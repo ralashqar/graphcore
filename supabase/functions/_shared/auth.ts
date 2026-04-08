@@ -26,3 +26,20 @@ export async function requireUserClient(request: Request, functionName: string) 
 
   return { client, user }
 }
+
+export function createAdminClient(functionName: string) {
+  const supabaseUrl = Deno.env.get('SUPABASE_URL')
+  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+
+  if (!supabaseUrl || !serviceRoleKey) {
+    throw new HttpError(500, `Supabase service role environment is incomplete for ${functionName}.`)
+  }
+
+  return createClient(supabaseUrl, serviceRoleKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+    },
+  })
+}

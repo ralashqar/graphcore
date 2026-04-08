@@ -564,6 +564,12 @@ export const patchOperationSchema = z.discriminatedUnion('op', [
     changes: z.record(z.string(), z.unknown()),
   }),
   z.object({
+    op: z.literal('update_node_template'),
+    graphKey: z.string(),
+    nodeKey: z.string(),
+    templateKey: z.string(),
+  }),
+  z.object({
     op: z.literal('delete_node'),
     graphKey: z.string(),
     nodeKey: z.string(),

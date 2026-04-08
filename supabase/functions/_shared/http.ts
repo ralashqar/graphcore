@@ -39,6 +39,8 @@ export class HttpError extends Error {
 }
 
 export function errorResponse(error: unknown, fallbackMessage: string) {
+  console.error('[edge-function-error]', fallbackMessage, error)
+
   if (error instanceof HttpError) {
     return json({ error: error.message }, { status: error.status })
   }

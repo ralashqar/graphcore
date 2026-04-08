@@ -5,6 +5,8 @@ GraphCore now includes two protected Supabase Edge Functions for provider-backed
 - `ai-openai`
 - `ai-fal`
 
+It also includes `prompt-patch` as the GraphCore-specific orchestration layer for prompt-to-graph and prompt-to-content generation.
+
 Both functions require a valid Supabase `Authorization` header and read provider credentials from Supabase secrets, not from the browser.
 
 ## Secret Setup

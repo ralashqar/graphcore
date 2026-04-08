@@ -1,7 +1,10 @@
 import '@xyflow/react/dist/style.css'
 
+import type { Session } from '@supabase/supabase-js'
 import { useEffect, useMemo, useState, useTransition } from 'react'
 import { compileBundle } from './domain/compiler'
+import { schemaCatalog } from './domain/graphcore'
+import { getCurrentSession, resendSignupConfirmation, sendMagicLink, signInWithGoogle, signInWithPassword, signOut, signUpWithPassword, subscribeToAuthChanges } from './data/auth'
 import type {
   ArchetypeDefinition,
   DefinitionBase,
@@ -9,10 +12,14 @@ import type {
   FieldDefinition,
   GameSystemBundle,
   GraphCreateInput,
+  GraphType,
   PatchOperation,
   ProjectSnapshot,
 } from './domain/graphcore'
-import { compileSnapshot, loadProjectSnapshot, proposePatch } from './data/graphcoreRepository'
+import { applyPatchProposal, bootstrapLiveWorkspace, compileSnapshot, ensureLiveProjectSnapshot, loadProjectSnapshot, proposePatch } from './data/graphcoreRepository'
+import { createGraphScaffold } from './domain/graphScaffold'
+import { applyPatchOperations, describePatchOperation, groupPatchOperations } from './domain/patchUtils'
+import type { PromptPatchResponse, PromptTargetMode } from './domain/prompting'
 import { normalizeNode } from './domain/nodeLibrary'
 import { GraphWorkspace } from './features/graphWorkspace'
 import { AssetsWorkspace, ContentWorkspace } from './features/itemAssetWorkspace'
@@ -24,6 +31,16 @@ type LoadedState = {
 }
 
 type WorkspaceTab = 'graph' | 'content' | 'assets' | 'prompts' | 'releases'
+type PatchSessionView = {
+  id: string
+  summary: string
+  prompt: string
+  status: string
+  operations: PatchOperation[]
+  diagnostics: string[]
+  assistantNotes?: string
+}
+type AuthMode = 'sign_in' | 'sign_up' | 'magic_link'
 
 const workspaceTabs: Array<{ id: WorkspaceTab; label: string }> = [
   { id: 'graph', label: 'Graph' },
@@ -52,38 +69,62 @@ function uniqueKey(existingKeys: string[], seed: string) {
 }
 
 export default function App() {
+  const [session, setSession] = useState<Session | null>(null)
   const [loadedState, setLoadedState] = useState<LoadedState | null>(null)
   const [snapshot, setSnapshot] = useState<ProjectSnapshot | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [bundle, setBundle] = useState<GameSystemBundle | null>(null)
-  const [patchPreview, setPatchPreview] = useState<{ summary: string; operations: PatchOperation[] } | null>(null)
+  const [patchPreview, setPatchPreview] = useState<(PromptPatchResponse & { id: string; prompt: string; status: string }) | null>(null)
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('graph')
   const [selectedAssetKey, setSelectedAssetKey] = useState<string | null>(null)
   const [selectedArchetypeKey, setSelectedArchetypeKey] = useState<string | null>(null)
   const [selectedPatchIndex, setSelectedPatchIndex] = useState(0)
+  const [promptModel, setPromptModel] = useState('gpt-5.4-mini')
+  const [promptTargetMode, setPromptTargetMode] = useState<PromptTargetMode>('auto')
+  const [promptGraphType, setPromptGraphType] = useState<GraphType>('narrative_flow')
+  const [promptRuntimeError, setPromptRuntimeError] = useState<string | null>(null)
+  const [authOpen, setAuthOpen] = useState(false)
+  const [authAutoOpened, setAuthAutoOpened] = useState(false)
+  const [authMode, setAuthMode] = useState<AuthMode>('sign_in')
+  const [authEmail, setAuthEmail] = useState('')
+  const [authPassword, setAuthPassword] = useState('')
+  const [authError, setAuthError] = useState<string | null>(null)
+  const [authInfo, setAuthInfo] = useState<string | null>(null)
+  const [authPendingConfirmation, setAuthPendingConfirmation] = useState(false)
+  const [workspaceBootstrapPending, setWorkspaceBootstrapPending] = useState(false)
+  const [workspaceBootstrapError, setWorkspaceBootstrapError] = useState<string | null>(null)
   const [isPending, startTransition] = useTransition()
   const { promptText, selectedDefinitionKey, selectedEdgeKey, selectedGraphKey, selectedNodeKey, setPromptText, setSelectedDefinitionKey, setSelectedEdgeKey, setSelectedGraphKey, setSelectedNodeKey } = useEditorStore()
+
+  function hydrateLoadedProject(state: { snapshot: ProjectSnapshot; source: 'supabase' | 'demo'; reason?: string }) {
+    const firstItem = state.snapshot.definitions.find((definition) => definition.kind === 'item') ?? state.snapshot.definitions[0] ?? null
+    const firstArchetype = state.snapshot.archetypes.find((archetype) => archetype.appliesToKind === 'item') ?? state.snapshot.archetypes[0] ?? null
+
+    startTransition(() => {
+      setLoadedState({ source: state.source, reason: state.reason })
+      setSnapshot(state.snapshot)
+      setSelectedGraphKey(state.snapshot.graphs[0]?.key ?? null)
+      setSelectedDefinitionKey(firstItem?.key ?? null)
+      setSelectedAssetKey(state.snapshot.assets[0]?.key ?? null)
+      setSelectedArchetypeKey(firstArchetype?.key ?? null)
+      setSelectedPatchIndex(0)
+      setBundle(compileBundle(state.snapshot))
+    })
+  }
 
   useEffect(() => {
     let active = true
     async function bootstrap() {
       setLoading(true)
       try {
-        const state = await loadProjectSnapshot()
+        const currentSession = await getCurrentSession()
         if (!active) return
-        const firstItem = state.snapshot.definitions.find((definition) => definition.kind === 'item') ?? state.snapshot.definitions[0] ?? null
-        const firstArchetype = state.snapshot.archetypes.find((archetype) => archetype.appliesToKind === 'item') ?? state.snapshot.archetypes[0] ?? null
-        startTransition(() => {
-          setLoadedState({ source: state.source, reason: state.reason })
-          setSnapshot(state.snapshot)
-          setSelectedGraphKey(state.snapshot.graphs[0]?.key ?? null)
-          setSelectedDefinitionKey(firstItem?.key ?? null)
-          setSelectedAssetKey(state.snapshot.assets[0]?.key ?? null)
-          setSelectedArchetypeKey(firstArchetype?.key ?? null)
-          setSelectedPatchIndex(0)
-          setBundle(compileBundle(state.snapshot))
-        })
+        setSession(currentSession)
+        const state = await ensureLiveProjectSnapshot()
+        if (!active) return
+        setWorkspaceBootstrapError(state.source === 'supabase' ? null : state.reason ?? null)
+        hydrateLoadedProject(state)
       } catch (loadError) {
         if (active) setError(loadError instanceof Error ? loadError.message : 'Failed to load GraphCore.')
       } finally {
@@ -96,6 +137,63 @@ export default function App() {
     }
   }, [setSelectedDefinitionKey, setSelectedGraphKey])
 
+  useEffect(() => {
+    let cancelled = false
+
+    const unsubscribe = subscribeToAuthChanges(async (nextSession) => {
+      if (cancelled) return
+      setSession(nextSession)
+
+      try {
+        const state = await ensureLiveProjectSnapshot()
+        if (cancelled) return
+        setWorkspaceBootstrapError(state.source === 'supabase' ? null : state.reason ?? null)
+        hydrateLoadedProject(state)
+        if (nextSession) {
+          setAuthOpen(false)
+          setAuthError(null)
+          setAuthInfo(null)
+        } else {
+          setPromptRuntimeError('Sign in to use live prompt generation, patch apply, and bundle publishing.')
+        }
+      } catch (loadError) {
+        if (!cancelled) {
+          setError(loadError instanceof Error ? loadError.message : 'Failed to refresh GraphCore after auth change.')
+        }
+      }
+    })
+
+    return () => {
+      cancelled = true
+      unsubscribe()
+    }
+  }, [])
+
+  async function handleBootstrapWorkspace() {
+    if (!session) {
+      setPromptRuntimeError('Sign in before creating a live GraphCore workspace.')
+      setAuthOpen(true)
+      return
+    }
+
+    setWorkspaceBootstrapPending(true)
+    setWorkspaceBootstrapError(null)
+    setPromptRuntimeError(null)
+
+    try {
+      const state = await bootstrapLiveWorkspace()
+      setWorkspaceBootstrapError(state.source === 'supabase' ? null : state.reason ?? null)
+      hydrateLoadedProject(state)
+    } catch (bootstrapError) {
+      console.error('[GraphCore] manual live workspace bootstrap failed.', bootstrapError)
+      const message = bootstrapError instanceof Error ? bootstrapError.message : 'Live workspace bootstrap failed.'
+      setWorkspaceBootstrapError(message)
+      setPromptRuntimeError(message)
+    } finally {
+      setWorkspaceBootstrapPending(false)
+    }
+  }
+
   const itemDefinitions = useMemo(() => snapshot?.definitions.filter((definition) => definition.kind === 'item') ?? [], [snapshot])
   const selectedGraph = useMemo(() => snapshot?.graphs.find((graph) => graph.key === selectedGraphKey) ?? snapshot?.graphs[0] ?? null, [selectedGraphKey, snapshot])
   const selectedItem = useMemo(() => itemDefinitions.find((definition) => definition.key === selectedDefinitionKey) ?? itemDefinitions[0] ?? null, [itemDefinitions, selectedDefinitionKey])
@@ -103,10 +201,61 @@ export default function App() {
   const selectedEdge = useMemo(() => selectedGraph?.edges.find((edge) => edge.key === selectedEdgeKey) ?? null, [selectedEdgeKey, selectedGraph])
   const selectedAsset = useMemo(() => snapshot?.assets.find((asset) => asset.key === selectedAssetKey) ?? snapshot?.assets[0] ?? null, [selectedAssetKey, snapshot])
 
-  const patchHistory = useMemo(() => {
-    const generated = patchPreview ? [{ id: 'preview', summary: patchPreview.summary, prompt: promptText, status: 'proposed', operations: patchPreview.operations, diagnostics: ['Local preview generated from the prompt dock.'] }] : []
-    return [...generated, ...(snapshot?.patchSets ?? [])]
-  }, [patchPreview, promptText, snapshot])
+  useEffect(() => {
+    if (selectedGraph?.graphType) {
+      setPromptGraphType(selectedGraph.graphType)
+    }
+  }, [selectedGraph?.graphType])
+
+  useEffect(() => {
+    if (loading) return
+    if (!session) {
+      setPromptRuntimeError('Sign in to use live prompt generation, patch apply, and bundle publishing.')
+      return
+    }
+    setPromptRuntimeError(null)
+  }, [loading, session])
+
+  useEffect(() => {
+    if (loading || session || authAutoOpened) return
+    setAuthOpen(true)
+    setAuthAutoOpened(true)
+  }, [authAutoOpened, loading, session])
+
+  const persistedPatchHistory = useMemo<PatchSessionView[]>(() => {
+    return (snapshot?.patchSets ?? []).map((patch) => {
+      const parsedOperations = schemaCatalog.patchOperationSchema.array().safeParse(patch.operations)
+
+      return {
+        id: patch.id,
+        summary: patch.summary,
+        prompt: patch.prompt,
+        status: patch.status,
+        operations: parsedOperations.success ? parsedOperations.data : [],
+        diagnostics: parsedOperations.success
+          ? patch.diagnostics
+          : [...patch.diagnostics, 'Stored patch operations could not be parsed against the current schema.'],
+      }
+    })
+  }, [snapshot])
+
+  const patchHistory = useMemo<PatchSessionView[]>(() => {
+    const generated = patchPreview
+      ? [
+          {
+            id: patchPreview.id,
+            summary: patchPreview.summary,
+            prompt: patchPreview.prompt,
+            status: patchPreview.status,
+            operations: patchPreview.operations,
+            diagnostics: patchPreview.diagnostics,
+            assistantNotes: patchPreview.assistantNotes,
+          },
+        ]
+      : []
+
+    return [...generated, ...persistedPatchHistory]
+  }, [patchPreview, persistedPatchHistory])
 
   const selectedPatch = patchHistory[selectedPatchIndex] ?? patchHistory[0] ?? null
   const itemArchetypes = useMemo(() => snapshot?.archetypes.filter((archetype) => archetype.appliesToKind === 'item') ?? [], [snapshot])
@@ -124,56 +273,10 @@ export default function App() {
   function createGraph(input: GraphCreateInput) {
     const suffix = uniqueKey(snapshot?.graphs.map((graph) => graph.key) ?? [], input.key.replace(/^graph\./, ''))
     const graphKey = input.key.startsWith('graph.') ? `graph.${suffix}` : `graph.${suffix}`
-    const startNode = normalizeNode({
-      id: `node-start-${Date.now()}`,
-      key: `start.${suffix}`,
-      type: 'start',
-      title: 'Start',
-      templateKey: 'start',
-      subtitle: null,
-      position: { x: 120, y: 200 },
-      body: { text: null, imageAssetKey: null, audioAssetKey: null, choices: [] },
-      condition: null,
-      effects: [],
-      ports: [],
-      display: { iconAssetKey: null, compactPreview: false },
-      metadata: {},
-    })
-    const endNode = normalizeNode({
-      id: `node-end-${Date.now()}`,
-      key: `end.${suffix}`,
-      type: 'end',
-      title: 'End',
-      templateKey: 'end',
-      subtitle: null,
-      position: { x: 860, y: 200 },
-      body: { text: null, imageAssetKey: null, audioAssetKey: null, choices: [] },
-      condition: null,
-      effects: [],
-      ports: [],
-      display: { iconAssetKey: null, compactPreview: false },
-      metadata: {},
-    })
-    const nextGraph = {
-      id: `graph-${Date.now()}`,
+    const nextGraph = createGraphScaffold({
+      ...input,
       key: graphKey,
-      name: input.name,
-      graphType: input.graphType,
-      summary: input.summary,
-      entryNodeKey: startNode.key,
-      metadata: {},
-      llmHints: {},
-      nodes: [startNode, endNode],
-      edges: [{
-        id: `edge-${Date.now()}`,
-        key: `edge.${suffix}_start_end`,
-        source: { nodeKey: startNode.key, portId: 'out' },
-        target: { nodeKey: endNode.key, portId: 'in' },
-        label: null,
-        condition: null,
-        metadata: {},
-      }],
-    }
+    })
     applySnapshotUpdate((current) => ({ ...current, graphs: [...current.graphs, nextGraph] }))
     setSelectedGraphKey(nextGraph.key)
   }
@@ -492,20 +595,199 @@ export default function App() {
     if (selectedEdgeKey !== null) setSelectedEdgeKey(null)
   }
 
+  async function handleAuthSubmit() {
+    setAuthError(null)
+    setAuthInfo(null)
+
+    try {
+      if (authMode === 'sign_in') {
+        await signInWithPassword(authEmail.trim(), authPassword)
+        setAuthPendingConfirmation(false)
+        setAuthInfo('Signed in successfully.')
+        return
+      }
+
+      if (authMode === 'sign_up') {
+        const result = await signUpWithPassword(authEmail.trim(), authPassword)
+
+        if (result.session) {
+          setAuthPendingConfirmation(false)
+          setAuthInfo('Account created and signed in successfully.')
+          return
+        }
+
+        setAuthPendingConfirmation(true)
+        setAuthInfo('Account created, but email confirmation is still required before password sign-in. Check your inbox or resend the confirmation email below.')
+        return
+      }
+
+      await sendMagicLink(authEmail.trim())
+      setAuthPendingConfirmation(false)
+      setAuthInfo('Magic link sent. Open the email and return here to finish signing in.')
+    } catch (authActionError) {
+      console.error('[GraphCore] auth action failed.', authActionError)
+      const message = authActionError instanceof Error ? authActionError.message : 'Authentication failed.'
+      const lowerMessage = message.toLowerCase()
+
+      if (authMode === 'sign_in' && (lowerMessage.includes('invalid login credentials') || lowerMessage.includes('invalid credentials'))) {
+        setAuthError('Invalid credentials. If you just signed up, your project may still require email confirmation before password sign-in.')
+        return
+      }
+
+      if (lowerMessage.includes('rate limit')) {
+        setAuthError('Supabase email rate limit was hit. Wait a moment before retrying, or use password sign-in after confirming your email.')
+        return
+      }
+
+      setAuthError(message)
+    }
+  }
+
+  async function handleResendConfirmation() {
+    setAuthError(null)
+    setAuthInfo(null)
+
+    try {
+      await resendSignupConfirmation(authEmail.trim())
+      setAuthPendingConfirmation(true)
+      setAuthInfo('Confirmation email resent. If nothing arrives, check Supabase Email provider settings and rate limits in the dashboard.')
+    } catch (resendError) {
+      console.error('[GraphCore] resend confirmation failed.', resendError)
+      const message = resendError instanceof Error ? resendError.message : 'Confirmation resend failed.'
+      if (message.toLowerCase().includes('rate limit')) {
+        setAuthError('Supabase email rate limit was hit while resending confirmation. Wait before trying again, or disable email confirmation in the dashboard for faster testing.')
+        return
+      }
+      setAuthError(message)
+    }
+  }
+
+  async function handleGoogleAuth() {
+    setAuthError(null)
+    setAuthInfo(null)
+
+    try {
+      await signInWithGoogle()
+      setAuthPendingConfirmation(false)
+      setAuthInfo('Redirecting to Google sign-in...')
+    } catch (googleAuthError) {
+      console.error('[GraphCore] google auth failed.', googleAuthError)
+      const message = googleAuthError instanceof Error ? googleAuthError.message : 'Google sign-in failed.'
+      if (message.toLowerCase().includes('provider is not enabled')) {
+        setAuthError('Google auth is not enabled in Supabase yet. Enable the Google provider in the dashboard and add your Google OAuth client credentials.')
+        return
+      }
+      setAuthError(message)
+    }
+  }
+
+  async function handleSignOut() {
+    setAuthError(null)
+    setAuthInfo(null)
+
+    try {
+      await signOut()
+    } catch (signOutError) {
+      console.error('[GraphCore] sign out failed.', signOutError)
+      setAuthError(signOutError instanceof Error ? signOutError.message : 'Sign out failed.')
+    }
+  }
+
   async function handleGeneratePatch() {
     if (!snapshot) return
-    const nextPatch = await proposePatch(promptText, snapshot, {
-      target: activeTab === 'graph' ? (selectedNode ? 'node' : 'graph') : 'content',
-      graphKey: selectedGraph?.key ?? null,
-      nodeKey: selectedNode?.key ?? null,
-    })
-    setPatchPreview(nextPatch)
-    setSelectedPatchIndex(0)
-    setActiveTab('prompts')
+    if (!session) {
+      setPromptRuntimeError('Sign in to use hosted prompt generation.')
+      setAuthOpen(true)
+      return
+    }
+    if (loadedState?.source !== 'supabase') {
+      setPromptRuntimeError(loadedState?.reason ?? 'You are signed in, but the editor is still showing the bundled demo snapshot. Load or create a live GraphCore workspace/draft before using hosted prompt generation.')
+      return
+    }
+    setPromptRuntimeError(null)
+
+    try {
+      const nextPatch = await proposePatch({
+        prompt: promptText,
+        snapshot,
+        context: {
+          target: activeTab === 'graph' ? (selectedNode ? 'node' : 'graph') : 'content',
+          graphKey: selectedGraph?.key ?? null,
+          nodeKey: selectedNode?.key ?? null,
+          edgeKey: selectedEdge?.key ?? null,
+        },
+        targetMode: activeTab === 'graph' ? promptTargetMode : 'auto',
+        graphType: activeTab === 'graph' && promptTargetMode === 'new_graph' ? promptGraphType : selectedGraph?.graphType,
+        model: promptModel,
+      })
+      setPatchPreview({
+        id: 'preview',
+        prompt: promptText,
+        status: nextPatch.operations.length > 0 ? 'proposed' : 'rejected',
+        ...nextPatch,
+      })
+      setSelectedPatchIndex(0)
+      setActiveTab('prompts')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Prompt generation failed.'
+      console.error('[GraphCore] prompt generation failed.', error)
+      setPromptRuntimeError(message)
+    }
+  }
+
+  async function handleApplySelectedPatch() {
+    if (!snapshot || !selectedPatch || selectedPatch.operations.length === 0) return
+    if (!session) {
+      setPromptRuntimeError('Sign in to apply patches to the live workspace.')
+      setAuthOpen(true)
+      return
+    }
+    if (loadedState?.source !== 'supabase') {
+      setPromptRuntimeError(loadedState?.reason ?? 'You are signed in, but the editor is still showing the bundled demo snapshot. Load or create a live GraphCore workspace/draft before applying hosted patches.')
+      return
+    }
+
+    setPromptRuntimeError(null)
+    const locallyAppliedSnapshot = applyPatchOperations(snapshot, selectedPatch.operations)
+
+    if (loadedState?.source !== 'supabase') {
+      setSnapshot({
+        ...locallyAppliedSnapshot,
+        patchSets: locallyAppliedSnapshot.patchSets.map((patch) =>
+          patch.id === selectedPatch.id ? { ...patch, status: 'applied' } : patch,
+        ),
+      })
+      setBundle(compileBundle(locallyAppliedSnapshot))
+      if (selectedPatch.id === 'preview') {
+        setPatchPreview(null)
+      }
+      return
+    }
+
+    try {
+      await applyPatchProposal(snapshot, selectedPatch.operations, selectedPatch.id === 'preview' ? undefined : selectedPatch.id)
+      const refreshed = await loadProjectSnapshot()
+      hydrateLoadedProject(refreshed)
+      setPatchPreview(null)
+      setActiveTab('graph')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Patch apply failed.'
+      console.error('[GraphCore] patch apply failed.', error)
+      setPromptRuntimeError(message)
+    }
   }
 
   async function handleCompile() {
     if (!snapshot) return
+    if (!session) {
+      setPromptRuntimeError('Sign in to publish bundles from the live workspace.')
+      setAuthOpen(true)
+      return
+    }
+    if (loadedState?.source !== 'supabase') {
+      setPromptRuntimeError(loadedState?.reason ?? 'You are signed in, but the editor is still showing the bundled demo snapshot. Load or create a live GraphCore workspace/draft before publishing.')
+      return
+    }
     const nextBundle = await compileSnapshot(snapshot)
     setBundle(nextBundle)
     setActiveTab('releases')
@@ -520,8 +802,23 @@ export default function App() {
         <header className="topbar">
           <div className="brand-cluster"><div className="brand-mark">G</div><div><div className="brand-line">GraphCore</div><p className="subtle-line">{snapshot.workspace.name} / {snapshot.project.name} / {snapshot.draft.name}</p></div></div>
           <div className="topbar-center"><nav className="tabbar" aria-label="Workspace tabs">{workspaceTabs.map((tab) => <button key={tab.id} className={tab.id === activeTab ? 'tab-button is-active' : 'tab-button'} onClick={() => setActiveTab(tab.id)} type="button">{tab.label}</button>)}</nav></div>
-          <div className="topbar-actions"><div className="signal-pill"><span>{loadedState?.source === 'supabase' ? 'Live workspace' : 'Demo snapshot'}</span></div><button className="ghost-button" onClick={() => setActiveTab('prompts')} type="button">Review patches</button><button className="primary-button" onClick={handleCompile} type="button">{isPending ? 'Compiling...' : 'Publish bundle'}</button></div>
+          <div className="topbar-actions"><div className="signal-pill"><span>{loadedState?.source === 'supabase' ? 'Live workspace' : 'Demo snapshot'}</span></div><div className="signal-pill"><span>{session?.user.email ?? 'Not signed in'}</span></div><button className="ghost-button" onClick={() => setActiveTab('prompts')} type="button">Review patches</button>{session ? <button className="ghost-button" onClick={handleSignOut} type="button">Sign out</button> : <button className="ghost-button" onClick={() => setAuthOpen(true)} type="button">Sign in</button>}<button className="primary-button" onClick={handleCompile} type="button">{isPending ? 'Compiling...' : 'Publish bundle'}</button></div>
         </header>
+
+        {session && loadedState?.source !== 'supabase' ? (
+          <section className="workspace-banner">
+            <div className="workspace-banner-copy">
+              <span className="eyebrow">Live Project Setup</span>
+              <h2>GraphCore is still showing the bundled demo snapshot.</h2>
+              <p>{workspaceBootstrapError ?? loadedState?.reason ?? 'Create a live workspace, project, and primary draft for this account to enable hosted prompts, patch apply, and publishing.'}</p>
+            </div>
+            <div className="workspace-banner-actions">
+              <button className="primary-button" onClick={handleBootstrapWorkspace} type="button">
+                {workspaceBootstrapPending ? 'Creating live workspace...' : 'Create live workspace'}
+              </button>
+            </div>
+          </section>
+        ) : null}
 
         <section className="workspace-stage">
           {activeTab === 'graph' ? (
@@ -578,18 +875,59 @@ export default function App() {
             />
           ) : null}
           {activeTab === 'assets' ? <AssetsWorkspace assets={snapshot.assets} selectedAsset={selectedAsset} selectedItem={selectedItem} onAssignAssetToSelectedItem={assignAssetToSelectedItem} onCreateUrlAsset={createUrlAsset} onSelectAsset={setSelectedAssetKey} onUploadAsset={handleAssetUpload} onUpdateAsset={updateAssetIdentity} /> : null}
-          {activeTab === 'prompts' ? <PromptsWorkspace patchHistory={patchHistory} selectedPatch={selectedPatch} selectedPatchIndex={selectedPatchIndex} onSelectPatch={setSelectedPatchIndex} /> : null}
+          {activeTab === 'prompts' ? <PromptsWorkspace patchHistory={patchHistory} selectedPatch={selectedPatch} selectedPatchIndex={selectedPatchIndex} onApplyPatch={handleApplySelectedPatch} onSelectPatch={setSelectedPatchIndex} /> : null}
           {activeTab === 'releases' ? <ReleasesWorkspace bundle={bundle} releases={snapshot.releases} sourceReason={loadedState?.reason} /> : null}
         </section>
 
         <section className="prompt-dock">
           <div className="prompt-dock-head"><div><span className="eyebrow">Prompt Dock</span><h2>Describe the item, graph, or asset change you want next</h2></div><p className="subtle-line">Target: {selectedNode?.key ?? selectedItem?.key ?? selectedArchetype?.key ?? selectedGraph?.key ?? snapshot.project.slug}</p></div>
+          <div className="prompt-controls">
+            <label className="field-block compact-block">
+              <span>Model</span>
+              <select value={promptModel} onChange={(event) => setPromptModel(event.target.value)}>
+                <option value="gpt-5.4-mini">gpt-5.4-mini</option>
+                <option value="gpt-5.4">gpt-5.4</option>
+                <option value="gpt-5.3-codex">gpt-5.3-codex</option>
+              </select>
+            </label>
+            {activeTab === 'graph' ? (
+              <>
+                <label className="field-block compact-block">
+                  <span>Graph Target</span>
+                  <select value={promptTargetMode} onChange={(event) => setPromptTargetMode(event.target.value as PromptTargetMode)}>
+                    <option value="auto">Auto</option>
+                    <option value="current_graph">Current graph</option>
+                    <option value="new_graph">New graph</option>
+                  </select>
+                </label>
+                <label className="field-block compact-block">
+                  <span>New Graph Type</span>
+                  <select value={promptGraphType} onChange={(event) => setPromptGraphType(event.target.value as GraphType)} disabled={promptTargetMode !== 'new_graph'}>
+                    <option value="narrative_flow">Narrative</option>
+                    <option value="quest_flow">Quest</option>
+                    <option value="system_graph">System</option>
+                  </select>
+                </label>
+              </>
+            ) : null}
+          </div>
+          {activeTab === 'graph' ? (
+            <div className="prompt-preset-row">
+              <button className="ghost-button compact" onClick={() => { setPromptTargetMode('new_graph'); setPromptGraphType('narrative_flow'); setPromptText('Create a new branching narrative graph with a clear opening scene, one gated branch, and a satisfying ending.'); }} type="button">Create new narrative graph</button>
+              <button className="ghost-button compact" onClick={() => { setPromptTargetMode('current_graph'); setPromptText('Expand the current graph with one new branch that deepens the conflict and reconnects cleanly to the main flow.'); }} type="button">Expand current graph</button>
+              <button className="ghost-button compact" onClick={() => { setPromptTargetMode('current_graph'); setPromptText('Add a new branch from the selected node with a meaningful choice and a gated outcome.'); }} type="button">Add branch from selected node</button>
+              <button className="ghost-button compact" onClick={() => { setPromptTargetMode('auto'); setPromptText('Add any missing gameplay content this graph needs, including new items, tokens, or archetypes if they do not exist yet.'); }} type="button">Add missing gameplay content</button>
+            </div>
+          ) : null}
+          {!session ? <div className="inline-note">Hosted AI, patch apply, and publishing require Supabase sign-in. You can still explore the demo workspace.</div> : null}
+          {promptRuntimeError ? <div className="inline-note is-error">{promptRuntimeError}</div> : null}
           <div className="prompt-dock-body">
             <textarea aria-label="Prompt editor" className="prompt-composer" value={promptText} onChange={(event) => setPromptText(event.target.value)} rows={3} />
             <div className="prompt-actions"><div className="prompt-hint"><span>Prompt-driven edits stay structured as reviewable patch operations before apply.</span></div><button className="primary-button" onClick={handleGeneratePatch} type="button">Generate patch</button></div>
           </div>
         </section>
       </div>
+      {authOpen ? <AuthDialog authEmail={authEmail} authError={authError} authInfo={authInfo} authMode={authMode} authPassword={authPassword} authPendingConfirmation={authPendingConfirmation} onClose={() => setAuthOpen(false)} onEmailChange={setAuthEmail} onGoogleAuth={handleGoogleAuth} onModeChange={(mode) => { setAuthMode(mode); setAuthError(null); setAuthInfo(null); if (mode !== 'sign_up') setAuthPendingConfirmation(false) }} onPasswordChange={setAuthPassword} onResendConfirmation={handleResendConfirmation} onSubmit={handleAuthSubmit} /> : null}
     </main>
   )
 }
@@ -598,17 +936,136 @@ function PromptsWorkspace({
   patchHistory,
   selectedPatch,
   selectedPatchIndex,
+  onApplyPatch,
   onSelectPatch,
 }: {
-  patchHistory: Array<{ id: string; summary: string; prompt: string; status: string; operations: unknown[]; diagnostics: string[] }>
-  selectedPatch: { id: string; summary: string; prompt: string; status: string; operations: unknown[]; diagnostics: string[] } | null
+  patchHistory: PatchSessionView[]
+  selectedPatch: PatchSessionView | null
   selectedPatchIndex: number
+  onApplyPatch: () => void
   onSelectPatch: (index: number) => void
 }) {
+  const groupedOperations = selectedPatch ? groupPatchOperations(selectedPatch.operations) : null
+
   return (
     <div className="focus-layout prompts-layout">
       <aside className="focus-rail"><div className="rail-section"><span className="section-label">Patch sessions</span><div className="rail-list">{patchHistory.map((patch, index) => <button key={`${patch.id}-${index}`} className={index === selectedPatchIndex ? 'rail-button is-active' : 'rail-button'} onClick={() => onSelectPatch(index)} type="button"><strong>{patch.summary}</strong><span>{patch.status}</span></button>)}</div></div></aside>
-      <section className="main-surface detail-surface">{selectedPatch ? <div className="detail-stack"><span className="eyebrow">Prompt Session</span><h2>{selectedPatch.summary}</h2><p className="subtle-line">{selectedPatch.prompt}</p><div className="chip-row"><span className="chip">{selectedPatch.status}</span><span className="chip">{selectedPatch.operations.length} operations</span></div><pre>{JSON.stringify(selectedPatch.operations, null, 2)}</pre><div className="diagnostic-stack">{selectedPatch.diagnostics.map((diagnostic) => <div key={diagnostic} className="inline-note">{diagnostic}</div>)}</div></div> : null}</section>
+      <section className="main-surface detail-surface">{selectedPatch ? <div className="detail-stack"><span className="eyebrow">Prompt Session</span><h2>{selectedPatch.summary}</h2><p className="subtle-line">{selectedPatch.prompt}</p><div className="chip-row"><span className="chip">{selectedPatch.status}</span><span className="chip">{selectedPatch.operations.length} operations</span></div>{selectedPatch.assistantNotes ? <div className="inline-note">{selectedPatch.assistantNotes}</div> : null}<div className="prompt-review-grid">{groupedOperations && groupedOperations.graphs.length > 0 ? <PatchGroup title="Graphs" operations={groupedOperations.graphs} /> : null}{groupedOperations && groupedOperations.nodesAndEdges.length > 0 ? <PatchGroup title="Nodes and edges" operations={groupedOperations.nodesAndEdges} /> : null}{groupedOperations && groupedOperations.definitions.length > 0 ? <PatchGroup title="Definitions created" operations={groupedOperations.definitions} /> : null}</div><div className="detail-actions"><button className="primary-button" disabled={selectedPatch.operations.length === 0 || selectedPatch.status === 'applied'} onClick={onApplyPatch} type="button">{selectedPatch.status === 'applied' ? 'Already applied' : 'Apply patch'}</button></div><div className="diagnostic-stack">{selectedPatch.diagnostics.length === 0 ? <div className="inline-note">No warnings returned for this patch proposal.</div> : null}{selectedPatch.diagnostics.map((diagnostic, index) => <div key={`${diagnostic}-${index}`} className="inline-note">{diagnostic}</div>)}</div><pre>{JSON.stringify(selectedPatch.operations, null, 2)}</pre></div> : null}</section>
+    </div>
+  )
+}
+
+function PatchGroup({ operations, title }: { operations: PatchOperation[]; title: string }) {
+  return (
+    <div className="editor-section compact-section">
+      <div className="section-head">
+        <div>
+          <span className="eyebrow">{title}</span>
+          <h3>{operations.length} change{operations.length === 1 ? '' : 's'}</h3>
+        </div>
+      </div>
+      <div className="diagnostic-stack">
+        {operations.map((operation, index) => <div key={`${operation.op}-${index}`} className="inline-note">{describePatchOperation(operation)}</div>)}
+      </div>
+    </div>
+  )
+}
+
+function AuthDialog({
+  authEmail,
+  authError,
+  authInfo,
+  authMode,
+  authPendingConfirmation,
+  authPassword,
+  onClose,
+  onEmailChange,
+  onGoogleAuth,
+  onModeChange,
+  onPasswordChange,
+  onResendConfirmation,
+  onSubmit,
+}: {
+  authEmail: string
+  authError: string | null
+  authInfo: string | null
+  authMode: AuthMode
+  authPendingConfirmation: boolean
+  authPassword: string
+  onClose: () => void
+  onEmailChange: (value: string) => void
+  onGoogleAuth: () => void
+  onModeChange: (mode: AuthMode) => void
+  onPasswordChange: (value: string) => void
+  onResendConfirmation: () => void
+  onSubmit: () => void
+}) {
+  return (
+    <div className="auth-overlay" onClick={onClose} role="presentation">
+      <section className="auth-dialog" onClick={(event) => event.stopPropagation()}>
+        <div className="surface-head">
+          <div>
+            <span className="eyebrow">Supabase Auth</span>
+            <h2>{authMode === 'sign_in' ? 'Sign in to GraphCore' : authMode === 'sign_up' ? 'Create your account' : 'Send a magic link'}</h2>
+            <p className="subtle-line">
+              {authMode === 'magic_link'
+                ? 'Use email-only login when you want the fastest path into the live workspace.'
+                : authMode === 'sign_up'
+                  ? 'Create an account for live prompt generation, patch apply, and bundle publishing. Password sign-in may still require email confirmation depending on your Supabase settings.'
+                  : 'Sign in to use hosted prompt generation, live patch apply, and bundle publishing.'}
+            </p>
+          </div>
+          <button className="ghost-button compact" onClick={onClose} type="button">Close</button>
+        </div>
+        <div className="segmented-control auth-mode-switch">
+          <button className={authMode === 'sign_in' ? 'segment-button is-active' : 'segment-button'} onClick={() => onModeChange('sign_in')} type="button">Sign in</button>
+          <button className={authMode === 'sign_up' ? 'segment-button is-active' : 'segment-button'} onClick={() => onModeChange('sign_up')} type="button">Sign up</button>
+          <button className={authMode === 'magic_link' ? 'segment-button is-active' : 'segment-button'} onClick={() => onModeChange('magic_link')} type="button">Magic link</button>
+        </div>
+        <div className="auth-form">
+          <button className="oauth-button google-oauth-button" onClick={onGoogleAuth} type="button">
+            <span className="google-oauth-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" role="img">
+                <path d="M21.6 12.23c0-.68-.06-1.34-.17-1.97H12v3.73h5.39a4.62 4.62 0 0 1-2 3.04v2.52h3.24c1.9-1.75 2.97-4.32 2.97-7.32Z" fill="#4285F4" />
+                <path d="M12 22c2.7 0 4.96-.89 6.61-2.41l-3.24-2.52c-.9.6-2.05.96-3.37.96-2.59 0-4.78-1.75-5.56-4.1H3.09v2.59A9.97 9.97 0 0 0 12 22Z" fill="#34A853" />
+                <path d="M6.44 13.93A5.99 5.99 0 0 1 6.13 12c0-.67.11-1.31.31-1.93V7.48H3.09A9.99 9.99 0 0 0 2 12c0 1.61.39 3.13 1.09 4.52l3.35-2.59Z" fill="#FBBC05" />
+                <path d="M12 5.97c1.47 0 2.79.5 3.83 1.5l2.87-2.87C16.95 2.97 14.69 2 12 2A9.97 9.97 0 0 0 3.09 7.48l3.35 2.59c.78-2.35 2.97-4.1 5.56-4.1Z" fill="#EA4335" />
+              </svg>
+            </span>
+            <span>Continue with Google</span>
+          </button>
+          <div className="auth-divider">
+            <span>or continue with email</span>
+          </div>
+          <label className="field-block">
+            <span>Email</span>
+            <input autoComplete="email" onChange={(event) => onEmailChange(event.target.value)} placeholder="you@example.com" type="email" value={authEmail} />
+          </label>
+          {authMode !== 'magic_link' ? (
+            <label className="field-block">
+              <span>Password</span>
+              <input autoComplete={authMode === 'sign_in' ? 'current-password' : 'new-password'} minLength={6} onChange={(event) => onPasswordChange(event.target.value)} placeholder="At least 6 characters" type="password" value={authPassword} />
+            </label>
+          ) : null}
+          {authMode === 'sign_up' ? (
+            <div className="inline-note">
+              For quick testing, disable email confirmation in Supabase Auth or make sure your email provider is configured. Default email flows can hit rate limits quickly.
+            </div>
+          ) : null}
+          {authInfo ? <div className="inline-note">{authInfo}</div> : null}
+          {authError ? <div className="inline-note is-error">{authError}</div> : null}
+          <div className="auth-actions">
+            {authPendingConfirmation && authEmail.trim() ? (
+              <button className="ghost-button" onClick={onResendConfirmation} type="button">
+                Resend confirmation
+              </button>
+            ) : null}
+            <button className="primary-button" onClick={onSubmit} type="button">
+              {authMode === 'sign_in' ? 'Sign in' : authMode === 'sign_up' ? 'Create account' : 'Send link'}
+            </button>
+          </div>
+        </div>
+      </section>
     </div>
   )
 }

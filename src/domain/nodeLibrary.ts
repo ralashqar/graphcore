@@ -148,6 +148,50 @@ export function createNodeFromTemplate(
   return normalizeNode(node)
 }
 
+export function applyTemplateToNode(node: NodeDefinition, templateKey: string) {
+  const template = graphNodeTemplatesByKey.get(templateKey)
+
+  if (!template) {
+    return node
+  }
+
+  return normalizeNode({
+    ...node,
+    type: template.baseNodeType,
+    templateKey: template.key,
+    subtitle: template.defaultSubtitle ?? node.subtitle,
+    title: node.title || template.defaultTitle,
+    body: {
+      text: node.body.text ?? template.defaultBody?.text ?? null,
+      imageAssetKey: node.body.imageAssetKey ?? template.defaultBody?.imageAssetKey ?? null,
+      audioAssetKey: node.body.audioAssetKey ?? template.defaultBody?.audioAssetKey ?? null,
+      choices:
+        template.baseNodeType === 'choice'
+          ? node.body.choices.length > 0
+            ? node.body.choices
+            : template.defaultBody?.choices ?? []
+          : [],
+    },
+    condition:
+      template.baseNodeType === 'condition'
+        ? node.condition ?? template.defaultCondition ?? null
+        : null,
+    effects:
+      template.baseNodeType === 'effect' || template.baseNodeType === 'quest_step' || template.baseNodeType === 'market'
+        ? node.effects.length > 0
+          ? node.effects
+          : template.defaultEffects ?? []
+        : [],
+    display: {
+      ...node.display,
+      ...template.defaultDisplay,
+    },
+    metadata: {
+      ...node.metadata,
+    },
+  })
+}
+
 export function normalizeNode(node: NodeDefinition): NodeDefinition {
   return {
     ...node,

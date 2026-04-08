@@ -11,7 +11,92 @@ import {
   type PatchOperation,
   type ProjectSnapshot,
 } from '../domain/graphcore'
+import type { PromptPatchRequest, PromptPatchResponse } from '../domain/prompting'
 import { supabase } from '../utils/supabase'
+import type { FunctionsHttpError, Session } from '@supabase/supabase-js'
+
+function isUuidLike(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+}
+
+function isLiveSnapshot(snapshot: ProjectSnapshot) {
+  return isUuidLike(snapshot.workspace.id) && isUuidLike(snapshot.project.id) && isUuidLike(snapshot.draft.id)
+}
+
+function slugify(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
+function titleCase(value: string) {
+  return value
+    .split(/[\s._-]+/)
+    .filter(Boolean)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(' ')
+}
+
+function bootstrapSeedFromSession(session: Session) {
+  const emailSeed = session.user.email?.split('@')[0] ?? 'graphcore'
+  const cleanedSeed = slugify(emailSeed) || 'graphcore'
+  return {
+    cleanedSeed,
+    workspaceName: `${titleCase(cleanedSeed)} Workspace`,
+    projectName: `${titleCase(cleanedSeed)} Project`,
+  }
+}
+
+function shouldBootstrapLiveProject(reason?: string) {
+  return [
+    'No GraphCore workspace was visible through RLS.',
+    'No project data was found yet.',
+    'Project exists, but it has no draft yet.',
+  ].some((fragment) => reason?.includes(fragment))
+}
+
+async function readFunctionsErrorMessage(error: FunctionsHttpError | Error) {
+  if (!('context' in error)) {
+    return error.message
+  }
+
+  const context = (error as FunctionsHttpError & { context?: unknown }).context
+  if (!(context instanceof Response)) {
+    return error.message
+  }
+
+  try {
+    const payload = await context.clone().json() as { error?: string }
+    return payload.error ?? error.message
+  } catch {
+    try {
+      const text = await context.clone().text()
+      return text || error.message
+    } catch {
+      return error.message
+    }
+  }
+}
+
+type SnapshotLoadResult = {
+  snapshot: ProjectSnapshot
+  source: 'supabase' | 'demo'
+  reason?: string
+}
+
+async function invokeAuthedFunction<TResponse>(
+  functionName: string,
+  body: Record<string, unknown>,
+  session: Session,
+) {
+  return supabase.functions.invoke<TResponse>(functionName, {
+    headers: {
+      Authorization: `Bearer ${session.access_token}`,
+    },
+    body,
+  })
+}
 
 type DefinitionRow = {
   id: string
@@ -85,12 +170,15 @@ type NodeRow = {
   key: string
   node_type: GraphDefinition['nodes'][number]['type']
   title: string
+  template_key: string | null
+  subtitle: string | null
   position_x: number
   position_y: number
   body: Record<string, unknown> | null
   condition_expr: Record<string, unknown> | null
   effect_ops: Record<string, unknown>[] | null
   ports: Record<string, unknown>[] | null
+  display: Record<string, unknown> | null
   metadata: Record<string, unknown> | null
 }
 
@@ -118,11 +206,7 @@ type AssetRow = {
   llm_hints: Record<string, unknown> | null
 }
 
-export async function loadProjectSnapshot(): Promise<{
-  snapshot: ProjectSnapshot
-  source: 'supabase' | 'demo'
-  reason?: string
-}> {
+export async function loadProjectSnapshot(): Promise<SnapshotLoadResult> {
   const {
     data: { session },
   } = await supabase.auth.getSession()
@@ -253,7 +337,7 @@ export async function loadProjectSnapshot(): Promise<{
       .order('created_at', { ascending: true }),
     supabase
       .from('draft_graph_nodes')
-      .select('id, graph_id, key, node_type, title, position_x, position_y, body, condition_expr, effect_ops, ports, metadata'),
+      .select('id, graph_id, key, node_type, title, template_key, subtitle, position_x, position_y, body, condition_expr, effect_ops, ports, display, metadata'),
     supabase
       .from('draft_graph_edges')
       .select('id, graph_id, key, source_node_key, source_port, target_node_key, target_port, label, condition_expr, metadata'),
@@ -394,6 +478,8 @@ export async function loadProjectSnapshot(): Promise<{
           key: node.key,
           type: node.node_type,
           title: node.title,
+          templateKey: node.template_key ?? (typeof node.metadata?.templateKey === 'string' ? node.metadata.templateKey : null),
+          subtitle: node.subtitle ?? (typeof node.metadata?.subtitle === 'string' ? node.metadata.subtitle : null),
           position: {
             x: Number(node.position_x),
             y: Number(node.position_y),
@@ -402,6 +488,12 @@ export async function loadProjectSnapshot(): Promise<{
           condition: node.condition_expr,
           effects: node.effect_ops ?? [],
           ports: node.ports ?? [],
+          display:
+            node.display && typeof node.display === 'object'
+              ? node.display
+              : node.metadata?.display && typeof node.metadata.display === 'object'
+                ? node.metadata.display
+                : {},
           metadata: node.metadata ?? {},
         })),
       edges: edges
@@ -447,28 +539,227 @@ export async function loadProjectSnapshot(): Promise<{
   }
 }
 
-export async function proposePatch(prompt: string, snapshot: ProjectSnapshot, context?: { graphKey?: string | null; nodeKey?: string | null; target?: 'graph' | 'node' | 'content' }): Promise<{
-  summary: string
-  operations: PatchOperation[]
-}> {
+export async function ensureLiveProjectSnapshot(): Promise<SnapshotLoadResult> {
   const {
     data: { session },
   } = await supabase.auth.getSession()
 
-  if (session) {
-    const response = await supabase.functions.invoke('prompt-patch', {
-      body: {
-        prompt,
-        snapshot,
-        context,
-      },
-    })
+  const initial = await loadProjectSnapshot()
 
-    if (!response.error && response.data) {
-      return response.data as { summary: string; operations: PatchOperation[] }
+  if (!session || initial.source === 'supabase' || !shouldBootstrapLiveProject(initial.reason)) {
+    return initial
+  }
+
+  try {
+    await bootstrapLiveWorkspace(session)
+  } catch (bootstrapError) {
+    console.error('[GraphCore] live workspace bootstrap failed during snapshot load.', bootstrapError)
+    const message = bootstrapError instanceof Error ? bootstrapError.message : 'Live workspace bootstrap failed.'
+    return {
+      ...initial,
+      reason: `${initial.reason ?? 'Live bootstrap failed.'} ${message}`,
     }
   }
 
+  return loadProjectSnapshot()
+}
+
+export async function bootstrapLiveWorkspace(existingSession?: Session): Promise<SnapshotLoadResult> {
+  const session =
+    existingSession ??
+    (
+      await supabase.auth.getSession()
+    ).data.session
+
+  if (!session) {
+    throw new Error('Sign in before creating a live GraphCore workspace.')
+  }
+
+  try {
+    await bootstrapLiveWorkspaceDirect(session)
+  } catch (directBootstrapError) {
+    console.error('[GraphCore] direct client bootstrap failed, trying hosted bootstrap fallback.', directBootstrapError)
+
+    const seed = bootstrapSeedFromSession(session)
+    const response = await invokeAuthedFunction('bootstrap-workspace', {
+      workspaceName: seed.workspaceName,
+      projectName: seed.projectName,
+    }, session)
+
+    if (response.error) {
+      const functionErrorMessage = await readFunctionsErrorMessage(response.error)
+      const directMessage = directBootstrapError instanceof Error ? directBootstrapError.message : 'Direct bootstrap failed.'
+      throw new Error(`${directMessage} Hosted bootstrap fallback also failed: ${functionErrorMessage}`)
+    }
+  }
+
+  return loadProjectSnapshot()
+}
+
+async function bootstrapLiveWorkspaceDirect(session: Session) {
+  const seed = bootstrapSeedFromSession(session)
+  const timestampSeed = Date.now().toString(36)
+
+  const workspaceResponse = await supabase
+    .from('workspace_memberships')
+    .select('role, workspace:workspaces!inner(id, name, slug)')
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle()
+
+  if (workspaceResponse.error) {
+    throw new Error(workspaceResponse.error.message)
+  }
+
+  const membershipWorkspace = workspaceResponse.data?.workspace as
+    | { id: string; name?: string; slug?: string }
+    | Array<{ id: string; name?: string; slug?: string }>
+    | null
+    | undefined
+
+  let workspaceId = Array.isArray(membershipWorkspace)
+    ? membershipWorkspace[0]?.id ?? null
+    : membershipWorkspace?.id ?? null
+
+  if (!workspaceId) {
+    workspaceId = crypto.randomUUID()
+    const createdWorkspace = await supabase
+      .from('workspaces')
+      .insert({
+        id: workspaceId,
+        name: seed.workspaceName,
+        slug: `${seed.cleanedSeed}-${timestampSeed}`,
+        summary: 'Live GraphCore workspace bootstrapped from the editor.',
+        created_by: session.user.id,
+        metadata: {
+          bootstrapSource: 'web_app',
+          bootstrapVersion: 4,
+        },
+      })
+
+    if (createdWorkspace.error) {
+      throw new Error(createdWorkspace.error?.message ?? 'Workspace creation failed.')
+    }
+
+    const membershipInsert = await supabase
+      .from('workspace_memberships')
+      .insert({
+        workspace_id: workspaceId,
+        user_id: session.user.id,
+        role: 'owner',
+      })
+
+    if (membershipInsert.error) {
+      throw new Error(membershipInsert.error.message)
+    }
+  }
+
+  const projectResponse = await supabase
+    .from('projects')
+    .select('id')
+    .eq('workspace_id', workspaceId)
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle()
+
+  if (projectResponse.error) {
+    throw new Error(projectResponse.error.message)
+  }
+
+  let projectId = projectResponse.data?.id ?? null
+
+  if (!projectId) {
+    projectId = crypto.randomUUID()
+    const createdProject = await supabase
+      .from('projects')
+      .insert({
+        id: projectId,
+        workspace_id: workspaceId,
+        name: seed.projectName,
+        slug: `project-${timestampSeed}`,
+        summary: 'Primary GraphCore project created automatically for promptable authoring.',
+        visibility: 'private',
+        created_by: session.user.id,
+        metadata: {
+          bootstrapSource: 'web_app',
+          bootstrapVersion: 4,
+        },
+      })
+
+    if (createdProject.error) {
+      throw new Error(createdProject.error?.message ?? 'Project creation failed.')
+    }
+  }
+
+  const draftResponse = await supabase
+    .from('project_drafts')
+    .select('id')
+    .eq('project_id', projectId)
+    .order('is_primary', { ascending: false })
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (draftResponse.error) {
+    throw new Error(draftResponse.error.message)
+  }
+
+  if (!draftResponse.data?.id) {
+    const draftId = crypto.randomUUID()
+    const createdDraft = await supabase
+      .from('project_drafts')
+      .insert({
+        id: draftId,
+        project_id: projectId,
+        name: 'Main Draft',
+        version: 1,
+        is_primary: true,
+        created_by: session.user.id,
+        metadata: {
+          bootstrapSource: 'web_app',
+          bootstrapVersion: 4,
+        },
+      })
+
+    if (createdDraft.error) {
+      throw new Error(createdDraft.error?.message ?? 'Draft creation failed.')
+    }
+  }
+}
+
+export async function proposePatch(request: PromptPatchRequest): Promise<PromptPatchResponse> {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession()
+  let fallbackReason: string | null = null
+  const liveSnapshot = isLiveSnapshot(request.snapshot)
+
+  if (session && liveSnapshot) {
+    const response = await invokeAuthedFunction<PromptPatchResponse>('prompt-patch', request, session)
+
+    if (!response.error && response.data) {
+      return response.data as PromptPatchResponse
+    }
+
+    fallbackReason = response.error?.message ?? 'The hosted prompt orchestrator returned no data.'
+    console.error('[GraphCore] prompt-patch invocation failed, using local fallback.', {
+      reason: fallbackReason,
+      request,
+      response,
+    })
+  } else {
+    fallbackReason = session
+      ? 'The current editor snapshot is the bundled demo project, not a live Supabase draft.'
+      : 'No authenticated Supabase session was available.'
+    console.error('[GraphCore] prompt-patch skipped, using local fallback.', {
+      reason: fallbackReason,
+      request,
+    })
+  }
+
+  const prompt = request.prompt
+  const snapshot = request.snapshot
+  const context = request.context
   const slug = prompt
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '_')
@@ -507,6 +798,65 @@ export async function proposePatch(prompt: string, snapshot: ProjectSnapshot, co
           },
         },
       ] as PatchOperation[],
+      diagnostics: [
+        'Fallback patch generated locally because the prompt backend was unavailable.',
+        fallbackReason ? `Reason: ${fallbackReason}` : 'Reason: unknown prompt backend failure.',
+      ],
+      assistantNotes: fallbackReason
+        ? `Hosted prompt orchestrator was unavailable. Local fallback was used instead. ${fallbackReason}`
+        : 'Hosted prompt orchestrator was unavailable. Local fallback was used instead.',
+    }
+  }
+
+  if (request.targetMode === 'new_graph') {
+    const graphKey = `graph.${slug}`
+    return {
+      summary: `Draft graph patch generated from prompt: ${prompt.slice(0, 80)}`,
+      operations: [
+        {
+          op: 'create_graph',
+          key: graphKey,
+          payload: {
+            name: slug
+              .split('_')
+              .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+              .join(' '),
+            graphType: request.graphType ?? 'narrative_flow',
+            summary: prompt,
+          },
+        },
+        {
+          op: 'create_node',
+          graphKey,
+          node: {
+            id: `node-generated-${Date.now()}`,
+            key: `${graphKey}.story_text_${slug}`,
+            type: 'text',
+            title: 'Generated Story Beat',
+            templateKey: 'story_text',
+            subtitle: null,
+            position: { x: 360, y: 220 },
+            body: {
+              text: 'Review and refine this generated graph node before applying it.',
+              imageAssetKey: null,
+              audioAssetKey: null,
+              choices: [],
+            },
+            condition: null,
+            effects: [],
+            ports: [{ id: 'in', label: 'In', direction: 'input' }, { id: 'out', label: 'Out', direction: 'output' }],
+            display: { iconAssetKey: null, compactPreview: false },
+            metadata: {},
+          },
+        },
+      ] as PatchOperation[],
+      diagnostics: [
+        'Fallback patch generated locally because the prompt backend was unavailable.',
+        fallbackReason ? `Reason: ${fallbackReason}` : 'Reason: unknown prompt backend failure.',
+      ],
+      assistantNotes: fallbackReason
+        ? `Hosted prompt orchestrator was unavailable. Local graph fallback was used instead. ${fallbackReason}`
+        : 'Hosted prompt orchestrator was unavailable. Local graph fallback was used instead.',
     }
   }
 
@@ -543,6 +893,8 @@ export async function proposePatch(prompt: string, snapshot: ProjectSnapshot, co
           },
         },
       ] as PatchOperation[],
+      diagnostics: ['Fallback patch generated locally because the prompt backend was unavailable.'],
+      assistantNotes: 'The hosted prompt orchestrator was unavailable, so GraphCore generated a minimal local patch preview.',
     }
   }
 
@@ -567,6 +919,43 @@ export async function proposePatch(prompt: string, snapshot: ProjectSnapshot, co
         archetypeKey: prompt.toLowerCase().includes('potion') ? 'item.consumable' : 'item.utility',
       },
     ] as PatchOperation[],
+    diagnostics: [
+      'Fallback patch generated locally because the prompt backend was unavailable.',
+      fallbackReason ? `Reason: ${fallbackReason}` : 'Reason: unknown prompt backend failure.',
+    ],
+    assistantNotes: fallbackReason
+      ? `Hosted prompt orchestrator was unavailable. Local fallback was used instead. ${fallbackReason}`
+      : 'Hosted prompt orchestrator was unavailable. Local fallback was used instead.',
+  }
+}
+
+export async function applyPatchProposal(snapshot: ProjectSnapshot, operations: PatchOperation[], patchSetId?: string) {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession()
+
+  if (!session || !isLiveSnapshot(snapshot)) {
+    return { source: 'local' as const }
+  }
+
+  const response = await supabase.functions.invoke('apply-patch', {
+    headers: {
+      Authorization: `Bearer ${session.access_token}`,
+    },
+    body: {
+      draftId: snapshot.draft.id,
+      patchSetId,
+      operations,
+    },
+  })
+
+  if (response.error) {
+    throw new Error(response.error.message)
+  }
+
+  return {
+    source: 'supabase' as const,
+    data: response.data,
   }
 }
 
@@ -575,9 +964,12 @@ export async function compileSnapshot(snapshot: ProjectSnapshot) {
     data: { session },
   } = await supabase.auth.getSession()
 
-  if (session) {
+  if (session && isLiveSnapshot(snapshot)) {
     const releaseVersion = `draft-${snapshot.draft.version}-${Date.now()}`
     const response = await supabase.functions.invoke('publish-release', {
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+      },
       body: {
         snapshot,
         label: `${snapshot.project.name} draft preview`,

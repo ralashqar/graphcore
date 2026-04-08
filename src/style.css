@@ -259,6 +259,42 @@ code {
   min-height: 0;
 }
 
+.workspace-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 18px 22px;
+  border: 1px solid rgba(94, 234, 212, 0.16);
+  border-radius: 22px;
+  background:
+    linear-gradient(135deg, rgba(94, 234, 212, 0.09), rgba(45, 212, 191, 0.03)),
+    var(--bg-elev-1);
+  box-shadow: var(--shadow);
+}
+
+.workspace-banner-copy {
+  display: grid;
+  gap: 6px;
+}
+
+.workspace-banner-copy p,
+.workspace-banner-copy h2 {
+  margin: 0;
+}
+
+.workspace-banner-copy p {
+  max-width: 78ch;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.workspace-banner-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
 .focus-layout {
   min-height: 100%;
   display: grid;
@@ -841,6 +877,20 @@ code {
   margin-top: 14px;
 }
 
+.prompt-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.prompt-preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
+}
+
 .prompt-composer {
   width: 100%;
   min-height: 88px;
@@ -866,6 +916,122 @@ code {
 .prompt-hint span {
   color: var(--muted);
   line-height: 1.5;
+}
+
+.prompt-review-grid {
+  display: grid;
+  gap: 16px;
+}
+
+.compact-section {
+  gap: 12px;
+}
+
+.detail-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.auth-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(3, 6, 10, 0.68);
+  backdrop-filter: blur(10px);
+}
+
+.auth-dialog {
+  width: min(100%, 520px);
+  display: grid;
+  gap: 18px;
+  padding: 22px;
+  border-radius: 28px;
+  border: 1px solid var(--line);
+  background:
+    linear-gradient(140deg, rgba(94, 234, 212, 0.06), transparent 26%),
+    var(--bg-elev-2);
+  box-shadow: var(--shadow);
+}
+
+.auth-mode-switch {
+  width: fit-content;
+}
+
+.auth-form {
+  display: grid;
+  gap: 14px;
+}
+
+.auth-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.oauth-button {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 13px 16px;
+  border-radius: 16px;
+  border: 1px solid var(--line-strong);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  cursor: pointer;
+  transition:
+    background-color 180ms ease,
+    border-color 180ms ease,
+    transform 180ms ease;
+}
+
+.oauth-button:hover {
+  transform: translateY(-1px);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.google-oauth-icon {
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.google-oauth-icon svg {
+  width: 20px;
+  height: 20px;
+  display: block;
+}
+
+.auth-divider {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 2px 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.auth-divider::before,
+.auth-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+
+.auth-divider::before {
+  margin-right: 12px;
+}
+
+.auth-divider::after {
+  margin-left: 12px;
 }
 
 .item-layout {

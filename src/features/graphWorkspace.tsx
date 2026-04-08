@@ -28,6 +28,7 @@ import type {
   NodeDefinition,
 } from '../domain/graphcore'
 import {
+  applyTemplateToNode,
   createNodeFromTemplate,
   graphNodeLibrary,
   graphNodeTemplatesByKey,
@@ -292,43 +293,8 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
   function applyTemplateChange(nodeKey: string, templateKey: string) {
     if (!selectedGraph) return
     const currentNode = selectedGraph.nodes.find((node) => node.key === nodeKey)
-    const template = graphNodeTemplatesByKey.get(templateKey)
-    if (!currentNode || !template) return
-    const nextNode = normalizeNode({
-      ...currentNode,
-      type: template.baseNodeType,
-      templateKey: template.key,
-      subtitle: template.defaultSubtitle ?? currentNode.subtitle,
-      title: currentNode.title || template.defaultTitle,
-      body: {
-        text: currentNode.body.text ?? template.defaultBody?.text ?? null,
-        imageAssetKey: currentNode.body.imageAssetKey ?? template.defaultBody?.imageAssetKey ?? null,
-        audioAssetKey: currentNode.body.audioAssetKey ?? template.defaultBody?.audioAssetKey ?? null,
-        choices:
-          template.baseNodeType === 'choice'
-            ? currentNode.body.choices.length > 0
-              ? currentNode.body.choices
-              : template.defaultBody?.choices ?? []
-            : [],
-      },
-      condition:
-        template.baseNodeType === 'condition'
-          ? currentNode.condition ?? template.defaultCondition ?? null
-          : null,
-      effects:
-        template.baseNodeType === 'effect' || template.baseNodeType === 'quest_step' || template.baseNodeType === 'market'
-          ? currentNode.effects.length > 0
-            ? currentNode.effects
-            : template.defaultEffects ?? []
-          : [],
-      display: {
-        ...currentNode.display,
-        ...template.defaultDisplay,
-      },
-      metadata: {
-        ...currentNode.metadata,
-      },
-    })
+    if (!currentNode || !graphNodeTemplatesByKey.get(templateKey)) return
+    const nextNode = applyTemplateToNode(currentNode, templateKey)
     setLiveNodes((current) =>
       current.map((node) =>
         node.id === nodeKey
