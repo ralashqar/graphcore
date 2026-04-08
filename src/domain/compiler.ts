@@ -7,11 +7,28 @@ import type {
   GraphDefinition,
   ProjectSnapshot,
 } from './graphcore'
+import { graphNodeTemplatesByKey } from './nodeLibrary'
 
 export function compileBundle(snapshot: ProjectSnapshot): GameSystemBundle {
+  const graphKeys = new Set<string>()
   const diagnostics = [
     ...validateDefinitions(snapshot.definitions, snapshot.archetypes, snapshot.assets),
-    ...snapshot.graphs.flatMap((graph) => validateGraph(graph, snapshot.definitions, snapshot.assets)),
+    ...snapshot.graphs.flatMap((graph) => {
+      const duplicateGraphKey = graphKeys.has(graph.key)
+      graphKeys.add(graph.key)
+      return [
+        ...(duplicateGraphKey
+          ? [{
+              level: 'error' as const,
+              code: 'duplicate_graph_key',
+              message: `Duplicate graph key "${graph.key}".`,
+              graphKey: graph.key,
+              nodeKey: null,
+            }]
+          : []),
+        ...validateGraph(graph, snapshot.graphs, snapshot.definitions, snapshot.assets),
+      ]
+    }),
   ]
 
   const definitionsByKind = snapshot.definitions.reduce<Record<string, string[]>>((acc, definition) => {
@@ -162,13 +179,15 @@ export function validateDefinitions(
 
 export function validateGraph(
   graph: GraphDefinition,
+  graphs: GraphDefinition[],
   definitions: DefinitionBase[],
   assets: AssetDefinition[],
 ): Diagnostic[] {
   const diagnostics: Diagnostic[] = []
   const definitionKeys = new Set(definitions.map((definition) => definition.key))
   const assetKeys = new Set(assets.map((asset) => asset.key))
-  const nodeKeys = new Set(graph.nodes.map((node) => node.key))
+  const graphKeys = new Set(graphs.map((item) => item.key))
+  const nodeKeys = new Set<string>()
   const startNodes = graph.nodes.filter((node) => node.type === 'start')
   const endNodes = graph.nodes.filter((node) => node.type === 'end')
 
@@ -192,6 +211,16 @@ export function validateGraph(
     })
   }
 
+  if (graph.entryNodeKey && !graph.nodes.some((node) => node.key === graph.entryNodeKey)) {
+    diagnostics.push({
+      level: 'error',
+      code: 'graph_missing_entry',
+      message: `Graph "${graph.key}" entry node "${graph.entryNodeKey}" is missing.`,
+      graphKey: graph.key,
+      nodeKey: null,
+    })
+  }
+
   for (const edge of graph.edges) {
     if (!nodeKeys.has(edge.source.nodeKey) || !nodeKeys.has(edge.target.nodeKey)) {
       diagnostics.push({
@@ -205,6 +234,40 @@ export function validateGraph(
   }
 
   for (const node of graph.nodes) {
+    if (nodeKeys.has(node.key)) {
+      diagnostics.push({
+        level: 'error',
+        code: 'duplicate_node_key',
+        message: `Graph "${graph.key}" has duplicate node key "${node.key}".`,
+        graphKey: graph.key,
+        nodeKey: node.key,
+      })
+    }
+
+    nodeKeys.add(node.key)
+
+    const template = node.templateKey ? graphNodeTemplatesByKey.get(node.templateKey) : null
+
+    if (node.templateKey && !template) {
+      diagnostics.push({
+        level: 'warning',
+        code: 'missing_node_template',
+        message: `Node "${node.key}" references unknown template "${node.templateKey}".`,
+        graphKey: graph.key,
+        nodeKey: node.key,
+      })
+    }
+
+    if (template && !template.compatibleGraphTypes.includes(graph.graphType)) {
+      diagnostics.push({
+        level: 'warning',
+        code: 'template_graph_type_mismatch',
+        message: `Node "${node.key}" uses template "${template.key}" outside compatible graph types.`,
+        graphKey: graph.key,
+        nodeKey: node.key,
+      })
+    }
+
     if (node.body.imageAssetKey && !assetKeys.has(node.body.imageAssetKey)) {
       diagnostics.push({
         level: 'error',
@@ -223,6 +286,45 @@ export function validateGraph(
         graphKey: graph.key,
         nodeKey: node.key,
       })
+    }
+
+    if (node.type === 'choice') {
+      if (node.body.choices.length === 0) {
+        diagnostics.push({
+          level: 'warning',
+          code: 'choice_missing_options',
+          message: `Choice node "${node.key}" should contain at least one choice.`,
+          graphKey: graph.key,
+          nodeKey: node.key,
+        })
+      }
+
+      const choiceIds = new Set<string>()
+      for (const choice of node.body.choices) {
+        if (choiceIds.has(choice.id)) {
+          diagnostics.push({
+            level: 'error',
+            code: 'duplicate_choice_id',
+            message: `Choice node "${node.key}" has duplicate choice id "${choice.id}".`,
+            graphKey: graph.key,
+            nodeKey: node.key,
+          })
+        }
+        choiceIds.add(choice.id)
+      }
+    }
+
+    if (node.type === 'call_subgraph') {
+      const subgraphKey = typeof node.metadata.subgraphGraphKey === 'string' ? node.metadata.subgraphGraphKey : null
+      if (subgraphKey && !graphKeys.has(subgraphKey)) {
+        diagnostics.push({
+          level: 'error',
+          code: 'missing_subgraph_target',
+          message: `Call subgraph node "${node.key}" references missing graph "${subgraphKey}".`,
+          graphKey: graph.key,
+          nodeKey: node.key,
+        })
+      }
     }
 
     for (const effect of node.effects) {

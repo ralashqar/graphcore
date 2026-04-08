@@ -58,6 +58,8 @@ export const nodeTypeSchema = z.enum([
   'end',
 ])
 
+export const graphTypeSchema = z.enum(['narrative_flow', 'system_graph', 'quest_flow'])
+
 export const questStateSchema = z.enum([
   'not_started',
   'available',
@@ -325,11 +327,19 @@ export const portDefinitionSchema = z.object({
   direction: z.enum(['input', 'output']),
 })
 
+export const nodeDisplaySchema = z.object({
+  colorToken: z.string().optional(),
+  iconAssetKey: z.string().nullable().default(null),
+  compactPreview: z.boolean().default(false),
+})
+
 export const nodeDefinitionSchema = z.object({
   id: z.string(),
   key: z.string(),
   type: nodeTypeSchema,
   title: z.string(),
+  templateKey: z.string().nullable().default(null),
+  subtitle: z.string().nullable().default(null),
   position: z.object({ x: z.number(), y: z.number() }),
   body: z
     .object({
@@ -347,6 +357,10 @@ export const nodeDefinitionSchema = z.object({
   condition: conditionExprSchema.nullable().default(null),
   effects: z.array(effectOpSchema).default([]),
   ports: z.array(portDefinitionSchema).default([]),
+  display: nodeDisplaySchema.default({
+    iconAssetKey: null,
+    compactPreview: false,
+  }),
   metadata: looseRecordSchema.default({}),
 })
 
@@ -364,7 +378,7 @@ export const graphDefinitionSchema = z.object({
   id: z.string(),
   key: z.string(),
   name: z.string(),
-  graphType: z.enum(['narrative_flow', 'system_graph', 'quest_flow']).default('narrative_flow'),
+  graphType: graphTypeSchema.default('narrative_flow'),
   summary: z.string().default(''),
   entryNodeKey: z.string().nullable().default(null),
   metadata: looseRecordSchema.default({}),
@@ -525,9 +539,34 @@ export const patchOperationSchema = z.discriminatedUnion('op', [
     payload: graphDefinitionSchema.partial(),
   }),
   z.object({
+    op: z.literal('update_graph'),
+    key: z.string(),
+    changes: z.record(z.string(), z.unknown()),
+  }),
+  z.object({
+    op: z.literal('delete_graph'),
+    key: z.string(),
+  }),
+  z.object({
+    op: z.literal('duplicate_graph'),
+    key: z.string(),
+    nextKey: z.string(),
+  }),
+  z.object({
     op: z.literal('create_node'),
     graphKey: z.string(),
     node: nodeDefinitionSchema,
+  }),
+  z.object({
+    op: z.literal('update_node'),
+    graphKey: z.string(),
+    nodeKey: z.string(),
+    changes: z.record(z.string(), z.unknown()),
+  }),
+  z.object({
+    op: z.literal('delete_node'),
+    graphKey: z.string(),
+    nodeKey: z.string(),
   }),
   z.object({
     op: z.literal('move_node'),
@@ -539,6 +578,17 @@ export const patchOperationSchema = z.discriminatedUnion('op', [
     op: z.literal('connect_edge'),
     graphKey: z.string(),
     edge: edgeDefinitionSchema,
+  }),
+  z.object({
+    op: z.literal('update_edge'),
+    graphKey: z.string(),
+    edgeKey: z.string(),
+    changes: z.record(z.string(), z.unknown()),
+  }),
+  z.object({
+    op: z.literal('delete_edge'),
+    graphKey: z.string(),
+    edgeKey: z.string(),
   }),
   z.object({
     op: z.literal('replace_subgraph'),
@@ -557,6 +607,27 @@ export const patchOperationSchema = z.discriminatedUnion('op', [
     graphKey: z.string(),
     nodeKey: z.string(),
     effects: z.array(effectOpSchema),
+  }),
+  z.object({
+    op: z.literal('set_node_body'),
+    graphKey: z.string(),
+    nodeKey: z.string(),
+    body: nodeDefinitionSchema.shape.body,
+  }),
+  z.object({
+    op: z.literal('set_node_choices'),
+    graphKey: z.string(),
+    nodeKey: z.string(),
+    choices: z.array(z.object({ id: z.string(), label: z.string(), condition: conditionExprSchema.optional() })),
+  }),
+  z.object({
+    op: z.literal('set_node_media'),
+    graphKey: z.string(),
+    nodeKey: z.string(),
+    media: z.object({
+      imageAssetKey: z.string().nullable().default(null),
+      audioAssetKey: z.string().nullable().default(null),
+    }),
   }),
   z.object({
     op: z.literal('attach_asset'),
@@ -613,12 +684,41 @@ export type FieldValue = z.infer<typeof fieldValueSchema>
 export type GraphDefinition = z.infer<typeof graphDefinitionSchema>
 export type NodeDefinition = z.infer<typeof nodeDefinitionSchema>
 export type EdgeDefinition = z.infer<typeof edgeDefinitionSchema>
+export type PortDefinition = z.infer<typeof portDefinitionSchema>
 export type AssetDefinition = z.infer<typeof assetDefinitionSchema>
 export type ProjectSnapshot = z.infer<typeof projectSnapshotSchema>
 export type PatchOperation = z.infer<typeof patchOperationSchema>
 export type Diagnostic = z.infer<typeof diagnosticSchema>
 export type GameSystemBundle = z.infer<typeof gameSystemBundleSchema>
 export type EffectOp = z.infer<typeof effectOpSchema>
+export type GraphType = z.infer<typeof graphTypeSchema>
+export type GraphCreateInput = Pick<GraphDefinition, 'name' | 'key' | 'graphType' | 'summary'>
+export type GraphEditorSelection = {
+  graphKey: string | null
+  nodeKey: string | null
+  edgeKey: string | null
+}
+export type NodeTemplateDefinition = {
+  key: string
+  label: string
+  groupKey: string
+  baseNodeType: NodeDefinition['type']
+  compatibleGraphTypes: GraphType[]
+  defaultTitle: string
+  defaultSubtitle?: string | null
+  defaultBody?: Partial<NodeDefinition['body']>
+  defaultCondition?: ConditionExpr | null
+  defaultEffects?: EffectOp[]
+  defaultMetadata?: Record<string, unknown>
+  defaultDisplay?: Partial<NodeDefinition['display']>
+  defaultChoices?: Array<{ id: string; label: string; condition?: ConditionExpr }>
+  inspectorSchema: 'story' | 'choice' | 'condition' | 'effect' | 'quest_step' | 'market' | 'call_subgraph' | 'random' | 'branch' | 'basic'
+}
+export type NodeLibraryGroup = {
+  key: string
+  label: string
+  templates: NodeTemplateDefinition[]
+}
 
 export const schemaCatalog = {
   archetypeDefinitionSchema,
@@ -634,6 +734,8 @@ export const schemaCatalog = {
   formulaExprSchema,
   gameSystemBundleSchema,
   graphDefinitionSchema,
+  graphTypeSchema,
+  nodeDisplaySchema,
   nodeDefinitionSchema,
   patchOperationSchema,
   projectSnapshotSchema,

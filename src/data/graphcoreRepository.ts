@@ -447,7 +447,7 @@ export async function loadProjectSnapshot(): Promise<{
   }
 }
 
-export async function proposePatch(prompt: string, snapshot: ProjectSnapshot): Promise<{
+export async function proposePatch(prompt: string, snapshot: ProjectSnapshot, context?: { graphKey?: string | null; nodeKey?: string | null; target?: 'graph' | 'node' | 'content' }): Promise<{
   summary: string
   operations: PatchOperation[]
 }> {
@@ -460,6 +460,7 @@ export async function proposePatch(prompt: string, snapshot: ProjectSnapshot): P
       body: {
         prompt,
         snapshot,
+        context,
       },
     })
 
@@ -503,6 +504,42 @@ export async function proposePatch(prompt: string, snapshot: ProjectSnapshot): P
             defaultValue: 0,
             constraints: {},
             sortOrder: 1,
+          },
+        },
+      ] as PatchOperation[],
+    }
+  }
+
+  if (context?.target === 'graph' || context?.target === 'node' || context?.graphKey) {
+    const graphKey = context.graphKey ?? snapshot.graphs[0]?.key ?? 'graph.generated'
+    return {
+      summary: `Draft graph patch generated from prompt: ${prompt.slice(0, 80)}`,
+      operations: [
+        {
+          op: 'create_node',
+          graphKey,
+          node: {
+            id: `node-generated-${Date.now()}`,
+            key: `${graphKey}.story_text_${slug}`,
+            type: 'text',
+            title: slug
+              .split('_')
+              .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+              .join(' '),
+            templateKey: 'story_text',
+            subtitle: null,
+            position: { x: 360, y: 220 },
+            body: {
+              text: 'Review and refine this generated graph node before applying it.',
+              imageAssetKey: null,
+              audioAssetKey: null,
+              choices: [],
+            },
+            condition: null,
+            effects: [],
+            ports: [{ id: 'in', label: 'In', direction: 'input' }, { id: 'out', label: 'Out', direction: 'output' }],
+            display: { iconAssetKey: null, compactPreview: false },
+            metadata: {},
           },
         },
       ] as PatchOperation[],

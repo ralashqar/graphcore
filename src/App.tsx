@@ -1,18 +1,20 @@
 import '@xyflow/react/dist/style.css'
 
-import { Background, Controls, MiniMap, ReactFlow, type Edge, type Node } from '@xyflow/react'
 import { useEffect, useMemo, useState, useTransition } from 'react'
 import { compileBundle } from './domain/compiler'
 import type {
   ArchetypeDefinition,
   DefinitionBase,
+  EdgeDefinition,
   FieldDefinition,
   GameSystemBundle,
-  GraphDefinition,
+  GraphCreateInput,
   PatchOperation,
   ProjectSnapshot,
 } from './domain/graphcore'
 import { compileSnapshot, loadProjectSnapshot, proposePatch } from './data/graphcoreRepository'
+import { normalizeNode } from './domain/nodeLibrary'
+import { GraphWorkspace } from './features/graphWorkspace'
 import { AssetsWorkspace, ContentWorkspace } from './features/itemAssetWorkspace'
 import { useEditorStore } from './state/editorStore'
 
@@ -30,8 +32,6 @@ const workspaceTabs: Array<{ id: WorkspaceTab; label: string }> = [
   { id: 'prompts', label: 'Prompts' },
   { id: 'releases', label: 'Releases' },
 ]
-
-const graphNodePalette = ['start', 'text', 'choice', 'condition', 'effect', 'quest_step', 'branch', 'call_subgraph', 'return', 'random', 'market', 'end']
 
 function slugify(value: string) {
   return value
@@ -63,7 +63,7 @@ export default function App() {
   const [selectedArchetypeKey, setSelectedArchetypeKey] = useState<string | null>(null)
   const [selectedPatchIndex, setSelectedPatchIndex] = useState(0)
   const [isPending, startTransition] = useTransition()
-  const { promptText, selectedDefinitionKey, selectedGraphKey, selectedNodeKey, setPromptText, setSelectedDefinitionKey, setSelectedGraphKey, setSelectedNodeKey } = useEditorStore()
+  const { promptText, selectedDefinitionKey, selectedEdgeKey, selectedGraphKey, selectedNodeKey, setPromptText, setSelectedDefinitionKey, setSelectedEdgeKey, setSelectedGraphKey, setSelectedNodeKey } = useEditorStore()
 
   useEffect(() => {
     let active = true
@@ -100,10 +100,8 @@ export default function App() {
   const selectedGraph = useMemo(() => snapshot?.graphs.find((graph) => graph.key === selectedGraphKey) ?? snapshot?.graphs[0] ?? null, [selectedGraphKey, snapshot])
   const selectedItem = useMemo(() => itemDefinitions.find((definition) => definition.key === selectedDefinitionKey) ?? itemDefinitions[0] ?? null, [itemDefinitions, selectedDefinitionKey])
   const selectedNode = useMemo(() => selectedGraph?.nodes.find((node) => node.key === selectedNodeKey) ?? null, [selectedGraph, selectedNodeKey])
+  const selectedEdge = useMemo(() => selectedGraph?.edges.find((edge) => edge.key === selectedEdgeKey) ?? null, [selectedEdgeKey, selectedGraph])
   const selectedAsset = useMemo(() => snapshot?.assets.find((asset) => asset.key === selectedAssetKey) ?? snapshot?.assets[0] ?? null, [selectedAssetKey, snapshot])
-
-  const graphNodes = useMemo<Node[]>(() => (selectedGraph?.nodes ?? []).map((node): Node => ({ id: node.key, position: node.position, data: { label: `${node.title}` }, type: 'default', className: `flow-node flow-node-${node.type}` })), [selectedGraph])
-  const graphEdges = useMemo<Edge[]>(() => (selectedGraph?.edges ?? []).map((edge): Edge => ({ id: edge.key, source: edge.source.nodeKey, target: edge.target.nodeKey, label: edge.label ?? undefined, animated: edge.source.portId === 'true' || edge.source.portId === 'false' })), [selectedGraph])
 
   const patchHistory = useMemo(() => {
     const generated = patchPreview ? [{ id: 'preview', summary: patchPreview.summary, prompt: promptText, status: 'proposed', operations: patchPreview.operations, diagnostics: ['Local preview generated from the prompt dock.'] }] : []
@@ -121,6 +119,192 @@ export default function App() {
       setBundle(compileBundle(next))
       return next
     })
+  }
+
+  function createGraph(input: GraphCreateInput) {
+    const suffix = uniqueKey(snapshot?.graphs.map((graph) => graph.key) ?? [], input.key.replace(/^graph\./, ''))
+    const graphKey = input.key.startsWith('graph.') ? `graph.${suffix}` : `graph.${suffix}`
+    const startNode = normalizeNode({
+      id: `node-start-${Date.now()}`,
+      key: `start.${suffix}`,
+      type: 'start',
+      title: 'Start',
+      templateKey: 'start',
+      subtitle: null,
+      position: { x: 80, y: 160 },
+      body: { text: null, imageAssetKey: null, audioAssetKey: null, choices: [] },
+      condition: null,
+      effects: [],
+      ports: [],
+      display: { iconAssetKey: null, compactPreview: false },
+      metadata: {},
+    })
+    const endNode = normalizeNode({
+      id: `node-end-${Date.now()}`,
+      key: `end.${suffix}`,
+      type: 'end',
+      title: 'End',
+      templateKey: 'end',
+      subtitle: null,
+      position: { x: 480, y: 160 },
+      body: { text: null, imageAssetKey: null, audioAssetKey: null, choices: [] },
+      condition: null,
+      effects: [],
+      ports: [],
+      display: { iconAssetKey: null, compactPreview: false },
+      metadata: {},
+    })
+    const nextGraph = {
+      id: `graph-${Date.now()}`,
+      key: graphKey,
+      name: input.name,
+      graphType: input.graphType,
+      summary: input.summary,
+      entryNodeKey: startNode.key,
+      metadata: {},
+      llmHints: {},
+      nodes: [startNode, endNode],
+      edges: [{
+        id: `edge-${Date.now()}`,
+        key: `edge.${suffix}_start_end`,
+        source: { nodeKey: startNode.key, portId: 'out' },
+        target: { nodeKey: endNode.key, portId: 'in' },
+        label: null,
+        condition: null,
+        metadata: {},
+      }],
+    }
+    applySnapshotUpdate((current) => ({ ...current, graphs: [...current.graphs, nextGraph] }))
+    setSelectedGraphKey(nextGraph.key)
+  }
+
+  function updateGraph(graphKey: string, changes: Partial<ProjectSnapshot['graphs'][number]>) {
+    applySnapshotUpdate((current) => ({
+      ...current,
+      graphs: current.graphs.map((graph) => {
+        if (graph.key !== graphKey) return graph
+        const nextGraph = { ...graph, ...changes }
+        if (changes.key && changes.key !== graphKey) {
+          nextGraph.nodes = graph.nodes.map((node) => ({
+            ...node,
+            key: node.key.replace(graphKey, changes.key ?? graphKey),
+          }))
+        }
+        return nextGraph
+      }),
+    }))
+    if (changes.key && selectedGraphKey === graphKey) setSelectedGraphKey(changes.key)
+  }
+
+  function deleteGraph(graphKey: string) {
+    applySnapshotUpdate((current) => {
+      const nextGraphs = current.graphs.filter((graph) => graph.key !== graphKey)
+      return { ...current, graphs: nextGraphs }
+    })
+    const fallbackGraph = snapshot?.graphs.find((graph) => graph.key !== graphKey) ?? null
+    setSelectedGraphKey(fallbackGraph?.key ?? null)
+  }
+
+  function duplicateGraph(graphKey: string) {
+    if (!snapshot) return
+    const graph = snapshot.graphs.find((item) => item.key === graphKey)
+    if (!graph) return
+    const duplicateKey = `graph.${uniqueKey(snapshot.graphs.map((item) => item.key), `${graph.name.replace(/\s+/g, '_').toLowerCase()}_copy`)}`
+    const nodeKeyMap = new Map<string, string>()
+    const duplicatedNodes = graph.nodes.map((node, index) => {
+      const nextKey = `${node.key}_copy_${index + 1}`
+      nodeKeyMap.set(node.key, nextKey)
+      return { ...node, id: `${node.id}-copy-${Date.now()}`, key: nextKey, position: { x: node.position.x + 120, y: node.position.y + 80 } }
+    })
+    const duplicatedGraph = {
+      ...graph,
+      id: `${graph.id}-copy-${Date.now()}`,
+      key: duplicateKey,
+      name: `${graph.name} Copy`,
+      entryNodeKey: graph.entryNodeKey ? nodeKeyMap.get(graph.entryNodeKey) ?? null : null,
+      nodes: duplicatedNodes,
+      edges: graph.edges.map((edge, index) => ({
+        ...edge,
+        id: `${edge.id}-copy-${Date.now()}-${index}`,
+        key: `${edge.key}_copy_${index + 1}`,
+        source: { ...edge.source, nodeKey: nodeKeyMap.get(edge.source.nodeKey) ?? edge.source.nodeKey },
+        target: { ...edge.target, nodeKey: nodeKeyMap.get(edge.target.nodeKey) ?? edge.target.nodeKey },
+      })),
+    }
+    applySnapshotUpdate((current) => ({ ...current, graphs: [...current.graphs, duplicatedGraph] }))
+    setSelectedGraphKey(duplicatedGraph.key)
+  }
+
+  function createNode(graphKey: string, node: ProjectSnapshot['graphs'][number]['nodes'][number]) {
+    applySnapshotUpdate((current) => ({
+      ...current,
+      graphs: current.graphs.map((graph) => graph.key === graphKey ? { ...graph, nodes: [...graph.nodes, normalizeNode(node)] } : graph),
+    }))
+    setSelectedNodeKey(node.key)
+  }
+
+  function updateNode(graphKey: string, nodeKey: string, changes: Partial<ProjectSnapshot['graphs'][number]['nodes'][number]>) {
+    applySnapshotUpdate((current) => ({
+      ...current,
+      graphs: current.graphs.map((graph) => {
+        if (graph.key !== graphKey) return graph
+        return {
+          ...graph,
+          nodes: graph.nodes.map((node) => node.key === nodeKey ? normalizeNode({ ...node, ...changes, body: changes.body ? { ...node.body, ...changes.body } : node.body, display: changes.display ? { ...node.display, ...changes.display } : node.display, metadata: changes.metadata ? { ...node.metadata, ...changes.metadata } : node.metadata }) : node),
+          entryNodeKey: graph.entryNodeKey === nodeKey && typeof changes.key === 'string' ? changes.key : graph.entryNodeKey,
+          edges: typeof changes.key === 'string' ? graph.edges.map((edge) => ({
+            ...edge,
+            source: edge.source.nodeKey === nodeKey ? { ...edge.source, nodeKey: changes.key as string } : edge.source,
+            target: edge.target.nodeKey === nodeKey ? { ...edge.target, nodeKey: changes.key as string } : edge.target,
+          })) : graph.edges,
+        }
+      }),
+    }))
+    if (changes.key && selectedNodeKey === nodeKey) setSelectedNodeKey(changes.key)
+  }
+
+  function deleteNode(graphKey: string, nodeKey: string) {
+    applySnapshotUpdate((current) => ({
+      ...current,
+      graphs: current.graphs.map((graph) => graph.key === graphKey ? { ...graph, nodes: graph.nodes.filter((node) => node.key !== nodeKey), edges: graph.edges.filter((edge) => edge.source.nodeKey !== nodeKey && edge.target.nodeKey !== nodeKey), entryNodeKey: graph.entryNodeKey === nodeKey ? null : graph.entryNodeKey } : graph),
+    }))
+    if (selectedNodeKey === nodeKey) setSelectedNodeKey(null)
+  }
+
+  function duplicateNode(graphKey: string, nodeKey: string) {
+    const graph = snapshot?.graphs.find((item) => item.key === graphKey)
+    const node = graph?.nodes.find((item) => item.key === nodeKey)
+    if (!graph || !node) return
+    const nextKey = `${node.key}_copy_${graph.nodes.filter((item) => item.key.startsWith(`${node.key}_copy`)).length + 1}`
+    createNode(graphKey, { ...node, id: `${node.id}-copy-${Date.now()}`, key: nextKey, title: `${node.title} Copy`, position: { x: node.position.x + 140, y: node.position.y + 80 } })
+  }
+
+  function moveNode(graphKey: string, nodeKey: string, position: ProjectSnapshot['graphs'][number]['nodes'][number]['position']) {
+    updateNode(graphKey, nodeKey, { position })
+  }
+
+  function connectEdge(graphKey: string, edge: EdgeDefinition) {
+    applySnapshotUpdate((current) => ({
+      ...current,
+      graphs: current.graphs.map((graph) => graph.key === graphKey ? { ...graph, edges: [...graph.edges, edge] } : graph),
+    }))
+    setSelectedEdgeKey(edge.key)
+  }
+
+  function updateEdge(graphKey: string, edgeKey: string, changes: Partial<EdgeDefinition>) {
+    applySnapshotUpdate((current) => ({
+      ...current,
+      graphs: current.graphs.map((graph) => graph.key === graphKey ? { ...graph, edges: graph.edges.map((edge) => edge.key === edgeKey ? { ...edge, ...changes, source: changes.source ? { ...edge.source, ...changes.source } : edge.source, target: changes.target ? { ...edge.target, ...changes.target } : edge.target } : edge) } : graph),
+    }))
+    if (changes.key && selectedEdgeKey === edgeKey) setSelectedEdgeKey(changes.key)
+  }
+
+  function deleteEdge(graphKey: string, edgeKey: string) {
+    applySnapshotUpdate((current) => ({
+      ...current,
+      graphs: current.graphs.map((graph) => graph.key === graphKey ? { ...graph, edges: graph.edges.filter((edge) => edge.key !== edgeKey) } : graph),
+    }))
+    if (selectedEdgeKey === edgeKey) setSelectedEdgeKey(null)
   }
 
   function createItem(archetypeKey: string | null = null) {
@@ -303,9 +487,18 @@ export default function App() {
     updateArchetypeIdentity(selectedArchetype.key, { iconAssetKey: assetKey })
   }
 
+  function clearGraphSelection() {
+    if (selectedNodeKey !== null) setSelectedNodeKey(null)
+    if (selectedEdgeKey !== null) setSelectedEdgeKey(null)
+  }
+
   async function handleGeneratePatch() {
     if (!snapshot) return
-    const nextPatch = await proposePatch(promptText, snapshot)
+    const nextPatch = await proposePatch(promptText, snapshot, {
+      target: activeTab === 'graph' ? (selectedNode ? 'node' : 'graph') : 'content',
+      graphKey: selectedGraph?.key ?? null,
+      nodeKey: selectedNode?.key ?? null,
+    })
     setPatchPreview(nextPatch)
     setSelectedPatchIndex(0)
     setActiveTab('prompts')
@@ -331,7 +524,33 @@ export default function App() {
         </header>
 
         <section className="workspace-stage">
-          {activeTab === 'graph' ? <GraphWorkspace graphEdges={graphEdges} graphNodes={graphNodes} selectedGraph={selectedGraph} selectedNode={selectedNode} snapshot={snapshot} onSelectGraph={setSelectedGraphKey} onSelectNode={setSelectedNodeKey} /> : null}
+          {activeTab === 'graph' ? (
+            <GraphWorkspace
+              assets={snapshot.assets}
+              definitions={snapshot.definitions}
+              diagnostics={bundle.diagnostics}
+              selectedEdge={selectedEdge}
+              selectedGraph={selectedGraph}
+              selectedNode={selectedNode}
+              snapshotGraphs={snapshot.graphs}
+              onClearSelection={clearGraphSelection}
+              onConnectEdge={connectEdge}
+              onCreateGraph={createGraph}
+              onCreateNode={createNode}
+              onDeleteEdge={deleteEdge}
+              onDeleteGraph={deleteGraph}
+              onDeleteNode={deleteNode}
+              onDuplicateGraph={duplicateGraph}
+              onDuplicateNode={duplicateNode}
+              onMoveNode={moveNode}
+              onSelectEdge={setSelectedEdgeKey}
+              onSelectGraph={setSelectedGraphKey}
+              onSelectNode={setSelectedNodeKey}
+              onUpdateEdge={updateEdge}
+              onUpdateGraph={updateGraph}
+              onUpdateNode={updateNode}
+            />
+          ) : null}
           {activeTab === 'content' ? (
             <ContentWorkspace
               archetypes={itemArchetypes}
@@ -375,43 +594,6 @@ export default function App() {
   )
 }
 
-function GraphWorkspace({
-  graphEdges,
-  graphNodes,
-  selectedGraph,
-  selectedNode,
-  snapshot,
-  onSelectGraph,
-  onSelectNode,
-}: {
-  graphEdges: Edge[]
-  graphNodes: Node[]
-  selectedGraph: GraphDefinition | null
-  selectedNode: GraphDefinition['nodes'][number] | null
-  snapshot: ProjectSnapshot
-  onSelectGraph: (key: string | null) => void
-  onSelectNode: (key: string | null) => void
-}) {
-  return (
-    <div className="focus-layout">
-      <aside className="focus-rail">
-        <div className="rail-section"><span className="section-label">Narrative graphs</span><div className="rail-list">{snapshot.graphs.map((graph) => <button key={graph.key} className={graph.key === selectedGraph?.key ? 'rail-button is-active' : 'rail-button'} onClick={() => onSelectGraph(graph.key)} type="button"><strong>{graph.name}</strong><span>{graph.graphType}</span></button>)}</div></div>
-        <div className="rail-section"><span className="section-label">Node palette</span><div className="chip-grid">{graphNodePalette.map((nodeType) => <span key={nodeType} className="chip">{nodeType}</span>)}</div></div>
-      </aside>
-
-      <section className="main-surface">
-        <div className="surface-head"><div><span className="eyebrow">Central View</span><h2>{selectedGraph?.name ?? 'No graph selected'}</h2><p className="subtle-line">{selectedGraph?.summary ?? 'Select a graph to focus the main workspace.'}</p></div><div className="surface-stats"><span>{selectedGraph?.nodes.length ?? 0} nodes</span><span>{selectedGraph?.edges.length ?? 0} edges</span><span>{selectedGraph?.graphType ?? 'n/a'}</span></div></div>
-        <div className="canvas-stage"><ReactFlow fitView nodes={graphNodes} edges={graphEdges} onNodeClick={(_, node) => onSelectNode(node.id)} nodesDraggable={false} nodesConnectable={false} elementsSelectable><MiniMap /><Controls /><Background /></ReactFlow></div>
-      </section>
-
-      <aside className="context-drawer">
-        <div className="drawer-head"><span className="section-label">Inspector</span><strong>{selectedNode ? 'Node focus' : 'Graph context'}</strong></div>
-        {selectedNode ? <NodeInspector graph={selectedGraph} node={selectedNode} /> : <GraphSummary graph={selectedGraph} />}
-      </aside>
-    </div>
-  )
-}
-
 function PromptsWorkspace({
   patchHistory,
   selectedPatch,
@@ -435,15 +617,7 @@ function ReleasesWorkspace({ bundle, releases, sourceReason }: { bundle: GameSys
   return (
     <div className="focus-layout releases-layout">
       <aside className="focus-rail"><div className="rail-section"><span className="section-label">Release history</span><div className="rail-list">{releases.map((release) => <div key={release.id} className="release-row"><strong>{release.version}</strong><span>{release.label}</span></div>)}</div></div></aside>
-      <section className="main-surface detail-surface"><div className="detail-stack"><span className="eyebrow">Bundle Contract</span><h2>{bundle.manifest.projectSlug}</h2><p className="subtle-line">{sourceReason ?? 'Deterministic export for engine adapters and runtime loaders.'}</p><div className="stats-line"><span>{bundle.manifest.definitionCount} definitions</span><span>{bundle.manifest.archetypeCount} archetypes</span><span>{bundle.manifest.assetCount} assets</span></div><div className="diagnostic-stack">{bundle.diagnostics.length === 0 ? <div className="inline-note">No compiler diagnostics in the current bundle.</div> : null}{bundle.diagnostics.map((diagnostic) => <div key={`${diagnostic.code}-${diagnostic.nodeKey ?? 'global'}`} className={`inline-note is-${diagnostic.level}`}>{diagnostic.message}</div>)}</div><pre>{JSON.stringify(bundle, null, 2)}</pre></div></section>
+      <section className="main-surface detail-surface"><div className="detail-stack"><span className="eyebrow">Bundle Contract</span><h2>{bundle.manifest.projectSlug}</h2><p className="subtle-line">{sourceReason ?? 'Deterministic export for engine adapters and runtime loaders.'}</p><div className="stats-line"><span>{bundle.manifest.definitionCount} definitions</span><span>{bundle.manifest.archetypeCount} archetypes</span><span>{bundle.manifest.assetCount} assets</span></div><div className="diagnostic-stack">{bundle.diagnostics.length === 0 ? <div className="inline-note">No compiler diagnostics in the current bundle.</div> : null}{bundle.diagnostics.map((diagnostic, index) => <div key={`${diagnostic.code}-${diagnostic.nodeKey ?? 'global'}-${index}`} className={`inline-note is-${diagnostic.level}`}>{diagnostic.message}</div>)}</div><pre>{JSON.stringify(bundle, null, 2)}</pre></div></section>
     </div>
   )
-}
-
-function NodeInspector({ graph, node }: { graph: GraphDefinition | null; node: GraphDefinition['nodes'][number] }) {
-  return <div className="detail-stack compact"><span className="eyebrow">{graph?.name}</span><h3>{node.title}</h3><p className="subtle-line">{node.body.text ?? 'No text body on this node.'}</p><dl className="data-list compact"><div><dt>Node key</dt><dd>{node.key}</dd></div><div><dt>Type</dt><dd>{node.type}</dd></div><div><dt>Effects</dt><dd>{node.effects.length}</dd></div></dl><pre>{JSON.stringify({ condition: node.condition, effects: node.effects }, null, 2)}</pre></div>
-}
-
-function GraphSummary({ graph }: { graph: GraphDefinition | null }) {
-  return graph ? <div className="detail-stack compact"><span className="eyebrow">{graph.graphType}</span><h3>{graph.name}</h3><p className="subtle-line">{graph.summary}</p><div className="stats-line"><span>{graph.nodes.length} nodes</span><span>{graph.edges.length} edges</span></div><pre>{JSON.stringify({ entryNodeKey: graph.entryNodeKey, llmHints: graph.llmHints }, null, 2)}</pre></div> : null
 }

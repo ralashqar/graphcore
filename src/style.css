@@ -452,6 +452,131 @@ code {
   background: rgba(30, 31, 48, 0.94);
 }
 
+.graph-layout {
+  grid-template-columns: 300px minmax(0, 1fr) 340px;
+}
+
+.graph-rail,
+.graph-surface {
+  min-height: 0;
+}
+
+.graph-rail-stack,
+.graph-library {
+  display: grid;
+  gap: 12px;
+}
+
+.graph-library-grid {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.library-button {
+  width: 100%;
+  text-align: left;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.library-button strong,
+.library-button span {
+  display: block;
+}
+
+.library-button span {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.library-button:hover {
+  border-color: rgba(94, 234, 212, 0.18);
+  background: rgba(94, 234, 212, 0.05);
+}
+
+.graph-toolbar {
+  display: grid;
+  grid-template-columns: minmax(180px, 220px) minmax(220px, 1fr) 160px auto auto;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.graph-toolbar input,
+.graph-toolbar select {
+  width: 100%;
+  padding: 11px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: rgba(7, 11, 18, 0.92);
+  color: var(--text);
+  outline: none;
+}
+
+.graph-toolbar input:focus,
+.graph-toolbar select:focus {
+  border-color: rgba(94, 234, 212, 0.24);
+  box-shadow: 0 0 0 4px rgba(94, 234, 212, 0.08);
+}
+
+.graph-canvas {
+  min-height: 560px;
+}
+
+.graph-diagnostic-row {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.flow-node {
+  min-width: 190px;
+  max-width: 260px;
+  display: grid;
+  gap: 10px;
+}
+
+.flow-node-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.flow-node-head span {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.flow-node p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.flow-node-thumb {
+  width: 36px;
+  height: 36px;
+  object-fit: cover;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.flow-node-meta {
+  color: var(--accent);
+  font-size: 0.76rem;
+  line-height: 1.4;
+}
+
 .context-drawer {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
