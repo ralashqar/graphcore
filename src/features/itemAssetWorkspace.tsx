@@ -282,40 +282,39 @@ export function ContentWorkspace({
 
                 <div className="editor-heading-copy">
                   <span className="eyebrow">Item Editor</span>
-                  <h2>{selectedItem.name}</h2>
-                  <p className="subtle-line">
-                    {selectedItem.summary || 'Describe what this item does and how it should be surfaced.'}
-                  </p>
                   <div className="chip-row">
                     <span className="chip">{selectedItem.archetypeKey ?? 'No archetype'}</span>
                     <span className="chip">{resolvedFields.length} fields</span>
+                  </div>
+                  <div className="editor-head-grid">
+                    <label className="field-block compact-block head-field">
+                      <span>Name</span>
+                      <input
+                        value={selectedItem.name}
+                        onChange={(event) => onUpdateItemIdentity(selectedItem.key, { name: event.target.value })}
+                      />
+                    </label>
+                    <label className="field-block compact-block head-field">
+                      <span>Key</span>
+                      <input
+                        value={selectedItem.key}
+                        onChange={(event) => onUpdateItemIdentity(selectedItem.key, { key: event.target.value })}
+                      />
+                    </label>
+                    <label className="field-block compact-block head-field full-width">
+                      <span>Description</span>
+                      <textarea
+                        rows={3}
+                        value={selectedItem.summary}
+                        onChange={(event) => onUpdateItemIdentity(selectedItem.key, { summary: event.target.value })}
+                        placeholder="Describe what this item does and how it should be surfaced."
+                      />
+                    </label>
                   </div>
                 </div>
               </div>
 
               <div className="editor-grid">
-                <label className="field-block">
-                  <span>Name</span>
-                  <input
-                    value={selectedItem.name}
-                    onChange={(event) => onUpdateItemIdentity(selectedItem.key, { name: event.target.value })}
-                  />
-                </label>
-                <label className="field-block">
-                  <span>Key</span>
-                  <input
-                    value={selectedItem.key}
-                    onChange={(event) => onUpdateItemIdentity(selectedItem.key, { key: event.target.value })}
-                  />
-                </label>
-                <label className="field-block full-width">
-                  <span>Description</span>
-                  <textarea
-                    rows={3}
-                    value={selectedItem.summary}
-                    onChange={(event) => onUpdateItemIdentity(selectedItem.key, { summary: event.target.value })}
-                  />
-                </label>
                 <label className="field-block">
                   <span>Archetype</span>
                   <select
@@ -413,40 +412,39 @@ export function ContentWorkspace({
 
               <div className="editor-heading-copy">
                 <span className="eyebrow">Archetype Editor</span>
-                <h2>{selectedArchetype.name}</h2>
-                <p className="subtle-line">
-                  {selectedArchetype.summary || 'Define the shared schema and defaults for a family of items.'}
-                </p>
                 <div className="chip-row">
                   <span className="chip">{selectedArchetype.appliesToKind}</span>
                   <span className="chip">{selectedArchetype.fields.length} shared fields</span>
                 </div>
+                <div className="editor-head-grid">
+                  <label className="field-block compact-block head-field">
+                    <span>Name</span>
+                    <input
+                      value={selectedArchetype.name}
+                      onChange={(event) => onUpdateArchetypeIdentity(selectedArchetype.key, { name: event.target.value })}
+                    />
+                  </label>
+                  <label className="field-block compact-block head-field">
+                    <span>Key</span>
+                    <input
+                        value={selectedArchetype.key}
+                        onChange={(event) => onUpdateArchetypeIdentity(selectedArchetype.key, { key: event.target.value })}
+                      />
+                    </label>
+                    <label className="field-block compact-block head-field full-width">
+                      <span>Description</span>
+                      <textarea
+                        rows={3}
+                        value={selectedArchetype.summary}
+                        onChange={(event) => onUpdateArchetypeIdentity(selectedArchetype.key, { summary: event.target.value })}
+                        placeholder="Define the shared schema and defaults for a family of items."
+                      />
+                    </label>
+                  </div>
               </div>
             </div>
 
             <div className="editor-grid">
-              <label className="field-block">
-                <span>Name</span>
-                <input
-                  value={selectedArchetype.name}
-                  onChange={(event) => onUpdateArchetypeIdentity(selectedArchetype.key, { name: event.target.value })}
-                />
-              </label>
-              <label className="field-block">
-                <span>Key</span>
-                <input
-                  value={selectedArchetype.key}
-                  onChange={(event) => onUpdateArchetypeIdentity(selectedArchetype.key, { key: event.target.value })}
-                />
-              </label>
-              <label className="field-block full-width">
-                <span>Description</span>
-                <textarea
-                  rows={3}
-                  value={selectedArchetype.summary}
-                  onChange={(event) => onUpdateArchetypeIdentity(selectedArchetype.key, { summary: event.target.value })}
-                />
-              </label>
               <label className="field-block">
                 <span>Applies To</span>
                 <select
