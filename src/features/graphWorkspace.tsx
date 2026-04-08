@@ -98,7 +98,9 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
   const [liveNodes, setLiveNodes] = useState<Node[]>([])
   const [liveEdges, setLiveEdges] = useState<Edge[]>([])
   const [contextMenu, setContextMenu] = useState<GraphContextMenu | null>(null)
+  const [contextMenuSearch, setContextMenuSearch] = useState('')
   const canvasRef = useRef<HTMLDivElement | null>(null)
+  const contextMenuSearchRef = useRef<HTMLInputElement | null>(null)
 
   const nodes = useMemo<Node[]>(() => {
     return (selectedGraph?.nodes ?? []).map((node) => {
@@ -144,9 +146,24 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
   }, [edges])
 
   useEffect(() => {
+    if (!contextMenu || contextMenu.kind !== 'pane') return
+    setContextMenuSearch('')
+    const timeout = window.setTimeout(() => contextMenuSearchRef.current?.focus(), 0)
+    return () => window.clearTimeout(timeout)
+  }, [contextMenu])
+
+  useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (!selectedGraph) return
       if (event.key === 'Escape') onClearSelection()
+      if (event.key.toLowerCase() === 'a' && !isTextInput(event.target)) {
+        event.preventDefault()
+        openPaletteAtCanvasCenter()
+      }
+      if (event.key.toLowerCase() === 'f' && !isTextInput(event.target)) {
+        event.preventDefault()
+        refocusViewport()
+      }
       if ((event.key === 'Delete' || event.key === 'Backspace') && !isTextInput(event.target)) {
         if (selectedEdge) onDeleteEdge(selectedGraph.key, selectedEdge.key)
         else if (selectedNode) onDeleteNode(selectedGraph.key, selectedNode.key)
@@ -158,7 +175,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [onClearSelection, onDeleteEdge, onDeleteNode, onDuplicateNode, selectedEdge, selectedGraph, selectedNode])
+  }, [flowInstance, onClearSelection, onDeleteEdge, onDeleteNode, onDuplicateNode, selectedEdge, selectedGraph, selectedNode])
 
   function createGraph(graphType: GraphType) {
     const suffix = `${graphType}_${snapshotGraphs.length + 1}`
@@ -244,6 +261,32 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
       x: event.clientX - canvasRef.current.getBoundingClientRect().left,
       y: event.clientY - canvasRef.current.getBoundingClientRect().top,
     })
+  }
+
+  function openPaletteAtCanvasCenter() {
+    if (!flowInstance || !canvasRef.current) return
+    const rect = canvasRef.current.getBoundingClientRect()
+    const x = rect.width / 2
+    const y = rect.height / 2
+    const flowPosition = flowInstance.screenToFlowPosition({ x: rect.left + x, y: rect.top + y })
+    setContextMenu({
+      kind: 'pane',
+      x,
+      y,
+      flowPosition,
+    })
+  }
+
+  function refocusViewport() {
+    if (!flowInstance || !selectedGraph) return
+    if (selectedNode) {
+      void flowInstance.setCenter(selectedNode.position.x + 120, selectedNode.position.y + 48, {
+        zoom: 1.1,
+        duration: 240,
+      })
+      return
+    }
+    void flowInstance.fitView({ duration: 240, padding: 0.24 })
   }
 
   function applyTemplateChange(nodeKey: string, templateKey: string) {
@@ -406,7 +449,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                 <span className="section-label">{group.label}</span>
                 <div className="graph-library-grid">
                   {group.templates
-                    .filter((template) => selectedGraph ? template.compatibleGraphTypes.includes(selectedGraph.graphType) : true)
+                    .filter((template) => selectedGraph ? isTemplateAvailableForGraph(template, selectedGraph) : true)
                     .map((template) => (
                       <button key={template.key} className="library-button" onClick={() => placeTemplate(template.key)} type="button">
                         <strong>{template.label}</strong>
@@ -464,12 +507,19 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
               {contextMenu.kind === 'pane' ? (
                 <>
                   <span className="section-label">Add Node</span>
+                  <input
+                    ref={contextMenuSearchRef}
+                    className="context-menu-search"
+                    placeholder="Search nodes..."
+                    value={contextMenuSearch}
+                    onChange={(event) => setContextMenuSearch(event.target.value)}
+                  />
                   {graphNodeLibrary.map((group) => (
+                    filterTemplateGroup(group, contextMenuSearch, selectedGraph).length > 0 ? (
                     <div key={group.key} className="context-menu-group">
                       <strong>{group.label}</strong>
                       <div className="context-menu-list">
-                        {group.templates
-                          .filter((template) => selectedGraph ? template.compatibleGraphTypes.includes(selectedGraph.graphType) : true)
+                        {filterTemplateGroup(group, contextMenuSearch, selectedGraph)
                           .map((template) => (
                             <button key={template.key} className="context-menu-item" onClick={() => placeTemplate(template.key, contextMenu.flowPosition)} type="button">
                               <span>{template.label}</span>
@@ -478,6 +528,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
                           ))}
                       </div>
                     </div>
+                    ) : null
                   ))}
                 </>
               ) : (
@@ -648,12 +699,12 @@ function NodeInspector({
     <div className="detail-stack compact">
       <span className="eyebrow">{template?.label ?? node.type}</span>
       <h3>{node.title}</h3>
-      <div className="asset-toolbar">
-        <label className="field-block compact-block inspector-type-field">
+        <div className="asset-toolbar">
+          <label className="field-block compact-block inspector-type-field">
           <span>Node Template</span>
           <select value={node.templateKey ?? templateKeyFromType(node.type)} onChange={(event) => onApplyTemplateChange(event.target.value)}>
             {graphNodeLibrary.flatMap((group) => group.templates)
-              .filter((entry) => entry.compatibleGraphTypes.includes(graph.graphType))
+              .filter((entry) => isTemplateAvailableForGraph(entry, graph, node))
               .map((entry) => <option key={entry.key} value={entry.key}>{entry.label}</option>)}
           </select>
         </label>
@@ -893,4 +944,32 @@ function isTextInput(target: EventTarget | null) {
 function templateKeyFromType(type: NodeDefinition['type']) {
   const match = graphNodeLibrary.flatMap((group) => group.templates).find((template) => template.baseNodeType === type)
   return match?.key ?? 'story_text'
+}
+
+function filterTemplateGroup(group: typeof graphNodeLibrary[number], query: string, graph: GraphDefinition | null) {
+  const normalizedQuery = query.trim().toLowerCase()
+  return group.templates.filter((template) => {
+    if (graph && !isTemplateAvailableForGraph(template, graph)) return false
+    if (!normalizedQuery) return true
+    return (
+      template.label.toLowerCase().includes(normalizedQuery) ||
+      template.key.toLowerCase().includes(normalizedQuery) ||
+      template.baseNodeType.toLowerCase().includes(normalizedQuery)
+    )
+  })
+}
+
+function isTemplateAvailableForGraph(
+  template: typeof graphNodeLibrary[number]['templates'][number],
+  graph: GraphDefinition,
+  currentNode?: NodeDefinition | null,
+) {
+  if (!template.compatibleGraphTypes.includes(graph.graphType)) return false
+  if (template.baseNodeType === 'start') {
+    return graph.nodes.every((node) => node.type !== 'start' || node.key === currentNode?.key)
+  }
+  if (template.baseNodeType === 'end') {
+    return graph.nodes.every((node) => node.type !== 'end' || node.key === currentNode?.key)
+  }
+  return true
 }
