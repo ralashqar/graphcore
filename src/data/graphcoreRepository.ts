@@ -334,6 +334,54 @@ type AssetRow = {
   llm_hints: Record<string, unknown> | null
 }
 
+function prettifyChoiceKey(value: string) {
+  return value
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (segment) => segment.toUpperCase())
+}
+
+function deriveChoiceBody(
+  node: NodeRow,
+  graphEdges: EdgeRow[],
+) {
+  const body = typeof node.body === 'object' && node.body !== null ? { ...node.body } : {}
+  const existingChoices = Array.isArray(body.choices) ? body.choices : []
+
+  if (node.node_type !== 'choice' || existingChoices.length > 0) {
+    return body
+  }
+
+  const ports = Array.isArray(node.ports) ? node.ports : []
+  const derivedChoicesFromPorts = ports
+    .filter((port) => port && port.direction === 'output' && typeof port.id === 'string' && port.id !== 'out')
+    .map((port) => ({
+      id: String(port.id),
+      label: typeof port.label === 'string' && port.label.trim().length > 0 ? port.label : prettifyChoiceKey(String(port.id)),
+    }))
+
+  const derivedChoicesFromEdges = graphEdges
+    .filter((edge) => edge.source_node_key === node.key && edge.source_port && edge.source_port !== 'out')
+    .map((edge) => ({
+      id: String(edge.source_port),
+      label: typeof edge.label === 'string' && edge.label.trim().length > 0 ? edge.label : prettifyChoiceKey(String(edge.source_port)),
+    }))
+
+  const mergedChoices = new Map<string, { id: string; label: string }>()
+
+  for (const choice of [...derivedChoicesFromPorts, ...derivedChoicesFromEdges]) {
+    if (!mergedChoices.has(choice.id)) {
+      mergedChoices.set(choice.id, choice)
+    }
+  }
+
+  return {
+    ...body,
+    choices: [...mergedChoices.values()],
+  }
+}
+
 export async function loadProjectSnapshot(): Promise<SnapshotLoadResult> {
   const {
     data: { session },
@@ -599,8 +647,11 @@ export async function loadProjectSnapshot(): Promise<SnapshotLoadResult> {
       entryNodeKey: graph.entry_node_key,
       metadata: graph.metadata ?? {},
       llmHints: graph.llm_hints ?? {},
-      nodes: nodes
-        .filter((node) => node.graph_id === graph.id)
+      nodes: (() => {
+        const graphNodes = nodes.filter((node) => node.graph_id === graph.id)
+        const graphEdges = edges.filter((edge) => edge.graph_id === graph.id)
+
+        return graphNodes
         .map((node) => ({
           id: node.id,
           key: node.key,
@@ -612,7 +663,7 @@ export async function loadProjectSnapshot(): Promise<SnapshotLoadResult> {
             x: Number(node.position_x),
             y: Number(node.position_y),
           },
-          body: node.body ?? {},
+          body: deriveChoiceBody(node, graphEdges),
           condition: node.condition_expr,
           effects: node.effect_ops ?? [],
           ports: node.ports ?? [],
@@ -620,10 +671,11 @@ export async function loadProjectSnapshot(): Promise<SnapshotLoadResult> {
             node.display && typeof node.display === 'object'
               ? node.display
               : node.metadata?.display && typeof node.metadata.display === 'object'
-                ? node.metadata.display
-                : {},
+              ? node.metadata.display
+              : {},
           metadata: node.metadata ?? {},
-        })),
+        }))
+      })(),
       edges: edges
         .filter((edge) => edge.graph_id === graph.id)
         .map((edge) => ({

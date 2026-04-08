@@ -109,6 +109,7 @@ export default function App() {
   const [promptGraphType, setPromptGraphType] = useState<GraphType>('narrative_flow')
   const [promptRuntimeError, setPromptRuntimeError] = useState<string | null>(null)
   const [isGeneratingPatch, setIsGeneratingPatch] = useState(false)
+  const [isApplyingPatch, setIsApplyingPatch] = useState(false)
   const [authOpen, setAuthOpen] = useState(false)
   const [authAutoOpened, setAuthAutoOpened] = useState(false)
   const [authMode, setAuthMode] = useState<AuthMode>('sign_in')
@@ -792,6 +793,7 @@ export default function App() {
     }
 
     setPromptRuntimeError(null)
+    setIsApplyingPatch(true)
     const locallyAppliedSnapshot = applyPatchOperations(snapshot, selectedPatch.operations)
 
     if (loadedState?.source !== 'supabase') {
@@ -805,6 +807,7 @@ export default function App() {
       if (selectedPatch.id === 'preview') {
         setPatchPreview(null)
       }
+      setIsApplyingPatch(false)
       return
     }
 
@@ -818,6 +821,8 @@ export default function App() {
       const message = error instanceof Error ? error.message : 'Patch apply failed.'
       console.error('[GraphCore] patch apply failed.', error)
       setPromptRuntimeError(message)
+    } finally {
+      setIsApplyingPatch(false)
     }
   }
 
@@ -919,7 +924,7 @@ export default function App() {
             />
           ) : null}
           {activeTab === 'assets' ? <AssetsWorkspace assets={snapshot.assets} selectedAsset={selectedAsset} selectedItem={selectedItem} onAssignAssetToSelectedItem={assignAssetToSelectedItem} onCreateUrlAsset={createUrlAsset} onSelectAsset={setSelectedAssetKey} onUploadAsset={handleAssetUpload} onUpdateAsset={updateAssetIdentity} /> : null}
-          {activeTab === 'prompts' ? <PromptsWorkspace patchHistory={patchHistory} selectedPatch={selectedPatch} selectedPatchIndex={selectedPatchIndex} onApplyPatch={handleApplySelectedPatch} onSelectPatch={setSelectedPatchIndex} /> : null}
+          {activeTab === 'prompts' ? <PromptsWorkspace isApplyingPatch={isApplyingPatch} patchHistory={patchHistory} selectedPatch={selectedPatch} selectedPatchIndex={selectedPatchIndex} onApplyPatch={handleApplySelectedPatch} onSelectPatch={setSelectedPatchIndex} /> : null}
           {activeTab === 'releases' ? <ReleasesWorkspace bundle={bundle} releases={snapshot.releases} sourceReason={loadedState?.reason} /> : null}
         </section>
 
@@ -977,12 +982,14 @@ export default function App() {
 }
 
 function PromptsWorkspace({
+  isApplyingPatch,
   patchHistory,
   selectedPatch,
   selectedPatchIndex,
   onApplyPatch,
   onSelectPatch,
 }: {
+  isApplyingPatch: boolean
   patchHistory: PatchSessionView[]
   selectedPatch: PatchSessionView | null
   selectedPatchIndex: number
@@ -994,7 +1001,7 @@ function PromptsWorkspace({
   return (
     <div className="focus-layout prompts-layout">
       <aside className="focus-rail"><div className="rail-section"><span className="section-label">Patch sessions</span><div className="rail-list">{patchHistory.map((patch, index) => <button key={`${patch.id}-${index}`} className={index === selectedPatchIndex ? 'rail-button is-active' : 'rail-button'} onClick={() => onSelectPatch(index)} type="button"><strong>{patch.summary}</strong><span>{patch.status}</span></button>)}</div></div></aside>
-      <section className="main-surface detail-surface">{selectedPatch ? <div className="detail-stack"><span className="eyebrow">Prompt Session</span><h2>{selectedPatch.summary}</h2><p className="subtle-line">{selectedPatch.prompt}</p><div className="chip-row"><span className="chip">{selectedPatch.status}</span><span className="chip">{selectedPatch.operations.length} operations</span></div>{selectedPatch.assistantNotes ? <div className="inline-note">{selectedPatch.assistantNotes}</div> : null}<div className="prompt-review-grid">{groupedOperations && groupedOperations.graphs.length > 0 ? <PatchGroup title="Graphs" operations={groupedOperations.graphs} /> : null}{groupedOperations && groupedOperations.nodesAndEdges.length > 0 ? <PatchGroup title="Nodes and edges" operations={groupedOperations.nodesAndEdges} /> : null}{groupedOperations && groupedOperations.definitions.length > 0 ? <PatchGroup title="Definitions created" operations={groupedOperations.definitions} /> : null}</div><div className="detail-actions"><button className="primary-button" disabled={selectedPatch.operations.length === 0 || selectedPatch.status === 'applied'} onClick={onApplyPatch} type="button">{selectedPatch.status === 'applied' ? 'Already applied' : 'Apply patch'}</button></div><div className="diagnostic-stack">{selectedPatch.diagnostics.length === 0 ? <div className="inline-note">No warnings returned for this patch proposal.</div> : null}{selectedPatch.diagnostics.map((diagnostic, index) => <div key={`${diagnostic}-${index}`} className="inline-note">{diagnostic}</div>)}</div><pre>{JSON.stringify(selectedPatch.operations, null, 2)}</pre></div> : null}</section>
+      <section className="main-surface detail-surface">{selectedPatch ? <div className="detail-stack"><span className="eyebrow">Prompt Session</span><h2>{selectedPatch.summary}</h2><p className="subtle-line">{selectedPatch.prompt}</p><div className="chip-row"><span className="chip">{selectedPatch.status}</span><span className="chip">{selectedPatch.operations.length} operations</span></div>{selectedPatch.assistantNotes ? <div className="inline-note">{selectedPatch.assistantNotes}</div> : null}<div className="prompt-review-grid">{groupedOperations && groupedOperations.graphs.length > 0 ? <PatchGroup title="Graphs" operations={groupedOperations.graphs} /> : null}{groupedOperations && groupedOperations.nodesAndEdges.length > 0 ? <PatchGroup title="Nodes and edges" operations={groupedOperations.nodesAndEdges} /> : null}{groupedOperations && groupedOperations.definitions.length > 0 ? <PatchGroup title="Definitions created" operations={groupedOperations.definitions} /> : null}</div><div className="detail-actions"><button className="primary-button button-with-spinner" disabled={isApplyingPatch || selectedPatch.operations.length === 0 || selectedPatch.status === 'applied'} onClick={onApplyPatch} type="button">{selectedPatch.status === 'applied' ? 'Already applied' : isApplyingPatch ? <><span className="button-spinner" aria-hidden="true" />Applying patch...</> : 'Apply patch'}</button></div><div className="diagnostic-stack">{selectedPatch.diagnostics.length === 0 ? <div className="inline-note">No warnings returned for this patch proposal.</div> : null}{selectedPatch.diagnostics.map((diagnostic, index) => <div key={`${diagnostic}-${index}`} className="inline-note">{diagnostic}</div>)}</div><pre>{JSON.stringify(selectedPatch.operations, null, 2)}</pre></div> : null}</section>
     </div>
   )
 }

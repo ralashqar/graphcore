@@ -53,6 +53,64 @@ function inferPorts(nodeType: string, choices: Array<Record<string, unknown>> = 
   return [...inputs, { id: 'out', label: 'Out', direction: 'output' }]
 }
 
+function prettifyChoiceKey(value: string) {
+  return value
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (segment) => segment.toUpperCase())
+}
+
+async function ensureChoiceSourceHandle(
+  client: ReturnType<typeof createClient>,
+  graphId: string,
+  nodeKey: string,
+  sourcePort: string,
+  edgeLabel: string | null,
+) {
+  if (!sourcePort || sourcePort === 'out') {
+    return
+  }
+
+  const { data: nodeRow } = await client
+    .from('draft_graph_nodes')
+    .select('body, ports, node_type')
+    .eq('graph_id', graphId)
+    .eq('key', nodeKey)
+    .maybeSingle()
+
+  if (!nodeRow || nodeRow.node_type !== 'choice') {
+    return
+  }
+
+  const currentBody = typeof nodeRow.body === 'object' && nodeRow.body !== null ? nodeRow.body as Record<string, unknown> : {}
+  const currentChoices = Array.isArray(currentBody.choices) ? currentBody.choices as Array<Record<string, unknown>> : []
+
+  if (currentChoices.some((choice) => choice.id === sourcePort)) {
+    return
+  }
+
+  const nextChoices = [
+    ...currentChoices,
+    {
+      id: sourcePort,
+      label: edgeLabel && edgeLabel.trim().length > 0 ? edgeLabel : prettifyChoiceKey(sourcePort),
+    },
+  ]
+
+  await client
+    .from('draft_graph_nodes')
+    .update({
+      body: {
+        ...currentBody,
+        choices: nextChoices,
+      },
+      ports: inferPorts('choice', nextChoices),
+    })
+    .eq('graph_id', graphId)
+    .eq('key', nodeKey)
+}
+
 function graphSuffix(graphKey: string) {
   return graphKey.replace(/^graph\./, '').replace(/[^a-z0-9_]+/gi, '_').replace(/^_+|_+$/g, '') || 'generated'
 }
@@ -327,6 +385,13 @@ Deno.serve(async (request) => {
           metadata: edge.metadata ?? {},
         }).select('id, key').single()
         if (insertResult.error) return json({ error: insertResult.error.message, operation }, { status: 400 })
+        await ensureChoiceSourceHandle(
+          client,
+          graphId,
+          String(edge.source?.nodeKey ?? ''),
+          String(edge.source?.portId ?? ''),
+          typeof edge.label === 'string' ? edge.label : null,
+        )
         results.push(insertResult.data)
         continue
       }
