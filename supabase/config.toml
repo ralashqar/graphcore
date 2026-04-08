@@ -134,6 +134,21 @@ max_namespaces = 5
 max_tables = 10
 max_catalogs = 2
 
+[functions.bootstrap-workspace]
+verify_jwt = false
+
+[functions.prompt-patch]
+verify_jwt = false
+
+[functions.ai-openai]
+verify_jwt = false
+
+[functions.ai-fal]
+verify_jwt = false
+
+[functions.apply-patch]
+verify_jwt = false
+
 # Analytics Buckets is available to Supabase Pro plan.
 # [storage.analytics.buckets.my-warehouse]
 

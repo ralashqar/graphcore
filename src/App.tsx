@@ -68,6 +68,30 @@ function uniqueKey(existingKeys: string[], seed: string) {
   return candidate
 }
 
+function inferPromptIntent(prompt: string) {
+  const normalized = prompt.toLowerCase()
+  const asksForGraph =
+    /\b(graph|node|edge|branch|choice node|story node|narrative flow|quest flow|system graph)\b/.test(normalized)
+    || /\bcreate a new .*graph\b/.test(normalized)
+  const asksForNewGraph =
+    /\b(create|build|generate|make)\b/.test(normalized) && /\bnew\b/.test(normalized) && /\bgraph\b/.test(normalized)
+
+  let inferredGraphType: GraphType | undefined
+  if (/\bquest\b/.test(normalized)) {
+    inferredGraphType = 'quest_flow'
+  } else if (/\bsystem\b/.test(normalized)) {
+    inferredGraphType = 'system_graph'
+  } else if (/\bnarrative\b|\bstory\b|\bscene\b/.test(normalized)) {
+    inferredGraphType = 'narrative_flow'
+  }
+
+  return {
+    asksForGraph,
+    asksForNewGraph,
+    inferredGraphType,
+  }
+}
+
 export default function App() {
   const [session, setSession] = useState<Session | null>(null)
   const [loadedState, setLoadedState] = useState<LoadedState | null>(null)
@@ -84,6 +108,7 @@ export default function App() {
   const [promptTargetMode, setPromptTargetMode] = useState<PromptTargetMode>('auto')
   const [promptGraphType, setPromptGraphType] = useState<GraphType>('narrative_flow')
   const [promptRuntimeError, setPromptRuntimeError] = useState<string | null>(null)
+  const [isGeneratingPatch, setIsGeneratingPatch] = useState(false)
   const [authOpen, setAuthOpen] = useState(false)
   const [authAutoOpened, setAuthAutoOpened] = useState(false)
   const [authMode, setAuthMode] = useState<AuthMode>('sign_in')
@@ -705,19 +730,36 @@ export default function App() {
       return
     }
     setPromptRuntimeError(null)
+    setIsGeneratingPatch(true)
 
     try {
+      const inferredIntent = inferPromptIntent(promptText)
+      const shouldTreatAsGraphPrompt = activeTab === 'graph' || inferredIntent.asksForGraph
+      const graphTargetMode: PromptTargetMode =
+        activeTab === 'graph'
+          ? promptTargetMode
+          : inferredIntent.asksForNewGraph
+            ? 'new_graph'
+            : inferredIntent.asksForGraph
+              ? 'current_graph'
+              : 'auto'
+      const graphType = shouldTreatAsGraphPrompt
+        ? graphTargetMode === 'new_graph'
+          ? inferredIntent.inferredGraphType ?? promptGraphType
+          : selectedGraph?.graphType ?? inferredIntent.inferredGraphType
+        : undefined
+
       const nextPatch = await proposePatch({
         prompt: promptText,
         snapshot,
         context: {
-          target: activeTab === 'graph' ? (selectedNode ? 'node' : 'graph') : 'content',
-          graphKey: selectedGraph?.key ?? null,
-          nodeKey: selectedNode?.key ?? null,
-          edgeKey: selectedEdge?.key ?? null,
+          target: shouldTreatAsGraphPrompt ? (selectedNode ? 'node' : 'graph') : 'content',
+          graphKey: shouldTreatAsGraphPrompt ? selectedGraph?.key ?? null : null,
+          nodeKey: shouldTreatAsGraphPrompt ? selectedNode?.key ?? null : null,
+          edgeKey: shouldTreatAsGraphPrompt ? selectedEdge?.key ?? null : null,
         },
-        targetMode: activeTab === 'graph' ? promptTargetMode : 'auto',
-        graphType: activeTab === 'graph' && promptTargetMode === 'new_graph' ? promptGraphType : selectedGraph?.graphType,
+        targetMode: shouldTreatAsGraphPrompt ? graphTargetMode : 'auto',
+        graphType,
         model: promptModel,
       })
       setPatchPreview({
@@ -732,6 +774,8 @@ export default function App() {
       const message = error instanceof Error ? error.message : 'Prompt generation failed.'
       console.error('[GraphCore] prompt generation failed.', error)
       setPromptRuntimeError(message)
+    } finally {
+      setIsGeneratingPatch(false)
     }
   }
 
@@ -923,7 +967,7 @@ export default function App() {
           {promptRuntimeError ? <div className="inline-note is-error">{promptRuntimeError}</div> : null}
           <div className="prompt-dock-body">
             <textarea aria-label="Prompt editor" className="prompt-composer" value={promptText} onChange={(event) => setPromptText(event.target.value)} rows={3} />
-            <div className="prompt-actions"><div className="prompt-hint"><span>Prompt-driven edits stay structured as reviewable patch operations before apply.</span></div><button className="primary-button" onClick={handleGeneratePatch} type="button">Generate patch</button></div>
+            <div className="prompt-actions"><div className="prompt-hint"><span>Prompt-driven edits stay structured as reviewable patch operations before apply.</span></div><button className="primary-button button-with-spinner" disabled={isGeneratingPatch} onClick={handleGeneratePatch} type="button">{isGeneratingPatch ? <><span className="button-spinner" aria-hidden="true" />Generating patch...</> : 'Generate patch'}</button></div>
           </div>
         </section>
       </div>

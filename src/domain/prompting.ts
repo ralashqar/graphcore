@@ -22,4 +22,5 @@ export type PromptPatchResponse = {
   operations: PatchOperation[]
   diagnostics: string[]
   assistantNotes?: string
+  debugRawOutput?: string
 }

@@ -1,4 +1,5 @@
 import { compileBundle } from '../domain/compiler'
+import { BASELINE_ITEM_ARCHETYPES, hasMissingBaselineItemArchetypes } from '../domain/bootstrapSeeds'
 import { demoProjectSnapshot } from '../domain/demo-data'
 import {
   projectSnapshotSchema,
@@ -79,10 +80,41 @@ async function readFunctionsErrorMessage(error: FunctionsHttpError | Error) {
   }
 }
 
+async function readFunctionsErrorPayload<TPayload>(error: FunctionsHttpError | Error) {
+  if (!('context' in error)) {
+    return null
+  }
+
+  const context = (error as FunctionsHttpError & { context?: unknown }).context
+  if (!(context instanceof Response)) {
+    return null
+  }
+
+  try {
+    return await context.clone().json() as TPayload
+  } catch {
+    return null
+  }
+}
+
 type SnapshotLoadResult = {
   snapshot: ProjectSnapshot
   source: 'supabase' | 'demo'
   reason?: string
+}
+
+function sanitizePromptPatchResponse(response: PromptPatchResponse, request: PromptPatchRequest) {
+  if (typeof response.debugRawOutput === 'string' && response.debugRawOutput.trim()) {
+    console.error('[GraphCore] prompt-patch raw model output', {
+      prompt: request.prompt,
+      context: request.context,
+      model: request.model,
+      rawOutput: response.debugRawOutput,
+    })
+  }
+
+  const { debugRawOutput: _debugRawOutput, ...visibleResponse } = response
+  return visibleResponse
 }
 
 async function invokeAuthedFunction<TResponse>(
@@ -96,6 +128,102 @@ async function invokeAuthedFunction<TResponse>(
     },
     body,
   })
+}
+
+async function seedBaselineArchetypesDirect(draftId: string, userId: string) {
+  const existingArchetypesResponse = await supabase
+    .from('project_archetypes')
+    .select('id, key')
+    .eq('draft_id', draftId)
+
+  if (existingArchetypesResponse.error) {
+    throw new Error(existingArchetypesResponse.error.message)
+  }
+
+  const existingArchetypes = existingArchetypesResponse.data ?? []
+  const existingByKey = new Map(existingArchetypes.map((row) => [row.key, row.id]))
+  const missingSeeds = BASELINE_ITEM_ARCHETYPES.filter((seed) => !existingByKey.has(seed.key))
+
+  if (missingSeeds.length > 0) {
+    const insertResponse = await supabase
+      .from('project_archetypes')
+      .insert(
+        missingSeeds.map((seed) => ({
+          draft_id: draftId,
+          key: seed.key,
+          name: seed.name,
+          summary: seed.summary,
+          definition_kind: seed.appliesToKind,
+          icon_asset_key: seed.iconAssetKey,
+          metadata: seed.metadata,
+          llm_hints: seed.llmHints,
+          created_by: userId,
+        })),
+      )
+      .select('id, key')
+
+    if (insertResponse.error) {
+      throw new Error(insertResponse.error.message)
+    }
+
+    for (const row of insertResponse.data ?? []) {
+      existingByKey.set(row.key, row.id)
+    }
+  }
+
+  const archetypeIds = [...existingByKey.values()]
+  if (archetypeIds.length === 0) {
+    return false
+  }
+
+  const existingFieldsResponse = await supabase
+    .from('project_archetype_fields')
+    .select('archetype_id, key')
+    .eq('draft_id', draftId)
+    .not('archetype_id', 'is', null)
+    .in('archetype_id', archetypeIds)
+
+  if (existingFieldsResponse.error) {
+    throw new Error(existingFieldsResponse.error.message)
+  }
+
+  const existingFieldKeys = new Set(
+    (existingFieldsResponse.data ?? []).map((row) => `${row.archetype_id}:${row.key}`),
+  )
+
+  const fieldRows = BASELINE_ITEM_ARCHETYPES.flatMap((seed) => {
+    const archetypeId = existingByKey.get(seed.key)
+    if (!archetypeId) {
+      return []
+    }
+
+    return seed.fields
+      .filter((field) => !existingFieldKeys.has(`${archetypeId}:${field.key}`))
+      .map((field) => ({
+        draft_id: draftId,
+        archetype_id: archetypeId,
+        key: field.key,
+        label: field.label,
+        field_type: field.fieldType,
+        description: field.description,
+        required: field.required,
+        default_value: field.defaultValue,
+        constraints: field.constraints,
+        sort_order: field.sortOrder,
+      }))
+  })
+
+  if (fieldRows.length > 0) {
+    const insertFieldsResponse = await supabase
+      .from('project_archetype_fields')
+      .insert(fieldRows)
+
+    if (insertFieldsResponse.error) {
+      throw new Error(insertFieldsResponse.error.message)
+    }
+  }
+
+  return missingSeeds.length > 0 || fieldRows.length > 0
 }
 
 type DefinitionRow = {
@@ -547,6 +675,11 @@ export async function ensureLiveProjectSnapshot(): Promise<SnapshotLoadResult> {
   const initial = await loadProjectSnapshot()
 
   if (!session || initial.source === 'supabase' || !shouldBootstrapLiveProject(initial.reason)) {
+    if (session && initial.source === 'supabase' && hasMissingBaselineItemArchetypes(initial.snapshot.archetypes)) {
+      await seedBaselineArchetypesDirect(initial.snapshot.draft.id, session.user.id)
+      return loadProjectSnapshot()
+    }
+
     return initial
   }
 
@@ -704,8 +837,10 @@ async function bootstrapLiveWorkspaceDirect(session: Session) {
     throw new Error(draftResponse.error.message)
   }
 
+  let draftId = draftResponse.data?.id ?? null
+
   if (!draftResponse.data?.id) {
-    const draftId = crypto.randomUUID()
+    draftId = crypto.randomUUID()
     const createdDraft = await supabase
       .from('project_drafts')
       .insert({
@@ -725,6 +860,12 @@ async function bootstrapLiveWorkspaceDirect(session: Session) {
       throw new Error(createdDraft.error?.message ?? 'Draft creation failed.')
     }
   }
+
+  if (!draftId) {
+    throw new Error('Draft creation failed.')
+  }
+
+  await seedBaselineArchetypesDirect(draftId, session.user.id)
 }
 
 export async function proposePatch(request: PromptPatchRequest): Promise<PromptPatchResponse> {
@@ -738,10 +879,23 @@ export async function proposePatch(request: PromptPatchRequest): Promise<PromptP
     const response = await invokeAuthedFunction<PromptPatchResponse>('prompt-patch', request, session)
 
     if (!response.error && response.data) {
-      return response.data as PromptPatchResponse
+      return sanitizePromptPatchResponse(response.data as PromptPatchResponse, request)
     }
 
-    fallbackReason = response.error?.message ?? 'The hosted prompt orchestrator returned no data.'
+    if (response.error) {
+      const errorPayload = await readFunctionsErrorPayload<Partial<PromptPatchResponse> & { diagnostics?: string[] }>(response.error)
+      if (errorPayload && Array.isArray(errorPayload.diagnostics)) {
+        return sanitizePromptPatchResponse({
+          summary: typeof errorPayload.summary === 'string' ? errorPayload.summary : 'Prompt proposal failed.',
+          operations: Array.isArray(errorPayload.operations) ? (errorPayload.operations as PatchOperation[]) : [],
+          diagnostics: errorPayload.diagnostics,
+          assistantNotes: typeof errorPayload.assistantNotes === 'string' ? errorPayload.assistantNotes : undefined,
+          debugRawOutput: typeof errorPayload.debugRawOutput === 'string' ? errorPayload.debugRawOutput : undefined,
+        }, request)
+      }
+    }
+
+    fallbackReason = response.error ? await readFunctionsErrorMessage(response.error) : 'The hosted prompt orchestrator returned no data.'
     console.error('[GraphCore] prompt-patch invocation failed, using local fallback.', {
       reason: fallbackReason,
       request,

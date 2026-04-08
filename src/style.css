@@ -913,6 +913,38 @@ code {
   gap: 12px;
 }
 
+.button-with-spinner {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.button-spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  border: 2px solid rgba(237, 244, 251, 0.24);
+  border-top-color: var(--text);
+  animation: button-spin 0.8s linear infinite;
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 0.78;
+  transform: none;
+}
+
+@keyframes button-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .prompt-hint span {
   color: var(--muted);
   line-height: 1.5;

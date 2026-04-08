@@ -2,10 +2,55 @@ import '@supabase/functions-js/edge-runtime.d.ts'
 
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
+import { requireUserClient } from '../_shared/auth.ts'
+import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
+
 type ApplyPatchPayload = {
   draftId: string
   patchSetId?: string
   operations: Array<Record<string, unknown>>
+}
+
+function inferPorts(nodeType: string, choices: Array<Record<string, unknown>> = []) {
+  const inputs = nodeType === 'start' ? [] : [{ id: 'in', label: 'In', direction: 'input' }]
+
+  if (nodeType === 'start') return [{ id: 'out', label: 'Out', direction: 'output' }]
+  if (nodeType === 'end') return inputs
+  if (nodeType === 'condition') {
+    return [
+      ...inputs,
+      { id: 'true', label: 'True', direction: 'output' },
+      { id: 'false', label: 'False', direction: 'output' },
+    ]
+  }
+  if (nodeType === 'choice') {
+    return [
+      ...inputs,
+      ...(choices.length > 0
+        ? choices.map((choice, index) => ({
+            id: typeof choice.id === 'string' ? choice.id : `choice_${index + 1}`,
+            label: typeof choice.label === 'string' ? choice.label : `Choice ${index + 1}`,
+            direction: 'output',
+          }))
+        : [{ id: 'out', label: 'Out', direction: 'output' }]),
+    ]
+  }
+  if (nodeType === 'branch') {
+    return [
+      ...inputs,
+      { id: 'branch_a', label: 'Branch A', direction: 'output' },
+      { id: 'branch_b', label: 'Branch B', direction: 'output' },
+    ]
+  }
+  if (nodeType === 'random') {
+    return [
+      ...inputs,
+      { id: 'success', label: 'Success', direction: 'output' },
+      { id: 'fail', label: 'Fail', direction: 'output' },
+    ]
+  }
+
+  return [...inputs, { id: 'out', label: 'Out', direction: 'output' }]
 }
 
 function graphSuffix(graphKey: string) {
@@ -28,21 +73,15 @@ async function getGraphId(client: ReturnType<typeof createClient>, draftId: stri
 }
 
 Deno.serve(async (request) => {
+  const preflight = maybeHandleOptions(request)
+  if (preflight) return preflight
+
   try {
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')
-    const anonKey = Deno.env.get('SUPABASE_ANON_KEY')
-    const authHeader = request.headers.get('Authorization')
-
-    if (!supabaseUrl || !anonKey || !authHeader) {
-      return Response.json({ error: 'Supabase environment is incomplete for apply-patch.' }, { status: 500 })
+    if (request.method !== 'POST') {
+      throw new HttpError(405, 'Method not allowed.')
     }
 
-    const client = createClient(supabaseUrl, anonKey, { global: { headers: { Authorization: authHeader } } })
-    const { data: { user } } = await client.auth.getUser()
-
-    if (!user) {
-      return Response.json({ error: 'User context is required to apply a patch.' }, { status: 401 })
-    }
+    const { client, user } = await requireUserClient(request, 'apply-patch')
 
     const payload = (await request.json()) as ApplyPatchPayload
     const results: Array<Record<string, unknown>> = []
@@ -66,7 +105,7 @@ Deno.serve(async (request) => {
           created_by: user.id,
           updated_by: user.id,
         }).select('id, key').single()
-        if (insertResult.error) return Response.json({ error: insertResult.error.message, operation }, { status: 400 })
+        if (insertResult.error) return json({ error: insertResult.error.message, operation }, { status: 400 })
         results.push(insertResult.data)
         continue
       }
@@ -86,23 +125,23 @@ Deno.serve(async (request) => {
           definition_data: typeof changes.definitionData === 'object' && changes.definitionData !== null ? changes.definitionData : undefined,
           updated_by: user.id,
         }).eq('draft_id', payload.draftId).eq('key', operation.key).select('id, key').single()
-        if (updateResult.error) return Response.json({ error: updateResult.error.message, operation }, { status: 400 })
+        if (updateResult.error) return json({ error: updateResult.error.message, operation }, { status: 400 })
         results.push(updateResult.data)
         continue
       }
 
       if (operation.op === 'set_archetype') {
         const updateResult = await client.from('project_definitions').update({ archetype_key: operation.archetypeKey ?? null, updated_by: user.id }).eq('draft_id', payload.draftId).eq('key', operation.key).select('id, key').single()
-        if (updateResult.error) return Response.json({ error: updateResult.error.message, operation }, { status: 400 })
+        if (updateResult.error) return json({ error: updateResult.error.message, operation }, { status: 400 })
         results.push(updateResult.data)
         continue
       }
 
       if (operation.op === 'set_field_value') {
         const definitionId = await getDefinitionId(client, payload.draftId, String(operation.key))
-        if (!definitionId) return Response.json({ error: `Definition ${String(operation.key)} was not found.`, operation }, { status: 400 })
+        if (!definitionId) return json({ error: `Definition ${String(operation.key)} was not found.`, operation }, { status: 400 })
         const upsertResult = await client.from('project_definition_field_values').upsert({ definition_id: definitionId, field_key: operation.fieldKey, value: operation.value }, { onConflict: 'definition_id,field_key' }).select('id').single()
-        if (upsertResult.error) return Response.json({ error: upsertResult.error.message, operation }, { status: 400 })
+        if (upsertResult.error) return json({ error: upsertResult.error.message, operation }, { status: 400 })
         results.push({ definitionId, fieldKey: operation.fieldKey })
         continue
       }
@@ -116,11 +155,11 @@ Deno.serve(async (request) => {
 
       if (operation.op === 'attach_asset') {
         const definitionId = await getDefinitionId(client, payload.draftId, String(operation.key))
-        if (!definitionId) return Response.json({ error: `Definition ${String(operation.key)} was not found.`, operation }, { status: 400 })
+        if (!definitionId) return json({ error: `Definition ${String(operation.key)} was not found.`, operation }, { status: 400 })
         const { data: row } = await client.from('project_definitions').select('asset_refs').eq('id', definitionId).maybeSingle()
         const assetRefs = Array.isArray(row?.asset_refs) ? row.asset_refs : []
         const updateResult = await client.from('project_definitions').update({ asset_refs: [...assetRefs, operation.assetRef], updated_by: user.id }).eq('id', definitionId).select('id').single()
-        if (updateResult.error) return Response.json({ error: updateResult.error.message, operation }, { status: 400 })
+        if (updateResult.error) return json({ error: updateResult.error.message, operation }, { status: 400 })
         results.push(updateResult.data)
         continue
       }
@@ -137,14 +176,14 @@ Deno.serve(async (request) => {
           llm_hints: (operation.payload as { llmHints?: Record<string, unknown> } | undefined)?.llmHints ?? {},
           created_by: user.id,
         }).select('id, key').single()
-        if (insertResult.error) return Response.json({ error: insertResult.error.message, operation }, { status: 400 })
+        if (insertResult.error) return json({ error: insertResult.error.message, operation }, { status: 400 })
         results.push(insertResult.data)
         continue
       }
 
       if (operation.op === 'add_archetype_field') {
         const archetypeId = await getArchetypeId(client, payload.draftId, String(operation.key))
-        if (!archetypeId) return Response.json({ error: `Archetype ${String(operation.key)} was not found.`, operation }, { status: 400 })
+        if (!archetypeId) return json({ error: `Archetype ${String(operation.key)} was not found.`, operation }, { status: 400 })
         const insertResult = await client.from('project_archetype_fields').insert({
           draft_id: payload.draftId,
           archetype_id: archetypeId,
@@ -157,7 +196,7 @@ Deno.serve(async (request) => {
           constraints: operation.field.constraints ?? {},
           sort_order: operation.field.sortOrder ?? 0,
         }).select('id, key').single()
-        if (insertResult.error) return Response.json({ error: insertResult.error.message, operation }, { status: 400 })
+        if (insertResult.error) return json({ error: insertResult.error.message, operation }, { status: 400 })
         results.push(insertResult.data)
         continue
       }
@@ -175,7 +214,7 @@ Deno.serve(async (request) => {
           created_by: user.id,
           updated_by: user.id,
         }).select('id, key').single()
-        if (insertGraph.error) return Response.json({ error: insertGraph.error.message, operation }, { status: 400 })
+        if (insertGraph.error) return json({ error: insertGraph.error.message, operation }, { status: 400 })
         const suffix = graphSuffix(String(operation.key))
         await client.from('draft_graph_nodes').insert([
           { graph_id: insertGraph.data.id, key: `start.${suffix}`, node_type: 'start', title: 'Start', template_key: 'start', subtitle: null, position_x: 120, position_y: 200, body: { text: null, imageAssetKey: null, audioAssetKey: null, choices: [] }, condition_expr: null, effect_ops: [], ports: [{ id: 'out', label: 'Out', direction: 'output' }], display: { iconAssetKey: null, compactPreview: false }, metadata: { templateKey: 'start', display: { iconAssetKey: null, compactPreview: false } } },
@@ -196,14 +235,14 @@ Deno.serve(async (request) => {
           llm_hints: (operation.changes as { llmHints?: Record<string, unknown> } | undefined)?.llmHints,
           updated_by: user.id,
         }).eq('draft_id', payload.draftId).eq('key', operation.key).select('id, key').single()
-        if (updateResult.error) return Response.json({ error: updateResult.error.message, operation }, { status: 400 })
+        if (updateResult.error) return json({ error: updateResult.error.message, operation }, { status: 400 })
         results.push(updateResult.data)
         continue
       }
 
       if (operation.op === 'create_node') {
         const graphId = await getGraphId(client, payload.draftId, String(operation.graphKey))
-        if (!graphId) return Response.json({ error: `Graph ${String(operation.graphKey)} was not found.`, operation }, { status: 400 })
+        if (!graphId) return json({ error: `Graph ${String(operation.graphKey)} was not found.`, operation }, { status: 400 })
         const node = operation.node as Record<string, unknown>
         const insertResult = await client.from('draft_graph_nodes').insert({
           graph_id: graphId,
@@ -221,18 +260,19 @@ Deno.serve(async (request) => {
           display: node.display ?? { iconAssetKey: null, compactPreview: false },
           metadata: { ...(typeof node.metadata === 'object' && node.metadata !== null ? node.metadata : {}), templateKey: node.templateKey ?? null, subtitle: node.subtitle ?? null, display: node.display ?? { iconAssetKey: null, compactPreview: false } },
         }).select('id, key').single()
-        if (insertResult.error) return Response.json({ error: insertResult.error.message, operation }, { status: 400 })
+        if (insertResult.error) return json({ error: insertResult.error.message, operation }, { status: 400 })
         results.push(insertResult.data)
         continue
       }
 
       if (operation.op === 'update_node' || operation.op === 'set_condition' || operation.op === 'set_effects' || operation.op === 'set_node_body' || operation.op === 'set_node_choices' || operation.op === 'set_node_media' || operation.op === 'move_node' || operation.op === 'update_node_template') {
         const graphId = await getGraphId(client, payload.draftId, String(operation.graphKey))
-        if (!graphId) return Response.json({ error: `Graph ${String(operation.graphKey)} was not found.`, operation }, { status: 400 })
-        const { data: currentNode } = await client.from('draft_graph_nodes').select('body, metadata, display').eq('graph_id', graphId).eq('key', operation.nodeKey).maybeSingle()
+        if (!graphId) return json({ error: `Graph ${String(operation.graphKey)} was not found.`, operation }, { status: 400 })
+        const { data: currentNode } = await client.from('draft_graph_nodes').select('body, metadata, display, node_type').eq('graph_id', graphId).eq('key', operation.nodeKey).maybeSingle()
         const currentBody = typeof currentNode?.body === 'object' && currentNode.body !== null ? currentNode.body : {}
         const currentMetadata = typeof currentNode?.metadata === 'object' && currentNode.metadata !== null ? currentNode.metadata : {}
         const currentDisplay = typeof currentNode?.display === 'object' && currentNode.display !== null ? currentNode.display : {}
+        const currentNodeType = typeof currentNode?.node_type === 'string' ? currentNode.node_type : 'text'
         const updatePayload =
           operation.op === 'update_node'
             ? {
@@ -256,21 +296,24 @@ Deno.serve(async (request) => {
                 : operation.op === 'set_node_body'
                   ? { body: operation.body ?? currentBody }
                   : operation.op === 'set_node_choices'
-                    ? { body: { ...currentBody, choices: operation.choices ?? [] } }
+                    ? {
+                        body: { ...currentBody, choices: operation.choices ?? [] },
+                        ports: inferPorts(currentNodeType, Array.isArray(operation.choices) ? operation.choices as Array<Record<string, unknown>> : []),
+                      }
                     : operation.op === 'set_node_media'
                       ? { body: { ...currentBody, imageAssetKey: operation.media?.imageAssetKey ?? null, audioAssetKey: operation.media?.audioAssetKey ?? null } }
                       : operation.op === 'move_node'
                         ? { position_x: operation.position?.x ?? 0, position_y: operation.position?.y ?? 0 }
                         : { template_key: operation.templateKey, metadata: { ...currentMetadata, templateKey: operation.templateKey } }
         const updateResult = await client.from('draft_graph_nodes').update(updatePayload).eq('graph_id', graphId).eq('key', operation.nodeKey).select('id, key').single()
-        if (updateResult.error) return Response.json({ error: updateResult.error.message, operation }, { status: 400 })
+        if (updateResult.error) return json({ error: updateResult.error.message, operation }, { status: 400 })
         results.push(updateResult.data)
         continue
       }
 
       if (operation.op === 'connect_edge') {
         const graphId = await getGraphId(client, payload.draftId, String(operation.graphKey))
-        if (!graphId) return Response.json({ error: `Graph ${String(operation.graphKey)} was not found.`, operation }, { status: 400 })
+        if (!graphId) return json({ error: `Graph ${String(operation.graphKey)} was not found.`, operation }, { status: 400 })
         const edge = operation.edge as Record<string, any>
         const insertResult = await client.from('draft_graph_edges').insert({
           graph_id: graphId,
@@ -283,14 +326,14 @@ Deno.serve(async (request) => {
           condition_expr: edge.condition ?? null,
           metadata: edge.metadata ?? {},
         }).select('id, key').single()
-        if (insertResult.error) return Response.json({ error: insertResult.error.message, operation }, { status: 400 })
+        if (insertResult.error) return json({ error: insertResult.error.message, operation }, { status: 400 })
         results.push(insertResult.data)
         continue
       }
 
       if (operation.op === 'update_edge') {
         const graphId = await getGraphId(client, payload.draftId, String(operation.graphKey))
-        if (!graphId) return Response.json({ error: `Graph ${String(operation.graphKey)} was not found.`, operation }, { status: 400 })
+        if (!graphId) return json({ error: `Graph ${String(operation.graphKey)} was not found.`, operation }, { status: 400 })
         const changes = (operation.changes as Record<string, any> | undefined) ?? {}
         const updateResult = await client.from('draft_graph_edges').update({
           source_node_key: changes.source?.nodeKey,
@@ -301,7 +344,7 @@ Deno.serve(async (request) => {
           condition_expr: changes.condition,
           metadata: typeof changes.metadata === 'object' && changes.metadata !== null ? changes.metadata : undefined,
         }).eq('graph_id', graphId).eq('key', operation.edgeKey).select('id, key').single()
-        if (updateResult.error) return Response.json({ error: updateResult.error.message, operation }, { status: 400 })
+        if (updateResult.error) return json({ error: updateResult.error.message, operation }, { status: 400 })
         results.push(updateResult.data)
         continue
       }
@@ -311,8 +354,8 @@ Deno.serve(async (request) => {
       await client.from('patch_sets').update({ status: 'applied' }).eq('id', payload.patchSetId).eq('draft_id', payload.draftId)
     }
 
-    return Response.json({ ok: true, applied: results.length, results })
+    return json({ ok: true, applied: results.length, results })
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : 'Failed to apply patch.' }, { status: 500 })
+    return errorResponse(error, 'Failed to apply patch.')
   }
 })

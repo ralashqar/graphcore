@@ -1,5 +1,6 @@
 import { z } from 'npm:zod@4'
 
+import { BASELINE_ITEM_ARCHETYPES } from '../../../src/domain/bootstrapSeeds.ts'
 import { createAdminClient, requireUserClient } from '../_shared/auth.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
 
@@ -21,6 +22,98 @@ function titleCase(value: string) {
     .filter(Boolean)
     .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
     .join(' ')
+}
+
+async function seedBaselineArchetypes(admin: ReturnType<typeof createAdminClient>, draftId: string, userId: string) {
+  const existingArchetypesResponse = await admin
+    .from('project_archetypes')
+    .select('id, key')
+    .eq('draft_id', draftId)
+
+  if (existingArchetypesResponse.error) {
+    throw new HttpError(500, existingArchetypesResponse.error.message)
+  }
+
+  const existingByKey = new Map((existingArchetypesResponse.data ?? []).map((row) => [row.key, row.id]))
+  const missingSeeds = BASELINE_ITEM_ARCHETYPES.filter((seed) => !existingByKey.has(seed.key))
+
+  if (missingSeeds.length > 0) {
+    const insertResponse = await admin
+      .from('project_archetypes')
+      .insert(
+        missingSeeds.map((seed) => ({
+          draft_id: draftId,
+          key: seed.key,
+          name: seed.name,
+          summary: seed.summary,
+          definition_kind: seed.appliesToKind,
+          icon_asset_key: seed.iconAssetKey,
+          metadata: seed.metadata,
+          llm_hints: seed.llmHints,
+          created_by: userId,
+        })),
+      )
+      .select('id, key')
+
+    if (insertResponse.error) {
+      throw new HttpError(500, insertResponse.error.message)
+    }
+
+    for (const row of insertResponse.data ?? []) {
+      existingByKey.set(row.key, row.id)
+    }
+  }
+
+  const archetypeIds = [...existingByKey.values()]
+  if (archetypeIds.length === 0) {
+    return
+  }
+
+  const existingFieldsResponse = await admin
+    .from('project_archetype_fields')
+    .select('archetype_id, key')
+    .eq('draft_id', draftId)
+    .not('archetype_id', 'is', null)
+    .in('archetype_id', archetypeIds)
+
+  if (existingFieldsResponse.error) {
+    throw new HttpError(500, existingFieldsResponse.error.message)
+  }
+
+  const existingFieldKeys = new Set((existingFieldsResponse.data ?? []).map((row) => `${row.archetype_id}:${row.key}`))
+  const fieldRows = BASELINE_ITEM_ARCHETYPES.flatMap((seed) => {
+    const archetypeId = existingByKey.get(seed.key)
+    if (!archetypeId) {
+      return []
+    }
+
+    return seed.fields
+      .filter((field) => !existingFieldKeys.has(`${archetypeId}:${field.key}`))
+      .map((field) => ({
+        draft_id: draftId,
+        archetype_id: archetypeId,
+        key: field.key,
+        label: field.label,
+        field_type: field.fieldType,
+        description: field.description,
+        required: field.required,
+        default_value: field.defaultValue,
+        constraints: field.constraints,
+        sort_order: field.sortOrder,
+      }))
+  })
+
+  if (fieldRows.length === 0) {
+    return
+  }
+
+  const insertFieldsResponse = await admin
+    .from('project_archetype_fields')
+    .insert(fieldRows)
+
+  if (insertFieldsResponse.error) {
+    throw new HttpError(500, insertFieldsResponse.error.message)
+  }
 }
 
 Deno.serve(async (request) => {
@@ -179,6 +272,8 @@ Deno.serve(async (request) => {
       draftId = createdDraftResponse.data.id
       createdDraft = true
     }
+
+    await seedBaselineArchetypes(admin, draftId, user.id)
 
     return json({
       workspaceId,

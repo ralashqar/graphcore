@@ -11,18 +11,34 @@ export async function requireUserClient(request: Request, functionName: string) 
     throw new HttpError(500, `Supabase environment is incomplete for ${functionName}.`)
   }
 
-  const client = createClient(supabaseUrl, anonKey, {
-    global: { headers: { Authorization: authHeader } },
-  })
+  const accessToken = authHeader.replace(/^Bearer\s+/i, '').trim()
 
+  if (!accessToken) {
+    throw new HttpError(401, 'Authorization token is required.')
+  }
+
+  const admin = createAdminClient(functionName)
   const {
     data: { user },
     error,
-  } = await client.auth.getUser()
+  } = await admin.auth.getUser(accessToken)
 
   if (error || !user) {
-    throw new HttpError(401, 'User context is required to access this AI function.')
+    throw new HttpError(401, 'User context is required to access this function.')
   }
+
+  const client = createClient(supabaseUrl, anonKey, {
+    global: {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    },
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+    },
+  })
 
   return { client, user }
 }
