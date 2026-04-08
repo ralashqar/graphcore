@@ -221,6 +221,20 @@ export function validateGraph(
     })
   }
 
+  for (const node of graph.nodes) {
+    if (nodeKeys.has(node.key)) {
+      diagnostics.push({
+        level: 'error',
+        code: 'duplicate_node_key',
+        message: `Graph "${graph.key}" has duplicate node key "${node.key}".`,
+        graphKey: graph.key,
+        nodeKey: node.key,
+      })
+    }
+
+    nodeKeys.add(node.key)
+  }
+
   for (const edge of graph.edges) {
     if (!nodeKeys.has(edge.source.nodeKey) || !nodeKeys.has(edge.target.nodeKey)) {
       diagnostics.push({
@@ -234,18 +248,6 @@ export function validateGraph(
   }
 
   for (const node of graph.nodes) {
-    if (nodeKeys.has(node.key)) {
-      diagnostics.push({
-        level: 'error',
-        code: 'duplicate_node_key',
-        message: `Graph "${graph.key}" has duplicate node key "${node.key}".`,
-        graphKey: graph.key,
-        nodeKey: node.key,
-      })
-    }
-
-    nodeKeys.add(node.key)
-
     const template = node.templateKey ? graphNodeTemplatesByKey.get(node.templateKey) : null
 
     if (node.templateKey && !template) {

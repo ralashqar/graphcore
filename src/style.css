@@ -527,6 +527,7 @@ code {
 
 .graph-canvas {
   min-height: 560px;
+  position: relative;
 }
 
 .graph-diagnostic-row {
@@ -575,6 +576,114 @@ code {
   color: var(--accent);
   font-size: 0.76rem;
   line-height: 1.4;
+}
+
+.choice-port-list {
+  display: grid;
+  gap: 8px;
+}
+
+.choice-port-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: 32px;
+}
+
+.choice-port-input {
+  width: 100%;
+  padding: 7px 28px 7px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  outline: none;
+  font-size: 0.8rem;
+}
+
+.choice-port-input:focus {
+  border-color: rgba(94, 234, 212, 0.24);
+  box-shadow: 0 0 0 3px rgba(94, 234, 212, 0.08);
+}
+
+.choice-add-button {
+  justify-self: start;
+  padding: 6px 10px;
+  border-radius: 10px;
+  border: 1px dashed rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.choice-add-button:hover {
+  border-color: rgba(94, 234, 212, 0.24);
+  color: var(--text);
+}
+
+.graph-context-menu {
+  position: absolute;
+  z-index: 8;
+  min-width: 220px;
+  max-width: 280px;
+  max-height: 420px;
+  overflow: auto;
+  padding: 12px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: rgba(12, 18, 27, 0.96);
+  box-shadow: 0 28px 60px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(14px);
+}
+
+.context-menu-group + .context-menu-group {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.context-menu-group strong {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 0.84rem;
+}
+
+.context-menu-list {
+  display: grid;
+  gap: 6px;
+}
+
+.context-menu-item {
+  width: 100%;
+  display: grid;
+  gap: 2px;
+  text-align: left;
+  padding: 9px 10px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.context-menu-item small {
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+.context-menu-item:hover {
+  background: rgba(94, 234, 212, 0.06);
+  border-color: rgba(94, 234, 212, 0.18);
+}
+
+.context-menu-item.danger:hover {
+  background: rgba(248, 113, 113, 0.08);
+  border-color: rgba(248, 113, 113, 0.18);
+}
+
+.inspector-type-field {
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .context-drawer {

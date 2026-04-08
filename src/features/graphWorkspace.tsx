@@ -63,6 +63,9 @@ type GraphWorkspaceProps = {
 }
 
 type RailMode = 'graphs' | 'library'
+type GraphContextMenu =
+  | { kind: 'pane'; x: number; y: number; flowPosition: NodeDefinition['position'] }
+  | { kind: 'node'; x: number; y: number; nodeKey: string }
 
 export function GraphWorkspace(props: GraphWorkspaceProps) {
   const {
@@ -94,6 +97,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
   const [flowInstance, setFlowInstance] = useState<ReactFlowInstance<Node, Edge> | null>(null)
   const [liveNodes, setLiveNodes] = useState<Node[]>([])
   const [liveEdges, setLiveEdges] = useState<Edge[]>([])
+  const [contextMenu, setContextMenu] = useState<GraphContextMenu | null>(null)
   const canvasRef = useRef<HTMLDivElement | null>(null)
 
   const nodes = useMemo<Node[]>(() => {
@@ -109,6 +113,8 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
           previewUrl,
           conditionSummary: summarizeCondition(node.condition),
           effectSummary: summarizeEffects(node.effects).slice(0, 2),
+          onAddChoice: () => selectedGraph && addChoiceToNode(selectedGraph.key, node.key),
+          onUpdateChoiceLabel: (choiceId: string, label: string) => selectedGraph && updateChoiceLabel(selectedGraph.key, node.key, choiceId, label),
         },
       }
     })
@@ -121,7 +127,10 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
       sourceHandle: edge.source.portId ?? undefined,
       target: edge.target.nodeKey,
       targetHandle: edge.target.portId ?? 'in',
-      label: edge.label ?? undefined,
+      label: edge.condition ? (edge.label ? `${edge.label} [if]` : '[if]') : edge.label ?? undefined,
+      labelShowBg: Boolean(edge.condition),
+      labelBgStyle: edge.condition ? { fill: '#13202a', fillOpacity: 0.96 } : undefined,
+      labelStyle: edge.condition ? { fill: '#5eead4', fontSize: 11, fontWeight: 600 } : undefined,
       animated: edge.source.portId === 'true' || edge.source.portId === 'false',
     }))
   }, [selectedEdge, selectedGraph])
@@ -161,13 +170,14 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
     })
   }
 
-  function placeTemplate(templateKey: string) {
+  function placeTemplate(templateKey: string, positionOverride?: NodeDefinition['position']) {
     if (!selectedGraph) return
     const template = graphNodeTemplatesByKey.get(templateKey)
     if (!template) return
     const count = selectedGraph.nodes.filter((node) => node.templateKey === templateKey || node.type === template.baseNodeType).length + 1
-    const position = getPlacementPosition(selectedGraph, selectedNode, flowInstance, canvasRef.current)
+    const position = positionOverride ?? getPlacementPosition(selectedGraph, selectedNode, flowInstance, canvasRef.current)
     onCreateNode(selectedGraph.key, createNodeFromTemplate(selectedGraph, template, count, position))
+    setContextMenu(null)
   }
 
   function handleNodesChange(changes: NodeChange<Node>[]) {
@@ -210,6 +220,158 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
         targetHandle: connection.targetHandle ?? 'in',
       },
     ])
+  }
+
+  function handlePaneContextMenu(event: MouseEvent | React.MouseEvent<Element, MouseEvent>) {
+    event.preventDefault()
+    if (!flowInstance || !canvasRef.current) return
+    const flowPosition = flowInstance.screenToFlowPosition({ x: event.clientX, y: event.clientY })
+    setContextMenu({
+      kind: 'pane',
+      x: event.clientX - canvasRef.current.getBoundingClientRect().left,
+      y: event.clientY - canvasRef.current.getBoundingClientRect().top,
+      flowPosition,
+    })
+  }
+
+  function handleNodeContextMenu(event: React.MouseEvent, node: Node) {
+    event.preventDefault()
+    if (!canvasRef.current) return
+    onSelectNode(node.id)
+    setContextMenu({
+      kind: 'node',
+      nodeKey: node.id,
+      x: event.clientX - canvasRef.current.getBoundingClientRect().left,
+      y: event.clientY - canvasRef.current.getBoundingClientRect().top,
+    })
+  }
+
+  function applyTemplateChange(nodeKey: string, templateKey: string) {
+    if (!selectedGraph) return
+    const currentNode = selectedGraph.nodes.find((node) => node.key === nodeKey)
+    const template = graphNodeTemplatesByKey.get(templateKey)
+    if (!currentNode || !template) return
+    const nextNode = normalizeNode({
+      ...currentNode,
+      type: template.baseNodeType,
+      templateKey: template.key,
+      subtitle: template.defaultSubtitle ?? currentNode.subtitle,
+      title: currentNode.title || template.defaultTitle,
+      body: {
+        text: currentNode.body.text ?? template.defaultBody?.text ?? null,
+        imageAssetKey: currentNode.body.imageAssetKey ?? template.defaultBody?.imageAssetKey ?? null,
+        audioAssetKey: currentNode.body.audioAssetKey ?? template.defaultBody?.audioAssetKey ?? null,
+        choices:
+          template.baseNodeType === 'choice'
+            ? currentNode.body.choices.length > 0
+              ? currentNode.body.choices
+              : template.defaultBody?.choices ?? []
+            : [],
+      },
+      condition:
+        template.baseNodeType === 'condition'
+          ? currentNode.condition ?? template.defaultCondition ?? null
+          : null,
+      effects:
+        template.baseNodeType === 'effect' || template.baseNodeType === 'quest_step' || template.baseNodeType === 'market'
+          ? currentNode.effects.length > 0
+            ? currentNode.effects
+            : template.defaultEffects ?? []
+          : [],
+      display: {
+        ...currentNode.display,
+        ...template.defaultDisplay,
+      },
+      metadata: {
+        ...currentNode.metadata,
+      },
+    })
+    setLiveNodes((current) =>
+      current.map((node) =>
+        node.id === nodeKey
+          ? {
+              ...node,
+              data: {
+                ...(node.data as GraphNodeData),
+                node: nextNode,
+                conditionSummary: summarizeCondition(nextNode.condition),
+                effectSummary: summarizeEffects(nextNode.effects).slice(0, 2),
+              },
+            }
+          : node,
+      ),
+    )
+    onUpdateNode(selectedGraph.key, nodeKey, {
+      type: nextNode.type,
+      templateKey: nextNode.templateKey,
+      subtitle: nextNode.subtitle,
+      body: nextNode.body,
+      condition: nextNode.condition,
+      effects: nextNode.effects,
+      ports: nextNode.ports,
+      display: nextNode.display,
+      metadata: nextNode.metadata,
+    })
+  }
+
+  function addChoiceToNode(graphKey: string, nodeKey: string) {
+    const graphNode = selectedGraph?.nodes.find((node) => node.key === nodeKey)
+    if (!graphNode) return
+    const nextChoices = [
+      ...graphNode.body.choices,
+      {
+        id: `choice_${graphNode.body.choices.length + 1}`,
+        label: `Choice ${graphNode.body.choices.length + 1}`,
+      },
+    ]
+    const nextNode = normalizeNode({
+      ...graphNode,
+      body: { ...graphNode.body, choices: nextChoices },
+    })
+    setLiveNodes((current) =>
+      current.map((node) =>
+        node.id === nodeKey
+          ? {
+              ...node,
+              data: {
+                ...(node.data as GraphNodeData),
+                node: nextNode,
+              },
+            }
+          : node,
+      ),
+    )
+    onUpdateNode(graphKey, nodeKey, {
+      body: nextNode.body,
+      ports: nextNode.ports,
+    })
+  }
+
+  function updateChoiceLabel(graphKey: string, nodeKey: string, choiceId: string, label: string) {
+    const graphNode = selectedGraph?.nodes.find((node) => node.key === nodeKey)
+    if (!graphNode) return
+    const nextChoices = graphNode.body.choices.map((choice) => (choice.id === choiceId ? { ...choice, label } : choice))
+    const nextNode = normalizeNode({
+      ...graphNode,
+      body: { ...graphNode.body, choices: nextChoices },
+    })
+    setLiveNodes((current) =>
+      current.map((node) =>
+        node.id === nodeKey
+          ? {
+              ...node,
+              data: {
+                ...(node.data as GraphNodeData),
+                node: nextNode,
+              },
+            }
+          : node,
+      ),
+    )
+    onUpdateNode(graphKey, nodeKey, {
+      body: nextNode.body,
+      ports: nextNode.ports,
+    })
   }
 
   return (
@@ -282,8 +444,13 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
             nodesConnectable
             onInit={setFlowInstance}
             onNodeClick={(_, node) => onSelectNode(node.id)}
+            onNodeContextMenu={handleNodeContextMenu}
             onEdgeClick={(_, edge) => onSelectEdge(edge.id)}
-            onPaneClick={onClearSelection}
+            onPaneClick={() => {
+              setContextMenu(null)
+              onClearSelection()
+            }}
+            onPaneContextMenu={handlePaneContextMenu}
             onNodesChange={handleNodesChange}
             onEdgesChange={handleEdgesChange}
             onConnect={handleConnect}
@@ -292,6 +459,36 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
             <Controls />
             <Background />
           </ReactFlow>
+          {contextMenu ? (
+            <div className="graph-context-menu" style={{ left: contextMenu.x, top: contextMenu.y }}>
+              {contextMenu.kind === 'pane' ? (
+                <>
+                  <span className="section-label">Add Node</span>
+                  {graphNodeLibrary.map((group) => (
+                    <div key={group.key} className="context-menu-group">
+                      <strong>{group.label}</strong>
+                      <div className="context-menu-list">
+                        {group.templates
+                          .filter((template) => selectedGraph ? template.compatibleGraphTypes.includes(selectedGraph.graphType) : true)
+                          .map((template) => (
+                            <button key={template.key} className="context-menu-item" onClick={() => placeTemplate(template.key, contextMenu.flowPosition)} type="button">
+                              <span>{template.label}</span>
+                              <small>{template.baseNodeType}</small>
+                            </button>
+                          ))}
+                      </div>
+                    </div>
+                  ))}
+                </>
+              ) : (
+                <>
+                  <span className="section-label">Node Actions</span>
+                  <button className="context-menu-item" onClick={() => { selectedGraph && onDuplicateNode(selectedGraph.key, contextMenu.nodeKey); setContextMenu(null) }} type="button"><span>Duplicate Node</span></button>
+                  <button className="context-menu-item danger" onClick={() => { selectedGraph && onDeleteNode(selectedGraph.key, contextMenu.nodeKey); setContextMenu(null) }} type="button"><span>Delete Node</span></button>
+                </>
+              )}
+            </div>
+          ) : null}
         </div>
         <div className="graph-diagnostic-row">
           {(diagnostics.filter((item) => item.graphKey === selectedGraph?.key).slice(0, 4)).map((diagnostic, index) => (
@@ -302,9 +499,9 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
 
       <aside className="context-drawer">
         {selectedEdge && selectedGraph ? (
-          <EdgeInspector edge={selectedEdge} onUpdate={(changes) => onUpdateEdge(selectedGraph.key, selectedEdge.key, changes)} />
+          <EdgeInspector definitions={definitions} edge={selectedEdge} onUpdate={(changes) => onUpdateEdge(selectedGraph.key, selectedEdge.key, changes)} />
         ) : selectedNode && selectedGraph ? (
-          <NodeInspector assets={assets} definitions={definitions} graphs={snapshotGraphs} node={selectedNode} onUpdate={(changes) => onUpdateNode(selectedGraph.key, selectedNode.key, changes)} />
+          <NodeInspector assets={assets} definitions={definitions} graph={selectedGraph} graphs={snapshotGraphs} node={selectedNode} onApplyTemplateChange={(templateKey) => applyTemplateChange(selectedNode.key, templateKey)} onDelete={() => onDeleteNode(selectedGraph.key, selectedNode.key)} onUpdate={(changes) => onUpdateNode(selectedGraph.key, selectedNode.key, changes)} />
         ) : selectedGraph ? (
           <GraphInspector diagnostics={diagnostics.filter((item) => item.graphKey === selectedGraph.key)} graph={selectedGraph} onUpdate={(changes) => onUpdateGraph(selectedGraph.key, changes)} />
         ) : (
@@ -315,8 +512,17 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
   )
 }
 
-function FlowNodeCard({ data }: { data: { node: NodeDefinition; previewUrl: string | null; conditionSummary: string; effectSummary: string[] } }) {
-  const { node, previewUrl, conditionSummary, effectSummary } = data
+type GraphNodeData = {
+  node: NodeDefinition
+  previewUrl: string | null
+  conditionSummary: string
+  effectSummary: string[]
+  onAddChoice?: () => void
+  onUpdateChoiceLabel?: (choiceId: string, label: string) => void
+}
+
+function FlowNodeCard({ data }: { data: GraphNodeData }) {
+  const { node, previewUrl, conditionSummary, effectSummary, onAddChoice, onUpdateChoiceLabel } = data
   const inputs = node.ports.filter((port) => port.direction === 'input')
   const outputs = node.ports.filter((port) => port.direction === 'output')
 
@@ -331,10 +537,31 @@ function FlowNodeCard({ data }: { data: { node: NodeDefinition; previewUrl: stri
         </div>
       </div>
       {node.body.text ? <p>{node.body.text}</p> : null}
-      {node.type === 'choice' ? <div className="flow-node-meta">{node.body.choices.length} choices</div> : null}
+      {node.type === 'choice' ? (
+        <div className="choice-port-list">
+          {node.body.choices.map((choice) => (
+            <div key={choice.id} className="choice-port-row">
+              <input
+                className="choice-port-input nodrag nopan"
+                value={choice.label}
+                onChange={(event) => onUpdateChoiceLabel?.(choice.id, event.target.value)}
+              />
+              <Handle
+                id={choice.id}
+                type="source"
+                position={Position.Right}
+                style={{ top: '50%', right: -7, transform: 'translateY(-50%)' }}
+              />
+            </div>
+          ))}
+          <button className="choice-add-button nodrag nopan" onClick={() => onAddChoice?.()} type="button">
+            + Choice
+          </button>
+        </div>
+      ) : null}
       {node.type === 'condition' ? <div className="flow-node-meta">{conditionSummary}</div> : null}
       {effectSummary.length > 0 ? <div className="flow-node-meta">{effectSummary.join(' • ')}</div> : null}
-      {outputs.map((port, index) => <Handle key={port.id} id={port.id} type="source" position={Position.Right} style={{ top: 18 + index * 18 }} />)}
+      {node.type !== 'choice' ? outputs.map((port, index) => <Handle key={port.id} id={port.id} type="source" position={Position.Right} style={{ top: 18 + index * 18 }} />) : null}
     </div>
   )
 }
@@ -343,21 +570,68 @@ function GraphInspector({ diagnostics, graph, onUpdate }: { diagnostics: Diagnos
   return <div className="detail-stack compact"><span className="eyebrow">{graph.graphType}</span><h3>{graph.name}</h3><label className="field-block"><span>Key</span><input value={graph.key} onChange={(event) => onUpdate({ key: event.target.value })} /></label><label className="field-block full-width"><span>Summary</span><textarea rows={3} value={graph.summary} onChange={(event) => onUpdate({ summary: event.target.value })} /></label><label className="field-block"><span>Entry Node</span><select value={graph.entryNodeKey ?? ''} onChange={(event) => onUpdate({ entryNodeKey: event.target.value || null })}><option value="">No entry node</option>{graph.nodes.map((node) => <option key={node.key} value={node.key}>{node.title}</option>)}</select></label><div className="diagnostic-stack">{diagnostics.length === 0 ? <div className="inline-note">No graph diagnostics.</div> : diagnostics.map((diagnostic, index) => <div key={`${diagnostic.code}-${diagnostic.nodeKey ?? 'graph'}-${index}`} className={`inline-note is-${diagnostic.level}`}>{diagnostic.message}</div>)}</div></div>
 }
 
-function EdgeInspector({ edge, onUpdate }: { edge: EdgeDefinition; onUpdate: (changes: Partial<EdgeDefinition>) => void }) {
-  return <div className="detail-stack compact"><span className="eyebrow">Edge</span><h3>{edge.key}</h3><label className="field-block"><span>Label</span><input value={edge.label ?? ''} onChange={(event) => onUpdate({ label: event.target.value || null })} /></label></div>
+function EdgeInspector({
+  definitions,
+  edge,
+  onUpdate,
+}: {
+  definitions: DefinitionBase[]
+  edge: EdgeDefinition
+  onUpdate: (changes: Partial<EdgeDefinition>) => void
+}) {
+  const itemDefinitions = definitions.filter((definition) => definition.kind === 'item')
+  const tokenDefinitions = definitions.filter((definition) => definition.kind === 'item' && (definition.tags.includes('shadow_token') || definition.key.startsWith('token.') || definition.archetypeKey?.includes('progression_token')))
+  const statDefinitions = definitions.filter((definition) => definition.kind === 'stat')
+  const questDefinitions = definitions.filter((definition) => definition.kind === 'quest')
+  const locationDefinitions = definitions.filter((definition) => definition.kind === 'location')
+
+  return (
+    <div className="detail-stack compact">
+      <span className="eyebrow">Edge</span>
+      <h3>{edge.key}</h3>
+      <label className="field-block">
+        <span>Label</span>
+        <input value={edge.label ?? ''} onChange={(event) => onUpdate({ label: event.target.value || null })} />
+      </label>
+      <div className="editor-section">
+        <div className="section-head">
+          <div>
+            <span className="eyebrow">Visibility Gate</span>
+            <h3>Edge Condition</h3>
+          </div>
+          <p className="subtle-line">Use this to hide or block the branch on the runtime side unless the condition passes.</p>
+        </div>
+        <ConditionEditor
+          condition={edge.condition}
+          itemDefinitions={itemDefinitions}
+          locationDefinitions={locationDefinitions}
+          questDefinitions={questDefinitions}
+          statDefinitions={statDefinitions}
+          tokenDefinitions={tokenDefinitions}
+          onChange={(condition) => onUpdate({ condition })}
+        />
+      </div>
+    </div>
+  )
 }
 
 function NodeInspector({
   assets,
   definitions,
+  graph,
   graphs,
   node,
+  onApplyTemplateChange,
+  onDelete,
   onUpdate,
 }: {
   assets: AssetDefinition[]
   definitions: DefinitionBase[]
+  graph: GraphDefinition
   graphs: GraphDefinition[]
   node: NodeDefinition
+  onApplyTemplateChange: (templateKey: string) => void
+  onDelete: () => void
   onUpdate: (changes: Partial<NodeDefinition>) => void
 }) {
   const itemDefinitions = definitions.filter((definition) => definition.kind === 'item')
@@ -374,6 +648,17 @@ function NodeInspector({
     <div className="detail-stack compact">
       <span className="eyebrow">{template?.label ?? node.type}</span>
       <h3>{node.title}</h3>
+      <div className="asset-toolbar">
+        <label className="field-block compact-block inspector-type-field">
+          <span>Node Template</span>
+          <select value={node.templateKey ?? templateKeyFromType(node.type)} onChange={(event) => onApplyTemplateChange(event.target.value)}>
+            {graphNodeLibrary.flatMap((group) => group.templates)
+              .filter((entry) => entry.compatibleGraphTypes.includes(graph.graphType))
+              .map((entry) => <option key={entry.key} value={entry.key}>{entry.label}</option>)}
+          </select>
+        </label>
+        <button className="ghost-button compact" onClick={onDelete} type="button">Delete node</button>
+      </div>
       <label className="field-block"><span>Title</span><input value={node.title} onChange={(event) => onUpdate({ title: event.target.value })} /></label>
       <label className="field-block"><span>Subtitle</span><input value={node.subtitle ?? ''} onChange={(event) => onUpdate({ subtitle: event.target.value || null })} /></label>
       {(node.type === 'text' || node.type === 'choice' || template?.inspectorSchema === 'story') ? (
@@ -603,4 +888,9 @@ function uniqueEdgeKey(graph: GraphDefinition, source: string, target: string) {
 
 function isTextInput(target: EventTarget | null) {
   return target instanceof HTMLElement && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)
+}
+
+function templateKeyFromType(type: NodeDefinition['type']) {
+  const match = graphNodeLibrary.flatMap((group) => group.templates).find((template) => template.baseNodeType === type)
+  return match?.key ?? 'story_text'
 }
