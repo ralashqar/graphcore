@@ -22,6 +22,7 @@ type ArchetypeSort = 'name' | 'field_count' | 'key'
 export function ContentWorkspace({
   archetypes,
   assets,
+  definitions,
   items,
   selectedAsset,
   selectedArchetype,
@@ -44,6 +45,7 @@ export function ContentWorkspace({
 }: {
   archetypes: ArchetypeDefinition[]
   assets: AssetDefinition[]
+  definitions: DefinitionBase[]
   items: DefinitionBase[]
   selectedAsset: AssetDefinition | null
   selectedArchetype: ArchetypeDefinition | null
@@ -361,6 +363,8 @@ export function ContentWorkspace({
                   {resolvedFields.map((field) => (
                     <EditableField
                       key={field.key}
+                      assets={assets}
+                      definitions={definitions}
                       field={field}
                       value={getFieldValue(selectedItem, field)}
                       onChange={(value) => onUpdateFieldValue(selectedItem.key, field.key, value)}
@@ -717,15 +721,65 @@ export function AssetsWorkspace({
 }
 
 function EditableField({
+  assets,
+  definitions,
   field,
   value,
   onChange,
 }: {
+  assets: AssetDefinition[]
+  definitions: DefinitionBase[]
   field: FieldDefinition
   value: FieldValue['value']
   onChange: (value: FieldValue['value']) => void
 }) {
   const options = Array.isArray(field.constraints.options) ? field.constraints.options.map(String) : []
+  const allowedKinds = Array.isArray(field.constraints.allowedKinds)
+    ? field.constraints.allowedKinds.map(String)
+    : null
+  const allowedAssetKinds = Array.isArray(field.constraints.allowedAssetKinds)
+    ? field.constraints.allowedAssetKinds.map(String)
+    : null
+
+  if (field.fieldType === 'asset_ref') {
+    const assetOptions = assets.filter((asset) =>
+      allowedAssetKinds ? allowedAssetKinds.includes(asset.kind) : true,
+    )
+
+    return (
+      <label className="field-block">
+        <span>{field.label}</span>
+        <select value={typeof value === 'string' ? value : ''} onChange={(event) => onChange(event.target.value || null)}>
+          <option value="">No asset</option>
+          {assetOptions.map((asset) => (
+            <option key={asset.key} value={asset.key}>
+              {asset.name} ({asset.key})
+            </option>
+          ))}
+        </select>
+      </label>
+    )
+  }
+
+  if (field.fieldType === 'definition_ref') {
+    const definitionOptions = definitions.filter((definition) =>
+      allowedKinds ? allowedKinds.includes(definition.kind) : true,
+    )
+
+    return (
+      <label className="field-block">
+        <span>{field.label}</span>
+        <select value={typeof value === 'string' ? value : ''} onChange={(event) => onChange(event.target.value || null)}>
+          <option value="">No reference</option>
+          {definitionOptions.map((definition) => (
+            <option key={definition.key} value={definition.key}>
+              {definition.name} ({definition.key})
+            </option>
+          ))}
+        </select>
+      </label>
+    )
+  }
 
   if (field.fieldType === 'long_text') {
     return (

@@ -336,6 +336,7 @@ export default function App() {
             <ContentWorkspace
               archetypes={itemArchetypes}
               assets={snapshot.assets}
+              definitions={snapshot.definitions}
               items={itemDefinitions}
               selectedAsset={selectedAsset}
               selectedArchetype={selectedArchetype}

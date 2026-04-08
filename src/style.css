@@ -618,7 +618,7 @@ code {
 }
 
 .item-layout {
-  grid-template-columns: 248px minmax(0, 1fr) 308px;
+  grid-template-columns: 312px minmax(0, 1fr) 308px;
 }
 
 .item-editor-surface {
@@ -680,6 +680,8 @@ code {
 
 .item-editor {
   display: grid;
+  width: 100%;
+  min-width: 0;
   gap: 24px;
   align-content: start;
   padding: 4px;
@@ -687,7 +689,8 @@ code {
 
 .item-editor-head,
 .asset-detail-head {
-  display: flex;
+  display: grid;
+  grid-template-columns: 108px minmax(0, 1fr);
   align-items: flex-start;
   gap: 18px;
 }
@@ -730,13 +733,19 @@ code {
 .field-grid,
 .asset-import-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(12, minmax(0, 1fr));
   gap: 14px;
 }
 
 .editor-grid.compact {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   align-items: end;
+}
+
+.item-editor > .editor-grid > .field-block,
+.field-grid > .field-block,
+.asset-import-grid > * {
+  grid-column: span 6;
 }
 
 .field-block,
@@ -885,6 +894,11 @@ code {
   gap: 12px;
 }
 
+.rail-collection-head {
+  display: grid;
+  gap: 12px;
+}
+
 .collection-controls {
   display: grid;
   gap: 12px;
@@ -900,6 +914,7 @@ code {
 .segmented-control {
   display: inline-flex;
   align-items: center;
+  width: 100%;
   padding: 4px;
   gap: 4px;
   border-radius: 14px;
@@ -908,11 +923,13 @@ code {
 }
 
 .segment-button {
+  flex: 1 1 0;
   padding: 8px 12px;
   border-radius: 10px;
   background: transparent;
   color: var(--muted);
   cursor: pointer;
+  text-align: center;
 }
 
 .segment-button.is-active {
@@ -948,6 +965,10 @@ code {
 
 .schema-grid {
   grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.focus-rail .primary-button.compact {
+  width: 100%;
 }
 
 @keyframes stageEnter {
@@ -994,7 +1015,7 @@ code {
   }
 
   .item-layout {
-    grid-template-columns: 240px minmax(0, 1fr);
+    grid-template-columns: 280px minmax(0, 1fr);
   }
 
   .asset-picker-drawer {
