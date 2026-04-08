@@ -1,4 +1,6 @@
 import {
+  applyEdgeChanges,
+  applyNodeChanges,
   Background,
   Controls,
   Handle,
@@ -90,6 +92,8 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
   } = props
   const [railMode, setRailMode] = useState<RailMode>('graphs')
   const [flowInstance, setFlowInstance] = useState<ReactFlowInstance<Node, Edge> | null>(null)
+  const [liveNodes, setLiveNodes] = useState<Node[]>([])
+  const [liveEdges, setLiveEdges] = useState<Edge[]>([])
   const canvasRef = useRef<HTMLDivElement | null>(null)
 
   const nodes = useMemo<Node[]>(() => {
@@ -121,6 +125,14 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
       animated: edge.source.portId === 'true' || edge.source.portId === 'false',
     }))
   }, [selectedEdge, selectedGraph])
+
+  useEffect(() => {
+    setLiveNodes(nodes)
+  }, [nodes])
+
+  useEffect(() => {
+    setLiveEdges(edges)
+  }, [edges])
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -160,6 +172,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
 
   function handleNodesChange(changes: NodeChange<Node>[]) {
     if (!selectedGraph) return
+    setLiveNodes((current) => applyNodeChanges(changes, current))
     for (const change of changes) {
       if (change.type === 'position' && change.position && !change.dragging) {
         onMoveNode(selectedGraph.key, change.id, change.position)
@@ -170,6 +183,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
 
   function handleEdgesChange(changes: EdgeChange<Edge>[]) {
     if (!selectedGraph) return
+    setLiveEdges((current) => applyEdgeChanges(changes, current))
     for (const change of changes) {
       if (change.type === 'remove') onDeleteEdge(selectedGraph.key, change.id)
     }
@@ -186,6 +200,16 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
       condition: null,
       metadata: {},
     })
+    setLiveEdges((current) => [
+      ...current,
+      {
+        id: uniqueEdgeKey(selectedGraph, connection.source, connection.target),
+        source: connection.source,
+        sourceHandle: connection.sourceHandle ?? 'out',
+        target: connection.target,
+        targetHandle: connection.targetHandle ?? 'in',
+      },
+    ])
   }
 
   return (
@@ -251,8 +275,8 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
         <div className="canvas-stage graph-canvas" ref={canvasRef}>
           <ReactFlow
             fitView
-            nodes={nodes}
-            edges={edges}
+            nodes={liveNodes}
+            edges={liveEdges}
             nodeTypes={{ graphNode: FlowNodeCard }}
             nodesDraggable
             nodesConnectable
