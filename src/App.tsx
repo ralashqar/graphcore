@@ -8,7 +8,7 @@ import { promptGenerationService } from './application/services/promptGeneration
 import { publishService } from './application/services/publishService'
 import { workspaceService } from './application/services/workspaceService'
 import { compileBundle } from './domain/compiler'
-import { schemaCatalog } from './domain/graphcore'
+import { buildDefaultDefinitionComponents, schemaCatalog } from './domain/graphcore'
 import type {
   ArchetypeDefinition,
   DefinitionBase,
@@ -27,7 +27,7 @@ import { PromptDock } from './features/prompts/PromptDock'
 import { WorkspaceBanner } from './features/shell/WorkspaceBanner'
 import { WorkspaceTopbar } from './features/shell/WorkspaceTopbar'
 import { useEditorStore } from './state/editorStore'
-import type { AuthMode, LoadedState, PatchSessionView, WorkspaceTab } from './shared/workspace'
+import type { AuthMode, GameSummary, LoadedState, PatchSessionView, WorkspaceTab } from './shared/workspace'
 import { workspaceTabs } from './shared/workspace'
 
 const GraphWorkspace = lazy(() =>
@@ -38,6 +38,9 @@ const ContentWorkspace = lazy(() =>
 )
 const AssetsWorkspace = lazy(() =>
   import('./features/itemAssetWorkspace').then((module) => ({ default: module.AssetsWorkspace })),
+)
+const SpecializedDefinitionWorkspace = lazy(() =>
+  import('./features/content/SpecializedDefinitionWorkspace').then((module) => ({ default: module.SpecializedDefinitionWorkspace })),
 )
 const ActivityWorkspace = lazy(() =>
   import('./features/prompts/ActivityWorkspace').then((module) => ({ default: module.ActivityWorkspace })),
@@ -63,6 +66,7 @@ function uniqueKey(existingKeys: string[], seed: string) {
 export default function App() {
   const [session, setSession] = useState<Session | null>(null)
   const [loadedState, setLoadedState] = useState<LoadedState | null>(null)
+  const [games, setGames] = useState<GameSummary[]>([])
   const [snapshot, setSnapshot] = useState<ProjectSnapshot | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -99,6 +103,9 @@ export default function App() {
     startTransition(() => {
       setLoadedState({ source: state.source, reason: state.reason })
       setSnapshot(state.snapshot)
+      setPatchPreview(null)
+      setSelectedNodeKey(null)
+      setSelectedEdgeKey(null)
       setSelectedGraphKey(state.snapshot.graphs[0]?.key ?? null)
       setSelectedDefinitionKey(firstDefinition?.key ?? null)
       setSelectedAssetKey(state.snapshot.assets[0]?.key ?? null)
@@ -106,6 +113,15 @@ export default function App() {
       setSelectedPatchIndex(0)
       setBundle(compileBundle(state.snapshot))
     })
+  }
+
+  async function refreshWorkspaceState(loader?: () => Promise<{ snapshot: ProjectSnapshot; source: 'supabase' | 'demo'; reason?: string }>) {
+    const state = await (loader ? loader() : workspaceService.load())
+    const nextGames = state.source === 'supabase' ? await workspaceService.listGames() : []
+    setGames(nextGames)
+    setWorkspaceBootstrapError(state.source === 'supabase' ? null : state.reason ?? null)
+    hydrateLoadedProject(state)
+    return state
   }
 
   useEffect(() => {
@@ -118,6 +134,9 @@ export default function App() {
         setSession(currentSession)
         const state = await workspaceService.ensureLiveWorkspace()
         if (!active) return
+        const nextGames = state.source === 'supabase' ? await workspaceService.listGames() : []
+        if (!active) return
+        setGames(nextGames)
         setWorkspaceBootstrapError(state.source === 'supabase' ? null : state.reason ?? null)
         hydrateLoadedProject(state)
       } catch (loadError) {
@@ -142,6 +161,9 @@ export default function App() {
       try {
         const state = await workspaceService.ensureLiveWorkspace()
         if (cancelled) return
+        const nextGames = state.source === 'supabase' ? await workspaceService.listGames() : []
+        if (cancelled) return
+        setGames(nextGames)
         setWorkspaceBootstrapError(state.source === 'supabase' ? null : state.reason ?? null)
         hydrateLoadedProject(state)
         if (nextSession) {
@@ -176,9 +198,7 @@ export default function App() {
     setPromptRuntimeError(null)
 
     try {
-      const state = await workspaceService.bootstrapLiveWorkspace()
-      setWorkspaceBootstrapError(state.source === 'supabase' ? null : state.reason ?? null)
-      hydrateLoadedProject(state)
+      await refreshWorkspaceState(() => workspaceService.bootstrapLiveWorkspace())
     } catch (bootstrapError) {
       console.error('[GraphCore] manual live workspace bootstrap failed.', bootstrapError)
       const message = bootstrapError instanceof Error ? bootstrapError.message : 'Live workspace bootstrap failed.'
@@ -195,7 +215,8 @@ export default function App() {
   const selectedNode = useMemo(() => selectedGraph?.nodes.find((node) => node.key === selectedNodeKey) ?? null, [selectedGraph, selectedNodeKey])
   const selectedEdge = useMemo(() => selectedGraph?.edges.find((edge) => edge.key === selectedEdgeKey) ?? null, [selectedEdgeKey, selectedGraph])
   const selectedAsset = useMemo(() => snapshot?.assets.find((asset) => asset.key === selectedAssetKey) ?? snapshot?.assets[0] ?? null, [selectedAssetKey, snapshot])
-  const needsBootstrapOnboarding = loadedState?.source === 'supabase' && (!snapshot?.gameSpec || (snapshot.definitions.length === 0 && snapshot.graphs.length === 0))
+  const activeGame = useMemo(() => games.find((game) => game.projectId === snapshot?.project.id) ?? null, [games, snapshot?.project.id])
+  const activeGameIsEmpty = loadedState?.source === 'supabase' && (!!snapshot && !snapshot.gameSpec && snapshot.definitions.length === 0 && snapshot.graphs.length === 0)
 
   useEffect(() => {
     if (loading) return
@@ -223,12 +244,6 @@ export default function App() {
     setBootstrapGameArchetypeId(nextArchetypeId)
     setBootstrapConceptPrompt(nextConceptPrompt)
   }, [snapshot?.draft.id, snapshot?.gameSpec])
-
-  useEffect(() => {
-    if (needsBootstrapOnboarding) {
-      setBootstrapOnboardingOpen(true)
-    }
-  }, [needsBootstrapOnboarding])
 
   const persistedPatchHistory = useMemo<PatchSessionView[]>(() => {
     return (snapshot?.patchSets ?? []).map((patch) => {
@@ -421,11 +436,11 @@ export default function App() {
     if (selectedEdgeKey === edgeKey) setSelectedEdgeKey(null)
   }
 
-  function createItem(archetypeKey: string | null = null) {
+  function createDefinitionOfKind(kindOverride: DefinitionBase['kind'], archetypeKey: string | null = null) {
     if (!snapshot) return
     const existingKeys = snapshot.definitions.map((definition) => definition.key)
     const archetype = snapshot.archetypes.find((candidate) => candidate.key === archetypeKey) ?? null
-    const kind = archetype?.appliesToKind ?? selectedDefinition?.kind ?? 'item'
+    const kind = archetype?.appliesToKind ?? kindOverride
     const suffix = uniqueKey(existingKeys, archetype ? archetype.name : kind)
     const nextItem: DefinitionBase = {
       id: `definition-item-${Date.now()}`,
@@ -444,11 +459,26 @@ export default function App() {
       definitionData: {},
       fieldValues: (archetype?.fields ?? []).map((field) => ({ fieldKey: field.key, value: field.defaultValue ?? null })),
       customFields: [],
-      components: [],
+      components: buildDefaultDefinitionComponents(kind),
     }
     applySnapshotUpdate((current) => ({ ...current, definitions: [nextItem, ...current.definitions] }))
     setSelectedDefinitionKey(nextItem.key)
+  }
+
+  function createItem(archetypeKey: string | null = null) {
+    const archetype = snapshot?.archetypes.find((candidate) => candidate.key === archetypeKey) ?? null
+    createDefinitionOfKind(archetype?.appliesToKind ?? selectedDefinition?.kind ?? 'item', archetypeKey)
     setActiveTab('content')
+  }
+
+  function createCharacter(archetypeKey: string | null = null) {
+    createDefinitionOfKind('character', archetypeKey)
+    setActiveTab('characters')
+  }
+
+  function createEnvironment(archetypeKey: string | null = null) {
+    createDefinitionOfKind('environment', archetypeKey)
+    setActiveTab('environments')
   }
 
   function createArchetype() {
@@ -776,8 +806,7 @@ export default function App() {
       if (nextPatch.operations.length > 0) {
         setIsApplyingPatch(true)
         await patchApplyService.apply(snapshot, nextPatch.operations, nextPatch.patchSetId)
-        const refreshed = await workspaceService.load()
-        hydrateLoadedProject(refreshed)
+        await refreshWorkspaceState()
         setPatchPreview((current) => current ? {
           ...current,
           status: 'applied',
@@ -809,6 +838,68 @@ export default function App() {
     setBootstrapGameArchetypeId('rpg')
     setBootstrapConceptPrompt('')
     setBootstrapOnboardingOpen(true)
+  }
+
+  async function handleOpenNewGame() {
+    if (!session) {
+      setPromptRuntimeError('Sign in before creating a new game.')
+      setAuthOpen(true)
+      return
+    }
+
+    setWorkspaceBootstrapPending(true)
+    setWorkspaceBootstrapError(null)
+    setPromptRuntimeError(null)
+
+    try {
+      const state = await refreshWorkspaceState(() => workspaceService.createGame())
+      setBootstrapGameArchetypeId('rpg')
+      setBootstrapConceptPrompt('')
+      setActiveTab('graph')
+      if (state.source === 'supabase') {
+        setBootstrapOnboardingOpen(true)
+      }
+    } catch (createError) {
+      console.error('[GraphCore] create game failed.', createError)
+      const message = createError instanceof Error ? createError.message : 'Creating a new game failed.'
+      setWorkspaceBootstrapError(message)
+      setPromptRuntimeError(message)
+    } finally {
+      setWorkspaceBootstrapPending(false)
+    }
+  }
+
+  async function handleSelectGame(projectId: string) {
+    if (!snapshot) return
+    const nextGame = games.find((game) => game.projectId === projectId)
+    if (!nextGame || nextGame.projectId === snapshot.project.id) return
+
+    setLoading(true)
+    setBootstrapOnboardingOpen(false)
+    setPromptRuntimeError(null)
+
+    try {
+      const state = await refreshWorkspaceState(() => workspaceService.setActiveGame(nextGame.projectId, nextGame.draftId))
+      setActiveTab('graph')
+      if (state.source === 'supabase') {
+        setBootstrapGameArchetypeId(
+          typeof state.snapshot.gameSpec?.overrides?.gameArchetypeId === 'string'
+            ? state.snapshot.gameSpec.overrides.gameArchetypeId
+            : 'rpg',
+        )
+        setBootstrapConceptPrompt(
+          typeof state.snapshot.gameSpec?.overrides?.gameConceptPrompt === 'string'
+            ? state.snapshot.gameSpec.overrides.gameConceptPrompt
+            : '',
+        )
+      }
+    } catch (switchError) {
+      console.error('[GraphCore] switch game failed.', switchError)
+      const message = switchError instanceof Error ? switchError.message : 'Switching games failed.'
+      setPromptRuntimeError(message)
+    } finally {
+      setLoading(false)
+    }
   }
 
   async function handleBootstrapGeneration() {
@@ -855,8 +946,7 @@ export default function App() {
         await patchApplyService.apply(snapshot, nextPatch.operations, nextPatch.patchSetId)
       }
 
-      const refreshed = await workspaceService.load()
-      hydrateLoadedProject(refreshed)
+      await refreshWorkspaceState()
       setPatchPreview((current) => current ? {
         ...current,
         status: nextPatch.operations.length > 0 ? 'applied' : current.status,
@@ -908,14 +998,17 @@ export default function App() {
       <div className="workspace-frame">
         <WorkspaceTopbar
           activeTab={activeTab}
+          activeGameId={snapshot.project.id}
           currentUserEmail={session?.user.email ?? null}
           draftName={snapshot.draft.name}
+          games={games}
           isCompiling={isPending}
           isSignedIn={Boolean(session)}
           onCompile={handleCompile}
           onOpenActivity={() => setActiveTab('prompts')}
           onOpenAuth={() => setAuthOpen(true)}
-          onOpenNewGame={handleOpenBootstrapOnboarding}
+          onOpenNewGame={handleOpenNewGame}
+          onSelectGame={handleSelectGame}
           onSetActiveTab={setActiveTab}
           onSignOut={handleSignOut}
           projectName={snapshot.project.name}
@@ -930,6 +1023,23 @@ export default function App() {
             message={workspaceBootstrapError ?? loadedState?.reason ?? 'Create a live workspace, project, and primary draft for this account to enable hosted prompts, patch apply, and publishing.'}
             onCreateLiveWorkspace={handleBootstrapWorkspace}
           />
+        ) : null}
+
+        {activeGameIsEmpty && !bootstrapOnboardingOpen ? (
+          <section className="workspace-empty-game">
+            <div className="workspace-empty-game-copy">
+              <span className="eyebrow">Game Setup</span>
+              <h2>{activeGame?.projectName ?? snapshot.project.name} is still empty.</h2>
+              <p>
+                This game now lives in its own isolated project and draft. Initialize it when ready, or switch back to another game from the top bar.
+              </p>
+            </div>
+            <div className="workspace-empty-game-actions">
+              <button className="primary-button" onClick={handleOpenBootstrapOnboarding} type="button">
+                Initialize Game
+              </button>
+            </div>
+          </section>
         ) : null}
 
         <section className="workspace-stage">
@@ -989,6 +1099,50 @@ export default function App() {
                 onUpdateComponents={updateDefinitionComponents}
               />
             ) : null}
+            {activeTab === 'characters' ? (
+              <SpecializedDefinitionWorkspace
+                title="Characters"
+                subtitle="Character definitions stay directly accessible here, with subtype, abilities, animation bindings, and logic-state data in one place."
+                kind="character"
+                archetypes={snapshot.archetypes}
+                assets={snapshot.assets}
+                definitions={snapshot.definitions}
+                graphKeys={snapshot.graphs.map((graph) => graph.key)}
+                selectedAsset={selectedAsset}
+                selectedDefinition={selectedDefinition?.kind === 'character' ? selectedDefinition : null}
+                onAddCustomField={addCustomField}
+                onAssignDefinitionIcon={assignAssetToSelectedItem}
+                onCreateDefinition={createCharacter}
+                onCreateUrlAsset={createUrlAsset}
+                onSelectAsset={setSelectedAssetKey}
+                onSelectDefinition={setSelectedDefinitionKey}
+                onUpdateComponents={updateDefinitionComponents}
+                onUpdateFieldValue={updateItemFieldValue}
+                onUpdateItemIdentity={updateItemIdentity}
+              />
+            ) : null}
+            {activeTab === 'environments' ? (
+              <SpecializedDefinitionWorkspace
+                title="Environments"
+                subtitle="Environment definitions stay directly accessible here, with world-model links, navigation, spawn rules, and placeholder render bindings."
+                kind="environment"
+                archetypes={snapshot.archetypes}
+                assets={snapshot.assets}
+                definitions={snapshot.definitions}
+                graphKeys={snapshot.graphs.map((graph) => graph.key)}
+                selectedAsset={selectedAsset}
+                selectedDefinition={selectedDefinition?.kind === 'environment' ? selectedDefinition : null}
+                onAddCustomField={addCustomField}
+                onAssignDefinitionIcon={assignAssetToSelectedItem}
+                onCreateDefinition={createEnvironment}
+                onCreateUrlAsset={createUrlAsset}
+                onSelectAsset={setSelectedAssetKey}
+                onSelectDefinition={setSelectedDefinitionKey}
+                onUpdateComponents={updateDefinitionComponents}
+                onUpdateFieldValue={updateItemFieldValue}
+                onUpdateItemIdentity={updateItemIdentity}
+              />
+            ) : null}
             {activeTab === 'assets' ? <AssetsWorkspace assets={snapshot.assets} selectedAsset={selectedAsset} selectedItem={selectedDefinition} onAssignAssetToSelectedItem={assignAssetToSelectedItem} onCreateUrlAsset={createUrlAsset} onSelectAsset={setSelectedAssetKey} onUploadAsset={handleAssetUpload} onUpdateAsset={updateAssetIdentity} /> : null}
             {activeTab === 'prompts' ? <ActivityWorkspace patchHistory={patchHistory} selectedPatch={selectedPatch} selectedPatchIndex={selectedPatchIndex} onSelectPatch={setSelectedPatchIndex} /> : null}
             {activeTab === 'releases' ? <ReleasesWorkspace bundle={bundle} releases={snapshot.releases} sourceReason={loadedState?.reason} /> : null}
@@ -1000,7 +1154,7 @@ export default function App() {
           isApplyingPatch={isApplyingPatch}
           isGeneratingPatch={isGeneratingPatch}
           model={promptModel}
-          needsBootstrapOnboarding={needsBootstrapOnboarding}
+          needsInitialization={activeGameIsEmpty}
           promptRuntimeError={promptRuntimeError}
           promptText={promptText}
           sessionEmail={session?.user.email ?? null}
@@ -1012,7 +1166,7 @@ export default function App() {
       </div>
       {bootstrapOnboardingOpen ? (
         <GameBootstrapOnboarding
-          canClose={!needsBootstrapOnboarding}
+          canClose
           conceptPrompt={bootstrapConceptPrompt}
           gameArchetypeId={bootstrapGameArchetypeId}
           isGenerating={isGeneratingPatch || isApplyingPatch}

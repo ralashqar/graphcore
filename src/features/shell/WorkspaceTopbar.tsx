@@ -1,13 +1,16 @@
-import type { WorkspaceTab } from '../../shared/workspace'
+import type { GameSummary, WorkspaceTab } from '../../shared/workspace'
 
 type WorkspaceTopbarProps = {
   activeTab: WorkspaceTab
+  activeGameId?: string | null
   currentUserEmail?: string | null
   isCompiling: boolean
+  games: GameSummary[]
   onCompile: () => void
   onOpenActivity: () => void
   onOpenAuth: () => void
   onOpenNewGame: () => void
+  onSelectGame: (projectId: string) => void
   onSetActiveTab: (tab: WorkspaceTab) => void
   onSignOut: () => void
   projectName: string
@@ -20,14 +23,17 @@ type WorkspaceTopbarProps = {
 
 export function WorkspaceTopbar({
   activeTab,
+  activeGameId,
   currentUserEmail,
   draftName,
+  games,
   isCompiling,
   isSignedIn,
   onCompile,
   onOpenActivity,
   onOpenAuth,
   onOpenNewGame,
+  onSelectGame,
   onSetActiveTab,
   onSignOut,
   projectName,
@@ -54,6 +60,18 @@ export function WorkspaceTopbar({
         </nav>
       </div>
       <div className="topbar-actions">
+        {games.length > 0 ? (
+          <label className="topbar-select-wrap">
+            <span className="topbar-select-label">Game</span>
+            <select className="topbar-select" value={activeGameId ?? ''} onChange={(event) => onSelectGame(event.target.value)}>
+              {games.map((game) => (
+                <option key={game.projectId} value={game.projectId}>
+                  {game.projectName}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
         <div className="signal-pill"><span>{sourceLabel}</span></div>
         <div className="signal-pill"><span>{currentUserEmail ?? 'Not signed in'}</span></div>
         <button className="ghost-button" onClick={onOpenNewGame} type="button">New Game</button>

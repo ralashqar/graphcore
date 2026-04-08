@@ -3,7 +3,7 @@ import { z } from 'zod'
 const scopeWeightSchema = z.enum(['none', 'light', 'medium', 'heavy'])
 
 export const gameSpecSchema = z.object({
-  presetCatalogVersion: z.string().default('2026-04-08.1'),
+  presetCatalogVersion: z.string().default('2026-04-08.2'),
   title: z.string().default(''),
   theme: z.object({
     genre: z.string().default('fantasy_rpg'),
@@ -36,6 +36,8 @@ export const gameSpecSchema = z.object({
     characters: scopeWeightSchema.default('heavy'),
     abilities: scopeWeightSchema.default('medium'),
     locations: scopeWeightSchema.default('medium'),
+    environments: scopeWeightSchema.default('medium'),
+    worldModels: scopeWeightSchema.default('light'),
     markets: scopeWeightSchema.default('light'),
     quests: scopeWeightSchema.default('medium'),
     graphs: scopeWeightSchema.default('medium'),
@@ -44,6 +46,8 @@ export const gameSpecSchema = z.object({
     characters: 'heavy',
     abilities: 'medium',
     locations: 'medium',
+    environments: 'medium',
+    worldModels: 'light',
     markets: 'light',
     quests: 'medium',
     graphs: 'medium',

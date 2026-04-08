@@ -206,6 +206,36 @@ code {
 .topbar-actions {
   justify-content: flex-end;
   gap: 10px;
+  flex-wrap: wrap;
+}
+
+.topbar-select-wrap {
+  display: grid;
+  gap: 4px;
+  min-width: 190px;
+}
+
+.topbar-select-label {
+  color: var(--muted);
+  font-size: 0.74rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.topbar-select {
+  width: 100%;
+  min-height: 42px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: rgba(7, 11, 18, 0.92);
+  color: var(--text);
+  outline: none;
+}
+
+.topbar-select:focus {
+  border-color: rgba(94, 234, 212, 0.24);
+  box-shadow: 0 0 0 4px rgba(94, 234, 212, 0.08);
 }
 
 .signal-pill,
@@ -271,6 +301,42 @@ code {
     linear-gradient(135deg, rgba(94, 234, 212, 0.09), rgba(45, 212, 191, 0.03)),
     var(--bg-elev-1);
   box-shadow: var(--shadow);
+}
+
+.workspace-empty-game {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 18px 22px;
+  border: 1px solid rgba(245, 158, 11, 0.16);
+  border-radius: 22px;
+  background:
+    linear-gradient(135deg, rgba(245, 158, 11, 0.09), rgba(245, 158, 11, 0.02)),
+    var(--bg-elev-1);
+  box-shadow: var(--shadow);
+}
+
+.workspace-empty-game-copy {
+  display: grid;
+  gap: 6px;
+}
+
+.workspace-empty-game-copy h2,
+.workspace-empty-game-copy p {
+  margin: 0;
+}
+
+.workspace-empty-game-copy p {
+  max-width: 76ch;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.workspace-empty-game-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
 }
 
 .workspace-banner-copy {
@@ -1047,6 +1113,17 @@ button:disabled {
 .bootstrap-hero {
   justify-content: space-between;
   gap: 18px;
+}
+
+.bootstrap-close-button {
+  min-width: 42px;
+  min-height: 42px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.94rem;
+  font-weight: 700;
 }
 
 .bootstrap-hero h2 {

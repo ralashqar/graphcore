@@ -57,6 +57,7 @@ export function DefinitionEditor({
   const definition = selectedItem
   const selectedArchetypeForItem =
     archetypes.find((archetype) => archetype.key === definition.archetypeKey) ?? null
+  const compatibleArchetypes = archetypes.filter((archetype) => archetype.appliesToKind === definition.kind)
   const resolvedFields = resolveItemFields(definition, selectedArchetypeForItem)
 
   function updateComponentConfig(itemKey: string, componentType: DefinitionBase['components'][number]['type'], config: Record<string, unknown>) {
@@ -132,7 +133,7 @@ export function DefinitionEditor({
             }
           >
             <option value="">No archetype</option>
-            {archetypes.map((archetype) => (
+            {compatibleArchetypes.map((archetype) => (
               <option key={archetype.key} value={archetype.key}>
                 {archetype.name}
               </option>

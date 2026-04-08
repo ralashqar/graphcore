@@ -3,6 +3,7 @@ import { BASELINE_ARCHETYPES, hasMissingBaselineArchetypes } from '../domain/boo
 import { demoProjectSnapshot } from '../domain/demo-data'
 import { createGameSpecFromArchetype } from '../domain/gameArchetypes'
 import {
+  buildDefaultDefinitionComponents,
   projectSnapshotSchema,
   type ArchetypeDefinition,
   type AssetDefinition,
@@ -15,6 +16,7 @@ import {
 } from '../domain/graphcore'
 import { buildBootstrapPatch, createDefaultGameSpec } from '../domain/presetCatalog'
 import type { PromptPatchRequest, PromptPatchResponse } from '../domain/prompting'
+import type { GameSummary } from '../shared/workspace'
 import { supabase } from '../utils/supabase'
 import type { FunctionsHttpError, Session } from '@supabase/supabase-js'
 
@@ -43,6 +45,22 @@ function titleCase(value: string) {
 
 function isMissingAbilityEnumError(message: string | undefined) {
   return typeof message === 'string' && message.includes('invalid input value for enum definition_kind: "ability"')
+}
+
+function isMissingDefinitionKindEnumError(message: string | undefined, kind: string) {
+  return typeof message === 'string' && message.includes(`invalid input value for enum definition_kind: "${kind}"`)
+}
+
+function filterSupportedArchetypeSeedsForEnumError<TSeed extends { appliesToKind: string }>(
+  seeds: TSeed[],
+  message: string | undefined,
+) {
+  return seeds.filter((seed) => {
+    if (isMissingAbilityEnumError(message) && seed.appliesToKind === 'ability') return false
+    if (isMissingDefinitionKindEnumError(message, 'environment') && seed.appliesToKind === 'environment') return false
+    if (isMissingDefinitionKindEnumError(message, 'world_model') && seed.appliesToKind === 'world_model') return false
+    return true
+  })
 }
 
 function bootstrapSeedFromSession(session: Session) {
@@ -109,6 +127,39 @@ type SnapshotLoadResult = {
   reason?: string
 }
 
+type WorkspaceMembershipRow = {
+  role: ProjectSnapshot['workspace']['role']
+  workspace: { id: string; name: string; slug: string } | Array<{ id: string; name: string; slug: string }>
+}
+
+type ActiveWorkspaceStateRow = {
+  workspace_id: string
+  active_project_id: string | null
+  active_draft_id: string | null
+}
+
+type LocalActiveGameSelection = Record<string, { projectId: string; draftId: string }>
+
+type ProjectSummaryRow = {
+  id: string
+  name: string
+  slug: string
+  summary: string
+  visibility: ProjectSnapshot['project']['visibility']
+  updated_at?: string
+  created_at?: string
+}
+
+type DraftSummaryRow = {
+  id: string
+  project_id: string
+  name: string
+  version: number
+  is_primary: boolean
+  updated_at: string
+  metadata: Record<string, unknown> | null
+}
+
 function sanitizePromptPatchResponse(response: PromptPatchResponse, request: PromptPatchRequest) {
   if (typeof response.debugRawOutput === 'string' && response.debugRawOutput.trim()) {
     console.error('[GraphCore] prompt-patch raw model output', {
@@ -132,57 +183,8 @@ function prettyNameFromKey(key: string) {
     .join(' ')
 }
 
-function defaultComponentsForKind(kind: DefinitionBase['kind']): ComponentEnvelope[] {
-  switch (kind) {
-    case 'character':
-      return [
-        {
-          type: 'inventory',
-          config: {
-            startingItems: [],
-            capacityFormula: null,
-          },
-        },
-      ]
-    case 'ability':
-      return [
-        {
-          type: 'ability_profile',
-          config: {
-            targetMode: 'enemy',
-            cooldownSeconds: 0,
-            castTimeSeconds: 0,
-            resourceCostItemKey: null,
-            resourceCostQuantity: 0,
-            effectOps: [],
-          },
-        },
-      ]
-    case 'market':
-      return [
-        {
-          type: 'market_inventory',
-          config: {
-            trades: [],
-          },
-        },
-      ]
-    case 'location':
-      return [
-        {
-          type: 'location_state',
-          config: {
-            region: 'frontier',
-            isUnlockedByDefault: true,
-            linkedGraphKeys: [],
-            linkedMarketKeys: [],
-            unlockTokenKey: null,
-          },
-        },
-      ]
-    default:
-      return []
-  }
+function defaultComponentsForKind(kind: DefinitionBase['kind']) {
+  return buildDefaultDefinitionComponents(kind)
 }
 
 function localPatchDiagnostics(fallbackReason: string | null) {
@@ -190,6 +192,213 @@ function localPatchDiagnostics(fallbackReason: string | null) {
     'Fallback patch generated locally because the prompt backend was unavailable.',
     fallbackReason ? `Reason: ${fallbackReason}` : 'Reason: unknown prompt backend failure.',
   ]
+}
+
+async function getPrimaryWorkspace(session: Session) {
+  const workspaceResponse = await supabase
+    .from('workspace_memberships')
+    .select('role, workspace:workspaces!inner(id, name, slug)')
+    .eq('user_id', session.user.id)
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle()
+
+  if (workspaceResponse.error || !workspaceResponse.data?.workspace) {
+    return null
+  }
+
+  const row = workspaceResponse.data as WorkspaceMembershipRow
+  const workspace = Array.isArray(row.workspace) ? row.workspace[0] : row.workspace
+  if (!workspace) return null
+
+  return {
+    workspace,
+    role: row.role,
+  }
+}
+
+function isMissingUserWorkspaceStateTableError(message: string | undefined) {
+  if (typeof message !== 'string') return false
+  return (
+    message.includes(`Could not find the table 'public.user_workspace_state' in the schema cache`) ||
+    message.includes('relation "public.user_workspace_state" does not exist') ||
+    message.includes('relation "user_workspace_state" does not exist')
+  )
+}
+
+function readLocalActiveGameSelection() {
+  if (typeof window === 'undefined') return {}
+
+  try {
+    const raw = window.localStorage.getItem('graphcore.active-game-selection.v1')
+    if (!raw) return {}
+    const parsed = JSON.parse(raw) as LocalActiveGameSelection
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function writeLocalActiveGameSelection(nextSelection: LocalActiveGameSelection) {
+  if (typeof window === 'undefined') return
+
+  try {
+    window.localStorage.setItem('graphcore.active-game-selection.v1', JSON.stringify(nextSelection))
+  } catch {
+    // Ignore local persistence failures and keep the session usable.
+  }
+}
+
+function getLocalActiveGameSelection(workspaceId: string) {
+  return readLocalActiveGameSelection()[workspaceId] ?? null
+}
+
+function setLocalActiveGameSelection(workspaceId: string, projectId: string, draftId: string) {
+  const current = readLocalActiveGameSelection()
+  current[workspaceId] = { projectId, draftId }
+  writeLocalActiveGameSelection(current)
+}
+
+async function setActiveWorkspaceGameState(workspaceId: string, projectId: string, draftId: string) {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession()
+
+  if (!session) {
+    throw new Error('Sign in before selecting an active game.')
+  }
+
+  const response = await supabase
+    .from('user_workspace_state')
+    .upsert(
+      {
+        user_id: session.user.id,
+        workspace_id: workspaceId,
+        active_project_id: projectId,
+        active_draft_id: draftId,
+      },
+      { onConflict: 'user_id,workspace_id' },
+    )
+
+  if (response.error) {
+    if (isMissingUserWorkspaceStateTableError(response.error.message)) {
+      setLocalActiveGameSelection(workspaceId, projectId, draftId)
+      return
+    }
+    throw new Error(response.error.message)
+  }
+
+  setLocalActiveGameSelection(workspaceId, projectId, draftId)
+}
+
+function extractBootstrapStatus(metadata: Record<string, unknown> | null | undefined) {
+  const status = metadata?.bootstrapStatus
+  return status === 'complete' ? 'complete' : 'pending'
+}
+
+function draftHasGameSpec(metadata: Record<string, unknown> | null | undefined) {
+  return Boolean(metadata && typeof metadata === 'object' && metadata.gameSpec)
+}
+
+async function listWorkspaceProjectsAndDrafts(workspaceId: string) {
+  const projectResponse = await supabase
+    .from('projects')
+    .select('id, name, slug, summary, visibility, updated_at, created_at')
+    .eq('workspace_id', workspaceId)
+    .order('updated_at', { ascending: false })
+
+  if (projectResponse.error) {
+    throw new Error(projectResponse.error.message)
+  }
+
+  const projects = (projectResponse.data as ProjectSummaryRow[] | null) ?? []
+  if (projects.length === 0) {
+    return { projects, draftsByProjectId: new Map<string, DraftSummaryRow[]>() }
+  }
+
+  const projectIds = projects.map((project) => project.id)
+  const draftResponse = await supabase
+    .from('project_drafts')
+    .select('id, project_id, name, version, is_primary, updated_at, metadata')
+    .in('project_id', projectIds)
+    .order('is_primary', { ascending: false })
+    .order('updated_at', { ascending: false })
+
+  if (draftResponse.error) {
+    throw new Error(draftResponse.error.message)
+  }
+
+  const drafts = (draftResponse.data as DraftSummaryRow[] | null) ?? []
+  const draftsByProjectId = drafts.reduce<Map<string, DraftSummaryRow[]>>((acc, draft) => {
+    const current = acc.get(draft.project_id) ?? []
+    current.push(draft)
+    acc.set(draft.project_id, current)
+    return acc
+  }, new Map())
+
+  return { projects, draftsByProjectId }
+}
+
+function pickPreferredDraft(drafts: DraftSummaryRow[]) {
+  return [...drafts].sort((left, right) => {
+    if (left.is_primary !== right.is_primary) return left.is_primary ? -1 : 1
+    return new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime()
+  })[0] ?? null
+}
+
+async function resolveActiveGameSelection(session: Session, workspaceId: string) {
+  const [{ projects, draftsByProjectId }, activeStateResponse] = await Promise.all([
+    listWorkspaceProjectsAndDrafts(workspaceId),
+    supabase
+      .from('user_workspace_state')
+      .select('workspace_id, active_project_id, active_draft_id')
+      .eq('user_id', session.user.id)
+      .eq('workspace_id', workspaceId)
+      .maybeSingle(),
+  ])
+
+  const activeState = activeStateResponse.error
+    ? (
+        isMissingUserWorkspaceStateTableError(activeStateResponse.error.message)
+          ? null
+          : (() => {
+              throw new Error(activeStateResponse.error.message)
+            })()
+      )
+    : (activeStateResponse.data as ActiveWorkspaceStateRow | null)
+  const localActiveState = getLocalActiveGameSelection(workspaceId)
+
+  const activeProjectId = activeState?.active_project_id ?? localActiveState?.projectId ?? null
+  const activeDraftId = activeState?.active_draft_id ?? localActiveState?.draftId ?? null
+  const activeProject = activeProjectId
+    ? projects.find((project) => project.id === activeProjectId) ?? null
+    : null
+  const activeDraft = activeProject
+    ? (draftsByProjectId.get(activeProject.id) ?? []).find((draft) => draft.id === activeDraftId) ?? null
+    : null
+
+  if (activeProject && activeDraft) {
+    return {
+      project: activeProject,
+      draft: activeDraft,
+      projects,
+      draftsByProjectId,
+    }
+  }
+
+  const fallbackProject = projects[0] ?? null
+  const fallbackDraft = fallbackProject ? pickPreferredDraft(draftsByProjectId.get(fallbackProject.id) ?? []) : null
+
+  if (fallbackProject && fallbackDraft) {
+    await setActiveWorkspaceGameState(workspaceId, fallbackProject.id, fallbackDraft.id)
+  }
+
+  return {
+    project: fallbackProject,
+    draft: fallbackDraft,
+    projects,
+    draftsByProjectId,
+  }
 }
 
 async function invokeAuthedFunction<TResponse>(
@@ -238,10 +447,14 @@ async function seedBaselineArchetypesDirect(draftId: string, userId: string) {
       .insert(seedRows(missingSeeds))
       .select('id, key')
 
-    const recoveredResponse = insertResponse.error && isMissingAbilityEnumError(insertResponse.error.message)
+    const recoveredSeeds = insertResponse.error
+      ? filterSupportedArchetypeSeedsForEnumError(missingSeeds, insertResponse.error.message)
+      : missingSeeds
+
+    const recoveredResponse = insertResponse.error && recoveredSeeds.length !== missingSeeds.length
       ? await supabase
           .from('project_archetypes')
-          .insert(seedRows(missingSeeds.filter((seed) => seed.appliesToKind !== 'ability')))
+          .insert(seedRows(recoveredSeeds))
           .select('id, key')
       : insertResponse
 
@@ -465,7 +678,9 @@ function deriveChoiceBody(
   }
 }
 
-export async function loadProjectSnapshot(): Promise<SnapshotLoadResult> {
+export async function loadProjectSnapshot(
+  selection?: { projectId?: string | null; draftId?: string | null },
+): Promise<SnapshotLoadResult> {
   const {
     data: { session },
   } = await supabase.auth.getSession()
@@ -478,13 +693,9 @@ export async function loadProjectSnapshot(): Promise<SnapshotLoadResult> {
     }
   }
 
-  const workspaceResponse = await supabase
-    .from('workspace_memberships')
-    .select('role, workspace:workspaces!inner(id, name, slug)')
-    .limit(1)
-    .maybeSingle()
+  const workspaceMembership = await getPrimaryWorkspace(session)
 
-  if (workspaceResponse.error || !workspaceResponse.data?.workspace) {
+  if (!workspaceMembership) {
     return {
       snapshot: demoProjectSnapshot,
       source: 'demo',
@@ -492,19 +703,25 @@ export async function loadProjectSnapshot(): Promise<SnapshotLoadResult> {
     }
   }
 
-  const workspace = Array.isArray(workspaceResponse.data.workspace)
-    ? workspaceResponse.data.workspace[0]
-    : workspaceResponse.data.workspace
+  const workspace = workspaceMembership.workspace
 
-  const projectResponse = await supabase
-    .from('projects')
-    .select('id, name, slug, summary, visibility')
-    .eq('workspace_id', workspace.id)
-    .order('created_at', { ascending: true })
-    .limit(1)
-    .maybeSingle()
+  const resolvedSelection = await resolveActiveGameSelection(session, workspace.id)
+  const project =
+    selection?.projectId
+      ? resolvedSelection.projects.find((entry) => entry.id === selection.projectId) ?? null
+      : resolvedSelection.project
+  const draft =
+    project && selection?.draftId
+      ? (resolvedSelection.draftsByProjectId.get(project.id) ?? []).find((entry) => entry.id === selection.draftId) ?? null
+      : project
+        ? (
+            selection?.projectId && !selection?.draftId
+              ? pickPreferredDraft(resolvedSelection.draftsByProjectId.get(project.id) ?? [])
+              : resolvedSelection.draft
+          )
+        : null
 
-  if (projectResponse.error || !projectResponse.data) {
+  if (!project) {
     return {
       snapshot: demoProjectSnapshot,
       source: 'demo',
@@ -512,18 +729,7 @@ export async function loadProjectSnapshot(): Promise<SnapshotLoadResult> {
     }
   }
 
-  const project = projectResponse.data
-
-  const draftResponse = await supabase
-    .from('project_drafts')
-    .select('id, name, version, is_primary, updated_at, metadata')
-    .eq('project_id', project.id)
-    .order('is_primary', { ascending: false })
-    .order('updated_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-
-  if (draftResponse.error || !draftResponse.data) {
+  if (!draft) {
     return {
       snapshot: demoProjectSnapshot,
       source: 'demo',
@@ -531,7 +737,10 @@ export async function loadProjectSnapshot(): Promise<SnapshotLoadResult> {
     }
   }
 
-  const draft = draftResponse.data
+  if (selection?.projectId && selection?.draftId) {
+    await setActiveWorkspaceGameState(workspace.id, project.id, draft.id)
+  }
+
   const definitionIds = await getDefinitionIds(draft.id)
   const archetypeIds = await getArchetypeIds(draft.id)
 
@@ -641,7 +850,7 @@ export async function loadProjectSnapshot(): Promise<SnapshotLoadResult> {
       id: workspace.id,
       name: workspace.name,
       slug: workspace.slug,
-      role: workspaceResponse.data.role,
+      role: workspaceMembership.role,
     },
     project: {
       id: project.id,
@@ -837,6 +1046,168 @@ export async function ensureLiveProjectSnapshot(): Promise<SnapshotLoadResult> {
   return loadProjectSnapshot()
 }
 
+async function ensureWorkspaceShellDirect(session: Session) {
+  const seed = bootstrapSeedFromSession(session)
+  const timestampSeed = Date.now().toString(36)
+
+  const existingMembership = await getPrimaryWorkspace(session)
+  if (existingMembership) {
+    return existingMembership.workspace.id
+  }
+
+  const workspaceId = crypto.randomUUID()
+  const createdWorkspace = await supabase
+    .from('workspaces')
+    .insert({
+      id: workspaceId,
+      name: seed.workspaceName,
+      slug: `${seed.cleanedSeed}-${timestampSeed}`,
+      summary: 'Live GraphCore workspace bootstrapped from the editor.',
+      created_by: session.user.id,
+      metadata: {
+        bootstrapSource: 'web_app',
+        bootstrapVersion: 5,
+      },
+    })
+
+  if (createdWorkspace.error) {
+    throw new Error(createdWorkspace.error?.message ?? 'Workspace creation failed.')
+  }
+
+  const membershipInsert = await supabase
+    .from('workspace_memberships')
+    .insert({
+      workspace_id: workspaceId,
+      user_id: session.user.id,
+      role: 'owner',
+    })
+
+  if (membershipInsert.error) {
+    throw new Error(membershipInsert.error.message)
+  }
+
+  return workspaceId
+}
+
+async function createGameDirect(session: Session, workspaceId: string, options?: { projectName?: string; draftName?: string }) {
+  const { projects } = await listWorkspaceProjectsAndDrafts(workspaceId)
+  const timestampSeed = Date.now().toString(36)
+  const sequence = projects.length + 1
+  const projectName = options?.projectName?.trim() || `Untitled Game ${sequence}`
+  const draftName = options?.draftName?.trim() || 'Main Draft'
+  const projectId = crypto.randomUUID()
+  const draftId = crypto.randomUUID()
+
+  const createdProject = await supabase
+    .from('projects')
+    .insert({
+      id: projectId,
+      workspace_id: workspaceId,
+      name: projectName,
+      slug: `${slugify(projectName) || 'game'}-${timestampSeed}`,
+      summary: 'GraphCore game project created from the editor.',
+      visibility: 'private',
+      created_by: session.user.id,
+      metadata: {
+        bootstrapSource: 'web_app',
+        bootstrapVersion: 5,
+      },
+    })
+
+  if (createdProject.error) {
+    throw new Error(createdProject.error?.message ?? 'Project creation failed.')
+  }
+
+  const createdDraft = await supabase
+    .from('project_drafts')
+    .insert({
+      id: draftId,
+      project_id: projectId,
+      name: draftName,
+      version: 1,
+      is_primary: true,
+      created_by: session.user.id,
+      metadata: {
+        bootstrapSource: 'web_app',
+        bootstrapVersion: 5,
+        bootstrapStatus: 'pending',
+      },
+    })
+
+  if (createdDraft.error) {
+    throw new Error(createdDraft.error?.message ?? 'Draft creation failed.')
+  }
+
+  await seedBaselineArchetypesDirect(draftId, session.user.id)
+  await setActiveWorkspaceGameState(workspaceId, projectId, draftId)
+
+  return { projectId, draftId }
+}
+
+export async function listGames(): Promise<GameSummary[]> {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession()
+
+  if (!session) return []
+
+  const workspaceMembership = await getPrimaryWorkspace(session)
+  if (!workspaceMembership) return []
+
+  const { projects, draftsByProjectId } = await listWorkspaceProjectsAndDrafts(workspaceMembership.workspace.id)
+
+  return projects
+    .map((project) => {
+      const draft = pickPreferredDraft(draftsByProjectId.get(project.id) ?? [])
+      if (!draft) return null
+      return {
+        projectId: project.id,
+        projectName: project.name,
+        projectSlug: project.slug,
+        draftId: draft.id,
+        draftName: draft.name,
+        updatedAt: draft.updated_at,
+        bootstrapStatus: extractBootstrapStatus(draft.metadata),
+        hasGameSpec: draftHasGameSpec(draft.metadata),
+      } satisfies GameSummary
+    })
+    .filter((entry): entry is GameSummary => entry !== null)
+}
+
+export async function setActiveGame(projectId: string, draftId: string): Promise<SnapshotLoadResult> {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession()
+
+  if (!session) {
+    throw new Error('Sign in before switching games.')
+  }
+
+  const workspaceMembership = await getPrimaryWorkspace(session)
+  if (!workspaceMembership) {
+    throw new Error('No live workspace is available for this account.')
+  }
+
+  await setActiveWorkspaceGameState(workspaceMembership.workspace.id, projectId, draftId)
+  return loadProjectSnapshot({ projectId, draftId })
+}
+
+export async function createGame(existingSession?: Session): Promise<SnapshotLoadResult> {
+  const session =
+    existingSession ??
+    (
+      await supabase.auth.getSession()
+    ).data.session
+
+  if (!session) {
+    throw new Error('Sign in before creating a new game.')
+  }
+
+  const workspaceId = await ensureWorkspaceShellDirect(session)
+  await createGameDirect(session, workspaceId)
+  return loadProjectSnapshot()
+}
+
 export async function bootstrapLiveWorkspace(existingSession?: Session): Promise<SnapshotLoadResult> {
   const session =
     existingSession ??
@@ -849,7 +1220,13 @@ export async function bootstrapLiveWorkspace(existingSession?: Session): Promise
   }
 
   try {
-    await bootstrapLiveWorkspaceDirect(session)
+    const workspaceId = await ensureWorkspaceShellDirect(session)
+    const { projects, draftsByProjectId } = await listWorkspaceProjectsAndDrafts(workspaceId)
+    if (projects.length === 0 || !pickPreferredDraft(draftsByProjectId.get(projects[0].id) ?? [])) {
+      await createGameDirect(session, workspaceId, {
+        projectName: `${bootstrapSeedFromSession(session).projectName}`,
+      })
+    }
   } catch (directBootstrapError) {
     console.error('[GraphCore] direct client bootstrap failed, trying hosted bootstrap fallback.', directBootstrapError)
 
@@ -867,145 +1244,6 @@ export async function bootstrapLiveWorkspace(existingSession?: Session): Promise
   }
 
   return loadProjectSnapshot()
-}
-
-async function bootstrapLiveWorkspaceDirect(session: Session) {
-  const seed = bootstrapSeedFromSession(session)
-  const timestampSeed = Date.now().toString(36)
-
-  const workspaceResponse = await supabase
-    .from('workspace_memberships')
-    .select('role, workspace:workspaces!inner(id, name, slug)')
-    .order('created_at', { ascending: true })
-    .limit(1)
-    .maybeSingle()
-
-  if (workspaceResponse.error) {
-    throw new Error(workspaceResponse.error.message)
-  }
-
-  const membershipWorkspace = workspaceResponse.data?.workspace as
-    | { id: string; name?: string; slug?: string }
-    | Array<{ id: string; name?: string; slug?: string }>
-    | null
-    | undefined
-
-  let workspaceId = Array.isArray(membershipWorkspace)
-    ? membershipWorkspace[0]?.id ?? null
-    : membershipWorkspace?.id ?? null
-
-  if (!workspaceId) {
-    workspaceId = crypto.randomUUID()
-    const createdWorkspace = await supabase
-      .from('workspaces')
-      .insert({
-        id: workspaceId,
-        name: seed.workspaceName,
-        slug: `${seed.cleanedSeed}-${timestampSeed}`,
-        summary: 'Live GraphCore workspace bootstrapped from the editor.',
-        created_by: session.user.id,
-        metadata: {
-          bootstrapSource: 'web_app',
-          bootstrapVersion: 4,
-        },
-      })
-
-    if (createdWorkspace.error) {
-      throw new Error(createdWorkspace.error?.message ?? 'Workspace creation failed.')
-    }
-
-    const membershipInsert = await supabase
-      .from('workspace_memberships')
-      .insert({
-        workspace_id: workspaceId,
-        user_id: session.user.id,
-        role: 'owner',
-      })
-
-    if (membershipInsert.error) {
-      throw new Error(membershipInsert.error.message)
-    }
-  }
-
-  const projectResponse = await supabase
-    .from('projects')
-    .select('id')
-    .eq('workspace_id', workspaceId)
-    .order('created_at', { ascending: true })
-    .limit(1)
-    .maybeSingle()
-
-  if (projectResponse.error) {
-    throw new Error(projectResponse.error.message)
-  }
-
-  let projectId = projectResponse.data?.id ?? null
-
-  if (!projectId) {
-    projectId = crypto.randomUUID()
-    const createdProject = await supabase
-      .from('projects')
-      .insert({
-        id: projectId,
-        workspace_id: workspaceId,
-        name: seed.projectName,
-        slug: `project-${timestampSeed}`,
-        summary: 'Primary GraphCore project created automatically for promptable authoring.',
-        visibility: 'private',
-        created_by: session.user.id,
-        metadata: {
-          bootstrapSource: 'web_app',
-          bootstrapVersion: 4,
-        },
-      })
-
-    if (createdProject.error) {
-      throw new Error(createdProject.error?.message ?? 'Project creation failed.')
-    }
-  }
-
-  const draftResponse = await supabase
-    .from('project_drafts')
-    .select('id')
-    .eq('project_id', projectId)
-    .order('is_primary', { ascending: false })
-    .order('updated_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-
-  if (draftResponse.error) {
-    throw new Error(draftResponse.error.message)
-  }
-
-  let draftId = draftResponse.data?.id ?? null
-
-  if (!draftResponse.data?.id) {
-    draftId = crypto.randomUUID()
-    const createdDraft = await supabase
-      .from('project_drafts')
-      .insert({
-        id: draftId,
-        project_id: projectId,
-        name: 'Main Draft',
-        version: 1,
-        is_primary: true,
-        created_by: session.user.id,
-        metadata: {
-          bootstrapSource: 'web_app',
-          bootstrapVersion: 4,
-        },
-      })
-
-    if (createdDraft.error) {
-      throw new Error(createdDraft.error?.message ?? 'Draft creation failed.')
-    }
-  }
-
-  if (!draftId) {
-    throw new Error('Draft creation failed.')
-  }
-
-  await seedBaselineArchetypesDirect(draftId, session.user.id)
 }
 
 export async function proposePatch(request: PromptPatchRequest): Promise<PromptPatchResponse> {
@@ -1077,7 +1315,7 @@ export async function proposePatch(request: PromptPatchRequest): Promise<PromptP
       executionPlan: {
         classification: 'bootstrap',
         requiresDependencies: true,
-        dependencyKinds: ['archetype', 'item', 'character', 'ability', 'location', 'market'],
+        dependencyKinds: ['archetype', 'item', 'character', 'ability', 'location', 'environment', 'world_model', 'market'],
         graphJobCount: 0,
         graphJobs: [],
       },
@@ -1180,14 +1418,67 @@ export async function proposePatch(request: PromptPatchRequest): Promise<PromptP
       : /\bsafehouse\b/.test(normalizedPrompt)
         ? 'location.safehouse'
         : 'location.dungeon'
+    const environmentPresetId = /\bhub\b/.test(normalizedPrompt)
+      ? 'environment.settlement'
+      : /\bdungeon\b/.test(normalizedPrompt)
+        ? 'environment.dungeon'
+        : 'environment.wilderness'
     const locationKey = `location.${slug}`
+    const environmentKey = `environment.${slug}`
+    const worldModelKey = `world_model.${slug}_world`
     const wantsVendor = /\bvendor\b|\bmarket\b|\bshop\b/.test(normalizedPrompt)
     return {
       summary: 'Add location',
       operations: [
         { op: 'instantiate_archetype_preset', presetId: locationPresetId },
+        { op: 'instantiate_archetype_preset', presetId: environmentPresetId },
+        { op: 'instantiate_archetype_preset', presetId: 'world_model.region_set' },
         ...(wantsVendor ? [{ op: 'instantiate_archetype_preset', presetId: 'market.vendor_basic' } as PatchOperation] : []),
         ...(wantsVendor ? [{ op: 'instantiate_definition_preset', presetId: 'currency.gold' } as PatchOperation] : []),
+        {
+          op: 'create_definition',
+          kind: 'world_model',
+          key: worldModelKey,
+          payload: {
+            name: prettyNameFromKey(worldModelKey),
+            summary: 'Starter world model generated for the new location cluster.',
+            archetypeKey: 'world_model.region_set',
+            components: defaultComponentsForKind('world_model').map((component) =>
+              component.type === 'world_environment_index'
+                ? {
+                    ...component,
+                    config: {
+                      ...component.config,
+                      environmentKeys: [environmentKey],
+                      primaryEnvironmentKey: environmentKey,
+                    },
+                  }
+                : component,
+            ),
+          },
+        },
+        {
+          op: 'create_definition',
+          kind: 'environment',
+          key: environmentKey,
+          payload: {
+            name: prettyNameFromKey(environmentKey),
+            summary: 'Scene-facing environment linked to the generated location.',
+            archetypeKey: environmentPresetId,
+            components: defaultComponentsForKind('environment').map((component) =>
+              component.type === 'environment_profile'
+                ? {
+                    ...component,
+                    config: {
+                      ...component.config,
+                      worldModelKey,
+                      linkedLocationKeys: [locationKey],
+                    },
+                  }
+                : component,
+            ),
+          },
+        },
         {
           op: 'create_definition',
           kind: 'location',
@@ -1204,6 +1495,7 @@ export async function proposePatch(request: PromptPatchRequest): Promise<PromptP
                   isUnlockedByDefault: true,
                   linkedGraphKeys: [],
                   linkedMarketKeys: wantsVendor ? [`market.${slug}_vendor`] : [],
+                  environmentKey,
                   unlockTokenKey: null,
                 },
               },
@@ -1226,6 +1518,63 @@ export async function proposePatch(request: PromptPatchRequest): Promise<PromptP
       ],
       diagnostics: localPatchDiagnostics(fallbackReason),
       assistantNotes: 'Local fallback used location and market presets before inventing new schema.',
+    }
+  }
+
+  if (/\benvironment\b|\bworld\b|\bregion set\b/.test(normalizedPrompt)) {
+    const worldModelKey = `world_model.${slug}`
+    const environmentKey = `environment.${slug}`
+    return {
+      summary: 'Add world and environment',
+      operations: [
+        { op: 'instantiate_archetype_preset', presetId: 'world_model.region_set' },
+        { op: 'instantiate_archetype_preset', presetId: 'environment.wilderness' },
+        {
+          op: 'create_definition',
+          kind: 'world_model',
+          key: worldModelKey,
+          payload: {
+            name: prettyNameFromKey(worldModelKey),
+            summary: 'Starter world model created from the prompt.',
+            archetypeKey: 'world_model.region_set',
+            components: defaultComponentsForKind('world_model').map((component) =>
+              component.type === 'world_environment_index'
+                ? {
+                    ...component,
+                    config: {
+                      ...component.config,
+                      environmentKeys: [environmentKey],
+                      primaryEnvironmentKey: environmentKey,
+                    },
+                  }
+                : component,
+            ),
+          },
+        },
+        {
+          op: 'create_definition',
+          kind: 'environment',
+          key: environmentKey,
+          payload: {
+            name: prettyNameFromKey(environmentKey),
+            summary: 'Starter environment created from the prompt.',
+            archetypeKey: 'environment.wilderness',
+            components: defaultComponentsForKind('environment').map((component) =>
+              component.type === 'environment_profile'
+                ? {
+                    ...component,
+                    config: {
+                      ...component.config,
+                      worldModelKey,
+                    },
+                  }
+                : component,
+            ),
+          },
+        },
+      ],
+      diagnostics: localPatchDiagnostics(fallbackReason),
+      assistantNotes: 'Local fallback created a world model first, then linked an environment onto it.',
     }
   }
 

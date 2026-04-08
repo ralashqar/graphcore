@@ -28,6 +28,22 @@ function isMissingAbilityEnumError(message: string | undefined) {
   return typeof message === 'string' && message.includes('invalid input value for enum definition_kind: "ability"')
 }
 
+function isMissingDefinitionKindEnumError(message: string | undefined, kind: string) {
+  return typeof message === 'string' && message.includes(`invalid input value for enum definition_kind: "${kind}"`)
+}
+
+function filterSupportedArchetypeSeedsForEnumError<TSeed extends { appliesToKind: string }>(
+  seeds: TSeed[],
+  message: string | undefined,
+) {
+  return seeds.filter((seed) => {
+    if (isMissingAbilityEnumError(message) && seed.appliesToKind === 'ability') return false
+    if (isMissingDefinitionKindEnumError(message, 'environment') && seed.appliesToKind === 'environment') return false
+    if (isMissingDefinitionKindEnumError(message, 'world_model') && seed.appliesToKind === 'world_model') return false
+    return true
+  })
+}
+
 async function seedBaselineArchetypes(admin: ReturnType<typeof createAdminClient>, draftId: string, userId: string) {
   const existingArchetypesResponse = await admin
     .from('project_archetypes')
@@ -60,10 +76,14 @@ async function seedBaselineArchetypes(admin: ReturnType<typeof createAdminClient
       .insert(seedRows(missingSeeds))
       .select('id, key')
 
-    const recoveredResponse = insertResponse.error && isMissingAbilityEnumError(insertResponse.error.message)
+    const recoveredSeeds = insertResponse.error
+      ? filterSupportedArchetypeSeedsForEnumError(missingSeeds, insertResponse.error.message)
+      : missingSeeds
+
+    const recoveredResponse = insertResponse.error && recoveredSeeds.length !== missingSeeds.length
       ? await admin
           .from('project_archetypes')
-          .insert(seedRows(missingSeeds.filter((seed) => seed.appliesToKind !== 'ability')))
+          .insert(seedRows(recoveredSeeds))
           .select('id, key')
       : insertResponse
 

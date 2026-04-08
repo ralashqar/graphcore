@@ -6,7 +6,18 @@ export type LoadedState = {
   reason?: string
 }
 
-export type WorkspaceTab = 'graph' | 'content' | 'assets' | 'prompts' | 'releases'
+export type GameSummary = {
+  projectId: string
+  projectName: string
+  projectSlug: string
+  draftId: string
+  draftName: string
+  updatedAt: string
+  bootstrapStatus: 'pending' | 'complete'
+  hasGameSpec: boolean
+}
+
+export type WorkspaceTab = 'graph' | 'content' | 'characters' | 'environments' | 'assets' | 'prompts' | 'releases'
 
 export type PatchSessionView = {
   id: string
@@ -26,6 +37,8 @@ export type AuthMode = 'sign_in' | 'sign_up' | 'magic_link'
 export const workspaceTabs: Array<{ id: WorkspaceTab; label: string }> = [
   { id: 'graph', label: 'Graph' },
   { id: 'content', label: 'Content' },
+  { id: 'characters', label: 'Characters' },
+  { id: 'environments', label: 'Environments' },
   { id: 'assets', label: 'Assets' },
   { id: 'prompts', label: 'Activity' },
   { id: 'releases', label: 'Releases' },

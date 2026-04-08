@@ -10,6 +10,21 @@ import type {
 import { graphNodeTemplatesByKey } from './nodeLibrary'
 import { PRESET_CATALOG_VERSION } from './presetCatalog'
 
+function isLikelyReferenceKey(value: string) {
+  return /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/i.test(value)
+}
+
+function getComponent<TType extends DefinitionBase['components'][number]['type']>(
+  definition: DefinitionBase,
+  type: TType,
+) {
+  return definition.components.find((component) => component.type === type) as Extract<DefinitionBase['components'][number], { type: TType }> | undefined
+}
+
+function pushDiagnostic(diagnostics: Diagnostic[], diagnostic: Diagnostic) {
+  diagnostics.push(diagnostic)
+}
+
 export function compileBundle(snapshot: ProjectSnapshot): GameSystemBundle {
   const graphKeys = new Set<string>()
   const diagnostics = [
@@ -103,6 +118,8 @@ export function validateDefinitions(
   const archetypesByKey = new Map(archetypes.map((archetype) => [archetype.key, archetype]))
   const definitionsByKey = new Map(definitions.map((definition) => [definition.key, definition]))
   const graphKeys = new Set(graphs.map((graph) => graph.key))
+  const meshAssetKeys = new Set(assets.filter((asset) => asset.kind === 'mesh').map((asset) => asset.key))
+  const imageAssetKeys = new Set(assets.filter((asset) => asset.kind === 'image').map((asset) => asset.key))
 
   if (gameSpec && gameSpec.presetCatalogVersion !== PRESET_CATALOG_VERSION) {
     diagnostics.push({
@@ -190,15 +207,30 @@ export function validateDefinitions(
     }
 
     if (definition.kind === 'character') {
-      const inventoryComponent = definition.components.find((component) => component.type === 'inventory')
-      const loadoutComponent = definition.components.find((component) => component.type === 'ability_loadout')
-      const controlledBy = typeof definition.metadata.controlledBy === 'string' ? definition.metadata.controlledBy : null
+      const inventoryComponent = getComponent(definition, 'inventory')
+      const loadoutComponent = getComponent(definition, 'ability_loadout')
+      const profileComponent = getComponent(definition, 'character_profile')
+      const animationBinding = getComponent(definition, 'animation_binding')
+      const logicBinding = getComponent(definition, 'logic_state_machine_binding')
+      const renderBinding = getComponent(definition, 'render_3d_binding')
+      const controlledBy = profileComponent?.config.controlMode
+        ?? (typeof definition.metadata.controlledBy === 'string' ? definition.metadata.controlledBy : null)
 
       if (!inventoryComponent) {
-        diagnostics.push({
+        pushDiagnostic(diagnostics, {
           level: 'warning',
           code: 'character_missing_inventory',
           message: `Character "${definition.key}" should include an inventory component.`,
+          graphKey: null,
+          nodeKey: null,
+        })
+      }
+
+      if (!profileComponent) {
+        pushDiagnostic(diagnostics, {
+          level: 'warning',
+          code: 'character_missing_profile',
+          message: `Character "${definition.key}" should include a character profile component. Older drafts default to subtype "humanoid".`,
           graphKey: null,
           nodeKey: null,
         })
@@ -236,6 +268,74 @@ export function validateDefinitions(
               nodeKey: null,
             })
           }
+        }
+      }
+
+      if (animationBinding?.type === 'animation_binding') {
+        if (animationBinding.config.defaultAnimationGraphKey && !isLikelyReferenceKey(animationBinding.config.defaultAnimationGraphKey)) {
+          pushDiagnostic(diagnostics, {
+            level: 'warning',
+            code: 'invalid_animation_graph_ref',
+            message: `Character "${definition.key}" uses an invalid animation graph key "${animationBinding.config.defaultAnimationGraphKey}".`,
+            graphKey: null,
+            nodeKey: null,
+          })
+        }
+
+        for (const animationSetKey of animationBinding.config.animationSetKeys) {
+          if (!isLikelyReferenceKey(animationSetKey)) {
+            pushDiagnostic(diagnostics, {
+              level: 'warning',
+              code: 'invalid_animation_set_ref',
+              message: `Character "${definition.key}" uses an invalid animation set key "${animationSetKey}".`,
+              graphKey: null,
+              nodeKey: null,
+            })
+          }
+        }
+      }
+
+      if (logicBinding?.type === 'logic_state_machine_binding') {
+        if (logicBinding.config.stateMachineKey && !isLikelyReferenceKey(logicBinding.config.stateMachineKey)) {
+          pushDiagnostic(diagnostics, {
+            level: 'warning',
+            code: 'invalid_state_machine_ref',
+            message: `Character "${definition.key}" uses an invalid state machine key "${logicBinding.config.stateMachineKey}".`,
+            graphKey: null,
+            nodeKey: null,
+          })
+        }
+
+        if (logicBinding.config.defaultStateKey && !isLikelyReferenceKey(logicBinding.config.defaultStateKey)) {
+          pushDiagnostic(diagnostics, {
+            level: 'warning',
+            code: 'invalid_state_key_ref',
+            message: `Character "${definition.key}" uses an invalid default state key "${logicBinding.config.defaultStateKey}".`,
+            graphKey: null,
+            nodeKey: null,
+          })
+        }
+      }
+
+      if (renderBinding?.type === 'render_3d_binding') {
+        if (renderBinding.config.primaryMeshAssetKey && !meshAssetKeys.has(renderBinding.config.primaryMeshAssetKey)) {
+          pushDiagnostic(diagnostics, {
+            level: 'error',
+            code: 'missing_character_mesh_asset',
+            message: `Character "${definition.key}" references missing mesh asset "${renderBinding.config.primaryMeshAssetKey}".`,
+            graphKey: null,
+            nodeKey: null,
+          })
+        }
+
+        if (renderBinding.config.previewImageAssetKey && !imageAssetKeys.has(renderBinding.config.previewImageAssetKey)) {
+          pushDiagnostic(diagnostics, {
+            level: 'error',
+            code: 'missing_character_preview_image',
+            message: `Character "${definition.key}" references missing preview image asset "${renderBinding.config.previewImageAssetKey}".`,
+            graphKey: null,
+            nodeKey: null,
+          })
         }
       }
     }
@@ -299,7 +399,7 @@ export function validateDefinitions(
     }
 
     if (definition.kind === 'location') {
-      const locationState = definition.components.find((component) => component.type === 'location_state')
+      const locationState = getComponent(definition, 'location_state')
       if (locationState?.type === 'location_state') {
         for (const linkedGraphKey of locationState.config.linkedGraphKeys) {
           if (!graphKeys.has(linkedGraphKey)) {
@@ -326,11 +426,229 @@ export function validateDefinitions(
           }
         }
 
+        if (locationState.config.environmentKey) {
+          const linkedEnvironment = definitionsByKey.get(locationState.config.environmentKey)
+          if (!linkedEnvironment || linkedEnvironment.kind !== 'environment') {
+            pushDiagnostic(diagnostics, {
+              level: 'error',
+              code: 'missing_location_environment',
+              message: `Location "${definition.key}" references missing environment "${locationState.config.environmentKey}".`,
+              graphKey: null,
+              nodeKey: null,
+            })
+          }
+        }
+
         if (locationState.config.unlockTokenKey && !definitionsByKey.has(locationState.config.unlockTokenKey)) {
           diagnostics.push({
             level: 'error',
             code: 'missing_location_unlock_token',
             message: `Location "${definition.key}" references missing unlock token "${locationState.config.unlockTokenKey}".`,
+            graphKey: null,
+            nodeKey: null,
+          })
+        }
+      }
+    }
+
+    if (definition.kind === 'environment') {
+      const profile = getComponent(definition, 'environment_profile')
+      const renderBinding = getComponent(definition, 'environment_render_binding')
+      const navigation = getComponent(definition, 'environment_navigation')
+      const spawnRules = getComponent(definition, 'environment_spawn_rules')
+
+      if (!profile) {
+        pushDiagnostic(diagnostics, {
+          level: 'warning',
+          code: 'environment_missing_profile',
+          message: `Environment "${definition.key}" should include an environment profile component.`,
+          graphKey: null,
+          nodeKey: null,
+        })
+      }
+
+      if (!navigation) {
+        pushDiagnostic(diagnostics, {
+          level: 'warning',
+          code: 'environment_missing_navigation',
+          message: `Environment "${definition.key}" should include an environment navigation component.`,
+          graphKey: null,
+          nodeKey: null,
+        })
+      }
+
+      if (profile?.type === 'environment_profile') {
+        if (profile.config.worldModelKey) {
+          const linkedWorld = definitionsByKey.get(profile.config.worldModelKey)
+          if (!linkedWorld || linkedWorld.kind !== 'world_model') {
+            pushDiagnostic(diagnostics, {
+              level: 'error',
+              code: 'missing_environment_world_model',
+              message: `Environment "${definition.key}" references missing world model "${profile.config.worldModelKey}".`,
+              graphKey: null,
+              nodeKey: null,
+            })
+          }
+        }
+
+        for (const linkedLocationKey of profile.config.linkedLocationKeys) {
+          const linkedLocation = definitionsByKey.get(linkedLocationKey)
+          if (!linkedLocation || linkedLocation.kind !== 'location') {
+            pushDiagnostic(diagnostics, {
+              level: 'error',
+              code: 'missing_environment_location',
+              message: `Environment "${definition.key}" references missing location "${linkedLocationKey}".`,
+              graphKey: null,
+              nodeKey: null,
+            })
+          }
+        }
+      }
+
+      if (renderBinding?.type === 'environment_render_binding') {
+        if (renderBinding.config.primaryMeshAssetKey && !meshAssetKeys.has(renderBinding.config.primaryMeshAssetKey)) {
+          pushDiagnostic(diagnostics, {
+            level: 'error',
+            code: 'missing_environment_mesh_asset',
+            message: `Environment "${definition.key}" references missing mesh asset "${renderBinding.config.primaryMeshAssetKey}".`,
+            graphKey: null,
+            nodeKey: null,
+          })
+        }
+
+        if (renderBinding.config.previewImageAssetKey && !imageAssetKeys.has(renderBinding.config.previewImageAssetKey)) {
+          pushDiagnostic(diagnostics, {
+            level: 'error',
+            code: 'missing_environment_preview_image',
+            message: `Environment "${definition.key}" references missing preview image asset "${renderBinding.config.previewImageAssetKey}".`,
+            graphKey: null,
+            nodeKey: null,
+          })
+        }
+      }
+
+      if (spawnRules?.type === 'environment_spawn_rules') {
+        for (const characterKey of spawnRules.config.characterKeys) {
+          const character = definitionsByKey.get(characterKey)
+          if (!character || character.kind !== 'character') {
+            pushDiagnostic(diagnostics, {
+              level: 'error',
+              code: 'missing_environment_spawn_character',
+              message: `Environment "${definition.key}" references missing spawn character "${characterKey}".`,
+              graphKey: null,
+              nodeKey: null,
+            })
+          }
+        }
+
+        for (const itemKey of spawnRules.config.itemKeys) {
+          const item = definitionsByKey.get(itemKey)
+          if (!item || item.kind !== 'item') {
+            pushDiagnostic(diagnostics, {
+              level: 'error',
+              code: 'missing_environment_spawn_item',
+              message: `Environment "${definition.key}" references missing spawn item "${itemKey}".`,
+              graphKey: null,
+              nodeKey: null,
+            })
+          }
+        }
+      }
+    }
+
+    if (definition.kind === 'world_model') {
+      const profile = getComponent(definition, 'world_profile')
+      const environmentIndex = getComponent(definition, 'world_environment_index')
+      const renderBinding = getComponent(definition, 'world_render_binding')
+
+      if (!profile) {
+        pushDiagnostic(diagnostics, {
+          level: 'warning',
+          code: 'world_model_missing_profile',
+          message: `World model "${definition.key}" should include a world profile component.`,
+          graphKey: null,
+          nodeKey: null,
+        })
+      }
+
+      if (!environmentIndex) {
+        pushDiagnostic(diagnostics, {
+          level: 'warning',
+          code: 'world_model_missing_environment_index',
+          message: `World model "${definition.key}" should include a world environment index component.`,
+          graphKey: null,
+          nodeKey: null,
+        })
+      }
+
+      if (environmentIndex?.type === 'world_environment_index') {
+        for (const environmentKey of environmentIndex.config.environmentKeys) {
+          const environment = definitionsByKey.get(environmentKey)
+          if (!environment || environment.kind !== 'environment') {
+            pushDiagnostic(diagnostics, {
+              level: 'error',
+              code: 'missing_world_environment',
+              message: `World model "${definition.key}" references missing environment "${environmentKey}".`,
+              graphKey: null,
+              nodeKey: null,
+            })
+          }
+        }
+
+        if (environmentIndex.config.primaryEnvironmentKey && !environmentIndex.config.environmentKeys.includes(environmentIndex.config.primaryEnvironmentKey)) {
+          pushDiagnostic(diagnostics, {
+            level: 'warning',
+            code: 'world_primary_environment_unindexed',
+            message: `World model "${definition.key}" uses primary environment "${environmentIndex.config.primaryEnvironmentKey}" outside its environment index.`,
+            graphKey: null,
+            nodeKey: null,
+          })
+        }
+      }
+
+      if (renderBinding?.type === 'world_render_binding') {
+        if (renderBinding.config.primaryMeshAssetKey && !meshAssetKeys.has(renderBinding.config.primaryMeshAssetKey)) {
+          pushDiagnostic(diagnostics, {
+            level: 'error',
+            code: 'missing_world_mesh_asset',
+            message: `World model "${definition.key}" references missing mesh asset "${renderBinding.config.primaryMeshAssetKey}".`,
+            graphKey: null,
+            nodeKey: null,
+          })
+        }
+
+        if (renderBinding.config.previewImageAssetKey && !imageAssetKeys.has(renderBinding.config.previewImageAssetKey)) {
+          pushDiagnostic(diagnostics, {
+            level: 'error',
+            code: 'missing_world_preview_image',
+            message: `World model "${definition.key}" references missing preview image asset "${renderBinding.config.previewImageAssetKey}".`,
+            graphKey: null,
+            nodeKey: null,
+          })
+        }
+      }
+    }
+
+    if (definition.kind === 'item') {
+      const physicalProfile = getComponent(definition, 'physical_item_profile')
+      const renderBinding = getComponent(definition, 'render_3d_binding')
+
+      if (physicalProfile?.type === 'physical_item_profile' && renderBinding?.type === 'render_3d_binding') {
+        if (renderBinding.config.primaryMeshAssetKey && !meshAssetKeys.has(renderBinding.config.primaryMeshAssetKey)) {
+          pushDiagnostic(diagnostics, {
+            level: 'error',
+            code: 'missing_item_mesh_asset',
+            message: `Item "${definition.key}" references missing mesh asset "${renderBinding.config.primaryMeshAssetKey}".`,
+            graphKey: null,
+            nodeKey: null,
+          })
+        }
+
+        if (renderBinding.config.previewImageAssetKey && !imageAssetKeys.has(renderBinding.config.previewImageAssetKey)) {
+          pushDiagnostic(diagnostics, {
+            level: 'error',
+            code: 'missing_item_preview_image',
+            message: `Item "${definition.key}" references missing preview image asset "${renderBinding.config.previewImageAssetKey}".`,
             graphKey: null,
             nodeKey: null,
           })

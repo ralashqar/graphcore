@@ -235,7 +235,11 @@ Deno.serve(async (request) => {
 
     for (const operation of payload.operations) {
       if (operation.op === 'set_game_spec') {
-        const result = await upsertDraftMetadata(client, payload.draftId, (metadata) => ({ ...metadata, gameSpec: operation.gameSpec }))
+        const result = await upsertDraftMetadata(client, payload.draftId, (metadata) => ({
+          ...metadata,
+          gameSpec: operation.gameSpec,
+          bootstrapStatus: 'complete',
+        }))
         if (result.error) return json({ error: result.error.message, operation }, { status: 400 })
         results.push({ op: operation.op, draftId: payload.draftId })
         continue

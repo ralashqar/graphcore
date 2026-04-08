@@ -3,7 +3,7 @@ type PromptDockProps = {
   isApplyingPatch: boolean
   isGeneratingPatch: boolean
   model: string
-  needsBootstrapOnboarding: boolean
+  needsInitialization: boolean
   promptRuntimeError: string | null
   promptText: string
   sessionEmail?: string | null
@@ -18,7 +18,7 @@ export function PromptDock({
   isApplyingPatch,
   isGeneratingPatch,
   model,
-  needsBootstrapOnboarding,
+  needsInitialization,
   promptRuntimeError,
   promptText,
   sessionEmail,
@@ -28,7 +28,7 @@ export function PromptDock({
   onOpenOnboarding,
 }: PromptDockProps) {
   const isBusy = isGeneratingPatch || isApplyingPatch
-  const buttonDisabled = isBusy || (!needsBootstrapOnboarding && promptText.trim().length === 0)
+  const buttonDisabled = isBusy || (!needsInitialization && promptText.trim().length === 0)
 
   return (
     <section className="prompt-dock">
@@ -52,16 +52,16 @@ export function PromptDock({
       </div>
       {!sessionEmail ? <div className="inline-note">Hosted AI, patch apply, and publishing require Supabase sign-in. You can still explore the demo workspace.</div> : null}
       {promptRuntimeError ? <div className="inline-note is-error">{promptRuntimeError}</div> : null}
-      {needsBootstrapOnboarding ? <div className="inline-note">A fresh live draft opens into onboarding first. Finish the starter generation flow before sending normal prompts.</div> : null}
+      {needsInitialization ? <div className="inline-note">This active game is still empty. Initialize it first, then use normal prompts to expand it.</div> : null}
       <div className="prompt-dock-body">
         <textarea aria-label="Prompt editor" className="prompt-composer" placeholder="Add a fire mage enemy with a vendor quest hub and one starter narrative graph." value={promptText} onChange={(event) => onChangePromptText(event.target.value)} rows={3} />
         <div className="prompt-actions">
           <div className="prompt-hint"><span>The orchestrator plans dependencies first, fans out graph work if needed, and applies successful changes automatically.</span></div>
-          <button className="primary-button button-with-spinner" disabled={buttonDisabled} onClick={needsBootstrapOnboarding ? onOpenOnboarding : onGenerate} type="button">
+          <button className="primary-button button-with-spinner" disabled={buttonDisabled} onClick={needsInitialization ? onOpenOnboarding : onGenerate} type="button">
             {isBusy
               ? <><span className="button-spinner" aria-hidden="true" />Generating...</>
-              : needsBootstrapOnboarding
-                ? 'Open onboarding'
+              : needsInitialization
+                ? 'Initialize game'
                 : 'Generate'}
           </button>
         </div>

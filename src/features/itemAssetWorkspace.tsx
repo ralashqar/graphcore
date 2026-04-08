@@ -152,6 +152,8 @@ export function ContentWorkspace({
                   <option value="character">Characters</option>
                   <option value="ability">Abilities</option>
                   <option value="location">Locations</option>
+                  <option value="environment">Environments</option>
+                  <option value="world_model">World Models</option>
                   <option value="market">Markets</option>
                   <option value="quest">Quests</option>
                   <option value="stat">Stats</option>
@@ -188,6 +190,8 @@ export function ContentWorkspace({
                   <option value="character">Characters</option>
                   <option value="ability">Abilities</option>
                   <option value="location">Locations</option>
+                  <option value="environment">Environments</option>
+                  <option value="world_model">World Models</option>
                   <option value="market">Markets</option>
                   <option value="quest">Quests</option>
                   <option value="stat">Stats</option>

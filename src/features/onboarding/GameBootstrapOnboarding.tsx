@@ -36,7 +36,7 @@ export function GameBootstrapOnboarding({
             <h2>Build the first playable data layer</h2>
             <p className="subtle-line">Pick the overall game archetype, describe the concept, and GraphCore will infer systems, starter content, and graphs automatically.</p>
           </div>
-          {canClose ? <button className="ghost-button compact" onClick={onClose} type="button">Close</button> : null}
+          {canClose ? <button aria-label="Close onboarding" className="ghost-button compact bootstrap-close-button" onClick={onClose} type="button">X</button> : null}
         </div>
 
         <div className="bootstrap-progress bootstrap-progress-minimal" aria-label="Bootstrap steps">

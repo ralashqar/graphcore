@@ -1,3 +1,4 @@
+import { buildDefaultDefinitionComponents } from './graphcore'
 import type {
   ArchetypeDefinition,
   DefinitionBase,
@@ -8,7 +9,7 @@ import type {
 import { createGraphScaffold, getGraphScaffoldKeys } from './graphScaffold'
 import { normalizeNode } from './nodeLibrary'
 
-export const PRESET_CATALOG_VERSION = '2026-04-08.1'
+export const PRESET_CATALOG_VERSION = '2026-04-08.2'
 
 type ArchetypePreset = {
   id: string
@@ -335,6 +336,30 @@ const archetypePresets: ArchetypePreset[] = [
     { controlledBy: 'ai' },
   ),
   makeArchetypePreset(
+    'character.beast_enemy',
+    'character',
+    'Beast Enemy',
+    'Non-humanoid hostile character built around animal or creature behaviors.',
+    [
+      makeField('role', 'Role', 'text', 0, { defaultValue: 'enemy' }),
+      makeField('pack_behavior', 'Pack Behavior', 'boolean', 1, { defaultValue: false }),
+    ],
+    ['characters', 'enemy', 'beast'],
+    { controlledBy: 'ai', subtype: 'beast' },
+  ),
+  makeArchetypePreset(
+    'character.construct_boss',
+    'character',
+    'Construct Boss',
+    'Large mechanical or magical boss character with staged logic.',
+    [
+      makeField('role', 'Role', 'text', 0, { defaultValue: 'boss' }),
+      makeField('phase_count', 'Phase Count', 'number', 1, { defaultValue: 3 }),
+    ],
+    ['characters', 'boss', 'construct'],
+    { controlledBy: 'ai', subtype: 'construct' },
+  ),
+  makeArchetypePreset(
     'ability.active_melee',
     'ability',
     'Active Melee Ability',
@@ -456,6 +481,102 @@ const archetypePresets: ArchetypePreset[] = [
     ['locations', 'market'],
   ),
   makeArchetypePreset(
+    'environment.settlement',
+    'environment',
+    'Settlement Environment',
+    'Scene-facing settlement or town environment linked to gameplay locations.',
+    [
+      makeField('biome', 'Biome', 'text', 0, { defaultValue: 'temperate' }),
+      makeField('scale_tier', 'Scale Tier', 'enum', 1, { defaultValue: 'site', constraints: { options: ['room', 'site', 'zone', 'region'] } }),
+    ],
+    ['environments', 'settlement'],
+    { subtype: 'settlement' },
+  ),
+  makeArchetypePreset(
+    'environment.dungeon',
+    'environment',
+    'Dungeon Environment',
+    'Interior environment used for layered traversal and encounter spaces.',
+    [
+      makeField('biome', 'Biome', 'text', 0, { defaultValue: 'stone' }),
+      makeField('scale_tier', 'Scale Tier', 'enum', 1, { defaultValue: 'site', constraints: { options: ['room', 'site', 'zone', 'region'] } }),
+    ],
+    ['environments', 'dungeon'],
+    { subtype: 'dungeon' },
+  ),
+  makeArchetypePreset(
+    'environment.wilderness',
+    'environment',
+    'Wilderness Environment',
+    'Outdoor environment for routes, regions, and encounter spaces.',
+    [
+      makeField('biome', 'Biome', 'text', 0, { defaultValue: 'forest' }),
+      makeField('scale_tier', 'Scale Tier', 'enum', 1, { defaultValue: 'zone', constraints: { options: ['room', 'site', 'zone', 'region'] } }),
+    ],
+    ['environments', 'wilderness'],
+    { subtype: 'wilderness' },
+  ),
+  makeArchetypePreset(
+    'environment.structure',
+    'environment',
+    'Structure Environment',
+    'Standalone structure or POI environment with traversal metadata.',
+    [
+      makeField('biome', 'Biome', 'text', 0, { defaultValue: 'ruin' }),
+      makeField('scale_tier', 'Scale Tier', 'enum', 1, { defaultValue: 'site', constraints: { options: ['room', 'site', 'zone', 'region'] } }),
+    ],
+    ['environments', 'structure'],
+    { subtype: 'structure' },
+  ),
+  makeArchetypePreset(
+    'world_model.hub_world',
+    'world_model',
+    'Hub World',
+    'Compact world model centered around a main hub and connected spokes.',
+    [
+      makeField('theme', 'Theme', 'text', 0, { defaultValue: 'frontier' }),
+      makeField('scale_tier', 'Scale Tier', 'enum', 1, { defaultValue: 'regional', constraints: { options: ['local', 'regional', 'planetary'] } }),
+    ],
+    ['world', 'hub'],
+    { subtype: 'hub_world' },
+  ),
+  makeArchetypePreset(
+    'world_model.region_set',
+    'world_model',
+    'Region Set',
+    'World model representing a set of connected regions or zones.',
+    [
+      makeField('theme', 'Theme', 'text', 0, { defaultValue: 'frontier' }),
+      makeField('scale_tier', 'Scale Tier', 'enum', 1, { defaultValue: 'regional', constraints: { options: ['local', 'regional', 'planetary'] } }),
+    ],
+    ['world', 'regions'],
+    { subtype: 'region_set' },
+  ),
+  makeArchetypePreset(
+    'item.prop',
+    'item',
+    'Prop Item',
+    'Physical world prop or pickup-ready object with placeholder 3D-ready data.',
+    [
+      makeField('description', 'Description', 'long_text', 0, { required: true, defaultValue: '' }),
+      makeField('physical_role', 'Physical Role', 'enum', 1, { defaultValue: 'prop', constraints: { options: ['prop', 'pickup', 'world_object'] } }),
+    ],
+    ['items', 'physical'],
+    { physicalSubtype: 'prop' },
+  ),
+  makeArchetypePreset(
+    'item.world_object',
+    'item',
+    'World Object',
+    'Physical item used as a placeable world-facing object.',
+    [
+      makeField('description', 'Description', 'long_text', 0, { required: true, defaultValue: '' }),
+      makeField('physical_role', 'Physical Role', 'enum', 1, { defaultValue: 'world_object', constraints: { options: ['prop', 'pickup', 'world_object'] } }),
+    ],
+    ['items', 'physical', 'world'],
+    { physicalSubtype: 'world_object' },
+  ),
+  makeArchetypePreset(
     'market.vendor_basic',
     'market',
     'Basic Vendor',
@@ -567,6 +688,16 @@ const definitionPresets: DefinitionPreset[] = [
     ],
     definitionData: { stackable: false, systemItem: true },
   }, ['progression']),
+  makeDefinitionPreset('item.minor_healing_potion', 'item', 'Minor Healing Potion', 'Starter restorative consumable for early vendors and player kits.', {
+    archetypeKey: 'item.consumable',
+    fieldValues: [
+      { fieldKey: 'description', value: 'A simple restorative carried by scouts and quartermasters.' },
+      { fieldKey: 'heal_amount', value: 20 },
+      { fieldKey: 'cooldown_seconds', value: 0 },
+      { fieldKey: 'rarity', value: 'common' },
+    ],
+    definitionData: { stackable: true },
+  }, ['items', 'starter']),
   makeDefinitionPreset('ability.fireball', 'ability', 'Fireball', 'Arcane projectile that damages an enemy.', {
     archetypeKey: 'ability.active_spell',
     fieldValues: [
@@ -667,6 +798,251 @@ const definitionPresets: DefinitionPreset[] = [
       },
     ],
   }, ['abilities', 'starter']),
+  makeDefinitionPreset('character.player_starter', 'character', 'Starter Hero', 'Primary player-controlled starter character.', {
+    archetypeKey: 'character.player_avatar',
+    metadata: { controlledBy: 'player' },
+    fieldValues: [
+      { fieldKey: 'role', value: 'player' },
+      { fieldKey: 'starting_region', value: 'frontier' },
+    ],
+    components: [
+      ...buildDefaultDefinitionComponents('character').map((component) =>
+        component.type === 'character_profile'
+          ? {
+              ...component,
+              config: {
+                ...component.config,
+                subtype: 'humanoid',
+                bodyClass: 'humanoid',
+                controlMode: 'player',
+                scaleProfile: 'medium',
+              },
+            }
+          : component.type === 'ability_loadout'
+            ? {
+                ...component,
+                config: {
+                  entries: [
+                    {
+                      abilityKey: 'ability.melee_attack',
+                      slotKey: 'primary',
+                      inputBinding: 'Mouse1',
+                      cooldownGroup: 'attack',
+                      unlockTokenKey: null,
+                    },
+                  ],
+                },
+              }
+            : component.type === 'logic_state_machine_binding'
+              ? {
+                  ...component,
+                  config: {
+                    ...component.config,
+                    controlMode: 'player',
+                  },
+                }
+              : component,
+      ),
+    ] as DefinitionBase['components'],
+  }, ['characters', 'starter']),
+  makeDefinitionPreset('character.frontier_vendor', 'character', 'Frontier Quartermaster', 'Starter vendor NPC for the first hub.', {
+    archetypeKey: 'character.npc_vendor',
+    metadata: { controlledBy: 'ai' },
+    fieldValues: [
+      { fieldKey: 'role', value: 'vendor' },
+      { fieldKey: 'market_key', value: 'market.frontier_supplies' },
+    ],
+    components: [
+      ...buildDefaultDefinitionComponents('character').map((component) =>
+        component.type === 'character_profile'
+          ? {
+              ...component,
+              config: {
+                ...component.config,
+                subtype: 'humanoid',
+                bodyClass: 'humanoid',
+                controlMode: 'ai',
+                scaleProfile: 'medium',
+              },
+            }
+          : component,
+      ),
+      {
+        type: 'dialogue_actor',
+        config: {
+          portraitAssetKey: null,
+          voiceAssetKey: null,
+          persona: 'Practical, guarded, and always watching inventory levels.',
+        },
+      },
+    ] as DefinitionBase['components'],
+  }, ['characters', 'npc']),
+  makeDefinitionPreset('character.frontier_beast', 'character', 'Frontier Stalker', 'Starter beast enemy for the first encounter zone.', {
+    archetypeKey: 'character.beast_enemy',
+    metadata: { controlledBy: 'ai' },
+    fieldValues: [
+      { fieldKey: 'role', value: 'enemy' },
+      { fieldKey: 'pack_behavior', value: true },
+    ],
+    components: [
+      ...buildDefaultDefinitionComponents('character').map((component) =>
+        component.type === 'character_profile'
+          ? {
+              ...component,
+              config: {
+                ...component.config,
+                subtype: 'beast',
+                bodyClass: 'quadruped',
+                controlMode: 'ai',
+                scaleProfile: 'medium',
+              },
+            }
+          : component.type === 'ability_loadout'
+            ? {
+                ...component,
+                config: {
+                  entries: [
+                    {
+                      abilityKey: 'ability.melee_attack',
+                      slotKey: 'bite',
+                      inputBinding: null,
+                      cooldownGroup: 'attack',
+                      unlockTokenKey: null,
+                    },
+                  ],
+                },
+              }
+            : component,
+      ),
+    ] as DefinitionBase['components'],
+  }, ['characters', 'enemy']),
+  makeDefinitionPreset('market.frontier_supplies', 'market', 'Frontier Supplies', 'Starter vendor inventory for the first hub.', {
+    archetypeKey: 'market.vendor_basic',
+    components: [
+      {
+        type: 'market_inventory',
+        config: {
+          trades: [
+            {
+              id: 'trade-healing-potion',
+              offerItemKey: 'item.minor_healing_potion',
+              offerQuantity: 1,
+              costItemKey: 'currency.gold',
+              costQuantity: 10,
+              unlockTokenKey: null,
+            },
+          ],
+        },
+      },
+    ],
+  }, ['markets']),
+  makeDefinitionPreset('world_model.frontier_regions', 'world_model', 'Frontier Regions', 'Starter world model linking the first authored environments.', {
+    archetypeKey: 'world_model.region_set',
+    fieldValues: [
+      { fieldKey: 'theme', value: 'frontier' },
+      { fieldKey: 'scale_tier', value: 'regional' },
+    ],
+    components: [
+      ...buildDefaultDefinitionComponents('world_model').map((component) =>
+        component.type === 'world_profile'
+          ? {
+              ...component,
+              config: {
+                ...component.config,
+                subtype: 'region_set',
+                theme: 'frontier',
+                scaleTier: 'regional',
+                generationStyle: 'hand_authored',
+              },
+            }
+            : component.type === 'world_environment_index'
+              ? {
+                  ...component,
+                  config: {
+                    ...component.config,
+                    environmentKeys: ['environment.frontier_hub'],
+                    primaryEnvironmentKey: 'environment.frontier_hub',
+                  },
+                }
+            : component,
+      ),
+    ] as DefinitionBase['components'],
+  }, ['world', 'starter']),
+  makeDefinitionPreset('environment.frontier_hub', 'environment', 'Frontier Hub', 'Starter settlement environment for the opening hub.', {
+    archetypeKey: 'environment.settlement',
+    fieldValues: [
+      { fieldKey: 'biome', value: 'frontier' },
+      { fieldKey: 'scale_tier', value: 'site' },
+    ],
+    components: [
+      ...buildDefaultDefinitionComponents('environment').map((component) =>
+        component.type === 'environment_profile'
+          ? {
+              ...component,
+              config: {
+                ...component.config,
+                subtype: 'settlement',
+                biome: 'frontier',
+                scaleTier: 'site',
+                linkedLocationKeys: [],
+                worldModelKey: 'world_model.frontier_regions',
+              },
+            }
+            : component,
+      ),
+    ] as DefinitionBase['components'],
+  }, ['environment', 'starter']),
+  makeDefinitionPreset('environment.frontier_wilds', 'environment', 'Frontier Wilds', 'Starter wilderness environment for early routes and encounters.', {
+    archetypeKey: 'environment.wilderness',
+    fieldValues: [
+      { fieldKey: 'biome', value: 'forest' },
+      { fieldKey: 'scale_tier', value: 'zone' },
+    ],
+    components: [
+      ...buildDefaultDefinitionComponents('environment').map((component) =>
+        component.type === 'environment_profile'
+          ? {
+              ...component,
+              config: {
+                ...component.config,
+                subtype: 'wilderness',
+                biome: 'forest',
+                scaleTier: 'zone',
+                linkedLocationKeys: [],
+                worldModelKey: 'world_model.frontier_regions',
+              },
+            }
+            : component,
+      ),
+    ] as DefinitionBase['components'],
+  }, ['environment']),
+  makeDefinitionPreset('item.worn_crate', 'item', 'Worn Crate', 'Starter physical prop item for world interactions and loot dressing.', {
+    archetypeKey: 'item.prop',
+    fieldValues: [
+      { fieldKey: 'description', value: 'A beat-up crate that can dress a scene or hold starter loot.' },
+      { fieldKey: 'physical_role', value: 'prop' },
+    ],
+    components: [
+      {
+        type: 'physical_item_profile',
+        config: {
+          physicalSubtype: 'prop',
+          worldPlacementRole: 'set_dressing',
+          pickupContext: 'none',
+        },
+      },
+      {
+        type: 'render_3d_binding',
+        config: {
+          primaryMeshAssetKey: null,
+          previewImageAssetKey: null,
+          generationPrompt: null,
+          generationStyle: null,
+        },
+      },
+    ],
+    definitionData: { stackable: false },
+  }, ['items', 'physical']),
 ]
 
 const graphPresets: GraphPreset[] = [
@@ -769,20 +1145,31 @@ const packPresets: PackPreset[] = [
       'character.companion',
       'character.enemy_melee',
       'character.enemy_caster',
+      'character.beast_enemy',
       'ability.active_melee',
       'ability.active_spell',
       'ability.active_heal',
       'location.hub',
       'location.dungeon',
+      'environment.settlement',
+      'environment.dungeon',
+      'world_model.hub_world',
       'market.vendor_basic',
     ],
     definitionPresetIds: [
       'currency.gold',
       'currency.mana',
       'progression.main_token',
+      'item.minor_healing_potion',
       'ability.fireball',
       'ability.melee_attack',
       'ability.heal_small',
+      'character.player_starter',
+      'character.frontier_vendor',
+      'character.frontier_beast',
+      'market.frontier_supplies',
+      'world_model.frontier_regions',
+      'environment.frontier_hub',
     ],
     graphPresetIds: ['graph.starting_hub_loop', 'graph.quest_offer'],
   },
@@ -801,9 +1188,11 @@ const packPresets: PackPreset[] = [
       'ability.active_melee',
       'ability.active_ranged',
       'location.encounter_zone',
+      'environment.wilderness',
+      'world_model.region_set',
       'market.vendor_basic',
     ],
-    definitionPresetIds: ['currency.energy', 'progression.main_token', 'ability.melee_attack', 'ability.basic_shot'],
+    definitionPresetIds: ['currency.energy', 'progression.main_token', 'item.minor_healing_potion', 'ability.melee_attack', 'ability.basic_shot', 'character.player_starter', 'character.frontier_beast', 'world_model.frontier_regions', 'environment.frontier_wilds'],
     graphPresetIds: ['graph.basic_combat_encounter'],
   },
   {
@@ -815,13 +1204,17 @@ const packPresets: PackPreset[] = [
       'item.crafting_material',
       'item.currency',
       'item.progression_token',
+      'item.world_object',
       'character.player_avatar',
       'character.npc_vendor',
       'location.safehouse',
       'location.encounter_zone',
+      'environment.wilderness',
+      'environment.structure',
+      'world_model.region_set',
       'market.vendor_barter',
     ],
-    definitionPresetIds: ['currency.energy', 'progression.region_unlock'],
+    definitionPresetIds: ['currency.energy', 'progression.region_unlock', 'item.worn_crate', 'character.player_starter', 'character.frontier_vendor', 'world_model.frontier_regions', 'environment.frontier_wilds'],
     graphPresetIds: ['graph.starting_hub_loop'],
   },
   {
@@ -835,9 +1228,11 @@ const packPresets: PackPreset[] = [
       'character.npc_questgiver',
       'location.hub',
       'location.shopfront',
+      'environment.settlement',
+      'world_model.hub_world',
       'market.vendor_basic',
     ],
-    definitionPresetIds: ['currency.gold', 'progression.main_token'],
+    definitionPresetIds: ['currency.gold', 'progression.main_token', 'item.minor_healing_potion', 'character.player_starter', 'character.frontier_vendor', 'market.frontier_supplies', 'world_model.frontier_regions', 'environment.frontier_hub'],
     graphPresetIds: ['graph.vendor_intro', 'graph.quest_offer'],
   },
 ]
@@ -947,6 +1342,8 @@ export function createDefaultGameSpec(packIds: string[] = ['pack.rpg_core']): Ga
       characters: 'heavy',
       abilities: 'medium',
       locations: 'medium',
+      environments: 'medium',
+      worldModels: 'light',
       markets: 'light',
       quests: 'medium',
       graphs: 'medium',

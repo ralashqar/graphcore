@@ -8,6 +8,8 @@ export const definitionKindSchema = z.enum([
   'character',
   'ability',
   'location',
+  'environment',
+  'world_model',
   'market',
   'narrative_flow',
   'graph',
@@ -20,7 +22,7 @@ export const definitionStatusSchema = z.enum([
   'archived',
 ])
 
-export const assetKindSchema = z.enum(['image', 'audio', 'json', 'document', 'other'])
+export const assetKindSchema = z.enum(['image', 'audio', 'json', 'document', 'mesh', 'other'])
 
 export const componentTypeSchema = z.enum([
   'inventory',
@@ -29,10 +31,22 @@ export const componentTypeSchema = z.enum([
   'pricing',
   'market_inventory',
   'dialogue_actor',
+  'character_profile',
   'ability_loadout',
   'ability_profile',
+  'animation_binding',
+  'logic_state_machine_binding',
   'quest_state',
   'location_state',
+  'environment_profile',
+  'environment_render_binding',
+  'environment_navigation',
+  'environment_spawn_rules',
+  'world_profile',
+  'world_environment_index',
+  'world_render_binding',
+  'physical_item_profile',
+  'render_3d_binding',
   'spawn_rules',
   'media',
 ])
@@ -72,6 +86,48 @@ export const questStateSchema = z.enum([
   'completed',
   'failed',
 ])
+
+export const characterSubtypeSchema = z.enum([
+  'humanoid',
+  'beast',
+  'construct',
+  'undead',
+  'vehicle',
+  'spirit',
+])
+
+export const environmentSubtypeSchema = z.enum([
+  'interior',
+  'exterior',
+  'dungeon',
+  'settlement',
+  'wilderness',
+  'structure',
+  'biome',
+  'poi',
+])
+
+export const worldModelSubtypeSchema = z.enum([
+  'hub_world',
+  'region_set',
+  'planetary_world',
+  'mission_world',
+])
+
+export const physicalItemSubtypeSchema = z.enum([
+  'prop',
+  'equipment',
+  'weapon',
+  'pickup',
+  'world_object',
+])
+
+const controlModeSchema = z.enum(['player', 'ai', 'scripted', 'neutral'])
+const scaleProfileSchema = z.enum(['small', 'medium', 'large', 'huge'])
+const locomotionModeSchema = z.enum(['grounded', 'aerial', 'stationary'])
+const traversalTypeSchema = z.enum(['walk', 'climb', 'swim', 'fly', 'mixed'])
+const environmentScaleTierSchema = z.enum(['room', 'site', 'zone', 'region'])
+const worldScaleTierSchema = z.enum(['local', 'regional', 'planetary'])
 
 const looseRecordSchema = z.record(z.string(), z.unknown())
 
@@ -171,6 +227,13 @@ export const dialogueActorComponentSchema = z.object({
   persona: z.string().default(''),
 })
 
+export const characterProfileComponentSchema = z.object({
+  subtype: characterSubtypeSchema.default('humanoid'),
+  bodyClass: z.string().default('humanoid'),
+  controlMode: controlModeSchema.default('ai'),
+  scaleProfile: scaleProfileSchema.default('medium'),
+})
+
 export const abilityLoadoutComponentSchema = z.object({
   entries: z.array(z.object({
     abilityKey: z.string(),
@@ -179,6 +242,22 @@ export const abilityLoadoutComponentSchema = z.object({
     cooldownGroup: z.string().nullable().default(null),
     unlockTokenKey: z.string().nullable().default(null),
   })).default([]),
+})
+
+export const animationBindingComponentSchema = z.object({
+  defaultAnimationGraphKey: z.string().nullable().default(null),
+  animationSetKeys: z.array(z.string()).default([]),
+  slotBindings: z.array(z.object({
+    slotKey: z.string(),
+    animationKey: z.string(),
+  })).default([]),
+  locomotionMode: locomotionModeSchema.default('grounded'),
+})
+
+export const logicStateMachineBindingComponentSchema = z.object({
+  stateMachineKey: z.string().nullable().default(null),
+  defaultStateKey: z.string().nullable().default(null),
+  controlMode: controlModeSchema.default('ai'),
 })
 
 export const questStateComponentSchema = z.object({
@@ -191,7 +270,75 @@ export const locationStateComponentSchema = z.object({
   isUnlockedByDefault: z.boolean().default(false),
   linkedGraphKeys: z.array(z.string()).default([]),
   linkedMarketKeys: z.array(z.string()).default([]),
+  environmentKey: z.string().nullable().default(null),
   unlockTokenKey: z.string().nullable().default(null),
+})
+
+export const environmentProfileComponentSchema = z.object({
+  subtype: environmentSubtypeSchema.default('exterior'),
+  biome: z.string().default(''),
+  traversalType: traversalTypeSchema.default('walk'),
+  isInterior: z.boolean().default(false),
+  scaleTier: environmentScaleTierSchema.default('site'),
+  worldModelKey: z.string().nullable().default(null),
+  linkedLocationKeys: z.array(z.string()).default([]),
+})
+
+export const render3dBindingComponentSchema = z.object({
+  primaryMeshAssetKey: z.string().nullable().default(null),
+  previewImageAssetKey: z.string().nullable().default(null),
+  generationPrompt: z.string().nullable().default(null),
+  generationStyle: z.string().nullable().default(null),
+})
+
+export const environmentRenderBindingComponentSchema = z.object({
+  primaryMeshAssetKey: z.string().nullable().default(null),
+  previewImageAssetKey: z.string().nullable().default(null),
+  lightingProfile: z.string().default(''),
+  generationPrompt: z.string().nullable().default(null),
+  generationStyle: z.string().nullable().default(null),
+})
+
+export const environmentNavigationComponentSchema = z.object({
+  entryAnchors: z.array(z.string()).default([]),
+  regionMarkers: z.array(z.string()).default([]),
+  navigationNotes: z.string().default(''),
+})
+
+export const environmentSpawnRulesComponentSchema = z.object({
+  characterKeys: z.array(z.string()).default([]),
+  itemKeys: z.array(z.string()).default([]),
+  resourceNodeKeys: z.array(z.string()).default([]),
+})
+
+export const worldProfileComponentSchema = z.object({
+  subtype: worldModelSubtypeSchema.default('region_set'),
+  theme: z.string().default(''),
+  scaleTier: worldScaleTierSchema.default('regional'),
+  generationStyle: z.string().default('hand_authored'),
+})
+
+export const worldEnvironmentIndexComponentSchema = z.object({
+  environmentKeys: z.array(z.string()).default([]),
+  primaryEnvironmentKey: z.string().nullable().default(null),
+  regionGroups: z.array(z.object({
+    id: z.string(),
+    name: z.string(),
+    environmentKeys: z.array(z.string()).default([]),
+  })).default([]),
+})
+
+export const worldRenderBindingComponentSchema = z.object({
+  primaryMeshAssetKey: z.string().nullable().default(null),
+  previewImageAssetKey: z.string().nullable().default(null),
+  generationPrompt: z.string().nullable().default(null),
+  generationStyle: z.string().nullable().default(null),
+})
+
+export const physicalItemProfileComponentSchema = z.object({
+  physicalSubtype: physicalItemSubtypeSchema.default('pickup'),
+  worldPlacementRole: z.string().default(''),
+  pickupContext: z.string().default(''),
 })
 
 export const spawnRulesComponentSchema = z.object({
@@ -240,6 +387,10 @@ export const componentConfigSchema = z.discriminatedUnion('type', [
     config: dialogueActorComponentSchema,
   }),
   z.object({
+    type: z.literal('character_profile'),
+    config: characterProfileComponentSchema,
+  }),
+  z.object({
     type: z.literal('ability_loadout'),
     config: abilityLoadoutComponentSchema,
   }),
@@ -248,12 +399,56 @@ export const componentConfigSchema = z.discriminatedUnion('type', [
     config: abilityProfileComponentSchema,
   }),
   z.object({
+    type: z.literal('animation_binding'),
+    config: animationBindingComponentSchema,
+  }),
+  z.object({
+    type: z.literal('logic_state_machine_binding'),
+    config: logicStateMachineBindingComponentSchema,
+  }),
+  z.object({
     type: z.literal('quest_state'),
     config: questStateComponentSchema,
   }),
   z.object({
     type: z.literal('location_state'),
     config: locationStateComponentSchema,
+  }),
+  z.object({
+    type: z.literal('environment_profile'),
+    config: environmentProfileComponentSchema,
+  }),
+  z.object({
+    type: z.literal('environment_render_binding'),
+    config: environmentRenderBindingComponentSchema,
+  }),
+  z.object({
+    type: z.literal('environment_navigation'),
+    config: environmentNavigationComponentSchema,
+  }),
+  z.object({
+    type: z.literal('environment_spawn_rules'),
+    config: environmentSpawnRulesComponentSchema,
+  }),
+  z.object({
+    type: z.literal('world_profile'),
+    config: worldProfileComponentSchema,
+  }),
+  z.object({
+    type: z.literal('world_environment_index'),
+    config: worldEnvironmentIndexComponentSchema,
+  }),
+  z.object({
+    type: z.literal('world_render_binding'),
+    config: worldRenderBindingComponentSchema,
+  }),
+  z.object({
+    type: z.literal('physical_item_profile'),
+    config: physicalItemProfileComponentSchema,
+  }),
+  z.object({
+    type: z.literal('render_3d_binding'),
+    config: render3dBindingComponentSchema,
   }),
   z.object({
     type: z.literal('spawn_rules'),
@@ -802,6 +997,162 @@ export type NodeLibraryGroup = {
   key: string
   label: string
   templates: NodeTemplateDefinition[]
+}
+
+export function buildDefaultDefinitionComponents(kind: DefinitionKind): ComponentEnvelope[] {
+  switch (kind) {
+    case 'character':
+      return [
+        {
+          type: 'inventory',
+          config: {
+            startingItems: [],
+            capacityFormula: null,
+          },
+        },
+        {
+          type: 'character_profile',
+          config: {
+            subtype: 'humanoid',
+            bodyClass: 'humanoid',
+            controlMode: 'ai',
+            scaleProfile: 'medium',
+          },
+        },
+        {
+          type: 'ability_loadout',
+          config: {
+            entries: [],
+          },
+        },
+        {
+          type: 'animation_binding',
+          config: {
+            defaultAnimationGraphKey: null,
+            animationSetKeys: [],
+            slotBindings: [],
+            locomotionMode: 'grounded',
+          },
+        },
+        {
+          type: 'logic_state_machine_binding',
+          config: {
+            stateMachineKey: null,
+            defaultStateKey: null,
+            controlMode: 'ai',
+          },
+        },
+      ]
+    case 'ability':
+      return [
+        {
+          type: 'ability_profile',
+          config: {
+            targetMode: 'enemy',
+            cooldownSeconds: 0,
+            castTimeSeconds: 0,
+            resourceCostItemKey: null,
+            resourceCostQuantity: 0,
+            effectOps: [],
+          },
+        },
+      ]
+    case 'market':
+      return [
+        {
+          type: 'market_inventory',
+          config: {
+            trades: [],
+          },
+        },
+      ]
+    case 'location':
+      return [
+        {
+          type: 'location_state',
+          config: {
+            region: 'frontier',
+            isUnlockedByDefault: true,
+            linkedGraphKeys: [],
+            linkedMarketKeys: [],
+            environmentKey: null,
+            unlockTokenKey: null,
+          },
+        },
+      ]
+    case 'environment':
+      return [
+        {
+          type: 'environment_profile',
+          config: {
+            subtype: 'exterior',
+            biome: '',
+            traversalType: 'walk',
+            isInterior: false,
+            scaleTier: 'site',
+            worldModelKey: null,
+            linkedLocationKeys: [],
+          },
+        },
+        {
+          type: 'environment_render_binding',
+          config: {
+            primaryMeshAssetKey: null,
+            previewImageAssetKey: null,
+            lightingProfile: '',
+            generationPrompt: null,
+            generationStyle: null,
+          },
+        },
+        {
+          type: 'environment_navigation',
+          config: {
+            entryAnchors: [],
+            regionMarkers: [],
+            navigationNotes: '',
+          },
+        },
+        {
+          type: 'environment_spawn_rules',
+          config: {
+            characterKeys: [],
+            itemKeys: [],
+            resourceNodeKeys: [],
+          },
+        },
+      ]
+    case 'world_model':
+      return [
+        {
+          type: 'world_profile',
+          config: {
+            subtype: 'region_set',
+            theme: '',
+            scaleTier: 'regional',
+            generationStyle: 'hand_authored',
+          },
+        },
+        {
+          type: 'world_environment_index',
+          config: {
+            environmentKeys: [],
+            primaryEnvironmentKey: null,
+            regionGroups: [],
+          },
+        },
+        {
+          type: 'world_render_binding',
+          config: {
+            primaryMeshAssetKey: null,
+            previewImageAssetKey: null,
+            generationPrompt: null,
+            generationStyle: null,
+          },
+        },
+      ]
+    default:
+      return []
+  }
 }
 
 export const schemaCatalog = {
