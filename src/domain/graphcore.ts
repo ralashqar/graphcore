@@ -32,6 +32,17 @@ export const componentTypeSchema = z.enum([
   'media',
 ])
 
+export const fieldTypeSchema = z.enum([
+  'text',
+  'long_text',
+  'number',
+  'boolean',
+  'enum',
+  'asset_ref',
+  'definition_ref',
+  'url',
+])
+
 export const nodeTypeSchema = z.enum([
   'start',
   'text',
@@ -55,10 +66,43 @@ export const questStateSchema = z.enum([
   'failed',
 ])
 
+const looseRecordSchema = z.record(z.string(), z.unknown())
+
 export const assetRefSchema = z.object({
   assetKey: z.string(),
   usage: z.string(),
   required: z.boolean().default(false),
+})
+
+export const fieldValueValueSchema = z.union([z.string(), z.number(), z.boolean(), z.null()])
+
+export const fieldValueSchema = z.object({
+  fieldKey: z.string(),
+  value: fieldValueValueSchema,
+})
+
+export const fieldDefinitionSchema = z.object({
+  id: z.string(),
+  key: z.string(),
+  label: z.string(),
+  fieldType: fieldTypeSchema,
+  description: z.string().default(''),
+  required: z.boolean().default(false),
+  defaultValue: fieldValueValueSchema.default(null),
+  constraints: looseRecordSchema.default({}),
+  sortOrder: z.number().int().default(0),
+})
+
+export const archetypeDefinitionSchema = z.object({
+  id: z.string(),
+  key: z.string(),
+  name: z.string(),
+  summary: z.string().default(''),
+  appliesToKind: definitionKindSchema.default('item'),
+  iconAssetKey: z.string().nullable().default(null),
+  metadata: looseRecordSchema.default({}),
+  llmHints: looseRecordSchema.default({}),
+  fields: z.array(fieldDefinitionSchema).default([]),
 })
 
 const itemStackSchema = z.object({
@@ -176,12 +220,16 @@ export const definitionBaseSchema = z.object({
   name: z.string(),
   summary: z.string().default(''),
   status: definitionStatusSchema.default('draft'),
+  iconAssetKey: z.string().nullable().default(null),
+  archetypeKey: z.string().nullable().default(null),
   tags: z.array(z.string()).default([]),
   schemaVersion: z.number().int().positive().default(1),
-  metadata: z.record(z.string(), z.unknown()).default({}),
-  llmHints: z.record(z.string(), z.unknown()).default({}),
+  metadata: looseRecordSchema.default({}),
+  llmHints: looseRecordSchema.default({}),
   assetRefs: z.array(assetRefSchema).default([]),
-  definitionData: z.record(z.string(), z.unknown()).default({}),
+  definitionData: looseRecordSchema.default({}),
+  fieldValues: z.array(fieldValueSchema).default([]),
+  customFields: z.array(fieldDefinitionSchema).default([]),
   components: z.array(componentConfigSchema).default([]),
 })
 
@@ -268,7 +316,7 @@ export const effectOpSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('revokeToken'), tokenKey: z.string() }),
   z.object({ type: z.literal('unlockLocation'), locationKey: z.string() }),
   z.object({ type: z.literal('enqueueNarrative'), graphKey: z.string() }),
-  z.object({ type: z.literal('emitEvent'), eventKey: z.string(), payload: z.record(z.string(), z.unknown()).default({}) }),
+  z.object({ type: z.literal('emitEvent'), eventKey: z.string(), payload: looseRecordSchema.default({}) }),
 ])
 
 export const portDefinitionSchema = z.object({
@@ -299,7 +347,7 @@ export const nodeDefinitionSchema = z.object({
   condition: conditionExprSchema.nullable().default(null),
   effects: z.array(effectOpSchema).default([]),
   ports: z.array(portDefinitionSchema).default([]),
-  metadata: z.record(z.string(), z.unknown()).default({}),
+  metadata: looseRecordSchema.default({}),
 })
 
 export const edgeDefinitionSchema = z.object({
@@ -309,7 +357,7 @@ export const edgeDefinitionSchema = z.object({
   target: z.object({ nodeKey: z.string(), portId: z.string().nullable().default(null) }),
   label: z.string().nullable().default(null),
   condition: conditionExprSchema.nullable().default(null),
-  metadata: z.record(z.string(), z.unknown()).default({}),
+  metadata: looseRecordSchema.default({}),
 })
 
 export const graphDefinitionSchema = z.object({
@@ -319,8 +367,8 @@ export const graphDefinitionSchema = z.object({
   graphType: z.enum(['narrative_flow', 'system_graph', 'quest_flow']).default('narrative_flow'),
   summary: z.string().default(''),
   entryNodeKey: z.string().nullable().default(null),
-  metadata: z.record(z.string(), z.unknown()).default({}),
-  llmHints: z.record(z.string(), z.unknown()).default({}),
+  metadata: looseRecordSchema.default({}),
+  llmHints: looseRecordSchema.default({}),
   nodes: z.array(nodeDefinitionSchema).default([]),
   edges: z.array(edgeDefinitionSchema).default([]),
 })
@@ -332,8 +380,8 @@ export const assetDefinitionSchema = z.object({
   kind: assetKindSchema,
   mimeType: z.string(),
   storagePath: z.string(),
-  metadata: z.record(z.string(), z.unknown()).default({}),
-  llmHints: z.record(z.string(), z.unknown()).default({}),
+  metadata: looseRecordSchema.default({}),
+  llmHints: looseRecordSchema.default({}),
 })
 
 export const workspaceRoleSchema = z.enum(['owner', 'editor', 'viewer'])
@@ -359,6 +407,7 @@ export const projectSnapshotSchema = z.object({
     isPrimary: z.boolean(),
     updatedAt: z.string(),
   }),
+  archetypes: z.array(archetypeDefinitionSchema).default([]),
   definitions: z.array(definitionBaseSchema),
   graphs: z.array(graphDefinitionSchema),
   assets: z.array(assetDefinitionSchema),
@@ -384,6 +433,36 @@ export const projectSnapshotSchema = z.object({
 
 export const patchOperationSchema = z.discriminatedUnion('op', [
   z.object({
+    op: z.literal('create_archetype'),
+    key: z.string(),
+    payload: archetypeDefinitionSchema.partial(),
+  }),
+  z.object({
+    op: z.literal('update_archetype'),
+    key: z.string(),
+    changes: z.record(z.string(), z.unknown()),
+  }),
+  z.object({
+    op: z.literal('delete_archetype'),
+    key: z.string(),
+  }),
+  z.object({
+    op: z.literal('add_archetype_field'),
+    key: z.string(),
+    field: fieldDefinitionSchema,
+  }),
+  z.object({
+    op: z.literal('update_archetype_field'),
+    key: z.string(),
+    fieldKey: z.string(),
+    changes: z.record(z.string(), z.unknown()),
+  }),
+  z.object({
+    op: z.literal('remove_archetype_field'),
+    key: z.string(),
+    fieldKey: z.string(),
+  }),
+  z.object({
     op: z.literal('create_definition'),
     kind: definitionKindSchema,
     key: z.string(),
@@ -397,6 +476,32 @@ export const patchOperationSchema = z.discriminatedUnion('op', [
   z.object({
     op: z.literal('delete_definition'),
     key: z.string(),
+  }),
+  z.object({
+    op: z.literal('set_icon_asset'),
+    key: z.string(),
+    iconAssetKey: z.string().nullable(),
+  }),
+  z.object({
+    op: z.literal('set_archetype'),
+    key: z.string(),
+    archetypeKey: z.string().nullable(),
+  }),
+  z.object({
+    op: z.literal('set_field_value'),
+    key: z.string(),
+    fieldKey: z.string(),
+    value: fieldValueValueSchema,
+  }),
+  z.object({
+    op: z.literal('add_custom_field'),
+    key: z.string(),
+    field: fieldDefinitionSchema,
+  }),
+  z.object({
+    op: z.literal('remove_custom_field'),
+    key: z.string(),
+    fieldKey: z.string(),
   }),
   z.object({
     op: z.literal('attach_component'),
@@ -482,13 +587,17 @@ export const gameSystemBundleSchema = z.object({
     generatedAt: z.string(),
     definitionCount: z.number().int().nonnegative(),
     graphCount: z.number().int().nonnegative(),
+    archetypeCount: z.number().int().nonnegative(),
     assetCount: z.number().int().nonnegative(),
   }),
+  archetypes: z.array(archetypeDefinitionSchema),
   definitions: z.array(definitionBaseSchema),
   graphs: z.array(graphDefinitionSchema),
   assets: z.array(assetDefinitionSchema),
   lookupIndices: z.object({
     definitionsByKind: z.record(z.string(), z.array(z.string())),
+    definitionsByArchetype: z.record(z.string(), z.array(z.string())),
+    archetypesByKind: z.record(z.string(), z.array(z.string())),
     graphEntryNodes: z.record(z.string(), z.string().nullable()),
     assetKeysByKind: z.record(z.string(), z.array(z.string())),
   }),
@@ -498,6 +607,9 @@ export const gameSystemBundleSchema = z.object({
 export type DefinitionKind = z.infer<typeof definitionKindSchema>
 export type DefinitionBase = z.infer<typeof definitionBaseSchema>
 export type ComponentEnvelope = z.infer<typeof componentConfigSchema>
+export type ArchetypeDefinition = z.infer<typeof archetypeDefinitionSchema>
+export type FieldDefinition = z.infer<typeof fieldDefinitionSchema>
+export type FieldValue = z.infer<typeof fieldValueSchema>
 export type GraphDefinition = z.infer<typeof graphDefinitionSchema>
 export type NodeDefinition = z.infer<typeof nodeDefinitionSchema>
 export type EdgeDefinition = z.infer<typeof edgeDefinitionSchema>
@@ -509,6 +621,7 @@ export type GameSystemBundle = z.infer<typeof gameSystemBundleSchema>
 export type EffectOp = z.infer<typeof effectOpSchema>
 
 export const schemaCatalog = {
+  archetypeDefinitionSchema,
   assetDefinitionSchema,
   componentConfigSchema,
   conditionExprSchema,
@@ -516,6 +629,8 @@ export const schemaCatalog = {
   diagnosticSchema,
   edgeDefinitionSchema,
   effectOpSchema,
+  fieldDefinitionSchema,
+  fieldValueSchema,
   formulaExprSchema,
   gameSystemBundleSchema,
   graphDefinitionSchema,

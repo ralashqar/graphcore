@@ -1,4 +1,5 @@
 import type {
+  ArchetypeDefinition,
   AssetDefinition,
   Diagnostic,
   DefinitionBase,
@@ -9,13 +10,26 @@ import type {
 
 export function compileBundle(snapshot: ProjectSnapshot): GameSystemBundle {
   const diagnostics = [
-    ...validateDefinitions(snapshot.definitions),
+    ...validateDefinitions(snapshot.definitions, snapshot.archetypes, snapshot.assets),
     ...snapshot.graphs.flatMap((graph) => validateGraph(graph, snapshot.definitions, snapshot.assets)),
   ]
 
   const definitionsByKind = snapshot.definitions.reduce<Record<string, string[]>>((acc, definition) => {
     acc[definition.kind] ??= []
     acc[definition.kind].push(definition.key)
+    return acc
+  }, {})
+
+  const definitionsByArchetype = snapshot.definitions.reduce<Record<string, string[]>>((acc, definition) => {
+    const archetypeKey = definition.archetypeKey ?? 'untyped'
+    acc[archetypeKey] ??= []
+    acc[archetypeKey].push(definition.key)
+    return acc
+  }, {})
+
+  const archetypesByKind = snapshot.archetypes.reduce<Record<string, string[]>>((acc, archetype) => {
+    acc[archetype.appliesToKind] ??= []
+    acc[archetype.appliesToKind].push(archetype.key)
     return acc
   }, {})
 
@@ -39,13 +53,17 @@ export function compileBundle(snapshot: ProjectSnapshot): GameSystemBundle {
       generatedAt: new Date().toISOString(),
       definitionCount: snapshot.definitions.length,
       graphCount: snapshot.graphs.length,
+      archetypeCount: snapshot.archetypes.length,
       assetCount: snapshot.assets.length,
     },
+    archetypes: snapshot.archetypes,
     definitions: snapshot.definitions,
     graphs: snapshot.graphs,
     assets: snapshot.assets,
     lookupIndices: {
       definitionsByKind,
+      definitionsByArchetype,
+      archetypesByKind,
       graphEntryNodes,
       assetKeysByKind,
     },
@@ -53,9 +71,15 @@ export function compileBundle(snapshot: ProjectSnapshot): GameSystemBundle {
   }
 }
 
-export function validateDefinitions(definitions: DefinitionBase[]): Diagnostic[] {
+export function validateDefinitions(
+  definitions: DefinitionBase[],
+  archetypes: ArchetypeDefinition[],
+  assets: AssetDefinition[],
+): Diagnostic[] {
   const diagnostics: Diagnostic[] = []
   const seenKeys = new Set<string>()
+  const assetKeys = new Set(assets.map((asset) => asset.key))
+  const archetypesByKey = new Map(archetypes.map((archetype) => [archetype.key, archetype]))
 
   for (const definition of definitions) {
     if (seenKeys.has(definition.key)) {
@@ -78,6 +102,58 @@ export function validateDefinitions(definitions: DefinitionBase[]): Diagnostic[]
         graphKey: null,
         nodeKey: null,
       })
+    }
+
+    if (definition.iconAssetKey && !assetKeys.has(definition.iconAssetKey)) {
+      diagnostics.push({
+        level: 'error',
+        code: 'missing_definition_icon',
+        message: `Definition "${definition.key}" references missing icon asset "${definition.iconAssetKey}".`,
+        graphKey: null,
+        nodeKey: null,
+      })
+    }
+
+    if (definition.archetypeKey) {
+      const archetype = archetypesByKey.get(definition.archetypeKey)
+
+      if (!archetype) {
+        diagnostics.push({
+          level: 'error',
+          code: 'missing_archetype',
+          message: `Definition "${definition.key}" references missing archetype "${definition.archetypeKey}".`,
+          graphKey: null,
+          nodeKey: null,
+        })
+        continue
+      }
+
+      if (archetype.appliesToKind !== definition.kind) {
+        diagnostics.push({
+          level: 'error',
+          code: 'archetype_kind_mismatch',
+          message: `Definition "${definition.key}" uses archetype "${definition.archetypeKey}" for kind "${archetype.appliesToKind}".`,
+          graphKey: null,
+          nodeKey: null,
+        })
+      }
+
+      const knownFields = new Set([
+        ...archetype.fields.map((field) => field.key),
+        ...definition.customFields.map((field) => field.key),
+      ])
+
+      for (const fieldValue of definition.fieldValues) {
+        if (!knownFields.has(fieldValue.fieldKey)) {
+          diagnostics.push({
+            level: 'warning',
+            code: 'unknown_field_value',
+            message: `Definition "${definition.key}" has value for unknown field "${fieldValue.fieldKey}".`,
+            graphKey: null,
+            nodeKey: null,
+          })
+        }
+      }
     }
   }
 
