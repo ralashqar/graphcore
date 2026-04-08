@@ -9,3 +9,5 @@ Prompt-based edits never write directly to authoring tables.
 5. Recompile and publish a release bundle.
 
 The initial edge functions in `supabase/functions/prompt-patch` and `supabase/functions/apply-patch` provide the first reviewable workflow foundation.
+
+Provider-backed AI transport now lives behind `supabase/functions/ai-openai` and `supabase/functions/ai-fal`, so prompt-based graph generation can call models without exposing API keys in the client.
