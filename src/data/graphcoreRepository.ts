@@ -1,6 +1,7 @@
 import { compileBundle } from '../domain/compiler'
 import { BASELINE_ARCHETYPES, hasMissingBaselineArchetypes } from '../domain/bootstrapSeeds'
 import { demoProjectSnapshot } from '../domain/demo-data'
+import { createGameSpecFromArchetype } from '../domain/gameArchetypes'
 import {
   projectSnapshotSchema,
   type ArchetypeDefinition,
@@ -1063,11 +1064,31 @@ export async function proposePatch(request: PromptPatchRequest): Promise<PromptP
     const bootstrapSpec =
       request.gameSpec
       ?? snapshot.gameSpec
-      ?? createDefaultGameSpec(
-        request.selectedPresetIds?.filter((presetId) => presetId.startsWith('pack.')) ?? ['pack.rpg_core'],
-      )
+      ?? (request.gameArchetypeId
+        ? createGameSpecFromArchetype(request.gameArchetypeId, request.gameConceptPrompt ?? request.prompt)
+        : createDefaultGameSpec(
+            request.selectedPresetIds?.filter((presetId) => presetId.startsWith('pack.')) ?? ['pack.rpg_core'],
+          ))
 
     return {
+      requestSummary: bootstrapSpec.title?.trim()
+        ? `Bootstrap ${bootstrapSpec.title}`
+        : 'Bootstrap game data layer',
+      executionPlan: {
+        classification: 'bootstrap',
+        requiresDependencies: true,
+        dependencyKinds: ['archetype', 'item', 'character', 'ability', 'location', 'market'],
+        graphJobCount: 0,
+        graphJobs: [],
+      },
+      activityEntries: [
+        {
+          phase: 'fallback',
+          status: 'completed',
+          title: 'Local bootstrap fallback built a starter game spec.',
+          detail: request.gameArchetypeId ? `Used ${request.gameArchetypeId} as the top-level game archetype.` : 'Used the default preset pack fallback.',
+        },
+      ],
       summary: bootstrapSpec.title?.trim()
         ? `Bootstrap ${bootstrapSpec.title}`
         : 'Bootstrap game data layer',

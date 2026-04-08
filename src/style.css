@@ -853,21 +853,35 @@ code {
 .prompt-dock {
   position: sticky;
   bottom: 12px;
-  padding: 16px 18px 18px;
+  min-height: 184px;
+  max-height: 56vh;
+  overflow: auto;
+  resize: vertical;
+  padding: 14px 18px 16px;
   border-radius: 24px;
   background:
     linear-gradient(135deg, rgba(94, 234, 212, 0.05), transparent 28%),
     var(--bg-elev-1);
 }
 
+.prompt-dock-resize-handle {
+  width: 56px;
+  height: 5px;
+  margin: 0 auto 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+}
+
 .prompt-dock-head {
   display: flex;
   align-items: flex-end;
+  justify-content: space-between;
+  gap: 14px;
 }
 
 .prompt-dock-head h2 {
   margin-top: 6px;
-  font-size: 1.05rem;
+  font-size: 1rem;
   font-weight: 600;
 }
 
@@ -881,7 +895,11 @@ code {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 12px;
-  margin-top: 14px;
+  margin-top: 10px;
+}
+
+.compact-prompt-controls {
+  grid-template-columns: minmax(180px, 240px);
 }
 
 .prompt-preset-row {
@@ -893,9 +911,9 @@ code {
 
 .prompt-composer {
   width: 100%;
-  min-height: 88px;
-  padding: 16px 18px;
-  resize: vertical;
+  min-height: 92px;
+  padding: 14px 16px;
+  resize: none;
   border-radius: 18px;
   border: 1px solid var(--line-strong);
   background: rgba(5, 10, 16, 0.82);
@@ -1006,6 +1024,18 @@ button:disabled {
   animation: stageEnter 240ms ease;
 }
 
+.bootstrap-dialog-minimal {
+  width: min(760px, 100%);
+  min-height: min(760px, calc(100vh - 56px));
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  gap: 22px;
+  padding: 34px;
+  background:
+    radial-gradient(circle at top right, rgba(245, 158, 11, 0.14), transparent 28%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.01)),
+    rgba(8, 13, 21, 0.97);
+}
+
 .bootstrap-hero,
 .bootstrap-footer,
 .bootstrap-nav,
@@ -1025,10 +1055,19 @@ button:disabled {
   max-width: 10ch;
 }
 
+.bootstrap-hero-minimal h2 {
+  max-width: 11ch;
+  font-size: clamp(2.2rem, 4vw, 3.8rem);
+}
+
 .bootstrap-progress {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
+}
+
+.bootstrap-progress-minimal {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .bootstrap-step,
@@ -1051,6 +1090,10 @@ button:disabled {
   padding: 14px 16px;
   border-radius: 18px;
   cursor: pointer;
+}
+
+.minimal-step {
+  cursor: default;
 }
 
 .bootstrap-step span {
@@ -1086,6 +1129,19 @@ button:disabled {
   gap: 18px;
 }
 
+.bootstrap-stage {
+  min-height: 0;
+  display: grid;
+  align-items: center;
+}
+
+.bootstrap-slide {
+  display: grid;
+  gap: 24px;
+  align-content: center;
+  min-height: 100%;
+}
+
 .bootstrap-main,
 .bootstrap-sidebar {
   min-height: 0;
@@ -1112,6 +1168,11 @@ button:disabled {
 .bootstrap-copy-block {
   display: grid;
   gap: 8px;
+}
+
+.bootstrap-copy-centered {
+  justify-items: start;
+  max-width: 560px;
 }
 
 .bootstrap-copy-block h3 {
@@ -1151,11 +1212,41 @@ button:disabled {
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
 }
 
+.bootstrap-field {
+  max-width: 100%;
+}
+
+.bootstrap-field select,
+.bootstrap-field textarea {
+  width: 100%;
+}
+
+.bootstrap-summary-panel {
+  display: grid;
+  gap: 10px;
+  padding: 18px 20px;
+  border-radius: 22px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.bootstrap-summary-panel p,
+.bootstrap-summary-panel span {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
 .bootstrap-review-card {
   display: grid;
   gap: 10px;
   padding: 18px;
   border-radius: 20px;
+}
+
+.bootstrap-review-card-minimal {
+  min-height: 180px;
+  align-content: start;
 }
 
 .bootstrap-review-card p,
@@ -1168,6 +1259,10 @@ button:disabled {
 .bootstrap-footer {
   justify-content: space-between;
   gap: 12px;
+}
+
+.bootstrap-footer-minimal {
+  align-items: center;
 }
 
 .bootstrap-nav {
