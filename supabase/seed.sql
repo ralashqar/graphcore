@@ -1,5 +1,3 @@
-insert into public.todos (name, is_complete)
-values
-  ('Create the initial Supabase schema', true),
-  ('Point the Vite app at the local Supabase stack', false),
-  ('Deploy the healthcheck edge function', false);
+-- GraphCore uses authenticated workspaces and RLS-protected authoring data.
+-- Seed data is intentionally omitted here because the initial flow expects a signed-in
+-- user to create a workspace and project through the application or SQL scripts.
