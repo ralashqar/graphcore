@@ -6,9 +6,24 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "supabase:start": "npx supabase start",
+    "supabase:stop": "npx supabase stop",
+    "supabase:status": "npx supabase status",
+    "supabase:db:reset": "npx supabase db reset",
+    "supabase:functions:serve": "npx supabase functions serve",
+    "supabase:link": "npx supabase link --project-ref znwdatidqdkzidempvkt",
+    "supabase:db:push": "npx supabase db push"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.102.1",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
   },
   "devDependencies": {
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^4.7.0",
     "typescript": "~6.0.2",
     "vite": "^6.4.2"
   }
