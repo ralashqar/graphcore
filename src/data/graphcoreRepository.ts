@@ -1,5 +1,5 @@
 import { compileBundle } from '../domain/compiler'
-import { BASELINE_ITEM_ARCHETYPES, hasMissingBaselineItemArchetypes } from '../domain/bootstrapSeeds'
+import { BASELINE_ARCHETYPES, hasMissingBaselineArchetypes } from '../domain/bootstrapSeeds'
 import { demoProjectSnapshot } from '../domain/demo-data'
 import {
   projectSnapshotSchema,
@@ -12,6 +12,7 @@ import {
   type PatchOperation,
   type ProjectSnapshot,
 } from '../domain/graphcore'
+import { buildBootstrapPatch, createDefaultGameSpec } from '../domain/presetCatalog'
 import type { PromptPatchRequest, PromptPatchResponse } from '../domain/prompting'
 import { supabase } from '../utils/supabase'
 import type { FunctionsHttpError, Session } from '@supabase/supabase-js'
@@ -37,6 +38,10 @@ function titleCase(value: string) {
     .filter(Boolean)
     .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
     .join(' ')
+}
+
+function isMissingAbilityEnumError(message: string | undefined) {
+  return typeof message === 'string' && message.includes('invalid input value for enum definition_kind: "ability"')
 }
 
 function bootstrapSeedFromSession(session: Session) {
@@ -117,6 +122,75 @@ function sanitizePromptPatchResponse(response: PromptPatchResponse, request: Pro
   return visibleResponse
 }
 
+function prettyNameFromKey(key: string) {
+  return key
+    .replace(/^[^.]+\./, '')
+    .split(/[._-]+/)
+    .filter(Boolean)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(' ')
+}
+
+function defaultComponentsForKind(kind: DefinitionBase['kind']): ComponentEnvelope[] {
+  switch (kind) {
+    case 'character':
+      return [
+        {
+          type: 'inventory',
+          config: {
+            startingItems: [],
+            capacityFormula: null,
+          },
+        },
+      ]
+    case 'ability':
+      return [
+        {
+          type: 'ability_profile',
+          config: {
+            targetMode: 'enemy',
+            cooldownSeconds: 0,
+            castTimeSeconds: 0,
+            resourceCostItemKey: null,
+            resourceCostQuantity: 0,
+            effectOps: [],
+          },
+        },
+      ]
+    case 'market':
+      return [
+        {
+          type: 'market_inventory',
+          config: {
+            trades: [],
+          },
+        },
+      ]
+    case 'location':
+      return [
+        {
+          type: 'location_state',
+          config: {
+            region: 'frontier',
+            isUnlockedByDefault: true,
+            linkedGraphKeys: [],
+            linkedMarketKeys: [],
+            unlockTokenKey: null,
+          },
+        },
+      ]
+    default:
+      return []
+  }
+}
+
+function localPatchDiagnostics(fallbackReason: string | null) {
+  return [
+    'Fallback patch generated locally because the prompt backend was unavailable.',
+    fallbackReason ? `Reason: ${fallbackReason}` : 'Reason: unknown prompt backend failure.',
+  ]
+}
+
 async function invokeAuthedFunction<TResponse>(
   functionName: string,
   body: Record<string, unknown>,
@@ -142,31 +216,39 @@ async function seedBaselineArchetypesDirect(draftId: string, userId: string) {
 
   const existingArchetypes = existingArchetypesResponse.data ?? []
   const existingByKey = new Map(existingArchetypes.map((row) => [row.key, row.id]))
-  const missingSeeds = BASELINE_ITEM_ARCHETYPES.filter((seed) => !existingByKey.has(seed.key))
+  const missingSeeds = BASELINE_ARCHETYPES.filter((seed) => !existingByKey.has(seed.key))
 
   if (missingSeeds.length > 0) {
+    const seedRows = (seeds: typeof missingSeeds) =>
+      seeds.map((seed) => ({
+        draft_id: draftId,
+        key: seed.key,
+        name: seed.name,
+        summary: seed.summary,
+        definition_kind: seed.appliesToKind,
+        icon_asset_key: seed.iconAssetKey,
+        metadata: seed.metadata,
+        llm_hints: seed.llmHints,
+        created_by: userId,
+      }))
+
     const insertResponse = await supabase
       .from('project_archetypes')
-      .insert(
-        missingSeeds.map((seed) => ({
-          draft_id: draftId,
-          key: seed.key,
-          name: seed.name,
-          summary: seed.summary,
-          definition_kind: seed.appliesToKind,
-          icon_asset_key: seed.iconAssetKey,
-          metadata: seed.metadata,
-          llm_hints: seed.llmHints,
-          created_by: userId,
-        })),
-      )
+      .insert(seedRows(missingSeeds))
       .select('id, key')
 
-    if (insertResponse.error) {
-      throw new Error(insertResponse.error.message)
+    const recoveredResponse = insertResponse.error && isMissingAbilityEnumError(insertResponse.error.message)
+      ? await supabase
+          .from('project_archetypes')
+          .insert(seedRows(missingSeeds.filter((seed) => seed.appliesToKind !== 'ability')))
+          .select('id, key')
+      : insertResponse
+
+    if (recoveredResponse.error) {
+      throw new Error(recoveredResponse.error.message)
     }
 
-    for (const row of insertResponse.data ?? []) {
+    for (const row of recoveredResponse.data ?? []) {
       existingByKey.set(row.key, row.id)
     }
   }
@@ -191,7 +273,7 @@ async function seedBaselineArchetypesDirect(draftId: string, userId: string) {
     (existingFieldsResponse.data ?? []).map((row) => `${row.archetype_id}:${row.key}`),
   )
 
-  const fieldRows = BASELINE_ITEM_ARCHETYPES.flatMap((seed) => {
+  const fieldRows = BASELINE_ARCHETYPES.flatMap((seed) => {
     const archetypeId = existingByKey.get(seed.key)
     if (!archetypeId) {
       return []
@@ -433,7 +515,7 @@ export async function loadProjectSnapshot(): Promise<SnapshotLoadResult> {
 
   const draftResponse = await supabase
     .from('project_drafts')
-    .select('id, name, version, is_primary, updated_at')
+    .select('id, name, version, is_primary, updated_at, metadata')
     .eq('project_id', project.id)
     .order('is_primary', { ascending: false })
     .order('updated_at', { ascending: false })
@@ -573,7 +655,12 @@ export async function loadProjectSnapshot(): Promise<SnapshotLoadResult> {
       version: draft.version,
       isPrimary: draft.is_primary,
       updatedAt: draft.updated_at,
+      metadata: draft.metadata ?? {},
     },
+    gameSpec:
+      draft.metadata && typeof draft.metadata === 'object' && draft.metadata !== null && 'gameSpec' in draft.metadata
+        ? (draft.metadata as { gameSpec?: unknown }).gameSpec
+        : null,
     archetypes: archetypes.map((archetype) => ({
       id: archetype.id,
       key: archetype.key,
@@ -727,7 +814,7 @@ export async function ensureLiveProjectSnapshot(): Promise<SnapshotLoadResult> {
   const initial = await loadProjectSnapshot()
 
   if (!session || initial.source === 'supabase' || !shouldBootstrapLiveProject(initial.reason)) {
-    if (session && initial.source === 'supabase' && hasMissingBaselineItemArchetypes(initial.snapshot.archetypes)) {
+    if (session && initial.source === 'supabase' && hasMissingBaselineArchetypes(initial.snapshot.archetypes)) {
       await seedBaselineArchetypesDirect(initial.snapshot.draft.id, session.user.id)
       return loadProjectSnapshot()
     }
@@ -972,7 +1059,156 @@ export async function proposePatch(request: PromptPatchRequest): Promise<PromptP
     .replace(/^_+|_+$/g, '')
     .slice(0, 32) || 'generated'
 
-  if (prompt.toLowerCase().includes('archetype')) {
+  if (request.intent === 'bootstrap_game' || request.phase === 'spec' || request.gameSpec) {
+    const bootstrapSpec =
+      request.gameSpec
+      ?? snapshot.gameSpec
+      ?? createDefaultGameSpec(
+        request.selectedPresetIds?.filter((presetId) => presetId.startsWith('pack.')) ?? ['pack.rpg_core'],
+      )
+
+    return {
+      summary: bootstrapSpec.title?.trim()
+        ? `Bootstrap ${bootstrapSpec.title}`
+        : 'Bootstrap game data layer',
+      operations: buildBootstrapPatch(bootstrapSpec),
+      diagnostics: localPatchDiagnostics(fallbackReason),
+      assistantNotes: fallbackReason
+        ? `Hosted prompt orchestration was unavailable. Generated a deterministic bootstrap patch from the current game spec. ${fallbackReason}`
+        : 'Hosted prompt orchestration was unavailable. Generated a deterministic bootstrap patch from the current game spec.',
+    }
+  }
+
+  const normalizedPrompt = prompt.toLowerCase()
+
+  if (/\b(fire mage|enemy caster|caster enemy|mage enemy)\b/.test(normalizedPrompt)) {
+    const enemyKey = `character.${slug}`
+    return {
+      summary: 'Add caster enemy',
+      operations: [
+        { op: 'instantiate_archetype_preset', presetId: 'character.enemy_caster' },
+        { op: 'instantiate_definition_preset', presetId: 'ability.fireball' },
+        {
+          op: 'create_definition',
+          kind: 'character',
+          key: enemyKey,
+          payload: {
+            name: prettyNameFromKey(enemyKey),
+            summary: 'Preset-backed enemy caster with a starter fire spell.',
+            archetypeKey: 'character.enemy_caster',
+            metadata: { controlledBy: 'ai' },
+            components: [
+              ...defaultComponentsForKind('character'),
+              {
+                type: 'ability_loadout',
+                config: {
+                  entries: [
+                    {
+                      abilityKey: 'ability.fireball',
+                      slotKey: 'primary',
+                      inputBinding: null,
+                      cooldownGroup: 'offense',
+                      unlockTokenKey: null,
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+      ],
+      diagnostics: localPatchDiagnostics(fallbackReason),
+      assistantNotes: 'Local fallback preferred existing presets for the enemy archetype and fire ability.',
+    }
+  }
+
+  if (/\bmarket\b|\bvendor\b|\bshop\b/.test(normalizedPrompt)) {
+    const marketKey = `market.${slug}`
+    return {
+      summary: 'Add market',
+      operations: [
+        { op: 'instantiate_archetype_preset', presetId: 'market.vendor_basic' },
+        { op: 'instantiate_definition_preset', presetId: 'currency.gold' },
+        {
+          op: 'create_definition',
+          kind: 'market',
+          key: marketKey,
+          payload: {
+            name: prettyNameFromKey(marketKey),
+            summary: 'Starter market built from the vendor preset.',
+            archetypeKey: 'market.vendor_basic',
+            components: [
+              {
+                type: 'market_inventory',
+                config: {
+                  trades: [],
+                },
+              },
+            ],
+          },
+        },
+      ],
+      diagnostics: localPatchDiagnostics(fallbackReason),
+      assistantNotes: 'Local fallback created a preset-backed market and ensured a starter currency exists.',
+    }
+  }
+
+  if (/\blocation\b|\bhub\b|\bsafehouse\b|\bdungeon\b/.test(normalizedPrompt)) {
+    const locationPresetId = /\bhub\b/.test(normalizedPrompt)
+      ? 'location.hub'
+      : /\bsafehouse\b/.test(normalizedPrompt)
+        ? 'location.safehouse'
+        : 'location.dungeon'
+    const locationKey = `location.${slug}`
+    const wantsVendor = /\bvendor\b|\bmarket\b|\bshop\b/.test(normalizedPrompt)
+    return {
+      summary: 'Add location',
+      operations: [
+        { op: 'instantiate_archetype_preset', presetId: locationPresetId },
+        ...(wantsVendor ? [{ op: 'instantiate_archetype_preset', presetId: 'market.vendor_basic' } as PatchOperation] : []),
+        ...(wantsVendor ? [{ op: 'instantiate_definition_preset', presetId: 'currency.gold' } as PatchOperation] : []),
+        {
+          op: 'create_definition',
+          kind: 'location',
+          key: locationKey,
+          payload: {
+            name: prettyNameFromKey(locationKey),
+            summary: 'Starter location created from the preset library.',
+            archetypeKey: locationPresetId,
+            components: [
+              {
+                type: 'location_state',
+                config: {
+                  region: 'frontier',
+                  isUnlockedByDefault: true,
+                  linkedGraphKeys: [],
+                  linkedMarketKeys: wantsVendor ? [`market.${slug}_vendor`] : [],
+                  unlockTokenKey: null,
+                },
+              },
+            ],
+          },
+        },
+        ...(wantsVendor
+          ? [{
+              op: 'create_definition',
+              kind: 'market',
+              key: `market.${slug}_vendor`,
+              payload: {
+                name: `${prettyNameFromKey(locationKey)} Vendor`,
+                summary: 'Vendor attached to the generated location.',
+                archetypeKey: 'market.vendor_basic',
+                components: defaultComponentsForKind('market'),
+              },
+            } satisfies PatchOperation]
+          : []),
+      ],
+      diagnostics: localPatchDiagnostics(fallbackReason),
+      assistantNotes: 'Local fallback used location and market presets before inventing new schema.',
+    }
+  }
+
+  if (normalizedPrompt.includes('archetype')) {
     return {
       summary: `Draft archetype patch generated from prompt: ${prompt.slice(0, 80)}`,
       operations: [
@@ -1005,8 +1241,7 @@ export async function proposePatch(request: PromptPatchRequest): Promise<PromptP
         },
       ] as PatchOperation[],
       diagnostics: [
-        'Fallback patch generated locally because the prompt backend was unavailable.',
-        fallbackReason ? `Reason: ${fallbackReason}` : 'Reason: unknown prompt backend failure.',
+        ...localPatchDiagnostics(fallbackReason),
       ],
       assistantNotes: fallbackReason
         ? `Hosted prompt orchestrator was unavailable. Local fallback was used instead. ${fallbackReason}`
@@ -1057,8 +1292,7 @@ export async function proposePatch(request: PromptPatchRequest): Promise<PromptP
         },
       ] as PatchOperation[],
       diagnostics: [
-        'Fallback patch generated locally because the prompt backend was unavailable.',
-        fallbackReason ? `Reason: ${fallbackReason}` : 'Reason: unknown prompt backend failure.',
+        ...localPatchDiagnostics(fallbackReason),
       ],
       assistantNotes: fallbackReason
         ? `Hosted prompt orchestrator was unavailable. Local graph fallback was used instead. ${fallbackReason}`
@@ -1099,7 +1333,7 @@ export async function proposePatch(request: PromptPatchRequest): Promise<PromptP
           },
         },
       ] as PatchOperation[],
-      diagnostics: ['Fallback patch generated locally because the prompt backend was unavailable.'],
+      diagnostics: localPatchDiagnostics(fallbackReason),
       assistantNotes: 'The hosted prompt orchestrator was unavailable, so GraphCore generated a minimal local patch preview.',
     }
   }
@@ -1116,19 +1350,17 @@ export async function proposePatch(request: PromptPatchRequest): Promise<PromptP
             .split('_')
             .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
             .join(' '),
-          summary: 'Review and refine this generated item before applying it.',
+          summary: 'Review and refine this generated definition before applying it.',
+          components: defaultComponentsForKind('item'),
         },
       },
       {
         op: 'set_archetype',
         key: `item.${slug}`,
-        archetypeKey: prompt.toLowerCase().includes('potion') ? 'item.consumable' : 'item.utility',
+        archetypeKey: normalizedPrompt.includes('potion') ? 'item.consumable' : 'item.utility',
       },
     ] as PatchOperation[],
-    diagnostics: [
-      'Fallback patch generated locally because the prompt backend was unavailable.',
-      fallbackReason ? `Reason: ${fallbackReason}` : 'Reason: unknown prompt backend failure.',
-    ],
+    diagnostics: localPatchDiagnostics(fallbackReason),
     assistantNotes: fallbackReason
       ? `Hosted prompt orchestrator was unavailable. Local fallback was used instead. ${fallbackReason}`
       : 'Hosted prompt orchestrator was unavailable. Local fallback was used instead.',

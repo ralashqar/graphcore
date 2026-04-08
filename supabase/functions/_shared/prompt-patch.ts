@@ -1,3 +1,11 @@
+import {
+  archetypePresetMap,
+  definitionPresetMap,
+  graphPresetMap,
+  packPresetMap,
+  presetCatalog,
+} from '../../../src/domain/presetCatalog.ts'
+
 const templateCatalog = [
   { key: 'start', type: 'start', graphs: ['narrative_flow', 'quest_flow', 'system_graph'] },
   { key: 'story_text', type: 'text', graphs: ['narrative_flow', 'quest_flow'] },
@@ -45,20 +53,30 @@ const fieldTypeMap: Record<string, string> = {
 }
 
 export const CONTENT_PASS_ALLOWED_OPS = new Set([
+  'set_game_spec',
+  'apply_preset_pack',
+  'instantiate_archetype_preset',
+  'instantiate_definition_preset',
   'create_definition',
   'update_definition',
   'set_archetype',
   'set_field_value',
   'create_archetype',
   'add_archetype_field',
+  'update_archetype_field',
+  'remove_archetype_field',
+  'add_custom_field',
+  'remove_custom_field',
   'set_icon_asset',
   'attach_asset',
 ])
 
 export const GRAPH_PASS_ALLOWED_OPS = new Set([
+  'instantiate_graph_preset',
   'create_graph',
   'update_graph',
   'duplicate_graph',
+  'delete_graph',
   'create_node',
   'update_node',
   'update_node_template',
@@ -74,8 +92,78 @@ export const GRAPH_PASS_ALLOWED_OPS = new Set([
   'set_node_media',
 ])
 
-export const CONTENT_PASS_MAX_OPS = 12
+export const CONTENT_PASS_MAX_OPS = 14
 export const GRAPH_PASS_MAX_OPS = 18
+
+function summarizePreset(presetId: string) {
+  const archetypePreset = archetypePresetMap.get(presetId)
+  if (archetypePreset) {
+    return {
+      id: presetId,
+      kind: 'archetype',
+      appliesToKind: archetypePreset.archetype.appliesToKind,
+      name: archetypePreset.archetype.name,
+      summary: archetypePreset.archetype.summary,
+      tags: archetypePreset.tags,
+    }
+  }
+
+  const definitionPreset = definitionPresetMap.get(presetId)
+  if (definitionPreset) {
+    return {
+      id: presetId,
+      kind: 'definition',
+      appliesToKind: definitionPreset.definition.kind,
+      name: definitionPreset.definition.name,
+      summary: definitionPreset.definition.summary,
+      tags: definitionPreset.tags,
+    }
+  }
+
+  const graphPreset = graphPresetMap.get(presetId)
+  if (graphPreset) {
+    return {
+      id: presetId,
+      kind: 'graph',
+      appliesToKind: 'graph',
+      name: graphPreset.id,
+      summary: graphPreset.tags.join(', '),
+      tags: graphPreset.tags,
+    }
+  }
+
+  const packPreset = packPresetMap.get(presetId)
+  if (packPreset) {
+    return {
+      id: presetId,
+      kind: 'pack',
+      appliesToKind: 'pack',
+      name: packPreset.id,
+      summary: `Pack with ${packPreset.archetypePresetIds.length} archetype presets, ${packPreset.definitionPresetIds.length} definition presets, and ${packPreset.graphPresetIds.length} graph presets.`,
+      tags: packPreset.tags,
+    }
+  }
+
+  return null
+}
+
+function buildPresetSummaries(selectedPresetIds: string[] = [], allowedPresetIds: string[] = []) {
+  const ids = [...new Set([...selectedPresetIds, ...allowedPresetIds])]
+  const sourceIds =
+    ids.length > 0
+      ? ids
+      : [
+          ...presetCatalog.packs.map((preset) => preset.id),
+          ...presetCatalog.archetypes.map((preset) => preset.id),
+          ...presetCatalog.definitions.map((preset) => preset.id),
+          ...presetCatalog.graphs.map((preset) => preset.id),
+        ]
+
+  return sourceIds
+    .map((presetId) => summarizePreset(presetId))
+    .filter((preset): preset is NonNullable<ReturnType<typeof summarizePreset>> => preset !== null)
+    .slice(0, 40)
+}
 
 export function buildPromptContext(payload: Record<string, any>) {
   const definitionsByKind: Record<string, string[]> = {}
@@ -94,16 +182,25 @@ export function buildPromptContext(payload: Record<string, any>) {
   return {
     request: {
       prompt: payload.prompt,
+      intent: payload.intent ?? null,
+      phase: payload.phase ?? null,
       targetMode: payload.targetMode ?? 'auto',
       requestedGraphType: payload.graphType ?? null,
       selectedGraphKey: payload.context?.graphKey ?? null,
       selectedNodeKey: payload.context?.nodeKey ?? null,
       selectedEdgeKey: payload.context?.edgeKey ?? null,
       target: payload.context?.target ?? null,
+      operationBudget: payload.operationBudget ?? null,
     },
+    gameSpec: payload.gameSpec ?? payload.snapshot.gameSpec ?? null,
+    presetCatalogVersion: presetCatalog.version,
+    selectedPresetIds: payload.selectedPresetIds ?? [],
+    allowedPresetIds: payload.allowedPresetIds ?? [],
+    presetSummaries: buildPresetSummaries(payload.selectedPresetIds ?? [], payload.allowedPresetIds ?? []),
     project: {
       workspace: payload.snapshot.workspace,
       project: payload.snapshot.project,
+      draft: payload.snapshot.draft,
     },
     selectedGraph: selectedGraph
       ? {
@@ -141,87 +238,103 @@ export function buildPromptContext(payload: Record<string, any>) {
 
 export function contentPassSystemPrompt() {
   return [
-    'You generate GraphCore patch operations for GraphCore.',
+    'You generate GraphCore patch operations.',
     'Return JSON only.',
     'Use exactly: { "summary": string, "assistantNotes"?: string, "diagnostics": string[], "operations": object[] }.',
     'Do not wrap JSON in markdown fences.',
-    'Use the shortest valid JSON possible.',
-    'Keep summary under 16 words.',
-    'Omit assistantNotes unless essential.',
-    'Use diagnostics only for real caveats. Prefer diagnostics: [].',
-    'This is the content support pass only.',
-    'Only create supporting content needed for the requested graph or content change.',
+    'Prefer preset-based operations over raw create operations.',
+    'Use set_game_spec only when the request changes or initializes the game data layer.',
+    'Use apply_preset_pack to record selected packs.',
+    'Use instantiate_archetype_preset and instantiate_definition_preset whenever a matching preset exists.',
+    'Only create new archetypes or definitions from scratch when no preset fits.',
     'Do not create graphs, nodes, or edges in this pass.',
     `Allowed ops only: ${[...CONTENT_PASS_ALLOWED_OPS].join(', ')}.`,
     `Keep operations.length <= ${CONTENT_PASS_MAX_OPS}.`,
-    'Prefer existing archetypes. If baseline item archetypes are present, reuse them instead of creating new archetypes.',
-    'Only create an archetype if the supplied context truly lacks a suitable one.',
-    'All content references use stable keys. Never use fields like definitionKey unless the op schema explicitly supports them.',
-    'Compact content patch examples:',
-    'create_archetype => {"op":"create_archetype","key":"item.progression_token","payload":{"name":"Progression Token","summary":"Hidden progression marker","appliesToKind":"item"}}',
-    'add_archetype_field => {"op":"add_archetype_field","key":"item.progression_token","field":{"id":"field-token-hidden","key":"is_hidden","label":"Hidden","fieldType":"boolean","description":"Whether the token is hidden.","required":true,"defaultValue":true,"constraints":{},"sortOrder":1}}',
-    'create_definition => {"op":"create_definition","kind":"item","key":"item.hooded_lantern","payload":{"name":"Hooded Lantern","summary":"A shuttered lantern.","status":"draft"}}',
-    'set_archetype => {"op":"set_archetype","key":"item.hooded_lantern","archetypeKey":"item.utility"}',
-    'set_field_value => {"op":"set_field_value","key":"item.hooded_lantern","fieldKey":"equip_slot","value":"hand"}',
-    'Progression tokens are still kind "item", not a separate kind.',
-    'If no supporting content is needed, return operations: [].',
-    'Do not restate the user prompt or explain obvious choices.',
-    'Prefer fewer correct operations over many speculative ones.',
+    'Currencies and progression tokens are still kind "item".',
+    'Abilities are first-class definitions with kind "ability".',
+    'Keep changes compact and prefer minimal overrides after preset instantiation.',
   ].join('\n')
 }
 
 export function graphPassSystemPrompt() {
   return [
-    'You generate GraphCore patch operations for GraphCore.',
+    'You generate GraphCore graph patch operations.',
     'Return JSON only.',
     'Use exactly: { "summary": string, "assistantNotes"?: string, "diagnostics": string[], "operations": object[] }.',
     'Do not wrap JSON in markdown fences.',
-    'Use the shortest valid JSON possible.',
-    'Keep summary under 16 words.',
-    'Omit assistantNotes unless essential.',
-    'Use diagnostics only for real caveats. Prefer diagnostics: [].',
-    'This is the graph structure pass only.',
+    'Prefer instantiate_graph_preset when a preset already matches the requested structure.',
     'Do not create definitions, archetypes, or assets in this pass.',
     `Allowed ops only: ${[...GRAPH_PASS_ALLOWED_OPS].join(', ')}.`,
     `Keep operations.length <= ${GRAPH_PASS_MAX_OPS}.`,
-    'If targetMode is new_graph, create exactly one graph unless the user explicitly asked for more.',
-    'Creating a graph auto-scaffolds start/end nodes. For graph.bridge_intro, the scaffold keys are start.bridge_intro and end.bridge_intro.',
-    'Prefer compact graph patches:',
-    '1. create_graph',
-    '2. create minimal nodes',
-    '3. set_node_choices for choice branches',
-    '4. set_condition for condition nodes',
-    '5. set_effects for effect nodes',
-    '6. connect_edge for flow',
-    'Keep story/body text brief: one short sentence per narrative node.',
-    'Do not include long atmospheric prose.',
+    'If targetMode is new_graph, create at most one graph unless the prompt explicitly asks for more.',
+    'Creating a graph auto-scaffolds start and end nodes.',
     'Use existing node templates only.',
-    'Never invent new op names or unsupported node templates.',
-    'Compact graph patch examples:',
-    'create_graph => {"op":"create_graph","key":"graph.ashen_hollow_opening","payload":{"name":"Ashen Hollow Opening","graphType":"narrative_flow","summary":"Opening scene at the ruined gate in the rain."}}',
-    'create_node => {"op":"create_node","graphKey":"graph.ashen_hollow_opening","node":{"key":"story.ruined_gate_intro","templateKey":"story_text","title":"Ruined Gate in the Rain","position":{"x":320,"y":160},"body":{"text":"Rain sheets across the broken gate."}}}',
-    'create_choice_node => {"op":"create_node","graphKey":"graph.ashen_hollow_opening","node":{"key":"choice.ruined_gate","templateKey":"choice","title":"What do you do?","position":{"x":620,"y":160},"body":{"text":"The storm hides your movement."}}}',
-    'set_node_choices => {"op":"set_node_choices","graphKey":"graph.ashen_hollow_opening","nodeKey":"choice.ruined_gate","choices":[{"id":"approach","label":"Approach the gate"},{"id":"search","label":"Search the wagon wreck"}]}',
-    'set_condition => {"op":"set_condition","graphKey":"graph.ashen_hollow_opening","nodeKey":"check.has_lantern","condition":{"type":"hasItem","itemKey":"item.hooded_lantern","minQuantity":1}}',
-    'set_effects => {"op":"set_effects","graphKey":"graph.ashen_hollow_opening","nodeKey":"effect.grant_lantern","effects":[{"type":"grantItem","itemKey":"item.hooded_lantern","quantity":1}]}',
-    'connect_edge => {"op":"connect_edge","graphKey":"graph.ashen_hollow_opening","edge":{"key":"edge.start_to_intro","source":{"nodeKey":"start.ashen_hollow_opening","portId":"out"},"target":{"nodeKey":"story.ruined_gate_intro","portId":"in"}}}',
-    'Prefer one create_node plus follow-up set_node_choices/set_condition/set_effects over a huge node object.',
-    'Prefer one item grant effect per effect node unless multiple grants are absolutely necessary.',
-    'Prefer three clear endings over many alternate micro-branches.',
-    'Use content keys provided in context and prior content-support operations.',
-    'Prefer fewer nodes and edges that fully satisfy the prompt over an oversized cinematic graph.',
+    'Keep body text short and structural, not atmospheric.',
+    'Prefer fewer, valid nodes and edges over oversized graphs.',
   ].join('\n')
 }
 
 export function augmentSnapshotForPrompting(snapshot: Record<string, any>, operations: Array<Record<string, any>>) {
   const nextSnapshot = {
     ...snapshot,
+    draft: {
+      ...(snapshot.draft ?? {}),
+      metadata: { ...((snapshot.draft?.metadata as Record<string, unknown> | undefined) ?? {}) },
+    },
+    gameSpec: snapshot.gameSpec ?? null,
     archetypes: [...(snapshot.archetypes ?? [])],
     definitions: [...(snapshot.definitions ?? [])],
+    graphs: [...(snapshot.graphs ?? [])],
   }
 
   for (const operation of operations) {
-    if (!operation || typeof operation.op !== 'string') {
+    if (!operation || typeof operation.op !== 'string') continue
+
+    if (operation.op === 'set_game_spec') {
+      nextSnapshot.gameSpec = operation.gameSpec
+      nextSnapshot.draft.metadata = { ...nextSnapshot.draft.metadata, gameSpec: operation.gameSpec }
+      continue
+    }
+
+    if (operation.op === 'instantiate_archetype_preset' && typeof operation.presetId === 'string') {
+      const preset = archetypePresetMap.get(operation.presetId)
+      if (!preset || nextSnapshot.archetypes.some((archetype: Record<string, any>) => archetype.key === preset.archetype.key)) {
+        continue
+      }
+      nextSnapshot.archetypes.push({
+        id: `archetype-${preset.id}`,
+        ...preset.archetype,
+      })
+      continue
+    }
+
+    if (operation.op === 'instantiate_definition_preset' && typeof operation.presetId === 'string') {
+      const preset = definitionPresetMap.get(operation.presetId)
+      const key = typeof operation.keyOverride === 'string' ? operation.keyOverride : preset?.definition.key
+      if (!preset || !key || nextSnapshot.definitions.some((definition: Record<string, any>) => definition.key === key)) {
+        continue
+      }
+      nextSnapshot.definitions.push({
+        id: `definition-${key}`,
+        ...preset.definition,
+        key,
+        name: typeof operation.nameOverride === 'string' ? operation.nameOverride : preset.definition.name,
+      })
+      continue
+    }
+
+    if (operation.op === 'instantiate_graph_preset' && typeof operation.presetId === 'string') {
+      const preset = graphPresetMap.get(operation.presetId)
+      const key = typeof operation.keyOverride === 'string' ? operation.keyOverride : preset?.id
+      if (!preset || !key || nextSnapshot.graphs.some((graph: Record<string, any>) => graph.key === key)) {
+        continue
+      }
+      nextSnapshot.graphs.push(
+        preset.build({
+          keyOverride: key,
+          nameOverride: typeof operation.nameOverride === 'string' ? operation.nameOverride : undefined,
+        }),
+      )
       continue
     }
 
@@ -533,9 +646,7 @@ function normalizeConnectEdgeOperation(operation: Record<string, any>, index: nu
 
 export function repairOperations(rawOperations: Array<Record<string, any>>) {
   return rawOperations.map((operation, index) => {
-    if (!operation || typeof operation.op !== 'string') {
-      return operation
-    }
+    if (!operation || typeof operation.op !== 'string') return operation
 
     switch (operation.op) {
       case 'create_archetype':
@@ -622,6 +733,20 @@ function definitionKeys(snapshot: Record<string, any>) {
   return grouped
 }
 
+function materializedArchetypeKey(presetId: string) {
+  return archetypePresetMap.get(presetId)?.archetype.key ?? null
+}
+
+function materializedDefinitionKey(operation: Record<string, any>) {
+  if (typeof operation.keyOverride === 'string') return operation.keyOverride
+  return definitionPresetMap.get(String(operation.presetId ?? ''))?.definition.key ?? null
+}
+
+function materializedGraphKey(operation: Record<string, any>) {
+  if (typeof operation.keyOverride === 'string') return operation.keyOverride
+  return graphPresetMap.get(String(operation.presetId ?? ''))?.id ?? null
+}
+
 export function validateOperations(snapshot: Record<string, any>, operations: Array<Record<string, any>>, requestedGraphType?: string) {
   const diagnostics: string[] = []
   const normalized: Array<Record<string, any>> = []
@@ -639,7 +764,6 @@ export function validateOperations(snapshot: Record<string, any>, operations: Ar
     ]),
   )
   const assets = new Set((snapshot.assets ?? []).map((asset: Record<string, any>) => asset.key).filter(Boolean))
-
   const hasDef = (kind: string, key: string) => defs[kind]?.has(key) || createdDefs[kind]?.has(key)
 
   for (const [index, raw] of operations.entries()) {
@@ -647,7 +771,59 @@ export function validateOperations(snapshot: Record<string, any>, operations: Ar
       diagnostics.push(`Operation ${index + 1} is missing an op field.`)
       continue
     }
+
     const op = raw.op === 'create_node' ? normalizeNode(raw, index) : raw
+
+    if (op.op === 'set_game_spec') {
+      if (!op.gameSpec || typeof op.gameSpec !== 'object') diagnostics.push('set_game_spec is missing a gameSpec payload.')
+      else normalized.push(op)
+      continue
+    }
+
+    if (op.op === 'apply_preset_pack') {
+      if (!packPresetMap.has(String(op.packId ?? ''))) diagnostics.push(`Unknown preset pack "${String(op.packId ?? '')}".`)
+      else normalized.push(op)
+      continue
+    }
+
+    if (op.op === 'instantiate_archetype_preset') {
+      const archetypeKey = materializedArchetypeKey(String(op.presetId ?? ''))
+      if (!archetypeKey) diagnostics.push(`Unknown archetype preset "${String(op.presetId ?? '')}".`)
+      else if (archetypes.has(archetypeKey) || createdArchetypes.has(archetypeKey)) continue
+      else {
+        createdArchetypes.add(archetypeKey)
+        archetypeFieldKeys.set(archetypeKey, new Set())
+        normalized.push(op)
+      }
+      continue
+    }
+
+    if (op.op === 'instantiate_definition_preset') {
+      const preset = definitionPresetMap.get(String(op.presetId ?? ''))
+      const key = materializedDefinitionKey(op)
+      if (!preset || !key) diagnostics.push(`Unknown definition preset "${String(op.presetId ?? '')}".`)
+      else if (hasDef(preset.definition.kind, key)) continue
+      else {
+        createdDefs[preset.definition.kind] ??= new Set<string>()
+        createdDefs[preset.definition.kind].add(key)
+        normalized.push(op)
+      }
+      continue
+    }
+
+    if (op.op === 'instantiate_graph_preset') {
+      const key = materializedGraphKey(op)
+      if (!graphPresetMap.has(String(op.presetId ?? '')) || !key) diagnostics.push(`Unknown graph preset "${String(op.presetId ?? '')}".`)
+      else if (graphs.has(key)) continue
+      else {
+        graphs.add(key)
+        graphTypes.set(key, requestedGraphType ?? 'narrative_flow')
+        nodeKeysByGraph.set(key, new Set())
+        normalized.push(op)
+      }
+      continue
+    }
+
     if (op.op === 'create_graph') {
       if (!op.key || graphs.has(op.key)) diagnostics.push(`Graph key "${String(op.key)}" is invalid or already exists.`)
       else {
@@ -659,6 +835,7 @@ export function validateOperations(snapshot: Record<string, any>, operations: Ar
       }
       continue
     }
+
     if (op.op === 'create_node') {
       const graphKey = String(op.graphKey ?? '')
       const nodeKey = String(op.node?.key ?? '')
@@ -676,6 +853,7 @@ export function validateOperations(snapshot: Record<string, any>, operations: Ar
       }
       continue
     }
+
     if (op.op === 'connect_edge') {
       const graphKey = String(op.graphKey ?? '')
       const source = String(op.edge?.source?.nodeKey ?? '')
@@ -685,6 +863,7 @@ export function validateOperations(snapshot: Record<string, any>, operations: Ar
       else normalized.push(op)
       continue
     }
+
     if (['set_condition', 'set_effects', 'set_node_body', 'set_node_choices', 'set_node_media', 'update_node', 'update_node_template', 'move_node', 'delete_node'].includes(op.op)) {
       const graphKey = String(op.graphKey ?? '')
       const nodeKey = String(op.nodeKey ?? '')
@@ -693,13 +872,12 @@ export function validateOperations(snapshot: Record<string, any>, operations: Ar
       else normalized.push(op)
       continue
     }
+
     if (op.op === 'create_definition') {
       const kind = String(op.kind ?? '')
       const key = String(op.key ?? '')
       if (!kind || !key) diagnostics.push(`Definition "${key}" is invalid.`)
-      else if (hasDef(kind, key)) {
-        continue
-      }
+      else if (hasDef(kind, key)) continue
       else {
         createdDefs[kind] ??= new Set<string>()
         createdDefs[kind].add(key)
@@ -707,29 +885,25 @@ export function validateOperations(snapshot: Record<string, any>, operations: Ar
       }
       continue
     }
+
     if (op.op === 'create_archetype') {
       const key = String(op.key ?? '')
       if (!key) diagnostics.push(`Archetype "${key}" is invalid.`)
-      else if (archetypes.has(key) || createdArchetypes.has(key)) {
-        continue
-      }
+      else if (archetypes.has(key) || createdArchetypes.has(key)) continue
       else {
         createdArchetypes.add(key)
-        if (!archetypeFieldKeys.has(key)) {
-          archetypeFieldKeys.set(key, new Set())
-        }
+        if (!archetypeFieldKeys.has(key)) archetypeFieldKeys.set(key, new Set())
         normalized.push(op)
       }
       continue
     }
+
     if (op.op === 'add_archetype_field') {
       if (!op.key || (!archetypes.has(op.key) && !createdArchetypes.has(op.key))) diagnostics.push(`Unknown archetype "${String(op.key)}".`)
       else {
         const fieldKeys = archetypeFieldKeys.get(op.key) ?? new Set<string>()
         if (typeof op.field?.key === 'string') {
-          if (fieldKeys.has(op.field.key)) {
-            continue
-          }
+          if (fieldKeys.has(op.field.key)) continue
           fieldKeys.add(op.field.key)
           archetypeFieldKeys.set(op.key, fieldKeys)
         }
@@ -737,20 +911,24 @@ export function validateOperations(snapshot: Record<string, any>, operations: Ar
       }
       continue
     }
+
     if (op.op === 'set_archetype') {
       if (op.archetypeKey !== null && typeof op.archetypeKey === 'string' && !archetypes.has(op.archetypeKey) && !createdArchetypes.has(op.archetypeKey)) diagnostics.push(`Unknown archetype "${op.archetypeKey}".`)
       else normalized.push(op)
       continue
     }
+
     if (op.op === 'set_icon_asset') {
       if (op.iconAssetKey !== null && typeof op.iconAssetKey === 'string' && !assets.has(op.iconAssetKey)) diagnostics.push(`Unknown asset "${op.iconAssetKey}".`)
       else normalized.push(op)
       continue
     }
-    if (['update_definition', 'set_field_value', 'attach_asset', 'update_graph', 'duplicate_graph', 'delete_graph', 'update_edge', 'delete_edge'].includes(op.op)) {
+
+    if (['update_definition', 'set_field_value', 'attach_asset', 'update_graph', 'duplicate_graph', 'delete_graph', 'update_edge', 'delete_edge', 'update_archetype_field', 'remove_archetype_field', 'add_custom_field', 'remove_custom_field'].includes(op.op)) {
       normalized.push(op)
       continue
     }
+
     diagnostics.push(`Unsupported patch op "${op.op}".`)
   }
 

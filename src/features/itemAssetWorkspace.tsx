@@ -18,11 +18,13 @@ type ArchetypeIdentityChanges = Partial<
 type ContentMode = 'items' | 'archetypes'
 type ItemSort = 'name' | 'archetype' | 'key'
 type ArchetypeSort = 'name' | 'field_count' | 'key'
+type DefinitionKindFilter = DefinitionBase['kind'] | 'all'
 
 export function ContentWorkspace({
   archetypes,
   assets,
   definitions,
+  graphKeys,
   items,
   selectedAsset,
   selectedArchetype,
@@ -42,10 +44,12 @@ export function ContentWorkspace({
   onUpdateArchetypeIdentity,
   onUpdateFieldValue,
   onUpdateItemIdentity,
+  onUpdateComponents,
 }: {
   archetypes: ArchetypeDefinition[]
   assets: AssetDefinition[]
   definitions: DefinitionBase[]
+  graphKeys: string[]
   items: DefinitionBase[]
   selectedAsset: AssetDefinition | null
   selectedArchetype: ArchetypeDefinition | null
@@ -65,12 +69,15 @@ export function ContentWorkspace({
   onUpdateArchetypeIdentity: (key: string, changes: ArchetypeIdentityChanges) => void
   onUpdateFieldValue: (itemKey: string, fieldKey: string, value: FieldValue['value']) => void
   onUpdateItemIdentity: (key: string, changes: ItemIdentityChanges) => void
+  onUpdateComponents: (itemKey: string, components: DefinitionBase['components']) => void
 }) {
   const [mode, setMode] = useState<ContentMode>('items')
   const [itemSearch, setItemSearch] = useState('')
   const [itemFilterArchetype, setItemFilterArchetype] = useState('all')
+  const [itemFilterKind, setItemFilterKind] = useState<DefinitionKindFilter>('all')
   const [itemSort, setItemSort] = useState<ItemSort>('name')
   const [archetypeSearch, setArchetypeSearch] = useState('')
+  const [archetypeKindFilter, setArchetypeKindFilter] = useState<DefinitionKindFilter>('all')
   const [archetypeSort, setArchetypeSort] = useState<ArchetypeSort>('name')
 
   const imageAssets = assets.filter((asset) => asset.kind === 'image')
@@ -89,7 +96,8 @@ export function ContentWorkspace({
         item.tags.some((tag) => tag.toLowerCase().includes(query))
       const matchesArchetype =
         itemFilterArchetype === 'all' ? true : (item.archetypeKey ?? 'none') === itemFilterArchetype
-      return matchesQuery && matchesArchetype
+      const matchesKind = itemFilterKind === 'all' ? true : item.kind === itemFilterKind
+      return matchesQuery && matchesArchetype && matchesKind
     })
 
     return next.sort((left, right) => {
@@ -101,7 +109,7 @@ export function ContentWorkspace({
       }
       return left.name.localeCompare(right.name)
     })
-  }, [itemFilterArchetype, itemSearch, itemSort, items])
+  }, [itemFilterArchetype, itemFilterKind, itemSearch, itemSort, items])
 
   const filteredArchetypes = useMemo(() => {
     const query = archetypeSearch.trim().toLowerCase()
@@ -111,7 +119,7 @@ export function ContentWorkspace({
         archetype.name.toLowerCase().includes(query) ||
         archetype.key.toLowerCase().includes(query) ||
         archetype.summary.toLowerCase().includes(query)
-      )
+      ) && (archetypeKindFilter === 'all' ? true : archetype.appliesToKind === archetypeKindFilter)
     })
 
     return next.sort((left, right) => {
@@ -121,7 +129,16 @@ export function ContentWorkspace({
       if (archetypeSort === 'key') return left.key.localeCompare(right.key)
       return left.name.localeCompare(right.name)
     })
-  }, [archetypeSearch, archetypeSort, archetypes])
+  }, [archetypeKindFilter, archetypeSearch, archetypeSort, archetypes])
+
+  function updateComponentConfig(itemKey: string, componentType: DefinitionBase['components'][number]['type'], config: Record<string, unknown>) {
+    const nextComponents = selectedItem
+      ? selectedItem.components.some((component) => component.type === componentType)
+        ? selectedItem.components.map((component) => component.type === componentType ? { ...component, config } : component)
+        : [...selectedItem.components, { type: componentType, config } as DefinitionBase['components'][number]]
+      : []
+    onUpdateComponents(itemKey, nextComponents as DefinitionBase['components'])
+  }
 
   return (
     <div className="focus-layout item-layout">
@@ -133,7 +150,7 @@ export function ContentWorkspace({
               onClick={() => setMode('items')}
               type="button"
             >
-              Items
+              Definitions
             </button>
             <button
               className={mode === 'archetypes' ? 'segment-button is-active' : 'segment-button'}
@@ -148,7 +165,7 @@ export function ContentWorkspace({
             onClick={() => (mode === 'items' ? onCreateItem(selectedArchetype?.key ?? null) : onCreateArchetype())}
             type="button"
           >
-            {mode === 'items' ? '+ New item' : '+ New archetype'}
+            {mode === 'items' ? '+ New definition' : '+ New archetype'}
           </button>
         </div>
 
@@ -160,13 +177,26 @@ export function ContentWorkspace({
               onChange={(event) =>
                 mode === 'items' ? setItemSearch(event.target.value) : setArchetypeSearch(event.target.value)
               }
-              placeholder={mode === 'items' ? 'Search items' : 'Search archetypes'}
+              placeholder={mode === 'items' ? 'Search definitions' : 'Search archetypes'}
               value={mode === 'items' ? itemSearch : archetypeSearch}
             />
           </label>
 
           {mode === 'items' ? (
             <div className="collection-meta-grid">
+              <label className="field-block compact-block">
+                <span>Kind</span>
+                <select value={itemFilterKind} onChange={(event) => setItemFilterKind(event.target.value as DefinitionKindFilter)}>
+                  <option value="all">All kinds</option>
+                  <option value="item">Items</option>
+                  <option value="character">Characters</option>
+                  <option value="ability">Abilities</option>
+                  <option value="location">Locations</option>
+                  <option value="market">Markets</option>
+                  <option value="quest">Quests</option>
+                  <option value="stat">Stats</option>
+                </select>
+              </label>
               <label className="field-block compact-block">
                 <span>Archetype</span>
                 <select value={itemFilterArchetype} onChange={(event) => setItemFilterArchetype(event.target.value)}>
@@ -192,8 +222,15 @@ export function ContentWorkspace({
             <div className="collection-meta-grid">
               <label className="field-block compact-block">
                 <span>Applies To</span>
-                <select value="item" disabled>
-                  <option value="item">Item</option>
+                <select value={archetypeKindFilter} onChange={(event) => setArchetypeKindFilter(event.target.value as DefinitionKindFilter)}>
+                  <option value="all">All kinds</option>
+                  <option value="item">Items</option>
+                  <option value="character">Characters</option>
+                  <option value="ability">Abilities</option>
+                  <option value="location">Locations</option>
+                  <option value="market">Markets</option>
+                  <option value="quest">Quests</option>
+                  <option value="stat">Stats</option>
                 </select>
               </label>
               <label className="field-block compact-block">
@@ -213,7 +250,7 @@ export function ContentWorkspace({
 
         <div className="rail-section">
           <div className="collection-status">
-            <span className="section-label">{mode === 'items' ? 'Item registry' : 'Archetype registry'}</span>
+            <span className="section-label">{mode === 'items' ? 'Definition registry' : 'Archetype registry'}</span>
             <strong>{mode === 'items' ? filteredItems.length : filteredArchetypes.length} visible</strong>
           </div>
           <div className="rail-list">
@@ -231,7 +268,7 @@ export function ContentWorkspace({
                     />
                     <div className="item-row-copy">
                       <strong>{item.name}</strong>
-                      <span>{item.archetypeKey ?? 'No archetype'}</span>
+                      <span>{item.kind} · {item.archetypeKey ?? 'No archetype'}</span>
                     </div>
                   </button>
                 ))
@@ -281,8 +318,9 @@ export function ContentWorkspace({
                 </div>
 
                 <div className="editor-heading-copy">
-                  <span className="eyebrow">Item Editor</span>
+                  <span className="eyebrow">Definition Editor</span>
                   <div className="chip-row">
+                    <span className="chip">{selectedItem.kind}</span>
                     <span className="chip">{selectedItem.archetypeKey ?? 'No archetype'}</span>
                     <span className="chip">{resolvedFields.length} fields</span>
                   </div>
@@ -307,7 +345,7 @@ export function ContentWorkspace({
                         rows={3}
                         value={selectedItem.summary}
                         onChange={(event) => onUpdateItemIdentity(selectedItem.key, { summary: event.target.value })}
-                        placeholder="Describe what this item does and how it should be surfaced."
+                        placeholder="Describe what this definition does and how it should be surfaced."
                       />
                     </label>
                   </div>
@@ -351,7 +389,7 @@ export function ContentWorkspace({
                 <div className="section-head">
                   <div>
                     <span className="eyebrow">Structured Values</span>
-                    <h3>{selectedArchetypeForItem?.name ?? 'Item-specific values'}</h3>
+                    <h3>{selectedArchetypeForItem?.name ?? 'Definition-specific values'}</h3>
                   </div>
                   <p className="subtle-line">
                     {selectedArchetypeForItem?.summary ??
@@ -375,22 +413,40 @@ export function ContentWorkspace({
               <div className="editor-section">
                 <div className="section-head">
                   <div>
-                    <span className="eyebrow">Custom Fields</span>
-                    <h3>Extend this item locally</h3>
+                    <span className="eyebrow">Components</span>
+                    <h3>Runtime-linked config</h3>
                   </div>
                   <p className="subtle-line">
-                    Use local fields when one item needs data that should not be shared across the whole archetype.
+                    Preset-backed definitions can still be tuned locally through component data.
                   </p>
                 </div>
-                <AddFieldForm actionLabel="Add item field" onAddField={(field) => onAddCustomField(selectedItem.key, field)} />
+                <DefinitionComponentsEditor
+                  definition={selectedItem}
+                  definitions={definitions}
+                  graphKeys={graphKeys}
+                  onUpdateComponent={(componentType, config) => updateComponentConfig(selectedItem.key, componentType, config)}
+                />
+              </div>
+
+              <div className="editor-section">
+                <div className="section-head">
+                  <div>
+                    <span className="eyebrow">Custom Fields</span>
+                    <h3>Extend this definition locally</h3>
+                  </div>
+                  <p className="subtle-line">
+                    Use local fields when one definition needs data that should not be shared across the whole archetype.
+                  </p>
+                </div>
+                <AddFieldForm actionLabel="Add definition field" onAddField={(field) => onAddCustomField(selectedItem.key, field)} />
               </div>
             </div>
           ) : (
             <EmptyEditor
-              actionLabel="+ New item"
-              body="Create a blank item or switch to prompt mode to generate one from a short design brief."
+              actionLabel="+ New definition"
+              body="Create a blank definition or switch to prompt mode to generate one from a short design brief."
               onAction={() => onCreateItem(selectedArchetype?.key ?? null)}
-              title="No item selected"
+              title="No definition selected"
             />
           )
         ) : selectedArchetype ? (
@@ -437,7 +493,7 @@ export function ContentWorkspace({
                         rows={3}
                         value={selectedArchetype.summary}
                         onChange={(event) => onUpdateArchetypeIdentity(selectedArchetype.key, { summary: event.target.value })}
-                        placeholder="Define the shared schema and defaults for a family of items."
+                        placeholder="Define the shared schema and defaults for a family of game definitions."
                       />
                     </label>
                   </div>
@@ -456,7 +512,9 @@ export function ContentWorkspace({
                   }
                 >
                   <option value="item">Item</option>
+                  <option value="stat">Stat</option>
                   <option value="character">Character</option>
+                  <option value="ability">Ability</option>
                   <option value="location">Location</option>
                   <option value="market">Market</option>
                   <option value="quest">Quest</option>
@@ -714,6 +772,200 @@ export function AssetsWorkspace({
           </div>
         ) : null}
       </section>
+    </div>
+  )
+}
+
+function DefinitionComponentsEditor({
+  definition,
+  definitions,
+  graphKeys,
+  onUpdateComponent,
+}: {
+  definition: DefinitionBase
+  definitions: DefinitionBase[]
+  graphKeys: string[]
+  onUpdateComponent: (componentType: DefinitionBase['components'][number]['type'], config: Record<string, unknown>) => void
+}) {
+  const marketInventory = definition.components.find((component) => component.type === 'market_inventory')
+  const abilityLoadout = definition.components.find((component) => component.type === 'ability_loadout')
+  const abilityProfile = definition.components.find((component) => component.type === 'ability_profile')
+  const locationState = definition.components.find((component) => component.type === 'location_state')
+  const itemOptions = definitions.filter((entry) => entry.kind === 'item')
+  const abilityOptions = definitions.filter((entry) => entry.kind === 'ability')
+  const marketOptions = definitions.filter((entry) => entry.kind === 'market')
+
+  return (
+    <div className="detail-stack">
+      {definition.kind === 'market' ? (
+        <div className="editor-grid">
+          <label className="field-block full-width">
+            <span>Trade Rows</span>
+            <textarea
+              key={`${definition.key}-market_inventory`}
+              rows={6}
+              defaultValue={JSON.stringify(marketInventory?.config ?? { trades: [] }, null, 2)}
+              onBlur={(event) => {
+                try {
+                  onUpdateComponent('market_inventory', JSON.parse(event.target.value) as Record<string, unknown>)
+                } catch {
+                  // Ignore invalid JSON until the author corrects it.
+                }
+              }}
+            />
+          </label>
+          <div className="inline-note">Use valid item keys for `offerItemKey` and `costItemKey`. Available items: {itemOptions.map((item) => item.key).join(', ') || 'none'}.</div>
+        </div>
+      ) : null}
+
+      {definition.kind === 'character' ? (
+        <div className="editor-grid">
+          <label className="field-block full-width">
+            <span>Ability Loadout</span>
+            <textarea
+              key={`${definition.key}-ability_loadout`}
+              rows={6}
+              defaultValue={JSON.stringify(abilityLoadout?.config ?? { entries: [] }, null, 2)}
+              onBlur={(event) => {
+                try {
+                  onUpdateComponent('ability_loadout', JSON.parse(event.target.value) as Record<string, unknown>)
+                } catch {
+                  // Ignore invalid JSON until the author corrects it.
+                }
+              }}
+            />
+          </label>
+          <div className="inline-note">Available abilities: {abilityOptions.map((ability) => ability.key).join(', ') || 'none'}.</div>
+        </div>
+      ) : null}
+
+      {definition.kind === 'ability' ? (
+        <div className="editor-grid">
+          <label className="field-block">
+            <span>Target Mode</span>
+            <select
+              value={String((abilityProfile?.config as { targetMode?: string } | undefined)?.targetMode ?? 'enemy')}
+              onChange={(event) =>
+                onUpdateComponent('ability_profile', {
+                  ...(abilityProfile?.config ?? {}),
+                  targetMode: event.target.value,
+                })
+              }
+            >
+              <option value="self">Self</option>
+              <option value="ally">Ally</option>
+              <option value="enemy">Enemy</option>
+              <option value="area">Area</option>
+              <option value="passive">Passive</option>
+            </select>
+          </label>
+          <label className="field-block">
+            <span>Cooldown Seconds</span>
+            <input
+              type="number"
+              value={String((abilityProfile?.config as { cooldownSeconds?: number } | undefined)?.cooldownSeconds ?? 0)}
+              onChange={(event) =>
+                onUpdateComponent('ability_profile', {
+                  ...(abilityProfile?.config ?? {}),
+                  cooldownSeconds: Number(event.target.value || 0),
+                })
+              }
+            />
+          </label>
+          <label className="field-block">
+            <span>Cast Time</span>
+            <input
+              type="number"
+              value={String((abilityProfile?.config as { castTimeSeconds?: number } | undefined)?.castTimeSeconds ?? 0)}
+              onChange={(event) =>
+                onUpdateComponent('ability_profile', {
+                  ...(abilityProfile?.config ?? {}),
+                  castTimeSeconds: Number(event.target.value || 0),
+                })
+              }
+            />
+          </label>
+          <label className="field-block">
+            <span>Resource Item</span>
+            <select
+              value={String((abilityProfile?.config as { resourceCostItemKey?: string | null } | undefined)?.resourceCostItemKey ?? '')}
+              onChange={(event) =>
+                onUpdateComponent('ability_profile', {
+                  ...(abilityProfile?.config ?? {}),
+                  resourceCostItemKey: event.target.value || null,
+                })
+              }
+            >
+              <option value="">None</option>
+              {itemOptions.map((item) => (
+                <option key={item.key} value={item.key}>{item.key}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+      ) : null}
+
+      {definition.kind === 'location' ? (
+        <div className="editor-grid">
+          <label className="field-block">
+            <span>Region</span>
+            <input
+              value={String((locationState?.config as { region?: string } | undefined)?.region ?? '')}
+              onChange={(event) =>
+                onUpdateComponent('location_state', {
+                  ...(locationState?.config ?? {}),
+                  region: event.target.value,
+                })
+              }
+            />
+          </label>
+          <label className="field-block">
+            <span>Unlocked By Default</span>
+            <select
+              value={String(Boolean((locationState?.config as { isUnlockedByDefault?: boolean } | undefined)?.isUnlockedByDefault))}
+              onChange={(event) =>
+                onUpdateComponent('location_state', {
+                  ...(locationState?.config ?? {}),
+                  isUnlockedByDefault: event.target.value === 'true',
+                })
+              }
+            >
+              <option value="true">True</option>
+              <option value="false">False</option>
+            </select>
+          </label>
+          <label className="field-block full-width">
+            <span>Linked Graph Keys</span>
+            <input
+              value={((locationState?.config as { linkedGraphKeys?: string[] } | undefined)?.linkedGraphKeys ?? []).join(', ')}
+              onChange={(event) =>
+                onUpdateComponent('location_state', {
+                  ...(locationState?.config ?? {}),
+                  linkedGraphKeys: event.target.value.split(',').map((value) => value.trim()).filter(Boolean),
+                })
+              }
+              placeholder={graphKeys.join(', ')}
+            />
+          </label>
+          <label className="field-block full-width">
+            <span>Linked Markets</span>
+            <input
+              value={((locationState?.config as { linkedMarketKeys?: string[] } | undefined)?.linkedMarketKeys ?? []).join(', ')}
+              onChange={(event) =>
+                onUpdateComponent('location_state', {
+                  ...(locationState?.config ?? {}),
+                  linkedMarketKeys: event.target.value.split(',').map((value) => value.trim()).filter(Boolean),
+                })
+              }
+              placeholder={marketOptions.map((market) => market.key).join(', ')}
+            />
+          </label>
+        </div>
+      ) : null}
+
+      {!['market', 'character', 'ability', 'location'].includes(definition.kind) ? (
+        <div className="inline-note">No specialized component editor for this definition kind yet.</div>
+      ) : null}
     </div>
   )
 }

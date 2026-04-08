@@ -8,6 +8,7 @@ import type {
 } from './graphcore'
 import { createGraphScaffold } from './graphScaffold'
 import { applyTemplateToNode, normalizeNode } from './nodeLibrary'
+import { materializeArchetypePreset, materializeDefinitionPreset, materializeGraphPreset } from './presetCatalog'
 
 function createDefinitionFromPatch(operation: Extract<PatchOperation, { op: 'create_definition' }>): DefinitionBase {
   const payload = operation.payload ?? {}
@@ -111,6 +112,82 @@ function updateEdge(
 export function applyPatchOperations(snapshot: ProjectSnapshot, operations: PatchOperation[]) {
   return operations.reduce((currentSnapshot, operation) => {
     switch (operation.op) {
+      case 'set_game_spec':
+        return {
+          ...currentSnapshot,
+          gameSpec: operation.gameSpec,
+          draft: {
+            ...currentSnapshot.draft,
+            metadata: {
+              ...currentSnapshot.draft.metadata,
+              gameSpec: operation.gameSpec,
+            },
+          },
+        }
+      case 'apply_preset_pack': {
+        const nextGameSpec = currentSnapshot.gameSpec
+          ? {
+              ...currentSnapshot.gameSpec,
+              selectedPresetIds: {
+                ...currentSnapshot.gameSpec.selectedPresetIds,
+                packs: [...new Set([...currentSnapshot.gameSpec.selectedPresetIds.packs, operation.packId])],
+              },
+            }
+          : null
+
+        return nextGameSpec
+          ? {
+              ...currentSnapshot,
+              gameSpec: nextGameSpec,
+              draft: {
+                ...currentSnapshot.draft,
+                metadata: {
+                  ...currentSnapshot.draft.metadata,
+                  gameSpec: nextGameSpec,
+                },
+              },
+            }
+          : currentSnapshot
+      }
+      case 'instantiate_archetype_preset': {
+        const nextArchetype = materializeArchetypePreset(operation.presetId)
+        if (!nextArchetype || currentSnapshot.archetypes.some((archetype) => archetype.key === nextArchetype.key)) {
+          return currentSnapshot
+        }
+
+        return {
+          ...currentSnapshot,
+          archetypes: [nextArchetype, ...currentSnapshot.archetypes],
+        }
+      }
+      case 'instantiate_definition_preset': {
+        const nextDefinition = materializeDefinitionPreset(operation.presetId, {
+          keyOverride: operation.keyOverride,
+          nameOverride: operation.nameOverride,
+        })
+        if (!nextDefinition || currentSnapshot.definitions.some((definition) => definition.key === nextDefinition.key)) {
+          return currentSnapshot
+        }
+
+        return {
+          ...currentSnapshot,
+          definitions: [nextDefinition, ...currentSnapshot.definitions],
+        }
+      }
+      case 'instantiate_graph_preset': {
+        const nextGraph = materializeGraphPreset(operation.presetId, {
+          keyOverride: operation.keyOverride,
+          nameOverride: operation.nameOverride,
+        })
+        if (!nextGraph || currentSnapshot.graphs.some((graph) => graph.key === nextGraph.key)) {
+          return currentSnapshot
+        }
+
+        return {
+          ...currentSnapshot,
+          graphs: [nextGraph, ...currentSnapshot.graphs],
+        }
+      }
       case 'create_archetype':
         if (currentSnapshot.archetypes.some((archetype) => archetype.key === operation.key)) return currentSnapshot
         return {
@@ -454,7 +531,7 @@ export function applyPatchOperations(snapshot: ProjectSnapshot, operations: Patc
 }
 
 export function groupPatchOperations(operations: PatchOperation[]) {
-  const graphOps = new Set(['create_graph', 'update_graph', 'duplicate_graph', 'delete_graph'])
+  const graphOps = new Set(['instantiate_graph_preset', 'create_graph', 'update_graph', 'duplicate_graph', 'delete_graph'])
   const nodeOps = new Set([
     'create_node',
     'update_node',
@@ -472,6 +549,10 @@ export function groupPatchOperations(operations: PatchOperation[]) {
     'set_node_media',
   ])
   const definitionOps = new Set([
+    'set_game_spec',
+    'apply_preset_pack',
+    'instantiate_archetype_preset',
+    'instantiate_definition_preset',
     'create_definition',
     'update_definition',
     'delete_definition',
@@ -502,6 +583,16 @@ export function groupPatchOperations(operations: PatchOperation[]) {
 
 export function describePatchOperation(operation: PatchOperation) {
   switch (operation.op) {
+    case 'set_game_spec':
+      return 'Set game spec'
+    case 'apply_preset_pack':
+      return `Apply preset pack \`${operation.packId}\``
+    case 'instantiate_archetype_preset':
+      return `Instantiate archetype preset \`${operation.presetId}\``
+    case 'instantiate_definition_preset':
+      return `Instantiate definition preset \`${operation.presetId}\``
+    case 'instantiate_graph_preset':
+      return `Instantiate graph preset \`${operation.presetId}\``
     case 'create_graph':
       return `Create graph \`${operation.key}\``
     case 'update_graph':

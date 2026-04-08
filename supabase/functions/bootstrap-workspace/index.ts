@@ -1,6 +1,6 @@
 import { z } from 'npm:zod@4'
 
-import { BASELINE_ITEM_ARCHETYPES } from '../../../src/domain/bootstrapSeeds.ts'
+import { BASELINE_ARCHETYPES } from '../../../src/domain/bootstrapSeeds.ts'
 import { createAdminClient, requireUserClient } from '../_shared/auth.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
 
@@ -24,6 +24,10 @@ function titleCase(value: string) {
     .join(' ')
 }
 
+function isMissingAbilityEnumError(message: string | undefined) {
+  return typeof message === 'string' && message.includes('invalid input value for enum definition_kind: "ability"')
+}
+
 async function seedBaselineArchetypes(admin: ReturnType<typeof createAdminClient>, draftId: string, userId: string) {
   const existingArchetypesResponse = await admin
     .from('project_archetypes')
@@ -35,31 +39,39 @@ async function seedBaselineArchetypes(admin: ReturnType<typeof createAdminClient
   }
 
   const existingByKey = new Map((existingArchetypesResponse.data ?? []).map((row) => [row.key, row.id]))
-  const missingSeeds = BASELINE_ITEM_ARCHETYPES.filter((seed) => !existingByKey.has(seed.key))
+  const missingSeeds = BASELINE_ARCHETYPES.filter((seed) => !existingByKey.has(seed.key))
 
   if (missingSeeds.length > 0) {
+    const seedRows = (seeds: typeof missingSeeds) =>
+      seeds.map((seed) => ({
+        draft_id: draftId,
+        key: seed.key,
+        name: seed.name,
+        summary: seed.summary,
+        definition_kind: seed.appliesToKind,
+        icon_asset_key: seed.iconAssetKey,
+        metadata: seed.metadata,
+        llm_hints: seed.llmHints,
+        created_by: userId,
+      }))
+
     const insertResponse = await admin
       .from('project_archetypes')
-      .insert(
-        missingSeeds.map((seed) => ({
-          draft_id: draftId,
-          key: seed.key,
-          name: seed.name,
-          summary: seed.summary,
-          definition_kind: seed.appliesToKind,
-          icon_asset_key: seed.iconAssetKey,
-          metadata: seed.metadata,
-          llm_hints: seed.llmHints,
-          created_by: userId,
-        })),
-      )
+      .insert(seedRows(missingSeeds))
       .select('id, key')
 
-    if (insertResponse.error) {
-      throw new HttpError(500, insertResponse.error.message)
+    const recoveredResponse = insertResponse.error && isMissingAbilityEnumError(insertResponse.error.message)
+      ? await admin
+          .from('project_archetypes')
+          .insert(seedRows(missingSeeds.filter((seed) => seed.appliesToKind !== 'ability')))
+          .select('id, key')
+      : insertResponse
+
+    if (recoveredResponse.error) {
+      throw new HttpError(500, recoveredResponse.error.message)
     }
 
-    for (const row of insertResponse.data ?? []) {
+    for (const row of recoveredResponse.data ?? []) {
       existingByKey.set(row.key, row.id)
     }
   }
@@ -81,7 +93,7 @@ async function seedBaselineArchetypes(admin: ReturnType<typeof createAdminClient
   }
 
   const existingFieldKeys = new Set((existingFieldsResponse.data ?? []).map((row) => `${row.archetype_id}:${row.key}`))
-  const fieldRows = BASELINE_ITEM_ARCHETYPES.flatMap((seed) => {
+  const fieldRows = BASELINE_ARCHETYPES.flatMap((seed) => {
     const archetypeId = existingByKey.get(seed.key)
     if (!archetypeId) {
       return []

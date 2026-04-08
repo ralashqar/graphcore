@@ -11,6 +11,7 @@ import type {
   EdgeDefinition,
   FieldDefinition,
   GameSystemBundle,
+  GameSpec,
   GraphCreateInput,
   GraphType,
   PatchOperation,
@@ -19,6 +20,7 @@ import type {
 import { applyPatchProposal, bootstrapLiveWorkspace, compileSnapshot, ensureLiveProjectSnapshot, loadProjectSnapshot, proposePatch } from './data/graphcoreRepository'
 import { createGraphScaffold } from './domain/graphScaffold'
 import { applyPatchOperations, describePatchOperation, groupPatchOperations } from './domain/patchUtils'
+import { buildBootstrapPatch, createDefaultGameSpec, expandPackPresetIds, presetCatalog } from './domain/presetCatalog'
 import type { PromptPatchResponse, PromptTargetMode } from './domain/prompting'
 import { normalizeNode } from './domain/nodeLibrary'
 import { GraphWorkspace } from './features/graphWorkspace'
@@ -120,18 +122,20 @@ export default function App() {
   const [authPendingConfirmation, setAuthPendingConfirmation] = useState(false)
   const [workspaceBootstrapPending, setWorkspaceBootstrapPending] = useState(false)
   const [workspaceBootstrapError, setWorkspaceBootstrapError] = useState<string | null>(null)
+  const [bootstrapGameSpec, setBootstrapGameSpec] = useState<GameSpec>(() => createDefaultGameSpec(['pack.rpg_core']))
+  const [bootstrapOnboardingOpen, setBootstrapOnboardingOpen] = useState(false)
   const [isPending, startTransition] = useTransition()
   const { promptText, selectedDefinitionKey, selectedEdgeKey, selectedGraphKey, selectedNodeKey, setPromptText, setSelectedDefinitionKey, setSelectedEdgeKey, setSelectedGraphKey, setSelectedNodeKey } = useEditorStore()
 
   function hydrateLoadedProject(state: { snapshot: ProjectSnapshot; source: 'supabase' | 'demo'; reason?: string }) {
-    const firstItem = state.snapshot.definitions.find((definition) => definition.kind === 'item') ?? state.snapshot.definitions[0] ?? null
-    const firstArchetype = state.snapshot.archetypes.find((archetype) => archetype.appliesToKind === 'item') ?? state.snapshot.archetypes[0] ?? null
+    const firstDefinition = state.snapshot.definitions[0] ?? null
+    const firstArchetype = state.snapshot.archetypes[0] ?? null
 
     startTransition(() => {
       setLoadedState({ source: state.source, reason: state.reason })
       setSnapshot(state.snapshot)
       setSelectedGraphKey(state.snapshot.graphs[0]?.key ?? null)
-      setSelectedDefinitionKey(firstItem?.key ?? null)
+      setSelectedDefinitionKey(firstDefinition?.key ?? null)
       setSelectedAssetKey(state.snapshot.assets[0]?.key ?? null)
       setSelectedArchetypeKey(firstArchetype?.key ?? null)
       setSelectedPatchIndex(0)
@@ -220,12 +224,13 @@ export default function App() {
     }
   }
 
-  const itemDefinitions = useMemo(() => snapshot?.definitions.filter((definition) => definition.kind === 'item') ?? [], [snapshot])
+  const definitionEntries = useMemo(() => snapshot?.definitions ?? [], [snapshot])
   const selectedGraph = useMemo(() => snapshot?.graphs.find((graph) => graph.key === selectedGraphKey) ?? snapshot?.graphs[0] ?? null, [selectedGraphKey, snapshot])
-  const selectedItem = useMemo(() => itemDefinitions.find((definition) => definition.key === selectedDefinitionKey) ?? itemDefinitions[0] ?? null, [itemDefinitions, selectedDefinitionKey])
+  const selectedDefinition = useMemo(() => definitionEntries.find((definition) => definition.key === selectedDefinitionKey) ?? definitionEntries[0] ?? null, [definitionEntries, selectedDefinitionKey])
   const selectedNode = useMemo(() => selectedGraph?.nodes.find((node) => node.key === selectedNodeKey) ?? null, [selectedGraph, selectedNodeKey])
   const selectedEdge = useMemo(() => selectedGraph?.edges.find((edge) => edge.key === selectedEdgeKey) ?? null, [selectedEdgeKey, selectedGraph])
   const selectedAsset = useMemo(() => snapshot?.assets.find((asset) => asset.key === selectedAssetKey) ?? snapshot?.assets[0] ?? null, [selectedAssetKey, snapshot])
+  const needsBootstrapOnboarding = loadedState?.source === 'supabase' && (!snapshot?.gameSpec || (snapshot.definitions.length === 0 && snapshot.graphs.length === 0))
 
   useEffect(() => {
     if (selectedGraph?.graphType) {
@@ -247,6 +252,17 @@ export default function App() {
     setAuthOpen(true)
     setAuthAutoOpened(true)
   }, [authAutoOpened, loading, session])
+
+  useEffect(() => {
+    if (!snapshot) return
+    setBootstrapGameSpec(snapshot.gameSpec ?? createDefaultGameSpec(['pack.rpg_core']))
+  }, [snapshot?.draft.id, snapshot?.gameSpec])
+
+  useEffect(() => {
+    if (needsBootstrapOnboarding) {
+      setBootstrapOnboardingOpen(true)
+    }
+  }, [needsBootstrapOnboarding])
 
   const persistedPatchHistory = useMemo<PatchSessionView[]>(() => {
     return (snapshot?.patchSets ?? []).map((patch) => {
@@ -284,8 +300,7 @@ export default function App() {
   }, [patchPreview, persistedPatchHistory])
 
   const selectedPatch = patchHistory[selectedPatchIndex] ?? patchHistory[0] ?? null
-  const itemArchetypes = useMemo(() => snapshot?.archetypes.filter((archetype) => archetype.appliesToKind === 'item') ?? [], [snapshot])
-  const selectedArchetype = useMemo(() => itemArchetypes.find((archetype) => archetype.key === selectedArchetypeKey) ?? itemArchetypes[0] ?? null, [itemArchetypes, selectedArchetypeKey])
+  const selectedArchetype = useMemo(() => snapshot?.archetypes.find((archetype) => archetype.key === selectedArchetypeKey) ?? snapshot?.archetypes[0] ?? null, [selectedArchetypeKey, snapshot])
 
   function applySnapshotUpdate(mutator: (current: ProjectSnapshot) => ProjectSnapshot) {
     setSnapshot((current) => {
@@ -440,12 +455,13 @@ export default function App() {
     if (!snapshot) return
     const existingKeys = snapshot.definitions.map((definition) => definition.key)
     const archetype = snapshot.archetypes.find((candidate) => candidate.key === archetypeKey) ?? null
-    const suffix = uniqueKey(existingKeys, archetype ? archetype.name : 'item')
+    const kind = archetype?.appliesToKind ?? selectedDefinition?.kind ?? 'item'
+    const suffix = uniqueKey(existingKeys, archetype ? archetype.name : kind)
     const nextItem: DefinitionBase = {
       id: `definition-item-${Date.now()}`,
-      key: `item.${suffix}`,
-      kind: 'item',
-      name: archetype ? `New ${archetype.name}` : 'New Item',
+      key: `${kind}.${suffix}`,
+      kind,
+      name: archetype ? `New ${archetype.name}` : `New ${kind.charAt(0).toUpperCase() + kind.slice(1)}`,
       summary: '',
       status: 'draft',
       iconAssetKey: null,
@@ -501,6 +517,15 @@ export default function App() {
         else nextFieldValues.push({ fieldKey, value })
         return { ...definition, fieldValues: nextFieldValues }
       }),
+    }))
+  }
+
+  function updateDefinitionComponents(itemKey: string, components: DefinitionBase['components']) {
+    applySnapshotUpdate((current) => ({
+      ...current,
+      definitions: current.definitions.map((definition) =>
+        definition.key === itemKey ? { ...definition, components } : definition,
+      ),
     }))
   }
 
@@ -607,8 +632,8 @@ export default function App() {
   }
 
   function assignAssetToSelectedItem(assetKey: string | null) {
-    if (!selectedItem) return
-    updateItemIdentity(selectedItem.key, { iconAssetKey: assetKey })
+    if (!selectedDefinition) return
+    updateItemIdentity(selectedDefinition.key, { iconAssetKey: assetKey })
   }
 
   function assignAssetToSelectedArchetype(assetKey: string | null) {
@@ -736,6 +761,13 @@ export default function App() {
     try {
       const inferredIntent = inferPromptIntent(promptText)
       const shouldTreatAsGraphPrompt = activeTab === 'graph' || inferredIntent.asksForGraph
+      const activeGameSpec = snapshot.gameSpec ?? bootstrapGameSpec
+      const selectedPresetIds = [
+        ...activeGameSpec.selectedPresetIds.packs,
+        ...activeGameSpec.selectedPresetIds.archetypes,
+        ...activeGameSpec.selectedPresetIds.definitions,
+        ...activeGameSpec.selectedPresetIds.graphs,
+      ]
       const graphTargetMode: PromptTargetMode =
         activeTab === 'graph'
           ? promptTargetMode
@@ -753,6 +785,12 @@ export default function App() {
       const nextPatch = await proposePatch({
         prompt: promptText,
         snapshot,
+        intent: needsBootstrapOnboarding ? 'bootstrap_game' : shouldTreatAsGraphPrompt ? 'extend_graph' : 'create_content',
+        phase: needsBootstrapOnboarding ? 'spec' : shouldTreatAsGraphPrompt ? 'graph_skeleton' : 'content',
+        gameSpec: activeGameSpec,
+        selectedPresetIds,
+        allowedPresetIds: selectedPresetIds,
+        operationBudget: needsBootstrapOnboarding ? 24 : shouldTreatAsGraphPrompt ? 18 : 12,
         context: {
           target: shouldTreatAsGraphPrompt ? (selectedNode ? 'node' : 'graph') : 'content',
           graphKey: shouldTreatAsGraphPrompt ? selectedGraph?.key ?? null : null,
@@ -778,6 +816,40 @@ export default function App() {
     } finally {
       setIsGeneratingPatch(false)
     }
+  }
+
+  function handleBootstrapPatchPreview() {
+    if (!snapshot) return
+    const normalizedSpec: GameSpec = {
+      ...bootstrapGameSpec,
+      selectedPresetIds: {
+        ...bootstrapGameSpec.selectedPresetIds,
+        ...expandPackPresetIds(bootstrapGameSpec.selectedPresetIds.packs),
+        packs: bootstrapGameSpec.selectedPresetIds.packs,
+      },
+      bootstrapTargets: {
+        starterArchetypePresetIds: [...new Set(bootstrapGameSpec.selectedPresetIds.archetypes)],
+        starterDefinitionPresetIds: [...new Set(bootstrapGameSpec.selectedPresetIds.definitions)],
+        starterGraphPresetIds: [...new Set(bootstrapGameSpec.selectedPresetIds.graphs)],
+      },
+    }
+
+    const operations = buildBootstrapPatch(normalizedSpec)
+    setPatchPreview({
+      id: 'preview',
+      prompt: 'Bootstrap game data layer',
+      status: operations.length > 0 ? 'proposed' : 'rejected',
+      summary: normalizedSpec.title?.trim() ? `Bootstrap ${normalizedSpec.title}` : 'Bootstrap game data layer',
+      operations,
+      diagnostics: ['Review the generated bootstrap patch before applying it to the live draft.'],
+      assistantNotes: 'This patch will set the game spec, record selected packs, and materialize the chosen preset-backed starter content.',
+    })
+    setSelectedPatchIndex(0)
+    setActiveTab('prompts')
+  }
+
+  function handleOpenBootstrapOnboarding() {
+    setBootstrapOnboardingOpen(true)
   }
 
   async function handleApplySelectedPatch() {
@@ -851,7 +923,14 @@ export default function App() {
         <header className="topbar">
           <div className="brand-cluster"><div className="brand-mark">G</div><div><div className="brand-line">GraphCore</div><p className="subtle-line">{snapshot.workspace.name} / {snapshot.project.name} / {snapshot.draft.name}</p></div></div>
           <div className="topbar-center"><nav className="tabbar" aria-label="Workspace tabs">{workspaceTabs.map((tab) => <button key={tab.id} className={tab.id === activeTab ? 'tab-button is-active' : 'tab-button'} onClick={() => setActiveTab(tab.id)} type="button">{tab.label}</button>)}</nav></div>
-          <div className="topbar-actions"><div className="signal-pill"><span>{loadedState?.source === 'supabase' ? 'Live workspace' : 'Demo snapshot'}</span></div><div className="signal-pill"><span>{session?.user.email ?? 'Not signed in'}</span></div><button className="ghost-button" onClick={() => setActiveTab('prompts')} type="button">Review patches</button>{session ? <button className="ghost-button" onClick={handleSignOut} type="button">Sign out</button> : <button className="ghost-button" onClick={() => setAuthOpen(true)} type="button">Sign in</button>}<button className="primary-button" onClick={handleCompile} type="button">{isPending ? 'Compiling...' : 'Publish bundle'}</button></div>
+          <div className="topbar-actions">
+            <div className="signal-pill"><span>{loadedState?.source === 'supabase' ? 'Live workspace' : 'Demo snapshot'}</span></div>
+            <div className="signal-pill"><span>{session?.user.email ?? 'Not signed in'}</span></div>
+            <button className="ghost-button" onClick={handleOpenBootstrapOnboarding} type="button">New Project</button>
+            <button className="ghost-button" onClick={() => setActiveTab('prompts')} type="button">Review patches</button>
+            {session ? <button className="ghost-button" onClick={handleSignOut} type="button">Sign out</button> : <button className="ghost-button" onClick={() => setAuthOpen(true)} type="button">Sign in</button>}
+            <button className="primary-button" onClick={handleCompile} type="button">{isPending ? 'Compiling...' : 'Publish bundle'}</button>
+          </div>
         </header>
 
         {session && loadedState?.source !== 'supabase' ? (
@@ -899,13 +978,14 @@ export default function App() {
           ) : null}
           {activeTab === 'content' ? (
             <ContentWorkspace
-              archetypes={itemArchetypes}
+              archetypes={snapshot.archetypes}
               assets={snapshot.assets}
               definitions={snapshot.definitions}
-              items={itemDefinitions}
+              graphKeys={snapshot.graphs.map((graph) => graph.key)}
+              items={definitionEntries}
               selectedAsset={selectedAsset}
               selectedArchetype={selectedArchetype}
-              selectedItem={selectedItem}
+              selectedItem={selectedDefinition}
               onAddArchetypeField={addArchetypeField}
               onAddCustomField={addCustomField}
               onAssignArchetypeIcon={assignAssetToSelectedArchetype}
@@ -921,15 +1001,16 @@ export default function App() {
               onUpdateArchetypeIdentity={updateArchetypeIdentity}
               onUpdateFieldValue={updateItemFieldValue}
               onUpdateItemIdentity={updateItemIdentity}
+              onUpdateComponents={updateDefinitionComponents}
             />
           ) : null}
-          {activeTab === 'assets' ? <AssetsWorkspace assets={snapshot.assets} selectedAsset={selectedAsset} selectedItem={selectedItem} onAssignAssetToSelectedItem={assignAssetToSelectedItem} onCreateUrlAsset={createUrlAsset} onSelectAsset={setSelectedAssetKey} onUploadAsset={handleAssetUpload} onUpdateAsset={updateAssetIdentity} /> : null}
+          {activeTab === 'assets' ? <AssetsWorkspace assets={snapshot.assets} selectedAsset={selectedAsset} selectedItem={selectedDefinition} onAssignAssetToSelectedItem={assignAssetToSelectedItem} onCreateUrlAsset={createUrlAsset} onSelectAsset={setSelectedAssetKey} onUploadAsset={handleAssetUpload} onUpdateAsset={updateAssetIdentity} /> : null}
           {activeTab === 'prompts' ? <PromptsWorkspace isApplyingPatch={isApplyingPatch} patchHistory={patchHistory} selectedPatch={selectedPatch} selectedPatchIndex={selectedPatchIndex} onApplyPatch={handleApplySelectedPatch} onSelectPatch={setSelectedPatchIndex} /> : null}
           {activeTab === 'releases' ? <ReleasesWorkspace bundle={bundle} releases={snapshot.releases} sourceReason={loadedState?.reason} /> : null}
         </section>
 
         <section className="prompt-dock">
-          <div className="prompt-dock-head"><div><span className="eyebrow">Prompt Dock</span><h2>Describe the item, graph, or asset change you want next</h2></div><p className="subtle-line">Target: {selectedNode?.key ?? selectedItem?.key ?? selectedArchetype?.key ?? selectedGraph?.key ?? snapshot.project.slug}</p></div>
+          <div className="prompt-dock-head"><div><span className="eyebrow">Prompt Dock</span><h2>Describe the definition, graph, or asset change you want next</h2></div><p className="subtle-line">Target: {selectedNode?.key ?? selectedDefinition?.key ?? selectedArchetype?.key ?? selectedGraph?.key ?? snapshot.project.slug}</p></div>
           <div className="prompt-controls">
             <label className="field-block compact-block">
               <span>Model</span>
@@ -968,16 +1049,364 @@ export default function App() {
               <button className="ghost-button compact" onClick={() => { setPromptTargetMode('auto'); setPromptText('Add any missing gameplay content this graph needs, including new items, tokens, or archetypes if they do not exist yet.'); }} type="button">Add missing gameplay content</button>
             </div>
           ) : null}
+          {activeTab !== 'graph' ? (
+            <div className="prompt-preset-row">
+              <button className="ghost-button compact" onClick={() => setPromptText('Bootstrap a new RPG game data layer with shared currencies, progression tokens, player and enemy archetypes, starter abilities, a hub location, and a vendor.')} type="button">Bootstrap game data layer</button>
+              <button className="ghost-button compact" onClick={() => setPromptText('Add starter currencies and progression tokens using existing presets before creating anything new.')} type="button">Add starter currencies</button>
+              <button className="ghost-button compact" onClick={() => setPromptText('Add a player roster and an enemy roster using existing character and ability presets before inventing new schema.')} type="button">Add player and enemy roster</button>
+              <button className="ghost-button compact" onClick={() => setPromptText('Add a hub location with a vendor market, linked starter graph, and valid trade references.')} type="button">Add locations and markets</button>
+            </div>
+          ) : null}
           {!session ? <div className="inline-note">Hosted AI, patch apply, and publishing require Supabase sign-in. You can still explore the demo workspace.</div> : null}
           {promptRuntimeError ? <div className="inline-note is-error">{promptRuntimeError}</div> : null}
+          {needsBootstrapOnboarding ? <div className="inline-note">Use the onboarding flow to initialize a fresh game before generating general prompt patches.</div> : null}
           <div className="prompt-dock-body">
             <textarea aria-label="Prompt editor" className="prompt-composer" value={promptText} onChange={(event) => setPromptText(event.target.value)} rows={3} />
-            <div className="prompt-actions"><div className="prompt-hint"><span>Prompt-driven edits stay structured as reviewable patch operations before apply.</span></div><button className="primary-button button-with-spinner" disabled={isGeneratingPatch} onClick={handleGeneratePatch} type="button">{isGeneratingPatch ? <><span className="button-spinner" aria-hidden="true" />Generating patch...</> : 'Generate patch'}</button></div>
+            <div className="prompt-actions"><div className="prompt-hint"><span>Prompt-driven edits stay structured as reviewable patch operations before apply.</span></div><button className="primary-button button-with-spinner" disabled={isGeneratingPatch} onClick={needsBootstrapOnboarding ? handleOpenBootstrapOnboarding : handleGeneratePatch} type="button">{isGeneratingPatch ? <><span className="button-spinner" aria-hidden="true" />Generating patch...</> : needsBootstrapOnboarding ? 'Open onboarding' : 'Generate patch'}</button></div>
           </div>
         </section>
       </div>
+      {bootstrapOnboardingOpen ? (
+        <GameBootstrapOnboarding
+          canClose={!needsBootstrapOnboarding}
+          spec={bootstrapGameSpec}
+          onChange={setBootstrapGameSpec}
+          onClose={() => setBootstrapOnboardingOpen(false)}
+          onGenerate={() => {
+            handleBootstrapPatchPreview()
+            setBootstrapOnboardingOpen(false)
+          }}
+        />
+      ) : null}
       {authOpen ? <AuthDialog authEmail={authEmail} authError={authError} authInfo={authInfo} authMode={authMode} authPassword={authPassword} authPendingConfirmation={authPendingConfirmation} onClose={() => setAuthOpen(false)} onEmailChange={setAuthEmail} onGoogleAuth={handleGoogleAuth} onModeChange={(mode) => { setAuthMode(mode); setAuthError(null); setAuthInfo(null); if (mode !== 'sign_up') setAuthPendingConfirmation(false) }} onPasswordChange={setAuthPassword} onResendConfirmation={handleResendConfirmation} onSubmit={handleAuthSubmit} /> : null}
     </main>
+  )
+}
+
+function GameBootstrapOnboarding({
+  canClose,
+  spec,
+  onChange,
+  onClose,
+  onGenerate,
+}: {
+  canClose: boolean
+  spec: GameSpec
+  onChange: (spec: GameSpec) => void
+  onClose: () => void
+  onGenerate: () => void
+}) {
+  const [step, setStep] = useState(0)
+  const packIds = presetCatalog.packs.map((pack) => pack.id)
+  const steps = ['Brief', 'Systems', 'Presets', 'Review']
+
+  function updatePrimaryPack(packId: string) {
+    const nextPacks = packId ? [packId] : []
+    const expanded = expandPackPresetIds(nextPacks)
+    onChange({
+      ...spec,
+      selectedPresetIds: {
+        packs: nextPacks,
+        archetypes: expanded.archetypePresetIds,
+        definitions: expanded.definitionPresetIds,
+        graphs: expanded.graphPresetIds,
+      },
+      bootstrapTargets: {
+        starterArchetypePresetIds: expanded.archetypePresetIds,
+        starterDefinitionPresetIds: expanded.definitionPresetIds,
+        starterGraphPresetIds: expanded.graphPresetIds,
+      },
+    })
+  }
+
+  function updateContentScope<Key extends keyof GameSpec['contentScope']>(key: Key, value: GameSpec['contentScope'][Key]) {
+    onChange({
+      ...spec,
+      contentScope: {
+        ...spec.contentScope,
+        [key]: value,
+      },
+    })
+  }
+
+  return (
+    <div className="bootstrap-overlay" onClick={canClose ? onClose : undefined} role="presentation">
+      <section className="bootstrap-dialog" onClick={(event) => event.stopPropagation()}>
+        <div className="bootstrap-hero">
+          <div>
+            <span className="eyebrow">First-Run Onboarding</span>
+            <h2>Initialize the game data layer</h2>
+            <p className="subtle-line">Set the fantasy, choose the system shape, then seed the draft from preset-backed archetypes, shared definitions, and starter graphs.</p>
+          </div>
+          {canClose ? <button className="ghost-button compact" onClick={onClose} type="button">Close</button> : null}
+        </div>
+
+        <div className="bootstrap-progress" aria-label="Bootstrap steps">
+          {steps.map((label, index) => (
+            <div key={label} className={index === step ? 'bootstrap-step is-active' : 'bootstrap-step'}>
+              <span>{index + 1}</span>
+              <strong>{label}</strong>
+            </div>
+          ))}
+        </div>
+
+        <div className="bootstrap-layout">
+          <div className="bootstrap-main">
+            {step === 0 ? (
+              <div className="detail-stack">
+                <div className="bootstrap-copy-block">
+                  <span className="section-label">Premise</span>
+                  <h3>Define the world and player fantasy</h3>
+                  <p className="subtle-line">This becomes the canonical brief passed into preset selection and future prompts.</p>
+                </div>
+                <div className="editor-grid">
+                  <label className="field-block">
+                    <span>Game Title</span>
+                    <input value={spec.title} onChange={(event) => onChange({ ...spec, title: event.target.value })} />
+                  </label>
+                  <label className="field-block">
+                    <span>Genre</span>
+                    <select value={spec.theme.genre} onChange={(event) => onChange({ ...spec, theme: { ...spec.theme, genre: event.target.value } })}>
+                      <option value="fantasy_rpg">Fantasy RPG</option>
+                      <option value="sci_fi_action">Sci-Fi Action</option>
+                      <option value="survival_adventure">Survival Adventure</option>
+                      <option value="narrative_mystery">Narrative Mystery</option>
+                    </select>
+                  </label>
+                  <label className="field-block">
+                    <span>Tone</span>
+                    <select value={spec.theme.tone} onChange={(event) => onChange({ ...spec, theme: { ...spec.theme, tone: event.target.value } })}>
+                      <option value="grounded">Grounded</option>
+                      <option value="heroic">Heroic</option>
+                      <option value="grim">Grim</option>
+                      <option value="mysterious">Mysterious</option>
+                    </select>
+                  </label>
+                  <label className="field-block">
+                    <span>Player Fantasy</span>
+                    <select value={spec.theme.playerFantasy} onChange={(event) => onChange({ ...spec, theme: { ...spec.theme, playerFantasy: event.target.value } })}>
+                      <option value="adventurer">Adventurer</option>
+                      <option value="wanderer">Wanderer</option>
+                      <option value="commander">Commander</option>
+                      <option value="survivor">Survivor</option>
+                    </select>
+                  </label>
+                  <label className="field-block">
+                    <span>Naming Style</span>
+                    <select value={spec.theme.namingStyle} onChange={(event) => onChange({ ...spec, theme: { ...spec.theme, namingStyle: event.target.value } })}>
+                      <option value="classic_fantasy">Classic Fantasy</option>
+                      <option value="clean_modern">Clean Modern</option>
+                      <option value="mythic_dense">Mythic Dense</option>
+                      <option value="minimalist">Minimalist</option>
+                    </select>
+                  </label>
+                  <label className="field-block full-width">
+                    <span>World Premise</span>
+                    <textarea rows={4} value={spec.theme.worldPremise} onChange={(event) => onChange({ ...spec, theme: { ...spec.theme, worldPremise: event.target.value } })} />
+                  </label>
+                </div>
+              </div>
+            ) : null}
+
+            {step === 1 ? (
+              <div className="detail-stack">
+                <div className="bootstrap-copy-block">
+                  <span className="section-label">Systems</span>
+                  <h3>Choose the play structure</h3>
+                  <p className="subtle-line">These settings drive what presets and starter content the system should prefer.</p>
+                </div>
+                <div className="editor-grid">
+                  <label className="field-block">
+                    <span>Progression Style</span>
+                    <select value={spec.systems.progressionStyle} onChange={(event) => onChange({ ...spec, systems: { ...spec.systems, progressionStyle: event.target.value as GameSpec['systems']['progressionStyle'] } })}>
+                      <option value="linear">Linear</option>
+                      <option value="branching">Branching</option>
+                      <option value="hub_and_spoke">Hub and Spoke</option>
+                      <option value="open">Open</option>
+                    </select>
+                  </label>
+                  <label className="field-block">
+                    <span>Combat Style</span>
+                    <select value={spec.systems.combatStyle} onChange={(event) => onChange({ ...spec, systems: { ...spec.systems, combatStyle: event.target.value as GameSpec['systems']['combatStyle'] } })}>
+                      <option value="none">None</option>
+                      <option value="turn_based">Turn-based</option>
+                      <option value="real_time">Real-time</option>
+                      <option value="hybrid">Hybrid</option>
+                    </select>
+                  </label>
+                  <label className="field-block">
+                    <span>Input Style</span>
+                    <select value={spec.systems.inputStyle} onChange={(event) => onChange({ ...spec, systems: { ...spec.systems, inputStyle: event.target.value as GameSpec['systems']['inputStyle'] } })}>
+                      <option value="none">None</option>
+                      <option value="direct_control">Direct control</option>
+                      <option value="party_commands">Party commands</option>
+                      <option value="dialogue_choice">Dialogue choice</option>
+                    </select>
+                  </label>
+                  <label className="field-block">
+                    <span>Inventory Style</span>
+                    <select value={spec.systems.inventoryStyle} onChange={(event) => onChange({ ...spec, systems: { ...spec.systems, inventoryStyle: event.target.value as GameSpec['systems']['inventoryStyle'] } })}>
+                      <option value="none">None</option>
+                      <option value="slots">Slots</option>
+                      <option value="weight">Weight</option>
+                      <option value="stacked">Stacked</option>
+                    </select>
+                  </label>
+                  <label className="field-block">
+                    <span>Economy Style</span>
+                    <select value={spec.systems.economyStyle} onChange={(event) => onChange({ ...spec, systems: { ...spec.systems, economyStyle: event.target.value as GameSpec['systems']['economyStyle'] } })}>
+                      <option value="none">None</option>
+                      <option value="gold">Gold</option>
+                      <option value="barter">Barter</option>
+                      <option value="energy">Energy</option>
+                    </select>
+                  </label>
+                </div>
+              </div>
+            ) : null}
+
+            {step === 2 ? (
+                <div className="detail-stack">
+                  <div className="bootstrap-copy-block">
+                    <span className="section-label">Preset Packs</span>
+                    <h3>Choose the default game shape</h3>
+                    <p className="subtle-line">Use a single primary preset pack, then tune how much content each system area should receive.</p>
+                  </div>
+                <div className="editor-grid">
+                  <label className="field-block full-width">
+                    <span>Primary Preset Pack</span>
+                    <select value={spec.selectedPresetIds.packs[0] ?? ''} onChange={(event) => updatePrimaryPack(event.target.value)}>
+                      {packIds.map((packId) => (
+                        <option key={packId} value={packId}>{packId}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="field-block">
+                    <span>Items</span>
+                    <select value={spec.contentScope.items} onChange={(event) => updateContentScope('items', event.target.value as GameSpec['contentScope']['items'])}>
+                      <option value="none">None</option>
+                      <option value="light">Light</option>
+                      <option value="medium">Medium</option>
+                      <option value="heavy">Heavy</option>
+                    </select>
+                  </label>
+                  <label className="field-block">
+                    <span>Characters</span>
+                    <select value={spec.contentScope.characters} onChange={(event) => updateContentScope('characters', event.target.value as GameSpec['contentScope']['characters'])}>
+                      <option value="none">None</option>
+                      <option value="light">Light</option>
+                      <option value="medium">Medium</option>
+                      <option value="heavy">Heavy</option>
+                    </select>
+                  </label>
+                  <label className="field-block">
+                    <span>Abilities</span>
+                    <select value={spec.contentScope.abilities} onChange={(event) => updateContentScope('abilities', event.target.value as GameSpec['contentScope']['abilities'])}>
+                      <option value="none">None</option>
+                      <option value="light">Light</option>
+                      <option value="medium">Medium</option>
+                      <option value="heavy">Heavy</option>
+                    </select>
+                  </label>
+                  <label className="field-block">
+                    <span>Locations</span>
+                    <select value={spec.contentScope.locations} onChange={(event) => updateContentScope('locations', event.target.value as GameSpec['contentScope']['locations'])}>
+                      <option value="none">None</option>
+                      <option value="light">Light</option>
+                      <option value="medium">Medium</option>
+                      <option value="heavy">Heavy</option>
+                    </select>
+                  </label>
+                  <label className="field-block">
+                    <span>Markets</span>
+                    <select value={spec.contentScope.markets} onChange={(event) => updateContentScope('markets', event.target.value as GameSpec['contentScope']['markets'])}>
+                      <option value="none">None</option>
+                      <option value="light">Light</option>
+                      <option value="medium">Medium</option>
+                      <option value="heavy">Heavy</option>
+                    </select>
+                  </label>
+                  <label className="field-block">
+                    <span>Quests</span>
+                    <select value={spec.contentScope.quests} onChange={(event) => updateContentScope('quests', event.target.value as GameSpec['contentScope']['quests'])}>
+                      <option value="none">None</option>
+                      <option value="light">Light</option>
+                      <option value="medium">Medium</option>
+                      <option value="heavy">Heavy</option>
+                    </select>
+                  </label>
+                  <label className="field-block">
+                    <span>Graphs</span>
+                    <select value={spec.contentScope.graphs} onChange={(event) => updateContentScope('graphs', event.target.value as GameSpec['contentScope']['graphs'])}>
+                      <option value="none">None</option>
+                      <option value="light">Light</option>
+                      <option value="medium">Medium</option>
+                      <option value="heavy">Heavy</option>
+                    </select>
+                  </label>
+                </div>
+              </div>
+            ) : null}
+
+            {step === 3 ? (
+              <div className="detail-stack">
+                <div className="bootstrap-copy-block">
+                  <span className="section-label">Review</span>
+                  <h3>Generate a reviewable bootstrap patch</h3>
+                  <p className="subtle-line">The patch will set the game spec, record selected packs, and materialize starter archetypes, shared definitions, and optional starter graphs.</p>
+                </div>
+                <div className="bootstrap-review-grid">
+                  <div className="bootstrap-review-card">
+                    <span className="section-label">Game</span>
+                    <strong>{spec.title.trim() || 'Untitled project'}</strong>
+                    <p>{spec.theme.genre} · {spec.theme.tone} · {spec.theme.playerFantasy}</p>
+                  </div>
+                  <div className="bootstrap-review-card">
+                    <span className="section-label">Systems</span>
+                    <p>{spec.systems.combatStyle}, {spec.systems.inputStyle}, {spec.systems.inventoryStyle}, {spec.systems.economyStyle}</p>
+                  </div>
+                  <div className="bootstrap-review-card">
+                    <span className="section-label">Materialization</span>
+                    <p>{spec.selectedPresetIds.archetypes.length} archetypes · {spec.selectedPresetIds.definitions.length} definitions · {spec.selectedPresetIds.graphs.length} graphs</p>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+          </div>
+
+          <aside className="bootstrap-sidebar">
+            <div className="bootstrap-sidebar-block">
+              <span className="section-label">Selected Packs</span>
+              <div className="chip-row">
+                {spec.selectedPresetIds.packs.length > 0 ? spec.selectedPresetIds.packs.map((packId) => <span key={packId} className="chip">{packId}</span>) : <span className="inline-note">No preset packs selected yet.</span>}
+              </div>
+            </div>
+            <div className="bootstrap-sidebar-block">
+              <span className="section-label">Coverage</span>
+              <div className="stats-line bootstrap-stats">
+                <span>{spec.selectedPresetIds.archetypes.length} archetypes</span>
+                <span>{spec.selectedPresetIds.definitions.length} definitions</span>
+                <span>{spec.selectedPresetIds.graphs.length} graphs</span>
+              </div>
+            </div>
+            <div className="bootstrap-sidebar-block">
+              <span className="section-label">Flow</span>
+              <p className="subtle-line">Questionnaire first, patch review second, apply third. Nothing bypasses patch review.</p>
+            </div>
+          </aside>
+        </div>
+
+        <div className="bootstrap-footer">
+          <div className="bootstrap-nav">
+            <button className="ghost-button" disabled={step === 0} onClick={() => setStep((current) => Math.max(0, current - 1))} type="button">Back</button>
+            {step < steps.length - 1 ? (
+              <button className="primary-button" onClick={() => setStep((current) => Math.min(steps.length - 1, current + 1))} type="button">Next</button>
+            ) : null}
+          </div>
+          {step === steps.length - 1 ? <button className="primary-button" onClick={onGenerate} type="button">Review bootstrap patch</button> : <div className="inline-note">Move through the questionnaire step by step.</div>}
+        </div>
+      </section>
+    </div>
   )
 }
 

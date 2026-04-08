@@ -8,11 +8,12 @@ import type {
   ProjectSnapshot,
 } from './graphcore'
 import { graphNodeTemplatesByKey } from './nodeLibrary'
+import { PRESET_CATALOG_VERSION } from './presetCatalog'
 
 export function compileBundle(snapshot: ProjectSnapshot): GameSystemBundle {
   const graphKeys = new Set<string>()
   const diagnostics = [
-    ...validateDefinitions(snapshot.definitions, snapshot.archetypes, snapshot.assets),
+    ...validateDefinitions(snapshot.definitions, snapshot.archetypes, snapshot.assets, snapshot.graphs, snapshot.gameSpec),
     ...snapshot.graphs.flatMap((graph) => {
       const duplicateGraphKey = graphKeys.has(graph.key)
       graphKeys.add(graph.key)
@@ -74,6 +75,7 @@ export function compileBundle(snapshot: ProjectSnapshot): GameSystemBundle {
       assetCount: snapshot.assets.length,
     },
     archetypes: snapshot.archetypes,
+    gameSpec: snapshot.gameSpec,
     definitions: snapshot.definitions,
     graphs: snapshot.graphs,
     assets: snapshot.assets,
@@ -92,11 +94,25 @@ export function validateDefinitions(
   definitions: DefinitionBase[],
   archetypes: ArchetypeDefinition[],
   assets: AssetDefinition[],
+  graphs: GraphDefinition[],
+  gameSpec: ProjectSnapshot['gameSpec'],
 ): Diagnostic[] {
   const diagnostics: Diagnostic[] = []
   const seenKeys = new Set<string>()
   const assetKeys = new Set(assets.map((asset) => asset.key))
   const archetypesByKey = new Map(archetypes.map((archetype) => [archetype.key, archetype]))
+  const definitionsByKey = new Map(definitions.map((definition) => [definition.key, definition]))
+  const graphKeys = new Set(graphs.map((graph) => graph.key))
+
+  if (gameSpec && gameSpec.presetCatalogVersion !== PRESET_CATALOG_VERSION) {
+    diagnostics.push({
+      level: 'warning',
+      code: 'stale_preset_catalog',
+      message: `Game spec expects preset catalog "${gameSpec.presetCatalogVersion}" but the editor uses "${PRESET_CATALOG_VERSION}".`,
+      graphKey: null,
+      nodeKey: null,
+    })
+  }
 
   for (const definition of definitions) {
     if (seenKeys.has(definition.key)) {
@@ -166,6 +182,155 @@ export function validateDefinitions(
             level: 'warning',
             code: 'unknown_field_value',
             message: `Definition "${definition.key}" has value for unknown field "${fieldValue.fieldKey}".`,
+            graphKey: null,
+            nodeKey: null,
+          })
+        }
+      }
+    }
+
+    if (definition.kind === 'character') {
+      const inventoryComponent = definition.components.find((component) => component.type === 'inventory')
+      const loadoutComponent = definition.components.find((component) => component.type === 'ability_loadout')
+      const controlledBy = typeof definition.metadata.controlledBy === 'string' ? definition.metadata.controlledBy : null
+
+      if (!inventoryComponent) {
+        diagnostics.push({
+          level: 'warning',
+          code: 'character_missing_inventory',
+          message: `Character "${definition.key}" should include an inventory component.`,
+          graphKey: null,
+          nodeKey: null,
+        })
+      }
+
+      if (loadoutComponent?.type === 'ability_loadout') {
+        for (const entry of loadoutComponent.config.entries) {
+          const ability = definitionsByKey.get(entry.abilityKey)
+          if (!ability || ability.kind !== 'ability') {
+            diagnostics.push({
+              level: 'error',
+              code: 'missing_character_ability',
+              message: `Character "${definition.key}" references missing ability "${entry.abilityKey}".`,
+              graphKey: null,
+              nodeKey: null,
+            })
+          }
+
+          if (entry.unlockTokenKey && !definitionsByKey.has(entry.unlockTokenKey)) {
+            diagnostics.push({
+              level: 'error',
+              code: 'missing_character_unlock_token',
+              message: `Character "${definition.key}" references missing unlock token "${entry.unlockTokenKey}".`,
+              graphKey: null,
+              nodeKey: null,
+            })
+          }
+
+          if (entry.inputBinding && controlledBy !== 'player' && !definition.tags.includes('player_controlled')) {
+            diagnostics.push({
+              level: 'warning',
+              code: 'character_input_binding_scope',
+              message: `Character "${definition.key}" uses input bindings without being marked player-controlled.`,
+              graphKey: null,
+              nodeKey: null,
+            })
+          }
+        }
+      }
+    }
+
+    if (definition.kind === 'ability') {
+      const profile = definition.components.find((component) => component.type === 'ability_profile')
+      if (profile?.type === 'ability_profile') {
+        if (profile.config.resourceCostItemKey) {
+          const resource = definitionsByKey.get(profile.config.resourceCostItemKey)
+          if (!resource || resource.kind !== 'item') {
+            diagnostics.push({
+              level: 'error',
+              code: 'missing_ability_resource_item',
+              message: `Ability "${definition.key}" references missing resource item "${profile.config.resourceCostItemKey}".`,
+              graphKey: null,
+              nodeKey: null,
+            })
+          }
+        }
+      }
+    }
+
+    if (definition.kind === 'market') {
+      const inventory = definition.components.find((component) => component.type === 'market_inventory')
+      if (inventory?.type === 'market_inventory') {
+        for (const trade of inventory.config.trades) {
+          const offerItem = definitionsByKey.get(trade.offerItemKey)
+          const costItem = definitionsByKey.get(trade.costItemKey)
+
+          if (!offerItem || offerItem.kind !== 'item') {
+            diagnostics.push({
+              level: 'error',
+              code: 'missing_market_offer_item',
+              message: `Market "${definition.key}" references missing offered item "${trade.offerItemKey}".`,
+              graphKey: null,
+              nodeKey: null,
+            })
+          }
+
+          if (!costItem || costItem.kind !== 'item') {
+            diagnostics.push({
+              level: 'error',
+              code: 'missing_market_cost_item',
+              message: `Market "${definition.key}" references missing cost item "${trade.costItemKey}".`,
+              graphKey: null,
+              nodeKey: null,
+            })
+          }
+
+          if (trade.unlockTokenKey && !definitionsByKey.has(trade.unlockTokenKey)) {
+            diagnostics.push({
+              level: 'error',
+              code: 'missing_market_unlock_token',
+              message: `Market "${definition.key}" references missing unlock token "${trade.unlockTokenKey}".`,
+              graphKey: null,
+              nodeKey: null,
+            })
+          }
+        }
+      }
+    }
+
+    if (definition.kind === 'location') {
+      const locationState = definition.components.find((component) => component.type === 'location_state')
+      if (locationState?.type === 'location_state') {
+        for (const linkedGraphKey of locationState.config.linkedGraphKeys) {
+          if (!graphKeys.has(linkedGraphKey)) {
+            diagnostics.push({
+              level: 'error',
+              code: 'missing_location_graph',
+              message: `Location "${definition.key}" references missing graph "${linkedGraphKey}".`,
+              graphKey: null,
+              nodeKey: null,
+            })
+          }
+        }
+
+        for (const linkedMarketKey of locationState.config.linkedMarketKeys) {
+          const linkedMarket = definitionsByKey.get(linkedMarketKey)
+          if (!linkedMarket || linkedMarket.kind !== 'market') {
+            diagnostics.push({
+              level: 'error',
+              code: 'missing_location_market',
+              message: `Location "${definition.key}" references missing market "${linkedMarketKey}".`,
+              graphKey: null,
+              nodeKey: null,
+            })
+          }
+        }
+
+        if (locationState.config.unlockTokenKey && !definitionsByKey.has(locationState.config.unlockTokenKey)) {
+          diagnostics.push({
+            level: 'error',
+            code: 'missing_location_unlock_token',
+            message: `Location "${definition.key}" references missing unlock token "${locationState.config.unlockTokenKey}".`,
             graphKey: null,
             nodeKey: null,
           })

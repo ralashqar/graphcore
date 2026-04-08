@@ -1,10 +1,12 @@
 import { z } from 'zod'
+import { gameSpecSchema } from './gameSpec'
 
 export const definitionKindSchema = z.enum([
   'item',
   'stat',
   'quest',
   'character',
+  'ability',
   'location',
   'market',
   'narrative_flow',
@@ -25,7 +27,10 @@ export const componentTypeSchema = z.enum([
   'stat_block',
   'progression',
   'pricing',
+  'market_inventory',
   'dialogue_actor',
+  'ability_loadout',
+  'ability_profile',
   'quest_state',
   'location_state',
   'spawn_rules',
@@ -149,10 +154,31 @@ export const pricingComponentSchema = z.object({
     .default({ restockIntervalMinutes: null, maxStock: null }),
 })
 
+export const marketInventoryComponentSchema = z.object({
+  trades: z.array(z.object({
+    id: z.string(),
+    offerItemKey: z.string(),
+    offerQuantity: z.number().int().positive().default(1),
+    costItemKey: z.string(),
+    costQuantity: z.number().int().positive().default(1),
+    unlockTokenKey: z.string().nullable().default(null),
+  })).default([]),
+})
+
 export const dialogueActorComponentSchema = z.object({
   portraitAssetKey: z.string().nullable().default(null),
   voiceAssetKey: z.string().nullable().default(null),
   persona: z.string().default(''),
+})
+
+export const abilityLoadoutComponentSchema = z.object({
+  entries: z.array(z.object({
+    abilityKey: z.string(),
+    slotKey: z.string(),
+    inputBinding: z.string().nullable().default(null),
+    cooldownGroup: z.string().nullable().default(null),
+    unlockTokenKey: z.string().nullable().default(null),
+  })).default([]),
 })
 
 export const questStateComponentSchema = z.object({
@@ -163,6 +189,9 @@ export const questStateComponentSchema = z.object({
 export const locationStateComponentSchema = z.object({
   region: z.string().default(''),
   isUnlockedByDefault: z.boolean().default(false),
+  linkedGraphKeys: z.array(z.string()).default([]),
+  linkedMarketKeys: z.array(z.string()).default([]),
+  unlockTokenKey: z.string().nullable().default(null),
 })
 
 export const spawnRulesComponentSchema = z.object({
@@ -174,6 +203,15 @@ export const mediaComponentSchema = z.object({
   imageAssetKey: z.string().nullable().default(null),
   audioAssetKey: z.string().nullable().default(null),
   caption: z.string().nullable().default(null),
+})
+
+export const abilityProfileComponentSchema = z.object({
+  targetMode: z.enum(['self', 'ally', 'enemy', 'area', 'passive']).default('enemy'),
+  cooldownSeconds: z.number().nonnegative().default(0),
+  castTimeSeconds: z.number().nonnegative().default(0),
+  resourceCostItemKey: z.string().nullable().default(null),
+  resourceCostQuantity: z.number().int().nonnegative().default(0),
+  effectOps: z.lazy(() => z.array(effectOpSchema).default([])),
 })
 
 export const componentConfigSchema = z.discriminatedUnion('type', [
@@ -194,8 +232,20 @@ export const componentConfigSchema = z.discriminatedUnion('type', [
     config: pricingComponentSchema,
   }),
   z.object({
+    type: z.literal('market_inventory'),
+    config: marketInventoryComponentSchema,
+  }),
+  z.object({
     type: z.literal('dialogue_actor'),
     config: dialogueActorComponentSchema,
+  }),
+  z.object({
+    type: z.literal('ability_loadout'),
+    config: abilityLoadoutComponentSchema,
+  }),
+  z.object({
+    type: z.literal('ability_profile'),
+    config: abilityProfileComponentSchema,
   }),
   z.object({
     type: z.literal('quest_state'),
@@ -420,7 +470,9 @@ export const projectSnapshotSchema = z.object({
     version: z.number().int().positive(),
     isPrimary: z.boolean(),
     updatedAt: z.string(),
+    metadata: z.record(z.string(), z.unknown()).default({}),
   }),
+  gameSpec: gameSpecSchema.nullable().default(null),
   archetypes: z.array(archetypeDefinitionSchema).default([]),
   definitions: z.array(definitionBaseSchema),
   graphs: z.array(graphDefinitionSchema),
@@ -446,6 +498,30 @@ export const projectSnapshotSchema = z.object({
 })
 
 export const patchOperationSchema = z.discriminatedUnion('op', [
+  z.object({
+    op: z.literal('set_game_spec'),
+    gameSpec: gameSpecSchema,
+  }),
+  z.object({
+    op: z.literal('apply_preset_pack'),
+    packId: z.string(),
+  }),
+  z.object({
+    op: z.literal('instantiate_archetype_preset'),
+    presetId: z.string(),
+  }),
+  z.object({
+    op: z.literal('instantiate_definition_preset'),
+    presetId: z.string(),
+    keyOverride: z.string().optional(),
+    nameOverride: z.string().optional(),
+  }),
+  z.object({
+    op: z.literal('instantiate_graph_preset'),
+    presetId: z.string(),
+    keyOverride: z.string().optional(),
+    nameOverride: z.string().optional(),
+  }),
   z.object({
     op: z.literal('create_archetype'),
     key: z.string(),
@@ -668,6 +744,7 @@ export const gameSystemBundleSchema = z.object({
     assetCount: z.number().int().nonnegative(),
   }),
   archetypes: z.array(archetypeDefinitionSchema),
+  gameSpec: gameSpecSchema.nullable().default(null),
   definitions: z.array(definitionBaseSchema),
   graphs: z.array(graphDefinitionSchema),
   assets: z.array(assetDefinitionSchema),
@@ -704,6 +781,7 @@ export type GraphEditorSelection = {
   nodeKey: string | null
   edgeKey: string | null
 }
+export type GameSpec = z.infer<typeof gameSpecSchema>
 export type NodeTemplateDefinition = {
   key: string
   label: string
@@ -738,6 +816,7 @@ export const schemaCatalog = {
   fieldDefinitionSchema,
   fieldValueSchema,
   formulaExprSchema,
+  gameSpecSchema,
   gameSystemBundleSchema,
   graphDefinitionSchema,
   graphTypeSchema,

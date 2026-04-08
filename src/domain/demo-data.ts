@@ -1,4 +1,5 @@
 import { projectSnapshotSchema, type ProjectSnapshot } from './graphcore'
+import { createDefaultGameSpec } from './presetCatalog'
 
 export const demoProjectSnapshot: ProjectSnapshot = projectSnapshotSchema.parse({
   workspace: {
@@ -20,7 +21,11 @@ export const demoProjectSnapshot: ProjectSnapshot = projectSnapshotSchema.parse(
     version: 8,
     isPrimary: true,
     updatedAt: '2026-04-08T14:20:00.000Z',
+    metadata: {
+      gameSpec: createDefaultGameSpec(['pack.rpg_core']),
+    },
   },
+  gameSpec: createDefaultGameSpec(['pack.rpg_core']),
   archetypes: [
     {
       id: 'arch-consumable',
@@ -168,8 +173,121 @@ export const demoProjectSnapshot: ProjectSnapshot = projectSnapshotSchema.parse(
         },
       ],
     },
+    {
+      id: 'arch-currency',
+      key: 'item.currency',
+      name: 'Currency',
+      summary: 'Economy token used for trades and vendors.',
+      appliesToKind: 'item',
+      iconAssetKey: null,
+      metadata: { category: 'currency' },
+      llmHints: {},
+      fields: [
+        {
+          id: 'field-currency-description',
+          key: 'description',
+          label: 'Description',
+          fieldType: 'long_text',
+          description: 'Short player-facing description.',
+          required: true,
+          defaultValue: '',
+          constraints: {},
+          sortOrder: 0,
+        },
+        {
+          id: 'field-currency-symbol',
+          key: 'symbol',
+          label: 'Symbol',
+          fieldType: 'text',
+          description: 'Displayed short symbol.',
+          required: false,
+          defaultValue: '',
+          constraints: {},
+          sortOrder: 1,
+        },
+      ],
+    },
+    {
+      id: 'arch-character-questgiver',
+      key: 'character.npc_questgiver',
+      name: 'Quest Giver NPC',
+      summary: 'Narrative NPC that anchors quest and dialogue flows.',
+      appliesToKind: 'character',
+      iconAssetKey: 'image.sera',
+      metadata: { controlledBy: 'ai' },
+      llmHints: {},
+      fields: [
+        {
+          id: 'field-character-role',
+          key: 'role',
+          label: 'Role',
+          fieldType: 'text',
+          description: 'Primary role label.',
+          required: false,
+          defaultValue: 'questgiver',
+          constraints: {},
+          sortOrder: 0,
+        },
+      ],
+    },
+    {
+      id: 'arch-ability-spell',
+      key: 'ability.active_spell',
+      name: 'Active Spell',
+      summary: 'Triggered magical ability with optional resource cost.',
+      appliesToKind: 'ability',
+      iconAssetKey: null,
+      metadata: {},
+      llmHints: {},
+      fields: [
+        {
+          id: 'field-ability-description',
+          key: 'description',
+          label: 'Description',
+          fieldType: 'long_text',
+          description: 'Short ability description.',
+          required: true,
+          defaultValue: '',
+          constraints: {},
+          sortOrder: 0,
+        },
+        {
+          id: 'field-ability-element',
+          key: 'element',
+          label: 'Element',
+          fieldType: 'enum',
+          description: 'Damage or spell element.',
+          required: false,
+          defaultValue: 'fire',
+          constraints: { options: ['fire', 'ice', 'lightning', 'shadow', 'holy'] },
+          sortOrder: 1,
+        },
+      ],
+    },
   ],
   definitions: [
+    {
+      id: 'def-currency-gold',
+      key: 'currency.gold',
+      kind: 'item',
+      name: 'Gold',
+      summary: 'Default market currency.',
+      status: 'active',
+      iconAssetKey: null,
+      archetypeKey: 'item.currency',
+      tags: ['currency'],
+      schemaVersion: 1,
+      metadata: {},
+      llmHints: {},
+      assetRefs: [],
+      definitionData: { stackable: true },
+      fieldValues: [
+        { fieldKey: 'description', value: 'Stamped frontier coinage used in trade.' },
+        { fieldKey: 'symbol', value: 'G' },
+      ],
+      customFields: [],
+      components: [],
+    },
     {
       id: 'def-item-lantern',
       key: 'item.lantern',
@@ -323,6 +441,40 @@ export const demoProjectSnapshot: ProjectSnapshot = projectSnapshotSchema.parse(
       ],
     },
     {
+      id: 'def-ability-fireball',
+      key: 'ability.fireball',
+      kind: 'ability',
+      name: 'Fireball',
+      summary: 'Starter offensive spell for caster characters.',
+      status: 'active',
+      iconAssetKey: null,
+      archetypeKey: 'ability.active_spell',
+      tags: ['starter_spell'],
+      schemaVersion: 1,
+      metadata: {},
+      llmHints: {},
+      assetRefs: [],
+      definitionData: {},
+      fieldValues: [
+        { fieldKey: 'description', value: 'Hurl a fast fire projectile at an enemy.' },
+        { fieldKey: 'element', value: 'fire' },
+      ],
+      customFields: [],
+      components: [
+        {
+          type: 'ability_profile',
+          config: {
+            targetMode: 'enemy',
+            cooldownSeconds: 6,
+            castTimeSeconds: 0.4,
+            resourceCostItemKey: null,
+            resourceCostQuantity: 0,
+            effectOps: [],
+          },
+        },
+      ],
+    },
+    {
       id: 'def-char-watch',
       key: 'character.warden_sera',
       kind: 'character',
@@ -330,10 +482,10 @@ export const demoProjectSnapshot: ProjectSnapshot = projectSnapshotSchema.parse(
       summary: 'Frontier captain who controls access to the bridge route.',
       status: 'active',
       iconAssetKey: 'image.sera',
-      archetypeKey: null,
+      archetypeKey: 'character.npc_questgiver',
       tags: ['npc'],
       schemaVersion: 1,
-      metadata: {},
+      metadata: { controlledBy: 'ai' },
       llmHints: { tone: 'severe but fair' },
       assetRefs: [
         { assetKey: 'image.sera', usage: 'portrait', required: false },
@@ -343,6 +495,27 @@ export const demoProjectSnapshot: ProjectSnapshot = projectSnapshotSchema.parse(
       fieldValues: [],
       customFields: [],
       components: [
+        {
+          type: 'inventory',
+          config: {
+            startingItems: [],
+            capacityFormula: null,
+          },
+        },
+        {
+          type: 'ability_loadout',
+          config: {
+            entries: [
+              {
+                abilityKey: 'ability.fireball',
+                slotKey: 'warning_spell',
+                inputBinding: null,
+                cooldownGroup: 'dialogue_threat',
+                unlockTokenKey: null,
+              },
+            ],
+          },
+        },
         {
           type: 'dialogue_actor',
           config: {
@@ -376,6 +549,9 @@ export const demoProjectSnapshot: ProjectSnapshot = projectSnapshotSchema.parse(
           config: {
             region: 'frontier',
             isUnlockedByDefault: false,
+            linkedGraphKeys: ['graph.bridge_intro'],
+            linkedMarketKeys: ['market.bridge_camp'],
+            unlockTokenKey: 'token.shadow.gate_01',
           },
         },
       ],
@@ -399,14 +575,18 @@ export const demoProjectSnapshot: ProjectSnapshot = projectSnapshotSchema.parse(
       customFields: [],
       components: [
         {
-          type: 'pricing',
+          type: 'market_inventory',
           config: {
-            currencyItemKey: 'item.lantern',
-            priceFormula: 'lookup:market.bridge_camp.base_price',
-            stockRules: {
-              restockIntervalMinutes: 60,
-              maxStock: 8,
-            },
+            trades: [
+              {
+                id: 'trade-minor-healing',
+                offerItemKey: 'item.potion_minor_healing',
+                offerQuantity: 1,
+                costItemKey: 'currency.gold',
+                costQuantity: 12,
+                unlockTokenKey: null,
+              },
+            ],
           },
         },
       ],

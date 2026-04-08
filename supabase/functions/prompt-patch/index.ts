@@ -24,11 +24,12 @@ const requestSchema = z.object({
   snapshot: z.object({
     workspace: z.object({ slug: z.string(), name: z.string() }),
     project: z.object({ id: z.string(), slug: z.string(), name: z.string(), summary: z.string().optional() }),
-    draft: z.object({ id: z.string() }),
+    draft: z.object({ id: z.string(), metadata: z.record(z.string(), z.unknown()).optional() }),
     definitions: z.array(z.record(z.string(), z.unknown())).default([]),
     archetypes: z.array(z.record(z.string(), z.unknown())).default([]),
     graphs: z.array(z.record(z.string(), z.unknown())).default([]),
     assets: z.array(z.record(z.string(), z.unknown())).default([]),
+    gameSpec: z.record(z.string(), z.unknown()).nullable().optional(),
   }),
   context: z.object({
     graphKey: z.string().nullable().optional(),
@@ -38,6 +39,12 @@ const requestSchema = z.object({
   }).optional(),
   targetMode: z.enum(['current_graph', 'new_graph', 'auto']).optional(),
   graphType: z.enum(['narrative_flow', 'quest_flow', 'system_graph']).optional(),
+  intent: z.enum(['bootstrap_game', 'create_content', 'extend_graph', 'repair_graph', 'polish_text']).optional(),
+  phase: z.enum(['spec', 'content', 'graph_skeleton', 'graph_wiring', 'text_polish']).optional(),
+  gameSpec: z.record(z.string(), z.unknown()).nullable().optional(),
+  selectedPresetIds: z.array(z.string()).optional(),
+  allowedPresetIds: z.array(z.string()).optional(),
+  operationBudget: z.number().int().positive().optional(),
   model: z.string().min(1),
 })
 
@@ -69,6 +76,30 @@ type PromptPassSuccess = {
 type PromptPassFailure = {
   ok: false
   response: PromptPatchHttpResponse
+}
+
+const responseJsonSchema = {
+  name: 'graphcore_patch_response',
+  schema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['summary', 'diagnostics', 'operations'],
+    properties: {
+      summary: { type: 'string' },
+      assistantNotes: { type: 'string' },
+      diagnostics: {
+        type: 'array',
+        items: { type: 'string' },
+      },
+      operations: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: true,
+        },
+      },
+    },
+  },
 }
 
 function inferGraphIntentFromPrompt(payload: PromptRequest) {
@@ -179,18 +210,19 @@ async function runPromptPass({
   maxOperations: number
   maxOutputTokens: number
 }): Promise<PromptPassSuccess | PromptPassFailure> {
-    const aiResponse = await runOpenAiResponses({
-      model: payload.model,
-      input: [
-        { role: 'system', content: [{ type: 'input_text', text: systemText }] },
-        { role: 'user', content: [{ type: 'input_text', text: JSON.stringify(promptContext, null, 2) }] },
-      ],
-      text: {
-        format: {
-          type: 'json_object',
-        },
+  const aiResponse = await runOpenAiResponses({
+    model: payload.model,
+    input: [
+      { role: 'system', content: [{ type: 'input_text', text: systemText }] },
+      { role: 'user', content: [{ type: 'input_text', text: JSON.stringify(promptContext, null, 2) }] },
+    ],
+    text: {
+      format: {
+        type: 'json_schema',
+        ...responseJsonSchema,
       },
-      reasoning: { effort: 'low' },
+    },
+    reasoning: { effort: 'low' },
     metadata: { feature: 'prompt-patch', pass: passLabel, target_mode: payload.targetMode ?? 'auto' },
     store: false,
     maxOutputTokens,
@@ -292,6 +324,7 @@ Deno.serve(async (request) => {
     const inferredIntent = inferGraphIntentFromPrompt(payload)
     const effectivePayload: PromptRequest = {
       ...payload,
+      gameSpec: payload.gameSpec ?? payload.snapshot.gameSpec ?? null,
       context: {
         ...payload.context,
         target:
