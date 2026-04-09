@@ -455,9 +455,59 @@ function buildRoofGeometry(
     return geometry
   }
 
+  if (
+    node.kind === 'roof_shed'
+    || node.kind === 'roof_gable'
+    || node.kind === 'roof_hip'
+    || node.kind === 'roof_pyramid'
+    || node.kind === 'roof_pointed'
+  ) {
+    const geometry = extrudeProfile(profile, Math.max(height, 0.2))
+    const position = geometry.getAttribute('position')
+    const ridgeAlongX = size.x >= size.z
+    const halfWidth = Math.max(size.x * 0.5, 0.0001)
+    const halfDepth = Math.max(size.z * 0.5, 0.0001)
+    const topThreshold = Math.max(height - 0.001, 0.001)
+
+    for (let index = 0; index < position.count; index += 1) {
+      const y = position.getY(index)
+      if (y < topThreshold) continue
+
+      let x = position.getX(index)
+      let z = position.getZ(index)
+      let nextY = y
+
+      if (node.kind === 'roof_shed') {
+        const normalized = ridgeAlongX
+          ? (z - center.z) / halfDepth
+          : (x - center.x) / halfWidth
+        const t = (normalized + 1) * 0.5
+        nextY = Math.max(0.06, Math.min(height, t * height))
+      } else if (node.kind === 'roof_gable') {
+        if (ridgeAlongX) z = center.z
+        else x = center.x
+      } else if (node.kind === 'roof_hip') {
+        x = center.x + (x - center.x) * 0.28
+        z = center.z + (z - center.z) * 0.28
+      } else {
+        x = center.x
+        z = center.z
+      }
+
+      position.setXYZ(index, x, nextY, z)
+    }
+
+    position.needsUpdate = true
+    geometry.computeVertexNormals()
+    geometry.computeBoundingBox()
+    geometry.translate(placement.offsetX, placement.baseElevation, placement.offsetZ)
+    return geometry
+  }
+
   if (node.kind === 'roof_dome') {
-    const radius = Math.max(size.x, size.z) * 0.35
+    const radius = Math.max(Math.max(size.x, size.z) * 0.5, 0.2)
     const geometry = new SphereGeometry(radius, 24, 16, 0, Math.PI * 2, 0, Math.PI / 2)
+    geometry.scale(size.x > 0 ? size.x / (radius * 2) : 1, Math.max(height / radius, 0.2), size.z > 0 ? size.z / (radius * 2) : 1)
     geometry.translate(center.x + placement.offsetX, placement.baseElevation, center.z + placement.offsetZ)
     return geometry
   }
