@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useTransition } from 'react'
 
-import type { ArchetypeDefinition, AssetDefinition, AssemblyGraphDefinition, DefinitionBase, FieldDefinition, FieldValue } from '../../domain/graphcore'
+import type { ArchetypeDefinition, AssetDefinition, AssemblyGraphDefinition, DefinitionBase, EnvironmentBlueprintV1, FieldDefinition, FieldValue } from '../../domain/graphcore'
 import { DefinitionEditor } from './DefinitionEditor'
 import { EnvironmentAssemblyWorkspace } from './EnvironmentAssemblyWorkspace'
 import { AssetPickerDialog, EmptyEditor, MediaThumb, findAssetByKey, resolveItemIconAssetKey } from './shared'
@@ -17,20 +17,24 @@ type SpecializedDefinitionWorkspaceProps = {
   definitions: DefinitionBase[]
   graphKeys: string[]
   assemblyGraphs: AssemblyGraphDefinition[]
+  environmentBlueprints?: EnvironmentBlueprintV1[]
   selectedAsset: AssetDefinition | null
   selectedDefinition: DefinitionBase | null
   onAddCustomField: (itemKey: string, field: FieldDefinition) => void
   onAssignDefinitionIcon: (assetKey: string | null) => void
   isGeneratingPrompt: boolean
+  onCreateEnvironmentBlueprint: (environmentKey: string) => string | null
   onCreateAssemblyGraph: (environmentKey: string) => string | null
   onCreateDefinition: (archetypeKey?: string | null) => void
   onCreateUrlAsset: (url: string, kind?: 'image' | 'mesh') => void
   onDeleteAssemblyGraph: (graphKey: string) => void
+  onDeleteEnvironmentBlueprint: (blueprintId: string) => void
   onChangePromptText: (value: string) => void
   onGeneratePrompt: () => void
   onSelectAsset: (key: string | null) => void
   onSelectDefinition: (key: string | null) => void
   onUpsertAssemblyGraph: (graph: AssemblyGraphDefinition) => void
+  onUpsertEnvironmentBlueprint: (blueprint: EnvironmentBlueprintV1) => void
   onUpdateComponents: (itemKey: string, components: DefinitionBase['components']) => void
   onUpdateFieldValue: (itemKey: string, fieldKey: string, value: FieldValue['value']) => void
   onUpdateItemIdentity: (key: string, changes: Partial<Pick<DefinitionBase, 'name' | 'key' | 'summary' | 'iconAssetKey' | 'archetypeKey'>>) => void
@@ -46,20 +50,24 @@ export function SpecializedDefinitionWorkspace({
   definitions,
   graphKeys,
   assemblyGraphs,
+  environmentBlueprints = [],
   selectedAsset,
   selectedDefinition,
   onAddCustomField,
   onAssignDefinitionIcon,
   isGeneratingPrompt,
+  onCreateEnvironmentBlueprint,
   onCreateAssemblyGraph,
   onCreateDefinition,
   onCreateUrlAsset: _onCreateUrlAsset,
   onDeleteAssemblyGraph,
+  onDeleteEnvironmentBlueprint,
   onChangePromptText,
   onGeneratePrompt,
   onSelectAsset: _onSelectAsset,
   onSelectDefinition,
   onUpsertAssemblyGraph,
+  onUpsertEnvironmentBlueprint,
   onUpdateComponents,
   onUpdateFieldValue,
   onUpdateItemIdentity,
@@ -97,6 +105,12 @@ export function SpecializedDefinitionWorkspace({
     const graphKey = geometryBinding?.type === 'environment_geometry_binding' ? geometryBinding.config.assemblyGraphKey : null
     return assemblyGraphs.find((graph) => graph.key === graphKey) ?? null
   }, [assemblyGraphs, effectiveSelection])
+  const selectedEnvironmentBlueprint = useMemo(() => {
+    if (effectiveSelection?.kind !== 'environment') return null
+    const geometryBinding = effectiveSelection.components.find((component) => component.type === 'environment_geometry_binding')
+    const blueprintId = geometryBinding?.type === 'environment_geometry_binding' ? geometryBinding.config.environmentBlueprintKey : null
+    return environmentBlueprints.find((blueprint) => blueprint.id === blueprintId) ?? null
+  }, [effectiveSelection, environmentBlueprints])
   const definitionPanelControls = supports3dPanel ? (
     <div className="segmented-control panel-mode-control" aria-label="Character panel mode">
       <button
@@ -268,21 +282,27 @@ export function SpecializedDefinitionWorkspace({
                 <Definition3dPanel
                   assets={assets}
                   assemblyGraph={selectedAssemblyGraph}
+                  environmentBlueprint={selectedEnvironmentBlueprint}
                   definition={effectiveSelection}
                   onUpdateComponents={onUpdateComponents}
                 />
               ) : panelMode === 'graph' && effectiveSelection.kind === 'environment' ? (
                 <EnvironmentAssemblyWorkspace
                   assemblyGraphs={assemblyGraphs}
+                  environmentBlueprints={environmentBlueprints}
                   environment={effectiveSelection}
                   isGeneratingPrompt={isGeneratingPrompt}
                   isOpeningPreview={isOpeningPreview}
+                  mode="graph_only"
                   onChangePromptText={onChangePromptText}
+                  onCreateEnvironmentBlueprint={onCreateEnvironmentBlueprint}
                   onCreateAssemblyGraph={onCreateAssemblyGraph}
                   onDeleteAssemblyGraph={onDeleteAssemblyGraph}
+                  onDeleteEnvironmentBlueprint={onDeleteEnvironmentBlueprint}
                   onGeneratePrompt={onGeneratePrompt}
                   onOpenPreview={() => startOpeningPreview(() => setPanelMode('3d'))}
                   onUpsertAssemblyGraph={onUpsertAssemblyGraph}
+                  onUpsertEnvironmentBlueprint={onUpsertEnvironmentBlueprint}
                   onUpdateComponents={onUpdateComponents}
                   promptText={promptText}
                 />

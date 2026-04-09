@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { visualAssetGenerationService } from '../../application/services/visualAssetGenerationService'
 import { isImageAsset, isMeshAsset, resolveAssetSourceUrl } from '../../domain/assets'
+import { compileEnvironmentBlueprint } from '../../domain/environmentBlueprint'
 import { compileAssemblyGraph, createAssemblyCompileCache } from '../../domain/environmentAssemblyCompiler'
 import {
   getCharacterProfile,
@@ -11,18 +12,19 @@ import {
   type EnvironmentRenderBindingConfig,
   type Render3dBindingConfig,
 } from '../../domain/render3d'
-import type { AssetDefinition, AssemblyGraphDefinition, DefinitionBase } from '../../domain/graphcore'
+import type { AssetDefinition, AssemblyGraphDefinition, DefinitionBase, EnvironmentBlueprintV1 } from '../../domain/graphcore'
 import { MediaThumb, findAssetByKey } from '../content/shared'
 import { ThreeSceneViewport } from './ThreeSceneViewport'
 
 type Definition3dPanelProps = {
   assets: AssetDefinition[]
   assemblyGraph?: AssemblyGraphDefinition | null
+  environmentBlueprint?: EnvironmentBlueprintV1 | null
   definition: DefinitionBase
   onUpdateComponents: (itemKey: string, components: DefinitionBase['components']) => void
 }
 
-export function Definition3dPanel({ assets, assemblyGraph = null, definition, onUpdateComponents }: Definition3dPanelProps) {
+export function Definition3dPanel({ assets, assemblyGraph = null, environmentBlueprint = null, definition, onUpdateComponents }: Definition3dPanelProps) {
   const [showFloor, setShowFloor] = useState(true)
   const [showGrid, setShowGrid] = useState(false)
   const [resetSignal, setResetSignal] = useState(0)
@@ -42,7 +44,7 @@ export function Definition3dPanel({ assets, assemblyGraph = null, definition, on
   const previewImageAsset = findAssetByKey(assets, renderBinding.previewImageAssetKey)
   const meshSourceUrl = resolveAssetSourceUrl(meshAsset)
   const meshSourceLabel = meshSourceUrl ?? 'No mesh source bound'
-  const isProceduralEnvironment = isEnvironment && geometryBinding?.sourceMode === 'procedural_graph'
+  const isProceduralEnvironment = isEnvironment && (geometryBinding?.sourceMode === 'procedural_graph' || geometryBinding?.sourceMode === 'procedural_blueprint')
   const compileCacheRef = useRef(createAssemblyCompileCache())
   const lastCompiledPreviewRef = useRef<{
     signature: string
@@ -53,7 +55,24 @@ export function Definition3dPanel({ assets, assemblyGraph = null, definition, on
   } | null>(null)
   const compiledPreview = useMemo(
     () => {
-      if (!(isEnvironment && geometryBinding?.sourceMode === 'procedural_graph' && assemblyGraph)) return null
+      if (!(isEnvironment && geometryBinding && (geometryBinding.sourceMode === 'procedural_graph' || geometryBinding.sourceMode === 'procedural_blueprint'))) return null
+      if (geometryBinding.sourceMode === 'procedural_blueprint' && environmentBlueprint) {
+        const compileResult = compileEnvironmentBlueprint(environmentBlueprint, {
+          existingGraph: assemblyGraph ?? undefined,
+          existingCache: compileCacheRef.current,
+        })
+        compileCacheRef.current = compileResult.compileResult.cache
+        const value = {
+          compileResult: compileResult.compileResult,
+          compiledEnvironment: {
+            ...compileResult.compiledModel,
+            parts: compileResult.compiledModel.parts.filter((part) => part.kind !== 'debug' && part.kind !== 'line'),
+          },
+        }
+        lastCompiledPreviewRef.current = { signature: JSON.stringify({ blueprint: environmentBlueprint, graphKey: assemblyGraph?.key ?? null }), value }
+        return value
+      }
+      if (!assemblyGraph) return null
       const signature = JSON.stringify({
         key: assemblyGraph.key,
         metadata: assemblyGraph.metadata,
@@ -76,7 +95,7 @@ export function Definition3dPanel({ assets, assemblyGraph = null, definition, on
       lastCompiledPreviewRef.current = { signature, value }
       return value
     },
-    [assemblyGraph, geometryBinding?.sourceMode, isEnvironment],
+    [assemblyGraph, environmentBlueprint, geometryBinding, isEnvironment],
   )
   const compiledEnvironment = compiledPreview?.compiledEnvironment ?? null
   const compiledPartSummary = useMemo(

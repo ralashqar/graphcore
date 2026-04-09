@@ -4,6 +4,7 @@ import type {
   AssetDefinition,
   Diagnostic,
   DefinitionBase,
+  EnvironmentBlueprintV1,
   GameSystemBundle,
   GraphDefinition,
   ProjectSnapshot,
@@ -28,11 +29,17 @@ function pushDiagnostic(diagnostics: Diagnostic[], diagnostic: Diagnostic) {
 }
 
 export function compileBundle(snapshot: ProjectSnapshot): GameSystemBundle {
+  const definitions = snapshot.definitions ?? []
+  const archetypes = snapshot.archetypes ?? []
+  const assets = snapshot.assets ?? []
+  const graphs = snapshot.graphs ?? []
+  const assemblyGraphs = snapshot.assemblyGraphs ?? []
+  const environmentBlueprints = snapshot.environmentBlueprints ?? []
   const graphKeys = new Set<string>()
   const assemblyGraphKeys = new Set<string>()
   const diagnostics = [
-    ...validateDefinitions(snapshot.definitions, snapshot.archetypes, snapshot.assets, snapshot.graphs, snapshot.assemblyGraphs, snapshot.gameSpec),
-    ...snapshot.graphs.flatMap((graph) => {
+    ...validateDefinitions(definitions, archetypes, assets, graphs, assemblyGraphs, environmentBlueprints, snapshot.gameSpec),
+    ...graphs.flatMap((graph) => {
       const duplicateGraphKey = graphKeys.has(graph.key)
       graphKeys.add(graph.key)
       return [
@@ -45,10 +52,10 @@ export function compileBundle(snapshot: ProjectSnapshot): GameSystemBundle {
               nodeKey: null,
             }]
           : []),
-        ...validateGraph(graph, snapshot.graphs, snapshot.definitions, snapshot.assets),
+        ...validateGraph(graph, graphs, definitions, assets),
       ]
     }),
-    ...snapshot.assemblyGraphs.flatMap((graph) => {
+    ...assemblyGraphs.flatMap((graph) => {
       const duplicateGraphKey = assemblyGraphKeys.has(graph.key)
       assemblyGraphKeys.add(graph.key)
       return duplicateGraphKey
@@ -62,33 +69,33 @@ export function compileBundle(snapshot: ProjectSnapshot): GameSystemBundle {
         : validateAssemblyGraph(graph)
     }),
   ]
-  const compiledEnvironments = snapshot.assemblyGraphs.map((graph) => compileAssemblyGraph(graph).compiledModel)
+  const compiledEnvironments = assemblyGraphs.map((graph) => compileAssemblyGraph(graph).compiledModel)
 
-  const definitionsByKind = snapshot.definitions.reduce<Record<string, string[]>>((acc, definition) => {
+  const definitionsByKind = definitions.reduce<Record<string, string[]>>((acc, definition) => {
     acc[definition.kind] ??= []
     acc[definition.kind].push(definition.key)
     return acc
   }, {})
 
-  const definitionsByArchetype = snapshot.definitions.reduce<Record<string, string[]>>((acc, definition) => {
+  const definitionsByArchetype = definitions.reduce<Record<string, string[]>>((acc, definition) => {
     const archetypeKey = definition.archetypeKey ?? 'untyped'
     acc[archetypeKey] ??= []
     acc[archetypeKey].push(definition.key)
     return acc
   }, {})
 
-  const archetypesByKind = snapshot.archetypes.reduce<Record<string, string[]>>((acc, archetype) => {
+  const archetypesByKind = archetypes.reduce<Record<string, string[]>>((acc, archetype) => {
     acc[archetype.appliesToKind] ??= []
     acc[archetype.appliesToKind].push(archetype.key)
     return acc
   }, {})
 
-  const graphEntryNodes = snapshot.graphs.reduce<Record<string, string | null>>((acc, graph) => {
+  const graphEntryNodes = graphs.reduce<Record<string, string | null>>((acc, graph) => {
     acc[graph.key] = graph.entryNodeKey
     return acc
   }, {})
 
-  const assetKeysByKind = snapshot.assets.reduce<Record<string, string[]>>((acc, asset) => {
+  const assetKeysByKind = assets.reduce<Record<string, string[]>>((acc, asset) => {
     acc[asset.kind] ??= []
     acc[asset.kind].push(asset.key)
     return acc
@@ -101,18 +108,19 @@ export function compileBundle(snapshot: ProjectSnapshot): GameSystemBundle {
       projectSlug: snapshot.project.slug,
       draftId: snapshot.draft.id,
       generatedAt: new Date().toISOString(),
-      definitionCount: snapshot.definitions.length,
-      graphCount: snapshot.graphs.length,
-      archetypeCount: snapshot.archetypes.length,
-      assetCount: snapshot.assets.length,
+      definitionCount: definitions.length,
+      graphCount: graphs.length,
+      archetypeCount: archetypes.length,
+      assetCount: assets.length,
     },
-    archetypes: snapshot.archetypes,
+    archetypes,
     gameSpec: snapshot.gameSpec,
-    definitions: snapshot.definitions,
-    graphs: snapshot.graphs,
-    assemblyGraphs: snapshot.assemblyGraphs,
+    definitions,
+    graphs,
+    assemblyGraphs,
+    environmentBlueprints,
     compiledEnvironments,
-    assets: snapshot.assets,
+    assets,
     lookupIndices: {
       definitionsByKind,
       definitionsByArchetype,
@@ -125,11 +133,12 @@ export function compileBundle(snapshot: ProjectSnapshot): GameSystemBundle {
 }
 
 export function validateDefinitions(
-  definitions: DefinitionBase[],
-  archetypes: ArchetypeDefinition[],
-  assets: AssetDefinition[],
-  graphs: GraphDefinition[],
-  assemblyGraphs: AssemblyGraphDefinition[],
+  definitions: DefinitionBase[] = [],
+  archetypes: ArchetypeDefinition[] = [],
+  assets: AssetDefinition[] = [],
+  graphs: GraphDefinition[] = [],
+  assemblyGraphs: AssemblyGraphDefinition[] = [],
+  environmentBlueprints: EnvironmentBlueprintV1[] = [],
   gameSpec: ProjectSnapshot['gameSpec'],
 ): Diagnostic[] {
   const diagnostics: Diagnostic[] = []
@@ -139,6 +148,7 @@ export function validateDefinitions(
   const definitionsByKey = new Map(definitions.map((definition) => [definition.key, definition]))
   const graphKeys = new Set(graphs.map((graph) => graph.key))
   const assemblyGraphKeys = new Set(assemblyGraphs.map((graph) => graph.key))
+  const environmentBlueprintKeys = new Set(environmentBlueprints.map((blueprint) => blueprint.id))
   const meshAssetKeys = new Set(assets.filter((asset) => asset.kind === 'mesh').map((asset) => asset.key))
   const imageAssetKeys = new Set(assets.filter((asset) => asset.kind === 'image').map((asset) => asset.key))
 
@@ -505,6 +515,15 @@ export function validateDefinitions(
             level: 'error',
             code: 'missing_environment_assembly_graph',
             message: `Environment "${definition.key}" references missing assembly graph "${geometryBinding.config.assemblyGraphKey}".`,
+            graphKey: null,
+            nodeKey: null,
+          })
+        }
+        if (geometryBinding.config.sourceMode === 'procedural_blueprint' && geometryBinding.config.environmentBlueprintKey && !environmentBlueprintKeys.has(geometryBinding.config.environmentBlueprintKey)) {
+          pushDiagnostic(diagnostics, {
+            level: 'error',
+            code: 'missing_environment_blueprint',
+            message: `Environment "${definition.key}" references missing blueprint "${geometryBinding.config.environmentBlueprintKey}".`,
             graphKey: null,
             nodeKey: null,
           })

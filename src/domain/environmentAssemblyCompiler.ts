@@ -966,6 +966,23 @@ function openingPositionFromWallFace(face: WallFaceSpec | undefined, fallback: V
   return new Vector3(face.center[0], face.center[1], face.center[2])
 }
 
+function chooseWallFaceForNode(node: AssemblyNodeDefinition, faces: WallFaceSpec[]) {
+  if (faces.length === 0) return undefined
+  const requestedSide = stringParam(node, 'side', '').toLowerCase()
+  const requestedIndex = Math.max(0, Math.round(numberParam(node, 'wallFaceIndex', 1)) - 1)
+  if (!requestedSide && requestedIndex === 0) return faces[0]
+
+  const bySide = faces.find((face) => {
+    const normal = new Vector3(face.normal[0], face.normal[1], face.normal[2])
+    if (requestedSide === 'front' || requestedSide === 'north') return normal.z < -0.5
+    if (requestedSide === 'back' || requestedSide === 'south') return normal.z > 0.5
+    if (requestedSide === 'left' || requestedSide === 'west') return normal.x < -0.5
+    if (requestedSide === 'right' || requestedSide === 'east') return normal.x > 0.5
+    return false
+  })
+  return bySide ?? faces[Math.min(requestedIndex, faces.length - 1)] ?? faces[0]
+}
+
 function bandColor(kind: unknown, fallback: string) {
   if (kind === 'remainder_lower') return '#5f86c2'
   if (kind === 'remainder_upper') return '#b96a57'
@@ -1933,7 +1950,7 @@ export function compileAssemblyGraph(
       case 'arch_opening':
       case 'connector_opening': {
         const host = collectIncomingSolids(graph, node, nextCache.nodeResults, 'host')[0]
-        const wallFace = collectIncomingWallFaces(graph, node, nextCache.nodeResults)[0]
+        const wallFace = chooseWallFaceForNode(node, collectIncomingWallFaces(graph, node, nextCache.nodeResults))
         const width = numberParam(node, 'width', node.kind === 'doorway' || node.kind === 'door_opening' ? 1.1 : 1.4)
         const height = numberParam(node, 'height', node.kind === 'window_opening' || node.kind === 'opening_array' ? 1.2 : 2.2)
         const sillHeight = numberParam(node, 'sillHeight', 0.9)
@@ -1942,9 +1959,10 @@ export function compileAssemblyGraph(
         const basePosition = openingPositionFromWallFace(wallFace, new Vector3(0, height / 2, 0))
         const normal = wallFace ? new Vector3(wallFace.normal[0], wallFace.normal[1], wallFace.normal[2]) : new Vector3(1, 0, 0)
         const tangent = new Vector3(-normal.z, 0, normal.x).normalize()
+        const requestedOffset = numberParam(node, 'offset', 0)
         result.openings = Array.from({ length: count }, (_, index) => {
-          const offset = (index - (count - 1) / 2) * spacing
-          const position = basePosition.clone().addScaledVector(tangent, offset)
+          const openingOffset = (index - (count - 1) / 2) * spacing
+          const position = basePosition.clone().addScaledVector(tangent, openingOffset + requestedOffset)
           position.y = node.kind === 'window_opening' ? sillHeight + height * 0.5 : position.y
           return {
             id: `${node.key}.opening_${index + 1}`,
@@ -1953,7 +1971,7 @@ export function compileAssemblyGraph(
             kind: node.kind === 'doorway' || node.kind === 'door_opening' ? 'doorway' : 'opening',
             position: [position.x, position.y, position.z],
             size: [width, height, 0.2],
-            metadata: { wallFaceId: wallFace?.id ?? null, openingIndex: index + 1, openingKind: node.kind },
+            metadata: { wallFaceId: wallFace?.id ?? null, openingIndex: index + 1, openingKind: node.kind, requestedSide: stringParam(node, 'side', ''), offset: openingOffset + requestedOffset },
           }
         })
         result.windows = node.kind === 'window_opening' || node.kind === 'opening_array'
@@ -2509,8 +2527,8 @@ export function compileAssemblyGraph(
   const wallFaces = outputResult.wallFaces ?? [...nextCache.nodeResults.values()].flatMap((result) => result.wallFaces ?? [])
   const anchors = outputResult.anchors ?? [...nextCache.nodeResults.values()].flatMap((result) => result.anchors ?? [])
   const connectors = outputResult.connectors ?? [...nextCache.nodeResults.values()].flatMap((result) => result.connectors ?? [])
-  const openings = outputResult.openings ?? [...nextCache.nodeResults.values()].flatMap((result) => result.openings ?? [])
-  const windows = outputResult.windows ?? [...nextCache.nodeResults.values()].flatMap((result) => result.windows ?? [])
+  const openings = outputResult.openings && outputResult.openings.length > 0 ? outputResult.openings : [...nextCache.nodeResults.values()].flatMap((result) => result.openings ?? [])
+  const windows = outputResult.windows && outputResult.windows.length > 0 ? outputResult.windows : [...nextCache.nodeResults.values()].flatMap((result) => result.windows ?? [])
   const rooms = outputResult.rooms ?? [...nextCache.nodeResults.values()].flatMap((result) => result.rooms ?? [])
   const roofs = outputResult.roofs ?? [...nextCache.nodeResults.values()].flatMap((result) => result.roofs ?? [])
   const bridges = outputResult.bridges ?? [...nextCache.nodeResults.values()].flatMap((result) => result.bridges ?? [])

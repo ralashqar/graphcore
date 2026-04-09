@@ -56,6 +56,11 @@ async function getAssemblyGraphId(client: ReturnType<typeof createClient>, draft
   return data?.id ?? null
 }
 
+async function getEnvironmentBlueprintRowId(client: ReturnType<typeof createClient>, draftId: string, key: string) {
+  const { data } = await client.from('draft_environment_blueprints').select('id').eq('draft_id', draftId).eq('key', key).maybeSingle()
+  return data?.id ?? null
+}
+
 async function upsertDefinitionComponentConfig(
   client: ReturnType<typeof createClient>,
   definitionId: string,
@@ -936,6 +941,7 @@ Deno.serve(async (request) => {
           ...currentConfig,
           sourceMode: operation.assemblyGraphKey ? 'procedural_graph' : (currentConfig.sourceMode ?? 'mesh'),
           assemblyGraphKey: operation.assemblyGraphKey ?? null,
+          environmentBlueprintKey: currentConfig.environmentBlueprintKey ?? null,
         }
 
         const componentResult = await upsertDefinitionComponentConfig(
@@ -956,6 +962,124 @@ Deno.serve(async (request) => {
         }
 
         results.push({ environmentKey: operation.environmentKey, assemblyGraphKey: operation.assemblyGraphKey ?? null })
+        continue
+      }
+
+      if (operation.op === 'create_environment_blueprint') {
+        const blueprint = operation.blueprint as Record<string, unknown>
+        const result = await client.from('draft_environment_blueprints').insert({
+          draft_id: payload.draftId,
+          key: String(blueprint.id ?? ''),
+          environment_key: String(blueprint.environmentKey ?? ''),
+          name: String(blueprint.name ?? 'Environment Blueprint'),
+          document: blueprint,
+        }).select('id, key').single()
+        if (result.error) return json({ error: result.error.message, operation }, { status: 400 })
+        results.push(result.data as Record<string, unknown>)
+        continue
+      }
+
+      if (operation.op === 'update_environment_blueprint') {
+        const rowId = await getEnvironmentBlueprintRowId(client, payload.draftId, String(operation.blueprintId))
+        if (!rowId) return json({ error: `Blueprint ${String(operation.blueprintId)} was not found.`, operation }, { status: 400 })
+        const current = await client.from('draft_environment_blueprints').select('document, key, environment_key, name').eq('id', rowId).single()
+        if (current.error) return json({ error: current.error.message, operation }, { status: 400 })
+        const currentDocument = typeof current.data.document === 'object' && current.data.document !== null ? current.data.document as Record<string, unknown> : {}
+        const changes = (operation.changes as Record<string, unknown> | undefined) ?? {}
+        const nextDocument = {
+          ...currentDocument,
+          ...changes,
+          metadata: typeof changes.metadata === 'object' && changes.metadata !== null
+            ? { ...(typeof currentDocument.metadata === 'object' && currentDocument.metadata !== null ? currentDocument.metadata as Record<string, unknown> : {}), ...(changes.metadata as Record<string, unknown>) }
+            : currentDocument.metadata,
+          styleHints: typeof changes.styleHints === 'object' && changes.styleHints !== null
+            ? { ...(typeof currentDocument.styleHints === 'object' && currentDocument.styleHints !== null ? currentDocument.styleHints as Record<string, unknown> : {}), ...(changes.styleHints as Record<string, unknown>) }
+            : currentDocument.styleHints,
+        }
+        const result = await client.from('draft_environment_blueprints').update({
+          name: typeof changes.name === 'string' ? changes.name : current.data.name,
+          environment_key: typeof changes.environmentKey === 'string' ? changes.environmentKey : current.data.environment_key,
+          document: nextDocument,
+        }).eq('id', rowId).select('id, key').single()
+        if (result.error) return json({ error: result.error.message, operation }, { status: 400 })
+        results.push(result.data as Record<string, unknown>)
+        continue
+      }
+
+      if (operation.op === 'delete_environment_blueprint') {
+        const result = await client.from('draft_environment_blueprints').delete().eq('draft_id', payload.draftId).eq('key', operation.blueprintId)
+        if (result.error) return json({ error: result.error.message, operation }, { status: 400 })
+        results.push({ blueprintId: operation.blueprintId })
+        continue
+      }
+
+      if (operation.op === 'materialize_blueprint_region') {
+        const rowId = await getEnvironmentBlueprintRowId(client, payload.draftId, String(operation.blueprintId))
+        if (!rowId) return json({ error: `Blueprint ${String(operation.blueprintId)} was not found.`, operation }, { status: 400 })
+        const blueprintQuery = await client.from('draft_environment_blueprints').select('environment_key').eq('id', rowId).single()
+        if (blueprintQuery.error) return json({ error: blueprintQuery.error.message, operation }, { status: 400 })
+        const definitionId = await getDefinitionId(client, payload.draftId, String(blueprintQuery.data.environment_key))
+        if (!definitionId) return json({ error: `Environment ${String(blueprintQuery.data.environment_key)} was not found.`, operation }, { status: 400 })
+        const componentQuery = await client
+          .from('project_definition_components')
+          .select('config')
+          .eq('definition_id', definitionId)
+          .eq('component_type', 'environment_geometry_binding')
+          .maybeSingle()
+        if (componentQuery.error) return json({ error: componentQuery.error.message, operation }, { status: 400 })
+        const currentConfig =
+          typeof componentQuery.data?.config === 'object' && componentQuery.data.config !== null
+            ? componentQuery.data.config as Record<string, unknown>
+            : {}
+        const componentResult = await upsertDefinitionComponentConfig(client, definitionId, 'environment_geometry_binding', {
+          ...currentConfig,
+          sourceMode: 'procedural_blueprint',
+          environmentBlueprintKey: operation.blueprintId,
+          assemblyGraphKey: operation.assemblyGraphKey ?? currentConfig.assemblyGraphKey ?? null,
+        })
+        if (componentResult.error) return json({ error: componentResult.error.message, operation }, { status: 400 })
+        results.push({ blueprintId: operation.blueprintId, assemblyGraphKey: operation.assemblyGraphKey ?? null })
+        continue
+      }
+
+      if (operation.op === 'detach_blueprint_region' || operation.op === 'reattach_blueprint_region') {
+        const graphId = await getAssemblyGraphId(client, payload.draftId, String(operation.assemblyGraphKey))
+        if (!graphId) return json({ error: `Assembly graph ${String(operation.assemblyGraphKey)} was not found.`, operation }, { status: 400 })
+        const existingGraph = await client.from('draft_assembly_graphs').select('metadata').eq('id', graphId).single()
+        if (existingGraph.error) return json({ error: existingGraph.error.message, operation }, { status: 400 })
+        const currentMetadata =
+          typeof existingGraph.data.metadata === 'object' && existingGraph.data.metadata !== null
+            ? existingGraph.data.metadata as Record<string, unknown>
+            : {}
+        const result = await client.from('draft_assembly_graphs').update({
+          metadata: {
+            ...currentMetadata,
+            blueprintKey: operation.blueprintId,
+            blueprintOwnership: operation.op === 'detach_blueprint_region' ? 'manual_override' : 'generated',
+          },
+        }).eq('id', graphId).select('id, key').single()
+        if (result.error) return json({ error: result.error.message, operation }, { status: 400 })
+        results.push(result.data as Record<string, unknown>)
+        continue
+      }
+
+      if (operation.op === 'expand_macro_node' || operation.op === 'collapse_macro_region') {
+        const graphId = await getAssemblyGraphId(client, payload.draftId, String(operation.graphKey))
+        if (!graphId) return json({ error: `Assembly graph ${String(operation.graphKey)} was not found.`, operation }, { status: 400 })
+        const existingNode = await client.from('draft_assembly_nodes').select('metadata').eq('assembly_graph_id', graphId).eq('key', operation.nodeKey).single()
+        if (existingNode.error) return json({ error: existingNode.error.message, operation }, { status: 400 })
+        const currentMetadata =
+          typeof existingNode.data.metadata === 'object' && existingNode.data.metadata !== null
+            ? existingNode.data.metadata as Record<string, unknown>
+            : {}
+        const result = await client.from('draft_assembly_nodes').update({
+          metadata: {
+            ...currentMetadata,
+            macroState: operation.op === 'expand_macro_node' ? 'expanded' : 'collapsed',
+          },
+        }).eq('assembly_graph_id', graphId).eq('key', operation.nodeKey).select('id, key').single()
+        if (result.error) return json({ error: result.error.message, operation }, { status: 400 })
+        results.push(result.data as Record<string, unknown>)
         continue
       }
     }

@@ -7,6 +7,9 @@ import {
   compiledEnvironmentModelSchema,
   environmentGeometryBindingConfigSchema,
 } from './environmentAssembly'
+import {
+  environmentBlueprintV1Schema,
+} from './environmentBlueprint'
 
 export const definitionKindSchema = z.enum([
   'item',
@@ -686,6 +689,7 @@ export const projectSnapshotSchema = z.object({
   definitions: z.array(definitionBaseSchema),
   graphs: z.array(graphDefinitionSchema),
   assemblyGraphs: z.array(assemblyGraphDefinitionSchema).default([]),
+  environmentBlueprints: z.array(environmentBlueprintV1Schema).default([]),
   assets: z.array(assetDefinitionSchema),
   patchSets: z.array(
     z.object({
@@ -946,6 +950,44 @@ export const patchOperationSchema = z.discriminatedUnion('op', [
     assemblyGraphKey: z.string().nullable(),
   }),
   z.object({
+    op: z.literal('create_environment_blueprint'),
+    blueprint: environmentBlueprintV1Schema,
+  }),
+  z.object({
+    op: z.literal('update_environment_blueprint'),
+    blueprintId: z.string(),
+    changes: z.record(z.string(), z.unknown()),
+  }),
+  z.object({
+    op: z.literal('delete_environment_blueprint'),
+    blueprintId: z.string(),
+  }),
+  z.object({
+    op: z.literal('materialize_blueprint_region'),
+    blueprintId: z.string(),
+    assemblyGraphKey: z.string().nullable(),
+  }),
+  z.object({
+    op: z.literal('detach_blueprint_region'),
+    blueprintId: z.string(),
+    assemblyGraphKey: z.string(),
+  }),
+  z.object({
+    op: z.literal('reattach_blueprint_region'),
+    blueprintId: z.string(),
+    assemblyGraphKey: z.string(),
+  }),
+  z.object({
+    op: z.literal('expand_macro_node'),
+    graphKey: z.string(),
+    nodeKey: z.string(),
+  }),
+  z.object({
+    op: z.literal('collapse_macro_region'),
+    graphKey: z.string(),
+    nodeKey: z.string(),
+  }),
+  z.object({
     op: z.literal('set_condition'),
     graphKey: z.string(),
     nodeKey: z.string(),
@@ -1015,6 +1057,7 @@ export const gameSystemBundleSchema = z.object({
   definitions: z.array(definitionBaseSchema),
   graphs: z.array(graphDefinitionSchema),
   assemblyGraphs: z.array(assemblyGraphDefinitionSchema).default([]),
+  environmentBlueprints: z.array(environmentBlueprintV1Schema).default([]),
   compiledEnvironments: z.array(compiledEnvironmentModelSchema).default([]),
   assets: z.array(assetDefinitionSchema),
   lookupIndices: z.object({
@@ -1045,6 +1088,7 @@ export type ProjectSnapshot = z.infer<typeof projectSnapshotSchema>
 export type PatchOperation = z.infer<typeof patchOperationSchema>
 export type Diagnostic = z.infer<typeof diagnosticSchema>
 export type GameSystemBundle = z.infer<typeof gameSystemBundleSchema>
+export type EnvironmentBlueprintV1 = z.infer<typeof environmentBlueprintV1Schema>
 export type EffectOp = z.infer<typeof effectOpSchema>
 export type GraphType = z.infer<typeof graphTypeSchema>
 export type GraphCreateInput = Pick<GraphDefinition, 'name' | 'key' | 'graphType' | 'summary'>
@@ -1185,6 +1229,7 @@ export function buildDefaultDefinitionComponents(kind: DefinitionKind): Componen
           config: {
             sourceMode: 'mesh',
             assemblyGraphKey: null,
+            environmentBlueprintKey: null,
             compilerTarget: 'preview_mesh',
             units: 'meters',
             svgBlueprintAssetKey: null,

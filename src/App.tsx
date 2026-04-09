@@ -9,12 +9,14 @@ import { publishService } from './application/services/publishService'
 import { workspaceService } from './application/services/workspaceService'
 import { buildAssetSlug, getAssetKeyPrefix, inferAssetKindFromUpload, inferRemoteAssetMimeType, inferUploadMimeType, isSupportedMeshPath, type AssetUrlCreationKind } from './domain/assets'
 import { compileBundle } from './domain/compiler'
+import { createEnvironmentBlueprint } from './domain/environmentBlueprint'
 import { buildDefaultDefinitionComponents, projectSnapshotSchema, schemaCatalog } from './domain/graphcore'
 import type {
   AssemblyGraphDefinition,
   ArchetypeDefinition,
   DefinitionBase,
   EdgeDefinition,
+  EnvironmentBlueprintV1,
   FieldDefinition,
   GameSystemBundle,
   GraphCreateInput,
@@ -642,6 +644,72 @@ export default function App() {
                     ...component.config,
                     assemblyGraphKey: null,
                     sourceMode: component.config.sourceMode === 'procedural_graph' ? 'mesh' : component.config.sourceMode,
+                  },
+                }
+              : component,
+          ),
+        }
+      }),
+    }))
+  }
+
+  function createEnvironmentBlueprintForEnvironment(environmentKey: string) {
+    if (!snapshot) return null
+    const environment = snapshot.definitions.find((definition) => definition.key === environmentKey && definition.kind === 'environment')
+    if (!environment) return null
+
+    const blueprint = createEnvironmentBlueprint(environmentKey, `${environment.name} Blueprint`)
+    applySnapshotUpdate((current) => ({
+      ...current,
+      environmentBlueprints: [blueprint, ...current.environmentBlueprints],
+      definitions: current.definitions.map((definition) => {
+        if (definition.key !== environmentKey || definition.kind !== 'environment') return definition
+        return {
+          ...definition,
+          components: definition.components.map((component) =>
+            component.type === 'environment_geometry_binding'
+              ? {
+                  ...component,
+                  config: {
+                    ...component.config,
+                    sourceMode: 'procedural_blueprint',
+                    environmentBlueprintKey: blueprint.id,
+                  },
+                }
+              : component,
+          ),
+        }
+      }),
+    }))
+
+    return blueprint.id
+  }
+
+  function upsertEnvironmentBlueprint(nextBlueprint: EnvironmentBlueprintV1) {
+    applySnapshotUpdate((current) => ({
+      ...current,
+      environmentBlueprints: current.environmentBlueprints.some((blueprint) => blueprint.id === nextBlueprint.id)
+        ? current.environmentBlueprints.map((blueprint) => (blueprint.id === nextBlueprint.id ? nextBlueprint : blueprint))
+        : [...current.environmentBlueprints, nextBlueprint],
+    }))
+  }
+
+  function deleteEnvironmentBlueprint(blueprintId: string) {
+    applySnapshotUpdate((current) => ({
+      ...current,
+      environmentBlueprints: current.environmentBlueprints.filter((blueprint) => blueprint.id !== blueprintId),
+      definitions: current.definitions.map((definition) => {
+        if (definition.kind !== 'environment') return definition
+        return {
+          ...definition,
+          components: definition.components.map((component) =>
+            component.type === 'environment_geometry_binding' && component.config.environmentBlueprintKey === blueprintId
+              ? {
+                  ...component,
+                  config: {
+                    ...component.config,
+                    environmentBlueprintKey: null,
+                    sourceMode: component.config.sourceMode === 'procedural_blueprint' ? 'mesh' : component.config.sourceMode,
                   },
                 }
               : component,
@@ -1309,20 +1377,24 @@ export default function App() {
                 definitions={snapshot.definitions}
                 graphKeys={snapshot.graphs.map((graph) => graph.key)}
                 assemblyGraphs={snapshot.assemblyGraphs}
+                environmentBlueprints={snapshot.environmentBlueprints}
                 selectedAsset={selectedAsset}
                 selectedDefinition={selectedDefinition?.kind === 'character' ? selectedDefinition : null}
                 onAddCustomField={addCustomField}
                 onAssignDefinitionIcon={assignAssetToSelectedItem}
                 isGeneratingPrompt={isGeneratingPatch}
+                onCreateEnvironmentBlueprint={createEnvironmentBlueprintForEnvironment}
                 onCreateAssemblyGraph={createEnvironmentAssemblyGraph}
                 onCreateDefinition={createCharacter}
                 onCreateUrlAsset={createUrlAsset}
                 onChangePromptText={setPromptText}
                 onDeleteAssemblyGraph={deleteAssemblyGraph}
+                onDeleteEnvironmentBlueprint={deleteEnvironmentBlueprint}
                 onGeneratePrompt={handleGeneratePatch}
                 onSelectAsset={setSelectedAssetKey}
                 onSelectDefinition={setSelectedDefinitionKey}
                 onUpsertAssemblyGraph={upsertAssemblyGraph}
+                onUpsertEnvironmentBlueprint={upsertEnvironmentBlueprint}
                 onUpdateComponents={updateDefinitionComponents}
                 onUpdateFieldValue={updateItemFieldValue}
                 onUpdateItemIdentity={updateItemIdentity}
@@ -1339,20 +1411,24 @@ export default function App() {
                 definitions={snapshot.definitions}
                 graphKeys={snapshot.graphs.map((graph) => graph.key)}
                 assemblyGraphs={snapshot.assemblyGraphs}
+                environmentBlueprints={snapshot.environmentBlueprints}
                 selectedAsset={selectedAsset}
                 selectedDefinition={selectedDefinition?.kind === 'environment' ? selectedDefinition : null}
                 onAddCustomField={addCustomField}
                 onAssignDefinitionIcon={assignAssetToSelectedItem}
                 isGeneratingPrompt={isGeneratingPatch}
+                onCreateEnvironmentBlueprint={createEnvironmentBlueprintForEnvironment}
                 onCreateAssemblyGraph={createEnvironmentAssemblyGraph}
                 onCreateDefinition={createEnvironment}
                 onCreateUrlAsset={createUrlAsset}
                 onChangePromptText={setPromptText}
                 onDeleteAssemblyGraph={deleteAssemblyGraph}
+                onDeleteEnvironmentBlueprint={deleteEnvironmentBlueprint}
                 onGeneratePrompt={handleGeneratePatch}
                 onSelectAsset={setSelectedAssetKey}
                 onSelectDefinition={setSelectedDefinitionKey}
                 onUpsertAssemblyGraph={upsertAssemblyGraph}
+                onUpsertEnvironmentBlueprint={upsertEnvironmentBlueprint}
                 onUpdateComponents={updateDefinitionComponents}
                 onUpdateFieldValue={updateItemFieldValue}
                 onUpdateItemIdentity={updateItemIdentity}

@@ -76,6 +76,12 @@ export const GRAPH_PASS_ALLOWED_OPS = new Set([
   'instantiate_graph_preset',
   'create_graph',
   'create_assembly_graph',
+  'create_environment_blueprint',
+  'update_environment_blueprint',
+  'delete_environment_blueprint',
+  'materialize_blueprint_region',
+  'detach_blueprint_region',
+  'reattach_blueprint_region',
   'update_assembly_graph',
   'delete_assembly_graph',
   'create_assembly_node',
@@ -85,6 +91,8 @@ export const GRAPH_PASS_ALLOWED_OPS = new Set([
   'update_assembly_edge',
   'delete_assembly_edge',
   'replace_assembly_subgraph',
+  'expand_macro_node',
+  'collapse_macro_region',
   'bind_environment_assembly',
   'update_graph',
   'duplicate_graph',
@@ -198,6 +206,10 @@ export function buildPromptContext(payload: Record<string, any>) {
     selectedEnvironment && Array.isArray(payload.snapshot.assemblyGraphs)
       ? (payload.snapshot.assemblyGraphs as Array<Record<string, any>>).find((graph) => graph.key === selectedEnvironment.components?.find?.((component: Record<string, any>) => component.type === 'environment_geometry_binding')?.config?.assemblyGraphKey) ?? null
       : null
+  const selectedEnvironmentBlueprint =
+    selectedEnvironment && Array.isArray(payload.snapshot.environmentBlueprints)
+      ? (payload.snapshot.environmentBlueprints as Array<Record<string, any>>).find((blueprint) => blueprint.id === selectedEnvironment.components?.find?.((component: Record<string, any>) => component.type === 'environment_geometry_binding')?.config?.environmentBlueprintKey) ?? null
+      : null
 
   return {
     request: {
@@ -254,6 +266,7 @@ export function buildPromptContext(payload: Record<string, any>) {
     graphKeys: (payload.snapshot.graphs ?? []).map((graph: Record<string, any>) => graph.key),
     assemblyGraphKeys: (payload.snapshot.assemblyGraphs ?? []).map((graph: Record<string, any>) => graph.key),
     selectedAssemblyGraph,
+    selectedEnvironmentBlueprint,
     assemblyGraphs: (payload.snapshot.assemblyGraphs ?? []).map((graph: Record<string, any>) => ({
       key: graph.key,
       name: graph.name,
@@ -261,6 +274,13 @@ export function buildPromptContext(payload: Record<string, any>) {
       boundEnvironmentKey: graph.boundEnvironmentKey ?? null,
       nodeCount: Array.isArray(graph.nodes) ? graph.nodes.length : 0,
       edgeCount: Array.isArray(graph.edges) ? graph.edges.length : 0,
+    })),
+    environmentBlueprints: (payload.snapshot.environmentBlueprints ?? []).map((blueprint: Record<string, any>) => ({
+      id: blueprint.id,
+      environmentKey: blueprint.environmentKey,
+      name: blueprint.name,
+      structureCount: Array.isArray(blueprint.structures) ? blueprint.structures.length : 0,
+      openingCount: Array.isArray(blueprint.openings) ? blueprint.openings.length : 0,
     })),
     environmentMacroLibrary: environmentAssemblyMacroLibrary,
     definitionKeysByKind: definitionsByKind,
@@ -907,6 +927,7 @@ export function validateOperations(snapshot: Record<string, any>, operations: Ar
   const normalized: Array<Record<string, any>> = []
   const graphs = new Set((snapshot.graphs ?? []).map((graph: Record<string, any>) => graph.key).filter(Boolean))
   const assemblyGraphs = new Set((snapshot.assemblyGraphs ?? []).map((graph: Record<string, any>) => graph.key).filter(Boolean))
+  const environmentBlueprints = new Set((snapshot.environmentBlueprints ?? []).map((blueprint: Record<string, any>) => blueprint.id).filter(Boolean))
   const graphTypes = new Map((snapshot.graphs ?? []).map((graph: Record<string, any>) => [graph.key, graph.graphType]))
   const nodeKeysByGraph = graphNodeKeys(snapshot)
   const assemblyNodeKeysByGraph = assemblyGraphNodeKeys(snapshot)
@@ -1004,6 +1025,18 @@ export function validateOperations(snapshot: Record<string, any>, operations: Ar
       continue
     }
 
+    if (op.op === 'create_environment_blueprint') {
+      const blueprintId = String(op.blueprint?.id ?? '')
+      const environmentKey = String(op.blueprint?.environmentKey ?? '')
+      if (!blueprintId || environmentBlueprints.has(blueprintId)) diagnostics.push(`Environment blueprint id "${blueprintId}" is invalid or already exists.`)
+      else if (!hasDef('environment', environmentKey)) diagnostics.push(`Unknown environment "${environmentKey}" for blueprint "${blueprintId}".`)
+      else {
+        environmentBlueprints.add(blueprintId)
+        normalized.push(op)
+      }
+      continue
+    }
+
     if (op.op === 'create_node') {
       const graphKey = String(op.graphKey ?? '')
       const nodeKey = String(op.node?.key ?? '')
@@ -1077,6 +1110,21 @@ export function validateOperations(snapshot: Record<string, any>, operations: Ar
     if (['update_assembly_graph', 'delete_assembly_graph', 'replace_assembly_subgraph'].includes(op.op)) {
       const graphKey = String(op.key ?? op.graphKey ?? '')
       if (!graphKey || !assemblyGraphs.has(graphKey)) diagnostics.push(`${op.op} references missing assembly graph "${graphKey}".`)
+      else normalized.push(op)
+      continue
+    }
+
+    if (['update_environment_blueprint', 'delete_environment_blueprint', 'materialize_blueprint_region', 'detach_blueprint_region', 'reattach_blueprint_region'].includes(op.op)) {
+      const blueprintId = String(op.blueprintId ?? '')
+      if (!blueprintId || !environmentBlueprints.has(blueprintId)) diagnostics.push(`${op.op} references missing blueprint "${blueprintId}".`)
+      else normalized.push(op)
+      continue
+    }
+
+    if (['expand_macro_node', 'collapse_macro_region'].includes(op.op)) {
+      const graphKey = String(op.graphKey ?? '')
+      const nodeKey = String(op.nodeKey ?? '')
+      if (!graphKey || !assemblyGraphs.has(graphKey) || !(assemblyNodeKeysByGraph.get(graphKey) ?? new Set()).has(nodeKey)) diagnostics.push(`${op.op} references missing assembly node "${nodeKey}" in "${graphKey}".`)
       else normalized.push(op)
       continue
     }

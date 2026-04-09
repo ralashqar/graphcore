@@ -5,6 +5,7 @@ import type {
   ArchetypeDefinition,
   DefinitionBase,
   EdgeDefinition,
+  EnvironmentBlueprintV1,
   GraphCreateInput,
   PatchOperation,
   ProjectSnapshot,
@@ -102,6 +103,17 @@ function updateAssemblyGraph(
   }
 }
 
+function updateEnvironmentBlueprint(
+  snapshot: ProjectSnapshot,
+  blueprintId: string,
+  updater: (blueprint: ProjectSnapshot['environmentBlueprints'][number]) => ProjectSnapshot['environmentBlueprints'][number],
+) {
+  return {
+    ...snapshot,
+    environmentBlueprints: snapshot.environmentBlueprints.map((blueprint) => (blueprint.id === blueprintId ? updater(blueprint) : blueprint)),
+  }
+}
+
 function updateNode(
   graph: ProjectSnapshot['graphs'][number],
   nodeKey: string,
@@ -146,8 +158,8 @@ function updateAssemblyEdge(
   }
 }
 
-export function applyPatchOperations(snapshot: ProjectSnapshot, operations: PatchOperation[]) {
-  return operations.reduce((currentSnapshot, operation) => {
+export function applyPatchOperations(snapshot: ProjectSnapshot, operations: PatchOperation[]): ProjectSnapshot {
+  return operations.reduce<ProjectSnapshot>((currentSnapshot, operation): ProjectSnapshot => {
     switch (operation.op) {
       case 'set_game_spec':
         return {
@@ -667,6 +679,116 @@ export function applyPatchOperations(snapshot: ProjectSnapshot, operations: Patc
                 : graph,
           ),
         }
+      case 'create_environment_blueprint':
+        return currentSnapshot.environmentBlueprints.some((blueprint) => blueprint.id === operation.blueprint.id)
+          ? currentSnapshot
+          : {
+              ...currentSnapshot,
+              environmentBlueprints: [operation.blueprint, ...currentSnapshot.environmentBlueprints],
+            }
+      case 'update_environment_blueprint':
+        return updateEnvironmentBlueprint(currentSnapshot, operation.blueprintId, (blueprint) => ({
+          ...blueprint,
+          ...operation.changes,
+          site:
+            typeof operation.changes.site === 'object' && operation.changes.site !== null
+              ? {
+                  ...(blueprint.site ?? {}),
+                  ...(operation.changes.site as Record<string, unknown>),
+                }
+              : blueprint.site,
+          styleHints:
+            typeof operation.changes.styleHints === 'object' && operation.changes.styleHints !== null
+              ? { ...blueprint.styleHints, ...(operation.changes.styleHints as Record<string, unknown>) }
+              : blueprint.styleHints,
+          metadata:
+            typeof operation.changes.metadata === 'object' && operation.changes.metadata !== null
+              ? { ...blueprint.metadata, ...(operation.changes.metadata as Record<string, unknown>) }
+              : blueprint.metadata,
+        } as EnvironmentBlueprintV1))
+      case 'delete_environment_blueprint':
+        return {
+          ...currentSnapshot,
+          environmentBlueprints: currentSnapshot.environmentBlueprints.filter((blueprint) => blueprint.id !== operation.blueprintId),
+          definitions: currentSnapshot.definitions.map((definition) =>
+            definition.kind !== 'environment'
+              ? definition
+              : {
+                  ...definition,
+                  components: definition.components.map((component) =>
+                    component.type === 'environment_geometry_binding' && component.config.environmentBlueprintKey === operation.blueprintId
+                      ? {
+                          ...component,
+                          config: {
+                            ...component.config,
+                            environmentBlueprintKey: null,
+                            sourceMode: component.config.sourceMode === 'procedural_blueprint' ? 'mesh' : component.config.sourceMode,
+                          },
+                        }
+                      : component,
+                  ),
+                },
+          ),
+        }
+      case 'materialize_blueprint_region':
+        return {
+          ...currentSnapshot,
+          definitions: currentSnapshot.definitions.map((definition) =>
+            definition.kind !== 'environment'
+            || !currentSnapshot.environmentBlueprints.some((blueprint) => blueprint.id === operation.blueprintId && blueprint.environmentKey === definition.key)
+              ? definition
+              : {
+                  ...definition,
+                  components: definition.components.map((component) =>
+                    component.type === 'environment_geometry_binding'
+                      ? {
+                          ...component,
+                          config: {
+                            ...component.config,
+                            sourceMode: 'procedural_blueprint',
+                            environmentBlueprintKey: operation.blueprintId,
+                            assemblyGraphKey: operation.assemblyGraphKey ?? component.config.assemblyGraphKey,
+                          },
+                        }
+                      : component,
+                  ),
+                },
+          ),
+        }
+      case 'detach_blueprint_region':
+        return updateAssemblyGraph(currentSnapshot, operation.assemblyGraphKey, (graph) => ({
+          ...graph,
+          metadata: {
+            ...graph.metadata,
+            blueprintOwnership: 'manual_override',
+            blueprintKey: operation.blueprintId,
+          },
+        }))
+      case 'reattach_blueprint_region':
+        return updateAssemblyGraph(currentSnapshot, operation.assemblyGraphKey, (graph) => ({
+          ...graph,
+          metadata: {
+            ...graph.metadata,
+            blueprintOwnership: 'generated',
+            blueprintKey: operation.blueprintId,
+          },
+        }))
+      case 'expand_macro_node':
+      case 'collapse_macro_region':
+        return updateAssemblyGraph(currentSnapshot, operation.graphKey, (graph) => ({
+          ...graph,
+          nodes: graph.nodes.map((node) =>
+            node.key === operation.nodeKey
+              ? {
+                  ...node,
+                  metadata: {
+                    ...node.metadata,
+                    macroState: operation.op === 'expand_macro_node' ? 'expanded' : 'collapsed',
+                  },
+                }
+              : node,
+          ),
+        }))
       case 'set_condition':
         return updateGraph(currentSnapshot, operation.graphKey, (graph) =>
           updateNode(graph, operation.nodeKey, (node) => ({ ...node, condition: operation.condition })),
@@ -726,6 +848,12 @@ export function groupPatchOperations(operations: PatchOperation[]) {
     'instantiate_graph_preset',
     'create_graph',
     'create_assembly_graph',
+    'create_environment_blueprint',
+    'update_environment_blueprint',
+    'delete_environment_blueprint',
+    'materialize_blueprint_region',
+    'detach_blueprint_region',
+    'reattach_blueprint_region',
     'update_graph',
     'update_assembly_graph',
     'duplicate_graph',
@@ -750,6 +878,8 @@ export function groupPatchOperations(operations: PatchOperation[]) {
     'delete_assembly_edge',
     'replace_subgraph',
     'replace_assembly_subgraph',
+    'expand_macro_node',
+    'collapse_macro_region',
     'set_condition',
     'set_effects',
     'set_node_body',
@@ -805,6 +935,12 @@ export function describePatchOperation(operation: PatchOperation) {
       return `Create graph \`${operation.key}\``
     case 'create_assembly_graph':
       return `Create environment assembly graph \`${operation.key}\``
+    case 'create_environment_blueprint':
+      return `Create environment blueprint \`${operation.blueprint.id}\``
+    case 'update_environment_blueprint':
+      return `Update environment blueprint \`${operation.blueprintId}\``
+    case 'delete_environment_blueprint':
+      return `Delete environment blueprint \`${operation.blueprintId}\``
     case 'update_graph':
       return `Update graph \`${operation.key}\``
     case 'update_assembly_graph':
@@ -829,6 +965,16 @@ export function describePatchOperation(operation: PatchOperation) {
       return `Replace assembly subgraph in \`${operation.graphKey}\``
     case 'bind_environment_assembly':
       return `Bind environment \`${operation.environmentKey}\` to assembly graph \`${operation.assemblyGraphKey ?? 'none'}\``
+    case 'materialize_blueprint_region':
+      return `Materialize blueprint \`${operation.blueprintId}\` into \`${operation.assemblyGraphKey ?? 'auto'}\``
+    case 'detach_blueprint_region':
+      return `Detach blueprint \`${operation.blueprintId}\` from \`${operation.assemblyGraphKey}\``
+    case 'reattach_blueprint_region':
+      return `Reattach blueprint \`${operation.blueprintId}\` to \`${operation.assemblyGraphKey}\``
+    case 'expand_macro_node':
+      return `Expand macro node \`${operation.nodeKey}\``
+    case 'collapse_macro_region':
+      return `Collapse macro region \`${operation.nodeKey}\``
     case 'set_condition':
       return `Set condition on node \`${operation.nodeKey}\``
     case 'set_effects':

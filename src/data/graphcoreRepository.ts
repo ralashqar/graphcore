@@ -1,6 +1,7 @@
 import { compileBundle } from '../domain/compiler'
 import { BASELINE_ARCHETYPES, hasMissingBaselineArchetypes } from '../domain/bootstrapSeeds'
 import { demoProjectSnapshot } from '../domain/demo-data'
+import { environmentBlueprintV1Schema } from '../domain/environmentBlueprint'
 import { createGameSpecFromArchetype } from '../domain/gameArchetypes'
 import {
   type AssemblyNodeDefinition,
@@ -10,6 +11,7 @@ import {
   type AssetDefinition,
   type ComponentEnvelope,
   type DefinitionBase,
+  type EnvironmentBlueprintV1,
   type FieldDefinition,
   type GraphDefinition,
   type PatchOperation,
@@ -663,6 +665,14 @@ type AssemblyEdgeRow = {
   metadata: Record<string, unknown> | null
 }
 
+type EnvironmentBlueprintRow = {
+  id: string
+  key: string
+  environment_key: string
+  name: string
+  document: unknown
+}
+
 type AssetRow = {
   id: string
   key: string
@@ -801,6 +811,7 @@ export async function loadProjectSnapshot(
     assemblyGraphsResponse,
     assemblyNodesResponse,
     assemblyEdgesResponse,
+    environmentBlueprintsResponse,
     assetsResponse,
     patchSetsResponse,
     releasesResponse,
@@ -868,6 +879,11 @@ export async function loadProjectSnapshot(
       .from('draft_assembly_edges')
       .select('id, assembly_graph_id, key, source_node_key, source_port, target_node_key, target_port, metadata'),
     supabase
+      .from('draft_environment_blueprints')
+      .select('id, key, environment_key, name, document')
+      .eq('draft_id', draft.id)
+      .order('created_at', { ascending: true }),
+    supabase
       .from('project_assets')
       .select('id, key, name, kind, mime_type, storage_path, metadata, llm_hints')
       .eq('project_id', project.id)
@@ -888,6 +904,8 @@ export async function loadProjectSnapshot(
     isMissingRelationError(assemblyGraphsResponse.error?.message, 'draft_assembly_graphs')
     || isMissingRelationError(assemblyNodesResponse.error?.message, 'draft_assembly_nodes')
     || isMissingRelationError(assemblyEdgesResponse.error?.message, 'draft_assembly_edges')
+  const blueprintSchemaMissing =
+    isMissingRelationError(environmentBlueprintsResponse.error?.message, 'draft_environment_blueprints')
 
   if (definitionsResponse.error || archetypesResponse.error) {
     return {
@@ -909,6 +927,7 @@ export async function loadProjectSnapshot(
   const assemblyGraphs = assemblySchemaMissing ? [] : (assemblyGraphsResponse.data as AssemblyGraphRow[] | null) ?? []
   const assemblyNodes = assemblySchemaMissing ? [] : (assemblyNodesResponse.data as AssemblyNodeRow[] | null) ?? []
   const assemblyEdges = assemblySchemaMissing ? [] : (assemblyEdgesResponse.data as AssemblyEdgeRow[] | null) ?? []
+  const environmentBlueprints = blueprintSchemaMissing ? [] : (environmentBlueprintsResponse.data as EnvironmentBlueprintRow[] | null) ?? []
   const assets = (assetsResponse.data as AssetRow[] | null) ?? []
 
   const snapshot = projectSnapshotSchema.parse({
@@ -1096,6 +1115,18 @@ export async function loadProjectSnapshot(
           metadata: edge.metadata ?? {},
         })),
     })),
+    environmentBlueprints: environmentBlueprints
+      .map((blueprint) => {
+        const parsed = environmentBlueprintV1Schema.safeParse(blueprint.document)
+        if (!parsed.success) return null
+        return {
+          ...parsed.data,
+          id: parsed.data.id || blueprint.key,
+          environmentKey: parsed.data.environmentKey || blueprint.environment_key,
+          name: parsed.data.name || blueprint.name,
+        }
+      })
+      .filter((blueprint): blueprint is EnvironmentBlueprintV1 => blueprint !== null),
     assets: assets.map((asset) => ({
       id: asset.id,
       key: asset.key,
