@@ -524,6 +524,15 @@ export const demoProjectSnapshot: ProjectSnapshot = projectSnapshotSchema.parse(
             persona: 'Measured, suspicious, rewards proof over promises.',
           },
         },
+        {
+          type: 'render_3d_binding',
+          config: {
+            primaryMeshAssetKey: null,
+            previewImageAssetKey: 'image.sera',
+            generationPrompt: 'Armored frontier warden with a practical silhouette, layered cloak, and grounded heroic proportions.',
+            generationStyle: 'stylized realism',
+          },
+        },
       ],
     },
     {

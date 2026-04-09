@@ -18,6 +18,7 @@ export type ContentMode = 'items' | 'archetypes'
 export type ItemSort = 'name' | 'archetype' | 'key'
 export type ArchetypeSort = 'name' | 'field_count' | 'key'
 export type DefinitionKindFilter = DefinitionBase['kind'] | 'all'
+export type CharacterPanelMode = 'details' | '3d'
 
 export type ContentWorkspaceProps = {
   archetypes: ArchetypeDefinition[]
@@ -34,7 +35,7 @@ export type ContentWorkspaceProps = {
   onAssignItemIcon: (assetKey: string | null) => void
   onCreateArchetype: () => void
   onCreateItem: (archetypeKey?: string | null) => void
-  onCreateUrlAsset: (url: string) => void
+  onCreateUrlAsset: (url: string, kind?: 'image' | 'mesh') => void
   onRemoveArchetypeField: (archetypeKey: string, fieldKey: string) => void
   onSelectAsset: (key: string | null) => void
   onSelectArchetype: (key: string | null) => void
@@ -51,7 +52,7 @@ export type AssetsWorkspaceProps = {
   selectedAsset: AssetDefinition | null
   selectedItem: DefinitionBase | null
   onAssignAssetToSelectedItem: (assetKey: string | null) => void
-  onCreateUrlAsset: (url: string) => void
+  onCreateUrlAsset: (url: string, kind?: 'image' | 'mesh') => void
   onSelectAsset: (key: string | null) => void
   onUploadAsset: (file: File) => void
   onUpdateAsset: (assetKey: string, changes: Partial<AssetDefinition>) => void

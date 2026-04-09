@@ -1,5 +1,6 @@
 import { useMemo, useState, type ChangeEvent } from 'react'
 
+import { supportedMeshAccept } from '../../domain/assets'
 import { MediaThumb, QuickUrlAssetForm } from './shared'
 import type { AssetsWorkspaceProps } from './types'
 
@@ -106,7 +107,7 @@ export function AssetsWorkspace({
                       metadata: {
                         ...selectedAsset.metadata,
                         sourceUrl: event.target.value,
-                        previewUrl: event.target.value,
+                        ...(selectedAsset.kind === 'image' ? { previewUrl: event.target.value } : {}),
                       },
                     })
                   }
@@ -125,13 +126,13 @@ export function AssetsWorkspace({
                 <span className="section-label">Local upload</span>
                 <input
                   type="file"
-                  accept="image/*,audio/*"
+                  accept={`image/*,audio/*,${supportedMeshAccept}`}
                   onChange={(event: ChangeEvent<HTMLInputElement>) =>
                     event.target.files?.[0] && onUploadAsset(event.target.files[0])
                   }
                 />
-                <strong>Select image or audio</strong>
-                <span>Creates a local session asset entry with preview metadata.</span>
+                <strong>Select image, audio, or mesh</strong>
+                <span>Creates a local session asset entry. Mesh uploads currently support `.glb` and `.gltf`.</span>
               </label>
             </div>
           </div>

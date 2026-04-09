@@ -1042,6 +1042,15 @@ export function buildDefaultDefinitionComponents(kind: DefinitionKind): Componen
             controlMode: 'ai',
           },
         },
+        {
+          type: 'render_3d_binding',
+          config: {
+            primaryMeshAssetKey: null,
+            previewImageAssetKey: null,
+            generationPrompt: null,
+            generationStyle: null,
+          },
+        },
       ]
     case 'ability':
       return [

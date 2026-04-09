@@ -142,12 +142,7 @@ export function DefinitionComponentsEditor({
           </label>
           <label className="field-block full-width">
             <span>Render Binding</span>
-            {renderJsonEditor('render_3d_binding', render3dBinding?.config ?? {
-              primaryMeshAssetKey: null,
-              previewImageAssetKey: null,
-              generationPrompt: null,
-              generationStyle: null,
-            })}
+            <div className="inline-note">Use the character `3D` tab for mesh binding, preview image selection, and future generation prompts.</div>
           </label>
           <div className="inline-note">Available abilities: {abilityOptions.map((ability) => ability.key).join(', ') || 'none'}.</div>
         </div>

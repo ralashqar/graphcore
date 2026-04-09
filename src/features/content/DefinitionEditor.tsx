@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import type { ArchetypeDefinition, AssetDefinition, DefinitionBase, FieldDefinition, FieldValue } from '../../domain/graphcore'
 import { DefinitionComponentsEditor } from './DefinitionComponentsEditor'
 import {
@@ -21,6 +22,7 @@ export function DefinitionEditor({
   selectedArchetype,
   selectedAsset,
   selectedItem,
+  headerControls,
   onAddCustomField,
   onAssignItemIcon,
   onCreateItem,
@@ -36,6 +38,7 @@ export function DefinitionEditor({
   selectedArchetype: ArchetypeDefinition | null
   selectedAsset: AssetDefinition | null
   selectedItem: DefinitionBase | null
+  headerControls?: ReactNode
   onAddCustomField: (itemKey: string, field: FieldDefinition) => void
   onAssignItemIcon: (assetKey: string | null) => void
   onCreateItem: (archetypeKey?: string | null) => void
@@ -90,10 +93,13 @@ export function DefinitionEditor({
 
         <div className="editor-heading-copy">
           <span className="eyebrow">Definition Editor</span>
-          <div className="chip-row">
-            <span className="chip">{definition.kind}</span>
-            <span className="chip">{definition.archetypeKey ?? 'No archetype'}</span>
-            <span className="chip">{resolvedFields.length} fields</span>
+          <div className="editor-head-toolbar">
+            <div className="chip-row">
+              <span className="chip">{definition.kind}</span>
+              <span className="chip">{definition.archetypeKey ?? 'No archetype'}</span>
+              <span className="chip">{resolvedFields.length} fields</span>
+            </div>
+            {headerControls ? <div className="editor-head-controls">{headerControls}</div> : null}
           </div>
           <div className="editor-head-grid">
             <label className="field-block compact-block head-field">

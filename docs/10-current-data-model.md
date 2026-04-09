@@ -57,6 +57,12 @@ Current asset kinds:
 
 `mesh` exists as a data contract only right now. There is no full 3D generation or preview pipeline implemented yet.
 
+That statement is no longer completely true:
+
+- mesh assets can now be authored and bound in the frontend
+- the first preview surface exists in the `Characters` workspace
+- mesh generation is still not implemented
+
 ## Archetypes
 
 Archetypes are reusable schema + field templates for a given definition kind.
@@ -118,6 +124,8 @@ Character subtype enum:
 
 `humanoid` is the default compatibility subtype.
 
+Characters now also default to including `render_3d_binding`, even when no mesh is attached yet.
+
 ### Environment
 
 Environment-related component types:
@@ -169,6 +177,29 @@ Physical item subtype enum:
 - `world_object`
 
 This is data-only. It reserves a stable place for later 3D systems.
+
+Current practical usage:
+
+- `render_3d_binding.primaryMeshAssetKey`
+  - binds a `.glb` / `.gltf` mesh asset for viewport preview
+- `render_3d_binding.previewImageAssetKey`
+  - reserves the concept-image handoff point for future mesh generation
+- `render_3d_binding.generationPrompt`
+  - stores shape/material guidance for the future AI mesh step
+- `render_3d_binding.generationStyle`
+  - stores style direction for the same future step
+
+## Current 3D Preview Limits
+
+- first UI surface: characters only
+- supported mesh formats: `.glb`, `.gltf`
+- no database migration was added
+- no provider-backed mesh generation exists yet
+- the planned path is still:
+  - concept image asset
+  - mesh generation job
+  - created mesh asset
+  - `primaryMeshAssetKey` binding
 
 ## Graph Model
 

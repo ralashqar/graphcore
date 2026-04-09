@@ -7,6 +7,7 @@ import { patchApplyService } from './application/services/patchApplyService'
 import { promptGenerationService } from './application/services/promptGenerationService'
 import { publishService } from './application/services/publishService'
 import { workspaceService } from './application/services/workspaceService'
+import { buildAssetSlug, getAssetKeyPrefix, inferAssetKindFromUpload, inferRemoteAssetMimeType, inferUploadMimeType, isSupportedMeshPath, type AssetUrlCreationKind } from './domain/assets'
 import { compileBundle } from './domain/compiler'
 import { buildDefaultDefinitionComponents, schemaCatalog } from './domain/graphcore'
 import type {
@@ -611,11 +612,25 @@ export default function App() {
     if (changes.key && selectedAssetKey === assetKey) setSelectedAssetKey(changes.key)
   }
 
-  function createUrlAsset(sourceUrl: string) {
+  function createUrlAsset(sourceUrl: string, kind: AssetUrlCreationKind = 'image') {
     const trimmedUrl = sourceUrl.trim()
     if (!trimmedUrl) return
-    const slug = trimmedUrl.toLowerCase().replace(/https?:\/\//, '').replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 24) || `asset_${Date.now()}`
-    const nextAsset = { id: `asset-url-${Date.now()}`, key: `image.${slug}`, name: `Imported ${slug}`, kind: 'image' as const, mimeType: 'image/png', storagePath: `external/${slug}`, metadata: { sourceUrl: trimmedUrl, previewUrl: trimmedUrl }, llmHints: {} }
+    if (kind === 'mesh' && !isSupportedMeshPath(trimmedUrl)) return
+    const slug = buildAssetSlug(trimmedUrl.replace(/https?:\/\//, '')) || `asset_${Date.now()}`
+    const assetPrefix = getAssetKeyPrefix(kind)
+    const nextAsset = {
+      id: `asset-url-${Date.now()}`,
+      key: `${assetPrefix}.${slug}`,
+      name: `Imported ${slug}`,
+      kind: kind as 'image' | 'mesh',
+      mimeType: inferRemoteAssetMimeType(trimmedUrl, kind),
+      storagePath: `external/${slug}`,
+      metadata: {
+        sourceUrl: trimmedUrl,
+        ...(kind === 'image' ? { previewUrl: trimmedUrl } : {}),
+      },
+      llmHints: {},
+    }
     applySnapshotUpdate((current) => ({ ...current, assets: [nextAsset, ...current.assets] }))
     setSelectedAssetKey(nextAsset.key)
     setActiveTab('assets')
@@ -624,8 +639,24 @@ export default function App() {
   function handleAssetUpload(file: File) {
     const objectUrl = URL.createObjectURL(file)
     const baseName = file.name.replace(/\.[^.]+$/, '')
-    const slug = baseName.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 24) || `upload_${Date.now()}`
-    const nextAsset = { id: `asset-upload-${Date.now()}`, key: `image.${slug}`, name: baseName, kind: file.type.startsWith('audio/') ? 'audio' as const : 'image' as const, mimeType: file.type || 'application/octet-stream', storagePath: `local-upload/${file.name}`, metadata: { previewUrl: objectUrl, localFileName: file.name }, llmHints: {} }
+    const kind = inferAssetKindFromUpload(file)
+    if (!kind) return
+    const slug = buildAssetSlug(baseName) || `upload_${Date.now()}`
+    const assetPrefix = getAssetKeyPrefix(kind)
+    const nextAsset = {
+      id: `asset-upload-${Date.now()}`,
+      key: `${assetPrefix}.${slug}`,
+      name: baseName,
+      kind,
+      mimeType: inferUploadMimeType(file, kind),
+      storagePath: `local-upload/${file.name}`,
+      metadata: {
+        sourceUrl: objectUrl,
+        ...(kind === 'image' ? { previewUrl: objectUrl } : {}),
+        localFileName: file.name,
+      },
+      llmHints: {},
+    }
     applySnapshotUpdate((current) => ({ ...current, assets: [nextAsset, ...current.assets] }))
     setSelectedAssetKey(nextAsset.key)
     setActiveTab('assets')

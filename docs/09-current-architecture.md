@@ -60,6 +60,13 @@ Important feature entrypoints:
   - generic content workspace coordinator
 - [`src/features/content/SpecializedDefinitionWorkspace.tsx`](../src/features/content/SpecializedDefinitionWorkspace.tsx)
   - dedicated `Characters` and `Environments` top-level tabs
+  - `Characters` now includes a local `Details | 3D` central-panel mode switch
+- [`src/features/viewer3d/Character3dPanel.tsx`](../src/features/viewer3d/Character3dPanel.tsx)
+  - first shipped R3F-powered 3D authoring view
+  - structured mesh binding editor for characters
+- [`src/features/viewer3d/ThreeSceneViewport.tsx`](../src/features/viewer3d/ThreeSceneViewport.tsx)
+  - reusable three.js / React Three Fiber viewport shell
+  - floor plane, optional grid, lighting, orbit controls, mesh fallback proxy
 
 ## Service Layer
 
@@ -70,6 +77,7 @@ Application services are intentionally thin wrappers over infrastructure adapter
 - [`src/application/services/promptGenerationService.ts`](../src/application/services/promptGenerationService.ts)
 - [`src/application/services/patchApplyService.ts`](../src/application/services/patchApplyService.ts)
 - [`src/application/services/publishService.ts`](../src/application/services/publishService.ts)
+- [`src/application/services/visualAssetGenerationService.ts`](../src/application/services/visualAssetGenerationService.ts)
 
 These services define the UI-facing use cases without putting Supabase calls directly into most feature modules.
 
@@ -79,6 +87,7 @@ Important infrastructure adapters:
 
 - [`src/infrastructure/auth/supabaseAuthAdapter.ts`](../src/infrastructure/auth/supabaseAuthAdapter.ts)
 - [`src/infrastructure/graphcore/graphcoreWorkspaceAdapter.ts`](../src/infrastructure/graphcore/graphcoreWorkspaceAdapter.ts)
+- [`src/infrastructure/ai/visualAssetAdapter.ts`](../src/infrastructure/ai/visualAssetAdapter.ts)
 
 The graphcore adapter delegates to the repository in [`src/data/graphcoreRepository.ts`](../src/data/graphcoreRepository.ts).
 
@@ -120,3 +129,21 @@ Top-level tabs are defined in [`src/shared/workspace.ts`](../src/shared/workspac
 - `releases`
 
 `characters` and `environments` are intentionally first-class tabs now, not hidden inside the generic content view.
+
+## 3D Viewer Slice
+
+The first 3D authoring slice is character-only in the UI, but the viewport subsystem is reusable.
+
+- dependencies:
+  - `three`
+  - `@react-three/fiber`
+  - `@react-three/drei`
+- current character UX:
+  - `Details` keeps the existing definition editor
+  - `3D` swaps the central panel to a viewport + render-binding editor
+- supported mesh formats in this slice:
+  - `.glb`
+  - `.gltf`
+- future pipeline direction:
+  - concept image generation can continue through Fal-backed infrastructure
+  - mesh-from-image remains a typed stub only for now

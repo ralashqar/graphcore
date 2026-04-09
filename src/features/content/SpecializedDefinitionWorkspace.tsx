@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 
+import type { CharacterPanelMode } from './types'
 import type { ArchetypeDefinition, AssetDefinition, DefinitionBase, FieldDefinition, FieldValue } from '../../domain/graphcore'
 import { DefinitionEditor } from './DefinitionEditor'
 import { EmptyEditor, MediaThumb, QuickUrlAssetForm, findAssetByKey, resolveItemIconAssetKey } from './shared'
+import { Character3dPanel } from '../viewer3d/Character3dPanel'
 
 type SpecializedDefinitionWorkspaceProps = {
   title: string
@@ -17,7 +19,7 @@ type SpecializedDefinitionWorkspaceProps = {
   onAddCustomField: (itemKey: string, field: FieldDefinition) => void
   onAssignDefinitionIcon: (assetKey: string | null) => void
   onCreateDefinition: (archetypeKey?: string | null) => void
-  onCreateUrlAsset: (url: string) => void
+  onCreateUrlAsset: (url: string, kind?: 'image' | 'mesh') => void
   onSelectAsset: (key: string | null) => void
   onSelectDefinition: (key: string | null) => void
   onUpdateComponents: (itemKey: string, components: DefinitionBase['components']) => void
@@ -46,6 +48,7 @@ export function SpecializedDefinitionWorkspace({
   onUpdateItemIdentity,
 }: SpecializedDefinitionWorkspaceProps) {
   const [search, setSearch] = useState('')
+  const [panelMode, setPanelMode] = useState<CharacterPanelMode>('details')
   const filteredDefinitions = useMemo(() => {
     const query = search.trim().toLowerCase()
     return definitions
@@ -66,12 +69,36 @@ export function SpecializedDefinitionWorkspace({
   )
   const imageAssets = assets.filter((asset) => asset.kind === 'image')
   const effectiveSelection = selectedDefinition?.kind === kind ? selectedDefinition : filteredDefinitions[0] ?? null
+  const characterPanelControls = kind === 'character' && effectiveSelection ? (
+    <div className="segmented-control panel-mode-control" aria-label="Character panel mode">
+      <button
+        className={panelMode === 'details' ? 'segment-button is-active' : 'segment-button'}
+        onClick={() => setPanelMode('details')}
+        type="button"
+      >
+        Details
+      </button>
+      <button
+        className={panelMode === '3d' ? 'segment-button is-active' : 'segment-button'}
+        onClick={() => setPanelMode('3d')}
+        type="button"
+      >
+        3D
+      </button>
+    </div>
+  ) : null
 
   useEffect(() => {
     if (effectiveSelection && selectedDefinition?.key !== effectiveSelection.key) {
       onSelectDefinition(effectiveSelection.key)
     }
   }, [effectiveSelection, onSelectDefinition, selectedDefinition?.key])
+
+  useEffect(() => {
+    if (kind !== 'character' && panelMode !== 'details') {
+      setPanelMode('details')
+    }
+  }, [kind, panelMode])
 
   return (
     <div className="focus-layout item-layout">
@@ -157,22 +184,32 @@ export function SpecializedDefinitionWorkspace({
 
       <section className="main-surface detail-surface item-editor-surface">
         {effectiveSelection ? (
-          <DefinitionEditor
-            archetypes={compatibleArchetypes}
-            assets={assets}
-            definitions={definitions}
-            graphKeys={graphKeys}
-            imageAssets={imageAssets}
-            selectedArchetype={compatibleArchetypes.find((archetype) => archetype.key === effectiveSelection.archetypeKey) ?? null}
-            selectedAsset={selectedAsset}
-            selectedItem={effectiveSelection}
-            onAddCustomField={onAddCustomField}
-            onAssignItemIcon={onAssignDefinitionIcon}
-            onCreateItem={(archetypeKey) => onCreateDefinition(archetypeKey)}
-            onUpdateComponents={onUpdateComponents}
-            onUpdateFieldValue={onUpdateFieldValue}
-            onUpdateItemIdentity={onUpdateItemIdentity}
-          />
+          kind === 'character' && panelMode === '3d' ? (
+            <Character3dPanel
+              assets={assets}
+              character={effectiveSelection}
+              headerControls={characterPanelControls}
+              onUpdateComponents={onUpdateComponents}
+            />
+          ) : (
+            <DefinitionEditor
+              archetypes={compatibleArchetypes}
+              assets={assets}
+              definitions={definitions}
+              graphKeys={graphKeys}
+              imageAssets={imageAssets}
+              selectedArchetype={compatibleArchetypes.find((archetype) => archetype.key === effectiveSelection.archetypeKey) ?? null}
+              selectedAsset={selectedAsset}
+              selectedItem={effectiveSelection}
+              headerControls={characterPanelControls}
+              onAddCustomField={onAddCustomField}
+              onAssignItemIcon={onAssignDefinitionIcon}
+              onCreateItem={(archetypeKey) => onCreateDefinition(archetypeKey)}
+              onUpdateComponents={onUpdateComponents}
+              onUpdateFieldValue={onUpdateFieldValue}
+              onUpdateItemIdentity={onUpdateItemIdentity}
+            />
+          )
         ) : (
           <EmptyEditor
             actionLabel={`+ New ${title.slice(0, -1)}`}

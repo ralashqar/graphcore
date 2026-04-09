@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { isSupportedMeshPath, resolveAssetPreviewUrl, type AssetUrlCreationKind } from '../../domain/assets'
 
 import type {
   ArchetypeDefinition,
@@ -274,25 +275,38 @@ export function EmptyEditor({
   )
 }
 
-export function QuickUrlAssetForm({ onCreateUrlAsset }: { onCreateUrlAsset: (url: string) => void }) {
+export function QuickUrlAssetForm({ onCreateUrlAsset }: { onCreateUrlAsset: (url: string, kind?: AssetUrlCreationKind) => void }) {
+  const [kind, setKind] = useState<AssetUrlCreationKind>('image')
   const [url, setUrl] = useState('')
+  const trimmedUrl = url.trim()
+  const meshUrlValid = kind !== 'mesh' || isSupportedMeshPath(trimmedUrl)
 
   return (
     <div className="quick-url-form">
+      <label className="field-block">
+        <span>Asset Kind</span>
+        <select value={kind} onChange={(event) => setKind(event.target.value as AssetUrlCreationKind)}>
+          <option value="image">Image</option>
+          <option value="mesh">Mesh (.glb/.gltf)</option>
+        </select>
+      </label>
       <label className="field-block full-width">
-        <span>Image URL</span>
+        <span>{kind === 'mesh' ? 'Mesh URL' : 'Image URL'}</span>
         <input value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://..." />
       </label>
       <button
         className="ghost-button compact"
+        disabled={!trimmedUrl || !meshUrlValid}
         onClick={() => {
-          onCreateUrlAsset(url)
+          onCreateUrlAsset(trimmedUrl, kind)
           setUrl('')
+          setKind('image')
         }}
         type="button"
       >
         Add URL asset
       </button>
+      {kind === 'mesh' ? <div className="inline-note">Mesh URLs must point to a `.glb` or `.gltf` file.</div> : null}
     </div>
   )
 }
@@ -306,12 +320,7 @@ export function MediaThumb({
   label: string
   large?: boolean
 }) {
-  const previewUrl =
-    typeof asset?.metadata.previewUrl === 'string'
-      ? asset.metadata.previewUrl
-      : typeof asset?.metadata.sourceUrl === 'string'
-        ? asset.metadata.sourceUrl
-        : null
+  const previewUrl = resolveAssetPreviewUrl(asset)
 
   if (previewUrl) {
     return (
@@ -321,7 +330,14 @@ export function MediaThumb({
     )
   }
 
-  const placeholderGlyph = (label.trim().match(/[A-Za-z0-9]/)?.[0] ?? '?').toUpperCase()
+  const placeholderGlyph =
+    asset?.kind === 'mesh'
+      ? '3D'
+      : asset?.kind === 'audio'
+        ? 'AU'
+        : asset?.kind === 'document'
+          ? 'DOC'
+          : (label.trim().match(/[A-Za-z0-9]/)?.[0] ?? '?').toUpperCase()
 
   return (
     <span className={large ? 'media-thumb large fallback' : 'media-thumb fallback'}>
