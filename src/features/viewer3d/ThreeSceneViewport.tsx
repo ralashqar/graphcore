@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Bounds, Grid, OrbitControls, useBounds } from '@react-three/drei'
 import { Canvas } from '@react-three/fiber'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
-import { Box3, BufferAttribute, BufferGeometry, Group, Line, LineBasicMaterial, Mesh, MeshStandardMaterial, Vector3 } from 'three'
+import { Box3, BufferAttribute, BufferGeometry, DoubleSide, Group, Line, LineBasicMaterial, Mesh, MeshStandardMaterial, Vector3 } from 'three'
 
 import type { CompiledEnvironmentModel, CompiledMeshPart } from '../../domain/environmentAssembly'
 
@@ -150,6 +150,7 @@ function CompiledPartView({ part }: { part: CompiledMeshPart }) {
         metalness={part.kind === 'debug' ? 0.15 : 0.08}
         opacity={part.kind === 'debug' ? 0.92 : 1}
         roughness={part.kind === 'surface' ? 0.7 : 0.56}
+        side={part.metadata.solidKind === 'wall_shell' ? DoubleSide : undefined}
         transparent={part.kind === 'debug'}
       />
     </mesh>

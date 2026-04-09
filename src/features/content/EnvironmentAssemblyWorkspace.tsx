@@ -22,6 +22,7 @@ import {
   environmentAssemblyBindingDefaults,
   environmentAssemblyPresets,
   environmentAssemblyTemplatesByKey,
+  migrateAssemblyGraph,
   type AssemblyGraphDefinition,
   type AssemblyNodeDefinition,
   type EnvironmentGeometryBindingConfig,
@@ -33,6 +34,7 @@ type EnvironmentAssemblyWorkspaceProps = {
   assemblyGraphs: AssemblyGraphDefinition[]
   environment: DefinitionBase
   isGeneratingPrompt: boolean
+  isOpeningPreview: boolean
   onChangePromptText: (value: string) => void
   onCreateAssemblyGraph: (environmentKey: string) => string | null
   onDeleteAssemblyGraph: (graphKey: string) => void
@@ -111,6 +113,7 @@ export function EnvironmentAssemblyWorkspace({
   assemblyGraphs,
   environment,
   isGeneratingPrompt,
+  isOpeningPreview,
   onChangePromptText,
   onCreateAssemblyGraph,
   onDeleteAssemblyGraph,
@@ -122,7 +125,10 @@ export function EnvironmentAssemblyWorkspace({
 }: EnvironmentAssemblyWorkspaceProps) {
   const geometryBinding = useMemo(() => getResolvedEnvironmentGeometryBinding(environment), [environment])
   const graph = useMemo(
-    () => assemblyGraphs.find((entry) => entry.key === geometryBinding.assemblyGraphKey) ?? null,
+    () => {
+      const current = assemblyGraphs.find((entry) => entry.key === geometryBinding.assemblyGraphKey) ?? null
+      return current ? migrateAssemblyGraph(current) : null
+    },
     [assemblyGraphs, geometryBinding.assemblyGraphKey],
   )
   const availableGraphs = useMemo(
@@ -183,6 +189,13 @@ export function EnvironmentAssemblyWorkspace({
   useEffect(() => {
     setLiveEdges(edges)
   }, [edges])
+
+  useEffect(() => {
+    const current = assemblyGraphs.find((entry) => entry.key === geometryBinding.assemblyGraphKey)
+    if (!current || !graph) return
+    if (JSON.stringify(current) === JSON.stringify(graph)) return
+    onUpsertAssemblyGraph(graph)
+  }, [assemblyGraphs, geometryBinding.assemblyGraphKey, graph, onUpsertAssemblyGraph])
 
   useEffect(() => {
     if (!graph) {
@@ -498,8 +511,16 @@ export function EnvironmentAssemblyWorkspace({
             <button className="ghost-button compact" onClick={() => onDeleteAssemblyGraph(graph.key)} type="button">
               Delete Graph
             </button>
-            <button className="primary-button compact" onClick={() => { updateGeometryBinding({ sourceMode: 'procedural_graph', assemblyGraphKey: graph.key }); onOpenPreview() }} type="button">
-              Generate Mesh
+            <button
+              className="primary-button compact"
+              disabled={isOpeningPreview}
+              onClick={() => {
+                updateGeometryBinding({ sourceMode: 'procedural_graph', assemblyGraphKey: graph.key })
+                onOpenPreview()
+              }}
+              type="button"
+            >
+              {isOpeningPreview ? 'Opening 3D...' : 'Generate Mesh'}
             </button>
           </div>
 

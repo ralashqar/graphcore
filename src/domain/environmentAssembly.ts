@@ -303,6 +303,43 @@ export const roomVolumeSchema = z.object({
   metadata: looseRecordSchema.default({}),
 })
 
+export const structureFootprintSchema = z.object({
+  id: z.string(),
+  sourceNodeKey: z.string(),
+  shapeKind: z.enum(['polygon', 'round', 'mixed']).default('polygon'),
+  outerLoop: boundaryLoopSchema,
+  innerLoops: z.array(boundaryLoopSchema).default([]),
+  metadata: looseRecordSchema.default({}),
+})
+
+export const verticalBandSchema = z.object({
+  id: z.string(),
+  baseElevation: z.number().default(0),
+  topElevation: z.number().default(0),
+  metadata: looseRecordSchema.default({}),
+})
+
+export const shellBandSpecSchema = z.object({
+  id: z.string(),
+  sourceNodeKeys: z.array(z.string()).default([]),
+  outerLoop: boundaryLoopSchema,
+  innerLoops: z.array(boundaryLoopSchema).default([]),
+  baseElevation: z.number().default(0),
+  topElevation: z.number().default(0),
+  floorAtBase: z.boolean().default(false),
+  metadata: looseRecordSchema.default({}),
+})
+
+export const structuralFusionSpecSchema = z.object({
+  id: z.string(),
+  sourceNodeKeys: z.array(z.string()).default([]),
+  overlapBand: verticalBandSchema,
+  fusedOuterLoop: boundaryLoopSchema,
+  fusedInnerLoops: z.array(boundaryLoopSchema).default([]),
+  remainderBands: z.array(shellBandSpecSchema).default([]),
+  metadata: looseRecordSchema.default({}),
+})
+
 export const levelSpecSchema = z.object({
   id: z.string(),
   sourceNodeKey: z.string(),
@@ -408,6 +445,9 @@ export const spatialDocumentSchema = z.object({
   profiles: z.array(profile2dSchema).default([]),
   solids: z.array(solidSpecSchema).default([]),
   surfaces: z.array(surfaceSpecSchema).default([]),
+  structureFootprints: z.array(structureFootprintSchema).default([]),
+  shellBands: z.array(shellBandSpecSchema).default([]),
+  structuralFusions: z.array(structuralFusionSpecSchema).default([]),
   levels: z.array(levelSpecSchema).default([]),
   wallRuns: z.array(wallRunSpecSchema).default([]),
   wallFaces: z.array(wallFaceSpecSchema).default([]),
@@ -474,6 +514,10 @@ export type SurfaceSpec = z.infer<typeof surfaceSpecSchema>
 export type Anchor = z.infer<typeof anchorSchema>
 export type Connector = z.infer<typeof connectorSchema>
 export type RoomVolume = z.infer<typeof roomVolumeSchema>
+export type StructureFootprint = z.infer<typeof structureFootprintSchema>
+export type VerticalBand = z.infer<typeof verticalBandSchema>
+export type ShellBandSpec = z.infer<typeof shellBandSpecSchema>
+export type StructuralFusionSpec = z.infer<typeof structuralFusionSpecSchema>
 export type LevelSpec = z.infer<typeof levelSpecSchema>
 export type WallRunSpec = z.infer<typeof wallRunSpecSchema>
 export type WallFaceSpec = z.infer<typeof wallFaceSpecSchema>
@@ -1154,13 +1198,7 @@ export const environmentAssemblyPresets: AssemblyGraphPresetDefinition[] = [
         presetNode('transform', 'right_tower_shift', { x: 540, y: 320 }, { translate: { x: 12, y: 0, z: 0 }, rotate: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } }, 'Shift Right Tower'),
         presetNode('dome_roof', 'left_tower_dome', { x: 540, y: 80 }, { height: 1.9, roundness: 1.15, baseThickness: 0.14 }, 'Left Dome Roof'),
         presetNode('tower_cap', 'right_tower_cap', { x: 540, y: 440 }, { height: 2.6, taper: 1 }, 'Right Tower Cap'),
-        presetNode('bridge_room', 'tower_bridge_room', { x: 800, y: 220 }, { width: 3.4, wallHeight: 2.9, wallThickness: 0.22, floorThickness: 0.18, roofThickness: 0.18, elevation: 3.1, openingWidth: 1.9, openingHeight: 2.35, overlap: 0.48 }, 'Bridge Room'),
-        presetNode('slab', 'left_bridge_plate', { x: 800, y: 100 }, { thickness: 0.18 }, 'Left Bridge Plate'),
-        presetNode('slab', 'right_bridge_plate', { x: 800, y: 340 }, { thickness: 0.18 }, 'Right Bridge Plate'),
-        presetNode('transform', 'left_bridge_plate_lift', { x: 1000, y: 100 }, { translate: { x: 0, y: 3.1, z: 0 }, rotate: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } }, 'Lift Left Plate'),
-        presetNode('transform', 'right_bridge_plate_lift', { x: 1000, y: 340 }, { translate: { x: 12, y: 3.1, z: 0 }, rotate: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } }, 'Lift Right Plate'),
-        presetNode('union_structure', 'bridge_with_left_plate', { x: 1220, y: 160 }, {}, 'Union Left Plate'),
-        presetNode('union_structure', 'bridge_with_floor_plates', { x: 1420, y: 220 }, {}, 'Union Floor Plates'),
+        presetNode('bridge_room', 'tower_bridge_room', { x: 800, y: 220 }, { width: 3.4, wallHeight: 2.9, wallThickness: 0.22, floorThickness: 0.18, roofThickness: 0.18, elevation: 3.1, openingWidth: 1.9, openingHeight: 2.35, overlap: 1.15 }, 'Bridge Room'),
         presetNode('environment_output', `${graphKey}.output`, { x: 1640, y: 220 }, {}, 'Environment Output'),
       ],
       edges: [
@@ -1175,15 +1213,7 @@ export const environmentAssemblyPresets: AssemblyGraphPresetDefinition[] = [
         presetEdge('right_anchor_to_bridge_room', 'right_tower_shift', 'anchors', 'tower_bridge_room', 'to'),
         presetEdge('left_shell_to_bridge_host', 'left_tower_shell', 'shell', 'tower_bridge_room', 'from_host'),
         presetEdge('right_shift_to_bridge_host', 'right_tower_shift', 'shell', 'tower_bridge_room', 'to_host'),
-        presetEdge('left_outline_to_plate', 'left_tower_outline', 'profile', 'left_bridge_plate', 'profile'),
-        presetEdge('right_outline_to_plate', 'right_tower_outline', 'profile', 'right_bridge_plate', 'profile'),
-        presetEdge('left_plate_to_lift', 'left_bridge_plate', 'solid', 'left_bridge_plate_lift', 'source'),
-        presetEdge('right_plate_to_lift', 'right_bridge_plate', 'solid', 'right_bridge_plate_lift', 'source'),
-        presetEdge('bridge_room_to_union_left', 'tower_bridge_room', 'solid', 'bridge_with_left_plate', 'a'),
-        presetEdge('left_plate_to_union_left', 'left_bridge_plate_lift', 'solid', 'bridge_with_left_plate', 'b'),
-        presetEdge('union_left_to_union_final', 'bridge_with_left_plate', 'solid', 'bridge_with_floor_plates', 'a'),
-        presetEdge('right_plate_to_union_final', 'right_bridge_plate_lift', 'solid', 'bridge_with_floor_plates', 'b'),
-        presetEdge('core_to_output', 'bridge_with_floor_plates', 'solid', `${graphKey}.output`, 'solids'),
+        presetEdge('bridge_room_to_output', 'tower_bridge_room', 'solid', `${graphKey}.output`, 'solids'),
         presetEdge('bridge_room_anchors_to_output', 'tower_bridge_room', 'anchors', `${graphKey}.output`, 'anchors'),
         presetEdge('left_dome_to_output', 'left_tower_dome', 'solid', `${graphKey}.output`, 'solids'),
         presetEdge('right_cap_to_output', 'right_tower_cap', 'solid', `${graphKey}.output`, 'solids'),
@@ -1261,6 +1291,43 @@ export const environmentAssemblyPresets: AssemblyGraphPresetDefinition[] = [
 export const environmentAssemblyPresetsByKey = new Map(
   environmentAssemblyPresets.map((preset) => [preset.key, preset] as const),
 )
+
+function hasLegacyBridgeBetweenTowersNodes(graph: AssemblyGraphDefinition) {
+  const legacyKeys = new Set([
+    'left_bridge_plate',
+    'right_bridge_plate',
+    'left_bridge_plate_lift',
+    'right_bridge_plate_lift',
+    'bridge_with_left_plate',
+    'bridge_with_floor_plates',
+  ])
+  return graph.nodes.some((node) => legacyKeys.has(node.key))
+}
+
+export function migrateAssemblyGraph(graph: AssemblyGraphDefinition) {
+  const presetKey = typeof graph.metadata.presetKey === 'string' ? graph.metadata.presetKey : null
+  const shouldUpgradeBridgePreset =
+    (presetKey === 'bridge_between_towers' || hasLegacyBridgeBetweenTowersNodes(graph))
+    && hasLegacyBridgeBetweenTowersNodes(graph)
+
+  if (!shouldUpgradeBridgePreset) return graph
+
+  const preset = environmentAssemblyPresetsByKey.get('bridge_between_towers')
+  if (!preset) return graph
+
+  const rebuilt = preset.build(graph.key, graph.boundEnvironmentKey)
+  return {
+    ...rebuilt,
+    id: graph.id,
+    key: graph.key,
+    boundEnvironmentKey: graph.boundEnvironmentKey,
+    metadata: {
+      ...graph.metadata,
+      ...rebuilt.metadata,
+      migratedFrom: 'bridge_between_towers_legacy_v1',
+    },
+  }
+}
 
 export const environmentAssemblyMacroLibrary: EnvironmentMacroDefinition[] = [
   { key: 'room', label: 'Room', summary: 'Generate a compact room or house shell.', presetKey: 'small_house', examplePrompt: 'room with a front door and three windows' },

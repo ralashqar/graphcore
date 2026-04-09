@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useTransition } from 'react'
 
 import type { ArchetypeDefinition, AssetDefinition, AssemblyGraphDefinition, DefinitionBase, FieldDefinition, FieldValue } from '../../domain/graphcore'
 import { DefinitionEditor } from './DefinitionEditor'
@@ -68,6 +68,7 @@ export function SpecializedDefinitionWorkspace({
   const [search, setSearch] = useState('')
   const [panelMode, setPanelMode] = useState<SpecializedPanelMode>('details')
   const [isSelectionIconPickerOpen, setIsSelectionIconPickerOpen] = useState(false)
+  const [isOpeningPreview, startOpeningPreview] = useTransition()
   const filteredDefinitions = useMemo(() => {
     const query = search.trim().toLowerCase()
     return definitions
@@ -275,11 +276,12 @@ export function SpecializedDefinitionWorkspace({
                   assemblyGraphs={assemblyGraphs}
                   environment={effectiveSelection}
                   isGeneratingPrompt={isGeneratingPrompt}
+                  isOpeningPreview={isOpeningPreview}
                   onChangePromptText={onChangePromptText}
                   onCreateAssemblyGraph={onCreateAssemblyGraph}
                   onDeleteAssemblyGraph={onDeleteAssemblyGraph}
                   onGeneratePrompt={onGeneratePrompt}
-                  onOpenPreview={() => setPanelMode('3d')}
+                  onOpenPreview={() => startOpeningPreview(() => setPanelMode('3d'))}
                   onUpsertAssemblyGraph={onUpsertAssemblyGraph}
                   onUpdateComponents={onUpdateComponents}
                   promptText={promptText}

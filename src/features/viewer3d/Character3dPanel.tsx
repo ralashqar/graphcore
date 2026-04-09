@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 import { visualAssetGenerationService } from '../../application/services/visualAssetGenerationService'
 import { isImageAsset, isMeshAsset, resolveAssetSourceUrl } from '../../domain/assets'
@@ -43,17 +43,67 @@ export function Definition3dPanel({ assets, assemblyGraph = null, definition, on
   const meshSourceUrl = resolveAssetSourceUrl(meshAsset)
   const meshSourceLabel = meshSourceUrl ?? 'No mesh source bound'
   const isProceduralEnvironment = isEnvironment && geometryBinding?.sourceMode === 'procedural_graph'
-  const compiledEnvironment = useMemo(
+  const compiledPreview = useMemo(
     () => {
       if (!(isEnvironment && geometryBinding?.sourceMode === 'procedural_graph' && assemblyGraph)) return null
-      const compiled = compileAssemblyGraph(assemblyGraph).compiledModel
+      const compileResult = compileAssemblyGraph(assemblyGraph)
       return {
-        ...compiled,
-        parts: compiled.parts.filter((part) => part.kind !== 'debug' && part.kind !== 'line'),
+        compileResult,
+        compiledEnvironment: {
+          ...compileResult.compiledModel,
+          parts: compileResult.compiledModel.parts.filter((part) => part.kind !== 'debug' && part.kind !== 'line'),
+        },
       }
     },
     [assemblyGraph, geometryBinding?.sourceMode, isEnvironment],
   )
+  const compiledEnvironment = compiledPreview?.compiledEnvironment ?? null
+  const compiledPartSummary = useMemo(
+    () =>
+      compiledEnvironment?.parts
+        .filter((part) => part.kind === 'solid')
+        .map((part) => {
+          const yValues = part.positions.filter((_, index) => index % 3 === 1)
+          const minY = yValues.length > 0 ? Math.min(...yValues) : 0
+          const maxY = yValues.length > 0 ? Math.max(...yValues) : 0
+          return {
+            id: part.id,
+            sourceNodeKey: part.sourceNodeKey,
+            solidKind: String(part.metadata?.solidKind ?? 'unknown'),
+            derivedKind: typeof part.metadata?.derivedKind === 'string' ? part.metadata.derivedKind : null,
+            minY,
+            maxY,
+          }
+        }) ?? [],
+    [compiledEnvironment],
+  )
+
+  useEffect(() => {
+    if (!compiledPreview || !assemblyGraph) return
+    const shellBands = compiledPreview.compileResult.spatialDocument.shellBands.map((band) => ({
+      id: band.id,
+      derivedKind: band.metadata.derivedKind,
+      baseElevation: band.baseElevation,
+      topElevation: band.topElevation,
+      sourceNodeKeys: band.sourceNodeKeys,
+    }))
+    console.groupCollapsed(`[Environment Compile] ${assemblyGraph.key}`)
+    console.table(shellBands)
+    console.table(
+      compiledPartSummary.map((part) => ({
+        id: part.id,
+        sourceNodeKey: part.sourceNodeKey,
+        solidKind: part.solidKind,
+        derivedKind: part.derivedKind,
+        minY: Number(part.minY.toFixed(3)),
+        maxY: Number(part.maxY.toFixed(3)),
+      })),
+    )
+    if (compiledPreview.compileResult.diagnostics.length > 0) {
+      console.warn('Diagnostics', compiledPreview.compileResult.diagnostics)
+    }
+    console.groupEnd()
+  }, [assemblyGraph, compiledPartSummary, compiledPreview])
 
   function updateRenderBinding(changes: Partial<typeof renderBinding>) {
     if (isEnvironment) {
@@ -248,6 +298,26 @@ export function Definition3dPanel({ assets, assemblyGraph = null, definition, on
                 <div className="character-3d-summary-row">
                   <strong>Compiled parts</strong>
                   <span>{compiledEnvironment.parts.length}</span>
+                </div>
+              ) : null}
+              {compiledEnvironment ? (
+                <div className="character-3d-summary-row">
+                  <strong>Structural fusion</strong>
+                  <span>{String(compiledEnvironment.metadata?.structuralFusionCount ?? 0)}</span>
+                </div>
+              ) : null}
+              {compiledPartSummary.length > 0 ? (
+                <div className="character-3d-summary-row" style={{ display: 'block' }}>
+                  <strong>Solid Parts</strong>
+                  <div className="inline-note" style={{ marginTop: 8 }}>
+                    {compiledPartSummary.map((part) => (
+                      <div key={part.id}>
+                        {part.solidKind}
+                        {part.derivedKind ? ` (${part.derivedKind})` : ''}
+                        {` y=${part.minY.toFixed(2)}..${part.maxY.toFixed(2)} from ${part.sourceNodeKey}`}
+                      </div>
+                    ))}
+                  </div>
                 </div>
               ) : null}
               <div className="character-3d-preview-thumb">
