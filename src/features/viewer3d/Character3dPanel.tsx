@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { visualAssetGenerationService } from '../../application/services/visualAssetGenerationService'
 import { isImageAsset, isMeshAsset, resolveAssetSourceUrl } from '../../domain/assets'
-import { compileAssemblyGraph } from '../../domain/environmentAssemblyCompiler'
+import { compileAssemblyGraph, createAssemblyCompileCache } from '../../domain/environmentAssemblyCompiler'
 import {
   getCharacterProfile,
   getResolvedEnvironmentGeometryBinding,
@@ -43,17 +43,38 @@ export function Definition3dPanel({ assets, assemblyGraph = null, definition, on
   const meshSourceUrl = resolveAssetSourceUrl(meshAsset)
   const meshSourceLabel = meshSourceUrl ?? 'No mesh source bound'
   const isProceduralEnvironment = isEnvironment && geometryBinding?.sourceMode === 'procedural_graph'
+  const compileCacheRef = useRef(createAssemblyCompileCache())
+  const lastCompiledPreviewRef = useRef<{
+    signature: string
+    value: {
+      compileResult: ReturnType<typeof compileAssemblyGraph>
+      compiledEnvironment: ReturnType<typeof compileAssemblyGraph>['compiledModel']
+    }
+  } | null>(null)
   const compiledPreview = useMemo(
     () => {
       if (!(isEnvironment && geometryBinding?.sourceMode === 'procedural_graph' && assemblyGraph)) return null
-      const compileResult = compileAssemblyGraph(assemblyGraph)
-      return {
+      const signature = JSON.stringify({
+        key: assemblyGraph.key,
+        metadata: assemblyGraph.metadata,
+        nodes: assemblyGraph.nodes,
+        edges: assemblyGraph.edges,
+      })
+      if (lastCompiledPreviewRef.current?.signature === signature) {
+        return lastCompiledPreviewRef.current.value
+      }
+
+      const compileResult = compileAssemblyGraph(assemblyGraph, compileCacheRef.current)
+      compileCacheRef.current = compileResult.cache
+      const value = {
         compileResult,
         compiledEnvironment: {
           ...compileResult.compiledModel,
           parts: compileResult.compiledModel.parts.filter((part) => part.kind !== 'debug' && part.kind !== 'line'),
         },
       }
+      lastCompiledPreviewRef.current = { signature, value }
+      return value
     },
     [assemblyGraph, geometryBinding?.sourceMode, isEnvironment],
   )

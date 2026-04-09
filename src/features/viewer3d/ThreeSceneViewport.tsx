@@ -302,7 +302,7 @@ function SceneContents({
           fadeStrength={1}
         />
       ) : null}
-      <Bounds fit clip observe margin={1.2}>
+      <Bounds fit clip margin={1.2}>
         <FitBounds fitKey={fitKey} />
         {compiledEnvironment
           ? <CompiledEnvironmentView model={compiledEnvironment} />

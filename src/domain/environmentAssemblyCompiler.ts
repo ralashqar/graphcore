@@ -1030,6 +1030,29 @@ function compileShellBandToResult(
         color: bandColor(band.metadata.derivedKind, '#596979'),
       } satisfies RuntimeSolid
     : null
+  const ceilingAtTop = Boolean(band.metadata.ceilingAtTop)
+  const ceilingThickness = Number.isFinite(Number(band.metadata.ceilingThickness)) ? Math.max(0.04, Number(band.metadata.ceilingThickness)) : 0.18
+  const ceilingSource = band.inner.length >= 3 ? runtimeProfileFromLoops(`${node.key}.band_${index + 1}.ceiling`, band.inner, [], {}) : outerProfile
+  const ceilingSolid = ceilingAtTop
+    ? {
+        spec: {
+          id: `${node.key}.band_${index + 1}.ceiling`,
+          sourceNodeKey: node.key,
+          kind: 'slab',
+          profileId: ceilingSource.profile.id,
+          transform: { position: [0, band.topElevation - ceilingThickness, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
+          params: { thickness: ceilingThickness, derivedBandIndex: index + 1 },
+          metadata: {
+            ...band.metadata,
+            sourceNodeKeys: band.sourceNodeKeys,
+            bridgePiece: 'ceiling',
+            derivedKind: 'bridge_ceiling',
+          },
+        },
+        geometry: extrudeProfile(ceilingSource, ceilingThickness).translate(0, band.topElevation - ceilingThickness, 0),
+        color: '#7a8274',
+      } satisfies RuntimeSolid
+    : null
 
   const center = profileCenter(outerProfile)
   const bounds = new Box3()
@@ -1047,11 +1070,12 @@ function compileShellBandToResult(
   const wallRunId = `${node.key}.band_${index + 1}.wall_run`
   return {
     profiles: [shellProfile],
-    solids: [shellSolid, ...(floorSolid ? [floorSolid] : [])],
+    solids: [shellSolid, ...(floorSolid ? [floorSolid] : []), ...(ceilingSolid ? [ceilingSolid] : [])],
     solidOutputs: {
-      solid: [shellSolid, ...(floorSolid ? [floorSolid] : [])],
+      solid: [shellSolid, ...(floorSolid ? [floorSolid] : []), ...(ceilingSolid ? [ceilingSolid] : [])],
       shell: [shellSolid],
       ...(floorSolid ? { floor: [floorSolid] } : {}),
+      ...(ceilingSolid ? { ceiling: [ceilingSolid] } : {}),
     },
     structuralShells: [{
       id: `${node.key}.band_${index + 1}.structural_shell`,
@@ -1212,6 +1236,7 @@ function applyStructuralFusion(
   result: RuntimeNodeResult,
   diagnostics: string[],
   color = '#8b7a69',
+  decorateBand?: (band: StructuralShellBandResult) => StructuralShellBandResult,
 ) {
   const fusion = resolveStructuralUnion(shells, fusionId)
   if (!fusion) return false
@@ -1222,7 +1247,8 @@ function applyStructuralFusion(
   result.structuralShells = []
 
   fusion.bands.forEach((band, index) => {
-    mergeNodeResults(result, compileShellBandToResult(node, band, index, color))
+    const nextBand = decorateBand ? decorateBand(band) : band
+    mergeNodeResults(result, compileShellBandToResult(node, nextBand, index, color))
   })
 
   diagnostics.push(...fusion.diagnostics)
@@ -2028,6 +2054,18 @@ export function compileAssemblyGraph(
             [fromStructuralShell, bridgeShell, toStructuralShell],
             result,
             diagnostics,
+            '#8b7a69',
+            (band) =>
+              band.metadata.derivedKind === 'fused'
+                ? {
+                    ...band,
+                    metadata: {
+                      ...band.metadata,
+                      ceilingAtTop: true,
+                      ceilingThickness: roofThickness,
+                    },
+                  }
+                : band,
           )
           if (fused) {
             result.solids = (result.solids ?? []).map((solid, index) => ({
