@@ -72,6 +72,7 @@ type RuntimeNodeResult = {
   profiles?: RuntimeProfile[]
   paths?: RuntimePath[]
   solids?: RuntimeSolid[]
+  solidOutputs?: Record<string, RuntimeSolid[]>
   surfaces?: RuntimeSurface[]
   levels?: LevelSpec[]
   wallRuns?: WallRunSpec[]
@@ -239,6 +240,29 @@ function cloneSolid(runtimeSolid: RuntimeSolid, geometry: BufferGeometry, params
     },
     geometry,
   }
+}
+
+function pickStructuralHostSolid(solids: RuntimeSolid[]) {
+  const preferredKinds: SolidSpec['kind'][] = ['boolean_result', 'wall_shell', 'room', 'bridge_room', 'roof', 'box', 'cylinder', 'prism', 'tapered_prism']
+  for (const kind of preferredKinds) {
+    const match = solids.find((solid) => solid.spec.kind === kind)
+    if (match) return match
+  }
+  return solids[0] ?? null
+}
+
+function mapSolidOutputs(
+  result: RuntimeNodeResult | undefined,
+  mapper: (solid: RuntimeSolid, outputKey: string, index: number) => RuntimeSolid,
+) {
+  const outputs = result?.solidOutputs ?? (result?.solids ? { solid: result.solids } : undefined)
+  if (!outputs) return undefined
+  return Object.fromEntries(
+    Object.entries(outputs).map(([outputKey, solids]) => [
+      outputKey,
+      solids.map((solid, index) => mapper(solid, outputKey, index)),
+    ]),
+  )
 }
 
 function pointsToSegments(points: Vector2[]): CurveSegment[] {
@@ -471,7 +495,13 @@ function collectIncomingPaths(graph: AssemblyGraphDefinition, node: AssemblyNode
 
 function collectIncomingSolids(graph: AssemblyGraphDefinition, node: AssemblyNodeDefinition, results: Map<string, RuntimeNodeResult>, portId?: string) {
   const edges = portId ? incomingEdges(graph, node.key, portId) : incomingEdges(graph, node.key)
-  return edges.flatMap((edge) => results.get(edge.source.nodeKey)?.solids ?? [])
+  return edges.flatMap((edge) => {
+    const sourceResult = results.get(edge.source.nodeKey)
+    if (!sourceResult) return []
+    if (sourceResult.solidOutputs?.[edge.source.portId]) return sourceResult.solidOutputs[edge.source.portId]
+    if (edge.source.portId === 'solid') return sourceResult.solids ?? sourceResult.solidOutputs?.solid ?? []
+    return sourceResult.solidOutputs?.solid ?? sourceResult.solids ?? []
+  })
 }
 
 function collectIncomingLevels(graph: AssemblyGraphDefinition, node: AssemblyNodeDefinition, results: Map<string, RuntimeNodeResult>, portId = 'level') {
@@ -510,7 +540,9 @@ function booleanCombine(a: RuntimeSolid, b: RuntimeSolid, operation: typeof ADDI
     brushA.updateMatrixWorld()
     brushB.updateMatrixWorld()
     const result = evaluator.evaluate(brushA, brushB, operation)
-    result.geometry.computeVertexNormals()
+    const geometry = result.geometry.index ? result.geometry.toNonIndexed() : result.geometry.clone()
+    geometry.computeVertexNormals()
+    geometry.computeBoundingBox()
     return {
       spec: {
         id: `${node.key}.solid`,
@@ -521,7 +553,7 @@ function booleanCombine(a: RuntimeSolid, b: RuntimeSolid, operation: typeof ADDI
         params: { operation: node.kind },
         metadata: {},
       } satisfies SolidSpec,
-      geometry: result.geometry,
+      geometry,
       color: '#d3b36a',
     } satisfies RuntimeSolid
   } catch (error) {
@@ -561,6 +593,14 @@ function canonicalRoofKind(kind: AssemblyNodeDefinition['kind']) {
     default:
       return kind
   }
+}
+
+function boundaryVertices2D(profile: RuntimeProfile) {
+  const loops = [
+    profile.outer,
+    ...profile.holes,
+  ]
+  return loops.flatMap((loop) => loop.map((point) => new Vector2(point.x, point.y)))
 }
 
 function buildRoofGeometry(
@@ -642,11 +682,40 @@ function buildRoofGeometry(
   }
 
   if (roofKind === 'roof_dome') {
-    const radius = Math.max(Math.max(size.x, size.z) * 0.5, 0.2)
+    const workingProfile = eaves !== 0 ? insetProfile(profile, -eaves) : profile
+    const baseThickness = Math.max(0.06, numberParam(node, 'baseThickness', Math.min(0.18, Math.max(height * 0.08, 0.08))))
     const roundness = Math.max(0.2, numberParam(node, 'roundness', 1))
-    const geometry = new SphereGeometry(radius, 24, 16, 0, Math.PI * 2, 0, Math.PI / 2)
-    geometry.scale(size.x > 0 ? size.x / (radius * 2) : 1, Math.max((height / radius) * roundness, 0.2), size.z > 0 ? size.z / (radius * 2) : 1)
-    geometry.translate(center.x + placement.offsetX, placement.baseElevation, center.z + placement.offsetZ)
+    const geometry = extrudeProfile(workingProfile, baseThickness)
+    const position = geometry.getAttribute('position')
+    const boundaryPoints = boundaryVertices2D(workingProfile)
+    const halfWidth = Math.max(size.x * 0.5, 0.0001)
+    const halfDepth = Math.max(size.z * 0.5, 0.0001)
+    const topThreshold = Math.max(baseThickness - 0.001, 0.001)
+    const boundaryEpsilon = 0.001
+
+    for (let index = 0; index < position.count; index += 1) {
+      const y = position.getY(index)
+      if (y < topThreshold) continue
+
+      const x = position.getX(index)
+      const z = position.getZ(index)
+      const isBoundary = boundaryPoints.some((point) => Math.abs(point.x - x) <= boundaryEpsilon && Math.abs(point.y - z) <= boundaryEpsilon)
+      if (isBoundary) {
+        position.setY(index, baseThickness)
+        continue
+      }
+
+      const nx = (x - center.x) / halfWidth
+      const nz = (z - center.z) / halfDepth
+      const radial = Math.min(1, Math.sqrt(nx * nx + nz * nz))
+      const domeFactor = Math.pow(Math.max(0, 1 - radial * radial), roundness)
+      position.setY(index, baseThickness + domeFactor * height)
+    }
+
+    position.needsUpdate = true
+    geometry.computeVertexNormals()
+    geometry.computeBoundingBox()
+    geometry.translate(placement.offsetX, placement.baseElevation, placement.offsetZ)
     return geometry
   }
 
@@ -665,6 +734,69 @@ function createAnchor(nodeKey: string, label: string, position: Vector3): Anchor
     position: [position.x, position.y, position.z],
     metadata: {},
   }
+}
+
+function anchorPosition(anchor: Anchor) {
+  return new Vector3(anchor.position[0], anchor.position[1], anchor.position[2])
+}
+
+function chooseDirectionalAnchor(anchors: Anchor[], preferredLabel: string) {
+  return anchors.find((anchor) => anchor.label.toLowerCase() === preferredLabel.toLowerCase()) ?? null
+}
+
+function averageAnchorPosition(anchors: Anchor[]) {
+  if (anchors.length === 0) return new Vector3(0, 0, 0)
+  return anchors.reduce((sum, anchor) => sum.add(anchorPosition(anchor)), new Vector3()).multiplyScalar(1 / anchors.length)
+}
+
+function chooseBridgeAnchorPair(fromAnchors: Anchor[], toAnchors: Anchor[]) {
+  if (fromAnchors.length === 0 || toAnchors.length === 0) return null
+
+  const fromCenter = chooseDirectionalAnchor(fromAnchors, 'Center') ?? { position: averageAnchorPosition(fromAnchors).toArray() as [number, number, number] } as Anchor
+  const toCenter = chooseDirectionalAnchor(toAnchors, 'Center') ?? { position: averageAnchorPosition(toAnchors).toArray() as [number, number, number] } as Anchor
+  const delta = new Vector3().subVectors(anchorPosition(toCenter), anchorPosition(fromCenter))
+  const primaryAxis = Math.abs(delta.x) >= Math.abs(delta.z) ? 'x' : 'z'
+
+  const fromPreferredLabel = primaryAxis === 'x'
+    ? (delta.x >= 0 ? 'East Entry' : 'West Entry')
+    : (delta.z >= 0 ? 'South Entry' : 'North Entry')
+  const toPreferredLabel = primaryAxis === 'x'
+    ? (delta.x >= 0 ? 'West Entry' : 'East Entry')
+    : (delta.z >= 0 ? 'North Entry' : 'South Entry')
+
+  const fromPreferred = chooseDirectionalAnchor(fromAnchors, fromPreferredLabel)
+  const toPreferred = chooseDirectionalAnchor(toAnchors, toPreferredLabel)
+  if (fromPreferred && toPreferred) return { from: fromPreferred, to: toPreferred }
+
+  let bestPair: { from: Anchor; to: Anchor; score: number } | null = null
+  for (const from of fromAnchors) {
+    for (const to of toAnchors) {
+      const distance = anchorPosition(from).distanceToSquared(anchorPosition(to))
+      if (!bestPair || distance < bestPair.score) {
+        bestPair = { from, to, score: distance }
+      }
+    }
+  }
+
+  return bestPair ? { from: bestPair.from, to: bestPair.to } : null
+}
+
+function orientedBoxGeometry(length: number, height: number, width: number, center: Vector3, angle: number) {
+  const geometry = new BoxGeometry(Math.max(length, 0.001), Math.max(height, 0.001), Math.max(width, 0.001))
+  geometry.rotateY(-angle)
+  geometry.translate(center.x, center.y, center.z)
+  return geometry
+}
+
+function unionSolidList(solids: RuntimeSolid[], node: AssemblyNodeDefinition, diagnostics: string[]) {
+  if (solids.length === 0) return null
+  let combined = solids[0]
+  for (let index = 1; index < solids.length; index += 1) {
+    const next = booleanCombine(combined, solids[index], ADDITION, node, diagnostics)
+    if (!next) return combined
+    combined = next
+  }
+  return combined
 }
 
 function wallFacesFromProfile(node: AssemblyNodeDefinition, profile: RuntimeProfile, height: number): WallFaceSpec[] {
@@ -1034,30 +1166,40 @@ export function compileAssemblyGraph(
         )
         const floorThickness = numberParam(node, 'floorThickness', 0.18)
         const floorGeometry = extrudeProfile(profile, floorThickness)
+        const floorSolid = node.kind === 'room' || node.kind === 'room_shell'
+          ? {
+              spec: {
+                id: `${node.key}.floor`,
+                sourceNodeKey: node.key,
+                kind: 'slab',
+                profileId: profile.profile.id,
+                transform: { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
+                params: { thickness: floorThickness },
+                metadata: {},
+              },
+              geometry: floorGeometry,
+              color: '#596979',
+            } satisfies RuntimeSolid
+          : null
         result.solids = [
           ...(wallGeometry ? [wallGeometry] : []),
-          ...(node.kind === 'room' || node.kind === 'room_shell'
-            ? [{
-                spec: {
-                  id: `${node.key}.floor`,
-                  sourceNodeKey: node.key,
-                  kind: 'slab',
-                  profileId: profile.profile.id,
-                  transform: { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
-                  params: { thickness: floorThickness },
-                  metadata: {},
-                },
-                geometry: floorGeometry,
-                color: '#596979',
-              } satisfies RuntimeSolid]
-            : []),
+          ...(floorSolid ? [floorSolid] : []),
         ]
+        result.solidOutputs = {
+          solid: result.solids,
+          shell: wallGeometry ? [wallGeometry] : [],
+          ...(floorSolid ? { floor: [floorSolid] } : {}),
+        }
         const box = new Box3()
         for (const point of profile.outer) box.expandByPoint(new Vector3(point.x, 0, point.y))
         const size = box.getSize(new Vector3())
         const center = box.getCenter(new Vector3())
         result.anchors = [
           createAnchor(node.key, 'Entry', new Vector3(center.x + size.x * 0.5, level?.elevation ?? 0, center.z)),
+          createAnchor(node.key, 'East Entry', new Vector3(center.x + size.x * 0.5, level?.elevation ?? 0, center.z)),
+          createAnchor(node.key, 'West Entry', new Vector3(center.x - size.x * 0.5, level?.elevation ?? 0, center.z)),
+          createAnchor(node.key, 'North Entry', new Vector3(center.x, level?.elevation ?? 0, center.z - size.z * 0.5)),
+          createAnchor(node.key, 'South Entry', new Vector3(center.x, level?.elevation ?? 0, center.z + size.z * 0.5)),
           createAnchor(node.key, 'Center', new Vector3(center.x, level?.elevation ?? 0, center.z)),
           createAnchor(node.key, 'Roof Ridge', new Vector3(center.x, (level?.elevation ?? 0) + wallHeight, center.z)),
         ]
@@ -1348,9 +1490,12 @@ export function compileAssemblyGraph(
       case 'bridge_span':
       case 'bridge_deck':
       case 'bridge_supports': {
-        const from = collectIncomingAnchors(graph, node, nextCache.nodeResults, 'from')[0]
-        const to = collectIncomingAnchors(graph, node, nextCache.nodeResults, 'to')[0]
-        if (!from || !to) break
+        const anchorPair = chooseBridgeAnchorPair(
+          collectIncomingAnchors(graph, node, nextCache.nodeResults, 'from'),
+          collectIncomingAnchors(graph, node, nextCache.nodeResults, 'to'),
+        )
+        if (!anchorPair) break
+        const { from, to } = anchorPair
         const start = new Vector3(from.position[0], from.position[1], from.position[2])
         const end = new Vector3(to.position[0], to.position[1], to.position[2])
         const span = new Vector3().subVectors(end, start)
@@ -1376,6 +1521,227 @@ export function compileAssemblyGraph(
           deckElevation: center.y,
           width,
           metadata: {},
+        }]
+        break
+      }
+      case 'bridge_room': {
+        const anchorPair = chooseBridgeAnchorPair(
+          collectIncomingAnchors(graph, node, nextCache.nodeResults, 'from'),
+          collectIncomingAnchors(graph, node, nextCache.nodeResults, 'to'),
+        )
+        if (!anchorPair) break
+
+        const fromHost = pickStructuralHostSolid(collectIncomingSolids(graph, node, nextCache.nodeResults, 'from_host'))
+        const toHost = pickStructuralHostSolid(collectIncomingSolids(graph, node, nextCache.nodeResults, 'to_host'))
+        if (!fromHost || !toHost) break
+
+        const start = anchorPosition(anchorPair.from)
+        const end = anchorPosition(anchorPair.to)
+        const span = new Vector3().subVectors(end, start)
+        const spanLength = Math.max(span.length(), 0.001)
+        const axis = span.clone().normalize()
+        const angle = Math.atan2(span.z, span.x)
+        const width = numberParam(node, 'width', 3.2)
+        const wallHeight = numberParam(node, 'wallHeight', 3)
+        const wallThickness = numberParam(node, 'wallThickness', 0.22)
+        const floorThickness = numberParam(node, 'floorThickness', 0.18)
+        const roofThickness = numberParam(node, 'roofThickness', 0.18)
+        const openingWidth = numberParam(node, 'openingWidth', 1.9)
+        const openingHeight = numberParam(node, 'openingHeight', 2.4)
+        const elevation = typeof node.params.elevation === 'number' ? numberParam(node, 'elevation', 0) : (start.y + end.y) * 0.5
+        const overlap = numberParam(node, 'overlap', 0.45)
+        const totalLength = spanLength + overlap * 2
+        const center = start.clone().add(end).multiplyScalar(0.5)
+
+        const floorCenter = new Vector3(center.x, elevation + floorThickness * 0.5, center.z)
+        const roofCenter = new Vector3(center.x, elevation + wallHeight - roofThickness * 0.5, center.z)
+        const leftWallOffset = new Vector3(-axis.z, 0, axis.x).multiplyScalar(width * 0.5 - wallThickness * 0.5)
+        const rightWallOffset = leftWallOffset.clone().multiplyScalar(-1)
+        const wallCenterY = elevation + wallHeight * 0.5
+
+        const bridgePieces: RuntimeSolid[] = [
+          {
+            spec: {
+              id: `${node.key}.floor`,
+              sourceNodeKey: node.key,
+              kind: 'bridge_room',
+              profileId: null,
+              transform: { position: [floorCenter.x, floorCenter.y, floorCenter.z], rotation: [0, angle, 0], scale: [1, 1, 1] },
+              params: { length: totalLength, width, floorThickness },
+              metadata: { bridgePiece: 'floor' },
+            },
+            geometry: orientedBoxGeometry(totalLength, floorThickness, width, floorCenter, angle),
+            color: '#667585',
+          },
+          {
+            spec: {
+              id: `${node.key}.left_wall`,
+              sourceNodeKey: node.key,
+              kind: 'bridge_room',
+              profileId: null,
+              transform: { position: [center.x + leftWallOffset.x, wallCenterY, center.z + leftWallOffset.z], rotation: [0, angle, 0], scale: [1, 1, 1] },
+              params: { length: totalLength, width: wallThickness, wallHeight },
+              metadata: { bridgePiece: 'left_wall' },
+            },
+            geometry: orientedBoxGeometry(totalLength, wallHeight, wallThickness, new Vector3(center.x + leftWallOffset.x, wallCenterY, center.z + leftWallOffset.z), angle),
+            color: '#7f92a6',
+          },
+          {
+            spec: {
+              id: `${node.key}.right_wall`,
+              sourceNodeKey: node.key,
+              kind: 'bridge_room',
+              profileId: null,
+              transform: { position: [center.x + rightWallOffset.x, wallCenterY, center.z + rightWallOffset.z], rotation: [0, angle, 0], scale: [1, 1, 1] },
+              params: { length: totalLength, width: wallThickness, wallHeight },
+              metadata: { bridgePiece: 'right_wall' },
+            },
+            geometry: orientedBoxGeometry(totalLength, wallHeight, wallThickness, new Vector3(center.x + rightWallOffset.x, wallCenterY, center.z + rightWallOffset.z), angle),
+            color: '#7f92a6',
+          },
+          {
+            spec: {
+              id: `${node.key}.roof`,
+              sourceNodeKey: node.key,
+              kind: 'bridge_room',
+              profileId: null,
+              transform: { position: [roofCenter.x, roofCenter.y, roofCenter.z], rotation: [0, angle, 0], scale: [1, 1, 1] },
+              params: { length: totalLength, width, roofThickness },
+              metadata: { bridgePiece: 'roof' },
+            },
+            geometry: orientedBoxGeometry(totalLength, roofThickness, width, roofCenter, angle),
+            color: '#718193',
+          },
+        ]
+
+        const bridgeSolid = unionSolidList(bridgePieces, node, diagnostics)
+        if (!bridgeSolid) break
+
+        const cutDepth = Math.max(wallThickness * 6, overlap * 2 + 0.35, openingWidth * 0.8, 1.4)
+        const openingCenterY = elevation + openingHeight * 0.5
+        const fromCutCenter = start.clone().addScaledVector(axis, cutDepth * 0.5 - overlap * 0.15)
+        fromCutCenter.y = openingCenterY
+        const toCutCenter = end.clone().addScaledVector(axis, -(cutDepth * 0.5 - overlap * 0.15))
+        toCutCenter.y = openingCenterY
+
+        const fromOpeningCut = {
+          spec: {
+            id: `${node.key}.from_opening_cut`,
+            sourceNodeKey: node.key,
+            kind: 'bridge_room',
+            profileId: null,
+            transform: { position: [fromCutCenter.x, fromCutCenter.y, fromCutCenter.z], rotation: [0, angle, 0], scale: [1, 1, 1] },
+            params: { openingWidth, openingHeight, cutDepth },
+            metadata: { bridgePiece: 'from_opening_cut' },
+          },
+          geometry: orientedBoxGeometry(cutDepth, openingHeight, openingWidth, fromCutCenter, angle),
+          color: '#c97b6a',
+        } satisfies RuntimeSolid
+        const toOpeningCut = {
+          spec: {
+            id: `${node.key}.to_opening_cut`,
+            sourceNodeKey: node.key,
+            kind: 'bridge_room',
+            profileId: null,
+            transform: { position: [toCutCenter.x, toCutCenter.y, toCutCenter.z], rotation: [0, angle, 0], scale: [1, 1, 1] },
+            params: { openingWidth, openingHeight, cutDepth },
+            metadata: { bridgePiece: 'to_opening_cut' },
+          },
+          geometry: orientedBoxGeometry(cutDepth, openingHeight, openingWidth, toCutCenter, angle),
+          color: '#c97b6a',
+        } satisfies RuntimeSolid
+
+        const carvedFromHost = booleanCombine(fromHost, fromOpeningCut, SUBTRACTION, node, diagnostics) ?? fromHost
+        const carvedToHost = booleanCombine(toHost, toOpeningCut, SUBTRACTION, node, diagnostics) ?? toHost
+        const combinedStructure = unionSolidList([carvedFromHost, carvedToHost, bridgeSolid], node, diagnostics)
+        result.solids = combinedStructure ? [{
+          ...combinedStructure,
+          spec: {
+            ...combinedStructure.spec,
+            id: `${node.key}.solid`,
+            sourceNodeKey: node.key,
+            kind: 'bridge_room',
+            params: {
+              width,
+              wallHeight,
+              elevation,
+              spanLength,
+              openingWidth,
+              openingHeight,
+            },
+          },
+          color: '#8b7a69',
+        }] : []
+
+        const sideNormal = new Vector3(-axis.z, 0, axis.x)
+        result.anchors = [
+          createAnchor(node.key, 'Bridge Start', new Vector3(start.x, elevation, start.z)),
+          createAnchor(node.key, 'Bridge End', new Vector3(end.x, elevation, end.z)),
+          createAnchor(node.key, 'Bridge Center', new Vector3(center.x, elevation, center.z)),
+        ]
+        result.wallFaces = [
+          {
+            id: `${node.key}.wall_face_left`,
+            sourceNodeKey: node.key,
+            wallRunId: `${node.key}.wall_run`,
+            start: [start.x + leftWallOffset.x, elevation, start.z + leftWallOffset.z],
+            end: [end.x + leftWallOffset.x, elevation, end.z + leftWallOffset.z],
+            center: [center.x + leftWallOffset.x, elevation + wallHeight * 0.5, center.z + leftWallOffset.z],
+            normal: [sideNormal.x, 0, sideNormal.z],
+            elevationBottom: elevation,
+            elevationTop: elevation + wallHeight,
+            metadata: { bridgeSide: 'left' },
+          },
+          {
+            id: `${node.key}.wall_face_right`,
+            sourceNodeKey: node.key,
+            wallRunId: `${node.key}.wall_run`,
+            start: [start.x + rightWallOffset.x, elevation, start.z + rightWallOffset.z],
+            end: [end.x + rightWallOffset.x, elevation, end.z + rightWallOffset.z],
+            center: [center.x + rightWallOffset.x, elevation + wallHeight * 0.5, center.z + rightWallOffset.z],
+            normal: [-sideNormal.x, 0, -sideNormal.z],
+            elevationBottom: elevation,
+            elevationTop: elevation + wallHeight,
+            metadata: { bridgeSide: 'right' },
+          },
+        ]
+        result.openings = [
+          {
+            id: `${node.key}.opening_from`,
+            sourceNodeKey: node.key,
+            hostSolidId: fromHost.spec.id,
+            kind: 'doorway',
+            position: [start.x, elevation + openingHeight * 0.5, start.z],
+            size: [openingWidth, openingHeight, cutDepth],
+            metadata: { bridgeSide: 'from', bridgeNodeKey: node.key },
+          },
+          {
+            id: `${node.key}.opening_to`,
+            sourceNodeKey: node.key,
+            hostSolidId: toHost.spec.id,
+            kind: 'doorway',
+            position: [end.x, elevation + openingHeight * 0.5, end.z],
+            size: [openingWidth, openingHeight, cutDepth],
+            metadata: { bridgeSide: 'to', bridgeNodeKey: node.key },
+          },
+        ]
+        result.rooms = [{
+          id: `${node.key}.room`,
+          sourceNodeKey: node.key,
+          name: node.title,
+          profileId: null,
+          floorElevation: elevation,
+          ceilingElevation: elevation + wallHeight - roofThickness,
+          metadata: { roomKind: 'bridge_room' },
+        }]
+        result.bridges = [{
+          id: `${node.key}.bridge`,
+          sourceNodeKey: node.key,
+          fromAnchorId: anchorPair.from.id,
+          toAnchorId: anchorPair.to.id,
+          deckElevation: elevation,
+          width,
+          metadata: { enclosed: true, spanLength },
         }]
         break
       }
@@ -1513,10 +1879,14 @@ export function compileAssemblyGraph(
         const op = node.kind === 'union' || node.kind === 'union_structure' ? ADDITION : node.kind === 'difference' || node.kind === 'difference_structure' ? SUBTRACTION : INTERSECTION
         const combined = booleanCombine(a, b, op, node, diagnostics)
         result.solids = combined ? [combined] : []
+        result.solidOutputs = combined ? { solid: [combined] } : { solid: [] }
         break
       }
-      case 'transform':
+      case 'transform': {
+        const sourceEdge = incomingEdges(graph, node.key, 'source')[0]
+        const sourceResult = sourceEdge ? nextCache.nodeResults.get(sourceEdge.source.nodeKey) : undefined
         result.solids = collectIncomingSolids(graph, node, nextCache.nodeResults, 'source').map((solid) => transformedSolid(solid, node))
+        result.solidOutputs = mapSolidOutputs(sourceResult, (solid) => transformedSolid(solid, node))
         result.anchors = collectSourceAnchors(graph, node, nextCache.nodeResults, 'source').map((anchor) => {
           const translate = vector3Param(node, 'translate', { x: 0, y: 0, z: 0 })
           return {
@@ -1526,9 +1896,17 @@ export function compileAssemblyGraph(
           }
         })
         break
+      }
       case 'mirror': {
         const axis = stringParam(node, 'axis', 'x')
         result.solids = collectIncomingSolids(graph, node, nextCache.nodeResults, 'source').map((solid) => {
+          const scale = new Vector3(axis === 'x' ? -1 : 1, axis === 'y' ? -1 : 1, axis === 'z' ? -1 : 1)
+          const matrix = new Matrix4().makeScale(scale.x, scale.y, scale.z)
+          return cloneSolid(solid, cloneGeometryWithMatrix(solid.geometry, matrix), { mirroredAxis: axis })
+        })
+        const sourceEdge = incomingEdges(graph, node.key, 'source')[0]
+        const sourceResult = sourceEdge ? nextCache.nodeResults.get(sourceEdge.source.nodeKey) : undefined
+        result.solidOutputs = mapSolidOutputs(sourceResult, (solid) => {
           const scale = new Vector3(axis === 'x' ? -1 : 1, axis === 'y' ? -1 : 1, axis === 'z' ? -1 : 1)
           const matrix = new Matrix4().makeScale(scale.x, scale.y, scale.z)
           return cloneSolid(solid, cloneGeometryWithMatrix(solid.geometry, matrix), { mirroredAxis: axis })
@@ -1565,6 +1943,19 @@ export function compileAssemblyGraph(
             ] as [number, number, number],
           })),
         ).flat()
+        const sourceEdge = incomingEdges(graph, node.key, 'source')[0]
+        const sourceResult = sourceEdge ? nextCache.nodeResults.get(sourceEdge.source.nodeKey) : undefined
+        result.solidOutputs = sourceResult
+          ? Object.fromEntries(
+              Object.entries(sourceResult.solidOutputs ?? { solid: sourceResult.solids ?? [] }).map(([outputKey, solids]) => [
+                outputKey,
+                Array.from({ length: count }, (_, index) => {
+                  const matrix = new Matrix4().makeTranslation(offset.x * index, offset.y * index, offset.z * index)
+                  return solids.map((solid) => cloneSolid(solid, cloneGeometryWithMatrix(solid.geometry, matrix), { repeatIndex: index }))
+                }).flat(),
+              ]),
+            )
+          : undefined
         break
       }
       case 'attach_to_host': {
@@ -1579,6 +1970,7 @@ export function compileAssemblyGraph(
           hostBounds.getCenter(new Vector3()).z - sourceBounds.getCenter(new Vector3()).z,
         )
         result.solids = [cloneSolid(source, cloneGeometryWithMatrix(source.geometry, translation), { attachedTo: host.spec.id })]
+        result.solidOutputs = { solid: result.solids }
         break
       }
       case 'roof_flat':
@@ -1638,19 +2030,19 @@ export function compileAssemblyGraph(
       }
       case 'environment_output':
       case 'debug_output':
-        result.solids = collectIncomingSolids(graph, node, nextCache.nodeResults)
+        result.solids = collectIncomingSolids(graph, node, nextCache.nodeResults, 'solids')
         result.surfaces = incomingEdges(graph, node.key, 'surfaces').flatMap((edge) => nextCache.nodeResults.get(edge.source.nodeKey)?.surfaces ?? [])
-        result.levels = incomingEdges(graph, node.key).flatMap((edge) => nextCache.nodeResults.get(edge.source.nodeKey)?.levels ?? [])
-        result.wallFaces = incomingEdges(graph, node.key).flatMap((edge) => nextCache.nodeResults.get(edge.source.nodeKey)?.wallFaces ?? [])
-        result.anchors = incomingEdges(graph, node.key).flatMap((edge) => nextCache.nodeResults.get(edge.source.nodeKey)?.anchors ?? [])
-        result.connectors = incomingEdges(graph, node.key).flatMap((edge) => nextCache.nodeResults.get(edge.source.nodeKey)?.connectors ?? [])
-        result.openings = incomingEdges(graph, node.key).flatMap((edge) => nextCache.nodeResults.get(edge.source.nodeKey)?.openings ?? [])
-        result.windows = incomingEdges(graph, node.key).flatMap((edge) => nextCache.nodeResults.get(edge.source.nodeKey)?.windows ?? [])
-        result.rooms = incomingEdges(graph, node.key).flatMap((edge) => nextCache.nodeResults.get(edge.source.nodeKey)?.rooms ?? [])
-        result.roofs = incomingEdges(graph, node.key).flatMap((edge) => nextCache.nodeResults.get(edge.source.nodeKey)?.roofs ?? [])
-        result.bridges = incomingEdges(graph, node.key).flatMap((edge) => nextCache.nodeResults.get(edge.source.nodeKey)?.bridges ?? [])
-        result.stairs = incomingEdges(graph, node.key).flatMap((edge) => nextCache.nodeResults.get(edge.source.nodeKey)?.stairs ?? [])
-        result.arrayPlacements = incomingEdges(graph, node.key).flatMap((edge) => nextCache.nodeResults.get(edge.source.nodeKey)?.arrayPlacements ?? [])
+        result.levels = incomingEdges(graph, node.key, 'anchors').flatMap((edge) => nextCache.nodeResults.get(edge.source.nodeKey)?.levels ?? [])
+        result.wallFaces = incomingEdges(graph, node.key, 'solids').flatMap((edge) => nextCache.nodeResults.get(edge.source.nodeKey)?.wallFaces ?? [])
+        result.anchors = incomingEdges(graph, node.key, 'anchors').flatMap((edge) => nextCache.nodeResults.get(edge.source.nodeKey)?.anchors ?? [])
+        result.connectors = incomingEdges(graph, node.key, 'anchors').flatMap((edge) => nextCache.nodeResults.get(edge.source.nodeKey)?.connectors ?? [])
+        result.openings = incomingEdges(graph, node.key, 'solids').flatMap((edge) => nextCache.nodeResults.get(edge.source.nodeKey)?.openings ?? [])
+        result.windows = incomingEdges(graph, node.key, 'solids').flatMap((edge) => nextCache.nodeResults.get(edge.source.nodeKey)?.windows ?? [])
+        result.rooms = incomingEdges(graph, node.key, 'solids').flatMap((edge) => nextCache.nodeResults.get(edge.source.nodeKey)?.rooms ?? [])
+        result.roofs = incomingEdges(graph, node.key, 'solids').flatMap((edge) => nextCache.nodeResults.get(edge.source.nodeKey)?.roofs ?? [])
+        result.bridges = incomingEdges(graph, node.key, 'solids').flatMap((edge) => nextCache.nodeResults.get(edge.source.nodeKey)?.bridges ?? [])
+        result.stairs = incomingEdges(graph, node.key, 'solids').flatMap((edge) => nextCache.nodeResults.get(edge.source.nodeKey)?.stairs ?? [])
+        result.arrayPlacements = incomingEdges(graph, node.key, 'solids').flatMap((edge) => nextCache.nodeResults.get(edge.source.nodeKey)?.arrayPlacements ?? [])
         break
       default:
         break

@@ -124,6 +124,7 @@ function compiledPartGeometry(part: CompiledMeshPart) {
 
 function CompiledPartView({ part }: { part: CompiledMeshPart }) {
   const geometry = useMemo(() => compiledPartGeometry(part), [part])
+  const useFlatShading = part.kind !== 'line' && (part.metadata.solidKind === 'boolean_result' || part.metadata.solidKind === 'bridge_room')
   const lineObject = useMemo(
     () => (part.kind === 'line' ? new Line(geometry, new LineBasicMaterial({ color: part.color })) : null),
     [geometry, part.color, part.kind],
@@ -145,6 +146,7 @@ function CompiledPartView({ part }: { part: CompiledMeshPart }) {
     <mesh castShadow receiveShadow geometry={geometry}>
       <meshStandardMaterial
         color={part.color}
+        flatShading={useFlatShading}
         metalness={part.kind === 'debug' ? 0.15 : 0.08}
         opacity={part.kind === 'debug' ? 0.92 : 1}
         roughness={part.kind === 'surface' ? 0.7 : 0.56}

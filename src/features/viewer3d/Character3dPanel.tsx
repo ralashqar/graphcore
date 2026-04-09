@@ -44,10 +44,14 @@ export function Definition3dPanel({ assets, assemblyGraph = null, definition, on
   const meshSourceLabel = meshSourceUrl ?? 'No mesh source bound'
   const isProceduralEnvironment = isEnvironment && geometryBinding?.sourceMode === 'procedural_graph'
   const compiledEnvironment = useMemo(
-    () =>
-      isEnvironment && geometryBinding?.sourceMode === 'procedural_graph' && assemblyGraph
-        ? compileAssemblyGraph(assemblyGraph).compiledModel
-        : null,
+    () => {
+      if (!(isEnvironment && geometryBinding?.sourceMode === 'procedural_graph' && assemblyGraph)) return null
+      const compiled = compileAssemblyGraph(assemblyGraph).compiledModel
+      return {
+        ...compiled,
+        parts: compiled.parts.filter((part) => part.kind !== 'debug' && part.kind !== 'line'),
+      }
+    },
     [assemblyGraph, geometryBinding?.sourceMode, isEnvironment],
   )
 

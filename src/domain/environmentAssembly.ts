@@ -109,6 +109,7 @@ export const assemblyNodeKindSchema = z.enum([
   'tower_cap',
   'roof_dome',
   'dome_roof',
+  'bridge_room',
   'bridge_span',
   'bridge_deck',
   'bridge_supports',
@@ -247,6 +248,7 @@ export const solidSpecSchema = z.object({
     'stair',
     'landing',
     'roof',
+    'bridge_room',
     'ribbon',
     'array',
     'boolean_result',
@@ -602,6 +604,7 @@ export const environmentAssemblyLibrary: AssemblyTemplateGroup[] = [
       { key: 'connector_opening', label: 'Connector Opening', groupKey: 'building', defaultTitle: 'Connector Opening', summary: 'Opening driven by bridge or connector alignment.', defaultParams: { width: 1.8, height: 2.6 } },
       { key: 'doorway', label: 'Doorway', groupKey: 'building', defaultTitle: 'Doorway', summary: 'Door opening metadata.', defaultParams: { width: 1.1, height: 2.2 } },
       { key: 'connector', label: 'Connector', groupKey: 'building', defaultTitle: 'Connector', summary: 'Semantic connector between anchors.' },
+      { key: 'bridge_room', label: 'Bridge Room', groupKey: 'building', defaultTitle: 'Bridge Room', summary: 'Enclosed bridge-room between two hosted structures.', defaultParams: { width: 3.2, wallHeight: 3, wallThickness: 0.22, floorThickness: 0.18, roofThickness: 0.18, elevation: 3.2, openingWidth: 1.9, openingHeight: 2.4, overlap: 0.45 } },
     ],
   },
   {
@@ -746,7 +749,15 @@ export function inferAssemblyPorts(kind: AssemblyNodeKind): AssemblyPortDefiniti
     case 'wall_shell':
     case 'room':
     case 'room_shell':
-      return [port('profile', 'Profile', 'input', 'profile'), port('level', 'Level', 'input', 'level'), port('solid', 'Solid', 'output', 'solid'), port('wall_faces', 'Wall Faces', 'output', 'wall_face', true), port('anchors', 'Anchors', 'output', 'anchor', true)]
+      return [
+        port('profile', 'Profile', 'input', 'profile'),
+        port('level', 'Level', 'input', 'level'),
+        port('solid', 'Solid', 'output', 'solid'),
+        port('shell', 'Shell', 'output', 'solid'),
+        ...(kind === 'room' || kind === 'room_shell' ? [port('floor', 'Floor', 'output', 'solid')] : []),
+        port('wall_faces', 'Wall Faces', 'output', 'wall_face', true),
+        port('anchors', 'Anchors', 'output', 'anchor', true),
+      ]
     case 'wall_style':
       return [port('style', 'Style', 'output', 'debug')]
     case 'stair':
@@ -767,6 +778,16 @@ export function inferAssemblyPorts(kind: AssemblyNodeKind): AssemblyPortDefiniti
       return [port('host', 'Host', 'input', 'solid'), port('wall_face', 'Wall Face', 'input', 'wall_face'), port('opening', 'Opening', 'output', 'opening', kind === 'opening_array'), port('anchors', 'Anchors', 'output', 'anchor', true)]
     case 'connector':
       return [port('from', 'From', 'input', 'anchor'), port('to', 'To', 'input', 'anchor'), port('connector', 'Connector', 'output', 'connector')]
+    case 'bridge_room':
+      return [
+        port('from', 'From', 'input', 'anchor', true),
+        port('to', 'To', 'input', 'anchor', true),
+        port('from_host', 'From Host', 'input', 'solid'),
+        port('to_host', 'To Host', 'input', 'solid'),
+        port('solid', 'Solid', 'output', 'solid'),
+        port('anchors', 'Anchors', 'output', 'anchor', true),
+        port('wall_faces', 'Wall Faces', 'output', 'wall_face', true),
+      ]
     case 'bridge_span':
     case 'bridge_deck':
     case 'bridge_supports':
@@ -797,7 +818,13 @@ export function inferAssemblyPorts(kind: AssemblyNodeKind): AssemblyPortDefiniti
     case 'mirror':
     case 'transform':
     case 'repeat':
-      return [port('source', 'Source', 'input', 'solid'), port('solid', 'Solid', 'output', 'solid'), port('anchors', 'Anchors', 'output', 'anchor', true)]
+      return [
+        port('source', 'Source', 'input', 'solid'),
+        port('solid', 'Solid', 'output', 'solid'),
+        port('shell', 'Shell', 'output', 'solid'),
+        port('floor', 'Floor', 'output', 'solid'),
+        port('anchors', 'Anchors', 'output', 'anchor', true),
+      ]
     case 'debug_profile':
       return [port('profile', 'Profile', 'input', 'profile'), port('environment', 'Environment', 'output', 'environment')]
     case 'debug_levels':
@@ -1111,12 +1138,12 @@ export const environmentAssemblyPresets: AssemblyGraphPresetDefinition[] = [
   {
     key: 'bridge_between_towers',
     label: 'Bridge Between Towers',
-    summary: 'Two towers linked by a bridge span.',
+    summary: 'Two towers linked by an enclosed bridge-room.',
     build: (graphKey, environmentKey) => ({
       id: `preset-graph-${graphKey}`,
       key: graphKey,
       name: 'Bridge Between Towers',
-      summary: 'Bridge span test between tower anchors.',
+      summary: 'Tower pair with a dome roof, pointed cap, and enclosed skybridge.',
       boundEnvironmentKey: environmentKey ?? null,
       metadata: { presetKey: 'bridge_between_towers', macroKey: 'bridge' },
       nodes: [
@@ -1125,18 +1152,41 @@ export const environmentAssemblyPresets: AssemblyGraphPresetDefinition[] = [
         presetNode('room_shell', 'left_tower_shell', { x: 300, y: 120 }, { height: 7.5, wallThickness: 0.24, floorThickness: 0.18 }, 'Left Tower Shell'),
         presetNode('room_shell', 'right_tower_shell', { x: 300, y: 320 }, { height: 7.5, wallThickness: 0.24, floorThickness: 0.18 }, 'Right Tower Shell'),
         presetNode('transform', 'right_tower_shift', { x: 540, y: 320 }, { translate: { x: 12, y: 0, z: 0 }, rotate: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } }, 'Shift Right Tower'),
-        presetNode('bridge_span', 'tower_bridge', { x: 760, y: 220 }, { width: 2.4, thickness: 0.24, railHeight: 1.1 }, 'Bridge Span'),
-        presetNode('environment_output', `${graphKey}.output`, { x: 1000, y: 220 }, {}, 'Environment Output'),
+        presetNode('dome_roof', 'left_tower_dome', { x: 540, y: 80 }, { height: 1.9, roundness: 1.15, baseThickness: 0.14 }, 'Left Dome Roof'),
+        presetNode('tower_cap', 'right_tower_cap', { x: 540, y: 440 }, { height: 2.6, taper: 1 }, 'Right Tower Cap'),
+        presetNode('bridge_room', 'tower_bridge_room', { x: 800, y: 220 }, { width: 3.4, wallHeight: 2.9, wallThickness: 0.22, floorThickness: 0.18, roofThickness: 0.18, elevation: 3.1, openingWidth: 1.9, openingHeight: 2.35, overlap: 0.48 }, 'Bridge Room'),
+        presetNode('slab', 'left_bridge_plate', { x: 800, y: 100 }, { thickness: 0.18 }, 'Left Bridge Plate'),
+        presetNode('slab', 'right_bridge_plate', { x: 800, y: 340 }, { thickness: 0.18 }, 'Right Bridge Plate'),
+        presetNode('transform', 'left_bridge_plate_lift', { x: 1000, y: 100 }, { translate: { x: 0, y: 3.1, z: 0 }, rotate: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } }, 'Lift Left Plate'),
+        presetNode('transform', 'right_bridge_plate_lift', { x: 1000, y: 340 }, { translate: { x: 12, y: 3.1, z: 0 }, rotate: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } }, 'Lift Right Plate'),
+        presetNode('union_structure', 'bridge_with_left_plate', { x: 1220, y: 160 }, {}, 'Union Left Plate'),
+        presetNode('union_structure', 'bridge_with_floor_plates', { x: 1420, y: 220 }, {}, 'Union Floor Plates'),
+        presetNode('environment_output', `${graphKey}.output`, { x: 1640, y: 220 }, {}, 'Environment Output'),
       ],
       edges: [
         presetEdge('left_outline_to_shell', 'left_tower_outline', 'profile', 'left_tower_shell', 'profile'),
         presetEdge('right_outline_to_shell', 'right_tower_outline', 'profile', 'right_tower_shell', 'profile'),
         presetEdge('right_shell_to_shift', 'right_tower_shell', 'solid', 'right_tower_shift', 'source'),
-        presetEdge('left_anchor_to_bridge', 'left_tower_shell', 'anchors', 'tower_bridge', 'from'),
-        presetEdge('right_anchor_to_bridge', 'right_tower_shift', 'anchors', 'tower_bridge', 'to'),
-        presetEdge('left_shell_to_output', 'left_tower_shell', 'solid', `${graphKey}.output`, 'solids'),
-        presetEdge('right_shell_to_output', 'right_tower_shift', 'solid', `${graphKey}.output`, 'solids'),
-        presetEdge('bridge_to_output', 'tower_bridge', 'solid', `${graphKey}.output`, 'solids'),
+        presetEdge('left_outline_to_dome', 'left_tower_outline', 'profile', 'left_tower_dome', 'profile'),
+        presetEdge('left_shell_to_dome_host', 'left_tower_shell', 'solid', 'left_tower_dome', 'host'),
+        presetEdge('right_outline_to_cap', 'right_tower_outline', 'profile', 'right_tower_cap', 'profile'),
+        presetEdge('right_shift_to_cap_host', 'right_tower_shift', 'solid', 'right_tower_cap', 'host'),
+        presetEdge('left_anchor_to_bridge_room', 'left_tower_shell', 'anchors', 'tower_bridge_room', 'from'),
+        presetEdge('right_anchor_to_bridge_room', 'right_tower_shift', 'anchors', 'tower_bridge_room', 'to'),
+        presetEdge('left_shell_to_bridge_host', 'left_tower_shell', 'shell', 'tower_bridge_room', 'from_host'),
+        presetEdge('right_shift_to_bridge_host', 'right_tower_shift', 'shell', 'tower_bridge_room', 'to_host'),
+        presetEdge('left_outline_to_plate', 'left_tower_outline', 'profile', 'left_bridge_plate', 'profile'),
+        presetEdge('right_outline_to_plate', 'right_tower_outline', 'profile', 'right_bridge_plate', 'profile'),
+        presetEdge('left_plate_to_lift', 'left_bridge_plate', 'solid', 'left_bridge_plate_lift', 'source'),
+        presetEdge('right_plate_to_lift', 'right_bridge_plate', 'solid', 'right_bridge_plate_lift', 'source'),
+        presetEdge('bridge_room_to_union_left', 'tower_bridge_room', 'solid', 'bridge_with_left_plate', 'a'),
+        presetEdge('left_plate_to_union_left', 'left_bridge_plate_lift', 'solid', 'bridge_with_left_plate', 'b'),
+        presetEdge('union_left_to_union_final', 'bridge_with_left_plate', 'solid', 'bridge_with_floor_plates', 'a'),
+        presetEdge('right_plate_to_union_final', 'right_bridge_plate_lift', 'solid', 'bridge_with_floor_plates', 'b'),
+        presetEdge('core_to_output', 'bridge_with_floor_plates', 'solid', `${graphKey}.output`, 'solids'),
+        presetEdge('bridge_room_anchors_to_output', 'tower_bridge_room', 'anchors', `${graphKey}.output`, 'anchors'),
+        presetEdge('left_dome_to_output', 'left_tower_dome', 'solid', `${graphKey}.output`, 'solids'),
+        presetEdge('right_cap_to_output', 'right_tower_cap', 'solid', `${graphKey}.output`, 'solids'),
       ],
     }),
   },
