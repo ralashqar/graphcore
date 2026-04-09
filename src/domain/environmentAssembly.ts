@@ -486,6 +486,7 @@ export function inferAssemblyPorts(kind: AssemblyNodeKind): AssemblyPortDefiniti
     case 'prism':
     case 'tapered_prism':
     case 'slab':
+      return [port('profile', 'Profile', 'input', 'profile'), port('solid', 'Solid', 'output', 'solid')]
     case 'roof_flat':
     case 'roof_shed':
     case 'roof_gable':
@@ -493,7 +494,7 @@ export function inferAssemblyPorts(kind: AssemblyNodeKind): AssemblyPortDefiniti
     case 'roof_pyramid':
     case 'roof_pointed':
     case 'roof_dome':
-      return [port('profile', 'Profile', 'input', 'profile'), port('solid', 'Solid', 'output', 'solid')]
+      return [port('profile', 'Profile', 'input', 'profile'), port('host', 'Host', 'input', 'solid', true), port('solid', 'Solid', 'output', 'solid')]
     case 'floor_plate':
     case 'mezzanine':
       return [port('profile', 'Profile', 'input', 'profile'), port('surface', 'Surface', 'output', 'surface')]
@@ -630,6 +631,7 @@ export const environmentAssemblyPresets: AssemblyGraphPresetDefinition[] = [
         presetEdge('footprint_to_room', 'footprint_main', 'profile_out', 'room_main', 'profile'),
         presetEdge('footprint_to_floor', 'footprint_main', 'profile_out', 'floor_main', 'profile'),
         presetEdge('footprint_to_roof', 'footprint_main', 'profile_out', 'roof_main', 'profile'),
+        presetEdge('room_to_roof_host', 'room_main', 'solid', 'roof_main', 'host'),
         presetEdge('room_to_output', 'room_main', 'solid', `${graphKey}.output`, 'solids'),
         presetEdge('floor_to_output', 'floor_main', 'surface', `${graphKey}.output`, 'surfaces'),
         presetEdge('roof_to_output', 'roof_main', 'solid', `${graphKey}.output`, 'solids'),
@@ -665,6 +667,7 @@ export const environmentAssemblyPresets: AssemblyGraphPresetDefinition[] = [
         presetEdge('wing_to_union', 'wing_mass', 'solid', 'union_mass', 'a'),
         presetEdge('tower_to_union', 'tower_shift', 'solid', 'union_mass', 'b'),
         presetEdge('tower_profile_to_roof', 'tower_profile', 'profile', 'tower_roof', 'profile'),
+        presetEdge('tower_host_to_roof', 'tower_shift', 'solid', 'tower_roof', 'host'),
         presetEdge('union_to_output', 'union_mass', 'solid', `${graphKey}.output`, 'solids'),
         presetEdge('roof_to_output', 'tower_roof', 'solid', `${graphKey}.output`, 'solids'),
       ],
@@ -696,6 +699,7 @@ export const environmentAssemblyPresets: AssemblyGraphPresetDefinition[] = [
         presetEdge('walkway_to_room', 'walkway_profile', 'profile_out', 'hall_room', 'profile'),
         presetEdge('walkway_to_mezz', 'walkway_profile', 'profile_out', 'side_mezz', 'profile'),
         presetEdge('walkway_to_roof', 'walkway_profile', 'profile_out', 'hall_roof', 'profile'),
+        presetEdge('room_to_roof_host', 'hall_room', 'solid', 'hall_roof', 'host'),
         presetEdge('room_to_output', 'hall_room', 'solid', `${graphKey}.output`, 'solids'),
         presetEdge('mezz_to_output', 'side_mezz', 'surface', `${graphKey}.output`, 'surfaces'),
         presetEdge('roof_to_output', 'hall_roof', 'solid', `${graphKey}.output`, 'solids'),

@@ -52,6 +52,15 @@ function isMissingDefinitionKindEnumError(message: string | undefined, kind: str
   return typeof message === 'string' && message.includes(`invalid input value for enum definition_kind: "${kind}"`)
 }
 
+function isMissingRelationError(message: string | undefined, relation: string) {
+  if (typeof message !== 'string') return false
+  return (
+    message.includes(`Could not find the table 'public.${relation}' in the schema cache`) ||
+    message.includes(`relation "public.${relation}" does not exist`) ||
+    message.includes(`relation "${relation}" does not exist`)
+  )
+}
+
 function filterSupportedArchetypeSeedsForEnumError<TSeed extends { appliesToKind: string }>(
   seeds: TSeed[],
   message: string | undefined,
@@ -875,6 +884,11 @@ export async function loadProjectSnapshot(
       .order('created_at', { ascending: false }),
   ])
 
+  const assemblySchemaMissing =
+    isMissingRelationError(assemblyGraphsResponse.error?.message, 'draft_assembly_graphs')
+    || isMissingRelationError(assemblyNodesResponse.error?.message, 'draft_assembly_nodes')
+    || isMissingRelationError(assemblyEdgesResponse.error?.message, 'draft_assembly_edges')
+
   if (definitionsResponse.error || archetypesResponse.error) {
     return {
       snapshot: demoProjectSnapshot,
@@ -892,9 +906,9 @@ export async function loadProjectSnapshot(
   const graphs = (graphsResponse.data as GraphRow[] | null) ?? []
   const nodes = (nodesResponse.data as NodeRow[] | null) ?? []
   const edges = (edgesResponse.data as EdgeRow[] | null) ?? []
-  const assemblyGraphs = (assemblyGraphsResponse.data as AssemblyGraphRow[] | null) ?? []
-  const assemblyNodes = (assemblyNodesResponse.data as AssemblyNodeRow[] | null) ?? []
-  const assemblyEdges = (assemblyEdgesResponse.data as AssemblyEdgeRow[] | null) ?? []
+  const assemblyGraphs = assemblySchemaMissing ? [] : (assemblyGraphsResponse.data as AssemblyGraphRow[] | null) ?? []
+  const assemblyNodes = assemblySchemaMissing ? [] : (assemblyNodesResponse.data as AssemblyNodeRow[] | null) ?? []
+  const assemblyEdges = assemblySchemaMissing ? [] : (assemblyEdgesResponse.data as AssemblyEdgeRow[] | null) ?? []
   const assets = (assetsResponse.data as AssetRow[] | null) ?? []
 
   const snapshot = projectSnapshotSchema.parse({

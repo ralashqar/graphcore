@@ -1,6 +1,6 @@
 import '@xyflow/react/dist/style.css'
 
-import type { Session } from '@supabase/supabase-js'
+import type { AuthChangeEvent, Session } from '@supabase/supabase-js'
 import { Suspense, lazy, useEffect, useMemo, useState, useTransition } from 'react'
 import { authService } from './application/services/authService'
 import { patchApplyService } from './application/services/patchApplyService'
@@ -9,7 +9,7 @@ import { publishService } from './application/services/publishService'
 import { workspaceService } from './application/services/workspaceService'
 import { buildAssetSlug, getAssetKeyPrefix, inferAssetKindFromUpload, inferRemoteAssetMimeType, inferUploadMimeType, isSupportedMeshPath, type AssetUrlCreationKind } from './domain/assets'
 import { compileBundle } from './domain/compiler'
-import { buildDefaultDefinitionComponents, schemaCatalog } from './domain/graphcore'
+import { buildDefaultDefinitionComponents, projectSnapshotSchema, schemaCatalog } from './domain/graphcore'
 import type {
   AssemblyGraphDefinition,
   ArchetypeDefinition,
@@ -66,6 +66,50 @@ function uniqueKey(existingKeys: string[], seed: string) {
   return candidate
 }
 
+function unsavedSnapshotStorageKey(draftId: string) {
+  return `graphcore.unsaved-snapshot.v1.${draftId}`
+}
+
+function readUnsavedSnapshot(draftId: string) {
+  if (typeof window === 'undefined') return null
+
+  try {
+    const raw = window.localStorage.getItem(unsavedSnapshotStorageKey(draftId))
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as { snapshot?: unknown }
+    const validated = projectSnapshotSchema.safeParse(parsed.snapshot)
+    return validated.success ? validated.data : null
+  } catch {
+    return null
+  }
+}
+
+function writeUnsavedSnapshot(snapshot: ProjectSnapshot) {
+  if (typeof window === 'undefined') return
+
+  try {
+    window.localStorage.setItem(
+      unsavedSnapshotStorageKey(snapshot.draft.id),
+      JSON.stringify({
+        savedAt: new Date().toISOString(),
+        snapshot,
+      }),
+    )
+  } catch {
+    // Ignore local persistence failures and keep the editor usable.
+  }
+}
+
+function clearUnsavedSnapshot(draftId: string) {
+  if (typeof window === 'undefined') return
+
+  try {
+    window.localStorage.removeItem(unsavedSnapshotStorageKey(draftId))
+  } catch {
+    // Ignore local persistence failures and keep the editor usable.
+  }
+}
+
 export default function App() {
   const [session, setSession] = useState<Session | null>(null)
   const [loadedState, setLoadedState] = useState<LoadedState | null>(null)
@@ -96,25 +140,53 @@ export default function App() {
   const [bootstrapGameArchetypeId, setBootstrapGameArchetypeId] = useState('rpg')
   const [bootstrapConceptPrompt, setBootstrapConceptPrompt] = useState('')
   const [bootstrapOnboardingOpen, setBootstrapOnboardingOpen] = useState(false)
+  const [hasLocalSnapshotChanges, setHasLocalSnapshotChanges] = useState(false)
   const [isPending, startTransition] = useTransition()
   const { promptText, selectedDefinitionKey, selectedEdgeKey, selectedGraphKey, selectedNodeKey, setPromptText, setSelectedDefinitionKey, setSelectedEdgeKey, setSelectedGraphKey, setSelectedNodeKey } = useEditorStore()
 
-  function hydrateLoadedProject(state: { snapshot: ProjectSnapshot; source: 'supabase' | 'demo'; reason?: string }) {
-    const firstDefinition = state.snapshot.definitions[0] ?? null
-    const firstArchetype = state.snapshot.archetypes[0] ?? null
+  function hydrateLoadedProject(
+    state: { snapshot: ProjectSnapshot; source: 'supabase' | 'demo'; reason?: string },
+    options?: { preserveUnsavedIfSameDraft?: boolean },
+  ) {
+    if (
+      options?.preserveUnsavedIfSameDraft
+      && hasLocalSnapshotChanges
+      && snapshot
+      && snapshot.draft.id === state.snapshot.draft.id
+    ) {
+      startTransition(() => {
+        setLoadedState({ source: state.source, reason: state.reason })
+      })
+      return
+    }
+
+    const cachedUnsavedSnapshot = state.source === 'supabase' ? readUnsavedSnapshot(state.snapshot.draft.id) : null
+    const snapshotToHydrate =
+      cachedUnsavedSnapshot
+      && cachedUnsavedSnapshot.project.id === state.snapshot.project.id
+      && cachedUnsavedSnapshot.draft.id === state.snapshot.draft.id
+        ? cachedUnsavedSnapshot
+        : state.snapshot
+    const restoredUnsavedSnapshot = snapshotToHydrate !== state.snapshot
+
+    const nextDefinition = snapshotToHydrate.definitions.find((definition) => definition.key === selectedDefinitionKey) ?? snapshotToHydrate.definitions[0] ?? null
+    const nextArchetype = snapshotToHydrate.archetypes.find((archetype) => archetype.key === selectedArchetypeKey) ?? snapshotToHydrate.archetypes[0] ?? null
+    const nextGraph = snapshotToHydrate.graphs.find((graph) => graph.key === selectedGraphKey) ?? snapshotToHydrate.graphs[0] ?? null
+    const nextAsset = snapshotToHydrate.assets.find((asset) => asset.key === selectedAssetKey) ?? snapshotToHydrate.assets[0] ?? null
 
     startTransition(() => {
       setLoadedState({ source: state.source, reason: state.reason })
-      setSnapshot(state.snapshot)
+      setSnapshot(snapshotToHydrate)
       setPatchPreview(null)
       setSelectedNodeKey(null)
       setSelectedEdgeKey(null)
-      setSelectedGraphKey(state.snapshot.graphs[0]?.key ?? null)
-      setSelectedDefinitionKey(firstDefinition?.key ?? null)
-      setSelectedAssetKey(state.snapshot.assets[0]?.key ?? null)
-      setSelectedArchetypeKey(firstArchetype?.key ?? null)
+      setSelectedGraphKey(nextGraph?.key ?? null)
+      setSelectedDefinitionKey(nextDefinition?.key ?? null)
+      setSelectedAssetKey(nextAsset?.key ?? null)
+      setSelectedArchetypeKey(nextArchetype?.key ?? null)
       setSelectedPatchIndex(0)
-      setBundle(compileBundle(state.snapshot))
+      setHasLocalSnapshotChanges(restoredUnsavedSnapshot)
+      setBundle(compileBundle(snapshotToHydrate))
     })
   }
 
@@ -157,9 +229,13 @@ export default function App() {
   useEffect(() => {
     let cancelled = false
 
-    const unsubscribe = authService.subscribeToAuthChanges(async (nextSession) => {
+    const unsubscribe = authService.subscribeToAuthChanges(async (event: AuthChangeEvent, nextSession) => {
       if (cancelled) return
       setSession(nextSession)
+
+      if (event === 'TOKEN_REFRESHED' || event === 'INITIAL_SESSION') {
+        return
+      }
 
       try {
         const state = await workspaceService.ensureLiveWorkspace()
@@ -168,7 +244,7 @@ export default function App() {
         if (cancelled) return
         setGames(nextGames)
         setWorkspaceBootstrapError(state.source === 'supabase' ? null : state.reason ?? null)
-        hydrateLoadedProject(state)
+        hydrateLoadedProject(state, { preserveUnsavedIfSameDraft: true })
         if (nextSession) {
           setAuthOpen(false)
           setAuthError(null)
@@ -248,6 +324,15 @@ export default function App() {
     setBootstrapConceptPrompt(nextConceptPrompt)
   }, [snapshot?.draft.id, snapshot?.gameSpec])
 
+  useEffect(() => {
+    if (!snapshot || loadedState?.source !== 'supabase') return
+    if (hasLocalSnapshotChanges) {
+      writeUnsavedSnapshot(snapshot)
+      return
+    }
+    clearUnsavedSnapshot(snapshot.draft.id)
+  }, [hasLocalSnapshotChanges, loadedState?.source, snapshot])
+
   const persistedPatchHistory = useMemo<PatchSessionView[]>(() => {
     return (snapshot?.patchSets ?? []).map((patch) => {
       const parsedOperations = schemaCatalog.patchOperationSchema.array().safeParse(patch.operations)
@@ -300,6 +385,7 @@ export default function App() {
     setSnapshot((current) => {
       if (!current) return current
       const next = mutator(current)
+      setHasLocalSnapshotChanges(true)
       setBundle(compileBundle(next))
       return next
     })

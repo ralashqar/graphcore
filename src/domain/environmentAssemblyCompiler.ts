@@ -422,7 +422,27 @@ function booleanCombine(a: RuntimeSolid, b: RuntimeSolid, operation: typeof ADDI
   }
 }
 
-function buildRoofGeometry(node: AssemblyNodeDefinition, profile: RuntimeProfile) {
+function computeGeometryBounds(geometry: BufferGeometry) {
+  if (!geometry.boundingBox) geometry.computeBoundingBox()
+  return geometry.boundingBox?.clone() ?? new Box3()
+}
+
+function combinedSolidBounds(solids: RuntimeSolid[]) {
+  if (solids.length === 0) return null
+  const bounds = new Box3()
+  for (const solid of solids) bounds.union(computeGeometryBounds(solid.geometry))
+  return bounds
+}
+
+function buildRoofGeometry(
+  node: AssemblyNodeDefinition,
+  profile: RuntimeProfile,
+  placement: {
+    baseElevation: number
+    offsetX: number
+    offsetZ: number
+  },
+) {
   const bounds = new Box3()
   for (const point of profile.outer) bounds.expandByPoint(new Vector3(point.x, 0, point.y))
   const size = bounds.getSize(new Vector3())
@@ -430,20 +450,22 @@ function buildRoofGeometry(node: AssemblyNodeDefinition, profile: RuntimeProfile
   const height = numberParam(node, 'height', node.kind === 'roof_flat' ? 0.3 : 1.5)
 
   if (node.kind === 'roof_flat') {
-    return extrudeProfile(profile, height)
+    const geometry = extrudeProfile(profile, height)
+    geometry.translate(placement.offsetX, placement.baseElevation, placement.offsetZ)
+    return geometry
   }
 
   if (node.kind === 'roof_dome') {
     const radius = Math.max(size.x, size.z) * 0.35
     const geometry = new SphereGeometry(radius, 24, 16, 0, Math.PI * 2, 0, Math.PI / 2)
-    geometry.translate(center.x, height * 0.5, center.z)
+    geometry.translate(center.x + placement.offsetX, placement.baseElevation, center.z + placement.offsetZ)
     return geometry
   }
 
   const radius = Math.max(size.x, size.z) * 0.5
   const geometry = new ConeGeometry(radius, Math.max(height, 0.2), 4, 1)
   geometry.rotateY(Math.PI / 4)
-  geometry.translate(center.x, height / 2, center.z)
+  geometry.translate(center.x + placement.offsetX, placement.baseElevation + height / 2, center.z + placement.offsetZ)
   return geometry
 }
 
@@ -960,6 +982,17 @@ export function compileAssemblyGraph(
       case 'roof_dome': {
         const profile = collectIncomingProfiles(graph, node, nextCache.nodeResults)[0]
         if (!profile) break
+        const hostSolids = collectIncomingSolids(graph, node, nextCache.nodeResults, 'host')
+        const hostBounds = combinedSolidBounds(hostSolids)
+        const profileBounds = new Box3()
+        for (const point of profile.outer) profileBounds.expandByPoint(new Vector3(point.x, 0, point.y))
+        const profileCenter = profileBounds.getCenter(new Vector3())
+        const hostCenter = hostBounds?.getCenter(new Vector3()) ?? profileCenter
+        const roofPlacement = {
+          baseElevation: hostBounds?.max.y ?? 0,
+          offsetX: hostCenter.x - profileCenter.x,
+          offsetZ: hostCenter.z - profileCenter.z,
+        }
         const roofType = node.kind.replace('roof_', '')
         result.solids = [{
           spec: {
@@ -967,11 +1000,11 @@ export function compileAssemblyGraph(
             sourceNodeKey: node.key,
             kind: 'roof',
             profileId: profile.profile.id,
-            transform: { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
-            params: { roofType },
+            transform: { position: [roofPlacement.offsetX, roofPlacement.baseElevation, roofPlacement.offsetZ], rotation: [0, 0, 0], scale: [1, 1, 1] },
+            params: { roofType, hostBaseElevation: roofPlacement.baseElevation },
             metadata: {},
           },
-          geometry: buildRoofGeometry(node, profile),
+          geometry: buildRoofGeometry(node, profile, roofPlacement),
           color: '#ab5f4b',
         }]
         result.roofs = [{
@@ -980,7 +1013,10 @@ export function compileAssemblyGraph(
           roofType: roofType === 'pointed' ? 'pointed' : roofType === 'dome' ? 'dome' : roofType as RoofSpec['roofType'],
           profileId: profile.profile.id,
           height: numberParam(node, 'height', 1.5),
-          metadata: {},
+          metadata: {
+            baseElevation: roofPlacement.baseElevation,
+            hostNodeKeys: hostSolids.map((solid) => solid.spec.sourceNodeKey),
+          },
         }]
         break
       }
