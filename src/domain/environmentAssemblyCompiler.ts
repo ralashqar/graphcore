@@ -1617,12 +1617,14 @@ export function compileAssemblyGraph(
         const bridgeSolid = unionSolidList(bridgePieces, node, diagnostics)
         if (!bridgeSolid) break
 
-        const cutDepth = Math.max(wallThickness * 6, overlap * 2 + 0.35, openingWidth * 0.8, 1.4)
-        const openingCenterY = elevation + openingHeight * 0.5
-        const fromCutCenter = start.clone().addScaledVector(axis, cutDepth * 0.5 - overlap * 0.15)
-        fromCutCenter.y = openingCenterY
-        const toCutCenter = end.clone().addScaledVector(axis, -(cutDepth * 0.5 - overlap * 0.15))
-        toCutCenter.y = openingCenterY
+        const interfaceDepth = Math.max(overlap * 2 + wallThickness * 2, openingWidth, 1.4)
+        const interfaceWidth = Math.max(width + wallThickness * 0.75, openingWidth + wallThickness)
+        const interfaceHeight = Math.max(wallHeight + 0.04, openingHeight + floorThickness + roofThickness)
+        const interfaceCenterY = elevation + interfaceHeight * 0.5
+        const fromCutCenter = start.clone().addScaledVector(axis, -(interfaceDepth * 0.5 - overlap * 0.1))
+        fromCutCenter.y = interfaceCenterY
+        const toCutCenter = end.clone().addScaledVector(axis, interfaceDepth * 0.5 - overlap * 0.1)
+        toCutCenter.y = interfaceCenterY
 
         const fromOpeningCut = {
           spec: {
@@ -1631,10 +1633,10 @@ export function compileAssemblyGraph(
             kind: 'bridge_room',
             profileId: null,
             transform: { position: [fromCutCenter.x, fromCutCenter.y, fromCutCenter.z], rotation: [0, angle, 0], scale: [1, 1, 1] },
-            params: { openingWidth, openingHeight, cutDepth },
+            params: { interfaceWidth, interfaceHeight, interfaceDepth },
             metadata: { bridgePiece: 'from_opening_cut' },
           },
-          geometry: orientedBoxGeometry(cutDepth, openingHeight, openingWidth, fromCutCenter, angle),
+          geometry: orientedBoxGeometry(interfaceDepth, interfaceHeight, interfaceWidth, fromCutCenter, angle),
           color: '#c97b6a',
         } satisfies RuntimeSolid
         const toOpeningCut = {
@@ -1644,10 +1646,10 @@ export function compileAssemblyGraph(
             kind: 'bridge_room',
             profileId: null,
             transform: { position: [toCutCenter.x, toCutCenter.y, toCutCenter.z], rotation: [0, angle, 0], scale: [1, 1, 1] },
-            params: { openingWidth, openingHeight, cutDepth },
+            params: { interfaceWidth, interfaceHeight, interfaceDepth },
             metadata: { bridgePiece: 'to_opening_cut' },
           },
-          geometry: orientedBoxGeometry(cutDepth, openingHeight, openingWidth, toCutCenter, angle),
+          geometry: orientedBoxGeometry(interfaceDepth, interfaceHeight, interfaceWidth, toCutCenter, angle),
           color: '#c97b6a',
         } satisfies RuntimeSolid
 
@@ -1712,7 +1714,7 @@ export function compileAssemblyGraph(
             hostSolidId: fromHost.spec.id,
             kind: 'doorway',
             position: [start.x, elevation + openingHeight * 0.5, start.z],
-            size: [openingWidth, openingHeight, cutDepth],
+            size: [Math.max(openingWidth, width - wallThickness * 2), openingHeight, interfaceDepth],
             metadata: { bridgeSide: 'from', bridgeNodeKey: node.key },
           },
           {
@@ -1721,7 +1723,7 @@ export function compileAssemblyGraph(
             hostSolidId: toHost.spec.id,
             kind: 'doorway',
             position: [end.x, elevation + openingHeight * 0.5, end.z],
-            size: [openingWidth, openingHeight, cutDepth],
+            size: [Math.max(openingWidth, width - wallThickness * 2), openingHeight, interfaceDepth],
             metadata: { bridgeSide: 'to', bridgeNodeKey: node.key },
           },
         ]
