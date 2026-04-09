@@ -7,6 +7,7 @@ import {
   materializeDefinitionPreset,
   materializeGraphPreset,
 } from '../../../src/domain/presetCatalog.ts'
+import { createAssemblyGraph } from '../../../src/domain/environmentAssembly.ts'
 import { requireUserClient } from '../_shared/auth.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
 
@@ -48,6 +49,47 @@ async function getArchetypeId(client: ReturnType<typeof createClient>, draftId: 
 async function getGraphId(client: ReturnType<typeof createClient>, draftId: string, key: string) {
   const { data } = await client.from('draft_graphs').select('id').eq('draft_id', draftId).eq('key', key).maybeSingle()
   return data?.id ?? null
+}
+
+async function getAssemblyGraphId(client: ReturnType<typeof createClient>, draftId: string, key: string) {
+  const { data } = await client.from('draft_assembly_graphs').select('id').eq('draft_id', draftId).eq('key', key).maybeSingle()
+  return data?.id ?? null
+}
+
+async function upsertDefinitionComponentConfig(
+  client: ReturnType<typeof createClient>,
+  definitionId: string,
+  componentType: string,
+  config: Record<string, unknown>,
+) {
+  const existing = await client
+    .from('project_definition_components')
+    .select('definition_id, component_type')
+    .eq('definition_id', definitionId)
+    .eq('component_type', componentType)
+    .maybeSingle()
+
+  if (existing.error) return existing
+
+  if (existing.data) {
+    return client
+      .from('project_definition_components')
+      .update({ config })
+      .eq('definition_id', definitionId)
+      .eq('component_type', componentType)
+      .select('definition_id, component_type')
+      .single()
+  }
+
+  return client
+    .from('project_definition_components')
+    .insert({
+      definition_id: definitionId,
+      component_type: componentType,
+      config,
+    })
+    .select('definition_id, component_type')
+    .single()
 }
 
 async function ensureChoiceSourceHandle(
@@ -214,6 +256,51 @@ async function insertGraph(client: ReturnType<typeof createClient>, draftId: str
       target_port: edge.target?.portId ?? null,
       label: edge.label ?? null,
       condition_expr: edge.condition ?? null,
+      metadata: edge.metadata ?? {},
+    })))
+    if (edgeResult.error) return { error: edgeResult.error, data: null }
+  }
+
+  return created
+}
+
+async function insertAssemblyGraph(client: ReturnType<typeof createClient>, draftId: string, userId: string, graph: Record<string, any>) {
+  const created = await client.from('draft_assembly_graphs').insert({
+    draft_id: draftId,
+    key: graph.key,
+    name: graph.name ?? String(graph.key),
+    summary: graph.summary ?? '',
+    bound_environment_key: graph.boundEnvironmentKey ?? null,
+    metadata: graph.metadata ?? {},
+    created_by: userId,
+    updated_by: userId,
+  }).select('id, key').single()
+  if (created.error || !created.data) return created
+
+  if (Array.isArray(graph.nodes) && graph.nodes.length > 0) {
+    const nodeResult = await client.from('draft_assembly_nodes').insert(graph.nodes.map((node: Record<string, any>) => ({
+      assembly_graph_id: created.data.id,
+      key: node.key,
+      kind: node.kind,
+      title: node.title,
+      subtitle: node.subtitle ?? null,
+      position_x: node.position?.x ?? 0,
+      position_y: node.position?.y ?? 0,
+      ports: node.ports ?? [],
+      params: node.params ?? {},
+      metadata: node.metadata ?? {},
+    })))
+    if (nodeResult.error) return { error: nodeResult.error, data: null }
+  }
+
+  if (Array.isArray(graph.edges) && graph.edges.length > 0) {
+    const edgeResult = await client.from('draft_assembly_edges').insert(graph.edges.map((edge: Record<string, any>) => ({
+      assembly_graph_id: created.data.id,
+      key: edge.key,
+      source_node_key: edge.source?.nodeKey,
+      source_port: edge.source?.portId,
+      target_node_key: edge.target?.nodeKey,
+      target_port: edge.target?.portId,
       metadata: edge.metadata ?? {},
     })))
     if (edgeResult.error) return { error: edgeResult.error, data: null }
@@ -475,6 +562,32 @@ Deno.serve(async (request) => {
         continue
       }
 
+      if (operation.op === 'create_assembly_graph') {
+        const scaffold = createAssemblyGraph({
+          key: String(operation.key),
+          name: (operation.payload as { name?: string } | undefined)?.name ?? String(operation.key),
+          summary: (operation.payload as { summary?: string } | undefined)?.summary ?? '',
+          boundEnvironmentKey:
+            typeof (operation.payload as { boundEnvironmentKey?: unknown } | undefined)?.boundEnvironmentKey === 'string'
+              ? String((operation.payload as { boundEnvironmentKey?: string }).boundEnvironmentKey)
+              : null,
+        })
+        const result = await insertAssemblyGraph(client, payload.draftId, user.id, {
+          ...scaffold,
+          ...(typeof operation.payload === 'object' && operation.payload !== null ? operation.payload : {}),
+          nodes:
+            Array.isArray((operation.payload as { nodes?: unknown[] } | undefined)?.nodes) && (operation.payload as { nodes?: unknown[] }).nodes!.length > 0
+              ? (operation.payload as { nodes: unknown[] }).nodes
+              : scaffold.nodes,
+          edges: Array.isArray((operation.payload as { edges?: unknown[] } | undefined)?.edges)
+            ? (operation.payload as { edges: unknown[] }).edges
+            : scaffold.edges,
+        })
+        if (result.error) return json({ error: result.error.message, operation }, { status: 400 })
+        results.push(result.data as Record<string, unknown>)
+        continue
+      }
+
       if (operation.op === 'update_graph') {
         const changes = (operation.changes as Record<string, any> | undefined) ?? {}
         const result = await client.from('draft_graphs').update({
@@ -491,8 +604,32 @@ Deno.serve(async (request) => {
         continue
       }
 
+      if (operation.op === 'update_assembly_graph') {
+        const changes = (operation.changes as Record<string, any> | undefined) ?? {}
+        const result = await client.from('draft_assembly_graphs').update({
+          name: changes.name,
+          summary: changes.summary,
+          bound_environment_key:
+            typeof changes.boundEnvironmentKey === 'string' || changes.boundEnvironmentKey === null
+              ? changes.boundEnvironmentKey
+              : undefined,
+          metadata: typeof changes.metadata === 'object' && changes.metadata !== null ? changes.metadata : undefined,
+          updated_by: user.id,
+        }).eq('draft_id', payload.draftId).eq('key', operation.key).select('id, key').single()
+        if (result.error) return json({ error: result.error.message, operation }, { status: 400 })
+        results.push(result.data as Record<string, unknown>)
+        continue
+      }
+
       if (operation.op === 'delete_graph') {
         const result = await client.from('draft_graphs').delete().eq('draft_id', payload.draftId).eq('key', operation.key)
+        if (result.error) return json({ error: result.error.message, operation }, { status: 400 })
+        results.push({ key: operation.key })
+        continue
+      }
+
+      if (operation.op === 'delete_assembly_graph') {
+        const result = await client.from('draft_assembly_graphs').delete().eq('draft_id', payload.draftId).eq('key', operation.key)
         if (result.error) return json({ error: result.error.message, operation }, { status: 400 })
         results.push({ key: operation.key })
         continue
@@ -544,6 +681,27 @@ Deno.serve(async (request) => {
         continue
       }
 
+      if (operation.op === 'create_assembly_node') {
+        const graphId = await getAssemblyGraphId(client, payload.draftId, String(operation.graphKey))
+        if (!graphId) return json({ error: `Assembly graph ${String(operation.graphKey)} was not found.`, operation }, { status: 400 })
+        const node = operation.node as Record<string, unknown>
+        const result = await client.from('draft_assembly_nodes').insert({
+          assembly_graph_id: graphId,
+          key: node.key,
+          kind: node.kind,
+          title: node.title,
+          subtitle: node.subtitle ?? null,
+          position_x: (node.position as { x?: number } | undefined)?.x ?? 0,
+          position_y: (node.position as { y?: number } | undefined)?.y ?? 0,
+          ports: node.ports ?? [],
+          params: node.params ?? {},
+          metadata: node.metadata ?? {},
+        }).select('id, key').single()
+        if (result.error) return json({ error: result.error.message, operation }, { status: 400 })
+        results.push(result.data as Record<string, unknown>)
+        continue
+      }
+
       if (operation.op === 'update_node' || operation.op === 'set_condition' || operation.op === 'set_effects' || operation.op === 'set_node_body' || operation.op === 'set_node_choices' || operation.op === 'set_node_media' || operation.op === 'move_node' || operation.op === 'update_node_template') {
         const graphId = await getGraphId(client, payload.draftId, String(operation.graphKey))
         if (!graphId) return json({ error: `Graph ${String(operation.graphKey)} was not found.`, operation }, { status: 400 })
@@ -580,12 +738,45 @@ Deno.serve(async (request) => {
         continue
       }
 
+      if (operation.op === 'update_assembly_node') {
+        const graphId = await getAssemblyGraphId(client, payload.draftId, String(operation.graphKey))
+        if (!graphId) return json({ error: `Assembly graph ${String(operation.graphKey)} was not found.`, operation }, { status: 400 })
+        const changes = (operation.changes as Record<string, unknown> | undefined) ?? {}
+        const result = await client.from('draft_assembly_nodes').update({
+          kind: typeof changes.kind === 'string' ? changes.kind : undefined,
+          title: typeof changes.title === 'string' ? changes.title : undefined,
+          subtitle:
+            typeof changes.subtitle === 'string' || changes.subtitle === null
+              ? changes.subtitle
+              : undefined,
+          position_x: (changes.position as { x?: number } | undefined)?.x,
+          position_y: (changes.position as { y?: number } | undefined)?.y,
+          ports: Array.isArray(changes.ports) ? changes.ports : undefined,
+          params: typeof changes.params === 'object' && changes.params !== null ? changes.params : undefined,
+          metadata: typeof changes.metadata === 'object' && changes.metadata !== null ? changes.metadata : undefined,
+        }).eq('assembly_graph_id', graphId).eq('key', operation.nodeKey).select('id, key').single()
+        if (result.error) return json({ error: result.error.message, operation }, { status: 400 })
+        results.push(result.data as Record<string, unknown>)
+        continue
+      }
+
       if (operation.op === 'delete_node') {
         const graphId = await getGraphId(client, payload.draftId, String(operation.graphKey))
         if (!graphId) return json({ error: `Graph ${String(operation.graphKey)} was not found.`, operation }, { status: 400 })
         const nodeDelete = await client.from('draft_graph_nodes').delete().eq('graph_id', graphId).eq('key', operation.nodeKey)
         if (nodeDelete.error) return json({ error: nodeDelete.error.message, operation }, { status: 400 })
         const edgeDelete = await client.from('draft_graph_edges').delete().eq('graph_id', graphId).or(`source_node_key.eq.${operation.nodeKey},target_node_key.eq.${operation.nodeKey}`)
+        if (edgeDelete.error) return json({ error: edgeDelete.error.message, operation }, { status: 400 })
+        results.push({ graphKey: operation.graphKey, nodeKey: operation.nodeKey })
+        continue
+      }
+
+      if (operation.op === 'delete_assembly_node') {
+        const graphId = await getAssemblyGraphId(client, payload.draftId, String(operation.graphKey))
+        if (!graphId) return json({ error: `Assembly graph ${String(operation.graphKey)} was not found.`, operation }, { status: 400 })
+        const nodeDelete = await client.from('draft_assembly_nodes').delete().eq('assembly_graph_id', graphId).eq('key', operation.nodeKey)
+        if (nodeDelete.error) return json({ error: nodeDelete.error.message, operation }, { status: 400 })
+        const edgeDelete = await client.from('draft_assembly_edges').delete().eq('assembly_graph_id', graphId).or(`source_node_key.eq.${operation.nodeKey},target_node_key.eq.${operation.nodeKey}`)
         if (edgeDelete.error) return json({ error: edgeDelete.error.message, operation }, { status: 400 })
         results.push({ graphKey: operation.graphKey, nodeKey: operation.nodeKey })
         continue
@@ -612,6 +803,24 @@ Deno.serve(async (request) => {
         continue
       }
 
+      if (operation.op === 'connect_assembly_edge') {
+        const graphId = await getAssemblyGraphId(client, payload.draftId, String(operation.graphKey))
+        if (!graphId) return json({ error: `Assembly graph ${String(operation.graphKey)} was not found.`, operation }, { status: 400 })
+        const edge = operation.edge as Record<string, any>
+        const result = await client.from('draft_assembly_edges').insert({
+          assembly_graph_id: graphId,
+          key: edge.key,
+          source_node_key: edge.source?.nodeKey,
+          source_port: edge.source?.portId,
+          target_node_key: edge.target?.nodeKey,
+          target_port: edge.target?.portId,
+          metadata: edge.metadata ?? {},
+        }).select('id, key').single()
+        if (result.error) return json({ error: result.error.message, operation }, { status: 400 })
+        results.push(result.data as Record<string, unknown>)
+        continue
+      }
+
       if (operation.op === 'update_edge') {
         const graphId = await getGraphId(client, payload.draftId, String(operation.graphKey))
         if (!graphId) return json({ error: `Graph ${String(operation.graphKey)} was not found.`, operation }, { status: 400 })
@@ -630,12 +839,123 @@ Deno.serve(async (request) => {
         continue
       }
 
+      if (operation.op === 'update_assembly_edge') {
+        const graphId = await getAssemblyGraphId(client, payload.draftId, String(operation.graphKey))
+        if (!graphId) return json({ error: `Assembly graph ${String(operation.graphKey)} was not found.`, operation }, { status: 400 })
+        const changes = (operation.changes as Record<string, any> | undefined) ?? {}
+        const result = await client.from('draft_assembly_edges').update({
+          source_node_key: changes.source?.nodeKey,
+          source_port: changes.source?.portId,
+          target_node_key: changes.target?.nodeKey,
+          target_port: changes.target?.portId,
+          metadata: typeof changes.metadata === 'object' && changes.metadata !== null ? changes.metadata : undefined,
+        }).eq('assembly_graph_id', graphId).eq('key', operation.edgeKey).select('id, key').single()
+        if (result.error) return json({ error: result.error.message, operation }, { status: 400 })
+        results.push(result.data as Record<string, unknown>)
+        continue
+      }
+
       if (operation.op === 'delete_edge') {
         const graphId = await getGraphId(client, payload.draftId, String(operation.graphKey))
         if (!graphId) return json({ error: `Graph ${String(operation.graphKey)} was not found.`, operation }, { status: 400 })
         const result = await client.from('draft_graph_edges').delete().eq('graph_id', graphId).eq('key', operation.edgeKey)
         if (result.error) return json({ error: result.error.message, operation }, { status: 400 })
         results.push({ graphKey: operation.graphKey, edgeKey: operation.edgeKey })
+        continue
+      }
+
+      if (operation.op === 'delete_assembly_edge') {
+        const graphId = await getAssemblyGraphId(client, payload.draftId, String(operation.graphKey))
+        if (!graphId) return json({ error: `Assembly graph ${String(operation.graphKey)} was not found.`, operation }, { status: 400 })
+        const result = await client.from('draft_assembly_edges').delete().eq('assembly_graph_id', graphId).eq('key', operation.edgeKey)
+        if (result.error) return json({ error: result.error.message, operation }, { status: 400 })
+        results.push({ graphKey: operation.graphKey, edgeKey: operation.edgeKey })
+        continue
+      }
+
+      if (operation.op === 'replace_assembly_subgraph') {
+        const graphId = await getAssemblyGraphId(client, payload.draftId, String(operation.graphKey))
+        if (!graphId) return json({ error: `Assembly graph ${String(operation.graphKey)} was not found.`, operation }, { status: 400 })
+        const deleteEdges = await client.from('draft_assembly_edges').delete().eq('assembly_graph_id', graphId)
+        if (deleteEdges.error) return json({ error: deleteEdges.error.message, operation }, { status: 400 })
+        const deleteNodes = await client.from('draft_assembly_nodes').delete().eq('assembly_graph_id', graphId)
+        if (deleteNodes.error) return json({ error: deleteNodes.error.message, operation }, { status: 400 })
+
+        if (Array.isArray(operation.nodes) && operation.nodes.length > 0) {
+          const nodeInsert = await client.from('draft_assembly_nodes').insert(operation.nodes.map((node) => ({
+            assembly_graph_id: graphId,
+            key: node.key,
+            kind: node.kind,
+            title: node.title,
+            subtitle: node.subtitle ?? null,
+            position_x: node.position.x ?? 0,
+            position_y: node.position.y ?? 0,
+            ports: node.ports ?? [],
+            params: node.params ?? {},
+            metadata: node.metadata ?? {},
+          })))
+          if (nodeInsert.error) return json({ error: nodeInsert.error.message, operation }, { status: 400 })
+        }
+
+        if (Array.isArray(operation.edges) && operation.edges.length > 0) {
+          const edgeInsert = await client.from('draft_assembly_edges').insert(operation.edges.map((edge) => ({
+            assembly_graph_id: graphId,
+            key: edge.key,
+            source_node_key: edge.source.nodeKey,
+            source_port: edge.source.portId,
+            target_node_key: edge.target.nodeKey,
+            target_port: edge.target.portId,
+            metadata: edge.metadata ?? {},
+          })))
+          if (edgeInsert.error) return json({ error: edgeInsert.error.message, operation }, { status: 400 })
+        }
+
+        results.push({ graphKey: operation.graphKey, nodeCount: operation.nodes.length, edgeCount: operation.edges.length })
+        continue
+      }
+
+      if (operation.op === 'bind_environment_assembly') {
+        const definitionId = await getDefinitionId(client, payload.draftId, String(operation.environmentKey))
+        if (!definitionId) return json({ error: `Environment ${String(operation.environmentKey)} was not found.`, operation }, { status: 400 })
+
+        const componentQuery = await client
+          .from('project_definition_components')
+          .select('config')
+          .eq('definition_id', definitionId)
+          .eq('component_type', 'environment_geometry_binding')
+          .maybeSingle()
+
+        if (componentQuery.error) return json({ error: componentQuery.error.message, operation }, { status: 400 })
+
+        const currentConfig =
+          typeof componentQuery.data?.config === 'object' && componentQuery.data.config !== null
+            ? componentQuery.data.config as Record<string, unknown>
+            : {}
+
+        const nextConfig = {
+          ...currentConfig,
+          sourceMode: operation.assemblyGraphKey ? 'procedural_graph' : (currentConfig.sourceMode ?? 'mesh'),
+          assemblyGraphKey: operation.assemblyGraphKey ?? null,
+        }
+
+        const componentResult = await upsertDefinitionComponentConfig(
+          client,
+          definitionId,
+          'environment_geometry_binding',
+          nextConfig,
+        )
+        if (componentResult.error) return json({ error: componentResult.error.message, operation }, { status: 400 })
+
+        if (operation.assemblyGraphKey) {
+          const graphUpdate = await client
+            .from('draft_assembly_graphs')
+            .update({ bound_environment_key: operation.environmentKey, updated_by: user.id })
+            .eq('draft_id', payload.draftId)
+            .eq('key', operation.assemblyGraphKey)
+          if (graphUpdate.error) return json({ error: graphUpdate.error.message, operation }, { status: 400 })
+        }
+
+        results.push({ environmentKey: operation.environmentKey, assemblyGraphKey: operation.assemblyGraphKey ?? null })
         continue
       }
     }

@@ -1,4 +1,7 @@
 import type {
+  AssemblyEdgeDefinition,
+  AssemblyGraphDefinition,
+  AssemblyNodeDefinition,
   ArchetypeDefinition,
   DefinitionBase,
   EdgeDefinition,
@@ -6,6 +9,7 @@ import type {
   PatchOperation,
   ProjectSnapshot,
 } from './graphcore'
+import { createAssemblyGraph } from './environmentAssembly'
 import { createGraphScaffold } from './graphScaffold'
 import { applyTemplateToNode, normalizeNode } from './nodeLibrary'
 import { materializeArchetypePreset, materializeDefinitionPreset, materializeGraphPreset } from './presetCatalog'
@@ -87,6 +91,17 @@ function updateGraph(snapshot: ProjectSnapshot, graphKey: string, updater: (grap
   }
 }
 
+function updateAssemblyGraph(
+  snapshot: ProjectSnapshot,
+  graphKey: string,
+  updater: (graph: ProjectSnapshot['assemblyGraphs'][number]) => ProjectSnapshot['assemblyGraphs'][number],
+) {
+  return {
+    ...snapshot,
+    assemblyGraphs: snapshot.assemblyGraphs.map((graph) => (graph.key === graphKey ? updater(graph) : graph)),
+  }
+}
+
 function updateNode(
   graph: ProjectSnapshot['graphs'][number],
   nodeKey: string,
@@ -102,6 +117,28 @@ function updateEdge(
   graph: ProjectSnapshot['graphs'][number],
   edgeKey: string,
   updater: (edge: ProjectSnapshot['graphs'][number]['edges'][number]) => ProjectSnapshot['graphs'][number]['edges'][number],
+) {
+  return {
+    ...graph,
+    edges: graph.edges.map((edge) => (edge.key === edgeKey ? updater(edge) : edge)),
+  }
+}
+
+function updateAssemblyNode(
+  graph: ProjectSnapshot['assemblyGraphs'][number],
+  nodeKey: string,
+  updater: (node: ProjectSnapshot['assemblyGraphs'][number]['nodes'][number]) => ProjectSnapshot['assemblyGraphs'][number]['nodes'][number],
+) {
+  return {
+    ...graph,
+    nodes: graph.nodes.map((node) => (node.key === nodeKey ? updater(node) : node)),
+  }
+}
+
+function updateAssemblyEdge(
+  graph: ProjectSnapshot['assemblyGraphs'][number],
+  edgeKey: string,
+  updater: (edge: ProjectSnapshot['assemblyGraphs'][number]['edges'][number]) => ProjectSnapshot['assemblyGraphs'][number]['edges'][number],
 ) {
   return {
     ...graph,
@@ -357,12 +394,68 @@ export function applyPatchOperations(snapshot: ProjectSnapshot, operations: Patc
           ],
         }
       }
+      case 'create_assembly_graph': {
+        if (currentSnapshot.assemblyGraphs.some((graph) => graph.key === operation.key)) return currentSnapshot
+
+        const scaffold = createAssemblyGraph({
+          key: operation.key,
+          name: typeof operation.payload.name === 'string' ? operation.payload.name : operation.key,
+          summary: typeof operation.payload.summary === 'string' ? operation.payload.summary : '',
+          boundEnvironmentKey:
+            typeof operation.payload.boundEnvironmentKey === 'string' || operation.payload.boundEnvironmentKey === null
+              ? operation.payload.boundEnvironmentKey
+              : null,
+        })
+
+        return {
+          ...currentSnapshot,
+          assemblyGraphs: [
+            {
+              ...scaffold,
+              ...operation.payload,
+              nodes: Array.isArray(operation.payload.nodes) && operation.payload.nodes.length > 0 ? operation.payload.nodes : scaffold.nodes,
+              edges: Array.isArray(operation.payload.edges) ? operation.payload.edges : scaffold.edges,
+              metadata:
+                typeof operation.payload.metadata === 'object' && operation.payload.metadata !== null
+                  ? operation.payload.metadata
+                  : scaffold.metadata,
+            } satisfies AssemblyGraphDefinition,
+            ...currentSnapshot.assemblyGraphs,
+          ],
+        }
+      }
       case 'update_graph':
         return updateGraph(currentSnapshot, operation.key, (graph) => ({ ...graph, ...operation.changes }))
+      case 'update_assembly_graph':
+        return updateAssemblyGraph(currentSnapshot, operation.key, (graph) => ({
+          ...graph,
+          ...operation.changes,
+          metadata:
+            typeof operation.changes.metadata === 'object' && operation.changes.metadata !== null
+              ? { ...graph.metadata, ...(operation.changes.metadata as Record<string, unknown>) }
+              : graph.metadata,
+        }))
       case 'delete_graph':
         return {
           ...currentSnapshot,
           graphs: currentSnapshot.graphs.filter((graph) => graph.key !== operation.key),
+        }
+      case 'delete_assembly_graph':
+        return {
+          ...currentSnapshot,
+          assemblyGraphs: currentSnapshot.assemblyGraphs.filter((graph) => graph.key !== operation.key),
+          definitions: currentSnapshot.definitions.map((definition) =>
+            definition.kind !== 'environment'
+              ? definition
+              : {
+                  ...definition,
+                  components: definition.components.map((component) =>
+                    component.type === 'environment_geometry_binding'
+                      ? { ...component, config: { ...component.config, assemblyGraphKey: component.config.assemblyGraphKey === operation.key ? null : component.config.assemblyGraphKey } }
+                      : component,
+                  ),
+                },
+          ),
         }
       case 'duplicate_graph': {
         const sourceGraph = currentSnapshot.graphs.find((graph) => graph.key === operation.key)
@@ -409,6 +502,11 @@ export function applyPatchOperations(snapshot: ProjectSnapshot, operations: Patc
             ? graph.nodes
             : [...graph.nodes, normalizeNode(operation.node)],
         }))
+      case 'create_assembly_node':
+        return updateAssemblyGraph(currentSnapshot, operation.graphKey, (graph) => ({
+          ...graph,
+          nodes: graph.nodes.some((node) => node.key === operation.node.key) ? graph.nodes : [...graph.nodes, operation.node],
+        }))
       case 'update_node':
         return updateGraph(currentSnapshot, operation.graphKey, (graph) =>
           updateNode(graph, operation.nodeKey, (node) =>
@@ -430,6 +528,26 @@ export function applyPatchOperations(snapshot: ProjectSnapshot, operations: Patc
             }),
           ),
         )
+      case 'update_assembly_node':
+        return updateAssemblyGraph(currentSnapshot, operation.graphKey, (graph) =>
+          updateAssemblyNode(graph, operation.nodeKey, (node) => ({
+            ...node,
+            ...operation.changes,
+            position:
+              typeof operation.changes.position === 'object' && operation.changes.position !== null
+                ? { ...node.position, ...(operation.changes.position as Partial<AssemblyNodeDefinition['position']>) }
+                : node.position,
+            params:
+              typeof operation.changes.params === 'object' && operation.changes.params !== null
+                ? { ...node.params, ...(operation.changes.params as Record<string, unknown>) }
+                : node.params,
+            metadata:
+              typeof operation.changes.metadata === 'object' && operation.changes.metadata !== null
+                ? { ...node.metadata, ...(operation.changes.metadata as Record<string, unknown>) }
+                : node.metadata,
+            ports: Array.isArray(operation.changes.ports) ? operation.changes.ports as AssemblyNodeDefinition['ports'] : node.ports,
+          })),
+        )
       case 'update_node_template':
         return updateGraph(currentSnapshot, operation.graphKey, (graph) =>
           updateNode(graph, operation.nodeKey, (node) => applyTemplateToNode(node, operation.templateKey)),
@@ -441,12 +559,23 @@ export function applyPatchOperations(snapshot: ProjectSnapshot, operations: Patc
           edges: graph.edges.filter((edge) => edge.source.nodeKey !== operation.nodeKey && edge.target.nodeKey !== operation.nodeKey),
           entryNodeKey: graph.entryNodeKey === operation.nodeKey ? null : graph.entryNodeKey,
         }))
+      case 'delete_assembly_node':
+        return updateAssemblyGraph(currentSnapshot, operation.graphKey, (graph) => ({
+          ...graph,
+          nodes: graph.nodes.filter((node) => node.key !== operation.nodeKey),
+          edges: graph.edges.filter((edge) => edge.source.nodeKey !== operation.nodeKey && edge.target.nodeKey !== operation.nodeKey),
+        }))
       case 'move_node':
         return updateGraph(currentSnapshot, operation.graphKey, (graph) =>
           updateNode(graph, operation.nodeKey, (node) => ({ ...node, position: operation.position })),
         )
       case 'connect_edge':
         return updateGraph(currentSnapshot, operation.graphKey, (graph) => ({
+          ...graph,
+          edges: graph.edges.some((edge) => edge.key === operation.edge.key) ? graph.edges : [...graph.edges, operation.edge],
+        }))
+      case 'connect_assembly_edge':
+        return updateAssemblyGraph(currentSnapshot, operation.graphKey, (graph) => ({
           ...graph,
           edges: graph.edges.some((edge) => edge.key === operation.edge.key) ? graph.edges : [...graph.edges, operation.edge],
         }))
@@ -465,8 +594,32 @@ export function applyPatchOperations(snapshot: ProjectSnapshot, operations: Patc
                 : edge.target,
           })),
         )
+      case 'update_assembly_edge':
+        return updateAssemblyGraph(currentSnapshot, operation.graphKey, (graph) =>
+          updateAssemblyEdge(graph, operation.edgeKey, (edge) => ({
+            ...edge,
+            ...operation.changes,
+            source:
+              typeof operation.changes.source === 'object' && operation.changes.source !== null
+                ? { ...edge.source, ...(operation.changes.source as Partial<AssemblyEdgeDefinition['source']>) }
+                : edge.source,
+            target:
+              typeof operation.changes.target === 'object' && operation.changes.target !== null
+                ? { ...edge.target, ...(operation.changes.target as Partial<AssemblyEdgeDefinition['target']>) }
+                : edge.target,
+            metadata:
+              typeof operation.changes.metadata === 'object' && operation.changes.metadata !== null
+                ? { ...edge.metadata, ...(operation.changes.metadata as Record<string, unknown>) }
+                : edge.metadata,
+          })),
+        )
       case 'delete_edge':
         return updateGraph(currentSnapshot, operation.graphKey, (graph) => ({
+          ...graph,
+          edges: graph.edges.filter((edge) => edge.key !== operation.edgeKey),
+        }))
+      case 'delete_assembly_edge':
+        return updateAssemblyGraph(currentSnapshot, operation.graphKey, (graph) => ({
           ...graph,
           edges: graph.edges.filter((edge) => edge.key !== operation.edgeKey),
         }))
@@ -476,6 +629,44 @@ export function applyPatchOperations(snapshot: ProjectSnapshot, operations: Patc
           nodes: operation.nodes.map((node) => normalizeNode(node)),
           edges: operation.edges,
         }))
+      case 'replace_assembly_subgraph':
+        return updateAssemblyGraph(currentSnapshot, operation.graphKey, (graph) => ({
+          ...graph,
+          nodes: operation.nodes,
+          edges: operation.edges,
+        }))
+      case 'bind_environment_assembly':
+        return {
+          ...currentSnapshot,
+          definitions: currentSnapshot.definitions.map((definition) =>
+            definition.key !== operation.environmentKey || definition.kind !== 'environment'
+              ? definition
+              : {
+                  ...definition,
+                  components: definition.components.some((component) => component.type === 'environment_geometry_binding')
+                    ? definition.components.map((component) =>
+                        component.type === 'environment_geometry_binding'
+                          ? {
+                              ...component,
+                              config: {
+                                ...component.config,
+                                sourceMode: operation.assemblyGraphKey ? 'procedural_graph' : component.config.sourceMode,
+                                assemblyGraphKey: operation.assemblyGraphKey,
+                              },
+                            }
+                          : component,
+                      )
+                    : definition.components,
+                },
+          ),
+          assemblyGraphs: currentSnapshot.assemblyGraphs.map((graph) =>
+            graph.key === operation.assemblyGraphKey
+              ? { ...graph, boundEnvironmentKey: operation.environmentKey }
+              : graph.boundEnvironmentKey === operation.environmentKey
+                ? { ...graph, boundEnvironmentKey: null }
+                : graph,
+          ),
+        }
       case 'set_condition':
         return updateGraph(currentSnapshot, operation.graphKey, (graph) =>
           updateNode(graph, operation.nodeKey, (node) => ({ ...node, condition: operation.condition })),
@@ -531,17 +722,34 @@ export function applyPatchOperations(snapshot: ProjectSnapshot, operations: Patc
 }
 
 export function groupPatchOperations(operations: PatchOperation[]) {
-  const graphOps = new Set(['instantiate_graph_preset', 'create_graph', 'update_graph', 'duplicate_graph', 'delete_graph'])
+  const graphOps = new Set([
+    'instantiate_graph_preset',
+    'create_graph',
+    'create_assembly_graph',
+    'update_graph',
+    'update_assembly_graph',
+    'duplicate_graph',
+    'delete_graph',
+    'delete_assembly_graph',
+    'bind_environment_assembly',
+  ])
   const nodeOps = new Set([
     'create_node',
+    'create_assembly_node',
     'update_node',
+    'update_assembly_node',
     'update_node_template',
     'delete_node',
+    'delete_assembly_node',
     'move_node',
     'connect_edge',
+    'connect_assembly_edge',
     'update_edge',
+    'update_assembly_edge',
     'delete_edge',
+    'delete_assembly_edge',
     'replace_subgraph',
+    'replace_assembly_subgraph',
     'set_condition',
     'set_effects',
     'set_node_body',
@@ -595,16 +803,32 @@ export function describePatchOperation(operation: PatchOperation) {
       return `Instantiate graph preset \`${operation.presetId}\``
     case 'create_graph':
       return `Create graph \`${operation.key}\``
+    case 'create_assembly_graph':
+      return `Create environment assembly graph \`${operation.key}\``
     case 'update_graph':
       return `Update graph \`${operation.key}\``
+    case 'update_assembly_graph':
+      return `Update assembly graph \`${operation.key}\``
     case 'duplicate_graph':
       return `Duplicate graph \`${operation.key}\` to \`${operation.nextKey}\``
+    case 'delete_assembly_graph':
+      return `Delete assembly graph \`${operation.key}\``
     case 'create_node':
       return `Create ${operation.node.templateKey ?? operation.node.type} node \`${operation.node.key}\` in \`${operation.graphKey}\``
+    case 'create_assembly_node':
+      return `Create ${operation.node.kind} assembly node \`${operation.node.key}\` in \`${operation.graphKey}\``
+    case 'update_assembly_node':
+      return `Update assembly node \`${operation.nodeKey}\``
     case 'update_node_template':
       return `Convert node \`${operation.nodeKey}\` to template \`${operation.templateKey}\``
     case 'connect_edge':
       return `Connect \`${operation.edge.source.nodeKey}\` to \`${operation.edge.target.nodeKey}\``
+    case 'connect_assembly_edge':
+      return `Connect assembly node \`${operation.edge.source.nodeKey}\` to \`${operation.edge.target.nodeKey}\``
+    case 'replace_assembly_subgraph':
+      return `Replace assembly subgraph in \`${operation.graphKey}\``
+    case 'bind_environment_assembly':
+      return `Bind environment \`${operation.environmentKey}\` to assembly graph \`${operation.assemblyGraphKey ?? 'none'}\``
     case 'set_condition':
       return `Set condition on node \`${operation.nodeKey}\``
     case 'set_effects':

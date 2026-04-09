@@ -11,6 +11,7 @@ import { buildAssetSlug, getAssetKeyPrefix, inferAssetKindFromUpload, inferRemot
 import { compileBundle } from './domain/compiler'
 import { buildDefaultDefinitionComponents, schemaCatalog } from './domain/graphcore'
 import type {
+  AssemblyGraphDefinition,
   ArchetypeDefinition,
   DefinitionBase,
   EdgeDefinition,
@@ -19,6 +20,7 @@ import type {
   GraphCreateInput,
   ProjectSnapshot,
 } from './domain/graphcore'
+import { createAssemblyGraph } from './domain/environmentAssembly'
 import { createGraphScaffold } from './domain/graphScaffold'
 import type { PromptPatchResponse } from './domain/prompting'
 import { normalizeNode } from './domain/nodeLibrary'
@@ -287,6 +289,12 @@ export default function App() {
 
   const selectedPatch = patchHistory[selectedPatchIndex] ?? patchHistory[0] ?? null
   const selectedArchetype = useMemo(() => snapshot?.archetypes.find((archetype) => archetype.key === selectedArchetypeKey) ?? snapshot?.archetypes[0] ?? null, [selectedArchetypeKey, snapshot])
+  const promptTarget =
+    activeTab === 'graph'
+      ? (selectedNode ? 'node' : 'graph')
+      : activeTab === 'environments'
+        ? 'environment'
+        : 'content'
 
   function applySnapshotUpdate(mutator: (current: ProjectSnapshot) => ProjectSnapshot) {
     setSnapshot((current) => {
@@ -480,6 +488,81 @@ export default function App() {
   function createEnvironment(archetypeKey: string | null = null) {
     createDefinitionOfKind('environment', archetypeKey)
     setActiveTab('environments')
+  }
+
+  function createEnvironmentAssemblyGraph(environmentKey: string) {
+    if (!snapshot) return null
+    const environment = snapshot.definitions.find((definition) => definition.key === environmentKey && definition.kind === 'environment')
+    if (!environment) return null
+
+    const existingGraphKeys = snapshot.assemblyGraphs.map((graph) => graph.key)
+    const suffix = uniqueKey(existingGraphKeys, environment.name || environmentKey.replace(/^environment\./, ''))
+    const graphKey = `assembly.${suffix}`
+    const nextGraph = createAssemblyGraph({
+      key: graphKey,
+      name: `${environment.name} Assembly`,
+      summary: `Procedural assembly graph for ${environment.name}.`,
+      boundEnvironmentKey: environmentKey,
+    })
+
+    applySnapshotUpdate((current) => ({
+      ...current,
+      assemblyGraphs: [...current.assemblyGraphs, nextGraph],
+      definitions: current.definitions.map((definition) => {
+        if (definition.key !== environmentKey || definition.kind !== 'environment') return definition
+        return {
+          ...definition,
+          components: definition.components.map((component) =>
+            component.type === 'environment_geometry_binding'
+              ? {
+                  ...component,
+                  config: {
+                    ...component.config,
+                    sourceMode: 'procedural_graph',
+                    assemblyGraphKey: graphKey,
+                  },
+                }
+              : component,
+          ),
+        }
+      }),
+    }))
+
+    return graphKey
+  }
+
+  function upsertAssemblyGraph(nextGraph: AssemblyGraphDefinition) {
+    applySnapshotUpdate((current) => ({
+      ...current,
+      assemblyGraphs: current.assemblyGraphs.some((graph) => graph.key === nextGraph.key)
+        ? current.assemblyGraphs.map((graph) => (graph.key === nextGraph.key ? nextGraph : graph))
+        : [...current.assemblyGraphs, nextGraph],
+    }))
+  }
+
+  function deleteAssemblyGraph(graphKey: string) {
+    applySnapshotUpdate((current) => ({
+      ...current,
+      assemblyGraphs: current.assemblyGraphs.filter((graph) => graph.key !== graphKey),
+      definitions: current.definitions.map((definition) => {
+        if (definition.kind !== 'environment') return definition
+        return {
+          ...definition,
+          components: definition.components.map((component) =>
+            component.type === 'environment_geometry_binding' && component.config.assemblyGraphKey === graphKey
+              ? {
+                  ...component,
+                  config: {
+                    ...component.config,
+                    assemblyGraphKey: null,
+                    sourceMode: component.config.sourceMode === 'procedural_graph' ? 'mesh' : component.config.sourceMode,
+                  },
+                }
+              : component,
+          ),
+        }
+      }),
+    }))
   }
 
   function createArchetype() {
@@ -811,13 +894,13 @@ export default function App() {
         allowedPresetIds: selectedPresetIds,
         operationBudget: 24,
         context: {
-          target: activeTab === 'graph' ? (selectedNode ? 'node' : 'graph') : 'content',
+          target: promptTarget,
           graphKey: selectedGraph?.key ?? null,
           nodeKey: selectedNode?.key ?? null,
           edgeKey: selectedEdge?.key ?? null,
         },
         selectionContext: {
-          target: activeTab === 'graph' ? (selectedNode ? 'node' : 'graph') : 'content',
+          target: promptTarget,
           graphKey: selectedGraph?.key ?? null,
           nodeKey: selectedNode?.key ?? null,
           edgeKey: selectedEdge?.key ?? null,
@@ -1139,14 +1222,18 @@ export default function App() {
                 assets={snapshot.assets}
                 definitions={snapshot.definitions}
                 graphKeys={snapshot.graphs.map((graph) => graph.key)}
+                assemblyGraphs={snapshot.assemblyGraphs}
                 selectedAsset={selectedAsset}
                 selectedDefinition={selectedDefinition?.kind === 'character' ? selectedDefinition : null}
                 onAddCustomField={addCustomField}
                 onAssignDefinitionIcon={assignAssetToSelectedItem}
+                onCreateAssemblyGraph={createEnvironmentAssemblyGraph}
                 onCreateDefinition={createCharacter}
                 onCreateUrlAsset={createUrlAsset}
+                onDeleteAssemblyGraph={deleteAssemblyGraph}
                 onSelectAsset={setSelectedAssetKey}
                 onSelectDefinition={setSelectedDefinitionKey}
+                onUpsertAssemblyGraph={upsertAssemblyGraph}
                 onUpdateComponents={updateDefinitionComponents}
                 onUpdateFieldValue={updateItemFieldValue}
                 onUpdateItemIdentity={updateItemIdentity}
@@ -1161,14 +1248,18 @@ export default function App() {
                 assets={snapshot.assets}
                 definitions={snapshot.definitions}
                 graphKeys={snapshot.graphs.map((graph) => graph.key)}
+                assemblyGraphs={snapshot.assemblyGraphs}
                 selectedAsset={selectedAsset}
                 selectedDefinition={selectedDefinition?.kind === 'environment' ? selectedDefinition : null}
                 onAddCustomField={addCustomField}
                 onAssignDefinitionIcon={assignAssetToSelectedItem}
+                onCreateAssemblyGraph={createEnvironmentAssemblyGraph}
                 onCreateDefinition={createEnvironment}
                 onCreateUrlAsset={createUrlAsset}
+                onDeleteAssemblyGraph={deleteAssemblyGraph}
                 onSelectAsset={setSelectedAssetKey}
                 onSelectDefinition={setSelectedDefinitionKey}
+                onUpsertAssemblyGraph={upsertAssemblyGraph}
                 onUpdateComponents={updateDefinitionComponents}
                 onUpdateFieldValue={updateItemFieldValue}
                 onUpdateItemIdentity={updateItemIdentity}

@@ -5,6 +5,7 @@ import {
   packPresetMap,
   presetCatalog,
 } from '../../../src/domain/presetCatalog.ts'
+import { createAssemblyNode, environmentAssemblyLibrary, inferAssemblyPorts } from '../../../src/domain/environmentAssembly.ts'
 
 const templateCatalog = [
   { key: 'start', type: 'start', graphs: ['narrative_flow', 'quest_flow', 'system_graph'] },
@@ -74,6 +75,17 @@ export const CONTENT_PASS_ALLOWED_OPS = new Set([
 export const GRAPH_PASS_ALLOWED_OPS = new Set([
   'instantiate_graph_preset',
   'create_graph',
+  'create_assembly_graph',
+  'update_assembly_graph',
+  'delete_assembly_graph',
+  'create_assembly_node',
+  'update_assembly_node',
+  'delete_assembly_node',
+  'connect_assembly_edge',
+  'update_assembly_edge',
+  'delete_assembly_edge',
+  'replace_assembly_subgraph',
+  'bind_environment_assembly',
   'update_graph',
   'duplicate_graph',
   'delete_graph',
@@ -178,6 +190,14 @@ export function buildPromptContext(payload: Record<string, any>) {
     payload.context?.graphKey
       ? (payload.snapshot.graphs ?? []).find((graph: Record<string, any>) => graph.key === payload.context.graphKey) ?? null
       : null
+  const selectedEnvironment =
+    payload.selectionContext?.definitionKey
+      ? (payload.snapshot.definitions ?? []).find((definition: Record<string, any>) => definition.key === payload.selectionContext.definitionKey) ?? null
+      : null
+  const selectedAssemblyGraph =
+    selectedEnvironment && Array.isArray(payload.snapshot.assemblyGraphs)
+      ? (payload.snapshot.assemblyGraphs as Array<Record<string, any>>).find((graph) => graph.key === selectedEnvironment.components?.find?.((component: Record<string, any>) => component.type === 'environment_geometry_binding')?.config?.assemblyGraphKey) ?? null
+      : null
 
   return {
     request: {
@@ -192,6 +212,14 @@ export function buildPromptContext(payload: Record<string, any>) {
       target: payload.context?.target ?? null,
       operationBudget: payload.operationBudget ?? null,
     },
+    selectedEnvironment: selectedEnvironment
+      ? {
+          key: selectedEnvironment.key,
+          kind: selectedEnvironment.kind,
+          name: selectedEnvironment.name,
+          components: selectedEnvironment.components ?? [],
+        }
+      : null,
     gameSpec: payload.gameSpec ?? payload.snapshot.gameSpec ?? null,
     presetCatalogVersion: presetCatalog.version,
     selectedPresetIds: payload.selectedPresetIds ?? [],
@@ -224,6 +252,16 @@ export function buildPromptContext(payload: Record<string, any>) {
         }
       : null,
     graphKeys: (payload.snapshot.graphs ?? []).map((graph: Record<string, any>) => graph.key),
+    assemblyGraphKeys: (payload.snapshot.assemblyGraphs ?? []).map((graph: Record<string, any>) => graph.key),
+    selectedAssemblyGraph,
+    assemblyGraphs: (payload.snapshot.assemblyGraphs ?? []).map((graph: Record<string, any>) => ({
+      key: graph.key,
+      name: graph.name,
+      summary: graph.summary ?? '',
+      boundEnvironmentKey: graph.boundEnvironmentKey ?? null,
+      nodeCount: Array.isArray(graph.nodes) ? graph.nodes.length : 0,
+      edgeCount: Array.isArray(graph.edges) ? graph.edges.length : 0,
+    })),
     definitionKeysByKind: definitionsByKind,
     archetypes: (payload.snapshot.archetypes ?? []).map((archetype: Record<string, any>) => ({
       key: archetype.key,
@@ -233,6 +271,7 @@ export function buildPromptContext(payload: Record<string, any>) {
     })),
     assets: (payload.snapshot.assets ?? []).map((asset: Record<string, any>) => ({ key: asset.key, kind: asset.kind, name: asset.name })),
     nodeLibrary: templateCatalog,
+    environmentAssemblyLibrary,
   }
 }
 
@@ -263,6 +302,8 @@ export function graphPassSystemPrompt() {
     'Use exactly: { "summary": string, "assistantNotes"?: string, "diagnostics": string[], "operations": object[] }.',
     'Do not wrap JSON in markdown fences.',
     'Prefer instantiate_graph_preset when a preset already matches the requested structure.',
+    'When the request targets environments, you may create or modify assembly graphs instead of gameplay graphs.',
+    'Assembly graphs are buildings-first procedural environment graphs. Bind them to environment definitions with bind_environment_assembly.',
     'Do not create definitions, archetypes, or assets in this pass.',
     `Allowed ops only: ${[...GRAPH_PASS_ALLOWED_OPS].join(', ')}.`,
     `Keep operations.length <= ${GRAPH_PASS_MAX_OPS}.`,
@@ -272,6 +313,108 @@ export function graphPassSystemPrompt() {
     'Keep body text short and structural, not atmospheric.',
     'Prefer fewer, valid nodes and edges over oversized graphs.',
   ].join('\n')
+}
+
+function normalizeCreateAssemblyGraphOperation(operation: Record<string, any>) {
+  const keySeed =
+    typeof operation.key === 'string'
+      ? operation.key
+      : typeof operation.graphKey === 'string'
+        ? operation.graphKey
+        : 'assembly.generated'
+  const key = keySeed.startsWith('assembly.') ? keySeed : `assembly.${graphSuffix(keySeed)}`
+  const payload = typeof operation.payload === 'object' && operation.payload !== null ? operation.payload : {}
+  return {
+    op: 'create_assembly_graph',
+    key,
+    payload: {
+      name:
+        typeof payload.name === 'string'
+          ? payload.name
+          : typeof operation.title === 'string'
+            ? operation.title
+            : typeof operation.name === 'string'
+              ? operation.name
+              : key,
+      summary:
+        typeof payload.summary === 'string'
+          ? payload.summary
+          : typeof operation.summary === 'string'
+            ? operation.summary
+            : '',
+      boundEnvironmentKey:
+        typeof payload.boundEnvironmentKey === 'string'
+          ? payload.boundEnvironmentKey
+          : typeof operation.environmentKey === 'string'
+            ? operation.environmentKey
+            : null,
+      metadata: typeof payload.metadata === 'object' && payload.metadata !== null ? payload.metadata : {},
+    },
+  }
+}
+
+function normalizeCreateAssemblyNodeOperation(operation: Record<string, any>, index: number) {
+  const graphKeySeed =
+    typeof operation.graphKey === 'string'
+      ? operation.graphKey
+      : typeof operation.assemblyGraphKey === 'string'
+        ? operation.assemblyGraphKey
+        : 'assembly.generated'
+  const graphKey = graphKeySeed.startsWith('assembly.') ? graphKeySeed : `assembly.${graphSuffix(graphKeySeed)}`
+  const rawNode = typeof operation.node === 'object' && operation.node !== null ? operation.node : operation
+  const kind = typeof rawNode.kind === 'string' ? rawNode.kind : 'rectangle'
+  const scaffold = createAssemblyNode(kind as Parameters<typeof createAssemblyNode>[0], index + 1, {
+    x: typeof rawNode.position?.x === 'number' ? rawNode.position.x : 320,
+    y: typeof rawNode.position?.y === 'number' ? rawNode.position.y : 180 + index * 80,
+  })
+  return {
+    op: 'create_assembly_node',
+    graphKey,
+    node: {
+      ...scaffold,
+      ...(typeof rawNode === 'object' ? rawNode : {}),
+      id: typeof rawNode.id === 'string' ? rawNode.id : scaffold.id,
+      key: typeof rawNode.key === 'string' ? rawNode.key : scaffold.key,
+      kind,
+      title: typeof rawNode.title === 'string' ? rawNode.title : scaffold.title,
+      subtitle: typeof rawNode.subtitle === 'string' ? rawNode.subtitle : null,
+      position: {
+        x: typeof rawNode.position?.x === 'number' ? rawNode.position.x : scaffold.position.x,
+        y: typeof rawNode.position?.y === 'number' ? rawNode.position.y : scaffold.position.y,
+      },
+      ports: Array.isArray(rawNode.ports) ? rawNode.ports : inferAssemblyPorts(kind as Parameters<typeof inferAssemblyPorts>[0]),
+      params: typeof rawNode.params === 'object' && rawNode.params !== null ? rawNode.params : scaffold.params,
+      metadata: typeof rawNode.metadata === 'object' && rawNode.metadata !== null ? rawNode.metadata : {},
+    },
+  }
+}
+
+function normalizeConnectAssemblyEdgeOperation(operation: Record<string, any>, index: number) {
+  const graphKeySeed =
+    typeof operation.graphKey === 'string'
+      ? operation.graphKey
+      : typeof operation.assemblyGraphKey === 'string'
+        ? operation.assemblyGraphKey
+        : 'assembly.generated'
+  const graphKey = graphKeySeed.startsWith('assembly.') ? graphKeySeed : `assembly.${graphSuffix(graphKeySeed)}`
+  const edge = typeof operation.edge === 'object' && operation.edge !== null ? operation.edge : operation
+  return {
+    op: 'connect_assembly_edge',
+    graphKey,
+    edge: {
+      id: typeof edge.id === 'string' ? edge.id : `assembly-edge-generated-${Date.now()}-${index}`,
+      key: typeof edge.key === 'string' ? edge.key : `assembly.edge_${index + 1}`,
+      source: {
+        nodeKey: typeof edge.source?.nodeKey === 'string' ? edge.source.nodeKey : typeof operation.sourceNodeKey === 'string' ? operation.sourceNodeKey : '',
+        portId: typeof edge.source?.portId === 'string' ? edge.source.portId : typeof operation.sourcePort === 'string' ? operation.sourcePort : 'solid',
+      },
+      target: {
+        nodeKey: typeof edge.target?.nodeKey === 'string' ? edge.target.nodeKey : typeof operation.targetNodeKey === 'string' ? operation.targetNodeKey : '',
+        portId: typeof edge.target?.portId === 'string' ? edge.target.portId : typeof operation.targetPort === 'string' ? operation.targetPort : 'solids',
+      },
+      metadata: typeof edge.metadata === 'object' && edge.metadata !== null ? edge.metadata : {},
+    },
+  }
 }
 
 export function augmentSnapshotForPrompting(snapshot: Record<string, any>, operations: Array<Record<string, any>>) {
@@ -674,10 +817,16 @@ export function repairOperations(rawOperations: Array<Record<string, any>>) {
         }
       case 'create_graph':
         return normalizeCreateGraphOperation(operation)
+      case 'create_assembly_graph':
+        return normalizeCreateAssemblyGraphOperation(operation)
       case 'create_node':
         return normalizeCreateNodeOperation(operation, index)
+      case 'create_assembly_node':
+        return normalizeCreateAssemblyNodeOperation(operation, index)
       case 'connect_edge':
         return normalizeConnectEdgeOperation(operation, index)
+      case 'connect_assembly_edge':
+        return normalizeConnectAssemblyEdgeOperation(operation, index)
       default:
         return operation
     }
@@ -724,6 +873,10 @@ function graphNodeKeys(snapshot: Record<string, any>) {
   return new Map((snapshot.graphs ?? []).map((graph: Record<string, any>) => [graph.key, new Set((graph.nodes ?? []).map((node: Record<string, any>) => node.key).filter(Boolean))]))
 }
 
+function assemblyGraphNodeKeys(snapshot: Record<string, any>) {
+  return new Map((snapshot.assemblyGraphs ?? []).map((graph: Record<string, any>) => [graph.key, new Set((graph.nodes ?? []).map((node: Record<string, any>) => node.key).filter(Boolean))]))
+}
+
 function definitionKeys(snapshot: Record<string, any>) {
   const grouped: Record<string, Set<string>> = {}
   for (const definition of snapshot.definitions ?? []) {
@@ -751,8 +904,10 @@ export function validateOperations(snapshot: Record<string, any>, operations: Ar
   const diagnostics: string[] = []
   const normalized: Array<Record<string, any>> = []
   const graphs = new Set((snapshot.graphs ?? []).map((graph: Record<string, any>) => graph.key).filter(Boolean))
+  const assemblyGraphs = new Set((snapshot.assemblyGraphs ?? []).map((graph: Record<string, any>) => graph.key).filter(Boolean))
   const graphTypes = new Map((snapshot.graphs ?? []).map((graph: Record<string, any>) => [graph.key, graph.graphType]))
   const nodeKeysByGraph = graphNodeKeys(snapshot)
+  const assemblyNodeKeysByGraph = assemblyGraphNodeKeys(snapshot)
   const defs = definitionKeys(snapshot)
   const createdDefs: Record<string, Set<string>> = {}
   const archetypes = new Set((snapshot.archetypes ?? []).map((archetype: Record<string, any>) => archetype.key).filter(Boolean))
@@ -836,6 +991,17 @@ export function validateOperations(snapshot: Record<string, any>, operations: Ar
       continue
     }
 
+    if (op.op === 'create_assembly_graph') {
+      if (!op.key || assemblyGraphs.has(op.key)) diagnostics.push(`Assembly graph key "${String(op.key)}" is invalid or already exists.`)
+      else {
+        assemblyGraphs.add(op.key)
+        const defaultOutputKey = `${op.key}.output`
+        assemblyNodeKeysByGraph.set(op.key, new Set(Array.isArray(op.payload?.nodes) ? op.payload.nodes.map((node: Record<string, any>) => node.key).filter(Boolean) : [defaultOutputKey]))
+        normalized.push(op)
+      }
+      continue
+    }
+
     if (op.op === 'create_node') {
       const graphKey = String(op.graphKey ?? '')
       const nodeKey = String(op.node?.key ?? '')
@@ -854,6 +1020,21 @@ export function validateOperations(snapshot: Record<string, any>, operations: Ar
       continue
     }
 
+    if (op.op === 'create_assembly_node') {
+      const graphKey = String(op.graphKey ?? '')
+      const nodeKey = String(op.node?.key ?? '')
+      const nodeKeys = assemblyNodeKeysByGraph.get(graphKey) ?? new Set<string>()
+      if (!assemblyGraphs.has(graphKey)) diagnostics.push(`Unknown assembly graph "${graphKey}" for create_assembly_node.`)
+      else if (!nodeKey) diagnostics.push('create_assembly_node is missing node.key.')
+      else if (nodeKeys.has(nodeKey)) diagnostics.push(`Assembly node "${nodeKey}" already exists in "${graphKey}".`)
+      else {
+        nodeKeys.add(nodeKey)
+        assemblyNodeKeysByGraph.set(graphKey, nodeKeys)
+        normalized.push(op)
+      }
+      continue
+    }
+
     if (op.op === 'connect_edge') {
       const graphKey = String(op.graphKey ?? '')
       const source = String(op.edge?.source?.nodeKey ?? '')
@@ -864,11 +1045,52 @@ export function validateOperations(snapshot: Record<string, any>, operations: Ar
       continue
     }
 
+    if (op.op === 'connect_assembly_edge') {
+      const graphKey = String(op.graphKey ?? '')
+      const source = String(op.edge?.source?.nodeKey ?? '')
+      const target = String(op.edge?.target?.nodeKey ?? '')
+      const nodeKeys = assemblyNodeKeysByGraph.get(graphKey) ?? new Set<string>()
+      if (!assemblyGraphs.has(graphKey) || !nodeKeys.has(source) || !nodeKeys.has(target)) diagnostics.push(`connect_assembly_edge references missing nodes in "${graphKey}".`)
+      else normalized.push(op)
+      continue
+    }
+
     if (['set_condition', 'set_effects', 'set_node_body', 'set_node_choices', 'set_node_media', 'update_node', 'update_node_template', 'move_node', 'delete_node'].includes(op.op)) {
       const graphKey = String(op.graphKey ?? '')
       const nodeKey = String(op.nodeKey ?? '')
       if (!graphs.has(graphKey) || !(nodeKeysByGraph.get(graphKey) ?? new Set()).has(nodeKey)) diagnostics.push(`${op.op} references missing node "${nodeKey}" in "${graphKey}".`)
       else if (op.op === 'update_node_template' && (!op.templateKey || !templateMap.has(op.templateKey))) diagnostics.push(`Unknown template "${String(op.templateKey)}".`)
+      else normalized.push(op)
+      continue
+    }
+
+    if (['update_assembly_node', 'delete_assembly_node'].includes(op.op)) {
+      const graphKey = String(op.graphKey ?? '')
+      const nodeKey = String(op.nodeKey ?? '')
+      if (!assemblyGraphs.has(graphKey) || !(assemblyNodeKeysByGraph.get(graphKey) ?? new Set()).has(nodeKey)) diagnostics.push(`${op.op} references missing assembly node "${nodeKey}" in "${graphKey}".`)
+      else normalized.push(op)
+      continue
+    }
+
+    if (['update_assembly_graph', 'delete_assembly_graph', 'replace_assembly_subgraph'].includes(op.op)) {
+      const graphKey = String(op.key ?? op.graphKey ?? '')
+      if (!graphKey || !assemblyGraphs.has(graphKey)) diagnostics.push(`${op.op} references missing assembly graph "${graphKey}".`)
+      else normalized.push(op)
+      continue
+    }
+
+    if (['update_assembly_edge', 'delete_assembly_edge'].includes(op.op)) {
+      const graphKey = String(op.graphKey ?? '')
+      if (!graphKey || !assemblyGraphs.has(graphKey)) diagnostics.push(`${op.op} references missing assembly graph "${graphKey}".`)
+      else normalized.push(op)
+      continue
+    }
+
+    if (op.op === 'bind_environment_assembly') {
+      const environmentKey = String(op.environmentKey ?? '')
+      const graphKey = op.assemblyGraphKey === null ? null : String(op.assemblyGraphKey ?? '')
+      if (!hasDef('environment', environmentKey)) diagnostics.push(`Unknown environment "${environmentKey}" for bind_environment_assembly.`)
+      else if (graphKey && !assemblyGraphs.has(graphKey)) diagnostics.push(`Unknown assembly graph "${graphKey}" for bind_environment_assembly.`)
       else normalized.push(op)
       continue
     }

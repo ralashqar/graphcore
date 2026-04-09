@@ -1,5 +1,6 @@
 import type {
   ArchetypeDefinition,
+  AssemblyGraphDefinition,
   AssetDefinition,
   Diagnostic,
   DefinitionBase,
@@ -7,6 +8,7 @@ import type {
   GraphDefinition,
   ProjectSnapshot,
 } from './graphcore'
+import { compileAssemblyGraph } from './environmentAssemblyCompiler'
 import { graphNodeTemplatesByKey } from './nodeLibrary'
 import { PRESET_CATALOG_VERSION } from './presetCatalog'
 
@@ -27,8 +29,9 @@ function pushDiagnostic(diagnostics: Diagnostic[], diagnostic: Diagnostic) {
 
 export function compileBundle(snapshot: ProjectSnapshot): GameSystemBundle {
   const graphKeys = new Set<string>()
+  const assemblyGraphKeys = new Set<string>()
   const diagnostics = [
-    ...validateDefinitions(snapshot.definitions, snapshot.archetypes, snapshot.assets, snapshot.graphs, snapshot.gameSpec),
+    ...validateDefinitions(snapshot.definitions, snapshot.archetypes, snapshot.assets, snapshot.graphs, snapshot.assemblyGraphs, snapshot.gameSpec),
     ...snapshot.graphs.flatMap((graph) => {
       const duplicateGraphKey = graphKeys.has(graph.key)
       graphKeys.add(graph.key)
@@ -45,7 +48,21 @@ export function compileBundle(snapshot: ProjectSnapshot): GameSystemBundle {
         ...validateGraph(graph, snapshot.graphs, snapshot.definitions, snapshot.assets),
       ]
     }),
+    ...snapshot.assemblyGraphs.flatMap((graph) => {
+      const duplicateGraphKey = assemblyGraphKeys.has(graph.key)
+      assemblyGraphKeys.add(graph.key)
+      return duplicateGraphKey
+        ? [{
+            level: 'error' as const,
+            code: 'duplicate_assembly_graph_key',
+            message: `Duplicate assembly graph key "${graph.key}".`,
+            graphKey: graph.key,
+            nodeKey: null,
+          }]
+        : validateAssemblyGraph(graph)
+    }),
   ]
+  const compiledEnvironments = snapshot.assemblyGraphs.map((graph) => compileAssemblyGraph(graph).compiledModel)
 
   const definitionsByKind = snapshot.definitions.reduce<Record<string, string[]>>((acc, definition) => {
     acc[definition.kind] ??= []
@@ -93,6 +110,8 @@ export function compileBundle(snapshot: ProjectSnapshot): GameSystemBundle {
     gameSpec: snapshot.gameSpec,
     definitions: snapshot.definitions,
     graphs: snapshot.graphs,
+    assemblyGraphs: snapshot.assemblyGraphs,
+    compiledEnvironments,
     assets: snapshot.assets,
     lookupIndices: {
       definitionsByKind,
@@ -110,6 +129,7 @@ export function validateDefinitions(
   archetypes: ArchetypeDefinition[],
   assets: AssetDefinition[],
   graphs: GraphDefinition[],
+  assemblyGraphs: AssemblyGraphDefinition[],
   gameSpec: ProjectSnapshot['gameSpec'],
 ): Diagnostic[] {
   const diagnostics: Diagnostic[] = []
@@ -118,6 +138,7 @@ export function validateDefinitions(
   const archetypesByKey = new Map(archetypes.map((archetype) => [archetype.key, archetype]))
   const definitionsByKey = new Map(definitions.map((definition) => [definition.key, definition]))
   const graphKeys = new Set(graphs.map((graph) => graph.key))
+  const assemblyGraphKeys = new Set(assemblyGraphs.map((graph) => graph.key))
   const meshAssetKeys = new Set(assets.filter((asset) => asset.kind === 'mesh').map((asset) => asset.key))
   const imageAssetKeys = new Set(assets.filter((asset) => asset.kind === 'image').map((asset) => asset.key))
 
@@ -453,6 +474,7 @@ export function validateDefinitions(
 
     if (definition.kind === 'environment') {
       const profile = getComponent(definition, 'environment_profile')
+      const geometryBinding = getComponent(definition, 'environment_geometry_binding')
       const renderBinding = getComponent(definition, 'environment_render_binding')
       const navigation = getComponent(definition, 'environment_navigation')
       const spawnRules = getComponent(definition, 'environment_spawn_rules')
@@ -475,6 +497,18 @@ export function validateDefinitions(
           graphKey: null,
           nodeKey: null,
         })
+      }
+
+      if (geometryBinding?.type === 'environment_geometry_binding') {
+        if (geometryBinding.config.sourceMode === 'procedural_graph' && geometryBinding.config.assemblyGraphKey && !assemblyGraphKeys.has(geometryBinding.config.assemblyGraphKey)) {
+          pushDiagnostic(diagnostics, {
+            level: 'error',
+            code: 'missing_environment_assembly_graph',
+            message: `Environment "${definition.key}" references missing assembly graph "${geometryBinding.config.assemblyGraphKey}".`,
+            graphKey: null,
+            nodeKey: null,
+          })
+        }
       }
 
       if (profile?.type === 'environment_profile') {
@@ -654,6 +688,48 @@ export function validateDefinitions(
           })
         }
       }
+    }
+  }
+
+  return diagnostics
+}
+
+export function validateAssemblyGraph(graph: AssemblyGraphDefinition): Diagnostic[] {
+  const diagnostics: Diagnostic[] = []
+  const nodeKeys = new Set<string>()
+
+  if (!graph.nodes.some((node) => node.kind === 'environment_output')) {
+    diagnostics.push({
+      level: 'warning',
+      code: 'assembly_graph_missing_output',
+      message: `Assembly graph "${graph.key}" should include an environment output node.`,
+      graphKey: graph.key,
+      nodeKey: null,
+    })
+  }
+
+  for (const node of graph.nodes) {
+    if (nodeKeys.has(node.key)) {
+      diagnostics.push({
+        level: 'error',
+        code: 'duplicate_assembly_node_key',
+        message: `Assembly graph "${graph.key}" has duplicate node key "${node.key}".`,
+        graphKey: graph.key,
+        nodeKey: node.key,
+      })
+    }
+    nodeKeys.add(node.key)
+  }
+
+  for (const edge of graph.edges) {
+    if (!nodeKeys.has(edge.source.nodeKey) || !nodeKeys.has(edge.target.nodeKey)) {
+      diagnostics.push({
+        level: 'error',
+        code: 'assembly_edge_missing_endpoint',
+        message: `Assembly edge "${edge.key}" points to a missing node.`,
+        graphKey: graph.key,
+        nodeKey: null,
+      })
     }
   }
 

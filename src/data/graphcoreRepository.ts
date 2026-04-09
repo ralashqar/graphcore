@@ -3,6 +3,7 @@ import { BASELINE_ARCHETYPES, hasMissingBaselineArchetypes } from '../domain/boo
 import { demoProjectSnapshot } from '../domain/demo-data'
 import { createGameSpecFromArchetype } from '../domain/gameArchetypes'
 import {
+  type AssemblyNodeDefinition,
   buildDefaultDefinitionComponents,
   projectSnapshotSchema,
   type ArchetypeDefinition,
@@ -619,6 +620,40 @@ type EdgeRow = {
   metadata: Record<string, unknown> | null
 }
 
+type AssemblyGraphRow = {
+  id: string
+  key: string
+  name: string
+  summary: string
+  bound_environment_key: string | null
+  metadata: Record<string, unknown> | null
+}
+
+type AssemblyNodeRow = {
+  id: string
+  assembly_graph_id: string
+  key: string
+  kind: AssemblyNodeDefinition['kind']
+  title: string
+  subtitle: string | null
+  position_x: number
+  position_y: number
+  ports: Record<string, unknown>[] | null
+  params: Record<string, unknown> | null
+  metadata: Record<string, unknown> | null
+}
+
+type AssemblyEdgeRow = {
+  id: string
+  assembly_graph_id: string
+  key: string
+  source_node_key: string
+  source_port: string
+  target_node_key: string
+  target_port: string
+  metadata: Record<string, unknown> | null
+}
+
 type AssetRow = {
   id: string
   key: string
@@ -754,6 +789,9 @@ export async function loadProjectSnapshot(
     graphsResponse,
     nodesResponse,
     edgesResponse,
+    assemblyGraphsResponse,
+    assemblyNodesResponse,
+    assemblyEdgesResponse,
     assetsResponse,
     patchSetsResponse,
     releasesResponse,
@@ -810,6 +848,17 @@ export async function loadProjectSnapshot(
       .from('draft_graph_edges')
       .select('id, graph_id, key, source_node_key, source_port, target_node_key, target_port, label, condition_expr, metadata'),
     supabase
+      .from('draft_assembly_graphs')
+      .select('id, key, name, summary, bound_environment_key, metadata')
+      .eq('draft_id', draft.id)
+      .order('created_at', { ascending: true }),
+    supabase
+      .from('draft_assembly_nodes')
+      .select('id, assembly_graph_id, key, kind, title, subtitle, position_x, position_y, ports, params, metadata'),
+    supabase
+      .from('draft_assembly_edges')
+      .select('id, assembly_graph_id, key, source_node_key, source_port, target_node_key, target_port, metadata'),
+    supabase
       .from('project_assets')
       .select('id, key, name, kind, mime_type, storage_path, metadata, llm_hints')
       .eq('project_id', project.id)
@@ -843,6 +892,9 @@ export async function loadProjectSnapshot(
   const graphs = (graphsResponse.data as GraphRow[] | null) ?? []
   const nodes = (nodesResponse.data as NodeRow[] | null) ?? []
   const edges = (edgesResponse.data as EdgeRow[] | null) ?? []
+  const assemblyGraphs = (assemblyGraphsResponse.data as AssemblyGraphRow[] | null) ?? []
+  const assemblyNodes = (assemblyNodesResponse.data as AssemblyNodeRow[] | null) ?? []
+  const assemblyEdges = (assemblyEdgesResponse.data as AssemblyEdgeRow[] | null) ?? []
   const assets = (assetsResponse.data as AssetRow[] | null) ?? []
 
   const snapshot = projectSnapshotSchema.parse({
@@ -988,6 +1040,45 @@ export async function loadProjectSnapshot(
           },
           label: edge.label,
           condition: edge.condition_expr,
+          metadata: edge.metadata ?? {},
+        })),
+    })),
+    assemblyGraphs: assemblyGraphs.map((graph) => ({
+      id: graph.id,
+      key: graph.key,
+      name: graph.name,
+      summary: graph.summary ?? '',
+      boundEnvironmentKey: graph.bound_environment_key,
+      metadata: graph.metadata ?? {},
+      nodes: assemblyNodes
+        .filter((node) => node.assembly_graph_id === graph.id)
+        .map((node) => ({
+          id: node.id,
+          key: node.key,
+          kind: node.kind,
+          title: node.title,
+          subtitle: node.subtitle ?? null,
+          position: {
+            x: Number(node.position_x),
+            y: Number(node.position_y),
+          },
+          ports: (node.ports ?? []) as AssemblyNodeDefinition['ports'],
+          params: node.params ?? {},
+          metadata: node.metadata ?? {},
+        })),
+      edges: assemblyEdges
+        .filter((edge) => edge.assembly_graph_id === graph.id)
+        .map((edge) => ({
+          id: edge.id,
+          key: edge.key,
+          source: {
+            nodeKey: edge.source_node_key,
+            portId: edge.source_port,
+          },
+          target: {
+            nodeKey: edge.target_node_key,
+            portId: edge.target_port,
+          },
           metadata: edge.metadata ?? {},
         })),
     })),

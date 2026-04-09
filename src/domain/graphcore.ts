@@ -1,5 +1,12 @@
 import { z } from 'zod'
 import { gameSpecSchema } from './gameSpec'
+import {
+  assemblyEdgeDefinitionSchema,
+  assemblyGraphDefinitionSchema,
+  assemblyNodeDefinitionSchema,
+  compiledEnvironmentModelSchema,
+  environmentGeometryBindingConfigSchema,
+} from './environmentAssembly'
 
 export const definitionKindSchema = z.enum([
   'item',
@@ -39,6 +46,7 @@ export const componentTypeSchema = z.enum([
   'quest_state',
   'location_state',
   'environment_profile',
+  'environment_geometry_binding',
   'environment_render_binding',
   'environment_navigation',
   'environment_spawn_rules',
@@ -284,6 +292,8 @@ export const environmentProfileComponentSchema = z.object({
   linkedLocationKeys: z.array(z.string()).default([]),
 })
 
+export const environmentGeometryBindingComponentSchema = environmentGeometryBindingConfigSchema
+
 export const render3dBindingComponentSchema = z.object({
   primaryMeshAssetKey: z.string().nullable().default(null),
   previewImageAssetKey: z.string().nullable().default(null),
@@ -417,6 +427,10 @@ export const componentConfigSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('environment_profile'),
     config: environmentProfileComponentSchema,
+  }),
+  z.object({
+    type: z.literal('environment_geometry_binding'),
+    config: environmentGeometryBindingComponentSchema,
   }),
   z.object({
     type: z.literal('environment_render_binding'),
@@ -671,6 +685,7 @@ export const projectSnapshotSchema = z.object({
   archetypes: z.array(archetypeDefinitionSchema).default([]),
   definitions: z.array(definitionBaseSchema),
   graphs: z.array(graphDefinitionSchema),
+  assemblyGraphs: z.array(assemblyGraphDefinitionSchema).default([]),
   assets: z.array(assetDefinitionSchema),
   patchSets: z.array(
     z.object({
@@ -810,12 +825,26 @@ export const patchOperationSchema = z.discriminatedUnion('op', [
     payload: graphDefinitionSchema.partial(),
   }),
   z.object({
+    op: z.literal('create_assembly_graph'),
+    key: z.string(),
+    payload: assemblyGraphDefinitionSchema.partial(),
+  }),
+  z.object({
     op: z.literal('update_graph'),
     key: z.string(),
     changes: z.record(z.string(), z.unknown()),
   }),
   z.object({
+    op: z.literal('update_assembly_graph'),
+    key: z.string(),
+    changes: z.record(z.string(), z.unknown()),
+  }),
+  z.object({
     op: z.literal('delete_graph'),
+    key: z.string(),
+  }),
+  z.object({
+    op: z.literal('delete_assembly_graph'),
     key: z.string(),
   }),
   z.object({
@@ -829,7 +858,18 @@ export const patchOperationSchema = z.discriminatedUnion('op', [
     node: nodeDefinitionSchema,
   }),
   z.object({
+    op: z.literal('create_assembly_node'),
+    graphKey: z.string(),
+    node: assemblyNodeDefinitionSchema,
+  }),
+  z.object({
     op: z.literal('update_node'),
+    graphKey: z.string(),
+    nodeKey: z.string(),
+    changes: z.record(z.string(), z.unknown()),
+  }),
+  z.object({
+    op: z.literal('update_assembly_node'),
     graphKey: z.string(),
     nodeKey: z.string(),
     changes: z.record(z.string(), z.unknown()),
@@ -846,6 +886,11 @@ export const patchOperationSchema = z.discriminatedUnion('op', [
     nodeKey: z.string(),
   }),
   z.object({
+    op: z.literal('delete_assembly_node'),
+    graphKey: z.string(),
+    nodeKey: z.string(),
+  }),
+  z.object({
     op: z.literal('move_node'),
     graphKey: z.string(),
     nodeKey: z.string(),
@@ -857,7 +902,18 @@ export const patchOperationSchema = z.discriminatedUnion('op', [
     edge: edgeDefinitionSchema,
   }),
   z.object({
+    op: z.literal('connect_assembly_edge'),
+    graphKey: z.string(),
+    edge: assemblyEdgeDefinitionSchema,
+  }),
+  z.object({
     op: z.literal('update_edge'),
+    graphKey: z.string(),
+    edgeKey: z.string(),
+    changes: z.record(z.string(), z.unknown()),
+  }),
+  z.object({
+    op: z.literal('update_assembly_edge'),
     graphKey: z.string(),
     edgeKey: z.string(),
     changes: z.record(z.string(), z.unknown()),
@@ -868,10 +924,26 @@ export const patchOperationSchema = z.discriminatedUnion('op', [
     edgeKey: z.string(),
   }),
   z.object({
+    op: z.literal('delete_assembly_edge'),
+    graphKey: z.string(),
+    edgeKey: z.string(),
+  }),
+  z.object({
     op: z.literal('replace_subgraph'),
     graphKey: z.string(),
     nodes: z.array(nodeDefinitionSchema),
     edges: z.array(edgeDefinitionSchema),
+  }),
+  z.object({
+    op: z.literal('replace_assembly_subgraph'),
+    graphKey: z.string(),
+    nodes: z.array(assemblyNodeDefinitionSchema),
+    edges: z.array(assemblyEdgeDefinitionSchema),
+  }),
+  z.object({
+    op: z.literal('bind_environment_assembly'),
+    environmentKey: z.string(),
+    assemblyGraphKey: z.string().nullable(),
   }),
   z.object({
     op: z.literal('set_condition'),
@@ -942,6 +1014,8 @@ export const gameSystemBundleSchema = z.object({
   gameSpec: gameSpecSchema.nullable().default(null),
   definitions: z.array(definitionBaseSchema),
   graphs: z.array(graphDefinitionSchema),
+  assemblyGraphs: z.array(assemblyGraphDefinitionSchema).default([]),
+  compiledEnvironments: z.array(compiledEnvironmentModelSchema).default([]),
   assets: z.array(assetDefinitionSchema),
   lookupIndices: z.object({
     definitionsByKind: z.record(z.string(), z.array(z.string())),
@@ -962,6 +1036,9 @@ export type FieldValue = z.infer<typeof fieldValueSchema>
 export type GraphDefinition = z.infer<typeof graphDefinitionSchema>
 export type NodeDefinition = z.infer<typeof nodeDefinitionSchema>
 export type EdgeDefinition = z.infer<typeof edgeDefinitionSchema>
+export type AssemblyGraphDefinition = z.infer<typeof assemblyGraphDefinitionSchema>
+export type AssemblyNodeDefinition = z.infer<typeof assemblyNodeDefinitionSchema>
+export type AssemblyEdgeDefinition = z.infer<typeof assemblyEdgeDefinitionSchema>
 export type PortDefinition = z.infer<typeof portDefinitionSchema>
 export type AssetDefinition = z.infer<typeof assetDefinitionSchema>
 export type ProjectSnapshot = z.infer<typeof projectSnapshotSchema>
@@ -1104,6 +1181,23 @@ export function buildDefaultDefinitionComponents(kind: DefinitionKind): Componen
           },
         },
         {
+          type: 'environment_geometry_binding',
+          config: {
+            sourceMode: 'mesh',
+            assemblyGraphKey: null,
+            compilerTarget: 'preview_mesh',
+            units: 'meters',
+            svgBlueprintAssetKey: null,
+            compileSettings: {
+              livePreview: true,
+              showDebug: true,
+              triangulation: 'shape_utils',
+              booleanMode: 'bounded_v1',
+              levelHeight: 3,
+            },
+          },
+        },
+        {
           type: 'environment_render_binding',
           config: {
             primaryMeshAssetKey: null,
@@ -1173,6 +1267,7 @@ export const schemaCatalog = {
   diagnosticSchema,
   edgeDefinitionSchema,
   effectOpSchema,
+  environmentGeometryBindingComponentSchema,
   fieldDefinitionSchema,
   fieldValueSchema,
   formulaExprSchema,
@@ -1180,6 +1275,9 @@ export const schemaCatalog = {
   gameSystemBundleSchema,
   graphDefinitionSchema,
   graphTypeSchema,
+  assemblyGraphDefinitionSchema,
+  assemblyNodeDefinitionSchema,
+  assemblyEdgeDefinitionSchema,
   nodeDisplaySchema,
   nodeDefinitionSchema,
   patchOperationSchema,

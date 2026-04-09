@@ -2,24 +2,27 @@ import { useMemo, useState } from 'react'
 
 import { visualAssetGenerationService } from '../../application/services/visualAssetGenerationService'
 import { isImageAsset, isMeshAsset, resolveAssetSourceUrl } from '../../domain/assets'
+import { compileAssemblyGraph } from '../../domain/environmentAssemblyCompiler'
 import {
   getCharacterProfile,
+  getResolvedEnvironmentGeometryBinding,
   getEnvironmentProfile,
   getResolvedDefinition3dBinding,
   type EnvironmentRenderBindingConfig,
   type Render3dBindingConfig,
 } from '../../domain/render3d'
-import type { AssetDefinition, DefinitionBase } from '../../domain/graphcore'
+import type { AssetDefinition, AssemblyGraphDefinition, DefinitionBase } from '../../domain/graphcore'
 import { MediaThumb, findAssetByKey } from '../content/shared'
 import { ThreeSceneViewport } from './ThreeSceneViewport'
 
 type Definition3dPanelProps = {
   assets: AssetDefinition[]
+  assemblyGraph?: AssemblyGraphDefinition | null
   definition: DefinitionBase
   onUpdateComponents: (itemKey: string, components: DefinitionBase['components']) => void
 }
 
-export function Definition3dPanel({ assets, definition, onUpdateComponents }: Definition3dPanelProps) {
+export function Definition3dPanel({ assets, assemblyGraph = null, definition, onUpdateComponents }: Definition3dPanelProps) {
   const [showFloor, setShowFloor] = useState(true)
   const [showGrid, setShowGrid] = useState(false)
   const [resetSignal, setResetSignal] = useState(0)
@@ -28,6 +31,7 @@ export function Definition3dPanel({ assets, definition, onUpdateComponents }: De
 
   const isEnvironment = definition.kind === 'environment'
   const renderBinding = getResolvedDefinition3dBinding(definition)
+  const geometryBinding = isEnvironment ? getResolvedEnvironmentGeometryBinding(definition) : null
   const subtype = isEnvironment
     ? getEnvironmentProfile(definition)?.config.subtype ?? 'exterior'
     : getCharacterProfile(definition)?.config.subtype ?? 'humanoid'
@@ -38,6 +42,13 @@ export function Definition3dPanel({ assets, definition, onUpdateComponents }: De
   const previewImageAsset = findAssetByKey(assets, renderBinding.previewImageAssetKey)
   const meshSourceUrl = resolveAssetSourceUrl(meshAsset)
   const meshSourceLabel = meshSourceUrl ?? 'No mesh source bound'
+  const compiledEnvironment = useMemo(
+    () =>
+      isEnvironment && geometryBinding?.sourceMode === 'procedural_graph' && assemblyGraph
+        ? compileAssemblyGraph(assemblyGraph).compiledModel
+        : null,
+    [assemblyGraph, geometryBinding?.sourceMode, isEnvironment],
+  )
 
   function updateRenderBinding(changes: Partial<typeof renderBinding>) {
     if (isEnvironment) {
@@ -92,6 +103,7 @@ export function Definition3dPanel({ assets, definition, onUpdateComponents }: De
       <div className="character-3d-layout">
         <div className="character-3d-stage">
           <ThreeSceneViewport
+            compiledEnvironment={compiledEnvironment}
             meshSourceUrl={meshSourceUrl}
             modelKind={isEnvironment ? 'environment' : 'character'}
             modelLabel={definition.name}
@@ -204,6 +216,16 @@ export function Definition3dPanel({ assets, definition, onUpdateComponents }: De
             </div>
             <div className="character-3d-summary-card">
               <div className="character-3d-summary-row">
+                <strong>Geometry mode</strong>
+                <span>{isEnvironment ? geometryBinding?.sourceMode ?? 'mesh' : 'mesh'}</span>
+              </div>
+              {isEnvironment ? (
+                <div className="character-3d-summary-row">
+                  <strong>Assembly graph</strong>
+                  <span>{geometryBinding?.assemblyGraphKey ?? 'None'}</span>
+                </div>
+              ) : null}
+              <div className="character-3d-summary-row">
                 <strong>Mesh</strong>
                 <span>{meshAsset?.name ?? 'None'}</span>
               </div>
@@ -215,6 +237,12 @@ export function Definition3dPanel({ assets, definition, onUpdateComponents }: De
                 <strong>Concept image</strong>
                 <span>{previewImageAsset?.name ?? 'None'}</span>
               </div>
+              {compiledEnvironment ? (
+                <div className="character-3d-summary-row">
+                  <strong>Compiled parts</strong>
+                  <span>{compiledEnvironment.parts.length}</span>
+                </div>
+              ) : null}
               <div className="character-3d-preview-thumb">
                 <MediaThumb asset={previewImageAsset} label={previewImageAsset?.name ?? definition.name} large />
               </div>

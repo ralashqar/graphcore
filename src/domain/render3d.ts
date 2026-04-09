@@ -1,8 +1,10 @@
 import type { DefinitionBase } from './graphcore'
+import { environmentAssemblyBindingDefaults, type EnvironmentGeometryBindingConfig } from './environmentAssembly'
 
 export type DefinitionComponentType = DefinitionBase['components'][number]['type']
 export type CharacterProfileComponent = Extract<DefinitionBase['components'][number], { type: 'character_profile' }>
 export type EnvironmentProfileComponent = Extract<DefinitionBase['components'][number], { type: 'environment_profile' }>
+export type EnvironmentGeometryBindingComponent = Extract<DefinitionBase['components'][number], { type: 'environment_geometry_binding' }>
 export type Render3dBindingComponent = Extract<DefinitionBase['components'][number], { type: 'render_3d_binding' }>
 export type EnvironmentRenderBindingComponent = Extract<DefinitionBase['components'][number], { type: 'environment_render_binding' }>
 export type Render3dBindingConfig = Render3dBindingComponent['config']
@@ -41,10 +43,25 @@ export function getEnvironmentRenderBinding(definition: DefinitionBase) {
   return getDefinitionComponent(definition, 'environment_render_binding') as EnvironmentRenderBindingComponent | undefined
 }
 
+export function getEnvironmentGeometryBinding(definition: DefinitionBase) {
+  return getDefinitionComponent(definition, 'environment_geometry_binding') as EnvironmentGeometryBindingComponent | undefined
+}
+
 export function getResolvedRender3dBinding(definition: DefinitionBase): Render3dBindingConfig {
   return {
     ...defaultRender3dBindingConfig,
     ...(getRender3dBinding(definition)?.config ?? {}),
+  }
+}
+
+export function getResolvedEnvironmentGeometryBinding(definition: DefinitionBase): EnvironmentGeometryBindingConfig {
+  return {
+    ...environmentAssemblyBindingDefaults,
+    ...(getEnvironmentGeometryBinding(definition)?.config ?? {}),
+    compileSettings: {
+      ...environmentAssemblyBindingDefaults.compileSettings,
+      ...(getEnvironmentGeometryBinding(definition)?.config.compileSettings ?? {}),
+    },
   }
 }
 

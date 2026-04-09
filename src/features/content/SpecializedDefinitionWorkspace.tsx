@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 
-import type { DefinitionPanelMode } from './types'
-import type { ArchetypeDefinition, AssetDefinition, DefinitionBase, FieldDefinition, FieldValue } from '../../domain/graphcore'
+import type { ArchetypeDefinition, AssetDefinition, AssemblyGraphDefinition, DefinitionBase, FieldDefinition, FieldValue } from '../../domain/graphcore'
 import { DefinitionEditor } from './DefinitionEditor'
+import { EnvironmentAssemblyWorkspace } from './EnvironmentAssemblyWorkspace'
 import { AssetPickerDialog, EmptyEditor, MediaThumb, findAssetByKey, resolveItemIconAssetKey } from './shared'
 import { Definition3dPanel } from '../viewer3d/Character3dPanel'
+
+type SpecializedPanelMode = 'details' | 'graph' | '3d'
 
 type SpecializedDefinitionWorkspaceProps = {
   title: string
@@ -14,14 +16,18 @@ type SpecializedDefinitionWorkspaceProps = {
   assets: AssetDefinition[]
   definitions: DefinitionBase[]
   graphKeys: string[]
+  assemblyGraphs: AssemblyGraphDefinition[]
   selectedAsset: AssetDefinition | null
   selectedDefinition: DefinitionBase | null
   onAddCustomField: (itemKey: string, field: FieldDefinition) => void
   onAssignDefinitionIcon: (assetKey: string | null) => void
+  onCreateAssemblyGraph: (environmentKey: string) => string | null
   onCreateDefinition: (archetypeKey?: string | null) => void
   onCreateUrlAsset: (url: string, kind?: 'image' | 'mesh') => void
+  onDeleteAssemblyGraph: (graphKey: string) => void
   onSelectAsset: (key: string | null) => void
   onSelectDefinition: (key: string | null) => void
+  onUpsertAssemblyGraph: (graph: AssemblyGraphDefinition) => void
   onUpdateComponents: (itemKey: string, components: DefinitionBase['components']) => void
   onUpdateFieldValue: (itemKey: string, fieldKey: string, value: FieldValue['value']) => void
   onUpdateItemIdentity: (key: string, changes: Partial<Pick<DefinitionBase, 'name' | 'key' | 'summary' | 'iconAssetKey' | 'archetypeKey'>>) => void
@@ -35,20 +41,24 @@ export function SpecializedDefinitionWorkspace({
   assets,
   definitions,
   graphKeys,
+  assemblyGraphs,
   selectedAsset,
   selectedDefinition,
   onAddCustomField,
   onAssignDefinitionIcon,
+  onCreateAssemblyGraph,
   onCreateDefinition,
   onCreateUrlAsset: _onCreateUrlAsset,
+  onDeleteAssemblyGraph,
   onSelectAsset: _onSelectAsset,
   onSelectDefinition,
+  onUpsertAssemblyGraph,
   onUpdateComponents,
   onUpdateFieldValue,
   onUpdateItemIdentity,
 }: SpecializedDefinitionWorkspaceProps) {
   const [search, setSearch] = useState('')
-  const [panelMode, setPanelMode] = useState<DefinitionPanelMode>('details')
+  const [panelMode, setPanelMode] = useState<SpecializedPanelMode>('details')
   const [isSelectionIconPickerOpen, setIsSelectionIconPickerOpen] = useState(false)
   const filteredDefinitions = useMemo(() => {
     const query = search.trim().toLowerCase()
@@ -71,6 +81,13 @@ export function SpecializedDefinitionWorkspace({
   const imageAssets = assets.filter((asset) => asset.kind === 'image')
   const effectiveSelection = selectedDefinition?.kind === kind ? selectedDefinition : filteredDefinitions[0] ?? null
   const supports3dPanel = (kind === 'character' || kind === 'environment') && Boolean(effectiveSelection)
+  const supportsGraphPanel = kind === 'environment' && Boolean(effectiveSelection)
+  const selectedAssemblyGraph = useMemo(() => {
+    if (effectiveSelection?.kind !== 'environment') return null
+    const geometryBinding = effectiveSelection.components.find((component) => component.type === 'environment_geometry_binding')
+    const graphKey = geometryBinding?.type === 'environment_geometry_binding' ? geometryBinding.config.assemblyGraphKey : null
+    return assemblyGraphs.find((graph) => graph.key === graphKey) ?? null
+  }, [assemblyGraphs, effectiveSelection])
   const definitionPanelControls = supports3dPanel ? (
     <div className="segmented-control panel-mode-control" aria-label="Character panel mode">
       <button
@@ -80,6 +97,15 @@ export function SpecializedDefinitionWorkspace({
       >
         Details
       </button>
+      {supportsGraphPanel ? (
+        <button
+          className={panelMode === 'graph' ? 'segment-button is-active' : 'segment-button'}
+          onClick={() => setPanelMode('graph')}
+          type="button"
+        >
+          Graph
+        </button>
+      ) : null}
       <button
         className={panelMode === '3d' ? 'segment-button is-active' : 'segment-button'}
         onClick={() => setPanelMode('3d')}
@@ -98,6 +124,9 @@ export function SpecializedDefinitionWorkspace({
 
   useEffect(() => {
     if (kind !== 'character' && kind !== 'environment' && panelMode !== 'details') {
+      setPanelMode('details')
+    }
+    if (kind !== 'environment' && panelMode === 'graph') {
       setPanelMode('details')
     }
   }, [kind, panelMode])
@@ -229,7 +258,17 @@ export function SpecializedDefinitionWorkspace({
               {panelMode === '3d' ? (
                 <Definition3dPanel
                   assets={assets}
+                  assemblyGraph={selectedAssemblyGraph}
                   definition={effectiveSelection}
+                  onUpdateComponents={onUpdateComponents}
+                />
+              ) : panelMode === 'graph' && effectiveSelection.kind === 'environment' ? (
+                <EnvironmentAssemblyWorkspace
+                  assemblyGraphs={assemblyGraphs}
+                  environment={effectiveSelection}
+                  onCreateAssemblyGraph={onCreateAssemblyGraph}
+                  onDeleteAssemblyGraph={onDeleteAssemblyGraph}
+                  onUpsertAssemblyGraph={onUpsertAssemblyGraph}
                   onUpdateComponents={onUpdateComponents}
                 />
               ) : (

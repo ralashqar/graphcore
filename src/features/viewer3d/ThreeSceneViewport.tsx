@@ -2,9 +2,12 @@ import { useEffect, useMemo, useState } from 'react'
 import { Bounds, Grid, OrbitControls, useBounds } from '@react-three/drei'
 import { Canvas } from '@react-three/fiber'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
-import { Box3, Group, Mesh, MeshStandardMaterial, Vector3 } from 'three'
+import { Box3, BufferAttribute, BufferGeometry, Group, Line, LineBasicMaterial, Mesh, MeshStandardMaterial, Vector3 } from 'three'
+
+import type { CompiledEnvironmentModel, CompiledMeshPart } from '../../domain/environmentAssembly'
 
 type ThreeSceneViewportProps = {
+  compiledEnvironment?: CompiledEnvironmentModel | null
   meshSourceUrl: string | null
   modelKind: 'character' | 'environment'
   modelLabel: string
@@ -101,6 +104,66 @@ function FloorPlane() {
   )
 }
 
+function compiledPartGeometry(part: CompiledMeshPart) {
+  const geometry = new BufferGeometry()
+
+  if (part.kind === 'line') {
+    geometry.setAttribute('position', new BufferAttribute(new Float32Array(part.linePoints), 3))
+    return geometry
+  }
+
+  geometry.setAttribute('position', new BufferAttribute(new Float32Array(part.positions), 3))
+  if (part.normals.length > 0) {
+    geometry.setAttribute('normal', new BufferAttribute(new Float32Array(part.normals), 3))
+  } else {
+    geometry.computeVertexNormals()
+  }
+  geometry.setIndex(part.indices)
+  return geometry
+}
+
+function CompiledPartView({ part }: { part: CompiledMeshPart }) {
+  const geometry = useMemo(() => compiledPartGeometry(part), [part])
+  const lineObject = useMemo(
+    () => (part.kind === 'line' ? new Line(geometry, new LineBasicMaterial({ color: part.color })) : null),
+    [geometry, part.color, part.kind],
+  )
+
+  useEffect(
+    () => () => {
+      geometry.dispose()
+      lineObject?.material.dispose()
+    },
+    [geometry, lineObject],
+  )
+
+  if (part.kind === 'line') {
+    return lineObject ? <primitive object={lineObject} /> : null
+  }
+
+  return (
+    <mesh castShadow receiveShadow geometry={geometry}>
+      <meshStandardMaterial
+        color={part.color}
+        metalness={part.kind === 'debug' ? 0.15 : 0.08}
+        opacity={part.kind === 'debug' ? 0.92 : 1}
+        roughness={part.kind === 'surface' ? 0.7 : 0.56}
+        transparent={part.kind === 'debug'}
+      />
+    </mesh>
+  )
+}
+
+function CompiledEnvironmentView({ model }: { model: CompiledEnvironmentModel }) {
+  return (
+    <group>
+      {model.parts.map((part) => (
+        <CompiledPartView key={part.id} part={part} />
+      ))}
+    </group>
+  )
+}
+
 function ProxyModel({ kind, subtype }: { kind: 'character' | 'environment'; subtype: string }) {
   if (kind === 'environment') {
     return (
@@ -192,6 +255,7 @@ function ProxyModel({ kind, subtype }: { kind: 'character' | 'environment'; subt
 }
 
 function SceneContents({
+  compiledEnvironment,
   fitKey,
   loadedScene,
   modelKind,
@@ -199,6 +263,7 @@ function SceneContents({
   showFloor,
   showGrid,
 }: {
+  compiledEnvironment: CompiledEnvironmentModel | null
   fitKey: string
   loadedScene: LoadedSceneState
   modelKind: 'character' | 'environment'
@@ -236,7 +301,11 @@ function SceneContents({
       ) : null}
       <Bounds fit clip observe margin={1.2}>
         <FitBounds fitKey={fitKey} />
-        {loadedScene.status === 'ready' ? <primitive object={loadedScene.scene} /> : <ProxyModel kind={modelKind} subtype={modelSubtype} />}
+        {compiledEnvironment
+          ? <CompiledEnvironmentView model={compiledEnvironment} />
+          : loadedScene.status === 'ready'
+            ? <primitive object={loadedScene.scene} />
+            : <ProxyModel kind={modelKind} subtype={modelSubtype} />}
       </Bounds>
       <OrbitControls
         makeDefault
@@ -251,6 +320,7 @@ function SceneContents({
 }
 
 export function ThreeSceneViewport({
+  compiledEnvironment = null,
   meshSourceUrl,
   modelKind,
   modelLabel,
@@ -260,13 +330,14 @@ export function ThreeSceneViewport({
   resetSignal,
 }: ThreeSceneViewportProps) {
   const loadedScene = useLoadedScene(meshSourceUrl)
-  const fitKey = `${modelLabel}:${modelSubtype}:${meshSourceUrl ?? 'proxy'}:${resetSignal}`
+  const fitKey = `${modelLabel}:${modelSubtype}:${compiledEnvironment?.graphKey ?? meshSourceUrl ?? 'proxy'}:${resetSignal}`
 
   return (
     <div className="three-scene-shell">
       <div className="canvas-stage three-scene-canvas">
         <Canvas camera={{ position: [4.8, 3.8, 5.4], fov: 48 }} shadows dpr={[1, 2]}>
           <SceneContents
+            compiledEnvironment={compiledEnvironment}
             fitKey={fitKey}
             loadedScene={loadedScene}
             modelKind={modelKind}
@@ -279,7 +350,9 @@ export function ThreeSceneViewport({
       <div className="three-scene-status">
         <span className="section-label">Viewport</span>
         <strong>
-          {loadedScene.status === 'loading'
+          {compiledEnvironment
+            ? 'Procedural preview active'
+            : loadedScene.status === 'loading'
             ? 'Loading mesh...'
             : loadedScene.status === 'ready'
               ? 'Mesh preview active'
@@ -288,7 +361,9 @@ export function ThreeSceneViewport({
                 : 'Proxy preview active'}
         </strong>
         <span>
-          {loadedScene.status === 'error'
+          {compiledEnvironment
+            ? `${compiledEnvironment.parts.length} compiled part${compiledEnvironment.parts.length === 1 ? '' : 's'} from ${compiledEnvironment.graphKey}.`
+            : loadedScene.status === 'error'
             ? loadedScene.error
             : loadedScene.status === 'ready'
               ? modelLabel

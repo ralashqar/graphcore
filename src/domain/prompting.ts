@@ -1,6 +1,6 @@
 import type { GameSpec, GraphType, PatchOperation, ProjectSnapshot } from './graphcore'
 
-export type PromptTarget = 'graph' | 'node' | 'content'
+export type PromptTarget = 'graph' | 'node' | 'content' | 'environment'
 export type PromptTargetMode = 'current_graph' | 'new_graph' | 'auto'
 export type PromptIntent = 'bootstrap_game' | 'create_content' | 'extend_graph' | 'repair_graph' | 'polish_text'
 export type PromptPhase =
