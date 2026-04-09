@@ -5,7 +5,7 @@ import {
   packPresetMap,
   presetCatalog,
 } from '../../../src/domain/presetCatalog.ts'
-import { createAssemblyNode, environmentAssemblyLibrary, inferAssemblyPorts } from '../../../src/domain/environmentAssembly.ts'
+import { createAssemblyNode, environmentAssemblyLibrary, environmentAssemblyMacroLibrary, inferAssemblyPorts } from '../../../src/domain/environmentAssembly.ts'
 
 const templateCatalog = [
   { key: 'start', type: 'start', graphs: ['narrative_flow', 'quest_flow', 'system_graph'] },
@@ -262,6 +262,7 @@ export function buildPromptContext(payload: Record<string, any>) {
       nodeCount: Array.isArray(graph.nodes) ? graph.nodes.length : 0,
       edgeCount: Array.isArray(graph.edges) ? graph.edges.length : 0,
     })),
+    environmentMacroLibrary: environmentAssemblyMacroLibrary,
     definitionKeysByKind: definitionsByKind,
     archetypes: (payload.snapshot.archetypes ?? []).map((archetype: Record<string, any>) => ({
       key: archetype.key,
@@ -304,6 +305,7 @@ export function graphPassSystemPrompt() {
     'Prefer instantiate_graph_preset when a preset already matches the requested structure.',
     'When the request targets environments, you may create or modify assembly graphs instead of gameplay graphs.',
     'Assembly graphs are buildings-first procedural environment graphs. Bind them to environment definitions with bind_environment_assembly.',
+    'Prefer the environment macro vocabulary when reasoning about environments: room, wing, tower, bridge, courtyard_shell, gable_roof, window_row, switchback_stair.',
     'Do not create definitions, archetypes, or assets in this pass.',
     `Allowed ops only: ${[...GRAPH_PASS_ALLOWED_OPS].join(', ')}.`,
     `Keep operations.length <= ${GRAPH_PASS_MAX_OPS}.`,

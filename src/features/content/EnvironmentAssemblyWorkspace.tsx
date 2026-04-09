@@ -458,7 +458,7 @@ export function EnvironmentAssemblyWorkspace({
           <div className="environment-assembly-prompt">
             <textarea
               aria-label="Environment graph prompt"
-              placeholder="Generate a simple tavern with one main hall, a side tower, and a gable roof."
+              placeholder="Build a castle courtyard with two towers and a bridge, or a curved hall with a mezzanine ring."
               rows={4}
               value={promptText}
               onChange={(event) => onChangePromptText(event.target.value)}
