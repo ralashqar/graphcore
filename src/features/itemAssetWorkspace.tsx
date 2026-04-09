@@ -5,7 +5,6 @@ import { AssetsWorkspace as AssetsWorkspaceView } from './content/AssetsWorkspac
 import { DefinitionEditor } from './content/DefinitionEditor'
 import {
   MediaThumb,
-  QuickUrlAssetForm,
   findAssetByKey,
   resolveItemIconAssetKey,
 } from './content/shared'
@@ -32,9 +31,9 @@ export function ContentWorkspace({
   onAssignItemIcon,
   onCreateArchetype,
   onCreateItem,
-  onCreateUrlAsset,
+  onCreateUrlAsset: _onCreateUrlAsset,
   onRemoveArchetypeField,
-  onSelectAsset,
+  onSelectAsset: _onSelectAsset,
   onSelectArchetype,
   onSelectItem,
   onUpdateArchetypeField,
@@ -101,7 +100,7 @@ export function ContentWorkspace({
   }, [archetypeKindFilter, archetypeSearch, archetypeSort, archetypes])
 
   return (
-    <div className="focus-layout item-layout">
+    <div className="focus-layout item-layout item-layout-wide">
       <aside className="focus-rail">
         <div className="rail-collection-head">
           <div className="segmented-control" aria-label="Content collections">
@@ -291,45 +290,6 @@ export function ContentWorkspace({
         )}
       </section>
 
-      <aside className="context-drawer asset-picker-drawer">
-        <div className="drawer-head">
-          <span className="section-label">Asset Picker</span>
-          <strong>{selectedAsset?.name ?? 'Select an asset'}</strong>
-        </div>
-        <div className="drawer-section">
-          <div className="collection-status">
-            <span className="section-label">Selection</span>
-            <strong>{mode === 'items' ? selectedItem?.name ?? 'No item' : selectedArchetype?.name ?? 'No archetype'}</strong>
-          </div>
-          <div className="asset-grid">
-            {imageAssets.map((asset) => (
-              <button
-                key={asset.key}
-                className={asset.key === selectedAsset?.key ? 'asset-tile is-active' : 'asset-tile'}
-                onClick={() => onSelectAsset(asset.key)}
-                type="button"
-              >
-                <MediaThumb asset={asset} label={asset.name} />
-                <span>{asset.name}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="drawer-section">
-          {mode === 'items' ? (
-            <button className="primary-button compact" onClick={() => onAssignItemIcon(selectedAsset?.key ?? null)} type="button">
-              Set as item icon
-            </button>
-          ) : (
-            <button className="primary-button compact" onClick={() => onAssignArchetypeIcon(selectedAsset?.key ?? null)} type="button">
-              Set as archetype icon
-            </button>
-          )}
-        </div>
-        <div className="drawer-section">
-          <QuickUrlAssetForm onCreateUrlAsset={onCreateUrlAsset} />
-        </div>
-      </aside>
     </div>
   )
 }

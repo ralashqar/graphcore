@@ -311,6 +311,65 @@ export function QuickUrlAssetForm({ onCreateUrlAsset }: { onCreateUrlAsset: (url
   )
 }
 
+export function AssetPickerDialog({
+  assets,
+  onClose,
+  onPickAsset,
+  selectedAssetKey = null,
+  title,
+}: {
+  assets: AssetDefinition[]
+  onClose: () => void
+  onPickAsset: (assetKey: string | null) => void
+  selectedAssetKey?: string | null
+  title: string
+}) {
+  return (
+    <div className="asset-picker-overlay" onClick={onClose} role="presentation">
+      <div className="asset-picker-dialog" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={title}>
+        <div className="asset-picker-dialog-head">
+          <div>
+            <span className="eyebrow">Asset Picker</span>
+            <h3>{title}</h3>
+          </div>
+          <button className="ghost-button compact" onClick={onClose} type="button">
+            Close
+          </button>
+        </div>
+        <div className="asset-picker-dialog-actions">
+          <button className="ghost-button compact" onClick={() => onPickAsset(null)} type="button">
+            Clear icon
+          </button>
+          <span className="subtle-line">{assets.length} image assets</span>
+        </div>
+        <div className="asset-picker-grid">
+          {assets.map((asset) => {
+            const previewUrl = resolveAssetPreviewUrl(asset)
+            const isActive = asset.key === selectedAssetKey
+
+            return (
+              <button
+                key={asset.key}
+                className={isActive ? 'asset-picker-card is-active' : 'asset-picker-card'}
+                onClick={() => onPickAsset(asset.key)}
+                type="button"
+              >
+                <div className="asset-picker-card-media">
+                  {previewUrl ? <img alt={asset.name} src={previewUrl} /> : <MediaThumb asset={asset} label={asset.name} large />}
+                </div>
+                <div className="asset-picker-card-copy">
+                  <strong>{asset.name}</strong>
+                  <span>{asset.key}</span>
+                </div>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function MediaThumb({
   asset,
   label,

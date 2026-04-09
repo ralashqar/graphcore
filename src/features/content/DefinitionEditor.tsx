@@ -1,8 +1,9 @@
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import type { ArchetypeDefinition, AssetDefinition, DefinitionBase, FieldDefinition, FieldValue } from '../../domain/graphcore'
 import { DefinitionComponentsEditor } from './DefinitionComponentsEditor'
 import {
   AddFieldForm,
+  AssetPickerDialog,
   EditableField,
   EmptyEditor,
   MediaThumb,
@@ -20,9 +21,10 @@ export function DefinitionEditor({
   graphKeys,
   imageAssets,
   selectedArchetype,
-  selectedAsset,
+  selectedAsset: _selectedAsset,
   selectedItem,
   headerControls,
+  hideHeader = false,
   onAddCustomField,
   onAssignItemIcon,
   onCreateItem,
@@ -39,6 +41,7 @@ export function DefinitionEditor({
   selectedAsset: AssetDefinition | null
   selectedItem: DefinitionBase | null
   headerControls?: ReactNode
+  hideHeader?: boolean
   onAddCustomField: (itemKey: string, field: FieldDefinition) => void
   onAssignItemIcon: (assetKey: string | null) => void
   onCreateItem: (archetypeKey?: string | null) => void
@@ -58,6 +61,7 @@ export function DefinitionEditor({
   }
 
   const definition = selectedItem
+  const [isIconPickerOpen, setIsIconPickerOpen] = useState(false)
   const selectedArchetypeForItem =
     archetypes.find((archetype) => archetype.key === definition.archetypeKey) ?? null
   const compatibleArchetypes = archetypes.filter((archetype) => archetype.appliesToKind === definition.kind)
@@ -72,64 +76,69 @@ export function DefinitionEditor({
 
   return (
     <div className="item-editor">
-      <div className="item-editor-head">
-        <div className="item-icon-stack">
-          <button className="icon-button" onClick={() => onAssignItemIcon(selectedAsset?.key ?? null)} type="button">
-            <MediaThumb
-              asset={findAssetByKey(assets, resolveItemIconAssetKey(selectedItem, archetypes))}
-              label={definition.name}
-              large
-            />
-          </button>
-          <div className="icon-actions">
-            <button className="ghost-button compact" onClick={() => onAssignItemIcon(selectedAsset?.key ?? null)} type="button">
-              Use selected asset
-            </button>
-            <button className="ghost-button compact" onClick={() => onAssignItemIcon(null)} type="button">
-              Clear icon
+      {!hideHeader ? (
+        <div className="item-editor-head">
+          <div className="item-icon-stack">
+            <button className="icon-button" onClick={() => setIsIconPickerOpen(true)} type="button">
+              <MediaThumb
+                asset={findAssetByKey(assets, resolveItemIconAssetKey(selectedItem, archetypes))}
+                label={definition.name}
+                large
+              />
             </button>
           </div>
-        </div>
 
-        <div className="editor-heading-copy">
-          <span className="eyebrow">Definition Editor</span>
-          <div className="editor-head-toolbar">
-            <div className="chip-row">
-              <span className="chip">{definition.kind}</span>
-              <span className="chip">{definition.archetypeKey ?? 'No archetype'}</span>
-              <span className="chip">{resolvedFields.length} fields</span>
+          <div className="editor-heading-copy">
+            <span className="eyebrow">Definition Editor</span>
+            <div className="editor-head-toolbar">
+              <div className="chip-row">
+                <span className="chip">{definition.kind}</span>
+                <span className="chip">{definition.archetypeKey ?? 'No archetype'}</span>
+                <span className="chip">{resolvedFields.length} fields</span>
+              </div>
+              {headerControls ? <div className="editor-head-controls">{headerControls}</div> : null}
             </div>
-            {headerControls ? <div className="editor-head-controls">{headerControls}</div> : null}
-          </div>
-          <div className="editor-head-grid">
-            <label className="field-block compact-block head-field">
-              <span>Name</span>
-              <input
-                value={definition.name}
-                onChange={(event) => onUpdateItemIdentity(definition.key, { name: event.target.value })}
-              />
-            </label>
-            <label className="field-block compact-block head-field">
-              <span>Key</span>
-              <input
-                value={definition.key}
-                onChange={(event) => onUpdateItemIdentity(definition.key, { key: event.target.value })}
-              />
-            </label>
-            <label className="field-block compact-block head-field full-width">
-              <span>Description</span>
-              <textarea
-                rows={3}
-                value={definition.summary}
-                onChange={(event) => onUpdateItemIdentity(definition.key, { summary: event.target.value })}
-                placeholder="Describe what this definition does and how it should be surfaced."
-              />
-            </label>
+            <div className="editor-head-grid">
+              <label className="field-block compact-block head-field">
+                <span>Name</span>
+                <input
+                  value={definition.name}
+                  onChange={(event) => onUpdateItemIdentity(definition.key, { name: event.target.value })}
+                />
+              </label>
+              <label className="field-block compact-block head-field">
+                <span>Key</span>
+                <input
+                  value={definition.key}
+                  onChange={(event) => onUpdateItemIdentity(definition.key, { key: event.target.value })}
+                />
+              </label>
+              <label className="field-block compact-block head-field full-width">
+                <span>Description</span>
+                <textarea
+                  rows={3}
+                  value={definition.summary}
+                  onChange={(event) => onUpdateItemIdentity(definition.key, { summary: event.target.value })}
+                  placeholder="Describe what this definition does and how it should be surfaced."
+                />
+              </label>
+            </div>
           </div>
         </div>
-      </div>
+      ) : null}
 
       <div className="editor-grid">
+        {hideHeader ? (
+          <label className="field-block full-width">
+            <span>Description</span>
+            <textarea
+              rows={4}
+              value={definition.summary}
+              onChange={(event) => onUpdateItemIdentity(definition.key, { summary: event.target.value })}
+              placeholder="Describe what this definition does and how it should be surfaced."
+            />
+          </label>
+        ) : null}
         <label className="field-block">
           <span>Archetype</span>
           <select
@@ -217,6 +226,19 @@ export function DefinitionEditor({
         </div>
         <AddFieldForm actionLabel="Add definition field" onAddField={(field) => onAddCustomField(definition.key, field)} />
       </div>
+
+      {isIconPickerOpen ? (
+        <AssetPickerDialog
+          assets={imageAssets}
+          onClose={() => setIsIconPickerOpen(false)}
+          onPickAsset={(assetKey) => {
+            onAssignItemIcon(assetKey)
+            setIsIconPickerOpen(false)
+          }}
+          selectedAssetKey={definition.iconAssetKey}
+          title={`Choose icon for ${definition.name}`}
+        />
+      ) : null}
     </div>
   )
 }

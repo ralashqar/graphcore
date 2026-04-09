@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { CharacterPanelMode } from './types'
 import type { ArchetypeDefinition, AssetDefinition, DefinitionBase, FieldDefinition, FieldValue } from '../../domain/graphcore'
 import { DefinitionEditor } from './DefinitionEditor'
-import { EmptyEditor, MediaThumb, QuickUrlAssetForm, findAssetByKey, resolveItemIconAssetKey } from './shared'
+import { AssetPickerDialog, EmptyEditor, MediaThumb, findAssetByKey, resolveItemIconAssetKey } from './shared'
 import { Character3dPanel } from '../viewer3d/Character3dPanel'
 
 type SpecializedDefinitionWorkspaceProps = {
@@ -40,8 +40,8 @@ export function SpecializedDefinitionWorkspace({
   onAddCustomField,
   onAssignDefinitionIcon,
   onCreateDefinition,
-  onCreateUrlAsset,
-  onSelectAsset,
+  onCreateUrlAsset: _onCreateUrlAsset,
+  onSelectAsset: _onSelectAsset,
   onSelectDefinition,
   onUpdateComponents,
   onUpdateFieldValue,
@@ -49,6 +49,7 @@ export function SpecializedDefinitionWorkspace({
 }: SpecializedDefinitionWorkspaceProps) {
   const [search, setSearch] = useState('')
   const [panelMode, setPanelMode] = useState<CharacterPanelMode>('details')
+  const [isCharacterIconPickerOpen, setIsCharacterIconPickerOpen] = useState(false)
   const filteredDefinitions = useMemo(() => {
     const query = search.trim().toLowerCase()
     return definitions
@@ -101,7 +102,7 @@ export function SpecializedDefinitionWorkspace({
   }, [kind, panelMode])
 
   return (
-    <div className="focus-layout item-layout">
+    <div className="focus-layout item-layout item-layout-wide">
       <aside className="focus-rail">
         <div className="rail-collection-head">
           <div>
@@ -184,13 +185,72 @@ export function SpecializedDefinitionWorkspace({
 
       <section className="main-surface detail-surface item-editor-surface">
         {effectiveSelection ? (
-          kind === 'character' && panelMode === '3d' ? (
-            <Character3dPanel
-              assets={assets}
-              character={effectiveSelection}
-              headerControls={characterPanelControls}
-              onUpdateComponents={onUpdateComponents}
-            />
+          kind === 'character' ? (
+            <div className="character-panel-shell">
+              <div className="item-editor-head character-panel-header">
+                <div className="item-icon-stack">
+                  <button className="icon-button" onClick={() => setIsCharacterIconPickerOpen(true)} type="button">
+                    <MediaThumb
+                      asset={findAssetByKey(assets, resolveItemIconAssetKey(effectiveSelection, archetypes))}
+                      label={effectiveSelection.name}
+                      large
+                    />
+                  </button>
+                </div>
+                <div className="editor-heading-copy">
+                  <span className="eyebrow">Character Editor</span>
+                  <div className="editor-head-toolbar character-head-toolbar">
+                    <div className="chip-row">
+                      <span className="chip">{effectiveSelection.kind}</span>
+                      <span className="chip">{effectiveSelection.archetypeKey ?? 'No archetype'}</span>
+                      <span className="chip">{compatibleArchetypes.length} archetypes</span>
+                    </div>
+                    <div className="editor-head-inline-fields">
+                      <label className="inline-head-field">
+                        <span>Name</span>
+                        <input
+                          value={effectiveSelection.name}
+                          onChange={(event) => onUpdateItemIdentity(effectiveSelection.key, { name: event.target.value })}
+                        />
+                      </label>
+                      <label className="inline-head-field">
+                        <span>Key</span>
+                        <input
+                          value={effectiveSelection.key}
+                          onChange={(event) => onUpdateItemIdentity(effectiveSelection.key, { key: event.target.value })}
+                        />
+                      </label>
+                    </div>
+                    {characterPanelControls ? <div className="editor-head-controls">{characterPanelControls}</div> : null}
+                  </div>
+                </div>
+              </div>
+              {panelMode === '3d' ? (
+                <Character3dPanel
+                  assets={assets}
+                  character={effectiveSelection}
+                  onUpdateComponents={onUpdateComponents}
+                />
+              ) : (
+                <DefinitionEditor
+                  archetypes={compatibleArchetypes}
+                  assets={assets}
+                  definitions={definitions}
+                  graphKeys={graphKeys}
+                  imageAssets={imageAssets}
+                  selectedArchetype={compatibleArchetypes.find((archetype) => archetype.key === effectiveSelection.archetypeKey) ?? null}
+                  selectedAsset={selectedAsset}
+                  selectedItem={effectiveSelection}
+                  hideHeader
+                  onAddCustomField={onAddCustomField}
+                  onAssignItemIcon={onAssignDefinitionIcon}
+                  onCreateItem={(archetypeKey) => onCreateDefinition(archetypeKey)}
+                  onUpdateComponents={onUpdateComponents}
+                  onUpdateFieldValue={onUpdateFieldValue}
+                  onUpdateItemIdentity={onUpdateItemIdentity}
+                />
+              )}
+            </div>
           ) : (
             <DefinitionEditor
               archetypes={compatibleArchetypes}
@@ -201,7 +261,6 @@ export function SpecializedDefinitionWorkspace({
               selectedArchetype={compatibleArchetypes.find((archetype) => archetype.key === effectiveSelection.archetypeKey) ?? null}
               selectedAsset={selectedAsset}
               selectedItem={effectiveSelection}
-              headerControls={characterPanelControls}
               onAddCustomField={onAddCustomField}
               onAssignItemIcon={onAssignDefinitionIcon}
               onCreateItem={(archetypeKey) => onCreateDefinition(archetypeKey)}
@@ -218,41 +277,20 @@ export function SpecializedDefinitionWorkspace({
             title={`No ${title.toLowerCase()} yet`}
           />
         )}
-      </section>
 
-      <aside className="context-drawer asset-picker-drawer">
-        <div className="drawer-head">
-          <span className="section-label">Asset Picker</span>
-          <strong>{selectedAsset?.name ?? 'Select an asset'}</strong>
-        </div>
-        <div className="drawer-section">
-          <div className="collection-status">
-            <span className="section-label">Selection</span>
-            <strong>{effectiveSelection?.name ?? `No ${title.slice(0, -1).toLowerCase()}`}</strong>
-          </div>
-          <div className="asset-grid">
-            {imageAssets.map((asset) => (
-              <button
-                key={asset.key}
-                className={asset.key === selectedAsset?.key ? 'asset-tile is-active' : 'asset-tile'}
-                onClick={() => onSelectAsset(asset.key)}
-                type="button"
-              >
-                <MediaThumb asset={asset} label={asset.name} />
-                <span>{asset.name}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="drawer-section">
-          <button className="primary-button compact" onClick={() => onAssignDefinitionIcon(selectedAsset?.key ?? null)} type="button">
-            Set as icon
-          </button>
-        </div>
-        <div className="drawer-section">
-          <QuickUrlAssetForm onCreateUrlAsset={onCreateUrlAsset} />
-        </div>
-      </aside>
+        {kind === 'character' && effectiveSelection && isCharacterIconPickerOpen ? (
+          <AssetPickerDialog
+            assets={imageAssets}
+            onClose={() => setIsCharacterIconPickerOpen(false)}
+            onPickAsset={(assetKey) => {
+              onAssignDefinitionIcon(assetKey)
+              setIsCharacterIconPickerOpen(false)
+            }}
+            selectedAssetKey={effectiveSelection.iconAssetKey}
+            title={`Choose icon for ${effectiveSelection.name}`}
+          />
+        ) : null}
+      </section>
     </div>
   )
 }

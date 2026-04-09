@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react'
+import { useMemo, useState } from 'react'
 
 import { visualAssetGenerationService } from '../../application/services/visualAssetGenerationService'
 import { isImageAsset, isMeshAsset, resolveAssetSourceUrl } from '../../domain/assets'
@@ -10,11 +10,10 @@ import { ThreeSceneViewport } from './ThreeSceneViewport'
 type Character3dPanelProps = {
   assets: AssetDefinition[]
   character: DefinitionBase
-  headerControls?: ReactNode
   onUpdateComponents: (itemKey: string, components: DefinitionBase['components']) => void
 }
 
-export function Character3dPanel({ assets, character, headerControls, onUpdateComponents }: Character3dPanelProps) {
+export function Character3dPanel({ assets, character, onUpdateComponents }: Character3dPanelProps) {
   const [showFloor, setShowFloor] = useState(true)
   const [showGrid, setShowGrid] = useState(false)
   const [resetSignal, setResetSignal] = useState(0)
@@ -64,19 +63,6 @@ export function Character3dPanel({ assets, character, headerControls, onUpdateCo
     <div className="character-3d-panel">
       <div className="character-3d-layout">
         <div className="character-3d-stage">
-          <div className="surface-head character-3d-head">
-            <div>
-              <span className="eyebrow">3D Preview</span>
-              <h2>{character.name}</h2>
-            </div>
-            <div className="character-3d-head-side">
-              <div className="chip-row">
-                <span className="chip">{subtype}</span>
-                <span className="chip">{meshAsset ? 'Mesh bound' : 'Proxy only'}</span>
-              </div>
-              {headerControls ? <div className="editor-head-controls">{headerControls}</div> : null}
-            </div>
-          </div>
           <ThreeSceneViewport
             meshSourceUrl={meshSourceUrl}
             modelLabel={character.name}

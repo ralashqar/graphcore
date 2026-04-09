@@ -1441,6 +1441,10 @@ button:disabled {
   grid-template-columns: 312px minmax(0, 1fr) 308px;
 }
 
+.item-layout.item-layout-wide {
+  grid-template-columns: 312px minmax(0, 1fr);
+}
+
 .item-editor-surface {
   overflow: auto;
 }
@@ -1535,6 +1539,17 @@ button:disabled {
   min-width: 0;
 }
 
+.character-panel-shell {
+  width: 100%;
+  display: grid;
+  gap: 20px;
+  align-content: start;
+}
+
+.character-panel-header {
+  width: 100%;
+}
+
 .character-3d-layout {
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(280px, 360px);
@@ -1550,16 +1565,6 @@ button:disabled {
 .character-3d-stage {
   display: grid;
   gap: 14px;
-}
-
-.character-3d-head {
-  margin-bottom: 0;
-}
-
-.character-3d-head-side {
-  display: grid;
-  justify-items: end;
-  gap: 10px;
 }
 
 .character-3d-sidebar {
@@ -1662,10 +1667,57 @@ button:disabled {
   flex-wrap: wrap;
 }
 
+.character-head-toolbar {
+  align-items: center;
+}
+
 .editor-head-controls {
   display: flex;
   align-items: center;
   justify-content: flex-end;
+}
+
+.editor-head-inline-fields {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1 1 420px;
+  min-width: 0;
+}
+
+.inline-head-field {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: rgba(7, 11, 18, 0.72);
+}
+
+.inline-head-field span {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.inline-head-field input {
+  min-width: 0;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  outline: none;
+}
+
+.inline-head-field:first-child {
+  flex: 1 1 220px;
+}
+
+.inline-head-field:last-child {
+  flex: 1 1 180px;
 }
 
 .editor-head-grid {
@@ -1798,6 +1850,106 @@ button:disabled {
 .quick-url-form {
   display: grid;
   gap: 12px;
+}
+
+.asset-picker-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 42;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(3, 6, 10, 0.7);
+  backdrop-filter: blur(10px);
+}
+
+.asset-picker-dialog {
+  width: min(980px, 100%);
+  max-height: min(82vh, 860px);
+  display: grid;
+  gap: 14px;
+  overflow: auto;
+  padding: 20px;
+  border-radius: 24px;
+  border: 1px solid var(--line);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.01)),
+    var(--bg-elev-2);
+  box-shadow: var(--shadow);
+}
+
+.asset-picker-dialog-head,
+.asset-picker-dialog-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.asset-picker-dialog-head h3 {
+  margin-top: 6px;
+}
+
+.asset-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.asset-picker-card {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  padding: 12px;
+  border-radius: 18px;
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.asset-picker-card:hover {
+  border-color: rgba(94, 234, 212, 0.18);
+  background: rgba(94, 234, 212, 0.05);
+}
+
+.asset-picker-card.is-active {
+  border-color: rgba(94, 234, 212, 0.26);
+  background: rgba(94, 234, 212, 0.09);
+}
+
+.asset-picker-card-media {
+  min-height: 136px;
+  display: grid;
+  place-items: center;
+  padding: 10px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: rgba(7, 11, 18, 0.9);
+}
+
+.asset-picker-card-media img {
+  width: 100%;
+  height: auto;
+  max-height: 180px;
+  object-fit: contain;
+  display: block;
+}
+
+.asset-picker-card-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.asset-picker-card-copy strong,
+.asset-picker-card-copy span {
+  overflow-wrap: anywhere;
+}
+
+.asset-picker-card-copy span {
+  color: var(--muted);
+  font-size: 0.82rem;
 }
 
 .upload-card {
@@ -2054,17 +2206,26 @@ button:disabled {
     width: 100%;
   }
 
-  .editor-head-controls,
-  .character-3d-head-side {
+  .editor-head-controls {
     justify-content: flex-start;
-    justify-items: start;
+  }
+
+  .editor-head-inline-fields {
+    width: 100%;
+    flex-basis: 100%;
+    flex-wrap: wrap;
+  }
+
+  .inline-head-field {
+    flex: 1 1 100%;
   }
 
   .editor-grid,
   .editor-grid.compact,
   .field-grid,
   .asset-import-grid,
-  .asset-grid {
+  .asset-grid,
+  .asset-picker-grid {
     grid-template-columns: 1fr;
   }
 }

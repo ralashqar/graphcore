@@ -1,11 +1,12 @@
+import { useState } from 'react'
 import type { ArchetypeDefinition, AssetDefinition, FieldDefinition } from '../../domain/graphcore'
-import { AddFieldForm, ArchetypeFieldEditor, EmptyEditor, MediaThumb, findAssetByKey } from './shared'
+import { AddFieldForm, ArchetypeFieldEditor, AssetPickerDialog, EmptyEditor, MediaThumb, findAssetByKey } from './shared'
 import type { ArchetypeIdentityChanges } from './types'
 
 export function ArchetypeEditor({
   imageAssets,
   selectedArchetype,
-  selectedAsset,
+  selectedAsset: _selectedAsset,
   onAddArchetypeField,
   onAssignArchetypeIcon,
   onCreateArchetype,
@@ -23,6 +24,8 @@ export function ArchetypeEditor({
   onUpdateArchetypeField: (archetypeKey: string, fieldKey: string, changes: Partial<FieldDefinition>) => void
   onUpdateArchetypeIdentity: (key: string, changes: ArchetypeIdentityChanges) => void
 }) {
+  const [isIconPickerOpen, setIsIconPickerOpen] = useState(false)
+
   if (!selectedArchetype) {
     return (
       <EmptyEditor
@@ -38,17 +41,9 @@ export function ArchetypeEditor({
     <div className="item-editor">
       <div className="item-editor-head">
         <div className="item-icon-stack">
-          <button className="icon-button" onClick={() => onAssignArchetypeIcon(selectedAsset?.key ?? null)} type="button">
+          <button className="icon-button" onClick={() => setIsIconPickerOpen(true)} type="button">
             <MediaThumb asset={findAssetByKey(imageAssets, selectedArchetype.iconAssetKey)} label={selectedArchetype.name} large />
           </button>
-          <div className="icon-actions">
-            <button className="ghost-button compact" onClick={() => onAssignArchetypeIcon(selectedAsset?.key ?? null)} type="button">
-              Use selected asset
-            </button>
-            <button className="ghost-button compact" onClick={() => onAssignArchetypeIcon(null)} type="button">
-              Clear icon
-            </button>
-          </div>
         </div>
 
         <div className="editor-heading-copy">
@@ -160,6 +155,19 @@ export function ArchetypeEditor({
           onAddField={(field) => onAddArchetypeField(selectedArchetype.key, field)}
         />
       </div>
+
+      {isIconPickerOpen ? (
+        <AssetPickerDialog
+          assets={imageAssets}
+          onClose={() => setIsIconPickerOpen(false)}
+          onPickAsset={(assetKey) => {
+            onAssignArchetypeIcon(assetKey)
+            setIsIconPickerOpen(false)
+          }}
+          selectedAssetKey={selectedArchetype.iconAssetKey}
+          title={`Choose icon for ${selectedArchetype.name}`}
+        />
+      ) : null}
     </div>
   )
 }
