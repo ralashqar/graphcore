@@ -21,16 +21,20 @@ type SpecializedDefinitionWorkspaceProps = {
   selectedDefinition: DefinitionBase | null
   onAddCustomField: (itemKey: string, field: FieldDefinition) => void
   onAssignDefinitionIcon: (assetKey: string | null) => void
+  isGeneratingPrompt: boolean
   onCreateAssemblyGraph: (environmentKey: string) => string | null
   onCreateDefinition: (archetypeKey?: string | null) => void
   onCreateUrlAsset: (url: string, kind?: 'image' | 'mesh') => void
   onDeleteAssemblyGraph: (graphKey: string) => void
+  onChangePromptText: (value: string) => void
+  onGeneratePrompt: () => void
   onSelectAsset: (key: string | null) => void
   onSelectDefinition: (key: string | null) => void
   onUpsertAssemblyGraph: (graph: AssemblyGraphDefinition) => void
   onUpdateComponents: (itemKey: string, components: DefinitionBase['components']) => void
   onUpdateFieldValue: (itemKey: string, fieldKey: string, value: FieldValue['value']) => void
   onUpdateItemIdentity: (key: string, changes: Partial<Pick<DefinitionBase, 'name' | 'key' | 'summary' | 'iconAssetKey' | 'archetypeKey'>>) => void
+  promptText: string
 }
 
 export function SpecializedDefinitionWorkspace({
@@ -46,16 +50,20 @@ export function SpecializedDefinitionWorkspace({
   selectedDefinition,
   onAddCustomField,
   onAssignDefinitionIcon,
+  isGeneratingPrompt,
   onCreateAssemblyGraph,
   onCreateDefinition,
   onCreateUrlAsset: _onCreateUrlAsset,
   onDeleteAssemblyGraph,
+  onChangePromptText,
+  onGeneratePrompt,
   onSelectAsset: _onSelectAsset,
   onSelectDefinition,
   onUpsertAssemblyGraph,
   onUpdateComponents,
   onUpdateFieldValue,
   onUpdateItemIdentity,
+  promptText,
 }: SpecializedDefinitionWorkspaceProps) {
   const [search, setSearch] = useState('')
   const [panelMode, setPanelMode] = useState<SpecializedPanelMode>('details')
@@ -266,10 +274,15 @@ export function SpecializedDefinitionWorkspace({
                 <EnvironmentAssemblyWorkspace
                   assemblyGraphs={assemblyGraphs}
                   environment={effectiveSelection}
+                  isGeneratingPrompt={isGeneratingPrompt}
+                  onChangePromptText={onChangePromptText}
                   onCreateAssemblyGraph={onCreateAssemblyGraph}
                   onDeleteAssemblyGraph={onDeleteAssemblyGraph}
+                  onGeneratePrompt={onGeneratePrompt}
+                  onOpenPreview={() => setPanelMode('3d')}
                   onUpsertAssemblyGraph={onUpsertAssemblyGraph}
                   onUpdateComponents={onUpdateComponents}
+                  promptText={promptText}
                 />
               ) : (
                 <DefinitionEditor

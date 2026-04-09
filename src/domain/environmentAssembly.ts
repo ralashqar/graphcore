@@ -344,6 +344,13 @@ export type AssemblyTemplateGroup = {
   templates: AssemblyTemplateDefinition[]
 }
 
+export type AssemblyGraphPresetDefinition = {
+  key: string
+  label: string
+  summary: string
+  build: (graphKey: string, environmentKey?: string | null) => AssemblyGraphDefinition
+}
+
 function port(id: string, label: string, direction: 'input' | 'output', valueType: AssemblyValueType, multiple = false): AssemblyPortDefinition {
   return { id, label, direction, valueType, multiple }
 }
@@ -564,6 +571,143 @@ export function createAssemblyGraph(input: {
     edges: [],
   }
 }
+
+function presetNode(
+  kind: AssemblyNodeKind,
+  key: string,
+  position: { x: number; y: number },
+  params: Record<string, unknown> = {},
+  title?: string,
+): AssemblyNodeDefinition {
+  const node = createAssemblyNode(kind, 1, position)
+  return {
+    ...node,
+    id: `preset-${key}`,
+    key,
+    title: title ?? node.title,
+    params: { ...node.params, ...params },
+  }
+}
+
+function presetEdge(
+  key: string,
+  sourceNodeKey: string,
+  sourcePortId: string,
+  targetNodeKey: string,
+  targetPortId: string,
+): AssemblyEdgeDefinition {
+  return {
+    id: `preset-${key}`,
+    key,
+    source: { nodeKey: sourceNodeKey, portId: sourcePortId },
+    target: { nodeKey: targetNodeKey, portId: targetPortId },
+    metadata: {},
+  }
+}
+
+export const environmentAssemblyPresets: AssemblyGraphPresetDefinition[] = [
+  {
+    key: 'starter_room',
+    label: 'Starter Room',
+    summary: 'Rectangle footprint, room shell, floor plate, and gable roof.',
+    build: (graphKey, environmentKey) => ({
+      id: `preset-graph-${graphKey}`,
+      key: graphKey,
+      name: 'Starter Room',
+      summary: 'Simple room preset for fast compile checks.',
+      boundEnvironmentKey: environmentKey ?? null,
+      metadata: { presetKey: 'starter_room' },
+      nodes: [
+        presetNode('rectangle', 'rect_main', { x: 80, y: 140 }, { width: 8, depth: 6 }, 'Main Footprint'),
+        presetNode('footprint', 'footprint_main', { x: 300, y: 140 }, {}, 'Footprint'),
+        presetNode('room', 'room_main', { x: 540, y: 80 }, { height: 3.2, wallThickness: 0.24, floorThickness: 0.2 }, 'Room'),
+        presetNode('floor_plate', 'floor_main', { x: 540, y: 240 }, { elevation: 0, thickness: 0.12 }, 'Floor Plate'),
+        presetNode('roof_gable', 'roof_main', { x: 780, y: 140 }, { height: 1.8 }, 'Gable Roof'),
+        presetNode('environment_output', `${graphKey}.output`, { x: 1020, y: 140 }, {}, 'Environment Output'),
+      ],
+      edges: [
+        presetEdge('rect_to_footprint', 'rect_main', 'profile', 'footprint_main', 'profile'),
+        presetEdge('footprint_to_room', 'footprint_main', 'profile_out', 'room_main', 'profile'),
+        presetEdge('footprint_to_floor', 'footprint_main', 'profile_out', 'floor_main', 'profile'),
+        presetEdge('footprint_to_roof', 'footprint_main', 'profile_out', 'roof_main', 'profile'),
+        presetEdge('room_to_output', 'room_main', 'solid', `${graphKey}.output`, 'solids'),
+        presetEdge('floor_to_output', 'floor_main', 'surface', `${graphKey}.output`, 'surfaces'),
+        presetEdge('roof_to_output', 'roof_main', 'solid', `${graphKey}.output`, 'solids'),
+        presetEdge('anchors_to_output', 'room_main', 'anchors', `${graphKey}.output`, 'anchors'),
+      ],
+    }),
+  },
+  {
+    key: 'tower_union',
+    label: 'Tower Union',
+    summary: 'Cylinder tower fused with a rectangular room and a pointed roof.',
+    build: (graphKey, environmentKey) => ({
+      id: `preset-graph-${graphKey}`,
+      key: graphKey,
+      name: 'Tower Union',
+      summary: 'Boolean union test between tower and room masses.',
+      boundEnvironmentKey: environmentKey ?? null,
+      metadata: { presetKey: 'tower_union' },
+      nodes: [
+        presetNode('rectangle', 'rect_wing', { x: 60, y: 120 }, { width: 8, depth: 5 }, 'Wing Footprint'),
+        presetNode('prism', 'wing_mass', { x: 300, y: 120 }, { height: 4 }, 'Wing Prism'),
+        presetNode('regular_polygon', 'tower_profile', { x: 60, y: 300 }, { sides: 20, radius: 2.8 }, 'Tower Footprint'),
+        presetNode('prism', 'tower_mass', { x: 300, y: 300 }, { height: 7 }, 'Tower Prism'),
+        presetNode('transform', 'tower_shift', { x: 520, y: 300 }, { translate: { x: 2.4, y: 0, z: 0 }, rotate: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } }, 'Shift Tower'),
+        presetNode('union', 'union_mass', { x: 760, y: 210 }, {}, 'Union'),
+        presetNode('roof_pointed', 'tower_roof', { x: 520, y: 420 }, { height: 2.8 }, 'Tower Cap'),
+        presetNode('environment_output', `${graphKey}.output`, { x: 1000, y: 220 }, {}, 'Environment Output'),
+      ],
+      edges: [
+        presetEdge('rect_to_wing', 'rect_wing', 'profile', 'wing_mass', 'profile'),
+        presetEdge('tower_profile_to_mass', 'tower_profile', 'profile', 'tower_mass', 'profile'),
+        presetEdge('tower_mass_to_shift', 'tower_mass', 'solid', 'tower_shift', 'source'),
+        presetEdge('wing_to_union', 'wing_mass', 'solid', 'union_mass', 'a'),
+        presetEdge('tower_to_union', 'tower_shift', 'solid', 'union_mass', 'b'),
+        presetEdge('tower_profile_to_roof', 'tower_profile', 'profile', 'tower_roof', 'profile'),
+        presetEdge('union_to_output', 'union_mass', 'solid', `${graphKey}.output`, 'solids'),
+        presetEdge('roof_to_output', 'tower_roof', 'solid', `${graphKey}.output`, 'solids'),
+      ],
+    }),
+  },
+  {
+    key: 'mezzanine_walkway',
+    label: 'Mezzanine Walkway',
+    summary: 'Outer room shell plus inner hole loop for mezzanine test geometry.',
+    build: (graphKey, environmentKey) => ({
+      id: `preset-graph-${graphKey}`,
+      key: graphKey,
+      name: 'Mezzanine Walkway',
+      summary: 'Hole-loop and mezzanine compile test.',
+      boundEnvironmentKey: environmentKey ?? null,
+      metadata: { presetKey: 'mezzanine_walkway' },
+      nodes: [
+        presetNode('rectangle', 'outer_rect', { x: 60, y: 120 }, { width: 12, depth: 10 }, 'Outer Loop'),
+        presetNode('rectangle', 'inner_rect', { x: 60, y: 320 }, { width: 5, depth: 4 }, 'Inner Hole'),
+        presetNode('hole_loop', 'walkway_profile', { x: 320, y: 220 }, {}, 'Walkway Profile'),
+        presetNode('room', 'hall_room', { x: 580, y: 100 }, { height: 4.5, wallThickness: 0.22, floorThickness: 0.2 }, 'Hall Room'),
+        presetNode('mezzanine', 'side_mezz', { x: 580, y: 280 }, { elevation: 2.1, thickness: 0.18 }, 'Mezzanine'),
+        presetNode('roof_hip', 'hall_roof', { x: 820, y: 100 }, { height: 1.6 }, 'Hip Roof'),
+        presetNode('environment_output', `${graphKey}.output`, { x: 1040, y: 180 }, {}, 'Environment Output'),
+      ],
+      edges: [
+        presetEdge('outer_to_hole', 'outer_rect', 'profile', 'walkway_profile', 'profile'),
+        presetEdge('inner_to_hole', 'inner_rect', 'profile', 'walkway_profile', 'profile_hole'),
+        presetEdge('walkway_to_room', 'walkway_profile', 'profile_out', 'hall_room', 'profile'),
+        presetEdge('walkway_to_mezz', 'walkway_profile', 'profile_out', 'side_mezz', 'profile'),
+        presetEdge('walkway_to_roof', 'walkway_profile', 'profile_out', 'hall_roof', 'profile'),
+        presetEdge('room_to_output', 'hall_room', 'solid', `${graphKey}.output`, 'solids'),
+        presetEdge('mezz_to_output', 'side_mezz', 'surface', `${graphKey}.output`, 'surfaces'),
+        presetEdge('roof_to_output', 'hall_roof', 'solid', `${graphKey}.output`, 'solids'),
+        presetEdge('room_anchors_to_output', 'hall_room', 'anchors', `${graphKey}.output`, 'anchors'),
+      ],
+    }),
+  },
+]
+
+export const environmentAssemblyPresetsByKey = new Map(
+  environmentAssemblyPresets.map((preset) => [preset.key, preset] as const),
+)
 
 export function environmentAssemblyGraphToDsl(graph: AssemblyGraphDefinition) {
   return JSON.stringify({

@@ -1227,16 +1227,20 @@ export default function App() {
                 selectedDefinition={selectedDefinition?.kind === 'character' ? selectedDefinition : null}
                 onAddCustomField={addCustomField}
                 onAssignDefinitionIcon={assignAssetToSelectedItem}
+                isGeneratingPrompt={isGeneratingPatch}
                 onCreateAssemblyGraph={createEnvironmentAssemblyGraph}
                 onCreateDefinition={createCharacter}
                 onCreateUrlAsset={createUrlAsset}
+                onChangePromptText={setPromptText}
                 onDeleteAssemblyGraph={deleteAssemblyGraph}
+                onGeneratePrompt={handleGeneratePatch}
                 onSelectAsset={setSelectedAssetKey}
                 onSelectDefinition={setSelectedDefinitionKey}
                 onUpsertAssemblyGraph={upsertAssemblyGraph}
                 onUpdateComponents={updateDefinitionComponents}
                 onUpdateFieldValue={updateItemFieldValue}
                 onUpdateItemIdentity={updateItemIdentity}
+                promptText={promptText}
               />
             ) : null}
             {activeTab === 'environments' ? (
@@ -1253,16 +1257,20 @@ export default function App() {
                 selectedDefinition={selectedDefinition?.kind === 'environment' ? selectedDefinition : null}
                 onAddCustomField={addCustomField}
                 onAssignDefinitionIcon={assignAssetToSelectedItem}
+                isGeneratingPrompt={isGeneratingPatch}
                 onCreateAssemblyGraph={createEnvironmentAssemblyGraph}
                 onCreateDefinition={createEnvironment}
                 onCreateUrlAsset={createUrlAsset}
+                onChangePromptText={setPromptText}
                 onDeleteAssemblyGraph={deleteAssemblyGraph}
+                onGeneratePrompt={handleGeneratePatch}
                 onSelectAsset={setSelectedAssetKey}
                 onSelectDefinition={setSelectedDefinitionKey}
                 onUpsertAssemblyGraph={upsertAssemblyGraph}
                 onUpdateComponents={updateDefinitionComponents}
                 onUpdateFieldValue={updateItemFieldValue}
                 onUpdateItemIdentity={updateItemIdentity}
+                promptText={promptText}
               />
             ) : null}
             {activeTab === 'assets' ? <AssetsWorkspace assets={snapshot.assets} selectedAsset={selectedAsset} selectedItem={selectedDefinition} onAssignAssetToSelectedItem={assignAssetToSelectedItem} onCreateUrlAsset={createUrlAsset} onSelectAsset={setSelectedAssetKey} onUploadAsset={handleAssetUpload} onUpdateAsset={updateAssetIdentity} /> : null}

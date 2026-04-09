@@ -42,6 +42,7 @@ export function Definition3dPanel({ assets, assemblyGraph = null, definition, on
   const previewImageAsset = findAssetByKey(assets, renderBinding.previewImageAssetKey)
   const meshSourceUrl = resolveAssetSourceUrl(meshAsset)
   const meshSourceLabel = meshSourceUrl ?? 'No mesh source bound'
+  const isProceduralEnvironment = isEnvironment && geometryBinding?.sourceMode === 'procedural_graph'
   const compiledEnvironment = useMemo(
     () =>
       isEnvironment && geometryBinding?.sourceMode === 'procedural_graph' && assemblyGraph
@@ -136,76 +137,78 @@ export function Definition3dPanel({ assets, assemblyGraph = null, definition, on
             </div>
           </div>
 
-          <div className="editor-section">
-            <div className="section-head">
-              <div>
-                <span className="eyebrow">Binding</span>
-                <h3>Mesh and preview assets</h3>
+          {!isProceduralEnvironment ? (
+            <div className="editor-section">
+              <div className="section-head">
+                <div>
+                  <span className="eyebrow">Binding</span>
+                  <h3>Mesh and preview assets</h3>
+                </div>
+                <p className="subtle-line">
+                  {isEnvironment
+                    ? 'Environments use `environment_render_binding`; this tab gives it a structured editor.'
+                    : 'Characters use `render_3d_binding`; this tab gives it a structured editor.'}
+                </p>
               </div>
-              <p className="subtle-line">
-                {isEnvironment
-                  ? 'Environments use `environment_render_binding`; this tab gives it a structured editor.'
-                  : 'Characters use `render_3d_binding`; this tab gives it a structured editor.'}
-              </p>
-            </div>
-            <div className="editor-grid compact">
-              <label className="field-block full-width">
-                <span>Primary Mesh</span>
-                <select
-                  value={renderBinding.primaryMeshAssetKey ?? ''}
-                  onChange={(event) => updateRenderBinding({ primaryMeshAssetKey: event.target.value || null })}
-                >
-                  <option value="">No mesh bound</option>
-                  {meshAssets.map((asset) => (
-                    <option key={asset.key} value={asset.key}>
-                      {asset.name} ({asset.key})
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="field-block full-width">
-                <span>Preview Image</span>
-                <select
-                  value={renderBinding.previewImageAssetKey ?? ''}
-                  onChange={(event) => updateRenderBinding({ previewImageAssetKey: event.target.value || null })}
-                >
-                  <option value="">No concept image</option>
-                  {imageAssets.map((asset) => (
-                    <option key={asset.key} value={asset.key}>
-                      {asset.name} ({asset.key})
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {isEnvironment ? (
+              <div className="editor-grid compact">
                 <label className="field-block full-width">
-                  <span>Lighting Profile</span>
-                  <input
-                    value={renderBinding.lightingProfile ?? ''}
-                    onChange={(event) => updateRenderBinding({ lightingProfile: event.target.value })}
-                    placeholder="Day exterior, moody cavern, bright interior..."
+                  <span>Primary Mesh</span>
+                  <select
+                    value={renderBinding.primaryMeshAssetKey ?? ''}
+                    onChange={(event) => updateRenderBinding({ primaryMeshAssetKey: event.target.value || null })}
+                  >
+                    <option value="">No mesh bound</option>
+                    {meshAssets.map((asset) => (
+                      <option key={asset.key} value={asset.key}>
+                        {asset.name} ({asset.key})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field-block full-width">
+                  <span>Preview Image</span>
+                  <select
+                    value={renderBinding.previewImageAssetKey ?? ''}
+                    onChange={(event) => updateRenderBinding({ previewImageAssetKey: event.target.value || null })}
+                  >
+                    <option value="">No concept image</option>
+                    {imageAssets.map((asset) => (
+                      <option key={asset.key} value={asset.key}>
+                        {asset.name} ({asset.key})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {isEnvironment ? (
+                  <label className="field-block full-width">
+                    <span>Lighting Profile</span>
+                    <input
+                      value={renderBinding.lightingProfile ?? ''}
+                      onChange={(event) => updateRenderBinding({ lightingProfile: event.target.value })}
+                      placeholder="Day exterior, moody cavern, bright interior..."
+                    />
+                  </label>
+                ) : null}
+                <label className="field-block full-width">
+                  <span>Generation Prompt</span>
+                  <textarea
+                    rows={4}
+                    value={renderBinding.generationPrompt ?? ''}
+                    onChange={(event) => updateRenderBinding({ generationPrompt: event.target.value || null })}
+                    placeholder="Describe silhouette, materials, and major forms for the future mesh pass."
                   />
                 </label>
-              ) : null}
-              <label className="field-block full-width">
-                <span>Generation Prompt</span>
-                <textarea
-                  rows={4}
-                  value={renderBinding.generationPrompt ?? ''}
-                  onChange={(event) => updateRenderBinding({ generationPrompt: event.target.value || null })}
-                  placeholder="Describe silhouette, materials, and major forms for the future mesh pass."
-                />
-              </label>
-              <label className="field-block full-width">
-                <span>Generation Style</span>
-                <input
-                  value={renderBinding.generationStyle ?? ''}
-                  onChange={(event) => updateRenderBinding({ generationStyle: event.target.value || null })}
-                  placeholder="Stylized, realistic, low poly, hand painted..."
-                />
-              </label>
+                <label className="field-block full-width">
+                  <span>Generation Style</span>
+                  <input
+                    value={renderBinding.generationStyle ?? ''}
+                    onChange={(event) => updateRenderBinding({ generationStyle: event.target.value || null })}
+                    placeholder="Stylized, realistic, low poly, hand painted..."
+                  />
+                </label>
+              </div>
             </div>
-          </div>
+          ) : null}
 
           <div className="editor-section">
             <div className="section-head">
@@ -249,21 +252,33 @@ export function Definition3dPanel({ assets, assemblyGraph = null, definition, on
             </div>
           </div>
 
-          <div className="editor-section">
-            <div className="section-head">
-              <div>
-                <span className="eyebrow">AI Path</span>
-                <h3>Generate 3D mesh</h3>
+          {!isProceduralEnvironment ? (
+            <div className="editor-section">
+              <div className="section-head">
+                <div>
+                  <span className="eyebrow">AI Path</span>
+                  <h3>Generate 3D mesh</h3>
+                </div>
+                <p className="subtle-line">
+                  This keeps the future {'image -> mesh -> asset -> bind'} path visible for this {entityLabel.toLowerCase()} without enabling the provider step yet.
+                </p>
               </div>
-              <p className="subtle-line">
-                This keeps the future {'image -> mesh -> asset -> bind'} path visible for this {entityLabel.toLowerCase()} without enabling the provider step yet.
-              </p>
+              <button className="primary-button compact" disabled={generationPending} onClick={handleGenerateStub} type="button">
+                {generationPending ? 'Checking mesh generation path...' : 'Generate 3D mesh (Stub)'}
+              </button>
+              {generationMessage ? <div className="inline-note is-warning">{generationMessage}</div> : null}
             </div>
-            <button className="primary-button compact" disabled={generationPending} onClick={handleGenerateStub} type="button">
-              {generationPending ? 'Checking mesh generation path...' : 'Generate 3D mesh (Stub)'}
-            </button>
-            {generationMessage ? <div className="inline-note is-warning">{generationMessage}</div> : null}
-          </div>
+          ) : (
+            <div className="editor-section">
+              <div className="section-head">
+                <div>
+                  <span className="eyebrow">Compiled</span>
+                  <h3>Procedural mesh preview</h3>
+                </div>
+                <p className="subtle-line">This view is compiled directly from the assembly graph. Update the graph and regenerate from the Graph tab.</p>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
