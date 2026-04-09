@@ -2,27 +2,36 @@ import { useMemo, useState } from 'react'
 
 import { visualAssetGenerationService } from '../../application/services/visualAssetGenerationService'
 import { isImageAsset, isMeshAsset, resolveAssetSourceUrl } from '../../domain/assets'
-import { getCharacterProfile, getResolvedRender3dBinding } from '../../domain/render3d'
+import {
+  getCharacterProfile,
+  getEnvironmentProfile,
+  getResolvedDefinition3dBinding,
+  type EnvironmentRenderBindingConfig,
+  type Render3dBindingConfig,
+} from '../../domain/render3d'
 import type { AssetDefinition, DefinitionBase } from '../../domain/graphcore'
 import { MediaThumb, findAssetByKey } from '../content/shared'
 import { ThreeSceneViewport } from './ThreeSceneViewport'
 
-type Character3dPanelProps = {
+type Definition3dPanelProps = {
   assets: AssetDefinition[]
-  character: DefinitionBase
+  definition: DefinitionBase
   onUpdateComponents: (itemKey: string, components: DefinitionBase['components']) => void
 }
 
-export function Character3dPanel({ assets, character, onUpdateComponents }: Character3dPanelProps) {
+export function Definition3dPanel({ assets, definition, onUpdateComponents }: Definition3dPanelProps) {
   const [showFloor, setShowFloor] = useState(true)
   const [showGrid, setShowGrid] = useState(false)
   const [resetSignal, setResetSignal] = useState(0)
   const [generationMessage, setGenerationMessage] = useState<string | null>(null)
   const [generationPending, setGenerationPending] = useState(false)
 
-  const renderBinding = getResolvedRender3dBinding(character)
-  const profile = getCharacterProfile(character)
-  const subtype = profile?.config.subtype ?? 'humanoid'
+  const isEnvironment = definition.kind === 'environment'
+  const renderBinding = getResolvedDefinition3dBinding(definition)
+  const subtype = isEnvironment
+    ? getEnvironmentProfile(definition)?.config.subtype ?? 'exterior'
+    : getCharacterProfile(definition)?.config.subtype ?? 'humanoid'
+  const entityLabel = isEnvironment ? 'Environment' : 'Character'
   const meshAssets = useMemo(() => assets.filter(isMeshAsset).sort((left, right) => left.name.localeCompare(right.name)), [assets])
   const imageAssets = useMemo(() => assets.filter(isImageAsset).sort((left, right) => left.name.localeCompare(right.name)), [assets])
   const meshAsset = findAssetByKey(assets, renderBinding.primaryMeshAssetKey)
@@ -31,21 +40,40 @@ export function Character3dPanel({ assets, character, onUpdateComponents }: Char
   const meshSourceLabel = meshSourceUrl ?? 'No mesh source bound'
 
   function updateRenderBinding(changes: Partial<typeof renderBinding>) {
-    const nextConfig = {
-      ...renderBinding,
+    if (isEnvironment) {
+      const nextConfig: EnvironmentRenderBindingConfig = {
+        primaryMeshAssetKey: renderBinding.primaryMeshAssetKey ?? null,
+        previewImageAssetKey: renderBinding.previewImageAssetKey ?? null,
+        lightingProfile: renderBinding.lightingProfile ?? '',
+        generationPrompt: renderBinding.generationPrompt ?? null,
+        generationStyle: renderBinding.generationStyle ?? null,
+        ...changes,
+      }
+      const nextComponents = definition.components.some((component) => component.type === 'environment_render_binding')
+        ? definition.components.map((component) => component.type === 'environment_render_binding' ? { ...component, config: nextConfig } : component)
+        : [...definition.components, { type: 'environment_render_binding', config: nextConfig } as DefinitionBase['components'][number]]
+      onUpdateComponents(definition.key, nextComponents)
+      return
+    }
+
+    const nextConfig: Render3dBindingConfig = {
+      primaryMeshAssetKey: renderBinding.primaryMeshAssetKey ?? null,
+      previewImageAssetKey: renderBinding.previewImageAssetKey ?? null,
+      generationPrompt: renderBinding.generationPrompt ?? null,
+      generationStyle: renderBinding.generationStyle ?? null,
       ...changes,
     }
-    const nextComponents = character.components.some((component) => component.type === 'render_3d_binding')
-      ? character.components.map((component) => component.type === 'render_3d_binding' ? { ...component, config: nextConfig } : component)
-      : [...character.components, { type: 'render_3d_binding', config: nextConfig } as DefinitionBase['components'][number]]
-    onUpdateComponents(character.key, nextComponents)
+    const nextComponents = definition.components.some((component) => component.type === 'render_3d_binding')
+      ? definition.components.map((component) => component.type === 'render_3d_binding' ? { ...component, config: nextConfig } : component)
+      : [...definition.components, { type: 'render_3d_binding', config: nextConfig } as DefinitionBase['components'][number]]
+    onUpdateComponents(definition.key, nextComponents)
   }
 
   async function handleGenerateStub() {
     setGenerationPending(true)
     try {
       const result = await visualAssetGenerationService.generateMeshFromImage({
-        definitionKey: character.key,
+        definitionKey: definition.key,
         imageAssetKey: renderBinding.previewImageAssetKey,
         imageUrl: resolveAssetSourceUrl(previewImageAsset),
         prompt: renderBinding.generationPrompt,
@@ -65,7 +93,8 @@ export function Character3dPanel({ assets, character, onUpdateComponents }: Char
         <div className="character-3d-stage">
           <ThreeSceneViewport
             meshSourceUrl={meshSourceUrl}
-            modelLabel={character.name}
+            modelKind={isEnvironment ? 'environment' : 'character'}
+            modelLabel={definition.name}
             modelSubtype={subtype}
             showFloor={showFloor}
             showGrid={showGrid}
@@ -101,7 +130,11 @@ export function Character3dPanel({ assets, character, onUpdateComponents }: Char
                 <span className="eyebrow">Binding</span>
                 <h3>Mesh and preview assets</h3>
               </div>
-              <p className="subtle-line">Characters keep using `render_3d_binding`; this tab gives it a structured editor.</p>
+              <p className="subtle-line">
+                {isEnvironment
+                  ? 'Environments use `environment_render_binding`; this tab gives it a structured editor.'
+                  : 'Characters use `render_3d_binding`; this tab gives it a structured editor.'}
+              </p>
             </div>
             <div className="editor-grid compact">
               <label className="field-block full-width">
@@ -132,6 +165,16 @@ export function Character3dPanel({ assets, character, onUpdateComponents }: Char
                   ))}
                 </select>
               </label>
+              {isEnvironment ? (
+                <label className="field-block full-width">
+                  <span>Lighting Profile</span>
+                  <input
+                    value={renderBinding.lightingProfile ?? ''}
+                    onChange={(event) => updateRenderBinding({ lightingProfile: event.target.value })}
+                    placeholder="Day exterior, moody cavern, bright interior..."
+                  />
+                </label>
+              ) : null}
               <label className="field-block full-width">
                 <span>Generation Prompt</span>
                 <textarea
@@ -173,7 +216,7 @@ export function Character3dPanel({ assets, character, onUpdateComponents }: Char
                 <span>{previewImageAsset?.name ?? 'None'}</span>
               </div>
               <div className="character-3d-preview-thumb">
-                <MediaThumb asset={previewImageAsset} label={previewImageAsset?.name ?? character.name} large />
+                <MediaThumb asset={previewImageAsset} label={previewImageAsset?.name ?? definition.name} large />
               </div>
             </div>
           </div>
@@ -184,7 +227,9 @@ export function Character3dPanel({ assets, character, onUpdateComponents }: Char
                 <span className="eyebrow">AI Path</span>
                 <h3>Generate 3D mesh</h3>
               </div>
-              <p className="subtle-line">This keeps the future {'image -> mesh -> asset -> bind'} path visible without enabling the provider step yet.</p>
+              <p className="subtle-line">
+                This keeps the future {'image -> mesh -> asset -> bind'} path visible for this {entityLabel.toLowerCase()} without enabling the provider step yet.
+              </p>
             </div>
             <button className="primary-button compact" disabled={generationPending} onClick={handleGenerateStub} type="button">
               {generationPending ? 'Checking mesh generation path...' : 'Generate 3D mesh (Stub)'}

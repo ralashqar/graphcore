@@ -18,7 +18,7 @@ export type ContentMode = 'items' | 'archetypes'
 export type ItemSort = 'name' | 'archetype' | 'key'
 export type ArchetypeSort = 'name' | 'field_count' | 'key'
 export type DefinitionKindFilter = DefinitionBase['kind'] | 'all'
-export type CharacterPanelMode = 'details' | '3d'
+export type DefinitionPanelMode = 'details' | '3d'
 
 export type ContentWorkspaceProps = {
   archetypes: ArchetypeDefinition[]

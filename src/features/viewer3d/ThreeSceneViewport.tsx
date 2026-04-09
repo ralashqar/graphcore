@@ -6,6 +6,7 @@ import { Box3, Group, Mesh, MeshStandardMaterial, Vector3 } from 'three'
 
 type ThreeSceneViewportProps = {
   meshSourceUrl: string | null
+  modelKind: 'character' | 'environment'
   modelLabel: string
   modelSubtype: string
   showFloor: boolean
@@ -100,7 +101,16 @@ function FloorPlane() {
   )
 }
 
-function ProxyModel({ subtype }: { subtype: string }) {
+function ProxyModel({ kind, subtype }: { kind: 'character' | 'environment'; subtype: string }) {
+  if (kind === 'environment') {
+    return (
+      <mesh castShadow receiveShadow position={[0, 0.92, 0]}>
+        <boxGeometry args={[2.2, 1.84, 2.2]} />
+        <meshStandardMaterial color="#7f92a6" roughness={0.58} metalness={0.08} />
+      </mesh>
+    )
+  }
+
   const materialProps = useMemo(() => {
     if (subtype === 'spirit') return { color: '#8bf6df', emissive: '#57d7c0', emissiveIntensity: 0.35, roughness: 0.12, metalness: 0.08 }
     if (subtype === 'undead') return { color: '#d2e7d5', emissive: '#608e72', emissiveIntensity: 0.08, roughness: 0.72, metalness: 0.08 }
@@ -184,12 +194,14 @@ function ProxyModel({ subtype }: { subtype: string }) {
 function SceneContents({
   fitKey,
   loadedScene,
+  modelKind,
   modelSubtype,
   showFloor,
   showGrid,
 }: {
   fitKey: string
   loadedScene: LoadedSceneState
+  modelKind: 'character' | 'environment'
   modelSubtype: string
   showFloor: boolean
   showGrid: boolean
@@ -224,7 +236,7 @@ function SceneContents({
       ) : null}
       <Bounds fit clip observe margin={1.2}>
         <FitBounds fitKey={fitKey} />
-        {loadedScene.status === 'ready' ? <primitive object={loadedScene.scene} /> : <ProxyModel subtype={modelSubtype} />}
+        {loadedScene.status === 'ready' ? <primitive object={loadedScene.scene} /> : <ProxyModel kind={modelKind} subtype={modelSubtype} />}
       </Bounds>
       <OrbitControls
         makeDefault
@@ -240,6 +252,7 @@ function SceneContents({
 
 export function ThreeSceneViewport({
   meshSourceUrl,
+  modelKind,
   modelLabel,
   modelSubtype,
   showFloor,
@@ -256,6 +269,7 @@ export function ThreeSceneViewport({
           <SceneContents
             fitKey={fitKey}
             loadedScene={loadedScene}
+            modelKind={modelKind}
             modelSubtype={modelSubtype}
             showFloor={showFloor}
             showGrid={showGrid}
@@ -278,7 +292,9 @@ export function ThreeSceneViewport({
             ? loadedScene.error
             : loadedScene.status === 'ready'
               ? modelLabel
-              : `Showing a generated ${modelSubtype} placeholder until a mesh is bound.`}
+              : modelKind === 'environment'
+                ? 'Showing a cube environment blockout until a mesh is bound.'
+                : `Showing a generated ${modelSubtype} placeholder until a mesh is bound.`}
         </span>
       </div>
     </div>

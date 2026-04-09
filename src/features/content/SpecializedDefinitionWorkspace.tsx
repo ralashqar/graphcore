@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 
-import type { CharacterPanelMode } from './types'
+import type { DefinitionPanelMode } from './types'
 import type { ArchetypeDefinition, AssetDefinition, DefinitionBase, FieldDefinition, FieldValue } from '../../domain/graphcore'
 import { DefinitionEditor } from './DefinitionEditor'
 import { AssetPickerDialog, EmptyEditor, MediaThumb, findAssetByKey, resolveItemIconAssetKey } from './shared'
-import { Character3dPanel } from '../viewer3d/Character3dPanel'
+import { Definition3dPanel } from '../viewer3d/Character3dPanel'
 
 type SpecializedDefinitionWorkspaceProps = {
   title: string
@@ -48,8 +48,8 @@ export function SpecializedDefinitionWorkspace({
   onUpdateItemIdentity,
 }: SpecializedDefinitionWorkspaceProps) {
   const [search, setSearch] = useState('')
-  const [panelMode, setPanelMode] = useState<CharacterPanelMode>('details')
-  const [isCharacterIconPickerOpen, setIsCharacterIconPickerOpen] = useState(false)
+  const [panelMode, setPanelMode] = useState<DefinitionPanelMode>('details')
+  const [isSelectionIconPickerOpen, setIsSelectionIconPickerOpen] = useState(false)
   const filteredDefinitions = useMemo(() => {
     const query = search.trim().toLowerCase()
     return definitions
@@ -70,7 +70,8 @@ export function SpecializedDefinitionWorkspace({
   )
   const imageAssets = assets.filter((asset) => asset.kind === 'image')
   const effectiveSelection = selectedDefinition?.kind === kind ? selectedDefinition : filteredDefinitions[0] ?? null
-  const characterPanelControls = kind === 'character' && effectiveSelection ? (
+  const supports3dPanel = (kind === 'character' || kind === 'environment') && Boolean(effectiveSelection)
+  const definitionPanelControls = supports3dPanel ? (
     <div className="segmented-control panel-mode-control" aria-label="Character panel mode">
       <button
         className={panelMode === 'details' ? 'segment-button is-active' : 'segment-button'}
@@ -96,7 +97,7 @@ export function SpecializedDefinitionWorkspace({
   }, [effectiveSelection, onSelectDefinition, selectedDefinition?.key])
 
   useEffect(() => {
-    if (kind !== 'character' && panelMode !== 'details') {
+    if (kind !== 'character' && kind !== 'environment' && panelMode !== 'details') {
       setPanelMode('details')
     }
   }, [kind, panelMode])
@@ -185,11 +186,11 @@ export function SpecializedDefinitionWorkspace({
 
       <section className="main-surface detail-surface item-editor-surface">
         {effectiveSelection ? (
-          kind === 'character' ? (
+          supports3dPanel ? (
             <div className="character-panel-shell">
               <div className="item-editor-head character-panel-header">
                 <div className="item-icon-stack">
-                  <button className="icon-button" onClick={() => setIsCharacterIconPickerOpen(true)} type="button">
+                  <button className="icon-button" onClick={() => setIsSelectionIconPickerOpen(true)} type="button">
                     <MediaThumb
                       asset={findAssetByKey(assets, resolveItemIconAssetKey(effectiveSelection, archetypes))}
                       label={effectiveSelection.name}
@@ -198,7 +199,7 @@ export function SpecializedDefinitionWorkspace({
                   </button>
                 </div>
                 <div className="editor-heading-copy">
-                  <span className="eyebrow">Character Editor</span>
+                  <span className="eyebrow">{kind === 'environment' ? 'Environment Editor' : 'Character Editor'}</span>
                   <div className="editor-head-toolbar character-head-toolbar">
                     <div className="chip-row">
                       <span className="chip">{effectiveSelection.kind}</span>
@@ -221,14 +222,14 @@ export function SpecializedDefinitionWorkspace({
                         />
                       </label>
                     </div>
-                    {characterPanelControls ? <div className="editor-head-controls">{characterPanelControls}</div> : null}
+                    {definitionPanelControls ? <div className="editor-head-controls">{definitionPanelControls}</div> : null}
                   </div>
                 </div>
               </div>
               {panelMode === '3d' ? (
-                <Character3dPanel
+                <Definition3dPanel
                   assets={assets}
-                  character={effectiveSelection}
+                  definition={effectiveSelection}
                   onUpdateComponents={onUpdateComponents}
                 />
               ) : (
@@ -278,13 +279,13 @@ export function SpecializedDefinitionWorkspace({
           />
         )}
 
-        {kind === 'character' && effectiveSelection && isCharacterIconPickerOpen ? (
+        {supports3dPanel && effectiveSelection && isSelectionIconPickerOpen ? (
           <AssetPickerDialog
             assets={imageAssets}
-            onClose={() => setIsCharacterIconPickerOpen(false)}
+            onClose={() => setIsSelectionIconPickerOpen(false)}
             onPickAsset={(assetKey) => {
               onAssignDefinitionIcon(assetKey)
-              setIsCharacterIconPickerOpen(false)
+              setIsSelectionIconPickerOpen(false)
             }}
             selectedAssetKey={effectiveSelection.iconAssetKey}
             title={`Choose icon for ${effectiveSelection.name}`}
