@@ -62,6 +62,7 @@ type RuntimeProfile = {
 }
 
 type RuntimePath = {
+  spec: PathSpec
   points: Vector3[]
 }
 
@@ -136,12 +137,15 @@ type StairLayoutRequest = {
   id: string
   sourceNodeKey: string
   stairFamily: StairRunSpec['stairFamily']
+  solverVersion?: 'v2' | 'v3'
   fitMode: 'strict' | 'zone_autofit' | 'zone_autofit_with_partition_push'
   targetElevationMode: 'level_top' | 'mezzanine' | 'explicit'
+  targetMode?: 'level_top' | 'mezzanine' | 'explicit' | 'anchor' | 'surface_edge'
   fromLevelId: string | null
   toLevelId: string | null
   zoneRoomIds: string[]
   targetAnchorId: string | null
+  targetPathIds?: string[]
   width: number
   tread: number
   maxRise: number
@@ -152,6 +156,7 @@ type StairLayoutRequest = {
   wallClearance: number
   clearanceMargin: number
   explicitTargetElevation: number | null
+  explicitTargetPosition?: [number, number, number] | null
 }
 
 type StairConnectionRequest = {
@@ -160,6 +165,10 @@ type StairConnectionRequest = {
   stairId: string | null
   targetRoomIds: string[]
   targetWallSegmentId: string | null
+  targetAnchorId?: string | null
+  targetPathIds?: string[]
+  targetKind?: 'room' | 'anchor' | 'surface_edge'
+  edgeSelectionMode?: 'nearest' | 'tagged' | 'explicit'
   connectionMode: 'door' | 'open_edge' | 'guard_opening'
   landing: 'auto' | 'bottom' | 'top'
   connectionPlacement: 'auto' | 'center' | 'landing_aligned'
@@ -392,28 +401,79 @@ function insetProfile(profile: RuntimeProfile, inset: number): RuntimeProfile {
     const length = Math.max(direction.length(), 0.0001)
     return point.clone().sub(direction.normalize().multiplyScalar(Math.min(inset, length * 0.45)))
   })
+  const nextHoles = profile.holes.map((hole) => {
+    const holeCenter = hole.reduce((sum, point) => sum.add(point), new Vector2()).multiplyScalar(1 / Math.max(hole.length, 1))
+    return hole.map((point) => {
+      const direction = point.clone().sub(holeCenter)
+      const length = Math.max(direction.length(), 0.0001)
+      const offset = Math.min(Math.abs(inset), length * 0.45)
+      return inset >= 0
+        ? point.clone().add(direction.normalize().multiplyScalar(offset))
+        : point.clone().sub(direction.normalize().multiplyScalar(offset))
+    })
+  })
   return {
     profile: {
       id: `${profile.profile.id}.inset`,
-      loops: [{
-        id: `${profile.profile.id}.inset.outer`,
-        closed: true,
-        kind: 'outer',
-        segments: pointsToSegments(nextOuter),
-      }],
+      loops: [
+        {
+          id: `${profile.profile.id}.inset.outer`,
+          closed: true,
+          kind: 'outer',
+          segments: pointsToSegments(nextOuter),
+        },
+        ...nextHoles.map((hole, holeIndex) => ({
+          id: `${profile.profile.id}.inset.hole_${holeIndex + 1}`,
+          closed: true,
+          kind: 'hole' as const,
+          segments: pointsToSegments(hole),
+        })),
+      ],
       metadata: {
         ...profile.profile.metadata,
         inset,
       },
     },
     outer: nextOuter,
-    holes: [],
+    holes: nextHoles,
   }
+}
+
+function flipTriangleWinding(geometry: BufferGeometry) {
+  const indexed = geometry.getIndex()
+  if (indexed) {
+    const source = indexed.array as ArrayLike<number>
+    const next = Array.from(source, (value) => Number(value))
+    for (let index = 0; index < next.length; index += 3) {
+      const swap = next[index + 1]
+      next[index + 1] = next[index + 2]
+      next[index + 2] = swap
+    }
+    geometry.setIndex(next)
+    return geometry
+  }
+
+  for (const [name, attribute] of Object.entries(geometry.attributes)) {
+    const source = attribute.array as ArrayLike<number>
+    const itemSize = attribute.itemSize
+    const next = new (attribute.array.constructor as { new(length: number): typeof attribute.array })(source.length)
+    for (let index = 0; index < attribute.count; index += 3) {
+      const order = [index, index + 2, index + 1]
+      for (let vertexOffset = 0; vertexOffset < order.length; vertexOffset += 1) {
+        const sourceVertex = order[vertexOffset]
+        for (let component = 0; component < itemSize; component += 1) {
+          next[(index + vertexOffset) * itemSize + component] = source[sourceVertex * itemSize + component]
+        }
+      }
+    }
+    geometry.setAttribute(name, attribute.clone().copyArray(next))
+  }
+  return geometry
 }
 
 function extrudeProfile(profile: RuntimeProfile, depth: number) {
   const shape = shapeFromProfile(profile)
-  const geometry = new ExtrudeGeometry(shape, {
+  let geometry: BufferGeometry = new ExtrudeGeometry(shape, {
     depth,
     bevelEnabled: false,
     curveSegments: 24,
@@ -421,6 +481,7 @@ function extrudeProfile(profile: RuntimeProfile, depth: number) {
   })
   geometry.rotateX(-Math.PI / 2)
   geometry.scale(1, 1, -1)
+  geometry = flipTriangleWinding(geometry)
   geometry.computeVertexNormals()
   geometry.computeBoundingBox()
   return geometry
@@ -581,8 +642,37 @@ function createMixedLoopProfile(node: AssemblyNodeDefinition): RuntimeProfile {
   })
 }
 
-function createPathFromPoints(points: Array<{ x: number; y: number }>) {
+function createRuntimePath(
+  sourceNodeKey: string,
+  id: string,
+  kind: PathSpec['kind'],
+  points: Vector3[],
+  metadata: Record<string, unknown> = {},
+  closed = false,
+): RuntimePath {
   return {
+    spec: {
+      id,
+      sourceNodeKey,
+      kind,
+      pointCount: points.length,
+      closed,
+      metadata,
+    },
+    points,
+  }
+}
+
+function createPathFromPoints(sourceNodeKey: string, id: string, kind: PathSpec['kind'], points: Array<{ x: number; y: number }>, metadata: Record<string, unknown> = {}, closed = false) {
+  return {
+    spec: {
+      id,
+      sourceNodeKey,
+      kind,
+      pointCount: points.length,
+      closed,
+      metadata,
+    },
     points: points.map((point) => new Vector3(point.x, 0, point.y)),
   }
 }
@@ -593,6 +683,65 @@ function collectIncomingProfiles(graph: AssemblyGraphDefinition, node: AssemblyN
 
 function collectIncomingPaths(graph: AssemblyGraphDefinition, node: AssemblyNodeDefinition, results: Map<string, RuntimeNodeResult>, portId = 'path') {
   return incomingEdges(graph, node.key, portId).flatMap((edge) => results.get(edge.source.nodeKey)?.paths ?? [])
+}
+
+function runtimePathLength(path: RuntimePath) {
+  let total = 0
+  for (let index = 1; index < path.points.length; index += 1) total += path.points[index - 1].distanceTo(path.points[index])
+  return total
+}
+
+function closestPointOnPathXZ(path: RuntimePath, point: [number, number, number] | Vector3) {
+  const source = point instanceof Vector3 ? point : new Vector3(point[0], point[1], point[2])
+  let best:
+    | {
+      point: Vector3
+      tangent: Vector3
+      distanceSq: number
+      segmentIndex: number
+      t: number
+    }
+    | null = null
+
+  for (let index = 1; index < path.points.length; index += 1) {
+    const start = path.points[index - 1]
+    const end = path.points[index]
+    const delta = new Vector3(end.x - start.x, 0, end.z - start.z)
+    const lengthSq = Math.max(delta.x * delta.x + delta.z * delta.z, 1e-6)
+    const rawT = ((source.x - start.x) * delta.x + (source.z - start.z) * delta.z) / lengthSq
+    const t = Math.max(0, Math.min(1, rawT))
+    const projected = new Vector3(start.x + delta.x * t, start.y + (end.y - start.y) * t, start.z + delta.z * t)
+    const distanceSq = (source.x - projected.x) ** 2 + (source.z - projected.z) ** 2
+    if (!best || distanceSq < best.distanceSq) {
+      best = {
+        point: projected,
+        tangent: delta.lengthSq() > 1e-6 ? delta.normalize() : new Vector3(0, 0, 1),
+        distanceSq,
+        segmentIndex: index - 1,
+        t,
+      }
+    }
+  }
+
+  return best
+}
+
+function pathMidpoint(path: RuntimePath) {
+  const totalLength = runtimePathLength(path)
+  if (totalLength <= 1e-6) return path.points[0]?.clone() ?? new Vector3()
+  let traveled = 0
+  const target = totalLength * 0.5
+  for (let index = 1; index < path.points.length; index += 1) {
+    const start = path.points[index - 1]
+    const end = path.points[index]
+    const segmentLength = start.distanceTo(end)
+    if (traveled + segmentLength >= target) {
+      const t = (target - traveled) / Math.max(segmentLength, 1e-6)
+      return start.clone().lerp(end, t)
+    }
+    traveled += segmentLength
+  }
+  return path.points[path.points.length - 1]?.clone() ?? new Vector3()
 }
 
 function collectIncomingSolids(graph: AssemblyGraphDefinition, node: AssemblyNodeDefinition, results: Map<string, RuntimeNodeResult>, portId?: string) {
@@ -723,6 +872,58 @@ function runtimeProfileFromLoops(id: string, outer: Vector2[], holes: Vector2[][
     },
     outer,
     holes,
+  }
+}
+
+function boundaryPathsFromProfile(nodeKey: string, surfaceId: string, profile: RuntimeProfile, elevation: number) {
+  const runtimePaths: RuntimePath[] = []
+  const anchors: Anchor[] = []
+
+  profile.profile.loops.forEach((loop, loopIndex) => {
+    const loopPoints = segmentsToPolyline(loop)
+    if (loopPoints.length < 2) return
+    const loopRole = loop.kind === 'hole' ? 'hole_loop' : 'outer_loop'
+    const loopRuntimePoints = loopPoints.map((point) => new Vector3(point.x, elevation, point.y))
+    runtimePaths.push(createRuntimePath(nodeKey, `${surfaceId}.${loop.id}.loop`, 'derived_profile', loopRuntimePoints, {
+      surfaceId,
+      loopId: loop.id,
+      boundaryRole: loopRole,
+      edgeId: null,
+      walkable: loop.kind !== 'hole',
+      railingAllowed: true,
+      wallAllowed: loop.kind !== 'hole',
+      openingAllowed: loop.kind !== 'hole',
+    }, true))
+
+    const center = loopPoints.reduce((sum, point) => sum.add(point), new Vector2()).multiplyScalar(1 / loopPoints.length)
+    anchors.push(createAnchor(nodeKey, `${loop.kind === 'hole' ? 'Hole' : 'Outer'} Loop ${loopIndex + 1}`, new Vector3(center.x, elevation, center.y)))
+
+    for (let edgeIndex = 1; edgeIndex < loopPoints.length; edgeIndex += 1) {
+      const start = loopPoints[edgeIndex - 1]
+      const end = loopPoints[edgeIndex]
+      const edgeId = `${loop.id}.edge_${edgeIndex}`
+      const edgeRole = loop.kind === 'hole' ? 'hole_edge' : 'outer_edge'
+      runtimePaths.push(createRuntimePath(nodeKey, `${surfaceId}.${edgeId}`, 'derived_profile', [
+        new Vector3(start.x, elevation, start.y),
+        new Vector3(end.x, elevation, end.y),
+      ], {
+        surfaceId,
+        loopId: loop.id,
+        boundaryRole: edgeRole,
+        edgeId,
+        walkable: loop.kind !== 'hole',
+        railingAllowed: true,
+        wallAllowed: loop.kind !== 'hole',
+        openingAllowed: loop.kind !== 'hole',
+      }))
+      anchors.push(createAnchor(nodeKey, `${loop.kind === 'hole' ? 'Hole' : 'Outer'} Edge ${loopIndex + 1}.${edgeIndex}`, new Vector3((start.x + end.x) * 0.5, elevation, (start.y + end.y) * 0.5)))
+    }
+  })
+
+  return {
+    paths: runtimePaths,
+    pathSpecs: runtimePaths.map((path) => path.spec),
+    anchors,
   }
 }
 
@@ -1923,9 +2124,352 @@ function applySlabVoidsToSolids(solids: RuntimeSolid[], slabVoids: SlabVoidSpec[
 }
 
 function stairKindFromFamily(stairFamily: StairRunSpec['stairFamily']): StairRunSpec['kind'] {
-  if (stairFamily === 'spiral') return 'spiral'
-  if (stairFamily === 'u_stair' || stairFamily === 'winder_u') return 'switchback'
+  if (stairFamily === 'spiral' || stairFamily === 'helical') return 'spiral'
+  if (stairFamily === 'u_stair' || stairFamily === 'winder_u' || stairFamily === 'switchback') return 'switchback'
   return 'straight'
+}
+
+function normalizeXZ(vector: Vector3) {
+  const next = new Vector3(vector.x, 0, vector.z)
+  return next.lengthSq() > 1e-6 ? next.normalize() : new Vector3(0, 0, 1)
+}
+
+function perpendicularXZ(vector: Vector3, turnDirection: 'left' | 'right') {
+  return turnDirection === 'left'
+    ? new Vector3(vector.z, 0, -vector.x)
+    : new Vector3(-vector.z, 0, vector.x)
+}
+
+function yawForTravelDirection(direction: Vector3) {
+  const travel = normalizeXZ(direction)
+  return Math.atan2(travel.z, travel.x) - Math.PI * 0.5
+}
+
+function yawForDepthDirection(direction: Vector3) {
+  const depthAxis = normalizeXZ(direction)
+  return Math.atan2(depthAxis.z, depthAxis.x)
+}
+
+function preferredSideTarget(
+  bounds: { minX: number; maxX: number; minZ: number; maxZ: number },
+  elevation: number,
+  preferredExitSide: StairLayoutRequest['preferredExitSide'],
+) {
+  const centerX = (bounds.minX + bounds.maxX) * 0.5
+  const centerZ = (bounds.minZ + bounds.maxZ) * 0.5
+  switch (preferredExitSide) {
+    case 'left':
+      return {
+        point: new Vector3(bounds.minX, elevation, centerZ),
+        tangent: new Vector3(0, 0, 1),
+        inwardNormal: new Vector3(1, 0, 0),
+      }
+    case 'right':
+      return {
+        point: new Vector3(bounds.maxX, elevation, centerZ),
+        tangent: new Vector3(0, 0, 1),
+        inwardNormal: new Vector3(-1, 0, 0),
+      }
+    case 'back':
+      return {
+        point: new Vector3(centerX, elevation, bounds.minZ),
+        tangent: new Vector3(1, 0, 0),
+        inwardNormal: new Vector3(0, 0, 1),
+      }
+    case 'front':
+    case 'auto':
+    default:
+      return {
+        point: new Vector3(centerX, elevation, bounds.maxZ),
+        tangent: new Vector3(1, 0, 0),
+        inwardNormal: new Vector3(0, 0, -1),
+      }
+  }
+}
+
+function resolveV3TargetFrame(
+  request: StairLayoutRequest,
+  zoneBounds: { minX: number; maxX: number; minZ: number; maxZ: number },
+  targetElevation: number,
+  runtimePaths: RuntimePath[],
+) {
+  const zoneCenter = new Vector3((zoneBounds.minX + zoneBounds.maxX) * 0.5, targetElevation, (zoneBounds.minZ + zoneBounds.maxZ) * 0.5)
+  const fallback = preferredSideTarget(zoneBounds, targetElevation, request.preferredExitSide)
+  const explicitTarget = request.explicitTargetPosition
+    ? new Vector3(request.explicitTargetPosition[0], request.explicitTargetPosition[1], request.explicitTargetPosition[2])
+    : null
+  const candidatePaths = runtimePaths.filter((path) =>
+    (request.targetPathIds ?? []).includes(path.spec.id)
+    || ((request.targetMode === 'surface_edge' || request.targetMode === 'mezzanine')
+      && path.spec.kind === 'derived_profile'))
+
+  if ((request.targetMode === 'surface_edge' || candidatePaths.length > 0) && candidatePaths.length > 0) {
+    const reference = explicitTarget ?? zoneCenter
+    let best:
+      | {
+        point: Vector3
+        tangent: Vector3
+        inwardNormal: Vector3
+        pathId: string
+      }
+      | null = null
+    for (const path of candidatePaths) {
+      const projection = closestPointOnPathXZ(path, reference)
+      if (!projection) continue
+      const boundaryRole = typeof path.spec.metadata.boundaryRole === 'string' ? path.spec.metadata.boundaryRole : null
+      const towardZone = normalizeXZ(zoneCenter.clone().sub(projection.point))
+      const defaultNormal = perpendicularXZ(projection.tangent, request.turnDirection).multiplyScalar(-1)
+      const inward = boundaryRole === 'hole_edge' || boundaryRole === 'hole_loop'
+        ? towardZone.clone().multiplyScalar(-1)
+        : towardZone
+      const inwardNormal = inward.lengthSq() > 1e-6 ? inward : defaultNormal
+      const distanceSq = reference.distanceToSquared(projection.point)
+      if (!best || distanceSq < best.point.distanceToSquared(reference)) {
+        best = {
+          point: projection.point.clone().setY(targetElevation),
+          tangent: normalizeXZ(projection.tangent),
+          inwardNormal: normalizeXZ(inwardNormal),
+          pathId: path.spec.id,
+        }
+      }
+    }
+    if (best) return best
+  }
+
+  if ((request.targetMode === 'anchor' || request.targetMode === 'explicit' || request.targetMode === 'mezzanine') && explicitTarget) {
+    const inward = normalizeXZ(zoneCenter.clone().sub(explicitTarget))
+    const tangent = Math.abs(inward.x) >= Math.abs(inward.z) ? new Vector3(0, 0, 1) : new Vector3(1, 0, 0)
+    return {
+      point: explicitTarget.clone().setY(targetElevation),
+      tangent,
+      inwardNormal: inward.lengthSq() > 1e-6 ? inward : fallback.inwardNormal.clone(),
+      pathId: null,
+    }
+  }
+
+  return {
+    ...fallback,
+    pathId: null,
+  }
+}
+
+function occupiedBoundsFromSolids(solids: RuntimeSolid[], padding = 0.02) {
+  return mergeBoundsXZ(
+    solids
+      .filter((solid) => solid.spec.kind === 'stair' || solid.spec.kind === 'landing')
+      .map((solid) => solidBoundsXZ(solid))
+      .filter((bounds): bounds is { minX: number; maxX: number; minZ: number; maxZ: number } => Boolean(bounds)),
+    padding,
+  )
+}
+
+function solvePathAwareStairGeometry(
+  request: StairLayoutRequest,
+  resolvedBounds: { minX: number; maxX: number; minZ: number; maxZ: number },
+  fromElevation: number,
+  targetElevation: number,
+  targetFrame: { point: Vector3; tangent: Vector3; inwardNormal: Vector3; pathId: string | null },
+) {
+  const diagnostics: string[] = []
+  const totalRise = Math.max(targetElevation - fromElevation, 0.01)
+  const riseCount = Math.max(2, Math.ceil(totalRise / Math.max(request.maxRise, 0.01)))
+  const actualRise = totalRise / riseCount
+  const stepHeight = Math.max(actualRise, 0.02)
+  const width = request.width
+  const tread = request.tread
+  const landingDepth = Math.max(request.landingDepth, width)
+  const inward = normalizeXZ(targetFrame.inwardNormal)
+  const lateral = perpendicularXZ(inward, 'left')
+  const topConnectionPoint = targetFrame.point.clone()
+  const topLandingCenter = topConnectionPoint.clone().addScaledVector(inward, Math.max(landingDepth * 0.5 - 0.02, 0.05)).setY(targetElevation + 0.09)
+  const solids: RuntimeSolid[] = []
+  const anchors: Anchor[] = []
+  const landingIds: string[] = []
+  const intermediateLandingIds: string[] = []
+  const stairId = `${request.sourceNodeKey}.stair`
+  const baseColor = '#b98f66'
+  const landingColor = '#b1a385'
+  let bottomLandingId: string | null = null
+  let topLandingId: string | null = null
+  let bottomConnectionPoint: [number, number, number] | null = null
+
+  const landingYaw = yawForDepthDirection(inward)
+  const topLandingSolidId = `${request.sourceNodeKey}.landing_top`
+  landingIds.push(topLandingSolidId)
+  topLandingId = topLandingSolidId
+  solids.push({
+    spec: {
+      id: topLandingSolidId,
+      sourceNodeKey: request.sourceNodeKey,
+      kind: 'landing',
+      profileId: null,
+      transform: { position: [topLandingCenter.x, topLandingCenter.y, topLandingCenter.z], rotation: [0, landingYaw, 0], scale: [1, 1, 1] },
+      params: { landingElevation: targetElevation },
+      metadata: { stairFamily: request.stairFamily, landingRole: 'top', targetPathId: targetFrame.pathId },
+    },
+    geometry: orientedBoxGeometry(landingDepth, 0.18, width, topLandingCenter, landingYaw),
+    color: landingColor,
+  })
+
+  if (request.stairFamily === 'helical') {
+    const zoneCenter = new Vector3((resolvedBounds.minX + resolvedBounds.maxX) * 0.5, fromElevation, (resolvedBounds.minZ + resolvedBounds.maxZ) * 0.5)
+    const radius = Math.max(width * 0.8, Math.min(resolvedBounds.maxX - resolvedBounds.minX, resolvedBounds.maxZ - resolvedBounds.minZ) * 0.22)
+    const center = topConnectionPoint.clone().addScaledVector(inward, radius).setY(fromElevation)
+    const startAngle = Math.atan2(zoneCenter.z - center.z, zoneCenter.x - center.x)
+    const endAngle = Math.atan2(topConnectionPoint.z - center.z, topConnectionPoint.x - center.x)
+    const direction = request.turnDirection === 'left' ? 1 : -1
+    let sweep = endAngle - startAngle
+    if (direction > 0 && sweep < 0) sweep += Math.PI * 2
+    if (direction < 0 && sweep > 0) sweep -= Math.PI * 2
+    if (Math.abs(sweep) < Math.PI * 0.75) sweep += direction * Math.PI
+    for (let index = 0; index < riseCount; index += 1) {
+      const stepT = (index + 0.5) / riseCount
+      const angle = startAngle + sweep * stepT
+      const topY = fromElevation + actualRise * (index + 1)
+      const centerPoint = new Vector3(center.x + Math.cos(angle) * radius, topY - stepHeight * 0.5, center.z + Math.sin(angle) * radius)
+      const tangent = new Vector3(-Math.sin(angle), 0, Math.cos(angle)).multiplyScalar(direction)
+      const yaw = yawForTravelDirection(tangent)
+      solids.push({
+        spec: {
+          id: `${request.sourceNodeKey}.step_${index + 1}`,
+          sourceNodeKey: request.sourceNodeKey,
+          kind: 'stair',
+          profileId: null,
+          transform: { position: [centerPoint.x, centerPoint.y, centerPoint.z], rotation: [0, yaw, 0], scale: [1, 1, 1] },
+          params: { stepIndex: index + 1 },
+          metadata: { stairFamily: request.stairFamily },
+        },
+        geometry: orientedBoxGeometry(width, stepHeight, tread, centerPoint, yaw),
+        color: baseColor,
+      })
+    }
+    const startPoint = new Vector3(center.x + Math.cos(startAngle) * radius, fromElevation, center.z + Math.sin(startAngle) * radius)
+    bottomConnectionPoint = [startPoint.x, fromElevation, startPoint.z]
+    anchors.push(createAnchor(request.sourceNodeKey, 'Stair Base', startPoint), createAnchor(request.sourceNodeKey, 'Stair Top', new Vector3(topConnectionPoint.x, targetElevation, topConnectionPoint.z)))
+  } else if (request.stairFamily === 'arc') {
+    const radius = Math.max(width * 1.2, Math.min(resolvedBounds.maxX - resolvedBounds.minX, resolvedBounds.maxZ - resolvedBounds.minZ) * 0.28)
+    const center = topConnectionPoint.clone().addScaledVector(lateral, -radius)
+    const radialEnd = topConnectionPoint.clone().sub(center)
+    const sweep = (request.turnDirection === 'left' ? -1 : 1) * Math.PI * 0.5
+    const endAngle = Math.atan2(radialEnd.z, radialEnd.x)
+    const startAngle = endAngle - sweep
+    const startPoint = new Vector3(center.x + Math.cos(startAngle) * radius, fromElevation, center.z + Math.sin(startAngle) * radius)
+    for (let index = 0; index < riseCount; index += 1) {
+      const stepT = (index + 0.5) / riseCount
+      const angle = startAngle + sweep * stepT
+      const topY = fromElevation + actualRise * (index + 1)
+      const centerPoint = new Vector3(center.x + Math.cos(angle) * radius, topY - stepHeight * 0.5, center.z + Math.sin(angle) * radius)
+      const tangent = new Vector3(-Math.sin(angle), 0, Math.cos(angle))
+      const yaw = yawForTravelDirection(tangent)
+      solids.push({
+        spec: {
+          id: `${request.sourceNodeKey}.step_${index + 1}`,
+          sourceNodeKey: request.sourceNodeKey,
+          kind: 'stair',
+          profileId: null,
+          transform: { position: [centerPoint.x, centerPoint.y, centerPoint.z], rotation: [0, yaw, 0], scale: [1, 1, 1] },
+          params: { stepIndex: index + 1 },
+          metadata: { stairFamily: request.stairFamily },
+        },
+        geometry: orientedBoxGeometry(width, stepHeight, tread, centerPoint, yaw),
+        color: baseColor,
+      })
+    }
+    bottomConnectionPoint = [startPoint.x, fromElevation, startPoint.z]
+    anchors.push(createAnchor(request.sourceNodeKey, 'Stair Base', startPoint), createAnchor(request.sourceNodeKey, 'Stair Top', new Vector3(topConnectionPoint.x, targetElevation, topConnectionPoint.z)))
+  } else {
+    const switchback = request.stairFamily === 'switchback'
+    const lowerRunSteps = switchback ? Math.max(1, Math.ceil(riseCount / 2)) : riseCount
+    const upperRunSteps = switchback ? Math.max(riseCount - lowerRunSteps, 1) : 0
+    const lowerRunLength = lowerRunSteps * tread
+    const upperRunLength = upperRunSteps * tread
+    const gap = Math.max(width * 0.3, request.wallClearance * 2)
+    const topRunStart = topConnectionPoint.clone().addScaledVector(inward, landingDepth)
+    if (switchback) {
+      const midLandingCenter = topRunStart.clone().addScaledVector(inward, upperRunLength + landingDepth * 0.5).addScaledVector(lateral, (width + gap) * 0.5)
+      const midLandingId = `${request.sourceNodeKey}.landing_mid`
+      landingIds.push(midLandingId)
+      intermediateLandingIds.push(midLandingId)
+      bottomLandingId = midLandingId
+      solids.push({
+        spec: {
+          id: midLandingId,
+          sourceNodeKey: request.sourceNodeKey,
+          kind: 'landing',
+          profileId: null,
+          transform: { position: [midLandingCenter.x, fromElevation + actualRise * lowerRunSteps + 0.09, midLandingCenter.z], rotation: [0, landingYaw, 0], scale: [1, 1, 1] },
+          params: { landingElevation: fromElevation + actualRise * lowerRunSteps },
+          metadata: { stairFamily: request.stairFamily, landingRole: 'mid' },
+        },
+        geometry: orientedBoxGeometry(landingDepth, 0.18, width * 2 + gap, new Vector3(midLandingCenter.x, fromElevation + actualRise * lowerRunSteps + 0.09, midLandingCenter.z), landingYaw),
+        color: landingColor,
+      })
+      const bottomRunStart = midLandingCenter.clone().addScaledVector(inward, landingDepth * 0.5 + lowerRunLength).addScaledVector(lateral, -(width + gap) * 0.5)
+      const lowerYaw = yawForTravelDirection(inward.clone().multiplyScalar(-1))
+      for (let index = 0; index < lowerRunSteps; index += 1) {
+        const topY = fromElevation + actualRise * (index + 1)
+        const centerPoint = bottomRunStart.clone().addScaledVector(inward, -tread * (index + 0.5)).setY(topY - stepHeight * 0.5)
+        solids.push({
+          spec: { id: `${request.sourceNodeKey}.lower_${index + 1}`, sourceNodeKey: request.sourceNodeKey, kind: 'stair', profileId: null, transform: { position: [centerPoint.x, centerPoint.y, centerPoint.z], rotation: [0, lowerYaw, 0], scale: [1, 1, 1] }, params: { stepIndex: index + 1 }, metadata: { stairFamily: request.stairFamily } },
+          geometry: orientedBoxGeometry(width, stepHeight, tread, centerPoint, lowerYaw),
+          color: baseColor,
+        })
+      }
+      const upperYaw = yawForTravelDirection(inward)
+      for (let index = 0; index < upperRunSteps; index += 1) {
+        const topY = fromElevation + actualRise * (lowerRunSteps + index + 1)
+        const centerPoint = topRunStart.clone().addScaledVector(inward, upperRunLength - tread * (index + 0.5)).addScaledVector(lateral, (width + gap) * 0.5).setY(topY - stepHeight * 0.5)
+        solids.push({
+          spec: { id: `${request.sourceNodeKey}.upper_${index + 1}`, sourceNodeKey: request.sourceNodeKey, kind: 'stair', profileId: null, transform: { position: [centerPoint.x, centerPoint.y, centerPoint.z], rotation: [0, upperYaw, 0], scale: [1, 1, 1] }, params: { stepIndex: lowerRunSteps + index + 1 }, metadata: { stairFamily: request.stairFamily } },
+          geometry: orientedBoxGeometry(width, stepHeight, tread, centerPoint, upperYaw),
+          color: baseColor,
+        })
+      }
+      const startPoint = bottomRunStart.clone().setY(fromElevation)
+      bottomConnectionPoint = [startPoint.x, fromElevation, startPoint.z]
+      anchors.push(createAnchor(request.sourceNodeKey, 'Stair Base', startPoint), createAnchor(request.sourceNodeKey, 'Stair Top', new Vector3(topConnectionPoint.x, targetElevation, topConnectionPoint.z)))
+    } else {
+      const startPoint = topRunStart.clone().addScaledVector(inward, lowerRunLength).setY(fromElevation)
+      const straightYaw = yawForTravelDirection(inward.clone().multiplyScalar(-1))
+      for (let index = 0; index < riseCount; index += 1) {
+        const topY = fromElevation + actualRise * (index + 1)
+        const centerPoint = startPoint.clone().addScaledVector(inward, -tread * (index + 0.5)).setY(topY - stepHeight * 0.5)
+        solids.push({
+          spec: { id: `${request.sourceNodeKey}.step_${index + 1}`, sourceNodeKey: request.sourceNodeKey, kind: 'stair', profileId: null, transform: { position: [centerPoint.x, centerPoint.y, centerPoint.z], rotation: [0, straightYaw, 0], scale: [1, 1, 1] }, params: { stepIndex: index + 1 }, metadata: { stairFamily: request.stairFamily } },
+          geometry: orientedBoxGeometry(width, stepHeight, tread, centerPoint, straightYaw),
+          color: baseColor,
+        })
+      }
+      bottomConnectionPoint = [startPoint.x, fromElevation, startPoint.z]
+      anchors.push(createAnchor(request.sourceNodeKey, 'Stair Base', startPoint), createAnchor(request.sourceNodeKey, 'Stair Top', new Vector3(topConnectionPoint.x, targetElevation, topConnectionPoint.z)))
+    }
+  }
+
+  const voidBounds = occupiedBoundsFromSolids(solids, 0.02) ?? {
+    minX: resolvedBounds.minX,
+    maxX: resolvedBounds.maxX,
+    minZ: resolvedBounds.minZ,
+    maxZ: resolvedBounds.maxZ,
+  }
+  const requiredEnvelope: [number, number, number] = [voidBounds.maxX - voidBounds.minX, totalRise, voidBounds.maxZ - voidBounds.minZ]
+
+  return {
+    solids,
+    anchors,
+    stairId,
+    landingIds,
+    bottomLandingId,
+    topLandingId,
+    intermediateLandingIds,
+    lowerRunSteps: riseCount,
+    riseCount,
+    requiredEnvelope,
+    resolvedEnvelope: requiredEnvelope,
+    voidBounds,
+    bottomConnectionPoint,
+    topConnectionPoint: [topConnectionPoint.x, targetElevation, topConnectionPoint.z] as [number, number, number],
+    diagnostics,
+  }
 }
 
 function rectLoopFromBounds(id: string, bounds: { minX: number; maxX: number; minZ: number; maxZ: number }) {
@@ -2225,6 +2769,7 @@ function resolveZoneAdjustedStairs(
   solids: RuntimeSolid[],
   rooms: RoomVolume[],
   levels: LevelSpec[],
+  runtimePaths: RuntimePath[],
   stairRequests: StairLayoutRequest[],
   stairConnectionRequests: StairConnectionRequest[],
   diagnostics: string[],
@@ -2269,7 +2814,12 @@ function resolveZoneAdjustedStairs(
       diagnostics.push(`Circulation zone for "${request.sourceNodeKey}" must use an axis-aligned rectangular profile.`)
       continue
     }
-    const preview = solveStairGeometry(request, bounds, fromElevation, targetElevation)
+    const previewTargetFrame = request.solverVersion === 'v3'
+      ? resolveV3TargetFrame(request, bounds, targetElevation, runtimePaths)
+      : null
+    const preview = request.solverVersion === 'v3' && previewTargetFrame
+      ? solvePathAwareStairGeometry(request, bounds, fromElevation, targetElevation, previewTargetFrame)
+      : solveStairGeometry(request, bounds, fromElevation, targetElevation)
     const widthDeficit = Math.max(0, preview.requiredEnvelope[0] - (bounds.maxX - bounds.minX))
     const depthDeficit = Math.max(0, preview.requiredEnvelope[2] - (bounds.maxZ - bounds.minZ))
     const zoneNode = graphNodes.get(fromZoneRoom.sourceNodeKey)
@@ -2316,7 +2866,13 @@ function resolveZoneAdjustedStairs(
         })
       }
     }
-    const resolved = solveStairGeometry(request, fitStatus === 'overflow' || fitStatus === 'invalid' ? bounds : resolvedBounds, fromElevation, targetElevation)
+    const workingBounds = fitStatus === 'overflow' || fitStatus === 'invalid' ? bounds : resolvedBounds
+    const resolvedTargetFrame = request.solverVersion === 'v3'
+      ? resolveV3TargetFrame(request, workingBounds, targetElevation, runtimePaths)
+      : null
+    const resolved = request.solverVersion === 'v3' && resolvedTargetFrame
+      ? solvePathAwareStairGeometry(request, workingBounds, fromElevation, targetElevation, resolvedTargetFrame)
+      : solveStairGeometry(request, workingBounds, fromElevation, targetElevation)
     derivedAnchors.push(...resolved.anchors)
     if (fitStatus !== 'overflow' && fitStatus !== 'invalid') {
       updatedSolids.push(...resolved.solids)
@@ -2362,6 +2918,8 @@ function resolveZoneAdjustedStairs(
         zoneRoomId: fromZoneRoom.roomId,
         topZoneRoomId: toZoneRoom?.roomId ?? null,
         targetElevation,
+        targetMode: request.targetMode ?? request.targetElevationMode,
+        targetPathId: resolvedTargetFrame?.pathId ?? null,
         bottomConnectionPoint: resolved.bottomConnectionPoint,
         topConnectionPoint: resolved.topConnectionPoint,
         connectionRequestIds: stairConnectionRequests.filter((entry) => entry.stairId === resolved.stairId).map((entry) => entry.id),
@@ -2580,6 +3138,12 @@ function mergeNodeResults(target: RuntimeNodeResult, source: RuntimeNodeResult) 
 
 function preferOutputCollection<T>(primary: T[] | undefined, fallback: T[]) {
   return Array.isArray(primary) && primary.length > 0 ? primary : fallback
+}
+
+function mergeByKey<T>(items: T[], keyOf: (item: T) => string) {
+  const byKey = new Map<string, T>()
+  for (const item of items) byKey.set(keyOf(item), item)
+  return [...byKey.values()]
 }
 
 function compileRoomLikeNode(
@@ -2961,30 +3525,16 @@ export function compileAssemblyGraph(
         break
       case 'polyline':
       case 'spline':
-        result.paths = [createPathFromPoints(pointsParam(node))]
-        result.pathSpecs = [{
-          id: `${node.key}.path`,
-          sourceNodeKey: node.key,
-          kind: node.kind === 'spline' ? 'spline' : 'polyline',
-          pointCount: pointsParam(node).length,
-          closed: false,
-          metadata: {},
-        }]
+        result.paths = [createPathFromPoints(node.key, `${node.key}.path`, node.kind === 'spline' ? 'spline' : 'polyline', pointsParam(node))]
+        result.pathSpecs = result.paths.map((path) => path.spec)
         break
       case 'arc': {
         const radius = numberParam(node, 'radius', 4)
         const startAngle = numberParam(node, 'startAngle', 0)
         const endAngle = numberParam(node, 'endAngle', 180)
         const curve = new ArcCurve(0, 0, radius, (startAngle * Math.PI) / 180, (endAngle * Math.PI) / 180, false)
-        result.paths = [{ points: curve.getPoints(32).map((point) => new Vector3(point.x, 0, point.y)) }]
-        result.pathSpecs = [{
-          id: `${node.key}.path`,
-          sourceNodeKey: node.key,
-          kind: 'arc',
-          pointCount: 33,
-          closed: false,
-          metadata: { radius, startAngle, endAngle },
-        }]
+        result.paths = [createRuntimePath(node.key, `${node.key}.path`, 'arc', curve.getPoints(32).map((point) => new Vector3(point.x, 0, point.y)), { radius, startAngle, endAngle })]
+        result.pathSpecs = result.paths.map((path) => path.spec)
         break
       }
       case 'profile_from_path':
@@ -3370,7 +3920,7 @@ export function compileAssemblyGraph(
           profile,
           resolvedLevels,
           {
-            topologyOwned: node.kind === 'circulation_zone' ? true : isTopologyOwnedRoomNode(node),
+            topologyOwned: node.kind === 'circulation_zone' ? node.metadata.topologyOwned !== false : isTopologyOwnedRoomNode(node),
             roomRole: node.kind === 'circulation_zone' ? 'circulation_zone' : 'room',
             movablePartition: booleanParam(node, 'movablePartition', node.kind === 'circulation_zone'),
             zoneOwned: node.kind === 'circulation_zone',
@@ -3389,12 +3939,24 @@ export function compileAssemblyGraph(
       case 'ceiling_slab':
       case 'ceiling_fill':
       case 'mezzanine':
-      case 'mezzanine_ring': {
-        const profile = collectIncomingProfiles(graph, node, nextCache.nodeResults)[0]
+      case 'mezzanine_ring':
+      case 'mezzanine_surface': {
+        const profile = node.kind === 'mezzanine_surface'
+          ? (() => {
+              const outer = collectIncomingProfiles(graph, node, nextCache.nodeResults, 'outer')[0]
+              if (!outer) return null
+              const holes = collectIncomingProfiles(graph, node, nextCache.nodeResults, 'holes').map((entry) => entry.outer)
+              return runtimeProfileFromLoops(`${node.key}.profile`, outer.outer, holes, {
+                nodeKind: node.kind,
+                sourceOuterProfileId: outer.profile.id,
+                sourceHoleCount: holes.length,
+              })
+            })()
+          : collectIncomingProfiles(graph, node, nextCache.nodeResults)[0]
         if (!profile) break
         const thickness = numberParam(node, 'thickness', 0.18)
         const availableLevels = collectIncomingLevels(graph, node, nextCache.nodeResults)
-        const selectedLevel = (node.kind === 'floor_slab' || node.kind === 'ceiling_slab')
+        const selectedLevel = (node.kind === 'floor_slab' || node.kind === 'ceiling_slab' || node.kind === 'mezzanine_surface')
           ? selectLevelForNode(node, availableLevels, 'levelIndex', 1)
           : null
         const elevation = node.kind === 'floor_slab'
@@ -3404,41 +3966,54 @@ export function compileAssemblyGraph(
             : numberParam(node, 'elevation', node.kind === 'mezzanine' || node.kind === 'mezzanine_ring' ? 1.5 : node.kind === 'ceiling_fill' ? 3 : 0)
         const geometry = extrudeProfile(profile, thickness)
         geometry.translate(0, elevation, 0)
-        if (node.kind === 'floor_slab' || node.kind === 'ceiling_slab') {
+        if (node.kind === 'floor_slab' || node.kind === 'ceiling_slab' || (node.kind === 'mezzanine_surface' && booleanParam(node, 'emitSolid', true))) {
           result.solids = [{
             spec: {
               id: `${node.key}.solid`,
               sourceNodeKey: node.key,
-              kind: 'slab',
+              kind: node.kind === 'mezzanine_surface' ? 'landing' : 'slab',
               profileId: profile.profile.id,
               transform: { position: [0, elevation, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
-              params: { thickness },
+              params: { thickness, undersideMode: stringParam(node, 'undersideMode', 'flat') },
               metadata: {
                 levelId: selectedLevel?.id ?? null,
-                slabRole: node.kind === 'floor_slab' ? 'floor' : 'ceiling',
+                slabRole: node.kind === 'floor_slab' ? 'floor' : node.kind === 'ceiling_slab' ? 'ceiling' : 'mezzanine_surface',
               },
             },
             geometry: geometry.clone(),
-            color: '#687788',
+            color: node.kind === 'mezzanine_surface' ? '#869a63' : '#687788',
           }]
         }
-        result.surfaces = [{
-          spec: {
-            id: `${node.key}.surface`,
-            sourceNodeKey: node.key,
-            kind: node.kind === 'mezzanine' || node.kind === 'mezzanine_ring' ? 'mezzanine' : node.kind === 'ceiling_fill' ? 'roof' : 'floor',
-            profileId: profile.profile.id,
-            elevation,
-            thickness,
-            metadata: {
-              levelId: selectedLevel?.id ?? null,
-              slabRole: node.kind === 'floor_slab' ? 'floor' : node.kind === 'ceiling_slab' ? 'ceiling' : null,
-            },
-          },
-          geometry,
-          color: node.kind === 'mezzanine' || node.kind === 'mezzanine_ring' ? '#95a56f' : node.kind === 'ceiling_fill' ? '#6d7078' : '#5b6c7c',
-        }]
-        result.anchors = [createAnchor(node.key, node.kind === 'mezzanine' || node.kind === 'mezzanine_ring' ? 'Mezzanine Edge' : node.kind === 'ceiling_fill' ? 'Ceiling Center' : 'Floor Center', new Vector3(0, elevation, 0))]
+        result.surfaces = booleanParam(node, 'emitSurface', true) || node.kind !== 'mezzanine_surface'
+          ? [{
+              spec: {
+                id: `${node.key}.surface`,
+                sourceNodeKey: node.key,
+                kind: node.kind === 'mezzanine' || node.kind === 'mezzanine_ring' || node.kind === 'mezzanine_surface' ? 'mezzanine' : node.kind === 'ceiling_fill' ? 'roof' : 'floor',
+                profileId: profile.profile.id,
+                elevation,
+                thickness,
+                metadata: {
+                  levelId: selectedLevel?.id ?? null,
+                  slabRole: node.kind === 'floor_slab' ? 'floor' : node.kind === 'ceiling_slab' ? 'ceiling' : node.kind === 'mezzanine_surface' ? 'mezzanine_surface' : null,
+                },
+              },
+              geometry,
+              color: node.kind === 'mezzanine' || node.kind === 'mezzanine_ring' || node.kind === 'mezzanine_surface' ? '#95a56f' : node.kind === 'ceiling_fill' ? '#6d7078' : '#5b6c7c',
+            }]
+          : []
+        if (node.kind === 'mezzanine_surface') {
+          const boundary = boundaryPathsFromProfile(node.key, `${node.key}.surface`, profile, elevation + thickness)
+          result.profiles = [profile]
+          result.paths = boundary.paths
+          result.pathSpecs = boundary.pathSpecs
+          result.anchors = [
+            createAnchor(node.key, 'Mezzanine Surface', new Vector3(0, elevation + thickness, 0)),
+            ...boundary.anchors,
+          ]
+        } else {
+          result.anchors = [createAnchor(node.key, node.kind === 'mezzanine' || node.kind === 'mezzanine_ring' ? 'Mezzanine Edge' : node.kind === 'ceiling_fill' ? 'Ceiling Center' : 'Floor Center', new Vector3(0, elevation, 0))]
+        }
         break
       }
       case 'mezzanine_anchor': {
@@ -3848,12 +4423,15 @@ export function compileAssemblyGraph(
           id: stairId,
           sourceNodeKey: node.key,
           stairFamily,
+          solverVersion: 'v2',
           fitMode,
           targetElevationMode,
+          targetMode: targetElevationMode,
           fromLevelId: fromLevel.id,
           toLevelId: toLevel?.id ?? null,
           zoneRoomIds: zoneRooms.map((room) => room.roomId ?? room.id),
           targetAnchorId: targetAnchor?.id ?? null,
+          targetPathIds: [],
           width: numberParam(node, 'width', 2.2),
           tread: numberParam(node, 'tread', 0.28),
           maxRise: numberParam(node, 'maxRise', 0.18),
@@ -3864,6 +4442,93 @@ export function compileAssemblyGraph(
           wallClearance: numberParam(node, 'wallClearance', 0.16),
           clearanceMargin: numberParam(node, 'clearanceMargin', 0.22),
           explicitTargetElevation: targetAnchor?.position[1] ?? (targetElevationMode === 'explicit' ? numberParam(node, 'targetElevation', fromLevel.topElevation) : null),
+          explicitTargetPosition: targetAnchor?.position ?? null,
+        }]
+        break
+      }
+      case 'stair_core_v3': {
+        const availableLevels = collectIncomingLevels(graph, node, nextCache.nodeResults, 'levels')
+        const fromLevel = selectLevelForNode(node, availableLevels, 'fromLevelIndex', 1)
+        const toLevel = selectLevelForNode(node, availableLevels, 'toLevelIndex', Math.min(2, availableLevels.length))
+        const zoneRooms = collectIncomingRooms(graph, node, nextCache.nodeResults, 'zone')
+        const targetAnchor = collectIncomingAnchors(graph, node, nextCache.nodeResults, 'target')[0]
+        const targetPaths = collectIncomingPaths(graph, node, nextCache.nodeResults, 'target_paths')
+        if (!fromLevel) {
+          diagnostics.push(`Stair core "${node.key}" is missing a valid source level.`)
+          break
+        }
+        if (zoneRooms.length === 0) {
+          diagnostics.push(`Stair core "${node.key}" requires a connected circulation zone.`)
+          break
+        }
+        const stairId = `${node.key}.stair`
+        const stairFamilyParam = stringParam(node, 'stairFamily', 'arc')
+        const stairFamily: StairRunSpec['stairFamily'] =
+          stairFamilyParam === 'straight' || stairFamilyParam === 'switchback' || stairFamilyParam === 'arc' || stairFamilyParam === 'helical'
+            ? stairFamilyParam
+            : 'straight'
+        const fitModeParam = stringParam(node, 'fitMode', 'zone_autofit')
+        const fitMode: StairLayoutRequest['fitMode'] =
+          fitModeParam === 'strict' || fitModeParam === 'zone_autofit_with_partition_push' ? fitModeParam : 'zone_autofit'
+        const turnDirectionParam = stringParam(node, 'turnDirection', 'right')
+        const turnDirection: StairLayoutRequest['turnDirection'] = turnDirectionParam === 'left' ? 'left' : 'right'
+        const preferredExitSideParam = stringParam(node, 'preferredExitSide', 'auto')
+        const preferredExitSide: StairLayoutRequest['preferredExitSide'] =
+          preferredExitSideParam === 'front' || preferredExitSideParam === 'back' || preferredExitSideParam === 'left' || preferredExitSideParam === 'right'
+            ? preferredExitSideParam
+            : 'auto'
+        const targetModeParam = stringParam(node, 'targetMode', targetPaths.length > 0 ? 'surface_edge' : targetAnchor ? 'anchor' : 'level_top')
+        const targetMode: StairLayoutRequest['targetMode'] =
+          targetModeParam === 'surface_edge' || targetModeParam === 'anchor' || targetModeParam === 'mezzanine' || targetModeParam === 'explicit'
+            ? targetModeParam
+            : 'level_top'
+        const fromZoneRoom = zoneRooms.find((room) => room.levelId === fromLevel.id) ?? zoneRooms[0]
+        result.stairs = [{
+          id: stairId,
+          sourceNodeKey: node.key,
+          kind: stairKindFromFamily(stairFamily),
+          stairFamily,
+          fromLevelId: fromLevel.id,
+          toLevelId: toLevel?.id ?? null,
+          shaftId: `${node.key}.void`,
+          zoneId: fromZoneRoom?.sourceNodeKey ?? null,
+          clearanceEnvelope: null,
+          landingIds: [],
+          bottomLandingId: null,
+          topLandingId: null,
+          intermediateLandingIds: [],
+          requiredEnvelope: null,
+          resolvedEnvelope: null,
+          fitStatus: 'invalid',
+          diagnostics: [],
+          riseCount: 0,
+          metadata: { placeholder: true, solverVersion: 'v3' },
+        }]
+        result.stairLayoutRequests = [{
+          id: stairId,
+          sourceNodeKey: node.key,
+          stairFamily,
+          solverVersion: 'v3',
+          fitMode,
+          targetElevationMode: targetMode === 'mezzanine' ? 'mezzanine' : targetMode === 'explicit' || targetMode === 'anchor' || targetMode === 'surface_edge' ? 'explicit' : 'level_top',
+          targetMode,
+          fromLevelId: fromLevel.id,
+          toLevelId: toLevel?.id ?? null,
+          zoneRoomIds: zoneRooms.map((room) => room.roomId ?? room.id),
+          targetAnchorId: targetAnchor?.id ?? null,
+          targetPathIds: targetPaths.map((path) => path.spec.id),
+          width: numberParam(node, 'width', 2),
+          tread: numberParam(node, 'tread', 0.28),
+          maxRise: numberParam(node, 'maxRise', 0.18),
+          landingDepth: numberParam(node, 'landingDepth', 1.8),
+          turnDirection,
+          preferredExitSide,
+          headroom: numberParam(node, 'headroom', 2.2),
+          wallClearance: numberParam(node, 'wallClearance', 0.16),
+          clearanceMargin: numberParam(node, 'clearanceMargin', 0.22),
+          explicitTargetElevation: targetAnchor?.position[1]
+            ?? (targetMode === 'explicit' ? numberParam(node, 'targetElevation', fromLevel.topElevation) : (toLevel?.baseElevation ?? fromLevel.topElevation)),
+          explicitTargetPosition: targetAnchor?.position ?? null,
         }]
         break
       }
@@ -4050,6 +4715,8 @@ export function compileAssemblyGraph(
       case 'stair_connection': {
         const stairs = collectIncomingStairs(graph, node, nextCache.nodeResults)
         const rooms = collectIncomingRooms(graph, node, nextCache.nodeResults)
+        const targetAnchor = collectIncomingAnchors(graph, node, nextCache.nodeResults, 'target_anchor')[0]
+        const targetPaths = collectIncomingPaths(graph, node, nextCache.nodeResults, 'target_path')
         const wallSegmentEdge = incomingEdges(graph, node.key, 'wall_segment')[0]
         result.stairConnectionRequests = stairs.map((stair) => ({
           id: `${node.key}.${stair.id}`,
@@ -4057,6 +4724,18 @@ export function compileAssemblyGraph(
           stairId: stair.id,
           targetRoomIds: rooms.map((room) => roomLabel(room)),
           targetWallSegmentId: wallSegmentEdge ? `${wallSegmentEdge.source.nodeKey}.${wallSegmentEdge.source.portId}` : null,
+          targetAnchorId: targetAnchor?.id ?? null,
+          targetPathIds: targetPaths.map((path) => path.spec.id),
+          targetKind: stringParam(node, 'targetKind', 'room') === 'anchor'
+            ? 'anchor'
+            : stringParam(node, 'targetKind', 'room') === 'surface_edge'
+              ? 'surface_edge'
+              : 'room',
+          edgeSelectionMode: stringParam(node, 'edgeSelectionMode', 'nearest') === 'tagged'
+            ? 'tagged'
+            : stringParam(node, 'edgeSelectionMode', 'nearest') === 'explicit'
+              ? 'explicit'
+              : 'nearest',
           connectionMode: stringParam(node, 'connectionMode', 'door') === 'open_edge'
             ? 'open_edge'
             : stringParam(node, 'connectionMode', 'door') === 'guard_opening'
@@ -4309,12 +4988,31 @@ export function compileAssemblyGraph(
       }
       case 'ribbon_along_path':
       case 'ribbon_path':
+      case 'boundary_path_selector':
       case 'fence_along_path':
       case 'wall_along_path':
       case 'tiled_array_along_path':
       case 'array_along_path':
       case 'path_loft': {
-        const path = collectIncomingPaths(graph, node, nextCache.nodeResults)[0]
+        const incomingPaths = collectIncomingPaths(graph, node, nextCache.nodeResults)
+        if (node.kind === 'boundary_path_selector') {
+          const boundaryRole = typeof node.params.boundaryRole === 'string' ? String(node.params.boundaryRole) : null
+          const surfaceId = typeof node.params.surfaceId === 'string' ? String(node.params.surfaceId) : null
+          const loopId = typeof node.params.loopId === 'string' ? String(node.params.loopId) : null
+          const edgeId = typeof node.params.edgeId === 'string' ? String(node.params.edgeId) : null
+          const selected = incomingPaths.filter((path) => {
+            if (surfaceId && path.spec.metadata.surfaceId !== surfaceId) return false
+            if (loopId && path.spec.metadata.loopId !== loopId) return false
+            if (edgeId && path.spec.metadata.edgeId !== edgeId) return false
+            if (boundaryRole && path.spec.metadata.boundaryRole !== boundaryRole) return false
+            return true
+          })
+          result.paths = selected
+          result.pathSpecs = selected.map((path) => path.spec)
+          result.anchors = selected.map((path, index) => createAnchor(node.key, `Boundary Path ${index + 1}`, pathMidpoint(path)))
+          break
+        }
+        const path = incomingPaths[0]
         if (!path || path.points.length < 2) break
         if (node.kind === 'ribbon_path' || node.kind === 'ribbon_along_path' || node.kind === 'path_loft') {
           const width = numberParam(node, 'width', 1.5)
@@ -4649,12 +5347,19 @@ export function compileAssemblyGraph(
   const connectors = preferOutputCollection(outputResult.connectors, [...nextCache.nodeResults.values()].flatMap((result) => result.connectors ?? []))
   const openings = outputResult.openings && outputResult.openings.length > 0 ? outputResult.openings : [...nextCache.nodeResults.values()].flatMap((result) => result.openings ?? [])
   const windows = outputResult.windows && outputResult.windows.length > 0 ? outputResult.windows : [...nextCache.nodeResults.values()].flatMap((result) => result.windows ?? [])
-  const rooms = preferOutputCollection(outputResult.rooms, [...nextCache.nodeResults.values()].flatMap((result) => result.rooms ?? []))
+  const rooms = mergeByKey(
+    [
+      ...[...nextCache.nodeResults.values()].flatMap((result) => result.rooms ?? []),
+      ...(outputResult.rooms ?? []),
+    ],
+    (room) => roomLabel(room),
+  )
   const roofs = preferOutputCollection(outputResult.roofs, [...nextCache.nodeResults.values()].flatMap((result) => result.roofs ?? []))
   const bridges = preferOutputCollection(outputResult.bridges, [...nextCache.nodeResults.values()].flatMap((result) => result.bridges ?? []))
   const stairs = preferOutputCollection(outputResult.stairs, [...nextCache.nodeResults.values()].flatMap((result) => result.stairs ?? []))
   const slabVoids = preferOutputCollection(outputResult.slabVoids, [...nextCache.nodeResults.values()].flatMap((result) => result.slabVoids ?? []))
   const paths = [...nextCache.nodeResults.values()].flatMap((result) => result.pathSpecs ?? [])
+  const runtimePaths = [...nextCache.nodeResults.values()].flatMap((result) => result.paths ?? [])
   const arrayPlacements = preferOutputCollection(outputResult.arrayPlacements, [...nextCache.nodeResults.values()].flatMap((result) => result.arrayPlacements ?? []))
   const interiorDoorRequests = [...nextCache.nodeResults.values()].flatMap((result) => result.interiorDoorRequests ?? [])
   const wallSegmentOpeningRequests = [...nextCache.nodeResults.values()].flatMap((result) => result.wallSegmentOpeningRequests ?? [])
@@ -4667,6 +5372,7 @@ export function compileAssemblyGraph(
     solids,
     rooms,
     levels,
+    runtimePaths,
     stairLayoutRequests,
     stairConnectionRequests,
     diagnostics,
@@ -4708,11 +5414,19 @@ export function compileAssemblyGraph(
     })),
     ...derivedWallFaces,
   ]
-  const stairConnectionOpenings = stairConnectionRequests.flatMap((request) => {
+  const stairConnectionDoorRequests = stairConnectionRequests.flatMap((request): InteriorDoorRequest[] => {
     const stair = effectiveStairs.find((entry) => entry.id === request.stairId)
     if (!stair) return []
+    const landingPoint = request.landing === 'bottom'
+      ? (Array.isArray(stair.metadata.bottomConnectionPoint) ? stair.metadata.bottomConnectionPoint as [number, number, number] : null)
+      : request.landing === 'top'
+        ? (Array.isArray(stair.metadata.topConnectionPoint) ? stair.metadata.topConnectionPoint as [number, number, number] : null)
+        : (Array.isArray(stair.metadata.topConnectionPoint) ? stair.metadata.topConnectionPoint as [number, number, number] : Array.isArray(stair.metadata.bottomConnectionPoint) ? stair.metadata.bottomConnectionPoint as [number, number, number] : null)
+    if (request.targetKind === 'surface_edge' || request.targetKind === 'anchor') {
+      return []
+    }
     if (request.connectionMode !== 'door') {
-      diagnostics.push(`Stair connection "${request.id}" uses unsupported mode "${request.connectionMode}".`)
+      diagnostics.push(`Stair connection "${request.id}" uses unsupported mode "${request.connectionMode}" for room targets.`)
       return []
     }
     return request.targetRoomIds.flatMap((targetRoomId) => {
@@ -4725,13 +5439,7 @@ export function compileAssemblyGraph(
           : (targetRoom.levelId === stair.toLevelId ? (stair.metadata.topZoneRoomId ?? stair.metadata.zoneRoomId) : stair.metadata.zoneRoomId)
       const preferredPosition = request.connectionPlacement === 'center'
         ? null
-        : request.landing === 'bottom'
-          ? (Array.isArray(stair.metadata.bottomConnectionPoint) ? stair.metadata.bottomConnectionPoint as [number, number, number] : null)
-          : request.landing === 'top'
-            ? (Array.isArray(stair.metadata.topConnectionPoint) ? stair.metadata.topConnectionPoint as [number, number, number] : null)
-            : (targetRoom.levelId === stair.toLevelId
-                ? (Array.isArray(stair.metadata.topConnectionPoint) ? stair.metadata.topConnectionPoint as [number, number, number] : null)
-                : (Array.isArray(stair.metadata.bottomConnectionPoint) ? stair.metadata.bottomConnectionPoint as [number, number, number] : null))
+        : landingPoint
       return zoneRoomId
         ? [{
             id: `${request.id}.${targetRoomId}`,
@@ -4747,8 +5455,79 @@ export function compileAssemblyGraph(
         : []
     })
   })
+  const stairConnectionEdgeOpenings = stairConnectionRequests.flatMap((request): OpeningSpec[] => {
+    const stair = effectiveStairs.find((entry) => entry.id === request.stairId)
+    if (!stair || (request.targetKind !== 'surface_edge' && request.targetKind !== 'anchor')) return []
+    const landingPoint = request.landing === 'bottom'
+      ? (Array.isArray(stair.metadata.bottomConnectionPoint) ? stair.metadata.bottomConnectionPoint as [number, number, number] : null)
+      : request.landing === 'top'
+        ? (Array.isArray(stair.metadata.topConnectionPoint) ? stair.metadata.topConnectionPoint as [number, number, number] : null)
+        : (Array.isArray(stair.metadata.topConnectionPoint) ? stair.metadata.topConnectionPoint as [number, number, number] : Array.isArray(stair.metadata.bottomConnectionPoint) ? stair.metadata.bottomConnectionPoint as [number, number, number] : null)
+    const resolvedLevelId = request.landing === 'bottom' ? stair.fromLevelId : (stair.toLevelId ?? stair.fromLevelId)
+    const landingY = landingPoint?.[1] ?? (request.landing === 'bottom' ? 0 : Number(stair.metadata.targetElevation ?? 0))
+    if (request.targetKind === 'anchor' && request.targetAnchorId) {
+      const targetAnchor = effectiveAnchors.find((anchor) => anchor.id === request.targetAnchorId)
+      return targetAnchor
+        ? [{
+            id: `${request.id}.anchor_connection`,
+            sourceNodeKey: request.sourceNodeKey,
+            hostSolidId: null,
+            hostWallSegmentId: null,
+            levelId: resolvedLevelId,
+            fromRoomId: typeof stair.metadata.zoneRoomId === 'string' ? stair.metadata.zoneRoomId : null,
+            toRoomId: null,
+            kind: request.connectionMode === 'door' ? 'doorway' : 'opening',
+            openingRole: 'circulation',
+            position: [targetAnchor.position[0], landingY + request.height * 0.5, targetAnchor.position[2]],
+            size: [request.width, request.height, 0.12],
+            metadata: {
+              connectionMode: request.connectionMode,
+              targetKind: request.targetKind,
+              targetAnchorId: request.targetAnchorId,
+            },
+          }]
+        : []
+    }
+    const reference = landingPoint ?? [0, landingY, 0] as [number, number, number]
+    const candidatePaths = runtimePaths.filter((path) => (request.targetPathIds ?? []).includes(path.spec.id))
+    let bestPath: RuntimePath | null = null
+    let bestProjection: ReturnType<typeof closestPointOnPathXZ> = null
+    let bestDistance = Number.POSITIVE_INFINITY
+    for (const path of candidatePaths) {
+      const projection = closestPointOnPathXZ(path, reference)
+      if (!projection) continue
+      if (projection.distanceSq < bestDistance) {
+        bestDistance = projection.distanceSq
+        bestPath = path
+        bestProjection = projection
+      }
+    }
+    return bestPath && bestProjection
+      ? [{
+          id: `${request.id}.surface_edge`,
+          sourceNodeKey: request.sourceNodeKey,
+          hostSolidId: null,
+          hostWallSegmentId: null,
+          levelId: resolvedLevelId,
+          fromRoomId: typeof stair.metadata.zoneRoomId === 'string' ? stair.metadata.zoneRoomId : null,
+          toRoomId: null,
+          kind: request.connectionMode === 'door' ? 'doorway' : 'opening',
+          openingRole: 'circulation',
+          position: [bestProjection.point.x, landingY + request.height * 0.5, bestProjection.point.z],
+          size: [request.width, request.height, 0.12],
+          metadata: {
+            connectionMode: request.connectionMode,
+            targetKind: request.targetKind,
+            targetPathId: bestPath.spec.id,
+            boundaryRole: bestPath.spec.metadata.boundaryRole,
+            edgeId: bestPath.spec.metadata.edgeId,
+            guardRequired: request.connectionMode === 'guard_opening',
+          },
+        }]
+      : []
+  })
   const allInteriorOpenings = resolveInteriorDoorRequests(
-    [...interiorDoorRequests, ...stairConnectionOpenings],
+    [...interiorDoorRequests, ...stairConnectionDoorRequests],
     topologyRoomAdjacency,
     topologyWallSegments,
   )
@@ -4772,7 +5551,7 @@ export function compileAssemblyGraph(
       metadata: {},
     }]
   })
-  const openingsWithTopology = remapTopologyOpenings([...openings, ...allInteriorOpenings, ...manualWallSegmentOpenings], topologyWallSegments, diagnostics)
+  const openingsWithTopology = remapTopologyOpenings([...openings, ...allInteriorOpenings, ...manualWallSegmentOpenings, ...stairConnectionEdgeOpenings], topologyWallSegments, diagnostics)
   const windowsWithTopology = remapTopologyWindows(windows, openingsWithTopology)
   const clusteredFloors = rebuildTopologyFloorClusters(effectiveProfiles, effectiveSolids, effectiveRooms, openingsWithTopology, effectiveSlabVoids)
   const clusteredProfiles = clusteredFloors.profiles
@@ -4812,6 +5591,56 @@ export function compileAssemblyGraph(
       metadata: { boundEnvironmentKey: graph.boundEnvironmentKey },
   }
 
+  const includeDebugParts = outputNode.kind === 'debug_output' || graph.metadata.includeDebugParts === true
+  const debugParts: CompiledMeshPart[] = includeDebugParts
+    ? [
+        ...profiles.map((profile, index) => {
+          const points = profile.loops.flatMap((loop) => segmentsToPolyline(loop).map((point) => new Vector3(point.x, 0.02, point.y)))
+          return linePart(`profile.${index + 1}`, graph.key, points, '#5eead4', { debugKind: 'profile' })
+        }),
+        ...structureFootprints.map((footprint, index) => {
+          const points = boundaryLoopPoints(footprint.outerLoop).map((point) => new Vector3(point.x, Number(footprint.metadata.baseElevation ?? 0) + 0.04, point.y))
+          return linePart(`footprint.${index + 1}`, footprint.sourceNodeKey, points, '#22c55e', { debugKind: 'structure_footprint', shapeKind: footprint.shapeKind })
+        }),
+        ...levels.map((level, index) =>
+          linePart(`level.${index + 1}`, level.sourceNodeKey, [new Vector3(-1.2, level.elevation, 0), new Vector3(1.2, level.elevation, 0)], '#f59e0b', { label: level.label }),
+        ),
+        ...topologyWallFaces.map((face, index) =>
+          linePart(`wallface.${index + 1}`, face.sourceNodeKey, [new Vector3(face.start[0], face.start[1], face.start[2]), new Vector3(face.end[0], face.end[1], face.end[2])], '#f97316', { wallFaceId: face.id }),
+        ),
+        ...effectiveAnchors.map((anchor, index) => {
+          const geometry = new SphereGeometry(0.12, 8, 8)
+          geometry.translate(anchor.position[0], anchor.position[1], anchor.position[2])
+          return geometryToPart(`anchor.${index + 1}`, anchor.sourceNodeKey, 'debug', geometry, '#fbbf24', { label: anchor.label })
+        }),
+        ...openingsWithTopology.map((opening, index) => {
+          const geometry = new BoxGeometry(opening.size[0], opening.size[1], Math.max(opening.size[2], 0.08))
+          geometry.translate(opening.position[0], opening.position[1], opening.position[2])
+          return geometryToPart(`opening.${index + 1}`, opening.sourceNodeKey, 'debug', geometry, '#60a5fa', { openingId: opening.id })
+        }),
+        ...topologyWallSegments.map((segment, index) =>
+          linePart(`wallsegment.${index + 1}`, segment.sourceNodeKeys[0] ?? graph.key, [new Vector3(segment.start[0], segment.start[1], segment.start[2]), new Vector3(segment.end[0], segment.end[1], segment.end[2])], segment.wallRole === 'partition' ? '#c084fc' : '#f97316', { wallSegmentId: segment.id }),
+        ),
+        ...connectors
+          .map((connector, index) => {
+            const from = effectiveAnchors.find((anchor) => anchor.id === connector.fromAnchorId)
+            const to = effectiveAnchors.find((anchor) => anchor.id === connector.toAnchorId)
+            if (!from || !to) return null
+            return linePart(
+              `connector.${index + 1}`,
+              connector.sourceNodeKey,
+              [
+                new Vector3(from.position[0], from.position[1], from.position[2]),
+                new Vector3(to.position[0], to.position[1], to.position[2]),
+              ],
+              '#fb7185',
+              { connectorId: connector.id },
+            )
+          })
+          .filter((part): part is CompiledMeshPart => part !== null),
+      ]
+    : []
+
   const parts: CompiledMeshPart[] = [
     ...carvedSolids.map((entry, index) => geometryToPart(
       `solid.${index + 1}`,
@@ -4827,50 +5656,7 @@ export function compileAssemblyGraph(
       },
     )),
     ...surfaces.map((entry, index) => geometryToPart(`surface.${index + 1}`, entry.spec.sourceNodeKey, 'surface', entry.geometry, entry.color, { surfaceKind: entry.spec.kind })),
-    ...profiles.map((profile, index) => {
-      const points = profile.loops.flatMap((loop) => segmentsToPolyline(loop).map((point) => new Vector3(point.x, 0.02, point.y)))
-      return linePart(`profile.${index + 1}`, graph.key, points, '#5eead4', { debugKind: 'profile' })
-    }),
-    ...structureFootprints.map((footprint, index) => {
-      const points = boundaryLoopPoints(footprint.outerLoop).map((point) => new Vector3(point.x, Number(footprint.metadata.baseElevation ?? 0) + 0.04, point.y))
-      return linePart(`footprint.${index + 1}`, footprint.sourceNodeKey, points, '#22c55e', { debugKind: 'structure_footprint', shapeKind: footprint.shapeKind })
-    }),
-    ...levels.map((level, index) =>
-      linePart(`level.${index + 1}`, level.sourceNodeKey, [new Vector3(-1.2, level.elevation, 0), new Vector3(1.2, level.elevation, 0)], '#f59e0b', { label: level.label }),
-    ),
-    ...topologyWallFaces.map((face, index) =>
-      linePart(`wallface.${index + 1}`, face.sourceNodeKey, [new Vector3(face.start[0], face.start[1], face.start[2]), new Vector3(face.end[0], face.end[1], face.end[2])], '#f97316', { wallFaceId: face.id }),
-    ),
-    ...effectiveAnchors.map((anchor, index) => {
-      const geometry = new SphereGeometry(0.12, 8, 8)
-      geometry.translate(anchor.position[0], anchor.position[1], anchor.position[2])
-      return geometryToPart(`anchor.${index + 1}`, anchor.sourceNodeKey, 'debug', geometry, '#fbbf24', { label: anchor.label })
-    }),
-    ...openingsWithTopology.map((opening, index) => {
-      const geometry = new BoxGeometry(opening.size[0], opening.size[1], Math.max(opening.size[2], 0.08))
-      geometry.translate(opening.position[0], opening.position[1], opening.position[2])
-      return geometryToPart(`opening.${index + 1}`, opening.sourceNodeKey, 'debug', geometry, '#60a5fa', { openingId: opening.id })
-    }),
-    ...topologyWallSegments.map((segment, index) =>
-      linePart(`wallsegment.${index + 1}`, segment.sourceNodeKeys[0] ?? graph.key, [new Vector3(segment.start[0], segment.start[1], segment.start[2]), new Vector3(segment.end[0], segment.end[1], segment.end[2])], segment.wallRole === 'partition' ? '#c084fc' : '#f97316', { wallSegmentId: segment.id }),
-    ),
-    ...connectors
-      .map((connector, index) => {
-        const from = effectiveAnchors.find((anchor) => anchor.id === connector.fromAnchorId)
-        const to = effectiveAnchors.find((anchor) => anchor.id === connector.toAnchorId)
-        if (!from || !to) return null
-        return linePart(
-          `connector.${index + 1}`,
-          connector.sourceNodeKey,
-          [
-            new Vector3(from.position[0], from.position[1], from.position[2]),
-            new Vector3(to.position[0], to.position[1], to.position[2]),
-          ],
-          '#fb7185',
-          { connectorId: connector.id },
-        )
-      })
-      .filter((part): part is CompiledMeshPart => part !== null),
+    ...debugParts,
   ]
 
   const compiledModel: CompiledEnvironmentModel = {

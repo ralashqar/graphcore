@@ -69,6 +69,7 @@ export const assemblyNodeKindSchema = z.enum([
   'ceiling_fill',
   'mezzanine',
   'mezzanine_ring',
+  'mezzanine_surface',
   'slab_void',
   'stair',
   'stair_run',
@@ -76,6 +77,7 @@ export const assemblyNodeKindSchema = z.enum([
   'spiral_stair',
   'stair_core',
   'stair_core_v2',
+  'stair_core_v3',
   'stair_shaft',
   'landing',
   'landing_stack',
@@ -95,6 +97,7 @@ export const assemblyNodeKindSchema = z.enum([
   'partition_walls_from_rooms',
   'connector',
   'path_profile',
+  'boundary_path_selector',
   'ribbon_path',
   'ribbon_along_path',
   'fence_along_path',
@@ -457,7 +460,7 @@ export const stairRunSpecSchema = z.object({
   id: z.string(),
   sourceNodeKey: z.string(),
   kind: z.enum(['straight', 'switchback', 'spiral']),
-  stairFamily: z.enum(['straight', 'l_stair', 'u_stair', 'winder_l', 'winder_u', 'spiral', 'mezzanine']).default('straight'),
+  stairFamily: z.enum(['straight', 'switchback', 'l_stair', 'u_stair', 'winder_l', 'winder_u', 'spiral', 'helical', 'arc', 'mezzanine']).default('straight'),
   fromLevelId: z.string().nullable().default(null),
   toLevelId: z.string().nullable().default(null),
   shaftId: z.string().nullable().default(null),
@@ -753,6 +756,7 @@ export const environmentAssemblyLibrary: AssemblyTemplateGroup[] = [
       { key: 'ceiling_fill', label: 'Ceiling Fill', groupKey: 'building', defaultTitle: 'Ceiling Fill', summary: 'Ceiling fill from a profile.', defaultParams: { elevation: 3, thickness: 0.14 } },
       { key: 'mezzanine', label: 'Mezzanine', groupKey: 'building', defaultTitle: 'Mezzanine', summary: 'Elevated floor plate with holes.', defaultParams: { elevation: 1.5, thickness: 0.18 } },
       { key: 'mezzanine_ring', label: 'Mezzanine Ring', groupKey: 'building', defaultTitle: 'Mezzanine Ring', summary: 'Mezzanine fill around a hole or courtyard.', defaultParams: { elevation: 2.2, thickness: 0.18 } },
+      { key: 'mezzanine_surface', label: 'Mezzanine Surface', groupKey: 'building', defaultTitle: 'Mezzanine Surface', summary: 'Continuous mezzanine or balcony surface with boundary path outputs.', defaultParams: { elevation: 2.4, thickness: 0.18, emitSurface: true, emitSolid: true, undersideMode: 'flat' } },
       { key: 'slab_void', label: 'Slab Void', groupKey: 'building', defaultTitle: 'Slab Void', summary: 'Carve a void through host slabs on a selected level.', defaultParams: { levelIndex: 2, bottomOffset: 0, topOffset: 0.4 } },
       { key: 'stair', label: 'Stair', groupKey: 'building', defaultTitle: 'Stair', summary: 'Straight stair block.', defaultParams: { width: 1.8, stepCount: 8, rise: 0.18, tread: 0.28 } },
       { key: 'stair_run', label: 'Stair Run', groupKey: 'building', defaultTitle: 'Stair Run', summary: 'Semantic stair run between levels.', defaultParams: { width: 1.8, stepCount: 10, rise: 0.18, tread: 0.28 } },
@@ -760,12 +764,13 @@ export const environmentAssemblyLibrary: AssemblyTemplateGroup[] = [
       { key: 'spiral_stair', label: 'Spiral Stair', groupKey: 'building', defaultTitle: 'Spiral Stair', summary: 'Spiral stair for towers.', defaultParams: { radius: 1.4, stepCount: 18, rise: 0.18 } },
       { key: 'stair_core', label: 'Stair Core', groupKey: 'building', defaultTitle: 'Stair Core', summary: 'Host-aware stair core between explicit levels with slab cutouts.', defaultParams: { stairType: 'switchback', fromLevelIndex: 1, toLevelIndex: 2, width: 2.2, depth: 4.6, rise: 0.18, tread: 0.28, landingDepth: 2.4, offset: { x: 0, y: 0, z: 0 } } },
       { key: 'stair_core_v2', label: 'Stair Core V2', groupKey: 'building', defaultTitle: 'Stair Core', summary: 'Zone-aware stair solver for topology-owned circulation halls.', defaultParams: { stairFamily: 'u_stair', targetElevationMode: 'level_top', fromLevelIndex: 1, toLevelIndex: 2, width: 2.2, tread: 0.28, maxRise: 0.18, landingDepth: 2.4, turnDirection: 'right', preferredExitSide: 'auto', headroom: 2.1, wallClearance: 0.16, fitMode: 'zone_autofit' } },
+      { key: 'stair_core_v3', label: 'Stair Core V3', groupKey: 'building', defaultTitle: 'Path Stair Core', summary: 'Path-aware stair solver with anchor and surface-edge targeting.', defaultParams: { stairFamily: 'arc', targetMode: 'surface_edge', fromLevelIndex: 1, toLevelIndex: 2, width: 2, tread: 0.28, maxRise: 0.18, landingDepth: 1.8, turnDirection: 'right', preferredExitSide: 'auto', headroom: 2.2, wallClearance: 0.16, clearanceMargin: 0.22, fitMode: 'zone_autofit' } },
       { key: 'stair_shaft', label: 'Stair Shaft', groupKey: 'building', defaultTitle: 'Stair Shaft', summary: 'Void shaft footprint for stair and circulation cutouts.', defaultParams: { fromLevelIndex: 1, toLevelIndex: 2, width: 2.6, depth: 4.8 } },
       { key: 'landing', label: 'Landing', groupKey: 'building', defaultTitle: 'Landing', summary: 'Landing slab.', defaultParams: { width: 2, depth: 2, thickness: 0.18, elevation: 1.44 } },
       { key: 'landing_stack', label: 'Landing Stack', groupKey: 'building', defaultTitle: 'Landing Stack', summary: 'Generate circulation landings across explicit levels.', defaultParams: { fromLevelIndex: 1, toLevelIndex: 2, width: 2.2, depth: 2.2, thickness: 0.18 } },
       { key: 'landing_stack_v2', label: 'Landing Stack V2', groupKey: 'building', defaultTitle: 'Landing Stack', summary: 'Zone-aware landing generation across explicit levels.', defaultParams: { fromLevelIndex: 1, toLevelIndex: 2, width: 2.2, depth: 2.2, thickness: 0.18 } },
       { key: 'mezzanine_anchor', label: 'Mezzanine Anchor', groupKey: 'building', defaultTitle: 'Mezzanine Anchor', summary: 'Explicit stair target on a mezzanine or intermediate elevation.', defaultParams: { elevation: 2.3, offset: { x: 0, y: 0, z: 0 } } },
-      { key: 'stair_connection', label: 'Stair Connection', groupKey: 'building', defaultTitle: 'Stair Connection', summary: 'Connect stair landings to adjacent rooms or wall hosts.', defaultParams: { connectionMode: 'door', landing: 'auto', connectionPlacement: 'landing_aligned', width: 1.1, height: 2.2, offset: 0 } },
+      { key: 'stair_connection', label: 'Stair Connection', groupKey: 'building', defaultTitle: 'Stair Connection', summary: 'Connect stair landings to rooms, anchors, or mezzanine edges.', defaultParams: { connectionMode: 'door', targetKind: 'room', edgeSelectionMode: 'nearest', landing: 'auto', connectionPlacement: 'landing_aligned', width: 1.1, height: 2.2, offset: 0 } },
       { key: 'stair_to_level', label: 'Stair To Level', groupKey: 'building', defaultTitle: 'Stair To Level', summary: 'Semantic stair-level connector.' },
       { key: 'opening', label: 'Opening', groupKey: 'building', defaultTitle: 'Opening', summary: 'Generic opening metadata.', defaultParams: { width: 1.4, height: 2.2 } },
       { key: 'door_opening', label: 'Door Opening', groupKey: 'building', defaultTitle: 'Door Opening', summary: 'Door opening attached to wall faces or host solids.', defaultParams: { width: 1.1, height: 2.2 } },
@@ -786,6 +791,7 @@ export const environmentAssemblyLibrary: AssemblyTemplateGroup[] = [
     label: 'Path/Ribbon',
     templates: [
       { key: 'path_profile', label: 'Path Profile', groupKey: 'path', defaultTitle: 'Path Profile', summary: 'Create a fill profile from a path width.', defaultParams: { width: 1.4 } },
+      { key: 'boundary_path_selector', label: 'Boundary Path Selector', groupKey: 'path', defaultTitle: 'Boundary Path Selector', summary: 'Filter mezzanine boundary paths by loop, role, or edge id.', defaultParams: { boundaryRole: 'outer_edge' } },
       { key: 'ribbon_path', label: 'Ribbon Path', groupKey: 'path', defaultTitle: 'Ribbon Path', summary: 'Extruded ribbon along a path.', defaultParams: { width: 1.5, thickness: 0.12 } },
       { key: 'ribbon_along_path', label: 'Ribbon Along Path', groupKey: 'path', defaultTitle: 'Ribbon Along Path', summary: 'Alias for ribbon path generation.', defaultParams: { width: 1.5, thickness: 0.12 } },
       { key: 'fence_along_path', label: 'Fence Along Path', groupKey: 'path', defaultTitle: 'Fence Along Path', summary: 'Repeated fence posts and rails.', defaultParams: { postSpacing: 1.6, height: 1.2 } },
@@ -884,6 +890,8 @@ export function inferAssemblyPorts(kind: AssemblyNodeKind): AssemblyPortDefiniti
       return [port('path', 'Path', 'output', 'path')]
     case 'path_profile':
       return [port('path', 'Path', 'input', 'path'), port('profile', 'Profile', 'output', 'profile')]
+    case 'boundary_path_selector':
+      return [port('path', 'Path', 'input', 'path', true), port('paths', 'Paths', 'output', 'path', true)]
     case 'box':
     case 'cylinder':
       return [port('solid', 'Solid', 'output', 'solid')]
@@ -919,10 +927,16 @@ export function inferAssemblyPorts(kind: AssemblyNodeKind): AssemblyPortDefiniti
     case 'ceiling_fill':
     case 'mezzanine':
     case 'mezzanine_ring':
+    case 'mezzanine_surface':
       return [
-        port('profile', 'Profile', 'input', 'profile'),
+        ...(kind === 'mezzanine_surface'
+          ? [port('outer', 'Outer', 'input', 'profile'), port('holes', 'Holes', 'input', 'profile', true)]
+          : [port('profile', 'Profile', 'input', 'profile')]),
         port('level', 'Level', 'input', 'level'),
-        ...(kind === 'floor_slab' || kind === 'ceiling_slab' ? [port('voids', 'Voids', 'input', 'slab_void', true), port('solid', 'Solid', 'output', 'solid')] : []),
+        ...(kind === 'floor_slab' || kind === 'ceiling_slab' || kind === 'mezzanine_surface' ? [port('voids', 'Voids', 'input', 'slab_void', true), port('solid', 'Solid', 'output', 'solid')] : []),
+        ...(kind === 'mezzanine_surface'
+          ? [port('profile', 'Profile', 'output', 'profile'), port('paths', 'Paths', 'output', 'path', true), port('anchors', 'Anchors', 'output', 'anchor', true)]
+          : []),
         port('surface', 'Surface', 'output', 'surface'),
       ]
     case 'footprint':
@@ -950,6 +964,7 @@ export function inferAssemblyPorts(kind: AssemblyNodeKind): AssemblyPortDefiniti
     case 'spiral_stair':
     case 'stair_core':
     case 'stair_core_v2':
+    case 'stair_core_v3':
     case 'stair_shaft':
     case 'landing':
     case 'landing_stack':
@@ -957,11 +972,14 @@ export function inferAssemblyPorts(kind: AssemblyNodeKind): AssemblyPortDefiniti
     case 'mezzanine_anchor':
     case 'stair_connection':
       return [
-        ...(kind === 'stair_core' || kind === 'stair_core_v2' || kind === 'landing_stack' || kind === 'landing_stack_v2' || kind === 'stair_shaft'
+        ...(kind === 'stair_core' || kind === 'stair_core_v2' || kind === 'stair_core_v3' || kind === 'landing_stack' || kind === 'landing_stack_v2' || kind === 'stair_shaft'
           ? [port('levels', 'Levels', 'input', 'level', true)]
           : []),
-        ...(kind === 'stair_core_v2'
+        ...(kind === 'stair_core_v2' || kind === 'stair_core_v3'
           ? [port('zone', 'Zone', 'input', 'room'), port('target', 'Target', 'input', 'anchor', true)]
+          : []),
+        ...(kind === 'stair_core_v3'
+          ? [port('target_paths', 'Target Paths', 'input', 'path', true)]
           : []),
         ...(kind === 'landing_stack_v2'
           ? [port('zone', 'Zone', 'input', 'room')]
@@ -970,13 +988,13 @@ export function inferAssemblyPorts(kind: AssemblyNodeKind): AssemblyPortDefiniti
           ? [port('host', 'Host', 'input', 'solid', true), port('anchor', 'Anchor', 'output', 'anchor')]
           : []),
         ...(kind === 'stair_connection'
-          ? [port('stair', 'Stair', 'input', 'stair'), port('rooms', 'Rooms', 'input', 'room', true), port('wall_segment', 'Wall Segment', 'input', 'wall_segment'), port('opening', 'Opening', 'output', 'opening'), port('anchors', 'Anchors', 'output', 'anchor', true)]
+          ? [port('stair', 'Stair', 'input', 'stair'), port('rooms', 'Rooms', 'input', 'room', true), port('wall_segment', 'Wall Segment', 'input', 'wall_segment'), port('target_anchor', 'Target Anchor', 'input', 'anchor', true), port('target_path', 'Target Path', 'input', 'path', true), port('opening', 'Opening', 'output', 'opening'), port('anchors', 'Anchors', 'output', 'anchor', true)]
           : []),
         ...(kind === 'mezzanine_anchor' || kind === 'stair_connection'
           ? []
           : [
         port('solid', 'Solid', 'output', 'solid'),
-        ...(kind === 'stair_core' || kind === 'stair_core_v2' || kind === 'stair_shaft' ? [port('void', 'Void', 'output', 'slab_void', true), port('stair', 'Stair', 'output', 'stair')] : []),
+        ...(kind === 'stair_core' || kind === 'stair_core_v2' || kind === 'stair_core_v3' || kind === 'stair_shaft' ? [port('void', 'Void', 'output', 'slab_void', true), port('stair', 'Stair', 'output', 'stair')] : []),
         port('anchors', 'Anchors', 'output', 'anchor', true),
           ]),
       ]
@@ -1543,6 +1561,67 @@ export const environmentAssemblyPresets: AssemblyGraphPresetDefinition[] = [
         presetEdge('shell_to_output', 'hall_shell', 'solid', `${graphKey}.output`, 'solids'),
         presetEdge('mezz_to_output', 'hall_mezzanine', 'surface', `${graphKey}.output`, 'surfaces'),
         presetEdge('dome_to_output', 'hall_dome', 'solid', `${graphKey}.output`, 'solids'),
+      ],
+    }),
+  },
+  {
+    key: 'grand_hall_balcony_v3',
+    label: 'Grand Hall Balcony V3',
+    summary: 'Curved mezzanine surface with boundary paths, railings, and a path-aware stair core.',
+    build: (graphKey, environmentKey) => ({
+      id: `preset-graph-${graphKey}`,
+      key: graphKey,
+      name: 'Grand Hall Balcony V3',
+      summary: 'High-level mezzanine surface with boundary path targeting for a ceremonial stair.',
+      boundEnvironmentKey: environmentKey ?? null,
+      metadata: { presetKey: 'grand_hall_balcony_v3' },
+      nodes: [
+        presetNode('mixed_loop', 'grand_hall_outline', { x: 70, y: 160 }, {
+          segments: [
+            { type: 'line', from: { x: -10, y: -5 }, to: { x: 8, y: -5 } },
+            { type: 'arc', center: { x: 8, y: 0 }, radius: 5, startAngle: -1.5707963267948966, endAngle: 1.5707963267948966, clockwise: false },
+            { type: 'line', from: { x: 8, y: 5 }, to: { x: -10, y: 5 } },
+            { type: 'spline', points: [{ x: -10, y: 5 }, { x: -12.5, y: 3 }, { x: -12.5, y: -3 }, { x: -10, y: -5 }], closed: false },
+          ],
+        }, 'Grand Hall Outline'),
+        presetNode('rectangle', 'grand_hall_void', { x: 70, y: 340 }, { width: 7, depth: 5.5 }, 'Central Void'),
+        presetNode('profile_holes', 'grand_hall_profile', { x: 320, y: 240 }, {}, 'Grand Hall Profile'),
+        presetNode('room_shell', 'grand_hall_shell', { x: 580, y: 120 }, { height: 6.8, wallThickness: 0.24, floorThickness: 0.2 }, 'Grand Hall Shell'),
+        presetNode('slab', 'grand_hall_floor', { x: 580, y: 210 }, { thickness: 0.2 }, 'Grand Hall Floor'),
+        presetNode('storey_stack', 'grand_hall_storeys', { x: 320, y: 70 }, { count: 2, baseElevation: 0, levelHeight: 3.2, slabThickness: 0.18, labelPrefix: 'Grand Hall Level' }, 'Storeys'),
+        presetNode('polygon', 'grand_stair_zone_outline', { x: 320, y: 430 }, { points: [{ x: -2.4, y: -4.4 }, { x: 2.4, y: -4.4 }, { x: 2.4, y: 1.8 }, { x: -2.4, y: 1.8 }] }, 'Stair Zone Outline'),
+        {
+          ...presetNode('circulation_zone', 'grand_stair_zone', { x: 580, y: 430 }, { levelIndex: 1, toLevelIndex: 2, roomName: 'Grand Stair Zone', height: 3.2, wallThickness: 0.2, floorThickness: 0.18, fitMode: 'zone_autofit', maxExpandX: 2, maxExpandZ: 2 }, 'Grand Stair Zone'),
+          metadata: { topologyOwned: false },
+        },
+        presetNode('mezzanine_surface', 'grand_balcony_surface', { x: 840, y: 240 }, { levelIndex: 2, elevation: 3.2, thickness: 0.18, emitSurface: false, emitSolid: true }, 'Balcony Surface'),
+        presetNode('boundary_path_selector', 'grand_balcony_edges', { x: 1080, y: 180 }, { boundaryRole: 'hole_edge' }, 'Boundary Paths'),
+        presetNode('fence_along_path', 'grand_balcony_rail', { x: 1300, y: 160 }, { postSpacing: 1.4, height: 1.1, thickness: 0.12 }, 'Balcony Rail'),
+        presetNode('stair_core_v3', 'grand_arc_stair', { x: 1080, y: 360 }, { stairFamily: 'arc', targetMode: 'surface_edge', fromLevelIndex: 1, toLevelIndex: 2, width: 2.1, tread: 0.28, maxRise: 0.18, landingDepth: 2, preferredExitSide: 'front', fitMode: 'zone_autofit' }, 'Arc Stair'),
+        presetNode('stair_connection', 'grand_arc_stair_edge', { x: 1300, y: 320 }, { connectionMode: 'open_edge', targetKind: 'surface_edge', landing: 'top', width: 2.1, height: 2.2 }, 'Balcony Edge Connection'),
+        presetNode('environment_output', `${graphKey}.output`, { x: 1540, y: 250 }, {}, 'Environment Output'),
+      ],
+      edges: [
+        presetEdge('grand_outline_to_profile', 'grand_hall_outline', 'profile', 'grand_hall_profile', 'profiles'),
+        presetEdge('grand_void_to_profile', 'grand_hall_void', 'profile', 'grand_hall_profile', 'profiles'),
+        presetEdge('grand_outline_to_shell', 'grand_hall_outline', 'profile', 'grand_hall_shell', 'profile'),
+        presetEdge('grand_outline_to_floor', 'grand_hall_outline', 'profile', 'grand_hall_floor', 'profile'),
+        presetEdge('grand_outline_to_balcony_outer', 'grand_hall_outline', 'profile', 'grand_balcony_surface', 'outer'),
+        presetEdge('grand_void_to_balcony_hole', 'grand_hall_void', 'profile', 'grand_balcony_surface', 'holes'),
+        presetEdge('grand_stair_zone_outline_to_zone', 'grand_stair_zone_outline', 'profile', 'grand_stair_zone', 'profile'),
+        presetEdge('grand_storeys_to_zone', 'grand_hall_storeys', 'levels', 'grand_stair_zone', 'level'),
+        presetEdge('grand_storeys_to_balcony', 'grand_hall_storeys', 'levels', 'grand_balcony_surface', 'level'),
+        presetEdge('grand_storeys_to_stair', 'grand_hall_storeys', 'levels', 'grand_arc_stair', 'levels'),
+        presetEdge('grand_zone_to_stair', 'grand_stair_zone', 'room', 'grand_arc_stair', 'zone'),
+        presetEdge('grand_balcony_paths_to_selector', 'grand_balcony_surface', 'paths', 'grand_balcony_edges', 'path'),
+        presetEdge('grand_balcony_paths_to_rail', 'grand_balcony_edges', 'paths', 'grand_balcony_rail', 'path'),
+        presetEdge('grand_balcony_paths_to_stair', 'grand_balcony_edges', 'paths', 'grand_arc_stair', 'target_paths'),
+        presetEdge('grand_stair_to_connection', 'grand_arc_stair', 'stair', 'grand_arc_stair_edge', 'stair'),
+        presetEdge('grand_balcony_paths_to_connection', 'grand_balcony_edges', 'paths', 'grand_arc_stair_edge', 'target_path'),
+        presetEdge('grand_shell_to_output', 'grand_hall_shell', 'shell', `${graphKey}.output`, 'solids'),
+        presetEdge('grand_floor_to_output', 'grand_hall_floor', 'solid', `${graphKey}.output`, 'solids'),
+        presetEdge('grand_balcony_solid_to_output', 'grand_balcony_surface', 'solid', `${graphKey}.output`, 'solids'),
+        presetEdge('grand_stair_to_output', 'grand_arc_stair', 'solid', `${graphKey}.output`, 'solids'),
       ],
     }),
   },
