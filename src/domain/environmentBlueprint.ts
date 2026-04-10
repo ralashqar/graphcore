@@ -262,6 +262,8 @@ type StructureMaterialization = {
   profileKey: string
   shellKey: string
   levelKey: string
+  roomKeys: string[]
+  storeyKey: string
 }
 
 const DEFAULT_SITE: EnvironmentBlueprintV1['site'] = {
@@ -808,73 +810,77 @@ export function materializeEnvironmentBlueprintToAssemblyGraph(
 
   blueprint.structures.forEach((structure, index) => {
     const profileNode = createRectangleOrPolygonNode(structure, index)
-    const levelNode = createAssemblyNode('building_level', index + 1, graphNodePosition(index, 1))
-    levelNode.key = `bp.${sanitizeBlueprintKey(structure.id)}.level`
-    levelNode.title = `${structure.label || structure.type} Level`
-    levelNode.params = {
-      elevation: structure.elevation,
-      height: Math.max(2.4, structure.height),
-      label: `${structure.label || structure.type} L1`,
+    const storeyNode = createAssemblyNode('storey_stack', index + 1, graphNodePosition(index, 1))
+    storeyNode.key = `bp.${sanitizeBlueprintKey(structure.id)}.storeys`
+    storeyNode.title = `${structure.label || structure.type} Storeys`
+    storeyNode.params = {
+      count: Math.max(1, structure.levels),
+      baseElevation: structure.elevation,
+      levelHeight: Math.max(2.4, structure.height),
+      slabThickness: structure.floorThickness,
+      labelPrefix: structure.label || structure.type,
     }
-    levelNode.metadata = {
+    storeyNode.metadata = {
       blueprintElementId: structure.id,
-      generationRole: 'level',
+      generationRole: 'storeys',
       ownership: structure.provenance.ownership,
     }
-
-    const shellNode = createAssemblyNode('room_shell', index + 1, graphNodePosition(index, 2))
-    shellNode.key = `bp.${sanitizeBlueprintKey(structure.id)}.shell`
-    shellNode.title = `${structure.label || structure.type} Shell`
-    shellNode.params = {
-      height: structure.height,
-      wallThickness: structure.wallThickness,
-      floorThickness: structure.floorThickness,
+    nodes.push(profileNode, storeyNode)
+    const roomKeys: string[] = []
+    for (let levelIndex = 0; levelIndex < Math.max(1, structure.levels); levelIndex += 1) {
+      const roomNode = createAssemblyNode('room_on_level', levelIndex + 1, graphNodePosition(index + levelIndex * 0.08, 2))
+      roomNode.key = `bp.${sanitizeBlueprintKey(structure.id)}.room_${levelIndex + 1}`
+      roomNode.title = `${structure.label || structure.type} L${levelIndex + 1}`
+      roomNode.params = {
+        levelIndex: levelIndex + 1,
+        roomName: `${structure.label || structure.type} Level ${levelIndex + 1}`,
+        height: structure.height,
+        wallThickness: structure.wallThickness,
+        floorThickness: structure.floorThickness,
+      }
+      roomNode.metadata = {
+        blueprintElementId: structure.id,
+        generationRole: 'room_on_level',
+        ownership: structure.provenance.ownership,
+        topologyOwned: true,
+      }
+      nodes.push(roomNode)
+      edges.push(
+        {
+          id: `edge.${structure.id}.profile_room_${levelIndex + 1}`,
+          key: `edge.${structure.id}.profile_room_${levelIndex + 1}`,
+          source: { nodeKey: profileNode.key, portId: 'profile' },
+          target: { nodeKey: roomNode.key, portId: 'profile' },
+          metadata: { blueprintElementId: structure.id },
+        },
+        {
+          id: `edge.${structure.id}.storeys_room_${levelIndex + 1}`,
+          key: `edge.${structure.id}.storeys_room_${levelIndex + 1}`,
+          source: { nodeKey: storeyNode.key, portId: 'levels' },
+          target: { nodeKey: roomNode.key, portId: 'level' },
+          metadata: { blueprintElementId: structure.id },
+        },
+        {
+          id: `edge.${structure.id}.room_out_${levelIndex + 1}`,
+          key: `edge.${structure.id}.room_out_${levelIndex + 1}`,
+          source: { nodeKey: roomNode.key, portId: 'solid' },
+          target: { nodeKey: outputNode.key, portId: 'solids' },
+          metadata: { blueprintElementId: structure.id },
+        },
+      )
+      roomKeys.push(roomNode.key)
     }
-    shellNode.metadata = {
-      blueprintElementId: structure.id,
-      generationRole: 'shell',
-      ownership: structure.provenance.ownership,
-    }
-
-    nodes.push(profileNode, levelNode, shellNode)
-    edges.push(
-      {
-        id: `edge.${structure.id}.profile_shell`,
-        key: `edge.${structure.id}.profile_shell`,
-        source: { nodeKey: profileNode.key, portId: 'profile' },
-        target: { nodeKey: shellNode.key, portId: 'profile' },
-        metadata: {
-          blueprintElementId: structure.id,
-        },
-      },
-      {
-        id: `edge.${structure.id}.level_shell`,
-        key: `edge.${structure.id}.level_shell`,
-        source: { nodeKey: levelNode.key, portId: 'level' },
-        target: { nodeKey: shellNode.key, portId: 'level' },
-        metadata: {
-          blueprintElementId: structure.id,
-        },
-      },
-      {
-        id: `edge.${structure.id}.shell_out`,
-        key: `edge.${structure.id}.shell_out`,
-        source: { nodeKey: shellNode.key, portId: 'solid' },
-        target: { nodeKey: outputNode.key, portId: 'solids' },
-        metadata: {
-          blueprintElementId: structure.id,
-        },
-      },
-    )
 
     structureMap.set(structure.id, {
       profileKey: profileNode.key,
-      shellKey: shellNode.key,
-      levelKey: levelNode.key,
+      shellKey: roomKeys[0] ?? profileNode.key,
+      levelKey: storeyNode.key,
+      roomKeys,
+      storeyKey: storeyNode.key,
     })
     materializationEntries.push({
       blueprintElementId: structure.id,
-      nodeKeys: [profileNode.key, levelNode.key, shellNode.key],
+      nodeKeys: [profileNode.key, storeyNode.key, ...roomKeys],
       role: 'structure',
       ownership: structure.provenance.ownership,
     })
@@ -909,7 +915,7 @@ export function materializeEnvironmentBlueprintToAssemblyGraph(
       {
         id: `edge.${roof.id}.shell_roof`,
         key: `edge.${roof.id}.shell_roof`,
-        source: { nodeKey: structure.shellKey, portId: 'solid' },
+        source: { nodeKey: structure.roomKeys[structure.roomKeys.length - 1] ?? structure.shellKey, portId: 'solid' },
         target: { nodeKey: node.key, portId: 'host' },
         metadata: {
           blueprintElementId: roof.id,
@@ -1025,15 +1031,19 @@ export function materializeEnvironmentBlueprintToAssemblyGraph(
   blueprint.circulation.forEach((circulation, index) => {
     const structure = circulation.structureId ? structureMap.get(circulation.structureId) : null
     if (circulation.type === 'stair_core') {
-      const node = createAssemblyNode('switchback_stair', index + 1, graphNodePosition(index, 6))
+      const node = createAssemblyNode('stair_core', index + 1, graphNodePosition(index, 6))
       node.key = `bp.${sanitizeBlueprintKey(circulation.id)}.stair`
       node.title = circulation.label || 'Stair Core'
       node.params = {
+        stairType: 'switchback',
+        fromLevelIndex: 1,
+        toLevelIndex: Math.max(2, Math.round(circulation.height / Math.max(circulation.rise, 0.18))),
         width: circulation.width,
-        stepCount: circulation.stepCount,
         rise: circulation.rise,
         tread: circulation.tread,
+        depth: circulation.depth,
         landingDepth: circulation.depth,
+        offset: { x: circulation.offset.x, y: 0, z: circulation.offset.y },
       }
       node.metadata = {
         blueprintElementId: circulation.id,
@@ -1048,6 +1058,15 @@ export function materializeEnvironmentBlueprintToAssemblyGraph(
         target: { nodeKey: outputNode.key, portId: 'solids' },
         metadata: { blueprintElementId: circulation.id },
       })
+      if (structure) {
+        edges.push({
+          id: `edge.${circulation.id}.levels`,
+          key: `edge.${circulation.id}.levels`,
+          source: { nodeKey: structure.storeyKey, portId: 'levels' },
+          target: { nodeKey: node.key, portId: 'levels' },
+          metadata: { blueprintElementId: circulation.id },
+        })
+      }
       materializationEntries.push({
         blueprintElementId: circulation.id,
         nodeKeys: [node.key],

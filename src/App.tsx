@@ -1,7 +1,7 @@
 import '@xyflow/react/dist/style.css'
 
 import type { AuthChangeEvent, Session } from '@supabase/supabase-js'
-import { Suspense, lazy, useEffect, useMemo, useState, useTransition } from 'react'
+import { Suspense, lazy, useEffect, useMemo, useRef, useState, useTransition } from 'react'
 import { authService } from './application/services/authService'
 import { patchApplyService } from './application/services/patchApplyService'
 import { promptGenerationService } from './application/services/promptGenerationService'
@@ -145,6 +145,11 @@ export default function App() {
   const [hasLocalSnapshotChanges, setHasLocalSnapshotChanges] = useState(false)
   const [isPending, startTransition] = useTransition()
   const { promptText, selectedDefinitionKey, selectedEdgeKey, selectedGraphKey, selectedNodeKey, setPromptText, setSelectedDefinitionKey, setSelectedEdgeKey, setSelectedGraphKey, setSelectedNodeKey } = useEditorStore()
+  const sessionRef = useRef<Session | null>(null)
+
+  useEffect(() => {
+    sessionRef.current = session
+  }, [session])
 
   function hydrateLoadedProject(
     state: { snapshot: ProjectSnapshot; source: 'supabase' | 'demo'; reason?: string },
@@ -233,9 +238,14 @@ export default function App() {
 
     const unsubscribe = authService.subscribeToAuthChanges(async (event: AuthChangeEvent, nextSession) => {
       if (cancelled) return
+      const previousSession = sessionRef.current
       setSession(nextSession)
 
       if (event === 'TOKEN_REFRESHED' || event === 'INITIAL_SESSION') {
+        return
+      }
+
+      if (event === 'SIGNED_IN' && previousSession?.user.id && previousSession.user.id === nextSession?.user.id) {
         return
       }
 

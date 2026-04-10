@@ -54,12 +54,20 @@ function isMissingDefinitionKindEnumError(message: string | undefined, kind: str
   return typeof message === 'string' && message.includes(`invalid input value for enum definition_kind: "${kind}"`)
 }
 
-function isMissingRelationError(message: string | undefined, relation: string) {
-  if (typeof message !== 'string') return false
+function isMissingRelationError(
+  error: { message?: string | null; details?: string | null; hint?: string | null; code?: string | null } | string | null | undefined,
+  relation: string,
+) {
+  if (!error) return false
+  if (typeof error !== 'string' && error.code === 'PGRST205') return true
+  const candidates = typeof error === 'string'
+    ? [error]
+    : [error.message, error.details, error.hint].filter((value): value is string => typeof value === 'string')
+  if (candidates.length === 0) return false
   return (
-    message.includes(`Could not find the table 'public.${relation}' in the schema cache`) ||
-    message.includes(`relation "public.${relation}" does not exist`) ||
-    message.includes(`relation "${relation}" does not exist`)
+    candidates.some((message) => message.includes(`Could not find the table 'public.${relation}' in the schema cache`)) ||
+    candidates.some((message) => message.includes(`relation "public.${relation}" does not exist`)) ||
+    candidates.some((message) => message.includes(`relation "${relation}" does not exist`))
   )
 }
 
@@ -901,11 +909,15 @@ export async function loadProjectSnapshot(
   ])
 
   const assemblySchemaMissing =
-    isMissingRelationError(assemblyGraphsResponse.error?.message, 'draft_assembly_graphs')
-    || isMissingRelationError(assemblyNodesResponse.error?.message, 'draft_assembly_nodes')
-    || isMissingRelationError(assemblyEdgesResponse.error?.message, 'draft_assembly_edges')
+    assemblyGraphsResponse.status === 404
+    || assemblyNodesResponse.status === 404
+    || assemblyEdgesResponse.status === 404
+    || isMissingRelationError(assemblyGraphsResponse.error, 'draft_assembly_graphs')
+    || isMissingRelationError(assemblyNodesResponse.error, 'draft_assembly_nodes')
+    || isMissingRelationError(assemblyEdgesResponse.error, 'draft_assembly_edges')
   const blueprintSchemaMissing =
-    isMissingRelationError(environmentBlueprintsResponse.error?.message, 'draft_environment_blueprints')
+    environmentBlueprintsResponse.status === 404
+    || isMissingRelationError(environmentBlueprintsResponse.error, 'draft_environment_blueprints')
 
   if (definitionsResponse.error || archetypesResponse.error) {
     return {

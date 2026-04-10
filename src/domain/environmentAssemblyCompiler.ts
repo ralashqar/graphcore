@@ -34,11 +34,14 @@ import {
   type CurveSegment,
   type LevelSpec,
   type OpeningSpec,
+  type PartitionWallSpec,
   type PathSpec,
   type Profile2D,
   type RoofSpec,
   type RoomVolume,
+  type RoomAdjacencySpec,
   type ShellBandSpec,
+  type SlabVoidSpec,
   type SolidSpec,
   type StairRunSpec,
   type SpatialDocument,
@@ -47,6 +50,7 @@ import {
   type SurfaceSpec,
   type WallFaceSpec,
   type WallRunSpec,
+  type WallSegmentSpec,
   type WindowSpec,
 } from './environmentAssembly'
 import { resolveStructuralUnion, type StructuralShellInput, type StructuralShellBandResult } from './environmentAssemblyStructuralFusion'
@@ -91,11 +95,36 @@ type RuntimeNodeResult = {
   openings?: OpeningSpec[]
   windows?: WindowSpec[]
   rooms?: RoomVolume[]
+  wallSegments?: WallSegmentSpec[]
+  partitionWalls?: PartitionWallSpec[]
+  roomAdjacency?: RoomAdjacencySpec[]
   roofs?: RoofSpec[]
   bridges?: BridgeSpec[]
   stairs?: StairRunSpec[]
+  slabVoids?: SlabVoidSpec[]
   pathSpecs?: PathSpec[]
   arrayPlacements?: ArrayPlacementSpec[]
+  interiorDoorRequests?: InteriorDoorRequest[]
+  wallSegmentOpeningRequests?: WallSegmentOpeningRequest[]
+}
+
+type InteriorDoorRequest = {
+  id: string
+  sourceNodeKey: string
+  roomIds: string[]
+  width: number
+  height: number
+  offset: number
+}
+
+type WallSegmentOpeningRequest = {
+  id: string
+  sourceNodeKey: string
+  wallSegmentId: string | null
+  width: number
+  height: number
+  offset: number
+  openingRole: OpeningSpec['openingRole']
 }
 
 export type AssemblyCompileCache = {
@@ -345,6 +374,9 @@ function extrudeProfile(profile: RuntimeProfile, depth: number) {
     steps: 1,
   })
   geometry.rotateX(-Math.PI / 2)
+  geometry.scale(1, 1, -1)
+  geometry.computeVertexNormals()
+  geometry.computeBoundingBox()
   return geometry
 }
 
@@ -538,6 +570,10 @@ function collectIncomingWallFaces(graph: AssemblyGraphDefinition, node: Assembly
 
 function collectIncomingAnchors(graph: AssemblyGraphDefinition, node: AssemblyNodeDefinition, results: Map<string, RuntimeNodeResult>, portId: string) {
   return incomingEdges(graph, node.key, portId).flatMap((edge) => results.get(edge.source.nodeKey)?.anchors ?? [])
+}
+
+function collectIncomingRooms(graph: AssemblyGraphDefinition, node: AssemblyNodeDefinition, results: Map<string, RuntimeNodeResult>, portId = 'rooms') {
+  return incomingEdges(graph, node.key, portId).flatMap((edge) => results.get(edge.source.nodeKey)?.rooms ?? [])
 }
 
 function collectSourceAnchors(graph: AssemblyGraphDefinition, node: AssemblyNodeDefinition, results: Map<string, RuntimeNodeResult>, portId = 'source') {
@@ -941,15 +977,25 @@ function unionSolidList(solids: RuntimeSolid[], node: AssemblyNodeDefinition, di
 
 function wallFacesFromProfile(node: AssemblyNodeDefinition, profile: RuntimeProfile, height: number, baseElevation = 0, wallRunId = `${node.key}.wall_run`): WallFaceSpec[] {
   if (profile.outer.length < 2) return []
+  const signedArea = profile.outer.reduce((sum, point, index) => {
+    const next = profile.outer[(index + 1) % profile.outer.length]
+    return sum + (point.x * next.y - next.x * point.y)
+  }, 0)
+  const isClockwise = signedArea < 0
   return profile.outer.map((point, index) => {
     const next = profile.outer[(index + 1) % profile.outer.length]
     const midpoint = new Vector3((point.x + next.x) * 0.5, baseElevation + height * 0.5, (point.y + next.y) * 0.5)
     const direction = new Vector3(next.x - point.x, 0, next.y - point.y).normalize()
-    const normal = new Vector3(-direction.z, 0, direction.x).normalize()
+    const normal = isClockwise
+      ? new Vector3(-direction.z, 0, direction.x).normalize()
+      : new Vector3(direction.z, 0, -direction.x).normalize()
     return {
       id: `${node.key}.wall_face_${index + 1}`,
       sourceNodeKey: node.key,
       wallRunId,
+      levelId: null,
+      wallRole: 'exterior',
+      ownerRoomIds: [],
       start: [point.x, baseElevation, point.y],
       end: [next.x, baseElevation, next.y],
       center: [midpoint.x, midpoint.y, midpoint.z],
@@ -963,7 +1009,32 @@ function wallFacesFromProfile(node: AssemblyNodeDefinition, profile: RuntimeProf
 
 function openingPositionFromWallFace(face: WallFaceSpec | undefined, fallback: Vector3) {
   if (!face) return fallback
-  return new Vector3(face.center[0], face.center[1], face.center[2])
+  return new Vector3(face.center[0], face.elevationBottom, face.center[2])
+}
+
+function levelsForNode(node: AssemblyNodeDefinition, levels: LevelSpec[]) {
+  if (levels.length === 0) return levels
+  const explicitLevelId = typeof node.params.levelId === 'string' ? node.params.levelId : null
+  if (explicitLevelId) {
+    const level = levels.find((entry) => entry.id === explicitLevelId || entry.levelId === explicitLevelId)
+    return level ? [level] : []
+  }
+  return levels
+}
+
+function selectLevelForNode(node: AssemblyNodeDefinition, levels: LevelSpec[], levelIndexKey = 'levelIndex', fallbackIndex = 1) {
+  const candidates = levelsForNode(node, levels)
+  if (candidates.length === 0) return null
+  const requestedIndex = Math.max(1, Math.round(numberParam(node, levelIndexKey, fallbackIndex)))
+  return candidates[Math.min(requestedIndex - 1, candidates.length - 1)] ?? candidates[0] ?? null
+}
+
+function selectLevelPairForNode(node: AssemblyNodeDefinition, levels: LevelSpec[]) {
+  const candidates = levelsForNode(node, levels)
+  if (candidates.length === 0) return { fromLevel: null, toLevel: null }
+  const fromLevel = selectLevelForNode(node, candidates, 'fromLevelIndex', 1)
+  const toLevel = selectLevelForNode(node, candidates, 'toLevelIndex', Math.min(2, candidates.length))
+  return { fromLevel, toLevel }
 }
 
 function chooseWallFaceForNode(node: AssemblyNodeDefinition, faces: WallFaceSpec[]) {
@@ -981,6 +1052,464 @@ function chooseWallFaceForNode(node: AssemblyNodeDefinition, faces: WallFaceSpec
     return false
   })
   return bySide ?? faces[Math.min(requestedIndex, faces.length - 1)] ?? faces[0]
+}
+
+function subtractGeometryFromSolid(host: RuntimeSolid, cutter: BufferGeometry, sourceNodeKey: string, diagnostics: string[]) {
+  try {
+    const brushHost = new Brush(normalizeGeometry(host.geometry))
+    const brushCutter = new Brush(normalizeGeometry(cutter))
+    brushHost.updateMatrixWorld()
+    brushCutter.updateMatrixWorld()
+    const result = evaluator.evaluate(brushHost, brushCutter, SUBTRACTION)
+    const geometry = result.geometry.index ? result.geometry.toNonIndexed() : result.geometry.clone()
+    geometry.computeVertexNormals()
+    geometry.computeBoundingBox()
+    return {
+      ...host,
+      spec: {
+        ...host.spec,
+        sourceNodeKey,
+      },
+      geometry,
+    } satisfies RuntimeSolid
+  } catch (error) {
+    diagnostics.push(`Boolean subtraction failed for "${host.spec.id}": ${error instanceof Error ? error.message : 'Unknown error'}.`)
+    return host
+  }
+}
+
+function roundedPointKey(x: number, z: number) {
+  return `${x.toFixed(3)}:${z.toFixed(3)}`
+}
+
+function segmentKey(start: Vector2, end: Vector2, levelId: string | null) {
+  const a = roundedPointKey(start.x, start.y)
+  const b = roundedPointKey(end.x, end.y)
+  return `${levelId ?? 'none'}::${a < b ? `${a}|${b}` : `${b}|${a}`}`
+}
+
+function profileOuterLoop(profile: Profile2D | undefined) {
+  const outerLoop = profile?.loops.find((loop) => loop.kind === 'outer') ?? profile?.loops[0]
+  return outerLoop ? segmentsToPolyline(outerLoop) : []
+}
+
+function roomLabel(room: RoomVolume) {
+  return room.roomId ?? room.id
+}
+
+function isTopologyOwnedRoomNode(node: AssemblyNodeDefinition) {
+  if (node.metadata.topologyOwned === false) return false
+  return node.kind === 'room_on_level' || node.metadata.topologyOwned === true
+}
+
+function isTopologyOwnedRoom(room: RoomVolume) {
+  return room.metadata.topologyOwned === true
+}
+
+function wallSegmentCenter(segment: WallSegmentSpec) {
+  return new Vector3(
+    (segment.start[0] + segment.end[0]) * 0.5,
+    segment.start[1] + segment.height * 0.5,
+    (segment.start[2] + segment.end[2]) * 0.5,
+  )
+}
+
+function wallSegmentNormal(segment: WallSegmentSpec) {
+  const metadataNormal = Array.isArray(segment.metadata.normal) && segment.metadata.normal.length >= 3
+    ? segment.metadata.normal
+    : null
+  if (metadataNormal) {
+    return new Vector3(Number(metadataNormal[0]), Number(metadataNormal[1]), Number(metadataNormal[2])).normalize()
+  }
+  const direction = new Vector3(segment.end[0] - segment.start[0], 0, segment.end[2] - segment.start[2]).normalize()
+  return new Vector3(-direction.z, 0, direction.x).normalize()
+}
+
+function wallSegmentHostOffset(segment: WallSegmentSpec) {
+  if (segment.wallRole !== 'exterior') return new Vector3(0, 0, 0)
+  return wallSegmentNormal(segment).multiplyScalar(segment.thickness * 0.5)
+}
+
+function wallSegmentHostCenter(segment: WallSegmentSpec) {
+  return wallSegmentCenter(segment).add(wallSegmentHostOffset(segment))
+}
+
+function wallSegmentHostId(segment: WallSegmentSpec) {
+  return `${segment.id}.solid`
+}
+
+function createPartitionWallSolid(segment: WallSegmentSpec): RuntimeSolid {
+  const start = new Vector3(segment.start[0], segment.start[1], segment.start[2])
+  const end = new Vector3(segment.end[0], segment.end[1], segment.end[2])
+  const span = new Vector3().subVectors(end, start)
+  const length = Math.max(span.length(), 0.001)
+  const center = wallSegmentHostCenter(segment)
+  const angle = Math.atan2(span.z, span.x)
+  const geometry = new BoxGeometry(length, segment.height, segment.thickness)
+  geometry.rotateY(-angle)
+  geometry.translate(center.x, center.y, center.z)
+  return {
+    spec: {
+      id: wallSegmentHostId(segment),
+      sourceNodeKey: segment.sourceNodeKeys[0] ?? segment.id,
+      kind: segment.wallRole === 'partition' ? 'partition_wall' : 'wall_shell',
+      profileId: null,
+      transform: { position: [center.x, center.y, center.z], rotation: [0, angle, 0], scale: [1, 1, 1] },
+      params: { length, thickness: segment.thickness, height: segment.height },
+      metadata: {
+        wallSegmentId: segment.id,
+        levelId: segment.levelId,
+        ownerRoomIds: segment.ownerRoomIds,
+        wallRole: segment.wallRole,
+        wallSystem: 'topology',
+      },
+    },
+    geometry,
+    color: segment.wallRole === 'partition' ? '#8f7d68' : '#7f92a6',
+  }
+}
+
+function createPartitionWallFace(segment: WallSegmentSpec, partition: PartitionWallSpec | null = null): WallFaceSpec {
+  const hostOffset = wallSegmentHostOffset(segment)
+  const center = wallSegmentCenter(segment).add(hostOffset)
+  const normal = wallSegmentNormal(segment)
+  return {
+    id: `${segment.id}.face`,
+    sourceNodeKey: segment.sourceNodeKeys[0] ?? segment.id,
+    wallRunId: segment.id,
+    levelId: segment.levelId,
+    wallRole: segment.wallRole,
+    ownerRoomIds: segment.ownerRoomIds,
+    start: [segment.start[0] + hostOffset.x, segment.start[1], segment.start[2] + hostOffset.z],
+    end: [segment.end[0] + hostOffset.x, segment.end[1], segment.end[2] + hostOffset.z],
+    center: [center.x, center.y, center.z],
+    normal: [normal.x, normal.y, normal.z],
+    elevationBottom: center.y - segment.height * 0.5,
+    elevationTop: center.y + segment.height * 0.5,
+    metadata: {
+      wallSegmentId: segment.id,
+      wallRole: segment.wallRole,
+      wallSystem: 'topology',
+      fromRoomId: partition?.fromRoomId ?? null,
+      toRoomId: partition?.toRoomId ?? null,
+    },
+  }
+}
+
+function deriveRoomTopology(rooms: RoomVolume[], profiles: Profile2D[], diagnostics: string[]) {
+  const profileMap = new Map(profiles.map((profile) => [profile.id, profile]))
+  const topologyRooms = rooms.filter((room) => isTopologyOwnedRoom(room))
+  type BoundaryEntry = {
+    room: RoomVolume
+    start: Vector2
+    end: Vector2
+    tStart: number
+    tEnd: number
+    axis: Vector2
+    lineNormal: Vector2
+    offset: number
+    outwardNormal: [number, number, number]
+  }
+  const boundaryGroups = new Map<string, BoundaryEntry[]>()
+
+  for (const room of topologyRooms) {
+    const outer = profileOuterLoop(profileMap.get(room.profileId ?? ''))
+    if (outer.length < 2) continue
+    const signedArea = outer.reduce((sum, point, index) => {
+      const next = outer[(index + 1) % outer.length]
+      return sum + (point.x * next.y - next.x * point.y)
+    }, 0)
+    const isClockwise = signedArea < 0
+    for (let index = 0; index < outer.length; index += 1) {
+      const start = outer[index]
+      const end = outer[(index + 1) % outer.length]
+      const direction = new Vector2(end.x - start.x, end.y - start.y)
+      if (direction.lengthSq() <= 1e-8) continue
+      direction.normalize()
+      const canonicalAxis = direction.x < -1e-6 || (Math.abs(direction.x) <= 1e-6 && direction.y < 0)
+        ? direction.clone().multiplyScalar(-1)
+        : direction.clone()
+      const lineNormal = new Vector2(-canonicalAxis.y, canonicalAxis.x)
+      const offset = start.x * lineNormal.x + start.y * lineNormal.y
+      const tStart = start.x * canonicalAxis.x + start.y * canonicalAxis.y
+      const tEnd = end.x * canonicalAxis.x + end.y * canonicalAxis.y
+      const outwardNormal2d = isClockwise
+        ? new Vector2(-direction.y, direction.x)
+        : new Vector2(direction.y, -direction.x)
+      const groupKey = `${room.levelId ?? 'none'}::${canonicalAxis.x.toFixed(4)}:${canonicalAxis.y.toFixed(4)}::${offset.toFixed(4)}`
+      const entries = boundaryGroups.get(groupKey) ?? []
+      entries.push({
+        room,
+        start,
+        end,
+        tStart: Math.min(tStart, tEnd),
+        tEnd: Math.max(tStart, tEnd),
+        axis: canonicalAxis,
+        lineNormal,
+        offset,
+        outwardNormal: [outwardNormal2d.x, 0, outwardNormal2d.y],
+      })
+      boundaryGroups.set(groupKey, entries)
+    }
+  }
+
+  const wallSegments: WallSegmentSpec[] = []
+  const partitionWalls: PartitionWallSpec[] = []
+  const roomAdjacency: RoomAdjacencySpec[] = []
+
+  for (const [groupKey, entries] of boundaryGroups.entries()) {
+    const breakpoints = Array.from(new Set(entries.flatMap((entry) => [entry.tStart.toFixed(4), entry.tEnd.toFixed(4)])))
+      .map((value) => Number(value))
+      .sort((a, b) => a - b)
+    if (breakpoints.length < 2) continue
+    const axis = entries[0]?.axis
+    const lineNormal = entries[0]?.lineNormal
+    const offset = entries[0]?.offset
+    if (!axis || !lineNormal || typeof offset !== 'number') continue
+
+    for (let breakpointIndex = 0; breakpointIndex < breakpoints.length - 1; breakpointIndex += 1) {
+      const segmentStartT = breakpoints[breakpointIndex]
+      const segmentEndT = breakpoints[breakpointIndex + 1]
+      if (segmentEndT - segmentStartT <= 1e-4) continue
+      const midpoint = (segmentStartT + segmentEndT) * 0.5
+      const owners = entries.filter((entry) => midpoint >= entry.tStart - 1e-4 && midpoint <= entry.tEnd + 1e-4)
+      if (owners.length === 0) continue
+      const first = owners[0]
+      if (!first) continue
+      const start = new Vector2(axis.x * segmentStartT + lineNormal.x * offset, axis.y * segmentStartT + lineNormal.y * offset)
+      const end = new Vector2(axis.x * segmentEndT + lineNormal.x * offset, axis.y * segmentEndT + lineNormal.y * offset)
+      const baseHeight = Math.max(Math.min(...owners.map(({ room }) => room.ceilingElevation - room.floorElevation)), 0.1)
+      const baseY = Math.min(...owners.map(({ room }) => room.floorElevation))
+      const ownerRoomIds = Array.from(new Set(owners.map(({ room }) => roomLabel(room))))
+      const sourceNodeKeys = Array.from(new Set(owners.map(({ room }) => room.sourceNodeKey)))
+      const wallRole = owners.length === 1 ? 'exterior' as const : 'partition' as const
+      const thickness = wallRole === 'exterior'
+        ? Number(first.room.metadata.wallThickness ?? 0.22)
+        : Math.min(...owners.map(({ room }) => Number(room.metadata.wallThickness ?? 0.16)))
+      const wallSegmentId = `wall_segment.${segmentKey(start, end, first.room.levelId)}.${breakpointIndex + 1}`
+      wallSegments.push({
+        id: wallSegmentId,
+        sourceNodeKeys,
+        levelId: first.room.levelId,
+        wallRole,
+        start: [start.x, baseY, start.y],
+        end: [end.x, baseY, end.y],
+        thickness,
+        height: baseHeight,
+        ownerRoomIds,
+        metadata: {
+          topologyOwned: true,
+          wallSystem: 'topology',
+          normal: first.outwardNormal,
+          groupKey,
+        },
+      })
+      if (wallRole === 'partition') {
+        for (let ownerIndex = 1; ownerIndex < owners.length; ownerIndex += 1) {
+          const other = owners[ownerIndex]
+          partitionWalls.push({
+            id: `partition.${wallSegmentId}.${ownerIndex}`,
+            sourceNodeKeys: [first.room.sourceNodeKey, other.room.sourceNodeKey],
+            wallSegmentId,
+            levelId: first.room.levelId,
+            fromRoomId: roomLabel(first.room),
+            toRoomId: roomLabel(other.room),
+            metadata: { wallSystem: 'topology' },
+          })
+          roomAdjacency.push({
+            id: `adjacency.${wallSegmentId}.${ownerIndex}`,
+            levelId: first.room.levelId,
+            fromRoomId: roomLabel(first.room),
+            toRoomId: roomLabel(other.room),
+            wallSegmentId,
+            metadata: { wallSystem: 'topology' },
+          })
+        }
+      }
+    }
+  }
+
+  if (partitionWalls.length === 0 && topologyRooms.length > 1) {
+    diagnostics.push('No semantic room adjacencies were derived from the current room profiles.')
+  }
+
+  return { wallSegments, partitionWalls, roomAdjacency }
+}
+
+function resolveInteriorDoorRequests(
+  requests: InteriorDoorRequest[],
+  roomAdjacency: RoomAdjacencySpec[],
+  wallSegments: WallSegmentSpec[],
+): OpeningSpec[] {
+  const wallSegmentsById = new Map(wallSegments.map((segment) => [segment.id, segment]))
+
+  return requests.flatMap((request) => {
+    const requested = new Set(request.roomIds)
+    const adjacency = roomAdjacency.find((entry) => {
+      const ids = new Set([entry.fromRoomId, entry.toRoomId].filter(Boolean))
+      return requested.size > 0
+        ? Array.from(requested).every((id) => ids.has(id))
+        : false
+    })
+    if (!adjacency?.wallSegmentId) return []
+    const segment = wallSegmentsById.get(adjacency.wallSegmentId)
+    if (!segment) return []
+    const tangent = new Vector3(segment.end[0] - segment.start[0], 0, segment.end[2] - segment.start[2]).normalize()
+    const center = wallSegmentHostCenter(segment).addScaledVector(tangent, request.offset)
+    return [{
+      id: request.id,
+      sourceNodeKey: request.sourceNodeKey,
+      hostSolidId: wallSegmentHostId(segment),
+      hostWallSegmentId: segment.id,
+      levelId: adjacency.levelId,
+      fromRoomId: adjacency.fromRoomId,
+      toRoomId: adjacency.toRoomId,
+      kind: 'doorway',
+      openingRole: 'interior',
+      position: [center.x, segment.start[1] + request.height * 0.5, center.z],
+      size: [request.width, request.height, Math.max(segment.thickness + 0.04, 0.12)],
+      metadata: {},
+    }]
+  })
+}
+
+function pointToWallSegmentDistanceXZ(point: OpeningSpec['position'], segment: WallSegmentSpec) {
+  const start = new Vector3(segment.start[0], 0, segment.start[2])
+  const end = new Vector3(segment.end[0], 0, segment.end[2])
+  const target = new Vector3(point[0], 0, point[2])
+  const line = new Vector3().subVectors(end, start)
+  const lengthSq = Math.max(line.lengthSq(), 1e-8)
+  const t = Math.max(0, Math.min(1, new Vector3().subVectors(target, start).dot(line) / lengthSq))
+  const projection = start.clone().addScaledVector(line, t)
+  return projection.distanceTo(target)
+}
+
+function remapTopologyOpenings(
+  openings: OpeningSpec[],
+  wallSegments: WallSegmentSpec[],
+  diagnostics: string[],
+) {
+  return openings.map((opening) => {
+    const existing = opening.hostWallSegmentId
+      ? wallSegments.find((segment) => segment.id === opening.hostWallSegmentId)
+      : null
+    const fallback = !existing && opening.openingRole !== 'interior'
+      ? wallSegments
+        .filter((segment) =>
+          segment.wallRole === 'exterior'
+          && segment.levelId === opening.levelId
+          && (!opening.fromRoomId || segment.ownerRoomIds.includes(opening.fromRoomId)))
+        .sort((left, right) => pointToWallSegmentDistanceXZ(opening.position, left) - pointToWallSegmentDistanceXZ(opening.position, right))[0] ?? null
+      : null
+    const resolvedSegment = existing ?? fallback
+    if (!resolvedSegment) {
+      if (opening.openingRole !== 'interior' && opening.hostSolidId && opening.hostSolidId.endsWith('.floor')) {
+        diagnostics.push(`Opening "${opening.id}" could not resolve a topology wall host.`)
+      }
+      return opening
+    }
+    const tangent = new Vector3(resolvedSegment.end[0] - resolvedSegment.start[0], 0, resolvedSegment.end[2] - resolvedSegment.start[2]).normalize()
+    const center = wallSegmentHostCenter(resolvedSegment)
+    const current = new Vector3(opening.position[0], 0, opening.position[2])
+    const midpoint = new Vector3((resolvedSegment.start[0] + resolvedSegment.end[0]) * 0.5, 0, (resolvedSegment.start[2] + resolvedSegment.end[2]) * 0.5)
+    const offset = new Vector3().subVectors(current, midpoint).dot(tangent)
+    const resolvedPosition = center.clone().addScaledVector(tangent, offset)
+    return {
+      ...opening,
+      hostSolidId: wallSegmentHostId(resolvedSegment),
+      hostWallSegmentId: resolvedSegment.id,
+      levelId: resolvedSegment.levelId,
+      fromRoomId: opening.fromRoomId ?? resolvedSegment.ownerRoomIds[0] ?? null,
+      toRoomId: opening.toRoomId ?? resolvedSegment.ownerRoomIds[1] ?? null,
+      position: [resolvedPosition.x, opening.position[1], resolvedPosition.z] as [number, number, number],
+      size: [
+        opening.size[0],
+        opening.size[1],
+        Math.max(opening.size[2], resolvedSegment.thickness + 0.04),
+      ] as [number, number, number],
+      metadata: {
+        ...opening.metadata,
+        wallSystem: 'topology',
+      },
+    }
+  })
+}
+
+function remapTopologyWindows(windows: WindowSpec[], openings: OpeningSpec[]) {
+  const openingById = new Map(
+    openings
+      .map((opening) => {
+        const openingId = typeof opening.metadata.openingId === 'string'
+          ? String(opening.metadata.openingId)
+          : opening.id.replace('.window_', '.opening_')
+        return [openingId, opening] as const
+      }),
+  )
+  return windows.map((windowSpec) => {
+    const openingId = typeof windowSpec.metadata.openingId === 'string' ? String(windowSpec.metadata.openingId) : null
+    const opening = openingId ? openingById.get(openingId) : null
+    return opening
+      ? {
+          ...windowSpec,
+          hostSolidId: opening.hostSolidId,
+          position: opening.position,
+          metadata: {
+            ...windowSpec.metadata,
+            wallSystem: 'topology',
+          },
+        }
+      : windowSpec
+  })
+}
+
+function applyOpeningsToSolids(
+  solids: RuntimeSolid[],
+  openings: OpeningSpec[],
+  diagnostics: string[],
+  wallSegments: WallSegmentSpec[] = [],
+) {
+  const bySolidId = new Map(solids.map((solid) => [solid.spec.id, solid]))
+  const wallSegmentsById = new Map(wallSegments.map((segment) => [segment.id, segment]))
+  for (const opening of openings) {
+    if (!opening.hostSolidId) continue
+    const host = bySolidId.get(opening.hostSolidId)
+    if (!host) continue
+    const geometry = new BoxGeometry(opening.size[0], opening.size[1], Math.max(opening.size[2], 0.08))
+    const segment = opening.hostWallSegmentId ? wallSegmentsById.get(opening.hostWallSegmentId) : null
+    if (segment) {
+      const span = new Vector3(
+        segment.end[0] - segment.start[0],
+        segment.end[1] - segment.start[1],
+        segment.end[2] - segment.start[2],
+      )
+      const angle = Math.atan2(span.z, span.x)
+      geometry.rotateY(-angle)
+    }
+    geometry.translate(opening.position[0], opening.position[1], opening.position[2])
+    bySolidId.set(host.spec.id, subtractGeometryFromSolid(host, geometry, opening.sourceNodeKey, diagnostics))
+  }
+  return solids.map((solid) => bySolidId.get(solid.spec.id) ?? solid)
+}
+
+function applySlabVoidsToSolids(solids: RuntimeSolid[], slabVoids: SlabVoidSpec[], diagnostics: string[]) {
+  const bySolidId = new Map(solids.map((solid) => [solid.spec.id, solid]))
+  for (const slabVoid of slabVoids) {
+    const matching = solids.filter((solid) => {
+      if (solid.spec.kind !== 'slab') return false
+      const levelId = typeof solid.spec.metadata.levelId === 'string' ? solid.spec.metadata.levelId : null
+      return levelId === slabVoid.hostLevelId || solid.spec.id === slabVoid.hostSolidId
+    })
+    for (const host of matching) {
+      const outer = segmentsToPolyline(slabVoid.outerLoop)
+      if (outer.length < 3) continue
+      const profile = runtimeProfileFromLoops(`${slabVoid.id}.profile`, outer, [])
+      const height = Math.max(slabVoid.topElevation - slabVoid.bottomElevation, 0.4)
+      const geometry = extrudeProfile(profile, height)
+      geometry.translate(0, slabVoid.bottomElevation, 0)
+      bySolidId.set(host.spec.id, subtractGeometryFromSolid(host, geometry, slabVoid.sourceNodeKey, diagnostics))
+    }
+  }
+  return solids.map((solid) => bySolidId.get(solid.spec.id) ?? solid)
 }
 
 function bandColor(kind: unknown, fallback: string) {
@@ -1126,10 +1655,14 @@ function compileShellBandToResult(
     rooms: [{
       id: `${node.key}.band_${index + 1}.room`,
       sourceNodeKey: node.key,
+      roomId: `${node.key}.band_${index + 1}.room`,
+      levelId: null,
+      parentStructureId: null,
       name: `${node.title} Band ${index + 1}`,
       profileId: floorSource.profile.id,
       floorElevation: band.baseElevation,
       ceilingElevation: band.topElevation,
+      adjacencyTags: [],
       metadata: {
         ...band.metadata,
         sourceNodeKeys: band.sourceNodeKeys,
@@ -1458,7 +1991,11 @@ export function compileAssemblyGraph(
         result.levels = [{
           id: `${node.key}.level`,
           sourceNodeKey: node.key,
+          levelId: `${node.key}.level`,
+          index: 1,
           label: stringParam(node, 'label', node.title),
+          baseElevation: elevation,
+          topElevation: elevation + height,
           elevation,
           height,
           metadata: {},
@@ -1473,12 +2010,40 @@ export function compileAssemblyGraph(
         result.levels = Array.from({ length: count }, (_, index) => ({
           id: `${node.key}.level_${index + 1}`,
           sourceNodeKey: node.key,
+          levelId: `${node.key}.level_${index + 1}`,
+          index: index + 1,
           label: `Level ${index + 1}`,
+          baseElevation: baseElevation + index * levelHeight,
+          topElevation: baseElevation + (index + 1) * levelHeight,
           elevation: baseElevation + index * levelHeight,
           height: levelHeight,
           metadata: { index: index + 1 },
         }))
         result.anchors = result.levels.map((level, index) => createAnchor(node.key, `Level ${index + 1}`, new Vector3(0, level.elevation, 0)))
+        break
+      }
+      case 'storey_stack': {
+        const count = Math.max(1, Math.round(numberParam(node, 'count', 2)))
+        const baseElevation = numberParam(node, 'baseElevation', 0)
+        const levelHeight = numberParam(node, 'levelHeight', 3.2)
+        const slabThickness = numberParam(node, 'slabThickness', 0.18)
+        const labelPrefix = stringParam(node, 'labelPrefix', 'Level')
+        result.levels = Array.from({ length: count }, (_, index) => {
+          const elevation = baseElevation + index * levelHeight
+          return {
+            id: `${node.key}.level_${index + 1}`,
+            sourceNodeKey: node.key,
+            levelId: `${node.key}.level_${index + 1}`,
+            index: index + 1,
+            label: `${labelPrefix} ${index + 1}`,
+            baseElevation: elevation,
+            topElevation: elevation + levelHeight,
+            elevation,
+            height: levelHeight,
+            metadata: { index: index + 1, slabThickness },
+          }
+        })
+        result.anchors = result.levels.map((level) => createAnchor(node.key, level.label, new Vector3(0, level.baseElevation, 0)))
         break
       }
       case 'box': {
@@ -1571,53 +2136,62 @@ export function compileAssemblyGraph(
       case 'wall_run':
       case 'wall_shell':
       case 'room':
-      case 'room_shell': {
+      case 'room_shell':
+      case 'room_on_level': {
         const profile = collectIncomingProfiles(graph, node, nextCache.nodeResults)[0]
         if (!profile) break
-        const level = collectIncomingLevels(graph, node, nextCache.nodeResults)[0]
-        const baseElevation = level?.elevation ?? 0
+        const availableLevels = collectIncomingLevels(graph, node, nextCache.nodeResults)
+        const level = node.kind === 'room_on_level'
+          ? selectLevelForNode(node, availableLevels, 'levelIndex', 1)
+          : availableLevels[0]
+        const topologyOwned = isTopologyOwnedRoomNode(node)
+        const baseElevation = level?.baseElevation ?? level?.elevation ?? 0
         const wallHeight = numberParam(node, 'height', level?.height ?? 3)
         const wallThickness = numberParam(node, 'wallThickness', numberParam(node, 'thickness', 0.2))
-        const outerGeometry = extrudeProfile(profile, wallHeight)
-        outerGeometry.translate(0, baseElevation, 0)
-        const inset = insetProfile(profile, wallThickness)
-        const innerGeometry = extrudeProfile(inset, wallHeight + 0.02)
-        innerGeometry.translate(0, baseElevation, 0)
-        const wallGeometry = booleanCombine(
-          {
-            spec: {
-              id: `${node.key}.outer`,
-              sourceNodeKey: node.key,
-              kind: 'wall_shell',
-              profileId: profile.profile.id,
-              transform: { position: [0, baseElevation, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
-              params: {},
-              metadata: {},
-            },
-            geometry: outerGeometry,
-            color: '#7f92a6',
-          },
-          {
-            spec: {
-              id: `${node.key}.inner`,
-              sourceNodeKey: node.key,
-              kind: 'wall_shell',
-              profileId: inset.profile.id,
-              transform: { position: [0, baseElevation, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
-              params: {},
-              metadata: {},
-            },
-            geometry: innerGeometry,
-            color: '#7f92a6',
-          },
-          SUBTRACTION,
-          node,
-          diagnostics,
-        )
+        const wallGeometry = topologyOwned
+          ? null
+          : (() => {
+              const outerGeometry = extrudeProfile(profile, wallHeight)
+              outerGeometry.translate(0, baseElevation, 0)
+              const inset = insetProfile(profile, wallThickness)
+              const innerGeometry = extrudeProfile(inset, wallHeight + 0.02)
+              innerGeometry.translate(0, baseElevation, 0)
+              return booleanCombine(
+                {
+                  spec: {
+                    id: `${node.key}.outer`,
+                    sourceNodeKey: node.key,
+                    kind: 'wall_shell',
+                    profileId: profile.profile.id,
+                    transform: { position: [0, baseElevation, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
+                    params: {},
+                    metadata: { wallSystem: 'legacy_shell' },
+                  },
+                  geometry: outerGeometry,
+                  color: '#7f92a6',
+                },
+                {
+                  spec: {
+                    id: `${node.key}.inner`,
+                    sourceNodeKey: node.key,
+                    kind: 'wall_shell',
+                    profileId: inset.profile.id,
+                    transform: { position: [0, baseElevation, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
+                    params: {},
+                    metadata: { wallSystem: 'legacy_shell' },
+                  },
+                  geometry: innerGeometry,
+                  color: '#7f92a6',
+                },
+                SUBTRACTION,
+                node,
+                diagnostics,
+              )
+            })()
         const floorThickness = numberParam(node, 'floorThickness', 0.18)
         const floorGeometry = extrudeProfile(profile, floorThickness)
         floorGeometry.translate(0, baseElevation, 0)
-        const floorSolid = node.kind === 'room' || node.kind === 'room_shell'
+        const floorSolid = node.kind === 'room' || node.kind === 'room_shell' || node.kind === 'room_on_level'
           ? {
               spec: {
                 id: `${node.key}.floor`,
@@ -1626,7 +2200,12 @@ export function compileAssemblyGraph(
                 profileId: profile.profile.id,
                 transform: { position: [0, baseElevation, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
                 params: { thickness: floorThickness },
-                metadata: {},
+                metadata: {
+                  levelId: level?.id ?? null,
+                  roomId: `${node.key}.room`,
+                  structureId: typeof node.metadata.blueprintElementId === 'string' ? node.metadata.blueprintElementId : null,
+                  topologyOwned,
+                },
               },
               geometry: floorGeometry,
               color: '#596979',
@@ -1636,21 +2215,50 @@ export function compileAssemblyGraph(
           ...(wallGeometry ? [wallGeometry] : []),
           ...(floorSolid ? [floorSolid] : []),
         ]
+        if (floorSolid) {
+          floorSolid.spec.metadata = {
+            ...floorSolid.spec.metadata,
+            levelId: level?.id ?? null,
+            roomId: `${node.key}.room`,
+            structureId: typeof node.metadata.blueprintElementId === 'string' ? node.metadata.blueprintElementId : null,
+            topologyOwned,
+          }
+        }
         result.solidOutputs = {
           solid: result.solids,
           shell: wallGeometry ? [wallGeometry] : [],
           ...(floorSolid ? { floor: [floorSolid] } : {}),
         }
-        result.structuralShells = [createStructuralShellFromProfile(
-          node,
-          profile,
-          wallThickness,
-          floorThickness,
-          baseElevation,
-          baseElevation + wallHeight,
-          Boolean(floorSolid),
-        )]
-        result.structureFootprints = result.structuralShells.map((shell) => ({
+        result.structuralShells = topologyOwned
+          ? []
+          : [createStructuralShellFromProfile(
+              node,
+              profile,
+              wallThickness,
+              floorThickness,
+              baseElevation,
+              baseElevation + wallHeight,
+              Boolean(floorSolid),
+            )]
+        result.structureFootprints = (topologyOwned
+          ? [{
+              id: `${node.key}.footprint`,
+              sourceNodeKey: node.key,
+              shapeKind: 'polygon' as const,
+              outerLoop: {
+                id: `${node.key}.footprint.outer`,
+                closed: true,
+                kind: 'outer' as const,
+                segments: pointsToSegments(profile.outer),
+              },
+              innerLoops: [],
+              metadata: {
+                baseElevation,
+                topElevation: baseElevation + wallHeight,
+                topologyOwned: true,
+              },
+            }]
+          : result.structuralShells.map((shell) => ({
           id: `${node.key}.footprint`,
           sourceNodeKey: node.key,
           shapeKind: shell.shapeKind,
@@ -1672,8 +2280,8 @@ export function compileAssemblyGraph(
             baseElevation,
             topElevation: baseElevation + wallHeight,
           },
-        }))
-        result.shellBands = result.structuralShells.map((shell) => ({
+        })))
+        result.shellBands = topologyOwned ? [] : result.structuralShells.map((shell) => ({
           id: `${node.key}.shell_band`,
           sourceNodeKeys: [node.key],
           outerLoop: {
@@ -1697,6 +2305,7 @@ export function compileAssemblyGraph(
             derivedKind: 'original',
             wallThickness,
             floorThickness,
+            wallSystem: 'legacy_shell',
           },
         }))
         const box = new Box3()
@@ -1719,33 +2328,88 @@ export function compileAssemblyGraph(
           levelId: level?.id ?? null,
           height: wallHeight,
           thickness: wallThickness,
-          metadata: {},
+          metadata: {
+            topologyOwned,
+            wallSystem: topologyOwned ? 'topology' : 'legacy_shell',
+          },
         }]
-        result.wallFaces = wallFacesFromProfile(node, profile, wallHeight, baseElevation)
-        result.rooms = node.kind === 'room' || node.kind === 'room_shell'
+        result.wallFaces = wallFacesFromProfile(node, profile, wallHeight, baseElevation, `${node.key}.wall_run`).map((face) => ({
+          ...face,
+          levelId: level?.id ?? null,
+          wallRole: 'exterior',
+          ownerRoomIds: [`${node.key}.room`],
+          metadata: {
+            ...face.metadata,
+            levelId: level?.id ?? null,
+            wallRole: 'exterior',
+            topologyOwned,
+            wallSystem: topologyOwned ? 'topology' : 'legacy_shell',
+            roomId: `${node.key}.room`,
+            wallThickness,
+            profileId: profile.profile.id,
+          },
+        }))
+        result.rooms = node.kind === 'room' || node.kind === 'room_shell' || node.kind === 'room_on_level'
           ? [{
               id: `${node.key}.room`,
               sourceNodeKey: node.key,
-              name: node.title,
+              roomId: `${node.key}.room`,
+              levelId: level?.id ?? null,
+              parentStructureId: typeof node.metadata.blueprintElementId === 'string' ? node.metadata.blueprintElementId : null,
+              name: stringParam(node, 'roomName', node.title),
               profileId: profile.profile.id,
               floorElevation: baseElevation,
               ceilingElevation: baseElevation + wallHeight,
-              metadata: {},
+              adjacencyTags: [],
+              metadata: {
+                wallThickness,
+                floorThickness,
+                levelIndex: level?.index ?? 1,
+                topologyOwned,
+              },
             }]
           : []
         break
       }
       case 'floor_plate':
       case 'floor_fill':
+      case 'floor_slab':
+      case 'ceiling_slab':
       case 'ceiling_fill':
       case 'mezzanine':
       case 'mezzanine_ring': {
         const profile = collectIncomingProfiles(graph, node, nextCache.nodeResults)[0]
         if (!profile) break
         const thickness = numberParam(node, 'thickness', 0.18)
-        const elevation = numberParam(node, 'elevation', node.kind === 'mezzanine' || node.kind === 'mezzanine_ring' ? 1.5 : node.kind === 'ceiling_fill' ? 3 : 0)
+        const availableLevels = collectIncomingLevels(graph, node, nextCache.nodeResults)
+        const selectedLevel = (node.kind === 'floor_slab' || node.kind === 'ceiling_slab')
+          ? selectLevelForNode(node, availableLevels, 'levelIndex', 1)
+          : null
+        const elevation = node.kind === 'floor_slab'
+          ? selectedLevel?.baseElevation ?? 0
+          : node.kind === 'ceiling_slab'
+            ? (selectedLevel?.topElevation ?? selectedLevel?.elevation ?? 3) - thickness
+            : numberParam(node, 'elevation', node.kind === 'mezzanine' || node.kind === 'mezzanine_ring' ? 1.5 : node.kind === 'ceiling_fill' ? 3 : 0)
         const geometry = extrudeProfile(profile, thickness)
         geometry.translate(0, elevation, 0)
+        if (node.kind === 'floor_slab' || node.kind === 'ceiling_slab') {
+          result.solids = [{
+            spec: {
+              id: `${node.key}.solid`,
+              sourceNodeKey: node.key,
+              kind: 'slab',
+              profileId: profile.profile.id,
+              transform: { position: [0, elevation, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
+              params: { thickness },
+              metadata: {
+                levelId: selectedLevel?.id ?? null,
+                slabRole: node.kind === 'floor_slab' ? 'floor' : 'ceiling',
+              },
+            },
+            geometry: geometry.clone(),
+            color: '#687788',
+          }]
+        }
         result.surfaces = [{
           spec: {
             id: `${node.key}.surface`,
@@ -1754,12 +2418,36 @@ export function compileAssemblyGraph(
             profileId: profile.profile.id,
             elevation,
             thickness,
-            metadata: {},
+            metadata: {
+              levelId: selectedLevel?.id ?? null,
+              slabRole: node.kind === 'floor_slab' ? 'floor' : node.kind === 'ceiling_slab' ? 'ceiling' : null,
+            },
           },
           geometry,
           color: node.kind === 'mezzanine' || node.kind === 'mezzanine_ring' ? '#95a56f' : node.kind === 'ceiling_fill' ? '#6d7078' : '#5b6c7c',
         }]
         result.anchors = [createAnchor(node.key, node.kind === 'mezzanine' || node.kind === 'mezzanine_ring' ? 'Mezzanine Edge' : node.kind === 'ceiling_fill' ? 'Ceiling Center' : 'Floor Center', new Vector3(0, elevation, 0))]
+        break
+      }
+      case 'slab_void': {
+        const profile = collectIncomingProfiles(graph, node, nextCache.nodeResults)[0]
+        const level = selectLevelForNode(node, collectIncomingLevels(graph, node, nextCache.nodeResults), 'levelIndex', 1)
+        if (!profile || !level) break
+        result.slabVoids = [{
+          id: `${node.key}.void`,
+          sourceNodeKey: node.key,
+          hostLevelId: level.id,
+          hostSolidId: null,
+          outerLoop: {
+            id: `${node.key}.void.outer`,
+            closed: true,
+            kind: 'outer',
+            segments: pointsToSegments(profile.outer),
+          },
+          bottomElevation: level.baseElevation + numberParam(node, 'bottomOffset', 0),
+          topElevation: level.baseElevation + Math.max(numberParam(node, 'topOffset', 0.4), numberParam(node, 'bottomOffset', 0) + 0.2),
+          metadata: {},
+        }]
         break
       }
       case 'stair': {
@@ -1794,6 +2482,9 @@ export function compileAssemblyGraph(
           kind: 'straight',
           fromLevelId: null,
           toLevelId: null,
+          shaftId: null,
+          clearanceEnvelope: null,
+          landingIds: [],
           riseCount: stepCount,
           metadata: {},
         }]
@@ -1830,6 +2521,9 @@ export function compileAssemblyGraph(
           kind: 'straight',
           fromLevelId: null,
           toLevelId: null,
+          shaftId: null,
+          clearanceEnvelope: null,
+          landingIds: [],
           riseCount: stepCount,
           metadata: {},
         }]
@@ -1876,6 +2570,9 @@ export function compileAssemblyGraph(
           kind: 'switchback',
           fromLevelId: null,
           toLevelId: null,
+          shaftId: null,
+          clearanceEnvelope: null,
+          landingIds: [`${node.key}.landing`],
           riseCount: stepCount,
           metadata: {},
         }]
@@ -1906,9 +2603,162 @@ export function compileAssemblyGraph(
           kind: 'spiral',
           fromLevelId: null,
           toLevelId: null,
+          shaftId: null,
+          clearanceEnvelope: null,
+          landingIds: [],
           riseCount: stepCount,
           metadata: {},
         }]
+        break
+      }
+      case 'stair_core': {
+        const { fromLevel, toLevel } = selectLevelPairForNode(node, collectIncomingLevels(graph, node, nextCache.nodeResults))
+        if (!fromLevel || !toLevel) {
+          diagnostics.push(`Stair core "${node.key}" is missing valid from/to levels.`)
+          break
+        }
+        if ((toLevel.baseElevation ?? toLevel.elevation) <= (fromLevel.baseElevation ?? fromLevel.elevation)) {
+          diagnostics.push(`Stair core "${node.key}" has non-ascending level targets.`)
+          break
+        }
+        const offset = vector3Param(node, 'offset', { x: 0, y: 0, z: 0 })
+        const stairType = stringParam(node, 'stairType', 'switchback')
+        const width = numberParam(node, 'width', 2.2)
+        const depth = numberParam(node, 'depth', 4.6)
+        const rise = numberParam(node, 'rise', 0.18)
+        const totalRise = (toLevel.baseElevation ?? toLevel.elevation) - (fromLevel.baseElevation ?? fromLevel.elevation)
+        const stepCount = Math.max(2, Math.round(totalRise / Math.max(rise, 0.01)))
+        if (stairType === 'spiral') {
+          const radius = Math.max(width * 0.5, 0.8)
+          result.solids = Array.from({ length: stepCount }, (_, index) => {
+            const angle = (index / stepCount) * Math.PI * 2
+            const height = (fromLevel.baseElevation ?? fromLevel.elevation) + rise * (index + 1)
+            const x = offset.x + Math.cos(angle) * radius * 0.6
+            const z = offset.z + Math.sin(angle) * radius * 0.6
+            return {
+              spec: { id: `${node.key}.step_${index + 1}`, sourceNodeKey: node.key, kind: 'stair', profileId: null, transform: { position: [0, 0, 0], rotation: [0, angle, 0], scale: [1, 1, 1] }, params: { stepIndex: index + 1 }, metadata: {} },
+              geometry: new BoxGeometry(radius, 0.12, 0.5).translate(x, height, z),
+              color: '#b98f66',
+            }
+          })
+        } else {
+          const halfSteps = Math.max(1, Math.floor(stepCount / 2))
+          result.solids = []
+          for (let index = 0; index < halfSteps; index += 1) {
+            const height = rise * (index + 1)
+            result.solids.push({
+              spec: { id: `${node.key}.lower_${index + 1}`, sourceNodeKey: node.key, kind: 'stair', profileId: null, transform: { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] }, params: { stepIndex: index + 1 }, metadata: {} },
+              geometry: new BoxGeometry(width, height, depth / Math.max(stepCount, 2)).translate(offset.x, (fromLevel.baseElevation ?? fromLevel.elevation) + height / 2, offset.z + index * (depth / Math.max(stepCount, 2))),
+              color: '#b98f66',
+            })
+          }
+          const landingElevation = (fromLevel.baseElevation ?? fromLevel.elevation) + rise * halfSteps
+          const landingDepth = numberParam(node, 'landingDepth', Math.max(depth * 0.35, 2))
+          result.solids.push({
+            spec: { id: `${node.key}.landing`, sourceNodeKey: node.key, kind: 'landing', profileId: null, transform: { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] }, params: { landingElevation }, metadata: {} },
+            geometry: new BoxGeometry(width, 0.18, landingDepth).translate(offset.x, landingElevation + 0.09, offset.z + halfSteps * (depth / Math.max(stepCount, 2)) + landingDepth * 0.5),
+            color: '#b1a385',
+          })
+          for (let index = 0; index < stepCount - halfSteps; index += 1) {
+            const height = landingElevation + rise * (index + 1)
+            result.solids.push({
+              spec: { id: `${node.key}.upper_${index + 1}`, sourceNodeKey: node.key, kind: 'stair', profileId: null, transform: { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] }, params: { stepIndex: halfSteps + index + 1 }, metadata: {} },
+              geometry: new BoxGeometry(width, height - (fromLevel.baseElevation ?? fromLevel.elevation), depth / Math.max(stepCount, 2)).translate(offset.x, (fromLevel.baseElevation ?? fromLevel.elevation) + (height - (fromLevel.baseElevation ?? fromLevel.elevation)) / 2, offset.z + halfSteps * (depth / Math.max(stepCount, 2)) + landingDepth + index * (depth / Math.max(stepCount, 2))),
+              color: '#b98f66',
+            })
+          }
+        }
+        const shaftWidth = Math.max(width + 0.35, numberParam(node, 'shaftWidth', width + 0.35))
+        const shaftDepth = Math.max(depth + 0.35, numberParam(node, 'shaftDepth', depth + 0.35))
+        const shaftLoop = [
+          new Vector2(offset.x - shaftWidth * 0.5, offset.z - shaftDepth * 0.5),
+          new Vector2(offset.x + shaftWidth * 0.5, offset.z - shaftDepth * 0.5),
+          new Vector2(offset.x + shaftWidth * 0.5, offset.z + shaftDepth * 0.5),
+          new Vector2(offset.x - shaftWidth * 0.5, offset.z + shaftDepth * 0.5),
+        ]
+        result.slabVoids = [{
+          id: `${node.key}.shaft`,
+          sourceNodeKey: node.key,
+          hostLevelId: toLevel.id,
+          hostSolidId: null,
+          outerLoop: {
+            id: `${node.key}.shaft.outer`,
+            closed: true,
+            kind: 'outer',
+            segments: pointsToSegments(shaftLoop),
+          },
+          bottomElevation: (toLevel.baseElevation ?? toLevel.elevation) - 0.05,
+          topElevation: (toLevel.baseElevation ?? toLevel.elevation) + Math.max(numberParam(node, 'voidHeight', 0.45), 0.45),
+          metadata: {},
+        }]
+        result.anchors = [
+          createAnchor(node.key, 'Stair Base', new Vector3(offset.x, fromLevel.baseElevation ?? fromLevel.elevation, offset.z)),
+          createAnchor(node.key, 'Stair Top', new Vector3(offset.x, toLevel.baseElevation ?? toLevel.elevation, offset.z)),
+        ]
+        result.stairs = [{
+          id: `${node.key}.stair`,
+          sourceNodeKey: node.key,
+          kind: stairType === 'spiral' ? 'spiral' : 'switchback',
+          fromLevelId: fromLevel.id,
+          toLevelId: toLevel.id,
+          shaftId: `${node.key}.shaft`,
+          clearanceEnvelope: [shaftWidth, totalRise, shaftDepth],
+          landingIds: [`${node.key}.landing`],
+          riseCount: stepCount,
+          metadata: {},
+        }]
+        break
+      }
+      case 'stair_shaft': {
+        const { fromLevel, toLevel } = selectLevelPairForNode(node, collectIncomingLevels(graph, node, nextCache.nodeResults))
+        if (!fromLevel || !toLevel) break
+        const width = numberParam(node, 'width', 2.6)
+        const depth = numberParam(node, 'depth', 4.8)
+        const offset = vector3Param(node, 'offset', { x: 0, y: 0, z: 0 })
+        const loop = [
+          new Vector2(offset.x - width * 0.5, offset.z - depth * 0.5),
+          new Vector2(offset.x + width * 0.5, offset.z - depth * 0.5),
+          new Vector2(offset.x + width * 0.5, offset.z + depth * 0.5),
+          new Vector2(offset.x - width * 0.5, offset.z + depth * 0.5),
+        ]
+        result.slabVoids = [{
+          id: `${node.key}.void`,
+          sourceNodeKey: node.key,
+          hostLevelId: toLevel.id,
+          hostSolidId: null,
+          outerLoop: {
+            id: `${node.key}.void.outer`,
+            closed: true,
+            kind: 'outer',
+            segments: pointsToSegments(loop),
+          },
+          bottomElevation: (toLevel.baseElevation ?? toLevel.elevation) - 0.05,
+          topElevation: (toLevel.baseElevation ?? toLevel.elevation) + 0.45,
+          metadata: {},
+        }]
+        break
+      }
+      case 'landing_stack': {
+        const { fromLevel, toLevel } = selectLevelPairForNode(node, collectIncomingLevels(graph, node, nextCache.nodeResults))
+        if (!fromLevel || !toLevel) break
+        const width = numberParam(node, 'width', 2.2)
+        const depth = numberParam(node, 'depth', 2.2)
+        const thickness = numberParam(node, 'thickness', 0.18)
+        const offset = vector3Param(node, 'offset', { x: 0, y: 0, z: 0 })
+        result.solids = [{
+          spec: {
+            id: `${node.key}.landing`,
+            sourceNodeKey: node.key,
+            kind: 'landing',
+            profileId: null,
+            transform: { position: [offset.x, toLevel.baseElevation ?? toLevel.elevation, offset.z], rotation: [0, 0, 0], scale: [1, 1, 1] },
+            params: { width, depth, thickness },
+            metadata: { levelId: toLevel.id },
+          },
+          geometry: new BoxGeometry(width, thickness, depth).translate(offset.x, (toLevel.baseElevation ?? toLevel.elevation) + thickness * 0.5, offset.z),
+          color: '#b1a385',
+        }]
+        result.anchors = [createAnchor(node.key, 'Landing', new Vector3(offset.x, toLevel.baseElevation ?? toLevel.elevation, offset.z))]
         break
       }
       case 'landing': {
@@ -1956,19 +2806,27 @@ export function compileAssemblyGraph(
         const sillHeight = numberParam(node, 'sillHeight', 0.9)
         const count = Math.max(1, Math.round(numberParam(node, 'count', 1)))
         const spacing = numberParam(node, 'spacing', 2.2)
-        const basePosition = openingPositionFromWallFace(wallFace, new Vector3(0, height / 2, 0))
+        const baseElevation = wallFace?.elevationBottom ?? 0
+        const basePosition = openingPositionFromWallFace(wallFace, new Vector3(0, baseElevation, 0))
         const normal = wallFace ? new Vector3(wallFace.normal[0], wallFace.normal[1], wallFace.normal[2]) : new Vector3(1, 0, 0)
         const tangent = new Vector3(-normal.z, 0, normal.x).normalize()
         const requestedOffset = numberParam(node, 'offset', 0)
         result.openings = Array.from({ length: count }, (_, index) => {
           const openingOffset = (index - (count - 1) / 2) * spacing
           const position = basePosition.clone().addScaledVector(tangent, openingOffset + requestedOffset)
-          position.y = node.kind === 'window_opening' ? sillHeight + height * 0.5 : position.y
+          position.y = baseElevation + (node.kind === 'window_opening' || node.kind === 'opening_array' ? sillHeight + height * 0.5 : height * 0.5)
+          const wallFaceLevelId = typeof wallFace?.levelId === 'string' ? wallFace.levelId : null
+          const wallFaceRoomIds = wallFace?.ownerRoomIds ?? []
           return {
             id: `${node.key}.opening_${index + 1}`,
             sourceNodeKey: node.key,
             hostSolidId: host?.spec.id ?? null,
+            hostWallSegmentId: typeof wallFace?.metadata.wallSegmentId === 'string' ? String(wallFace.metadata.wallSegmentId) : null,
+            levelId: wallFaceLevelId,
+            fromRoomId: wallFaceRoomIds[0] ?? null,
+            toRoomId: wallFaceRoomIds[1] ?? null,
             kind: node.kind === 'doorway' || node.kind === 'door_opening' ? 'doorway' : 'opening',
+            openingRole: wallFace?.wallRole === 'partition' ? 'interior' : 'exterior',
             position: [position.x, position.y, position.z],
             size: [width, height, 0.2],
             metadata: { wallFaceId: wallFace?.id ?? null, openingIndex: index + 1, openingKind: node.kind, requestedSide: stringParam(node, 'side', ''), offset: openingOffset + requestedOffset },
@@ -1987,6 +2845,36 @@ export function compileAssemblyGraph(
             }))
           : []
         result.anchors = result.openings.map((opening, index) => createAnchor(node.key, `Opening ${index + 1}`, new Vector3(opening.position[0], opening.position[1], opening.position[2])))
+        break
+      }
+      case 'door_between_rooms': {
+        const rooms = collectIncomingRooms(graph, node, nextCache.nodeResults)
+        result.interiorDoorRequests = [{
+          id: `${node.key}.opening`,
+          sourceNodeKey: node.key,
+          roomIds: rooms.slice(0, 2).map((room) => roomLabel(room)),
+          width: numberParam(node, 'width', 1.05),
+          height: numberParam(node, 'height', 2.1),
+          offset: numberParam(node, 'offset', 0),
+        }]
+        result.anchors = [createAnchor(node.key, 'Interior Door', new Vector3(0, 1, 0))]
+        break
+      }
+      case 'opening_on_wall_segment': {
+        result.wallSegmentOpeningRequests = [{
+          id: `${node.key}.opening`,
+          sourceNodeKey: node.key,
+          wallSegmentId: typeof node.params.wallSegmentId === 'string' ? node.params.wallSegmentId : null,
+          width: numberParam(node, 'width', 1.1),
+          height: numberParam(node, 'height', 2.1),
+          offset: numberParam(node, 'offset', 0),
+          openingRole: stringParam(node, 'openingRole', 'interior') === 'circulation' ? 'circulation' : stringParam(node, 'openingRole', 'interior') === 'exterior' ? 'exterior' : 'interior',
+        }]
+        result.anchors = [createAnchor(node.key, 'Wall Segment Opening', new Vector3(0, 1, 0))]
+        break
+      }
+      case 'partition_walls_from_rooms': {
+        result.rooms = collectIncomingRooms(graph, node, nextCache.nodeResults)
         break
       }
       case 'connector': {
@@ -2173,7 +3061,12 @@ export function compileAssemblyGraph(
             id: `${node.key}.opening_a`,
             sourceNodeKey: node.key,
             hostSolidId: null,
+            hostWallSegmentId: null,
+            levelId: null,
+            fromRoomId: null,
+            toRoomId: null,
             kind: 'opening',
+            openingRole: 'circulation',
             position: from.position,
             size: [numberParam(node, 'width', 1.8), numberParam(node, 'height', 2.4), 0.2],
             metadata: { bridgeSide: 'from' },
@@ -2182,7 +3075,12 @@ export function compileAssemblyGraph(
             id: `${node.key}.opening_b`,
             sourceNodeKey: node.key,
             hostSolidId: null,
+            hostWallSegmentId: null,
+            levelId: null,
+            fromRoomId: null,
+            toRoomId: null,
             kind: 'opening',
+            openingRole: 'circulation',
             position: to.position,
             size: [numberParam(node, 'width', 1.8), numberParam(node, 'height', 2.4), 0.2],
             metadata: { bridgeSide: 'to' },
@@ -2454,14 +3352,13 @@ export function compileAssemblyGraph(
         if (!profile) break
         const hostSolids = collectIncomingSolids(graph, node, nextCache.nodeResults, 'host')
         const hostBounds = combinedSolidBounds(hostSolids)
-        const profileBounds = new Box3()
-        for (const point of profile.outer) profileBounds.expandByPoint(new Vector3(point.x, 0, point.y))
-        const profileCenter = profileBounds.getCenter(new Vector3())
-        const hostCenter = hostBounds?.getCenter(new Vector3()) ?? profileCenter
+        const hostRoomTop = incomingEdges(graph, node.key, 'host')
+          .flatMap((edge) => nextCache.nodeResults.get(edge.source.nodeKey)?.rooms ?? [])
+          .reduce((max, room) => Math.max(max, room.ceilingElevation), Number.NEGATIVE_INFINITY)
         const roofPlacement = {
-          baseElevation: hostBounds?.max.y ?? 0,
-          offsetX: hostCenter.x - profileCenter.x,
-          offsetZ: hostCenter.z - profileCenter.z,
+          baseElevation: Number.isFinite(hostRoomTop) ? hostRoomTop : (hostBounds?.max.y ?? 0),
+          offsetX: 0,
+          offsetZ: 0,
         }
         const roofType = canonicalRoofKind(node.kind).replace('roof_', '')
         result.solids = [{
@@ -2499,6 +3396,9 @@ export function compileAssemblyGraph(
         result.structuralFusions = incomingEdges(graph, node.key, 'solids').flatMap((edge) => nextCache.nodeResults.get(edge.source.nodeKey)?.structuralFusions ?? [])
         result.levels = incomingEdges(graph, node.key, 'anchors').flatMap((edge) => nextCache.nodeResults.get(edge.source.nodeKey)?.levels ?? [])
         result.wallFaces = incomingEdges(graph, node.key, 'solids').flatMap((edge) => nextCache.nodeResults.get(edge.source.nodeKey)?.wallFaces ?? [])
+        result.wallSegments = incomingEdges(graph, node.key, 'solids').flatMap((edge) => nextCache.nodeResults.get(edge.source.nodeKey)?.wallSegments ?? [])
+        result.partitionWalls = incomingEdges(graph, node.key, 'solids').flatMap((edge) => nextCache.nodeResults.get(edge.source.nodeKey)?.partitionWalls ?? [])
+        result.roomAdjacency = incomingEdges(graph, node.key, 'solids').flatMap((edge) => nextCache.nodeResults.get(edge.source.nodeKey)?.roomAdjacency ?? [])
         result.anchors = incomingEdges(graph, node.key, 'anchors').flatMap((edge) => nextCache.nodeResults.get(edge.source.nodeKey)?.anchors ?? [])
         result.connectors = incomingEdges(graph, node.key, 'anchors').flatMap((edge) => nextCache.nodeResults.get(edge.source.nodeKey)?.connectors ?? [])
         result.openings = incomingEdges(graph, node.key, 'solids').flatMap((edge) => nextCache.nodeResults.get(edge.source.nodeKey)?.openings ?? [])
@@ -2507,6 +3407,7 @@ export function compileAssemblyGraph(
         result.roofs = incomingEdges(graph, node.key, 'solids').flatMap((edge) => nextCache.nodeResults.get(edge.source.nodeKey)?.roofs ?? [])
         result.bridges = incomingEdges(graph, node.key, 'solids').flatMap((edge) => nextCache.nodeResults.get(edge.source.nodeKey)?.bridges ?? [])
         result.stairs = incomingEdges(graph, node.key, 'solids').flatMap((edge) => nextCache.nodeResults.get(edge.source.nodeKey)?.stairs ?? [])
+        result.slabVoids = incomingEdges(graph, node.key, 'solids').flatMap((edge) => nextCache.nodeResults.get(edge.source.nodeKey)?.slabVoids ?? [])
         result.arrayPlacements = incomingEdges(graph, node.key, 'solids').flatMap((edge) => nextCache.nodeResults.get(edge.source.nodeKey)?.arrayPlacements ?? [])
         break
       default:
@@ -2533,37 +3434,102 @@ export function compileAssemblyGraph(
   const roofs = outputResult.roofs ?? [...nextCache.nodeResults.values()].flatMap((result) => result.roofs ?? [])
   const bridges = outputResult.bridges ?? [...nextCache.nodeResults.values()].flatMap((result) => result.bridges ?? [])
   const stairs = outputResult.stairs ?? [...nextCache.nodeResults.values()].flatMap((result) => result.stairs ?? [])
+  const slabVoids = outputResult.slabVoids ?? [...nextCache.nodeResults.values()].flatMap((result) => result.slabVoids ?? [])
   const paths = [...nextCache.nodeResults.values()].flatMap((result) => result.pathSpecs ?? [])
   const arrayPlacements = outputResult.arrayPlacements ?? [...nextCache.nodeResults.values()].flatMap((result) => result.arrayPlacements ?? [])
+  const interiorDoorRequests = [...nextCache.nodeResults.values()].flatMap((result) => result.interiorDoorRequests ?? [])
+  const wallSegmentOpeningRequests = [...nextCache.nodeResults.values()].flatMap((result) => result.wallSegmentOpeningRequests ?? [])
+
+  const derivedTopology = deriveRoomTopology(rooms, profiles, diagnostics)
+  const derivedWallSolids = derivedTopology.wallSegments.map((segment) => createPartitionWallSolid(segment))
+  const partitionBySegmentId = new Map(derivedTopology.partitionWalls.map((partition) => [partition.wallSegmentId, partition] as const))
+  const derivedWallFaces = derivedTopology.wallSegments.map((segment) => createPartitionWallFace(segment, partitionBySegmentId.get(segment.id) ?? null))
+  const topologyWallSegments = [
+    ...(outputResult.wallSegments ?? [...nextCache.nodeResults.values()].flatMap((result) => result.wallSegments ?? [])),
+    ...derivedTopology.wallSegments,
+  ]
+  const topologyPartitionWalls = [
+    ...(outputResult.partitionWalls ?? [...nextCache.nodeResults.values()].flatMap((result) => result.partitionWalls ?? [])),
+    ...derivedTopology.partitionWalls,
+  ]
+  const topologyRoomAdjacency = [
+    ...(outputResult.roomAdjacency ?? [...nextCache.nodeResults.values()].flatMap((result) => result.roomAdjacency ?? [])),
+    ...derivedTopology.roomAdjacency,
+  ]
+  const topologyWallFaces = [
+    ...wallFaces
+      .filter((face) => face.metadata.topologyOwned !== true)
+      .map((face) => ({
+      ...face,
+      levelId: face.levelId ?? (typeof face.metadata.levelId === 'string' ? String(face.metadata.levelId) : null),
+      wallRole: face.wallRole ?? 'exterior',
+      ownerRoomIds: face.ownerRoomIds ?? [],
+    })),
+    ...derivedWallFaces,
+  ]
+  const interiorOpenings = resolveInteriorDoorRequests(
+    interiorDoorRequests,
+    topologyRoomAdjacency,
+    topologyWallSegments,
+  )
+  const manualWallSegmentOpenings = wallSegmentOpeningRequests.flatMap((request) => {
+    const segment = topologyWallSegments.find((entry) => entry.id === request.wallSegmentId)
+    if (!segment) return []
+    const tangent = new Vector3(segment.end[0] - segment.start[0], 0, segment.end[2] - segment.start[2]).normalize()
+    const center = wallSegmentHostCenter(segment).addScaledVector(tangent, request.offset)
+    return [{
+      id: request.id,
+      sourceNodeKey: request.sourceNodeKey,
+      hostSolidId: wallSegmentHostId(segment),
+      hostWallSegmentId: segment.id,
+      levelId: segment.levelId,
+      fromRoomId: segment.ownerRoomIds[0] ?? null,
+      toRoomId: segment.ownerRoomIds[1] ?? null,
+      kind: 'opening' as const,
+      openingRole: request.openingRole,
+      position: [center.x, segment.start[1] + request.height * 0.5, center.z] as [number, number, number],
+      size: [request.width, request.height, Math.max(segment.thickness + 0.04, 0.12)] as [number, number, number],
+      metadata: {},
+    }]
+  })
+  const openingsWithTopology = remapTopologyOpenings([...openings, ...interiorOpenings, ...manualWallSegmentOpenings], topologyWallSegments, diagnostics)
+  const windowsWithTopology = remapTopologyWindows(windows, openingsWithTopology)
+  const solidsWithTopology = [...solids, ...derivedWallSolids]
+  const solidsAfterSlabVoids = applySlabVoidsToSolids(solidsWithTopology, slabVoids, diagnostics)
+  const carvedSolids = applyOpeningsToSolids(solidsAfterSlabVoids, openingsWithTopology, diagnostics, topologyWallSegments)
 
   const spatialDocument: SpatialDocument = {
     id: `spatial.${graph.key}`,
     graphKey: graph.key,
     profiles,
-    solids: solids.map((entry) => entry.spec),
+    solids: carvedSolids.map((entry) => entry.spec),
     surfaces: surfaces.map((entry) => entry.spec),
     structureFootprints,
     shellBands,
     structuralFusions,
     levels,
     wallRuns,
-    wallFaces,
+    wallFaces: topologyWallFaces,
+    wallSegments: topologyWallSegments,
+    partitionWalls: topologyPartitionWalls,
+    roomAdjacency: topologyRoomAdjacency,
     anchors,
     connectors,
     rooms,
-    openings,
-    windows,
+    openings: openingsWithTopology,
+    windows: windowsWithTopology,
     roofs,
     bridges,
     stairs,
+    slabVoids,
     paths,
     arrayPlacements,
     diagnostics,
-    metadata: { boundEnvironmentKey: graph.boundEnvironmentKey },
+      metadata: { boundEnvironmentKey: graph.boundEnvironmentKey },
   }
 
   const parts: CompiledMeshPart[] = [
-    ...solids.map((entry, index) => geometryToPart(
+    ...carvedSolids.map((entry, index) => geometryToPart(
       `solid.${index + 1}`,
       entry.spec.sourceNodeKey,
       'solid',
@@ -2588,7 +3554,7 @@ export function compileAssemblyGraph(
     ...levels.map((level, index) =>
       linePart(`level.${index + 1}`, level.sourceNodeKey, [new Vector3(-1.2, level.elevation, 0), new Vector3(1.2, level.elevation, 0)], '#f59e0b', { label: level.label }),
     ),
-    ...wallFaces.map((face, index) =>
+    ...topologyWallFaces.map((face, index) =>
       linePart(`wallface.${index + 1}`, face.sourceNodeKey, [new Vector3(face.start[0], face.start[1], face.start[2]), new Vector3(face.end[0], face.end[1], face.end[2])], '#f97316', { wallFaceId: face.id }),
     ),
     ...anchors.map((anchor, index) => {
@@ -2596,11 +3562,14 @@ export function compileAssemblyGraph(
       geometry.translate(anchor.position[0], anchor.position[1], anchor.position[2])
       return geometryToPart(`anchor.${index + 1}`, anchor.sourceNodeKey, 'debug', geometry, '#fbbf24', { label: anchor.label })
     }),
-    ...openings.map((opening, index) => {
+    ...openingsWithTopology.map((opening, index) => {
       const geometry = new BoxGeometry(opening.size[0], opening.size[1], Math.max(opening.size[2], 0.08))
       geometry.translate(opening.position[0], opening.position[1], opening.position[2])
       return geometryToPart(`opening.${index + 1}`, opening.sourceNodeKey, 'debug', geometry, '#60a5fa', { openingId: opening.id })
     }),
+    ...topologyWallSegments.map((segment, index) =>
+      linePart(`wallsegment.${index + 1}`, segment.sourceNodeKeys[0] ?? graph.key, [new Vector3(segment.start[0], segment.start[1], segment.start[2]), new Vector3(segment.end[0], segment.end[1], segment.end[2])], segment.wallRole === 'partition' ? '#c084fc' : '#f97316', { wallSegmentId: segment.id }),
+    ),
     ...connectors
       .map((connector, index) => {
         const from = anchors.find((anchor) => anchor.id === connector.fromAnchorId)
@@ -2626,12 +3595,16 @@ export function compileAssemblyGraph(
     generatedAt: new Date().toISOString(),
     parts,
     levels,
-    wallFaces,
+    wallFaces: topologyWallFaces,
+    wallSegments: topologyWallSegments,
+    partitionWalls: topologyPartitionWalls,
+    roomAdjacency: topologyRoomAdjacency,
     anchors,
-    openings,
-    windows,
+    openings: openingsWithTopology,
+    windows: windowsWithTopology,
     bridges,
     stairs,
+    slabVoids,
     rooms,
     diagnostics,
     metadata: {

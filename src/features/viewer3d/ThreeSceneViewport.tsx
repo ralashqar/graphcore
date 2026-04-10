@@ -150,7 +150,7 @@ function CompiledPartView({ part }: { part: CompiledMeshPart }) {
         metalness={part.kind === 'debug' ? 0.15 : 0.08}
         opacity={part.kind === 'debug' ? 0.92 : 1}
         roughness={part.kind === 'surface' ? 0.7 : 0.56}
-        side={part.metadata.solidKind === 'wall_shell' ? DoubleSide : undefined}
+        side={part.metadata.solidKind === 'wall_shell' || part.metadata.solidKind === 'roof' ? DoubleSide : undefined}
         transparent={part.kind === 'debug'}
       />
     </mesh>
