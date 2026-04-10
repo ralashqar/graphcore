@@ -7,6 +7,8 @@ export const assemblyValueTypeSchema = z.enum([
   'path',
   'solid',
   'surface',
+  'surface_height_control',
+  'blend_target',
   'level',
   'room',
   'wall_face',
@@ -39,10 +41,13 @@ export const assemblyNodeKindSchema = z.enum([
   'line_loop',
   'arc_loop',
   'mixed_loop',
+  'smooth_closed_spline_loop',
+  'loop_builder',
   'close_loop',
   'hole_loop',
   'offset_profile',
   'profile_merge',
+  'profile_compose_v2',
   'profile_split',
   'profile_from_path',
   'profile_holes',
@@ -70,6 +75,7 @@ export const assemblyNodeKindSchema = z.enum([
   'mezzanine',
   'mezzanine_ring',
   'mezzanine_surface',
+  'mezzanine_surface_v2',
   'slab_void',
   'stair',
   'stair_run',
@@ -83,6 +89,8 @@ export const assemblyNodeKindSchema = z.enum([
   'landing_stack',
   'landing_stack_v2',
   'mezzanine_anchor',
+  'surface_control_set',
+  'stair_surface_blend',
   'stair_connection',
   'stair_to_level',
   'opening',
@@ -206,7 +214,7 @@ export const environmentGeometryBindingConfigSchema = z.object({
   compileSettings: z.object({
     livePreview: z.boolean().default(true),
     showDebug: z.boolean().default(true),
-    triangulation: z.enum(['shape_utils']).default('shape_utils'),
+    triangulation: z.enum(['shape_utils', 'constrained_delaunay_v1']).default('shape_utils'),
     booleanMode: z.enum(['bounded_v1']).default('bounded_v1'),
     levelHeight: z.number().positive().default(3),
   }).default({
@@ -223,12 +231,20 @@ export const curvePoint2dSchema = z.object({
   y: z.number(),
 })
 
+const curveSegmentDecoratorShape = {
+  tag: z.string().nullable().default(null),
+  boundaryRoleOverride: z.enum(['outer_edge', 'hole_edge']).nullable().default(null),
+  railingAllowed: z.boolean().nullable().default(null),
+  wallAllowed: z.boolean().nullable().default(null),
+  openingAllowed: z.boolean().nullable().default(null),
+}
+
 export const curveSegmentSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('line'),
     from: curvePoint2dSchema,
     to: curvePoint2dSchema,
-  }),
+  }).extend(curveSegmentDecoratorShape),
   z.object({
     type: z.literal('arc'),
     center: curvePoint2dSchema,
@@ -236,12 +252,21 @@ export const curveSegmentSchema = z.discriminatedUnion('type', [
     startAngle: z.number(),
     endAngle: z.number(),
     clockwise: z.boolean().default(false),
-  }),
+  }).extend(curveSegmentDecoratorShape),
+  z.object({
+    type: z.literal('bezier'),
+    from: curvePoint2dSchema,
+    control1: curvePoint2dSchema,
+    control2: curvePoint2dSchema,
+    to: curvePoint2dSchema,
+  }).extend(curveSegmentDecoratorShape),
   z.object({
     type: z.literal('spline'),
     points: z.array(curvePoint2dSchema).min(2),
     closed: z.boolean().default(false),
-  }),
+    curveType: z.enum(['centripetal', 'chordal', 'catmullrom']).default('centripetal'),
+    tension: z.number().min(0).max(1).default(0.5),
+  }).extend(curveSegmentDecoratorShape),
 ])
 
 export const boundaryLoopSchema = z.object({
@@ -714,10 +739,13 @@ export const environmentAssemblyLibrary: AssemblyTemplateGroup[] = [
       { key: 'line_loop', label: 'Line Loop', groupKey: 'sketch', defaultTitle: 'Line Loop', summary: 'Closed footprint described by line segments.', defaultParams: { points: [{ x: -4, y: -3 }, { x: 4, y: -3 }, { x: 4, y: 3 }, { x: -4, y: 3 }] } },
       { key: 'arc_loop', label: 'Arc Loop', groupKey: 'sketch', defaultTitle: 'Arc Loop', summary: 'Closed profile using arc segments.', defaultParams: { radius: 3.5, startAngle: 0, endAngle: 6.283185307179586 } },
       { key: 'mixed_loop', label: 'Mixed Loop', groupKey: 'sketch', defaultTitle: 'Mixed Loop', summary: 'Profile mixing lines, arcs, and splines.', defaultParams: { segments: [{ type: 'line', from: { x: -5, y: -3 }, to: { x: 3, y: -3 } }, { type: 'arc', center: { x: 3, y: 0 }, radius: 3, startAngle: -1.5707963267948966, endAngle: 1.5707963267948966, clockwise: false }, { type: 'line', from: { x: 3, y: 3 }, to: { x: -5, y: 3 } }, { type: 'line', from: { x: -5, y: 3 }, to: { x: -5, y: -3 } }] } },
+      { key: 'smooth_closed_spline_loop', label: 'Smooth Closed Spline Loop', groupKey: 'sketch', defaultTitle: 'Smooth Closed Loop', summary: 'One continuous closed spline loop with smoother tangent continuity.', defaultParams: { points: [{ x: -6, y: -3 }, { x: 0, y: -5 }, { x: 6, y: -3 }, { x: 6, y: 3 }, { x: 0, y: 5 }, { x: -6, y: 3 }], curveType: 'centripetal', tension: 0.5 } },
+      { key: 'loop_builder', label: 'Loop Builder', groupKey: 'sketch', defaultTitle: 'Loop Builder', summary: 'Build one closed outer or hole loop from multiple path inputs.', defaultParams: { loopRole: 'outer', closeTolerance: 0.12, sampleSpacing: 0.35, resampleMode: 'uniform', outputCurveKind: 'auto', curveType: 'centripetal', tension: 0.5 } },
       { key: 'close_loop', label: 'Close Loop', groupKey: 'sketch', defaultTitle: 'Close Loop', summary: 'Convert a path into a closed loop.' },
       { key: 'hole_loop', label: 'Hole Loop', groupKey: 'sketch', defaultTitle: 'Hole Loop', summary: 'Add a hole loop into a profile.' },
       { key: 'offset_profile', label: 'Offset Profile', groupKey: 'sketch', defaultTitle: 'Offset Profile', summary: 'Inset or outset a profile.', defaultParams: { offset: 0.4 } },
       { key: 'profile_merge', label: 'Profile Merge', groupKey: 'sketch', defaultTitle: 'Profile Merge', summary: 'Merge multiple profile inputs into one compound profile.' },
+      { key: 'profile_compose_v2', label: 'Profile Compose V2', groupKey: 'sketch', defaultTitle: 'Profile Compose', summary: 'Compose one outer loop and many hole loops into a profile.', defaultParams: {} },
       { key: 'profile_split', label: 'Profile Split', groupKey: 'sketch', defaultTitle: 'Profile Split', summary: 'Split or tag a profile for downstream nodes.' },
       { key: 'profile_from_path', label: 'Profile From Path', groupKey: 'sketch', defaultTitle: 'Profile From Path', summary: 'Close a path into a fillable profile.' },
       { key: 'profile_holes', label: 'Profile Holes', groupKey: 'sketch', defaultTitle: 'Profile Holes', summary: 'Combine outer and hole loops into a profile.' },
@@ -757,6 +785,7 @@ export const environmentAssemblyLibrary: AssemblyTemplateGroup[] = [
       { key: 'mezzanine', label: 'Mezzanine', groupKey: 'building', defaultTitle: 'Mezzanine', summary: 'Elevated floor plate with holes.', defaultParams: { elevation: 1.5, thickness: 0.18 } },
       { key: 'mezzanine_ring', label: 'Mezzanine Ring', groupKey: 'building', defaultTitle: 'Mezzanine Ring', summary: 'Mezzanine fill around a hole or courtyard.', defaultParams: { elevation: 2.2, thickness: 0.18 } },
       { key: 'mezzanine_surface', label: 'Mezzanine Surface', groupKey: 'building', defaultTitle: 'Mezzanine Surface', summary: 'Continuous mezzanine or balcony surface with boundary path outputs.', defaultParams: { elevation: 2.4, thickness: 0.18, emitSurface: true, emitSolid: true, undersideMode: 'flat' } },
+      { key: 'mezzanine_surface_v2', label: 'Mezzanine Surface V2', groupKey: 'building', defaultTitle: 'Mezzanine Surface V2', summary: 'CDT-backed mezzanine surface with custom loops, holes, grading, and stair blend targets.', defaultParams: { elevation: 2.4, thickness: 0.18, emitSurface: true, emitSolid: true, undersideMode: 'flat', sampleSpacing: 0.35, closeTolerance: 0.12, triangulationMode: 'constrained_delaunay_v1' } },
       { key: 'slab_void', label: 'Slab Void', groupKey: 'building', defaultTitle: 'Slab Void', summary: 'Carve a void through host slabs on a selected level.', defaultParams: { levelIndex: 2, bottomOffset: 0, topOffset: 0.4 } },
       { key: 'stair', label: 'Stair', groupKey: 'building', defaultTitle: 'Stair', summary: 'Straight stair block.', defaultParams: { width: 1.8, stepCount: 8, rise: 0.18, tread: 0.28 } },
       { key: 'stair_run', label: 'Stair Run', groupKey: 'building', defaultTitle: 'Stair Run', summary: 'Semantic stair run between levels.', defaultParams: { width: 1.8, stepCount: 10, rise: 0.18, tread: 0.28 } },
@@ -770,6 +799,8 @@ export const environmentAssemblyLibrary: AssemblyTemplateGroup[] = [
       { key: 'landing_stack', label: 'Landing Stack', groupKey: 'building', defaultTitle: 'Landing Stack', summary: 'Generate circulation landings across explicit levels.', defaultParams: { fromLevelIndex: 1, toLevelIndex: 2, width: 2.2, depth: 2.2, thickness: 0.18 } },
       { key: 'landing_stack_v2', label: 'Landing Stack V2', groupKey: 'building', defaultTitle: 'Landing Stack', summary: 'Zone-aware landing generation across explicit levels.', defaultParams: { fromLevelIndex: 1, toLevelIndex: 2, width: 2.2, depth: 2.2, thickness: 0.18 } },
       { key: 'mezzanine_anchor', label: 'Mezzanine Anchor', groupKey: 'building', defaultTitle: 'Mezzanine Anchor', summary: 'Explicit stair target on a mezzanine or intermediate elevation.', defaultParams: { elevation: 2.3, offset: { x: 0, y: 0, z: 0 } } },
+      { key: 'surface_control_set', label: 'Surface Control Set', groupKey: 'building', defaultTitle: 'Surface Control Set', summary: 'Point, breakline, and plateau controls for graded surface solving.', defaultParams: { interpolationMode: 'idw', controlPoints: [], breaklines: [], plateaus: [] } },
+      { key: 'stair_surface_blend', label: 'Stair Surface Blend', groupKey: 'building', defaultTitle: 'Stair Surface Blend', summary: 'Publish a stair landing plateau/transition patch for mezzanine stitching.', defaultParams: { preferredBlendDepth: 1.2, openingWidth: null } },
       { key: 'stair_connection', label: 'Stair Connection', groupKey: 'building', defaultTitle: 'Stair Connection', summary: 'Connect stair landings to rooms, anchors, or mezzanine edges.', defaultParams: { connectionMode: 'door', targetKind: 'room', edgeSelectionMode: 'nearest', landing: 'auto', connectionPlacement: 'landing_aligned', width: 1.1, height: 2.2, offset: 0 } },
       { key: 'stair_to_level', label: 'Stair To Level', groupKey: 'building', defaultTitle: 'Stair To Level', summary: 'Semantic stair-level connector.' },
       { key: 'opening', label: 'Opening', groupKey: 'building', defaultTitle: 'Opening', summary: 'Generic opening metadata.', defaultParams: { width: 1.4, height: 2.2 } },
@@ -871,12 +902,17 @@ export function inferAssemblyPorts(kind: AssemblyNodeKind): AssemblyPortDefiniti
     case 'line_loop':
     case 'arc_loop':
     case 'mixed_loop':
+    case 'smooth_closed_spline_loop':
       return [port('profile', 'Profile', 'output', 'profile')]
+    case 'loop_builder':
+      return [port('paths', 'Paths', 'input', 'path', true), port('profile', 'Profile', 'output', 'profile')]
     case 'offset_profile':
       return [port('profile', 'Profile', 'input', 'profile'), port('profile_out', 'Profile', 'output', 'profile')]
     case 'profile_merge':
     case 'profile_holes':
       return [port('profiles', 'Profiles', 'input', 'profile', true), port('profile_out', 'Profile', 'output', 'profile')]
+    case 'profile_compose_v2':
+      return [port('outer', 'Outer', 'input', 'profile'), port('holes', 'Holes', 'input', 'profile', true), port('profile_out', 'Profile', 'output', 'profile')]
     case 'profile_split':
       return [port('profile', 'Profile', 'input', 'profile'), port('profile_a', 'Profile A', 'output', 'profile'), port('profile_b', 'Profile B', 'output', 'profile')]
     case 'profile_from_path':
@@ -928,13 +964,17 @@ export function inferAssemblyPorts(kind: AssemblyNodeKind): AssemblyPortDefiniti
     case 'mezzanine':
     case 'mezzanine_ring':
     case 'mezzanine_surface':
+    case 'mezzanine_surface_v2':
       return [
-        ...(kind === 'mezzanine_surface'
+        ...(kind === 'mezzanine_surface' || kind === 'mezzanine_surface_v2'
           ? [port('outer', 'Outer', 'input', 'profile'), port('holes', 'Holes', 'input', 'profile', true)]
           : [port('profile', 'Profile', 'input', 'profile')]),
         port('level', 'Level', 'input', 'level'),
-        ...(kind === 'floor_slab' || kind === 'ceiling_slab' || kind === 'mezzanine_surface' ? [port('voids', 'Voids', 'input', 'slab_void', true), port('solid', 'Solid', 'output', 'solid')] : []),
-        ...(kind === 'mezzanine_surface'
+        ...(kind === 'floor_slab' || kind === 'ceiling_slab' || kind === 'mezzanine_surface' || kind === 'mezzanine_surface_v2' ? [port('voids', 'Voids', 'input', 'slab_void', true), port('solid', 'Solid', 'output', 'solid')] : []),
+        ...(kind === 'mezzanine_surface_v2'
+          ? [port('height_controls', 'Height Controls', 'input', 'surface_height_control', true), port('blend_targets', 'Blend Targets', 'input', 'blend_target', true)]
+          : []),
+        ...(kind === 'mezzanine_surface' || kind === 'mezzanine_surface_v2'
           ? [port('profile', 'Profile', 'output', 'profile'), port('paths', 'Paths', 'output', 'path', true), port('anchors', 'Anchors', 'output', 'anchor', true)]
           : []),
         port('surface', 'Surface', 'output', 'surface'),
@@ -970,6 +1010,8 @@ export function inferAssemblyPorts(kind: AssemblyNodeKind): AssemblyPortDefiniti
     case 'landing_stack':
     case 'landing_stack_v2':
     case 'mezzanine_anchor':
+    case 'surface_control_set':
+    case 'stair_surface_blend':
     case 'stair_connection':
       return [
         ...(kind === 'stair_core' || kind === 'stair_core_v2' || kind === 'stair_core_v3' || kind === 'landing_stack' || kind === 'landing_stack_v2' || kind === 'stair_shaft'
@@ -990,7 +1032,13 @@ export function inferAssemblyPorts(kind: AssemblyNodeKind): AssemblyPortDefiniti
         ...(kind === 'stair_connection'
           ? [port('stair', 'Stair', 'input', 'stair'), port('rooms', 'Rooms', 'input', 'room', true), port('wall_segment', 'Wall Segment', 'input', 'wall_segment'), port('target_anchor', 'Target Anchor', 'input', 'anchor', true), port('target_path', 'Target Path', 'input', 'path', true), port('opening', 'Opening', 'output', 'opening'), port('anchors', 'Anchors', 'output', 'anchor', true)]
           : []),
-        ...(kind === 'mezzanine_anchor' || kind === 'stair_connection'
+        ...(kind === 'surface_control_set'
+          ? [port('height_controls', 'Height Controls', 'output', 'surface_height_control')]
+          : []),
+        ...(kind === 'stair_surface_blend'
+          ? [port('stair', 'Stair', 'input', 'stair'), port('blend_target', 'Blend Target', 'output', 'blend_target')]
+          : []),
+        ...(kind === 'mezzanine_anchor' || kind === 'stair_connection' || kind === 'surface_control_set' || kind === 'stair_surface_blend'
           ? []
           : [
         port('solid', 'Solid', 'output', 'solid'),
@@ -1622,6 +1670,329 @@ export const environmentAssemblyPresets: AssemblyGraphPresetDefinition[] = [
         presetEdge('grand_floor_to_output', 'grand_hall_floor', 'solid', `${graphKey}.output`, 'solids'),
         presetEdge('grand_balcony_solid_to_output', 'grand_balcony_surface', 'solid', `${graphKey}.output`, 'solids'),
         presetEdge('grand_stair_to_output', 'grand_arc_stair', 'solid', `${graphKey}.output`, 'solids'),
+      ],
+    }),
+  },
+  {
+    key: 'custom_mezzanine_planar_v1',
+    label: 'Custom Mezzanine Planar V1',
+    summary: 'Planar custom mezzanine surface with spline outer boundary, curved hole, and CDT fill.',
+    build: (graphKey, environmentKey) => ({
+      id: `preset-graph-${graphKey}`,
+      key: graphKey,
+      name: 'Custom Mezzanine Planar V1',
+      summary: 'Reference planar mezzanine surface using custom curved loops and constrained triangulation.',
+      boundEnvironmentKey: environmentKey ?? null,
+      metadata: { presetKey: 'custom_mezzanine_planar_v1', compileSettings: { triangulation: 'constrained_delaunay_v1' } },
+      nodes: [
+        presetNode('mixed_loop', 'planar_outer_loop', { x: 80, y: 140 }, {
+          segments: [
+            { type: 'spline', tag: 'outer_north', points: [{ x: -8.5, y: -1.5 }, { x: -6.5, y: -5.8 }, { x: 0, y: -6.8 }, { x: 6.8, y: -5.5 }, { x: 8.7, y: -1.8 }], closed: false },
+            { type: 'spline', tag: 'outer_east', points: [{ x: 8.7, y: -1.8 }, { x: 9.4, y: 0.8 }, { x: 9.1, y: 4.8 }, { x: 5.2, y: 6.6 }], closed: false },
+            { type: 'spline', tag: 'outer_south', points: [{ x: 5.2, y: 6.6 }, { x: 1.6, y: 7.9 }, { x: -3.8, y: 7.2 }, { x: -7.6, y: 5.4 }], closed: false },
+            { type: 'spline', tag: 'outer_west', points: [{ x: -7.6, y: 5.4 }, { x: -9.6, y: 3.2 }, { x: -9.5, y: 0.6 }, { x: -8.5, y: -1.5 }], closed: false },
+          ],
+        }, 'Planar Outer Loop'),
+        presetNode('mixed_loop', 'planar_inner_hole', { x: 80, y: 350 }, {
+          segments: [
+            { type: 'spline', tag: 'hole_north', boundaryRoleOverride: 'hole_edge', points: [{ x: -2.7, y: -0.5 }, { x: -1.4, y: -2.8 }, { x: 1.5, y: -2.9 }, { x: 3.2, y: -0.8 }], closed: false },
+            { type: 'spline', tag: 'hole_east', boundaryRoleOverride: 'hole_edge', points: [{ x: 3.2, y: -0.8 }, { x: 3.8, y: 0.4 }, { x: 3.6, y: 2.2 }, { x: 2.2, y: 3.4 }], closed: false },
+            { type: 'spline', tag: 'hole_south', boundaryRoleOverride: 'hole_edge', points: [{ x: 2.2, y: 3.4 }, { x: 0.8, y: 4.2 }, { x: -1.3, y: 4.1 }, { x: -2.8, y: 3.1 }], closed: false },
+            { type: 'spline', tag: 'hole_west', boundaryRoleOverride: 'hole_edge', points: [{ x: -2.8, y: 3.1 }, { x: -3.9, y: 2 }, { x: -3.8, y: 0.4 }, { x: -2.7, y: -0.5 }], closed: false },
+          ],
+        }, 'Planar Inner Hole'),
+        presetNode('mezzanine_surface_v2', 'planar_mezzanine', { x: 360, y: 240 }, { elevation: 3.2, thickness: 0.22, emitSurface: true, emitSolid: true, triangulationMode: 'constrained_delaunay_v1', sampleSpacing: 0.28 }, 'Planar Mezzanine'),
+        presetNode('boundary_path_selector', 'planar_outer_edges', { x: 620, y: 180 }, { boundaryRole: 'outer_edge' }, 'Outer Edge Paths'),
+        presetNode('fence_along_path', 'planar_outer_rail', { x: 860, y: 180 }, { postSpacing: 1.35, height: 1.05 }, 'Outer Rail'),
+        presetNode('environment_output', `${graphKey}.output`, { x: 1080, y: 240 }, {}, 'Environment Output'),
+      ],
+      edges: [
+        presetEdge('planar_outer_to_surface', 'planar_outer_loop', 'profile', 'planar_mezzanine', 'outer'),
+        presetEdge('planar_hole_to_surface', 'planar_inner_hole', 'profile', 'planar_mezzanine', 'holes'),
+        presetEdge('planar_surface_to_paths', 'planar_mezzanine', 'paths', 'planar_outer_edges', 'path'),
+        presetEdge('planar_paths_to_rail', 'planar_outer_edges', 'paths', 'planar_outer_rail', 'path'),
+        presetEdge('planar_surface_solid_to_output', 'planar_mezzanine', 'solid', `${graphKey}.output`, 'solids'),
+        presetEdge('planar_surface_to_output', 'planar_mezzanine', 'surface', `${graphKey}.output`, 'surfaces'),
+        presetEdge('planar_paths_anchors_to_output', 'planar_mezzanine', 'anchors', `${graphKey}.output`, 'anchors'),
+      ],
+    }),
+  },
+  {
+    key: 'custom_mezzanine_bulged_ring_v1',
+    label: 'Custom Mezzanine Bulged Ring V1',
+    summary: 'Custom full-loop balcony ring that widens in selected sections and emits tagged boundary paths.',
+    build: (graphKey, environmentKey) => ({
+      id: `preset-graph-${graphKey}`,
+      key: graphKey,
+      name: 'Custom Mezzanine Bulged Ring V1',
+      summary: 'Bulged ring reference with segment tagging for railing and wall targeting.',
+      boundEnvironmentKey: environmentKey ?? null,
+      metadata: { presetKey: 'custom_mezzanine_bulged_ring_v1', compileSettings: { triangulation: 'constrained_delaunay_v1' } },
+      nodes: [
+        presetNode('mixed_loop', 'bulged_outer_loop', { x: 70, y: 140 }, {
+          segments: [
+            { type: 'bezier', tag: 'gallery_front', from: { x: -6.3, y: -5.1 }, control1: { x: -3.4, y: -7.25 }, control2: { x: 3.4, y: -7.15 }, to: { x: 6.3, y: -5.1 } },
+            { type: 'bezier', tag: 'gallery_east', from: { x: 6.3, y: -5.1 }, control1: { x: 8.7, y: -5.1 }, control2: { x: 8.85, y: 3.6 }, to: { x: 6, y: 5.6 } },
+            { type: 'bezier', tag: 'gallery_back', from: { x: 6, y: 5.6 }, control1: { x: 3.2, y: 7.05 }, control2: { x: -3.2, y: 7.05 }, to: { x: -6, y: 5.6 } },
+            { type: 'bezier', tag: 'gallery_west', from: { x: -6, y: 5.6 }, control1: { x: -8.85, y: 3.6 }, control2: { x: -8.7, y: -5.1 }, to: { x: -6.3, y: -5.1 } },
+          ],
+        }, 'Bulged Outer Loop'),
+        presetNode('mixed_loop', 'bulged_inner_loop', { x: 70, y: 330 }, {
+          segments: [
+            { type: 'bezier', tag: 'inner_front_attach', boundaryRoleOverride: 'hole_edge', from: { x: -3.85, y: -2.75 }, control1: { x: -2.05, y: -4.1 }, control2: { x: 2.05, y: -4.1 }, to: { x: 3.85, y: -2.75 } },
+            { type: 'bezier', tag: 'inner_east', boundaryRoleOverride: 'hole_edge', from: { x: 3.85, y: -2.75 }, control1: { x: 5.05, y: -2.05 }, control2: { x: 5.05, y: 2.25 }, to: { x: 3.65, y: 3.05 } },
+            { type: 'bezier', tag: 'inner_back', boundaryRoleOverride: 'hole_edge', from: { x: 3.65, y: 3.05 }, control1: { x: 1.95, y: 4.05 }, control2: { x: -1.95, y: 4.05 }, to: { x: -3.65, y: 3.05 } },
+            { type: 'bezier', tag: 'inner_west', boundaryRoleOverride: 'hole_edge', from: { x: -3.65, y: 3.05 }, control1: { x: -5.05, y: 2.25 }, control2: { x: -5.05, y: -2.05 }, to: { x: -3.85, y: -2.75 } },
+          ],
+        }, 'Bulged Inner Loop'),
+        presetNode('mezzanine_surface_v2', 'bulged_mezzanine', { x: 330, y: 240 }, { elevation: 3.2, thickness: 0.24, emitSurface: true, emitSolid: true, triangulationMode: 'constrained_delaunay_v1', sampleSpacing: 0.16 }, 'Bulged Ring'),
+        presetNode('boundary_path_selector', 'bulged_outer_gallery_paths', { x: 590, y: 170 }, { boundaryRole: 'outer_edge', tag: 'gallery_front' }, 'Front Gallery Edge'),
+        presetNode('boundary_path_selector', 'bulged_back_gallery_paths', { x: 590, y: 280 }, { boundaryRole: 'outer_edge', tag: 'gallery_back' }, 'Back Gallery Edge'),
+        presetNode('fence_along_path', 'bulged_front_rail', { x: 840, y: 170 }, { postSpacing: 1.3, height: 1.08 }, 'Front Rail'),
+        presetNode('wall_along_path', 'bulged_back_wall', { x: 840, y: 280 }, { thickness: 0.16, height: 2.2 }, 'Back Wall'),
+        presetNode('environment_output', `${graphKey}.output`, { x: 1080, y: 230 }, {}, 'Environment Output'),
+      ],
+      edges: [
+        presetEdge('bulged_outer_to_surface', 'bulged_outer_loop', 'profile', 'bulged_mezzanine', 'outer'),
+        presetEdge('bulged_hole_to_surface', 'bulged_inner_loop', 'profile', 'bulged_mezzanine', 'holes'),
+        presetEdge('bulged_surface_paths_to_front_selector', 'bulged_mezzanine', 'paths', 'bulged_outer_gallery_paths', 'path'),
+        presetEdge('bulged_surface_paths_to_back_selector', 'bulged_mezzanine', 'paths', 'bulged_back_gallery_paths', 'path'),
+        presetEdge('bulged_front_selector_to_rail', 'bulged_outer_gallery_paths', 'paths', 'bulged_front_rail', 'path'),
+        presetEdge('bulged_back_selector_to_wall', 'bulged_back_gallery_paths', 'paths', 'bulged_back_wall', 'path'),
+        presetEdge('bulged_surface_solid_to_output', 'bulged_mezzanine', 'solid', `${graphKey}.output`, 'solids'),
+        presetEdge('bulged_surface_to_output', 'bulged_mezzanine', 'surface', `${graphKey}.output`, 'surfaces'),
+        presetEdge('bulged_anchors_to_output', 'bulged_mezzanine', 'anchors', `${graphKey}.output`, 'anchors'),
+      ],
+    }),
+  },
+  {
+    key: 'custom_mezzanine_multipath_v1',
+    label: 'Custom Mezzanine Multipath V1',
+    summary: 'Outer and hole loops assembled from multiple open path pieces via loop_builder.',
+    build: (graphKey, environmentKey) => ({
+      id: `preset-graph-${graphKey}`,
+      key: graphKey,
+      name: 'Custom Mezzanine Multipath V1',
+      summary: 'Multipath authoring example using loop_builder and profile composition.',
+      boundEnvironmentKey: environmentKey ?? null,
+      metadata: { presetKey: 'custom_mezzanine_multipath_v1', compileSettings: { triangulation: 'constrained_delaunay_v1' } },
+      nodes: [
+        presetNode('spline', 'multi_outer_north', { x: 60, y: 100 }, { points: [{ x: -8.2, y: -4.1 }, { x: -4.8, y: -6.7 }, { x: 0.6, y: -6.9 }, { x: 4.2, y: -5.5 }], curveType: 'centripetal', tension: 0.45 }, 'Outer North Path'),
+        presetNode('spline', 'multi_outer_east', { x: 60, y: 170 }, { points: [{ x: 4.2, y: -5.5 }, { x: 8.2, y: -4.2 }, { x: 9.1, y: -0.4 }, { x: 8.6, y: 3.7 }, { x: 3.2, y: 6.5 }], curveType: 'centripetal', tension: 0.45 }, 'Outer East Path'),
+        presetNode('spline', 'multi_outer_south', { x: 60, y: 240 }, { points: [{ x: 3.2, y: 6.5 }, { x: -0.8, y: 7.4 }, { x: -4.9, y: 7 }, { x: -8.1, y: 4.9 }], curveType: 'centripetal', tension: 0.45 }, 'Outer South Path'),
+        presetNode('spline', 'multi_outer_west', { x: 60, y: 310 }, { points: [{ x: -8.1, y: 4.9 }, { x: -9.8, y: 2.4 }, { x: -9.6, y: -1.4 }, { x: -8.2, y: -4.1 }], curveType: 'centripetal', tension: 0.45 }, 'Outer West Path'),
+        presetNode('spline', 'multi_hole_north', { x: 60, y: 420 }, { points: [{ x: -3.1, y: -1.9 }, { x: -1.2, y: -3.4 }, { x: 1.4, y: -3.5 }, { x: 3.2, y: -2 }], curveType: 'centripetal', tension: 0.45 }, 'Hole North Path'),
+        presetNode('spline', 'multi_hole_east', { x: 60, y: 490 }, { points: [{ x: 3.2, y: -2 }, { x: 4.4, y: -1 }, { x: 4.6, y: 0.9 }, { x: 4, y: 2.5 }, { x: 2.6, y: 3.4 }], curveType: 'centripetal', tension: 0.45 }, 'Hole East Path'),
+        presetNode('spline', 'multi_hole_south', { x: 60, y: 560 }, { points: [{ x: 2.6, y: 3.4 }, { x: 0.8, y: 4.3 }, { x: -1.3, y: 4.3 }, { x: -3.1, y: 3 }], curveType: 'centripetal', tension: 0.45 }, 'Hole South Path'),
+        presetNode('spline', 'multi_hole_west', { x: 60, y: 630 }, { points: [{ x: -3.1, y: 3 }, { x: -4.4, y: 2.1 }, { x: -4.5, y: 0.2 }, { x: -4, y: -1.2 }, { x: -3.1, y: -1.9 }], curveType: 'centripetal', tension: 0.45 }, 'Hole West Path'),
+        presetNode('loop_builder', 'multi_outer_loop', { x: 320, y: 190 }, { loopRole: 'outer', closeTolerance: 0.18, sampleSpacing: 0.18, outputCurveKind: 'spline', curveType: 'centripetal', tension: 0.45 }, 'Outer Loop Builder'),
+        presetNode('loop_builder', 'multi_hole_loop', { x: 320, y: 540 }, { loopRole: 'hole', closeTolerance: 0.18, sampleSpacing: 0.16, outputCurveKind: 'spline', curveType: 'centripetal', tension: 0.45 }, 'Hole Loop Builder'),
+        presetNode('profile_compose_v2', 'multi_composed_profile', { x: 560, y: 360 }, {}, 'Compose Profile'),
+        presetNode('mezzanine_surface_v2', 'multi_mezzanine', { x: 800, y: 360 }, { elevation: 3.2, thickness: 0.22, triangulationMode: 'constrained_delaunay_v1', sampleSpacing: 0.24 }, 'Multipath Mezzanine'),
+        presetNode('environment_output', `${graphKey}.output`, { x: 1040, y: 360 }, {}, 'Environment Output'),
+      ],
+      edges: [
+        presetEdge('multi_outer_north_to_builder', 'multi_outer_north', 'path', 'multi_outer_loop', 'paths'),
+        presetEdge('multi_outer_east_to_builder', 'multi_outer_east', 'path', 'multi_outer_loop', 'paths'),
+        presetEdge('multi_outer_south_to_builder', 'multi_outer_south', 'path', 'multi_outer_loop', 'paths'),
+        presetEdge('multi_outer_west_to_builder', 'multi_outer_west', 'path', 'multi_outer_loop', 'paths'),
+        presetEdge('multi_hole_north_to_builder', 'multi_hole_north', 'path', 'multi_hole_loop', 'paths'),
+        presetEdge('multi_hole_east_to_builder', 'multi_hole_east', 'path', 'multi_hole_loop', 'paths'),
+        presetEdge('multi_hole_south_to_builder', 'multi_hole_south', 'path', 'multi_hole_loop', 'paths'),
+        presetEdge('multi_hole_west_to_builder', 'multi_hole_west', 'path', 'multi_hole_loop', 'paths'),
+        presetEdge('multi_outer_loop_to_compose', 'multi_outer_loop', 'profile', 'multi_composed_profile', 'outer'),
+        presetEdge('multi_hole_loop_to_compose', 'multi_hole_loop', 'profile', 'multi_composed_profile', 'holes'),
+        presetEdge('multi_outer_loop_to_surface', 'multi_outer_loop', 'profile', 'multi_mezzanine', 'outer'),
+        presetEdge('multi_hole_loop_to_surface', 'multi_hole_loop', 'profile', 'multi_mezzanine', 'holes'),
+        presetEdge('multi_surface_solid_to_output', 'multi_mezzanine', 'solid', `${graphKey}.output`, 'solids'),
+        presetEdge('multi_surface_to_output', 'multi_mezzanine', 'surface', `${graphKey}.output`, 'surfaces'),
+        presetEdge('multi_surface_anchors_to_output', 'multi_mezzanine', 'anchors', `${graphKey}.output`, 'anchors'),
+      ],
+    }),
+  },
+  {
+    key: 'custom_mezzanine_stair_attach_v1',
+    label: 'Custom Mezzanine Stair Attach V1',
+    summary: 'Custom mezzanine surface with a v3 stair attaching to a tagged inner boundary edge.',
+    build: (graphKey, environmentKey) => ({
+      id: `preset-graph-${graphKey}`,
+      key: graphKey,
+      name: 'Custom Mezzanine Stair Attach V1',
+      summary: 'Stair-to-surface-edge attachment reference for the new mezzanine surface stack.',
+      boundEnvironmentKey: environmentKey ?? null,
+      metadata: { presetKey: 'custom_mezzanine_stair_attach_v1', compileSettings: { triangulation: 'constrained_delaunay_v1' } },
+      nodes: [
+        presetNode('storey_stack', 'attach_storeys', { x: 60, y: 80 }, { count: 2, baseElevation: 0, levelHeight: 3.2, slabThickness: 0.18, labelPrefix: 'Attach Level' }, 'Storeys'),
+        presetNode('polygon', 'attach_stair_zone_outline', { x: 60, y: 210 }, { points: [{ x: -1.6, y: -7.4 }, { x: 1.6, y: -7.4 }, { x: 1.6, y: -1.4 }, { x: -1.6, y: -1.4 }] }, 'Stair Zone Outline'),
+        {
+          ...presetNode('circulation_zone', 'attach_stair_zone', { x: 320, y: 210 }, { levelIndex: 1, toLevelIndex: 2, roomName: 'Attach Stair Zone', height: 3.2, wallThickness: 0.2, floorThickness: 0.18, fitMode: 'zone_autofit', maxExpandX: 0.8, maxExpandZ: 1.2 }, 'Stair Zone'),
+          metadata: { topologyOwned: false },
+        },
+        presetNode('mixed_loop', 'attach_outer_loop', { x: 60, y: 390 }, {
+          segments: [
+            { type: 'arc', tag: 'outer_front', center: { x: 0, y: 0 }, radius: 9.1, startAngle: -2.35, endAngle: -0.78, clockwise: false },
+            { type: 'spline', tag: 'outer_east', points: [{ x: 6.5, y: -6 }, { x: 10, y: -2 }, { x: 10.2, y: 2.6 }, { x: 7.1, y: 6.1 }], closed: false },
+            { type: 'arc', tag: 'outer_back', center: { x: 0, y: 0 }, radius: 8.5, startAngle: 0.78, endAngle: 2.42, clockwise: false },
+            { type: 'spline', tag: 'outer_west', points: [{ x: -6.4, y: 5.6 }, { x: -9.5, y: 2.6 }, { x: -9.2, y: -2.5 }, { x: -6.3, y: -5.7 }], closed: false },
+          ],
+        }, 'Attach Outer Loop'),
+        presetNode('mixed_loop', 'attach_inner_hole', { x: 60, y: 590 }, {
+          segments: [
+            { type: 'arc', tag: 'stair_attach', boundaryRoleOverride: 'hole_edge', openingAllowed: true, center: { x: 0, y: 0 }, radius: 4.3, startAngle: -2.1, endAngle: -1.05, clockwise: false },
+            { type: 'spline', tag: 'inner_east', boundaryRoleOverride: 'hole_edge', points: [{ x: 2.1, y: -3.8 }, { x: 4.2, y: -1.4 }, { x: 4.1, y: 2 }, { x: 2.1, y: 3.8 }], closed: false },
+            { type: 'arc', tag: 'inner_back', boundaryRoleOverride: 'hole_edge', center: { x: 0, y: 0 }, radius: 4.1, startAngle: 1.05, endAngle: 2.1, clockwise: false },
+            { type: 'spline', tag: 'inner_west', boundaryRoleOverride: 'hole_edge', points: [{ x: -2.2, y: 3.6 }, { x: -4.1, y: 1.7 }, { x: -4.1, y: -1.6 }, { x: -2.1, y: -3.8 }], closed: false },
+          ],
+        }, 'Attach Inner Hole'),
+        presetNode('mezzanine_surface_v2', 'attach_mezzanine', { x: 320, y: 470 }, { elevation: 3.2, thickness: 0.22, triangulationMode: 'constrained_delaunay_v1', sampleSpacing: 0.24 }, 'Attach Mezzanine'),
+        presetNode('boundary_path_selector', 'attach_target_edge', { x: 560, y: 470 }, { boundaryRole: 'hole_edge', tag: 'stair_attach' }, 'Attach Target Edge'),
+        presetNode('stair_core_v3', 'attach_arc_stair', { x: 800, y: 350 }, { stairFamily: 'arc', targetMode: 'surface_edge', fromLevelIndex: 1, toLevelIndex: 2, width: 1.9, tread: 0.28, maxRise: 0.18, landingDepth: 1.8, preferredExitSide: 'front', fitMode: 'zone_autofit' }, 'Arc Stair'),
+        presetNode('stair_connection', 'attach_edge_connection', { x: 1040, y: 360 }, { connectionMode: 'open_edge', targetKind: 'surface_edge', landing: 'top', width: 1.8, height: 2.2 }, 'Edge Connection'),
+        presetNode('environment_output', `${graphKey}.output`, { x: 1260, y: 430 }, {}, 'Environment Output'),
+      ],
+      edges: [
+        presetEdge('attach_storeys_to_zone', 'attach_storeys', 'levels', 'attach_stair_zone', 'level'),
+        presetEdge('attach_zone_outline_to_zone', 'attach_stair_zone_outline', 'profile', 'attach_stair_zone', 'profile'),
+        presetEdge('attach_outer_to_surface', 'attach_outer_loop', 'profile', 'attach_mezzanine', 'outer'),
+        presetEdge('attach_hole_to_surface', 'attach_inner_hole', 'profile', 'attach_mezzanine', 'holes'),
+        presetEdge('attach_surface_to_selector', 'attach_mezzanine', 'paths', 'attach_target_edge', 'path'),
+        presetEdge('attach_storeys_to_stair', 'attach_storeys', 'levels', 'attach_arc_stair', 'levels'),
+        presetEdge('attach_zone_to_stair', 'attach_stair_zone', 'room', 'attach_arc_stair', 'zone'),
+        presetEdge('attach_target_to_stair', 'attach_target_edge', 'paths', 'attach_arc_stair', 'target_paths'),
+        presetEdge('attach_stair_to_connection', 'attach_arc_stair', 'stair', 'attach_edge_connection', 'stair'),
+        presetEdge('attach_paths_to_connection', 'attach_target_edge', 'paths', 'attach_edge_connection', 'target_path'),
+        presetEdge('attach_surface_solid_to_output', 'attach_mezzanine', 'solid', `${graphKey}.output`, 'solids'),
+        presetEdge('attach_surface_to_output', 'attach_mezzanine', 'surface', `${graphKey}.output`, 'surfaces'),
+        presetEdge('attach_stair_to_output', 'attach_arc_stair', 'solid', `${graphKey}.output`, 'solids'),
+        presetEdge('attach_anchors_to_output', 'attach_mezzanine', 'anchors', `${graphKey}.output`, 'anchors'),
+      ],
+    }),
+  },
+  {
+    key: 'custom_mezzanine_graded_v1',
+    label: 'Custom Mezzanine Graded V1',
+    summary: 'Custom mezzanine surface with plateau, control-point, and breakline height controls.',
+    build: (graphKey, environmentKey) => ({
+      id: `preset-graph-${graphKey}`,
+      key: graphKey,
+      name: 'Custom Mezzanine Graded V1',
+      summary: 'Height-control reference for graded mezzanine top surfaces.',
+      boundEnvironmentKey: environmentKey ?? null,
+      metadata: { presetKey: 'custom_mezzanine_graded_v1', compileSettings: { triangulation: 'constrained_delaunay_v1' } },
+      nodes: [
+        presetNode('mixed_loop', 'graded_outer_loop', { x: 60, y: 160 }, {
+          segments: [
+            { type: 'spline', tag: 'graded_outer_north', points: [{ x: -8, y: -3.8 }, { x: -4.4, y: -6.9 }, { x: 2.5, y: -6.7 }, { x: 7.8, y: -3.6 }], closed: false },
+            { type: 'spline', tag: 'graded_outer_east', points: [{ x: 7.8, y: -3.6 }, { x: 9.2, y: -0.8 }, { x: 9.1, y: 3.8 }, { x: 6.2, y: 6.6 }], closed: false },
+            { type: 'spline', tag: 'graded_outer_south', points: [{ x: 6.2, y: 6.6 }, { x: 2.8, y: 8.2 }, { x: -2.6, y: 8 }, { x: -6.8, y: 5.6 }], closed: false },
+            { type: 'spline', tag: 'graded_outer_west', points: [{ x: -6.8, y: 5.6 }, { x: -9.1, y: 2.8 }, { x: -9, y: -1.2 }, { x: -8, y: -3.8 }], closed: false },
+          ],
+        }, 'Graded Outer Loop'),
+        presetNode('mixed_loop', 'graded_inner_hole', { x: 60, y: 360 }, {
+          segments: [
+            { type: 'arc', tag: 'graded_inner_front', boundaryRoleOverride: 'hole_edge', center: { x: 0, y: 0 }, radius: 3.8, startAngle: -2.2, endAngle: -0.9, clockwise: false },
+            { type: 'spline', tag: 'graded_inner_east', boundaryRoleOverride: 'hole_edge', points: [{ x: 2.4, y: -3 }, { x: 3.9, y: -1.4 }, { x: 4, y: 1.8 }, { x: 2.6, y: 3.1 }], closed: false },
+            { type: 'arc', tag: 'graded_inner_back', boundaryRoleOverride: 'hole_edge', center: { x: 0, y: 0 }, radius: 3.6, startAngle: 0.95, endAngle: 2.2, clockwise: false },
+            { type: 'spline', tag: 'graded_inner_west', boundaryRoleOverride: 'hole_edge', points: [{ x: -2.4, y: 2.9 }, { x: -4, y: 1.5 }, { x: -4, y: -1.3 }, { x: -2.4, y: -3 }], closed: false },
+          ],
+        }, 'Graded Inner Hole'),
+        presetNode('surface_control_set', 'graded_height_controls', { x: 320, y: 260 }, {
+          interpolationMode: 'idw',
+          controlPoints: [
+            { x: -6.2, z: -2.6, elevation: 3.7 },
+            { x: 0, z: -5.1, elevation: 3.95 },
+            { x: 5.8, z: 4.7, elevation: 3.48 },
+          ],
+          breaklines: [
+            { points: [{ x: -5.4, z: -0.4 }, { x: -1.2, z: 1.3 }, { x: 3.6, z: 2.1 }], elevations: [3.65, 3.7, 3.55] },
+          ],
+          plateaus: [
+            { points: [{ x: -1.6, z: -2.2 }, { x: 1.2, z: -2.2 }, { x: 1.4, z: 0.7 }, { x: -1.4, z: 0.8 }], elevation: 3.88 },
+          ],
+        }, 'Height Controls'),
+        presetNode('mezzanine_surface_v2', 'graded_mezzanine', { x: 590, y: 260 }, { elevation: 3.2, thickness: 0.26, triangulationMode: 'constrained_delaunay_v1', undersideMode: 'vertical_offset', sampleSpacing: 0.24 }, 'Graded Mezzanine'),
+        presetNode('environment_output', `${graphKey}.output`, { x: 860, y: 260 }, {}, 'Environment Output'),
+      ],
+      edges: [
+        presetEdge('graded_outer_to_surface', 'graded_outer_loop', 'profile', 'graded_mezzanine', 'outer'),
+        presetEdge('graded_hole_to_surface', 'graded_inner_hole', 'profile', 'graded_mezzanine', 'holes'),
+        presetEdge('graded_controls_to_surface', 'graded_height_controls', 'height_controls', 'graded_mezzanine', 'height_controls'),
+        presetEdge('graded_surface_solid_to_output', 'graded_mezzanine', 'solid', `${graphKey}.output`, 'solids'),
+        presetEdge('graded_surface_to_output', 'graded_mezzanine', 'surface', `${graphKey}.output`, 'surfaces'),
+        presetEdge('graded_anchors_to_output', 'graded_mezzanine', 'anchors', `${graphKey}.output`, 'anchors'),
+      ],
+    }),
+  },
+  {
+    key: 'custom_mezzanine_stair_blend_v1',
+    label: 'Custom Mezzanine Stair Blend V1',
+    summary: 'Graded mezzanine with a stair_surface_blend target published from a v3 stair.',
+    build: (graphKey, environmentKey) => ({
+      id: `preset-graph-${graphKey}`,
+      key: graphKey,
+      name: 'Custom Mezzanine Stair Blend V1',
+      summary: 'Blend-target reference combining graded mezzanine controls and a path-aware stair landing patch.',
+      boundEnvironmentKey: environmentKey ?? null,
+      metadata: { presetKey: 'custom_mezzanine_stair_blend_v1', compileSettings: { triangulation: 'constrained_delaunay_v1' } },
+      nodes: [
+        presetNode('storey_stack', 'blend_storeys', { x: 60, y: 80 }, { count: 2, baseElevation: 0, levelHeight: 3.2, slabThickness: 0.18, labelPrefix: 'Blend Level' }, 'Storeys'),
+        presetNode('polygon', 'blend_stair_zone_outline', { x: 60, y: 200 }, { points: [{ x: -1.7, y: -7 }, { x: 1.7, y: -7 }, { x: 1.7, y: -1.2 }, { x: -1.7, y: -1.2 }] }, 'Stair Zone Outline'),
+        {
+          ...presetNode('circulation_zone', 'blend_stair_zone', { x: 320, y: 200 }, { levelIndex: 1, toLevelIndex: 2, roomName: 'Blend Stair Zone', height: 3.2, wallThickness: 0.2, floorThickness: 0.18, fitMode: 'zone_autofit', maxExpandX: 0.9, maxExpandZ: 1.3 }, 'Stair Zone'),
+          metadata: { topologyOwned: false },
+        },
+        presetNode('mixed_loop', 'blend_outer_loop', { x: 60, y: 390 }, {
+          segments: [
+            { type: 'arc', tag: 'blend_outer_front', center: { x: 0, y: 0 }, radius: 9, startAngle: -2.25, endAngle: -0.7, clockwise: false },
+            { type: 'spline', tag: 'blend_outer_east', points: [{ x: 6.9, y: -5.8 }, { x: 10.1, y: -2.5 }, { x: 10.2, y: 3 }, { x: 6.6, y: 6.5 }], closed: false },
+            { type: 'arc', tag: 'blend_outer_back', center: { x: 0, y: 0 }, radius: 8.6, startAngle: 0.8, endAngle: 2.35, clockwise: false },
+            { type: 'spline', tag: 'blend_outer_west', points: [{ x: -6.2, y: 6 }, { x: -9.4, y: 2.7 }, { x: -9.1, y: -2.2 }, { x: -6.5, y: -5.7 }], closed: false },
+          ],
+        }, 'Blend Outer Loop'),
+        presetNode('mixed_loop', 'blend_inner_hole', { x: 60, y: 590 }, {
+          segments: [
+            { type: 'arc', tag: 'blend_attach', boundaryRoleOverride: 'hole_edge', openingAllowed: true, center: { x: 0, y: 0 }, radius: 4.2, startAngle: -2.15, endAngle: -1.02, clockwise: false },
+            { type: 'spline', tag: 'blend_inner_east', boundaryRoleOverride: 'hole_edge', points: [{ x: 2.2, y: -3.6 }, { x: 4.1, y: -1.3 }, { x: 4.1, y: 1.8 }, { x: 2.2, y: 3.5 }], closed: false },
+            { type: 'arc', tag: 'blend_inner_back', boundaryRoleOverride: 'hole_edge', center: { x: 0, y: 0 }, radius: 4, startAngle: 1.04, endAngle: 2.18, clockwise: false },
+            { type: 'spline', tag: 'blend_inner_west', boundaryRoleOverride: 'hole_edge', points: [{ x: -2.4, y: 3.3 }, { x: -4, y: 1.5 }, { x: -4, y: -1.4 }, { x: -2.4, y: -3.6 }], closed: false },
+          ],
+        }, 'Blend Inner Hole'),
+        presetNode('surface_control_set', 'blend_height_controls', { x: 320, y: 430 }, {
+          interpolationMode: 'idw',
+          controlPoints: [
+            { x: -5.8, z: -2.8, elevation: 3.76 },
+            { x: -0.8, z: -4.6, elevation: 3.94 },
+            { x: 5.1, z: 4.9, elevation: 3.52 },
+          ],
+          breaklines: [
+            { points: [{ x: -4.4, z: -0.6 }, { x: -1.2, z: 0.6 }, { x: 2.9, z: 1.8 }], elevations: [3.78, 3.82, 3.68] },
+          ],
+          plateaus: [
+            { points: [{ x: -1.5, z: -2.2 }, { x: 1.3, z: -2.2 }, { x: 1.5, z: 0.8 }, { x: -1.4, z: 0.9 }], elevation: 3.9 },
+          ],
+        }, 'Blend Height Controls'),
+        presetNode('mezzanine_surface_v2', 'blend_mezzanine', { x: 590, y: 430 }, { elevation: 3.2, thickness: 0.26, triangulationMode: 'constrained_delaunay_v1', undersideMode: 'vertical_offset', sampleSpacing: 0.24 }, 'Blend Mezzanine'),
+        presetNode('boundary_path_selector', 'blend_target_edge', { x: 820, y: 380 }, { boundaryRole: 'hole_edge', tag: 'blend_attach' }, 'Blend Target Edge'),
+        presetNode('stair_core_v3', 'blend_arc_stair', { x: 820, y: 520 }, { stairFamily: 'arc', targetMode: 'surface_edge', fromLevelIndex: 1, toLevelIndex: 2, width: 1.95, tread: 0.28, maxRise: 0.18, landingDepth: 1.9, preferredExitSide: 'front', fitMode: 'zone_autofit' }, 'Blend Arc Stair'),
+        presetNode('stair_surface_blend', 'blend_patch', { x: 1060, y: 520 }, { preferredBlendDepth: 1.35 }, 'Blend Patch'),
+        presetNode('environment_output', `${graphKey}.output`, { x: 1280, y: 430 }, {}, 'Environment Output'),
+      ],
+      edges: [
+        presetEdge('blend_storeys_to_zone', 'blend_storeys', 'levels', 'blend_stair_zone', 'level'),
+        presetEdge('blend_zone_outline_to_zone', 'blend_stair_zone_outline', 'profile', 'blend_stair_zone', 'profile'),
+        presetEdge('blend_outer_to_surface', 'blend_outer_loop', 'profile', 'blend_mezzanine', 'outer'),
+        presetEdge('blend_hole_to_surface', 'blend_inner_hole', 'profile', 'blend_mezzanine', 'holes'),
+        presetEdge('blend_controls_to_surface', 'blend_height_controls', 'height_controls', 'blend_mezzanine', 'height_controls'),
+        presetEdge('blend_surface_to_selector', 'blend_mezzanine', 'paths', 'blend_target_edge', 'path'),
+        presetEdge('blend_storeys_to_stair', 'blend_storeys', 'levels', 'blend_arc_stair', 'levels'),
+        presetEdge('blend_zone_to_stair', 'blend_stair_zone', 'room', 'blend_arc_stair', 'zone'),
+        presetEdge('blend_target_to_stair', 'blend_target_edge', 'paths', 'blend_arc_stair', 'target_paths'),
+        presetEdge('blend_stair_to_patch', 'blend_arc_stair', 'stair', 'blend_patch', 'stair'),
+        presetEdge('blend_patch_to_surface', 'blend_patch', 'blend_target', 'blend_mezzanine', 'blend_targets'),
+        presetEdge('blend_surface_solid_to_output', 'blend_mezzanine', 'solid', `${graphKey}.output`, 'solids'),
+        presetEdge('blend_surface_to_output', 'blend_mezzanine', 'surface', `${graphKey}.output`, 'surfaces'),
+        presetEdge('blend_stair_to_output', 'blend_arc_stair', 'solid', `${graphKey}.output`, 'solids'),
+        presetEdge('blend_surface_anchors_to_output', 'blend_mezzanine', 'anchors', `${graphKey}.output`, 'anchors'),
       ],
     }),
   },

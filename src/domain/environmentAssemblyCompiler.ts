@@ -5,9 +5,11 @@ import {
   BufferGeometry,
   CatmullRomCurve3,
   ConeGeometry,
+  CubicBezierCurve,
   CylinderGeometry,
   Euler,
   ExtrudeGeometry,
+  Float32BufferAttribute,
   Matrix4,
   Shape,
   SphereGeometry,
@@ -16,6 +18,7 @@ import {
   Vector3,
 } from 'three'
 import { ADDITION, Brush, Evaluator, INTERSECTION, SUBTRACTION } from 'three-bvh-csg'
+import * as poly2tri from 'poly2tri'
 
 import {
   createAssemblyNode,
@@ -32,6 +35,7 @@ import {
   type CompiledMeshPart,
   type Connector,
   type CurveSegment,
+  type EnvironmentGeometryBindingConfig,
   type LevelSpec,
   type OpeningSpec,
   type PartitionWallSpec,
@@ -78,6 +82,39 @@ type RuntimeSurface = {
   color: string
 }
 
+type RuntimeSurfaceHeightControl = {
+  id: string
+  sourceNodeKey: string
+  interpolationMode: 'flat' | 'idw'
+  controlPoints: Array<{
+    id: string
+    point: Vector2
+    elevation: number
+  }>
+  breaklines: Array<{
+    id: string
+    points: Vector2[]
+    elevations: number[]
+  }>
+  plateaus: Array<{
+    id: string
+    profile: RuntimeProfile
+    elevation: number
+  }>
+}
+
+type RuntimeBlendTarget = {
+  id: string
+  sourceNodeKey: string
+  stairId: string | null
+  outline: Vector2[]
+  elevation: number
+  tangent: Vector2
+  preferredBlendDepth: number
+  openingWidth: number | null
+  metadata: Record<string, unknown>
+}
+
 type RuntimeNodeResult = {
   profiles?: RuntimeProfile[]
   paths?: RuntimePath[]
@@ -103,6 +140,8 @@ type RuntimeNodeResult = {
   bridges?: BridgeSpec[]
   stairs?: StairRunSpec[]
   slabVoids?: SlabVoidSpec[]
+  surfaceHeightControls?: RuntimeSurfaceHeightControl[]
+  blendTargets?: RuntimeBlendTarget[]
   pathSpecs?: PathSpec[]
   arrayPlacements?: ArrayPlacementSpec[]
   interiorDoorRequests?: InteriorDoorRequest[]
@@ -190,6 +229,10 @@ export type AssemblyCompileResult = {
   cache: AssemblyCompileCache
 }
 
+type AssemblyCompileOptions = {
+  triangulation?: EnvironmentGeometryBindingConfig['compileSettings']['triangulation']
+}
+
 const evaluator = new Evaluator()
 
 function incomingEdges(graph: AssemblyGraphDefinition, nodeKey: string, portId?: string) {
@@ -262,6 +305,23 @@ function booleanParam(node: AssemblyNodeDefinition, key: string, fallback: boole
   return typeof value === 'boolean' ? value : fallback
 }
 
+function recordParam(node: AssemblyNodeDefinition, key: string): Record<string, unknown> | null {
+  const value = node.params[key]
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
+}
+
+function curveSegmentDecorators(segment: Record<string, unknown>) {
+  return {
+    tag: typeof segment.tag === 'string' ? segment.tag : null,
+    boundaryRoleOverride: segment.boundaryRoleOverride === 'outer_edge' || segment.boundaryRoleOverride === 'hole_edge'
+      ? segment.boundaryRoleOverride
+      : null,
+    railingAllowed: typeof segment.railingAllowed === 'boolean' ? segment.railingAllowed : null,
+    wallAllowed: typeof segment.wallAllowed === 'boolean' ? segment.wallAllowed : null,
+    openingAllowed: typeof segment.openingAllowed === 'boolean' ? segment.openingAllowed : null,
+  } satisfies Pick<CurveSegment, 'tag' | 'boundaryRoleOverride' | 'railingAllowed' | 'wallAllowed' | 'openingAllowed'>
+}
+
 function edgeHash(edge: AssemblyEdgeDefinition) {
   return `${edge.source.nodeKey}:${edge.source.portId}->${edge.target.nodeKey}:${edge.target.portId}`
 }
@@ -306,24 +366,9 @@ function linePart(id: string, sourceNodeKey: string, points: Vector3[], color: s
 }
 
 function shapeFromProfile(profile: RuntimeProfile) {
-  const signedArea2D = (points: Vector2[]) => {
-    let area = 0
-    for (let index = 0; index < points.length; index += 1) {
-      const current = points[index]
-      const next = points[(index + 1) % points.length]
-      area += current.x * next.y - next.x * current.y
-    }
-    return area * 0.5
-  }
-
-  const normalizeWinding = (points: Vector2[], clockwise: boolean) => {
-    const isClockwise = signedArea2D(points) < 0
-    return isClockwise === clockwise ? points : [...points].reverse()
-  }
-
-  const shape = new Shape(normalizeWinding(profile.outer, false))
+  const shape = new Shape(normalizeLoopWinding(profile.outer, false))
   for (const holePoints of profile.holes) {
-    const hole = new Shape(normalizeWinding(holePoints, true))
+    const hole = new Shape(normalizeLoopWinding(holePoints, true))
     shape.holes.push(hole)
   }
   return shape
@@ -383,9 +428,153 @@ function pointsToSegments(points: Vector2[]): CurveSegment[] {
       type: 'line',
       from: { x: current.x, y: current.y },
       to: { x: next.x, y: next.y },
+      tag: null,
+      boundaryRoleOverride: null,
+      railingAllowed: null,
+      wallAllowed: null,
+      openingAllowed: null,
     })
   }
   return segments
+}
+
+function signedArea2D(points: Vector2[]) {
+  let area = 0
+  for (let index = 0; index < points.length; index += 1) {
+    const current = points[index]
+    const next = points[(index + 1) % points.length]
+    area += current.x * next.y - next.x * current.y
+  }
+  return area * 0.5
+}
+
+function normalizeLoopWinding(points: Vector2[], clockwise: boolean) {
+  const isClockwise = signedArea2D(points) < 0
+  return isClockwise === clockwise ? [...points] : [...points].reverse()
+}
+
+function distance2D(a: Vector2, b: Vector2) {
+  return Math.hypot(a.x - b.x, a.y - b.y)
+}
+
+function dedupeSequentialPoints(points: Vector2[], tolerance = 1e-4) {
+  const deduped: Vector2[] = []
+  for (const point of points) {
+    const previous = deduped[deduped.length - 1]
+    if (!previous || previous.distanceTo(point) > tolerance) deduped.push(point.clone())
+  }
+  if (deduped.length >= 2 && deduped[0].distanceTo(deduped[deduped.length - 1]) <= tolerance) deduped.pop()
+  return deduped
+}
+
+function resamplePolyline(points: Vector2[], spacing: number, closed: boolean) {
+  if (points.length <= 1) return points.map((point) => point.clone())
+  const safeSpacing = Math.max(spacing, 0.05)
+  const source = closed ? [...points, points[0]] : points
+  const sampled: Vector2[] = [source[0].clone()]
+  let carry = 0
+
+  for (let index = 1; index < source.length; index += 1) {
+    const start = source[index - 1]
+    const end = source[index]
+    const delta = end.clone().sub(start)
+    const length = delta.length()
+    if (length <= 1e-6) continue
+    const direction = delta.clone().multiplyScalar(1 / length)
+    let cursor = safeSpacing - carry
+    while (cursor < length - 1e-6) {
+      sampled.push(start.clone().addScaledVector(direction, cursor))
+      cursor += safeSpacing
+    }
+    carry = length - Math.max(0, cursor - safeSpacing)
+    if (!closed || index < source.length - 1) sampled.push(end.clone())
+  }
+
+  return dedupeSequentialPoints(sampled)
+}
+
+function sampleCurveSegment(segment: CurveSegment, sampleSpacing = 0.35) {
+  const spacing = Math.max(sampleSpacing, 0.05)
+  if (segment.type === 'line') {
+    return [new Vector2(segment.from.x, segment.from.y), new Vector2(segment.to.x, segment.to.y)]
+  }
+  if (segment.type === 'arc') {
+    const arcLength = Math.abs(segment.endAngle - segment.startAngle) * segment.radius
+    const subdivisions = Math.max(8, Math.ceil(arcLength / spacing))
+    const curve = new ArcCurve(segment.center.x, segment.center.y, segment.radius, segment.startAngle, segment.endAngle, segment.clockwise)
+    return dedupeSequentialPoints(curve.getSpacedPoints(subdivisions))
+  }
+  if (segment.type === 'bezier') {
+    const curve = new CubicBezierCurve(
+      new Vector2(segment.from.x, segment.from.y),
+      new Vector2(segment.control1.x, segment.control1.y),
+      new Vector2(segment.control2.x, segment.control2.y),
+      new Vector2(segment.to.x, segment.to.y),
+    )
+    const subdivisions = Math.max(12, Math.ceil(curve.getLength() / spacing))
+    return dedupeSequentialPoints(curve.getSpacedPoints(subdivisions))
+  }
+  const curve = new CatmullRomCurve3(
+    segment.points.map((point) => new Vector3(point.x, 0, point.y)),
+    segment.closed,
+    segment.curveType ?? 'centripetal',
+    segment.tension ?? 0.5,
+  )
+  const subdivisions = Math.max(8, Math.ceil(curve.getLength() / spacing))
+  return dedupeSequentialPoints(curve.getSpacedPoints(subdivisions).map((point) => new Vector2(point.x, point.z)))
+}
+
+type SampledLoopEdge = {
+  id: string
+  loopId: string
+  loopKind: BoundaryLoop['kind']
+  points: Vector2[]
+  segment: CurveSegment
+  boundaryRole: 'outer_edge' | 'hole_edge'
+}
+
+function sampleBoundaryLoop(loop: BoundaryLoop, sampleSpacing = 0.35) {
+  const edges: SampledLoopEdge[] = []
+  const polyline: Vector2[] = []
+
+  loop.segments.forEach((segment, segmentIndex) => {
+    const points = sampleCurveSegment(segment, sampleSpacing)
+    if (points.length < 2) return
+    const segmentPoints = segmentIndex === 0 ? points : points.slice(1)
+    polyline.push(...segmentPoints.map((point) => point.clone()))
+    edges.push({
+      id: `${loop.id}.edge_${segmentIndex + 1}`,
+      loopId: loop.id,
+      loopKind: loop.kind,
+      points: points.map((point) => point.clone()),
+      segment,
+      boundaryRole: segment.boundaryRoleOverride ?? (loop.kind === 'hole' ? 'hole_edge' : 'outer_edge'),
+    })
+  })
+
+  return {
+    points: dedupeSequentialPoints(polyline),
+    edges,
+  }
+}
+
+function pointInLoop(point: Vector2, loop: Vector2[]) {
+  let inside = false
+  for (let i = 0, j = loop.length - 1; i < loop.length; j = i, i += 1) {
+    const xi = loop[i].x
+    const yi = loop[i].y
+    const xj = loop[j].x
+    const yj = loop[j].y
+    const intersects = ((yi > point.y) !== (yj > point.y))
+      && (point.x < ((xj - xi) * (point.y - yi)) / Math.max(yj - yi, 1e-8) + xi)
+    if (intersects) inside = !inside
+  }
+  return inside
+}
+
+function pointInProfileXZ(point: Vector2, outer: Vector2[], holes: Vector2[][]) {
+  if (!pointInLoop(point, outer)) return false
+  return !holes.some((hole) => hole.length >= 3 && pointInLoop(point, hole))
 }
 
 function profileCenter(profile: RuntimeProfile) {
@@ -605,11 +794,12 @@ function curveSegmentsParam(node: AssemblyNodeDefinition, key = 'segments'): Cur
     .map((segment) => {
       if (!segment || typeof segment !== 'object' || typeof (segment as { type?: unknown }).type !== 'string') return null
       const type = (segment as { type: string }).type
+      const decorators = curveSegmentDecorators(segment as Record<string, unknown>)
       if (type === 'line') {
         const from = (segment as { from?: { x?: unknown; y?: unknown } }).from
         const to = (segment as { to?: { x?: unknown; y?: unknown } }).to
         if (typeof from?.x !== 'number' || typeof from?.y !== 'number' || typeof to?.x !== 'number' || typeof to?.y !== 'number') return null
-        return { type: 'line', from: { x: from.x, y: from.y }, to: { x: to.x, y: to.y } } satisfies CurveSegment
+        return { type: 'line', from: { x: from.x, y: from.y }, to: { x: to.x, y: to.y }, ...decorators } satisfies CurveSegment
       }
       if (type === 'arc') {
         const center = (segment as { center?: { x?: unknown; y?: unknown } }).center
@@ -617,7 +807,27 @@ function curveSegmentsParam(node: AssemblyNodeDefinition, key = 'segments'): Cur
         const startAngle = (segment as { startAngle?: unknown }).startAngle
         const endAngle = (segment as { endAngle?: unknown }).endAngle
         if (typeof center?.x !== 'number' || typeof center?.y !== 'number' || typeof radius !== 'number' || typeof startAngle !== 'number' || typeof endAngle !== 'number') return null
-        return { type: 'arc', center: { x: center.x, y: center.y }, radius, startAngle, endAngle, clockwise: Boolean((segment as { clockwise?: unknown }).clockwise) } satisfies CurveSegment
+        return { type: 'arc', center: { x: center.x, y: center.y }, radius, startAngle, endAngle, clockwise: Boolean((segment as { clockwise?: unknown }).clockwise), ...decorators } satisfies CurveSegment
+      }
+      if (type === 'bezier') {
+        const from = (segment as { from?: { x?: unknown; y?: unknown } }).from
+        const control1 = (segment as { control1?: { x?: unknown; y?: unknown } }).control1
+        const control2 = (segment as { control2?: { x?: unknown; y?: unknown } }).control2
+        const to = (segment as { to?: { x?: unknown; y?: unknown } }).to
+        if (
+          typeof from?.x !== 'number' || typeof from?.y !== 'number'
+          || typeof control1?.x !== 'number' || typeof control1?.y !== 'number'
+          || typeof control2?.x !== 'number' || typeof control2?.y !== 'number'
+          || typeof to?.x !== 'number' || typeof to?.y !== 'number'
+        ) return null
+        return {
+          type: 'bezier',
+          from: { x: from.x, y: from.y },
+          control1: { x: control1.x, y: control1.y },
+          control2: { x: control2.x, y: control2.y },
+          to: { x: to.x, y: to.y },
+          ...decorators,
+        } satisfies CurveSegment
       }
       if (type === 'spline') {
         const points = Array.isArray((segment as { points?: unknown[] }).points)
@@ -626,7 +836,10 @@ function curveSegmentsParam(node: AssemblyNodeDefinition, key = 'segments'): Cur
               .filter((point): point is { x: number; y: number } => point !== null))
           : []
         if (points.length < 2) return null
-        return { type: 'spline', points, closed: Boolean((segment as { closed?: unknown }).closed) } satisfies CurveSegment
+        const curveTypeRaw = (segment as { curveType?: unknown }).curveType
+        const curveType = curveTypeRaw === 'chordal' || curveTypeRaw === 'catmullrom' ? curveTypeRaw : 'centripetal'
+        const tension = typeof (segment as { tension?: unknown }).tension === 'number' ? Number((segment as { tension: number }).tension) : 0.5
+        return { type: 'spline', points, closed: Boolean((segment as { closed?: unknown }).closed), curveType, tension, ...decorators } satisfies CurveSegment
       }
       return null
     })
@@ -639,6 +852,34 @@ function createMixedLoopProfile(node: AssemblyNodeDefinition): RuntimeProfile {
     id: `${node.key}.profile`,
     loops: [{ id: `${node.key}.outer`, closed: true, kind: 'outer', segments }],
     metadata: { nodeKind: node.kind },
+  })
+}
+
+function createSmoothClosedSplineLoopProfile(node: AssemblyNodeDefinition): RuntimeProfile {
+  const points = pointsParam(node).map((point) => new Vector2(point.x, point.y))
+  const curveTypeRaw = node.params.curveType
+  const curveType = curveTypeRaw === 'chordal' || curveTypeRaw === 'catmullrom' ? curveTypeRaw : 'centripetal'
+  const tension = typeof node.params.tension === 'number' ? Number(node.params.tension) : 0.5
+  return runtimeProfileFromShape({
+    id: `${node.key}.profile`,
+    loops: [{
+      id: `${node.key}.outer`,
+      closed: true,
+      kind: 'outer',
+      segments: [{
+        type: 'spline',
+        points: points.map((point) => ({ x: point.x, y: point.y })),
+        closed: true,
+        curveType,
+        tension,
+        tag: null,
+        boundaryRoleOverride: null,
+        railingAllowed: null,
+        wallAllowed: null,
+        openingAllowed: null,
+      }],
+    }],
+    metadata: { nodeKind: node.kind, curveType, tension },
   })
 }
 
@@ -775,6 +1016,14 @@ function collectIncomingStairs(graph: AssemblyGraphDefinition, node: AssemblyNod
   return incomingEdges(graph, node.key, portId).flatMap((edge) => results.get(edge.source.nodeKey)?.stairs ?? [])
 }
 
+function collectIncomingSurfaceHeightControls(graph: AssemblyGraphDefinition, node: AssemblyNodeDefinition, results: Map<string, RuntimeNodeResult>, portId = 'height_controls') {
+  return incomingEdges(graph, node.key, portId).flatMap((edge) => results.get(edge.source.nodeKey)?.surfaceHeightControls ?? [])
+}
+
+function collectIncomingBlendTargets(graph: AssemblyGraphDefinition, node: AssemblyNodeDefinition, results: Map<string, RuntimeNodeResult>, portId = 'blend_targets') {
+  return incomingEdges(graph, node.key, portId).flatMap((edge) => results.get(edge.source.nodeKey)?.blendTargets ?? [])
+}
+
 function collectSourceAnchors(graph: AssemblyGraphDefinition, node: AssemblyNodeDefinition, results: Map<string, RuntimeNodeResult>, portId = 'source') {
   return incomingEdges(graph, node.key, portId).flatMap((edge) => results.get(edge.source.nodeKey)?.anchors ?? [])
 }
@@ -875,12 +1124,13 @@ function runtimeProfileFromLoops(id: string, outer: Vector2[], holes: Vector2[][
   }
 }
 
-function boundaryPathsFromProfile(nodeKey: string, surfaceId: string, profile: RuntimeProfile, elevation: number) {
+function boundaryPathsFromProfile(nodeKey: string, surfaceId: string, profile: RuntimeProfile, elevation: number, sampleSpacing = 0.35) {
   const runtimePaths: RuntimePath[] = []
   const anchors: Anchor[] = []
 
   profile.profile.loops.forEach((loop, loopIndex) => {
-    const loopPoints = segmentsToPolyline(loop)
+    const sampled = sampleBoundaryLoop(loop, sampleSpacing)
+    const loopPoints = sampled.points
     if (loopPoints.length < 2) return
     const loopRole = loop.kind === 'hole' ? 'hole_loop' : 'outer_loop'
     const loopRuntimePoints = loopPoints.map((point) => new Vector3(point.x, elevation, point.y))
@@ -898,32 +1148,325 @@ function boundaryPathsFromProfile(nodeKey: string, surfaceId: string, profile: R
     const center = loopPoints.reduce((sum, point) => sum.add(point), new Vector2()).multiplyScalar(1 / loopPoints.length)
     anchors.push(createAnchor(nodeKey, `${loop.kind === 'hole' ? 'Hole' : 'Outer'} Loop ${loopIndex + 1}`, new Vector3(center.x, elevation, center.y)))
 
-    for (let edgeIndex = 1; edgeIndex < loopPoints.length; edgeIndex += 1) {
-      const start = loopPoints[edgeIndex - 1]
-      const end = loopPoints[edgeIndex]
-      const edgeId = `${loop.id}.edge_${edgeIndex}`
-      const edgeRole = loop.kind === 'hole' ? 'hole_edge' : 'outer_edge'
+    sampled.edges.forEach((edge, edgeIndex) => {
+      const start = edge.points[0]
+      const end = edge.points[edge.points.length - 1]
+      const edgeId = edge.id
       runtimePaths.push(createRuntimePath(nodeKey, `${surfaceId}.${edgeId}`, 'derived_profile', [
-        new Vector3(start.x, elevation, start.y),
-        new Vector3(end.x, elevation, end.y),
+        ...edge.points.map((point) => new Vector3(point.x, elevation, point.y)),
       ], {
         surfaceId,
         loopId: loop.id,
-        boundaryRole: edgeRole,
+        boundaryRole: edge.boundaryRole,
         edgeId,
-        walkable: loop.kind !== 'hole',
-        railingAllowed: true,
-        wallAllowed: loop.kind !== 'hole',
-        openingAllowed: loop.kind !== 'hole',
+        segmentTag: edge.segment.tag ?? null,
+        walkable: edge.boundaryRole !== 'hole_edge',
+        railingAllowed: edge.segment.railingAllowed ?? true,
+        wallAllowed: edge.segment.wallAllowed ?? edge.boundaryRole !== 'hole_edge',
+        openingAllowed: edge.segment.openingAllowed ?? edge.boundaryRole !== 'hole_edge',
       }))
-      anchors.push(createAnchor(nodeKey, `${loop.kind === 'hole' ? 'Hole' : 'Outer'} Edge ${loopIndex + 1}.${edgeIndex}`, new Vector3((start.x + end.x) * 0.5, elevation, (start.y + end.y) * 0.5)))
-    }
+      anchors.push(createAnchor(nodeKey, `${loop.kind === 'hole' ? 'Hole' : 'Outer'} Edge ${loopIndex + 1}.${edgeIndex + 1}`, new Vector3((start.x + end.x) * 0.5, elevation, (start.y + end.y) * 0.5)))
+    })
   })
 
   return {
     paths: runtimePaths,
     pathSpecs: runtimePaths.map((path) => path.spec),
     anchors,
+  }
+}
+
+function resolveCompileTriangulation(
+  graph: AssemblyGraphDefinition,
+  node: AssemblyNodeDefinition,
+  options?: AssemblyCompileOptions,
+) {
+  const metadataSettings = recordParam({ ...node, params: graph.metadata }, 'compileSettings')
+  const graphSetting = metadataSettings?.triangulation
+  const nodeSetting = typeof node.params.triangulationMode === 'string' ? node.params.triangulationMode : null
+  const override = options?.triangulation
+  const resolved = override ?? (graphSetting === 'constrained_delaunay_v1' || graphSetting === 'shape_utils' ? graphSetting : null) ?? (nodeSetting === 'constrained_delaunay_v1' || nodeSetting === 'shape_utils' ? nodeSetting : null)
+  return resolved ?? 'shape_utils'
+}
+
+function closeLoopPoints(points: Vector2[]) {
+  if (points.length === 0) return []
+  return [...points.map((point) => point.clone()), points[0].clone()]
+}
+
+function sanitizeLoopForTriangulation(points: Vector2[], clockwise: boolean, epsilon = 1e-4) {
+  const deduped = dedupeSequentialPoints(points, epsilon)
+  if (deduped.length >= 3) return normalizeLoopWinding(deduped, clockwise)
+  return deduped
+}
+
+function validateSurfaceLoops(outer: Vector2[], holes: Vector2[][]) {
+  const diagnostics: string[] = []
+  if (outer.length < 3) diagnostics.push('Surface outer loop has fewer than 3 vertices.')
+  const outerBounds = {
+    minX: Math.min(...outer.map((point) => point.x)),
+    maxX: Math.max(...outer.map((point) => point.x)),
+    minY: Math.min(...outer.map((point) => point.y)),
+    maxY: Math.max(...outer.map((point) => point.y)),
+  }
+  holes.forEach((hole, index) => {
+    if (hole.length < 3) diagnostics.push(`Surface hole ${index + 1} has fewer than 3 vertices.`)
+    const holeBounds = {
+      minX: Math.min(...hole.map((point) => point.x)),
+      maxX: Math.max(...hole.map((point) => point.x)),
+      minY: Math.min(...hole.map((point) => point.y)),
+      maxY: Math.max(...hole.map((point) => point.y)),
+    }
+    const withinBounds = holeBounds.minX >= outerBounds.minX - 1e-4
+      && holeBounds.maxX <= outerBounds.maxX + 1e-4
+      && holeBounds.minY >= outerBounds.minY - 1e-4
+      && holeBounds.maxY <= outerBounds.maxY + 1e-4
+    if (!withinBounds) diagnostics.push(`Surface hole ${index + 1} lies outside the outer loop.`)
+  })
+  return diagnostics
+}
+
+function triangulationSteinerPoints(
+  heightControls: RuntimeSurfaceHeightControl[],
+  blendTargets: RuntimeBlendTarget[],
+) {
+  const points: Array<{ x: number; y: number }> = []
+  heightControls.forEach((control) => {
+    control.controlPoints.forEach((entry) => points.push({ x: entry.point.x, y: entry.point.y }))
+    control.breaklines.forEach((breakline) => breakline.points.forEach((point) => points.push({ x: point.x, y: point.y })))
+    control.plateaus.forEach((plateau) => plateau.profile.outer.forEach((point) => points.push({ x: point.x, y: point.y })))
+  })
+  blendTargets.forEach((target) => target.outline.forEach((point) => points.push({ x: point.x, y: point.y })))
+  const deduped: Array<{ x: number; y: number }> = []
+  points.forEach((point) => {
+    if (!deduped.some((entry) => Math.abs(entry.x - point.x) <= 1e-4 && Math.abs(entry.y - point.y) <= 1e-4)) deduped.push(point)
+  })
+  return deduped
+}
+
+function pointOnPolylineWithElevation(point: Vector2, linePoints: Vector2[], elevations: number[], tolerance = 0.08) {
+  let traveled = 0
+  for (let index = 1; index < linePoints.length; index += 1) {
+    const start = linePoints[index - 1]
+    const end = linePoints[index]
+    const segment = end.clone().sub(start)
+    const lengthSq = Math.max(segment.lengthSq(), 1e-8)
+    const t = Math.max(0, Math.min(1, point.clone().sub(start).dot(segment) / lengthSq))
+    const projected = start.clone().addScaledVector(segment, t)
+    if (projected.distanceTo(point) <= tolerance) {
+      const segmentLength = Math.sqrt(lengthSq)
+      const lineLength = linePoints.slice(1).reduce((sum, current, currentIndex) => sum + linePoints[currentIndex].distanceTo(current), 0)
+      const distanceAlong = traveled + segmentLength * t
+      const normalized = lineLength > 1e-6 ? distanceAlong / lineLength : 0
+      const startElevation = elevations[0] ?? 0
+      const endElevation = elevations[elevations.length - 1] ?? startElevation
+      return startElevation + (endElevation - startElevation) * normalized
+    }
+    traveled += Math.sqrt(lengthSq)
+  }
+  return null
+}
+
+function resolveSurfaceVertexElevation(
+  point: Vector2,
+  defaultTopElevation: number,
+  heightControls: RuntimeSurfaceHeightControl[],
+  blendTargets: RuntimeBlendTarget[],
+  sampleSpacing: number,
+) {
+  for (const control of heightControls) {
+    for (const plateau of control.plateaus) {
+      if (pointInProfileXZ(point, plateau.profile.outer, plateau.profile.holes)) return plateau.elevation
+    }
+  }
+
+  const exactControl = heightControls
+    .flatMap((control) => control.controlPoints)
+    .find((entry) => entry.point.distanceTo(point) <= 0.03)
+  if (exactControl) return exactControl.elevation
+
+  for (const control of heightControls) {
+    for (const breakline of control.breaklines) {
+      const lineElevation = pointOnPolylineWithElevation(point, breakline.points, breakline.elevations, Math.max(sampleSpacing * 0.45, 0.06))
+      if (lineElevation !== null) return lineElevation
+    }
+  }
+
+  const weighted: Array<{ elevation: number; distance: number }> = []
+  heightControls.forEach((control) => {
+    control.controlPoints.forEach((entry) => weighted.push({ elevation: entry.elevation, distance: Math.max(entry.point.distanceTo(point), 0.05) }))
+    control.breaklines.forEach((breakline) => {
+      breakline.points.forEach((linePoint, index) => weighted.push({
+        elevation: breakline.elevations[index] ?? breakline.elevations[breakline.elevations.length - 1] ?? defaultTopElevation,
+        distance: Math.max(linePoint.distanceTo(point), 0.05),
+      }))
+    })
+  })
+  blendTargets.forEach((target) => {
+    const centroid = target.outline.reduce((sum, entry) => sum.add(entry), new Vector2()).multiplyScalar(1 / Math.max(target.outline.length, 1))
+    weighted.push({ elevation: target.elevation, distance: Math.max(centroid.distanceTo(point), 0.05) })
+  })
+  if (weighted.length === 0) return defaultTopElevation
+
+  let numerator = 0
+  let denominator = 0
+  weighted.forEach((entry) => {
+    const weight = 1 / (entry.distance * entry.distance)
+    numerator += entry.elevation * weight
+    denominator += weight
+  })
+  return denominator > 1e-6 ? numerator / denominator : defaultTopElevation
+}
+
+function buildSurfaceMeshV1(
+  node: AssemblyNodeDefinition,
+  profile: RuntimeProfile,
+  options: {
+    bottomElevation: number
+    topElevation: number
+    thickness: number
+    sampleSpacing: number
+    undersideMode: 'flat' | 'vertical_offset'
+    triangulation: 'shape_utils' | 'constrained_delaunay_v1'
+    heightControls: RuntimeSurfaceHeightControl[]
+    blendTargets: RuntimeBlendTarget[]
+  },
+  diagnostics: string[],
+) {
+  const outerLoop = profile.profile.loops.find((loop) => loop.kind === 'outer') ?? profile.profile.loops[0]
+  if (!outerLoop) return null
+  const sampledOuter = sanitizeLoopForTriangulation(sampleBoundaryLoop(outerLoop, options.sampleSpacing).points, false)
+  const sampledHoles = profile.profile.loops
+    .filter((loop) => loop.kind === 'hole')
+    .map((loop) => sanitizeLoopForTriangulation(sampleBoundaryLoop(loop, options.sampleSpacing).points, true))
+    .filter((loop) => loop.length >= 3)
+  diagnostics.push(...validateSurfaceLoops(sampledOuter, sampledHoles))
+  if (sampledOuter.length < 3) return null
+
+  const safeTopElevation = options.topElevation
+  const sampledProfile = runtimeProfileFromLoops(`${node.key}.surface_mesh.profile`, sampledOuter, sampledHoles, {
+    sourceProfileId: profile.profile.id,
+    triangulation: options.triangulation,
+  })
+  const hasCustomHeights = options.heightControls.length > 0 || options.blendTargets.length > 0
+
+  if (options.triangulation === 'shape_utils') {
+    const geometry = extrudeProfile(sampledProfile, Math.max(options.thickness, 0.02))
+    geometry.translate(0, options.bottomElevation, 0)
+    return {
+      geometry,
+      sampledProfile,
+      topElevation: safeTopElevation,
+    }
+  }
+
+  const contour = normalizeLoopWinding(sampledOuter, false).map((point) => ({ x: point.x, y: point.y }))
+  const swctx = new poly2tri.SweepContext(contour, { cloneArrays: true })
+  sampledHoles.forEach((hole) => swctx.addHole(normalizeLoopWinding(hole, true).map((point) => ({ x: point.x, y: point.y }))))
+  const steinerPoints = triangulationSteinerPoints(options.heightControls, options.blendTargets)
+    .filter((point) => pointInProfileXZ(new Vector2(point.x, point.y), sampledOuter, sampledHoles))
+  if (steinerPoints.length > 0) swctx.addPoints(steinerPoints)
+
+  try {
+    swctx.triangulate()
+  } catch (error) {
+    diagnostics.push(`Surface triangulation failed for "${node.key}": ${error instanceof Error ? error.message : 'unknown error'}`)
+    return null
+  }
+
+  const topPositions: number[] = []
+  const topNormals: number[] = []
+  const bottomPositions: number[] = []
+  const bottomNormals: number[] = []
+
+  const topHeightAt = (point: Vector2) =>
+    resolveSurfaceVertexElevation(point, safeTopElevation, options.heightControls, options.blendTargets, options.sampleSpacing)
+
+  const pushTriangle = (positions: number[], normals: number[], a: Vector3, b: Vector3, c: Vector3, mode: 'top' | 'bottom' | 'side') => {
+    positions.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z)
+    let normal: Vector3
+    if (mode === 'top' && !hasCustomHeights) {
+      normal = new Vector3(0, 1, 0)
+    } else if (mode === 'bottom' && !hasCustomHeights && options.undersideMode === 'flat') {
+      normal = new Vector3(0, -1, 0)
+    } else {
+      normal = new Vector3().subVectors(b, a).cross(new Vector3().subVectors(c, a)).normalize()
+      if (normal.lengthSq() <= 1e-8) normal = mode === 'bottom' ? new Vector3(0, -1, 0) : new Vector3(0, 1, 0)
+    }
+    normals.push(normal.x, normal.y, normal.z, normal.x, normal.y, normal.z, normal.x, normal.y, normal.z)
+  }
+
+  swctx.getTriangles().forEach((triangle) => {
+    const points = triangle.getPoints().map((entry) => new Vector2(entry.x, entry.y))
+    const oriented2D = signedArea2D(points) >= 0 ? points : [points[0], points[2], points[1]]
+    const topTriangle = oriented2D.map((point) => new Vector3(point.x, topHeightAt(point), point.y))
+    const bottomTriangle = oriented2D.map((point) => new Vector3(
+      point.x,
+      options.undersideMode === 'vertical_offset' ? topHeightAt(point) - options.thickness : options.bottomElevation,
+      point.y,
+    ))
+    pushTriangle(topPositions, topNormals, topTriangle[0], topTriangle[1], topTriangle[2], 'top')
+    pushTriangle(bottomPositions, bottomNormals, bottomTriangle[0], bottomTriangle[2], bottomTriangle[1], 'bottom')
+  })
+
+  const sidePositions: number[] = []
+  const sideNormals: number[] = []
+  const appendSideQuads = (loop: Vector2[], reverse = false) => {
+    const closed = closeLoopPoints(loop)
+    for (let index = 1; index < closed.length; index += 1) {
+      const start = closed[index - 1]
+      const end = closed[index]
+      if (start.distanceTo(end) <= 1e-6) continue
+      const topStartY = topHeightAt(start)
+      const topEndY = topHeightAt(end)
+      const bottomStartY = options.undersideMode === 'vertical_offset' ? topStartY - options.thickness : options.bottomElevation
+      const bottomEndY = options.undersideMode === 'vertical_offset' ? topEndY - options.thickness : options.bottomElevation
+      const vertices = reverse
+        ? [
+            [start.x, topStartY, start.y],
+            [start.x, bottomStartY, start.y],
+            [end.x, bottomEndY, end.y],
+            [end.x, topEndY, end.y],
+          ]
+        : [
+            [start.x, topStartY, start.y],
+            [end.x, topEndY, end.y],
+            [end.x, bottomEndY, end.y],
+            [start.x, bottomStartY, start.y],
+          ]
+      pushTriangle(
+        sidePositions,
+        sideNormals,
+        new Vector3(vertices[0][0], vertices[0][1], vertices[0][2]),
+        new Vector3(vertices[1][0], vertices[1][1], vertices[1][2]),
+        new Vector3(vertices[2][0], vertices[2][1], vertices[2][2]),
+        'side',
+      )
+      pushTriangle(
+        sidePositions,
+        sideNormals,
+        new Vector3(vertices[0][0], vertices[0][1], vertices[0][2]),
+        new Vector3(vertices[2][0], vertices[2][1], vertices[2][2]),
+        new Vector3(vertices[3][0], vertices[3][1], vertices[3][2]),
+        'side',
+      )
+    }
+  }
+  appendSideQuads(sampledOuter, false)
+  sampledHoles.forEach((hole) => appendSideQuads(hole, true))
+
+  const positions = [...topPositions, ...bottomPositions, ...sidePositions]
+  const normals = [...topNormals, ...bottomNormals, ...sideNormals]
+
+  const geometry = new BufferGeometry()
+  geometry.setAttribute('position', new Float32BufferAttribute(positions, 3))
+  geometry.setAttribute('normal', new Float32BufferAttribute(normals, 3))
+  geometry.computeBoundingBox()
+
+  return {
+    geometry,
+    sampledProfile,
+    topElevation: safeTopElevation,
   }
 }
 
@@ -2468,6 +3011,10 @@ function solvePathAwareStairGeometry(
     voidBounds,
     bottomConnectionPoint,
     topConnectionPoint: [topConnectionPoint.x, targetElevation, topConnectionPoint.z] as [number, number, number],
+    topLandingCenter: [topLandingCenter.x, targetElevation, topLandingCenter.z] as [number, number, number],
+    topLandingYaw: landingYaw,
+    width,
+    landingDepth,
     diagnostics,
   }
 }
@@ -2563,6 +3110,8 @@ function solveStairGeometry(
   let topLandingId: string | null = null
   let bottomConnectionPoint: [number, number, number] | null = null
   let topConnectionPoint: [number, number, number] | null = null
+  let topLandingCenterResult: [number, number, number] | null = null
+  let topLandingYawResult = 0
 
   if (request.stairFamily === 'spiral') {
     const radius = Math.max(width * 0.5, 0.85)
@@ -2640,6 +3189,8 @@ function solveStairGeometry(
     )
     bottomConnectionPoint = [midX, fromElevation, runStartZ]
     topConnectionPoint = [topLandingCenter.x, targetElevation, topLandingCenter.z]
+    topLandingCenterResult = [topLandingCenter.x, targetElevation, topLandingCenter.z]
+    topLandingYawResult = 0
   } else if (request.stairFamily === 'u_stair' || request.stairFamily === 'winder_u') {
     const halfGap = Math.max(width * 0.2, request.wallClearance)
     const leftX = midX - (width + halfGap) * 0.5
@@ -2759,6 +3310,10 @@ function solveStairGeometry(
     voidBounds,
     bottomConnectionPoint,
     topConnectionPoint,
+    topLandingCenter: topLandingCenterResult,
+    topLandingYaw: topLandingYawResult,
+    width,
+    landingDepth,
     diagnostics,
   }
 }
@@ -2922,6 +3477,10 @@ function resolveZoneAdjustedStairs(
         targetPathId: resolvedTargetFrame?.pathId ?? null,
         bottomConnectionPoint: resolved.bottomConnectionPoint,
         topConnectionPoint: resolved.topConnectionPoint,
+        topLandingCenter: resolved.topLandingCenter ?? null,
+        topLandingYaw: resolved.topLandingYaw ?? null,
+        width: resolved.width ?? request.width,
+        landingDepth: resolved.landingDepth ?? request.landingDepth,
         connectionRequestIds: stairConnectionRequests.filter((entry) => entry.stairId === resolved.stairId).map((entry) => entry.id),
       },
     })
@@ -3121,6 +3680,8 @@ function mergeNodeResults(target: RuntimeNodeResult, source: RuntimeNodeResult) 
   target.bridges = [...(target.bridges ?? []), ...(source.bridges ?? [])]
   target.stairs = [...(target.stairs ?? []), ...(source.stairs ?? [])]
   target.slabVoids = [...(target.slabVoids ?? []), ...(source.slabVoids ?? [])]
+  target.surfaceHeightControls = [...(target.surfaceHeightControls ?? []), ...(source.surfaceHeightControls ?? [])]
+  target.blendTargets = [...(target.blendTargets ?? []), ...(source.blendTargets ?? [])]
   target.pathSpecs = [...(target.pathSpecs ?? []), ...(source.pathSpecs ?? [])]
   target.arrayPlacements = [...(target.arrayPlacements ?? []), ...(source.arrayPlacements ?? [])]
   target.interiorDoorRequests = [...(target.interiorDoorRequests ?? []), ...(source.interiorDoorRequests ?? [])]
@@ -3462,11 +4023,16 @@ function applyStructuralFusion(
   return true
 }
 
-function dependencyHash(node: AssemblyNodeDefinition, graph: AssemblyGraphDefinition, results: Map<string, RuntimeNodeResult>) {
+function dependencyHash(node: AssemblyNodeDefinition, graph: AssemblyGraphDefinition, results: Map<string, RuntimeNodeResult>, options?: AssemblyCompileOptions) {
   const incoming = incomingEdges(graph, node.key)
     .map((edge) => `${edgeHash(edge)}:${JSON.stringify(results.get(edge.source.nodeKey) ?? {})}`)
     .join('|')
-  return JSON.stringify({ kind: node.kind, params: node.params, incoming })
+  return JSON.stringify({
+    kind: node.kind,
+    params: node.params,
+    incoming,
+    triangulation: resolveCompileTriangulation(graph, node, options),
+  })
 }
 
 export function createAssemblyCompileCache(): AssemblyCompileCache {
@@ -3479,6 +4045,7 @@ export function createAssemblyCompileCache(): AssemblyCompileCache {
 export function compileAssemblyGraph(
   graphInput: AssemblyGraphDefinition,
   existingCache: AssemblyCompileCache = createAssemblyCompileCache(),
+  options?: AssemblyCompileOptions,
 ): AssemblyCompileResult {
   const graph = migrateAssemblyGraph(graphInput)
   const diagnostics: string[] = []
@@ -3486,7 +4053,7 @@ export function compileAssemblyGraph(
   const nextCache: AssemblyCompileCache = createAssemblyCompileCache()
 
   for (const node of orderedNodes) {
-    const hash = dependencyHash(node, graph, nextCache.nodeResults)
+    const hash = dependencyHash(node, graph, nextCache.nodeResults, options)
     if (existingCache.dependencyHashes.get(node.key) === hash) {
       const cached = existingCache.nodeResults.get(node.key)
       if (cached) {
@@ -3523,6 +4090,94 @@ export function compileAssemblyGraph(
       case 'mixed_loop':
         result.profiles = [createMixedLoopProfile(node)]
         break
+      case 'smooth_closed_spline_loop':
+        result.profiles = [createSmoothClosedSplineLoopProfile(node)]
+        break
+      case 'loop_builder': {
+        const sourcePaths = collectIncomingPaths(graph, node, nextCache.nodeResults, 'paths')
+        const closeTolerance = numberParam(node, 'closeTolerance', 0.12)
+        const sampleSpacing = numberParam(node, 'sampleSpacing', 0.35)
+        const fragments = sourcePaths
+          .map((path) => dedupeSequentialPoints(path.points.map((point) => new Vector2(point.x, point.z))))
+          .filter((points) => points.length >= 2)
+        if (fragments.length === 0) break
+        const chain = fragments.shift() ?? []
+        while (fragments.length > 0) {
+          const chainStart = chain[0]
+          const chainEnd = chain[chain.length - 1]
+          let bestIndex = 0
+          let reverse = false
+          let attachToStart = false
+          let bestDistance = Number.POSITIVE_INFINITY
+          fragments.forEach((fragment, fragmentIndex) => {
+            const start = fragment[0]
+            const end = fragment[fragment.length - 1]
+            const candidates = [
+              { distance: distance2D(chainEnd, start), reverse: false, attachToStart: false },
+              { distance: distance2D(chainEnd, end), reverse: true, attachToStart: false },
+              { distance: distance2D(chainStart, start), reverse: true, attachToStart: true },
+              { distance: distance2D(chainStart, end), reverse: false, attachToStart: true },
+            ]
+            candidates.forEach((candidate) => {
+              if (candidate.distance < bestDistance) {
+                bestDistance = candidate.distance
+                bestIndex = fragmentIndex
+                reverse = candidate.reverse
+                attachToStart = candidate.attachToStart
+              }
+            })
+          })
+          const nextFragment = fragments.splice(bestIndex, 1)[0]
+          const nextPoints = reverse ? [...nextFragment].reverse() : nextFragment
+          if (attachToStart) {
+            if (bestDistance > closeTolerance) chain.unshift(nextPoints[nextPoints.length - 1].clone())
+            chain.unshift(...nextPoints.slice(0, nextPoints.length - 1).map((point) => point.clone()))
+          } else {
+            if (bestDistance > closeTolerance) chain.push(nextPoints[0].clone())
+            chain.push(...nextPoints.slice(1).map((point) => point.clone()))
+          }
+        }
+        const closed = chain.length >= 3
+          ? resamplePolyline(dedupeSequentialPoints(chain), sampleSpacing, true)
+          : []
+        if (closed.length >= 3) {
+          const loopKind = stringParam(node, 'loopRole', 'outer') === 'hole' ? 'hole' : 'outer'
+          const outputCurveKindParam = stringParam(node, 'outputCurveKind', 'auto')
+          const useSplineOutput = outputCurveKindParam === 'spline'
+            || (outputCurveKindParam === 'auto' && sourcePaths.some((path) => path.spec.kind === 'spline' || path.spec.kind === 'arc'))
+          const curveTypeParam = stringParam(node, 'curveType', 'centripetal')
+          const curveType = curveTypeParam === 'chordal' || curveTypeParam === 'catmullrom' ? curveTypeParam : 'centripetal'
+          const tension = numberParam(node, 'tension', 0.5)
+          result.profiles = [{
+            profile: {
+              id: `${node.key}.profile`,
+              loops: [{
+                id: `${node.key}.${loopKind}`,
+                closed: true,
+                kind: loopKind,
+                segments: useSplineOutput
+                  ? [{
+                      type: 'spline',
+                      points: closed.map((point) => ({ x: point.x, y: point.y })),
+                      closed: true,
+                      curveType,
+                      tension,
+                      tag: null,
+                      boundaryRoleOverride: loopKind === 'hole' ? 'hole_edge' : 'outer_edge',
+                      railingAllowed: null,
+                      wallAllowed: null,
+                      openingAllowed: null,
+                    }]
+                  : pointsToSegments(closed),
+              }],
+              metadata: { nodeKind: node.kind, sourcePathCount: sourcePaths.length, outputCurveKind: useSplineOutput ? 'spline' : 'line' },
+            },
+            outer: closed,
+            holes: [],
+          }]
+        }
+        break
+      }
       case 'polyline':
       case 'spline':
         result.paths = [createPathFromPoints(node.key, `${node.key}.path`, node.kind === 'spline' ? 'spline' : 'polyline', pointsParam(node))]
@@ -3582,6 +4237,42 @@ export function compileAssemblyGraph(
             holes: hole ? [...outer.holes, hole.outer] : outer.holes,
           }]
         }
+        break
+      }
+      case 'profile_compose_v2': {
+        const outer = collectIncomingProfiles(graph, node, nextCache.nodeResults, 'outer')[0]
+        if (!outer) break
+        const holeProfiles = collectIncomingProfiles(graph, node, nextCache.nodeResults, 'holes')
+        const loops: Profile2D['loops'] = outer.profile.loops.map((loop) => ({
+          ...loop,
+          segments: loop.segments.map((segment) => ({ ...segment })),
+        }))
+        holeProfiles.forEach((holeProfile, holeIndex) => {
+          const outerLoop = holeProfile.profile.loops.find((loop) => loop.kind === 'outer') ?? holeProfile.profile.loops[0]
+          if (!outerLoop) return
+          loops.push({
+            ...outerLoop,
+            id: `${node.key}.hole_${holeIndex + 1}`,
+            kind: 'hole',
+            segments: outerLoop.segments.map((segment) => ({ ...segment })),
+          })
+        })
+        result.profiles = [{
+          profile: {
+            id: `${node.key}.profile`,
+            loops,
+            metadata: {
+              nodeKind: node.kind,
+              sourceOuterProfileId: outer.profile.id,
+              holeCount: holeProfiles.length,
+            },
+          },
+          outer: outer.outer.map((point) => point.clone()),
+          holes: [
+            ...outer.holes.map((hole) => hole.map((point) => point.clone())),
+            ...holeProfiles.map((holeProfile) => holeProfile.outer.map((point) => point.clone())),
+          ],
+        }]
         break
       }
       case 'profile_split': {
@@ -3687,6 +4378,66 @@ export function compileAssemblyGraph(
           }
         })
         result.anchors = result.levels.map((level) => createAnchor(node.key, level.label, new Vector3(0, level.baseElevation, 0)))
+        break
+      }
+      case 'surface_control_set': {
+        const interpolationMode = stringParam(node, 'interpolationMode', 'idw') === 'flat' ? 'flat' : 'idw'
+        const rawControlPoints = Array.isArray(node.params.controlPoints) ? node.params.controlPoints : []
+        const rawBreaklines = Array.isArray(node.params.breaklines) ? node.params.breaklines : []
+        const rawPlateaus = Array.isArray(node.params.plateaus) ? node.params.plateaus : []
+        result.surfaceHeightControls = [{
+          id: `${node.key}.height_controls`,
+          sourceNodeKey: node.key,
+          interpolationMode,
+          controlPoints: rawControlPoints
+            .map((entry, index) => {
+              if (!entry || typeof entry !== 'object') return null
+              const x = typeof (entry as { x?: unknown }).x === 'number' ? Number((entry as { x: number }).x) : null
+              const z = typeof (entry as { z?: unknown }).z === 'number' ? Number((entry as { z: number }).z) : null
+              const elevation = typeof (entry as { elevation?: unknown }).elevation === 'number' ? Number((entry as { elevation: number }).elevation) : null
+              if (x === null || z === null || elevation === null) return null
+              return { id: `${node.key}.control_point_${index + 1}`, point: new Vector2(x, z), elevation }
+            })
+            .filter((entry): entry is RuntimeSurfaceHeightControl['controlPoints'][number] => Boolean(entry)),
+          breaklines: rawBreaklines
+            .map((entry, index) => {
+              if (!entry || typeof entry !== 'object') return null
+              const points = Array.isArray((entry as { points?: unknown[] }).points)
+                ? (entry as { points: Array<{ x?: unknown; z?: unknown }> }).points
+                    .map((point) => (typeof point.x === 'number' && typeof point.z === 'number' ? new Vector2(point.x, point.z) : null))
+                    .filter((point): point is Vector2 => Boolean(point))
+                : []
+              const elevations = Array.isArray((entry as { elevations?: unknown[] }).elevations)
+                ? (entry as { elevations: unknown[] }).elevations
+                    .map((value) => (typeof value === 'number' ? value : null))
+                    .filter((value): value is number => value !== null)
+                : []
+              if (points.length < 2) return null
+              const resolvedElevations = elevations.length === points.length
+                ? elevations
+                : Array.from({ length: points.length }, (_, pointIndex) => elevations[pointIndex] ?? elevations[elevations.length - 1] ?? numberParam(node, 'defaultElevation', 0))
+              return { id: `${node.key}.breakline_${index + 1}`, points, elevations: resolvedElevations }
+            })
+            .filter((entry): entry is RuntimeSurfaceHeightControl['breaklines'][number] => Boolean(entry)),
+          plateaus: rawPlateaus
+            .map((entry, index) => {
+              if (!entry || typeof entry !== 'object') return null
+              const elevation = typeof (entry as { elevation?: unknown }).elevation === 'number' ? Number((entry as { elevation: number }).elevation) : null
+              const points = Array.isArray((entry as { points?: unknown[] }).points)
+                ? (entry as { points: Array<{ x?: unknown; z?: unknown }> }).points
+                    .map((point) => (typeof point.x === 'number' && typeof point.z === 'number' ? new Vector2(point.x, point.z) : null))
+                    .filter((point): point is Vector2 => Boolean(point))
+                : []
+              if (elevation === null || points.length < 3) return null
+              const normalized = resamplePolyline(points, numberParam(node, 'sampleSpacing', 0.35), true)
+              return {
+                id: `${node.key}.plateau_${index + 1}`,
+                profile: runtimeProfileFromLoops(`${node.key}.plateau_${index + 1}.profile`, normalized, [], { sourceNodeKey: node.key }),
+                elevation,
+              }
+            })
+            .filter((entry): entry is RuntimeSurfaceHeightControl['plateaus'][number] => Boolean(entry)),
+        }]
         break
       }
       case 'box': {
@@ -3940,12 +4691,42 @@ export function compileAssemblyGraph(
       case 'ceiling_fill':
       case 'mezzanine':
       case 'mezzanine_ring':
-      case 'mezzanine_surface': {
-        const profile = node.kind === 'mezzanine_surface'
+      case 'mezzanine_surface':
+      case 'mezzanine_surface_v2': {
+        const profile = node.kind === 'mezzanine_surface' || node.kind === 'mezzanine_surface_v2'
           ? (() => {
               const outer = collectIncomingProfiles(graph, node, nextCache.nodeResults, 'outer')[0]
               if (!outer) return null
-              const holes = collectIncomingProfiles(graph, node, nextCache.nodeResults, 'holes').map((entry) => entry.outer)
+              const holeProfiles = collectIncomingProfiles(graph, node, nextCache.nodeResults, 'holes')
+              if (node.kind === 'mezzanine_surface_v2') {
+                const loops: Profile2D['loops'] = outer.profile.loops
+                  .filter((loop) => loop.kind === 'outer')
+                  .map((loop) => ({ ...loop, segments: loop.segments.map((segment) => ({ ...segment })) }))
+                holeProfiles.forEach((holeProfile, holeIndex) => {
+                  const loop = holeProfile.profile.loops.find((entry) => entry.kind === 'outer') ?? holeProfile.profile.loops[0]
+                  if (!loop) return
+                  loops.push({
+                    ...loop,
+                    id: `${node.key}.hole_${holeIndex + 1}`,
+                    kind: 'hole',
+                    segments: loop.segments.map((segment) => ({ ...segment })),
+                  })
+                })
+                return {
+                  profile: {
+                    id: `${node.key}.profile`,
+                    loops,
+                    metadata: {
+                      nodeKind: node.kind,
+                      sourceOuterProfileId: outer.profile.id,
+                      sourceHoleCount: holeProfiles.length,
+                    },
+                  },
+                  outer: outer.outer.map((point) => point.clone()),
+                  holes: holeProfiles.map((entry) => entry.outer.map((point) => point.clone())),
+                } satisfies RuntimeProfile
+              }
+              const holes = holeProfiles.map((entry) => entry.outer)
               return runtimeProfileFromLoops(`${node.key}.profile`, outer.outer, holes, {
                 nodeKind: node.kind,
                 sourceOuterProfileId: outer.profile.id,
@@ -3956,7 +4737,7 @@ export function compileAssemblyGraph(
         if (!profile) break
         const thickness = numberParam(node, 'thickness', 0.18)
         const availableLevels = collectIncomingLevels(graph, node, nextCache.nodeResults)
-        const selectedLevel = (node.kind === 'floor_slab' || node.kind === 'ceiling_slab' || node.kind === 'mezzanine_surface')
+        const selectedLevel = (node.kind === 'floor_slab' || node.kind === 'ceiling_slab' || node.kind === 'mezzanine_surface' || node.kind === 'mezzanine_surface_v2')
           ? selectLevelForNode(node, availableLevels, 'levelIndex', 1)
           : null
         const elevation = node.kind === 'floor_slab'
@@ -3964,47 +4745,62 @@ export function compileAssemblyGraph(
           : node.kind === 'ceiling_slab'
             ? (selectedLevel?.topElevation ?? selectedLevel?.elevation ?? 3) - thickness
             : numberParam(node, 'elevation', node.kind === 'mezzanine' || node.kind === 'mezzanine_ring' ? 1.5 : node.kind === 'ceiling_fill' ? 3 : 0)
-        const geometry = extrudeProfile(profile, thickness)
-        geometry.translate(0, elevation, 0)
-        if (node.kind === 'floor_slab' || node.kind === 'ceiling_slab' || (node.kind === 'mezzanine_surface' && booleanParam(node, 'emitSolid', true))) {
+        const undersideMode = stringParam(node, 'undersideMode', 'flat') === 'vertical_offset' ? 'vertical_offset' : 'flat'
+        const triangulation = resolveCompileTriangulation(graph, node, options)
+        const sampleSpacing = numberParam(node, 'sampleSpacing', 0.35)
+        const surfaceMesh = node.kind === 'mezzanine_surface_v2'
+          ? buildSurfaceMeshV1(node, profile, {
+              bottomElevation: elevation,
+              topElevation: elevation + thickness,
+              thickness,
+              sampleSpacing,
+              undersideMode,
+              triangulation,
+              heightControls: collectIncomingSurfaceHeightControls(graph, node, nextCache.nodeResults),
+              blendTargets: collectIncomingBlendTargets(graph, node, nextCache.nodeResults),
+            }, diagnostics)
+          : null
+        const geometry = surfaceMesh?.geometry ?? extrudeProfile(profile, thickness).translate(0, elevation, 0)
+        if (node.kind === 'floor_slab' || node.kind === 'ceiling_slab' || ((node.kind === 'mezzanine_surface' || node.kind === 'mezzanine_surface_v2') && booleanParam(node, 'emitSolid', true))) {
           result.solids = [{
             spec: {
               id: `${node.key}.solid`,
               sourceNodeKey: node.key,
-              kind: node.kind === 'mezzanine_surface' ? 'landing' : 'slab',
-              profileId: profile.profile.id,
+              kind: node.kind === 'mezzanine_surface' || node.kind === 'mezzanine_surface_v2' ? 'landing' : 'slab',
+              profileId: (surfaceMesh?.sampledProfile ?? profile).profile.id,
               transform: { position: [0, elevation, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
-              params: { thickness, undersideMode: stringParam(node, 'undersideMode', 'flat') },
+              params: { thickness, undersideMode, triangulation },
               metadata: {
                 levelId: selectedLevel?.id ?? null,
-                slabRole: node.kind === 'floor_slab' ? 'floor' : node.kind === 'ceiling_slab' ? 'ceiling' : 'mezzanine_surface',
+                slabRole: node.kind === 'floor_slab' ? 'floor' : node.kind === 'ceiling_slab' ? 'ceiling' : node.kind,
               },
             },
             geometry: geometry.clone(),
-            color: node.kind === 'mezzanine_surface' ? '#869a63' : '#687788',
+            color: node.kind === 'mezzanine_surface' || node.kind === 'mezzanine_surface_v2' ? '#869a63' : '#687788',
           }]
         }
-        result.surfaces = booleanParam(node, 'emitSurface', true) || node.kind !== 'mezzanine_surface'
+        result.surfaces = booleanParam(node, 'emitSurface', true) || (node.kind !== 'mezzanine_surface' && node.kind !== 'mezzanine_surface_v2')
           ? [{
               spec: {
                 id: `${node.key}.surface`,
                 sourceNodeKey: node.key,
-                kind: node.kind === 'mezzanine' || node.kind === 'mezzanine_ring' || node.kind === 'mezzanine_surface' ? 'mezzanine' : node.kind === 'ceiling_fill' ? 'roof' : 'floor',
-                profileId: profile.profile.id,
+                kind: node.kind === 'mezzanine' || node.kind === 'mezzanine_ring' || node.kind === 'mezzanine_surface' || node.kind === 'mezzanine_surface_v2' ? 'mezzanine' : node.kind === 'ceiling_fill' ? 'roof' : 'floor',
+                profileId: (surfaceMesh?.sampledProfile ?? profile).profile.id,
                 elevation,
                 thickness,
                 metadata: {
                   levelId: selectedLevel?.id ?? null,
-                  slabRole: node.kind === 'floor_slab' ? 'floor' : node.kind === 'ceiling_slab' ? 'ceiling' : node.kind === 'mezzanine_surface' ? 'mezzanine_surface' : null,
+                  slabRole: node.kind === 'floor_slab' ? 'floor' : node.kind === 'ceiling_slab' ? 'ceiling' : node.kind,
+                  triangulation,
                 },
               },
               geometry,
-              color: node.kind === 'mezzanine' || node.kind === 'mezzanine_ring' || node.kind === 'mezzanine_surface' ? '#95a56f' : node.kind === 'ceiling_fill' ? '#6d7078' : '#5b6c7c',
+              color: node.kind === 'mezzanine' || node.kind === 'mezzanine_ring' || node.kind === 'mezzanine_surface' || node.kind === 'mezzanine_surface_v2' ? '#95a56f' : node.kind === 'ceiling_fill' ? '#6d7078' : '#5b6c7c',
             }]
           : []
-        if (node.kind === 'mezzanine_surface') {
-          const boundary = boundaryPathsFromProfile(node.key, `${node.key}.surface`, profile, elevation + thickness)
-          result.profiles = [profile]
+        if (node.kind === 'mezzanine_surface' || node.kind === 'mezzanine_surface_v2') {
+          const boundary = boundaryPathsFromProfile(node.key, `${node.key}.surface`, surfaceMesh?.sampledProfile ?? profile, elevation + thickness, sampleSpacing)
+          result.profiles = [surfaceMesh?.sampledProfile ?? profile]
           result.paths = boundary.paths
           result.pathSpecs = boundary.pathSpecs
           result.anchors = [
@@ -4712,6 +5508,44 @@ export function compileAssemblyGraph(
         result.anchors = [createAnchor(node.key, 'Interior Door', new Vector3(0, 1, 0))]
         break
       }
+      case 'stair_surface_blend': {
+        const stair = collectIncomingStairs(graph, node, nextCache.nodeResults, 'stair')[0]
+        if (!stair) break
+        const topConnectionPoint = Array.isArray(stair.metadata.topConnectionPoint) ? stair.metadata.topConnectionPoint as [number, number, number] : null
+        const topLandingCenter = Array.isArray(stair.metadata.topLandingCenter) ? stair.metadata.topLandingCenter as [number, number, number] : topConnectionPoint
+        const topLandingYaw = typeof stair.metadata.topLandingYaw === 'number' ? Number(stair.metadata.topLandingYaw) : 0
+        const width = typeof stair.metadata.width === 'number' ? Number(stair.metadata.width) : numberParam(node, 'openingWidth', 1.6)
+        const landingDepth = typeof stair.metadata.landingDepth === 'number' ? Number(stair.metadata.landingDepth) : numberParam(node, 'preferredBlendDepth', 1.2)
+        if (!topLandingCenter) break
+        const preferredBlendDepth = numberParam(node, 'preferredBlendDepth', Math.max(landingDepth, 1.2))
+        const forward = new Vector2(Math.sin(topLandingYaw), Math.cos(topLandingYaw)).normalize()
+        const lateral = new Vector2(forward.y, -forward.x)
+        const center = new Vector2(topLandingCenter[0], topLandingCenter[2])
+        const halfDepth = Math.max(preferredBlendDepth * 0.5, 0.2)
+        const halfWidth = Math.max(width * 0.5, 0.2)
+        const outline = [
+          center.clone().addScaledVector(forward, halfDepth).addScaledVector(lateral, halfWidth),
+          center.clone().addScaledVector(forward, halfDepth).addScaledVector(lateral, -halfWidth),
+          center.clone().addScaledVector(forward, -halfDepth).addScaledVector(lateral, -halfWidth),
+          center.clone().addScaledVector(forward, -halfDepth).addScaledVector(lateral, halfWidth),
+        ]
+        result.blendTargets = [{
+          id: `${node.key}.blend_target`,
+          sourceNodeKey: node.key,
+          stairId: stair.id,
+          outline,
+          elevation: topLandingCenter[1] + 0.18,
+          tangent: forward,
+          preferredBlendDepth,
+          openingWidth: typeof node.params.openingWidth === 'number' ? numberParam(node, 'openingWidth', width) : null,
+          metadata: {
+            landingId: stair.topLandingId,
+            targetPathId: typeof stair.metadata.targetPathId === 'string' ? stair.metadata.targetPathId : null,
+          },
+        }]
+        result.anchors = [createAnchor(node.key, 'Blend Target', new Vector3(topLandingCenter[0], topLandingCenter[1], topLandingCenter[2]))]
+        break
+      }
       case 'stair_connection': {
         const stairs = collectIncomingStairs(graph, node, nextCache.nodeResults)
         const rooms = collectIncomingRooms(graph, node, nextCache.nodeResults)
@@ -5000,11 +5834,13 @@ export function compileAssemblyGraph(
           const surfaceId = typeof node.params.surfaceId === 'string' ? String(node.params.surfaceId) : null
           const loopId = typeof node.params.loopId === 'string' ? String(node.params.loopId) : null
           const edgeId = typeof node.params.edgeId === 'string' ? String(node.params.edgeId) : null
+          const tag = typeof node.params.tag === 'string' ? String(node.params.tag) : null
           const selected = incomingPaths.filter((path) => {
             if (surfaceId && path.spec.metadata.surfaceId !== surfaceId) return false
             if (loopId && path.spec.metadata.loopId !== loopId) return false
             if (edgeId && path.spec.metadata.edgeId !== edgeId) return false
             if (boundaryRole && path.spec.metadata.boundaryRole !== boundaryRole) return false
+            if (tag && path.spec.metadata.segmentTag !== tag) return false
             return true
           })
           result.paths = selected
@@ -5693,28 +6529,5 @@ export function compileAssemblyGraph(
 }
 
 function segmentsToPolyline(loop: BoundaryLoop) {
-  const points: Vector2[] = []
-
-  for (const segment of loop.segments) {
-    if (segment.type === 'line') {
-      if (points.length === 0) points.push(new Vector2(segment.from.x, segment.from.y))
-      points.push(new Vector2(segment.to.x, segment.to.y))
-      continue
-    }
-
-    if (segment.type === 'arc') {
-      const curve = new ArcCurve(segment.center.x, segment.center.y, segment.radius, segment.startAngle, segment.endAngle, segment.clockwise)
-      const curvePoints = curve.getPoints(16)
-      if (points.length === 0) points.push(curvePoints[0])
-      points.push(...curvePoints.slice(1))
-      continue
-    }
-
-    const curve = new CatmullRomCurve3(segment.points.map((point) => new Vector3(point.x, 0, point.y)), segment.closed)
-    const curvePoints = curve.getPoints(Math.max(8, segment.points.length * 4)).map((point) => new Vector2(point.x, point.z))
-    if (points.length === 0) points.push(curvePoints[0])
-    points.push(...curvePoints.slice(1))
-  }
-
-  return points
+  return sampleBoundaryLoop(loop).points
 }

@@ -218,6 +218,11 @@ function pointsToSegments(points: Vector2[]) {
       type: 'line',
       from: { x: current.x, y: current.y },
       to: { x: next.x, y: next.y },
+      tag: null,
+      boundaryRoleOverride: null,
+      railingAllowed: null,
+      wallAllowed: null,
+      openingAllowed: null,
     })
   }
   return segments
