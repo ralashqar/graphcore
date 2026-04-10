@@ -1860,6 +1860,31 @@ function slabSolidBoundsXZ(solid: RuntimeSolid) {
   }
 }
 
+function solidBoundsXZ(solid: RuntimeSolid) {
+  if (!solid.geometry.boundingBox) solid.geometry.computeBoundingBox()
+  const bounds = solid.geometry.boundingBox
+  if (!bounds) return null
+  return {
+    minX: bounds.min.x,
+    maxX: bounds.max.x,
+    minZ: bounds.min.z,
+    maxZ: bounds.max.z,
+  }
+}
+
+function mergeBoundsXZ(
+  boundsList: Array<{ minX: number; maxX: number; minZ: number; maxZ: number }>,
+  padding = 0,
+) {
+  if (boundsList.length === 0) return null
+  return {
+    minX: Math.min(...boundsList.map((bounds) => bounds.minX)) - padding,
+    maxX: Math.max(...boundsList.map((bounds) => bounds.maxX)) + padding,
+    minZ: Math.min(...boundsList.map((bounds) => bounds.minZ)) - padding,
+    maxZ: Math.max(...boundsList.map((bounds) => bounds.maxZ)) + padding,
+  }
+}
+
 function applySlabVoidsToSolids(solids: RuntimeSolid[], slabVoids: SlabVoidSpec[], diagnostics: string[]) {
   const bySolidId = new Map(solids.map((solid) => [solid.spec.id, solid]))
   for (const slabVoid of slabVoids) {
@@ -1923,39 +1948,6 @@ function overlapAmount(minA: number, maxA: number, minB: number, maxB: number) {
 
 function boundsOverlap(a: { minX: number; maxX: number; minZ: number; maxZ: number }, b: { minX: number; maxX: number; minZ: number; maxZ: number }) {
   return overlapAmount(a.minX, a.maxX, b.minX, b.maxX) > 1e-4 && overlapAmount(a.minZ, a.maxZ, b.minZ, b.maxZ) > 1e-4
-}
-
-function extendStairVoidToTopConnections(
-  voidBounds: { minX: number; maxX: number; minZ: number; maxZ: number },
-  zoneBounds: { minX: number; maxX: number; minZ: number; maxZ: number },
-  stairId: string,
-  toLevelId: string | null,
-  stairConnectionRequests: StairConnectionRequest[],
-  roomById: Map<string, RoomVolume>,
-  profiles: Profile2D[],
-) {
-  if (!toLevelId) return voidBounds
-
-  const next = { ...voidBounds }
-  const relevantRequests = stairConnectionRequests.filter((entry) =>
-    entry.stairId === stairId && entry.connectionMode === 'door' && entry.landing !== 'bottom')
-
-  for (const request of relevantRequests) {
-    for (const roomId of request.targetRoomIds) {
-      const room = roomById.get(roomId)
-      if (!room || room.levelId !== toLevelId) continue
-      const targetBounds = roomProfileBounds(room, profiles)
-      if (!targetBounds) continue
-      const overlapX = overlapAmount(zoneBounds.minX, zoneBounds.maxX, targetBounds.minX, targetBounds.maxX)
-      const overlapZ = overlapAmount(zoneBounds.minZ, zoneBounds.maxZ, targetBounds.minZ, targetBounds.maxZ)
-      if (Math.abs(targetBounds.maxX - zoneBounds.minX) < 0.2 && overlapZ > 0.2) next.minX = zoneBounds.minX
-      if (Math.abs(targetBounds.minX - zoneBounds.maxX) < 0.2 && overlapZ > 0.2) next.maxX = zoneBounds.maxX
-      if (Math.abs(targetBounds.maxZ - zoneBounds.minZ) < 0.2 && overlapX > 0.2) next.minZ = zoneBounds.minZ
-      if (Math.abs(targetBounds.minZ - zoneBounds.maxZ) < 0.2 && overlapX > 0.2) next.maxZ = zoneBounds.maxZ
-    }
-  }
-
-  return next
 }
 
 function regenerateRoomSlabSolid(solid: RuntimeSolid, profile: Profile2D, room: RoomVolume) {
@@ -2199,6 +2191,15 @@ function solveStairGeometry(
     topConnectionPoint = [landingCenter.x + upperDirection * (upperRunLength + width * 0.5), targetElevation, landingCenter.z]
   }
 
+  const occupiedBounds = mergeBoundsXZ(
+    solids
+      .filter((solid) => solid.spec.kind === 'stair' || solid.spec.kind === 'landing')
+      .map((solid) => solidBoundsXZ(solid))
+      .filter((bounds): bounds is { minX: number; maxX: number; minZ: number; maxZ: number } => Boolean(bounds)),
+    0.02,
+  )
+  if (occupiedBounds) voidBounds = occupiedBounds
+
   return {
     solids,
     anchors,
@@ -2325,15 +2326,6 @@ function resolveZoneAdjustedStairs(
         && (request.stairFamily === 'straight' || request.stairFamily === 'mezzanine')
         ? `${toZoneRoom.sourceNodeKey}.${toZoneRoom.levelId}.floor`
         : null
-      const resolvedVoidBounds = extendStairVoidToTopConnections(
-        resolved.voidBounds,
-        resolvedBounds,
-        resolved.stairId,
-        request.toLevelId,
-        stairConnectionRequests,
-        roomById,
-        updatedProfiles,
-      )
       derivedSlabVoids.push({
         id: `${request.sourceNodeKey}.void`,
         sourceNodeKey: request.sourceNodeKey,
@@ -2341,10 +2333,10 @@ function resolveZoneAdjustedStairs(
         hostLevelId: targetLevelId,
         hostSolidId: destinationZoneSlabId,
         voidRole: request.targetElevationMode === 'mezzanine' ? 'mezzanine_connection' : 'stair_run',
-        outerLoop: rectLoopFromBounds(`${request.sourceNodeKey}.void.outer`, resolvedVoidBounds),
+        outerLoop: rectLoopFromBounds(`${request.sourceNodeKey}.void.outer`, resolved.voidBounds),
         bottomElevation: targetElevation - 0.05,
         topElevation: targetElevation + 0.55,
-        metadata: { stairFamily: request.stairFamily },
+        metadata: { stairFamily: request.stairFamily, voidPadding: 0.02 },
       })
     }
     derivedStairs.push({
