@@ -125,6 +125,7 @@ function compiledPartGeometry(part: CompiledMeshPart) {
 function CompiledPartView({ part }: { part: CompiledMeshPart }) {
   const geometry = useMemo(() => compiledPartGeometry(part), [part])
   const useFlatShading = part.kind !== 'line' && (part.metadata.solidKind === 'boolean_result' || part.metadata.solidKind === 'bridge_room')
+  const doubleSidedKinds = new Set(['wall_shell', 'roof', 'slab', 'landing'])
   const lineObject = useMemo(
     () => (part.kind === 'line' ? new Line(geometry, new LineBasicMaterial({ color: part.color })) : null),
     [geometry, part.color, part.kind],
@@ -150,7 +151,7 @@ function CompiledPartView({ part }: { part: CompiledMeshPart }) {
         metalness={part.kind === 'debug' ? 0.15 : 0.08}
         opacity={part.kind === 'debug' ? 0.92 : 1}
         roughness={part.kind === 'surface' ? 0.7 : 0.56}
-        side={part.metadata.solidKind === 'wall_shell' || part.metadata.solidKind === 'roof' ? DoubleSide : undefined}
+        side={typeof part.metadata.solidKind === 'string' && doubleSidedKinds.has(part.metadata.solidKind) ? DoubleSide : undefined}
         transparent={part.kind === 'debug'}
       />
     </mesh>
@@ -274,10 +275,15 @@ function SceneContents({
   showFloor: boolean
   showGrid: boolean
 }) {
+  const fogArgs = modelKind === 'environment'
+    ? ['#0c121b', 48, 140] as const
+    : ['#0c121b', 12, 28] as const
+  const maxDistance = modelKind === 'environment' ? 120 : 30
+
   return (
     <>
       <color attach="background" args={['#0c121b']} />
-      <fog attach="fog" args={['#0c121b', 12, 28]} />
+      <fog attach="fog" args={fogArgs} />
       <ambientLight intensity={0.7} />
       <hemisphereLight intensity={0.8} color="#f5f7ff" groundColor="#1a1f29" />
       <directionalLight
@@ -315,7 +321,7 @@ function SceneContents({
         enableDamping
         dampingFactor={0.08}
         minDistance={1.8}
-        maxDistance={30}
+        maxDistance={maxDistance}
         maxPolarAngle={Math.PI / 2.05}
       />
     </>

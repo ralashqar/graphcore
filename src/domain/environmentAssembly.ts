@@ -61,6 +61,7 @@ export const assemblyNodeKindSchema = z.enum([
   'room',
   'room_shell',
   'room_on_level',
+  'circulation_zone',
   'floor_plate',
   'floor_fill',
   'floor_slab',
@@ -74,9 +75,13 @@ export const assemblyNodeKindSchema = z.enum([
   'switchback_stair',
   'spiral_stair',
   'stair_core',
+  'stair_core_v2',
   'stair_shaft',
   'landing',
   'landing_stack',
+  'landing_stack_v2',
+  'mezzanine_anchor',
+  'stair_connection',
   'stair_to_level',
   'opening',
   'door_opening',
@@ -320,6 +325,10 @@ export const roomVolumeSchema = z.object({
   floorElevation: z.number().default(0),
   ceilingElevation: z.number().default(3),
   adjacencyTags: z.array(z.string()).default([]),
+  topologyOwned: z.boolean().default(false),
+  movablePartition: z.boolean().default(false),
+  zoneOwned: z.boolean().default(false),
+  circulationOwned: z.boolean().default(false),
   metadata: looseRecordSchema.default({}),
 })
 
@@ -448,11 +457,20 @@ export const stairRunSpecSchema = z.object({
   id: z.string(),
   sourceNodeKey: z.string(),
   kind: z.enum(['straight', 'switchback', 'spiral']),
+  stairFamily: z.enum(['straight', 'l_stair', 'u_stair', 'winder_l', 'winder_u', 'spiral', 'mezzanine']).default('straight'),
   fromLevelId: z.string().nullable().default(null),
   toLevelId: z.string().nullable().default(null),
   shaftId: z.string().nullable().default(null),
+  zoneId: z.string().nullable().default(null),
   clearanceEnvelope: z.tuple([z.number(), z.number(), z.number()]).nullable().default(null),
   landingIds: z.array(z.string()).default([]),
+  bottomLandingId: z.string().nullable().default(null),
+  topLandingId: z.string().nullable().default(null),
+  intermediateLandingIds: z.array(z.string()).default([]),
+  requiredEnvelope: z.tuple([z.number(), z.number(), z.number()]).nullable().default(null),
+  resolvedEnvelope: z.tuple([z.number(), z.number(), z.number()]).nullable().default(null),
+  fitStatus: z.enum(['fit', 'autofit', 'overflow', 'invalid']).default('fit'),
+  diagnostics: z.array(z.string()).default([]),
   riseCount: z.number().int().nonnegative().default(0),
   metadata: looseRecordSchema.default({}),
 })
@@ -467,6 +485,9 @@ export const wallSegmentSpecSchema = z.object({
   thickness: z.number().positive().default(0.2),
   height: z.number().positive().default(3),
   ownerRoomIds: z.array(z.string()).default([]),
+  movablePartition: z.boolean().default(false),
+  zoneOwned: z.boolean().default(false),
+  circulationOwned: z.boolean().default(false),
   metadata: looseRecordSchema.default({}),
 })
 
@@ -492,8 +513,10 @@ export const roomAdjacencySpecSchema = z.object({
 export const slabVoidSpecSchema = z.object({
   id: z.string(),
   sourceNodeKey: z.string(),
+  stairId: z.string().nullable().default(null),
   hostLevelId: z.string().nullable().default(null),
   hostSolidId: z.string().nullable().default(null),
+  voidRole: z.enum(['stair_run', 'landing_clearance', 'mezzanine_connection']).default('stair_run'),
   outerLoop: boundaryLoopSchema,
   bottomElevation: z.number().default(0),
   topElevation: z.number().default(0),
@@ -722,6 +745,7 @@ export const environmentAssemblyLibrary: AssemblyTemplateGroup[] = [
       { key: 'room', label: 'Room', groupKey: 'building', defaultTitle: 'Room', summary: 'Create walls and floor from a footprint.', defaultParams: { height: 3, wallThickness: 0.2, floorThickness: 0.2 } },
       { key: 'room_shell', label: 'Room Shell', groupKey: 'building', defaultTitle: 'Room Shell', summary: 'High-level room shell that emits wall faces and anchors.', defaultParams: { height: 3.2, wallThickness: 0.22, floorThickness: 0.18 } },
       { key: 'room_on_level', label: 'Room On Level', groupKey: 'building', defaultTitle: 'Room On Level', summary: 'Create one room volume on a selected explicit level.', defaultParams: { levelIndex: 1, roomName: 'Room', wallThickness: 0.22, floorThickness: 0.18, height: 3.2 } },
+      { key: 'circulation_zone', label: 'Circulation Zone', groupKey: 'building', defaultTitle: 'Circulation Zone', summary: 'Topology-owned stair hall or circulation room with bounded auto-fit.', defaultParams: { levelIndex: 1, roomName: 'Circulation Zone', wallThickness: 0.2, floorThickness: 0.18, height: 3.2, fitMode: 'zone_autofit', maxExpandX: 1.2, maxExpandZ: 1.2, allowPartitionPush: true, clearanceMargin: 0.22 } },
       { key: 'floor_plate', label: 'Floor Plate', groupKey: 'building', defaultTitle: 'Floor Plate', summary: 'Triangulated floor surface.', defaultParams: { elevation: 0, thickness: 0.18 } },
       { key: 'floor_fill', label: 'Floor Fill', groupKey: 'building', defaultTitle: 'Floor Fill', summary: 'Semantic floor fill from a profile.', defaultParams: { elevation: 0, thickness: 0.18 } },
       { key: 'floor_slab', label: 'Floor Slab', groupKey: 'building', defaultTitle: 'Floor Slab', summary: 'Standalone structural slab attached to a level.', defaultParams: { levelIndex: 1, thickness: 0.18 } },
@@ -735,9 +759,13 @@ export const environmentAssemblyLibrary: AssemblyTemplateGroup[] = [
       { key: 'switchback_stair', label: 'Switchback Stair', groupKey: 'building', defaultTitle: 'Switchback Stair', summary: 'Two-run switchback stair with landing.', defaultParams: { width: 2, stepCount: 12, rise: 0.18, tread: 0.28, landingDepth: 2.2 } },
       { key: 'spiral_stair', label: 'Spiral Stair', groupKey: 'building', defaultTitle: 'Spiral Stair', summary: 'Spiral stair for towers.', defaultParams: { radius: 1.4, stepCount: 18, rise: 0.18 } },
       { key: 'stair_core', label: 'Stair Core', groupKey: 'building', defaultTitle: 'Stair Core', summary: 'Host-aware stair core between explicit levels with slab cutouts.', defaultParams: { stairType: 'switchback', fromLevelIndex: 1, toLevelIndex: 2, width: 2.2, depth: 4.6, rise: 0.18, tread: 0.28, landingDepth: 2.4, offset: { x: 0, y: 0, z: 0 } } },
+      { key: 'stair_core_v2', label: 'Stair Core V2', groupKey: 'building', defaultTitle: 'Stair Core', summary: 'Zone-aware stair solver for topology-owned circulation halls.', defaultParams: { stairFamily: 'u_stair', targetElevationMode: 'level_top', fromLevelIndex: 1, toLevelIndex: 2, width: 2.2, tread: 0.28, maxRise: 0.18, landingDepth: 2.4, turnDirection: 'right', headroom: 2.1, wallClearance: 0.16, fitMode: 'zone_autofit' } },
       { key: 'stair_shaft', label: 'Stair Shaft', groupKey: 'building', defaultTitle: 'Stair Shaft', summary: 'Void shaft footprint for stair and circulation cutouts.', defaultParams: { fromLevelIndex: 1, toLevelIndex: 2, width: 2.6, depth: 4.8 } },
       { key: 'landing', label: 'Landing', groupKey: 'building', defaultTitle: 'Landing', summary: 'Landing slab.', defaultParams: { width: 2, depth: 2, thickness: 0.18, elevation: 1.44 } },
       { key: 'landing_stack', label: 'Landing Stack', groupKey: 'building', defaultTitle: 'Landing Stack', summary: 'Generate circulation landings across explicit levels.', defaultParams: { fromLevelIndex: 1, toLevelIndex: 2, width: 2.2, depth: 2.2, thickness: 0.18 } },
+      { key: 'landing_stack_v2', label: 'Landing Stack V2', groupKey: 'building', defaultTitle: 'Landing Stack', summary: 'Zone-aware landing generation across explicit levels.', defaultParams: { fromLevelIndex: 1, toLevelIndex: 2, width: 2.2, depth: 2.2, thickness: 0.18 } },
+      { key: 'mezzanine_anchor', label: 'Mezzanine Anchor', groupKey: 'building', defaultTitle: 'Mezzanine Anchor', summary: 'Explicit stair target on a mezzanine or intermediate elevation.', defaultParams: { elevation: 2.3, offset: { x: 0, y: 0, z: 0 } } },
+      { key: 'stair_connection', label: 'Stair Connection', groupKey: 'building', defaultTitle: 'Stair Connection', summary: 'Connect stair landings to adjacent rooms or wall hosts.', defaultParams: { connectionMode: 'door', landing: 'auto', width: 1.1, height: 2.2, offset: 0 } },
       { key: 'stair_to_level', label: 'Stair To Level', groupKey: 'building', defaultTitle: 'Stair To Level', summary: 'Semantic stair-level connector.' },
       { key: 'opening', label: 'Opening', groupKey: 'building', defaultTitle: 'Opening', summary: 'Generic opening metadata.', defaultParams: { width: 1.4, height: 2.2 } },
       { key: 'door_opening', label: 'Door Opening', groupKey: 'building', defaultTitle: 'Door Opening', summary: 'Door opening attached to wall faces or host solids.', defaultParams: { width: 1.1, height: 2.2 } },
@@ -904,6 +932,7 @@ export function inferAssemblyPorts(kind: AssemblyNodeKind): AssemblyPortDefiniti
     case 'room':
     case 'room_shell':
     case 'room_on_level':
+    case 'circulation_zone':
       return [
         port('profile', 'Profile', 'input', 'profile'),
         port('level', 'Level', 'input', 'level'),
@@ -920,16 +949,36 @@ export function inferAssemblyPorts(kind: AssemblyNodeKind): AssemblyPortDefiniti
     case 'switchback_stair':
     case 'spiral_stair':
     case 'stair_core':
+    case 'stair_core_v2':
     case 'stair_shaft':
     case 'landing':
     case 'landing_stack':
+    case 'landing_stack_v2':
+    case 'mezzanine_anchor':
+    case 'stair_connection':
       return [
-        ...(kind === 'stair_core' || kind === 'landing_stack' || kind === 'stair_shaft'
+        ...(kind === 'stair_core' || kind === 'stair_core_v2' || kind === 'landing_stack' || kind === 'landing_stack_v2' || kind === 'stair_shaft'
           ? [port('levels', 'Levels', 'input', 'level', true)]
           : []),
+        ...(kind === 'stair_core_v2'
+          ? [port('zone', 'Zone', 'input', 'room'), port('target', 'Target', 'input', 'anchor', true)]
+          : []),
+        ...(kind === 'landing_stack_v2'
+          ? [port('zone', 'Zone', 'input', 'room')]
+          : []),
+        ...(kind === 'mezzanine_anchor'
+          ? [port('host', 'Host', 'input', 'solid', true), port('anchor', 'Anchor', 'output', 'anchor')]
+          : []),
+        ...(kind === 'stair_connection'
+          ? [port('stair', 'Stair', 'input', 'stair'), port('rooms', 'Rooms', 'input', 'room', true), port('wall_segment', 'Wall Segment', 'input', 'wall_segment'), port('opening', 'Opening', 'output', 'opening'), port('anchors', 'Anchors', 'output', 'anchor', true)]
+          : []),
+        ...(kind === 'mezzanine_anchor' || kind === 'stair_connection'
+          ? []
+          : [
         port('solid', 'Solid', 'output', 'solid'),
-        ...(kind === 'stair_core' || kind === 'stair_shaft' ? [port('void', 'Void', 'output', 'slab_void', true), port('stair', 'Stair', 'output', 'stair')] : []),
+        ...(kind === 'stair_core' || kind === 'stair_core_v2' || kind === 'stair_shaft' ? [port('void', 'Void', 'output', 'slab_void', true), port('stair', 'Stair', 'output', 'stair')] : []),
         port('anchors', 'Anchors', 'output', 'anchor', true),
+          ]),
       ]
     case 'slab_void':
       return [port('profile', 'Profile', 'input', 'profile'), port('level', 'Level', 'input', 'level'), port('void', 'Void', 'output', 'slab_void')]
@@ -1199,17 +1248,23 @@ export const environmentAssemblyPresets: AssemblyGraphPresetDefinition[] = [
       boundEnvironmentKey: environmentKey ?? null,
       metadata: { presetKey: 'small_house', macroKey: 'room' },
       nodes: [
-        presetNode('polygon', 'house_front_room_profile', { x: 60, y: 100 }, { points: [{ x: -4.5, y: -3 }, { x: 4.5, y: -3 }, { x: 4.5, y: 0 }, { x: -4.5, y: 0 }] }, 'Front Room Profile'),
-        presetNode('polygon', 'house_rear_room_profile', { x: 60, y: 260 }, { points: [{ x: -4.5, y: 0 }, { x: 4.5, y: 0 }, { x: 4.5, y: 3 }, { x: -4.5, y: 3 }] }, 'Rear Room Profile'),
-        presetNode('polygon', 'house_upper_profile', { x: 60, y: 420 }, { points: [{ x: -4.5, y: -3 }, { x: 4.5, y: -3 }, { x: 4.5, y: 3 }, { x: -4.5, y: 3 }] }, 'Upper Floor Profile'),
+        presetNode('polygon', 'house_outline', { x: 60, y: 60 }, { points: [{ x: -4.5, y: -3 }, { x: 4.5, y: -3 }, { x: 4.5, y: 3 }, { x: -4.5, y: 3 }] }, 'House Outline'),
+        presetNode('polygon', 'house_front_room_profile', { x: 60, y: 150 }, { points: [{ x: -4.5, y: -3 }, { x: 1.8, y: -3 }, { x: 1.8, y: 0 }, { x: -4.5, y: 0 }] }, 'Front Room Profile'),
+        presetNode('polygon', 'house_rear_room_profile', { x: 60, y: 300 }, { points: [{ x: -4.5, y: 0 }, { x: 1.8, y: 0 }, { x: 1.8, y: 3 }, { x: -4.5, y: 3 }] }, 'Rear Room Profile'),
+        presetNode('polygon', 'house_upper_profile', { x: 60, y: 450 }, { points: [{ x: -4.5, y: -3 }, { x: 1.8, y: -3 }, { x: 1.8, y: 3 }, { x: -4.5, y: 3 }] }, 'Upper Floor Profile'),
+        presetNode('polygon', 'house_stair_zone_profile', { x: 60, y: 600 }, { points: [{ x: 1.8, y: -3 }, { x: 4.5, y: -3 }, { x: 4.5, y: 3 }, { x: 1.8, y: 3 }] }, 'Stair Hall Profile'),
         presetNode('storey_stack', 'house_storeys', { x: 280, y: 150 }, { count: 2, baseElevation: 0, levelHeight: 3.2, slabThickness: 0.18, labelPrefix: 'House Level' }, 'Storeys'),
         presetNode('room_on_level', 'house_front_room', { x: 520, y: 90 }, { levelIndex: 1, roomName: 'Front Room', height: 3.2, wallThickness: 0.24, floorThickness: 0.18 }, 'Front Room'),
         presetNode('room_on_level', 'house_rear_room', { x: 520, y: 250 }, { levelIndex: 1, roomName: 'Rear Room', height: 3.2, wallThickness: 0.24, floorThickness: 0.18 }, 'Rear Room'),
         presetNode('room_on_level', 'house_upper_room', { x: 520, y: 420 }, { levelIndex: 2, roomName: 'Upper Room', height: 3.2, wallThickness: 0.22, floorThickness: 0.18 }, 'Upper Room'),
+        presetNode('circulation_zone', 'house_stair_zone', { x: 520, y: 580 }, { levelIndex: 1, toLevelIndex: 2, roomName: 'Stair Hall', height: 3.2, wallThickness: 0.2, floorThickness: 0.18, fitMode: 'zone_autofit', maxExpandX: 0.8, maxExpandZ: 0.8, allowPartitionPush: false }, 'Stair Hall'),
         presetNode('door_between_rooms', 'house_interior_door', { x: 760, y: 170 }, { width: 1.05, height: 2.1 }, 'Interior Door'),
-        presetNode('stair_core', 'house_stair', { x: 760, y: 320 }, { stairType: 'switchback', fromLevelIndex: 1, toLevelIndex: 2, width: 2, depth: 4.2, landingDepth: 2.2, offset: { x: 2.1, y: 0, z: -0.1 } }, 'Stair Core'),
+        presetNode('stair_core_v2', 'house_stair', { x: 760, y: 320 }, { stairFamily: 'straight', fromLevelIndex: 1, toLevelIndex: 2, width: 1.55, tread: 0.26, maxRise: 0.2, landingDepth: 1.3, fitMode: 'zone_autofit' }, 'Stair Core'),
+        presetNode('stair_connection', 'house_stair_ground_connection', { x: 760, y: 470 }, { connectionMode: 'door', landing: 'bottom', width: 1.1, height: 2.2 }, 'Ground Stair Doors'),
+        presetNode('stair_connection', 'house_stair_upper_connection', { x: 760, y: 560 }, { connectionMode: 'door', landing: 'top', width: 1.1, height: 2.2 }, 'Upper Stair Door'),
         presetNode('door_opening', 'house_entry', { x: 980, y: 90 }, { side: 'front', width: 1.2, height: 2.2 }, 'Front Door'),
         presetNode('opening_array', 'house_windows', { x: 980, y: 220 }, { side: 'front', count: 3, spacing: 2.4, width: 1.2, height: 1.1, sillHeight: 0.9 }, 'Window Row'),
+        presetNode('opening_array', 'house_upper_windows', { x: 980, y: 320 }, { side: 'front', count: 2, spacing: 2.2, width: 1.05, height: 1.15, sillHeight: 0.95 }, 'Upper Windows'),
         presetNode('gable_roof', 'house_roof', { x: 980, y: 420 }, { height: 1.8, eaves: 0.2 }, 'Gable Roof'),
         presetNode('environment_output', `${graphKey}.output`, { x: 1230, y: 250 }, {}, 'Environment Output'),
       ],
@@ -1217,21 +1272,32 @@ export const environmentAssemblyPresets: AssemblyGraphPresetDefinition[] = [
         presetEdge('front_profile_to_room', 'house_front_room_profile', 'profile', 'house_front_room', 'profile'),
         presetEdge('rear_profile_to_room', 'house_rear_room_profile', 'profile', 'house_rear_room', 'profile'),
         presetEdge('upper_profile_to_room', 'house_upper_profile', 'profile', 'house_upper_room', 'profile'),
+        presetEdge('stair_profile_to_zone', 'house_stair_zone_profile', 'profile', 'house_stair_zone', 'profile'),
         presetEdge('storeys_to_front_room', 'house_storeys', 'levels', 'house_front_room', 'level'),
         presetEdge('storeys_to_rear_room', 'house_storeys', 'levels', 'house_rear_room', 'level'),
         presetEdge('storeys_to_upper_room', 'house_storeys', 'levels', 'house_upper_room', 'level'),
+        presetEdge('storeys_to_zone', 'house_storeys', 'levels', 'house_stair_zone', 'level'),
         presetEdge('front_room_to_interior_door', 'house_front_room', 'room', 'house_interior_door', 'rooms'),
         presetEdge('rear_room_to_interior_door', 'house_rear_room', 'room', 'house_interior_door', 'rooms'),
         presetEdge('storeys_to_stair', 'house_storeys', 'levels', 'house_stair', 'levels'),
+        presetEdge('zone_to_stair', 'house_stair_zone', 'room', 'house_stair', 'zone'),
+        presetEdge('stair_to_ground_connection', 'house_stair', 'stair', 'house_stair_ground_connection', 'stair'),
+        presetEdge('front_room_to_ground_connection', 'house_front_room', 'room', 'house_stair_ground_connection', 'rooms'),
+        presetEdge('rear_room_to_ground_connection', 'house_rear_room', 'room', 'house_stair_ground_connection', 'rooms'),
+        presetEdge('stair_to_upper_connection', 'house_stair', 'stair', 'house_stair_upper_connection', 'stair'),
+        presetEdge('upper_room_to_upper_connection', 'house_upper_room', 'room', 'house_stair_upper_connection', 'rooms'),
         presetEdge('front_room_to_door_host', 'house_front_room', 'solid', 'house_entry', 'host'),
         presetEdge('front_room_to_door_face', 'house_front_room', 'wall_faces', 'house_entry', 'wall_face'),
         presetEdge('front_room_to_windows_host', 'house_front_room', 'solid', 'house_windows', 'host'),
         presetEdge('front_room_to_windows_face', 'house_front_room', 'wall_faces', 'house_windows', 'wall_face'),
-        presetEdge('upper_profile_to_roof', 'house_upper_profile', 'profile', 'house_roof', 'profile'),
+        presetEdge('upper_room_to_upper_windows_host', 'house_upper_room', 'solid', 'house_upper_windows', 'host'),
+        presetEdge('upper_room_to_upper_windows_face', 'house_upper_room', 'wall_faces', 'house_upper_windows', 'wall_face'),
+        presetEdge('outline_to_roof', 'house_outline', 'profile', 'house_roof', 'profile'),
         presetEdge('upper_room_to_roof_host', 'house_upper_room', 'solid', 'house_roof', 'host'),
         presetEdge('front_room_to_output', 'house_front_room', 'solid', `${graphKey}.output`, 'solids'),
         presetEdge('rear_room_to_output', 'house_rear_room', 'solid', `${graphKey}.output`, 'solids'),
         presetEdge('upper_room_to_output', 'house_upper_room', 'solid', `${graphKey}.output`, 'solids'),
+        presetEdge('zone_to_output', 'house_stair_zone', 'solid', `${graphKey}.output`, 'solids'),
         presetEdge('stair_to_output', 'house_stair', 'solid', `${graphKey}.output`, 'solids'),
         presetEdge('roof_to_output', 'house_roof', 'solid', `${graphKey}.output`, 'solids'),
       ],
@@ -1239,33 +1305,115 @@ export const environmentAssemblyPresets: AssemblyGraphPresetDefinition[] = [
   },
   {
     key: 'townhouse_row',
-    label: 'Townhouse Row',
-    summary: 'Repeated townhouse module shells and roofs.',
-    build: (graphKey, environmentKey) => ({
-      id: `preset-graph-${graphKey}`,
-      key: graphKey,
-      name: 'Townhouse Row',
-      summary: 'Row of repeated townhouse masses.',
-      boundEnvironmentKey: environmentKey ?? null,
-      metadata: { presetKey: 'townhouse_row', macroKey: 'wing' },
-      nodes: [
-        presetNode('rectangle', 'townhouse_outline', { x: 70, y: 160 }, { width: 5.5, depth: 7 }, 'Module Outline'),
-        presetNode('room_shell', 'townhouse_module', { x: 320, y: 160 }, { height: 3.6, wallThickness: 0.2, floorThickness: 0.18 }, 'Townhouse Module'),
-        presetNode('gable_roof', 'townhouse_roof', { x: 540, y: 160 }, { height: 1.5, eaves: 0.08 }, 'Module Roof'),
-        presetNode('repeat', 'townhouse_repeat', { x: 760, y: 160 }, { count: 4, offset: { x: 5.6, y: 0, z: 0 } }, 'Repeat Modules'),
-        presetNode('repeat', 'roof_repeat', { x: 760, y: 310 }, { count: 4, offset: { x: 5.6, y: 0, z: 0 } }, 'Repeat Roofs'),
-        presetNode('environment_output', `${graphKey}.output`, { x: 990, y: 220 }, {}, 'Environment Output'),
-      ],
-      edges: [
-        presetEdge('outline_to_module', 'townhouse_outline', 'profile', 'townhouse_module', 'profile'),
-        presetEdge('outline_to_roof', 'townhouse_outline', 'profile', 'townhouse_roof', 'profile'),
-        presetEdge('module_to_roof_host', 'townhouse_module', 'solid', 'townhouse_roof', 'host'),
-        presetEdge('module_to_repeat', 'townhouse_module', 'solid', 'townhouse_repeat', 'source'),
-        presetEdge('roof_to_repeat', 'townhouse_roof', 'solid', 'roof_repeat', 'source'),
-        presetEdge('modules_to_output', 'townhouse_repeat', 'solid', `${graphKey}.output`, 'solids'),
-        presetEdge('roofs_to_output', 'roof_repeat', 'solid', `${graphKey}.output`, 'solids'),
-      ],
-    }),
+    label: 'Townhouse Terrace',
+    summary: 'Three attached townhouses with party walls, explicit storeys, and per-unit stairs.',
+    build: (graphKey, environmentKey) => {
+      const outputKey = `${graphKey}.output`
+      const unitSpecs = [
+        { key: 'west', label: 'West', minX: -7.5, maxX: -2.7, roofHeight: 1.45 },
+        { key: 'middle', label: 'Middle', minX: -2.7, maxX: 2.1, roofHeight: 1.7 },
+        { key: 'east', label: 'East', minX: 2.1, maxX: 6.9, roofHeight: 1.5 },
+      ] as const
+
+      const nodes: AssemblyNodeDefinition[] = [
+        presetNode('storey_stack', 'terrace_storeys', { x: 280, y: 180 }, { count: 2, baseElevation: 0, levelHeight: 3.2, slabThickness: 0.18, labelPrefix: 'Terrace Level' }, 'Terrace Storeys'),
+        presetNode('environment_output', outputKey, { x: 1410, y: 360 }, {}, 'Environment Output'),
+      ]
+
+      const edges: AssemblyEdgeDefinition[] = []
+
+      for (const [index, unit] of unitSpecs.entries()) {
+        const xColumn = 60
+        const roomColumn = 520 + index * 170
+        const stairColumn = 760 + index * 170
+        const facadeColumn = 1030 + index * 170
+        const minX = unit.minX
+        const maxX = unit.maxX
+        const splitX = minX + 2.4
+        const outlineKey = `terrace_${unit.key}_outline`
+        const frontKey = `terrace_${unit.key}_front_profile`
+        const rearKey = `terrace_${unit.key}_rear_profile`
+        const upperKey = `terrace_${unit.key}_upper_profile`
+        const stairZoneProfileKey = `terrace_${unit.key}_stair_zone_profile`
+        const frontRoomKey = `terrace_${unit.key}_front_room`
+        const rearRoomKey = `terrace_${unit.key}_rear_room`
+        const upperRoomKey = `terrace_${unit.key}_upper_room`
+        const stairZoneKey = `terrace_${unit.key}_stair_zone`
+        const stairKey = `terrace_${unit.key}_stair`
+        const interiorDoorKey = `terrace_${unit.key}_interior_door`
+        const groundConnectionKey = `terrace_${unit.key}_stair_ground_connection`
+        const upperConnectionKey = `terrace_${unit.key}_stair_upper_connection`
+        const entryKey = `terrace_${unit.key}_entry`
+        const frontWindowKey = `terrace_${unit.key}_front_windows`
+        const upperWindowKey = `terrace_${unit.key}_upper_windows`
+        const roofKey = `terrace_${unit.key}_roof`
+
+        nodes.push(
+          presetNode('polygon', outlineKey, { x: xColumn, y: 80 + index * 240 }, { points: [{ x: minX, y: -4 }, { x: maxX, y: -4 }, { x: maxX, y: 4 }, { x: minX, y: 4 }] }, `${unit.label} Outline`),
+          presetNode('polygon', frontKey, { x: xColumn, y: 130 + index * 240 }, { points: [{ x: minX, y: -4 }, { x: splitX, y: -4 }, { x: splitX, y: 0 }, { x: minX, y: 0 }] }, `${unit.label} Front Profile`),
+          presetNode('polygon', rearKey, { x: xColumn, y: 180 + index * 240 }, { points: [{ x: minX, y: 0 }, { x: splitX, y: 0 }, { x: splitX, y: 4 }, { x: minX, y: 4 }] }, `${unit.label} Rear Profile`),
+          presetNode('polygon', upperKey, { x: xColumn, y: 230 + index * 240 }, { points: [{ x: minX, y: -4 }, { x: splitX, y: -4 }, { x: splitX, y: 4 }, { x: minX, y: 4 }] }, `${unit.label} Upper Profile`),
+          presetNode('polygon', stairZoneProfileKey, { x: xColumn, y: 280 + index * 240 }, { points: [{ x: splitX, y: -4 }, { x: maxX, y: -4 }, { x: maxX, y: 4 }, { x: splitX, y: 4 }] }, `${unit.label} Stair Hall Profile`),
+          presetNode('room_on_level', frontRoomKey, { x: roomColumn, y: 70 }, { levelIndex: 1, roomName: `${unit.label} Front Parlour`, height: 3.2, wallThickness: 0.22, floorThickness: 0.18 }, `${unit.label} Front Parlour`),
+          presetNode('room_on_level', rearRoomKey, { x: roomColumn, y: 170 }, { levelIndex: 1, roomName: `${unit.label} Rear Kitchen`, height: 3.2, wallThickness: 0.22, floorThickness: 0.18 }, `${unit.label} Rear Kitchen`),
+          presetNode('room_on_level', upperRoomKey, { x: roomColumn, y: 270 }, { levelIndex: 2, roomName: `${unit.label} Upper Suite`, height: 3.2, wallThickness: 0.2, floorThickness: 0.18 }, `${unit.label} Upper Suite`),
+          presetNode('circulation_zone', stairZoneKey, { x: roomColumn, y: 380 }, { levelIndex: 1, toLevelIndex: 2, roomName: `${unit.label} Stair Hall`, height: 3.2, wallThickness: 0.2, floorThickness: 0.18, fitMode: 'zone_autofit', maxExpandX: 0.45, maxExpandZ: 0.6, allowPartitionPush: false }, `${unit.label} Stair Hall`),
+          presetNode('door_between_rooms', interiorDoorKey, { x: stairColumn, y: 70 }, { width: 0.95, height: 2.1 }, `${unit.label} Interior Door`),
+          presetNode('stair_core_v2', stairKey, { x: stairColumn, y: 180 }, { stairFamily: 'straight', fromLevelIndex: 1, toLevelIndex: 2, width: 1.5, tread: 0.26, maxRise: 0.2, landingDepth: 1.35, fitMode: 'zone_autofit' }, `${unit.label} Stair`),
+          presetNode('stair_connection', groundConnectionKey, { x: stairColumn, y: 290 }, { connectionMode: 'door', landing: 'bottom', width: 1, height: 2.2 }, `${unit.label} Ground Stair Doors`),
+          presetNode('stair_connection', upperConnectionKey, { x: stairColumn, y: 380 }, { connectionMode: 'door', landing: 'top', width: 1, height: 2.15 }, `${unit.label} Upper Stair Door`),
+          presetNode('door_opening', entryKey, { x: facadeColumn, y: 70 }, { side: 'front', width: 1.05, height: 2.2 }, `${unit.label} Entry Door`),
+          presetNode('opening_array', frontWindowKey, { x: facadeColumn, y: 170 }, { side: 'front', count: 1, spacing: 1.4, width: 1.05, height: 1.15, sillHeight: 0.88 }, `${unit.label} Front Window`),
+          presetNode('opening_array', upperWindowKey, { x: facadeColumn, y: 270 }, { side: 'front', count: 1, spacing: 1.4, width: 1, height: 1.1, sillHeight: 0.96 }, `${unit.label} Upper Window`),
+          presetNode('gable_roof', roofKey, { x: facadeColumn, y: 380 }, { height: unit.roofHeight, eaves: 0.1 }, `${unit.label} Roof`),
+        )
+
+        edges.push(
+          presetEdge(`${unit.key}_front_profile_to_room`, frontKey, 'profile', frontRoomKey, 'profile'),
+          presetEdge(`${unit.key}_rear_profile_to_room`, rearKey, 'profile', rearRoomKey, 'profile'),
+          presetEdge(`${unit.key}_upper_profile_to_room`, upperKey, 'profile', upperRoomKey, 'profile'),
+          presetEdge(`${unit.key}_stair_profile_to_zone`, stairZoneProfileKey, 'profile', stairZoneKey, 'profile'),
+          presetEdge(`${unit.key}_storeys_to_front_room`, 'terrace_storeys', 'levels', frontRoomKey, 'level'),
+          presetEdge(`${unit.key}_storeys_to_rear_room`, 'terrace_storeys', 'levels', rearRoomKey, 'level'),
+          presetEdge(`${unit.key}_storeys_to_upper_room`, 'terrace_storeys', 'levels', upperRoomKey, 'level'),
+          presetEdge(`${unit.key}_storeys_to_zone`, 'terrace_storeys', 'levels', stairZoneKey, 'level'),
+          presetEdge(`${unit.key}_front_to_interior_door`, frontRoomKey, 'room', interiorDoorKey, 'rooms'),
+          presetEdge(`${unit.key}_rear_to_interior_door`, rearRoomKey, 'room', interiorDoorKey, 'rooms'),
+          presetEdge(`${unit.key}_storeys_to_stair`, 'terrace_storeys', 'levels', stairKey, 'levels'),
+          presetEdge(`${unit.key}_zone_to_stair`, stairZoneKey, 'room', stairKey, 'zone'),
+          presetEdge(`${unit.key}_stair_to_ground_connection`, stairKey, 'stair', groundConnectionKey, 'stair'),
+          presetEdge(`${unit.key}_front_to_ground_connection`, frontRoomKey, 'room', groundConnectionKey, 'rooms'),
+          presetEdge(`${unit.key}_rear_to_ground_connection`, rearRoomKey, 'room', groundConnectionKey, 'rooms'),
+          presetEdge(`${unit.key}_stair_to_upper_connection`, stairKey, 'stair', upperConnectionKey, 'stair'),
+          presetEdge(`${unit.key}_upper_to_upper_connection`, upperRoomKey, 'room', upperConnectionKey, 'rooms'),
+          presetEdge(`${unit.key}_front_to_entry_host`, frontRoomKey, 'solid', entryKey, 'host'),
+          presetEdge(`${unit.key}_front_to_entry_face`, frontRoomKey, 'wall_faces', entryKey, 'wall_face'),
+          presetEdge(`${unit.key}_front_to_front_windows_host`, frontRoomKey, 'solid', frontWindowKey, 'host'),
+          presetEdge(`${unit.key}_front_to_front_windows_face`, frontRoomKey, 'wall_faces', frontWindowKey, 'wall_face'),
+          presetEdge(`${unit.key}_upper_to_upper_windows_host`, upperRoomKey, 'solid', upperWindowKey, 'host'),
+          presetEdge(`${unit.key}_upper_to_upper_windows_face`, upperRoomKey, 'wall_faces', upperWindowKey, 'wall_face'),
+          presetEdge(`${unit.key}_outline_to_roof`, outlineKey, 'profile', roofKey, 'profile'),
+          presetEdge(`${unit.key}_upper_to_roof_host`, upperRoomKey, 'solid', roofKey, 'host'),
+          presetEdge(`${unit.key}_front_to_output`, frontRoomKey, 'solid', outputKey, 'solids'),
+          presetEdge(`${unit.key}_rear_to_output`, rearRoomKey, 'solid', outputKey, 'solids'),
+          presetEdge(`${unit.key}_upper_to_output`, upperRoomKey, 'solid', outputKey, 'solids'),
+          presetEdge(`${unit.key}_zone_to_output`, stairZoneKey, 'solid', outputKey, 'solids'),
+          presetEdge(`${unit.key}_stair_to_output`, stairKey, 'solid', outputKey, 'solids'),
+          presetEdge(`${unit.key}_roof_to_output`, roofKey, 'solid', outputKey, 'solids'),
+        )
+      }
+
+      return {
+        id: `preset-graph-${graphKey}`,
+        key: graphKey,
+        name: 'Townhouse Terrace',
+        summary: 'Three attached townhouses with explicit storeys, party walls, circulation zones, and facade openings.',
+        boundEnvironmentKey: environmentKey ?? null,
+        metadata: { presetKey: 'townhouse_row', macroKey: 'wing' },
+        nodes,
+        edges,
+      }
+    },
   },
   {
     key: 'castle_gatehouse',
@@ -1411,26 +1559,37 @@ export const environmentAssemblyPresets: AssemblyGraphPresetDefinition[] = [
       metadata: { presetKey: 'manor_house_suite', macroKey: 'manor' },
       nodes: [
         presetNode('polygon', 'manor_main_outline', { x: 60, y: 80 }, { points: [{ x: -6, y: -4 }, { x: 6, y: -4 }, { x: 6, y: 4 }, { x: -6, y: 4 }] }, 'Main Block Outline'),
-        presetNode('polygon', 'manor_main_front_outline', { x: 60, y: 200 }, { points: [{ x: -6, y: -4 }, { x: 6, y: -4 }, { x: 6, y: 0 }, { x: -6, y: 0 }] }, 'Front Hall Outline'),
-        presetNode('polygon', 'manor_main_rear_outline', { x: 60, y: 320 }, { points: [{ x: -6, y: 0 }, { x: 6, y: 0 }, { x: 6, y: 4 }, { x: -6, y: 4 }] }, 'Rear Hall Outline'),
+        presetNode('polygon', 'manor_front_west_outline', { x: 60, y: 200 }, { points: [{ x: -6, y: -4 }, { x: -1.6, y: -4 }, { x: -1.6, y: 0.6 }, { x: -6, y: 0.6 }] }, 'Front West Hall Outline'),
+        presetNode('polygon', 'manor_front_east_outline', { x: 60, y: 260 }, { points: [{ x: 1.6, y: -4 }, { x: 6, y: -4 }, { x: 6, y: 0.6 }, { x: 1.6, y: 0.6 }] }, 'Front East Hall Outline'),
+        presetNode('polygon', 'manor_rear_west_outline', { x: 60, y: 320 }, { points: [{ x: -6, y: 0.6 }, { x: -2, y: 0.6 }, { x: -2, y: 4 }, { x: -6, y: 4 }] }, 'Rear West Outline'),
+        presetNode('polygon', 'manor_rear_east_outline', { x: 60, y: 400 }, { points: [{ x: 2, y: 0.6 }, { x: 6, y: 0.6 }, { x: 6, y: 4 }, { x: 2, y: 4 }] }, 'Rear East Outline'),
+        presetNode('polygon', 'manor_stair_zone_outline', { x: 60, y: 480 }, { points: [{ x: -1.6, y: -2.6 }, { x: 1.6, y: -2.6 }, { x: 1.6, y: 4 }, { x: -1.6, y: 4 }] }, 'Stair Hall Outline'),
         presetNode('polygon', 'manor_west_outline', { x: 60, y: 440 }, { points: [{ x: -12, y: -4 }, { x: -6, y: -4 }, { x: -6, y: 0 }, { x: -12, y: 0 }] }, 'West Wing Outline'),
         presetNode('polygon', 'manor_east_outline', { x: 60, y: 560 }, { points: [{ x: 6, y: -4 }, { x: 12, y: -4 }, { x: 12, y: 0 }, { x: 6, y: 0 }] }, 'East Wing Outline'),
         presetNode('storey_stack', 'manor_storeys', { x: 280, y: 220 }, { count: 2, baseElevation: 0, levelHeight: 3.4, slabThickness: 0.2, labelPrefix: 'Manor Level' }, 'Storeys'),
-        presetNode('room_on_level', 'manor_front_ground', { x: 520, y: 60 }, { levelIndex: 1, roomName: 'Front Hall', height: 3.4, wallThickness: 0.24, floorThickness: 0.2 }, 'Front Hall'),
-        presetNode('room_on_level', 'manor_rear_ground', { x: 520, y: 160 }, { levelIndex: 1, roomName: 'Rear Hall', height: 3.4, wallThickness: 0.24, floorThickness: 0.2 }, 'Rear Hall'),
+        presetNode('room_on_level', 'manor_front_west_ground', { x: 520, y: 60 }, { levelIndex: 1, roomName: 'Front West Hall', height: 3.4, wallThickness: 0.24, floorThickness: 0.2 }, 'Front West Hall'),
+        presetNode('room_on_level', 'manor_front_east_ground', { x: 520, y: 120 }, { levelIndex: 1, roomName: 'Front East Hall', height: 3.4, wallThickness: 0.24, floorThickness: 0.2 }, 'Front East Hall'),
+        presetNode('room_on_level', 'manor_rear_west_ground', { x: 520, y: 160 }, { levelIndex: 1, roomName: 'Rear West Chamber', height: 3.4, wallThickness: 0.24, floorThickness: 0.2 }, 'Rear West Chamber'),
+        presetNode('room_on_level', 'manor_rear_east_ground', { x: 520, y: 220 }, { levelIndex: 1, roomName: 'Rear East Chamber', height: 3.4, wallThickness: 0.24, floorThickness: 0.2 }, 'Rear East Chamber'),
+        presetNode('circulation_zone', 'manor_stair_zone', { x: 520, y: 300 }, { levelIndex: 1, toLevelIndex: 2, roomName: 'Grand Stair Hall', height: 3.4, wallThickness: 0.2, floorThickness: 0.18, fitMode: 'zone_autofit', maxExpandX: 1, maxExpandZ: 1, allowPartitionPush: false }, 'Grand Stair Hall'),
         presetNode('room_on_level', 'manor_west_ground', { x: 520, y: 260 }, { levelIndex: 1, roomName: 'West Wing', height: 3.4, wallThickness: 0.22, floorThickness: 0.18 }, 'West Wing'),
         presetNode('room_on_level', 'manor_east_ground', { x: 520, y: 360 }, { levelIndex: 1, roomName: 'East Wing', height: 3.4, wallThickness: 0.22, floorThickness: 0.18 }, 'East Wing'),
-        presetNode('room_on_level', 'manor_front_upper', { x: 520, y: 470 }, { levelIndex: 2, roomName: 'Upper Front Gallery', height: 3.4, wallThickness: 0.22, floorThickness: 0.18 }, 'Upper Front Gallery'),
-        presetNode('room_on_level', 'manor_rear_upper', { x: 520, y: 570 }, { levelIndex: 2, roomName: 'Upper Rear Suite', height: 3.4, wallThickness: 0.22, floorThickness: 0.18 }, 'Upper Rear Suite'),
+        presetNode('room_on_level', 'manor_front_west_upper', { x: 520, y: 470 }, { levelIndex: 2, roomName: 'Upper Front West Gallery', height: 3.4, wallThickness: 0.22, floorThickness: 0.18 }, 'Upper Front West Gallery'),
+        presetNode('room_on_level', 'manor_front_east_upper', { x: 520, y: 520 }, { levelIndex: 2, roomName: 'Upper Front East Gallery', height: 3.4, wallThickness: 0.22, floorThickness: 0.18 }, 'Upper Front East Gallery'),
+        presetNode('room_on_level', 'manor_rear_west_upper', { x: 520, y: 570 }, { levelIndex: 2, roomName: 'Upper Rear West Suite', height: 3.4, wallThickness: 0.22, floorThickness: 0.18 }, 'Upper Rear West Suite'),
+        presetNode('room_on_level', 'manor_rear_east_upper', { x: 520, y: 620 }, { levelIndex: 2, roomName: 'Upper Rear East Suite', height: 3.4, wallThickness: 0.22, floorThickness: 0.18 }, 'Upper Rear East Suite'),
         presetNode('room_on_level', 'manor_west_upper', { x: 520, y: 670 }, { levelIndex: 2, roomName: 'Upper West Wing', height: 3.4, wallThickness: 0.2, floorThickness: 0.18 }, 'Upper West Wing'),
         presetNode('room_on_level', 'manor_east_upper', { x: 520, y: 770 }, { levelIndex: 2, roomName: 'Upper East Wing', height: 3.4, wallThickness: 0.2, floorThickness: 0.18 }, 'Upper East Wing'),
-        presetNode('door_between_rooms', 'manor_rear_door', { x: 760, y: 110 }, { width: 1.2, height: 2.2 }, 'Rear Hall Door'),
         presetNode('door_between_rooms', 'manor_west_door', { x: 760, y: 210 }, { width: 1.1, height: 2.1 }, 'West Interior Door'),
         presetNode('door_between_rooms', 'manor_east_door', { x: 760, y: 310 }, { width: 1.1, height: 2.1 }, 'East Interior Door'),
-        presetNode('stair_core', 'manor_stair', { x: 760, y: 450 }, { stairType: 'switchback', fromLevelIndex: 1, toLevelIndex: 2, width: 2.4, depth: 4.8, landingDepth: 2.6, offset: { x: 0, y: 0, z: 1.2 } }, 'Grand Stair'),
-        presetNode('door_opening', 'manor_entry', { x: 980, y: 70 }, { side: 'front', width: 1.5, height: 2.4 }, 'Main Entry'),
-        presetNode('opening_array', 'manor_front_windows', { x: 980, y: 170 }, { side: 'front', count: 3, spacing: 3, width: 1.25, height: 1.4, sillHeight: 0.9 }, 'Ground Windows'),
-        presetNode('opening_array', 'manor_upper_windows', { x: 980, y: 270 }, { side: 'front', count: 3, spacing: 3, width: 1.15, height: 1.3, sillHeight: 0.95 }, 'Upper Windows'),
+        presetNode('stair_core_v2', 'manor_stair', { x: 760, y: 450 }, { stairFamily: 'straight', fromLevelIndex: 1, toLevelIndex: 2, width: 1.8, tread: 0.25, maxRise: 0.22, landingDepth: 1.6, fitMode: 'zone_autofit' }, 'Grand Stair'),
+        presetNode('stair_connection', 'manor_stair_ground_connection', { x: 760, y: 520 }, { connectionMode: 'door', landing: 'bottom', width: 1.2, height: 2.3 }, 'Ground Stair Doors'),
+        presetNode('stair_connection', 'manor_stair_upper_connection', { x: 760, y: 600 }, { connectionMode: 'door', landing: 'top', width: 1.15, height: 2.2 }, 'Upper Stair Doors'),
+        presetNode('door_opening', 'manor_entry', { x: 980, y: 70 }, { side: 'front', width: 1.4, height: 2.4 }, 'Main Entry'),
+        presetNode('opening_array', 'manor_front_west_windows', { x: 980, y: 170 }, { side: 'front', count: 2, spacing: 1.8, width: 1.1, height: 1.35, sillHeight: 0.9 }, 'Front West Windows'),
+        presetNode('opening_array', 'manor_front_east_windows', { x: 980, y: 220 }, { side: 'front', count: 2, spacing: 1.8, width: 1.1, height: 1.35, sillHeight: 0.9 }, 'Front East Windows'),
+        presetNode('opening_array', 'manor_upper_west_windows', { x: 980, y: 270 }, { side: 'front', count: 2, spacing: 1.8, width: 1.05, height: 1.25, sillHeight: 0.95 }, 'Upper West Windows'),
+        presetNode('opening_array', 'manor_upper_east_windows', { x: 980, y: 320 }, { side: 'front', count: 2, spacing: 1.8, width: 1.05, height: 1.25, sillHeight: 0.95 }, 'Upper East Windows'),
         presetNode('opening_array', 'west_wing_windows', { x: 980, y: 370 }, { side: 'front', count: 2, spacing: 1.8, width: 1.05, height: 1.15, sillHeight: 0.95 }, 'West Wing Windows'),
         presetNode('opening_array', 'east_wing_windows', { x: 980, y: 470 }, { side: 'front', count: 2, spacing: 1.8, width: 1.05, height: 1.15, sillHeight: 0.95 }, 'East Wing Windows'),
         presetNode('gable_roof', 'manor_main_roof', { x: 980, y: 590 }, { height: 2.4, eaves: 0.26 }, 'Main Roof'),
@@ -1439,51 +1598,79 @@ export const environmentAssemblyPresets: AssemblyGraphPresetDefinition[] = [
         presetNode('environment_output', `${graphKey}.output`, { x: 1230, y: 430 }, {}, 'Environment Output'),
       ],
       edges: [
-        presetEdge('front_outline_to_front_ground', 'manor_main_front_outline', 'profile', 'manor_front_ground', 'profile'),
-        presetEdge('rear_outline_to_rear_ground', 'manor_main_rear_outline', 'profile', 'manor_rear_ground', 'profile'),
+        presetEdge('front_west_outline_to_front_ground', 'manor_front_west_outline', 'profile', 'manor_front_west_ground', 'profile'),
+        presetEdge('front_east_outline_to_front_ground', 'manor_front_east_outline', 'profile', 'manor_front_east_ground', 'profile'),
+        presetEdge('rear_west_outline_to_rear_ground', 'manor_rear_west_outline', 'profile', 'manor_rear_west_ground', 'profile'),
+        presetEdge('rear_east_outline_to_rear_ground', 'manor_rear_east_outline', 'profile', 'manor_rear_east_ground', 'profile'),
+        presetEdge('stair_zone_outline_to_zone', 'manor_stair_zone_outline', 'profile', 'manor_stair_zone', 'profile'),
         presetEdge('west_outline_to_ground', 'manor_west_outline', 'profile', 'manor_west_ground', 'profile'),
         presetEdge('east_outline_to_ground', 'manor_east_outline', 'profile', 'manor_east_ground', 'profile'),
-        presetEdge('front_outline_to_front_upper', 'manor_main_front_outline', 'profile', 'manor_front_upper', 'profile'),
-        presetEdge('rear_outline_to_rear_upper', 'manor_main_rear_outline', 'profile', 'manor_rear_upper', 'profile'),
+        presetEdge('front_west_outline_to_front_upper', 'manor_front_west_outline', 'profile', 'manor_front_west_upper', 'profile'),
+        presetEdge('front_east_outline_to_front_upper', 'manor_front_east_outline', 'profile', 'manor_front_east_upper', 'profile'),
+        presetEdge('rear_west_outline_to_rear_upper', 'manor_rear_west_outline', 'profile', 'manor_rear_west_upper', 'profile'),
+        presetEdge('rear_east_outline_to_rear_upper', 'manor_rear_east_outline', 'profile', 'manor_rear_east_upper', 'profile'),
         presetEdge('west_outline_to_upper', 'manor_west_outline', 'profile', 'manor_west_upper', 'profile'),
         presetEdge('east_outline_to_upper', 'manor_east_outline', 'profile', 'manor_east_upper', 'profile'),
-        presetEdge('storeys_to_front_ground', 'manor_storeys', 'levels', 'manor_front_ground', 'level'),
-        presetEdge('storeys_to_rear_ground', 'manor_storeys', 'levels', 'manor_rear_ground', 'level'),
+        presetEdge('storeys_to_front_west_ground', 'manor_storeys', 'levels', 'manor_front_west_ground', 'level'),
+        presetEdge('storeys_to_front_east_ground', 'manor_storeys', 'levels', 'manor_front_east_ground', 'level'),
+        presetEdge('storeys_to_rear_west_ground', 'manor_storeys', 'levels', 'manor_rear_west_ground', 'level'),
+        presetEdge('storeys_to_rear_east_ground', 'manor_storeys', 'levels', 'manor_rear_east_ground', 'level'),
+        presetEdge('storeys_to_stair_zone', 'manor_storeys', 'levels', 'manor_stair_zone', 'level'),
         presetEdge('storeys_to_west_ground', 'manor_storeys', 'levels', 'manor_west_ground', 'level'),
         presetEdge('storeys_to_east_ground', 'manor_storeys', 'levels', 'manor_east_ground', 'level'),
-        presetEdge('storeys_to_front_upper', 'manor_storeys', 'levels', 'manor_front_upper', 'level'),
-        presetEdge('storeys_to_rear_upper', 'manor_storeys', 'levels', 'manor_rear_upper', 'level'),
+        presetEdge('storeys_to_front_west_upper', 'manor_storeys', 'levels', 'manor_front_west_upper', 'level'),
+        presetEdge('storeys_to_front_east_upper', 'manor_storeys', 'levels', 'manor_front_east_upper', 'level'),
+        presetEdge('storeys_to_rear_west_upper', 'manor_storeys', 'levels', 'manor_rear_west_upper', 'level'),
+        presetEdge('storeys_to_rear_east_upper', 'manor_storeys', 'levels', 'manor_rear_east_upper', 'level'),
         presetEdge('storeys_to_west_upper', 'manor_storeys', 'levels', 'manor_west_upper', 'level'),
         presetEdge('storeys_to_east_upper', 'manor_storeys', 'levels', 'manor_east_upper', 'level'),
-        presetEdge('front_ground_to_rear_door', 'manor_front_ground', 'room', 'manor_rear_door', 'rooms'),
-        presetEdge('rear_ground_to_rear_door', 'manor_rear_ground', 'room', 'manor_rear_door', 'rooms'),
-        presetEdge('front_ground_to_west_door', 'manor_front_ground', 'room', 'manor_west_door', 'rooms'),
-        presetEdge('west_ground_to_west_door', 'manor_west_ground', 'room', 'manor_west_door', 'rooms'),
-        presetEdge('front_ground_to_east_door', 'manor_front_ground', 'room', 'manor_east_door', 'rooms'),
-        presetEdge('east_ground_to_east_door', 'manor_east_ground', 'room', 'manor_east_door', 'rooms'),
+        presetEdge('front_west_ground_to_west_door', 'manor_front_west_ground', 'room', 'manor_west_door', 'rooms'),
+        presetEdge('rear_west_ground_to_west_door', 'manor_rear_west_ground', 'room', 'manor_west_door', 'rooms'),
+        presetEdge('front_east_ground_to_east_door', 'manor_front_east_ground', 'room', 'manor_east_door', 'rooms'),
+        presetEdge('rear_east_ground_to_east_door', 'manor_rear_east_ground', 'room', 'manor_east_door', 'rooms'),
         presetEdge('storeys_to_stair', 'manor_storeys', 'levels', 'manor_stair', 'levels'),
-        presetEdge('front_ground_to_entry_host', 'manor_front_ground', 'solid', 'manor_entry', 'host'),
-        presetEdge('front_ground_to_entry_face', 'manor_front_ground', 'wall_faces', 'manor_entry', 'wall_face'),
-        presetEdge('front_ground_to_front_windows_host', 'manor_front_ground', 'solid', 'manor_front_windows', 'host'),
-        presetEdge('front_ground_to_front_windows_face', 'manor_front_ground', 'wall_faces', 'manor_front_windows', 'wall_face'),
-        presetEdge('front_upper_to_upper_windows_host', 'manor_front_upper', 'solid', 'manor_upper_windows', 'host'),
-        presetEdge('front_upper_to_upper_windows_face', 'manor_front_upper', 'wall_faces', 'manor_upper_windows', 'wall_face'),
+        presetEdge('zone_to_stair', 'manor_stair_zone', 'room', 'manor_stair', 'zone'),
+        presetEdge('stair_to_ground_connection', 'manor_stair', 'stair', 'manor_stair_ground_connection', 'stair'),
+        presetEdge('front_west_ground_to_ground_connection', 'manor_front_west_ground', 'room', 'manor_stair_ground_connection', 'rooms'),
+        presetEdge('front_east_ground_to_ground_connection', 'manor_front_east_ground', 'room', 'manor_stair_ground_connection', 'rooms'),
+        presetEdge('rear_west_ground_to_ground_connection', 'manor_rear_west_ground', 'room', 'manor_stair_ground_connection', 'rooms'),
+        presetEdge('rear_east_ground_to_ground_connection', 'manor_rear_east_ground', 'room', 'manor_stair_ground_connection', 'rooms'),
+        presetEdge('stair_to_upper_connection', 'manor_stair', 'stair', 'manor_stair_upper_connection', 'stair'),
+        presetEdge('front_west_upper_to_upper_connection', 'manor_front_west_upper', 'room', 'manor_stair_upper_connection', 'rooms'),
+        presetEdge('front_east_upper_to_upper_connection', 'manor_front_east_upper', 'room', 'manor_stair_upper_connection', 'rooms'),
+        presetEdge('rear_west_upper_to_upper_connection', 'manor_rear_west_upper', 'room', 'manor_stair_upper_connection', 'rooms'),
+        presetEdge('rear_east_upper_to_upper_connection', 'manor_rear_east_upper', 'room', 'manor_stair_upper_connection', 'rooms'),
+        presetEdge('front_west_ground_to_entry_host', 'manor_front_west_ground', 'solid', 'manor_entry', 'host'),
+        presetEdge('front_west_ground_to_entry_face', 'manor_front_west_ground', 'wall_faces', 'manor_entry', 'wall_face'),
+        presetEdge('front_west_ground_to_windows_host', 'manor_front_west_ground', 'solid', 'manor_front_west_windows', 'host'),
+        presetEdge('front_west_ground_to_windows_face', 'manor_front_west_ground', 'wall_faces', 'manor_front_west_windows', 'wall_face'),
+        presetEdge('front_east_ground_to_windows_host', 'manor_front_east_ground', 'solid', 'manor_front_east_windows', 'host'),
+        presetEdge('front_east_ground_to_windows_face', 'manor_front_east_ground', 'wall_faces', 'manor_front_east_windows', 'wall_face'),
+        presetEdge('front_west_upper_to_windows_host', 'manor_front_west_upper', 'solid', 'manor_upper_west_windows', 'host'),
+        presetEdge('front_west_upper_to_windows_face', 'manor_front_west_upper', 'wall_faces', 'manor_upper_west_windows', 'wall_face'),
+        presetEdge('front_east_upper_to_windows_host', 'manor_front_east_upper', 'solid', 'manor_upper_east_windows', 'host'),
+        presetEdge('front_east_upper_to_windows_face', 'manor_front_east_upper', 'wall_faces', 'manor_upper_east_windows', 'wall_face'),
         presetEdge('west_ground_to_windows_host', 'manor_west_ground', 'solid', 'west_wing_windows', 'host'),
         presetEdge('west_ground_to_windows_face', 'manor_west_ground', 'wall_faces', 'west_wing_windows', 'wall_face'),
         presetEdge('east_ground_to_windows_host', 'manor_east_ground', 'solid', 'east_wing_windows', 'host'),
         presetEdge('east_ground_to_windows_face', 'manor_east_ground', 'wall_faces', 'east_wing_windows', 'wall_face'),
         presetEdge('main_outline_to_roof', 'manor_main_outline', 'profile', 'manor_main_roof', 'profile'),
-        presetEdge('rear_upper_to_main_roof', 'manor_rear_upper', 'solid', 'manor_main_roof', 'host'),
+        presetEdge('front_west_upper_to_main_roof', 'manor_front_west_upper', 'solid', 'manor_main_roof', 'host'),
         presetEdge('west_outline_to_roof', 'manor_west_outline', 'profile', 'manor_west_roof', 'profile'),
         presetEdge('west_upper_to_roof', 'manor_west_upper', 'solid', 'manor_west_roof', 'host'),
         presetEdge('east_outline_to_roof', 'manor_east_outline', 'profile', 'manor_east_roof', 'profile'),
         presetEdge('east_upper_to_roof', 'manor_east_upper', 'solid', 'manor_east_roof', 'host'),
-        presetEdge('front_ground_to_output', 'manor_front_ground', 'solid', `${graphKey}.output`, 'solids'),
-        presetEdge('rear_ground_to_output', 'manor_rear_ground', 'solid', `${graphKey}.output`, 'solids'),
+        presetEdge('front_west_ground_to_output', 'manor_front_west_ground', 'solid', `${graphKey}.output`, 'solids'),
+        presetEdge('front_east_ground_to_output', 'manor_front_east_ground', 'solid', `${graphKey}.output`, 'solids'),
+        presetEdge('rear_west_ground_to_output', 'manor_rear_west_ground', 'solid', `${graphKey}.output`, 'solids'),
+        presetEdge('rear_east_ground_to_output', 'manor_rear_east_ground', 'solid', `${graphKey}.output`, 'solids'),
+        presetEdge('stair_zone_to_output', 'manor_stair_zone', 'solid', `${graphKey}.output`, 'solids'),
         presetEdge('west_ground_to_output', 'manor_west_ground', 'solid', `${graphKey}.output`, 'solids'),
         presetEdge('east_ground_to_output', 'manor_east_ground', 'solid', `${graphKey}.output`, 'solids'),
-        presetEdge('front_upper_to_output', 'manor_front_upper', 'solid', `${graphKey}.output`, 'solids'),
-        presetEdge('rear_upper_to_output', 'manor_rear_upper', 'solid', `${graphKey}.output`, 'solids'),
+        presetEdge('front_west_upper_to_output', 'manor_front_west_upper', 'solid', `${graphKey}.output`, 'solids'),
+        presetEdge('front_east_upper_to_output', 'manor_front_east_upper', 'solid', `${graphKey}.output`, 'solids'),
+        presetEdge('rear_west_upper_to_output', 'manor_rear_west_upper', 'solid', `${graphKey}.output`, 'solids'),
+        presetEdge('rear_east_upper_to_output', 'manor_rear_east_upper', 'solid', `${graphKey}.output`, 'solids'),
         presetEdge('west_upper_to_output', 'manor_west_upper', 'solid', `${graphKey}.output`, 'solids'),
         presetEdge('east_upper_to_output', 'manor_east_upper', 'solid', `${graphKey}.output`, 'solids'),
         presetEdge('stair_to_output', 'manor_stair', 'solid', `${graphKey}.output`, 'solids'),
