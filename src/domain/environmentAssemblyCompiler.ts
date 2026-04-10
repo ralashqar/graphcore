@@ -117,6 +117,9 @@ type InteriorDoorRequest = {
   width: number
   height: number
   offset: number
+  preferredPosition?: [number, number, number] | null
+  preferredWallSegmentId?: string | null
+  connectionPlacement?: 'auto' | 'center' | 'landing_aligned'
 }
 
 type WallSegmentOpeningRequest = {
@@ -144,6 +147,7 @@ type StairLayoutRequest = {
   maxRise: number
   landingDepth: number
   turnDirection: 'left' | 'right'
+  preferredExitSide: 'auto' | 'front' | 'back' | 'left' | 'right'
   headroom: number
   wallClearance: number
   clearanceMargin: number
@@ -158,6 +162,7 @@ type StairConnectionRequest = {
   targetWallSegmentId: string | null
   connectionMode: 'door' | 'open_edge' | 'guard_opening'
   landing: 'auto' | 'bottom' | 'top'
+  connectionPlacement: 'auto' | 'center' | 'landing_aligned'
   width: number
   height: number
   offset: number
@@ -1099,7 +1104,16 @@ function chooseWallFaceForNode(node: AssemblyNodeDefinition, faces: WallFaceSpec
   return bySide ?? faces[Math.min(requestedIndex, faces.length - 1)] ?? faces[0]
 }
 
-function subtractGeometryFromSolid(host: RuntimeSolid, cutter: BufferGeometry, sourceNodeKey: string, diagnostics: string[]) {
+function subtractGeometryFromSolid(
+  host: RuntimeSolid,
+  cutter: BufferGeometry,
+  sourceNodeKey: string,
+  diagnostics: string[],
+  options: {
+    preserveSourceNodeKey?: boolean
+    metadata?: Record<string, unknown>
+  } = {},
+) {
   try {
     const brushHost = new Brush(normalizeGeometry(host.geometry))
     const brushCutter = new Brush(normalizeGeometry(cutter))
@@ -1113,7 +1127,11 @@ function subtractGeometryFromSolid(host: RuntimeSolid, cutter: BufferGeometry, s
       ...host,
       spec: {
         ...host.spec,
-        sourceNodeKey,
+        sourceNodeKey: options.preserveSourceNodeKey ? host.spec.sourceNodeKey : sourceNodeKey,
+        metadata: {
+          ...host.spec.metadata,
+          ...(options.metadata ?? {}),
+        },
       },
       geometry,
     } satisfies RuntimeSolid
@@ -1172,6 +1190,235 @@ function roomProfileBounds(room: RoomVolume, profiles: Profile2D[]) {
   const actual = points.map((point) => roundedPointKey(point.x, point.y)).sort()
   if (expected.sort().join('|') !== actual.join('|')) return null
   return { minX, maxX, minZ, maxZ }
+}
+
+function polygonArea(points: Vector2[]) {
+  let area = 0
+  for (let index = 0; index < points.length; index += 1) {
+    const current = points[index]
+    const next = points[(index + 1) % points.length]
+    area += current.x * next.y - next.x * current.y
+  }
+  return area * 0.5
+}
+
+function ensureCounterClockwiseLoop(points: Vector2[]) {
+  return polygonArea(points) >= 0 ? points : [...points].reverse()
+}
+
+function orthogonalUnionLoops(rects: Array<{ minX: number; maxX: number; minZ: number; maxZ: number }>) {
+  type DirectedEdge = { start: Vector2; end: Vector2 }
+  const directedEdges = new Map<string, DirectedEdge>()
+  for (const rect of rects) {
+    const corners = [
+      new Vector2(rect.minX, rect.minZ),
+      new Vector2(rect.maxX, rect.minZ),
+      new Vector2(rect.maxX, rect.maxZ),
+      new Vector2(rect.minX, rect.maxZ),
+    ]
+    for (let index = 0; index < corners.length; index += 1) {
+      const start = corners[index]
+      const end = corners[(index + 1) % corners.length]
+      const key = `${roundedPointKey(start.x, start.y)}|${roundedPointKey(end.x, end.y)}`
+      const reverseKey = `${roundedPointKey(end.x, end.y)}|${roundedPointKey(start.x, start.y)}`
+      if (directedEdges.has(reverseKey)) {
+        directedEdges.delete(reverseKey)
+      } else {
+        directedEdges.set(key, { start, end })
+      }
+    }
+  }
+  const remaining = Array.from(directedEdges.values())
+  const loops: Vector2[][] = []
+  while (remaining.length > 0) {
+    const first = remaining.pop()
+    if (!first) break
+    const loop = [first.start.clone(), first.end.clone()]
+    while (loop[loop.length - 1].distanceToSquared(loop[0]) > 1e-8) {
+      const tail = loop[loop.length - 1]
+      const nextIndex = remaining.findIndex((entry) => entry.start.distanceToSquared(tail) <= 1e-8)
+      if (nextIndex === -1) return null
+      const [next] = remaining.splice(nextIndex, 1)
+      loop.push(next.end.clone())
+    }
+    loop.pop()
+    if (loop.length >= 3) loops.push(loop)
+  }
+  if (loops.length === 0) return null
+  const ranked = loops
+    .map((loop) => ({ loop, area: Math.abs(polygonArea(loop)) }))
+    .sort((left, right) => right.area - left.area)
+  const outer = ensureCounterClockwiseLoop(ranked[0]?.loop ?? [])
+  if (outer.length < 3) return null
+  return {
+    outer,
+    holes: ranked.slice(1).map((entry) => ensureCounterClockwiseLoop(entry.loop)).filter((loop) => loop.length >= 3),
+  }
+}
+
+function rebuildTopologyFloorClusters(
+  profiles: Profile2D[],
+  solids: RuntimeSolid[],
+  rooms: RoomVolume[],
+  openings: OpeningSpec[],
+  slabVoids: SlabVoidSpec[],
+) {
+  const topologyRooms = rooms.filter((room) => isTopologyOwnedRoom(room))
+  if (topologyRooms.length === 0) {
+    return { profiles, solids, slabVoids }
+  }
+
+  const roomById = new Map(topologyRooms.map((room) => [roomLabel(room), room] as const))
+  const boundsByRoomId = new Map(
+    topologyRooms
+      .map((room) => {
+        const bounds = roomProfileBounds(room, profiles)
+        return bounds ? [roomLabel(room), bounds] as const : null
+      })
+      .filter((entry): entry is readonly [string, { minX: number; maxX: number; minZ: number; maxZ: number }] => entry !== null),
+  )
+  const adjacency = new Map<string, Set<string>>()
+  for (const room of topologyRooms) adjacency.set(roomLabel(room), new Set())
+  for (const opening of openings) {
+    if (!opening.fromRoomId || !opening.toRoomId) continue
+    if (!roomById.has(opening.fromRoomId) || !roomById.has(opening.toRoomId)) continue
+    if (opening.openingRole === 'exterior') continue
+    adjacency.get(opening.fromRoomId)?.add(opening.toRoomId)
+    adjacency.get(opening.toRoomId)?.add(opening.fromRoomId)
+  }
+
+  const visited = new Set<string>()
+  const clusterProfiles: Profile2D[] = []
+  const clusterSolids: RuntimeSolid[] = []
+  const replacedSlabIds = new Set<string>()
+  const nextSlabVoids = slabVoids.map((entry) => ({ ...entry, metadata: { ...entry.metadata } }))
+  let clusterIndex = 0
+
+  for (const room of topologyRooms) {
+    const roomId = roomLabel(room)
+    if (visited.has(roomId)) continue
+    const queue = [roomId]
+    const component: string[] = []
+    visited.add(roomId)
+    while (queue.length > 0) {
+      const current = queue.shift()
+      if (!current) continue
+      component.push(current)
+      for (const neighbor of adjacency.get(current) ?? []) {
+        const currentRoom = roomById.get(current)
+        const neighborRoom = roomById.get(neighbor)
+        if (!currentRoom || !neighborRoom) continue
+        if (currentRoom.levelId !== neighborRoom.levelId) continue
+        if (visited.has(neighbor)) continue
+        visited.add(neighbor)
+        queue.push(neighbor)
+      }
+    }
+
+    const componentRooms = component.map((id) => roomById.get(id)).filter((entry): entry is RoomVolume => Boolean(entry))
+    if (componentRooms.length === 0) continue
+    const componentLevelId = componentRooms[0]?.levelId ?? null
+    const rects = componentRooms
+      .map((entry) => boundsByRoomId.get(roomLabel(entry)))
+      .filter((entry): entry is { minX: number; maxX: number; minZ: number; maxZ: number } => Boolean(entry))
+    if (rects.length === 0) continue
+    const union = orthogonalUnionLoops(rects)
+    if (!union) continue
+    const unionOuter = union.holes.length > 0
+      ? [
+          new Vector2(Math.min(...rects.map((entry) => entry.minX)), Math.min(...rects.map((entry) => entry.minZ))),
+          new Vector2(Math.max(...rects.map((entry) => entry.maxX)), Math.min(...rects.map((entry) => entry.minZ))),
+          new Vector2(Math.max(...rects.map((entry) => entry.maxX)), Math.max(...rects.map((entry) => entry.maxZ))),
+          new Vector2(Math.min(...rects.map((entry) => entry.minX)), Math.max(...rects.map((entry) => entry.maxZ))),
+        ]
+      : union.outer
+
+    const memberSlabs = solids.filter((solid) => {
+      if (solid.spec.kind !== 'slab') return false
+      const roomIdValue = typeof solid.spec.metadata.roomId === 'string' ? solid.spec.metadata.roomId : null
+      return roomIdValue ? component.includes(roomIdValue) : false
+    })
+    if (memberSlabs.length === 0) continue
+
+    clusterIndex += 1
+    const clusterFloorId = `floor_cluster.${componentLevelId ?? 'none'}.${clusterIndex}`
+    const memberBounds = {
+      minX: Math.min(...rects.map((entry) => entry.minX)),
+      maxX: Math.max(...rects.map((entry) => entry.maxX)),
+      minZ: Math.min(...rects.map((entry) => entry.minZ)),
+      maxZ: Math.max(...rects.map((entry) => entry.maxZ)),
+    }
+    const matchingVoids = nextSlabVoids.filter((slabVoid) => {
+      if (slabVoid.hostLevelId !== componentLevelId) return false
+      const hostSolidMatch = slabVoid.hostSolidId ? memberSlabs.some((solid) => solid.spec.id === slabVoid.hostSolidId) : false
+      if (hostSolidMatch) return true
+      const outer = segmentsToPolyline(slabVoid.outerLoop)
+      if (outer.length < 3) return false
+      const voidBounds = {
+        minX: Math.min(...outer.map((point) => point.x)),
+        maxX: Math.max(...outer.map((point) => point.x)),
+        minZ: Math.min(...outer.map((point) => point.y)),
+        maxZ: Math.max(...outer.map((point) => point.y)),
+      }
+      return boundsOverlap(memberBounds, voidBounds)
+    })
+    const holes = [
+      ...matchingVoids
+        .map((slabVoid) => segmentsToPolyline(slabVoid.outerLoop))
+        .filter((loop) => loop.length >= 3)
+        .map((loop) => ensureCounterClockwiseLoop(loop)),
+    ]
+    const clusterProfile = runtimeProfileFromLoops(
+      `${clusterFloorId}.profile`,
+      unionOuter,
+      holes,
+      {
+        clusterFloorId,
+        roomIds: component,
+        levelId: componentLevelId,
+      },
+    )
+    const floorElevation = Math.min(...componentRooms.map((entry) => entry.floorElevation))
+    const floorThickness = Math.max(...componentRooms.map((entry) => Number(entry.metadata.floorThickness ?? 0.18)))
+    const geometry = extrudeProfile(clusterProfile, floorThickness)
+    geometry.translate(0, floorElevation, 0)
+    const sourceNodeKey = componentRooms[0]?.sourceNodeKey ?? memberSlabs[0]?.spec.sourceNodeKey ?? 'topology_floor_cluster'
+    clusterProfiles.push(clusterProfile.profile)
+    clusterSolids.push({
+      spec: {
+        id: clusterFloorId,
+        sourceNodeKey,
+        kind: 'slab',
+        profileId: clusterProfile.profile.id,
+        transform: { position: [0, floorElevation, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
+        params: { thickness: floorThickness },
+        metadata: {
+          levelId: componentLevelId,
+          topologyOwned: true,
+          clusterFloorId,
+          roomIds: component,
+          sourceNodeKeys: Array.from(new Set(componentRooms.map((entry) => entry.sourceNodeKey))),
+        },
+      },
+      geometry,
+      color: memberSlabs[0]?.color ?? '#596979',
+    })
+    for (const slab of memberSlabs) replacedSlabIds.add(slab.spec.id)
+    for (const slabVoid of matchingVoids) {
+      slabVoid.hostSolidId = clusterFloorId
+      slabVoid.metadata = {
+        ...slabVoid.metadata,
+        appliedInProfile: true,
+        clusterFloorId,
+      }
+    }
+  }
+
+  return {
+    profiles: [...profiles, ...clusterProfiles],
+    solids: [...solids.filter((solid) => !replacedSlabIds.has(solid.spec.id)), ...clusterSolids],
+    slabVoids: nextSlabVoids,
+  }
 }
 
 function rectProfileFromBounds(id: string, bounds: { minX: number; maxX: number; minZ: number; maxZ: number }, metadata: Record<string, unknown> = {}) {
@@ -1432,24 +1679,33 @@ function resolveInteriorDoorRequests(
         ? Array.from(requested).every((id) => ids.has(id))
         : false
     })
-    if (!adjacency?.wallSegmentId) return []
-    const segment = wallSegmentsById.get(adjacency.wallSegmentId)
+    const preferredSegment = request.preferredWallSegmentId ? wallSegmentsById.get(request.preferredWallSegmentId) : null
+    const segment = preferredSegment ?? (adjacency?.wallSegmentId ? wallSegmentsById.get(adjacency.wallSegmentId) ?? null : null)
     if (!segment) return []
     const tangent = new Vector3(segment.end[0] - segment.start[0], 0, segment.end[2] - segment.start[2]).normalize()
-    const center = wallSegmentHostCenter(segment).addScaledVector(tangent, request.offset)
+    const baseCenter = wallSegmentHostCenter(segment)
+    const projected = request.connectionPlacement !== 'center' && request.preferredPosition
+      ? projectPointToWallSegment(request.preferredPosition, segment)
+      : null
+    const center = projected
+      ? new Vector3(projected.resolvedPosition[0], baseCenter.y, projected.resolvedPosition[2]).addScaledVector(tangent, request.offset)
+      : baseCenter.clone().addScaledVector(tangent, request.offset)
     return [{
       id: request.id,
       sourceNodeKey: request.sourceNodeKey,
       hostSolidId: wallSegmentHostId(segment),
       hostWallSegmentId: segment.id,
-      levelId: adjacency.levelId,
-      fromRoomId: adjacency.fromRoomId,
-      toRoomId: adjacency.toRoomId,
+      levelId: adjacency?.levelId ?? segment.levelId,
+      fromRoomId: adjacency?.fromRoomId ?? segment.ownerRoomIds[0] ?? null,
+      toRoomId: adjacency?.toRoomId ?? segment.ownerRoomIds[1] ?? null,
       kind: 'doorway',
       openingRole: 'interior',
       position: [center.x, segment.start[1] + request.height * 0.5, center.z],
       size: [request.width, request.height, Math.max(segment.thickness + 0.04, 0.12)],
-      metadata: {},
+      metadata: {
+        connectionPlacement: request.connectionPlacement ?? 'auto',
+        projectedFromLanding: Boolean(projected),
+      },
     }]
   })
 }
@@ -1463,6 +1719,26 @@ function pointToWallSegmentDistanceXZ(point: OpeningSpec['position'], segment: W
   const t = Math.max(0, Math.min(1, new Vector3().subVectors(target, start).dot(line) / lengthSq))
   const projection = start.clone().addScaledVector(line, t)
   return projection.distanceTo(target)
+}
+
+function projectPointToWallSegment(point: [number, number, number], segment: WallSegmentSpec) {
+  const start = new Vector3(segment.start[0], 0, segment.start[2])
+  const end = new Vector3(segment.end[0], 0, segment.end[2])
+  const target = new Vector3(point[0], 0, point[2])
+  const line = new Vector3().subVectors(end, start)
+  const lengthSq = Math.max(line.lengthSq(), 1e-8)
+  const tangent = line.clone().normalize()
+  const rawT = new Vector3().subVectors(target, start).dot(line) / lengthSq
+  const clampedT = Math.max(0, Math.min(1, rawT))
+  const projection = start.clone().addScaledVector(line, clampedT)
+  const hostCenter = wallSegmentHostCenter(segment)
+  const midpoint = new Vector3((segment.start[0] + segment.end[0]) * 0.5, hostCenter.y, (segment.start[2] + segment.end[2]) * 0.5)
+  const resolvedPosition = wallSegmentHostCenter(segment).addScaledVector(tangent, projection.clone().sub(new Vector3(midpoint.x, 0, midpoint.z)).dot(tangent))
+  const offset = projection.clone().sub(new Vector3(midpoint.x, 0, midpoint.z)).dot(tangent)
+  return {
+    resolvedPosition: [resolvedPosition.x, hostCenter.y, resolvedPosition.z] as [number, number, number],
+    offset,
+  }
 }
 
 function remapTopologyOpenings(
@@ -1572,22 +1848,50 @@ function applyOpeningsToSolids(
   return solids.map((solid) => bySolidId.get(solid.spec.id) ?? solid)
 }
 
+function slabSolidBoundsXZ(solid: RuntimeSolid) {
+  if (!solid.geometry.boundingBox) solid.geometry.computeBoundingBox()
+  const bounds = solid.geometry.boundingBox
+  if (!bounds) return null
+  return {
+    minX: bounds.min.x,
+    maxX: bounds.max.x,
+    minZ: bounds.min.z,
+    maxZ: bounds.max.z,
+  }
+}
+
 function applySlabVoidsToSolids(solids: RuntimeSolid[], slabVoids: SlabVoidSpec[], diagnostics: string[]) {
   const bySolidId = new Map(solids.map((solid) => [solid.spec.id, solid]))
   for (const slabVoid of slabVoids) {
+    const outer = segmentsToPolyline(slabVoid.outerLoop)
+    if (outer.length < 3) continue
+    const voidBounds = {
+      minX: Math.min(...outer.map((point) => point.x)),
+      maxX: Math.max(...outer.map((point) => point.x)),
+      minZ: Math.min(...outer.map((point) => point.y)),
+      maxZ: Math.max(...outer.map((point) => point.y)),
+    }
     const matching = solids.filter((solid) => {
       if (solid.spec.kind !== 'slab') return false
+      if (solid.spec.id === slabVoid.hostSolidId) return true
       const levelId = typeof solid.spec.metadata.levelId === 'string' ? solid.spec.metadata.levelId : null
-      return levelId === slabVoid.hostLevelId || solid.spec.id === slabVoid.hostSolidId
+      if (levelId !== slabVoid.hostLevelId) return false
+      const hostBounds = slabSolidBoundsXZ(solid)
+      return hostBounds ? boundsOverlap(hostBounds, voidBounds) : false
     })
     for (const host of matching) {
-      const outer = segmentsToPolyline(slabVoid.outerLoop)
-      if (outer.length < 3) continue
       const profile = runtimeProfileFromLoops(`${slabVoid.id}.profile`, outer, [])
       const height = Math.max(slabVoid.topElevation - slabVoid.bottomElevation, 0.4)
       const geometry = extrudeProfile(profile, height)
       geometry.translate(0, slabVoid.bottomElevation, 0)
-      bySolidId.set(host.spec.id, subtractGeometryFromSolid(host, geometry, slabVoid.sourceNodeKey, diagnostics))
+      bySolidId.set(host.spec.id, subtractGeometryFromSolid(host, geometry, slabVoid.sourceNodeKey, diagnostics, {
+        preserveSourceNodeKey: true,
+        metadata: {
+          carvedBy: slabVoid.sourceNodeKey,
+          carvedVoidId: slabVoid.id,
+          clusterFloorId: typeof slabVoid.metadata.clusterFloorId === 'string' ? slabVoid.metadata.clusterFloorId : undefined,
+        },
+      }))
     }
   }
   return solids.map((solid) => bySolidId.get(solid.spec.id) ?? solid)
@@ -1718,6 +2022,11 @@ function solveStairGeometry(
   const stairId = `${request.sourceNodeKey}.stair`
   const baseColor = '#b98f66'
   const landingColor = '#b1a385'
+  let voidBounds = { ...usableBounds }
+  let bottomLandingId: string | null = null
+  let topLandingId: string | null = null
+  let bottomConnectionPoint: [number, number, number] | null = null
+  let topConnectionPoint: [number, number, number] | null = null
 
   if (request.stairFamily === 'spiral') {
     const radius = Math.max(width * 0.5, 0.85)
@@ -1744,6 +2053,8 @@ function solveStairGeometry(
       createAnchor(request.sourceNodeKey, 'Stair Base', new Vector3(midX, fromElevation, midZ)),
       createAnchor(request.sourceNodeKey, 'Stair Top', new Vector3(midX, targetElevation, midZ)),
     )
+    bottomConnectionPoint = [midX, fromElevation, midZ]
+    topConnectionPoint = [midX, targetElevation, midZ]
   } else if (request.stairFamily === 'straight' || request.stairFamily === 'mezzanine') {
     const stepDepth = lowerRunLength / Math.max(riseCount, 1)
     const runStartZ = usableBounds.minZ + clearancePad
@@ -1765,24 +2076,34 @@ function solveStairGeometry(
       })
     }
     const topLandingCenter = new Vector3(midX, targetElevation + 0.09, runStartZ + lowerRunLength + landingDepth * 0.5)
-    landingIds.push(`${request.sourceNodeKey}.landing_top`)
+    const topLandingSolidId = `${request.sourceNodeKey}.landing_top`
+    landingIds.push(topLandingSolidId)
+    topLandingId = topLandingSolidId
     solids.push({
       spec: {
-        id: `${request.sourceNodeKey}.landing_top`,
+        id: topLandingSolidId,
         sourceNodeKey: request.sourceNodeKey,
         kind: 'landing',
         profileId: null,
         transform: { position: [topLandingCenter.x, topLandingCenter.y, topLandingCenter.z], rotation: [0, 0, 0], scale: [1, 1, 1] },
         params: { landingElevation: targetElevation },
-        metadata: { stairFamily: request.stairFamily },
+        metadata: { stairFamily: request.stairFamily, landingRole: 'top' },
       },
       geometry: new BoxGeometry(width, 0.18, landingDepth).translate(topLandingCenter.x, topLandingCenter.y, topLandingCenter.z),
       color: landingColor,
     })
+    voidBounds = {
+      minX: midX - width * 0.5 - request.wallClearance,
+      maxX: midX + width * 0.5 + request.wallClearance,
+      minZ: usableBounds.minZ,
+      maxZ: Math.min(usableBounds.maxZ, runStartZ + lowerRunLength + landingDepth + request.wallClearance + request.clearanceMargin),
+    }
     anchors.push(
       createAnchor(request.sourceNodeKey, 'Stair Base', new Vector3(midX, fromElevation, runStartZ)),
-      createAnchor(request.sourceNodeKey, 'Stair Top', new Vector3(midX, targetElevation, runStartZ + lowerRunLength + landingDepth)),
+      createAnchor(request.sourceNodeKey, 'Stair Top', new Vector3(topLandingCenter.x, targetElevation, topLandingCenter.z)),
     )
+    bottomConnectionPoint = [midX, fromElevation, runStartZ]
+    topConnectionPoint = [topLandingCenter.x, targetElevation, topLandingCenter.z]
   } else if (request.stairFamily === 'u_stair' || request.stairFamily === 'winder_u') {
     const halfGap = Math.max(width * 0.2, request.wallClearance)
     const leftX = midX - (width + halfGap) * 0.5
@@ -1802,6 +2123,8 @@ function solveStairGeometry(
     const landingCenter = new Vector3(midX, landingElevation + 0.09, runStartZ + lowerRunLength + landingDepth * 0.5)
     landingIds.push(`${request.sourceNodeKey}.landing_mid`)
     intermediateLandingIds.push(`${request.sourceNodeKey}.landing_mid`)
+    bottomLandingId = `${request.sourceNodeKey}.landing_mid`
+    topLandingId = `${request.sourceNodeKey}.landing_mid`
     solids.push({
       spec: { id: `${request.sourceNodeKey}.landing_mid`, sourceNodeKey: request.sourceNodeKey, kind: 'landing', profileId: null, transform: { position: [landingCenter.x, landingCenter.y, landingCenter.z], rotation: [0, 0, 0], scale: [1, 1, 1] }, params: { landingElevation }, metadata: { stairFamily: request.stairFamily } },
       geometry: new BoxGeometry(width * 2 + halfGap, 0.18, landingDepth).translate(landingCenter.x, landingCenter.y, landingCenter.z),
@@ -1821,6 +2144,8 @@ function solveStairGeometry(
       createAnchor(request.sourceNodeKey, 'Stair Base', new Vector3(leftX, fromElevation, runStartZ)),
       createAnchor(request.sourceNodeKey, 'Stair Top', new Vector3(rightX, targetElevation, runStartZ + lowerRunLength + landingDepth)),
     )
+    bottomConnectionPoint = [leftX, fromElevation, runStartZ]
+    topConnectionPoint = [rightX, targetElevation, runStartZ + lowerRunLength + landingDepth]
   } else {
     const runStartX = request.turnDirection === 'left' ? usableBounds.maxX - clearancePad - width * 0.5 : usableBounds.minX + clearancePad + width * 0.5
     const runStartZ = usableBounds.minZ + clearancePad
@@ -1843,6 +2168,8 @@ function solveStairGeometry(
     if (request.stairFamily === 'l_stair') {
       landingIds.push(`${request.sourceNodeKey}.landing_mid`)
       intermediateLandingIds.push(`${request.sourceNodeKey}.landing_mid`)
+      bottomLandingId = `${request.sourceNodeKey}.landing_mid`
+      topLandingId = `${request.sourceNodeKey}.landing_mid`
       solids.push({
         spec: { id: `${request.sourceNodeKey}.landing_mid`, sourceNodeKey: request.sourceNodeKey, kind: 'landing', profileId: null, transform: { position: [landingCenter.x, landingCenter.y, landingCenter.z], rotation: [0, Math.PI * 0.5, 0], scale: [1, 1, 1] }, params: { landingElevation }, metadata: { stairFamily: request.stairFamily } },
         geometry: orientedBoxGeometry(landingDepth, 0.18, width, landingCenter, Math.PI * 0.5),
@@ -1868,6 +2195,8 @@ function solveStairGeometry(
       createAnchor(request.sourceNodeKey, 'Stair Base', new Vector3(runStartX, fromElevation, runStartZ)),
       createAnchor(request.sourceNodeKey, 'Stair Top', new Vector3(landingCenter.x + upperDirection * (upperRunLength + width * 0.5), targetElevation, landingCenter.z)),
     )
+    bottomConnectionPoint = [runStartX, fromElevation, runStartZ]
+    topConnectionPoint = [landingCenter.x + upperDirection * (upperRunLength + width * 0.5), targetElevation, landingCenter.z]
   }
 
   return {
@@ -1875,12 +2204,16 @@ function solveStairGeometry(
     anchors,
     stairId,
     landingIds,
+    bottomLandingId,
+    topLandingId,
     intermediateLandingIds,
     lowerRunSteps,
     riseCount,
     requiredEnvelope: [requiredWidth, totalRise, requiredDepth] as [number, number, number],
     resolvedEnvelope: [resolvedBounds.maxX - resolvedBounds.minX, totalRise, resolvedBounds.maxZ - resolvedBounds.minZ] as [number, number, number],
-    voidBounds: usableBounds,
+    voidBounds,
+    bottomConnectionPoint,
+    topConnectionPoint,
     diagnostics,
   }
 }
@@ -1987,6 +2320,11 @@ function resolveZoneAdjustedStairs(
     if (fitStatus !== 'overflow' && fitStatus !== 'invalid') {
       updatedSolids.push(...resolved.solids)
       const targetLevelId = request.targetElevationMode === 'level_top' ? request.toLevelId : request.fromLevelId
+      const destinationZoneSlabId = request.targetElevationMode === 'level_top'
+        && toZoneRoom
+        && (request.stairFamily === 'straight' || request.stairFamily === 'mezzanine')
+        ? `${toZoneRoom.sourceNodeKey}.${toZoneRoom.levelId}.floor`
+        : null
       const resolvedVoidBounds = extendStairVoidToTopConnections(
         resolved.voidBounds,
         resolvedBounds,
@@ -2001,7 +2339,7 @@ function resolveZoneAdjustedStairs(
         sourceNodeKey: request.sourceNodeKey,
         stairId: resolved.stairId,
         hostLevelId: targetLevelId,
-        hostSolidId: null,
+        hostSolidId: destinationZoneSlabId,
         voidRole: request.targetElevationMode === 'mezzanine' ? 'mezzanine_connection' : 'stair_run',
         outerLoop: rectLoopFromBounds(`${request.sourceNodeKey}.void.outer`, resolvedVoidBounds),
         bottomElevation: targetElevation - 0.05,
@@ -2020,8 +2358,8 @@ function resolveZoneAdjustedStairs(
       zoneId: fromZoneRoom.sourceNodeKey,
       clearanceEnvelope: resolved.resolvedEnvelope,
       landingIds: resolved.landingIds,
-      bottomLandingId: resolved.landingIds[0] ?? null,
-      topLandingId: resolved.landingIds[resolved.landingIds.length - 1] ?? null,
+      bottomLandingId: resolved.bottomLandingId,
+      topLandingId: resolved.topLandingId,
       intermediateLandingIds: resolved.intermediateLandingIds,
       requiredEnvelope: resolved.requiredEnvelope,
       resolvedEnvelope: resolved.resolvedEnvelope,
@@ -2032,6 +2370,8 @@ function resolveZoneAdjustedStairs(
         zoneRoomId: fromZoneRoom.roomId,
         topZoneRoomId: toZoneRoom?.roomId ?? null,
         targetElevation,
+        bottomConnectionPoint: resolved.bottomConnectionPoint,
+        topConnectionPoint: resolved.topConnectionPoint,
         connectionRequestIds: stairConnectionRequests.filter((entry) => entry.stairId === resolved.stairId).map((entry) => entry.id),
       },
     })
@@ -3485,17 +3825,12 @@ export function compileAssemblyGraph(
           fitModeParam === 'strict' || fitModeParam === 'zone_autofit_with_partition_push' ? fitModeParam : 'zone_autofit'
         const turnDirectionParam = stringParam(node, 'turnDirection', 'right')
         const turnDirection: StairLayoutRequest['turnDirection'] = turnDirectionParam === 'left' ? 'left' : 'right'
+        const preferredExitSideParam = stringParam(node, 'preferredExitSide', 'auto')
+        const preferredExitSide: StairLayoutRequest['preferredExitSide'] =
+          preferredExitSideParam === 'front' || preferredExitSideParam === 'back' || preferredExitSideParam === 'left' || preferredExitSideParam === 'right'
+            ? preferredExitSideParam
+            : 'auto'
         const fromZoneRoom = zoneRooms.find((room) => room.levelId === fromLevel.id) ?? zoneRooms[0]
-        const profilePool = [...nextCache.nodeResults.values()].flatMap((entry) => entry.profiles?.map((profile) => profile.profile) ?? [])
-        const stairCenterBounds = fromZoneRoom ? roomProfileBounds(fromZoneRoom, profilePool) : null
-        const stairCenter = stairCenterBounds
-          ? new Vector3((stairCenterBounds.minX + stairCenterBounds.maxX) * 0.5, fromLevel.baseElevation ?? fromLevel.elevation, (stairCenterBounds.minZ + stairCenterBounds.maxZ) * 0.5)
-          : new Vector3(0, fromLevel.baseElevation ?? fromLevel.elevation, 0)
-        const targetY = targetAnchor?.position[1] ?? (targetElevationMode === 'explicit' ? numberParam(node, 'targetElevation', fromLevel.topElevation) : (toLevel?.baseElevation ?? fromLevel.topElevation))
-        result.anchors = [
-          createAnchor(node.key, 'Stair Base', stairCenter),
-          createAnchor(node.key, 'Stair Top', new Vector3(stairCenter.x, targetY, stairCenter.z)),
-        ]
         result.stairs = [{
           id: stairId,
           sourceNodeKey: node.key,
@@ -3532,6 +3867,7 @@ export function compileAssemblyGraph(
           maxRise: numberParam(node, 'maxRise', 0.18),
           landingDepth: numberParam(node, 'landingDepth', 2.4),
           turnDirection,
+          preferredExitSide,
           headroom: numberParam(node, 'headroom', 2.1),
           wallClearance: numberParam(node, 'wallClearance', 0.16),
           clearanceMargin: numberParam(node, 'clearanceMargin', 0.22),
@@ -3739,6 +4075,11 @@ export function compileAssemblyGraph(
             : stringParam(node, 'landing', 'auto') === 'top'
               ? 'top'
               : 'auto',
+          connectionPlacement: stringParam(node, 'connectionPlacement', 'landing_aligned') === 'center'
+            ? 'center'
+            : stringParam(node, 'connectionPlacement', 'landing_aligned') === 'auto'
+              ? 'auto'
+              : 'landing_aligned',
           width: numberParam(node, 'width', 1.1),
           height: numberParam(node, 'height', 2.2),
           offset: numberParam(node, 'offset', 0),
@@ -4378,7 +4719,10 @@ export function compileAssemblyGraph(
   const stairConnectionOpenings = stairConnectionRequests.flatMap((request) => {
     const stair = effectiveStairs.find((entry) => entry.id === request.stairId)
     if (!stair) return []
-    if (request.connectionMode !== 'door') return []
+    if (request.connectionMode !== 'door') {
+      diagnostics.push(`Stair connection "${request.id}" uses unsupported mode "${request.connectionMode}".`)
+      return []
+    }
     return request.targetRoomIds.flatMap((targetRoomId) => {
       const targetRoom = effectiveRooms.find((entry) => roomLabel(entry) === targetRoomId)
       if (!targetRoom) return []
@@ -4387,6 +4731,15 @@ export function compileAssemblyGraph(
         : request.landing === 'top'
           ? (stair.metadata.topZoneRoomId ?? stair.metadata.zoneRoomId)
           : (targetRoom.levelId === stair.toLevelId ? (stair.metadata.topZoneRoomId ?? stair.metadata.zoneRoomId) : stair.metadata.zoneRoomId)
+      const preferredPosition = request.connectionPlacement === 'center'
+        ? null
+        : request.landing === 'bottom'
+          ? (Array.isArray(stair.metadata.bottomConnectionPoint) ? stair.metadata.bottomConnectionPoint as [number, number, number] : null)
+          : request.landing === 'top'
+            ? (Array.isArray(stair.metadata.topConnectionPoint) ? stair.metadata.topConnectionPoint as [number, number, number] : null)
+            : (targetRoom.levelId === stair.toLevelId
+                ? (Array.isArray(stair.metadata.topConnectionPoint) ? stair.metadata.topConnectionPoint as [number, number, number] : null)
+                : (Array.isArray(stair.metadata.bottomConnectionPoint) ? stair.metadata.bottomConnectionPoint as [number, number, number] : null))
       return zoneRoomId
         ? [{
             id: `${request.id}.${targetRoomId}`,
@@ -4395,6 +4748,9 @@ export function compileAssemblyGraph(
             width: request.width,
             height: request.height,
             offset: request.offset,
+            preferredPosition,
+            preferredWallSegmentId: request.targetWallSegmentId,
+            connectionPlacement: request.connectionPlacement,
           } satisfies InteriorDoorRequest]
         : []
     })
@@ -4426,14 +4782,18 @@ export function compileAssemblyGraph(
   })
   const openingsWithTopology = remapTopologyOpenings([...openings, ...allInteriorOpenings, ...manualWallSegmentOpenings], topologyWallSegments, diagnostics)
   const windowsWithTopology = remapTopologyWindows(windows, openingsWithTopology)
-  const solidsWithTopology = [...effectiveSolids, ...derivedWallSolids]
-  const solidsAfterSlabVoids = applySlabVoidsToSolids(solidsWithTopology, effectiveSlabVoids, diagnostics)
+  const clusteredFloors = rebuildTopologyFloorClusters(effectiveProfiles, effectiveSolids, effectiveRooms, openingsWithTopology, effectiveSlabVoids)
+  const clusteredProfiles = clusteredFloors.profiles
+  const clusteredSlabVoids = clusteredFloors.slabVoids
+  const solidsWithTopology = [...clusteredFloors.solids, ...derivedWallSolids]
+  const slabVoidsForBooleanPass = clusteredSlabVoids.filter((entry) => entry.metadata.appliedInProfile !== true)
+  const solidsAfterSlabVoids = applySlabVoidsToSolids(solidsWithTopology, slabVoidsForBooleanPass, diagnostics)
   const carvedSolids = applyOpeningsToSolids(solidsAfterSlabVoids, openingsWithTopology, diagnostics, topologyWallSegments)
 
   const spatialDocument: SpatialDocument = {
     id: `spatial.${graph.key}`,
     graphKey: graph.key,
-    profiles: effectiveProfiles,
+    profiles: clusteredProfiles,
     solids: carvedSolids.map((entry) => entry.spec),
     surfaces: surfaces.map((entry) => entry.spec),
     structureFootprints,
@@ -4453,7 +4813,7 @@ export function compileAssemblyGraph(
     roofs,
     bridges,
     stairs: effectiveStairs,
-    slabVoids: effectiveSlabVoids,
+    slabVoids: clusteredSlabVoids,
     paths,
     arrayPlacements,
     diagnostics,
@@ -4489,7 +4849,7 @@ export function compileAssemblyGraph(
     ...topologyWallFaces.map((face, index) =>
       linePart(`wallface.${index + 1}`, face.sourceNodeKey, [new Vector3(face.start[0], face.start[1], face.start[2]), new Vector3(face.end[0], face.end[1], face.end[2])], '#f97316', { wallFaceId: face.id }),
     ),
-    ...anchors.map((anchor, index) => {
+    ...effectiveAnchors.map((anchor, index) => {
       const geometry = new SphereGeometry(0.12, 8, 8)
       geometry.translate(anchor.position[0], anchor.position[1], anchor.position[2])
       return geometryToPart(`anchor.${index + 1}`, anchor.sourceNodeKey, 'debug', geometry, '#fbbf24', { label: anchor.label })
@@ -4504,8 +4864,8 @@ export function compileAssemblyGraph(
     ),
     ...connectors
       .map((connector, index) => {
-        const from = anchors.find((anchor) => anchor.id === connector.fromAnchorId)
-        const to = anchors.find((anchor) => anchor.id === connector.toAnchorId)
+        const from = effectiveAnchors.find((anchor) => anchor.id === connector.fromAnchorId)
+        const to = effectiveAnchors.find((anchor) => anchor.id === connector.toAnchorId)
         if (!from || !to) return null
         return linePart(
           `connector.${index + 1}`,
@@ -4536,7 +4896,7 @@ export function compileAssemblyGraph(
     windows: windowsWithTopology,
     bridges,
     stairs: effectiveStairs,
-    slabVoids: effectiveSlabVoids,
+    slabVoids: clusteredSlabVoids,
     rooms: effectiveRooms,
     diagnostics,
     metadata: {
