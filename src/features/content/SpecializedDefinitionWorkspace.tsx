@@ -107,7 +107,10 @@ export function SpecializedDefinitionWorkspace({
     [archetypes, kind],
   )
   const imageAssets = assets.filter((asset) => asset.kind === 'image')
-  const effectiveSelection = selectedDefinition?.kind === kind ? selectedDefinition : filteredDefinitions[0] ?? null
+  const hasSelectedDefinitionForKind =
+    selectedDefinition?.kind === kind
+    && filteredDefinitions.some((definition) => definition.key === selectedDefinition.key)
+  const effectiveSelection = hasSelectedDefinitionForKind ? selectedDefinition : filteredDefinitions[0] ?? null
   const supports3dPanel = (kind === 'character' || kind === 'environment') && Boolean(effectiveSelection)
   const supportsGraphPanel = kind === 'environment' && Boolean(effectiveSelection)
   const selectedCharacterProfile = useMemo(() => {
@@ -249,10 +252,10 @@ export function SpecializedDefinitionWorkspace({
   }
 
   useEffect(() => {
-    if (effectiveSelection && selectedDefinition?.key !== effectiveSelection.key) {
+    if (!hasSelectedDefinitionForKind && effectiveSelection && selectedDefinition?.key !== effectiveSelection.key) {
       onSelectDefinition(effectiveSelection.key)
     }
-  }, [effectiveSelection, onSelectDefinition, selectedDefinition?.key])
+  }, [effectiveSelection, hasSelectedDefinitionForKind, onSelectDefinition, selectedDefinition?.key])
 
   useEffect(() => {
     if (kind !== 'character' && kind !== 'environment' && panelMode !== 'details') {
@@ -265,6 +268,10 @@ export function SpecializedDefinitionWorkspace({
 
   useEffect(() => {
     setCharacterConceptMessage(null)
+  }, [effectiveSelection?.key])
+
+  useEffect(() => {
+    setIsSelectionIconPickerOpen(false)
   }, [effectiveSelection?.key])
 
   return (
@@ -317,7 +324,7 @@ export function SpecializedDefinitionWorkspace({
           <div className="rail-list">
             {filteredDefinitions.map((definition) => (
               <button
-                key={definition.id}
+                key={`${definition.id}:${definition.key}`}
                 className={definition.key === effectiveSelection?.key ? 'rail-button item-row is-active' : 'rail-button item-row'}
                 onClick={() => onSelectDefinition(definition.key)}
                 type="button"
@@ -371,7 +378,7 @@ export function SpecializedDefinitionWorkspace({
       <section className="main-surface detail-surface item-editor-surface">
         {effectiveSelection ? (
           supports3dPanel ? (
-            <div className="character-panel-shell">
+            <div key={effectiveSelection.key} className="character-panel-shell">
               {effectiveSelection.kind === 'character' ? (
                 <>
                   <div className="character-concept-header">

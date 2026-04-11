@@ -109,6 +109,53 @@ function dedupeAssetsByKey(snapshot: ProjectSnapshot) {
   }
 }
 
+function normalizeDefinitionIdentityConflicts(snapshot: ProjectSnapshot) {
+  const seenIds = new Set<string>()
+  const seenKeysByKind = new Map<DefinitionBase['kind'], string[]>()
+  let changed = false
+
+  const normalizedDefinitions = snapshot.definitions.map((definition) => {
+    let nextDefinition = definition
+
+    if (!nextDefinition.id || seenIds.has(nextDefinition.id)) {
+      nextDefinition = { ...nextDefinition, id: createLocalEntityId('definition-item') }
+      changed = true
+    }
+    seenIds.add(nextDefinition.id)
+
+    const existingKindKeys = seenKeysByKind.get(nextDefinition.kind) ?? []
+    const currentPrefix = `${nextDefinition.kind}.`
+    const currentSuffix = nextDefinition.key.startsWith(currentPrefix)
+      ? nextDefinition.key.slice(currentPrefix.length)
+      : nextDefinition.key
+
+    if (!nextDefinition.key || existingKindKeys.includes(currentSuffix)) {
+      const nextSuffix = uniqueKey(existingKindKeys, currentSuffix || nextDefinition.name || nextDefinition.kind)
+      nextDefinition = { ...nextDefinition, key: `${nextDefinition.kind}.${nextSuffix}` }
+      changed = true
+    }
+
+    const resolvedKey = nextDefinition.key.startsWith(currentPrefix)
+      ? nextDefinition.key.slice(currentPrefix.length)
+      : nextDefinition.key
+    seenKeysByKind.set(nextDefinition.kind, [...existingKindKeys, resolvedKey])
+    return nextDefinition
+  })
+
+  if (!changed) {
+    return snapshot
+  }
+
+  return {
+    ...snapshot,
+    definitions: normalizedDefinitions,
+  }
+}
+
+function normalizeSnapshot(snapshot: ProjectSnapshot) {
+  return normalizeDefinitionIdentityConflicts(dedupeAssetsByKey(snapshot))
+}
+
 function clearAssetReferences<T>(value: T, assetKey: string): T {
   if (Array.isArray(value)) {
     return value.map((entry) => clearAssetReferences(entry, assetKey)) as T
@@ -225,7 +272,7 @@ export default function App() {
     state: { snapshot: ProjectSnapshot; source: 'supabase' | 'demo'; reason?: string },
     options?: { preserveUnsavedIfSameDraft?: boolean },
   ) {
-    const normalizedIncomingSnapshot = dedupeAssetsByKey(state.snapshot)
+    const normalizedIncomingSnapshot = normalizeSnapshot(state.snapshot)
     if (
       options?.preserveUnsavedIfSameDraft
       && hasLocalSnapshotChanges
@@ -243,7 +290,7 @@ export default function App() {
       cachedUnsavedSnapshot
       && cachedUnsavedSnapshot.project.id === normalizedIncomingSnapshot.project.id
       && cachedUnsavedSnapshot.draft.id === normalizedIncomingSnapshot.draft.id
-        ? dedupeAssetsByKey(cachedUnsavedSnapshot)
+        ? normalizeSnapshot(cachedUnsavedSnapshot)
         : normalizedIncomingSnapshot
     const restoredUnsavedSnapshot = snapshotToHydrate !== state.snapshot
 
@@ -417,7 +464,7 @@ export default function App() {
 
   useEffect(() => {
     if (!snapshot) return
-    const normalizedSnapshot = dedupeAssetsByKey(snapshot)
+    const normalizedSnapshot = normalizeSnapshot(snapshot)
     if (normalizedSnapshot === snapshot) return
 
     setSnapshot(normalizedSnapshot)
@@ -485,7 +532,7 @@ export default function App() {
   function applySnapshotUpdate(mutator: (current: ProjectSnapshot) => ProjectSnapshot) {
     setSnapshot((current) => {
       if (!current) return current
-      const next = dedupeAssetsByKey(mutator(current))
+      const next = normalizeSnapshot(mutator(current))
       setHasLocalSnapshotChanges(true)
       setBundle(compileBundle(next))
       return next
@@ -634,15 +681,24 @@ export default function App() {
 
   function createDefinitionOfKind(kindOverride: DefinitionBase['kind'], archetypeKey: string | null = null) {
     if (!snapshot) return
-    const existingKeys = snapshot.definitions.map((definition) => definition.key)
     const archetype = snapshot.archetypes.find((candidate) => candidate.key === archetypeKey) ?? null
     const kind = archetype?.appliesToKind ?? kindOverride
-    const suffix = uniqueKey(existingKeys, archetype ? archetype.name : kind)
+    const kindPrefix = `${kind}.`
+    const existingKindKeys = snapshot.definitions
+      .filter((definition) => definition.kind === kind)
+      .map((definition) => definition.key.startsWith(kindPrefix) ? definition.key.slice(kindPrefix.length) : definition.key)
+    const kindLabel = kind.replace(/_/g, ' ')
+    const baseName = archetype ? `New ${archetype.name}` : `New ${kindLabel.charAt(0).toUpperCase() + kindLabel.slice(1)}`
+    const uniqueName = uniqueValue(
+      snapshot.definitions.filter((definition) => definition.kind === kind).map((definition) => definition.name),
+      baseName,
+    )
+    const suffix = uniqueKey(existingKindKeys, uniqueName)
     const nextItem: DefinitionBase = {
-      id: `definition-item-${Date.now()}`,
+      id: createLocalEntityId('definition-item'),
       key: `${kind}.${suffix}`,
       kind,
-      name: archetype ? `New ${archetype.name}` : `New ${kind.charAt(0).toUpperCase() + kind.slice(1)}`,
+      name: uniqueName,
       summary: '',
       status: 'draft',
       iconAssetKey: null,
@@ -823,7 +879,7 @@ export default function App() {
     const existingKeys = snapshot.archetypes.map((archetype) => archetype.key)
     const suffix = uniqueKey(existingKeys, 'item_archetype')
     const nextArchetype: ArchetypeDefinition = {
-      id: `archetype-${Date.now()}`,
+      id: createLocalEntityId('archetype'),
       key: `item.${suffix}`,
       name: 'New Archetype',
       summary: '',
@@ -839,8 +895,28 @@ export default function App() {
   }
 
   function updateItemIdentity(key: string, changes: Partial<Pick<DefinitionBase, 'name' | 'key' | 'summary' | 'iconAssetKey' | 'archetypeKey'>>) {
-    applySnapshotUpdate((current) => ({ ...current, definitions: current.definitions.map((definition) => (definition.key === key ? { ...definition, ...changes } : definition)) }))
-    if (changes.key && selectedDefinitionKey === key) setSelectedDefinitionKey(changes.key)
+    let resolvedKey = changes.key
+    applySnapshotUpdate((current) => {
+      const nextDefinitions = current.definitions.map((definition) => {
+        if (definition.key !== key) return definition
+
+        if (typeof changes.key === 'string' && changes.key !== key) {
+          resolvedKey = uniqueValue(
+            current.definitions.filter((candidate) => candidate.key !== key).map((candidate) => candidate.key),
+            changes.key,
+          )
+        }
+
+        return {
+          ...definition,
+          ...changes,
+          ...(resolvedKey ? { key: resolvedKey } : {}),
+        }
+      })
+
+      return { ...current, definitions: nextDefinitions }
+    })
+    if (resolvedKey && selectedDefinitionKey === key) setSelectedDefinitionKey(resolvedKey)
   }
 
   function updateItemFieldValue(itemKey: string, fieldKey: string, value: string | number | boolean | null) {

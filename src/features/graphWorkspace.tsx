@@ -148,7 +148,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [onClearSelection, onDeleteEdge, onDeleteNode, onDuplicateNode, selectedEdge, selectedGraph, selectedNode])
 
-  function createGraph(graphType: GraphType) {
+  function createGraph(graphType: GraphType = 'narrative_flow') {
     const suffix = `${graphType}_${snapshotGraphs.length + 1}`
     onCreateGraph({
       name: graphType === 'narrative_flow' ? 'New Narrative Flow' : graphType === 'quest_flow' ? 'New Quest Flow' : 'New System Graph',
@@ -364,11 +364,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
         </div>
         {railMode === 'graphs' ? (
           <div className="graph-rail-stack">
-            <div className="collection-meta-grid">
-              <button className="primary-button compact" onClick={() => createGraph('narrative_flow')} type="button">+ Narrative</button>
-              <button className="ghost-button compact" onClick={() => createGraph('quest_flow')} type="button">+ Quest</button>
-            </div>
-            <button className="ghost-button compact" onClick={() => createGraph('system_graph')} type="button">+ System graph</button>
+            <button className="primary-button compact" onClick={() => createGraph()} type="button">+ New Graph</button>
             <div className="rail-list">
               {snapshotGraphs.map((graph) => (
                 <button key={graph.key} className={graph.key === selectedGraph?.key ? 'rail-button is-active' : 'rail-button'} onClick={() => onSelectGraph(graph.key)} type="button">

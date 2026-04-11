@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { isSupportedMeshPath, resolveAssetPreviewUrl, type AssetUrlCreateOptions, type AssetUrlCreationKind } from '../../domain/assets'
 import { EntityIcon, type EntityIconId } from '../../shared/entityIcons'
 
@@ -339,8 +340,7 @@ export function AssetPickerDialog({
   clearLabel?: string
 }) {
   const selectedAsset = findAssetByKey(assets, selectedAssetKey)
-
-  return (
+  const dialog = (
     <div className="asset-picker-overlay" onClick={onClose} role="presentation">
       <div className="asset-picker-dialog" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={title}>
         <div className="asset-picker-hero">
@@ -400,6 +400,12 @@ export function AssetPickerDialog({
       </div>
     </div>
   )
+
+  if (typeof document === 'undefined') {
+    return dialog
+  }
+
+  return createPortal(dialog, document.body)
 }
 
 export function MediaThumb({

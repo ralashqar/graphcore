@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 import { EntityIcon, iconForDefinitionKind } from '../shared/entityIcons'
 import { ArchetypeEditor } from './content/ArchetypeEditor'
@@ -29,6 +29,14 @@ const contentKindOptions: Array<{ value: DefinitionKindFilter; label: string }> 
   { value: 'all', label: 'All' },
   ...contentKinds.map((entry) => ({ value: entry.kind, label: entry.label })),
 ]
+
+type ContentKind = (typeof contentKinds)[number]['kind']
+
+const contentKindSet = new Set<ContentKind>(contentKinds.map((entry) => entry.kind))
+
+function isContentKind(kind: string): kind is ContentKind {
+  return contentKindSet.has(kind as ContentKind)
+}
 
 export function ContentWorkspace({
   archetypes,
@@ -65,14 +73,30 @@ export function ContentWorkspace({
   const [archetypeKindFilter, setArchetypeKindFilter] = useState<DefinitionKindFilter>('all')
 
   const imageAssets = assets.filter((asset) => asset.kind === 'image')
-  const selectedTemplateForCreate =
-    selectedArchetype && contentKinds.some((entry) => entry.kind === selectedArchetype.appliesToKind)
+  const contentItems = useMemo(
+    () => items.filter((item) => isContentKind(item.kind)),
+    [items],
+  )
+  const contentArchetypes = useMemo(
+    () => archetypes.filter((archetype) => isContentKind(archetype.appliesToKind)),
+    [archetypes],
+  )
+  const selectedContentItem =
+    selectedItem && isContentKind(selectedItem.kind)
+      ? selectedItem
+      : null
+  const selectedContentArchetype =
+    selectedArchetype && isContentKind(selectedArchetype.appliesToKind)
       ? selectedArchetype
+      : null
+  const selectedTemplateForCreate =
+    selectedContentArchetype && contentKinds.some((entry) => entry.kind === selectedContentArchetype.appliesToKind)
+      ? selectedContentArchetype
       : null
 
   const filteredItems = useMemo(() => {
     const query = itemSearch.trim().toLowerCase()
-    return items
+    return contentItems
       .filter((item) => {
         const matchesQuery =
           query.length === 0 ||
@@ -80,14 +104,15 @@ export function ContentWorkspace({
           item.key.toLowerCase().includes(query) ||
           item.summary.toLowerCase().includes(query) ||
           item.tags.some((tag) => tag.toLowerCase().includes(query))
-        return matchesQuery
+        const matchesKind = itemFilterKind === 'all' ? true : item.kind === itemFilterKind
+        return matchesQuery && matchesKind
       })
       .sort((left, right) => left.name.localeCompare(right.name))
-  }, [itemSearch, items])
+  }, [contentItems, itemFilterKind, itemSearch])
 
   const filteredArchetypes = useMemo(() => {
     const query = archetypeSearch.trim().toLowerCase()
-    return archetypes
+    return contentArchetypes
       .filter((archetype) => {
         const matchesQuery =
           query.length === 0 ||
@@ -98,7 +123,21 @@ export function ContentWorkspace({
         return matchesQuery && matchesKind
       })
       .sort((left, right) => left.name.localeCompare(right.name))
-  }, [archetypeKindFilter, archetypeSearch, archetypes])
+  }, [archetypeKindFilter, archetypeSearch, contentArchetypes])
+
+  useEffect(() => {
+    if (mode !== 'items') return
+    if (selectedContentItem && filteredItems.some((item) => item.key === selectedContentItem.key)) return
+    if (selectedItem && !isContentKind(selectedItem.kind)) return
+    onSelectItem(filteredItems[0]?.key ?? null)
+  }, [filteredItems, mode, onSelectItem, selectedContentItem, selectedItem])
+
+  useEffect(() => {
+    if (mode !== 'archetypes') return
+    if (selectedContentArchetype && filteredArchetypes.some((archetype) => archetype.key === selectedContentArchetype.key)) return
+    if (selectedArchetype && !isContentKind(selectedArchetype.appliesToKind)) return
+    onSelectArchetype(filteredArchetypes[0]?.key ?? null)
+  }, [filteredArchetypes, mode, onSelectArchetype, selectedArchetype, selectedContentArchetype])
 
   return (
     <div className="focus-layout item-layout item-layout-wide">
@@ -161,8 +200,8 @@ export function ContentWorkspace({
               <div className="rail-list">
                 {filteredItems.map((item) => (
                   <button
-                    key={item.id}
-                    className={item.key === selectedItem?.key ? 'rail-button item-row is-active' : 'rail-button item-row'}
+                    key={`${item.id}:${item.key}`}
+                    className={item.key === selectedContentItem?.key ? 'rail-button item-row is-active' : 'rail-button item-row'}
                     onClick={() => onSelectItem(item.key)}
                     type="button"
                   >
@@ -210,8 +249,8 @@ export function ContentWorkspace({
               <div className="rail-list">
                 {filteredArchetypes.map((archetype) => (
                   <button
-                    key={archetype.id}
-                    className={archetype.key === selectedArchetype?.key ? 'rail-button item-row is-active' : 'rail-button item-row'}
+                    key={`${archetype.id}:${archetype.key}`}
+                    className={archetype.key === selectedContentArchetype?.key ? 'rail-button item-row is-active' : 'rail-button item-row'}
                     onClick={() => onSelectArchetype(archetype.key)}
                     type="button"
                   >
@@ -237,9 +276,9 @@ export function ContentWorkspace({
             definitions={definitions}
             graphKeys={graphKeys}
             imageAssets={imageAssets}
-            selectedArchetype={selectedArchetype}
+            selectedArchetype={selectedContentArchetype}
             selectedAsset={selectedAsset}
-            selectedItem={selectedItem}
+            selectedItem={selectedContentItem}
             onAddCustomField={onAddCustomField}
             onAssignItemIcon={onAssignItemIcon}
             onCreateItem={onCreateItem}
@@ -250,7 +289,7 @@ export function ContentWorkspace({
         ) : (
           <ArchetypeEditor
             imageAssets={imageAssets}
-            selectedArchetype={selectedArchetype}
+            selectedArchetype={selectedContentArchetype}
             selectedAsset={selectedAsset}
             onAddArchetypeField={onAddArchetypeField}
             onAssignArchetypeIcon={onAssignArchetypeIcon}
