@@ -63,7 +63,7 @@ export function AssetsWorkspace({
                 onClick={() => onSelectAsset(asset.key)}
                 type="button"
               >
-                <MediaThumb asset={asset} label={asset.name} />
+                <MediaThumb asset={asset} fallbackIcon="asset" label={asset.name} />
                 <div className="item-row-copy">
                   <strong>{asset.name}</strong>
                   <span>{asset.kind}</span>
@@ -78,7 +78,7 @@ export function AssetsWorkspace({
         {selectedAsset ? (
           <div className="detail-stack">
             <div className="asset-detail-head">
-              <MediaThumb asset={selectedAsset} label={selectedAsset.name} large />
+              <MediaThumb asset={selectedAsset} fallbackIcon="asset" label={selectedAsset.name} large />
               <div>
                 <span className="eyebrow">Managed Asset</span>
                 <h2>{selectedAsset.name}</h2>

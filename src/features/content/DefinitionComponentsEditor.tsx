@@ -77,48 +77,9 @@ export function DefinitionComponentsEditor({
 
       {definition.kind === 'character' ? (
         <div className="editor-grid">
-          <label className="field-block">
-            <span>Subtype</span>
-            <select
-              value={String((characterProfile?.config as { subtype?: string } | undefined)?.subtype ?? 'humanoid')}
-              onChange={(event) =>
-                onUpdateComponent('character_profile', {
-                  bodyClass: 'humanoid',
-                  controlMode: 'ai',
-                  scaleProfile: 'medium',
-                  ...(characterProfile?.config ?? {}),
-                  subtype: event.target.value,
-                })
-              }
-            >
-              <option value="humanoid">Humanoid</option>
-              <option value="beast">Beast</option>
-              <option value="construct">Construct</option>
-              <option value="undead">Undead</option>
-              <option value="vehicle">Vehicle</option>
-              <option value="spirit">Spirit</option>
-            </select>
-          </label>
-          <label className="field-block">
-            <span>Control Mode</span>
-            <select
-              value={String((characterProfile?.config as { controlMode?: string } | undefined)?.controlMode ?? 'ai')}
-              onChange={(event) =>
-                onUpdateComponent('character_profile', {
-                  subtype: 'humanoid',
-                  bodyClass: 'humanoid',
-                  scaleProfile: 'medium',
-                  ...(characterProfile?.config ?? {}),
-                  controlMode: event.target.value,
-                })
-              }
-            >
-              <option value="player">Player</option>
-              <option value="ai">AI</option>
-              <option value="scripted">Scripted</option>
-              <option value="neutral">Neutral</option>
-            </select>
-          </label>
+          <div className="inline-note">
+            Character profile basics live in the header. Current profile: subtype {String((characterProfile?.config as { subtype?: string } | undefined)?.subtype ?? 'humanoid')}, control mode {String((characterProfile?.config as { controlMode?: string } | undefined)?.controlMode ?? 'ai')}.
+          </div>
           <label className="field-block full-width">
             <span>Ability Loadout</span>
             {renderJsonEditor('ability_loadout', abilityLoadout?.config ?? { entries: [] })}

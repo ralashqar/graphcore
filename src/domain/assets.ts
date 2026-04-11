@@ -4,6 +4,12 @@ export const supportedMeshExtensions = ['.glb', '.gltf'] as const
 export const supportedMeshAccept = '.glb,.gltf,model/gltf-binary,model/gltf+json'
 
 export type AssetUrlCreationKind = 'image' | 'mesh'
+export type AssetUrlCreateOptions = {
+  metadata?: Record<string, unknown>
+  name?: string
+  openAssetsTab?: boolean
+  selectAsset?: boolean
+}
 
 const imageMimeTypesByExtension: Record<string, string> = {
   '.avif': 'image/avif',

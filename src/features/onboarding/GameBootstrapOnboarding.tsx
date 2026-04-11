@@ -1,12 +1,17 @@
 import { useState } from 'react'
 
+import { ART_STYLE_PRESETS } from '../../domain/artStylePresets'
 import { GAME_ARCHETYPES, gameArchetypeMap } from '../../domain/gameArchetypes'
 
 type GameBootstrapOnboardingProps = {
+  artStyleDescription: string
+  artStylePreset: string
   canClose: boolean
   conceptPrompt: string
   gameArchetypeId: string
   isGenerating: boolean
+  onChangeArtStyleDescription: (value: string) => void
+  onChangeArtStylePreset: (value: string) => void
   onChangeConceptPrompt: (value: string) => void
   onChangeGameArchetypeId: (value: string) => void
   onClose: () => void
@@ -14,10 +19,14 @@ type GameBootstrapOnboardingProps = {
 }
 
 export function GameBootstrapOnboarding({
+  artStyleDescription,
+  artStylePreset,
   canClose,
   conceptPrompt,
   gameArchetypeId,
   isGenerating,
+  onChangeArtStyleDescription,
+  onChangeArtStylePreset,
   onChangeConceptPrompt,
   onChangeGameArchetypeId,
   onClose,
@@ -88,6 +97,24 @@ export function GameBootstrapOnboarding({
                   placeholder="A rain-soaked detective RPG set in a floating port city where every district is controlled by merchant houses and clues are traded like currency."
                 />
               </label>
+              <div className="bootstrap-review-grid">
+                <label className="field-block bootstrap-field">
+                  <span>Universal art style</span>
+                  <select value={artStylePreset} onChange={(event) => onChangeArtStylePreset(event.target.value)}>
+                    {ART_STYLE_PRESETS.map((preset) => (
+                      <option key={preset.id} value={preset.id}>{preset.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field-block bootstrap-field">
+                  <span>Custom art style notes</span>
+                  <input
+                    value={artStyleDescription}
+                    onChange={(event) => onChangeArtStyleDescription(event.target.value)}
+                    placeholder="Painterly lighting, bold silhouettes, muted autumn palette..."
+                  />
+                </label>
+              </div>
             </div>
           ) : null}
 
@@ -102,6 +129,8 @@ export function GameBootstrapOnboarding({
                 <span className="section-label">Selection</span>
                 <strong>{selectedArchetype.label}</strong>
                 <p>{conceptPrompt.trim() || 'No concept entered yet.'}</p>
+                <span>Art style: {ART_STYLE_PRESETS.find((preset) => preset.id === artStylePreset)?.label ?? 'Custom'}</span>
+                {artStyleDescription.trim() ? <span>{artStyleDescription.trim()}</span> : null}
               </div>
             </div>
           ) : null}

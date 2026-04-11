@@ -10,6 +10,7 @@ import { createGraphScaffold, getGraphScaffoldKeys } from './graphScaffold'
 import { normalizeNode } from './nodeLibrary'
 
 export const PRESET_CATALOG_VERSION = '2026-04-08.2'
+const FALLBACK_ART_STYLE_PRESET = 'storybook_illustration'
 
 type ArchetypePreset = {
   id: string
@@ -1036,6 +1037,7 @@ const definitionPresets: DefinitionPreset[] = [
         config: {
           primaryMeshAssetKey: null,
           previewImageAssetKey: null,
+          conceptPrompt: null,
           generationPrompt: null,
           generationStyle: null,
         },
@@ -1329,6 +1331,8 @@ export function createDefaultGameSpec(packIds: string[] = ['pack.rpg_core']): Ga
       playerFantasy: 'adventurer',
       worldPremise: '',
       namingStyle: 'classic_fantasy',
+      artStylePreset: FALLBACK_ART_STYLE_PRESET,
+      artStyleDescription: '',
     },
     systems: {
       progressionStyle: 'branching',

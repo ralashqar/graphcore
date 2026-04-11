@@ -5,6 +5,7 @@ const looseRecordSchema = z.record(z.string(), z.unknown())
 export const assemblyValueTypeSchema = z.enum([
   'profile',
   'path',
+  'surface_spine_segment',
   'solid',
   'surface',
   'surface_height_control',
@@ -76,6 +77,9 @@ export const assemblyNodeKindSchema = z.enum([
   'mezzanine_ring',
   'mezzanine_surface',
   'mezzanine_surface_v2',
+  'surface_spine_segment_v1',
+  'walkable_surface_from_spine_v1',
+  'stair_overlay_from_spine_v1',
   'slab_void',
   'stair',
   'stair_run',
@@ -229,6 +233,17 @@ export const environmentGeometryBindingConfigSchema = z.object({
 export const curvePoint2dSchema = z.object({
   x: z.number(),
   y: z.number(),
+})
+
+export const surfaceSpineWidthStationSchema = z.object({
+  t: z.number().min(0).max(1),
+  left: z.number().positive(),
+  right: z.number().positive(),
+})
+
+export const surfaceSpineElevationStationSchema = z.object({
+  t: z.number().min(0).max(1),
+  elevation: z.number(),
 })
 
 const curveSegmentDecoratorShape = {
@@ -786,6 +801,9 @@ export const environmentAssemblyLibrary: AssemblyTemplateGroup[] = [
       { key: 'mezzanine_ring', label: 'Mezzanine Ring', groupKey: 'building', defaultTitle: 'Mezzanine Ring', summary: 'Mezzanine fill around a hole or courtyard.', defaultParams: { elevation: 2.2, thickness: 0.18 } },
       { key: 'mezzanine_surface', label: 'Mezzanine Surface', groupKey: 'building', defaultTitle: 'Mezzanine Surface', summary: 'Continuous mezzanine or balcony surface with boundary path outputs.', defaultParams: { elevation: 2.4, thickness: 0.18, emitSurface: true, emitSolid: true, undersideMode: 'flat' } },
       { key: 'mezzanine_surface_v2', label: 'Mezzanine Surface V2', groupKey: 'building', defaultTitle: 'Mezzanine Surface V2', summary: 'CDT-backed mezzanine surface with custom loops, holes, grading, and stair blend targets.', defaultParams: { elevation: 2.4, thickness: 0.18, emitSurface: true, emitSolid: true, undersideMode: 'flat', sampleSpacing: 0.35, closeTolerance: 0.12, triangulationMode: 'constrained_delaunay_v1' } },
+      { key: 'surface_spine_segment_v1', label: 'Surface Spine Segment', groupKey: 'building', defaultTitle: 'Surface Spine Segment', summary: 'Centerline segment with width and elevation stations for spine-driven walkable surfaces.', defaultParams: { startJunctionId: 'junction_a', endJunctionId: 'junction_b', segmentRole: 'walkway', sampleSpacing: 0.3, widthStations: [{ t: 0, left: 1.2, right: 1.2 }, { t: 1, left: 1.2, right: 1.2 }], elevationStations: [{ t: 0, elevation: 0 }, { t: 1, elevation: 0 }] } },
+      { key: 'walkable_surface_from_spine_v1', label: 'Walkable Surface From Spine', groupKey: 'building', defaultTitle: 'Spine Surface', summary: 'Union spine ribbons into one shared walkable surface with grading.', defaultParams: { thickness: 0.22, emitSolid: true, emitSurface: true, undersideMode: 'flat', triangulationMode: 'constrained_delaunay_v1', sampleSpacing: 0.2, junctionJoinStyle: 'round', junctionPlateauRadius: 1.4, junctionBlendRadius: 2.4, minClearWidth: 0.9, smoothContours: true, contourSampleSpacing: 0.14, contourCurveType: 'centripetal', contourTension: 0.4 } },
+      { key: 'stair_overlay_from_spine_v1', label: 'Stair Overlay From Spine', groupKey: 'building', defaultTitle: 'Spine Stair Overlay', summary: 'Add tread solids along spine segments marked as stair runs while keeping the base surface shared.', defaultParams: { treadDepth: 0.28, maxRise: 0.18, thickness: 0.08, landingDepth: 1.2, widthPadding: 0, elevationOffset: 0.01 } },
       { key: 'slab_void', label: 'Slab Void', groupKey: 'building', defaultTitle: 'Slab Void', summary: 'Carve a void through host slabs on a selected level.', defaultParams: { levelIndex: 2, bottomOffset: 0, topOffset: 0.4 } },
       { key: 'stair', label: 'Stair', groupKey: 'building', defaultTitle: 'Stair', summary: 'Straight stair block.', defaultParams: { width: 1.8, stepCount: 8, rise: 0.18, tread: 0.28 } },
       { key: 'stair_run', label: 'Stair Run', groupKey: 'building', defaultTitle: 'Stair Run', summary: 'Semantic stair run between levels.', defaultParams: { width: 1.8, stepCount: 10, rise: 0.18, tread: 0.28 } },
@@ -906,6 +924,8 @@ export function inferAssemblyPorts(kind: AssemblyNodeKind): AssemblyPortDefiniti
       return [port('profile', 'Profile', 'output', 'profile')]
     case 'loop_builder':
       return [port('paths', 'Paths', 'input', 'path', true), port('profile', 'Profile', 'output', 'profile')]
+    case 'surface_spine_segment_v1':
+      return [port('path', 'Path', 'input', 'path'), port('segment', 'Segment', 'output', 'surface_spine_segment')]
     case 'offset_profile':
       return [port('profile', 'Profile', 'input', 'profile'), port('profile_out', 'Profile', 'output', 'profile')]
     case 'profile_merge':
@@ -965,17 +985,23 @@ export function inferAssemblyPorts(kind: AssemblyNodeKind): AssemblyPortDefiniti
     case 'mezzanine_ring':
     case 'mezzanine_surface':
     case 'mezzanine_surface_v2':
+    case 'walkable_surface_from_spine_v1':
       return [
         ...(kind === 'mezzanine_surface' || kind === 'mezzanine_surface_v2'
           ? [port('outer', 'Outer', 'input', 'profile'), port('holes', 'Holes', 'input', 'profile', true)]
+          : kind === 'walkable_surface_from_spine_v1'
+            ? [port('segments', 'Segments', 'input', 'surface_spine_segment', true), port('extra_holes', 'Extra Holes', 'input', 'profile', true)]
           : [port('profile', 'Profile', 'input', 'profile')]),
         port('level', 'Level', 'input', 'level'),
-        ...(kind === 'floor_slab' || kind === 'ceiling_slab' || kind === 'mezzanine_surface' || kind === 'mezzanine_surface_v2' ? [port('voids', 'Voids', 'input', 'slab_void', true), port('solid', 'Solid', 'output', 'solid')] : []),
-        ...(kind === 'mezzanine_surface_v2'
+        ...(kind === 'floor_slab' || kind === 'ceiling_slab' || kind === 'mezzanine_surface' || kind === 'mezzanine_surface_v2' || kind === 'walkable_surface_from_spine_v1' ? [port('voids', 'Voids', 'input', 'slab_void', true), port('solid', 'Solid', 'output', 'solid')] : []),
+        ...(kind === 'mezzanine_surface_v2' || kind === 'walkable_surface_from_spine_v1'
           ? [port('height_controls', 'Height Controls', 'input', 'surface_height_control', true), port('blend_targets', 'Blend Targets', 'input', 'blend_target', true)]
           : []),
-        ...(kind === 'mezzanine_surface' || kind === 'mezzanine_surface_v2'
+        ...(kind === 'mezzanine_surface' || kind === 'mezzanine_surface_v2' || kind === 'walkable_surface_from_spine_v1'
           ? [port('profile', 'Profile', 'output', 'profile'), port('paths', 'Paths', 'output', 'path', true), port('anchors', 'Anchors', 'output', 'anchor', true)]
+          : []),
+        ...(kind === 'walkable_surface_from_spine_v1'
+          ? [port('spine_paths', 'Spine Paths', 'output', 'path', true)]
           : []),
         port('surface', 'Surface', 'output', 'surface'),
       ]
@@ -1005,6 +1031,7 @@ export function inferAssemblyPorts(kind: AssemblyNodeKind): AssemblyPortDefiniti
     case 'stair_core':
     case 'stair_core_v2':
     case 'stair_core_v3':
+    case 'stair_overlay_from_spine_v1':
     case 'stair_shaft':
     case 'landing':
     case 'landing_stack':
@@ -1022,6 +1049,9 @@ export function inferAssemblyPorts(kind: AssemblyNodeKind): AssemblyPortDefiniti
           : []),
         ...(kind === 'stair_core_v3'
           ? [port('target_paths', 'Target Paths', 'input', 'path', true)]
+          : []),
+        ...(kind === 'stair_overlay_from_spine_v1'
+          ? [port('segments', 'Segments', 'input', 'surface_spine_segment', true)]
           : []),
         ...(kind === 'landing_stack_v2'
           ? [port('zone', 'Zone', 'input', 'room')]
@@ -1042,7 +1072,7 @@ export function inferAssemblyPorts(kind: AssemblyNodeKind): AssemblyPortDefiniti
           ? []
           : [
         port('solid', 'Solid', 'output', 'solid'),
-        ...(kind === 'stair_core' || kind === 'stair_core_v2' || kind === 'stair_core_v3' || kind === 'stair_shaft' ? [port('void', 'Void', 'output', 'slab_void', true), port('stair', 'Stair', 'output', 'stair')] : []),
+        ...(kind === 'stair_core' || kind === 'stair_core_v2' || kind === 'stair_core_v3' || kind === 'stair_shaft' || kind === 'stair_overlay_from_spine_v1' ? [port('void', 'Void', 'output', 'slab_void', true), port('stair', 'Stair', 'output', 'stair')] : []),
         port('anchors', 'Anchors', 'output', 'anchor', true),
           ]),
       ]
@@ -1993,6 +2023,299 @@ export const environmentAssemblyPresets: AssemblyGraphPresetDefinition[] = [
         presetEdge('blend_surface_to_output', 'blend_mezzanine', 'surface', `${graphKey}.output`, 'surfaces'),
         presetEdge('blend_stair_to_output', 'blend_arc_stair', 'solid', `${graphKey}.output`, 'solids'),
         presetEdge('blend_surface_anchors_to_output', 'blend_mezzanine', 'anchors', `${graphKey}.output`, 'anchors'),
+      ],
+    }),
+  },
+  {
+    key: 'spine_surface_trunk_v1',
+    label: 'Spine Surface Trunk V1',
+    summary: 'Single rising spine segment compiled into one shared walkable surface.',
+    build: (graphKey, environmentKey) => ({
+      id: `preset-graph-${graphKey}`,
+      key: graphKey,
+      name: 'Spine Surface Trunk V1',
+      summary: 'Minimal spine-surface reference with one rising trunk and no fork.',
+      boundEnvironmentKey: environmentKey ?? null,
+      metadata: { presetKey: 'spine_surface_trunk_v1', compileSettings: { triangulation: 'constrained_delaunay_v1' } },
+      nodes: [
+        presetNode('spline', 'trunk_path', { x: 60, y: 180 }, { points: [{ x: 0, y: -10.5 }, { x: -0.4, y: -7.2 }, { x: 0.2, y: -3.5 }, { x: 0, y: -0.2 }], curveType: 'centripetal', tension: 0.45 }, 'Entry Trunk Path'),
+        presetNode('surface_spine_segment_v1', 'trunk_segment', { x: 330, y: 180 }, {
+          startJunctionId: 'entry',
+          endJunctionId: 'upper_landing',
+          segmentRole: 'stair_run',
+          sampleSpacing: 0.18,
+          widthStations: [{ t: 0, left: 1.3, right: 1.3 }, { t: 0.55, left: 1.55, right: 1.55 }, { t: 1, left: 2.1, right: 2.1 }],
+          elevationStations: [{ t: 0, elevation: 0 }, { t: 0.55, elevation: 1.6 }, { t: 1, elevation: 3.2 }],
+        }, 'Trunk Segment'),
+        presetNode('walkable_surface_from_spine_v1', 'trunk_surface', { x: 620, y: 180 }, { thickness: 0.24, sampleSpacing: 0.18, junctionPlateauRadius: 1.1, junctionBlendRadius: 1.9 }, 'Trunk Surface'),
+        presetNode('environment_output', `${graphKey}.output`, { x: 880, y: 180 }, {}, 'Environment Output'),
+      ],
+      edges: [
+        presetEdge('trunk_path_to_segment', 'trunk_path', 'path', 'trunk_segment', 'path'),
+        presetEdge('trunk_segment_to_surface', 'trunk_segment', 'segment', 'trunk_surface', 'segments'),
+        presetEdge('trunk_surface_solid_to_output', 'trunk_surface', 'solid', `${graphKey}.output`, 'solids'),
+        presetEdge('trunk_surface_to_output', 'trunk_surface', 'surface', `${graphKey}.output`, 'surfaces'),
+      ],
+    }),
+  },
+  {
+    key: 'spine_surface_fork_v1',
+    label: 'Spine Surface Fork V1',
+    summary: 'Trunk plus fork branches and a flat fork platform built from shared spine geometry.',
+    build: (graphKey, environmentKey) => ({
+      id: `preset-graph-${graphKey}`,
+      key: graphKey,
+      name: 'Spine Surface Fork V1',
+      summary: 'Forking spine walkable surface with a plateau at the branch junction.',
+      boundEnvironmentKey: environmentKey ?? null,
+      metadata: { presetKey: 'spine_surface_fork_v1', compileSettings: { triangulation: 'constrained_delaunay_v1' } },
+      nodes: [
+        presetNode('spline', 'fork_trunk_path', { x: 60, y: 100 }, { points: [{ x: 0, y: -10.5 }, { x: -0.2, y: -7 }, { x: 0.1, y: -4.2 }, { x: 0, y: -2.2 }], curveType: 'centripetal', tension: 0.45 }, 'Fork Trunk Path'),
+        presetNode('polyline', 'fork_plateau_path', { x: 60, y: 180 }, { points: [{ x: -1.7, y: -2.1 }, { x: 1.7, y: -2.1 }] }, 'Fork Plateau Path'),
+        presetNode('spline', 'fork_left_path', { x: 60, y: 260 }, { points: [{ x: 0, y: -2.2 }, { x: -1.8, y: -1.6 }, { x: -3.5, y: 0.3 }, { x: -4.9, y: 2.6 }], curveType: 'centripetal', tension: 0.45 }, 'Left Branch Path'),
+        presetNode('spline', 'fork_right_path', { x: 60, y: 340 }, { points: [{ x: 0, y: -2.2 }, { x: 1.8, y: -1.6 }, { x: 3.5, y: 0.3 }, { x: 4.9, y: 2.6 }], curveType: 'centripetal', tension: 0.45 }, 'Right Branch Path'),
+        presetNode('surface_spine_segment_v1', 'fork_trunk_segment', { x: 330, y: 100 }, { startJunctionId: 'entry', endJunctionId: 'fork', segmentRole: 'stair_run', sampleSpacing: 0.18, widthStations: [{ t: 0, left: 1.35, right: 1.35 }, { t: 1, left: 1.85, right: 1.85 }], elevationStations: [{ t: 0, elevation: 0 }, { t: 1, elevation: 1.7 }] }, 'Trunk Segment'),
+        presetNode('surface_spine_segment_v1', 'fork_plateau_segment', { x: 330, y: 180 }, { startJunctionId: 'fork', endJunctionId: 'fork', segmentRole: 'landing', sampleSpacing: 0.16, widthStations: [{ t: 0, left: 1.8, right: 1.8 }, { t: 1, left: 1.8, right: 1.8 }], elevationStations: [{ t: 0, elevation: 1.7 }, { t: 1, elevation: 1.7 }] }, 'Fork Plateau Segment'),
+        presetNode('surface_spine_segment_v1', 'fork_left_segment', { x: 330, y: 260 }, { startJunctionId: 'fork', endJunctionId: 'left_gallery', segmentRole: 'stair_run', sampleSpacing: 0.18, widthStations: [{ t: 0, left: 1.55, right: 1.25 }, { t: 1, left: 1.8, right: 1.35 }], elevationStations: [{ t: 0, elevation: 1.7 }, { t: 0.8, elevation: 3.2 }, { t: 1, elevation: 3.2 }] }, 'Left Branch Segment'),
+        presetNode('surface_spine_segment_v1', 'fork_right_segment', { x: 330, y: 340 }, { startJunctionId: 'fork', endJunctionId: 'right_gallery', segmentRole: 'stair_run', sampleSpacing: 0.18, widthStations: [{ t: 0, left: 1.25, right: 1.55 }, { t: 1, left: 1.35, right: 1.8 }], elevationStations: [{ t: 0, elevation: 1.7 }, { t: 0.8, elevation: 3.2 }, { t: 1, elevation: 3.2 }] }, 'Right Branch Segment'),
+        presetNode('walkable_surface_from_spine_v1', 'fork_surface', { x: 620, y: 220 }, { thickness: 0.24, sampleSpacing: 0.18, junctionPlateauRadius: 1.3, junctionBlendRadius: 2.2 }, 'Fork Surface'),
+        presetNode('environment_output', `${graphKey}.output`, { x: 900, y: 220 }, {}, 'Environment Output'),
+      ],
+      edges: [
+        presetEdge('fork_trunk_path_to_segment', 'fork_trunk_path', 'path', 'fork_trunk_segment', 'path'),
+        presetEdge('fork_plateau_path_to_segment', 'fork_plateau_path', 'path', 'fork_plateau_segment', 'path'),
+        presetEdge('fork_left_path_to_segment', 'fork_left_path', 'path', 'fork_left_segment', 'path'),
+        presetEdge('fork_right_path_to_segment', 'fork_right_path', 'path', 'fork_right_segment', 'path'),
+        presetEdge('fork_trunk_segment_to_surface', 'fork_trunk_segment', 'segment', 'fork_surface', 'segments'),
+        presetEdge('fork_plateau_segment_to_surface', 'fork_plateau_segment', 'segment', 'fork_surface', 'segments'),
+        presetEdge('fork_left_segment_to_surface', 'fork_left_segment', 'segment', 'fork_surface', 'segments'),
+        presetEdge('fork_right_segment_to_surface', 'fork_right_segment', 'segment', 'fork_surface', 'segments'),
+        presetEdge('fork_surface_solid_to_output', 'fork_surface', 'solid', `${graphKey}.output`, 'solids'),
+        presetEdge('fork_surface_to_output', 'fork_surface', 'surface', `${graphKey}.output`, 'surfaces'),
+      ],
+    }),
+  },
+  {
+    key: 'spine_surface_loop_v1',
+    label: 'Spine Surface Loop V1',
+    summary: 'Closed mezzanine loop with variable width generated from spine segments alone.',
+    build: (graphKey, environmentKey) => ({
+      id: `preset-graph-${graphKey}`,
+      key: graphKey,
+      name: 'Spine Surface Loop V1',
+      summary: 'Pure mezzanine-loop validation for the spine-to-surface system.',
+      boundEnvironmentKey: environmentKey ?? null,
+      metadata: { presetKey: 'spine_surface_loop_v1', compileSettings: { triangulation: 'constrained_delaunay_v1' } },
+      nodes: [
+        presetNode('spline', 'loop_front_left_path', { x: 60, y: 80 }, { points: [{ x: -4.8, y: -4.9 }, { x: -2.1, y: -6.2 }, { x: 2.1, y: -6.2 }, { x: 4.8, y: -4.9 }], curveType: 'centripetal', tension: 0.45 }, 'Loop Front Path'),
+        presetNode('spline', 'loop_right_path', { x: 60, y: 160 }, { points: [{ x: 4.8, y: -4.9 }, { x: 6.1, y: -2 }, { x: 6.2, y: 2.3 }, { x: 4.8, y: 5.1 }], curveType: 'centripetal', tension: 0.45 }, 'Loop Right Path'),
+        presetNode('spline', 'loop_back_path', { x: 60, y: 240 }, { points: [{ x: 4.8, y: 5.1 }, { x: 2.2, y: 6.1 }, { x: -2.2, y: 6.1 }, { x: -4.8, y: 5.1 }], curveType: 'centripetal', tension: 0.45 }, 'Loop Back Path'),
+        presetNode('spline', 'loop_left_path', { x: 60, y: 320 }, { points: [{ x: -4.8, y: 5.1 }, { x: -6.2, y: 2.3 }, { x: -6.1, y: -2 }, { x: -4.8, y: -4.9 }], curveType: 'centripetal', tension: 0.45 }, 'Loop Left Path'),
+        presetNode('surface_spine_segment_v1', 'loop_front_segment', { x: 340, y: 80 }, { startJunctionId: 'loop_front_left', endJunctionId: 'loop_front_right', segmentRole: 'mezzanine', sampleSpacing: 0.16, widthStations: [{ t: 0, left: 1.15, right: 2.5 }, { t: 0.5, left: 1.2, right: 3 }, { t: 1, left: 1.15, right: 2.5 }], elevationStations: [{ t: 0, elevation: 3.2 }, { t: 1, elevation: 3.2 }], boundaryTagsLeft: ['gallery_inner'], boundaryTagsRight: ['gallery_outer', 'gallery_front'] }, 'Loop Front Segment'),
+        presetNode('surface_spine_segment_v1', 'loop_right_segment', { x: 340, y: 160 }, { startJunctionId: 'loop_front_right', endJunctionId: 'loop_back_right', segmentRole: 'mezzanine', sampleSpacing: 0.16, widthStations: [{ t: 0, left: 1.2, right: 2.4 }, { t: 1, left: 1.2, right: 2.2 }], elevationStations: [{ t: 0, elevation: 3.2 }, { t: 1, elevation: 3.2 }], boundaryTagsLeft: ['gallery_inner'], boundaryTagsRight: ['gallery_outer', 'gallery_side'] }, 'Loop Right Segment'),
+        presetNode('surface_spine_segment_v1', 'loop_back_segment', { x: 340, y: 240 }, { startJunctionId: 'loop_back_right', endJunctionId: 'loop_back_left', segmentRole: 'mezzanine', sampleSpacing: 0.16, widthStations: [{ t: 0, left: 1.2, right: 2.2 }, { t: 0.5, left: 1.3, right: 2.7 }, { t: 1, left: 1.2, right: 2.2 }], elevationStations: [{ t: 0, elevation: 3.2 }, { t: 1, elevation: 3.2 }], boundaryTagsLeft: ['gallery_inner'], boundaryTagsRight: ['gallery_outer', 'gallery_back'] }, 'Loop Back Segment'),
+        presetNode('surface_spine_segment_v1', 'loop_left_segment', { x: 340, y: 320 }, { startJunctionId: 'loop_back_left', endJunctionId: 'loop_front_left', segmentRole: 'mezzanine', sampleSpacing: 0.16, widthStations: [{ t: 0, left: 1.2, right: 2.2 }, { t: 1, left: 1.2, right: 2.4 }], elevationStations: [{ t: 0, elevation: 3.2 }, { t: 1, elevation: 3.2 }], boundaryTagsLeft: ['gallery_inner'], boundaryTagsRight: ['gallery_outer', 'gallery_side'] }, 'Loop Left Segment'),
+        presetNode('walkable_surface_from_spine_v1', 'loop_surface', { x: 620, y: 200 }, { thickness: 0.24, sampleSpacing: 0.16, junctionPlateauRadius: 1, junctionBlendRadius: 1.8 }, 'Loop Surface'),
+        presetNode('environment_output', `${graphKey}.output`, { x: 880, y: 200 }, {}, 'Environment Output'),
+      ],
+      edges: [
+        presetEdge('loop_front_path_to_segment', 'loop_front_left_path', 'path', 'loop_front_segment', 'path'),
+        presetEdge('loop_right_path_to_segment', 'loop_right_path', 'path', 'loop_right_segment', 'path'),
+        presetEdge('loop_back_path_to_segment', 'loop_back_path', 'path', 'loop_back_segment', 'path'),
+        presetEdge('loop_left_path_to_segment', 'loop_left_path', 'path', 'loop_left_segment', 'path'),
+        presetEdge('loop_front_segment_to_surface', 'loop_front_segment', 'segment', 'loop_surface', 'segments'),
+        presetEdge('loop_right_segment_to_surface', 'loop_right_segment', 'segment', 'loop_surface', 'segments'),
+        presetEdge('loop_back_segment_to_surface', 'loop_back_segment', 'segment', 'loop_surface', 'segments'),
+        presetEdge('loop_left_segment_to_surface', 'loop_left_segment', 'segment', 'loop_surface', 'segments'),
+        presetEdge('loop_surface_solid_to_output', 'loop_surface', 'solid', `${graphKey}.output`, 'solids'),
+        presetEdge('loop_surface_to_output', 'loop_surface', 'surface', `${graphKey}.output`, 'surfaces'),
+      ],
+    }),
+  },
+  {
+    key: 'spine_surface_trunk_to_loop_v1',
+    label: 'Spine Surface Trunk To Loop V1',
+    summary: 'Continuous trunk, fork, branches, and mezzanine loop using only the spine surface generator.',
+    build: (graphKey, environmentKey) => ({
+      id: `preset-graph-${graphKey}`,
+      key: graphKey,
+      name: 'Spine Surface Trunk To Loop V1',
+      summary: 'Surface-only prototype of the palace hall massing: trunk into fork into full loop.',
+      boundEnvironmentKey: environmentKey ?? null,
+      metadata: { presetKey: 'spine_surface_trunk_to_loop_v1', compileSettings: { triangulation: 'constrained_delaunay_v1' } },
+      nodes: [
+        presetNode('spline', 'trunk_loop_entry_path', { x: 40, y: 80 }, { points: [{ x: 0, y: -11.2 }, { x: -0.4, y: -8 }, { x: 0.1, y: -5.1 }, { x: 0, y: -3.2 }], curveType: 'centripetal', tension: 0.45 }, 'Entry Trunk'),
+        presetNode('polyline', 'trunk_loop_fork_path', { x: 40, y: 150 }, { points: [{ x: -1.9, y: -3.1 }, { x: 1.9, y: -3.1 }] }, 'Fork Platform'),
+        presetNode('spline', 'trunk_loop_left_branch_path', { x: 40, y: 230 }, { points: [{ x: 0, y: -3.2 }, { x: -2.1, y: -4 }, { x: -3.4, y: -4.8 }, { x: -4.8, y: -4.9 }], curveType: 'centripetal', tension: 0.45 }, 'Left Branch'),
+        presetNode('spline', 'trunk_loop_right_branch_path', { x: 40, y: 300 }, { points: [{ x: 0, y: -3.2 }, { x: 2.1, y: -4 }, { x: 3.4, y: -4.8 }, { x: 4.8, y: -4.9 }], curveType: 'centripetal', tension: 0.45 }, 'Right Branch'),
+        presetNode('spline', 'trunk_loop_front_path', { x: 40, y: 380 }, { points: [{ x: -4.8, y: -4.9 }, { x: -2.2, y: -6.1 }, { x: 2.2, y: -6.1 }, { x: 4.8, y: -4.9 }], curveType: 'centripetal', tension: 0.45 }, 'Loop Front'),
+        presetNode('spline', 'trunk_loop_right_path', { x: 40, y: 450 }, { points: [{ x: 4.8, y: -4.9 }, { x: 6.1, y: -2 }, { x: 6.2, y: 2.3 }, { x: 4.8, y: 5.1 }], curveType: 'centripetal', tension: 0.45 }, 'Loop Right'),
+        presetNode('spline', 'trunk_loop_back_path', { x: 40, y: 520 }, { points: [{ x: 4.8, y: 5.1 }, { x: 2.2, y: 6.1 }, { x: -2.2, y: 6.1 }, { x: -4.8, y: 5.1 }], curveType: 'centripetal', tension: 0.45 }, 'Loop Back'),
+        presetNode('spline', 'trunk_loop_left_path', { x: 40, y: 590 }, { points: [{ x: -4.8, y: 5.1 }, { x: -6.2, y: 2.3 }, { x: -6.1, y: -2 }, { x: -4.8, y: -4.9 }], curveType: 'centripetal', tension: 0.45 }, 'Loop Left'),
+        presetNode('surface_spine_segment_v1', 'trunk_loop_entry_segment', { x: 340, y: 80 }, { startJunctionId: 'entry', endJunctionId: 'fork', segmentRole: 'stair_run', sampleSpacing: 0.18, widthStations: [{ t: 0, left: 1.4, right: 1.4 }, { t: 1, left: 2.1, right: 2.1 }], elevationStations: [{ t: 0, elevation: 0 }, { t: 1, elevation: 1.7 }] }, 'Entry Segment'),
+        presetNode('surface_spine_segment_v1', 'trunk_loop_fork_segment', { x: 340, y: 150 }, { startJunctionId: 'fork', endJunctionId: 'fork', segmentRole: 'landing', sampleSpacing: 0.16, widthStations: [{ t: 0, left: 2, right: 2 }, { t: 1, left: 2, right: 2 }], elevationStations: [{ t: 0, elevation: 1.7 }, { t: 1, elevation: 1.7 }] }, 'Fork Segment'),
+        presetNode('surface_spine_segment_v1', 'trunk_loop_left_branch_segment', { x: 340, y: 230 }, { startJunctionId: 'fork', endJunctionId: 'loop_front_left', segmentRole: 'stair_run', sampleSpacing: 0.18, widthStations: [{ t: 0, left: 1.5, right: 1.25 }, { t: 1, left: 1.2, right: 1.65 }], elevationStations: [{ t: 0, elevation: 1.7 }, { t: 0.82, elevation: 3.2 }, { t: 1, elevation: 3.2 }] }, 'Left Branch Segment'),
+        presetNode('surface_spine_segment_v1', 'trunk_loop_right_branch_segment', { x: 340, y: 300 }, { startJunctionId: 'fork', endJunctionId: 'loop_front_right', segmentRole: 'stair_run', sampleSpacing: 0.18, widthStations: [{ t: 0, left: 1.25, right: 1.5 }, { t: 1, left: 1.65, right: 1.2 }], elevationStations: [{ t: 0, elevation: 1.7 }, { t: 0.82, elevation: 3.2 }, { t: 1, elevation: 3.2 }] }, 'Right Branch Segment'),
+        presetNode('surface_spine_segment_v1', 'trunk_loop_front_segment', { x: 340, y: 380 }, { startJunctionId: 'loop_front_left', endJunctionId: 'loop_front_right', segmentRole: 'mezzanine', sampleSpacing: 0.16, widthStations: [{ t: 0, left: 1.1, right: 2.7 }, { t: 0.5, left: 1.2, right: 3.15 }, { t: 1, left: 1.1, right: 2.7 }], elevationStations: [{ t: 0, elevation: 3.2 }, { t: 1, elevation: 3.2 }], boundaryTagsLeft: ['gallery_inner'], boundaryTagsRight: ['gallery_outer', 'gallery_front'] }, 'Loop Front Segment'),
+        presetNode('surface_spine_segment_v1', 'trunk_loop_right_segment', { x: 340, y: 450 }, { startJunctionId: 'loop_front_right', endJunctionId: 'loop_back_right', segmentRole: 'mezzanine', sampleSpacing: 0.16, widthStations: [{ t: 0, left: 1.15, right: 2.45 }, { t: 1, left: 1.15, right: 2.25 }], elevationStations: [{ t: 0, elevation: 3.2 }, { t: 1, elevation: 3.2 }], boundaryTagsLeft: ['gallery_inner'], boundaryTagsRight: ['gallery_outer', 'gallery_side'] }, 'Loop Right Segment'),
+        presetNode('surface_spine_segment_v1', 'trunk_loop_back_segment', { x: 340, y: 520 }, { startJunctionId: 'loop_back_right', endJunctionId: 'loop_back_left', segmentRole: 'mezzanine', sampleSpacing: 0.16, widthStations: [{ t: 0, left: 1.15, right: 2.3 }, { t: 0.5, left: 1.2, right: 2.85 }, { t: 1, left: 1.15, right: 2.3 }], elevationStations: [{ t: 0, elevation: 3.2 }, { t: 1, elevation: 3.2 }], boundaryTagsLeft: ['gallery_inner'], boundaryTagsRight: ['gallery_outer', 'gallery_back'] }, 'Loop Back Segment'),
+        presetNode('surface_spine_segment_v1', 'trunk_loop_left_segment', { x: 340, y: 590 }, { startJunctionId: 'loop_back_left', endJunctionId: 'loop_front_left', segmentRole: 'mezzanine', sampleSpacing: 0.16, widthStations: [{ t: 0, left: 1.15, right: 2.25 }, { t: 1, left: 1.15, right: 2.45 }], elevationStations: [{ t: 0, elevation: 3.2 }, { t: 1, elevation: 3.2 }], boundaryTagsLeft: ['gallery_inner'], boundaryTagsRight: ['gallery_outer', 'gallery_side'] }, 'Loop Left Segment'),
+        presetNode('walkable_surface_from_spine_v1', 'trunk_loop_surface', { x: 660, y: 340 }, { thickness: 0.24, sampleSpacing: 0.16, junctionPlateauRadius: 1.3, junctionBlendRadius: 2.6 }, 'Trunk To Loop Surface'),
+        presetNode('environment_output', `${graphKey}.output`, { x: 930, y: 340 }, {}, 'Environment Output'),
+      ],
+      edges: [
+        presetEdge('trunk_loop_entry_path_to_segment', 'trunk_loop_entry_path', 'path', 'trunk_loop_entry_segment', 'path'),
+        presetEdge('trunk_loop_fork_path_to_segment', 'trunk_loop_fork_path', 'path', 'trunk_loop_fork_segment', 'path'),
+        presetEdge('trunk_loop_left_branch_path_to_segment', 'trunk_loop_left_branch_path', 'path', 'trunk_loop_left_branch_segment', 'path'),
+        presetEdge('trunk_loop_right_branch_path_to_segment', 'trunk_loop_right_branch_path', 'path', 'trunk_loop_right_branch_segment', 'path'),
+        presetEdge('trunk_loop_front_path_to_segment', 'trunk_loop_front_path', 'path', 'trunk_loop_front_segment', 'path'),
+        presetEdge('trunk_loop_right_path_to_segment', 'trunk_loop_right_path', 'path', 'trunk_loop_right_segment', 'path'),
+        presetEdge('trunk_loop_back_path_to_segment', 'trunk_loop_back_path', 'path', 'trunk_loop_back_segment', 'path'),
+        presetEdge('trunk_loop_left_path_to_segment', 'trunk_loop_left_path', 'path', 'trunk_loop_left_segment', 'path'),
+        presetEdge('entry_segment_to_surface', 'trunk_loop_entry_segment', 'segment', 'trunk_loop_surface', 'segments'),
+        presetEdge('fork_segment_to_surface', 'trunk_loop_fork_segment', 'segment', 'trunk_loop_surface', 'segments'),
+        presetEdge('left_branch_segment_to_surface', 'trunk_loop_left_branch_segment', 'segment', 'trunk_loop_surface', 'segments'),
+        presetEdge('right_branch_segment_to_surface', 'trunk_loop_right_branch_segment', 'segment', 'trunk_loop_surface', 'segments'),
+        presetEdge('front_segment_to_surface', 'trunk_loop_front_segment', 'segment', 'trunk_loop_surface', 'segments'),
+        presetEdge('right_segment_to_surface', 'trunk_loop_right_segment', 'segment', 'trunk_loop_surface', 'segments'),
+        presetEdge('back_segment_to_surface', 'trunk_loop_back_segment', 'segment', 'trunk_loop_surface', 'segments'),
+        presetEdge('left_segment_to_surface', 'trunk_loop_left_segment', 'segment', 'trunk_loop_surface', 'segments'),
+        presetEdge('trunk_loop_surface_solid_to_output', 'trunk_loop_surface', 'solid', `${graphKey}.output`, 'solids'),
+        presetEdge('trunk_loop_surface_to_output', 'trunk_loop_surface', 'surface', `${graphKey}.output`, 'surfaces'),
+      ],
+    }),
+  },
+  {
+    key: 'spine_surface_stair_overlay_v1',
+    label: 'Spine Surface Stair Overlay V1',
+    summary: 'Shared spine surface with tread overlays generated only on the rising trunk and branch segments.',
+    build: (graphKey, environmentKey) => ({
+      id: `preset-graph-${graphKey}`,
+      key: graphKey,
+      name: 'Spine Surface Stair Overlay V1',
+      summary: 'Adds tread overlays on top of the shared trunk-to-loop spine surface.',
+      boundEnvironmentKey: environmentKey ?? null,
+      metadata: { presetKey: 'spine_surface_stair_overlay_v1', compileSettings: { triangulation: 'constrained_delaunay_v1' } },
+      nodes: [
+        presetNode('spline', 'overlay_entry_path', { x: 40, y: 80 }, { points: [{ x: 0, y: -11.2 }, { x: -0.4, y: -8 }, { x: 0.1, y: -5.1 }, { x: 0, y: -3.2 }], curveType: 'centripetal', tension: 0.45 }, 'Entry Trunk'),
+        presetNode('polyline', 'overlay_fork_path', { x: 40, y: 150 }, { points: [{ x: -1.9, y: -3.1 }, { x: 1.9, y: -3.1 }] }, 'Fork Platform'),
+        presetNode('spline', 'overlay_left_branch_path', { x: 40, y: 230 }, { points: [{ x: 0, y: -3.2 }, { x: -2.1, y: -4 }, { x: -3.4, y: -4.8 }, { x: -4.8, y: -4.9 }], curveType: 'centripetal', tension: 0.45 }, 'Left Branch'),
+        presetNode('spline', 'overlay_right_branch_path', { x: 40, y: 300 }, { points: [{ x: 0, y: -3.2 }, { x: 2.1, y: -4 }, { x: 3.4, y: -4.8 }, { x: 4.8, y: -4.9 }], curveType: 'centripetal', tension: 0.45 }, 'Right Branch'),
+        presetNode('spline', 'overlay_front_path', { x: 40, y: 380 }, { points: [{ x: -4.8, y: -4.9 }, { x: -2.2, y: -6.1 }, { x: 2.2, y: -6.1 }, { x: 4.8, y: -4.9 }], curveType: 'centripetal', tension: 0.45 }, 'Loop Front'),
+        presetNode('spline', 'overlay_right_path', { x: 40, y: 450 }, { points: [{ x: 4.8, y: -4.9 }, { x: 6.1, y: -2 }, { x: 6.2, y: 2.3 }, { x: 4.8, y: 5.1 }], curveType: 'centripetal', tension: 0.45 }, 'Loop Right'),
+        presetNode('spline', 'overlay_back_path', { x: 40, y: 520 }, { points: [{ x: 4.8, y: 5.1 }, { x: 2.2, y: 6.1 }, { x: -2.2, y: 6.1 }, { x: -4.8, y: 5.1 }], curveType: 'centripetal', tension: 0.45 }, 'Loop Back'),
+        presetNode('spline', 'overlay_left_path', { x: 40, y: 590 }, { points: [{ x: -4.8, y: 5.1 }, { x: -6.2, y: 2.3 }, { x: -6.1, y: -2 }, { x: -4.8, y: -4.9 }], curveType: 'centripetal', tension: 0.45 }, 'Loop Left'),
+        presetNode('surface_spine_segment_v1', 'overlay_entry_segment', { x: 340, y: 80 }, { startJunctionId: 'entry', endJunctionId: 'fork', segmentRole: 'stair_run', sampleSpacing: 0.18, widthStations: [{ t: 0, left: 1.4, right: 1.4 }, { t: 1, left: 2.1, right: 2.1 }], elevationStations: [{ t: 0, elevation: 0 }, { t: 1, elevation: 1.7 }] }, 'Entry Segment'),
+        presetNode('surface_spine_segment_v1', 'overlay_fork_segment', { x: 340, y: 150 }, { startJunctionId: 'fork', endJunctionId: 'fork', segmentRole: 'landing', sampleSpacing: 0.16, widthStations: [{ t: 0, left: 2, right: 2 }, { t: 1, left: 2, right: 2 }], elevationStations: [{ t: 0, elevation: 1.7 }, { t: 1, elevation: 1.7 }] }, 'Fork Segment'),
+        presetNode('surface_spine_segment_v1', 'overlay_left_branch_segment', { x: 340, y: 230 }, { startJunctionId: 'fork', endJunctionId: 'loop_front_left', segmentRole: 'stair_run', sampleSpacing: 0.18, widthStations: [{ t: 0, left: 1.5, right: 1.25 }, { t: 1, left: 1.2, right: 1.65 }], elevationStations: [{ t: 0, elevation: 1.7 }, { t: 0.82, elevation: 3.2 }, { t: 1, elevation: 3.2 }] }, 'Left Branch Segment'),
+        presetNode('surface_spine_segment_v1', 'overlay_right_branch_segment', { x: 340, y: 300 }, { startJunctionId: 'fork', endJunctionId: 'loop_front_right', segmentRole: 'stair_run', sampleSpacing: 0.18, widthStations: [{ t: 0, left: 1.25, right: 1.5 }, { t: 1, left: 1.65, right: 1.2 }], elevationStations: [{ t: 0, elevation: 1.7 }, { t: 0.82, elevation: 3.2 }, { t: 1, elevation: 3.2 }] }, 'Right Branch Segment'),
+        presetNode('surface_spine_segment_v1', 'overlay_front_segment', { x: 340, y: 380 }, { startJunctionId: 'loop_front_left', endJunctionId: 'loop_front_right', segmentRole: 'mezzanine', sampleSpacing: 0.16, widthStations: [{ t: 0, left: 1.1, right: 2.7 }, { t: 0.5, left: 1.2, right: 3.15 }, { t: 1, left: 1.1, right: 2.7 }], elevationStations: [{ t: 0, elevation: 3.2 }, { t: 1, elevation: 3.2 }] }, 'Loop Front Segment'),
+        presetNode('surface_spine_segment_v1', 'overlay_right_segment', { x: 340, y: 450 }, { startJunctionId: 'loop_front_right', endJunctionId: 'loop_back_right', segmentRole: 'mezzanine', sampleSpacing: 0.16, widthStations: [{ t: 0, left: 1.15, right: 2.45 }, { t: 1, left: 1.15, right: 2.25 }], elevationStations: [{ t: 0, elevation: 3.2 }, { t: 1, elevation: 3.2 }] }, 'Loop Right Segment'),
+        presetNode('surface_spine_segment_v1', 'overlay_back_segment', { x: 340, y: 520 }, { startJunctionId: 'loop_back_right', endJunctionId: 'loop_back_left', segmentRole: 'mezzanine', sampleSpacing: 0.16, widthStations: [{ t: 0, left: 1.15, right: 2.3 }, { t: 0.5, left: 1.2, right: 2.85 }, { t: 1, left: 1.15, right: 2.3 }], elevationStations: [{ t: 0, elevation: 3.2 }, { t: 1, elevation: 3.2 }] }, 'Loop Back Segment'),
+        presetNode('surface_spine_segment_v1', 'overlay_left_segment', { x: 340, y: 590 }, { startJunctionId: 'loop_back_left', endJunctionId: 'loop_front_left', segmentRole: 'mezzanine', sampleSpacing: 0.16, widthStations: [{ t: 0, left: 1.15, right: 2.25 }, { t: 1, left: 1.15, right: 2.45 }], elevationStations: [{ t: 0, elevation: 3.2 }, { t: 1, elevation: 3.2 }] }, 'Loop Left Segment'),
+        presetNode('walkable_surface_from_spine_v1', 'overlay_surface', { x: 660, y: 300 }, { thickness: 0.24, sampleSpacing: 0.16, junctionPlateauRadius: 1.3, junctionBlendRadius: 2.6 }, 'Overlay Surface'),
+        presetNode('stair_overlay_from_spine_v1', 'overlay_stairs', { x: 660, y: 470 }, { treadDepth: 0.28, maxRise: 0.18, thickness: 0.08, elevationOffset: 0.015 }, 'Overlay Stairs'),
+        presetNode('environment_output', `${graphKey}.output`, { x: 950, y: 360 }, {}, 'Environment Output'),
+      ],
+      edges: [
+        presetEdge('overlay_entry_path_to_segment', 'overlay_entry_path', 'path', 'overlay_entry_segment', 'path'),
+        presetEdge('overlay_fork_path_to_segment', 'overlay_fork_path', 'path', 'overlay_fork_segment', 'path'),
+        presetEdge('overlay_left_branch_path_to_segment', 'overlay_left_branch_path', 'path', 'overlay_left_branch_segment', 'path'),
+        presetEdge('overlay_right_branch_path_to_segment', 'overlay_right_branch_path', 'path', 'overlay_right_branch_segment', 'path'),
+        presetEdge('overlay_front_path_to_segment', 'overlay_front_path', 'path', 'overlay_front_segment', 'path'),
+        presetEdge('overlay_right_path_to_segment', 'overlay_right_path', 'path', 'overlay_right_segment', 'path'),
+        presetEdge('overlay_back_path_to_segment', 'overlay_back_path', 'path', 'overlay_back_segment', 'path'),
+        presetEdge('overlay_left_path_to_segment', 'overlay_left_path', 'path', 'overlay_left_segment', 'path'),
+        presetEdge('overlay_entry_segment_to_surface', 'overlay_entry_segment', 'segment', 'overlay_surface', 'segments'),
+        presetEdge('overlay_fork_segment_to_surface', 'overlay_fork_segment', 'segment', 'overlay_surface', 'segments'),
+        presetEdge('overlay_left_branch_segment_to_surface', 'overlay_left_branch_segment', 'segment', 'overlay_surface', 'segments'),
+        presetEdge('overlay_right_branch_segment_to_surface', 'overlay_right_branch_segment', 'segment', 'overlay_surface', 'segments'),
+        presetEdge('overlay_front_segment_to_surface', 'overlay_front_segment', 'segment', 'overlay_surface', 'segments'),
+        presetEdge('overlay_right_segment_to_surface', 'overlay_right_segment', 'segment', 'overlay_surface', 'segments'),
+        presetEdge('overlay_back_segment_to_surface', 'overlay_back_segment', 'segment', 'overlay_surface', 'segments'),
+        presetEdge('overlay_left_segment_to_surface', 'overlay_left_segment', 'segment', 'overlay_surface', 'segments'),
+        presetEdge('overlay_entry_segment_to_stairs', 'overlay_entry_segment', 'segment', 'overlay_stairs', 'segments'),
+        presetEdge('overlay_fork_segment_to_stairs', 'overlay_fork_segment', 'segment', 'overlay_stairs', 'segments'),
+        presetEdge('overlay_left_branch_segment_to_stairs', 'overlay_left_branch_segment', 'segment', 'overlay_stairs', 'segments'),
+        presetEdge('overlay_right_branch_segment_to_stairs', 'overlay_right_branch_segment', 'segment', 'overlay_stairs', 'segments'),
+        presetEdge('overlay_front_segment_to_stairs', 'overlay_front_segment', 'segment', 'overlay_stairs', 'segments'),
+        presetEdge('overlay_right_segment_to_stairs', 'overlay_right_segment', 'segment', 'overlay_stairs', 'segments'),
+        presetEdge('overlay_back_segment_to_stairs', 'overlay_back_segment', 'segment', 'overlay_stairs', 'segments'),
+        presetEdge('overlay_left_segment_to_stairs', 'overlay_left_segment', 'segment', 'overlay_stairs', 'segments'),
+        presetEdge('overlay_surface_solid_to_output', 'overlay_surface', 'solid', `${graphKey}.output`, 'solids'),
+        presetEdge('overlay_surface_to_output', 'overlay_surface', 'surface', `${graphKey}.output`, 'surfaces'),
+        presetEdge('overlay_stairs_to_output', 'overlay_stairs', 'solid', `${graphKey}.output`, 'solids'),
+      ],
+    }),
+  },
+  {
+    key: 'palace_grand_hall_spine_v1',
+    label: 'Palace Grand Hall Spine V1',
+    summary: 'Prototype palace grand hall built from one shared spine surface plus stair overlays and selected balcony rails.',
+    build: (graphKey, environmentKey) => ({
+      id: `preset-graph-${graphKey}`,
+      key: graphKey,
+      name: 'Palace Grand Hall Spine V1',
+      summary: 'Grand-hall prototype: main stair trunk, fork platform, rising branches, full mezzanine loop, and selected gallery rails.',
+      boundEnvironmentKey: environmentKey ?? null,
+      metadata: { presetKey: 'palace_grand_hall_spine_v1', compileSettings: { triangulation: 'constrained_delaunay_v1' } },
+      nodes: [
+        presetNode('spline', 'palace_spine_entry_path', { x: 40, y: 80 }, { points: [{ x: 0, y: -12.5 }, { x: -0.5, y: -8.9 }, { x: 0.1, y: -5.8 }, { x: 0, y: -3.4 }], curveType: 'centripetal', tension: 0.45 }, 'Main Stair Trunk'),
+        presetNode('polyline', 'palace_spine_fork_path', { x: 40, y: 150 }, { points: [{ x: -2.2, y: -3.25 }, { x: 2.2, y: -3.25 }] }, 'Fork Platform'),
+        presetNode('spline', 'palace_spine_left_branch_path', { x: 40, y: 230 }, { points: [{ x: 0, y: -3.4 }, { x: -2.2, y: -4.2 }, { x: -3.6, y: -4.95 }, { x: -5.2, y: -5.15 }], curveType: 'centripetal', tension: 0.45 }, 'Left Branch Stair'),
+        presetNode('spline', 'palace_spine_right_branch_path', { x: 40, y: 300 }, { points: [{ x: 0, y: -3.4 }, { x: 2.2, y: -4.2 }, { x: 3.6, y: -4.95 }, { x: 5.2, y: -5.15 }], curveType: 'centripetal', tension: 0.45 }, 'Right Branch Stair'),
+        presetNode('spline', 'palace_spine_front_loop_path', { x: 40, y: 380 }, { points: [{ x: -5.2, y: -5.15 }, { x: -2.3, y: -6.45 }, { x: 2.3, y: -6.45 }, { x: 5.2, y: -5.15 }], curveType: 'centripetal', tension: 0.45 }, 'Front Loop Gallery'),
+        presetNode('spline', 'palace_spine_right_loop_path', { x: 40, y: 450 }, { points: [{ x: 5.2, y: -5.15 }, { x: 6.6, y: -2.2 }, { x: 6.7, y: 2.5 }, { x: 5.1, y: 5.5 }], curveType: 'centripetal', tension: 0.45 }, 'Right Loop Gallery'),
+        presetNode('spline', 'palace_spine_back_loop_path', { x: 40, y: 520 }, { points: [{ x: 5.1, y: 5.5 }, { x: 2.4, y: 6.55 }, { x: -2.4, y: 6.55 }, { x: -5.1, y: 5.5 }], curveType: 'centripetal', tension: 0.45 }, 'Back Loop Gallery'),
+        presetNode('spline', 'palace_spine_left_loop_path', { x: 40, y: 590 }, { points: [{ x: -5.1, y: 5.5 }, { x: -6.7, y: 2.5 }, { x: -6.6, y: -2.2 }, { x: -5.2, y: -5.15 }], curveType: 'centripetal', tension: 0.45 }, 'Left Loop Gallery'),
+        presetNode('surface_spine_segment_v1', 'palace_entry_segment', { x: 360, y: 80 }, { startJunctionId: 'entry', endJunctionId: 'fork', segmentRole: 'stair_run', sampleSpacing: 0.16, widthStations: [{ t: 0, left: 1.6, right: 1.6 }, { t: 0.5, left: 1.9, right: 1.9 }, { t: 1, left: 2.35, right: 2.35 }], elevationStations: [{ t: 0, elevation: 0 }, { t: 0.55, elevation: 1.75 }, { t: 1, elevation: 2.2 }] }, 'Entry Segment'),
+        presetNode('surface_spine_segment_v1', 'palace_fork_segment', { x: 360, y: 150 }, { startJunctionId: 'fork', endJunctionId: 'fork', segmentRole: 'landing', sampleSpacing: 0.14, widthStations: [{ t: 0, left: 2.35, right: 2.35 }, { t: 1, left: 2.35, right: 2.35 }], elevationStations: [{ t: 0, elevation: 2.2 }, { t: 1, elevation: 2.2 }] }, 'Fork Platform Segment'),
+        presetNode('surface_spine_segment_v1', 'palace_left_branch_segment', { x: 360, y: 230 }, { startJunctionId: 'fork', endJunctionId: 'loop_front_left', segmentRole: 'stair_run', sampleSpacing: 0.16, widthStations: [{ t: 0, left: 1.8, right: 1.45 }, { t: 0.7, left: 1.5, right: 1.8 }, { t: 1, left: 1.25, right: 2.1 }], elevationStations: [{ t: 0, elevation: 2.2 }, { t: 0.72, elevation: 3.8 }, { t: 0.88, elevation: 4 }, { t: 1, elevation: 4 }], boundaryTagsRight: ['ceremonial_outer'] }, 'Left Branch Segment'),
+        presetNode('surface_spine_segment_v1', 'palace_right_branch_segment', { x: 360, y: 300 }, { startJunctionId: 'fork', endJunctionId: 'loop_front_right', segmentRole: 'stair_run', sampleSpacing: 0.16, widthStations: [{ t: 0, left: 1.45, right: 1.8 }, { t: 0.7, left: 1.8, right: 1.5 }, { t: 1, left: 2.1, right: 1.25 }], elevationStations: [{ t: 0, elevation: 2.2 }, { t: 0.72, elevation: 3.8 }, { t: 0.88, elevation: 4 }, { t: 1, elevation: 4 }], boundaryTagsLeft: ['ceremonial_outer'] }, 'Right Branch Segment'),
+        presetNode('surface_spine_segment_v1', 'palace_front_loop_segment', { x: 360, y: 380 }, { startJunctionId: 'loop_front_left', endJunctionId: 'loop_front_right', segmentRole: 'mezzanine', sampleSpacing: 0.14, widthStations: [{ t: 0, left: 1.2, right: 3.1 }, { t: 0.5, left: 1.3, right: 3.7 }, { t: 1, left: 1.2, right: 3.1 }], elevationStations: [{ t: 0, elevation: 4 }, { t: 1, elevation: 4 }], boundaryTagsLeft: ['gallery_inner'], boundaryTagsRight: ['gallery_outer', 'gallery_front'] }, 'Front Loop Segment'),
+        presetNode('surface_spine_segment_v1', 'palace_right_loop_segment', { x: 360, y: 450 }, { startJunctionId: 'loop_front_right', endJunctionId: 'loop_back_right', segmentRole: 'mezzanine', sampleSpacing: 0.14, widthStations: [{ t: 0, left: 1.25, right: 2.8 }, { t: 1, left: 1.25, right: 2.55 }], elevationStations: [{ t: 0, elevation: 4 }, { t: 1, elevation: 4 }], boundaryTagsLeft: ['gallery_inner'], boundaryTagsRight: ['gallery_outer', 'gallery_side'] }, 'Right Loop Segment'),
+        presetNode('surface_spine_segment_v1', 'palace_back_loop_segment', { x: 360, y: 520 }, { startJunctionId: 'loop_back_right', endJunctionId: 'loop_back_left', segmentRole: 'mezzanine', sampleSpacing: 0.14, widthStations: [{ t: 0, left: 1.25, right: 2.6 }, { t: 0.5, left: 1.35, right: 3.2 }, { t: 1, left: 1.25, right: 2.6 }], elevationStations: [{ t: 0, elevation: 4 }, { t: 1, elevation: 4 }], boundaryTagsLeft: ['gallery_inner'], boundaryTagsRight: ['gallery_outer', 'gallery_back'] }, 'Back Loop Segment'),
+        presetNode('surface_spine_segment_v1', 'palace_left_loop_segment', { x: 360, y: 590 }, { startJunctionId: 'loop_back_left', endJunctionId: 'loop_front_left', segmentRole: 'mezzanine', sampleSpacing: 0.14, widthStations: [{ t: 0, left: 1.25, right: 2.55 }, { t: 1, left: 1.25, right: 2.8 }], elevationStations: [{ t: 0, elevation: 4 }, { t: 1, elevation: 4 }], boundaryTagsLeft: ['gallery_inner'], boundaryTagsRight: ['gallery_outer', 'gallery_side'] }, 'Left Loop Segment'),
+        presetNode('walkable_surface_from_spine_v1', 'palace_spine_surface', { x: 700, y: 330 }, { thickness: 0.26, sampleSpacing: 0.14, junctionPlateauRadius: 1.45, junctionBlendRadius: 2.8 }, 'Grand Hall Spine Surface'),
+        presetNode('stair_overlay_from_spine_v1', 'palace_spine_stairs', { x: 700, y: 500 }, { treadDepth: 0.28, maxRise: 0.18, thickness: 0.08, elevationOffset: 0.015 }, 'Grand Hall Stairs'),
+        presetNode('boundary_path_selector', 'palace_gallery_outer_edges', { x: 980, y: 250 }, { spineRole: 'mezzanine', side: 'right', tag: 'gallery_outer' }, 'Outer Gallery Edges'),
+        presetNode('boundary_path_selector', 'palace_gallery_back_edge', { x: 980, y: 360 }, { spineRole: 'mezzanine', side: 'right', tag: 'gallery_back' }, 'Back Gallery Edge'),
+        presetNode('fence_along_path', 'palace_gallery_rail', { x: 1240, y: 250 }, { postSpacing: 1.3, height: 1.08, thickness: 0.12 }, 'Gallery Rail'),
+        presetNode('wall_along_path', 'palace_back_wall', { x: 1240, y: 360 }, { thickness: 0.18, height: 2.4 }, 'Back Gallery Wall'),
+        presetNode('environment_output', `${graphKey}.output`, { x: 1480, y: 330 }, {}, 'Environment Output'),
+      ],
+      edges: [
+        presetEdge('palace_entry_path_to_segment', 'palace_spine_entry_path', 'path', 'palace_entry_segment', 'path'),
+        presetEdge('palace_fork_path_to_segment', 'palace_spine_fork_path', 'path', 'palace_fork_segment', 'path'),
+        presetEdge('palace_left_branch_path_to_segment', 'palace_spine_left_branch_path', 'path', 'palace_left_branch_segment', 'path'),
+        presetEdge('palace_right_branch_path_to_segment', 'palace_spine_right_branch_path', 'path', 'palace_right_branch_segment', 'path'),
+        presetEdge('palace_front_loop_path_to_segment', 'palace_spine_front_loop_path', 'path', 'palace_front_loop_segment', 'path'),
+        presetEdge('palace_right_loop_path_to_segment', 'palace_spine_right_loop_path', 'path', 'palace_right_loop_segment', 'path'),
+        presetEdge('palace_back_loop_path_to_segment', 'palace_spine_back_loop_path', 'path', 'palace_back_loop_segment', 'path'),
+        presetEdge('palace_left_loop_path_to_segment', 'palace_spine_left_loop_path', 'path', 'palace_left_loop_segment', 'path'),
+        presetEdge('palace_entry_segment_to_surface', 'palace_entry_segment', 'segment', 'palace_spine_surface', 'segments'),
+        presetEdge('palace_fork_segment_to_surface', 'palace_fork_segment', 'segment', 'palace_spine_surface', 'segments'),
+        presetEdge('palace_left_branch_segment_to_surface', 'palace_left_branch_segment', 'segment', 'palace_spine_surface', 'segments'),
+        presetEdge('palace_right_branch_segment_to_surface', 'palace_right_branch_segment', 'segment', 'palace_spine_surface', 'segments'),
+        presetEdge('palace_front_loop_segment_to_surface', 'palace_front_loop_segment', 'segment', 'palace_spine_surface', 'segments'),
+        presetEdge('palace_right_loop_segment_to_surface', 'palace_right_loop_segment', 'segment', 'palace_spine_surface', 'segments'),
+        presetEdge('palace_back_loop_segment_to_surface', 'palace_back_loop_segment', 'segment', 'palace_spine_surface', 'segments'),
+        presetEdge('palace_left_loop_segment_to_surface', 'palace_left_loop_segment', 'segment', 'palace_spine_surface', 'segments'),
+        presetEdge('palace_entry_segment_to_stairs', 'palace_entry_segment', 'segment', 'palace_spine_stairs', 'segments'),
+        presetEdge('palace_fork_segment_to_stairs', 'palace_fork_segment', 'segment', 'palace_spine_stairs', 'segments'),
+        presetEdge('palace_left_branch_segment_to_stairs', 'palace_left_branch_segment', 'segment', 'palace_spine_stairs', 'segments'),
+        presetEdge('palace_right_branch_segment_to_stairs', 'palace_right_branch_segment', 'segment', 'palace_spine_stairs', 'segments'),
+        presetEdge('palace_front_loop_segment_to_stairs', 'palace_front_loop_segment', 'segment', 'palace_spine_stairs', 'segments'),
+        presetEdge('palace_right_loop_segment_to_stairs', 'palace_right_loop_segment', 'segment', 'palace_spine_stairs', 'segments'),
+        presetEdge('palace_back_loop_segment_to_stairs', 'palace_back_loop_segment', 'segment', 'palace_spine_stairs', 'segments'),
+        presetEdge('palace_left_loop_segment_to_stairs', 'palace_left_loop_segment', 'segment', 'palace_spine_stairs', 'segments'),
+        presetEdge('palace_surface_to_outer_selector', 'palace_spine_surface', 'paths', 'palace_gallery_outer_edges', 'path'),
+        presetEdge('palace_surface_to_back_selector', 'palace_spine_surface', 'paths', 'palace_gallery_back_edge', 'path'),
+        presetEdge('palace_outer_selector_to_rail', 'palace_gallery_outer_edges', 'paths', 'palace_gallery_rail', 'path'),
+        presetEdge('palace_back_selector_to_wall', 'palace_gallery_back_edge', 'paths', 'palace_back_wall', 'path'),
+        presetEdge('palace_surface_solid_to_output', 'palace_spine_surface', 'solid', `${graphKey}.output`, 'solids'),
+        presetEdge('palace_surface_to_output', 'palace_spine_surface', 'surface', `${graphKey}.output`, 'surfaces'),
+        presetEdge('palace_stairs_to_output', 'palace_spine_stairs', 'solid', `${graphKey}.output`, 'solids'),
       ],
     }),
   },

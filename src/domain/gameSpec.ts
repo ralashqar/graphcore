@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { DEFAULT_ART_STYLE_PRESET } from './artStylePresets'
 
 const scopeWeightSchema = z.enum(['none', 'light', 'medium', 'heavy'])
 
@@ -11,12 +12,16 @@ export const gameSpecSchema = z.object({
     playerFantasy: z.string().default('adventurer'),
     worldPremise: z.string().default(''),
     namingStyle: z.string().default('classic_fantasy'),
+    artStylePreset: z.string().default(DEFAULT_ART_STYLE_PRESET),
+    artStyleDescription: z.string().default(''),
   }).default({
     genre: 'fantasy_rpg',
     tone: 'grounded',
     playerFantasy: 'adventurer',
     worldPremise: '',
     namingStyle: 'classic_fantasy',
+    artStylePreset: DEFAULT_ART_STYLE_PRESET,
+    artStyleDescription: '',
   }),
   systems: z.object({
     progressionStyle: z.enum(['linear', 'branching', 'hub_and_spoke', 'open']).default('branching'),

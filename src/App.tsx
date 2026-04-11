@@ -7,9 +7,11 @@ import { patchApplyService } from './application/services/patchApplyService'
 import { promptGenerationService } from './application/services/promptGenerationService'
 import { publishService } from './application/services/publishService'
 import { workspaceService } from './application/services/workspaceService'
-import { buildAssetSlug, getAssetKeyPrefix, inferAssetKindFromUpload, inferRemoteAssetMimeType, inferUploadMimeType, isSupportedMeshPath, type AssetUrlCreationKind } from './domain/assets'
+import { buildAssetSlug, getAssetKeyPrefix, inferAssetKindFromUpload, inferRemoteAssetMimeType, inferUploadMimeType, isSupportedMeshPath, type AssetUrlCreateOptions, type AssetUrlCreationKind } from './domain/assets'
+import { DEFAULT_ART_STYLE_PRESET } from './domain/artStylePresets'
 import { compileBundle } from './domain/compiler'
 import { createEnvironmentBlueprint } from './domain/environmentBlueprint'
+import { createGameSpecFromArchetype } from './domain/gameArchetypes'
 import { buildDefaultDefinitionComponents, projectSnapshotSchema, schemaCatalog } from './domain/graphcore'
 import type {
   AssemblyGraphDefinition,
@@ -141,6 +143,8 @@ export default function App() {
   const [workspaceBootstrapError, setWorkspaceBootstrapError] = useState<string | null>(null)
   const [bootstrapGameArchetypeId, setBootstrapGameArchetypeId] = useState('rpg')
   const [bootstrapConceptPrompt, setBootstrapConceptPrompt] = useState('')
+  const [bootstrapArtStylePreset, setBootstrapArtStylePreset] = useState<string>(DEFAULT_ART_STYLE_PRESET)
+  const [bootstrapArtStyleDescription, setBootstrapArtStyleDescription] = useState('')
   const [bootstrapOnboardingOpen, setBootstrapOnboardingOpen] = useState(false)
   const [hasLocalSnapshotChanges, setHasLocalSnapshotChanges] = useState(false)
   const [isPending, startTransition] = useTransition()
@@ -332,8 +336,16 @@ export default function App() {
     const nextConceptPrompt = typeof snapshot.gameSpec?.overrides?.gameConceptPrompt === 'string'
       ? snapshot.gameSpec.overrides.gameConceptPrompt
       : ''
+    const nextArtStylePreset = typeof snapshot.gameSpec?.theme?.artStylePreset === 'string'
+      ? snapshot.gameSpec.theme.artStylePreset
+      : DEFAULT_ART_STYLE_PRESET
+    const nextArtStyleDescription = typeof snapshot.gameSpec?.theme?.artStyleDescription === 'string'
+      ? snapshot.gameSpec.theme.artStyleDescription
+      : ''
     setBootstrapGameArchetypeId(nextArchetypeId)
     setBootstrapConceptPrompt(nextConceptPrompt)
+    setBootstrapArtStylePreset(nextArtStylePreset)
+    setBootstrapArtStyleDescription(nextArtStyleDescription)
   }, [snapshot?.draft.id, snapshot?.gameSpec])
 
   useEffect(() => {
@@ -859,28 +871,34 @@ export default function App() {
     if (changes.key && selectedAssetKey === assetKey) setSelectedAssetKey(changes.key)
   }
 
-  function createUrlAsset(sourceUrl: string, kind: AssetUrlCreationKind = 'image') {
+  function createUrlAsset(sourceUrl: string, kind: AssetUrlCreationKind = 'image', options?: AssetUrlCreateOptions) {
     const trimmedUrl = sourceUrl.trim()
-    if (!trimmedUrl) return
-    if (kind === 'mesh' && !isSupportedMeshPath(trimmedUrl)) return
+    if (!trimmedUrl) return null
+    if (kind === 'mesh' && !isSupportedMeshPath(trimmedUrl)) return null
     const slug = buildAssetSlug(trimmedUrl.replace(/https?:\/\//, '')) || `asset_${Date.now()}`
     const assetPrefix = getAssetKeyPrefix(kind)
     const nextAsset = {
       id: `asset-url-${Date.now()}`,
       key: `${assetPrefix}.${slug}`,
-      name: `Imported ${slug}`,
+      name: options?.name?.trim() || `Imported ${slug}`,
       kind: kind as 'image' | 'mesh',
       mimeType: inferRemoteAssetMimeType(trimmedUrl, kind),
       storagePath: `external/${slug}`,
       metadata: {
         sourceUrl: trimmedUrl,
         ...(kind === 'image' ? { previewUrl: trimmedUrl } : {}),
+        ...(options?.metadata ?? {}),
       },
       llmHints: {},
     }
     applySnapshotUpdate((current) => ({ ...current, assets: [nextAsset, ...current.assets] }))
-    setSelectedAssetKey(nextAsset.key)
-    setActiveTab('assets')
+    if (options?.selectAsset ?? true) {
+      setSelectedAssetKey(nextAsset.key)
+    }
+    if (options?.openAssetsTab ?? true) {
+      setActiveTab('assets')
+    }
+    return nextAsset.key
   }
 
   function handleAssetUpload(file: File) {
@@ -1115,6 +1133,8 @@ export default function App() {
   function handleOpenBootstrapOnboarding() {
     setBootstrapGameArchetypeId('rpg')
     setBootstrapConceptPrompt('')
+    setBootstrapArtStylePreset(DEFAULT_ART_STYLE_PRESET)
+    setBootstrapArtStyleDescription('')
     setBootstrapOnboardingOpen(true)
   }
 
@@ -1133,6 +1153,8 @@ export default function App() {
       const state = await refreshWorkspaceState(() => workspaceService.createGame())
       setBootstrapGameArchetypeId('rpg')
       setBootstrapConceptPrompt('')
+      setBootstrapArtStylePreset(DEFAULT_ART_STYLE_PRESET)
+      setBootstrapArtStyleDescription('')
       setActiveTab('graph')
       if (state.source === 'supabase') {
         setBootstrapOnboardingOpen(true)
@@ -1170,6 +1192,16 @@ export default function App() {
             ? state.snapshot.gameSpec.overrides.gameConceptPrompt
             : '',
         )
+        setBootstrapArtStylePreset(
+          typeof state.snapshot.gameSpec?.theme?.artStylePreset === 'string'
+            ? state.snapshot.gameSpec.theme.artStylePreset
+            : DEFAULT_ART_STYLE_PRESET,
+        )
+        setBootstrapArtStyleDescription(
+          typeof state.snapshot.gameSpec?.theme?.artStyleDescription === 'string'
+            ? state.snapshot.gameSpec.theme.artStyleDescription
+            : '',
+        )
       }
     } catch (switchError) {
       console.error('[GraphCore] switch game failed.', switchError)
@@ -1200,6 +1232,15 @@ export default function App() {
       const prompt = conceptPrompt.length > 0
         ? conceptPrompt
         : `Initialize a ${bootstrapGameArchetypeId.replace(/[_-]+/g, ' ')} game with a compact starter data layer.`
+      const baseBootstrapSpec = createGameSpecFromArchetype(bootstrapGameArchetypeId, conceptPrompt)
+      const bootstrapGameSpec = {
+        ...baseBootstrapSpec,
+        theme: {
+          ...baseBootstrapSpec.theme,
+          artStylePreset: bootstrapArtStylePreset,
+          artStyleDescription: bootstrapArtStyleDescription.trim(),
+        },
+      }
       const nextPatch = await promptGenerationService.generate({
         prompt,
         snapshot,
@@ -1207,6 +1248,7 @@ export default function App() {
         autoApply: true,
         intent: 'bootstrap_game',
         phase: 'bootstrap_orchestrator',
+        gameSpec: bootstrapGameSpec,
         gameArchetypeId: bootstrapGameArchetypeId,
         gameConceptPrompt: conceptPrompt,
         model: promptModel,
@@ -1380,7 +1422,7 @@ export default function App() {
             {activeTab === 'characters' ? (
               <SpecializedDefinitionWorkspace
                 title="Characters"
-                subtitle="Character definitions stay directly accessible here, with subtype, abilities, animation bindings, and logic-state data in one place."
+                subtitle="Create and refine cast entries here, with visual concept art, runtime profile, abilities, animation bindings, and logic-state data in one place."
                 kind="character"
                 archetypes={snapshot.archetypes}
                 assets={snapshot.assets}
@@ -1388,6 +1430,7 @@ export default function App() {
                 graphKeys={snapshot.graphs.map((graph) => graph.key)}
                 assemblyGraphs={snapshot.assemblyGraphs}
                 environmentBlueprints={snapshot.environmentBlueprints}
+                gameSpec={snapshot.gameSpec}
                 selectedAsset={selectedAsset}
                 selectedDefinition={selectedDefinition?.kind === 'character' ? selectedDefinition : null}
                 onAddCustomField={addCustomField}
@@ -1422,6 +1465,7 @@ export default function App() {
                 graphKeys={snapshot.graphs.map((graph) => graph.key)}
                 assemblyGraphs={snapshot.assemblyGraphs}
                 environmentBlueprints={snapshot.environmentBlueprints}
+                gameSpec={snapshot.gameSpec}
                 selectedAsset={selectedAsset}
                 selectedDefinition={selectedDefinition?.kind === 'environment' ? selectedDefinition : null}
                 onAddCustomField={addCustomField}
@@ -1469,9 +1513,13 @@ export default function App() {
       {bootstrapOnboardingOpen ? (
         <GameBootstrapOnboarding
           canClose
+          artStyleDescription={bootstrapArtStyleDescription}
+          artStylePreset={bootstrapArtStylePreset}
           conceptPrompt={bootstrapConceptPrompt}
           gameArchetypeId={bootstrapGameArchetypeId}
           isGenerating={isGeneratingPatch || isApplyingPatch}
+          onChangeArtStyleDescription={setBootstrapArtStyleDescription}
+          onChangeArtStylePreset={setBootstrapArtStylePreset}
           onChangeConceptPrompt={setBootstrapConceptPrompt}
           onChangeGameArchetypeId={setBootstrapGameArchetypeId}
           onClose={() => setBootstrapOnboardingOpen(false)}

@@ -94,6 +94,8 @@ const bootstrapBlueprintSchema = z.object({
     playerFantasy: z.string().optional(),
     worldPremise: z.string().optional(),
     namingStyle: z.string().optional(),
+    artStylePreset: z.string().optional(),
+    artStyleDescription: z.string().optional(),
   }).partial().default({}),
   systems: z.object({
     progressionStyle: z.enum(['linear', 'branching', 'hub_and_spoke', 'open']).optional(),
@@ -402,7 +404,36 @@ function buildExecutionPlan(
 }
 
 function normalizeBootstrapSpec(payload: PromptRequest, blueprint: z.infer<typeof bootstrapBlueprintSchema>) {
-  const baseSpec = createGameSpecFromArchetype(payload.gameArchetypeId ?? 'rpg', payload.gameConceptPrompt ?? payload.prompt)
+  const payloadGameSpec = payload.gameSpec ? gameSpecSchema.partial().parse(payload.gameSpec) : null
+  const seededBaseSpec = createGameSpecFromArchetype(payload.gameArchetypeId ?? 'rpg', payload.gameConceptPrompt ?? payload.prompt)
+  const baseSpec = gameSpecSchema.parse({
+    ...seededBaseSpec,
+    ...payloadGameSpec,
+    theme: {
+      ...seededBaseSpec.theme,
+      ...(payloadGameSpec?.theme ?? {}),
+    },
+    systems: {
+      ...seededBaseSpec.systems,
+      ...(payloadGameSpec?.systems ?? {}),
+    },
+    contentScope: {
+      ...seededBaseSpec.contentScope,
+      ...(payloadGameSpec?.contentScope ?? {}),
+    },
+    selectedPresetIds: {
+      ...seededBaseSpec.selectedPresetIds,
+      ...(payloadGameSpec?.selectedPresetIds ?? {}),
+    },
+    bootstrapTargets: {
+      ...seededBaseSpec.bootstrapTargets,
+      ...(payloadGameSpec?.bootstrapTargets ?? {}),
+    },
+    overrides: {
+      ...seededBaseSpec.overrides,
+      ...(payloadGameSpec?.overrides ?? {}),
+    },
+  })
   const packIds = [...new Set([
     ...baseSpec.selectedPresetIds.packs,
     ...blueprint.selectedPackIds.filter((packId) => packPresetMap.has(packId)),
@@ -428,6 +459,8 @@ function normalizeBootstrapSpec(payload: PromptRequest, blueprint: z.infer<typeo
     theme: {
       ...baseSpec.theme,
       ...blueprint.theme,
+      artStylePreset: payloadGameSpec?.theme?.artStylePreset ?? blueprint.theme.artStylePreset ?? baseSpec.theme.artStylePreset,
+      artStyleDescription: payloadGameSpec?.theme?.artStyleDescription ?? blueprint.theme.artStyleDescription ?? baseSpec.theme.artStyleDescription,
       worldPremise: payload.gameConceptPrompt?.trim() || blueprint.theme.worldPremise || baseSpec.theme.worldPremise,
     },
     systems: {

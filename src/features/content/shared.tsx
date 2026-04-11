@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { isSupportedMeshPath, resolveAssetPreviewUrl, type AssetUrlCreationKind } from '../../domain/assets'
+import { isSupportedMeshPath, resolveAssetPreviewUrl, type AssetUrlCreateOptions, type AssetUrlCreationKind } from '../../domain/assets'
+import { EntityIcon, type EntityIconId } from '../../shared/entityIcons'
 
 import type {
   ArchetypeDefinition,
@@ -255,16 +256,23 @@ export function AddFieldForm({
 export function EmptyEditor({
   actionLabel,
   body,
+  icon,
   onAction,
   title,
 }: {
   actionLabel: string
   body: string
+  icon?: EntityIconId
   onAction: () => void
   title: string
 }) {
   return (
     <div className="empty-surface">
+      {icon ? (
+        <span className="empty-surface-icon">
+          <EntityIcon id={icon} />
+        </span>
+      ) : null}
       <span className="eyebrow">Focused Editor</span>
       <h2>{title}</h2>
       <p>{body}</p>
@@ -275,7 +283,7 @@ export function EmptyEditor({
   )
 }
 
-export function QuickUrlAssetForm({ onCreateUrlAsset }: { onCreateUrlAsset: (url: string, kind?: AssetUrlCreationKind) => void }) {
+export function QuickUrlAssetForm({ onCreateUrlAsset }: { onCreateUrlAsset: (url: string, kind?: AssetUrlCreationKind, options?: AssetUrlCreateOptions) => string | null }) {
   const [kind, setKind] = useState<AssetUrlCreationKind>('image')
   const [url, setUrl] = useState('')
   const trimmedUrl = url.trim()
@@ -355,7 +363,7 @@ export function AssetPickerDialog({
                 type="button"
               >
                 <div className="asset-picker-card-media">
-                  {previewUrl ? <img alt={asset.name} src={previewUrl} /> : <MediaThumb asset={asset} label={asset.name} large />}
+                  {previewUrl ? <img alt={asset.name} src={previewUrl} /> : <MediaThumb asset={asset} fallbackIcon="asset" label={asset.name} large />}
                 </div>
                 <div className="asset-picker-card-copy">
                   <strong>{asset.name}</strong>
@@ -372,10 +380,12 @@ export function AssetPickerDialog({
 
 export function MediaThumb({
   asset,
+  fallbackIcon,
   label,
   large = false,
 }: {
   asset: AssetDefinition | null
+  fallbackIcon?: EntityIconId
   label: string
   large?: boolean
 }) {
@@ -397,6 +407,14 @@ export function MediaThumb({
         : asset?.kind === 'document'
           ? 'DOC'
           : (label.trim().match(/[A-Za-z0-9]/)?.[0] ?? '?').toUpperCase()
+
+  if (fallbackIcon) {
+    return (
+      <span className={large ? 'media-thumb large fallback has-icon' : 'media-thumb fallback has-icon'}>
+        <EntityIcon className="media-thumb-entity-icon" id={fallbackIcon} />
+      </span>
+    )
+  }
 
   return (
     <span className={large ? 'media-thumb large fallback' : 'media-thumb fallback'}>

@@ -300,6 +300,7 @@ export const environmentGeometryBindingComponentSchema = environmentGeometryBind
 export const render3dBindingComponentSchema = z.object({
   primaryMeshAssetKey: z.string().nullable().default(null),
   previewImageAssetKey: z.string().nullable().default(null),
+  conceptPrompt: z.string().nullable().default(null),
   generationPrompt: z.string().nullable().default(null),
   generationStyle: z.string().nullable().default(null),
 })
@@ -1168,6 +1169,7 @@ export function buildDefaultDefinitionComponents(kind: DefinitionKind): Componen
           config: {
             primaryMeshAssetKey: null,
             previewImageAssetKey: null,
+            conceptPrompt: null,
             generationPrompt: null,
             generationStyle: null,
           },

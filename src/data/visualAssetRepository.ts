@@ -16,16 +16,17 @@ function extractFalImageUrls(data: Record<string, unknown>) {
 }
 
 export async function generateConceptImage(request: ConceptImageGenerationRequest): Promise<ConceptImageGenerationResult> {
+  const referenceImageUrls = (request.referenceImageUrls ?? []).filter(Boolean)
   const response = await invokeFal({
     action: 'subscribe',
-    model: request.model ?? 'fal-ai/nano-banana-2/edit',
+    model: request.model ?? 'fal-ai/nano-banana-2',
     input: {
       prompt: request.prompt,
-      image_urls: request.referenceImageUrls ?? [],
       num_images: 1,
       aspect_ratio: request.aspectRatio ?? '1:1',
       output_format: 'png',
       resolution: '1K',
+      ...(referenceImageUrls.length > 0 ? { image_urls: referenceImageUrls } : {}),
     },
     logs: true,
     timeoutMs: 120000,

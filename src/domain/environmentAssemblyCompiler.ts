@@ -18,6 +18,7 @@ import {
   Vector3,
 } from 'three'
 import { ADDITION, Brush, Evaluator, INTERSECTION, SUBTRACTION } from 'three-bvh-csg'
+import * as martinez from 'martinez-polygon-clipping'
 import * as poly2tri from 'poly2tri'
 
 import {
@@ -70,6 +71,45 @@ type RuntimePath = {
   points: Vector3[]
 }
 
+type RuntimeSurfaceSpineStationWidth = {
+  t: number
+  left: number
+  right: number
+}
+
+type RuntimeSurfaceSpineStationElevation = {
+  t: number
+  elevation: number
+}
+
+type RuntimeSurfaceSpineSample = {
+  point: Vector3
+  tangent: Vector3
+  normal: Vector2
+  distance: number
+  t: number
+  leftWidth: number
+  rightWidth: number
+  elevation: number
+}
+
+type RuntimeSurfaceSpineSegment = {
+  id: string
+  sourceNodeKey: string
+  segmentRole: 'walkway' | 'stair_run' | 'landing' | 'mezzanine'
+  startJunctionId: string
+  endJunctionId: string
+  sampleSpacing: number
+  path: RuntimePath
+  widthStations: RuntimeSurfaceSpineStationWidth[]
+  elevationStations: RuntimeSurfaceSpineStationElevation[]
+  sampled: RuntimeSurfaceSpineSample[]
+  leftBoundary: Vector2[]
+  rightBoundary: Vector2[]
+  outline: Vector2[]
+  metadata: Record<string, unknown>
+}
+
 type RuntimeSolid = {
   spec: SolidSpec
   geometry: BufferGeometry
@@ -118,6 +158,7 @@ type RuntimeBlendTarget = {
 type RuntimeNodeResult = {
   profiles?: RuntimeProfile[]
   paths?: RuntimePath[]
+  pathOutputs?: Record<string, RuntimePath[]>
   solids?: RuntimeSolid[]
   solidOutputs?: Record<string, RuntimeSolid[]>
   surfaces?: RuntimeSurface[]
@@ -142,6 +183,7 @@ type RuntimeNodeResult = {
   slabVoids?: SlabVoidSpec[]
   surfaceHeightControls?: RuntimeSurfaceHeightControl[]
   blendTargets?: RuntimeBlendTarget[]
+  surfaceSpineSegments?: RuntimeSurfaceSpineSegment[]
   pathSpecs?: PathSpec[]
   arrayPlacements?: ArrayPlacementSpec[]
   interiorDoorRequests?: InteriorDoorRequest[]
@@ -308,6 +350,37 @@ function booleanParam(node: AssemblyNodeDefinition, key: string, fallback: boole
 function recordParam(node: AssemblyNodeDefinition, key: string): Record<string, unknown> | null {
   const value = node.params[key]
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
+}
+
+function spineWidthStationsParam(node: AssemblyNodeDefinition, key = 'widthStations', fallback: RuntimeSurfaceSpineStationWidth[] = [{ t: 0, left: 1, right: 1 }, { t: 1, left: 1, right: 1 }]) {
+  const value = node.params[key]
+  if (!Array.isArray(value)) return fallback
+  const stations = value
+    .map((entry) => {
+      if (!entry || typeof entry !== 'object') return null
+      const t = typeof (entry as { t?: unknown }).t === 'number' ? Math.max(0, Math.min(1, Number((entry as { t: number }).t))) : null
+      const left = typeof (entry as { left?: unknown }).left === 'number' ? Math.max(Number((entry as { left: number }).left), 0.05) : null
+      const right = typeof (entry as { right?: unknown }).right === 'number' ? Math.max(Number((entry as { right: number }).right), 0.05) : null
+      return t === null || left === null || right === null ? null : { t, left, right }
+    })
+    .filter((entry): entry is RuntimeSurfaceSpineStationWidth => entry !== null)
+    .sort((a, b) => a.t - b.t)
+  return stations.length > 0 ? stations : fallback
+}
+
+function spineElevationStationsParam(node: AssemblyNodeDefinition, key = 'elevationStations', fallback: RuntimeSurfaceSpineStationElevation[] = [{ t: 0, elevation: 0 }, { t: 1, elevation: 0 }]) {
+  const value = node.params[key]
+  if (!Array.isArray(value)) return fallback
+  const stations = value
+    .map((entry) => {
+      if (!entry || typeof entry !== 'object') return null
+      const t = typeof (entry as { t?: unknown }).t === 'number' ? Math.max(0, Math.min(1, Number((entry as { t: number }).t))) : null
+      const elevation = typeof (entry as { elevation?: unknown }).elevation === 'number' ? Number((entry as { elevation: number }).elevation) : null
+      return t === null || elevation === null ? null : { t, elevation }
+    })
+    .filter((entry): entry is RuntimeSurfaceSpineStationElevation => entry !== null)
+    .sort((a, b) => a.t - b.t)
+  return stations.length > 0 ? stations : fallback
 }
 
 function curveSegmentDecorators(segment: Record<string, unknown>) {
@@ -918,12 +991,76 @@ function createPathFromPoints(sourceNodeKey: string, id: string, kind: PathSpec[
   }
 }
 
+function stationValueAt<T extends { t: number }>(stations: T[], t: number, valueFor: (station: T) => number, fallback: number) {
+  if (stations.length === 0) return fallback
+  const clamped = Math.max(0, Math.min(1, t))
+  if (clamped <= stations[0].t) return valueFor(stations[0])
+  if (clamped >= stations[stations.length - 1].t) return valueFor(stations[stations.length - 1])
+  for (let index = 1; index < stations.length; index += 1) {
+    const previous = stations[index - 1]
+    const next = stations[index]
+    if (clamped <= next.t) {
+      const span = Math.max(next.t - previous.t, 1e-6)
+      const alpha = (clamped - previous.t) / span
+      return valueFor(previous) + (valueFor(next) - valueFor(previous)) * alpha
+    }
+  }
+  return fallback
+}
+
+function resampleRuntimePath(path: RuntimePath, spacing: number) {
+  if (path.points.length < 2) return path.points.map((point, index) => ({
+    point: point.clone(),
+    tangent: new Vector3(0, 0, 1),
+    distance: index,
+    t: path.points.length <= 1 ? 0 : index / (path.points.length - 1),
+  }))
+  const totalLength = Math.max(runtimePathLength(path), 1e-6)
+  const targetCount = Math.max(2, Math.ceil(totalLength / Math.max(spacing, 0.05)) + 1)
+  const samples: Array<{ point: Vector3; tangent: Vector3; distance: number; t: number }> = []
+  let traveled = 0
+  let segmentIndex = 1
+  let segmentStart = path.points[0]
+  let segmentEnd = path.points[1]
+  let segmentLength = segmentStart.distanceTo(segmentEnd)
+
+  for (let sampleIndex = 0; sampleIndex < targetCount; sampleIndex += 1) {
+    const targetDistance = sampleIndex === targetCount - 1 ? totalLength : (sampleIndex / (targetCount - 1)) * totalLength
+    while (segmentIndex < path.points.length - 1 && traveled + segmentLength < targetDistance) {
+      traveled += segmentLength
+      segmentIndex += 1
+      segmentStart = path.points[segmentIndex - 1]
+      segmentEnd = path.points[segmentIndex]
+      segmentLength = segmentStart.distanceTo(segmentEnd)
+    }
+    const localT = segmentLength > 1e-6 ? (targetDistance - traveled) / segmentLength : 0
+    const point = segmentStart.clone().lerp(segmentEnd, Math.max(0, Math.min(1, localT)))
+    const tangent = segmentEnd.clone().sub(segmentStart)
+    tangent.y = 0
+    if (tangent.lengthSq() <= 1e-6) tangent.set(0, 0, 1)
+    else tangent.normalize()
+    samples.push({
+      point,
+      tangent,
+      distance: targetDistance,
+      t: totalLength > 1e-6 ? targetDistance / totalLength : 0,
+    })
+  }
+
+  return samples
+}
+
 function collectIncomingProfiles(graph: AssemblyGraphDefinition, node: AssemblyNodeDefinition, results: Map<string, RuntimeNodeResult>, portId = 'profile') {
   return incomingEdges(graph, node.key, portId).flatMap((edge) => results.get(edge.source.nodeKey)?.profiles ?? [])
 }
 
 function collectIncomingPaths(graph: AssemblyGraphDefinition, node: AssemblyNodeDefinition, results: Map<string, RuntimeNodeResult>, portId = 'path') {
-  return incomingEdges(graph, node.key, portId).flatMap((edge) => results.get(edge.source.nodeKey)?.paths ?? [])
+  return incomingEdges(graph, node.key, portId).flatMap((edge) => {
+    const source = results.get(edge.source.nodeKey)
+    if (!source) return []
+    if (source.pathOutputs?.[edge.source.portId]) return source.pathOutputs[edge.source.portId]
+    return source.paths ?? []
+  })
 }
 
 function runtimePathLength(path: RuntimePath) {
@@ -1022,6 +1159,10 @@ function collectIncomingSurfaceHeightControls(graph: AssemblyGraphDefinition, no
 
 function collectIncomingBlendTargets(graph: AssemblyGraphDefinition, node: AssemblyNodeDefinition, results: Map<string, RuntimeNodeResult>, portId = 'blend_targets') {
   return incomingEdges(graph, node.key, portId).flatMap((edge) => results.get(edge.source.nodeKey)?.blendTargets ?? [])
+}
+
+function collectIncomingSurfaceSpineSegments(graph: AssemblyGraphDefinition, node: AssemblyNodeDefinition, results: Map<string, RuntimeNodeResult>, portId = 'segments') {
+  return incomingEdges(graph, node.key, portId).flatMap((edge) => results.get(edge.source.nodeKey)?.surfaceSpineSegments ?? [])
 }
 
 function collectSourceAnchors(graph: AssemblyGraphDefinition, node: AssemblyNodeDefinition, results: Map<string, RuntimeNodeResult>, portId = 'source') {
@@ -1196,7 +1337,29 @@ function closeLoopPoints(points: Vector2[]) {
 
 function sanitizeLoopForTriangulation(points: Vector2[], clockwise: boolean, epsilon = 1e-4) {
   const deduped = dedupeSequentialPoints(points, epsilon)
-  if (deduped.length >= 3) return normalizeLoopWinding(deduped, clockwise)
+  if (deduped.length >= 2 && deduped[0].distanceTo(deduped[deduped.length - 1]) <= epsilon) deduped.pop()
+  const cleaned = deduped.slice()
+  let changed = true
+  while (changed && cleaned.length >= 3) {
+    changed = false
+    for (let index = 0; index < cleaned.length; index += 1) {
+      const previous = cleaned[(index - 1 + cleaned.length) % cleaned.length]
+      const current = cleaned[index]
+      const next = cleaned[(index + 1) % cleaned.length]
+      if (previous.distanceTo(current) <= epsilon || current.distanceTo(next) <= epsilon) {
+        cleaned.splice(index, 1)
+        changed = true
+        break
+      }
+      const area = Math.abs(signedArea2D([previous, current, next]))
+      if (area <= epsilon * 0.5) {
+        cleaned.splice(index, 1)
+        changed = true
+        break
+      }
+    }
+  }
+  if (cleaned.length >= 3) return normalizeLoopWinding(cleaned, clockwise)
   return deduped
 }
 
@@ -1318,6 +1481,459 @@ function resolveSurfaceVertexElevation(
   return denominator > 1e-6 ? numerator / denominator : defaultTopElevation
 }
 
+function spineBoundaryTags(node: AssemblyNodeDefinition, key: string) {
+  const value = node.params[key]
+  if (typeof value === 'string' && value.trim().length > 0) return [value.trim()]
+  if (!Array.isArray(value)) return []
+  return value
+    .map((entry) => (typeof entry === 'string' && entry.trim().length > 0 ? entry.trim() : null))
+    .filter((entry): entry is string => entry !== null)
+}
+
+function createSurfaceSpineSegment(
+  node: AssemblyNodeDefinition,
+  path: RuntimePath,
+): RuntimeSurfaceSpineSegment | null {
+  if (path.points.length < 2) return null
+  const sampleSpacing = Math.max(numberParam(node, 'sampleSpacing', 0.3), 0.08)
+  const widthStations = spineWidthStationsParam(node)
+  const elevationStations = spineElevationStationsParam(node)
+  const rawSamples = resampleRuntimePath(path, sampleSpacing)
+  const sampled = rawSamples.map((sample) => {
+    const leftWidth = stationValueAt(widthStations, sample.t, (station) => station.left, widthStations[widthStations.length - 1]?.left ?? 1)
+    const rightWidth = stationValueAt(widthStations, sample.t, (station) => station.right, widthStations[widthStations.length - 1]?.right ?? 1)
+    const elevation = stationValueAt(elevationStations, sample.t, (station) => station.elevation, elevationStations[elevationStations.length - 1]?.elevation ?? 0)
+    const normal = new Vector2(-sample.tangent.z, sample.tangent.x).normalize()
+    return {
+      ...sample,
+      normal,
+      leftWidth,
+      rightWidth,
+      elevation,
+    }
+  })
+  const leftBoundary = sampled.map((sample) => new Vector2(sample.point.x, sample.point.z).addScaledVector(sample.normal, sample.leftWidth))
+  const rightBoundary = sampled.map((sample) => new Vector2(sample.point.x, sample.point.z).addScaledVector(sample.normal, -sample.rightWidth))
+  const outline = dedupeSequentialPoints([...leftBoundary, ...rightBoundary.slice().reverse()])
+  const segmentRoleParam = stringParam(node, 'segmentRole', 'walkway')
+  const segmentRole: RuntimeSurfaceSpineSegment['segmentRole'] =
+    segmentRoleParam === 'stair_run' || segmentRoleParam === 'landing' || segmentRoleParam === 'mezzanine'
+      ? segmentRoleParam
+      : 'walkway'
+  return {
+    id: `${node.key}.segment`,
+    sourceNodeKey: node.key,
+    segmentRole,
+    startJunctionId: stringParam(node, 'startJunctionId', `${node.key}.start`),
+    endJunctionId: stringParam(node, 'endJunctionId', `${node.key}.end`),
+    sampleSpacing,
+    path,
+    widthStations,
+    elevationStations,
+    sampled,
+    leftBoundary,
+    rightBoundary,
+    outline,
+    metadata: {
+      boundaryTagsLeft: spineBoundaryTags(node, 'boundaryTagsLeft'),
+      boundaryTagsRight: spineBoundaryTags(node, 'boundaryTagsRight'),
+      railingAllowedLeft: booleanParam(node, 'railingAllowedLeft', true),
+      railingAllowedRight: booleanParam(node, 'railingAllowedRight', true),
+      wallAllowedLeft: booleanParam(node, 'wallAllowedLeft', true),
+      wallAllowedRight: booleanParam(node, 'wallAllowedRight', true),
+      openingAllowedLeft: booleanParam(node, 'openingAllowedLeft', true),
+      openingAllowedRight: booleanParam(node, 'openingAllowedRight', true),
+    },
+  }
+}
+
+function sampleSurfaceSpineSegmentAt(segment: RuntimeSurfaceSpineSegment, t: number) {
+  if (segment.sampled.length === 0) {
+    return {
+      point: new Vector3(),
+      tangent: new Vector3(0, 0, 1),
+      normal: new Vector2(1, 0),
+      leftWidth: 1,
+      rightWidth: 1,
+      elevation: 0,
+    }
+  }
+  const clamped = Math.max(0, Math.min(1, t))
+  if (clamped <= segment.sampled[0].t) return segment.sampled[0]
+  if (clamped >= segment.sampled[segment.sampled.length - 1].t) return segment.sampled[segment.sampled.length - 1]
+  for (let index = 1; index < segment.sampled.length; index += 1) {
+    const previous = segment.sampled[index - 1]
+    const next = segment.sampled[index]
+    if (clamped <= next.t) {
+      const alpha = (clamped - previous.t) / Math.max(next.t - previous.t, 1e-6)
+      return {
+        point: previous.point.clone().lerp(next.point, alpha),
+        tangent: previous.tangent.clone().lerp(next.tangent, alpha).normalize(),
+        normal: previous.normal.clone().lerp(next.normal, alpha).normalize(),
+        leftWidth: previous.leftWidth + (next.leftWidth - previous.leftWidth) * alpha,
+        rightWidth: previous.rightWidth + (next.rightWidth - previous.rightWidth) * alpha,
+        elevation: previous.elevation + (next.elevation - previous.elevation) * alpha,
+      }
+    }
+  }
+  return segment.sampled[segment.sampled.length - 1]
+}
+
+type MartinezRing = number[][]
+type MartinezPolygon = MartinezRing[]
+type MartinezGeometry = MartinezPolygon[]
+
+function ringArea(points: Vector2[]) {
+  let area = 0
+  for (let index = 0; index < points.length; index += 1) {
+    const current = points[index]
+    const next = points[(index + 1) % points.length]
+    area += current.x * next.y - next.x * current.y
+  }
+  return area * 0.5
+}
+
+function closeMartinezRing(points: Vector2[]) {
+  const loop = dedupeSequentialPoints(points)
+  if (loop.length < 3) return [] as MartinezRing
+  const ring = loop.map((point) => [point.x, point.y])
+  const first = ring[0]
+  const last = ring[ring.length - 1]
+  if (!first || !last || Math.abs(first[0] - last[0]) > 1e-6 || Math.abs(first[1] - last[1]) > 1e-6) ring.push([first[0], first[1]])
+  return ring
+}
+
+function polygonToMartinez(points: Vector2[]): MartinezGeometry {
+  const ring = closeMartinezRing(points)
+  return ring.length >= 4 ? [[ring]] : []
+}
+
+function profileToMartinez(profile: RuntimeProfile): MartinezGeometry {
+  const outer = closeMartinezRing(profile.outer)
+  if (outer.length < 4) return []
+  const polygon: MartinezPolygon = [outer]
+  profile.holes.forEach((hole) => {
+    const ring = closeMartinezRing(hole)
+    if (ring.length >= 4) polygon.push(ring)
+  })
+  return [polygon]
+}
+
+function normalizeMartinezGeometry(value: unknown): MartinezGeometry {
+  if (!Array.isArray(value)) return []
+  return value as MartinezGeometry
+}
+
+function unionMartinezGeometries(parts: MartinezGeometry[]) {
+  let result: MartinezGeometry = []
+  parts.forEach((part) => {
+    if (part.length === 0) return
+    if (result.length === 0) {
+      result = part
+      return
+    }
+    result = normalizeMartinezGeometry((martinez.union as (...args: unknown[]) => unknown)(result as unknown, part as unknown))
+  })
+  return result
+}
+
+function subtractMartinezGeometry(source: MartinezGeometry, cut: MartinezGeometry) {
+  if (source.length === 0 || cut.length === 0) return source
+  return normalizeMartinezGeometry((martinez.diff as (...args: unknown[]) => unknown)(source as unknown, cut as unknown))
+}
+
+function circlePolygon(center: Vector2, radius: number, segments = 24) {
+  return Array.from({ length: Math.max(12, segments) }, (_, index) => {
+    const angle = (index / Math.max(12, segments)) * Math.PI * 2
+    return new Vector2(center.x + Math.cos(angle) * radius, center.y + Math.sin(angle) * radius)
+  })
+}
+
+function martinezGeometryToRuntimeProfile(id: string, geometry: MartinezGeometry, metadata: Record<string, unknown> = {}) {
+  if (geometry.length === 0) return null
+  const primary = geometry
+    .map((polygon) => ({
+      polygon,
+      area: polygon.length > 0 ? Math.abs(ringArea(polygon[0].map((point) => new Vector2(point[0], point[1])))) : 0,
+    }))
+    .sort((a, b) => b.area - a.area)[0]?.polygon
+  if (!primary || primary.length === 0) return null
+  const outer = sanitizeLoopForTriangulation(primary[0].map((point) => new Vector2(point[0], point[1])), false)
+  const holes = primary
+    .slice(1)
+    .map((ring) => sanitizeLoopForTriangulation(ring.map((point) => new Vector2(point[0], point[1])), true))
+    .filter((ring) => ring.length >= 3)
+  return runtimeProfileFromLoops(id, outer, holes, metadata)
+}
+
+function smoothClosedLoopPoints(
+  points: Vector2[],
+  sampleSpacing: number,
+  curveType: 'centripetal' | 'chordal' | 'catmullrom',
+  tension: number,
+) {
+  const base = sanitizeLoopForTriangulation(points, false, 1e-4)
+  if (base.length < 4) return base
+  const curve = new CatmullRomCurve3(
+    base.map((point) => new Vector3(point.x, 0, point.y)),
+    true,
+    curveType,
+    tension,
+  )
+  const subdivisions = Math.max(base.length * 2, Math.ceil(curve.getLength() / Math.max(sampleSpacing, 0.06)))
+  const smoothed = dedupeSequentialPoints(
+    curve.getSpacedPoints(subdivisions).map((point) => new Vector2(point.x, point.z)),
+    Math.max(sampleSpacing * 0.2, 1e-4),
+  )
+  return sanitizeLoopForTriangulation(smoothed, false, Math.max(sampleSpacing * 0.08, 1e-4))
+}
+
+function pointToPolylineDistance(point: Vector2, polyline: Vector2[]) {
+  let best = Number.POSITIVE_INFINITY
+  for (let index = 1; index < polyline.length; index += 1) {
+    const start = polyline[index - 1]
+    const end = polyline[index]
+    const delta = end.clone().sub(start)
+    const lengthSq = Math.max(delta.lengthSq(), 1e-8)
+    const t = Math.max(0, Math.min(1, point.clone().sub(start).dot(delta) / lengthSq))
+    const projected = start.clone().addScaledVector(delta, t)
+    best = Math.min(best, projected.distanceTo(point))
+  }
+  return best
+}
+
+type SpineBoundaryHit = {
+  segment: RuntimeSurfaceSpineSegment
+  side: 'left' | 'right'
+  distance: number
+}
+
+function spineBoundaryMetadataForPoint(point: Vector2, segments: RuntimeSurfaceSpineSegment[]) {
+  let best: SpineBoundaryHit | null = null
+
+  segments.forEach((segment) => {
+    ;(['left', 'right'] as const).forEach((side) => {
+      const polyline = side === 'left' ? segment.leftBoundary : segment.rightBoundary
+      const distance = pointToPolylineDistance(point, polyline)
+      if (!best || distance < best.distance) best = { segment, side, distance }
+    })
+  })
+
+  if (!best) return null
+  const resolvedBest = best as SpineBoundaryHit
+  const tags = resolvedBest.side === 'left'
+    ? (Array.isArray(resolvedBest.segment.metadata.boundaryTagsLeft) ? resolvedBest.segment.metadata.boundaryTagsLeft as string[] : [])
+    : (Array.isArray(resolvedBest.segment.metadata.boundaryTagsRight) ? resolvedBest.segment.metadata.boundaryTagsRight as string[] : [])
+  return {
+    spineSegmentId: resolvedBest.segment.id,
+    spineRole: resolvedBest.segment.segmentRole,
+    side: resolvedBest.side,
+    startJunctionId: resolvedBest.segment.startJunctionId,
+    endJunctionId: resolvedBest.segment.endJunctionId,
+    segmentTag: tags[0] ?? null,
+    segmentTags: tags,
+    railingAllowed: resolvedBest.side === 'left'
+      ? (typeof resolvedBest.segment.metadata.railingAllowedLeft === 'boolean' ? resolvedBest.segment.metadata.railingAllowedLeft : true)
+      : (typeof resolvedBest.segment.metadata.railingAllowedRight === 'boolean' ? resolvedBest.segment.metadata.railingAllowedRight : true),
+    wallAllowed: resolvedBest.side === 'left'
+      ? (typeof resolvedBest.segment.metadata.wallAllowedLeft === 'boolean' ? resolvedBest.segment.metadata.wallAllowedLeft : true)
+      : (typeof resolvedBest.segment.metadata.wallAllowedRight === 'boolean' ? resolvedBest.segment.metadata.wallAllowedRight : true),
+    openingAllowed: resolvedBest.side === 'left'
+      ? (typeof resolvedBest.segment.metadata.openingAllowedLeft === 'boolean' ? resolvedBest.segment.metadata.openingAllowedLeft : true)
+      : (typeof resolvedBest.segment.metadata.openingAllowedRight === 'boolean' ? resolvedBest.segment.metadata.openingAllowedRight : true),
+  }
+}
+
+function boundaryPathsFromSpineSurface(
+  nodeKey: string,
+  surfaceId: string,
+  profile: RuntimeProfile,
+  elevation: number,
+  segments: RuntimeSurfaceSpineSegment[],
+  sampleSpacing = 0.35,
+  elevationResolver?: ((point: Vector2) => number) | null,
+) {
+  const runtimePaths: RuntimePath[] = []
+  const anchors: Anchor[] = []
+
+  profile.profile.loops.forEach((loop, loopIndex) => {
+    const sampled = sampleBoundaryLoop(loop, sampleSpacing)
+    const loopPoints = sampled.points
+    if (loopPoints.length < 2) return
+    const loopRole = loop.kind === 'hole' ? 'hole_loop' : 'outer_loop'
+    const loopRuntimePoints = loopPoints.map((point) => new Vector3(point.x, typeof elevationResolver === 'function' ? elevationResolver(point) : elevation, point.y))
+    runtimePaths.push(createRuntimePath(nodeKey, `${surfaceId}.${loop.id}.loop`, 'derived_profile', loopRuntimePoints, {
+      surfaceId,
+      loopId: loop.id,
+      boundaryRole: loopRole,
+      edgeId: null,
+      walkable: loop.kind !== 'hole',
+    }, true))
+
+    const center = loopPoints.reduce((sum, point) => sum.add(point), new Vector2()).multiplyScalar(1 / loopPoints.length)
+    anchors.push(createAnchor(nodeKey, `${loop.kind === 'hole' ? 'Hole' : 'Outer'} Loop ${loopIndex + 1}`, new Vector3(center.x, typeof elevationResolver === 'function' ? elevationResolver(center) : elevation, center.y)))
+
+    sampled.edges.forEach((edge, edgeIndex) => {
+      const midpoint = edge.points.reduce((sum, point) => sum.add(point), new Vector2()).multiplyScalar(1 / edge.points.length)
+      const spineMetadata = spineBoundaryMetadataForPoint(midpoint, segments)
+      runtimePaths.push(createRuntimePath(nodeKey, `${surfaceId}.${edge.id}`, 'derived_profile', edge.points.map((point) => new Vector3(point.x, typeof elevationResolver === 'function' ? elevationResolver(point) : elevation, point.y)), {
+        surfaceId,
+        loopId: loop.id,
+        boundaryRole: edge.boundaryRole,
+        edgeId: edge.id,
+        walkable: edge.boundaryRole !== 'hole_edge',
+        ...(spineMetadata ?? {}),
+      }))
+      anchors.push(createAnchor(nodeKey, `${loop.kind === 'hole' ? 'Hole' : 'Outer'} Edge ${loopIndex + 1}.${edgeIndex + 1}`, new Vector3(midpoint.x, typeof elevationResolver === 'function' ? elevationResolver(midpoint) : elevation, midpoint.y)))
+    })
+  })
+
+  return {
+    paths: runtimePaths,
+    pathSpecs: runtimePaths.map((path) => path.spec),
+    anchors,
+  }
+}
+
+function nearestSpineSample(point: Vector2, segments: RuntimeSurfaceSpineSegment[]): {
+  segment: RuntimeSurfaceSpineSegment
+  distance: number
+  t: number
+  elevation: number
+} | null {
+  let best: {
+    segment: RuntimeSurfaceSpineSegment
+    distance: number
+    t: number
+    elevation: number
+  } | null = null
+
+  segments.forEach((segment) => {
+    for (let index = 1; index < segment.sampled.length; index += 1) {
+      const start = segment.sampled[index - 1]
+      const end = segment.sampled[index]
+      const start2 = new Vector2(start.point.x, start.point.z)
+      const end2 = new Vector2(end.point.x, end.point.z)
+      const delta = end2.clone().sub(start2)
+      const lengthSq = Math.max(delta.lengthSq(), 1e-8)
+      const alpha = Math.max(0, Math.min(1, point.clone().sub(start2).dot(delta) / lengthSq))
+      const projected = start2.clone().addScaledVector(delta, alpha)
+      const distance = projected.distanceTo(point)
+      const t = start.t + (end.t - start.t) * alpha
+      const elevation = start.elevation + (end.elevation - start.elevation) * alpha
+      if (!best || distance < best.distance) best = { segment, distance, t, elevation }
+    }
+  })
+
+  return best
+}
+
+function buildSpineBaseElevationResolver(
+  segments: RuntimeSurfaceSpineSegment[],
+  defaultElevation: number,
+  junctionPlateauRadius: number,
+  junctionBlendRadius: number,
+) {
+  type PlateauHit = { distance: number; elevation: number }
+  const plateauJunctions = new Map<string, { point: Vector2; elevation: number }>()
+  segments.forEach((segment) => {
+    const hasPlateauRole = segment.segmentRole === 'landing' || segment.segmentRole === 'mezzanine'
+    if (!hasPlateauRole || segment.sampled.length === 0) return
+    const start = segment.sampled[0]
+    const end = segment.sampled[segment.sampled.length - 1]
+    plateauJunctions.set(segment.startJunctionId, { point: new Vector2(start.point.x, start.point.z), elevation: start.elevation })
+    plateauJunctions.set(segment.endJunctionId, { point: new Vector2(end.point.x, end.point.z), elevation: end.elevation })
+  })
+
+  return (point: Vector2) => {
+    const nearestSegment = nearestSpineSample(point, segments)
+    let baseElevation = nearestSegment?.elevation ?? defaultElevation
+    let nearestPlateau: PlateauHit | null = null
+    plateauJunctions.forEach((junction) => {
+      const distance = junction.point.distanceTo(point)
+      if (!nearestPlateau || distance < nearestPlateau.distance) nearestPlateau = { distance, elevation: junction.elevation }
+    })
+    if (nearestPlateau) {
+      const resolvedPlateau = nearestPlateau as PlateauHit
+      if (resolvedPlateau.distance <= junctionPlateauRadius) return resolvedPlateau.elevation
+      if (resolvedPlateau.distance <= junctionBlendRadius) {
+        const alpha = 1 - (resolvedPlateau.distance - junctionPlateauRadius) / Math.max(junctionBlendRadius - junctionPlateauRadius, 1e-6)
+        baseElevation = baseElevation * (1 - alpha) + resolvedPlateau.elevation * alpha
+      }
+    }
+    return baseElevation
+  }
+}
+
+function buildWalkableSurfaceProfileFromSegments(
+  node: AssemblyNodeDefinition,
+  segments: RuntimeSurfaceSpineSegment[],
+  extraHoles: RuntimeProfile[],
+  diagnostics: string[],
+) {
+  const minClearWidth = Math.max(numberParam(node, 'minClearWidth', 0.9), 0.2)
+  const parts: MartinezGeometry[] = segments
+    .map((segment) => {
+      const normalizedOutline = segment.outline.length >= 3
+        ? segment.outline
+        : [
+            ...segment.leftBoundary,
+            ...segment.rightBoundary.slice().reverse(),
+          ]
+      return polygonToMartinez(normalizedOutline)
+    })
+    .filter((part) => part.length > 0)
+
+  const junctionJoinStyle = stringParam(node, 'junctionJoinStyle', 'round')
+  if (junctionJoinStyle === 'round') {
+    const junctions = new Map<string, { point: Vector2; radius: number }>()
+    segments.forEach((segment) => {
+      const start = segment.sampled[0]
+      const end = segment.sampled[segment.sampled.length - 1]
+      const startRadius = Math.max(start.leftWidth, start.rightWidth, minClearWidth * 0.5)
+      const endRadius = Math.max(end.leftWidth, end.rightWidth, minClearWidth * 0.5)
+      const existingStart = junctions.get(segment.startJunctionId)
+      if (!existingStart || startRadius > existingStart.radius) junctions.set(segment.startJunctionId, { point: new Vector2(start.point.x, start.point.z), radius: startRadius })
+      const existingEnd = junctions.get(segment.endJunctionId)
+      if (!existingEnd || endRadius > existingEnd.radius) junctions.set(segment.endJunctionId, { point: new Vector2(end.point.x, end.point.z), radius: endRadius })
+    })
+    junctions.forEach((junction) => {
+      parts.push(polygonToMartinez(circlePolygon(junction.point, junction.radius)))
+    })
+  }
+
+  let geometry = unionMartinezGeometries(parts)
+  extraHoles.forEach((hole) => {
+    geometry = subtractMartinezGeometry(geometry, profileToMartinez(hole))
+  })
+
+  const profile = martinezGeometryToRuntimeProfile(`${node.key}.profile`, geometry, {
+    nodeKind: node.kind,
+    generatedFrom: 'spine_segments',
+    segmentCount: segments.length,
+  })
+  const smoothContours = booleanParam(node, 'smoothContours', true)
+  if (profile && smoothContours) {
+    const contourSampleSpacing = Math.max(numberParam(node, 'contourSampleSpacing', Math.max(numberParam(node, 'sampleSpacing', 0.2) * 0.8, 0.12)), 0.06)
+    const curveTypeRaw = stringParam(node, 'contourCurveType', 'centripetal')
+    const curveType = curveTypeRaw === 'chordal' || curveTypeRaw === 'catmullrom' ? curveTypeRaw : 'centripetal'
+    const tension = Math.max(0, Math.min(1, numberParam(node, 'contourTension', 0.4)))
+    const smoothedOuter = smoothClosedLoopPoints(profile.outer, contourSampleSpacing, curveType, tension)
+    const smoothedHoles = profile.holes
+      .map((hole) => smoothClosedLoopPoints(hole, contourSampleSpacing, curveType, tension))
+      .filter((hole) => hole.length >= 3)
+    return runtimeProfileFromLoops(`${node.key}.profile.smoothed`, smoothedOuter, smoothedHoles, {
+      ...profile.profile.metadata,
+      contourSampleSpacing,
+      contourCurveType: curveType,
+      contourTension: tension,
+      smoothedContours: true,
+    })
+  }
+  if (!profile) diagnostics.push(`Walkable spine surface "${node.key}" could not resolve a valid union profile.`)
+  return profile
+}
+
 function buildSurfaceMeshV1(
   node: AssemblyNodeDefinition,
   profile: RuntimeProfile,
@@ -1330,6 +1946,7 @@ function buildSurfaceMeshV1(
     triangulation: 'shape_utils' | 'constrained_delaunay_v1'
     heightControls: RuntimeSurfaceHeightControl[]
     blendTargets: RuntimeBlendTarget[]
+    baseElevationResolver?: ((point: Vector2) => number) | null
   },
   diagnostics: string[],
 ) {
@@ -1348,7 +1965,7 @@ function buildSurfaceMeshV1(
     sourceProfileId: profile.profile.id,
     triangulation: options.triangulation,
   })
-  const hasCustomHeights = options.heightControls.length > 0 || options.blendTargets.length > 0
+  const hasCustomHeights = options.heightControls.length > 0 || options.blendTargets.length > 0 || typeof options.baseElevationResolver === 'function'
 
   if (options.triangulation === 'shape_utils') {
     const geometry = extrudeProfile(sampledProfile, Math.max(options.thickness, 0.02))
@@ -1380,7 +1997,13 @@ function buildSurfaceMeshV1(
   const bottomNormals: number[] = []
 
   const topHeightAt = (point: Vector2) =>
-    resolveSurfaceVertexElevation(point, safeTopElevation, options.heightControls, options.blendTargets, options.sampleSpacing)
+    resolveSurfaceVertexElevation(
+      point,
+      typeof options.baseElevationResolver === 'function' ? options.baseElevationResolver(point) : safeTopElevation,
+      options.heightControls,
+      options.blendTargets,
+      options.sampleSpacing,
+    )
 
   const pushTriangle = (positions: number[], normals: number[], a: Vector3, b: Vector3, c: Vector3, mode: 'top' | 'bottom' | 'side') => {
     positions.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z)
@@ -3682,6 +4305,7 @@ function mergeNodeResults(target: RuntimeNodeResult, source: RuntimeNodeResult) 
   target.slabVoids = [...(target.slabVoids ?? []), ...(source.slabVoids ?? [])]
   target.surfaceHeightControls = [...(target.surfaceHeightControls ?? []), ...(source.surfaceHeightControls ?? [])]
   target.blendTargets = [...(target.blendTargets ?? []), ...(source.blendTargets ?? [])]
+  target.surfaceSpineSegments = [...(target.surfaceSpineSegments ?? []), ...(source.surfaceSpineSegments ?? [])]
   target.pathSpecs = [...(target.pathSpecs ?? []), ...(source.pathSpecs ?? [])]
   target.arrayPlacements = [...(target.arrayPlacements ?? []), ...(source.arrayPlacements ?? [])]
   target.interiorDoorRequests = [...(target.interiorDoorRequests ?? []), ...(source.interiorDoorRequests ?? [])]
@@ -3694,6 +4318,13 @@ function mergeNodeResults(target: RuntimeNodeResult, source: RuntimeNodeResult) 
       nextOutputs[outputKey] = [...(nextOutputs[outputKey] ?? []), ...solids]
     }
     target.solidOutputs = nextOutputs
+  }
+  if (source.pathOutputs) {
+    const nextOutputs: Record<string, RuntimePath[]> = { ...(target.pathOutputs ?? {}) }
+    for (const [outputKey, paths] of Object.entries(source.pathOutputs)) {
+      nextOutputs[outputKey] = [...(nextOutputs[outputKey] ?? []), ...paths]
+    }
+    target.pathOutputs = nextOutputs
   }
 }
 
@@ -4192,6 +4823,40 @@ export function compileAssemblyGraph(
         result.pathSpecs = result.paths.map((path) => path.spec)
         break
       }
+      case 'surface_spine_segment_v1': {
+        const path = collectIncomingPaths(graph, node, nextCache.nodeResults, 'path')[0]
+        if (!path) {
+          diagnostics.push(`Surface spine segment "${node.key}" requires an incoming path.`)
+          break
+        }
+        const segment = createSurfaceSpineSegment(node, path)
+        if (!segment) {
+          diagnostics.push(`Surface spine segment "${node.key}" could not be sampled from its input path.`)
+          break
+        }
+        const centerline = createRuntimePath(
+          node.key,
+          `${node.key}.spine_path`,
+          path.spec.kind,
+          segment.sampled.map((sample) => new Vector3(sample.point.x, sample.elevation, sample.point.z)),
+          {
+            spineSegmentId: segment.id,
+            spineRole: segment.segmentRole,
+            startJunctionId: segment.startJunctionId,
+            endJunctionId: segment.endJunctionId,
+          },
+          path.spec.closed,
+        )
+        result.surfaceSpineSegments = [segment]
+        result.paths = [centerline]
+        result.pathOutputs = { path: [centerline] }
+        result.pathSpecs = [centerline.spec]
+        result.anchors = [
+          createAnchor(node.key, 'Start Junction', new Vector3(segment.sampled[0].point.x, segment.sampled[0].elevation, segment.sampled[0].point.z)),
+          createAnchor(node.key, 'End Junction', new Vector3(segment.sampled[segment.sampled.length - 1].point.x, segment.sampled[segment.sampled.length - 1].elevation, segment.sampled[segment.sampled.length - 1].point.z)),
+        ]
+        break
+      }
       case 'profile_from_path':
       case 'close_loop': {
         const path = collectIncomingPaths(graph, node, nextCache.nodeResults)[0]
@@ -4682,6 +5347,132 @@ export function compileAssemblyGraph(
           },
         )
         mergeNodeResults(result, compiled)
+        break
+      }
+      case 'walkable_surface_from_spine_v1': {
+        const segments = collectIncomingSurfaceSpineSegments(graph, node, nextCache.nodeResults, 'segments')
+        if (segments.length === 0) {
+          diagnostics.push(`Walkable spine surface "${node.key}" requires one or more incoming spine segments.`)
+          break
+        }
+        const extraHoles = collectIncomingProfiles(graph, node, nextCache.nodeResults, 'extra_holes')
+        const profile = buildWalkableSurfaceProfileFromSegments(node, segments, extraHoles, diagnostics)
+        if (!profile) break
+        const thickness = numberParam(node, 'thickness', 0.22)
+        const sampleSpacing = numberParam(node, 'sampleSpacing', 0.2)
+        const undersideMode = stringParam(node, 'undersideMode', 'flat') === 'vertical_offset' ? 'vertical_offset' : 'flat'
+        const triangulation = resolveCompileTriangulation(graph, node, options)
+        const segmentElevations = segments.flatMap((segment) => segment.sampled.map((sample) => sample.elevation))
+        const minElevation = segmentElevations.length > 0 ? Math.min(...segmentElevations) : 0
+        const maxElevation = segmentElevations.length > 0 ? Math.max(...segmentElevations) : minElevation
+        const baseElevationResolver = buildSpineBaseElevationResolver(
+          segments,
+          minElevation,
+          numberParam(node, 'junctionPlateauRadius', 1.4),
+          numberParam(node, 'junctionBlendRadius', 2.4),
+        )
+        const meshOptions = {
+          bottomElevation: minElevation - thickness,
+          topElevation: maxElevation,
+          thickness,
+          sampleSpacing,
+          undersideMode,
+          triangulation,
+          heightControls: collectIncomingSurfaceHeightControls(graph, node, nextCache.nodeResults),
+          blendTargets: collectIncomingBlendTargets(graph, node, nextCache.nodeResults),
+          baseElevationResolver,
+        } as const
+        const surfaceDiagnostics: string[] = []
+        let surfaceMesh = buildSurfaceMeshV1(node, profile, meshOptions, surfaceDiagnostics)
+        let effectiveTriangulation = triangulation
+        if (!surfaceMesh && triangulation === 'constrained_delaunay_v1') {
+          surfaceMesh = buildSurfaceMeshV1(node, profile, {
+            ...meshOptions,
+            triangulation: 'shape_utils',
+          }, [])
+          if (surfaceMesh) effectiveTriangulation = 'shape_utils'
+        }
+        if (!surfaceMesh) diagnostics.push(...surfaceDiagnostics)
+        if (!surfaceMesh) break
+        const geometry = surfaceMesh.geometry
+        const boundary = boundaryPathsFromSpineSurface(
+          node.key,
+          `${node.key}.surface`,
+          surfaceMesh.sampledProfile,
+          maxElevation,
+          segments,
+          sampleSpacing,
+          (point) => baseElevationResolver(point) + thickness,
+        )
+        const spinePaths = segments.map((segment) => createRuntimePath(
+          node.key,
+          `${segment.id}.spine`,
+          segment.path.spec.kind,
+          segment.sampled.map((sample) => new Vector3(sample.point.x, sample.elevation, sample.point.z)),
+          {
+            spineSegmentId: segment.id,
+            spineRole: segment.segmentRole,
+            startJunctionId: segment.startJunctionId,
+            endJunctionId: segment.endJunctionId,
+          },
+          segment.path.spec.closed,
+        ))
+        result.profiles = [surfaceMesh.sampledProfile]
+        result.paths = [...boundary.paths, ...spinePaths]
+        result.pathOutputs = {
+          paths: boundary.paths,
+          spine_paths: spinePaths,
+        }
+        result.pathSpecs = [...boundary.pathSpecs, ...spinePaths.map((path) => path.spec)]
+        if (booleanParam(node, 'emitSolid', true)) {
+          result.solids = [{
+            spec: {
+              id: `${node.key}.solid`,
+              sourceNodeKey: node.key,
+              kind: 'landing',
+              profileId: surfaceMesh.sampledProfile.profile.id,
+              transform: { position: [0, minElevation - thickness, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
+              params: { thickness, undersideMode, triangulation: effectiveTriangulation },
+                metadata: {
+                  slabRole: node.kind,
+                  minElevation,
+                  maxElevation,
+                  triangulationFallback: effectiveTriangulation !== triangulation ? effectiveTriangulation : null,
+                },
+              },
+            geometry: geometry.clone(),
+            color: '#869a63',
+          }]
+        }
+        result.surfaces = booleanParam(node, 'emitSurface', true)
+          ? [{
+              spec: {
+                id: `${node.key}.surface`,
+                sourceNodeKey: node.key,
+                kind: 'mezzanine',
+                profileId: surfaceMesh.sampledProfile.profile.id,
+                elevation: minElevation,
+                thickness,
+                metadata: {
+                  slabRole: node.kind,
+                  minElevation,
+                  maxElevation,
+                  triangulation: effectiveTriangulation,
+                },
+              },
+              geometry,
+              color: '#95a56f',
+            }]
+          : []
+        const center = profileCenter(surfaceMesh.sampledProfile)
+        result.anchors = [
+          createAnchor(node.key, 'Spine Surface', new Vector3(center.x, baseElevationResolver(center) + thickness, center.y)),
+          ...boundary.anchors,
+          ...segments.flatMap((segment) => ([
+            createAnchor(node.key, `${segment.startJunctionId}`, new Vector3(segment.sampled[0].point.x, segment.sampled[0].elevation, segment.sampled[0].point.z)),
+            createAnchor(node.key, `${segment.endJunctionId}`, new Vector3(segment.sampled[segment.sampled.length - 1].point.x, segment.sampled[segment.sampled.length - 1].elevation, segment.sampled[segment.sampled.length - 1].point.z)),
+          ])),
+        ]
         break
       }
       case 'floor_plate':
@@ -5328,6 +6119,92 @@ export function compileAssemblyGraph(
         }]
         break
       }
+      case 'stair_overlay_from_spine_v1': {
+        const segments = collectIncomingSurfaceSpineSegments(graph, node, nextCache.nodeResults, 'segments')
+          .filter((segment) => segment.segmentRole === 'stair_run')
+        if (segments.length === 0) break
+        const treadDepth = Math.max(numberParam(node, 'treadDepth', 0.28), 0.12)
+        const maxRise = Math.max(numberParam(node, 'maxRise', 0.18), 0.05)
+        const thickness = Math.max(numberParam(node, 'thickness', 0.08), 0.02)
+        const widthPadding = numberParam(node, 'widthPadding', 0)
+        const elevationOffset = numberParam(node, 'elevationOffset', 0.01)
+        const solids: RuntimeSolid[] = []
+        const stairs: StairRunSpec[] = []
+        const anchors: Anchor[] = []
+
+        segments.forEach((segment, segmentIndex) => {
+          const startSample = sampleSurfaceSpineSegmentAt(segment, 0)
+          const endSample = sampleSurfaceSpineSegmentAt(segment, 1)
+          const totalRise = Math.max(endSample.elevation - startSample.elevation, 0)
+          const totalLength = Math.max(runtimePathLength(segment.path), treadDepth)
+          const stepCount = Math.max(1, Math.ceil(totalLength / treadDepth), Math.ceil(totalRise / maxRise))
+          const stepDepth = totalLength / stepCount
+
+          for (let stepIndex = 0; stepIndex < stepCount; stepIndex += 1) {
+            const stepStart = sampleSurfaceSpineSegmentAt(segment, stepIndex / stepCount)
+            const stepCenter = sampleSurfaceSpineSegmentAt(segment, (stepIndex + 0.5) / stepCount)
+            const width = Math.max(stepCenter.leftWidth + stepCenter.rightWidth + widthPadding * 2, 0.4)
+            const yaw = Math.atan2(stepCenter.tangent.x, stepCenter.tangent.z)
+            const geometry = new BoxGeometry(width, thickness, Math.max(stepDepth, 0.12))
+            geometry.rotateY(yaw)
+            geometry.translate(stepCenter.point.x, stepStart.elevation + thickness * 0.5 + elevationOffset, stepCenter.point.z)
+            solids.push({
+              spec: {
+                id: `${node.key}.${segment.id}.step_${stepIndex + 1}`,
+                sourceNodeKey: node.key,
+                kind: 'stair',
+                profileId: null,
+                transform: { position: [stepCenter.point.x, stepStart.elevation + elevationOffset, stepCenter.point.z], rotation: [0, yaw, 0], scale: [1, 1, 1] },
+                params: { width, depth: stepDepth, thickness, stepIndex: stepIndex + 1, segmentId: segment.id },
+                metadata: {
+                  spineSegmentId: segment.id,
+                  spineRole: segment.segmentRole,
+                },
+              },
+              geometry,
+              color: '#b1a385',
+            })
+          }
+
+          stairs.push({
+            id: `${node.key}.${segment.id}.stair`,
+            sourceNodeKey: node.key,
+            kind: 'straight',
+            stairFamily: segment.path.spec.kind === 'spline' || segment.path.spec.kind === 'arc' ? 'arc' : 'straight',
+            fromLevelId: null,
+            toLevelId: null,
+            shaftId: null,
+            zoneId: null,
+            clearanceEnvelope: null,
+            landingIds: [],
+            bottomLandingId: null,
+            topLandingId: null,
+            intermediateLandingIds: [],
+            requiredEnvelope: null,
+            resolvedEnvelope: null,
+            fitStatus: 'fit',
+            diagnostics: [],
+            riseCount: stepCount,
+            metadata: {
+              solverVersion: 'spine_overlay_v1',
+              spineSegmentId: segment.id,
+              bottomConnectionPoint: [startSample.point.x, startSample.elevation, startSample.point.z],
+              topConnectionPoint: [endSample.point.x, endSample.elevation, endSample.point.z],
+              width: startSample.leftWidth + startSample.rightWidth,
+            },
+          })
+          anchors.push(
+            createAnchor(node.key, `Spine Stair ${segmentIndex + 1} Start`, new Vector3(startSample.point.x, startSample.elevation, startSample.point.z)),
+            createAnchor(node.key, `Spine Stair ${segmentIndex + 1} Top`, new Vector3(endSample.point.x, endSample.elevation, endSample.point.z)),
+          )
+        })
+
+        result.solids = solids
+        result.stairs = stairs
+        result.slabVoids = []
+        result.anchors = anchors
+        break
+      }
       case 'stair_shaft': {
         const { fromLevel, toLevel } = selectLevelPairForNode(node, collectIncomingLevels(graph, node, nextCache.nodeResults, 'levels'))
         if (!fromLevel || !toLevel) break
@@ -5835,12 +6712,23 @@ export function compileAssemblyGraph(
           const loopId = typeof node.params.loopId === 'string' ? String(node.params.loopId) : null
           const edgeId = typeof node.params.edgeId === 'string' ? String(node.params.edgeId) : null
           const tag = typeof node.params.tag === 'string' ? String(node.params.tag) : null
+          const spineRole = typeof node.params.spineRole === 'string' ? String(node.params.spineRole) : null
+          const side = typeof node.params.side === 'string' ? String(node.params.side) : null
+          const startJunctionId = typeof node.params.startJunctionId === 'string' ? String(node.params.startJunctionId) : null
+          const endJunctionId = typeof node.params.endJunctionId === 'string' ? String(node.params.endJunctionId) : null
           const selected = incomingPaths.filter((path) => {
             if (surfaceId && path.spec.metadata.surfaceId !== surfaceId) return false
             if (loopId && path.spec.metadata.loopId !== loopId) return false
             if (edgeId && path.spec.metadata.edgeId !== edgeId) return false
             if (boundaryRole && path.spec.metadata.boundaryRole !== boundaryRole) return false
-            if (tag && path.spec.metadata.segmentTag !== tag) return false
+            if (tag) {
+              const tags = Array.isArray(path.spec.metadata.segmentTags) ? path.spec.metadata.segmentTags : []
+              if (path.spec.metadata.segmentTag !== tag && !tags.includes(tag)) return false
+            }
+            if (spineRole && path.spec.metadata.spineRole !== spineRole) return false
+            if (side && path.spec.metadata.side !== side) return false
+            if (startJunctionId && path.spec.metadata.startJunctionId !== startJunctionId) return false
+            if (endJunctionId && path.spec.metadata.endJunctionId !== endJunctionId) return false
             return true
           })
           result.paths = selected

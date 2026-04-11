@@ -1,0 +1,123 @@
+import type { CSSProperties } from 'react'
+
+export type EntityIconId =
+  | 'graph'
+  | 'content'
+  | 'item'
+  | 'character'
+  | 'environment'
+  | 'asset'
+  | 'activity'
+  | 'release'
+  | 'archetype'
+
+type EntityIconProps = {
+  className?: string
+  id: EntityIconId
+  title?: string
+}
+
+type IconGlyphProps = {
+  style?: CSSProperties
+}
+
+function Stroke(props: IconGlyphProps) {
+  return { fill: 'none', stroke: 'currentColor', strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const, strokeWidth: 1.7, ...props }
+}
+
+function IconPath({ id }: { id: EntityIconId }) {
+  const stroke = Stroke({})
+
+  switch (id) {
+    case 'graph':
+      return (
+        <>
+          <circle cx="6" cy="6" r="2.2" {...stroke} />
+          <circle cx="18" cy="6" r="2.2" {...stroke} />
+          <circle cx="12" cy="18" r="2.2" {...stroke} />
+          <path d="M8 7.2 10.2 10.8M16 7.2 13.8 10.8" {...stroke} />
+        </>
+      )
+    case 'content':
+      return (
+        <>
+          <rect x="4.5" y="5" width="15" height="14" rx="2.5" {...stroke} />
+          <path d="M8 9.5h8M8 13h6M8 16.5h5" {...stroke} />
+        </>
+      )
+    case 'item':
+      return (
+        <>
+          <path d="M12 3.8 19 8v8l-7 4.2L5 16V8l7-4.2Z" {...stroke} />
+          <path d="M12 3.8v16.4M5 8l7 4.2L19 8" {...stroke} />
+        </>
+      )
+    case 'character':
+      return (
+        <>
+          <circle cx="12" cy="8.2" r="3.2" {...stroke} />
+          <path d="M6.8 19c.8-3.4 3-5.2 5.2-5.2S16.4 15.6 17.2 19" {...stroke} />
+        </>
+      )
+    case 'environment':
+      return (
+        <>
+          <path d="M4.5 19h15" {...stroke} />
+          <path d="M6.2 19V9.5L12 5l5.8 4.5V19" {...stroke} />
+          <path d="M9.4 19v-4.2h5.2V19" {...stroke} />
+        </>
+      )
+    case 'asset':
+      return (
+        <>
+          <rect x="5" y="4.5" width="14" height="15" rx="2.5" {...stroke} />
+          <path d="M8.5 15.5 11.2 12.8l2.2 2.2 2.9-3.1 2.2 2.8" {...stroke} />
+          <circle cx="10" cy="9" r="1.3" {...stroke} />
+        </>
+      )
+    case 'activity':
+      return (
+        <>
+          <path d="M12 5.2v6.1l3.6 2.1" {...stroke} />
+          <circle cx="12" cy="12" r="7.2" {...stroke} />
+        </>
+      )
+    case 'release':
+      return (
+        <>
+          <path d="M12 3.8 19 8v8l-7 4.2L5 16V8l7-4.2Z" {...stroke} />
+          <path d="M9.3 12.2 11.2 14.1 15 10.2" {...stroke} />
+        </>
+      )
+    case 'archetype':
+      return (
+        <>
+          <path d="M12 4.4 18.5 8.2v7.6L12 19.6l-6.5-3.8V8.2L12 4.4Z" {...stroke} />
+          <path d="M12 8.2 9.2 12 12 15.8 14.8 12 12 8.2Z" {...stroke} />
+        </>
+      )
+    default:
+      return null
+  }
+}
+
+export function EntityIcon({ className, id, title }: EntityIconProps) {
+  return (
+    <svg aria-hidden={title ? undefined : 'true'} aria-label={title} className={className} viewBox="0 0 24 24" role="img">
+      <IconPath id={id} />
+    </svg>
+  )
+}
+
+export function iconForDefinitionKind(kind: string | null | undefined): EntityIconId {
+  switch (kind) {
+    case 'character':
+      return 'character'
+    case 'environment':
+      return 'environment'
+    case 'item':
+      return 'item'
+    default:
+      return 'content'
+  }
+}

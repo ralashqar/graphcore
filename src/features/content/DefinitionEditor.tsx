@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import type { ArchetypeDefinition, AssetDefinition, DefinitionBase, FieldDefinition, FieldValue } from '../../domain/graphcore'
+import { iconForDefinitionKind } from '../../shared/entityIcons'
 import { DefinitionComponentsEditor } from './DefinitionComponentsEditor'
 import {
   AddFieldForm,
@@ -24,7 +25,9 @@ export function DefinitionEditor({
   selectedAsset: _selectedAsset,
   selectedItem,
   headerControls,
+  hideArchetypeField = false,
   hideHeader = false,
+  suppressSummaryField = false,
   onAddCustomField,
   onAssignItemIcon,
   onCreateItem,
@@ -41,7 +44,9 @@ export function DefinitionEditor({
   selectedAsset: AssetDefinition | null
   selectedItem: DefinitionBase | null
   headerControls?: ReactNode
+  hideArchetypeField?: boolean
   hideHeader?: boolean
+  suppressSummaryField?: boolean
   onAddCustomField: (itemKey: string, field: FieldDefinition) => void
   onAssignItemIcon: (assetKey: string | null) => void
   onCreateItem: (archetypeKey?: string | null) => void
@@ -54,6 +59,7 @@ export function DefinitionEditor({
       <EmptyEditor
         actionLabel="+ New definition"
         body="Create a blank definition or switch to prompt mode to generate one from a short design brief."
+        icon="content"
         onAction={() => onCreateItem(selectedArchetype?.key ?? null)}
         title="No definition selected"
       />
@@ -82,6 +88,7 @@ export function DefinitionEditor({
             <button className="icon-button" onClick={() => setIsIconPickerOpen(true)} type="button">
               <MediaThumb
                 asset={findAssetByKey(assets, resolveItemIconAssetKey(selectedItem, archetypes))}
+                fallbackIcon={iconForDefinitionKind(definition.kind)}
                 label={definition.name}
                 large
               />
@@ -128,7 +135,7 @@ export function DefinitionEditor({
       ) : null}
 
       <div className="editor-grid">
-        {hideHeader ? (
+        {hideHeader && !suppressSummaryField ? (
           <label className="field-block full-width">
             <span>Description</span>
             <textarea
@@ -139,22 +146,24 @@ export function DefinitionEditor({
             />
           </label>
         ) : null}
-        <label className="field-block">
-          <span>Archetype</span>
-          <select
-            value={definition.archetypeKey ?? ''}
-            onChange={(event) =>
-              onUpdateItemIdentity(definition.key, { archetypeKey: event.target.value || null })
-            }
-          >
-            <option value="">No archetype</option>
-            {compatibleArchetypes.map((archetype) => (
-              <option key={archetype.key} value={archetype.key}>
-                {archetype.name}
-              </option>
-            ))}
-          </select>
-        </label>
+        {!hideArchetypeField ? (
+          <label className="field-block">
+            <span>Archetype</span>
+            <select
+              value={definition.archetypeKey ?? ''}
+              onChange={(event) =>
+                onUpdateItemIdentity(definition.key, { archetypeKey: event.target.value || null })
+              }
+            >
+              <option value="">No archetype</option>
+              {compatibleArchetypes.map((archetype) => (
+                <option key={archetype.key} value={archetype.key}>
+                  {archetype.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
         <label className="field-block">
           <span>Icon Asset</span>
           <select

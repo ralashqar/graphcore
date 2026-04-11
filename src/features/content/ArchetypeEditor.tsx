@@ -31,6 +31,7 @@ export function ArchetypeEditor({
       <EmptyEditor
         actionLabel="+ New archetype"
         body="Create an archetype to define shared fields, defaults, and icon behavior for a whole family of game data."
+        icon="archetype"
         onAction={onCreateArchetype}
         title="No archetype selected"
       />
@@ -42,7 +43,7 @@ export function ArchetypeEditor({
       <div className="item-editor-head">
         <div className="item-icon-stack">
           <button className="icon-button" onClick={() => setIsIconPickerOpen(true)} type="button">
-            <MediaThumb asset={findAssetByKey(imageAssets, selectedArchetype.iconAssetKey)} label={selectedArchetype.name} large />
+            <MediaThumb asset={findAssetByKey(imageAssets, selectedArchetype.iconAssetKey)} fallbackIcon="archetype" label={selectedArchetype.name} large />
           </button>
         </div>
 

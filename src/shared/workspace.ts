@@ -1,5 +1,6 @@
 import type { PatchOperation } from '../domain/graphcore'
 import type { PromptActivityEntry, PromptExecutionPlan } from '../domain/prompting'
+import type { EntityIconId } from './entityIcons'
 
 export type LoadedState = {
   source: 'supabase' | 'demo'
@@ -34,12 +35,12 @@ export type PatchSessionView = {
 
 export type AuthMode = 'sign_in' | 'sign_up' | 'magic_link'
 
-export const workspaceTabs: Array<{ id: WorkspaceTab; label: string }> = [
-  { id: 'graph', label: 'Graph' },
-  { id: 'content', label: 'Content' },
-  { id: 'characters', label: 'Characters' },
-  { id: 'environments', label: 'Environments' },
-  { id: 'assets', label: 'Assets' },
-  { id: 'prompts', label: 'Activity' },
-  { id: 'releases', label: 'Releases' },
+export const workspaceTabs: Array<{ id: WorkspaceTab; label: string; icon: EntityIconId }> = [
+  { id: 'graph', label: 'Graph', icon: 'graph' },
+  { id: 'content', label: 'Content', icon: 'content' },
+  { id: 'characters', label: 'Characters', icon: 'character' },
+  { id: 'environments', label: 'Environments', icon: 'environment' },
+  { id: 'assets', label: 'Assets', icon: 'asset' },
+  { id: 'prompts', label: 'Activity', icon: 'activity' },
+  { id: 'releases', label: 'Releases', icon: 'release' },
 ]

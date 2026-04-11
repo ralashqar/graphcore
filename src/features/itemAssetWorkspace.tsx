@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 
+import { iconForDefinitionKind } from '../shared/entityIcons'
 import { ArchetypeEditor } from './content/ArchetypeEditor'
 import { AssetsWorkspace as AssetsWorkspaceView } from './content/AssetsWorkspace'
 import { DefinitionEditor } from './content/DefinitionEditor'
@@ -227,6 +228,7 @@ export function ContentWorkspace({
                   >
                     <MediaThumb
                       asset={findAssetByKey(assets, resolveItemIconAssetKey(item, archetypes))}
+                      fallbackIcon={iconForDefinitionKind(item.kind)}
                       label={item.name}
                     />
                     <div className="item-row-copy">
@@ -246,7 +248,7 @@ export function ContentWorkspace({
                     onClick={() => onSelectArchetype(archetype.key)}
                     type="button"
                   >
-                    <MediaThumb asset={findAssetByKey(assets, archetype.iconAssetKey)} label={archetype.name} />
+                    <MediaThumb asset={findAssetByKey(assets, archetype.iconAssetKey)} fallbackIcon="archetype" label={archetype.name} />
                     <div className="item-row-copy">
                       <strong>{archetype.name}</strong>
                       <span>{archetype.fields.length} shared fields</span>

@@ -165,6 +165,7 @@ export function Definition3dPanel({ assets, assemblyGraph = null, environmentBlu
     const nextConfig: Render3dBindingConfig = {
       primaryMeshAssetKey: renderBinding.primaryMeshAssetKey ?? null,
       previewImageAssetKey: renderBinding.previewImageAssetKey ?? null,
+      conceptPrompt: renderBinding.conceptPrompt ?? null,
       generationPrompt: renderBinding.generationPrompt ?? null,
       generationStyle: renderBinding.generationStyle ?? null,
       ...changes,

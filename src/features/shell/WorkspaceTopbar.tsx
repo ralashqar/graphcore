@@ -1,4 +1,5 @@
 import type { GameSummary, WorkspaceTab } from '../../shared/workspace'
+import { EntityIcon, type EntityIconId } from '../../shared/entityIcons'
 
 type WorkspaceTopbarProps = {
   activeTab: WorkspaceTab
@@ -15,7 +16,7 @@ type WorkspaceTopbarProps = {
   onSignOut: () => void
   projectName: string
   sourceLabel: string
-  tabs: Array<{ id: WorkspaceTab; label: string }>
+  tabs: Array<{ id: WorkspaceTab; label: string; icon: EntityIconId }>
   workspaceName: string
   draftName: string
   isSignedIn: boolean
@@ -54,6 +55,7 @@ export function WorkspaceTopbar({
         <nav className="tabbar" aria-label="Workspace tabs">
           {tabs.map((tab) => (
             <button key={tab.id} className={tab.id === activeTab ? 'tab-button is-active' : 'tab-button'} onClick={() => onSetActiveTab(tab.id)} type="button">
+              <EntityIcon className="tab-button-icon" id={tab.icon} />
               {tab.label}
             </button>
           ))}

@@ -28,3 +28,25 @@ export type MeshFromImageGenerationResult = {
   requestId: null
   message: string
 }
+
+export type CharacterConceptPromptInput = {
+  artStyleDescription?: string | null
+  artStylePresetLabel?: string | null
+  archetypeLabel?: string | null
+  characterName?: string | null
+  subtype?: string | null
+  visualDescription: string
+}
+
+export function buildCharacterConceptPrompt(input: CharacterConceptPromptInput) {
+  const sections = [
+    input.characterName?.trim() ? `Character: ${input.characterName.trim()}.` : null,
+    input.subtype?.trim() ? `Subtype: ${input.subtype.trim()}.` : null,
+    input.archetypeLabel?.trim() ? `Archetype: ${input.archetypeLabel.trim()}.` : null,
+    input.artStylePresetLabel?.trim() ? `Art style preset: ${input.artStylePresetLabel.trim()}.` : null,
+    input.artStyleDescription?.trim() ? `Art style notes: ${input.artStyleDescription.trim()}.` : null,
+    `Create a square concept image focused on the character. ${input.visualDescription.trim()}`,
+  ]
+
+  return sections.filter(Boolean).join(' ')
+}

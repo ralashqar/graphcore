@@ -16,6 +16,7 @@ export type Definition3dBindingConfig =
 export const defaultRender3dBindingConfig: Render3dBindingConfig = {
   primaryMeshAssetKey: null,
   previewImageAssetKey: null,
+  conceptPrompt: null,
   generationPrompt: null,
   generationStyle: null,
 }

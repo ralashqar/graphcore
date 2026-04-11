@@ -5,6 +5,7 @@ import type {
   FieldDefinition,
   FieldValue,
 } from '../../domain/graphcore'
+import type { AssetUrlCreateOptions } from '../../domain/assets'
 
 export type ItemIdentityChanges = Partial<
   Pick<DefinitionBase, 'name' | 'key' | 'summary' | 'iconAssetKey' | 'archetypeKey'>
@@ -35,7 +36,7 @@ export type ContentWorkspaceProps = {
   onAssignItemIcon: (assetKey: string | null) => void
   onCreateArchetype: () => void
   onCreateItem: (archetypeKey?: string | null) => void
-  onCreateUrlAsset: (url: string, kind?: 'image' | 'mesh') => void
+  onCreateUrlAsset: (url: string, kind?: 'image' | 'mesh', options?: AssetUrlCreateOptions) => string | null
   onRemoveArchetypeField: (archetypeKey: string, fieldKey: string) => void
   onSelectAsset: (key: string | null) => void
   onSelectArchetype: (key: string | null) => void
@@ -52,7 +53,7 @@ export type AssetsWorkspaceProps = {
   selectedAsset: AssetDefinition | null
   selectedItem: DefinitionBase | null
   onAssignAssetToSelectedItem: (assetKey: string | null) => void
-  onCreateUrlAsset: (url: string, kind?: 'image' | 'mesh') => void
+  onCreateUrlAsset: (url: string, kind?: 'image' | 'mesh', options?: AssetUrlCreateOptions) => string | null
   onSelectAsset: (key: string | null) => void
   onUploadAsset: (file: File) => void
   onUpdateAsset: (assetKey: string, changes: Partial<AssetDefinition>) => void
