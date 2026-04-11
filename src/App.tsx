@@ -70,6 +70,72 @@ function uniqueKey(existingKeys: string[], seed: string) {
   return candidate
 }
 
+function uniqueValue(existingValues: Iterable<string>, seed: string) {
+  const values = new Set(existingValues)
+  let candidate = seed
+  let index = 2
+  while (values.has(candidate)) {
+    candidate = `${seed}_${index}`
+    index += 1
+  }
+  return candidate
+}
+
+function createLocalEntityId(prefix: string) {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `${prefix}-${crypto.randomUUID()}`
+  }
+
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
+
+function dedupeAssetsByKey(snapshot: ProjectSnapshot) {
+  const seen = new Set<string>()
+  const dedupedAssets = snapshot.assets.filter((asset) => {
+    if (seen.has(asset.key)) {
+      return false
+    }
+    seen.add(asset.key)
+    return true
+  })
+
+  if (dedupedAssets.length === snapshot.assets.length) {
+    return snapshot
+  }
+
+  return {
+    ...snapshot,
+    assets: dedupedAssets,
+  }
+}
+
+function clearAssetReferences<T>(value: T, assetKey: string): T {
+  if (Array.isArray(value)) {
+    return value.map((entry) => clearAssetReferences(entry, assetKey)) as T
+  }
+
+  if (!value || typeof value !== 'object') {
+    return value
+  }
+
+  const entries = Object.entries(value as Record<string, unknown>).map(([key, entryValue]) => {
+    if (key === 'assetRefs' && Array.isArray(entryValue)) {
+      return [
+        key,
+        entryValue.filter((entry) => !(entry && typeof entry === 'object' && (entry as { assetKey?: unknown }).assetKey === assetKey)),
+      ]
+    }
+
+    if (key.endsWith('AssetKey') && entryValue === assetKey) {
+      return [key, null]
+    }
+
+    return [key, clearAssetReferences(entryValue, assetKey)]
+  })
+
+  return Object.fromEntries(entries) as T
+}
+
 function unsavedSnapshotStorageKey(draftId: string) {
   return `graphcore.unsaved-snapshot.v1.${draftId}`
 }
@@ -159,11 +225,12 @@ export default function App() {
     state: { snapshot: ProjectSnapshot; source: 'supabase' | 'demo'; reason?: string },
     options?: { preserveUnsavedIfSameDraft?: boolean },
   ) {
+    const normalizedIncomingSnapshot = dedupeAssetsByKey(state.snapshot)
     if (
       options?.preserveUnsavedIfSameDraft
       && hasLocalSnapshotChanges
       && snapshot
-      && snapshot.draft.id === state.snapshot.draft.id
+      && snapshot.draft.id === normalizedIncomingSnapshot.draft.id
     ) {
       startTransition(() => {
         setLoadedState({ source: state.source, reason: state.reason })
@@ -171,13 +238,13 @@ export default function App() {
       return
     }
 
-    const cachedUnsavedSnapshot = state.source === 'supabase' ? readUnsavedSnapshot(state.snapshot.draft.id) : null
+    const cachedUnsavedSnapshot = state.source === 'supabase' ? readUnsavedSnapshot(normalizedIncomingSnapshot.draft.id) : null
     const snapshotToHydrate =
       cachedUnsavedSnapshot
-      && cachedUnsavedSnapshot.project.id === state.snapshot.project.id
-      && cachedUnsavedSnapshot.draft.id === state.snapshot.draft.id
-        ? cachedUnsavedSnapshot
-        : state.snapshot
+      && cachedUnsavedSnapshot.project.id === normalizedIncomingSnapshot.project.id
+      && cachedUnsavedSnapshot.draft.id === normalizedIncomingSnapshot.draft.id
+        ? dedupeAssetsByKey(cachedUnsavedSnapshot)
+        : normalizedIncomingSnapshot
     const restoredUnsavedSnapshot = snapshotToHydrate !== state.snapshot
 
     const nextDefinition = snapshotToHydrate.definitions.find((definition) => definition.key === selectedDefinitionKey) ?? snapshotToHydrate.definitions[0] ?? null
@@ -349,6 +416,16 @@ export default function App() {
   }, [snapshot?.draft.id, snapshot?.gameSpec])
 
   useEffect(() => {
+    if (!snapshot) return
+    const normalizedSnapshot = dedupeAssetsByKey(snapshot)
+    if (normalizedSnapshot === snapshot) return
+
+    setSnapshot(normalizedSnapshot)
+    setHasLocalSnapshotChanges(true)
+    setBundle(compileBundle(normalizedSnapshot))
+  }, [snapshot])
+
+  useEffect(() => {
     if (!snapshot || loadedState?.source !== 'supabase') return
     if (hasLocalSnapshotChanges) {
       writeUnsavedSnapshot(snapshot)
@@ -408,7 +485,7 @@ export default function App() {
   function applySnapshotUpdate(mutator: (current: ProjectSnapshot) => ProjectSnapshot) {
     setSnapshot((current) => {
       if (!current) return current
-      const next = mutator(current)
+      const next = dedupeAssetsByKey(mutator(current))
       setHasLocalSnapshotChanges(true)
       setBundle(compileBundle(next))
       return next
@@ -871,34 +948,106 @@ export default function App() {
     if (changes.key && selectedAssetKey === assetKey) setSelectedAssetKey(changes.key)
   }
 
+  function deleteAsset(assetKey: string) {
+    const nextSelectedAssetKey =
+      selectedAssetKey === assetKey
+        ? snapshot?.assets.find((asset) => asset.key !== assetKey)?.key ?? null
+        : selectedAssetKey
+
+    applySnapshotUpdate((current) => ({
+      ...current,
+      assets: current.assets.filter((asset) => asset.key !== assetKey),
+      archetypes: current.archetypes.map((archetype) => clearAssetReferences(archetype, assetKey)),
+      definitions: current.definitions.map((definition) => clearAssetReferences(definition, assetKey)),
+      graphs: current.graphs.map((graph) => clearAssetReferences(graph, assetKey)),
+      environmentBlueprints: current.environmentBlueprints.map((blueprint) => clearAssetReferences(blueprint, assetKey)),
+    }))
+
+    if (selectedAssetKey === assetKey) {
+      setSelectedAssetKey(nextSelectedAssetKey)
+    }
+  }
+
   function createUrlAsset(sourceUrl: string, kind: AssetUrlCreationKind = 'image', options?: AssetUrlCreateOptions) {
     const trimmedUrl = sourceUrl.trim()
     if (!trimmedUrl) return null
     if (kind === 'mesh' && !isSupportedMeshPath(trimmedUrl)) return null
     const slug = buildAssetSlug(trimmedUrl.replace(/https?:\/\//, '')) || `asset_${Date.now()}`
     const assetPrefix = getAssetKeyPrefix(kind)
-    const nextAsset = {
-      id: `asset-url-${Date.now()}`,
-      key: `${assetPrefix}.${slug}`,
-      name: options?.name?.trim() || `Imported ${slug}`,
-      kind: kind as 'image' | 'mesh',
-      mimeType: inferRemoteAssetMimeType(trimmedUrl, kind),
-      storagePath: `external/${slug}`,
-      metadata: {
-        sourceUrl: trimmedUrl,
-        ...(kind === 'image' ? { previewUrl: trimmedUrl } : {}),
-        ...(options?.metadata ?? {}),
-      },
-      llmHints: {},
+    let nextAssetKey: string | null = null
+
+    applySnapshotUpdate((current) => {
+      const targetedAsset =
+        options?.existingAssetKey
+          ? current.assets.find((asset) => asset.key === options.existingAssetKey) ?? null
+          : null
+
+      if (targetedAsset) {
+        nextAssetKey = targetedAsset.key
+        return {
+          ...current,
+          assets: current.assets.map((asset) =>
+            asset.key === targetedAsset.key
+              ? {
+                  ...asset,
+                  name: options?.name?.trim() || asset.name,
+                  kind: kind as 'image' | 'mesh',
+                  mimeType: inferRemoteAssetMimeType(trimmedUrl, kind),
+                  storagePath: `external/${slug}`,
+                  metadata: {
+                    ...asset.metadata,
+                    sourceUrl: trimmedUrl,
+                    ...(kind === 'image' ? { previewUrl: trimmedUrl } : {}),
+                    ...(options?.metadata ?? {}),
+                  },
+                }
+              : asset,
+          ),
+        }
+      }
+
+      const existingAsset = current.assets.find((asset) =>
+        asset.kind === kind &&
+        (asset.metadata.sourceUrl === trimmedUrl || asset.metadata.previewUrl === trimmedUrl),
+      )
+
+      if (existingAsset) {
+        nextAssetKey = existingAsset.key
+        return current
+      }
+
+      const assetKey = uniqueValue(current.assets.map((asset) => asset.key), `${assetPrefix}.${slug}`)
+      const storagePath = uniqueValue(current.assets.map((asset) => asset.storagePath), `external/${slug}`)
+      const nextAsset = {
+        id: createLocalEntityId('asset-url'),
+        key: assetKey,
+        name: options?.name?.trim() || `Imported ${slug}`,
+        kind: kind as 'image' | 'mesh',
+        mimeType: inferRemoteAssetMimeType(trimmedUrl, kind),
+        storagePath,
+        metadata: {
+          sourceUrl: trimmedUrl,
+          ...(kind === 'image' ? { previewUrl: trimmedUrl } : {}),
+          ...(options?.metadata ?? {}),
+        },
+        llmHints: {},
+      }
+
+      nextAssetKey = assetKey
+      return { ...current, assets: [nextAsset, ...current.assets] }
+    })
+
+    if (!nextAssetKey) {
+      return null
     }
-    applySnapshotUpdate((current) => ({ ...current, assets: [nextAsset, ...current.assets] }))
+
     if (options?.selectAsset ?? true) {
-      setSelectedAssetKey(nextAsset.key)
+      setSelectedAssetKey(nextAssetKey)
     }
     if (options?.openAssetsTab ?? true) {
       setActiveTab('assets')
     }
-    return nextAsset.key
+    return nextAssetKey
   }
 
   function handleAssetUpload(file: File) {
@@ -908,22 +1057,35 @@ export default function App() {
     if (!kind) return
     const slug = buildAssetSlug(baseName) || `upload_${Date.now()}`
     const assetPrefix = getAssetKeyPrefix(kind)
-    const nextAsset = {
-      id: `asset-upload-${Date.now()}`,
-      key: `${assetPrefix}.${slug}`,
-      name: baseName,
-      kind,
-      mimeType: inferUploadMimeType(file, kind),
-      storagePath: `local-upload/${file.name}`,
-      metadata: {
-        sourceUrl: objectUrl,
-        ...(kind === 'image' ? { previewUrl: objectUrl } : {}),
-        localFileName: file.name,
-      },
-      llmHints: {},
+    let nextAssetKey: string | null = null
+
+    applySnapshotUpdate((current) => {
+      const assetKey = uniqueValue(current.assets.map((asset) => asset.key), `${assetPrefix}.${slug}`)
+      const storagePath = uniqueValue(current.assets.map((asset) => asset.storagePath), `local-upload/${file.name}`)
+      const nextAsset = {
+        id: createLocalEntityId('asset-upload'),
+        key: assetKey,
+        name: baseName,
+        kind,
+        mimeType: inferUploadMimeType(file, kind),
+        storagePath,
+        metadata: {
+          sourceUrl: objectUrl,
+          ...(kind === 'image' ? { previewUrl: objectUrl } : {}),
+          localFileName: file.name,
+        },
+        llmHints: {},
+      }
+
+      nextAssetKey = assetKey
+      return { ...current, assets: [nextAsset, ...current.assets] }
+    })
+
+    if (!nextAssetKey) {
+      return
     }
-    applySnapshotUpdate((current) => ({ ...current, assets: [nextAsset, ...current.assets] }))
-    setSelectedAssetKey(nextAsset.key)
+
+    setSelectedAssetKey(nextAssetKey)
     setActiveTab('assets')
   }
 
@@ -1489,7 +1651,7 @@ export default function App() {
                 promptText={promptText}
               />
             ) : null}
-            {activeTab === 'assets' ? <AssetsWorkspace assets={snapshot.assets} selectedAsset={selectedAsset} selectedItem={selectedDefinition} onAssignAssetToSelectedItem={assignAssetToSelectedItem} onCreateUrlAsset={createUrlAsset} onSelectAsset={setSelectedAssetKey} onUploadAsset={handleAssetUpload} onUpdateAsset={updateAssetIdentity} /> : null}
+            {activeTab === 'assets' ? <AssetsWorkspace assets={snapshot.assets} selectedAsset={selectedAsset} selectedItem={selectedDefinition} onAssignAssetToSelectedItem={assignAssetToSelectedItem} onCreateUrlAsset={createUrlAsset} onDeleteAsset={deleteAsset} onSelectAsset={setSelectedAssetKey} onUploadAsset={handleAssetUpload} onUpdateAsset={updateAssetIdentity} /> : null}
             {activeTab === 'prompts' ? <ActivityWorkspace patchHistory={patchHistory} selectedPatch={selectedPatch} selectedPatchIndex={selectedPatchIndex} onSelectPatch={setSelectedPatchIndex} /> : null}
             {activeTab === 'releases' ? <ReleasesWorkspace bundle={bundle} releases={snapshot.releases} sourceReason={loadedState?.reason} /> : null}
           </Suspense>

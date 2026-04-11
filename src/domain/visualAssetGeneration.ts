@@ -39,13 +39,22 @@ export type CharacterConceptPromptInput = {
 }
 
 export function buildCharacterConceptPrompt(input: CharacterConceptPromptInput) {
+  const subtype = input.subtype?.trim() ?? ''
+  const isHumanoid = subtype.length === 0 || subtype === 'humanoid'
+  const poseDirection = isHumanoid
+    ? 'Show the full-body character in a neutral T-pose concept-sheet stance for modeling reference.'
+    : 'Show the full character clearly, fully visible, centered in frame.'
   const sections = [
     input.characterName?.trim() ? `Character: ${input.characterName.trim()}.` : null,
-    input.subtype?.trim() ? `Subtype: ${input.subtype.trim()}.` : null,
+    subtype ? `Subtype: ${subtype}.` : null,
     input.archetypeLabel?.trim() ? `Archetype: ${input.archetypeLabel.trim()}.` : null,
-    input.artStylePresetLabel?.trim() ? `Art style preset: ${input.artStylePresetLabel.trim()}.` : null,
-    input.artStyleDescription?.trim() ? `Art style notes: ${input.artStyleDescription.trim()}.` : null,
-    `Create a square concept image focused on the character. ${input.visualDescription.trim()}`,
+    'Create a square game concept art image for a playable in-engine character asset.',
+    'Render it in the game’s final visual language, not as a loose illustration, sketch, mood board, or cinematic poster.',
+    input.artStylePresetLabel?.trim() ? `Universal game art style: ${input.artStylePresetLabel.trim()}.` : null,
+    input.artStyleDescription?.trim() ? `Additional art direction: ${input.artStyleDescription.trim()}.` : null,
+    poseDirection,
+    'Use a clean studio or neutral background with the silhouette fully readable and no UI, text, logos, borders, or collage layout.',
+    `Character visual description: ${input.visualDescription.trim()}.`,
   ]
 
   return sections.filter(Boolean).join(' ')

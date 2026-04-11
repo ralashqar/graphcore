@@ -5,6 +5,7 @@ export const supportedMeshAccept = '.glb,.gltf,model/gltf-binary,model/gltf+json
 
 export type AssetUrlCreationKind = 'image' | 'mesh'
 export type AssetUrlCreateOptions = {
+  existingAssetKey?: string | null
   metadata?: Record<string, unknown>
   name?: string
   openAssetsTab?: boolean

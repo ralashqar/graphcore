@@ -34,8 +34,8 @@ npx supabase secrets set --project-ref znwdatidqdkzidempvkt OPENAI_BASE_URL=http
 Then deploy:
 
 ```bash
-npx supabase functions deploy ai-openai --project-ref znwdatidqdkzidempvkt
-npx supabase functions deploy ai-fal --project-ref znwdatidqdkzidempvkt
+npx supabase functions deploy ai-openai --project-ref znwdatidqdkzidempvkt --no-verify-jwt
+npx supabase functions deploy ai-fal --project-ref znwdatidqdkzidempvkt --no-verify-jwt
 ```
 
 ## Recommended flow

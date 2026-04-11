@@ -54,6 +54,7 @@ export type AssetsWorkspaceProps = {
   selectedItem: DefinitionBase | null
   onAssignAssetToSelectedItem: (assetKey: string | null) => void
   onCreateUrlAsset: (url: string, kind?: 'image' | 'mesh', options?: AssetUrlCreateOptions) => string | null
+  onDeleteAsset: (assetKey: string) => void
   onSelectAsset: (key: string | null) => void
   onUploadAsset: (file: File) => void
   onUpdateAsset: (assetKey: string, changes: Partial<AssetDefinition>) => void

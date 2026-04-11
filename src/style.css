@@ -70,6 +70,17 @@ button {
   color: inherit;
 }
 
+select {
+  color: var(--text);
+  color-scheme: dark;
+}
+
+select option,
+select optgroup {
+  background: #0b1119;
+  color: var(--text);
+}
+
 pre,
 code {
   font-family: 'Cascadia Code', Consolas, monospace;

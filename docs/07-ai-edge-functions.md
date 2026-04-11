@@ -33,8 +33,8 @@ Useful commands:
 
 ```bash
 npx supabase secrets list --project-ref znwdatidqdkzidempvkt
-npx supabase functions deploy ai-openai --project-ref znwdatidqdkzidempvkt
-npx supabase functions deploy ai-fal --project-ref znwdatidqdkzidempvkt
+npx supabase functions deploy ai-openai --project-ref znwdatidqdkzidempvkt --no-verify-jwt
+npx supabase functions deploy ai-fal --project-ref znwdatidqdkzidempvkt --no-verify-jwt
 ```
 
 You can also set the same secrets in the Supabase dashboard under project secrets / edge function secrets, then redeploy the functions.
@@ -185,3 +185,4 @@ type FalInvokeResult = {
 - `ai-openai` sends requests to OpenAI's `/v1/responses` API.
 - `ai-fal` uses Fal's queue endpoints and supports `submit`, `status`, `result`, `cancel`, and a server-side polling `subscribe` mode.
 - Both functions are intentionally provider-generic enough that the graph prompt feature can call them directly before we wire prompt-to-patch generation on top.
+- Redeploy these protected functions with `--no-verify-jwt` so Supabase relay auth does not reject the request before the in-function session check runs.

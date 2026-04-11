@@ -1,4 +1,9 @@
 export const ART_STYLE_PRESETS = [
+  {
+    id: 'premium_stylized_3d',
+    label: 'Premium Stylized 3D',
+    promptLabel: 'premium stylized 3D game concept art, polished hero-driven battle royale style, high-end game-ready materials',
+  },
   { id: 'storybook_illustration', label: 'Storybook Illustration', promptLabel: 'storybook illustration' },
   { id: 'stylized_fantasy', label: 'Stylized Fantasy', promptLabel: 'stylized fantasy concept art' },
   { id: 'anime_cel', label: 'Anime Cel', promptLabel: 'anime cel-shaded illustration' },
@@ -11,18 +16,18 @@ export const ART_STYLE_PRESETS = [
 
 export type ArtStylePresetId = (typeof ART_STYLE_PRESETS)[number]['id']
 
-export const DEFAULT_ART_STYLE_PRESET: ArtStylePresetId = 'storybook_illustration'
+export const DEFAULT_ART_STYLE_PRESET: ArtStylePresetId = 'premium_stylized_3d'
 
 export const artStylePresetMap = new Map(ART_STYLE_PRESETS.map((preset) => [preset.id, preset]))
 
 export function getArtStylePresetLabel(presetId: string | null | undefined) {
   return artStylePresetMap.get((presetId ?? DEFAULT_ART_STYLE_PRESET) as ArtStylePresetId)?.label
     ?? artStylePresetMap.get(DEFAULT_ART_STYLE_PRESET)?.label
-    ?? 'Storybook Illustration'
+    ?? 'Premium Stylized 3D'
 }
 
 export function getArtStylePromptLabel(presetId: string | null | undefined) {
   return artStylePresetMap.get((presetId ?? DEFAULT_ART_STYLE_PRESET) as ArtStylePresetId)?.promptLabel
     ?? artStylePresetMap.get(DEFAULT_ART_STYLE_PRESET)?.promptLabel
-    ?? 'storybook illustration'
+    ?? 'premium stylized 3D game concept art'
 }

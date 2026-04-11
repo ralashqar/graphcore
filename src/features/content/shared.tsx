@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { isSupportedMeshPath, resolveAssetPreviewUrl, type AssetUrlCreateOptions, type AssetUrlCreationKind } from '../../domain/assets'
 import { EntityIcon, type EntityIconId } from '../../shared/entityIcons'
 
@@ -390,11 +390,16 @@ export function MediaThumb({
   large?: boolean
 }) {
   const previewUrl = resolveAssetPreviewUrl(asset)
+  const [imageFailed, setImageFailed] = useState(false)
 
-  if (previewUrl) {
+  useEffect(() => {
+    setImageFailed(false)
+  }, [previewUrl])
+
+  if (previewUrl && !imageFailed) {
     return (
       <span className={large ? 'media-thumb large' : 'media-thumb'}>
-        <img alt={label} src={previewUrl} />
+        <img alt={label} onError={() => setImageFailed(true)} src={previewUrl} />
       </span>
     )
   }

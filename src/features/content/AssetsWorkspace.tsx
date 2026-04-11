@@ -10,6 +10,7 @@ export function AssetsWorkspace({
   selectedItem,
   onAssignAssetToSelectedItem,
   onCreateUrlAsset,
+  onDeleteAsset,
   onSelectAsset,
   onUploadAsset,
   onUpdateAsset,
@@ -117,6 +118,9 @@ export function AssetsWorkspace({
             <div className="asset-toolbar">
               <button className="primary-button compact" onClick={() => onAssignAssetToSelectedItem(selectedAsset.key)} type="button">
                 Use for selected item icon
+              </button>
+              <button className="ghost-button compact danger" onClick={() => onDeleteAsset(selectedAsset.key)} type="button">
+                Delete asset
               </button>
               <span className="subtle-line">Selected item: {selectedItem?.name ?? 'none'}</span>
             </div>

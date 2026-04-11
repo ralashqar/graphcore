@@ -6,13 +6,52 @@ import type {
   MeshFromImageGenerationResult,
 } from '../domain/visualAssetGeneration'
 
-function extractFalImageUrls(data: Record<string, unknown>) {
-  const images = Array.isArray(data.images) ? data.images : []
-  const imageList = images
-    .map((entry) => (entry && typeof entry === 'object' && typeof (entry as { url?: unknown }).url === 'string' ? String((entry as { url: string }).url) : null))
-    .filter((value): value is string => Boolean(value))
-  const singularImage = typeof data.image === 'string' ? [data.image] : []
-  return [...imageList, ...singularImage]
+function isValidImageFileEntry(value: unknown): value is { url: string; content_type?: string; file_name?: string } {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+
+  const candidate = value as { url?: unknown; content_type?: unknown; file_name?: unknown }
+  if (typeof candidate.url !== 'string' || !/^https?:\/\//i.test(candidate.url)) {
+    return false
+  }
+
+  if (typeof candidate.content_type === 'string' && candidate.content_type.toLowerCase().startsWith('image/')) {
+    return true
+  }
+
+  if (typeof candidate.file_name === 'string' && /\.(avif|gif|jpe?g|png|webp)$/i.test(candidate.file_name)) {
+    return true
+  }
+
+  return /\.(avif|gif|jpe?g|png|webp)(\?|$)/i.test(candidate.url)
+}
+
+function extractFalImageUrls(data: unknown) {
+  if (!data || typeof data !== 'object') {
+    return []
+  }
+
+  const record = data as {
+    image?: unknown
+    images?: unknown
+  }
+
+  if (Array.isArray(record.images)) {
+    const imageUrls = record.images
+      .filter(isValidImageFileEntry)
+      .map((entry) => entry.url)
+
+    if (imageUrls.length > 0) {
+      return imageUrls
+    }
+  }
+
+  if (typeof record.image === 'string' && /^https?:\/\//i.test(record.image)) {
+    return [record.image]
+  }
+
+  return []
 }
 
 export async function generateConceptImage(request: ConceptImageGenerationRequest): Promise<ConceptImageGenerationResult> {
@@ -31,13 +70,23 @@ export async function generateConceptImage(request: ConceptImageGenerationReques
     logs: true,
     timeoutMs: 120000,
   })
+  const imageUrls = extractFalImageUrls(response.data)
+
+  if (imageUrls.length === 0) {
+    console.error('[GraphCore] Fal concept image response contained no image URLs.', {
+      model: response.model,
+      requestId: response.requestId,
+      data: response.data,
+      statusData: response.statusData,
+    })
+  }
 
   return {
     status: 'succeeded',
     provider: 'fal',
     model: response.model,
     requestId: response.requestId,
-    imageUrls: extractFalImageUrls(response.data),
+    imageUrls,
     raw: response.data,
   }
 }

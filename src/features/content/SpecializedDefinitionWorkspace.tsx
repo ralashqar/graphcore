@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, useTransition } from 'react'
 
 import { getArtStylePresetLabel } from '../../domain/artStylePresets'
+import { buildAssetSlug, type AssetUrlCreateOptions } from '../../domain/assets'
 import type { ArchetypeDefinition, AssetDefinition, AssemblyGraphDefinition, DefinitionBase, EnvironmentBlueprintV1, FieldDefinition, FieldValue, GameSpec } from '../../domain/graphcore'
 import { buildCharacterConceptPrompt } from '../../domain/visualAssetGeneration'
 import { visualAssetGenerationService } from '../../application/services/visualAssetGenerationService'
@@ -32,7 +33,7 @@ type SpecializedDefinitionWorkspaceProps = {
   onCreateEnvironmentBlueprint: (environmentKey: string) => string | null
   onCreateAssemblyGraph: (environmentKey: string) => string | null
   onCreateDefinition: (archetypeKey?: string | null) => void
-  onCreateUrlAsset: (url: string, kind?: 'image' | 'mesh', options?: { name?: string; metadata?: Record<string, unknown>; openAssetsTab?: boolean; selectAsset?: boolean }) => string | null
+  onCreateUrlAsset: (url: string, kind?: 'image' | 'mesh', options?: AssetUrlCreateOptions) => string | null
   onDeleteAssemblyGraph: (graphKey: string) => void
   onDeleteEnvironmentBlueprint: (blueprintId: string) => void
   onChangePromptText: (value: string) => void
@@ -202,6 +203,7 @@ export function SpecializedDefinitionWorkspace({
 
     try {
       const archetypeLabel = compatibleArchetypes.find((archetype) => archetype.key === effectiveSelection.archetypeKey)?.name ?? effectiveSelection.archetypeKey ?? null
+      const conceptAssetName = `${buildAssetSlug(effectiveSelection.name) || 'character'}_conceptart`
       const prompt = buildCharacterConceptPrompt({
         characterName: effectiveSelection.name,
         subtype: selectedCharacterProfile?.subtype ?? 'humanoid',
@@ -217,12 +219,13 @@ export function SpecializedDefinitionWorkspace({
       const imageUrl = result.imageUrls[0] ?? null
       if (!imageUrl) {
         throw new Error('Fal returned no concept image URL.')
-      }
-      const assetKey = onCreateUrlAsset(imageUrl, 'image', {
-        name: `${effectiveSelection.name} Concept`,
-        metadata: {
-          generatedBy: 'character_concept',
-          provider: result.provider,
+        }
+        const assetKey = onCreateUrlAsset(imageUrl, 'image', {
+          existingAssetKey: selectedCharacterRenderBinding.previewImageAssetKey,
+          name: conceptAssetName,
+          metadata: {
+            generatedBy: 'character_concept',
+            provider: result.provider,
           model: result.model,
           requestId: result.requestId,
           prompt,
