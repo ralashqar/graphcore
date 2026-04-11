@@ -1,6 +1,7 @@
 import { useMemo, useState, type ChangeEvent } from 'react'
 
 import { supportedMeshAccept } from '../../domain/assets'
+import { isPendingGenerationResource } from '../../domain/worldBuild'
 import { MediaThumb, QuickUrlAssetForm } from './shared'
 import type { AssetsWorkspaceProps } from './types'
 
@@ -77,69 +78,77 @@ export function AssetsWorkspace({
 
       <section className="main-surface detail-surface">
         {selectedAsset ? (
-          <div className="detail-stack">
-            <div className="asset-detail-head">
-              <MediaThumb asset={selectedAsset} fallbackIcon="asset" label={selectedAsset.name} large />
-              <div>
-                <span className="eyebrow">Managed Asset</span>
-                <h2>{selectedAsset.name}</h2>
-                <p className="subtle-line">{selectedAsset.storagePath}</p>
+          isPendingGenerationResource(selectedAsset) ? (
+            <div className="detail-stack compact world-build-loading-shell">
+              <span className="eyebrow">Generating Asset</span>
+              <h3>{selectedAsset.name}</h3>
+              <div className="inline-note">This asset is still being generated. The final preview and editable fields will appear when the job completes.</div>
+            </div>
+          ) : (
+            <div className="detail-stack">
+              <div className="asset-detail-head">
+                <MediaThumb asset={selectedAsset} fallbackIcon="asset" label={selectedAsset.name} large />
+                <div>
+                  <span className="eyebrow">Managed Asset</span>
+                  <h2>{selectedAsset.name}</h2>
+                  <p className="subtle-line">{selectedAsset.storagePath}</p>
+                </div>
+              </div>
+              <div className="editor-grid">
+                <label className="field-block">
+                  <span>Name</span>
+                  <input value={selectedAsset.name} onChange={(event) => onUpdateAsset(selectedAsset.key, { name: event.target.value })} />
+                </label>
+                <label className="field-block">
+                  <span>Key</span>
+                  <input value={selectedAsset.key} onChange={(event) => onUpdateAsset(selectedAsset.key, { key: event.target.value })} />
+                </label>
+                <label className="field-block full-width">
+                  <span>Storage Path</span>
+                  <input value={selectedAsset.storagePath} onChange={(event) => onUpdateAsset(selectedAsset.key, { storagePath: event.target.value })} />
+                </label>
+                <label className="field-block full-width">
+                  <span>Source URL</span>
+                  <input
+                    value={String(selectedAsset.metadata.sourceUrl ?? selectedAsset.metadata.previewUrl ?? '')}
+                    onChange={(event) =>
+                      onUpdateAsset(selectedAsset.key, {
+                        metadata: {
+                          ...selectedAsset.metadata,
+                          sourceUrl: event.target.value,
+                          ...(selectedAsset.kind === 'image' ? { previewUrl: event.target.value } : {}),
+                        },
+                      })
+                    }
+                  />
+                </label>
+              </div>
+              <div className="asset-toolbar">
+                <button className="primary-button compact" onClick={() => onAssignAssetToSelectedItem(selectedAsset.key)} type="button">
+                  Use for selected item icon
+                </button>
+                <button className="ghost-button compact danger" onClick={() => onDeleteAsset(selectedAsset.key)} type="button">
+                  Delete asset
+                </button>
+                <span className="subtle-line">Selected item: {selectedItem?.name ?? 'none'}</span>
+              </div>
+              <div className="asset-import-grid">
+                <QuickUrlAssetForm onCreateUrlAsset={onCreateUrlAsset} />
+                <label className="upload-card">
+                  <span className="section-label">Local upload</span>
+                  <input
+                    type="file"
+                    accept={`image/*,audio/*,${supportedMeshAccept}`}
+                    onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                      event.target.files?.[0] && onUploadAsset(event.target.files[0])
+                    }
+                  />
+                  <strong>Select image, audio, or mesh</strong>
+                  <span>Creates a local session asset entry. Mesh uploads currently support `.glb` and `.gltf`.</span>
+                </label>
               </div>
             </div>
-            <div className="editor-grid">
-              <label className="field-block">
-                <span>Name</span>
-                <input value={selectedAsset.name} onChange={(event) => onUpdateAsset(selectedAsset.key, { name: event.target.value })} />
-              </label>
-              <label className="field-block">
-                <span>Key</span>
-                <input value={selectedAsset.key} onChange={(event) => onUpdateAsset(selectedAsset.key, { key: event.target.value })} />
-              </label>
-              <label className="field-block full-width">
-                <span>Storage Path</span>
-                <input value={selectedAsset.storagePath} onChange={(event) => onUpdateAsset(selectedAsset.key, { storagePath: event.target.value })} />
-              </label>
-              <label className="field-block full-width">
-                <span>Source URL</span>
-                <input
-                  value={String(selectedAsset.metadata.sourceUrl ?? selectedAsset.metadata.previewUrl ?? '')}
-                  onChange={(event) =>
-                    onUpdateAsset(selectedAsset.key, {
-                      metadata: {
-                        ...selectedAsset.metadata,
-                        sourceUrl: event.target.value,
-                        ...(selectedAsset.kind === 'image' ? { previewUrl: event.target.value } : {}),
-                      },
-                    })
-                  }
-                />
-              </label>
-            </div>
-            <div className="asset-toolbar">
-              <button className="primary-button compact" onClick={() => onAssignAssetToSelectedItem(selectedAsset.key)} type="button">
-                Use for selected item icon
-              </button>
-              <button className="ghost-button compact danger" onClick={() => onDeleteAsset(selectedAsset.key)} type="button">
-                Delete asset
-              </button>
-              <span className="subtle-line">Selected item: {selectedItem?.name ?? 'none'}</span>
-            </div>
-            <div className="asset-import-grid">
-              <QuickUrlAssetForm onCreateUrlAsset={onCreateUrlAsset} />
-              <label className="upload-card">
-                <span className="section-label">Local upload</span>
-                <input
-                  type="file"
-                  accept={`image/*,audio/*,${supportedMeshAccept}`}
-                  onChange={(event: ChangeEvent<HTMLInputElement>) =>
-                    event.target.files?.[0] && onUploadAsset(event.target.files[0])
-                  }
-                />
-                <strong>Select image, audio, or mesh</strong>
-                <span>Creates a local session asset entry. Mesh uploads currently support `.glb` and `.gltf`.</span>
-              </label>
-            </div>
-          </div>
+          )
         ) : null}
       </section>
     </div>

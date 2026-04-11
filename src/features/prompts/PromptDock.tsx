@@ -55,10 +55,10 @@ export function PromptDock({
         <div className="prompt-actions prompt-actions-inline">
           <button className="primary-button button-with-spinner" disabled={buttonDisabled} onClick={needsInitialization ? onOpenOnboarding : onGenerate} type="button">
             {isBusy
-              ? <><span className="button-spinner" aria-hidden="true" />Generating...</>
+              ? <><span className="button-spinner" aria-hidden="true" />Planning...</>
               : needsInitialization
                 ? 'Initialize game'
-                : 'Generate'}
+                : 'Plan build'}
           </button>
         </div>
       </div>

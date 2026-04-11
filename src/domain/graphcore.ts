@@ -1,6 +1,10 @@
 import { z } from 'zod'
 import { gameSpecSchema } from './gameSpec'
 import {
+  resourceGenerationMetadataSchema,
+  worldBuildBatchSchema,
+} from './worldBuild'
+import {
   assemblyEdgeDefinitionSchema,
   assemblyGraphDefinitionSchema,
   assemblyNodeDefinitionSchema,
@@ -141,6 +145,9 @@ const environmentScaleTierSchema = z.enum(['room', 'site', 'zone', 'region'])
 const worldScaleTierSchema = z.enum(['local', 'regional', 'planetary'])
 
 const looseRecordSchema = z.record(z.string(), z.unknown())
+const metadataRecordSchema = z.object({
+  generation: resourceGenerationMetadataSchema.optional(),
+}).catchall(z.unknown())
 
 export const assetRefSchema = z.object({
   assetKey: z.string(),
@@ -174,7 +181,7 @@ export const archetypeDefinitionSchema = z.object({
   summary: z.string().default(''),
   appliesToKind: definitionKindSchema.default('item'),
   iconAssetKey: z.string().nullable().default(null),
-  metadata: looseRecordSchema.default({}),
+  metadata: metadataRecordSchema.default({}),
   llmHints: looseRecordSchema.default({}),
   fields: z.array(fieldDefinitionSchema).default([]),
 })
@@ -644,7 +651,7 @@ export const graphDefinitionSchema = z.object({
   graphType: graphTypeSchema.default('narrative_flow'),
   summary: z.string().default(''),
   entryNodeKey: z.string().nullable().default(null),
-  metadata: looseRecordSchema.default({}),
+  metadata: metadataRecordSchema.default({}),
   llmHints: looseRecordSchema.default({}),
   nodes: z.array(nodeDefinitionSchema).default([]),
   edges: z.array(edgeDefinitionSchema).default([]),
@@ -657,7 +664,7 @@ export const assetDefinitionSchema = z.object({
   kind: assetKindSchema,
   mimeType: z.string(),
   storagePath: z.string(),
-  metadata: looseRecordSchema.default({}),
+  metadata: metadataRecordSchema.default({}),
   llmHints: looseRecordSchema.default({}),
 })
 
@@ -683,7 +690,7 @@ export const projectSnapshotSchema = z.object({
     version: z.number().int().positive(),
     isPrimary: z.boolean(),
     updatedAt: z.string(),
-    metadata: z.record(z.string(), z.unknown()).default({}),
+    metadata: metadataRecordSchema.default({}),
   }),
   gameSpec: gameSpecSchema.nullable().default(null),
   archetypes: z.array(archetypeDefinitionSchema).default([]),
@@ -692,6 +699,7 @@ export const projectSnapshotSchema = z.object({
   assemblyGraphs: z.array(assemblyGraphDefinitionSchema).default([]),
   environmentBlueprints: z.array(environmentBlueprintV1Schema).default([]),
   assets: z.array(assetDefinitionSchema),
+  worldBuildBatches: z.array(worldBuildBatchSchema).default([]),
   patchSets: z.array(
     z.object({
       id: z.string(),
@@ -1123,6 +1131,27 @@ export type NodeLibraryGroup = {
 
 export function buildDefaultDefinitionComponents(kind: DefinitionKind): ComponentEnvelope[] {
   switch (kind) {
+    case 'item':
+      return [
+        {
+          type: 'physical_item_profile',
+          config: {
+            physicalSubtype: 'pickup',
+            worldPlacementRole: '',
+            pickupContext: '',
+          },
+        },
+        {
+          type: 'render_3d_binding',
+          config: {
+            primaryMeshAssetKey: null,
+            previewImageAssetKey: null,
+            conceptPrompt: null,
+            generationPrompt: null,
+            generationStyle: null,
+          },
+        },
+      ]
     case 'character':
       return [
         {

@@ -4,6 +4,7 @@ import { getArtStylePresetLabel } from '../../domain/artStylePresets'
 import { buildAssetSlug, type AssetUrlCreateOptions } from '../../domain/assets'
 import type { ArchetypeDefinition, AssetDefinition, AssemblyGraphDefinition, DefinitionBase, EnvironmentBlueprintV1, FieldDefinition, FieldValue, GameSpec } from '../../domain/graphcore'
 import { buildCharacterConceptPrompt } from '../../domain/visualAssetGeneration'
+import { isPendingGenerationResource } from '../../domain/worldBuild'
 import { visualAssetGenerationService } from '../../application/services/visualAssetGenerationService'
 import { getResolvedRender3dBinding } from '../../domain/render3d'
 import { iconForDefinitionKind } from '../../shared/entityIcons'
@@ -138,6 +139,7 @@ export function SpecializedDefinitionWorkspace({
     const blueprintId = geometryBinding?.type === 'environment_geometry_binding' ? geometryBinding.config.environmentBlueprintKey : null
     return environmentBlueprints.find((blueprint) => blueprint.id === blueprintId) ?? null
   }, [effectiveSelection, environmentBlueprints])
+  const isSelectionPending = isPendingGenerationResource(effectiveSelection)
   const definitionPanelControls = supports3dPanel ? (
     <div className="segmented-control panel-mode-control" aria-label="Character panel mode">
       <button
@@ -299,7 +301,7 @@ export function SpecializedDefinitionWorkspace({
               value={search}
             />
           </label>
-          <div className="inline-note">{subtitle}</div>
+          {!isCharacterWorkspace ? <div className="inline-note">{subtitle}</div> : null}
         </div>
 
         {isCharacterWorkspace ? (
@@ -377,7 +379,13 @@ export function SpecializedDefinitionWorkspace({
 
       <section className="main-surface detail-surface item-editor-surface">
         {effectiveSelection ? (
-          supports3dPanel ? (
+          isSelectionPending ? (
+            <div className="detail-stack compact world-build-loading-shell">
+              <span className="eyebrow">Generating {effectiveSelection.kind === 'character' ? 'Character' : 'Environment'}</span>
+              <h3>{effectiveSelection.name}</h3>
+              <div className="inline-note">This placeholder is still being generated. The editor will unlock when the background job completes.</div>
+            </div>
+          ) : supports3dPanel ? (
             <div key={effectiveSelection.key} className="character-panel-shell">
               {effectiveSelection.kind === 'character' ? (
                 <>

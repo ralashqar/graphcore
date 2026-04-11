@@ -149,6 +149,15 @@ verify_jwt = false
 [functions.apply-patch]
 verify_jwt = false
 
+[functions.plan-world-build]
+verify_jwt = false
+
+[functions.start-world-build]
+verify_jwt = false
+
+[functions.poll-world-build]
+verify_jwt = false
+
 # Analytics Buckets is available to Supabase Pro plan.
 # [storage.analytics.buckets.my-warehouse]
 

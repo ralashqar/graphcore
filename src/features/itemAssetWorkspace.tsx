@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 
+import { isPendingGenerationResource } from '../domain/worldBuild'
 import { EntityIcon, iconForDefinitionKind } from '../shared/entityIcons'
 import { ArchetypeEditor } from './content/ArchetypeEditor'
 import { AssetsWorkspace as AssetsWorkspaceView } from './content/AssetsWorkspace'
@@ -67,6 +68,7 @@ export function ContentWorkspace({
 }: ContentWorkspaceProps) {
   const [mode, setMode] = useState<ContentMode>('items')
   const [isCreateContentOpen, setIsCreateContentOpen] = useState(false)
+  const [createTemplateKindFilter, setCreateTemplateKindFilter] = useState<DefinitionKindFilter>('all')
   const [itemSearch, setItemSearch] = useState('')
   const [itemFilterKind, setItemFilterKind] = useState<DefinitionKindFilter>('all')
   const [archetypeSearch, setArchetypeSearch] = useState('')
@@ -89,11 +91,6 @@ export function ContentWorkspace({
     selectedArchetype && isContentKind(selectedArchetype.appliesToKind)
       ? selectedArchetype
       : null
-  const selectedTemplateForCreate =
-    selectedContentArchetype && contentKinds.some((entry) => entry.kind === selectedContentArchetype.appliesToKind)
-      ? selectedContentArchetype
-      : null
-
   const filteredItems = useMemo(() => {
     const query = itemSearch.trim().toLowerCase()
     return contentItems
@@ -124,6 +121,12 @@ export function ContentWorkspace({
       })
       .sort((left, right) => left.name.localeCompare(right.name))
   }, [archetypeKindFilter, archetypeSearch, contentArchetypes])
+
+  const createModalTemplates = useMemo(() => {
+    return contentArchetypes
+      .filter((archetype) => (createTemplateKindFilter === 'all' ? true : archetype.appliesToKind === createTemplateKindFilter))
+      .sort((left, right) => left.name.localeCompare(right.name))
+  }, [contentArchetypes, createTemplateKindFilter])
 
   useEffect(() => {
     if (mode !== 'items') return
@@ -161,7 +164,14 @@ export function ContentWorkspace({
           </div>
           <button
             className="primary-button compact"
-            onClick={() => (mode === 'items' ? setIsCreateContentOpen(true) : onCreateArchetype())}
+            onClick={() => {
+              if (mode === 'items') {
+                setCreateTemplateKindFilter('all')
+                setIsCreateContentOpen(true)
+                return
+              }
+              onCreateArchetype()
+            }}
             type="button"
           >
             {mode === 'items' ? 'New Content' : '+ New template'}
@@ -270,22 +280,30 @@ export function ContentWorkspace({
 
       <section className="main-surface detail-surface item-editor-surface">
         {mode === 'items' ? (
-          <DefinitionEditor
-            archetypes={archetypes}
-            assets={assets}
-            definitions={definitions}
-            graphKeys={graphKeys}
-            imageAssets={imageAssets}
-            selectedArchetype={selectedContentArchetype}
-            selectedAsset={selectedAsset}
-            selectedItem={selectedContentItem}
-            onAddCustomField={onAddCustomField}
-            onAssignItemIcon={onAssignItemIcon}
-            onCreateItem={onCreateItem}
-            onUpdateComponents={onUpdateComponents}
-            onUpdateFieldValue={onUpdateFieldValue}
-            onUpdateItemIdentity={onUpdateItemIdentity}
-          />
+          selectedContentItem && isPendingGenerationResource(selectedContentItem) ? (
+            <div className="detail-stack compact world-build-loading-shell">
+              <span className="eyebrow">Generating Content</span>
+              <h3>{selectedContentItem.name}</h3>
+              <div className="inline-note">This placeholder is still being generated. Fields will appear here when the background job finishes.</div>
+            </div>
+          ) : (
+            <DefinitionEditor
+              archetypes={archetypes}
+              assets={assets}
+              definitions={definitions}
+              graphKeys={graphKeys}
+              imageAssets={imageAssets}
+              selectedArchetype={selectedContentArchetype}
+              selectedAsset={selectedAsset}
+              selectedItem={selectedContentItem}
+              onAddCustomField={onAddCustomField}
+              onAssignItemIcon={onAssignItemIcon}
+              onCreateItem={onCreateItem}
+              onUpdateComponents={onUpdateComponents}
+              onUpdateFieldValue={onUpdateFieldValue}
+              onUpdateItemIdentity={onUpdateItemIdentity}
+            />
+          )
         ) : (
           <ArchetypeEditor
             imageAssets={imageAssets}
@@ -332,22 +350,50 @@ export function ContentWorkspace({
                 </button>
               ))}
             </div>
-            {selectedTemplateForCreate ? (
-              <div className="content-create-template-callout">
-                <strong>Selected template</strong>
-                <span>{selectedTemplateForCreate.name}</span>
-                <button
-                  className="ghost-button compact"
-                  onClick={() => {
-                    onCreateDefinitionOfKind(selectedTemplateForCreate.appliesToKind, selectedTemplateForCreate.key)
-                    setIsCreateContentOpen(false)
-                  }}
-                  type="button"
-                >
-                  Create From Template
-                </button>
+            <div className="content-create-template-section">
+              <div className="content-create-template-head">
+                <div>
+                  <span className="eyebrow">From Template</span>
+                  <h4>Start from an existing structure</h4>
+                </div>
+                <label className="field-block compact-block">
+                  <span>Kind</span>
+                  <select value={createTemplateKindFilter} onChange={(event) => setCreateTemplateKindFilter(event.target.value as DefinitionKindFilter)}>
+                    {contentKindOptions.map((entry) => (
+                      <option key={entry.value} value={entry.value}>
+                        {entry.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
               </div>
-            ) : null}
+              <div className="content-create-template-list">
+                {createModalTemplates.map((archetype) => (
+                  <button
+                    key={`${archetype.id}:${archetype.key}`}
+                    className={archetype.key === selectedContentArchetype?.key ? 'content-create-template-item is-active' : 'content-create-template-item'}
+                    onClick={() => {
+                      onCreateDefinitionOfKind(archetype.appliesToKind, archetype.key)
+                      setIsCreateContentOpen(false)
+                    }}
+                    type="button"
+                  >
+                    <span className="content-create-template-icon">
+                      <EntityIcon id="archetype" />
+                    </span>
+                    <span className="content-create-template-copy">
+                      <strong>{archetype.name}</strong>
+                      <span>{contentKinds.find((entry) => entry.kind === archetype.appliesToKind)?.label ?? archetype.appliesToKind}</span>
+                    </span>
+                  </button>
+                ))}
+                {createModalTemplates.length === 0 ? (
+                  <div className="content-create-template-empty">
+                    No templates available for this kind yet.
+                  </div>
+                ) : null}
+              </div>
+            </div>
           </div>
         </div>
       ) : null}

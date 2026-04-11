@@ -15,6 +15,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import type { GraphType, NodeDefinition } from '../domain/graphcore'
+import { isPendingGenerationResource } from '../domain/worldBuild'
 import {
   applyTemplateToNode,
   createNodeFromTemplate,
@@ -64,6 +65,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
   const [contextMenuSearch, setContextMenuSearch] = useState('')
   const canvasRef = useRef<HTMLDivElement | null>(null)
   const contextMenuSearchRef = useRef<HTMLInputElement | null>(null)
+  const isSelectedGraphPending = isPendingGenerationResource(selectedGraph)
 
   const nodes = useMemo<Node[]>(() => {
     return (selectedGraph?.nodes ?? []).map((node) => {
@@ -396,44 +398,58 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
       </aside>
 
       <section className="main-surface graph-surface">
-        <div className="graph-toolbar">
-          <select value={selectedGraph?.key ?? ''} onChange={(event) => onSelectGraph(event.target.value || null)}>
-            {snapshotGraphs.map((graph) => <option key={graph.key} value={graph.key}>{graph.name}</option>)}
-          </select>
-          <input value={selectedGraph?.name ?? ''} onChange={(event) => selectedGraph && onUpdateGraph(selectedGraph.key, { name: event.target.value })} placeholder="Graph name" />
-          <select value={selectedGraph?.graphType ?? 'narrative_flow'} onChange={(event) => selectedGraph && onUpdateGraph(selectedGraph.key, { graphType: event.target.value as GraphType })}>
-            <option value="narrative_flow">Narrative</option>
-            <option value="quest_flow">Quest</option>
-            <option value="system_graph">System</option>
-          </select>
-          <button className="ghost-button compact" onClick={() => selectedGraph && onDuplicateGraph(selectedGraph.key)} type="button">Duplicate</button>
-          <button className="ghost-button compact" onClick={() => selectedGraph && onDeleteGraph(selectedGraph.key)} type="button">Delete</button>
-        </div>
+        {isSelectedGraphPending ? (
+          <div className="graph-toolbar">
+            <div className="inline-note">This graph is still generating. Toolbar controls unlock when the job completes.</div>
+          </div>
+        ) : (
+          <div className="graph-toolbar">
+            <select value={selectedGraph?.key ?? ''} onChange={(event) => onSelectGraph(event.target.value || null)}>
+              {snapshotGraphs.map((graph) => <option key={graph.key} value={graph.key}>{graph.name}</option>)}
+            </select>
+            <input value={selectedGraph?.name ?? ''} onChange={(event) => selectedGraph && onUpdateGraph(selectedGraph.key, { name: event.target.value })} placeholder="Graph name" />
+            <select value={selectedGraph?.graphType ?? 'narrative_flow'} onChange={(event) => selectedGraph && onUpdateGraph(selectedGraph.key, { graphType: event.target.value as GraphType })}>
+              <option value="narrative_flow">Narrative</option>
+              <option value="quest_flow">Quest</option>
+              <option value="system_graph">System</option>
+            </select>
+            <button className="ghost-button compact" onClick={() => selectedGraph && onDuplicateGraph(selectedGraph.key)} type="button">Duplicate</button>
+            <button className="ghost-button compact" onClick={() => selectedGraph && onDeleteGraph(selectedGraph.key)} type="button">Delete</button>
+          </div>
+        )}
         <div className="canvas-stage graph-canvas" ref={canvasRef}>
-          <ReactFlow
-            fitView
-            nodes={liveNodes}
-            edges={liveEdges}
-            nodeTypes={{ graphNode: FlowNodeCard }}
-            nodesDraggable
-            nodesConnectable
-            onInit={setFlowInstance}
-            onNodeClick={(_, node) => onSelectNode(node.id)}
-            onNodeContextMenu={handleNodeContextMenu}
-            onEdgeClick={(_, edge) => onSelectEdge(edge.id)}
-            onPaneClick={() => {
-              setContextMenu(null)
-              onClearSelection()
-            }}
-            onPaneContextMenu={handlePaneContextMenu}
-            onNodesChange={handleNodesChange}
-            onEdgesChange={handleEdgesChange}
-            onConnect={handleConnect}
-          >
-            <MiniMap />
-            <Controls />
-            <Background />
-          </ReactFlow>
+          {isSelectedGraphPending ? (
+            <div className="detail-stack compact world-build-loading-shell graph-loading-shell">
+              <span className="eyebrow">Generating Graph</span>
+              <h3>{selectedGraph?.name ?? 'Pending graph'}</h3>
+              <div className="inline-note">This narrative graph is still being generated. Nodes and edges will appear when the background job completes.</div>
+            </div>
+          ) : (
+            <ReactFlow
+              fitView
+              nodes={liveNodes}
+              edges={liveEdges}
+              nodeTypes={{ graphNode: FlowNodeCard }}
+              nodesDraggable
+              nodesConnectable
+              onInit={setFlowInstance}
+              onNodeClick={(_, node) => onSelectNode(node.id)}
+              onNodeContextMenu={handleNodeContextMenu}
+              onEdgeClick={(_, edge) => onSelectEdge(edge.id)}
+              onPaneClick={() => {
+                setContextMenu(null)
+                onClearSelection()
+              }}
+              onPaneContextMenu={handlePaneContextMenu}
+              onNodesChange={handleNodesChange}
+              onEdgesChange={handleEdgesChange}
+              onConnect={handleConnect}
+            >
+              <MiniMap />
+              <Controls />
+              <Background />
+            </ReactFlow>
+          )}
           {contextMenu ? (
             <div className="graph-context-menu" style={{ left: contextMenu.x, top: contextMenu.y }}>
               {contextMenu.kind === 'pane' ? (
@@ -481,7 +497,13 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
       </section>
 
       <aside className="context-drawer">
-        {selectedEdge && selectedGraph ? (
+        {selectedGraph && isSelectedGraphPending ? (
+          <div className="detail-stack compact world-build-loading-shell">
+            <span className="eyebrow">Graph Placeholder</span>
+            <h3>{selectedGraph.name}</h3>
+            <div className="inline-note">Inspector controls are hidden until graph generation completes.</div>
+          </div>
+        ) : selectedEdge && selectedGraph ? (
           <EdgeInspector definitions={definitions} edge={selectedEdge} onUpdate={(changes) => onUpdateEdge(selectedGraph.key, selectedEdge.key, changes)} />
         ) : selectedNode && selectedGraph ? (
           <NodeInspector assets={assets} definitions={definitions} graph={selectedGraph} graphs={snapshotGraphs} node={selectedNode} onApplyTemplateChange={(templateKey) => applyTemplateChange(selectedNode.key, templateKey)} onDelete={() => onDeleteNode(selectedGraph.key, selectedNode.key)} onUpdate={(changes) => onUpdateNode(selectedGraph.key, selectedNode.key, changes)} />

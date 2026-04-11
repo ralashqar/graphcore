@@ -3,6 +3,9 @@ import type { Session } from '@supabase/supabase-js'
 import { graphcoreWorkspaceAdapter } from '../../infrastructure/graphcore/graphcoreWorkspaceAdapter'
 
 export const workspaceService = {
+  planWorldBuild: graphcoreWorkspaceAdapter.planWorldBuild,
+  pollWorldBuild: graphcoreWorkspaceAdapter.pollWorldBuild,
+  startWorldBuild: graphcoreWorkspaceAdapter.startWorldBuild,
   createGame: (session?: Session) => graphcoreWorkspaceAdapter.createGame(session),
   load: graphcoreWorkspaceAdapter.loadProjectSnapshot,
   listGames: graphcoreWorkspaceAdapter.listGames,

@@ -1,5 +1,6 @@
 import type { PatchOperation } from '../domain/graphcore'
 import type { PromptActivityEntry, PromptExecutionPlan } from '../domain/prompting'
+import type { WorldBuildBatch } from '../domain/worldBuild'
 import type { EntityIconId } from './entityIcons'
 
 export type LoadedState = {
@@ -22,6 +23,7 @@ export type WorkspaceTab = 'graph' | 'content' | 'characters' | 'environments' |
 
 export type PatchSessionView = {
   id: string
+  kind?: 'patch' | 'world_build'
   summary: string
   requestSummary?: string
   prompt: string
@@ -31,6 +33,7 @@ export type PatchSessionView = {
   activityEntries?: PromptActivityEntry[]
   diagnostics: string[]
   assistantNotes?: string
+  worldBuildBatch?: WorldBuildBatch
 }
 
 export type AuthMode = 'sign_in' | 'sign_up' | 'magic_link'

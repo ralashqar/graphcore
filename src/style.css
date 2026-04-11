@@ -575,6 +575,81 @@ code {
   color: var(--muted);
 }
 
+.content-create-template-section {
+  display: grid;
+  gap: 12px;
+}
+
+.content-create-template-head {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.content-create-template-head h4 {
+  margin: 6px 0 0;
+}
+
+.content-create-template-list {
+  display: grid;
+  gap: 10px;
+  max-height: 300px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.content-create-template-item {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--text);
+  text-align: left;
+}
+
+.content-create-template-item:hover,
+.content-create-template-item.is-active {
+  border-color: rgba(94, 234, 212, 0.24);
+  background: rgba(94, 234, 212, 0.06);
+}
+
+.content-create-template-icon {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  background: rgba(94, 234, 212, 0.08);
+  color: var(--accent);
+}
+
+.content-create-template-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.content-create-template-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.content-create-template-copy span {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.content-create-template-empty {
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px dashed var(--line);
+  color: var(--muted);
+}
+
 .rail-button,
 .release-row {
   width: 100%;
@@ -2783,4 +2858,83 @@ button:disabled {
   .asset-picker-grid {
     grid-template-columns: 1fr;
   }
+}
+
+.world-build-dialog {
+  width: min(100%, 920px);
+}
+
+.world-build-plan-list,
+.world-build-completion-list {
+  display: grid;
+  gap: 1rem;
+}
+
+.world-build-plan-card,
+.world-build-completion-row {
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 18px;
+  background: rgba(15, 23, 42, 0.52);
+  padding: 1rem 1.1rem;
+}
+
+.world-build-plan-card.is-disabled {
+  opacity: 0.58;
+}
+
+.world-build-plan-card-head,
+.world-build-plan-toggle,
+.world-build-option-row,
+.world-build-completion-row {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+}
+
+.world-build-plan-toggle {
+  flex: 1;
+}
+
+.world-build-plan-toggle > div,
+.world-build-completion-row > div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.world-build-plan-icon {
+  width: 2rem;
+  height: 2rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgba(94, 234, 212, 0.12);
+  color: #8df6e6;
+}
+
+.world-build-plan-icon svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.world-build-option-row {
+  margin-top: 0.75rem;
+}
+
+.world-build-loading-shell,
+.graph-loading-shell {
+  min-height: 220px;
+  justify-content: center;
+}
+
+.world-build-completion-row {
+  justify-content: space-between;
+}
+
+.world-build-completion-row.is-success .world-build-completion-mark {
+  color: #7dd3a7;
+}
+
+.world-build-completion-row.is-error .world-build-completion-mark {
+  color: #fca5a5;
 }

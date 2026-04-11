@@ -19,6 +19,14 @@ import {
 } from '../domain/graphcore'
 import { buildBootstrapPatch, createDefaultGameSpec } from '../domain/presetCatalog'
 import type { PromptPatchRequest, PromptPatchResponse } from '../domain/prompting'
+import {
+  worldBuildPlanResponseSchema,
+  worldBuildStatusResponseSchema,
+  type WorldBuildPlanRequest,
+  type WorldBuildPlanResponse,
+  type WorldBuildStartRequest,
+  type WorldBuildStatusResponse,
+} from '../domain/worldBuild'
 import type { GameSummary } from '../shared/workspace'
 import { supabase } from '../utils/supabase'
 import type { FunctionsHttpError, Session } from '@supabase/supabase-js'
@@ -28,6 +36,10 @@ function isUuidLike(value: string) {
 }
 
 function isLiveSnapshot(snapshot: ProjectSnapshot) {
+  return isUuidLike(snapshot.workspace.id) && isUuidLike(snapshot.project.id) && isUuidLike(snapshot.draft.id)
+}
+
+function hasLiveSnapshotIds(snapshot: { workspace: { id: string }; project: { id: string }; draft: { id: string } }) {
   return isUuidLike(snapshot.workspace.id) && isUuidLike(snapshot.project.id) && isUuidLike(snapshot.draft.id)
 }
 
@@ -112,16 +124,64 @@ async function readFunctionsErrorMessage(error: FunctionsHttpError | Error) {
   }
 
   try {
-    const payload = await context.clone().json() as { error?: string }
-    return payload.error ?? error.message
+    const payload = await context.clone().json() as { error?: unknown }
+    console.error('[GraphCore] edge function error payload', payload)
+    if (typeof payload.error === 'string') {
+      return payload.error
+    }
+    if (payload.error !== undefined) {
+      return JSON.stringify(payload.error, null, 2)
+    }
+    return error.message
   } catch {
     try {
       const text = await context.clone().text()
+      console.error('[GraphCore] edge function error text', text)
       return text || error.message
     } catch {
       return error.message
     }
   }
+}
+
+async function getValidatedSession(signInMessage: string) {
+  const {
+    data: { session },
+    error,
+  } = await supabase.auth.getSession()
+
+  if (error) {
+    throw error
+  }
+
+  if (!session) {
+    throw new Error(signInMessage)
+  }
+
+  const initialUserCheck = await supabase.auth.getUser(session.access_token)
+  if (!initialUserCheck.error && initialUserCheck.data.user) {
+    return session
+  }
+
+  console.error('[GraphCore] Supabase session validation failed before edge invoke.', {
+    message: initialUserCheck.error?.message ?? 'Unknown auth validation error.',
+  })
+
+  const refreshed = await supabase.auth.refreshSession()
+  if (refreshed.error) {
+    throw refreshed.error
+  }
+
+  if (!refreshed.data.session) {
+    throw new Error(signInMessage)
+  }
+
+  const refreshedUserCheck = await supabase.auth.getUser(refreshed.data.session.access_token)
+  if (refreshedUserCheck.error || !refreshedUserCheck.data.user) {
+    throw new Error('Your Supabase session is invalid. Sign out and sign in again.')
+  }
+
+  return refreshed.data.session
 }
 
 async function readFunctionsErrorPayload<TPayload>(error: FunctionsHttpError | Error) {
@@ -426,12 +486,48 @@ async function invokeAuthedFunction<TResponse>(
   body: Record<string, unknown>,
   session: Session,
 ) {
-  return supabase.functions.invoke<TResponse>(functionName, {
-    headers: {
-      Authorization: `Bearer ${session.access_token}`,
-    },
-    body,
+  const functionsClient = supabase.functions
+  functionsClient.setAuth(session.access_token)
+  return functionsClient.invoke<TResponse>(functionName, { body })
+}
+
+function isUnauthorizedFunctionsError(error: FunctionsHttpError | Error) {
+  if (!('context' in error)) {
+    return false
+  }
+
+  const context = (error as FunctionsHttpError & { context?: unknown }).context
+  return context instanceof Response && context.status === 401
+}
+
+async function invokeAuthedFunctionWithSessionRecovery<TResponse>(
+  functionName: string,
+  body: Record<string, unknown>,
+  session: Session,
+) {
+  let response = await invokeAuthedFunction<TResponse>(functionName, body, session)
+
+  if (response.error && isUnauthorizedFunctionsError(response.error)) {
+    const refreshed = await supabase.auth.refreshSession()
+    if (refreshed.error) {
+      throw refreshed.error
+    }
+
+    if (!refreshed.data.session) {
+      throw new Error('No authenticated Supabase session was available after refresh.')
+    }
+
+    response = await invokeAuthedFunction<TResponse>(functionName, body, refreshed.data.session)
+  }
+
+  if (!response.error) {
+    return response
+  }
+
+  console.error(`[GraphCore] ${functionName} SDK invocation failed.`, {
+    message: response.error.message,
   })
+  return response
 }
 
 async function seedBaselineArchetypesDirect(draftId: string, userId: string) {
@@ -692,6 +788,36 @@ type AssetRow = {
   llm_hints: Record<string, unknown> | null
 }
 
+type WorldBuildBatchRow = {
+  id: string
+  draft_id: string
+  project_id: string
+  prompt: string
+  request_summary: string
+  status: string
+  diagnostics: string[] | null
+  plan_json: unknown[] | null
+  created_at: string
+  updated_at: string
+}
+
+type WorldBuildJobRow = {
+  id: string
+  batch_id: string
+  plan_item_id: string
+  kind: string
+  status: string
+  depends_on_job_ids: string[] | null
+  target_keys: Record<string, string> | null
+  prompt: string
+  options: Record<string, unknown> | null
+  result_context: Record<string, unknown> | null
+  error_message: string | null
+  order_index: number
+  created_at: string
+  updated_at: string
+}
+
 function prettifyChoiceKey(value: string) {
   return value
     .replace(/[_-]+/g, ' ')
@@ -821,6 +947,7 @@ export async function loadProjectSnapshot(
     assemblyEdgesResponse,
     environmentBlueprintsResponse,
     assetsResponse,
+    worldBuildBatchesResponse,
     patchSetsResponse,
     releasesResponse,
   ] = await Promise.all([
@@ -897,6 +1024,11 @@ export async function loadProjectSnapshot(
       .eq('project_id', project.id)
       .order('created_at', { ascending: true }),
     supabase
+      .from('world_build_batches')
+      .select('id, draft_id, project_id, prompt, request_summary, status, diagnostics, plan_json, created_at, updated_at')
+      .eq('draft_id', draft.id)
+      .order('created_at', { ascending: false }),
+    supabase
       .from('patch_sets')
       .select('id, summary, prompt, status, operations, diagnostics')
       .eq('draft_id', draft.id)
@@ -918,6 +1050,9 @@ export async function loadProjectSnapshot(
   const blueprintSchemaMissing =
     environmentBlueprintsResponse.status === 404
     || isMissingRelationError(environmentBlueprintsResponse.error, 'draft_environment_blueprints')
+  const worldBuildSchemaMissing =
+    worldBuildBatchesResponse.status === 404
+    || isMissingRelationError(worldBuildBatchesResponse.error, 'world_build_batches')
 
   if (definitionsResponse.error || archetypesResponse.error) {
     return {
@@ -941,6 +1076,17 @@ export async function loadProjectSnapshot(
   const assemblyEdges = assemblySchemaMissing ? [] : (assemblyEdgesResponse.data as AssemblyEdgeRow[] | null) ?? []
   const environmentBlueprints = blueprintSchemaMissing ? [] : (environmentBlueprintsResponse.data as EnvironmentBlueprintRow[] | null) ?? []
   const assets = (assetsResponse.data as AssetRow[] | null) ?? []
+  const worldBuildBatches = worldBuildSchemaMissing ? [] : (worldBuildBatchesResponse.data as WorldBuildBatchRow[] | null) ?? []
+  const worldBuildJobs =
+    worldBuildSchemaMissing || worldBuildBatches.length === 0
+      ? []
+      : (
+          await supabase
+            .from('world_build_jobs')
+            .select('id, batch_id, plan_item_id, kind, status, depends_on_job_ids, target_keys, prompt, options, result_context, error_message, order_index, created_at, updated_at')
+            .in('batch_id', worldBuildBatches.map((batch) => batch.id))
+            .order('order_index', { ascending: true })
+        ).data as WorldBuildJobRow[] | null ?? []
 
   const snapshot = projectSnapshotSchema.parse({
     workspace: {
@@ -1148,6 +1294,36 @@ export async function loadProjectSnapshot(
       storagePath: asset.storage_path,
       metadata: asset.metadata ?? {},
       llmHints: asset.llm_hints ?? {},
+    })),
+    worldBuildBatches: worldBuildBatches.map((batch) => ({
+      id: batch.id,
+      projectId: batch.project_id,
+      draftId: batch.draft_id,
+      prompt: batch.prompt,
+      requestSummary: batch.request_summary,
+      status: batch.status,
+      diagnostics: batch.diagnostics ?? [],
+      planItems: batch.plan_json ?? [],
+      createdAt: batch.created_at,
+      updatedAt: batch.updated_at,
+      jobs: worldBuildJobs
+        .filter((job) => job.batch_id === batch.id)
+        .map((job) => ({
+          id: job.id,
+          batchId: job.batch_id,
+          planItemId: job.plan_item_id,
+          kind: job.kind,
+          status: job.status,
+          dependsOnJobIds: job.depends_on_job_ids ?? [],
+          targetKeys: job.target_keys ?? {},
+          prompt: job.prompt ?? '',
+          options: job.options ?? {},
+          resultContext: job.result_context ?? null,
+          errorMessage: job.error_message ?? null,
+          orderIndex: job.order_index,
+          createdAt: job.created_at,
+          updatedAt: job.updated_at,
+        })),
     })),
     patchSets: patchSetsResponse.data ?? [],
     releases: (releasesResponse.data ?? []).map((release) => ({
@@ -1913,6 +2089,51 @@ export async function applyPatchProposal(snapshot: ProjectSnapshot, operations: 
     source: 'supabase' as const,
     data: response.data,
   }
+}
+
+export async function planWorldBuild(request: WorldBuildPlanRequest): Promise<WorldBuildPlanResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before planning a world build.')
+
+  if (!hasLiveSnapshotIds(request.snapshot)) {
+    throw new Error('Sign in and load a live GraphCore draft before planning a world build.')
+  }
+
+  const response = await invokeAuthedFunctionWithSessionRecovery<WorldBuildPlanResponse>('plan-world-build', request, session)
+  if (response.error || !response.data) {
+    throw new Error(response.error ? await readFunctionsErrorMessage(response.error) : 'World build planning returned no data.')
+  }
+
+  return worldBuildPlanResponseSchema.parse(response.data)
+}
+
+export async function startWorldBuild(request: WorldBuildStartRequest): Promise<WorldBuildStatusResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before starting a world build.')
+
+  if (!hasLiveSnapshotIds(request.snapshot)) {
+    throw new Error('Sign in and load a live GraphCore draft before starting a world build.')
+  }
+
+  const response = await invokeAuthedFunctionWithSessionRecovery<WorldBuildStatusResponse>('start-world-build', request, session)
+  if (response.error || !response.data) {
+    throw new Error(response.error ? await readFunctionsErrorMessage(response.error) : 'Starting world build returned no data.')
+  }
+
+  return worldBuildStatusResponseSchema.parse(response.data)
+}
+
+export async function pollWorldBuild(request: { batchId: string; snapshot: ProjectSnapshot; model: string }): Promise<WorldBuildStatusResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before polling a world build.')
+
+  if (!isLiveSnapshot(request.snapshot)) {
+    throw new Error('Sign in and load a live GraphCore draft before polling a world build.')
+  }
+
+  const response = await invokeAuthedFunctionWithSessionRecovery<WorldBuildStatusResponse>('poll-world-build', request, session)
+  if (response.error || !response.data) {
+    throw new Error(response.error ? await readFunctionsErrorMessage(response.error) : 'Polling world build returned no data.')
+  }
+
+  return worldBuildStatusResponseSchema.parse(response.data)
 }
 
 export async function compileSnapshot(snapshot: ProjectSnapshot) {

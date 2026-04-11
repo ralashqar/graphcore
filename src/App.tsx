@@ -28,9 +28,13 @@ import { createAssemblyGraph } from './domain/environmentAssembly'
 import { createGraphScaffold } from './domain/graphScaffold'
 import type { PromptPatchResponse } from './domain/prompting'
 import { normalizeNode } from './domain/nodeLibrary'
+import type { WorldBuildBatch, WorldBuildPlanItem, WorldBuildPlanResponse, WorldBuildStatusResponse } from './domain/worldBuild'
+import { isTerminalWorldBuildBatchStatus } from './domain/worldBuild'
 import { AuthDialog } from './features/auth/AuthDialog'
 import { GameBootstrapOnboarding } from './features/onboarding/GameBootstrapOnboarding'
 import { PromptDock } from './features/prompts/PromptDock'
+import { WorldBuildCompletionModal } from './features/prompts/WorldBuildCompletionModal'
+import { WorldBuildPlanModal } from './features/prompts/WorldBuildPlanModal'
 import { WorkspaceBanner } from './features/shell/WorkspaceBanner'
 import { WorkspaceTopbar } from './features/shell/WorkspaceTopbar'
 import { useEditorStore } from './state/editorStore'
@@ -156,6 +160,34 @@ function normalizeSnapshot(snapshot: ProjectSnapshot) {
   return normalizeDefinitionIdentityConflicts(dedupeAssetsByKey(snapshot))
 }
 
+function mergeByKey<T extends { key: string }>(current: T[], incoming: T[]) {
+  if (incoming.length === 0) return current
+
+  const incomingMap = new Map(incoming.map((entry) => [entry.key, entry]))
+  const merged = current.map((entry) => incomingMap.get(entry.key) ?? entry)
+  const seen = new Set(current.map((entry) => entry.key))
+
+  for (const entry of incoming) {
+    if (!seen.has(entry.key)) {
+      merged.unshift(entry)
+    }
+  }
+
+  return merged
+}
+
+function mergeWorldBuildStatusIntoSnapshot(snapshot: ProjectSnapshot, status: WorldBuildStatusResponse) {
+  return normalizeSnapshot({
+    ...snapshot,
+    definitions: mergeByKey(snapshot.definitions, status.definitions as ProjectSnapshot['definitions']),
+    graphs: mergeByKey(snapshot.graphs, status.graphs as ProjectSnapshot['graphs']),
+    assets: mergeByKey(snapshot.assets, status.assets as ProjectSnapshot['assets']),
+    worldBuildBatches: snapshot.worldBuildBatches.some((batch) => batch.id === status.batch.id)
+      ? snapshot.worldBuildBatches.map((batch) => (batch.id === status.batch.id ? status.batch : batch))
+      : [status.batch, ...snapshot.worldBuildBatches],
+  })
+}
+
 function clearAssetReferences<T>(value: T, assetKey: string): T {
   if (Array.isArray(value)) {
     return value.map((entry) => clearAssetReferences(entry, assetKey)) as T
@@ -244,6 +276,10 @@ export default function App() {
   const [promptRuntimeError, setPromptRuntimeError] = useState<string | null>(null)
   const [isGeneratingPatch, setIsGeneratingPatch] = useState(false)
   const [isApplyingPatch, setIsApplyingPatch] = useState(false)
+  const [isPlanningWorldBuild, setIsPlanningWorldBuild] = useState(false)
+  const [isStartingWorldBuild, setIsStartingWorldBuild] = useState(false)
+  const [worldBuildPlanPreview, setWorldBuildPlanPreview] = useState<WorldBuildPlanResponse | null>(null)
+  const [completedWorldBuildBatch, setCompletedWorldBuildBatch] = useState<WorldBuildBatch | null>(null)
   const [authOpen, setAuthOpen] = useState(false)
   const [authAutoOpened, setAuthAutoOpened] = useState(false)
   const [authMode, setAuthMode] = useState<AuthMode>('sign_in')
@@ -263,6 +299,8 @@ export default function App() {
   const [isPending, startTransition] = useTransition()
   const { promptText, selectedDefinitionKey, selectedEdgeKey, selectedGraphKey, selectedNodeKey, setPromptText, setSelectedDefinitionKey, setSelectedEdgeKey, setSelectedGraphKey, setSelectedNodeKey } = useEditorStore()
   const sessionRef = useRef<Session | null>(null)
+  const worldBuildPollInFlightRef = useRef(false)
+  const announcedWorldBuildBatchIdsRef = useRef<Set<string>>(new Set())
 
   useEffect(() => {
     sessionRef.current = session
@@ -481,6 +519,67 @@ export default function App() {
     clearUnsavedSnapshot(snapshot.draft.id)
   }, [hasLocalSnapshotChanges, loadedState?.source, snapshot])
 
+  useEffect(() => {
+    if (!snapshot) return
+
+    for (const batch of snapshot.worldBuildBatches) {
+      if (isTerminalWorldBuildBatchStatus(batch.status) && !announcedWorldBuildBatchIdsRef.current.has(batch.id)) {
+        announcedWorldBuildBatchIdsRef.current.add(batch.id)
+        setCompletedWorldBuildBatch(batch)
+      }
+    }
+  }, [snapshot])
+
+  useEffect(() => {
+    if (!snapshot || loadedState?.source !== 'supabase') return
+
+    const activeBatches = snapshot.worldBuildBatches.filter((batch) => !isTerminalWorldBuildBatchStatus(batch.status))
+    if (activeBatches.length === 0) return
+
+    let cancelled = false
+
+    const currentSnapshot = snapshot
+
+    async function pollActiveWorldBuilds() {
+      if (worldBuildPollInFlightRef.current || cancelled) return
+      worldBuildPollInFlightRef.current = true
+
+      try {
+        for (const batch of activeBatches) {
+          const status = await workspaceService.pollWorldBuild({
+            batchId: batch.id,
+            snapshot: currentSnapshot,
+            model: promptModel,
+          })
+
+          if (cancelled) return
+
+          setSnapshot((current) => {
+            if (!current) return current
+            const nextSnapshot = mergeWorldBuildStatusIntoSnapshot(current, status)
+            setBundle(compileBundle(nextSnapshot))
+            return nextSnapshot
+          })
+        }
+      } catch (pollError) {
+        console.error('[GraphCore] world build polling failed.', pollError)
+      } finally {
+        worldBuildPollInFlightRef.current = false
+      }
+    }
+
+    const interval = window.setInterval(() => {
+      void pollActiveWorldBuilds()
+    }, 3000)
+
+    void pollActiveWorldBuilds()
+
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+    }
+  }, [loadedState?.source, promptModel, snapshot])
+
   const persistedPatchHistory = useMemo<PatchSessionView[]>(() => {
     return (snapshot?.patchSets ?? []).map((patch) => {
       const parsedOperations = schemaCatalog.patchOperationSchema.array().safeParse(patch.operations)
@@ -499,11 +598,26 @@ export default function App() {
     })
   }, [snapshot])
 
+  const persistedWorldBuildHistory = useMemo<PatchSessionView[]>(() => {
+    return (snapshot?.worldBuildBatches ?? []).map((batch) => ({
+      id: batch.id,
+      kind: 'world_build',
+      summary: batch.requestSummary,
+      requestSummary: batch.requestSummary,
+      prompt: batch.prompt,
+      status: batch.status,
+      operations: [],
+      diagnostics: batch.diagnostics,
+      worldBuildBatch: batch,
+    }))
+  }, [snapshot])
+
   const patchHistory = useMemo<PatchSessionView[]>(() => {
     const generated = patchPreview
       ? [
           {
             id: patchPreview.id,
+            kind: 'patch' as const,
             summary: patchPreview.summary,
             requestSummary: patchPreview.requestSummary,
             prompt: patchPreview.prompt,
@@ -517,8 +631,8 @@ export default function App() {
         ]
       : []
 
-    return [...generated, ...persistedPatchHistory]
-  }, [patchPreview, persistedPatchHistory])
+    return [...generated, ...persistedWorldBuildHistory, ...persistedPatchHistory]
+  }, [patchPreview, persistedPatchHistory, persistedWorldBuildHistory])
 
   const selectedPatch = patchHistory[selectedPatchIndex] ?? patchHistory[0] ?? null
   const selectedArchetype = useMemo(() => snapshot?.archetypes.find((archetype) => archetype.key === selectedArchetypeKey) ?? snapshot?.archetypes[0] ?? null, [selectedArchetypeKey, snapshot])
@@ -1368,6 +1482,82 @@ export default function App() {
     }
   }
 
+  function updateWorldBuildPlanItem(itemId: string, updater: (item: WorldBuildPlanItem) => WorldBuildPlanItem) {
+    setWorldBuildPlanPreview((current) => {
+      if (!current) return current
+      return {
+        ...current,
+        planItems: current.planItems.map((item) => (item.id === itemId ? updater(item) : item)),
+      }
+    })
+  }
+
+  async function handlePlanWorldBuild() {
+    if (!snapshot) return
+    if (!session) {
+      setPromptRuntimeError('Sign in to use hosted world building.')
+      setAuthOpen(true)
+      return
+    }
+    if (loadedState?.source !== 'supabase') {
+      setPromptRuntimeError(loadedState?.reason ?? 'Load or create a live GraphCore workspace before starting a world build.')
+      return
+    }
+    if (promptText.trim().length === 0) {
+      return
+    }
+
+    setPromptRuntimeError(null)
+    setIsPlanningWorldBuild(true)
+
+    try {
+      const plan = await workspaceService.planWorldBuild({
+        prompt: promptText,
+        snapshot,
+        model: promptModel,
+      })
+      setWorldBuildPlanPreview(plan)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'World build planning failed.'
+      console.error('[GraphCore] world build planning failed.', error)
+      setPromptRuntimeError(message)
+    } finally {
+      setIsPlanningWorldBuild(false)
+    }
+  }
+
+  async function handleStartWorldBuild() {
+    if (!snapshot || !worldBuildPlanPreview) return
+
+    setIsStartingWorldBuild(true)
+    setPromptRuntimeError(null)
+
+    try {
+      const status = await workspaceService.startWorldBuild({
+        prompt: promptText,
+        requestSummary: worldBuildPlanPreview.requestSummary,
+        snapshot,
+        planItems: worldBuildPlanPreview.planItems,
+        model: promptModel,
+      })
+
+      setSnapshot((current) => {
+        if (!current) return current
+        const nextSnapshot = mergeWorldBuildStatusIntoSnapshot(current, status)
+        setBundle(compileBundle(nextSnapshot))
+        return nextSnapshot
+      })
+      setWorldBuildPlanPreview(null)
+      setSelectedPatchIndex(0)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Starting world build failed.'
+      console.error('[GraphCore] world build start failed.', error)
+      setPromptRuntimeError(message)
+    } finally {
+      setIsStartingWorldBuild(false)
+    }
+  }
+
   function handleOpenBootstrapOnboarding() {
     setBootstrapGameArchetypeId('rpg')
     setBootstrapConceptPrompt('')
@@ -1736,8 +1926,8 @@ export default function App() {
 
         <PromptDock
           currentContextLabel={selectedNode?.key ?? selectedDefinition?.key ?? selectedArchetype?.key ?? selectedGraph?.key ?? snapshot.project.slug}
-          isApplyingPatch={isApplyingPatch}
-          isGeneratingPatch={isGeneratingPatch}
+          isApplyingPatch={isApplyingPatch || isStartingWorldBuild}
+          isGeneratingPatch={isGeneratingPatch || isPlanningWorldBuild}
           model={promptModel}
           needsInitialization={activeGameIsEmpty}
           promptRuntimeError={promptRuntimeError}
@@ -1745,7 +1935,7 @@ export default function App() {
           sessionEmail={session?.user.email ?? null}
           onChangeModel={setPromptModel}
           onChangePromptText={setPromptText}
-          onGenerate={handleGeneratePatch}
+          onGenerate={handlePlanWorldBuild}
           onOpenOnboarding={handleOpenBootstrapOnboarding}
         />
       </div>
@@ -1763,6 +1953,32 @@ export default function App() {
           onChangeGameArchetypeId={setBootstrapGameArchetypeId}
           onClose={() => setBootstrapOnboardingOpen(false)}
           onGenerate={handleBootstrapGeneration}
+        />
+      ) : null}
+      {worldBuildPlanPreview ? (
+        <WorldBuildPlanModal
+          isStarting={isStartingWorldBuild}
+          planItems={worldBuildPlanPreview.planItems}
+          prompt={promptText}
+          requestSummary={worldBuildPlanPreview.requestSummary}
+          onCancel={() => setWorldBuildPlanPreview(null)}
+          onConfirm={handleStartWorldBuild}
+          onToggleEnabled={(itemId, enabled) => updateWorldBuildPlanItem(itemId, (item) => ({ ...item, enabled }))}
+          onToggleOption={(itemId, optionKey, enabled) =>
+            updateWorldBuildPlanItem(itemId, (item) => ({
+              ...item,
+              generationOptions: {
+                ...item.generationOptions,
+                [optionKey]: enabled,
+              },
+            }))
+          }
+        />
+      ) : null}
+      {completedWorldBuildBatch ? (
+        <WorldBuildCompletionModal
+          batch={completedWorldBuildBatch}
+          onClose={() => setCompletedWorldBuildBatch(null)}
         />
       ) : null}
       {authOpen ? <AuthDialog authEmail={authEmail} authError={authError} authInfo={authInfo} authMode={authMode} authPassword={authPassword} authPendingConfirmation={authPendingConfirmation} onClose={() => setAuthOpen(false)} onEmailChange={setAuthEmail} onGoogleAuth={handleGoogleAuth} onModeChange={(mode) => { setAuthMode(mode); setAuthError(null); setAuthInfo(null); if (mode !== 'sign_up') setAuthPendingConfirmation(false) }} onPasswordChange={setAuthPassword} onResendConfirmation={handleResendConfirmation} onSubmit={handleAuthSubmit} /> : null}
