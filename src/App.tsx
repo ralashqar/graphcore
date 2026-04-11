@@ -1565,11 +1565,12 @@ export default function App() {
                 selectedItem={selectedDefinition}
                 onAddArchetypeField={addArchetypeField}
                 onAddCustomField={addCustomField}
-                onAssignArchetypeIcon={assignAssetToSelectedArchetype}
-                onAssignItemIcon={assignAssetToSelectedItem}
-                onCreateArchetype={createArchetype}
-                onCreateItem={createItem}
-                onCreateUrlAsset={createUrlAsset}
+                  onAssignArchetypeIcon={assignAssetToSelectedArchetype}
+                  onAssignItemIcon={assignAssetToSelectedItem}
+                  onCreateArchetype={createArchetype}
+                  onCreateDefinitionOfKind={createDefinitionOfKind}
+                  onCreateItem={createItem}
+                  onCreateUrlAsset={createUrlAsset}
                 onRemoveArchetypeField={removeArchetypeField}
                 onSelectAsset={setSelectedAssetKey}
                 onSelectArchetype={setSelectedArchetypeKey}

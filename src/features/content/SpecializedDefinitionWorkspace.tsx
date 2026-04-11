@@ -373,128 +373,130 @@ export function SpecializedDefinitionWorkspace({
           supports3dPanel ? (
             <div className="character-panel-shell">
               {effectiveSelection.kind === 'character' ? (
-                <div className="character-concept-header">
-                  <div className="character-concept-media">
-                    <button className="icon-button character-concept-art-button" onClick={() => setIsSelectionIconPickerOpen(true)} type="button">
-                      <MediaThumb
-                        asset={selectedCharacterPreviewAsset}
-                        fallbackIcon="character"
-                        label={effectiveSelection.name}
-                        large
-                      />
-                    </button>
-                    <div className="character-concept-media-meta">
-                      <span className="eyebrow">Concept Art</span>
-                      <span className="subtle-line">{selectedCharacterPreviewAsset?.name ?? 'No concept image bound yet.'}</span>
-                    </div>
-                  </div>
-                  <div className="editor-heading-copy character-concept-copy">
-                    <div className="editor-head-toolbar character-head-toolbar">
-                      <span className="eyebrow">Character Editor</span>
-                      {definitionPanelControls ? <div className="editor-head-controls">{definitionPanelControls}</div> : null}
-                    </div>
-                    <div className="character-header-rows">
-                      <div className="editor-head-inline-fields">
-                        <label className="inline-head-field">
-                          <span>Name</span>
-                          <input
-                            value={effectiveSelection.name}
-                            onChange={(event) => onUpdateItemIdentity(effectiveSelection.key, { name: event.target.value })}
-                          />
-                        </label>
-                        <label className="inline-head-field">
-                          <span>Key</span>
-                          <input
-                            value={effectiveSelection.key}
-                            onChange={(event) => onUpdateItemIdentity(effectiveSelection.key, { key: event.target.value })}
-                          />
-                        </label>
-                      </div>
-                      <div className="character-header-triple">
-                        <label className="inline-head-field">
-                          <span>Archetype</span>
-                          <select
-                            value={effectiveSelection.archetypeKey ?? ''}
-                            onChange={(event) => onUpdateItemIdentity(effectiveSelection.key, { archetypeKey: event.target.value || null })}
-                          >
-                            <option value="">No archetype</option>
-                            {compatibleArchetypes.map((archetype) => (
-                              <option key={archetype.key} value={archetype.key}>
-                                {archetype.name}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        <label className="inline-head-field">
-                          <span>Subtype</span>
-                          <select
-                            value={selectedCharacterProfile?.subtype ?? 'humanoid'}
-                            onChange={(event) => updateCharacterProfile({ subtype: event.target.value as NonNullable<typeof selectedCharacterProfile>['subtype'], bodyClass: event.target.value === 'vehicle' ? 'vehicle' : 'humanoid' })}
-                          >
-                            <option value="humanoid">Humanoid</option>
-                            <option value="beast">Beast</option>
-                            <option value="construct">Construct</option>
-                            <option value="undead">Undead</option>
-                            <option value="vehicle">Vehicle</option>
-                            <option value="spirit">Spirit</option>
-                          </select>
-                        </label>
-                        <label className="inline-head-field">
-                          <span>Control</span>
-                          <select
-                            value={selectedCharacterProfile?.controlMode ?? 'ai'}
-                            onChange={(event) => updateCharacterProfile({ controlMode: event.target.value as NonNullable<typeof selectedCharacterProfile>['controlMode'] })}
-                          >
-                            <option value="player">Player</option>
-                            <option value="ai">AI</option>
-                            <option value="scripted">Scripted</option>
-                            <option value="neutral">Neutral</option>
-                          </select>
-                        </label>
-                      </div>
-                      <label className="field-block character-header-textarea">
-                        <span>Summary</span>
-                        <textarea
-                          rows={3}
-                          value={effectiveSelection.summary}
-                          onChange={(event) => onUpdateItemIdentity(effectiveSelection.key, { summary: event.target.value })}
-                          placeholder="Describe the role, personality, and gameplay purpose of this character."
+                <>
+                  <div className="character-concept-header">
+                    <div className="character-concept-media">
+                      <button className="icon-button character-concept-art-button" onClick={() => setIsSelectionIconPickerOpen(true)} type="button">
+                        <MediaThumb
+                          asset={selectedCharacterPreviewAsset}
+                          fallbackIcon="character"
+                          label={effectiveSelection.name}
+                          large
                         />
-                      </label>
-                      <div className="character-concept-prompt-row">
+                      </button>
+                      <div className="character-concept-media-meta">
+                        <span className="eyebrow">Concept Art</span>
+                        <span className="subtle-line">{selectedCharacterPreviewAsset?.name ?? 'No concept image bound yet.'}</span>
+                      </div>
+                    </div>
+                    <div className="editor-heading-copy character-concept-copy">
+                      <div className="editor-head-toolbar character-head-toolbar">
+                        <span className="eyebrow">Character Editor</span>
+                        {definitionPanelControls ? <div className="editor-head-controls">{definitionPanelControls}</div> : null}
+                      </div>
+                      <div className="character-header-rows">
+                        <div className="editor-head-inline-fields">
+                          <label className="inline-head-field">
+                            <span>Name</span>
+                            <input
+                              value={effectiveSelection.name}
+                              onChange={(event) => onUpdateItemIdentity(effectiveSelection.key, { name: event.target.value })}
+                            />
+                          </label>
+                          <label className="inline-head-field">
+                            <span>Key</span>
+                            <input
+                              value={effectiveSelection.key}
+                              onChange={(event) => onUpdateItemIdentity(effectiveSelection.key, { key: event.target.value })}
+                            />
+                          </label>
+                        </div>
+                        <div className="character-header-triple">
+                          <label className="inline-head-field">
+                            <span>Archetype</span>
+                            <select
+                              value={effectiveSelection.archetypeKey ?? ''}
+                              onChange={(event) => onUpdateItemIdentity(effectiveSelection.key, { archetypeKey: event.target.value || null })}
+                            >
+                              <option value="">No archetype</option>
+                              {compatibleArchetypes.map((archetype) => (
+                                <option key={archetype.key} value={archetype.key}>
+                                  {archetype.name}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label className="inline-head-field">
+                            <span>Subtype</span>
+                            <select
+                              value={selectedCharacterProfile?.subtype ?? 'humanoid'}
+                              onChange={(event) => updateCharacterProfile({ subtype: event.target.value as NonNullable<typeof selectedCharacterProfile>['subtype'], bodyClass: event.target.value === 'vehicle' ? 'vehicle' : 'humanoid' })}
+                            >
+                              <option value="humanoid">Humanoid</option>
+                              <option value="beast">Beast</option>
+                              <option value="construct">Construct</option>
+                              <option value="undead">Undead</option>
+                              <option value="vehicle">Vehicle</option>
+                              <option value="spirit">Spirit</option>
+                            </select>
+                          </label>
+                          <label className="inline-head-field">
+                            <span>Control</span>
+                            <select
+                              value={selectedCharacterProfile?.controlMode ?? 'ai'}
+                              onChange={(event) => updateCharacterProfile({ controlMode: event.target.value as NonNullable<typeof selectedCharacterProfile>['controlMode'] })}
+                            >
+                              <option value="player">Player</option>
+                              <option value="ai">AI</option>
+                              <option value="scripted">Scripted</option>
+                              <option value="neutral">Neutral</option>
+                            </select>
+                          </label>
+                        </div>
                         <label className="field-block character-header-textarea">
-                          <span>Visual Description</span>
+                          <span>Summary</span>
                           <textarea
-                            rows={4}
-                            value={selectedCharacterRenderBinding?.conceptPrompt ?? ''}
-                            onChange={(event) => updateCharacterRenderBinding({ conceptPrompt: event.target.value || null })}
-                            placeholder="Describe face, silhouette, outfit, props, palette, mood, and any must-have visual cues."
+                            rows={3}
+                            value={effectiveSelection.summary}
+                            onChange={(event) => onUpdateItemIdentity(effectiveSelection.key, { summary: event.target.value })}
+                            placeholder="Describe the role, personality, and gameplay purpose of this character."
                           />
                         </label>
-                        <div className="character-concept-actions">
-                          <button
-                            className="primary-button"
-                            disabled={characterConceptPending || !(selectedCharacterRenderBinding?.conceptPrompt?.trim())}
-                            onClick={() => void handleGenerateCharacterConcept()}
-                            type="button"
-                          >
-                            {characterConceptPending ? 'Generating...' : 'Generate concept image'}
-                          </button>
-                          <button className="ghost-button compact" onClick={() => setIsSelectionIconPickerOpen(true)} type="button">
-                            Choose existing image
-                          </button>
-                          <span className="subtle-line">
-                            Style: {getArtStylePresetLabel(typeof gameSpec?.theme?.artStylePreset === 'string' ? gameSpec.theme.artStylePreset : null)}
-                          </span>
-                          {typeof gameSpec?.theme?.artStyleDescription === 'string' && gameSpec.theme.artStyleDescription.trim() ? (
-                            <span className="subtle-line">{gameSpec.theme.artStyleDescription.trim()}</span>
-                          ) : null}
-                          {characterConceptMessage ? <div className="inline-note">{characterConceptMessage}</div> : null}
+                        <div className="character-concept-prompt-row">
+                          <label className="field-block character-header-textarea">
+                            <span>Visual Description</span>
+                            <textarea
+                              rows={4}
+                              value={selectedCharacterRenderBinding?.conceptPrompt ?? ''}
+                              onChange={(event) => updateCharacterRenderBinding({ conceptPrompt: event.target.value || null })}
+                              placeholder="Describe face, silhouette, outfit, props, palette, mood, and any must-have visual cues."
+                            />
+                          </label>
+                          <div className="character-concept-actions">
+                            <button
+                              className="primary-button"
+                              disabled={characterConceptPending || !(selectedCharacterRenderBinding?.conceptPrompt?.trim())}
+                              onClick={() => void handleGenerateCharacterConcept()}
+                              type="button"
+                            >
+                              {characterConceptPending ? 'Generating...' : 'Generate concept image'}
+                            </button>
+                            <button className="ghost-button compact" onClick={() => setIsSelectionIconPickerOpen(true)} type="button">
+                              Change image
+                            </button>
+                            <span className="subtle-line">
+                              Style: {getArtStylePresetLabel(typeof gameSpec?.theme?.artStylePreset === 'string' ? gameSpec.theme.artStylePreset : null)}
+                            </span>
+                            {typeof gameSpec?.theme?.artStyleDescription === 'string' && gameSpec.theme.artStyleDescription.trim() ? (
+                              <span className="subtle-line">{gameSpec.theme.artStyleDescription.trim()}</span>
+                            ) : null}
+                            {characterConceptMessage ? <div className="inline-note">{characterConceptMessage}</div> : null}
+                          </div>
                         </div>
                       </div>
                     </div>
                   </div>
-                </div>
+                </>
               ) : (
                 <div className="item-editor-head character-panel-header">
                   <div className="item-icon-stack">
@@ -616,17 +618,20 @@ export function SpecializedDefinitionWorkspace({
         {supports3dPanel && effectiveSelection && isSelectionIconPickerOpen ? (
           <AssetPickerDialog
             assets={imageAssets}
+            clearLabel={kind === 'character' ? 'Clear image' : 'Clear icon'}
+            fallbackIcon={kind === 'character' ? 'character' : iconForDefinitionKind(effectiveSelection.kind)}
             onClose={() => setIsSelectionIconPickerOpen(false)}
             onPickAsset={(assetKey) => {
-              if (effectiveSelection.kind === 'character') {
+              if (kind === 'character') {
                 updateCharacterRenderBinding({ previewImageAssetKey: assetKey })
               } else {
                 onAssignDefinitionIcon(assetKey)
               }
               setIsSelectionIconPickerOpen(false)
             }}
-            selectedAssetKey={effectiveSelection.kind === 'character' ? selectedCharacterRenderBinding?.previewImageAssetKey ?? null : effectiveSelection.iconAssetKey}
-            title={effectiveSelection.kind === 'character' ? `Choose concept image for ${effectiveSelection.name}` : `Choose icon for ${effectiveSelection.name}`}
+            selectedAssetKey={kind === 'character' ? selectedCharacterRenderBinding?.previewImageAssetKey ?? null : effectiveSelection.iconAssetKey}
+            selectedLabel={effectiveSelection.name}
+            title={kind === 'character' ? `Choose concept image for ${effectiveSelection.name}` : `Choose icon for ${effectiveSelection.name}`}
           />
         ) : null}
       </section>

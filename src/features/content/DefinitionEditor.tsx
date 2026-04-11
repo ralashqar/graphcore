@@ -239,11 +239,14 @@ export function DefinitionEditor({
       {isIconPickerOpen ? (
         <AssetPickerDialog
           assets={imageAssets}
+          fallbackIcon={iconForDefinitionKind(definition.kind)}
           onClose={() => setIsIconPickerOpen(false)}
           onPickAsset={(assetKey) => {
             onAssignItemIcon(assetKey)
             setIsIconPickerOpen(false)
           }}
+          clearLabel="Clear icon"
+          selectedLabel={definition.name}
           selectedAssetKey={definition.iconAssetKey}
           title={`Choose icon for ${definition.name}`}
         />

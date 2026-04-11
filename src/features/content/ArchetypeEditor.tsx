@@ -160,11 +160,14 @@ export function ArchetypeEditor({
       {isIconPickerOpen ? (
         <AssetPickerDialog
           assets={imageAssets}
+          fallbackIcon="archetype"
           onClose={() => setIsIconPickerOpen(false)}
           onPickAsset={(assetKey) => {
             onAssignArchetypeIcon(assetKey)
             setIsIconPickerOpen(false)
           }}
+          clearLabel="Clear icon"
+          selectedLabel={selectedArchetype.name}
           selectedAssetKey={selectedArchetype.iconAssetKey}
           title={`Choose icon for ${selectedArchetype.name}`}
         />

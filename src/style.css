@@ -413,6 +413,8 @@ code {
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 24%),
     var(--bg-elev-2);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 .rail-section + .rail-section {
@@ -449,6 +451,128 @@ code {
   margin: 0;
   color: var(--muted);
   line-height: 1.5;
+}
+
+.quick-create-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.quick-create-button {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  padding: 12px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--text);
+  text-align: left;
+}
+
+.quick-create-button:hover {
+  border-color: rgba(94, 234, 212, 0.2);
+  background: rgba(94, 234, 212, 0.05);
+}
+
+.quick-create-button strong {
+  font-size: 0.92rem;
+}
+
+.quick-create-button span:last-child {
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.quick-create-icon {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: rgba(94, 234, 212, 0.08);
+  color: var(--accent);
+}
+
+.quick-create-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.content-template-button {
+  margin-top: 12px;
+  width: 100%;
+  justify-content: center;
+}
+
+.filter-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.filter-chip-button {
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--muted);
+}
+
+.filter-chip-button.is-active {
+  border-color: rgba(94, 234, 212, 0.24);
+  background: rgba(94, 234, 212, 0.1);
+  color: var(--text);
+}
+
+.content-create-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 42;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(3, 6, 10, 0.7);
+  backdrop-filter: blur(10px);
+}
+
+.content-create-dialog {
+  width: min(760px, 100%);
+  display: grid;
+  gap: 16px;
+  padding: 22px;
+  border-radius: 24px;
+  border: 1px solid var(--line);
+  background: var(--bg-elev-1);
+  box-shadow: var(--shadow);
+}
+
+.content-create-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.content-create-head h3 {
+  margin: 6px 0 0;
+}
+
+.content-create-template-callout {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.content-create-template-callout span {
+  color: var(--muted);
 }
 
 .rail-button,
@@ -1556,6 +1680,11 @@ button:disabled {
   white-space: nowrap;
 }
 
+.item-row-copy {
+  display: grid;
+  gap: 2px;
+}
+
 .media-thumb {
   width: 42px;
   height: 42px;
@@ -2234,7 +2363,7 @@ button:disabled {
 }
 
 .asset-picker-dialog {
-  width: min(980px, 100%);
+  width: min(1120px, 100%);
   max-height: min(82vh, 860px);
   display: grid;
   gap: 14px;
@@ -2251,13 +2380,43 @@ button:disabled {
 .asset-picker-dialog-head,
 .asset-picker-dialog-actions {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
 }
 
 .asset-picker-dialog-head h3 {
   margin-top: 6px;
+}
+
+.asset-picker-hero {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  gap: 20px;
+  padding: 6px 0 10px;
+}
+
+.asset-picker-hero-media {
+  display: grid;
+  align-content: start;
+}
+
+.asset-picker-hero-media .media-thumb.large {
+  width: 320px;
+  height: 320px;
+  border-radius: 30px;
+}
+
+.asset-picker-hero-copy,
+.asset-picker-dialog-actions {
+  display: grid;
+  gap: 12px;
+}
+
+.asset-picker-button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 
 .asset-picker-grid {
@@ -2499,7 +2658,8 @@ button:disabled {
   }
 
   .character-concept-header,
-  .character-concept-prompt-row {
+  .character-concept-prompt-row,
+  .asset-picker-hero {
     grid-template-columns: 1fr;
   }
 
@@ -2511,13 +2671,21 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 
-  .bootstrap-sidebar {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
+    .bootstrap-sidebar {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
 
-  .asset-picker-drawer {
-    grid-column: 1 / -1;
-  }
+    .asset-picker-drawer {
+      grid-column: 1 / -1;
+    }
+
+    .quick-create-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .content-create-dialog {
+      padding: 18px;
+    }
 
   .editor-grid.compact {
     grid-template-columns: repeat(2, minmax(0, 1fr));

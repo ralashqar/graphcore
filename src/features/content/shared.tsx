@@ -321,34 +321,58 @@ export function QuickUrlAssetForm({ onCreateUrlAsset }: { onCreateUrlAsset: (url
 
 export function AssetPickerDialog({
   assets,
+  fallbackIcon,
   onClose,
   onPickAsset,
+  selectedLabel,
   selectedAssetKey = null,
   title,
+  clearLabel = 'Clear asset',
 }: {
   assets: AssetDefinition[]
+  fallbackIcon?: EntityIconId
   onClose: () => void
   onPickAsset: (assetKey: string | null) => void
+  selectedLabel?: string
   selectedAssetKey?: string | null
   title: string
+  clearLabel?: string
 }) {
+  const selectedAsset = findAssetByKey(assets, selectedAssetKey)
+
   return (
     <div className="asset-picker-overlay" onClick={onClose} role="presentation">
       <div className="asset-picker-dialog" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={title}>
-        <div className="asset-picker-dialog-head">
-          <div>
-            <span className="eyebrow">Asset Picker</span>
-            <h3>{title}</h3>
+        <div className="asset-picker-hero">
+          <div className="asset-picker-hero-media">
+            <MediaThumb
+              asset={selectedAsset}
+              fallbackIcon={fallbackIcon ?? 'asset'}
+              label={selectedAsset?.name ?? selectedLabel ?? title}
+              large
+            />
           </div>
-          <button className="ghost-button compact" onClick={onClose} type="button">
-            Close
-          </button>
-        </div>
-        <div className="asset-picker-dialog-actions">
-          <button className="ghost-button compact" onClick={() => onPickAsset(null)} type="button">
-            Clear icon
-          </button>
-          <span className="subtle-line">{assets.length} image assets</span>
+          <div className="asset-picker-hero-copy">
+            <div className="asset-picker-dialog-head">
+              <div>
+                <span className="eyebrow">Asset Picker</span>
+                <h3>{title}</h3>
+              </div>
+            </div>
+            <div className="asset-picker-dialog-actions">
+              <strong>{selectedAsset?.name ?? 'No asset selected'}</strong>
+              <span className="subtle-line">{selectedAsset?.key ?? (selectedLabel ?? 'Select an asset below')}</span>
+              <div className="asset-picker-button-row">
+                <button className="ghost-button compact" onClick={() => onPickAsset(null)} type="button">
+                  {clearLabel}
+                </button>
+                <button className="ghost-button compact" onClick={onClose} type="button">
+                  Close
+                </button>
+              </div>
+              <span className="subtle-line">{assets.length} image assets</span>
+            </div>
+          </div>
         </div>
         <div className="asset-picker-grid">
           {assets.map((asset) => {
