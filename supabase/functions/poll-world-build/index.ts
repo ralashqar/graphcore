@@ -64,6 +64,8 @@ const contentGenerationSchema = z.object({
   }),
 })
 
+const contentGenerationRawSchema = z.record(z.string(), z.unknown())
+
 type BatchRow = {
   id: string
   draft_id: string
@@ -118,14 +120,48 @@ type WorldBuildPollSnapshot = z.infer<typeof worldBuildPollRequestSchema>['snaps
 }
 
 function contentSystemPrompt(kind: string) {
+  const profileHint =
+    kind === 'character_definition'
+      ? [
+          'Return exactly one JSON object with keys: name, summary, tags, characterProfile, render3dBinding, resultContext.',
+          'characterProfile must contain subtype, bodyClass, controlMode, scaleProfile.',
+          'render3dBinding should contain conceptPrompt, generationPrompt, generationStyle.',
+        ]
+      : kind === 'item_definition'
+        ? [
+            'Return exactly one JSON object with keys: name, summary, tags, physicalItemProfile, render3dBinding, resultContext.',
+            'physicalItemProfile must contain physicalSubtype, worldPlacementRole, pickupContext.',
+            'render3dBinding should contain conceptPrompt, generationPrompt, generationStyle.',
+          ]
+        : [
+            'Return exactly one JSON object with keys: name, summary, tags, environmentProfile, environmentRenderBinding, environmentNavigation, environmentSpawnRules, resultContext.',
+            'environmentProfile must contain subtype, biome, traversalType, isInterior, scaleTier.',
+            'environmentRenderBinding should contain lightingProfile, generationPrompt, generationStyle.',
+            'environmentNavigation should contain entryAnchors, regionMarkers, navigationNotes.',
+            'environmentSpawnRules should contain characterKeys, itemKeys, resourceNodeKeys.',
+          ]
+
   return [
     'You are generating structured data to complete a GraphCore placeholder definition.',
     'Return JSON only.',
+    ...profileHint,
+    'resultContext must always be present and must contain title, summary, graphHook, visualDirection.',
     'Do not create IDs or external references beyond the supplied context.',
     `The current placeholder kind is ${kind}.`,
     'Produce concise, implementation-facing content that can directly populate the placeholder.',
     'Favor grounded names, summaries, and generation prompts over lore dumps.',
+    'Example resultContext: {"title":"Mage","summary":"A disciplined battle mage with arcane focus.","graphHook":"Can mentor the player in forbidden spells.","visualDirection":"Layered robes, rune-etched staff, cool arcane glow."}',
   ].join('\n')
+}
+
+function formatIssues(issues: Array<{ path: PropertyKey[]; message: string }>) {
+  return issues.map((issue) => `${issue.path.join('.') || '<root>'}: ${issue.message}`).join(' | ')
+}
+
+function describeTopLevelKeys(value: unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return '<not-an-object>'
+  const keys = Object.keys(value as Record<string, unknown>)
+  return keys.length > 0 ? keys.join(', ') : '<no-keys>'
 }
 
 function conceptPromptFromDefinition(definition: SnapshotDefinition, job: JobRow, snapshot: WorldBuildPollSnapshot) {
@@ -371,6 +407,50 @@ async function upsertDefinitionComponent(
   if (insert.error) throw new Error(insert.error.message)
 }
 
+async function markDefinitionGenerationState(
+  client: Awaited<ReturnType<typeof requireUserClient>>['client'],
+  draftId: string,
+  definitionKey: string,
+  generation: Record<string, unknown>,
+) {
+  const definitionRow = await client.from('project_definitions').select('metadata').eq('draft_id', draftId).eq('key', definitionKey).maybeSingle()
+  if (definitionRow.error || !definitionRow.data) return
+
+  const currentMetadata =
+    typeof definitionRow.data.metadata === 'object' && definitionRow.data.metadata !== null
+      ? definitionRow.data.metadata as Record<string, unknown>
+      : {}
+
+  await client.from('project_definitions').update({
+    metadata: {
+      ...currentMetadata,
+      generation,
+    },
+  }).eq('draft_id', draftId).eq('key', definitionKey)
+}
+
+async function markGraphGenerationState(
+  client: Awaited<ReturnType<typeof requireUserClient>>['client'],
+  draftId: string,
+  graphKey: string,
+  generation: Record<string, unknown>,
+) {
+  const graphRow = await client.from('draft_graphs').select('metadata').eq('draft_id', draftId).eq('key', graphKey).maybeSingle()
+  if (graphRow.error || !graphRow.data) return
+
+  const currentMetadata =
+    typeof graphRow.data.metadata === 'object' && graphRow.data.metadata !== null
+      ? graphRow.data.metadata as Record<string, unknown>
+      : {}
+
+  await client.from('draft_graphs').update({
+    metadata: {
+      ...currentMetadata,
+      generation,
+    },
+  }).eq('draft_id', draftId).eq('key', graphKey)
+}
+
 function terminalStatusFromJobs(jobs: WorldBuildJob[]) {
   const failed = jobs.some((job) => job.status === 'failed')
   const queuedOrRunning = jobs.some((job) => job.status === 'queued' || job.status === 'running')
@@ -445,9 +525,14 @@ Deno.serve(async (request) => {
                 },
                 gameSpec: snapshot.gameSpec,
               },
-              schema: contentGenerationSchema,
+              schema: contentGenerationRawSchema,
               maxOutputTokens: 5000,
             })
+
+            const generatedCheck = contentGenerationSchema.safeParse(generated)
+            if (!generatedCheck.success) {
+              throw new Error(`${job.kind} generation validation failed. keys=${describeTopLevelKeys(generated)}. ${formatIssues(generatedCheck.error.issues)}`)
+            }
 
             const definitionRow = await client.from('project_definitions').select('id, metadata').eq('draft_id', batch.draft_id).eq('key', definition.key).single()
             if (definitionRow.error || !definitionRow.data) throw new Error(definitionRow.error?.message ?? `Definition ${definition.key} was not found.`)
@@ -458,9 +543,9 @@ Deno.serve(async (request) => {
                 : {}
 
             const updateResponse = await client.from('project_definitions').update({
-              name: generated.name,
-              summary: generated.summary,
-              tags: generated.tags,
+              name: generatedCheck.data.name,
+              summary: generatedCheck.data.summary,
+              tags: generatedCheck.data.tags,
               metadata: {
                 ...currentMetadata,
                 generation: {
@@ -476,36 +561,36 @@ Deno.serve(async (request) => {
 
             if (updateResponse.error) throw new Error(updateResponse.error.message)
 
-            if (generated.characterProfile) {
-              await upsertDefinitionComponent(client, definitionRow.data.id, 'character_profile', generated.characterProfile)
+            if (generatedCheck.data.characterProfile) {
+              await upsertDefinitionComponent(client, definitionRow.data.id, 'character_profile', generatedCheck.data.characterProfile)
             }
-            if (generated.render3dBinding) {
+            if (generatedCheck.data.render3dBinding) {
               const existingRender3d = definition.components.find((component) => component.type === 'render_3d_binding')
               await upsertDefinitionComponent(client, definitionRow.data.id, 'render_3d_binding', {
                 ...(existingRender3d?.config ?? buildDefaultDefinitionComponents('character').find((component) => component.type === 'render_3d_binding')?.config ?? {}),
-                ...generated.render3dBinding,
+                ...generatedCheck.data.render3dBinding,
               })
             }
-            if (generated.physicalItemProfile) {
-              await upsertDefinitionComponent(client, definitionRow.data.id, 'physical_item_profile', generated.physicalItemProfile)
+            if (generatedCheck.data.physicalItemProfile) {
+              await upsertDefinitionComponent(client, definitionRow.data.id, 'physical_item_profile', generatedCheck.data.physicalItemProfile)
             }
-            if (generated.environmentProfile) {
+            if (generatedCheck.data.environmentProfile) {
               await upsertDefinitionComponent(client, definitionRow.data.id, 'environment_profile', {
                 ...(definition.components.find((component) => component.type === 'environment_profile')?.config ?? {}),
-                ...generated.environmentProfile,
+                ...generatedCheck.data.environmentProfile,
               })
             }
-            if (generated.environmentRenderBinding) {
+            if (generatedCheck.data.environmentRenderBinding) {
               await upsertDefinitionComponent(client, definitionRow.data.id, 'environment_render_binding', {
                 ...(definition.components.find((component) => component.type === 'environment_render_binding')?.config ?? {}),
-                ...generated.environmentRenderBinding,
+                ...generatedCheck.data.environmentRenderBinding,
               })
             }
-            if (generated.environmentNavigation) {
-              await upsertDefinitionComponent(client, definitionRow.data.id, 'environment_navigation', generated.environmentNavigation)
+            if (generatedCheck.data.environmentNavigation) {
+              await upsertDefinitionComponent(client, definitionRow.data.id, 'environment_navigation', generatedCheck.data.environmentNavigation)
             }
-            if (generated.environmentSpawnRules) {
-              await upsertDefinitionComponent(client, definitionRow.data.id, 'environment_spawn_rules', generated.environmentSpawnRules)
+            if (generatedCheck.data.environmentSpawnRules) {
+              await upsertDefinitionComponent(client, definitionRow.data.id, 'environment_spawn_rules', generatedCheck.data.environmentSpawnRules)
             }
 
             await updateJob(client, job.id, {
@@ -513,7 +598,7 @@ Deno.serve(async (request) => {
               result_context: {
                 definitionKey: definition.key,
                 kind: definition.kind,
-                ...generated.resultContext,
+                ...generatedCheck.data.resultContext,
               },
               error_message: null,
             })
@@ -682,6 +767,26 @@ Deno.serve(async (request) => {
             status: 'failed',
             error_message: errorMessage,
           })
+
+          if (job.kind.endsWith('_definition') && job.target_keys?.definitionKey) {
+            await markDefinitionGenerationState(client, batch.draft_id, job.target_keys.definitionKey, {
+              batchId: batch.id,
+              jobId: job.id,
+              state: 'failed',
+              placeholder: false,
+              source: 'global_prompt',
+            })
+          }
+
+          if (job.kind === 'narrative_graph' && job.target_keys?.graphKey) {
+            await markGraphGenerationState(client, batch.draft_id, job.target_keys.graphKey, {
+              batchId: batch.id,
+              jobId: job.id,
+              state: 'failed',
+              placeholder: false,
+              source: 'global_prompt',
+            })
+          }
 
           if (job.kind.includes('concept_image') && job.target_keys?.assetKey) {
             const assetRow = await client.from('project_assets').select('metadata').eq('project_id', batch.project_id).eq('key', job.target_keys.assetKey).maybeSingle()

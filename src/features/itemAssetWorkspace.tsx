@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 
-import { isPendingGenerationResource } from '../domain/worldBuild'
+import { getResourceGenerationMetadata, isPendingGenerationResource } from '../domain/worldBuild'
 import { EntityIcon, iconForDefinitionKind } from '../shared/entityIcons'
 import { ArchetypeEditor } from './content/ArchetypeEditor'
 import { AssetsWorkspace as AssetsWorkspaceView } from './content/AssetsWorkspace'
@@ -56,6 +56,7 @@ export function ContentWorkspace({
   onCreateDefinitionOfKind,
   onCreateItem,
   onCreateUrlAsset: _onCreateUrlAsset,
+  onDeleteItem,
   onRemoveArchetypeField,
   onSelectAsset: _onSelectAsset,
   onSelectArchetype,
@@ -208,7 +209,7 @@ export function ContentWorkspace({
                 </select>
               </label>
               <div className="rail-list">
-                {filteredItems.map((item) => (
+              {filteredItems.map((item) => (
                   <button
                     key={`${item.id}:${item.key}`}
                     className={item.key === selectedContentItem?.key ? 'rail-button item-row is-active' : 'rail-button item-row'}
@@ -223,7 +224,7 @@ export function ContentWorkspace({
                     <div className="item-row-copy">
                       <strong>{item.name}</strong>
                       <span>{contentKinds.find((entry) => entry.kind === item.kind)?.label ?? item.kind}</span>
-                      <span>{item.archetypeKey ?? 'No template'}</span>
+                      <span className={isPendingGenerationResource(item) ? 'world-build-rail-status' : undefined}>{isPendingGenerationResource(item) ? <><span className="button-spinner item-row-spinner" aria-hidden="true" />Generating...</> : getResourceGenerationMetadata(item)?.state === 'failed' ? 'Generation failed' : item.archetypeKey ?? 'No template'}</span>
                     </div>
                   </button>
                 ))}
@@ -284,7 +285,10 @@ export function ContentWorkspace({
             <div className="detail-stack compact world-build-loading-shell">
               <span className="eyebrow">Generating Content</span>
               <h3>{selectedContentItem.name}</h3>
-              <div className="inline-note">This placeholder is still being generated. Fields will appear here when the background job finishes.</div>
+              <div className="inline-note world-build-status-note"><span className="button-spinner" aria-hidden="true" />This placeholder is still being generated. Fields will appear here when the background job finishes.</div>
+              <div className="editor-head-controls">
+                <button className="ghost-button compact danger" onClick={() => onDeleteItem(selectedContentItem.key)} type="button">Delete</button>
+              </div>
             </div>
           ) : (
             <DefinitionEditor
@@ -296,6 +300,7 @@ export function ContentWorkspace({
               selectedArchetype={selectedContentArchetype}
               selectedAsset={selectedAsset}
               selectedItem={selectedContentItem}
+              headerControls={selectedContentItem ? <><button className="ghost-button compact danger" onClick={() => onDeleteItem(selectedContentItem.key)} type="button">Delete</button>{getResourceGenerationMetadata(selectedContentItem)?.state === 'failed' ? <span className="inline-note danger">Background generation failed. You can edit or delete this entry.</span> : null}</> : undefined}
               onAddCustomField={onAddCustomField}
               onAssignItemIcon={onAssignItemIcon}
               onCreateItem={onCreateItem}

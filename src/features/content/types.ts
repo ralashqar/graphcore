@@ -38,6 +38,7 @@ export type ContentWorkspaceProps = {
   onCreateDefinitionOfKind: (kind: DefinitionBase['kind'], archetypeKey?: string | null) => void
   onCreateItem: (archetypeKey?: string | null) => void
   onCreateUrlAsset: (url: string, kind?: 'image' | 'mesh', options?: AssetUrlCreateOptions) => string | null
+  onDeleteItem: (itemKey: string) => void
   onRemoveArchetypeField: (archetypeKey: string, fieldKey: string) => void
   onSelectAsset: (key: string | null) => void
   onSelectArchetype: (key: string | null) => void

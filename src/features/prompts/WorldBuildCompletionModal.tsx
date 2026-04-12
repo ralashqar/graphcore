@@ -36,6 +36,7 @@ export function WorldBuildCompletionModal({ batch, onClose }: WorldBuildCompleti
             const relatedJobs = batch.jobs.filter((job) => job.planItemId === item.id)
             const hasFailure = relatedJobs.some((job) => job.status === 'failed')
             const isComplete = relatedJobs.length > 0 && relatedJobs.every((job) => job.status === 'succeeded' || job.status === 'skipped')
+            const firstFailure = relatedJobs.find((job) => job.status === 'failed' && job.errorMessage)
 
             return (
               <div key={item.id} className={hasFailure ? 'world-build-completion-row is-error' : 'world-build-completion-row is-success'}>
@@ -43,6 +44,7 @@ export function WorldBuildCompletionModal({ batch, onClose }: WorldBuildCompleti
                 <div>
                   <strong>{item.name}</strong>
                   <span>{hasFailure ? 'Failed' : isComplete ? 'Completed' : 'In progress'}</span>
+                  {firstFailure?.errorMessage ? <p className="subtle-line">{firstFailure.errorMessage}</p> : null}
                 </div>
                 <span className="world-build-completion-mark">{hasFailure ? '!' : '✓'}</span>
               </div>

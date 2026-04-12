@@ -3,6 +3,7 @@ import type { Session } from '@supabase/supabase-js'
 import { graphcoreWorkspaceAdapter } from '../../infrastructure/graphcore/graphcoreWorkspaceAdapter'
 
 export const workspaceService = {
+  deleteWorldBuildPlaceholder: graphcoreWorkspaceAdapter.deleteWorldBuildPlaceholder,
   planWorldBuild: graphcoreWorkspaceAdapter.planWorldBuild,
   pollWorldBuild: graphcoreWorkspaceAdapter.pollWorldBuild,
   startWorldBuild: graphcoreWorkspaceAdapter.startWorldBuild,

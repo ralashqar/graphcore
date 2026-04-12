@@ -122,6 +122,21 @@ export const worldBuildPollRequestSchema = z.object({
   model: z.string().min(1),
 })
 
+export const worldBuildDeletePlaceholderRequestSchema = z.object({
+  snapshot: worldBuildPlanRequestSchema.shape.snapshot,
+  resourceType: z.enum(['definition', 'graph', 'asset']),
+  key: z.string().min(1),
+})
+
+export const worldBuildDeletePlaceholderResponseSchema = z.object({
+  batch: worldBuildBatchSchema,
+  deleted: z.object({
+    definitions: z.array(z.string()).default([]),
+    graphs: z.array(z.string()).default([]),
+    assets: z.array(z.string()).default([]),
+  }),
+})
+
 export type WorldBuildPlanItemKind = z.infer<typeof worldBuildPlanItemKindSchema>
 export type WorldBuildGenerationOptions = z.infer<typeof worldBuildGenerationOptionsSchema>
 export type WorldBuildPlanItem = z.infer<typeof worldBuildPlanItemSchema>
@@ -133,6 +148,8 @@ export type WorldBuildBatch = z.infer<typeof worldBuildBatchSchema>
 export type WorldBuildJob = z.infer<typeof worldBuildJobSchema>
 export type WorldBuildStatusResponse = z.infer<typeof worldBuildStatusResponseSchema>
 export type WorldBuildPollRequest = z.infer<typeof worldBuildPollRequestSchema>
+export type WorldBuildDeletePlaceholderRequest = z.infer<typeof worldBuildDeletePlaceholderRequestSchema>
+export type WorldBuildDeletePlaceholderResponse = z.infer<typeof worldBuildDeletePlaceholderResponseSchema>
 
 export function getResourceGenerationMetadata(value: { metadata?: unknown } | null | undefined) {
   if (!value || typeof value !== 'object') return null

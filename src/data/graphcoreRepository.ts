@@ -21,9 +21,12 @@ import { buildBootstrapPatch, createDefaultGameSpec } from '../domain/presetCata
 import type { PromptPatchRequest, PromptPatchResponse } from '../domain/prompting'
 import {
   worldBuildPlanResponseSchema,
+  worldBuildDeletePlaceholderResponseSchema,
   worldBuildStatusResponseSchema,
   type WorldBuildPlanRequest,
   type WorldBuildPlanResponse,
+  type WorldBuildDeletePlaceholderRequest,
+  type WorldBuildDeletePlaceholderResponse,
   type WorldBuildStartRequest,
   type WorldBuildStatusResponse,
 } from '../domain/worldBuild'
@@ -2134,6 +2137,21 @@ export async function pollWorldBuild(request: { batchId: string; snapshot: Proje
   }
 
   return worldBuildStatusResponseSchema.parse(response.data)
+}
+
+export async function deleteWorldBuildPlaceholder(request: WorldBuildDeletePlaceholderRequest): Promise<WorldBuildDeletePlaceholderResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before deleting a world-build placeholder.')
+
+  if (!hasLiveSnapshotIds(request.snapshot)) {
+    throw new Error('Sign in and load a live GraphCore draft before deleting a world-build placeholder.')
+  }
+
+  const response = await invokeAuthedFunctionWithSessionRecovery<WorldBuildDeletePlaceholderResponse>('delete-world-build-placeholder', request, session)
+  if (response.error || !response.data) {
+    throw new Error(response.error ? await readFunctionsErrorMessage(response.error) : 'Deleting world-build placeholder returned no data.')
+  }
+
+  return worldBuildDeletePlaceholderResponseSchema.parse(response.data)
 }
 
 export async function compileSnapshot(snapshot: ProjectSnapshot) {

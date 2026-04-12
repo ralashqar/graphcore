@@ -36,11 +36,15 @@ function plannerSystemPrompt() {
     'Only plan these item kinds: character, environment, item, narrative_graph.',
     'Infer user intent from the single global prompt.',
     'Generate concise implementation-facing plan items with stable ids.',
+    'The summary must read like a concrete creative brief, not a generic checklist.',
+    'Avoid bland phrases like "core traits", "appearance", "abilities", "role hooks", or other meta category lists.',
+    'For character, item, and environment summaries, write 1-2 vivid implementation-facing sentences with specific fantasy or visual direction when possible.',
+    'Use grounded, evocative nouns and adjectives so the resulting plan item feels like an actual concept, not a template placeholder.',
     'Use narrative_graph only when the prompt clearly asks for a story/quest/dialogue/narrative graph.',
     'When a narrative graph references created content, set dependsOn to those item ids.',
     'Do not include duplicate items.',
     'Keep the plan compact and useful.',
-    'Example: {"requestSummary":"Create mage character","planItems":[{"id":"character_mage","kind":"character","name":"Mage","summary":"Create a mage character definition with core description.","dependsOn":[]}],"diagnostics":[],"assistantNotes":"Optional short note."}',
+    'Example: {"requestSummary":"Create mage character","planItems":[{"id":"character_mage","kind":"character","name":"Ilyra the Ember Veil","summary":"Create a battle mage wrapped in ember-dyed robes, carrying a scorched brass staff and a reputation for precise fire warding under pressure.","dependsOn":[]}],"diagnostics":[],"assistantNotes":"Optional short note."}',
   ].join('\n')
 }
 
@@ -87,7 +91,7 @@ Deno.serve(async (request) => {
         existingAssetKeys: payload.snapshot.assets.map((asset) => asset.key),
       },
       schema: plannerRawSchema,
-      maxOutputTokens: 6000,
+      maxOutputTokens: 32000,
     })
 
     const planCheck = plannerSchema.safeParse(plan)

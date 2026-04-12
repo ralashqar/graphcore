@@ -15,7 +15,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import type { GraphType, NodeDefinition } from '../domain/graphcore'
-import { isPendingGenerationResource } from '../domain/worldBuild'
+import { getResourceGenerationMetadata, isPendingGenerationResource } from '../domain/worldBuild'
 import {
   applyTemplateToNode,
   createNodeFromTemplate,
@@ -371,7 +371,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
               {snapshotGraphs.map((graph) => (
                 <button key={graph.key} className={graph.key === selectedGraph?.key ? 'rail-button is-active' : 'rail-button'} onClick={() => onSelectGraph(graph.key)} type="button">
                   <strong>{graph.name}</strong>
-                  <span>{graph.graphType}</span>
+                  <span className={isPendingGenerationResource(graph) ? 'world-build-rail-status' : undefined}>{isPendingGenerationResource(graph) ? <><span className="button-spinner item-row-spinner" aria-hidden="true" />Generating...</> : getResourceGenerationMetadata(graph)?.state === 'failed' ? 'Generation failed' : graph.graphType}</span>
                 </button>
               ))}
             </div>
@@ -422,7 +422,12 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
             <div className="detail-stack compact world-build-loading-shell graph-loading-shell">
               <span className="eyebrow">Generating Graph</span>
               <h3>{selectedGraph?.name ?? 'Pending graph'}</h3>
-              <div className="inline-note">This narrative graph is still being generated. Nodes and edges will appear when the background job completes.</div>
+              <div className="inline-note world-build-status-note"><span className="button-spinner" aria-hidden="true" />This narrative graph is still being generated. Nodes and edges will appear when the background job completes.</div>
+              {selectedGraph ? (
+                <div className="editor-head-controls">
+                  <button className="ghost-button compact danger" onClick={() => onDeleteGraph(selectedGraph.key)} type="button">Delete</button>
+                </div>
+              ) : null}
             </div>
           ) : (
             <ReactFlow

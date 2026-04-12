@@ -1,7 +1,7 @@
 import { useMemo, useState, type ChangeEvent } from 'react'
 
 import { supportedMeshAccept } from '../../domain/assets'
-import { isPendingGenerationResource } from '../../domain/worldBuild'
+import { getResourceGenerationMetadata, isPendingGenerationResource } from '../../domain/worldBuild'
 import { MediaThumb, QuickUrlAssetForm } from './shared'
 import type { AssetsWorkspaceProps } from './types'
 
@@ -69,6 +69,7 @@ export function AssetsWorkspace({
                 <div className="item-row-copy">
                   <strong>{asset.name}</strong>
                   <span>{asset.kind}</span>
+                  <span className={isPendingGenerationResource(asset) ? 'world-build-rail-status' : undefined}>{isPendingGenerationResource(asset) ? <><span className="button-spinner item-row-spinner" aria-hidden="true" />Generating...</> : getResourceGenerationMetadata(asset)?.state === 'failed' ? 'Generation failed' : asset.storagePath}</span>
                 </div>
               </button>
             ))}
@@ -82,7 +83,10 @@ export function AssetsWorkspace({
             <div className="detail-stack compact world-build-loading-shell">
               <span className="eyebrow">Generating Asset</span>
               <h3>{selectedAsset.name}</h3>
-              <div className="inline-note">This asset is still being generated. The final preview and editable fields will appear when the job completes.</div>
+              <div className="inline-note world-build-status-note"><span className="button-spinner" aria-hidden="true" />This asset is still being generated. The final preview and editable fields will appear when the job completes.</div>
+              <div className="editor-head-controls">
+                <button className="ghost-button compact danger" onClick={() => onDeleteAsset(selectedAsset.key)} type="button">Delete</button>
+              </div>
             </div>
           ) : (
             <div className="detail-stack">

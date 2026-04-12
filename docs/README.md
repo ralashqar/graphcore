@@ -13,6 +13,8 @@ If you are an AI agent trying to understand the codebase, start with the current
 2. [`10-current-data-model.md`](./10-current-data-model.md)
 3. [`11-live-workspace-and-game-flow.md`](./11-live-workspace-and-game-flow.md)
 4. [`12-prompt-bootstrap-and-edge-functions.md`](./12-prompt-bootstrap-and-edge-functions.md)
+5. [`13-supabase-edge-function-runbook.md`](./13-supabase-edge-function-runbook.md)
+6. [`14-supabase-project-operations.md`](./14-supabase-project-operations.md)
 
 ## Important Note
 

@@ -2,6 +2,7 @@ import '@supabase/functions-js/edge-runtime.d.ts'
 
 import {
   WORLD_BUILD_ENVIRONMENT_VIEWS,
+  getResourceGenerationMetadata,
   type WorldBuildPlanItem,
   worldBuildBatchSchema,
   worldBuildJobSchema,
@@ -23,6 +24,17 @@ type PlaceholderAsset = {
   key: string
   name: string
   metadata: Record<string, unknown>
+}
+
+type ExistingRemoteResourceRow = {
+  key: string
+  metadata: unknown
+}
+
+type ExistingKeyState = {
+  occupiedKeys: Set<string>
+  reclaimableKeys: Set<string>
+  reclaimedKeys: Set<string>
 }
 
 type WorldBuildStartSnapshot = {
@@ -55,25 +67,107 @@ function updateComponentConfig(
   )
 }
 
-function buildDefinitionKey(kind: DefinitionKind, name: string, existingKeys: Set<string>) {
+function buildWorldBuildKey(seed: string, keyState: ExistingKeyState) {
+  const key = uniqueWorldBuildKey(keyState.occupiedKeys, seed)
+  keyState.occupiedKeys.add(key)
+  if (keyState.reclaimableKeys.has(key)) {
+    keyState.reclaimedKeys.add(key)
+  }
+  return key
+}
+
+function buildDefinitionKey(kind: DefinitionKind, name: string, keyState: ExistingKeyState) {
   const baseKey = `${kind}.${slugifyWorldBuildName(name) || 'generated'}`
-  const key = uniqueWorldBuildKey(existingKeys, baseKey)
-  existingKeys.add(key)
-  return key
+  return buildWorldBuildKey(baseKey, keyState)
 }
 
-function buildGraphKey(name: string, existingKeys: Set<string>) {
+function buildGraphKey(name: string, keyState: ExistingKeyState) {
   const baseKey = `graph.${slugifyWorldBuildName(name) || 'generated'}`
-  const key = uniqueWorldBuildKey(existingKeys, baseKey)
-  existingKeys.add(key)
-  return key
+  return buildWorldBuildKey(baseKey, keyState)
 }
 
-function buildAssetKey(name: string, suffix: string, existingKeys: Set<string>) {
+function buildAssetKey(name: string, suffix: string, keyState: ExistingKeyState) {
   const baseKey = `image.${slugifyWorldBuildName(`${name}_${suffix}`) || `generated_${suffix}`}`
-  const key = uniqueWorldBuildKey(existingKeys, baseKey)
-  existingKeys.add(key)
-  return key
+  return buildWorldBuildKey(baseKey, keyState)
+}
+
+function createExistingKeyState(localKeys: string[], remoteRows: ExistingRemoteResourceRow[]) {
+  const localKeySet = new Set(localKeys)
+  const occupiedKeys = new Set(localKeys)
+  const reclaimableKeys = new Set<string>()
+
+  for (const row of remoteRows) {
+    const generation = getResourceGenerationMetadata({ metadata: row.metadata })
+    const reclaimable = !localKeySet.has(row.key) && generation?.source === 'global_prompt'
+    if (reclaimable) {
+      reclaimableKeys.add(row.key)
+      continue
+    }
+    occupiedKeys.add(row.key)
+  }
+
+  return {
+    occupiedKeys,
+    reclaimableKeys,
+    reclaimedKeys: new Set<string>(),
+  }
+}
+
+async function loadExistingWorldBuildKeys(
+  client: Awaited<ReturnType<typeof requireUserClient>>['client'],
+  draftId: string,
+  projectId: string,
+) {
+  const [definitionsResponse, graphsResponse, assetsResponse] = await Promise.all([
+    client.from('project_definitions').select('key, metadata').eq('draft_id', draftId),
+    client.from('draft_graphs').select('key, metadata').eq('draft_id', draftId),
+    client.from('project_assets').select('key, metadata').eq('project_id', projectId),
+  ])
+
+  if (definitionsResponse.error || graphsResponse.error || assetsResponse.error) {
+    throw new Error(
+      definitionsResponse.error?.message
+      ?? graphsResponse.error?.message
+      ?? assetsResponse.error?.message
+      ?? 'Failed to load existing world-build keys.',
+    )
+  }
+
+  return {
+    definitionRows: ((definitionsResponse.data ?? []) as Array<{ key: string; metadata: unknown }>).map((row) => ({ key: row.key, metadata: row.metadata })),
+    graphRows: ((graphsResponse.data ?? []) as Array<{ key: string; metadata: unknown }>).map((row) => ({ key: row.key, metadata: row.metadata })),
+    assetRows: ((assetsResponse.data ?? []) as Array<{ key: string; metadata: unknown }>).map((row) => ({ key: row.key, metadata: row.metadata })),
+  }
+}
+
+async function deleteReclaimedPlaceholderRows(
+  client: Awaited<ReturnType<typeof requireUserClient>>['client'],
+  draftId: string,
+  projectId: string,
+  keyState: {
+    definitions: ExistingKeyState
+    graphs: ExistingKeyState
+    assets: ExistingKeyState
+  },
+) {
+  const reclaimedDefinitionKeys = [...keyState.definitions.reclaimedKeys]
+  const reclaimedGraphKeys = [...keyState.graphs.reclaimedKeys]
+  const reclaimedAssetKeys = [...keyState.assets.reclaimedKeys]
+
+  if (reclaimedDefinitionKeys.length > 0) {
+    const response = await client.from('project_definitions').delete().eq('draft_id', draftId).in('key', reclaimedDefinitionKeys)
+    if (response.error) throw new Error(response.error.message)
+  }
+
+  if (reclaimedGraphKeys.length > 0) {
+    const response = await client.from('draft_graphs').delete().eq('draft_id', draftId).in('key', reclaimedGraphKeys)
+    if (response.error) throw new Error(response.error.message)
+  }
+
+  if (reclaimedAssetKeys.length > 0) {
+    const response = await client.from('project_assets').delete().eq('project_id', projectId).in('key', reclaimedAssetKeys)
+    if (response.error) throw new Error(response.error.message)
+  }
 }
 
 async function insertPlaceholderAsset(
@@ -284,9 +378,10 @@ Deno.serve(async (request) => {
     }
 
     const batchId = batchInsert.data.id
-    const existingDefinitionKeys = new Set(snapshot.definitions.map((definition) => definition.key))
-    const existingGraphKeys = new Set(snapshot.graphs.map((graph) => graph.key))
-    const existingAssetKeys = new Set(snapshot.assets.map((asset) => asset.key))
+    const existingRemoteKeys = await loadExistingWorldBuildKeys(client, snapshot.draft.id, snapshot.project.id)
+    const definitionKeyState = createExistingKeyState(snapshot.definitions.map((definition) => definition.key), existingRemoteKeys.definitionRows)
+    const graphKeyState = createExistingKeyState(snapshot.graphs.map((graph) => graph.key), existingRemoteKeys.graphRows)
+    const assetKeyState = createExistingKeyState(snapshot.assets.map((asset) => asset.key), existingRemoteKeys.assetRows)
     const jobsToInsert: Array<Record<string, unknown>> = []
     const planJobIds = new Map<string, string>()
     const planTargetKeys = new Map<string, Record<string, string>>()
@@ -302,7 +397,7 @@ Deno.serve(async (request) => {
       if (item.kind === 'narrative_graph') continue
 
       const definitionJobId = crypto.randomUUID()
-      const definitionKey = buildDefinitionKey(item.kind === 'character' ? 'character' : item.kind === 'environment' ? 'environment' : 'item', item.name, existingDefinitionKeys)
+      const definitionKey = buildDefinitionKey(item.kind === 'character' ? 'character' : item.kind === 'environment' ? 'environment' : 'item', item.name, definitionKeyState)
       planJobIds.set(item.id, definitionJobId)
       planTargetKeys.set(item.id, { definitionKey })
       jobsToInsert.push({
@@ -321,7 +416,7 @@ Deno.serve(async (request) => {
       })
 
       if ((item.kind === 'character' || item.kind === 'item') && item.generationOptions.generateConceptImage) {
-        const assetKey = buildAssetKey(item.name, 'concept', existingAssetKeys)
+        const assetKey = buildAssetKey(item.name, 'concept', assetKeyState)
         const assetJobId = crypto.randomUUID()
         jobsToInsert.push({
           id: assetJobId,
@@ -344,7 +439,7 @@ Deno.serve(async (request) => {
       if (item.kind === 'environment' && item.generationOptions.generateConceptGallery) {
         const targetKeys = { definitionKey } as Record<string, string>
         for (const view of item.generationOptions.environmentViews ?? WORLD_BUILD_ENVIRONMENT_VIEWS) {
-          const assetKey = buildAssetKey(item.name, view, existingAssetKeys)
+          const assetKey = buildAssetKey(item.name, view, assetKeyState)
           const assetJobId = crypto.randomUUID()
           targetKeys[`assetKey:${view}`] = assetKey
           jobsToInsert.push({
@@ -369,7 +464,7 @@ Deno.serve(async (request) => {
 
     for (const item of enabledItems.filter((entry) => entry.kind === 'narrative_graph')) {
       const graphJobId = crypto.randomUUID()
-      const graphKey = buildGraphKey(item.name, existingGraphKeys)
+      const graphKey = buildGraphKey(item.name, graphKeyState)
       const dependsOnJobIds = item.dependsOn.map((planItemId) => planJobIds.get(planItemId)).filter((value): value is string => Boolean(value))
       jobsToInsert.push({
         id: graphJobId,
@@ -395,6 +490,12 @@ Deno.serve(async (request) => {
         throw new Error(jobsInsert.error.message)
       }
     }
+
+    await deleteReclaimedPlaceholderRows(client, snapshot.draft.id, snapshot.project.id, {
+      definitions: definitionKeyState,
+      graphs: graphKeyState,
+      assets: assetKeyState,
+    })
 
     const createdAssets: Awaited<ReturnType<typeof insertPlaceholderAsset>>[] = []
     const createdDefinitions: Awaited<ReturnType<typeof insertPlaceholderDefinition>>[] = []

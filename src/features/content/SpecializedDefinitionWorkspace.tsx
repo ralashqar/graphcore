@@ -4,7 +4,7 @@ import { getArtStylePresetLabel } from '../../domain/artStylePresets'
 import { buildAssetSlug, type AssetUrlCreateOptions } from '../../domain/assets'
 import type { ArchetypeDefinition, AssetDefinition, AssemblyGraphDefinition, DefinitionBase, EnvironmentBlueprintV1, FieldDefinition, FieldValue, GameSpec } from '../../domain/graphcore'
 import { buildCharacterConceptPrompt } from '../../domain/visualAssetGeneration'
-import { isPendingGenerationResource } from '../../domain/worldBuild'
+import { getResourceGenerationMetadata, isPendingGenerationResource } from '../../domain/worldBuild'
 import { visualAssetGenerationService } from '../../application/services/visualAssetGenerationService'
 import { getResolvedRender3dBinding } from '../../domain/render3d'
 import { iconForDefinitionKind } from '../../shared/entityIcons'
@@ -35,6 +35,7 @@ type SpecializedDefinitionWorkspaceProps = {
   onCreateAssemblyGraph: (environmentKey: string) => string | null
   onCreateDefinition: (archetypeKey?: string | null) => void
   onCreateUrlAsset: (url: string, kind?: 'image' | 'mesh', options?: AssetUrlCreateOptions) => string | null
+  onDeleteDefinition: (itemKey: string) => void
   onDeleteAssemblyGraph: (graphKey: string) => void
   onDeleteEnvironmentBlueprint: (blueprintId: string) => void
   onChangePromptText: (value: string) => void
@@ -69,6 +70,7 @@ export function SpecializedDefinitionWorkspace({
   onCreateAssemblyGraph,
   onCreateDefinition,
   onCreateUrlAsset,
+  onDeleteDefinition,
   onDeleteAssemblyGraph,
   onDeleteEnvironmentBlueprint,
   onChangePromptText,
@@ -140,6 +142,8 @@ export function SpecializedDefinitionWorkspace({
     return environmentBlueprints.find((blueprint) => blueprint.id === blueprintId) ?? null
   }, [effectiveSelection, environmentBlueprints])
   const isSelectionPending = isPendingGenerationResource(effectiveSelection)
+  const selectionGeneration = getResourceGenerationMetadata(effectiveSelection)
+  const hasSelectionGenerationFailed = selectionGeneration?.state === 'failed'
   const definitionPanelControls = supports3dPanel ? (
     <div className="segmented-control panel-mode-control" aria-label="Character panel mode">
       <button
@@ -304,27 +308,16 @@ export function SpecializedDefinitionWorkspace({
           {!isCharacterWorkspace ? <div className="inline-note">{subtitle}</div> : null}
         </div>
 
-        {isCharacterWorkspace ? (
-          <div className="rail-section rail-section-first">
-            <div className="collection-status">
-              <span className="section-label">Create Character</span>
-              <strong>Start a new cast entry</strong>
-            </div>
-            <div className="rail-create-card">
-              <button className="primary-button compact" onClick={() => onCreateDefinition()} type="button">
-                + New Character
-              </button>
-            </div>
-          </div>
-        ) : null}
-
         <div className="rail-section">
           <div className="collection-status">
             <span className="section-label">Registry</span>
             <strong>{filteredDefinitions.length} visible</strong>
           </div>
           <div className="rail-list">
-            {filteredDefinitions.map((definition) => (
+            {filteredDefinitions.map((definition) => {
+              const isDefinitionPending = isPendingGenerationResource(definition)
+              const generation = getResourceGenerationMetadata(definition)
+              return (
               <button
                 key={`${definition.id}:${definition.key}`}
                 className={definition.key === effectiveSelection?.key ? 'rail-button item-row is-active' : 'rail-button item-row'}
@@ -338,10 +331,11 @@ export function SpecializedDefinitionWorkspace({
                 />
                 <div className="item-row-copy">
                   <strong>{definition.name}</strong>
-                  <span>{definition.archetypeKey ?? 'No archetype'}</span>
+                  <span className={isDefinitionPending ? 'world-build-rail-status' : undefined}>{isDefinitionPending ? <><span className="button-spinner item-row-spinner" aria-hidden="true" />Generating...</> : generation?.state === 'failed' ? 'Generation failed' : definition.archetypeKey ?? 'No archetype'}</span>
                 </div>
               </button>
-            ))}
+              )
+            })}
           </div>
         </div>
 
@@ -383,7 +377,10 @@ export function SpecializedDefinitionWorkspace({
             <div className="detail-stack compact world-build-loading-shell">
               <span className="eyebrow">Generating {effectiveSelection.kind === 'character' ? 'Character' : 'Environment'}</span>
               <h3>{effectiveSelection.name}</h3>
-              <div className="inline-note">This placeholder is still being generated. The editor will unlock when the background job completes.</div>
+              <div className="inline-note world-build-status-note"><span className="button-spinner" aria-hidden="true" />This placeholder is still being generated. The editor will unlock when the background job completes.</div>
+              <div className="editor-head-controls">
+                <button className="ghost-button compact danger" onClick={() => onDeleteDefinition(effectiveSelection.key)} type="button">Delete</button>
+              </div>
             </div>
           ) : supports3dPanel ? (
             <div key={effectiveSelection.key} className="character-panel-shell">
@@ -407,7 +404,11 @@ export function SpecializedDefinitionWorkspace({
                     <div className="editor-heading-copy character-concept-copy">
                       <div className="editor-head-toolbar character-head-toolbar">
                         <span className="eyebrow">Character Editor</span>
-                        {definitionPanelControls ? <div className="editor-head-controls">{definitionPanelControls}</div> : null}
+                        <div className="editor-head-controls">
+                          {hasSelectionGenerationFailed ? <span className="inline-note danger">Background generation failed. You can edit or delete this entry.</span> : null}
+                          <button className="ghost-button compact danger" onClick={() => onDeleteDefinition(effectiveSelection.key)} type="button">Delete</button>
+                          {definitionPanelControls}
+                        </div>
                       </div>
                       <div className="character-header-rows">
                         <div className="editor-head-inline-fields">
@@ -547,7 +548,11 @@ export function SpecializedDefinitionWorkspace({
                           />
                         </label>
                       </div>
-                      {definitionPanelControls ? <div className="editor-head-controls">{definitionPanelControls}</div> : null}
+                      <div className="editor-head-controls">
+                        {hasSelectionGenerationFailed ? <span className="inline-note danger">Background generation failed. You can edit or delete this entry.</span> : null}
+                        <button className="ghost-button compact danger" onClick={() => onDeleteDefinition(effectiveSelection.key)} type="button">Delete</button>
+                        {definitionPanelControls}
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -587,12 +592,13 @@ export function SpecializedDefinitionWorkspace({
                   definitions={definitions}
                   graphKeys={graphKeys}
                   imageAssets={imageAssets}
-                  selectedArchetype={compatibleArchetypes.find((archetype) => archetype.key === effectiveSelection.archetypeKey) ?? null}
-                  selectedAsset={selectedAsset}
-                  selectedItem={effectiveSelection}
-                  hideHeader
-                  hideArchetypeField={effectiveSelection.kind === 'character'}
-                  suppressSummaryField={effectiveSelection.kind === 'character'}
+              selectedArchetype={compatibleArchetypes.find((archetype) => archetype.key === effectiveSelection.archetypeKey) ?? null}
+              selectedAsset={selectedAsset}
+              selectedItem={effectiveSelection}
+              headerControls={<><button className="ghost-button compact danger" onClick={() => onDeleteDefinition(effectiveSelection.key)} type="button">Delete</button></>}
+              hideHeader
+              hideArchetypeField={effectiveSelection.kind === 'character'}
+              suppressSummaryField={effectiveSelection.kind === 'character'}
                   onAddCustomField={onAddCustomField}
                   onAssignItemIcon={onAssignDefinitionIcon}
                   onCreateItem={(archetypeKey) => onCreateDefinition(archetypeKey)}
@@ -612,6 +618,7 @@ export function SpecializedDefinitionWorkspace({
               selectedArchetype={compatibleArchetypes.find((archetype) => archetype.key === effectiveSelection.archetypeKey) ?? null}
               selectedAsset={selectedAsset}
               selectedItem={effectiveSelection}
+              headerControls={<><button className="ghost-button compact danger" onClick={() => onDeleteDefinition(effectiveSelection.key)} type="button">Delete</button>{hasSelectionGenerationFailed ? <span className="inline-note danger">Background generation failed. You can edit or delete this entry.</span> : null}</>}
               onAddCustomField={onAddCustomField}
               onAssignItemIcon={onAssignDefinitionIcon}
               onCreateItem={(archetypeKey) => onCreateDefinition(archetypeKey)}
