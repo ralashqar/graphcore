@@ -144,7 +144,11 @@ async function readFunctionsErrorMessage(error: FunctionsHttpError | Error) {
 
   try {
     const payload = await context.clone().json() as { error?: unknown }
-    console.error('[GraphCore] edge function error payload', payload)
+    console.error('[GraphCore] edge function error payload', {
+      status: context.status,
+      statusText: context.statusText,
+      payload,
+    })
     if (typeof payload.error === 'string') {
       return payload.error
     }
@@ -155,11 +159,61 @@ async function readFunctionsErrorMessage(error: FunctionsHttpError | Error) {
   } catch {
     try {
       const text = await context.clone().text()
-      console.error('[GraphCore] edge function error text', text)
+      console.error('[GraphCore] edge function error text', {
+        status: context.status,
+        statusText: context.statusText,
+        text,
+      })
       return text || error.message
     } catch {
       return error.message
     }
+  }
+}
+
+function summarizeFunctionBody(body: Record<string, unknown>) {
+  const snapshot = body.snapshot && typeof body.snapshot === 'object'
+    ? body.snapshot as {
+        workspace?: { id?: string }
+        project?: { id?: string; name?: string }
+        draft?: { id?: string; name?: string }
+        definitions?: unknown[]
+        graphs?: unknown[]
+        assets?: unknown[]
+      }
+    : null
+
+  return {
+    prompt: typeof body.prompt === 'string' ? body.prompt.slice(0, 180) : undefined,
+    requestSummary: typeof body.requestSummary === 'string' ? body.requestSummary : undefined,
+    plannerMode: typeof body.plannerMode === 'string' ? body.plannerMode : undefined,
+    graphKey: typeof body.graphKey === 'string' ? body.graphKey : undefined,
+    batchId: typeof body.batchId === 'string' ? body.batchId : undefined,
+    mode: typeof body.mode === 'string' ? body.mode : undefined,
+    model: typeof body.model === 'string' ? body.model : undefined,
+    planItems:
+      Array.isArray(body.planItems)
+        ? body.planItems.map((item) => {
+          const record = item && typeof item === 'object' ? item as Record<string, unknown> : {}
+          return {
+            id: typeof record.id === 'string' ? record.id : undefined,
+            kind: typeof record.kind === 'string' ? record.kind : undefined,
+            enabled: typeof record.enabled === 'boolean' ? record.enabled : undefined,
+          }
+        })
+        : undefined,
+    snapshot: snapshot
+      ? {
+          workspaceId: snapshot.workspace?.id,
+          projectId: snapshot.project?.id,
+          projectName: snapshot.project?.name,
+          draftId: snapshot.draft?.id,
+          draftName: snapshot.draft?.name,
+          definitionCount: Array.isArray(snapshot.definitions) ? snapshot.definitions.length : undefined,
+          graphCount: Array.isArray(snapshot.graphs) ? snapshot.graphs.length : undefined,
+          assetCount: Array.isArray(snapshot.assets) ? snapshot.assets.length : undefined,
+        }
+      : undefined,
   }
 }
 
@@ -550,8 +604,20 @@ async function invokeAuthedFunctionWithSessionRecovery<TResponse>(
     return response
   }
 
+  const context = 'context' in response.error ? (response.error as FunctionsHttpError & { context?: unknown }).context : null
+  const responseInfo = context instanceof Response
+    ? {
+        status: context.status,
+        statusText: context.statusText,
+      }
+    : null
+  const errorPayload = await readFunctionsErrorPayload<Record<string, unknown> | string>(response.error)
+
   console.error(`[GraphCore] ${functionName} SDK invocation failed.`, {
     message: response.error.message,
+    response: responseInfo,
+    request: summarizeFunctionBody(body),
+    errorPayload,
   })
   return response
 }

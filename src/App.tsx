@@ -657,6 +657,24 @@ export default function App() {
     for (const batch of snapshot.worldBuildBatches) {
       if (isTerminalWorldBuildBatchStatus(batch.status) && !announcedWorldBuildBatchIdsRef.current.has(batch.id)) {
         announcedWorldBuildBatchIdsRef.current.add(batch.id)
+        if (batch.status === 'failed' || batch.status === 'completed_with_errors') {
+          console.error('[GraphCore] world build batch completed with failures.', {
+            batchId: batch.id,
+            status: batch.status,
+            plannerMode: batch.plannerMode,
+            requestSummary: batch.requestSummary,
+            diagnostics: batch.diagnostics,
+            failedJobs: batch.jobs
+              .filter((job) => job.status === 'failed')
+              .map((job) => ({
+                id: job.id,
+                planItemId: job.planItemId,
+                kind: job.kind,
+                errorMessage: job.errorMessage,
+                resultContext: job.resultContext,
+              })),
+          })
+        }
         setCompletedWorldBuildBatch(batch)
       }
     }
@@ -2385,6 +2403,7 @@ export default function App() {
                 deletingGraphKey={deletingGraphKey}
                 definitions={snapshot.definitions}
                 diagnostics={bundle.diagnostics}
+                worldBuildBatches={snapshot.worldBuildBatches}
                 selectedEdge={selectedEdge}
                 selectedGraph={selectedGraph}
                 selectedNode={selectedNode}
@@ -2416,6 +2435,7 @@ export default function App() {
                 deletingGraphKey={deletingGraphKey}
                 diagnostics={bundle.diagnostics}
                 gameSpec={snapshot.gameSpec}
+                worldBuildBatches={snapshot.worldBuildBatches}
                 selectedEdge={selectedCinematicGraph ? selectedEdge : null}
                 selectedGraph={selectedCinematicGraph}
                 selectedNode={selectedCinematicGraph ? selectedNode : null}

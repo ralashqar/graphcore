@@ -133,6 +133,42 @@ function collectNamedLabels(value: unknown) {
     .filter((entry) => entry.length > 0)
 }
 
+function buildFallbackShot(input: {
+  requestSummary: string
+  graphSummary: string
+  entityRefs: Array<{
+    id: string
+    kind: 'character' | 'environment' | 'item'
+  }>
+}) {
+  const environmentRef = input.entityRefs.find((entry) => entry.kind === 'environment') ?? null
+  const participantRefIds = input.entityRefs.filter((entry) => entry.kind === 'character').map((entry) => entry.id)
+  const propRefIds = input.entityRefs.filter((entry) => entry.kind === 'item').map((entry) => entry.id)
+  const beat = input.graphSummary.trim() || input.requestSummary.trim() || 'Play the key cinematic beat described by the prompt.'
+  const shotType =
+    participantRefIds.length >= 2
+      ? 'action' as const
+      : environmentRef
+        ? 'establishing' as const
+        : 'custom' as const
+
+  return {
+    id: 'shot_1',
+    title: 'Primary beat',
+    beat,
+    participantRefIds,
+    locationRefId: environmentRef?.id ?? null,
+    propRefIds,
+    shotType,
+    framing: shotType === 'establishing' ? 'Wide establishing frame' : '',
+    cameraAngle: '',
+    cameraMovement: '',
+    lensPreference: '',
+    durationSeconds: null,
+    visualPrompt: '',
+  }
+}
+
 export function coerceCinematicPlannerRaw(input: unknown) {
   const record = asRecord(input) ?? {}
   const requestSummary = pickFirstString(record, ['requestSummary', 'summary', 'title']) || 'Cinematic build plan'
@@ -282,6 +318,14 @@ export function coerceCinematicPlannerRaw(input: unknown) {
     })
     .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
 
+  const normalizedShots = shots.length > 0
+    ? shots
+    : [buildFallbackShot({
+      requestSummary,
+      graphSummary,
+      entityRefs,
+    })]
+
   const diagnosticsValue = record.diagnostics
   const diagnostics = Array.isArray(diagnosticsValue)
     ? asStringArray(diagnosticsValue)
@@ -303,7 +347,7 @@ export function coerceCinematicPlannerRaw(input: unknown) {
     graphName,
     graphSummary,
     entityRefs,
-    shots,
+    shots: normalizedShots,
     graphSettings: asRecord(record.graphSettings ?? record.settings) ?? {},
     diagnostics,
     assistantNotes,

@@ -1,18 +1,5 @@
-import {
-  applyEdgeChanges,
-  applyNodeChanges,
-  Background,
-  Controls,
-  MiniMap,
-  ReactFlow,
-  type Connection,
-  type Edge,
-  type EdgeChange,
-  type Node,
-  type NodeChange,
-  type ReactFlowInstance,
-} from '@xyflow/react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import type { Connection } from '@xyflow/react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { resolveAssetPreviewUrl, resolveAssetSourceUrl } from '../../domain/assets'
 import {
@@ -35,18 +22,19 @@ import type {
   NodeDefinition,
 } from '../../domain/graphcore'
 import {
-  applyTemplateToNode,
-  createNodeFromTemplate,
   graphNodeLibrary,
   graphNodeTemplatesByKey,
   summarizeCondition,
   summarizeEffects,
 } from '../../domain/nodeLibrary'
 import { getResolvedDefinition3dBinding } from '../../domain/render3d'
-import { FlowNodeCard } from '../graph/FlowNodeCard'
+import { getResourceGenerationMetadata, isPendingGenerationResource } from '../../domain/worldBuild'
+import { GraphCanvasStage } from '../graph/GraphCanvasStage'
 import { EdgeInspector, NodeInspector } from '../graph/inspectors'
-import type { GraphContextMenu, GraphNodeData, RailMode } from '../graph/types'
-import { filterTemplateGroup, getPlacementPosition, isTemplateAvailableForGraph, isTextInput, uniqueEdgeKey, uniqueGraphKey } from '../graph/utils'
+import type { RailMode } from '../graph/types'
+import { useGraphCanvasController } from '../graph/useGraphCanvasController'
+import { isTemplateAvailableForGraph, uniqueEdgeKey, uniqueGraphKey } from '../graph/utils'
+import type { WorldBuildBatch } from '../../domain/worldBuild'
 
 type CinematicRunMode = 'graph_run' | 'preview_still' | 'preview_video'
 
@@ -58,6 +46,7 @@ type CinematicsWorkspaceProps = {
   deletingGraphKey?: string | null
   diagnostics: Diagnostic[]
   gameSpec: GameSpec | null
+  worldBuildBatches?: WorldBuildBatch[]
   selectedEdge: EdgeDefinition | null
   selectedGraph: GraphDefinition | null
   selectedNode: NodeDefinition | null
@@ -97,6 +86,7 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
     deletingGraphKey = null,
     diagnostics,
     gameSpec,
+    worldBuildBatches = [],
     selectedEdge,
     selectedGraph,
     selectedNode,
@@ -128,6 +118,17 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
   const currentGraph = selectedGraph?.graphType === 'cinematic_flow'
     ? selectedGraph
     : null
+  const isCurrentGraphPending = isPendingGenerationResource(currentGraph)
+  const currentGraphGeneration = getResourceGenerationMetadata(currentGraph)
+  const currentGraphGenerationError = useMemo(() => {
+    const jobId = currentGraphGeneration?.jobId
+    if (!jobId) return null
+    for (const batch of worldBuildBatches) {
+      const job = batch.jobs.find((entry) => entry.id === jobId)
+      if (job?.errorMessage) return job.errorMessage
+    }
+    return null
+  }, [currentGraphGeneration?.jobId, worldBuildBatches])
   const currentNode = currentGraph?.nodes.find((node) => node.key === selectedNode?.key) ?? null
   const currentEdge = currentGraph?.edges.find((edge) => edge.key === selectedEdge?.key) ?? null
   const currentGraphRuns = useMemo(
@@ -139,70 +140,8 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
 
   const [railMode, setRailMode] = useState<RailMode | 'runs'>('graphs')
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
-  const [flowInstance, setFlowInstance] = useState<ReactFlowInstance<Node, Edge> | null>(null)
-  const [liveNodes, setLiveNodes] = useState<Node[]>([])
-  const [liveEdges, setLiveEdges] = useState<Edge[]>([])
-  const [contextMenu, setContextMenu] = useState<GraphContextMenu | null>(null)
-  const [contextMenuSearch, setContextMenuSearch] = useState('')
-  const canvasRef = useRef<HTMLDivElement | null>(null)
-  const contextMenuSearchRef = useRef<HTMLInputElement | null>(null)
   const isDeletingSelectedGraph = currentGraph?.key === deletingGraphKey
   const selectedRun = currentGraphRuns.find((run) => run.id === selectedRunId) ?? currentGraphRuns[0] ?? null
-
-  const nodes = useMemo<Node[]>(() => {
-    if (!currentGraph) return []
-
-    return currentGraph.nodes.map((node) => {
-      const previewAsset = resolveNodePreviewAsset(node, definitions, assets)
-      const shotRunStatus = node.type === 'cinematic_shot'
-        ? currentGraphRuns.find((run) => run.jobs.some((job) => job.shotNodeKey === node.key)) ?? null
-        : null
-
-      const data: GraphNodeData = {
-        node,
-        previewUrl: resolveAssetPreviewUrl(previewAsset),
-        conditionSummary: summarizeCondition(node.condition),
-        effectSummary: buildNodeMetaLines(node, shotRunStatus),
-      }
-
-      return {
-        id: node.key,
-        position: node.position,
-        type: 'graphNode',
-        data,
-      }
-    })
-  }, [assets, currentGraph, currentGraphRuns, definitions])
-
-  const edges = useMemo<Edge[]>(() => {
-    return (currentGraph?.edges ?? []).map((edge) => ({
-      id: edge.key,
-      source: edge.source.nodeKey,
-      sourceHandle: edge.source.portId ?? undefined,
-      target: edge.target.nodeKey,
-      targetHandle: edge.target.portId ?? 'in',
-      label: edge.condition ? (edge.label ? `${edge.label} [if]` : '[if]') : edge.label ?? undefined,
-      labelShowBg: Boolean(edge.condition),
-      labelBgStyle: edge.condition ? { fill: '#13202a', fillOpacity: 0.96 } : undefined,
-      labelStyle: edge.condition ? { fill: '#5eead4', fontSize: 11, fontWeight: 600 } : undefined,
-      animated: edge.source.portId === 'true' || edge.source.portId === 'false',
-    }))
-  }, [currentGraph])
-
-  useEffect(() => {
-    setLiveNodes(nodes)
-  }, [nodes])
-
-  useEffect(() => {
-    setLiveEdges(edges)
-  }, [edges])
-
-  useEffect(() => {
-    if (!contextMenu || contextMenu.kind !== 'pane') return
-    setContextMenuSearch('')
-    const timeout = window.setTimeout(() => contextMenuSearchRef.current?.focus(), 0)
-    return () => window.clearTimeout(timeout)
-  }, [contextMenu])
 
   useEffect(() => {
     if (!selectedRunId && currentGraphRuns.length > 0) {
@@ -215,31 +154,52 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
     }
   }, [currentGraphRuns, selectedRunId])
 
-  useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
-      if (!currentGraph) return
-      if (event.key === 'Escape') onClearSelection()
-      if (event.key.toLowerCase() === 'a' && !isTextInput(event.target)) {
-        event.preventDefault()
-        openPaletteAtCanvasCenter()
-      }
-      if (event.key.toLowerCase() === 'f' && !isTextInput(event.target)) {
-        event.preventDefault()
-        refocusViewport()
-      }
-      if ((event.key === 'Delete' || event.key === 'Backspace') && !isTextInput(event.target)) {
-        if (currentEdge) onDeleteEdge(currentGraph.key, currentEdge.key)
-        else if (currentNode) onDeleteNode(currentGraph.key, currentNode.key)
-      }
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'd' && currentNode) {
-        event.preventDefault()
-        onDuplicateNode(currentGraph.key, currentNode.key)
-      }
-    }
+  const buildNodeData = useCallback((node: NodeDefinition) => {
+    const previewAsset = resolveNodePreviewAsset(node, definitions, assets)
+    const shotRunStatus = node.type === 'cinematic_shot'
+      ? currentGraphRuns.find((run) => run.jobs.some((job) => job.shotNodeKey === node.key)) ?? null
+      : null
 
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [currentEdge, currentGraph, currentNode, onClearSelection, onDeleteEdge, onDeleteNode, onDuplicateNode])
+    return {
+      previewUrl: resolveAssetPreviewUrl(previewAsset),
+      conditionSummary: summarizeCondition(node.condition),
+      effectSummary: buildNodeMetaLines(node, shotRunStatus),
+    }
+  }, [assets, currentGraphRuns, definitions])
+
+  const {
+    applyTemplateChange,
+    canvasRef,
+    contextMenu,
+    contextMenuSearch,
+    contextMenuSearchRef,
+    handleConnect,
+    handleEdgesChange,
+    handleNodeContextMenu,
+    handleNodesChange,
+    handlePaneContextMenu,
+    liveEdges,
+    liveNodes,
+    placeTemplate,
+    setContextMenu,
+    setContextMenuSearch,
+    setFlowInstance,
+  } = useGraphCanvasController({
+    buildNodeData,
+    currentGraph,
+    currentNode,
+    currentEdge,
+    onClearSelection,
+    onConnectEdge,
+    onCreateNode,
+    onDeleteEdge,
+    onDeleteNode,
+    onDuplicateNode,
+    onMoveNode,
+    onSelectNode,
+    onUpdateNode,
+    resolveConnection: buildCinematicConnectionEdge,
+  })
 
   function createGraph() {
     onCreateGraph({
@@ -247,159 +207,6 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
       key: uniqueGraphKey(cinematicGraphs, `graph.cinematic_flow_${cinematicGraphs.length + 1}`),
       graphType: 'cinematic_flow',
       summary: 'Playable cinematic sequence graph.',
-    })
-  }
-
-  function placeTemplate(templateKey: string, positionOverride?: NodeDefinition['position']) {
-    if (!currentGraph) return
-    const template = graphNodeTemplatesByKey.get(templateKey)
-    if (!template) return
-    const count = currentGraph.nodes.filter((node) => node.templateKey === templateKey || node.type === template.baseNodeType).length + 1
-    const position = positionOverride ?? getPlacementPosition(currentGraph, currentNode, flowInstance, canvasRef.current)
-    onCreateNode(currentGraph.key, createNodeFromTemplate(currentGraph, template, count, position))
-    setContextMenu(null)
-  }
-
-  function handleNodesChange(changes: NodeChange<Node>[]) {
-    if (!currentGraph) return
-    setLiveNodes((current) => applyNodeChanges(changes, current))
-    for (const change of changes) {
-      if (change.type === 'position' && change.position && !change.dragging) {
-        onMoveNode(currentGraph.key, change.id, change.position)
-      }
-      if (change.type === 'remove') onDeleteNode(currentGraph.key, change.id)
-    }
-  }
-
-  function handleEdgesChange(changes: EdgeChange<Edge>[]) {
-    if (!currentGraph) return
-    setLiveEdges((current) => applyEdgeChanges(changes, current))
-    for (const change of changes) {
-      if (change.type === 'remove') onDeleteEdge(currentGraph.key, change.id)
-    }
-  }
-
-  function handleConnect(connection: Connection) {
-    if (!currentGraph || !connection.source || !connection.target) return
-
-    const sourceNode = currentGraph.nodes.find((node) => node.key === connection.source)
-    const targetNode = currentGraph.nodes.find((node) => node.key === connection.target)
-    if (!sourceNode || !targetNode) return
-
-    if (sourceNode.type === 'asset_ref' && targetNode.type !== 'cinematic_shot') return
-    if (targetNode.type === 'asset_ref') return
-
-    const sourceHandle = connection.sourceHandle ?? (sourceNode.type === 'asset_ref' ? 'asset_out' : 'out')
-    const targetHandle = connection.targetHandle ?? (
-      targetNode.type === 'cinematic_shot'
-        ? sourceNode.type === 'asset_ref'
-          ? 'asset_in'
-          : 'flow_in'
-        : 'in'
-    )
-    const edgeKey = uniqueEdgeKey(currentGraph, connection.source, connection.target)
-
-    onConnectEdge(currentGraph.key, {
-      id: `edge-${Date.now()}`,
-      key: edgeKey,
-      source: { nodeKey: connection.source, portId: sourceHandle },
-      target: { nodeKey: connection.target, portId: targetHandle },
-      label: null,
-      condition: null,
-      metadata: {},
-    })
-    setLiveEdges((current) => [
-      ...current,
-      {
-        id: edgeKey,
-        source: connection.source,
-        sourceHandle,
-        target: connection.target,
-        targetHandle,
-      },
-    ])
-  }
-
-  function handlePaneContextMenu(event: MouseEvent | React.MouseEvent<Element, MouseEvent>) {
-    event.preventDefault()
-    if (!flowInstance || !canvasRef.current) return
-    const flowPosition = flowInstance.screenToFlowPosition({ x: event.clientX, y: event.clientY })
-    setContextMenu({
-      kind: 'pane',
-      x: event.clientX - canvasRef.current.getBoundingClientRect().left,
-      y: event.clientY - canvasRef.current.getBoundingClientRect().top,
-      flowPosition,
-    })
-  }
-
-  function handleNodeContextMenu(event: React.MouseEvent, node: Node) {
-    event.preventDefault()
-    if (!canvasRef.current) return
-    onSelectNode(node.id)
-    setContextMenu({
-      kind: 'node',
-      nodeKey: node.id,
-      x: event.clientX - canvasRef.current.getBoundingClientRect().left,
-      y: event.clientY - canvasRef.current.getBoundingClientRect().top,
-    })
-  }
-
-  function openPaletteAtCanvasCenter() {
-    if (!flowInstance || !canvasRef.current) return
-    const rect = canvasRef.current.getBoundingClientRect()
-    const x = rect.width / 2
-    const y = rect.height / 2
-    const flowPosition = flowInstance.screenToFlowPosition({ x: rect.left + x, y: rect.top + y })
-    setContextMenu({
-      kind: 'pane',
-      x,
-      y,
-      flowPosition,
-    })
-  }
-
-  function refocusViewport() {
-    if (!flowInstance || !currentGraph) return
-    if (currentNode) {
-      void flowInstance.setCenter(currentNode.position.x + 120, currentNode.position.y + 48, {
-        zoom: 1.1,
-        duration: 240,
-      })
-      return
-    }
-    void flowInstance.fitView({ duration: 240, padding: 0.24 })
-  }
-
-  function applyTemplateChange(nodeKey: string, templateKey: string) {
-    if (!currentGraph) return
-    const existingNode = currentGraph.nodes.find((node) => node.key === nodeKey)
-    if (!existingNode || !graphNodeTemplatesByKey.get(templateKey)) return
-    const nextNode = applyTemplateToNode(existingNode, templateKey)
-    setLiveNodes((current) =>
-      current.map((node) =>
-        node.id === nodeKey
-          ? {
-              ...node,
-              data: {
-                ...(node.data as GraphNodeData),
-                node: nextNode,
-                conditionSummary: summarizeCondition(nextNode.condition),
-                effectSummary: summarizeEffects(nextNode.effects).slice(0, 2),
-              },
-            }
-          : node,
-      ),
-    )
-    onUpdateNode(currentGraph.key, nodeKey, {
-      type: nextNode.type,
-      templateKey: nextNode.templateKey,
-      subtitle: nextNode.subtitle,
-      body: nextNode.body,
-      condition: nextNode.condition,
-      effects: nextNode.effects,
-      ports: nextNode.ports,
-      display: nextNode.display,
-      metadata: nextNode.metadata,
     })
   }
 
@@ -437,7 +244,9 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
               {cinematicGraphs.map((graph) => (
                 <button key={graph.key} className={graph.key === currentGraph?.key ? 'rail-button is-active' : 'rail-button'} onClick={() => onSelectGraph(graph.key)} type="button">
                   <strong>{graph.name}</strong>
-                  <span>{graph.summary || graph.graphType}</span>
+                  <span className={isPendingGenerationResource(graph) ? 'world-build-rail-status' : undefined}>
+                    {isPendingGenerationResource(graph) ? <><span className="button-spinner item-row-spinner" aria-hidden="true" />Generating...</> : getResourceGenerationMetadata(graph)?.state === 'failed' ? 'Generation failed' : graph.summary || graph.graphType}
+                  </span>
                 </button>
               ))}
               {cinematicGraphs.length === 0 ? <div className="inline-note">No cinematic graphs yet. Create one to start sequencing shots.</div> : null}
@@ -510,85 +319,58 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
       </aside>
 
       <section className="main-surface graph-surface">
-        <div className="graph-toolbar cinematic-toolbar">
-          <select value={currentGraph?.key ?? ''} onChange={(event) => onSelectGraph(event.target.value || null)}>
-            {cinematicGraphs.length === 0 ? <option value="">No cinematic flows</option> : null}
-            {cinematicGraphs.map((graph) => <option key={graph.key} value={graph.key}>{graph.name}</option>)}
-          </select>
-          <input value={currentGraph?.name ?? ''} onChange={(event) => currentGraph && onUpdateGraph(currentGraph.key, { name: event.target.value })} placeholder="Cinematic flow name" />
-          <select value={graphSettings.specializationMode} onChange={(event) => updateGraphCinematics({ specializationMode: event.target.value as CinematicSettings['specializationMode'] })}>
-            <option value="story">Story</option>
-            <option value="ugc">UGC</option>
-          </select>
-          <button className="ghost-button compact" onClick={() => currentGraph && onDuplicateGraph(currentGraph.key)} type="button">Duplicate</button>
-          <button className={isDeletingSelectedGraph ? 'ghost-button compact button-with-spinner' : 'ghost-button compact'} disabled={isDeletingSelectedGraph} onClick={() => currentGraph && onDeleteGraph(currentGraph.key)} type="button">{isDeletingSelectedGraph ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}</button>
-          <button className="primary-button compact" disabled={!currentGraph || !canRunCinematics} onClick={() => currentGraph && onStartCinematicRun({ graphKey: currentGraph.key, mode: 'graph_run' })} type="button">Run Cinematic</button>
-        </div>
-        <div className="canvas-stage graph-canvas" ref={canvasRef}>
-          <ReactFlow
-            fitView
-            nodes={liveNodes}
-            edges={liveEdges}
-            nodeTypes={{ graphNode: FlowNodeCard }}
-            nodesDraggable
-            nodesConnectable
-            onInit={setFlowInstance}
-            onNodeClick={(_, node) => onSelectNode(node.id)}
-            onNodeContextMenu={handleNodeContextMenu}
-            onEdgeClick={(_, edge) => onSelectEdge(edge.id)}
-            onPaneClick={() => {
-              setContextMenu(null)
-              onClearSelection()
-            }}
-            onPaneContextMenu={handlePaneContextMenu}
-            onNodesChange={handleNodesChange}
-            onEdgesChange={handleEdgesChange}
-            onConnect={handleConnect}
-          >
-            <MiniMap />
-            <Controls />
-            <Background />
-          </ReactFlow>
-          {contextMenu ? (
-            <div className="graph-context-menu" style={{ left: contextMenu.x, top: contextMenu.y }}>
-              {contextMenu.kind === 'pane' ? (
-                <>
-                  <span className="section-label">Add Node</span>
-                  <input
-                    ref={contextMenuSearchRef}
-                    className="context-menu-search"
-                    placeholder="Search nodes..."
-                    value={contextMenuSearch}
-                    onChange={(event) => setContextMenuSearch(event.target.value)}
-                  />
-                  {graphNodeLibrary.map((group) => (
-                    filterTemplateGroup(group, contextMenuSearch, currentGraph).length > 0 ? (
-                      <div key={group.key} className="context-menu-group">
-                        <strong>{group.label}</strong>
-                        <div className="context-menu-list">
-                          {filterTemplateGroup(group, contextMenuSearch, currentGraph)
-                            .map((template) => (
-                              <button key={template.key} className="context-menu-item" onClick={() => placeTemplate(template.key, contextMenu.flowPosition)} type="button">
-                                <span>{template.label}</span>
-                                <small>{template.baseNodeType}</small>
-                              </button>
-                            ))}
-                        </div>
-                      </div>
-                    ) : null
-                  ))}
-                </>
-              ) : (
-                <>
-                  <span className="section-label">Node Actions</span>
-                  <button className="context-menu-item" onClick={() => { currentGraph && onDuplicateNode(currentGraph.key, contextMenu.nodeKey); setContextMenu(null) }} type="button"><span>Duplicate Node</span></button>
-                  <button className="context-menu-item danger" onClick={() => { currentGraph && onDeleteNode(currentGraph.key, contextMenu.nodeKey); setContextMenu(null) }} type="button"><span>Delete Node</span></button>
-                </>
-              )}
-            </div>
-          ) : null}
-        </div>
+        {isCurrentGraphPending ? (
+          <div className="graph-toolbar cinematic-toolbar">
+            <div className="inline-note">This cinematic flow is still generating. Run controls unlock when the job completes.</div>
+          </div>
+        ) : (
+          <div className="graph-toolbar cinematic-toolbar">
+            <select value={currentGraph?.key ?? ''} onChange={(event) => onSelectGraph(event.target.value || null)}>
+              {cinematicGraphs.length === 0 ? <option value="">No cinematic flows</option> : null}
+              {cinematicGraphs.map((graph) => <option key={graph.key} value={graph.key}>{graph.name}</option>)}
+            </select>
+            <input value={currentGraph?.name ?? ''} onChange={(event) => currentGraph && onUpdateGraph(currentGraph.key, { name: event.target.value })} placeholder="Cinematic flow name" />
+            <select value={graphSettings.specializationMode} onChange={(event) => updateGraphCinematics({ specializationMode: event.target.value as CinematicSettings['specializationMode'] })}>
+              <option value="story">Story</option>
+              <option value="ugc">UGC</option>
+            </select>
+            <button className="ghost-button compact" onClick={() => currentGraph && onDuplicateGraph(currentGraph.key)} type="button">Duplicate</button>
+            <button className={isDeletingSelectedGraph ? 'ghost-button compact button-with-spinner' : 'ghost-button compact'} disabled={isDeletingSelectedGraph} onClick={() => currentGraph && onDeleteGraph(currentGraph.key)} type="button">{isDeletingSelectedGraph ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}</button>
+            <button className="primary-button compact" disabled={!currentGraph || !canRunCinematics} onClick={() => currentGraph && onStartCinematicRun({ graphKey: currentGraph.key, mode: 'graph_run' })} type="button">Run Cinematic</button>
+          </div>
+        )}
+        <GraphCanvasStage
+          canvasRef={canvasRef}
+          contextMenu={contextMenu}
+          contextMenuSearch={contextMenuSearch}
+          contextMenuSearchRef={contextMenuSearchRef}
+          currentGraph={currentGraph}
+          handleConnect={handleConnect}
+          handleEdgesChange={handleEdgesChange}
+          handleNodeContextMenu={handleNodeContextMenu}
+          handleNodesChange={handleNodesChange}
+          handlePaneContextMenu={handlePaneContextMenu}
+          isPending={isCurrentGraphPending}
+          isDeletingSelectedGraph={isDeletingSelectedGraph}
+          liveEdges={liveEdges}
+          liveNodes={liveNodes}
+          onClearSelection={onClearSelection}
+          onDeleteGraph={onDeleteGraph}
+          onDeleteNode={onDeleteNode}
+          onDuplicateNode={onDuplicateNode}
+          onSelectEdge={onSelectEdge}
+          onSelectNode={onSelectNode}
+          pendingLabel="cinematic flow"
+          pendingTitle={currentGraph?.name ?? 'Pending cinematic flow'}
+          placeTemplate={placeTemplate}
+          setContextMenu={setContextMenu}
+          setContextMenuSearch={setContextMenuSearch}
+          setFlowInstance={setFlowInstance}
+        />
         <div className="graph-diagnostic-row">
+          {currentGraphGeneration?.state === 'failed' ? (
+            <div className="inline-note is-danger">{currentGraphGenerationError ?? 'This cinematic flow failed to generate.'}</div>
+          ) : null}
           {(diagnostics.filter((item) => item.graphKey === currentGraph?.key).slice(0, 4)).map((diagnostic, index) => (
             <div key={`${diagnostic.code}-${diagnostic.nodeKey ?? 'graph'}-${index}`} className={`inline-note is-${diagnostic.level}`}>{diagnostic.message}</div>
           ))}
@@ -596,8 +378,20 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
       </section>
 
       <aside className="context-drawer">
-        {currentEdge && currentGraph ? (
+        {currentGraph && isCurrentGraphPending ? (
+          <div className="detail-stack compact world-build-loading-shell">
+            <span className="eyebrow">Cinematic Placeholder</span>
+            <h3>{currentGraph.name}</h3>
+            <div className="inline-note">Inspector controls are hidden until cinematic generation completes.</div>
+          </div>
+        ) : currentEdge && currentGraph ? (
           <EdgeInspector definitions={definitions} edge={currentEdge} onUpdate={(changes) => onUpdateEdge(currentGraph.key, currentEdge.key, changes)} />
+        ) : currentGraphGeneration?.state === 'failed' && currentGraph ? (
+          <div className="detail-stack compact world-build-loading-shell">
+            <span className="eyebrow">Cinematic Generation Failed</span>
+            <h3>{currentGraph.name}</h3>
+            <div className="inline-note danger">{currentGraphGenerationError ?? 'This cinematic flow failed to generate.'}</div>
+          </div>
         ) : currentNode && currentGraph ? (
           currentNode.type === 'asset_ref' ? (
             <AssetRefInspector
@@ -1088,6 +882,36 @@ function collectShotSources(graph: GraphDefinition, shotNode: NodeDefinition, de
       const asset = resolveDefinitionPreviewAsset(definition, assets)
       return { node, definition, asset }
     })
+}
+
+function buildCinematicConnectionEdge(connection: Connection, graph: GraphDefinition) {
+  if (!connection.source || !connection.target) return null
+
+  const sourceNode = graph.nodes.find((node) => node.key === connection.source)
+  const targetNode = graph.nodes.find((node) => node.key === connection.target)
+  if (!sourceNode || !targetNode) return null
+
+  if (sourceNode.type === 'asset_ref' && targetNode.type !== 'cinematic_shot') return null
+  if (targetNode.type === 'asset_ref') return null
+
+  const sourceHandle = connection.sourceHandle ?? (sourceNode.type === 'asset_ref' ? 'asset_out' : 'out')
+  const targetHandle = connection.targetHandle ?? (
+    targetNode.type === 'cinematic_shot'
+      ? sourceNode.type === 'asset_ref'
+        ? 'asset_in'
+        : 'flow_in'
+      : 'in'
+  )
+
+  return {
+    id: `edge-${Date.now()}`,
+    key: uniqueEdgeKey(graph, connection.source, connection.target),
+    source: { nodeKey: connection.source, portId: sourceHandle },
+    target: { nodeKey: connection.target, portId: targetHandle },
+    label: null,
+    condition: null,
+    metadata: {},
+  } satisfies EdgeDefinition
 }
 
 function mapDefinitionKindToAssetRole(kind: DefinitionBase['kind'] | null) {

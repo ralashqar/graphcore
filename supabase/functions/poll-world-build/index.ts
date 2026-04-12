@@ -179,6 +179,35 @@ function formatIssues(issues: Array<{ path: PropertyKey[]; message: string }>) {
   return issues.map((issue) => `${issue.path.join('.') || '<root>'}: ${issue.message}`).join(' | ')
 }
 
+async function readInvokeErrorMessage(error: { message?: string; context?: unknown } | null | undefined) {
+  if (!error) return 'Unknown Edge Function error.'
+  const context = error.context
+  if (!(context instanceof Response)) {
+    return error.message ?? 'Unknown Edge Function error.'
+  }
+
+  try {
+    const payload = await context.clone().json() as { error?: unknown }
+    if (typeof payload.error === 'string' && payload.error.trim()) {
+      return payload.error
+    }
+    if (payload.error !== undefined) {
+      return JSON.stringify(payload.error)
+    }
+  } catch {
+    // fall through to text body
+  }
+
+  try {
+    const text = await context.clone().text()
+    if (text.trim()) return text
+  } catch {
+    // ignore secondary parse failure
+  }
+
+  return error.message ?? `Edge Function failed with HTTP ${context.status}.`
+}
+
 function describeTopLevelKeys(value: unknown) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return '<not-an-object>'
   const keys = Object.keys(value as Record<string, unknown>)
@@ -1203,7 +1232,15 @@ Deno.serve(async (request) => {
               })
 
               if (cinematicStart.error || !cinematicStart.data) {
-                throw new Error(cinematicStart.error?.message ?? 'Failed to start child cinematic run.')
+                const detailedMessage = await readInvokeErrorMessage(cinematicStart.error ?? null)
+                console.error('[GraphCore] child cinematic run start failed during world-build polling.', {
+                  batchId: batch.id,
+                  worldBuildJobId: job.id,
+                  graphKey,
+                  message: cinematicStart.error?.message ?? null,
+                  detailedMessage,
+                })
+                throw new Error(detailedMessage || cinematicStart.error?.message || 'Failed to start child cinematic run.')
               }
 
               const childRun = cinematicRunStatusResponseSchema.parse(cinematicStart.data)
@@ -1327,7 +1364,7 @@ Deno.serve(async (request) => {
             })
           }
 
-          if (job.kind === 'narrative_graph' && job.target_keys?.graphKey) {
+          if ((job.kind === 'narrative_graph' || job.kind === 'cinematic_graph') && job.target_keys?.graphKey) {
             await markGraphGenerationState(client, batch.draft_id, job.target_keys.graphKey, {
               batchId: batch.id,
               jobId: job.id,

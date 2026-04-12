@@ -1,10 +1,12 @@
 import type { AssetDefinition, DefinitionBase, Diagnostic, EdgeDefinition, GraphCreateInput, GraphDefinition, NodeDefinition } from '../../domain/graphcore'
+import type { WorldBuildBatch } from '../../domain/worldBuild'
 
 export type GraphWorkspaceProps = {
   assets: AssetDefinition[]
   deletingGraphKey?: string | null
   definitions: DefinitionBase[]
   diagnostics: Diagnostic[]
+  worldBuildBatches?: WorldBuildBatch[]
   selectedEdge: EdgeDefinition | null
   selectedGraph: GraphDefinition | null
   selectedNode: NodeDefinition | null
