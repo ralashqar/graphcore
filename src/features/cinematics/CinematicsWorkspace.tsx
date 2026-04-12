@@ -853,7 +853,7 @@ function CinematicShotInspector({
   const config = getCinematicShotNodeConfig(node)
   const sources = collectShotSources(currentGraph, node, definitions, assets)
   const missingSources = sources.filter((source) => !resolveAssetSourceUrl(source.asset))
-  const canGenerateStill = sources.length > 0 && missingSources.length === 0
+  const canGenerateStill = sources.length > 0
   const stillAsset = assets.find((asset) => asset.key === config.stillAssetKey) ?? null
   const videoAsset = assets.find((asset) => asset.key === config.videoAssetKey) ?? null
   const latestRun = runs.find((run) => run.jobs.some((job) => job.shotNodeKey === node.key)) ?? null
@@ -948,7 +948,7 @@ function CinematicShotInspector({
         <button className="primary-button compact" disabled={!canRunCinematics || (!stillAsset && !canGenerateStill)} onClick={() => onGenerate('preview_video')} type="button">Generate Clip</button>
       </div>
       {!canRunCinematics ? <div className="inline-note">Connect to a live Supabase workspace before starting cinematic generation jobs.</div> : null}
-      {missingSources.length > 0 ? <div className="inline-note is-warning">Every connected source needs a usable preview image before the shot can generate.</div> : null}
+      {missingSources.length > 0 ? <div className="inline-note is-warning">Sources without preview images will fall back to text-only context. Add preview art for stronger composition control.</div> : null}
       {latestRun ? <div className="inline-note">Latest run: {formatRunLabel(latestRun)}</div> : null}
 
       <div className="editor-section compact-section">

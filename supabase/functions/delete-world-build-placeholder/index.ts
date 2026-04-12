@@ -11,6 +11,8 @@ import {
 import { requireUserClient } from '../_shared/auth.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
 
+// Keep the hosted bundle in sync when shared world-build schemas change.
+
 type BatchRow = {
   id: string
   draft_id: string

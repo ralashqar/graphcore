@@ -2510,6 +2510,7 @@ export default function App() {
                 onDeleteEnvironmentBlueprint={deleteEnvironmentBlueprint}
                 onGeneratePrompt={handleGeneratePatch}
                 onStartMeshGeneration={(definitionKey) => void startMeshGenerationForDefinition(definitionKey)}
+                onPersistDefinitionPreviewImageBinding={(definitionKey, assetKey) => workspaceService.persistDefinitionPreviewImageBinding(snapshot, definitionKey, assetKey)}
                 onSelectAsset={setSelectedAssetKey}
                 onSelectDefinition={setSelectedDefinitionKey}
                 onUpsertAssemblyGraph={upsertAssemblyGraph}
@@ -2552,6 +2553,7 @@ export default function App() {
                 onDeleteEnvironmentBlueprint={deleteEnvironmentBlueprint}
                 onGeneratePrompt={handleGeneratePatch}
                 onStartMeshGeneration={(definitionKey) => void startMeshGenerationForDefinition(definitionKey)}
+                onPersistDefinitionPreviewImageBinding={(definitionKey, assetKey) => workspaceService.persistDefinitionPreviewImageBinding(snapshot, definitionKey, assetKey)}
                 onSelectAsset={setSelectedAssetKey}
                 onSelectDefinition={setSelectedDefinitionKey}
                 onUpsertAssemblyGraph={upsertAssemblyGraph}

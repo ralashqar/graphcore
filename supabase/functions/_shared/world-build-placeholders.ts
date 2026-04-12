@@ -1,3 +1,5 @@
+import { normalizeNode } from '../../../src/domain/nodeLibrary.ts'
+
 export type DefinitionKind = 'item' | 'character' | 'environment'
 
 export type ComponentEnvelope = {
@@ -207,7 +209,7 @@ export function createGraphScaffold(input: {
     metadata: {},
     llmHints: {},
     nodes: [
-      {
+      normalizeNode({
         id: `node-start-${now}`,
         key: startNodeKey,
         type: 'start',
@@ -221,8 +223,8 @@ export function createGraphScaffold(input: {
         ports: [],
         display: { iconAssetKey: null, compactPreview: false },
         metadata: {},
-      },
-      {
+      }),
+      normalizeNode({
         id: `node-end-${now + 1}`,
         key: endNodeKey,
         type: 'end',
@@ -236,7 +238,7 @@ export function createGraphScaffold(input: {
         ports: [],
         display: { iconAssetKey: null, compactPreview: false },
         metadata: {},
-      },
+      }),
     ],
     edges: [
       {

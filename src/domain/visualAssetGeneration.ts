@@ -51,6 +51,17 @@ export type ItemConceptPromptInput = {
   visualDescription: string
 }
 
+export type EnvironmentConceptPromptInput = {
+  artStyleDescription?: string | null
+  artStylePresetLabel?: string | null
+  archetypeLabel?: string | null
+  environmentName?: string | null
+  projectContextDescription?: string | null
+  subtype?: string | null
+  lightingProfile?: string | null
+  visualDescription: string
+}
+
 export function isValidImageFileEntry(value: unknown): value is { url: string; content_type?: string; file_name?: string } {
   if (!value || typeof value !== 'object') {
     return false
@@ -162,6 +173,24 @@ export function buildItemConceptPrompt(input: ItemConceptPromptInput) {
     'Show one clearly readable hero object, centered in frame, fully visible, with no hands, characters, UI, labels, logo marks, borders, or collage layout.',
     'Use a clean neutral or studio-style background so silhouette, materials, and gameplay-readable details are clear.',
     `Item visual description: ${input.visualDescription.trim()}.`,
+  ]
+
+  return sections.filter(Boolean).join(' ')
+}
+
+export function buildEnvironmentConceptPrompt(input: EnvironmentConceptPromptInput) {
+  const sections = [
+    input.environmentName?.trim() ? `Environment: ${input.environmentName.trim()}.` : null,
+    input.subtype?.trim() ? `Subtype: ${input.subtype.trim()}.` : null,
+    input.archetypeLabel?.trim() ? `Archetype: ${input.archetypeLabel.trim()}.` : null,
+    input.lightingProfile?.trim() ? `Lighting direction: ${input.lightingProfile.trim()}.` : null,
+    'Create a polished hero concept image for a game environment or set piece.',
+    'Render it in the game\'s final visual language, not as a rough paintover, sketch, mood board, cinematic poster, or top-down map.',
+    input.artStylePresetLabel?.trim() ? `Universal game art style: ${input.artStylePresetLabel.trim()}.` : null,
+    input.artStyleDescription?.trim() ? `Additional art direction: ${input.artStyleDescription.trim()}.` : null,
+    input.projectContextDescription?.trim() ? `Project context: ${input.projectContextDescription.trim()}.` : null,
+    'Show one clear environment view with strong spatial readability, grounded scale cues, and no UI, text, logos, borders, or collage layout.',
+    `Environment visual description: ${input.visualDescription.trim()}.`,
   ]
 
   return sections.filter(Boolean).join(' ')

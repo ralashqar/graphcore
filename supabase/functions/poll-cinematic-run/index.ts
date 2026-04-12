@@ -172,18 +172,14 @@ Deno.serve(async (request) => {
 
       if (job.kind === 'shot_still') {
         const imageUrls = sourceInputs.map((entry) => entry.imageUrl).filter((entry): entry is string => Boolean(entry))
-        if (imageUrls.length === 0) {
-          await client.from('cinematic_run_jobs').update({
-            status: 'failed',
-            error_message: 'At least one referenced source asset must expose a preview image before still generation can run.',
-          }).eq('id', job.id)
-          break
-        }
+        const stillModel = imageUrls.length > 0
+          ? Deno.env.get('CINEMATIC_STILL_FAL_MODEL') ?? 'fal-ai/nano-banana-2/edit'
+          : Deno.env.get('CINEMATIC_STILL_TEXT_FAL_MODEL') ?? 'fal-ai/nano-banana-2'
 
         const falResponse = await client.functions.invoke('ai-fal', {
           body: {
             action: 'subscribe',
-            model: Deno.env.get('CINEMATIC_STILL_FAL_MODEL') ?? 'fal-ai/nano-banana-2/edit',
+            model: stillModel,
             input: {
               prompt: job.prompt || buildStillPrompt({
                 snapshot: payload.snapshot,
@@ -191,11 +187,11 @@ Deno.serve(async (request) => {
                 shotNode,
                 sourceInputs,
               }),
-              image_urls: imageUrls,
               num_images: 1,
               aspect_ratio: settings.stillAspectRatio,
               output_format: 'png',
               resolution: settings.stillResolution,
+              ...(imageUrls.length > 0 ? { image_urls: imageUrls } : {}),
             },
             logs: true,
             timeoutMs: 120000,
@@ -233,7 +229,7 @@ Deno.serve(async (request) => {
           metadata: {
             generatedBy: 'cinematic_still',
             provider: 'fal',
-            model: (falResponse.data as { model?: unknown } | null)?.model ?? Deno.env.get('CINEMATIC_STILL_FAL_MODEL') ?? 'fal-ai/nano-banana-2/edit',
+            model: (falResponse.data as { model?: unknown } | null)?.model ?? stillModel,
             requestId: (falResponse.data as { requestId?: unknown } | null)?.requestId ?? null,
             prompt: job.prompt,
           },
@@ -244,11 +240,12 @@ Deno.serve(async (request) => {
           status: 'succeeded',
           still_asset_key: storedAsset.key,
           provider: 'fal',
-          model: (falResponse.data as { model?: unknown } | null)?.model ?? Deno.env.get('CINEMATIC_STILL_FAL_MODEL') ?? 'fal-ai/nano-banana-2/edit',
+          model: (falResponse.data as { model?: unknown } | null)?.model ?? stillModel,
           provider_request_id: (falResponse.data as { requestId?: unknown } | null)?.requestId ?? null,
           result_context: {
             imageUrl,
             stillAssetKey: storedAsset.key,
+            sourceImageCount: imageUrls.length,
           },
         }).eq('id', job.id)
 
@@ -257,7 +254,7 @@ Deno.serve(async (request) => {
           metadata: {
             stillAssetKey: storedAsset.key,
             provider: 'fal',
-            providerModel: String((falResponse.data as { model?: unknown } | null)?.model ?? Deno.env.get('CINEMATIC_STILL_FAL_MODEL') ?? 'fal-ai/nano-banana-2/edit'),
+            providerModel: String((falResponse.data as { model?: unknown } | null)?.model ?? stillModel),
             providerRequestId: String((falResponse.data as { requestId?: unknown } | null)?.requestId ?? ''),
           },
         })
@@ -266,7 +263,7 @@ Deno.serve(async (request) => {
           metadata: {
             stillAssetKey: storedAsset.key,
             provider: 'fal',
-            providerModel: String((falResponse.data as { model?: unknown } | null)?.model ?? Deno.env.get('CINEMATIC_STILL_FAL_MODEL') ?? 'fal-ai/nano-banana-2/edit'),
+            providerModel: String((falResponse.data as { model?: unknown } | null)?.model ?? stillModel),
             providerRequestId: String((falResponse.data as { requestId?: unknown } | null)?.requestId ?? ''),
           },
         })

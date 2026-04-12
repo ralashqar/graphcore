@@ -1038,6 +1038,26 @@ Deno.serve(async (request) => {
 
             if (assetUpdate.error) throw new Error(assetUpdate.error.message)
 
+            const shouldBindDefinitionIcon =
+              job.kind === 'character_concept_image'
+              || job.kind === 'item_concept_image'
+              || job.target_keys?.view === 'hero'
+
+            if (shouldBindDefinitionIcon) {
+              const definitionUpdate = await client
+                .from('project_definitions')
+                .update({
+                  icon_asset_key: assetKey,
+                  updated_by: user.id,
+                })
+                .eq('draft_id', batch.draft_id)
+                .eq('key', definitionKey)
+
+              if (definitionUpdate.error) {
+                throw new Error(definitionUpdate.error.message)
+              }
+            }
+
             await updateJob(client, job.id, {
               status: 'succeeded',
               result_context: {
@@ -1096,28 +1116,6 @@ Deno.serve(async (request) => {
                 .filter((value): value is string => typeof value === 'string' && value.length > 0),
             ))
             const cinematicAssets = await loadProjectAssetsByKeys(client, batch.project_id, displayAssetKeys)
-            const missingPreviewRefs = resolvedEntityRefs.filter((entityRef) => {
-              const definition = cinematicDefinitions.find((entry) => entry.key === entityRef.definitionKey)
-              const assetKey = definition ? resolveDefinitionDisplayAssetKey(definition as {
-                key: string
-                kind: string
-                name: string
-                iconAssetKey?: string | null
-                components?: Array<{ type?: string; config?: Record<string, unknown> }>
-              }) : null
-              const asset = cinematicAssets.find((entry) => entry.key === assetKey) ?? null
-              return !asset || !resolveAssetUrl(asset as {
-                key: string
-                name: string
-                kind: string
-                metadata?: Record<string, unknown>
-              })
-            })
-
-            if (missingPreviewRefs.length > 0) {
-              throw new Error(`Cinematic dependencies are missing usable preview images: ${missingPreviewRefs.map((entry) => entry.sourceName).join(', ')}`)
-            }
-
             let authorPlan = buildFallbackAuthorPlan({
               cinematicPlan: cinematicPlan.data,
               resolvedEntityRefs,

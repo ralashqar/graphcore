@@ -216,6 +216,7 @@ async function insertPlaceholderDefinition(
     kind: DefinitionKind
     name: string
     summary: string
+    iconAssetKey?: string | null
     metadata: Record<string, unknown>
     assetRefs: Array<Record<string, unknown>>
     components: ComponentEnvelope[]
@@ -228,7 +229,7 @@ async function insertPlaceholderDefinition(
     name: definition.name,
     summary: definition.summary,
     status: 'draft',
-    icon_asset_key: null,
+    icon_asset_key: definition.iconAssetKey ?? null,
     archetype_key: null,
     tags: [],
     schema_version: 1,
@@ -391,7 +392,6 @@ Deno.serve(async (request) => {
     const planJobIds = new Map<string, string>()
     const planTargetKeys = new Map<string, Record<string, string>>()
     const assetJobIds = new Map<string, string>()
-    const planReadyJobIds = new Map<string, string>()
     const orderSeed = { value: 0 }
 
     function nextOrder() {
@@ -420,8 +420,6 @@ Deno.serve(async (request) => {
         error_message: null,
         order_index: nextOrder(),
       })
-      planReadyJobIds.set(item.id, definitionJobId)
-
       if ((item.kind === 'character' || item.kind === 'item') && item.generationOptions.generateConceptImage) {
         const assetKey = buildAssetKey(item.name, 'concept', assetKeyState)
         const assetJobId = crypto.randomUUID()
@@ -441,7 +439,6 @@ Deno.serve(async (request) => {
         })
         assetJobIds.set(assetKey, assetJobId)
         planTargetKeys.set(item.id, { definitionKey, assetKey })
-        planReadyJobIds.set(item.id, assetJobId)
       }
 
       if (item.kind === 'environment' && item.generationOptions.generateConceptGallery) {
@@ -465,9 +462,6 @@ Deno.serve(async (request) => {
             order_index: nextOrder(),
           })
           assetJobIds.set(assetKey, assetJobId)
-          if (view === 'hero') {
-            planReadyJobIds.set(item.id, assetJobId)
-          }
         }
         planTargetKeys.set(item.id, targetKeys)
       }
@@ -499,7 +493,7 @@ Deno.serve(async (request) => {
       const graphJobId = crypto.randomUUID()
       const graphKey = buildGraphKey(item.name, graphKeyState)
       const dependsOnJobIds = item.dependsOn
-        .map((planItemId) => planReadyJobIds.get(planItemId) ?? planJobIds.get(planItemId))
+        .map((planItemId) => planJobIds.get(planItemId))
         .filter((value): value is string => Boolean(value))
       jobsToInsert.push({
         id: graphJobId,
@@ -611,6 +605,10 @@ Deno.serve(async (request) => {
           kind: item.kind === 'character' ? 'character' : item.kind === 'environment' ? 'environment' : 'item',
           name: item.name,
           summary: item.summary,
+          iconAssetKey:
+            item.kind === 'environment'
+              ? (targetKeys['assetKey:hero'] ?? null)
+              : (targetKeys.assetKey ?? null),
           metadata: {
             generation: createGenerationMetadata(batchId, definitionJobId),
           },

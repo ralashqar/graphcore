@@ -2452,17 +2452,26 @@ export async function persistDefinitionPreviewImageBinding(
     throw new Error(`Definition ${definitionKey} was not found in the current snapshot.`)
   }
 
-  const renderBindingComponent = definition.components.find((component) => component.type === 'render_3d_binding')
+  const componentType = definition.kind === 'environment' ? 'environment_render_binding' : 'render_3d_binding'
+  const renderBindingComponent = definition.components.find((component) => component.type === componentType)
   const currentRenderBinding =
     renderBindingComponent && typeof renderBindingComponent.config === 'object' && renderBindingComponent.config !== null
       ? renderBindingComponent.config as Record<string, unknown>
-      : {
-          primaryMeshAssetKey: null,
-          previewImageAssetKey: null,
-          conceptPrompt: null,
-          generationPrompt: null,
-          generationStyle: null,
-        }
+      : definition.kind === 'environment'
+        ? {
+            primaryMeshAssetKey: null,
+            previewImageAssetKey: null,
+            lightingProfile: '',
+            generationPrompt: null,
+            generationStyle: null,
+          }
+        : {
+            primaryMeshAssetKey: null,
+            previewImageAssetKey: null,
+            conceptPrompt: null,
+            generationPrompt: null,
+            generationStyle: null,
+          }
 
   const definitionResponse = await supabase
     .from('project_definitions')
@@ -2478,7 +2487,7 @@ export async function persistDefinitionPreviewImageBinding(
     .from('project_definition_components')
     .select('id')
     .eq('definition_id', definitionResponse.data.id)
-    .eq('component_type', 'render_3d_binding')
+    .eq('component_type', componentType)
     .maybeSingle()
 
   if (componentResponse.error) throw new Error(componentResponse.error.message)
@@ -2493,7 +2502,7 @@ export async function persistDefinitionPreviewImageBinding(
       .from('project_definition_components')
       .update({ config: nextRenderBinding })
       .eq('definition_id', definitionResponse.data.id)
-      .eq('component_type', 'render_3d_binding')
+      .eq('component_type', componentType)
 
     if (updateResponse.error) throw new Error(updateResponse.error.message)
   } else {
@@ -2501,14 +2510,14 @@ export async function persistDefinitionPreviewImageBinding(
       .from('project_definition_components')
       .insert({
         definition_id: definitionResponse.data.id,
-        component_type: 'render_3d_binding',
+        component_type: componentType,
         config: nextRenderBinding,
       })
 
     if (insertResponse.error) throw new Error(insertResponse.error.message)
   }
 
-  if (definition.kind === 'item') {
+  if (definition.kind === 'item' || definition.kind === 'environment') {
     const updateDefinitionResponse = await supabase
       .from('project_definitions')
       .update({ icon_asset_key: assetKey })
