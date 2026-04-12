@@ -29,6 +29,7 @@ const requestSchema = z.object({
     archetypes: z.array(z.record(z.string(), z.unknown())).default([]),
     graphs: z.array(z.record(z.string(), z.unknown())).default([]),
     assets: z.array(z.record(z.string(), z.unknown())).default([]),
+    gameSpec: z.record(z.string(), z.unknown()).nullable().optional(),
   }),
   context: z.object({
     graphKey: z.string().nullable().optional(),

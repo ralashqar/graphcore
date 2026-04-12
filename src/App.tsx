@@ -59,8 +59,8 @@ const SpecializedDefinitionWorkspace = lazy(() =>
 const ActivityWorkspace = lazy(() =>
   import('./features/prompts/ActivityWorkspace').then((module) => ({ default: module.ActivityWorkspace })),
 )
-const ReleasesWorkspace = lazy(() =>
-  import('./features/releases/ReleasesWorkspace').then((module) => ({ default: module.ReleasesWorkspace })),
+const GlobalWorkspace = lazy(() =>
+  import('./features/global/GlobalWorkspace').then((module) => ({ default: module.GlobalWorkspace })),
 )
 
 function uniqueKey(existingKeys: string[], seed: string) {
@@ -234,6 +234,26 @@ function mergeMeshGenerationStatusIntoSnapshot(snapshot: ProjectSnapshot, status
   })
 }
 
+function buildLocalMeshGenerationFailureStatus(
+  job: ProjectSnapshot['meshGenerationJobs'][number],
+  errorMessage: string,
+): MeshGenerationStatusResponse {
+  const timestamp = new Date().toISOString()
+  return {
+    jobs: [
+      {
+        ...job,
+        status: 'failed',
+        errorMessage,
+        updatedAt: timestamp,
+      },
+    ],
+    definitions: [],
+    assets: [],
+    deletedAssetKeys: [job.targetMeshAssetKey],
+  }
+}
+
 function clearAssetReferences<T>(value: T, assetKey: string): T {
   if (Array.isArray(value)) {
     return value.map((entry) => clearAssetReferences(entry, assetKey)) as T
@@ -350,11 +370,13 @@ export default function App() {
   const [bootstrapArtStyleDescription, setBootstrapArtStyleDescription] = useState('')
   const [bootstrapOnboardingOpen, setBootstrapOnboardingOpen] = useState(false)
   const [hasLocalSnapshotChanges, setHasLocalSnapshotChanges] = useState(false)
+  const [globalWorkspaceAutoFocusReleasesNonce, setGlobalWorkspaceAutoFocusReleasesNonce] = useState(0)
   const [isPending, startTransition] = useTransition()
   const { promptText, selectedDefinitionKey, selectedEdgeKey, selectedGraphKey, selectedNodeKey, setPromptText, setSelectedDefinitionKey, setSelectedEdgeKey, setSelectedGraphKey, setSelectedNodeKey } = useEditorStore()
   const sessionRef = useRef<Session | null>(null)
   const worldBuildPollInFlightRef = useRef(false)
   const meshGenerationPollInFlightRef = useRef(false)
+  const meshGenerationPollFailureCountsRef = useRef(new Map<string, number>())
   const announcedWorldBuildBatchIdsRef = useRef<Set<string>>(new Set())
   const deletingDefinitionKey = deletingTarget?.resourceType === 'definition' ? deletingTarget.key : null
   const deletingGraphKey = deletingTarget?.resourceType === 'graph' ? deletingTarget.key : null
@@ -654,22 +676,55 @@ export default function App() {
 
       try {
         for (const job of activeJobs) {
-          const status = await workspaceService.pollMeshGeneration({
-            jobId: job.id,
-            snapshot: currentSnapshot,
-          })
+          try {
+            const status = await workspaceService.pollMeshGeneration({
+              jobId: job.id,
+              snapshot: currentSnapshot,
+            })
 
-          if (cancelled) return
+            if (cancelled) return
 
-          setSnapshot((current) => {
-            if (!current) return current
-            const nextSnapshot = mergeMeshGenerationStatusIntoSnapshot(current, status)
-            setBundle(compileBundle(nextSnapshot))
-            return nextSnapshot
-          })
+            meshGenerationPollFailureCountsRef.current.delete(job.id)
+            setSnapshot((current) => {
+              if (!current) return current
+              const nextSnapshot = mergeMeshGenerationStatusIntoSnapshot(current, status)
+              setBundle(compileBundle(nextSnapshot))
+              return nextSnapshot
+            })
+          } catch (jobPollError) {
+            const message = jobPollError instanceof Error ? jobPollError.message : 'Mesh generation polling failed.'
+            const previousFailures = meshGenerationPollFailureCountsRef.current.get(job.id) ?? 0
+            const nextFailures = previousFailures + 1
+            meshGenerationPollFailureCountsRef.current.set(job.id, nextFailures)
+
+            console.error('[GraphCore] mesh generation polling failed for job.', {
+              jobId: job.id,
+              definitionKey: job.definitionKey,
+              failures: nextFailures,
+              error: jobPollError,
+            })
+
+            const shouldFailLocally = !job.providerRequestId || nextFailures >= 3
+            if (!shouldFailLocally) {
+              continue
+            }
+
+            meshGenerationPollFailureCountsRef.current.delete(job.id)
+            const failureStatus = buildLocalMeshGenerationFailureStatus(
+              job,
+              !job.providerRequestId
+                ? `Trellis 2 did not start successfully. ${message}`
+                : `Mesh generation polling failed repeatedly. ${message}`,
+            )
+
+            setSnapshot((current) => {
+              if (!current) return current
+              const nextSnapshot = mergeMeshGenerationStatusIntoSnapshot(current, failureStatus)
+              setBundle(compileBundle(nextSnapshot))
+              return nextSnapshot
+            })
+          }
         }
-      } catch (pollError) {
-        console.error('[GraphCore] mesh generation polling failed.', pollError)
       } finally {
         meshGenerationPollInFlightRef.current = false
       }
@@ -2078,7 +2133,37 @@ export default function App() {
     }
     const nextBundle = await publishService.publish(snapshot)
     setBundle(nextBundle)
-    setActiveTab('releases')
+    setActiveTab('global')
+    setGlobalWorkspaceAutoFocusReleasesNonce((current) => current + 1)
+  }
+
+  async function handleSaveGlobalProjectContext(values: {
+    projectName: string
+    projectDescription: string
+    artStylePreset: string
+    artStyleDescription: string
+  }) {
+    if (!snapshot) return
+
+    const persisted = await workspaceService.persistGlobalProjectContext(snapshot, values)
+
+    setSnapshot((current) => {
+      if (!current) return current
+      const nextSnapshot = {
+        ...current,
+        project: persisted.project,
+        draft: persisted.draft,
+        gameSpec: persisted.gameSpec,
+      }
+      setBundle(compileBundle(nextSnapshot))
+      return nextSnapshot
+    })
+
+    setGames((current) => current.map((game) => (
+      game.projectId === snapshot.project.id
+        ? { ...game, projectName: persisted.project.name }
+        : game
+    )))
   }
 
   if (loading) return <main className="app-shell loading-shell"><p>Booting GraphCore workspace...</p></main>
@@ -2171,6 +2256,7 @@ export default function App() {
                 deletingGeneratedMeshDefinitionKey={deletingGeneratedMeshDefinitionKey}
                 definitions={snapshot.definitions}
                 gameSpec={snapshot.gameSpec}
+                projectSummary={snapshot.project.summary}
                 graphKeys={snapshot.graphs.map((graph) => graph.key)}
                 items={definitionEntries}
                 meshGenerationJobs={snapshot.meshGenerationJobs}
@@ -2212,6 +2298,7 @@ export default function App() {
                 assemblyGraphs={snapshot.assemblyGraphs}
                 environmentBlueprints={snapshot.environmentBlueprints}
                 gameSpec={snapshot.gameSpec}
+                projectSummary={snapshot.project.summary}
                 meshGenerationJobs={snapshot.meshGenerationJobs}
                 selectedAsset={selectedAsset}
                 selectedDefinition={selectedDefinition?.kind === 'character' ? selectedDefinition : null}
@@ -2253,6 +2340,7 @@ export default function App() {
                 assemblyGraphs={snapshot.assemblyGraphs}
                 environmentBlueprints={snapshot.environmentBlueprints}
                 gameSpec={snapshot.gameSpec}
+                projectSummary={snapshot.project.summary}
                 meshGenerationJobs={snapshot.meshGenerationJobs}
                 selectedAsset={selectedAsset}
                 selectedDefinition={selectedDefinition?.kind === 'environment' ? selectedDefinition : null}
@@ -2284,7 +2372,20 @@ export default function App() {
             ) : null}
             {activeTab === 'assets' ? <AssetsWorkspace assets={snapshot.assets} deletingAssetKey={deletingAssetKey} selectedAsset={selectedAsset} selectedItem={selectedDefinition} onAssignAssetToSelectedItem={assignAssetToSelectedItem} onCreateUrlAsset={createUrlAsset} onDeleteAsset={deleteAsset} onSelectAsset={setSelectedAssetKey} onUploadAsset={handleAssetUpload} onUpdateAsset={updateAssetIdentity} /> : null}
             {activeTab === 'prompts' ? <ActivityWorkspace patchHistory={patchHistory} selectedPatch={selectedPatch} selectedPatchIndex={selectedPatchIndex} onSelectPatch={setSelectedPatchIndex} /> : null}
-            {activeTab === 'releases' ? <ReleasesWorkspace bundle={bundle} releases={snapshot.releases} sourceReason={loadedState?.reason} /> : null}
+            {activeTab === 'global' ? (
+              <GlobalWorkspace
+                autoFocusReleasesNonce={globalWorkspaceAutoFocusReleasesNonce}
+                artStyleDescription={typeof snapshot.gameSpec?.theme?.artStyleDescription === 'string' ? snapshot.gameSpec.theme.artStyleDescription : ''}
+                artStylePreset={typeof snapshot.gameSpec?.theme?.artStylePreset === 'string' ? snapshot.gameSpec.theme.artStylePreset : DEFAULT_ART_STYLE_PRESET}
+                bundle={bundle}
+                canEdit={loadedState?.source === 'supabase'}
+                projectDescription={snapshot.project.summary}
+                projectName={snapshot.project.name}
+                releases={snapshot.releases}
+                sourceReason={loadedState?.reason}
+                onSave={handleSaveGlobalProjectContext}
+              />
+            ) : null}
           </Suspense>
         </section>
 

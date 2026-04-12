@@ -30,6 +30,7 @@ export type ContentWorkspaceProps = {
   graphKeys: string[]
   items: DefinitionBase[]
   gameSpec?: GameSpec | null
+  projectSummary?: string | null
   selectedAsset: AssetDefinition | null
   selectedArchetype: ArchetypeDefinition | null
   selectedItem: DefinitionBase | null

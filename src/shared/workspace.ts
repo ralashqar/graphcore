@@ -19,7 +19,7 @@ export type GameSummary = {
   hasGameSpec: boolean
 }
 
-export type WorkspaceTab = 'graph' | 'content' | 'characters' | 'environments' | 'assets' | 'prompts' | 'releases'
+export type WorkspaceTab = 'graph' | 'content' | 'characters' | 'environments' | 'assets' | 'prompts' | 'global'
 
 export type PatchSessionView = {
   id: string
@@ -45,5 +45,5 @@ export const workspaceTabs: Array<{ id: WorkspaceTab; label: string; icon: Entit
   { id: 'environments', label: 'Environments', icon: 'environment' },
   { id: 'assets', label: 'Assets', icon: 'asset' },
   { id: 'prompts', label: 'Activity', icon: 'activity' },
-  { id: 'releases', label: 'Releases', icon: 'release' },
+  { id: 'global', label: 'Global', icon: 'global' },
 ]

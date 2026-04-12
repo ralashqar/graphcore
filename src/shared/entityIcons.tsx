@@ -8,6 +8,7 @@ export type EntityIconId =
   | 'environment'
   | 'asset'
   | 'activity'
+  | 'global'
   | 'release'
   | 'archetype'
 
@@ -80,6 +81,13 @@ function IconPath({ id }: { id: EntityIconId }) {
         <>
           <path d="M12 5.2v6.1l3.6 2.1" {...stroke} />
           <circle cx="12" cy="12" r="7.2" {...stroke} />
+        </>
+      )
+    case 'global':
+      return (
+        <>
+          <circle cx="12" cy="12" r="7.2" {...stroke} />
+          <path d="M4.8 12h14.4M12 4.8c2 1.9 3.1 4.3 3.1 7.2S14 17.3 12 19.2M12 4.8c-2 1.9-3.1 4.3-3.1 7.2s1.1 5.3 3.1 7.2" {...stroke} />
         </>
       )
     case 'release':

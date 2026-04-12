@@ -35,6 +35,8 @@ function plannerSystemPrompt() {
     'dependsOn must always be an array of ids.',
     'Only plan these item kinds: character, environment, item, narrative_graph.',
     'Infer user intent from the single global prompt.',
+    'Use the supplied project name, project summary, and art direction as the default world context when the prompt is underspecified.',
+    'If project summary or art style imply a clear setting, tone, or visual language, reflect that in names and summaries.',
     'Generate concise implementation-facing plan items with stable ids.',
     'The summary must read like a concrete creative brief, not a generic checklist.',
     'Avoid bland phrases like "core traits", "appearance", "abilities", "role hooks", or other meta category lists.',

@@ -28,6 +28,7 @@ type SpecializedDefinitionWorkspaceProps = {
   assemblyGraphs: AssemblyGraphDefinition[]
   environmentBlueprints?: EnvironmentBlueprintV1[]
   gameSpec?: GameSpec | null
+  projectSummary?: string | null
   selectedAsset: AssetDefinition | null
   selectedDefinition: DefinitionBase | null
   deletingDefinitionKey?: string | null
@@ -68,6 +69,7 @@ export function SpecializedDefinitionWorkspace({
   assemblyGraphs,
   environmentBlueprints = [],
   gameSpec = null,
+  projectSummary = null,
   selectedAsset,
   selectedDefinition,
   deletingDefinitionKey = null,
@@ -248,6 +250,7 @@ export function SpecializedDefinitionWorkspace({
         archetypeLabel,
         artStylePresetLabel: getArtStylePresetLabel(typeof gameSpec?.theme?.artStylePreset === 'string' ? gameSpec.theme.artStylePreset : null),
         artStyleDescription: typeof gameSpec?.theme?.artStyleDescription === 'string' ? gameSpec.theme.artStyleDescription : null,
+        projectContextDescription: projectSummary,
         visualDescription: conceptPrompt,
       })
       const result = await visualAssetGenerationService.generateConceptImage({

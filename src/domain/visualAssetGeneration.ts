@@ -34,6 +34,7 @@ export type CharacterConceptPromptInput = {
   artStylePresetLabel?: string | null
   archetypeLabel?: string | null
   characterName?: string | null
+  projectContextDescription?: string | null
   subtype?: string | null
   visualDescription: string
 }
@@ -43,6 +44,7 @@ export type ItemConceptPromptInput = {
   artStylePresetLabel?: string | null
   archetypeLabel?: string | null
   itemName?: string | null
+  projectContextDescription?: string | null
   physicalSubtype?: string | null
   worldPlacementRole?: string | null
   pickupContext?: string | null
@@ -136,6 +138,7 @@ export function buildCharacterConceptPrompt(input: CharacterConceptPromptInput) 
     'Render it in the game’s final visual language, not as a loose illustration, sketch, mood board, or cinematic poster.',
     input.artStylePresetLabel?.trim() ? `Universal game art style: ${input.artStylePresetLabel.trim()}.` : null,
     input.artStyleDescription?.trim() ? `Additional art direction: ${input.artStyleDescription.trim()}.` : null,
+    input.projectContextDescription?.trim() ? `Project context: ${input.projectContextDescription.trim()}.` : null,
     poseDirection,
     'Use a clean studio or neutral background with the silhouette fully readable and no UI, text, logos, borders, or collage layout.',
     `Character visual description: ${input.visualDescription.trim()}.`,
@@ -155,6 +158,7 @@ export function buildItemConceptPrompt(input: ItemConceptPromptInput) {
     'Render it in the game\'s final visual language, not as a loose illustration, sketch, mood board, cinematic poster, or inventory card mockup.',
     input.artStylePresetLabel?.trim() ? `Universal game art style: ${input.artStylePresetLabel.trim()}.` : null,
     input.artStyleDescription?.trim() ? `Additional art direction: ${input.artStyleDescription.trim()}.` : null,
+    input.projectContextDescription?.trim() ? `Project context: ${input.projectContextDescription.trim()}.` : null,
     'Show one clearly readable hero object, centered in frame, fully visible, with no hands, characters, UI, labels, logo marks, borders, or collage layout.',
     'Use a clean neutral or studio-style background so silhouette, materials, and gameplay-readable details are clear.',
     `Item visual description: ${input.visualDescription.trim()}.`,

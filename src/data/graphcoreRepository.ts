@@ -17,6 +17,7 @@ import {
   type PatchOperation,
   type ProjectSnapshot,
 } from '../domain/graphcore'
+import { gameSpecSchema } from '../domain/gameSpec'
 import { buildBootstrapPatch, createDefaultGameSpec } from '../domain/presetCatalog'
 import type { PromptPatchRequest, PromptPatchResponse } from '../domain/prompting'
 import {
@@ -240,6 +241,13 @@ type ProjectSummaryRow = {
   visibility: ProjectSnapshot['project']['visibility']
   updated_at?: string
   created_at?: string
+}
+
+export type GlobalProjectContextUpdate = {
+  projectName: string
+  projectDescription: string
+  artStylePreset: string
+  artStyleDescription: string
 }
 
 type DraftSummaryRow = {
@@ -2388,6 +2396,86 @@ export async function persistDefinitionPreviewImageBinding(
       .eq('id', definitionResponse.data.id)
 
     if (updateDefinitionResponse.error) throw new Error(updateDefinitionResponse.error.message)
+  }
+}
+
+export async function persistGlobalProjectContext(
+  snapshot: ProjectSnapshot,
+  updates: GlobalProjectContextUpdate,
+): Promise<{
+  project: ProjectSnapshot['project']
+  draft: ProjectSnapshot['draft']
+  gameSpec: ProjectSnapshot['gameSpec']
+}> {
+  await getValidatedSession('Sign in and load a live GraphCore draft before updating global project context.')
+
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Sign in and load a live GraphCore draft before updating global project context.')
+  }
+
+  const nextProjectName = updates.projectName.trim()
+  const nextProjectDescription = updates.projectDescription.trim()
+  const nextArtStylePreset = updates.artStylePreset.trim()
+  const nextArtStyleDescription = updates.artStyleDescription.trim()
+
+  if (!nextProjectName) {
+    throw new Error('Project name cannot be empty.')
+  }
+
+  const projectResponse = await supabase
+    .from('projects')
+    .update({
+      name: nextProjectName,
+      summary: nextProjectDescription,
+    })
+    .eq('id', snapshot.project.id)
+    .select('id, name, slug, summary, visibility')
+    .single()
+
+  if (projectResponse.error) throw new Error(projectResponse.error.message)
+
+  const nextGameSpec = gameSpecSchema.parse({
+    ...(snapshot.gameSpec ?? {}),
+    theme: {
+      ...(snapshot.gameSpec?.theme ?? {}),
+      artStylePreset: nextArtStylePreset,
+      artStyleDescription: nextArtStyleDescription,
+    },
+  })
+
+  const nextDraftMetadata = {
+    ...(snapshot.draft.metadata ?? {}),
+    gameSpec: nextGameSpec,
+  }
+
+  const draftResponse = await supabase
+    .from('project_drafts')
+    .update({
+      metadata: nextDraftMetadata,
+    })
+    .eq('id', snapshot.draft.id)
+    .select('id, name, version, is_primary, updated_at, metadata')
+    .single()
+
+  if (draftResponse.error) throw new Error(draftResponse.error.message)
+
+  return {
+    project: {
+      id: projectResponse.data.id,
+      name: projectResponse.data.name,
+      slug: projectResponse.data.slug,
+      summary: projectResponse.data.summary ?? '',
+      visibility: projectResponse.data.visibility,
+    },
+    draft: {
+      id: draftResponse.data.id,
+      name: draftResponse.data.name,
+      version: draftResponse.data.version,
+      isPrimary: draftResponse.data.is_primary,
+      updatedAt: draftResponse.data.updated_at,
+      metadata: draftResponse.data.metadata ?? {},
+    },
+    gameSpec: nextGameSpec,
   }
 }
 

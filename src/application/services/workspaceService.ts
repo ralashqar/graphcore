@@ -6,6 +6,7 @@ export const workspaceService = {
   deleteGeneratedMesh: graphcoreWorkspaceAdapter.deleteGeneratedMesh,
   deleteWorldBuildPlaceholder: graphcoreWorkspaceAdapter.deleteWorldBuildPlaceholder,
   persistDefinitionPreviewImageBinding: graphcoreWorkspaceAdapter.persistDefinitionPreviewImageBinding,
+  persistGlobalProjectContext: graphcoreWorkspaceAdapter.persistGlobalProjectContext,
   planWorldBuild: graphcoreWorkspaceAdapter.planWorldBuild,
   pollMeshGeneration: graphcoreWorkspaceAdapter.pollMeshGeneration,
   pollWorldBuild: graphcoreWorkspaceAdapter.pollWorldBuild,

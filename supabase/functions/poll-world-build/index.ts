@@ -211,6 +211,7 @@ function conceptPromptFromDefinition(definition: SnapshotDefinition, job: JobRow
       archetypeLabel: typeof definition.archetypeKey === 'string' ? definition.archetypeKey : null,
       artStylePresetLabel: getArtStylePresetLabel(artStylePreset),
       artStyleDescription,
+      projectContextDescription: snapshot.project.summary,
       visualDescription,
     })
   }
@@ -237,12 +238,14 @@ function conceptPromptFromDefinition(definition: SnapshotDefinition, job: JobRow
       pickupContext,
       artStylePresetLabel: getArtStylePresetLabel(artStylePreset),
       artStyleDescription,
+      projectContextDescription: snapshot.project.summary,
       visualDescription,
     })
   }
 
   return [
     `Create polished game concept art for ${definition.name}.`,
+    snapshot.project.summary ? `Project context: ${snapshot.project.summary}.` : null,
     typeof definition.summary === 'string' && definition.summary.trim() ? `Summary: ${definition.summary.trim()}.` : null,
     artStylePreset ? `Art style preset: ${artStylePreset}.` : null,
     artStyleDescription ? `Additional art direction: ${artStyleDescription}.` : null,

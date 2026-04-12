@@ -1,6 +1,6 @@
 import { useState } from 'react'
 
-import { ART_STYLE_PRESETS } from '../../domain/artStylePresets'
+import { ART_STYLE_PRESETS, getArtStylePresetDescription, getArtStylePresetsByGroup } from '../../domain/artStylePresets'
 import { GAME_ARCHETYPES, gameArchetypeMap } from '../../domain/gameArchetypes'
 
 type GameBootstrapOnboardingProps = {
@@ -35,6 +35,7 @@ export function GameBootstrapOnboarding({
   const [step, setStep] = useState(0)
   const steps = ['Archetype', 'Concept', 'Generate']
   const selectedArchetype = gameArchetypeMap.get(gameArchetypeId) ?? GAME_ARCHETYPES[0]
+  const artStyleGroups = getArtStylePresetsByGroup()
 
   return (
     <div className="bootstrap-overlay" onClick={canClose ? onClose : undefined} role="presentation">
@@ -101,8 +102,12 @@ export function GameBootstrapOnboarding({
                 <label className="field-block bootstrap-field">
                   <span>Universal art style</span>
                   <select value={artStylePreset} onChange={(event) => onChangeArtStylePreset(event.target.value)}>
-                    {ART_STYLE_PRESETS.map((preset) => (
-                      <option key={preset.id} value={preset.id}>{preset.label}</option>
+                    {artStyleGroups.map((entry) => (
+                      <optgroup key={entry.group} label={entry.group}>
+                        {entry.presets.map((preset) => (
+                          <option key={preset.id} value={preset.id}>{preset.label}</option>
+                        ))}
+                      </optgroup>
                     ))}
                   </select>
                 </label>
@@ -114,6 +119,10 @@ export function GameBootstrapOnboarding({
                     placeholder="Painterly lighting, bold silhouettes, muted autumn palette..."
                   />
                 </label>
+              </div>
+              <div className="inline-note">
+                <strong>{ART_STYLE_PRESETS.find((preset) => preset.id === artStylePreset)?.label ?? 'Custom'}</strong>
+                <p className="subtle-line">{getArtStylePresetDescription(artStylePreset)}</p>
               </div>
             </div>
           ) : null}

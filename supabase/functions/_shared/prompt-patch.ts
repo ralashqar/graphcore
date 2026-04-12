@@ -105,6 +105,12 @@ export function buildPromptContext(payload: Record<string, any>) {
       workspace: payload.snapshot.workspace,
       project: payload.snapshot.project,
     },
+    creativeDirection: {
+      projectName: payload.snapshot.project?.name ?? '',
+      projectSummary: payload.snapshot.project?.summary ?? '',
+      artStylePreset: payload.snapshot.gameSpec?.theme?.artStylePreset ?? null,
+      artStyleDescription: payload.snapshot.gameSpec?.theme?.artStyleDescription ?? '',
+    },
     selectedGraph: selectedGraph
       ? {
           key: selectedGraph.key,
@@ -158,6 +164,7 @@ export function contentPassSystemPrompt() {
     'Only create an archetype if the supplied context truly lacks a suitable one.',
     'All content references use stable keys. Never use fields like definitionKey unless the op schema explicitly supports them.',
     'Compact content patch examples:',
+    'Honor the project summary and creative direction when choosing names, summaries, and supporting content tone.',
     'create_archetype => {"op":"create_archetype","key":"item.progression_token","payload":{"name":"Progression Token","summary":"Hidden progression marker","appliesToKind":"item"}}',
     'add_archetype_field => {"op":"add_archetype_field","key":"item.progression_token","field":{"id":"field-token-hidden","key":"is_hidden","label":"Hidden","fieldType":"boolean","description":"Whether the token is hidden.","required":true,"defaultValue":true,"constraints":{},"sortOrder":1}}',
     'create_definition => {"op":"create_definition","kind":"item","key":"item.hooded_lantern","payload":{"name":"Hooded Lantern","summary":"A shuttered lantern.","status":"draft"}}',
@@ -198,6 +205,7 @@ export function graphPassSystemPrompt() {
     'Use existing node templates only.',
     'Never invent new op names or unsupported node templates.',
     'Compact graph patch examples:',
+    'Honor the project summary and creative direction when choosing graph names, node titles, and narrative tone.',
     'create_graph => {"op":"create_graph","key":"graph.ashen_hollow_opening","payload":{"name":"Ashen Hollow Opening","graphType":"narrative_flow","summary":"Opening scene at the ruined gate in the rain."}}',
     'create_node => {"op":"create_node","graphKey":"graph.ashen_hollow_opening","node":{"key":"story.ruined_gate_intro","templateKey":"story_text","title":"Ruined Gate in the Rain","position":{"x":320,"y":160},"body":{"text":"Rain sheets across the broken gate."}}}',
     'create_choice_node => {"op":"create_node","graphKey":"graph.ashen_hollow_opening","node":{"key":"choice.ruined_gate","templateKey":"choice","title":"What do you do?","position":{"x":620,"y":160},"body":{"text":"The storm hides your movement."}}}',
