@@ -2,8 +2,11 @@ import '@supabase/functions-js/edge-runtime.d.ts'
 
 import { z } from 'npm:zod@4'
 
+import { cinematicRunStatusResponseSchema } from '../../../src/domain/cinematics.ts'
 import {
+  type CinematicPlan,
   type WorldBuildJob,
+  cinematicPlanSchema,
   worldBuildBatchSchema,
   worldBuildJobSchema,
   worldBuildPollRequestSchema,
@@ -12,9 +15,21 @@ import {
 import { getArtStylePresetLabel } from '../../../src/domain/artStylePresets.ts'
 import { buildCharacterConceptPrompt, buildItemConceptPrompt, extractFalImageUrls } from '../../../src/domain/visualAssetGeneration.ts'
 import { requireUserClient } from '../_shared/auth.ts'
+import {
+  isTerminalCinematicRunStatus,
+  resolveDefinitionDisplayAssetKey,
+  resolveAssetUrl,
+  toCinematicRun,
+  toCinematicRunJob,
+} from '../_shared/cinematics.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
 import { buildDefaultDefinitionComponents } from '../_shared/world-build-placeholders.ts'
 import { runStructuredWorldBuildModel, isTerminalWorldBuildStatus } from '../_shared/world-build.ts'
+import {
+  buildCinematicGraphFromAuthorPlan,
+  cinematicGraphAuthorSchema,
+  cinematicGraphAuthorSystemPrompt,
+} from '../_shared/world-build-cinematics.ts'
 import { buildAssetSlug } from '../../../src/domain/assets.ts'
 
 const contentGenerationSchema = z.object({
@@ -75,9 +90,11 @@ type BatchRow = {
   project_id: string
   prompt: string
   request_summary: string
+  planner_mode: string | null
   status: string
   diagnostics: string[] | null
   plan_json: unknown[]
+  cinematic_plan: Record<string, unknown> | null
   created_at: string
   updated_at: string
 }
@@ -261,7 +278,7 @@ async function loadBatch(
 ) {
   const batchResponse = await client
     .from('world_build_batches')
-    .select('id, draft_id, project_id, prompt, request_summary, status, diagnostics, plan_json, created_at, updated_at')
+    .select('id, draft_id, project_id, prompt, request_summary, planner_mode, status, diagnostics, plan_json, cinematic_plan, created_at, updated_at')
     .eq('id', batchId)
     .single()
 
@@ -520,6 +537,271 @@ function terminalStatusFromJobs(jobs: WorldBuildJob[]) {
   return 'completed'
 }
 
+async function loadDefinitionRecordsByKeys(
+  client: Awaited<ReturnType<typeof requireUserClient>>['client'],
+  draftId: string,
+  definitionKeys: string[],
+) {
+  if (definitionKeys.length === 0) return []
+
+  const definitionsResponse = await client
+    .from('project_definitions')
+    .select('id, key, kind, name, summary, status, icon_asset_key, archetype_key, tags, schema_version, metadata, llm_hints, asset_refs, definition_data')
+    .eq('draft_id', draftId)
+    .in('key', definitionKeys)
+
+  if (definitionsResponse.error) {
+    throw new Error(definitionsResponse.error.message)
+  }
+
+  return await Promise.all((definitionsResponse.data ?? []).map(async (definition) => {
+    const componentsResponse = await client
+      .from('project_definition_components')
+      .select('component_type, config')
+      .eq('definition_id', definition.id)
+
+    if (componentsResponse.error) {
+      throw new Error(componentsResponse.error.message)
+    }
+
+    return {
+      id: definition.id,
+      key: definition.key,
+      kind: definition.kind,
+      name: definition.name,
+      summary: definition.summary ?? '',
+      status: definition.status,
+      iconAssetKey: definition.icon_asset_key,
+      archetypeKey: definition.archetype_key,
+      tags: definition.tags ?? [],
+      schemaVersion: definition.schema_version ?? 1,
+      metadata: definition.metadata ?? {},
+      llmHints: definition.llm_hints ?? {},
+      assetRefs: definition.asset_refs ?? [],
+      definitionData: definition.definition_data ?? {},
+      fieldValues: [],
+      customFields: [],
+      components: (componentsResponse.data ?? []).map((component) => ({
+        type: component.component_type,
+        config: component.config ?? {},
+      })),
+    }
+  }))
+}
+
+async function loadProjectAssetsByKeys(
+  client: Awaited<ReturnType<typeof requireUserClient>>['client'],
+  projectId: string,
+  assetKeys: string[],
+) {
+  if (assetKeys.length === 0) return []
+
+  const assetsResponse = await client
+    .from('project_assets')
+    .select('id, key, name, kind, mime_type, storage_path, metadata, llm_hints')
+    .eq('project_id', projectId)
+    .in('key', assetKeys)
+
+  if (assetsResponse.error) {
+    throw new Error(assetsResponse.error.message)
+  }
+
+  return (assetsResponse.data ?? []).map((asset) => ({
+    id: asset.id,
+    key: asset.key,
+    name: asset.name,
+    kind: asset.kind,
+    mimeType: asset.mime_type,
+    storagePath: asset.storage_path,
+    metadata: asset.metadata ?? {},
+    llmHints: asset.llm_hints ?? {},
+  }))
+}
+
+async function replaceGraphContents(
+  client: Awaited<ReturnType<typeof requireUserClient>>['client'],
+  draftId: string,
+  graph: {
+    key: string
+    name: string
+    graphType: string
+    summary: string
+    entryNodeKey: string
+    metadata: Record<string, unknown>
+    llmHints: Record<string, unknown>
+    nodes: Array<{
+      key: string
+      type: string
+      title: string
+      templateKey: string
+      subtitle: string | null
+      position: { x: number; y: number }
+      body: Record<string, unknown>
+      condition: unknown
+      effects: unknown[]
+      ports: unknown[]
+      display: Record<string, unknown>
+      metadata: Record<string, unknown>
+    }>
+    edges: Array<{
+      key: string
+      source: { nodeKey: string; portId: string }
+      target: { nodeKey: string; portId: string }
+      label: string | null
+      condition: unknown
+      metadata: Record<string, unknown>
+    }>
+  },
+) {
+  const graphRow = await client
+    .from('draft_graphs')
+    .select('id')
+    .eq('draft_id', draftId)
+    .eq('key', graph.key)
+    .single()
+
+  if (graphRow.error || !graphRow.data) {
+    throw new Error(graphRow.error?.message ?? `Graph ${graph.key} was not found.`)
+  }
+
+  const graphId = graphRow.data.id
+  const deleteEdges = await client.from('draft_graph_edges').delete().eq('graph_id', graphId)
+  if (deleteEdges.error) throw new Error(deleteEdges.error.message)
+  const deleteNodes = await client.from('draft_graph_nodes').delete().eq('graph_id', graphId)
+  if (deleteNodes.error) throw new Error(deleteNodes.error.message)
+
+  const updateGraph = await client
+    .from('draft_graphs')
+    .update({
+      name: graph.name,
+      graph_type: graph.graphType,
+      summary: graph.summary,
+      entry_node_key: graph.entryNodeKey,
+      metadata: graph.metadata,
+      llm_hints: graph.llmHints,
+    })
+    .eq('draft_id', draftId)
+    .eq('key', graph.key)
+
+  if (updateGraph.error) throw new Error(updateGraph.error.message)
+
+  if (graph.nodes.length > 0) {
+    const nodeInsert = await client.from('draft_graph_nodes').insert(
+      graph.nodes.map((node) => ({
+        graph_id: graphId,
+        key: node.key,
+        node_type: node.type,
+        title: node.title,
+        template_key: node.templateKey,
+        subtitle: node.subtitle,
+        position_x: node.position.x,
+        position_y: node.position.y,
+        body: node.body,
+        condition_expr: node.condition,
+        effect_ops: node.effects,
+        ports: node.ports,
+        display: node.display,
+        metadata: node.metadata,
+      })),
+    )
+
+    if (nodeInsert.error) throw new Error(nodeInsert.error.message)
+  }
+
+  if (graph.edges.length > 0) {
+    const edgeInsert = await client.from('draft_graph_edges').insert(
+      graph.edges.map((edge) => ({
+        graph_id: graphId,
+        key: edge.key,
+        source_node_key: edge.source.nodeKey,
+        source_port: edge.source.portId,
+        target_node_key: edge.target.nodeKey,
+        target_port: edge.target.portId,
+        label: edge.label,
+        condition_expr: edge.condition,
+        metadata: edge.metadata,
+      })),
+    )
+
+    if (edgeInsert.error) throw new Error(edgeInsert.error.message)
+  }
+}
+
+async function loadCinematicRunsForBatchJobs(
+  client: Awaited<ReturnType<typeof requireUserClient>>['client'],
+  jobs: JobRow[],
+) {
+  const runIds = jobs
+    .map((job) => {
+      const resultContext = job.result_context ?? {}
+      return typeof resultContext.childCinematicRunId === 'string' ? resultContext.childCinematicRunId : null
+    })
+    .filter((value): value is string => Boolean(value))
+
+  if (runIds.length === 0) return []
+
+  const runsResponse = await client
+    .from('cinematic_runs')
+    .select('id, draft_id, project_id, graph_key, graph_name, mode, status, shot_node_key, diagnostics, created_at, updated_at')
+    .in('id', runIds)
+
+  if (runsResponse.error) {
+    throw new Error(runsResponse.error.message)
+  }
+
+  const jobResponse = await client
+    .from('cinematic_run_jobs')
+    .select('id, run_id, graph_key, shot_node_key, kind, status, order_index, depends_on_job_ids, still_asset_key, video_asset_key, provider, model, provider_request_id, error_message, prompt, result_context, created_at, updated_at')
+    .in('run_id', runIds)
+
+  if (jobResponse.error) {
+    throw new Error(jobResponse.error.message)
+  }
+
+  const cinematicJobs = (jobResponse.data ?? []).map((row) => toCinematicRunJob(row as Record<string, unknown>))
+  return (runsResponse.data ?? []).map((row) => toCinematicRun({
+    row: row as Record<string, unknown>,
+    jobs: cinematicJobs.filter((job) => job.runId === row.id),
+  }))
+}
+
+function buildFallbackAuthorPlan(input: {
+  cinematicPlan: z.infer<typeof cinematicPlanSchema>
+  resolvedEntityRefs: Array<CinematicPlan['entityRefs'][number] & { definitionKey: string }>
+}) {
+  return cinematicGraphAuthorSchema.parse({
+    graphName: input.cinematicPlan.graphName,
+    graphSummary: input.cinematicPlan.graphSummary,
+    graphSettings: input.cinematicPlan.graphSettings ?? {},
+    assetRefs: input.resolvedEntityRefs.map((entityRef) => ({
+      id: entityRef.id,
+      definitionKey: entityRef.definitionKey,
+      assetRole: entityRef.kind,
+      title: entityRef.sourceName,
+      subtitle: entityRef.kind,
+      stagingNotes: entityRef.role,
+    })),
+    shots: input.cinematicPlan.shots.map((shot) => ({
+      id: shot.id,
+      title: shot.title,
+      subtitle: null,
+      beat: shot.beat,
+      visualPrompt: shot.visualPrompt,
+      shotType: shot.shotType,
+      framing: shot.framing,
+      cameraAngle: shot.cameraAngle,
+      cameraMovement: shot.cameraMovement,
+      lensPreference: shot.lensPreference,
+      durationSeconds: shot.durationSeconds,
+      sourceRefIds: Array.from(new Set([
+        ...shot.participantRefIds,
+        ...shot.propRefIds,
+        ...(shot.locationRefId ? [shot.locationRefId] : []),
+      ])),
+    })),
+  })
+}
+
 Deno.serve(async (request) => {
   const preflight = maybeHandleOptions(request)
   if (preflight) return preflight
@@ -765,6 +1047,178 @@ Deno.serve(async (request) => {
               },
               error_message: null,
             })
+          } else if (job.kind === 'cinematic_graph') {
+            const graphKey = job.target_keys?.graphKey
+            if (!graphKey) throw new Error(`Placeholder graph key was missing for job ${job.id}.`)
+
+            const cinematicPlan = cinematicPlanSchema.safeParse(batch.cinematic_plan)
+            if (!cinematicPlan.success) {
+              throw new Error(`Batch cinematic plan was invalid. ${formatIssues(cinematicPlan.error.issues)}`)
+            }
+
+            const resolvedEntityRefs = cinematicPlan.data.entityRefs.map((entityRef) => {
+              if (entityRef.resolution === 'existing' && entityRef.definitionKey) {
+                return {
+                  ...entityRef,
+                  definitionKey: entityRef.definitionKey,
+                }
+              }
+
+              const definitionJob = jobs.find((candidate) =>
+                candidate.plan_item_id === entityRef.planItemId
+                && candidate.kind.endsWith('_definition'),
+              )
+              const definitionKey = definitionJob?.target_keys?.definitionKey
+              if (!definitionKey) {
+                throw new Error(`Cinematic entity "${entityRef.sourceName}" is still missing a resolved definition.`)
+              }
+
+              return {
+                ...entityRef,
+                definitionKey,
+              }
+            })
+
+            const cinematicDefinitions = await loadDefinitionRecordsByKeys(
+              client,
+              batch.draft_id,
+              resolvedEntityRefs.map((entityRef) => entityRef.definitionKey),
+            )
+            const displayAssetKeys = Array.from(new Set(
+              cinematicDefinitions
+                .map((definition) => resolveDefinitionDisplayAssetKey(definition as {
+                  key: string
+                  kind: string
+                  name: string
+                  iconAssetKey?: string | null
+                  components?: Array<{ type?: string; config?: Record<string, unknown> }>
+                }))
+                .filter((value): value is string => typeof value === 'string' && value.length > 0),
+            ))
+            const cinematicAssets = await loadProjectAssetsByKeys(client, batch.project_id, displayAssetKeys)
+            const missingPreviewRefs = resolvedEntityRefs.filter((entityRef) => {
+              const definition = cinematicDefinitions.find((entry) => entry.key === entityRef.definitionKey)
+              const assetKey = definition ? resolveDefinitionDisplayAssetKey(definition as {
+                key: string
+                kind: string
+                name: string
+                iconAssetKey?: string | null
+                components?: Array<{ type?: string; config?: Record<string, unknown> }>
+              }) : null
+              const asset = cinematicAssets.find((entry) => entry.key === assetKey) ?? null
+              return !asset || !resolveAssetUrl(asset as {
+                key: string
+                name: string
+                kind: string
+                metadata?: Record<string, unknown>
+              })
+            })
+
+            if (missingPreviewRefs.length > 0) {
+              throw new Error(`Cinematic dependencies are missing usable preview images: ${missingPreviewRefs.map((entry) => entry.sourceName).join(', ')}`)
+            }
+
+            let authorPlan = buildFallbackAuthorPlan({
+              cinematicPlan: cinematicPlan.data,
+              resolvedEntityRefs,
+            })
+
+            try {
+              const authorDraft = await runStructuredWorldBuildModel({
+                model: payload.model,
+                passLabel: 'Cinematic graph author',
+                systemText: cinematicGraphAuthorSystemPrompt(),
+                promptContext: {
+                  worldPrompt: batch.prompt,
+                  requestSummary: batch.request_summary,
+                  project: snapshot.project,
+                  gameSpec: snapshot.gameSpec ?? null,
+                  cinematicPlan: cinematicPlan.data,
+                  resolvedEntities: resolvedEntityRefs.map((entityRef) => {
+                    const definition = cinematicDefinitions.find((entry) => entry.key === entityRef.definitionKey)
+                    return {
+                      id: entityRef.id,
+                      definitionKey: entityRef.definitionKey,
+                      kind: entityRef.kind,
+                      role: entityRef.role,
+                      sourceName: entityRef.sourceName,
+                      definitionName: definition?.name ?? entityRef.sourceName,
+                      summary: definition?.summary ?? entityRef.summary,
+                    }
+                  }),
+                },
+                schema: cinematicGraphAuthorSchema,
+                maxOutputTokens: 10000,
+              })
+
+              authorPlan = cinematicGraphAuthorSchema.parse(authorDraft)
+            } catch (authorError) {
+              console.warn('[GraphCore] cinematic graph authoring fell back to direct materialization.', authorError)
+            }
+
+            let authoredGraph = buildCinematicGraphFromAuthorPlan({
+              graphKey,
+              graphName: cinematicPlan.data.graphName,
+              graphSummary: cinematicPlan.data.graphSummary,
+              graphSettings: cinematicPlan.data.graphSettings ?? {},
+              authorPlan,
+            })
+            authoredGraph = {
+              ...authoredGraph,
+              metadata: {
+                ...authoredGraph.metadata,
+                generation: {
+                  batchId: batch.id,
+                  jobId: job.id,
+                  state: cinematicPlan.data.autoRun ? 'running' : 'completed',
+                  placeholder: false,
+                  source: 'global_prompt',
+                },
+              },
+            }
+
+            await replaceGraphContents(client, batch.draft_id, authoredGraph)
+
+            if (!cinematicPlan.data.autoRun) {
+              await updateJob(client, job.id, {
+                status: 'succeeded',
+                result_context: {
+                  graphKey,
+                  resolvedEntityRefs,
+                },
+                error_message: null,
+              })
+            } else {
+              const cinematicStart = await client.functions.invoke('start-cinematic-run', {
+                body: {
+                  snapshot: {
+                    project: snapshot.project,
+                    draft: snapshot.draft,
+                    definitions: cinematicDefinitions,
+                    graphs: [authoredGraph],
+                    assets: cinematicAssets,
+                    gameSpec: snapshot.gameSpec ?? null,
+                  },
+                  graphKey,
+                  mode: 'graph_run',
+                },
+              })
+
+              if (cinematicStart.error || !cinematicStart.data) {
+                throw new Error(cinematicStart.error?.message ?? 'Failed to start child cinematic run.')
+              }
+
+              const childRun = cinematicRunStatusResponseSchema.parse(cinematicStart.data)
+              await updateJob(client, job.id, {
+                status: 'running',
+                result_context: {
+                  graphKey,
+                  resolvedEntityRefs,
+                  childCinematicRunId: childRun.run.id,
+                },
+                error_message: null,
+              })
+            }
           } else if (job.kind === 'narrative_graph') {
             const graphKey = job.target_keys?.graphKey
             if (!graphKey) throw new Error(`Placeholder graph key was missing for job ${job.id}.`)
@@ -911,7 +1365,49 @@ Deno.serve(async (request) => {
       }
 
       const refreshed = await loadBatch(client, payload.batchId)
-      const parsedJobs = refreshed.jobs.map((job) => worldBuildJobSchema.parse({
+      let jobsToEvaluate = refreshed.jobs
+      const runningCinematicJobs = jobsToEvaluate.filter((job) => job.kind === 'cinematic_graph' && job.status === 'running')
+
+      if (runningCinematicJobs.length > 0) {
+        const cinematicRuns = await loadCinematicRunsForBatchJobs(client, runningCinematicJobs)
+        for (const cinematicJob of runningCinematicJobs) {
+          const childRunId = typeof cinematicJob.result_context?.childCinematicRunId === 'string'
+            ? cinematicJob.result_context.childCinematicRunId
+            : null
+          if (!childRunId) continue
+
+          const childRun = cinematicRuns.find((run) => run.id === childRunId) ?? null
+          if (!childRun) continue
+
+          if (isTerminalCinematicRunStatus(childRun.status)) {
+            const nextJobStatus = childRun.status === 'failed' ? 'failed' : 'succeeded'
+            await updateJob(client, cinematicJob.id, {
+              status: nextJobStatus,
+              result_context: {
+                ...(cinematicJob.result_context ?? {}),
+                childCinematicRunId: childRunId,
+                childCinematicStatus: childRun.status,
+              },
+              error_message: childRun.status === 'failed' ? 'Child cinematic run failed.' : null,
+            })
+
+            if (cinematicJob.target_keys?.graphKey) {
+              await markGraphGenerationState(client, batch.draft_id, cinematicJob.target_keys.graphKey, {
+                batchId: batch.id,
+                jobId: cinematicJob.id,
+                state: childRun.status === 'failed' ? 'failed' : 'completed',
+                placeholder: false,
+                source: 'global_prompt',
+              })
+            }
+          }
+        }
+
+        const reloadedAfterCinematicSync = await loadBatch(client, payload.batchId)
+        jobsToEvaluate = reloadedAfterCinematicSync.jobs
+      }
+
+      const parsedJobs = jobsToEvaluate.map((job) => worldBuildJobSchema.parse({
         id: job.id,
         batchId: job.batch_id,
         planItemId: job.plan_item_id,
@@ -952,6 +1448,7 @@ Deno.serve(async (request) => {
       updatedAt: job.updated_at,
     }))
     const resources = await loadBatchResources(client, finalLoaded.batch.draft_id, finalLoaded.batch.project_id, payload.batchId)
+    const cinematicRuns = await loadCinematicRunsForBatchJobs(client, finalLoaded.jobs)
 
     return json(worldBuildStatusResponseSchema.parse({
       batch: worldBuildBatchSchema.parse({
@@ -960,9 +1457,11 @@ Deno.serve(async (request) => {
         draftId: finalLoaded.batch.draft_id,
         prompt: finalLoaded.batch.prompt,
         requestSummary: finalLoaded.batch.request_summary,
+        plannerMode: finalLoaded.batch.planner_mode ?? 'world_build',
         status: finalLoaded.batch.status,
         diagnostics: finalLoaded.batch.diagnostics ?? [],
         planItems: finalLoaded.batch.plan_json ?? [],
+        cinematicPlan: finalLoaded.batch.cinematic_plan ?? null,
         createdAt: finalLoaded.batch.created_at,
         updatedAt: finalLoaded.batch.updated_at,
         jobs: finalJobs,
@@ -970,6 +1469,7 @@ Deno.serve(async (request) => {
       definitions: resources.definitions,
       graphs: resources.graphs,
       assets: resources.assets,
+      cinematicRuns,
     }))
   } catch (error) {
     return errorResponse(error, 'Failed to poll world build.')

@@ -6,13 +6,13 @@ import {
   type AssemblyGraphDefinition,
   type AssemblyNodeDefinition,
   type CompiledEnvironmentModel,
-} from './environmentAssembly'
+} from './environmentAssembly.ts'
 import {
   compileAssemblyGraph,
   createAssemblyCompileCache,
   type AssemblyCompileCache,
   type AssemblyCompileResult,
-} from './environmentAssemblyCompiler'
+} from './environmentAssemblyCompiler.ts'
 
 const looseRecordSchema = z.record(z.string(), z.unknown())
 

@@ -1,5 +1,5 @@
-import type { GameSpec } from './graphcore'
-import { PRESET_CATALOG_VERSION, createDefaultGameSpec, expandPackPresetIds } from './presetCatalog'
+import type { GameSpec } from './graphcore.ts'
+import { PRESET_CATALOG_VERSION, createDefaultGameSpec, expandPackPresetIds } from './presetCatalog.ts'
 
 export type GameArchetype = {
   id: string

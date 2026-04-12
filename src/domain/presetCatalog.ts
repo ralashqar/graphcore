@@ -1,13 +1,13 @@
-import { buildDefaultDefinitionComponents } from './graphcore'
+import { buildDefaultDefinitionComponents } from './graphcore.ts'
 import type {
   ArchetypeDefinition,
   DefinitionBase,
   GameSpec,
   GraphDefinition,
   PatchOperation,
-} from './graphcore'
-import { createGraphScaffold, getGraphScaffoldKeys } from './graphScaffold'
-import { normalizeNode } from './nodeLibrary'
+} from './graphcore.ts'
+import { createGraphScaffold, getGraphScaffoldKeys } from './graphScaffold.ts'
+import { normalizeNode } from './nodeLibrary.ts'
 
 export const PRESET_CATALOG_VERSION = '2026-04-08.2'
 const FALLBACK_ART_STYLE_PRESET = 'premium_stylized_3d'

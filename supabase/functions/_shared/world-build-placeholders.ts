@@ -5,7 +5,7 @@ export type ComponentEnvelope = {
   config: Record<string, unknown>
 }
 
-export type GraphType = 'narrative_flow' | 'system_graph' | 'quest_flow'
+export type GraphType = 'narrative_flow' | 'system_graph' | 'quest_flow' | 'cinematic_flow'
 
 export type GraphScaffold = {
   id: string

@@ -9,11 +9,11 @@ import type {
   GraphCreateInput,
   PatchOperation,
   ProjectSnapshot,
-} from './graphcore'
-import { createAssemblyGraph } from './environmentAssembly'
-import { createGraphScaffold } from './graphScaffold'
-import { applyTemplateToNode, normalizeNode } from './nodeLibrary'
-import { materializeArchetypePreset, materializeDefinitionPreset, materializeGraphPreset } from './presetCatalog'
+} from './graphcore.ts'
+import { createAssemblyGraph } from './environmentAssembly.ts'
+import { createGraphScaffold } from './graphScaffold.ts'
+import { applyTemplateToNode, normalizeNode } from './nodeLibrary.ts'
+import { materializeArchetypePreset, materializeDefinitionPreset, materializeGraphPreset } from './presetCatalog.ts'
 
 function createDefinitionFromPatch(operation: Extract<PatchOperation, { op: 'create_definition' }>): DefinitionBase {
   const payload = operation.payload ?? {}

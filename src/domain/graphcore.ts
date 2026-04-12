@@ -1,23 +1,23 @@
 import { z } from 'zod'
-import { gameSpecSchema } from './gameSpec'
+import { gameSpecSchema } from './gameSpec.ts'
 import {
   resourceGenerationMetadataSchema,
   worldBuildBatchSchema,
-} from './worldBuild'
-import { meshGenerationJobSchema } from './meshGeneration'
+} from './worldBuild.ts'
+import { meshGenerationJobSchema } from './meshGeneration.ts'
 import {
   assemblyEdgeDefinitionSchema,
   assemblyGraphDefinitionSchema,
   assemblyNodeDefinitionSchema,
   compiledEnvironmentModelSchema,
   environmentGeometryBindingConfigSchema,
-} from './environmentAssembly'
+} from './environmentAssembly.ts'
 import {
   environmentBlueprintV1Schema,
-} from './environmentBlueprint'
+} from './environmentBlueprint.ts'
 import {
   cinematicRunSchema,
-} from './cinematics'
+} from './cinematics.ts'
 
 export const definitionKindSchema = z.enum([
   'item',

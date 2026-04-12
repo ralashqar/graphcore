@@ -20,6 +20,9 @@ import {
 } from '../_shared/world-build-placeholders.ts'
 import { slugifyWorldBuildName, uniqueWorldBuildKey } from '../_shared/world-build.ts'
 
+// Hosted bundling for this function depends on the entrypoint hash changing when shared
+// world-build request/response contracts change.
+
 type PlaceholderAsset = {
   key: string
   name: string
@@ -367,11 +370,13 @@ Deno.serve(async (request) => {
       project_id: snapshot.project.id,
       prompt: payload.prompt,
       request_summary: payload.requestSummary,
+      planner_mode: payload.plannerMode,
       plan_json: payload.planItems,
+      cinematic_plan: payload.cinematicPlan,
       status: enabledItems.length > 0 ? 'running' : 'completed',
       diagnostics: [],
       created_by: user.id,
-    }).select('id, draft_id, project_id, prompt, request_summary, status, diagnostics, plan_json, created_at, updated_at').single()
+    }).select('id, draft_id, project_id, prompt, request_summary, planner_mode, status, diagnostics, plan_json, cinematic_plan, created_at, updated_at').single()
 
     if (batchInsert.error || !batchInsert.data) {
       throw new Error(batchInsert.error?.message ?? 'Failed to create world build batch.')
@@ -386,6 +391,7 @@ Deno.serve(async (request) => {
     const planJobIds = new Map<string, string>()
     const planTargetKeys = new Map<string, Record<string, string>>()
     const assetJobIds = new Map<string, string>()
+    const planReadyJobIds = new Map<string, string>()
     const orderSeed = { value: 0 }
 
     function nextOrder() {
@@ -394,7 +400,7 @@ Deno.serve(async (request) => {
     }
 
     for (const item of enabledItems) {
-      if (item.kind === 'narrative_graph') continue
+      if (item.kind === 'narrative_graph' || item.kind === 'cinematic_graph') continue
 
       const definitionJobId = crypto.randomUUID()
       const definitionKey = buildDefinitionKey(item.kind === 'character' ? 'character' : item.kind === 'environment' ? 'environment' : 'item', item.name, definitionKeyState)
@@ -414,6 +420,7 @@ Deno.serve(async (request) => {
         error_message: null,
         order_index: nextOrder(),
       })
+      planReadyJobIds.set(item.id, definitionJobId)
 
       if ((item.kind === 'character' || item.kind === 'item') && item.generationOptions.generateConceptImage) {
         const assetKey = buildAssetKey(item.name, 'concept', assetKeyState)
@@ -434,6 +441,7 @@ Deno.serve(async (request) => {
         })
         assetJobIds.set(assetKey, assetJobId)
         planTargetKeys.set(item.id, { definitionKey, assetKey })
+        planReadyJobIds.set(item.id, assetJobId)
       }
 
       if (item.kind === 'environment' && item.generationOptions.generateConceptGallery) {
@@ -457,6 +465,9 @@ Deno.serve(async (request) => {
             order_index: nextOrder(),
           })
           assetJobIds.set(assetKey, assetJobId)
+          if (view === 'hero') {
+            planReadyJobIds.set(item.id, assetJobId)
+          }
         }
         planTargetKeys.set(item.id, targetKeys)
       }
@@ -471,6 +482,30 @@ Deno.serve(async (request) => {
         batch_id: batchId,
         plan_item_id: item.id,
         kind: 'narrative_graph',
+        status: 'queued',
+        depends_on_job_ids: dependsOnJobIds,
+        target_keys: { graphKey },
+        prompt: payload.prompt,
+        options: item.generationOptions,
+        result_context: null,
+        error_message: null,
+        order_index: nextOrder(),
+      })
+      planJobIds.set(item.id, graphJobId)
+      planTargetKeys.set(item.id, { graphKey })
+    }
+
+    for (const item of enabledItems.filter((entry) => entry.kind === 'cinematic_graph')) {
+      const graphJobId = crypto.randomUUID()
+      const graphKey = buildGraphKey(item.name, graphKeyState)
+      const dependsOnJobIds = item.dependsOn
+        .map((planItemId) => planReadyJobIds.get(planItemId) ?? planJobIds.get(planItemId))
+        .filter((value): value is string => Boolean(value))
+      jobsToInsert.push({
+        id: graphJobId,
+        batch_id: batchId,
+        plan_item_id: item.id,
+        kind: 'cinematic_graph',
         status: 'queued',
         depends_on_job_ids: dependsOnJobIds,
         target_keys: { graphKey },
@@ -600,6 +635,23 @@ Deno.serve(async (request) => {
         }
         createdGraphs.push(await insertPlaceholderGraph(client, snapshot.draft.id, user.id, graph))
       }
+
+      if (item.kind === 'cinematic_graph') {
+        const graphJobId = planJobIds.get(item.id)
+        const graphKey = planTargetKeys.get(item.id)?.graphKey
+        if (!graphJobId || !graphKey) continue
+        const graph = createGraphScaffold({
+          key: graphKey,
+          name: item.name,
+          graphType: 'cinematic_flow',
+          summary: item.summary,
+        })
+        graph.metadata = {
+          generation: createGenerationMetadata(batchId, graphJobId),
+          cinematics: payload.cinematicPlan?.graphSettings ?? {},
+        }
+        createdGraphs.push(await insertPlaceholderGraph(client, snapshot.draft.id, user.id, graph))
+      }
     }
 
     const batch = worldBuildBatchSchema.parse({
@@ -608,9 +660,11 @@ Deno.serve(async (request) => {
       draftId: batchInsert.data.draft_id,
       prompt: batchInsert.data.prompt,
       requestSummary: batchInsert.data.request_summary,
+      plannerMode: batchInsert.data.planner_mode ?? 'world_build',
       status: batchInsert.data.status,
       diagnostics: batchInsert.data.diagnostics ?? [],
       planItems: batchInsert.data.plan_json ?? [],
+      cinematicPlan: batchInsert.data.cinematic_plan ?? null,
       createdAt: batchInsert.data.created_at,
       updatedAt: batchInsert.data.updated_at,
       jobs: jobsToInsert.map((job) => ({
@@ -636,6 +690,7 @@ Deno.serve(async (request) => {
       definitions: createdDefinitions,
       graphs: createdGraphs,
       assets: createdAssets,
+      cinematicRuns: [],
     }))
   } catch (error) {
     return errorResponse(error, 'Failed to start world build.')

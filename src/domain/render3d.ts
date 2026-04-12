@@ -1,5 +1,5 @@
-import type { DefinitionBase } from './graphcore'
-import { environmentAssemblyBindingDefaults, type EnvironmentGeometryBindingConfig } from './environmentAssembly'
+import type { DefinitionBase } from './graphcore.ts'
+import { environmentAssemblyBindingDefaults, type EnvironmentGeometryBindingConfig } from './environmentAssembly.ts'
 
 export type DefinitionComponentType = DefinitionBase['components'][number]['type']
 export type CharacterProfileComponent = Extract<DefinitionBase['components'][number], { type: 'character_profile' }>

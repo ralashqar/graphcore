@@ -5,7 +5,7 @@ import type {
   ShellBandSpec,
   StructureFootprint,
   StructuralFusionSpec,
-} from './environmentAssembly'
+} from './environmentAssembly.ts'
 
 export type StructuralShellInput = {
   id: string

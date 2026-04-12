@@ -3,6 +3,11 @@ import { EntityIcon } from '../../shared/entityIcons'
 
 type WorldBuildPlanModalProps = {
   isStarting: boolean
+  plannerMode?: 'world_build' | 'cinematic_build'
+  cinematicPlan?: {
+    entityRefs?: Array<{ id: string; sourceName: string; role: string; resolution: 'existing' | 'create'; definitionKey?: string | null }>
+    shots?: Array<{ id: string; title: string; beat: string }>
+  } | null
   planItems: WorldBuildPlanItem[]
   prompt: string
   requestSummary: string
@@ -22,11 +27,15 @@ function iconForPlanKind(kind: WorldBuildPlanItem['kind']) {
       return 'item'
     case 'narrative_graph':
       return 'graph'
+    case 'cinematic_graph':
+      return 'cinematic'
   }
 }
 
 export function WorldBuildPlanModal({
+  cinematicPlan,
   isStarting,
+  plannerMode = 'world_build',
   planItems,
   prompt,
   requestSummary,
@@ -42,12 +51,25 @@ export function WorldBuildPlanModal({
       <section className="bootstrap-dialog world-build-dialog" onClick={(event) => event.stopPropagation()}>
         <div className="surface-head">
           <div>
-            <span className="eyebrow">Global World Build</span>
+            <span className="eyebrow">{plannerMode === 'cinematic_build' ? 'Prompt Cinematic Build' : 'Global World Build'}</span>
             <h2>{requestSummary}</h2>
             <p className="subtle-line">{prompt}</p>
           </div>
           <button className="ghost-button compact" onClick={onCancel} type="button">Close</button>
         </div>
+        {plannerMode === 'cinematic_build' && cinematicPlan ? (
+          <div className="diagnostic-stack">
+            <div className="inline-note">
+              Matched existing: {(cinematicPlan.entityRefs ?? []).filter((entry) => entry.resolution === 'existing').map((entry) => entry.sourceName).join(', ') || 'none'}
+            </div>
+            <div className="inline-note">
+              Will create: {(cinematicPlan.entityRefs ?? []).filter((entry) => entry.resolution === 'create').map((entry) => entry.sourceName).join(', ') || 'none'}
+            </div>
+            <div className="inline-note">
+              Planned shots: {(cinematicPlan.shots ?? []).map((shot) => shot.title).join(', ') || 'none'}
+            </div>
+          </div>
+        ) : null}
         <div className="world-build-plan-list">
           {hasPlanItems ? planItems.map((item) => (
             <article key={item.id} className={item.enabled ? 'world-build-plan-card' : 'world-build-plan-card is-disabled'}>

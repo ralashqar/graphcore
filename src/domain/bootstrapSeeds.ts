@@ -1,4 +1,4 @@
-import { archetypePresetMap } from './presetCatalog'
+import { archetypePresetMap } from './presetCatalog.ts'
 
 export const BASELINE_ARCHETYPE_PRESET_IDS = [
   'item.consumable',

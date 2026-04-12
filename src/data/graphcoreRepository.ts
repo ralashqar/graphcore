@@ -820,9 +820,11 @@ type WorldBuildBatchRow = {
   project_id: string
   prompt: string
   request_summary: string
+  planner_mode: string | null
   status: string
   diagnostics: string[] | null
   plan_json: unknown[] | null
+  cinematic_plan: Record<string, unknown> | null
   created_at: string
   updated_at: string
 }
@@ -1202,7 +1204,7 @@ export async function loadProjectSnapshot(
       .order('created_at', { ascending: true }),
     supabase
       .from('world_build_batches')
-      .select('id, draft_id, project_id, prompt, request_summary, status, diagnostics, plan_json, created_at, updated_at')
+      .select('id, draft_id, project_id, prompt, request_summary, planner_mode, status, diagnostics, plan_json, cinematic_plan, created_at, updated_at')
       .eq('draft_id', draft.id)
       .order('created_at', { ascending: false }),
     supabase
@@ -1506,9 +1508,11 @@ export async function loadProjectSnapshot(
       draftId: batch.draft_id,
       prompt: batch.prompt,
       requestSummary: batch.request_summary,
+      plannerMode: batch.planner_mode ?? 'world_build',
       status: batch.status,
       diagnostics: batch.diagnostics ?? [],
       planItems: batch.plan_json ?? [],
+      cinematicPlan: batch.cinematic_plan ?? null,
       createdAt: batch.created_at,
       updatedAt: batch.updated_at,
       jobs: worldBuildJobs

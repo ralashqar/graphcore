@@ -1,5 +1,5 @@
-import { projectSnapshotSchema, type ProjectSnapshot } from './graphcore'
-import { createDefaultGameSpec } from './presetCatalog'
+import { projectSnapshotSchema, type ProjectSnapshot } from './graphcore.ts'
+import { createDefaultGameSpec } from './presetCatalog.ts'
 
 export const demoProjectSnapshot: ProjectSnapshot = projectSnapshotSchema.parse({
   workspace: {

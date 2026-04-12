@@ -53,6 +53,22 @@ export function ActivityWorkspace({
                     <h3>{selectedWorldBuild.planItems.length} item{selectedWorldBuild.planItems.length === 1 ? '' : 's'}</h3>
                   </div>
                 </div>
+                {selectedWorldBuild.plannerMode === 'cinematic_build' && selectedWorldBuild.cinematicPlan ? (
+                  <div className="diagnostic-stack">
+                    <div className="inline-note">
+                      <strong>Matched existing</strong>
+                      <span> {(selectedWorldBuild.cinematicPlan.entityRefs ?? []).filter((entry) => entry.resolution === 'existing').map((entry) => entry.sourceName).join(', ') || 'none'}</span>
+                    </div>
+                    <div className="inline-note">
+                      <strong>Created first</strong>
+                      <span> {(selectedWorldBuild.cinematicPlan.entityRefs ?? []).filter((entry) => entry.resolution === 'create').map((entry) => entry.sourceName).join(', ') || 'none'}</span>
+                    </div>
+                    <div className="inline-note">
+                      <strong>Shots</strong>
+                      <span> {(selectedWorldBuild.cinematicPlan.shots ?? []).map((entry) => entry.title).join(', ') || 'none'}</span>
+                    </div>
+                  </div>
+                ) : null}
                 <div className="diagnostic-stack">
                   {selectedWorldBuild.planItems.map((item) => (
                     <div key={item.id} className="inline-note">

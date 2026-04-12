@@ -1,4 +1,4 @@
-import type { AssetDefinition } from './graphcore'
+import type { AssetDefinition } from './graphcore.ts'
 
 export const supportedMeshExtensions = ['.glb', '.gltf'] as const
 export const supportedMeshAccept = '.glb,.gltf,model/gltf-binary,model/gltf+json'

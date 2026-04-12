@@ -191,6 +191,19 @@ function mergeWorldBuildResourcesByKey<T extends { key: string; metadata?: unkno
   return merged
 }
 
+function mergeResourcesById<T extends { id: string }>(current: T[], incoming: T[]) {
+  if (incoming.length === 0) return current
+  const incomingMap = new Map(incoming.map((entry) => [entry.id, entry]))
+  const merged = current.map((entry) => incomingMap.get(entry.id) ?? entry)
+  const seen = new Set(current.map((entry) => entry.id))
+  for (const entry of incoming) {
+    if (!seen.has(entry.id)) {
+      merged.unshift(entry)
+    }
+  }
+  return merged
+}
+
 function mergeWorldBuildStatusIntoSnapshot(snapshot: ProjectSnapshot, status: WorldBuildStatusResponse) {
   const hasBatchAlready = snapshot.worldBuildBatches.some((batch) => batch.id === status.batch.id)
   const skipReinsertForBatchId = hasBatchAlready ? status.batch.id : null
@@ -199,6 +212,7 @@ function mergeWorldBuildStatusIntoSnapshot(snapshot: ProjectSnapshot, status: Wo
     definitions: mergeWorldBuildResourcesByKey(snapshot.definitions as Array<ProjectSnapshot['definitions'][number]>, status.definitions as ProjectSnapshot['definitions'], { skipReinsertForBatchId }),
     graphs: mergeWorldBuildResourcesByKey(snapshot.graphs as Array<ProjectSnapshot['graphs'][number]>, status.graphs as ProjectSnapshot['graphs'], { skipReinsertForBatchId }),
     assets: mergeWorldBuildResourcesByKey(snapshot.assets as Array<ProjectSnapshot['assets'][number]>, status.assets as ProjectSnapshot['assets'], { skipReinsertForBatchId }),
+    cinematicRuns: mergeResourcesById(snapshot.cinematicRuns, status.cinematicRuns ?? []),
     worldBuildBatches: snapshot.worldBuildBatches.some((batch) => batch.id === status.batch.id)
       ? snapshot.worldBuildBatches.map((batch) => (batch.id === status.batch.id ? status.batch : batch))
       : [status.batch, ...snapshot.worldBuildBatches],
@@ -671,6 +685,9 @@ export default function App() {
           })
 
           if (cancelled) return
+          if (status.batch.plannerMode === 'cinematic_build' && status.graphs.some((graph) => graph.graphType === 'cinematic_flow')) {
+            setActiveTab('cinematics')
+          }
 
           setSnapshot((current) => {
             if (!current) return current
@@ -2028,12 +2045,18 @@ export default function App() {
 
     try {
       const status = await workspaceService.startWorldBuild({
+        plannerMode: worldBuildPlanPreview.plannerMode,
         prompt: promptText,
         requestSummary: worldBuildPlanPreview.requestSummary,
         snapshot,
         planItems: worldBuildPlanPreview.planItems,
+        cinematicPlan: worldBuildPlanPreview.cinematicPlan ?? null,
         model: promptModel,
       })
+
+      if (status.batch.plannerMode === 'cinematic_build' && status.graphs.some((graph) => graph.graphType === 'cinematic_flow')) {
+        setActiveTab('cinematics')
+      }
 
       setSnapshot((current) => {
         if (!current) return current
@@ -2601,7 +2624,9 @@ export default function App() {
       ) : null}
       {worldBuildPlanPreview ? (
         <WorldBuildPlanModal
+          cinematicPlan={worldBuildPlanPreview.cinematicPlan ?? null}
           isStarting={isStartingWorldBuild}
+          plannerMode={worldBuildPlanPreview.plannerMode}
           planItems={worldBuildPlanPreview.planItems}
           prompt={promptText}
           requestSummary={worldBuildPlanPreview.requestSummary}

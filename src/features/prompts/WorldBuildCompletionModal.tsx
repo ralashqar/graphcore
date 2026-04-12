@@ -16,6 +16,10 @@ function iconForPlanKind(kind: WorldBuildBatch['planItems'][number]['kind']) {
       return 'item'
     case 'narrative_graph':
       return 'graph'
+    case 'cinematic_graph':
+      return 'cinematic'
+    default:
+      return 'graph'
   }
 }
 
@@ -46,7 +50,7 @@ export function WorldBuildCompletionModal({ batch, onClose }: WorldBuildCompleti
                   <span>{hasFailure ? 'Failed' : isComplete ? 'Completed' : 'In progress'}</span>
                   {firstFailure?.errorMessage ? <p className="subtle-line">{firstFailure.errorMessage}</p> : null}
                 </div>
-                <span className="world-build-completion-mark">{hasFailure ? '!' : '✓'}</span>
+                <span className="world-build-completion-mark">{hasFailure ? '!' : 'OK'}</span>
               </div>
             )
           })}

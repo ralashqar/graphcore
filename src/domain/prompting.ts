@@ -1,4 +1,4 @@
-import type { GameSpec, GraphType, PatchOperation, ProjectSnapshot } from './graphcore'
+import type { GameSpec, GraphType, PatchOperation, ProjectSnapshot } from './graphcore.ts'
 
 export type PromptTarget = 'graph' | 'node' | 'content' | 'environment'
 export type PromptTargetMode = 'current_graph' | 'new_graph' | 'auto'

@@ -1,5 +1,5 @@
-import type { GraphCreateInput, GraphDefinition } from './graphcore'
-import { normalizeNode } from './nodeLibrary'
+import type { GraphCreateInput, GraphDefinition } from './graphcore.ts'
+import { normalizeNode } from './nodeLibrary.ts'
 
 function graphSuffix(graphKey: string) {
   return graphKey

@@ -8,10 +8,10 @@ import type {
   GameSystemBundle,
   GraphDefinition,
   ProjectSnapshot,
-} from './graphcore'
-import { compileAssemblyGraph } from './environmentAssemblyCompiler'
-import { graphNodeTemplatesByKey } from './nodeLibrary'
-import { PRESET_CATALOG_VERSION } from './presetCatalog'
+} from './graphcore.ts'
+import { compileAssemblyGraph } from './environmentAssemblyCompiler.ts'
+import { graphNodeTemplatesByKey } from './nodeLibrary.ts'
+import { PRESET_CATALOG_VERSION } from './presetCatalog.ts'
 
 function isLikelyReferenceKey(value: string) {
   return /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/i.test(value)

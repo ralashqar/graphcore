@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-import { worldBuildPlanRequestSchema } from './worldBuild'
+import { worldBuildPlanRequestSchema } from './worldBuild.ts'
 
 export const meshGenerationJobStatusSchema = z.enum([
   'queued',

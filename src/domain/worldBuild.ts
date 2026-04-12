@@ -1,11 +1,13 @@
 import { z } from 'zod'
+import { cinematicRunSchema } from './cinematics.ts'
 
 export const WORLD_BUILD_ENVIRONMENT_VIEWS = ['hero', 'wide_alt', 'detail_area'] as const
 
-export const worldBuildPlanItemKindSchema = z.enum(['character', 'environment', 'item', 'narrative_graph'])
+export const worldBuildPlanItemKindSchema = z.enum(['character', 'environment', 'item', 'narrative_graph', 'cinematic_graph'])
 export const worldBuildBatchStatusSchema = z.enum(['planned', 'running', 'completed', 'completed_with_errors', 'failed', 'cancelled'])
 export const worldBuildJobStatusSchema = z.enum(['queued', 'running', 'succeeded', 'failed', 'skipped'])
 export const resourceGenerationStateSchema = z.enum(['pending', 'running', 'completed', 'failed'])
+export const worldBuildPlannerModeSchema = z.enum(['world_build', 'cinematic_build'])
 
 export const worldBuildGenerationOptionsSchema = z.object({
   generateConceptImage: z.boolean().optional(),
@@ -21,6 +23,51 @@ export const worldBuildPlanItemSchema = z.object({
   dependsOn: z.array(z.string()).default([]),
   enabled: z.boolean().default(true),
   generationOptions: worldBuildGenerationOptionsSchema,
+})
+
+export const cinematicEntityRefSchema = z.object({
+  id: z.string(),
+  kind: z.enum(['character', 'environment', 'item']),
+  role: z.string(),
+  sourceName: z.string(),
+  summary: z.string().default(''),
+  resolution: z.enum(['existing', 'create']),
+  definitionKey: z.string().nullable().optional(),
+  planItemId: z.string().nullable().optional(),
+})
+
+export const cinematicShotPlanSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  beat: z.string(),
+  participantRefIds: z.array(z.string()).default([]),
+  locationRefId: z.string().nullable().default(null),
+  propRefIds: z.array(z.string()).default([]),
+  shotType: z.enum(['establishing', 'dialogue', 'reveal', 'action', 'insert', 'transition', 'custom']).default('custom'),
+  framing: z.string().default(''),
+  cameraAngle: z.string().default(''),
+  cameraMovement: z.string().default(''),
+  lensPreference: z.string().default(''),
+  durationSeconds: z.number().int().positive().max(20).nullable().default(null),
+  visualPrompt: z.string().default(''),
+})
+
+export const cinematicGraphSettingsSchema = z.object({
+  stillAspectRatio: z.enum(['1:1', '4:3', '3:4', '16:9', '9:16', '21:9']).optional(),
+  stillResolution: z.enum(['1K', '2K']).optional(),
+  videoResolution: z.enum(['480p', '720p', '1080p']).optional(),
+  defaultClipSeconds: z.number().int().positive().max(20).optional(),
+  defaultFps: z.number().int().positive().max(60).optional(),
+  specializationMode: z.enum(['story', 'ugc']).optional(),
+}).default({})
+
+export const cinematicPlanSchema = z.object({
+  graphName: z.string(),
+  graphSummary: z.string(),
+  entityRefs: z.array(cinematicEntityRefSchema).default([]),
+  shots: z.array(cinematicShotPlanSchema).min(1),
+  graphSettings: cinematicGraphSettingsSchema,
+  autoRun: z.boolean().default(true),
 })
 
 export const worldBuildPlanRequestSchema = z.object({
@@ -56,17 +103,21 @@ export const worldBuildPlanRequestSchema = z.object({
 })
 
 export const worldBuildPlanResponseSchema = z.object({
+  plannerMode: worldBuildPlannerModeSchema.default('world_build'),
   requestSummary: z.string(),
   planItems: z.array(worldBuildPlanItemSchema),
+  cinematicPlan: cinematicPlanSchema.nullable().optional(),
   diagnostics: z.array(z.string()).default([]),
   assistantNotes: z.string().optional(),
 })
 
 export const worldBuildStartRequestSchema = z.object({
+  plannerMode: worldBuildPlannerModeSchema.default('world_build'),
   prompt: z.string().min(1),
   requestSummary: z.string().min(1),
   snapshot: worldBuildPlanRequestSchema.shape.snapshot,
   planItems: z.array(worldBuildPlanItemSchema),
+  cinematicPlan: cinematicPlanSchema.nullable().optional(),
   model: z.string().min(1),
 })
 
@@ -101,9 +152,11 @@ export const worldBuildBatchSchema = z.object({
   draftId: z.string(),
   prompt: z.string(),
   requestSummary: z.string(),
+  plannerMode: worldBuildPlannerModeSchema.default('world_build'),
   status: worldBuildBatchStatusSchema,
   diagnostics: z.array(z.string()).default([]),
   planItems: z.array(worldBuildPlanItemSchema),
+  cinematicPlan: cinematicPlanSchema.nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
   jobs: z.array(worldBuildJobSchema).default([]),
@@ -114,6 +167,7 @@ export const worldBuildStatusResponseSchema = z.object({
   definitions: z.array(z.record(z.string(), z.unknown())).default([]),
   graphs: z.array(z.record(z.string(), z.unknown())).default([]),
   assets: z.array(z.record(z.string(), z.unknown())).default([]),
+  cinematicRuns: z.array(cinematicRunSchema).default([]),
 })
 
 export const worldBuildPollRequestSchema = z.object({
@@ -150,6 +204,10 @@ export type WorldBuildStatusResponse = z.infer<typeof worldBuildStatusResponseSc
 export type WorldBuildPollRequest = z.infer<typeof worldBuildPollRequestSchema>
 export type WorldBuildDeletePlaceholderRequest = z.infer<typeof worldBuildDeletePlaceholderRequestSchema>
 export type WorldBuildDeletePlaceholderResponse = z.infer<typeof worldBuildDeletePlaceholderResponseSchema>
+export type WorldBuildPlannerMode = z.infer<typeof worldBuildPlannerModeSchema>
+export type CinematicPlan = z.infer<typeof cinematicPlanSchema>
+export type CinematicEntityRef = z.infer<typeof cinematicEntityRefSchema>
+export type CinematicShotPlan = z.infer<typeof cinematicShotPlanSchema>
 
 export function getResourceGenerationMetadata(value: { metadata?: unknown } | null | undefined) {
   if (!value || typeof value !== 'object') return null

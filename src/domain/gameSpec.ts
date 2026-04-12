@@ -1,6 +1,6 @@
 import { z } from 'zod'
-import { DEFAULT_ART_STYLE_PRESET } from './artStylePresets'
-import { cinematicSettingsSchema } from './cinematics'
+import { DEFAULT_ART_STYLE_PRESET } from './artStylePresets.ts'
+import { cinematicSettingsSchema } from './cinematics.ts'
 
 const scopeWeightSchema = z.enum(['none', 'light', 'medium', 'heavy'])
 

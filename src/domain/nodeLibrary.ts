@@ -7,8 +7,8 @@ import type {
   NodeLibraryGroup,
   NodeTemplateDefinition,
   PortDefinition,
-} from './graphcore'
-import { updateNodeMetadataWithAssetRef, updateNodeMetadataWithShot } from './cinematics'
+} from './graphcore.ts'
+import { updateNodeMetadataWithAssetRef, updateNodeMetadataWithShot } from './cinematics.ts'
 
 const narrativeGraphTypes: GraphType[] = ['narrative_flow', 'quest_flow']
 const cinematicGraphTypes: GraphType[] = ['cinematic_flow']

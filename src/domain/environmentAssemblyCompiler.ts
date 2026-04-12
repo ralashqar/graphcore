@@ -57,8 +57,8 @@ import {
   type WallRunSpec,
   type WallSegmentSpec,
   type WindowSpec,
-} from './environmentAssembly'
-import { resolveStructuralUnion, type StructuralShellInput, type StructuralShellBandResult } from './environmentAssemblyStructuralFusion'
+} from './environmentAssembly.ts'
+import { resolveStructuralUnion, type StructuralShellInput, type StructuralShellBandResult } from './environmentAssemblyStructuralFusion.ts'
 
 type RuntimeProfile = {
   profile: Profile2D

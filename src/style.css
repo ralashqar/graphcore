@@ -1496,10 +1496,12 @@ button:disabled {
 .bootstrap-dialog {
   width: min(1200px, 100%);
   min-height: min(860px, calc(100vh - 48px));
+  max-height: calc(100svh - 48px);
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr) auto;
   gap: 18px;
   padding: 28px;
+  overflow: hidden;
   border-radius: 32px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background:
@@ -1513,6 +1515,7 @@ button:disabled {
 .bootstrap-dialog-minimal {
   width: min(760px, 100%);
   min-height: min(760px, calc(100vh - 56px));
+  max-height: calc(100svh - 56px);
   grid-template-rows: auto auto minmax(0, 1fr) auto;
   gap: 22px;
   padding: 34px;
@@ -3025,6 +3028,7 @@ button:disabled {
 
 .world-build-dialog {
   width: min(100%, 920px);
+  min-height: min(820px, calc(100svh - 48px));
 }
 
 .confirm-delete-dialog {
@@ -3054,6 +3058,18 @@ button:disabled {
 .world-build-completion-list {
   display: grid;
   gap: 1rem;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 0.35rem;
+  align-content: start;
+}
+
+.bootstrap-footer {
+  justify-content: space-between;
+  gap: 16px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(148, 163, 184, 0.14);
+  background: linear-gradient(180deg, rgba(9, 14, 22, 0), rgba(9, 14, 22, 0.92) 28%);
 }
 
 .world-build-plan-card,
