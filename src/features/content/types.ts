@@ -4,8 +4,10 @@ import type {
   DefinitionBase,
   FieldDefinition,
   FieldValue,
+  GameSpec,
 } from '../../domain/graphcore'
 import type { AssetUrlCreateOptions } from '../../domain/assets'
+import type { MeshGenerationJob } from '../../domain/meshGeneration'
 
 export type ItemIdentityChanges = Partial<
   Pick<DefinitionBase, 'name' | 'key' | 'summary' | 'iconAssetKey' | 'archetypeKey'>
@@ -27,10 +29,13 @@ export type ContentWorkspaceProps = {
   definitions: DefinitionBase[]
   graphKeys: string[]
   items: DefinitionBase[]
+  gameSpec?: GameSpec | null
   selectedAsset: AssetDefinition | null
   selectedArchetype: ArchetypeDefinition | null
   selectedItem: DefinitionBase | null
   deletingItemKey?: string | null
+  deletingGeneratedMeshDefinitionKey?: string | null
+  meshGenerationJobs?: MeshGenerationJob[]
   onAddArchetypeField: (archetypeKey: string, field: FieldDefinition) => void
   onAddCustomField: (itemKey: string, field: FieldDefinition) => void
   onAssignArchetypeIcon: (assetKey: string | null) => void
@@ -39,6 +44,7 @@ export type ContentWorkspaceProps = {
   onCreateDefinitionOfKind: (kind: DefinitionBase['kind'], archetypeKey?: string | null) => void
   onCreateItem: (archetypeKey?: string | null) => void
   onCreateUrlAsset: (url: string, kind?: 'image' | 'mesh', options?: AssetUrlCreateOptions) => string | null
+  onDeleteGeneratedMesh: (definitionKey: string) => void
   onDeleteItem: (itemKey: string) => void
   onRemoveArchetypeField: (archetypeKey: string, fieldKey: string) => void
   onSelectAsset: (key: string | null) => void
@@ -49,6 +55,8 @@ export type ContentWorkspaceProps = {
   onUpdateFieldValue: (itemKey: string, fieldKey: string, value: FieldValue['value']) => void
   onUpdateItemIdentity: (key: string, changes: ItemIdentityChanges) => void
   onUpdateComponents: (itemKey: string, components: DefinitionBase['components']) => void
+  onStartMeshGeneration: (definitionKey: string) => void
+  onPersistDefinitionPreviewImageBinding: (definitionKey: string, assetKey: string | null) => Promise<void>
 }
 
 export type AssetsWorkspaceProps = {

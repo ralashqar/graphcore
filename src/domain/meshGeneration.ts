@@ -33,6 +33,8 @@ export const meshGenerationJobSchema = z.object({
 export const meshGenerationStartRequestSchema = z.object({
   snapshot: worldBuildPlanRequestSchema.shape.snapshot,
   definitionKey: z.string().min(1),
+  preferredImageAssetKey: z.string().min(1).nullable().optional(),
+  preferredImageSourceUrl: z.string().min(1).nullable().optional(),
 })
 
 export const meshGenerationPollRequestSchema = z.object({
@@ -62,4 +64,3 @@ export type MeshGenerationStatusResponse = z.infer<typeof meshGenerationStatusRe
 export function isTerminalMeshGenerationJobStatus(status: string) {
   return status === 'succeeded' || status === 'failed' || status === 'cancelled'
 }
-

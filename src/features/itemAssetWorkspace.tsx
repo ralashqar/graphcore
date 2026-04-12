@@ -1,11 +1,19 @@
 import { useEffect, useMemo, useState } from 'react'
 
+import { visualAssetGenerationService } from '../application/services/visualAssetGenerationService'
+import { getArtStylePresetLabel } from '../domain/artStylePresets'
+import { buildAssetSlug } from '../domain/assets'
+import { getResolvedRender3dBinding } from '../domain/render3d'
+import { buildItemConceptPrompt } from '../domain/visualAssetGeneration'
 import { getResourceGenerationMetadata, isPendingGenerationResource } from '../domain/worldBuild'
+import type { MeshGenerationJob } from '../domain/meshGeneration'
+import { isTerminalMeshGenerationJobStatus } from '../domain/meshGeneration'
 import { EntityIcon, iconForDefinitionKind } from '../shared/entityIcons'
 import { ArchetypeEditor } from './content/ArchetypeEditor'
 import { AssetsWorkspace as AssetsWorkspaceView } from './content/AssetsWorkspace'
 import { DefinitionEditor } from './content/DefinitionEditor'
 import {
+  AssetPickerDialog,
   MediaThumb,
   findAssetByKey,
   resolveDefinitionDisplayAssetKey,
@@ -14,7 +22,9 @@ import type {
   ContentMode,
   ContentWorkspaceProps,
   DefinitionKindFilter,
+  DefinitionPanelMode,
 } from './content/types'
+import { Definition3dPanel } from './viewer3d/Character3dPanel'
 
 const contentKinds = [
   { kind: 'item', label: 'Item', helper: 'Objects, pickups, equipment' },
@@ -42,10 +52,13 @@ function isContentKind(kind: string): kind is ContentKind {
 export function ContentWorkspace({
   archetypes,
   assets,
-  deletingItemKey = null,
   definitions,
+  deletingGeneratedMeshDefinitionKey = null,
+  deletingItemKey = null,
+  gameSpec = null,
   graphKeys,
   items,
+  meshGenerationJobs = [],
   selectedAsset,
   selectedArchetype,
   selectedItem,
@@ -56,12 +69,15 @@ export function ContentWorkspace({
   onCreateArchetype,
   onCreateDefinitionOfKind,
   onCreateItem,
-  onCreateUrlAsset: _onCreateUrlAsset,
+  onCreateUrlAsset,
+  onDeleteGeneratedMesh,
   onDeleteItem,
   onRemoveArchetypeField,
   onSelectAsset: _onSelectAsset,
   onSelectArchetype,
   onSelectItem,
+  onStartMeshGeneration,
+  onPersistDefinitionPreviewImageBinding,
   onUpdateArchetypeField,
   onUpdateArchetypeIdentity,
   onUpdateFieldValue,
@@ -69,12 +85,16 @@ export function ContentWorkspace({
   onUpdateComponents,
 }: ContentWorkspaceProps) {
   const [mode, setMode] = useState<ContentMode>('items')
+  const [itemPanelMode, setItemPanelMode] = useState<DefinitionPanelMode>('details')
   const [isCreateContentOpen, setIsCreateContentOpen] = useState(false)
   const [createTemplateKindFilter, setCreateTemplateKindFilter] = useState<DefinitionKindFilter>('all')
   const [itemSearch, setItemSearch] = useState('')
   const [itemFilterKind, setItemFilterKind] = useState<DefinitionKindFilter>('all')
   const [archetypeSearch, setArchetypeSearch] = useState('')
   const [archetypeKindFilter, setArchetypeKindFilter] = useState<DefinitionKindFilter>('all')
+  const [itemConceptMessage, setItemConceptMessage] = useState<string | null>(null)
+  const [itemConceptPending, setItemConceptPending] = useState(false)
+  const [isItemImagePickerOpen, setIsItemImagePickerOpen] = useState(false)
 
   const imageAssets = assets.filter((asset) => asset.kind === 'image')
   const contentItems = useMemo(
@@ -94,6 +114,8 @@ export function ContentWorkspace({
       ? selectedArchetype
       : null
   const isDeletingSelectedItem = selectedContentItem?.key === deletingItemKey
+  const isDeletingGeneratedMesh = selectedContentItem?.key === deletingGeneratedMeshDefinitionKey
+
   const filteredItems = useMemo(() => {
     const query = itemSearch.trim().toLowerCase()
     return contentItems
@@ -131,6 +153,51 @@ export function ContentWorkspace({
       .sort((left, right) => left.name.localeCompare(right.name))
   }, [contentArchetypes, createTemplateKindFilter])
 
+  const meshJobByDefinitionKey = useMemo(() => {
+    const map = new Map<string, MeshGenerationJob>()
+    for (const job of meshGenerationJobs) {
+      if (!map.has(job.definitionKey)) {
+        map.set(job.definitionKey, job)
+      }
+    }
+    return map
+  }, [meshGenerationJobs])
+
+  const selectedItemRenderBinding = useMemo(() => {
+    if (selectedContentItem?.kind !== 'item') return null
+    return getResolvedRender3dBinding(selectedContentItem)
+  }, [selectedContentItem])
+
+  const selectedItemPhysicalProfile = useMemo(() => {
+    if (selectedContentItem?.kind !== 'item') return null
+    const component = selectedContentItem.components.find((entry) => entry.type === 'physical_item_profile')
+    if (!component || typeof component.config !== 'object' || component.config === null) return null
+    const config = component.config as Record<string, unknown>
+    return {
+      physicalSubtype: typeof config.physicalSubtype === 'string' && ['pickup', 'prop', 'equipment', 'weapon', 'world_object'].includes(config.physicalSubtype)
+        ? config.physicalSubtype as 'pickup' | 'prop' | 'equipment' | 'weapon' | 'world_object'
+        : 'pickup',
+      worldPlacementRole: typeof config.worldPlacementRole === 'string' ? config.worldPlacementRole : '',
+      pickupContext: typeof config.pickupContext === 'string' ? config.pickupContext : '',
+    }
+  }, [selectedContentItem])
+
+  const selectedItemPreviewAsset = useMemo(() => {
+    const previewAssetKey = selectedItemRenderBinding?.previewImageAssetKey ?? selectedContentItem?.iconAssetKey ?? null
+    if (!previewAssetKey) return null
+    return findAssetByKey(assets, previewAssetKey)
+  }, [assets, selectedContentItem?.iconAssetKey, selectedItemRenderBinding?.previewImageAssetKey])
+
+  const selectedItemMeshJob = useMemo(() => {
+    if (selectedContentItem?.kind !== 'item') return null
+    return meshJobByDefinitionKey.get(selectedContentItem.key) ?? null
+  }, [meshJobByDefinitionKey, selectedContentItem])
+
+  const isItemConceptAssetPending = isPendingGenerationResource(selectedItemPreviewAsset)
+  const isItemConceptBusy = itemConceptPending || isItemConceptAssetPending
+  const supportsItem3dPanel = selectedContentItem?.kind === 'item'
+  const hasSelectedItemGenerationFailed = getResourceGenerationMetadata(selectedContentItem)?.state === 'failed'
+
   useEffect(() => {
     if (mode !== 'items') return
     if (selectedContentItem && filteredItems.some((item) => item.key === selectedContentItem.key)) return
@@ -144,6 +211,132 @@ export function ContentWorkspace({
     if (selectedArchetype && !isContentKind(selectedArchetype.appliesToKind)) return
     onSelectArchetype(filteredArchetypes[0]?.key ?? null)
   }, [filteredArchetypes, mode, onSelectArchetype, selectedArchetype, selectedContentArchetype])
+
+  useEffect(() => {
+    if (!supportsItem3dPanel && itemPanelMode !== 'details') {
+      setItemPanelMode('details')
+    }
+  }, [itemPanelMode, supportsItem3dPanel])
+
+  useEffect(() => {
+    setItemConceptMessage(null)
+  }, [selectedContentItem?.key])
+
+  useEffect(() => {
+    setIsItemImagePickerOpen(false)
+  }, [selectedContentItem?.key])
+
+  function updateSelectedItemRenderBinding(changes: Partial<NonNullable<typeof selectedItemRenderBinding>>) {
+    if (selectedContentItem?.kind !== 'item' || !selectedItemRenderBinding) return
+    const nextConfig = {
+      ...selectedItemRenderBinding,
+      ...changes,
+    }
+    const nextComponents = selectedContentItem.components.some((component) => component.type === 'render_3d_binding')
+      ? selectedContentItem.components.map((component) => component.type === 'render_3d_binding' ? { ...component, config: nextConfig } : component)
+      : [...selectedContentItem.components, { type: 'render_3d_binding', config: nextConfig } as typeof selectedContentItem.components[number]]
+    onUpdateComponents(selectedContentItem.key, nextComponents)
+  }
+
+  function updateSelectedItemPhysicalProfile(changes: Partial<NonNullable<typeof selectedItemPhysicalProfile>>) {
+    if (selectedContentItem?.kind !== 'item') return
+    const currentProfile: NonNullable<typeof selectedItemPhysicalProfile> = selectedItemPhysicalProfile ?? {
+      physicalSubtype: 'pickup',
+      worldPlacementRole: '',
+      pickupContext: '',
+    }
+    const nextComponents = selectedContentItem.components.some((component) => component.type === 'physical_item_profile')
+      ? selectedContentItem.components.map((component) => component.type === 'physical_item_profile' ? { ...component, config: { ...currentProfile, ...changes } } : component)
+      : [...selectedContentItem.components, { type: 'physical_item_profile', config: { ...currentProfile, ...changes } } as typeof selectedContentItem.components[number]]
+    onUpdateComponents(selectedContentItem.key, nextComponents)
+  }
+
+  async function handleGenerateItemConcept() {
+    if (selectedContentItem?.kind !== 'item' || !selectedItemRenderBinding) return
+    const conceptPrompt = selectedItemRenderBinding.conceptPrompt?.trim() ?? ''
+    if (!conceptPrompt) return
+
+    setItemConceptPending(true)
+    setItemConceptMessage(null)
+
+    try {
+      const archetypeLabel = archetypes.find((archetype) => archetype.key === selectedContentItem.archetypeKey)?.name ?? selectedContentItem.archetypeKey ?? null
+      const conceptAssetName = `${buildAssetSlug(selectedContentItem.name) || 'item'}_conceptart`
+      const prompt = buildItemConceptPrompt({
+        itemName: selectedContentItem.name,
+        physicalSubtype: selectedItemPhysicalProfile?.physicalSubtype ?? 'pickup',
+        archetypeLabel,
+        artStylePresetLabel: getArtStylePresetLabel(typeof gameSpec?.theme?.artStylePreset === 'string' ? gameSpec.theme.artStylePreset : null),
+        artStyleDescription: typeof gameSpec?.theme?.artStyleDescription === 'string' ? gameSpec.theme.artStyleDescription : null,
+        worldPlacementRole: selectedItemPhysicalProfile?.worldPlacementRole ?? null,
+        pickupContext: selectedItemPhysicalProfile?.pickupContext ?? null,
+        visualDescription: conceptPrompt,
+      })
+      const result = await visualAssetGenerationService.generateConceptImage({
+        prompt,
+        aspectRatio: '1:1',
+      })
+      const imageUrl = result.imageUrls[0] ?? null
+      if (!imageUrl) {
+        throw new Error('Fal returned no concept image URL.')
+      }
+      const assetKey = onCreateUrlAsset(imageUrl, 'image', {
+        existingAssetKey: selectedItemRenderBinding.previewImageAssetKey,
+        name: conceptAssetName,
+        metadata: {
+          generatedBy: 'item_concept',
+          provider: result.provider,
+          model: result.model,
+          requestId: result.requestId,
+          prompt,
+          previewUrl: imageUrl,
+          sourceUrl: imageUrl,
+          generatedAt: new Date().toISOString(),
+        },
+        openAssetsTab: false,
+        selectAsset: false,
+      })
+      if (!assetKey) {
+        throw new Error('The generated concept image could not be stored as a project asset.')
+      }
+      updateSelectedItemRenderBinding({ previewImageAssetKey: assetKey })
+      onUpdateItemIdentity(selectedContentItem.key, { iconAssetKey: assetKey })
+      await persistItemPreviewImage(assetKey)
+      setItemConceptMessage(`Concept image generated with ${result.model}.`)
+    } catch (error) {
+      setItemConceptMessage(error instanceof Error ? error.message : 'Item concept generation failed.')
+    } finally {
+      setItemConceptPending(false)
+    }
+  }
+
+  function requestItemConceptFrom3d() {
+    void handleGenerateItemConcept()
+  }
+
+  async function persistItemPreviewImage(assetKey: string | null) {
+    if (!selectedContentItem) return
+    await onPersistDefinitionPreviewImageBinding(selectedContentItem.key, assetKey)
+  }
+
+  const itemPanelControls = supportsItem3dPanel ? (
+    <div className="segmented-control panel-mode-control" aria-label="Item panel mode">
+      <button
+        className={itemPanelMode === 'details' ? 'segment-button is-active' : 'segment-button'}
+        onClick={() => setItemPanelMode('details')}
+        type="button"
+      >
+        Details
+      </button>
+      <button
+        className={itemPanelMode === '3d' ? 'segment-button is-active' : 'segment-button'}
+        onClick={() => setItemPanelMode('3d')}
+        type="button"
+      >
+        3D
+      </button>
+    </div>
+  ) : null
 
   return (
     <div className="focus-layout item-layout item-layout-wide">
@@ -211,25 +404,37 @@ export function ContentWorkspace({
                 </select>
               </label>
               <div className="rail-list">
-              {filteredItems.map((item) => (
-                  <button
-                    key={`${item.id}:${item.key}`}
-                    className={item.key === selectedContentItem?.key ? 'rail-button item-row is-active' : 'rail-button item-row'}
-                    onClick={() => onSelectItem(item.key)}
-                    type="button"
-                  >
-                    <MediaThumb
-                      asset={findAssetByKey(assets, resolveDefinitionDisplayAssetKey(item, archetypes))}
-                      fallbackIcon={iconForDefinitionKind(item.kind)}
-                      label={item.name}
-                    />
-                    <div className="item-row-copy">
-                      <strong>{item.name}</strong>
-                      <span>{contentKinds.find((entry) => entry.kind === item.kind)?.label ?? item.kind}</span>
-                      <span className={isPendingGenerationResource(item) ? 'world-build-rail-status' : undefined}>{isPendingGenerationResource(item) ? <><span className="button-spinner item-row-spinner" aria-hidden="true" />Generating...</> : getResourceGenerationMetadata(item)?.state === 'failed' ? 'Generation failed' : item.archetypeKey ?? 'No template'}</span>
-                    </div>
-                  </button>
-                ))}
+                {filteredItems.map((item) => {
+                  const itemMeshJob = meshJobByDefinitionKey.get(item.key) ?? null
+                  const isMeshPending = Boolean(itemMeshJob && !isTerminalMeshGenerationJobStatus(itemMeshJob.status))
+                  const isDefinitionPending = isPendingGenerationResource(item)
+
+                  return (
+                    <button
+                      key={`${item.id}:${item.key}`}
+                      className={item.key === selectedContentItem?.key ? 'rail-button item-row is-active' : 'rail-button item-row'}
+                      onClick={() => onSelectItem(item.key)}
+                      type="button"
+                    >
+                      <MediaThumb
+                        asset={findAssetByKey(assets, resolveDefinitionDisplayAssetKey(item, archetypes))}
+                        fallbackIcon={iconForDefinitionKind(item.kind)}
+                        label={item.name}
+                      />
+                      <div className="item-row-copy">
+                        <strong>{item.name}</strong>
+                        <span>{contentKinds.find((entry) => entry.kind === item.kind)?.label ?? item.kind}</span>
+                        <span className={isDefinitionPending || isMeshPending ? 'world-build-rail-status' : undefined}>
+                          {isDefinitionPending ? (
+                            <><span className="button-spinner item-row-spinner" aria-hidden="true" />Generating...</>
+                          ) : isMeshPending ? (
+                            <><span className="button-spinner item-row-spinner" aria-hidden="true" />Generating 3D...</>
+                          ) : getResourceGenerationMetadata(item)?.state === 'failed' ? 'Generation failed' : item.archetypeKey ?? 'No template'}
+                        </span>
+                      </div>
+                    </button>
+                  )
+                })}
               </div>
             </div>
           </>
@@ -292,6 +497,157 @@ export function ContentWorkspace({
                 <button className={isDeletingSelectedItem ? 'ghost-button compact danger button-with-spinner' : 'ghost-button compact danger'} disabled={isDeletingSelectedItem} onClick={() => onDeleteItem(selectedContentItem.key)} type="button">{isDeletingSelectedItem ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}</button>
               </div>
             </div>
+          ) : selectedContentItem?.kind === 'item' ? (
+            <div key={selectedContentItem.key} className="character-panel-shell">
+              <div className="character-concept-header">
+                <div className="character-concept-media">
+                  <button className="icon-button character-concept-art-button" onClick={() => setIsItemImagePickerOpen(true)} type="button">
+                    {isItemConceptAssetPending ? (
+                      <span className="character-concept-art-overlay">
+                        <span className="button-spinner" aria-hidden="true" />
+                      </span>
+                    ) : null}
+                    <MediaThumb
+                      asset={selectedItemPreviewAsset}
+                      fallbackIcon={iconForDefinitionKind(selectedContentItem.kind)}
+                      label={selectedContentItem.name}
+                      large
+                    />
+                  </button>
+                </div>
+                <div className="editor-heading-copy character-concept-copy">
+                  <div className="editor-head-toolbar character-head-toolbar">
+                    <div className="editor-head-controls">
+                      <button className={isDeletingSelectedItem ? 'ghost-button compact danger button-with-spinner' : 'ghost-button compact danger'} disabled={isDeletingSelectedItem} onClick={() => onDeleteItem(selectedContentItem.key)} type="button">{isDeletingSelectedItem ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}</button>
+                      {hasSelectedItemGenerationFailed ? <span className="inline-note danger">Background generation failed. You can edit or delete this entry.</span> : null}
+                      {itemPanelControls}
+                    </div>
+                  </div>
+                  <div className="character-header-rows">
+                    <div className="editor-head-inline-fields">
+                      <label className="inline-head-field">
+                        <span>Name</span>
+                        <input
+                          value={selectedContentItem.name}
+                          onChange={(event) => onUpdateItemIdentity(selectedContentItem.key, { name: event.target.value })}
+                        />
+                      </label>
+                    </div>
+                    <div className="character-header-triple">
+                      <label className="inline-head-field">
+                        <span>Template</span>
+                        <select
+                          value={selectedContentItem.archetypeKey ?? ''}
+                          onChange={(event) => onUpdateItemIdentity(selectedContentItem.key, { archetypeKey: event.target.value || null })}
+                        >
+                          <option value="">No template</option>
+                          {contentArchetypes.filter((archetype) => archetype.appliesToKind === 'item').map((archetype) => (
+                            <option key={archetype.key} value={archetype.key}>
+                              {archetype.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="inline-head-field">
+                        <span>Subtype</span>
+                        <select
+                          value={selectedItemPhysicalProfile?.physicalSubtype ?? 'pickup'}
+                          onChange={(event) => updateSelectedItemPhysicalProfile({ physicalSubtype: event.target.value as 'pickup' | 'prop' | 'equipment' | 'weapon' | 'world_object' })}
+                        >
+                          <option value="pickup">Pickup</option>
+                          <option value="prop">Prop</option>
+                          <option value="equipment">Equipment</option>
+                          <option value="weapon">Weapon</option>
+                          <option value="world_object">World Object</option>
+                        </select>
+                      </label>
+                      <label className="inline-head-field">
+                        <span>Placement</span>
+                        <input
+                          value={selectedItemPhysicalProfile?.worldPlacementRole ?? ''}
+                          onChange={(event) => updateSelectedItemPhysicalProfile({ worldPlacementRole: event.target.value })}
+                          placeholder="inventory_item"
+                        />
+                      </label>
+                    </div>
+                    {itemPanelMode !== '3d' ? (
+                      <>
+                        <label className="field-block character-header-textarea">
+                          <span>Summary</span>
+                          <textarea
+                            rows={3}
+                            value={selectedContentItem.summary}
+                            onChange={(event) => onUpdateItemIdentity(selectedContentItem.key, { summary: event.target.value })}
+                            placeholder="Describe the item role, readability, use case, and gameplay value."
+                          />
+                        </label>
+                        <div className="character-concept-prompt-row">
+                          <label className="field-block character-header-textarea">
+                            <span>Visual Description</span>
+                            <textarea
+                              rows={4}
+                              value={selectedItemRenderBinding?.conceptPrompt ?? ''}
+                              onChange={(event) => updateSelectedItemRenderBinding({ conceptPrompt: event.target.value || null })}
+                              placeholder="Describe silhouette, materials, wear, shape language, scale cues, and any must-have visual details."
+                            />
+                          </label>
+                          <div className="character-concept-actions">
+                            <button
+                              className={isItemConceptBusy ? 'primary-button button-with-spinner' : 'primary-button'}
+                              disabled={isItemConceptBusy || !(selectedItemRenderBinding?.conceptPrompt?.trim())}
+                              onClick={() => void handleGenerateItemConcept()}
+                              type="button"
+                            >
+                              {isItemConceptBusy ? <><span className="button-spinner" aria-hidden="true" />Generating...</> : 'Generate concept image'}
+                            </button>
+                            <span className="subtle-line">
+                              Style: {getArtStylePresetLabel(typeof gameSpec?.theme?.artStylePreset === 'string' ? gameSpec.theme.artStylePreset : null)}
+                            </span>
+                            {typeof gameSpec?.theme?.artStyleDescription === 'string' && gameSpec.theme.artStyleDescription.trim() ? (
+                              <span className="subtle-line">{gameSpec.theme.artStyleDescription.trim()}</span>
+                            ) : null}
+                            {itemConceptMessage ? <div className="inline-note">{itemConceptMessage}</div> : null}
+                          </div>
+                        </div>
+                      </>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+
+              {itemPanelMode === '3d' ? (
+                <Definition3dPanel
+                  assets={assets}
+                  definition={selectedContentItem}
+                  isDeletingGeneratedMesh={isDeletingGeneratedMesh}
+                  meshGenerationJob={selectedItemMeshJob}
+                  onDeleteGeneratedMesh={() => onDeleteGeneratedMesh(selectedContentItem.key)}
+                  onRequestGenerateConceptArt={requestItemConceptFrom3d}
+                  onRequestGenerateMesh={() => onStartMeshGeneration(selectedContentItem.key)}
+                  onUpdateComponents={onUpdateComponents}
+                />
+              ) : (
+                <DefinitionEditor
+                  archetypes={archetypes}
+                  assets={assets}
+                  definitions={definitions}
+                  graphKeys={graphKeys}
+                  imageAssets={imageAssets}
+                  selectedArchetype={selectedContentArchetype}
+                  selectedAsset={selectedAsset}
+                  selectedItem={selectedContentItem}
+                  hideArchetypeField
+                  hideHeader
+                  hideManualSections
+                  suppressSummaryField
+                  onAddCustomField={onAddCustomField}
+                  onCreateItem={onCreateItem}
+                  onUpdateComponents={onUpdateComponents}
+                  onUpdateFieldValue={onUpdateFieldValue}
+                  onUpdateItemIdentity={onUpdateItemIdentity}
+                />
+              )}
+            </div>
           ) : (
             <DefinitionEditor
               archetypes={archetypes}
@@ -303,6 +659,7 @@ export function ContentWorkspace({
               selectedAsset={selectedAsset}
               selectedItem={selectedContentItem}
               headerControls={selectedContentItem ? <><button className={isDeletingSelectedItem ? 'ghost-button compact danger button-with-spinner' : 'ghost-button compact danger'} disabled={isDeletingSelectedItem} onClick={() => onDeleteItem(selectedContentItem.key)} type="button">{isDeletingSelectedItem ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}</button>{getResourceGenerationMetadata(selectedContentItem)?.state === 'failed' ? <span className="inline-note danger">Background generation failed. You can edit or delete this entry.</span> : null}</> : undefined}
+              hideManualSections
               onAddCustomField={onAddCustomField}
               onCreateItem={onCreateItem}
               onUpdateComponents={onUpdateComponents}
@@ -324,7 +681,6 @@ export function ContentWorkspace({
           />
         )}
       </section>
-
       {mode === 'items' && isCreateContentOpen ? (
         <div className="content-create-overlay" onClick={() => setIsCreateContentOpen(false)} role="presentation">
           <div className="content-create-dialog" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Create content">
@@ -402,6 +758,25 @@ export function ContentWorkspace({
             </div>
           </div>
         </div>
+      ) : null}
+      {mode === 'items' && selectedContentItem?.kind === 'item' && isItemImagePickerOpen ? (
+        <AssetPickerDialog
+          assets={imageAssets}
+          clearLabel="Clear image"
+          fallbackIcon={iconForDefinitionKind(selectedContentItem.kind)}
+          onClose={() => setIsItemImagePickerOpen(false)}
+          onPickAsset={(assetKey) => {
+            updateSelectedItemRenderBinding({ previewImageAssetKey: assetKey })
+            onUpdateItemIdentity(selectedContentItem.key, { iconAssetKey: assetKey })
+            setIsItemImagePickerOpen(false)
+            void persistItemPreviewImage(assetKey).catch((error) => {
+              setItemConceptMessage(error instanceof Error ? error.message : 'Saving the selected item image failed.')
+            })
+          }}
+          selectedAssetKey={selectedItemRenderBinding?.previewImageAssetKey ?? null}
+          selectedLabel={selectedContentItem.name}
+          title={`Choose concept image for ${selectedContentItem.name}`}
+        />
       ) : null}
     </div>
   )

@@ -38,6 +38,26 @@ function getSourceUrl(metadata: Record<string, unknown>) {
   return null
 }
 
+async function resolveAssetAccessUrl(
+  admin: ReturnType<typeof createAdminClient>,
+  asset: Awaited<ReturnType<typeof loadProjectAsset>>,
+) {
+  if (!asset) return null
+
+  const directUrl = getSourceUrl(asset.metadata)
+  if (directUrl) return directUrl
+  if (!asset.storagePath || asset.storagePath.startsWith('external/') || asset.storagePath.startsWith('local-upload/')) {
+    return null
+  }
+
+  const bucket = typeof asset.metadata.storageBucket === 'string' && asset.metadata.storageBucket.trim()
+    ? asset.metadata.storageBucket.trim()
+    : 'project-assets'
+  const signedResponse = await admin.storage.from(bucket).createSignedUrl(asset.storagePath, 60 * 60)
+  if (signedResponse.error || !signedResponse.data?.signedUrl) return null
+  return signedResponse.data.signedUrl
+}
+
 function getCharacterRenderBinding(definition: Awaited<ReturnType<typeof loadCharacterDefinition>>) {
   const component = definition?.components.find((entry) => entry.type === 'render_3d_binding')
   const config = component && typeof component.config === 'object' && component.config !== null
@@ -175,7 +195,7 @@ Deno.serve(async (request) => {
     }
 
     const definition = await loadCharacterDefinition(client, job.draftId, job.definitionKey)
-    if (!definition) throw new HttpError(404, `Character ${job.definitionKey} was not found.`)
+    if (!definition) throw new HttpError(404, `Definition ${job.definitionKey} was not found.`)
     const renderBinding = getCharacterRenderBinding(definition)
 
     if (!job.providerRequestId) {
@@ -202,7 +222,7 @@ Deno.serve(async (request) => {
         }))
       }
 
-      const sourceImageUrl = getSourceUrl(previewAsset.metadata)
+      const sourceImageUrl = await resolveAssetAccessUrl(admin, previewAsset)
       if (!sourceImageUrl) {
         const failure = await cleanupFailedJob(
           client,

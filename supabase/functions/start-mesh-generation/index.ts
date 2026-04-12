@@ -15,6 +15,7 @@ import {
   loadProjectAsset,
   meshGenerationStatusResponseSchema,
   uniqueMeshAssetKey,
+  upsertDefinitionComponent,
   updateMeshJob,
 } from '../_shared/mesh-generation.ts'
 
@@ -24,6 +25,8 @@ const meshGenerationStartRequestSchema = z.object({
     draft: z.object({ id: z.string() }),
   }),
   definitionKey: z.string().min(1),
+  preferredImageAssetKey: z.string().min(1).nullable().optional(),
+  preferredImageSourceUrl: z.string().min(1).nullable().optional(),
 })
 
 function isUuidLike(value: string) {
@@ -36,6 +39,26 @@ function getSourceUrl(metadata: Record<string, unknown>) {
   return null
 }
 
+async function resolveAssetAccessUrl(
+  admin: ReturnType<typeof createAdminClient>,
+  asset: Awaited<ReturnType<typeof loadProjectAsset>>,
+) {
+  if (!asset) return null
+
+  const directUrl = getSourceUrl(asset.metadata)
+  if (directUrl) return directUrl
+  if (!asset.storagePath || asset.storagePath.startsWith('external/') || asset.storagePath.startsWith('local-upload/')) {
+    return null
+  }
+
+  const bucket = typeof asset.metadata.storageBucket === 'string' && asset.metadata.storageBucket.trim()
+    ? asset.metadata.storageBucket.trim()
+    : 'project-assets'
+  const signedResponse = await admin.storage.from(bucket).createSignedUrl(asset.storagePath, 60 * 60)
+  if (signedResponse.error || !signedResponse.data?.signedUrl) return null
+  return signedResponse.data.signedUrl
+}
+
 function getCharacterRenderBinding(definition: Awaited<ReturnType<typeof loadCharacterDefinition>>) {
   const component = definition?.components.find((entry) => entry.type === 'render_3d_binding')
   const config = component && typeof component.config === 'object' && component.config !== null
@@ -45,6 +68,38 @@ function getCharacterRenderBinding(definition: Awaited<ReturnType<typeof loadCha
   return {
     primaryMeshAssetKey: typeof config.primaryMeshAssetKey === 'string' ? config.primaryMeshAssetKey : null,
     previewImageAssetKey: typeof config.previewImageAssetKey === 'string' ? config.previewImageAssetKey : null,
+  }
+}
+
+function resolvePreviewImageAssetKey(definition: Awaited<ReturnType<typeof loadCharacterDefinition>>) {
+  const renderBinding = getCharacterRenderBinding(definition)
+  if (renderBinding.previewImageAssetKey) return renderBinding.previewImageAssetKey
+  if (definition.kind === 'item' && definition.iconAssetKey) return definition.iconAssetKey
+  return null
+}
+
+async function syncPreferredPreviewImageBinding(
+  client: Awaited<ReturnType<typeof requireUserClient>>['client'],
+  definition: NonNullable<Awaited<ReturnType<typeof loadCharacterDefinition>>>,
+  preferredImageAssetKey: string,
+) {
+  const currentBinding = getCharacterRenderBinding(definition)
+  if (currentBinding.previewImageAssetKey === preferredImageAssetKey && (definition.kind !== 'item' || definition.iconAssetKey === preferredImageAssetKey)) {
+    return
+  }
+
+  await upsertDefinitionComponent(client, definition.id, 'render_3d_binding', {
+    ...currentBinding,
+    previewImageAssetKey: preferredImageAssetKey,
+  })
+
+  if (definition.kind === 'item' && definition.iconAssetKey !== preferredImageAssetKey) {
+    const updateResponse = await client
+      .from('project_definitions')
+      .update({ icon_asset_key: preferredImageAssetKey })
+      .eq('id', definition.id)
+
+    if (updateResponse.error) throw new Error(updateResponse.error.message)
   }
 }
 
@@ -64,19 +119,26 @@ Deno.serve(async (request) => {
     }
 
     const definition = await loadCharacterDefinition(client, payload.snapshot.draft.id, payload.definitionKey)
-    if (!definition) throw new HttpError(404, `Character ${payload.definitionKey} was not found.`)
-    if (definition.kind !== 'character') throw new HttpError(400, 'Trellis mesh generation is only enabled for characters in v1.')
+    if (!definition) throw new HttpError(404, `Definition ${payload.definitionKey} was not found.`)
+    if (definition.kind !== 'character' && definition.kind !== 'item') {
+      throw new HttpError(400, 'Trellis mesh generation is currently enabled for characters and items only.')
+    }
 
-    const renderBinding = getCharacterRenderBinding(definition)
-    const previewImageAssetKey = renderBinding.previewImageAssetKey
+    const previewImageAssetKey = payload.preferredImageAssetKey ?? resolvePreviewImageAssetKey(definition)
     if (!previewImageAssetKey) {
       throw new HttpError(400, 'Generate or assign a concept image before generating a 3D mesh.')
     }
 
+    if (payload.preferredImageAssetKey && payload.preferredImageAssetKey !== resolvePreviewImageAssetKey(definition)) {
+      await syncPreferredPreviewImageBinding(client, definition, payload.preferredImageAssetKey)
+    }
+
+    const renderBinding = getCharacterRenderBinding(definition)
+
     const previewAsset = await loadProjectAsset(client, payload.snapshot.project.id, previewImageAssetKey)
     if (!previewAsset) throw new HttpError(404, `Concept image asset ${previewImageAssetKey} was not found.`)
 
-    const sourceImageUrl = getSourceUrl(previewAsset.metadata)
+    const sourceImageUrl = payload.preferredImageSourceUrl?.trim() || await resolveAssetAccessUrl(admin, previewAsset)
     if (!sourceImageUrl) {
       throw new HttpError(400, 'The selected concept image does not have a usable source URL for Trellis 2.')
     }
@@ -118,7 +180,7 @@ Deno.serve(async (request) => {
     }
 
     const jobId = crypto.randomUUID()
-    const definitionSlug = definition.key.replace(/^character\./, '').replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '').toLowerCase() || 'character'
+    const definitionSlug = definition.key.replace(/^[^.]+\./, '').replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '').toLowerCase() || definition.kind
     const storagePath = `generated/meshes/${definitionSlug}/${jobId}.glb`
 
     const currentMeshAsset = renderBinding.primaryMeshAssetKey

@@ -719,8 +719,9 @@ Deno.serve(async (request) => {
                 ? assetRow.data.metadata as Record<string, unknown>
                 : {}
 
+            const storageSlug = buildAssetSlug(`${assetKey}_${falResult.requestId ?? 'generated'}`) || buildAssetSlug(assetKey) || 'generated_asset'
             const assetUpdate = await client.from('project_assets').update({
-              storage_path: `external/${buildAssetSlug(imageUrl.replace(/https?:\/\//, '')) || assetKey}`,
+              storage_path: `external/generated/${storageSlug}.png`,
               name: job.kind === 'character_concept_image'
                 ? `${definition.name} Concept`
                 : job.kind === 'item_concept_image'

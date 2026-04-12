@@ -2309,6 +2309,88 @@ export async function startMeshGeneration(request: MeshGenerationStartRequest): 
   }
 }
 
+export async function persistDefinitionPreviewImageBinding(
+  snapshot: ProjectSnapshot,
+  definitionKey: string,
+  assetKey: string | null,
+): Promise<void> {
+  await getValidatedSession('Sign in and load a live GraphCore draft before updating a concept image binding.')
+
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Sign in and load a live GraphCore draft before updating a concept image binding.')
+  }
+
+  const definition = snapshot.definitions.find((entry) => entry.key === definitionKey) ?? null
+  if (!definition) {
+    throw new Error(`Definition ${definitionKey} was not found in the current snapshot.`)
+  }
+
+  const renderBindingComponent = definition.components.find((component) => component.type === 'render_3d_binding')
+  const currentRenderBinding =
+    renderBindingComponent && typeof renderBindingComponent.config === 'object' && renderBindingComponent.config !== null
+      ? renderBindingComponent.config as Record<string, unknown>
+      : {
+          primaryMeshAssetKey: null,
+          previewImageAssetKey: null,
+          conceptPrompt: null,
+          generationPrompt: null,
+          generationStyle: null,
+        }
+
+  const definitionResponse = await supabase
+    .from('project_definitions')
+    .select('id')
+    .eq('draft_id', snapshot.draft.id)
+    .eq('key', definitionKey)
+    .maybeSingle()
+
+  if (definitionResponse.error) throw new Error(definitionResponse.error.message)
+  if (!definitionResponse.data) throw new Error(`Definition ${definitionKey} was not found in Supabase.`)
+
+  const componentResponse = await supabase
+    .from('project_definition_components')
+    .select('id')
+    .eq('definition_id', definitionResponse.data.id)
+    .eq('component_type', 'render_3d_binding')
+    .maybeSingle()
+
+  if (componentResponse.error) throw new Error(componentResponse.error.message)
+
+  const nextRenderBinding = {
+    ...currentRenderBinding,
+    previewImageAssetKey: assetKey,
+  }
+
+  if (componentResponse.data) {
+    const updateResponse = await supabase
+      .from('project_definition_components')
+      .update({ config: nextRenderBinding })
+      .eq('definition_id', definitionResponse.data.id)
+      .eq('component_type', 'render_3d_binding')
+
+    if (updateResponse.error) throw new Error(updateResponse.error.message)
+  } else {
+    const insertResponse = await supabase
+      .from('project_definition_components')
+      .insert({
+        definition_id: definitionResponse.data.id,
+        component_type: 'render_3d_binding',
+        config: nextRenderBinding,
+      })
+
+    if (insertResponse.error) throw new Error(insertResponse.error.message)
+  }
+
+  if (definition.kind === 'item') {
+    const updateDefinitionResponse = await supabase
+      .from('project_definitions')
+      .update({ icon_asset_key: assetKey })
+      .eq('id', definitionResponse.data.id)
+
+    if (updateDefinitionResponse.error) throw new Error(updateDefinitionResponse.error.message)
+  }
+}
+
 export async function pollMeshGeneration(request: MeshGenerationPollRequest): Promise<MeshGenerationStatusResponse> {
   const session = await getValidatedSession('Sign in and load a live GraphCore draft before polling mesh generation.')
 

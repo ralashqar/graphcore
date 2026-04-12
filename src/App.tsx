@@ -7,7 +7,7 @@ import { patchApplyService } from './application/services/patchApplyService'
 import { promptGenerationService } from './application/services/promptGenerationService'
 import { publishService } from './application/services/publishService'
 import { workspaceService } from './application/services/workspaceService'
-import { buildAssetSlug, getAssetKeyPrefix, inferAssetKindFromUpload, inferRemoteAssetMimeType, inferUploadMimeType, isSupportedMeshPath, type AssetUrlCreateOptions, type AssetUrlCreationKind } from './domain/assets'
+import { buildAssetSlug, getAssetKeyPrefix, inferAssetKindFromUpload, inferRemoteAssetMimeType, inferUploadMimeType, isSupportedMeshPath, resolveAssetSourceUrl, type AssetUrlCreateOptions, type AssetUrlCreationKind } from './domain/assets'
 import { DEFAULT_ART_STYLE_PRESET } from './domain/artStylePresets'
 import { compileBundle } from './domain/compiler'
 import { createEnvironmentBlueprint } from './domain/environmentBlueprint'
@@ -26,6 +26,7 @@ import type {
 } from './domain/graphcore'
 import { createAssemblyGraph } from './domain/environmentAssembly'
 import { createGraphScaffold } from './domain/graphScaffold'
+import { getResolvedRender3dBinding } from './domain/render3d'
 import type { PromptPatchResponse } from './domain/prompting'
 import { normalizeNode } from './domain/nodeLibrary'
 import type { MeshGenerationStatusResponse } from './domain/meshGeneration'
@@ -1246,9 +1247,23 @@ export default function App() {
 
     setPromptRuntimeError(null)
     try {
+      const definition = snapshot.definitions.find((entry) => entry.key === definitionKey) ?? null
+      const renderBinding = definition ? getResolvedRender3dBinding(definition) : null
+      const preferredImageAssetKey =
+        renderBinding?.previewImageAssetKey
+        ?? (definition?.kind === 'item' ? definition.iconAssetKey : null)
+        ?? null
+      const preferredImageAsset =
+        preferredImageAssetKey
+          ? snapshot.assets.find((asset) => asset.key === preferredImageAssetKey) ?? null
+          : null
+      const preferredImageSourceUrl = resolveAssetSourceUrl(preferredImageAsset)
+
       const status = await workspaceService.startMeshGeneration({
         snapshot,
         definitionKey,
+        preferredImageAssetKey,
+        preferredImageSourceUrl,
       })
 
       setSnapshot((current) => {
@@ -2153,9 +2168,12 @@ export default function App() {
                 archetypes={snapshot.archetypes}
                 assets={snapshot.assets}
                 deletingItemKey={deletingDefinitionKey}
+                deletingGeneratedMeshDefinitionKey={deletingGeneratedMeshDefinitionKey}
                 definitions={snapshot.definitions}
+                gameSpec={snapshot.gameSpec}
                 graphKeys={snapshot.graphs.map((graph) => graph.key)}
                 items={definitionEntries}
+                meshGenerationJobs={snapshot.meshGenerationJobs}
                 selectedAsset={selectedAsset}
                 selectedArchetype={selectedArchetype}
                 selectedItem={selectedDefinition}
@@ -2167,6 +2185,7 @@ export default function App() {
                 onCreateDefinitionOfKind={createDefinitionOfKind}
                 onCreateItem={createItem}
                 onCreateUrlAsset={createUrlAsset}
+                onDeleteGeneratedMesh={deleteGeneratedMesh}
                 onDeleteItem={deleteDefinition}
                 onRemoveArchetypeField={removeArchetypeField}
                 onSelectAsset={setSelectedAssetKey}
@@ -2177,6 +2196,8 @@ export default function App() {
                 onUpdateFieldValue={updateItemFieldValue}
                 onUpdateItemIdentity={updateItemIdentity}
                 onUpdateComponents={updateDefinitionComponents}
+                onStartMeshGeneration={(definitionKey) => void startMeshGenerationForDefinition(definitionKey)}
+                onPersistDefinitionPreviewImageBinding={(definitionKey, assetKey) => workspaceService.persistDefinitionPreviewImageBinding(snapshot, definitionKey, assetKey)}
               />
             ) : null}
             {activeTab === 'characters' ? (

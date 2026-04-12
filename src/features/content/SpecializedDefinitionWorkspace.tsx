@@ -627,7 +627,7 @@ export function SpecializedDefinitionWorkspace({
               headerControls={<><button className={isDeletingSelection ? 'ghost-button compact danger button-with-spinner' : 'ghost-button compact danger'} disabled={isDeletingSelection} onClick={() => onDeleteDefinition(effectiveSelection.key)} type="button">{isDeletingSelection ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}</button></>}
               hideHeader
               hideArchetypeField={effectiveSelection.kind === 'character'}
-              hideManualSections={effectiveSelection.kind === 'character'}
+              hideManualSections={effectiveSelection.kind === 'character' || effectiveSelection.kind === 'item'}
               suppressSummaryField={effectiveSelection.kind === 'character'}
                   onAddCustomField={onAddCustomField}
                   onCreateItem={(archetypeKey) => onCreateDefinition(archetypeKey)}
@@ -648,6 +648,7 @@ export function SpecializedDefinitionWorkspace({
               selectedAsset={selectedAsset}
               selectedItem={effectiveSelection}
               headerControls={<><button className={isDeletingSelection ? 'ghost-button compact danger button-with-spinner' : 'ghost-button compact danger'} disabled={isDeletingSelection} onClick={() => onDeleteDefinition(effectiveSelection.key)} type="button">{isDeletingSelection ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}</button>{hasSelectionGenerationFailed ? <span className="inline-note danger">Background generation failed. You can edit or delete this entry.</span> : null}</>}
+              hideManualSections={effectiveSelection.kind === 'item'}
               onAddCustomField={onAddCustomField}
               onCreateItem={(archetypeKey) => onCreateDefinition(archetypeKey)}
               onUpdateComponents={onUpdateComponents}

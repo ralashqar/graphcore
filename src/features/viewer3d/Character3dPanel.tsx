@@ -72,12 +72,15 @@ export function Definition3dPanel({
   const [fallbackMeshSourceUrl, setFallbackMeshSourceUrl] = useState<string | null>(null)
 
   const isEnvironment = definition.kind === 'environment'
+  const isItem = definition.kind === 'item'
   const renderBinding = getResolvedDefinition3dBinding(definition)
   const geometryBinding = isEnvironment ? getResolvedEnvironmentGeometryBinding(definition) : null
   const subtype = isEnvironment
     ? getEnvironmentProfile(definition)?.config.subtype ?? 'exterior'
-    : getCharacterProfile(definition)?.config.subtype ?? 'humanoid'
-  const entityLabel = isEnvironment ? 'Environment' : 'Character'
+    : isItem
+      ? 'pickup'
+      : getCharacterProfile(definition)?.config.subtype ?? 'humanoid'
+  const entityLabel = isEnvironment ? 'Environment' : isItem ? 'Item' : 'Character'
   const meshAssets = useMemo(() => assets.filter(isMeshAsset).sort((left, right) => left.name.localeCompare(right.name)), [assets])
   const imageAssets = useMemo(() => assets.filter(isImageAsset).sort((left, right) => left.name.localeCompare(right.name)), [assets])
   const meshAsset = findAssetByKey(assets, renderBinding.primaryMeshAssetKey)
@@ -86,10 +89,18 @@ export function Definition3dPanel({
   const effectiveMeshSourceUrl = meshSourceUrl ?? fallbackMeshSourceUrl
   const meshSourceLabel = meshSourceUrl ?? 'No mesh source bound'
   const meshGenerationPending = Boolean(meshGenerationJob && !isTerminalMeshGenerationJobStatus(meshGenerationJob.status))
+  const meshAssetGenerationState =
+    meshAsset?.metadata.generation && typeof meshAsset.metadata.generation === 'object' && typeof (meshAsset.metadata.generation as { state?: unknown }).state === 'string'
+      ? String((meshAsset.metadata.generation as { state: string }).state)
+      : null
+  const shouldSkipMeshFallbackLoad = meshGenerationPending || meshAssetGenerationState === 'pending' || meshAssetGenerationState === 'running'
   const meshGenerationMessage = meshGenerationJob?.errorMessage
     ?? meshGenerationJob?.providerLogs[meshGenerationJob.providerLogs.length - 1]
     ?? null
-  const showGeneratedMeshDelete = definition.kind === 'character' && (meshGenerationPending || meshAsset?.metadata.generatedBy === 'trellis_mesh')
+  const requiresPreviewImageForMesh = !isEnvironment
+  const canStartMeshGeneration = !requiresPreviewImageForMesh || Boolean(previewImageAsset)
+  const shouldUseConceptFallbackCta = !isEnvironment && !isItem && !previewImageAsset
+  const showGeneratedMeshDelete = !isEnvironment && (meshGenerationPending || meshAsset?.metadata.generatedBy === 'trellis_mesh')
   const isProceduralEnvironment = isEnvironment && (geometryBinding?.sourceMode === 'procedural_graph' || geometryBinding?.sourceMode === 'procedural_blueprint')
   const compileCacheRef = useRef(createAssemblyCompileCache())
   const lastCompiledPreviewRef = useRef<{
@@ -186,11 +197,14 @@ export function Definition3dPanel({
       ? meshAsset.storagePath.trim()
       : null
 
-    if (meshSourceUrl || !meshAsset || !bucket || !storagePath) {
+    if (meshSourceUrl || !meshAsset || !bucket || !storagePath || shouldSkipMeshFallbackLoad) {
       setFallbackMeshSourceUrl((current) => {
         if (current) URL.revokeObjectURL(current)
         return null
       })
+      if (shouldSkipMeshFallbackLoad) {
+        setMeshViewportError(null)
+      }
       return
     }
 
@@ -302,7 +316,7 @@ export function Definition3dPanel({
     return () => {
       cancelled = true
     }
-  }, [meshAsset, meshGenerationJob, meshSourceUrl])
+  }, [meshAsset, meshGenerationJob, meshSourceUrl, shouldSkipMeshFallbackLoad])
   const compiledEnvironment = compiledPreview?.compiledEnvironment ?? null
   const compiledPartSummary = useMemo(
     () =>
@@ -424,22 +438,25 @@ export function Definition3dPanel({
             <div className="editor-section">
               <button
                 className="primary-button compact"
-                disabled={meshGenerationPending || generationPending}
-                onClick={previewImageAsset ? () => onRequestGenerateMesh?.() : () => onRequestGenerateConceptArt?.()}
+                disabled={meshGenerationPending || generationPending || !canStartMeshGeneration}
+                onClick={shouldUseConceptFallbackCta ? () => onRequestGenerateConceptArt?.() : () => onRequestGenerateMesh?.()}
                 type="button"
               >
                 {meshGenerationPending
                   ? 'Generating 3D...'
                   : generationPending
                     ? 'Checking mesh generation path...'
-                  : previewImageAsset
-                    ? 'Generate 3D mesh'
-                    : 'Generate concept art'}
+                  : shouldUseConceptFallbackCta
+                    ? 'Generate concept art'
+                    : 'Generate 3D mesh'}
               </button>
               {showGeneratedMeshDelete ? (
                 <button className={isDeletingGeneratedMesh ? 'ghost-button compact danger button-with-spinner' : 'ghost-button compact danger'} disabled={isDeletingGeneratedMesh} onClick={() => onDeleteGeneratedMesh?.()} type="button">
                   {isDeletingGeneratedMesh ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : meshGenerationPending ? 'Cancel generation' : 'Delete 3D'}
                 </button>
+              ) : null}
+              {!shouldUseConceptFallbackCta && !canStartMeshGeneration ? (
+                <div className="inline-note is-warning">Generate a concept image in Details before creating a 3D mesh.</div>
               ) : null}
               {meshGenerationMessage ? <div className={meshGenerationJob?.errorMessage ? 'inline-note is-warning' : 'inline-note'}>{meshGenerationMessage}</div> : null}
               {meshViewportError ? <div className="inline-note is-warning">{meshViewportError}</div> : null}

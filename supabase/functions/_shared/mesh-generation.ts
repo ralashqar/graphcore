@@ -431,7 +431,7 @@ export function isTrellisGeneratedAsset(value: { metadata?: unknown } | null | u
 }
 
 export function uniqueMeshAssetKey(existingKeys: string[], definitionKey: string) {
-  const suffix = definitionKey.replace(/^character\./, '').replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '').toLowerCase() || 'character'
+  const suffix = definitionKey.replace(/^[^.]+\./, '').replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '').toLowerCase() || 'mesh'
   const base = `mesh.${suffix}_mesh`
   if (!existingKeys.includes(base)) return base
 

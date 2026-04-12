@@ -5,6 +5,7 @@ import { graphcoreWorkspaceAdapter } from '../../infrastructure/graphcore/graphc
 export const workspaceService = {
   deleteGeneratedMesh: graphcoreWorkspaceAdapter.deleteGeneratedMesh,
   deleteWorldBuildPlaceholder: graphcoreWorkspaceAdapter.deleteWorldBuildPlaceholder,
+  persistDefinitionPreviewImageBinding: graphcoreWorkspaceAdapter.persistDefinitionPreviewImageBinding,
   planWorldBuild: graphcoreWorkspaceAdapter.planWorldBuild,
   pollMeshGeneration: graphcoreWorkspaceAdapter.pollMeshGeneration,
   pollWorldBuild: graphcoreWorkspaceAdapter.pollWorldBuild,

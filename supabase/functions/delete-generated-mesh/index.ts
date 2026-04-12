@@ -58,8 +58,10 @@ Deno.serve(async (request) => {
     }
 
     const definition = await loadCharacterDefinition(client, payload.snapshot.draft.id, payload.definitionKey)
-    if (!definition) throw new HttpError(404, `Character ${payload.definitionKey} was not found.`)
-    if (definition.kind !== 'character') throw new HttpError(400, 'Only character meshes are supported in v1.')
+    if (!definition) throw new HttpError(404, `Definition ${payload.definitionKey} was not found.`)
+    if (definition.kind !== 'character' && definition.kind !== 'item') {
+      throw new HttpError(400, 'Generated mesh deletion is currently enabled for characters and items only.')
+    }
 
     const renderBinding = getCharacterRenderBinding(definition)
     const deletedAssetKeys: string[] = []
