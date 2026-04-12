@@ -7,6 +7,7 @@ import type { AssetsWorkspaceProps } from './types'
 
 export function AssetsWorkspace({
   assets,
+  deletingAssetKey = null,
   selectedAsset,
   selectedItem,
   onAssignAssetToSelectedItem,
@@ -35,6 +36,8 @@ export function AssetsWorkspace({
       return left.name.localeCompare(right.name)
     })
   }, [assets, search, sort])
+
+  const isDeletingSelectedAsset = selectedAsset?.key === deletingAssetKey
 
   return (
     <div className="focus-layout assets-layout">
@@ -85,7 +88,7 @@ export function AssetsWorkspace({
               <h3>{selectedAsset.name}</h3>
               <div className="inline-note world-build-status-note"><span className="button-spinner" aria-hidden="true" />This asset is still being generated. The final preview and editable fields will appear when the job completes.</div>
               <div className="editor-head-controls">
-                <button className="ghost-button compact danger" onClick={() => onDeleteAsset(selectedAsset.key)} type="button">Delete</button>
+                <button className={isDeletingSelectedAsset ? 'ghost-button compact danger button-with-spinner' : 'ghost-button compact danger'} disabled={isDeletingSelectedAsset} onClick={() => onDeleteAsset(selectedAsset.key)} type="button">{isDeletingSelectedAsset ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}</button>
               </div>
             </div>
           ) : (
@@ -131,8 +134,8 @@ export function AssetsWorkspace({
                 <button className="primary-button compact" onClick={() => onAssignAssetToSelectedItem(selectedAsset.key)} type="button">
                   Use for selected item icon
                 </button>
-                <button className="ghost-button compact danger" onClick={() => onDeleteAsset(selectedAsset.key)} type="button">
-                  Delete asset
+                <button className={isDeletingSelectedAsset ? 'ghost-button compact danger button-with-spinner' : 'ghost-button compact danger'} disabled={isDeletingSelectedAsset} onClick={() => onDeleteAsset(selectedAsset.key)} type="button">
+                  {isDeletingSelectedAsset ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete asset'}
                 </button>
                 <span className="subtle-line">Selected item: {selectedItem?.name ?? 'none'}</span>
               </div>

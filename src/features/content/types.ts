@@ -30,6 +30,7 @@ export type ContentWorkspaceProps = {
   selectedAsset: AssetDefinition | null
   selectedArchetype: ArchetypeDefinition | null
   selectedItem: DefinitionBase | null
+  deletingItemKey?: string | null
   onAddArchetypeField: (archetypeKey: string, field: FieldDefinition) => void
   onAddCustomField: (itemKey: string, field: FieldDefinition) => void
   onAssignArchetypeIcon: (assetKey: string | null) => void
@@ -52,6 +53,7 @@ export type ContentWorkspaceProps = {
 
 export type AssetsWorkspaceProps = {
   assets: AssetDefinition[]
+  deletingAssetKey?: string | null
   selectedAsset: AssetDefinition | null
   selectedItem: DefinitionBase | null
   onAssignAssetToSelectedItem: (assetKey: string | null) => void

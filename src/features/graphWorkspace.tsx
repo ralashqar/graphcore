@@ -33,6 +33,7 @@ import { filterTemplateGroup, getPlacementPosition, isTemplateAvailableForGraph,
 export function GraphWorkspace(props: GraphWorkspaceProps) {
   const {
     assets,
+    deletingGraphKey = null,
     definitions,
     diagnostics,
     selectedEdge,
@@ -66,6 +67,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
   const canvasRef = useRef<HTMLDivElement | null>(null)
   const contextMenuSearchRef = useRef<HTMLInputElement | null>(null)
   const isSelectedGraphPending = isPendingGenerationResource(selectedGraph)
+  const isDeletingSelectedGraph = selectedGraph?.key === deletingGraphKey
 
   const nodes = useMemo<Node[]>(() => {
     return (selectedGraph?.nodes ?? []).map((node) => {
@@ -414,7 +416,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
               <option value="system_graph">System</option>
             </select>
             <button className="ghost-button compact" onClick={() => selectedGraph && onDuplicateGraph(selectedGraph.key)} type="button">Duplicate</button>
-            <button className="ghost-button compact" onClick={() => selectedGraph && onDeleteGraph(selectedGraph.key)} type="button">Delete</button>
+            <button className={isDeletingSelectedGraph ? 'ghost-button compact button-with-spinner' : 'ghost-button compact'} disabled={isDeletingSelectedGraph} onClick={() => selectedGraph && onDeleteGraph(selectedGraph.key)} type="button">{isDeletingSelectedGraph ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}</button>
           </div>
         )}
         <div className="canvas-stage graph-canvas" ref={canvasRef}>
@@ -425,7 +427,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
               <div className="inline-note world-build-status-note"><span className="button-spinner" aria-hidden="true" />This narrative graph is still being generated. Nodes and edges will appear when the background job completes.</div>
               {selectedGraph ? (
                 <div className="editor-head-controls">
-                  <button className="ghost-button compact danger" onClick={() => onDeleteGraph(selectedGraph.key)} type="button">Delete</button>
+                  <button className={isDeletingSelectedGraph ? 'ghost-button compact danger button-with-spinner' : 'ghost-button compact danger'} disabled={isDeletingSelectedGraph} onClick={() => onDeleteGraph(selectedGraph.key)} type="button">{isDeletingSelectedGraph ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}</button>
                 </div>
               ) : null}
             </div>

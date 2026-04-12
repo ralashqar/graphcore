@@ -21,12 +21,13 @@ type Definition3dPanelProps = {
   assemblyGraph?: AssemblyGraphDefinition | null
   environmentBlueprint?: EnvironmentBlueprintV1 | null
   definition: DefinitionBase
+  onRequestGenerateConceptArt?: (() => void) | null
   onUpdateComponents: (itemKey: string, components: DefinitionBase['components']) => void
 }
 
-export function Definition3dPanel({ assets, assemblyGraph = null, environmentBlueprint = null, definition, onUpdateComponents }: Definition3dPanelProps) {
+export function Definition3dPanel({ assets, assemblyGraph = null, environmentBlueprint = null, definition, onRequestGenerateConceptArt = null, onUpdateComponents }: Definition3dPanelProps) {
   const [showFloor, setShowFloor] = useState(true)
-  const [showGrid, setShowGrid] = useState(false)
+  const [showGrid, setShowGrid] = useState(true)
   const [resetSignal, setResetSignal] = useState(0)
   const [generationMessage, setGenerationMessage] = useState<string | null>(null)
   const [generationPending, setGenerationPending] = useState(false)
@@ -211,28 +212,48 @@ export function Definition3dPanel({ assets, assemblyGraph = null, environmentBlu
         </div>
 
         <div className="character-3d-sidebar">
-          <div className="editor-section">
-            <div className="section-head">
-              <div>
-                <span className="eyebrow">Scene</span>
-                <h3>Viewport controls</h3>
-              </div>
-              <p className="subtle-line">Orbit with mouse drag, pan with right-drag, and dolly with scroll.</p>
+          {!isEnvironment && !isProceduralEnvironment ? (
+            <div className="editor-section">
+              <button
+                className="primary-button compact"
+                disabled={generationPending}
+                onClick={previewImageAsset ? handleGenerateStub : () => onRequestGenerateConceptArt?.()}
+                type="button"
+              >
+                {generationPending
+                  ? 'Checking mesh generation path...'
+                  : previewImageAsset
+                    ? 'Generate 3D mesh'
+                    : 'Generate concept art'}
+              </button>
+              {generationMessage ? <div className="inline-note is-warning">{generationMessage}</div> : null}
             </div>
-            <div className="chip-row">
-              <button className={showFloor ? 'segment-button is-active' : 'segment-button'} onClick={() => setShowFloor((current) => !current)} type="button">
-                Floor
-              </button>
-              <button className={showGrid ? 'segment-button is-active' : 'segment-button'} onClick={() => setShowGrid((current) => !current)} type="button">
-                Grid
-              </button>
-              <button className="ghost-button compact" onClick={() => setResetSignal((current) => current + 1)} type="button">
-                Reset camera
-              </button>
-            </div>
-          </div>
+          ) : null}
 
-          {!isProceduralEnvironment ? (
+          {isEnvironment && !isProceduralEnvironment ? (
+            <div className="editor-section">
+              <div className="section-head">
+                <div>
+                  <span className="eyebrow">Scene</span>
+                  <h3>Viewport controls</h3>
+                </div>
+                <p className="subtle-line">Orbit with mouse drag, pan with right-drag, and dolly with scroll.</p>
+              </div>
+              <div className="chip-row">
+                <button className={showFloor ? 'segment-button is-active' : 'segment-button'} onClick={() => setShowFloor((current) => !current)} type="button">
+                  Floor
+                </button>
+                <button className={showGrid ? 'segment-button is-active' : 'segment-button'} onClick={() => setShowGrid((current) => !current)} type="button">
+                  Grid
+                </button>
+                <button className="ghost-button compact" onClick={() => setResetSignal((current) => current + 1)} type="button">
+                  Reset camera
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          {isEnvironment && !isProceduralEnvironment ? (
             <div className="editor-section">
               <div className="section-head">
                 <div>
@@ -305,69 +326,69 @@ export function Definition3dPanel({ assets, assemblyGraph = null, environmentBlu
             </div>
           ) : null}
 
-          <div className="editor-section">
-            <div className="section-head">
-              <div>
-                <span className="eyebrow">Summary</span>
-                <h3>Bound assets</h3>
+          {isEnvironment ? (
+            <div className="editor-section">
+              <div className="section-head">
+                <div>
+                  <span className="eyebrow">Summary</span>
+                  <h3>Bound assets</h3>
+                </div>
               </div>
-            </div>
-            <div className="character-3d-summary-card">
-              <div className="character-3d-summary-row">
-                <strong>Geometry mode</strong>
-                <span>{isEnvironment ? geometryBinding?.sourceMode ?? 'mesh' : 'mesh'}</span>
-              </div>
-              {isEnvironment ? (
+              <div className="character-3d-summary-card">
+                <div className="character-3d-summary-row">
+                  <strong>Geometry mode</strong>
+                  <span>{geometryBinding?.sourceMode ?? 'mesh'}</span>
+                </div>
                 <div className="character-3d-summary-row">
                   <strong>Assembly graph</strong>
                   <span>{geometryBinding?.assemblyGraphKey ?? 'None'}</span>
                 </div>
-              ) : null}
-              <div className="character-3d-summary-row">
-                <strong>Mesh</strong>
-                <span>{meshAsset?.name ?? 'None'}</span>
-              </div>
-              <div className="character-3d-summary-row">
-                <strong>Mesh source</strong>
-                <span>{meshSourceLabel}</span>
-              </div>
-              <div className="character-3d-summary-row">
-                <strong>Concept image</strong>
-                <span>{previewImageAsset?.name ?? 'None'}</span>
-              </div>
-              {compiledEnvironment ? (
                 <div className="character-3d-summary-row">
-                  <strong>Compiled parts</strong>
-                  <span>{compiledEnvironment.parts.length}</span>
+                  <strong>Mesh</strong>
+                  <span>{meshAsset?.name ?? 'None'}</span>
                 </div>
-              ) : null}
-              {compiledEnvironment ? (
                 <div className="character-3d-summary-row">
-                  <strong>Structural fusion</strong>
-                  <span>{String(compiledEnvironment.metadata?.structuralFusionCount ?? 0)}</span>
+                  <strong>Mesh source</strong>
+                  <span>{meshSourceLabel}</span>
                 </div>
-              ) : null}
-              {compiledPartSummary.length > 0 ? (
-                <div className="character-3d-summary-row" style={{ display: 'block' }}>
-                  <strong>Solid Parts</strong>
-                  <div className="inline-note" style={{ marginTop: 8 }}>
-                    {compiledPartSummary.map((part) => (
-                      <div key={part.id}>
-                        {part.solidKind}
-                        {part.derivedKind ? ` (${part.derivedKind})` : ''}
-                        {` y=${part.minY.toFixed(2)}..${part.maxY.toFixed(2)} from ${part.sourceNodeKey}`}
-                      </div>
-                    ))}
+                <div className="character-3d-summary-row">
+                  <strong>Concept image</strong>
+                  <span>{previewImageAsset?.name ?? 'None'}</span>
+                </div>
+                {compiledEnvironment ? (
+                  <div className="character-3d-summary-row">
+                    <strong>Compiled parts</strong>
+                    <span>{compiledEnvironment.parts.length}</span>
                   </div>
+                ) : null}
+                {compiledEnvironment ? (
+                  <div className="character-3d-summary-row">
+                    <strong>Structural fusion</strong>
+                    <span>{String(compiledEnvironment.metadata?.structuralFusionCount ?? 0)}</span>
+                  </div>
+                ) : null}
+                {compiledPartSummary.length > 0 ? (
+                  <div className="character-3d-summary-row" style={{ display: 'block' }}>
+                    <strong>Solid Parts</strong>
+                    <div className="inline-note" style={{ marginTop: 8 }}>
+                      {compiledPartSummary.map((part) => (
+                        <div key={part.id}>
+                          {part.solidKind}
+                          {part.derivedKind ? ` (${part.derivedKind})` : ''}
+                          {` y=${part.minY.toFixed(2)}..${part.maxY.toFixed(2)} from ${part.sourceNodeKey}`}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                <div className="character-3d-preview-thumb">
+                  <MediaThumb asset={previewImageAsset} label={previewImageAsset?.name ?? definition.name} large />
                 </div>
-              ) : null}
-              <div className="character-3d-preview-thumb">
-                <MediaThumb asset={previewImageAsset} label={previewImageAsset?.name ?? definition.name} large />
               </div>
             </div>
-          </div>
+          ) : null}
 
-          {!isProceduralEnvironment ? (
+          {isEnvironment && !isProceduralEnvironment ? (
             <div className="editor-section">
               <div className="section-head">
                 <div>
@@ -384,7 +405,7 @@ export function Definition3dPanel({ assets, assemblyGraph = null, environmentBlu
               {generationMessage ? <div className="inline-note is-warning">{generationMessage}</div> : null}
             </div>
           ) : (
-            <div className="editor-section">
+            isEnvironment ? <div className="editor-section">
               <div className="section-head">
                 <div>
                   <span className="eyebrow">Compiled</span>
@@ -392,7 +413,7 @@ export function Definition3dPanel({ assets, assemblyGraph = null, environmentBlu
                 </div>
                 <p className="subtle-line">This view is compiled directly from the assembly graph. Update the graph and regenerate from the Graph tab.</p>
               </div>
-            </div>
+            </div> : null
           )}
         </div>
       </div>

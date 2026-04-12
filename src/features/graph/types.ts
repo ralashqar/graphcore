@@ -2,6 +2,7 @@ import type { AssetDefinition, DefinitionBase, Diagnostic, EdgeDefinition, Graph
 
 export type GraphWorkspaceProps = {
   assets: AssetDefinition[]
+  deletingGraphKey?: string | null
   definitions: DefinitionBase[]
   diagnostics: Diagnostic[]
   selectedEdge: EdgeDefinition | null

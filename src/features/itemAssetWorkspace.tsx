@@ -42,6 +42,7 @@ function isContentKind(kind: string): kind is ContentKind {
 export function ContentWorkspace({
   archetypes,
   assets,
+  deletingItemKey = null,
   definitions,
   graphKeys,
   items,
@@ -92,6 +93,7 @@ export function ContentWorkspace({
     selectedArchetype && isContentKind(selectedArchetype.appliesToKind)
       ? selectedArchetype
       : null
+  const isDeletingSelectedItem = selectedContentItem?.key === deletingItemKey
   const filteredItems = useMemo(() => {
     const query = itemSearch.trim().toLowerCase()
     return contentItems
@@ -287,7 +289,7 @@ export function ContentWorkspace({
               <h3>{selectedContentItem.name}</h3>
               <div className="inline-note world-build-status-note"><span className="button-spinner" aria-hidden="true" />This placeholder is still being generated. Fields will appear here when the background job finishes.</div>
               <div className="editor-head-controls">
-                <button className="ghost-button compact danger" onClick={() => onDeleteItem(selectedContentItem.key)} type="button">Delete</button>
+                <button className={isDeletingSelectedItem ? 'ghost-button compact danger button-with-spinner' : 'ghost-button compact danger'} disabled={isDeletingSelectedItem} onClick={() => onDeleteItem(selectedContentItem.key)} type="button">{isDeletingSelectedItem ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}</button>
               </div>
             </div>
           ) : (
@@ -300,7 +302,7 @@ export function ContentWorkspace({
               selectedArchetype={selectedContentArchetype}
               selectedAsset={selectedAsset}
               selectedItem={selectedContentItem}
-              headerControls={selectedContentItem ? <><button className="ghost-button compact danger" onClick={() => onDeleteItem(selectedContentItem.key)} type="button">Delete</button>{getResourceGenerationMetadata(selectedContentItem)?.state === 'failed' ? <span className="inline-note danger">Background generation failed. You can edit or delete this entry.</span> : null}</> : undefined}
+              headerControls={selectedContentItem ? <><button className={isDeletingSelectedItem ? 'ghost-button compact danger button-with-spinner' : 'ghost-button compact danger'} disabled={isDeletingSelectedItem} onClick={() => onDeleteItem(selectedContentItem.key)} type="button">{isDeletingSelectedItem ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}</button>{getResourceGenerationMetadata(selectedContentItem)?.state === 'failed' ? <span className="inline-note danger">Background generation failed. You can edit or delete this entry.</span> : null}</> : undefined}
               onAddCustomField={onAddCustomField}
               onAssignItemIcon={onAssignItemIcon}
               onCreateItem={onCreateItem}

@@ -268,6 +268,12 @@ function clearUnsavedSnapshot(draftId: string) {
   }
 }
 
+type DeleteConfirmationTarget = {
+  resourceType: 'definition' | 'graph' | 'asset'
+  key: string
+  label: string
+}
+
 export default function App() {
   const [session, setSession] = useState<Session | null>(null)
   const [loadedState, setLoadedState] = useState<LoadedState | null>(null)
@@ -289,6 +295,8 @@ export default function App() {
   const [isStartingWorldBuild, setIsStartingWorldBuild] = useState(false)
   const [worldBuildPlanPreview, setWorldBuildPlanPreview] = useState<WorldBuildPlanResponse | null>(null)
   const [completedWorldBuildBatch, setCompletedWorldBuildBatch] = useState<WorldBuildBatch | null>(null)
+  const [pendingDeleteTarget, setPendingDeleteTarget] = useState<DeleteConfirmationTarget | null>(null)
+  const [deletingTarget, setDeletingTarget] = useState<DeleteConfirmationTarget | null>(null)
   const [authOpen, setAuthOpen] = useState(false)
   const [authAutoOpened, setAuthAutoOpened] = useState(false)
   const [authMode, setAuthMode] = useState<AuthMode>('sign_in')
@@ -310,6 +318,9 @@ export default function App() {
   const sessionRef = useRef<Session | null>(null)
   const worldBuildPollInFlightRef = useRef(false)
   const announcedWorldBuildBatchIdsRef = useRef<Set<string>>(new Set())
+  const deletingDefinitionKey = deletingTarget?.resourceType === 'definition' ? deletingTarget.key : null
+  const deletingGraphKey = deletingTarget?.resourceType === 'graph' ? deletingTarget.key : null
+  const deletingAssetKey = deletingTarget?.resourceType === 'asset' ? deletingTarget.key : null
 
   useEffect(() => {
     sessionRef.current = session
@@ -723,37 +734,35 @@ export default function App() {
     if (selectedAssetKey && deletedAssetKeys.has(selectedAssetKey)) setSelectedAssetKey(null)
   }
 
-  function deleteGraph(graphKey: string) {
-    const run = async () => {
-      const target = snapshot?.graphs.find((graph) => graph.key === graphKey) ?? null
-      const generation = getResourceGenerationMetadata(target)
+  async function performDeleteGraph(graphKey: string) {
+    const target = snapshot?.graphs.find((graph) => graph.key === graphKey) ?? null
+    const generation = getResourceGenerationMetadata(target)
 
-      if (snapshot && loadedState?.source === 'supabase' && generation?.source === 'global_prompt') {
-        try {
-          const result = await workspaceService.deleteWorldBuildPlaceholder({
-            snapshot,
-            resourceType: 'graph',
-            key: graphKey,
-          })
-          applyWorldBuildPlaceholderDeletionLocally(result)
-          return
-        } catch (error) {
-          const message = error instanceof Error ? error.message : 'Deleting world-build graph placeholder failed.'
-          console.error('[GraphCore] world build graph delete failed.', error)
-          setPromptRuntimeError(message)
-          return
-        }
-      }
-
-      applySnapshotUpdate((current) => {
-        const nextGraphs = current.graphs.filter((graph) => graph.key !== graphKey)
-        return { ...current, graphs: nextGraphs }
+    if (snapshot && loadedState?.source === 'supabase' && generation?.source === 'global_prompt') {
+      const result = await workspaceService.deleteWorldBuildPlaceholder({
+        snapshot,
+        resourceType: 'graph',
+        key: graphKey,
       })
-      const fallbackGraph = snapshot?.graphs.find((graph) => graph.key !== graphKey) ?? null
-      setSelectedGraphKey(fallbackGraph?.key ?? null)
+      applyWorldBuildPlaceholderDeletionLocally(result)
+      return
     }
 
-    void run()
+    applySnapshotUpdate((current) => {
+      const nextGraphs = current.graphs.filter((graph) => graph.key !== graphKey)
+      return { ...current, graphs: nextGraphs }
+    })
+    const fallbackGraph = snapshot?.graphs.find((graph) => graph.key !== graphKey) ?? null
+    setSelectedGraphKey(fallbackGraph?.key ?? null)
+  }
+
+  function deleteGraph(graphKey: string) {
+    const target = snapshot?.graphs.find((graph) => graph.key === graphKey)
+    setPendingDeleteTarget({
+      resourceType: 'graph',
+      key: graphKey,
+      label: target?.name ?? graphKey,
+    })
   }
 
   function duplicateGraph(graphKey: string) {
@@ -1121,44 +1130,42 @@ export default function App() {
     }))
   }
 
-  function deleteDefinition(itemKey: string) {
-    const run = async () => {
-      const target = snapshot?.definitions.find((definition) => definition.key === itemKey) ?? null
-      const generation = getResourceGenerationMetadata(target)
+  async function performDeleteDefinition(itemKey: string) {
+    const target = snapshot?.definitions.find((definition) => definition.key === itemKey) ?? null
+    const generation = getResourceGenerationMetadata(target)
 
-      if (snapshot && loadedState?.source === 'supabase' && generation?.source === 'global_prompt') {
-        try {
-          const result = await workspaceService.deleteWorldBuildPlaceholder({
-            snapshot,
-            resourceType: 'definition',
-            key: itemKey,
-          })
-          applyWorldBuildPlaceholderDeletionLocally(result)
-          return
-        } catch (error) {
-          const message = error instanceof Error ? error.message : 'Deleting world-build definition placeholder failed.'
-          console.error('[GraphCore] world build definition delete failed.', error)
-          setPromptRuntimeError(message)
-          return
-        }
-      }
-
-      const nextSelectedDefinitionKey =
-        selectedDefinitionKey === itemKey
-          ? snapshot?.definitions.find((definition) => definition.key !== itemKey)?.key ?? null
-          : selectedDefinitionKey
-
-      applySnapshotUpdate((current) => ({
-        ...current,
-        definitions: current.definitions.filter((definition) => definition.key !== itemKey),
-      }))
-
-      if (selectedDefinitionKey === itemKey) {
-        setSelectedDefinitionKey(nextSelectedDefinitionKey)
-      }
+    if (snapshot && loadedState?.source === 'supabase' && generation?.source === 'global_prompt') {
+      const result = await workspaceService.deleteWorldBuildPlaceholder({
+        snapshot,
+        resourceType: 'definition',
+        key: itemKey,
+      })
+      applyWorldBuildPlaceholderDeletionLocally(result)
+      return
     }
 
-    void run()
+    const nextSelectedDefinitionKey =
+      selectedDefinitionKey === itemKey
+        ? snapshot?.definitions.find((definition) => definition.key !== itemKey)?.key ?? null
+        : selectedDefinitionKey
+
+    applySnapshotUpdate((current) => ({
+      ...current,
+      definitions: current.definitions.filter((definition) => definition.key !== itemKey),
+    }))
+
+    if (selectedDefinitionKey === itemKey) {
+      setSelectedDefinitionKey(nextSelectedDefinitionKey)
+    }
+  }
+
+  function deleteDefinition(itemKey: string) {
+    const target = snapshot?.definitions.find((definition) => definition.key === itemKey)
+    setPendingDeleteTarget({
+      resourceType: 'definition',
+      key: itemKey,
+      label: target?.name ?? itemKey,
+    })
   }
 
   function addCustomField(itemKey: string, field: ProjectSnapshot['definitions'][number]['customFields'][number]) {
@@ -1243,48 +1250,68 @@ export default function App() {
     if (changes.key && selectedAssetKey === assetKey) setSelectedAssetKey(changes.key)
   }
 
-  function deleteAsset(assetKey: string) {
-    const run = async () => {
-      const target = snapshot?.assets.find((asset) => asset.key === assetKey) ?? null
-      const generation = getResourceGenerationMetadata(target)
+  async function performDeleteAsset(assetKey: string) {
+    const target = snapshot?.assets.find((asset) => asset.key === assetKey) ?? null
+    const generation = getResourceGenerationMetadata(target)
 
-      if (snapshot && loadedState?.source === 'supabase' && generation?.source === 'global_prompt') {
-        try {
-          const result = await workspaceService.deleteWorldBuildPlaceholder({
-            snapshot,
-            resourceType: 'asset',
-            key: assetKey,
-          })
-          applyWorldBuildPlaceholderDeletionLocally(result)
-          return
-        } catch (error) {
-          const message = error instanceof Error ? error.message : 'Deleting world-build asset placeholder failed.'
-          console.error('[GraphCore] world build asset delete failed.', error)
-          setPromptRuntimeError(message)
-          return
-        }
-      }
-
-      const nextSelectedAssetKey =
-        selectedAssetKey === assetKey
-          ? snapshot?.assets.find((asset) => asset.key !== assetKey)?.key ?? null
-          : selectedAssetKey
-
-      applySnapshotUpdate((current) => ({
-        ...current,
-        assets: current.assets.filter((asset) => asset.key !== assetKey),
-        archetypes: current.archetypes.map((archetype) => clearAssetReferences(archetype, assetKey)),
-        definitions: current.definitions.map((definition) => clearAssetReferences(definition, assetKey)),
-        graphs: current.graphs.map((graph) => clearAssetReferences(graph, assetKey)),
-        environmentBlueprints: current.environmentBlueprints.map((blueprint) => clearAssetReferences(blueprint, assetKey)),
-      }))
-
-      if (selectedAssetKey === assetKey) {
-        setSelectedAssetKey(nextSelectedAssetKey)
-      }
+    if (snapshot && loadedState?.source === 'supabase' && generation?.source === 'global_prompt') {
+      const result = await workspaceService.deleteWorldBuildPlaceholder({
+        snapshot,
+        resourceType: 'asset',
+        key: assetKey,
+      })
+      applyWorldBuildPlaceholderDeletionLocally(result)
+      return
     }
 
-    void run()
+    const nextSelectedAssetKey =
+      selectedAssetKey === assetKey
+        ? snapshot?.assets.find((asset) => asset.key !== assetKey)?.key ?? null
+        : selectedAssetKey
+
+    applySnapshotUpdate((current) => ({
+      ...current,
+      assets: current.assets.filter((asset) => asset.key !== assetKey),
+      archetypes: current.archetypes.map((archetype) => clearAssetReferences(archetype, assetKey)),
+      definitions: current.definitions.map((definition) => clearAssetReferences(definition, assetKey)),
+      graphs: current.graphs.map((graph) => clearAssetReferences(graph, assetKey)),
+      environmentBlueprints: current.environmentBlueprints.map((blueprint) => clearAssetReferences(blueprint, assetKey)),
+    }))
+
+    if (selectedAssetKey === assetKey) {
+      setSelectedAssetKey(nextSelectedAssetKey)
+    }
+  }
+
+  function deleteAsset(assetKey: string) {
+    const target = snapshot?.assets.find((asset) => asset.key === assetKey)
+    setPendingDeleteTarget({
+      resourceType: 'asset',
+      key: assetKey,
+      label: target?.name ?? assetKey,
+    })
+  }
+
+  async function handleConfirmDelete() {
+    if (!pendingDeleteTarget) return
+    setDeletingTarget(pendingDeleteTarget)
+
+    try {
+      if (pendingDeleteTarget.resourceType === 'graph') {
+        await performDeleteGraph(pendingDeleteTarget.key)
+      } else if (pendingDeleteTarget.resourceType === 'definition') {
+        await performDeleteDefinition(pendingDeleteTarget.key)
+      } else {
+        await performDeleteAsset(pendingDeleteTarget.key)
+      }
+      setPendingDeleteTarget(null)
+    } catch (error) {
+      console.error('[GraphCore] delete failed.', error)
+      setPromptRuntimeError(error instanceof Error ? error.message : 'Delete failed.')
+      setPendingDeleteTarget(null)
+    } finally {
+      setDeletingTarget(null)
+    }
   }
 
   function createUrlAsset(sourceUrl: string, kind: AssetUrlCreationKind = 'image', options?: AssetUrlCreateOptions) {
@@ -1924,6 +1951,7 @@ export default function App() {
             {activeTab === 'graph' ? (
               <GraphWorkspace
                 assets={snapshot.assets}
+                deletingGraphKey={deletingGraphKey}
                 definitions={snapshot.definitions}
                 diagnostics={bundle.diagnostics}
                 selectedEdge={selectedEdge}
@@ -1952,6 +1980,7 @@ export default function App() {
               <ContentWorkspace
                 archetypes={snapshot.archetypes}
                 assets={snapshot.assets}
+                deletingItemKey={deletingDefinitionKey}
                 definitions={snapshot.definitions}
                 graphKeys={snapshot.graphs.map((graph) => graph.key)}
                 items={definitionEntries}
@@ -1992,6 +2021,7 @@ export default function App() {
                 gameSpec={snapshot.gameSpec}
                 selectedAsset={selectedAsset}
                 selectedDefinition={selectedDefinition?.kind === 'character' ? selectedDefinition : null}
+                deletingDefinitionKey={deletingDefinitionKey}
                 onAddCustomField={addCustomField}
                 onAssignDefinitionIcon={assignAssetToSelectedItem}
                 isGeneratingPrompt={isGeneratingPatch}
@@ -2028,6 +2058,7 @@ export default function App() {
                 gameSpec={snapshot.gameSpec}
                 selectedAsset={selectedAsset}
                 selectedDefinition={selectedDefinition?.kind === 'environment' ? selectedDefinition : null}
+                deletingDefinitionKey={deletingDefinitionKey}
                 onAddCustomField={addCustomField}
                 onAssignDefinitionIcon={assignAssetToSelectedItem}
                 isGeneratingPrompt={isGeneratingPatch}
@@ -2050,7 +2081,7 @@ export default function App() {
                 promptText={promptText}
               />
             ) : null}
-            {activeTab === 'assets' ? <AssetsWorkspace assets={snapshot.assets} selectedAsset={selectedAsset} selectedItem={selectedDefinition} onAssignAssetToSelectedItem={assignAssetToSelectedItem} onCreateUrlAsset={createUrlAsset} onDeleteAsset={deleteAsset} onSelectAsset={setSelectedAssetKey} onUploadAsset={handleAssetUpload} onUpdateAsset={updateAssetIdentity} /> : null}
+            {activeTab === 'assets' ? <AssetsWorkspace assets={snapshot.assets} deletingAssetKey={deletingAssetKey} selectedAsset={selectedAsset} selectedItem={selectedDefinition} onAssignAssetToSelectedItem={assignAssetToSelectedItem} onCreateUrlAsset={createUrlAsset} onDeleteAsset={deleteAsset} onSelectAsset={setSelectedAssetKey} onUploadAsset={handleAssetUpload} onUpdateAsset={updateAssetIdentity} /> : null}
             {activeTab === 'prompts' ? <ActivityWorkspace patchHistory={patchHistory} selectedPatch={selectedPatch} selectedPatchIndex={selectedPatchIndex} onSelectPatch={setSelectedPatchIndex} /> : null}
             {activeTab === 'releases' ? <ReleasesWorkspace bundle={bundle} releases={snapshot.releases} sourceReason={loadedState?.reason} /> : null}
           </Suspense>
@@ -2112,6 +2143,24 @@ export default function App() {
           batch={completedWorldBuildBatch}
           onClose={() => setCompletedWorldBuildBatch(null)}
         />
+      ) : null}
+      {pendingDeleteTarget ? (
+        <div className="bootstrap-overlay" onClick={() => !deletingTarget && setPendingDeleteTarget(null)} role="presentation">
+          <section className="bootstrap-dialog confirm-delete-dialog" onClick={(event) => event.stopPropagation()}>
+            <div className="surface-head">
+              <div>
+                <h2>Confirm Delete</h2>
+                <p className="confirm-delete-copy">Delete <strong>{pendingDeleteTarget.label}</strong>? This action cannot be undone.</p>
+              </div>
+            </div>
+            <div className="bootstrap-footer">
+              <button className="ghost-button compact" disabled={Boolean(deletingTarget)} onClick={() => setPendingDeleteTarget(null)} type="button">Cancel</button>
+              <button className="ghost-button compact danger button-with-spinner" disabled={Boolean(deletingTarget)} onClick={handleConfirmDelete} type="button">
+                {deletingTarget ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}
+              </button>
+            </div>
+          </section>
+        </div>
       ) : null}
       {authOpen ? <AuthDialog authEmail={authEmail} authError={authError} authInfo={authInfo} authMode={authMode} authPassword={authPassword} authPendingConfirmation={authPendingConfirmation} onClose={() => setAuthOpen(false)} onEmailChange={setAuthEmail} onGoogleAuth={handleGoogleAuth} onModeChange={(mode) => { setAuthMode(mode); setAuthError(null); setAuthInfo(null); if (mode !== 'sign_up') setAuthPendingConfirmation(false) }} onPasswordChange={setAuthPassword} onResendConfirmation={handleResendConfirmation} onSubmit={handleAuthSubmit} /> : null}
     </main>

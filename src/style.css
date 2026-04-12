@@ -2902,6 +2902,29 @@ button:disabled {
   width: min(100%, 920px);
 }
 
+.confirm-delete-dialog {
+  width: min(100%, 560px);
+  min-height: auto;
+  grid-template-rows: auto auto;
+  gap: 20px;
+  padding: 26px;
+}
+
+.confirm-delete-dialog .surface-head {
+  gap: 10px;
+}
+
+.confirm-delete-dialog .surface-head h2 {
+  font-size: clamp(2rem, 4vw, 2.6rem);
+  line-height: 1;
+}
+
+.confirm-delete-copy {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
 .world-build-plan-list,
 .world-build-completion-list {
   display: grid;

@@ -28,6 +28,7 @@ type SpecializedDefinitionWorkspaceProps = {
   gameSpec?: GameSpec | null
   selectedAsset: AssetDefinition | null
   selectedDefinition: DefinitionBase | null
+  deletingDefinitionKey?: string | null
   onAddCustomField: (itemKey: string, field: FieldDefinition) => void
   onAssignDefinitionIcon: (assetKey: string | null) => void
   isGeneratingPrompt: boolean
@@ -63,6 +64,7 @@ export function SpecializedDefinitionWorkspace({
   gameSpec = null,
   selectedAsset,
   selectedDefinition,
+  deletingDefinitionKey = null,
   onAddCustomField,
   onAssignDefinitionIcon,
   isGeneratingPrompt,
@@ -116,6 +118,7 @@ export function SpecializedDefinitionWorkspace({
   const effectiveSelection = hasSelectedDefinitionForKind ? selectedDefinition : filteredDefinitions[0] ?? null
   const supports3dPanel = (kind === 'character' || kind === 'environment') && Boolean(effectiveSelection)
   const supportsGraphPanel = kind === 'environment' && Boolean(effectiveSelection)
+  const isDeletingSelection = effectiveSelection?.key === deletingDefinitionKey
   const selectedCharacterProfile = useMemo(() => {
     if (effectiveSelection?.kind !== 'character') return null
     const profile = effectiveSelection.components.find((component) => component.type === 'character_profile')
@@ -259,6 +262,10 @@ export function SpecializedDefinitionWorkspace({
     }
   }
 
+  function requestCharacterConceptFrom3d() {
+    void handleGenerateCharacterConcept()
+  }
+
   useEffect(() => {
     if (!hasSelectedDefinitionForKind && effectiveSelection && selectedDefinition?.key !== effectiveSelection.key) {
       onSelectDefinition(effectiveSelection.key)
@@ -381,7 +388,7 @@ export function SpecializedDefinitionWorkspace({
               <h3>{effectiveSelection.name}</h3>
               <div className="inline-note world-build-status-note"><span className="button-spinner" aria-hidden="true" />This placeholder is still being generated. The editor will unlock when the background job completes.</div>
               <div className="editor-head-controls">
-                <button className="ghost-button compact danger" onClick={() => onDeleteDefinition(effectiveSelection.key)} type="button">Delete</button>
+                <button className={isDeletingSelection ? 'ghost-button compact danger button-with-spinner' : 'ghost-button compact danger'} disabled={isDeletingSelection} onClick={() => onDeleteDefinition(effectiveSelection.key)} type="button">{isDeletingSelection ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}</button>
               </div>
             </div>
           ) : supports3dPanel ? (
@@ -404,20 +411,13 @@ export function SpecializedDefinitionWorkspace({
                         />
                       </button>
                       <div className="character-concept-media-meta">
-                        <span className="eyebrow">Concept Art</span>
-                        <span className="subtle-line">
-                          {isCharacterConceptAssetPending
-                            ? 'Generating concept image...'
-                            : selectedCharacterPreviewAsset?.name ?? 'No concept image bound yet.'}
-                        </span>
+                        <button className={isDeletingSelection ? 'ghost-button compact danger button-with-spinner' : 'ghost-button compact danger'} disabled={isDeletingSelection} onClick={() => onDeleteDefinition(effectiveSelection.key)} type="button">{isDeletingSelection ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}</button>
                       </div>
                     </div>
                     <div className="editor-heading-copy character-concept-copy">
                       <div className="editor-head-toolbar character-head-toolbar">
-                        <span className="eyebrow">Character Editor</span>
                         <div className="editor-head-controls">
                           {hasSelectionGenerationFailed ? <span className="inline-note danger">Background generation failed. You can edit or delete this entry.</span> : null}
-                          <button className="ghost-button compact danger" onClick={() => onDeleteDefinition(effectiveSelection.key)} type="button">Delete</button>
                           {definitionPanelControls}
                         </div>
                       </div>
@@ -428,13 +428,6 @@ export function SpecializedDefinitionWorkspace({
                             <input
                               value={effectiveSelection.name}
                               onChange={(event) => onUpdateItemIdentity(effectiveSelection.key, { name: event.target.value })}
-                            />
-                          </label>
-                          <label className="inline-head-field">
-                            <span>Key</span>
-                            <input
-                              value={effectiveSelection.key}
-                              onChange={(event) => onUpdateItemIdentity(effectiveSelection.key, { key: event.target.value })}
                             />
                           </label>
                         </div>
@@ -480,46 +473,50 @@ export function SpecializedDefinitionWorkspace({
                             </select>
                           </label>
                         </div>
-                        <label className="field-block character-header-textarea">
-                          <span>Summary</span>
-                          <textarea
-                            rows={3}
-                            value={effectiveSelection.summary}
-                            onChange={(event) => onUpdateItemIdentity(effectiveSelection.key, { summary: event.target.value })}
-                            placeholder="Describe the role, personality, and gameplay purpose of this character."
-                          />
-                        </label>
-                        <div className="character-concept-prompt-row">
-                          <label className="field-block character-header-textarea">
-                            <span>Visual Description</span>
-                            <textarea
-                              rows={4}
-                              value={selectedCharacterRenderBinding?.conceptPrompt ?? ''}
-                              onChange={(event) => updateCharacterRenderBinding({ conceptPrompt: event.target.value || null })}
-                              placeholder="Describe face, silhouette, outfit, props, palette, mood, and any must-have visual cues."
-                            />
-                          </label>
-                          <div className="character-concept-actions">
-                            <button
-                              className={isCharacterConceptBusy ? 'primary-button button-with-spinner' : 'primary-button'}
-                              disabled={isCharacterConceptBusy || !(selectedCharacterRenderBinding?.conceptPrompt?.trim())}
-                              onClick={() => void handleGenerateCharacterConcept()}
-                              type="button"
-                            >
-                              {isCharacterConceptBusy ? <><span className="button-spinner" aria-hidden="true" />Generating...</> : 'Generate concept image'}
-                            </button>
-                            <button className="ghost-button compact" onClick={() => setIsSelectionIconPickerOpen(true)} type="button">
-                              Change image
-                            </button>
-                            <span className="subtle-line">
-                              Style: {getArtStylePresetLabel(typeof gameSpec?.theme?.artStylePreset === 'string' ? gameSpec.theme.artStylePreset : null)}
-                            </span>
-                            {typeof gameSpec?.theme?.artStyleDescription === 'string' && gameSpec.theme.artStyleDescription.trim() ? (
-                              <span className="subtle-line">{gameSpec.theme.artStyleDescription.trim()}</span>
-                            ) : null}
-                            {characterConceptMessage ? <div className="inline-note">{characterConceptMessage}</div> : null}
-                          </div>
-                        </div>
+                        {panelMode !== '3d' ? (
+                          <>
+                            <label className="field-block character-header-textarea">
+                              <span>Summary</span>
+                              <textarea
+                                rows={3}
+                                value={effectiveSelection.summary}
+                                onChange={(event) => onUpdateItemIdentity(effectiveSelection.key, { summary: event.target.value })}
+                                placeholder="Describe the role, personality, and gameplay purpose of this character."
+                              />
+                            </label>
+                            <div className="character-concept-prompt-row">
+                              <label className="field-block character-header-textarea">
+                                <span>Visual Description</span>
+                                <textarea
+                                  rows={4}
+                                  value={selectedCharacterRenderBinding?.conceptPrompt ?? ''}
+                                  onChange={(event) => updateCharacterRenderBinding({ conceptPrompt: event.target.value || null })}
+                                  placeholder="Describe face, silhouette, outfit, props, palette, mood, and any must-have visual cues."
+                                />
+                              </label>
+                              <div className="character-concept-actions">
+                                <button
+                                  className={isCharacterConceptBusy ? 'primary-button button-with-spinner' : 'primary-button'}
+                                  disabled={isCharacterConceptBusy || !(selectedCharacterRenderBinding?.conceptPrompt?.trim())}
+                                  onClick={() => void handleGenerateCharacterConcept()}
+                                  type="button"
+                                >
+                                  {isCharacterConceptBusy ? <><span className="button-spinner" aria-hidden="true" />Generating...</> : 'Generate concept image'}
+                                </button>
+                                <button className="ghost-button compact" onClick={() => setIsSelectionIconPickerOpen(true)} type="button">
+                                  Change image
+                                </button>
+                                <span className="subtle-line">
+                                  Style: {getArtStylePresetLabel(typeof gameSpec?.theme?.artStylePreset === 'string' ? gameSpec.theme.artStylePreset : null)}
+                                </span>
+                                {typeof gameSpec?.theme?.artStyleDescription === 'string' && gameSpec.theme.artStyleDescription.trim() ? (
+                                  <span className="subtle-line">{gameSpec.theme.artStyleDescription.trim()}</span>
+                                ) : null}
+                                {characterConceptMessage ? <div className="inline-note">{characterConceptMessage}</div> : null}
+                              </div>
+                            </div>
+                          </>
+                        ) : null}
                       </div>
                     </div>
                   </div>
@@ -535,6 +532,7 @@ export function SpecializedDefinitionWorkspace({
                         large
                       />
                     </button>
+                    <button className={isDeletingSelection ? 'ghost-button compact danger button-with-spinner' : 'ghost-button compact danger'} disabled={isDeletingSelection} onClick={() => onDeleteDefinition(effectiveSelection.key)} type="button">{isDeletingSelection ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}</button>
                   </div>
                   <div className="editor-heading-copy">
                     <span className="eyebrow">{kind === 'environment' ? 'Environment Editor' : 'Character Editor'}</span>
@@ -551,17 +549,9 @@ export function SpecializedDefinitionWorkspace({
                             onChange={(event) => onUpdateItemIdentity(effectiveSelection.key, { name: event.target.value })}
                           />
                         </label>
-                        <label className="inline-head-field">
-                          <span>Key</span>
-                          <input
-                            value={effectiveSelection.key}
-                            onChange={(event) => onUpdateItemIdentity(effectiveSelection.key, { key: event.target.value })}
-                          />
-                        </label>
                       </div>
                       <div className="editor-head-controls">
                         {hasSelectionGenerationFailed ? <span className="inline-note danger">Background generation failed. You can edit or delete this entry.</span> : null}
-                        <button className="ghost-button compact danger" onClick={() => onDeleteDefinition(effectiveSelection.key)} type="button">Delete</button>
                         {definitionPanelControls}
                       </div>
                     </div>
@@ -574,6 +564,7 @@ export function SpecializedDefinitionWorkspace({
                   assemblyGraph={selectedAssemblyGraph}
                   environmentBlueprint={selectedEnvironmentBlueprint}
                   definition={effectiveSelection}
+                  onRequestGenerateConceptArt={effectiveSelection.kind === 'character' ? requestCharacterConceptFrom3d : null}
                   onUpdateComponents={onUpdateComponents}
                 />
               ) : panelMode === 'graph' && effectiveSelection.kind === 'environment' ? (
@@ -606,9 +597,10 @@ export function SpecializedDefinitionWorkspace({
               selectedArchetype={compatibleArchetypes.find((archetype) => archetype.key === effectiveSelection.archetypeKey) ?? null}
               selectedAsset={selectedAsset}
               selectedItem={effectiveSelection}
-              headerControls={<><button className="ghost-button compact danger" onClick={() => onDeleteDefinition(effectiveSelection.key)} type="button">Delete</button></>}
+              headerControls={<><button className={isDeletingSelection ? 'ghost-button compact danger button-with-spinner' : 'ghost-button compact danger'} disabled={isDeletingSelection} onClick={() => onDeleteDefinition(effectiveSelection.key)} type="button">{isDeletingSelection ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}</button></>}
               hideHeader
               hideArchetypeField={effectiveSelection.kind === 'character'}
+              hideManualSections={effectiveSelection.kind === 'character'}
               suppressSummaryField={effectiveSelection.kind === 'character'}
                   onAddCustomField={onAddCustomField}
                   onAssignItemIcon={onAssignDefinitionIcon}
@@ -629,7 +621,7 @@ export function SpecializedDefinitionWorkspace({
               selectedArchetype={compatibleArchetypes.find((archetype) => archetype.key === effectiveSelection.archetypeKey) ?? null}
               selectedAsset={selectedAsset}
               selectedItem={effectiveSelection}
-              headerControls={<><button className="ghost-button compact danger" onClick={() => onDeleteDefinition(effectiveSelection.key)} type="button">Delete</button>{hasSelectionGenerationFailed ? <span className="inline-note danger">Background generation failed. You can edit or delete this entry.</span> : null}</>}
+              headerControls={<><button className={isDeletingSelection ? 'ghost-button compact danger button-with-spinner' : 'ghost-button compact danger'} disabled={isDeletingSelection} onClick={() => onDeleteDefinition(effectiveSelection.key)} type="button">{isDeletingSelection ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}</button>{hasSelectionGenerationFailed ? <span className="inline-note danger">Background generation failed. You can edit or delete this entry.</span> : null}</>}
               onAddCustomField={onAddCustomField}
               onAssignItemIcon={onAssignDefinitionIcon}
               onCreateItem={(archetypeKey) => onCreateDefinition(archetypeKey)}

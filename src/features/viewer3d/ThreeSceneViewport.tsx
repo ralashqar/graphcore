@@ -356,31 +356,6 @@ export function ThreeSceneViewport({
           />
         </Canvas>
       </div>
-      <div className="three-scene-status">
-        <span className="section-label">Viewport</span>
-        <strong>
-          {compiledEnvironment
-            ? 'Procedural preview active'
-            : loadedScene.status === 'loading'
-            ? 'Loading mesh...'
-            : loadedScene.status === 'ready'
-              ? 'Mesh preview active'
-              : meshSourceUrl
-                ? 'Proxy fallback active'
-                : 'Proxy preview active'}
-        </strong>
-        <span>
-          {compiledEnvironment
-            ? `${compiledEnvironment.parts.length} compiled part${compiledEnvironment.parts.length === 1 ? '' : 's'} from ${compiledEnvironment.graphKey}.`
-            : loadedScene.status === 'error'
-            ? loadedScene.error
-            : loadedScene.status === 'ready'
-              ? modelLabel
-              : modelKind === 'environment'
-                ? 'Showing a cube environment blockout until a mesh is bound.'
-                : `Showing a generated ${modelSubtype} placeholder until a mesh is bound.`}
-        </span>
-      </div>
     </div>
   )
 }

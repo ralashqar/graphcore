@@ -10,7 +10,7 @@ import {
   worldBuildStatusResponseSchema,
 } from '../../../src/domain/worldBuild.ts'
 import { getArtStylePresetLabel } from '../../../src/domain/artStylePresets.ts'
-import { buildCharacterConceptPrompt, extractFalImageUrls } from '../../../src/domain/visualAssetGeneration.ts'
+import { buildCharacterConceptPrompt, buildItemConceptPrompt, extractFalImageUrls } from '../../../src/domain/visualAssetGeneration.ts'
 import { requireUserClient } from '../_shared/auth.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
 import { buildDefaultDefinitionComponents } from '../_shared/world-build-placeholders.ts'
@@ -175,6 +175,9 @@ function conceptPromptFromDefinition(definition: SnapshotDefinition, job: JobRow
   const characterProfile = Array.isArray(definition.components)
     ? definition.components.find((component) => component.type === 'character_profile')
     : null
+  const physicalItemProfile = Array.isArray(definition.components)
+    ? definition.components.find((component) => component.type === 'physical_item_profile')
+    : null
   const environmentBinding = Array.isArray(definition.components)
     ? definition.components.find((component) => component.type === 'environment_render_binding')
     : null
@@ -206,6 +209,32 @@ function conceptPromptFromDefinition(definition: SnapshotDefinition, job: JobRow
       characterName: definition.name,
       subtype,
       archetypeLabel: typeof definition.archetypeKey === 'string' ? definition.archetypeKey : null,
+      artStylePresetLabel: getArtStylePresetLabel(artStylePreset),
+      artStyleDescription,
+      visualDescription,
+    })
+  }
+
+  if (job.kind === 'item_concept_image') {
+    const physicalSubtype =
+      typeof physicalItemProfile?.config?.physicalSubtype === 'string'
+        ? String(physicalItemProfile.config.physicalSubtype)
+        : null
+    const worldPlacementRole =
+      typeof physicalItemProfile?.config?.worldPlacementRole === 'string'
+        ? String(physicalItemProfile.config.worldPlacementRole)
+        : null
+    const pickupContext =
+      typeof physicalItemProfile?.config?.pickupContext === 'string'
+        ? String(physicalItemProfile.config.pickupContext)
+        : null
+
+    return buildItemConceptPrompt({
+      itemName: definition.name,
+      physicalSubtype,
+      archetypeLabel: typeof definition.archetypeKey === 'string' ? definition.archetypeKey : null,
+      worldPlacementRole,
+      pickupContext,
       artStylePresetLabel: getArtStylePresetLabel(artStylePreset),
       artStyleDescription,
       visualDescription,

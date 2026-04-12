@@ -27,6 +27,7 @@ export function DefinitionEditor({
   headerControls,
   hideArchetypeField = false,
   hideHeader = false,
+  hideManualSections = false,
   suppressSummaryField = false,
   onAddCustomField,
   onAssignItemIcon,
@@ -46,6 +47,7 @@ export function DefinitionEditor({
   headerControls?: ReactNode
   hideArchetypeField?: boolean
   hideHeader?: boolean
+  hideManualSections?: boolean
   suppressSummaryField?: boolean
   onAddCustomField: (itemKey: string, field: FieldDefinition) => void
   onAssignItemIcon: (assetKey: string | null) => void
@@ -113,13 +115,6 @@ export function DefinitionEditor({
                   onChange={(event) => onUpdateItemIdentity(definition.key, { name: event.target.value })}
                 />
               </label>
-              <label className="field-block compact-block head-field">
-                <span>Key</span>
-                <input
-                  value={definition.key}
-                  onChange={(event) => onUpdateItemIdentity(definition.key, { key: event.target.value })}
-                />
-              </label>
               <label className="field-block compact-block head-field full-width">
                 <span>Description</span>
                 <textarea
@@ -180,61 +175,65 @@ export function DefinitionEditor({
         </label>
       </div>
 
-      <div className="editor-section">
-        <div className="section-head">
-          <div>
-            <span className="eyebrow">Structured Values</span>
-            <h3>{selectedArchetypeForItem?.name ?? 'Definition-specific values'}</h3>
+      {!hideManualSections ? (
+        <>
+          <div className="editor-section">
+            <div className="section-head">
+              <div>
+                <span className="eyebrow">Structured Values</span>
+                <h3>{selectedArchetypeForItem?.name ?? 'Definition-specific values'}</h3>
+              </div>
+              <p className="subtle-line">
+                {selectedArchetypeForItem?.summary ??
+                  'Add values here so prompts and manual edits target known fields instead of freeform JSON.'}
+              </p>
+            </div>
+            <div className="field-grid">
+              {resolvedFields.map((field) => (
+                <EditableField
+                  key={field.key}
+                  assets={assets}
+                  definitions={definitions}
+                  field={field}
+                  value={getFieldValue(definition, field)}
+                  onChange={(value) => onUpdateFieldValue(definition.key, field.key, value)}
+                />
+              ))}
+            </div>
           </div>
-          <p className="subtle-line">
-            {selectedArchetypeForItem?.summary ??
-              'Add values here so prompts and manual edits target known fields instead of freeform JSON.'}
-          </p>
-        </div>
-        <div className="field-grid">
-          {resolvedFields.map((field) => (
-            <EditableField
-              key={field.key}
-              assets={assets}
+
+          <div className="editor-section">
+            <div className="section-head">
+              <div>
+                <span className="eyebrow">Components</span>
+                <h3>Runtime-linked config</h3>
+              </div>
+              <p className="subtle-line">
+                Preset-backed definitions can still be tuned locally through component data.
+              </p>
+            </div>
+            <DefinitionComponentsEditor
+              definition={definition}
               definitions={definitions}
-              field={field}
-              value={getFieldValue(definition, field)}
-              onChange={(value) => onUpdateFieldValue(definition.key, field.key, value)}
+              graphKeys={graphKeys}
+              onUpdateComponent={(componentType, config) => updateComponentConfig(definition.key, componentType, config)}
             />
-          ))}
-        </div>
-      </div>
-
-      <div className="editor-section">
-        <div className="section-head">
-          <div>
-            <span className="eyebrow">Components</span>
-            <h3>Runtime-linked config</h3>
           </div>
-          <p className="subtle-line">
-            Preset-backed definitions can still be tuned locally through component data.
-          </p>
-        </div>
-        <DefinitionComponentsEditor
-          definition={definition}
-          definitions={definitions}
-          graphKeys={graphKeys}
-          onUpdateComponent={(componentType, config) => updateComponentConfig(definition.key, componentType, config)}
-        />
-      </div>
 
-      <div className="editor-section">
-        <div className="section-head">
-          <div>
-            <span className="eyebrow">Custom Fields</span>
-            <h3>Extend this definition locally</h3>
+          <div className="editor-section">
+            <div className="section-head">
+              <div>
+                <span className="eyebrow">Custom Fields</span>
+                <h3>Extend this definition locally</h3>
+              </div>
+              <p className="subtle-line">
+                Use local fields when one definition needs data that should not be shared across the whole archetype.
+              </p>
+            </div>
+            <AddFieldForm actionLabel="Add definition field" onAddField={(field) => onAddCustomField(definition.key, field)} />
           </div>
-          <p className="subtle-line">
-            Use local fields when one definition needs data that should not be shared across the whole archetype.
-          </p>
-        </div>
-        <AddFieldForm actionLabel="Add definition field" onAddField={(field) => onAddCustomField(definition.key, field)} />
-      </div>
+        </>
+      ) : null}
 
       {isIconPickerOpen ? (
         <AssetPickerDialog
