@@ -69,7 +69,7 @@ async function getStatus(model: string, requestId: string, logs: boolean, header
 }
 
 async function getResult(model: string, requestId: string, headers: HeadersInit) {
-  return fetchFalJson(`${queueBaseUrl}/${model}/requests/${requestId}/response`, {
+  return fetchFalJson(`${queueBaseUrl}/${model}/requests/${requestId}`, {
     method: 'GET',
     headers,
   })
@@ -150,6 +150,10 @@ Deno.serve(async (request) => {
 
     if (action === 'result') {
       const { response, body } = await getResult(model, payload.requestId, headers)
+      const normalizedData =
+        body && typeof body.response === 'object' && body.response !== null
+          ? body.response
+          : body
 
       return json(
         {
@@ -157,7 +161,9 @@ Deno.serve(async (request) => {
           action,
           model,
           requestId: payload.requestId,
-          data: body,
+          data: normalizedData,
+          status: typeof body.status === 'string' ? body.status : undefined,
+          statusData: body,
         },
         { status: response.status },
       )
@@ -226,6 +232,10 @@ Deno.serve(async (request) => {
 
       if (status === 'COMPLETED') {
         const responseResult = await getResult(model, requestId, headers)
+        const normalizedData =
+          responseResult.body && typeof responseResult.body.response === 'object' && responseResult.body.response !== null
+            ? responseResult.body.response
+            : responseResult.body
 
         return json({
           provider: 'fal',
@@ -234,7 +244,7 @@ Deno.serve(async (request) => {
           requestId,
           status,
           statusData: statusResult.body,
-          data: responseResult.body,
+          data: normalizedData,
         })
       }
 

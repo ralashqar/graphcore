@@ -1882,6 +1882,27 @@ button:disabled {
   border-radius: 24px;
 }
 
+.character-concept-art-button {
+  position: relative;
+  overflow: hidden;
+}
+
+.character-concept-art-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(7, 11, 19, 0.46);
+  border-radius: 24px;
+  z-index: 1;
+}
+
+.character-concept-art-overlay .button-spinner {
+  width: 20px;
+  height: 20px;
+}
+
 .character-concept-media-meta,
 .character-concept-copy,
 .character-header-rows,

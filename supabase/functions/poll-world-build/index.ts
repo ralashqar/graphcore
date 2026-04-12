@@ -9,10 +9,13 @@ import {
   worldBuildPollRequestSchema,
   worldBuildStatusResponseSchema,
 } from '../../../src/domain/worldBuild.ts'
+import { getArtStylePresetLabel } from '../../../src/domain/artStylePresets.ts'
+import { buildCharacterConceptPrompt, extractFalImageUrls } from '../../../src/domain/visualAssetGeneration.ts'
 import { requireUserClient } from '../_shared/auth.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
 import { buildDefaultDefinitionComponents } from '../_shared/world-build-placeholders.ts'
 import { runStructuredWorldBuildModel, isTerminalWorldBuildStatus } from '../_shared/world-build.ts'
+import { buildAssetSlug } from '../../../src/domain/assets.ts'
 
 const contentGenerationSchema = z.object({
   name: z.string(),
@@ -106,6 +109,7 @@ type SnapshotDefinition = {
   kind: string
   name: string
   summary: string
+  archetypeKey?: string | null
   components: SnapshotComponent[]
 }
 
@@ -168,14 +172,17 @@ function conceptPromptFromDefinition(definition: SnapshotDefinition, job: JobRow
   const renderBinding = Array.isArray(definition.components)
     ? definition.components.find((component) => component.type === 'render_3d_binding')
     : null
+  const characterProfile = Array.isArray(definition.components)
+    ? definition.components.find((component) => component.type === 'character_profile')
+    : null
   const environmentBinding = Array.isArray(definition.components)
     ? definition.components.find((component) => component.type === 'environment_render_binding')
     : null
-  const artStylePreset = typeof snapshot.gameSpec?.theme?.artStylePreset === 'string' ? snapshot.gameSpec.theme.artStylePreset : ''
+  const artStylePreset = typeof snapshot.gameSpec?.theme?.artStylePreset === 'string' ? snapshot.gameSpec.theme.artStylePreset : null
   const artStyleDescription = typeof snapshot.gameSpec?.theme?.artStyleDescription === 'string' ? snapshot.gameSpec.theme.artStyleDescription : ''
-  const visualDirection =
-    typeof (job.result_context as { visualDirection?: unknown } | null)?.visualDirection === 'string'
-      ? String((job.result_context as { visualDirection: string }).visualDirection)
+  const visualDescription =
+    typeof renderBinding?.config?.conceptPrompt === 'string'
+      ? String(renderBinding.config.conceptPrompt)
       : typeof renderBinding?.config?.generationPrompt === 'string'
         ? String(renderBinding.config.generationPrompt)
         : typeof environmentBinding?.config?.generationPrompt === 'string'
@@ -183,7 +190,27 @@ function conceptPromptFromDefinition(definition: SnapshotDefinition, job: JobRow
           : typeof definition.summary === 'string'
             ? definition.summary
             : 'Complete the concept art for this placeholder.'
+  const visualDirection =
+    typeof (job.result_context as { visualDirection?: unknown } | null)?.visualDirection === 'string'
+      ? String((job.result_context as { visualDirection: string }).visualDirection)
+      : visualDescription
   const view = typeof job.target_keys?.view === 'string' ? job.target_keys.view.replace(/_/g, ' ') : null
+
+  if (job.kind === 'character_concept_image') {
+    const subtype =
+      typeof characterProfile?.config?.subtype === 'string'
+        ? String(characterProfile.config.subtype)
+        : null
+
+    return buildCharacterConceptPrompt({
+      characterName: definition.name,
+      subtype,
+      archetypeLabel: typeof definition.archetypeKey === 'string' ? definition.archetypeKey : null,
+      artStylePresetLabel: getArtStylePresetLabel(artStylePreset),
+      artStyleDescription,
+      visualDescription,
+    })
+  }
 
   return [
     `Create polished game concept art for ${definition.name}.`,
@@ -628,10 +655,31 @@ Deno.serve(async (request) => {
               throw new Error(falResponse.error.message)
             }
 
-            const data = (falResponse.data as { data?: { images?: Array<{ url?: string }> } })?.data
-            const imageUrl = data?.images?.[0]?.url ?? null
+            const falResult = (falResponse.data as {
+              data?: unknown
+              requestId?: string | null
+              model?: string | null
+              status?: string | null
+              statusData?: unknown
+            }) ?? {}
+            const data = falResult.data
+            const imageUrl = extractFalImageUrls(data)[0] ?? null
             if (!imageUrl) {
-              throw new Error('The concept image provider returned no image URL.')
+              console.error('[GraphCore] world build concept image response contained no usable image URL.', {
+                jobId: job.id,
+                batchId: batch.id,
+                assetKey,
+                definitionKey,
+                model: falResult.model ?? 'fal-ai/nano-banana-2',
+                requestId: falResult.requestId ?? null,
+                status: falResult.status ?? null,
+                statusData: falResult.statusData ?? null,
+                data,
+              })
+              const topLevelKeys = data && typeof data === 'object' && !Array.isArray(data)
+                ? Object.keys(data as Record<string, unknown>).join(', ') || '<no-keys>'
+                : '<not-an-object>'
+              throw new Error(`The concept image provider returned no image URL. keys=${topLevelKeys}`)
             }
 
             const assetRow = await client.from('project_assets').select('metadata').eq('project_id', batch.project_id).eq('key', assetKey).single()
@@ -643,10 +691,26 @@ Deno.serve(async (request) => {
                 : {}
 
             const assetUpdate = await client.from('project_assets').update({
+              storage_path: `external/${buildAssetSlug(imageUrl.replace(/https?:\/\//, '')) || assetKey}`,
+              name: job.kind === 'character_concept_image'
+                ? `${definition.name} Concept`
+                : job.kind === 'item_concept_image'
+                  ? `${definition.name} Concept`
+                  : `${definition.name} ${String(job.target_keys?.view ?? 'concept').replace(/_/g, ' ')}`,
               metadata: {
                 ...currentAssetMetadata,
+                generatedBy: job.kind === 'character_concept_image'
+                  ? 'character_concept'
+                  : job.kind === 'item_concept_image'
+                    ? 'item_concept'
+                    : 'environment_concept',
+                provider: 'fal',
+                model: falResult.model ?? 'fal-ai/nano-banana-2',
+                requestId: falResult.requestId ?? null,
+                prompt: conceptPromptFromDefinition(definition, job, snapshot),
                 sourceUrl: imageUrl,
                 previewUrl: imageUrl,
+                generatedAt: new Date().toISOString(),
                 generation: {
                   batchId: batch.id,
                   jobId: job.id,

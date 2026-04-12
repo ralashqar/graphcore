@@ -129,6 +129,8 @@ export function SpecializedDefinitionWorkspace({
     if (!selectedCharacterRenderBinding?.previewImageAssetKey) return null
     return findAssetByKey(assets, selectedCharacterRenderBinding.previewImageAssetKey)
   }, [assets, selectedCharacterRenderBinding?.previewImageAssetKey])
+  const isCharacterConceptAssetPending = isPendingGenerationResource(selectedCharacterPreviewAsset)
+  const isCharacterConceptBusy = characterConceptPending || isCharacterConceptAssetPending
   const selectedAssemblyGraph = useMemo(() => {
     if (effectiveSelection?.kind !== 'environment') return null
     const geometryBinding = effectiveSelection.components.find((component) => component.type === 'environment_geometry_binding')
@@ -389,6 +391,11 @@ export function SpecializedDefinitionWorkspace({
                   <div className="character-concept-header">
                     <div className="character-concept-media">
                       <button className="icon-button character-concept-art-button" onClick={() => setIsSelectionIconPickerOpen(true)} type="button">
+                        {isCharacterConceptAssetPending ? (
+                          <span className="character-concept-art-overlay">
+                            <span className="button-spinner" aria-hidden="true" />
+                          </span>
+                        ) : null}
                         <MediaThumb
                           asset={selectedCharacterPreviewAsset}
                           fallbackIcon="character"
@@ -398,7 +405,11 @@ export function SpecializedDefinitionWorkspace({
                       </button>
                       <div className="character-concept-media-meta">
                         <span className="eyebrow">Concept Art</span>
-                        <span className="subtle-line">{selectedCharacterPreviewAsset?.name ?? 'No concept image bound yet.'}</span>
+                        <span className="subtle-line">
+                          {isCharacterConceptAssetPending
+                            ? 'Generating concept image...'
+                            : selectedCharacterPreviewAsset?.name ?? 'No concept image bound yet.'}
+                        </span>
                       </div>
                     </div>
                     <div className="editor-heading-copy character-concept-copy">
@@ -490,12 +501,12 @@ export function SpecializedDefinitionWorkspace({
                           </label>
                           <div className="character-concept-actions">
                             <button
-                              className="primary-button"
-                              disabled={characterConceptPending || !(selectedCharacterRenderBinding?.conceptPrompt?.trim())}
+                              className={isCharacterConceptBusy ? 'primary-button button-with-spinner' : 'primary-button'}
+                              disabled={isCharacterConceptBusy || !(selectedCharacterRenderBinding?.conceptPrompt?.trim())}
                               onClick={() => void handleGenerateCharacterConcept()}
                               type="button"
                             >
-                              {characterConceptPending ? 'Generating...' : 'Generate concept image'}
+                              {isCharacterConceptBusy ? <><span className="button-spinner" aria-hidden="true" />Generating...</> : 'Generate concept image'}
                             </button>
                             <button className="ghost-button compact" onClick={() => setIsSelectionIconPickerOpen(true)} type="button">
                               Change image

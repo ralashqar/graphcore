@@ -5,54 +5,7 @@ import type {
   MeshFromImageGenerationRequest,
   MeshFromImageGenerationResult,
 } from '../domain/visualAssetGeneration'
-
-function isValidImageFileEntry(value: unknown): value is { url: string; content_type?: string; file_name?: string } {
-  if (!value || typeof value !== 'object') {
-    return false
-  }
-
-  const candidate = value as { url?: unknown; content_type?: unknown; file_name?: unknown }
-  if (typeof candidate.url !== 'string' || !/^https?:\/\//i.test(candidate.url)) {
-    return false
-  }
-
-  if (typeof candidate.content_type === 'string' && candidate.content_type.toLowerCase().startsWith('image/')) {
-    return true
-  }
-
-  if (typeof candidate.file_name === 'string' && /\.(avif|gif|jpe?g|png|webp)$/i.test(candidate.file_name)) {
-    return true
-  }
-
-  return /\.(avif|gif|jpe?g|png|webp)(\?|$)/i.test(candidate.url)
-}
-
-function extractFalImageUrls(data: unknown) {
-  if (!data || typeof data !== 'object') {
-    return []
-  }
-
-  const record = data as {
-    image?: unknown
-    images?: unknown
-  }
-
-  if (Array.isArray(record.images)) {
-    const imageUrls = record.images
-      .filter(isValidImageFileEntry)
-      .map((entry) => entry.url)
-
-    if (imageUrls.length > 0) {
-      return imageUrls
-    }
-  }
-
-  if (typeof record.image === 'string' && /^https?:\/\//i.test(record.image)) {
-    return [record.image]
-  }
-
-  return []
-}
+import { extractFalImageUrls } from '../domain/visualAssetGeneration'
 
 export async function generateConceptImage(request: ConceptImageGenerationRequest): Promise<ConceptImageGenerationResult> {
   const referenceImageUrls = (request.referenceImageUrls ?? []).filter(Boolean)
