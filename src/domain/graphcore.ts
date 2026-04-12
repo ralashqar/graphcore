@@ -15,6 +15,9 @@ import {
 import {
   environmentBlueprintV1Schema,
 } from './environmentBlueprint'
+import {
+  cinematicRunSchema,
+} from './cinematics'
 
 export const definitionKindSchema = z.enum([
   'item',
@@ -37,7 +40,7 @@ export const definitionStatusSchema = z.enum([
   'archived',
 ])
 
-export const assetKindSchema = z.enum(['image', 'audio', 'json', 'document', 'mesh', 'other'])
+export const assetKindSchema = z.enum(['image', 'audio', 'json', 'document', 'mesh', 'video', 'other'])
 
 export const componentTypeSchema = z.enum([
   'inventory',
@@ -90,10 +93,12 @@ export const nodeTypeSchema = z.enum([
   'return',
   'random',
   'market',
+  'asset_ref',
+  'cinematic_shot',
   'end',
 ])
 
-export const graphTypeSchema = z.enum(['narrative_flow', 'system_graph', 'quest_flow'])
+export const graphTypeSchema = z.enum(['narrative_flow', 'system_graph', 'quest_flow', 'cinematic_flow'])
 
 export const questStateSchema = z.enum([
   'not_started',
@@ -702,6 +707,7 @@ export const projectSnapshotSchema = z.object({
   assets: z.array(assetDefinitionSchema),
   worldBuildBatches: z.array(worldBuildBatchSchema).default([]),
   meshGenerationJobs: z.array(meshGenerationJobSchema).default([]),
+  cinematicRuns: z.array(cinematicRunSchema).default([]),
   patchSets: z.array(
     z.object({
       id: z.string(),

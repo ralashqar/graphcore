@@ -868,6 +868,52 @@ export function validateGraph(
       })
     }
 
+    if (node.type === 'asset_ref') {
+      const definitionKey = typeof node.metadata.definitionKey === 'string' ? node.metadata.definitionKey : null
+      if (!definitionKey) {
+        diagnostics.push({
+          level: 'warning',
+          code: 'asset_ref_missing_definition',
+          message: `Asset source node "${node.key}" should reference a project definition.`,
+          graphKey: graph.key,
+          nodeKey: node.key,
+        })
+      } else if (!definitionKeys.has(definitionKey)) {
+        diagnostics.push({
+          level: 'error',
+          code: 'asset_ref_unknown_definition',
+          message: `Asset source node "${node.key}" references missing definition "${definitionKey}".`,
+          graphKey: graph.key,
+          nodeKey: node.key,
+        })
+      }
+    }
+
+    if (node.type === 'cinematic_shot') {
+      const stillAssetKey = typeof node.metadata.stillAssetKey === 'string' ? node.metadata.stillAssetKey : null
+      const videoAssetKey = typeof node.metadata.videoAssetKey === 'string' ? node.metadata.videoAssetKey : null
+
+      if (stillAssetKey && !assetKeys.has(stillAssetKey)) {
+        diagnostics.push({
+          level: 'error',
+          code: 'missing_cinematic_still',
+          message: `Cinematic shot "${node.key}" references missing still asset "${stillAssetKey}".`,
+          graphKey: graph.key,
+          nodeKey: node.key,
+        })
+      }
+
+      if (videoAssetKey && !assetKeys.has(videoAssetKey)) {
+        diagnostics.push({
+          level: 'error',
+          code: 'missing_cinematic_video',
+          message: `Cinematic shot "${node.key}" references missing video asset "${videoAssetKey}".`,
+          graphKey: graph.key,
+          nodeKey: node.key,
+        })
+      }
+    }
+
     if (node.type === 'choice') {
       if (node.body.choices.length === 0) {
         diagnostics.push({

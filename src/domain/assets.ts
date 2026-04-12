@@ -3,7 +3,7 @@ import type { AssetDefinition } from './graphcore'
 export const supportedMeshExtensions = ['.glb', '.gltf'] as const
 export const supportedMeshAccept = '.glb,.gltf,model/gltf-binary,model/gltf+json'
 
-export type AssetUrlCreationKind = 'image' | 'mesh'
+export type AssetUrlCreationKind = 'image' | 'mesh' | 'video'
 export type AssetUrlCreateOptions = {
   existingAssetKey?: string | null
   metadata?: Record<string, unknown>
@@ -19,6 +19,13 @@ const imageMimeTypesByExtension: Record<string, string> = {
   '.jpg': 'image/jpeg',
   '.png': 'image/png',
   '.webp': 'image/webp',
+}
+
+const videoMimeTypesByExtension: Record<string, string> = {
+  '.m4v': 'video/mp4',
+  '.mov': 'video/quicktime',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
 }
 
 function safeLowerPath(value: string) {
@@ -57,12 +64,17 @@ export function inferRemoteAssetMimeType(url: string, kind: AssetUrlCreationKind
     return getPathExtension(url) === '.gltf' ? 'model/gltf+json' : 'model/gltf-binary'
   }
 
+  if (kind === 'video') {
+    return videoMimeTypesByExtension[getPathExtension(url)] ?? 'video/mp4'
+  }
+
   return imageMimeTypesByExtension[getPathExtension(url)] ?? 'image/png'
 }
 
 export function inferAssetKindFromUpload(file: File): AssetDefinition['kind'] | null {
   if (file.type.startsWith('image/')) return 'image'
   if (file.type.startsWith('audio/')) return 'audio'
+  if (file.type.startsWith('video/')) return 'video'
   if (file.type === 'model/gltf-binary' || file.type === 'model/gltf+json' || isSupportedMeshPath(file.name)) return 'mesh'
   return null
 }
@@ -76,6 +88,7 @@ export function inferUploadMimeType(file: File, kind: AssetDefinition['kind']) {
 export function getAssetKeyPrefix(kind: AssetUrlCreationKind | AssetDefinition['kind']) {
   if (kind === 'mesh') return 'mesh'
   if (kind === 'audio') return 'audio'
+  if (kind === 'video') return 'video'
   if (kind === 'image') return 'image'
   return 'asset'
 }
@@ -84,7 +97,7 @@ export function resolveAssetPreviewUrl(asset: AssetDefinition | null | undefined
   if (!asset) return null
   return typeof asset.metadata.previewUrl === 'string'
     ? asset.metadata.previewUrl
-    : typeof asset.metadata.sourceUrl === 'string' && asset.kind === 'image'
+    : typeof asset.metadata.sourceUrl === 'string' && (asset.kind === 'image' || asset.kind === 'video')
       ? asset.metadata.sourceUrl
       : null
 }

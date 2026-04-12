@@ -1054,6 +1054,53 @@ code {
   backdrop-filter: blur(14px);
 }
 
+.cinematics-layout .graph-toolbar {
+  grid-template-columns: minmax(180px, 220px) minmax(220px, 1fr) 140px auto auto auto;
+}
+
+.cinematic-preset-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.cinematic-preset-card {
+  min-height: 88px;
+}
+
+.cinematic-field-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.cinematic-action-row {
+  gap: 10px;
+}
+
+.cinematic-preview-image,
+.cinematic-preview-video {
+  width: 100%;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(4, 7, 12, 0.72);
+  object-fit: cover;
+}
+
+.cinematic-preview-image {
+  max-height: 220px;
+}
+
+.cinematic-run-rail {
+  align-content: start;
+}
+
+.history-dialog {
+  width: min(1240px, 100%);
+  min-height: min(860px, calc(100vh - 48px));
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.history-dialog .prompts-layout {
+  min-height: 0;
+}
+
 .context-menu-search {
   width: 100%;
   margin-top: 10px;

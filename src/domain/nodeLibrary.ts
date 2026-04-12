@@ -8,9 +8,11 @@ import type {
   NodeTemplateDefinition,
   PortDefinition,
 } from './graphcore'
+import { updateNodeMetadataWithAssetRef, updateNodeMetadataWithShot } from './cinematics'
 
 const narrativeGraphTypes: GraphType[] = ['narrative_flow', 'quest_flow']
-const allGraphTypes: GraphType[] = ['narrative_flow', 'quest_flow', 'system_graph']
+const cinematicGraphTypes: GraphType[] = ['cinematic_flow']
+const allGraphTypes: GraphType[] = ['narrative_flow', 'quest_flow', 'system_graph', 'cinematic_flow']
 
 export const graphNodeLibrary: NodeLibraryGroup[] = [
   {
@@ -31,6 +33,94 @@ export const graphNodeLibrary: NodeLibraryGroup[] = [
         },
       }),
       template('end', 'End', 'narrative', 'end', allGraphTypes, 'End', 'basic'),
+    ],
+  },
+  {
+    key: 'cinematics',
+    label: 'Cinematics',
+    templates: [
+      template('asset_ref', 'Source Asset', 'cinematics', 'asset_ref', cinematicGraphTypes, 'Source Asset', 'basic', {
+        defaultSubtitle: 'Bind a character, environment, or item.',
+        defaultMetadata: updateNodeMetadataWithAssetRef({}, {}),
+        defaultDisplay: {
+          compactPreview: true,
+        },
+      }),
+      template('cinematic_shot', 'Shot', 'cinematics', 'cinematic_shot', cinematicGraphTypes, 'Cinematic Shot', 'story', {
+        defaultSubtitle: 'Describe the beat and generate still/video output.',
+        defaultBody: {
+          text: 'Describe the shot beat, staging, and on-screen action.',
+        },
+        defaultMetadata: updateNodeMetadataWithShot({}, {}),
+      }),
+      template('cinematic_establishing', 'Establishing', 'cinematics', 'cinematic_shot', cinematicGraphTypes, 'Establishing Shot', 'story', {
+        defaultSubtitle: 'Wide scene setup.',
+        defaultBody: {
+          text: 'Establish the setting, scale, and mood before the action begins.',
+        },
+        defaultMetadata: updateNodeMetadataWithShot({}, {
+          shotType: 'establishing',
+          framing: 'wide',
+          cameraAngle: 'eye level',
+          cameraMovement: 'slow drift',
+        }),
+      }),
+      template('cinematic_dialogue', 'Dialogue', 'cinematics', 'cinematic_shot', cinematicGraphTypes, 'Dialogue Shot', 'story', {
+        defaultSubtitle: 'Performance and exchange.',
+        defaultBody: {
+          text: 'Stage a character exchange with clear eyelines and emotional emphasis.',
+        },
+        defaultMetadata: updateNodeMetadataWithShot({}, {
+          shotType: 'dialogue',
+          framing: 'medium close-up',
+          cameraAngle: 'over-shoulder',
+          cameraMovement: 'subtle handheld',
+        }),
+      }),
+      template('cinematic_reveal', 'Reveal', 'cinematics', 'cinematic_shot', cinematicGraphTypes, 'Reveal Shot', 'story', {
+        defaultSubtitle: 'Hold back then disclose.',
+        defaultBody: {
+          text: 'Reveal the key subject or information with controlled framing and timing.',
+        },
+        defaultMetadata: updateNodeMetadataWithShot({}, {
+          shotType: 'reveal',
+          framing: 'push-in',
+          cameraMovement: 'slow push',
+        }),
+      }),
+      template('cinematic_action', 'Action', 'cinematics', 'cinematic_shot', cinematicGraphTypes, 'Action Shot', 'story', {
+        defaultSubtitle: 'Motion and impact.',
+        defaultBody: {
+          text: 'Capture decisive movement with readable action and cinematic momentum.',
+        },
+        defaultMetadata: updateNodeMetadataWithShot({}, {
+          shotType: 'action',
+          framing: 'medium wide',
+          cameraMovement: 'tracking',
+        }),
+      }),
+      template('cinematic_insert', 'Insert', 'cinematics', 'cinematic_shot', cinematicGraphTypes, 'Insert Shot', 'story', {
+        defaultSubtitle: 'Detail emphasis.',
+        defaultBody: {
+          text: 'Focus on a prop, gesture, or detail that sharpens the scene beat.',
+        },
+        defaultMetadata: updateNodeMetadataWithShot({}, {
+          shotType: 'insert',
+          framing: 'close-up',
+          cameraMovement: 'locked-off',
+        }),
+      }),
+      template('cinematic_transition', 'Transition', 'cinematics', 'cinematic_shot', cinematicGraphTypes, 'Transition Shot', 'story', {
+        defaultSubtitle: 'Bridge into the next beat.',
+        defaultBody: {
+          text: 'Bridge scenes with a transitional image that preserves tone and continuity.',
+        },
+        defaultMetadata: updateNodeMetadataWithShot({}, {
+          shotType: 'transition',
+          framing: 'wide',
+          cameraMovement: 'glide',
+        }),
+      }),
     ],
   },
   {
@@ -205,11 +295,25 @@ export function normalizeNode(node: NodeDefinition): NodeDefinition {
 }
 
 export function inferPortsForNode(node: NodeDefinition): PortDefinition[] {
-  const inputs: PortDefinition[] = node.type === 'start' ? [] : [{ id: 'in', label: 'In', direction: 'input' }]
+  const inputs: PortDefinition[] =
+    node.type === 'start'
+      ? []
+      : node.type === 'cinematic_shot'
+        ? [
+            { id: 'flow_in', label: 'Flow', direction: 'input' },
+            { id: 'asset_in', label: 'Assets', direction: 'input' },
+          ]
+        : node.type === 'asset_ref'
+          ? []
+          : [{ id: 'in', label: 'In', direction: 'input' }]
 
   switch (node.type) {
     case 'start':
       return [{ id: 'out', label: 'Out', direction: 'output' }]
+    case 'asset_ref':
+      return [{ id: 'asset_out', label: 'Asset', direction: 'output' }]
+    case 'cinematic_shot':
+      return [...inputs, { id: 'out', label: 'Out', direction: 'output' }]
     case 'end':
       return inputs
     case 'condition':

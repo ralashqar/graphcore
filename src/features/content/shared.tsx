@@ -430,7 +430,9 @@ export function MediaThumb({
   if (previewUrl && !imageFailed) {
     return (
       <span className={large ? 'media-thumb large' : 'media-thumb'}>
-        <img alt={label} onError={() => setImageFailed(true)} src={previewUrl} />
+        {asset?.kind === 'video'
+          ? <video aria-label={label} muted onError={() => setImageFailed(true)} playsInline preload="metadata" src={previewUrl} />
+          : <img alt={label} onError={() => setImageFailed(true)} src={previewUrl} />}
       </span>
     )
   }
@@ -440,6 +442,8 @@ export function MediaThumb({
       ? '3D'
       : asset?.kind === 'audio'
         ? 'AU'
+        : asset?.kind === 'video'
+          ? 'VID'
         : asset?.kind === 'document'
           ? 'DOC'
           : (label.trim().match(/[A-Za-z0-9]/)?.[0] ?? '?').toUpperCase()

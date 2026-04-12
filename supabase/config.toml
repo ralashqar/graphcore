@@ -158,6 +158,12 @@ verify_jwt = false
 [functions.poll-world-build]
 verify_jwt = false
 
+[functions.start-cinematic-run]
+verify_jwt = false
+
+[functions.poll-cinematic-run]
+verify_jwt = false
+
 [functions.delete-world-build-placeholder]
 verify_jwt = false
 

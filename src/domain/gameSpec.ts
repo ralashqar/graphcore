@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { DEFAULT_ART_STYLE_PRESET } from './artStylePresets'
+import { cinematicSettingsSchema } from './cinematics'
 
 const scopeWeightSchema = z.enum(['none', 'light', 'medium', 'heavy'])
 
@@ -78,6 +79,7 @@ export const gameSpecSchema = z.object({
     starterGraphPresetIds: [],
   }),
   overrides: z.record(z.string(), z.unknown()).default({}),
+  cinematics: cinematicSettingsSchema.default(() => cinematicSettingsSchema.parse({})),
 })
 
 export type GameSpec = z.infer<typeof gameSpecSchema>

@@ -88,7 +88,7 @@ Deno.serve(async (request) => {
         ? metadata.storageBucket.trim()
         : 'project-assets'
 
-      if (!storagePath || asset.kind !== 'mesh') continue
+      if (!storagePath || (asset.kind !== 'mesh' && asset.kind !== 'video')) continue
 
       const signed = await admin.storage.from(bucket).createSignedUrl(storagePath, 60 * 60)
       if (signed.error || !signed.data?.signedUrl) {

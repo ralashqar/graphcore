@@ -6,7 +6,7 @@ import type {
   FieldValue,
   GameSpec,
 } from '../../domain/graphcore'
-import type { AssetUrlCreateOptions } from '../../domain/assets'
+import type { AssetUrlCreateOptions, AssetUrlCreationKind } from '../../domain/assets'
 import type { MeshGenerationJob } from '../../domain/meshGeneration'
 
 export type ItemIdentityChanges = Partial<
@@ -44,7 +44,7 @@ export type ContentWorkspaceProps = {
   onCreateArchetype: () => void
   onCreateDefinitionOfKind: (kind: DefinitionBase['kind'], archetypeKey?: string | null) => void
   onCreateItem: (archetypeKey?: string | null) => void
-  onCreateUrlAsset: (url: string, kind?: 'image' | 'mesh', options?: AssetUrlCreateOptions) => string | null
+  onCreateUrlAsset: (url: string, kind?: AssetUrlCreationKind, options?: AssetUrlCreateOptions) => string | null
   onDeleteGeneratedMesh: (definitionKey: string) => void
   onDeleteItem: (itemKey: string) => void
   onRemoveArchetypeField: (archetypeKey: string, fieldKey: string) => void
@@ -66,7 +66,7 @@ export type AssetsWorkspaceProps = {
   selectedAsset: AssetDefinition | null
   selectedItem: DefinitionBase | null
   onAssignAssetToSelectedItem: (assetKey: string | null) => void
-  onCreateUrlAsset: (url: string, kind?: 'image' | 'mesh', options?: AssetUrlCreateOptions) => string | null
+  onCreateUrlAsset: (url: string, kind?: AssetUrlCreationKind, options?: AssetUrlCreateOptions) => string | null
   onDeleteAsset: (assetKey: string) => void
   onSelectAsset: (key: string | null) => void
   onUploadAsset: (file: File) => void

@@ -155,10 +155,24 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
   function createGraph(graphType: GraphType = 'narrative_flow') {
     const suffix = `${graphType}_${snapshotGraphs.length + 1}`
     onCreateGraph({
-      name: graphType === 'narrative_flow' ? 'New Narrative Flow' : graphType === 'quest_flow' ? 'New Quest Flow' : 'New System Graph',
+      name:
+        graphType === 'narrative_flow'
+          ? 'New Narrative Flow'
+          : graphType === 'quest_flow'
+            ? 'New Quest Flow'
+            : graphType === 'cinematic_flow'
+              ? 'New Cinematic Flow'
+              : 'New System Graph',
       key: uniqueGraphKey(snapshotGraphs, `graph.${suffix}`),
       graphType,
-      summary: graphType === 'narrative_flow' ? 'Branching narrative graph.' : graphType === 'quest_flow' ? 'Quest progression graph.' : 'Reusable system logic graph.',
+      summary:
+        graphType === 'narrative_flow'
+          ? 'Branching narrative graph.'
+          : graphType === 'quest_flow'
+            ? 'Quest progression graph.'
+            : graphType === 'cinematic_flow'
+              ? 'Playable cinematic sequence graph.'
+              : 'Reusable system logic graph.',
     })
   }
 
@@ -414,6 +428,7 @@ export function GraphWorkspace(props: GraphWorkspaceProps) {
               <option value="narrative_flow">Narrative</option>
               <option value="quest_flow">Quest</option>
               <option value="system_graph">System</option>
+              <option value="cinematic_flow">Cinematic</option>
             </select>
             <button className="ghost-button compact" onClick={() => selectedGraph && onDuplicateGraph(selectedGraph.key)} type="button">Duplicate</button>
             <button className={isDeletingSelectedGraph ? 'ghost-button compact button-with-spinner' : 'ghost-button compact'} disabled={isDeletingSelectedGraph} onClick={() => selectedGraph && onDeleteGraph(selectedGraph.key)} type="button">{isDeletingSelectedGraph ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}</button>

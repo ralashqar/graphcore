@@ -77,7 +77,7 @@ export function WorkspaceTopbar({
         <div className="signal-pill"><span>{sourceLabel}</span></div>
         <div className="signal-pill"><span>{currentUserEmail ?? 'Not signed in'}</span></div>
         <button className="ghost-button" onClick={onOpenNewGame} type="button">New Game</button>
-        <button className="ghost-button" onClick={onOpenActivity} type="button">Activity</button>
+        <button className="ghost-button" onClick={onOpenActivity} type="button">History</button>
         {isSignedIn
           ? <button className="ghost-button" onClick={onSignOut} type="button">Sign out</button>
           : <button className="ghost-button" onClick={onOpenAuth} type="button">Sign in</button>}

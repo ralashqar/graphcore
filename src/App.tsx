@@ -9,9 +9,11 @@ import { publishService } from './application/services/publishService'
 import { workspaceService } from './application/services/workspaceService'
 import { buildAssetSlug, getAssetKeyPrefix, inferAssetKindFromUpload, inferRemoteAssetMimeType, inferUploadMimeType, isSupportedMeshPath, resolveAssetSourceUrl, type AssetUrlCreateOptions, type AssetUrlCreationKind } from './domain/assets'
 import { DEFAULT_ART_STYLE_PRESET } from './domain/artStylePresets'
+import type { CinematicRunStatusResponse, CinematicSettings } from './domain/cinematics'
 import { compileBundle } from './domain/compiler'
 import { createEnvironmentBlueprint } from './domain/environmentBlueprint'
 import { createGameSpecFromArchetype } from './domain/gameArchetypes'
+import { gameSpecSchema } from './domain/gameSpec'
 import { buildDefaultDefinitionComponents, projectSnapshotSchema, schemaCatalog } from './domain/graphcore'
 import type {
   AssemblyGraphDefinition,
@@ -58,6 +60,9 @@ const SpecializedDefinitionWorkspace = lazy(() =>
 )
 const ActivityWorkspace = lazy(() =>
   import('./features/prompts/ActivityWorkspace').then((module) => ({ default: module.ActivityWorkspace })),
+)
+const CinematicsWorkspace = lazy(() =>
+  import('./features/cinematics/CinematicsWorkspace').then((module) => ({ default: module.CinematicsWorkspace })),
 )
 const GlobalWorkspace = lazy(() =>
   import('./features/global/GlobalWorkspace').then((module) => ({ default: module.GlobalWorkspace })),
@@ -234,6 +239,31 @@ function mergeMeshGenerationStatusIntoSnapshot(snapshot: ProjectSnapshot, status
   })
 }
 
+function isTerminalCinematicRunStatus(status: ProjectSnapshot['cinematicRuns'][number]['status']) {
+  return ['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(status)
+}
+
+function mergeCinematicRunStatusIntoSnapshot(snapshot: ProjectSnapshot, status: CinematicRunStatusResponse) {
+  const nextRuns = snapshot.cinematicRuns.some((run) => run.id === status.run.id)
+    ? snapshot.cinematicRuns.map((run) => (run.id === status.run.id ? status.run : run))
+    : [status.run, ...snapshot.cinematicRuns]
+
+  return normalizeSnapshot({
+    ...snapshot,
+    graphs: mergeWorldBuildResourcesByKey(
+      snapshot.graphs as Array<ProjectSnapshot['graphs'][number]>,
+      status.graphs as ProjectSnapshot['graphs'],
+    ),
+    assets: mergeWorldBuildResourcesByKey(
+      snapshot.assets as Array<ProjectSnapshot['assets'][number]>,
+      status.assets as ProjectSnapshot['assets'],
+    ),
+    cinematicRuns: nextRuns.sort((left, right) => (
+      new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()
+    )),
+  })
+}
+
 function buildLocalMeshGenerationFailureStatus(
   job: ProjectSnapshot['meshGenerationJobs'][number],
   errorMessage: string,
@@ -352,6 +382,7 @@ export default function App() {
   const [isStartingWorldBuild, setIsStartingWorldBuild] = useState(false)
   const [worldBuildPlanPreview, setWorldBuildPlanPreview] = useState<WorldBuildPlanResponse | null>(null)
   const [completedWorldBuildBatch, setCompletedWorldBuildBatch] = useState<WorldBuildBatch | null>(null)
+  const [historyOpen, setHistoryOpen] = useState(false)
   const [pendingDeleteTarget, setPendingDeleteTarget] = useState<DeleteConfirmationTarget | null>(null)
   const [deletingTarget, setDeletingTarget] = useState<DeleteConfirmationTarget | null>(null)
   const [authOpen, setAuthOpen] = useState(false)
@@ -376,6 +407,7 @@ export default function App() {
   const sessionRef = useRef<Session | null>(null)
   const worldBuildPollInFlightRef = useRef(false)
   const meshGenerationPollInFlightRef = useRef(false)
+  const cinematicRunPollInFlightRef = useRef(false)
   const meshGenerationPollFailureCountsRef = useRef(new Map<string, number>())
   const announcedWorldBuildBatchIdsRef = useRef<Set<string>>(new Set())
   const deletingDefinitionKey = deletingTarget?.resourceType === 'definition' ? deletingTarget.key : null
@@ -539,6 +571,11 @@ export default function App() {
 
   const definitionEntries = useMemo(() => snapshot?.definitions ?? [], [snapshot])
   const selectedGraph = useMemo(() => snapshot?.graphs.find((graph) => graph.key === selectedGraphKey) ?? snapshot?.graphs[0] ?? null, [selectedGraphKey, snapshot])
+  const cinematicGraphs = useMemo(() => snapshot?.graphs.filter((graph) => graph.graphType === 'cinematic_flow') ?? [], [snapshot])
+  const selectedCinematicGraph = useMemo(
+    () => (selectedGraph?.graphType === 'cinematic_flow' ? selectedGraph : null),
+    [selectedGraph],
+  )
   const selectedDefinition = useMemo(() => definitionEntries.find((definition) => definition.key === selectedDefinitionKey) ?? definitionEntries[0] ?? null, [definitionEntries, selectedDefinitionKey])
   const selectedNode = useMemo(() => selectedGraph?.nodes.find((node) => node.key === selectedNodeKey) ?? null, [selectedGraph, selectedNodeKey])
   const selectedEdge = useMemo(() => selectedGraph?.edges.find((edge) => edge.key === selectedEdgeKey) ?? null, [selectedEdgeKey, selectedGraph])
@@ -741,6 +778,65 @@ export default function App() {
       window.clearInterval(interval)
     }
   }, [loadedState?.source, snapshot])
+
+  useEffect(() => {
+    if (!snapshot || loadedState?.source !== 'supabase') return
+
+    const activeRuns = snapshot.cinematicRuns.filter((run) => !isTerminalCinematicRunStatus(run.status))
+    if (activeRuns.length === 0) return
+
+    let cancelled = false
+    const currentSnapshot = snapshot
+
+    async function pollActiveCinematicRuns() {
+      if (cinematicRunPollInFlightRef.current || cancelled) return
+      cinematicRunPollInFlightRef.current = true
+
+      try {
+        for (const run of activeRuns) {
+          const status = await workspaceService.pollCinematicRun({
+            runId: run.id,
+            snapshot: currentSnapshot,
+            graphKey: run.graphKey,
+            mode: run.mode,
+            shotNodeKey: run.shotNodeKey,
+          })
+
+          if (cancelled) return
+
+          setSnapshot((current) => {
+            if (!current) return current
+            const nextSnapshot = mergeCinematicRunStatusIntoSnapshot(current, status)
+            setBundle(compileBundle(nextSnapshot))
+            return nextSnapshot
+          })
+        }
+      } catch (pollError) {
+        console.error('[GraphCore] cinematic polling failed.', pollError)
+      } finally {
+        cinematicRunPollInFlightRef.current = false
+      }
+    }
+
+    const interval = window.setInterval(() => {
+      void pollActiveCinematicRuns()
+    }, 3000)
+
+    void pollActiveCinematicRuns()
+
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+    }
+  }, [loadedState?.source, snapshot])
+
+  useEffect(() => {
+    if (activeTab !== 'cinematics') return
+    if (selectedCinematicGraph || cinematicGraphs.length === 0) return
+    setSelectedGraphKey(cinematicGraphs[0].key)
+    setSelectedNodeKey(null)
+    setSelectedEdgeKey(null)
+  }, [activeTab, cinematicGraphs, selectedCinematicGraph, setSelectedEdgeKey, setSelectedGraphKey, setSelectedNodeKey])
 
   const persistedPatchHistory = useMemo<PatchSessionView[]>(() => {
     return (snapshot?.patchSets ?? []).map((patch) => {
@@ -2166,6 +2262,46 @@ export default function App() {
     )))
   }
 
+  function updateGameSpecCinematics(changes: Partial<CinematicSettings>) {
+    applySnapshotUpdate((current) => ({
+      ...current,
+      gameSpec: gameSpecSchema.parse({
+        ...(current.gameSpec ?? {}),
+        cinematics: {
+          ...(current.gameSpec?.cinematics ?? {}),
+          ...changes,
+        },
+      }),
+    }))
+  }
+
+  async function handleStartCinematicRun(request: { graphKey: string; mode: 'graph_run' | 'preview_still' | 'preview_video'; shotNodeKey?: string | null }) {
+    if (!snapshot || loadedState?.source !== 'supabase') {
+      setPromptRuntimeError('Cinematic generation requires a live Supabase workspace.')
+      return
+    }
+
+    try {
+      const status = await workspaceService.startCinematicRun({
+        snapshot,
+        graphKey: request.graphKey,
+        mode: request.mode,
+        shotNodeKey: request.shotNodeKey ?? null,
+      })
+
+      setPromptRuntimeError(null)
+      setSnapshot((current) => {
+        if (!current) return current
+        const nextSnapshot = mergeCinematicRunStatusIntoSnapshot(current, status)
+        setBundle(compileBundle(nextSnapshot))
+        return nextSnapshot
+      })
+    } catch (runError) {
+      console.error('[GraphCore] cinematic run failed to start.', runError)
+      setPromptRuntimeError(runError instanceof Error ? runError.message : 'Cinematic run failed to start.')
+    }
+  }
+
   if (loading) return <main className="app-shell loading-shell"><p>Booting GraphCore workspace...</p></main>
   if (error || !snapshot || !bundle) return <main className="app-shell loading-shell"><p>{error ?? 'GraphCore could not load a project snapshot.'}</p></main>
 
@@ -2181,7 +2317,7 @@ export default function App() {
           isCompiling={isPending}
           isSignedIn={Boolean(session)}
           onCompile={handleCompile}
-          onOpenActivity={() => setActiveTab('prompts')}
+          onOpenActivity={() => setHistoryOpen(true)}
           onOpenAuth={() => setAuthOpen(true)}
           onOpenNewGame={handleOpenNewGame}
           onSelectGame={handleSelectGame}
@@ -2244,6 +2380,39 @@ export default function App() {
                 onSelectGraph={setSelectedGraphKey}
                 onSelectNode={setSelectedNodeKey}
                 onUpdateEdge={updateEdge}
+                onUpdateGraph={updateGraph}
+                onUpdateNode={updateNode}
+              />
+            ) : null}
+            {activeTab === 'cinematics' ? (
+              <CinematicsWorkspace
+                assets={snapshot.assets}
+                canRunCinematics={loadedState?.source === 'supabase'}
+                cinematicRuns={snapshot.cinematicRuns}
+                definitions={snapshot.definitions}
+                deletingGraphKey={deletingGraphKey}
+                diagnostics={bundle.diagnostics}
+                gameSpec={snapshot.gameSpec}
+                selectedEdge={selectedCinematicGraph ? selectedEdge : null}
+                selectedGraph={selectedCinematicGraph}
+                selectedNode={selectedCinematicGraph ? selectedNode : null}
+                snapshotGraphs={snapshot.graphs}
+                onClearSelection={clearGraphSelection}
+                onConnectEdge={connectEdge}
+                onCreateGraph={createGraph}
+                onCreateNode={createNode}
+                onDeleteEdge={deleteEdge}
+                onDeleteGraph={deleteGraph}
+                onDeleteNode={deleteNode}
+                onDuplicateGraph={duplicateGraph}
+                onDuplicateNode={duplicateNode}
+                onMoveNode={moveNode}
+                onSelectEdge={setSelectedEdgeKey}
+                onSelectGraph={setSelectedGraphKey}
+                onSelectNode={setSelectedNodeKey}
+                onStartCinematicRun={handleStartCinematicRun}
+                onUpdateEdge={updateEdge}
+                onUpdateGameSpecCinematics={updateGameSpecCinematics}
                 onUpdateGraph={updateGraph}
                 onUpdateNode={updateNode}
               />
@@ -2371,7 +2540,6 @@ export default function App() {
               />
             ) : null}
             {activeTab === 'assets' ? <AssetsWorkspace assets={snapshot.assets} deletingAssetKey={deletingAssetKey} selectedAsset={selectedAsset} selectedItem={selectedDefinition} onAssignAssetToSelectedItem={assignAssetToSelectedItem} onCreateUrlAsset={createUrlAsset} onDeleteAsset={deleteAsset} onSelectAsset={setSelectedAssetKey} onUploadAsset={handleAssetUpload} onUpdateAsset={updateAssetIdentity} /> : null}
-            {activeTab === 'prompts' ? <ActivityWorkspace patchHistory={patchHistory} selectedPatch={selectedPatch} selectedPatchIndex={selectedPatchIndex} onSelectPatch={setSelectedPatchIndex} /> : null}
             {activeTab === 'global' ? (
               <GlobalWorkspace
                 autoFocusReleasesNonce={globalWorkspaceAutoFocusReleasesNonce}
@@ -2404,6 +2572,17 @@ export default function App() {
           onOpenOnboarding={handleOpenBootstrapOnboarding}
         />
       </div>
+      {historyOpen ? (
+        <div className="bootstrap-overlay" onClick={() => setHistoryOpen(false)} role="presentation">
+          <div className="bootstrap-dialog history-dialog" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="History">
+            <div className="drawer-head">
+              <strong>History</strong>
+              <button className="ghost-button compact" onClick={() => setHistoryOpen(false)} type="button">Close</button>
+            </div>
+            <ActivityWorkspace patchHistory={patchHistory} selectedPatch={selectedPatch} selectedPatchIndex={selectedPatchIndex} onSelectPatch={setSelectedPatchIndex} />
+          </div>
+        </div>
+      ) : null}
       {bootstrapOnboardingOpen ? (
         <GameBootstrapOnboarding
           canClose

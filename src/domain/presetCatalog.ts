@@ -1358,6 +1358,14 @@ export function createDefaultGameSpec(packIds: string[] = ['pack.rpg_core']): Ga
       definitions: expanded.definitionPresetIds,
       graphs: expanded.graphPresetIds,
     },
+    cinematics: {
+      stillAspectRatio: '16:9',
+      stillResolution: '1K',
+      videoResolution: '720p',
+      defaultClipSeconds: 5,
+      defaultFps: 24,
+      specializationMode: 'story',
+    },
     bootstrapTargets: {
       starterArchetypePresetIds: expanded.archetypePresetIds,
       starterDefinitionPresetIds: expanded.definitionPresetIds,

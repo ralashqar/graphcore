@@ -17,6 +17,12 @@ import {
   type PatchOperation,
   type ProjectSnapshot,
 } from '../domain/graphcore'
+import {
+  cinematicRunSchema,
+  cinematicRunStatusResponseSchema,
+  type CinematicRunStatusResponse,
+  type CinematicRunStartRequest,
+} from '../domain/cinematics'
 import { gameSpecSchema } from '../domain/gameSpec'
 import { buildBootstrapPatch, createDefaultGameSpec } from '../domain/presetCatalog'
 import type { PromptPatchRequest, PromptPatchResponse } from '../domain/prompting'
@@ -52,8 +58,8 @@ function isLiveSnapshot(snapshot: ProjectSnapshot) {
   return isUuidLike(snapshot.workspace.id) && isUuidLike(snapshot.project.id) && isUuidLike(snapshot.draft.id)
 }
 
-function hasLiveSnapshotIds(snapshot: { workspace: { id: string }; project: { id: string }; draft: { id: string } }) {
-  return isUuidLike(snapshot.workspace.id) && isUuidLike(snapshot.project.id) && isUuidLike(snapshot.draft.id)
+function hasLiveSnapshotIds(snapshot: { workspace?: { id: string } | null; project: { id: string }; draft: { id: string } }) {
+  return (!snapshot.workspace || isUuidLike(snapshot.workspace.id)) && isUuidLike(snapshot.project.id) && isUuidLike(snapshot.draft.id)
 }
 
 function slugify(value: string) {
@@ -857,6 +863,41 @@ type MeshGenerationJobRow = {
   updated_at: string
 }
 
+type CinematicRunRow = {
+  id: string
+  draft_id: string
+  project_id: string
+  graph_key: string
+  graph_name: string
+  mode: string
+  status: string
+  shot_node_key: string | null
+  diagnostics: string[] | null
+  created_at: string
+  updated_at: string
+}
+
+type CinematicRunJobRow = {
+  id: string
+  run_id: string
+  graph_key: string
+  shot_node_key: string
+  kind: string
+  status: string
+  order_index: number
+  depends_on_job_ids: string[] | null
+  still_asset_key: string | null
+  video_asset_key: string | null
+  provider: string | null
+  model: string | null
+  provider_request_id: string | null
+  error_message: string | null
+  prompt: string | null
+  result_context: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+
 type SignProjectAssetUrlsRequest = {
   projectId: string
   assetKeys: string[]
@@ -869,12 +910,12 @@ type SignProjectAssetUrlsResponse = {
   }>
 }
 
-const meshBlobUrlCache = new Map<string, { storagePath: string; url: string }>()
+const storageAssetUrlCache = new Map<string, { storagePath: string; url: string }>()
 
-async function hydrateStorageMeshAssetUrls<TAsset extends AssetDefinition>(projectId: string, assets: TAsset[]) {
+async function hydrateStorageAssetUrls<TAsset extends AssetDefinition>(projectId: string, assets: TAsset[]) {
   const signedUrls = new Map<string, string>()
   const candidates = assets.filter((asset) => {
-    if (asset.kind !== 'mesh') return false
+    if (asset.kind !== 'mesh' && asset.kind !== 'video') return false
     if (typeof asset.metadata.sourceUrl === 'string' && asset.metadata.sourceUrl.trim()) return false
     if (typeof asset.metadata.previewUrl === 'string' && asset.metadata.previewUrl.trim()) return false
     if (typeof asset.metadata.storageBucket !== 'string' || !asset.metadata.storageBucket.trim()) return false
@@ -909,7 +950,7 @@ async function hydrateStorageMeshAssetUrls<TAsset extends AssetDefinition>(proje
 
   const unresolvedCandidates = candidates.filter((asset) => !signedUrls.has(asset.key))
   await Promise.all(unresolvedCandidates.map(async (asset) => {
-    const cached = meshBlobUrlCache.get(asset.key)
+    const cached = storageAssetUrlCache.get(asset.key)
     if (cached && cached.storagePath === asset.storagePath) {
       signedUrls.set(asset.key, cached.url)
       return
@@ -933,7 +974,7 @@ async function hydrateStorageMeshAssetUrls<TAsset extends AssetDefinition>(proje
     if (cached?.url) {
       URL.revokeObjectURL(cached.url)
     }
-    meshBlobUrlCache.set(asset.key, { storagePath: asset.storagePath, url: nextUrl })
+    storageAssetUrlCache.set(asset.key, { storagePath: asset.storagePath, url: nextUrl })
     signedUrls.set(asset.key, nextUrl)
   }))
 
@@ -1083,6 +1124,7 @@ export async function loadProjectSnapshot(
     assetsResponse,
     worldBuildBatchesResponse,
     meshGenerationJobsResponse,
+    cinematicRunsResponse,
     patchSetsResponse,
     releasesResponse,
   ] = await Promise.all([
@@ -1169,6 +1211,11 @@ export async function loadProjectSnapshot(
       .eq('draft_id', draft.id)
       .order('created_at', { ascending: false }),
     supabase
+      .from('cinematic_runs')
+      .select('id, draft_id, project_id, graph_key, graph_name, mode, status, shot_node_key, diagnostics, created_at, updated_at')
+      .eq('draft_id', draft.id)
+      .order('created_at', { ascending: false }),
+    supabase
       .from('patch_sets')
       .select('id, summary, prompt, status, operations, diagnostics')
       .eq('draft_id', draft.id)
@@ -1196,6 +1243,9 @@ export async function loadProjectSnapshot(
   const meshGenerationSchemaMissing =
     meshGenerationJobsResponse.status === 404
     || isMissingRelationError(meshGenerationJobsResponse.error, 'mesh_generation_jobs')
+  const cinematicRunSchemaMissing =
+    cinematicRunsResponse.status === 404
+    || isMissingRelationError(cinematicRunsResponse.error, 'cinematic_runs')
 
   if (definitionsResponse.error || archetypesResponse.error) {
     return {
@@ -1221,6 +1271,7 @@ export async function loadProjectSnapshot(
   const assets = (assetsResponse.data as AssetRow[] | null) ?? []
   const worldBuildBatches = worldBuildSchemaMissing ? [] : (worldBuildBatchesResponse.data as WorldBuildBatchRow[] | null) ?? []
   const meshGenerationJobs = meshGenerationSchemaMissing ? [] : (meshGenerationJobsResponse.data as MeshGenerationJobRow[] | null) ?? []
+  const cinematicRuns = cinematicRunSchemaMissing ? [] : (cinematicRunsResponse.data as CinematicRunRow[] | null) ?? []
   const worldBuildJobs =
     worldBuildSchemaMissing || worldBuildBatches.length === 0
       ? []
@@ -1231,6 +1282,16 @@ export async function loadProjectSnapshot(
             .in('batch_id', worldBuildBatches.map((batch) => batch.id))
             .order('order_index', { ascending: true })
         ).data as WorldBuildJobRow[] | null ?? []
+  const cinematicRunJobs =
+    cinematicRunSchemaMissing || cinematicRuns.length === 0
+      ? []
+      : (
+          await supabase
+            .from('cinematic_run_jobs')
+            .select('id, run_id, graph_key, shot_node_key, kind, status, order_index, depends_on_job_ids, still_asset_key, video_asset_key, provider, model, provider_request_id, error_message, prompt, result_context, created_at, updated_at')
+            .in('run_id', cinematicRuns.map((run) => run.id))
+            .order('order_index', { ascending: true })
+        ).data as CinematicRunJobRow[] | null ?? []
 
   let snapshot = projectSnapshotSchema.parse({
     workspace: {
@@ -1497,6 +1558,41 @@ export async function loadProjectSnapshot(
       createdAt: job.created_at,
       updatedAt: job.updated_at,
     })),
+    cinematicRuns: cinematicRuns.map((run) => cinematicRunSchema.parse({
+      id: run.id,
+      draftId: run.draft_id,
+      projectId: run.project_id,
+      graphKey: run.graph_key,
+      graphName: run.graph_name,
+      mode: run.mode,
+      status: run.status,
+      shotNodeKey: run.shot_node_key,
+      diagnostics: run.diagnostics ?? [],
+      createdAt: run.created_at,
+      updatedAt: run.updated_at,
+      jobs: cinematicRunJobs
+        .filter((job) => job.run_id === run.id)
+        .map((job) => ({
+          id: job.id,
+          runId: job.run_id,
+          graphKey: job.graph_key,
+          shotNodeKey: job.shot_node_key,
+          kind: job.kind,
+          status: job.status,
+          orderIndex: job.order_index,
+          dependsOnJobIds: job.depends_on_job_ids ?? [],
+          stillAssetKey: job.still_asset_key,
+          videoAssetKey: job.video_asset_key,
+          provider: job.provider,
+          model: job.model,
+          providerRequestId: job.provider_request_id,
+          errorMessage: job.error_message,
+          prompt: job.prompt ?? '',
+          resultContext: job.result_context ?? null,
+          createdAt: job.created_at,
+          updatedAt: job.updated_at,
+        })),
+    })),
     patchSets: patchSetsResponse.data ?? [],
     releases: (releasesResponse.data ?? []).map((release) => ({
       id: release.id,
@@ -1508,7 +1604,7 @@ export async function loadProjectSnapshot(
 
   snapshot = {
     ...snapshot,
-    assets: await hydrateStorageMeshAssetUrls(snapshot.project.id, snapshot.assets),
+    assets: await hydrateStorageAssetUrls(snapshot.project.id, snapshot.assets),
   }
 
   return {
@@ -2298,6 +2394,25 @@ export async function startWorldBuild(request: WorldBuildStartRequest): Promise<
   return worldBuildStatusResponseSchema.parse(response.data)
 }
 
+export async function startCinematicRun(request: CinematicRunStartRequest): Promise<CinematicRunStatusResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before starting a cinematic run.')
+
+  if (!hasLiveSnapshotIds(request.snapshot)) {
+    throw new Error('Sign in and load a live GraphCore draft before starting a cinematic run.')
+  }
+
+  const response = await invokeAuthedFunctionWithSessionRecovery<CinematicRunStatusResponse>('start-cinematic-run', request, session)
+  if (response.error || !response.data) {
+    throw new Error(response.error ? await readFunctionsErrorMessage(response.error) : 'Starting cinematic run returned no data.')
+  }
+
+  const parsed = cinematicRunStatusResponseSchema.parse(response.data)
+  return {
+    ...parsed,
+    assets: await hydrateStorageAssetUrls(request.snapshot.project.id, parsed.assets as AssetDefinition[]),
+  }
+}
+
 export async function startMeshGeneration(request: MeshGenerationStartRequest): Promise<MeshGenerationStatusResponse> {
   const session = await getValidatedSession('Sign in and load a live GraphCore draft before generating a 3D mesh.')
 
@@ -2313,7 +2428,7 @@ export async function startMeshGeneration(request: MeshGenerationStartRequest): 
   const parsed = meshGenerationStatusResponseSchema.parse(response.data)
   return {
     ...parsed,
-    assets: await hydrateStorageMeshAssetUrls(request.snapshot.project.id, parsed.assets as AssetDefinition[]),
+    assets: await hydrateStorageAssetUrls(request.snapshot.project.id, parsed.assets as AssetDefinition[]),
   }
 }
 
@@ -2494,7 +2609,26 @@ export async function pollMeshGeneration(request: MeshGenerationPollRequest): Pr
   const parsed = meshGenerationStatusResponseSchema.parse(response.data)
   return {
     ...parsed,
-    assets: await hydrateStorageMeshAssetUrls(request.snapshot.project.id, parsed.assets as AssetDefinition[]),
+    assets: await hydrateStorageAssetUrls(request.snapshot.project.id, parsed.assets as AssetDefinition[]),
+  }
+}
+
+export async function pollCinematicRun(request: CinematicRunStartRequest & { runId: string }): Promise<CinematicRunStatusResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before polling a cinematic run.')
+
+  if (!hasLiveSnapshotIds(request.snapshot)) {
+    throw new Error('Sign in and load a live GraphCore draft before polling a cinematic run.')
+  }
+
+  const response = await invokeAuthedFunctionWithSessionRecovery<CinematicRunStatusResponse>('poll-cinematic-run', request, session)
+  if (response.error || !response.data) {
+    throw new Error(response.error ? await readFunctionsErrorMessage(response.error) : 'Polling cinematic run returned no data.')
+  }
+
+  const parsed = cinematicRunStatusResponseSchema.parse(response.data)
+  return {
+    ...parsed,
+    assets: await hydrateStorageAssetUrls(request.snapshot.project.id, parsed.assets as AssetDefinition[]),
   }
 }
 
@@ -2513,7 +2647,7 @@ export async function deleteGeneratedMesh(request: DeleteGeneratedMeshRequest): 
   const parsed = meshGenerationStatusResponseSchema.parse(response.data)
   return {
     ...parsed,
-    assets: await hydrateStorageMeshAssetUrls(request.snapshot.project.id, parsed.assets as AssetDefinition[]),
+    assets: await hydrateStorageAssetUrls(request.snapshot.project.id, parsed.assets as AssetDefinition[]),
   }
 }
 

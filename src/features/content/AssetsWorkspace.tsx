@@ -101,6 +101,9 @@ export function AssetsWorkspace({
                   <p className="subtle-line">{selectedAsset.storagePath}</p>
                 </div>
               </div>
+              {selectedAsset.kind === 'video' && typeof selectedAsset.metadata.sourceUrl === 'string' ? (
+                <video className="asset-detail-video" controls playsInline preload="metadata" src={selectedAsset.metadata.sourceUrl} />
+              ) : null}
               <div className="editor-grid">
                 <label className="field-block">
                   <span>Name</span>
@@ -145,12 +148,12 @@ export function AssetsWorkspace({
                   <span className="section-label">Local upload</span>
                   <input
                     type="file"
-                    accept={`image/*,audio/*,${supportedMeshAccept}`}
+                    accept={`image/*,audio/*,video/*,${supportedMeshAccept}`}
                     onChange={(event: ChangeEvent<HTMLInputElement>) =>
                       event.target.files?.[0] && onUploadAsset(event.target.files[0])
                     }
                   />
-                  <strong>Select image, audio, or mesh</strong>
+                  <strong>Select image, audio, video, or mesh</strong>
                   <span>Creates a local session asset entry. Mesh uploads currently support `.glb` and `.gltf`.</span>
                 </label>
               </div>
