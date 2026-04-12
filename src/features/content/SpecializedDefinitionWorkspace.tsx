@@ -12,7 +12,7 @@ import { getResolvedRender3dBinding } from '../../domain/render3d'
 import { iconForDefinitionKind } from '../../shared/entityIcons'
 import { DefinitionEditor } from './DefinitionEditor'
 import { EnvironmentAssemblyWorkspace } from './EnvironmentAssemblyWorkspace'
-import { AssetPickerDialog, EmptyEditor, MediaThumb, findAssetByKey, resolveItemIconAssetKey } from './shared'
+import { AssetPickerDialog, EmptyEditor, MediaThumb, findAssetByKey, resolveDefinitionDisplayAssetKey } from './shared'
 import { Definition3dPanel } from '../viewer3d/Character3dPanel'
 
 type SpecializedPanelMode = 'details' | 'graph' | '3d'
@@ -74,7 +74,7 @@ export function SpecializedDefinitionWorkspace({
   deletingGeneratedMeshDefinitionKey = null,
   meshGenerationJobs = [],
   onAddCustomField,
-  onAssignDefinitionIcon,
+  onAssignDefinitionIcon: _onAssignDefinitionIcon,
   isGeneratingPrompt,
   onCreateEnvironmentBlueprint,
   onCreateAssemblyGraph,
@@ -358,7 +358,7 @@ export function SpecializedDefinitionWorkspace({
                 type="button"
               >
                 <MediaThumb
-                  asset={findAssetByKey(assets, resolveItemIconAssetKey(definition, archetypes))}
+                        asset={findAssetByKey(assets, resolveDefinitionDisplayAssetKey(definition, archetypes))}
                   fallbackIcon={iconForDefinitionKind(definition.kind)}
                   label={definition.name}
                 />
@@ -439,14 +439,12 @@ export function SpecializedDefinitionWorkspace({
                           label={effectiveSelection.name}
                           large
                         />
-                      </button>
-                      <div className="character-concept-media-meta">
-                        <button className={isDeletingSelection ? 'ghost-button compact danger button-with-spinner' : 'ghost-button compact danger'} disabled={isDeletingSelection} onClick={() => onDeleteDefinition(effectiveSelection.key)} type="button">{isDeletingSelection ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}</button>
-                      </div>
+                    </button>
                     </div>
                     <div className="editor-heading-copy character-concept-copy">
                       <div className="editor-head-toolbar character-head-toolbar">
                         <div className="editor-head-controls">
+                          <button className={isDeletingSelection ? 'ghost-button compact danger button-with-spinner' : 'ghost-button compact danger'} disabled={isDeletingSelection} onClick={() => onDeleteDefinition(effectiveSelection.key)} type="button">{isDeletingSelection ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}</button>
                           {hasSelectionGenerationFailed ? <span className="inline-note danger">Background generation failed. You can edit or delete this entry.</span> : null}
                           {definitionPanelControls}
                         </div>
@@ -533,9 +531,6 @@ export function SpecializedDefinitionWorkspace({
                                 >
                                   {isCharacterConceptBusy ? <><span className="button-spinner" aria-hidden="true" />Generating...</> : 'Generate concept image'}
                                 </button>
-                                <button className="ghost-button compact" onClick={() => setIsSelectionIconPickerOpen(true)} type="button">
-                                  Change image
-                                </button>
                                 <span className="subtle-line">
                                   Style: {getArtStylePresetLabel(typeof gameSpec?.theme?.artStylePreset === 'string' ? gameSpec.theme.artStylePreset : null)}
                                 </span>
@@ -554,14 +549,12 @@ export function SpecializedDefinitionWorkspace({
               ) : (
                 <div className="item-editor-head character-panel-header">
                   <div className="item-icon-stack">
-                    <button className="icon-button" onClick={() => setIsSelectionIconPickerOpen(true)} type="button">
-                      <MediaThumb
-                        asset={findAssetByKey(assets, resolveItemIconAssetKey(effectiveSelection, archetypes))}
-                        fallbackIcon={iconForDefinitionKind(effectiveSelection.kind)}
-                        label={effectiveSelection.name}
-                        large
-                      />
-                    </button>
+                    <MediaThumb
+                      asset={findAssetByKey(assets, resolveDefinitionDisplayAssetKey(effectiveSelection, archetypes))}
+                      fallbackIcon={iconForDefinitionKind(effectiveSelection.kind)}
+                      label={effectiveSelection.name}
+                      large
+                    />
                     <button className={isDeletingSelection ? 'ghost-button compact danger button-with-spinner' : 'ghost-button compact danger'} disabled={isDeletingSelection} onClick={() => onDeleteDefinition(effectiveSelection.key)} type="button">{isDeletingSelection ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}</button>
                   </div>
                   <div className="editor-heading-copy">
@@ -637,7 +630,6 @@ export function SpecializedDefinitionWorkspace({
               hideManualSections={effectiveSelection.kind === 'character'}
               suppressSummaryField={effectiveSelection.kind === 'character'}
                   onAddCustomField={onAddCustomField}
-                  onAssignItemIcon={onAssignDefinitionIcon}
                   onCreateItem={(archetypeKey) => onCreateDefinition(archetypeKey)}
                   onUpdateComponents={onUpdateComponents}
                   onUpdateFieldValue={onUpdateFieldValue}
@@ -657,7 +649,6 @@ export function SpecializedDefinitionWorkspace({
               selectedItem={effectiveSelection}
               headerControls={<><button className={isDeletingSelection ? 'ghost-button compact danger button-with-spinner' : 'ghost-button compact danger'} disabled={isDeletingSelection} onClick={() => onDeleteDefinition(effectiveSelection.key)} type="button">{isDeletingSelection ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}</button>{hasSelectionGenerationFailed ? <span className="inline-note danger">Background generation failed. You can edit or delete this entry.</span> : null}</>}
               onAddCustomField={onAddCustomField}
-              onAssignItemIcon={onAssignDefinitionIcon}
               onCreateItem={(archetypeKey) => onCreateDefinition(archetypeKey)}
               onUpdateComponents={onUpdateComponents}
               onUpdateFieldValue={onUpdateFieldValue}
@@ -674,23 +665,19 @@ export function SpecializedDefinitionWorkspace({
           />
         )}
 
-        {supports3dPanel && effectiveSelection && isSelectionIconPickerOpen ? (
+        {kind === 'character' && supports3dPanel && effectiveSelection && isSelectionIconPickerOpen ? (
           <AssetPickerDialog
             assets={imageAssets}
-            clearLabel={kind === 'character' ? 'Clear image' : 'Clear icon'}
-            fallbackIcon={kind === 'character' ? 'character' : iconForDefinitionKind(effectiveSelection.kind)}
+            clearLabel="Clear image"
+            fallbackIcon="character"
             onClose={() => setIsSelectionIconPickerOpen(false)}
             onPickAsset={(assetKey) => {
-              if (kind === 'character') {
-                updateCharacterRenderBinding({ previewImageAssetKey: assetKey })
-              } else {
-                onAssignDefinitionIcon(assetKey)
-              }
+              updateCharacterRenderBinding({ previewImageAssetKey: assetKey })
               setIsSelectionIconPickerOpen(false)
             }}
-            selectedAssetKey={kind === 'character' ? selectedCharacterRenderBinding?.previewImageAssetKey ?? null : effectiveSelection.iconAssetKey}
+            selectedAssetKey={selectedCharacterRenderBinding?.previewImageAssetKey ?? null}
             selectedLabel={effectiveSelection.name}
-            title={kind === 'character' ? `Choose concept image for ${effectiveSelection.name}` : `Choose icon for ${effectiveSelection.name}`}
+            title={`Choose concept image for ${effectiveSelection.name}`}
           />
         ) : null}
       </section>

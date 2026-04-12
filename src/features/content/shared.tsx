@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { isSupportedMeshPath, resolveAssetPreviewUrl, type AssetUrlCreateOptions, type AssetUrlCreationKind } from '../../domain/assets'
+import { getResolvedDefinition3dBinding } from '../../domain/render3d'
 import { EntityIcon, type EntityIconId } from '../../shared/entityIcons'
 
 import type {
@@ -468,6 +469,10 @@ export function getFieldValue(item: DefinitionBase, field: FieldDefinition) {
 
 export function resolveItemIconAssetKey(item: DefinitionBase, archetypes: ArchetypeDefinition[]) {
   return item.iconAssetKey ?? archetypes.find((archetype) => archetype.key === item.archetypeKey)?.iconAssetKey ?? null
+}
+
+export function resolveDefinitionDisplayAssetKey(item: DefinitionBase, archetypes: ArchetypeDefinition[]) {
+  return getResolvedDefinition3dBinding(item).previewImageAssetKey ?? resolveItemIconAssetKey(item, archetypes)
 }
 
 export function findAssetByKey(assets: AssetDefinition[], assetKey: string | null) {

@@ -8,7 +8,7 @@ import { DefinitionEditor } from './content/DefinitionEditor'
 import {
   MediaThumb,
   findAssetByKey,
-  resolveItemIconAssetKey,
+  resolveDefinitionDisplayAssetKey,
 } from './content/shared'
 import type {
   ContentMode,
@@ -52,7 +52,7 @@ export function ContentWorkspace({
   onAddArchetypeField,
   onAddCustomField,
   onAssignArchetypeIcon,
-  onAssignItemIcon,
+  onAssignItemIcon: _onAssignItemIcon,
   onCreateArchetype,
   onCreateDefinitionOfKind,
   onCreateItem,
@@ -219,7 +219,7 @@ export function ContentWorkspace({
                     type="button"
                   >
                     <MediaThumb
-                      asset={findAssetByKey(assets, resolveItemIconAssetKey(item, archetypes))}
+                      asset={findAssetByKey(assets, resolveDefinitionDisplayAssetKey(item, archetypes))}
                       fallbackIcon={iconForDefinitionKind(item.kind)}
                       label={item.name}
                     />
@@ -304,7 +304,6 @@ export function ContentWorkspace({
               selectedItem={selectedContentItem}
               headerControls={selectedContentItem ? <><button className={isDeletingSelectedItem ? 'ghost-button compact danger button-with-spinner' : 'ghost-button compact danger'} disabled={isDeletingSelectedItem} onClick={() => onDeleteItem(selectedContentItem.key)} type="button">{isDeletingSelectedItem ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}</button>{getResourceGenerationMetadata(selectedContentItem)?.state === 'failed' ? <span className="inline-note danger">Background generation failed. You can edit or delete this entry.</span> : null}</> : undefined}
               onAddCustomField={onAddCustomField}
-              onAssignItemIcon={onAssignItemIcon}
               onCreateItem={onCreateItem}
               onUpdateComponents={onUpdateComponents}
               onUpdateFieldValue={onUpdateFieldValue}

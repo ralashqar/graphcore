@@ -1,17 +1,16 @@
-import { useState, type ReactNode } from 'react'
+import type { ReactNode } from 'react'
 import type { ArchetypeDefinition, AssetDefinition, DefinitionBase, FieldDefinition, FieldValue } from '../../domain/graphcore'
 import { iconForDefinitionKind } from '../../shared/entityIcons'
 import { DefinitionComponentsEditor } from './DefinitionComponentsEditor'
 import {
   AddFieldForm,
-  AssetPickerDialog,
   EditableField,
   EmptyEditor,
   MediaThumb,
   findAssetByKey,
   getFieldValue,
+  resolveDefinitionDisplayAssetKey,
   resolveItemFields,
-  resolveItemIconAssetKey,
 } from './shared'
 import type { ItemIdentityChanges } from './types'
 
@@ -20,7 +19,7 @@ export function DefinitionEditor({
   assets,
   definitions,
   graphKeys,
-  imageAssets,
+  imageAssets: _imageAssets,
   selectedArchetype,
   selectedAsset: _selectedAsset,
   selectedItem,
@@ -30,7 +29,6 @@ export function DefinitionEditor({
   hideManualSections = false,
   suppressSummaryField = false,
   onAddCustomField,
-  onAssignItemIcon,
   onCreateItem,
   onUpdateComponents,
   onUpdateFieldValue,
@@ -50,7 +48,6 @@ export function DefinitionEditor({
   hideManualSections?: boolean
   suppressSummaryField?: boolean
   onAddCustomField: (itemKey: string, field: FieldDefinition) => void
-  onAssignItemIcon: (assetKey: string | null) => void
   onCreateItem: (archetypeKey?: string | null) => void
   onUpdateComponents: (itemKey: string, components: DefinitionBase['components']) => void
   onUpdateFieldValue: (itemKey: string, fieldKey: string, value: FieldValue['value']) => void
@@ -69,7 +66,6 @@ export function DefinitionEditor({
   }
 
   const definition = selectedItem
-  const [isIconPickerOpen, setIsIconPickerOpen] = useState(false)
   const selectedArchetypeForItem =
     archetypes.find((archetype) => archetype.key === definition.archetypeKey) ?? null
   const compatibleArchetypes = archetypes.filter((archetype) => archetype.appliesToKind === definition.kind)
@@ -87,14 +83,12 @@ export function DefinitionEditor({
       {!hideHeader ? (
         <div className="item-editor-head">
           <div className="item-icon-stack">
-            <button className="icon-button" onClick={() => setIsIconPickerOpen(true)} type="button">
-              <MediaThumb
-                asset={findAssetByKey(assets, resolveItemIconAssetKey(selectedItem, archetypes))}
-                fallbackIcon={iconForDefinitionKind(definition.kind)}
-                label={definition.name}
-                large
-              />
-            </button>
+            <MediaThumb
+              asset={findAssetByKey(assets, resolveDefinitionDisplayAssetKey(selectedItem, archetypes))}
+              fallbackIcon={iconForDefinitionKind(definition.kind)}
+              label={definition.name}
+              large
+            />
           </div>
 
           <div className="editor-heading-copy">
@@ -159,20 +153,6 @@ export function DefinitionEditor({
             </select>
           </label>
         ) : null}
-        <label className="field-block">
-          <span>Icon Asset</span>
-          <select
-            value={definition.iconAssetKey ?? ''}
-            onChange={(event) => onUpdateItemIdentity(definition.key, { iconAssetKey: event.target.value || null })}
-          >
-            <option value="">Use archetype or none</option>
-            {imageAssets.map((asset) => (
-              <option key={asset.key} value={asset.key}>
-                {asset.name}
-              </option>
-            ))}
-          </select>
-        </label>
       </div>
 
       {!hideManualSections ? (
@@ -233,22 +213,6 @@ export function DefinitionEditor({
             <AddFieldForm actionLabel="Add definition field" onAddField={(field) => onAddCustomField(definition.key, field)} />
           </div>
         </>
-      ) : null}
-
-      {isIconPickerOpen ? (
-        <AssetPickerDialog
-          assets={imageAssets}
-          fallbackIcon={iconForDefinitionKind(definition.kind)}
-          onClose={() => setIsIconPickerOpen(false)}
-          onPickAsset={(assetKey) => {
-            onAssignItemIcon(assetKey)
-            setIsIconPickerOpen(false)
-          }}
-          clearLabel="Clear icon"
-          selectedLabel={definition.name}
-          selectedAssetKey={definition.iconAssetKey}
-          title={`Choose icon for ${definition.name}`}
-        />
       ) : null}
     </div>
   )
