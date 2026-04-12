@@ -3,9 +3,12 @@ import type { Session } from '@supabase/supabase-js'
 import { graphcoreWorkspaceAdapter } from '../../infrastructure/graphcore/graphcoreWorkspaceAdapter'
 
 export const workspaceService = {
+  deleteGeneratedMesh: graphcoreWorkspaceAdapter.deleteGeneratedMesh,
   deleteWorldBuildPlaceholder: graphcoreWorkspaceAdapter.deleteWorldBuildPlaceholder,
   planWorldBuild: graphcoreWorkspaceAdapter.planWorldBuild,
+  pollMeshGeneration: graphcoreWorkspaceAdapter.pollMeshGeneration,
   pollWorldBuild: graphcoreWorkspaceAdapter.pollWorldBuild,
+  startMeshGeneration: graphcoreWorkspaceAdapter.startMeshGeneration,
   startWorldBuild: graphcoreWorkspaceAdapter.startWorldBuild,
   createGame: (session?: Session) => graphcoreWorkspaceAdapter.createGame(session),
   load: graphcoreWorkspaceAdapter.loadProjectSnapshot,

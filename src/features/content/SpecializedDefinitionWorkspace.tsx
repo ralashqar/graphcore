@@ -5,6 +5,8 @@ import { buildAssetSlug, type AssetUrlCreateOptions } from '../../domain/assets'
 import type { ArchetypeDefinition, AssetDefinition, AssemblyGraphDefinition, DefinitionBase, EnvironmentBlueprintV1, FieldDefinition, FieldValue, GameSpec } from '../../domain/graphcore'
 import { buildCharacterConceptPrompt } from '../../domain/visualAssetGeneration'
 import { getResourceGenerationMetadata, isPendingGenerationResource } from '../../domain/worldBuild'
+import type { MeshGenerationJob } from '../../domain/meshGeneration'
+import { isTerminalMeshGenerationJobStatus } from '../../domain/meshGeneration'
 import { visualAssetGenerationService } from '../../application/services/visualAssetGenerationService'
 import { getResolvedRender3dBinding } from '../../domain/render3d'
 import { iconForDefinitionKind } from '../../shared/entityIcons'
@@ -29,6 +31,8 @@ type SpecializedDefinitionWorkspaceProps = {
   selectedAsset: AssetDefinition | null
   selectedDefinition: DefinitionBase | null
   deletingDefinitionKey?: string | null
+  deletingGeneratedMeshDefinitionKey?: string | null
+  meshGenerationJobs?: MeshGenerationJob[]
   onAddCustomField: (itemKey: string, field: FieldDefinition) => void
   onAssignDefinitionIcon: (assetKey: string | null) => void
   isGeneratingPrompt: boolean
@@ -37,10 +41,12 @@ type SpecializedDefinitionWorkspaceProps = {
   onCreateDefinition: (archetypeKey?: string | null) => void
   onCreateUrlAsset: (url: string, kind?: 'image' | 'mesh', options?: AssetUrlCreateOptions) => string | null
   onDeleteDefinition: (itemKey: string) => void
+  onDeleteGeneratedMesh: (definitionKey: string) => void
   onDeleteAssemblyGraph: (graphKey: string) => void
   onDeleteEnvironmentBlueprint: (blueprintId: string) => void
   onChangePromptText: (value: string) => void
   onGeneratePrompt: () => void
+  onStartMeshGeneration: (definitionKey: string) => void
   onSelectAsset: (key: string | null) => void
   onSelectDefinition: (key: string | null) => void
   onUpsertAssemblyGraph: (graph: AssemblyGraphDefinition) => void
@@ -65,6 +71,8 @@ export function SpecializedDefinitionWorkspace({
   selectedAsset,
   selectedDefinition,
   deletingDefinitionKey = null,
+  deletingGeneratedMeshDefinitionKey = null,
+  meshGenerationJobs = [],
   onAddCustomField,
   onAssignDefinitionIcon,
   isGeneratingPrompt,
@@ -73,10 +81,12 @@ export function SpecializedDefinitionWorkspace({
   onCreateDefinition,
   onCreateUrlAsset,
   onDeleteDefinition,
+  onDeleteGeneratedMesh,
   onDeleteAssemblyGraph,
   onDeleteEnvironmentBlueprint,
   onChangePromptText,
   onGeneratePrompt,
+  onStartMeshGeneration,
   onSelectAsset: _onSelectAsset,
   onSelectDefinition,
   onUpsertAssemblyGraph,
@@ -132,8 +142,22 @@ export function SpecializedDefinitionWorkspace({
     if (!selectedCharacterRenderBinding?.previewImageAssetKey) return null
     return findAssetByKey(assets, selectedCharacterRenderBinding.previewImageAssetKey)
   }, [assets, selectedCharacterRenderBinding?.previewImageAssetKey])
+  const meshJobByDefinitionKey = useMemo(() => {
+    const map = new Map<string, MeshGenerationJob>()
+    for (const job of meshGenerationJobs) {
+      if (!map.has(job.definitionKey)) {
+        map.set(job.definitionKey, job)
+      }
+    }
+    return map
+  }, [meshGenerationJobs])
+  const selectedCharacterMeshJob = useMemo(() => {
+    if (effectiveSelection?.kind !== 'character') return null
+    return meshJobByDefinitionKey.get(effectiveSelection.key) ?? null
+  }, [effectiveSelection, meshJobByDefinitionKey])
   const isCharacterConceptAssetPending = isPendingGenerationResource(selectedCharacterPreviewAsset)
   const isCharacterConceptBusy = characterConceptPending || isCharacterConceptAssetPending
+  const isDeletingGeneratedMesh = effectiveSelection?.key === deletingGeneratedMeshDefinitionKey
   const selectedAssemblyGraph = useMemo(() => {
     if (effectiveSelection?.kind !== 'environment') return null
     const geometryBinding = effectiveSelection.components.find((component) => component.type === 'environment_geometry_binding')
@@ -340,7 +364,13 @@ export function SpecializedDefinitionWorkspace({
                 />
                 <div className="item-row-copy">
                   <strong>{definition.name}</strong>
-                  <span className={isDefinitionPending ? 'world-build-rail-status' : undefined}>{isDefinitionPending ? <><span className="button-spinner item-row-spinner" aria-hidden="true" />Generating...</> : generation?.state === 'failed' ? 'Generation failed' : definition.archetypeKey ?? 'No archetype'}</span>
+                  <span className={isDefinitionPending || (kind === 'character' && meshJobByDefinitionKey.get(definition.key) && !isTerminalMeshGenerationJobStatus(meshJobByDefinitionKey.get(definition.key)!.status)) ? 'world-build-rail-status' : undefined}>
+                    {isDefinitionPending ? (
+                      <><span className="button-spinner item-row-spinner" aria-hidden="true" />Generating...</>
+                    ) : kind === 'character' && meshJobByDefinitionKey.get(definition.key) && !isTerminalMeshGenerationJobStatus(meshJobByDefinitionKey.get(definition.key)!.status) ? (
+                      <><span className="button-spinner item-row-spinner" aria-hidden="true" />Generating 3D...</>
+                    ) : generation?.state === 'failed' ? 'Generation failed' : definition.archetypeKey ?? 'No archetype'}
+                  </span>
                 </div>
               </button>
               )
@@ -564,6 +594,10 @@ export function SpecializedDefinitionWorkspace({
                   assemblyGraph={selectedAssemblyGraph}
                   environmentBlueprint={selectedEnvironmentBlueprint}
                   definition={effectiveSelection}
+                  isDeletingGeneratedMesh={effectiveSelection.kind === 'character' ? isDeletingGeneratedMesh : false}
+                  meshGenerationJob={effectiveSelection.kind === 'character' ? selectedCharacterMeshJob : null}
+                  onDeleteGeneratedMesh={effectiveSelection.kind === 'character' ? () => onDeleteGeneratedMesh(effectiveSelection.key) : null}
+                  onRequestGenerateMesh={effectiveSelection.kind === 'character' ? () => onStartMeshGeneration(effectiveSelection.key) : null}
                   onRequestGenerateConceptArt={effectiveSelection.kind === 'character' ? requestCharacterConceptFrom3d : null}
                   onUpdateComponents={onUpdateComponents}
                 />

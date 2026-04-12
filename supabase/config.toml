@@ -161,6 +161,18 @@ verify_jwt = false
 [functions.delete-world-build-placeholder]
 verify_jwt = false
 
+[functions.start-mesh-generation]
+verify_jwt = false
+
+[functions.poll-mesh-generation]
+verify_jwt = false
+
+[functions.delete-generated-mesh]
+verify_jwt = false
+
+[functions.sign-project-asset-urls]
+verify_jwt = false
+
 # Analytics Buckets is available to Supabase Pro plan.
 # [storage.analytics.buckets.my-warehouse]
 

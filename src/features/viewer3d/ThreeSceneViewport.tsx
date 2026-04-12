@@ -6,6 +6,17 @@ import { Box3, BufferAttribute, BufferGeometry, DoubleSide, Group, Line, LineBas
 
 import type { CompiledEnvironmentModel, CompiledMeshPart } from '../../domain/environmentAssembly'
 
+function is3dDebugEnabled() {
+  if (import.meta.env.VITE_DEBUG_3D_VIEWER === 'true') return true
+  if (typeof window === 'undefined') return false
+  try {
+    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') return true
+    return window.localStorage.getItem('graphcore.debug3d') === 'true'
+  } catch {
+    return false
+  }
+}
+
 type ThreeSceneViewportProps = {
   compiledEnvironment?: CompiledEnvironmentModel | null
   meshSourceUrl: string | null
@@ -15,6 +26,7 @@ type ThreeSceneViewportProps = {
   showFloor: boolean
   showGrid: boolean
   resetSignal: number
+  onMeshLoadStateChange?: ((state: LoadedSceneState) => void) | null
 }
 
 type LoadedSceneState =
@@ -22,6 +34,8 @@ type LoadedSceneState =
   | { status: 'loading'; scene: null; error: null }
   | { status: 'ready'; scene: Group; error: null }
   | { status: 'error'; scene: null; error: string }
+
+const targetCharacterMeshHeight = 2.3
 
 function configureSceneShadows(group: Group) {
   group.traverse((child) => {
@@ -39,17 +53,26 @@ function configureSceneShadows(group: Group) {
   })
 }
 
-function useLoadedScene(meshSourceUrl: string | null): LoadedSceneState {
+function useLoadedScene(meshSourceUrl: string | null, modelKind: 'character' | 'environment'): LoadedSceneState {
   const [state, setState] = useState<LoadedSceneState>({ status: 'idle', scene: null, error: null })
 
   useEffect(() => {
+    const debug3dViewer = is3dDebugEnabled()
     if (!meshSourceUrl) {
+      if (debug3dViewer) {
+        console.log('[GraphCore][3D] No mesh source URL was available for the viewport.')
+      }
       setState({ status: 'idle', scene: null, error: null })
       return
     }
 
     let isActive = true
     const loader = new GLTFLoader()
+    if (debug3dViewer) {
+      console.log('[GraphCore][3D] Starting GLB load.', {
+        meshSourceUrl,
+      })
+    }
     setState({ status: 'loading', scene: null, error: null })
 
     loader.load(
@@ -58,29 +81,66 @@ function useLoadedScene(meshSourceUrl: string | null): LoadedSceneState {
         if (!isActive) return
         const root = (gltf.scene || gltf.scenes[0])?.clone(true)
         if (!root) {
+          if (debug3dViewer) {
+            console.error('[GraphCore][3D] GLB loaded without a scene root.', {
+              meshSourceUrl,
+              sceneCount: gltf.scenes?.length ?? 0,
+            })
+          }
           setState({ status: 'error', scene: null, error: 'Loaded mesh had no scene root.' })
           return
         }
 
         configureSceneShadows(root)
-        const bounds = new Box3().setFromObject(root)
+        let bounds = new Box3().setFromObject(root)
+        if (modelKind === 'character') {
+          const height = bounds.max.y - bounds.min.y
+          if (Number.isFinite(height) && height > 0.001) {
+            const scale = targetCharacterMeshHeight / height
+            root.scale.setScalar(scale)
+            bounds = new Box3().setFromObject(root)
+          }
+        }
         const center = bounds.getCenter(new Vector3())
         root.position.sub(center)
         root.position.y -= bounds.min.y
+        if (debug3dViewer) {
+          console.log('[GraphCore][3D] GLB load succeeded.', {
+            meshSourceUrl,
+            childCount: root.children.length,
+            modelKind,
+            bounds: {
+              min: bounds.min.toArray(),
+              max: bounds.max.toArray(),
+            },
+          })
+        }
         setState({ status: 'ready', scene: root, error: null })
       },
       undefined,
       (error) => {
         if (!isActive) return
         const message = error instanceof Error ? error.message : 'Mesh preview failed to load.'
+        if (debug3dViewer) {
+          console.error('[GraphCore][3D] GLB load failed.', {
+            meshSourceUrl,
+            error,
+            message,
+          })
+        }
         setState({ status: 'error', scene: null, error: message })
       },
     )
 
     return () => {
       isActive = false
+      if (debug3dViewer) {
+        console.log('[GraphCore][3D] Cancelled GLB load effect.', {
+          meshSourceUrl,
+        })
+      }
     }
-  }, [meshSourceUrl])
+  }, [meshSourceUrl, modelKind])
 
   return state
 }
@@ -337,9 +397,14 @@ export function ThreeSceneViewport({
   showFloor,
   showGrid,
   resetSignal,
+  onMeshLoadStateChange = null,
 }: ThreeSceneViewportProps) {
-  const loadedScene = useLoadedScene(meshSourceUrl)
+  const loadedScene = useLoadedScene(meshSourceUrl, modelKind)
   const fitKey = `${modelLabel}:${modelSubtype}:${compiledEnvironment?.graphKey ?? meshSourceUrl ?? 'proxy'}:${resetSignal}`
+
+  useEffect(() => {
+    onMeshLoadStateChange?.(loadedScene)
+  }, [loadedScene, onMeshLoadStateChange])
 
   return (
     <div className="three-scene-shell">

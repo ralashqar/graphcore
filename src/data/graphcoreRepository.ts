@@ -20,6 +20,15 @@ import {
 import { buildBootstrapPatch, createDefaultGameSpec } from '../domain/presetCatalog'
 import type { PromptPatchRequest, PromptPatchResponse } from '../domain/prompting'
 import {
+  type DeleteGeneratedMeshRequest,
+  type MeshGenerationPollRequest,
+  type MeshGenerationStartRequest,
+  meshGenerationStatusResponseSchema,
+  type MeshGenerationStatusResponse,
+  meshGenerationJobSchema,
+} from '../domain/meshGeneration'
+import {
+  getResourceGenerationMetadata,
   worldBuildPlanResponseSchema,
   worldBuildDeletePlaceholderResponseSchema,
   worldBuildStatusResponseSchema,
@@ -821,6 +830,120 @@ type WorldBuildJobRow = {
   updated_at: string
 }
 
+type MeshGenerationJobRow = {
+  id: string
+  project_id: string
+  draft_id: string
+  definition_key: string
+  source_image_asset_key: string
+  target_mesh_asset_key: string
+  provider: string
+  model: string
+  provider_request_id: string | null
+  status: string
+  provider_status: string | null
+  provider_logs: unknown
+  error_message: string | null
+  storage_path: string | null
+  created_at: string
+  updated_at: string
+}
+
+type SignProjectAssetUrlsRequest = {
+  projectId: string
+  assetKeys: string[]
+}
+
+type SignProjectAssetUrlsResponse = {
+  urls: Array<{
+    assetKey: string
+    signedUrl: string
+  }>
+}
+
+const meshBlobUrlCache = new Map<string, { storagePath: string; url: string }>()
+
+async function hydrateStorageMeshAssetUrls<TAsset extends AssetDefinition>(projectId: string, assets: TAsset[]) {
+  const signedUrls = new Map<string, string>()
+  const candidates = assets.filter((asset) => {
+    if (asset.kind !== 'mesh') return false
+    if (typeof asset.metadata.sourceUrl === 'string' && asset.metadata.sourceUrl.trim()) return false
+    if (typeof asset.metadata.previewUrl === 'string' && asset.metadata.previewUrl.trim()) return false
+    if (typeof asset.metadata.storageBucket !== 'string' || !asset.metadata.storageBucket.trim()) return false
+    if (!asset.storagePath || asset.storagePath.startsWith('external/') || asset.storagePath.startsWith('local-upload/')) return false
+    const generation = getResourceGenerationMetadata(asset)
+    if (generation?.state === 'pending' || generation?.state === 'running') return false
+    return true
+  })
+
+  if (candidates.length === 0) return assets
+
+  try {
+    const session = await getValidatedSession('Sign in and load a live GraphCore draft before loading generated meshes.')
+    const response = await invokeAuthedFunctionWithSessionRecovery<SignProjectAssetUrlsResponse>(
+      'sign-project-asset-urls',
+      {
+        projectId,
+        assetKeys: candidates.map((asset) => asset.key),
+      } satisfies SignProjectAssetUrlsRequest,
+      session,
+    )
+    if (!response.error && response.data?.urls) {
+      for (const entry of response.data.urls) {
+        if (typeof entry.assetKey === 'string' && typeof entry.signedUrl === 'string' && entry.signedUrl.trim()) {
+          signedUrls.set(entry.assetKey, entry.signedUrl)
+        }
+      }
+    }
+  } catch (error) {
+    console.error('[GraphCore] mesh asset signing failed during hydration.', error)
+  }
+
+  const unresolvedCandidates = candidates.filter((asset) => !signedUrls.has(asset.key))
+  await Promise.all(unresolvedCandidates.map(async (asset) => {
+    const cached = meshBlobUrlCache.get(asset.key)
+    if (cached && cached.storagePath === asset.storagePath) {
+      signedUrls.set(asset.key, cached.url)
+      return
+    }
+
+    const bucket = typeof asset.metadata.storageBucket === 'string' && asset.metadata.storageBucket.trim()
+      ? asset.metadata.storageBucket.trim()
+      : 'project-assets'
+    const downloadResponse = await supabase.storage.from(bucket).download(asset.storagePath)
+    if (downloadResponse.error || !downloadResponse.data) {
+      console.error('[GraphCore] mesh asset download fallback failed.', {
+        assetKey: asset.key,
+        bucket,
+        storagePath: asset.storagePath,
+        message: downloadResponse.error?.message ?? 'unknown download error',
+      })
+      return
+    }
+
+    const nextUrl = URL.createObjectURL(downloadResponse.data)
+    if (cached?.url) {
+      URL.revokeObjectURL(cached.url)
+    }
+    meshBlobUrlCache.set(asset.key, { storagePath: asset.storagePath, url: nextUrl })
+    signedUrls.set(asset.key, nextUrl)
+  }))
+
+  if (signedUrls.size === 0) return assets
+
+  return assets.map((asset) => (
+    signedUrls.has(asset.key)
+      ? {
+          ...asset,
+          metadata: {
+            ...asset.metadata,
+            sourceUrl: signedUrls.get(asset.key),
+          },
+        }
+      : asset
+  ))
+}
+
 function prettifyChoiceKey(value: string) {
   return value
     .replace(/[_-]+/g, ' ')
@@ -951,6 +1074,7 @@ export async function loadProjectSnapshot(
     environmentBlueprintsResponse,
     assetsResponse,
     worldBuildBatchesResponse,
+    meshGenerationJobsResponse,
     patchSetsResponse,
     releasesResponse,
   ] = await Promise.all([
@@ -1032,6 +1156,11 @@ export async function loadProjectSnapshot(
       .eq('draft_id', draft.id)
       .order('created_at', { ascending: false }),
     supabase
+      .from('mesh_generation_jobs')
+      .select('id, project_id, draft_id, definition_key, source_image_asset_key, target_mesh_asset_key, provider, model, provider_request_id, status, provider_status, provider_logs, error_message, storage_path, created_at, updated_at')
+      .eq('draft_id', draft.id)
+      .order('created_at', { ascending: false }),
+    supabase
       .from('patch_sets')
       .select('id, summary, prompt, status, operations, diagnostics')
       .eq('draft_id', draft.id)
@@ -1056,6 +1185,9 @@ export async function loadProjectSnapshot(
   const worldBuildSchemaMissing =
     worldBuildBatchesResponse.status === 404
     || isMissingRelationError(worldBuildBatchesResponse.error, 'world_build_batches')
+  const meshGenerationSchemaMissing =
+    meshGenerationJobsResponse.status === 404
+    || isMissingRelationError(meshGenerationJobsResponse.error, 'mesh_generation_jobs')
 
   if (definitionsResponse.error || archetypesResponse.error) {
     return {
@@ -1080,6 +1212,7 @@ export async function loadProjectSnapshot(
   const environmentBlueprints = blueprintSchemaMissing ? [] : (environmentBlueprintsResponse.data as EnvironmentBlueprintRow[] | null) ?? []
   const assets = (assetsResponse.data as AssetRow[] | null) ?? []
   const worldBuildBatches = worldBuildSchemaMissing ? [] : (worldBuildBatchesResponse.data as WorldBuildBatchRow[] | null) ?? []
+  const meshGenerationJobs = meshGenerationSchemaMissing ? [] : (meshGenerationJobsResponse.data as MeshGenerationJobRow[] | null) ?? []
   const worldBuildJobs =
     worldBuildSchemaMissing || worldBuildBatches.length === 0
       ? []
@@ -1091,7 +1224,7 @@ export async function loadProjectSnapshot(
             .order('order_index', { ascending: true })
         ).data as WorldBuildJobRow[] | null ?? []
 
-  const snapshot = projectSnapshotSchema.parse({
+  let snapshot = projectSnapshotSchema.parse({
     workspace: {
       id: workspace.id,
       name: workspace.name,
@@ -1328,6 +1461,34 @@ export async function loadProjectSnapshot(
           updatedAt: job.updated_at,
         })),
     })),
+    meshGenerationJobs: meshGenerationJobs.map((job) => meshGenerationJobSchema.parse({
+      id: job.id,
+      projectId: job.project_id,
+      draftId: job.draft_id,
+      definitionKey: job.definition_key,
+      sourceImageAssetKey: job.source_image_asset_key,
+      targetMeshAssetKey: job.target_mesh_asset_key,
+      provider: job.provider,
+      model: job.model,
+      providerRequestId: job.provider_request_id,
+      status: job.status,
+      providerStatus: job.provider_status,
+      providerLogs: Array.isArray(job.provider_logs)
+        ? job.provider_logs
+            .map((entry) => {
+              if (typeof entry === 'string') return entry
+              if (entry && typeof entry === 'object' && typeof (entry as { message?: unknown }).message === 'string') {
+                return String((entry as { message: string }).message)
+              }
+              return null
+            })
+            .filter((entry): entry is string => Boolean(entry))
+        : [],
+      errorMessage: job.error_message,
+      storagePath: job.storage_path,
+      createdAt: job.created_at,
+      updatedAt: job.updated_at,
+    })),
     patchSets: patchSetsResponse.data ?? [],
     releases: (releasesResponse.data ?? []).map((release) => ({
       id: release.id,
@@ -1336,6 +1497,11 @@ export async function loadProjectSnapshot(
       createdAt: release.created_at,
     })),
   })
+
+  snapshot = {
+    ...snapshot,
+    assets: await hydrateStorageMeshAssetUrls(snapshot.project.id, snapshot.assets),
+  }
 
   return {
     snapshot,
@@ -2122,6 +2288,63 @@ export async function startWorldBuild(request: WorldBuildStartRequest): Promise<
   }
 
   return worldBuildStatusResponseSchema.parse(response.data)
+}
+
+export async function startMeshGeneration(request: MeshGenerationStartRequest): Promise<MeshGenerationStatusResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before generating a 3D mesh.')
+
+  if (!hasLiveSnapshotIds(request.snapshot)) {
+    throw new Error('Sign in and load a live GraphCore draft before generating a 3D mesh.')
+  }
+
+  const response = await invokeAuthedFunctionWithSessionRecovery<MeshGenerationStatusResponse>('start-mesh-generation', request, session)
+  if (response.error || !response.data) {
+    throw new Error(response.error ? await readFunctionsErrorMessage(response.error) : 'Starting mesh generation returned no data.')
+  }
+
+  const parsed = meshGenerationStatusResponseSchema.parse(response.data)
+  return {
+    ...parsed,
+    assets: await hydrateStorageMeshAssetUrls(request.snapshot.project.id, parsed.assets as AssetDefinition[]),
+  }
+}
+
+export async function pollMeshGeneration(request: MeshGenerationPollRequest): Promise<MeshGenerationStatusResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before polling mesh generation.')
+
+  if (!hasLiveSnapshotIds(request.snapshot)) {
+    throw new Error('Sign in and load a live GraphCore draft before polling mesh generation.')
+  }
+
+  const response = await invokeAuthedFunctionWithSessionRecovery<MeshGenerationStatusResponse>('poll-mesh-generation', request, session)
+  if (response.error || !response.data) {
+    throw new Error(response.error ? await readFunctionsErrorMessage(response.error) : 'Polling mesh generation returned no data.')
+  }
+
+  const parsed = meshGenerationStatusResponseSchema.parse(response.data)
+  return {
+    ...parsed,
+    assets: await hydrateStorageMeshAssetUrls(request.snapshot.project.id, parsed.assets as AssetDefinition[]),
+  }
+}
+
+export async function deleteGeneratedMesh(request: DeleteGeneratedMeshRequest): Promise<MeshGenerationStatusResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before deleting a generated mesh.')
+
+  if (!hasLiveSnapshotIds(request.snapshot)) {
+    throw new Error('Sign in and load a live GraphCore draft before deleting a generated mesh.')
+  }
+
+  const response = await invokeAuthedFunctionWithSessionRecovery<MeshGenerationStatusResponse>('delete-generated-mesh', request, session)
+  if (response.error || !response.data) {
+    throw new Error(response.error ? await readFunctionsErrorMessage(response.error) : 'Deleting generated mesh returned no data.')
+  }
+
+  const parsed = meshGenerationStatusResponseSchema.parse(response.data)
+  return {
+    ...parsed,
+    assets: await hydrateStorageMeshAssetUrls(request.snapshot.project.id, parsed.assets as AssetDefinition[]),
+  }
 }
 
 export async function pollWorldBuild(request: { batchId: string; snapshot: ProjectSnapshot; model: string }): Promise<WorldBuildStatusResponse> {

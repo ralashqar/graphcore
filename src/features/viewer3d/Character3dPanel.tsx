@@ -12,25 +12,64 @@ import {
   type EnvironmentRenderBindingConfig,
   type Render3dBindingConfig,
 } from '../../domain/render3d'
+import type { MeshGenerationJob } from '../../domain/meshGeneration'
+import { isTerminalMeshGenerationJobStatus } from '../../domain/meshGeneration'
 import type { AssetDefinition, AssemblyGraphDefinition, DefinitionBase, EnvironmentBlueprintV1 } from '../../domain/graphcore'
+import { supabase } from '../../utils/supabase'
 import { MediaThumb, findAssetByKey } from '../content/shared'
 import { ThreeSceneViewport } from './ThreeSceneViewport'
+
+function is3dDebugEnabled() {
+  if (import.meta.env.VITE_DEBUG_3D_VIEWER === 'true') return true
+  if (typeof window === 'undefined') return false
+  try {
+    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') return true
+    return window.localStorage.getItem('graphcore.debug3d') === 'true'
+  } catch {
+    return false
+  }
+}
+
+function extractTrellisModelUrl(payload: unknown) {
+  if (!payload || typeof payload !== 'object') return null
+  const data = payload as { data?: unknown }
+  const result = data.data && typeof data.data === 'object' ? data.data as { model_glb?: unknown } : null
+  const modelGlb = result?.model_glb && typeof result.model_glb === 'object' ? result.model_glb as { url?: unknown } : null
+  return typeof modelGlb?.url === 'string' && modelGlb.url.trim() ? modelGlb.url : null
+}
 
 type Definition3dPanelProps = {
   assets: AssetDefinition[]
   assemblyGraph?: AssemblyGraphDefinition | null
   environmentBlueprint?: EnvironmentBlueprintV1 | null
   definition: DefinitionBase
+  isDeletingGeneratedMesh?: boolean
+  meshGenerationJob?: MeshGenerationJob | null
+  onDeleteGeneratedMesh?: (() => void) | null
   onRequestGenerateConceptArt?: (() => void) | null
+  onRequestGenerateMesh?: (() => void) | null
   onUpdateComponents: (itemKey: string, components: DefinitionBase['components']) => void
 }
 
-export function Definition3dPanel({ assets, assemblyGraph = null, environmentBlueprint = null, definition, onRequestGenerateConceptArt = null, onUpdateComponents }: Definition3dPanelProps) {
+export function Definition3dPanel({
+  assets,
+  assemblyGraph = null,
+  environmentBlueprint = null,
+  definition,
+  isDeletingGeneratedMesh = false,
+  meshGenerationJob = null,
+  onDeleteGeneratedMesh = null,
+  onRequestGenerateConceptArt = null,
+  onRequestGenerateMesh = null,
+  onUpdateComponents,
+}: Definition3dPanelProps) {
   const [showFloor, setShowFloor] = useState(true)
   const [showGrid, setShowGrid] = useState(true)
   const [resetSignal, setResetSignal] = useState(0)
   const [generationMessage, setGenerationMessage] = useState<string | null>(null)
   const [generationPending, setGenerationPending] = useState(false)
+  const [meshViewportError, setMeshViewportError] = useState<string | null>(null)
+  const [fallbackMeshSourceUrl, setFallbackMeshSourceUrl] = useState<string | null>(null)
 
   const isEnvironment = definition.kind === 'environment'
   const renderBinding = getResolvedDefinition3dBinding(definition)
@@ -44,7 +83,13 @@ export function Definition3dPanel({ assets, assemblyGraph = null, environmentBlu
   const meshAsset = findAssetByKey(assets, renderBinding.primaryMeshAssetKey)
   const previewImageAsset = findAssetByKey(assets, renderBinding.previewImageAssetKey)
   const meshSourceUrl = resolveAssetSourceUrl(meshAsset)
+  const effectiveMeshSourceUrl = meshSourceUrl ?? fallbackMeshSourceUrl
   const meshSourceLabel = meshSourceUrl ?? 'No mesh source bound'
+  const meshGenerationPending = Boolean(meshGenerationJob && !isTerminalMeshGenerationJobStatus(meshGenerationJob.status))
+  const meshGenerationMessage = meshGenerationJob?.errorMessage
+    ?? meshGenerationJob?.providerLogs[meshGenerationJob.providerLogs.length - 1]
+    ?? null
+  const showGeneratedMeshDelete = definition.kind === 'character' && (meshGenerationPending || meshAsset?.metadata.generatedBy === 'trellis_mesh')
   const isProceduralEnvironment = isEnvironment && (geometryBinding?.sourceMode === 'procedural_graph' || geometryBinding?.sourceMode === 'procedural_blueprint')
   const compileCacheRef = useRef(createAssemblyCompileCache())
   const lastCompiledPreviewRef = useRef<{
@@ -98,6 +143,166 @@ export function Definition3dPanel({ assets, assemblyGraph = null, environmentBlu
     },
     [assemblyGraph, environmentBlueprint, geometryBinding, isEnvironment],
   )
+
+  useEffect(() => {
+    const debug3dViewer = is3dDebugEnabled()
+    if (!debug3dViewer) return
+    console.log('[GraphCore][3D] Panel state snapshot.', {
+      definitionKey: definition.key,
+      definitionKind: definition.kind,
+      renderBinding,
+      meshAsset: meshAsset
+        ? {
+            key: meshAsset.key,
+            kind: meshAsset.kind,
+            storagePath: meshAsset.storagePath,
+            metadata: {
+              generatedBy: meshAsset.metadata.generatedBy,
+              storageBucket: meshAsset.metadata.storageBucket,
+              sourceUrl: typeof meshAsset.metadata.sourceUrl === 'string' ? `${meshAsset.metadata.sourceUrl.slice(0, 160)}...` : null,
+              previewUrl: typeof meshAsset.metadata.previewUrl === 'string' ? `${meshAsset.metadata.previewUrl.slice(0, 160)}...` : null,
+            },
+          }
+        : null,
+      previewImageAsset: previewImageAsset
+        ? {
+            key: previewImageAsset.key,
+            storagePath: previewImageAsset.storagePath,
+            hasSourceUrl: typeof previewImageAsset.metadata.sourceUrl === 'string' && previewImageAsset.metadata.sourceUrl.length > 0,
+            hasPreviewUrl: typeof previewImageAsset.metadata.previewUrl === 'string' && previewImageAsset.metadata.previewUrl.length > 0,
+          }
+        : null,
+      meshSourceUrlPreview: meshSourceUrl ? `${meshSourceUrl.slice(0, 160)}...` : null,
+      fallbackMeshSourceUrlPreview: fallbackMeshSourceUrl ? `${fallbackMeshSourceUrl.slice(0, 160)}...` : null,
+      meshGenerationJob,
+    })
+  }, [definition.key, definition.kind, fallbackMeshSourceUrl, meshAsset, meshGenerationJob, meshSourceUrl, previewImageAsset, renderBinding])
+
+  useEffect(() => {
+    const bucket = typeof meshAsset?.metadata.storageBucket === 'string' && meshAsset.metadata.storageBucket.trim()
+      ? meshAsset.metadata.storageBucket.trim()
+      : null
+    const storagePath = typeof meshAsset?.storagePath === 'string' && meshAsset.storagePath.trim()
+      ? meshAsset.storagePath.trim()
+      : null
+
+    if (meshSourceUrl || !meshAsset || !bucket || !storagePath) {
+      setFallbackMeshSourceUrl((current) => {
+        if (current) URL.revokeObjectURL(current)
+        return null
+      })
+      return
+    }
+
+    let cancelled = false
+    const debug3dViewer = is3dDebugEnabled()
+    setMeshViewportError(null)
+
+    if (debug3dViewer) {
+      console.log('[GraphCore][3D] Attempting direct Storage download fallback for mesh.', {
+        assetKey: meshAsset.key,
+        bucket,
+        storagePath,
+      })
+    }
+
+    void supabase.storage.from(bucket).download(storagePath).then(({ data, error }) => {
+      if (cancelled) return
+
+      if (error || !data) {
+        if (debug3dViewer) {
+          console.error('[GraphCore][3D] Direct Storage download fallback failed.', {
+            assetKey: meshAsset.key,
+            bucket,
+            storagePath,
+            error,
+          })
+        }
+        const requestId = typeof meshGenerationJob?.providerRequestId === 'string' ? meshGenerationJob.providerRequestId : null
+        const model = typeof meshGenerationJob?.model === 'string' && meshGenerationJob.model.trim()
+          ? meshGenerationJob.model
+          : 'fal-ai/trellis-2'
+        if (!requestId) {
+          setMeshViewportError(error?.message ?? 'The generated mesh could not be downloaded from Storage.')
+          return
+        }
+
+        if (debug3dViewer) {
+          console.log('[GraphCore][3D] Falling back to Trellis result URL.', {
+            assetKey: meshAsset.key,
+            requestId,
+            model,
+          })
+        }
+
+        void supabase.functions.invoke('ai-fal', {
+          body: {
+            action: 'result',
+            model,
+            requestId,
+          },
+        }).then(({ data: resultData, error: resultError }) => {
+          if (cancelled) return
+          if (resultError) {
+            if (debug3dViewer) {
+              console.error('[GraphCore][3D] Trellis result URL fallback failed.', {
+                assetKey: meshAsset.key,
+                requestId,
+                error: resultError,
+              })
+            }
+            setMeshViewportError(resultError.message || error?.message || 'The generated mesh could not be loaded.')
+            return
+          }
+
+          const fallbackUrl = extractTrellisModelUrl(resultData)
+          if (!fallbackUrl) {
+            if (debug3dViewer) {
+              console.error('[GraphCore][3D] Trellis result URL fallback returned no model URL.', {
+                assetKey: meshAsset.key,
+                requestId,
+                resultData,
+              })
+            }
+            setMeshViewportError('The generated mesh could not be loaded from Trellis 2 result output.')
+            return
+          }
+
+          if (debug3dViewer) {
+            console.log('[GraphCore][3D] Trellis result URL fallback succeeded.', {
+              assetKey: meshAsset.key,
+              requestId,
+              fallbackUrl,
+            })
+          }
+          setFallbackMeshSourceUrl((current) => {
+            if (current?.startsWith('blob:')) URL.revokeObjectURL(current)
+            return fallbackUrl
+          })
+        })
+        return
+      }
+
+      const objectUrl = URL.createObjectURL(data)
+      if (debug3dViewer) {
+        console.log('[GraphCore][3D] Direct Storage download fallback succeeded.', {
+          assetKey: meshAsset.key,
+          bucket,
+          storagePath,
+          size: data.size,
+        })
+      }
+
+      setFallbackMeshSourceUrl((current) => {
+        if (current?.startsWith('blob:')) URL.revokeObjectURL(current)
+        return objectUrl
+      })
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [meshAsset, meshGenerationJob, meshSourceUrl])
   const compiledEnvironment = compiledPreview?.compiledEnvironment ?? null
   const compiledPartSummary = useMemo(
     () =>
@@ -201,13 +406,16 @@ export function Definition3dPanel({ assets, assemblyGraph = null, environmentBlu
         <div className="character-3d-stage">
           <ThreeSceneViewport
             compiledEnvironment={compiledEnvironment}
-            meshSourceUrl={meshSourceUrl}
+            meshSourceUrl={effectiveMeshSourceUrl}
             modelKind={isEnvironment ? 'environment' : 'character'}
             modelLabel={definition.name}
             modelSubtype={subtype}
             showFloor={showFloor}
             showGrid={showGrid}
             resetSignal={resetSignal}
+            onMeshLoadStateChange={(state) => {
+              setMeshViewportError(state.status === 'error' ? state.error : null)
+            }}
           />
         </div>
 
@@ -216,16 +424,25 @@ export function Definition3dPanel({ assets, assemblyGraph = null, environmentBlu
             <div className="editor-section">
               <button
                 className="primary-button compact"
-                disabled={generationPending}
-                onClick={previewImageAsset ? handleGenerateStub : () => onRequestGenerateConceptArt?.()}
+                disabled={meshGenerationPending || generationPending}
+                onClick={previewImageAsset ? () => onRequestGenerateMesh?.() : () => onRequestGenerateConceptArt?.()}
                 type="button"
               >
-                {generationPending
-                  ? 'Checking mesh generation path...'
+                {meshGenerationPending
+                  ? 'Generating 3D...'
+                  : generationPending
+                    ? 'Checking mesh generation path...'
                   : previewImageAsset
                     ? 'Generate 3D mesh'
                     : 'Generate concept art'}
               </button>
+              {showGeneratedMeshDelete ? (
+                <button className={isDeletingGeneratedMesh ? 'ghost-button compact danger button-with-spinner' : 'ghost-button compact danger'} disabled={isDeletingGeneratedMesh} onClick={() => onDeleteGeneratedMesh?.()} type="button">
+                  {isDeletingGeneratedMesh ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : meshGenerationPending ? 'Cancel generation' : 'Delete 3D'}
+                </button>
+              ) : null}
+              {meshGenerationMessage ? <div className={meshGenerationJob?.errorMessage ? 'inline-note is-warning' : 'inline-note'}>{meshGenerationMessage}</div> : null}
+              {meshViewportError ? <div className="inline-note is-warning">{meshViewportError}</div> : null}
               {generationMessage ? <div className="inline-note is-warning">{generationMessage}</div> : null}
             </div>
           ) : null}

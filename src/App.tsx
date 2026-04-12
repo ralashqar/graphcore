@@ -28,6 +28,8 @@ import { createAssemblyGraph } from './domain/environmentAssembly'
 import { createGraphScaffold } from './domain/graphScaffold'
 import type { PromptPatchResponse } from './domain/prompting'
 import { normalizeNode } from './domain/nodeLibrary'
+import type { MeshGenerationStatusResponse } from './domain/meshGeneration'
+import { isTerminalMeshGenerationJobStatus } from './domain/meshGeneration'
 import type { WorldBuildBatch, WorldBuildPlanItem, WorldBuildPlanResponse, WorldBuildStatusResponse } from './domain/worldBuild'
 import { getResourceGenerationMetadata, isTerminalWorldBuildBatchStatus } from './domain/worldBuild'
 import { AuthDialog } from './features/auth/AuthDialog'
@@ -197,6 +199,40 @@ function mergeWorldBuildStatusIntoSnapshot(snapshot: ProjectSnapshot, status: Wo
   })
 }
 
+function mergeMeshGenerationStatusIntoSnapshot(snapshot: ProjectSnapshot, status: MeshGenerationStatusResponse) {
+  let nextDefinitions = mergeWorldBuildResourcesByKey(
+    snapshot.definitions as Array<ProjectSnapshot['definitions'][number]>,
+    status.definitions as ProjectSnapshot['definitions'],
+  )
+  let nextAssets = mergeWorldBuildResourcesByKey(
+    snapshot.assets as Array<ProjectSnapshot['assets'][number]>,
+    status.assets as ProjectSnapshot['assets'],
+  )
+
+  for (const assetKey of status.deletedAssetKeys) {
+    nextAssets = nextAssets.filter((asset) => asset.key !== assetKey)
+    nextDefinitions = nextDefinitions.map((definition) => clearAssetReferences(definition, assetKey))
+  }
+
+  const incomingJobs = new Map(status.jobs.map((job) => [job.id, job]))
+  const nextJobs = snapshot.meshGenerationJobs.map((job) => incomingJobs.get(job.id) ?? job)
+  const seenJobIds = new Set(snapshot.meshGenerationJobs.map((job) => job.id))
+  for (const job of status.jobs) {
+    if (!seenJobIds.has(job.id)) {
+      nextJobs.unshift(job)
+    }
+  }
+
+  return normalizeSnapshot({
+    ...snapshot,
+    definitions: nextDefinitions,
+    assets: nextAssets,
+    meshGenerationJobs: nextJobs.sort((left, right) => (
+      new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()
+    )),
+  })
+}
+
 function clearAssetReferences<T>(value: T, assetKey: string): T {
   if (Array.isArray(value)) {
     return value.map((entry) => clearAssetReferences(entry, assetKey)) as T
@@ -269,7 +305,7 @@ function clearUnsavedSnapshot(draftId: string) {
 }
 
 type DeleteConfirmationTarget = {
-  resourceType: 'definition' | 'graph' | 'asset'
+  resourceType: 'definition' | 'graph' | 'asset' | 'generated_mesh'
   key: string
   label: string
 }
@@ -317,10 +353,12 @@ export default function App() {
   const { promptText, selectedDefinitionKey, selectedEdgeKey, selectedGraphKey, selectedNodeKey, setPromptText, setSelectedDefinitionKey, setSelectedEdgeKey, setSelectedGraphKey, setSelectedNodeKey } = useEditorStore()
   const sessionRef = useRef<Session | null>(null)
   const worldBuildPollInFlightRef = useRef(false)
+  const meshGenerationPollInFlightRef = useRef(false)
   const announcedWorldBuildBatchIdsRef = useRef<Set<string>>(new Set())
   const deletingDefinitionKey = deletingTarget?.resourceType === 'definition' ? deletingTarget.key : null
   const deletingGraphKey = deletingTarget?.resourceType === 'graph' ? deletingTarget.key : null
   const deletingAssetKey = deletingTarget?.resourceType === 'asset' ? deletingTarget.key : null
+  const deletingGeneratedMeshDefinitionKey = deletingTarget?.resourceType === 'generated_mesh' ? deletingTarget.key : null
 
   useEffect(() => {
     sessionRef.current = session
@@ -599,6 +637,54 @@ export default function App() {
       window.clearInterval(interval)
     }
   }, [loadedState?.source, promptModel, snapshot])
+
+  useEffect(() => {
+    if (!snapshot || loadedState?.source !== 'supabase') return
+
+    const activeJobs = snapshot.meshGenerationJobs.filter((job) => !isTerminalMeshGenerationJobStatus(job.status))
+    if (activeJobs.length === 0) return
+
+    let cancelled = false
+    const currentSnapshot = snapshot
+
+    async function pollActiveMeshJobs() {
+      if (meshGenerationPollInFlightRef.current || cancelled) return
+      meshGenerationPollInFlightRef.current = true
+
+      try {
+        for (const job of activeJobs) {
+          const status = await workspaceService.pollMeshGeneration({
+            jobId: job.id,
+            snapshot: currentSnapshot,
+          })
+
+          if (cancelled) return
+
+          setSnapshot((current) => {
+            if (!current) return current
+            const nextSnapshot = mergeMeshGenerationStatusIntoSnapshot(current, status)
+            setBundle(compileBundle(nextSnapshot))
+            return nextSnapshot
+          })
+        }
+      } catch (pollError) {
+        console.error('[GraphCore] mesh generation polling failed.', pollError)
+      } finally {
+        meshGenerationPollInFlightRef.current = false
+      }
+    }
+
+    const interval = window.setInterval(() => {
+      void pollActiveMeshJobs()
+    }, 3000)
+
+    void pollActiveMeshJobs()
+
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+    }
+  }, [loadedState?.source, snapshot])
 
   const persistedPatchHistory = useMemo<PatchSessionView[]>(() => {
     return (snapshot?.patchSets ?? []).map((patch) => {
@@ -1130,9 +1216,74 @@ export default function App() {
     }))
   }
 
+  async function deleteGeneratedMeshForDefinition(definitionKey: string) {
+    if (!snapshot || loadedState?.source !== 'supabase') return
+
+    const status = await workspaceService.deleteGeneratedMesh({
+      snapshot,
+      definitionKey,
+    })
+
+    setSnapshot((current) => {
+      if (!current) return current
+      const nextSnapshot = mergeMeshGenerationStatusIntoSnapshot(current, status)
+      setBundle(compileBundle(nextSnapshot))
+      return nextSnapshot
+    })
+  }
+
+  async function startMeshGenerationForDefinition(definitionKey: string) {
+    if (!snapshot) return
+    if (!session) {
+      setPromptRuntimeError('Sign in before generating a 3D mesh.')
+      setAuthOpen(true)
+      return
+    }
+    if (loadedState?.source !== 'supabase') {
+      setPromptRuntimeError(loadedState?.reason ?? 'Load a live GraphCore workspace before generating a 3D mesh.')
+      return
+    }
+
+    setPromptRuntimeError(null)
+    try {
+      const status = await workspaceService.startMeshGeneration({
+        snapshot,
+        definitionKey,
+      })
+
+      setSnapshot((current) => {
+        if (!current) return current
+        const nextSnapshot = mergeMeshGenerationStatusIntoSnapshot(current, status)
+        setBundle(compileBundle(nextSnapshot))
+        return nextSnapshot
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Starting 3D mesh generation failed.'
+      console.error('[GraphCore] mesh generation start failed.', error)
+      setPromptRuntimeError(message)
+    }
+  }
+
   async function performDeleteDefinition(itemKey: string) {
     const target = snapshot?.definitions.find((definition) => definition.key === itemKey) ?? null
     const generation = getResourceGenerationMetadata(target)
+    const render3dComponent = target?.components.find((component): component is Extract<DefinitionBase['components'][number], { type: 'render_3d_binding' }> => component.type === 'render_3d_binding') ?? null
+    const meshJob = snapshot?.meshGenerationJobs.find((job) => job.definitionKey === itemKey && !isTerminalMeshGenerationJobStatus(job.status)) ?? null
+    const boundMeshAssetKey = render3dComponent?.config.primaryMeshAssetKey ?? null
+    const boundMeshAsset =
+      typeof boundMeshAssetKey === 'string'
+        ? snapshot?.assets.find((asset) => asset.key === boundMeshAssetKey) ?? null
+        : null
+    const shouldCleanupGeneratedMesh =
+      loadedState?.source === 'supabase'
+      && (
+        Boolean(meshJob)
+        || (boundMeshAsset?.metadata.generatedBy === 'trellis_mesh')
+      )
+
+    if (shouldCleanupGeneratedMesh) {
+      await deleteGeneratedMeshForDefinition(itemKey)
+    }
 
     if (snapshot && loadedState?.source === 'supabase' && generation?.source === 'global_prompt') {
       const result = await workspaceService.deleteWorldBuildPlaceholder({
@@ -1254,6 +1405,16 @@ export default function App() {
     const target = snapshot?.assets.find((asset) => asset.key === assetKey) ?? null
     const generation = getResourceGenerationMetadata(target)
 
+    if (
+      target?.metadata.generatedBy === 'trellis_mesh'
+      && typeof target.metadata.definitionKey === 'string'
+      && snapshot
+      && loadedState?.source === 'supabase'
+    ) {
+      await deleteGeneratedMeshForDefinition(target.metadata.definitionKey)
+      return
+    }
+
     if (snapshot && loadedState?.source === 'supabase' && generation?.source === 'global_prompt') {
       const result = await workspaceService.deleteWorldBuildPlaceholder({
         snapshot,
@@ -1292,6 +1453,15 @@ export default function App() {
     })
   }
 
+  function deleteGeneratedMesh(definitionKey: string) {
+    const definition = snapshot?.definitions.find((entry) => entry.key === definitionKey)
+    setPendingDeleteTarget({
+      resourceType: 'generated_mesh',
+      key: definitionKey,
+      label: definition?.name ?? definitionKey,
+    })
+  }
+
   async function handleConfirmDelete() {
     if (!pendingDeleteTarget) return
     setDeletingTarget(pendingDeleteTarget)
@@ -1301,6 +1471,8 @@ export default function App() {
         await performDeleteGraph(pendingDeleteTarget.key)
       } else if (pendingDeleteTarget.resourceType === 'definition') {
         await performDeleteDefinition(pendingDeleteTarget.key)
+      } else if (pendingDeleteTarget.resourceType === 'generated_mesh') {
+        await deleteGeneratedMeshForDefinition(pendingDeleteTarget.key)
       } else {
         await performDeleteAsset(pendingDeleteTarget.key)
       }
@@ -2019,9 +2191,11 @@ export default function App() {
                 assemblyGraphs={snapshot.assemblyGraphs}
                 environmentBlueprints={snapshot.environmentBlueprints}
                 gameSpec={snapshot.gameSpec}
+                meshGenerationJobs={snapshot.meshGenerationJobs}
                 selectedAsset={selectedAsset}
                 selectedDefinition={selectedDefinition?.kind === 'character' ? selectedDefinition : null}
                 deletingDefinitionKey={deletingDefinitionKey}
+                deletingGeneratedMeshDefinitionKey={deletingGeneratedMeshDefinitionKey}
                 onAddCustomField={addCustomField}
                 onAssignDefinitionIcon={assignAssetToSelectedItem}
                 isGeneratingPrompt={isGeneratingPatch}
@@ -2031,9 +2205,11 @@ export default function App() {
                 onCreateUrlAsset={createUrlAsset}
                 onChangePromptText={setPromptText}
                 onDeleteDefinition={deleteDefinition}
+                onDeleteGeneratedMesh={deleteGeneratedMesh}
                 onDeleteAssemblyGraph={deleteAssemblyGraph}
                 onDeleteEnvironmentBlueprint={deleteEnvironmentBlueprint}
                 onGeneratePrompt={handleGeneratePatch}
+                onStartMeshGeneration={(definitionKey) => void startMeshGenerationForDefinition(definitionKey)}
                 onSelectAsset={setSelectedAssetKey}
                 onSelectDefinition={setSelectedDefinitionKey}
                 onUpsertAssemblyGraph={upsertAssemblyGraph}
@@ -2056,9 +2232,11 @@ export default function App() {
                 assemblyGraphs={snapshot.assemblyGraphs}
                 environmentBlueprints={snapshot.environmentBlueprints}
                 gameSpec={snapshot.gameSpec}
+                meshGenerationJobs={snapshot.meshGenerationJobs}
                 selectedAsset={selectedAsset}
                 selectedDefinition={selectedDefinition?.kind === 'environment' ? selectedDefinition : null}
                 deletingDefinitionKey={deletingDefinitionKey}
+                deletingGeneratedMeshDefinitionKey={deletingGeneratedMeshDefinitionKey}
                 onAddCustomField={addCustomField}
                 onAssignDefinitionIcon={assignAssetToSelectedItem}
                 isGeneratingPrompt={isGeneratingPatch}
@@ -2068,9 +2246,11 @@ export default function App() {
                 onCreateUrlAsset={createUrlAsset}
                 onChangePromptText={setPromptText}
                 onDeleteDefinition={deleteDefinition}
+                onDeleteGeneratedMesh={deleteGeneratedMesh}
                 onDeleteAssemblyGraph={deleteAssemblyGraph}
                 onDeleteEnvironmentBlueprint={deleteEnvironmentBlueprint}
                 onGeneratePrompt={handleGeneratePatch}
+                onStartMeshGeneration={(definitionKey) => void startMeshGenerationForDefinition(definitionKey)}
                 onSelectAsset={setSelectedAssetKey}
                 onSelectDefinition={setSelectedDefinitionKey}
                 onUpsertAssemblyGraph={upsertAssemblyGraph}

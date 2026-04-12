@@ -4,6 +4,7 @@ import {
   resourceGenerationMetadataSchema,
   worldBuildBatchSchema,
 } from './worldBuild'
+import { meshGenerationJobSchema } from './meshGeneration'
 import {
   assemblyEdgeDefinitionSchema,
   assemblyGraphDefinitionSchema,
@@ -700,6 +701,7 @@ export const projectSnapshotSchema = z.object({
   environmentBlueprints: z.array(environmentBlueprintV1Schema).default([]),
   assets: z.array(assetDefinitionSchema),
   worldBuildBatches: z.array(worldBuildBatchSchema).default([]),
+  meshGenerationJobs: z.array(meshGenerationJobSchema).default([]),
   patchSets: z.array(
     z.object({
       id: z.string(),

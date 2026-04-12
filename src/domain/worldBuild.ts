@@ -71,11 +71,11 @@ export const worldBuildStartRequestSchema = z.object({
 })
 
 export const resourceGenerationMetadataSchema = z.object({
-  batchId: z.string(),
+  batchId: z.string().nullable().optional(),
   jobId: z.string(),
   state: resourceGenerationStateSchema,
   placeholder: z.boolean().default(false),
-  source: z.literal('global_prompt').default('global_prompt'),
+  source: z.enum(['global_prompt', 'mesh_generation']).default('global_prompt'),
 })
 
 export const worldBuildJobSchema = z.object({
