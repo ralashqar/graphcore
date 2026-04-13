@@ -10,14 +10,11 @@ import {
   buildCinematicDefinitionCatalog,
   buildPromptMatchedEntityRefs,
   coerceCinematicEntityExtractionRaw,
-  coerceCinematicPlannerRaw,
   cinematicEntityExtractionSystemPrompt,
   cinematicEntityResolutionSystemPrompt,
   cinematicIntentSchema,
   cinematicIntentSystemPrompt,
-  cinematicPlannerSystemPrompt,
   finalizeCinematicEntityRefs,
-  materializeCinematicPlan,
 } from '../_shared/world-build-cinematics.ts'
 
 const plannerItemSchema = z.object({
@@ -108,6 +105,97 @@ function buildPlanItemSummaryForEntity(entityRef: {
   return entityRef.kind === 'environment'
     ? `Create the environment "${entityRef.sourceName}" so it can anchor the ${entityRef.role} cinematic beats.`
     : `Create ${entityRef.kind} "${entityRef.sourceName}" so it can be used in the ${entityRef.role} cinematic action.`
+}
+
+function normalizeEntityToken(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+}
+
+function pruneIncidentalCinematicEntityRefs(entityRefs: Array<{
+  id: string
+  kind: 'character' | 'environment' | 'item'
+  role: string
+  sourceName: string
+  summary: string
+  resolution: 'existing' | 'create'
+  definitionKey?: string | null
+  planItemId?: string | null
+}>) {
+  const hasEnvironment = entityRefs.some((entry) => entry.kind === 'environment')
+  if (!hasEnvironment) return entityRefs
+
+  const incidentalItemNames = new Set([
+    'table',
+    'chair',
+    'stool',
+    'bench',
+    'bar',
+    'counter',
+    'mug',
+    'cup',
+    'glass',
+    'bottle',
+    'plate',
+    'bowl',
+    'door',
+    'window',
+  ])
+
+  return entityRefs.filter((entry) => {
+    if (entry.kind !== 'item' || entry.resolution !== 'create') return true
+    const normalizedName = normalizeEntityToken(entry.sourceName)
+    const normalizedRole = normalizeEntityToken(entry.role)
+    if (incidentalItemNames.has(normalizedName)) return false
+    if (normalizedRole.includes('surface') || normalizedRole.includes('set dressing') || normalizedRole.includes('background')) {
+      return false
+    }
+    return true
+  })
+}
+
+function trimPromptForSummary(prompt: string, maxLength = 160) {
+  const compact = prompt.replace(/\s+/g, ' ').trim()
+  if (compact.length <= maxLength) return compact
+  return `${compact.slice(0, maxLength - 1).trimEnd()}…`
+}
+
+function buildDeferredCinematicGraphName(entityRefs: Array<{
+  kind: 'character' | 'environment' | 'item'
+  sourceName: string
+}>, prompt: string) {
+  const participants = entityRefs.filter((entry) => entry.kind === 'character').map((entry) => entry.sourceName.trim()).filter(Boolean)
+  const environments = entityRefs.filter((entry) => entry.kind === 'environment').map((entry) => entry.sourceName.trim()).filter(Boolean)
+
+  if (participants.length >= 2 && environments[0]) {
+    return `${participants[0]} and ${participants[1]} in ${environments[0]}`
+  }
+  if (participants.length >= 2) {
+    return `${participants[0]} and ${participants[1]} Cinematic`
+  }
+  if (participants[0] && environments[0]) {
+    return `${participants[0]} in ${environments[0]}`
+  }
+  if (participants[0]) {
+    return `${participants[0]} Cinematic`
+  }
+  if (environments[0]) {
+    return `${environments[0]} Cinematic`
+  }
+
+  return trimPromptForSummary(prompt, 72) || 'Prompt Cinematic'
+}
+
+function buildDeferredCinematicGraphSummary(prompt: string, entityRefs: Array<{
+  kind: 'character' | 'environment' | 'item'
+  sourceName: string
+}>) {
+  const compactPrompt = trimPromptForSummary(prompt, 220)
+  const matchedNames = entityRefs.map((entry) => entry.sourceName.trim()).filter(Boolean)
+  if (matchedNames.length === 0) {
+    return compactPrompt || 'Generate a cinematic graph from the resolved prompt.'
+  }
+
+  return `Generate the cinematic script and graph from the resolved prompt using these locked refs: ${matchedNames.join(', ')}. Prompt: ${compactPrompt}`
 }
 
 function isTruthyEnv(value: string | undefined | null) {
@@ -237,31 +325,22 @@ Deno.serve(async (request) => {
         ),
         catalog,
       )
-      const cinematicDraftRaw = await runStructuredWorldBuildModel({
-        model: payload.model,
-        passLabel: 'Cinematic planner',
-        systemText: cinematicPlannerSystemPrompt(),
-        promptContext: {
-          prompt: payload.prompt,
-          project: payload.snapshot.project,
-          draft: payload.snapshot.draft,
-          gameSpec: payload.snapshot.gameSpec ?? null,
-          lockedEntityRefs: resolvedEntityRefs,
-          existingEntityRefs: resolvedEntityRefs.filter((entry) => entry.resolution === 'existing'),
-          createEntityRefs: resolvedEntityRefs.filter((entry) => entry.resolution === 'create'),
-        },
-        schema: z.record(z.string(), z.unknown()),
-        maxOutputTokens: 10000,
-      })
-      const cinematicDraft = coerceCinematicPlannerRaw(cinematicDraftRaw, {
-        lockedEntityRefs: resolvedEntityRefs,
-        allowEntityCreation: false,
-      })
-      const cinematicPlan = materializeCinematicPlan({
-        ...cinematicDraft,
-        entityRefs: resolvedEntityRefs,
-      })
-      const missingPlanItems = resolvedEntityRefs
+      const filteredEntityRefs = pruneIncidentalCinematicEntityRefs(resolvedEntityRefs)
+      const graphName = buildDeferredCinematicGraphName(filteredEntityRefs, payload.prompt)
+      const graphSummary = buildDeferredCinematicGraphSummary(payload.prompt, filteredEntityRefs)
+      const cinematicPlan = {
+        graphName,
+        graphSummary,
+        entityRefs: filteredEntityRefs,
+        scriptDoc: null,
+        relationshipRefs: [],
+        compositeRefPlans: [],
+        storyboardPlan: null,
+        shots: [],
+        graphSettings: {},
+        autoRun: false,
+      } as const
+      const missingPlanItems = filteredEntityRefs
         .filter((entityRef) => entityRef.resolution === 'create' && entityRef.planItemId)
         .map((entityRef) => ({
           id: entityRef.planItemId ?? entityRef.id,
@@ -278,7 +357,7 @@ Deno.serve(async (request) => {
 
       const responseDraft = {
         plannerMode: 'cinematic_build' as const,
-        requestSummary: cinematicDraft.requestSummary,
+        requestSummary: extractedEntities.requestSummary || 'Cinematic build plan',
         planItems: [
           ...missingPlanItems,
           {
@@ -295,12 +374,11 @@ Deno.serve(async (request) => {
         diagnostics: [
           ...extractedEntities.diagnostics,
           ...resolvedEntities.diagnostics,
-          ...cinematicDraft.diagnostics,
+          ...(filteredEntityRefs.length !== resolvedEntityRefs.length ? ['Filtered incidental cinematic set-dressing refs from generation plan.'] : []),
         ],
         assistantNotes: [
           extractedEntities.assistantNotes,
           resolvedEntities.assistantNotes,
-          cinematicDraft.assistantNotes,
         ].filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0).join('\n\n') || undefined,
       }
 

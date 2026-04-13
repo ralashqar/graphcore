@@ -424,6 +424,9 @@ export default function App() {
   const cinematicRunPollInFlightRef = useRef(false)
   const meshGenerationPollFailureCountsRef = useRef(new Map<string, number>())
   const announcedWorldBuildBatchIdsRef = useRef<Set<string>>(new Set())
+  const reconciledWorldBuildBatchIdsRef = useRef<Set<string>>(new Set())
+  const seededWorldBuildBatchHistoryRef = useRef(false)
+  const seededWorldBuildBatchDraftIdRef = useRef<string | null>(null)
   const deletingDefinitionKey = deletingTarget?.resourceType === 'definition' ? deletingTarget.key : null
   const deletingGraphKey = deletingTarget?.resourceType === 'graph' ? deletingTarget.key : null
   const deletingAssetKey = deletingTarget?.resourceType === 'asset' ? deletingTarget.key : null
@@ -435,7 +438,7 @@ export default function App() {
 
   function hydrateLoadedProject(
     state: { snapshot: ProjectSnapshot; source: 'supabase' | 'demo'; reason?: string },
-    options?: { preserveUnsavedIfSameDraft?: boolean },
+    options?: { preserveUnsavedIfSameDraft?: boolean; ignoreUnsavedCache?: boolean },
   ) {
     const normalizedIncomingSnapshot = normalizeSnapshot(state.snapshot)
     if (
@@ -450,7 +453,10 @@ export default function App() {
       return
     }
 
-    const cachedUnsavedSnapshot = state.source === 'supabase' ? readUnsavedSnapshot(normalizedIncomingSnapshot.draft.id) : null
+    const cachedUnsavedSnapshot =
+      state.source === 'supabase' && !options?.ignoreUnsavedCache
+        ? readUnsavedSnapshot(normalizedIncomingSnapshot.draft.id)
+        : null
     const snapshotToHydrate =
       cachedUnsavedSnapshot
       && cachedUnsavedSnapshot.project.id === normalizedIncomingSnapshot.project.id
@@ -480,12 +486,15 @@ export default function App() {
     })
   }
 
-  async function refreshWorkspaceState(loader?: () => Promise<{ snapshot: ProjectSnapshot; source: 'supabase' | 'demo'; reason?: string }>) {
+  async function refreshWorkspaceState(
+    loader?: () => Promise<{ snapshot: ProjectSnapshot; source: 'supabase' | 'demo'; reason?: string }>,
+    options?: { ignoreUnsavedCache?: boolean },
+  ) {
     const state = await (loader ? loader() : workspaceService.load())
     const nextGames = state.source === 'supabase' ? await workspaceService.listGames() : []
     setGames(nextGames)
     setWorkspaceBootstrapError(state.source === 'supabase' ? null : state.reason ?? null)
-    hydrateLoadedProject(state)
+    hydrateLoadedProject(state, { ignoreUnsavedCache: options?.ignoreUnsavedCache })
     return state
   }
 
@@ -654,6 +663,38 @@ export default function App() {
   useEffect(() => {
     if (!snapshot) return
 
+    if (seededWorldBuildBatchDraftIdRef.current !== snapshot.draft.id) {
+      announcedWorldBuildBatchIdsRef.current = new Set()
+      reconciledWorldBuildBatchIdsRef.current = new Set()
+      seededWorldBuildBatchHistoryRef.current = false
+      seededWorldBuildBatchDraftIdRef.current = snapshot.draft.id
+    }
+
+    const terminalBatchIds = snapshot.worldBuildBatches
+      .filter((batch) => isTerminalWorldBuildBatchStatus(batch.status))
+      .map((batch) => batch.id)
+
+    if (!seededWorldBuildBatchHistoryRef.current) {
+      announcedWorldBuildBatchIdsRef.current = new Set(terminalBatchIds)
+      if (loadedState?.source === 'supabase') {
+        reconciledWorldBuildBatchIdsRef.current = new Set(terminalBatchIds)
+      }
+      seededWorldBuildBatchHistoryRef.current = true
+      return
+    }
+
+    if (loadedState?.source === 'supabase') {
+      for (const batchId of terminalBatchIds) {
+        if (announcedWorldBuildBatchIdsRef.current.has(batchId)) {
+          reconciledWorldBuildBatchIdsRef.current.add(batchId)
+        }
+      }
+    }
+  }, [loadedState?.source, snapshot?.draft.id, snapshot?.worldBuildBatches])
+
+  useEffect(() => {
+    if (!snapshot) return
+
     for (const batch of snapshot.worldBuildBatches) {
       if (isTerminalWorldBuildBatchStatus(batch.status) && !announcedWorldBuildBatchIdsRef.current.has(batch.id)) {
         announcedWorldBuildBatchIdsRef.current.add(batch.id)
@@ -676,9 +717,15 @@ export default function App() {
           })
         }
         setCompletedWorldBuildBatch(batch)
+        if (!reconciledWorldBuildBatchIdsRef.current.has(batch.id) && loadedState?.source === 'supabase') {
+          reconciledWorldBuildBatchIdsRef.current.add(batch.id)
+          void refreshWorkspaceState(undefined, { ignoreUnsavedCache: true }).catch((refreshError) => {
+            console.error('[GraphCore] world build reconciliation refresh failed.', refreshError)
+          })
+        }
       }
     }
-  }, [snapshot])
+  }, [loadedState?.source, snapshot])
 
   useEffect(() => {
     if (!snapshot || loadedState?.source !== 'supabase') return
@@ -738,6 +785,7 @@ export default function App() {
 
     const activeJobs = snapshot.meshGenerationJobs.filter((job) => !isTerminalMeshGenerationJobStatus(job.status))
     if (activeJobs.length === 0) return
+    const definitionKeys = new Set(snapshot.definitions.map((definition) => definition.key))
 
     let cancelled = false
     const currentSnapshot = snapshot
@@ -748,6 +796,22 @@ export default function App() {
 
       try {
         for (const job of activeJobs) {
+          if (!definitionKeys.has(job.definitionKey)) {
+            meshGenerationPollFailureCountsRef.current.delete(job.id)
+            const failureStatus = buildLocalMeshGenerationFailureStatus(
+              job,
+              `Mesh generation job orphaned: definition ${job.definitionKey} no longer exists in this draft.`,
+            )
+
+            setSnapshot((current) => {
+              if (!current) return current
+              const nextSnapshot = mergeMeshGenerationStatusIntoSnapshot(current, failureStatus)
+              setBundle(compileBundle(nextSnapshot))
+              return nextSnapshot
+            })
+            continue
+          }
+
           try {
             const status = await workspaceService.pollMeshGeneration({
               jobId: job.id,
@@ -868,7 +932,7 @@ export default function App() {
   useEffect(() => {
     if (activeTab !== 'cinematics') return
     if (selectedCinematicGraph || cinematicGraphs.length === 0) return
-    setSelectedGraphKey(cinematicGraphs[0].key)
+    setSelectedGraphKey(cinematicGraphs[cinematicGraphs.length - 1].key)
     setSelectedNodeKey(null)
     setSelectedEdgeKey(null)
   }, [activeTab, cinematicGraphs, selectedCinematicGraph, setSelectedEdgeKey, setSelectedGraphKey, setSelectedNodeKey])

@@ -43,6 +43,16 @@ export function isTextInput(target: EventTarget | null) {
   return target instanceof HTMLElement && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)
 }
 
+export function isTextEntryTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false
+  if (target instanceof HTMLTextAreaElement) return true
+  if (target instanceof HTMLInputElement) {
+    const type = (target.type || 'text').toLowerCase()
+    return !['button', 'checkbox', 'color', 'file', 'hidden', 'image', 'radio', 'range', 'reset', 'submit'].includes(type)
+  }
+  return target.isContentEditable
+}
+
 export function templateKeyFromType(type: NodeDefinition['type']) {
   const match = graphNodeLibrary.flatMap((group) => group.templates).find((template) => template.baseNodeType === type)
   return match?.key ?? 'story_text'

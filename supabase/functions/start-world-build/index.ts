@@ -1,5 +1,6 @@
 import '@supabase/functions-js/edge-runtime.d.ts'
 
+import { buildCinematicSequenceFromScriptDoc, cinematicScriptDocSchema } from '../../../src/domain/cinematics.ts'
 import {
   WORLD_BUILD_ENVIRONMENT_VIEWS,
   getResourceGenerationMetadata,
@@ -48,6 +49,8 @@ type WorldBuildStartSnapshot = {
   assets: Array<{ key: string }>
 }
 
+const SHOULD_GENERATE_CINEMATIC_REFERENCE_ASSETS = false
+
 function createGenerationMetadata(batchId: string, jobId: string) {
   return {
     batchId,
@@ -56,6 +59,15 @@ function createGenerationMetadata(batchId: string, jobId: string) {
     placeholder: true,
     source: 'global_prompt',
   }
+}
+
+async function updateBatch(
+  client: Awaited<ReturnType<typeof requireUserClient>>['client'],
+  batchId: string,
+  changes: Record<string, unknown>,
+) {
+  const response = await client.from('world_build_batches').update(changes).eq('id', batchId)
+  if (response.error) throw new Error(response.error.message)
 }
 
 function updateComponentConfig(
@@ -502,71 +514,71 @@ Deno.serve(async (request) => {
       const dependencyJobIds = item.dependsOn
         .map((planItemId) => planJobIds.get(planItemId))
         .filter((value): value is string => Boolean(value))
+      const graphDependencyJobIds = [...dependencyJobIds]
 
       if (normalizedCinematicPlan) {
-        for (const composite of normalizedCinematicPlan.compositeRefPlans) {
-          const assetKey = buildAssetKey(composite.title, 'composite', assetKeyState)
-          const assetJobId = crypto.randomUUID()
-          cinematicCompositeAssetKeys.set(composite.id, assetKey)
-          assetJobIds.set(assetKey, assetJobId)
-          jobsToInsert.push({
-            id: assetJobId,
-            batch_id: batchId,
-            plan_item_id: item.id,
-            kind: 'cinematic_composite_image',
-            status: 'queued',
-            depends_on_job_ids: dependencyJobIds,
-            target_keys: { compositeRefId: composite.id, assetKey },
-            prompt: payload.prompt,
-            options: { compositeRefId: composite.id },
-            result_context: null,
-            error_message: null,
-            order_index: nextOrder(),
-          })
-          dependencyJobIds.push(assetJobId)
-        }
-
-        if (normalizedCinematicPlan.storyboardPlan && normalizedCinematicPlan.storyboardPlan.mode !== 'none') {
-          const sequenceAssetKey = buildAssetKey(item.name, 'storyboard_sequence', assetKeyState)
-          const sequenceJobId = crypto.randomUUID()
-          cinematicStoryboardAssetKeys.set('storyboard_sequence', sequenceAssetKey)
-          assetJobIds.set(sequenceAssetKey, sequenceJobId)
-          jobsToInsert.push({
-            id: sequenceJobId,
-            batch_id: batchId,
-            plan_item_id: item.id,
-            kind: 'cinematic_storyboard_image',
-            status: 'queued',
-            depends_on_job_ids: dependencyJobIds,
-            target_keys: { storyboardAssetId: 'storyboard_sequence', assetKey: sequenceAssetKey },
-            prompt: payload.prompt,
-            options: { storyboardAssetId: 'storyboard_sequence' },
-            result_context: null,
-            error_message: null,
-            order_index: nextOrder(),
-          })
-          dependencyJobIds.push(sequenceJobId)
-
-          for (const panel of normalizedCinematicPlan.storyboardPlan.panels) {
-            const assetKey = buildAssetKey(panel.title || panel.id, 'storyboard_panel', assetKeyState)
-            const panelJobId = crypto.randomUUID()
-            cinematicStoryboardAssetKeys.set(panel.id, assetKey)
-            assetJobIds.set(assetKey, panelJobId)
+        if (SHOULD_GENERATE_CINEMATIC_REFERENCE_ASSETS) {
+          for (const composite of normalizedCinematicPlan.compositeRefPlans) {
+            const assetKey = buildAssetKey(composite.title, 'composite', assetKeyState)
+            const assetJobId = crypto.randomUUID()
+            cinematicCompositeAssetKeys.set(composite.id, assetKey)
+            assetJobIds.set(assetKey, assetJobId)
             jobsToInsert.push({
-              id: panelJobId,
+              id: assetJobId,
+              batch_id: batchId,
+              plan_item_id: item.id,
+              kind: 'cinematic_composite_image',
+              status: 'queued',
+              depends_on_job_ids: dependencyJobIds,
+              target_keys: { compositeRefId: composite.id, assetKey },
+              prompt: payload.prompt,
+              options: { compositeRefId: composite.id },
+              result_context: null,
+              error_message: null,
+              order_index: nextOrder(),
+            })
+          }
+
+          if (normalizedCinematicPlan.storyboardPlan && normalizedCinematicPlan.storyboardPlan.mode !== 'none') {
+            const sequenceAssetKey = buildAssetKey(item.name, 'storyboard_sequence', assetKeyState)
+            const sequenceJobId = crypto.randomUUID()
+            cinematicStoryboardAssetKeys.set('storyboard_sequence', sequenceAssetKey)
+            assetJobIds.set(sequenceAssetKey, sequenceJobId)
+            jobsToInsert.push({
+              id: sequenceJobId,
               batch_id: batchId,
               plan_item_id: item.id,
               kind: 'cinematic_storyboard_image',
               status: 'queued',
               depends_on_job_ids: dependencyJobIds,
-              target_keys: { storyboardAssetId: panel.id, assetKey, shotId: panel.shotId ?? '' },
+              target_keys: { storyboardAssetId: 'storyboard_sequence', assetKey: sequenceAssetKey },
               prompt: payload.prompt,
-              options: { storyboardAssetId: panel.id, shotId: panel.shotId ?? '' },
+              options: { storyboardAssetId: 'storyboard_sequence' },
               result_context: null,
               error_message: null,
               order_index: nextOrder(),
             })
-            dependencyJobIds.push(panelJobId)
+
+            for (const panel of normalizedCinematicPlan.storyboardPlan.panels) {
+              const assetKey = buildAssetKey(panel.title || panel.id, 'storyboard_panel', assetKeyState)
+              const panelJobId = crypto.randomUUID()
+              cinematicStoryboardAssetKeys.set(panel.id, assetKey)
+              assetJobIds.set(assetKey, panelJobId)
+              jobsToInsert.push({
+                id: panelJobId,
+                batch_id: batchId,
+                plan_item_id: item.id,
+                kind: 'cinematic_storyboard_image',
+                status: 'queued',
+                depends_on_job_ids: dependencyJobIds,
+                target_keys: { storyboardAssetId: panel.id, assetKey, shotId: panel.shotId ?? '' },
+                prompt: payload.prompt,
+                options: { storyboardAssetId: panel.id, shotId: panel.shotId ?? '' },
+                result_context: null,
+                error_message: null,
+                order_index: nextOrder(),
+              })
+            }
           }
         }
       }
@@ -579,7 +591,7 @@ Deno.serve(async (request) => {
         plan_item_id: item.id,
         kind: 'cinematic_graph',
         status: 'queued',
-        depends_on_job_ids: dependencyJobIds,
+        depends_on_job_ids: graphDependencyJobIds,
         target_keys: { graphKey },
         prompt: payload.prompt,
         options: item.generationOptions,
@@ -607,6 +619,48 @@ Deno.serve(async (request) => {
     const createdAssets: Awaited<ReturnType<typeof insertPlaceholderAsset>>[] = []
     const createdDefinitions: Awaited<ReturnType<typeof insertPlaceholderDefinition>>[] = []
     const createdGraphs: Awaited<ReturnType<typeof insertPlaceholderGraph>>[] = []
+    const persistedCinematicPlan = normalizedCinematicPlan
+      ? {
+          ...normalizedCinematicPlan,
+          scriptDoc: normalizedCinematicPlan.scriptDoc
+            ? cinematicScriptDocSchema.parse({
+                ...normalizedCinematicPlan.scriptDoc,
+                compositeRefs: normalizedCinematicPlan.scriptDoc.compositeRefs.map((composite) => ({
+                  ...composite,
+                  outputAssetKey: cinematicCompositeAssetKeys.get(composite.id) ?? composite.outputAssetKey ?? null,
+                })),
+                storyboard: normalizedCinematicPlan.scriptDoc.storyboard
+                  ? {
+                      ...normalizedCinematicPlan.scriptDoc.storyboard,
+                      sequenceAssetKey: cinematicStoryboardAssetKeys.get('storyboard_sequence')
+                        ?? normalizedCinematicPlan.scriptDoc.storyboard.sequenceAssetKey
+                        ?? null,
+                      panels: normalizedCinematicPlan.scriptDoc.storyboard.panels.map((panel) => ({
+                        ...panel,
+                        assetKey: cinematicStoryboardAssetKeys.get(panel.id) ?? panel.assetKey ?? null,
+                      })),
+                    }
+                  : null,
+              })
+            : null,
+          compositeRefPlans: normalizedCinematicPlan.compositeRefPlans.map((composite) => ({
+            ...composite,
+            outputAssetKey: cinematicCompositeAssetKeys.get(composite.id) ?? composite.outputAssetKey ?? null,
+          })),
+          storyboardPlan: normalizedCinematicPlan.storyboardPlan
+            ? {
+                ...normalizedCinematicPlan.storyboardPlan,
+                sequenceAssetKey: cinematicStoryboardAssetKeys.get('storyboard_sequence')
+                  ?? normalizedCinematicPlan.storyboardPlan.sequenceAssetKey
+                  ?? null,
+                panels: normalizedCinematicPlan.storyboardPlan.panels.map((panel) => ({
+                  ...panel,
+                  assetKey: cinematicStoryboardAssetKeys.get(panel.id) ?? panel.assetKey ?? null,
+                })),
+              }
+            : null,
+        }
+      : null
 
     for (const item of enabledItems) {
       if (item.kind === 'character' || item.kind === 'item' || item.kind === 'environment') {
@@ -719,7 +773,7 @@ Deno.serve(async (request) => {
 
         const storyboardPlan = normalizedCinematicPlan?.storyboardPlan
         const compositePlans = normalizedCinematicPlan?.compositeRefPlans ?? []
-        const placeholderAssets: PlaceholderAsset[] = [
+        const placeholderAssets: PlaceholderAsset[] = SHOULD_GENERATE_CINEMATIC_REFERENCE_ASSETS ? [
           ...compositePlans.map((composite) => {
             const assetKey = cinematicCompositeAssetKeys.get(composite.id)
             if (!assetKey) return null
@@ -764,7 +818,7 @@ Deno.serve(async (request) => {
                 }),
               ]
             : []),
-        ].filter((asset): asset is PlaceholderAsset => asset !== null)
+        ].filter((asset): asset is PlaceholderAsset => asset !== null) : []
 
         if (placeholderAssets.length > 0) {
           const insertedAssets = await Promise.all(
@@ -779,33 +833,37 @@ Deno.serve(async (request) => {
           graphType: 'cinematic_flow',
           summary: item.summary,
         })
+        const scriptDoc = persistedCinematicPlan?.scriptDoc
+          ? cinematicScriptDocSchema.parse({
+              ...persistedCinematicPlan.scriptDoc,
+              compositeRefs: persistedCinematicPlan.scriptDoc.compositeRefs,
+              storyboard: persistedCinematicPlan.scriptDoc.storyboard,
+            })
+          : null
         graph.metadata = {
           generation: createGenerationMetadata(batchId, graphJobId),
-          cinematics: normalizedCinematicPlan?.graphSettings ?? {},
-          cinematicSequence: normalizedCinematicPlan ? {
-            references: [],
-            compositeRefs: normalizedCinematicPlan.compositeRefPlans.map((composite) => ({
-              ...composite,
-              outputAssetKey: cinematicCompositeAssetKeys.get(composite.id) ?? composite.outputAssetKey ?? null,
-            })),
-            relationships: normalizedCinematicPlan.relationshipRefs,
-            storyboard: normalizedCinematicPlan.storyboardPlan
-              ? {
-                  ...normalizedCinematicPlan.storyboardPlan,
-                  sequenceAssetKey: cinematicStoryboardAssetKeys.get('storyboard_sequence')
-                    ?? normalizedCinematicPlan.storyboardPlan.sequenceAssetKey
-                    ?? null,
-                  panels: normalizedCinematicPlan.storyboardPlan.panels.map((panel) => ({
-                    ...panel,
-                    assetKey: cinematicStoryboardAssetKeys.get(panel.id) ?? panel.assetKey ?? null,
-                  })),
-                }
-              : null,
-            shots: normalizedCinematicPlan.shots,
-          } : undefined,
+          cinematics: persistedCinematicPlan?.graphSettings ?? {},
+          cinematicScript: scriptDoc ?? undefined,
+          cinematicSequence: persistedCinematicPlan
+            ? (scriptDoc
+              ? buildCinematicSequenceFromScriptDoc(scriptDoc)
+              : {
+                  references: [],
+                  compositeRefs: persistedCinematicPlan.compositeRefPlans,
+                  relationships: persistedCinematicPlan.relationshipRefs,
+                  storyboard: persistedCinematicPlan.storyboardPlan ?? null,
+                  shots: persistedCinematicPlan.shots,
+                })
+            : undefined,
         }
         createdGraphs.push(await insertPlaceholderGraph(client, snapshot.draft.id, user.id, graph))
       }
+    }
+
+    if (persistedCinematicPlan) {
+      await updateBatch(client, batchId, {
+        cinematic_plan: persistedCinematicPlan,
+      })
     }
 
     const batch = worldBuildBatchSchema.parse({
@@ -818,7 +876,7 @@ Deno.serve(async (request) => {
       status: batchInsert.data.status,
       diagnostics: batchInsert.data.diagnostics ?? [],
       planItems: batchInsert.data.plan_json ?? [],
-      cinematicPlan: batchInsert.data.cinematic_plan ?? null,
+      cinematicPlan: persistedCinematicPlan ?? batchInsert.data.cinematic_plan ?? null,
       createdAt: batchInsert.data.created_at,
       updatedAt: batchInsert.data.updated_at,
       jobs: jobsToInsert.map((job) => ({

@@ -195,7 +195,30 @@ Deno.serve(async (request) => {
     }
 
     const definition = await loadCharacterDefinition(client, job.draftId, job.definitionKey)
-    if (!definition) throw new HttpError(404, `Definition ${job.definitionKey} was not found.`)
+    if (!definition) {
+      const deletedAssetKeys: string[] = []
+      const existingAsset = await loadProjectAsset(client, job.projectId, job.targetMeshAssetKey)
+      if (existingAsset) {
+        if (existingAsset.storagePath) {
+          await admin.storage.from('project-assets').remove([existingAsset.storagePath]).catch(() => undefined)
+        }
+        await deleteProjectAssetRow(client, job.projectId, job.targetMeshAssetKey)
+        deletedAssetKeys.push(job.targetMeshAssetKey)
+      }
+
+      await updateMeshJob(client, job.id, {
+        status: 'failed',
+        provider_status: 'FAILED',
+        error_message: `Definition ${job.definitionKey} no longer exists in this draft.`,
+      })
+      const nextJob = await loadMeshJobById(client, job.id)
+      return json(meshGenerationStatusResponseSchema.parse({
+        jobs: nextJob ? [nextJob] : [],
+        definitions: [],
+        assets: [],
+        deletedAssetKeys,
+      }))
+    }
     const renderBinding = getCharacterRenderBinding(definition)
 
     if (!job.providerRequestId) {

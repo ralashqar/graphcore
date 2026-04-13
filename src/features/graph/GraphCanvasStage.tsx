@@ -7,7 +7,7 @@ import {
   type Node,
   type ReactFlowInstance,
 } from '@xyflow/react'
-import type { RefObject } from 'react'
+import { useEffect, type RefObject } from 'react'
 
 import type { GraphDefinition } from '../../domain/graphcore'
 import { graphNodeLibrary } from '../../domain/nodeLibrary'
@@ -72,6 +72,12 @@ export function GraphCanvasStage({
   setContextMenuSearch,
   setFlowInstance,
 }: GraphCanvasStageProps) {
+  useEffect(() => {
+    return () => {
+      setFlowInstance(null)
+    }
+  }, [setFlowInstance])
+
   return (
     <div className="canvas-stage graph-canvas" ref={canvasRef}>
       {isPending ? (

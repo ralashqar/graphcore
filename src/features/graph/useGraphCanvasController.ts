@@ -19,7 +19,7 @@ import {
   summarizeEffects,
 } from '../../domain/nodeLibrary'
 import type { GraphContextMenu, GraphNodeData } from './types'
-import { getPlacementPosition, isTextInput, uniqueEdgeKey } from './utils'
+import { getPlacementPosition, isTextEntryTarget, isTextInput, uniqueEdgeKey } from './utils'
 
 type GraphCanvasControllerOptions = {
   buildNodeData: (node: NodeDefinition) => Omit<GraphNodeData, 'node'>
@@ -61,6 +61,7 @@ export function useGraphCanvasController({
   const [contextMenuSearch, setContextMenuSearch] = useState('')
   const canvasRef = useRef<HTMLDivElement | null>(null)
   const contextMenuSearchRef = useRef<HTMLInputElement | null>(null)
+  const lastAutoFitSignatureRef = useRef<string | null>(null)
 
   const nodes = useMemo<Node[]>(() => {
     return (currentGraph?.nodes ?? []).map((node) => ({
@@ -98,6 +99,26 @@ export function useGraphCanvasController({
   }, [edges])
 
   useEffect(() => {
+    lastAutoFitSignatureRef.current = null
+  }, [flowInstance])
+
+  useEffect(() => {
+    if (!flowInstance || !currentGraph || liveNodes.length === 0) return
+    const signature = `${currentGraph.key}:${liveNodes.length}:${liveEdges.length}`
+    if (lastAutoFitSignatureRef.current === signature) return
+    lastAutoFitSignatureRef.current = signature
+    const visibleNodeIds = liveNodes.map((node) => node.id)
+    const timeout = window.setTimeout(() => {
+      void flowInstance.fitView({
+        duration: 240,
+        padding: 0.16,
+        nodes: visibleNodeIds.map((id) => ({ id })),
+      })
+    }, 0)
+    return () => window.clearTimeout(timeout)
+  }, [currentGraph, flowInstance, liveEdges.length, liveNodes.length])
+
+  useEffect(() => {
     if (!contextMenu || contextMenu.kind !== 'pane') return
     setContextMenuSearch('')
     const timeout = window.setTimeout(() => contextMenuSearchRef.current?.focus(), 0)
@@ -112,7 +133,7 @@ export function useGraphCanvasController({
         event.preventDefault()
         openPaletteAtCanvasCenter()
       }
-      if (event.key.toLowerCase() === 'f' && !isTextInput(event.target)) {
+      if (event.key.toLowerCase() === 'f' && !isTextEntryTarget(event.target)) {
         event.preventDefault()
         refocusViewport()
       }
@@ -215,14 +236,14 @@ export function useGraphCanvasController({
 
   function refocusViewport() {
     if (!flowInstance || !currentGraph) return
-    if (currentNode) {
-      void flowInstance.setCenter(currentNode.position.x + 120, currentNode.position.y + 48, {
-        zoom: 1.1,
+    const visibleNodeIds = liveNodes.map((node) => node.id)
+    window.requestAnimationFrame(() => {
+      void flowInstance.fitView({
         duration: 240,
+        padding: 0.16,
+        nodes: visibleNodeIds.map((id) => ({ id })),
       })
-      return
-    }
-    void flowInstance.fitView({ duration: 240, padding: 0.24 })
+    })
   }
 
   function applyTemplateChange(nodeKey: string, templateKey: string) {
@@ -273,6 +294,7 @@ export function useGraphCanvasController({
     liveEdges,
     liveNodes,
     placeTemplate,
+    refocusViewport,
     setContextMenu,
     setContextMenuSearch,
     setFlowInstance,

@@ -2,8 +2,10 @@ import type { Connection } from '@xyflow/react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { resolveAssetPreviewUrl, resolveAssetSourceUrl } from '../../domain/assets'
+import { compileCinematicGraphFromScriptDoc } from '../../domain/cinematicScriptCompiler'
 import {
   getAssetRefNodeConfig,
+  getCinematicScript,
   getCinematicSettings,
   getCinematicShotNodeConfig,
   getCompositeRefNodeConfig,
@@ -13,6 +15,7 @@ import {
   updateNodeMetadataWithShot,
   updateNodeMetadataWithStoryboardRef,
   type CinematicRun,
+  type CinematicScriptDoc,
   type CinematicSettings,
 } from '../../domain/cinematics'
 import type {
@@ -117,7 +120,10 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
   } = props
 
   const cinematicGraphs = useMemo(
-    () => snapshotGraphs.filter((graph) => graph.graphType === 'cinematic_flow'),
+    () => snapshotGraphs
+      .filter((graph) => graph.graphType === 'cinematic_flow')
+      .slice()
+      .reverse(),
     [snapshotGraphs],
   )
   const currentGraph = selectedGraph?.graphType === 'cinematic_flow'
@@ -134,6 +140,18 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
     }
     return null
   }, [currentGraphGeneration?.jobId, worldBuildBatches])
+  const currentGraphGenerationPhase = useMemo(() => {
+    const jobId = currentGraphGeneration?.jobId
+    if (!jobId) return null
+    for (const batch of worldBuildBatches) {
+      const job = batch.jobs.find((entry) => entry.id === jobId)
+      const phase = job?.resultContext && typeof job.resultContext === 'object'
+        ? (job.resultContext as { phase?: unknown }).phase
+        : null
+      if (typeof phase === 'string' && phase.trim().length > 0) return phase
+    }
+    return null
+  }, [currentGraphGeneration?.jobId, worldBuildBatches])
   const currentNode = currentGraph?.nodes.find((node) => node.key === selectedNode?.key) ?? null
   const currentEdge = currentGraph?.edges.find((edge) => edge.key === selectedEdge?.key) ?? null
   const currentGraphRuns = useMemo(
@@ -142,6 +160,34 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
       .sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()),
     [cinematicRuns, currentGraph],
   )
+  const currentAuthoringDiagnostics = useMemo(() => {
+    const metadata = currentGraph?.metadata
+    if (!metadata || typeof metadata !== 'object') return [] as string[]
+    const candidate = (metadata as { cinematicAuthoring?: { diagnostics?: unknown } }).cinematicAuthoring?.diagnostics
+    return Array.isArray(candidate)
+      ? candidate.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+      : []
+  }, [currentGraph])
+  const currentAuthoringSummary = useMemo(() => {
+    const metadata = currentGraph?.metadata
+    if (!metadata || typeof metadata !== 'object') return null
+    const authoring = (metadata as {
+      cinematicAuthoring?: {
+        usedRepairPass?: unknown
+        usedFallbackPrimaryShot?: unknown
+        usedTemporalExpansionFallback?: unknown
+        usedActionBindingRepair?: unknown
+      }
+    }).cinematicAuthoring
+    if (!authoring) return null
+    if (authoring.usedFallbackPrimaryShot || authoring.usedTemporalExpansionFallback) {
+      return 'Script compiled with fallback shaping.'
+    }
+    if (authoring.usedRepairPass || authoring.usedActionBindingRepair) {
+      return 'Script was repaired before graph compile.'
+    }
+    return 'Script authored cleanly before graph compile.'
+  }, [currentGraph])
 
   const [railMode, setRailMode] = useState<RailMode | 'runs'>('graphs')
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
@@ -186,6 +232,7 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
     liveEdges,
     liveNodes,
     placeTemplate,
+    refocusViewport,
     setContextMenu,
     setContextMenuSearch,
     setFlowInstance,
@@ -231,6 +278,54 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
 
   const projectSettings = getCinematicSettings(gameSpec ?? {}, {})
   const graphSettings = getCinematicSettings(gameSpec ?? {}, currentGraph?.metadata ?? {})
+  const currentScript = useMemo(
+    () => currentGraph ? getCinematicScript(currentGraph.metadata) : null,
+    [currentGraph],
+  )
+  const [contentMode, setContentMode] = useState<'script' | 'graph' | 'runs'>('graph')
+
+  useEffect(() => {
+    if (!currentGraph) return
+    if (railMode === 'runs') {
+      setContentMode('runs')
+      return
+    }
+  }, [currentGraph, railMode])
+
+  function rebuildCurrentGraphFromScript() {
+    if (!currentGraph || !currentScript) return
+    const rebuiltGraph = compileCinematicGraphFromScriptDoc({
+      graphKey: currentGraph.key,
+      graphName: currentGraph.name,
+      graphSummary: currentGraph.summary,
+      graphSettings,
+      scriptDoc: currentScript,
+      existingMetadata: currentGraph.metadata,
+    })
+    onUpdateGraph(currentGraph.key, {
+      name: rebuiltGraph.name,
+      summary: rebuiltGraph.summary,
+      entryNodeKey: rebuiltGraph.entryNodeKey,
+      metadata: rebuiltGraph.metadata,
+      nodes: rebuiltGraph.nodes,
+      edges: rebuiltGraph.edges,
+    })
+    onClearSelection()
+    setContentMode('graph')
+  }
+
+  function renderGenerationPhaseLabel(phase: string | null) {
+    switch (phase) {
+      case 'writing_script':
+        return 'Writing script...'
+      case 'repairing_script':
+        return 'Repairing script...'
+      case 'compiling_graph':
+        return 'Compiling graph...'
+      default:
+        return 'This cinematic flow is still generating. Script should appear first; graph compilation should complete shortly after.'
+    }
+  }
 
   return (
     <div className="focus-layout graph-layout cinematics-layout">
@@ -324,62 +419,84 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
       </aside>
 
       <section className="main-surface graph-surface">
-        {isCurrentGraphPending ? (
-          <div className="graph-toolbar cinematic-toolbar">
-            <div className="inline-note">This cinematic flow is still generating. Run controls unlock when the job completes.</div>
+        <div className="graph-toolbar cinematic-toolbar">
+          <select value={currentGraph?.key ?? ''} onChange={(event) => onSelectGraph(event.target.value || null)}>
+            {cinematicGraphs.length === 0 ? <option value="">No cinematic flows</option> : null}
+            {cinematicGraphs.map((graph) => <option key={graph.key} value={graph.key}>{graph.name}</option>)}
+          </select>
+          <input value={currentGraph?.name ?? ''} onChange={(event) => currentGraph && onUpdateGraph(currentGraph.key, { name: event.target.value })} placeholder="Cinematic flow name" />
+          <div className="segmented-control">
+            <button className={contentMode === 'script' ? 'segment-button is-active' : 'segment-button'} onClick={() => setContentMode('script')} type="button">Script</button>
+            <button className={contentMode === 'graph' ? 'segment-button is-active' : 'segment-button'} onClick={() => setContentMode('graph')} type="button">Graph</button>
+            <button className={contentMode === 'runs' ? 'segment-button is-active' : 'segment-button'} onClick={() => setContentMode('runs')} type="button">Runs</button>
           </div>
-        ) : (
-          <div className="graph-toolbar cinematic-toolbar">
-            <select value={currentGraph?.key ?? ''} onChange={(event) => onSelectGraph(event.target.value || null)}>
-              {cinematicGraphs.length === 0 ? <option value="">No cinematic flows</option> : null}
-              {cinematicGraphs.map((graph) => <option key={graph.key} value={graph.key}>{graph.name}</option>)}
-            </select>
-            <input value={currentGraph?.name ?? ''} onChange={(event) => currentGraph && onUpdateGraph(currentGraph.key, { name: event.target.value })} placeholder="Cinematic flow name" />
-            <select value={graphSettings.specializationMode} onChange={(event) => updateGraphCinematics({ specializationMode: event.target.value as CinematicSettings['specializationMode'] })}>
-              <option value="story">Story</option>
-              <option value="ugc">UGC</option>
-            </select>
-            <button className="ghost-button compact" onClick={() => currentGraph && onDuplicateGraph(currentGraph.key)} type="button">Duplicate</button>
-            <button className={isDeletingSelectedGraph ? 'ghost-button compact button-with-spinner' : 'ghost-button compact'} disabled={isDeletingSelectedGraph} onClick={() => currentGraph && onDeleteGraph(currentGraph.key)} type="button">{isDeletingSelectedGraph ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}</button>
-            <button className="primary-button compact" disabled={!currentGraph || !canRunCinematics} onClick={() => currentGraph && onStartCinematicRun({ graphKey: currentGraph.key, mode: 'graph_run' })} type="button">Run Cinematic</button>
-          </div>
-        )}
-        <GraphCanvasStage
-          canvasRef={canvasRef}
-          contextMenu={contextMenu}
-          contextMenuSearch={contextMenuSearch}
-          contextMenuSearchRef={contextMenuSearchRef}
-          currentGraph={currentGraph}
-          handleConnect={handleConnect}
-          handleEdgesChange={handleEdgesChange}
-          handleNodeContextMenu={handleNodeContextMenu}
-          handleNodesChange={handleNodesChange}
-          handlePaneContextMenu={handlePaneContextMenu}
-          isPending={isCurrentGraphPending}
-          isDeletingSelectedGraph={isDeletingSelectedGraph}
-          liveEdges={liveEdges}
-          liveNodes={liveNodes}
-          onClearSelection={onClearSelection}
-          onDeleteGraph={onDeleteGraph}
-          onDeleteNode={onDeleteNode}
-          onDuplicateNode={onDuplicateNode}
-          onSelectEdge={onSelectEdge}
-          onSelectNode={onSelectNode}
-          pendingLabel="cinematic flow"
-          pendingTitle={currentGraph?.name ?? 'Pending cinematic flow'}
-          placeTemplate={placeTemplate}
-          setContextMenu={setContextMenu}
-          setContextMenuSearch={setContextMenuSearch}
-          setFlowInstance={setFlowInstance}
-        />
-        <div className="graph-diagnostic-row">
-          {currentGraphGeneration?.state === 'failed' ? (
-            <div className="inline-note is-danger">{currentGraphGenerationError ?? 'This cinematic flow failed to generate.'}</div>
-          ) : null}
-          {(diagnostics.filter((item) => item.graphKey === currentGraph?.key).slice(0, 4)).map((diagnostic, index) => (
-            <div key={`${diagnostic.code}-${diagnostic.nodeKey ?? 'graph'}-${index}`} className={`inline-note is-${diagnostic.level}`}>{diagnostic.message}</div>
-          ))}
+          <select value={graphSettings.specializationMode} onChange={(event) => updateGraphCinematics({ specializationMode: event.target.value as CinematicSettings['specializationMode'] })}>
+            <option value="story">Story</option>
+            <option value="ugc">UGC</option>
+          </select>
+          <button className="ghost-button compact" disabled={!currentGraph || contentMode !== 'graph'} onClick={refocusViewport} type="button">Fit View</button>
+          <button className="ghost-button compact" disabled={!currentGraph || !currentScript || currentScript.shots.length === 0} onClick={rebuildCurrentGraphFromScript} type="button">Rebuild From Script</button>
+          <button className="ghost-button compact" onClick={() => currentGraph && onDuplicateGraph(currentGraph.key)} type="button">Duplicate</button>
+          <button className={isDeletingSelectedGraph ? 'ghost-button compact button-with-spinner' : 'ghost-button compact'} disabled={isDeletingSelectedGraph} onClick={() => currentGraph && onDeleteGraph(currentGraph.key)} type="button">{isDeletingSelectedGraph ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}</button>
+          <button className="primary-button compact" disabled={!currentGraph || !canRunCinematics || isCurrentGraphPending} onClick={() => currentGraph && onStartCinematicRun({ graphKey: currentGraph.key, mode: 'graph_run' })} type="button">Run Cinematic</button>
         </div>
+        {isCurrentGraphPending ? (
+          <div className="graph-diagnostic-row">
+            <div className="inline-note">{renderGenerationPhaseLabel(currentGraphGenerationPhase)}</div>
+          </div>
+        ) : null}
+        {contentMode === 'graph' ? (
+          <>
+            <GraphCanvasStage
+              canvasRef={canvasRef}
+              contextMenu={contextMenu}
+              contextMenuSearch={contextMenuSearch}
+              contextMenuSearchRef={contextMenuSearchRef}
+              currentGraph={currentGraph}
+              handleConnect={handleConnect}
+              handleEdgesChange={handleEdgesChange}
+              handleNodeContextMenu={handleNodeContextMenu}
+              handleNodesChange={handleNodesChange}
+              handlePaneContextMenu={handlePaneContextMenu}
+              isPending={isCurrentGraphPending}
+              isDeletingSelectedGraph={isDeletingSelectedGraph}
+              liveEdges={liveEdges}
+              liveNodes={liveNodes}
+              onClearSelection={onClearSelection}
+              onDeleteGraph={onDeleteGraph}
+              onDeleteNode={onDeleteNode}
+              onDuplicateNode={onDuplicateNode}
+              onSelectEdge={onSelectEdge}
+              onSelectNode={onSelectNode}
+              pendingLabel="cinematic flow"
+              pendingTitle={currentGraph?.name ?? 'Pending cinematic flow'}
+              placeTemplate={placeTemplate}
+              setContextMenu={setContextMenu}
+              setContextMenuSearch={setContextMenuSearch}
+              setFlowInstance={setFlowInstance}
+            />
+            <div className="graph-diagnostic-row">
+              {currentGraphGeneration?.state === 'failed' ? (
+                <div className="inline-note is-danger">{currentGraphGenerationError ?? 'This cinematic flow failed to generate.'}</div>
+              ) : null}
+              {currentAuthoringSummary ? (
+                <div className="inline-note">{currentAuthoringSummary}</div>
+              ) : null}
+              {currentAuthoringDiagnostics.slice(0, 2).map((diagnostic, index) => (
+                <div key={`authoring-${index}`} className="inline-note">{diagnostic}</div>
+              ))}
+              {(diagnostics.filter((item) => item.graphKey === currentGraph?.key).slice(0, 4)).map((diagnostic, index) => (
+                <div key={`${diagnostic.code}-${diagnostic.nodeKey ?? 'graph'}-${index}`} className={`inline-note is-${diagnostic.level}`}>{diagnostic.message}</div>
+              ))}
+            </div>
+          </>
+        ) : null}
+        {contentMode === 'script' ? (
+          <ScriptPreviewSurface currentGraph={currentGraph} scriptDoc={currentScript} />
+        ) : null}
+        {contentMode === 'runs' ? (
+          <CinematicRunsSurface assets={assets} currentGraph={currentGraph} runs={currentGraphRuns} selectedRun={selectedRun} onSelectRun={setSelectedRunId} />
+        ) : null}
       </section>
 
       <aside className="context-drawer">
@@ -387,7 +504,7 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
           <div className="detail-stack compact world-build-loading-shell">
             <span className="eyebrow">Cinematic Placeholder</span>
             <h3>{currentGraph.name}</h3>
-            <div className="inline-note">Inspector controls are hidden until cinematic generation completes.</div>
+            <div className="inline-note">{renderGenerationPhaseLabel(currentGraphGenerationPhase)}</div>
           </div>
         ) : currentEdge && currentGraph ? (
           <EdgeInspector definitions={definitions} edge={currentEdge} onUpdate={(changes) => onUpdateEdge(currentGraph.key, currentEdge.key, changes)} />
@@ -552,6 +669,177 @@ function CinematicGraphInspector({
       <div className="diagnostic-stack">
         {diagnostics.length === 0 ? <div className="inline-note">No graph diagnostics.</div> : diagnostics.map((diagnostic, index) => <div key={`${diagnostic.code}-${diagnostic.nodeKey ?? 'graph'}-${index}`} className={`inline-note is-${diagnostic.level}`}>{diagnostic.message}</div>)}
       </div>
+    </div>
+  )
+}
+
+function ScriptPreviewSurface({
+  currentGraph,
+  scriptDoc,
+}: {
+  currentGraph: GraphDefinition | null
+  scriptDoc: CinematicScriptDoc | null
+}) {
+  if (!currentGraph || !scriptDoc) {
+    return (
+      <div className="detail-stack compact cinematic-script-surface">
+        <span className="eyebrow">Script</span>
+        <h3>No cinematic script yet</h3>
+        <div className="inline-note">Generate or select a cinematic flow to inspect the canonical script.</div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="detail-stack cinematic-script-surface">
+      <span className="eyebrow">Canonical Script</span>
+      <h2>{scriptDoc.title || currentGraph.name}</h2>
+      {scriptDoc.logline ? <p className="subtle-line">{scriptDoc.logline}</p> : null}
+      <div className="inline-note">This script is the canonical authoring artifact for this cinematic. The graph is a compiled projection used for references, diagnostics, and runtime execution.</div>
+
+      <div className="editor-section compact-section">
+        <div className="section-head">
+          <div>
+            <span className="eyebrow">Bindings</span>
+            <h3>{scriptDoc.entityBindings.length} source{scriptDoc.entityBindings.length === 1 ? '' : 's'}</h3>
+          </div>
+        </div>
+        <div className="diagnostic-stack">
+          {scriptDoc.entityBindings.map((binding) => (
+            <div key={binding.id} className="inline-note">
+              <strong>{binding.label}</strong>
+              <span> {binding.kind} / {binding.role}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="editor-section compact-section">
+        <div className="section-head">
+          <div>
+            <span className="eyebrow">Scenes</span>
+            <h3>{scriptDoc.scenes.length} scene{scriptDoc.scenes.length === 1 ? '' : 's'}</h3>
+          </div>
+        </div>
+        <div className="diagnostic-stack">
+          {scriptDoc.scenes.length === 0 ? <div className="inline-note">No explicit scene groupings were stored for this script.</div> : null}
+          {scriptDoc.scenes.map((scene) => (
+            <div key={scene.id} className="inline-note">
+              <strong>{scene.title}</strong>
+              <span> {scene.shotIds.length} shot{scene.shotIds.length === 1 ? '' : 's'}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="editor-section compact-section">
+        <div className="section-head">
+          <div>
+            <span className="eyebrow">Shots</span>
+            <h3>{scriptDoc.shots.length} shot{scriptDoc.shots.length === 1 ? '' : 's'}</h3>
+          </div>
+        </div>
+        <div className="diagnostic-stack">
+          {scriptDoc.shots.map((shot) => (
+            <div key={shot.id} className="inline-note">
+              <strong>{shot.title}</strong>
+              <span> {shot.beat || 'No beat summary'}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {scriptDoc.shots.map((shot) => (
+        <div key={shot.id} className="editor-section compact-section">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">{shot.shotType}</span>
+              <h3>{shot.title}</h3>
+            </div>
+          </div>
+          <div className="diagnostic-stack">
+            <div className="inline-note">{shot.beat || 'No beat text.'}</div>
+            <div className="inline-note">
+              <strong>Bindings</strong>
+              <span> {[
+                ...shot.participantRefIds,
+                ...(shot.locationRefId ? [shot.locationRefId] : []),
+                ...shot.propRefIds,
+              ].join(', ') || 'none'}</span>
+            </div>
+            {shot.dialogue.map((entry) => (
+              <div key={entry.id} className="inline-note">
+                <strong>Dialogue</strong>
+                <span> {entry.speakerRefId ?? 'speaker?'}: {entry.line || entry.delivery || 'placeholder line'}</span>
+              </div>
+            ))}
+            {shot.actions.map((entry) => (
+              <div key={entry.id} className="inline-note">
+                <strong>Action</strong>
+                <span> {entry.actorRefId ?? 'actor?'} {entry.verb || 'acts'} {entry.targetRefId ? `-> ${entry.targetRefId}` : ''}</span>
+              </div>
+            ))}
+            {shot.audio.map((entry) => (
+              <div key={entry.id} className="inline-note">
+                <strong>Audio</strong>
+                <span> {entry.kind}: {entry.cue || 'cue'}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function CinematicRunsSurface({
+  assets,
+  currentGraph,
+  runs,
+  selectedRun,
+  onSelectRun,
+}: {
+  assets: AssetDefinition[]
+  currentGraph: GraphDefinition | null
+  runs: CinematicRun[]
+  selectedRun: CinematicRun | null
+  onSelectRun: (runId: string) => void
+}) {
+  return (
+    <div className="detail-stack">
+      <span className="eyebrow">Runs</span>
+      <h2>{currentGraph?.name ?? 'Cinematic Runs'}</h2>
+      <div className="diagnostic-stack">
+        {runs.length === 0 ? <div className="inline-note">No runs yet for this cinematic flow.</div> : null}
+        {runs.map((run) => (
+          <button key={run.id} className={run.id === selectedRun?.id ? 'rail-button is-active' : 'rail-button'} onClick={() => onSelectRun(run.id)} type="button">
+            <strong>{formatRunLabel(run)}</strong>
+            <span>{run.jobs.length} job{run.jobs.length === 1 ? '' : 's'}</span>
+          </button>
+        ))}
+      </div>
+      {selectedRun ? (
+        <div className="editor-section compact-section">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Selected Run</span>
+              <h3>{formatRunLabel(selectedRun)}</h3>
+            </div>
+          </div>
+          <div className="diagnostic-stack">
+            {selectedRun.jobs.map((job) => {
+              const assetKey = job.videoAssetKey ?? job.stillAssetKey ?? null
+              const asset = assetKey ? assets.find((entry) => entry.key === assetKey) ?? null : null
+              return (
+                <div key={job.id} className="inline-note">
+                  <strong>{job.kind}</strong>
+                  <span> {job.shotNodeKey} - {job.status}{asset ? ` - ${asset.name}` : ''}{job.errorMessage ? ` - ${job.errorMessage}` : ''}</span>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -900,6 +1188,7 @@ function CinematicShotInspector({
         <span>Shot Script</span>
         <textarea rows={5} value={node.body.text ?? ''} onChange={(event) => onUpdate({ body: { ...node.body, text: event.target.value } })} placeholder="Describe the beat, blocking, emotional action, and what the camera should emphasize." />
       </label>
+      <div className="inline-note">The canonical cinematic structure now lives in the Script view. Shot edits here affect the compiled graph view only and do not sync back into the stored script in v1.</div>
       <label className="field-block full-width">
         <span>Visual Prompt Override</span>
         <textarea rows={4} value={config.visualPrompt} onChange={(event) => onUpdate({ metadata: updateNodeMetadataWithShot(node.metadata, { visualPrompt: event.target.value }) })} placeholder="Optional shot-specific visual prompt language layered on top of project and source context." />

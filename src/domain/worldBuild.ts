@@ -2,6 +2,7 @@ import { z } from 'zod'
 import {
   actionBeatSchema,
   audioBeatSchema,
+  cinematicScriptDocSchema,
   cinematicRelationshipSchema,
   cinematicRunSchema,
   dialogueBeatSchema,
@@ -95,10 +96,11 @@ export const cinematicPlanSchema = z.object({
   graphName: z.string(),
   graphSummary: z.string(),
   entityRefs: z.array(cinematicEntityRefSchema).default([]),
+  scriptDoc: cinematicScriptDocSchema.nullable().default(null),
   relationshipRefs: z.array(cinematicRelationshipSchema).default([]),
   compositeRefPlans: z.array(cinematicCompositeRefPlanSchema).default([]),
   storyboardPlan: storyboardSpecSchema.nullable().default(null),
-  shots: z.array(cinematicShotPlanSchema).min(1),
+  shots: z.array(cinematicShotPlanSchema).default([]),
   graphSettings: cinematicGraphSettingsSchema,
   autoRun: z.boolean().default(false),
 })

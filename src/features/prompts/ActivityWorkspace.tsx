@@ -79,6 +79,37 @@ export function ActivityWorkspace({
                       <strong>Storyboard</strong>
                       <span> {selectedWorldBuild.cinematicPlan.storyboardPlan?.mode ?? 'none'}</span>
                     </div>
+                    {!selectedWorldBuild.cinematicPlan.scriptDoc ? (
+                      <div className="inline-note">
+                        <strong>Script</strong>
+                        <span> authored during the cinematic graph job</span>
+                      </div>
+                    ) : null}
+                    {selectedWorldBuild.cinematicPlan.scriptDoc ? (
+                      <div className="editor-section compact-section">
+                        <div className="section-head">
+                          <div>
+                            <span className="eyebrow">Script</span>
+                            <h3>{selectedWorldBuild.cinematicPlan.scriptDoc.title || 'Generated Script'}</h3>
+                          </div>
+                        </div>
+                        {selectedWorldBuild.cinematicPlan.scriptDoc.logline ? <div className="inline-note">{selectedWorldBuild.cinematicPlan.scriptDoc.logline}</div> : null}
+                        <div className="diagnostic-stack">
+                          {(selectedWorldBuild.cinematicPlan.scriptDoc.scenes ?? []).map((scene) => (
+                            <div key={scene.id} className="inline-note">
+                              <strong>{scene.title}</strong>
+                              <span> {(scene.shotIds?.length ?? 0)} shot{(scene.shotIds?.length ?? 0) === 1 ? '' : 's'}</span>
+                            </div>
+                          ))}
+                          {(selectedWorldBuild.cinematicPlan.scriptDoc.shots ?? []).map((shot) => (
+                            <div key={shot.id} className="inline-note">
+                              <strong>{shot.title}</strong>
+                              <span> {(shot.dialogue?.length ?? 0)} dialogue, {(shot.actions?.length ?? 0)} action, {(shot.audio?.length ?? 0)} audio cue{(shot.audio?.length ?? 0) === 1 ? '' : 's'}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
                 <div className="diagnostic-stack">

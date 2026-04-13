@@ -1,11 +1,11 @@
 import { z } from 'npm:zod@4'
 
-import { normalizeNode } from '../../../src/domain/nodeLibrary.ts'
 import {
   actionBeatSchema,
   audioBeatSchema,
   cinematicBeatSchema,
   cinematicRelationshipSchema,
+  cinematicScriptDocSchema,
   cinematicSequenceSchema,
   dialogueBeatSchema,
   storyboardSpecSchema,
@@ -18,7 +18,6 @@ import {
   type CinematicEntityRef,
   type CinematicPlan,
 } from '../../../src/domain/worldBuild.ts'
-import { createGraphScaffold, type GraphScaffold } from './world-build-placeholders.ts'
 
 type SnapshotDefinition = {
   key: string
@@ -62,10 +61,11 @@ export const cinematicPlannerRawSchema = z.object({
     definitionKey: z.string().nullable().optional(),
     planItemId: z.string().nullable().optional(),
   })).default([]),
+  scriptDoc: cinematicScriptDocSchema.nullable().default(null),
   relationshipRefs: z.array(cinematicRelationshipSchema).default([]),
   compositeRefPlans: z.array(cinematicCompositeRefPlanSchema).default([]),
   storyboardPlan: storyboardSpecSchema.nullable().default(null),
-  shots: z.array(cinematicShotPlanSchema).min(1),
+  shots: z.array(cinematicShotPlanSchema).default([]),
   graphSettings: cinematicGraphSettingsSchema,
   diagnostics: z.array(z.string()).default([]),
   assistantNotes: z.string().optional(),
@@ -171,6 +171,465 @@ function normalizeShotType(value: unknown) {
 
 function normalizePromptTextForStoryboard(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+}
+
+function splitPromptIntoTemporalSegments(value: string) {
+  const cleaned = value
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!cleaned) return []
+
+  const segmented = cleaned
+    .replace(/\b(?:and then|then)\b/gi, ' || ')
+    .replace(/\b(?:finally|ultimately)\b/gi, ' || ')
+    .replace(/\b(?:at the end|in the end|by the end)\b/gi, ' || ')
+    .replace(/\b(?:ending with|ending on)\b/gi, ' || ')
+    .replace(/\b(?:escalating until|building until|leading to)\b/gi, ' || ')
+    .replace(/\buntil\b/gi, ' || ')
+
+  return segmented
+    .split('||')
+    .map((entry) => entry.trim().replace(/^[,.;:\s-]+|[,.;:\s-]+$/g, ''))
+    .filter((entry) => entry.length > 0)
+}
+
+function titleCaseWords(value: string) {
+  return value
+    .split(/\s+/)
+    .filter((entry) => entry.length > 0)
+    .map((entry) => entry.charAt(0).toUpperCase() + entry.slice(1))
+    .join(' ')
+}
+
+function deriveFallbackShotTitle(segment: string, index: number, total: number) {
+  const normalized = normalizeMatchKey(segment)
+  if (normalized.includes('slap')) return 'The Slap'
+  if (normalized.includes('warning') || normalized.includes('threat')) return 'Cold Warning'
+  if (normalized.includes('mock') || normalized.includes('retort')) return 'Mocking Reply'
+  if (normalized.includes('circle') || normalized.includes('standoff') || normalized.includes('stand')) return 'Rising Standoff'
+  if (normalized.includes('argument') || normalized.includes('argue') || normalized.includes('accuse')) {
+    return normalized.includes('table') ? 'Table Accusation' : 'Heated Exchange'
+  }
+  if (normalized.includes('tavern') || normalized.includes('interior')) return 'Tavern Tension'
+
+  const compact = segment
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^[^a-z0-9]+|[^a-z0-9]+$/gi, '')
+  if (compact) {
+    const words = compact.split(/\s+/).slice(0, 4).join(' ')
+    if (words) return titleCaseWords(words)
+  }
+
+  if (index === 0 && total > 1) return 'Opening Beat'
+  if (index === total - 1 && total > 1) return 'Closing Beat'
+  return `Beat ${index + 1}`
+}
+
+function inferShotTypeFromBeat(beat: string) {
+  const normalized = normalizeMatchKey(beat)
+  if (!normalized) return 'custom' as const
+  if (
+    normalized.includes('argument')
+    || normalized.includes('argue')
+    || normalized.includes('confront')
+    || normalized.includes('exchange')
+    || normalized.includes('retort')
+    || normalized.includes('shout')
+    || normalized.includes('yell')
+    || normalized.includes('accuse')
+  ) {
+    return 'dialogue' as const
+  }
+  if (
+    normalized.includes('slap')
+    || normalized.includes('strike')
+    || normalized.includes('hit')
+    || normalized.includes('attack')
+    || normalized.includes('fight')
+    || normalized.includes('punch')
+    || normalized.includes('grab')
+  ) {
+    return 'action' as const
+  }
+  if (
+    normalized.includes('inside')
+    || normalized.includes('tavern')
+    || normalized.includes('establish')
+    || normalized.includes('room')
+    || normalized.includes('interior')
+    || normalized.includes('outside')
+    || normalized.includes('street')
+  ) {
+    return 'establishing' as const
+  }
+  return 'custom' as const
+}
+
+function inferActionVerb(beat: string) {
+  const normalized = normalizeMatchKey(beat)
+  if (normalized.includes('slap')) return 'slaps'
+  if (normalized.includes('punch')) return 'punches'
+  if (normalized.includes('hit')) return 'hits'
+  if (normalized.includes('strike')) return 'strikes'
+  if (normalized.includes('fight')) return 'fights'
+  if (normalized.includes('grab')) return 'grabs'
+  if (normalized.includes('shove')) return 'shoves'
+  if (normalized.includes('draw')) return 'draws weapon'
+  return normalized.includes('argu') || normalized.includes('confront') ? 'confronts' : 'acts'
+}
+
+function inferDialogueDelivery(beat: string) {
+  const normalized = normalizeMatchKey(beat)
+  if (normalized.includes('slap') || normalized.includes('fight') || normalized.includes('yell')) return 'sharp and explosive'
+  if (normalized.includes('argument') || normalized.includes('argue') || normalized.includes('confront')) return 'heated and escalating'
+  return 'tense and controlled'
+}
+
+function buildEntityNameAliases(sourceName: string) {
+  const aliases = new Set<string>()
+  const raw = sourceName.trim()
+  if (!raw) return []
+  aliases.add(raw)
+  const beforeComma = raw.split(',')[0]?.trim()
+  if (beforeComma) aliases.add(beforeComma)
+  const words = raw.split(/\s+/).filter(Boolean)
+  if (words[0]) aliases.add(words[0])
+  return [...aliases]
+    .map((entry) => normalizeMatchKey(entry))
+    .filter((entry) => entry.length > 1)
+}
+
+function isIncidentalPropName(value: string) {
+  return [
+    'table',
+    'chair',
+    'stool',
+    'bench',
+    'bar',
+    'counter',
+    'mug',
+    'cup',
+    'glass',
+    'bottle',
+    'plate',
+    'bowl',
+  ].includes(normalizeMatchKey(value))
+}
+
+function promptMakesPropHero(promptText: string, propName: string) {
+  const normalizedPrompt = normalizeMatchKey(promptText)
+  const normalizedProp = normalizeMatchKey(propName)
+  if (!normalizedPrompt || !normalizedProp) return false
+  return [
+    `use ${normalizedProp}`,
+    `uses ${normalizedProp}`,
+    `using ${normalizedProp}`,
+    `with ${normalizedProp}`,
+    `grab ${normalizedProp}`,
+    `grabs ${normalizedProp}`,
+    `draw ${normalizedProp}`,
+    `draws ${normalizedProp}`,
+    `throw ${normalizedProp}`,
+    `throws ${normalizedProp}`,
+    `smash ${normalizedProp}`,
+    `smashes ${normalizedProp}`,
+    `${normalizedProp} in hand`,
+  ].some((pattern) => normalizedPrompt.includes(pattern))
+}
+
+function normalizeVerbRoot(value: string) {
+  const normalized = normalizeMatchKey(value)
+  if (normalized.endsWith('es')) return normalized.slice(0, -2)
+  if (normalized.endsWith('s')) return normalized.slice(0, -1)
+  return normalized
+}
+
+export function inferPromptDirectedActionBinding(
+  promptText: string,
+  verb: string,
+  participants: Array<{ id: string; sourceName: string }>,
+) {
+  const normalizedPrompt = normalizeMatchKey(promptText)
+  const verbRoot = normalizeVerbRoot(verb)
+  if (!normalizedPrompt || !verbRoot || participants.length < 2) return null
+
+  const verbTokens = Array.from(new Set([verbRoot, `${verbRoot}s`, `${verbRoot}es`]))
+  let bestMatch: { actorRefId: string; targetRefId: string; score: number } | null = null
+
+  for (const actor of participants) {
+    for (const target of participants) {
+      if (actor.id === target.id) continue
+      for (const actorAlias of buildEntityNameAliases(actor.sourceName)) {
+        for (const targetAlias of buildEntityNameAliases(target.sourceName)) {
+          const actorIndex = normalizedPrompt.indexOf(actorAlias)
+          const targetIndex = normalizedPrompt.indexOf(targetAlias)
+          if (actorIndex === -1 || targetIndex === -1 || actorIndex >= targetIndex) continue
+          for (const verbToken of verbTokens) {
+            const verbIndex = normalizedPrompt.indexOf(verbToken, actorIndex)
+            if (verbIndex === -1 || verbIndex >= targetIndex) continue
+            const score = (targetIndex - actorIndex) - Math.abs((verbIndex - actorIndex) - (targetIndex - verbIndex))
+            if (!bestMatch || score < bestMatch.score) {
+              bestMatch = { actorRefId: actor.id, targetRefId: target.id, score }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return bestMatch
+    ? { actorRefId: bestMatch.actorRefId, targetRefId: bestMatch.targetRefId }
+    : null
+}
+
+function isGenericShotTitle(title: string) {
+  const normalized = normalizeMatchKey(title)
+  return [
+    'shot 1',
+    'shot 2',
+    'shot 3',
+    'beat 1',
+    'beat 2',
+    'beat 3',
+    'primary beat',
+    'opening beat',
+    'closing beat',
+    'opening exchange',
+    'escalation',
+    'final beat',
+  ].includes(normalized)
+}
+
+function beatLooksLikePromptEcho(beat: string, promptText: string) {
+  const normalizedBeat = normalizeMatchKey(beat)
+  const normalizedPrompt = normalizeMatchKey(promptText)
+  if (!normalizedBeat || !normalizedPrompt) return false
+  if (normalizedBeat.length < 40) return false
+  return normalizedPrompt.includes(normalizedBeat) || normalizedBeat.includes(normalizedPrompt.slice(0, Math.min(normalizedPrompt.length, 80)))
+}
+
+function dialogueLooksLikePlaceholder(line: string, speakerName: string) {
+  const normalizedLine = normalizeMatchKey(line)
+  const speakerAliases = buildEntityNameAliases(speakerName)
+  if (!normalizedLine) return true
+  if (speakerAliases.some((alias) => normalizedLine.startsWith(alias))) return true
+  return [
+    'delivers a cutting accusation',
+    'fires back with a hard retort',
+    'issues a warning',
+    'mocking reply',
+    'placeholder',
+    'line of dialogue',
+  ].some((pattern) => normalizedLine.includes(pattern))
+}
+
+function findParticipantByMention(
+  beat: string,
+  participants: Array<{ id: string; sourceName: string }>,
+) {
+  const normalizedBeat = normalizeMatchKey(beat)
+  if (!normalizedBeat) return null
+  return participants.find((participant) => normalizedBeat.includes(normalizeMatchKey(participant.sourceName))) ?? null
+}
+
+function inferActorTargetFromBeat(
+  beat: string,
+  participants: Array<{ id: string; sourceName: string }>,
+) {
+  if (participants.length === 0) return { actorRefId: null, targetRefId: null }
+  if (participants.length === 1) return { actorRefId: participants[0].id, targetRefId: null }
+
+  const promptDirectedBinding = inferPromptDirectedActionBinding(beat, inferActionVerb(beat), participants)
+  if (promptDirectedBinding) {
+    return promptDirectedBinding
+  }
+
+  const normalizedBeat = normalizeMatchKey(beat)
+  const mentionedParticipants = participants.filter((participant) => normalizedBeat.includes(normalizeMatchKey(participant.sourceName)))
+  if (mentionedParticipants.length >= 2) {
+    return {
+      actorRefId: mentionedParticipants[0].id,
+      targetRefId: mentionedParticipants[1].id,
+    }
+  }
+  if (mentionedParticipants.length === 1) {
+    return {
+      actorRefId: mentionedParticipants[0].id,
+      targetRefId: participants.find((participant) => participant.id !== mentionedParticipants[0].id)?.id ?? null,
+    }
+  }
+  return {
+    actorRefId: participants[0].id,
+    targetRefId: participants[1]?.id ?? null,
+  }
+}
+
+export function shotImpliesDialogue(input: {
+  promptText?: string
+  title?: string
+  beat?: string
+  shotType?: string
+}) {
+  const normalized = normalizeMatchKey([input.promptText, input.title, input.beat, input.shotType].filter(Boolean).join(' '))
+  if (!normalized) return false
+  return [
+    'dialogue',
+    'argument',
+    'argue',
+    'verbal',
+    'exchange',
+    'retort',
+    'mock',
+    'warning',
+    'warn',
+    'accuse',
+    'confront',
+    'threat',
+    'threaten',
+    'taunt',
+    'insult',
+    'reply',
+  ].some((token) => normalized.includes(token))
+}
+
+export function shotImpliesAction(input: {
+  promptText?: string
+  title?: string
+  beat?: string
+  shotType?: string
+}) {
+  const normalized = normalizeMatchKey([input.promptText, input.title, input.beat, input.shotType].filter(Boolean).join(' '))
+  if (!normalized) return false
+  return [
+    'action',
+    'fight',
+    'combat',
+    'slap',
+    'strike',
+    'hit',
+    'punch',
+    'attack',
+    'grab',
+    'shove',
+    'circle',
+    'circling',
+    'rise',
+    'rises',
+    'stand',
+    'standoff',
+    'confront',
+  ].some((token) => normalized.includes(token))
+}
+
+export function buildFallbackDialogueBeats(input: {
+  shotId: string
+  beat: string
+  participants: Array<{ id: string; sourceName: string }>
+}) {
+  const normalized = normalizeMatchKey(input.beat)
+  if (
+    input.participants.length < 2
+    || !shotImpliesDialogue({ beat: input.beat })
+  ) {
+    return []
+  }
+
+  const [firstParticipant, secondParticipant] = input.participants
+  let firstLine = 'You keep talking like the room will save you.'
+  let secondLine = 'No. The room just gives everyone a better view of your mistake.'
+
+  if (normalized.includes('warning') || normalized.includes('threat')) {
+    firstLine = 'Take one more step and you will regret it.'
+    secondLine = 'That is not a warning. It is a promise.'
+  } else if (normalized.includes('mock') || normalized.includes('retort') || normalized.includes('sneer')) {
+    firstLine = 'That is your answer? I expected sharper steel from you.'
+    secondLine = 'And I expected a better threat than borrowed noise.'
+  } else if (normalized.includes('argument') || normalized.includes('argue') || normalized.includes('accuse') || normalized.includes('confront')) {
+    firstLine = 'You always mistake noise for strength.'
+    secondLine = 'And you always mistake silence for surrender.'
+  } else if (normalized.includes('circle') || normalized.includes('standoff') || normalized.includes('stand')) {
+    firstLine = 'Then stand up and say it where I can see your spine.'
+    secondLine = 'Gladly. I was getting tired of hearing you sit down.'
+  }
+
+  return [
+    {
+      id: `${input.shotId}_dialogue_1`,
+      speakerRefId: firstParticipant.id,
+      line: firstLine,
+      delivery: inferDialogueDelivery(input.beat),
+      startSeconds: null,
+      endSeconds: null,
+      lipSync: true,
+    },
+    {
+      id: `${input.shotId}_dialogue_2`,
+      speakerRefId: secondParticipant.id,
+      line: secondLine,
+      delivery: inferDialogueDelivery(input.beat),
+      startSeconds: null,
+      endSeconds: null,
+      lipSync: true,
+    },
+  ]
+}
+
+export function buildFallbackActionBeats(input: {
+  shotId: string
+  beat: string
+  participants: Array<{ id: string; sourceName: string }>
+  propRefIds: string[]
+}) {
+  const normalized = normalizeMatchKey(input.beat)
+  if (
+    input.participants.length === 0
+    || !shotImpliesAction({ beat: input.beat })
+  ) {
+    return []
+  }
+
+  const actorTarget = inferActorTargetFromBeat(input.beat, input.participants)
+  return [{
+    id: `${input.shotId}_action_1`,
+    actorRefId: actorTarget.actorRefId,
+    targetRefId: actorTarget.targetRefId,
+    verb: inferActionVerb(input.beat),
+    propRefId: input.propRefIds[0] ?? null,
+    stagingNotes: '',
+    startSeconds: null,
+    endSeconds: null,
+  }]
+}
+
+export function buildFallbackAudioBeats(input: {
+  shotId: string
+  beat: string
+  locationRefId: string | null
+}) {
+  const normalized = normalizeMatchKey(input.beat)
+  const audio = []
+  if (input.locationRefId) {
+    audio.push({
+      id: `${input.shotId}_audio_ambience`,
+      kind: 'ambience' as const,
+      cue: normalized.includes('tavern') ? 'Busy tavern room tone under the scene.' : 'Location ambience under the scene.',
+      sourceRefId: input.locationRefId,
+      startSeconds: null,
+      endSeconds: null,
+    })
+  }
+  if (normalized.includes('slap')) {
+    audio.push({
+      id: `${input.shotId}_audio_sfx`,
+      kind: 'sfx' as const,
+      cue: 'Sharp slap impact punctuates the beat.',
+      sourceRefId: null,
+      startSeconds: null,
+      endSeconds: null,
+    })
+  }
+  return audio
 }
 
 type EntityLookup = {
@@ -279,18 +738,34 @@ function buildFallbackShot(input: {
   entityRefs: Array<{
     id: string
     kind: 'character' | 'environment' | 'item'
+    sourceName?: string
   }>
 }) {
   const environmentRef = input.entityRefs.find((entry) => entry.kind === 'environment') ?? null
-  const participantRefIds = input.entityRefs.filter((entry) => entry.kind === 'character').map((entry) => entry.id)
+  const participantRefs = input.entityRefs.filter((entry) => entry.kind === 'character').map((entry) => ({
+    id: entry.id,
+    sourceName: entry.sourceName ?? entry.id,
+  }))
+  const participantRefIds = participantRefs.map((entry) => entry.id)
   const propRefIds = input.entityRefs.filter((entry) => entry.kind === 'item').map((entry) => entry.id)
   const beat = input.graphSummary.trim() || input.requestSummary.trim() || 'Play the key cinematic beat described by the prompt.'
-  const shotType =
-    participantRefIds.length >= 2
-      ? 'action' as const
-      : environmentRef
-        ? 'establishing' as const
-        : 'custom' as const
+  const shotType = inferShotTypeFromBeat(beat)
+  const dialogue = buildFallbackDialogueBeats({
+    shotId: 'shot_1',
+    beat,
+    participants: participantRefs,
+  })
+  const actions = buildFallbackActionBeats({
+    shotId: 'shot_1',
+    beat,
+    participants: participantRefs,
+    propRefIds,
+  })
+  const audio = buildFallbackAudioBeats({
+    shotId: 'shot_1',
+    beat,
+    locationRefId: environmentRef?.id ?? null,
+  })
 
   return {
     id: 'shot_1',
@@ -312,21 +787,112 @@ function buildFallbackShot(input: {
       propRefIds.length > 0 ? 'Ensure the planned props are visibly present or actively used.' : null,
     ].filter(Boolean).join(' '),
     beats: [],
-    dialogue: [],
-    actions: participantRefIds.length > 0
-      ? [{
-          id: 'action_1',
-          actorRefId: participantRefIds[0] ?? null,
-          targetRefId: participantRefIds[1] ?? null,
-          verb: shotType === 'action' ? 'engages in combat' : 'performs the key scene action',
-          propRefId: propRefIds[0] ?? null,
-          stagingNotes: '',
+    dialogue,
+    actions,
+    audio,
+  }
+}
+
+function expandTemporalShots(input: {
+  shots: Array<{
+    id: string
+    title: string
+    beat: string
+    participantRefIds: string[]
+    locationRefId: string | null
+    propRefIds: string[]
+    shotType: 'establishing' | 'dialogue' | 'reveal' | 'action' | 'insert' | 'transition' | 'custom'
+    framing: string
+    cameraAngle: string
+    cameraMovement: string
+    lensPreference: string
+    durationSeconds: number | null
+    visualPrompt: string
+    compositionGuide: string
+    beats: Array<z.infer<typeof cinematicBeatSchema>>
+    dialogue: Array<z.infer<typeof dialogueBeatSchema>>
+    actions: Array<z.infer<typeof actionBeatSchema>>
+    audio: Array<z.infer<typeof audioBeatSchema>>
+  }>
+  promptText: string
+  entityRefs: Array<{
+    id: string
+    kind: 'character' | 'environment' | 'item'
+    sourceName: string
+  }>
+}) {
+  const temporalSegments = splitPromptIntoTemporalSegments(input.promptText)
+  const needsExpansion = input.shots.length === 1 && temporalSegments.length >= 2
+  if (!needsExpansion) return input.shots
+
+  const baseShot = input.shots[0]
+  const participantRefs = input.entityRefs
+    .filter((entry) => entry.kind === 'character' && baseShot.participantRefIds.includes(entry.id))
+    .map((entry) => ({ id: entry.id, sourceName: entry.sourceName }))
+  const expandedShots = temporalSegments.map((segment, index) => {
+    const shotId = `shot_${index + 1}`
+    const shotType = inferShotTypeFromBeat(segment)
+    const dialogue = buildFallbackDialogueBeats({
+      shotId,
+      beat: segment,
+      participants: participantRefs,
+    })
+    const actions = buildFallbackActionBeats({
+      shotId,
+      beat: segment,
+      participants: participantRefs,
+      propRefIds: baseShot.propRefIds,
+    })
+    const audio = buildFallbackAudioBeats({
+      shotId,
+      beat: segment,
+      locationRefId: baseShot.locationRefId,
+    })
+
+    return {
+      ...baseShot,
+      id: shotId,
+      title: deriveFallbackShotTitle(segment, index, temporalSegments.length),
+      beat: segment,
+      shotType,
+      framing:
+        shotType === 'establishing'
+          ? 'Wide establishing frame'
+          : shotType === 'dialogue'
+            ? 'Medium two-shot'
+            : shotType === 'action'
+              ? 'Medium close action frame'
+              : baseShot.framing,
+      cameraMovement:
+        shotType === 'action'
+          ? 'Sharp push or snap movement into the action.'
+          : shotType === 'dialogue'
+            ? 'Controlled handheld drift between speakers.'
+            : baseShot.cameraMovement,
+      compositionGuide: segment,
+      dialogue,
+      actions,
+      audio,
+      beats: [
+        ...dialogue.map((entry) => ({
+          id: `${entry.id}_beat`,
+          type: 'dialogue' as const,
+          summary: entry.line,
           startSeconds: null,
           endSeconds: null,
-        }]
-      : [],
-    audio: [],
-  }
+        })),
+        ...actions.map((entry) => ({
+          id: `${entry.id}_beat`,
+          type: 'action' as const,
+          summary: entry.verb,
+          startSeconds: null,
+          endSeconds: null,
+        })),
+      ],
+    }
+  })
+
+  return expandedShots
 }
 
 export function coerceCinematicEntityExtractionRaw(input: unknown) {
@@ -445,6 +1011,8 @@ function sanitizeCompositeRefPlans(
 type CoerceCinematicPlannerOptions = {
   lockedEntityRefs?: Array<z.infer<typeof cinematicEntityExtractionSchema>['entityRefs'][number]>
   allowEntityCreation?: boolean
+  promptText?: string
+  enableFallbackShaping?: boolean
 }
 
 export function coerceCinematicPlannerRaw(input: unknown, options: CoerceCinematicPlannerOptions = {}) {
@@ -452,10 +1020,12 @@ export function coerceCinematicPlannerRaw(input: unknown, options: CoerceCinemat
   const requestSummary = pickFirstString(record, ['requestSummary', 'summary', 'title']) || 'Cinematic build plan'
   const graphName = pickFirstString(record, ['graphName', 'name', 'title']) || 'Prompt Cinematic'
   const graphSummary = pickFirstString(record, ['graphSummary', 'summary', 'description']) || requestSummary
+  const scriptRecord = asRecord(record.scriptDoc) ?? record
   const lockedEntityRefs = options.lockedEntityRefs
     ? options.lockedEntityRefs.map((entry) => ({ ...entry }))
     : null
   const allowEntityCreation = options.allowEntityCreation ?? !lockedEntityRefs
+  const enableFallbackShaping = options.enableFallbackShaping ?? true
 
   const rawEntityRefs = lockedEntityRefs
     ? []
@@ -511,14 +1081,12 @@ export function coerceCinematicPlannerRaw(input: unknown, options: CoerceCinemat
     })
     .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
 
-  const rawShots = Array.isArray(record.shots)
-    ? record.shots
-    : Array.isArray(record.scenes)
-      ? record.scenes
-      : Array.isArray(record.beats)
-        ? record.beats
-        : Array.isArray(record.sequence)
-          ? record.sequence
+  const rawShots = Array.isArray(scriptRecord.shots)
+    ? scriptRecord.shots
+    : Array.isArray(scriptRecord.beats)
+      ? scriptRecord.beats
+      : Array.isArray(scriptRecord.sequence)
+        ? scriptRecord.sequence
           : []
 
   const entityLookup = createEntityLookup(entityRefs)
@@ -623,18 +1191,38 @@ export function coerceCinematicPlannerRaw(input: unknown, options: CoerceCinemat
     })
     .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
 
+  const fallbackDiagnostics: string[] = []
   const normalizedShots = shots.length > 0
     ? shots
-    : [buildFallbackShot({
-      requestSummary,
-      graphSummary,
-      entityRefs,
-    })]
+    : enableFallbackShaping
+      ? (() => {
+        fallbackDiagnostics.push('Cinematic script planner returned no valid shots; generated a fallback primary beat.')
+        return [buildFallbackShot({
+          requestSummary,
+          graphSummary,
+          entityRefs,
+        })]
+      })()
+      : []
+  const expandedShots = enableFallbackShaping
+    ? expandTemporalShots({
+      shots: normalizedShots,
+      promptText: options.promptText ?? requestSummary,
+      entityRefs: entityRefs.map((entry) => ({
+        id: entry.id,
+        kind: entry.kind,
+        sourceName: entry.sourceName,
+      })),
+    })
+    : normalizedShots
+  if (enableFallbackShaping && shots.length === 1 && expandedShots.length > 1) {
+    fallbackDiagnostics.push(`Expanded a single authored shot into ${expandedShots.length} temporal shots using prompt phase heuristics.`)
+  }
   const soleEnvironmentRefId =
     entityRefs.filter((entry) => entry.kind === 'environment').length === 1
       ? entityRefs.find((entry) => entry.kind === 'environment')?.id ?? null
       : null
-  const normalizedShotsWithDefaultLocation = normalizedShots.map((shot) => (
+  const normalizedShotsWithDefaultLocation = expandedShots.map((shot) => (
     !shot.locationRefId && soleEnvironmentRefId
       ? {
           ...shot,
@@ -648,12 +1236,12 @@ export function coerceCinematicPlannerRaw(input: unknown, options: CoerceCinemat
     entityLookup,
   )
 
-  if (relationshipRefs.length === 0) {
+  if (enableFallbackShaping && relationshipRefs.length === 0) {
     const firstLocation = entityRefs.find((entry) => entry.kind === 'environment') ?? null
     const characterRefs = entityRefs.filter((entry) => entry.kind === 'character')
     const propRefs = entityRefs.filter((entry) => entry.kind === 'item')
 
-    for (const propRef of propRefs) {
+    for (const propRef of propRefs.filter((entry) => !isIncidentalPropName(entry.sourceName))) {
       if (characterRefs[0]) {
         relationshipRefs.push({
           id: `rel_${characterRefs[0].id}_${propRef.id}`,
@@ -687,11 +1275,11 @@ export function coerceCinematicPlannerRaw(input: unknown, options: CoerceCinemat
   }
 
   const compositeRefPlans = sanitizeCompositeRefPlans(
-    coerceArrayWithSchema(record.compositeRefPlans ?? record.composites, cinematicCompositeRefPlanSchema),
+    coerceArrayWithSchema(scriptRecord.compositeRefs ?? record.compositeRefPlans ?? scriptRecord.composites ?? record.composites, cinematicCompositeRefPlanSchema),
     entityLookup,
   )
 
-  if (compositeRefPlans.length === 0) {
+  if (enableFallbackShaping && compositeRefPlans.length === 0) {
     for (const relationship of relationshipRefs) {
       if (!['equip', 'wear', 'hold', 'mounted_on'].includes(relationship.type)) continue
       const sourceRef = entityRefs.find((entry) => entry.id === relationship.sourceRefId) ?? null
@@ -711,25 +1299,24 @@ export function coerceCinematicPlannerRaw(input: unknown, options: CoerceCinemat
     }
   }
 
-  const storyboardPlanInput = record.storyboardPlan ?? record.storyboard
+  const storyboardPlanInput = scriptRecord.storyboard ?? record.storyboardPlan ?? record.storyboard
   const storyboardPlanParsed = storyboardSpecSchema.safeParse(storyboardPlanInput ?? {})
   const storyboardPlan = storyboardPlanParsed.success
     ? storyboardPlanParsed.data
     : {
-        mode:
-          normalizedShotsWithDefaultLocation.length > 1
-            ? 'hybrid' as const
-            : (normalizePromptTextForStoryboard(requestSummary).includes('storyboard') ? 'sequence_board' as const : 'none' as const),
-        summary: normalizedShotsWithDefaultLocation.length > 1 ? 'Generate a storyboard sheet and shot panels for continuity.' : '',
+        mode: normalizePromptTextForStoryboard(requestSummary).includes('storyboard') ? 'sequence_board' as const : 'none' as const,
+        summary: normalizePromptTextForStoryboard(requestSummary).includes('storyboard') ? 'Generate a storyboard sheet and shot panels for continuity.' : '',
         sequenceAssetKey: null,
-        panels: normalizedShotsWithDefaultLocation.map((shot, index) => ({
-          id: `panel_${shot.id}`,
-          shotId: shot.id,
-          title: shot.title,
-          assetKey: null,
-          notes: shot.compositionGuide,
-          orderIndex: index,
-        })),
+        panels: normalizePromptTextForStoryboard(requestSummary).includes('storyboard')
+          ? normalizedShotsWithDefaultLocation.map((shot, index) => ({
+              id: `panel_${shot.id}`,
+              shotId: shot.id,
+              title: shot.title,
+              assetKey: null,
+              notes: shot.compositionGuide,
+              orderIndex: index,
+            }))
+          : [],
       }
 
   const diagnosticsValue = record.diagnostics
@@ -748,17 +1335,119 @@ export function coerceCinematicPlannerRaw(input: unknown, options: CoerceCinemat
         ? JSON.stringify(assistantNotesValue)
         : undefined
 
+  const rawScenes = Array.isArray(scriptRecord.scenes) ? scriptRecord.scenes : []
+  const scenes = rawScenes
+    .map((entry, index) => {
+      const scene = asRecord(entry)
+      if (!scene) return null
+      const title = pickFirstString(scene, ['title', 'name', 'label']) || `Scene ${index + 1}`
+      const shotIds = Array.from(new Set(collectNamedLabels(scene.shotIds ?? scene.shots)))
+      return {
+        id: pickFirstString(scene, ['id', 'key']) || `scene_${index + 1}`,
+        title,
+        summary: pickFirstString(scene, ['summary', 'description']),
+        locationRefId: (() => {
+          const locationName = pickFirstString(scene, ['locationRefId', 'location', 'environment', 'setting'])
+          return locationName ? resolveEntityRefId(locationName, entityLookup) : null
+        })(),
+        shotIds,
+        continuityNotes: pickFirstString(scene, ['continuityNotes', 'notes']),
+        orderIndex: typeof scene.orderIndex === 'number' ? scene.orderIndex : index,
+      }
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+  const normalizedScenes = scenes.length > 0
+    ? scenes.map((scene, index) => ({
+        ...scene,
+        shotIds: scene.shotIds.length > 0
+          ? scene.shotIds.filter((shotId) => normalizedShotsWithDefaultLocation.some((shot) => shot.id === shotId))
+          : normalizedShotsWithDefaultLocation.map((shot) => shot.id),
+        orderIndex: index,
+      }))
+    : (normalizedShotsWithDefaultLocation.length > 0
+      ? [{
+          id: 'scene_1',
+          title: pickFirstString(scriptRecord, ['sceneTitle']) || 'Scene 1',
+          summary: graphSummary,
+          locationRefId: normalizedShotsWithDefaultLocation[0]?.locationRefId ?? null,
+          shotIds: normalizedShotsWithDefaultLocation.map((shot) => shot.id),
+          continuityNotes: pickFirstString(scriptRecord, ['continuityNotes']) || '',
+          orderIndex: 0,
+        }]
+      : [])
+  const scriptDoc = cinematicScriptDocSchema.parse({
+    title: pickFirstString(scriptRecord, ['title']) || graphName,
+    logline: pickFirstString(scriptRecord, ['logline', 'summary']) || graphSummary,
+    tone: pickFirstString(scriptRecord, ['tone']),
+    continuityNotes: pickFirstString(scriptRecord, ['continuityNotes']),
+    entityBindings: entityRefs.map((entityRef) => ({
+      id: entityRef.id,
+      kind: entityRef.kind,
+      role: entityRef.role,
+      label: entityRef.sourceName,
+      sourceName: entityRef.sourceName,
+      summary: entityRef.summary,
+      definitionKey: entityRef.definitionKey ?? null,
+      assetKey: null,
+      stagingNotes: '',
+      priority: entityRef.kind === 'environment' ? 60 : entityRef.kind === 'item' ? 55 : 70,
+      required: true,
+    })),
+    scenes: normalizedScenes,
+    shots: normalizedShotsWithDefaultLocation.map((shot, index) => ({
+      id: shot.id,
+      sceneId: normalizedScenes.find((scene) => scene.shotIds.includes(shot.id))?.id ?? normalizedScenes[0]?.id ?? null,
+      orderIndex: index,
+      title: shot.title,
+      subtitle: null,
+      beat: shot.beat,
+      emotionalBeat: '',
+      shotType: shot.shotType,
+      framing: shot.framing,
+      cameraAngle: shot.cameraAngle,
+      cameraMovement: shot.cameraMovement,
+      lensPreference: shot.lensPreference,
+      visualPrompt: shot.visualPrompt,
+      compositionGuide: shot.compositionGuide,
+      continuityNotes: '',
+      participantRefIds: shot.participantRefIds,
+      locationRefId: shot.locationRefId,
+      propRefIds: shot.propRefIds,
+      requiredSourceRefIds: Array.from(new Set([
+        ...(shot.storyboardRefIds ?? []),
+        ...(shot.compositeRefIds ?? []),
+        ...shot.participantRefIds,
+        ...(shot.locationRefId ? [shot.locationRefId] : []),
+        ...shot.propRefIds,
+      ])),
+      compositeRefIds: shot.compositeRefIds,
+      storyboardRefIds: shot.storyboardRefIds,
+      durationSeconds: shot.durationSeconds,
+      beats: shot.beats,
+      dialogue: shot.dialogue,
+      actions: shot.actions,
+      audio: shot.audio,
+    })),
+    relationships: relationshipRefs,
+    compositeRefs: compositeRefPlans.map((composite) => ({
+      ...composite,
+      outputAssetKey: composite.outputAssetKey ?? null,
+    })),
+    storyboard: storyboardPlan,
+  })
+
   return cinematicPlannerRawSchema.parse({
     requestSummary,
     graphName,
     graphSummary,
     entityRefs,
+    scriptDoc,
     relationshipRefs,
     compositeRefPlans,
     storyboardPlan,
     shots: normalizedShotsWithDefaultLocation,
     graphSettings: asRecord(record.graphSettings ?? record.settings) ?? {},
-    diagnostics,
+    diagnostics: [...diagnostics, ...fallbackDiagnostics],
     assistantNotes,
   })
 }
@@ -916,6 +1605,8 @@ export function cinematicEntityExtractionSystemPrompt() {
     'Use kind character for named people, speakers, fighters, targets, and participants unless the supplied catalog clearly contradicts that.',
     'Use kind environment for locations, rooms, taverns, streets, wilderness areas, and other settings.',
     'Use kind item for props, weapons, artifacts, tools, and carried objects.',
+    'Do not extract incidental set dressing as standalone items unless the prompt makes them a reusable hero prop or the supplied catalog clearly contains them already.',
+    'Examples of incidental set dressing that should usually stay inside shot staging rather than entityRefs: table, chair, stool, wall, floor, room dressing, crowd extras, generic mugs, generic bottles.',
     'Set resolution to "existing" only when a supplied definitionKey is a confident match.',
     'Set resolution to "create" when the prompt needs a new entity that is not clearly in the supplied catalog.',
     'Prefer reusing supplied definitions instead of creating near-duplicates.',
@@ -938,31 +1629,131 @@ export function cinematicEntityResolutionSystemPrompt() {
   ].join('\n')
 }
 
-export function cinematicPlannerSystemPrompt() {
+export function cinematicScriptRepairSystemPrompt() {
   return [
-    'You are the GraphCore cinematic planner.',
+    'You repair a weak GraphCore cinematic script draft into a stronger authored script.',
     'Return JSON only.',
-    'Return exactly one JSON object with top-level keys: requestSummary, graphName, graphSummary, entityRefs, shots, graphSettings, diagnostics, assistantNotes.',
-    'Plan a cinematic sequence, not patch operations.',
+    'Return exactly one JSON object with top-level keys: requestSummary, graphName, graphSummary, scriptDoc, graphSettings, diagnostics, assistantNotes.',
+    'Preserve the same story intent, locked entity ids, and overall cinematic shape unless one of the reported quality failures requires adjustment.',
+    'Do not invent new entities, rename existing entities, or change locked ids.',
+    'Rewrite generic shot titles into specific dramatic titles.',
+    'Rewrite beat text into authored cinematic prose instead of copying or paraphrasing the prompt directly.',
+    'For dialogue scenes, write actual spoken dialogue lines in character voice. Do not use summary placeholders like "X delivers a cutting accusation."',
+    'Fix actorRefId and targetRefId when the prompt clearly names who acts on whom.',
+    'Remove or demote incidental staging props like tables, chairs, mugs, and bottles unless the prompt clearly makes them an important interactive prop.',
+    'Keep shots concrete, readable, and screenplay-like.',
+  ].join('\n')
+}
+
+export function evaluateCinematicScriptQuality(input: {
+  promptText: string
+  scriptDoc: z.infer<typeof cinematicScriptDocSchema>
+}) {
+  const failures: string[] = []
+  const flags = {
+    usedFallbackPrimaryShot: false,
+    usedTemporalExpansionFallback: false,
+    usedDialogueFallback: false,
+    usedActionBindingRepair: false,
+    promptEchoShots: false,
+    genericShotTitles: false,
+    incidentalPropRelationships: false,
+  }
+
+  for (const shot of input.scriptDoc.shots) {
+    const impliesDialogue = shotImpliesDialogue({
+      promptText: input.promptText,
+      title: shot.title,
+      beat: shot.beat,
+      shotType: shot.shotType,
+    })
+    const impliesAction = shotImpliesAction({
+      promptText: input.promptText,
+      title: shot.title,
+      beat: shot.beat,
+      shotType: shot.shotType,
+    })
+    if (isGenericShotTitle(shot.title)) {
+      flags.genericShotTitles = true
+      failures.push(`Shot "${shot.id}" has a generic title.`)
+    }
+    if (beatLooksLikePromptEcho(shot.beat, input.promptText)) {
+      flags.promptEchoShots = true
+      failures.push(`Shot "${shot.id}" beat text echoes the prompt instead of authored prose.`)
+    }
+    if (impliesDialogue && shot.dialogue.length === 0) {
+      flags.usedDialogueFallback = true
+      failures.push(`Shot "${shot.id}" implies dialogue but provides no dialogue beats.`)
+    }
+    if (impliesAction && shot.actions.length === 0) {
+      failures.push(`Shot "${shot.id}" implies action but provides no action beats.`)
+    }
+    if ((impliesDialogue || impliesAction) && shot.audio.length === 0) {
+      failures.push(`Shot "${shot.id}" needs audio cues but provides none.`)
+    }
+    for (const dialogue of shot.dialogue) {
+      const speakerName =
+        input.scriptDoc.entityBindings.find((binding) => binding.id === dialogue.speakerRefId)?.sourceName
+        ?? input.scriptDoc.entityBindings.find((binding) => binding.id === dialogue.speakerRefId)?.label
+        ?? ''
+      if (!dialogue.line.trim() || dialogueLooksLikePlaceholder(dialogue.line, speakerName)) {
+        flags.usedDialogueFallback = true
+        failures.push(`Shot "${shot.id}" contains placeholder or summary dialogue.`)
+        break
+      }
+    }
+  }
+
+  for (const relationship of input.scriptDoc.relationships) {
+    if (!['equip', 'hold', 'wear'].includes(relationship.type)) continue
+    const targetBinding = input.scriptDoc.entityBindings.find((binding) => binding.id === relationship.targetRefId) ?? null
+    if (targetBinding?.kind === 'item' && isIncidentalPropName(targetBinding.sourceName || targetBinding.label)) {
+      flags.incidentalPropRelationships = true
+      failures.push(`Relationship "${relationship.id}" over-emphasizes incidental prop "${targetBinding.label}".`)
+    }
+  }
+
+  return {
+    failures: Array.from(new Set(failures)),
+    shouldRepair: failures.length > 0,
+    flags,
+  }
+}
+
+export function cinematicScriptPlannerSystemPrompt() {
+  return [
+    'You are the GraphCore cinematic script planner.',
+    'Return JSON only.',
+    'Return exactly one JSON object with top-level keys: requestSummary, graphName, graphSummary, scriptDoc, graphSettings, diagnostics, assistantNotes.',
+    'scriptDoc must be an object with keys: title, logline, tone, continuityNotes, scenes, shots, relationships, compositeRefs, storyboard.',
+    'Plan a cinematic script, not patch operations or graph nodes.',
     'The prompt context includes a locked entity set that has already been resolved against the project.',
-    'entityRefs must mirror that locked entity set only. Do not invent new entities, rename them, or change their ids.',
+    'Do not invent new entities, rename them, or change their ids.',
     'Every shot must name the participantRefIds, locationRefId, and propRefIds that are relevant for that beat whenever those ingredients exist in the request.',
     'Prompts like "Character A fights Character B in Environment C using Weapon D" must preserve both characters, the environment, and the weapon as explicit shot ingredients.',
-    'Reuse supplied existing definitions when they are clearly the intended match.',
-    'Set resolution to "existing" only when a supplied definitionKey is a confident match.',
-    'Do not classify named speaking participants or scene actors as items.',
+    'Each scene should group one or more ordered shots and preserve continuity notes when useful.',
+    'When the prompt names multiple dramatic phases in one sentence, break them into separate shots instead of compressing them into one.',
     'Named people in an argument, fight, dialogue, or reaction scene are characters unless the supplied catalog clearly says otherwise.',
-    'Only reference ids from the locked entity set in shots, relationships, dialogue, action beats, audio beats, and composites.',
-    'Set resolution to "create" when the entity should be created first.',
-    'For create refs, include a short summary that can be used as a content-generation brief.',
+    'Only reference ids from the locked entity set in shots, relationships, dialogue, action beats, audio beats, storyboards, and composites.',
     'Every shot must be concrete and implementation-facing with camera/framing intent.',
+    'Give every shot a specific dramatic title. Avoid generic titles like "Shot 1", "Beat 1", "Escalation", or "Final beat" unless the prompt itself explicitly uses those labels.',
+    'Write each shot beat as authored cinematic prose. Do not copy the user prompt into the beat field.',
     'Include a short compositionGuide for each shot that explains how to combine the planned ingredients in frame.',
+    'If the prompt contains temporal cues like "then", "finally", "ending with", "at the end", or "until", split the sequence into multiple ordered shots rather than collapsing everything into one shot.',
+    'Argument, confrontation, and dialogue scenes should usually produce at least two shots when escalation or a final physical beat is present.',
+    'When a physical action is named, include at least one explicit action beat and populate actorRefId and targetRefId.',
+    'When a verbal exchange or argument is named, include explicit dialogue beats with speakerRefId values and actual spoken lines.',
+    'Dialogue line text must be what the character actually says, not a summary of what they say.',
+    'Populate dialogue, actions, and audio arrays whenever the prompt implies them; do not leave them empty for argument, confrontation, or fight scenes.',
+    'Use storyboard and compositeRefs only as authoring aids; do not reason about graph nodes or graph topology.',
     'Prefer 1-5 shots for v1 unless the prompt explicitly asks for a longer sequence.',
     'Default to a linear sequence.',
     'Use environments as location anchors when possible.',
     'graphSettings should only include fields that matter for this cinematic.',
   ].join('\n')
 }
+
+export const cinematicPlannerSystemPrompt = cinematicScriptPlannerSystemPrompt
 
 export function cinematicGraphAuthorSystemPrompt() {
   return [
@@ -979,6 +1770,7 @@ export function cinematicGraphAuthorSystemPrompt() {
     'Prefer storyboard_ref nodes for sequence board or shot panel references when they are available in the plan.',
     'Prefer composite_ref nodes for subject-plus-prop or subject-plus-wardrobe continuity when the plan contains those combinations.',
     'Include a compositionGuide for each shot that explains staging, blocking, ingredient priority, and how the scene should combine the supplied sources.',
+    'Preserve and carry through dialogue, action, and audio beat structure from the planned shots.',
     'Keep the graph linear unless the provided plan explicitly mentions variations.',
   ].join('\n')
 }
@@ -1032,14 +1824,99 @@ export function finalizeCinematicEntityRefs(
 }
 
 export function materializeCinematicPlan(rawPlan: z.infer<typeof cinematicPlannerRawSchema>) {
+  const scriptDoc = rawPlan.scriptDoc
+    ? cinematicScriptDocSchema.parse(rawPlan.scriptDoc)
+    : cinematicScriptDocSchema.parse({
+        title: rawPlan.graphName,
+        logline: rawPlan.graphSummary,
+        entityBindings: rawPlan.entityRefs.map((entityRef) => ({
+          id: entityRef.id,
+          kind: entityRef.kind,
+          role: entityRef.role,
+          label: entityRef.sourceName,
+          sourceName: entityRef.sourceName,
+          summary: entityRef.summary,
+          definitionKey: entityRef.definitionKey ?? null,
+          assetKey: null,
+          stagingNotes: '',
+          priority: entityRef.kind === 'environment' ? 60 : entityRef.kind === 'item' ? 55 : 70,
+          required: true,
+        })),
+        scenes: rawPlan.shots.length > 0 ? [{
+          id: 'scene_1',
+          title: 'Scene 1',
+          summary: rawPlan.graphSummary,
+          locationRefId: rawPlan.shots[0]?.locationRefId ?? null,
+          shotIds: rawPlan.shots.map((shot) => shot.id),
+          continuityNotes: '',
+          orderIndex: 0,
+        }] : [],
+        shots: rawPlan.shots.map((shot, index) => ({
+          id: shot.id,
+          sceneId: 'scene_1',
+          orderIndex: index,
+          title: shot.title,
+          subtitle: null,
+          beat: shot.beat,
+          emotionalBeat: '',
+          shotType: shot.shotType,
+          framing: shot.framing,
+          cameraAngle: shot.cameraAngle,
+          cameraMovement: shot.cameraMovement,
+          lensPreference: shot.lensPreference,
+          visualPrompt: shot.visualPrompt,
+          compositionGuide: shot.compositionGuide,
+          continuityNotes: '',
+          participantRefIds: shot.participantRefIds,
+          locationRefId: shot.locationRefId,
+          propRefIds: shot.propRefIds,
+          requiredSourceRefIds: Array.from(new Set([
+            ...shot.participantRefIds,
+            ...(shot.locationRefId ? [shot.locationRefId] : []),
+            ...shot.propRefIds,
+          ])),
+          compositeRefIds: [],
+          storyboardRefIds: [],
+          durationSeconds: shot.durationSeconds,
+          beats: shot.beats,
+          dialogue: shot.dialogue,
+          actions: shot.actions,
+          audio: shot.audio,
+        })),
+        relationships: rawPlan.relationshipRefs,
+        compositeRefs: rawPlan.compositeRefPlans,
+        storyboard: rawPlan.storyboardPlan,
+      })
+  const derivedShots = scriptDoc.shots.map((shot) => cinematicShotPlanSchema.parse({
+    id: shot.id,
+    title: shot.title,
+    beat: shot.beat,
+    participantRefIds: shot.participantRefIds,
+    locationRefId: shot.locationRefId,
+    propRefIds: shot.propRefIds,
+    shotType: shot.shotType,
+    framing: shot.framing,
+    cameraAngle: shot.cameraAngle,
+    cameraMovement: shot.cameraMovement,
+    lensPreference: shot.lensPreference,
+    durationSeconds: shot.durationSeconds,
+    visualPrompt: shot.visualPrompt,
+    compositionGuide: shot.compositionGuide,
+    beats: shot.beats,
+    dialogue: shot.dialogue,
+    actions: shot.actions,
+    audio: shot.audio,
+  }))
+
   return cinematicPlanSchema.parse({
     graphName: rawPlan.graphName,
     graphSummary: rawPlan.graphSummary,
     entityRefs: rawPlan.entityRefs,
-    relationshipRefs: rawPlan.relationshipRefs,
-    compositeRefPlans: rawPlan.compositeRefPlans,
-    storyboardPlan: rawPlan.storyboardPlan,
-    shots: rawPlan.shots,
+    scriptDoc,
+    relationshipRefs: scriptDoc.relationships,
+    compositeRefPlans: scriptDoc.compositeRefs,
+    storyboardPlan: scriptDoc.storyboard,
+    shots: derivedShots,
     graphSettings: rawPlan.graphSettings ?? {},
     autoRun: false,
   })

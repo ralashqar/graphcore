@@ -2,7 +2,8 @@ import '@supabase/functions-js/edge-runtime.d.ts'
 
 import { z } from 'npm:zod@4'
 
-import { cinematicRunStatusResponseSchema } from '../../../src/domain/cinematics.ts'
+import { cinematicRunStatusResponseSchema, cinematicScriptDocSchema } from '../../../src/domain/cinematics.ts'
+import { compileCinematicGraphFromScriptDoc } from '../../../src/domain/cinematicScriptCompiler.ts'
 import {
   type CinematicPlan,
   type WorldBuildJob,
@@ -25,12 +26,20 @@ import {
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
 import { buildDefaultDefinitionComponents } from '../_shared/world-build-placeholders.ts'
 import { runStructuredWorldBuildModel, isTerminalWorldBuildStatus } from '../_shared/world-build.ts'
-import {
-  buildCinematicGraphFromAuthorPlan,
-  cinematicGraphAuthorSchema,
-  cinematicGraphAuthorSystemPrompt,
-} from '../_shared/world-build-cinematics.ts'
 import { buildAssetSlug } from '../../../src/domain/assets.ts'
+import {
+  buildFallbackActionBeats,
+  buildFallbackAudioBeats,
+  buildFallbackDialogueBeats,
+  cinematicScriptPlannerSystemPrompt,
+  cinematicScriptRepairSystemPrompt,
+  coerceCinematicPlannerRaw,
+  evaluateCinematicScriptQuality,
+  inferPromptDirectedActionBinding,
+  materializeCinematicPlan,
+  shotImpliesAction,
+  shotImpliesDialogue,
+} from '../_shared/world-build-cinematics.ts'
 
 const contentGenerationSchema = z.object({
   name: z.string(),
@@ -47,11 +56,11 @@ const contentGenerationSchema = z.object({
     generationPrompt: z.string().nullable().default(null),
     generationStyle: z.string().nullable().default(null),
   }).optional(),
-  physicalItemProfile: z.object({
+  physicalItemProfile: z.preprocess((value) => normalizeGeneratedPhysicalItemProfile(value), z.object({
     physicalSubtype: z.enum(['prop', 'equipment', 'weapon', 'pickup', 'world_object']).default('pickup'),
     worldPlacementRole: z.string().default(''),
     pickupContext: z.string().default(''),
-  }).optional(),
+  })).optional(),
   environmentProfile: z.preprocess((value) => normalizeGeneratedEnvironmentProfile(value), z.object({
     subtype: z.enum(['interior', 'exterior', 'dungeon', 'settlement', 'wilderness', 'structure', 'biome', 'poi']).default('exterior'),
     biome: z.string().default(''),
@@ -87,6 +96,7 @@ const contentGenerationRawSchema = z.record(z.string(), z.unknown())
 const CANONICAL_ENVIRONMENT_SUBTYPES = ['interior', 'exterior', 'dungeon', 'settlement', 'wilderness', 'structure', 'biome', 'poi'] as const
 const CANONICAL_TRAVERSAL_TYPES = ['walk', 'climb', 'swim', 'fly', 'mixed'] as const
 const CANONICAL_SCALE_TIERS = ['room', 'site', 'zone', 'region'] as const
+const CANONICAL_PHYSICAL_SUBTYPES = ['prop', 'equipment', 'weapon', 'pickup', 'world_object'] as const
 
 function normalizeGeneratedToken(value: string) {
   return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
@@ -214,6 +224,36 @@ function normalizeGeneratedScaleTier(value: unknown) {
   if (['district', 'area', 'large_area'].includes(normalized)) return 'zone'
   if (['world', 'continent', 'nation'].includes(normalized)) return 'region'
   return 'site'
+}
+
+function normalizeGeneratedPhysicalSubtype(value: unknown) {
+  if (typeof value !== 'string') return 'pickup'
+  const normalized = normalizeGeneratedToken(value)
+  if (CANONICAL_PHYSICAL_SUBTYPES.includes(normalized as typeof CANONICAL_PHYSICAL_SUBTYPES[number])) {
+    return normalized
+  }
+  if (['furniture', 'table', 'chair', 'stool', 'bench', 'crate', 'barrel', 'container', 'fixture'].includes(normalized)) {
+    return 'world_object'
+  }
+  if (['gear', 'armor', 'armour', 'clothing', 'wardrobe'].includes(normalized)) {
+    return 'equipment'
+  }
+  if (['sword', 'axe', 'bow', 'blade', 'gun', 'shield'].includes(normalized)) {
+    return 'weapon'
+  }
+  if (['tool', 'device', 'trinket', 'artifact', 'object'].includes(normalized)) {
+    return 'prop'
+  }
+  return 'pickup'
+}
+
+function normalizeGeneratedPhysicalItemProfile(value: unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+  const source = value as Record<string, unknown>
+  return {
+    ...source,
+    physicalSubtype: normalizeGeneratedPhysicalSubtype(source.physicalSubtype),
+  }
 }
 
 function inferGeneratedEnvironmentInteriorFlag(subtype: string, rawSubtype: unknown, rawFlag: unknown) {
@@ -387,6 +427,45 @@ function describeTopLevelKeys(value: unknown) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return '<not-an-object>'
   const keys = Object.keys(value as Record<string, unknown>)
   return keys.length > 0 ? keys.join(', ') : '<no-keys>'
+}
+
+function normalizeScriptToken(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+}
+
+function isIncidentalScriptProp(value: string) {
+  return [
+    'table',
+    'chair',
+    'stool',
+    'bench',
+    'bar',
+    'counter',
+    'mug',
+    'cup',
+    'glass',
+    'bottle',
+    'plate',
+    'bowl',
+  ].includes(normalizeScriptToken(value))
+}
+
+function promptMakesPropHero(promptText: string, propName: string) {
+  const normalizedPrompt = normalizeScriptToken(promptText)
+  const normalizedProp = normalizeScriptToken(propName)
+  if (!normalizedPrompt || !normalizedProp) return false
+  return [
+    `use ${normalizedProp}`,
+    `uses ${normalizedProp}`,
+    `using ${normalizedProp}`,
+    `with ${normalizedProp}`,
+    `grab ${normalizedProp}`,
+    `grabs ${normalizedProp}`,
+    `throw ${normalizedProp}`,
+    `throws ${normalizedProp}`,
+    `smash ${normalizedProp}`,
+    `smashes ${normalizedProp}`,
+  ].some((pattern) => normalizedPrompt.includes(pattern))
 }
 
 function conceptPromptFromDefinition(definition: SnapshotDefinition, job: JobRow, snapshot: WorldBuildPollSnapshot) {
@@ -1247,6 +1326,66 @@ function collectRequiredShotSourceRefIds(shot: {
   ]))
 }
 
+function repairDialogueBeats(
+  dialogue: z.infer<typeof cinematicGraphAuthorSchema>['shots'][number]['dialogue'],
+  fallbackDialogue: z.infer<typeof cinematicGraphAuthorSchema>['shots'][number]['dialogue'],
+  participantRefIds: string[],
+) {
+  if (dialogue.length === 0) return fallbackDialogue
+  return dialogue.map((entry, index) => ({
+    ...entry,
+    speakerRefId:
+      entry.speakerRefId
+      ?? fallbackDialogue[index]?.speakerRefId
+      ?? participantRefIds[index % Math.max(participantRefIds.length, 1)]
+      ?? null,
+  }))
+}
+
+function repairActionBeats(
+  actions: z.infer<typeof cinematicGraphAuthorSchema>['shots'][number]['actions'],
+  fallbackActions: z.infer<typeof cinematicGraphAuthorSchema>['shots'][number]['actions'],
+  participantRefIds: string[],
+  propRefIds: string[],
+) {
+  if (actions.length === 0) return fallbackActions
+  return actions.map((entry, index) => ({
+    ...entry,
+    actorRefId:
+      entry.actorRefId
+      ?? fallbackActions[index]?.actorRefId
+      ?? participantRefIds[0]
+      ?? null,
+    targetRefId:
+      entry.targetRefId
+      ?? fallbackActions[index]?.targetRefId
+      ?? participantRefIds[1]
+      ?? participantRefIds[0]
+      ?? null,
+    propRefId:
+      entry.propRefId
+      ?? fallbackActions[index]?.propRefId
+      ?? propRefIds[0]
+      ?? null,
+  }))
+}
+
+function repairAudioBeats(
+  audio: z.infer<typeof cinematicGraphAuthorSchema>['shots'][number]['audio'],
+  fallbackAudio: z.infer<typeof cinematicGraphAuthorSchema>['shots'][number]['audio'],
+  locationRefId: string | null,
+) {
+  if (audio.length === 0) return fallbackAudio
+  return audio.map((entry, index) => ({
+    ...entry,
+    sourceRefId:
+      entry.sourceRefId
+      ?? fallbackAudio[index]?.sourceRefId
+      ?? locationRefId
+      ?? null,
+  }))
+}
+
 function validateAndRepairCinematicAuthorPlan(input: {
   cinematicPlan: z.infer<typeof cinematicPlanSchema>
   fallbackPlan: z.infer<typeof cinematicGraphAuthorSchema>
@@ -1316,9 +1455,9 @@ function validateAndRepairCinematicAuthorPlan(input: {
       storyboardRefIds: [...(authorShot.storyboardRefIds.length > 0 ? authorShot.storyboardRefIds : fallbackShot.storyboardRefIds)],
       compositionGuide: authorShot.compositionGuide.trim() || fallbackShot.compositionGuide,
       beats: authorShot.beats.length > 0 ? authorShot.beats : fallbackShot.beats,
-      dialogue: authorShot.dialogue.length > 0 ? authorShot.dialogue : fallbackShot.dialogue,
-      actions: authorShot.actions.length > 0 ? authorShot.actions : fallbackShot.actions,
-      audio: authorShot.audio.length > 0 ? authorShot.audio : fallbackShot.audio,
+      dialogue: repairDialogueBeats(authorShot.dialogue, fallbackShot.dialogue, shotPlan.participantRefIds),
+      actions: repairActionBeats(authorShot.actions, fallbackShot.actions, shotPlan.participantRefIds, shotPlan.propRefIds),
+      audio: repairAudioBeats(authorShot.audio, fallbackShot.audio, shotPlan.locationRefId),
     })
   }
 
@@ -1732,6 +1871,161 @@ Deno.serve(async (request) => {
               }
             })
 
+            let authoredCinematicPlan = cinematicPlan.data
+            const plannerDiagnostics: string[] = []
+            let authoringFlags = {
+              usedFallbackPrimaryShot: false,
+              usedTemporalExpansionFallback: false,
+              usedDialogueFallback: false,
+              usedActionBindingRepair: false,
+              usedRepairPass: false,
+            }
+            if (!authoredCinematicPlan.scriptDoc) {
+              await updateJob(client, job.id, {
+                result_context: {
+                  ...(job.result_context ?? {}),
+                  graphKey,
+                  phase: 'writing_script',
+                },
+              })
+
+              const cinematicDraftRaw = await runStructuredWorldBuildModel({
+                model: payload.model,
+                passLabel: 'Cinematic script planner',
+                systemText: cinematicScriptPlannerSystemPrompt(),
+                promptContext: {
+                  prompt: batch.prompt,
+                  project: snapshot.project,
+                  draft: snapshot.draft,
+                  gameSpec: snapshot.gameSpec ?? null,
+                  requestSummary: batch.request_summary,
+                  graphName: authoredCinematicPlan.graphName,
+                  graphSummary: authoredCinematicPlan.graphSummary,
+                  lockedEntityRefs: resolvedEntityRefs,
+                  existingEntityRefs: resolvedEntityRefs.filter((entry) => entry.resolution === 'existing'),
+                  createEntityRefs: [],
+                },
+                schema: z.record(z.string(), z.unknown()),
+                maxOutputTokens: 10000,
+              })
+              let cinematicDraft = coerceCinematicPlannerRaw(cinematicDraftRaw, {
+                lockedEntityRefs: resolvedEntityRefs,
+                allowEntityCreation: false,
+                promptText: batch.prompt,
+                enableFallbackShaping: false,
+              })
+              plannerDiagnostics.push(...cinematicDraft.diagnostics)
+
+              let draftPlan = materializeCinematicPlan({
+                ...cinematicDraft,
+                requestSummary: cinematicDraft.requestSummary || batch.request_summary,
+                graphName: cinematicDraft.graphName || authoredCinematicPlan.graphName,
+                graphSummary: cinematicDraft.graphSummary || authoredCinematicPlan.graphSummary,
+                entityRefs: resolvedEntityRefs,
+              })
+              let qualityReport = evaluateCinematicScriptQuality({
+                promptText: batch.prompt,
+                scriptDoc: cinematicScriptDocSchema.parse(draftPlan.scriptDoc),
+              })
+              plannerDiagnostics.push(...qualityReport.failures)
+              if (qualityReport.shouldRepair) {
+                console.warn('[GraphCore] cinematic script draft requires repair.', {
+                  batchId: batch.id,
+                  worldBuildJobId: job.id,
+                  graphKey,
+                  qualityFailures: qualityReport.failures,
+                })
+              }
+
+              if (qualityReport.shouldRepair) {
+                authoringFlags.usedRepairPass = true
+                await updateJob(client, job.id, {
+                  result_context: {
+                    ...(job.result_context ?? {}),
+                    graphKey,
+                    phase: 'repairing_script',
+                    qualityFailures: qualityReport.failures,
+                  },
+                })
+
+                const repairedDraftRaw = await runStructuredWorldBuildModel({
+                  model: payload.model,
+                  passLabel: 'Cinematic script repair',
+                  systemText: cinematicScriptRepairSystemPrompt(),
+                  promptContext: {
+                    prompt: batch.prompt,
+                    project: snapshot.project,
+                    draft: snapshot.draft,
+                    gameSpec: snapshot.gameSpec ?? null,
+                    requestSummary: batch.request_summary,
+                    graphName: draftPlan.graphName,
+                    graphSummary: draftPlan.graphSummary,
+                    lockedEntityRefs: resolvedEntityRefs,
+                    qualityFailures: qualityReport.failures,
+                    draftScript: draftPlan.scriptDoc,
+                  },
+                  schema: z.record(z.string(), z.unknown()),
+                  maxOutputTokens: 10000,
+                })
+                cinematicDraft = coerceCinematicPlannerRaw(repairedDraftRaw, {
+                  lockedEntityRefs: resolvedEntityRefs,
+                  allowEntityCreation: false,
+                  promptText: batch.prompt,
+                  enableFallbackShaping: false,
+                })
+                plannerDiagnostics.push(...cinematicDraft.diagnostics)
+                draftPlan = materializeCinematicPlan({
+                  ...cinematicDraft,
+                  requestSummary: cinematicDraft.requestSummary || batch.request_summary,
+                  graphName: cinematicDraft.graphName || draftPlan.graphName,
+                  graphSummary: cinematicDraft.graphSummary || draftPlan.graphSummary,
+                  entityRefs: resolvedEntityRefs,
+                })
+                qualityReport = evaluateCinematicScriptQuality({
+                  promptText: batch.prompt,
+                  scriptDoc: cinematicScriptDocSchema.parse(draftPlan.scriptDoc),
+                })
+                plannerDiagnostics.push(...qualityReport.failures)
+                if (qualityReport.shouldRepair) {
+                  console.warn('[GraphCore] cinematic script repair left residual quality concerns.', {
+                    batchId: batch.id,
+                    worldBuildJobId: job.id,
+                    graphKey,
+                    qualityFailures: qualityReport.failures,
+                  })
+                }
+              }
+
+              if ((draftPlan.scriptDoc?.shots?.length ?? 0) === 0) {
+                const fallbackDraft = coerceCinematicPlannerRaw(cinematicDraftRaw, {
+                  lockedEntityRefs: resolvedEntityRefs,
+                  allowEntityCreation: false,
+                  promptText: batch.prompt,
+                  enableFallbackShaping: true,
+                })
+                plannerDiagnostics.push(...fallbackDraft.diagnostics)
+                authoredCinematicPlan = materializeCinematicPlan({
+                  ...fallbackDraft,
+                  requestSummary: fallbackDraft.requestSummary || batch.request_summary,
+                  graphName: fallbackDraft.graphName || draftPlan.graphName,
+                  graphSummary: fallbackDraft.graphSummary || draftPlan.graphSummary,
+                  entityRefs: resolvedEntityRefs,
+                })
+                authoringFlags.usedFallbackPrimaryShot = fallbackDraft.diagnostics.some((entry) => entry.includes('fallback primary beat'))
+                authoringFlags.usedTemporalExpansionFallback = fallbackDraft.diagnostics.some((entry) => entry.includes('temporal shots'))
+                authoringFlags.usedDialogueFallback = fallbackDraft.diagnostics.some((entry) => entry.includes('placeholder or summary dialogue'))
+                console.warn('[GraphCore] cinematic script authoring fell back to heuristic shaping.', {
+                  batchId: batch.id,
+                  worldBuildJobId: job.id,
+                  graphKey,
+                  diagnostics: fallbackDraft.diagnostics,
+                })
+              } else {
+                authoredCinematicPlan = draftPlan
+                authoringFlags.usedDialogueFallback = qualityReport.flags.usedDialogueFallback
+              }
+            }
+
             const cinematicDefinitions = await loadDefinitionRecordsByKeys(
               client,
               batch.draft_id,
@@ -1758,13 +2052,21 @@ Deno.serve(async (request) => {
                 })
                 .filter((entry): entry is [string, string] => Array.isArray(entry)),
             )
+            for (const composite of authoredCinematicPlan.compositeRefPlans) {
+              if (composite.outputAssetKey && !compositeAssetKeys[composite.id]) {
+                compositeAssetKeys[composite.id] = composite.outputAssetKey
+              }
+            }
             const storyboardSequenceAssetKey =
               jobs.find((candidate) =>
                 candidate.kind === 'cinematic_storyboard_image'
                 && typeof candidate.target_keys?.storyboardAssetId === 'string'
                 && candidate.target_keys.storyboardAssetId === 'storyboard_sequence'
                 && (job.depends_on_job_ids ?? []).includes(candidate.id),
-              )?.target_keys?.assetKey ?? null
+              )?.target_keys?.assetKey
+              ?? authoredCinematicPlan.storyboardPlan?.sequenceAssetKey
+              ?? authoredCinematicPlan.scriptDoc?.storyboard?.sequenceAssetKey
+              ?? null
             const storyboardPanelAssetKeys = Object.fromEntries(
               jobs
                 .filter((candidate) => candidate.kind === 'cinematic_storyboard_image' && (job.depends_on_job_ids ?? []).includes(candidate.id))
@@ -1777,107 +2079,385 @@ Deno.serve(async (request) => {
                 })
                 .filter((entry): entry is [string, string] => Array.isArray(entry)),
             )
+            for (const panel of authoredCinematicPlan.storyboardPlan?.panels ?? []) {
+              const assetKey = panel.assetKey
+                ?? authoredCinematicPlan.scriptDoc?.storyboard?.panels.find((candidate) => candidate.id === panel.id)?.assetKey
+                ?? null
+              if (panel.id && assetKey && !storyboardPanelAssetKeys[panel.id]) {
+                storyboardPanelAssetKeys[panel.id] = assetKey
+              }
+            }
             const additionalCinematicAssetKeys = Array.from(new Set([
               ...Object.values(compositeAssetKeys),
               ...(storyboardSequenceAssetKey ? [storyboardSequenceAssetKey] : []),
               ...Object.values(storyboardPanelAssetKeys),
             ]))
             const cinematicAssets = await loadProjectAssetsByKeys(client, batch.project_id, [...displayAssetKeys, ...additionalCinematicAssetKeys])
-            const fallbackAuthorPlan = buildFallbackAuthorPlan({
-              cinematicPlan: cinematicPlan.data,
-              resolvedDefinitions: cinematicDefinitions.map((definition) => ({
-                key: definition.key,
-                kind: definition.kind,
-                name: definition.name,
-                summary: definition.summary,
+            const definitionByKey = new Map(cinematicDefinitions.map((definition) => [definition.key, definition]))
+            const displayAssetKeyByDefinitionKey = new Map(
+              cinematicDefinitions.map((definition) => [definition.key, resolveDefinitionDisplayAssetKey(definition as {
+                key: string
+                kind: string
+                name: string
+                iconAssetKey?: string | null
+                components?: Array<{ type?: string; config?: Record<string, unknown> }>
+              }) ?? null]),
+            )
+            const soleEnvironmentRefId =
+              resolvedEntityRefs.filter((entityRef) => entityRef.kind === 'environment').length === 1
+                ? resolvedEntityRefs.find((entityRef) => entityRef.kind === 'environment')?.id ?? null
+                : null
+            const scriptRepairDiagnostics: string[] = []
+            const rawScriptDoc = authoredCinematicPlan.scriptDoc
+              ? cinematicScriptDocSchema.parse(authoredCinematicPlan.scriptDoc)
+              : cinematicScriptDocSchema.parse({
+                  title: authoredCinematicPlan.graphName,
+                  logline: authoredCinematicPlan.graphSummary,
+                  entityBindings: [],
+                  scenes: [],
+                  shots: [],
+                  relationships: authoredCinematicPlan.relationshipRefs,
+                  compositeRefs: authoredCinematicPlan.compositeRefPlans,
+                  storyboard: authoredCinematicPlan.storyboardPlan,
+                })
+            const incidentalScriptPropRefIds = new Set(
+              rawScriptDoc.entityBindings
+                .filter((binding) => (
+                  binding.kind === 'item'
+                  && isIncidentalScriptProp(binding.sourceName || binding.label)
+                  && !promptMakesPropHero(batch.prompt, binding.sourceName || binding.label)
+                ))
+                .map((binding) => binding.id),
+            )
+            if (incidentalScriptPropRefIds.size > 0) {
+              scriptRepairDiagnostics.push(`Removed incidental staging props from cinematic bindings: ${Array.from(incidentalScriptPropRefIds).join(', ')}.`)
+            }
+            const scriptDoc = cinematicScriptDocSchema.parse({
+              ...rawScriptDoc,
+              entityBindings: resolvedEntityRefs.map((entityRef) => {
+                const existingBinding = rawScriptDoc.entityBindings.find((binding) => binding.id === entityRef.id) ?? null
+                const definition = definitionByKey.get(entityRef.definitionKey)
+                if (
+                  entityRef.kind === 'item'
+                  && incidentalScriptPropRefIds.has(entityRef.id)
+                ) {
+                  return null
+                }
+                return {
+                  id: entityRef.id,
+                  kind: entityRef.kind,
+                  role: existingBinding?.role ?? entityRef.role,
+                  label: existingBinding?.label || definition?.name || entityRef.sourceName,
+                  sourceName: entityRef.sourceName,
+                  summary: existingBinding?.summary || definition?.summary || entityRef.summary,
+                  definitionKey: entityRef.definitionKey ?? null,
+                  assetKey: existingBinding?.assetKey ?? (entityRef.definitionKey ? displayAssetKeyByDefinitionKey.get(entityRef.definitionKey) ?? null : null),
+                  stagingNotes: existingBinding?.stagingNotes ?? '',
+                  priority: existingBinding?.priority ?? (entityRef.kind === 'environment' ? 60 : entityRef.kind === 'item' ? 55 : 70),
+                  required: existingBinding?.required ?? true,
+                }
+              }).filter((binding): binding is NonNullable<typeof binding> => binding !== null),
+              relationships: rawScriptDoc.relationships.filter((relationship) => (
+                !incidentalScriptPropRefIds.has(relationship.sourceRefId)
+                && !incidentalScriptPropRefIds.has(relationship.targetRefId)
+              )),
+              compositeRefs: rawScriptDoc.compositeRefs
+                .filter((composite) => composite.sourceRefIds.every((refId) => !incidentalScriptPropRefIds.has(refId)))
+                .map((composite) => ({
+                ...composite,
+                outputAssetKey: compositeAssetKeys[composite.id] ?? composite.outputAssetKey ?? null,
+                })),
+              storyboard: rawScriptDoc.storyboard
+                ? {
+                    ...rawScriptDoc.storyboard,
+                    sequenceAssetKey: storyboardSequenceAssetKey ?? rawScriptDoc.storyboard.sequenceAssetKey ?? null,
+                    panels: rawScriptDoc.storyboard.panels.map((panel) => ({
+                      ...panel,
+                      assetKey: storyboardPanelAssetKeys[panel.id] ?? panel.assetKey ?? null,
+                    })),
+                  }
+                : null,
+              scenes: rawScriptDoc.scenes.map((scene, index) => ({
+                ...scene,
+                locationRefId: scene.locationRefId ?? soleEnvironmentRefId,
+                orderIndex: index,
               })),
-              resolvedEntityRefs,
-              compositeAssetKeys,
-              storyboardAssetKeys: {
-                sequenceAssetKey: storyboardSequenceAssetKey,
-                panelAssetKeys: storyboardPanelAssetKeys,
+              shots: rawScriptDoc.shots.map((shot, index) => {
+                const availableCompositeRefIds = new Set(
+                  rawScriptDoc.compositeRefs
+                    .filter((entry) => compositeAssetKeys[entry.id] ?? entry.outputAssetKey)
+                    .map((entry) => entry.id),
+                )
+                const availableStoryboardRefIds = new Set<string>([
+                  ...(storyboardSequenceAssetKey ? ['storyboard_sequence'] : []),
+                  ...Object.entries(storyboardPanelAssetKeys)
+                    .filter(([, assetKey]) => typeof assetKey === 'string' && assetKey.length > 0)
+                    .map(([panelId]) => panelId),
+                  ...((rawScriptDoc.storyboard?.panels ?? [])
+                    .filter((panel) => panel.assetKey)
+                    .map((panel) => panel.id)),
+                ])
+                const participantRefIds = [...shot.participantRefIds]
+                const locationRefId = shot.locationRefId ?? soleEnvironmentRefId
+                const filteredPropRefIds = shot.propRefIds.filter((refId) => !incidentalScriptPropRefIds.has(refId))
+                const participantBindings = participantRefIds
+                  .map((refId) => rawScriptDoc.entityBindings.find((binding) => binding.id === refId) ?? null)
+                  .filter((binding): binding is NonNullable<typeof binding> => binding !== null)
+                  .map((binding) => ({
+                    id: binding.id,
+                    sourceName: binding.sourceName || binding.label,
+                  }))
+                const dialogue = (shot.dialogue.length > 0 ? shot.dialogue : (
+                  shotImpliesDialogue({
+                    promptText: batch.prompt,
+                    title: shot.title,
+                    beat: shot.beat,
+                    shotType: shot.shotType,
+                  })
+                    ? buildFallbackDialogueBeats({
+                      shotId: shot.id,
+                      beat: shot.beat,
+                      participants: participantBindings,
+                    })
+                    : []
+                )).map((entry, dialogueIndex) => {
+                  if (entry.speakerRefId || participantRefIds.length === 0) return entry
+                  scriptRepairDiagnostics.push(`Filled missing speakerRefId for shot "${shot.title}" dialogue beat ${dialogueIndex + 1}.`)
+                  return {
+                    ...entry,
+                    speakerRefId: participantRefIds[Math.min(dialogueIndex, participantRefIds.length - 1)] ?? participantRefIds[0] ?? null,
+                  }
+                })
+                if (shot.dialogue.length === 0 && dialogue.length > 0) {
+                  authoringFlags.usedDialogueFallback = true
+                  scriptRepairDiagnostics.push(`Synthesized dialogue beats for shot "${shot.title}" after script repair left them empty.`)
+                }
+                const actions = (shot.actions.length > 0 ? shot.actions : (
+                  shotImpliesAction({
+                    promptText: batch.prompt,
+                    title: shot.title,
+                    beat: shot.beat,
+                    shotType: shot.shotType,
+                  })
+                    ? buildFallbackActionBeats({
+                      shotId: shot.id,
+                      beat: shot.beat,
+                      participants: participantBindings,
+                      propRefIds: filteredPropRefIds,
+                    })
+                    : []
+                )).map((entry, actionIndex) => {
+                  const nextEntry = { ...entry }
+                  let repaired = false
+                  const promptDirectedAction = inferPromptDirectedActionBinding(batch.prompt, nextEntry.verb, participantBindings)
+                  if (promptDirectedAction && (
+                    nextEntry.actorRefId !== promptDirectedAction.actorRefId
+                    || nextEntry.targetRefId !== promptDirectedAction.targetRefId
+                  )) {
+                    nextEntry.actorRefId = promptDirectedAction.actorRefId
+                    nextEntry.targetRefId = promptDirectedAction.targetRefId
+                    repaired = true
+                    authoringFlags.usedActionBindingRepair = true
+                    scriptRepairDiagnostics.push(`Corrected named action binding for shot "${shot.title}" action beat ${actionIndex + 1}.`)
+                  }
+                  if (!nextEntry.actorRefId && participantRefIds[0]) {
+                    nextEntry.actorRefId = participantRefIds[0]
+                    repaired = true
+                  }
+                  if (!nextEntry.targetRefId && participantRefIds.length > 1) {
+                    nextEntry.targetRefId = participantRefIds.find((refId) => refId !== nextEntry.actorRefId) ?? participantRefIds[1] ?? null
+                    repaired = true
+                  }
+                  if (repaired) {
+                    scriptRepairDiagnostics.push(`Filled missing action refs for shot "${shot.title}" action beat ${actionIndex + 1}.`)
+                  }
+                  return nextEntry
+                })
+                if (shot.actions.length === 0 && actions.length > 0) {
+                  scriptRepairDiagnostics.push(`Synthesized action beats for shot "${shot.title}" after script repair left them empty.`)
+                }
+                const audio = shot.audio.length > 0
+                  ? shot.audio.map((entry, audioIndex) => {
+                      if (entry.sourceRefId || entry.kind === 'silence') return entry
+                      const sourceRefId =
+                        entry.kind === 'dialogue'
+                          ? (dialogue[0]?.speakerRefId ?? participantRefIds[0] ?? null)
+                          : locationRefId
+                      if (sourceRefId) {
+                        scriptRepairDiagnostics.push(`Filled missing audio sourceRefId for shot "${shot.title}" audio cue ${audioIndex + 1}.`)
+                      }
+                      return {
+                        ...entry,
+                        sourceRefId,
+                      }
+                    })
+                  : (actions.length > 0 || dialogue.length > 0)
+                    ? buildFallbackAudioBeats({
+                      shotId: shot.id,
+                      beat: shot.beat,
+                      locationRefId,
+                    }).map((entry, audioIndex) => {
+                      if (entry.sourceRefId || entry.kind === 'silence') return entry
+                      const sourceRefId =
+                        entry.kind === 'dialogue'
+                          ? (dialogue[0]?.speakerRefId ?? participantRefIds[0] ?? null)
+                          : locationRefId
+                      if (sourceRefId) {
+                        scriptRepairDiagnostics.push(`Filled missing audio sourceRefId for shot "${shot.title}" audio cue ${audioIndex + 1}.`)
+                      }
+                      return {
+                        ...entry,
+                        sourceRefId,
+                      }
+                    })
+                    : shot.audio.length === 0 && (
+                      shotImpliesDialogue({
+                        promptText: batch.prompt,
+                        title: shot.title,
+                        beat: shot.beat,
+                        shotType: shot.shotType,
+                      })
+                      || shotImpliesAction({
+                        promptText: batch.prompt,
+                        title: shot.title,
+                        beat: shot.beat,
+                        shotType: shot.shotType,
+                      })
+                    )
+                    ? [{
+                        id: `${shot.id}_ambience`,
+                        kind: 'ambience' as const,
+                        cue: locationRefId ? 'Room tone and ambient environment bed.' : 'Scene ambience.',
+                        sourceRefId: locationRefId,
+                        startSeconds: null,
+                        endSeconds: null,
+                      }]
+                    : shot.audio
+                if (shot.audio.length === 0 && audio.length > 0) {
+                  scriptRepairDiagnostics.push(`Synthesized audio cues for shot "${shot.title}" after script repair left them empty.`)
+                }
+                const requiredSourceRefIds = Array.from(new Set(
+                  shot.requiredSourceRefIds.length > 0
+                    ? shot.requiredSourceRefIds.filter((refId) => (
+                      !incidentalScriptPropRefIds.has(refId)
+                      && (
+                        resolvedEntityRefs.some((entityRef) => entityRef.id === refId)
+                      || availableCompositeRefIds.has(refId)
+                      || availableStoryboardRefIds.has(refId)
+                      )
+                    ))
+                    : [
+                        ...shot.storyboardRefIds.filter((refId) => availableStoryboardRefIds.has(refId)),
+                        ...shot.compositeRefIds.filter((refId) => availableCompositeRefIds.has(refId)),
+                        ...participantRefIds,
+                        ...(locationRefId ? [locationRefId] : []),
+                        ...filteredPropRefIds,
+                      ],
+                ))
+                return {
+                  ...shot,
+                  orderIndex: index,
+                  sceneId: shot.sceneId ?? rawScriptDoc.scenes[0]?.id ?? null,
+                  locationRefId,
+                  participantRefIds,
+                  propRefIds: filteredPropRefIds,
+                  dialogue,
+                  actions,
+                  audio,
+                  requiredSourceRefIds,
+                }
+              }),
+            })
+            const persistedCinematicPlan = materializeCinematicPlan({
+              requestSummary: batch.request_summary,
+              graphName: authoredCinematicPlan.graphName,
+              graphSummary: authoredCinematicPlan.graphSummary,
+              entityRefs: resolvedEntityRefs,
+              scriptDoc,
+              relationshipRefs: scriptDoc.relationships,
+              compositeRefPlans: scriptDoc.compositeRefs,
+              storyboardPlan: scriptDoc.storyboard,
+              shots: [],
+              graphSettings: authoredCinematicPlan.graphSettings ?? {},
+              diagnostics: [],
+              assistantNotes: undefined,
+            })
+            const mergedBatchDiagnostics = Array.from(new Set([
+              ...(Array.isArray(batch.diagnostics) ? batch.diagnostics : []),
+              ...plannerDiagnostics,
+            ]))
+            await updateBatch(client, batch.id, {
+              cinematic_plan: persistedCinematicPlan,
+              diagnostics: mergedBatchDiagnostics,
+            })
+            batch = {
+              ...batch,
+              cinematic_plan: persistedCinematicPlan,
+              diagnostics: mergedBatchDiagnostics,
+            }
+            const sourceNodeIds = new Set<string>([
+              ...scriptDoc.entityBindings.map((binding) => binding.id),
+              ...scriptDoc.compositeRefs.filter((composite) => composite.outputAssetKey).map((composite) => composite.id),
+              ...(scriptDoc.storyboard?.sequenceAssetKey ? ['storyboard_sequence'] : []),
+              ...(scriptDoc.storyboard?.panels ?? []).filter((panel) => panel.assetKey).map((panel) => panel.id),
+            ])
+            const sourceCoverage = scriptDoc.shots.map((shot) => {
+              const requiredSourceRefIds = shot.requiredSourceRefIds.length > 0
+                ? shot.requiredSourceRefIds
+                : Array.from(new Set([
+                    ...shot.storyboardRefIds.filter((refId) => sourceNodeIds.has(refId)),
+                    ...shot.compositeRefIds.filter((refId) => sourceNodeIds.has(refId)),
+                    ...shot.participantRefIds,
+                    ...(shot.locationRefId ? [shot.locationRefId] : []),
+                    ...shot.propRefIds,
+                  ]))
+              const missingSourceRefIds = requiredSourceRefIds.filter((refId) => !sourceNodeIds.has(refId))
+              return {
+                shotId: shot.id,
+                expectedSourceCount: requiredSourceRefIds.length,
+                connectedSourceCount: requiredSourceRefIds.length - missingSourceRefIds.length,
+                missingSourceRefIds,
+              }
+            })
+
+            await updateJob(client, job.id, {
+              result_context: {
+                ...(job.result_context ?? {}),
+                graphKey,
+                phase: 'compiling_graph',
               },
             })
-            let authorPlan = fallbackAuthorPlan
-            let authorRepairDiagnostics: string[] = []
-            let authorRepairApplied = false
-            let sourceCoverage: Array<{
-              shotId: string
-              expectedSourceCount: number
-              connectedSourceCount: number
-              missingSourceRefIds: string[]
-            }> = []
-
-            try {
-              const authorDraft = await runStructuredWorldBuildModel({
-                model: payload.model,
-                passLabel: 'Cinematic graph author',
-                systemText: cinematicGraphAuthorSystemPrompt(),
-                promptContext: {
-                  worldPrompt: batch.prompt,
-                  requestSummary: batch.request_summary,
-                  project: snapshot.project,
-                  gameSpec: snapshot.gameSpec ?? null,
-                  cinematicPlan: cinematicPlan.data,
-                  resolvedEntities: resolvedEntityRefs.map((entityRef) => {
-                    const definition = cinematicDefinitions.find((entry) => entry.key === entityRef.definitionKey)
-                    return {
-                      id: entityRef.id,
-                      definitionKey: entityRef.definitionKey,
-                      kind: entityRef.kind,
-                      role: entityRef.role,
-                      sourceName: entityRef.sourceName,
-                      definitionName: definition?.name ?? entityRef.sourceName,
-                      summary: definition?.summary ?? entityRef.summary,
-                    }
-                  }),
-                },
-                schema: cinematicGraphAuthorSchema,
-                maxOutputTokens: 10000,
-              })
-
-              const mergedAuthorPlan = mergeAuthorPlanWithFallback({
-                fallbackPlan: fallbackAuthorPlan,
-                candidatePlan: cinematicGraphAuthorSchema.parse(authorDraft),
-              })
-              const validatedAuthorPlan = validateAndRepairCinematicAuthorPlan({
-                cinematicPlan: cinematicPlan.data,
-                fallbackPlan: fallbackAuthorPlan,
-                authorPlan: mergedAuthorPlan,
-              })
-              authorPlan = validatedAuthorPlan.repairedPlan
-              authorRepairDiagnostics = validatedAuthorPlan.diagnostics
-              authorRepairApplied = validatedAuthorPlan.repairApplied
-              sourceCoverage = validatedAuthorPlan.sourceCoverage
-            } catch (authorError) {
-              console.warn('[GraphCore] cinematic graph authoring fell back to direct materialization.', authorError)
-              const validatedAuthorPlan = validateAndRepairCinematicAuthorPlan({
-                cinematicPlan: cinematicPlan.data,
-                fallbackPlan: fallbackAuthorPlan,
-                authorPlan,
-              })
-              authorPlan = validatedAuthorPlan.repairedPlan
-              authorRepairDiagnostics = validatedAuthorPlan.diagnostics
-              authorRepairApplied = validatedAuthorPlan.repairApplied
-              sourceCoverage = validatedAuthorPlan.sourceCoverage
-            }
-
-            let authoredGraph = buildCinematicGraphFromAuthorPlan({
+            let authoredGraph = compileCinematicGraphFromScriptDoc({
               graphKey,
-              graphName: cinematicPlan.data.graphName,
-              graphSummary: cinematicPlan.data.graphSummary,
-              graphSettings: cinematicPlan.data.graphSettings ?? {},
-              cinematicPlan: cinematicPlan.data,
-              authorPlan,
+              graphName: persistedCinematicPlan.graphName,
+              graphSummary: persistedCinematicPlan.graphSummary,
+              graphSettings: persistedCinematicPlan.graphSettings ?? {},
+              scriptDoc,
+              existingMetadata: {
+                generation: {
+                  batchId: batch.id,
+                  jobId: job.id,
+                  state: 'completed',
+                  placeholder: false,
+                  source: 'global_prompt',
+                },
+              },
             })
             const shouldAutoRunCinematic = false
+            const authoringDiagnostics = [...plannerDiagnostics, ...scriptRepairDiagnostics]
             authoredGraph = {
               ...authoredGraph,
               metadata: {
                 ...authoredGraph.metadata,
                 cinematicAuthoring: {
-                  repairApplied: authorRepairApplied,
-                  diagnostics: authorRepairDiagnostics,
+                  phase: 'completed',
+                  repairApplied: authoringFlags.usedRepairPass || scriptRepairDiagnostics.length > 0,
+                  usedRepairPass: authoringFlags.usedRepairPass,
+                  usedFallbackPrimaryShot: authoringFlags.usedFallbackPrimaryShot,
+                  usedTemporalExpansionFallback: authoringFlags.usedTemporalExpansionFallback,
+                  usedDialogueFallback: authoringFlags.usedDialogueFallback,
+                  usedActionBindingRepair: authoringFlags.usedActionBindingRepair,
+                  diagnostics: authoringDiagnostics,
                   sourceCoverage,
                 },
                 generation: {
@@ -1892,10 +2472,10 @@ Deno.serve(async (request) => {
 
             await replaceGraphContents(client, batch.draft_id, authoredGraph)
 
-            if (authorRepairDiagnostics.length > 0) {
+            if (scriptRepairDiagnostics.length > 0) {
               const nextDiagnostics = Array.from(new Set([
                 ...(Array.isArray(batch.diagnostics) ? batch.diagnostics : []),
-                ...authorRepairDiagnostics,
+                ...scriptRepairDiagnostics,
               ]))
               await updateBatch(client, batch.id, {
                 diagnostics: nextDiagnostics,
@@ -1908,7 +2488,7 @@ Deno.serve(async (request) => {
                 batchId: batch.id,
                 worldBuildJobId: job.id,
                 graphKey,
-                diagnostics: authorRepairDiagnostics,
+                diagnostics: scriptRepairDiagnostics,
                 sourceCoverage,
               })
             }
@@ -1918,9 +2498,12 @@ Deno.serve(async (request) => {
                 status: 'succeeded',
                 result_context: {
                   graphKey,
+                  phase: 'completed',
                   resolvedEntityRefs,
-                  authorRepairApplied,
-                  authorRepairDiagnostics,
+                  scriptRepairApplied: authoringFlags.usedRepairPass || scriptRepairDiagnostics.length > 0,
+                  scriptRepairDiagnostics,
+                  plannerDiagnostics,
+                  authoringFlags,
                   sourceCoverage,
                 },
                 error_message: null,
@@ -1960,8 +2543,8 @@ Deno.serve(async (request) => {
                   graphKey,
                   resolvedEntityRefs,
                   childCinematicRunId: childRun.run.id,
-                  authorRepairApplied,
-                  authorRepairDiagnostics,
+                  scriptRepairApplied: scriptRepairDiagnostics.length > 0,
+                  scriptRepairDiagnostics,
                   sourceCoverage,
                 },
                 error_message: null,

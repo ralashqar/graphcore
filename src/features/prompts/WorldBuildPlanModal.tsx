@@ -9,6 +9,12 @@ type WorldBuildPlanModalProps = {
     relationshipRefs?: Array<{ id: string; type: string; sourceRefId: string; targetRefId: string }>
     compositeRefPlans?: Array<{ id: string; title: string }>
     storyboardPlan?: { mode?: string; panels?: Array<{ id: string; title: string }> } | null
+    scriptDoc?: {
+      title?: string
+      logline?: string
+      scenes?: Array<{ id: string; title: string; shotIds?: string[] }>
+      shots?: Array<{ id: string; title: string; beat?: string; dialogue?: Array<unknown>; actions?: Array<unknown>; audio?: Array<unknown> }>
+    } | null
     shots?: Array<{ id: string; title: string; beat: string }>
   } | null
   planItems: WorldBuildPlanItem[]
@@ -80,6 +86,36 @@ export function WorldBuildPlanModal({
             <div className="inline-note">
               Storyboard: {cinematicPlan.storyboardPlan?.mode ?? 'none'}{(cinematicPlan.storyboardPlan?.panels?.length ?? 0) > 0 ? `, ${(cinematicPlan.storyboardPlan?.panels?.length ?? 0)} panel(s)` : ''}
             </div>
+            {!cinematicPlan.scriptDoc ? (
+              <div className="inline-note">
+                Script authoring happens during cinematic generation after missing refs are resolved.
+              </div>
+            ) : null}
+            {cinematicPlan.scriptDoc ? (
+              <div className="editor-section compact-section">
+                <div className="section-head">
+                  <div>
+                    <span className="eyebrow">Script Preview</span>
+                    <h3>{cinematicPlan.scriptDoc.title ?? 'Generated Script'}</h3>
+                  </div>
+                </div>
+                {cinematicPlan.scriptDoc.logline ? <div className="inline-note">{cinematicPlan.scriptDoc.logline}</div> : null}
+                <div className="diagnostic-stack">
+                  {(cinematicPlan.scriptDoc.scenes ?? []).map((scene) => (
+                    <div key={scene.id} className="inline-note">
+                      <strong>{scene.title}</strong>
+                      <span> {(scene.shotIds?.length ?? 0)} shot{(scene.shotIds?.length ?? 0) === 1 ? '' : 's'}</span>
+                    </div>
+                  ))}
+                  {(cinematicPlan.scriptDoc.shots ?? []).map((shot) => (
+                    <div key={shot.id} className="inline-note">
+                      <strong>{shot.title}</strong>
+                      <span> {(shot.dialogue?.length ?? 0)} dialogue, {(shot.actions?.length ?? 0)} action, {(shot.audio?.length ?? 0)} audio cue{(shot.audio?.length ?? 0) === 1 ? '' : 's'}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </div>
         ) : null}
         <div className="world-build-plan-list">

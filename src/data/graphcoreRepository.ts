@@ -604,6 +604,19 @@ async function invokeAuthedFunctionWithSessionRecovery<TResponse>(
     return response
   }
 
+  const isTransientNetworkFailure =
+    response.error.message === 'Failed to send a request to the Edge Function'
+    || ('context' in response.error && (response.error as FunctionsHttpError & { context?: unknown }).context instanceof Response
+      && ((response.error as FunctionsHttpError & { context?: Response }).context?.status ?? 0) >= 500)
+
+  if (isTransientNetworkFailure && functionName === 'poll-world-build') {
+    await new Promise((resolve) => window.setTimeout(resolve, 1200))
+    response = await invokeAuthedFunction<TResponse>(functionName, body, session)
+    if (!response.error) {
+      return response
+    }
+  }
+
   const context = 'context' in response.error ? (response.error as FunctionsHttpError & { context?: unknown }).context : null
   const responseInfo = context instanceof Response
     ? {

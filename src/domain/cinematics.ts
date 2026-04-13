@@ -13,6 +13,7 @@ export const cinematicRelationshipTypeSchema = z.enum(['equip', 'wear', 'hold', 
 export const cinematicStoryboardModeSchema = z.enum(['none', 'sequence_board', 'shot_panels', 'hybrid'])
 export const cinematicBeatTypeSchema = z.enum(['action', 'dialogue', 'audio', 'camera', 'transition', 'custom'])
 export const cinematicAudioCueKindSchema = z.enum(['dialogue', 'ambience', 'sfx', 'music', 'silence', 'offscreen'])
+export const cinematicScriptBindingKindSchema = z.enum(['character', 'environment', 'item', 'audio', 'style'])
 export const seedanceEndpointSchema = z.enum(['reference-to-video', 'image-to-video'])
 export const seedanceModePreferenceSchema = z.enum(['auto', 'reference-to-video', 'image-to-video'])
 export const seedanceInputModalitySchema = z.enum(['image', 'video', 'audio'])
@@ -112,6 +113,72 @@ export const storyboardSpecSchema = z.object({
   summary: z.string().default(''),
   sequenceAssetKey: z.string().nullable().default(null),
   panels: z.array(storyboardPanelSchema).default([]),
+})
+
+export const cinematicScriptEntityBindingSchema = z.object({
+  id: z.string(),
+  kind: cinematicScriptBindingKindSchema.default('character'),
+  role: z.string().default('reference'),
+  label: z.string(),
+  sourceName: z.string().default(''),
+  summary: z.string().default(''),
+  definitionKey: z.string().nullable().default(null),
+  assetKey: z.string().nullable().default(null),
+  stagingNotes: z.string().default(''),
+  priority: cinematicReferencePrioritySchema.default(50),
+  required: z.boolean().default(true),
+})
+
+export const cinematicScriptSceneSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  summary: z.string().default(''),
+  locationRefId: z.string().nullable().default(null),
+  shotIds: z.array(z.string()).default([]),
+  continuityNotes: z.string().default(''),
+  orderIndex: z.number().int().default(0),
+})
+
+export const cinematicScriptShotSchema = z.object({
+  id: z.string(),
+  sceneId: z.string().nullable().default(null),
+  orderIndex: z.number().int().default(0),
+  title: z.string(),
+  subtitle: z.string().nullable().default(null),
+  beat: z.string().default(''),
+  emotionalBeat: z.string().default(''),
+  shotType: z.enum(['establishing', 'dialogue', 'reveal', 'action', 'insert', 'transition', 'custom']).default('custom'),
+  framing: z.string().default(''),
+  cameraAngle: z.string().default(''),
+  cameraMovement: z.string().default(''),
+  lensPreference: z.string().default(''),
+  visualPrompt: z.string().default(''),
+  compositionGuide: z.string().default(''),
+  continuityNotes: z.string().default(''),
+  participantRefIds: z.array(z.string()).default([]),
+  locationRefId: z.string().nullable().default(null),
+  propRefIds: z.array(z.string()).default([]),
+  requiredSourceRefIds: z.array(z.string()).default([]),
+  compositeRefIds: z.array(z.string()).default([]),
+  storyboardRefIds: z.array(z.string()).default([]),
+  durationSeconds: z.number().int().positive().max(20).nullable().default(null),
+  beats: z.array(cinematicBeatSchema).default([]),
+  dialogue: z.array(dialogueBeatSchema).default([]),
+  actions: z.array(actionBeatSchema).default([]),
+  audio: z.array(audioBeatSchema).default([]),
+})
+
+export const cinematicScriptDocSchema = z.object({
+  title: z.string().default('Prompt Cinematic'),
+  logline: z.string().default(''),
+  tone: z.string().default(''),
+  continuityNotes: z.string().default(''),
+  entityBindings: z.array(cinematicScriptEntityBindingSchema).default([]),
+  scenes: z.array(cinematicScriptSceneSchema).default([]),
+  shots: z.array(cinematicScriptShotSchema).default([]),
+  relationships: z.array(cinematicRelationshipSchema).default([]),
+  compositeRefs: z.array(cinematicCompositeReferenceSchema).default([]),
+  storyboard: storyboardSpecSchema.nullable().default(null),
 })
 
 export const seedanceReferenceInputSchema = z.object({
@@ -220,6 +287,7 @@ export const storyboardRefNodeConfigSchema = z.object({
 
 export const cinematicGraphMetadataSchema = z.object({
   cinematics: cinematicSettingsSchema.partial().default({}),
+  cinematicScript: cinematicScriptDocSchema.optional(),
   cinematicSequence: cinematicSequenceSchema.optional(),
   cinematicAuthoring: rawRecordSchema.optional(),
 }).catchall(z.unknown())
@@ -304,6 +372,10 @@ export type ActionBeat = z.infer<typeof actionBeatSchema>
 export type AudioBeat = z.infer<typeof audioBeatSchema>
 export type CinematicBeat = z.infer<typeof cinematicBeatSchema>
 export type StoryboardSpec = z.infer<typeof storyboardSpecSchema>
+export type CinematicScriptEntityBinding = z.infer<typeof cinematicScriptEntityBindingSchema>
+export type CinematicScriptScene = z.infer<typeof cinematicScriptSceneSchema>
+export type CinematicScriptShot = z.infer<typeof cinematicScriptShotSchema>
+export type CinematicScriptDoc = z.infer<typeof cinematicScriptDocSchema>
 export type SeedanceExecutionPlan = z.infer<typeof seedanceExecutionPlanSchema>
 export type CinematicShotSpec = z.infer<typeof cinematicShotSpecSchema>
 export type CinematicSequence = z.infer<typeof cinematicSequenceSchema>
@@ -325,6 +397,152 @@ const defaultShotNodeConfig = cinematicShotSpecSchema.parse({
   title: 'Shot',
 })
 
+function inferSequenceReferenceKindFromBinding(binding: CinematicScriptEntityBinding): CinematicReference['refKind'] {
+  if (binding.kind === 'audio') return 'audio'
+  if (binding.kind === 'style') return 'style'
+  return binding.definitionKey ? 'definition' : 'asset'
+}
+
+function inferSequenceAssetRoleFromBinding(binding: CinematicScriptEntityBinding): CinematicReference['assetRole'] {
+  if (binding.kind === 'audio') return 'audio'
+  if (binding.kind === 'style') return 'style'
+  return binding.kind
+}
+
+function buildRequiredSourceRefIdsForScriptShot(shot: CinematicScriptShot) {
+  const sourceRefIds = shot.requiredSourceRefIds.length > 0
+    ? shot.requiredSourceRefIds
+    : [
+        ...shot.storyboardRefIds,
+        ...shot.compositeRefIds,
+        ...shot.participantRefIds,
+        ...(shot.locationRefId ? [shot.locationRefId] : []),
+        ...shot.propRefIds,
+      ]
+  return Array.from(new Set(sourceRefIds.filter((entry) => entry.trim().length > 0)))
+}
+
+export function buildCinematicSequenceFromScriptDoc(scriptDoc: CinematicScriptDoc): CinematicSequence {
+  return cinematicSequenceSchema.parse({
+    references: scriptDoc.entityBindings.map((binding) => ({
+      id: binding.id,
+      refKind: inferSequenceReferenceKindFromBinding(binding),
+      role: binding.role,
+      label: binding.label,
+      summary: binding.summary,
+      definitionKey: binding.definitionKey,
+      assetKey: binding.assetKey,
+      assetRole: inferSequenceAssetRoleFromBinding(binding),
+      stagingNotes: binding.stagingNotes,
+      priority: binding.priority,
+      required: binding.required,
+    })),
+    compositeRefs: scriptDoc.compositeRefs,
+    relationships: scriptDoc.relationships,
+    storyboard: scriptDoc.storyboard,
+    shots: scriptDoc.shots.map((shot) => ({
+      id: shot.id,
+      title: shot.title,
+      subtitle: shot.subtitle,
+      beat: shot.beat,
+      shotType: shot.shotType,
+      framing: shot.framing,
+      cameraAngle: shot.cameraAngle,
+      cameraMovement: shot.cameraMovement,
+      lensPreference: shot.lensPreference,
+      visualPrompt: shot.visualPrompt,
+      compositionGuide: shot.compositionGuide,
+      participantRefIds: shot.participantRefIds,
+      locationRefId: shot.locationRefId,
+      propRefIds: shot.propRefIds,
+      requiredSourceRefIds: buildRequiredSourceRefIdsForScriptShot(shot),
+      compositeRefIds: shot.compositeRefIds,
+      storyboardRefIds: shot.storyboardRefIds,
+      durationSeconds: shot.durationSeconds,
+      seedanceModePreference:
+        shot.storyboardRefIds.length > 0 || shot.compositeRefIds.length > 0 || buildRequiredSourceRefIdsForScriptShot(shot).length > 1
+          ? 'reference-to-video'
+          : 'auto',
+      beats: shot.beats,
+      dialogue: shot.dialogue,
+      actions: shot.actions,
+      audio: shot.audio,
+    })),
+  })
+}
+
+export function deriveCinematicScriptFromSequence(sequence: CinematicSequence): CinematicScriptDoc {
+  const sceneId = 'scene_1'
+  return cinematicScriptDocSchema.parse({
+    title: sequence.shots[0]?.title ? `${sequence.shots[0].title} Sequence` : 'Prompt Cinematic',
+    logline: sequence.shots.map((shot) => shot.beat).filter((entry) => entry.trim().length > 0).join(' '),
+    tone: '',
+    continuityNotes: '',
+    entityBindings: sequence.references.map((reference) => ({
+      id: reference.id,
+      kind:
+        reference.assetRole === 'audio'
+          ? 'audio'
+          : reference.assetRole === 'style'
+            ? 'style'
+            : reference.assetRole === 'environment'
+              ? 'environment'
+              : reference.assetRole === 'item'
+                ? 'item'
+                : 'character',
+      role: reference.role,
+      label: reference.label,
+      sourceName: reference.label,
+      summary: reference.summary,
+      definitionKey: reference.definitionKey,
+      assetKey: reference.assetKey,
+      stagingNotes: reference.stagingNotes,
+      priority: reference.priority,
+      required: reference.required,
+    })),
+    scenes: sequence.shots.length > 0 ? [{
+      id: sceneId,
+      title: 'Scene 1',
+      summary: '',
+      locationRefId: sequence.shots[0]?.locationRefId ?? null,
+      shotIds: sequence.shots.map((shot) => shot.id),
+      continuityNotes: '',
+      orderIndex: 0,
+    }] : [],
+    shots: sequence.shots.map((shot, index) => ({
+      id: shot.id,
+      sceneId,
+      orderIndex: index,
+      title: shot.title,
+      subtitle: shot.subtitle,
+      beat: shot.beat,
+      emotionalBeat: '',
+      shotType: shot.shotType,
+      framing: shot.framing,
+      cameraAngle: shot.cameraAngle,
+      cameraMovement: shot.cameraMovement,
+      lensPreference: shot.lensPreference,
+      visualPrompt: shot.visualPrompt,
+      compositionGuide: shot.compositionGuide,
+      continuityNotes: '',
+      participantRefIds: shot.participantRefIds,
+      locationRefId: shot.locationRefId,
+      propRefIds: shot.propRefIds,
+      requiredSourceRefIds: shot.requiredSourceRefIds,
+      compositeRefIds: shot.compositeRefIds,
+      storyboardRefIds: shot.storyboardRefIds,
+      durationSeconds: shot.durationSeconds,
+      beats: shot.beats,
+      dialogue: shot.dialogue,
+      actions: shot.actions,
+      audio: shot.audio,
+    })),
+    relationships: sequence.relationships,
+    compositeRefs: sequence.compositeRefs,
+    storyboard: sequence.storyboard,
+  })
+}
+
 export function getCinematicSettings(gameSpec: unknown, graphMetadata: unknown): CinematicSettings {
   const gameSpecCinematics = cinematicSettingsSchema.partial().safeParse(
     gameSpec && typeof gameSpec === 'object' && (gameSpec as { cinematics?: unknown }).cinematics
@@ -344,12 +562,28 @@ export function getCinematicSettings(gameSpec: unknown, graphMetadata: unknown):
   }
 }
 
+export function getCinematicScript(graphMetadata: unknown): CinematicScriptDoc | null {
+  const metadata = graphMetadata && typeof graphMetadata === 'object'
+    ? graphMetadata as { cinematicScript?: unknown; cinematicSequence?: unknown }
+    : {}
+  const parsedScript = cinematicScriptDocSchema.safeParse(metadata.cinematicScript ?? null)
+  if (parsedScript.success) return parsedScript.data
+
+  const parsedSequence = cinematicSequenceSchema.safeParse(metadata.cinematicSequence ?? null)
+  if (parsedSequence.success) return deriveCinematicScriptFromSequence(parsedSequence.data)
+
+  return null
+}
+
 export function getCinematicSequence(graphMetadata: unknown): CinematicSequence {
   const metadata = graphMetadata && typeof graphMetadata === 'object'
-    ? graphMetadata as { cinematicSequence?: unknown }
+    ? graphMetadata as { cinematicSequence?: unknown; cinematicScript?: unknown }
     : {}
   const parsed = cinematicSequenceSchema.safeParse(metadata.cinematicSequence ?? {})
-  return parsed.success ? parsed.data : cinematicSequenceSchema.parse({})
+  if (parsed.success) return parsed.data
+
+  const parsedScript = cinematicScriptDocSchema.safeParse(metadata.cinematicScript ?? null)
+  return parsedScript.success ? buildCinematicSequenceFromScriptDoc(parsedScript.data) : cinematicSequenceSchema.parse({})
 }
 
 export function getAssetRefNodeConfig(node: { metadata?: unknown } | null | undefined): AssetRefNodeConfig {
