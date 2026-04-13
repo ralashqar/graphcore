@@ -50,6 +50,7 @@ export const cinematicShotPlanSchema = z.object({
   lensPreference: z.string().default(''),
   durationSeconds: z.number().int().positive().max(20).nullable().default(null),
   visualPrompt: z.string().default(''),
+  compositionGuide: z.string().default(''),
 })
 
 export const cinematicGraphSettingsSchema = z.object({

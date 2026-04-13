@@ -97,6 +97,22 @@ export function ActivityWorkspace({
                 </div>
               </div>
             ) : null}
+            {selectedWorldBuild ? (
+              <div className="editor-section compact-section">
+                <div className="section-head">
+                  <div>
+                    <span className="eyebrow">Batch Diagnostics</span>
+                    <h3>{selectedWorldBuild.diagnostics.length} note{selectedWorldBuild.diagnostics.length === 1 ? '' : 's'}</h3>
+                  </div>
+                </div>
+                <div className="diagnostic-stack">
+                  {selectedWorldBuild.diagnostics.length === 0 ? <div className="inline-note">No batch diagnostics.</div> : null}
+                  {selectedWorldBuild.diagnostics.map((diagnostic, index) => (
+                    <div key={`${diagnostic}-${index}`} className="inline-note">{diagnostic}</div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
             {selectedPatch.executionPlan ? (
               <div className="editor-section compact-section">
                 <div className="section-head">

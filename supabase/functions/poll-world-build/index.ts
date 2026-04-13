@@ -796,8 +796,11 @@ async function loadCinematicRunsForBatchJobs(
 
 function buildFallbackAuthorPlan(input: {
   cinematicPlan: z.infer<typeof cinematicPlanSchema>
+  resolvedDefinitions: Array<{ key: string; kind: string; name: string; summary?: string }>
   resolvedEntityRefs: Array<CinematicPlan['entityRefs'][number] & { definitionKey: string }>
 }) {
+  const resolvedDefinitionByKey = new Map(input.resolvedDefinitions.map((definition) => [definition.key, definition]))
+
   return cinematicGraphAuthorSchema.parse({
     graphName: input.cinematicPlan.graphName,
     graphSummary: input.cinematicPlan.graphSummary,
@@ -806,8 +809,8 @@ function buildFallbackAuthorPlan(input: {
       id: entityRef.id,
       definitionKey: entityRef.definitionKey,
       assetRole: entityRef.kind,
-      title: entityRef.sourceName,
-      subtitle: entityRef.kind,
+      title: resolvedDefinitionByKey.get(entityRef.definitionKey)?.name ?? entityRef.sourceName,
+      subtitle: resolvedDefinitionByKey.get(entityRef.definitionKey)?.kind ?? entityRef.kind,
       stagingNotes: entityRef.role,
     })),
     shots: input.cinematicPlan.shots.map((shot) => ({
@@ -816,12 +819,16 @@ function buildFallbackAuthorPlan(input: {
       subtitle: null,
       beat: shot.beat,
       visualPrompt: shot.visualPrompt,
+      compositionGuide: shot.compositionGuide,
       shotType: shot.shotType,
       framing: shot.framing,
       cameraAngle: shot.cameraAngle,
       cameraMovement: shot.cameraMovement,
       lensPreference: shot.lensPreference,
       durationSeconds: shot.durationSeconds,
+      participantRefIds: shot.participantRefIds,
+      locationRefId: shot.locationRefId,
+      propRefIds: shot.propRefIds,
       sourceRefIds: Array.from(new Set([
         ...shot.participantRefIds,
         ...shot.propRefIds,
@@ -829,6 +836,186 @@ function buildFallbackAuthorPlan(input: {
       ])),
     })),
   })
+}
+
+function mergeAuthorPlanWithFallback(input: {
+  fallbackPlan: z.infer<typeof cinematicGraphAuthorSchema>
+  candidatePlan: z.infer<typeof cinematicGraphAuthorSchema>
+}) {
+  const fallbackAssetRefById = new Map(input.fallbackPlan.assetRefs.map((assetRef) => [assetRef.id, assetRef]))
+  const fallbackAssetRefByDefinitionKey = new Map(input.fallbackPlan.assetRefs.map((assetRef) => [assetRef.definitionKey, assetRef]))
+  const mergedAssetRefs = new Map<string, z.infer<typeof cinematicGraphAuthorSchema>['assetRefs'][number]>()
+
+  for (const fallbackAssetRef of input.fallbackPlan.assetRefs) {
+    mergedAssetRefs.set(fallbackAssetRef.id, fallbackAssetRef)
+  }
+
+  for (const candidateAssetRef of input.candidatePlan.assetRefs) {
+    const fallbackAssetRef =
+      fallbackAssetRefById.get(candidateAssetRef.id)
+      ?? fallbackAssetRefByDefinitionKey.get(candidateAssetRef.definitionKey)
+      ?? null
+    if (!fallbackAssetRef) continue
+    const mergedAssetRef = {
+      ...fallbackAssetRef,
+      ...candidateAssetRef,
+      id: fallbackAssetRef.id,
+      definitionKey: fallbackAssetRef.definitionKey,
+      assetRole: fallbackAssetRef.assetRole,
+    }
+    mergedAssetRefs.set(mergedAssetRef.id, mergedAssetRef)
+  }
+
+  const availableSourceRefIds = new Set(Array.from(mergedAssetRefs.keys()))
+  const fallbackShotById = new Map(input.fallbackPlan.shots.map((shot) => [shot.id, shot]))
+
+  const mergedShots = input.fallbackPlan.shots.map((fallbackShot, index) => {
+    const candidateShot =
+      input.candidatePlan.shots.find((shot) => shot.id === fallbackShot.id)
+      ?? input.candidatePlan.shots[index]
+      ?? null
+
+    if (!candidateShot) {
+      return fallbackShot
+    }
+
+    const filteredCandidateSourceRefIds = candidateShot.sourceRefIds.filter((sourceRefId) => availableSourceRefIds.has(sourceRefId))
+    const mergedShot = {
+      ...fallbackShot,
+      ...candidateShot,
+      id: fallbackShot.id,
+      participantRefIds: candidateShot.participantRefIds.length > 0 ? candidateShot.participantRefIds : fallbackShot.participantRefIds,
+      locationRefId: candidateShot.locationRefId ?? fallbackShot.locationRefId,
+      propRefIds: candidateShot.propRefIds.length > 0 ? candidateShot.propRefIds : fallbackShot.propRefIds,
+      sourceRefIds: filteredCandidateSourceRefIds.length > 0 ? filteredCandidateSourceRefIds : fallbackShot.sourceRefIds,
+    }
+
+    return mergedShot
+  })
+
+  for (const candidateShot of input.candidatePlan.shots) {
+    if (fallbackShotById.has(candidateShot.id)) continue
+    mergedShots.push({
+      ...candidateShot,
+      sourceRefIds: candidateShot.sourceRefIds.filter((sourceRefId) => availableSourceRefIds.has(sourceRefId)),
+    })
+  }
+
+  return cinematicGraphAuthorSchema.parse({
+    ...input.fallbackPlan,
+    ...input.candidatePlan,
+    assetRefs: Array.from(mergedAssetRefs.values()),
+    shots: mergedShots,
+  })
+}
+
+function collectRequiredShotSourceRefIds(shot: {
+  participantRefIds: string[]
+  locationRefId: string | null
+  propRefIds: string[]
+}) {
+  return Array.from(new Set([
+    ...shot.participantRefIds,
+    ...shot.propRefIds,
+    ...(shot.locationRefId ? [shot.locationRefId] : []),
+  ]))
+}
+
+function validateAndRepairCinematicAuthorPlan(input: {
+  cinematicPlan: z.infer<typeof cinematicPlanSchema>
+  fallbackPlan: z.infer<typeof cinematicGraphAuthorSchema>
+  authorPlan: z.infer<typeof cinematicGraphAuthorSchema>
+}) {
+  const diagnostics: string[] = []
+  const fallbackAssetById = new Map(input.fallbackPlan.assetRefs.map((assetRef) => [assetRef.id, assetRef]))
+  const authorAssetById = new Map(input.authorPlan.assetRefs.map((assetRef) => [assetRef.id, assetRef]))
+  const repairedAssetRefs = new Map(input.authorPlan.assetRefs.map((assetRef) => [assetRef.id, assetRef]))
+
+  for (const shotPlan of input.cinematicPlan.shots) {
+    const requiredSourceRefIds = collectRequiredShotSourceRefIds(shotPlan)
+    for (const sourceRefId of requiredSourceRefIds) {
+      if (repairedAssetRefs.has(sourceRefId)) continue
+      const fallbackAsset = fallbackAssetById.get(sourceRefId)
+      if (!fallbackAsset) continue
+      repairedAssetRefs.set(sourceRefId, fallbackAsset)
+      diagnostics.push(`Repaired missing asset_ref for planned source "${fallbackAsset.title}".`)
+    }
+  }
+
+  const repairedShots = input.authorPlan.shots.map((shot) => ({ ...shot }))
+  const repairedShotById = new Map(repairedShots.map((shot) => [shot.id, shot]))
+
+  for (const shotPlan of input.cinematicPlan.shots) {
+    const fallbackShot = input.fallbackPlan.shots.find((entry) => entry.id === shotPlan.id) ?? null
+    const authorShot = repairedShotById.get(shotPlan.id) ?? null
+    const requiredSourceRefIds = collectRequiredShotSourceRefIds(shotPlan)
+
+    if (!fallbackShot) continue
+
+    if (!authorShot) {
+      repairedShots.push({ ...fallbackShot })
+      diagnostics.push(`Inserted missing cinematic shot "${fallbackShot.title}" from fallback plan.`)
+      continue
+    }
+
+    const nextSourceRefIds = Array.from(new Set([
+      ...authorShot.sourceRefIds.filter((sourceRefId) => repairedAssetRefs.has(sourceRefId)),
+      ...requiredSourceRefIds,
+    ]))
+
+    const missingRequiredSourceRefIds = requiredSourceRefIds.filter((sourceRefId) => !authorShot.sourceRefIds.includes(sourceRefId))
+    if (missingRequiredSourceRefIds.length > 0) {
+      diagnostics.push(`Repaired shot "${authorShot.title}" to reconnect ${missingRequiredSourceRefIds.length} planned source input${missingRequiredSourceRefIds.length === 1 ? '' : 's'}.`)
+    }
+
+    const participantMismatch =
+      authorShot.participantRefIds.length !== shotPlan.participantRefIds.length
+      || shotPlan.participantRefIds.some((sourceRefId) => !authorShot.participantRefIds.includes(sourceRefId))
+    const propMismatch =
+      authorShot.propRefIds.length !== shotPlan.propRefIds.length
+      || shotPlan.propRefIds.some((sourceRefId) => !authorShot.propRefIds.includes(sourceRefId))
+    const locationMismatch = (authorShot.locationRefId ?? null) !== (shotPlan.locationRefId ?? null)
+
+    if (participantMismatch || propMismatch || locationMismatch) {
+      diagnostics.push(`Repaired shot "${authorShot.title}" to preserve planned participants, location, or props.`)
+    }
+
+    repairedShotById.set(shotPlan.id, {
+      ...authorShot,
+      participantRefIds: [...shotPlan.participantRefIds],
+      locationRefId: shotPlan.locationRefId,
+      propRefIds: [...shotPlan.propRefIds],
+      sourceRefIds: nextSourceRefIds,
+      compositionGuide: authorShot.compositionGuide.trim() || fallbackShot.compositionGuide,
+    })
+  }
+
+  const orderedShots = input.fallbackPlan.shots.map((fallbackShot) => repairedShotById.get(fallbackShot.id) ?? fallbackShot)
+  const extraShots = repairedShots.filter((shot) => !input.fallbackPlan.shots.some((fallbackShot) => fallbackShot.id === shot.id))
+
+  const repairedPlan = cinematicGraphAuthorSchema.parse({
+    ...input.authorPlan,
+    assetRefs: Array.from(repairedAssetRefs.values()),
+    shots: [...orderedShots, ...extraShots],
+  })
+
+  return {
+    repairedPlan,
+    diagnostics: Array.from(new Set(diagnostics)),
+    repairApplied: diagnostics.length > 0,
+    sourceCoverage: input.cinematicPlan.shots.map((shotPlan) => {
+      const repairedShot = repairedPlan.shots.find((entry) => entry.id === shotPlan.id) ?? null
+      const requiredSourceRefIds = collectRequiredShotSourceRefIds(shotPlan)
+      const connectedSourceRefIds = repairedShot?.sourceRefIds.filter((sourceRefId) => repairedAssetRefs.has(sourceRefId)) ?? []
+      return {
+        shotId: shotPlan.id,
+        expectedSourceCount: requiredSourceRefIds.length,
+        connectedSourceCount: connectedSourceRefIds.length,
+        missingSourceRefIds: requiredSourceRefIds.filter((sourceRefId) => !connectedSourceRefIds.includes(sourceRefId)),
+      }
+    }),
+    modelAssetRefCount: authorAssetById.size,
+  }
 }
 
 Deno.serve(async (request) => {
@@ -1145,10 +1332,25 @@ Deno.serve(async (request) => {
                 .filter((value): value is string => typeof value === 'string' && value.length > 0),
             ))
             const cinematicAssets = await loadProjectAssetsByKeys(client, batch.project_id, displayAssetKeys)
-            let authorPlan = buildFallbackAuthorPlan({
+            const fallbackAuthorPlan = buildFallbackAuthorPlan({
               cinematicPlan: cinematicPlan.data,
+              resolvedDefinitions: cinematicDefinitions.map((definition) => ({
+                key: definition.key,
+                kind: definition.kind,
+                name: definition.name,
+                summary: definition.summary,
+              })),
               resolvedEntityRefs,
             })
+            let authorPlan = fallbackAuthorPlan
+            let authorRepairDiagnostics: string[] = []
+            let authorRepairApplied = false
+            let sourceCoverage: Array<{
+              shotId: string
+              expectedSourceCount: number
+              connectedSourceCount: number
+              missingSourceRefIds: string[]
+            }> = []
 
             try {
               const authorDraft = await runStructuredWorldBuildModel({
@@ -1178,9 +1380,30 @@ Deno.serve(async (request) => {
                 maxOutputTokens: 10000,
               })
 
-              authorPlan = cinematicGraphAuthorSchema.parse(authorDraft)
+              const mergedAuthorPlan = mergeAuthorPlanWithFallback({
+                fallbackPlan: fallbackAuthorPlan,
+                candidatePlan: cinematicGraphAuthorSchema.parse(authorDraft),
+              })
+              const validatedAuthorPlan = validateAndRepairCinematicAuthorPlan({
+                cinematicPlan: cinematicPlan.data,
+                fallbackPlan: fallbackAuthorPlan,
+                authorPlan: mergedAuthorPlan,
+              })
+              authorPlan = validatedAuthorPlan.repairedPlan
+              authorRepairDiagnostics = validatedAuthorPlan.diagnostics
+              authorRepairApplied = validatedAuthorPlan.repairApplied
+              sourceCoverage = validatedAuthorPlan.sourceCoverage
             } catch (authorError) {
               console.warn('[GraphCore] cinematic graph authoring fell back to direct materialization.', authorError)
+              const validatedAuthorPlan = validateAndRepairCinematicAuthorPlan({
+                cinematicPlan: cinematicPlan.data,
+                fallbackPlan: fallbackAuthorPlan,
+                authorPlan,
+              })
+              authorPlan = validatedAuthorPlan.repairedPlan
+              authorRepairDiagnostics = validatedAuthorPlan.diagnostics
+              authorRepairApplied = validatedAuthorPlan.repairApplied
+              sourceCoverage = validatedAuthorPlan.sourceCoverage
             }
 
             let authoredGraph = buildCinematicGraphFromAuthorPlan({
@@ -1194,6 +1417,11 @@ Deno.serve(async (request) => {
               ...authoredGraph,
               metadata: {
                 ...authoredGraph.metadata,
+                cinematicAuthoring: {
+                  repairApplied: authorRepairApplied,
+                  diagnostics: authorRepairDiagnostics,
+                  sourceCoverage,
+                },
                 generation: {
                   batchId: batch.id,
                   jobId: job.id,
@@ -1206,12 +1434,36 @@ Deno.serve(async (request) => {
 
             await replaceGraphContents(client, batch.draft_id, authoredGraph)
 
+            if (authorRepairDiagnostics.length > 0) {
+              const nextDiagnostics = Array.from(new Set([
+                ...(Array.isArray(batch.diagnostics) ? batch.diagnostics : []),
+                ...authorRepairDiagnostics,
+              ]))
+              await updateBatch(client, batch.id, {
+                diagnostics: nextDiagnostics,
+              })
+              batch = {
+                ...batch,
+                diagnostics: nextDiagnostics,
+              }
+              console.warn('[GraphCore] cinematic graph authoring required repair.', {
+                batchId: batch.id,
+                worldBuildJobId: job.id,
+                graphKey,
+                diagnostics: authorRepairDiagnostics,
+                sourceCoverage,
+              })
+            }
+
             if (!cinematicPlan.data.autoRun) {
               await updateJob(client, job.id, {
                 status: 'succeeded',
                 result_context: {
                   graphKey,
                   resolvedEntityRefs,
+                  authorRepairApplied,
+                  authorRepairDiagnostics,
+                  sourceCoverage,
                 },
                 error_message: null,
               })
@@ -1250,6 +1502,9 @@ Deno.serve(async (request) => {
                   graphKey,
                   resolvedEntityRefs,
                   childCinematicRunId: childRun.run.id,
+                  authorRepairApplied,
+                  authorRepairDiagnostics,
+                  sourceCoverage,
                 },
                 error_message: null,
               })

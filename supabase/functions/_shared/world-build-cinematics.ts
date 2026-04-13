@@ -166,6 +166,11 @@ function buildFallbackShot(input: {
     lensPreference: '',
     durationSeconds: null,
     visualPrompt: '',
+    compositionGuide: [
+      participantRefIds.length > 0 ? 'Keep the key participants clearly readable in the frame.' : null,
+      environmentRef ? 'Anchor the shot in the planned environment.' : null,
+      propRefIds.length > 0 ? 'Ensure the planned props are visibly present or actively used.' : null,
+    ].filter(Boolean).join(' '),
   }
 }
 
@@ -314,6 +319,7 @@ export function coerceCinematicPlannerRaw(input: unknown) {
             ? shot.duration
             : null,
         visualPrompt: pickFirstString(shot, ['visualPrompt', 'prompt', 'visualDescription']),
+        compositionGuide: pickFirstString(shot, ['compositionGuide', 'blocking', 'sceneComposition', 'ingredientGuide', 'stagingNotes']),
       }
     })
     .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
@@ -372,12 +378,16 @@ export const cinematicGraphAuthorSchema = z.object({
     subtitle: z.string().nullable().default(null),
     beat: z.string(),
     visualPrompt: z.string().default(''),
+    compositionGuide: z.string().default(''),
     shotType: z.enum(['establishing', 'dialogue', 'reveal', 'action', 'insert', 'transition', 'custom']).default('custom'),
     framing: z.string().default(''),
     cameraAngle: z.string().default(''),
     cameraMovement: z.string().default(''),
     lensPreference: z.string().default(''),
     durationSeconds: z.number().int().positive().max(20).nullable().default(null),
+    participantRefIds: z.array(z.string()).default([]),
+    locationRefId: z.string().nullable().default(null),
+    propRefIds: z.array(z.string()).default([]),
     sourceRefIds: z.array(z.string()).default([]),
   })).min(1),
 })
@@ -441,11 +451,14 @@ export function cinematicPlannerSystemPrompt() {
     'Return exactly one JSON object with top-level keys: requestSummary, graphName, graphSummary, entityRefs, shots, graphSettings, diagnostics, assistantNotes.',
     'Plan a cinematic sequence, not patch operations.',
     'entityRefs must contain every important character, item, and environment used in the cinematic.',
+    'Every shot must name the participantRefIds, locationRefId, and propRefIds that are relevant for that beat whenever those ingredients exist in the request.',
+    'Prompts like "Character A fights Character B in Environment C using Weapon D" must preserve both characters, the environment, and the weapon as explicit shot ingredients.',
     'Reuse supplied existing definitions when they are clearly the intended match.',
     'Set resolution to "existing" only when a supplied definitionKey is a confident match.',
     'Set resolution to "create" when the entity should be created first.',
     'For create refs, include a short summary that can be used as a content-generation brief.',
     'Every shot must be concrete and implementation-facing with camera/framing intent.',
+    'Include a short compositionGuide for each shot that explains how to combine the planned ingredients in frame.',
     'Prefer 1-5 shots for v1 unless the prompt explicitly asks for a longer sequence.',
     'Default to a linear sequence.',
     'Use environments as location anchors when possible.',
@@ -459,9 +472,13 @@ export function cinematicGraphAuthorSystemPrompt() {
     'Return JSON only.',
     'Return exactly one JSON object with top-level keys: graphName, graphSummary, graphSettings, assetRefs, shots.',
     'Do not invent entities beyond the supplied resolved entity refs.',
-    'assetRefs should map resolved definitions into source asset nodes.',
+    'assetRefs should map every resolved definition into a source asset node.',
     'shots should be authored in final execution order.',
+    'Each shot must preserve the planned participantRefIds, locationRefId, and propRefIds whenever they were supplied.',
     'Each shot should reference sourceRefIds that will connect into asset_in edges.',
+    'sourceRefIds are required structural inputs for still generation, not optional metadata.',
+    'Do not remove planned source refs from a shot.',
+    'Include a compositionGuide for each shot that explains staging, blocking, ingredient priority, and how the scene should combine the supplied sources.',
     'Keep the graph linear unless the provided plan explicitly mentions variations.',
   ].join('\n')
 }
@@ -550,6 +567,7 @@ export function buildCinematicGraphFromAuthorPlan(input: {
       ports: [],
       display: { iconAssetKey: null, compactPreview: true },
       metadata: {
+        entityRefId: ref.id,
         definitionKey: ref.definitionKey,
         assetRole: ref.assetRole,
         stagingNotes: ref.stagingNotes,
@@ -583,6 +601,11 @@ export function buildCinematicGraphFromAuthorPlan(input: {
         lensPreference: shot.lensPreference,
         durationSeconds: shot.durationSeconds,
         visualPrompt: shot.visualPrompt,
+        compositionGuide: shot.compositionGuide,
+        participantRefIds: shot.participantRefIds,
+        locationRefId: shot.locationRefId,
+        propRefIds: shot.propRefIds,
+        requiredSourceRefIds: shot.sourceRefIds,
       },
     })
     nodes.push(shotNode)

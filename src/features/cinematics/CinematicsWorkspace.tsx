@@ -75,6 +75,7 @@ type ShotSourceEntry = {
   asset: AssetDefinition | null
   definition: DefinitionBase | null
   node: NodeDefinition
+  refId: string | null
 }
 
 export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
@@ -614,7 +615,7 @@ function AssetRefInspector({
             <h3>{selectedDefinition?.name ?? 'No source selected'}</h3>
           </div>
         </div>
-        {previewAsset ? <AssetPreview asset={previewAsset} /> : <div className="inline-note">Bind a project character, environment, or item with a usable preview image before generating shots.</div>}
+        {previewAsset ? <AssetPreview asset={previewAsset} /> : <div className="inline-note">Bind a project character, environment, or item here. Preview art improves shot control, but text-only source context can still be used.</div>}
       </div>
     </div>
   )
@@ -647,6 +648,47 @@ function CinematicShotInspector({
   const config = getCinematicShotNodeConfig(node)
   const sources = collectShotSources(currentGraph, node, definitions, assets)
   const missingSources = sources.filter((source) => !resolveAssetSourceUrl(source.asset))
+  const expectedSourceRefIds = useMemo(
+    () => Array.from(new Set(
+      config.requiredSourceRefIds.length > 0
+        ? config.requiredSourceRefIds
+        : [
+            ...config.participantRefIds,
+            ...config.propRefIds,
+            ...(config.locationRefId ? [config.locationRefId] : []),
+          ],
+    )),
+    [config.locationRefId, config.participantRefIds, config.propRefIds, config.requiredSourceRefIds],
+  )
+  const connectedSourceRefIds = useMemo(
+    () => Array.from(new Set(sources.map((source) => source.refId).filter((refId): refId is string => Boolean(refId)))),
+    [sources],
+  )
+  const missingRequiredSourceRefIds = useMemo(
+    () => expectedSourceRefIds.filter((refId) => !connectedSourceRefIds.includes(refId)),
+    [connectedSourceRefIds, expectedSourceRefIds],
+  )
+  const expectedSourceLabels = useMemo(() => {
+    const sourceNodeByRefId = new Map<string, NodeDefinition>()
+    for (const graphNode of currentGraph.nodes) {
+      if (graphNode.type !== 'asset_ref') continue
+      const entityRefId = getAssetRefNodeConfig(graphNode).entityRefId
+      if (!entityRefId) continue
+      sourceNodeByRefId.set(entityRefId, graphNode)
+    }
+
+    return expectedSourceRefIds.map((refId) => {
+      const sourceNode = sourceNodeByRefId.get(refId) ?? null
+      const sourceConfig = sourceNode ? getAssetRefNodeConfig(sourceNode) : null
+      const definition = sourceConfig?.definitionKey
+        ? definitions.find((entry) => entry.key === sourceConfig.definitionKey) ?? null
+        : null
+      return {
+        refId,
+        label: definition?.name ?? sourceNode?.title ?? refId,
+      }
+    })
+  }, [currentGraph.nodes, definitions, expectedSourceRefIds])
   const canGenerateStill = sources.length > 0
   const stillAsset = assets.find((asset) => asset.key === config.stillAssetKey) ?? null
   const videoAsset = assets.find((asset) => asset.key === config.videoAssetKey) ?? null
@@ -682,6 +724,10 @@ function CinematicShotInspector({
       <label className="field-block full-width">
         <span>Visual Prompt Override</span>
         <textarea rows={4} value={config.visualPrompt} onChange={(event) => onUpdate({ metadata: updateNodeMetadataWithShot(node.metadata, { visualPrompt: event.target.value }) })} placeholder="Optional shot-specific visual prompt language layered on top of project and source context." />
+      </label>
+      <label className="field-block full-width">
+        <span>Composition Guide</span>
+        <textarea rows={4} value={config.compositionGuide} onChange={(event) => onUpdate({ metadata: updateNodeMetadataWithShot(node.metadata, { compositionGuide: event.target.value }) })} placeholder="Explain foreground/background, blocking, prop emphasis, and what should anchor the scene." />
       </label>
 
       <div className="editor-grid compact cinematic-field-grid">
@@ -723,11 +769,27 @@ function CinematicShotInspector({
         <div className="section-head">
           <div>
             <span className="eyebrow">Inputs</span>
-            <h3>{sources.length} source{sources.length === 1 ? '' : 's'}</h3>
+            <h3>{connectedSourceRefIds.length}/{expectedSourceRefIds.length || sources.length} connected</h3>
           </div>
         </div>
         <div className="diagnostic-stack">
           {sources.length === 0 ? <div className="inline-note">Connect at least one `Source Asset` node into this shot on the `asset_in` port.</div> : null}
+          {expectedSourceRefIds.length > 0 ? (
+            <div className="inline-note">
+              <strong>Expected sources</strong>
+              <span> {expectedSourceLabels.map((entry) => entry.label).join(', ') || 'none'}</span>
+            </div>
+          ) : null}
+          <div className="inline-note">
+            <strong>Connected sources</strong>
+            <span> {sources.map((source) => source.definition?.name ?? source.node.title).join(', ') || 'none'}</span>
+          </div>
+          {missingRequiredSourceRefIds.length > 0 ? (
+            <div className="inline-note is-warning">
+              <strong>Missing required sources</strong>
+              <span> {expectedSourceLabels.filter((entry) => missingRequiredSourceRefIds.includes(entry.refId)).map((entry) => entry.label).join(', ')}</span>
+            </div>
+          ) : null}
           {sources.map((source) => (
             <div key={source.node.key} className="inline-note">
               <strong>{source.definition?.name ?? source.node.title}</strong>
@@ -834,7 +896,7 @@ function AssetPreview({ asset }: { asset: AssetDefinition }) {
 function buildNodeMetaLines(node: NodeDefinition, shotRunStatus: CinematicRun | null) {
   if (node.type === 'asset_ref') {
     const config = getAssetRefNodeConfig(node)
-    return [config.assetRole ?? 'source', config.definitionKey ?? 'unbound'].filter(Boolean)
+    return [node.subtitle ?? config.assetRole ?? 'source', node.title].filter(Boolean)
   }
 
   if (node.type === 'cinematic_shot') {
@@ -880,7 +942,7 @@ function collectShotSources(graph: GraphDefinition, shotNode: NodeDefinition, de
       const config = getAssetRefNodeConfig(node)
       const definition = definitions.find((entry) => entry.key === config.definitionKey) ?? null
       const asset = resolveDefinitionPreviewAsset(definition, assets)
-      return { node, definition, asset }
+      return { node, definition, asset, refId: config.entityRefId }
     })
 }
 

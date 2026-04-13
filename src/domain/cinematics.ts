@@ -17,6 +17,7 @@ export const cinematicSettingsSchema = z.object({
 })
 
 export const assetRefNodeConfigSchema = z.object({
+  entityRefId: z.string().nullable().default(null),
   definitionKey: z.string().nullable().default(null),
   assetRole: z.enum(['character', 'environment', 'item']).nullable().default(null),
   stagingNotes: z.string().default(''),
@@ -29,6 +30,11 @@ export const cinematicShotNodeConfigSchema = z.object({
   cameraMovement: z.string().default(''),
   lensPreference: z.string().default(''),
   visualPrompt: z.string().default(''),
+  compositionGuide: z.string().default(''),
+  participantRefIds: z.array(z.string()).default([]),
+  locationRefId: z.string().nullable().default(null),
+  propRefIds: z.array(z.string()).default([]),
+  requiredSourceRefIds: z.array(z.string()).default([]),
   durationSeconds: z.number().int().positive().max(20).nullable().default(null),
   stillAssetKey: z.string().nullable().default(null),
   videoAssetKey: z.string().nullable().default(null),
