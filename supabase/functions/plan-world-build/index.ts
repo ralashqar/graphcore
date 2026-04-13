@@ -8,7 +8,11 @@ import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/h
 import { runStructuredWorldBuildModel } from '../_shared/world-build.ts'
 import {
   buildCinematicDefinitionCatalog,
+  buildPromptMatchedEntityRefs,
+  coerceCinematicEntityExtractionRaw,
   coerceCinematicPlannerRaw,
+  cinematicEntityExtractionSystemPrompt,
+  cinematicEntityResolutionSystemPrompt,
   cinematicIntentSchema,
   cinematicIntentSystemPrompt,
   cinematicPlannerSystemPrompt,
@@ -125,6 +129,34 @@ function describeTopLevelKeys(value: unknown) {
   return keys.length > 0 ? keys.join(', ') : '<no-keys>'
 }
 
+function mergeCinematicEntityRefs<T extends {
+  id: string
+  kind: 'character' | 'environment' | 'item'
+  role: string
+  sourceName: string
+  summary: string
+  resolution: 'existing' | 'create'
+  definitionKey?: string | null
+  planItemId?: string | null
+}>(
+  primary: T[],
+  secondary: T[],
+) {
+  const merged = [...primary]
+  const seen = new Set(
+    primary.map((entry) => `${entry.definitionKey ?? ''}::${entry.kind}::${entry.sourceName.trim().toLowerCase()}`),
+  )
+
+  for (const entry of secondary) {
+    const key = `${entry.definitionKey ?? ''}::${entry.kind}::${entry.sourceName.trim().toLowerCase()}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    merged.push(entry)
+  }
+
+  return merged
+}
+
 Deno.serve(async (request) => {
   const preflight = maybeHandleOptions(request)
   if (preflight) return preflight
@@ -158,10 +190,11 @@ Deno.serve(async (request) => {
         name: string
         summary?: string | null
       }>)
-      const cinematicDraftRaw = await runStructuredWorldBuildModel({
+      const promptMatchedEntityRefs = buildPromptMatchedEntityRefs(payload.prompt, catalog)
+      const extractedEntitiesRaw = await runStructuredWorldBuildModel({
         model: payload.model,
-        passLabel: 'Cinematic planner',
-        systemText: cinematicPlannerSystemPrompt(),
+        passLabel: 'Cinematic entity extraction',
+        systemText: cinematicEntityExtractionSystemPrompt(),
         promptContext: {
           prompt: payload.prompt,
           project: payload.snapshot.project,
@@ -175,16 +208,60 @@ Deno.serve(async (request) => {
           })),
         },
         schema: z.record(z.string(), z.unknown()),
+        maxOutputTokens: 4000,
+      })
+      const extractedEntities = coerceCinematicEntityExtractionRaw(extractedEntitiesRaw)
+      const resolvedEntitiesRaw = await runStructuredWorldBuildModel({
+        model: payload.model,
+        passLabel: 'Cinematic entity resolution',
+        systemText: cinematicEntityResolutionSystemPrompt(),
+        promptContext: {
+          prompt: payload.prompt,
+          project: payload.snapshot.project,
+          extractedEntityRefs: extractedEntities.entityRefs,
+          existingDefinitions: catalog.map((entry) => ({
+            definitionKey: entry.definitionKey,
+            kind: entry.kind,
+            name: entry.name,
+            summary: entry.summary,
+          })),
+        },
+        schema: z.record(z.string(), z.unknown()),
+        maxOutputTokens: 5000,
+      })
+      const resolvedEntities = coerceCinematicEntityExtractionRaw(resolvedEntitiesRaw)
+      const resolvedEntityRefs = finalizeCinematicEntityRefs(
+        mergeCinematicEntityRefs(
+          mergeCinematicEntityRefs(promptMatchedEntityRefs, resolvedEntities.entityRefs),
+          extractedEntities.entityRefs,
+        ),
+        catalog,
+      )
+      const cinematicDraftRaw = await runStructuredWorldBuildModel({
+        model: payload.model,
+        passLabel: 'Cinematic planner',
+        systemText: cinematicPlannerSystemPrompt(),
+        promptContext: {
+          prompt: payload.prompt,
+          project: payload.snapshot.project,
+          draft: payload.snapshot.draft,
+          gameSpec: payload.snapshot.gameSpec ?? null,
+          lockedEntityRefs: resolvedEntityRefs,
+          existingEntityRefs: resolvedEntityRefs.filter((entry) => entry.resolution === 'existing'),
+          createEntityRefs: resolvedEntityRefs.filter((entry) => entry.resolution === 'create'),
+        },
+        schema: z.record(z.string(), z.unknown()),
         maxOutputTokens: 10000,
       })
-      const cinematicDraft = coerceCinematicPlannerRaw(cinematicDraftRaw)
-
-      const finalizedEntityRefs = finalizeCinematicEntityRefs(cinematicDraft.entityRefs, catalog)
+      const cinematicDraft = coerceCinematicPlannerRaw(cinematicDraftRaw, {
+        lockedEntityRefs: resolvedEntityRefs,
+        allowEntityCreation: false,
+      })
       const cinematicPlan = materializeCinematicPlan({
         ...cinematicDraft,
-        entityRefs: finalizedEntityRefs,
+        entityRefs: resolvedEntityRefs,
       })
-      const missingPlanItems = finalizedEntityRefs
+      const missingPlanItems = resolvedEntityRefs
         .filter((entityRef) => entityRef.resolution === 'create' && entityRef.planItemId)
         .map((entityRef) => ({
           id: entityRef.planItemId ?? entityRef.id,
@@ -215,8 +292,16 @@ Deno.serve(async (request) => {
           },
         ],
         cinematicPlan,
-        diagnostics: cinematicDraft.diagnostics,
-        assistantNotes: cinematicDraft.assistantNotes,
+        diagnostics: [
+          ...extractedEntities.diagnostics,
+          ...resolvedEntities.diagnostics,
+          ...cinematicDraft.diagnostics,
+        ],
+        assistantNotes: [
+          extractedEntities.assistantNotes,
+          resolvedEntities.assistantNotes,
+          cinematicDraft.assistantNotes,
+        ].filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0).join('\n\n') || undefined,
       }
 
       const responseCheck = worldBuildPlanResponseSchema.safeParse(responseDraft)

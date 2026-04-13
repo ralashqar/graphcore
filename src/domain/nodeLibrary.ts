@@ -8,7 +8,12 @@ import type {
   NodeTemplateDefinition,
   PortDefinition,
 } from './graphcore.ts'
-import { updateNodeMetadataWithAssetRef, updateNodeMetadataWithShot } from './cinematics.ts'
+import {
+  updateNodeMetadataWithAssetRef,
+  updateNodeMetadataWithCompositeRef,
+  updateNodeMetadataWithShot,
+  updateNodeMetadataWithStoryboardRef,
+} from './cinematics.ts'
 
 const narrativeGraphTypes: GraphType[] = ['narrative_flow', 'quest_flow']
 const cinematicGraphTypes: GraphType[] = ['cinematic_flow']
@@ -45,6 +50,93 @@ export const graphNodeLibrary: NodeLibraryGroup[] = [
         defaultDisplay: {
           compactPreview: true,
         },
+      }),
+      template('character_ref', 'Character Ref', 'cinematics', 'asset_ref', cinematicGraphTypes, 'Character Ref', 'basic', {
+        defaultSubtitle: 'Primary character source.',
+        defaultMetadata: updateNodeMetadataWithAssetRef({}, {
+          assetRole: 'character',
+          role: 'participant',
+          priority: 70,
+        }),
+        defaultDisplay: { compactPreview: true },
+      }),
+      template('location_ref', 'Location Ref', 'cinematics', 'asset_ref', cinematicGraphTypes, 'Location Ref', 'basic', {
+        defaultSubtitle: 'Environment or scene anchor.',
+        defaultMetadata: updateNodeMetadataWithAssetRef({}, {
+          assetRole: 'environment',
+          role: 'location',
+          priority: 60,
+        }),
+        defaultDisplay: { compactPreview: true },
+      }),
+      template('prop_ref', 'Prop Ref', 'cinematics', 'asset_ref', cinematicGraphTypes, 'Prop Ref', 'basic', {
+        defaultSubtitle: 'Item or prop source.',
+        defaultMetadata: updateNodeMetadataWithAssetRef({}, {
+          assetRole: 'item',
+          role: 'prop',
+          priority: 55,
+        }),
+        defaultDisplay: { compactPreview: true },
+      }),
+      template('audio_ref', 'Audio Ref', 'cinematics', 'asset_ref', cinematicGraphTypes, 'Audio Ref', 'basic', {
+        defaultSubtitle: 'Audio reference or voice guide.',
+        defaultMetadata: updateNodeMetadataWithAssetRef({}, {
+          refKind: 'audio',
+          assetRole: 'audio',
+          role: 'audio',
+          priority: 35,
+        }),
+        defaultDisplay: { compactPreview: true },
+      }),
+      template('style_ref', 'Style Ref', 'cinematics', 'asset_ref', cinematicGraphTypes, 'Style Ref', 'basic', {
+        defaultSubtitle: 'Look or tone reference.',
+        defaultMetadata: updateNodeMetadataWithAssetRef({}, {
+          refKind: 'style',
+          assetRole: 'style',
+          role: 'style',
+          priority: 30,
+        }),
+        defaultDisplay: { compactPreview: true },
+      }),
+      template('equipped_character_ref', 'Equipped Ref', 'cinematics', 'composite_ref', cinematicGraphTypes, 'Equipped Character Ref', 'basic', {
+        defaultSubtitle: 'Fuse subject and equipment into one stable reference.',
+        defaultMetadata: updateNodeMetadataWithCompositeRef({}, {
+          relationshipType: 'equip',
+          priority: 85,
+        }),
+        defaultDisplay: { compactPreview: true },
+      }),
+      template('paired_subject_ref', 'Paired Subject', 'cinematics', 'composite_ref', cinematicGraphTypes, 'Paired Subject Ref', 'basic', {
+        defaultSubtitle: 'Fuse multiple related subjects into one reference.',
+        defaultMetadata: updateNodeMetadataWithCompositeRef({}, {
+          relationshipType: 'ally_of',
+          priority: 75,
+        }),
+        defaultDisplay: { compactPreview: true },
+      }),
+      template('wardrobe_ref', 'Wardrobe Ref', 'cinematics', 'composite_ref', cinematicGraphTypes, 'Wardrobe Ref', 'basic', {
+        defaultSubtitle: 'Lock costume and character together.',
+        defaultMetadata: updateNodeMetadataWithCompositeRef({}, {
+          relationshipType: 'wear',
+          priority: 82,
+        }),
+        defaultDisplay: { compactPreview: true },
+      }),
+      template('sequence_board_ref', 'Sequence Board', 'cinematics', 'storyboard_ref', cinematicGraphTypes, 'Sequence Board', 'basic', {
+        defaultSubtitle: 'Storyboard sheet for the sequence.',
+        defaultMetadata: updateNodeMetadataWithStoryboardRef({}, {
+          storyboardKind: 'sequence_board',
+          priority: 95,
+        }),
+        defaultDisplay: { compactPreview: true },
+      }),
+      template('shot_panel_ref', 'Shot Panel', 'cinematics', 'storyboard_ref', cinematicGraphTypes, 'Shot Panel', 'basic', {
+        defaultSubtitle: 'Storyboard panel for a specific shot.',
+        defaultMetadata: updateNodeMetadataWithStoryboardRef({}, {
+          storyboardKind: 'shot_panel',
+          priority: 92,
+        }),
+        defaultDisplay: { compactPreview: true },
       }),
       template('cinematic_shot', 'Shot', 'cinematics', 'cinematic_shot', cinematicGraphTypes, 'Cinematic Shot', 'story', {
         defaultSubtitle: 'Describe the beat and generate still/video output.',
@@ -303,15 +395,20 @@ export function inferPortsForNode(node: NodeDefinition): PortDefinition[] {
             { id: 'flow_in', label: 'Flow', direction: 'input' },
             { id: 'asset_in', label: 'Assets', direction: 'input' },
           ]
-        : node.type === 'asset_ref'
+        : node.type === 'asset_ref' || node.type === 'storyboard_ref'
           ? []
+          : node.type === 'composite_ref'
+            ? [{ id: 'asset_in', label: 'Assets', direction: 'input' }]
           : [{ id: 'in', label: 'In', direction: 'input' }]
 
   switch (node.type) {
     case 'start':
       return [{ id: 'out', label: 'Out', direction: 'output' }]
     case 'asset_ref':
+    case 'storyboard_ref':
       return [{ id: 'asset_out', label: 'Asset', direction: 'output' }]
+    case 'composite_ref':
+      return [...inputs, { id: 'asset_out', label: 'Asset', direction: 'output' }]
     case 'cinematic_shot':
       return [...inputs, { id: 'out', label: 'Out', direction: 'output' }]
     case 'end':

@@ -3,13 +3,12 @@ import '@supabase/functions-js/edge-runtime.d.ts'
 import {
   cinematicRunStartRequestSchema,
   cinematicRunStatusResponseSchema,
-  getCinematicShotNodeConfig,
 } from '../../../src/domain/cinematics.ts'
 import { requireUserClient } from '../_shared/auth.ts'
 import {
   applyShotBindingToGraph,
+  buildSeedanceExecutionPlan,
   buildStillPrompt,
-  buildVideoPrompt,
   collectReachableShotNodeKeys,
   findGraph,
   findNode,
@@ -88,7 +87,6 @@ Deno.serve(async (request) => {
     for (const shotNodeKey of shotNodeKeys) {
       const shotNode = findNode(graph, shotNodeKey)
       if (!shotNode) continue
-      const shotConfig = getCinematicShotNodeConfig(shotNode)
       const sourceInputs = resolveShotSources(payload.snapshot, graph, shotNodeKey)
       const stillPrompt = buildStillPrompt({
         snapshot: payload.snapshot,
@@ -96,7 +94,7 @@ Deno.serve(async (request) => {
         shotNode,
         sourceInputs,
       })
-      const videoPrompt = buildVideoPrompt({
+      const executionPlan = buildSeedanceExecutionPlan({
         snapshot: payload.snapshot,
         graph,
         shotNode,
@@ -105,7 +103,7 @@ Deno.serve(async (request) => {
 
       let stillJobId: string | null = null
       let videoJobId: string | null = null
-      const needsStillJob = payload.mode !== 'preview_video' || !shotConfig.stillAssetKey
+      const needsStillJob = payload.mode === 'preview_still'
       if (needsStillJob) {
         stillJobId = crypto.randomUUID()
         jobsToInsert.push({
@@ -134,10 +132,11 @@ Deno.serve(async (request) => {
           kind: 'shot_video',
           status: 'queued',
           order_index: jobsToInsert.length,
-          depends_on_job_ids: stillJobId ? [stillJobId] : previousJobId ? [previousJobId] : [],
-          prompt: videoPrompt,
+          depends_on_job_ids: previousJobId ? [previousJobId] : [],
+          prompt: executionPlan.prompt,
           result_context: {
             mode: payload.mode,
+            executionPlan,
           },
         })
       }
@@ -148,6 +147,7 @@ Deno.serve(async (request) => {
           lastRunId: runId,
           lastStillJobId: stillJobId,
           lastVideoJobId: videoJobId,
+          executionPlan,
         },
       })
       await persistShotBindingsIfPresent(client, payload.snapshot.draft.id, graph.key, shotNodeKey, {
@@ -155,6 +155,7 @@ Deno.serve(async (request) => {
           lastRunId: runId,
           lastStillJobId: stillJobId,
           lastVideoJobId: videoJobId,
+          executionPlan,
         },
       })
     }

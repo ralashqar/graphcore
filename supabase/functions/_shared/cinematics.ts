@@ -4,9 +4,12 @@ import {
   cinematicRunJobSchema,
   cinematicRunSchema,
   getAssetRefNodeConfig,
+  getCompositeRefNodeConfig,
   getCinematicSettings,
   getCinematicShotNodeConfig,
+  getStoryboardRefNodeConfig,
   updateNodeMetadataWithShot,
+  type SeedanceExecutionPlan,
   type CinematicRun,
   type CinematicRunJob,
 } from '../../../src/domain/cinematics.ts'
@@ -160,6 +163,64 @@ export function resolveAssetUrl(asset: SnapshotAsset | null | undefined) {
   return asString(metadata.sourceUrl) ?? asString(metadata.previewUrl)
 }
 
+function resolveNodeAssetSnapshot(input: {
+  sourceNode: SnapshotNode
+  definitions: SnapshotDefinition[]
+  assets: SnapshotAsset[]
+}) {
+  if (input.sourceNode.type === 'asset_ref') {
+    const sourceConfig = getAssetRefNodeConfig(input.sourceNode)
+    const definition = sourceConfig.definitionKey
+      ? input.definitions.find((entry) => entry.key === sourceConfig.definitionKey) ?? null
+      : null
+    const previewAssetKey = sourceConfig.assetKey ?? resolveDefinitionDisplayAssetKey(definition)
+    const asset = previewAssetKey ? input.assets.find((entry) => entry.key === previewAssetKey) ?? null : null
+    return {
+      definition,
+      asset,
+      config: sourceConfig,
+      refId: sourceConfig.entityRefId,
+      role: sourceConfig.assetRole ?? sourceConfig.role,
+      priority: sourceConfig.priority,
+      label: definition?.name ?? sourceConfig.definitionKey ?? sourceConfig.assetKey ?? input.sourceNode.title,
+    }
+  }
+
+  if (input.sourceNode.type === 'composite_ref') {
+    const sourceConfig = getCompositeRefNodeConfig(input.sourceNode)
+    const asset = sourceConfig.outputAssetKey
+      ? input.assets.find((entry) => entry.key === sourceConfig.outputAssetKey) ?? null
+      : null
+    return {
+      definition: null,
+      asset,
+      config: sourceConfig,
+      refId: sourceConfig.compositeRefId,
+      role: 'composite',
+      priority: sourceConfig.priority,
+      label: sourceConfig.title || input.sourceNode.title,
+    }
+  }
+
+  if (input.sourceNode.type === 'storyboard_ref') {
+    const sourceConfig = getStoryboardRefNodeConfig(input.sourceNode)
+    const asset = sourceConfig.assetKey
+      ? input.assets.find((entry) => entry.key === sourceConfig.assetKey) ?? null
+      : null
+    return {
+      definition: null,
+      asset,
+      config: sourceConfig,
+      refId: sourceConfig.panelId ?? sourceConfig.storyboardId,
+      role: 'storyboard',
+      priority: sourceConfig.priority,
+      label: input.sourceNode.title,
+    }
+  }
+
+  return null
+}
+
 export function resolveShotSources(snapshot: { definitions?: unknown[]; assets?: unknown[] }, graph: SnapshotGraph, shotNodeKey: string) {
   const definitions = Array.isArray(snapshot.definitions) ? snapshot.definitions.map((entry) => asRecord(entry) as SnapshotDefinition) : []
   const assets = Array.isArray(snapshot.assets) ? snapshot.assets.map((entry) => asRecord(entry) as SnapshotAsset) : []
@@ -169,21 +230,121 @@ export function resolveShotSources(snapshot: { definitions?: unknown[]; assets?:
     .filter((edge) => isAssetDependencyEdge(graph, edge))
     .map((edge) => {
       const sourceNode = findNode(graph, String(asRecord(edge.source).nodeKey ?? ''))
-      if (!sourceNode || sourceNode.type !== 'asset_ref') return null
-      const sourceConfig = getAssetRefNodeConfig(sourceNode)
-      const definition = definitions.find((entry) => entry.key === sourceConfig.definitionKey) ?? null
-      const previewAssetKey = resolveDefinitionDisplayAssetKey(definition)
-      const asset = assets.find((entry) => entry.key === previewAssetKey) ?? null
-      const imageUrl = resolveAssetUrl(asset)
+      if (!sourceNode || !['asset_ref', 'composite_ref', 'storyboard_ref'].includes(sourceNode.type)) return null
+      const resolved = resolveNodeAssetSnapshot({
+        sourceNode,
+        definitions,
+        assets,
+      })
+      if (!resolved) return null
+      const assetUrl = resolveAssetUrl(resolved.asset)
+      const modality =
+        resolved.asset?.kind === 'video'
+          ? 'video'
+          : resolved.asset?.kind === 'audio'
+            ? 'audio'
+            : 'image'
       return {
         node: sourceNode,
-        definition,
-        asset,
-        imageUrl,
-        config: sourceConfig,
+        definition: resolved.definition,
+        asset: resolved.asset,
+        imageUrl: modality === 'image' ? assetUrl : null,
+        assetUrl,
+        modality,
+        config: resolved.config,
+        refId: resolved.refId,
+        role: resolved.role,
+        priority: resolved.priority,
+        label: resolved.label,
       }
     })
     .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+}
+
+export function buildSeedanceExecutionPlan(input: {
+  snapshot: { project: { name: string; summary: string }; gameSpec?: unknown | null }
+  graph: SnapshotGraph
+  shotNode: SnapshotNode
+  sourceInputs: ReturnType<typeof resolveShotSources>
+}): SeedanceExecutionPlan {
+  const settings = getCinematicSettings(input.snapshot.gameSpec ?? null, input.graph.metadata)
+  const shot = getCinematicShotNodeConfig(input.shotNode)
+  const sortedInputs = [...input.sourceInputs]
+    .filter((entry) => Boolean(entry.assetUrl))
+    .sort((left, right) => right.priority - left.priority)
+
+  const endpoint =
+    shot.seedanceModePreference === 'image-to-video'
+      ? 'image-to-video'
+      : shot.seedanceModePreference === 'reference-to-video'
+        ? 'reference-to-video'
+        : sortedInputs.length <= 1 && sortedInputs.every((entry) => entry.modality === 'image')
+          ? 'image-to-video'
+          : 'reference-to-video'
+
+  const referenceInputs = sortedInputs.map((entry, index) => ({
+    id: `${entry.refId ?? entry.node.key}_${index}`,
+    sourceRefId: entry.refId ?? null,
+    nodeKey: entry.node.key,
+    label: entry.label,
+    modality: entry.modality,
+    url: entry.assetUrl ?? '',
+    priority: entry.priority,
+    truncated: index >= 12,
+  }))
+
+  const keptReferenceInputs = referenceInputs.filter((entry, index) => !entry.truncated && index < 12)
+  const droppedRefIds = referenceInputs.filter((entry) => entry.truncated).map((entry) => entry.sourceRefId ?? entry.id)
+
+  const promptLines = [
+    `Shot: ${input.shotNode.title}.`,
+    input.shotNode.body?.text ? `Action: ${String(input.shotNode.body.text).trim()}.` : null,
+    shot.visualPrompt.trim() ? `Visual direction: ${shot.visualPrompt.trim()}.` : null,
+    shot.compositionGuide.trim() ? `Composition: ${shot.compositionGuide.trim()}.` : null,
+    shot.framing.trim() ? `Framing: ${shot.framing.trim()}.` : null,
+    shot.cameraAngle.trim() ? `Camera angle: ${shot.cameraAngle.trim()}.` : null,
+    shot.cameraMovement.trim() ? `Camera movement: ${shot.cameraMovement.trim()}.` : null,
+    shot.lensPreference.trim() ? `Lens: ${shot.lensPreference.trim()}.` : null,
+    ...shot.actions.map((entry) => `Action beat: ${entry.verb}${entry.stagingNotes ? ` (${entry.stagingNotes})` : ''}.`),
+    ...shot.dialogue.map((entry) => `Dialogue: ${entry.line}${entry.delivery ? ` (${entry.delivery})` : ''}.`),
+    ...shot.audio.map((entry) => `${entry.kind}: ${entry.cue}.`),
+  ].filter((entry): entry is string => Boolean(entry))
+
+  const referenceDirectives = keptReferenceInputs.map((entry, index) => {
+    const tag = entry.modality === 'image' ? `@Image${index + 1}` : entry.modality === 'video' ? `@Video${index + 1}` : `@Audio${index + 1}`
+    return `${tag} is ${entry.label}.`
+  })
+
+  const prompt = [
+    `Shot 1: ${promptLines.join(' ')}`,
+    ...referenceDirectives,
+    'Keep one primary action and one primary camera move. Preserve subject continuity across all references.',
+  ].join(' ')
+
+  const imageInputs = keptReferenceInputs.filter((entry) => entry.modality === 'image')
+  const videoInputs = keptReferenceInputs.filter((entry) => entry.modality === 'video')
+  const audioInputs = keptReferenceInputs.filter((entry) => entry.modality === 'audio')
+
+  return {
+    endpoint,
+    modeReason:
+      endpoint === 'image-to-video'
+        ? 'Single strong image reference or explicit image-to-video preference.'
+        : 'Multiple references, storyboard references, or non-image modalities require reference-to-video.',
+    prompt,
+    resolution: settings.videoResolution === '480p' ? '480p' : '720p',
+    duration: `${Math.min(15, Math.max(4, shot.durationSeconds ?? settings.defaultClipSeconds))}` as SeedanceExecutionPlan['duration'],
+    aspectRatio: settings.stillAspectRatio,
+    generateAudio: shot.audio.length > 0 || shot.dialogue.length > 0,
+    seed: null,
+    imageUrl: endpoint === 'image-to-video' ? (imageInputs[0]?.url ?? null) : null,
+    endImageUrl: endpoint === 'image-to-video' && imageInputs.length > 1 ? imageInputs[1]?.url ?? null : null,
+    imageUrls: imageInputs.map((entry) => entry.url),
+    videoUrls: videoInputs.map((entry) => entry.url),
+    audioUrls: audioInputs.map((entry) => entry.url),
+    referenceInputs: keptReferenceInputs,
+    droppedRefIds,
+  }
 }
 
 export function buildStillPrompt(input: {

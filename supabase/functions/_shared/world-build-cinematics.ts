@@ -2,6 +2,16 @@ import { z } from 'npm:zod@4'
 
 import { normalizeNode } from '../../../src/domain/nodeLibrary.ts'
 import {
+  actionBeatSchema,
+  audioBeatSchema,
+  cinematicBeatSchema,
+  cinematicRelationshipSchema,
+  cinematicSequenceSchema,
+  dialogueBeatSchema,
+  storyboardSpecSchema,
+} from '../../../src/domain/cinematics.ts'
+import {
+  cinematicCompositeRefPlanSchema,
   cinematicGraphSettingsSchema,
   cinematicPlanSchema,
   cinematicShotPlanSchema,
@@ -22,6 +32,22 @@ export const cinematicIntentSchema = z.object({
   reason: z.string().default(''),
 })
 
+export const cinematicEntityExtractionSchema = z.object({
+  requestSummary: z.string().default('Cinematic build plan'),
+  entityRefs: z.array(z.object({
+    id: z.string(),
+    kind: z.enum(['character', 'environment', 'item']),
+    role: z.string(),
+    sourceName: z.string(),
+    summary: z.string().default(''),
+    resolution: z.enum(['existing', 'create']).default('create'),
+    definitionKey: z.string().nullable().optional(),
+    planItemId: z.string().nullable().optional(),
+  })).default([]),
+  diagnostics: z.array(z.string()).default([]),
+  assistantNotes: z.string().optional(),
+})
+
 export const cinematicPlannerRawSchema = z.object({
   requestSummary: z.string().default('Cinematic build plan'),
   graphName: z.string(),
@@ -36,6 +62,9 @@ export const cinematicPlannerRawSchema = z.object({
     definitionKey: z.string().nullable().optional(),
     planItemId: z.string().nullable().optional(),
   })).default([]),
+  relationshipRefs: z.array(cinematicRelationshipSchema).default([]),
+  compositeRefPlans: z.array(cinematicCompositeRefPlanSchema).default([]),
+  storyboardPlan: storyboardSpecSchema.nullable().default(null),
   shots: z.array(cinematicShotPlanSchema).min(1),
   graphSettings: cinematicGraphSettingsSchema,
   diagnostics: z.array(z.string()).default([]),
@@ -90,6 +119,44 @@ function normalizeEntityKind(value: unknown, fallback: 'character' | 'environmen
   return fallback
 }
 
+function inferEntityKindFromRole(value: unknown) {
+  if (typeof value !== 'string') return null
+  const normalized = normalizeMatchKey(value)
+  if (!normalized) return null
+  if (
+    normalized.includes('location')
+    || normalized.includes('setting')
+    || normalized.includes('place')
+    || normalized.includes('scene')
+    || normalized.includes('background')
+    || normalized.includes('environment')
+  ) {
+    return 'environment' as const
+  }
+  if (
+    normalized.includes('participant')
+    || normalized.includes('speaker')
+    || normalized.includes('actor')
+    || normalized.includes('target')
+    || normalized.includes('lead')
+    || normalized.includes('hero')
+    || normalized.includes('villain')
+    || normalized.includes('opponent')
+  ) {
+    return 'character' as const
+  }
+  if (
+    normalized.includes('prop')
+    || normalized.includes('weapon')
+    || normalized.includes('item')
+    || normalized.includes('object')
+    || normalized.includes('gear')
+  ) {
+    return 'item' as const
+  }
+  return null
+}
+
 function normalizeShotType(value: unknown) {
   if (typeof value !== 'string') return 'custom' as const
   const normalized = normalizeMatchKey(value)
@@ -102,21 +169,86 @@ function normalizeShotType(value: unknown) {
   return 'custom' as const
 }
 
+function normalizePromptTextForStoryboard(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+}
+
+type EntityLookup = {
+  byId: Map<string, string>
+  byDefinitionKey: Map<string, string>
+  byNormalizedName: Map<string, string>
+  byNormalizedDefinitionKey: Map<string, string>
+}
+
+function createEntityLookup(entityRefs: Array<{
+  id: string
+  sourceName: string
+  definitionKey?: string | null
+}>) {
+  const lookup: EntityLookup = {
+    byId: new Map(),
+    byDefinitionKey: new Map(),
+    byNormalizedName: new Map(),
+    byNormalizedDefinitionKey: new Map(),
+  }
+
+  for (const entityRef of entityRefs) {
+    registerEntityLookupEntry(lookup, entityRef)
+  }
+
+  return lookup
+}
+
+function registerEntityLookupEntry(
+  lookup: EntityLookup,
+  entityRef: {
+    id: string
+    sourceName: string
+    definitionKey?: string | null
+  },
+) {
+  lookup.byId.set(entityRef.id, entityRef.id)
+  const normalizedName = normalizeMatchKey(entityRef.sourceName)
+  if (normalizedName) {
+    lookup.byNormalizedName.set(normalizedName, entityRef.id)
+  }
+  if (typeof entityRef.definitionKey === 'string' && entityRef.definitionKey.trim()) {
+    lookup.byDefinitionKey.set(entityRef.definitionKey, entityRef.id)
+    const normalizedDefinitionKey = normalizeMatchKey(entityRef.definitionKey)
+    if (normalizedDefinitionKey) {
+      lookup.byNormalizedDefinitionKey.set(normalizedDefinitionKey, entityRef.id)
+    }
+  }
+}
+
+function resolveEntityRefId(value: unknown, lookup: EntityLookup) {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  if (lookup.byId.has(trimmed)) return lookup.byId.get(trimmed) ?? null
+  if (lookup.byDefinitionKey.has(trimmed)) return lookup.byDefinitionKey.get(trimmed) ?? null
+  const normalized = normalizeMatchKey(trimmed)
+  if (!normalized) return null
+  return lookup.byNormalizedName.get(normalized)
+    ?? lookup.byNormalizedDefinitionKey.get(normalized)
+    ?? null
+}
+
 function collectNamedRefs(
   value: unknown,
-  entityIdByName: Map<string, string>,
+  entityLookup: EntityLookup,
 ) {
   if (!Array.isArray(value)) return []
   return value
     .map((entry) => {
       if (typeof entry === 'string') {
-        return entityIdByName.get(normalizeMatchKey(entry)) ?? null
+        return resolveEntityRefId(entry, entityLookup)
       }
       const record = asRecord(entry)
       if (!record) return null
-      const candidateName = pickFirstString(record, ['sourceName', 'name', 'title', 'label', 'character', 'item', 'environment'])
-      if (!candidateName) return null
-      return entityIdByName.get(normalizeMatchKey(candidateName)) ?? null
+      const candidate = pickFirstString(record, ['id', 'refId', 'entityRefId', 'sourceRefId', 'definitionKey', 'sourceName', 'name', 'title', 'label', 'character', 'item', 'environment'])
+      if (!candidate) return null
+      return resolveEntityRefId(candidate, entityLookup)
     })
     .filter((entry): entry is string => typeof entry === 'string' && entry.length > 0)
 }
@@ -131,6 +263,14 @@ function collectNamedLabels(value: unknown) {
       return pickFirstString(record, ['sourceName', 'name', 'title', 'label', 'character', 'item', 'environment'])
     })
     .filter((entry) => entry.length > 0)
+}
+
+function coerceArrayWithSchema<TOutput>(value: unknown, schema: z.ZodType<TOutput>) {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((entry) => schema.safeParse(entry))
+    .filter((entry): entry is { success: true; data: TOutput } => entry.success)
+    .map((entry) => entry.data)
 }
 
 function buildFallbackShot(input: {
@@ -171,14 +311,27 @@ function buildFallbackShot(input: {
       environmentRef ? 'Anchor the shot in the planned environment.' : null,
       propRefIds.length > 0 ? 'Ensure the planned props are visibly present or actively used.' : null,
     ].filter(Boolean).join(' '),
+    beats: [],
+    dialogue: [],
+    actions: participantRefIds.length > 0
+      ? [{
+          id: 'action_1',
+          actorRefId: participantRefIds[0] ?? null,
+          targetRefId: participantRefIds[1] ?? null,
+          verb: shotType === 'action' ? 'engages in combat' : 'performs the key scene action',
+          propRefId: propRefIds[0] ?? null,
+          stagingNotes: '',
+          startSeconds: null,
+          endSeconds: null,
+        }]
+      : [],
+    audio: [],
   }
 }
 
-export function coerceCinematicPlannerRaw(input: unknown) {
+export function coerceCinematicEntityExtractionRaw(input: unknown) {
   const record = asRecord(input) ?? {}
   const requestSummary = pickFirstString(record, ['requestSummary', 'summary', 'title']) || 'Cinematic build plan'
-  const graphName = pickFirstString(record, ['graphName', 'name', 'title']) || 'Prompt Cinematic'
-  const graphSummary = pickFirstString(record, ['graphSummary', 'summary', 'description']) || requestSummary
 
   const rawEntityRefs = Array.isArray(record.entityRefs)
     ? record.entityRefs
@@ -204,7 +357,139 @@ export function coerceCinematicPlannerRaw(input: unknown) {
       if (!entity) return null
       const sourceName = pickFirstString(entity, ['sourceName', 'name', 'title', 'label', 'character', 'item', 'environment'])
       if (!sourceName) return null
-      const kind = normalizeEntityKind(entity.kind ?? entity.type ?? entity.category, 'item')
+      const inferredRoleKind = inferEntityKindFromRole(entity.role ?? entity.purpose ?? entity.usage ?? entity.relation)
+      const kind = normalizeEntityKind(entity.kind ?? entity.type ?? entity.category, inferredRoleKind ?? 'character')
+      const id = pickFirstString(entity, ['id', 'key']) || `${kind}_${slugSeed(sourceName, `entity_${index + 1}`)}`
+      const role = pickFirstString(entity, ['role', 'purpose', 'usage', 'relation'])
+        || (kind === 'environment' ? 'location' : kind === 'item' ? 'prop' : 'participant')
+      const resolutionCandidate = pickFirstString(entity, ['resolution', 'matchType', 'source'])
+      const resolution = resolutionCandidate === 'existing' || resolutionCandidate === 'create'
+        ? resolutionCandidate
+        : (pickFirstString(entity, ['definitionKey', 'existingDefinitionKey']) ? 'existing' : 'create')
+
+      return {
+        id,
+        kind,
+        role,
+        sourceName,
+        summary: pickFirstString(entity, ['summary', 'description', 'brief']),
+        resolution,
+        definitionKey: pickFirstString(entity, ['definitionKey', 'existingDefinitionKey']) || null,
+        planItemId: pickFirstString(entity, ['planItemId']) || null,
+      }
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+
+  const diagnosticsValue = record.diagnostics
+  const diagnostics = Array.isArray(diagnosticsValue)
+    ? asStringArray(diagnosticsValue)
+    : asRecord(diagnosticsValue)
+      ? Object.entries(diagnosticsValue).map(([key, value]) => `${key}: ${String(value)}`)
+      : []
+
+  const assistantNotesValue = record.assistantNotes ?? record.notes
+  const assistantNotes = typeof assistantNotesValue === 'string'
+    ? assistantNotesValue
+    : Array.isArray(assistantNotesValue)
+      ? asStringArray(assistantNotesValue).join('\n')
+      : asRecord(assistantNotesValue)
+        ? JSON.stringify(assistantNotesValue)
+        : undefined
+
+  return cinematicEntityExtractionSchema.parse({
+    requestSummary,
+    entityRefs,
+    diagnostics,
+    assistantNotes,
+  })
+}
+
+function sanitizeRelationshipRefs(
+  relationships: Array<z.infer<typeof cinematicRelationshipSchema>>,
+  entityLookup: EntityLookup,
+) {
+  return relationships
+    .map((relationship) => {
+      const sourceRefId = resolveEntityRefId(relationship.sourceRefId, entityLookup)
+      const targetRefId = resolveEntityRefId(relationship.targetRefId, entityLookup)
+      if (!sourceRefId || !targetRefId) return null
+      return {
+        ...relationship,
+        sourceRefId,
+        targetRefId,
+      }
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+}
+
+function sanitizeCompositeRefPlans(
+  composites: Array<z.infer<typeof cinematicCompositeRefPlanSchema>>,
+  entityLookup: EntityLookup,
+) {
+  return composites
+    .map((composite) => {
+      const sourceRefIds = Array.from(new Set(
+        composite.sourceRefIds
+          .map((entry) => resolveEntityRefId(entry, entityLookup))
+          .filter((entry): entry is string => typeof entry === 'string' && entry.length > 0),
+      ))
+      if (sourceRefIds.length < 2) return null
+      return {
+        ...composite,
+        sourceRefIds,
+      }
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+}
+
+type CoerceCinematicPlannerOptions = {
+  lockedEntityRefs?: Array<z.infer<typeof cinematicEntityExtractionSchema>['entityRefs'][number]>
+  allowEntityCreation?: boolean
+}
+
+export function coerceCinematicPlannerRaw(input: unknown, options: CoerceCinematicPlannerOptions = {}) {
+  const record = asRecord(input) ?? {}
+  const requestSummary = pickFirstString(record, ['requestSummary', 'summary', 'title']) || 'Cinematic build plan'
+  const graphName = pickFirstString(record, ['graphName', 'name', 'title']) || 'Prompt Cinematic'
+  const graphSummary = pickFirstString(record, ['graphSummary', 'summary', 'description']) || requestSummary
+  const lockedEntityRefs = options.lockedEntityRefs
+    ? options.lockedEntityRefs.map((entry) => ({ ...entry }))
+    : null
+  const allowEntityCreation = options.allowEntityCreation ?? !lockedEntityRefs
+
+  const rawEntityRefs = lockedEntityRefs
+    ? []
+    : (
+      Array.isArray(record.entityRefs)
+        ? record.entityRefs
+        : Array.isArray(record.entities)
+          ? record.entities
+          : []
+    )
+
+  const sectionEntityRefs = lockedEntityRefs
+    ? []
+    : [
+      ...(Array.isArray(record.characters)
+        ? record.characters.map((entry) => ({ ...(asRecord(entry) ?? { name: typeof entry === 'string' ? entry : '' }), kind: 'character' }))
+        : []),
+      ...(Array.isArray(record.environments)
+        ? record.environments.map((entry) => ({ ...(asRecord(entry) ?? { name: typeof entry === 'string' ? entry : '' }), kind: 'environment' }))
+        : []),
+      ...(Array.isArray(record.items)
+        ? record.items.map((entry) => ({ ...(asRecord(entry) ?? { name: typeof entry === 'string' ? entry : '' }), kind: 'item' }))
+        : []),
+    ]
+
+  const entityRefs = lockedEntityRefs ?? [...rawEntityRefs, ...sectionEntityRefs]
+    .map((entry, index) => {
+      if (lockedEntityRefs) return entry
+      const entity = asRecord(entry)
+      if (!entity) return null
+      const sourceName = pickFirstString(entity, ['sourceName', 'name', 'title', 'label', 'character', 'item', 'environment'])
+      if (!sourceName) return null
+      const inferredRoleKind = inferEntityKindFromRole(entity.role ?? entity.purpose ?? entity.usage ?? entity.relation)
+      const kind = normalizeEntityKind(entity.kind ?? entity.type ?? entity.category, inferredRoleKind ?? 'character')
       const id = pickFirstString(entity, ['id', 'key']) || `${kind}_${slugSeed(sourceName, `entity_${index + 1}`)}`
       const role = pickFirstString(entity, ['role', 'purpose', 'usage', 'relation'])
         || (kind === 'environment' ? 'location' : kind === 'item' ? 'prop' : 'participant')
@@ -236,7 +521,7 @@ export function coerceCinematicPlannerRaw(input: unknown) {
           ? record.sequence
           : []
 
-  const entityIdByName = new Map(entityRefs.map((entry) => [normalizeMatchKey(entry.sourceName), entry.id]))
+  const entityLookup = createEntityLookup(entityRefs)
 
   function ensureEntityRef(input: {
     sourceName: string
@@ -245,14 +530,12 @@ export function coerceCinematicPlannerRaw(input: unknown) {
   }) {
     const sourceName = input.sourceName.trim()
     if (!sourceName) return null
-    const normalizedName = normalizeMatchKey(sourceName)
-    if (!normalizedName) return null
-
-    const existingId = entityIdByName.get(normalizedName)
+    const existingId = resolveEntityRefId(sourceName, entityLookup)
     if (existingId) return existingId
+    if (!allowEntityCreation) return null
 
     const id = `${input.kind}_${slugSeed(sourceName, `${input.kind}_${entityRefs.length + 1}`)}`
-    entityRefs.push({
+    const nextEntityRef = {
       id,
       kind: input.kind,
       role: input.role,
@@ -261,8 +544,9 @@ export function coerceCinematicPlannerRaw(input: unknown) {
       resolution: 'create',
       definitionKey: null,
       planItemId: null,
-    })
-    entityIdByName.set(normalizedName, id)
+    }
+    entityRefs.push(nextEntityRef)
+    registerEntityLookupEntry(entityLookup, nextEntityRef)
     return id
   }
 
@@ -276,7 +560,7 @@ export function coerceCinematicPlannerRaw(input: unknown) {
 
       const locationName = pickFirstString(shot, ['location', 'environment', 'setting'])
       const locationRefId = locationName
-        ? (entityIdByName.get(normalizeMatchKey(locationName)) ?? ensureEntityRef({
+        ? (resolveEntityRefId(locationName, entityLookup) ?? ensureEntityRef({
           sourceName: locationName,
           kind: 'environment',
           role: 'location',
@@ -305,9 +589,9 @@ export function coerceCinematicPlannerRaw(input: unknown) {
         id: pickFirstString(shot, ['id', 'key']) || `shot_${index + 1}`,
         title,
         beat,
-        participantRefIds: collectNamedRefs(shot.participantRefIds ?? shot.participants ?? shot.characters ?? shot.cast, entityIdByName),
+        participantRefIds: Array.from(new Set(collectNamedRefs(shot.participantRefIds ?? shot.participants ?? shot.characters ?? shot.cast, entityLookup))),
         locationRefId,
-        propRefIds: collectNamedRefs(shot.propRefIds ?? shot.props ?? shot.items, entityIdByName),
+        propRefIds: Array.from(new Set(collectNamedRefs(shot.propRefIds ?? shot.props ?? shot.items, entityLookup))),
         shotType: normalizeShotType(shot.shotType ?? shot.type),
         framing: pickFirstString(shot, ['framing', 'frame', 'composition']),
         cameraAngle: pickFirstString(shot, ['cameraAngle', 'angle']),
@@ -320,6 +604,21 @@ export function coerceCinematicPlannerRaw(input: unknown) {
             : null,
         visualPrompt: pickFirstString(shot, ['visualPrompt', 'prompt', 'visualDescription']),
         compositionGuide: pickFirstString(shot, ['compositionGuide', 'blocking', 'sceneComposition', 'ingredientGuide', 'stagingNotes']),
+        beats: coerceArrayWithSchema(shot.beats, cinematicBeatSchema),
+        dialogue: coerceArrayWithSchema(shot.dialogue ?? shot.lines, dialogueBeatSchema).map((entry) => ({
+          ...entry,
+          speakerRefId: entry.speakerRefId ? resolveEntityRefId(entry.speakerRefId, entityLookup) : null,
+        })),
+        actions: coerceArrayWithSchema(shot.actions, actionBeatSchema).map((entry) => ({
+          ...entry,
+          actorRefId: entry.actorRefId ? resolveEntityRefId(entry.actorRefId, entityLookup) : null,
+          targetRefId: entry.targetRefId ? resolveEntityRefId(entry.targetRefId, entityLookup) : null,
+          propRefId: entry.propRefId ? resolveEntityRefId(entry.propRefId, entityLookup) : null,
+        })),
+        audio: coerceArrayWithSchema(shot.audio ?? shot.sound, audioBeatSchema).map((entry) => ({
+          ...entry,
+          sourceRefId: entry.sourceRefId ? resolveEntityRefId(entry.sourceRefId, entityLookup) : null,
+        })),
       }
     })
     .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
@@ -331,6 +630,107 @@ export function coerceCinematicPlannerRaw(input: unknown) {
       graphSummary,
       entityRefs,
     })]
+  const soleEnvironmentRefId =
+    entityRefs.filter((entry) => entry.kind === 'environment').length === 1
+      ? entityRefs.find((entry) => entry.kind === 'environment')?.id ?? null
+      : null
+  const normalizedShotsWithDefaultLocation = normalizedShots.map((shot) => (
+    !shot.locationRefId && soleEnvironmentRefId
+      ? {
+          ...shot,
+          locationRefId: soleEnvironmentRefId,
+        }
+      : shot
+  ))
+
+  const relationshipRefs = sanitizeRelationshipRefs(
+    coerceArrayWithSchema(record.relationshipRefs ?? record.relationships, cinematicRelationshipSchema),
+    entityLookup,
+  )
+
+  if (relationshipRefs.length === 0) {
+    const firstLocation = entityRefs.find((entry) => entry.kind === 'environment') ?? null
+    const characterRefs = entityRefs.filter((entry) => entry.kind === 'character')
+    const propRefs = entityRefs.filter((entry) => entry.kind === 'item')
+
+    for (const propRef of propRefs) {
+      if (characterRefs[0]) {
+        relationshipRefs.push({
+          id: `rel_${characterRefs[0].id}_${propRef.id}`,
+          type: 'equip',
+          sourceRefId: characterRefs[0].id,
+          targetRefId: propRef.id,
+          notes: 'Defaulted from prompt participants and props.',
+        })
+      }
+    }
+
+    if (characterRefs.length >= 2) {
+      relationshipRefs.push({
+        id: `rel_${characterRefs[0].id}_${characterRefs[1].id}`,
+        type: 'targets',
+        sourceRefId: characterRefs[0].id,
+        targetRefId: characterRefs[1].id,
+        notes: 'Defaulted from multi-character cinematic prompt.',
+      })
+    }
+
+    if (firstLocation && characterRefs[0]) {
+      relationshipRefs.push({
+        id: `rel_${characterRefs[0].id}_${firstLocation.id}`,
+        type: 'located_in',
+        sourceRefId: characterRefs[0].id,
+        targetRefId: firstLocation.id,
+        notes: 'Defaulted from cinematic location context.',
+      })
+    }
+  }
+
+  const compositeRefPlans = sanitizeCompositeRefPlans(
+    coerceArrayWithSchema(record.compositeRefPlans ?? record.composites, cinematicCompositeRefPlanSchema),
+    entityLookup,
+  )
+
+  if (compositeRefPlans.length === 0) {
+    for (const relationship of relationshipRefs) {
+      if (!['equip', 'wear', 'hold', 'mounted_on'].includes(relationship.type)) continue
+      const sourceRef = entityRefs.find((entry) => entry.id === relationship.sourceRefId) ?? null
+      const targetRef = entityRefs.find((entry) => entry.id === relationship.targetRefId) ?? null
+      if (!sourceRef || !targetRef) continue
+      compositeRefPlans.push({
+        id: `composite_${sourceRef.id}_${targetRef.id}`,
+        title: `${sourceRef.sourceName} with ${targetRef.sourceName}`,
+        summary: `${sourceRef.sourceName} combined with ${targetRef.sourceName} for continuity.`,
+        relationshipType: relationship.type,
+        sourceRefIds: [sourceRef.id, targetRef.id],
+        generationPrompt: `${sourceRef.sourceName} combined with ${targetRef.sourceName} in one clear, production-ready reference frame.`,
+        outputAssetKey: null,
+        stagingNotes: relationship.notes,
+        priority: 80,
+      })
+    }
+  }
+
+  const storyboardPlanInput = record.storyboardPlan ?? record.storyboard
+  const storyboardPlanParsed = storyboardSpecSchema.safeParse(storyboardPlanInput ?? {})
+  const storyboardPlan = storyboardPlanParsed.success
+    ? storyboardPlanParsed.data
+    : {
+        mode:
+          normalizedShotsWithDefaultLocation.length > 1
+            ? 'hybrid' as const
+            : (normalizePromptTextForStoryboard(requestSummary).includes('storyboard') ? 'sequence_board' as const : 'none' as const),
+        summary: normalizedShotsWithDefaultLocation.length > 1 ? 'Generate a storyboard sheet and shot panels for continuity.' : '',
+        sequenceAssetKey: null,
+        panels: normalizedShotsWithDefaultLocation.map((shot, index) => ({
+          id: `panel_${shot.id}`,
+          shotId: shot.id,
+          title: shot.title,
+          assetKey: null,
+          notes: shot.compositionGuide,
+          orderIndex: index,
+        })),
+      }
 
   const diagnosticsValue = record.diagnostics
   const diagnostics = Array.isArray(diagnosticsValue)
@@ -353,7 +753,10 @@ export function coerceCinematicPlannerRaw(input: unknown) {
     graphName,
     graphSummary,
     entityRefs,
-    shots: normalizedShots,
+    relationshipRefs,
+    compositeRefPlans,
+    storyboardPlan,
+    shots: normalizedShotsWithDefaultLocation,
     graphSettings: asRecord(record.graphSettings ?? record.settings) ?? {},
     diagnostics,
     assistantNotes,
@@ -366,11 +769,18 @@ export const cinematicGraphAuthorSchema = z.object({
   graphSettings: cinematicGraphSettingsSchema,
   assetRefs: z.array(z.object({
     id: z.string(),
-    definitionKey: z.string(),
-    assetRole: z.enum(['character', 'environment', 'item']),
+    nodeType: z.enum(['asset_ref', 'composite_ref', 'storyboard_ref']).default('asset_ref'),
+    templateKey: z.string().default('asset_ref'),
+    definitionKey: z.string().nullable().default(null),
+    assetKey: z.string().nullable().default(null),
+    assetRole: z.enum(['character', 'environment', 'item', 'audio', 'style', 'storyboard', 'composite']),
     title: z.string(),
     subtitle: z.string().nullable().default(null),
     stagingNotes: z.string().default(''),
+    role: z.string().default('reference'),
+    priority: z.number().int().min(0).max(100).default(50),
+    sourceRefIds: z.array(z.string()).default([]),
+    relationshipType: z.enum(['equip', 'wear', 'hold', 'mounted_on', 'located_in', 'targets', 'speaks_to', 'ally_of']).nullable().default(null),
   })).default([]),
   shots: z.array(z.object({
     id: z.string(),
@@ -389,6 +799,12 @@ export const cinematicGraphAuthorSchema = z.object({
     locationRefId: z.string().nullable().default(null),
     propRefIds: z.array(z.string()).default([]),
     sourceRefIds: z.array(z.string()).default([]),
+    compositeRefIds: z.array(z.string()).default([]),
+    storyboardRefIds: z.array(z.string()).default([]),
+    beats: z.array(cinematicBeatSchema).default([]),
+    dialogue: z.array(dialogueBeatSchema).default([]),
+    actions: z.array(actionBeatSchema).default([]),
+    audio: z.array(audioBeatSchema).default([]),
   })).min(1),
 })
 
@@ -414,6 +830,33 @@ export function buildCinematicDefinitionCatalog(definitions: SnapshotDefinition[
     }))
 }
 
+export function buildPromptMatchedEntityRefs(
+  prompt: string,
+  catalog: ReturnType<typeof buildCinematicDefinitionCatalog>,
+) {
+  const normalizedPrompt = ` ${normalizeMatchKey(prompt)} `
+  if (!normalizedPrompt.trim()) return []
+
+  return catalog
+    .map((entry) => {
+      const candidates = [entry.normalizedName, entry.normalizedKey].filter((value) => value.length > 0)
+      const matched = candidates.some((candidate) => normalizedPrompt.includes(` ${candidate} `))
+      if (!matched) return null
+      return {
+        id: `${entry.kind}_${slugSeed(entry.name, entry.definitionKey)}`,
+        kind: entry.kind,
+        role: entry.kind === 'environment' ? 'location' : entry.kind === 'item' ? 'prop' : 'participant',
+        sourceName: entry.name,
+        summary: entry.summary,
+        resolution: 'existing' as const,
+        definitionKey: entry.definitionKey,
+        planItemId: null,
+      }
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+    .sort((left, right) => right.sourceName.length - left.sourceName.length)
+}
+
 export function findStrongExistingDefinitionMatch(
   catalog: ReturnType<typeof buildCinematicDefinitionCatalog>,
   sourceName: string,
@@ -434,6 +877,25 @@ export function findStrongExistingDefinitionMatch(
   return fuzzy ?? null
 }
 
+function findStrongExistingDefinitionMatchAcrossKinds(
+  catalog: ReturnType<typeof buildCinematicDefinitionCatalog>,
+  sourceName: string,
+) {
+  const normalized = normalizeMatchKey(sourceName)
+  if (!normalized) return null
+
+  const exact = catalog.find((entry) => entry.normalizedName === normalized || entry.normalizedKey === normalized)
+  if (exact) return exact
+
+  const fuzzyMatches = catalog.filter((entry) =>
+    entry.normalizedName.includes(normalized)
+    || normalized.includes(entry.normalizedName),
+  )
+
+  if (fuzzyMatches.length === 1) return fuzzyMatches[0]
+  return null
+}
+
 export function cinematicIntentSystemPrompt() {
   return [
     'You classify whether a GraphCore prompt should use the normal world-build planner or the cinematic planner.',
@@ -444,17 +906,53 @@ export function cinematicIntentSystemPrompt() {
   ].join('\n')
 }
 
+export function cinematicEntityExtractionSystemPrompt() {
+  return [
+    'You extract the world entities a cinematic prompt depends on before graph authoring.',
+    'Return JSON only.',
+    'Return exactly one JSON object with top-level keys: requestSummary, entityRefs, diagnostics, assistantNotes.',
+    'entityRefs must contain every important character, environment, and item mentioned or clearly required by the prompt.',
+    'Each entityRef must contain: id, kind, role, sourceName, summary, resolution, definitionKey, planItemId.',
+    'Use kind character for named people, speakers, fighters, targets, and participants unless the supplied catalog clearly contradicts that.',
+    'Use kind environment for locations, rooms, taverns, streets, wilderness areas, and other settings.',
+    'Use kind item for props, weapons, artifacts, tools, and carried objects.',
+    'Set resolution to "existing" only when a supplied definitionKey is a confident match.',
+    'Set resolution to "create" when the prompt needs a new entity that is not clearly in the supplied catalog.',
+    'Prefer reusing supplied definitions instead of creating near-duplicates.',
+    'Do not extract shots, storyboards, or graph structure here.',
+  ].join('\n')
+}
+
+export function cinematicEntityResolutionSystemPrompt() {
+  return [
+    'You resolve extracted cinematic entities against the existing GraphCore definition catalog.',
+    'Return JSON only.',
+    'Return exactly one JSON object with top-level keys: requestSummary, entityRefs, diagnostics, assistantNotes.',
+    'For each supplied entityRef, decide whether it should reuse an existing definition or be created new.',
+    'Prefer existing definitions whenever the prompt meaning, spelling, aliases, or likely user intent indicate they are the same entity.',
+    'Handle misspellings, shorthand, slug-like names, and key-like names such as char_kharzag when they clearly map to an existing definition.',
+    'When reusing an existing definition, set resolution to "existing" and fill definitionKey with the exact supplied definitionKey.',
+    'When no strong match exists, keep resolution as "create".',
+    'Do not invent definitions that are not present in the supplied catalog.',
+    'Preserve the intended role of each entity, but if the supplied catalog makes the kind obvious, prefer the catalog kind over a guessed kind.',
+  ].join('\n')
+}
+
 export function cinematicPlannerSystemPrompt() {
   return [
     'You are the GraphCore cinematic planner.',
     'Return JSON only.',
     'Return exactly one JSON object with top-level keys: requestSummary, graphName, graphSummary, entityRefs, shots, graphSettings, diagnostics, assistantNotes.',
     'Plan a cinematic sequence, not patch operations.',
-    'entityRefs must contain every important character, item, and environment used in the cinematic.',
+    'The prompt context includes a locked entity set that has already been resolved against the project.',
+    'entityRefs must mirror that locked entity set only. Do not invent new entities, rename them, or change their ids.',
     'Every shot must name the participantRefIds, locationRefId, and propRefIds that are relevant for that beat whenever those ingredients exist in the request.',
     'Prompts like "Character A fights Character B in Environment C using Weapon D" must preserve both characters, the environment, and the weapon as explicit shot ingredients.',
     'Reuse supplied existing definitions when they are clearly the intended match.',
     'Set resolution to "existing" only when a supplied definitionKey is a confident match.',
+    'Do not classify named speaking participants or scene actors as items.',
+    'Named people in an argument, fight, dialogue, or reaction scene are characters unless the supplied catalog clearly says otherwise.',
+    'Only reference ids from the locked entity set in shots, relationships, dialogue, action beats, audio beats, and composites.',
     'Set resolution to "create" when the entity should be created first.',
     'For create refs, include a short summary that can be used as a content-generation brief.',
     'Every shot must be concrete and implementation-facing with camera/framing intent.',
@@ -472,12 +970,14 @@ export function cinematicGraphAuthorSystemPrompt() {
     'Return JSON only.',
     'Return exactly one JSON object with top-level keys: graphName, graphSummary, graphSettings, assetRefs, shots.',
     'Do not invent entities beyond the supplied resolved entity refs.',
-    'assetRefs should map every resolved definition into a source asset node.',
+    'assetRefs should map resolved definitions into source nodes, and may also include storyboard_ref or composite_ref nodes when they improve continuity.',
     'shots should be authored in final execution order.',
     'Each shot must preserve the planned participantRefIds, locationRefId, and propRefIds whenever they were supplied.',
     'Each shot should reference sourceRefIds that will connect into asset_in edges.',
     'sourceRefIds are required structural inputs for still generation, not optional metadata.',
     'Do not remove planned source refs from a shot.',
+    'Prefer storyboard_ref nodes for sequence board or shot panel references when they are available in the plan.',
+    'Prefer composite_ref nodes for subject-plus-prop or subject-plus-wardrobe continuity when the plan contains those combinations.',
     'Include a compositionGuide for each shot that explains staging, blocking, ingredient priority, and how the scene should combine the supplied sources.',
     'Keep the graph linear unless the provided plan explicitly mentions variations.',
   ].join('\n')
@@ -511,6 +1011,17 @@ export function finalizeCinematicEntityRefs(
       }
     }
 
+    const crossKindMatch = findStrongExistingDefinitionMatchAcrossKinds(catalog, entityRef.sourceName)
+    if (crossKindMatch) {
+      return {
+        ...entityRef,
+        kind: crossKindMatch.kind,
+        resolution: 'existing' as const,
+        definitionKey: crossKindMatch.definitionKey,
+        planItemId: null,
+      }
+    }
+
     return {
       ...entityRef,
       resolution: 'create' as const,
@@ -525,9 +1036,12 @@ export function materializeCinematicPlan(rawPlan: z.infer<typeof cinematicPlanne
     graphName: rawPlan.graphName,
     graphSummary: rawPlan.graphSummary,
     entityRefs: rawPlan.entityRefs,
+    relationshipRefs: rawPlan.relationshipRefs,
+    compositeRefPlans: rawPlan.compositeRefPlans,
+    storyboardPlan: rawPlan.storyboardPlan,
     shots: rawPlan.shots,
     graphSettings: rawPlan.graphSettings ?? {},
-    autoRun: true,
+    autoRun: false,
   })
 }
 
@@ -536,6 +1050,7 @@ export function buildCinematicGraphFromAuthorPlan(input: {
   graphName: string
   graphSummary: string
   graphSettings: Record<string, unknown>
+  cinematicPlan?: CinematicPlan | null
   authorPlan: z.infer<typeof cinematicGraphAuthorSchema>
 }) {
   const graph = createGraphScaffold({
@@ -552,13 +1067,16 @@ export function buildCinematicGraphFromAuthorPlan(input: {
   const assetNodeKeyByRefId = new Map<string, string>()
 
   for (const [index, ref] of input.authorPlan.assetRefs.entries()) {
-    const key = `${graph.key}.asset_ref_${index + 1}`
+    const key = `${graph.key}.${ref.nodeType}_${index + 1}`
+    const templateKey =
+      ref.templateKey
+      || (ref.nodeType === 'composite_ref' ? 'equipped_character_ref' : ref.nodeType === 'storyboard_ref' ? 'shot_panel_ref' : 'asset_ref')
     const node = normalizeNode({
-      id: `node-asset-ref-${Date.now()}-${index}`,
+      id: `node-${ref.nodeType}-${Date.now()}-${index}`,
       key,
-      type: 'asset_ref',
+      type: ref.nodeType,
       title: ref.title,
-      templateKey: 'asset_ref',
+      templateKey,
       subtitle: ref.subtitle ?? ref.assetRole,
       position: { x: 280, y: 120 + index * 130 },
       body: { text: null, imageAssetKey: null, audioAssetKey: null, choices: [] },
@@ -567,10 +1085,29 @@ export function buildCinematicGraphFromAuthorPlan(input: {
       ports: [],
       display: { iconAssetKey: null, compactPreview: true },
       metadata: {
-        entityRefId: ref.id,
+        entityRefId: ref.nodeType === 'asset_ref' ? ref.id : null,
         definitionKey: ref.definitionKey,
+        assetKey: ref.assetKey,
+        refKind:
+          ref.nodeType === 'storyboard_ref'
+            ? 'storyboard'
+            : ref.nodeType === 'composite_ref'
+              ? 'composite'
+              : ref.definitionKey
+                ? 'definition'
+                : 'asset',
         assetRole: ref.assetRole,
+        role: ref.role,
+        priority: ref.priority,
         stagingNotes: ref.stagingNotes,
+        compositeRefId: ref.nodeType === 'composite_ref' ? ref.id : undefined,
+        sourceRefIds: ref.sourceRefIds,
+        relationshipType: ref.relationshipType,
+        outputAssetKey: ref.nodeType === 'composite_ref' ? ref.assetKey : undefined,
+        storyboardId: ref.nodeType === 'storyboard_ref' ? ref.id : undefined,
+        panelId: ref.nodeType === 'storyboard_ref' && templateKey === 'shot_panel_ref' ? ref.id : undefined,
+        storyboardKind: ref.nodeType === 'storyboard_ref' && templateKey === 'sequence_board_ref' ? 'sequence_board' : 'shot_panel',
+        notes: ref.nodeType === 'storyboard_ref' ? ref.stagingNotes : undefined,
       },
     })
     nodes.push(node)
@@ -606,6 +1143,17 @@ export function buildCinematicGraphFromAuthorPlan(input: {
         locationRefId: shot.locationRefId,
         propRefIds: shot.propRefIds,
         requiredSourceRefIds: shot.sourceRefIds,
+        compositeRefIds: shot.compositeRefIds,
+        storyboardRefIds: shot.storyboardRefIds,
+        beats: shot.beats,
+        dialogue: shot.dialogue,
+        actions: shot.actions,
+        audio: shot.audio,
+        sequenceShotId: shot.id,
+        seedanceModePreference:
+          shot.storyboardRefIds.length > 0 || shot.compositeRefIds.length > 0 || shot.sourceRefIds.length > 1
+            ? 'reference-to-video'
+            : 'auto',
       },
     })
     nodes.push(shotNode)
@@ -653,6 +1201,82 @@ export function buildCinematicGraphFromAuthorPlan(input: {
     metadata: {
       ...graph.metadata,
       cinematics: input.graphSettings,
+      cinematicSequence: cinematicSequenceSchema.parse({
+        references: input.authorPlan.assetRefs
+          .filter((ref) => ref.nodeType === 'asset_ref')
+          .map((ref) => ({
+            id: ref.id,
+            refKind: ref.definitionKey ? 'definition' : ref.assetRole === 'audio' ? 'audio' : ref.assetRole === 'style' ? 'style' : 'asset',
+            role: ref.role,
+            label: ref.title,
+            summary: ref.subtitle ?? '',
+            definitionKey: ref.definitionKey,
+            assetKey: ref.assetKey,
+            assetRole: ref.assetRole,
+            stagingNotes: ref.stagingNotes,
+            priority: ref.priority,
+            required: true,
+          })),
+        compositeRefs: input.authorPlan.assetRefs
+          .filter((ref) => ref.nodeType === 'composite_ref')
+          .map((ref) => ({
+            id: ref.id,
+            title: ref.title,
+            summary: ref.subtitle ?? '',
+            relationshipType: ref.relationshipType ?? 'equip',
+            sourceRefIds: ref.sourceRefIds,
+            outputAssetKey: ref.assetKey,
+            generationPrompt: ref.stagingNotes,
+            stagingNotes: ref.stagingNotes,
+            priority: ref.priority,
+          })),
+        relationships: input.cinematicPlan?.relationshipRefs ?? [],
+        storyboard:
+          input.cinematicPlan?.storyboardPlan
+          ?? {
+            mode: input.authorPlan.assetRefs.some((ref) => ref.nodeType === 'storyboard_ref') ? 'hybrid' : 'none',
+            summary: '',
+            sequenceAssetKey: input.authorPlan.assetRefs.find((ref) => ref.templateKey === 'sequence_board_ref')?.assetKey ?? null,
+            panels: input.authorPlan.assetRefs
+              .filter((ref) => ref.nodeType === 'storyboard_ref' && ref.templateKey !== 'sequence_board_ref')
+              .map((ref, index) => ({
+                id: ref.id,
+                shotId: null,
+                title: ref.title,
+                assetKey: ref.assetKey,
+                notes: ref.stagingNotes,
+                orderIndex: index,
+              })),
+          },
+        shots: input.authorPlan.shots.map((shot) => ({
+          id: shot.id,
+          title: shot.title,
+          subtitle: shot.subtitle,
+          beat: shot.beat,
+          shotType: shot.shotType,
+          framing: shot.framing,
+          cameraAngle: shot.cameraAngle,
+          cameraMovement: shot.cameraMovement,
+          lensPreference: shot.lensPreference,
+          visualPrompt: shot.visualPrompt,
+          compositionGuide: shot.compositionGuide,
+          participantRefIds: shot.participantRefIds,
+          locationRefId: shot.locationRefId,
+          propRefIds: shot.propRefIds,
+          requiredSourceRefIds: shot.sourceRefIds,
+          compositeRefIds: shot.compositeRefIds,
+          storyboardRefIds: shot.storyboardRefIds,
+          durationSeconds: shot.durationSeconds,
+          seedanceModePreference:
+            shot.storyboardRefIds.length > 0 || shot.compositeRefIds.length > 0 || shot.sourceRefIds.length > 1
+              ? 'reference-to-video'
+              : 'auto',
+          beats: shot.beats,
+          dialogue: shot.dialogue,
+          actions: shot.actions,
+          audio: shot.audio,
+        })),
+      }),
       generation: graph.metadata.generation,
     },
     nodes,

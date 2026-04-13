@@ -52,13 +52,13 @@ const contentGenerationSchema = z.object({
     worldPlacementRole: z.string().default(''),
     pickupContext: z.string().default(''),
   }).optional(),
-  environmentProfile: z.object({
+  environmentProfile: z.preprocess((value) => normalizeGeneratedEnvironmentProfile(value), z.object({
     subtype: z.enum(['interior', 'exterior', 'dungeon', 'settlement', 'wilderness', 'structure', 'biome', 'poi']).default('exterior'),
     biome: z.string().default(''),
     traversalType: z.enum(['walk', 'climb', 'swim', 'fly', 'mixed']).default('walk'),
     isInterior: z.boolean().default(false),
     scaleTier: z.enum(['room', 'site', 'zone', 'region']).default('site'),
-  }).optional(),
+  })).optional(),
   environmentRenderBinding: z.object({
     lightingProfile: z.string().default(''),
     generationPrompt: z.string().nullable().default(null),
@@ -83,6 +83,179 @@ const contentGenerationSchema = z.object({
 })
 
 const contentGenerationRawSchema = z.record(z.string(), z.unknown())
+
+const CANONICAL_ENVIRONMENT_SUBTYPES = ['interior', 'exterior', 'dungeon', 'settlement', 'wilderness', 'structure', 'biome', 'poi'] as const
+const CANONICAL_TRAVERSAL_TYPES = ['walk', 'climb', 'swim', 'fly', 'mixed'] as const
+const CANONICAL_SCALE_TIERS = ['room', 'site', 'zone', 'region'] as const
+
+function normalizeGeneratedToken(value: string) {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+}
+
+function normalizeGeneratedEnvironmentSubtype(value: unknown, fallback = 'exterior') {
+  if (typeof value !== 'string') return fallback
+  const normalized = normalizeGeneratedToken(value)
+  if (CANONICAL_ENVIRONMENT_SUBTYPES.includes(normalized as typeof CANONICAL_ENVIRONMENT_SUBTYPES[number])) {
+    return normalized
+  }
+
+  if ([
+    'tavern',
+    'inn',
+    'pub',
+    'bar',
+    'shop',
+    'store',
+    'market_stall',
+    'room',
+    'hall',
+    'chamber',
+    'library',
+    'kitchen',
+    'forge',
+    'workshop',
+    'bedroom',
+    'cellar',
+    'basement',
+    'temple_interior',
+    'throne_room',
+  ].includes(normalized)) {
+    return 'interior'
+  }
+
+  if ([
+    'city',
+    'town',
+    'village',
+    'district',
+    'harbor',
+    'port',
+    'plaza',
+    'market',
+    'encampment',
+    'camp',
+  ].includes(normalized)) {
+    return 'settlement'
+  }
+
+  if ([
+    'castle',
+    'fort',
+    'fortress',
+    'tower',
+    'bridge',
+    'manor',
+    'keep',
+    'arena',
+    'temple',
+    'church',
+    'shrine',
+    'warehouse',
+    'building',
+    'house',
+    'outpost',
+    'gate',
+  ].includes(normalized)) {
+    return 'structure'
+  }
+
+  if ([
+    'forest',
+    'desert',
+    'swamp',
+    'jungle',
+    'tundra',
+    'mountain',
+    'cave',
+    'cavern',
+    'canyon',
+    'riverland',
+  ].includes(normalized)) {
+    return normalized === 'cave' || normalized === 'cavern' ? 'dungeon' : 'wilderness'
+  }
+
+  if ([
+    'landmark',
+    'tavern_exterior',
+    'blacksmith',
+    'graveyard',
+    'ruins',
+    'dock',
+    'crossroads',
+    'checkpoint',
+  ].includes(normalized)) {
+    return 'poi'
+  }
+
+  return fallback
+}
+
+function normalizeGeneratedTraversalType(value: unknown) {
+  if (typeof value !== 'string') return 'walk'
+  const normalized = normalizeGeneratedToken(value)
+  if (CANONICAL_TRAVERSAL_TYPES.includes(normalized as typeof CANONICAL_TRAVERSAL_TYPES[number])) {
+    return normalized
+  }
+  if (['ground', 'grounded', 'foot', 'on_foot'].includes(normalized)) return 'walk'
+  if (['parkour', 'vertical', 'clamber'].includes(normalized)) return 'climb'
+  if (['water', 'boating', 'sailing'].includes(normalized)) return 'swim'
+  if (['air', 'aerial'].includes(normalized)) return 'fly'
+  return 'walk'
+}
+
+function normalizeGeneratedScaleTier(value: unknown) {
+  if (typeof value !== 'string') return 'site'
+  const normalized = normalizeGeneratedToken(value)
+  if (CANONICAL_SCALE_TIERS.includes(normalized as typeof CANONICAL_SCALE_TIERS[number])) {
+    return normalized
+  }
+  if (['small', 'single_room', 'roomscale', 'intimate'].includes(normalized)) return 'room'
+  if (['building', 'venue', 'compound', 'local'].includes(normalized)) return 'site'
+  if (['district', 'area', 'large_area'].includes(normalized)) return 'zone'
+  if (['world', 'continent', 'nation'].includes(normalized)) return 'region'
+  return 'site'
+}
+
+function inferGeneratedEnvironmentInteriorFlag(subtype: string, rawSubtype: unknown, rawFlag: unknown) {
+  if (typeof rawFlag === 'boolean') return rawFlag
+  if (subtype === 'interior' || subtype === 'dungeon') return true
+  if (subtype === 'exterior' || subtype === 'settlement' || subtype === 'wilderness' || subtype === 'biome') return false
+  const normalizedRawSubtype = typeof rawSubtype === 'string' ? normalizeGeneratedToken(rawSubtype) : ''
+  if ([
+    'tavern',
+    'inn',
+    'pub',
+    'bar',
+    'shop',
+    'store',
+    'room',
+    'hall',
+    'chamber',
+    'library',
+    'cellar',
+    'basement',
+    'bedroom',
+    'kitchen',
+    'forge',
+    'workshop',
+  ].includes(normalizedRawSubtype)) {
+    return true
+  }
+  return false
+}
+
+function normalizeGeneratedEnvironmentProfile(value: unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+  const source = value as Record<string, unknown>
+  const subtype = normalizeGeneratedEnvironmentSubtype(source.subtype, typeof source.isInterior === 'boolean' && source.isInterior ? 'interior' : 'exterior')
+  return {
+    ...source,
+    subtype,
+    traversalType: normalizeGeneratedTraversalType(source.traversalType),
+    scaleTier: normalizeGeneratedScaleTier(source.scaleTier),
+    isInterior: inferGeneratedEnvironmentInteriorFlag(subtype, source.subtype, source.isInterior),
+  }
+}
 
 type BatchRow = {
   id: string
@@ -157,6 +330,8 @@ function contentSystemPrompt(kind: string) {
         : [
             'Return exactly one JSON object with keys: name, summary, tags, environmentProfile, environmentRenderBinding, environmentNavigation, environmentSpawnRules, resultContext.',
             'environmentProfile must contain subtype, biome, traversalType, isInterior, scaleTier.',
+            'Choose environmentProfile.subtype from: interior, exterior, dungeon, settlement, wilderness, structure, biome, poi.',
+            'Use interior for venue-like spaces such as tavern, inn, room, shop, or hall; use settlement for city/town/village; use structure for castle/tower/bridge/fort.',
             'environmentRenderBinding should contain lightingProfile, generationPrompt, generationStyle.',
             'environmentNavigation should contain entryAnchors, regionMarkers, navigationNotes.',
             'environmentSpawnRules should contain characterKeys, itemKeys, resourceNodeKeys.',
@@ -298,6 +473,41 @@ function conceptPromptFromDefinition(definition: SnapshotDefinition, job: JobRow
     view ? `Environment view: ${view}.` : null,
     visualDirection ? `Visual direction: ${visualDirection}.` : null,
     'No text, labels, collage, UI, or watermark.',
+  ].filter(Boolean).join(' ')
+}
+
+function compositePromptForPlan(plan: z.infer<typeof cinematicPlanSchema>, compositeRefId: string) {
+  const composite = plan.compositeRefPlans.find((entry) => entry.id === compositeRefId)
+  if (!composite) return 'Create a clean composite reference image for this cinematic relationship.'
+  return [
+    `Create a clean composite continuity reference for "${composite.title}".`,
+    composite.summary ? `Summary: ${composite.summary}.` : null,
+    composite.generationPrompt ? `Direction: ${composite.generationPrompt}.` : null,
+    composite.stagingNotes ? `Staging notes: ${composite.stagingNotes}.` : null,
+    'Keep the subjects clearly readable in one frame with stable costume, prop, and silhouette continuity.',
+    'No text, labels, borders, or collage layout.',
+  ].filter(Boolean).join(' ')
+}
+
+function storyboardPromptForPlan(plan: z.infer<typeof cinematicPlanSchema>, storyboardAssetId: string) {
+  if (storyboardAssetId === 'storyboard_sequence') {
+    return [
+      `Create a cinematic storyboard sheet for "${plan.graphName}".`,
+      plan.storyboardPlan?.summary ? `Brief: ${plan.storyboardPlan.summary}.` : null,
+      `Cover these beats: ${plan.shots.map((shot) => shot.title).join(', ')}.`,
+      'Lay out readable storyboard panels with clear camera continuity and blocking.',
+      'Minimal lettering only when needed for shot numbering.',
+    ].filter(Boolean).join(' ')
+  }
+
+  const panel = plan.storyboardPlan?.panels.find((entry) => entry.id === storyboardAssetId) ?? null
+  const shot = panel?.shotId ? plan.shots.find((entry) => entry.id === panel.shotId) ?? null : null
+  return [
+    `Create a storyboard panel for "${panel?.title ?? storyboardAssetId}".`,
+    shot ? `Shot beat: ${shot.beat}.` : null,
+    shot?.compositionGuide ? `Composition: ${shot.compositionGuide}.` : null,
+    panel?.notes ? `Notes: ${panel.notes}.` : null,
+    'Make the panel clear, high-contrast, and suitable as a visual continuity reference.',
   ].filter(Boolean).join(' ')
 }
 
@@ -798,6 +1008,11 @@ function buildFallbackAuthorPlan(input: {
   cinematicPlan: z.infer<typeof cinematicPlanSchema>
   resolvedDefinitions: Array<{ key: string; kind: string; name: string; summary?: string }>
   resolvedEntityRefs: Array<CinematicPlan['entityRefs'][number] & { definitionKey: string }>
+  compositeAssetKeys?: Record<string, string>
+  storyboardAssetKeys?: {
+    sequenceAssetKey?: string | null
+    panelAssetKeys?: Record<string, string>
+  }
 }) {
   const resolvedDefinitionByKey = new Map(input.resolvedDefinitions.map((definition) => [definition.key, definition]))
 
@@ -805,14 +1020,84 @@ function buildFallbackAuthorPlan(input: {
     graphName: input.cinematicPlan.graphName,
     graphSummary: input.cinematicPlan.graphSummary,
     graphSettings: input.cinematicPlan.graphSettings ?? {},
-    assetRefs: input.resolvedEntityRefs.map((entityRef) => ({
-      id: entityRef.id,
-      definitionKey: entityRef.definitionKey,
-      assetRole: entityRef.kind,
-      title: resolvedDefinitionByKey.get(entityRef.definitionKey)?.name ?? entityRef.sourceName,
-      subtitle: resolvedDefinitionByKey.get(entityRef.definitionKey)?.kind ?? entityRef.kind,
-      stagingNotes: entityRef.role,
-    })),
+    assetRefs: [
+      ...input.resolvedEntityRefs.map((entityRef) => ({
+        id: entityRef.id,
+        nodeType: 'asset_ref' as const,
+        templateKey:
+          entityRef.kind === 'character'
+            ? 'character_ref'
+            : entityRef.kind === 'environment'
+              ? 'location_ref'
+              : 'prop_ref',
+        definitionKey: entityRef.definitionKey,
+        assetKey: null,
+        assetRole: entityRef.kind,
+        title: resolvedDefinitionByKey.get(entityRef.definitionKey)?.name ?? entityRef.sourceName,
+        subtitle: resolvedDefinitionByKey.get(entityRef.definitionKey)?.kind ?? entityRef.kind,
+        stagingNotes: entityRef.role,
+        role: entityRef.role,
+        priority: entityRef.kind === 'character' ? 70 : entityRef.kind === 'environment' ? 60 : 55,
+        sourceRefIds: [],
+        relationshipType: null,
+      })),
+      ...input.cinematicPlan.compositeRefPlans.map((composite) => ({
+        id: composite.id,
+        nodeType: 'composite_ref' as const,
+        templateKey:
+          composite.relationshipType === 'wear'
+            ? 'wardrobe_ref'
+            : composite.relationshipType === 'ally_of'
+              ? 'paired_subject_ref'
+              : 'equipped_character_ref',
+        definitionKey: null,
+        assetKey: input.compositeAssetKeys?.[composite.id] ?? composite.outputAssetKey ?? null,
+        assetRole: 'composite' as const,
+        title: composite.title,
+        subtitle: composite.summary || 'Composite reference',
+        stagingNotes: composite.stagingNotes,
+        role: 'composite',
+        priority: composite.priority,
+        sourceRefIds: composite.sourceRefIds,
+        relationshipType: composite.relationshipType,
+      })),
+      ...(input.cinematicPlan.storyboardPlan?.mode && input.cinematicPlan.storyboardPlan.mode !== 'none'
+        ? [
+            ...(input.cinematicPlan.storyboardPlan.sequenceAssetKey || input.storyboardAssetKeys?.sequenceAssetKey
+              ? [{
+                  id: 'storyboard_sequence',
+                  nodeType: 'storyboard_ref' as const,
+                  templateKey: 'sequence_board_ref',
+                  definitionKey: null,
+                  assetKey: input.storyboardAssetKeys?.sequenceAssetKey ?? input.cinematicPlan.storyboardPlan.sequenceAssetKey,
+                  assetRole: 'storyboard' as const,
+                  title: 'Sequence Board',
+                  subtitle: input.cinematicPlan.storyboardPlan.summary || 'Storyboard sheet',
+                  stagingNotes: input.cinematicPlan.storyboardPlan.summary,
+                  role: 'storyboard',
+                  priority: 95,
+                  sourceRefIds: [],
+                  relationshipType: null,
+                }]
+              : []),
+            ...input.cinematicPlan.storyboardPlan.panels.map((panel) => ({
+              id: panel.id,
+              nodeType: 'storyboard_ref' as const,
+              templateKey: 'shot_panel_ref',
+              definitionKey: null,
+              assetKey: input.storyboardAssetKeys?.panelAssetKeys?.[panel.id] ?? panel.assetKey ?? null,
+              assetRole: 'storyboard' as const,
+              title: panel.title || `Panel ${panel.orderIndex + 1}`,
+              subtitle: 'Shot panel',
+              stagingNotes: panel.notes,
+              role: 'storyboard',
+              priority: 92,
+              sourceRefIds: [],
+              relationshipType: null,
+            })),
+          ]
+        : []),
+    ],
     shots: input.cinematicPlan.shots.map((shot) => ({
       id: shot.id,
       title: shot.title,
@@ -830,10 +1115,35 @@ function buildFallbackAuthorPlan(input: {
       locationRefId: shot.locationRefId,
       propRefIds: shot.propRefIds,
       sourceRefIds: Array.from(new Set([
+        ...(input.cinematicPlan.storyboardPlan?.mode && input.cinematicPlan.storyboardPlan.mode !== 'none'
+          ? ['storyboard_sequence', `panel_${shot.id}`].filter((refId) => (
+            refId === 'storyboard_sequence'
+              ? Boolean(input.storyboardAssetKeys?.sequenceAssetKey ?? input.cinematicPlan.storyboardPlan?.sequenceAssetKey)
+              : input.cinematicPlan.storyboardPlan?.panels.some((panel) => panel.id === refId)
+          ))
+          : []),
+        ...input.cinematicPlan.compositeRefPlans
+          .filter((composite) => (
+            composite.sourceRefIds.some((refId) => shot.participantRefIds.includes(refId) || shot.propRefIds.includes(refId))
+          ))
+          .map((composite) => composite.id),
         ...shot.participantRefIds,
         ...shot.propRefIds,
         ...(shot.locationRefId ? [shot.locationRefId] : []),
       ])),
+      compositeRefIds: input.cinematicPlan.compositeRefPlans
+        .filter((composite) => (
+          composite.sourceRefIds.some((refId) => shot.participantRefIds.includes(refId) || shot.propRefIds.includes(refId))
+        ))
+        .map((composite) => composite.id),
+      storyboardRefIds: [
+        ...(input.storyboardAssetKeys?.sequenceAssetKey ? ['storyboard_sequence'] : []),
+        ...(input.cinematicPlan.storyboardPlan?.panels.some((panel) => panel.id === `panel_${shot.id}`) ? [`panel_${shot.id}`] : []),
+      ],
+      beats: shot.beats,
+      dialogue: shot.dialogue,
+      actions: shot.actions,
+      audio: shot.audio,
     })),
   })
 }
@@ -843,7 +1153,11 @@ function mergeAuthorPlanWithFallback(input: {
   candidatePlan: z.infer<typeof cinematicGraphAuthorSchema>
 }) {
   const fallbackAssetRefById = new Map(input.fallbackPlan.assetRefs.map((assetRef) => [assetRef.id, assetRef]))
-  const fallbackAssetRefByDefinitionKey = new Map(input.fallbackPlan.assetRefs.map((assetRef) => [assetRef.definitionKey, assetRef]))
+  const fallbackAssetRefByDefinitionKey = new Map(
+    input.fallbackPlan.assetRefs
+      .filter((assetRef) => typeof assetRef.definitionKey === 'string' && assetRef.definitionKey.length > 0)
+      .map((assetRef) => [assetRef.definitionKey, assetRef] as const),
+  )
   const mergedAssetRefs = new Map<string, z.infer<typeof cinematicGraphAuthorSchema>['assetRefs'][number]>()
 
   for (const fallbackAssetRef of input.fallbackPlan.assetRefs) {
@@ -860,6 +1174,8 @@ function mergeAuthorPlanWithFallback(input: {
       ...fallbackAssetRef,
       ...candidateAssetRef,
       id: fallbackAssetRef.id,
+      nodeType: fallbackAssetRef.nodeType,
+      templateKey: fallbackAssetRef.templateKey,
       definitionKey: fallbackAssetRef.definitionKey,
       assetRole: fallbackAssetRef.assetRole,
     }
@@ -888,6 +1204,12 @@ function mergeAuthorPlanWithFallback(input: {
       locationRefId: candidateShot.locationRefId ?? fallbackShot.locationRefId,
       propRefIds: candidateShot.propRefIds.length > 0 ? candidateShot.propRefIds : fallbackShot.propRefIds,
       sourceRefIds: filteredCandidateSourceRefIds.length > 0 ? filteredCandidateSourceRefIds : fallbackShot.sourceRefIds,
+      compositeRefIds: candidateShot.compositeRefIds.length > 0 ? candidateShot.compositeRefIds : fallbackShot.compositeRefIds,
+      storyboardRefIds: candidateShot.storyboardRefIds.length > 0 ? candidateShot.storyboardRefIds : fallbackShot.storyboardRefIds,
+      beats: candidateShot.beats.length > 0 ? candidateShot.beats : fallbackShot.beats,
+      dialogue: candidateShot.dialogue.length > 0 ? candidateShot.dialogue : fallbackShot.dialogue,
+      actions: candidateShot.actions.length > 0 ? candidateShot.actions : fallbackShot.actions,
+      audio: candidateShot.audio.length > 0 ? candidateShot.audio : fallbackShot.audio,
     }
 
     return mergedShot
@@ -913,8 +1235,12 @@ function collectRequiredShotSourceRefIds(shot: {
   participantRefIds: string[]
   locationRefId: string | null
   propRefIds: string[]
+  compositeRefIds?: string[]
+  storyboardRefIds?: string[]
 }) {
   return Array.from(new Set([
+    ...(shot.storyboardRefIds ?? []),
+    ...(shot.compositeRefIds ?? []),
     ...shot.participantRefIds,
     ...shot.propRefIds,
     ...(shot.locationRefId ? [shot.locationRefId] : []),
@@ -986,7 +1312,13 @@ function validateAndRepairCinematicAuthorPlan(input: {
       locationRefId: shotPlan.locationRefId,
       propRefIds: [...shotPlan.propRefIds],
       sourceRefIds: nextSourceRefIds,
+      compositeRefIds: [...(authorShot.compositeRefIds.length > 0 ? authorShot.compositeRefIds : fallbackShot.compositeRefIds)],
+      storyboardRefIds: [...(authorShot.storyboardRefIds.length > 0 ? authorShot.storyboardRefIds : fallbackShot.storyboardRefIds)],
       compositionGuide: authorShot.compositionGuide.trim() || fallbackShot.compositionGuide,
+      beats: authorShot.beats.length > 0 ? authorShot.beats : fallbackShot.beats,
+      dialogue: authorShot.dialogue.length > 0 ? authorShot.dialogue : fallbackShot.dialogue,
+      actions: authorShot.actions.length > 0 ? authorShot.actions : fallbackShot.actions,
+      audio: authorShot.audio.length > 0 ? authorShot.audio : fallbackShot.audio,
     })
   }
 
@@ -1283,6 +1615,91 @@ Deno.serve(async (request) => {
               },
               error_message: null,
             })
+          } else if (job.kind === 'cinematic_composite_image' || job.kind === 'cinematic_storyboard_image') {
+            const assetKey = job.target_keys?.assetKey
+            const cinematicPlan = cinematicPlanSchema.safeParse(batch.cinematic_plan)
+            if (!assetKey || !cinematicPlan.success) {
+              throw new Error(`Cinematic asset placeholder resources for job ${job.id} were not found.`)
+            }
+
+            const prompt =
+              job.kind === 'cinematic_composite_image'
+                ? compositePromptForPlan(cinematicPlan.data, String(job.target_keys?.compositeRefId ?? ''))
+                : storyboardPromptForPlan(cinematicPlan.data, String(job.target_keys?.storyboardAssetId ?? ''))
+
+            const falResponse = await client.functions.invoke('ai-fal', {
+              body: {
+                action: 'subscribe',
+                model: 'fal-ai/nano-banana-2',
+                input: {
+                  prompt,
+                  num_images: 1,
+                  aspect_ratio: '16:9',
+                  output_format: 'png',
+                  resolution: '1K',
+                },
+                logs: true,
+                timeoutMs: 120000,
+              },
+            })
+
+            if (falResponse.error) {
+              throw new Error(falResponse.error.message)
+            }
+
+            const falResult = (falResponse.data as {
+              data?: unknown
+              requestId?: string | null
+              model?: string | null
+            }) ?? {}
+            const imageUrl = extractFalImageUrls(falResult.data)[0] ?? null
+            if (!imageUrl) {
+              throw new Error('The cinematic asset provider returned no image URL.')
+            }
+
+            const assetRow = await client.from('project_assets').select('metadata, name').eq('project_id', batch.project_id).eq('key', assetKey).single()
+            if (assetRow.error || !assetRow.data) throw new Error(assetRow.error?.message ?? `Asset ${assetKey} was not found.`)
+
+            const currentAssetMetadata =
+              typeof assetRow.data.metadata === 'object' && assetRow.data.metadata !== null
+                ? assetRow.data.metadata as Record<string, unknown>
+                : {}
+
+            const storageSlug = buildAssetSlug(`${assetKey}_${falResult.requestId ?? 'generated'}`) || buildAssetSlug(assetKey) || 'generated_asset'
+            const assetUpdate = await client.from('project_assets').update({
+              storage_path: `external/generated/${storageSlug}.png`,
+              metadata: {
+                ...currentAssetMetadata,
+                generatedBy: job.kind === 'cinematic_composite_image' ? 'cinematic_composite' : 'cinematic_storyboard',
+                provider: 'fal',
+                model: falResult.model ?? 'fal-ai/nano-banana-2',
+                requestId: falResult.requestId ?? null,
+                prompt,
+                sourceUrl: imageUrl,
+                previewUrl: imageUrl,
+                generatedAt: new Date().toISOString(),
+                generation: {
+                  batchId: batch.id,
+                  jobId: job.id,
+                  state: 'completed',
+                  placeholder: false,
+                  source: 'global_prompt',
+                },
+              },
+            }).eq('project_id', batch.project_id).eq('key', assetKey)
+
+            if (assetUpdate.error) throw new Error(assetUpdate.error.message)
+
+            await updateJob(client, job.id, {
+              status: 'succeeded',
+              result_context: {
+                assetKey,
+                imageUrl,
+                compositeRefId: job.target_keys?.compositeRefId ?? null,
+                storyboardAssetId: job.target_keys?.storyboardAssetId ?? null,
+              },
+              error_message: null,
+            })
           } else if (job.kind === 'cinematic_graph') {
             const graphKey = job.target_keys?.graphKey
             if (!graphKey) throw new Error(`Placeholder graph key was missing for job ${job.id}.`)
@@ -1331,7 +1748,41 @@ Deno.serve(async (request) => {
                 }))
                 .filter((value): value is string => typeof value === 'string' && value.length > 0),
             ))
-            const cinematicAssets = await loadProjectAssetsByKeys(client, batch.project_id, displayAssetKeys)
+            const compositeAssetKeys = Object.fromEntries(
+              jobs
+                .filter((candidate) => (candidate.kind === 'cinematic_composite_image') && (job.depends_on_job_ids ?? []).includes(candidate.id))
+                .map((candidate) => {
+                  const compositeRefId = typeof candidate.target_keys?.compositeRefId === 'string' ? candidate.target_keys.compositeRefId : null
+                  const assetKey = typeof candidate.target_keys?.assetKey === 'string' ? candidate.target_keys.assetKey : null
+                  return compositeRefId && assetKey ? [compositeRefId, assetKey] : null
+                })
+                .filter((entry): entry is [string, string] => Array.isArray(entry)),
+            )
+            const storyboardSequenceAssetKey =
+              jobs.find((candidate) =>
+                candidate.kind === 'cinematic_storyboard_image'
+                && typeof candidate.target_keys?.storyboardAssetId === 'string'
+                && candidate.target_keys.storyboardAssetId === 'storyboard_sequence'
+                && (job.depends_on_job_ids ?? []).includes(candidate.id),
+              )?.target_keys?.assetKey ?? null
+            const storyboardPanelAssetKeys = Object.fromEntries(
+              jobs
+                .filter((candidate) => candidate.kind === 'cinematic_storyboard_image' && (job.depends_on_job_ids ?? []).includes(candidate.id))
+                .map((candidate) => {
+                  const storyboardAssetId = typeof candidate.target_keys?.storyboardAssetId === 'string' ? candidate.target_keys.storyboardAssetId : null
+                  const assetKey = typeof candidate.target_keys?.assetKey === 'string' ? candidate.target_keys.assetKey : null
+                  return storyboardAssetId && assetKey && storyboardAssetId !== 'storyboard_sequence'
+                    ? [storyboardAssetId, assetKey]
+                    : null
+                })
+                .filter((entry): entry is [string, string] => Array.isArray(entry)),
+            )
+            const additionalCinematicAssetKeys = Array.from(new Set([
+              ...Object.values(compositeAssetKeys),
+              ...(storyboardSequenceAssetKey ? [storyboardSequenceAssetKey] : []),
+              ...Object.values(storyboardPanelAssetKeys),
+            ]))
+            const cinematicAssets = await loadProjectAssetsByKeys(client, batch.project_id, [...displayAssetKeys, ...additionalCinematicAssetKeys])
             const fallbackAuthorPlan = buildFallbackAuthorPlan({
               cinematicPlan: cinematicPlan.data,
               resolvedDefinitions: cinematicDefinitions.map((definition) => ({
@@ -1341,6 +1792,11 @@ Deno.serve(async (request) => {
                 summary: definition.summary,
               })),
               resolvedEntityRefs,
+              compositeAssetKeys,
+              storyboardAssetKeys: {
+                sequenceAssetKey: storyboardSequenceAssetKey,
+                panelAssetKeys: storyboardPanelAssetKeys,
+              },
             })
             let authorPlan = fallbackAuthorPlan
             let authorRepairDiagnostics: string[] = []
@@ -1411,8 +1867,10 @@ Deno.serve(async (request) => {
               graphName: cinematicPlan.data.graphName,
               graphSummary: cinematicPlan.data.graphSummary,
               graphSettings: cinematicPlan.data.graphSettings ?? {},
+              cinematicPlan: cinematicPlan.data,
               authorPlan,
             })
+            const shouldAutoRunCinematic = false
             authoredGraph = {
               ...authoredGraph,
               metadata: {
@@ -1425,7 +1883,7 @@ Deno.serve(async (request) => {
                 generation: {
                   batchId: batch.id,
                   jobId: job.id,
-                  state: cinematicPlan.data.autoRun ? 'running' : 'completed',
+                  state: shouldAutoRunCinematic ? 'running' : 'completed',
                   placeholder: false,
                   source: 'global_prompt',
                 },
@@ -1455,7 +1913,7 @@ Deno.serve(async (request) => {
               })
             }
 
-            if (!cinematicPlan.data.autoRun) {
+            if (!shouldAutoRunCinematic) {
               await updateJob(client, job.id, {
                 status: 'succeeded',
                 result_context: {
@@ -1629,7 +2087,7 @@ Deno.serve(async (request) => {
             })
           }
 
-          if (job.kind.includes('concept_image') && job.target_keys?.assetKey) {
+          if ((job.kind.includes('concept_image') || job.kind === 'cinematic_composite_image' || job.kind === 'cinematic_storyboard_image') && job.target_keys?.assetKey) {
             const assetRow = await client.from('project_assets').select('metadata').eq('project_id', batch.project_id).eq('key', job.target_keys.assetKey).maybeSingle()
             if (!assetRow.error && assetRow.data) {
               const currentMetadata =

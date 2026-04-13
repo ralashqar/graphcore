@@ -868,30 +868,86 @@ export function validateGraph(
       })
     }
 
-    if (node.type === 'asset_ref') {
+    if (node.type === 'asset_ref' || node.type === 'composite_ref' || node.type === 'storyboard_ref') {
       const definitionKey = typeof node.metadata.definitionKey === 'string' ? node.metadata.definitionKey : null
-      if (!definitionKey) {
-        diagnostics.push({
-          level: 'warning',
-          code: 'asset_ref_missing_definition',
-          message: `Asset source node "${node.key}" should reference a project definition.`,
-          graphKey: graph.key,
-          nodeKey: node.key,
-        })
-      } else if (!definitionKeys.has(definitionKey)) {
+      const assetKey =
+        typeof node.metadata.assetKey === 'string'
+          ? node.metadata.assetKey
+          : typeof node.metadata.outputAssetKey === 'string'
+            ? node.metadata.outputAssetKey
+            : null
+
+      if (definitionKey && !definitionKeys.has(definitionKey)) {
         diagnostics.push({
           level: 'error',
           code: 'asset_ref_unknown_definition',
-          message: `Asset source node "${node.key}" references missing definition "${definitionKey}".`,
+          message: `Reference node "${node.key}" references missing definition "${definitionKey}".`,
           graphKey: graph.key,
           nodeKey: node.key,
         })
+      }
+
+      if (assetKey && !assetKeys.has(assetKey)) {
+        diagnostics.push({
+          level: 'warning',
+          code: 'asset_ref_unknown_asset',
+          message: `Reference node "${node.key}" references missing asset "${assetKey}".`,
+          graphKey: graph.key,
+          nodeKey: node.key,
+        })
+      }
+
+      if (node.type === 'asset_ref' && !definitionKey && !assetKey) {
+        diagnostics.push({
+          level: 'warning',
+          code: 'asset_ref_missing_binding',
+          message: `Asset source node "${node.key}" should reference a project definition or asset.`,
+          graphKey: graph.key,
+          nodeKey: node.key,
+        })
+      }
+
+      if (node.type === 'composite_ref') {
+        const sourceRefIds = Array.isArray(node.metadata.sourceRefIds)
+          ? node.metadata.sourceRefIds.filter((value): value is string => typeof value === 'string' && value.length > 0)
+          : []
+        if (sourceRefIds.length < 2) {
+          diagnostics.push({
+            level: 'warning',
+            code: 'composite_ref_missing_sources',
+            message: `Composite reference node "${node.key}" should combine at least two source refs.`,
+            graphKey: graph.key,
+            nodeKey: node.key,
+          })
+        }
       }
     }
 
     if (node.type === 'cinematic_shot') {
       const stillAssetKey = typeof node.metadata.stillAssetKey === 'string' ? node.metadata.stillAssetKey : null
       const videoAssetKey = typeof node.metadata.videoAssetKey === 'string' ? node.metadata.videoAssetKey : null
+      const requiredSourceRefIds = Array.isArray(node.metadata.requiredSourceRefIds)
+        ? node.metadata.requiredSourceRefIds.filter((value): value is string => typeof value === 'string' && value.length > 0)
+        : []
+      const incomingRefIds = graph.edges
+        .filter((edge) => edge.target.nodeKey === node.key && edge.target.portId === 'asset_in')
+        .map((edge) => graph.nodes.find((candidate) => candidate.key === edge.source.nodeKey))
+        .filter((candidate): candidate is typeof graph.nodes[number] => Boolean(candidate))
+        .map((candidate) =>
+          typeof candidate.metadata.entityRefId === 'string'
+            ? candidate.metadata.entityRefId
+            : typeof candidate.metadata.compositeRefId === 'string'
+              ? candidate.metadata.compositeRefId
+              : typeof candidate.metadata.panelId === 'string'
+                ? candidate.metadata.panelId
+                : typeof candidate.metadata.storyboardId === 'string'
+                  ? candidate.metadata.storyboardId
+                  : null,
+        )
+        .filter((value): value is string => Boolean(value))
+      const connectedNodeTypes = graph.edges
+        .filter((edge) => edge.target.nodeKey === node.key && edge.target.portId === 'asset_in')
+        .map((edge) => graph.nodes.find((candidate) => candidate.key === edge.source.nodeKey)?.type ?? null)
 
       if (stillAssetKey && !assetKeys.has(stillAssetKey)) {
         diagnostics.push({
@@ -911,6 +967,70 @@ export function validateGraph(
           graphKey: graph.key,
           nodeKey: node.key,
         })
+      }
+
+      const missingRequiredSourceRefIds = requiredSourceRefIds.filter((refId) => !incomingRefIds.includes(refId))
+      if (missingRequiredSourceRefIds.length > 0) {
+        diagnostics.push({
+          level: 'warning',
+          code: 'cinematic_shot_missing_required_refs',
+          message: `Cinematic shot "${node.key}" is missing ${missingRequiredSourceRefIds.length} required reference input${missingRequiredSourceRefIds.length === 1 ? '' : 's'}.`,
+          graphKey: graph.key,
+          nodeKey: node.key,
+        })
+      }
+
+      const hasStoryboardInput = connectedNodeTypes.includes('storyboard_ref')
+      const hasCompositeInput = connectedNodeTypes.includes('composite_ref')
+      const storyboardMode =
+        graph.metadata
+        && typeof graph.metadata === 'object'
+        && (graph.metadata as { cinematicSequence?: { storyboard?: { mode?: unknown } } }).cinematicSequence
+        && typeof (graph.metadata as { cinematicSequence?: { storyboard?: { mode?: unknown } } }).cinematicSequence?.storyboard?.mode === 'string'
+          ? String((graph.metadata as { cinematicSequence?: { storyboard?: { mode?: unknown } } }).cinematicSequence?.storyboard?.mode)
+          : 'none'
+      const participantCount = Array.isArray(node.metadata.participantRefIds)
+        ? node.metadata.participantRefIds.filter((value): value is string => typeof value === 'string' && value.length > 0).length
+        : 0
+      const propCount = Array.isArray(node.metadata.propRefIds)
+        ? node.metadata.propRefIds.filter((value): value is string => typeof value === 'string' && value.length > 0).length
+        : 0
+      if ((participantCount + propCount >= 3) && !hasCompositeInput) {
+        diagnostics.push({
+          level: 'warning',
+          code: 'cinematic_shot_missing_composite_ref',
+          message: `Cinematic shot "${node.key}" should usually include a composite reference for multi-subject or subject-plus-prop continuity.`,
+          graphKey: graph.key,
+          nodeKey: node.key,
+        })
+      }
+      if (participantCount + propCount >= 2 && !hasStoryboardInput && storyboardMode !== 'none') {
+        diagnostics.push({
+          level: 'warning',
+          code: 'cinematic_shot_missing_storyboard_ref',
+          message: `Cinematic shot "${node.key}" should usually include a storyboard or panel reference for clearer continuity.`,
+          graphKey: graph.key,
+          nodeKey: node.key,
+        })
+      }
+
+      const executionPlan = node.metadata.executionPlan
+      if (executionPlan && typeof executionPlan === 'object') {
+        const droppedRefIds = Array.isArray((executionPlan as { droppedRefIds?: unknown }).droppedRefIds)
+          ? (executionPlan as { droppedRefIds: unknown[] }).droppedRefIds.filter((value): value is string => typeof value === 'string')
+          : []
+        const referenceInputs = Array.isArray((executionPlan as { referenceInputs?: unknown }).referenceInputs)
+          ? (executionPlan as { referenceInputs: unknown[] }).referenceInputs
+          : []
+        if (referenceInputs.length > 12 || droppedRefIds.length > 0) {
+          diagnostics.push({
+            level: 'warning',
+            code: 'cinematic_shot_seedance_pack_trimmed',
+            message: `Cinematic shot "${node.key}" exceeds the preferred Seedance reference budget and will trim lower-priority inputs.`,
+            graphKey: graph.key,
+            nodeKey: node.key,
+          })
+        }
       }
     }
 
@@ -979,6 +1099,10 @@ export function validateGraph(
   const unreachableNodeKeys = findUnreachableNodes(graph)
 
   for (const nodeKey of unreachableNodeKeys) {
+    const node = graph.nodes.find((candidate) => candidate.key === nodeKey) ?? null
+    if (node && (node.type === 'asset_ref' || node.type === 'composite_ref' || node.type === 'storyboard_ref')) {
+      continue
+    }
     diagnostics.push({
       level: 'warning',
       code: 'unreachable_node',

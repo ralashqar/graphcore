@@ -67,6 +67,18 @@ export function ActivityWorkspace({
                       <strong>Shots</strong>
                       <span> {(selectedWorldBuild.cinematicPlan.shots ?? []).map((entry) => entry.title).join(', ') || 'none'}</span>
                     </div>
+                    <div className="inline-note">
+                      <strong>Relationships</strong>
+                      <span> {(selectedWorldBuild.cinematicPlan.relationshipRefs ?? []).map((entry) => entry.type).join(', ') || 'none'}</span>
+                    </div>
+                    <div className="inline-note">
+                      <strong>Composite refs</strong>
+                      <span> {(selectedWorldBuild.cinematicPlan.compositeRefPlans ?? []).map((entry) => entry.title).join(', ') || 'none'}</span>
+                    </div>
+                    <div className="inline-note">
+                      <strong>Storyboard</strong>
+                      <span> {selectedWorldBuild.cinematicPlan.storyboardPlan?.mode ?? 'none'}</span>
+                    </div>
                   </div>
                 ) : null}
                 <div className="diagnostic-stack">

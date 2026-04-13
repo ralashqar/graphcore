@@ -1,5 +1,12 @@
 import { z } from 'zod'
-import { cinematicRunSchema } from './cinematics.ts'
+import {
+  actionBeatSchema,
+  audioBeatSchema,
+  cinematicRelationshipSchema,
+  cinematicRunSchema,
+  dialogueBeatSchema,
+  storyboardSpecSchema,
+} from './cinematics.ts'
 
 export const WORLD_BUILD_ENVIRONMENT_VIEWS = ['hero', 'wide_alt', 'detail_area'] as const
 
@@ -36,6 +43,18 @@ export const cinematicEntityRefSchema = z.object({
   planItemId: z.string().nullable().optional(),
 })
 
+export const cinematicCompositeRefPlanSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  summary: z.string().default(''),
+  relationshipType: z.enum(['equip', 'wear', 'hold', 'mounted_on', 'located_in', 'targets', 'speaks_to', 'ally_of']).default('equip'),
+  sourceRefIds: z.array(z.string()).min(2),
+  generationPrompt: z.string().default(''),
+  outputAssetKey: z.string().nullable().default(null),
+  stagingNotes: z.string().default(''),
+  priority: z.number().int().min(0).max(100).default(80),
+})
+
 export const cinematicShotPlanSchema = z.object({
   id: z.string(),
   title: z.string(),
@@ -51,6 +70,16 @@ export const cinematicShotPlanSchema = z.object({
   durationSeconds: z.number().int().positive().max(20).nullable().default(null),
   visualPrompt: z.string().default(''),
   compositionGuide: z.string().default(''),
+  beats: z.array(z.object({
+    id: z.string(),
+    type: z.enum(['action', 'dialogue', 'audio', 'camera', 'transition', 'custom']).default('custom'),
+    summary: z.string().default(''),
+    startSeconds: z.number().nonnegative().nullable().default(null),
+    endSeconds: z.number().nonnegative().nullable().default(null),
+  })).default([]),
+  dialogue: z.array(dialogueBeatSchema).default([]),
+  actions: z.array(actionBeatSchema).default([]),
+  audio: z.array(audioBeatSchema).default([]),
 })
 
 export const cinematicGraphSettingsSchema = z.object({
@@ -66,9 +95,12 @@ export const cinematicPlanSchema = z.object({
   graphName: z.string(),
   graphSummary: z.string(),
   entityRefs: z.array(cinematicEntityRefSchema).default([]),
+  relationshipRefs: z.array(cinematicRelationshipSchema).default([]),
+  compositeRefPlans: z.array(cinematicCompositeRefPlanSchema).default([]),
+  storyboardPlan: storyboardSpecSchema.nullable().default(null),
   shots: z.array(cinematicShotPlanSchema).min(1),
   graphSettings: cinematicGraphSettingsSchema,
-  autoRun: z.boolean().default(true),
+  autoRun: z.boolean().default(false),
 })
 
 export const worldBuildPlanRequestSchema = z.object({
@@ -208,6 +240,7 @@ export type WorldBuildDeletePlaceholderResponse = z.infer<typeof worldBuildDelet
 export type WorldBuildPlannerMode = z.infer<typeof worldBuildPlannerModeSchema>
 export type CinematicPlan = z.infer<typeof cinematicPlanSchema>
 export type CinematicEntityRef = z.infer<typeof cinematicEntityRefSchema>
+export type CinematicCompositeRefPlan = z.infer<typeof cinematicCompositeRefPlanSchema>
 export type CinematicShotPlan = z.infer<typeof cinematicShotPlanSchema>
 
 export function getResourceGenerationMetadata(value: { metadata?: unknown } | null | undefined) {

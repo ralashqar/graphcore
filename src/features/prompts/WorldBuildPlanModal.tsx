@@ -6,6 +6,9 @@ type WorldBuildPlanModalProps = {
   plannerMode?: 'world_build' | 'cinematic_build'
   cinematicPlan?: {
     entityRefs?: Array<{ id: string; sourceName: string; role: string; resolution: 'existing' | 'create'; definitionKey?: string | null }>
+    relationshipRefs?: Array<{ id: string; type: string; sourceRefId: string; targetRefId: string }>
+    compositeRefPlans?: Array<{ id: string; title: string }>
+    storyboardPlan?: { mode?: string; panels?: Array<{ id: string; title: string }> } | null
     shots?: Array<{ id: string; title: string; beat: string }>
   } | null
   planItems: WorldBuildPlanItem[]
@@ -67,6 +70,15 @@ export function WorldBuildPlanModal({
             </div>
             <div className="inline-note">
               Planned shots: {(cinematicPlan.shots ?? []).map((shot) => shot.title).join(', ') || 'none'}
+            </div>
+            <div className="inline-note">
+              Relationships: {(cinematicPlan.relationshipRefs ?? []).map((relationship) => relationship.type).join(', ') || 'none'}
+            </div>
+            <div className="inline-note">
+              Composite refs: {(cinematicPlan.compositeRefPlans ?? []).map((entry) => entry.title).join(', ') || 'none'}
+            </div>
+            <div className="inline-note">
+              Storyboard: {cinematicPlan.storyboardPlan?.mode ?? 'none'}{(cinematicPlan.storyboardPlan?.panels?.length ?? 0) > 0 ? `, ${(cinematicPlan.storyboardPlan?.panels?.length ?? 0)} panel(s)` : ''}
             </div>
           </div>
         ) : null}

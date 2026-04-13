@@ -11,8 +11,8 @@ import { extractFalImageUrls } from '../../../src/domain/visualAssetGeneration.t
 import { createAdminClient, requireUserClient } from '../_shared/auth.ts'
 import {
   applyShotBindingToGraph,
+  buildSeedanceExecutionPlan,
   buildStillPrompt,
-  buildVideoPrompt,
   createStoredGeneratedAsset,
   extractFalVideoUrl,
   findGraph,
@@ -270,32 +270,56 @@ Deno.serve(async (request) => {
         break
       }
 
-      const stillUrl = resolveStillSourceAssetUrl({
-        ...payload.snapshot,
-        assets: [...payload.snapshot.assets, ...createdAssets],
-      }, updatedGraph, job.shotNodeKey)
-      if (!stillUrl) {
-        await client.from('cinematic_run_jobs').update({
-          status: 'failed',
-          error_message: 'Generate a still for this shot before video generation can run.',
-        }).eq('id', job.id)
-        break
-      }
-
-      const videoModel = Deno.env.get('CINEMATIC_VIDEO_FAL_MODEL') ?? 'fal-ai/minimax/video-01/image-to-video'
-      const falResponse = await client.functions.invoke('ai-fal', {
-        body: {
-          action: 'subscribe',
-          model: videoModel,
-          input: {
-            image_url: stillUrl,
-            prompt: job.prompt || buildVideoPrompt({
+      const executionPlan =
+        job.resultContext && typeof job.resultContext === 'object' && job.resultContext.executionPlan && typeof job.resultContext.executionPlan === 'object'
+          ? job.resultContext.executionPlan
+          : buildSeedanceExecutionPlan({
               snapshot: payload.snapshot,
               graph: updatedGraph,
               shotNode,
               sourceInputs,
-            }),
-          },
+            })
+      const fallbackStillUrl = resolveStillSourceAssetUrl({
+        ...payload.snapshot,
+        assets: [...payload.snapshot.assets, ...createdAssets],
+      }, updatedGraph, job.shotNodeKey)
+      if (executionPlan.endpoint === 'image-to-video' && !executionPlan.imageUrl && !fallbackStillUrl) {
+        await client.from('cinematic_run_jobs').update({
+          status: 'failed',
+          error_message: 'This shot needs at least one image reference or generated still before Seedance image-to-video can run.',
+        }).eq('id', job.id)
+        break
+      }
+
+      const videoModel = executionPlan.endpoint === 'image-to-video'
+        ? (Deno.env.get('CINEMATIC_SEEDANCE_IMAGE_MODEL') ?? 'bytedance/seedance-2.0/image-to-video')
+        : (Deno.env.get('CINEMATIC_SEEDANCE_REFERENCE_MODEL') ?? 'bytedance/seedance-2.0/reference-to-video')
+      const falResponse = await client.functions.invoke('ai-fal', {
+        body: {
+          action: 'subscribe',
+          model: videoModel,
+          input: executionPlan.endpoint === 'image-to-video'
+            ? {
+                image_url: executionPlan.imageUrl ?? fallbackStillUrl,
+                ...(executionPlan.endImageUrl ? { end_image_url: executionPlan.endImageUrl } : {}),
+                prompt: job.prompt || executionPlan.prompt,
+                resolution: executionPlan.resolution,
+                duration: executionPlan.duration,
+                aspect_ratio: executionPlan.aspectRatio,
+                generate_audio: executionPlan.generateAudio,
+                ...(executionPlan.seed ? { seed: executionPlan.seed } : {}),
+              }
+            : {
+                prompt: job.prompt || executionPlan.prompt,
+                image_urls: executionPlan.imageUrls,
+                video_urls: executionPlan.videoUrls,
+                audio_urls: executionPlan.audioUrls,
+                resolution: executionPlan.resolution,
+                duration: executionPlan.duration,
+                aspect_ratio: executionPlan.aspectRatio,
+                generate_audio: executionPlan.generateAudio,
+                ...(executionPlan.seed ? { seed: executionPlan.seed } : {}),
+              },
           logs: true,
           timeoutMs: 180000,
         },
@@ -349,7 +373,8 @@ Deno.serve(async (request) => {
         result_context: {
           videoUrl,
           videoAssetKey: storedAsset.key,
-          effectiveVideoResolution: settings.videoResolution === '720p' ? '720p' : '720p',
+          effectiveVideoResolution: executionPlan.resolution,
+          executionPlan,
         },
       }).eq('id', job.id)
 
@@ -359,6 +384,7 @@ Deno.serve(async (request) => {
           provider: 'fal',
           providerModel: videoModel,
           providerRequestId: String((falResponse.data as { requestId?: unknown } | null)?.requestId ?? ''),
+          executionPlan,
         },
       })
       await persistShotBindingsIfPresent(client, payload.snapshot.draft.id, updatedGraph.key, job.shotNodeKey, {
@@ -367,6 +393,7 @@ Deno.serve(async (request) => {
           provider: 'fal',
           providerModel: videoModel,
           providerRequestId: String((falResponse.data as { requestId?: unknown } | null)?.requestId ?? ''),
+          executionPlan,
         },
       })
       break

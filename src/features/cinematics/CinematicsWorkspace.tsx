@@ -6,8 +6,12 @@ import {
   getAssetRefNodeConfig,
   getCinematicSettings,
   getCinematicShotNodeConfig,
+  getCompositeRefNodeConfig,
+  getStoryboardRefNodeConfig,
   updateNodeMetadataWithAssetRef,
+  updateNodeMetadataWithCompositeRef,
   updateNodeMetadataWithShot,
+  updateNodeMetadataWithStoryboardRef,
   type CinematicRun,
   type CinematicSettings,
 } from '../../domain/cinematics'
@@ -404,6 +408,25 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
               onDelete={() => onDeleteNode(currentGraph.key, currentNode.key)}
               onUpdate={(changes) => onUpdateNode(currentGraph.key, currentNode.key, changes)}
             />
+          ) : currentNode.type === 'composite_ref' ? (
+            <CompositeRefInspector
+              assets={assets}
+              currentGraph={currentGraph}
+              definitions={definitions}
+              node={currentNode}
+              onApplyTemplateChange={(templateKey) => applyTemplateChange(currentNode.key, templateKey)}
+              onDelete={() => onDeleteNode(currentGraph.key, currentNode.key)}
+              onUpdate={(changes) => onUpdateNode(currentGraph.key, currentNode.key, changes)}
+            />
+          ) : currentNode.type === 'storyboard_ref' ? (
+            <StoryboardRefInspector
+              assets={assets}
+              currentGraph={currentGraph}
+              node={currentNode}
+              onApplyTemplateChange={(templateKey) => applyTemplateChange(currentNode.key, templateKey)}
+              onDelete={() => onDeleteNode(currentGraph.key, currentNode.key)}
+              onUpdate={(changes) => onUpdateNode(currentGraph.key, currentNode.key, changes)}
+            />
           ) : currentNode.type === 'cinematic_shot' ? (
             <CinematicShotInspector
               assets={assets}
@@ -621,6 +644,148 @@ function AssetRefInspector({
   )
 }
 
+function CompositeRefInspector({
+  assets,
+  currentGraph,
+  definitions,
+  node,
+  onApplyTemplateChange,
+  onDelete,
+  onUpdate,
+}: {
+  assets: AssetDefinition[]
+  currentGraph: GraphDefinition
+  definitions: DefinitionBase[]
+  node: NodeDefinition
+  onApplyTemplateChange: (templateKey: string) => void
+  onDelete: () => void
+  onUpdate: (changes: Partial<NodeDefinition>) => void
+}) {
+  const template = node.templateKey ? graphNodeTemplatesByKey.get(node.templateKey) : null
+  const config = getCompositeRefNodeConfig(node)
+  const availableRefNodes = currentGraph.nodes.filter((entry) => entry.type === 'asset_ref')
+  const previewAsset = assets.find((asset) => asset.key === config.outputAssetKey) ?? null
+
+  return (
+    <div className="detail-stack compact">
+      <span className="eyebrow">{template?.label ?? 'Composite Ref'}</span>
+      <h3>{node.title}</h3>
+      <div className="asset-toolbar">
+        <label className="field-block compact-block inspector-type-field">
+          <span>Node Template</span>
+          <select value={node.templateKey ?? 'equipped_character_ref'} onChange={(event) => onApplyTemplateChange(event.target.value)}>
+            {graphNodeLibrary.flatMap((group) => group.templates)
+              .filter((entry) => isTemplateAvailableForGraph(entry, currentGraph, node))
+              .map((entry) => <option key={entry.key} value={entry.key}>{entry.label}</option>)}
+          </select>
+        </label>
+        <button className="ghost-button compact" onClick={onDelete} type="button">Delete node</button>
+      </div>
+      <label className="field-block">
+        <span>Title</span>
+        <input value={node.title} onChange={(event) => onUpdate({ title: event.target.value, metadata: updateNodeMetadataWithCompositeRef(node.metadata, { title: event.target.value }) })} />
+      </label>
+      <label className="field-block">
+        <span>Relationship</span>
+        <select value={config.relationshipType} onChange={(event) => onUpdate({ metadata: updateNodeMetadataWithCompositeRef(node.metadata, { relationshipType: event.target.value as typeof config.relationshipType }) })}>
+          <option value="equip">Equip</option>
+          <option value="wear">Wear</option>
+          <option value="hold">Hold</option>
+          <option value="mounted_on">Mounted On</option>
+          <option value="ally_of">Paired Subjects</option>
+        </select>
+      </label>
+      <label className="field-block full-width">
+        <span>Source Refs</span>
+        <select
+          multiple
+          value={config.sourceRefIds}
+          onChange={(event) => onUpdate({
+            metadata: updateNodeMetadataWithCompositeRef(node.metadata, {
+              sourceRefIds: Array.from(event.currentTarget.selectedOptions).map((option) => option.value),
+            }),
+          })}
+        >
+          {availableRefNodes.map((refNode) => {
+            const refConfig = getAssetRefNodeConfig(refNode)
+            const definition = refConfig.definitionKey ? definitions.find((entry) => entry.key === refConfig.definitionKey) ?? null : null
+            return <option key={refNode.key} value={refConfig.entityRefId ?? refNode.key}>{definition?.name ?? refNode.title}</option>
+          })}
+        </select>
+      </label>
+      <label className="field-block full-width">
+        <span>Generation Prompt</span>
+        <textarea rows={4} value={config.generationPrompt} onChange={(event) => onUpdate({ metadata: updateNodeMetadataWithCompositeRef(node.metadata, { generationPrompt: event.target.value }) })} />
+      </label>
+      <label className="field-block full-width">
+        <span>Output Asset</span>
+        <select value={config.outputAssetKey ?? ''} onChange={(event) => onUpdate({ metadata: updateNodeMetadataWithCompositeRef(node.metadata, { outputAssetKey: event.target.value || null }) })}>
+          <option value="">Pending generated asset</option>
+          {assets.filter((asset) => asset.kind === 'image').map((asset) => <option key={asset.key} value={asset.key}>{asset.name}</option>)}
+        </select>
+      </label>
+      {previewAsset ? <AssetPreview asset={previewAsset} /> : <div className="inline-note">This node should point at a generated composite continuity image.</div>}
+    </div>
+  )
+}
+
+function StoryboardRefInspector({
+  assets,
+  currentGraph,
+  node,
+  onApplyTemplateChange,
+  onDelete,
+  onUpdate,
+}: {
+  assets: AssetDefinition[]
+  currentGraph: GraphDefinition
+  node: NodeDefinition
+  onApplyTemplateChange: (templateKey: string) => void
+  onDelete: () => void
+  onUpdate: (changes: Partial<NodeDefinition>) => void
+}) {
+  const template = node.templateKey ? graphNodeTemplatesByKey.get(node.templateKey) : null
+  const config = getStoryboardRefNodeConfig(node)
+  const previewAsset = assets.find((asset) => asset.key === config.assetKey) ?? null
+
+  return (
+    <div className="detail-stack compact">
+      <span className="eyebrow">{template?.label ?? 'Storyboard Ref'}</span>
+      <h3>{node.title}</h3>
+      <div className="asset-toolbar">
+        <label className="field-block compact-block inspector-type-field">
+          <span>Node Template</span>
+          <select value={node.templateKey ?? 'shot_panel_ref'} onChange={(event) => onApplyTemplateChange(event.target.value)}>
+            {graphNodeLibrary.flatMap((group) => group.templates)
+              .filter((entry) => isTemplateAvailableForGraph(entry, currentGraph, node))
+              .map((entry) => <option key={entry.key} value={entry.key}>{entry.label}</option>)}
+          </select>
+        </label>
+        <button className="ghost-button compact" onClick={onDelete} type="button">Delete node</button>
+      </div>
+      <label className="field-block">
+        <span>Storyboard Kind</span>
+        <select value={config.storyboardKind} onChange={(event) => onUpdate({ metadata: updateNodeMetadataWithStoryboardRef(node.metadata, { storyboardKind: event.target.value as typeof config.storyboardKind }) })}>
+          <option value="sequence_board">Sequence Board</option>
+          <option value="shot_panel">Shot Panel</option>
+        </select>
+      </label>
+      <label className="field-block">
+        <span>Asset</span>
+        <select value={config.assetKey ?? ''} onChange={(event) => onUpdate({ metadata: updateNodeMetadataWithStoryboardRef(node.metadata, { assetKey: event.target.value || null }) })}>
+          <option value="">Pending generated asset</option>
+          {assets.filter((asset) => asset.kind === 'image').map((asset) => <option key={asset.key} value={asset.key}>{asset.name}</option>)}
+        </select>
+      </label>
+      <label className="field-block full-width">
+        <span>Notes</span>
+        <textarea rows={4} value={config.notes} onChange={(event) => onUpdate({ metadata: updateNodeMetadataWithStoryboardRef(node.metadata, { notes: event.target.value }) })} />
+      </label>
+      {previewAsset ? <AssetPreview asset={previewAsset} /> : <div className="inline-note">Bind a sequence board or shot panel here so Seedance can follow the storyboard.</div>}
+    </div>
+  )
+}
+
 function CinematicShotInspector({
   assets,
   canRunCinematics,
@@ -648,8 +813,8 @@ function CinematicShotInspector({
   const config = getCinematicShotNodeConfig(node)
   const sources = collectShotSources(currentGraph, node, definitions, assets)
   const missingSources = sources.filter((source) => !resolveAssetSourceUrl(source.asset))
-  const expectedSourceRefIds = useMemo(
-    () => Array.from(new Set(
+  const expectedSourceRefIds = useMemo<string[]>(
+    () => Array.from(new Set<string>(
       config.requiredSourceRefIds.length > 0
         ? config.requiredSourceRefIds
         : [
@@ -660,8 +825,8 @@ function CinematicShotInspector({
     )),
     [config.locationRefId, config.participantRefIds, config.propRefIds, config.requiredSourceRefIds],
   )
-  const connectedSourceRefIds = useMemo(
-    () => Array.from(new Set(sources.map((source) => source.refId).filter((refId): refId is string => Boolean(refId)))),
+  const connectedSourceRefIds = useMemo<string[]>(
+    () => Array.from(new Set<string>(sources.map((source) => source.refId).filter((refId): refId is string => Boolean(refId)))),
     [sources],
   )
   const missingRequiredSourceRefIds = useMemo(
@@ -671,15 +836,29 @@ function CinematicShotInspector({
   const expectedSourceLabels = useMemo(() => {
     const sourceNodeByRefId = new Map<string, NodeDefinition>()
     for (const graphNode of currentGraph.nodes) {
-      if (graphNode.type !== 'asset_ref') continue
-      const entityRefId = getAssetRefNodeConfig(graphNode).entityRefId
-      if (!entityRefId) continue
-      sourceNodeByRefId.set(entityRefId, graphNode)
+      if (graphNode.type === 'asset_ref') {
+        const entityRefId = getAssetRefNodeConfig(graphNode).entityRefId
+        if (!entityRefId) continue
+        sourceNodeByRefId.set(entityRefId, graphNode)
+        continue
+      }
+      if (graphNode.type === 'composite_ref') {
+        const compositeRefId = getCompositeRefNodeConfig(graphNode).compositeRefId
+        if (!compositeRefId) continue
+        sourceNodeByRefId.set(compositeRefId, graphNode)
+        continue
+      }
+      if (graphNode.type === 'storyboard_ref') {
+        const config = getStoryboardRefNodeConfig(graphNode)
+        const storyboardRefId = config.panelId ?? config.storyboardId
+        if (!storyboardRefId) continue
+        sourceNodeByRefId.set(storyboardRefId, graphNode)
+      }
     }
 
     return expectedSourceRefIds.map((refId) => {
       const sourceNode = sourceNodeByRefId.get(refId) ?? null
-      const sourceConfig = sourceNode ? getAssetRefNodeConfig(sourceNode) : null
+      const sourceConfig = sourceNode?.type === 'asset_ref' ? getAssetRefNodeConfig(sourceNode) : null
       const definition = sourceConfig?.definitionKey
         ? definitions.find((entry) => entry.key === sourceConfig.definitionKey) ?? null
         : null
@@ -799,6 +978,80 @@ function CinematicShotInspector({
         </div>
       </div>
 
+      <div className="editor-section compact-section">
+        <div className="section-head">
+          <div>
+            <span className="eyebrow">Action Beats</span>
+            <h3>{config.actions.length} beat{config.actions.length === 1 ? '' : 's'}</h3>
+          </div>
+        </div>
+        <ActionBeatEditor
+          actions={config.actions}
+          definitions={definitions}
+          onChange={(actions) => onUpdate({ metadata: updateNodeMetadataWithShot(node.metadata, { actions }) })}
+        />
+      </div>
+
+      <div className="editor-section compact-section">
+        <div className="section-head">
+          <div>
+            <span className="eyebrow">Dialogue</span>
+            <h3>{config.dialogue.length} line{config.dialogue.length === 1 ? '' : 's'}</h3>
+          </div>
+        </div>
+        <DialogueBeatEditor
+          definitions={definitions}
+          dialogue={config.dialogue}
+          onChange={(dialogue) => onUpdate({ metadata: updateNodeMetadataWithShot(node.metadata, { dialogue }) })}
+        />
+      </div>
+
+      <div className="editor-section compact-section">
+        <div className="section-head">
+          <div>
+            <span className="eyebrow">Audio</span>
+            <h3>{config.audio.length} cue{config.audio.length === 1 ? '' : 's'}</h3>
+          </div>
+        </div>
+        <AudioBeatEditor
+          audio={config.audio}
+          onChange={(audio) => onUpdate({ metadata: updateNodeMetadataWithShot(node.metadata, { audio }) })}
+        />
+      </div>
+
+      <div className="editor-section compact-section">
+        <div className="section-head">
+          <div>
+            <span className="eyebrow">Seedance Pack</span>
+            <h3>{config.executionPlan?.endpoint ?? 'Not planned yet'}</h3>
+          </div>
+        </div>
+        <div className="diagnostic-stack">
+          <div className="inline-note">
+            <strong>Source order</strong>
+            <span> {sources.map((source) => `${source.definition?.name ?? source.node.title} (${source.node.type})`).join(', ') || 'none'}</span>
+          </div>
+          {config.executionPlan ? (
+            <>
+              <div className="inline-note">
+                <strong>Endpoint</strong>
+                <span> {config.executionPlan.endpoint}</span>
+              </div>
+              <div className="inline-note">
+                <strong>Reason</strong>
+                <span> {config.executionPlan.modeReason || 'No reason stored.'}</span>
+              </div>
+              <div className="inline-note">
+                <strong>Pack size</strong>
+                <span> {config.executionPlan.referenceInputs.length} ref(s){config.executionPlan.droppedRefIds.length > 0 ? `, dropped ${config.executionPlan.droppedRefIds.length}` : ''}</span>
+              </div>
+            </>
+          ) : (
+            <div className="inline-note">Run the shot once to persist the resolved Seedance execution plan.</div>
+          )}
+        </div>
+      </div>
+
       <div className="detail-actions cinematic-action-row">
         <button className="ghost-button compact" disabled={!canRunCinematics || !canGenerateStill} onClick={() => onGenerate('preview_still')} type="button">Generate Still</button>
         <button className="primary-button compact" disabled={!canRunCinematics || (!stillAsset && !canGenerateStill)} onClick={() => onGenerate('preview_video')} type="button">Generate Clip</button>
@@ -884,6 +1137,163 @@ function CinematicSettingsEditor({
   )
 }
 
+function ActionBeatEditor({
+  actions,
+  definitions,
+  onChange,
+}: {
+  actions: ReturnType<typeof getCinematicShotNodeConfig>['actions']
+  definitions: DefinitionBase[]
+  onChange: (actions: ReturnType<typeof getCinematicShotNodeConfig>['actions']) => void
+}) {
+  const refOptions = definitions.filter((definition) => ['character', 'environment', 'item'].includes(definition.kind))
+  return (
+    <div className="diagnostic-stack">
+      {actions.map((action, index) => (
+        <div key={action.id} className="schema-card">
+          <label className="field-block compact-block">
+            <span>Verb</span>
+            <input value={action.verb} onChange={(event) => onChange(actions.map((entry, entryIndex) => entryIndex === index ? { ...entry, verb: event.target.value } : entry))} />
+          </label>
+          <label className="field-block compact-block">
+            <span>Actor</span>
+            <select value={action.actorRefId ?? ''} onChange={(event) => onChange(actions.map((entry, entryIndex) => entryIndex === index ? { ...entry, actorRefId: event.target.value || null } : entry))}>
+              <option value="">Select actor</option>
+              {refOptions.map((definition) => <option key={definition.key} value={definition.key}>{definition.name}</option>)}
+            </select>
+          </label>
+          <label className="field-block compact-block">
+            <span>Target</span>
+            <select value={action.targetRefId ?? ''} onChange={(event) => onChange(actions.map((entry, entryIndex) => entryIndex === index ? { ...entry, targetRefId: event.target.value || null } : entry))}>
+              <option value="">Select target</option>
+              {refOptions.map((definition) => <option key={definition.key} value={definition.key}>{definition.name}</option>)}
+            </select>
+          </label>
+          <label className="field-block full-width">
+            <span>Staging Notes</span>
+            <input value={action.stagingNotes} onChange={(event) => onChange(actions.map((entry, entryIndex) => entryIndex === index ? { ...entry, stagingNotes: event.target.value } : entry))} />
+          </label>
+          <button className="ghost-button compact" onClick={() => onChange(actions.filter((_, entryIndex) => entryIndex !== index))} type="button">Remove beat</button>
+        </div>
+      ))}
+      <button
+        className="ghost-button compact"
+        onClick={() => onChange([...actions, {
+          id: `action_${actions.length + 1}`,
+          actorRefId: null,
+          targetRefId: null,
+          verb: '',
+          propRefId: null,
+          stagingNotes: '',
+          startSeconds: null,
+          endSeconds: null,
+        }])}
+        type="button"
+      >
+        Add action beat
+      </button>
+    </div>
+  )
+}
+
+function DialogueBeatEditor({
+  definitions,
+  dialogue,
+  onChange,
+}: {
+  definitions: DefinitionBase[]
+  dialogue: ReturnType<typeof getCinematicShotNodeConfig>['dialogue']
+  onChange: (dialogue: ReturnType<typeof getCinematicShotNodeConfig>['dialogue']) => void
+}) {
+  const speakerOptions = definitions.filter((definition) => definition.kind === 'character')
+  return (
+    <div className="diagnostic-stack">
+      {dialogue.map((line, index) => (
+        <div key={line.id} className="schema-card">
+          <label className="field-block compact-block">
+            <span>Speaker</span>
+            <select value={line.speakerRefId ?? ''} onChange={(event) => onChange(dialogue.map((entry, entryIndex) => entryIndex === index ? { ...entry, speakerRefId: event.target.value || null } : entry))}>
+              <option value="">Select speaker</option>
+              {speakerOptions.map((definition) => <option key={definition.key} value={definition.key}>{definition.name}</option>)}
+            </select>
+          </label>
+          <label className="field-block full-width">
+            <span>Line</span>
+            <textarea rows={3} value={line.line} onChange={(event) => onChange(dialogue.map((entry, entryIndex) => entryIndex === index ? { ...entry, line: event.target.value } : entry))} />
+          </label>
+          <label className="field-block compact-block">
+            <span>Delivery</span>
+            <input value={line.delivery} onChange={(event) => onChange(dialogue.map((entry, entryIndex) => entryIndex === index ? { ...entry, delivery: event.target.value } : entry))} />
+          </label>
+          <button className="ghost-button compact" onClick={() => onChange(dialogue.filter((_, entryIndex) => entryIndex !== index))} type="button">Remove line</button>
+        </div>
+      ))}
+      <button
+        className="ghost-button compact"
+        onClick={() => onChange([...dialogue, {
+          id: `dialogue_${dialogue.length + 1}`,
+          speakerRefId: null,
+          line: '',
+          delivery: '',
+          startSeconds: null,
+          endSeconds: null,
+          lipSync: true,
+        }])}
+        type="button"
+      >
+        Add dialogue line
+      </button>
+    </div>
+  )
+}
+
+function AudioBeatEditor({
+  audio,
+  onChange,
+}: {
+  audio: ReturnType<typeof getCinematicShotNodeConfig>['audio']
+  onChange: (audio: ReturnType<typeof getCinematicShotNodeConfig>['audio']) => void
+}) {
+  return (
+    <div className="diagnostic-stack">
+      {audio.map((cue, index) => (
+        <div key={cue.id} className="schema-card">
+          <label className="field-block compact-block">
+            <span>Kind</span>
+            <select value={cue.kind} onChange={(event) => onChange(audio.map((entry, entryIndex) => entryIndex === index ? { ...entry, kind: event.target.value as typeof cue.kind } : entry))}>
+              <option value="dialogue">Dialogue</option>
+              <option value="ambience">Ambience</option>
+              <option value="sfx">SFX</option>
+              <option value="music">Music</option>
+              <option value="silence">Silence</option>
+              <option value="offscreen">Offscreen</option>
+            </select>
+          </label>
+          <label className="field-block full-width">
+            <span>Cue</span>
+            <input value={cue.cue} onChange={(event) => onChange(audio.map((entry, entryIndex) => entryIndex === index ? { ...entry, cue: event.target.value } : entry))} />
+          </label>
+          <button className="ghost-button compact" onClick={() => onChange(audio.filter((_, entryIndex) => entryIndex !== index))} type="button">Remove cue</button>
+        </div>
+      ))}
+      <button
+        className="ghost-button compact"
+        onClick={() => onChange([...audio, {
+          id: `audio_${audio.length + 1}`,
+          kind: 'ambience',
+          cue: '',
+          sourceRefId: null,
+          startSeconds: null,
+          endSeconds: null,
+        }])}
+        type="button"
+      >
+        Add audio cue
+      </button>
+    </div>
+  )
+}
+
 function AssetPreview({ asset }: { asset: AssetDefinition }) {
   const previewUrl = resolveAssetPreviewUrl(asset)
   if (!previewUrl) return <div className="inline-note">No preview available.</div>
@@ -897,6 +1307,16 @@ function buildNodeMetaLines(node: NodeDefinition, shotRunStatus: CinematicRun | 
   if (node.type === 'asset_ref') {
     const config = getAssetRefNodeConfig(node)
     return [node.subtitle ?? config.assetRole ?? 'source', node.title].filter(Boolean)
+  }
+
+  if (node.type === 'composite_ref') {
+    const config = getCompositeRefNodeConfig(node)
+    return [config.relationshipType, config.sourceRefIds.length > 0 ? `${config.sourceRefIds.length} refs` : null, config.outputAssetKey ? 'generated' : 'pending'].filter((value): value is string => Boolean(value))
+  }
+
+  if (node.type === 'storyboard_ref') {
+    const config = getStoryboardRefNodeConfig(node)
+    return [config.storyboardKind, config.assetKey ? 'ready' : 'pending'].filter((value): value is string => Boolean(value))
   }
 
   if (node.type === 'cinematic_shot') {
@@ -918,6 +1338,14 @@ function resolveNodePreviewAsset(node: NodeDefinition, definitions: DefinitionBa
     return resolveDefinitionPreviewAsset(definition, assets)
   }
 
+  if (node.type === 'composite_ref') {
+    return assets.find((asset) => asset.key === getCompositeRefNodeConfig(node).outputAssetKey) ?? null
+  }
+
+  if (node.type === 'storyboard_ref') {
+    return assets.find((asset) => asset.key === getStoryboardRefNodeConfig(node).assetKey) ?? null
+  }
+
   if (node.type === 'cinematic_shot') {
     const shot = getCinematicShotNodeConfig(node)
     return assets.find((asset) => asset.key === shot.stillAssetKey) ?? null
@@ -937,12 +1365,25 @@ function collectShotSources(graph: GraphDefinition, shotNode: NodeDefinition, de
   return graph.edges
     .filter((edge) => edge.target.nodeKey === shotNode.key && edge.target.portId === 'asset_in')
     .map((edge) => graph.nodes.find((node) => node.key === edge.source.nodeKey) ?? null)
-    .filter((node): node is NodeDefinition => Boolean(node && node.type === 'asset_ref'))
+    .filter((node): node is NodeDefinition => Boolean(node && ['asset_ref', 'composite_ref', 'storyboard_ref'].includes(node.type)))
     .map((node) => {
-      const config = getAssetRefNodeConfig(node)
-      const definition = definitions.find((entry) => entry.key === config.definitionKey) ?? null
-      const asset = resolveDefinitionPreviewAsset(definition, assets)
-      return { node, definition, asset, refId: config.entityRefId }
+      if (node.type === 'asset_ref') {
+        const config = getAssetRefNodeConfig(node)
+        const definition = definitions.find((entry) => entry.key === config.definitionKey) ?? null
+        const asset =
+          config.assetKey
+            ? assets.find((entry) => entry.key === config.assetKey) ?? null
+            : resolveDefinitionPreviewAsset(definition, assets)
+        return { node, definition, asset, refId: config.entityRefId }
+      }
+      if (node.type === 'composite_ref') {
+        const config = getCompositeRefNodeConfig(node)
+        const asset = assets.find((entry) => entry.key === config.outputAssetKey) ?? null
+        return { node, definition: null, asset, refId: config.compositeRefId }
+      }
+      const config = getStoryboardRefNodeConfig(node)
+      const asset = assets.find((entry) => entry.key === config.assetKey) ?? null
+      return { node, definition: null, asset, refId: config.panelId ?? config.storyboardId }
     })
 }
 
@@ -953,13 +1394,13 @@ function buildCinematicConnectionEdge(connection: Connection, graph: GraphDefini
   const targetNode = graph.nodes.find((node) => node.key === connection.target)
   if (!sourceNode || !targetNode) return null
 
-  if (sourceNode.type === 'asset_ref' && targetNode.type !== 'cinematic_shot') return null
-  if (targetNode.type === 'asset_ref') return null
+  if (['asset_ref', 'composite_ref', 'storyboard_ref'].includes(sourceNode.type) && targetNode.type !== 'cinematic_shot') return null
+  if (['asset_ref', 'composite_ref', 'storyboard_ref'].includes(targetNode.type)) return null
 
-  const sourceHandle = connection.sourceHandle ?? (sourceNode.type === 'asset_ref' ? 'asset_out' : 'out')
+  const sourceHandle = connection.sourceHandle ?? (['asset_ref', 'composite_ref', 'storyboard_ref'].includes(sourceNode.type) ? 'asset_out' : 'out')
   const targetHandle = connection.targetHandle ?? (
     targetNode.type === 'cinematic_shot'
-      ? sourceNode.type === 'asset_ref'
+      ? ['asset_ref', 'composite_ref', 'storyboard_ref'].includes(sourceNode.type)
         ? 'asset_in'
         : 'flow_in'
       : 'in'

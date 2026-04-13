@@ -94,6 +94,8 @@ export const nodeTypeSchema = z.enum([
   'random',
   'market',
   'asset_ref',
+  'composite_ref',
+  'storyboard_ref',
   'cinematic_shot',
   'end',
 ])
