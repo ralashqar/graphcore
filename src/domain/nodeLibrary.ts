@@ -44,12 +44,28 @@ export const graphNodeLibrary: NodeLibraryGroup[] = [
     key: 'cinematics',
     label: 'Cinematics',
     templates: [
-      template('asset_ref', 'Source Asset', 'cinematics', 'asset_ref', cinematicGraphTypes, 'Source Asset', 'basic', {
-        defaultSubtitle: 'Bind a character, environment, or item.',
+      template('asset_ref', 'Entity Ref', 'cinematics', 'asset_ref', cinematicGraphTypes, 'Entity Ref', 'basic', {
+        defaultSubtitle: 'Bind a character, environment, item, or support reference.',
         defaultMetadata: updateNodeMetadataWithAssetRef({}, {}),
         defaultDisplay: {
           compactPreview: true,
         },
+      }),
+      template('composite_ref', 'Composite Ref', 'cinematics', 'composite_ref', cinematicGraphTypes, 'Composite Ref', 'basic', {
+        defaultSubtitle: 'Derived continuity asset from multiple refs.',
+        defaultMetadata: updateNodeMetadataWithCompositeRef({}, {
+          relationshipType: 'equip',
+          priority: 85,
+        }),
+        defaultDisplay: { compactPreview: true },
+      }),
+      template('storyboard_ref', 'Storyboard Ref', 'cinematics', 'storyboard_ref', cinematicGraphTypes, 'Storyboard Ref', 'basic', {
+        defaultSubtitle: 'Optional storyboard support reference.',
+        defaultMetadata: updateNodeMetadataWithStoryboardRef({}, {
+          storyboardKind: 'shot_panel',
+          priority: 90,
+        }),
+        defaultDisplay: { compactPreview: true },
       }),
       template('character_ref', 'Character Ref', 'cinematics', 'asset_ref', cinematicGraphTypes, 'Character Ref', 'basic', {
         defaultSubtitle: 'Primary character source.',

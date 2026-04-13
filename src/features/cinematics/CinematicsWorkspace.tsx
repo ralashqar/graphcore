@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { resolveAssetPreviewUrl, resolveAssetSourceUrl } from '../../domain/assets'
 import { compileCinematicGraphFromScriptDoc } from '../../domain/cinematicScriptCompiler'
 import {
+  cinematicScriptDocSchema,
   getAssetRefNodeConfig,
   getCinematicScript,
   getCinematicSettings,
@@ -14,9 +15,14 @@ import {
   updateNodeMetadataWithCompositeRef,
   updateNodeMetadataWithShot,
   updateNodeMetadataWithStoryboardRef,
+  type ActionBeat,
+  type AudioBeat,
   type CinematicRun,
   type CinematicScriptDoc,
+  type CinematicScriptEntityBinding,
+  type CinematicScriptShot,
   type CinematicSettings,
+  type DialogueBeat,
 } from '../../domain/cinematics'
 import type {
   AssetDefinition,
@@ -36,6 +42,7 @@ import {
 } from '../../domain/nodeLibrary'
 import { getResolvedDefinition3dBinding } from '../../domain/render3d'
 import { getResourceGenerationMetadata, isPendingGenerationResource } from '../../domain/worldBuild'
+import { EntityIcon, iconForDefinitionKind, type EntityIconId } from '../../shared/entityIcons'
 import { GraphCanvasStage } from '../graph/GraphCanvasStage'
 import { EdgeInspector, NodeInspector } from '../graph/inspectors'
 import type { RailMode } from '../graph/types'
@@ -83,6 +90,294 @@ type ShotSourceEntry = {
   definition: DefinitionBase | null
   node: NodeDefinition
   refId: string | null
+}
+
+type ScriptReferenceOption = {
+  id: string
+  label: string
+  kind: CinematicScriptEntityBinding['kind']
+  role: string
+}
+
+type ScriptValidationIssue = {
+  id: string
+  level: 'error' | 'warning'
+  message: string
+  shotId?: string | null
+  sceneId?: string | null
+}
+
+function iconForScriptBindingKind(kind: CinematicScriptEntityBinding['kind']): EntityIconId {
+  if (kind === 'audio' || kind === 'style') return 'asset'
+  return iconForDefinitionKind(kind)
+}
+
+function buildScriptReferenceOptions(scriptDoc: CinematicScriptDoc): ScriptReferenceOption[] {
+  return scriptDoc.entityBindings.map((binding) => ({
+    id: binding.id,
+    label: binding.label,
+    kind: binding.kind,
+    role: binding.role,
+  }))
+}
+
+function moveArrayItem<TValue>(items: TValue[], fromIndex: number, toIndex: number) {
+  if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0 || fromIndex >= items.length || toIndex >= items.length) {
+    return items
+  }
+  const nextItems = items.slice()
+  const [entry] = nextItems.splice(fromIndex, 1)
+  nextItems.splice(toIndex, 0, entry)
+  return nextItems
+}
+
+function buildNextId(prefix: string, existingIds: string[]) {
+  const existing = new Set(existingIds)
+  let index = existingIds.length + 1
+  let candidate = `${prefix}_${index}`
+  while (existing.has(candidate)) {
+    index += 1
+    candidate = `${prefix}_${index}`
+  }
+  return candidate
+}
+
+function normalizeEditedScriptDoc(scriptDoc: CinematicScriptDoc) {
+  const parsed = cinematicScriptDocSchema.parse(scriptDoc)
+  const normalizedScenes = [...parsed.scenes]
+    .sort((left, right) => left.orderIndex - right.orderIndex)
+    .map((scene, index) => ({
+      ...scene,
+      orderIndex: index,
+      shotIds: [] as string[],
+    }))
+  const sceneIds = new Set(normalizedScenes.map((scene) => scene.id))
+  const fallbackSceneId = normalizedScenes[0]?.id ?? null
+  const normalizedShots = [...parsed.shots]
+    .sort((left, right) => left.orderIndex - right.orderIndex)
+    .map((shot, index) => ({
+      ...shot,
+      orderIndex: index,
+      sceneId: shot.sceneId && sceneIds.has(shot.sceneId) ? shot.sceneId : fallbackSceneId,
+    }))
+
+  for (const shot of normalizedShots) {
+    if (!shot.sceneId) continue
+    const scene = normalizedScenes.find((entry) => entry.id === shot.sceneId)
+    if (scene) scene.shotIds.push(shot.id)
+  }
+
+  return cinematicScriptDocSchema.parse({
+    ...parsed,
+    scenes: normalizedScenes,
+    shots: normalizedShots,
+  })
+}
+
+function validateScriptDoc(scriptDoc: CinematicScriptDoc): ScriptValidationIssue[] {
+  const issues: ScriptValidationIssue[] = []
+  const bindingIds = new Set(scriptDoc.entityBindings.map((binding) => binding.id))
+  const sceneIds = new Set(scriptDoc.scenes.map((scene) => scene.id))
+
+  for (const scene of scriptDoc.scenes) {
+    if (scene.locationRefId && !bindingIds.has(scene.locationRefId)) {
+      issues.push({
+        id: `scene-${scene.id}-location`,
+        level: 'error',
+        sceneId: scene.id,
+        message: `Scene "${scene.title}" references a missing location binding.`,
+      })
+    }
+  }
+
+  for (const shot of scriptDoc.shots) {
+    if (!shot.title.trim()) {
+      issues.push({
+        id: `shot-${shot.id}-title`,
+        level: 'error',
+        shotId: shot.id,
+        message: 'Shot title is required.',
+      })
+    }
+    if (!shot.beat.trim()) {
+      issues.push({
+        id: `shot-${shot.id}-beat`,
+        level: 'error',
+        shotId: shot.id,
+        message: `Shot "${shot.title || shot.id}" needs beat text.`,
+      })
+    }
+    if (shot.sceneId && !sceneIds.has(shot.sceneId)) {
+      issues.push({
+        id: `shot-${shot.id}-scene`,
+        level: 'error',
+        shotId: shot.id,
+        message: `Shot "${shot.title || shot.id}" points to a missing scene.`,
+      })
+    }
+    for (const refId of [...shot.participantRefIds, ...shot.propRefIds, ...shot.requiredSourceRefIds, ...shot.compositeRefIds, ...shot.storyboardRefIds]) {
+      if (refId && !bindingIds.has(refId) && !refId.startsWith('storyboard_') && !refId.startsWith('panel_') && !refId.startsWith('composite_')) {
+        issues.push({
+          id: `shot-${shot.id}-ref-${refId}`,
+          level: 'error',
+          shotId: shot.id,
+          message: `Shot "${shot.title || shot.id}" references missing binding "${refId}".`,
+        })
+      }
+    }
+    if (shot.locationRefId && !bindingIds.has(shot.locationRefId)) {
+      issues.push({
+        id: `shot-${shot.id}-location`,
+        level: 'error',
+        shotId: shot.id,
+        message: `Shot "${shot.title || shot.id}" references a missing location binding.`,
+      })
+    }
+    for (const line of shot.dialogue) {
+      if (!line.speakerRefId) {
+        issues.push({
+          id: `dialogue-${line.id}-speaker`,
+          level: 'error',
+          shotId: shot.id,
+          message: `Dialogue line in "${shot.title || shot.id}" is missing a speaker.`,
+        })
+      } else if (!bindingIds.has(line.speakerRefId)) {
+        issues.push({
+          id: `dialogue-${line.id}-speaker-ref`,
+          level: 'error',
+          shotId: shot.id,
+          message: `Dialogue line in "${shot.title || shot.id}" points to a missing speaker binding.`,
+        })
+      }
+      if (!line.line.trim()) {
+        issues.push({
+          id: `dialogue-${line.id}-line`,
+          level: 'warning',
+          shotId: shot.id,
+          message: `Dialogue line in "${shot.title || shot.id}" is empty.`,
+        })
+      }
+    }
+    for (const action of shot.actions) {
+      if (!action.verb.trim()) {
+        issues.push({
+          id: `action-${action.id}-verb`,
+          level: 'error',
+          shotId: shot.id,
+          message: `Action beat in "${shot.title || shot.id}" is missing a verb.`,
+        })
+      }
+      if (action.actorRefId && !bindingIds.has(action.actorRefId)) {
+        issues.push({
+          id: `action-${action.id}-actor`,
+          level: 'error',
+          shotId: shot.id,
+          message: `Action beat in "${shot.title || shot.id}" points to a missing actor binding.`,
+        })
+      }
+      if (action.targetRefId && !bindingIds.has(action.targetRefId)) {
+        issues.push({
+          id: `action-${action.id}-target`,
+          level: 'error',
+          shotId: shot.id,
+          message: `Action beat in "${shot.title || shot.id}" points to a missing target binding.`,
+        })
+      }
+      if (action.propRefId && !bindingIds.has(action.propRefId)) {
+        issues.push({
+          id: `action-${action.id}-prop`,
+          level: 'error',
+          shotId: shot.id,
+          message: `Action beat in "${shot.title || shot.id}" points to a missing prop binding.`,
+        })
+      }
+    }
+    for (const cue of shot.audio) {
+      if (cue.sourceRefId && !bindingIds.has(cue.sourceRefId)) {
+        issues.push({
+          id: `audio-${cue.id}-source`,
+          level: 'error',
+          shotId: shot.id,
+          message: `Audio cue in "${shot.title || shot.id}" points to a missing source binding.`,
+        })
+      }
+    }
+  }
+
+  return issues
+}
+
+function buildScriptEntitySummaryLabel(binding: CinematicScriptEntityBinding) {
+  const detail = [binding.kind, binding.role].filter(Boolean).join(' / ')
+  return detail ? `${binding.label} ${detail}` : binding.label
+}
+
+function truncateGraphLine(value: string, max = 84) {
+  const normalized = value.trim().replace(/\s+/g, ' ')
+  if (normalized.length <= max) return normalized
+  return `${normalized.slice(0, Math.max(0, max - 1)).trimEnd()}…`
+}
+
+function resolveCinematicRefId(node: NodeDefinition) {
+  if (node.type === 'asset_ref') {
+    return getAssetRefNodeConfig(node).entityRefId
+  }
+  if (node.type === 'composite_ref') {
+    return getCompositeRefNodeConfig(node).compositeRefId
+  }
+  if (node.type === 'storyboard_ref') {
+    const config = getStoryboardRefNodeConfig(node)
+    return config.panelId ?? config.storyboardId
+  }
+  return null
+}
+
+function collectShotSourcesFromMetadata(graph: GraphDefinition, shotNode: NodeDefinition, definitions: DefinitionBase[], assets: AssetDefinition[]): ShotSourceEntry[] {
+  const shot = getCinematicShotNodeConfig(shotNode)
+  const requestedRefIds = Array.from(new Set(
+    shot.requiredSourceRefIds.length > 0
+      ? shot.requiredSourceRefIds
+      : [
+          ...shot.storyboardRefIds,
+          ...shot.compositeRefIds,
+          ...shot.participantRefIds,
+          shot.locationRefId,
+          ...shot.propRefIds,
+        ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0),
+  ))
+  const sourceNodeByRefId = new Map<string, NodeDefinition>()
+  for (const graphNode of graph.nodes) {
+    if (!['asset_ref', 'composite_ref', 'storyboard_ref'].includes(graphNode.type)) continue
+    const refId = resolveCinematicRefId(graphNode)
+    if (!refId) continue
+    sourceNodeByRefId.set(refId, graphNode)
+  }
+
+  const metadataSources = requestedRefIds
+    .map((refId) => {
+      const node = sourceNodeByRefId.get(refId) ?? null
+      if (!node) return null
+      if (node.type === 'asset_ref') {
+        const config = getAssetRefNodeConfig(node)
+        const definition = definitions.find((entry) => entry.key === config.definitionKey) ?? null
+        const asset =
+          config.assetKey
+            ? assets.find((entry) => entry.key === config.assetKey) ?? null
+            : resolveDefinitionPreviewAsset(definition, assets)
+        return { node, definition, asset, refId: config.entityRefId }
+      }
+      if (node.type === 'composite_ref') {
+        const config = getCompositeRefNodeConfig(node)
+        const asset = assets.find((entry) => entry.key === config.outputAssetKey) ?? null
+        return { node, definition: null, asset, refId: config.compositeRefId }
+      }
+      const config = getStoryboardRefNodeConfig(node)
+      const asset = assets.find((entry) => entry.key === config.assetKey) ?? null
+      return { node, definition: null, asset, refId: config.panelId ?? config.storyboardId }
+    })
+    .filter((entry): entry is ShotSourceEntry => Boolean(entry))
+
+  return metadataSources
 }
 
 export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
@@ -210,13 +505,110 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
     const shotRunStatus = node.type === 'cinematic_shot'
       ? currentGraphRuns.find((run) => run.jobs.some((job) => job.shotNodeKey === node.key)) ?? null
       : null
+    const scriptDoc = currentGraph ? getCinematicScript(currentGraph.metadata) : null
+    const bindingById = new Map(scriptDoc?.entityBindings.map((binding) => [binding.id, binding]))
+    const cinematicCard = (() => {
+      if (node.type === 'asset_ref') {
+        const config = getAssetRefNodeConfig(node)
+        const binding = config.entityRefId ? bindingById.get(config.entityRefId) ?? null : null
+        const roleLabel = binding?.role ?? config.role ?? config.assetRole ?? node.subtitle ?? 'reference'
+        return {
+          variant: 'entity-ref' as const,
+          iconId: iconForScriptBindingKind(binding?.kind ?? (config.assetRole === 'environment' ? 'environment' : config.assetRole === 'item' ? 'item' : 'character')),
+          kicker: roleLabel,
+          chips: config.stagingNotes ? [{ label: truncateGraphLine(config.stagingNotes, 30), tone: 'muted' as const }] : [],
+          lines: [],
+          ambience: null,
+        }
+      }
+
+      if (node.type === 'composite_ref') {
+        const config = getCompositeRefNodeConfig(node)
+        const sourceChips = config.sourceRefIds
+          .map((refId) => bindingById.get(refId))
+          .filter((entry): entry is CinematicScriptEntityBinding => Boolean(entry))
+          .slice(0, 3)
+          .map((binding) => ({ label: binding.label, iconId: iconForScriptBindingKind(binding.kind) }))
+        return {
+          variant: 'composite-ref' as const,
+          iconId: 'asset' as const,
+          kicker: config.relationshipType.replace(/_/g, ' '),
+          chips: sourceChips,
+          lines: config.generationPrompt ? [truncateGraphLine(config.generationPrompt, 92)] : [],
+          ambience: config.outputAssetKey ? 'derived asset ready' : 'derived asset pending',
+        }
+      }
+
+      if (node.type === 'storyboard_ref') {
+        const config = getStoryboardRefNodeConfig(node)
+        return {
+          variant: 'storyboard-ref' as const,
+          iconId: 'content' as const,
+          kicker: config.storyboardKind.replace(/_/g, ' '),
+          chips: [],
+          lines: config.notes ? [truncateGraphLine(config.notes, 92)] : [],
+          ambience: config.assetKey ? 'board ready' : 'board pending',
+        }
+      }
+
+      if (node.type === 'cinematic_shot') {
+        const config = getCinematicShotNodeConfig(node)
+        const shotTags = [
+          config.shotType ? { label: config.shotType.replace(/_/g, ' '), tone: 'default' as const } : null,
+          config.framing ? { label: config.framing, tone: 'muted' as const } : null,
+          config.cameraMovement ? { label: config.cameraMovement, tone: 'muted' as const } : null,
+        ].filter((entry): entry is { label: string; tone: 'default' | 'muted' } => Boolean(entry))
+        const participantChips = config.participantRefIds
+          .map((refId) => bindingById.get(refId))
+          .filter((entry): entry is CinematicScriptEntityBinding => Boolean(entry))
+          .slice(0, 3)
+          .map((binding) => ({ label: binding.label, iconId: iconForScriptBindingKind(binding.kind) }))
+        const settingChips = [
+          ...(config.locationRefId ? [bindingById.get(config.locationRefId) ?? null] : []),
+          ...config.propRefIds.map((refId) => bindingById.get(refId) ?? null),
+        ]
+          .filter((entry): entry is CinematicScriptEntityBinding => Boolean(entry))
+          .slice(0, 2)
+          .map((binding) => ({ label: binding.label, iconId: iconForScriptBindingKind(binding.kind), tone: 'muted' as const }))
+        const dialogueLines = config.dialogue.slice(0, 2).map((line) => {
+          const speaker = line.speakerRefId ? bindingById.get(line.speakerRefId)?.label ?? 'Speaker' : 'Speaker'
+          return {
+            type: 'dialogue' as const,
+            speaker,
+            text: truncateGraphLine(line.line, 64),
+          }
+        })
+        const actionLines = config.actions.slice(0, 2).map((action) => {
+          const actor = action.actorRefId ? bindingById.get(action.actorRefId)?.label ?? 'Actor' : 'Actor'
+          const target = action.targetRefId ? bindingById.get(action.targetRefId)?.label ?? 'Target' : null
+          const line = [actor, action.verb, target].filter(Boolean).join(' ')
+          const text = truncateGraphLine(line || action.stagingNotes, 68)
+          return text ? {
+            type: 'action' as const,
+            text,
+          } : null
+        }).filter((entry): entry is { type: 'action'; text: string } => Boolean(entry))
+        const ambienceLine = config.audio.find((cue) => cue.kind === 'ambience' && cue.cue.trim())?.cue ?? null
+        return {
+          variant: 'shot' as const,
+          iconId: 'cinematic' as const,
+          kicker: shotRunStatus ? `${shotRunStatus.mode.replace(/_/g, ' ')} · ${shotRunStatus.status}` : null,
+          chips: [...shotTags, ...participantChips, ...settingChips],
+          lines: [...dialogueLines, ...actionLines],
+          ambience: ambienceLine ? truncateGraphLine(ambienceLine, 72) : null,
+        }
+      }
+
+      return null
+    })()
 
     return {
       previewUrl: resolveAssetPreviewUrl(previewAsset),
+      cinematicCard,
       conditionSummary: summarizeCondition(node.condition),
       effectSummary: buildNodeMetaLines(node, shotRunStatus),
     }
-  }, [assets, currentGraphRuns, definitions])
+  }, [assets, currentGraph, currentGraphRuns, definitions])
 
   const {
     applyTemplateChange,
@@ -282,6 +674,22 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
     () => currentGraph ? getCinematicScript(currentGraph.metadata) : null,
     [currentGraph],
   )
+  const currentScriptReferenceOptions = useMemo(
+    () => currentScript ? buildScriptReferenceOptions(currentScript) : [],
+    [currentScript],
+  )
+  const currentScriptValidation = useMemo(
+    () => currentScript ? validateScriptDoc(currentScript) : [],
+    [currentScript],
+  )
+  const currentScriptValidationErrors = currentScriptValidation.filter((issue) => issue.level === 'error')
+  const currentScriptDirty = useMemo(() => {
+    const metadata = currentGraph?.metadata
+    if (!metadata || typeof metadata !== 'object') return false
+    return Boolean((metadata as {
+      cinematicAuthoring?: { scriptDirty?: unknown }
+    }).cinematicAuthoring?.scriptDirty)
+  }, [currentGraph])
   const [contentMode, setContentMode] = useState<'script' | 'graph' | 'runs'>('graph')
 
   useEffect(() => {
@@ -293,14 +701,25 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
   }, [currentGraph, railMode])
 
   function rebuildCurrentGraphFromScript() {
-    if (!currentGraph || !currentScript) return
+    if (!currentGraph || !currentScript || currentScriptValidationErrors.length > 0) return
+    const existingAuthoring =
+      currentGraph.metadata && typeof currentGraph.metadata === 'object'
+        ? ((currentGraph.metadata as { cinematicAuthoring?: Record<string, unknown> }).cinematicAuthoring ?? {})
+        : {}
     const rebuiltGraph = compileCinematicGraphFromScriptDoc({
       graphKey: currentGraph.key,
       graphName: currentGraph.name,
       graphSummary: currentGraph.summary,
       graphSettings,
       scriptDoc: currentScript,
-      existingMetadata: currentGraph.metadata,
+      existingMetadata: {
+        ...(currentGraph.metadata ?? {}),
+        cinematicAuthoring: {
+          ...existingAuthoring,
+          scriptDirty: false,
+          scriptValidation: [],
+        },
+      },
     })
     onUpdateGraph(currentGraph.key, {
       name: rebuiltGraph.name,
@@ -312,6 +731,27 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
     })
     onClearSelection()
     setContentMode('graph')
+  }
+
+  function updateCurrentScript(mutator: (scriptDoc: CinematicScriptDoc) => CinematicScriptDoc) {
+    if (!currentGraph || !currentScript) return
+    const nextScript = normalizeEditedScriptDoc(mutator(currentScript))
+    const nextValidation = validateScriptDoc(nextScript)
+    const existingAuthoring =
+      currentGraph.metadata && typeof currentGraph.metadata === 'object'
+        ? ((currentGraph.metadata as { cinematicAuthoring?: Record<string, unknown> }).cinematicAuthoring ?? {})
+        : {}
+    onUpdateGraph(currentGraph.key, {
+      metadata: {
+        ...(currentGraph.metadata ?? {}),
+        cinematicScript: nextScript,
+        cinematicAuthoring: {
+          ...existingAuthoring,
+          scriptDirty: true,
+          scriptValidation: nextValidation,
+        },
+      },
+    })
   }
 
   function renderGenerationPhaseLabel(phase: string | null) {
@@ -435,7 +875,7 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
             <option value="ugc">UGC</option>
           </select>
           <button className="ghost-button compact" disabled={!currentGraph || contentMode !== 'graph'} onClick={refocusViewport} type="button">Fit View</button>
-          <button className="ghost-button compact" disabled={!currentGraph || !currentScript || currentScript.shots.length === 0} onClick={rebuildCurrentGraphFromScript} type="button">Rebuild From Script</button>
+          <button className="ghost-button compact" disabled={!currentGraph || !currentScript || currentScript.shots.length === 0 || currentScriptValidationErrors.length > 0} onClick={rebuildCurrentGraphFromScript} type="button">Rebuild From Script</button>
           <button className="ghost-button compact" onClick={() => currentGraph && onDuplicateGraph(currentGraph.key)} type="button">Duplicate</button>
           <button className={isDeletingSelectedGraph ? 'ghost-button compact button-with-spinner' : 'ghost-button compact'} disabled={isDeletingSelectedGraph} onClick={() => currentGraph && onDeleteGraph(currentGraph.key)} type="button">{isDeletingSelectedGraph ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}</button>
           <button className="primary-button compact" disabled={!currentGraph || !canRunCinematics || isCurrentGraphPending} onClick={() => currentGraph && onStartCinematicRun({ graphKey: currentGraph.key, mode: 'graph_run' })} type="button">Run Cinematic</button>
@@ -492,7 +932,15 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
           </>
         ) : null}
         {contentMode === 'script' ? (
-          <ScriptPreviewSurface currentGraph={currentGraph} scriptDoc={currentScript} />
+          <ScriptPreviewSurface
+            currentGraph={currentGraph}
+            onRebuild={rebuildCurrentGraphFromScript}
+            onUpdateScript={updateCurrentScript}
+            referenceOptions={currentScriptReferenceOptions}
+            scriptDirty={currentScriptDirty}
+            scriptDoc={currentScript}
+            validationIssues={currentScriptValidation}
+          />
         ) : null}
         {contentMode === 'runs' ? (
           <CinematicRunsSurface assets={assets} currentGraph={currentGraph} runs={currentGraphRuns} selectedRun={selectedRun} onSelectRun={setSelectedRunId} />
@@ -645,12 +1093,15 @@ function CinematicGraphInspector({
       <div className="editor-section compact-section">
         <div className="section-head">
           <div>
-            <span className="eyebrow">Shot Presets</span>
+            <span className="eyebrow">Quick Add</span>
             <h3>Quick Add</h3>
           </div>
         </div>
         <div className="graph-library-grid cinematic-preset-grid">
           {[
+            ['asset_ref', 'Entity Ref'],
+            ['composite_ref', 'Composite Ref'],
+            ['storyboard_ref', 'Storyboard Ref'],
             ['cinematic_establishing', 'Establishing'],
             ['cinematic_dialogue', 'Dialogue'],
             ['cinematic_reveal', 'Reveal'],
@@ -675,10 +1126,20 @@ function CinematicGraphInspector({
 
 function ScriptPreviewSurface({
   currentGraph,
+  onRebuild,
+  onUpdateScript,
+  referenceOptions,
+  scriptDirty,
   scriptDoc,
+  validationIssues,
 }: {
   currentGraph: GraphDefinition | null
+  onRebuild: () => void
+  onUpdateScript: (mutator: (scriptDoc: CinematicScriptDoc) => CinematicScriptDoc) => void
+  referenceOptions: ScriptReferenceOption[]
+  scriptDirty: boolean
   scriptDoc: CinematicScriptDoc | null
+  validationIssues: ScriptValidationIssue[]
 }) {
   if (!currentGraph || !scriptDoc) {
     return (
@@ -690,12 +1151,175 @@ function ScriptPreviewSurface({
     )
   }
 
+  const validationErrors = validationIssues.filter((issue) => issue.level === 'error')
+  const validationWarnings = validationIssues.filter((issue) => issue.level === 'warning')
+  const orderedShots = [...scriptDoc.shots].sort((left, right) => left.orderIndex - right.orderIndex)
+  const orderedScenes = [...scriptDoc.scenes].sort((left, right) => left.orderIndex - right.orderIndex)
+  const bindingById = new Map(scriptDoc.entityBindings.map((binding) => [binding.id, binding]))
+  const sceneById = new Map(orderedScenes.map((scene) => [scene.id, scene]))
+  const characterOptions = referenceOptions.filter((entry) => entry.kind === 'character')
+  const environmentOptions = referenceOptions.filter((entry) => entry.kind === 'environment')
+  const itemOptions = referenceOptions.filter((entry) => entry.kind === 'item')
+
+  function updateShot(shotId: string, mutator: (shot: CinematicScriptShot) => CinematicScriptShot) {
+    onUpdateScript((currentScript) => ({
+      ...currentScript,
+      shots: currentScript.shots.map((shot) => shot.id === shotId ? mutator(shot) : shot),
+    }))
+  }
+
+  function moveShot(shotId: string, delta: -1 | 1) {
+    onUpdateScript((currentScript) => {
+      const ordered = [...currentScript.shots].sort((left, right) => left.orderIndex - right.orderIndex)
+      const currentIndex = ordered.findIndex((shot) => shot.id === shotId)
+      const nextIndex = currentIndex + delta
+      if (currentIndex === -1 || nextIndex < 0 || nextIndex >= ordered.length) return currentScript
+      return {
+        ...currentScript,
+        shots: moveArrayItem(ordered, currentIndex, nextIndex),
+      }
+    })
+  }
+
+  function removeShot(shotId: string) {
+    onUpdateScript((currentScript) => ({
+      ...currentScript,
+      shots: currentScript.shots.filter((shot) => shot.id !== shotId),
+      scenes: currentScript.scenes.map((scene) => ({
+        ...scene,
+        shotIds: scene.shotIds.filter((entry) => entry !== shotId),
+      })),
+    }))
+  }
+
+  function addShot() {
+    const nextShotId = buildNextId('shot', scriptDoc!.shots.map((shot) => shot.id))
+    const defaultSceneId = orderedScenes[orderedScenes.length - 1]?.id ?? orderedScenes[0]?.id ?? null
+    const defaultLocationRefId = orderedScenes.find((scene) => scene.id === defaultSceneId)?.locationRefId
+      ?? environmentOptions[0]?.id
+      ?? null
+    onUpdateScript((currentScript) => ({
+      ...currentScript,
+      shots: [
+        ...currentScript.shots,
+        {
+          id: nextShotId,
+          sceneId: defaultSceneId,
+          orderIndex: currentScript.shots.length,
+          title: 'New Shot',
+          subtitle: null,
+          beat: '',
+          emotionalBeat: '',
+          shotType: 'custom',
+          framing: '',
+          cameraAngle: '',
+          cameraMovement: '',
+          lensPreference: '',
+          visualPrompt: '',
+          compositionGuide: '',
+          continuityNotes: '',
+          participantRefIds: [],
+          locationRefId: defaultLocationRefId,
+          propRefIds: [],
+          requiredSourceRefIds: [],
+          compositeRefIds: [],
+          storyboardRefIds: [],
+          durationSeconds: null,
+          beats: [],
+          dialogue: [],
+          actions: [],
+          audio: [],
+        },
+      ],
+    }))
+  }
+
+  function updateShotAmbience(shotId: string, cue: string) {
+    updateShot(shotId, (currentShot) => {
+      const nextCue = cue.trim()
+      const ambienceIndex = currentShot.audio.findIndex((entry) => entry.kind === 'ambience')
+      if (!nextCue) {
+        if (ambienceIndex === -1) return currentShot
+        return {
+          ...currentShot,
+          audio: currentShot.audio.filter((_, index) => index !== ambienceIndex),
+        }
+      }
+      if (ambienceIndex === -1) {
+        return {
+          ...currentShot,
+          audio: [
+            ...currentShot.audio,
+            {
+              id: buildNextId('audio', currentShot.audio.map((entry) => entry.id)),
+              kind: 'ambience',
+              cue: nextCue,
+              sourceRefId: null,
+              startSeconds: null,
+              endSeconds: null,
+            },
+          ],
+        }
+      }
+      return {
+        ...currentShot,
+        audio: currentShot.audio.map((entry, index) => index === ambienceIndex ? { ...entry, cue: nextCue } : entry),
+      }
+    })
+  }
+
   return (
     <div className="detail-stack cinematic-script-surface">
-      <span className="eyebrow">Canonical Script</span>
-      <h2>{scriptDoc.title || currentGraph.name}</h2>
-      {scriptDoc.logline ? <p className="subtle-line">{scriptDoc.logline}</p> : null}
-      <div className="inline-note">This script is the canonical authoring artifact for this cinematic. The graph is a compiled projection used for references, diagnostics, and runtime execution.</div>
+      <div className="script-editor-toolbar">
+        <div className="script-editor-status">
+          <span className="eyebrow">Canonical Script</span>
+          <div className={scriptDirty ? 'script-status-pill is-warning' : 'script-status-pill'}>
+            {scriptDirty ? 'Graph out of date' : 'Script clean'}
+          </div>
+          {validationErrors.length > 0 ? <div className="script-status-pill is-danger">{validationErrors.length} error{validationErrors.length === 1 ? '' : 's'}</div> : null}
+          {validationWarnings.length > 0 ? <div className="script-status-pill is-muted">{validationWarnings.length} warning{validationWarnings.length === 1 ? '' : 's'}</div> : null}
+        </div>
+        <button className="primary-button compact" disabled={validationErrors.length > 0 || orderedShots.length === 0} onClick={onRebuild} type="button">Rebuild From Script</button>
+      </div>
+
+      <div className="inline-note">
+        Script edits are canonical and save immediately. The graph is a compiled projection and will stay unchanged until you rebuild from script.
+      </div>
+      {scriptDirty ? <div className="inline-note is-warning">Script changed. Rebuild graph to sync runtime projection.</div> : null}
+      {validationIssues.length > 0 ? (
+        <div className="diagnostic-stack">
+          {validationIssues.map((issue) => (
+            <div key={issue.id} className={`inline-note ${issue.level === 'error' ? 'is-danger' : 'is-warning'}`}>{issue.message}</div>
+          ))}
+        </div>
+      ) : null}
+
+      <div className="editor-section compact-section">
+        <div className="section-head">
+          <div>
+            <span className="eyebrow">Script Header</span>
+            <h3>{scriptDoc.title || currentGraph.name}</h3>
+          </div>
+        </div>
+        <div className="editor-grid compact cinematic-field-grid">
+          <label className="field-block">
+            <span>Title</span>
+            <input value={scriptDoc.title} onChange={(event) => onUpdateScript((currentScript) => ({ ...currentScript, title: event.target.value }))} />
+          </label>
+          <label className="field-block full-width">
+            <span>Logline</span>
+            <textarea rows={2} value={scriptDoc.logline} onChange={(event) => onUpdateScript((currentScript) => ({ ...currentScript, logline: event.target.value }))} />
+          </label>
+          <label className="field-block compact-block">
+            <span>Tone</span>
+            <input value={scriptDoc.tone} onChange={(event) => onUpdateScript((currentScript) => ({ ...currentScript, tone: event.target.value }))} />
+          </label>
+          <label className="field-block full-width">
+            <span>Continuity Notes</span>
+            <textarea rows={2} value={scriptDoc.continuityNotes} onChange={(event) => onUpdateScript((currentScript) => ({ ...currentScript, continuityNotes: event.target.value }))} />
+          </label>
+        </div>
+      </div>
 
       <div className="editor-section compact-section">
         <div className="section-head">
@@ -704,11 +1328,14 @@ function ScriptPreviewSurface({
             <h3>{scriptDoc.entityBindings.length} source{scriptDoc.entityBindings.length === 1 ? '' : 's'}</h3>
           </div>
         </div>
-        <div className="diagnostic-stack">
+        <div className="script-chip-row">
           {scriptDoc.entityBindings.map((binding) => (
-            <div key={binding.id} className="inline-note">
-              <strong>{binding.label}</strong>
-              <span> {binding.kind} / {binding.role}</span>
+            <div key={binding.id} className="script-binding-chip">
+              <span className="script-binding-chip-icon"><EntityIcon id={iconForScriptBindingKind(binding.kind)} /></span>
+              <div className="script-binding-chip-copy">
+                <strong>{binding.label}</strong>
+                <span>{binding.kind} / {binding.role}</span>
+              </div>
             </div>
           ))}
         </div>
@@ -718,77 +1345,239 @@ function ScriptPreviewSurface({
         <div className="section-head">
           <div>
             <span className="eyebrow">Scenes</span>
-            <h3>{scriptDoc.scenes.length} scene{scriptDoc.scenes.length === 1 ? '' : 's'}</h3>
+            <h3>{orderedScenes.length} scene{orderedScenes.length === 1 ? '' : 's'}</h3>
           </div>
         </div>
-        <div className="diagnostic-stack">
-          {scriptDoc.scenes.length === 0 ? <div className="inline-note">No explicit scene groupings were stored for this script.</div> : null}
-          {scriptDoc.scenes.map((scene) => (
-            <div key={scene.id} className="inline-note">
-              <strong>{scene.title}</strong>
-              <span> {scene.shotIds.length} shot{scene.shotIds.length === 1 ? '' : 's'}</span>
-            </div>
-          ))}
-        </div>
+        {orderedScenes.length === 0 ? <div className="inline-note">No explicit scene groupings were stored for this script.</div> : (
+          <div className="script-chip-row">
+            {orderedScenes.map((scene) => (
+              <div key={scene.id} className="script-binding-chip script-scene-pill">
+                <div className="script-binding-chip-copy">
+                  <strong className="script-scene-pill-title">{scene.title}</strong>
+                  <span>{scene.shotIds.length} shot{scene.shotIds.length === 1 ? '' : 's'}{scene.summary ? ` · ${scene.summary}` : ''}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="editor-section compact-section">
         <div className="section-head">
           <div>
             <span className="eyebrow">Shots</span>
-            <h3>{scriptDoc.shots.length} shot{scriptDoc.shots.length === 1 ? '' : 's'}</h3>
+            <h3>{orderedShots.length} shot{orderedShots.length === 1 ? '' : 's'}</h3>
           </div>
-        </div>
-        <div className="diagnostic-stack">
-          {scriptDoc.shots.map((shot) => (
-            <div key={shot.id} className="inline-note">
-              <strong>{shot.title}</strong>
-              <span> {shot.beat || 'No beat summary'}</span>
-            </div>
-          ))}
+          <button className="ghost-button compact" onClick={addShot} type="button">Add Shot</button>
         </div>
       </div>
 
-      {scriptDoc.shots.map((shot) => (
-        <div key={shot.id} className="editor-section compact-section">
-          <div className="section-head">
-            <div>
-              <span className="eyebrow">{shot.shotType}</span>
-              <h3>{shot.title}</h3>
+      {orderedShots.map((shot, shotIndex) => {
+        const participantBindings = shot.participantRefIds.map((refId) => bindingById.get(refId)).filter((entry): entry is CinematicScriptEntityBinding => Boolean(entry))
+        const propBindings = shot.propRefIds.map((refId) => bindingById.get(refId)).filter((entry): entry is CinematicScriptEntityBinding => Boolean(entry))
+        const locationBinding = shot.locationRefId ? bindingById.get(shot.locationRefId) ?? null : null
+        const scene = shot.sceneId ? sceneById.get(shot.sceneId) ?? null : null
+        const ambienceCue = shot.audio.find((entry) => entry.kind === 'ambience')?.cue ?? ''
+        const shotIssues = validationIssues.filter((issue) => issue.shotId === shot.id)
+        return (
+          <div key={shot.id} className="editor-section compact-section script-shot-card">
+            <div className="section-head">
+              <div>
+                <span className="eyebrow">{scene?.title ?? `Shot ${shotIndex + 1}`}</span>
+                <h3>{shot.title}</h3>
+              </div>
+              <div className="script-row-controls">
+                <button className="ghost-button compact" disabled={shotIndex === 0} onClick={() => moveShot(shot.id, -1)} type="button">Up</button>
+                <button className="ghost-button compact" disabled={shotIndex === orderedShots.length - 1} onClick={() => moveShot(shot.id, 1)} type="button">Down</button>
+                <button className="ghost-button compact" onClick={() => removeShot(shot.id)} type="button">Remove</button>
+              </div>
             </div>
-          </div>
-          <div className="diagnostic-stack">
-            <div className="inline-note">{shot.beat || 'No beat text.'}</div>
-            <div className="inline-note">
-              <strong>Bindings</strong>
-              <span> {[
-                ...shot.participantRefIds,
-                ...(shot.locationRefId ? [shot.locationRefId] : []),
-                ...shot.propRefIds,
-              ].join(', ') || 'none'}</span>
+
+            <div className="script-chip-row">
+              {participantBindings.map((binding) => <ScriptEntityChip key={binding.id} binding={binding} />)}
+              {locationBinding ? <ScriptEntityChip binding={locationBinding} /> : null}
+              {propBindings.map((binding) => <ScriptEntityChip key={binding.id} binding={binding} />)}
+              <span className="script-mini-chip">{shot.dialogue.length} dialogue</span>
+              <span className="script-mini-chip">{shot.actions.length} action</span>
+              <span className="script-mini-chip">{ambienceCue ? 'ambience set' : 'no ambience'}</span>
             </div>
-            {shot.dialogue.map((entry) => (
-              <div key={entry.id} className="inline-note">
-                <strong>Dialogue</strong>
-                <span> {entry.speakerRefId ?? 'speaker?'}: {entry.line || entry.delivery || 'placeholder line'}</span>
+
+            {shotIssues.length > 0 ? (
+              <div className="diagnostic-stack">
+                {shotIssues.map((issue) => <div key={issue.id} className={`inline-note ${issue.level === 'error' ? 'is-danger' : 'is-warning'}`}>{issue.message}</div>)}
               </div>
-            ))}
-            {shot.actions.map((entry) => (
-              <div key={entry.id} className="inline-note">
-                <strong>Action</strong>
-                <span> {entry.actorRefId ?? 'actor?'} {entry.verb || 'acts'} {entry.targetRefId ? `-> ${entry.targetRefId}` : ''}</span>
+            ) : null}
+
+            <div className="script-shot-core">
+              <label className="field-block compact-block">
+                <span>Shot Title</span>
+                <input value={shot.title} onChange={(event) => updateShot(shot.id, (currentShot) => ({ ...currentShot, title: event.target.value }))} />
+              </label>
+              <label className="field-block full-width">
+                <span>Main Shot Description</span>
+                <textarea rows={3} value={shot.beat} onChange={(event) => updateShot(shot.id, (currentShot) => ({ ...currentShot, beat: event.target.value }))} />
+              </label>
+            </div>
+
+            <div className="editor-section compact-section">
+              <div className="section-head">
+                <div>
+                  <span className="eyebrow">Dialogue</span>
+                  <h3>{shot.dialogue.length} line{shot.dialogue.length === 1 ? '' : 's'}</h3>
+                </div>
               </div>
-            ))}
-            {shot.audio.map((entry) => (
-              <div key={entry.id} className="inline-note">
-                <strong>Audio</strong>
-                <span> {entry.kind}: {entry.cue || 'cue'}</span>
+              <DialogueBeatEditor
+                dialogue={shot.dialogue}
+                referenceOptions={characterOptions}
+                onChange={(dialogue) => updateShot(shot.id, (currentShot) => ({ ...currentShot, dialogue }))}
+              />
+            </div>
+
+            <div className="editor-section compact-section">
+              <div className="section-head">
+                <div>
+                  <span className="eyebrow">Action</span>
+                  <h3>{shot.actions.length} beat{shot.actions.length === 1 ? '' : 's'}</h3>
+                </div>
               </div>
-            ))}
+              <ActionBeatEditor
+                actions={shot.actions}
+                referenceOptions={referenceOptions.filter((option) => ['character', 'environment', 'item'].includes(option.kind))}
+                onChange={(actions) => updateShot(shot.id, (currentShot) => ({ ...currentShot, actions }))}
+              />
+            </div>
+
+            <div className="editor-section compact-section">
+              <div className="section-head">
+                <div>
+                  <span className="eyebrow">Ambience</span>
+                  <h3>Atmosphere and sound</h3>
+                </div>
+              </div>
+              <label className="field-block full-width">
+                <span>Ambience Prompt</span>
+                <textarea
+                  rows={2}
+                  placeholder="Busy tavern room tone, low crowd murmur, glasses clinking under the tension."
+                  value={ambienceCue}
+                  onChange={(event) => updateShotAmbience(shot.id, event.target.value)}
+                />
+              </label>
+            </div>
+
+            <details className="script-advanced-panel">
+              <summary>Advanced shot fields</summary>
+              <div className="editor-grid compact cinematic-field-grid">
+                <label className="field-block compact-block">
+                  <span>Shot Type</span>
+                  <select value={shot.shotType} onChange={(event) => updateShot(shot.id, (currentShot) => ({ ...currentShot, shotType: event.target.value as CinematicScriptShot['shotType'] }))}>
+                    <option value="custom">Custom</option>
+                    <option value="establishing">Establishing</option>
+                    <option value="dialogue">Dialogue</option>
+                    <option value="reveal">Reveal</option>
+                    <option value="action">Action</option>
+                    <option value="insert">Insert</option>
+                    <option value="transition">Transition</option>
+                  </select>
+                </label>
+                <label className="field-block compact-block">
+                  <span>Scene</span>
+                  <select value={shot.sceneId ?? ''} onChange={(event) => updateShot(shot.id, (currentShot) => ({ ...currentShot, sceneId: event.target.value || null }))}>
+                    <option value="">No scene</option>
+                    {orderedScenes.map((entry) => <option key={entry.id} value={entry.id}>{entry.title}</option>)}
+                  </select>
+                </label>
+                <label className="field-block compact-block">
+                  <span>Location</span>
+                  <select value={shot.locationRefId ?? ''} onChange={(event) => updateShot(shot.id, (currentShot) => ({ ...currentShot, locationRefId: event.target.value || null }))}>
+                    <option value="">No location</option>
+                    {environmentOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+                  </select>
+                </label>
+                <label className="field-block compact-block">
+                  <span>Framing</span>
+                  <input value={shot.framing} onChange={(event) => updateShot(shot.id, (currentShot) => ({ ...currentShot, framing: event.target.value }))} />
+                </label>
+                <label className="field-block compact-block">
+                  <span>Camera Angle</span>
+                  <input value={shot.cameraAngle} onChange={(event) => updateShot(shot.id, (currentShot) => ({ ...currentShot, cameraAngle: event.target.value }))} />
+                </label>
+                <label className="field-block compact-block">
+                  <span>Movement</span>
+                  <input value={shot.cameraMovement} onChange={(event) => updateShot(shot.id, (currentShot) => ({ ...currentShot, cameraMovement: event.target.value }))} />
+                </label>
+                <label className="field-block compact-block">
+                  <span>Lens</span>
+                  <input value={shot.lensPreference} onChange={(event) => updateShot(shot.id, (currentShot) => ({ ...currentShot, lensPreference: event.target.value }))} />
+                </label>
+                <label className="field-block compact-block">
+                  <span>Duration</span>
+                  <input type="number" min="1" max="20" value={shot.durationSeconds ?? ''} onChange={(event) => updateShot(shot.id, (currentShot) => ({ ...currentShot, durationSeconds: event.target.value ? Number(event.target.value) : null }))} />
+                </label>
+                <label className="field-block full-width">
+                  <span>Composition Guide</span>
+                  <textarea rows={2} value={shot.compositionGuide} onChange={(event) => updateShot(shot.id, (currentShot) => ({ ...currentShot, compositionGuide: event.target.value }))} />
+                </label>
+              </div>
+
+              <div className="script-binding-toggle-grid">
+                <div className="script-binding-toggle-group">
+                  <span className="section-label">Participants</span>
+                  <div className="script-chip-row">
+                    {characterOptions.map((option) => (
+                      <button
+                        key={option.id}
+                        className={shot.participantRefIds.includes(option.id) ? 'script-toggle-chip is-active' : 'script-toggle-chip'}
+                        onClick={() => updateShot(shot.id, (currentShot) => ({
+                          ...currentShot,
+                          participantRefIds: currentShot.participantRefIds.includes(option.id)
+                            ? currentShot.participantRefIds.filter((refId) => refId !== option.id)
+                            : [...currentShot.participantRefIds, option.id],
+                        }))}
+                        type="button"
+                      >
+                        <EntityIcon id={iconForScriptBindingKind(option.kind)} />
+                        <span>{option.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="script-binding-toggle-group">
+                  <span className="section-label">Props</span>
+                  <div className="script-chip-row">
+                    {itemOptions.map((option) => (
+                      <button
+                        key={option.id}
+                        className={shot.propRefIds.includes(option.id) ? 'script-toggle-chip is-active' : 'script-toggle-chip'}
+                        onClick={() => updateShot(shot.id, (currentShot) => ({
+                          ...currentShot,
+                          propRefIds: currentShot.propRefIds.includes(option.id)
+                            ? currentShot.propRefIds.filter((refId) => refId !== option.id)
+                            : [...currentShot.propRefIds, option.id],
+                        }))}
+                        type="button"
+                      >
+                        <EntityIcon id={iconForScriptBindingKind(option.kind)} />
+                        <span>{option.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </details>
           </div>
-        </div>
-      ))}
+        )
+      })}
     </div>
+  )
+}
+
+function ScriptEntityChip({ binding }: { binding: CinematicScriptEntityBinding }) {
+  return (
+    <span className="script-entity-chip">
+      <EntityIcon id={iconForScriptBindingKind(binding.kind)} />
+      <span>{buildScriptEntitySummaryLabel(binding)}</span>
+    </span>
   )
 }
 
@@ -869,7 +1658,7 @@ function AssetRefInspector({
 
   return (
     <div className="detail-stack compact">
-      <span className="eyebrow">{template?.label ?? 'Source Asset'}</span>
+      <span className="eyebrow">{template?.label ?? 'Entity Ref'}</span>
       <h3>{node.title}</h3>
       <div className="asset-toolbar">
         <label className="field-block compact-block inspector-type-field">
@@ -951,7 +1740,7 @@ function CompositeRefInspector({
 }) {
   const template = node.templateKey ? graphNodeTemplatesByKey.get(node.templateKey) : null
   const config = getCompositeRefNodeConfig(node)
-  const availableRefNodes = currentGraph.nodes.filter((entry) => entry.type === 'asset_ref')
+  const availableRefNodes = currentGraph.nodes.filter((entry) => ['asset_ref', 'composite_ref', 'storyboard_ref'].includes(entry.type))
   const previewAsset = assets.find((asset) => asset.key === config.outputAssetKey) ?? null
 
   return (
@@ -961,7 +1750,7 @@ function CompositeRefInspector({
       <div className="asset-toolbar">
         <label className="field-block compact-block inspector-type-field">
           <span>Node Template</span>
-          <select value={node.templateKey ?? 'equipped_character_ref'} onChange={(event) => onApplyTemplateChange(event.target.value)}>
+          <select value={node.templateKey ?? 'composite_ref'} onChange={(event) => onApplyTemplateChange(event.target.value)}>
             {graphNodeLibrary.flatMap((group) => group.templates)
               .filter((entry) => isTemplateAvailableForGraph(entry, currentGraph, node))
               .map((entry) => <option key={entry.key} value={entry.key}>{entry.label}</option>)}
@@ -995,9 +1784,17 @@ function CompositeRefInspector({
           })}
         >
           {availableRefNodes.map((refNode) => {
-            const refConfig = getAssetRefNodeConfig(refNode)
-            const definition = refConfig.definitionKey ? definitions.find((entry) => entry.key === refConfig.definitionKey) ?? null : null
-            return <option key={refNode.key} value={refConfig.entityRefId ?? refNode.key}>{definition?.name ?? refNode.title}</option>
+            if (refNode.type === 'asset_ref') {
+              const refConfig = getAssetRefNodeConfig(refNode)
+              const definition = refConfig.definitionKey ? definitions.find((entry) => entry.key === refConfig.definitionKey) ?? null : null
+              return <option key={refNode.key} value={refConfig.entityRefId ?? refNode.key}>{definition?.name ?? refNode.title}</option>
+            }
+            if (refNode.type === 'composite_ref') {
+              const refConfig = getCompositeRefNodeConfig(refNode)
+              return <option key={refNode.key} value={refConfig.compositeRefId ?? refNode.key}>{refNode.title}</option>
+            }
+            const refConfig = getStoryboardRefNodeConfig(refNode)
+            return <option key={refNode.key} value={refConfig.panelId ?? refConfig.storyboardId ?? refNode.key}>{refNode.title}</option>
           })}
         </select>
       </label>
@@ -1043,7 +1840,7 @@ function StoryboardRefInspector({
       <div className="asset-toolbar">
         <label className="field-block compact-block inspector-type-field">
           <span>Node Template</span>
-          <select value={node.templateKey ?? 'shot_panel_ref'} onChange={(event) => onApplyTemplateChange(event.target.value)}>
+          <select value={node.templateKey ?? 'storyboard_ref'} onChange={(event) => onApplyTemplateChange(event.target.value)}>
             {graphNodeLibrary.flatMap((group) => group.templates)
               .filter((entry) => isTemplateAvailableForGraph(entry, currentGraph, node))
               .map((entry) => <option key={entry.key} value={entry.key}>{entry.label}</option>)}
@@ -1241,7 +2038,7 @@ function CinematicShotInspector({
           </div>
         </div>
         <div className="diagnostic-stack">
-          {sources.length === 0 ? <div className="inline-note">Connect at least one `Source Asset` node into this shot on the `asset_in` port.</div> : null}
+          {sources.length === 0 ? <div className="inline-note">Bind at least one entity, composite, or storyboard reference on this shot so the runtime has continuity inputs.</div> : null}
           {expectedSourceRefIds.length > 0 ? (
             <div className="inline-note">
               <strong>Expected sources</strong>
@@ -1276,7 +2073,14 @@ function CinematicShotInspector({
         </div>
         <ActionBeatEditor
           actions={config.actions}
-          definitions={definitions}
+          referenceOptions={definitions
+            .filter((definition) => ['character', 'environment', 'item'].includes(definition.kind))
+            .map((definition) => ({
+              id: definition.key,
+              label: definition.name,
+              kind: definition.kind as ScriptReferenceOption['kind'],
+              role: definition.kind,
+            }))}
           onChange={(actions) => onUpdate({ metadata: updateNodeMetadataWithShot(node.metadata, { actions }) })}
         />
       </div>
@@ -1289,8 +2093,15 @@ function CinematicShotInspector({
           </div>
         </div>
         <DialogueBeatEditor
-          definitions={definitions}
           dialogue={config.dialogue}
+          referenceOptions={definitions
+            .filter((definition) => definition.kind === 'character')
+            .map((definition) => ({
+              id: definition.key,
+              label: definition.name,
+              kind: definition.kind as ScriptReferenceOption['kind'],
+              role: definition.kind,
+            }))}
           onChange={(dialogue) => onUpdate({ metadata: updateNodeMetadataWithShot(node.metadata, { dialogue }) })}
         />
       </div>
@@ -1304,6 +2115,14 @@ function CinematicShotInspector({
         </div>
         <AudioBeatEditor
           audio={config.audio}
+          referenceOptions={definitions
+            .filter((definition) => ['character', 'environment', 'item'].includes(definition.kind))
+            .map((definition) => ({
+              id: definition.key,
+              label: definition.name,
+              kind: definition.kind as ScriptReferenceOption['kind'],
+              role: definition.kind,
+            }))}
           onChange={(audio) => onUpdate({ metadata: updateNodeMetadataWithShot(node.metadata, { audio }) })}
         />
       </div>
@@ -1426,20 +2245,48 @@ function CinematicSettingsEditor({
   )
 }
 
+function ScriptReferenceBadge({
+  fallbackLabel,
+  option,
+}: {
+  fallbackLabel: string
+  option: ScriptReferenceOption | null
+}) {
+  if (!option) {
+    return <span className="script-reference-badge is-empty">{fallbackLabel}</span>
+  }
+
+  return (
+    <span className="script-reference-badge">
+      <EntityIcon id={iconForScriptBindingKind(option.kind)} />
+      <span>{option.label}</span>
+    </span>
+  )
+}
+
 function ActionBeatEditor({
   actions,
-  definitions,
+  referenceOptions,
   onChange,
 }: {
-  actions: ReturnType<typeof getCinematicShotNodeConfig>['actions']
-  definitions: DefinitionBase[]
-  onChange: (actions: ReturnType<typeof getCinematicShotNodeConfig>['actions']) => void
+  actions: ActionBeat[]
+  referenceOptions: ScriptReferenceOption[]
+  onChange: (actions: ActionBeat[]) => void
 }) {
-  const refOptions = definitions.filter((definition) => ['character', 'environment', 'item'].includes(definition.kind))
+  const actorOptions = referenceOptions.filter((option) => option.kind === 'character')
+  const targetOptions = referenceOptions.filter((option) => ['character', 'environment', 'item'].includes(option.kind))
+  const propOptions = referenceOptions.filter((option) => option.kind === 'item')
   return (
     <div className="diagnostic-stack">
       {actions.map((action, index) => (
         <div key={action.id} className="schema-card">
+          <div className="script-beat-flow">
+            <ScriptReferenceBadge option={actorOptions.find((option) => option.id === action.actorRefId) ?? null} fallbackLabel="Actor" />
+            <span className="script-beat-arrow">→</span>
+            <span className="script-beat-verb-preview">{action.verb || 'verb'}</span>
+            <span className="script-beat-arrow">→</span>
+            <ScriptReferenceBadge option={targetOptions.find((option) => option.id === action.targetRefId) ?? null} fallbackLabel="Target" />
+          </div>
           <label className="field-block compact-block">
             <span>Verb</span>
             <input value={action.verb} onChange={(event) => onChange(actions.map((entry, entryIndex) => entryIndex === index ? { ...entry, verb: event.target.value } : entry))} />
@@ -1448,27 +2295,38 @@ function ActionBeatEditor({
             <span>Actor</span>
             <select value={action.actorRefId ?? ''} onChange={(event) => onChange(actions.map((entry, entryIndex) => entryIndex === index ? { ...entry, actorRefId: event.target.value || null } : entry))}>
               <option value="">Select actor</option>
-              {refOptions.map((definition) => <option key={definition.key} value={definition.key}>{definition.name}</option>)}
+              {actorOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
             </select>
           </label>
           <label className="field-block compact-block">
             <span>Target</span>
             <select value={action.targetRefId ?? ''} onChange={(event) => onChange(actions.map((entry, entryIndex) => entryIndex === index ? { ...entry, targetRefId: event.target.value || null } : entry))}>
               <option value="">Select target</option>
-              {refOptions.map((definition) => <option key={definition.key} value={definition.key}>{definition.name}</option>)}
+              {targetOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+            </select>
+          </label>
+          <label className="field-block compact-block">
+            <span>Prop</span>
+            <select value={action.propRefId ?? ''} onChange={(event) => onChange(actions.map((entry, entryIndex) => entryIndex === index ? { ...entry, propRefId: event.target.value || null } : entry))}>
+              <option value="">No prop</option>
+              {propOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
             </select>
           </label>
           <label className="field-block full-width">
             <span>Staging Notes</span>
             <input value={action.stagingNotes} onChange={(event) => onChange(actions.map((entry, entryIndex) => entryIndex === index ? { ...entry, stagingNotes: event.target.value } : entry))} />
           </label>
-          <button className="ghost-button compact" onClick={() => onChange(actions.filter((_, entryIndex) => entryIndex !== index))} type="button">Remove beat</button>
+          <div className="script-row-controls">
+            <button className="ghost-button compact" disabled={index === 0} onClick={() => onChange(moveArrayItem(actions, index, index - 1))} type="button">Up</button>
+            <button className="ghost-button compact" disabled={index === actions.length - 1} onClick={() => onChange(moveArrayItem(actions, index, index + 1))} type="button">Down</button>
+            <button className="ghost-button compact" onClick={() => onChange(actions.filter((_, entryIndex) => entryIndex !== index))} type="button">Remove beat</button>
+          </div>
         </div>
       ))}
       <button
         className="ghost-button compact"
         onClick={() => onChange([...actions, {
-          id: `action_${actions.length + 1}`,
+          id: buildNextId('action', actions.map((entry) => entry.id)),
           actorRefId: null,
           targetRefId: null,
           verb: '',
@@ -1486,24 +2344,27 @@ function ActionBeatEditor({
 }
 
 function DialogueBeatEditor({
-  definitions,
   dialogue,
+  referenceOptions,
   onChange,
 }: {
-  definitions: DefinitionBase[]
-  dialogue: ReturnType<typeof getCinematicShotNodeConfig>['dialogue']
-  onChange: (dialogue: ReturnType<typeof getCinematicShotNodeConfig>['dialogue']) => void
+  dialogue: DialogueBeat[]
+  referenceOptions: ScriptReferenceOption[]
+  onChange: (dialogue: DialogueBeat[]) => void
 }) {
-  const speakerOptions = definitions.filter((definition) => definition.kind === 'character')
+  const speakerOptions = referenceOptions.filter((option) => option.kind === 'character')
   return (
     <div className="diagnostic-stack">
       {dialogue.map((line, index) => (
         <div key={line.id} className="schema-card">
+          <div className="script-dialogue-header">
+            <ScriptReferenceBadge option={speakerOptions.find((option) => option.id === line.speakerRefId) ?? null} fallbackLabel="Speaker" />
+          </div>
           <label className="field-block compact-block">
             <span>Speaker</span>
             <select value={line.speakerRefId ?? ''} onChange={(event) => onChange(dialogue.map((entry, entryIndex) => entryIndex === index ? { ...entry, speakerRefId: event.target.value || null } : entry))}>
               <option value="">Select speaker</option>
-              {speakerOptions.map((definition) => <option key={definition.key} value={definition.key}>{definition.name}</option>)}
+              {speakerOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
             </select>
           </label>
           <label className="field-block full-width">
@@ -1514,13 +2375,17 @@ function DialogueBeatEditor({
             <span>Delivery</span>
             <input value={line.delivery} onChange={(event) => onChange(dialogue.map((entry, entryIndex) => entryIndex === index ? { ...entry, delivery: event.target.value } : entry))} />
           </label>
-          <button className="ghost-button compact" onClick={() => onChange(dialogue.filter((_, entryIndex) => entryIndex !== index))} type="button">Remove line</button>
+          <div className="script-row-controls">
+            <button className="ghost-button compact" disabled={index === 0} onClick={() => onChange(moveArrayItem(dialogue, index, index - 1))} type="button">Up</button>
+            <button className="ghost-button compact" disabled={index === dialogue.length - 1} onClick={() => onChange(moveArrayItem(dialogue, index, index + 1))} type="button">Down</button>
+            <button className="ghost-button compact" onClick={() => onChange(dialogue.filter((_, entryIndex) => entryIndex !== index))} type="button">Remove line</button>
+          </div>
         </div>
       ))}
       <button
         className="ghost-button compact"
         onClick={() => onChange([...dialogue, {
-          id: `dialogue_${dialogue.length + 1}`,
+          id: buildNextId('dialogue', dialogue.map((entry) => entry.id)),
           speakerRefId: null,
           line: '',
           delivery: '',
@@ -1538,10 +2403,12 @@ function DialogueBeatEditor({
 
 function AudioBeatEditor({
   audio,
+  referenceOptions,
   onChange,
 }: {
-  audio: ReturnType<typeof getCinematicShotNodeConfig>['audio']
-  onChange: (audio: ReturnType<typeof getCinematicShotNodeConfig>['audio']) => void
+  audio: AudioBeat[]
+  referenceOptions: ScriptReferenceOption[]
+  onChange: (audio: AudioBeat[]) => void
 }) {
   return (
     <div className="diagnostic-stack">
@@ -1562,13 +2429,24 @@ function AudioBeatEditor({
             <span>Cue</span>
             <input value={cue.cue} onChange={(event) => onChange(audio.map((entry, entryIndex) => entryIndex === index ? { ...entry, cue: event.target.value } : entry))} />
           </label>
-          <button className="ghost-button compact" onClick={() => onChange(audio.filter((_, entryIndex) => entryIndex !== index))} type="button">Remove cue</button>
+          <label className="field-block compact-block">
+            <span>Source</span>
+            <select value={cue.sourceRefId ?? ''} onChange={(event) => onChange(audio.map((entry, entryIndex) => entryIndex === index ? { ...entry, sourceRefId: event.target.value || null } : entry))}>
+              <option value="">No source</option>
+              {referenceOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+            </select>
+          </label>
+          <div className="script-row-controls">
+            <button className="ghost-button compact" disabled={index === 0} onClick={() => onChange(moveArrayItem(audio, index, index - 1))} type="button">Up</button>
+            <button className="ghost-button compact" disabled={index === audio.length - 1} onClick={() => onChange(moveArrayItem(audio, index, index + 1))} type="button">Down</button>
+            <button className="ghost-button compact" onClick={() => onChange(audio.filter((_, entryIndex) => entryIndex !== index))} type="button">Remove cue</button>
+          </div>
         </div>
       ))}
       <button
         className="ghost-button compact"
         onClick={() => onChange([...audio, {
-          id: `audio_${audio.length + 1}`,
+          id: buildNextId('audio', audio.map((entry) => entry.id)),
           kind: 'ambience',
           cue: '',
           sourceRefId: null,
@@ -1651,7 +2529,7 @@ function resolveDefinitionPreviewAsset(definition: DefinitionBase | null, assets
 }
 
 function collectShotSources(graph: GraphDefinition, shotNode: NodeDefinition, definitions: DefinitionBase[], assets: AssetDefinition[]): ShotSourceEntry[] {
-  return graph.edges
+  const edgeSources = graph.edges
     .filter((edge) => edge.target.nodeKey === shotNode.key && edge.target.portId === 'asset_in')
     .map((edge) => graph.nodes.find((node) => node.key === edge.source.nodeKey) ?? null)
     .filter((node): node is NodeDefinition => Boolean(node && ['asset_ref', 'composite_ref', 'storyboard_ref'].includes(node.type)))
@@ -1674,6 +2552,8 @@ function collectShotSources(graph: GraphDefinition, shotNode: NodeDefinition, de
       const asset = assets.find((entry) => entry.key === config.assetKey) ?? null
       return { node, definition: null, asset, refId: config.panelId ?? config.storyboardId }
     })
+  if (edgeSources.length > 0) return edgeSources
+  return collectShotSourcesFromMetadata(graph, shotNode, definitions, assets)
 }
 
 function buildCinematicConnectionEdge(connection: Connection, graph: GraphDefinition) {
@@ -1683,17 +2563,28 @@ function buildCinematicConnectionEdge(connection: Connection, graph: GraphDefini
   const targetNode = graph.nodes.find((node) => node.key === connection.target)
   if (!sourceNode || !targetNode) return null
 
-  if (['asset_ref', 'composite_ref', 'storyboard_ref'].includes(sourceNode.type) && targetNode.type !== 'cinematic_shot') return null
-  if (['asset_ref', 'composite_ref', 'storyboard_ref'].includes(targetNode.type)) return null
+  const sourceIsRefNode = ['asset_ref', 'composite_ref', 'storyboard_ref'].includes(sourceNode.type)
+  const targetIsRefNode = ['asset_ref', 'composite_ref', 'storyboard_ref'].includes(targetNode.type)
 
-  const sourceHandle = connection.sourceHandle ?? (['asset_ref', 'composite_ref', 'storyboard_ref'].includes(sourceNode.type) ? 'asset_out' : 'out')
-  const targetHandle = connection.targetHandle ?? (
-    targetNode.type === 'cinematic_shot'
-      ? ['asset_ref', 'composite_ref', 'storyboard_ref'].includes(sourceNode.type)
-        ? 'asset_in'
-        : 'flow_in'
-      : 'in'
-  )
+  if (sourceNode.type === 'cinematic_shot' && targetNode.type !== 'cinematic_shot') return null
+  if (sourceIsRefNode && targetNode.type === 'cinematic_shot') return null
+  if (targetIsRefNode && targetNode.type !== 'composite_ref') return null
+  if (targetNode.type === 'composite_ref' && !sourceIsRefNode) return null
+  if (sourceNode.type === 'cinematic_shot' && targetNode.type === 'cinematic_shot') {
+    return {
+      id: `edge-${Date.now()}`,
+      key: uniqueEdgeKey(graph, connection.source, connection.target),
+      source: { nodeKey: connection.source, portId: connection.sourceHandle ?? 'out' },
+      target: { nodeKey: connection.target, portId: connection.targetHandle ?? 'flow_in' },
+      label: null,
+      condition: null,
+      metadata: {},
+    } satisfies EdgeDefinition
+  }
+  if (!(sourceIsRefNode && targetNode.type === 'composite_ref')) return null
+
+  const sourceHandle = connection.sourceHandle ?? 'asset_out'
+  const targetHandle = connection.targetHandle ?? 'asset_in'
 
   return {
     id: `edge-${Date.now()}`,

@@ -1,5 +1,6 @@
 import type { AssetDefinition, DefinitionBase, Diagnostic, EdgeDefinition, GraphCreateInput, GraphDefinition, NodeDefinition } from '../../domain/graphcore'
 import type { WorldBuildBatch } from '../../domain/worldBuild'
+import type { EntityIconId } from '../../shared/entityIcons'
 
 export type GraphWorkspaceProps = {
   assets: AssetDefinition[]
@@ -40,6 +41,21 @@ export type GraphNodeData = {
   previewUrl: string | null
   conditionSummary: string
   effectSummary: string[]
+  cinematicCard?: {
+    variant: 'entity-ref' | 'composite-ref' | 'storyboard-ref' | 'shot'
+    iconId?: EntityIconId | null
+    kicker?: string | null
+    chips?: Array<{ label: string; iconId?: EntityIconId | null; tone?: 'default' | 'muted' }>
+    lines?: Array<
+      | string
+      | {
+          type: 'dialogue' | 'action'
+          speaker?: string | null
+          text: string
+        }
+    >
+    ambience?: string | null
+  } | null
   onAddChoice?: () => void
   onUpdateChoiceLabel?: (choiceId: string, label: string) => void
 }

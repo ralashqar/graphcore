@@ -929,10 +929,8 @@ export function validateGraph(
       const requiredSourceRefIds = Array.isArray(node.metadata.requiredSourceRefIds)
         ? node.metadata.requiredSourceRefIds.filter((value): value is string => typeof value === 'string' && value.length > 0)
         : []
-      const incomingRefIds = graph.edges
-        .filter((edge) => edge.target.nodeKey === node.key && edge.target.portId === 'asset_in')
-        .map((edge) => graph.nodes.find((candidate) => candidate.key === edge.source.nodeKey))
-        .filter((candidate): candidate is typeof graph.nodes[number] => Boolean(candidate))
+      const availableRefNodes = graph.nodes.filter((candidate) => ['asset_ref', 'composite_ref', 'storyboard_ref'].includes(candidate.type))
+      const availableRefIds = availableRefNodes
         .map((candidate) =>
           typeof candidate.metadata.entityRefId === 'string'
             ? candidate.metadata.entityRefId
@@ -945,9 +943,19 @@ export function validateGraph(
                   : null,
         )
         .filter((value): value is string => Boolean(value))
-      const connectedNodeTypes = graph.edges
-        .filter((edge) => edge.target.nodeKey === node.key && edge.target.portId === 'asset_in')
-        .map((edge) => graph.nodes.find((candidate) => candidate.key === edge.source.nodeKey)?.type ?? null)
+      const referencedNodes = availableRefNodes.filter((candidate) => {
+        const refId =
+          typeof candidate.metadata.entityRefId === 'string'
+            ? candidate.metadata.entityRefId
+            : typeof candidate.metadata.compositeRefId === 'string'
+              ? candidate.metadata.compositeRefId
+              : typeof candidate.metadata.panelId === 'string'
+                ? candidate.metadata.panelId
+                : typeof candidate.metadata.storyboardId === 'string'
+                  ? candidate.metadata.storyboardId
+                  : null
+        return typeof refId === 'string' && requiredSourceRefIds.includes(refId)
+      })
 
       if (stillAssetKey && !assetKeys.has(stillAssetKey)) {
         diagnostics.push({
@@ -969,7 +977,7 @@ export function validateGraph(
         })
       }
 
-      const missingRequiredSourceRefIds = requiredSourceRefIds.filter((refId) => !incomingRefIds.includes(refId))
+      const missingRequiredSourceRefIds = requiredSourceRefIds.filter((refId) => !availableRefIds.includes(refId))
       if (missingRequiredSourceRefIds.length > 0) {
         diagnostics.push({
           level: 'warning',
@@ -980,8 +988,8 @@ export function validateGraph(
         })
       }
 
-      const hasStoryboardInput = connectedNodeTypes.includes('storyboard_ref')
-      const hasCompositeInput = connectedNodeTypes.includes('composite_ref')
+      const hasStoryboardInput = referencedNodes.some((candidate) => candidate.type === 'storyboard_ref')
+      const hasCompositeInput = referencedNodes.some((candidate) => candidate.type === 'composite_ref')
       const storyboardMode =
         graph.metadata
         && typeof graph.metadata === 'object'

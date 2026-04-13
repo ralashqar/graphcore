@@ -118,18 +118,9 @@ export function compileCinematicGraphFromScriptDoc(input: CompileCinematicGraphF
       key,
       type: 'asset_ref',
       title: binding.label,
-      templateKey:
-        assetRole === 'character'
-          ? 'character_ref'
-          : assetRole === 'environment'
-            ? 'location_ref'
-            : assetRole === 'item'
-              ? 'prop_ref'
-              : assetRole === 'audio'
-                ? 'audio_ref'
-                : 'style_ref',
+      templateKey: 'asset_ref',
       subtitle: binding.role,
-      position: { x: 280, y: 120 + index * 130 },
+      position: { x: 220, y: 120 + index * 126 },
       body: { text: null, imageAssetKey: null, audioAssetKey: null, choices: [] },
       condition: null,
       effects: [],
@@ -157,9 +148,9 @@ export function compileCinematicGraphFromScriptDoc(input: CompileCinematicGraphF
       key,
       type: 'composite_ref',
       title: composite.title,
-      templateKey: 'equipped_character_ref',
+      templateKey: 'composite_ref',
       subtitle: composite.summary || 'Composite reference',
-      position: { x: 280, y: 160 + (scriptDoc.entityBindings.length + index) * 130 },
+      position: { x: 220, y: 160 + (scriptDoc.entityBindings.length + index) * 126 },
       body: { text: null, imageAssetKey: null, audioAssetKey: null, choices: [] },
       condition: null,
       effects: [],
@@ -178,6 +169,20 @@ export function compileCinematicGraphFromScriptDoc(input: CompileCinematicGraphF
     })
     nodes.push(node)
     sourceNodeKeyByRefId.set(composite.id, key)
+
+    for (const [sourceIndex, sourceRefId] of composite.sourceRefIds.entries()) {
+      const sourceNodeKey = sourceNodeKeyByRefId.get(sourceRefId)
+      if (!sourceNodeKey) continue
+      edges.push({
+        id: `edge-composite-${index}-${sourceIndex}`,
+        key: `edge.${sourceNodeKey.split('.').pop() ?? 'asset'}_${key.split('.').pop() ?? 'composite'}_${sourceIndex + 1}`,
+        source: { nodeKey: sourceNodeKey, portId: 'asset_out' },
+        target: { nodeKey: key, portId: 'asset_in' },
+        label: null,
+        condition: null,
+        metadata: {},
+      })
+    }
   }
 
   const storyboardRefs = [
@@ -208,9 +213,9 @@ export function compileCinematicGraphFromScriptDoc(input: CompileCinematicGraphF
       key,
       type: 'storyboard_ref',
       title: storyboardRef.title,
-      templateKey: storyboardRef.storyboardKind === 'sequence_board' ? 'sequence_board_ref' : 'shot_panel_ref',
+      templateKey: 'storyboard_ref',
       subtitle: storyboardRef.storyboardKind === 'sequence_board' ? 'storyboard' : 'panel',
-      position: { x: 280, y: 220 + (scriptDoc.entityBindings.length + scriptDoc.compositeRefs.length + index) * 130 },
+      position: { x: 220, y: 220 + (scriptDoc.entityBindings.length + scriptDoc.compositeRefs.length + index) * 126 },
       body: { text: null, imageAssetKey: null, audioAssetKey: null, choices: [] },
       condition: null,
       effects: [],
@@ -270,7 +275,7 @@ export function compileCinematicGraphFromScriptDoc(input: CompileCinematicGraphF
       title: sequenceShot.title,
       templateKey: sequenceShot.shotType === 'custom' ? 'cinematic_shot' : `cinematic_${sequenceShot.shotType}`,
       subtitle: sequenceShot.subtitle,
-      position: { x: 720 + index * 360, y: 240 },
+      position: { x: 620 + index * 360, y: 220 },
       body: { text: sequenceShot.beat, imageAssetKey: null, audioAssetKey: null, choices: [] },
       condition: null,
       effects: [],
@@ -292,20 +297,6 @@ export function compileCinematicGraphFromScriptDoc(input: CompileCinematicGraphF
       metadata: {},
     })
     previousFlowNodeKey = key
-
-    for (const sourceRefId of sourceRefIds) {
-      const sourceNodeKey = sourceNodeKeyByRefId.get(sourceRefId)
-      if (!sourceNodeKey) continue
-      edges.push({
-        id: `edge-asset-${index}-${sourceRefId}`,
-        key: `edge.${sourceNodeKey.split('.').pop() ?? 'asset'}_${key.split('.').pop() ?? 'shot'}`,
-        source: { nodeKey: sourceNodeKey, portId: 'asset_out' },
-        target: { nodeKey: key, portId: 'asset_in' },
-        label: null,
-        condition: null,
-        metadata: {},
-      })
-    }
   }
 
   edges.push({

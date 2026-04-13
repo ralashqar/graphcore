@@ -3,6 +3,19 @@ import type { Edge, Node, ReactFlowInstance } from '@xyflow/react'
 import type { ConditionExpr, DefinitionBase, EffectOp, GraphDefinition, NodeDefinition } from '../../domain/graphcore'
 import { graphNodeLibrary } from '../../domain/nodeLibrary'
 
+const hiddenCinematicTemplateKeys = new Set([
+  'character_ref',
+  'location_ref',
+  'prop_ref',
+  'audio_ref',
+  'style_ref',
+  'equipped_character_ref',
+  'paired_subject_ref',
+  'wardrobe_ref',
+  'sequence_board_ref',
+  'shot_panel_ref',
+])
+
 export function getPlacementPosition(
   graph: GraphDefinition,
   selectedNode: NodeDefinition | null,
@@ -77,6 +90,13 @@ export function isTemplateAvailableForGraph(
   currentNode?: NodeDefinition | null,
 ) {
   if (!template.compatibleGraphTypes.includes(graph.graphType)) return false
+  if (
+    graph.graphType === 'cinematic_flow'
+    && hiddenCinematicTemplateKeys.has(template.key)
+    && currentNode?.templateKey !== template.key
+  ) {
+    return false
+  }
   if (template.baseNodeType === 'start') {
     return graph.nodes.every((node) => node.type !== 'start' || node.key === currentNode?.key)
   }
