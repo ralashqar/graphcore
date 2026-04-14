@@ -68,7 +68,7 @@ export const cinematicShotPlanSchema = z.object({
   cameraAngle: z.string().default(''),
   cameraMovement: z.string().default(''),
   lensPreference: z.string().default(''),
-  durationSeconds: z.number().int().positive().max(20).nullable().default(null),
+  durationSeconds: z.number().int().positive().max(15).nullable().default(null),
   visualPrompt: z.string().default(''),
   compositionGuide: z.string().default(''),
   beats: z.array(z.object({
@@ -87,7 +87,7 @@ export const cinematicGraphSettingsSchema = z.object({
   stillAspectRatio: z.enum(['1:1', '4:3', '3:4', '16:9', '9:16', '21:9']).optional(),
   stillResolution: z.enum(['1K', '2K']).optional(),
   videoResolution: z.enum(['480p', '720p', '1080p']).optional(),
-  defaultClipSeconds: z.number().int().positive().max(20).optional(),
+  defaultClipSeconds: z.number().int().positive().min(4).max(15).optional(),
   defaultFps: z.number().int().positive().max(60).optional(),
   specializationMode: z.enum(['story', 'ugc']).optional(),
 }).default({})

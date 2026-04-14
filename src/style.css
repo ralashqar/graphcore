@@ -1050,7 +1050,8 @@ code {
 .flow-node-cinematic-entity-ref,
 .flow-node-cinematic-composite-ref,
 .flow-node-cinematic-storyboard-ref,
-.flow-node-cinematic-shot {
+.flow-node-cinematic-shot,
+.flow-node-cinematic-take {
   border-color: rgba(94, 234, 212, 0.14);
 }
 
@@ -1080,6 +1081,16 @@ code {
   border-color: rgba(94, 234, 212, 0.18);
 }
 
+.flow-node-cinematic-take {
+  min-width: 250px;
+  max-width: 310px;
+  gap: 8px;
+  background:
+    linear-gradient(180deg, rgba(245, 158, 11, 0.08), rgba(255, 255, 255, 0.02) 24%, rgba(18, 20, 28, 0.95)),
+    rgba(18, 20, 28, 0.95);
+  border-color: rgba(245, 158, 11, 0.24);
+}
+
 .flow-node-cinematic-entity-ref .flow-node-thumb,
 .flow-node-cinematic-composite-ref .flow-node-thumb,
 .flow-node-cinematic-entity-ref .flow-node-icon-shell,
@@ -1099,6 +1110,10 @@ code {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+.flow-node-chip-row-secondary {
+  margin-top: 2px;
 }
 
 .flow-node-chip {

@@ -17,12 +17,13 @@ export const cinematicScriptBindingKindSchema = z.enum(['character', 'environmen
 export const seedanceEndpointSchema = z.enum(['reference-to-video', 'image-to-video'])
 export const seedanceModePreferenceSchema = z.enum(['auto', 'reference-to-video', 'image-to-video'])
 export const seedanceInputModalitySchema = z.enum(['image', 'video', 'audio'])
+export const cinematicDurationSourceSchema = z.enum(['manual', 'inferred'])
 
 export const cinematicSettingsSchema = z.object({
   stillAspectRatio: cinematicAspectRatioSchema.default('16:9'),
   stillResolution: cinematicStillResolutionSchema.default('1K'),
   videoResolution: cinematicVideoResolutionSchema.default('720p'),
-  defaultClipSeconds: z.number().int().positive().max(20).default(5),
+  defaultClipSeconds: z.number().int().min(4).max(15).default(5),
   defaultFps: z.number().int().positive().max(60).default(24),
   specializationMode: cinematicSpecializationModeSchema.default('story'),
 })
@@ -161,7 +162,8 @@ export const cinematicScriptShotSchema = z.object({
   requiredSourceRefIds: z.array(z.string()).default([]),
   compositeRefIds: z.array(z.string()).default([]),
   storyboardRefIds: z.array(z.string()).default([]),
-  durationSeconds: z.number().int().positive().max(20).nullable().default(null),
+  durationSeconds: z.number().int().positive().max(15).nullable().default(null),
+  forceTakeBreak: z.boolean().default(false),
   beats: z.array(cinematicBeatSchema).default([]),
   dialogue: z.array(dialogueBeatSchema).default([]),
   actions: z.array(actionBeatSchema).default([]),
@@ -228,7 +230,13 @@ export const cinematicShotSpecSchema = z.object({
   requiredSourceRefIds: z.array(z.string()).default([]),
   compositeRefIds: z.array(z.string()).default([]),
   storyboardRefIds: z.array(z.string()).default([]),
-  durationSeconds: z.number().int().positive().max(20).nullable().default(null),
+  durationSeconds: z.number().int().positive().max(15).nullable().default(null),
+  inferredDurationSeconds: z.number().int().positive().max(15).nullable().default(null),
+  durationSource: cinematicDurationSourceSchema.default('inferred'),
+  timingSummary: z.string().default(''),
+  takeId: z.string().nullable().default(null),
+  takeIndex: z.number().int().nullable().default(null),
+  forceTakeBreak: z.boolean().default(false),
   seedanceModePreference: seedanceModePreferenceSchema.default('auto'),
   beats: z.array(cinematicBeatSchema).default([]),
   dialogue: z.array(dialogueBeatSchema).default([]),
@@ -246,12 +254,33 @@ export const cinematicShotSpecSchema = z.object({
 })
 export const cinematicShotNodeConfigSchema = cinematicShotSpecSchema
 
+export const cinematicTakeSpecSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  shotIds: z.array(z.string()).default([]),
+  durationSeconds: z.number().int().min(4).max(15),
+  startSeconds: z.number().nonnegative().default(0),
+  endSeconds: z.number().nonnegative().default(0),
+  seedanceEndpoint: seedanceEndpointSchema.default('reference-to-video'),
+  requiredSourceRefIds: z.array(z.string()).default([]),
+  outputVideoAssetKey: z.string().nullable().default(null),
+  outputStillAssetKey: z.string().nullable().default(null),
+  lastRunId: z.string().nullable().default(null),
+  lastVideoJobId: z.string().nullable().default(null),
+  provider: z.string().nullable().default(null),
+  providerModel: z.string().nullable().default(null),
+  providerRequestId: z.string().nullable().default(null),
+  executionPlan: seedanceExecutionPlanSchema.nullable().default(null),
+})
+export const cinematicTakeNodeConfigSchema = cinematicTakeSpecSchema
+
 export const cinematicSequenceSchema = z.object({
   references: z.array(cinematicReferenceSchema).default([]),
   compositeRefs: z.array(cinematicCompositeReferenceSchema).default([]),
   relationships: z.array(cinematicRelationshipSchema).default([]),
   storyboard: storyboardSpecSchema.nullable().default(null),
   shots: z.array(cinematicShotSpecSchema).default([]),
+  takes: z.array(cinematicTakeSpecSchema).default([]),
 })
 
 export const assetRefNodeConfigSchema = z.object({
@@ -285,6 +314,8 @@ export const storyboardRefNodeConfigSchema = z.object({
   priority: cinematicReferencePrioritySchema.default(90),
 })
 
+export const cinematicTakeNodeMetadataSchema = cinematicTakeNodeConfigSchema
+
 export const cinematicGraphMetadataSchema = z.object({
   cinematics: cinematicSettingsSchema.partial().default({}),
   cinematicScript: cinematicScriptDocSchema.optional(),
@@ -295,7 +326,7 @@ export const cinematicGraphMetadataSchema = z.object({
 export const cinematicRunStatusSchema = z.enum(['queued', 'running', 'completed', 'completed_with_errors', 'failed', 'cancelled'])
 export const cinematicRunModeSchema = z.enum(['graph_run', 'preview_still', 'preview_video'])
 export const cinematicRunJobStatusSchema = z.enum(['queued', 'running', 'succeeded', 'failed', 'cancelled', 'skipped'])
-export const cinematicRunJobKindSchema = z.enum(['shot_still', 'shot_video'])
+export const cinematicRunJobKindSchema = z.enum(['shot_still', 'shot_video', 'take_video'])
 
 export const cinematicRunJobSchema = z.object({
   id: z.string(),
@@ -378,11 +409,13 @@ export type CinematicScriptShot = z.infer<typeof cinematicScriptShotSchema>
 export type CinematicScriptDoc = z.infer<typeof cinematicScriptDocSchema>
 export type SeedanceExecutionPlan = z.infer<typeof seedanceExecutionPlanSchema>
 export type CinematicShotSpec = z.infer<typeof cinematicShotSpecSchema>
+export type CinematicTakeSpec = z.infer<typeof cinematicTakeSpecSchema>
 export type CinematicSequence = z.infer<typeof cinematicSequenceSchema>
 export type AssetRefNodeConfig = z.infer<typeof assetRefNodeConfigSchema>
 export type CompositeRefNodeConfig = z.infer<typeof compositeRefNodeConfigSchema>
 export type StoryboardRefNodeConfig = z.infer<typeof storyboardRefNodeConfigSchema>
 export type CinematicShotNodeConfig = z.infer<typeof cinematicShotNodeConfigSchema>
+export type CinematicTakeNodeConfig = z.infer<typeof cinematicTakeNodeConfigSchema>
 export type CinematicRun = z.infer<typeof cinematicRunSchema>
 export type CinematicRunJob = z.infer<typeof cinematicRunJobSchema>
 export type CinematicRunStartRequest = z.infer<typeof cinematicRunStartRequestSchema>
@@ -395,6 +428,11 @@ const defaultStoryboardRefNodeConfig = storyboardRefNodeConfigSchema.parse({})
 const defaultShotNodeConfig = cinematicShotSpecSchema.parse({
   id: 'shot',
   title: 'Shot',
+})
+const defaultTakeNodeConfig = cinematicTakeSpecSchema.parse({
+  id: 'take',
+  title: 'Take',
+  durationSeconds: 4,
 })
 
 function inferSequenceReferenceKindFromBinding(binding: CinematicScriptEntityBinding): CinematicReference['refKind'] {
@@ -422,7 +460,219 @@ function buildRequiredSourceRefIdsForScriptShot(shot: CinematicScriptShot) {
   return Array.from(new Set(sourceRefIds.filter((entry) => entry.trim().length > 0)))
 }
 
+function clampShotDuration(value: number) {
+  return Math.min(15, Math.max(1, Math.round(value)))
+}
+
+function estimateDialogueDurationSeconds(line: DialogueBeat) {
+  const words = line.line.trim().split(/\s+/).filter(Boolean).length
+  const spokenSeconds = words > 0 ? words / 2.4 : 0
+  const punctuationPauseSeconds = (line.line.match(/[,:;!?]/g)?.length ?? 0) * 0.22
+  const deliveryWeight =
+    /(slow|careful|measured|cold|warning|threat|mock|taunt|whisper|quiet|deliberate)/i.test(line.delivery)
+      ? 0.65
+      : line.delivery.trim().length > 0
+        ? 0.35
+        : 0
+  const base = spokenSeconds + punctuationPauseSeconds + deliveryWeight + 0.6
+  return Math.max(1.2, Math.min(8, Math.ceil(base * 2) / 2))
+}
+
+function estimateActionDurationSeconds(action: ActionBeat) {
+  const notesWeight = action.stagingNotes.trim().length > 48 ? 0.5 : 0
+  const verbWeight = /slash|strike|slap|hit|throw|draw|unsheathe|embrace|kneel|turn|step|rise|sit|circle|circling|walk|approach|recoil|stagger/i.test(action.verb) ? 0.75 : 0.25
+  return Math.max(1, Math.min(5, Math.ceil((1.1 + notesWeight + verbWeight) * 2) / 2))
+}
+
+export function estimateShotContentDurationSeconds(shot: Pick<CinematicScriptShot, 'shotType' | 'beat' | 'dialogue' | 'actions' | 'audio'>) {
+  const dialogueSeconds = shot.dialogue.reduce((sum, line) => sum + estimateDialogueDurationSeconds(line), 0)
+  const actionSeconds = shot.actions.reduce((sum, action) => sum + estimateActionDurationSeconds(action), 0)
+  const audioWeight = shot.audio.some((cue) => cue.kind === 'ambience' || cue.kind === 'music') ? 1 : 0
+  const baseByType =
+    shot.shotType === 'establishing'
+      ? 3
+      : shot.shotType === 'insert'
+        ? 2
+        : shot.shotType === 'action'
+          ? 3
+          : shot.shotType === 'transition'
+            ? 2
+            : shot.shotType === 'dialogue'
+              ? 4
+              : 3
+  const cueBonus =
+    /(linger|pause|hold|slowly)/i.test(shot.beat)
+      ? 2
+      : /(brief|quick|sudden|fast)/i.test(shot.beat)
+        ? 0
+        : 1
+
+  return {
+    dialogueSeconds,
+    actionSeconds,
+    audioWeight,
+    inferredDurationSeconds: clampShotDuration(Math.max(
+      baseByType + cueBonus + audioWeight,
+      dialogueSeconds + actionSeconds,
+      shot.dialogue.length > 0 ? 3 : 2,
+    )),
+  }
+}
+
+function inferShotDuration(shot: CinematicScriptShot) {
+  if (typeof shot.durationSeconds === 'number' && Number.isFinite(shot.durationSeconds)) {
+    return {
+      durationSeconds: clampShotDuration(shot.durationSeconds),
+      durationSource: 'manual' as const,
+      timingSummary: 'Manual shot duration override.',
+    }
+  }
+
+  const estimated = estimateShotContentDurationSeconds(shot)
+  const inferred = estimated.inferredDurationSeconds
+
+  return {
+    durationSeconds: inferred,
+    durationSource: 'inferred' as const,
+    timingSummary: [
+      shot.dialogue.length > 0 ? `${shot.dialogue.length} dialogue beat${shot.dialogue.length === 1 ? '' : 's'} ~${Math.round(estimated.dialogueSeconds * 10) / 10}s` : null,
+      shot.actions.length > 0 ? `${shot.actions.length} action beat${shot.actions.length === 1 ? '' : 's'} ~${Math.round(estimated.actionSeconds * 10) / 10}s` : null,
+      shot.shotType !== 'custom' ? `${shot.shotType} shot` : null,
+    ].filter((entry): entry is string => Boolean(entry)).join(' · ') || 'Default cinematic pacing.',
+  }
+}
+
+function fillBeatTimingsForShot(shot: CinematicScriptShot, durationSeconds: number) {
+  let cursor = 0
+  const nextDialogue = shot.dialogue.map((line) => {
+    const lineDuration = typeof line.startSeconds === 'number' && typeof line.endSeconds === 'number'
+      ? Math.max(0, line.endSeconds - line.startSeconds)
+      : estimateDialogueDurationSeconds(line)
+    const startSeconds = line.startSeconds ?? Math.min(cursor, Math.max(0, durationSeconds - 1))
+    const endSeconds = line.endSeconds ?? Math.min(durationSeconds, startSeconds + lineDuration)
+    cursor = Math.max(cursor, endSeconds)
+    return {
+      ...line,
+      startSeconds,
+      endSeconds,
+    }
+  })
+
+  const nextActions = shot.actions.map((action) => {
+    const actionDuration = typeof action.startSeconds === 'number' && typeof action.endSeconds === 'number'
+      ? Math.max(0, action.endSeconds - action.startSeconds)
+      : estimateActionDurationSeconds(action)
+    const startSeconds = action.startSeconds ?? Math.min(cursor, Math.max(0, durationSeconds - 1))
+    const endSeconds = action.endSeconds ?? Math.min(durationSeconds, startSeconds + actionDuration)
+    cursor = Math.max(cursor, endSeconds)
+    return {
+      ...action,
+      startSeconds,
+      endSeconds,
+    }
+  })
+
+  const nextAudio = shot.audio.map((cue) => ({
+    ...cue,
+    startSeconds: cue.startSeconds ?? 0,
+    endSeconds: cue.endSeconds ?? durationSeconds,
+  }))
+
+  const nextBeats = shot.beats.map((beat) => ({
+    ...beat,
+    startSeconds: beat.startSeconds ?? 0,
+    endSeconds: beat.endSeconds ?? durationSeconds,
+  }))
+
+  return {
+    ...shot,
+    dialogue: nextDialogue,
+    actions: nextActions,
+    audio: nextAudio,
+    beats: nextBeats,
+  }
+}
+
+function buildTakeSourceRefIds(shots: Array<CinematicScriptShot>) {
+  return Array.from(new Set(
+    shots.flatMap((shot) => buildRequiredSourceRefIdsForScriptShot(shot)),
+  ))
+}
+
+function buildCompiledTakes(shots: Array<CinematicScriptShot & {
+  _compiledDurationSeconds: number
+  _seedanceModePreference: z.infer<typeof seedanceModePreferenceSchema>
+}>) {
+  const takes: Array<z.infer<typeof cinematicTakeSpecSchema>> = []
+  let currentShots: typeof shots = []
+  let currentDuration = 0
+  let currentStart = 0
+
+  function flushTake() {
+    if (currentShots.length === 0) return
+    const durationSeconds = Math.min(15, Math.max(4, currentDuration))
+    const shotIds = currentShots.map((shot) => shot.id)
+    const requiredSourceRefIds = buildTakeSourceRefIds(currentShots)
+    const endpoint =
+      currentShots.length === 1 && currentShots[0]._seedanceModePreference === 'image-to-video' && requiredSourceRefIds.length <= 1
+        ? 'image-to-video'
+        : 'reference-to-video'
+    takes.push(cinematicTakeSpecSchema.parse({
+      id: `take_${takes.length + 1}`,
+      title: `Take ${takes.length + 1}`,
+      shotIds,
+      durationSeconds,
+      startSeconds: currentStart,
+      endSeconds: currentStart + durationSeconds,
+      seedanceEndpoint: endpoint,
+      requiredSourceRefIds,
+    }))
+    currentStart += durationSeconds
+    currentShots = []
+    currentDuration = 0
+  }
+
+  for (const shot of shots) {
+    const locationChanged = currentShots.length > 0 && currentShots[currentShots.length - 1].locationRefId !== shot.locationRefId
+    const sceneChanged = currentShots.length > 0 && currentShots[currentShots.length - 1].sceneId !== shot.sceneId
+    const continuityBreak = currentShots.length > 0 && (
+      locationChanged
+      || sceneChanged
+      || shot.forceTakeBreak
+      || currentDuration + shot._compiledDurationSeconds > 15
+    )
+    if (continuityBreak) flushTake()
+    currentShots.push(shot)
+    currentDuration += shot._compiledDurationSeconds
+  }
+  flushTake()
+
+  return takes
+}
+
 export function buildCinematicSequenceFromScriptDoc(scriptDoc: CinematicScriptDoc): CinematicSequence {
+  const compiledShots = scriptDoc.shots.map((shot) => {
+    const inferredTiming = inferShotDuration(shot)
+    const timedShot = fillBeatTimingsForShot(shot, inferredTiming.durationSeconds)
+    const sourceRefIds = buildRequiredSourceRefIdsForScriptShot(timedShot)
+    return {
+      ...timedShot,
+      _compiledDurationSeconds: inferredTiming.durationSeconds,
+      _timingSummary: inferredTiming.timingSummary,
+      _durationSource: inferredTiming.durationSource,
+      _seedanceModePreference:
+        shot.storyboardRefIds.length > 0 || shot.compositeRefIds.length > 0 || sourceRefIds.length > 1
+          ? 'reference-to-video' as const
+          : 'auto' as const,
+      _requiredSourceRefIds: sourceRefIds,
+    }
+  })
+  const takes = buildCompiledTakes(compiledShots)
+  const takeByShotId = new Map<string, { id: string; index: number }>()
+  takes.forEach((take, index) => {
+    take.shotIds.forEach((shotId) => takeByShotId.set(shotId, { id: take.id, index }))
+  })
+
   return cinematicSequenceSchema.parse({
     references: scriptDoc.entityBindings.map((binding) => ({
       id: binding.id,
@@ -440,7 +690,7 @@ export function buildCinematicSequenceFromScriptDoc(scriptDoc: CinematicScriptDo
     compositeRefs: scriptDoc.compositeRefs,
     relationships: scriptDoc.relationships,
     storyboard: scriptDoc.storyboard,
-    shots: scriptDoc.shots.map((shot) => ({
+    shots: compiledShots.map((shot) => ({
       id: shot.id,
       title: shot.title,
       subtitle: shot.subtitle,
@@ -455,19 +705,23 @@ export function buildCinematicSequenceFromScriptDoc(scriptDoc: CinematicScriptDo
       participantRefIds: shot.participantRefIds,
       locationRefId: shot.locationRefId,
       propRefIds: shot.propRefIds,
-      requiredSourceRefIds: buildRequiredSourceRefIdsForScriptShot(shot),
+      requiredSourceRefIds: shot._requiredSourceRefIds,
       compositeRefIds: shot.compositeRefIds,
       storyboardRefIds: shot.storyboardRefIds,
-      durationSeconds: shot.durationSeconds,
-      seedanceModePreference:
-        shot.storyboardRefIds.length > 0 || shot.compositeRefIds.length > 0 || buildRequiredSourceRefIdsForScriptShot(shot).length > 1
-          ? 'reference-to-video'
-          : 'auto',
+      durationSeconds: shot._compiledDurationSeconds,
+      inferredDurationSeconds: shot._durationSource === 'inferred' ? shot._compiledDurationSeconds : null,
+      durationSource: shot._durationSource,
+      timingSummary: shot._timingSummary,
+      takeId: takeByShotId.get(shot.id)?.id ?? null,
+      takeIndex: takeByShotId.get(shot.id)?.index ?? null,
+      forceTakeBreak: shot.forceTakeBreak,
+      seedanceModePreference: shot._seedanceModePreference,
       beats: shot.beats,
       dialogue: shot.dialogue,
       actions: shot.actions,
       audio: shot.audio,
     })),
+    takes,
   })
 }
 
@@ -532,6 +786,7 @@ export function deriveCinematicScriptFromSequence(sequence: CinematicSequence): 
       compositeRefIds: shot.compositeRefIds,
       storyboardRefIds: shot.storyboardRefIds,
       durationSeconds: shot.durationSeconds,
+      forceTakeBreak: shot.forceTakeBreak,
       beats: shot.beats,
       dialogue: shot.dialogue,
       actions: shot.actions,
@@ -601,6 +856,20 @@ export function getStoryboardRefNodeConfig(node: { metadata?: unknown } | null |
   return parsed.success ? parsed.data : defaultStoryboardRefNodeConfig
 }
 
+export function getCinematicTakeNodeConfig(node: { metadata?: unknown; key?: unknown; title?: unknown } | null | undefined): CinematicTakeNodeConfig {
+  const metadata = node?.metadata && typeof node.metadata === 'object' ? node.metadata as Record<string, unknown> : {}
+  const parsed = cinematicTakeNodeConfigSchema.safeParse({
+    id: typeof metadata.takeId === 'string'
+      ? metadata.takeId
+      : typeof node?.key === 'string'
+        ? node.key
+        : defaultTakeNodeConfig.id,
+    title: typeof node?.title === 'string' ? node.title : defaultTakeNodeConfig.title,
+    ...metadata,
+  })
+  return parsed.success ? parsed.data : defaultTakeNodeConfig
+}
+
 export function getCinematicShotNodeConfig(node: { metadata?: unknown; key?: unknown; title?: unknown } | null | undefined): CinematicShotNodeConfig {
   const metadata = node?.metadata && typeof node.metadata === 'object' ? node.metadata as Record<string, unknown> : {}
   const parsed = cinematicShotSpecSchema.safeParse({
@@ -644,6 +913,17 @@ export function updateNodeMetadataWithStoryboardRef(
   return {
     ...(metadata ?? {}),
     ...getStoryboardRefNodeConfig({ metadata }),
+    ...changes,
+  }
+}
+
+export function updateNodeMetadataWithTake(
+  metadata: Record<string, unknown> | undefined,
+  changes: Partial<CinematicTakeNodeConfig>,
+) {
+  return {
+    ...(metadata ?? {}),
+    ...getCinematicTakeNodeConfig({ metadata }),
     ...changes,
   }
 }

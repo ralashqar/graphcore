@@ -4,10 +4,13 @@ import {
   cinematicRunJobSchema,
   cinematicRunSchema,
   getAssetRefNodeConfig,
+  getCinematicSequence,
   getCompositeRefNodeConfig,
+  getCinematicTakeNodeConfig,
   getCinematicSettings,
   getCinematicShotNodeConfig,
   getStoryboardRefNodeConfig,
+  updateNodeMetadataWithTake,
   updateNodeMetadataWithShot,
   type SeedanceExecutionPlan,
   type CinematicRun,
@@ -221,14 +224,69 @@ function resolveNodeAssetSnapshot(input: {
   return null
 }
 
-export function resolveShotSources(snapshot: { definitions?: unknown[]; assets?: unknown[] }, graph: SnapshotGraph, shotNodeKey: string) {
-  const definitions = Array.isArray(snapshot.definitions) ? snapshot.definitions.map((entry) => asRecord(entry) as SnapshotDefinition) : []
-  const assets = Array.isArray(snapshot.assets) ? snapshot.assets.map((entry) => asRecord(entry) as SnapshotAsset) : []
+function resolveRefIdForNode(node: SnapshotNode) {
+  if (node.type === 'asset_ref') return getAssetRefNodeConfig(node).entityRefId
+  if (node.type === 'composite_ref') return getCompositeRefNodeConfig(node).compositeRefId
+  if (node.type === 'storyboard_ref') {
+    const config = getStoryboardRefNodeConfig(node)
+    return config.panelId ?? config.storyboardId
+  }
+  return null
+}
 
-  return graph.edges
+function buildResolvedSourceEntries(input: {
+  snapshot: { definitions?: unknown[]; assets?: unknown[] }
+  graph: SnapshotGraph
+  refIds: string[]
+}) {
+  const definitions = Array.isArray(input.snapshot.definitions) ? input.snapshot.definitions.map((entry) => asRecord(entry) as SnapshotDefinition) : []
+  const assets = Array.isArray(input.snapshot.assets) ? input.snapshot.assets.map((entry) => asRecord(entry) as SnapshotAsset) : []
+  const sourceNodeByRefId = new Map<string, SnapshotNode>()
+  for (const rawNode of input.graph.nodes) {
+    const node = findNode(input.graph, String(rawNode.key ?? ''))
+    if (!node || !['asset_ref', 'composite_ref', 'storyboard_ref'].includes(node.type)) continue
+    const refId = resolveRefIdForNode(node)
+    if (!refId) continue
+    sourceNodeByRefId.set(refId, node)
+  }
+
+  return input.refIds
+    .map((refId) => {
+      const sourceNode = sourceNodeByRefId.get(refId) ?? null
+      if (!sourceNode) return null
+      const resolved = resolveNodeAssetSnapshot({ sourceNode, definitions, assets })
+      if (!resolved) return null
+      const assetUrl = resolveAssetUrl(resolved.asset)
+      const modality =
+        resolved.asset?.kind === 'video'
+          ? 'video'
+          : resolved.asset?.kind === 'audio'
+            ? 'audio'
+            : 'image'
+      return {
+        node: sourceNode,
+        definition: resolved.definition,
+        asset: resolved.asset,
+        imageUrl: modality === 'image' ? assetUrl : null,
+        assetUrl,
+        modality,
+        config: resolved.config,
+        refId: resolved.refId,
+        role: resolved.role,
+        priority: resolved.priority,
+        label: resolved.label,
+      }
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+}
+
+export function resolveShotSources(snapshot: { definitions?: unknown[]; assets?: unknown[] }, graph: SnapshotGraph, shotNodeKey: string) {
+  const edgeSources = graph.edges
     .filter((edge) => asString(asRecord(edge.target).nodeKey) === shotNodeKey)
     .filter((edge) => isAssetDependencyEdge(graph, edge))
     .map((edge) => {
+      const definitions = Array.isArray(snapshot.definitions) ? snapshot.definitions.map((entry) => asRecord(entry) as SnapshotDefinition) : []
+      const assets = Array.isArray(snapshot.assets) ? snapshot.assets.map((entry) => asRecord(entry) as SnapshotAsset) : []
       const sourceNode = findNode(graph, String(asRecord(edge.source).nodeKey ?? ''))
       if (!sourceNode || !['asset_ref', 'composite_ref', 'storyboard_ref'].includes(sourceNode.type)) return null
       const resolved = resolveNodeAssetSnapshot({
@@ -259,6 +317,34 @@ export function resolveShotSources(snapshot: { definitions?: unknown[]; assets?:
       }
     })
     .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+  if (edgeSources.length > 0) return edgeSources
+
+  const shotNode = findNode(graph, shotNodeKey)
+  if (!shotNode) return []
+  const shot = getCinematicShotNodeConfig(shotNode)
+  const refIds = Array.from(new Set(
+    shot.requiredSourceRefIds.length > 0
+      ? shot.requiredSourceRefIds
+      : [
+          ...shot.storyboardRefIds,
+          ...shot.compositeRefIds,
+          ...shot.participantRefIds,
+          shot.locationRefId,
+          ...shot.propRefIds,
+        ].filter((entry): entry is string => typeof entry === 'string' && entry.length > 0),
+  ))
+  return buildResolvedSourceEntries({ snapshot, graph, refIds })
+}
+
+export function resolveTakeSources(snapshot: { definitions?: unknown[]; assets?: unknown[] }, graph: SnapshotGraph, takeNodeKey: string) {
+  const takeNode = findNode(graph, takeNodeKey)
+  if (!takeNode) return []
+  const take = getCinematicTakeNodeConfig(takeNode)
+  return buildResolvedSourceEntries({
+    snapshot,
+    graph,
+    refIds: take.requiredSourceRefIds,
+  })
 }
 
 export function buildSeedanceExecutionPlan(input: {
@@ -345,6 +431,86 @@ export function buildSeedanceExecutionPlan(input: {
     referenceInputs: keptReferenceInputs,
     droppedRefIds,
   }
+}
+
+export function buildTakeSeedanceExecutionPlan(input: {
+  snapshot: { project: { name: string; summary: string }; gameSpec?: unknown | null }
+  graph: SnapshotGraph
+  takeNode: SnapshotNode
+  sourceInputs: ReturnType<typeof resolveTakeSources>
+}) {
+  const settings = getCinematicSettings(input.snapshot.gameSpec ?? null, input.graph.metadata)
+  const take = getCinematicTakeNodeConfig(input.takeNode)
+  const sequence = getCinematicSequence(input.graph.metadata)
+  const shots = take.shotIds
+    .map((shotId) => sequence.shots.find((entry) => entry.id === shotId) ?? null)
+    .filter((entry): entry is typeof sequence.shots[number] => Boolean(entry))
+  const sortedInputs = [...input.sourceInputs]
+    .filter((entry) => Boolean(entry.assetUrl))
+    .sort((left, right) => right.priority - left.priority)
+  const endpoint =
+    take.seedanceEndpoint === 'image-to-video'
+      ? 'image-to-video'
+      : sortedInputs.length <= 1 && sortedInputs.every((entry) => entry.modality === 'image')
+        ? 'image-to-video'
+        : 'reference-to-video'
+  const referenceInputs = sortedInputs.map((entry, index) => ({
+    id: `${entry.refId ?? entry.node.key}_${index}`,
+    sourceRefId: entry.refId ?? null,
+    nodeKey: entry.node.key,
+    label: entry.label,
+    modality: entry.modality,
+    url: entry.assetUrl ?? '',
+    priority: entry.priority,
+    truncated: index >= 12,
+  }))
+  const keptReferenceInputs = referenceInputs.filter((entry, index) => !entry.truncated && index < 12)
+  const droppedRefIds = referenceInputs.filter((entry) => entry.truncated).map((entry) => entry.sourceRefId ?? entry.id)
+  const prompt = [
+    `Create one continuous ${take.durationSeconds}-second cinematic take titled "${input.takeNode.title}".`,
+    input.snapshot.project.summary.trim() ? `Project context: ${input.snapshot.project.summary.trim()}.` : null,
+    ...shots.map((shot, index) => {
+      const segments = [
+        `Shot ${index + 1}: ${shot.title}.`,
+        shot.beat.trim() ? `Beat: ${shot.beat.trim()}.` : null,
+        shot.framing.trim() ? `Framing: ${shot.framing.trim()}.` : null,
+        shot.cameraMovement.trim() ? `Camera movement: ${shot.cameraMovement.trim()}.` : null,
+        ...shot.dialogue.map((entry) => `Dialogue: ${entry.line}${entry.delivery ? ` (${entry.delivery})` : ''}.`),
+        ...shot.actions.map((entry) => `Action: ${entry.verb}${entry.stagingNotes ? ` (${entry.stagingNotes})` : ''}.`),
+        ...shot.audio.map((entry) => `${entry.kind}: ${entry.cue}.`),
+      ].filter((entry): entry is string => Boolean(entry))
+      return segments.join(' ')
+    }),
+    ...keptReferenceInputs.map((entry, index) => {
+      const tag = entry.modality === 'image' ? `@Image${index + 1}` : entry.modality === 'video' ? `@Video${index + 1}` : `@Audio${index + 1}`
+      return `${tag} is ${entry.label}.`
+    }),
+    'Preserve continuity across the full take, and transition naturally between the listed shots without hard cuts unless the action implies one.',
+  ].filter((entry): entry is string => Boolean(entry)).join(' ')
+  const imageInputs = keptReferenceInputs.filter((entry) => entry.modality === 'image')
+  const videoInputs = keptReferenceInputs.filter((entry) => entry.modality === 'video')
+  const audioInputs = keptReferenceInputs.filter((entry) => entry.modality === 'audio')
+
+  return {
+    endpoint,
+    modeReason:
+      endpoint === 'image-to-video'
+        ? 'Single take can be driven from a single primary image reference.'
+        : 'Multi-shot continuity or multiple refs require reference-to-video.',
+    prompt,
+    resolution: settings.videoResolution === '480p' ? '480p' : '720p',
+    duration: `${Math.min(15, Math.max(4, take.durationSeconds))}` as SeedanceExecutionPlan['duration'],
+    aspectRatio: settings.stillAspectRatio,
+    generateAudio: shots.some((shot) => shot.audio.length > 0 || shot.dialogue.length > 0),
+    seed: null,
+    imageUrl: endpoint === 'image-to-video' ? (imageInputs[0]?.url ?? null) : null,
+    endImageUrl: endpoint === 'image-to-video' && imageInputs.length > 1 ? imageInputs[1]?.url ?? null : null,
+    imageUrls: imageInputs.map((entry) => entry.url),
+    videoUrls: videoInputs.map((entry) => entry.url),
+    audioUrls: audioInputs.map((entry) => entry.url),
+    referenceInputs: keptReferenceInputs,
+    droppedRefIds,
+  } satisfies SeedanceExecutionPlan
 }
 
 export function buildStillPrompt(input: {
@@ -535,6 +701,53 @@ export async function persistShotBindingsIfPresent(
     .eq('key', shotNodeKey)
 }
 
+export async function persistTakeBindingsIfPresent(
+  client: ReturnType<typeof createClient>,
+  draftId: string,
+  graphKey: string,
+  takeNodeKey: string,
+  changes: {
+    bodyImageAssetKey?: string | null
+    metadata: Partial<ReturnType<typeof getCinematicTakeNodeConfig>>
+  },
+) {
+  const graphRow = await client.from('draft_graphs').select('id').eq('draft_id', draftId).eq('key', graphKey).maybeSingle()
+  if (graphRow.error || !graphRow.data) return
+
+  const nodeRow = await client
+    .from('draft_graph_nodes')
+    .select('body, metadata, display')
+    .eq('graph_id', graphRow.data.id)
+    .eq('key', takeNodeKey)
+    .maybeSingle()
+
+  if (nodeRow.error || !nodeRow.data) return
+
+  const currentBody = asRecord(nodeRow.data.body)
+  const currentMetadata = asRecord(nodeRow.data.metadata)
+  const currentDisplay = asRecord(nodeRow.data.display)
+
+  await client
+    .from('draft_graph_nodes')
+    .update({
+      body: changes.bodyImageAssetKey === undefined
+        ? currentBody
+        : {
+            ...currentBody,
+            imageAssetKey: changes.bodyImageAssetKey,
+          },
+      display: changes.bodyImageAssetKey === undefined
+        ? currentDisplay
+        : {
+            ...currentDisplay,
+            iconAssetKey: changes.bodyImageAssetKey,
+          },
+      metadata: updateNodeMetadataWithTake(currentMetadata, changes.metadata),
+    })
+    .eq('graph_id', graphRow.data.id)
+    .eq('key', takeNodeKey)
+}
+
 export function applyShotBindingToGraph(
   graph: SnapshotGraph,
   shotNodeKey: string,
@@ -563,6 +776,39 @@ export function applyShotBindingToGraph(
               iconAssetKey: changes.bodyImageAssetKey,
             },
         metadata: updateNodeMetadataWithShot(asRecord(node.metadata), changes.metadata),
+      }
+    }),
+  }
+}
+
+export function applyTakeBindingToGraph(
+  graph: SnapshotGraph,
+  takeNodeKey: string,
+  changes: {
+    bodyImageAssetKey?: string | null
+    metadata: Partial<ReturnType<typeof getCinematicTakeNodeConfig>>
+  },
+) {
+  return {
+    ...graph,
+    nodes: graph.nodes.map((node) => {
+      if (node.key !== takeNodeKey) return node
+      const currentBody = asRecord(node.body)
+      return {
+        ...node,
+        body: changes.bodyImageAssetKey === undefined
+          ? currentBody
+          : {
+              ...currentBody,
+              imageAssetKey: changes.bodyImageAssetKey,
+            },
+        display: changes.bodyImageAssetKey === undefined
+          ? asRecord(node.display)
+          : {
+              ...asRecord(node.display),
+              iconAssetKey: changes.bodyImageAssetKey,
+            },
+        metadata: updateNodeMetadataWithTake(asRecord(node.metadata), changes.metadata),
       }
     }),
   }

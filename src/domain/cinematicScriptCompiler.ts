@@ -1,5 +1,6 @@
 import {
   buildCinematicSequenceFromScriptDoc,
+  cinematicTakeSpecSchema,
   cinematicShotSpecSchema,
   cinematicScriptDocSchema,
   type CinematicScriptDoc,
@@ -17,57 +18,6 @@ type CompileCinematicGraphFromScriptInput = {
   graphSettings: Partial<CinematicSettings> | Record<string, unknown>
   scriptDoc: CinematicScriptDoc
   existingMetadata?: Record<string, unknown>
-}
-
-function uniqueRefIds(values: Array<string | null | undefined>) {
-  return Array.from(new Set(
-    values
-      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
-      .map((value) => value.trim()),
-  ))
-}
-
-function getAvailableCompositeRefIds(scriptDoc: CinematicScriptDoc) {
-  return new Set(
-    scriptDoc.compositeRefs
-      .filter((entry) => typeof entry.outputAssetKey === 'string' && entry.outputAssetKey.trim().length > 0)
-      .map((entry) => entry.id),
-  )
-}
-
-function getAvailableStoryboardRefIds(scriptDoc: CinematicScriptDoc) {
-  return new Set([
-    ...(scriptDoc.storyboard?.sequenceAssetKey ? ['storyboard_sequence'] : []),
-    ...((scriptDoc.storyboard?.panels ?? [])
-      .filter((panel) => typeof panel.assetKey === 'string' && panel.assetKey.trim().length > 0)
-      .map((panel) => panel.id)),
-  ])
-}
-
-function buildShotSourceRefIds(scriptDoc: CinematicScriptDoc, shot: CinematicScriptDoc['shots'][number]) {
-  const entityBindingIds = new Set(scriptDoc.entityBindings.map((binding) => binding.id))
-  const availableCompositeRefIds = getAvailableCompositeRefIds(scriptDoc)
-  const availableStoryboardRefIds = getAvailableStoryboardRefIds(scriptDoc)
-  const explicitSourceRefIds = uniqueRefIds(shot.requiredSourceRefIds).filter((refId) => (
-    entityBindingIds.has(refId)
-    || availableCompositeRefIds.has(refId)
-    || availableStoryboardRefIds.has(refId)
-  ))
-  if (explicitSourceRefIds.length > 0) return explicitSourceRefIds
-
-  const defaultStoryboardRefIds = scriptDoc.storyboard?.panels
-    .filter((panel) => panel.shotId === shot.id && panel.assetKey)
-    .map((panel) => panel.id)
-    ?? []
-
-  return uniqueRefIds([
-    ...shot.storyboardRefIds.filter((refId) => availableStoryboardRefIds.has(refId)),
-    ...defaultStoryboardRefIds,
-    ...shot.compositeRefIds.filter((refId) => availableCompositeRefIds.has(refId)),
-    ...shot.participantRefIds,
-    shot.locationRefId,
-    ...shot.propRefIds,
-  ])
 }
 
 function assetRoleForBinding(binding: CinematicScriptDoc['entityBindings'][number]) {
@@ -98,6 +48,7 @@ function normalizeGraphLayoutPositions(nodes: GraphDefinition['nodes']) {
 
 export function compileCinematicGraphFromScriptDoc(input: CompileCinematicGraphFromScriptInput): GraphDefinition {
   const scriptDoc = cinematicScriptDocSchema.parse(input.scriptDoc)
+  const cinematicSequence = buildCinematicSequenceFromScriptDoc(scriptDoc)
   const graph = createGraphScaffold({
     key: input.graphKey,
     name: input.graphName,
@@ -235,58 +186,32 @@ export function compileCinematicGraphFromScriptDoc(input: CompileCinematicGraphF
   }
 
   let previousFlowNodeKey = startNode.key
-  const orderedShots = [...scriptDoc.shots].sort((left, right) => left.orderIndex - right.orderIndex)
+  const orderedShots = [...cinematicSequence.shots]
+  const shotNodeKeyByShotId = new Map<string, string>()
 
-  for (const [index, scriptShot] of orderedShots.entries()) {
-    const sourceRefIds = buildShotSourceRefIds(scriptDoc, scriptShot)
-    const sequenceShot = cinematicShotSpecSchema.parse({
-      id: scriptShot.id,
-      title: scriptShot.title,
-      subtitle: scriptShot.subtitle,
-      beat: scriptShot.beat,
-      shotType: scriptShot.shotType,
-      framing: scriptShot.framing,
-      cameraAngle: scriptShot.cameraAngle,
-      cameraMovement: scriptShot.cameraMovement,
-      lensPreference: scriptShot.lensPreference,
-      visualPrompt: scriptShot.visualPrompt,
-      compositionGuide: scriptShot.compositionGuide,
-      participantRefIds: scriptShot.participantRefIds,
-      locationRefId: scriptShot.locationRefId,
-      propRefIds: scriptShot.propRefIds,
-      requiredSourceRefIds: sourceRefIds,
-      compositeRefIds: scriptShot.compositeRefIds,
-      storyboardRefIds: uniqueRefIds(scriptShot.storyboardRefIds),
-      durationSeconds: scriptShot.durationSeconds,
-      seedanceModePreference:
-        scriptShot.storyboardRefIds.length > 0 || scriptShot.compositeRefIds.length > 0 || sourceRefIds.length > 1
-          ? 'reference-to-video'
-          : 'auto',
-      beats: scriptShot.beats,
-      dialogue: scriptShot.dialogue,
-      actions: scriptShot.actions,
-      audio: scriptShot.audio,
-    })
+  for (const [index, sequenceShot] of orderedShots.entries()) {
+    const parsedShot = cinematicShotSpecSchema.parse(sequenceShot)
     const key = `${graph.key}.cinematic_shot_${index + 1}`
     const node = normalizeNode({
-      id: `node-cinematic-shot-${sequenceShot.id}-${index}`,
+      id: `node-cinematic-shot-${parsedShot.id}-${index}`,
       key,
       type: 'cinematic_shot',
-      title: sequenceShot.title,
-      templateKey: sequenceShot.shotType === 'custom' ? 'cinematic_shot' : `cinematic_${sequenceShot.shotType}`,
-      subtitle: sequenceShot.subtitle,
+      title: parsedShot.title,
+      templateKey: parsedShot.shotType === 'custom' ? 'cinematic_shot' : `cinematic_${parsedShot.shotType}`,
+      subtitle: parsedShot.subtitle,
       position: { x: 620 + index * 360, y: 220 },
-      body: { text: sequenceShot.beat, imageAssetKey: null, audioAssetKey: null, choices: [] },
+      body: { text: parsedShot.beat, imageAssetKey: null, audioAssetKey: null, choices: [] },
       condition: null,
       effects: [],
       ports: [],
       display: { iconAssetKey: null, compactPreview: false },
       metadata: {
-        ...sequenceShot,
-        sequenceShotId: sequenceShot.id,
+        ...parsedShot,
+        sequenceShotId: parsedShot.id,
       },
     })
     nodes.push(node)
+    shotNodeKeyByShotId.set(parsedShot.id, key)
     edges.push({
       id: `edge-flow-${index}`,
       key: `edge.${previousFlowNodeKey.split('.').pop() ?? 'flow'}_${key.split('.').pop() ?? 'shot'}`,
@@ -297,6 +222,58 @@ export function compileCinematicGraphFromScriptDoc(input: CompileCinematicGraphF
       metadata: {},
     })
     previousFlowNodeKey = key
+  }
+
+  let previousTakeNodeKey: string | null = null
+  for (const [index, take] of cinematicSequence.takes.entries()) {
+    const parsedTake = cinematicTakeSpecSchema.parse(take)
+    const key = `${graph.key}.cinematic_take_${index + 1}`
+    const node = normalizeNode({
+      id: `node-cinematic-take-${parsedTake.id}-${index}`,
+      key,
+      type: 'cinematic_take',
+      title: parsedTake.title,
+      templateKey: 'cinematic_take',
+      subtitle: `${parsedTake.durationSeconds}s`,
+      position: { x: 620 + index * 420, y: 520 },
+      body: { text: parsedTake.shotIds.join(', '), imageAssetKey: null, audioAssetKey: null, choices: [] },
+      condition: null,
+      effects: [],
+      ports: [],
+      display: { iconAssetKey: null, compactPreview: false },
+      metadata: {
+        ...parsedTake,
+        takeId: parsedTake.id,
+      },
+    })
+    nodes.push(node)
+
+    for (const [shotIndex, shotId] of parsedTake.shotIds.entries()) {
+      const shotNodeKey = shotNodeKeyByShotId.get(shotId)
+      if (!shotNodeKey) continue
+      edges.push({
+        id: `edge-shot-take-${index}-${shotIndex}`,
+        key: `edge.${shotNodeKey.split('.').pop() ?? 'shot'}_${key.split('.').pop() ?? 'take'}_${shotIndex + 1}`,
+        source: { nodeKey: shotNodeKey, portId: 'out' },
+        target: { nodeKey: key, portId: 'in' },
+        label: null,
+        condition: null,
+        metadata: {},
+      })
+    }
+
+    if (previousTakeNodeKey) {
+      edges.push({
+        id: `edge-take-flow-${index}`,
+        key: `edge.${previousTakeNodeKey.split('.').pop() ?? 'take'}_${key.split('.').pop() ?? 'take'}`,
+        source: { nodeKey: previousTakeNodeKey, portId: 'out' },
+        target: { nodeKey: key, portId: 'in' },
+        label: null,
+        condition: null,
+        metadata: {},
+      })
+    }
+    previousTakeNodeKey = key
   }
 
   edges.push({
@@ -310,14 +287,6 @@ export function compileCinematicGraphFromScriptDoc(input: CompileCinematicGraphF
   })
   nodes.push(endNode)
   const normalizedNodes = normalizeGraphLayoutPositions(nodes)
-
-  const cinematicSequence = buildCinematicSequenceFromScriptDoc({
-    ...scriptDoc,
-    shots: orderedShots.map((shot) => ({
-      ...shot,
-      requiredSourceRefIds: buildShotSourceRefIds(scriptDoc, shot),
-    })),
-  })
   const existingGeneration =
     resourceGenerationMetadataSchema.safeParse(input.existingMetadata?.generation ?? null).success
       ? resourceGenerationMetadataSchema.parse(input.existingMetadata?.generation)

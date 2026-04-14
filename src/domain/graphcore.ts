@@ -97,6 +97,7 @@ export const nodeTypeSchema = z.enum([
   'composite_ref',
   'storyboard_ref',
   'cinematic_shot',
+  'cinematic_take',
   'end',
 ])
 

@@ -10,7 +10,9 @@ import {
 import { extractFalImageUrls } from '../../../src/domain/visualAssetGeneration.ts'
 import { createAdminClient, requireUserClient } from '../_shared/auth.ts'
 import {
+  applyTakeBindingToGraph,
   applyShotBindingToGraph,
+  buildTakeSeedanceExecutionPlan,
   buildSeedanceExecutionPlan,
   buildStillPrompt,
   createStoredGeneratedAsset,
@@ -19,8 +21,10 @@ import {
   findNode,
   isTerminalCinematicJobStatus,
   isTerminalCinematicRunStatus,
+  persistTakeBindingsIfPresent,
   persistShotBindingsIfPresent,
   resolveAssetUrl,
+  resolveTakeSources,
   resolveShotSources,
   toCinematicRun,
   toCinematicRunJob,
@@ -158,19 +162,31 @@ Deno.serve(async (request) => {
       })
       if (!allDependenciesSucceeded) continue
 
-      const shotNode = findNode(updatedGraph, job.shotNodeKey)
-      if (!shotNode) {
+      const targetNode = findNode(updatedGraph, job.shotNodeKey)
+      if (!targetNode) {
         await client.from('cinematic_run_jobs').update({
           status: 'failed',
-          error_message: `Shot node "${job.shotNodeKey}" was not found.`,
+          error_message: `Cinematic node "${job.shotNodeKey}" was not found.`,
         }).eq('id', job.id)
         break
       }
+      const isTakeJob = job.kind === 'take_video'
+      const shotNode = !isTakeJob ? targetNode : null
+      const takeNode = isTakeJob ? targetNode : null
 
       const settings = getCinematicSettings(payload.snapshot.gameSpec ?? null, updatedGraph.metadata)
-      const sourceInputs = resolveShotSources(payload.snapshot, updatedGraph, job.shotNodeKey)
+      const sourceInputs = isTakeJob
+        ? resolveTakeSources(payload.snapshot, updatedGraph, job.shotNodeKey)
+        : resolveShotSources(payload.snapshot, updatedGraph, job.shotNodeKey)
 
       if (job.kind === 'shot_still') {
+        if (!shotNode) {
+          await client.from('cinematic_run_jobs').update({
+            status: 'failed',
+            error_message: 'Still jobs require a cinematic shot node.',
+          }).eq('id', job.id)
+          break
+        }
         const imageUrls = sourceInputs.map((entry) => entry.imageUrl).filter((entry): entry is string => Boolean(entry))
         const stillModel = imageUrls.length > 0
           ? Deno.env.get('CINEMATIC_STILL_FAL_MODEL') ?? 'fal-ai/nano-banana-2/edit'
@@ -185,7 +201,7 @@ Deno.serve(async (request) => {
                 snapshot: payload.snapshot,
                 graph: updatedGraph,
                 shotNode,
-                sourceInputs,
+                sourceInputs: sourceInputs as ReturnType<typeof resolveShotSources>,
               }),
               num_images: 1,
               aspect_ratio: settings.stillAspectRatio,
@@ -273,20 +289,34 @@ Deno.serve(async (request) => {
       const executionPlan =
         job.resultContext && typeof job.resultContext === 'object' && job.resultContext.executionPlan && typeof job.resultContext.executionPlan === 'object'
           ? job.resultContext.executionPlan
-          : buildSeedanceExecutionPlan({
-              snapshot: payload.snapshot,
-              graph: updatedGraph,
-              shotNode,
-              sourceInputs,
-            })
+          : isTakeJob
+            ? buildTakeSeedanceExecutionPlan({
+                snapshot: payload.snapshot,
+                graph: updatedGraph,
+                takeNode: takeNode!,
+                sourceInputs: sourceInputs as ReturnType<typeof resolveTakeSources>,
+              })
+            : buildSeedanceExecutionPlan({
+                snapshot: payload.snapshot,
+                graph: updatedGraph,
+                shotNode: shotNode!,
+                sourceInputs: sourceInputs as ReturnType<typeof resolveShotSources>,
+              })
       const fallbackStillUrl = resolveStillSourceAssetUrl({
         ...payload.snapshot,
         assets: [...payload.snapshot.assets, ...createdAssets],
       }, updatedGraph, job.shotNodeKey)
-      if (executionPlan.endpoint === 'image-to-video' && !executionPlan.imageUrl && !fallbackStillUrl) {
+      if (executionPlan.endpoint === 'image-to-video' && !executionPlan.imageUrl && !fallbackStillUrl && !isTakeJob) {
         await client.from('cinematic_run_jobs').update({
           status: 'failed',
           error_message: 'This shot needs at least one image reference or generated still before Seedance image-to-video can run.',
+        }).eq('id', job.id)
+        break
+      }
+      if (executionPlan.endpoint === 'image-to-video' && !executionPlan.imageUrl && isTakeJob) {
+        await client.from('cinematic_run_jobs').update({
+          status: 'failed',
+          error_message: 'This compiled take needs at least one primary image reference before image-to-video can run.',
         }).eq('id', job.id)
         break
       }
@@ -351,10 +381,10 @@ Deno.serve(async (request) => {
         sourceUrl: videoUrl,
         graphKey: updatedGraph.key,
         runId: payload.runId,
-        name: `${shotNode.title} Clip`,
+        name: `${targetNode.title} Clip`,
         kind: 'video',
         metadata: {
-          generatedBy: 'cinematic_video',
+          generatedBy: isTakeJob ? 'cinematic_take_video' : 'cinematic_video',
           provider: 'fal',
           model: videoModel,
           requestId: (falResponse.data as { requestId?: unknown } | null)?.requestId ?? null,
@@ -378,24 +408,45 @@ Deno.serve(async (request) => {
         },
       }).eq('id', job.id)
 
-      updatedGraph = applyShotBindingToGraph(updatedGraph, job.shotNodeKey, {
-        metadata: {
-          videoAssetKey: storedAsset.key,
-          provider: 'fal',
-          providerModel: videoModel,
-          providerRequestId: String((falResponse.data as { requestId?: unknown } | null)?.requestId ?? ''),
-          executionPlan,
-        },
-      })
-      await persistShotBindingsIfPresent(client, payload.snapshot.draft.id, updatedGraph.key, job.shotNodeKey, {
-        metadata: {
-          videoAssetKey: storedAsset.key,
-          provider: 'fal',
-          providerModel: videoModel,
-          providerRequestId: String((falResponse.data as { requestId?: unknown } | null)?.requestId ?? ''),
-          executionPlan,
-        },
-      })
+      if (isTakeJob) {
+        updatedGraph = applyTakeBindingToGraph(updatedGraph, job.shotNodeKey, {
+          metadata: {
+            outputVideoAssetKey: storedAsset.key,
+            provider: 'fal',
+            providerModel: videoModel,
+            providerRequestId: String((falResponse.data as { requestId?: unknown } | null)?.requestId ?? ''),
+            executionPlan,
+          },
+        })
+        await persistTakeBindingsIfPresent(client, payload.snapshot.draft.id, updatedGraph.key, job.shotNodeKey, {
+          metadata: {
+            outputVideoAssetKey: storedAsset.key,
+            provider: 'fal',
+            providerModel: videoModel,
+            providerRequestId: String((falResponse.data as { requestId?: unknown } | null)?.requestId ?? ''),
+            executionPlan,
+          },
+        })
+      } else {
+        updatedGraph = applyShotBindingToGraph(updatedGraph, job.shotNodeKey, {
+          metadata: {
+            videoAssetKey: storedAsset.key,
+            provider: 'fal',
+            providerModel: videoModel,
+            providerRequestId: String((falResponse.data as { requestId?: unknown } | null)?.requestId ?? ''),
+            executionPlan,
+          },
+        })
+        await persistShotBindingsIfPresent(client, payload.snapshot.draft.id, updatedGraph.key, job.shotNodeKey, {
+          metadata: {
+            videoAssetKey: storedAsset.key,
+            provider: 'fal',
+            providerModel: videoModel,
+            providerRequestId: String((falResponse.data as { requestId?: unknown } | null)?.requestId ?? ''),
+            executionPlan,
+          },
+        })
+      }
       break
     }
 

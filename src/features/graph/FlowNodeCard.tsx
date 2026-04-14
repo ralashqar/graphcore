@@ -31,7 +31,17 @@ export function FlowNodeCard({ data }: { data: GraphNodeData }) {
         <div className="flow-node-cinematic-body">
           {cinematicCard.chips && cinematicCard.chips.length > 0 ? (
             <div className="flow-node-chip-row">
-              {cinematicCard.chips.slice(0, 6).map((chip, index) => (
+              {cinematicCard.chips.map((chip, index) => (
+                <span key={`${chip.label}-${index}`} className={chip.tone === 'muted' ? 'flow-node-chip is-muted' : 'flow-node-chip'}>
+                  {chip.iconId ? <EntityIcon id={chip.iconId} /> : null}
+                  <span>{chip.label}</span>
+                </span>
+              ))}
+            </div>
+          ) : null}
+          {cinematicCard.secondaryChips && cinematicCard.secondaryChips.length > 0 ? (
+            <div className="flow-node-chip-row flow-node-chip-row-secondary">
+              {cinematicCard.secondaryChips.map((chip, index) => (
                 <span key={`${chip.label}-${index}`} className={chip.tone === 'muted' ? 'flow-node-chip is-muted' : 'flow-node-chip'}>
                   {chip.iconId ? <EntityIcon id={chip.iconId} /> : null}
                   <span>{chip.label}</span>

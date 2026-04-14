@@ -42,10 +42,11 @@ export type GraphNodeData = {
   conditionSummary: string
   effectSummary: string[]
   cinematicCard?: {
-    variant: 'entity-ref' | 'composite-ref' | 'storyboard-ref' | 'shot'
+    variant: 'entity-ref' | 'composite-ref' | 'storyboard-ref' | 'shot' | 'take'
     iconId?: EntityIconId | null
     kicker?: string | null
     chips?: Array<{ label: string; iconId?: EntityIconId | null; tone?: 'default' | 'muted' }>
+    secondaryChips?: Array<{ label: string; iconId?: EntityIconId | null; tone?: 'default' | 'muted' }>
     lines?: Array<
       | string
       | {

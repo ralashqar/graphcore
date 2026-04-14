@@ -10,6 +10,7 @@ import type {
   ProjectSnapshot,
 } from './graphcore.ts'
 import { compileAssemblyGraph } from './environmentAssemblyCompiler.ts'
+import { estimateShotContentDurationSeconds } from './cinematics.ts'
 import { graphNodeTemplatesByKey } from './nodeLibrary.ts'
 import { PRESET_CATALOG_VERSION } from './presetCatalog.ts'
 
@@ -926,6 +927,8 @@ export function validateGraph(
     if (node.type === 'cinematic_shot') {
       const stillAssetKey = typeof node.metadata.stillAssetKey === 'string' ? node.metadata.stillAssetKey : null
       const videoAssetKey = typeof node.metadata.videoAssetKey === 'string' ? node.metadata.videoAssetKey : null
+      const durationSeconds = typeof node.metadata.durationSeconds === 'number' ? node.metadata.durationSeconds : null
+      const durationSource = node.metadata.durationSource === 'manual' ? 'manual' : 'inferred'
       const requiredSourceRefIds = Array.isArray(node.metadata.requiredSourceRefIds)
         ? node.metadata.requiredSourceRefIds.filter((value): value is string => typeof value === 'string' && value.length > 0)
         : []
@@ -975,6 +978,25 @@ export function validateGraph(
           graphKey: graph.key,
           nodeKey: node.key,
         })
+      }
+
+      if (durationSource === 'manual' && durationSeconds !== null) {
+        const estimated = estimateShotContentDurationSeconds({
+          shotType: typeof node.metadata.shotType === 'string' ? node.metadata.shotType as 'custom' | 'action' | 'dialogue' | 'transition' | 'establishing' | 'reveal' | 'insert' : 'custom',
+          beat: typeof node.metadata.beat === 'string' ? node.metadata.beat : typeof node.body.text === 'string' ? node.body.text : '',
+          dialogue: Array.isArray(node.metadata.dialogue) ? node.metadata.dialogue.filter((value): value is { line: string; delivery: string } & Record<string, unknown> => Boolean(value && typeof value === 'object')) as never[] : [],
+          actions: Array.isArray(node.metadata.actions) ? node.metadata.actions.filter((value): value is { verb: string; stagingNotes: string } & Record<string, unknown> => Boolean(value && typeof value === 'object')) as never[] : [],
+          audio: Array.isArray(node.metadata.audio) ? node.metadata.audio.filter((value): value is { kind: string } & Record<string, unknown> => Boolean(value && typeof value === 'object')) as never[] : [],
+        })
+        if (estimated.inferredDurationSeconds - durationSeconds >= 2) {
+          diagnostics.push({
+            level: 'warning',
+            code: 'cinematic_shot_manual_duration_too_short',
+            message: `Cinematic shot "${node.key}" has a manual ${durationSeconds}s duration, but its dialogue/action content suggests closer to ${estimated.inferredDurationSeconds}s.`,
+            graphKey: graph.key,
+            nodeKey: node.key,
+          })
+        }
       }
 
       const missingRequiredSourceRefIds = requiredSourceRefIds.filter((refId) => !availableRefIds.includes(refId))
@@ -1039,6 +1061,55 @@ export function validateGraph(
             nodeKey: node.key,
           })
         }
+      }
+    }
+
+    if (node.type === 'cinematic_take') {
+      const durationSeconds = typeof node.metadata.durationSeconds === 'number' ? node.metadata.durationSeconds : null
+      const shotIds = Array.isArray(node.metadata.shotIds)
+        ? node.metadata.shotIds.filter((value): value is string => typeof value === 'string' && value.length > 0)
+        : []
+      const outputVideoAssetKey = typeof node.metadata.outputVideoAssetKey === 'string' ? node.metadata.outputVideoAssetKey : null
+      const outputStillAssetKey = typeof node.metadata.outputStillAssetKey === 'string' ? node.metadata.outputStillAssetKey : null
+
+      if (shotIds.length === 0) {
+        diagnostics.push({
+          level: 'warning',
+          code: 'cinematic_take_missing_shots',
+          message: `Cinematic take "${node.key}" should include at least one compiled shot.`,
+          graphKey: graph.key,
+          nodeKey: node.key,
+        })
+      }
+
+      if (durationSeconds === null || durationSeconds < 4 || durationSeconds > 15) {
+        diagnostics.push({
+          level: 'warning',
+          code: 'cinematic_take_invalid_duration',
+          message: `Cinematic take "${node.key}" should stay within Seedance's 4-15 second clip window.`,
+          graphKey: graph.key,
+          nodeKey: node.key,
+        })
+      }
+
+      if (outputVideoAssetKey && !assetKeys.has(outputVideoAssetKey)) {
+        diagnostics.push({
+          level: 'error',
+          code: 'missing_cinematic_take_video',
+          message: `Cinematic take "${node.key}" references missing video asset "${outputVideoAssetKey}".`,
+          graphKey: graph.key,
+          nodeKey: node.key,
+        })
+      }
+
+      if (outputStillAssetKey && !assetKeys.has(outputStillAssetKey)) {
+        diagnostics.push({
+          level: 'error',
+          code: 'missing_cinematic_take_still',
+          message: `Cinematic take "${node.key}" references missing still asset "${outputStillAssetKey}".`,
+          graphKey: graph.key,
+          nodeKey: node.key,
+        })
       }
     }
 

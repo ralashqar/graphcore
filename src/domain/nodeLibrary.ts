@@ -11,6 +11,7 @@ import type {
 import {
   updateNodeMetadataWithAssetRef,
   updateNodeMetadataWithCompositeRef,
+  updateNodeMetadataWithTake,
   updateNodeMetadataWithShot,
   updateNodeMetadataWithStoryboardRef,
 } from './cinematics.ts'
@@ -66,6 +67,13 @@ export const graphNodeLibrary: NodeLibraryGroup[] = [
           priority: 90,
         }),
         defaultDisplay: { compactPreview: true },
+      }),
+      template('cinematic_take', 'Take Output', 'cinematics', 'cinematic_take', cinematicGraphTypes, 'Take Output', 'basic', {
+        defaultSubtitle: 'Compiled Seedance clip output.',
+        defaultMetadata: updateNodeMetadataWithTake({}, {
+          durationSeconds: 4,
+          seedanceEndpoint: 'reference-to-video',
+        }),
       }),
       template('character_ref', 'Character Ref', 'cinematics', 'asset_ref', cinematicGraphTypes, 'Character Ref', 'basic', {
         defaultSubtitle: 'Primary character source.',
@@ -411,6 +419,8 @@ export function inferPortsForNode(node: NodeDefinition): PortDefinition[] {
             { id: 'flow_in', label: 'Flow', direction: 'input' },
             { id: 'asset_in', label: 'Assets', direction: 'input' },
           ]
+        : node.type === 'cinematic_take'
+          ? [{ id: 'in', label: 'In', direction: 'input' }]
         : node.type === 'asset_ref' || node.type === 'storyboard_ref'
           ? []
           : node.type === 'composite_ref'
@@ -426,6 +436,8 @@ export function inferPortsForNode(node: NodeDefinition): PortDefinition[] {
     case 'composite_ref':
       return [...inputs, { id: 'asset_out', label: 'Asset', direction: 'output' }]
     case 'cinematic_shot':
+      return [...inputs, { id: 'out', label: 'Out', direction: 'output' }]
+    case 'cinematic_take':
       return [...inputs, { id: 'out', label: 'Out', direction: 'output' }]
     case 'end':
       return inputs

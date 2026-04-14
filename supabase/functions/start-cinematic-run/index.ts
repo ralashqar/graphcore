@@ -3,16 +3,20 @@ import '@supabase/functions-js/edge-runtime.d.ts'
 import {
   cinematicRunStartRequestSchema,
   cinematicRunStatusResponseSchema,
+  getCinematicSequence,
 } from '../../../src/domain/cinematics.ts'
 import { requireUserClient } from '../_shared/auth.ts'
 import {
+  applyTakeBindingToGraph,
   applyShotBindingToGraph,
+  buildTakeSeedanceExecutionPlan,
   buildSeedanceExecutionPlan,
   buildStillPrompt,
-  collectReachableShotNodeKeys,
   findGraph,
   findNode,
+  persistTakeBindingsIfPresent,
   persistShotBindingsIfPresent,
+  resolveTakeSources,
   resolveShotSources,
   toCinematicRun,
   toCinematicRunJob,
@@ -25,7 +29,7 @@ function buildAffectedShotOrder(
   shotNodeKey: string | null | undefined,
 ) {
   if (mode === 'graph_run') {
-    return collectReachableShotNodeKeys(graph)
+    return []
   }
 
   if (!shotNodeKey) {
@@ -38,6 +42,13 @@ function buildAffectedShotOrder(
   }
 
   return [shotNodeKey]
+}
+
+function buildAffectedTakeOrder(graph: NonNullable<ReturnType<typeof findGraph>>) {
+  const sequence = getCinematicSequence(graph.metadata)
+  return sequence.takes
+    .map((take) => graph.nodes.find((node) => node.type === 'cinematic_take' && typeof node.metadata?.takeId === 'string' && node.metadata.takeId === take.id)?.key ?? null)
+    .filter((value): value is string => typeof value === 'string' && value.length > 0)
 }
 
 Deno.serve(async (request) => {
@@ -55,7 +66,11 @@ Deno.serve(async (request) => {
     }
 
     const shotNodeKeys = buildAffectedShotOrder(payload.mode, graph, payload.shotNodeKey ?? null)
-    if (shotNodeKeys.length === 0) {
+    const takeNodeKeys = payload.mode === 'graph_run' ? buildAffectedTakeOrder(graph) : []
+    if (payload.mode === 'graph_run' && takeNodeKeys.length === 0) {
+      throw new HttpError(400, 'This cinematic graph has no compiled cinematic takes to run.')
+    }
+    if (payload.mode !== 'graph_run' && shotNodeKeys.length === 0) {
       throw new HttpError(400, 'This cinematic graph has no reachable cinematic shot nodes to run.')
     }
 
@@ -154,6 +169,50 @@ Deno.serve(async (request) => {
         metadata: {
           lastRunId: runId,
           lastStillJobId: stillJobId,
+          lastVideoJobId: videoJobId,
+          executionPlan,
+        },
+      })
+    }
+
+    for (const takeNodeKey of takeNodeKeys) {
+      const takeNode = findNode(graph, takeNodeKey)
+      if (!takeNode) continue
+      const sourceInputs = resolveTakeSources(payload.snapshot, graph, takeNodeKey)
+      const executionPlan = buildTakeSeedanceExecutionPlan({
+        snapshot: payload.snapshot,
+        graph,
+        takeNode,
+        sourceInputs,
+      })
+      const videoJobId = crypto.randomUUID()
+      jobsToInsert.push({
+        id: videoJobId,
+        run_id: runId,
+        graph_key: graph.key,
+        shot_node_key: takeNodeKey,
+        kind: 'take_video',
+        status: 'queued',
+        order_index: jobsToInsert.length,
+        depends_on_job_ids: previousJobId ? [previousJobId] : [],
+        prompt: executionPlan.prompt,
+        result_context: {
+          mode: payload.mode,
+          executionPlan,
+          takeId: takeNode.metadata?.takeId ?? null,
+        },
+      })
+      previousJobId = videoJobId
+      updatedGraph = applyTakeBindingToGraph(updatedGraph, takeNodeKey, {
+        metadata: {
+          lastRunId: runId,
+          lastVideoJobId: videoJobId,
+          executionPlan,
+        },
+      })
+      await persistTakeBindingsIfPresent(client, payload.snapshot.draft.id, graph.key, takeNodeKey, {
+        metadata: {
+          lastRunId: runId,
           lastVideoJobId: videoJobId,
           executionPlan,
         },

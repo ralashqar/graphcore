@@ -173,6 +173,25 @@ function normalizePromptTextForStoryboard(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
 }
 
+function containsExplicitTimingLanguage(value: string) {
+  const normalized = value.toLowerCase()
+  return (
+    /\b\d+\s*(?:s|sec|secs|second|seconds)\b/.test(normalized)
+    || /\b(?:for|within|over)\s+\d+\s*(?:s|sec|secs|second|seconds)\b/.test(normalized)
+    || /\b(?:linger|lingers|brief|briefly|quick beat|quickly|pause|hold for)\b/.test(normalized)
+  )
+}
+
+function normalizePlannerShotDuration(input: {
+  promptText: string
+  beat: string
+  durationSeconds: number | null
+}) {
+  if (typeof input.durationSeconds !== 'number' || !Number.isFinite(input.durationSeconds)) return null
+  const explicit = containsExplicitTimingLanguage(input.promptText) || containsExplicitTimingLanguage(input.beat)
+  return explicit ? Math.min(15, Math.max(1, Math.round(input.durationSeconds))) : null
+}
+
 function splitPromptIntoTemporalSegments(value: string) {
   const cleaned = value
     .replace(/\s+/g, ' ')
@@ -1165,11 +1184,16 @@ export function coerceCinematicPlannerRaw(input: unknown, options: CoerceCinemat
         cameraAngle: pickFirstString(shot, ['cameraAngle', 'angle']),
         cameraMovement: pickFirstString(shot, ['cameraMovement', 'movement']),
         lensPreference: pickFirstString(shot, ['lensPreference', 'lens']),
-        durationSeconds: typeof shot.durationSeconds === 'number'
-          ? shot.durationSeconds
-          : typeof shot.duration === 'number'
-            ? shot.duration
-            : null,
+        durationSeconds: normalizePlannerShotDuration({
+          promptText: options.promptText ?? requestSummary,
+          beat,
+          durationSeconds:
+            typeof shot.durationSeconds === 'number'
+              ? shot.durationSeconds
+              : typeof shot.duration === 'number'
+                ? shot.duration
+                : null,
+        }),
         visualPrompt: pickFirstString(shot, ['visualPrompt', 'prompt', 'visualDescription']),
         compositionGuide: pickFirstString(shot, ['compositionGuide', 'blocking', 'sceneComposition', 'ingredientGuide', 'stagingNotes']),
         beats: coerceArrayWithSchema(shot.beats, cinematicBeatSchema),
@@ -1483,7 +1507,7 @@ export const cinematicGraphAuthorSchema = z.object({
     cameraAngle: z.string().default(''),
     cameraMovement: z.string().default(''),
     lensPreference: z.string().default(''),
-    durationSeconds: z.number().int().positive().max(20).nullable().default(null),
+    durationSeconds: z.number().int().positive().max(15).nullable().default(null),
     participantRefIds: z.array(z.string()).default([]),
     locationRefId: z.string().nullable().default(null),
     propRefIds: z.array(z.string()).default([]),
@@ -1736,6 +1760,8 @@ export function cinematicScriptPlannerSystemPrompt() {
     'Named people in an argument, fight, dialogue, or reaction scene are characters unless the supplied catalog clearly says otherwise.',
     'Only reference ids from the locked entity set in shots, relationships, dialogue, action beats, audio beats, storyboards, and composites.',
     'Every shot must be concrete and implementation-facing with camera/framing intent.',
+    'Do not assign shot durationSeconds unless the prompt explicitly asks for timing or the beat itself contains explicit timing language.',
+    'When timing is not explicit, leave durationSeconds null and let compile-time timing inference determine shot length from dialogue and action content.',
     'Give every shot a specific dramatic title. Avoid generic titles like "Shot 1", "Beat 1", "Escalation", or "Final beat" unless the prompt itself explicitly uses those labels.',
     'Write each shot beat as authored cinematic prose. Do not copy the user prompt into the beat field.',
     'Include a short compositionGuide for each shot that explains how to combine the planned ingredients in frame.',

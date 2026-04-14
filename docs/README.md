@@ -25,3 +25,8 @@ Some older docs still describe earlier behavior that is no longer the main path,
 - prompt flows being graph/content pass only without the newer orchestrator framing
 
 Those older docs are still useful as background, but when they disagree with the code, trust the current-state docs and the implementation in `src/` and `supabase/functions/`.
+
+## Research And Planning Docs
+
+- [`16-cinematic-presets-and-ugc-research.md`](./16-cinematic-presets-and-ugc-research.md)
+  - Research base for cinematic preset families, UGC workflows, Seedance 2 patterns, and manual take-node still generation planning.
