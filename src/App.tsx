@@ -9,7 +9,17 @@ import { publishService } from './application/services/publishService'
 import { workspaceService } from './application/services/workspaceService'
 import { buildAssetSlug, getAssetKeyPrefix, inferAssetKindFromUpload, inferRemoteAssetMimeType, inferUploadMimeType, isSupportedMeshPath, resolveAssetSourceUrl, type AssetUrlCreateOptions, type AssetUrlCreationKind } from './domain/assets'
 import { DEFAULT_ART_STYLE_PRESET } from './domain/artStylePresets'
-import type { CinematicRunStatusResponse, CinematicSettings } from './domain/cinematics'
+import {
+  buildCinematicSettingsPatchFromFormatSubtype,
+  buildCinematicSettingsPatchFromPresetFamily,
+  type CinematicFormatSubtype,
+  getCinematicShotNodeConfig,
+  getCinematicTakeNodeConfig,
+  getStoryboardRefNodeConfig,
+  type CinematicPresetFamily,
+  type CinematicRunStatusResponse,
+  type CinematicSettings,
+} from './domain/cinematics'
 import { compileBundle } from './domain/compiler'
 import { createEnvironmentBlueprint } from './domain/environmentBlueprint'
 import { createGameSpecFromArchetype } from './domain/gameArchetypes'
@@ -369,10 +379,32 @@ function clearUnsavedSnapshot(draftId: string) {
   }
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms)
+  })
+}
+
 type DeleteConfirmationTarget = {
   resourceType: 'definition' | 'graph' | 'asset' | 'generated_mesh'
   key: string
   label: string
+}
+
+type CinematicPreflightStatus = {
+  graphKey: string
+  active: boolean
+  label: string
+  total: number
+  completed: number
+  failed: number
+  currentNodeKey: string | null
+  lastMessage: string | null
+}
+
+type CinematicPreflightQueueItem = {
+  nodeKey: string
+  mode: 'preview_still' | 'preview_storyboard_still' | 'preview_take_still'
 }
 
 export default function App() {
@@ -395,6 +427,7 @@ export default function App() {
   const [isPlanningWorldBuild, setIsPlanningWorldBuild] = useState(false)
   const [isStartingWorldBuild, setIsStartingWorldBuild] = useState(false)
   const [worldBuildPlanPreview, setWorldBuildPlanPreview] = useState<WorldBuildPlanResponse | null>(null)
+  const [cinematicPreflightStatus, setCinematicPreflightStatus] = useState<CinematicPreflightStatus | null>(null)
   const [completedWorldBuildBatch, setCompletedWorldBuildBatch] = useState<WorldBuildBatch | null>(null)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [pendingDeleteTarget, setPendingDeleteTarget] = useState<DeleteConfirmationTarget | null>(null)
@@ -898,6 +931,8 @@ export default function App() {
             snapshot: currentSnapshot,
             graphKey: run.graphKey,
             mode: run.mode,
+            targetNodeKey: run.shotNodeKey,
+            targetNodeKeys: [],
             shotNodeKey: run.shotNodeKey,
           })
 
@@ -2085,6 +2120,41 @@ export default function App() {
     })
   }
 
+  function updateWorldBuildCinematicPreset(presetFamily: CinematicPresetFamily) {
+    setWorldBuildPlanPreview((current) => {
+      if (!current?.cinematicPlan) return current
+      return {
+        ...current,
+        cinematicPlan: {
+          ...current.cinematicPlan,
+          graphSettings: {
+            ...(current.cinematicPlan.graphSettings ?? {}),
+            ...buildCinematicSettingsPatchFromPresetFamily(presetFamily),
+            presetSource: 'manual_override',
+          },
+        },
+      }
+    })
+  }
+
+  function updateWorldBuildCinematicFormatSubtype(formatSubtype: CinematicFormatSubtype) {
+    setWorldBuildPlanPreview((current) => {
+      if (!current?.cinematicPlan) return current
+      const presetFamily = (current.cinematicPlan.graphSettings?.presetFamily ?? 'story_movie_tv') as CinematicPresetFamily
+      return {
+        ...current,
+        cinematicPlan: {
+          ...current.cinematicPlan,
+          graphSettings: {
+            ...(current.cinematicPlan.graphSettings ?? {}),
+            ...buildCinematicSettingsPatchFromFormatSubtype(presetFamily, formatSubtype),
+            presetSource: 'manual_override',
+          },
+        },
+      }
+    })
+  }
+
   async function handlePlanWorldBuild() {
     if (!snapshot) return
     if (!session) {
@@ -2380,7 +2450,181 @@ export default function App() {
     }))
   }
 
-  async function handleStartCinematicRun(request: { graphKey: string; mode: 'graph_run' | 'preview_still' | 'preview_video'; shotNodeKey?: string | null }) {
+  function applyCinematicStatus(status: CinematicRunStatusResponse) {
+    let nextSnapshot: ProjectSnapshot | null = null
+    setSnapshot((current) => {
+      if (!current) return current
+      nextSnapshot = mergeCinematicRunStatusIntoSnapshot(current, status)
+      if (nextSnapshot) {
+        setBundle(compileBundle(nextSnapshot))
+      }
+      return nextSnapshot
+    })
+    return nextSnapshot
+  }
+
+  async function runCinematicRunToCompletion(request: {
+    snapshot: ProjectSnapshot
+    graphKey: string
+    mode: 'graph_run' | 'preview_still' | 'preview_video' | 'preview_take_still' | 'preview_storyboard_still'
+    targetNodeKey?: string | null
+    targetNodeKeys?: string[]
+  }) {
+    let workingSnapshot = request.snapshot
+    let status = await workspaceService.startCinematicRun({
+      snapshot: workingSnapshot,
+      graphKey: request.graphKey,
+      mode: request.mode,
+      targetNodeKey: request.targetNodeKey ?? null,
+      targetNodeKeys: request.targetNodeKeys ?? [],
+      shotNodeKey: request.targetNodeKey ?? null,
+    })
+    workingSnapshot = applyCinematicStatus(status) ?? workingSnapshot
+
+    while (!isTerminalCinematicRunStatus(status.run.status)) {
+      await sleep(3000)
+      status = await workspaceService.pollCinematicRun({
+        runId: status.run.id,
+        snapshot: workingSnapshot,
+        graphKey: request.graphKey,
+        mode: request.mode,
+        targetNodeKey: request.targetNodeKey ?? null,
+        targetNodeKeys: request.targetNodeKeys ?? [],
+        shotNodeKey: request.targetNodeKey ?? null,
+      })
+      workingSnapshot = applyCinematicStatus(status) ?? workingSnapshot
+    }
+
+    return { snapshot: workingSnapshot, status }
+  }
+
+  async function handleRunCinematicPreflight(request: {
+    graphKey: string
+    includeShots?: boolean
+    includeStoryboards?: boolean
+    includeTakes?: boolean
+  }) {
+    if (!snapshot || loadedState?.source !== 'supabase') {
+      setPromptRuntimeError('Cinematic generation requires a live Supabase workspace.')
+      return
+    }
+
+    const graph = snapshot.graphs.find((entry) => entry.key === request.graphKey && entry.graphType === 'cinematic_flow') ?? null
+    if (!graph) {
+      setPromptRuntimeError(`Cinematic graph "${request.graphKey}" was not found.`)
+      return
+    }
+
+    const runQueue: CinematicPreflightQueueItem[] = graph.nodes.flatMap((node): CinematicPreflightQueueItem[] => {
+      if (request.includeShots && node.type === 'cinematic_shot' && !getCinematicShotNodeConfig(node).stillAssetKey) {
+        return [{ nodeKey: node.key, mode: 'preview_still' as const }]
+      }
+      if (request.includeStoryboards && node.type === 'storyboard_ref' && !getStoryboardRefNodeConfig(node).assetKey) {
+        return [{ nodeKey: node.key, mode: 'preview_storyboard_still' as const }]
+      }
+      if (request.includeTakes && node.type === 'cinematic_take' && !getCinematicTakeNodeConfig(node).outputStillAssetKey) {
+        return [{ nodeKey: node.key, mode: 'preview_take_still' as const }]
+      }
+      return []
+    })
+
+    const labels: string[] = []
+    if (request.includeShots) labels.push('shot stills')
+    if (request.includeStoryboards) labels.push('storyboards')
+    if (request.includeTakes) labels.push('take stills')
+    const label = labels.join(' + ') || 'visual preflight'
+
+    if (runQueue.length === 0) {
+      setCinematicPreflightStatus({
+        graphKey: request.graphKey,
+        active: false,
+        label,
+        total: 0,
+        completed: 0,
+        failed: 0,
+        currentNodeKey: null,
+        lastMessage: 'Nothing missing to generate.',
+      })
+      return
+    }
+
+    let workingSnapshot = snapshot
+    let completed = 0
+    let failed = 0
+    setCinematicPreflightStatus({
+      graphKey: request.graphKey,
+      active: true,
+      label,
+      total: runQueue.length,
+      completed,
+      failed,
+      currentNodeKey: null,
+      lastMessage: 'Starting visual preflight queue.',
+    })
+    setPromptRuntimeError(null)
+
+    for (const item of runQueue) {
+      setCinematicPreflightStatus({
+        graphKey: request.graphKey,
+        active: true,
+        label,
+        total: runQueue.length,
+        completed,
+        failed,
+        currentNodeKey: item.nodeKey,
+        lastMessage: `Generating ${item.mode.replace(/_/g, ' ')} for ${item.nodeKey}.`,
+      })
+
+      try {
+        const result = await runCinematicRunToCompletion({
+          snapshot: workingSnapshot,
+          graphKey: request.graphKey,
+          mode: item.mode,
+          targetNodeKey: item.nodeKey,
+        })
+        workingSnapshot = result.snapshot
+        if (result.status.run.status === 'failed' || result.status.run.status === 'completed_with_errors') {
+          failed += 1
+        } else {
+          completed += 1
+        }
+      } catch (error) {
+        failed += 1
+        console.error('[GraphCore] cinematic preflight item failed.', error)
+      }
+
+      setCinematicPreflightStatus({
+        graphKey: request.graphKey,
+        active: true,
+        label,
+        total: runQueue.length,
+        completed,
+        failed,
+        currentNodeKey: item.nodeKey,
+        lastMessage: `Processed ${completed + failed} / ${runQueue.length} visual job(s).`,
+      })
+    }
+
+    setCinematicPreflightStatus({
+      graphKey: request.graphKey,
+      active: false,
+      label,
+      total: runQueue.length,
+      completed,
+      failed,
+      currentNodeKey: null,
+      lastMessage: failed > 0
+        ? `Completed ${completed} job(s) with ${failed} failure(s).`
+        : `Completed ${completed} visual job(s).`,
+    })
+  }
+
+  async function handleStartCinematicRun(request: {
+    graphKey: string
+    mode: 'graph_run' | 'preview_still' | 'preview_video' | 'preview_take_still' | 'preview_storyboard_still'
+    targetNodeKey?: string | null
+    targetNodeKeys?: string[]
+  }) {
     if (!snapshot || loadedState?.source !== 'supabase') {
       setPromptRuntimeError('Cinematic generation requires a live Supabase workspace.')
       return
@@ -2391,16 +2635,13 @@ export default function App() {
         snapshot,
         graphKey: request.graphKey,
         mode: request.mode,
-        shotNodeKey: request.shotNodeKey ?? null,
+        targetNodeKey: request.targetNodeKey ?? null,
+        targetNodeKeys: request.targetNodeKeys ?? [],
+        shotNodeKey: request.targetNodeKey ?? null,
       })
 
       setPromptRuntimeError(null)
-      setSnapshot((current) => {
-        if (!current) return current
-        const nextSnapshot = mergeCinematicRunStatusIntoSnapshot(current, status)
-        setBundle(compileBundle(nextSnapshot))
-        return nextSnapshot
-      })
+      applyCinematicStatus(status)
     } catch (runError) {
       console.error('[GraphCore] cinematic run failed to start.', runError)
       setPromptRuntimeError(runError instanceof Error ? runError.message : 'Cinematic run failed to start.')
@@ -2499,6 +2740,7 @@ export default function App() {
                 deletingGraphKey={deletingGraphKey}
                 diagnostics={bundle.diagnostics}
                 gameSpec={snapshot.gameSpec}
+                preflightStatus={cinematicPreflightStatus}
                 worldBuildBatches={snapshot.worldBuildBatches}
                 selectedEdge={selectedCinematicGraph ? selectedEdge : null}
                 selectedGraph={selectedCinematicGraph}
@@ -2514,6 +2756,7 @@ export default function App() {
                 onDuplicateGraph={duplicateGraph}
                 onDuplicateNode={duplicateNode}
                 onMoveNode={moveNode}
+                onRunCinematicPreflight={handleRunCinematicPreflight}
                 onSelectEdge={setSelectedEdgeKey}
                 onSelectGraph={setSelectedGraphKey}
                 onSelectNode={setSelectedNodeKey}
@@ -2717,6 +2960,8 @@ export default function App() {
           prompt={promptText}
           requestSummary={worldBuildPlanPreview.requestSummary}
           onCancel={() => setWorldBuildPlanPreview(null)}
+          onChangePresetFamily={updateWorldBuildCinematicPreset}
+          onChangeFormatSubtype={updateWorldBuildCinematicFormatSubtype}
           onConfirm={handleStartWorldBuild}
           onToggleEnabled={(itemId, enabled) => updateWorldBuildPlanItem(itemId, (item) => ({ ...item, enabled }))}
           onToggleOption={(itemId, optionKey, enabled) =>

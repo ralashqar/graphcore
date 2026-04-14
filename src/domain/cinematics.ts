@@ -6,6 +6,43 @@ export const cinematicAspectRatioSchema = z.enum(['1:1', '4:3', '3:4', '16:9', '
 export const cinematicStillResolutionSchema = z.enum(['1K', '2K'])
 export const cinematicVideoResolutionSchema = z.enum(['480p', '720p', '1080p'])
 export const cinematicSpecializationModeSchema = z.enum(['story', 'ugc'])
+export const cinematicPresetFamilySchema = z.enum(['story_movie_tv', 'ugc_creator', 'ugc_direct_response_ad', 'ugc_faceless_format'])
+export const cinematicFormatSubtypeSchema = z.enum([
+  'creator_problem_solution',
+  'creator_reframe',
+  'creator_validation',
+  'ad_problem_solution',
+  'ad_mechanism_proof',
+  'ad_before_after',
+  'ad_comparison',
+  'faceless_demo',
+  'faceless_explainer',
+  'faceless_process',
+  'contrast_narrative',
+])
+export const cinematicFormulaFamilySchema = z.enum([
+  'problem_solution',
+  'reframe',
+  'validation',
+  'doing_it_wrong',
+  'mechanism_proof',
+  'mistake_warning',
+  'result_reveal',
+  'before_after',
+  'contrast_comparison',
+  'contrast_narrative',
+  'personal_confession',
+])
+export const cinematicDominantTriggerSchema = z.enum([
+  'curiosity_gap',
+  'status_comparison',
+  'belief_reset',
+  'social_proof',
+  'parasocial_reassurance',
+  'transformation_desire',
+  'guilt_pressure',
+  'defiance_trigger',
+])
 export const cinematicReferenceKindSchema = z.enum(['definition', 'asset', 'video', 'audio', 'style', 'storyboard', 'composite'])
 export const cinematicNodeAssetRoleSchema = z.enum(['character', 'environment', 'item', 'audio', 'style', 'storyboard', 'composite'])
 export const cinematicReferencePrioritySchema = z.number().int().min(0).max(100)
@@ -18,6 +55,8 @@ export const seedanceEndpointSchema = z.enum(['reference-to-video', 'image-to-vi
 export const seedanceModePreferenceSchema = z.enum(['auto', 'reference-to-video', 'image-to-video'])
 export const seedanceInputModalitySchema = z.enum(['image', 'video', 'audio'])
 export const cinematicDurationSourceSchema = z.enum(['manual', 'inferred'])
+export const cinematicHookRoleSchema = z.enum(['hook', 'setup', 'proof', 'payoff', 'cta'])
+export const cinematicPlatformTargetSchema = z.enum(['tiktok', 'instagram_reels', 'youtube_shorts', 'facebook', 'x', 'web', 'general'])
 
 export const cinematicSettingsSchema = z.object({
   stillAspectRatio: cinematicAspectRatioSchema.default('16:9'),
@@ -25,6 +64,14 @@ export const cinematicSettingsSchema = z.object({
   videoResolution: cinematicVideoResolutionSchema.default('720p'),
   defaultClipSeconds: z.number().int().min(4).max(15).default(5),
   defaultFps: z.number().int().positive().max(60).default(24),
+  presetFamily: cinematicPresetFamilySchema.default('story_movie_tv'),
+  presetId: z.string().default('story_movie_tv'),
+  formatSubtype: cinematicFormatSubtypeSchema.nullable().default(null),
+  formulaFamily: cinematicFormulaFamilySchema.nullable().default(null),
+  dominantTrigger: cinematicDominantTriggerSchema.nullable().default(null),
+  contrastAxis: z.string().default(''),
+  proofMoment: z.string().default(''),
+  ctaStyle: z.string().default(''),
   specializationMode: cinematicSpecializationModeSchema.default('story'),
 })
 
@@ -116,6 +163,12 @@ export const storyboardSpecSchema = z.object({
   panels: z.array(storyboardPanelSchema).default([]),
 })
 
+export const cinematicReferenceVaultEntrySchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  description: z.string().default(''),
+})
+
 export const cinematicScriptEntityBindingSchema = z.object({
   id: z.string(),
   kind: cinematicScriptBindingKindSchema.default('character'),
@@ -148,6 +201,19 @@ export const cinematicScriptShotSchema = z.object({
   subtitle: z.string().nullable().default(null),
   beat: z.string().default(''),
   emotionalBeat: z.string().default(''),
+  hookRole: cinematicHookRoleSchema.nullable().default(null),
+  formatSubtype: cinematicFormatSubtypeSchema.nullable().default(null),
+  formulaFamily: cinematicFormulaFamilySchema.nullable().default(null),
+  dominantTrigger: cinematicDominantTriggerSchema.nullable().default(null),
+  hookType: z.string().default(''),
+  targetEmotion: z.string().default(''),
+  personaStyle: z.string().default(''),
+  contrastAxis: z.string().default(''),
+  proofMoment: z.string().default(''),
+  ctaStyle: z.string().default(''),
+  proofType: z.string().default(''),
+  ctaType: z.string().default(''),
+  platformTarget: cinematicPlatformTargetSchema.nullable().default(null),
   shotType: z.enum(['establishing', 'dialogue', 'reveal', 'action', 'insert', 'transition', 'custom']).default('custom'),
   framing: z.string().default(''),
   cameraAngle: z.string().default(''),
@@ -175,6 +241,10 @@ export const cinematicScriptDocSchema = z.object({
   logline: z.string().default(''),
   tone: z.string().default(''),
   continuityNotes: z.string().default(''),
+  statusPayoffType: z.string().default(''),
+  narrativeArcTemplate: z.string().default(''),
+  sceneCount: z.number().int().positive().nullable().default(null),
+  referenceVault: z.array(cinematicReferenceVaultEntrySchema).default([]),
   entityBindings: z.array(cinematicScriptEntityBindingSchema).default([]),
   scenes: z.array(cinematicScriptSceneSchema).default([]),
   shots: z.array(cinematicScriptShotSchema).default([]),
@@ -217,6 +287,20 @@ export const cinematicShotSpecSchema = z.object({
   title: z.string(),
   subtitle: z.string().nullable().default(null),
   beat: z.string().default(''),
+  emotionalBeat: z.string().default(''),
+  hookRole: cinematicHookRoleSchema.nullable().default(null),
+  formatSubtype: cinematicFormatSubtypeSchema.nullable().default(null),
+  formulaFamily: cinematicFormulaFamilySchema.nullable().default(null),
+  dominantTrigger: cinematicDominantTriggerSchema.nullable().default(null),
+  hookType: z.string().default(''),
+  targetEmotion: z.string().default(''),
+  personaStyle: z.string().default(''),
+  contrastAxis: z.string().default(''),
+  proofMoment: z.string().default(''),
+  ctaStyle: z.string().default(''),
+  proofType: z.string().default(''),
+  ctaType: z.string().default(''),
+  platformTarget: cinematicPlatformTargetSchema.nullable().default(null),
   shotType: z.enum(['establishing', 'dialogue', 'reveal', 'action', 'insert', 'transition', 'custom']).default('custom'),
   framing: z.string().default(''),
   cameraAngle: z.string().default(''),
@@ -262,10 +346,19 @@ export const cinematicTakeSpecSchema = z.object({
   startSeconds: z.number().nonnegative().default(0),
   endSeconds: z.number().nonnegative().default(0),
   seedanceEndpoint: seedanceEndpointSchema.default('reference-to-video'),
+  formatSubtype: cinematicFormatSubtypeSchema.nullable().default(null),
+  formulaFamily: cinematicFormulaFamilySchema.nullable().default(null),
+  dominantTrigger: cinematicDominantTriggerSchema.nullable().default(null),
+  contrastAxis: z.string().default(''),
+  proofMoment: z.string().default(''),
+  ctaStyle: z.string().default(''),
   requiredSourceRefIds: z.array(z.string()).default([]),
   outputVideoAssetKey: z.string().nullable().default(null),
   outputStillAssetKey: z.string().nullable().default(null),
+  approvedForVideo: z.boolean().default(false),
+  approvalNotes: z.string().default(''),
   lastRunId: z.string().nullable().default(null),
+  lastStillJobId: z.string().nullable().default(null),
   lastVideoJobId: z.string().nullable().default(null),
   provider: z.string().nullable().default(null),
   providerModel: z.string().nullable().default(null),
@@ -308,10 +401,17 @@ export const compositeRefNodeConfigSchema = z.object({
 export const storyboardRefNodeConfigSchema = z.object({
   storyboardId: z.string().nullable().default(null),
   panelId: z.string().nullable().default(null),
+  shotId: z.string().nullable().default(null),
   storyboardKind: z.enum(['sequence_board', 'shot_panel']).default('shot_panel'),
   assetKey: z.string().nullable().default(null),
+  generationPrompt: z.string().default(''),
   notes: z.string().default(''),
   priority: cinematicReferencePrioritySchema.default(90),
+  lastRunId: z.string().nullable().default(null),
+  lastStillJobId: z.string().nullable().default(null),
+  provider: z.string().nullable().default(null),
+  providerModel: z.string().nullable().default(null),
+  providerRequestId: z.string().nullable().default(null),
 })
 
 export const cinematicTakeNodeMetadataSchema = cinematicTakeNodeConfigSchema
@@ -324,9 +424,9 @@ export const cinematicGraphMetadataSchema = z.object({
 }).catchall(z.unknown())
 
 export const cinematicRunStatusSchema = z.enum(['queued', 'running', 'completed', 'completed_with_errors', 'failed', 'cancelled'])
-export const cinematicRunModeSchema = z.enum(['graph_run', 'preview_still', 'preview_video'])
+export const cinematicRunModeSchema = z.enum(['graph_run', 'preview_still', 'preview_video', 'preview_take_still', 'preview_storyboard_still'])
 export const cinematicRunJobStatusSchema = z.enum(['queued', 'running', 'succeeded', 'failed', 'cancelled', 'skipped'])
-export const cinematicRunJobKindSchema = z.enum(['shot_still', 'shot_video', 'take_video'])
+export const cinematicRunJobKindSchema = z.enum(['shot_still', 'shot_video', 'take_still', 'take_video', 'storyboard_still'])
 
 export const cinematicRunJobSchema = z.object({
   id: z.string(),
@@ -385,6 +485,8 @@ export const cinematicRunStartRequestSchema = z.object({
   snapshot: cinematicSnapshotSchema,
   graphKey: z.string(),
   mode: cinematicRunModeSchema,
+  targetNodeKey: z.string().nullable().optional(),
+  targetNodeKeys: z.array(z.string()).default([]),
   shotNodeKey: z.string().nullable().optional(),
 })
 
@@ -395,6 +497,10 @@ export const cinematicRunStatusResponseSchema = z.object({
 })
 
 export type CinematicSettings = z.infer<typeof cinematicSettingsSchema>
+export type CinematicPresetFamily = z.infer<typeof cinematicPresetFamilySchema>
+export type CinematicFormatSubtype = z.infer<typeof cinematicFormatSubtypeSchema>
+export type CinematicFormulaFamily = z.infer<typeof cinematicFormulaFamilySchema>
+export type CinematicDominantTrigger = z.infer<typeof cinematicDominantTriggerSchema>
 export type CinematicReference = z.infer<typeof cinematicReferenceSchema>
 export type CinematicCompositeReference = z.infer<typeof cinematicCompositeReferenceSchema>
 export type CinematicRelationship = z.infer<typeof cinematicRelationshipSchema>
@@ -434,6 +540,196 @@ const defaultTakeNodeConfig = cinematicTakeSpecSchema.parse({
   title: 'Take',
   durationSeconds: 4,
 })
+
+export function deriveSpecializationModeFromPresetFamily(presetFamily: CinematicPresetFamily): CinematicSettings['specializationMode'] {
+  return presetFamily === 'story_movie_tv' ? 'story' : 'ugc'
+}
+
+export function derivePresetFamilyFromSpecializationMode(mode: CinematicSettings['specializationMode'] | null | undefined): CinematicPresetFamily {
+  return mode === 'ugc' ? 'ugc_creator' : 'story_movie_tv'
+}
+
+export function isUgcPresetFamily(presetFamily: CinematicPresetFamily) {
+  return presetFamily !== 'story_movie_tv'
+}
+
+export function deriveDefaultFormatSubtypeFromPresetFamily(presetFamily: CinematicPresetFamily): CinematicFormatSubtype | null {
+  if (presetFamily === 'ugc_creator') return 'creator_problem_solution'
+  if (presetFamily === 'ugc_direct_response_ad') return 'ad_problem_solution'
+  if (presetFamily === 'ugc_faceless_format') return 'faceless_demo'
+  return null
+}
+
+export function deriveDefaultFormulaFamilyFromFormatSubtype(formatSubtype: CinematicFormatSubtype | null | undefined): CinematicFormulaFamily | null {
+  switch (formatSubtype) {
+    case 'creator_problem_solution':
+      return 'problem_solution'
+    case 'creator_reframe':
+      return 'reframe'
+    case 'creator_validation':
+      return 'validation'
+    case 'ad_problem_solution':
+      return 'problem_solution'
+    case 'ad_mechanism_proof':
+      return 'mechanism_proof'
+    case 'ad_before_after':
+      return 'before_after'
+    case 'ad_comparison':
+      return 'contrast_comparison'
+    case 'faceless_demo':
+      return 'mechanism_proof'
+    case 'faceless_explainer':
+      return 'doing_it_wrong'
+    case 'faceless_process':
+      return 'result_reveal'
+    case 'contrast_narrative':
+      return 'contrast_narrative'
+    default:
+      return null
+  }
+}
+
+export function deriveDefaultDominantTriggerFromFormatSubtype(formatSubtype: CinematicFormatSubtype | null | undefined): CinematicDominantTrigger | null {
+  switch (formatSubtype) {
+    case 'creator_problem_solution':
+      return 'curiosity_gap'
+    case 'creator_reframe':
+      return 'belief_reset'
+    case 'creator_validation':
+      return 'parasocial_reassurance'
+    case 'ad_problem_solution':
+      return 'transformation_desire'
+    case 'ad_mechanism_proof':
+      return 'curiosity_gap'
+    case 'ad_before_after':
+      return 'transformation_desire'
+    case 'ad_comparison':
+      return 'status_comparison'
+    case 'faceless_demo':
+      return 'curiosity_gap'
+    case 'faceless_explainer':
+      return 'belief_reset'
+    case 'faceless_process':
+      return 'transformation_desire'
+    case 'contrast_narrative':
+      return 'status_comparison'
+    default:
+      return null
+  }
+}
+
+export function isFormatSubtypeAllowedForPresetFamily(
+  presetFamily: CinematicPresetFamily,
+  formatSubtype: CinematicFormatSubtype | null | undefined,
+) {
+  if (!formatSubtype) return !isUgcPresetFamily(presetFamily)
+  if (!isUgcPresetFamily(presetFamily)) return false
+  if (formatSubtype === 'contrast_narrative') return true
+  if (presetFamily === 'ugc_creator') return formatSubtype.startsWith('creator_')
+  if (presetFamily === 'ugc_direct_response_ad') return formatSubtype.startsWith('ad_')
+  if (presetFamily === 'ugc_faceless_format') return formatSubtype.startsWith('faceless_')
+  return false
+}
+
+export function coerceFormatSubtypeForPresetFamily(
+  presetFamily: CinematicPresetFamily,
+  formatSubtype: CinematicFormatSubtype | null | undefined,
+): CinematicFormatSubtype | null {
+  if (!isUgcPresetFamily(presetFamily)) return null
+  if (formatSubtype && isFormatSubtypeAllowedForPresetFamily(presetFamily, formatSubtype)) return formatSubtype
+  return deriveDefaultFormatSubtypeFromPresetFamily(presetFamily)
+}
+
+export function getCinematicPresetLabel(presetFamily: CinematicPresetFamily) {
+  switch (presetFamily) {
+    case 'story_movie_tv':
+      return 'Movie / TV Story'
+    case 'ugc_creator':
+      return 'UGC Creator'
+    case 'ugc_direct_response_ad':
+      return 'UGC Direct Response Ad'
+    case 'ugc_faceless_format':
+      return 'UGC Faceless Format'
+  }
+}
+
+export function getCinematicFormatSubtypeLabel(formatSubtype: CinematicFormatSubtype) {
+  switch (formatSubtype) {
+    case 'creator_problem_solution':
+      return 'Creator Problem / Solution'
+    case 'creator_reframe':
+      return 'Creator Reframe'
+    case 'creator_validation':
+      return 'Creator Validation'
+    case 'ad_problem_solution':
+      return 'Ad Problem / Solution'
+    case 'ad_mechanism_proof':
+      return 'Ad Mechanism / Proof'
+    case 'ad_before_after':
+      return 'Ad Before / After'
+    case 'ad_comparison':
+      return 'Ad Comparison'
+    case 'faceless_demo':
+      return 'Faceless Demo'
+    case 'faceless_explainer':
+      return 'Faceless Explainer'
+    case 'faceless_process':
+      return 'Faceless Process'
+    case 'contrast_narrative':
+      return 'Contrast Narrative'
+  }
+}
+
+export function getCinematicFormulaFamilyLabel(formulaFamily: CinematicFormulaFamily) {
+  switch (formulaFamily) {
+    case 'problem_solution':
+      return 'Problem / Solution'
+    case 'reframe':
+      return 'Reframe'
+    case 'validation':
+      return 'Validation'
+    case 'doing_it_wrong':
+      return 'Doing It Wrong'
+    case 'mechanism_proof':
+      return 'Mechanism / Proof'
+    case 'mistake_warning':
+      return 'Mistake Warning'
+    case 'result_reveal':
+      return 'Result Reveal'
+    case 'before_after':
+      return 'Before / After'
+    case 'contrast_comparison':
+      return 'Contrast Comparison'
+    case 'contrast_narrative':
+      return 'Contrast Narrative'
+    case 'personal_confession':
+      return 'Personal Confession'
+  }
+}
+
+export function buildCinematicSettingsPatchFromFormatSubtype(
+  presetFamily: CinematicPresetFamily,
+  formatSubtype: CinematicFormatSubtype | null,
+): Pick<CinematicSettings, 'formatSubtype' | 'formulaFamily' | 'dominantTrigger'> {
+  const nextSubtype = coerceFormatSubtypeForPresetFamily(presetFamily, formatSubtype)
+  return {
+    formatSubtype: nextSubtype,
+    formulaFamily: deriveDefaultFormulaFamilyFromFormatSubtype(nextSubtype),
+    dominantTrigger: deriveDefaultDominantTriggerFromFormatSubtype(nextSubtype),
+  }
+}
+
+export function buildCinematicSettingsPatchFromPresetFamily(presetFamily: CinematicPresetFamily): Pick<CinematicSettings, 'presetFamily' | 'presetId' | 'specializationMode' | 'formatSubtype' | 'formulaFamily' | 'dominantTrigger'> {
+  const formatSubtype = coerceFormatSubtypeForPresetFamily(presetFamily, null)
+  return {
+    presetFamily,
+    presetId: presetFamily,
+    formatSubtype,
+    formulaFamily: deriveDefaultFormulaFamilyFromFormatSubtype(formatSubtype),
+    dominantTrigger: deriveDefaultDominantTriggerFromFormatSubtype(formatSubtype),
+    specializationMode: deriveSpecializationModeFromPresetFamily(presetFamily),
+  }
+}
 
 function inferSequenceReferenceKindFromBinding(binding: CinematicScriptEntityBinding): CinematicReference['refKind'] {
   if (binding.kind === 'audio') return 'audio'
@@ -599,6 +895,18 @@ function buildTakeSourceRefIds(shots: Array<CinematicScriptShot>) {
   ))
 }
 
+function coalesceTakeField<TValue>(shots: Array<CinematicScriptShot & { _compiledDurationSeconds: number }>, selector: (shot: CinematicScriptShot) => TValue, fallback: TValue) {
+  for (const shot of shots) {
+    const value = selector(shot)
+    if (typeof value === 'string') {
+      if (value.trim().length > 0) return value as TValue
+      continue
+    }
+    if (value !== null && value !== undefined) return value
+  }
+  return fallback
+}
+
 function buildCompiledTakes(shots: Array<CinematicScriptShot & {
   _compiledDurationSeconds: number
   _seedanceModePreference: z.infer<typeof seedanceModePreferenceSchema>
@@ -625,6 +933,12 @@ function buildCompiledTakes(shots: Array<CinematicScriptShot & {
       startSeconds: currentStart,
       endSeconds: currentStart + durationSeconds,
       seedanceEndpoint: endpoint,
+      formatSubtype: coalesceTakeField(currentShots, (shot) => shot.formatSubtype, null),
+      formulaFamily: coalesceTakeField(currentShots, (shot) => shot.formulaFamily, null),
+      dominantTrigger: coalesceTakeField(currentShots, (shot) => shot.dominantTrigger, null),
+      contrastAxis: coalesceTakeField(currentShots, (shot) => shot.contrastAxis, ''),
+      proofMoment: coalesceTakeField(currentShots, (shot) => shot.proofMoment, ''),
+      ctaStyle: coalesceTakeField(currentShots, (shot) => shot.ctaStyle, ''),
       requiredSourceRefIds,
     }))
     currentStart += durationSeconds
@@ -695,6 +1009,20 @@ export function buildCinematicSequenceFromScriptDoc(scriptDoc: CinematicScriptDo
       title: shot.title,
       subtitle: shot.subtitle,
       beat: shot.beat,
+      emotionalBeat: shot.emotionalBeat,
+      hookRole: shot.hookRole,
+      formatSubtype: shot.formatSubtype,
+      formulaFamily: shot.formulaFamily,
+      dominantTrigger: shot.dominantTrigger,
+      hookType: shot.hookType,
+      targetEmotion: shot.targetEmotion,
+      personaStyle: shot.personaStyle,
+      contrastAxis: shot.contrastAxis,
+      proofMoment: shot.proofMoment,
+      ctaStyle: shot.ctaStyle,
+      proofType: shot.proofType,
+      ctaType: shot.ctaType,
+      platformTarget: shot.platformTarget,
       shotType: shot.shotType,
       framing: shot.framing,
       cameraAngle: shot.cameraAngle,
@@ -732,6 +1060,10 @@ export function deriveCinematicScriptFromSequence(sequence: CinematicSequence): 
     logline: sequence.shots.map((shot) => shot.beat).filter((entry) => entry.trim().length > 0).join(' '),
     tone: '',
     continuityNotes: '',
+    statusPayoffType: '',
+    narrativeArcTemplate: '',
+    sceneCount: sequence.shots.length > 0 ? sequence.shots.length : null,
+    referenceVault: [],
     entityBindings: sequence.references.map((reference) => ({
       id: reference.id,
       kind:
@@ -770,7 +1102,20 @@ export function deriveCinematicScriptFromSequence(sequence: CinematicSequence): 
       title: shot.title,
       subtitle: shot.subtitle,
       beat: shot.beat,
-      emotionalBeat: '',
+      emotionalBeat: shot.emotionalBeat,
+      hookRole: shot.hookRole,
+      formatSubtype: shot.formatSubtype,
+      formulaFamily: shot.formulaFamily,
+      dominantTrigger: shot.dominantTrigger,
+      hookType: shot.hookType,
+      targetEmotion: shot.targetEmotion,
+      personaStyle: shot.personaStyle,
+      contrastAxis: shot.contrastAxis,
+      proofMoment: shot.proofMoment,
+      ctaStyle: shot.ctaStyle,
+      proofType: shot.proofType,
+      ctaType: shot.ctaType,
+      platformTarget: shot.platformTarget,
       shotType: shot.shotType,
       framing: shot.framing,
       cameraAngle: shot.cameraAngle,
@@ -810,10 +1155,45 @@ export function getCinematicSettings(gameSpec: unknown, graphMetadata: unknown):
       : {},
   )
 
+  const projectOverrides = gameSpecCinematics.success ? gameSpecCinematics.data : {}
+  const graphOverrides = graphCinematics.success ? graphCinematics.data : {}
+  const presetFamily =
+    graphOverrides.presetFamily
+    ?? projectOverrides.presetFamily
+    ?? (graphOverrides.specializationMode ? derivePresetFamilyFromSpecializationMode(graphOverrides.specializationMode) : null)
+    ?? (projectOverrides.specializationMode ? derivePresetFamilyFromSpecializationMode(projectOverrides.specializationMode) : null)
+    ?? defaultCinematicSettings.presetFamily
+  const presetId =
+    graphOverrides.presetId
+    ?? graphOverrides.presetFamily
+    ?? projectOverrides.presetId
+    ?? projectOverrides.presetFamily
+    ?? presetFamily
+  const formatSubtype = coerceFormatSubtypeForPresetFamily(
+    presetFamily,
+    graphOverrides.formatSubtype
+    ?? projectOverrides.formatSubtype
+    ?? null,
+  )
+  const formulaFamily =
+    graphOverrides.formulaFamily
+    ?? projectOverrides.formulaFamily
+    ?? deriveDefaultFormulaFamilyFromFormatSubtype(formatSubtype)
+  const dominantTrigger =
+    graphOverrides.dominantTrigger
+    ?? projectOverrides.dominantTrigger
+    ?? deriveDefaultDominantTriggerFromFormatSubtype(formatSubtype)
+
   return {
     ...defaultCinematicSettings,
-    ...(gameSpecCinematics.success ? gameSpecCinematics.data : {}),
-    ...(graphCinematics.success ? graphCinematics.data : {}),
+    ...projectOverrides,
+    ...graphOverrides,
+    presetFamily,
+    presetId,
+    formatSubtype,
+    formulaFamily,
+    dominantTrigger,
+    specializationMode: deriveSpecializationModeFromPresetFamily(presetFamily),
   }
 }
 

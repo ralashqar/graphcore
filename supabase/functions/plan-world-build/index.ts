@@ -2,6 +2,11 @@ import '@supabase/functions-js/edge-runtime.d.ts'
 
 import { z } from 'npm:zod@4'
 
+import {
+  buildCinematicSettingsPatchFromFormatSubtype,
+  buildCinematicSettingsPatchFromPresetFamily,
+  getCinematicSettings,
+} from '../../../src/domain/cinematics.ts'
 import { worldBuildPlanRequestSchema, worldBuildPlanResponseSchema } from '../../../src/domain/worldBuild.ts'
 import { requireUserClient } from '../_shared/auth.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
@@ -15,6 +20,8 @@ import {
   cinematicIntentSchema,
   cinematicIntentSystemPrompt,
   finalizeCinematicEntityRefs,
+  inferCinematicFormatSubtypeFromPrompt,
+  inferCinematicPresetFamilyFromPrompt,
 } from '../_shared/world-build-cinematics.ts'
 
 const plannerItemSchema = z.object({
@@ -328,6 +335,22 @@ Deno.serve(async (request) => {
       const filteredEntityRefs = pruneIncidentalCinematicEntityRefs(resolvedEntityRefs)
       const graphName = buildDeferredCinematicGraphName(filteredEntityRefs, payload.prompt)
       const graphSummary = buildDeferredCinematicGraphSummary(payload.prompt, filteredEntityRefs)
+      const rawProjectCinematics =
+        payload.snapshot.gameSpec && typeof payload.snapshot.gameSpec === 'object' && (payload.snapshot.gameSpec as { cinematics?: unknown }).cinematics && typeof (payload.snapshot.gameSpec as { cinematics?: unknown }).cinematics === 'object'
+          ? (payload.snapshot.gameSpec as { cinematics?: Record<string, unknown> }).cinematics ?? {}
+          : {}
+      const hasLockedProjectPreset =
+        typeof rawProjectCinematics.presetFamily === 'string'
+        || typeof rawProjectCinematics.presetId === 'string'
+        || typeof rawProjectCinematics.specializationMode === 'string'
+        || typeof rawProjectCinematics.formatSubtype === 'string'
+      const resolvedPresetFamily = hasLockedProjectPreset
+        ? getCinematicSettings(payload.snapshot.gameSpec ?? null, {}).presetFamily
+        : inferCinematicPresetFamilyFromPrompt(payload.prompt)
+      const resolvedFormatSubtype = hasLockedProjectPreset
+        ? getCinematicSettings(payload.snapshot.gameSpec ?? null, {}).formatSubtype
+        : inferCinematicFormatSubtypeFromPrompt(payload.prompt, resolvedPresetFamily)
+      const presetSource = hasLockedProjectPreset ? 'project_default' : 'prompt_inference'
       const cinematicPlan = {
         graphName,
         graphSummary,
@@ -337,7 +360,11 @@ Deno.serve(async (request) => {
         compositeRefPlans: [],
         storyboardPlan: null,
         shots: [],
-        graphSettings: {},
+        graphSettings: {
+          ...buildCinematicSettingsPatchFromPresetFamily(resolvedPresetFamily),
+          ...buildCinematicSettingsPatchFromFormatSubtype(resolvedPresetFamily, resolvedFormatSubtype),
+          presetSource,
+        },
         autoRun: false,
       } as const
       const missingPlanItems = filteredEntityRefs

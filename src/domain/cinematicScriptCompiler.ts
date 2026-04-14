@@ -152,6 +152,7 @@ export function compileCinematicGraphFromScriptDoc(input: CompileCinematicGraphF
         id: panel.id,
         title: panel.title || `Panel ${panel.orderIndex + 1}`,
         assetKey: panel.assetKey,
+        shotId: panel.shotId,
         notes: panel.notes,
         storyboardKind: 'shot_panel' as const,
       }))),
@@ -175,6 +176,7 @@ export function compileCinematicGraphFromScriptDoc(input: CompileCinematicGraphF
       metadata: {
         storyboardId: storyboardRef.id,
         panelId: storyboardRef.storyboardKind === 'shot_panel' ? storyboardRef.id : null,
+        shotId: storyboardRef.storyboardKind === 'shot_panel' ? (storyboardRef.shotId ?? null) : null,
         storyboardKind: storyboardRef.storyboardKind,
         assetKey: storyboardRef.assetKey,
         notes: storyboardRef.notes,

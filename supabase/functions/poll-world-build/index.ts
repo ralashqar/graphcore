@@ -2,7 +2,7 @@ import '@supabase/functions-js/edge-runtime.d.ts'
 
 import { z } from 'npm:zod@4'
 
-import { cinematicRunStatusResponseSchema, cinematicScriptDocSchema } from '../../../src/domain/cinematics.ts'
+import { cinematicRunStatusResponseSchema, cinematicScriptDocSchema, getCinematicSettings } from '../../../src/domain/cinematics.ts'
 import { compileCinematicGraphFromScriptDoc } from '../../../src/domain/cinematicScriptCompiler.ts'
 import {
   type CinematicPlan,
@@ -1892,7 +1892,10 @@ Deno.serve(async (request) => {
               const cinematicDraftRaw = await runStructuredWorldBuildModel({
                 model: payload.model,
                 passLabel: 'Cinematic script planner',
-                systemText: cinematicScriptPlannerSystemPrompt(),
+                systemText: cinematicScriptPlannerSystemPrompt(
+                  getCinematicSettings(snapshot.gameSpec ?? null, { cinematics: authoredCinematicPlan.graphSettings }).presetFamily,
+                  getCinematicSettings(snapshot.gameSpec ?? null, { cinematics: authoredCinematicPlan.graphSettings }).formatSubtype,
+                ),
                 promptContext: {
                   prompt: batch.prompt,
                   project: snapshot.project,

@@ -3,10 +3,18 @@ import { z } from 'npm:zod@4'
 import {
   actionBeatSchema,
   audioBeatSchema,
+  buildCinematicSettingsPatchFromFormatSubtype,
+  buildCinematicSettingsPatchFromPresetFamily,
   cinematicBeatSchema,
+  cinematicFormatSubtypeSchema,
+  cinematicPresetFamilySchema,
   cinematicRelationshipSchema,
   cinematicScriptDocSchema,
   cinematicSequenceSchema,
+  coerceFormatSubtypeForPresetFamily,
+  deriveDefaultFormatSubtypeFromPresetFamily,
+  getCinematicPresetLabel,
+  getCinematicFormatSubtypeLabel,
   dialogueBeatSchema,
   storyboardSpecSchema,
 } from '../../../src/domain/cinematics.ts'
@@ -24,6 +32,119 @@ type SnapshotDefinition = {
   kind: string
   name: string
   summary?: string | null
+}
+
+export function inferCinematicPresetFamilyFromPrompt(prompt: string) {
+  const normalized = prompt.toLowerCase()
+  if (/\b(ad|ads|roas|conversion|direct response|product page)\b/.test(normalized)) {
+    return cinematicPresetFamilySchema.parse('ugc_direct_response_ad')
+  }
+  if (/\b(podcast|faceless|explainer|demo loop)\b/.test(normalized)) {
+    return cinematicPresetFamilySchema.parse('ugc_faceless_format')
+  }
+  if (/\b(ugc|creator|tiktok|reels|shorts)\b/.test(normalized)) {
+    return cinematicPresetFamilySchema.parse('ugc_creator')
+  }
+  if (/\b(film|movie|tv|trailer|cutscene|storyboard)\b/.test(normalized)) {
+    return cinematicPresetFamilySchema.parse('story_movie_tv')
+  }
+  return cinematicPresetFamilySchema.parse('story_movie_tv')
+}
+
+export function inferCinematicFormatSubtypeFromPrompt(
+  prompt: string,
+  presetFamily: z.infer<typeof cinematicPresetFamilySchema>,
+) {
+  const normalized = prompt.toLowerCase()
+  if (/\b(rich vs poor|poor vs rich|pay[- ]?to[- ]?win|comparison|contrast|vs)\b/.test(normalized)) {
+    return cinematicFormatSubtypeSchema.parse('contrast_narrative')
+  }
+  if (/\b(before\/after|before and after|before after|transformation|glow up)\b/.test(normalized)) {
+    return presetFamily === 'ugc_direct_response_ad'
+      ? cinematicFormatSubtypeSchema.parse('ad_before_after')
+      : cinematicFormatSubtypeSchema.parse('contrast_narrative')
+  }
+  if (presetFamily === 'ugc_creator') {
+    if (/\b(reframe|redirect|overthink)\b/.test(normalized)) return cinematicFormatSubtypeSchema.parse('creator_reframe')
+    if (/\b(validation|validate|it'?s okay|you are not alone|permission)\b/.test(normalized)) return cinematicFormatSubtypeSchema.parse('creator_validation')
+    return cinematicFormatSubtypeSchema.parse('creator_problem_solution')
+  }
+  if (presetFamily === 'ugc_direct_response_ad') {
+    if (/\b(mechanism|proof|how it works)\b/.test(normalized)) return cinematicFormatSubtypeSchema.parse('ad_mechanism_proof')
+    if (/\b(comparison|versus|vs)\b/.test(normalized)) return cinematicFormatSubtypeSchema.parse('ad_comparison')
+    return cinematicFormatSubtypeSchema.parse('ad_problem_solution')
+  }
+  if (presetFamily === 'ugc_faceless_format') {
+    if (/\b(workflow|process)\b/.test(normalized)) return cinematicFormatSubtypeSchema.parse('faceless_process')
+    if (/\b(explainer|how it works|doing it wrong)\b/.test(normalized)) return cinematicFormatSubtypeSchema.parse('faceless_explainer')
+    return cinematicFormatSubtypeSchema.parse('faceless_demo')
+  }
+  return deriveDefaultFormatSubtypeFromPresetFamily(presetFamily)
+}
+
+function subtypePlannerInstructions(formatSubtype: z.infer<typeof cinematicFormatSubtypeSchema> | null) {
+  switch (formatSubtype) {
+    case 'creator_problem_solution':
+      return ['Structure beats as hook, personal problem, use case, soft proof, and soft CTA.']
+    case 'creator_reframe':
+      return ['Structure beats as hook, viewer behavior named, reframed interpretation, and emotional payoff.']
+    case 'creator_validation':
+      return ['Structure beats as hook, emotional recognition, validating statement, and soft resolution.']
+    case 'ad_problem_solution':
+      return ['Structure beats as hook, pain, product, proof, and CTA with product visibility early.']
+    case 'ad_mechanism_proof':
+      return ['Structure beats as hook, mechanism, visible demonstration, proof, and CTA.']
+    case 'ad_before_after':
+      return ['Structure beats as hook, before, intervention, after, and CTA.']
+    case 'ad_comparison':
+      return ['Structure beats as hook, option A versus B, why B wins, proof, and CTA.']
+    case 'faceless_demo':
+      return ['Structure beats as pattern interrupt, product or process, proof, and CTA.']
+    case 'faceless_explainer':
+      return ['Structure beats as wrong belief, explanation, mechanism, and result.']
+    case 'faceless_process':
+      return ['Structure beats as process start, progression, reveal, and payoff.']
+    case 'contrast_narrative':
+      return [
+        'Treat this as a contrast-led multi-scene narrative, not a talking-head script.',
+        'Plan 8-10 short escalating scenes with two locked poles and the strongest payoff image at the end.',
+        'Populate scriptDoc.referenceVault, sceneCount, statusPayoffType, and narrativeArcTemplate when useful.',
+      ]
+    default:
+      return []
+  }
+}
+
+function presetPlannerInstructions(
+  presetFamily: z.infer<typeof cinematicPresetFamilySchema>,
+  formatSubtype: z.infer<typeof cinematicFormatSubtypeSchema> | null,
+) {
+  switch (presetFamily) {
+    case 'story_movie_tv':
+      return [
+        'Bias toward authored film or TV scene construction with continuity between shots.',
+        'Prefer multi-shot sequences, stronger staging continuity, and storyboard-friendly compositions.',
+      ]
+    case 'ugc_creator':
+      return [
+        'Plan this as a short-form creator-native UGC video.',
+        'Bias toward 9:16 beats that move from hook to personal claim to demo to soft CTA.',
+        'Storyboard refs are optional; creator and product continuity matter more than boards.',
+        formatSubtype ? `Locked format subtype: ${getCinematicFormatSubtypeLabel(formatSubtype)}.` : null,
+      ].filter((entry): entry is string => Boolean(entry))
+    case 'ugc_direct_response_ad':
+      return [
+        'Plan this as a short-form direct-response ad.',
+        'Bias toward hook then pain then mechanism then proof then CTA, with product visibility early.',
+        formatSubtype ? `Locked format subtype: ${getCinematicFormatSubtypeLabel(formatSubtype)}.` : null,
+      ].filter((entry): entry is string => Boolean(entry))
+    case 'ugc_faceless_format':
+      return [
+        'Plan this as a faceless short-form format.',
+        'Bias toward objects, process, screens, podcast-style framing, or demo loops with minimal face dependence.',
+        formatSubtype ? `Locked format subtype: ${getCinematicFormatSubtypeLabel(formatSubtype)}.` : null,
+      ].filter((entry): entry is string => Boolean(entry))
+  }
 }
 
 export const cinematicIntentSchema = z.object({
@@ -1744,12 +1865,15 @@ export function evaluateCinematicScriptQuality(input: {
   }
 }
 
-export function cinematicScriptPlannerSystemPrompt() {
+export function cinematicScriptPlannerSystemPrompt(
+  presetFamily: z.infer<typeof cinematicPresetFamilySchema> = 'story_movie_tv',
+  formatSubtype: z.infer<typeof cinematicFormatSubtypeSchema> | null = null,
+) {
   return [
     'You are the GraphCore cinematic script planner.',
     'Return JSON only.',
     'Return exactly one JSON object with top-level keys: requestSummary, graphName, graphSummary, scriptDoc, graphSettings, diagnostics, assistantNotes.',
-    'scriptDoc must be an object with keys: title, logline, tone, continuityNotes, scenes, shots, relationships, compositeRefs, storyboard.',
+    'scriptDoc must be an object with keys: title, logline, tone, continuityNotes, statusPayoffType, narrativeArcTemplate, sceneCount, referenceVault, scenes, shots, relationships, compositeRefs, storyboard.',
     'Plan a cinematic script, not patch operations or graph nodes.',
     'The prompt context includes a locked entity set that has already been resolved against the project.',
     'Do not invent new entities, rename them, or change their ids.',
@@ -1775,8 +1899,15 @@ export function cinematicScriptPlannerSystemPrompt() {
     'Prefer 1-5 shots for v1 unless the prompt explicitly asks for a longer sequence.',
     'Default to a linear sequence.',
     'Use environments as location anchors when possible.',
+    `Locked preset family: ${getCinematicPresetLabel(presetFamily)}.`,
+    formatSubtype ? `Locked format subtype: ${getCinematicFormatSubtypeLabel(formatSubtype)}.` : null,
+    ...presetPlannerInstructions(presetFamily, formatSubtype),
+    ...subtypePlannerInstructions(formatSubtype),
+    presetFamily !== 'story_movie_tv'
+      ? 'For UGC planning, populate graphSettings.formatSubtype, graphSettings.formulaFamily, graphSettings.dominantTrigger, and shot fields like contrastAxis, proofMoment, and ctaStyle when relevant.'
+      : null,
     'graphSettings should only include fields that matter for this cinematic.',
-  ].join('\n')
+  ].filter((entry): entry is string => Boolean(entry)).join('\n')
 }
 
 export const cinematicPlannerSystemPrompt = cinematicScriptPlannerSystemPrompt
@@ -1850,6 +1981,20 @@ export function finalizeCinematicEntityRefs(
 }
 
 export function materializeCinematicPlan(rawPlan: z.infer<typeof cinematicPlannerRawSchema>) {
+  const inferredPresetFamily =
+    rawPlan.graphSettings?.presetFamily
+    ?? inferCinematicPresetFamilyFromPrompt(`${rawPlan.requestSummary} ${rawPlan.graphSummary}`)
+  const inferredFormatSubtype = coerceFormatSubtypeForPresetFamily(
+    inferredPresetFamily,
+    rawPlan.graphSettings?.formatSubtype
+      ?? inferCinematicFormatSubtypeFromPrompt(`${rawPlan.requestSummary} ${rawPlan.graphSummary}`, inferredPresetFamily),
+  )
+  const effectiveGraphSettings = {
+    ...buildCinematicSettingsPatchFromPresetFamily(inferredPresetFamily),
+    ...buildCinematicSettingsPatchFromFormatSubtype(inferredPresetFamily, inferredFormatSubtype),
+    ...(rawPlan.graphSettings ?? {}),
+    formatSubtype: inferredFormatSubtype,
+  }
   const scriptDoc = rawPlan.scriptDoc
     ? cinematicScriptDocSchema.parse(rawPlan.scriptDoc)
     : cinematicScriptDocSchema.parse({
@@ -1885,6 +2030,19 @@ export function materializeCinematicPlan(rawPlan: z.infer<typeof cinematicPlanne
           subtitle: null,
           beat: shot.beat,
           emotionalBeat: '',
+          hookRole: shot.hookRole,
+          formatSubtype: shot.formatSubtype ?? effectiveGraphSettings.formatSubtype ?? null,
+          formulaFamily: shot.formulaFamily ?? effectiveGraphSettings.formulaFamily ?? null,
+          dominantTrigger: shot.dominantTrigger ?? effectiveGraphSettings.dominantTrigger ?? null,
+          hookType: shot.hookType,
+          targetEmotion: shot.targetEmotion,
+          personaStyle: shot.personaStyle,
+          contrastAxis: shot.contrastAxis,
+          proofMoment: shot.proofMoment,
+          ctaStyle: shot.ctaStyle,
+          proofType: shot.proofType,
+          ctaType: shot.ctaType,
+          platformTarget: shot.platformTarget,
           shotType: shot.shotType,
           framing: shot.framing,
           cameraAngle: shot.cameraAngle,
@@ -1917,6 +2075,19 @@ export function materializeCinematicPlan(rawPlan: z.infer<typeof cinematicPlanne
     id: shot.id,
     title: shot.title,
     beat: shot.beat,
+    hookRole: shot.hookRole,
+    formatSubtype: shot.formatSubtype ?? effectiveGraphSettings.formatSubtype ?? null,
+    formulaFamily: shot.formulaFamily ?? effectiveGraphSettings.formulaFamily ?? null,
+    dominantTrigger: shot.dominantTrigger ?? effectiveGraphSettings.dominantTrigger ?? null,
+    hookType: shot.hookType,
+    targetEmotion: shot.targetEmotion,
+    personaStyle: shot.personaStyle,
+    contrastAxis: shot.contrastAxis,
+    proofMoment: shot.proofMoment,
+    ctaStyle: shot.ctaStyle,
+    proofType: shot.proofType,
+    ctaType: shot.ctaType,
+    platformTarget: shot.platformTarget,
     participantRefIds: shot.participantRefIds,
     locationRefId: shot.locationRefId,
     propRefIds: shot.propRefIds,
@@ -1943,7 +2114,7 @@ export function materializeCinematicPlan(rawPlan: z.infer<typeof cinematicPlanne
     compositeRefPlans: scriptDoc.compositeRefs,
     storyboardPlan: scriptDoc.storyboard,
     shots: derivedShots,
-    graphSettings: rawPlan.graphSettings ?? {},
+    graphSettings: effectiveGraphSettings,
     autoRun: false,
   })
 }
@@ -2009,6 +2180,9 @@ export function buildCinematicGraphFromAuthorPlan(input: {
         outputAssetKey: ref.nodeType === 'composite_ref' ? ref.assetKey : undefined,
         storyboardId: ref.nodeType === 'storyboard_ref' ? ref.id : undefined,
         panelId: ref.nodeType === 'storyboard_ref' && templateKey === 'shot_panel_ref' ? ref.id : undefined,
+        shotId: ref.nodeType === 'storyboard_ref' && templateKey === 'shot_panel_ref'
+          ? (input.cinematicPlan?.storyboardPlan?.panels.find((panel) => panel.id === ref.id)?.shotId ?? null)
+          : undefined,
         storyboardKind: ref.nodeType === 'storyboard_ref' && templateKey === 'sequence_board_ref' ? 'sequence_board' : 'shot_panel',
         notes: ref.nodeType === 'storyboard_ref' ? ref.stagingNotes : undefined,
       },

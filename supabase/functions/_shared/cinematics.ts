@@ -1,6 +1,9 @@
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
 import {
+  getCinematicFormulaFamilyLabel,
+  getCinematicFormatSubtypeLabel,
+  getCinematicPresetLabel,
   cinematicRunJobSchema,
   cinematicRunSchema,
   getAssetRefNodeConfig,
@@ -10,6 +13,7 @@ import {
   getCinematicSettings,
   getCinematicShotNodeConfig,
   getStoryboardRefNodeConfig,
+  updateNodeMetadataWithStoryboardRef,
   updateNodeMetadataWithTake,
   updateNodeMetadataWithShot,
   type SeedanceExecutionPlan,
@@ -62,6 +66,48 @@ function asString(value: unknown) {
 
 function asStringArray(value: unknown) {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : []
+}
+
+function describePresetPromptStyle(presetFamily: ReturnType<typeof getCinematicSettings>['presetFamily']) {
+  switch (presetFamily) {
+    case 'story_movie_tv':
+      return 'Use film or TV keyframe language with continuity, staging, and storyboard-level clarity.'
+    case 'ugc_creator':
+      return 'Use believable creator-shot language for a handheld, native short-form UGC frame.'
+    case 'ugc_direct_response_ad':
+      return 'Use direct-response ad language with a strong hook frame, visible product, and immediate proof.'
+    case 'ugc_faceless_format':
+      return 'Use faceless short-form language centered on objects, process, screens, or demo action.'
+  }
+}
+
+function describeSubtypePromptStyle(formatSubtype: ReturnType<typeof getCinematicSettings>['formatSubtype']) {
+  switch (formatSubtype) {
+    case 'creator_problem_solution':
+      return 'Bias toward creator-native problem, use case, soft proof, and soft CTA.'
+    case 'creator_reframe':
+      return 'Bias toward naming the viewer behavior, reframing it, and landing an emotional payoff.'
+    case 'creator_validation':
+      return 'Bias toward emotional recognition, reassurance, and low-pressure delivery.'
+    case 'ad_problem_solution':
+      return 'Bias toward pain, product, proof, and direct response clarity.'
+    case 'ad_mechanism_proof':
+      return 'Bias toward mechanism visibility, explicit demonstration, and readable proof.'
+    case 'ad_before_after':
+      return 'Bias toward transformation framing with before, intervention, and after contrast.'
+    case 'ad_comparison':
+      return 'Bias toward side-by-side or option-versus-option clarity with a clear winner.'
+    case 'faceless_demo':
+      return 'Bias toward object, product, or workflow readability without relying on a face.'
+    case 'faceless_explainer':
+      return 'Bias toward wrong-belief hooks, explanation, mechanism, and clean visual reasoning.'
+    case 'faceless_process':
+      return 'Bias toward process progression, reveal, and satisfying payoff.'
+    case 'contrast_narrative':
+      return 'Bias toward escalating two-pole contrast, status or transformation payoff, and loopable visual storytelling.'
+    default:
+      return null
+  }
 }
 
 export function extractFalVideoUrl(data: unknown) {
@@ -347,6 +393,104 @@ export function resolveTakeSources(snapshot: { definitions?: unknown[]; assets?:
   })
 }
 
+function resolveStoryboardTargetShots(graph: SnapshotGraph, storyboardNodeKey: string) {
+  const storyboardNode = findNode(graph, storyboardNodeKey)
+  if (!storyboardNode) return []
+  const config = getStoryboardRefNodeConfig(storyboardNode)
+  const sequence = getCinematicSequence(graph.metadata)
+  const directPanelShotId =
+    config.panelId
+      ? sequence.storyboard?.panels.find((panel) => panel.id === config.panelId)?.shotId ?? null
+      : null
+  const referencedShotIds = sequence.shots
+    .filter((shot) => {
+      const targetRefId = config.panelId ?? config.storyboardId
+      if (!targetRefId) return false
+      return shot.storyboardRefIds.includes(targetRefId)
+    })
+    .map((shot) => shot.id)
+  const shotIds = Array.from(new Set(
+    config.storyboardKind === 'sequence_board'
+      ? sequence.shots.slice(0, 6).map((shot) => shot.id)
+      : [
+          ...(config.shotId ? [config.shotId] : []),
+          ...(directPanelShotId ? [directPanelShotId] : []),
+          ...referencedShotIds,
+        ],
+  ))
+
+  return shotIds
+    .map((shotId) => sequence.shots.find((shot) => shot.id === shotId) ?? null)
+    .filter((shot): shot is typeof sequence.shots[number] => Boolean(shot))
+}
+
+export function resolveStoryboardSources(snapshot: { definitions?: unknown[]; assets?: unknown[] }, graph: SnapshotGraph, storyboardNodeKey: string) {
+  const storyboardNode = findNode(graph, storyboardNodeKey)
+  if (!storyboardNode) return []
+  const config = getStoryboardRefNodeConfig(storyboardNode)
+  const shots = resolveStoryboardTargetShots(graph, storyboardNodeKey)
+  const targetStoryboardRefId = config.panelId ?? config.storyboardId
+  const refIds = Array.from(new Set(
+    shots.flatMap((shot) => (
+      shot.requiredSourceRefIds.length > 0
+        ? shot.requiredSourceRefIds
+        : [
+            ...shot.participantRefIds,
+            ...(shot.locationRefId ? [shot.locationRefId] : []),
+            ...shot.propRefIds,
+            ...shot.compositeRefIds,
+          ]
+    )),
+  )).filter((refId) => refId !== targetStoryboardRefId)
+
+  return buildResolvedSourceEntries({
+    snapshot,
+    graph,
+    refIds,
+  })
+}
+
+export function resolveTakeStillReferenceImageUrls(
+  snapshot: { assets?: unknown[] },
+  graph: SnapshotGraph,
+  takeNodeKey: string,
+  sourceInputs: ReturnType<typeof resolveTakeSources>,
+) {
+  const assets = Array.isArray(snapshot.assets) ? snapshot.assets.map((entry) => asRecord(entry) as SnapshotAsset) : []
+  const takeNode = findNode(graph, takeNodeKey)
+  if (!takeNode) return sourceInputs.map((entry) => entry.imageUrl).filter((entry): entry is string => Boolean(entry))
+  const take = getCinematicTakeNodeConfig(takeNode)
+  const sequence = getCinematicSequence(graph.metadata)
+  const firstShot = take.shotIds
+    .map((shotId) => sequence.shots.find((entry) => entry.id === shotId) ?? null)
+    .find((entry) => Boolean(entry)) ?? null
+  const firstShotStillUrl = firstShot?.stillAssetKey
+    ? resolveAssetUrl(assets.find((asset) => asset.key === firstShot.stillAssetKey) ?? null)
+    : null
+
+  return Array.from(new Set([
+    ...sourceInputs.map((entry) => entry.imageUrl).filter((entry): entry is string => Boolean(entry)),
+    ...(firstShotStillUrl ? [firstShotStillUrl] : []),
+  ]))
+}
+
+export function resolveStoryboardStillReferenceImageUrls(
+  snapshot: { assets?: unknown[] },
+  graph: SnapshotGraph,
+  storyboardNodeKey: string,
+  sourceInputs: ReturnType<typeof resolveStoryboardSources>,
+) {
+  const assets = Array.isArray(snapshot.assets) ? snapshot.assets.map((entry) => asRecord(entry) as SnapshotAsset) : []
+  const shotStillUrls = resolveStoryboardTargetShots(graph, storyboardNodeKey)
+    .map((shot) => shot.stillAssetKey ? resolveAssetUrl(assets.find((asset) => asset.key === shot.stillAssetKey) ?? null) : null)
+    .filter((entry): entry is string => Boolean(entry))
+
+  return Array.from(new Set([
+    ...sourceInputs.map((entry) => entry.imageUrl).filter((entry): entry is string => Boolean(entry)),
+    ...shotStillUrls,
+  ]))
+}
+
 export function buildSeedanceExecutionPlan(input: {
   snapshot: { project: { name: string; summary: string }; gameSpec?: unknown | null }
   graph: SnapshotGraph
@@ -466,27 +610,14 @@ export function buildTakeSeedanceExecutionPlan(input: {
   }))
   const keptReferenceInputs = referenceInputs.filter((entry, index) => !entry.truncated && index < 12)
   const droppedRefIds = referenceInputs.filter((entry) => entry.truncated).map((entry) => entry.sourceRefId ?? entry.id)
-  const prompt = [
-    `Create one continuous ${take.durationSeconds}-second cinematic take titled "${input.takeNode.title}".`,
-    input.snapshot.project.summary.trim() ? `Project context: ${input.snapshot.project.summary.trim()}.` : null,
-    ...shots.map((shot, index) => {
-      const segments = [
-        `Shot ${index + 1}: ${shot.title}.`,
-        shot.beat.trim() ? `Beat: ${shot.beat.trim()}.` : null,
-        shot.framing.trim() ? `Framing: ${shot.framing.trim()}.` : null,
-        shot.cameraMovement.trim() ? `Camera movement: ${shot.cameraMovement.trim()}.` : null,
-        ...shot.dialogue.map((entry) => `Dialogue: ${entry.line}${entry.delivery ? ` (${entry.delivery})` : ''}.`),
-        ...shot.actions.map((entry) => `Action: ${entry.verb}${entry.stagingNotes ? ` (${entry.stagingNotes})` : ''}.`),
-        ...shot.audio.map((entry) => `${entry.kind}: ${entry.cue}.`),
-      ].filter((entry): entry is string => Boolean(entry))
-      return segments.join(' ')
-    }),
-    ...keptReferenceInputs.map((entry, index) => {
-      const tag = entry.modality === 'image' ? `@Image${index + 1}` : entry.modality === 'video' ? `@Video${index + 1}` : `@Audio${index + 1}`
-      return `${tag} is ${entry.label}.`
-    }),
-    'Preserve continuity across the full take, and transition naturally between the listed shots without hard cuts unless the action implies one.',
-  ].filter((entry): entry is string => Boolean(entry)).join(' ')
+  const prompt = buildSeedanceTakePrompt({
+    projectSummary: input.snapshot.project.summary,
+    take,
+    takeTitle: input.takeNode.title,
+    presetFamily: settings.presetFamily,
+    shots,
+    keptReferenceInputs,
+  })
   const imageInputs = keptReferenceInputs.filter((entry) => entry.modality === 'image')
   const videoInputs = keptReferenceInputs.filter((entry) => entry.modality === 'video')
   const audioInputs = keptReferenceInputs.filter((entry) => entry.modality === 'audio')
@@ -513,6 +644,81 @@ export function buildTakeSeedanceExecutionPlan(input: {
   } satisfies SeedanceExecutionPlan
 }
 
+function buildSeedanceTakePrompt(input: {
+  projectSummary: string
+  take: ReturnType<typeof getCinematicTakeNodeConfig>
+  takeTitle: string
+  presetFamily: ReturnType<typeof getCinematicSettings>['presetFamily']
+  shots: ReturnType<typeof getCinematicSequence>['shots']
+  keptReferenceInputs: Array<{
+    label: string
+    modality: 'image' | 'video' | 'audio'
+    sourceRefId: string | null
+  }>
+}) {
+  const continuityAnchors = input.keptReferenceInputs.slice(0, 5).map((entry) => entry.label)
+  const beatLines = input.shots.map((shot, index) => [
+    `Beat ${index + 1}: ${shot.title}.`,
+    shot.hookRole ? `Role: ${shot.hookRole}.` : null,
+    shot.targetEmotion.trim() ? `Target emotion: ${shot.targetEmotion.trim()}.` : null,
+    shot.personaStyle.trim() ? `Persona or delivery: ${shot.personaStyle.trim()}.` : null,
+    shot.beat.trim() ? `On-screen action: ${shot.beat.trim()}.` : null,
+    shot.framing.trim() ? `Framing: ${shot.framing.trim()}.` : null,
+    shot.cameraMovement.trim() ? `Primary camera move: ${shot.cameraMovement.trim()}.` : null,
+    shot.proofType.trim() ? `Proof cue: ${shot.proofType.trim()}.` : null,
+    shot.ctaType.trim() ? `CTA style: ${shot.ctaType.trim()}.` : null,
+    ...shot.dialogue.map((entry) => `Dialogue: ${entry.line}${entry.delivery ? ` (${entry.delivery})` : ''}.`),
+    ...shot.actions.map((entry) => `Action: ${entry.verb}${entry.stagingNotes ? ` (${entry.stagingNotes})` : ''}.`),
+  ].filter((entry): entry is string => Boolean(entry)).join(' '))
+  const presetDirectives =
+    input.presetFamily === 'story_movie_tv'
+      ? [
+          'Treat this as one continuous cinematic take for film or TV.',
+          'Prioritize continuity, motivated camera movement, and readable spatial progression.',
+        ]
+      : input.presetFamily === 'ugc_direct_response_ad'
+        ? [
+            'Treat this as a short-form direct-response ad take.',
+            'Surface product, proof, and emotional payoff early while keeping the motion native and believable.',
+          ]
+        : input.presetFamily === 'ugc_faceless_format'
+          ? [
+              'Treat this as a faceless short-form take focused on process, object, or screen-led storytelling.',
+              'Keep readability high for a mobile viewer and avoid dependence on facial acting.',
+            ]
+          : [
+              'Treat this as a creator-native UGC take.',
+              'Keep the framing and pacing believable for a handheld or creator-shot short-form video.',
+            ]
+  const subtypeLabel = input.take.formatSubtype ? getCinematicFormatSubtypeLabel(input.take.formatSubtype) : null
+  const formulaLabel = input.take.formulaFamily ? getCinematicFormulaFamilyLabel(input.take.formulaFamily) : null
+  const subtypeStyle = describeSubtypePromptStyle(input.take.formatSubtype ?? null)
+  const referenceDirectives = input.keptReferenceInputs.map((entry, index) => {
+    const tag = entry.modality === 'image' ? `@Image${index + 1}` : entry.modality === 'video' ? `@Video${index + 1}` : `@Audio${index + 1}`
+    return `${tag} is ${entry.label}.`
+  })
+
+  return [
+    `Create one continuous ${input.take.durationSeconds}-second video take titled "${input.takeTitle}".`,
+    input.projectSummary.trim() ? `Project context: ${input.projectSummary.trim()}.` : null,
+    `Preset family: ${getCinematicPresetLabel(input.presetFamily)}.`,
+    subtypeLabel ? `Format subtype: ${subtypeLabel}.` : null,
+    formulaLabel ? `Planned script formula: ${formulaLabel}.` : null,
+    input.take.dominantTrigger ? `Dominant trigger: ${input.take.dominantTrigger.replace(/_/g, ' ')}.` : null,
+    input.take.contrastAxis.trim() ? `Contrast axis: ${input.take.contrastAxis.trim()}.` : null,
+    input.take.proofMoment.trim() ? `Proof moment: ${input.take.proofMoment.trim()}.` : null,
+    input.take.ctaStyle.trim() ? `CTA style: ${input.take.ctaStyle.trim()}.` : null,
+    ...presetDirectives,
+    subtypeStyle,
+    continuityAnchors.length > 0 ? `Lock continuity for these anchors across the whole take: ${continuityAnchors.join(', ')}.` : null,
+    ...beatLines,
+    ...referenceDirectives,
+    'Use one dominant action arc and one primary camera path across the take.',
+    'Preserve identity, wardrobe, product, and environment continuity across all beats and references.',
+    'Do not introduce extra characters, props, cuts, captions, logos, or unrelated action.',
+  ].filter((entry): entry is string => Boolean(entry)).join(' ')
+}
+
 export function buildStillPrompt(input: {
   snapshot: { project: { name: string; summary: string }; gameSpec?: unknown | null }
   graph: SnapshotGraph
@@ -533,7 +739,12 @@ export function buildStillPrompt(input: {
   return [
     `Create a cinematic keyframe still for the project "${input.snapshot.project.name}".`,
     input.snapshot.project.summary.trim() ? `Project context: ${input.snapshot.project.summary.trim()}.` : null,
-    `Specialization mode: ${settings.specializationMode}.`,
+    `Preset family: ${getCinematicPresetLabel(settings.presetFamily)}.`,
+    settings.formatSubtype ? `Format subtype: ${getCinematicFormatSubtypeLabel(settings.formatSubtype)}.` : null,
+    settings.formulaFamily ? `Planned script formula: ${getCinematicFormulaFamilyLabel(settings.formulaFamily)}.` : null,
+    settings.dominantTrigger ? `Dominant trigger: ${settings.dominantTrigger.replace(/_/g, ' ')}.` : null,
+    describePresetPromptStyle(settings.presetFamily),
+    describeSubtypePromptStyle(shot.formatSubtype ?? settings.formatSubtype ?? null),
     `Target aspect ratio: ${settings.stillAspectRatio}.`,
     `Target still resolution: ${settings.stillResolution}.`,
     `Shot title: ${input.shotNode.title}.`,
@@ -542,12 +753,114 @@ export function buildStillPrompt(input: {
     shot.cameraAngle.trim() ? `Camera angle: ${shot.cameraAngle.trim()}.` : null,
     shot.cameraMovement.trim() ? `Camera movement intent: ${shot.cameraMovement.trim()}.` : null,
     shot.lensPreference.trim() ? `Lens preference: ${shot.lensPreference.trim()}.` : null,
+    shot.formatSubtype ? `Shot subtype: ${getCinematicFormatSubtypeLabel(shot.formatSubtype)}.` : null,
+    shot.formulaFamily ? `Shot formula: ${getCinematicFormulaFamilyLabel(shot.formulaFamily)}.` : null,
+    shot.dominantTrigger ? `Shot trigger: ${shot.dominantTrigger.replace(/_/g, ' ')}.` : null,
+    shot.contrastAxis.trim() ? `Contrast axis: ${shot.contrastAxis.trim()}.` : null,
+    shot.proofMoment.trim() ? `Proof moment: ${shot.proofMoment.trim()}.` : null,
+    shot.ctaStyle.trim() ? `CTA style: ${shot.ctaStyle.trim()}.` : null,
     input.shotNode.body?.text ? `Script beat: ${String(input.shotNode.body.text).trim()}.` : null,
     shot.visualPrompt.trim() ? `Additional visual direction: ${shot.visualPrompt.trim()}.` : null,
     shot.compositionGuide.trim() ? `Composition guide: ${shot.compositionGuide.trim()}.` : null,
     ...sourceDescriptions,
     'Compose all supplied sources into one coherent scene with consistent scale, lighting, staging, and continuity.',
     'No subtitles, logos, watermarks, borders, split panels, or collage layout.',
+  ].filter(Boolean).join(' ')
+}
+
+export function buildTakeStillPrompt(input: {
+  snapshot: { project: { name: string; summary: string }; gameSpec?: unknown | null }
+  graph: SnapshotGraph
+  takeNode: SnapshotNode
+  sourceInputs: ReturnType<typeof resolveTakeSources>
+}) {
+  const settings = getCinematicSettings(input.snapshot.gameSpec ?? null, input.graph.metadata)
+  const take = getCinematicTakeNodeConfig(input.takeNode)
+  const sequence = getCinematicSequence(input.graph.metadata)
+  const takeShots = take.shotIds
+    .map((shotId) => sequence.shots.find((entry) => entry.id === shotId) ?? null)
+    .filter((entry): entry is typeof sequence.shots[number] => Boolean(entry))
+
+  return [
+    `Create one representative still frame for the cinematic take "${input.takeNode.title}" in "${input.snapshot.project.name}".`,
+    input.snapshot.project.summary.trim() ? `Project context: ${input.snapshot.project.summary.trim()}.` : null,
+    `Preset family: ${getCinematicPresetLabel(settings.presetFamily)}.`,
+    take.formatSubtype ? `Format subtype: ${getCinematicFormatSubtypeLabel(take.formatSubtype)}.` : null,
+    take.formulaFamily ? `Planned script formula: ${getCinematicFormulaFamilyLabel(take.formulaFamily)}.` : null,
+    take.dominantTrigger ? `Dominant trigger: ${take.dominantTrigger.replace(/_/g, ' ')}.` : null,
+    describePresetPromptStyle(settings.presetFamily),
+    describeSubtypePromptStyle(take.formatSubtype ?? settings.formatSubtype ?? null),
+    `Target aspect ratio: ${settings.stillAspectRatio}.`,
+    `Target still resolution: ${settings.stillResolution}.`,
+    take.contrastAxis.trim() ? `Contrast axis: ${take.contrastAxis.trim()}.` : null,
+    take.proofMoment.trim() ? `Proof moment: ${take.proofMoment.trim()}.` : null,
+    take.ctaStyle.trim() ? `CTA style: ${take.ctaStyle.trim()}.` : null,
+    ...takeShots.map((shot, index) => [
+      `Take shot ${index + 1}: ${shot.title}.`,
+      shot.beat.trim() ? `Beat: ${shot.beat.trim()}.` : null,
+      shot.framing.trim() ? `Framing: ${shot.framing.trim()}.` : null,
+      shot.cameraMovement.trim() ? `Movement: ${shot.cameraMovement.trim()}.` : null,
+      shot.visualPrompt.trim() ? `Visual direction: ${shot.visualPrompt.trim()}.` : null,
+    ].filter(Boolean).join(' ')),
+    ...input.sourceInputs.map((entry) => `${entry.role ?? 'source'}: ${entry.definition?.name ?? entry.node.title}.`),
+    settings.presetFamily === 'story_movie_tv'
+      ? 'Choose the strongest storyboard-like keyframe that communicates the take with clear cinematic continuity.'
+      : settings.presetFamily === 'ugc_direct_response_ad'
+        ? 'Choose the strongest hook or proof frame with readable product visibility and immediate clarity.'
+        : settings.presetFamily === 'ugc_faceless_format'
+          ? 'Choose the cleanest object, demo, or process frame with strong readability for short-form viewing.'
+          : 'Choose a believable creator-native frame that feels captured inside a short-form UGC video.',
+    'No subtitles, logos, watermarks, borders, split panels, or collage layout.',
+  ].filter(Boolean).join(' ')
+}
+
+export function buildStoryboardStillPrompt(input: {
+  snapshot: { project: { name: string; summary: string }; gameSpec?: unknown | null }
+  graph: SnapshotGraph
+  storyboardNode: SnapshotNode
+  sourceInputs: ReturnType<typeof resolveStoryboardSources>
+}) {
+  const settings = getCinematicSettings(input.snapshot.gameSpec ?? null, input.graph.metadata)
+  const config = getStoryboardRefNodeConfig(input.storyboardNode)
+  const shots = resolveStoryboardTargetShots(input.graph, input.storyboardNode.key)
+  const sourceDescriptions = input.sourceInputs.map((entry) => `${entry.role ?? 'source'}: ${entry.definition?.name ?? entry.node.title}.`)
+
+  if (config.storyboardKind === 'sequence_board') {
+    return [
+    `Create a cinematic storyboard sequence board for "${input.storyboardNode.title}" in "${input.snapshot.project.name}".`,
+    input.snapshot.project.summary.trim() ? `Project context: ${input.snapshot.project.summary.trim()}.` : null,
+    `Preset family: ${getCinematicPresetLabel(settings.presetFamily)}.`,
+    settings.formatSubtype ? `Format subtype: ${getCinematicFormatSubtypeLabel(settings.formatSubtype)}.` : null,
+    'Render this as a readable storyboard sheet with multiple ordered panels that clearly progress through the action.',
+      'Use strong silhouette, clean panel composition, consistent character likeness, readable staging, and simple environment blocking.',
+      'Favor grayscale storyboard aesthetics or restrained monochrome marker rendering over polished final-frame concept art.',
+      ...shots.slice(0, 6).map((shot, index) => [
+        `Panel ${index + 1}: ${shot.title}.`,
+        shot.beat.trim() ? `Beat: ${shot.beat.trim()}.` : null,
+        shot.framing.trim() ? `Framing: ${shot.framing.trim()}.` : null,
+      ].filter(Boolean).join(' ')),
+      config.notes.trim() ? `Storyboard notes: ${config.notes.trim()}.` : null,
+      config.generationPrompt.trim() ? `Additional direction: ${config.generationPrompt.trim()}.` : null,
+      ...sourceDescriptions,
+      'No watermarks or decorative mockup chrome. Keep the panels clean and production-usable.',
+    ].filter(Boolean).join(' ')
+  }
+
+  const primaryShot = shots[0] ?? null
+  return [
+    `Create one storyboard panel for "${input.storyboardNode.title}" in "${input.snapshot.project.name}".`,
+    input.snapshot.project.summary.trim() ? `Project context: ${input.snapshot.project.summary.trim()}.` : null,
+    `Preset family: ${getCinematicPresetLabel(settings.presetFamily)}.`,
+    settings.formatSubtype ? `Format subtype: ${getCinematicFormatSubtypeLabel(settings.formatSubtype)}.` : null,
+    'Render this as a single production-style storyboard panel with clear blocking, silhouette, and readable composition.',
+    primaryShot?.title ? `Shot: ${primaryShot.title}.` : null,
+    primaryShot?.beat.trim() ? `Beat: ${primaryShot.beat.trim()}.` : null,
+    primaryShot?.framing.trim() ? `Framing: ${primaryShot.framing.trim()}.` : null,
+    primaryShot?.cameraAngle.trim() ? `Camera angle: ${primaryShot.cameraAngle.trim()}.` : null,
+    config.notes.trim() ? `Storyboard notes: ${config.notes.trim()}.` : null,
+    config.generationPrompt.trim() ? `Additional direction: ${config.generationPrompt.trim()}.` : null,
+    ...sourceDescriptions,
+    'Use a storyboard look rather than a polished final cinematic still. No multi-panel layout, no watermarks, and no decorative borders.',
   ].filter(Boolean).join(' ')
 }
 
@@ -565,6 +878,10 @@ export function buildVideoPrompt(input: {
     movementLabel,
     `Create a ${shot.durationSeconds ?? settings.defaultClipSeconds}-second cinematic clip for "${input.shotNode.title}".`,
     input.snapshot.project.summary.trim() ? `Project context: ${input.snapshot.project.summary.trim()}.` : null,
+    `Preset family: ${getCinematicPresetLabel(settings.presetFamily)}.`,
+    shot.formatSubtype ? `Format subtype: ${getCinematicFormatSubtypeLabel(shot.formatSubtype)}.` : null,
+    shot.formulaFamily ? `Planned script formula: ${getCinematicFormulaFamilyLabel(shot.formulaFamily)}.` : null,
+    shot.dominantTrigger ? `Dominant trigger: ${shot.dominantTrigger.replace(/_/g, ' ')}.` : null,
     input.shotNode.body?.text ? `Script beat: ${String(input.shotNode.body.text).trim()}.` : null,
     shot.visualPrompt.trim() ? `Additional visual direction: ${shot.visualPrompt.trim()}.` : null,
     shot.compositionGuide.trim() ? `Composition guide: ${shot.compositionGuide.trim()}.` : null,
@@ -572,7 +889,8 @@ export function buildVideoPrompt(input: {
     shot.cameraAngle.trim() ? `Camera angle: ${shot.cameraAngle.trim()}.` : null,
     shot.lensPreference.trim() ? `Lens preference: ${shot.lensPreference.trim()}.` : null,
     input.sourceInputs.map((entry) => `${entry.config.assetRole ?? entry.definition?.kind ?? 'source'}: ${entry.definition?.name ?? entry.node.title}.`).join(' '),
-    `Keep the scene visually aligned with a ${settings.specializationMode} cinematic sequence.`,
+    describePresetPromptStyle(settings.presetFamily),
+    describeSubtypePromptStyle(shot.formatSubtype ?? settings.formatSubtype ?? null),
   ].filter(Boolean).join(' ')
 }
 
@@ -748,6 +1066,53 @@ export async function persistTakeBindingsIfPresent(
     .eq('key', takeNodeKey)
 }
 
+export async function persistStoryboardBindingsIfPresent(
+  client: ReturnType<typeof createClient>,
+  draftId: string,
+  graphKey: string,
+  storyboardNodeKey: string,
+  changes: {
+    bodyImageAssetKey?: string | null
+    metadata: Partial<ReturnType<typeof getStoryboardRefNodeConfig>>
+  },
+) {
+  const graphRow = await client.from('draft_graphs').select('id').eq('draft_id', draftId).eq('key', graphKey).maybeSingle()
+  if (graphRow.error || !graphRow.data) return
+
+  const nodeRow = await client
+    .from('draft_graph_nodes')
+    .select('body, metadata, display')
+    .eq('graph_id', graphRow.data.id)
+    .eq('key', storyboardNodeKey)
+    .maybeSingle()
+
+  if (nodeRow.error || !nodeRow.data) return
+
+  const currentBody = asRecord(nodeRow.data.body)
+  const currentMetadata = asRecord(nodeRow.data.metadata)
+  const currentDisplay = asRecord(nodeRow.data.display)
+
+  await client
+    .from('draft_graph_nodes')
+    .update({
+      body: changes.bodyImageAssetKey === undefined
+        ? currentBody
+        : {
+            ...currentBody,
+            imageAssetKey: changes.bodyImageAssetKey,
+          },
+      display: changes.bodyImageAssetKey === undefined
+        ? currentDisplay
+        : {
+            ...currentDisplay,
+            iconAssetKey: changes.bodyImageAssetKey,
+          },
+      metadata: updateNodeMetadataWithStoryboardRef(currentMetadata, changes.metadata),
+    })
+    .eq('graph_id', graphRow.data.id)
+    .eq('key', storyboardNodeKey)
+}
+
 export function applyShotBindingToGraph(
   graph: SnapshotGraph,
   shotNodeKey: string,
@@ -809,6 +1174,39 @@ export function applyTakeBindingToGraph(
               iconAssetKey: changes.bodyImageAssetKey,
             },
         metadata: updateNodeMetadataWithTake(asRecord(node.metadata), changes.metadata),
+      }
+    }),
+  }
+}
+
+export function applyStoryboardBindingToGraph(
+  graph: SnapshotGraph,
+  storyboardNodeKey: string,
+  changes: {
+    bodyImageAssetKey?: string | null
+    metadata: Partial<ReturnType<typeof getStoryboardRefNodeConfig>>
+  },
+) {
+  return {
+    ...graph,
+    nodes: graph.nodes.map((node) => {
+      if (node.key !== storyboardNodeKey) return node
+      const currentBody = asRecord(node.body)
+      return {
+        ...node,
+        body: changes.bodyImageAssetKey === undefined
+          ? currentBody
+          : {
+              ...currentBody,
+              imageAssetKey: changes.bodyImageAssetKey,
+            },
+        display: changes.bodyImageAssetKey === undefined
+          ? asRecord(node.display)
+          : {
+              ...asRecord(node.display),
+              iconAssetKey: changes.bodyImageAssetKey,
+            },
+        metadata: updateNodeMetadataWithStoryboardRef(asRecord(node.metadata), changes.metadata),
       }
     }),
   }

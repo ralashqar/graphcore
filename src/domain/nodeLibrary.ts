@@ -102,6 +102,31 @@ export const graphNodeLibrary: NodeLibraryGroup[] = [
         }),
         defaultDisplay: { compactPreview: true },
       }),
+      template('creator_identity_ref', 'Creator Identity', 'cinematics', 'asset_ref', cinematicGraphTypes, 'Creator Identity Ref', 'basic', {
+        defaultSubtitle: 'Primary creator look and feel reference for UGC presets.',
+        defaultMetadata: updateNodeMetadataWithAssetRef({}, {
+          assetRole: 'character',
+          role: 'creator',
+          priority: 78,
+        }),
+        defaultDisplay: { compactPreview: true },
+      }),
+      template('product_hold_ref', 'Product Hold', 'cinematics', 'composite_ref', cinematicGraphTypes, 'Product Hold Ref', 'basic', {
+        defaultSubtitle: 'Creator plus product continuity reference for short-form demos and ads.',
+        defaultMetadata: updateNodeMetadataWithCompositeRef({}, {
+          relationshipType: 'hold',
+          priority: 88,
+        }),
+        defaultDisplay: { compactPreview: true },
+      }),
+      template('demo_proof_ref', 'Demo / Proof', 'cinematics', 'composite_ref', cinematicGraphTypes, 'Demo Proof Ref', 'basic', {
+        defaultSubtitle: 'Product and proof composition for UGC benefit or demo shots.',
+        defaultMetadata: updateNodeMetadataWithCompositeRef({}, {
+          relationshipType: 'targets',
+          priority: 86,
+        }),
+        defaultDisplay: { compactPreview: true },
+      }),
       template('audio_ref', 'Audio Ref', 'cinematics', 'asset_ref', cinematicGraphTypes, 'Audio Ref', 'basic', {
         defaultSubtitle: 'Audio reference or voice guide.',
         defaultMetadata: updateNodeMetadataWithAssetRef({}, {

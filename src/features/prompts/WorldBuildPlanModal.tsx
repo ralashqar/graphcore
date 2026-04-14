@@ -1,4 +1,15 @@
 import type { WorldBuildPlanItem } from '../../domain/worldBuild'
+import {
+  cinematicFormatSubtypeSchema,
+  coerceFormatSubtypeForPresetFamily,
+  getCinematicFormulaFamilyLabel,
+  getCinematicFormatSubtypeLabel,
+  getCinematicPresetLabel,
+  isUgcPresetFamily,
+  type CinematicFormulaFamily,
+  type CinematicFormatSubtype,
+  type CinematicPresetFamily,
+} from '../../domain/cinematics'
 import { EntityIcon } from '../../shared/entityIcons'
 
 type WorldBuildPlanModalProps = {
@@ -8,6 +19,7 @@ type WorldBuildPlanModalProps = {
     entityRefs?: Array<{ id: string; sourceName: string; role: string; resolution: 'existing' | 'create'; definitionKey?: string | null }>
     relationshipRefs?: Array<{ id: string; type: string; sourceRefId: string; targetRefId: string }>
     compositeRefPlans?: Array<{ id: string; title: string }>
+    graphSettings?: { presetFamily?: string; presetId?: string; presetSource?: string; specializationMode?: string; formatSubtype?: string | null; formulaFamily?: string | null } | null
     storyboardPlan?: { mode?: string; panels?: Array<{ id: string; title: string }> } | null
     scriptDoc?: {
       title?: string
@@ -22,6 +34,8 @@ type WorldBuildPlanModalProps = {
   requestSummary: string
   onCancel: () => void
   onConfirm: () => void
+  onChangePresetFamily?: (presetFamily: CinematicPresetFamily) => void
+  onChangeFormatSubtype?: (formatSubtype: CinematicFormatSubtype) => void
   onToggleEnabled: (itemId: string, enabled: boolean) => void
   onToggleOption: (itemId: string, optionKey: 'generateConceptImage' | 'generateConceptGallery', enabled: boolean) => void
 }
@@ -41,6 +55,21 @@ function iconForPlanKind(kind: WorldBuildPlanItem['kind']) {
   }
 }
 
+function presetSourceLabel(source: string | undefined) {
+  switch (source) {
+    case 'graph_override':
+      return 'Using graph override'
+    case 'project_default':
+      return 'Using project default'
+    case 'prompt_inference':
+      return 'Detected from prompt'
+    case 'manual_override':
+      return 'Manually overridden'
+    default:
+      return 'Using fallback default'
+  }
+}
+
 export function WorldBuildPlanModal({
   cinematicPlan,
   isStarting,
@@ -49,11 +78,19 @@ export function WorldBuildPlanModal({
   prompt,
   requestSummary,
   onCancel,
+  onChangePresetFamily,
+  onChangeFormatSubtype,
   onConfirm,
   onToggleEnabled,
   onToggleOption,
 }: WorldBuildPlanModalProps) {
   const hasPlanItems = planItems.length > 0
+  const presetFamily = (cinematicPlan?.graphSettings?.presetFamily as CinematicPresetFamily | undefined) ?? 'story_movie_tv'
+  const isUgcPreset = isUgcPresetFamily(presetFamily)
+  const subtypeOptions = cinematicFormatSubtypeSchema.options.filter((option) => option === 'contrast_narrative' || coerceFormatSubtypeForPresetFamily(presetFamily, option) === option)
+  const formatSubtype = isUgcPreset
+    ? coerceFormatSubtypeForPresetFamily(presetFamily, (cinematicPlan?.graphSettings?.formatSubtype as CinematicFormatSubtype | undefined) ?? null)
+    : null
 
   return (
     <div className="bootstrap-overlay" onClick={onCancel} role="presentation">
@@ -74,6 +111,37 @@ export function WorldBuildPlanModal({
             <div className="inline-note">
               Will create: {(cinematicPlan.entityRefs ?? []).filter((entry) => entry.resolution === 'create').map((entry) => entry.sourceName).join(', ') || 'none'}
             </div>
+            <label className="field-block compact-block">
+              <span>Detected preset</span>
+              <select
+                value={presetFamily}
+                onChange={(event) => onChangePresetFamily?.(event.target.value as CinematicPresetFamily)}
+              >
+                <option value="story_movie_tv">{getCinematicPresetLabel('story_movie_tv')}</option>
+                <option value="ugc_creator">{getCinematicPresetLabel('ugc_creator')}</option>
+                <option value="ugc_direct_response_ad">{getCinematicPresetLabel('ugc_direct_response_ad')}</option>
+                <option value="ugc_faceless_format">{getCinematicPresetLabel('ugc_faceless_format')}</option>
+              </select>
+            </label>
+            {isUgcPreset && formatSubtype ? (
+              <label className="field-block compact-block">
+                <span>Format subtype</span>
+                <select
+                  value={formatSubtype}
+                  onChange={(event) => onChangeFormatSubtype?.(event.target.value as CinematicFormatSubtype)}
+                >
+                  {subtypeOptions.map((option) => <option key={option} value={option}>{getCinematicFormatSubtypeLabel(option)}</option>)}
+                </select>
+              </label>
+            ) : null}
+            <div className="inline-note">
+              {presetSourceLabel(cinematicPlan.graphSettings?.presetSource)}.
+            </div>
+            {isUgcPreset && cinematicPlan.graphSettings?.formulaFamily ? (
+              <div className="inline-note">
+                Planned script formula: {getCinematicFormulaFamilyLabel(cinematicPlan.graphSettings.formulaFamily as CinematicFormulaFamily)}.
+              </div>
+            ) : null}
             <div className="inline-note">
               Planned shots: {(cinematicPlan.shots ?? []).map((shot) => shot.title).join(', ') || 'none'}
             </div>

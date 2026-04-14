@@ -4,9 +4,17 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { resolveAssetPreviewUrl, resolveAssetSourceUrl } from '../../domain/assets'
 import { compileCinematicGraphFromScriptDoc } from '../../domain/cinematicScriptCompiler'
 import {
+  buildCinematicSettingsPatchFromFormatSubtype,
+  buildCinematicSettingsPatchFromPresetFamily,
+  cinematicDominantTriggerSchema,
+  cinematicFormatSubtypeSchema,
   buildCinematicSequenceFromScriptDoc,
   cinematicScriptDocSchema,
+  coerceFormatSubtypeForPresetFamily,
   getAssetRefNodeConfig,
+  getCinematicFormulaFamilyLabel,
+  getCinematicFormatSubtypeLabel,
+  getCinematicPresetLabel,
   getCinematicSequence,
   getCinematicScript,
   getCinematicSettings,
@@ -21,7 +29,9 @@ import {
   updateNodeMetadataWithStoryboardRef,
   type ActionBeat,
   type AudioBeat,
+  type CinematicFormatSubtype,
   type CinematicRun,
+  type CinematicPresetFamily,
   type CinematicScriptDoc,
   type CinematicScriptEntityBinding,
   type CinematicScriptShot,
@@ -54,7 +64,7 @@ import { useGraphCanvasController } from '../graph/useGraphCanvasController'
 import { isTemplateAvailableForGraph, uniqueEdgeKey, uniqueGraphKey } from '../graph/utils'
 import type { WorldBuildBatch } from '../../domain/worldBuild'
 
-type CinematicRunMode = 'graph_run' | 'preview_still' | 'preview_video'
+type CinematicRunMode = CinematicRun['mode']
 
 type CinematicsWorkspaceProps = {
   assets: AssetDefinition[]
@@ -69,6 +79,16 @@ type CinematicsWorkspaceProps = {
   selectedGraph: GraphDefinition | null
   selectedNode: NodeDefinition | null
   snapshotGraphs: GraphDefinition[]
+  preflightStatus?: {
+    graphKey: string
+    active: boolean
+    label: string
+    total: number
+    completed: number
+    failed: number
+    currentNodeKey: string | null
+    lastMessage: string | null
+  } | null
   onClearSelection: () => void
   onConnectEdge: (graphKey: string, edge: EdgeDefinition) => void
   onCreateGraph: (input: GraphCreateInput) => void
@@ -79,10 +99,11 @@ type CinematicsWorkspaceProps = {
   onDuplicateGraph: (graphKey: string) => void
   onDuplicateNode: (graphKey: string, nodeKey: string) => void
   onMoveNode: (graphKey: string, nodeKey: string, position: NodeDefinition['position']) => void
+  onRunCinematicPreflight: (request: { graphKey: string; includeShots?: boolean; includeStoryboards?: boolean; includeTakes?: boolean }) => void
   onSelectEdge: (key: string | null) => void
   onSelectGraph: (key: string | null) => void
   onSelectNode: (key: string | null) => void
-  onStartCinematicRun: (request: { graphKey: string; mode: CinematicRunMode; shotNodeKey?: string | null }) => void
+  onStartCinematicRun: (request: { graphKey: string; mode: CinematicRunMode; targetNodeKey?: string | null; targetNodeKeys?: string[] }) => void
   onUpdateEdge: (graphKey: string, edgeKey: string, changes: Partial<EdgeDefinition>) => void
   onUpdateGameSpecCinematics: (changes: Partial<CinematicSettings>) => void
   onUpdateGraph: (graphKey: string, changes: Partial<GraphDefinition>) => void
@@ -123,6 +144,10 @@ function buildScriptReferenceOptions(scriptDoc: CinematicScriptDoc): ScriptRefer
     kind: binding.kind,
     role: binding.role,
   }))
+}
+
+function getSubtypeOptionsForPresetFamily(presetFamily: CinematicPresetFamily) {
+  return cinematicFormatSubtypeSchema.options.filter((option) => option === 'contrast_narrative' || coerceFormatSubtypeForPresetFamily(presetFamily, option) === option)
 }
 
 function moveArrayItem<TValue>(items: TValue[], fromIndex: number, toIndex: number) {
@@ -384,6 +409,80 @@ function collectShotSourcesFromMetadata(graph: GraphDefinition, shotNode: NodeDe
   return metadataSources
 }
 
+function collectStoryboardTargetShots(graph: GraphDefinition, storyboardNode: NodeDefinition) {
+  const config = getStoryboardRefNodeConfig(storyboardNode)
+  const sequence = getCinematicSequence(graph.metadata)
+  const panelShotId = config.panelId
+    ? sequence.storyboard?.panels.find((panel) => panel.id === config.panelId)?.shotId ?? null
+    : null
+  const referencedShotIds = sequence.shots
+    .filter((shot) => {
+      const targetRefId = config.panelId ?? config.storyboardId
+      if (!targetRefId) return false
+      return shot.storyboardRefIds.includes(targetRefId)
+    })
+    .map((shot) => shot.id)
+  const shotIds = Array.from(new Set(
+    config.storyboardKind === 'sequence_board'
+      ? sequence.shots.slice(0, 6).map((shot) => shot.id)
+      : [
+          ...(config.shotId ? [config.shotId] : []),
+          ...(panelShotId ? [panelShotId] : []),
+          ...referencedShotIds,
+        ],
+  ))
+
+  return shotIds
+    .map((shotId) => sequence.shots.find((shot) => shot.id === shotId) ?? null)
+    .filter((shot): shot is ReturnType<typeof getCinematicSequence>['shots'][number] => Boolean(shot))
+}
+
+function collectStoryboardSources(graph: GraphDefinition, storyboardNode: NodeDefinition, definitions: DefinitionBase[], assets: AssetDefinition[]) {
+  const config = getStoryboardRefNodeConfig(storyboardNode)
+  const targetRefId = config.panelId ?? config.storyboardId
+  const requestedRefIds = Array.from(new Set(
+    collectStoryboardTargetShots(graph, storyboardNode)
+      .flatMap((shot) => (
+        shot.requiredSourceRefIds.length > 0
+          ? shot.requiredSourceRefIds
+          : [
+              ...shot.participantRefIds,
+              ...(shot.locationRefId ? [shot.locationRefId] : []),
+              ...shot.propRefIds,
+              ...shot.compositeRefIds,
+            ]
+      )),
+  )).filter((refId) => refId !== targetRefId)
+  const sourceNodeByRefId = new Map<string, NodeDefinition>()
+  for (const graphNode of graph.nodes) {
+    if (!['asset_ref', 'composite_ref', 'storyboard_ref'].includes(graphNode.type)) continue
+    const refId = resolveCinematicRefId(graphNode)
+    if (!refId) continue
+    sourceNodeByRefId.set(refId, graphNode)
+  }
+
+  return requestedRefIds
+    .map((refId) => {
+      const node = sourceNodeByRefId.get(refId) ?? null
+      if (!node) return null
+      if (node.type === 'asset_ref') {
+        const refConfig = getAssetRefNodeConfig(node)
+        const definition = definitions.find((entry) => entry.key === refConfig.definitionKey) ?? null
+        const asset = refConfig.assetKey
+          ? assets.find((entry) => entry.key === refConfig.assetKey) ?? null
+          : resolveDefinitionPreviewAsset(definition, assets)
+        return { node, definition, asset, refId: refConfig.entityRefId }
+      }
+      if (node.type === 'composite_ref') {
+        const refConfig = getCompositeRefNodeConfig(node)
+        return { node, definition: null, asset: assets.find((entry) => entry.key === refConfig.outputAssetKey) ?? null, refId: refConfig.compositeRefId }
+      }
+      const refConfig = getStoryboardRefNodeConfig(node)
+      return { node, definition: null, asset: assets.find((entry) => entry.key === refConfig.assetKey) ?? null, refId: refConfig.panelId ?? refConfig.storyboardId }
+    })
+    .filter((entry): entry is ShotSourceEntry => Boolean(entry))
+}
+
 export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
   const {
     assets,
@@ -398,6 +497,7 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
     selectedGraph,
     selectedNode,
     snapshotGraphs,
+    preflightStatus = null,
     onClearSelection,
     onConnectEdge,
     onCreateGraph,
@@ -408,6 +508,7 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
     onDuplicateGraph,
     onDuplicateNode,
     onMoveNode,
+    onRunCinematicPreflight,
     onSelectEdge,
     onSelectGraph,
     onSelectNode,
@@ -592,6 +693,7 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
             { label: `${config.durationSeconds}s`, tone: 'default' as const },
             { label: config.seedanceEndpoint, tone: 'muted' as const },
             { label: `${config.shotIds.length} shots`, tone: 'muted' as const },
+            ...(config.approvedForVideo ? [{ label: 'approved', tone: 'default' as const }] : []),
           ],
           lines: takeShots.slice(0, 3).map((shot) => truncateGraphLine(shot.title, 52)),
           ambience: config.outputVideoAssetKey ? 'video ready' : 'waiting to render',
@@ -656,10 +758,15 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
   function updateGraphCinematics(changes: Partial<CinematicSettings>) {
     if (!currentGraph) return
     const currentSettings = getCinematicSettings({}, currentGraph.metadata)
+    const explicitGraphSettings =
+      currentGraph.metadata && typeof currentGraph.metadata === 'object' && (currentGraph.metadata as { cinematics?: unknown }).cinematics && typeof (currentGraph.metadata as { cinematics?: unknown }).cinematics === 'object'
+        ? (currentGraph.metadata as { cinematics?: Record<string, unknown> }).cinematics ?? {}
+        : {}
     onUpdateGraph(currentGraph.key, {
       metadata: {
         ...currentGraph.metadata,
         cinematics: {
+          ...explicitGraphSettings,
           ...currentSettings,
           ...changes,
         },
@@ -669,9 +776,32 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
 
   const projectSettings = getCinematicSettings(gameSpec ?? {}, {})
   const graphSettings = getCinematicSettings(gameSpec ?? {}, currentGraph?.metadata ?? {})
+  const subtypeOptions = getSubtypeOptionsForPresetFamily(graphSettings.presetFamily)
+  const currentPreflightStatus = preflightStatus?.graphKey === currentGraph?.key ? preflightStatus : null
+  const graphPresetOverrideActive = Boolean(
+    currentGraph
+    && currentGraph.metadata
+    && typeof currentGraph.metadata === 'object'
+    && (currentGraph.metadata as { cinematics?: Record<string, unknown> }).cinematics
+    && (
+      typeof (currentGraph.metadata as { cinematics?: Record<string, unknown> }).cinematics?.presetFamily === 'string'
+      || typeof (currentGraph.metadata as { cinematics?: Record<string, unknown> }).cinematics?.presetId === 'string'
+      || typeof (currentGraph.metadata as { cinematics?: Record<string, unknown> }).cinematics?.specializationMode === 'string'
+    )
+  )
   const currentScript = useMemo(
     () => currentGraph ? getCinematicScript(currentGraph.metadata) : null,
     [currentGraph],
+  )
+  const currentTakeNodes = useMemo(
+    () => currentGraph?.nodes.filter((node) => node.type === 'cinematic_take') ?? [],
+    [currentGraph],
+  )
+  const approvedTakeNodeKeys = useMemo(
+    () => currentTakeNodes
+      .filter((node) => getCinematicTakeNodeConfig(node).approvedForVideo)
+      .map((node) => node.key),
+    [currentTakeNodes],
   )
   const currentScriptReferenceOptions = useMemo(
     () => currentScript ? buildScriptReferenceOptions(currentScript) : [],
@@ -764,6 +894,29 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
       default:
         return 'This cinematic flow is still generating. Script should appear first; graph compilation should complete shortly after.'
     }
+  }
+
+  function resetGraphPresetOverride() {
+    if (!currentGraph) return
+    const explicitGraphSettings =
+      currentGraph.metadata && typeof currentGraph.metadata === 'object' && (currentGraph.metadata as { cinematics?: unknown }).cinematics && typeof (currentGraph.metadata as { cinematics?: unknown }).cinematics === 'object'
+        ? { ...((currentGraph.metadata as { cinematics?: Record<string, unknown> }).cinematics ?? {}) }
+        : {}
+    delete explicitGraphSettings.presetFamily
+    delete explicitGraphSettings.presetId
+    delete explicitGraphSettings.formatSubtype
+    delete explicitGraphSettings.formulaFamily
+    delete explicitGraphSettings.dominantTrigger
+    delete explicitGraphSettings.contrastAxis
+    delete explicitGraphSettings.proofMoment
+    delete explicitGraphSettings.ctaStyle
+    delete explicitGraphSettings.specializationMode
+    onUpdateGraph(currentGraph.key, {
+      metadata: {
+        ...currentGraph.metadata,
+        cinematics: explicitGraphSettings,
+      },
+    })
   }
 
   return (
@@ -869,21 +1022,39 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
             <button className={contentMode === 'graph' ? 'segment-button is-active' : 'segment-button'} onClick={() => setContentMode('graph')} type="button">Graph</button>
             <button className={contentMode === 'runs' ? 'segment-button is-active' : 'segment-button'} onClick={() => setContentMode('runs')} type="button">Runs</button>
           </div>
-          <select value={graphSettings.specializationMode} onChange={(event) => updateGraphCinematics({ specializationMode: event.target.value as CinematicSettings['specializationMode'] })}>
-            <option value="story">Story</option>
-            <option value="ugc">UGC</option>
+          <select value={graphSettings.presetFamily} onChange={(event) => updateGraphCinematics(buildCinematicSettingsPatchFromPresetFamily(event.target.value as CinematicPresetFamily))}>
+            <option value="story_movie_tv">Movie / TV Story</option>
+            <option value="ugc_creator">UGC Creator</option>
+            <option value="ugc_direct_response_ad">UGC Direct Response Ad</option>
+            <option value="ugc_faceless_format">UGC Faceless Format</option>
           </select>
+          {graphSettings.presetFamily !== 'story_movie_tv' && graphSettings.formatSubtype ? (
+            <select
+              value={graphSettings.formatSubtype}
+              onChange={(event) => updateGraphCinematics(buildCinematicSettingsPatchFromFormatSubtype(graphSettings.presetFamily, event.target.value as CinematicFormatSubtype))}
+            >
+              {subtypeOptions.map((option) => <option key={option} value={option}>{getCinematicFormatSubtypeLabel(option)}</option>)}
+            </select>
+          ) : null}
+          <button className="ghost-button compact" disabled={!currentGraph || !graphPresetOverrideActive} onClick={resetGraphPresetOverride} type="button">Use Project Preset</button>
           <button className="ghost-button compact" disabled={!currentGraph || contentMode !== 'graph'} onClick={refocusViewport} type="button">Fit View</button>
           <button className="ghost-button compact" disabled={!currentGraph || !currentScript || currentScript.shots.length === 0 || currentScriptValidationErrors.length > 0} onClick={rebuildCurrentGraphFromScript} type="button">Rebuild From Script</button>
+          <button className="ghost-button compact" disabled={!currentGraph || !canRunCinematics || isCurrentGraphPending || Boolean(currentPreflightStatus?.active)} onClick={() => currentGraph && onRunCinematicPreflight({ graphKey: currentGraph.key, includeShots: true })} type="button">Generate Missing Shot Stills</button>
+          <button className="ghost-button compact" disabled={!currentGraph || !canRunCinematics || isCurrentGraphPending || Boolean(currentPreflightStatus?.active)} onClick={() => currentGraph && onRunCinematicPreflight({ graphKey: currentGraph.key, includeStoryboards: true })} type="button">Generate Missing Storyboards</button>
+          <button className="ghost-button compact" disabled={!currentGraph || !canRunCinematics || isCurrentGraphPending || Boolean(currentPreflightStatus?.active)} onClick={() => currentGraph && onRunCinematicPreflight({ graphKey: currentGraph.key, includeTakes: true })} type="button">Generate Missing Take Stills</button>
+          <button className="ghost-button compact" disabled={!currentGraph || !canRunCinematics || isCurrentGraphPending || Boolean(currentPreflightStatus?.active)} onClick={() => currentGraph && onRunCinematicPreflight({ graphKey: currentGraph.key, includeShots: true, includeStoryboards: true, includeTakes: true })} type="button">Generate All Visuals</button>
           <button className="ghost-button compact" onClick={() => currentGraph && onDuplicateGraph(currentGraph.key)} type="button">Duplicate</button>
           <button className={isDeletingSelectedGraph ? 'ghost-button compact button-with-spinner' : 'ghost-button compact'} disabled={isDeletingSelectedGraph} onClick={() => currentGraph && onDeleteGraph(currentGraph.key)} type="button">{isDeletingSelectedGraph ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}</button>
-          <button className="primary-button compact" disabled={!currentGraph || !canRunCinematics || isCurrentGraphPending} onClick={() => currentGraph && onStartCinematicRun({ graphKey: currentGraph.key, mode: 'graph_run' })} type="button">Run Cinematic</button>
+          <button
+            className="primary-button compact"
+            disabled={!currentGraph || !canRunCinematics || isCurrentGraphPending || approvedTakeNodeKeys.length === 0}
+            onClick={() => currentGraph && onStartCinematicRun({ graphKey: currentGraph.key, mode: 'graph_run', targetNodeKeys: approvedTakeNodeKeys })}
+            type="button"
+          >
+            Render Approved Takes
+          </button>
+          <button className="ghost-button compact" disabled={!currentGraph || !canRunCinematics || isCurrentGraphPending || currentTakeNodes.length === 0} onClick={() => currentGraph && onStartCinematicRun({ graphKey: currentGraph.key, mode: 'graph_run' })} type="button">Render All Takes</button>
         </div>
-        {isCurrentGraphPending ? (
-          <div className="graph-diagnostic-row">
-            <div className="inline-note">{renderGenerationPhaseLabel(currentGraphGenerationPhase)}</div>
-          </div>
-        ) : null}
         {contentMode === 'graph' ? (
           <>
             <GraphCanvasStage
@@ -914,6 +1085,29 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
               setContextMenuSearch={setContextMenuSearch}
               setFlowInstance={setFlowInstance}
             />
+            <div className="graph-diagnostic-row">
+              {isCurrentGraphPending ? <div className="inline-note">{renderGenerationPhaseLabel(currentGraphGenerationPhase)}</div> : null}
+              {currentGraph ? (
+                <div className="inline-note">
+                  Preset: {getCinematicPresetLabel(graphSettings.presetFamily)}{graphPresetOverrideActive ? ' (graph override)' : ' (project default)'}{graphSettings.formatSubtype ? ` Â· ${getCinematicFormatSubtypeLabel(graphSettings.formatSubtype)}` : ''}
+                </div>
+              ) : null}
+              {currentGraph && graphSettings.formulaFamily ? (
+                <div className="inline-note">
+                  Planned formula: {getCinematicFormulaFamilyLabel(graphSettings.formulaFamily)}
+                </div>
+              ) : null}
+              {currentGraph ? (
+                <div className="inline-note">
+                  Approved takes: {approvedTakeNodeKeys.length} / {currentTakeNodes.length || 0}
+                </div>
+              ) : null}
+              {currentPreflightStatus ? (
+                <div className="inline-note">
+                  Preflight: {currentPreflightStatus.label} · {currentPreflightStatus.completed + currentPreflightStatus.failed}/{currentPreflightStatus.total}{currentPreflightStatus.failed > 0 ? `, failed ${currentPreflightStatus.failed}` : ''}{currentPreflightStatus.active && currentPreflightStatus.currentNodeKey ? ` · ${currentPreflightStatus.currentNodeKey}` : ''}{currentPreflightStatus.lastMessage ? ` · ${currentPreflightStatus.lastMessage}` : ''}
+                </div>
+              ) : null}
+            </div>
           </>
         ) : null}
         {contentMode === 'script' ? (
@@ -971,21 +1165,27 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
           ) : currentNode.type === 'storyboard_ref' ? (
             <StoryboardRefInspector
               assets={assets}
-              currentGraph={currentGraph}
-              node={currentNode}
-              onApplyTemplateChange={(templateKey) => applyTemplateChange(currentNode.key, templateKey)}
-              onDelete={() => onDeleteNode(currentGraph.key, currentNode.key)}
-              onUpdate={(changes) => onUpdateNode(currentGraph.key, currentNode.key, changes)}
-            />
-          ) : currentNode.type === 'cinematic_take' ? (
-            <CinematicTakeInspector
-              assets={assets}
+              canRunCinematics={canRunCinematics}
               currentGraph={currentGraph}
               definitions={definitions}
               node={currentNode}
               runs={currentGraphRuns}
               onApplyTemplateChange={(templateKey) => applyTemplateChange(currentNode.key, templateKey)}
               onDelete={() => onDeleteNode(currentGraph.key, currentNode.key)}
+              onGenerate={(mode) => onStartCinematicRun({ graphKey: currentGraph.key, mode, targetNodeKey: currentNode.key })}
+              onUpdate={(changes) => onUpdateNode(currentGraph.key, currentNode.key, changes)}
+            />
+          ) : currentNode.type === 'cinematic_take' ? (
+            <CinematicTakeInspector
+              assets={assets}
+              canRunCinematics={canRunCinematics}
+              currentGraph={currentGraph}
+              definitions={definitions}
+              node={currentNode}
+              runs={currentGraphRuns}
+              onApplyTemplateChange={(templateKey) => applyTemplateChange(currentNode.key, templateKey)}
+              onDelete={() => onDeleteNode(currentGraph.key, currentNode.key)}
+              onGenerate={(mode) => onStartCinematicRun({ graphKey: currentGraph.key, mode, targetNodeKey: currentNode.key, ...(mode === 'graph_run' ? { targetNodeKeys: [currentNode.key] } : {}) })}
               onUpdate={(changes) => onUpdateNode(currentGraph.key, currentNode.key, changes)}
             />
           ) : currentNode.type === 'cinematic_shot' ? (
@@ -998,7 +1198,7 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
               runs={currentGraphRuns}
               onApplyTemplateChange={(templateKey) => applyTemplateChange(currentNode.key, templateKey)}
               onDelete={() => onDeleteNode(currentGraph.key, currentNode.key)}
-              onGenerate={(mode) => onStartCinematicRun({ graphKey: currentGraph.key, mode, shotNodeKey: currentNode.key })}
+              onGenerate={(mode) => onStartCinematicRun({ graphKey: currentGraph.key, mode, targetNodeKey: currentNode.key })}
               onUpdate={(changes) => onUpdateNode(currentGraph.key, currentNode.key, changes)}
             />
           ) : (
@@ -1011,6 +1211,7 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
             graph={currentGraph}
             projectSettings={projectSettings}
             onAddPresetNode={placeTemplate}
+            onResetGraphPresetOverride={resetGraphPresetOverride}
             onUpdate={(changes) => onUpdateGraph(currentGraph.key, changes)}
             onUpdateGraphCinematics={updateGraphCinematics}
             onUpdateProjectCinematics={onUpdateGameSpecCinematics}
@@ -1033,6 +1234,7 @@ function CinematicGraphInspector({
   graph,
   projectSettings,
   onAddPresetNode,
+  onResetGraphPresetOverride,
   onUpdate,
   onUpdateGraphCinematics,
   onUpdateProjectCinematics,
@@ -1042,6 +1244,7 @@ function CinematicGraphInspector({
   graph: GraphDefinition
   projectSettings: CinematicSettings
   onAddPresetNode: (templateKey: string) => void
+  onResetGraphPresetOverride: () => void
   onUpdate: (changes: Partial<GraphDefinition>) => void
   onUpdateGraphCinematics: (changes: Partial<CinematicSettings>) => void
   onUpdateProjectCinematics: (changes: Partial<CinematicSettings>) => void
@@ -1082,6 +1285,10 @@ function CinematicGraphInspector({
             <span className="eyebrow">Flow Overrides</span>
             <h3>Graph Settings</h3>
           </div>
+          <button className="ghost-button compact" onClick={onResetGraphPresetOverride} type="button">Use Project Preset</button>
+        </div>
+        <div className="inline-note">
+          Effective preset: {getCinematicPresetLabel(currentSettings.presetFamily)}{currentSettings.formatSubtype ? ` Â· ${getCinematicFormatSubtypeLabel(currentSettings.formatSubtype)}` : ''}{currentSettings.formulaFamily ? ` Â· ${getCinematicFormulaFamilyLabel(currentSettings.formulaFamily)}` : ''}
         </div>
         <CinematicSettingsEditor settings={currentSettings} onChange={onUpdateGraphCinematics} />
       </div>
@@ -1218,6 +1425,19 @@ function ScriptPreviewSurface({
           subtitle: null,
           beat: '',
           emotionalBeat: '',
+          hookRole: null,
+          formatSubtype: null,
+          formulaFamily: null,
+          dominantTrigger: null,
+          hookType: '',
+          targetEmotion: '',
+          personaStyle: '',
+          contrastAxis: '',
+          proofMoment: '',
+          ctaStyle: '',
+          proofType: '',
+          ctaType: '',
+          platformTarget: null,
           shotType: 'custom',
           framing: '',
           cameraAngle: '',
@@ -1859,22 +2079,34 @@ function CompositeRefInspector({
 
 function StoryboardRefInspector({
   assets,
+  canRunCinematics,
   currentGraph,
+  definitions,
   node,
+  runs,
   onApplyTemplateChange,
   onDelete,
+  onGenerate,
   onUpdate,
 }: {
   assets: AssetDefinition[]
+  canRunCinematics: boolean
   currentGraph: GraphDefinition
+  definitions: DefinitionBase[]
   node: NodeDefinition
+  runs: CinematicRun[]
   onApplyTemplateChange: (templateKey: string) => void
   onDelete: () => void
+  onGenerate: (mode: CinematicRunMode) => void
   onUpdate: (changes: Partial<NodeDefinition>) => void
 }) {
   const template = node.templateKey ? graphNodeTemplatesByKey.get(node.templateKey) : null
   const config = getStoryboardRefNodeConfig(node)
   const previewAsset = assets.find((asset) => asset.key === config.assetKey) ?? null
+  const sources = collectStoryboardSources(currentGraph, node, definitions, assets)
+  const relatedShots = collectStoryboardTargetShots(currentGraph, node)
+  const latestRun = runs.find((run) => run.jobs.some((job) => job.shotNodeKey === node.key)) ?? null
+  const latestJob = latestRun?.jobs.find((job) => job.shotNodeKey === node.key) ?? null
 
   return (
     <div className="detail-stack compact">
@@ -1906,9 +2138,51 @@ function StoryboardRefInspector({
         </select>
       </label>
       <label className="field-block full-width">
+        <span>Prompt Override</span>
+        <textarea rows={4} value={config.generationPrompt} onChange={(event) => onUpdate({ metadata: updateNodeMetadataWithStoryboardRef(node.metadata, { generationPrompt: event.target.value }) })} />
+      </label>
+      <label className="field-block full-width">
         <span>Notes</span>
         <textarea rows={4} value={config.notes} onChange={(event) => onUpdate({ metadata: updateNodeMetadataWithStoryboardRef(node.metadata, { notes: event.target.value }) })} />
       </label>
+      <div className="diagnostic-stack">
+        <div className="inline-note">
+          <strong>Related shots</strong>
+          <span> {relatedShots.map((shot) => shot.title).join(', ') || 'none'}</span>
+        </div>
+        <div className="inline-note">
+          <strong>Reference pack</strong>
+          <span> {sources.map((source) => source.definition?.name ?? source.node.title).join(', ') || 'none'}</span>
+        </div>
+        <div className="inline-note">
+          <strong>Resolved refs</strong>
+          <span> {sources.map((source) => `${source.definition?.name ?? source.node.title} (${source.asset ? 'image' : 'text-only'})`).join(', ') || 'none'}</span>
+        </div>
+        {latestRun ? (
+          <div className="inline-note">
+            <strong>Latest run</strong>
+            <span> {latestRun.mode} Â· {latestRun.status}</span>
+          </div>
+        ) : null}
+      </div>
+      <div className="detail-actions cinematic-action-row">
+        <button className="ghost-button compact" disabled={!canRunCinematics} onClick={() => onGenerate('preview_storyboard_still')} type="button">
+          {config.storyboardKind === 'sequence_board' ? 'Generate Board' : 'Generate Panel'}
+        </button>
+      </div>
+      {!canRunCinematics ? <div className="inline-note">Connect to a live Supabase workspace before starting cinematic generation jobs.</div> : null}
+      <div className="editor-section compact-section">
+        <div className="section-head">
+          <div>
+            <span className="eyebrow">Compiled Prompt</span>
+            <h3>{latestJob ? 'Latest storyboard still prompt' : 'Prompt preview'}</h3>
+          </div>
+        </div>
+        <label className="field-block full-width">
+          <span>Prompt</span>
+          <textarea readOnly rows={8} value={latestJob?.prompt ?? config.generationPrompt ?? ''} />
+        </label>
+      </div>
       {previewAsset ? <AssetPreview asset={previewAsset} /> : <div className="inline-note">Bind a sequence board or shot panel here so Seedance can follow the storyboard.</div>}
     </div>
   )
@@ -1916,26 +2190,31 @@ function StoryboardRefInspector({
 
 function CinematicTakeInspector({
   assets,
+  canRunCinematics,
   currentGraph,
   definitions,
   node,
   runs,
   onApplyTemplateChange,
   onDelete,
+  onGenerate,
   onUpdate,
 }: {
   assets: AssetDefinition[]
+  canRunCinematics: boolean
   currentGraph: GraphDefinition
   definitions: DefinitionBase[]
   node: NodeDefinition
   runs: CinematicRun[]
   onApplyTemplateChange: (templateKey: string) => void
   onDelete: () => void
+  onGenerate: (mode: CinematicRunMode) => void
   onUpdate: (changes: Partial<NodeDefinition>) => void
 }) {
   const template = node.templateKey ? graphNodeTemplatesByKey.get(node.templateKey) : null
   const config = getCinematicTakeNodeConfig(node)
-  const previewAsset = assets.find((asset) => asset.key === (config.outputVideoAssetKey ?? config.outputStillAssetKey)) ?? null
+  const stillAsset = assets.find((asset) => asset.key === config.outputStillAssetKey) ?? null
+  const videoAsset = assets.find((asset) => asset.key === config.outputVideoAssetKey) ?? null
   const sequence = getCinematicSequence(currentGraph.metadata)
   const includedShots = sequence?.shots.filter((shot) => config.shotIds.includes(shot.id)) ?? []
   const latestRun = runs.find((run) => run.jobs.some((job) => job.shotNodeKey === node.key)) ?? null
@@ -1991,6 +2270,10 @@ function CinematicTakeInspector({
           </select>
         </label>
       </div>
+      <label className="field-block full-width">
+        <span>Approval Notes</span>
+        <textarea rows={3} value={config.approvalNotes} onChange={(event) => onUpdate({ metadata: updateNodeMetadataWithTake(node.metadata, { approvalNotes: event.target.value }) })} />
+      </label>
       <div className="diagnostic-stack">
         <div className="inline-note">
           <strong>Included shots</strong>
@@ -2000,6 +2283,22 @@ function CinematicTakeInspector({
           <strong>Reference pack</strong>
           <span> {sourceLabels.join(', ') || 'none'}</span>
         </div>
+        <div className="inline-note">
+          <strong>Approval</strong>
+          <span> {config.approvedForVideo ? 'Approved for video render' : 'Not approved yet'}</span>
+        </div>
+        {config.formatSubtype ? (
+          <div className="inline-note">
+            <strong>Format subtype</strong>
+            <span> {getCinematicFormatSubtypeLabel(config.formatSubtype)}</span>
+          </div>
+        ) : null}
+        {config.formulaFamily ? (
+          <div className="inline-note">
+            <strong>Planned formula</strong>
+            <span> {getCinematicFormulaFamilyLabel(config.formulaFamily)}</span>
+          </div>
+        ) : null}
         {latestRun ? (
           <div className="inline-note">
             <strong>Latest run</strong>
@@ -2007,7 +2306,90 @@ function CinematicTakeInspector({
           </div>
         ) : null}
       </div>
-      {previewAsset ? <AssetPreview asset={previewAsset} /> : <div className="inline-note">Run the cinematic to populate this take with a generated output clip.</div>}
+      <div className="detail-actions cinematic-action-row">
+        {config.approvedForVideo ? (
+          <button className="ghost-button compact" onClick={() => onUpdate({ metadata: updateNodeMetadataWithTake(node.metadata, { approvedForVideo: false }) })} type="button">Unapprove</button>
+        ) : (
+          <button className="ghost-button compact" onClick={() => onUpdate({ metadata: updateNodeMetadataWithTake(node.metadata, { approvedForVideo: true }) })} type="button">Approve for Video</button>
+        )}
+      </div>
+      <div className="editor-section compact-section">
+        <div className="section-head">
+          <div>
+            <span className="eyebrow">Seedance Pack</span>
+            <h3>{config.executionPlan?.endpoint ?? 'Not planned yet'}</h3>
+          </div>
+        </div>
+        <div className="diagnostic-stack">
+          {config.executionPlan ? (
+            <>
+              <div className="inline-note">
+                <strong>Endpoint</strong>
+                <span> {config.executionPlan.endpoint}</span>
+              </div>
+              <div className="inline-note">
+                <strong>Reason</strong>
+                <span> {config.executionPlan.modeReason || 'No reason stored.'}</span>
+              </div>
+              {config.formatSubtype ? (
+                <div className="inline-note">
+                  <strong>Subtype</strong>
+                  <span> {getCinematicFormatSubtypeLabel(config.formatSubtype)}</span>
+                </div>
+              ) : null}
+              {config.formulaFamily ? (
+                <div className="inline-note">
+                  <strong>Formula</strong>
+                  <span> {getCinematicFormulaFamilyLabel(config.formulaFamily)}</span>
+                </div>
+              ) : null}
+              <div className="inline-note">
+                <strong>Pack size</strong>
+                <span> {config.executionPlan.referenceInputs.length} ref(s){config.executionPlan.droppedRefIds.length > 0 ? `, dropped ${config.executionPlan.droppedRefIds.length}` : ''}</span>
+              </div>
+              <div className="inline-note">
+                <strong>Refs</strong>
+                <span> {config.executionPlan.referenceInputs.map((entry) => `${entry.label} (${entry.modality})`).join(', ') || 'none'}</span>
+              </div>
+              {config.executionPlan.droppedRefIds.length > 0 ? (
+                <div className="inline-note">
+                  <strong>Dropped refs</strong>
+                  <span> {config.executionPlan.droppedRefIds.join(', ')}</span>
+                </div>
+              ) : null}
+              <label className="field-block full-width">
+                <span>Compiled Prompt</span>
+                <textarea readOnly rows={8} value={config.executionPlan.prompt} />
+              </label>
+            </>
+          ) : (
+            <div className="inline-note">Run the take to compile the final Seedance prompt and reference pack.</div>
+          )}
+        </div>
+      </div>
+      <div className="detail-actions cinematic-action-row">
+        <button className="ghost-button compact" disabled={!canRunCinematics || includedShots.length === 0} onClick={() => onGenerate('preview_take_still')} type="button">Generate Still</button>
+        <button className="primary-button compact" disabled={!canRunCinematics || includedShots.length === 0} onClick={() => onGenerate('graph_run')} type="button">Generate Clip</button>
+      </div>
+      {!canRunCinematics ? <div className="inline-note">Connect to a live Supabase workspace before starting cinematic generation jobs.</div> : null}
+      <div className="editor-section compact-section">
+        <div className="section-head">
+          <div>
+            <span className="eyebrow">Still</span>
+            <h3>{stillAsset?.name ?? 'Not generated yet'}</h3>
+          </div>
+        </div>
+        {stillAsset ? <AssetPreview asset={stillAsset} /> : <div className="inline-note">Generate a take still to create a representative storyboard or hook frame for this node.</div>}
+      </div>
+      <div className="editor-section compact-section">
+        <div className="section-head">
+          <div>
+            <span className="eyebrow">Clip</span>
+            <h3>{videoAsset?.name ?? 'Not generated yet'}</h3>
+          </div>
+        </div>
+        {videoAsset ? <AssetPreview asset={videoAsset} /> : <div className="inline-note">Run the cinematic to populate this take with a generated output clip.</div>}
+      </div>
     </div>
   )
 }
@@ -2037,6 +2419,7 @@ function CinematicShotInspector({
 }) {
   const template = node.templateKey ? graphNodeTemplatesByKey.get(node.templateKey) : null
   const config = getCinematicShotNodeConfig(node)
+  const currentSettings = getCinematicSettings({}, currentGraph.metadata)
   const sources = collectShotSources(currentGraph, node, definitions, assets)
   const missingSources = sources.filter((source) => !resolveAssetSourceUrl(source.asset))
   const expectedSourceRefIds = useMemo<string[]>(
@@ -2135,6 +2518,12 @@ function CinematicShotInspector({
           <span> {take.title} · {take.durationSeconds}s · {take.seedanceEndpoint}</span>
         </div>
       ) : null}
+      {config.formatSubtype ? (
+        <div className="inline-note">
+          <strong>UGC subtype</strong>
+          <span> {getCinematicFormatSubtypeLabel(config.formatSubtype)}{config.formulaFamily ? ` Â· ${getCinematicFormulaFamilyLabel(config.formulaFamily)}` : ''}</span>
+        </div>
+      ) : null}
       {config.timingSummary ? (
         <div className="inline-note">
           <strong>Timing basis</strong>
@@ -2186,6 +2575,84 @@ function CinematicShotInspector({
         <label className="field-block compact-block">
           <span>Force New Take</span>
           <input type="checkbox" checked={config.forceTakeBreak} onChange={(event) => onUpdate({ metadata: updateNodeMetadataWithShot(node.metadata, { forceTakeBreak: event.target.checked }) })} />
+        </label>
+      </div>
+
+      <div className="editor-grid compact cinematic-field-grid">
+        {currentSettings.presetFamily !== 'story_movie_tv' && currentSettings.formatSubtype ? (
+          <label className="field-block compact-block">
+            <span>Format Subtype</span>
+            <select value={config.formatSubtype ?? currentSettings.formatSubtype} onChange={(event) => onUpdate({ metadata: updateNodeMetadataWithShot(node.metadata, { formatSubtype: event.target.value ? event.target.value as CinematicFormatSubtype : null }) })}>
+              {getSubtypeOptionsForPresetFamily(currentSettings.presetFamily).map((option) => <option key={option} value={option}>{getCinematicFormatSubtypeLabel(option)}</option>)}
+            </select>
+          </label>
+        ) : null}
+        <label className="field-block compact-block">
+          <span>Hook Role</span>
+          <select value={config.hookRole ?? ''} onChange={(event) => onUpdate({ metadata: updateNodeMetadataWithShot(node.metadata, { hookRole: event.target.value ? event.target.value as NonNullable<typeof config.hookRole> : null }) })}>
+            <option value="">None</option>
+            <option value="hook">Hook</option>
+            <option value="setup">Setup</option>
+            <option value="proof">Proof</option>
+            <option value="payoff">Payoff</option>
+            <option value="cta">CTA</option>
+          </select>
+        </label>
+        <label className="field-block compact-block">
+          <span>Hook Type</span>
+          <input value={config.hookType} onChange={(event) => onUpdate({ metadata: updateNodeMetadataWithShot(node.metadata, { hookType: event.target.value }) })} />
+        </label>
+        <label className="field-block compact-block">
+          <span>Target Emotion</span>
+          <input value={config.targetEmotion} onChange={(event) => onUpdate({ metadata: updateNodeMetadataWithShot(node.metadata, { targetEmotion: event.target.value }) })} />
+        </label>
+        <label className="field-block compact-block">
+          <span>Persona Style</span>
+          <input value={config.personaStyle} onChange={(event) => onUpdate({ metadata: updateNodeMetadataWithShot(node.metadata, { personaStyle: event.target.value }) })} />
+        </label>
+        <label className="field-block compact-block">
+          <span>Proof Type</span>
+          <input value={config.proofType} onChange={(event) => onUpdate({ metadata: updateNodeMetadataWithShot(node.metadata, { proofType: event.target.value }) })} />
+        </label>
+        <label className="field-block compact-block">
+          <span>CTA Type</span>
+          <input value={config.ctaType} onChange={(event) => onUpdate({ metadata: updateNodeMetadataWithShot(node.metadata, { ctaType: event.target.value }) })} />
+        </label>
+        <label className="field-block compact-block">
+          <span>Platform</span>
+          <select value={config.platformTarget ?? ''} onChange={(event) => onUpdate({ metadata: updateNodeMetadataWithShot(node.metadata, { platformTarget: event.target.value ? event.target.value as NonNullable<typeof config.platformTarget> : null }) })}>
+            <option value="">General</option>
+            <option value="tiktok">TikTok</option>
+            <option value="instagram_reels">Instagram Reels</option>
+            <option value="youtube_shorts">YouTube Shorts</option>
+            <option value="facebook">Facebook</option>
+            <option value="x">X</option>
+            <option value="web">Web</option>
+            <option value="general">General</option>
+          </select>
+        </label>
+        <label className="field-block compact-block">
+          <span>Formula</span>
+          <input readOnly value={config.formulaFamily ? getCinematicFormulaFamilyLabel(config.formulaFamily) : currentSettings.formulaFamily ? getCinematicFormulaFamilyLabel(currentSettings.formulaFamily) : 'Auto'} />
+        </label>
+        <label className="field-block compact-block">
+          <span>Dominant Trigger</span>
+          <select value={config.dominantTrigger ?? ''} onChange={(event) => onUpdate({ metadata: updateNodeMetadataWithShot(node.metadata, { dominantTrigger: event.target.value ? event.target.value as NonNullable<typeof config.dominantTrigger> : null }) })}>
+            <option value="">Auto</option>
+            {cinematicDominantTriggerSchema.options.map((option) => <option key={option} value={option}>{option.replace(/_/g, ' ')}</option>)}
+          </select>
+        </label>
+        <label className="field-block compact-block">
+          <span>Contrast Axis</span>
+          <input value={config.contrastAxis} onChange={(event) => onUpdate({ metadata: updateNodeMetadataWithShot(node.metadata, { contrastAxis: event.target.value }) })} />
+        </label>
+        <label className="field-block compact-block">
+          <span>Proof Moment</span>
+          <input value={config.proofMoment} onChange={(event) => onUpdate({ metadata: updateNodeMetadataWithShot(node.metadata, { proofMoment: event.target.value }) })} />
+        </label>
+        <label className="field-block compact-block">
+          <span>CTA Style</span>
+          <input value={config.ctaStyle} onChange={(event) => onUpdate({ metadata: updateNodeMetadataWithShot(node.metadata, { ctaStyle: event.target.value }) })} />
         </label>
       </div>
 
@@ -2308,10 +2775,36 @@ function CinematicShotInspector({
                 <strong>Reason</strong>
                 <span> {config.executionPlan.modeReason || 'No reason stored.'}</span>
               </div>
+              {config.formatSubtype ? (
+                <div className="inline-note">
+                  <strong>Subtype</strong>
+                  <span> {getCinematicFormatSubtypeLabel(config.formatSubtype)}</span>
+                </div>
+              ) : null}
+              {config.formulaFamily ? (
+                <div className="inline-note">
+                  <strong>Formula</strong>
+                  <span> {getCinematicFormulaFamilyLabel(config.formulaFamily)}</span>
+                </div>
+              ) : null}
               <div className="inline-note">
                 <strong>Pack size</strong>
                 <span> {config.executionPlan.referenceInputs.length} ref(s){config.executionPlan.droppedRefIds.length > 0 ? `, dropped ${config.executionPlan.droppedRefIds.length}` : ''}</span>
               </div>
+              <div className="inline-note">
+                <strong>Refs</strong>
+                <span> {config.executionPlan.referenceInputs.map((entry) => `${entry.label} (${entry.modality})`).join(', ') || 'none'}</span>
+              </div>
+              {config.executionPlan.droppedRefIds.length > 0 ? (
+                <div className="inline-note">
+                  <strong>Dropped refs</strong>
+                  <span> {config.executionPlan.droppedRefIds.join(', ')}</span>
+                </div>
+              ) : null}
+              <label className="field-block full-width">
+                <span>Compiled Prompt</span>
+                <textarea readOnly rows={8} value={config.executionPlan.prompt} />
+              </label>
             </>
           ) : (
             <div className="inline-note">Run the shot once to persist the resolved Seedance execution plan.</div>
@@ -2357,8 +2850,26 @@ function CinematicSettingsEditor({
   settings: CinematicSettings
   onChange: (changes: Partial<CinematicSettings>) => void
 }) {
+  const subtypeOptions = getSubtypeOptionsForPresetFamily(settings.presetFamily)
   return (
     <div className="editor-grid compact cinematic-field-grid">
+      <label className="field-block compact-block">
+        <span>Preset</span>
+        <select value={settings.presetFamily} onChange={(event) => onChange(buildCinematicSettingsPatchFromPresetFamily(event.target.value as CinematicPresetFamily))}>
+          <option value="story_movie_tv">Movie / TV Story</option>
+          <option value="ugc_creator">UGC Creator</option>
+          <option value="ugc_direct_response_ad">UGC Direct Response Ad</option>
+          <option value="ugc_faceless_format">UGC Faceless Format</option>
+        </select>
+      </label>
+      {settings.presetFamily !== 'story_movie_tv' && settings.formatSubtype ? (
+        <label className="field-block compact-block">
+          <span>Subtype</span>
+          <select value={settings.formatSubtype} onChange={(event) => onChange(buildCinematicSettingsPatchFromFormatSubtype(settings.presetFamily, event.target.value as CinematicFormatSubtype))}>
+            {subtypeOptions.map((option) => <option key={option} value={option}>{getCinematicFormatSubtypeLabel(option)}</option>)}
+          </select>
+        </label>
+      ) : null}
       <label className="field-block compact-block">
         <span>Still Aspect</span>
         <select value={settings.stillAspectRatio} onChange={(event) => onChange({ stillAspectRatio: event.target.value as CinematicSettings['stillAspectRatio'] })}>
@@ -2395,11 +2906,14 @@ function CinematicSettingsEditor({
       </label>
       <label className="field-block compact-block">
         <span>Mode</span>
-        <select value={settings.specializationMode} onChange={(event) => onChange({ specializationMode: event.target.value as CinematicSettings['specializationMode'] })}>
-          <option value="story">Story</option>
-          <option value="ugc">UGC</option>
-        </select>
+        <input disabled value={settings.specializationMode === 'story' ? 'Story' : 'UGC'} />
       </label>
+      {settings.presetFamily !== 'story_movie_tv' ? (
+        <label className="field-block compact-block">
+          <span>Planned Formula</span>
+          <input disabled value={settings.formulaFamily ? getCinematicFormulaFamilyLabel(settings.formulaFamily) : 'Auto'} />
+        </label>
+      ) : null}
     </div>
   )
 }

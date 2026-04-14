@@ -10,6 +10,9 @@ import {
 import { extractFalImageUrls } from '../../../src/domain/visualAssetGeneration.ts'
 import { createAdminClient, requireUserClient } from '../_shared/auth.ts'
 import {
+  buildStoryboardStillPrompt,
+  buildTakeStillPrompt,
+  applyStoryboardBindingToGraph,
   applyTakeBindingToGraph,
   applyShotBindingToGraph,
   buildTakeSeedanceExecutionPlan,
@@ -21,9 +24,13 @@ import {
   findNode,
   isTerminalCinematicJobStatus,
   isTerminalCinematicRunStatus,
+  persistStoryboardBindingsIfPresent,
   persistTakeBindingsIfPresent,
   persistShotBindingsIfPresent,
   resolveAssetUrl,
+  resolveStoryboardStillReferenceImageUrls,
+  resolveStoryboardSources,
+  resolveTakeStillReferenceImageUrls,
   resolveTakeSources,
   resolveShotSources,
   toCinematicRun,
@@ -50,7 +57,8 @@ const requestSchema = z.object({
     gameSpec: z.record(z.string(), z.unknown()).nullable().optional(),
   }),
   graphKey: z.string(),
-  mode: z.enum(['graph_run', 'preview_still', 'preview_video']),
+  mode: z.enum(['graph_run', 'preview_still', 'preview_video', 'preview_take_still', 'preview_storyboard_still']),
+  targetNodeKey: z.string().nullable().optional(),
   shotNodeKey: z.string().nullable().optional(),
 })
 
@@ -170,24 +178,46 @@ Deno.serve(async (request) => {
         }).eq('id', job.id)
         break
       }
-      const isTakeJob = job.kind === 'take_video'
-      const shotNode = !isTakeJob ? targetNode : null
+      const isTakeJob = job.kind === 'take_video' || job.kind === 'take_still'
+      const isStoryboardJob = job.kind === 'storyboard_still'
+      const shotNode = !isTakeJob && !isStoryboardJob ? targetNode : null
       const takeNode = isTakeJob ? targetNode : null
+      const storyboardNode = isStoryboardJob ? targetNode : null
 
       const settings = getCinematicSettings(payload.snapshot.gameSpec ?? null, updatedGraph.metadata)
       const sourceInputs = isTakeJob
         ? resolveTakeSources(payload.snapshot, updatedGraph, job.shotNodeKey)
-        : resolveShotSources(payload.snapshot, updatedGraph, job.shotNodeKey)
+        : isStoryboardJob
+          ? resolveStoryboardSources(payload.snapshot, updatedGraph, job.shotNodeKey)
+          : resolveShotSources(payload.snapshot, updatedGraph, job.shotNodeKey)
 
-      if (job.kind === 'shot_still') {
-        if (!shotNode) {
+      if (job.kind === 'shot_still' || job.kind === 'take_still' || job.kind === 'storyboard_still') {
+        if (job.kind === 'shot_still' && !shotNode) {
           await client.from('cinematic_run_jobs').update({
             status: 'failed',
             error_message: 'Still jobs require a cinematic shot node.',
           }).eq('id', job.id)
           break
         }
-        const imageUrls = sourceInputs.map((entry) => entry.imageUrl).filter((entry): entry is string => Boolean(entry))
+        if (job.kind === 'take_still' && !takeNode) {
+          await client.from('cinematic_run_jobs').update({
+            status: 'failed',
+            error_message: 'Take still jobs require a cinematic take node.',
+          }).eq('id', job.id)
+          break
+        }
+        if (job.kind === 'storyboard_still' && !storyboardNode) {
+          await client.from('cinematic_run_jobs').update({
+            status: 'failed',
+            error_message: 'Storyboard still jobs require a storyboard ref node.',
+          }).eq('id', job.id)
+          break
+        }
+        const imageUrls = job.kind === 'take_still'
+          ? resolveTakeStillReferenceImageUrls(payload.snapshot, updatedGraph, job.shotNodeKey, sourceInputs as ReturnType<typeof resolveTakeSources>)
+          : job.kind === 'storyboard_still'
+            ? resolveStoryboardStillReferenceImageUrls(payload.snapshot, updatedGraph, job.shotNodeKey, sourceInputs as ReturnType<typeof resolveStoryboardSources>)
+          : sourceInputs.map((entry) => entry.imageUrl).filter((entry): entry is string => Boolean(entry))
         const stillModel = imageUrls.length > 0
           ? Deno.env.get('CINEMATIC_STILL_FAL_MODEL') ?? 'fal-ai/nano-banana-2/edit'
           : Deno.env.get('CINEMATIC_STILL_TEXT_FAL_MODEL') ?? 'fal-ai/nano-banana-2'
@@ -197,12 +227,28 @@ Deno.serve(async (request) => {
             action: 'subscribe',
             model: stillModel,
             input: {
-              prompt: job.prompt || buildStillPrompt({
-                snapshot: payload.snapshot,
-                graph: updatedGraph,
-                shotNode,
-                sourceInputs: sourceInputs as ReturnType<typeof resolveShotSources>,
-              }),
+              prompt: job.prompt || (
+                job.kind === 'take_still'
+                  ? buildTakeStillPrompt({
+                      snapshot: payload.snapshot,
+                      graph: updatedGraph,
+                      takeNode: takeNode!,
+                      sourceInputs: sourceInputs as ReturnType<typeof resolveTakeSources>,
+                    })
+                  : job.kind === 'storyboard_still'
+                    ? buildStoryboardStillPrompt({
+                        snapshot: payload.snapshot,
+                        graph: updatedGraph,
+                        storyboardNode: storyboardNode!,
+                        sourceInputs: sourceInputs as ReturnType<typeof resolveStoryboardSources>,
+                      })
+                  : buildStillPrompt({
+                      snapshot: payload.snapshot,
+                      graph: updatedGraph,
+                      shotNode: shotNode!,
+                      sourceInputs: sourceInputs as ReturnType<typeof resolveShotSources>,
+                    })
+              ),
               num_images: 1,
               aspect_ratio: settings.stillAspectRatio,
               output_format: 'png',
@@ -240,10 +286,15 @@ Deno.serve(async (request) => {
           sourceUrl: imageUrl,
           graphKey: updatedGraph.key,
           runId: payload.runId,
-          name: `${shotNode.title} Still`,
+          name: `${targetNode.title} Still`,
           kind: 'image',
           metadata: {
-            generatedBy: 'cinematic_still',
+            generatedBy:
+              job.kind === 'take_still'
+                ? 'cinematic_take_still'
+                : job.kind === 'storyboard_still'
+                  ? 'cinematic_storyboard_still'
+                  : 'cinematic_still',
             provider: 'fal',
             model: (falResponse.data as { model?: unknown } | null)?.model ?? stillModel,
             requestId: (falResponse.data as { requestId?: unknown } | null)?.requestId ?? null,
@@ -265,24 +316,64 @@ Deno.serve(async (request) => {
           },
         }).eq('id', job.id)
 
-        updatedGraph = applyShotBindingToGraph(updatedGraph, job.shotNodeKey, {
-          bodyImageAssetKey: storedAsset.key,
-          metadata: {
-            stillAssetKey: storedAsset.key,
-            provider: 'fal',
-            providerModel: String((falResponse.data as { model?: unknown } | null)?.model ?? stillModel),
-            providerRequestId: String((falResponse.data as { requestId?: unknown } | null)?.requestId ?? ''),
-          },
-        })
-        await persistShotBindingsIfPresent(client, payload.snapshot.draft.id, updatedGraph.key, job.shotNodeKey, {
-          bodyImageAssetKey: storedAsset.key,
-          metadata: {
-            stillAssetKey: storedAsset.key,
-            provider: 'fal',
-            providerModel: String((falResponse.data as { model?: unknown } | null)?.model ?? stillModel),
-            providerRequestId: String((falResponse.data as { requestId?: unknown } | null)?.requestId ?? ''),
-          },
-        })
+        if (job.kind === 'take_still') {
+          updatedGraph = applyTakeBindingToGraph(updatedGraph, job.shotNodeKey, {
+            bodyImageAssetKey: storedAsset.key,
+            metadata: {
+              outputStillAssetKey: storedAsset.key,
+              provider: 'fal',
+              providerModel: String((falResponse.data as { model?: unknown } | null)?.model ?? stillModel),
+              providerRequestId: String((falResponse.data as { requestId?: unknown } | null)?.requestId ?? ''),
+            },
+          })
+          await persistTakeBindingsIfPresent(client, payload.snapshot.draft.id, updatedGraph.key, job.shotNodeKey, {
+            bodyImageAssetKey: storedAsset.key,
+            metadata: {
+              outputStillAssetKey: storedAsset.key,
+              provider: 'fal',
+              providerModel: String((falResponse.data as { model?: unknown } | null)?.model ?? stillModel),
+              providerRequestId: String((falResponse.data as { requestId?: unknown } | null)?.requestId ?? ''),
+            },
+          })
+        } else if (job.kind === 'storyboard_still') {
+          updatedGraph = applyStoryboardBindingToGraph(updatedGraph, job.shotNodeKey, {
+            bodyImageAssetKey: storedAsset.key,
+            metadata: {
+              assetKey: storedAsset.key,
+              provider: 'fal',
+              providerModel: String((falResponse.data as { model?: unknown } | null)?.model ?? stillModel),
+              providerRequestId: String((falResponse.data as { requestId?: unknown } | null)?.requestId ?? ''),
+            },
+          })
+          await persistStoryboardBindingsIfPresent(client, payload.snapshot.draft.id, updatedGraph.key, job.shotNodeKey, {
+            bodyImageAssetKey: storedAsset.key,
+            metadata: {
+              assetKey: storedAsset.key,
+              provider: 'fal',
+              providerModel: String((falResponse.data as { model?: unknown } | null)?.model ?? stillModel),
+              providerRequestId: String((falResponse.data as { requestId?: unknown } | null)?.requestId ?? ''),
+            },
+          })
+        } else {
+          updatedGraph = applyShotBindingToGraph(updatedGraph, job.shotNodeKey, {
+            bodyImageAssetKey: storedAsset.key,
+            metadata: {
+              stillAssetKey: storedAsset.key,
+              provider: 'fal',
+              providerModel: String((falResponse.data as { model?: unknown } | null)?.model ?? stillModel),
+              providerRequestId: String((falResponse.data as { requestId?: unknown } | null)?.requestId ?? ''),
+            },
+          })
+          await persistShotBindingsIfPresent(client, payload.snapshot.draft.id, updatedGraph.key, job.shotNodeKey, {
+            bodyImageAssetKey: storedAsset.key,
+            metadata: {
+              stillAssetKey: storedAsset.key,
+              provider: 'fal',
+              providerModel: String((falResponse.data as { model?: unknown } | null)?.model ?? stillModel),
+              providerRequestId: String((falResponse.data as { requestId?: unknown } | null)?.requestId ?? ''),
+            },
+          })
+        }
         break
       }
 
