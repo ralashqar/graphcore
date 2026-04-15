@@ -94,51 +94,61 @@ function subtypePlannerInstructions(formatSubtype: z.infer<typeof cinematicForma
       return [
         'Structure beats as hook, personal problem, use case, soft proof, and soft CTA.',
         'Keep the phrasing conversational and believable for a creator speaking from personal experience.',
+        'Dialogue can carry the format here, but keep it concise and native. Narrator overlay text is optional and should only reinforce the key point, not restate every beat.',
       ]
     case 'creator_reframe':
       return [
         'Structure beats as hook, viewer behavior named, reframed interpretation, and emotional payoff.',
         'Make the reframe feel like a native creator insight, not a polished brand line.',
+        'Dialogue is often the main delivery tool. Narrator overlay text should be sparse and only used when it sharpens the reframe without replacing the creator voice.',
       ]
     case 'creator_validation':
       return [
         'Structure beats as hook, emotional recognition, validating statement, and soft resolution.',
         'Bias toward emotional recognition and parasocial trust instead of hard selling.',
+        'Dialogue can dominate, but keep it intimate and short. Use narrator overlay text sparingly so the clip still feels creator-native instead of over-produced.',
       ]
     case 'ad_problem_solution':
       return [
         'Structure beats as hook, pain, product, proof, and CTA with product visibility early.',
         'Show the product causing the better outcome instead of merely being present in frame.',
+        'Dialogue should support the proof path, not explain the entire ad. Narrator overlay text is allowed for quick framing, proof captions, or CTA emphasis when it improves sound-off clarity.',
       ]
     case 'ad_mechanism_proof':
       return [
         'Structure beats as hook, mechanism, visible demonstration, proof, and CTA.',
         'Make the mechanism legible on screen and keep proof concrete and easy to verify.',
+        'Use dialogue only when it frames the mechanism or proof. Narrator overlay text can label steps or proof beats, but keep it short and readable on mobile.',
       ]
     case 'ad_before_after':
       return [
         'Structure beats as hook, before, intervention, after, and CTA.',
         'Make the before and after states visually distinct even with sound off.',
+        'Dialogue should be minimal unless it strengthens the transformation. Narrator overlay text can help mark the before, intervention, or after state, but do not overload every shot.',
       ]
     case 'ad_comparison':
       return [
         'Structure beats as hook, option A versus B, why B wins, proof, and CTA.',
         'Keep the winning side obvious in every beat and escalate proof instead of repeating the same comparison.',
+        'Prefer visual comparison first. Dialogue should stay brief, and narrator overlay text can help anchor the comparison or winner state without explaining every frame.',
       ]
     case 'faceless_demo':
       return [
         'Structure beats as pattern interrupt, product or process, proof, and CTA.',
         'Make the object, screen, or process the hero instead of relying on facial acting.',
+        'Keep dialogue absent or minimal unless the prompt explicitly asks for it. Narrator overlay text is often a better fit than spoken dialogue for faceless demos.',
       ]
     case 'faceless_explainer':
       return [
         'Structure beats as wrong belief, explanation, mechanism, and result.',
         'Use clean visual reasoning and avoid voiceover-dependent persuasion.',
+        'Prefer sparse narrator overlay text or very short explanatory lines over dense spoken dialogue. The visual mechanism should stay primary.',
       ]
     case 'faceless_process':
       return [
         'Structure beats as process start, progression, reveal, and payoff.',
         'Each beat should introduce a visibly new stage of the process rather than repeating the same view.',
+        'Dialogue is usually unnecessary. If text is needed, prefer short narrator overlay text that labels stages without dominating the visuals.',
       ]
     case 'contrast_narrative':
       return [
@@ -146,6 +156,9 @@ function subtypePlannerInstructions(formatSubtype: z.infer<typeof cinematicForma
         'Plan 8-10 short escalating scenes with two locked poles and the strongest payoff image at the end.',
         'Populate scriptDoc.referenceVault, sceneCount, statusPayoffType, and narrativeArcTemplate when useful.',
         'Keep the comparison readable in every beat and make each scene widen the gap across a new visible dimension.',
+        'Dialogue should usually be sparse. Most beats should work fully on mute, and the visual comparison should carry the format.',
+        'Do not make both poles speak full lines in every beat. If both sides speak in one shot, keep each line extremely short and contrastive.',
+        'Narrator overlay text is optional and should be used sparingly for chaptering, contrast labels, or final payoff language when it improves sound-off clarity.',
       ]
     default:
       return []
@@ -436,6 +449,29 @@ function deriveMarkdownShotTitle(action: string, index: number) {
   return deriveFallbackShotTitle(firstSentence, index, 8)
 }
 
+function normalizeMarkdownShotRole(
+  rawRole: string,
+  shotIndex: number,
+  shotCount: number,
+): z.infer<typeof cinematicHookRoleSchema> | null {
+  const parsed = parseNullableEnumValue(cinematicHookRoleSchema, rawRole)
+  if (parsed) return parsed
+  const normalized = normalizeMatchKey(rawRole)
+  if (!normalized) {
+    if (shotIndex === 0) return 'hook'
+    if (shotIndex === shotCount - 1) return 'payoff'
+    return null
+  }
+  if (/\b(hook|open|opening|intro|attention|pattern interrupt)\b/.test(normalized)) return 'hook'
+  if (/\b(setup|support|context|pain|problem|struggle|start|beginning)\b/.test(normalized)) return 'setup'
+  if (/\b(proof|escalation|mechanism|demo|demonstration|evidence|comparison|contrast|reveal)\b/.test(normalized)) return 'proof'
+  if (/\b(payoff|ending|end frame|final|result|resolution|winner)\b/.test(normalized)) return 'payoff'
+  if (/\b(cta|call to action|offer|close)\b/.test(normalized)) return 'cta'
+  if (shotIndex === 0) return 'hook'
+  if (shotIndex === shotCount - 1) return 'payoff'
+  return null
+}
+
 export function resolveTargetShotCount(promptText: string, formatSubtype: z.infer<typeof cinematicFormatSubtypeSchema> | null) {
   const normalized = normalizeMatchKey(promptText)
   const explicitMatch = normalized.match(/\b(\d+)\s+(?:scene|scenes|shot|shots|beat|beats)\b/)
@@ -525,7 +561,7 @@ function parseShotBlockMarkdown(input: {
   let tone = ''
   let inReferences = false
   let currentShotNumber: number | null = null
-  let currentField: 'action' | 'dialogue' | 'composition' | null = null
+  let currentField: 'action' | 'dialogue' | 'overlay' | 'composition' | null = null
   const shotBlocks: Array<{
     number: number
     role: string
@@ -535,6 +571,7 @@ function parseShotBlockMarkdown(input: {
     action: string
     composition: string
     dialogueLines: string[]
+    narratorOverlayLines: string[]
   }> = []
   let currentShot: (typeof shotBlocks)[number] | null = null
 
@@ -583,6 +620,7 @@ function parseShotBlockMarkdown(input: {
         action: '',
         composition: '',
         dialogueLines: [],
+        narratorOverlayLines: [],
       }
       continue
     }
@@ -620,16 +658,31 @@ function parseShotBlockMarkdown(input: {
       currentField = 'composition'
       continue
     }
+    if (/^Narrator Overlay:/i.test(line)) {
+      const inline = line.replace(/^Narrator Overlay:/i, '').trim()
+      if (inline) currentShot.narratorOverlayLines.push(inline)
+      currentField = 'overlay'
+      continue
+    }
     if (/^Dialogue:/i.test(line)) {
       currentField = 'dialogue'
       continue
     }
-    if (currentField === 'dialogue' && /^-\s+/.test(line)) {
-      currentShot.dialogueLines.push(line.replace(/^-\s+/, '').trim())
+    if ((currentField === 'dialogue' || currentField === 'overlay') && /^-\s+/.test(line)) {
+      const entry = line.replace(/^-\s+/, '').trim()
+      if (currentField === 'dialogue') currentShot.dialogueLines.push(entry)
+      else currentShot.narratorOverlayLines.push(entry)
       continue
     }
     if (currentField === 'action') {
       currentShot.action = [currentShot.action, line].filter(Boolean).join(' ').trim()
+      continue
+    }
+    if (currentField === 'overlay') {
+      currentShot.narratorOverlayLines = [
+        ...currentShot.narratorOverlayLines,
+        line,
+      ].filter(Boolean)
       continue
     }
     if (currentField === 'composition') {
@@ -658,6 +711,10 @@ function parseShotBlockMarkdown(input: {
       const participantRefIds = parseMarkdownRefIds(shot.characters, entityLookup)
       if (shot.characters && participantRefIds.length === 0) diagnostics.push(`Shot ${shot.number} did not resolve any character ids from "${shot.characters}".`)
       const propRefIds = parseMarkdownRefIds(shot.props, entityLookup)
+      const hookRole = normalizeMarkdownShotRole(shot.role, index, shotBlocks.length)
+      if (shot.role.trim() && !parseNullableEnumValue(cinematicHookRoleSchema, shot.role) && hookRole) {
+        diagnostics.push(`Shot ${shot.number} role "${shot.role}" was normalized to "${hookRole}".`)
+      }
       const dialogue = shot.dialogueLines.map((entry, dialogueIndex) => {
         const match = entry.match(/^([a-zA-Z0-9_\-]+)\s*:\s*["“]?(.+?)["”]?$/)
         if (!match) {
@@ -679,13 +736,24 @@ function parseShotBlockMarkdown(input: {
           lipSync: true,
         }
       }).filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+      const narratorOverlayAudio = shot.narratorOverlayLines
+        .map((entry, overlayIndex) => entry.trim())
+        .filter(Boolean)
+        .map((entry, overlayIndex) => ({
+          id: `overlay_${index + 1}_${overlayIndex + 1}`,
+          kind: 'offscreen' as const,
+          cue: entry,
+          sourceRefId: null,
+          startSeconds: null,
+          endSeconds: null,
+        }))
       if (!locationRefId) diagnostics.push(`Shot ${shot.number} is missing a valid Environment field.`)
       if (participantRefIds.length === 0) diagnostics.push(`Shot ${shot.number} is missing valid Characters.`)
       if (!shot.action.trim()) diagnostics.push(`Shot ${shot.number} is missing Action.`)
       return {
         id: `shot_${index + 1}`,
         title: deriveMarkdownShotTitle(shot.action, index),
-        hookRole: parseNullableEnumValue(cinematicHookRoleSchema, shot.role),
+        hookRole,
         formatSubtype: input.formatSubtype,
         formulaFamily: input.formulaFamily,
         dominantTrigger: input.dominantTrigger,
@@ -713,7 +781,7 @@ function parseShotBlockMarkdown(input: {
         beats: [],
         dialogue,
         actions: [],
-        audio: [],
+        audio: narratorOverlayAudio,
       }
     })
     .filter((shot) => shot.beat.length > 0)
@@ -2339,12 +2407,19 @@ export function cinematicScriptRepairSystemPrompt(
     'Action: Literal on-screen action only.',
     'Dialogue:',
     '- character_ref_a: "Actual line"',
+    'Narrator Overlay:',
+    '- Short on-screen overlay or narrator text.',
     'Composition: Short framing note.',
     '',
     'Repeat the same format for every shot.',
-    'Action is required for every shot. Environment and Characters are required for every shot. Props, Role, Dialogue, and Composition are optional.',
+    'Action is required for every shot. Environment and Characters are required for every shot. Props, Role, Dialogue, Narrator Overlay, and Composition are optional.',
+    'If you use Role, only use these exact values: hook, setup, proof, payoff, cta.',
+    'Use setup for normal support, context, or problem beats. Use proof for escalation, mechanism, comparison, or visible evidence beats. Do not invent extra role labels like support or escalation.',
     'Do not return scriptDoc JSON. Put the full script inside rawScriptMarkdown as one markdown string.',
     'Do not invent new reference ids. Use only the locked ids from the provided reference list.',
+    'Only include refs in ## References when they are genuinely used by the authored shots. Do not mechanically repeat every locked ref.',
+    'Only use Props for recurring hero or continuity-critical refs. Everyday carrier objects, staging objects, packaging, surfaces, and background clutter should usually stay inside Action or Composition instead of becoming reusable props.',
+    'Narrator Overlay is optional and should be used only when short on-screen text improves sound-off clarity. Keep it brief and mobile-readable.',
     'Keep Action literal, visual, and specific. Do not summarize the whole ad in one block.',
     `Locked preset family: ${getCinematicPresetLabel(presetFamily)}.`,
     formatSubtype ? `Locked format subtype: ${getCinematicFormatSubtypeLabel(formatSubtype)}.` : null,
@@ -2417,6 +2492,10 @@ function inferPayoffDimensions(shot: z.infer<typeof cinematicScriptShotSchema>) 
 
 function subtypeLooksAdLike(formatSubtype: z.infer<typeof cinematicFormatSubtypeSchema> | null) {
   return typeof formatSubtype === 'string' && (formatSubtype.startsWith('ad_') || formatSubtype === 'contrast_narrative')
+}
+
+function shotNarratorOverlayCount(shot: z.infer<typeof cinematicScriptShotSchema>) {
+  return shot.audio.filter((cue) => cue.kind === 'offscreen' && cue.cue.trim()).length
 }
 
 function shotShowsProductFunction(text: string) {
@@ -2571,6 +2650,30 @@ export function evaluateCinematicScriptQuality(input: {
       flags.ugcCreativeWeakness = true
       failures.push('Contrast narrative beats should widen the gap across multiple visible dimensions instead of repeating one flat comparison.')
     }
+    const dialogueHeavyShots = input.scriptDoc.shots.filter((shot) => shot.dialogue.length > 1).length
+    const dualSpeakerShots = input.scriptDoc.shots.filter((shot) => new Set(shot.dialogue.map((entry) => entry.speakerRefId ?? `unknown_${entry.id}`)).size > 1).length
+    const overlayHeavyShots = input.scriptDoc.shots.filter((shot) => shotNarratorOverlayCount(shot) > 1).length
+    const shotsWithDialogue = input.scriptDoc.shots.filter((shot) => shot.dialogue.length > 0).length
+    if (shotsWithDialogue > Math.ceil(input.scriptDoc.shots.length / 2)) {
+      flags.ugcCreativeWeakness = true
+      failures.push('Contrast narrative dialogue should be sparse. Too many shots rely on spoken lines instead of visual comparison.')
+    }
+    if (dialogueHeavyShots > 1 || dualSpeakerShots > 1) {
+      flags.ugcCreativeWeakness = true
+      failures.push('Contrast narrative should avoid frequent back-and-forth dialogue. Keep most beats visual and keep any spoken contrast extremely short.')
+    }
+    if (overlayHeavyShots > 1) {
+      flags.ugcCreativeWeakness = true
+      failures.push('Contrast narrative narrator overlay text is too dense. Use overlay text sparingly so the comparison remains instantly readable.')
+    }
+  }
+
+  if (isUgcFlow && input.scriptDoc.shots.some((shot) => typeof shot.formatSubtype === 'string' && shot.formatSubtype.startsWith('faceless_'))) {
+    const facelessDialogueShots = input.scriptDoc.shots.filter((shot) => typeof shot.formatSubtype === 'string' && shot.formatSubtype.startsWith('faceless_') && shot.dialogue.length > 0).length
+    if (facelessDialogueShots > Math.ceil(input.scriptDoc.shots.length / 2)) {
+      flags.ugcCreativeWeakness = true
+      failures.push('Faceless formats should usually stay visual-first. Too many shots rely on dialogue instead of process, object, or screen clarity.')
+    }
   }
 
   if (isUgcFlow && lastShot) {
@@ -2630,13 +2733,20 @@ export function cinematicScriptPlannerSystemPrompt(
     'Action: Literal on-screen action only.',
     'Dialogue:',
     '- character_ref_a: "Actual line"',
+    'Narrator Overlay:',
+    '- Short on-screen overlay or narrator text.',
     'Composition: Short framing note.',
     '',
     'Repeat the same format for every shot.',
     'Required per shot: Shot heading, Environment, Characters, Action.',
-    'Optional per shot: Role, Props, Dialogue, Composition.',
+    'Optional per shot: Role, Props, Dialogue, Narrator Overlay, Composition.',
+    'If you use Role, only use these exact values: hook, setup, proof, payoff, cta.',
+    'Use setup for support, context, or problem beats. Use proof for escalation, mechanism, comparison, or visible evidence beats. Do not invent labels like support or escalation.',
     'Only use reference ids from the locked entity set in the References section and shot blocks.',
+    'Only list refs in ## References when they are actually needed by the authored shots. Do not repeat every available locked ref by default.',
+    'Only use Props for recurring hero or continuity-critical refs. Everyday carrier objects, staging objects, packaging, surfaces, and background clutter should usually stay inside Action or Composition.',
     'Do not invent new reusable item refs from generic props. If an object is not already in the locked entity set and is not clearly a specific recurring hero object, keep it inside Action or Composition.',
+    'Narrator Overlay is optional and should be used only when short on-screen text improves sound-off clarity. Keep it brief and mobile-readable.',
     'When the prompt names multiple phases, split them into separate shot blocks instead of compressing them into one.',
     'Dialogue must use actual spoken lines. Do not summarize what the character says.',
     'Action is the canonical shot script. It must describe only what is visibly happening on screen.',
@@ -2652,6 +2762,9 @@ export function cinematicScriptPlannerSystemPrompt(
       : null,
     presetFamily !== 'story_movie_tv'
       ? 'Every UGC shot should be understandable from a still frame and clear enough to read without sound.'
+      : null,
+    presetFamily !== 'story_movie_tv'
+      ? 'Dialogue and narrator overlay text should follow the format. Some presets are dialogue-led, others should stay mostly visual.'
       : null,
     presetFamily !== 'story_movie_tv'
       ? 'Give each UGC shot one primary job in the arc: hook, pain, mechanism, proof, payoff, or CTA. Use Role to reflect that shot job when helpful.'

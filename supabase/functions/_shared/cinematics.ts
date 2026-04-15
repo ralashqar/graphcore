@@ -114,6 +114,12 @@ function subtypeLooksLikeAd(formatSubtype: ReturnType<typeof getCinematicSetting
   return typeof formatSubtype === 'string' && (formatSubtype.startsWith('ad_') || formatSubtype === 'contrast_narrative')
 }
 
+function formatOverlayCues(audio: ReturnType<typeof getCinematicShotNodeConfig>['audio']) {
+  return audio
+    .filter((cue) => cue.kind === 'offscreen' && cue.cue.trim())
+    .map((cue) => `Narrator overlay: ${cue.cue.trim()}.`)
+}
+
 export function extractFalVideoUrl(data: unknown) {
   const record = asRecord(data)
   const video = asRecord(record.video)
@@ -402,6 +408,9 @@ function resolveStoryboardTargetShots(graph: SnapshotGraph, storyboardNodeKey: s
   if (!storyboardNode) return []
   const config = getStoryboardRefNodeConfig(storyboardNode)
   const sequence = getCinematicSequence(graph.metadata)
+  const takeShotIds = config.takeId
+    ? sequence.takes.find((take) => take.id === config.takeId)?.shotIds ?? []
+    : []
   const directPanelShotId =
     config.panelId
       ? sequence.storyboard?.panels.find((panel) => panel.id === config.panelId)?.shotId ?? null
@@ -415,8 +424,9 @@ function resolveStoryboardTargetShots(graph: SnapshotGraph, storyboardNodeKey: s
     .map((shot) => shot.id)
   const shotIds = Array.from(new Set(
     config.storyboardKind === 'sequence_board'
-      ? sequence.shots.slice(0, 6).map((shot) => shot.id)
+      ? (takeShotIds.length > 0 ? takeShotIds : sequence.shots.slice(0, 6).map((shot) => shot.id))
       : [
+          ...takeShotIds,
           ...(config.shotId ? [config.shotId] : []),
           ...(directPanelShotId ? [directPanelShotId] : []),
           ...referencedShotIds,
@@ -582,6 +592,7 @@ export function buildSeedanceExecutionPlan(input: {
     shot.cameraMovement.trim() ? `Camera movement: ${shot.cameraMovement.trim()}.` : null,
     shot.lensPreference.trim() ? `Lens: ${shot.lensPreference.trim()}.` : null,
     ...shot.dialogue.map((entry) => `Dialogue: ${entry.line}${entry.delivery ? ` (${entry.delivery})` : ''}.`),
+    ...formatOverlayCues(shot.audio),
   ].filter((entry): entry is string => Boolean(entry))
 
   const referenceDirectives = keptReferenceInputs.map((entry, index) => {
@@ -719,6 +730,7 @@ function buildSeedanceTakePrompt(input: {
     shot.proofType.trim() ? `Proof cue: ${shot.proofType.trim()}.` : null,
     shot.ctaType.trim() ? `CTA style: ${shot.ctaType.trim()}.` : null,
     ...shot.dialogue.map((entry) => `Dialogue: ${entry.line}${entry.delivery ? ` (${entry.delivery})` : ''}.`),
+    ...formatOverlayCues(shot.audio),
   ].filter((entry): entry is string => Boolean(entry)).join(' '))
   const presetDirectives =
     input.presetFamily === 'story_movie_tv'
@@ -821,6 +833,7 @@ export function buildStillPrompt(input: {
     input.shotNode.body?.text ? `Script beat: ${String(input.shotNode.body.text).trim()}.` : null,
     shot.visualPrompt.trim() ? `Additional visual direction: ${shot.visualPrompt.trim()}.` : null,
     shot.compositionGuide.trim() ? `Composition guide: ${shot.compositionGuide.trim()}.` : null,
+    ...formatOverlayCues(shot.audio),
     ...sourceDescriptions,
     'Use literal visual staging and readable proof. Avoid poetic metaphor or polished ad copy.',
     subtypeLooksLikeAd(shot.formatSubtype ?? settings.formatSubtype ?? null)
@@ -867,6 +880,7 @@ export function buildTakeStillPrompt(input: {
       shot.framing.trim() ? `Framing: ${shot.framing.trim()}.` : null,
       shot.cameraMovement.trim() ? `Movement: ${shot.cameraMovement.trim()}.` : null,
       shot.visualPrompt.trim() ? `Visual direction: ${shot.visualPrompt.trim()}.` : null,
+      ...formatOverlayCues(shot.audio),
     ].filter(Boolean).join(' ')),
     ...input.sourceInputs.map((entry) => `${entry.role ?? 'source'}: ${entry.definition?.name ?? entry.node.title}.`),
     'Use literal visual phrasing and visible proof instead of polished ad copy or metaphor.',
@@ -958,6 +972,7 @@ export function buildVideoPrompt(input: {
     shot.framing.trim() ? `Framing: ${shot.framing.trim()}.` : null,
     shot.cameraAngle.trim() ? `Camera angle: ${shot.cameraAngle.trim()}.` : null,
     shot.lensPreference.trim() ? `Lens preference: ${shot.lensPreference.trim()}.` : null,
+    ...formatOverlayCues(shot.audio),
     input.sourceInputs.map((entry) => `${entry.config.assetRole ?? entry.definition?.kind ?? 'source'}: ${entry.definition?.name ?? entry.node.title}.`).join(' '),
     describePresetPromptStyle(settings.presetFamily),
     describeSubtypePromptStyle(shot.formatSubtype ?? settings.formatSubtype ?? null),

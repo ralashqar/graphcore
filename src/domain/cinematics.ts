@@ -413,6 +413,7 @@ export const storyboardRefNodeConfigSchema = z.object({
   storyboardId: z.string().nullable().default(null),
   panelId: z.string().nullable().default(null),
   shotId: z.string().nullable().default(null),
+  takeId: z.string().nullable().default(null),
   storyboardKind: z.enum(['sequence_board', 'shot_panel']).default('shot_panel'),
   assetKey: z.string().nullable().default(null),
   generationPrompt: z.string().default(''),

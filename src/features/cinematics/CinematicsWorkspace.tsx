@@ -1,5 +1,6 @@
 import type { Connection } from '@xyflow/react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import type { CSSProperties, MouseEvent as ReactMouseEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { resolveAssetPreviewUrl, resolveAssetSourceUrl } from '../../domain/assets'
 import { compileCinematicGraphFromScriptDoc } from '../../domain/cinematicScriptCompiler'
@@ -53,6 +54,7 @@ import type {
   NodeDefinition,
 } from '../../domain/graphcore'
 import {
+  createNodeFromTemplate,
   graphNodeLibrary,
   graphNodeTemplatesByKey,
   normalizeNode,
@@ -379,6 +381,11 @@ function buildReadableScriptExport(scriptDoc: CinematicScriptDoc) {
         const speaker = line.speakerRefId ? bindingById.get(line.speakerRefId)?.label ?? line.speakerRefId : 'Unknown'
         lines.push(`- ${speaker}: "${line.line.trim()}"${line.delivery.trim() ? ` (${line.delivery.trim()})` : ''}`)
       }
+    }
+    const narratorOverlay = shot.audio.filter((cue) => cue.kind === 'offscreen' && cue.cue.trim())
+    if (narratorOverlay.length > 0) {
+      lines.push('Narrator Overlay:')
+      for (const cue of narratorOverlay) lines.push(`- ${cue.cue.trim()}`)
     }
     lines.push('')
   }
@@ -824,13 +831,11 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
     onDuplicateGraph,
     onDuplicateNode,
     onMoveNode,
-    onRunCinematicPreflight,
     onSelectEdge,
     onSelectGraph,
     onSelectNode,
     onStartCinematicRun,
     onUpdateEdge,
-    onUpdateGameSpecCinematics,
     onUpdateGraph,
     onUpdateNode,
   } = props
@@ -878,6 +883,10 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
   )
   const [railMode, setRailMode] = useState<RailMode | 'runs'>('graphs')
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
+  const [inspectorWidth, setInspectorWidth] = useState(360)
+  const [pendingStoryboardNodeKeys, setPendingStoryboardNodeKeys] = useState<string[]>([])
+  const [queuedStoryboardRequests, setQueuedStoryboardRequests] = useState<Array<{ takeNodeKey: string; storyboardNodeKey: string }>>([])
+  const inspectorResizeState = useRef<{ startX: number; startWidth: number } | null>(null)
   const isDeletingSelectedGraph = currentGraph?.key === deletingGraphKey
   const selectedRun = currentGraphRuns.find((run) => run.id === selectedRunId) ?? currentGraphRuns[0] ?? null
 
@@ -891,6 +900,65 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
       setSelectedRunId(currentGraphRuns[0]?.id ?? null)
     }
   }, [currentGraphRuns, selectedRunId])
+
+  useEffect(() => {
+    if (!currentGraph || queuedStoryboardRequests.length === 0) return
+    const readyRequests = queuedStoryboardRequests.filter((entry) => currentGraph.nodes.some((node) => node.key === entry.storyboardNodeKey))
+    if (readyRequests.length === 0) return
+    for (const request of readyRequests) {
+      onStartCinematicRun({
+        graphKey: currentGraph.key,
+        mode: 'preview_storyboard_still',
+        targetNodeKey: request.storyboardNodeKey,
+      })
+    }
+    setQueuedStoryboardRequests((current) => current.filter((entry) => !readyRequests.some((ready) => ready.storyboardNodeKey === entry.storyboardNodeKey)))
+  }, [currentGraph, onStartCinematicRun, queuedStoryboardRequests])
+
+  useEffect(() => {
+    if (pendingStoryboardNodeKeys.length === 0) return
+    const terminalStoryboardNodeKeys = new Set(
+      currentGraphRuns
+        .flatMap((run) => run.jobs)
+        .filter((job) => job.kind === 'storyboard_still' && ['succeeded', 'failed', 'cancelled', 'skipped'].includes(job.status))
+        .map((job) => job.shotNodeKey),
+    )
+    if (terminalStoryboardNodeKeys.size === 0) return
+    setPendingStoryboardNodeKeys((current) => current.filter((nodeKey) => !terminalStoryboardNodeKeys.has(nodeKey)))
+  }, [currentGraphRuns, pendingStoryboardNodeKeys.length])
+
+  useEffect(() => {
+    const handlePointerMove = (event: MouseEvent) => {
+      const state = inspectorResizeState.current
+      if (!state) return
+      const nextWidth = Math.max(280, Math.min(760, state.startWidth - (event.clientX - state.startX)))
+      setInspectorWidth(nextWidth)
+    }
+
+    const handlePointerUp = () => {
+      if (!inspectorResizeState.current) return
+      inspectorResizeState.current = null
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+
+    window.addEventListener('mousemove', handlePointerMove)
+    window.addEventListener('mouseup', handlePointerUp)
+    return () => {
+      window.removeEventListener('mousemove', handlePointerMove)
+      window.removeEventListener('mouseup', handlePointerUp)
+    }
+  }, [])
+
+  const startInspectorResize = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    inspectorResizeState.current = {
+      startX: event.clientX,
+      startWidth: inspectorWidth,
+    }
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    event.preventDefault()
+  }, [inspectorWidth])
 
   const buildNodeData = useCallback((node: NodeDefinition) => {
     const previewAsset = resolveNodePreviewAsset(node, definitions, assets)
@@ -937,10 +1005,12 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
         return {
           variant: 'storyboard-ref' as const,
           iconId: 'content' as const,
-          kicker: config.storyboardKind.replace(/_/g, ' '),
+          kicker: pendingStoryboardNodeKeys.includes(node.key) ? 'generating storyboard' : config.storyboardKind.replace(/_/g, ' '),
           chips: [],
           lines: config.notes ? [truncateGraphLine(config.notes, 92)] : [],
-          ambience: config.assetKey ? 'board ready' : 'board pending',
+          ambience: pendingStoryboardNodeKeys.includes(node.key)
+            ? 'rendering board'
+            : config.assetKey ? 'board ready' : 'board pending',
         }
       }
 
@@ -1025,7 +1095,7 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
       conditionSummary: summarizeCondition(node.condition),
       effectSummary: buildNodeMetaLines(node, shotRunStatus),
     }
-  }, [assets, currentGraph, currentGraphRuns, definitions])
+  }, [assets, currentGraph, currentGraphRuns, definitions, pendingStoryboardNodeKeys])
 
   const {
     applyTemplateChange,
@@ -1041,7 +1111,6 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
     liveEdges,
     liveNodes,
     placeTemplate,
-    refocusViewport,
     setContextMenu,
     setContextMenuSearch,
     setFlowInstance,
@@ -1090,7 +1159,57 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
     })
   }
 
-  const projectSettings = getCinematicSettings(gameSpec ?? {}, {})
+  const ensureStoryboardNodeForTake = useCallback((takeNode: NodeDefinition) => {
+    if (!currentGraph || takeNode.type !== 'cinematic_take') return null
+    const takeConfig = getCinematicTakeNodeConfig(takeNode)
+    const existingStoryboard = currentGraph.nodes.find((entry) => (
+      entry.type === 'storyboard_ref'
+      && getStoryboardRefNodeConfig(entry).takeId === takeConfig.id
+      && getStoryboardRefNodeConfig(entry).storyboardKind === 'sequence_board'
+    )) ?? null
+    if (existingStoryboard) {
+      return existingStoryboard.key
+    }
+
+    const template = graphNodeTemplatesByKey.get('sequence_board_ref') ?? graphNodeTemplatesByKey.get('storyboard_ref')
+    if (!template) return null
+
+    const storyboardNode = createNodeFromTemplate(
+      currentGraph,
+      template,
+      currentGraph.nodes.length + 1,
+      { x: takeNode.position.x + 280, y: takeNode.position.y - 20 },
+    )
+    storyboardNode.title = `${takeNode.title} Storyboard`
+    storyboardNode.metadata = updateNodeMetadataWithStoryboardRef(storyboardNode.metadata, {
+      takeId: takeConfig.id,
+      storyboardKind: 'sequence_board',
+      notes: `Sequence board for ${takeNode.title}.`,
+    })
+    onCreateNode(currentGraph.key, storyboardNode)
+    return storyboardNode.key
+  }, [currentGraph, onCreateNode])
+
+  const handleGenerateStoryboardFromTake = useCallback((takeNode: NodeDefinition) => {
+    if (!currentGraph || takeNode.type !== 'cinematic_take') return
+    const storyboardNodeKey = ensureStoryboardNodeForTake(takeNode)
+    if (!storyboardNodeKey) return
+    setPendingStoryboardNodeKeys((current) => current.includes(storyboardNodeKey) ? current : [...current, storyboardNodeKey])
+    if (currentGraph.nodes.some((node) => node.key === storyboardNodeKey)) {
+      onStartCinematicRun({
+        graphKey: currentGraph.key,
+        mode: 'preview_storyboard_still',
+        targetNodeKey: storyboardNodeKey,
+      })
+      return
+    }
+    setQueuedStoryboardRequests((current) => (
+      current.some((entry) => entry.storyboardNodeKey === storyboardNodeKey)
+        ? current
+        : [...current, { takeNodeKey: takeNode.key, storyboardNodeKey }]
+    ))
+  }, [currentGraph, ensureStoryboardNodeForTake, onStartCinematicRun])
+
   const graphSettings = getCinematicSettings(gameSpec ?? {}, currentGraph?.metadata ?? {})
   const subtypeOptions = getSubtypeOptionsForPresetFamily(graphSettings.presetFamily)
   const currentPreflightStatus = preflightStatus?.graphKey === currentGraph?.key ? preflightStatus : null
@@ -1359,7 +1478,10 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
   }
 
   return (
-    <div className="focus-layout graph-layout cinematics-layout">
+    <div
+      className="focus-layout graph-layout cinematics-layout"
+      style={{ '--cinematic-drawer-width': `${inspectorWidth}px` } as CSSProperties}
+    >
       <aside className="focus-rail graph-rail">
         <div className="rail-collection-head">
           <div className="segmented-control">
@@ -1455,7 +1577,6 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
             {cinematicGraphs.length === 0 ? <option value="">No cinematic flows</option> : null}
             {cinematicGraphs.map((graph) => <option key={graph.key} value={graph.key}>{graph.name}</option>)}
           </select>
-          <input value={currentGraph?.name ?? ''} onChange={(event) => currentGraph && onUpdateGraph(currentGraph.key, { name: event.target.value })} placeholder="Cinematic flow name" />
           <div className="segmented-control">
             <button className={contentMode === 'script' ? 'segment-button is-active' : 'segment-button'} onClick={() => setContentMode('script')} type="button">Script</button>
             <button className={contentMode === 'graph' ? 'segment-button is-active' : 'segment-button'} onClick={() => setContentMode('graph')} type="button">Graph</button>
@@ -1475,24 +1596,8 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
               {subtypeOptions.map((option) => <option key={option} value={option}>{getCinematicFormatSubtypeLabel(option)}</option>)}
             </select>
           ) : null}
-          <button className="ghost-button compact" disabled={!currentGraph || !graphPresetOverrideActive} onClick={resetGraphPresetOverride} type="button">Use Project Preset</button>
-          <button className="ghost-button compact" disabled={!currentGraph || contentMode !== 'graph'} onClick={refocusViewport} type="button">Fit View</button>
-          <button className="ghost-button compact" disabled={!currentGraph || !currentScript || currentScript.shots.length === 0 || currentScriptValidationErrors.length > 0} onClick={rebuildCurrentGraphFromScript} type="button">Rebuild From Script</button>
-          <button className="ghost-button compact" disabled={!currentGraph || !canRunCinematics || isCurrentGraphPending || Boolean(currentPreflightStatus?.active)} onClick={() => currentGraph && onRunCinematicPreflight({ graphKey: currentGraph.key, includeShots: true })} type="button">Generate Missing Shot Stills</button>
-          <button className="ghost-button compact" disabled={!currentGraph || !canRunCinematics || isCurrentGraphPending || Boolean(currentPreflightStatus?.active)} onClick={() => currentGraph && onRunCinematicPreflight({ graphKey: currentGraph.key, includeStoryboards: true })} type="button">Generate Missing Storyboards</button>
-          <button className="ghost-button compact" disabled={!currentGraph || !canRunCinematics || isCurrentGraphPending || Boolean(currentPreflightStatus?.active)} onClick={() => currentGraph && onRunCinematicPreflight({ graphKey: currentGraph.key, includeTakes: true })} type="button">Generate Missing Take Stills</button>
-          <button className="ghost-button compact" disabled={!currentGraph || !canRunCinematics || isCurrentGraphPending || Boolean(currentPreflightStatus?.active)} onClick={() => currentGraph && onRunCinematicPreflight({ graphKey: currentGraph.key, includeShots: true, includeStoryboards: true, includeTakes: true })} type="button">Generate All Visuals</button>
           <button className="ghost-button compact" onClick={() => currentGraph && onDuplicateGraph(currentGraph.key)} type="button">Duplicate</button>
           <button className={isDeletingSelectedGraph ? 'ghost-button compact button-with-spinner' : 'ghost-button compact'} disabled={isDeletingSelectedGraph} onClick={() => currentGraph && onDeleteGraph(currentGraph.key)} type="button">{isDeletingSelectedGraph ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}</button>
-          <button
-            className="primary-button compact"
-            disabled={!currentGraph || !canRunCinematics || isCurrentGraphPending || approvedTakeNodeKeys.length === 0}
-            onClick={() => currentGraph && onStartCinematicRun({ graphKey: currentGraph.key, mode: 'graph_run', targetNodeKeys: approvedTakeNodeKeys })}
-            type="button"
-          >
-            Render Approved Takes
-          </button>
-          <button className="ghost-button compact" disabled={!currentGraph || !canRunCinematics || isCurrentGraphPending || currentTakeNodes.length === 0} onClick={() => currentGraph && onStartCinematicRun({ graphKey: currentGraph.key, mode: 'graph_run' })} type="button">Render All Takes</button>
         </div>
         {contentMode === 'graph' ? (
           <>
@@ -1565,6 +1670,12 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
         ) : null}
       </section>
 
+      <div
+        aria-hidden="true"
+        className="cinematic-drawer-resizer"
+        onMouseDown={startInspectorResize}
+      />
+
       <aside className="context-drawer">
         {currentGraph && isCurrentGraphPending ? (
           <div className="detail-stack compact world-build-loading-shell">
@@ -1621,6 +1732,8 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
               currentGraph={currentGraph}
               definitions={definitions}
               onExtractShot={extractShotFromTake}
+              onGenerateStoryboard={handleGenerateStoryboardFromTake}
+              isGeneratingStoryboard={currentGraph.nodes.some((entry) => entry.type === 'storyboard_ref' && getStoryboardRefNodeConfig(entry).takeId === getCinematicTakeNodeConfig(currentNode).id && pendingStoryboardNodeKeys.includes(entry.key))}
               node={currentNode}
               onMergeTake={mergeTakeWithNeighbor}
               onMoveShot={moveShotWithinTake}
@@ -1653,12 +1766,10 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
             currentSettings={graphSettings}
             diagnostics={diagnostics.filter((item) => item.graphKey === currentGraph.key)}
             graph={currentGraph}
-            projectSettings={projectSettings}
             onAddPresetNode={placeTemplate}
             onResetGraphPresetOverride={resetGraphPresetOverride}
             onUpdate={(changes) => onUpdateGraph(currentGraph.key, changes)}
             onUpdateGraphCinematics={updateGraphCinematics}
-            onUpdateProjectCinematics={onUpdateGameSpecCinematics}
           />
         ) : (
           <div className="detail-stack compact">
@@ -1676,27 +1787,27 @@ function CinematicGraphInspector({
   currentSettings,
   diagnostics,
   graph,
-  projectSettings,
   onAddPresetNode,
   onResetGraphPresetOverride,
   onUpdate,
   onUpdateGraphCinematics,
-  onUpdateProjectCinematics,
 }: {
   currentSettings: CinematicSettings
   diagnostics: Diagnostic[]
   graph: GraphDefinition
-  projectSettings: CinematicSettings
   onAddPresetNode: (templateKey: string) => void
   onResetGraphPresetOverride: () => void
   onUpdate: (changes: Partial<GraphDefinition>) => void
   onUpdateGraphCinematics: (changes: Partial<CinematicSettings>) => void
-  onUpdateProjectCinematics: (changes: Partial<CinematicSettings>) => void
 }) {
   return (
     <div className="detail-stack compact">
       <span className="eyebrow">Cinematic Flow</span>
       <h3>{graph.name}</h3>
+      <label className="field-block">
+        <span>Name</span>
+        <input value={graph.name} onChange={(event) => onUpdate({ name: event.target.value })} />
+      </label>
       <label className="field-block">
         <span>Key</span>
         <input value={graph.key} onChange={(event) => onUpdate({ key: event.target.value })} />
@@ -1712,16 +1823,6 @@ function CinematicGraphInspector({
           {graph.nodes.map((node) => <option key={node.key} value={node.key}>{node.title}</option>)}
         </select>
       </label>
-
-      <div className="editor-section compact-section">
-        <div className="section-head">
-          <div>
-            <span className="eyebrow">Project Defaults</span>
-            <h3>Cinematic Settings</h3>
-          </div>
-        </div>
-        <CinematicSettingsEditor settings={projectSettings} onChange={onUpdateProjectCinematics} />
-      </div>
 
       <div className="editor-section compact-section">
         <div className="section-head">
@@ -2599,8 +2700,10 @@ function CinematicTakeInspector({
   canRunCinematics,
   currentGraph,
   definitions,
+  isGeneratingStoryboard,
   node,
   onExtractShot,
+  onGenerateStoryboard,
   onMergeTake,
   onMoveShot,
   onPullAdjacentShot,
@@ -2615,8 +2718,10 @@ function CinematicTakeInspector({
   canRunCinematics: boolean
   currentGraph: GraphDefinition
   definitions: DefinitionBase[]
+  isGeneratingStoryboard: boolean
   node: NodeDefinition
   onExtractShot: (takeId: string, shotId: string) => void
+  onGenerateStoryboard: (takeNode: NodeDefinition) => void
   onMergeTake: (takeId: string, direction: -1 | 1) => void
   onMoveShot: (takeId: string, shotId: string, direction: -1 | 1) => void
   onPullAdjacentShot: (takeId: string, direction: -1 | 1) => void
@@ -2824,6 +2929,7 @@ function CinematicTakeInspector({
         </div>
       </div>
       <div className="detail-actions cinematic-action-row">
+        <button className={isGeneratingStoryboard ? 'ghost-button compact button-with-spinner' : 'ghost-button compact'} disabled={!canRunCinematics || includedShots.length === 0 || isGeneratingStoryboard} onClick={() => onGenerateStoryboard(node)} type="button">{isGeneratingStoryboard ? <><span className="button-spinner" aria-hidden="true" />Generating Storyboard...</> : 'Generate Storyboard'}</button>
         <button className="ghost-button compact" disabled={!canRunCinematics || includedShots.length === 0} onClick={() => onGenerate('preview_take_still')} type="button">Generate Still</button>
         <button className="primary-button compact" disabled={!canRunCinematics || includedShots.length === 0} onClick={() => onGenerate('graph_run')} type="button">Generate Clip</button>
       </div>

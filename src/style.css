@@ -892,6 +892,10 @@ code {
   align-items: stretch;
 }
 
+.cinematics-layout {
+  grid-template-columns: 300px minmax(0, 1fr) 10px minmax(280px, var(--cinematic-drawer-width, 360px));
+}
+
 .graph-rail {
   min-height: 0;
   max-height: 100%;
@@ -917,6 +921,28 @@ code {
 .graph-layout .context-drawer {
   min-height: 0;
   max-height: 100%;
+}
+
+.cinematic-drawer-resizer {
+  position: relative;
+  min-height: 0;
+  cursor: col-resize;
+  border-radius: 999px;
+  background: transparent;
+}
+
+.cinematic-drawer-resizer::before {
+  content: '';
+  position: absolute;
+  inset: 0 3px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  transition: background 160ms ease;
+}
+
+.cinematic-drawer-resizer:hover::before,
+.cinematic-drawer-resizer:active::before {
+  background: rgba(94, 234, 212, 0.32);
 }
 
 .graph-rail-stack,
@@ -3334,6 +3360,14 @@ button:disabled {
     grid-template-columns: 240px minmax(0, 1fr);
   }
 
+  .cinematics-layout {
+    grid-template-columns: 240px minmax(0, 1fr);
+  }
+
+  .cinematic-drawer-resizer {
+    display: none;
+  }
+
   .context-drawer {
     grid-column: 1 / -1;
   }
@@ -3397,6 +3431,10 @@ button:disabled {
   .prompts-layout,
   .releases-layout,
   .global-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .cinematics-layout {
     grid-template-columns: 1fr;
   }
 
