@@ -69,7 +69,7 @@ async function getStatus(model: string, requestId: string, logs: boolean, header
 }
 
 async function getResult(model: string, requestId: string, headers: HeadersInit) {
-  return fetchFalJson(`${queueBaseUrl}/${model}/requests/${requestId}`, {
+  return fetchFalJson(`${queueBaseUrl}/${model}/requests/${requestId}/response`, {
     method: 'GET',
     headers,
   })

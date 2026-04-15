@@ -158,3 +158,34 @@ Expected graph shape:
 - `preview_still` remains a fallback still-generation path.
 - `preview_video` and `graph_run` are Seedance-first.
 - Execution plans are stored on shot metadata so the exact packed reference set can be inspected and replayed.
+
+## Cinematic Storyboard And Still Polling Notes
+
+GraphCore cinematic preview images now follow an asset-first async queue pattern.
+
+For `preview_storyboard_still` and other cinematic preview image jobs:
+
+1. `start-cinematic-run` reserves the final asset key immediately.
+2. The take or storyboard node is bound to that same key immediately.
+3. The Fal job is submitted and the job stores:
+   - `provider_request_id`
+   - `statusUrl`
+   - `responseUrl`
+4. `poll-cinematic-run` uses those exact provider URLs to fetch completion state.
+5. On success, `poll-cinematic-run` updates the reserved asset row in place with final `sourceUrl` and `previewUrl`.
+
+Do not change this back to a blocking one-shot subscribe flow for slow storyboard edit jobs. The request can exceed Supabase edge idle limits before the provider completes.
+
+### Fal Nano Banana Edit Notes
+
+For reference-driven storyboard generation:
+
+- use `fal-ai/nano-banana-2/edit`
+- pass resolved image references as `image_urls`
+- do not rely on reconstructed queue URLs when polling; use Fal's returned URLs from submit
+
+If a storyboard run submits successfully but polls forever:
+
+- confirm the job has `provider_request_id`
+- confirm `statusUrl` and `responseUrl` are present in `result_context`
+- inspect server-side polling logs before changing prompt logic

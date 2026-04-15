@@ -412,11 +412,13 @@ export function AssetPickerDialog({
 export function MediaThumb({
   asset,
   fallbackIcon,
+  busy = false,
   label,
   large = false,
 }: {
   asset: AssetDefinition | null
   fallbackIcon?: EntityIconId
+  busy?: boolean
   label: string
   large?: boolean
 }) {
@@ -430,6 +432,7 @@ export function MediaThumb({
   if (previewUrl && !imageFailed) {
     return (
       <span className={large ? 'media-thumb large' : 'media-thumb'}>
+        {busy ? <span className="media-thumb-spinner"><span className="button-spinner" aria-hidden="true" /></span> : null}
         {asset?.kind === 'video'
           ? <video aria-label={label} muted onError={() => setImageFailed(true)} playsInline preload="metadata" src={previewUrl} />
           : <img alt={label} onError={() => setImageFailed(true)} src={previewUrl} />}
@@ -451,6 +454,7 @@ export function MediaThumb({
   if (fallbackIcon) {
     return (
       <span className={large ? 'media-thumb large fallback has-icon' : 'media-thumb fallback has-icon'}>
+        {busy ? <span className="media-thumb-spinner"><span className="button-spinner" aria-hidden="true" /></span> : null}
         <EntityIcon className="media-thumb-entity-icon" id={fallbackIcon} />
       </span>
     )
@@ -458,6 +462,7 @@ export function MediaThumb({
 
   return (
     <span className={large ? 'media-thumb large fallback' : 'media-thumb fallback'}>
+      {busy ? <span className="media-thumb-spinner"><span className="button-spinner" aria-hidden="true" /></span> : null}
       <span className="media-thumb-glyph">{placeholderGlyph}</span>
     </span>
   )

@@ -21,6 +21,12 @@ import {
   type CinematicRunJob,
 } from '../../../src/domain/cinematics.ts'
 import { buildAssetSlug } from '../../../src/domain/assets.ts'
+import {
+  getArtStylePresetDescription,
+  getArtStylePresetLabel,
+  getArtStylePromptLabel,
+} from '../../../src/domain/artStylePresets.ts'
+import { gameSpecSchema } from '../../../src/domain/gameSpec.ts'
 
 type SnapshotRecord = Record<string, unknown>
 type SnapshotGraph = SnapshotRecord & {
@@ -118,6 +124,111 @@ function formatOverlayCues(audio: ReturnType<typeof getCinematicShotNodeConfig>[
   return audio
     .filter((cue) => cue.kind === 'offscreen' && cue.cue.trim())
     .map((cue) => `Narrator overlay: ${cue.cue.trim()}.`)
+}
+
+function getProjectArtDirection(gameSpec: unknown | null | undefined) {
+  const rawGameSpec = asRecord(gameSpec)
+  const rawTheme = asRecord(rawGameSpec.theme)
+  const rawArtStylePreset = asString(rawTheme.artStylePreset)?.trim() ?? ''
+  const rawArtStyleDescription = asString(rawTheme.artStyleDescription)?.trim() ?? ''
+  const parsed = gameSpecSchema.safeParse(gameSpec ?? null)
+  const parsedArtStylePreset = parsed.success ? parsed.data.theme.artStylePreset.trim() : ''
+  const parsedArtStyleDescription = parsed.success ? parsed.data.theme.artStyleDescription.trim() : ''
+
+  return {
+    artStylePreset: rawArtStylePreset || parsedArtStylePreset,
+    artStyleDescription: rawArtStyleDescription || parsedArtStyleDescription,
+  }
+}
+
+function formatProjectArtDirection(gameSpec: unknown | null | undefined) {
+  const direction = getProjectArtDirection(gameSpec)
+  const presetIdOrLabel = direction.artStylePreset || null
+  const presetLabel = getArtStylePresetLabel(presetIdOrLabel)
+  const presetPromptLabel = getArtStylePromptLabel(presetIdOrLabel)
+  const presetDescription = getArtStylePresetDescription(presetIdOrLabel)
+  const styleDescription = direction.artStyleDescription || presetDescription
+  return [
+    `Art style: ${presetLabel}.`,
+    presetPromptLabel ? `Style target: ${presetPromptLabel}.` : null,
+    styleDescription ? `Style direction: ${styleDescription}.` : null,
+  ].filter((entry): entry is string => Boolean(entry))
+}
+
+function buildStoryboardReferenceStyleInstruction(sourceInputs: Array<{ imageUrl?: string | null }>) {
+  const hasImageReferences = sourceInputs.some((entry) => typeof entry.imageUrl === 'string' && entry.imageUrl.trim().length > 0)
+  if (!hasImageReferences) return null
+  return 'Match the same character identity, wardrobe, props, environment details, and rendering style shown in the provided reference images. Use the same style as the added reference images representing the actors and scene elements.'
+}
+
+function ordinalLabel(index: number) {
+  return ['first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth'][index] ?? `${index + 1}th`
+}
+
+function buildStoryboardPanelDirection(shot: {
+  title: string
+  beat: string
+  framing: string
+  cameraAngle: string
+}, index: number) {
+  const parts = [
+    `In the ${ordinalLabel(index)} frame, show ${shot.title}.`,
+    shot.beat.trim() ? shot.beat.trim().replace(/\.$/, '') + '.' : null,
+    shot.framing.trim() ? `Use ${shot.framing.trim()} framing.` : null,
+    shot.cameraAngle.trim() ? `Use a ${shot.cameraAngle.trim()} camera angle.` : null,
+  ]
+  return parts.filter((entry): entry is string => Boolean(entry)).join(' ')
+}
+
+function buildStoryboardSourceDescriptions(
+  sourceInputs: Array<{ role?: string | null; definition?: { name?: string | null } | null; node: { title: string }; imageUrl?: string | null }>,
+) {
+  return sourceInputs.map((entry) => {
+    const label = entry.definition?.name ?? entry.node.title
+    const role = entry.role ?? 'reference'
+    return entry.imageUrl
+      ? `Reference image for ${role}: ${label}.`
+      : `Reference for ${role}: ${label}.`
+  })
+}
+
+function isUsableAssetUrl(asset: SnapshotAsset | null | undefined, url: string | null) {
+  if (!url || !/^https?:\/\//i.test(url)) return false
+  const metadata = asRecord(asset?.metadata)
+  if (metadata.placeholder === true) return false
+  return true
+}
+
+function describeStoryboardGrid(panelCount: number, aspectRatio: string) {
+  const isVertical = aspectRatio === '9:16' || aspectRatio === '3:4'
+  const isSquareish = aspectRatio === '1:1' || aspectRatio === '4:3'
+  if (panelCount <= 1) {
+    return `Use a single full-frame panel matching a ${aspectRatio} composition.`
+  }
+  if (isVertical) {
+    if (panelCount <= 4) return `Arrange the sequence as a 2x2 grid of tall ${aspectRatio} panels with noticeable whitespace gutters between panels.`
+    if (panelCount <= 6) return `Arrange the sequence as a 2x3 grid of tall ${aspectRatio} panels with noticeable whitespace gutters between panels.`
+    if (panelCount <= 9) return `Arrange the sequence as a 3x3 grid of tall ${aspectRatio} panels with noticeable whitespace gutters between panels.`
+    return `Arrange the sequence as a 3x4 contact-sheet style grid of tall ${aspectRatio} panels with noticeable whitespace gutters, using only as many panels as needed.`
+  }
+  if (isSquareish) {
+    if (panelCount <= 4) return `Arrange the sequence as an evenly sized 2x2 grid of ${aspectRatio} panels with noticeable whitespace gutters between panels.`
+    if (panelCount <= 6) return `Arrange the sequence as an evenly sized 3x2 grid of ${aspectRatio} panels with noticeable whitespace gutters between panels.`
+    if (panelCount <= 9) return `Arrange the sequence as an evenly sized 3x3 grid of ${aspectRatio} panels with noticeable whitespace gutters between panels.`
+    return `Arrange the sequence as an evenly sized 4x4 contact-sheet style grid of ${aspectRatio} panels with noticeable whitespace gutters, using only as many panels as needed.`
+  }
+  if (panelCount <= 4) return `Arrange the sequence as an evenly sized 2x2 grid of wide ${aspectRatio} panels with noticeable whitespace gutters between panels.`
+  if (panelCount <= 6) return `Arrange the sequence as an evenly sized 3x2 grid of wide ${aspectRatio} panels with noticeable whitespace gutters between panels.`
+  if (panelCount <= 9) return `Arrange the sequence as an evenly sized 3x3 grid of wide ${aspectRatio} panels with noticeable whitespace gutters between panels.`
+  return `Arrange the sequence as an evenly sized 4x4 contact-sheet style grid of wide ${aspectRatio} panels with noticeable whitespace gutters, using only as many panels as needed.`
+}
+
+function describeStoryboardPanelStyling(aspectRatio: string) {
+  return [
+    `Each panel should read as a ${aspectRatio} frame.`,
+    'Give each panel slightly rounded corners.',
+    'Leave a bit of clean whitespace between panels so the grid feels organized and easy to read.',
+  ].join(' ')
 }
 
 export function extractFalVideoUrl(data: unknown) {
@@ -312,7 +423,8 @@ function buildResolvedSourceEntries(input: {
       if (!sourceNode) return null
       const resolved = resolveNodeAssetSnapshot({ sourceNode, definitions, assets })
       if (!resolved) return null
-      const assetUrl = resolveAssetUrl(resolved.asset)
+      const rawAssetUrl = resolveAssetUrl(resolved.asset)
+      const assetUrl = isUsableAssetUrl(resolved.asset, rawAssetUrl) ? rawAssetUrl : null
       const modality =
         resolved.asset?.kind === 'video'
           ? 'video'
@@ -351,7 +463,8 @@ export function resolveShotSources(snapshot: { definitions?: unknown[]; assets?:
         assets,
       })
       if (!resolved) return null
-      const assetUrl = resolveAssetUrl(resolved.asset)
+      const rawAssetUrl = resolveAssetUrl(resolved.asset)
+      const assetUrl = isUsableAssetUrl(resolved.asset, rawAssetUrl) ? rawAssetUrl : null
       const modality =
         resolved.asset?.kind === 'video'
           ? 'video'
@@ -396,10 +509,27 @@ export function resolveTakeSources(snapshot: { definitions?: unknown[]; assets?:
   const takeNode = findNode(graph, takeNodeKey)
   if (!takeNode) return []
   const take = getCinematicTakeNodeConfig(takeNode)
+  const sequence = getCinematicSequence(graph.metadata)
+  const takeShots = take.shotIds
+    .map((shotId) => sequence.shots.find((shot) => shot.id === shotId) ?? null)
+    .filter((shot): shot is typeof sequence.shots[number] => Boolean(shot))
+  const inferredRefIds = Array.from(new Set(
+    takeShots.flatMap((shot) => (
+      shot.requiredSourceRefIds.length > 0
+        ? shot.requiredSourceRefIds
+        : [
+            ...shot.storyboardRefIds,
+            ...shot.compositeRefIds,
+            ...shot.participantRefIds,
+            ...(shot.locationRefId ? [shot.locationRefId] : []),
+            ...shot.propRefIds,
+          ]
+    )),
+  ))
   return buildResolvedSourceEntries({
     snapshot,
     graph,
-    refIds: take.requiredSourceRefIds,
+    refIds: take.requiredSourceRefIds.length > 0 ? take.requiredSourceRefIds : inferredRefIds,
   })
 }
 
@@ -520,13 +650,14 @@ export function resolveTakeStillReferenceImageUrls(
   const firstShot = take.shotIds
     .map((shotId) => sequence.shots.find((entry) => entry.id === shotId) ?? null)
     .find((entry) => Boolean(entry)) ?? null
-  const firstShotStillUrl = firstShot?.stillAssetKey
-    ? resolveAssetUrl(assets.find((asset) => asset.key === firstShot.stillAssetKey) ?? null)
+  const firstShotStillAsset = firstShot?.stillAssetKey
+    ? assets.find((asset) => asset.key === firstShot.stillAssetKey) ?? null
     : null
+  const firstShotStillUrl = firstShotStillAsset ? resolveAssetUrl(firstShotStillAsset) : null
 
   return Array.from(new Set([
     ...sourceInputs.map((entry) => entry.imageUrl).filter((entry): entry is string => Boolean(entry)),
-    ...(firstShotStillUrl ? [firstShotStillUrl] : []),
+    ...(isUsableAssetUrl(firstShotStillAsset, firstShotStillUrl) ? [firstShotStillUrl as string] : []),
   ]))
 }
 
@@ -538,7 +669,11 @@ export function resolveStoryboardStillReferenceImageUrls(
 ) {
   const assets = Array.isArray(snapshot.assets) ? snapshot.assets.map((entry) => asRecord(entry) as SnapshotAsset) : []
   const shotStillUrls = resolveStoryboardTargetShots(graph, storyboardNodeKey)
-    .map((shot) => shot.stillAssetKey ? resolveAssetUrl(assets.find((asset) => asset.key === shot.stillAssetKey) ?? null) : null)
+    .map((shot) => {
+      const stillAsset = shot.stillAssetKey ? assets.find((asset) => asset.key === shot.stillAssetKey) ?? null : null
+      const url = stillAsset ? resolveAssetUrl(stillAsset) : null
+      return isUsableAssetUrl(stillAsset, url) ? url : null
+    })
     .filter((entry): entry is string => Boolean(entry))
 
   return Array.from(new Set([
@@ -762,7 +897,6 @@ function buildSeedanceTakePrompt(input: {
 
   return [
     `Create one continuous ${input.take.durationSeconds}-second video take titled "${input.takeTitle}".`,
-    input.projectSummary.trim() ? `Project context: ${input.projectSummary.trim()}.` : null,
     `Preset family: ${getCinematicPresetLabel(input.presetFamily)}.`,
     subtypeLabel ? `Format subtype: ${subtypeLabel}.` : null,
     formulaLabel ? `Planned script formula: ${formulaLabel}.` : null,
@@ -809,7 +943,7 @@ export function buildStillPrompt(input: {
 
   return [
     `Create a cinematic keyframe still for the project "${input.snapshot.project.name}".`,
-    input.snapshot.project.summary.trim() ? `Project context: ${input.snapshot.project.summary.trim()}.` : null,
+    ...formatProjectArtDirection(input.snapshot.gameSpec ?? null),
     `Preset family: ${getCinematicPresetLabel(settings.presetFamily)}.`,
     settings.formatSubtype ? `Format subtype: ${getCinematicFormatSubtypeLabel(settings.formatSubtype)}.` : null,
     settings.formulaFamily ? `Planned script formula: ${getCinematicFormulaFamilyLabel(settings.formulaFamily)}.` : null,
@@ -862,7 +996,7 @@ export function buildTakeStillPrompt(input: {
 
   return [
     `Create one representative still frame for the cinematic take "${input.takeNode.title}" in "${input.snapshot.project.name}".`,
-    input.snapshot.project.summary.trim() ? `Project context: ${input.snapshot.project.summary.trim()}.` : null,
+    ...formatProjectArtDirection(input.snapshot.gameSpec ?? null),
     `Preset family: ${getCinematicPresetLabel(settings.presetFamily)}.`,
     take.formatSubtype ? `Format subtype: ${getCinematicFormatSubtypeLabel(take.formatSubtype)}.` : null,
     take.formulaFamily ? `Planned script formula: ${getCinematicFormulaFamilyLabel(take.formulaFamily)}.` : null,
@@ -907,44 +1041,77 @@ export function buildStoryboardStillPrompt(input: {
   const settings = getCinematicSettings(input.snapshot.gameSpec ?? null, input.graph.metadata)
   const config = getStoryboardRefNodeConfig(input.storyboardNode)
   const shots = resolveStoryboardTargetShots(input.graph, input.storyboardNode.key)
-  const sourceDescriptions = input.sourceInputs.map((entry) => `${entry.role ?? 'source'}: ${entry.definition?.name ?? entry.node.title}.`)
+  const sourceDescriptions = buildStoryboardSourceDescriptions(input.sourceInputs)
+  const referenceStyleInstruction = buildStoryboardReferenceStyleInstruction(input.sourceInputs)
 
   if (config.storyboardKind === 'sequence_board') {
+    const panelCount = Math.min(shots.length, 9)
     return [
-    `Create a cinematic storyboard sequence board for "${input.storyboardNode.title}" in "${input.snapshot.project.name}".`,
-    input.snapshot.project.summary.trim() ? `Project context: ${input.snapshot.project.summary.trim()}.` : null,
-    `Preset family: ${getCinematicPresetLabel(settings.presetFamily)}.`,
-    settings.formatSubtype ? `Format subtype: ${getCinematicFormatSubtypeLabel(settings.formatSubtype)}.` : null,
-    'Render this as a readable storyboard sheet with multiple ordered panels that clearly progress through the action.',
-      'Use strong silhouette, clean panel composition, consistent character likeness, readable staging, and simple environment blocking.',
-      'Favor grayscale storyboard aesthetics or restrained monochrome marker rendering over polished final-frame concept art.',
-      ...shots.slice(0, 6).map((shot, index) => [
-        `Panel ${index + 1}: ${shot.title}.`,
-        shot.beat.trim() ? `Beat: ${shot.beat.trim()}.` : null,
-        shot.framing.trim() ? `Framing: ${shot.framing.trim()}.` : null,
-      ].filter(Boolean).join(' ')),
-      config.notes.trim() ? `Storyboard notes: ${config.notes.trim()}.` : null,
-      config.generationPrompt.trim() ? `Additional direction: ${config.generationPrompt.trim()}.` : null,
+      'Create a cinematic storyboard sequence board.',
+      ...formatProjectArtDirection(input.snapshot.gameSpec ?? null),
+      `Use a ${settings.stillAspectRatio} frame ratio for every panel.`,
+      'Render this as one clean multi-panel sequence image that clearly progresses through the action.',
+      describeStoryboardGrid(panelCount, settings.stillAspectRatio),
+      describeStoryboardPanelStyling(settings.stillAspectRatio),
+      'Keep all panels the same size and preserve consistent framing discipline across the whole board.',
+      referenceStyleInstruction,
+      ...shots.slice(0, 9).map((shot, index) => buildStoryboardPanelDirection(shot, index)),
+      config.notes.trim() ? `Additional scene direction: ${config.notes.trim()}.` : null,
+      config.generationPrompt.trim() ? `Additional visual direction: ${config.generationPrompt.trim()}.` : null,
       ...sourceDescriptions,
-      'No watermarks or decorative mockup chrome. Keep the panels clean and production-usable.',
+      'No captions, panel numbers, text labels, handwritten notes, speech bubbles, comic halftones, watermarks, or decorative mockup chrome.',
+      'Each panel should look like a real image frame from the project, not a sketch overlay.',
     ].filter(Boolean).join(' ')
   }
 
   const primaryShot = shots[0] ?? null
   return [
-    `Create one storyboard panel for "${input.storyboardNode.title}" in "${input.snapshot.project.name}".`,
-    input.snapshot.project.summary.trim() ? `Project context: ${input.snapshot.project.summary.trim()}.` : null,
-    `Preset family: ${getCinematicPresetLabel(settings.presetFamily)}.`,
-    settings.formatSubtype ? `Format subtype: ${getCinematicFormatSubtypeLabel(settings.formatSubtype)}.` : null,
-    'Render this as a single production-style storyboard panel with clear blocking, silhouette, and readable composition.',
-    primaryShot?.title ? `Shot: ${primaryShot.title}.` : null,
-    primaryShot?.beat.trim() ? `Beat: ${primaryShot.beat.trim()}.` : null,
-    primaryShot?.framing.trim() ? `Framing: ${primaryShot.framing.trim()}.` : null,
-    primaryShot?.cameraAngle.trim() ? `Camera angle: ${primaryShot.cameraAngle.trim()}.` : null,
-    config.notes.trim() ? `Storyboard notes: ${config.notes.trim()}.` : null,
-    config.generationPrompt.trim() ? `Additional direction: ${config.generationPrompt.trim()}.` : null,
+    'Create one storyboard panel.',
+    ...formatProjectArtDirection(input.snapshot.gameSpec ?? null),
+    `Use a ${settings.stillAspectRatio} frame ratio.`,
+    'Render this as a single clean cinematic frame in the project final visual language with clear blocking and readable composition.',
+    referenceStyleInstruction,
+    describeStoryboardPanelStyling(settings.stillAspectRatio),
+    primaryShot ? buildStoryboardPanelDirection(primaryShot, 0) : null,
+    config.notes.trim() ? `Additional scene direction: ${config.notes.trim()}.` : null,
+    config.generationPrompt.trim() ? `Additional visual direction: ${config.generationPrompt.trim()}.` : null,
     ...sourceDescriptions,
-    'Use a storyboard look rather than a polished final cinematic still. No multi-panel layout, no watermarks, and no decorative borders.',
+    'No captions, text labels, handwritten notes, sketch marks, multi-panel layout, watermarks, or decorative borders.',
+  ].filter(Boolean).join(' ')
+}
+
+export function buildTakeStoryboardStillPrompt(input: {
+  snapshot: { project: { name: string; summary: string }; gameSpec?: unknown | null }
+  graph: SnapshotGraph
+  takeNode: SnapshotNode
+  sourceInputs: ReturnType<typeof resolveTakeSources>
+}) {
+  const settings = getCinematicSettings(input.snapshot.gameSpec ?? null, input.graph.metadata)
+  const take = getCinematicTakeNodeConfig(input.takeNode)
+  const sequence = getCinematicSequence(input.graph.metadata)
+  const shots = take.shotIds
+    .map((shotId) => sequence.shots.find((shot) => shot.id === shotId) ?? null)
+    .filter((shot): shot is typeof sequence.shots[number] => Boolean(shot))
+  const sourceDescriptions = buildStoryboardSourceDescriptions(input.sourceInputs)
+  const referenceStyleInstruction = buildStoryboardReferenceStyleInstruction(input.sourceInputs)
+  const panelCount = Math.min(shots.length, 9)
+
+  return [
+    'Create a cinematic storyboard sequence board.',
+    ...formatProjectArtDirection(input.snapshot.gameSpec ?? null),
+    `Use a ${settings.stillAspectRatio} frame ratio for every panel.`,
+    'Render this as one clean multi-panel sequence image that clearly progresses through the sequence.',
+    describeStoryboardGrid(panelCount, settings.stillAspectRatio),
+    describeStoryboardPanelStyling(settings.stillAspectRatio),
+    'Keep all panels the same size with the same final rendering style across the whole board.',
+    referenceStyleInstruction,
+    ...shots.slice(0, 9).map((shot, index) => buildStoryboardPanelDirection(shot, index)),
+    take.proofMoment.trim() ? `Make this proof moment visually obvious: ${take.proofMoment.trim()}.` : null,
+    take.contrastAxis.trim() ? `Make this contrast visually clear: ${take.contrastAxis.trim()}.` : null,
+    ...sourceDescriptions,
+    'Use referenced characters, environments, and hero objects when valid image refs are available; otherwise infer missing details from the sequence beats.',
+    'No captions, panel numbers, text labels, handwritten notes, speech bubbles, comic halftones, watermarks, or decorative mockup chrome.',
+    'Every panel should read as a real image frame from the project rather than a sketch with notes.',
   ].filter(Boolean).join(' ')
 }
 
@@ -961,7 +1128,6 @@ export function buildVideoPrompt(input: {
   return [
     movementLabel,
     `Create a ${shot.durationSeconds ?? settings.defaultClipSeconds}-second cinematic clip for "${input.shotNode.title}".`,
-    input.snapshot.project.summary.trim() ? `Project context: ${input.snapshot.project.summary.trim()}.` : null,
     `Preset family: ${getCinematicPresetLabel(settings.presetFamily)}.`,
     shot.formatSubtype ? `Format subtype: ${getCinematicFormatSubtypeLabel(shot.formatSubtype)}.` : null,
     shot.formulaFamily ? `Planned script formula: ${getCinematicFormulaFamilyLabel(shot.formulaFamily)}.` : null,
@@ -992,6 +1158,196 @@ function inferStorageFileExtension(kind: 'image' | 'video', sourceUrl: string | 
   return '.png'
 }
 
+function toAssetDefinition(row: {
+  id: string
+  key: string
+  name: string
+  kind: string
+  mime_type: string
+  storage_path: string
+  metadata: unknown
+  llm_hints: unknown
+}) {
+  return {
+    id: row.id,
+    key: row.key,
+    name: row.name,
+    kind: row.kind,
+    mimeType: row.mime_type,
+    storagePath: row.storage_path,
+    metadata: row.metadata && typeof row.metadata === 'object' ? row.metadata as Record<string, unknown> : {},
+    llmHints: row.llm_hints && typeof row.llm_hints === 'object' ? row.llm_hints as Record<string, unknown> : {},
+  }
+}
+
+function buildExternalGeneratedImageStoragePath(assetKey: string, sourceUrl: string | null, requestId: string | null) {
+  const extension = inferStorageFileExtension('image', sourceUrl, null)
+  const storageSlug = buildAssetSlug(`${assetKey}_${requestId ?? 'generated'}`) || buildAssetSlug(assetKey) || 'generated_asset'
+  return `external/generated/${storageSlug}${extension}`
+}
+
+async function loadProjectAssetByKey(
+  client: ReturnType<typeof createClient>,
+  projectId: string,
+  assetKey: string,
+) {
+  const assetRow = await client
+    .from('project_assets')
+    .select('id, key, name, kind, mime_type, storage_path, metadata, llm_hints')
+    .eq('project_id', projectId)
+    .eq('key', assetKey)
+    .maybeSingle()
+
+  if (assetRow.error) {
+    throw new Error(assetRow.error.message)
+  }
+
+  return assetRow.data
+}
+
+export async function reserveGeneratedImageAsset(input: {
+  client: ReturnType<typeof createClient>
+  projectId: string
+  userId: string
+  name: string
+  metadata: Record<string, unknown>
+  assetKey?: string | null
+}) {
+  const assetKey = input.assetKey?.trim() || `image.${buildAssetSlug(input.name) || crypto.randomUUID()}`
+  const existingAsset = await loadProjectAssetByKey(input.client, input.projectId, assetKey)
+  const currentMetadata = existingAsset?.metadata && typeof existingAsset.metadata === 'object'
+    ? existingAsset.metadata as Record<string, unknown>
+    : {}
+  const storagePath = buildExternalGeneratedImageStoragePath(assetKey, null, null)
+  const desiredMetadata = {
+    ...currentMetadata,
+    ...input.metadata,
+    placeholder: true,
+    generationStatus: 'queued',
+    generationError: null,
+  }
+
+  const persistedAsset = existingAsset
+    ? await input.client
+        .from('project_assets')
+        .update({
+          name: input.name,
+          kind: 'image',
+          mime_type: 'image/png',
+          storage_path: storagePath,
+          metadata: desiredMetadata,
+        })
+        .eq('id', existingAsset.id)
+        .select('id, key, name, kind, mime_type, storage_path, metadata, llm_hints')
+        .single()
+    : await input.client
+        .from('project_assets')
+        .insert({
+          project_id: input.projectId,
+          key: assetKey,
+          name: input.name,
+          kind: 'image',
+          mime_type: 'image/png',
+          storage_path: storagePath,
+          metadata: desiredMetadata,
+          llm_hints: {},
+          created_by: input.userId,
+        })
+        .select('id, key, name, kind, mime_type, storage_path, metadata, llm_hints')
+        .single()
+
+  if (persistedAsset.error || !persistedAsset.data) {
+    throw new Error(persistedAsset.error?.message ?? 'Failed to reserve generated image asset.')
+  }
+
+  return toAssetDefinition(persistedAsset.data)
+}
+
+export async function completeReservedGeneratedImageAsset(input: {
+  client: ReturnType<typeof createClient>
+  projectId: string
+  assetKey: string
+  imageUrl: string
+  metadata: Record<string, unknown>
+  name?: string | null
+}) {
+  const existingAsset = await loadProjectAssetByKey(input.client, input.projectId, input.assetKey)
+  if (!existingAsset) {
+    throw new Error(`Generated image asset "${input.assetKey}" was not found.`)
+  }
+
+  const currentMetadata = existingAsset.metadata && typeof existingAsset.metadata === 'object'
+    ? existingAsset.metadata as Record<string, unknown>
+    : {}
+  const requestId = typeof input.metadata.requestId === 'string' ? input.metadata.requestId : null
+  const storagePath = buildExternalGeneratedImageStoragePath(input.assetKey, input.imageUrl, requestId)
+  const persistedAsset = await input.client
+    .from('project_assets')
+    .update({
+      name: input.name?.trim() || existingAsset.name,
+      kind: 'image',
+      mime_type: inferStorageFileExtension('image', input.imageUrl, null) === '.webp' ? 'image/webp' : 'image/png',
+      storage_path: storagePath,
+      metadata: {
+        ...currentMetadata,
+        ...input.metadata,
+        placeholder: false,
+        generationStatus: 'completed',
+        generationError: null,
+        sourceUrl: input.imageUrl,
+        previewUrl: input.imageUrl,
+        generatedAt: new Date().toISOString(),
+      },
+    })
+    .eq('id', existingAsset.id)
+    .select('id, key, name, kind, mime_type, storage_path, metadata, llm_hints')
+    .single()
+
+  if (persistedAsset.error || !persistedAsset.data) {
+    throw new Error(persistedAsset.error?.message ?? `Failed to complete generated image asset "${input.assetKey}".`)
+  }
+
+  return toAssetDefinition(persistedAsset.data)
+}
+
+export async function markGeneratedImageAssetFailed(input: {
+  client: ReturnType<typeof createClient>
+  projectId: string
+  assetKey: string
+  errorMessage: string
+  metadata?: Record<string, unknown>
+}) {
+  const existingAsset = await loadProjectAssetByKey(input.client, input.projectId, input.assetKey)
+  if (!existingAsset) {
+    return null
+  }
+
+  const currentMetadata = existingAsset.metadata && typeof existingAsset.metadata === 'object'
+    ? existingAsset.metadata as Record<string, unknown>
+    : {}
+  const persistedAsset = await input.client
+    .from('project_assets')
+    .update({
+      metadata: {
+        ...currentMetadata,
+        ...(input.metadata ?? {}),
+        placeholder: false,
+        generationStatus: 'failed',
+        generationError: input.errorMessage,
+        failedAt: new Date().toISOString(),
+      },
+    })
+    .eq('id', existingAsset.id)
+    .select('id, key, name, kind, mime_type, storage_path, metadata, llm_hints')
+    .single()
+
+  if (persistedAsset.error || !persistedAsset.data) {
+    throw new Error(persistedAsset.error?.message ?? `Failed to mark generated image asset "${input.assetKey}" as failed.`)
+  }
+
+  return toAssetDefinition(persistedAsset.data)
+}
+
 export async function createStoredGeneratedAsset(input: {
   admin: ReturnType<typeof createClient>
   client: ReturnType<typeof createClient>
@@ -1003,64 +1359,110 @@ export async function createStoredGeneratedAsset(input: {
   name: string
   kind: 'image' | 'video'
   metadata: Record<string, unknown>
+  existingAssetKey?: string | null
 }) {
-  const uploadSource = await fetch(input.sourceUrl)
-  if (!uploadSource.ok) {
-    throw new Error(`Failed to download generated ${input.kind} from provider output.`)
-  }
+  const assetKey = input.existingAssetKey?.trim() || `${input.kind}.${buildAssetSlug(`${input.name}_${input.runId}`) || crypto.randomUUID()}`
+  let mimeType = input.kind === 'video' ? 'video/mp4' : 'image/png'
+  let storagePath = ''
+  let resolvedSourceUrl = input.sourceUrl
 
-  const mimeType = uploadSource.headers.get('content-type') ?? (input.kind === 'video' ? 'video/mp4' : 'image/png')
-  const extension = inferStorageFileExtension(input.kind, input.sourceUrl, mimeType)
-  const assetKey = `${input.kind}.${buildAssetSlug(`${input.name}_${input.runId}`) || crypto.randomUUID()}`
-  const storagePath = `generated/cinematics/${buildAssetSlug(input.graphKey) || 'graph'}/${input.runId}/${assetKey}${extension}`
-  const blob = await uploadSource.blob()
+  if (input.kind === 'image') {
+    const extension = inferStorageFileExtension(input.kind, input.sourceUrl, null)
+    mimeType = extension === '.webp' ? 'image/webp' : 'image/png'
+    const storageSlug = buildAssetSlug(`${assetKey}_${input.runId}`) || buildAssetSlug(assetKey) || 'generated_asset'
+    storagePath = `external/generated/${storageSlug}${extension}`
+  } else {
+    const uploadSource = await fetch(input.sourceUrl)
+    if (!uploadSource.ok) {
+      throw new Error(`Failed to download generated ${input.kind} from provider output.`)
+    }
 
-  const uploadResponse = await input.admin.storage.from('project-assets').upload(storagePath, blob, {
-    contentType: mimeType,
-    upsert: true,
-  })
+    mimeType = uploadSource.headers.get('content-type') ?? 'video/mp4'
+    const extension = inferStorageFileExtension(input.kind, input.sourceUrl, mimeType)
+    storagePath = `generated/cinematics/${buildAssetSlug(input.graphKey) || 'graph'}/${input.runId}/${assetKey}${extension}`
+    const blob = await uploadSource.blob()
 
-  if (uploadResponse.error) {
-    throw new Error(uploadResponse.error.message)
-  }
-
-  const signedResponse = await input.admin.storage.from('project-assets').createSignedUrl(storagePath, 60 * 60)
-  const signedUrl = !signedResponse.error && signedResponse.data?.signedUrl ? signedResponse.data.signedUrl : input.sourceUrl
-
-  const insertedAsset = await input.client
-    .from('project_assets')
-    .insert({
-      project_id: input.projectId,
-      key: assetKey,
-      name: input.name,
-      kind: input.kind,
-      mime_type: mimeType,
-      storage_path: storagePath,
-      metadata: {
-        ...input.metadata,
-        storageBucket: 'project-assets',
-        sourceUrl: signedUrl,
-        previewUrl: input.kind === 'image' ? signedUrl : input.metadata.previewUrl ?? signedUrl,
-      },
-      llm_hints: {},
-      created_by: input.userId,
+    const uploadResponse = await input.admin.storage.from('project-assets').upload(storagePath, blob, {
+      contentType: mimeType,
+      upsert: true,
     })
-    .select('id, key, name, kind, mime_type, storage_path, metadata, llm_hints')
-    .single()
 
-  if (insertedAsset.error || !insertedAsset.data) {
-    throw new Error(insertedAsset.error?.message ?? `Failed to store generated ${input.kind} asset.`)
+    if (uploadResponse.error) {
+      throw new Error(uploadResponse.error.message)
+    }
+
+    const signedResponse = await input.admin.storage.from('project-assets').createSignedUrl(storagePath, 60 * 60)
+    resolvedSourceUrl = !signedResponse.error && signedResponse.data?.signedUrl ? signedResponse.data.signedUrl : input.sourceUrl
+  }
+
+  const desiredMetadata = {
+    ...input.metadata,
+    ...(input.kind === 'video' ? { storageBucket: 'project-assets' } : {}),
+    placeholder: false,
+    generationStatus: 'completed',
+    sourceUrl: resolvedSourceUrl,
+    previewUrl: input.kind === 'image' ? resolvedSourceUrl : input.metadata.previewUrl ?? resolvedSourceUrl,
+  }
+
+  const existingAsset =
+    input.existingAssetKey?.trim()
+      ? await input.client
+          .from('project_assets')
+          .select('id, key, name, kind, mime_type, storage_path, metadata, llm_hints')
+          .eq('project_id', input.projectId)
+          .eq('key', assetKey)
+          .maybeSingle()
+      : null
+
+  if (existingAsset?.error) {
+    throw new Error(existingAsset.error.message)
+  }
+
+  const persistedAsset = existingAsset?.data
+    ? await input.client
+        .from('project_assets')
+        .update({
+          name: input.name,
+          kind: input.kind,
+          mime_type: mimeType,
+          storage_path: storagePath,
+          metadata: {
+            ...((existingAsset.data.metadata ?? {}) as Record<string, unknown>),
+            ...desiredMetadata,
+          },
+        })
+        .eq('id', existingAsset.data.id)
+        .select('id, key, name, kind, mime_type, storage_path, metadata, llm_hints')
+        .single()
+    : await input.client
+        .from('project_assets')
+        .insert({
+          project_id: input.projectId,
+          key: assetKey,
+          name: input.name,
+          kind: input.kind,
+          mime_type: mimeType,
+          storage_path: storagePath,
+          metadata: desiredMetadata,
+          llm_hints: {},
+          created_by: input.userId,
+        })
+        .select('id, key, name, kind, mime_type, storage_path, metadata, llm_hints')
+        .single()
+
+  if (persistedAsset.error || !persistedAsset.data) {
+    throw new Error(persistedAsset.error?.message ?? `Failed to store generated ${input.kind} asset.`)
   }
 
   return {
-    id: insertedAsset.data.id,
-    key: insertedAsset.data.key,
-    name: insertedAsset.data.name,
-    kind: insertedAsset.data.kind,
-    mimeType: insertedAsset.data.mime_type,
-    storagePath: insertedAsset.data.storage_path,
-    metadata: insertedAsset.data.metadata ?? {},
-    llmHints: insertedAsset.data.llm_hints ?? {},
+    id: persistedAsset.data.id,
+    key: persistedAsset.data.key,
+    name: persistedAsset.data.name,
+    kind: persistedAsset.data.kind,
+    mimeType: persistedAsset.data.mime_type,
+    storagePath: persistedAsset.data.storage_path,
+    metadata: persistedAsset.data.metadata ?? {},
+    llmHints: persistedAsset.data.llm_hints ?? {},
   }
 }
 
@@ -1354,3 +1756,4 @@ export function isTerminalCinematicRunStatus(status: string) {
 export function isTerminalCinematicJobStatus(status: string) {
   return ['succeeded', 'failed', 'cancelled', 'skipped'].includes(status)
 }
+

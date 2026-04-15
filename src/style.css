@@ -1057,6 +1057,15 @@ code {
   border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
+.flow-node-banner {
+  width: 100%;
+  max-height: 172px;
+  object-fit: cover;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+}
+
 .flow-node-icon-shell {
   width: 36px;
   height: 36px;
@@ -1109,7 +1118,7 @@ code {
 
 .flow-node-cinematic-take {
   min-width: 250px;
-  max-width: 310px;
+  max-width: 340px;
   gap: 8px;
   background:
     linear-gradient(180deg, rgba(245, 158, 11, 0.08), rgba(255, 255, 255, 0.02) 24%, rgba(18, 20, 28, 0.95)),
@@ -2384,6 +2393,7 @@ button:disabled {
   height: 42px;
   display: grid;
   place-items: center;
+  position: relative;
   overflow: hidden;
   border-radius: 12px;
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -2439,6 +2449,26 @@ button:disabled {
 
 .media-thumb.large .media-thumb-glyph {
   font-size: 2.2rem;
+}
+
+.media-thumb-spinner {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: rgba(7, 11, 18, 0.78);
+  z-index: 1;
+}
+
+.media-thumb.large .media-thumb-spinner {
+  top: 8px;
+  right: 8px;
+  width: 20px;
+  height: 20px;
 }
 
 .item-editor {

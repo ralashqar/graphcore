@@ -3,11 +3,16 @@ import '@supabase/functions-js/edge-runtime.d.ts'
 import {
   cinematicRunStartRequestSchema,
   cinematicRunStatusResponseSchema,
+  getCinematicShotNodeConfig,
+  getCinematicSettings,
+  getCinematicTakeNodeConfig,
   getCinematicSequence,
+  getStoryboardRefNodeConfig,
 } from '../../../src/domain/cinematics.ts'
 import { requireUserClient } from '../_shared/auth.ts'
 import {
   buildStoryboardStillPrompt,
+  buildTakeStoryboardStillPrompt,
   applyTakeBindingToGraph,
   applyStoryboardBindingToGraph,
   applyShotBindingToGraph,
@@ -17,16 +22,24 @@ import {
   buildStillPrompt,
   findGraph,
   findNode,
+  markGeneratedImageAssetFailed,
+  reserveGeneratedImageAsset,
   persistStoryboardBindingsIfPresent,
   persistTakeBindingsIfPresent,
   persistShotBindingsIfPresent,
   resolveStoryboardSources,
+  resolveStoryboardStillReferenceImageUrls,
   resolveTakeSources,
+  resolveTakeStillReferenceImageUrls,
   resolveShotSources,
   toCinematicRun,
   toCinematicRunJob,
 } from '../_shared/cinematics.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
+
+function readFalQueueUrl(value: unknown) {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null
+}
 
 function buildAffectedShotOrder(
   mode: 'graph_run' | 'preview_still' | 'preview_video' | 'preview_take_still' | 'preview_storyboard_still',
@@ -72,10 +85,10 @@ function buildAffectedStoryboardPreviewOrder(
 ) {
   if (mode !== 'preview_storyboard_still') return []
   if (!targetNodeKey) {
-    throw new HttpError(400, 'A storyboard ref node is required for storyboard preview runs.')
+    throw new HttpError(400, 'A storyboard ref or cinematic take node is required for storyboard preview runs.')
   }
   const node = findNode(graph, targetNodeKey)
-  if (!node || node.type !== 'storyboard_ref') {
+  if (!node || (node.type !== 'storyboard_ref' && node.type !== 'cinematic_take')) {
     throw new HttpError(404, `Storyboard ref "${targetNodeKey}" was not found.`)
   }
   return [targetNodeKey]
@@ -106,6 +119,36 @@ function buildAffectedTakeOrder(
     }
   }
   return filteredKeys
+}
+
+async function loadRunState(
+  client: Awaited<ReturnType<typeof requireUserClient>>['client'],
+  runId: string,
+) {
+  const runRow = await client
+    .from('cinematic_runs')
+    .select('id, draft_id, project_id, graph_key, graph_name, mode, status, shot_node_key, diagnostics, created_at, updated_at')
+    .eq('id', runId)
+    .single()
+
+  if (runRow.error || !runRow.data) {
+    throw new Error(runRow.error?.message ?? `Cinematic run "${runId}" was not found after creation.`)
+  }
+
+  const jobRows = await client
+    .from('cinematic_run_jobs')
+    .select('id, run_id, graph_key, shot_node_key, kind, status, order_index, depends_on_job_ids, still_asset_key, video_asset_key, provider, model, provider_request_id, error_message, prompt, result_context, created_at, updated_at')
+    .eq('run_id', runId)
+    .order('order_index', { ascending: true })
+
+  if (jobRows.error) {
+    throw new Error(jobRows.error.message)
+  }
+
+  return {
+    row: runRow.data as Record<string, unknown>,
+    jobs: (jobRows.data ?? []).map((row) => toCinematicRunJob(row as Record<string, unknown>)),
+  }
 }
 
 Deno.serve(async (request) => {
@@ -163,6 +206,7 @@ Deno.serve(async (request) => {
 
     const runId = insertedRun.data.id
     const jobsToInsert: Array<Record<string, unknown>> = []
+    const reservedAssets: Array<Record<string, unknown>> = []
     let previousJobId: string | null = null
     let updatedGraph = graph
 
@@ -186,8 +230,26 @@ Deno.serve(async (request) => {
       let stillJobId: string | null = null
       let videoJobId: string | null = null
       const needsStillJob = payload.mode === 'preview_still'
+      const reservedShotStillAsset = needsStillJob
+        ? await reserveGeneratedImageAsset({
+            client,
+            projectId: payload.snapshot.project.id,
+            userId: user.id,
+            assetKey: getCinematicShotNodeConfig(shotNode).stillAssetKey,
+            name: `${shotNode.title} Still`,
+            metadata: {
+              generatedBy: 'cinematic_still',
+              graphKey: graph.key,
+              shotNodeKey,
+              runId,
+            },
+          })
+        : null
       if (needsStillJob) {
         stillJobId = crypto.randomUUID()
+        if (reservedShotStillAsset) {
+          reservedAssets.push(reservedShotStillAsset)
+        }
         jobsToInsert.push({
           id: stillJobId,
           run_id: runId,
@@ -195,11 +257,13 @@ Deno.serve(async (request) => {
           shot_node_key: shotNodeKey,
           kind: 'shot_still',
           status: 'queued',
+          still_asset_key: reservedShotStillAsset?.key ?? null,
           order_index: jobsToInsert.length,
           depends_on_job_ids: previousJobId ? [previousJobId] : [],
           prompt: stillPrompt,
           result_context: {
             mode: payload.mode,
+            assetKey: reservedShotStillAsset?.key ?? null,
           },
         })
       }
@@ -225,7 +289,9 @@ Deno.serve(async (request) => {
 
       previousJobId = videoJobId ?? stillJobId ?? previousJobId
       updatedGraph = applyShotBindingToGraph(updatedGraph, shotNodeKey, {
+        ...(reservedShotStillAsset ? { bodyImageAssetKey: reservedShotStillAsset.key } : {}),
         metadata: {
+          ...(reservedShotStillAsset ? { stillAssetKey: reservedShotStillAsset.key } : {}),
           lastRunId: runId,
           lastStillJobId: stillJobId,
           lastVideoJobId: videoJobId,
@@ -233,7 +299,9 @@ Deno.serve(async (request) => {
         },
       })
       await persistShotBindingsIfPresent(client, payload.snapshot.draft.id, graph.key, shotNodeKey, {
+        ...(reservedShotStillAsset ? { bodyImageAssetKey: reservedShotStillAsset.key } : {}),
         metadata: {
+          ...(reservedShotStillAsset ? { stillAssetKey: reservedShotStillAsset.key } : {}),
           lastRunId: runId,
           lastStillJobId: stillJobId,
           lastVideoJobId: videoJobId,
@@ -246,6 +314,22 @@ Deno.serve(async (request) => {
       const takeNode = findNode(graph, takeNodeKey)
       if (!takeNode) continue
       const sourceInputs = resolveTakeSources(payload.snapshot, graph, takeNodeKey)
+      const takeConfig = getCinematicTakeNodeConfig(takeNode)
+      const reservedTakeStillAsset = payload.mode === 'preview_take_still'
+        ? await reserveGeneratedImageAsset({
+            client,
+            projectId: payload.snapshot.project.id,
+            userId: user.id,
+            assetKey: takeConfig.outputStillAssetKey,
+            name: `${takeNode.title} Still`,
+            metadata: {
+              generatedBy: 'cinematic_take_still',
+              graphKey: graph.key,
+              takeNodeKey,
+              runId,
+            },
+          })
+        : null
       const takeStillJobId = payload.mode === 'preview_take_still' ? crypto.randomUUID() : null
       const executionPlan = payload.mode === 'preview_take_still'
         ? null
@@ -257,6 +341,9 @@ Deno.serve(async (request) => {
           })
       const takeVideoJobId = payload.mode === 'graph_run' ? crypto.randomUUID() : null
       if (takeStillJobId) {
+        if (reservedTakeStillAsset) {
+          reservedAssets.push(reservedTakeStillAsset)
+        }
         jobsToInsert.push({
           id: takeStillJobId,
           run_id: runId,
@@ -264,6 +351,7 @@ Deno.serve(async (request) => {
           shot_node_key: takeNodeKey,
           kind: 'take_still',
           status: 'queued',
+          still_asset_key: reservedTakeStillAsset?.key ?? null,
           order_index: jobsToInsert.length,
           depends_on_job_ids: previousJobId ? [previousJobId] : [],
           prompt: buildTakeStillPrompt({
@@ -275,6 +363,7 @@ Deno.serve(async (request) => {
           result_context: {
             mode: payload.mode,
             takeId: takeNode.metadata?.takeId ?? null,
+            assetKey: reservedTakeStillAsset?.key ?? null,
           },
         })
       }
@@ -298,7 +387,13 @@ Deno.serve(async (request) => {
       }
       previousJobId = takeVideoJobId ?? takeStillJobId ?? previousJobId
       updatedGraph = applyTakeBindingToGraph(updatedGraph, takeNodeKey, {
+        ...(reservedTakeStillAsset
+          ? { bodyImageAssetKey: reservedTakeStillAsset.key }
+          : {}),
         metadata: {
+          ...(reservedTakeStillAsset
+            ? { outputStillAssetKey: reservedTakeStillAsset.key }
+            : {}),
           lastRunId: runId,
           lastStillJobId: takeStillJobId,
           lastVideoJobId: takeVideoJobId,
@@ -306,7 +401,13 @@ Deno.serve(async (request) => {
         },
       })
       await persistTakeBindingsIfPresent(client, payload.snapshot.draft.id, graph.key, takeNodeKey, {
+        ...(reservedTakeStillAsset
+          ? { bodyImageAssetKey: reservedTakeStillAsset.key }
+          : {}),
         metadata: {
+          ...(reservedTakeStillAsset
+            ? { outputStillAssetKey: reservedTakeStillAsset.key }
+            : {}),
           lastRunId: runId,
           lastStillJobId: takeStillJobId,
           lastVideoJobId: takeVideoJobId,
@@ -318,8 +419,28 @@ Deno.serve(async (request) => {
     for (const storyboardNodeKey of storyboardNodeKeys) {
       const storyboardNode = findNode(graph, storyboardNodeKey)
       if (!storyboardNode) continue
-      const sourceInputs = resolveStoryboardSources(payload.snapshot, graph, storyboardNodeKey)
+      const isTakeStoryboard = storyboardNode.type === 'cinematic_take'
+      const storyboardAssetKey = isTakeStoryboard
+        ? getCinematicTakeNodeConfig(storyboardNode).storyboardAssetKey
+        : getStoryboardRefNodeConfig(storyboardNode).assetKey
+      const sourceInputs = isTakeStoryboard
+        ? resolveTakeSources(payload.snapshot, graph, storyboardNodeKey)
+        : resolveStoryboardSources(payload.snapshot, graph, storyboardNodeKey)
+      const reservedStoryboardAsset = await reserveGeneratedImageAsset({
+        client,
+        projectId: payload.snapshot.project.id,
+        userId: user.id,
+        assetKey: storyboardAssetKey,
+        name: `${storyboardNode.title} Storyboard`,
+        metadata: {
+          generatedBy: isTakeStoryboard ? 'cinematic_take_storyboard_still' : 'cinematic_storyboard_still',
+          graphKey: graph.key,
+          storyboardNodeKey,
+          runId,
+        },
+      })
       const stillJobId = crypto.randomUUID()
+      reservedAssets.push(reservedStoryboardAsset)
       jobsToInsert.push({
         id: stillJobId,
         run_id: runId,
@@ -327,32 +448,63 @@ Deno.serve(async (request) => {
         shot_node_key: storyboardNodeKey,
         kind: 'storyboard_still',
         status: 'queued',
+        still_asset_key: reservedStoryboardAsset.key,
         order_index: jobsToInsert.length,
         depends_on_job_ids: previousJobId ? [previousJobId] : [],
-        prompt: buildStoryboardStillPrompt({
-          snapshot: payload.snapshot,
-          graph,
-          storyboardNode,
-          sourceInputs,
-        }),
+        prompt: isTakeStoryboard
+          ? buildTakeStoryboardStillPrompt({
+              snapshot: payload.snapshot,
+              graph,
+              takeNode: storyboardNode,
+              sourceInputs: sourceInputs as ReturnType<typeof resolveTakeSources>,
+            })
+          : buildStoryboardStillPrompt({
+              snapshot: payload.snapshot,
+              graph,
+              storyboardNode,
+              sourceInputs: sourceInputs as ReturnType<typeof resolveStoryboardSources>,
+            }),
         result_context: {
           mode: payload.mode,
-          storyboardKind: storyboardNode.metadata?.storyboardKind ?? null,
+          storyboardKind: storyboardNode.type === 'storyboard_ref' ? storyboardNode.metadata?.storyboardKind ?? null : 'take_sequence_board',
+          takeId: storyboardNode.type === 'cinematic_take' ? getCinematicTakeNodeConfig(storyboardNode).id : null,
+          assetKey: reservedStoryboardAsset.key,
         },
       })
       previousJobId = stillJobId
-      updatedGraph = applyStoryboardBindingToGraph(updatedGraph, storyboardNodeKey, {
-        metadata: {
-          lastRunId: runId,
-          lastStillJobId: stillJobId,
-        },
-      })
-      await persistStoryboardBindingsIfPresent(client, payload.snapshot.draft.id, graph.key, storyboardNodeKey, {
-        metadata: {
-          lastRunId: runId,
-          lastStillJobId: stillJobId,
-        },
-      })
+      if (isTakeStoryboard) {
+        updatedGraph = applyTakeBindingToGraph(updatedGraph, storyboardNodeKey, {
+          metadata: {
+            storyboardAssetKey: reservedStoryboardAsset.key,
+            lastRunId: runId,
+            lastStoryboardJobId: stillJobId,
+          },
+        })
+        await persistTakeBindingsIfPresent(client, payload.snapshot.draft.id, graph.key, storyboardNodeKey, {
+          metadata: {
+            storyboardAssetKey: reservedStoryboardAsset.key,
+            lastRunId: runId,
+            lastStoryboardJobId: stillJobId,
+          },
+        })
+      } else {
+        updatedGraph = applyStoryboardBindingToGraph(updatedGraph, storyboardNodeKey, {
+          bodyImageAssetKey: reservedStoryboardAsset.key,
+          metadata: {
+            assetKey: reservedStoryboardAsset.key,
+            lastRunId: runId,
+            lastStillJobId: stillJobId,
+          },
+        })
+        await persistStoryboardBindingsIfPresent(client, payload.snapshot.draft.id, graph.key, storyboardNodeKey, {
+          bodyImageAssetKey: reservedStoryboardAsset.key,
+          metadata: {
+            assetKey: reservedStoryboardAsset.key,
+            lastRunId: runId,
+            lastStillJobId: stillJobId,
+          },
+        })
+      }
     }
 
     const insertedJobs = jobsToInsert.length === 0
@@ -366,15 +518,211 @@ Deno.serve(async (request) => {
       throw new Error(insertedJobs.error.message)
     }
 
+    const insertedJobRows = (insertedJobs.data ?? []).map((row) => toCinematicRunJob(row as Record<string, unknown>))
+
+    if (payload.mode === 'preview_storyboard_still' && storyboardNodeKeys.length === 1 && insertedJobRows.length === 1) {
+      const storyboardNodeKey = storyboardNodeKeys[0]
+      const storyboardNode = findNode(updatedGraph, storyboardNodeKey)
+      const storyboardJob = insertedJobRows[0]
+      const cinematicSettings = getCinematicSettings(payload.snapshot.gameSpec ?? null, updatedGraph.metadata)
+      const aspectRatio = cinematicSettings.stillAspectRatio || '16:9'
+
+      if (!storyboardNode || storyboardJob.kind !== 'storyboard_still' || !storyboardJob.stillAssetKey) {
+        throw new Error('Storyboard preview did not produce a valid reserved asset job.')
+      }
+
+      try {
+        const referenceImageUrls = storyboardNode.type === 'cinematic_take'
+          ? resolveTakeStillReferenceImageUrls(
+              payload.snapshot,
+              updatedGraph,
+              storyboardNodeKey,
+              resolveTakeSources(payload.snapshot, updatedGraph, storyboardNodeKey),
+            )
+          : resolveStoryboardStillReferenceImageUrls(
+              payload.snapshot,
+              updatedGraph,
+              storyboardNodeKey,
+              resolveStoryboardSources(payload.snapshot, updatedGraph, storyboardNodeKey),
+            )
+        const storyboardStillModel = referenceImageUrls.length > 0
+          ? Deno.env.get('CINEMATIC_STILL_FAL_MODEL') ?? 'fal-ai/nano-banana-2/edit'
+          : Deno.env.get('CINEMATIC_STILL_TEXT_FAL_MODEL') ?? 'fal-ai/nano-banana-2'
+
+        const falResponse = await client.functions.invoke('ai-fal', {
+          body: {
+            action: 'submit',
+            model: storyboardStillModel,
+            input: {
+              prompt: storyboardJob.prompt,
+              ...(referenceImageUrls.length > 0 ? { image_urls: referenceImageUrls } : {}),
+              num_images: 1,
+              aspect_ratio: aspectRatio,
+              output_format: 'png',
+              resolution: '1K',
+            },
+          },
+        })
+
+        if (falResponse.error || !falResponse.data) {
+          throw new Error(falResponse.error?.message ?? 'Storyboard generation returned no Fal response.')
+        }
+
+        const falResult = (falResponse.data as {
+          data?: unknown
+          provider?: string | null
+          model?: string | null
+          requestId?: string | null
+        }) ?? {}
+        const falSubmitData = falResult.data && typeof falResult.data === 'object'
+          ? falResult.data as Record<string, unknown>
+          : {}
+        const statusUrl =
+          readFalQueueUrl(falSubmitData.status_url)
+          ?? readFalQueueUrl(falSubmitData.statusUrl)
+          ?? readFalQueueUrl((falSubmitData.urls && typeof falSubmitData.urls === 'object' ? (falSubmitData.urls as Record<string, unknown>).status : null))
+        const responseUrl =
+          readFalQueueUrl(falSubmitData.response_url)
+          ?? readFalQueueUrl(falSubmitData.responseUrl)
+          ?? readFalQueueUrl((falSubmitData.urls && typeof falSubmitData.urls === 'object' ? (falSubmitData.urls as Record<string, unknown>).response : null))
+        console.info('[start-cinematic-run] storyboard submit payload.', {
+          runId,
+          jobId: storyboardJob.id,
+          shotNodeKey: storyboardNodeKey,
+          model: storyboardStillModel,
+          requestId: falResult.requestId ?? null,
+          rawData: falSubmitData,
+          statusUrl,
+          responseUrl,
+        })
+        const requestId = falResult.requestId ?? null
+        if (!requestId) {
+          throw new Error('Fal did not return a request id for the storyboard job.')
+        }
+
+        await client
+          .from('cinematic_run_jobs')
+          .update({
+            status: 'running',
+            provider: falResult.provider ?? 'fal',
+            model: falResult.model ?? storyboardStillModel,
+            provider_request_id: requestId,
+            error_message: null,
+            result_context: {
+              ...(storyboardJob.resultContext ?? {}),
+              assetKey: storyboardJob.stillAssetKey,
+              imageUrls: referenceImageUrls,
+              sourceImageCount: referenceImageUrls.length,
+              submittedAt: new Date().toISOString(),
+              statusUrl,
+              responseUrl,
+            },
+          })
+          .eq('id', storyboardJob.id)
+
+        if (storyboardNode.type === 'cinematic_take') {
+          updatedGraph = applyTakeBindingToGraph(updatedGraph, storyboardNodeKey, {
+            metadata: {
+              storyboardAssetKey: storyboardJob.stillAssetKey,
+              lastRunId: runId,
+              lastStoryboardJobId: storyboardJob.id,
+              provider: falResult.provider ?? 'fal',
+              providerModel: falResult.model ?? storyboardStillModel,
+              providerRequestId: requestId,
+            },
+          })
+          await persistTakeBindingsIfPresent(client, payload.snapshot.draft.id, graph.key, storyboardNodeKey, {
+            metadata: {
+              storyboardAssetKey: storyboardJob.stillAssetKey,
+              lastRunId: runId,
+              lastStoryboardJobId: storyboardJob.id,
+              provider: falResult.provider ?? 'fal',
+              providerModel: falResult.model ?? storyboardStillModel,
+              providerRequestId: requestId,
+            },
+          })
+        } else {
+          updatedGraph = applyStoryboardBindingToGraph(updatedGraph, storyboardNodeKey, {
+            bodyImageAssetKey: storyboardJob.stillAssetKey,
+            metadata: {
+              assetKey: storyboardJob.stillAssetKey,
+              lastRunId: runId,
+              lastStillJobId: storyboardJob.id,
+              provider: falResult.provider ?? 'fal',
+              providerModel: falResult.model ?? storyboardStillModel,
+              providerRequestId: requestId,
+            },
+          })
+          await persistStoryboardBindingsIfPresent(client, payload.snapshot.draft.id, graph.key, storyboardNodeKey, {
+            bodyImageAssetKey: storyboardJob.stillAssetKey,
+            metadata: {
+              assetKey: storyboardJob.stillAssetKey,
+              lastRunId: runId,
+              lastStillJobId: storyboardJob.id,
+              provider: falResult.provider ?? 'fal',
+              providerModel: falResult.model ?? storyboardStillModel,
+              providerRequestId: requestId,
+            },
+          })
+        }
+
+        await client
+          .from('cinematic_runs')
+          .update({
+            status: 'running',
+            diagnostics: [],
+          })
+          .eq('id', runId)
+      } catch (storyboardError) {
+        const errorMessage = storyboardError instanceof Error
+          ? storyboardError.message
+          : 'Storyboard generation failed.'
+
+        const failedAsset = await markGeneratedImageAssetFailed({
+          client,
+          projectId: payload.snapshot.project.id,
+          assetKey: storyboardJob.stillAssetKey,
+          errorMessage,
+          metadata: {
+            generatedBy: storyboardNode.type === 'cinematic_take' ? 'cinematic_take_storyboard_still' : 'cinematic_storyboard_still',
+            prompt: storyboardJob.prompt,
+          },
+        })
+
+        await client
+          .from('cinematic_run_jobs')
+          .update({
+            status: 'failed',
+            error_message: errorMessage,
+          })
+          .eq('id', storyboardJob.id)
+
+        await client
+          .from('cinematic_runs')
+          .update({
+            status: 'failed',
+            diagnostics: [errorMessage],
+          })
+          .eq('id', runId)
+      }
+
+      const finalState = await loadRunState(client, runId)
+      return json(cinematicRunStatusResponseSchema.parse({
+        run: toCinematicRun(finalState),
+        graphs: [updatedGraph],
+        assets: reservedAssets,
+      }))
+    }
+
     const run = toCinematicRun({
       row: insertedRun.data,
-      jobs: (insertedJobs.data ?? []).map((row) => toCinematicRunJob(row as Record<string, unknown>)),
+      jobs: insertedJobRows,
     })
 
     return json(cinematicRunStatusResponseSchema.parse({
       run,
       graphs: [updatedGraph],
-      assets: [],
+      assets: reservedAssets,
     }))
   } catch (error) {
     return errorResponse(error, 'Failed to start cinematic run.')

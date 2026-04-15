@@ -288,6 +288,27 @@ function mergeCinematicRunStatusIntoSnapshot(snapshot: ProjectSnapshot, status: 
   })
 }
 
+function buildCinematicRunErrorMessage(status: CinematicRunStatusResponse) {
+  const failedJobs = status.run.jobs.filter((job) => job.status === 'failed')
+  if (failedJobs.length > 0) {
+    const primaryMessage = failedJobs
+      .map((job) => job.errorMessage?.trim())
+      .find((message): message is string => Boolean(message))
+    if (primaryMessage) return primaryMessage
+  }
+
+  const skippedJobs = status.run.jobs.filter((job) => job.status === 'skipped')
+  const skippedMessage = skippedJobs
+    .map((job) => job.errorMessage?.trim())
+    .find((message): message is string => Boolean(message))
+  if (skippedMessage) return skippedMessage
+
+  const diagnostic = status.run.diagnostics.find((entry) => entry.trim().length > 0)
+  if (diagnostic) return diagnostic
+
+  return 'Cinematic run completed without producing the expected output.'
+}
+
 function buildLocalMeshGenerationFailureStatus(
   job: ProjectSnapshot['meshGenerationJobs'][number],
   errorMessage: string,
@@ -448,16 +469,28 @@ export default function App() {
   const [bootstrapArtStyleDescription, setBootstrapArtStyleDescription] = useState('')
   const [bootstrapOnboardingOpen, setBootstrapOnboardingOpen] = useState(false)
   const [hasLocalSnapshotChanges, setHasLocalSnapshotChanges] = useState(false)
+  const [pendingStoryboardNodeKeys, setPendingStoryboardNodeKeys] = useState<string[]>([])
   const [globalWorkspaceAutoFocusReleasesNonce, setGlobalWorkspaceAutoFocusReleasesNonce] = useState(0)
   const [isPending, startTransition] = useTransition()
   const { promptText, selectedDefinitionKey, selectedEdgeKey, selectedGraphKey, selectedNodeKey, setPromptText, setSelectedDefinitionKey, setSelectedEdgeKey, setSelectedGraphKey, setSelectedNodeKey } = useEditorStore()
   const sessionRef = useRef<Session | null>(null)
+  const snapshotRef = useRef<ProjectSnapshot | null>(null)
   const worldBuildPollInFlightRef = useRef(false)
   const meshGenerationPollInFlightRef = useRef(false)
   const cinematicRunPollInFlightRef = useRef(false)
   const meshGenerationPollFailureCountsRef = useRef(new Map<string, number>())
+
+  function markStoryboardNodePending(nodeKey: string) {
+    setPendingStoryboardNodeKeys((current) => current.includes(nodeKey) ? current : [...current, nodeKey])
+  }
+
+  function clearStoryboardNodePending(nodeKey: string) {
+    setPendingStoryboardNodeKeys((current) => current.filter((entry) => entry !== nodeKey))
+  }
   const announcedWorldBuildBatchIdsRef = useRef<Set<string>>(new Set())
   const reconciledWorldBuildBatchIdsRef = useRef<Set<string>>(new Set())
+  const announcedCinematicRunIdsRef = useRef<Set<string>>(new Set())
+  const reconciledCinematicRunIdsRef = useRef<Set<string>>(new Set())
   const seededWorldBuildBatchHistoryRef = useRef(false)
   const seededWorldBuildBatchDraftIdRef = useRef<string | null>(null)
   const deletingDefinitionKey = deletingTarget?.resourceType === 'definition' ? deletingTarget.key : null
@@ -468,6 +501,10 @@ export default function App() {
   useEffect(() => {
     sessionRef.current = session
   }, [session])
+
+  useEffect(() => {
+    snapshotRef.current = snapshot
+  }, [snapshot])
 
   function hydrateLoadedProject(
     state: { snapshot: ProjectSnapshot; source: 'supabase' | 'demo'; reason?: string },
@@ -699,6 +736,8 @@ export default function App() {
     if (seededWorldBuildBatchDraftIdRef.current !== snapshot.draft.id) {
       announcedWorldBuildBatchIdsRef.current = new Set()
       reconciledWorldBuildBatchIdsRef.current = new Set()
+      announcedCinematicRunIdsRef.current = new Set()
+      reconciledCinematicRunIdsRef.current = new Set()
       seededWorldBuildBatchHistoryRef.current = false
       seededWorldBuildBatchDraftIdRef.current = snapshot.draft.id
     }
@@ -706,12 +745,17 @@ export default function App() {
     const terminalBatchIds = snapshot.worldBuildBatches
       .filter((batch) => isTerminalWorldBuildBatchStatus(batch.status))
       .map((batch) => batch.id)
+    const terminalCinematicRunIds = snapshot.cinematicRuns
+      .filter((run) => isTerminalCinematicRunStatus(run.status))
+      .map((run) => run.id)
 
     if (!seededWorldBuildBatchHistoryRef.current) {
       announcedWorldBuildBatchIdsRef.current = new Set(terminalBatchIds)
       if (loadedState?.source === 'supabase') {
         reconciledWorldBuildBatchIdsRef.current = new Set(terminalBatchIds)
+        reconciledCinematicRunIdsRef.current = new Set(terminalCinematicRunIds)
       }
+      announcedCinematicRunIdsRef.current = new Set(terminalCinematicRunIds)
       seededWorldBuildBatchHistoryRef.current = true
       return
     }
@@ -722,8 +766,13 @@ export default function App() {
           reconciledWorldBuildBatchIdsRef.current.add(batchId)
         }
       }
+      for (const runId of terminalCinematicRunIds) {
+        if (announcedCinematicRunIdsRef.current.has(runId)) {
+          reconciledCinematicRunIdsRef.current.add(runId)
+        }
+      }
     }
-  }, [loadedState?.source, snapshot?.draft.id, snapshot?.worldBuildBatches])
+  }, [loadedState?.source, snapshot?.draft.id, snapshot?.worldBuildBatches, snapshot?.cinematicRuns])
 
   useEffect(() => {
     if (!snapshot) return
@@ -909,23 +958,67 @@ export default function App() {
   }, [loadedState?.source, snapshot])
 
   useEffect(() => {
-    if (!snapshot || loadedState?.source !== 'supabase') return
+    if (!snapshot) return
 
-    const activeRuns = snapshot.cinematicRuns.filter((run) => !isTerminalCinematicRunStatus(run.status))
-    if (activeRuns.length === 0) return
+    for (const run of snapshot.cinematicRuns) {
+      if (!isTerminalCinematicRunStatus(run.status) || announcedCinematicRunIdsRef.current.has(run.id)) continue
+      announcedCinematicRunIdsRef.current.add(run.id)
+
+      if (run.status === 'failed' || run.status === 'completed_with_errors') {
+        console.error('[GraphCore] cinematic run completed with failures.', {
+          runId: run.id,
+          graphKey: run.graphKey,
+          mode: run.mode,
+          status: run.status,
+          shotNodeKey: run.shotNodeKey,
+          diagnostics: run.diagnostics,
+          failedJobs: run.jobs
+            .filter((job) => job.status === 'failed')
+            .map((job) => ({
+              id: job.id,
+              kind: job.kind,
+              nodeKey: job.shotNodeKey,
+              errorMessage: job.errorMessage,
+              resultContext: job.resultContext,
+            })),
+        })
+      }
+
+      if (!reconciledCinematicRunIdsRef.current.has(run.id) && loadedState?.source === 'supabase') {
+        reconciledCinematicRunIdsRef.current.add(run.id)
+        void refreshWorkspaceState(undefined, { ignoreUnsavedCache: true }).catch((refreshError) => {
+          console.error('[GraphCore] cinematic reconciliation refresh failed.', refreshError)
+        })
+      }
+    }
+  }, [loadedState?.source, snapshot])
+
+  useEffect(() => {
+    if (loadedState?.source !== 'supabase') return
 
     let cancelled = false
-    const currentSnapshot = snapshot
 
     async function pollActiveCinematicRuns() {
       if (cinematicRunPollInFlightRef.current || cancelled) return
+      const currentSnapshot = snapshotRef.current
+      if (!currentSnapshot) return
+      const activeRuns = currentSnapshot.cinematicRuns.filter((run) => !isTerminalCinematicRunStatus(run.status))
+      if (activeRuns.length === 0) return
       cinematicRunPollInFlightRef.current = true
 
       try {
+        let workingSnapshot = currentSnapshot
         for (const run of activeRuns) {
+          console.info('[GraphCore] polling cinematic run.', {
+            runId: run.id,
+            graphKey: run.graphKey,
+            mode: run.mode,
+            status: run.status,
+            shotNodeKey: run.shotNodeKey,
+          })
           const status = await workspaceService.pollCinematicRun({
             runId: run.id,
-            snapshot: currentSnapshot,
+            snapshot: workingSnapshot,
             graphKey: run.graphKey,
             mode: run.mode,
             targetNodeKey: run.shotNodeKey,
@@ -935,12 +1028,25 @@ export default function App() {
 
           if (cancelled) return
 
-          setSnapshot((current) => {
-            if (!current) return current
-            const nextSnapshot = mergeCinematicRunStatusIntoSnapshot(current, status)
-            setBundle(compileBundle(nextSnapshot))
-            return nextSnapshot
+          console.info('[GraphCore] cinematic run polled.', {
+            runId: status.run.id,
+            status: status.run.status,
+            assetCount: status.assets.length,
+            jobs: status.run.jobs.map((job) => ({
+              id: job.id,
+              kind: job.kind,
+              status: job.status,
+              nodeKey: job.shotNodeKey,
+              error: job.errorMessage ?? null,
+            })),
           })
+
+          const mergeBase = snapshotRef.current ?? workingSnapshot
+          const nextSnapshot = mergeCinematicRunStatusIntoSnapshot(mergeBase, status)
+          workingSnapshot = nextSnapshot
+          snapshotRef.current = nextSnapshot
+          setSnapshot(nextSnapshot)
+          setBundle(compileBundle(nextSnapshot))
         }
       } catch (pollError) {
         console.error('[GraphCore] cinematic polling failed.', pollError)
@@ -959,7 +1065,7 @@ export default function App() {
       cancelled = true
       window.clearInterval(interval)
     }
-  }, [loadedState?.source, snapshot])
+  }, [loadedState?.source])
 
   useEffect(() => {
     if (activeTab !== 'cinematics') return
@@ -2492,6 +2598,26 @@ export default function App() {
       workingSnapshot = applyCinematicStatus(status) ?? workingSnapshot
     }
 
+    if (status.run.status === 'failed' || status.run.status === 'completed_with_errors') {
+      throw new Error(buildCinematicRunErrorMessage(status))
+    }
+
+    if (request.mode === 'preview_storyboard_still') {
+      const resultingGraph = workingSnapshot.graphs.find((graph) => graph.key === request.graphKey) ?? null
+      const targetNode = request.targetNodeKey && resultingGraph
+        ? resultingGraph.nodes.find((node) => node.key === request.targetNodeKey) ?? null
+        : null
+      const storyboardAssetKey =
+        targetNode?.type === 'storyboard_ref'
+          ? getStoryboardRefNodeConfig(targetNode).assetKey
+          : targetNode?.type === 'cinematic_take'
+            ? getCinematicTakeNodeConfig(targetNode).storyboardAssetKey
+            : null
+      if (status.assets.length === 0 && !storyboardAssetKey) {
+        throw new Error('Storyboard run finished without generating an image asset.')
+      }
+    }
+
     return { snapshot: workingSnapshot, status }
   }
 
@@ -2627,6 +2753,15 @@ export default function App() {
       return
     }
 
+    const pendingStoryboardNodeKey =
+      request.mode === 'preview_storyboard_still' && typeof request.targetNodeKey === 'string'
+        ? request.targetNodeKey
+        : null
+
+    if (pendingStoryboardNodeKey) {
+      markStoryboardNodePending(pendingStoryboardNodeKey)
+    }
+
     try {
       const status = await workspaceService.startCinematicRun({
         snapshot,
@@ -2639,9 +2774,119 @@ export default function App() {
 
       setPromptRuntimeError(null)
       applyCinematicStatus(status)
+      const previewAssetKey = typeof status.assets[0]?.key === 'string' ? status.assets[0].key : null
+      if (previewAssetKey) {
+        setSelectedAssetKey(previewAssetKey)
+      }
     } catch (runError) {
       console.error('[GraphCore] cinematic run failed to start.', runError)
       setPromptRuntimeError(runError instanceof Error ? runError.message : 'Cinematic run failed to start.')
+    } finally {
+      if (pendingStoryboardNodeKey) {
+        clearStoryboardNodePending(pendingStoryboardNodeKey)
+      }
+    }
+  }
+
+  async function handleStartTakeStoryboardGeneration(request: {
+    graphKey: string
+    takeNodeKey: string
+  }) {
+    console.info('[GraphCore] take storyboard requested.', request)
+    if (!snapshot || loadedState?.source !== 'supabase') {
+      setPromptRuntimeError('Cinematic generation requires a live Supabase workspace.')
+      return
+    }
+
+    markStoryboardNodePending(request.takeNodeKey)
+    try {
+      const status = await workspaceService.startCinematicRun({
+        snapshot,
+        graphKey: request.graphKey,
+        mode: 'preview_storyboard_still',
+        targetNodeKey: request.takeNodeKey,
+        targetNodeKeys: [],
+        shotNodeKey: request.takeNodeKey,
+      })
+
+      console.info('[GraphCore] take storyboard run started.', {
+        runId: status.run.id,
+        status: status.run.status,
+        targetNodeKey: request.takeNodeKey,
+        assetCount: status.assets.length,
+      })
+      setPromptRuntimeError(
+        status.run.status === 'failed' || status.run.status === 'completed_with_errors'
+          ? buildCinematicRunErrorMessage(status)
+          : null,
+      )
+      applyCinematicStatus(status)
+      const previewAssetKey = typeof status.assets[0]?.key === 'string' ? status.assets[0].key : null
+      if (previewAssetKey) {
+        setSelectedAssetKey(previewAssetKey)
+      }
+    } catch (runError) {
+      console.error('[GraphCore] take storyboard run failed to start.', runError)
+      setPromptRuntimeError(runError instanceof Error ? runError.message : 'Storyboard generation failed to start.')
+    } finally {
+      clearStoryboardNodePending(request.takeNodeKey)
+    }
+  }
+
+  async function handleStartTakeStillGeneration(request: {
+    graphKey: string
+    takeNodeKey: string
+  }) {
+    console.info('[GraphCore] take still requested.', request)
+    if (!snapshot || loadedState?.source !== 'supabase') {
+      setPromptRuntimeError('Cinematic generation requires a live Supabase workspace.')
+      return
+    }
+
+    try {
+      const status = await workspaceService.startCinematicRun({
+        snapshot,
+        graphKey: request.graphKey,
+        mode: 'preview_take_still',
+        targetNodeKey: request.takeNodeKey,
+        targetNodeKeys: [],
+        shotNodeKey: request.takeNodeKey,
+      })
+
+      console.info('[GraphCore] take still run started.', {
+        runId: status.run.id,
+        status: status.run.status,
+        targetNodeKey: request.takeNodeKey,
+        assetCount: status.assets.length,
+      })
+      setPromptRuntimeError(null)
+      applyCinematicStatus(status)
+      const previewAssetKey = typeof status.assets[0]?.key === 'string' ? status.assets[0].key : null
+      if (previewAssetKey) {
+        setSelectedAssetKey(previewAssetKey)
+      }
+    } catch (runError) {
+      console.error('[GraphCore] take still run failed to start.', runError)
+      setPromptRuntimeError(runError instanceof Error ? runError.message : 'Still generation failed to start.')
+    }
+  }
+
+  async function handleCancelCinematicRun(runId: string) {
+    if (!snapshot || loadedState?.source !== 'supabase') {
+      setPromptRuntimeError('Cinematic generation requires a live Supabase workspace.')
+      return
+    }
+
+    try {
+      const status = await workspaceService.cancelCinematicRun({
+        snapshot,
+        runId,
+      })
+      setPromptRuntimeError(null)
+      applyCinematicStatus(status)
+    } catch (cancelError) {
+      console.error('[GraphCore] cinematic run failed to cancel.', cancelError)
+      setPromptRuntimeError(cancelError instanceof Error ? cancelError.message : 'Cinematic run failed to cancel.')
     }
   }
 
@@ -2737,6 +2982,7 @@ export default function App() {
                 deletingGraphKey={deletingGraphKey}
                 diagnostics={bundle.diagnostics}
                 gameSpec={snapshot.gameSpec}
+                pendingStoryboardNodeKeys={pendingStoryboardNodeKeys}
                 preflightStatus={cinematicPreflightStatus}
                 worldBuildBatches={snapshot.worldBuildBatches}
                 selectedEdge={selectedCinematicGraph ? selectedEdge : null}
@@ -2752,6 +2998,9 @@ export default function App() {
                 onDeleteNode={deleteNode}
                 onDuplicateGraph={duplicateGraph}
                 onDuplicateNode={duplicateNode}
+                onCancelCinematicRun={handleCancelCinematicRun}
+                onGenerateTakeStill={handleStartTakeStillGeneration}
+                onGenerateTakeStoryboard={handleStartTakeStoryboardGeneration}
                 onMoveNode={moveNode}
                 onRunCinematicPreflight={handleRunCinematicPreflight}
                 onSelectEdge={setSelectedEdgeKey}

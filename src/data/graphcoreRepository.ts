@@ -20,6 +20,7 @@ import {
 import {
   cinematicRunSchema,
   cinematicRunStatusResponseSchema,
+  type CinematicRunCancelRequest,
   type CinematicRunStatusResponse,
   type CinematicRunStartRequest,
 } from '../domain/cinematics'
@@ -568,7 +569,12 @@ async function invokeAuthedFunction<TResponse>(
 ) {
   const functionsClient = supabase.functions
   functionsClient.setAuth(session.access_token)
-  return functionsClient.invoke<TResponse>(functionName, { body })
+  return functionsClient.invoke<TResponse>(functionName, {
+    headers: {
+      Authorization: `Bearer ${session.access_token}`,
+    },
+    body,
+  })
 }
 
 function isUnauthorizedFunctionsError(error: FunctionsHttpError | Error) {
@@ -2718,6 +2724,64 @@ export async function pollCinematicRun(request: CinematicRunStartRequest & { run
   }
 
   const parsed = cinematicRunStatusResponseSchema.parse(response.data)
+  return {
+    ...parsed,
+    assets: await hydrateStorageAssetUrls(request.snapshot.project.id, parsed.assets as AssetDefinition[]),
+  }
+}
+
+export async function cancelCinematicRun(request: CinematicRunCancelRequest): Promise<CinematicRunStatusResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before cancelling a cinematic run.')
+  const publishableKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY
+
+  if (!hasLiveSnapshotIds(request.snapshot)) {
+    throw new Error('Sign in and load a live GraphCore draft before cancelling a cinematic run.')
+  }
+
+  if (!publishableKey) {
+    throw new Error('Missing Supabase publishable key. Check VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY.')
+  }
+
+  async function invokeDirect(accessToken: string) {
+    return fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/cancel-cinematic-run`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        apikey: publishableKey,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(request),
+    })
+  }
+
+  let response = await invokeDirect(session.access_token)
+  if (response.status === 401) {
+    const refreshed = await supabase.auth.refreshSession()
+    if (refreshed.error) {
+      throw refreshed.error
+    }
+    if (!refreshed.data.session) {
+      throw new Error('No authenticated Supabase session was available after refresh.')
+    }
+    response = await invokeDirect(refreshed.data.session.access_token)
+  }
+
+  if (!response.ok) {
+    const payload = await response.clone().json().catch(() => null) as { error?: unknown } | null
+    console.error('[GraphCore] cancel-cinematic-run direct invocation failed.', {
+      status: response.status,
+      statusText: response.statusText,
+      request: summarizeFunctionBody(request),
+      errorPayload: payload,
+    })
+    if (typeof payload?.error === 'string') {
+      throw new Error(payload.error)
+    }
+    throw new Error(`Cancelling cinematic run failed with HTTP ${response.status}.`)
+  }
+
+  const data = await response.json() as CinematicRunStatusResponse
+  const parsed = cinematicRunStatusResponseSchema.parse(data)
   return {
     ...parsed,
     assets: await hydrateStorageAssetUrls(request.snapshot.project.id, parsed.assets as AssetDefinition[]),

@@ -5,6 +5,7 @@ import { EntityIcon } from '../../shared/entityIcons'
 
 export function FlowNodeCard({ data }: { data: GraphNodeData }) {
   const { cinematicCard, node, previewUrl, conditionSummary, effectSummary, onAddChoice, onUpdateChoiceLabel } = data
+  const isWideTakePreview = node.type === 'cinematic_take' && Boolean(previewUrl)
   const inputs = node.ports.filter((port) => port.direction === 'input')
   const outputs = node.ports.filter((port) => port.direction === 'output')
   const rootClassName = [
@@ -17,7 +18,7 @@ export function FlowNodeCard({ data }: { data: GraphNodeData }) {
     <div className={rootClassName}>
       {inputs.map((port, index) => <Handle key={port.id} id={port.id} type="target" position={Position.Left} style={{ top: 18 + index * 18 }} />)}
       <div className="flow-node-head">
-        {previewUrl ? <img alt="" className="flow-node-thumb" src={previewUrl} /> : cinematicCard?.iconId ? (
+        {!isWideTakePreview && previewUrl ? <img alt="" className="flow-node-thumb" src={previewUrl} /> : cinematicCard?.iconId ? (
           <span className="flow-node-icon-shell">
             <EntityIcon id={cinematicCard.iconId} />
           </span>
@@ -27,6 +28,7 @@ export function FlowNodeCard({ data }: { data: GraphNodeData }) {
           <span>{cinematicCard?.kicker ?? node.subtitle ?? node.templateKey ?? node.type}</span>
         </div>
       </div>
+      {isWideTakePreview ? <img alt="" className="flow-node-banner" src={previewUrl ?? undefined} /> : null}
       {cinematicCard ? (
         <div className="flow-node-cinematic-body">
           {cinematicCard.chips && cinematicCard.chips.length > 0 ? (

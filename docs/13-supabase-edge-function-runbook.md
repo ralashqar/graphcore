@@ -258,6 +258,91 @@ npx supabase functions delete <name> --project-ref <project-ref> --yes
 npx supabase functions deploy <name> --project-ref <project-ref> --no-verify-jwt
 ```
 
+## Long-Running Provider Queue Pattern
+
+For provider jobs that can exceed normal edge-function request windows, do not block inside the start function waiting for final media output.
+
+Use this pattern instead:
+
+1. `start-*` reserves the final logical asset row up front.
+2. `start-*` binds that asset key to the graph or definition immediately.
+3. `start-*` submits the provider job and persists:
+   - `provider_request_id`
+   - provider `status_url`
+   - provider `response_url`
+4. `start-*` returns quickly with a `queued` or `running` job.
+5. `poll-*` uses the persisted provider URLs to check status and fetch the final result.
+6. `poll-*` updates the same reserved asset row in place and marks the job/run terminal.
+
+Do not rely on a single blocking `subscribe` request for jobs that may take a long time. Supabase can terminate long requests with platform time limits such as:
+
+- `504 Gateway Timeout`
+- `IDLE_TIMEOUT`
+- `Request idle timeout limit (150s) reached`
+
+### Fal Queue Rules
+
+For Fal queue-based image and video jobs:
+
+- treat `submit` as the authoritative start step
+- persist the exact `status_url` and `response_url` returned by Fal
+- prefer those stored URLs during polling instead of rebuilding queue paths manually
+
+Why this matters:
+
+- provider queue URL formats can differ by model or API version
+- guessed paths can return `405` or `404` even when the job itself exists
+- a valid `provider_request_id` alone is not enough if the poller hits the wrong endpoint
+
+### GraphCore Cinematic Preview Rules
+
+For cinematic preview stills and storyboards:
+
+- reserve one real `project_assets.key` at start
+- never create a second final asset for the same preview
+- store the Fal queue URLs on the cinematic job `result_context`
+- keep the graph binding pointed at that reserved key from the start
+- let polling complete the asset row in place
+
+This keeps the successful asset contract aligned with the world-build image path:
+
+- one key
+- one asset row
+- one final URL handoff
+
+### Debugging Checklist For Stuck Polling Jobs
+
+If a run keeps polling forever:
+
+1. Check the DB row for `provider_request_id`.
+   If missing, submission never completed.
+2. Check whether `statusUrl` and `responseUrl` were persisted in `result_context`.
+   If missing, the start step did not capture the provider queue URLs correctly.
+3. Check server logs for the raw provider result and status payloads.
+4. Check whether the reserved asset row is still a placeholder.
+   If yes, the failure is before asset completion.
+5. Prefer logging:
+   - request id
+   - HTTP status
+   - raw response text
+   - parsed JSON body
+
+Do not assume an empty parsed body means the provider returned nothing useful. It may mean:
+
+- the endpoint path is wrong
+- the provider returned non-JSON text
+- the response body shape changed
+
+### Prompt Compilation Rule
+
+If a generation prompt must reflect live project settings, compile it fresh inside `start-*` for every new run. Do not reuse a previous stored prompt when the user clicks generate again.
+
+For cinematic storyboard stills specifically:
+
+- rebuild the prompt on every fresh `Generate Storyboard`
+- read art-style data from the current snapshot
+- pass reference images separately via provider inputs, not only as text inside the prompt
+
 Then re-run the `OPTIONS` check.
 
 ## Auth Failure Triage

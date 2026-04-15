@@ -164,6 +164,9 @@ verify_jwt = false
 [functions.poll-cinematic-run]
 verify_jwt = false
 
+[functions.cancel-cinematic-run]
+verify_jwt = false
+
 [functions.delete-world-build-placeholder]
 verify_jwt = false
 

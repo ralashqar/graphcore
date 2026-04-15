@@ -3,6 +3,7 @@ import type { Session } from '@supabase/supabase-js'
 import { graphcoreWorkspaceAdapter } from '../../infrastructure/graphcore/graphcoreWorkspaceAdapter'
 
 export const workspaceService = {
+  cancelCinematicRun: graphcoreWorkspaceAdapter.cancelCinematicRun,
   deleteGeneratedMesh: graphcoreWorkspaceAdapter.deleteGeneratedMesh,
   deleteWorldBuildPlaceholder: graphcoreWorkspaceAdapter.deleteWorldBuildPlaceholder,
   persistDefinitionPreviewImageBinding: graphcoreWorkspaceAdapter.persistDefinitionPreviewImageBinding,

@@ -54,7 +54,6 @@ import type {
   NodeDefinition,
 } from '../../domain/graphcore'
 import {
-  createNodeFromTemplate,
   graphNodeLibrary,
   graphNodeTemplatesByKey,
   normalizeNode,
@@ -81,6 +80,7 @@ type CinematicsWorkspaceProps = {
   deletingGraphKey?: string | null
   diagnostics: Diagnostic[]
   gameSpec: GameSpec | null
+  pendingStoryboardNodeKeys?: string[]
   worldBuildBatches?: WorldBuildBatch[]
   selectedEdge: EdgeDefinition | null
   selectedGraph: GraphDefinition | null
@@ -98,6 +98,7 @@ type CinematicsWorkspaceProps = {
   } | null
   onClearSelection: () => void
   onConnectEdge: (graphKey: string, edge: EdgeDefinition) => void
+  onCancelCinematicRun: (runId: string) => void
   onCreateGraph: (input: GraphCreateInput) => void
   onCreateNode: (graphKey: string, node: NodeDefinition) => void
   onDeleteEdge: (graphKey: string, edgeKey: string) => void
@@ -105,6 +106,8 @@ type CinematicsWorkspaceProps = {
   onDeleteNode: (graphKey: string, nodeKey: string) => void
   onDuplicateGraph: (graphKey: string) => void
   onDuplicateNode: (graphKey: string, nodeKey: string) => void
+  onGenerateTakeStill: (request: { graphKey: string; takeNodeKey: string }) => void
+  onGenerateTakeStoryboard: (request: { graphKey: string; takeNodeKey: string }) => void
   onMoveNode: (graphKey: string, nodeKey: string, position: NodeDefinition['position']) => void
   onRunCinematicPreflight: (request: { graphKey: string; includeShots?: boolean; includeStoryboards?: boolean; includeTakes?: boolean }) => void
   onSelectEdge: (key: string | null) => void
@@ -815,6 +818,7 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
     deletingGraphKey = null,
     diagnostics,
     gameSpec,
+    pendingStoryboardNodeKeys = [],
     worldBuildBatches = [],
     selectedEdge,
     selectedGraph,
@@ -822,6 +826,7 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
     snapshotGraphs,
     preflightStatus = null,
     onClearSelection,
+    onCancelCinematicRun,
     onConnectEdge,
     onCreateGraph,
     onCreateNode,
@@ -830,6 +835,8 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
     onDeleteNode,
     onDuplicateGraph,
     onDuplicateNode,
+    onGenerateTakeStill,
+    onGenerateTakeStoryboard,
     onMoveNode,
     onSelectEdge,
     onSelectGraph,
@@ -884,8 +891,6 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
   const [railMode, setRailMode] = useState<RailMode | 'runs'>('graphs')
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
   const [inspectorWidth, setInspectorWidth] = useState(360)
-  const [pendingStoryboardNodeKeys, setPendingStoryboardNodeKeys] = useState<string[]>([])
-  const [queuedStoryboardRequests, setQueuedStoryboardRequests] = useState<Array<{ takeNodeKey: string; storyboardNodeKey: string }>>([])
   const inspectorResizeState = useRef<{ startX: number; startWidth: number } | null>(null)
   const isDeletingSelectedGraph = currentGraph?.key === deletingGraphKey
   const selectedRun = currentGraphRuns.find((run) => run.id === selectedRunId) ?? currentGraphRuns[0] ?? null
@@ -900,32 +905,6 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
       setSelectedRunId(currentGraphRuns[0]?.id ?? null)
     }
   }, [currentGraphRuns, selectedRunId])
-
-  useEffect(() => {
-    if (!currentGraph || queuedStoryboardRequests.length === 0) return
-    const readyRequests = queuedStoryboardRequests.filter((entry) => currentGraph.nodes.some((node) => node.key === entry.storyboardNodeKey))
-    if (readyRequests.length === 0) return
-    for (const request of readyRequests) {
-      onStartCinematicRun({
-        graphKey: currentGraph.key,
-        mode: 'preview_storyboard_still',
-        targetNodeKey: request.storyboardNodeKey,
-      })
-    }
-    setQueuedStoryboardRequests((current) => current.filter((entry) => !readyRequests.some((ready) => ready.storyboardNodeKey === entry.storyboardNodeKey)))
-  }, [currentGraph, onStartCinematicRun, queuedStoryboardRequests])
-
-  useEffect(() => {
-    if (pendingStoryboardNodeKeys.length === 0) return
-    const terminalStoryboardNodeKeys = new Set(
-      currentGraphRuns
-        .flatMap((run) => run.jobs)
-        .filter((job) => job.kind === 'storyboard_still' && ['succeeded', 'failed', 'cancelled', 'skipped'].includes(job.status))
-        .map((job) => job.shotNodeKey),
-    )
-    if (terminalStoryboardNodeKeys.size === 0) return
-    setPendingStoryboardNodeKeys((current) => current.filter((nodeKey) => !terminalStoryboardNodeKeys.has(nodeKey)))
-  }, [currentGraphRuns, pendingStoryboardNodeKeys.length])
 
   useEffect(() => {
     const handlePointerMove = (event: MouseEvent) => {
@@ -1002,13 +981,16 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
 
       if (node.type === 'storyboard_ref') {
         const config = getStoryboardRefNodeConfig(node)
+        const isStoryboardRunning =
+          pendingStoryboardNodeKeys.includes(node.key)
+          || currentGraphRuns.some((run) => !['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(run.status) && run.mode === 'preview_storyboard_still' && run.shotNodeKey === node.key)
         return {
           variant: 'storyboard-ref' as const,
           iconId: 'content' as const,
-          kicker: pendingStoryboardNodeKeys.includes(node.key) ? 'generating storyboard' : config.storyboardKind.replace(/_/g, ' '),
+          kicker: isStoryboardRunning ? 'generating storyboard' : config.storyboardKind.replace(/_/g, ' '),
           chips: [],
           lines: config.notes ? [truncateGraphLine(config.notes, 92)] : [],
-          ambience: pendingStoryboardNodeKeys.includes(node.key)
+          ambience: isStoryboardRunning
             ? 'rendering board'
             : config.assetKey ? 'board ready' : 'board pending',
         }
@@ -1074,7 +1056,7 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
         return {
           variant: 'take' as const,
           iconId: 'asset' as const,
-          kicker: config.outputVideoAssetKey ? 'rendered clip' : 'compiled take',
+          kicker: config.storyboardAssetKey ? 'storyboard ready' : config.outputVideoAssetKey ? 'rendered clip' : 'compiled take',
           chips: [
             { label: `${config.durationSeconds}s`, tone: 'default' as const },
             { label: config.seedanceEndpoint, tone: 'muted' as const },
@@ -1095,7 +1077,7 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
       conditionSummary: summarizeCondition(node.condition),
       effectSummary: buildNodeMetaLines(node, shotRunStatus),
     }
-  }, [assets, currentGraph, currentGraphRuns, definitions, pendingStoryboardNodeKeys])
+  }, [assets, currentGraph, currentGraphRuns, definitions])
 
   const {
     applyTemplateChange,
@@ -1159,56 +1141,33 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
     })
   }
 
-  const ensureStoryboardNodeForTake = useCallback((takeNode: NodeDefinition) => {
-    if (!currentGraph || takeNode.type !== 'cinematic_take') return null
-    const takeConfig = getCinematicTakeNodeConfig(takeNode)
-    const existingStoryboard = currentGraph.nodes.find((entry) => (
-      entry.type === 'storyboard_ref'
-      && getStoryboardRefNodeConfig(entry).takeId === takeConfig.id
-      && getStoryboardRefNodeConfig(entry).storyboardKind === 'sequence_board'
-    )) ?? null
-    if (existingStoryboard) {
-      return existingStoryboard.key
-    }
-
-    const template = graphNodeTemplatesByKey.get('sequence_board_ref') ?? graphNodeTemplatesByKey.get('storyboard_ref')
-    if (!template) return null
-
-    const storyboardNode = createNodeFromTemplate(
-      currentGraph,
-      template,
-      currentGraph.nodes.length + 1,
-      { x: takeNode.position.x + 280, y: takeNode.position.y - 20 },
-    )
-    storyboardNode.title = `${takeNode.title} Storyboard`
-    storyboardNode.metadata = updateNodeMetadataWithStoryboardRef(storyboardNode.metadata, {
-      takeId: takeConfig.id,
-      storyboardKind: 'sequence_board',
-      notes: `Sequence board for ${takeNode.title}.`,
-    })
-    onCreateNode(currentGraph.key, storyboardNode)
-    return storyboardNode.key
-  }, [currentGraph, onCreateNode])
-
   const handleGenerateStoryboardFromTake = useCallback((takeNode: NodeDefinition) => {
     if (!currentGraph || takeNode.type !== 'cinematic_take') return
-    const storyboardNodeKey = ensureStoryboardNodeForTake(takeNode)
-    if (!storyboardNodeKey) return
-    setPendingStoryboardNodeKeys((current) => current.includes(storyboardNodeKey) ? current : [...current, storyboardNodeKey])
-    if (currentGraph.nodes.some((node) => node.key === storyboardNodeKey)) {
-      onStartCinematicRun({
-        graphKey: currentGraph.key,
-        mode: 'preview_storyboard_still',
-        targetNodeKey: storyboardNodeKey,
-      })
-      return
-    }
-    setQueuedStoryboardRequests((current) => (
-      current.some((entry) => entry.storyboardNodeKey === storyboardNodeKey)
-        ? current
-        : [...current, { takeNodeKey: takeNode.key, storyboardNodeKey }]
-    ))
-  }, [currentGraph, ensureStoryboardNodeForTake, onStartCinematicRun])
+    console.info('[GraphCore] take inspector generate storyboard clicked.', {
+      graphKey: currentGraph.key,
+      takeNodeKey: takeNode.key,
+      takeId: getCinematicTakeNodeConfig(takeNode).id,
+      shotCount: getCinematicTakeNodeConfig(takeNode).shotIds.length,
+    })
+    onGenerateTakeStoryboard({
+      graphKey: currentGraph.key,
+      takeNodeKey: takeNode.key,
+    })
+  }, [currentGraph, onGenerateTakeStoryboard])
+
+  const handleGenerateStillFromTake = useCallback((takeNode: NodeDefinition) => {
+    if (!currentGraph || takeNode.type !== 'cinematic_take') return
+    console.info('[GraphCore] take inspector generate still clicked.', {
+      graphKey: currentGraph.key,
+      takeNodeKey: takeNode.key,
+      takeId: getCinematicTakeNodeConfig(takeNode).id,
+      shotCount: getCinematicTakeNodeConfig(takeNode).shotIds.length,
+    })
+    onGenerateTakeStill({
+      graphKey: currentGraph.key,
+      takeNodeKey: takeNode.key,
+    })
+  }, [currentGraph, onGenerateTakeStill])
 
   const graphSettings = getCinematicSettings(gameSpec ?? {}, currentGraph?.metadata ?? {})
   const subtypeOptions = getSubtypeOptionsForPresetFamily(graphSettings.presetFamily)
@@ -1557,6 +1516,11 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
             {selectedRun ? (
               <div className="rail-section">
                 <span className="section-label">Run Jobs</span>
+                {!['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(selectedRun.status) ? (
+                  <div className="detail-actions cinematic-action-row">
+                    <button className="ghost-button compact" onClick={() => onCancelCinematicRun(selectedRun.id)} type="button">Cancel Run</button>
+                  </div>
+                ) : null}
                 <div className="diagnostic-stack">
                   {selectedRun.jobs.map((job) => (
                     <div key={job.id} className="inline-note">
@@ -1720,6 +1684,7 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
               definitions={definitions}
               node={currentNode}
               runs={currentGraphRuns}
+              onCancelRun={onCancelCinematicRun}
               onApplyTemplateChange={(templateKey) => applyTemplateChange(currentNode.key, templateKey)}
               onDelete={() => onDeleteNode(currentGraph.key, currentNode.key)}
               onGenerate={(mode) => onStartCinematicRun({ graphKey: currentGraph.key, mode, targetNodeKey: currentNode.key })}
@@ -1732,11 +1697,17 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
               currentGraph={currentGraph}
               definitions={definitions}
               onExtractShot={extractShotFromTake}
+              onGenerateStill={handleGenerateStillFromTake}
               onGenerateStoryboard={handleGenerateStoryboardFromTake}
-              isGeneratingStoryboard={currentGraph.nodes.some((entry) => entry.type === 'storyboard_ref' && getStoryboardRefNodeConfig(entry).takeId === getCinematicTakeNodeConfig(currentNode).id && pendingStoryboardNodeKeys.includes(entry.key))}
+              isGeneratingStill={currentGraphRuns.some((run) => !['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(run.status) && run.mode === 'preview_take_still' && run.shotNodeKey === currentNode.key)}
+              isGeneratingStoryboard={
+                pendingStoryboardNodeKeys.includes(currentNode.key)
+                || currentGraphRuns.some((run) => !['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(run.status) && run.mode === 'preview_storyboard_still' && run.shotNodeKey === currentNode.key)
+              }
               node={currentNode}
               onMergeTake={mergeTakeWithNeighbor}
               onMoveShot={moveShotWithinTake}
+              onCancelRun={onCancelCinematicRun}
               runs={currentGraphRuns}
               onApplyTemplateChange={(templateKey) => applyTemplateChange(currentNode.key, templateKey)}
               onDelete={() => onDeleteNode(currentGraph.key, currentNode.key)}
@@ -2589,6 +2560,7 @@ function StoryboardRefInspector({
   definitions,
   node,
   runs,
+  onCancelRun,
   onApplyTemplateChange,
   onDelete,
   onGenerate,
@@ -2600,6 +2572,7 @@ function StoryboardRefInspector({
   definitions: DefinitionBase[]
   node: NodeDefinition
   runs: CinematicRun[]
+  onCancelRun: (runId: string) => void
   onApplyTemplateChange: (templateKey: string) => void
   onDelete: () => void
   onGenerate: (mode: CinematicRunMode) => void
@@ -2612,6 +2585,7 @@ function StoryboardRefInspector({
   const relatedShots = collectStoryboardTargetShots(currentGraph, node)
   const latestRun = runs.find((run) => run.jobs.some((job) => job.shotNodeKey === node.key)) ?? null
   const latestJob = latestRun?.jobs.find((job) => job.shotNodeKey === node.key) ?? null
+  const activeStoryboardRun = runs.find((run) => !['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(run.status) && run.mode === 'preview_storyboard_still' && run.shotNodeKey === node.key) ?? null
 
   return (
     <div className="detail-stack compact">
@@ -2676,6 +2650,7 @@ function StoryboardRefInspector({
       </div>
       <div className="detail-actions cinematic-action-row">
         <button className="ghost-button compact" disabled={!canRunCinematics} onClick={() => onGenerate('preview_storyboard_still')} type="button">Generate Storyboard</button>
+        {activeStoryboardRun ? <button className="ghost-button compact" onClick={() => onCancelRun(activeStoryboardRun.id)} type="button">Cancel</button> : null}
       </div>
       {!canRunCinematics ? <div className="inline-note">Connect to a live Supabase workspace before starting cinematic generation jobs.</div> : null}
       <div className="editor-section compact-section">
@@ -2700,12 +2675,15 @@ function CinematicTakeInspector({
   canRunCinematics,
   currentGraph,
   definitions,
+  isGeneratingStill,
   isGeneratingStoryboard,
   node,
   onExtractShot,
+  onGenerateStill,
   onGenerateStoryboard,
   onMergeTake,
   onMoveShot,
+  onCancelRun,
   onPullAdjacentShot,
   onSplitTake,
   runs,
@@ -2718,12 +2696,15 @@ function CinematicTakeInspector({
   canRunCinematics: boolean
   currentGraph: GraphDefinition
   definitions: DefinitionBase[]
+  isGeneratingStill: boolean
   isGeneratingStoryboard: boolean
   node: NodeDefinition
   onExtractShot: (takeId: string, shotId: string) => void
+  onGenerateStill: (takeNode: NodeDefinition) => void
   onGenerateStoryboard: (takeNode: NodeDefinition) => void
   onMergeTake: (takeId: string, direction: -1 | 1) => void
   onMoveShot: (takeId: string, shotId: string, direction: -1 | 1) => void
+  onCancelRun: (runId: string) => void
   onPullAdjacentShot: (takeId: string, direction: -1 | 1) => void
   onSplitTake: (takeId: string, shotId: string) => void
   runs: CinematicRun[]
@@ -2734,11 +2715,14 @@ function CinematicTakeInspector({
 }) {
   const template = node.templateKey ? graphNodeTemplatesByKey.get(node.templateKey) : null
   const config = getCinematicTakeNodeConfig(node)
+  const storyboardAsset = assets.find((asset) => asset.key === config.storyboardAssetKey) ?? null
   const stillAsset = assets.find((asset) => asset.key === config.outputStillAssetKey) ?? null
   const videoAsset = assets.find((asset) => asset.key === config.outputVideoAssetKey) ?? null
   const sequence = getCinematicSequence(currentGraph.metadata)
   const includedShots = sequence?.shots.filter((shot) => config.shotIds.includes(shot.id)) ?? []
   const latestRun = runs.find((run) => run.jobs.some((job) => job.shotNodeKey === node.key)) ?? null
+  const activeStoryboardRun = runs.find((run) => !['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(run.status) && run.mode === 'preview_storyboard_still' && run.shotNodeKey === node.key) ?? null
+  const activeStillRun = runs.find((run) => !['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(run.status) && run.mode === 'preview_take_still' && run.shotNodeKey === node.key) ?? null
   const takeIndex = sequence.takes.findIndex((take) => take.id === config.id)
   const previousTake = takeIndex > 0 ? sequence.takes[takeIndex - 1] ?? null : null
   const nextTake = takeIndex >= 0 && takeIndex < sequence.takes.length - 1 ? sequence.takes[takeIndex + 1] ?? null : null
@@ -2930,10 +2914,21 @@ function CinematicTakeInspector({
       </div>
       <div className="detail-actions cinematic-action-row">
         <button className={isGeneratingStoryboard ? 'ghost-button compact button-with-spinner' : 'ghost-button compact'} disabled={!canRunCinematics || includedShots.length === 0 || isGeneratingStoryboard} onClick={() => onGenerateStoryboard(node)} type="button">{isGeneratingStoryboard ? <><span className="button-spinner" aria-hidden="true" />Generating Storyboard...</> : 'Generate Storyboard'}</button>
-        <button className="ghost-button compact" disabled={!canRunCinematics || includedShots.length === 0} onClick={() => onGenerate('preview_take_still')} type="button">Generate Still</button>
+        <button className={isGeneratingStill ? 'ghost-button compact button-with-spinner' : 'ghost-button compact'} disabled={!canRunCinematics || includedShots.length === 0 || isGeneratingStill} onClick={() => onGenerateStill(node)} type="button">{isGeneratingStill ? <><span className="button-spinner" aria-hidden="true" />Generating Still...</> : 'Generate Still'}</button>
+        {activeStoryboardRun ? <button className="ghost-button compact" onClick={() => onCancelRun(activeStoryboardRun.id)} type="button">Cancel Storyboard</button> : null}
+        {activeStillRun ? <button className="ghost-button compact" onClick={() => onCancelRun(activeStillRun.id)} type="button">Cancel Still</button> : null}
         <button className="primary-button compact" disabled={!canRunCinematics || includedShots.length === 0} onClick={() => onGenerate('graph_run')} type="button">Generate Clip</button>
       </div>
       {!canRunCinematics ? <div className="inline-note">Connect to a live Supabase workspace before starting cinematic generation jobs.</div> : null}
+      <div className="editor-section compact-section">
+        <div className="section-head">
+          <div>
+            <span className="eyebrow">Storyboard</span>
+            <h3>{storyboardAsset?.name ?? 'Not generated yet'}</h3>
+          </div>
+        </div>
+        {storyboardAsset ? <AssetPreview asset={storyboardAsset} /> : <div className="inline-note">Generate a storyboard from this take to create a sequence board image asset.</div>}
+      </div>
       <div className="editor-section compact-section">
         <div className="section-head">
           <div>
@@ -3765,7 +3760,7 @@ function resolveNodePreviewAsset(node: NodeDefinition, definitions: DefinitionBa
 
   if (node.type === 'cinematic_take') {
     const take = getCinematicTakeNodeConfig(node)
-    return assets.find((asset) => asset.key === (take.outputVideoAssetKey ?? take.outputStillAssetKey)) ?? null
+    return assets.find((asset) => asset.key === (take.storyboardAssetKey ?? take.outputStillAssetKey ?? null)) ?? null
   }
 
   return assets.find((asset) => asset.key === (node.display.iconAssetKey ?? node.body.imageAssetKey)) ?? null

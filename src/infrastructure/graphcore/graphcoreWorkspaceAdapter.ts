@@ -1,6 +1,7 @@
 import {
   applyPatchProposal,
   bootstrapLiveWorkspace,
+  cancelCinematicRun,
   compileSnapshot,
   createGame,
   deleteGeneratedMesh,
@@ -24,6 +25,7 @@ import {
 export const graphcoreWorkspaceAdapter = {
   applyPatchProposal,
   bootstrapLiveWorkspace,
+  cancelCinematicRun,
   compileSnapshot,
   createGame,
   deleteGeneratedMesh,

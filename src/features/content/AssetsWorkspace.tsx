@@ -19,6 +19,23 @@ export function AssetsWorkspace({
 }: AssetsWorkspaceProps) {
   const [search, setSearch] = useState('')
   const [sort, setSort] = useState<'name' | 'kind'>('name')
+  const isAssetGenerating = (asset: AssetsWorkspaceProps['assets'][number]) => {
+    const hasResolvedUrl = (
+      (typeof asset.metadata?.previewUrl === 'string' && asset.metadata.previewUrl.trim().length > 0)
+      || (typeof asset.metadata?.sourceUrl === 'string' && asset.metadata.sourceUrl.trim().length > 0)
+    )
+
+    if (hasResolvedUrl && asset.metadata?.placeholder !== true) {
+      return false
+    }
+
+    return (
+      isPendingGenerationResource(asset)
+      || asset.metadata?.placeholder === true
+      || asset.metadata?.generationStatus === 'queued'
+      || asset.metadata?.generationStatus === 'running'
+    )
+  }
 
   const filteredAssets = useMemo(() => {
     const query = search.trim().toLowerCase()
@@ -62,19 +79,24 @@ export function AssetsWorkspace({
         <div className="rail-section">
           <div className="rail-list">
             {filteredAssets.map((asset) => (
+              (() => {
+                const generating = isAssetGenerating(asset)
+                return (
               <button
                 key={asset.id}
                 className={asset.key === selectedAsset?.key ? 'rail-button item-row is-active' : 'rail-button item-row'}
                 onClick={() => onSelectAsset(asset.key)}
                 type="button"
               >
-                <MediaThumb asset={asset} fallbackIcon="asset" label={asset.name} />
+                <MediaThumb asset={asset} busy={generating} fallbackIcon="asset" label={asset.name} />
                 <div className="item-row-copy">
                   <strong>{asset.name}</strong>
                   <span>{asset.kind}</span>
-                  <span className={isPendingGenerationResource(asset) ? 'world-build-rail-status' : undefined}>{isPendingGenerationResource(asset) ? <><span className="button-spinner item-row-spinner" aria-hidden="true" />Generating...</> : getResourceGenerationMetadata(asset)?.state === 'failed' ? 'Generation failed' : asset.storagePath}</span>
+                  <span className={generating ? 'world-build-rail-status' : undefined}>{generating ? <><span className="button-spinner item-row-spinner" aria-hidden="true" />Generating...</> : getResourceGenerationMetadata(asset)?.state === 'failed' ? 'Generation failed' : asset.storagePath}</span>
                 </div>
               </button>
+                )
+              })()
             ))}
           </div>
         </div>
@@ -82,7 +104,7 @@ export function AssetsWorkspace({
 
       <section className="main-surface detail-surface">
         {selectedAsset ? (
-          isPendingGenerationResource(selectedAsset) ? (
+          isAssetGenerating(selectedAsset) ? (
             <div className="detail-stack compact world-build-loading-shell">
               <span className="eyebrow">Generating Asset</span>
               <h3>{selectedAsset.name}</h3>

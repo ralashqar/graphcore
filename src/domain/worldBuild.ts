@@ -202,7 +202,7 @@ export const resourceGenerationMetadataSchema = z.object({
   jobId: z.string(),
   state: resourceGenerationStateSchema,
   placeholder: z.boolean().default(false),
-  source: z.enum(['global_prompt', 'mesh_generation']).default('global_prompt'),
+  source: z.enum(['global_prompt', 'mesh_generation', 'cinematic_storyboard_preview']).default('global_prompt'),
 })
 
 export const worldBuildJobSchema = z.object({

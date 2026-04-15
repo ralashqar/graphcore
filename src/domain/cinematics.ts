@@ -364,11 +364,13 @@ export const cinematicTakeSpecSchema = z.object({
   proofMoment: z.string().default(''),
   ctaStyle: z.string().default(''),
   requiredSourceRefIds: z.array(z.string()).default([]),
+  storyboardAssetKey: z.string().nullable().default(null),
   outputVideoAssetKey: z.string().nullable().default(null),
   outputStillAssetKey: z.string().nullable().default(null),
   approvedForVideo: z.boolean().default(false),
   approvalNotes: z.string().default(''),
   lastRunId: z.string().nullable().default(null),
+  lastStoryboardJobId: z.string().nullable().default(null),
   lastStillJobId: z.string().nullable().default(null),
   lastVideoJobId: z.string().nullable().default(null),
   provider: z.string().nullable().default(null),
@@ -502,6 +504,11 @@ export const cinematicRunStartRequestSchema = z.object({
   shotNodeKey: z.string().nullable().optional(),
 })
 
+export const cinematicRunCancelRequestSchema = z.object({
+  snapshot: cinematicSnapshotSchema,
+  runId: z.string(),
+})
+
 export const cinematicRunStatusResponseSchema = z.object({
   run: cinematicRunSchema,
   graphs: z.array(rawRecordSchema).default([]),
@@ -536,6 +543,7 @@ export type CinematicShotNodeConfig = z.infer<typeof cinematicShotNodeConfigSche
 export type CinematicTakeNodeConfig = z.infer<typeof cinematicTakeNodeConfigSchema>
 export type CinematicRun = z.infer<typeof cinematicRunSchema>
 export type CinematicRunJob = z.infer<typeof cinematicRunJobSchema>
+export type CinematicRunCancelRequest = z.infer<typeof cinematicRunCancelRequestSchema>
 export type CinematicRunStartRequest = z.infer<typeof cinematicRunStartRequestSchema>
 export type CinematicRunStatusResponse = z.infer<typeof cinematicRunStatusResponseSchema>
 
@@ -570,6 +578,10 @@ export function deriveDefaultFormatSubtypeFromPresetFamily(presetFamily: Cinemat
   if (presetFamily === 'ugc_direct_response_ad') return 'ad_problem_solution'
   if (presetFamily === 'ugc_faceless_format') return 'faceless_demo'
   return null
+}
+
+export function deriveDefaultStillAspectRatioFromPresetFamily(presetFamily: CinematicPresetFamily): CinematicSettings['stillAspectRatio'] {
+  return isUgcPresetFamily(presetFamily) ? '9:16' : '16:9'
 }
 
 export function deriveDefaultFormulaFamilyFromFormatSubtype(formatSubtype: CinematicFormatSubtype | null | undefined): CinematicFormulaFamily | null {
@@ -731,11 +743,12 @@ export function buildCinematicSettingsPatchFromFormatSubtype(
   }
 }
 
-export function buildCinematicSettingsPatchFromPresetFamily(presetFamily: CinematicPresetFamily): Pick<CinematicSettings, 'presetFamily' | 'presetId' | 'specializationMode' | 'formatSubtype' | 'formulaFamily' | 'dominantTrigger'> {
+export function buildCinematicSettingsPatchFromPresetFamily(presetFamily: CinematicPresetFamily): Pick<CinematicSettings, 'presetFamily' | 'presetId' | 'specializationMode' | 'formatSubtype' | 'formulaFamily' | 'dominantTrigger' | 'stillAspectRatio'> {
   const formatSubtype = coerceFormatSubtypeForPresetFamily(presetFamily, null)
   return {
     presetFamily,
     presetId: presetFamily,
+    stillAspectRatio: deriveDefaultStillAspectRatioFromPresetFamily(presetFamily),
     formatSubtype,
     formulaFamily: deriveDefaultFormulaFamilyFromFormatSubtype(formatSubtype),
     dominantTrigger: deriveDefaultDominantTriggerFromFormatSubtype(formatSubtype),
@@ -1223,6 +1236,10 @@ export function getCinematicSettings(gameSpec: unknown, graphMetadata: unknown):
     graphOverrides.dominantTrigger
     ?? projectOverrides.dominantTrigger
     ?? deriveDefaultDominantTriggerFromFormatSubtype(formatSubtype)
+  const stillAspectRatio =
+    graphOverrides.stillAspectRatio
+    ?? projectOverrides.stillAspectRatio
+    ?? deriveDefaultStillAspectRatioFromPresetFamily(presetFamily)
 
   return {
     ...defaultCinematicSettings,
@@ -1233,6 +1250,7 @@ export function getCinematicSettings(gameSpec: unknown, graphMetadata: unknown):
     formatSubtype,
     formulaFamily,
     dominantTrigger,
+    stillAspectRatio,
     specializationMode: deriveSpecializationModeFromPresetFamily(presetFamily),
   }
 }

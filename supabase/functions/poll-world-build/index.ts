@@ -17,6 +17,7 @@ import { getArtStylePresetLabel } from '../../../src/domain/artStylePresets.ts'
 import { buildCharacterConceptPrompt, buildEnvironmentConceptPrompt, buildItemConceptPrompt, extractFalImageUrls } from '../../../src/domain/visualAssetGeneration.ts'
 import { requireUserClient } from '../_shared/auth.ts'
 import {
+  completeReservedGeneratedImageAsset,
   isTerminalCinematicRunStatus,
   resolveDefinitionDisplayAssetKey,
   resolveAssetUrl,
@@ -1702,24 +1703,17 @@ Deno.serve(async (request) => {
               throw new Error(`The concept image provider returned no image URL. keys=${topLevelKeys}`)
             }
 
-            const assetRow = await client.from('project_assets').select('metadata').eq('project_id', batch.project_id).eq('key', assetKey).single()
-            if (assetRow.error || !assetRow.data) throw new Error(assetRow.error?.message ?? `Asset ${assetKey} was not found.`)
-
-            const currentAssetMetadata =
-              typeof assetRow.data.metadata === 'object' && assetRow.data.metadata !== null
-                ? assetRow.data.metadata as Record<string, unknown>
-                : {}
-
-            const storageSlug = buildAssetSlug(`${assetKey}_${falResult.requestId ?? 'generated'}`) || buildAssetSlug(assetKey) || 'generated_asset'
-            const assetUpdate = await client.from('project_assets').update({
-              storage_path: `external/generated/${storageSlug}.png`,
+            await completeReservedGeneratedImageAsset({
+              client,
+              projectId: batch.project_id,
+              assetKey,
+              imageUrl,
               name: job.kind === 'character_concept_image'
                 ? `${definition.name} Concept`
                 : job.kind === 'item_concept_image'
                   ? `${definition.name} Concept`
                   : `${definition.name} ${String(job.target_keys?.view ?? 'concept').replace(/_/g, ' ')}`,
               metadata: {
-                ...currentAssetMetadata,
                 generatedBy: job.kind === 'character_concept_image'
                   ? 'character_concept'
                   : job.kind === 'item_concept_image'
@@ -1729,9 +1723,6 @@ Deno.serve(async (request) => {
                 model: falResult.model ?? 'fal-ai/nano-banana-2',
                 requestId: falResult.requestId ?? null,
                 prompt: conceptPromptFromDefinition(definition, job, snapshot),
-                sourceUrl: imageUrl,
-                previewUrl: imageUrl,
-                generatedAt: new Date().toISOString(),
                 generation: {
                   batchId: batch.id,
                   jobId: job.id,
@@ -1740,9 +1731,7 @@ Deno.serve(async (request) => {
                   source: 'global_prompt',
                 },
               },
-            }).eq('project_id', batch.project_id).eq('key', assetKey)
-
-            if (assetUpdate.error) throw new Error(assetUpdate.error.message)
+            })
 
             const shouldBindDefinitionIcon =
               job.kind === 'character_concept_image'
@@ -1815,27 +1804,17 @@ Deno.serve(async (request) => {
               throw new Error('The cinematic asset provider returned no image URL.')
             }
 
-            const assetRow = await client.from('project_assets').select('metadata, name').eq('project_id', batch.project_id).eq('key', assetKey).single()
-            if (assetRow.error || !assetRow.data) throw new Error(assetRow.error?.message ?? `Asset ${assetKey} was not found.`)
-
-            const currentAssetMetadata =
-              typeof assetRow.data.metadata === 'object' && assetRow.data.metadata !== null
-                ? assetRow.data.metadata as Record<string, unknown>
-                : {}
-
-            const storageSlug = buildAssetSlug(`${assetKey}_${falResult.requestId ?? 'generated'}`) || buildAssetSlug(assetKey) || 'generated_asset'
-            const assetUpdate = await client.from('project_assets').update({
-              storage_path: `external/generated/${storageSlug}.png`,
+            await completeReservedGeneratedImageAsset({
+              client,
+              projectId: batch.project_id,
+              assetKey,
+              imageUrl,
               metadata: {
-                ...currentAssetMetadata,
                 generatedBy: job.kind === 'cinematic_composite_image' ? 'cinematic_composite' : 'cinematic_storyboard',
                 provider: 'fal',
                 model: falResult.model ?? 'fal-ai/nano-banana-2',
                 requestId: falResult.requestId ?? null,
                 prompt,
-                sourceUrl: imageUrl,
-                previewUrl: imageUrl,
-                generatedAt: new Date().toISOString(),
                 generation: {
                   batchId: batch.id,
                   jobId: job.id,
@@ -1844,9 +1823,7 @@ Deno.serve(async (request) => {
                   source: 'global_prompt',
                 },
               },
-            }).eq('project_id', batch.project_id).eq('key', assetKey)
-
-            if (assetUpdate.error) throw new Error(assetUpdate.error.message)
+            })
 
             await updateJob(client, job.id, {
               status: 'succeeded',

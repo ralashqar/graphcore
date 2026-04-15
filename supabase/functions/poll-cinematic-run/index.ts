@@ -6,11 +6,13 @@ import {
   cinematicRunStatusResponseSchema,
   getCinematicSettings,
   getCinematicShotNodeConfig,
+  getCinematicTakeNodeConfig,
 } from '../../../src/domain/cinematics.ts'
 import { extractFalImageUrls } from '../../../src/domain/visualAssetGeneration.ts'
 import { createAdminClient, requireUserClient } from '../_shared/auth.ts'
 import {
   buildStoryboardStillPrompt,
+  buildTakeStoryboardStillPrompt,
   buildTakeStillPrompt,
   applyStoryboardBindingToGraph,
   applyTakeBindingToGraph,
@@ -18,12 +20,14 @@ import {
   buildTakeSeedanceExecutionPlan,
   buildSeedanceExecutionPlan,
   buildStillPrompt,
+  completeReservedGeneratedImageAsset,
   createStoredGeneratedAsset,
   extractFalVideoUrl,
   findGraph,
   findNode,
   isTerminalCinematicJobStatus,
   isTerminalCinematicRunStatus,
+  markGeneratedImageAssetFailed,
   persistStoryboardBindingsIfPresent,
   persistTakeBindingsIfPresent,
   persistShotBindingsIfPresent,
@@ -37,6 +41,8 @@ import {
   toCinematicRunJob,
 } from '../_shared/cinematics.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
+
+const falQueueBaseUrl = 'https://queue.fal.run'
 
 const requestSchema = z.object({
   runId: z.string(),
@@ -61,6 +67,94 @@ const requestSchema = z.object({
   targetNodeKey: z.string().nullable().optional(),
   shotNodeKey: z.string().nullable().optional(),
 })
+
+function buildFalHeaders(apiKey: string) {
+  return new Headers({
+    Authorization: `Key ${apiKey}`,
+    'Content-Type': 'application/json',
+  })
+}
+
+async function fetchFalJson(url: string, init: RequestInit) {
+  const response = await fetch(url, init)
+  const rawText = await response.text().catch(() => '')
+  let body: Record<string, unknown> = {}
+  if (rawText.trim().length > 0) {
+    try {
+      body = JSON.parse(rawText) as Record<string, unknown>
+    } catch {
+      body = {}
+    }
+  }
+  return { response, body, rawText }
+}
+
+async function submitFalRequest(input: {
+  apiKey: string
+  model: string
+  payload: Record<string, unknown>
+}) {
+  return fetchFalJson(`${falQueueBaseUrl}/${input.model}`, {
+    method: 'POST',
+    headers: buildFalHeaders(input.apiKey),
+    body: JSON.stringify(input.payload),
+  })
+}
+
+async function getFalStatus(input: {
+  apiKey: string
+  model: string
+  requestId: string
+  logs?: boolean
+  statusUrl?: string | null
+}) {
+  const url = input.statusUrl
+    ? new URL(input.statusUrl)
+    : new URL(`${falQueueBaseUrl}/${input.model}/requests/${input.requestId}/status`)
+  if (input.logs) {
+    url.searchParams.set('logs', '1')
+  }
+  return fetchFalJson(url.toString(), {
+    method: 'GET',
+    headers: buildFalHeaders(input.apiKey),
+  })
+}
+
+async function getFalResult(input: {
+  apiKey: string
+  model: string
+  requestId: string
+  responseUrl?: string | null
+}) {
+  let { response, body, rawText } = await fetchFalJson(input.responseUrl || `${falQueueBaseUrl}/${input.model}/requests/${input.requestId}/response`, {
+    method: 'GET',
+    headers: buildFalHeaders(input.apiKey),
+  })
+  if (!input.responseUrl && (response.status === 404 || response.status === 405)) {
+    ({ response, body, rawText } = await fetchFalJson(`${falQueueBaseUrl}/${input.model}/requests/${input.requestId}`, {
+      method: 'GET',
+      headers: buildFalHeaders(input.apiKey),
+    }))
+  }
+  const normalizedData =
+    body && typeof body.response === 'object' && body.response !== null
+      ? body.response as Record<string, unknown>
+      : body
+
+  return {
+    response,
+    body,
+    rawText,
+    normalizedData,
+  }
+}
+
+function getFalErrorMessage(body: Record<string, unknown>, fallback: string) {
+  if (typeof body.detail === 'string' && body.detail.trim()) return body.detail.trim()
+  if (typeof body.error === 'string' && body.error.trim()) return body.error.trim()
+  if (typeof body.message === 'string' && body.message.trim()) return body.message.trim()
+  return fallback
+}
 
 function resolveStillSourceAssetUrl(
   snapshot: z.infer<typeof requestSchema>['snapshot'],
@@ -119,6 +213,168 @@ async function loadRunState(
   }
 }
 
+function toAssetDefinition(row: Record<string, unknown>) {
+  return {
+    id: row.id,
+    key: row.key,
+    name: row.name,
+    kind: row.kind,
+    mimeType: row.mime_type,
+    storagePath: row.storage_path,
+    metadata: row.metadata && typeof row.metadata === 'object' ? row.metadata : {},
+    llmHints: row.llm_hints && typeof row.llm_hints === 'object' ? row.llm_hints : {},
+  }
+}
+
+function getJobExecutionPlan(job: ReturnType<typeof toCinematicRunJob>) {
+  const resultContext = job.resultContext
+  if (!resultContext || typeof resultContext !== 'object') return undefined
+  const executionPlan = resultContext.executionPlan
+  return executionPlan && typeof executionPlan === 'object' ? executionPlan : undefined
+}
+
+function rebuildGraphFromRunJobs(
+  graph: NonNullable<ReturnType<typeof findGraph>>,
+  jobs: ReturnType<typeof toCinematicRunJob>[],
+) {
+  let nextGraph = graph
+
+  for (const job of jobs) {
+    const targetNode = findNode(nextGraph, job.shotNodeKey)
+    if (!targetNode) continue
+
+    if (job.kind === 'shot_still' && job.stillAssetKey) {
+      nextGraph = applyShotBindingToGraph(nextGraph, job.shotNodeKey, {
+        bodyImageAssetKey: job.stillAssetKey,
+        metadata: {
+          stillAssetKey: job.stillAssetKey,
+          provider: job.provider,
+          providerModel: job.model,
+          providerRequestId: job.providerRequestId,
+        },
+      })
+      continue
+    }
+
+    if (job.kind === 'take_still' && job.stillAssetKey) {
+      nextGraph = applyTakeBindingToGraph(nextGraph, job.shotNodeKey, {
+        bodyImageAssetKey: job.stillAssetKey,
+        metadata: {
+          outputStillAssetKey: job.stillAssetKey,
+          provider: job.provider,
+          providerModel: job.model,
+          providerRequestId: job.providerRequestId,
+        },
+      })
+      continue
+    }
+
+    if (job.kind === 'storyboard_still' && job.stillAssetKey) {
+      if (targetNode.type === 'cinematic_take') {
+        nextGraph = applyTakeBindingToGraph(nextGraph, job.shotNodeKey, {
+          metadata: {
+            storyboardAssetKey: job.stillAssetKey,
+            provider: job.provider,
+            providerModel: job.model,
+            providerRequestId: job.providerRequestId,
+          },
+        })
+      } else if (targetNode.type === 'storyboard_ref') {
+        nextGraph = applyStoryboardBindingToGraph(nextGraph, job.shotNodeKey, {
+          bodyImageAssetKey: job.stillAssetKey,
+          metadata: {
+            assetKey: job.stillAssetKey,
+            provider: job.provider,
+            providerModel: job.model,
+            providerRequestId: job.providerRequestId,
+          },
+        })
+      }
+      continue
+    }
+
+    if (job.status !== 'succeeded') continue
+
+    if (job.kind === 'shot_video' && job.videoAssetKey) {
+      nextGraph = applyShotBindingToGraph(nextGraph, job.shotNodeKey, {
+        metadata: {
+          videoAssetKey: job.videoAssetKey,
+          provider: job.provider,
+          providerModel: job.model,
+          providerRequestId: job.providerRequestId,
+          ...(getJobExecutionPlan(job) ? { executionPlan: getJobExecutionPlan(job) } : {}),
+        },
+      })
+      continue
+    }
+
+    if (job.kind === 'take_video' && job.videoAssetKey) {
+      nextGraph = applyTakeBindingToGraph(nextGraph, job.shotNodeKey, {
+        metadata: {
+          outputVideoAssetKey: job.videoAssetKey,
+          provider: job.provider,
+          providerModel: job.model,
+          providerRequestId: job.providerRequestId,
+          ...(getJobExecutionPlan(job) ? { executionPlan: getJobExecutionPlan(job) } : {}),
+        },
+      })
+    }
+  }
+
+  return nextGraph
+}
+
+async function loadPersistedRunAssets(
+  client: Awaited<ReturnType<typeof requireUserClient>>['client'],
+  projectId: string,
+  jobs: ReturnType<typeof toCinematicRunJob>[],
+) {
+  const assetKeys = Array.from(new Set(
+    jobs
+      .flatMap((job) => [job.stillAssetKey, job.videoAssetKey])
+      .filter((value): value is string => typeof value === 'string' && value.length > 0),
+  ))
+
+  if (assetKeys.length === 0) return []
+
+  const assetRows = await client
+    .from('project_assets')
+    .select('id, key, name, kind, mime_type, storage_path, metadata, llm_hints')
+    .eq('project_id', projectId)
+    .in('key', assetKeys)
+
+  if (assetRows.error) {
+    throw new Error(assetRows.error.message)
+  }
+
+  const assetByKey = new Map(
+    (assetRows.data ?? []).map((row) => [String(row.key), toAssetDefinition(row as Record<string, unknown>)]),
+  )
+
+  return assetKeys
+    .map((key) => assetByKey.get(key) ?? null)
+    .filter((asset): asset is NonNullable<typeof asset> => Boolean(asset))
+}
+
+async function buildCinematicRunResponse(input: {
+  client: Awaited<ReturnType<typeof requireUserClient>>['client']
+  projectId: string
+  snapshot: z.infer<typeof requestSchema>['snapshot']
+  state: Awaited<ReturnType<typeof loadRunState>>
+  baseGraph?: NonNullable<ReturnType<typeof findGraph>> | null
+}) {
+  const authoritativeAssets = await loadPersistedRunAssets(input.client, input.projectId, input.state.jobs)
+  const graphKey = String(input.state.row.graph_key ?? '')
+  const baseGraph = input.baseGraph ?? findGraph(input.snapshot, graphKey) ?? null
+  const authoritativeGraph = baseGraph ? rebuildGraphFromRunJobs(baseGraph, input.state.jobs) : null
+
+  return {
+    run: toCinematicRun(input.state),
+    graphs: authoritativeGraph ? [authoritativeGraph] : [],
+    assets: authoritativeAssets,
+  }
+}
+
 Deno.serve(async (request) => {
   const preflight = maybeHandleOptions(request)
   if (preflight) return preflight
@@ -129,14 +385,20 @@ Deno.serve(async (request) => {
     const { client, user } = await requireUserClient(request, 'poll-cinematic-run')
     const admin = createAdminClient('poll-cinematic-run')
     const payload = requestSchema.parse(await request.json())
+    const falApiKey = Deno.env.get('FAL_KEY')
     const initialState = await loadRunState(client, payload.runId)
 
+    if (!falApiKey) {
+      throw new Error('FAL_KEY is not configured.')
+    }
+
     if (isTerminalCinematicRunStatus(String(initialState.row.status ?? ''))) {
-      return json(cinematicRunStatusResponseSchema.parse({
-        run: toCinematicRun(initialState),
-        graphs: [],
-        assets: [],
-      }))
+      return json(cinematicRunStatusResponseSchema.parse(await buildCinematicRunResponse({
+        client,
+        projectId: payload.snapshot.project.id,
+        snapshot: payload.snapshot,
+        state: initialState,
+      })))
     }
 
     const graph = findGraph(payload.snapshot, String(initialState.row.graph_key))
@@ -148,7 +410,7 @@ Deno.serve(async (request) => {
     const createdAssets: Array<Record<string, unknown>> = []
 
     for (const job of initialState.jobs) {
-      if (job.status !== 'queued') continue
+      if (job.status !== 'queued' && job.status !== 'running') continue
       const hasFailedDependency = job.dependsOnJobIds.some((dependencyId) => {
         const dependency = initialState.jobs.find((candidate) => candidate.id === dependencyId)
         return dependency ? dependency.status !== 'succeeded' && isTerminalCinematicJobStatus(dependency.status) : false
@@ -180,15 +442,18 @@ Deno.serve(async (request) => {
       }
       const isTakeJob = job.kind === 'take_video' || job.kind === 'take_still'
       const isStoryboardJob = job.kind === 'storyboard_still'
+      const isTakeStoryboardJob = isStoryboardJob && targetNode?.type === 'cinematic_take'
       const shotNode = !isTakeJob && !isStoryboardJob ? targetNode : null
-      const takeNode = isTakeJob ? targetNode : null
+      const takeNode = (isTakeJob || isTakeStoryboardJob) ? targetNode : null
       const storyboardNode = isStoryboardJob ? targetNode : null
 
       const settings = getCinematicSettings(payload.snapshot.gameSpec ?? null, updatedGraph.metadata)
       const sourceInputs = isTakeJob
         ? resolveTakeSources(payload.snapshot, updatedGraph, job.shotNodeKey)
         : isStoryboardJob
-          ? resolveStoryboardSources(payload.snapshot, updatedGraph, job.shotNodeKey)
+          ? isTakeStoryboardJob
+            ? resolveTakeSources(payload.snapshot, updatedGraph, job.shotNodeKey)
+            : resolveStoryboardSources(payload.snapshot, updatedGraph, job.shotNodeKey)
           : resolveShotSources(payload.snapshot, updatedGraph, job.shotNodeKey)
 
       if (job.kind === 'shot_still' || job.kind === 'take_still' || job.kind === 'storyboard_still') {
@@ -207,113 +472,410 @@ Deno.serve(async (request) => {
           break
         }
         if (job.kind === 'storyboard_still' && !storyboardNode) {
-          await client.from('cinematic_run_jobs').update({
-            status: 'failed',
-            error_message: 'Storyboard still jobs require a storyboard ref node.',
-          }).eq('id', job.id)
-          break
+          if (!isTakeStoryboardJob) {
+            await client.from('cinematic_run_jobs').update({
+              status: 'failed',
+              error_message: 'Storyboard still jobs require a storyboard ref node or cinematic take node.',
+            }).eq('id', job.id)
+            break
+          }
         }
         const imageUrls = job.kind === 'take_still'
           ? resolveTakeStillReferenceImageUrls(payload.snapshot, updatedGraph, job.shotNodeKey, sourceInputs as ReturnType<typeof resolveTakeSources>)
           : job.kind === 'storyboard_still'
-            ? resolveStoryboardStillReferenceImageUrls(payload.snapshot, updatedGraph, job.shotNodeKey, sourceInputs as ReturnType<typeof resolveStoryboardSources>)
+            ? isTakeStoryboardJob
+              ? resolveTakeStillReferenceImageUrls(payload.snapshot, updatedGraph, job.shotNodeKey, sourceInputs as ReturnType<typeof resolveTakeSources>)
+              : resolveStoryboardStillReferenceImageUrls(payload.snapshot, updatedGraph, job.shotNodeKey, sourceInputs as ReturnType<typeof resolveStoryboardSources>)
           : sourceInputs.map((entry) => entry.imageUrl).filter((entry): entry is string => Boolean(entry))
         const stillModel = imageUrls.length > 0
           ? Deno.env.get('CINEMATIC_STILL_FAL_MODEL') ?? 'fal-ai/nano-banana-2/edit'
           : Deno.env.get('CINEMATIC_STILL_TEXT_FAL_MODEL') ?? 'fal-ai/nano-banana-2'
+        const stillPrompt = job.prompt || (
+          job.kind === 'take_still'
+            ? buildTakeStillPrompt({
+                snapshot: payload.snapshot,
+                graph: updatedGraph,
+                takeNode: takeNode!,
+                sourceInputs: sourceInputs as ReturnType<typeof resolveTakeSources>,
+              })
+            : job.kind === 'storyboard_still'
+              ? isTakeStoryboardJob
+                ? buildTakeStoryboardStillPrompt({
+                    snapshot: payload.snapshot,
+                    graph: updatedGraph,
+                    takeNode: targetNode!,
+                    sourceInputs: sourceInputs as ReturnType<typeof resolveTakeSources>,
+                  })
+                : buildStoryboardStillPrompt({
+                    snapshot: payload.snapshot,
+                    graph: updatedGraph,
+                    storyboardNode: storyboardNode!,
+                    sourceInputs: sourceInputs as ReturnType<typeof resolveStoryboardSources>,
+                  })
+            : buildStillPrompt({
+                snapshot: payload.snapshot,
+                graph: updatedGraph,
+                shotNode: shotNode!,
+                sourceInputs: sourceInputs as ReturnType<typeof resolveShotSources>,
+              })
+        )
+        const reservedStillAssetKey =
+          job.stillAssetKey
+          ?? (
+            job.resultContext
+            && typeof job.resultContext === 'object'
+            && typeof job.resultContext.assetKey === 'string'
+            && job.resultContext.assetKey.trim().length > 0
+              ? job.resultContext.assetKey.trim()
+              : null
+          )
+        const resultContextRecord = job.resultContext && typeof job.resultContext === 'object'
+          ? job.resultContext as Record<string, unknown>
+          : {}
+        const providerStatusUrl = typeof resultContextRecord.statusUrl === 'string' && resultContextRecord.statusUrl.trim().length > 0
+          ? resultContextRecord.statusUrl.trim()
+          : null
+        const providerResponseUrl = typeof resultContextRecord.responseUrl === 'string' && resultContextRecord.responseUrl.trim().length > 0
+          ? resultContextRecord.responseUrl.trim()
+          : null
 
-        const falResponse = await client.functions.invoke('ai-fal', {
-          body: {
-            action: 'subscribe',
+        if (job.status === 'queued') {
+          const submitResult = await submitFalRequest({
+            apiKey: falApiKey,
             model: stillModel,
-            input: {
-              prompt: job.prompt || (
-                job.kind === 'take_still'
-                  ? buildTakeStillPrompt({
-                      snapshot: payload.snapshot,
-                      graph: updatedGraph,
-                      takeNode: takeNode!,
-                      sourceInputs: sourceInputs as ReturnType<typeof resolveTakeSources>,
-                    })
-                  : job.kind === 'storyboard_still'
-                    ? buildStoryboardStillPrompt({
-                        snapshot: payload.snapshot,
-                        graph: updatedGraph,
-                        storyboardNode: storyboardNode!,
-                        sourceInputs: sourceInputs as ReturnType<typeof resolveStoryboardSources>,
-                      })
-                  : buildStillPrompt({
-                      snapshot: payload.snapshot,
-                      graph: updatedGraph,
-                      shotNode: shotNode!,
-                      sourceInputs: sourceInputs as ReturnType<typeof resolveShotSources>,
-                    })
-              ),
+            payload: {
+              prompt: stillPrompt,
               num_images: 1,
               aspect_ratio: settings.stillAspectRatio,
               output_format: 'png',
               resolution: settings.stillResolution,
               ...(imageUrls.length > 0 ? { image_urls: imageUrls } : {}),
             },
-            logs: true,
-            timeoutMs: 120000,
-          },
-        })
+          })
 
-        if (falResponse.error) {
+          const requestId = typeof submitResult.body.request_id === 'string' ? submitResult.body.request_id : null
+
+          if (!submitResult.response.ok) {
+            const message = getFalErrorMessage(
+              submitResult.body,
+              `Fal still submission failed with HTTP ${submitResult.response.status}.`,
+            )
+            console.error('[poll-cinematic-run] still submit failed.', {
+              runId: payload.runId,
+              jobId: job.id,
+              shotNodeKey: job.shotNodeKey,
+              kind: job.kind,
+              model: stillModel,
+              requestId,
+              message,
+            })
+            await client.from('cinematic_run_jobs').update({
+              status: 'failed',
+              provider: 'fal',
+              model: stillModel,
+              provider_request_id: requestId,
+              prompt: stillPrompt,
+              error_message: message,
+            }).eq('id', job.id)
+            if (reservedStillAssetKey) {
+              await markGeneratedImageAssetFailed({
+                client,
+                projectId: payload.snapshot.project.id,
+                assetKey: reservedStillAssetKey,
+                errorMessage: message,
+                metadata: {
+                  provider: 'fal',
+                  model: stillModel,
+                  requestId,
+                  prompt: stillPrompt,
+                },
+              })
+            }
+            break
+          }
+
+          if (!requestId) {
+            await client.from('cinematic_run_jobs').update({
+              status: 'failed',
+              provider: 'fal',
+              model: stillModel,
+              prompt: stillPrompt,
+              error_message: 'Fal did not return a request id for the cinematic still job.',
+            }).eq('id', job.id)
+            if (reservedStillAssetKey) {
+              await markGeneratedImageAssetFailed({
+                client,
+                projectId: payload.snapshot.project.id,
+                assetKey: reservedStillAssetKey,
+                errorMessage: 'Fal did not return a request id for the cinematic still job.',
+                metadata: {
+                  provider: 'fal',
+                  model: stillModel,
+                  prompt: stillPrompt,
+                },
+              })
+            }
+            break
+          }
+
           await client.from('cinematic_run_jobs').update({
-            status: 'failed',
-            error_message: falResponse.error.message,
-          }).eq('id', job.id)
-          break
-        }
-
-        const resultData = ((falResponse.data as { data?: unknown } | null)?.data ?? {}) as Record<string, unknown>
-        const imageUrl = extractFalImageUrls(resultData)[0] ?? null
-        if (!imageUrl) {
-          await client.from('cinematic_run_jobs').update({
-            status: 'failed',
-            error_message: 'The still-generation provider returned no image URL.',
-          }).eq('id', job.id)
-          break
-        }
-
-        const storedAsset = await createStoredGeneratedAsset({
-          admin,
-          client,
-          projectId: payload.snapshot.project.id,
-          userId: user.id,
-          sourceUrl: imageUrl,
-          graphKey: updatedGraph.key,
-          runId: payload.runId,
-          name: `${targetNode.title} Still`,
-          kind: 'image',
-          metadata: {
-            generatedBy:
-              job.kind === 'take_still'
-                ? 'cinematic_take_still'
-                : job.kind === 'storyboard_still'
-                  ? 'cinematic_storyboard_still'
-                  : 'cinematic_still',
+            status: 'running',
             provider: 'fal',
-            model: (falResponse.data as { model?: unknown } | null)?.model ?? stillModel,
-            requestId: (falResponse.data as { requestId?: unknown } | null)?.requestId ?? null,
-            prompt: job.prompt,
-          },
+            model: stillModel,
+            provider_request_id: requestId,
+            prompt: stillPrompt,
+            result_context: {
+              ...resultContextRecord,
+              assetKey: reservedStillAssetKey,
+              sourceImageCount: imageUrls.length,
+              submittedAt: new Date().toISOString(),
+              statusUrl: typeof submitResult.body.status_url === 'string' ? submitResult.body.status_url : null,
+              responseUrl: typeof submitResult.body.response_url === 'string' ? submitResult.body.response_url : null,
+            },
+            error_message: null,
+          }).eq('id', job.id)
+          break
+        }
+
+        const providerRequestId = job.providerRequestId
+        if (!providerRequestId) {
+          await client.from('cinematic_run_jobs').update({
+            status: 'failed',
+            error_message: 'Still-generation job is missing a provider request id.',
+          }).eq('id', job.id)
+          if (reservedStillAssetKey) {
+            await markGeneratedImageAssetFailed({
+              client,
+              projectId: payload.snapshot.project.id,
+              assetKey: reservedStillAssetKey,
+              errorMessage: 'Still-generation job is missing a provider request id.',
+              metadata: {
+                provider: 'fal',
+                model: job.model ?? stillModel,
+                prompt: job.prompt ?? stillPrompt,
+              },
+            })
+          }
+          break
+        }
+
+        if (!reservedStillAssetKey) {
+          await client.from('cinematic_run_jobs').update({
+            status: 'failed',
+            error_message: 'Still-generation job is missing a reserved asset key.',
+          }).eq('id', job.id)
+          break
+        }
+
+        const falResult = await getFalResult({
+          apiKey: falApiKey,
+          model: job.model ?? stillModel,
+          requestId: providerRequestId,
+          responseUrl: providerResponseUrl,
         })
+        if (job.kind === 'storyboard_still' && (job.model ?? stillModel).includes('nano-banana-2/edit')) {
+          console.info('[poll-cinematic-run] storyboard edit result payload.', {
+            runId: payload.runId,
+            jobId: job.id,
+            shotNodeKey: job.shotNodeKey,
+            requestId: providerRequestId,
+            model: job.model ?? stillModel,
+            httpStatus: falResult.response.status,
+            normalizedData: falResult.normalizedData,
+            rawBody: falResult.body,
+            rawText: falResult.rawText,
+          })
+        }
+        const resultImageUrl =
+          extractFalImageUrls(falResult.normalizedData)[0]
+          ?? extractFalImageUrls(falResult.body)[0]
+          ?? null
+        let imageUrl = resultImageUrl
+        if (!imageUrl) {
+          const statusResult = await getFalStatus({
+            apiKey: falApiKey,
+            model: job.model ?? stillModel,
+            requestId: providerRequestId,
+            logs: true,
+            statusUrl: providerStatusUrl,
+          })
+          const providerStatus = typeof statusResult.body.status === 'string' ? statusResult.body.status : null
+          if (job.kind === 'storyboard_still' && (job.model ?? stillModel).includes('nano-banana-2/edit')) {
+            console.info('[poll-cinematic-run] storyboard edit status payload.', {
+              runId: payload.runId,
+              jobId: job.id,
+              shotNodeKey: job.shotNodeKey,
+              requestId: providerRequestId,
+              model: job.model ?? stillModel,
+              httpStatus: statusResult.response.status,
+              providerStatus,
+              rawBody: statusResult.body,
+              rawText: statusResult.rawText,
+            })
+          }
+          imageUrl = extractFalImageUrls(statusResult.body)[0] ?? null
+
+          if (typeof statusResult.body.error === 'string') {
+            await client.from('cinematic_run_jobs').update({
+              status: 'failed',
+              error_message: statusResult.body.error,
+            }).eq('id', job.id)
+            await markGeneratedImageAssetFailed({
+              client,
+              projectId: payload.snapshot.project.id,
+              assetKey: reservedStillAssetKey,
+              errorMessage: statusResult.body.error,
+              metadata: {
+                provider: 'fal',
+                model: job.model ?? stillModel,
+                requestId: providerRequestId,
+                prompt: job.prompt ?? stillPrompt,
+              },
+            })
+            break
+          }
+
+          if (imageUrl) {
+            // Fal sometimes exposes finished image payloads through status-like envelopes before the canonical result shape stabilizes.
+          } else if (providerStatus === 'COMPLETED') {
+            const message = getFalErrorMessage(
+              falResult.body,
+              'The still-generation provider reported completion but returned no image URL.',
+            )
+            await client.from('cinematic_run_jobs').update({
+              status: 'failed',
+              error_message: message,
+            }).eq('id', job.id)
+            await markGeneratedImageAssetFailed({
+              client,
+              projectId: payload.snapshot.project.id,
+              assetKey: reservedStillAssetKey,
+              errorMessage: message,
+              metadata: {
+                provider: 'fal',
+                model: job.model ?? stillModel,
+                requestId: providerRequestId,
+                prompt: job.prompt ?? stillPrompt,
+              },
+            })
+            break
+          } else {
+            await client.from('cinematic_run_jobs').update({
+              status: 'running',
+              provider: 'fal',
+              model: job.model ?? stillModel,
+              provider_request_id: providerRequestId,
+              result_context: {
+                ...(job.resultContext && typeof job.resultContext === 'object' ? job.resultContext : {}),
+                lastObservedProviderStatus: providerStatus,
+                lastStatusCheckAt: new Date().toISOString(),
+              },
+              error_message: null,
+            }).eq('id', job.id)
+            break
+          }
+        }
+
+        const statusResult = await getFalStatus({
+          apiKey: falApiKey,
+          model: job.model ?? stillModel,
+          requestId: providerRequestId,
+          logs: true,
+          statusUrl: providerStatusUrl,
+        })
+        const providerStatus = typeof statusResult.body.status === 'string' ? statusResult.body.status : null
+        if (typeof statusResult.body.error === 'string') {
+          const message = getFalErrorMessage(
+            statusResult.body,
+            'The still-generation provider returned an error.',
+          )
+          await client.from('cinematic_run_jobs').update({
+            status: 'failed',
+            error_message: message,
+          }).eq('id', job.id)
+          await markGeneratedImageAssetFailed({
+            client,
+            projectId: payload.snapshot.project.id,
+            assetKey: reservedStillAssetKey,
+            errorMessage: message,
+            metadata: {
+              provider: 'fal',
+              model: job.model ?? stillModel,
+              requestId: providerRequestId,
+              prompt: job.prompt ?? stillPrompt,
+            },
+          })
+          break
+        }
+
+        let storedAsset
+        try {
+          storedAsset = await completeReservedGeneratedImageAsset({
+            client,
+            projectId: payload.snapshot.project.id,
+            assetKey: reservedStillAssetKey,
+            imageUrl,
+            name: job.kind === 'storyboard_still' ? `${targetNode.title} Storyboard` : `${targetNode.title} Still`,
+            metadata: {
+              generatedBy:
+                job.kind === 'take_still'
+                  ? 'cinematic_take_still'
+                  : job.kind === 'storyboard_still'
+                    ? isTakeStoryboardJob
+                      ? 'cinematic_take_storyboard_still'
+                      : 'cinematic_storyboard_still'
+                    : 'cinematic_still',
+              provider: 'fal',
+              model: job.model ?? stillModel,
+              requestId: providerRequestId,
+              prompt: job.prompt ?? stillPrompt,
+            },
+          })
+        } catch (assetError) {
+          const message = assetError instanceof Error ? assetError.message : 'Failed to persist the generated cinematic image asset.'
+          console.error('[poll-cinematic-run] failed to persist generated image asset.', {
+            runId: payload.runId,
+            jobId: job.id,
+            shotNodeKey: job.shotNodeKey,
+            imageUrl,
+            message,
+          })
+          await client.from('cinematic_run_jobs').update({
+            status: 'failed',
+            error_message: message,
+          }).eq('id', job.id)
+          await markGeneratedImageAssetFailed({
+            client,
+            projectId: payload.snapshot.project.id,
+            assetKey: reservedStillAssetKey,
+            errorMessage: message,
+            metadata: {
+              provider: 'fal',
+              model: job.model ?? stillModel,
+              requestId: providerRequestId,
+              prompt: job.prompt ?? stillPrompt,
+            },
+          })
+          break
+        }
 
         createdAssets.push(storedAsset)
         await client.from('cinematic_run_jobs').update({
           status: 'succeeded',
           still_asset_key: storedAsset.key,
           provider: 'fal',
-          model: (falResponse.data as { model?: unknown } | null)?.model ?? stillModel,
-          provider_request_id: (falResponse.data as { requestId?: unknown } | null)?.requestId ?? null,
+          model: job.model ?? stillModel,
+          provider_request_id: providerRequestId,
           result_context: {
+            ...(job.resultContext && typeof job.resultContext === 'object' ? job.resultContext : {}),
+            assetKey: storedAsset.key,
             imageUrl,
             stillAssetKey: storedAsset.key,
             sourceImageCount: imageUrls.length,
+            status: providerStatus,
+            statusData: statusResult.body,
           },
+          error_message: null,
         }).eq('id', job.id)
 
         if (job.kind === 'take_still') {
@@ -322,8 +884,8 @@ Deno.serve(async (request) => {
             metadata: {
               outputStillAssetKey: storedAsset.key,
               provider: 'fal',
-              providerModel: String((falResponse.data as { model?: unknown } | null)?.model ?? stillModel),
-              providerRequestId: String((falResponse.data as { requestId?: unknown } | null)?.requestId ?? ''),
+              providerModel: String(job.model ?? stillModel),
+              providerRequestId: String(providerRequestId),
             },
           })
           await persistTakeBindingsIfPresent(client, payload.snapshot.draft.id, updatedGraph.key, job.shotNodeKey, {
@@ -331,37 +893,56 @@ Deno.serve(async (request) => {
             metadata: {
               outputStillAssetKey: storedAsset.key,
               provider: 'fal',
-              providerModel: String((falResponse.data as { model?: unknown } | null)?.model ?? stillModel),
-              providerRequestId: String((falResponse.data as { requestId?: unknown } | null)?.requestId ?? ''),
+              providerModel: String(job.model ?? stillModel),
+              providerRequestId: String(providerRequestId),
             },
           })
         } else if (job.kind === 'storyboard_still') {
-          updatedGraph = applyStoryboardBindingToGraph(updatedGraph, job.shotNodeKey, {
-            bodyImageAssetKey: storedAsset.key,
-            metadata: {
-              assetKey: storedAsset.key,
-              provider: 'fal',
-              providerModel: String((falResponse.data as { model?: unknown } | null)?.model ?? stillModel),
-              providerRequestId: String((falResponse.data as { requestId?: unknown } | null)?.requestId ?? ''),
-            },
-          })
-          await persistStoryboardBindingsIfPresent(client, payload.snapshot.draft.id, updatedGraph.key, job.shotNodeKey, {
-            bodyImageAssetKey: storedAsset.key,
-            metadata: {
-              assetKey: storedAsset.key,
-              provider: 'fal',
-              providerModel: String((falResponse.data as { model?: unknown } | null)?.model ?? stillModel),
-              providerRequestId: String((falResponse.data as { requestId?: unknown } | null)?.requestId ?? ''),
-            },
-          })
+          if (isTakeStoryboardJob) {
+            updatedGraph = applyTakeBindingToGraph(updatedGraph, job.shotNodeKey, {
+              metadata: {
+                storyboardAssetKey: storedAsset.key,
+                provider: 'fal',
+                providerModel: String(job.model ?? stillModel),
+                providerRequestId: String(providerRequestId),
+              },
+            })
+            await persistTakeBindingsIfPresent(client, payload.snapshot.draft.id, updatedGraph.key, job.shotNodeKey, {
+              metadata: {
+                storyboardAssetKey: storedAsset.key,
+                provider: 'fal',
+                providerModel: String(job.model ?? stillModel),
+                providerRequestId: String(providerRequestId),
+              },
+            })
+          } else {
+            updatedGraph = applyStoryboardBindingToGraph(updatedGraph, job.shotNodeKey, {
+              bodyImageAssetKey: storedAsset.key,
+              metadata: {
+                assetKey: storedAsset.key,
+                provider: 'fal',
+                providerModel: String(job.model ?? stillModel),
+                providerRequestId: String(providerRequestId),
+              },
+            })
+            await persistStoryboardBindingsIfPresent(client, payload.snapshot.draft.id, updatedGraph.key, job.shotNodeKey, {
+              bodyImageAssetKey: storedAsset.key,
+              metadata: {
+                assetKey: storedAsset.key,
+                provider: 'fal',
+                providerModel: String(job.model ?? stillModel),
+                providerRequestId: String(providerRequestId),
+              },
+            })
+          }
         } else {
           updatedGraph = applyShotBindingToGraph(updatedGraph, job.shotNodeKey, {
             bodyImageAssetKey: storedAsset.key,
             metadata: {
               stillAssetKey: storedAsset.key,
               provider: 'fal',
-              providerModel: String((falResponse.data as { model?: unknown } | null)?.model ?? stillModel),
-              providerRequestId: String((falResponse.data as { requestId?: unknown } | null)?.requestId ?? ''),
+              providerModel: String(job.model ?? stillModel),
+              providerRequestId: String(providerRequestId),
             },
           })
           await persistShotBindingsIfPresent(client, payload.snapshot.draft.id, updatedGraph.key, job.shotNodeKey, {
@@ -369,8 +950,8 @@ Deno.serve(async (request) => {
             metadata: {
               stillAssetKey: storedAsset.key,
               provider: 'fal',
-              providerModel: String((falResponse.data as { model?: unknown } | null)?.model ?? stillModel),
-              providerRequestId: String((falResponse.data as { requestId?: unknown } | null)?.requestId ?? ''),
+              providerModel: String(job.model ?? stillModel),
+              providerRequestId: String(providerRequestId),
             },
           })
         }
@@ -464,25 +1045,42 @@ Deno.serve(async (request) => {
         break
       }
 
-      const storedAsset = await createStoredGeneratedAsset({
-        admin,
-        client,
-        projectId: payload.snapshot.project.id,
-        userId: user.id,
-        sourceUrl: videoUrl,
-        graphKey: updatedGraph.key,
-        runId: payload.runId,
-        name: `${targetNode.title} Clip`,
-        kind: 'video',
-        metadata: {
-          generatedBy: isTakeJob ? 'cinematic_take_video' : 'cinematic_video',
-          provider: 'fal',
-          model: videoModel,
-          requestId: (falResponse.data as { requestId?: unknown } | null)?.requestId ?? null,
-          prompt: job.prompt,
-          previewUrl: videoUrl,
-        },
-      })
+      let storedAsset
+      try {
+        storedAsset = await createStoredGeneratedAsset({
+          admin,
+          client,
+          projectId: payload.snapshot.project.id,
+          userId: user.id,
+          sourceUrl: videoUrl,
+          graphKey: updatedGraph.key,
+          runId: payload.runId,
+          name: `${targetNode.title} Clip`,
+          kind: 'video',
+          metadata: {
+            generatedBy: isTakeJob ? 'cinematic_take_video' : 'cinematic_video',
+            provider: 'fal',
+            model: videoModel,
+            requestId: (falResponse.data as { requestId?: unknown } | null)?.requestId ?? null,
+            prompt: job.prompt,
+            previewUrl: videoUrl,
+          },
+        })
+      } catch (assetError) {
+        const message = assetError instanceof Error ? assetError.message : 'Failed to persist the generated cinematic video asset.'
+        console.error('[poll-cinematic-run] failed to persist generated video asset.', {
+          runId: payload.runId,
+          jobId: job.id,
+          shotNodeKey: job.shotNodeKey,
+          videoUrl,
+          message,
+        })
+        await client.from('cinematic_run_jobs').update({
+          status: 'failed',
+          error_message: message,
+        }).eq('id', job.id)
+        break
+      }
 
       createdAssets.push(storedAsset)
       await client.from('cinematic_run_jobs').update({
@@ -565,11 +1163,20 @@ Deno.serve(async (request) => {
       jobs: finalState.jobs,
     })
 
-    return json(cinematicRunStatusResponseSchema.parse({
-      run,
-      graphs: [updatedGraph],
-      assets: createdAssets,
-    }))
+    return json(cinematicRunStatusResponseSchema.parse(await buildCinematicRunResponse({
+      client,
+      projectId: payload.snapshot.project.id,
+      snapshot: payload.snapshot,
+      state: {
+        row: {
+          ...finalState.row,
+          status: run.status,
+          diagnostics: run.diagnostics,
+        },
+        jobs: finalState.jobs,
+      },
+      baseGraph: updatedGraph,
+    })))
   } catch (error) {
     return errorResponse(error, 'Failed to poll cinematic run.')
   }

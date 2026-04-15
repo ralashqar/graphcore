@@ -94,6 +94,9 @@ export function extractFalImageUrls(data: unknown): string[] {
     url?: unknown
     output_url?: unknown
     output?: unknown
+    response?: unknown
+    data?: unknown
+    result?: unknown
   }
 
   if (Array.isArray(record.images)) {
@@ -127,6 +130,27 @@ export function extractFalImageUrls(data: unknown): string[] {
 
   if (record.output && typeof record.output === 'object' && !Array.isArray(record.output)) {
     const nestedUrls: string[] = extractFalImageUrls(record.output)
+    if (nestedUrls.length > 0) {
+      return nestedUrls
+    }
+  }
+
+  if (record.response && typeof record.response === 'object' && !Array.isArray(record.response)) {
+    const nestedUrls: string[] = extractFalImageUrls(record.response)
+    if (nestedUrls.length > 0) {
+      return nestedUrls
+    }
+  }
+
+  if (record.data && typeof record.data === 'object' && !Array.isArray(record.data)) {
+    const nestedUrls: string[] = extractFalImageUrls(record.data)
+    if (nestedUrls.length > 0) {
+      return nestedUrls
+    }
+  }
+
+  if (record.result && typeof record.result === 'object' && !Array.isArray(record.result)) {
+    const nestedUrls: string[] = extractFalImageUrls(record.result)
     if (nestedUrls.length > 0) {
       return nestedUrls
     }
