@@ -15,6 +15,8 @@ import { FlowNodeCard } from './FlowNodeCard'
 import type { GraphContextMenu } from './types'
 import { filterTemplateGroup } from './utils'
 
+const graphNodeTypes = { graphNode: FlowNodeCard }
+
 type GraphCanvasStageProps = {
   canvasRef: RefObject<HTMLDivElement | null>
   contextMenu: GraphContextMenu | null
@@ -96,7 +98,8 @@ export function GraphCanvasStage({
           fitView
           nodes={liveNodes}
           edges={liveEdges}
-          nodeTypes={{ graphNode: FlowNodeCard }}
+          nodeTypes={graphNodeTypes}
+          onlyRenderVisibleElements
           nodesDraggable
           nodesConnectable
           onInit={setFlowInstance}

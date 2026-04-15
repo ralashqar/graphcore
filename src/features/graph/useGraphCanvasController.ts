@@ -62,6 +62,7 @@ export function useGraphCanvasController({
   const canvasRef = useRef<HTMLDivElement | null>(null)
   const contextMenuSearchRef = useRef<HTMLInputElement | null>(null)
   const lastAutoFitSignatureRef = useRef<string | null>(null)
+  const isNodeDragInProgressRef = useRef(false)
 
   const nodes = useMemo<Node[]>(() => {
     return (currentGraph?.nodes ?? []).map((node) => ({
@@ -91,11 +92,12 @@ export function useGraphCanvasController({
   }, [currentGraph])
 
   useEffect(() => {
-    setLiveNodes(nodes)
+    if (isNodeDragInProgressRef.current) return
+    setLiveNodes((current) => reconcileFlowNodes(current, nodes))
   }, [nodes])
 
   useEffect(() => {
-    setLiveEdges(edges)
+    setLiveEdges((current) => reconcileFlowEdges(current, edges))
   }, [edges])
 
   useEffect(() => {
@@ -162,6 +164,12 @@ export function useGraphCanvasController({
 
   function handleNodesChange(changes: NodeChange<Node>[]) {
     if (!currentGraph) return
+    if (changes.some((change) => change.type === 'position' && change.dragging)) {
+      isNodeDragInProgressRef.current = true
+    }
+    if (changes.some((change) => change.type === 'position' && change.dragging === false)) {
+      isNodeDragInProgressRef.current = false
+    }
     setLiveNodes((current) => applyNodeChanges(changes, current))
     for (const change of changes) {
       if (change.type === 'position' && change.position && !change.dragging) {
@@ -313,4 +321,37 @@ function buildDefaultConnectionEdge(connection: Connection, graph: GraphDefiniti
     condition: null,
     metadata: {},
   } satisfies EdgeDefinition
+}
+
+function reconcileFlowNodes(current: Node[], next: Node[]) {
+  const currentById = new Map(current.map((node) => [node.id, node]))
+
+  return next.map((node) => {
+    const existing = currentById.get(node.id)
+    if (!existing) return node
+    return {
+      ...existing,
+      ...node,
+      data: node.data,
+      position: node.position,
+      selected: node.selected ?? existing.selected,
+      dragging: existing.dragging,
+      measured: existing.measured,
+      width: existing.width,
+      height: existing.height,
+    }
+  })
+}
+
+function reconcileFlowEdges(current: Edge[], next: Edge[]) {
+  const currentById = new Map(current.map((edge) => [edge.id, edge]))
+
+  return next.map((edge) => {
+    const existing = currentById.get(edge.id)
+    if (!existing) return edge
+    return {
+      ...existing,
+      ...edge,
+    }
+  })
 }

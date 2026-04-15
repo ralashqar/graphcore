@@ -1,6 +1,17 @@
 import { z } from 'zod'
 
 const rawRecordSchema = z.record(z.string(), z.unknown())
+const normalizeEnumCandidate = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+const coerceEnumLikeValue = <TOption extends string>(options: readonly TOption[]) => (value: unknown) => {
+  if (value === null || value === undefined) return value
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  if (options.includes(trimmed as TOption)) return trimmed
+  const normalized = normalizeEnumCandidate(trimmed)
+  const matched = options.find((option) => normalizeEnumCandidate(option) === normalized)
+  return matched ?? null
+}
 
 export const cinematicAspectRatioSchema = z.enum(['1:1', '4:3', '3:4', '16:9', '9:16', '21:9'])
 export const cinematicStillResolutionSchema = z.enum(['1K', '2K'])
@@ -66,9 +77,9 @@ export const cinematicSettingsSchema = z.object({
   defaultFps: z.number().int().positive().max(60).default(24),
   presetFamily: cinematicPresetFamilySchema.default('story_movie_tv'),
   presetId: z.string().default('story_movie_tv'),
-  formatSubtype: cinematicFormatSubtypeSchema.nullable().default(null),
-  formulaFamily: cinematicFormulaFamilySchema.nullable().default(null),
-  dominantTrigger: cinematicDominantTriggerSchema.nullable().default(null),
+  formatSubtype: z.preprocess(coerceEnumLikeValue(cinematicFormatSubtypeSchema.options), cinematicFormatSubtypeSchema.nullable()).default(null),
+  formulaFamily: z.preprocess(coerceEnumLikeValue(cinematicFormulaFamilySchema.options), cinematicFormulaFamilySchema.nullable()).default(null),
+  dominantTrigger: z.preprocess(coerceEnumLikeValue(cinematicDominantTriggerSchema.options), cinematicDominantTriggerSchema.nullable()).default(null),
   contrastAxis: z.string().default(''),
   proofMoment: z.string().default(''),
   ctaStyle: z.string().default(''),
@@ -202,9 +213,9 @@ export const cinematicScriptShotSchema = z.object({
   beat: z.string().default(''),
   emotionalBeat: z.string().default(''),
   hookRole: cinematicHookRoleSchema.nullable().default(null),
-  formatSubtype: cinematicFormatSubtypeSchema.nullable().default(null),
-  formulaFamily: cinematicFormulaFamilySchema.nullable().default(null),
-  dominantTrigger: cinematicDominantTriggerSchema.nullable().default(null),
+  formatSubtype: z.preprocess(coerceEnumLikeValue(cinematicFormatSubtypeSchema.options), cinematicFormatSubtypeSchema.nullable()).default(null),
+  formulaFamily: z.preprocess(coerceEnumLikeValue(cinematicFormulaFamilySchema.options), cinematicFormulaFamilySchema.nullable()).default(null),
+  dominantTrigger: z.preprocess(coerceEnumLikeValue(cinematicDominantTriggerSchema.options), cinematicDominantTriggerSchema.nullable()).default(null),
   hookType: z.string().default(''),
   targetEmotion: z.string().default(''),
   personaStyle: z.string().default(''),
@@ -289,9 +300,9 @@ export const cinematicShotSpecSchema = z.object({
   beat: z.string().default(''),
   emotionalBeat: z.string().default(''),
   hookRole: cinematicHookRoleSchema.nullable().default(null),
-  formatSubtype: cinematicFormatSubtypeSchema.nullable().default(null),
-  formulaFamily: cinematicFormulaFamilySchema.nullable().default(null),
-  dominantTrigger: cinematicDominantTriggerSchema.nullable().default(null),
+  formatSubtype: z.preprocess(coerceEnumLikeValue(cinematicFormatSubtypeSchema.options), cinematicFormatSubtypeSchema.nullable()).default(null),
+  formulaFamily: z.preprocess(coerceEnumLikeValue(cinematicFormulaFamilySchema.options), cinematicFormulaFamilySchema.nullable()).default(null),
+  dominantTrigger: z.preprocess(coerceEnumLikeValue(cinematicDominantTriggerSchema.options), cinematicDominantTriggerSchema.nullable()).default(null),
   hookType: z.string().default(''),
   targetEmotion: z.string().default(''),
   personaStyle: z.string().default(''),
@@ -346,9 +357,9 @@ export const cinematicTakeSpecSchema = z.object({
   startSeconds: z.number().nonnegative().default(0),
   endSeconds: z.number().nonnegative().default(0),
   seedanceEndpoint: seedanceEndpointSchema.default('reference-to-video'),
-  formatSubtype: cinematicFormatSubtypeSchema.nullable().default(null),
-  formulaFamily: cinematicFormulaFamilySchema.nullable().default(null),
-  dominantTrigger: cinematicDominantTriggerSchema.nullable().default(null),
+  formatSubtype: z.preprocess(coerceEnumLikeValue(cinematicFormatSubtypeSchema.options), cinematicFormatSubtypeSchema.nullable()).default(null),
+  formulaFamily: z.preprocess(coerceEnumLikeValue(cinematicFormulaFamilySchema.options), cinematicFormulaFamilySchema.nullable()).default(null),
+  dominantTrigger: z.preprocess(coerceEnumLikeValue(cinematicDominantTriggerSchema.options), cinematicDominantTriggerSchema.nullable()).default(null),
   contrastAxis: z.string().default(''),
   proofMoment: z.string().default(''),
   ctaStyle: z.string().default(''),
@@ -895,6 +906,26 @@ function buildTakeSourceRefIds(shots: Array<CinematicScriptShot>) {
   ))
 }
 
+function sharesTakeParticipants(
+  left: CinematicScriptShot & { _compiledDurationSeconds: number },
+  right: CinematicScriptShot & { _compiledDurationSeconds: number },
+) {
+  const leftParticipants = new Set(left.participantRefIds)
+  return right.participantRefIds.some((entry) => leftParticipants.has(entry))
+}
+
+function isStrongTakeFormatBreak(
+  left: CinematicScriptShot & { _compiledDurationSeconds: number },
+  right: CinematicScriptShot & { _compiledDurationSeconds: number },
+) {
+  return (
+    (left.formatSubtype ?? null) !== (right.formatSubtype ?? null)
+    || (left.formulaFamily ?? null) !== (right.formulaFamily ?? null)
+    || (left.dominantTrigger ?? null) !== (right.dominantTrigger ?? null)
+    || (left.contrastAxis.trim() || '') !== (right.contrastAxis.trim() || '')
+  )
+}
+
 function coalesceTakeField<TValue>(shots: Array<CinematicScriptShot & { _compiledDurationSeconds: number }>, selector: (shot: CinematicScriptShot) => TValue, fallback: TValue) {
   for (const shot of shots) {
     const value = selector(shot)
@@ -947,13 +978,21 @@ function buildCompiledTakes(shots: Array<CinematicScriptShot & {
   }
 
   for (const shot of shots) {
-    const locationChanged = currentShots.length > 0 && currentShots[currentShots.length - 1].locationRefId !== shot.locationRefId
-    const sceneChanged = currentShots.length > 0 && currentShots[currentShots.length - 1].sceneId !== shot.sceneId
+    const previousShot = currentShots.length > 0 ? currentShots[currentShots.length - 1] : null
+    const locationChanged = Boolean(previousShot && previousShot.locationRefId !== shot.locationRefId)
+    const sceneChanged = Boolean(previousShot && previousShot.sceneId !== shot.sceneId)
+    const sharedParticipants = previousShot ? sharesTakeParticipants(previousShot, shot) : false
+    const formatChanged = previousShot ? isStrongTakeFormatBreak(previousShot, shot) : false
+    const hardLocationJump = locationChanged && !sharedParticipants
+    const hardSceneJump = sceneChanged && locationChanged && !sharedParticipants
+    const softContinuityShift = (locationChanged || sceneChanged) && !hardLocationJump && !hardSceneJump
     const continuityBreak = currentShots.length > 0 && (
-      locationChanged
-      || sceneChanged
-      || shot.forceTakeBreak
+      shot.forceTakeBreak
       || currentDuration + shot._compiledDurationSeconds > 15
+      || formatChanged
+      || hardLocationJump
+      || hardSceneJump
+      || (softContinuityShift && currentDuration >= 10)
     )
     if (continuityBreak) flushTake()
     currentShots.push(shot)

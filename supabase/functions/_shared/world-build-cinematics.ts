@@ -6,12 +6,18 @@ import {
   buildCinematicSettingsPatchFromFormatSubtype,
   buildCinematicSettingsPatchFromPresetFamily,
   cinematicBeatSchema,
+  cinematicDominantTriggerSchema,
   cinematicFormatSubtypeSchema,
+  cinematicFormulaFamilySchema,
+  cinematicHookRoleSchema,
+  cinematicPlatformTargetSchema,
   cinematicPresetFamilySchema,
   cinematicRelationshipSchema,
   cinematicScriptDocSchema,
   cinematicSequenceSchema,
   coerceFormatSubtypeForPresetFamily,
+  deriveDefaultDominantTriggerFromFormatSubtype,
+  deriveDefaultFormulaFamilyFromFormatSubtype,
   deriveDefaultFormatSubtypeFromPresetFamily,
   getCinematicPresetLabel,
   getCinematicFormatSubtypeLabel,
@@ -85,30 +91,61 @@ export function inferCinematicFormatSubtypeFromPrompt(
 function subtypePlannerInstructions(formatSubtype: z.infer<typeof cinematicFormatSubtypeSchema> | null) {
   switch (formatSubtype) {
     case 'creator_problem_solution':
-      return ['Structure beats as hook, personal problem, use case, soft proof, and soft CTA.']
+      return [
+        'Structure beats as hook, personal problem, use case, soft proof, and soft CTA.',
+        'Keep the phrasing conversational and believable for a creator speaking from personal experience.',
+      ]
     case 'creator_reframe':
-      return ['Structure beats as hook, viewer behavior named, reframed interpretation, and emotional payoff.']
+      return [
+        'Structure beats as hook, viewer behavior named, reframed interpretation, and emotional payoff.',
+        'Make the reframe feel like a native creator insight, not a polished brand line.',
+      ]
     case 'creator_validation':
-      return ['Structure beats as hook, emotional recognition, validating statement, and soft resolution.']
+      return [
+        'Structure beats as hook, emotional recognition, validating statement, and soft resolution.',
+        'Bias toward emotional recognition and parasocial trust instead of hard selling.',
+      ]
     case 'ad_problem_solution':
-      return ['Structure beats as hook, pain, product, proof, and CTA with product visibility early.']
+      return [
+        'Structure beats as hook, pain, product, proof, and CTA with product visibility early.',
+        'Show the product causing the better outcome instead of merely being present in frame.',
+      ]
     case 'ad_mechanism_proof':
-      return ['Structure beats as hook, mechanism, visible demonstration, proof, and CTA.']
+      return [
+        'Structure beats as hook, mechanism, visible demonstration, proof, and CTA.',
+        'Make the mechanism legible on screen and keep proof concrete and easy to verify.',
+      ]
     case 'ad_before_after':
-      return ['Structure beats as hook, before, intervention, after, and CTA.']
+      return [
+        'Structure beats as hook, before, intervention, after, and CTA.',
+        'Make the before and after states visually distinct even with sound off.',
+      ]
     case 'ad_comparison':
-      return ['Structure beats as hook, option A versus B, why B wins, proof, and CTA.']
+      return [
+        'Structure beats as hook, option A versus B, why B wins, proof, and CTA.',
+        'Keep the winning side obvious in every beat and escalate proof instead of repeating the same comparison.',
+      ]
     case 'faceless_demo':
-      return ['Structure beats as pattern interrupt, product or process, proof, and CTA.']
+      return [
+        'Structure beats as pattern interrupt, product or process, proof, and CTA.',
+        'Make the object, screen, or process the hero instead of relying on facial acting.',
+      ]
     case 'faceless_explainer':
-      return ['Structure beats as wrong belief, explanation, mechanism, and result.']
+      return [
+        'Structure beats as wrong belief, explanation, mechanism, and result.',
+        'Use clean visual reasoning and avoid voiceover-dependent persuasion.',
+      ]
     case 'faceless_process':
-      return ['Structure beats as process start, progression, reveal, and payoff.']
+      return [
+        'Structure beats as process start, progression, reveal, and payoff.',
+        'Each beat should introduce a visibly new stage of the process rather than repeating the same view.',
+      ]
     case 'contrast_narrative':
       return [
         'Treat this as a contrast-led multi-scene narrative, not a talking-head script.',
         'Plan 8-10 short escalating scenes with two locked poles and the strongest payoff image at the end.',
         'Populate scriptDoc.referenceVault, sceneCount, statusPayoffType, and narrativeArcTemplate when useful.',
+        'Keep the comparison readable in every beat and make each scene widen the gap across a new visible dimension.',
       ]
     default:
       return []
@@ -130,18 +167,21 @@ function presetPlannerInstructions(
         'Plan this as a short-form creator-native UGC video.',
         'Bias toward 9:16 beats that move from hook to personal claim to demo to soft CTA.',
         'Storyboard refs are optional; creator and product continuity matter more than boards.',
+        'Keep the language conversational, creator-believable, and less polished than a commercial storyboard.',
         formatSubtype ? `Locked format subtype: ${getCinematicFormatSubtypeLabel(formatSubtype)}.` : null,
       ].filter((entry): entry is string => Boolean(entry))
     case 'ugc_direct_response_ad':
       return [
         'Plan this as a short-form direct-response ad.',
         'Bias toward hook then pain then mechanism then proof then CTA, with product visibility early.',
+        'Make the product readable early and make the proof or payoff obvious before the ending.',
         formatSubtype ? `Locked format subtype: ${getCinematicFormatSubtypeLabel(formatSubtype)}.` : null,
       ].filter((entry): entry is string => Boolean(entry))
     case 'ugc_faceless_format':
       return [
         'Plan this as a faceless short-form format.',
         'Bias toward objects, process, screens, podcast-style framing, or demo loops with minimal face dependence.',
+        'Prioritize process clarity and readable objects or screens over facial performance.',
         formatSubtype ? `Locked format subtype: ${getCinematicFormatSubtypeLabel(formatSubtype)}.` : null,
       ].filter((entry): entry is string => Boolean(entry))
   }
@@ -172,6 +212,7 @@ export const cinematicPlannerRawSchema = z.object({
   requestSummary: z.string().default('Cinematic build plan'),
   graphName: z.string(),
   graphSummary: z.string(),
+  rawScriptMarkdown: z.string().default(''),
   entityRefs: z.array(z.object({
     id: z.string(),
     kind: z.enum(['character', 'environment', 'item']),
@@ -290,6 +331,26 @@ function normalizeShotType(value: unknown) {
   return 'custom' as const
 }
 
+function parseNullableEnumValue<T>(schema: z.ZodType<T>, value: unknown): T | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  const parsed = schema.safeParse(trimmed)
+  if (parsed.success) return parsed.data
+  const schemaOptions = (schema as { options?: string[] }).options
+  if (!Array.isArray(schemaOptions)) return null
+  const normalizeEnumAlias = (input: string) => normalizeMatchKey(
+    input
+      .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+      .replace(/\b(?:formula|family|trigger|dominant|primary|planned|script|style)\b/gi, ' ')
+  ).replace(/\s+/g, ' ').trim()
+  const normalized = normalizeEnumAlias(trimmed)
+  const matched = schemaOptions.find((option) => normalizeEnumAlias(option) === normalized)
+  if (!matched) return null
+  const reparsed = schema.safeParse(matched)
+  return reparsed.success ? reparsed.data : null
+}
+
 function normalizePromptTextForStoryboard(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
 }
@@ -364,6 +425,300 @@ function deriveFallbackShotTitle(segment: string, index: number, total: number) 
   if (index === 0 && total > 1) return 'Opening Beat'
   if (index === total - 1 && total > 1) return 'Closing Beat'
   return `Beat ${index + 1}`
+}
+
+function deriveMarkdownShotTitle(action: string, index: number) {
+  const firstSentence = action
+    .split(/(?<=[.!?])\s+/)
+    .map((entry) => entry.trim())
+    .find((entry) => entry.length > 0)
+    ?? action.trim()
+  return deriveFallbackShotTitle(firstSentence, index, 8)
+}
+
+export function resolveTargetShotCount(promptText: string, formatSubtype: z.infer<typeof cinematicFormatSubtypeSchema> | null) {
+  const normalized = normalizeMatchKey(promptText)
+  const explicitMatch = normalized.match(/\b(\d+)\s+(?:scene|scenes|shot|shots|beat|beats)\b/)
+  const explicitCount = explicitMatch ? Number(explicitMatch[1]) : null
+  if (explicitCount && Number.isFinite(explicitCount)) {
+    return Math.min(10, Math.max(4, Math.round(explicitCount)))
+  }
+  if (formatSubtype === 'contrast_narrative') return 8
+  if (formatSubtype === 'creator_validation' || formatSubtype === 'creator_reframe') return 4
+  return 5
+}
+
+function parseMarkdownRefIds(value: string, entityLookup: EntityLookup) {
+  return Array.from(new Set(
+    value
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0)
+      .map((entry) => resolveEntityRefId(entry, entityLookup))
+      .filter((entry): entry is string => typeof entry === 'string' && entry.length > 0),
+  ))
+}
+
+function buildDerivedScenesFromMarkdownShots(shots: Array<{
+  id: string
+  title: string
+  locationRefId: string | null
+}>) {
+  const scenes: Array<{
+    id: string
+    title: string
+    summary: string
+    locationRefId: string | null
+    shotIds: string[]
+    continuityNotes: string
+    orderIndex: number
+  }> = []
+  for (const shot of shots) {
+    const previousScene = scenes[scenes.length - 1] ?? null
+    if (previousScene && previousScene.locationRefId === shot.locationRefId) {
+      previousScene.shotIds.push(shot.id)
+      continue
+    }
+    scenes.push({
+      id: `scene_${scenes.length + 1}`,
+      title: `Scene ${scenes.length + 1}`,
+      summary: shot.title,
+      locationRefId: shot.locationRefId,
+      shotIds: [shot.id],
+      continuityNotes: '',
+      orderIndex: scenes.length,
+    })
+  }
+  return scenes
+}
+
+function parseShotBlockMarkdown(input: {
+  markdown: string
+  graphName: string
+  graphSummary: string
+  entityRefs: Array<{
+    id: string
+    kind: 'character' | 'environment' | 'item'
+    role: string
+    sourceName: string
+    summary: string
+    resolution: 'existing' | 'create'
+    definitionKey?: string | null
+    planItemId?: string | null
+  }>
+  formatSubtype: z.infer<typeof cinematicFormatSubtypeSchema> | null
+  formulaFamily: z.infer<typeof cinematicFormulaFamilySchema> | null
+  dominantTrigger: z.infer<typeof cinematicDominantTriggerSchema> | null
+  promptText: string
+}) {
+  const diagnostics: string[] = []
+  const markdown = input.markdown.replace(/\r\n/g, '\n').trim()
+  if (!markdown) {
+    diagnostics.push('Markdown script output was empty.')
+    return { diagnostics, title: input.graphName, logline: input.graphSummary, tone: '', shots: [] as Array<Record<string, unknown>> }
+  }
+
+  const entityLookup = createEntityLookup(input.entityRefs)
+  const lines = markdown.split('\n')
+  let title = input.graphName
+  let logline = input.graphSummary
+  let tone = ''
+  let inReferences = false
+  let currentShotNumber: number | null = null
+  let currentField: 'action' | 'dialogue' | 'composition' | null = null
+  const shotBlocks: Array<{
+    number: number
+    role: string
+    environment: string
+    characters: string
+    props: string
+    action: string
+    composition: string
+    dialogueLines: string[]
+  }> = []
+  let currentShot: (typeof shotBlocks)[number] | null = null
+
+  const flushCurrentShot = () => {
+    if (!currentShot) return
+    shotBlocks.push(currentShot)
+    currentShot = null
+    currentShotNumber = null
+    currentField = null
+  }
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim()
+    if (!line) {
+      currentField = currentField === 'dialogue' ? 'dialogue' : null
+      continue
+    }
+    if (line.startsWith('# ')) {
+      title = line.slice(2).trim() || title
+      continue
+    }
+    if (/^Logline:/i.test(line)) {
+      logline = line.replace(/^Logline:/i, '').trim() || logline
+      continue
+    }
+    if (/^Tone:/i.test(line)) {
+      tone = line.replace(/^Tone:/i, '').trim()
+      continue
+    }
+    if (/^##\s*References\b/i.test(line)) {
+      flushCurrentShot()
+      inReferences = true
+      continue
+    }
+    const shotHeading = line.match(/^##\s*Shot\s+(\d+)\b/i)
+    if (shotHeading) {
+      flushCurrentShot()
+      inReferences = false
+      currentShotNumber = Number(shotHeading[1])
+      currentShot = {
+        number: currentShotNumber,
+        role: '',
+        environment: '',
+        characters: '',
+        props: '',
+        action: '',
+        composition: '',
+        dialogueLines: [],
+      }
+      continue
+    }
+    if (inReferences) {
+      continue
+    }
+    if (!currentShot) continue
+    if (/^Role:/i.test(line)) {
+      currentShot.role = line.replace(/^Role:/i, '').trim()
+      currentField = null
+      continue
+    }
+    if (/^Environment:/i.test(line)) {
+      currentShot.environment = line.replace(/^Environment:/i, '').trim()
+      currentField = null
+      continue
+    }
+    if (/^Characters:/i.test(line)) {
+      currentShot.characters = line.replace(/^Characters:/i, '').trim()
+      currentField = null
+      continue
+    }
+    if (/^Props:/i.test(line)) {
+      currentShot.props = line.replace(/^Props:/i, '').trim()
+      currentField = null
+      continue
+    }
+    if (/^Action:/i.test(line)) {
+      currentShot.action = line.replace(/^Action:/i, '').trim()
+      currentField = 'action'
+      continue
+    }
+    if (/^Composition:/i.test(line)) {
+      currentShot.composition = line.replace(/^Composition:/i, '').trim()
+      currentField = 'composition'
+      continue
+    }
+    if (/^Dialogue:/i.test(line)) {
+      currentField = 'dialogue'
+      continue
+    }
+    if (currentField === 'dialogue' && /^-\s+/.test(line)) {
+      currentShot.dialogueLines.push(line.replace(/^-\s+/, '').trim())
+      continue
+    }
+    if (currentField === 'action') {
+      currentShot.action = [currentShot.action, line].filter(Boolean).join(' ').trim()
+      continue
+    }
+    if (currentField === 'composition') {
+      currentShot.composition = [currentShot.composition, line].filter(Boolean).join(' ').trim()
+      continue
+    }
+  }
+  flushCurrentShot()
+
+  const seenNumbers = new Set<number>()
+  const shots = shotBlocks
+    .filter((shot) => {
+      if (seenNumbers.has(shot.number)) {
+        diagnostics.push(`Duplicate shot number ${shot.number} was dropped.`)
+        return false
+      }
+      seenNumbers.add(shot.number)
+      return true
+    })
+    .map((shot, index) => {
+      const locationRefId = (() => {
+        const resolved = shot.environment ? resolveEntityRefId(shot.environment, entityLookup) : null
+        if (!resolved && shot.environment) diagnostics.push(`Shot ${shot.number} referenced unknown environment "${shot.environment}".`)
+        return resolved
+      })()
+      const participantRefIds = parseMarkdownRefIds(shot.characters, entityLookup)
+      if (shot.characters && participantRefIds.length === 0) diagnostics.push(`Shot ${shot.number} did not resolve any character ids from "${shot.characters}".`)
+      const propRefIds = parseMarkdownRefIds(shot.props, entityLookup)
+      const dialogue = shot.dialogueLines.map((entry, dialogueIndex) => {
+        const match = entry.match(/^([a-zA-Z0-9_\-]+)\s*:\s*["“]?(.+?)["”]?$/)
+        if (!match) {
+          diagnostics.push(`Shot ${shot.number} dialogue line ${dialogueIndex + 1} could not be parsed and was dropped.`)
+          return null
+        }
+        const speakerRefId = resolveEntityRefId(match[1], entityLookup)
+        if (!speakerRefId) {
+          diagnostics.push(`Shot ${shot.number} dialogue line ${dialogueIndex + 1} referenced unknown speaker "${match[1]}".`)
+          return null
+        }
+        return {
+          id: `dialogue_${index + 1}_${dialogueIndex + 1}`,
+          speakerRefId,
+          line: match[2].trim(),
+          delivery: '',
+          startSeconds: null,
+          endSeconds: null,
+          lipSync: true,
+        }
+      }).filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+      if (!locationRefId) diagnostics.push(`Shot ${shot.number} is missing a valid Environment field.`)
+      if (participantRefIds.length === 0) diagnostics.push(`Shot ${shot.number} is missing valid Characters.`)
+      if (!shot.action.trim()) diagnostics.push(`Shot ${shot.number} is missing Action.`)
+      return {
+        id: `shot_${index + 1}`,
+        title: deriveMarkdownShotTitle(shot.action, index),
+        hookRole: parseNullableEnumValue(cinematicHookRoleSchema, shot.role),
+        formatSubtype: input.formatSubtype,
+        formulaFamily: input.formulaFamily,
+        dominantTrigger: input.dominantTrigger,
+        hookType: '',
+        targetEmotion: '',
+        personaStyle: '',
+        contrastAxis: '',
+        proofMoment: '',
+        ctaStyle: '',
+        proofType: '',
+        ctaType: '',
+        platformTarget: null,
+        participantRefIds,
+        locationRefId,
+        propRefIds,
+        shotType: normalizeShotType(shot.role || shot.action),
+        framing: '',
+        cameraAngle: '',
+        cameraMovement: '',
+        lensPreference: '',
+        durationSeconds: null,
+        visualPrompt: '',
+        compositionGuide: shot.composition.trim(),
+        beat: shot.action.trim(),
+        beats: [],
+        dialogue,
+        actions: [],
+        audio: [],
+      }
+    })
+    .filter((shot) => shot.beat.length > 0)
+
+  return { diagnostics, title, logline, tone, shots }
 }
 
 function inferShotTypeFromBeat(beat: string) {
@@ -933,6 +1288,67 @@ function buildFallbackShot(input: {
   }
 }
 
+function promptSuggestsMultiBeatNarrative(promptText: string) {
+  const normalized = normalizeMatchKey(promptText)
+  if (!normalized) return false
+  return (
+    /\b\d+\s+(scene|scenes|beats|shots)\b/.test(normalized)
+    || /\b(across|through)\s+\d+\b/.test(normalized)
+    || /\b(split path|split screen|contrast narrative|parallel life|parallel paths|two versions|escalating scenes|gap widens|final payoff)\b/.test(normalized)
+  )
+}
+
+function shotLooksLikeCatchAllSummary(shot: {
+  title: string
+  beat: string
+  compositionGuide: string
+}) {
+  const title = normalizeMatchKey(shot.title)
+  const beat = normalizeMatchKey(shot.beat)
+  const composition = normalizeMatchKey(shot.compositionGuide)
+  if (!beat) return false
+  return (
+    title === 'primary beat'
+    || /\b(create|make)\s+a\s+native/.test(beat)
+    || /\bthe script uses\b/.test(beat)
+    || /\bkeep .* readable in every beat\b/.test(beat)
+    || /\bescalate from\b/.test(beat)
+    || /\bfinal payoff frame\b/.test(beat)
+    || /\bplanned props are visibly present\b/.test(composition)
+  )
+}
+
+function buildContrastNarrativeFallbackSegments(promptText: string) {
+  const normalized = normalizeMatchKey(promptText)
+  const lower = normalized.toLowerCase()
+  const prefersMealPrep = /\bmeal prep|mealprep|lunch|takeout|missed meals|budgeting app|budget app|prep\b/.test(lower)
+  if (!/\bcontrast narrative|split path|split screen|parallel life|parallel paths|two versions|chaotic|organized|vs|versus\b/.test(lower) && !prefersMealPrep) {
+    return []
+  }
+  if (prefersMealPrep) {
+    return [
+      'Split-screen hook: chaotic version opens an empty fridge and looks stressed while organized version checks the meal-prep app and sees the day already planned.',
+      'Chaotic version rushes out the door and realizes breakfast or lunch is missing; organized version grabs a labeled container and leaves on time.',
+      'Chaotic version scrolls takeout menus and sees prices stacking up; organized version follows the app meal plan and prep checklist.',
+      'Chaotic version crashes at work hungry and distracted; organized version eats a ready lunch and keeps steady energy.',
+      'Prep-night proof: organized version portions meals and checks steps off in the app while chaotic version stares at clutter and indecision.',
+      'Lunch-break proof: chaotic version looks at another delivery receipt; organized version opens a prepared lunch in the workplace break area.',
+      'Savings proof: chaotic version sees repeated small charges and clutter; organized version sees fewer purchases and a cleaner routine.',
+      'Final payoff frame: chaotic version looks frazzled beside stacked receipts while organized version stands calm with lunch in hand and the app open as proof.',
+    ]
+  }
+  return [
+    'Split-screen hook that shows the two opposing paths clearly in one frame.',
+    'First consequence on the weaker path and first visible advantage on the stronger path.',
+    'The gap widens through money, time, or effort contrast.',
+    'A clear mechanism or routine starts producing visible results on the stronger path.',
+    'The weaker path shows stress, waste, or failure while the stronger path shows proof.',
+    'The contrast escalates through another visible dimension such as energy, convenience, or status.',
+    'A proof frame makes the winner state obvious without sound.',
+    'Final payoff frame with the clearest winner image and strongest contrast.',
+  ]
+}
+
 function expandTemporalShots(input: {
   shots: Array<{
     id: string
@@ -962,14 +1378,16 @@ function expandTemporalShots(input: {
   }>
 }) {
   const temporalSegments = splitPromptIntoTemporalSegments(input.promptText)
-  const needsExpansion = input.shots.length === 1 && temporalSegments.length >= 2
+  const contrastSegments = buildContrastNarrativeFallbackSegments(input.promptText)
+  const segments = temporalSegments.length >= 2 ? temporalSegments : contrastSegments
+  const needsExpansion = input.shots.length === 1 && segments.length >= 2
   if (!needsExpansion) return input.shots
 
   const baseShot = input.shots[0]
   const participantRefs = input.entityRefs
     .filter((entry) => entry.kind === 'character' && baseShot.participantRefIds.includes(entry.id))
     .map((entry) => ({ id: entry.id, sourceName: entry.sourceName }))
-  const expandedShots = temporalSegments.map((segment, index) => {
+  const expandedShots = segments.map((segment, index) => {
     const shotId = `shot_${index + 1}`
     const shotType = inferShotTypeFromBeat(segment)
     const dialogue = buildFallbackDialogueBeats({
@@ -992,7 +1410,7 @@ function expandTemporalShots(input: {
     return {
       ...baseShot,
       id: shotId,
-      title: deriveFallbackShotTitle(segment, index, temporalSegments.length),
+      title: deriveFallbackShotTitle(segment, index, segments.length),
       beat: segment,
       shotType,
       framing:
@@ -1161,6 +1579,7 @@ export function coerceCinematicPlannerRaw(input: unknown, options: CoerceCinemat
   const graphName = pickFirstString(record, ['graphName', 'name', 'title']) || 'Prompt Cinematic'
   const graphSummary = pickFirstString(record, ['graphSummary', 'summary', 'description']) || requestSummary
   const scriptRecord = asRecord(record.scriptDoc) ?? record
+  const rawScriptMarkdown = asString(record.rawScriptMarkdown ?? record.scriptMarkdown)
   const lockedEntityRefs = options.lockedEntityRefs
     ? options.lockedEntityRefs.map((entry) => ({ ...entry }))
     : null
@@ -1221,6 +1640,8 @@ export function coerceCinematicPlannerRaw(input: unknown, options: CoerceCinemat
     })
     .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
 
+  const rawScenes = Array.isArray(scriptRecord.scenes) ? scriptRecord.scenes : []
+
   const rawShots = Array.isArray(scriptRecord.shots)
     ? scriptRecord.shots
     : Array.isArray(scriptRecord.beats)
@@ -1228,6 +1649,71 @@ export function coerceCinematicPlannerRaw(input: unknown, options: CoerceCinemat
       : Array.isArray(scriptRecord.sequence)
         ? scriptRecord.sequence
           : []
+  const sceneDerivedShots = rawShots.length === 0
+    ? rawScenes.flatMap((entry, index) => {
+      const scene = asRecord(entry)
+      if (!scene) return []
+      const sceneId = pickFirstString(scene, ['id', 'key']) || `scene_${index + 1}`
+      const sceneTitle = pickFirstString(scene, ['title', 'name', 'label']) || `Scene ${index + 1}`
+      const sceneLocation = pickFirstString(scene, ['locationRefId', 'location', 'environment', 'setting'])
+      const sceneParticipants = scene.participantRefIds ?? scene.participants ?? scene.characters ?? scene.cast
+      const sceneProps = scene.propRefIds ?? scene.props ?? scene.items
+      const nestedShots = Array.isArray(scene.shots)
+        ? scene.shots.map((candidate) => asRecord(candidate)).filter((candidate): candidate is Record<string, unknown> => candidate !== null)
+        : []
+
+      if (nestedShots.length > 0) {
+        return nestedShots.map((nestedShot, nestedIndex) => ({
+          ...nestedShot,
+          id: pickFirstString(nestedShot, ['id', 'key']) || `${sceneId}_shot_${nestedIndex + 1}`,
+          title: pickFirstString(nestedShot, ['title', 'name', 'label']) || `${sceneTitle} ${nestedIndex + 1}`,
+          sceneId,
+          location: pickFirstString(nestedShot, ['locationRefId', 'location', 'environment', 'setting']) || sceneLocation,
+          participants: nestedShot.participantRefIds ?? nestedShot.participants ?? nestedShot.characters ?? nestedShot.cast ?? sceneParticipants,
+          props: nestedShot.propRefIds ?? nestedShot.props ?? nestedShot.items ?? sceneProps,
+        }))
+      }
+
+      const beat = pickFirstString(scene, ['summary', 'description', 'beat', 'script', 'action', 'text'])
+      if (!beat) return []
+
+      return [{
+        id: `shot_${index + 1}`,
+        title: sceneTitle,
+        beat,
+        sceneId,
+        location: sceneLocation,
+        participants: sceneParticipants,
+        props: sceneProps,
+        hookRole:
+          index === 0
+            ? 'hook'
+            : index === rawScenes.length - 1
+              ? 'payoff'
+              : 'setup',
+        shotType: normalizeShotType(scene.shotType ?? scene.type),
+        framing: pickFirstString(scene, ['framing', 'frame', 'composition']),
+        cameraAngle: pickFirstString(scene, ['cameraAngle', 'angle']),
+        cameraMovement: pickFirstString(scene, ['cameraMovement', 'movement']),
+        lensPreference: pickFirstString(scene, ['lensPreference', 'lens']),
+        visualPrompt: pickFirstString(scene, ['visualPrompt', 'prompt', 'visualDescription']),
+        compositionGuide: pickFirstString(scene, ['compositionGuide', 'blocking', 'sceneComposition', 'ingredientGuide', 'stagingNotes']),
+        formatSubtype: pickFirstString(scene, ['formatSubtype']),
+        formulaFamily: pickFirstString(scene, ['formulaFamily']),
+        dominantTrigger: pickFirstString(scene, ['dominantTrigger']),
+        hookType: pickFirstString(scene, ['hookType']),
+        targetEmotion: pickFirstString(scene, ['targetEmotion']),
+        personaStyle: pickFirstString(scene, ['personaStyle']),
+        contrastAxis: pickFirstString(scene, ['contrastAxis']),
+        proofMoment: pickFirstString(scene, ['proofMoment']),
+        ctaStyle: pickFirstString(scene, ['ctaStyle']),
+        proofType: pickFirstString(scene, ['proofType']),
+        ctaType: pickFirstString(scene, ['ctaType']),
+        platformTarget: pickFirstString(scene, ['platformTarget']),
+      }]
+    })
+    : []
+  const normalizedRawShots = rawShots.length > 0 ? rawShots : sceneDerivedShots
 
   const entityLookup = createEntityLookup(entityRefs)
 
@@ -1258,7 +1744,22 @@ export function coerceCinematicPlannerRaw(input: unknown, options: CoerceCinemat
     return id
   }
 
-  const shots = rawShots
+  const markdownParsed = rawScriptMarkdown
+    ? parseShotBlockMarkdown({
+      markdown: rawScriptMarkdown,
+      graphName,
+      graphSummary,
+      entityRefs,
+      formatSubtype: parseNullableEnumValue(cinematicFormatSubtypeSchema, record.graphSettings && asRecord(record.graphSettings)?.formatSubtype),
+      formulaFamily: parseNullableEnumValue(cinematicFormulaFamilySchema, record.graphSettings && asRecord(record.graphSettings)?.formulaFamily),
+      dominantTrigger: parseNullableEnumValue(cinematicDominantTriggerSchema, record.graphSettings && asRecord(record.graphSettings)?.dominantTrigger),
+      promptText: options.promptText ?? requestSummary,
+    })
+    : null
+
+  const shots = (markdownParsed?.shots.length ?? 0) > 0
+    ? markdownParsed!.shots
+    : normalizedRawShots
     .map((entry, index) => {
       const shot = asRecord(entry)
       if (!shot) return null
@@ -1284,19 +1785,24 @@ export function coerceCinematicPlannerRaw(input: unknown, options: CoerceCinemat
         })
       }
 
-      const propNames = collectNamedLabels(shot.propRefIds ?? shot.props ?? shot.items)
-      for (const propName of propNames) {
-        ensureEntityRef({
-          sourceName: propName,
-          kind: 'item',
-          role: 'prop',
-        })
-      }
-
       return {
         id: pickFirstString(shot, ['id', 'key']) || `shot_${index + 1}`,
+        sceneId: pickFirstString(shot, ['sceneId', 'scene', 'parentSceneId']) || null,
         title,
         beat,
+        hookRole: parseNullableEnumValue(cinematicHookRoleSchema, shot.hookRole),
+        formatSubtype: parseNullableEnumValue(cinematicFormatSubtypeSchema, shot.formatSubtype),
+        formulaFamily: parseNullableEnumValue(cinematicFormulaFamilySchema, shot.formulaFamily),
+        dominantTrigger: parseNullableEnumValue(cinematicDominantTriggerSchema, shot.dominantTrigger),
+        hookType: pickFirstString(shot, ['hookType']),
+        targetEmotion: pickFirstString(shot, ['targetEmotion']),
+        personaStyle: pickFirstString(shot, ['personaStyle']),
+        contrastAxis: pickFirstString(shot, ['contrastAxis']),
+        proofMoment: pickFirstString(shot, ['proofMoment']),
+        ctaStyle: pickFirstString(shot, ['ctaStyle']),
+        proofType: pickFirstString(shot, ['proofType']),
+        ctaType: pickFirstString(shot, ['ctaType']),
+        platformTarget: parseNullableEnumValue(cinematicPlatformTargetSchema, shot.platformTarget),
         participantRefIds: Array.from(new Set(collectNamedRefs(shot.participantRefIds ?? shot.participants ?? shot.characters ?? shot.cast, entityLookup))),
         locationRefId,
         propRefIds: Array.from(new Set(collectNamedRefs(shot.propRefIds ?? shot.props ?? shot.items, entityLookup))),
@@ -1317,6 +1823,8 @@ export function coerceCinematicPlannerRaw(input: unknown, options: CoerceCinemat
         }),
         visualPrompt: pickFirstString(shot, ['visualPrompt', 'prompt', 'visualDescription']),
         compositionGuide: pickFirstString(shot, ['compositionGuide', 'blocking', 'sceneComposition', 'ingredientGuide', 'stagingNotes']),
+        compositeRefIds: Array.from(new Set(collectNamedLabels(shot.compositeRefIds ?? shot.composites ?? shot.compositeRefs))),
+        storyboardRefIds: Array.from(new Set(collectNamedLabels(shot.storyboardRefIds ?? shot.storyboards ?? shot.storyboardRefs))),
         beats: coerceArrayWithSchema(shot.beats, cinematicBeatSchema),
         dialogue: coerceArrayWithSchema(shot.dialogue ?? shot.lines, dialogueBeatSchema).map((entry) => ({
           ...entry,
@@ -1337,6 +1845,9 @@ export function coerceCinematicPlannerRaw(input: unknown, options: CoerceCinemat
     .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
 
   const fallbackDiagnostics: string[] = []
+  if (markdownParsed) {
+    fallbackDiagnostics.push(...markdownParsed.diagnostics)
+  }
   const normalizedShots = shots.length > 0
     ? shots
     : enableFallbackShaping
@@ -1480,7 +1991,6 @@ export function coerceCinematicPlannerRaw(input: unknown, options: CoerceCinemat
         ? JSON.stringify(assistantNotesValue)
         : undefined
 
-  const rawScenes = Array.isArray(scriptRecord.scenes) ? scriptRecord.scenes : []
   const scenes = rawScenes
     .map((entry, index) => {
       const scene = asRecord(entry)
@@ -1504,9 +2014,15 @@ export function coerceCinematicPlannerRaw(input: unknown, options: CoerceCinemat
   const normalizedScenes = scenes.length > 0
     ? scenes.map((scene, index) => ({
         ...scene,
-        shotIds: scene.shotIds.length > 0
-          ? scene.shotIds.filter((shotId) => normalizedShotsWithDefaultLocation.some((shot) => shot.id === shotId))
-          : normalizedShotsWithDefaultLocation.map((shot) => shot.id),
+        shotIds: (() => {
+          const explicitShotIds = scene.shotIds.filter((shotId) => normalizedShotsWithDefaultLocation.some((shot) => shot.id === shotId))
+          if (explicitShotIds.length > 0) return explicitShotIds
+          const derivedShotIds = normalizedShotsWithDefaultLocation
+            .filter((shot) => shot.sceneId === scene.id)
+            .map((shot) => shot.id)
+          if (derivedShotIds.length > 0) return derivedShotIds
+          return scenes.length === 1 ? normalizedShotsWithDefaultLocation.map((shot) => shot.id) : []
+        })(),
         orderIndex: index,
       }))
     : (normalizedShotsWithDefaultLocation.length > 0
@@ -1521,9 +2037,9 @@ export function coerceCinematicPlannerRaw(input: unknown, options: CoerceCinemat
         }]
       : [])
   const scriptDoc = cinematicScriptDocSchema.parse({
-    title: pickFirstString(scriptRecord, ['title']) || graphName,
-    logline: pickFirstString(scriptRecord, ['logline', 'summary']) || graphSummary,
-    tone: pickFirstString(scriptRecord, ['tone']),
+    title: markdownParsed?.title || pickFirstString(scriptRecord, ['title']) || graphName,
+    logline: markdownParsed?.logline || pickFirstString(scriptRecord, ['logline', 'summary']) || graphSummary,
+    tone: markdownParsed?.tone || pickFirstString(scriptRecord, ['tone']),
     continuityNotes: pickFirstString(scriptRecord, ['continuityNotes']),
     entityBindings: entityRefs.map((entityRef) => ({
       id: entityRef.id,
@@ -1541,12 +2057,25 @@ export function coerceCinematicPlannerRaw(input: unknown, options: CoerceCinemat
     scenes: normalizedScenes,
     shots: normalizedShotsWithDefaultLocation.map((shot, index) => ({
       id: shot.id,
-      sceneId: normalizedScenes.find((scene) => scene.shotIds.includes(shot.id))?.id ?? normalizedScenes[0]?.id ?? null,
+      sceneId: shot.sceneId ?? normalizedScenes.find((scene) => scene.shotIds.includes(shot.id))?.id ?? normalizedScenes[0]?.id ?? null,
       orderIndex: index,
       title: shot.title,
       subtitle: null,
       beat: shot.beat,
       emotionalBeat: '',
+      hookRole: shot.hookRole ?? null,
+      formatSubtype: shot.formatSubtype ?? null,
+      formulaFamily: shot.formulaFamily ?? null,
+      dominantTrigger: shot.dominantTrigger ?? null,
+      hookType: shot.hookType ?? '',
+      targetEmotion: shot.targetEmotion ?? '',
+      personaStyle: shot.personaStyle ?? '',
+      contrastAxis: shot.contrastAxis ?? '',
+      proofMoment: shot.proofMoment ?? '',
+      ctaStyle: shot.ctaStyle ?? '',
+      proofType: shot.proofType ?? '',
+      ctaType: shot.ctaType ?? '',
+      platformTarget: shot.platformTarget ?? null,
       shotType: shot.shotType,
       framing: shot.framing,
       cameraAngle: shot.cameraAngle,
@@ -1585,13 +2114,22 @@ export function coerceCinematicPlannerRaw(input: unknown, options: CoerceCinemat
     requestSummary,
     graphName,
     graphSummary,
+    rawScriptMarkdown,
     entityRefs,
     scriptDoc,
     relationshipRefs,
     compositeRefPlans,
     storyboardPlan,
     shots: normalizedShotsWithDefaultLocation,
-    graphSettings: asRecord(record.graphSettings ?? record.settings) ?? {},
+    graphSettings: (() => {
+      const graphSettings = asRecord(record.graphSettings ?? record.settings) ?? {}
+      return {
+        ...graphSettings,
+        formatSubtype: parseNullableEnumValue(cinematicFormatSubtypeSchema, graphSettings.formatSubtype),
+        formulaFamily: parseNullableEnumValue(cinematicFormulaFamilySchema, graphSettings.formulaFamily),
+        dominantTrigger: parseNullableEnumValue(cinematicDominantTriggerSchema, graphSettings.dominantTrigger),
+      }
+    })(),
     diagnostics: [...diagnostics, ...fallbackDiagnostics],
     assistantNotes,
   })
@@ -1745,13 +2283,13 @@ export function cinematicEntityExtractionSystemPrompt() {
     'You extract the world entities a cinematic prompt depends on before graph authoring.',
     'Return JSON only.',
     'Return exactly one JSON object with top-level keys: requestSummary, entityRefs, diagnostics, assistantNotes.',
-    'entityRefs must contain every important character, environment, and item mentioned or clearly required by the prompt.',
+    'entityRefs must contain every important character, environment, and only the item refs that are clearly specific, continuity-critical, reusable, or hero-level in the prompt.',
     'Each entityRef must contain: id, kind, role, sourceName, summary, resolution, definitionKey, planItemId.',
     'Use kind character for named people, speakers, fighters, targets, and participants unless the supplied catalog clearly contradicts that.',
     'Use kind environment for locations, rooms, taverns, streets, wilderness areas, and other settings.',
-    'Use kind item for props, weapons, artifacts, tools, and carried objects.',
-    'Do not extract incidental set dressing as standalone items unless the prompt makes them a reusable hero prop or the supplied catalog clearly contains them already.',
-    'Examples of incidental set dressing that should usually stay inside shot staging rather than entityRefs: table, chair, stool, wall, floor, room dressing, crowd extras, generic mugs, generic bottles.',
+    'Use kind item only for specific, reusable, or hero props such as a named artifact, a signature weapon, a featured product, or a recurring prop that must stay visually consistent across multiple beats.',
+    'Do not elevate generic everyday objects, carrier objects, financial symbols, or background staging props into standalone item refs unless the prompt clearly makes them an important recurring hero object.',
+    'If an object can live inside shot staging or composition notes without needing its own reusable reference, keep it out of entityRefs.',
     'Set resolution to "existing" only when a supplied definitionKey is a confident match.',
     'Set resolution to "create" when the prompt needs a new entity that is not clearly in the supplied catalog.',
     'Prefer reusing supplied definitions instead of creating near-duplicates.',
@@ -1774,20 +2312,135 @@ export function cinematicEntityResolutionSystemPrompt() {
   ].join('\n')
 }
 
-export function cinematicScriptRepairSystemPrompt() {
+export function cinematicScriptRepairSystemPrompt(
+  presetFamily: z.infer<typeof cinematicPresetFamilySchema> = 'story_movie_tv',
+  formatSubtype: z.infer<typeof cinematicFormatSubtypeSchema> | null = null,
+  targetShotCount = 5,
+) {
   return [
     'You repair a weak GraphCore cinematic script draft into a stronger authored script.',
     'Return JSON only.',
-    'Return exactly one JSON object with top-level keys: requestSummary, graphName, graphSummary, scriptDoc, graphSettings, diagnostics, assistantNotes.',
+    'Return exactly one JSON object with top-level keys: requestSummary, graphName, graphSummary, rawScriptMarkdown, graphSettings, diagnostics, assistantNotes.',
     'Preserve the same story intent, locked entity ids, and overall cinematic shape unless one of the reported quality failures requires adjustment.',
     'Do not invent new entities, rename existing entities, or change locked ids.',
-    'Rewrite generic shot titles into specific dramatic titles.',
-    'Rewrite beat text into authored cinematic prose instead of copying or paraphrasing the prompt directly.',
-    'For dialogue scenes, write actual spoken dialogue lines in character voice. Do not use summary placeholders like "X delivers a cutting accusation."',
-    'Fix actorRefId and targetRefId when the prompt clearly names who acts on whom.',
-    'Remove or demote incidental staging props like tables, chairs, mugs, and bottles unless the prompt clearly makes them an important interactive prop.',
+    `Write the script in this exact markdown contract with ${targetShotCount} shot blocks unless the quality failures explicitly justify fewer:`,
+    '# Title',
+    'Logline: ...',
+    'Tone: ...',
+    '',
+    '## References',
+    '- ref_id | kind | Human Label',
+    '',
+    '## Shot 1',
+    'Role: hook',
+    'Environment: environment_ref_id',
+    'Characters: character_ref_a, character_ref_b',
+    'Props: item_ref_a, item_ref_b',
+    'Action: Literal on-screen action only.',
+    'Dialogue:',
+    '- character_ref_a: "Actual line"',
+    'Composition: Short framing note.',
+    '',
+    'Repeat the same format for every shot.',
+    'Action is required for every shot. Environment and Characters are required for every shot. Props, Role, Dialogue, and Composition are optional.',
+    'Do not return scriptDoc JSON. Put the full script inside rawScriptMarkdown as one markdown string.',
+    'Do not invent new reference ids. Use only the locked ids from the provided reference list.',
+    'Keep Action literal, visual, and specific. Do not summarize the whole ad in one block.',
+    `Locked preset family: ${getCinematicPresetLabel(presetFamily)}.`,
+    formatSubtype ? `Locked format subtype: ${getCinematicFormatSubtypeLabel(formatSubtype)}.` : null,
+    'Make the first UGC shot a stronger stop-scroll image when it only sets up the situation without a real hook, contrast, or problem.',
+    'Replace abstract payoff language like control, confidence, handled, winning, or calm with visible in-frame evidence whenever possible.',
+    'If consecutive middle shots repeat the same payoff dimension, diversify them so the sequence escalates through different visible dimensions such as time, money, stress, energy, proof, or convenience.',
+    'When a product appears in a UGC ad, show what it is doing on screen instead of letting it sit as a passive prop.',
+    'Strengthen the final shot so it lands as the clearest proof, payoff, or CTA frame rather than a generic pretty ending.',
     'Keep shots concrete, readable, and screenplay-like.',
   ].join('\n')
+}
+
+function isUgcCreativeFlow(input: {
+  promptText: string
+  scriptDoc: z.infer<typeof cinematicScriptDocSchema>
+}) {
+  if (inferCinematicPresetFamilyFromPrompt(input.promptText) !== 'story_movie_tv') return true
+  return input.scriptDoc.shots.some((shot) => {
+    const formatSubtype = shot.formatSubtype ?? null
+    return Boolean(formatSubtype) || Boolean(shot.formulaFamily) || Boolean(shot.dominantTrigger)
+  })
+}
+
+function shotTextForCreativeChecks(shot: z.infer<typeof cinematicScriptShotSchema>) {
+  return [shot.beat, shot.visualPrompt, shot.compositionGuide, shot.emotionalBeat].filter(Boolean).join(' ')
+}
+
+function shotUsesWriterlyOrMetaphoricalLanguage(text: string) {
+  const normalized = normalizeMatchKey(text)
+  if (!normalized) return false
+  return (
+    /\b(as if|feels like|feel like|looks like|like a|like the|personally betrayed|quiet little|weirdly powerful|asked too much|obvious answer)\b/.test(normalized)
+    || /\b(calm as ever|winning with|clearly winning|bad habit with a login)\b/.test(normalized)
+  )
+}
+
+function shotContainsVisibleProofCue(text: string) {
+  const normalized = normalizeMatchKey(text)
+  if (!normalized) return false
+  return /\b(app|screen|receipt|receipts|container|labeled|checklist|calendar|plan|grocery|price|prices|charge|charges|total|totals|before after|split screen|side by side|demo|proof|comparison|tracking|mapped out|list|lists)\b/.test(normalized)
+}
+
+function shotUsesAbstractPayoffLanguage(text: string) {
+  const normalized = normalizeMatchKey(text)
+  if (!normalized) return false
+  return /\b(control|confidence|handled|handling|winning|winner|calm|calmer|stable|stability|effortless|effortlessly|powerful|organized|in control|answer|solution|system)\b/.test(normalized)
+}
+
+function shotHasStrongHookImage(text: string, formatSubtype: z.infer<typeof cinematicFormatSubtypeSchema> | null) {
+  const normalized = normalizeMatchKey(text)
+  if (!normalized) return false
+  if (formatSubtype === 'contrast_narrative') {
+    return /\b(split|split screen|side by side|two versions|versus|vs|contrast|before after|left|right)\b/.test(normalized)
+      && /\b(empty|mess|chaos|stare|stress|crash|panic|late|receipts|stack|winner|clean|proof|product)\b/.test(normalized)
+  }
+  return /\b(problem|pain|wrong|empty|mess|chaos|crash|caught|stare|reveal|receipt|proof|split|comparison|before|after|stack)\b/.test(normalized)
+}
+
+function inferPayoffDimensions(shot: z.infer<typeof cinematicScriptShotSchema>) {
+  const normalized = normalizeMatchKey(shotTextForCreativeChecks(shot))
+  const dimensions: string[] = []
+  if (/\b(save|savings|money|cost|price|receipt|receipts|charge|charges|budget)\b/.test(normalized)) dimensions.push('money')
+  if (/\b(late|early|time|schedule|rush|minutes|prep night)\b/.test(normalized)) dimensions.push('time')
+  if (/\b(energy|crash|tired|fuel|fed|coffee|fatigue)\b/.test(normalized)) dimensions.push('energy')
+  if (/\b(stress|panic|frazzled|mess|chaos|clutter|defeated)\b/.test(normalized)) dimensions.push('stress')
+  if (/\b(app|plan|checklist|calendar|routine|container|labeled|mapped out)\b/.test(normalized)) dimensions.push('routine')
+  if (/\b(proof|screen|receipt|totals|visible|shown|shows|opens|tap|check)\b/.test(normalized)) dimensions.push('proof')
+  return dimensions
+}
+
+function subtypeLooksAdLike(formatSubtype: z.infer<typeof cinematicFormatSubtypeSchema> | null) {
+  return typeof formatSubtype === 'string' && (formatSubtype.startsWith('ad_') || formatSubtype === 'contrast_narrative')
+}
+
+function shotShowsProductFunction(text: string) {
+  const normalized = normalizeMatchKey(text)
+  if (!normalized) return false
+  return /\b(open|opens|tap|taps|check|checks|show|shows|track|tracks|map|maps|plan|plans|calculate|calculates|organize|organizes|queue|queues|schedule|schedules|display|displays|compare|compares|generat|sort|preps)\b/.test(normalized)
+}
+
+export function scriptNeedsMultiBeatFallback(input: {
+  promptText: string
+  scriptDoc: z.infer<typeof cinematicScriptDocSchema>
+}) {
+  const shots = input.scriptDoc.shots
+  const firstShot = shots[0] ?? null
+  const hasContrastNarrative = shots.some((shot) => shot.formatSubtype === 'contrast_narrative')
+  if (shots.length === 0) return true
+  if (hasContrastNarrative && shots.length < 4) return true
+  if (promptSuggestsMultiBeatNarrative(input.promptText) && shots.length < 2) return true
+  if (!firstShot) return false
+  return shots.length === 1 && shotLooksLikeCatchAllSummary({
+    title: firstShot.title,
+    beat: firstShot.beat,
+    compositionGuide: firstShot.compositionGuide,
+  })
 }
 
 export function evaluateCinematicScriptQuality(input: {
@@ -1803,16 +2456,14 @@ export function evaluateCinematicScriptQuality(input: {
     promptEchoShots: false,
     genericShotTitles: false,
     incidentalPropRelationships: false,
+    ugcCreativeWeakness: false,
   }
+  const isUgcFlow = isUgcCreativeFlow(input)
+  const firstShot = input.scriptDoc.shots[0] ?? null
+  const lastShot = input.scriptDoc.shots[input.scriptDoc.shots.length - 1] ?? null
 
   for (const shot of input.scriptDoc.shots) {
     const impliesDialogue = shotImpliesDialogue({
-      promptText: input.promptText,
-      title: shot.title,
-      beat: shot.beat,
-      shotType: shot.shotType,
-    })
-    const impliesAction = shotImpliesAction({
       promptText: input.promptText,
       title: shot.title,
       beat: shot.beat,
@@ -1830,12 +2481,6 @@ export function evaluateCinematicScriptQuality(input: {
       flags.usedDialogueFallback = true
       failures.push(`Shot "${shot.id}" implies dialogue but provides no dialogue beats.`)
     }
-    if (impliesAction && shot.actions.length === 0) {
-      failures.push(`Shot "${shot.id}" implies action but provides no action beats.`)
-    }
-    if ((impliesDialogue || impliesAction) && shot.audio.length === 0) {
-      failures.push(`Shot "${shot.id}" needs audio cues but provides none.`)
-    }
     for (const dialogue of shot.dialogue) {
       const speakerName =
         input.scriptDoc.entityBindings.find((binding) => binding.id === dialogue.speakerRefId)?.sourceName
@@ -1846,6 +2491,96 @@ export function evaluateCinematicScriptQuality(input: {
         failures.push(`Shot "${shot.id}" contains placeholder or summary dialogue.`)
         break
       }
+    }
+    if (!isUgcFlow) continue
+
+    const shotText = shotTextForCreativeChecks(shot)
+    if (shotUsesWriterlyOrMetaphoricalLanguage(shotText)) {
+      flags.ugcCreativeWeakness = true
+      failures.push(`UGC shot "${shot.id}" uses writerly or metaphorical phrasing instead of literal on-screen description.`)
+    }
+    if (
+      (shot.hookRole === 'proof' || shot.hookRole === 'payoff' || shot.hookRole === 'cta' || subtypeLooksAdLike(shot.formatSubtype))
+      && shotUsesAbstractPayoffLanguage(shotText)
+      && !shotContainsVisibleProofCue(shotText)
+    ) {
+      flags.ugcCreativeWeakness = true
+      failures.push(`UGC shot "${shot.id}" describes payoff abstractly without enough visible proof.`)
+    }
+  }
+
+  if (isUgcFlow && firstShot) {
+    const firstShotText = shotTextForCreativeChecks(firstShot)
+    if (!shotHasStrongHookImage(firstShotText, firstShot.formatSubtype ?? null)) {
+      flags.ugcCreativeWeakness = true
+      failures.push(`UGC first shot "${firstShot.id}" needs a clearer stop-scroll hook image or immediate problem/contrast.`)
+    }
+    if (input.scriptDoc.shots.length === 1 && shotLooksLikeCatchAllSummary({
+      title: firstShot.title,
+      beat: firstShot.beat,
+      compositionGuide: firstShot.compositionGuide,
+    })) {
+      flags.ugcCreativeWeakness = true
+      failures.push('UGC script collapsed into one generic summary shot instead of authored beats.')
+    }
+  }
+
+  if (isUgcFlow && promptSuggestsMultiBeatNarrative(input.promptText) && input.scriptDoc.shots.length < 2) {
+    flags.ugcCreativeWeakness = true
+    failures.push('Prompt implies a multi-beat sequence, but the authored script does not break the sequence into enough shots.')
+  }
+
+  if (isUgcFlow) {
+    const adLikeShots = input.scriptDoc.shots.filter((shot) => subtypeLooksAdLike(shot.formatSubtype))
+    if (
+      adLikeShots.length > 0
+      && adLikeShots.some((shot) => shotTextForCreativeChecks(shot).trim())
+      && !adLikeShots.some((shot) => shotShowsProductFunction(shotTextForCreativeChecks(shot)))
+    ) {
+      flags.ugcCreativeWeakness = true
+      failures.push('UGC ad sequence shows the product but does not clearly show the product doing its job on screen.')
+    }
+  }
+
+  if (isUgcFlow && input.scriptDoc.shots.length >= 4) {
+    let repeatedDimensionPairs = 0
+    for (let index = 1; index < input.scriptDoc.shots.length - 1; index += 1) {
+      const currentDimensions = inferPayoffDimensions(input.scriptDoc.shots[index])
+      const nextDimensions = inferPayoffDimensions(input.scriptDoc.shots[index + 1])
+      if (currentDimensions.length === 0 || nextDimensions.length === 0) continue
+      if (currentDimensions.some((dimension) => nextDimensions.includes(dimension))) {
+        repeatedDimensionPairs += 1
+      }
+    }
+    if (repeatedDimensionPairs >= 2) {
+      flags.ugcCreativeWeakness = true
+      failures.push('UGC middle shots repeat the same payoff or pain dimension too often instead of escalating through new visible dimensions.')
+    }
+  }
+
+  if (isUgcFlow && input.scriptDoc.shots.some((shot) => shot.formatSubtype === 'contrast_narrative')) {
+    if (input.scriptDoc.shots.length < 4) {
+      flags.ugcCreativeWeakness = true
+      failures.push('Contrast narrative output is under-segmented and needs multiple escalating shots, not a collapsed summary beat.')
+    }
+    const distinctDimensions = new Set<string>()
+    for (const shot of input.scriptDoc.shots) {
+      for (const dimension of inferPayoffDimensions(shot)) distinctDimensions.add(dimension)
+    }
+    if (distinctDimensions.size < 3) {
+      flags.ugcCreativeWeakness = true
+      failures.push('Contrast narrative beats should widen the gap across multiple visible dimensions instead of repeating one flat comparison.')
+    }
+  }
+
+  if (isUgcFlow && lastShot) {
+    const lastShotText = shotTextForCreativeChecks(lastShot)
+    if (
+      !shotContainsVisibleProofCue(lastShotText)
+      && !/\b(winner|wins|final|ending|payoff|cta|proof|strongest|contrast|obvious)\b/.test(normalizeMatchKey(lastShotText))
+    ) {
+      flags.ugcCreativeWeakness = true
+      failures.push(`UGC final shot "${lastShot.id}" should land as the clearest proof, payoff, or winner frame.`)
     }
   }
 
@@ -1868,43 +2603,70 @@ export function evaluateCinematicScriptQuality(input: {
 export function cinematicScriptPlannerSystemPrompt(
   presetFamily: z.infer<typeof cinematicPresetFamilySchema> = 'story_movie_tv',
   formatSubtype: z.infer<typeof cinematicFormatSubtypeSchema> | null = null,
+  targetShotCount = 5,
 ) {
   return [
     'You are the GraphCore cinematic script planner.',
     'Return JSON only.',
-    'Return exactly one JSON object with top-level keys: requestSummary, graphName, graphSummary, scriptDoc, graphSettings, diagnostics, assistantNotes.',
-    'scriptDoc must be an object with keys: title, logline, tone, continuityNotes, statusPayoffType, narrativeArcTemplate, sceneCount, referenceVault, scenes, shots, relationships, compositeRefs, storyboard.',
+    'Return exactly one JSON object with top-level keys: requestSummary, graphName, graphSummary, rawScriptMarkdown, graphSettings, diagnostics, assistantNotes.',
+    'rawScriptMarkdown must contain the full authored script in markdown. Do not return scriptDoc JSON.',
     'Plan a cinematic script, not patch operations or graph nodes.',
     'The prompt context includes a locked entity set that has already been resolved against the project.',
     'Do not invent new entities, rename them, or change their ids.',
-    'Every shot must name the participantRefIds, locationRefId, and propRefIds that are relevant for that beat whenever those ingredients exist in the request.',
-    'Prompts like "Character A fights Character B in Environment C using Weapon D" must preserve both characters, the environment, and the weapon as explicit shot ingredients.',
-    'Each scene should group one or more ordered shots and preserve continuity notes when useful.',
-    'When the prompt names multiple dramatic phases in one sentence, break them into separate shots instead of compressing them into one.',
-    'Named people in an argument, fight, dialogue, or reaction scene are characters unless the supplied catalog clearly says otherwise.',
-    'Only reference ids from the locked entity set in shots, relationships, dialogue, action beats, audio beats, storyboards, and composites.',
-    'Every shot must be concrete and implementation-facing with camera/framing intent.',
-    'Do not assign shot durationSeconds unless the prompt explicitly asks for timing or the beat itself contains explicit timing language.',
-    'When timing is not explicit, leave durationSeconds null and let compile-time timing inference determine shot length from dialogue and action content.',
-    'Give every shot a specific dramatic title. Avoid generic titles like "Shot 1", "Beat 1", "Escalation", or "Final beat" unless the prompt itself explicitly uses those labels.',
-    'Write each shot beat as authored cinematic prose. Do not copy the user prompt into the beat field.',
-    'Include a short compositionGuide for each shot that explains how to combine the planned ingredients in frame.',
-    'If the prompt contains temporal cues like "then", "finally", "ending with", "at the end", or "until", split the sequence into multiple ordered shots rather than collapsing everything into one shot.',
-    'Argument, confrontation, and dialogue scenes should usually produce at least two shots when escalation or a final physical beat is present.',
-    'When a physical action is named, include at least one explicit action beat and populate actorRefId and targetRefId.',
-    'When a verbal exchange or argument is named, include explicit dialogue beats with speakerRefId values and actual spoken lines.',
-    'Dialogue line text must be what the character actually says, not a summary of what they say.',
-    'Populate dialogue, actions, and audio arrays whenever the prompt implies them; do not leave them empty for argument, confrontation, or fight scenes.',
-    'Use storyboard and compositeRefs only as authoring aids; do not reason about graph nodes or graph topology.',
-    'Prefer 1-5 shots for v1 unless the prompt explicitly asks for a longer sequence.',
-    'Default to a linear sequence.',
-    'Use environments as location anchors when possible.',
+    `Write exactly ${targetShotCount} shot blocks unless the prompt explicitly asks for a nearby count.`,
+    'Use this exact markdown contract inside rawScriptMarkdown:',
+    '# Title',
+    'Logline: ...',
+    'Tone: ...',
+    '',
+    '## References',
+    '- ref_id | kind | Human Label',
+    '',
+    '## Shot 1',
+    'Role: hook',
+    'Environment: environment_ref_id',
+    'Characters: character_ref_a, character_ref_b',
+    'Props: item_ref_a, item_ref_b',
+    'Action: Literal on-screen action only.',
+    'Dialogue:',
+    '- character_ref_a: "Actual line"',
+    'Composition: Short framing note.',
+    '',
+    'Repeat the same format for every shot.',
+    'Required per shot: Shot heading, Environment, Characters, Action.',
+    'Optional per shot: Role, Props, Dialogue, Composition.',
+    'Only use reference ids from the locked entity set in the References section and shot blocks.',
+    'Do not invent new reusable item refs from generic props. If an object is not already in the locked entity set and is not clearly a specific recurring hero object, keep it inside Action or Composition.',
+    'When the prompt names multiple phases, split them into separate shot blocks instead of compressing them into one.',
+    'Dialogue must use actual spoken lines. Do not summarize what the character says.',
+    'Action is the canonical shot script. It must describe only what is visibly happening on screen.',
     `Locked preset family: ${getCinematicPresetLabel(presetFamily)}.`,
     formatSubtype ? `Locked format subtype: ${getCinematicFormatSubtypeLabel(formatSubtype)}.` : null,
     ...presetPlannerInstructions(presetFamily, formatSubtype),
     ...subtypePlannerInstructions(formatSubtype),
     presetFamily !== 'story_movie_tv'
-      ? 'For UGC planning, populate graphSettings.formatSubtype, graphSettings.formulaFamily, graphSettings.dominantTrigger, and shot fields like contrastAxis, proofMoment, and ctaStyle when relevant.'
+      ? 'For UGC planning, graphSettings should keep the locked formatSubtype, formulaFamily, and dominantTrigger.'
+      : null,
+    presetFamily !== 'story_movie_tv'
+      ? 'For UGC shots, write literal on-screen descriptions, not clever copy, metaphor, or polished ad-agency prose.'
+      : null,
+    presetFamily !== 'story_movie_tv'
+      ? 'Every UGC shot should be understandable from a still frame and clear enough to read without sound.'
+      : null,
+    presetFamily !== 'story_movie_tv'
+      ? 'Give each UGC shot one primary job in the arc: hook, pain, mechanism, proof, payoff, or CTA. Use Role to reflect that shot job when helpful.'
+      : null,
+    presetFamily !== 'story_movie_tv'
+      ? 'Make the first UGC shot a stop-scroll image with immediate contrast, problem, or curiosity instead of gentle setup.'
+      : null,
+    presetFamily !== 'story_movie_tv'
+      ? 'When showing a product, show what it is doing on screen. Do not let the product sit in frame as a passive prop.'
+      : null,
+    presetFamily !== 'story_movie_tv'
+      ? 'Make proof visible in-frame through screens, receipts, containers, comparison states, actions, or other concrete evidence instead of abstract claims like control, confidence, or winning.'
+      : null,
+    presetFamily !== 'story_movie_tv'
+      ? 'Vary the middle shots across different visible payoff dimensions such as time, money, stress, energy, convenience, or proof instead of repeating the same comparison in new words.'
       : null,
     'graphSettings should only include fields that matter for this cinematic.',
   ].filter((entry): entry is string => Boolean(entry)).join('\n')
@@ -1981,19 +2743,29 @@ export function finalizeCinematicEntityRefs(
 }
 
 export function materializeCinematicPlan(rawPlan: z.infer<typeof cinematicPlannerRawSchema>) {
+  const rawGraphSettings = {
+    ...(rawPlan.graphSettings ?? {}),
+    formatSubtype: parseNullableEnumValue(cinematicFormatSubtypeSchema, rawPlan.graphSettings?.formatSubtype),
+    formulaFamily: parseNullableEnumValue(cinematicFormulaFamilySchema, rawPlan.graphSettings?.formulaFamily),
+    dominantTrigger: parseNullableEnumValue(cinematicDominantTriggerSchema, rawPlan.graphSettings?.dominantTrigger),
+  }
   const inferredPresetFamily =
-    rawPlan.graphSettings?.presetFamily
+    rawGraphSettings?.presetFamily
     ?? inferCinematicPresetFamilyFromPrompt(`${rawPlan.requestSummary} ${rawPlan.graphSummary}`)
   const inferredFormatSubtype = coerceFormatSubtypeForPresetFamily(
     inferredPresetFamily,
-    rawPlan.graphSettings?.formatSubtype
+    rawGraphSettings?.formatSubtype
       ?? inferCinematicFormatSubtypeFromPrompt(`${rawPlan.requestSummary} ${rawPlan.graphSummary}`, inferredPresetFamily),
   )
+  const presetPatch = buildCinematicSettingsPatchFromPresetFamily(inferredPresetFamily)
+  const subtypePatch = buildCinematicSettingsPatchFromFormatSubtype(inferredPresetFamily, inferredFormatSubtype)
   const effectiveGraphSettings = {
-    ...buildCinematicSettingsPatchFromPresetFamily(inferredPresetFamily),
-    ...buildCinematicSettingsPatchFromFormatSubtype(inferredPresetFamily, inferredFormatSubtype),
-    ...(rawPlan.graphSettings ?? {}),
+    ...presetPatch,
+    ...subtypePatch,
+    ...rawGraphSettings,
     formatSubtype: inferredFormatSubtype,
+    formulaFamily: rawGraphSettings.formulaFamily ?? subtypePatch.formulaFamily ?? deriveDefaultFormulaFamilyFromFormatSubtype(inferredFormatSubtype),
+    dominantTrigger: rawGraphSettings.dominantTrigger ?? subtypePatch.dominantTrigger ?? deriveDefaultDominantTriggerFromFormatSubtype(inferredFormatSubtype),
   }
   const scriptDoc = rawPlan.scriptDoc
     ? cinematicScriptDocSchema.parse(rawPlan.scriptDoc)
@@ -2109,6 +2881,7 @@ export function materializeCinematicPlan(rawPlan: z.infer<typeof cinematicPlanne
     graphName: rawPlan.graphName,
     graphSummary: rawPlan.graphSummary,
     entityRefs: rawPlan.entityRefs,
+    rawScriptMarkdown: rawPlan.rawScriptMarkdown ?? '',
     scriptDoc,
     relationshipRefs: scriptDoc.relationships,
     compositeRefPlans: scriptDoc.compositeRefs,

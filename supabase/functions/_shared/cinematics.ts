@@ -73,41 +73,45 @@ function describePresetPromptStyle(presetFamily: ReturnType<typeof getCinematicS
     case 'story_movie_tv':
       return 'Use film or TV keyframe language with continuity, staging, and storyboard-level clarity.'
     case 'ugc_creator':
-      return 'Use believable creator-shot language for a handheld, native short-form UGC frame.'
+      return 'Use believable creator-shot language for a handheld, native short-form UGC frame. Keep the wording literal and visually direct.'
     case 'ugc_direct_response_ad':
-      return 'Use direct-response ad language with a strong hook frame, visible product, and immediate proof.'
+      return 'Use direct-response ad language with a strong hook frame, visible product, and immediate proof. Show the product causing the better outcome.'
     case 'ugc_faceless_format':
-      return 'Use faceless short-form language centered on objects, process, screens, or demo action.'
+      return 'Use faceless short-form language centered on objects, process, screens, or demo action. Keep the frame visually legible without relying on facial acting.'
   }
 }
 
 function describeSubtypePromptStyle(formatSubtype: ReturnType<typeof getCinematicSettings>['formatSubtype']) {
   switch (formatSubtype) {
     case 'creator_problem_solution':
-      return 'Bias toward creator-native problem, use case, soft proof, and soft CTA.'
+      return 'Bias toward creator-native problem, use case, soft proof, and soft CTA. Avoid polished ad-slogan phrasing.'
     case 'creator_reframe':
-      return 'Bias toward naming the viewer behavior, reframing it, and landing an emotional payoff.'
+      return 'Bias toward naming the viewer behavior, reframing it, and landing an emotional payoff through believable creator delivery.'
     case 'creator_validation':
-      return 'Bias toward emotional recognition, reassurance, and low-pressure delivery.'
+      return 'Bias toward emotional recognition, reassurance, and low-pressure delivery instead of hard selling.'
     case 'ad_problem_solution':
-      return 'Bias toward pain, product, proof, and direct response clarity.'
+      return 'Bias toward pain, product, proof, and direct response clarity with concrete visible evidence.'
     case 'ad_mechanism_proof':
-      return 'Bias toward mechanism visibility, explicit demonstration, and readable proof.'
+      return 'Bias toward mechanism visibility, explicit demonstration, and readable proof. Make the function obvious on screen.'
     case 'ad_before_after':
-      return 'Bias toward transformation framing with before, intervention, and after contrast.'
+      return 'Bias toward transformation framing with before, intervention, and after contrast that reads clearly on mute.'
     case 'ad_comparison':
-      return 'Bias toward side-by-side or option-versus-option clarity with a clear winner.'
+      return 'Bias toward side-by-side or option-versus-option clarity with a clear winner and visible proof.'
     case 'faceless_demo':
       return 'Bias toward object, product, or workflow readability without relying on a face.'
     case 'faceless_explainer':
       return 'Bias toward wrong-belief hooks, explanation, mechanism, and clean visual reasoning.'
     case 'faceless_process':
-      return 'Bias toward process progression, reveal, and satisfying payoff.'
+      return 'Bias toward process progression, reveal, and satisfying payoff through visibly different stages.'
     case 'contrast_narrative':
-      return 'Bias toward escalating two-pole contrast, status or transformation payoff, and loopable visual storytelling.'
+      return 'Bias toward escalating two-pole contrast, status or transformation payoff, and loopable visual storytelling. Keep both poles readable and widen the gap each beat.'
     default:
       return null
   }
+}
+
+function subtypeLooksLikeAd(formatSubtype: ReturnType<typeof getCinematicSettings>['formatSubtype']) {
+  return typeof formatSubtype === 'string' && (formatSubtype.startsWith('ad_') || formatSubtype === 'contrast_narrative')
 }
 
 export function extractFalVideoUrl(data: unknown) {
@@ -428,6 +432,42 @@ export function resolveStoryboardSources(snapshot: { definitions?: unknown[]; as
   const storyboardNode = findNode(graph, storyboardNodeKey)
   if (!storyboardNode) return []
   const config = getStoryboardRefNodeConfig(storyboardNode)
+  const directEdgeSources = graph.edges
+    .filter((edge) => asString(asRecord(edge.target).nodeKey) === storyboardNodeKey)
+    .filter((edge) => isAssetDependencyEdge(graph, edge))
+    .map((edge) => {
+      const definitions = Array.isArray(snapshot.definitions) ? snapshot.definitions.map((entry) => asRecord(entry) as SnapshotDefinition) : []
+      const assets = Array.isArray(snapshot.assets) ? snapshot.assets.map((entry) => asRecord(entry) as SnapshotAsset) : []
+      const sourceNode = findNode(graph, String(asRecord(edge.source).nodeKey ?? ''))
+      if (!sourceNode || !['asset_ref', 'composite_ref', 'storyboard_ref'].includes(sourceNode.type)) return null
+      const resolved = resolveNodeAssetSnapshot({
+        sourceNode,
+        definitions,
+        assets,
+      })
+      if (!resolved) return null
+      const assetUrl = resolveAssetUrl(resolved.asset)
+      const modality =
+        resolved.asset?.kind === 'video'
+          ? 'video'
+          : resolved.asset?.kind === 'audio'
+            ? 'audio'
+            : 'image'
+      return {
+        node: sourceNode,
+        definition: resolved.definition,
+        asset: resolved.asset,
+        imageUrl: modality === 'image' ? assetUrl : null,
+        assetUrl,
+        modality,
+        config: resolved.config,
+        refId: resolved.refId,
+        role: resolved.role,
+        priority: resolved.priority,
+        label: resolved.label,
+      }
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
   const shots = resolveStoryboardTargetShots(graph, storyboardNodeKey)
   const targetStoryboardRefId = config.panelId ?? config.storyboardId
   const refIds = Array.from(new Set(
@@ -443,11 +483,17 @@ export function resolveStoryboardSources(snapshot: { definitions?: unknown[]; as
     )),
   )).filter((refId) => refId !== targetStoryboardRefId)
 
-  return buildResolvedSourceEntries({
+  const resolvedEntries = buildResolvedSourceEntries({
     snapshot,
     graph,
     refIds,
   })
+  const merged = [...directEdgeSources]
+  for (const entry of resolvedEntries) {
+    if (merged.some((candidate) => (candidate.refId ?? candidate.node.key) === (entry.refId ?? entry.node.key))) continue
+    merged.push(entry)
+  }
+  return merged
 }
 
 export function resolveTakeStillReferenceImageUrls(
@@ -535,9 +581,7 @@ export function buildSeedanceExecutionPlan(input: {
     shot.cameraAngle.trim() ? `Camera angle: ${shot.cameraAngle.trim()}.` : null,
     shot.cameraMovement.trim() ? `Camera movement: ${shot.cameraMovement.trim()}.` : null,
     shot.lensPreference.trim() ? `Lens: ${shot.lensPreference.trim()}.` : null,
-    ...shot.actions.map((entry) => `Action beat: ${entry.verb}${entry.stagingNotes ? ` (${entry.stagingNotes})` : ''}.`),
     ...shot.dialogue.map((entry) => `Dialogue: ${entry.line}${entry.delivery ? ` (${entry.delivery})` : ''}.`),
-    ...shot.audio.map((entry) => `${entry.kind}: ${entry.cue}.`),
   ].filter((entry): entry is string => Boolean(entry))
 
   const referenceDirectives = keptReferenceInputs.map((entry, index) => {
@@ -657,8 +701,15 @@ function buildSeedanceTakePrompt(input: {
   }>
 }) {
   const continuityAnchors = input.keptReferenceInputs.slice(0, 5).map((entry) => entry.label)
+  const arcSummary =
+    input.shots.length === 0
+      ? null
+      : input.shots.length === 1
+        ? input.shots[0].beat.trim() || input.shots[0].title
+        : `${input.shots[0].title} builds through ${input.shots.slice(1, -1).map((shot) => shot.title).join(', ') || 'the middle beats'} and lands on ${input.shots[input.shots.length - 1].title}.`
   const beatLines = input.shots.map((shot, index) => [
     `Beat ${index + 1}: ${shot.title}.`,
+    `Segment duration: ${shot.durationSeconds}s.`,
     shot.hookRole ? `Role: ${shot.hookRole}.` : null,
     shot.targetEmotion.trim() ? `Target emotion: ${shot.targetEmotion.trim()}.` : null,
     shot.personaStyle.trim() ? `Persona or delivery: ${shot.personaStyle.trim()}.` : null,
@@ -668,7 +719,6 @@ function buildSeedanceTakePrompt(input: {
     shot.proofType.trim() ? `Proof cue: ${shot.proofType.trim()}.` : null,
     shot.ctaType.trim() ? `CTA style: ${shot.ctaType.trim()}.` : null,
     ...shot.dialogue.map((entry) => `Dialogue: ${entry.line}${entry.delivery ? ` (${entry.delivery})` : ''}.`),
-    ...shot.actions.map((entry) => `Action: ${entry.verb}${entry.stagingNotes ? ` (${entry.stagingNotes})` : ''}.`),
   ].filter((entry): entry is string => Boolean(entry)).join(' '))
   const presetDirectives =
     input.presetFamily === 'story_movie_tv'
@@ -710,10 +760,19 @@ function buildSeedanceTakePrompt(input: {
     input.take.ctaStyle.trim() ? `CTA style: ${input.take.ctaStyle.trim()}.` : null,
     ...presetDirectives,
     subtypeStyle,
+    arcSummary ? `Overall arc: ${arcSummary}` : null,
+    'Write motion and staging literally. Avoid metaphor, slogan copy, or polished ad-agency phrasing.',
+    'Make each beat readable on mute from the visuals alone.',
     continuityAnchors.length > 0 ? `Lock continuity for these anchors across the whole take: ${continuityAnchors.join(', ')}.` : null,
     ...beatLines,
     ...referenceDirectives,
     'Use one dominant action arc and one primary camera path across the take.',
+    input.take.formatSubtype === 'contrast_narrative'
+      ? 'Keep both poles visible and readable whenever possible, and make the last beat the strongest winner or payoff image.'
+      : null,
+    subtypeLooksLikeAd(input.take.formatSubtype ?? null)
+      ? 'Show the product or mechanism doing its job on screen and make proof legible early.'
+      : null,
     'Preserve identity, wardrobe, product, and environment continuity across all beats and references.',
     'Do not introduce extra characters, props, cuts, captions, logos, or unrelated action.',
   ].filter((entry): entry is string => Boolean(entry)).join(' ')
@@ -763,6 +822,13 @@ export function buildStillPrompt(input: {
     shot.visualPrompt.trim() ? `Additional visual direction: ${shot.visualPrompt.trim()}.` : null,
     shot.compositionGuide.trim() ? `Composition guide: ${shot.compositionGuide.trim()}.` : null,
     ...sourceDescriptions,
+    'Use literal visual staging and readable proof. Avoid poetic metaphor or polished ad copy.',
+    subtypeLooksLikeAd(shot.formatSubtype ?? settings.formatSubtype ?? null)
+      ? 'If the product is present, show it doing its job with visible proof instead of acting like a passive prop.'
+      : null,
+    shot.formatSubtype === 'contrast_narrative'
+      ? 'Keep both poles readable in the frame and make the stronger winner state immediately obvious.'
+      : null,
     'Compose all supplied sources into one coherent scene with consistent scale, lighting, staging, and continuity.',
     'No subtitles, logos, watermarks, borders, split panels, or collage layout.',
   ].filter(Boolean).join(' ')
@@ -803,13 +869,17 @@ export function buildTakeStillPrompt(input: {
       shot.visualPrompt.trim() ? `Visual direction: ${shot.visualPrompt.trim()}.` : null,
     ].filter(Boolean).join(' ')),
     ...input.sourceInputs.map((entry) => `${entry.role ?? 'source'}: ${entry.definition?.name ?? entry.node.title}.`),
+    'Use literal visual phrasing and visible proof instead of polished ad copy or metaphor.',
     settings.presetFamily === 'story_movie_tv'
       ? 'Choose the strongest storyboard-like keyframe that communicates the take with clear cinematic continuity.'
       : settings.presetFamily === 'ugc_direct_response_ad'
-        ? 'Choose the strongest hook or proof frame with readable product visibility and immediate clarity.'
+        ? 'Choose the strongest hook or proof frame with readable product visibility, clear mechanism, and immediate clarity.'
         : settings.presetFamily === 'ugc_faceless_format'
           ? 'Choose the cleanest object, demo, or process frame with strong readability for short-form viewing.'
           : 'Choose a believable creator-native frame that feels captured inside a short-form UGC video.',
+    take.formatSubtype === 'contrast_narrative'
+      ? 'Keep both poles legible and choose the frame where the gap or winner state is most obvious.'
+      : null,
     'No subtitles, logos, watermarks, borders, split panels, or collage layout.',
   ].filter(Boolean).join(' ')
 }
@@ -891,6 +961,13 @@ export function buildVideoPrompt(input: {
     input.sourceInputs.map((entry) => `${entry.config.assetRole ?? entry.definition?.kind ?? 'source'}: ${entry.definition?.name ?? entry.node.title}.`).join(' '),
     describePresetPromptStyle(settings.presetFamily),
     describeSubtypePromptStyle(shot.formatSubtype ?? settings.formatSubtype ?? null),
+    'Use literal visual phrasing and readable on-screen action rather than polished advertising copy.',
+    subtypeLooksLikeAd(shot.formatSubtype ?? settings.formatSubtype ?? null)
+      ? 'Show the product or mechanism doing its job and make proof readable in frame.'
+      : null,
+    shot.formatSubtype === 'contrast_narrative'
+      ? 'Keep both poles readable and make the gap visibly wider than the previous beat.'
+      : null,
   ].filter(Boolean).join(' ')
 }
 

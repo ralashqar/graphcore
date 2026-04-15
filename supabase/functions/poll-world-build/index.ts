@@ -14,7 +14,7 @@ import {
   worldBuildStatusResponseSchema,
 } from '../../../src/domain/worldBuild.ts'
 import { getArtStylePresetLabel } from '../../../src/domain/artStylePresets.ts'
-import { buildCharacterConceptPrompt, buildItemConceptPrompt, extractFalImageUrls } from '../../../src/domain/visualAssetGeneration.ts'
+import { buildCharacterConceptPrompt, buildEnvironmentConceptPrompt, buildItemConceptPrompt, extractFalImageUrls } from '../../../src/domain/visualAssetGeneration.ts'
 import { requireUserClient } from '../_shared/auth.ts'
 import {
   isTerminalCinematicRunStatus,
@@ -37,6 +37,8 @@ import {
   evaluateCinematicScriptQuality,
   inferPromptDirectedActionBinding,
   materializeCinematicPlan,
+  resolveTargetShotCount,
+  scriptNeedsMultiBeatFallback,
   shotImpliesAction,
   shotImpliesDialogue,
 } from '../_shared/world-build-cinematics.ts'
@@ -543,16 +545,32 @@ function conceptPromptFromDefinition(definition: SnapshotDefinition, job: JobRow
     })
   }
 
-  return [
-    `Create polished game concept art for ${definition.name}.`,
-    snapshot.project.summary ? `Project context: ${snapshot.project.summary}.` : null,
-    typeof definition.summary === 'string' && definition.summary.trim() ? `Summary: ${definition.summary.trim()}.` : null,
-    artStylePreset ? `Art style preset: ${artStylePreset}.` : null,
-    artStyleDescription ? `Additional art direction: ${artStyleDescription}.` : null,
-    view ? `Environment view: ${view}.` : null,
-    visualDirection ? `Visual direction: ${visualDirection}.` : null,
-    'No text, labels, collage, UI, or watermark.',
-  ].filter(Boolean).join(' ')
+  const environmentProfile = Array.isArray(definition.components)
+    ? definition.components.find((component) => component.type === 'environment_profile')
+    : null
+  const subtype =
+    typeof environmentProfile?.config?.subtype === 'string'
+      ? String(environmentProfile.config.subtype)
+      : null
+  const lightingProfile =
+    typeof environmentBinding?.config?.lightingProfile === 'string'
+      ? String(environmentBinding.config.lightingProfile)
+      : null
+  const environmentVisualDescription = [
+    visualDirection,
+    view ? `Preferred environment view: ${view}.` : null,
+  ].filter((entry): entry is string => Boolean(entry)).join(' ')
+
+  return buildEnvironmentConceptPrompt({
+    environmentName: definition.name,
+    subtype,
+    archetypeLabel: typeof definition.archetypeKey === 'string' ? definition.archetypeKey : null,
+    lightingProfile,
+    artStylePresetLabel: getArtStylePresetLabel(artStylePreset),
+    artStyleDescription,
+    projectContextDescription: snapshot.project.summary,
+    visualDescription: environmentVisualDescription || visualDescription,
+  })
 }
 
 function compositePromptForPlan(plan: z.infer<typeof cinematicPlanSchema>, compositeRefId: string) {
@@ -1520,13 +1538,14 @@ Deno.serve(async (request) => {
         jobs = reloaded.jobs
       }
 
-      const readyJobs = jobs
+      const readyJobsAll = jobs
         .filter((job) => job.status === 'queued')
         .filter((job) => (job.depends_on_job_ids ?? []).every((dependencyId) => {
           const dependencyStatus = jobs.find((candidate) => candidate.id === dependencyId)?.status
           return dependencyStatus === 'succeeded' || dependencyStatus === 'skipped'
         }))
-        .slice(0, 4)
+      const hasHeavyReadyJob = readyJobsAll.some((job) => !job.kind.endsWith('_definition'))
+      const readyJobs = (hasHeavyReadyJob ? readyJobsAll.slice(0, 1) : readyJobsAll.slice(0, 4))
 
       for (const job of readyJobs) {
         await updateJob(client, job.id, { status: 'running', error_message: null })
@@ -1881,6 +1900,8 @@ Deno.serve(async (request) => {
               usedRepairPass: false,
             }
             if (!authoredCinematicPlan.scriptDoc) {
+              const effectiveSettings = getCinematicSettings(snapshot.gameSpec ?? null, { cinematics: authoredCinematicPlan.graphSettings })
+              const targetShotCount = resolveTargetShotCount(batch.prompt, effectiveSettings.formatSubtype)
               await updateJob(client, job.id, {
                 result_context: {
                   ...(job.result_context ?? {}),
@@ -1893,8 +1914,9 @@ Deno.serve(async (request) => {
                 model: payload.model,
                 passLabel: 'Cinematic script planner',
                 systemText: cinematicScriptPlannerSystemPrompt(
-                  getCinematicSettings(snapshot.gameSpec ?? null, { cinematics: authoredCinematicPlan.graphSettings }).presetFamily,
-                  getCinematicSettings(snapshot.gameSpec ?? null, { cinematics: authoredCinematicPlan.graphSettings }).formatSubtype,
+                  effectiveSettings.presetFamily,
+                  effectiveSettings.formatSubtype,
+                  targetShotCount,
                 ),
                 promptContext: {
                   prompt: batch.prompt,
@@ -1911,6 +1933,7 @@ Deno.serve(async (request) => {
                 schema: z.record(z.string(), z.unknown()),
                 maxOutputTokens: 10000,
               })
+              let latestDraftRaw: unknown = cinematicDraftRaw
               let cinematicDraft = coerceCinematicPlannerRaw(cinematicDraftRaw, {
                 lockedEntityRefs: resolvedEntityRefs,
                 allowEntityCreation: false,
@@ -1919,13 +1942,26 @@ Deno.serve(async (request) => {
               })
               plannerDiagnostics.push(...cinematicDraft.diagnostics)
 
-              let draftPlan = materializeCinematicPlan({
-                ...cinematicDraft,
-                requestSummary: cinematicDraft.requestSummary || batch.request_summary,
-                graphName: cinematicDraft.graphName || authoredCinematicPlan.graphName,
-                graphSummary: cinematicDraft.graphSummary || authoredCinematicPlan.graphSummary,
-                entityRefs: resolvedEntityRefs,
-              })
+              let draftPlan
+              try {
+                draftPlan = materializeCinematicPlan({
+                  ...cinematicDraft,
+                  requestSummary: cinematicDraft.requestSummary || batch.request_summary,
+                  graphName: cinematicDraft.graphName || authoredCinematicPlan.graphName,
+                  graphSummary: cinematicDraft.graphSummary || authoredCinematicPlan.graphSummary,
+                  entityRefs: resolvedEntityRefs,
+                })
+              } catch (error) {
+                console.error('[GraphCore] materializeCinematicPlan failed during writing_script.', {
+                  batchId: batch.id,
+                  worldBuildJobId: job.id,
+                  graphKey,
+                  authoredGraphSettings: authoredCinematicPlan.graphSettings ?? null,
+                  draftGraphSettings: cinematicDraft.graphSettings ?? null,
+                  error: error instanceof Error ? error.message : String(error),
+                })
+                throw error
+              }
               let qualityReport = evaluateCinematicScriptQuality({
                 promptText: batch.prompt,
                 scriptDoc: cinematicScriptDocSchema.parse(draftPlan.scriptDoc),
@@ -1954,7 +1990,11 @@ Deno.serve(async (request) => {
                 const repairedDraftRaw = await runStructuredWorldBuildModel({
                   model: payload.model,
                   passLabel: 'Cinematic script repair',
-                  systemText: cinematicScriptRepairSystemPrompt(),
+                  systemText: cinematicScriptRepairSystemPrompt(
+                    effectiveSettings.presetFamily,
+                    effectiveSettings.formatSubtype,
+                    targetShotCount,
+                  ),
                   promptContext: {
                     prompt: batch.prompt,
                     project: snapshot.project,
@@ -1976,6 +2016,7 @@ Deno.serve(async (request) => {
                   promptText: batch.prompt,
                   enableFallbackShaping: false,
                 })
+                latestDraftRaw = repairedDraftRaw
                 plannerDiagnostics.push(...cinematicDraft.diagnostics)
                 draftPlan = materializeCinematicPlan({
                   ...cinematicDraft,
@@ -1999,8 +2040,12 @@ Deno.serve(async (request) => {
                 }
               }
 
-              if ((draftPlan.scriptDoc?.shots?.length ?? 0) === 0) {
-                const fallbackDraft = coerceCinematicPlannerRaw(cinematicDraftRaw, {
+              const shouldUseMultiBeatFallback = scriptNeedsMultiBeatFallback({
+                promptText: batch.prompt,
+                scriptDoc: cinematicScriptDocSchema.parse(draftPlan.scriptDoc),
+              })
+              if (shouldUseMultiBeatFallback) {
+                const fallbackDraft = coerceCinematicPlannerRaw(latestDraftRaw, {
                   lockedEntityRefs: resolvedEntityRefs,
                   allowEntityCreation: false,
                   promptText: batch.prompt,
@@ -2021,6 +2066,7 @@ Deno.serve(async (request) => {
                   batchId: batch.id,
                   worldBuildJobId: job.id,
                   graphKey,
+                  fallbackReason: 'under_segmented_script',
                   diagnostics: fallbackDraft.diagnostics,
                 })
               } else {
@@ -2235,21 +2281,7 @@ Deno.serve(async (request) => {
                   authoringFlags.usedDialogueFallback = true
                   scriptRepairDiagnostics.push(`Synthesized dialogue beats for shot "${shot.title}" after script repair left them empty.`)
                 }
-                const actions = (shot.actions.length > 0 ? shot.actions : (
-                  shotImpliesAction({
-                    promptText: batch.prompt,
-                    title: shot.title,
-                    beat: shot.beat,
-                    shotType: shot.shotType,
-                  })
-                    ? buildFallbackActionBeats({
-                      shotId: shot.id,
-                      beat: shot.beat,
-                      participants: participantBindings,
-                      propRefIds: filteredPropRefIds,
-                    })
-                    : []
-                )).map((entry, actionIndex) => {
+                const actions = shot.actions.map((entry, actionIndex) => {
                   const nextEntry = { ...entry }
                   let repaired = false
                   const promptDirectedAction = inferPromptDirectedActionBinding(batch.prompt, nextEntry.verb, participantBindings)
@@ -2276,9 +2308,6 @@ Deno.serve(async (request) => {
                   }
                   return nextEntry
                 })
-                if (shot.actions.length === 0 && actions.length > 0) {
-                  scriptRepairDiagnostics.push(`Synthesized action beats for shot "${shot.title}" after script repair left them empty.`)
-                }
                 const audio = shot.audio.length > 0
                   ? shot.audio.map((entry, audioIndex) => {
                       if (entry.sourceRefId || entry.kind === 'silence') return entry
@@ -2294,51 +2323,7 @@ Deno.serve(async (request) => {
                         sourceRefId,
                       }
                     })
-                  : (actions.length > 0 || dialogue.length > 0)
-                    ? buildFallbackAudioBeats({
-                      shotId: shot.id,
-                      beat: shot.beat,
-                      locationRefId,
-                    }).map((entry, audioIndex) => {
-                      if (entry.sourceRefId || entry.kind === 'silence') return entry
-                      const sourceRefId =
-                        entry.kind === 'dialogue'
-                          ? (dialogue[0]?.speakerRefId ?? participantRefIds[0] ?? null)
-                          : locationRefId
-                      if (sourceRefId) {
-                        scriptRepairDiagnostics.push(`Filled missing audio sourceRefId for shot "${shot.title}" audio cue ${audioIndex + 1}.`)
-                      }
-                      return {
-                        ...entry,
-                        sourceRefId,
-                      }
-                    })
-                    : shot.audio.length === 0 && (
-                      shotImpliesDialogue({
-                        promptText: batch.prompt,
-                        title: shot.title,
-                        beat: shot.beat,
-                        shotType: shot.shotType,
-                      })
-                      || shotImpliesAction({
-                        promptText: batch.prompt,
-                        title: shot.title,
-                        beat: shot.beat,
-                        shotType: shot.shotType,
-                      })
-                    )
-                    ? [{
-                        id: `${shot.id}_ambience`,
-                        kind: 'ambience' as const,
-                        cue: locationRefId ? 'Room tone and ambient environment bed.' : 'Scene ambience.',
-                        sourceRefId: locationRefId,
-                        startSeconds: null,
-                        endSeconds: null,
-                      }]
-                    : shot.audio
-                if (shot.audio.length === 0 && audio.length > 0) {
-                  scriptRepairDiagnostics.push(`Synthesized audio cues for shot "${shot.title}" after script repair left them empty.`)
-                }
+                  : shot.audio
                 const requiredSourceRefIds = Array.from(new Set(
                   shot.requiredSourceRefIds.length > 0
                     ? shot.requiredSourceRefIds.filter((refId) => (
@@ -2460,6 +2445,8 @@ Deno.serve(async (request) => {
                   usedTemporalExpansionFallback: authoringFlags.usedTemporalExpansionFallback,
                   usedDialogueFallback: authoringFlags.usedDialogueFallback,
                   usedActionBindingRepair: authoringFlags.usedActionBindingRepair,
+                  rawScriptMarkdown: authoredCinematicPlan.rawScriptMarkdown ?? '',
+                  parsedShotCount: scriptDoc.shots.length,
                   diagnostics: authoringDiagnostics,
                   sourceCoverage,
                 },

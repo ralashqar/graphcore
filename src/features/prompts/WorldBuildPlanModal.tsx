@@ -2,11 +2,9 @@ import type { WorldBuildPlanItem } from '../../domain/worldBuild'
 import {
   cinematicFormatSubtypeSchema,
   coerceFormatSubtypeForPresetFamily,
-  getCinematicFormulaFamilyLabel,
   getCinematicFormatSubtypeLabel,
   getCinematicPresetLabel,
   isUgcPresetFamily,
-  type CinematicFormulaFamily,
   type CinematicFormatSubtype,
   type CinematicPresetFamily,
 } from '../../domain/cinematics'
@@ -55,21 +53,6 @@ function iconForPlanKind(kind: WorldBuildPlanItem['kind']) {
   }
 }
 
-function presetSourceLabel(source: string | undefined) {
-  switch (source) {
-    case 'graph_override':
-      return 'Using graph override'
-    case 'project_default':
-      return 'Using project default'
-    case 'prompt_inference':
-      return 'Detected from prompt'
-    case 'manual_override':
-      return 'Manually overridden'
-    default:
-      return 'Using fallback default'
-  }
-}
-
 export function WorldBuildPlanModal({
   cinematicPlan,
   isStarting,
@@ -103,130 +86,101 @@ export function WorldBuildPlanModal({
           </div>
           <button className="ghost-button compact" onClick={onCancel} type="button">Close</button>
         </div>
-        {plannerMode === 'cinematic_build' && cinematicPlan ? (
-          <div className="diagnostic-stack">
-            <div className="inline-note">
-              Matched existing: {(cinematicPlan.entityRefs ?? []).filter((entry) => entry.resolution === 'existing').map((entry) => entry.sourceName).join(', ') || 'none'}
-            </div>
-            <div className="inline-note">
-              Will create: {(cinematicPlan.entityRefs ?? []).filter((entry) => entry.resolution === 'create').map((entry) => entry.sourceName).join(', ') || 'none'}
-            </div>
-            <label className="field-block compact-block">
-              <span>Detected preset</span>
-              <select
-                value={presetFamily}
-                onChange={(event) => onChangePresetFamily?.(event.target.value as CinematicPresetFamily)}
-              >
-                <option value="story_movie_tv">{getCinematicPresetLabel('story_movie_tv')}</option>
-                <option value="ugc_creator">{getCinematicPresetLabel('ugc_creator')}</option>
-                <option value="ugc_direct_response_ad">{getCinematicPresetLabel('ugc_direct_response_ad')}</option>
-                <option value="ugc_faceless_format">{getCinematicPresetLabel('ugc_faceless_format')}</option>
-              </select>
-            </label>
-            {isUgcPreset && formatSubtype ? (
+        <div className="world-build-dialog-body">
+          {plannerMode === 'cinematic_build' && cinematicPlan ? (
+            <div className="world-build-dialog-controls">
               <label className="field-block compact-block">
-                <span>Format subtype</span>
+                <span>Preset</span>
                 <select
-                  value={formatSubtype}
-                  onChange={(event) => onChangeFormatSubtype?.(event.target.value as CinematicFormatSubtype)}
+                  value={presetFamily}
+                  onChange={(event) => onChangePresetFamily?.(event.target.value as CinematicPresetFamily)}
                 >
-                  {subtypeOptions.map((option) => <option key={option} value={option}>{getCinematicFormatSubtypeLabel(option)}</option>)}
+                  <option value="story_movie_tv">{getCinematicPresetLabel('story_movie_tv')}</option>
+                  <option value="ugc_creator">{getCinematicPresetLabel('ugc_creator')}</option>
+                  <option value="ugc_direct_response_ad">{getCinematicPresetLabel('ugc_direct_response_ad')}</option>
+                  <option value="ugc_faceless_format">{getCinematicPresetLabel('ugc_faceless_format')}</option>
                 </select>
               </label>
-            ) : null}
-            <div className="inline-note">
-              {presetSourceLabel(cinematicPlan.graphSettings?.presetSource)}.
+              {isUgcPreset && formatSubtype ? (
+                <label className="field-block compact-block">
+                  <span>Format subtype</span>
+                  <select
+                    value={formatSubtype}
+                    onChange={(event) => onChangeFormatSubtype?.(event.target.value as CinematicFormatSubtype)}
+                  >
+                    {subtypeOptions.map((option) => <option key={option} value={option}>{getCinematicFormatSubtypeLabel(option)}</option>)}
+                  </select>
+                </label>
+              ) : null}
             </div>
-            {isUgcPreset && cinematicPlan.graphSettings?.formulaFamily ? (
-              <div className="inline-note">
-                Planned script formula: {getCinematicFormulaFamilyLabel(cinematicPlan.graphSettings.formulaFamily as CinematicFormulaFamily)}.
+          ) : null}
+          {plannerMode === 'cinematic_build' && cinematicPlan?.scriptDoc ? (
+            <div className="editor-section compact-section">
+              <div className="section-head">
+                <div>
+                  <span className="eyebrow">Script Preview</span>
+                  <h3>{cinematicPlan.scriptDoc.title ?? 'Generated Script'}</h3>
+                </div>
               </div>
-            ) : null}
-            <div className="inline-note">
-              Planned shots: {(cinematicPlan.shots ?? []).map((shot) => shot.title).join(', ') || 'none'}
-            </div>
-            <div className="inline-note">
-              Relationships: {(cinematicPlan.relationshipRefs ?? []).map((relationship) => relationship.type).join(', ') || 'none'}
-            </div>
-            <div className="inline-note">
-              Composite refs: {(cinematicPlan.compositeRefPlans ?? []).map((entry) => entry.title).join(', ') || 'none'}
-            </div>
-            <div className="inline-note">
-              Storyboard: {cinematicPlan.storyboardPlan?.mode ?? 'none'}{(cinematicPlan.storyboardPlan?.panels?.length ?? 0) > 0 ? `, ${(cinematicPlan.storyboardPlan?.panels?.length ?? 0)} panel(s)` : ''}
-            </div>
-            {!cinematicPlan.scriptDoc ? (
-              <div className="inline-note">
-                Script authoring happens during cinematic generation after missing refs are resolved.
-              </div>
-            ) : null}
-            {cinematicPlan.scriptDoc ? (
-              <div className="editor-section compact-section">
-                <div className="section-head">
-                  <div>
-                    <span className="eyebrow">Script Preview</span>
-                    <h3>{cinematicPlan.scriptDoc.title ?? 'Generated Script'}</h3>
+              {cinematicPlan.scriptDoc.logline ? <div className="inline-note">{cinematicPlan.scriptDoc.logline}</div> : null}
+              <div className="diagnostic-stack">
+                {(cinematicPlan.scriptDoc.scenes ?? []).map((scene) => (
+                  <div key={scene.id} className="inline-note">
+                    <strong>{scene.title}</strong>
+                    <span> {(scene.shotIds?.length ?? 0)} shot{(scene.shotIds?.length ?? 0) === 1 ? '' : 's'}</span>
                   </div>
-                </div>
-                {cinematicPlan.scriptDoc.logline ? <div className="inline-note">{cinematicPlan.scriptDoc.logline}</div> : null}
-                <div className="diagnostic-stack">
-                  {(cinematicPlan.scriptDoc.scenes ?? []).map((scene) => (
-                    <div key={scene.id} className="inline-note">
-                      <strong>{scene.title}</strong>
-                      <span> {(scene.shotIds?.length ?? 0)} shot{(scene.shotIds?.length ?? 0) === 1 ? '' : 's'}</span>
-                    </div>
-                  ))}
-                  {(cinematicPlan.scriptDoc.shots ?? []).map((shot) => (
-                    <div key={shot.id} className="inline-note">
-                      <strong>{shot.title}</strong>
-                      <span> {(shot.dialogue?.length ?? 0)} dialogue, {(shot.actions?.length ?? 0)} action, {(shot.audio?.length ?? 0)} audio cue{(shot.audio?.length ?? 0) === 1 ? '' : 's'}</span>
-                    </div>
-                  ))}
-                </div>
+                ))}
+                {(cinematicPlan.scriptDoc.shots ?? []).map((shot) => (
+                  <div key={shot.id} className="inline-note">
+                    <strong>{shot.title}</strong>
+                    <span> {shot.beat?.trim() || 'No description yet'}</span>
+                  </div>
+                ))}
               </div>
-            ) : null}
+            </div>
+          ) : null}
+          <div className="world-build-plan-list">
+            {hasPlanItems ? planItems.map((item) => (
+              <article key={item.id} className={item.enabled ? 'world-build-plan-card' : 'world-build-plan-card is-disabled'}>
+                <div className="world-build-plan-card-head">
+                  <label className="world-build-plan-toggle">
+                    <input checked={item.enabled} onChange={(event) => onToggleEnabled(item.id, event.target.checked)} type="checkbox" />
+                    <span className="world-build-plan-icon"><EntityIcon id={iconForPlanKind(item.kind)} /></span>
+                    <div>
+                      <strong>{item.name}</strong>
+                      <span>{item.kind.replace(/_/g, ' ')}</span>
+                    </div>
+                  </label>
+                </div>
+                <p>{item.summary}</p>
+                {item.dependsOn.length > 0 ? <div className="inline-note">Depends on: {item.dependsOn.join(', ')}</div> : null}
+                {item.kind === 'character' || item.kind === 'item' ? (
+                  <label className="world-build-option-row">
+                    <input
+                      checked={Boolean(item.generationOptions.generateConceptImage)}
+                      disabled={!item.enabled}
+                      onChange={(event) => onToggleOption(item.id, 'generateConceptImage', event.target.checked)}
+                      type="checkbox"
+                    />
+                    <span>Generate concept image</span>
+                  </label>
+                ) : null}
+                {item.kind === 'environment' ? (
+                  <label className="world-build-option-row">
+                    <input
+                      checked={Boolean(item.generationOptions.generateConceptGallery)}
+                      disabled={!item.enabled}
+                      onChange={(event) => onToggleOption(item.id, 'generateConceptGallery', event.target.checked)}
+                      type="checkbox"
+                    />
+                    <span>Generate concept gallery</span>
+                  </label>
+                ) : null}
+              </article>
+            )) : (
+              <div className="inline-note">The planner returned no actionable items for this prompt.</div>
+            )}
           </div>
-        ) : null}
-        <div className="world-build-plan-list">
-          {hasPlanItems ? planItems.map((item) => (
-            <article key={item.id} className={item.enabled ? 'world-build-plan-card' : 'world-build-plan-card is-disabled'}>
-              <div className="world-build-plan-card-head">
-                <label className="world-build-plan-toggle">
-                  <input checked={item.enabled} onChange={(event) => onToggleEnabled(item.id, event.target.checked)} type="checkbox" />
-                  <span className="world-build-plan-icon"><EntityIcon id={iconForPlanKind(item.kind)} /></span>
-                  <div>
-                    <strong>{item.name}</strong>
-                    <span>{item.kind.replace(/_/g, ' ')}</span>
-                  </div>
-                </label>
-              </div>
-              <p>{item.summary}</p>
-              {item.dependsOn.length > 0 ? <div className="inline-note">Depends on: {item.dependsOn.join(', ')}</div> : null}
-              {item.kind === 'character' || item.kind === 'item' ? (
-                <label className="world-build-option-row">
-                  <input
-                    checked={Boolean(item.generationOptions.generateConceptImage)}
-                    disabled={!item.enabled}
-                    onChange={(event) => onToggleOption(item.id, 'generateConceptImage', event.target.checked)}
-                    type="checkbox"
-                  />
-                  <span>Generate concept image</span>
-                </label>
-              ) : null}
-              {item.kind === 'environment' ? (
-                <label className="world-build-option-row">
-                  <input
-                    checked={Boolean(item.generationOptions.generateConceptGallery)}
-                    disabled={!item.enabled}
-                    onChange={(event) => onToggleOption(item.id, 'generateConceptGallery', event.target.checked)}
-                    type="checkbox"
-                  />
-                  <span>Generate concept gallery</span>
-                </label>
-              ) : null}
-            </article>
-          )) : (
-            <div className="inline-note">The planner returned no actionable items for this prompt.</div>
-          )}
         </div>
         <div className="bootstrap-footer">
           <div className="inline-note">Confirm to create placeholders immediately and continue generation in the background.</div>

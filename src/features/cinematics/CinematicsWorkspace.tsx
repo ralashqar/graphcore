@@ -6,6 +6,8 @@ import { compileCinematicGraphFromScriptDoc } from '../../domain/cinematicScript
 import {
   buildCinematicSettingsPatchFromFormatSubtype,
   buildCinematicSettingsPatchFromPresetFamily,
+  cinematicSequenceSchema,
+  cinematicTakeSpecSchema,
   cinematicDominantTriggerSchema,
   cinematicFormatSubtypeSchema,
   buildCinematicSequenceFromScriptDoc,
@@ -32,9 +34,11 @@ import {
   type CinematicFormatSubtype,
   type CinematicRun,
   type CinematicPresetFamily,
+  type CinematicSequence,
   type CinematicScriptDoc,
   type CinematicScriptEntityBinding,
   type CinematicScriptShot,
+  type CinematicTakeSpec,
   type CinematicSettings,
   type DialogueBeat,
 } from '../../domain/cinematics'
@@ -51,6 +55,7 @@ import type {
 import {
   graphNodeLibrary,
   graphNodeTemplatesByKey,
+  normalizeNode,
   summarizeCondition,
   summarizeEffects,
 } from '../../domain/nodeLibrary'
@@ -341,6 +346,46 @@ function buildScriptEntitySummaryLabel(binding: CinematicScriptEntityBinding) {
   return detail ? `${binding.label} ${detail}` : binding.label
 }
 
+function buildReadableScriptExport(scriptDoc: CinematicScriptDoc) {
+  const orderedScenes = [...scriptDoc.scenes].sort((left, right) => left.orderIndex - right.orderIndex)
+  const orderedShots = [...scriptDoc.shots].sort((left, right) => left.orderIndex - right.orderIndex)
+  const bindingById = new Map(scriptDoc.entityBindings.map((binding) => [binding.id, binding]))
+  const sceneById = new Map(orderedScenes.map((scene) => [scene.id, scene]))
+  const lines: string[] = []
+
+  lines.push(`# ${scriptDoc.title || 'Generated Script'}`)
+  if (scriptDoc.logline.trim()) lines.push(`Logline: ${scriptDoc.logline.trim()}`)
+  if (scriptDoc.tone.trim()) lines.push(`Tone: ${scriptDoc.tone.trim()}`)
+  if (scriptDoc.continuityNotes.trim()) lines.push(`Continuity: ${scriptDoc.continuityNotes.trim()}`)
+  lines.push('')
+
+  if (scriptDoc.entityBindings.length > 0) {
+    lines.push('Bindings:')
+    for (const binding of scriptDoc.entityBindings) {
+      lines.push(`- ${binding.label} (${binding.kind} / ${binding.role})`)
+    }
+    lines.push('')
+  }
+
+  for (const shot of orderedShots) {
+    const scene = shot.sceneId ? sceneById.get(shot.sceneId) ?? null : null
+    lines.push(`## ${scene?.title ?? shot.title}`)
+    if (scene && scene.title !== shot.title) lines.push(`Shot: ${shot.title}`)
+    if (shot.beat.trim()) lines.push(shot.beat.trim())
+    if (shot.compositionGuide.trim()) lines.push(`Composition: ${shot.compositionGuide.trim()}`)
+    if (shot.dialogue.length > 0) {
+      lines.push('Dialogue:')
+      for (const line of shot.dialogue) {
+        const speaker = line.speakerRefId ? bindingById.get(line.speakerRefId)?.label ?? line.speakerRefId : 'Unknown'
+        lines.push(`- ${speaker}: "${line.line.trim()}"${line.delivery.trim() ? ` (${line.delivery.trim()})` : ''}`)
+      }
+    }
+    lines.push('')
+  }
+
+  return lines.join('\n').trim()
+}
+
 function truncateGraphLine(value: string, max = 84) {
   const normalized = value.trim().replace(/\s+/g, ' ')
   if (normalized.length <= max) return normalized
@@ -439,6 +484,31 @@ function collectStoryboardTargetShots(graph: GraphDefinition, storyboardNode: No
 
 function collectStoryboardSources(graph: GraphDefinition, storyboardNode: NodeDefinition, definitions: DefinitionBase[], assets: AssetDefinition[]) {
   const config = getStoryboardRefNodeConfig(storyboardNode)
+  const directEdgeSources = graph.edges
+    .filter((edge) => edge.target.nodeKey === storyboardNode.key)
+    .filter((edge) => edge.source.portId === 'asset_out' || edge.target.portId === 'asset_in')
+    .map((edge) => graph.nodes.find((entry) => entry.key === edge.source.nodeKey) ?? null)
+    .filter((entry): entry is NodeDefinition => Boolean(entry && ['asset_ref', 'composite_ref', 'storyboard_ref'].includes(entry.type)))
+    .map((sourceNode) => {
+      if (sourceNode.type === 'asset_ref') {
+        const refConfig = getAssetRefNodeConfig(sourceNode)
+        const definition = definitions.find((entry) => entry.key === refConfig.definitionKey) ?? null
+        const asset =
+          refConfig.assetKey
+            ? assets.find((entry) => entry.key === refConfig.assetKey) ?? null
+            : resolveDefinitionPreviewAsset(definition, assets)
+        return { node: sourceNode, definition, asset, refId: refConfig.entityRefId }
+      }
+      if (sourceNode.type === 'composite_ref') {
+        const refConfig = getCompositeRefNodeConfig(sourceNode)
+        const asset = assets.find((entry) => entry.key === refConfig.outputAssetKey) ?? null
+        return { node: sourceNode, definition: null, asset, refId: refConfig.compositeRefId }
+      }
+      const refConfig = getStoryboardRefNodeConfig(sourceNode)
+      const asset = assets.find((entry) => entry.key === refConfig.assetKey) ?? null
+      return { node: sourceNode, definition: null, asset, refId: refConfig.panelId ?? refConfig.storyboardId }
+    })
+    .filter((entry): entry is ShotSourceEntry => Boolean(entry))
   const targetRefId = config.panelId ?? config.storyboardId
   const requestedRefIds = Array.from(new Set(
     collectStoryboardTargetShots(graph, storyboardNode)
@@ -481,6 +551,252 @@ function collectStoryboardSources(graph: GraphDefinition, storyboardNode: NodeDe
       return { node, definition: null, asset: assets.find((entry) => entry.key === refConfig.assetKey) ?? null, refId: refConfig.panelId ?? refConfig.storyboardId }
     })
     .filter((entry): entry is ShotSourceEntry => Boolean(entry))
+    .reduce<ShotSourceEntry[]>((entries, entry) => {
+      if (entries.some((candidate) => candidate.refId && candidate.refId === entry.refId)) return entries
+      entries.push(entry)
+      return entries
+    }, [...directEdgeSources])
+}
+
+function takeFieldValueFromShots<T>(shots: CinematicSequence['shots'], selector: (shot: CinematicSequence['shots'][number]) => T, fallback: T) {
+  for (const shot of shots) {
+    const value = selector(shot)
+    if (typeof value === 'string') {
+      if (value.trim()) return value as T
+      continue
+    }
+    if (value !== null && value !== undefined) return value
+  }
+  return fallback
+}
+
+function buildTakeRequiredSourceRefIds(shots: CinematicSequence['shots']) {
+  return Array.from(new Set(shots.flatMap((shot) => (
+    shot.requiredSourceRefIds.length > 0
+      ? shot.requiredSourceRefIds
+      : [
+          ...shot.storyboardRefIds,
+          ...shot.compositeRefIds,
+          ...shot.participantRefIds,
+          shot.locationRefId,
+          ...shot.propRefIds,
+        ].filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+  ))))
+}
+
+function inferTakeEndpointFromShots(shots: CinematicSequence['shots'], requiredSourceRefIds: string[]) {
+  return shots.length === 1 && shots[0].seedanceModePreference === 'image-to-video' && requiredSourceRefIds.length <= 1
+    ? 'image-to-video'
+    : 'reference-to-video'
+}
+
+function rederiveTakeSpec(input: {
+  sequence: CinematicSequence
+  shotIds: string[]
+  index: number
+  startSeconds: number
+  existingTake?: CinematicTakeSpec | null
+}) {
+  const includedShots = input.shotIds
+    .map((shotId) => input.sequence.shots.find((shot) => shot.id === shotId) ?? null)
+    .filter((shot): shot is CinematicSequence['shots'][number] => Boolean(shot))
+  const requiredSourceRefIds = buildTakeRequiredSourceRefIds(includedShots)
+  const durationSeconds = Math.min(15, Math.max(4, includedShots.reduce((total, shot) => total + (shot.durationSeconds ?? 4), 0)))
+  const endpoint = inferTakeEndpointFromShots(includedShots, requiredSourceRefIds)
+  const existingTake = input.existingTake ?? null
+
+  return cinematicTakeSpecSchema.parse({
+    id: existingTake?.id ?? `take_${input.index + 1}`,
+    title: existingTake?.title ?? `Take ${input.index + 1}`,
+    shotIds: includedShots.map((shot) => shot.id),
+    durationSeconds,
+    startSeconds: input.startSeconds,
+    endSeconds: input.startSeconds + durationSeconds,
+    seedanceEndpoint: existingTake?.seedanceEndpoint ?? endpoint,
+    formatSubtype: takeFieldValueFromShots(includedShots, (shot) => shot.formatSubtype, null),
+    formulaFamily: takeFieldValueFromShots(includedShots, (shot) => shot.formulaFamily, null),
+    dominantTrigger: takeFieldValueFromShots(includedShots, (shot) => shot.dominantTrigger, null),
+    contrastAxis: takeFieldValueFromShots(includedShots, (shot) => shot.contrastAxis, ''),
+    proofMoment: takeFieldValueFromShots(includedShots, (shot) => shot.proofMoment, ''),
+    ctaStyle: takeFieldValueFromShots(includedShots, (shot) => shot.ctaStyle, ''),
+    requiredSourceRefIds,
+    approvedForVideo: false,
+    approvalNotes: existingTake?.approvalNotes ?? '',
+    outputStillAssetKey: null,
+    outputVideoAssetKey: null,
+    lastRunId: null,
+    lastStillJobId: null,
+    lastVideoJobId: null,
+    provider: null,
+    providerModel: null,
+    providerRequestId: null,
+    executionPlan: null,
+  })
+}
+
+function reconcileEditedSequence(sequence: CinematicSequence) {
+  let currentStart = 0
+  const takes = sequence.takes
+    .map((take, index) => rederiveTakeSpec({
+      sequence,
+      shotIds: take.shotIds,
+      index,
+      startSeconds: currentStart,
+      existingTake: take,
+    }))
+    .filter((take) => take.shotIds.length > 0)
+    .map((take) => {
+      currentStart = take.endSeconds
+      return take
+    })
+
+  const takeByShotId = new Map<string, { id: string; index: number }>()
+  takes.forEach((take, index) => {
+    take.shotIds.forEach((shotId) => takeByShotId.set(shotId, { id: take.id, index }))
+  })
+
+  return cinematicSequenceSchema.parse({
+    ...sequence,
+    shots: sequence.shots.map((shot) => ({
+      ...shot,
+      takeId: takeByShotId.get(shot.id)?.id ?? null,
+      takeIndex: takeByShotId.get(shot.id)?.index ?? null,
+    })),
+    takes,
+  })
+}
+
+function applyEditedSequenceToGraph(graph: GraphDefinition, nextSequenceInput: CinematicSequence) {
+  const nextSequence = reconcileEditedSequence(nextSequenceInput)
+  const shotNodeByShotId = new Map<string, NodeDefinition>()
+  const existingTakeNodes = graph.nodes.filter((node) => node.type === 'cinematic_take')
+  const existingTakeNodeByTakeId = new Map<string, NodeDefinition>()
+  const existingTakeNodeByIndex = new Map<number, NodeDefinition>()
+
+  graph.nodes.forEach((node) => {
+    if (node.type === 'cinematic_shot') {
+      const shotId = getCinematicShotNodeConfig(node).id
+      shotNodeByShotId.set(shotId, node)
+    }
+  })
+  existingTakeNodes.forEach((node, index) => {
+    existingTakeNodeByIndex.set(index, node)
+    existingTakeNodeByTakeId.set(getCinematicTakeNodeConfig(node).id, node)
+  })
+
+  const shotNodes = graph.nodes
+    .filter((node) => node.type !== 'cinematic_take')
+    .map((node) => {
+      if (node.type !== 'cinematic_shot') return node
+      const shotId = getCinematicShotNodeConfig(node).id
+      const shot = nextSequence.shots.find((entry) => entry.id === shotId) ?? null
+      if (!shot) return node
+      return {
+        ...node,
+        metadata: updateNodeMetadataWithShot(node.metadata, {
+          takeId: shot.takeId,
+          takeIndex: shot.takeIndex,
+          durationSeconds: shot.durationSeconds,
+          inferredDurationSeconds: shot.inferredDurationSeconds,
+          durationSource: shot.durationSource,
+          timingSummary: shot.timingSummary,
+        }),
+      }
+    })
+
+  const usedKeys = new Set(shotNodes.map((node) => node.key))
+  const nextTakeNodes = nextSequence.takes.map((take, index) => {
+    const existingNode = existingTakeNodeByTakeId.get(take.id) ?? existingTakeNodeByIndex.get(index) ?? null
+    const baseKey = `${graph.key}.cinematic_take_${index + 1}`
+    let nextKey = existingNode?.key ?? baseKey
+    if (!existingNode) {
+      let counter = 1
+      while (usedKeys.has(nextKey)) {
+        counter += 1
+        nextKey = `${baseKey}_${counter}`
+      }
+    }
+    usedKeys.add(nextKey)
+
+    const nextNode = normalizeNode({
+      ...(existingNode ?? {
+        id: `node-cinematic-take-${take.id}-${index}`,
+        key: nextKey,
+        type: 'cinematic_take',
+        title: take.title,
+        templateKey: 'cinematic_take',
+        subtitle: `${take.durationSeconds}s`,
+        position: { x: 620 + index * 420, y: 520 },
+        body: { text: take.shotIds.join(', '), imageAssetKey: null, audioAssetKey: null, choices: [] },
+        condition: null,
+        effects: [],
+        ports: [],
+        display: { iconAssetKey: null, compactPreview: false },
+        metadata: {},
+      }),
+      key: nextKey,
+      title: take.title,
+      subtitle: `${take.durationSeconds}s`,
+      body: {
+        ...(existingNode?.body ?? { text: null, imageAssetKey: null, audioAssetKey: null, choices: [] }),
+        text: take.shotIds.join(', '),
+      },
+      position: existingNode?.position ?? { x: 620 + index * 420, y: 520 },
+      metadata: updateNodeMetadataWithTake(existingNode?.metadata as Record<string, unknown> | undefined, take),
+    })
+
+    return nextNode
+  })
+
+  const takeNodeKeyByTakeId = new Map(nextTakeNodes.map((node) => [getCinematicTakeNodeConfig(node).id, node.key]))
+  const retainedEdges = graph.edges.filter((edge) => {
+    const sourceNode = graph.nodes.find((node) => node.key === edge.source.nodeKey) ?? null
+    const targetNode = graph.nodes.find((node) => node.key === edge.target.nodeKey) ?? null
+    return sourceNode?.type !== 'cinematic_take' && targetNode?.type !== 'cinematic_take'
+  })
+  const takeEdges: EdgeDefinition[] = []
+
+  nextSequence.takes.forEach((take, takeIndex) => {
+    const takeNodeKey = takeNodeKeyByTakeId.get(take.id)
+    if (!takeNodeKey) return
+    take.shotIds.forEach((shotId, shotIndex) => {
+      const shotNodeKey = shotNodeByShotId.get(shotId)?.key
+      if (!shotNodeKey) return
+      takeEdges.push({
+        id: `edge-shot-take-${takeIndex}-${shotIndex}`,
+        key: uniqueEdgeKey({ ...graph, edges: [...retainedEdges, ...takeEdges] }, shotNodeKey, takeNodeKey),
+        source: { nodeKey: shotNodeKey, portId: 'out' },
+        target: { nodeKey: takeNodeKey, portId: 'in' },
+        label: null,
+        condition: null,
+        metadata: {},
+      })
+    })
+    if (takeIndex > 0) {
+      const previousTakeNodeKey = takeNodeKeyByTakeId.get(nextSequence.takes[takeIndex - 1].id)
+      if (previousTakeNodeKey) {
+        takeEdges.push({
+          id: `edge-take-flow-${takeIndex}`,
+          key: uniqueEdgeKey({ ...graph, edges: [...retainedEdges, ...takeEdges] }, previousTakeNodeKey, takeNodeKey),
+          source: { nodeKey: previousTakeNodeKey, portId: 'out' },
+          target: { nodeKey: takeNodeKey, portId: 'in' },
+          label: null,
+          condition: null,
+          metadata: {},
+        })
+      }
+    }
+  })
+
+  return {
+    ...graph,
+    metadata: {
+      ...(graph.metadata ?? {}),
+      cinematicSequence: nextSequence,
+    },
+    nodes: [...shotNodes, ...nextTakeNodes],
+    edges: [...retainedEdges, ...takeEdges],
+  }
 }
 
 export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
@@ -883,6 +1199,129 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
     })
   }
 
+  function updateCurrentSequence(mutator: (sequence: CinematicSequence) => CinematicSequence) {
+    if (!currentGraph) return
+    const currentSequence = getCinematicSequence(currentGraph.metadata)
+    const nextSequence = reconcileEditedSequence(mutator(currentSequence))
+    const updatedGraph = applyEditedSequenceToGraph(currentGraph, nextSequence)
+    onUpdateGraph(currentGraph.key, {
+      metadata: updatedGraph.metadata,
+      nodes: updatedGraph.nodes,
+      edges: updatedGraph.edges,
+    })
+    onClearSelection()
+  }
+
+  function moveShotWithinTake(takeId: string, shotId: string, direction: -1 | 1) {
+    updateCurrentSequence((sequence) => ({
+      ...sequence,
+      takes: sequence.takes.map((take) => {
+        if (take.id !== takeId) return take
+        const index = take.shotIds.indexOf(shotId)
+        const nextIndex = index + direction
+        if (index === -1 || nextIndex < 0 || nextIndex >= take.shotIds.length) return take
+        const nextShotIds = [...take.shotIds]
+        ;[nextShotIds[index], nextShotIds[nextIndex]] = [nextShotIds[nextIndex], nextShotIds[index]]
+        return { ...take, shotIds: nextShotIds }
+      }),
+    }))
+  }
+
+  function splitTakeAfterShot(takeId: string, shotId: string) {
+    updateCurrentSequence((sequence) => {
+      const nextTakes: CinematicTakeSpec[] = []
+      sequence.takes.forEach((take) => {
+        if (take.id !== takeId) {
+          nextTakes.push(take)
+          return
+        }
+        const index = take.shotIds.indexOf(shotId)
+        if (index === -1 || index === take.shotIds.length - 1) {
+          nextTakes.push(take)
+          return
+        }
+        nextTakes.push({ ...take, shotIds: take.shotIds.slice(0, index + 1) })
+        nextTakes.push({ ...take, id: crypto.randomUUID(), title: `${take.title} B`, shotIds: take.shotIds.slice(index + 1) })
+      })
+      return { ...sequence, takes: nextTakes }
+    })
+  }
+
+  function mergeTakeWithNeighbor(takeId: string, direction: -1 | 1) {
+    updateCurrentSequence((sequence) => {
+      const index = sequence.takes.findIndex((take) => take.id === takeId)
+      const neighborIndex = index + direction
+      if (index === -1 || neighborIndex < 0 || neighborIndex >= sequence.takes.length) return sequence
+      const firstIndex = Math.min(index, neighborIndex)
+      const secondIndex = Math.max(index, neighborIndex)
+      const first = sequence.takes[firstIndex]
+      const second = sequence.takes[secondIndex]
+      const combinedShotIds = [...first.shotIds, ...second.shotIds]
+      const combinedDuration = combinedShotIds
+        .map((shotId) => sequence.shots.find((shot) => shot.id === shotId)?.durationSeconds ?? 0)
+        .reduce((sum, value) => sum + value, 0)
+      if (combinedDuration > 15) return sequence
+      return {
+        ...sequence,
+        takes: sequence.takes.flatMap((take, takeIndex) => {
+          if (takeIndex === firstIndex) return [{ ...first, shotIds: combinedShotIds }]
+          if (takeIndex === secondIndex) return []
+          return [take]
+        }),
+      }
+    })
+  }
+
+  function pullAdjacentShotIntoTake(takeId: string, direction: -1 | 1) {
+    updateCurrentSequence((sequence) => {
+      const index = sequence.takes.findIndex((take) => take.id === takeId)
+      const neighborIndex = index + direction
+      if (index === -1 || neighborIndex < 0 || neighborIndex >= sequence.takes.length) return sequence
+      const take = sequence.takes[index]
+      const neighbor = sequence.takes[neighborIndex]
+      const movingShotId = direction < 0 ? neighbor.shotIds[neighbor.shotIds.length - 1] : neighbor.shotIds[0]
+      if (!movingShotId) return sequence
+      const combinedDuration = [...take.shotIds, movingShotId]
+        .map((shotId) => sequence.shots.find((shot) => shot.id === shotId)?.durationSeconds ?? 0)
+        .reduce((sum, value) => sum + value, 0)
+      if (combinedDuration > 15) return sequence
+      const nextTakes = sequence.takes.map((currentTake, takeIndex) => {
+        if (takeIndex === index) {
+          return {
+            ...currentTake,
+            shotIds: direction < 0 ? [movingShotId, ...currentTake.shotIds] : [...currentTake.shotIds, movingShotId],
+          }
+        }
+        if (takeIndex === neighborIndex) {
+          return {
+            ...currentTake,
+            shotIds: direction < 0 ? currentTake.shotIds.slice(0, -1) : currentTake.shotIds.slice(1),
+          }
+        }
+        return currentTake
+      }).filter((take) => take.shotIds.length > 0)
+      return { ...sequence, takes: nextTakes }
+    })
+  }
+
+  function extractShotFromTake(takeId: string, shotId: string) {
+    updateCurrentSequence((sequence) => {
+      const index = sequence.takes.findIndex((take) => take.id === takeId)
+      if (index === -1) return sequence
+      const take = sequence.takes[index]
+      if (take.shotIds.length <= 1 || !take.shotIds.includes(shotId)) return sequence
+      const nextTakes = sequence.takes.flatMap((currentTake, takeIndex) => {
+        if (takeIndex !== index) return [currentTake]
+        const remaining = currentTake.shotIds.filter((entry) => entry !== shotId)
+        return [
+          { ...currentTake, shotIds: remaining },
+          { ...currentTake, id: crypto.randomUUID(), title: `${currentTake.title} Insert`, shotIds: [shotId] },
+        ]
+      })
+      return { ...sequence, takes: nextTakes }
+    })
+  }
+
   function renderGenerationPhaseLabel(phase: string | null) {
     switch (phase) {
       case 'writing_script':
@@ -1181,11 +1620,16 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
               canRunCinematics={canRunCinematics}
               currentGraph={currentGraph}
               definitions={definitions}
+              onExtractShot={extractShotFromTake}
               node={currentNode}
+              onMergeTake={mergeTakeWithNeighbor}
+              onMoveShot={moveShotWithinTake}
               runs={currentGraphRuns}
               onApplyTemplateChange={(templateKey) => applyTemplateChange(currentNode.key, templateKey)}
               onDelete={() => onDeleteNode(currentGraph.key, currentNode.key)}
               onGenerate={(mode) => onStartCinematicRun({ graphKey: currentGraph.key, mode, targetNodeKey: currentNode.key, ...(mode === 'graph_run' ? { targetNodeKeys: [currentNode.key] } : {}) })}
+              onPullAdjacentShot={pullAdjacentShotIntoTake}
+              onSplitTake={splitTakeAfterShot}
               onUpdate={(changes) => onUpdateNode(currentGraph.key, currentNode.key, changes)}
             />
           ) : currentNode.type === 'cinematic_shot' ? (
@@ -1375,6 +1819,14 @@ function ScriptPreviewSurface({
   const characterOptions = referenceOptions.filter((entry) => entry.kind === 'character')
   const environmentOptions = referenceOptions.filter((entry) => entry.kind === 'environment')
   const itemOptions = referenceOptions.filter((entry) => entry.kind === 'item')
+  const [showRawScript, setShowRawScript] = useState(false)
+  const authoredRawScriptMarkdown = typeof ((currentGraph.metadata as { cinematicAuthoring?: Record<string, unknown> }).cinematicAuthoring?.rawScriptMarkdown) === 'string'
+    ? String((currentGraph.metadata as { cinematicAuthoring?: Record<string, unknown> }).cinematicAuthoring?.rawScriptMarkdown ?? '')
+    : ''
+  const rawScriptExport = useMemo(
+    () => authoredRawScriptMarkdown.trim() || buildReadableScriptExport(scriptDoc),
+    [authoredRawScriptMarkdown, scriptDoc],
+  )
 
   function updateShot(shotId: string, mutator: (shot: CinematicScriptShot) => CinematicScriptShot) {
     onUpdateScript((currentScript) => ({
@@ -1463,40 +1915,6 @@ function ScriptPreviewSurface({
     }))
   }
 
-  function updateShotAmbience(shotId: string, cue: string) {
-    updateShot(shotId, (currentShot) => {
-      const nextCue = cue.trim()
-      const ambienceIndex = currentShot.audio.findIndex((entry) => entry.kind === 'ambience')
-      if (!nextCue) {
-        if (ambienceIndex === -1) return currentShot
-        return {
-          ...currentShot,
-          audio: currentShot.audio.filter((_, index) => index !== ambienceIndex),
-        }
-      }
-      if (ambienceIndex === -1) {
-        return {
-          ...currentShot,
-          audio: [
-            ...currentShot.audio,
-            {
-              id: buildNextId('audio', currentShot.audio.map((entry) => entry.id)),
-              kind: 'ambience',
-              cue: nextCue,
-              sourceRefId: null,
-              startSeconds: null,
-              endSeconds: null,
-            },
-          ],
-        }
-      }
-      return {
-        ...currentShot,
-        audio: currentShot.audio.map((entry, index) => index === ambienceIndex ? { ...entry, cue: nextCue } : entry),
-      }
-    })
-  }
-
   return (
     <div className="detail-stack cinematic-script-surface">
       <div className="script-editor-toolbar">
@@ -1508,18 +1926,39 @@ function ScriptPreviewSurface({
           {validationErrors.length > 0 ? <div className="script-status-pill is-danger">{validationErrors.length} error{validationErrors.length === 1 ? '' : 's'}</div> : null}
           {validationWarnings.length > 0 ? <div className="script-status-pill is-muted">{validationWarnings.length} warning{validationWarnings.length === 1 ? '' : 's'}</div> : null}
         </div>
-        <button className="primary-button compact" disabled={validationErrors.length > 0 || orderedShots.length === 0} onClick={onRebuild} type="button">Rebuild From Script</button>
+        <div className="script-row-controls">
+          <button className="ghost-button compact" onClick={() => setShowRawScript((current) => !current)} type="button">
+            {showRawScript ? 'Hide Raw Script' : 'Preview Raw Script'}
+          </button>
+          <button className="ghost-button compact" onClick={() => void navigator.clipboard.writeText(rawScriptExport)} type="button">Copy Raw Script</button>
+          <button className="primary-button compact" disabled={validationErrors.length > 0 || orderedShots.length === 0} onClick={onRebuild} type="button">Rebuild From Script</button>
+        </div>
       </div>
 
       <div className="inline-note">
         Script edits are canonical and save immediately. The graph is a compiled projection and will stay unchanged until you rebuild from script.
       </div>
+      <div className="inline-note">The primary scripting flow is descriptive shot prose plus optional tagged dialogue. Action and ambience micro-structure are no longer emphasized in the main editor.</div>
       {scriptDirty ? <div className="inline-note is-warning">Script changed. Rebuild graph to sync runtime projection.</div> : null}
       {validationIssues.length > 0 ? (
         <div className="diagnostic-stack">
           {validationIssues.map((issue) => (
             <div key={issue.id} className={`inline-note ${issue.level === 'error' ? 'is-danger' : 'is-warning'}`}>{issue.message}</div>
           ))}
+        </div>
+      ) : null}
+      {showRawScript ? (
+        <div className="editor-section compact-section">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Raw Script Output</span>
+              <h3>{authoredRawScriptMarkdown.trim() ? 'Authored markdown' : 'Readable export'}</h3>
+            </div>
+          </div>
+          <label className="field-block full-width">
+            <span>Raw script</span>
+            <textarea readOnly rows={20} value={rawScriptExport} />
+          </label>
         </div>
       ) : null}
 
@@ -1631,7 +2070,6 @@ function ScriptPreviewSurface({
         const propBindings = shot.propRefIds.map((refId) => bindingById.get(refId)).filter((entry): entry is CinematicScriptEntityBinding => Boolean(entry))
         const locationBinding = shot.locationRefId ? bindingById.get(shot.locationRefId) ?? null : null
         const scene = shot.sceneId ? sceneById.get(shot.sceneId) ?? null : null
-        const ambienceCue = shot.audio.find((entry) => entry.kind === 'ambience')?.cue ?? ''
         const shotIssues = validationIssues.filter((issue) => issue.shotId === shot.id)
         return (
           <div key={shot.id} className="editor-section compact-section script-shot-card">
@@ -1657,8 +2095,6 @@ function ScriptPreviewSurface({
               {take ? <span className="script-mini-chip">{take.title} · {take.durationSeconds}s</span> : null}
               {shot.forceTakeBreak ? <span className="script-mini-chip">forces new take</span> : null}
               <span className="script-mini-chip">{shot.dialogue.length} dialogue</span>
-              <span className="script-mini-chip">{shot.actions.length} action</span>
-              <span className="script-mini-chip">{ambienceCue ? 'ambience set' : 'no ambience'}</span>
             </div>
 
             {shotIssues.length > 0 ? (
@@ -1690,38 +2126,6 @@ function ScriptPreviewSurface({
                 referenceOptions={characterOptions}
                 onChange={(dialogue) => updateShot(shot.id, (currentShot) => ({ ...currentShot, dialogue }))}
               />
-            </div>
-
-            <div className="editor-section compact-section">
-              <div className="section-head">
-                <div>
-                  <span className="eyebrow">Action</span>
-                  <h3>{shot.actions.length} beat{shot.actions.length === 1 ? '' : 's'}</h3>
-                </div>
-              </div>
-              <ActionBeatEditor
-                actions={shot.actions}
-                referenceOptions={referenceOptions.filter((option) => ['character', 'environment', 'item'].includes(option.kind))}
-                onChange={(actions) => updateShot(shot.id, (currentShot) => ({ ...currentShot, actions }))}
-              />
-            </div>
-
-            <div className="editor-section compact-section">
-              <div className="section-head">
-                <div>
-                  <span className="eyebrow">Ambience</span>
-                  <h3>Atmosphere and sound</h3>
-                </div>
-              </div>
-              <label className="field-block full-width">
-                <span>Ambience Prompt</span>
-                <textarea
-                  rows={2}
-                  placeholder="Busy tavern room tone, low crowd murmur, glasses clinking under the tension."
-                  value={ambienceCue}
-                  onChange={(event) => updateShotAmbience(shot.id, event.target.value)}
-                />
-              </label>
             </div>
 
             <details className="script-advanced-panel">
@@ -2147,6 +2551,10 @@ function StoryboardRefInspector({
       </label>
       <div className="diagnostic-stack">
         <div className="inline-note">
+          <strong>Generation mode</strong>
+          <span> {relatedShots.length > 0 ? 'Shot-aware storyboard using linked shots plus connected refs.' : 'Direct storyboard using node notes/prompt plus connected refs.'}</span>
+        </div>
+        <div className="inline-note">
           <strong>Related shots</strong>
           <span> {relatedShots.map((shot) => shot.title).join(', ') || 'none'}</span>
         </div>
@@ -2166,9 +2574,7 @@ function StoryboardRefInspector({
         ) : null}
       </div>
       <div className="detail-actions cinematic-action-row">
-        <button className="ghost-button compact" disabled={!canRunCinematics} onClick={() => onGenerate('preview_storyboard_still')} type="button">
-          {config.storyboardKind === 'sequence_board' ? 'Generate Board' : 'Generate Panel'}
-        </button>
+        <button className="ghost-button compact" disabled={!canRunCinematics} onClick={() => onGenerate('preview_storyboard_still')} type="button">Generate Storyboard</button>
       </div>
       {!canRunCinematics ? <div className="inline-note">Connect to a live Supabase workspace before starting cinematic generation jobs.</div> : null}
       <div className="editor-section compact-section">
@@ -2194,6 +2600,11 @@ function CinematicTakeInspector({
   currentGraph,
   definitions,
   node,
+  onExtractShot,
+  onMergeTake,
+  onMoveShot,
+  onPullAdjacentShot,
+  onSplitTake,
   runs,
   onApplyTemplateChange,
   onDelete,
@@ -2205,6 +2616,11 @@ function CinematicTakeInspector({
   currentGraph: GraphDefinition
   definitions: DefinitionBase[]
   node: NodeDefinition
+  onExtractShot: (takeId: string, shotId: string) => void
+  onMergeTake: (takeId: string, direction: -1 | 1) => void
+  onMoveShot: (takeId: string, shotId: string, direction: -1 | 1) => void
+  onPullAdjacentShot: (takeId: string, direction: -1 | 1) => void
+  onSplitTake: (takeId: string, shotId: string) => void
   runs: CinematicRun[]
   onApplyTemplateChange: (templateKey: string) => void
   onDelete: () => void
@@ -2218,6 +2634,9 @@ function CinematicTakeInspector({
   const sequence = getCinematicSequence(currentGraph.metadata)
   const includedShots = sequence?.shots.filter((shot) => config.shotIds.includes(shot.id)) ?? []
   const latestRun = runs.find((run) => run.jobs.some((job) => job.shotNodeKey === node.key)) ?? null
+  const takeIndex = sequence.takes.findIndex((take) => take.id === config.id)
+  const previousTake = takeIndex > 0 ? sequence.takes[takeIndex - 1] ?? null : null
+  const nextTake = takeIndex >= 0 && takeIndex < sequence.takes.length - 1 ? sequence.takes[takeIndex + 1] ?? null : null
   const includedLabels = includedShots.map((shot) => shot.title)
   const sourceLabels = config.requiredSourceRefIds.map((refId: string) => {
     const refNode = currentGraph.nodes.find((entry) => {
@@ -2280,6 +2699,10 @@ function CinematicTakeInspector({
           <span> {includedLabels.join(', ') || 'none'}</span>
         </div>
         <div className="inline-note">
+          <strong>Shot timing</strong>
+          <span> {includedShots.map((shot) => `${shot.title} (${shot.durationSeconds}s)`).join(', ') || 'none'}</span>
+        </div>
+        <div className="inline-note">
           <strong>Reference pack</strong>
           <span> {sourceLabels.join(', ') || 'none'}</span>
         </div>
@@ -2312,6 +2735,33 @@ function CinematicTakeInspector({
         ) : (
           <button className="ghost-button compact" onClick={() => onUpdate({ metadata: updateNodeMetadataWithTake(node.metadata, { approvedForVideo: true }) })} type="button">Approve for Video</button>
         )}
+        <button className="ghost-button compact" disabled={!previousTake} onClick={() => onMergeTake(config.id, -1)} type="button">Merge Prev</button>
+        <button className="ghost-button compact" disabled={!nextTake} onClick={() => onMergeTake(config.id, 1)} type="button">Merge Next</button>
+        <button className="ghost-button compact" disabled={!previousTake} onClick={() => onPullAdjacentShot(config.id, -1)} type="button">Pull Prev Shot</button>
+        <button className="ghost-button compact" disabled={!nextTake} onClick={() => onPullAdjacentShot(config.id, 1)} type="button">Pull Next Shot</button>
+      </div>
+      <div className="editor-section compact-section">
+        <div className="section-head">
+          <div>
+            <span className="eyebrow">Take Shots</span>
+            <h3>Ordered Segments</h3>
+          </div>
+        </div>
+        <div className="diagnostic-stack">
+          {includedShots.map((shot, index) => (
+            <div key={shot.id} className="inline-note">
+              <strong>{index + 1}. {shot.title}</strong>
+              <span> {shot.durationSeconds}s · {shot.hookRole ?? 'beat'}{shot.proofMoment ? ` · ${shot.proofMoment}` : ''}</span>
+              <span>
+                {' '}
+                <button className="ghost-button compact" disabled={index === 0} onClick={() => onMoveShot(config.id, shot.id, -1)} type="button">Up</button>
+                <button className="ghost-button compact" disabled={index === includedShots.length - 1} onClick={() => onMoveShot(config.id, shot.id, 1)} type="button">Down</button>
+                <button className="ghost-button compact" disabled={index === includedShots.length - 1} onClick={() => onSplitTake(config.id, shot.id)} type="button">Split After</button>
+                <button className="ghost-button compact" disabled={includedShots.length <= 1} onClick={() => onExtractShot(config.id, shot.id)} type="button">Extract</button>
+              </span>
+            </div>
+          ))}
+        </div>
       </div>
       <div className="editor-section compact-section">
         <div className="section-head">
@@ -2355,6 +2805,12 @@ function CinematicTakeInspector({
                 <div className="inline-note">
                   <strong>Dropped refs</strong>
                   <span> {config.executionPlan.droppedRefIds.join(', ')}</span>
+                </div>
+              ) : null}
+              {config.executionPlan.droppedRefIds.length > 0 ? (
+                <div className="inline-note">
+                  <strong>Trim reason</strong>
+                  <span> Provider pack trimmed lower-priority refs to fit the Seedance reference budget.</span>
                 </div>
               ) : null}
               <label className="field-block full-width">

@@ -15,6 +15,18 @@ import {
   storyboardSpecSchema,
 } from './cinematics.ts'
 
+const normalizeEnumCandidate = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+const coerceEnumLikeValue = <TOption extends string>(options: readonly TOption[]) => (value: unknown) => {
+  if (value === null || value === undefined) return value
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  if (options.includes(trimmed as TOption)) return trimmed
+  const normalized = normalizeEnumCandidate(trimmed)
+  const matched = options.find((option) => normalizeEnumCandidate(option) === normalized)
+  return matched ?? null
+}
+
 export const WORLD_BUILD_ENVIRONMENT_VIEWS = ['hero', 'wide_alt', 'detail_area'] as const
 
 export const worldBuildPlanItemKindSchema = z.enum(['character', 'environment', 'item', 'narrative_graph', 'cinematic_graph'])
@@ -67,9 +79,9 @@ export const cinematicShotPlanSchema = z.object({
   title: z.string(),
   beat: z.string(),
   hookRole: cinematicHookRoleSchema.nullable().default(null),
-  formatSubtype: cinematicFormatSubtypeSchema.nullable().default(null),
-  formulaFamily: cinematicFormulaFamilySchema.nullable().default(null),
-  dominantTrigger: cinematicDominantTriggerSchema.nullable().default(null),
+  formatSubtype: z.preprocess(coerceEnumLikeValue(cinematicFormatSubtypeSchema.options), cinematicFormatSubtypeSchema.nullable()).default(null),
+  formulaFamily: z.preprocess(coerceEnumLikeValue(cinematicFormulaFamilySchema.options), cinematicFormulaFamilySchema.nullable()).default(null),
+  dominantTrigger: z.preprocess(coerceEnumLikeValue(cinematicDominantTriggerSchema.options), cinematicDominantTriggerSchema.nullable()).default(null),
   hookType: z.string().default(''),
   targetEmotion: z.string().default(''),
   personaStyle: z.string().default(''),
@@ -110,9 +122,9 @@ export const cinematicGraphSettingsSchema = z.object({
   defaultFps: z.number().int().positive().max(60).optional(),
   presetFamily: cinematicPresetFamilySchema.optional(),
   presetId: z.string().optional(),
-  formatSubtype: cinematicFormatSubtypeSchema.nullable().optional(),
-  formulaFamily: cinematicFormulaFamilySchema.nullable().optional(),
-  dominantTrigger: cinematicDominantTriggerSchema.nullable().optional(),
+  formatSubtype: z.preprocess(coerceEnumLikeValue(cinematicFormatSubtypeSchema.options), cinematicFormatSubtypeSchema.nullable()).optional(),
+  formulaFamily: z.preprocess(coerceEnumLikeValue(cinematicFormulaFamilySchema.options), cinematicFormulaFamilySchema.nullable()).optional(),
+  dominantTrigger: z.preprocess(coerceEnumLikeValue(cinematicDominantTriggerSchema.options), cinematicDominantTriggerSchema.nullable()).optional(),
   contrastAxis: z.string().optional(),
   proofMoment: z.string().optional(),
   ctaStyle: z.string().optional(),
@@ -124,6 +136,7 @@ export const cinematicPlanSchema = z.object({
   graphName: z.string(),
   graphSummary: z.string(),
   entityRefs: z.array(cinematicEntityRefSchema).default([]),
+  rawScriptMarkdown: z.string().default(''),
   scriptDoc: cinematicScriptDocSchema.nullable().default(null),
   relationshipRefs: z.array(cinematicRelationshipSchema).default([]),
   compositeRefPlans: z.array(cinematicCompositeRefPlanSchema).default([]),

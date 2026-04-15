@@ -990,7 +990,7 @@ code {
 }
 
 .graph-diagnostic-row {
-  display: grid;
+  display: none;
   gap: 8px;
   margin-top: 12px;
 }
@@ -3482,6 +3482,22 @@ button:disabled {
 .world-build-dialog {
   width: min(100%, 920px);
   min-height: min(820px, calc(100svh - 48px));
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.world-build-dialog-body {
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  gap: 16px;
+  align-content: start;
+  padding-right: 0.35rem;
+}
+
+.world-build-dialog-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
 }
 
 .confirm-delete-dialog {
@@ -3512,8 +3528,6 @@ button:disabled {
   display: grid;
   gap: 1rem;
   min-height: 0;
-  overflow-y: auto;
-  padding-right: 0.35rem;
   align-content: start;
 }
 

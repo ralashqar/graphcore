@@ -783,9 +783,6 @@ export default function App() {
           })
 
           if (cancelled) return
-          if (status.batch.plannerMode === 'cinematic_build' && status.graphs.some((graph) => graph.graphType === 'cinematic_flow')) {
-            setActiveTab('cinematics')
-          }
 
           setSnapshot((current) => {
             if (!current) return current
