@@ -218,6 +218,23 @@ function summarizeFunctionBody(body: Record<string, unknown>) {
   }
 }
 
+function readGenerationQueueMetadata(resultContext: unknown) {
+  const context = resultContext && typeof resultContext === 'object'
+    ? resultContext as Record<string, unknown>
+    : {}
+
+  return {
+    providerRequestId: typeof context.providerRequestId === 'string'
+      ? context.providerRequestId
+      : typeof context.requestId === 'string'
+        ? context.requestId
+        : null,
+    statusUrl: typeof context.statusUrl === 'string' ? context.statusUrl : null,
+    responseUrl: typeof context.responseUrl === 'string' ? context.responseUrl : null,
+    cancelUrl: typeof context.cancelUrl === 'string' ? context.cancelUrl : null,
+  }
+}
+
 async function getValidatedSession(signInMessage: string) {
   const {
     data: { session },
@@ -577,6 +594,64 @@ async function invokeAuthedFunction<TResponse>(
   })
 }
 
+async function invokeAuthedFunctionDirect(
+  functionName: string,
+  body: Record<string, unknown>,
+  session: Session,
+) {
+  const publishableKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
+
+  if (!publishableKey) {
+    throw new Error('Missing Supabase publishable key. Check VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY.')
+  }
+
+  if (!supabaseUrl) {
+    throw new Error('Missing Supabase URL. Check VITE_SUPABASE_URL.')
+  }
+
+  async function invokeDirect(accessToken: string) {
+    return fetch(`${supabaseUrl}/functions/v1/${functionName}`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        apikey: publishableKey,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    })
+  }
+
+  let response = await invokeDirect(session.access_token)
+
+  if (response.status === 401) {
+    const refreshed = await supabase.auth.refreshSession()
+    if (refreshed.error) {
+      throw refreshed.error
+    }
+    if (!refreshed.data.session) {
+      throw new Error('No authenticated Supabase session was available after refresh.')
+    }
+    response = await invokeDirect(refreshed.data.session.access_token)
+  }
+
+  if (!response.ok) {
+    const payload = await response.clone().json().catch(() => null) as { error?: unknown } | null
+    console.error(`[GraphCore] ${functionName} direct invocation failed.`, {
+      status: response.status,
+      statusText: response.statusText,
+      request: summarizeFunctionBody(body),
+      errorPayload: payload,
+    })
+    if (typeof payload?.error === 'string') {
+      throw new Error(payload.error)
+    }
+    throw new Error(`${functionName} failed with HTTP ${response.status}.`)
+  }
+
+  return response.json()
+}
+
 function isUnauthorizedFunctionsError(error: FunctionsHttpError | Error) {
   if (!('context' in error)) {
     return false
@@ -924,6 +999,10 @@ type WorldBuildJobRow = {
   target_keys: Record<string, string> | null
   prompt: string
   options: Record<string, unknown> | null
+  provider_request_id: string | null
+  status_url: string | null
+  response_url: string | null
+  cancel_url: string | null
   result_context: Record<string, unknown> | null
   error_message: string | null
   order_index: number
@@ -941,6 +1020,9 @@ type MeshGenerationJobRow = {
   provider: string
   model: string
   provider_request_id: string | null
+  status_url: string | null
+  response_url: string | null
+  cancel_url: string | null
   status: string
   provider_status: string | null
   provider_logs: unknown
@@ -1294,7 +1376,7 @@ export async function loadProjectSnapshot(
       .order('created_at', { ascending: false }),
     supabase
       .from('mesh_generation_jobs')
-      .select('id, project_id, draft_id, definition_key, source_image_asset_key, target_mesh_asset_key, provider, model, provider_request_id, status, provider_status, provider_logs, error_message, storage_path, created_at, updated_at')
+      .select('id, project_id, draft_id, definition_key, source_image_asset_key, target_mesh_asset_key, provider, model, provider_request_id, status_url, response_url, cancel_url, status, provider_status, provider_logs, error_message, storage_path, created_at, updated_at')
       .eq('draft_id', draft.id)
       .order('created_at', { ascending: false }),
     supabase
@@ -1365,7 +1447,7 @@ export async function loadProjectSnapshot(
       : (
           await supabase
             .from('world_build_jobs')
-            .select('id, batch_id, plan_item_id, kind, status, depends_on_job_ids, target_keys, prompt, options, result_context, error_message, order_index, created_at, updated_at')
+            .select('id, batch_id, plan_item_id, kind, status, depends_on_job_ids, target_keys, prompt, options, provider_request_id, status_url, response_url, cancel_url, result_context, error_message, order_index, created_at, updated_at')
             .in('batch_id', worldBuildBatches.map((batch) => batch.id))
             .order('order_index', { ascending: true })
         ).data as WorldBuildJobRow[] | null ?? []
@@ -1602,22 +1684,35 @@ export async function loadProjectSnapshot(
       updatedAt: batch.updated_at,
       jobs: worldBuildJobs
         .filter((job) => job.batch_id === batch.id)
-        .map((job) => ({
-          id: job.id,
-          batchId: job.batch_id,
-          planItemId: job.plan_item_id,
-          kind: job.kind,
-          status: job.status,
-          dependsOnJobIds: job.depends_on_job_ids ?? [],
-          targetKeys: job.target_keys ?? {},
-          prompt: job.prompt ?? '',
-          options: job.options ?? {},
-          resultContext: job.result_context ?? null,
-          errorMessage: job.error_message ?? null,
-          orderIndex: job.order_index,
-          createdAt: job.created_at,
-          updatedAt: job.updated_at,
-        })),
+        .map((job) => {
+          const queueMetadata = readGenerationQueueMetadata({
+            ...(job.result_context ?? {}),
+            providerRequestId: job.provider_request_id ?? undefined,
+            statusUrl: job.status_url ?? undefined,
+            responseUrl: job.response_url ?? undefined,
+            cancelUrl: job.cancel_url ?? undefined,
+          })
+          return {
+            id: job.id,
+            batchId: job.batch_id,
+            planItemId: job.plan_item_id,
+            kind: job.kind,
+            status: job.status,
+            dependsOnJobIds: job.depends_on_job_ids ?? [],
+            targetKeys: job.target_keys ?? {},
+            prompt: job.prompt ?? '',
+            options: job.options ?? {},
+            providerRequestId: queueMetadata.providerRequestId,
+            statusUrl: queueMetadata.statusUrl,
+            responseUrl: queueMetadata.responseUrl,
+            cancelUrl: queueMetadata.cancelUrl,
+            resultContext: job.result_context ?? null,
+            errorMessage: job.error_message ?? null,
+            orderIndex: job.order_index,
+            createdAt: job.created_at,
+            updatedAt: job.updated_at,
+          }
+        }),
     })),
     meshGenerationJobs: meshGenerationJobs.map((job) => meshGenerationJobSchema.parse({
       id: job.id,
@@ -1629,6 +1724,9 @@ export async function loadProjectSnapshot(
       provider: job.provider,
       model: job.model,
       providerRequestId: job.provider_request_id,
+      statusUrl: job.status_url,
+      responseUrl: job.response_url,
+      cancelUrl: job.cancel_url,
       status: job.status,
       providerStatus: job.provider_status,
       providerLogs: Array.isArray(job.provider_logs)
@@ -2699,12 +2797,8 @@ export async function pollMeshGeneration(request: MeshGenerationPollRequest): Pr
     throw new Error('Sign in and load a live GraphCore draft before polling mesh generation.')
   }
 
-  const response = await invokeAuthedFunctionWithSessionRecovery<MeshGenerationStatusResponse>('poll-mesh-generation', request, session)
-  if (response.error || !response.data) {
-    throw new Error(response.error ? await readFunctionsErrorMessage(response.error) : 'Polling mesh generation returned no data.')
-  }
-
-  const parsed = meshGenerationStatusResponseSchema.parse(response.data)
+  const response = await invokeAuthedFunctionDirect('poll-mesh-generation', request, session)
+  const parsed = meshGenerationStatusResponseSchema.parse(response)
   return {
     ...parsed,
     assets: await hydrateStorageAssetUrls(request.snapshot.project.id, parsed.assets as AssetDefinition[]),
@@ -2718,12 +2812,8 @@ export async function pollCinematicRun(request: CinematicRunStartRequest & { run
     throw new Error('Sign in and load a live GraphCore draft before polling a cinematic run.')
   }
 
-  const response = await invokeAuthedFunctionWithSessionRecovery<CinematicRunStatusResponse>('poll-cinematic-run', request, session)
-  if (response.error || !response.data) {
-    throw new Error(response.error ? await readFunctionsErrorMessage(response.error) : 'Polling cinematic run returned no data.')
-  }
-
-  const parsed = cinematicRunStatusResponseSchema.parse(response.data)
+  const response = await invokeAuthedFunctionDirect('poll-cinematic-run', request, session)
+  const parsed = cinematicRunStatusResponseSchema.parse(response)
   return {
     ...parsed,
     assets: await hydrateStorageAssetUrls(request.snapshot.project.id, parsed.assets as AssetDefinition[]),
@@ -2814,12 +2904,8 @@ export async function pollWorldBuild(request: { batchId: string; snapshot: Proje
     throw new Error('Sign in and load a live GraphCore draft before polling a world build.')
   }
 
-  const response = await invokeAuthedFunctionWithSessionRecovery<WorldBuildStatusResponse>('poll-world-build', request, session)
-  if (response.error || !response.data) {
-    throw new Error(response.error ? await readFunctionsErrorMessage(response.error) : 'Polling world build returned no data.')
-  }
-
-  return worldBuildStatusResponseSchema.parse(response.data)
+  const response = await invokeAuthedFunctionDirect('poll-world-build', request, session)
+  return worldBuildStatusResponseSchema.parse(response)
 }
 
 export async function deleteWorldBuildPlaceholder(request: WorldBuildDeletePlaceholderRequest): Promise<WorldBuildDeletePlaceholderResponse> {

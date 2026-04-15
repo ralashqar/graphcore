@@ -230,6 +230,80 @@ Confirm:
 - version incremented
 - `verify_jwt` is correct
 
+## Webhook Pattern For Long-Running Fal Jobs
+
+For Fal queue jobs, GraphCore now uses:
+
+1. reserve or confirm the final asset/resource first
+2. submit the Fal queue request
+3. persist:
+   - `providerRequestId`
+   - `statusUrl`
+   - `responseUrl`
+   - `cancelUrl`
+4. pass `webhook_url` pointing at `fal-webhook`
+5. let the webhook mark the job terminal when possible
+6. keep polling as fallback and recovery
+
+This is the current reliability pattern for:
+
+- world-build image jobs
+- cinematic still/storyboard preview jobs
+- Trellis mesh jobs
+
+Do not rely on `providerRequestId` alone if Fal already returned exact queue URLs.
+
+### Fal Webhook Verification
+
+`fal-webhook` is server-to-server and should not use `requireUserClient()`.
+
+It must:
+
+- set `verify_jwt = false`
+- verify Fal's signed webhook headers against Fal's JWKS
+- reject missing headers, stale timestamps, and bad signatures
+- be idempotent for repeated deliveries of the same `request_id`
+
+Fal docs currently require:
+
+- headers:
+  - `X-Fal-Webhook-Request-Id`
+  - `X-Fal-Webhook-User-Id`
+  - `X-Fal-Webhook-Timestamp`
+  - `X-Fal-Webhook-Signature`
+- body hash:
+  - SHA-256 of the raw request body
+- signature message:
+  - `request_id`
+  - `user_id`
+  - `timestamp`
+  - hex body hash
+  joined with newline characters
+
+### Webhook Completion Rules
+
+Use the webhook as the primary fast-path, but do not make it the only completion mechanism.
+
+If webhook status is terminal failure:
+
+- mark the job `failed`
+- mark the reserved asset/resource failed
+- stop polling on the next client/server reconciliation
+
+If webhook status is `OK` and the payload is usable:
+
+- complete the reserved asset/resource immediately
+- mark the job `succeeded`
+
+If webhook status is `OK` but the payload is missing, null, or unusable:
+
+- do not mark the job failed just from that
+- record webhook diagnostics
+- leave the job `running`
+- let polling fall back to `responseUrl`
+
+This avoids false failures when Fal sends a completion notification but the webhook payload is not sufficient to materialize the final result directly.
+
 ## Gateway Health Check
 
 `ACTIVE` in the management API is not enough. A function can still be broken on the public gateway.

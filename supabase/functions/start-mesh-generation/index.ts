@@ -152,6 +152,7 @@ Deno.serve(async (request) => {
             action: 'cancel',
             model: staleJob.model,
             requestId: staleJob.providerRequestId,
+            cancelUrl: staleJob.cancelUrl,
           },
         })
         if (!cancelResponse.error) {
@@ -273,6 +274,9 @@ Deno.serve(async (request) => {
       provider: 'fal',
       model: 'fal-ai/trellis-2',
       status: 'queued',
+      status_url: null,
+      response_url: null,
+      cancel_url: null,
       provider_logs: [],
       storage_path: storagePath,
       created_by: user.id,

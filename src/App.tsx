@@ -38,7 +38,7 @@ import type {
 } from './domain/graphcore'
 import { createAssemblyGraph } from './domain/environmentAssembly'
 import { createGraphScaffold } from './domain/graphScaffold'
-import { getResolvedRender3dBinding } from './domain/render3d'
+import { getResolvedDefinition3dBinding, getResolvedRender3dBinding } from './domain/render3d'
 import type { PromptPatchResponse } from './domain/prompting'
 import { normalizeNode } from './domain/nodeLibrary'
 import type { MeshGenerationStatusResponse } from './domain/meshGeneration'
@@ -329,6 +329,10 @@ function buildLocalMeshGenerationFailureStatus(
   }
 }
 
+function isDirectAssetGenerationBatch(batch: WorldBuildBatch) {
+  return batch.plannerMode === 'direct_asset_generation'
+}
+
 function clearAssetReferences<T>(value: T, assetKey: string): T {
   if (Array.isArray(value)) {
     return value.map((entry) => clearAssetReferences(entry, assetKey)) as T
@@ -476,6 +480,7 @@ export default function App() {
   const sessionRef = useRef<Session | null>(null)
   const snapshotRef = useRef<ProjectSnapshot | null>(null)
   const worldBuildPollInFlightRef = useRef(false)
+  const worldBuildPollFailureCountRef = useRef(0)
   const meshGenerationPollInFlightRef = useRef(false)
   const cinematicRunPollInFlightRef = useRef(false)
   const meshGenerationPollFailureCountsRef = useRef(new Map<string, number>())
@@ -798,7 +803,9 @@ export default function App() {
               })),
           })
         }
-        setCompletedWorldBuildBatch(batch)
+        if (!isDirectAssetGenerationBatch(batch)) {
+          setCompletedWorldBuildBatch(batch)
+        }
         if (!reconciledWorldBuildBatchIdsRef.current.has(batch.id) && loadedState?.source === 'supabase') {
           reconciledWorldBuildBatchIdsRef.current.add(batch.id)
           void refreshWorkspaceState(undefined, { ignoreUnsavedCache: true }).catch((refreshError) => {
@@ -810,38 +817,51 @@ export default function App() {
   }, [loadedState?.source, snapshot])
 
   useEffect(() => {
-    if (!snapshot || loadedState?.source !== 'supabase') return
-
-    const activeBatches = snapshot.worldBuildBatches.filter((batch) => !isTerminalWorldBuildBatchStatus(batch.status))
-    if (activeBatches.length === 0) return
+    if (loadedState?.source !== 'supabase') return
 
     let cancelled = false
 
-    const currentSnapshot = snapshot
-
     async function pollActiveWorldBuilds() {
       if (worldBuildPollInFlightRef.current || cancelled) return
+      const currentSnapshot = snapshotRef.current
+      if (!currentSnapshot) return
+      const activeBatches = currentSnapshot.worldBuildBatches.filter((batch) => !isTerminalWorldBuildBatchStatus(batch.status))
+      if (activeBatches.length === 0) return
       worldBuildPollInFlightRef.current = true
 
       try {
+        let workingSnapshot = currentSnapshot
         for (const batch of activeBatches) {
+          console.info('[GraphCore] polling world build batch.', {
+            batchId: batch.id,
+            plannerMode: batch.plannerMode,
+            status: batch.status,
+          })
           const status = await workspaceService.pollWorldBuild({
             batchId: batch.id,
-            snapshot: currentSnapshot,
+            snapshot: workingSnapshot,
             model: promptModel,
           })
 
           if (cancelled) return
 
-          setSnapshot((current) => {
-            if (!current) return current
-            const nextSnapshot = mergeWorldBuildStatusIntoSnapshot(current, status)
-            setBundle(compileBundle(nextSnapshot))
-            return nextSnapshot
+          const mergeBase = snapshotRef.current ?? workingSnapshot
+          const nextSnapshot = mergeWorldBuildStatusIntoSnapshot(mergeBase, status)
+          workingSnapshot = nextSnapshot
+          snapshotRef.current = nextSnapshot
+          setSnapshot(nextSnapshot)
+          setBundle(compileBundle(nextSnapshot))
+        }
+        worldBuildPollFailureCountRef.current = 0
+      } catch (pollError) {
+        worldBuildPollFailureCountRef.current += 1
+        console.error('[GraphCore] world build polling failed.', pollError)
+        if (worldBuildPollFailureCountRef.current >= 2) {
+          worldBuildPollFailureCountRef.current = 0
+          void refreshWorkspaceState(undefined, { ignoreUnsavedCache: true }).catch((refreshError) => {
+            console.error('[GraphCore] world build polling recovery refresh failed.', refreshError)
           })
         }
-      } catch (pollError) {
-        console.error('[GraphCore] world build polling failed.', pollError)
       } finally {
         worldBuildPollInFlightRef.current = false
       }
@@ -857,23 +877,24 @@ export default function App() {
       cancelled = true
       window.clearInterval(interval)
     }
-  }, [loadedState?.source, promptModel, snapshot])
+  }, [loadedState?.source, promptModel])
 
   useEffect(() => {
-    if (!snapshot || loadedState?.source !== 'supabase') return
-
-    const activeJobs = snapshot.meshGenerationJobs.filter((job) => !isTerminalMeshGenerationJobStatus(job.status))
-    if (activeJobs.length === 0) return
-    const definitionKeys = new Set(snapshot.definitions.map((definition) => definition.key))
+    if (loadedState?.source !== 'supabase') return
 
     let cancelled = false
-    const currentSnapshot = snapshot
 
     async function pollActiveMeshJobs() {
       if (meshGenerationPollInFlightRef.current || cancelled) return
+      const currentSnapshot = snapshotRef.current
+      if (!currentSnapshot) return
+      const activeJobs = currentSnapshot.meshGenerationJobs.filter((job) => !isTerminalMeshGenerationJobStatus(job.status))
+      if (activeJobs.length === 0) return
+      const definitionKeys = new Set(currentSnapshot.definitions.map((definition) => definition.key))
       meshGenerationPollInFlightRef.current = true
 
       try {
+        let workingSnapshot = currentSnapshot
         for (const job of activeJobs) {
           if (!definitionKeys.has(job.definitionKey)) {
             meshGenerationPollFailureCountsRef.current.delete(job.id)
@@ -882,30 +903,30 @@ export default function App() {
               `Mesh generation job orphaned: definition ${job.definitionKey} no longer exists in this draft.`,
             )
 
-            setSnapshot((current) => {
-              if (!current) return current
-              const nextSnapshot = mergeMeshGenerationStatusIntoSnapshot(current, failureStatus)
-              setBundle(compileBundle(nextSnapshot))
-              return nextSnapshot
-            })
+            const mergeBase = snapshotRef.current ?? workingSnapshot
+            const nextSnapshot = mergeMeshGenerationStatusIntoSnapshot(mergeBase, failureStatus)
+            workingSnapshot = nextSnapshot
+            snapshotRef.current = nextSnapshot
+            setSnapshot(nextSnapshot)
+            setBundle(compileBundle(nextSnapshot))
             continue
           }
 
           try {
             const status = await workspaceService.pollMeshGeneration({
               jobId: job.id,
-              snapshot: currentSnapshot,
+              snapshot: workingSnapshot,
             })
 
             if (cancelled) return
 
             meshGenerationPollFailureCountsRef.current.delete(job.id)
-            setSnapshot((current) => {
-              if (!current) return current
-              const nextSnapshot = mergeMeshGenerationStatusIntoSnapshot(current, status)
-              setBundle(compileBundle(nextSnapshot))
-              return nextSnapshot
-            })
+            const mergeBase = snapshotRef.current ?? workingSnapshot
+            const nextSnapshot = mergeMeshGenerationStatusIntoSnapshot(mergeBase, status)
+            workingSnapshot = nextSnapshot
+            snapshotRef.current = nextSnapshot
+            setSnapshot(nextSnapshot)
+            setBundle(compileBundle(nextSnapshot))
           } catch (jobPollError) {
             const message = jobPollError instanceof Error ? jobPollError.message : 'Mesh generation polling failed.'
             const previousFailures = meshGenerationPollFailureCountsRef.current.get(job.id) ?? 0
@@ -932,12 +953,12 @@ export default function App() {
                 : `Mesh generation polling failed repeatedly. ${message}`,
             )
 
-            setSnapshot((current) => {
-              if (!current) return current
-              const nextSnapshot = mergeMeshGenerationStatusIntoSnapshot(current, failureStatus)
-              setBundle(compileBundle(nextSnapshot))
-              return nextSnapshot
-            })
+            const mergeBase = snapshotRef.current ?? workingSnapshot
+            const nextSnapshot = mergeMeshGenerationStatusIntoSnapshot(mergeBase, failureStatus)
+            workingSnapshot = nextSnapshot
+            snapshotRef.current = nextSnapshot
+            setSnapshot(nextSnapshot)
+            setBundle(compileBundle(nextSnapshot))
           }
         }
       } finally {
@@ -955,7 +976,7 @@ export default function App() {
       cancelled = true
       window.clearInterval(interval)
     }
-  }, [loadedState?.source, snapshot])
+  }, [loadedState?.source])
 
   useEffect(() => {
     if (!snapshot) return
@@ -2330,6 +2351,91 @@ export default function App() {
     }
   }
 
+  function getDefinitionConceptGenerationState(definitionKey: string) {
+    if (!snapshot) return null
+
+    const definition = snapshot.definitions.find((entry) => entry.key === definitionKey) ?? null
+    if (!definition || (definition.kind !== 'character' && definition.kind !== 'item' && definition.kind !== 'environment')) {
+      return null
+    }
+
+    if (definition.kind === 'environment') {
+      const renderBinding = getResolvedDefinition3dBinding(definition)
+      return {
+        definition,
+        existingAssetKey: renderBinding?.previewImageAssetKey ?? definition.iconAssetKey ?? null,
+        promptText: renderBinding?.generationPrompt?.trim() || definition.summary,
+      }
+    }
+
+    const renderBinding = getResolvedRender3dBinding(definition)
+    return {
+      definition,
+      existingAssetKey: renderBinding?.previewImageAssetKey ?? definition.iconAssetKey ?? null,
+      promptText: renderBinding?.conceptPrompt?.trim() || renderBinding?.generationPrompt?.trim() || definition.summary,
+    }
+  }
+
+  async function handleStartDefinitionConceptGeneration(definitionKey: string) {
+    if (!snapshot || loadedState?.source !== 'supabase') {
+      setPromptRuntimeError('Concept generation requires a live Supabase workspace.')
+      return
+    }
+
+    const conceptState = getDefinitionConceptGenerationState(definitionKey)
+    if (!conceptState) {
+      setPromptRuntimeError(`Definition ${definitionKey} was not found.`)
+      return
+    }
+
+    const { definition, existingAssetKey, promptText: directPromptText } = conceptState
+
+    const requestSummary = `Generate concept image for ${definition.name}`
+    const prompt = directPromptText.trim() || requestSummary
+    const planItem: WorldBuildPlanItem = {
+      id: createLocalEntityId('direct-concept'),
+      kind: definition.kind as 'character' | 'environment' | 'item',
+      name: definition.name,
+      summary: prompt,
+      dependsOn: [],
+      enabled: true,
+      generationOptions: {
+        generateConceptImage: true,
+        existingDefinitionKey: definition.key,
+        existingAssetKey,
+      },
+    }
+
+    try {
+      const status = await workspaceService.startWorldBuild({
+        plannerMode: 'direct_asset_generation',
+        prompt,
+        requestSummary,
+        snapshot,
+        planItems: [planItem],
+        cinematicPlan: null,
+        model: promptModel,
+      })
+
+      setPromptRuntimeError(null)
+      setSnapshot((current) => {
+        if (!current) return current
+        const nextSnapshot = mergeWorldBuildStatusIntoSnapshot(current, status)
+        setBundle(compileBundle(nextSnapshot))
+        return nextSnapshot
+      })
+      const previewAssetKey = typeof status.assets[0]?.key === 'string' ? status.assets[0].key : null
+      if (previewAssetKey) {
+        setSelectedAssetKey(previewAssetKey)
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Starting concept image generation failed.'
+      console.error('[GraphCore] direct concept generation failed to start.', error)
+      setPromptRuntimeError(message)
+      throw error
+    }
+  }
+
   function handleOpenBootstrapOnboarding() {
     setBootstrapGameArchetypeId('rpg')
     setBootstrapConceptPrompt('')
@@ -3032,12 +3138,12 @@ export default function App() {
                 onAddCustomField={addCustomField}
                   onAssignArchetypeIcon={assignAssetToSelectedArchetype}
                   onAssignItemIcon={assignAssetToSelectedItem}
-                  onCreateArchetype={createArchetype}
+                onCreateArchetype={createArchetype}
                 onCreateDefinitionOfKind={createDefinitionOfKind}
                 onCreateItem={createItem}
-                onCreateUrlAsset={createUrlAsset}
                 onDeleteGeneratedMesh={deleteGeneratedMesh}
                 onDeleteItem={deleteDefinition}
+                onGenerateConceptImage={(definitionKey) => handleStartDefinitionConceptGeneration(definitionKey)}
                 onRemoveArchetypeField={removeArchetypeField}
                 onSelectAsset={setSelectedAssetKey}
                 onSelectArchetype={setSelectedArchetypeKey}
@@ -3075,13 +3181,13 @@ export default function App() {
                 onCreateEnvironmentBlueprint={createEnvironmentBlueprintForEnvironment}
                 onCreateAssemblyGraph={createEnvironmentAssemblyGraph}
                 onCreateDefinition={createCharacter}
-                onCreateUrlAsset={createUrlAsset}
                 onChangePromptText={setPromptText}
                 onDeleteDefinition={deleteDefinition}
                 onDeleteGeneratedMesh={deleteGeneratedMesh}
                 onDeleteAssemblyGraph={deleteAssemblyGraph}
                 onDeleteEnvironmentBlueprint={deleteEnvironmentBlueprint}
                 onGeneratePrompt={handleGeneratePatch}
+                onGenerateConceptImage={(definitionKey) => handleStartDefinitionConceptGeneration(definitionKey)}
                 onStartMeshGeneration={(definitionKey) => void startMeshGenerationForDefinition(definitionKey)}
                 onPersistDefinitionPreviewImageBinding={(definitionKey, assetKey) => workspaceService.persistDefinitionPreviewImageBinding(snapshot, definitionKey, assetKey)}
                 onSelectAsset={setSelectedAssetKey}
@@ -3118,13 +3224,13 @@ export default function App() {
                 onCreateEnvironmentBlueprint={createEnvironmentBlueprintForEnvironment}
                 onCreateAssemblyGraph={createEnvironmentAssemblyGraph}
                 onCreateDefinition={createEnvironment}
-                onCreateUrlAsset={createUrlAsset}
                 onChangePromptText={setPromptText}
                 onDeleteDefinition={deleteDefinition}
                 onDeleteGeneratedMesh={deleteGeneratedMesh}
                 onDeleteAssemblyGraph={deleteAssemblyGraph}
                 onDeleteEnvironmentBlueprint={deleteEnvironmentBlueprint}
                 onGeneratePrompt={handleGeneratePatch}
+                onGenerateConceptImage={(definitionKey) => handleStartDefinitionConceptGeneration(definitionKey)}
                 onStartMeshGeneration={(definitionKey) => void startMeshGenerationForDefinition(definitionKey)}
                 onPersistDefinitionPreviewImageBinding={(definitionKey, assetKey) => workspaceService.persistDefinitionPreviewImageBinding(snapshot, definitionKey, assetKey)}
                 onSelectAsset={setSelectedAssetKey}

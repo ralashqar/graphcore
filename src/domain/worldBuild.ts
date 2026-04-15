@@ -33,12 +33,14 @@ export const worldBuildPlanItemKindSchema = z.enum(['character', 'environment', 
 export const worldBuildBatchStatusSchema = z.enum(['planned', 'running', 'completed', 'completed_with_errors', 'failed', 'cancelled'])
 export const worldBuildJobStatusSchema = z.enum(['queued', 'running', 'succeeded', 'failed', 'skipped'])
 export const resourceGenerationStateSchema = z.enum(['pending', 'running', 'completed', 'failed'])
-export const worldBuildPlannerModeSchema = z.enum(['world_build', 'cinematic_build'])
+export const worldBuildPlannerModeSchema = z.enum(['world_build', 'cinematic_build', 'direct_asset_generation'])
 
 export const worldBuildGenerationOptionsSchema = z.object({
   generateConceptImage: z.boolean().optional(),
   generateConceptGallery: z.boolean().optional(),
   environmentViews: z.array(z.enum(WORLD_BUILD_ENVIRONMENT_VIEWS)).optional(),
+  existingDefinitionKey: z.string().min(1).optional(),
+  existingAssetKey: z.string().min(1).nullable().optional(),
 }).default({})
 
 export const worldBuildPlanItemSchema = z.object({
@@ -215,6 +217,10 @@ export const worldBuildJobSchema = z.object({
   targetKeys: z.record(z.string(), z.string()).default({}),
   prompt: z.string().default(''),
   options: z.record(z.string(), z.unknown()).default({}),
+  providerRequestId: z.string().nullable().default(null),
+  statusUrl: z.string().nullable().default(null),
+  responseUrl: z.string().nullable().default(null),
+  cancelUrl: z.string().nullable().default(null),
   resultContext: z.record(z.string(), z.unknown()).nullable().default(null),
   errorMessage: z.string().nullable().default(null),
   orderIndex: z.number().int().default(0),

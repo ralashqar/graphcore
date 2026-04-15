@@ -44,7 +44,6 @@ export type ContentWorkspaceProps = {
   onCreateArchetype: () => void
   onCreateDefinitionOfKind: (kind: DefinitionBase['kind'], archetypeKey?: string | null) => void
   onCreateItem: (archetypeKey?: string | null) => void
-  onCreateUrlAsset: (url: string, kind?: AssetUrlCreationKind, options?: AssetUrlCreateOptions) => string | null
   onDeleteGeneratedMesh: (definitionKey: string) => void
   onDeleteItem: (itemKey: string) => void
   onRemoveArchetypeField: (archetypeKey: string, fieldKey: string) => void
@@ -56,6 +55,7 @@ export type ContentWorkspaceProps = {
   onUpdateFieldValue: (itemKey: string, fieldKey: string, value: FieldValue['value']) => void
   onUpdateItemIdentity: (key: string, changes: ItemIdentityChanges) => void
   onUpdateComponents: (itemKey: string, components: DefinitionBase['components']) => void
+  onGenerateConceptImage: (definitionKey: string) => Promise<void>
   onStartMeshGeneration: (definitionKey: string) => void
   onPersistDefinitionPreviewImageBinding: (definitionKey: string, assetKey: string | null) => Promise<void>
 }

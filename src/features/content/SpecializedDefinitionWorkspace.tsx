@@ -1,14 +1,11 @@
 import { useEffect, useMemo, useState, useTransition } from 'react'
 
 import { getArtStylePresetLabel } from '../../domain/artStylePresets'
-import { buildAssetSlug, type AssetUrlCreateOptions } from '../../domain/assets'
 import type { ArchetypeDefinition, AssetDefinition, AssemblyGraphDefinition, DefinitionBase, EnvironmentBlueprintV1, FieldDefinition, FieldValue, GameSpec } from '../../domain/graphcore'
 import { getEnvironmentProfile, getResolvedDefinition3dBinding, getResolvedRender3dBinding } from '../../domain/render3d'
-import { buildCharacterConceptPrompt, buildEnvironmentConceptPrompt } from '../../domain/visualAssetGeneration'
 import { getResourceGenerationMetadata, isPendingGenerationResource } from '../../domain/worldBuild'
 import type { MeshGenerationJob } from '../../domain/meshGeneration'
 import { isTerminalMeshGenerationJobStatus } from '../../domain/meshGeneration'
-import { visualAssetGenerationService } from '../../application/services/visualAssetGenerationService'
 import { iconForDefinitionKind } from '../../shared/entityIcons'
 import { DefinitionEditor } from './DefinitionEditor'
 import { EnvironmentAssemblyWorkspace } from './EnvironmentAssemblyWorkspace'
@@ -40,13 +37,13 @@ type SpecializedDefinitionWorkspaceProps = {
   onCreateEnvironmentBlueprint: (environmentKey: string) => string | null
   onCreateAssemblyGraph: (environmentKey: string) => string | null
   onCreateDefinition: (archetypeKey?: string | null) => void
-  onCreateUrlAsset: (url: string, kind?: 'image' | 'mesh', options?: AssetUrlCreateOptions) => string | null
   onDeleteDefinition: (itemKey: string) => void
   onDeleteGeneratedMesh: (definitionKey: string) => void
   onDeleteAssemblyGraph: (graphKey: string) => void
   onDeleteEnvironmentBlueprint: (blueprintId: string) => void
   onChangePromptText: (value: string) => void
   onGeneratePrompt: () => void
+  onGenerateConceptImage: (definitionKey: string) => Promise<void>
   onStartMeshGeneration: (definitionKey: string) => void
   onPersistDefinitionPreviewImageBinding: (definitionKey: string, assetKey: string | null) => Promise<void>
   onSelectAsset: (key: string | null) => void
@@ -70,7 +67,7 @@ export function SpecializedDefinitionWorkspace({
   assemblyGraphs,
   environmentBlueprints = [],
   gameSpec = null,
-  projectSummary = null,
+  projectSummary: _projectSummary = null,
   selectedAsset,
   selectedDefinition,
   deletingDefinitionKey = null,
@@ -82,13 +79,13 @@ export function SpecializedDefinitionWorkspace({
   onCreateEnvironmentBlueprint,
   onCreateAssemblyGraph,
   onCreateDefinition,
-  onCreateUrlAsset,
   onDeleteDefinition,
   onDeleteGeneratedMesh,
   onDeleteAssemblyGraph,
   onDeleteEnvironmentBlueprint,
   onChangePromptText,
   onGeneratePrompt,
+  onGenerateConceptImage,
   onStartMeshGeneration,
   onPersistDefinitionPreviewImageBinding,
   onSelectAsset: _onSelectAsset,
@@ -294,46 +291,8 @@ export function SpecializedDefinitionWorkspace({
     setCharacterConceptMessage(null)
 
     try {
-      const archetypeLabel = compatibleArchetypes.find((archetype) => archetype.key === effectiveSelection.archetypeKey)?.name ?? effectiveSelection.archetypeKey ?? null
-      const conceptAssetName = `${buildAssetSlug(effectiveSelection.name) || 'character'}_conceptart`
-      const prompt = buildCharacterConceptPrompt({
-        characterName: effectiveSelection.name,
-        subtype: selectedCharacterProfile?.subtype ?? 'humanoid',
-        archetypeLabel,
-        artStylePresetLabel: getArtStylePresetLabel(typeof gameSpec?.theme?.artStylePreset === 'string' ? gameSpec.theme.artStylePreset : null),
-        artStyleDescription: typeof gameSpec?.theme?.artStyleDescription === 'string' ? gameSpec.theme.artStyleDescription : null,
-        projectContextDescription: projectSummary,
-        visualDescription: conceptPrompt,
-      })
-      const result = await visualAssetGenerationService.generateConceptImage({
-        prompt,
-        aspectRatio: '1:1',
-      })
-      const imageUrl = result.imageUrls[0] ?? null
-      if (!imageUrl) {
-        throw new Error('Fal returned no concept image URL.')
-        }
-        const assetKey = onCreateUrlAsset(imageUrl, 'image', {
-          existingAssetKey: selectedCharacterRenderBinding.previewImageAssetKey,
-          name: conceptAssetName,
-          metadata: {
-            generatedBy: 'character_concept',
-            provider: result.provider,
-          model: result.model,
-          requestId: result.requestId,
-          prompt,
-          previewUrl: imageUrl,
-          sourceUrl: imageUrl,
-          generatedAt: new Date().toISOString(),
-        },
-        openAssetsTab: false,
-        selectAsset: false,
-      })
-      if (!assetKey) {
-        throw new Error('The generated concept image could not be stored as a project asset.')
-      }
-      updateCharacterRenderBinding({ previewImageAssetKey: assetKey })
-      setCharacterConceptMessage(`Concept image generated with ${result.model}.`)
+      await onGenerateConceptImage(effectiveSelection.key)
+      setCharacterConceptMessage('Concept image generation queued.')
     } catch (error) {
       setCharacterConceptMessage(error instanceof Error ? error.message : 'Character concept generation failed.')
     } finally {
@@ -350,49 +309,8 @@ export function SpecializedDefinitionWorkspace({
     setEnvironmentConceptMessage(null)
 
     try {
-      const archetypeLabel = compatibleArchetypes.find((archetype) => archetype.key === effectiveSelection.archetypeKey)?.name ?? effectiveSelection.archetypeKey ?? null
-      const conceptAssetName = `${buildAssetSlug(effectiveSelection.name) || 'environment'}_conceptart`
-      const prompt = buildEnvironmentConceptPrompt({
-        environmentName: effectiveSelection.name,
-        subtype: selectedEnvironmentProfile?.subtype ?? 'exterior',
-        archetypeLabel,
-        lightingProfile: selectedEnvironmentRenderBinding.lightingProfile ?? null,
-        artStylePresetLabel: getArtStylePresetLabel(typeof gameSpec?.theme?.artStylePreset === 'string' ? gameSpec.theme.artStylePreset : null),
-        artStyleDescription: typeof gameSpec?.theme?.artStyleDescription === 'string' ? gameSpec.theme.artStyleDescription : null,
-        projectContextDescription: projectSummary,
-        visualDescription,
-      })
-      const result = await visualAssetGenerationService.generateConceptImage({
-        prompt,
-        aspectRatio: '16:9',
-      })
-      const imageUrl = result.imageUrls[0] ?? null
-      if (!imageUrl) {
-        throw new Error('Fal returned no concept image URL.')
-      }
-      const assetKey = onCreateUrlAsset(imageUrl, 'image', {
-        existingAssetKey: selectedEnvironmentRenderBinding.previewImageAssetKey,
-        name: conceptAssetName,
-        metadata: {
-          generatedBy: 'environment_concept',
-          provider: result.provider,
-          model: result.model,
-          requestId: result.requestId,
-          prompt,
-          previewUrl: imageUrl,
-          sourceUrl: imageUrl,
-          generatedAt: new Date().toISOString(),
-        },
-        openAssetsTab: false,
-        selectAsset: false,
-      })
-      if (!assetKey) {
-        throw new Error('The generated concept image could not be stored as a project asset.')
-      }
-      updateEnvironmentRenderBinding({ previewImageAssetKey: assetKey })
-      onUpdateItemIdentity(effectiveSelection.key, { iconAssetKey: assetKey })
-      await onPersistDefinitionPreviewImageBinding(effectiveSelection.key, assetKey)
-      setEnvironmentConceptMessage(`Concept image generated with ${result.model}.`)
+      await onGenerateConceptImage(effectiveSelection.key)
+      setEnvironmentConceptMessage('Concept image generation queued.')
     } catch (error) {
       setEnvironmentConceptMessage(error instanceof Error ? error.message : 'Environment concept generation failed.')
     } finally {

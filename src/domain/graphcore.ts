@@ -111,14 +111,7 @@ export const questStateSchema = z.enum([
   'failed',
 ])
 
-export const characterSubtypeSchema = z.enum([
-  'humanoid',
-  'beast',
-  'construct',
-  'undead',
-  'vehicle',
-  'spirit',
-])
+export const characterSubtypeSchema = z.string().trim().min(1).default('humanoid')
 
 export const environmentSubtypeSchema = z.enum([
   'interior',

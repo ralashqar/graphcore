@@ -19,6 +19,7 @@ import { requireUserClient } from '../_shared/auth.ts'
 import {
   completeReservedGeneratedImageAsset,
   isTerminalCinematicRunStatus,
+  markGeneratedImageAssetFailed,
   resolveDefinitionDisplayAssetKey,
   resolveAssetUrl,
   toCinematicRun,
@@ -26,6 +27,7 @@ import {
 } from '../_shared/cinematics.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
 import { buildDefaultDefinitionComponents } from '../_shared/world-build-placeholders.ts'
+import { buildFalWebhookUrl } from '../_shared/fal-webhooks.ts'
 import { runStructuredWorldBuildModel, isTerminalWorldBuildStatus } from '../_shared/world-build.ts'
 import { buildAssetSlug } from '../../../src/domain/assets.ts'
 import {
@@ -49,7 +51,7 @@ const contentGenerationSchema = z.object({
   summary: z.string(),
   tags: z.array(z.string()).default([]),
   characterProfile: z.object({
-    subtype: z.enum(['humanoid', 'beast', 'construct', 'undead', 'vehicle', 'spirit']).default('humanoid'),
+    subtype: z.string().trim().min(1).default('humanoid'),
     bodyClass: z.string().default('humanoid'),
     controlMode: z.enum(['player', 'ai', 'scripted', 'neutral']).default('ai'),
     scaleProfile: z.enum(['small', 'medium', 'large', 'huge']).default('medium'),
@@ -325,6 +327,10 @@ type JobRow = {
   target_keys: Record<string, string> | null
   prompt: string
   options: Record<string, unknown> | null
+  provider_request_id: string | null
+  status_url: string | null
+  response_url: string | null
+  cancel_url: string | null
   result_context: Record<string, unknown> | null
   error_message: string | null
   order_index: number
@@ -609,6 +615,75 @@ function storyboardPromptForPlan(plan: z.infer<typeof cinematicPlanSchema>, stor
   ].filter(Boolean).join(' ')
 }
 
+function readWorldBuildQueueMetadata(
+  resultContext: Record<string, unknown> | null | undefined,
+  overrides?: {
+    providerRequestId?: string | null
+    statusUrl?: string | null
+    responseUrl?: string | null
+    cancelUrl?: string | null
+  },
+) {
+  const context = resultContext && typeof resultContext === 'object'
+    ? resultContext
+    : {}
+
+  return {
+    providerRequestId: typeof overrides?.providerRequestId === 'string'
+      ? overrides.providerRequestId
+      : typeof context.providerRequestId === 'string'
+      ? context.providerRequestId
+      : typeof context.requestId === 'string'
+        ? context.requestId
+        : null,
+    statusUrl: typeof overrides?.statusUrl === 'string'
+      ? overrides.statusUrl
+      : typeof context.statusUrl === 'string' ? context.statusUrl : null,
+    responseUrl: typeof overrides?.responseUrl === 'string'
+      ? overrides.responseUrl
+      : typeof context.responseUrl === 'string' ? context.responseUrl : null,
+    cancelUrl: typeof overrides?.cancelUrl === 'string'
+      ? overrides.cancelUrl
+      : typeof context.cancelUrl === 'string' ? context.cancelUrl : null,
+  }
+}
+
+function readSubmittedAt(resultContext: Record<string, unknown> | null | undefined) {
+  const context = resultContext && typeof resultContext === 'object'
+    ? resultContext
+    : {}
+  return typeof context.submittedAt === 'string' ? context.submittedAt : null
+}
+
+function parseWorldBuildJob(row: JobRow) {
+  const queueMetadata = readWorldBuildQueueMetadata(row.result_context, {
+    providerRequestId: row.provider_request_id,
+    statusUrl: row.status_url,
+    responseUrl: row.response_url,
+    cancelUrl: row.cancel_url,
+  })
+  return worldBuildJobSchema.parse({
+    id: row.id,
+    batchId: row.batch_id,
+    planItemId: row.plan_item_id,
+    kind: row.kind,
+    status: row.status,
+    dependsOnJobIds: row.depends_on_job_ids ?? [],
+    targetKeys: row.target_keys ?? {},
+    prompt: row.prompt ?? '',
+    options: row.options ?? {},
+    providerRequestId: queueMetadata.providerRequestId,
+    statusUrl: queueMetadata.statusUrl,
+    responseUrl: queueMetadata.responseUrl,
+    cancelUrl: queueMetadata.cancelUrl,
+    resultContext: row.result_context ?? null,
+    errorMessage: row.error_message ?? null,
+    orderIndex: row.order_index,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  })
+}
+
 async function loadBatch(
   client: Awaited<ReturnType<typeof requireUserClient>>['client'],
   batchId: string,
@@ -625,7 +700,7 @@ async function loadBatch(
 
   const jobsResponse = await client
     .from('world_build_jobs')
-    .select('id, batch_id, plan_item_id, kind, status, depends_on_job_ids, target_keys, prompt, options, result_context, error_message, order_index, created_at, updated_at')
+    .select('id, batch_id, plan_item_id, kind, status, depends_on_job_ids, target_keys, prompt, options, provider_request_id, status_url, response_url, cancel_url, result_context, error_message, order_index, created_at, updated_at')
     .eq('batch_id', batchId)
     .order('order_index', { ascending: true })
 
@@ -645,6 +720,27 @@ async function loadBatchResources(
   projectId: string,
   batchId: string,
 ) {
+  const batchJobsResponse = await client
+    .from('world_build_jobs')
+    .select('kind, target_keys')
+    .eq('batch_id', batchId)
+
+  if (batchJobsResponse.error) {
+    throw new Error(batchJobsResponse.error.message)
+  }
+
+  const existingDefinitionKeys = Array.from(new Set(
+    ((batchJobsResponse.data ?? []) as Array<{ kind?: string | null; target_keys?: Record<string, unknown> | null }>)
+      .flatMap((job) => {
+        const definitionKey = typeof job.target_keys?.definitionKey === 'string' ? job.target_keys.definitionKey : null
+        if (!definitionKey) return []
+        if (job.kind === 'character_concept_image' || job.kind === 'item_concept_image' || job.kind === 'environment_concept_image') {
+          return [definitionKey]
+        }
+        return []
+      }),
+  ))
+
   const [definitionsResponse, graphsResponse, graphNodesResponse, graphEdgesResponse, assetsResponse] = await Promise.all([
     client
       .from('project_definitions')
@@ -680,7 +776,25 @@ async function loadBatchResources(
     )
   }
 
-  const definitions = await Promise.all((definitionsResponse.data ?? []).map(async (definition) => {
+  const directDefinitionsResponse = existingDefinitionKeys.length > 0
+    ? await client
+        .from('project_definitions')
+        .select('id, key, kind, name, summary, status, icon_asset_key, archetype_key, tags, schema_version, metadata, llm_hints, asset_refs, definition_data')
+        .eq('draft_id', draftId)
+        .in('key', existingDefinitionKeys)
+    : { data: [], error: null }
+
+  if (directDefinitionsResponse.error) {
+    throw new Error(directDefinitionsResponse.error.message)
+  }
+
+  const mergedDefinitionRows = Array.from(
+    new Map(
+      [...(definitionsResponse.data ?? []), ...(directDefinitionsResponse.data ?? [])].map((definition) => [definition.key, definition]),
+    ).values(),
+  )
+
+  const definitions = await Promise.all(mergedDefinitionRows.map(async (definition) => {
     const componentsResponse = await client
       .from('project_definition_components')
       .select('component_type, config')
@@ -1655,53 +1769,285 @@ Deno.serve(async (request) => {
             const assetKey = job.target_keys?.assetKey
             const definition = snapshot.definitions.find((entry) => entry.key === definitionKey)
             if (!definition || !assetKey) throw new Error(`Placeholder resources for job ${job.id} were not found.`)
+            const prompt = conceptPromptFromDefinition(definition, job, snapshot)
+            const currentResultContext = job.result_context ?? {}
+            const queueMetadata = readWorldBuildQueueMetadata(currentResultContext)
 
-            const falResponse = await client.functions.invoke('ai-fal', {
-              body: {
-                action: 'subscribe',
-                model: 'fal-ai/nano-banana-2',
-                input: {
-                  prompt: conceptPromptFromDefinition(definition, job, snapshot),
-                  num_images: 1,
-                  aspect_ratio: '1:1',
-                  output_format: 'png',
-                  resolution: '1K',
+            if (job.status === 'queued') {
+              const falResponse = await client.functions.invoke('ai-fal', {
+                body: {
+                  action: 'submit',
+                  model: 'fal-ai/nano-banana-2',
+                  webhookUrl: buildFalWebhookUrl(),
+                  input: {
+                    prompt,
+                    num_images: 1,
+                    aspect_ratio: job.kind === 'environment_concept_image' ? '16:9' : '1:1',
+                    output_format: 'png',
+                    resolution: '1K',
+                  },
+                  logs: true,
                 },
-                logs: true,
-                timeoutMs: 120000,
+              })
+
+              if (falResponse.error) {
+                throw new Error(falResponse.error.message)
+              }
+
+              const falResult = (falResponse.data as {
+                requestId?: string | null
+                model?: string | null
+                statusUrl?: string | null
+                responseUrl?: string | null
+                cancelUrl?: string | null
+                data?: unknown
+              }) ?? {}
+              const requestId = typeof falResult.requestId === 'string' ? falResult.requestId : null
+              if (!requestId) {
+                const message = 'The concept image provider did not return a request id.'
+                await updateJob(client, job.id, {
+                  status: 'failed',
+                  error_message: message,
+                  result_context: {
+                    ...currentResultContext,
+                    prompt,
+                  },
+                })
+                await markGeneratedImageAssetFailed({
+                  client,
+                  projectId: batch.project_id,
+                  assetKey,
+                  errorMessage: message,
+                  metadata: {
+                    provider: 'fal',
+                    model: falResult.model ?? 'fal-ai/nano-banana-2',
+                    prompt,
+                  },
+                })
+                break
+              }
+
+              console.info('[poll-world-build] world-build image submit result.', {
+                batchId: batch.id,
+                jobId: job.id,
+                kind: job.kind,
+                model: falResult.model ?? 'fal-ai/nano-banana-2',
+                requestId,
+                statusUrl: typeof falResult.statusUrl === 'string' ? falResult.statusUrl : null,
+                responseUrl: typeof falResult.responseUrl === 'string' ? falResult.responseUrl : null,
+                cancelUrl: typeof falResult.cancelUrl === 'string' ? falResult.cancelUrl : null,
+                webhookUrl: buildFalWebhookUrl(),
+                rawFalSubmitData: falResult.data ?? null,
+              })
+
+              await updateJob(client, job.id, {
+                status: 'running',
+                provider_request_id: requestId,
+                status_url: typeof falResult.statusUrl === 'string' ? falResult.statusUrl : null,
+                response_url: typeof falResult.responseUrl === 'string' ? falResult.responseUrl : null,
+                cancel_url: typeof falResult.cancelUrl === 'string' ? falResult.cancelUrl : null,
+                error_message: null,
+                result_context: {
+                  ...currentResultContext,
+                  assetKey,
+                  definitionKey,
+                  prompt,
+                  providerRequestId: requestId,
+                  statusUrl: typeof falResult.statusUrl === 'string' ? falResult.statusUrl : null,
+                  responseUrl: typeof falResult.responseUrl === 'string' ? falResult.responseUrl : null,
+                  cancelUrl: typeof falResult.cancelUrl === 'string' ? falResult.cancelUrl : null,
+                  submittedAt: new Date().toISOString(),
+                },
+              })
+              break
+            }
+
+            if (!queueMetadata.providerRequestId) {
+              const message = 'The concept image job is missing a provider request id.'
+              await updateJob(client, job.id, {
+                status: 'failed',
+                error_message: message,
+              })
+              await markGeneratedImageAssetFailed({
+                client,
+                projectId: batch.project_id,
+                assetKey,
+                errorMessage: message,
+                metadata: {
+                  provider: 'fal',
+                  model: 'fal-ai/nano-banana-2',
+                  prompt,
+                },
+              })
+              break
+            }
+
+            if (!queueMetadata.statusUrl && !queueMetadata.responseUrl) {
+              console.warn('[poll-world-build] queued urls missing for running world-build job.', {
+                batchId: batch.id,
+                jobId: job.id,
+                kind: job.kind,
+                providerRequestId: queueMetadata.providerRequestId,
+                submittedAt: readSubmittedAt(currentResultContext),
+              })
+              const submittedAt = readSubmittedAt(currentResultContext)
+              const submittedAtMs = submittedAt ? Date.parse(submittedAt) : Number.NaN
+              const missingQueueUrlsTooLong =
+                Number.isFinite(submittedAtMs)
+                && (Date.now() - submittedAtMs) >= 60_000
+
+              if (missingQueueUrlsTooLong) {
+                const message = 'The concept image provider request started, but no queue URLs were returned for polling or webhook recovery.'
+                await updateJob(client, job.id, {
+                  status: 'failed',
+                  error_message: message,
+                  provider_request_id: queueMetadata.providerRequestId,
+                })
+                await markGeneratedImageAssetFailed({
+                  client,
+                  projectId: batch.project_id,
+                  assetKey,
+                  errorMessage: message,
+                  metadata: {
+                    provider: 'fal',
+                    model: 'fal-ai/nano-banana-2',
+                    requestId: queueMetadata.providerRequestId,
+                    prompt,
+                  },
+                })
+                break
+              }
+            }
+
+            const resultResponse = await client.functions.invoke('ai-fal', {
+              body: {
+                action: 'result',
+                model: 'fal-ai/nano-banana-2',
+                requestId: queueMetadata.providerRequestId,
+                responseUrl: queueMetadata.responseUrl,
               },
             })
 
-            if (falResponse.error) {
-              throw new Error(falResponse.error.message)
+            if (resultResponse.error) {
+              throw new Error(resultResponse.error.message)
             }
 
-            const falResult = (falResponse.data as {
+            const resultPayload = (resultResponse.data as {
               data?: unknown
-              requestId?: string | null
               model?: string | null
               status?: string | null
               statusData?: unknown
             }) ?? {}
-            const data = falResult.data
-            const imageUrl = extractFalImageUrls(data)[0] ?? null
+            let imageUrl = extractFalImageUrls(resultPayload.data)[0] ?? null
+            let providerStatus = typeof resultPayload.status === 'string' ? resultPayload.status : null
+            let statusData = resultPayload.statusData ?? null
+
             if (!imageUrl) {
-              console.error('[GraphCore] world build concept image response contained no usable image URL.', {
-                jobId: job.id,
-                batchId: batch.id,
-                assetKey,
-                definitionKey,
-                model: falResult.model ?? 'fal-ai/nano-banana-2',
-                requestId: falResult.requestId ?? null,
-                status: falResult.status ?? null,
-                statusData: falResult.statusData ?? null,
-                data,
+              const statusResponse = await client.functions.invoke('ai-fal', {
+                body: {
+                  action: 'status',
+                  model: 'fal-ai/nano-banana-2',
+                  requestId: queueMetadata.providerRequestId,
+                  statusUrl: queueMetadata.statusUrl,
+                  logs: true,
+                },
               })
-              const topLevelKeys = data && typeof data === 'object' && !Array.isArray(data)
-                ? Object.keys(data as Record<string, unknown>).join(', ') || '<no-keys>'
-                : '<not-an-object>'
-              throw new Error(`The concept image provider returned no image URL. keys=${topLevelKeys}`)
+
+              if (statusResponse.error) {
+                throw new Error(statusResponse.error.message)
+              }
+
+              const statusPayload = (statusResponse.data as { data?: unknown } | null)?.data ?? {}
+              console.info('[poll-world-build] world-build image provider status.', {
+                batchId: batch.id,
+                jobId: job.id,
+                kind: job.kind,
+                providerRequestId: queueMetadata.providerRequestId,
+                statusUrl: queueMetadata.statusUrl,
+                responseUrl: queueMetadata.responseUrl,
+                rawStatusPayload: statusPayload,
+              })
+              providerStatus = typeof (statusPayload as { status?: unknown }).status === 'string'
+                ? String((statusPayload as { status: string }).status)
+                : providerStatus
+              statusData = statusPayload
+              imageUrl = extractFalImageUrls(statusPayload)[0] ?? null
+
+              if (typeof (statusPayload as { error?: unknown }).error === 'string') {
+                const message = String((statusPayload as { error: string }).error)
+                await updateJob(client, job.id, {
+                  status: 'failed',
+                  error_message: message,
+                })
+                await markGeneratedImageAssetFailed({
+                  client,
+                  projectId: batch.project_id,
+                  assetKey,
+                  errorMessage: message,
+                  metadata: {
+                    provider: 'fal',
+                    model: resultPayload.model ?? 'fal-ai/nano-banana-2',
+                    requestId: queueMetadata.providerRequestId,
+                    prompt,
+                  },
+                })
+                break
+              }
+
+              if (!imageUrl && providerStatus !== 'COMPLETED') {
+                await updateJob(client, job.id, {
+                  status: 'running',
+                  provider_request_id: queueMetadata.providerRequestId,
+                  status_url: queueMetadata.statusUrl,
+                  response_url: queueMetadata.responseUrl,
+                  cancel_url: queueMetadata.cancelUrl,
+                  error_message: null,
+                  result_context: {
+                    ...currentResultContext,
+                    assetKey,
+                    definitionKey,
+                    prompt,
+                    providerRequestId: queueMetadata.providerRequestId,
+                    statusUrl: queueMetadata.statusUrl,
+                    responseUrl: queueMetadata.responseUrl,
+                    cancelUrl: queueMetadata.cancelUrl,
+                    lastObservedProviderStatus: providerStatus,
+                    lastStatusCheckAt: new Date().toISOString(),
+                  },
+                })
+                break
+              }
             }
+
+            if (!imageUrl) {
+              const message = 'The concept image provider reported completion without returning an image URL.'
+              await updateJob(client, job.id, {
+                status: 'failed',
+                error_message: message,
+              })
+              await markGeneratedImageAssetFailed({
+                client,
+                projectId: batch.project_id,
+                assetKey,
+                errorMessage: message,
+                metadata: {
+                  provider: 'fal',
+                  model: resultPayload.model ?? 'fal-ai/nano-banana-2',
+                  requestId: queueMetadata.providerRequestId,
+                  prompt,
+                },
+              })
+              break
+            }
+
+            console.info('[poll-world-build] world-build image completed through polling.', {
+              batchId: batch.id,
+              jobId: job.id,
+              kind: job.kind,
+              providerRequestId: queueMetadata.providerRequestId,
+              providerStatus,
+              imageUrl,
+            })
 
             await completeReservedGeneratedImageAsset({
               client,
@@ -1720,9 +2066,9 @@ Deno.serve(async (request) => {
                     ? 'item_concept'
                     : 'environment_concept',
                 provider: 'fal',
-                model: falResult.model ?? 'fal-ai/nano-banana-2',
-                requestId: falResult.requestId ?? null,
-                prompt: conceptPromptFromDefinition(definition, job, snapshot),
+                model: resultPayload.model ?? 'fal-ai/nano-banana-2',
+                requestId: queueMetadata.providerRequestId,
+                prompt,
                 generation: {
                   batchId: batch.id,
                   jobId: job.id,
@@ -1755,10 +2101,22 @@ Deno.serve(async (request) => {
 
             await updateJob(client, job.id, {
               status: 'succeeded',
+              provider_request_id: queueMetadata.providerRequestId,
+              status_url: queueMetadata.statusUrl,
+              response_url: queueMetadata.responseUrl,
+              cancel_url: queueMetadata.cancelUrl,
               result_context: {
+                ...currentResultContext,
                 assetKey,
                 definitionKey,
                 imageUrl,
+                prompt,
+                providerRequestId: queueMetadata.providerRequestId,
+                statusUrl: queueMetadata.statusUrl,
+                responseUrl: queueMetadata.responseUrl,
+                cancelUrl: queueMetadata.cancelUrl,
+                providerStatus,
+                statusData,
               },
               error_message: null,
             })
@@ -1773,36 +2131,254 @@ Deno.serve(async (request) => {
               job.kind === 'cinematic_composite_image'
                 ? compositePromptForPlan(cinematicPlan.data, String(job.target_keys?.compositeRefId ?? ''))
                 : storyboardPromptForPlan(cinematicPlan.data, String(job.target_keys?.storyboardAssetId ?? ''))
+            const currentResultContext = job.result_context ?? {}
+            const queueMetadata = readWorldBuildQueueMetadata(currentResultContext)
 
-            const falResponse = await client.functions.invoke('ai-fal', {
-              body: {
-                action: 'subscribe',
-                model: 'fal-ai/nano-banana-2',
-                input: {
-                  prompt,
-                  num_images: 1,
-                  aspect_ratio: '16:9',
-                  output_format: 'png',
-                  resolution: '1K',
+            if (job.status === 'queued') {
+              const falResponse = await client.functions.invoke('ai-fal', {
+                body: {
+                  action: 'submit',
+                  model: 'fal-ai/nano-banana-2',
+                  webhookUrl: buildFalWebhookUrl(),
+                  input: {
+                    prompt,
+                    num_images: 1,
+                    aspect_ratio: '16:9',
+                    output_format: 'png',
+                    resolution: '1K',
+                  },
+                  logs: true,
                 },
-                logs: true,
-                timeoutMs: 120000,
+              })
+
+              if (falResponse.error) {
+                throw new Error(falResponse.error.message)
+              }
+
+              const falResult = (falResponse.data as {
+                requestId?: string | null
+                model?: string | null
+                statusUrl?: string | null
+                responseUrl?: string | null
+                cancelUrl?: string | null
+              }) ?? {}
+              const requestId = typeof falResult.requestId === 'string' ? falResult.requestId : null
+              if (!requestId) {
+                const message = 'The cinematic image provider did not return a request id.'
+                await updateJob(client, job.id, {
+                  status: 'failed',
+                  error_message: message,
+                })
+                await markGeneratedImageAssetFailed({
+                  client,
+                  projectId: batch.project_id,
+                  assetKey,
+                  errorMessage: message,
+                  metadata: {
+                    provider: 'fal',
+                    model: falResult.model ?? 'fal-ai/nano-banana-2',
+                    prompt,
+                  },
+                })
+                break
+              }
+
+              console.info('[poll-world-build] world-build cinematic image submit result.', {
+                batchId: batch.id,
+                jobId: job.id,
+                kind: job.kind,
+                model: falResult.model ?? 'fal-ai/nano-banana-2',
+                requestId,
+                statusUrl: typeof falResult.statusUrl === 'string' ? falResult.statusUrl : null,
+                responseUrl: typeof falResult.responseUrl === 'string' ? falResult.responseUrl : null,
+                cancelUrl: typeof falResult.cancelUrl === 'string' ? falResult.cancelUrl : null,
+                webhookUrl: buildFalWebhookUrl(),
+                rawFalSubmitData: falResult.data ?? null,
+              })
+
+              await updateJob(client, job.id, {
+                status: 'running',
+                provider_request_id: requestId,
+                status_url: typeof falResult.statusUrl === 'string' ? falResult.statusUrl : null,
+                response_url: typeof falResult.responseUrl === 'string' ? falResult.responseUrl : null,
+                cancel_url: typeof falResult.cancelUrl === 'string' ? falResult.cancelUrl : null,
+                error_message: null,
+                result_context: {
+                  ...currentResultContext,
+                  assetKey,
+                  prompt,
+                  providerRequestId: requestId,
+                  statusUrl: typeof falResult.statusUrl === 'string' ? falResult.statusUrl : null,
+                  responseUrl: typeof falResult.responseUrl === 'string' ? falResult.responseUrl : null,
+                  cancelUrl: typeof falResult.cancelUrl === 'string' ? falResult.cancelUrl : null,
+                  submittedAt: new Date().toISOString(),
+                  compositeRefId: job.target_keys?.compositeRefId ?? null,
+                  storyboardAssetId: job.target_keys?.storyboardAssetId ?? null,
+                },
+              })
+              break
+            }
+
+            if (!queueMetadata.providerRequestId) {
+              const message = 'The cinematic image job is missing a provider request id.'
+              await updateJob(client, job.id, {
+                status: 'failed',
+                error_message: message,
+              })
+              await markGeneratedImageAssetFailed({
+                client,
+                projectId: batch.project_id,
+                assetKey,
+                errorMessage: message,
+                metadata: {
+                  provider: 'fal',
+                  model: 'fal-ai/nano-banana-2',
+                  prompt,
+                },
+              })
+              break
+            }
+
+            if (!queueMetadata.statusUrl && !queueMetadata.responseUrl) {
+              console.warn('[poll-world-build] queued urls missing for running cinematic image job.', {
+                batchId: batch.id,
+                jobId: job.id,
+                kind: job.kind,
+                providerRequestId: queueMetadata.providerRequestId,
+                submittedAt: readSubmittedAt(currentResultContext),
+              })
+            }
+
+            const resultResponse = await client.functions.invoke('ai-fal', {
+              body: {
+                action: 'result',
+                model: 'fal-ai/nano-banana-2',
+                requestId: queueMetadata.providerRequestId,
+                responseUrl: queueMetadata.responseUrl,
               },
             })
 
-            if (falResponse.error) {
-              throw new Error(falResponse.error.message)
+            if (resultResponse.error) {
+              throw new Error(resultResponse.error.message)
             }
 
-            const falResult = (falResponse.data as {
+            const resultPayload = (resultResponse.data as {
               data?: unknown
-              requestId?: string | null
               model?: string | null
+              status?: string | null
+              statusData?: unknown
             }) ?? {}
-            const imageUrl = extractFalImageUrls(falResult.data)[0] ?? null
+            let imageUrl = extractFalImageUrls(resultPayload.data)[0] ?? null
+            let providerStatus = typeof resultPayload.status === 'string' ? resultPayload.status : null
+            let statusData = resultPayload.statusData ?? null
+
             if (!imageUrl) {
-              throw new Error('The cinematic asset provider returned no image URL.')
+              const statusResponse = await client.functions.invoke('ai-fal', {
+                body: {
+                  action: 'status',
+                  model: 'fal-ai/nano-banana-2',
+                  requestId: queueMetadata.providerRequestId,
+                  statusUrl: queueMetadata.statusUrl,
+                  logs: true,
+                },
+              })
+
+              if (statusResponse.error) {
+                throw new Error(statusResponse.error.message)
+              }
+
+              const statusPayload = (statusResponse.data as { data?: unknown } | null)?.data ?? {}
+              console.info('[poll-world-build] world-build cinematic image provider status.', {
+                batchId: batch.id,
+                jobId: job.id,
+                kind: job.kind,
+                providerRequestId: queueMetadata.providerRequestId,
+                statusUrl: queueMetadata.statusUrl,
+                responseUrl: queueMetadata.responseUrl,
+                rawStatusPayload: statusPayload,
+              })
+              providerStatus = typeof (statusPayload as { status?: unknown }).status === 'string'
+                ? String((statusPayload as { status: string }).status)
+                : providerStatus
+              statusData = statusPayload
+              imageUrl = extractFalImageUrls(statusPayload)[0] ?? null
+
+              if (typeof (statusPayload as { error?: unknown }).error === 'string') {
+                const message = String((statusPayload as { error: string }).error)
+                await updateJob(client, job.id, {
+                  status: 'failed',
+                  error_message: message,
+                })
+                await markGeneratedImageAssetFailed({
+                  client,
+                  projectId: batch.project_id,
+                  assetKey,
+                  errorMessage: message,
+                  metadata: {
+                    provider: 'fal',
+                    model: resultPayload.model ?? 'fal-ai/nano-banana-2',
+                    requestId: queueMetadata.providerRequestId,
+                    prompt,
+                  },
+                })
+                break
+              }
+
+              if (!imageUrl && providerStatus !== 'COMPLETED') {
+                await updateJob(client, job.id, {
+                  status: 'running',
+                  provider_request_id: queueMetadata.providerRequestId,
+                  status_url: queueMetadata.statusUrl,
+                  response_url: queueMetadata.responseUrl,
+                  cancel_url: queueMetadata.cancelUrl,
+                  error_message: null,
+                  result_context: {
+                    ...currentResultContext,
+                    assetKey,
+                    prompt,
+                    providerRequestId: queueMetadata.providerRequestId,
+                    statusUrl: queueMetadata.statusUrl,
+                    responseUrl: queueMetadata.responseUrl,
+                    cancelUrl: queueMetadata.cancelUrl,
+                    lastObservedProviderStatus: providerStatus,
+                    lastStatusCheckAt: new Date().toISOString(),
+                    compositeRefId: job.target_keys?.compositeRefId ?? null,
+                    storyboardAssetId: job.target_keys?.storyboardAssetId ?? null,
+                  },
+                })
+                break
+              }
             }
+
+            if (!imageUrl) {
+              const message = 'The cinematic image provider reported completion without returning an image URL.'
+              await updateJob(client, job.id, {
+                status: 'failed',
+                error_message: message,
+              })
+              await markGeneratedImageAssetFailed({
+                client,
+                projectId: batch.project_id,
+                assetKey,
+                errorMessage: message,
+                metadata: {
+                  provider: 'fal',
+                  model: resultPayload.model ?? 'fal-ai/nano-banana-2',
+                  requestId: queueMetadata.providerRequestId,
+                  prompt,
+                },
+              })
+              break
+            }
+
+            console.info('[poll-world-build] world-build cinematic image completed through polling.', {
+              batchId: batch.id,
+              jobId: job.id,
+              kind: job.kind,
+              providerRequestId: queueMetadata.providerRequestId,
+              providerStatus,
+              imageUrl,
+            })
 
             await completeReservedGeneratedImageAsset({
               client,
@@ -1812,8 +2388,8 @@ Deno.serve(async (request) => {
               metadata: {
                 generatedBy: job.kind === 'cinematic_composite_image' ? 'cinematic_composite' : 'cinematic_storyboard',
                 provider: 'fal',
-                model: falResult.model ?? 'fal-ai/nano-banana-2',
-                requestId: falResult.requestId ?? null,
+                model: resultPayload.model ?? 'fal-ai/nano-banana-2',
+                requestId: queueMetadata.providerRequestId,
                 prompt,
                 generation: {
                   batchId: batch.id,
@@ -1827,9 +2403,21 @@ Deno.serve(async (request) => {
 
             await updateJob(client, job.id, {
               status: 'succeeded',
+              provider_request_id: queueMetadata.providerRequestId,
+              status_url: queueMetadata.statusUrl,
+              response_url: queueMetadata.responseUrl,
+              cancel_url: queueMetadata.cancelUrl,
               result_context: {
+                ...currentResultContext,
                 assetKey,
                 imageUrl,
+                prompt,
+                providerRequestId: queueMetadata.providerRequestId,
+                statusUrl: queueMetadata.statusUrl,
+                responseUrl: queueMetadata.responseUrl,
+                cancelUrl: queueMetadata.cancelUrl,
+                providerStatus,
+                statusData,
                 compositeRefId: job.target_keys?.compositeRefId ?? null,
                 storyboardAssetId: job.target_keys?.storyboardAssetId ?? null,
               },
@@ -2705,22 +3293,7 @@ Deno.serve(async (request) => {
         jobsToEvaluate = reloadedAfterCinematicSync.jobs
       }
 
-      const parsedJobs = jobsToEvaluate.map((job) => worldBuildJobSchema.parse({
-        id: job.id,
-        batchId: job.batch_id,
-        planItemId: job.plan_item_id,
-        kind: job.kind,
-        status: job.status,
-        dependsOnJobIds: job.depends_on_job_ids ?? [],
-        targetKeys: job.target_keys ?? {},
-        prompt: job.prompt ?? '',
-        options: job.options ?? {},
-        resultContext: job.result_context ?? null,
-        errorMessage: job.error_message ?? null,
-        orderIndex: job.order_index,
-        createdAt: job.created_at,
-        updatedAt: job.updated_at,
-      }))
+      const parsedJobs = jobsToEvaluate.map(parseWorldBuildJob)
 
       const nextStatus = terminalStatusFromJobs(parsedJobs)
       if (nextStatus !== refreshed.batch.status) {
@@ -2729,22 +3302,7 @@ Deno.serve(async (request) => {
     }
 
     const finalLoaded = await loadBatch(client, payload.batchId)
-    const finalJobs = finalLoaded.jobs.map((job) => worldBuildJobSchema.parse({
-      id: job.id,
-      batchId: job.batch_id,
-      planItemId: job.plan_item_id,
-      kind: job.kind,
-      status: job.status,
-      dependsOnJobIds: job.depends_on_job_ids ?? [],
-      targetKeys: job.target_keys ?? {},
-      prompt: job.prompt ?? '',
-      options: job.options ?? {},
-      resultContext: job.result_context ?? null,
-      errorMessage: job.error_message ?? null,
-      orderIndex: job.order_index,
-      createdAt: job.created_at,
-      updatedAt: job.updated_at,
-    }))
+    const finalJobs = finalLoaded.jobs.map(parseWorldBuildJob)
     const resources = await loadBatchResources(client, finalLoaded.batch.draft_id, finalLoaded.batch.project_id, payload.batchId)
     const cinematicRuns = await loadCinematicRunsForBatchJobs(client, finalLoaded.jobs)
 

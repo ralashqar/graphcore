@@ -32,6 +32,9 @@ export const meshGenerationJobSchema = z.object({
   provider: z.string(),
   model: z.string(),
   providerRequestId: z.string().nullable().default(null),
+  statusUrl: z.string().nullable().default(null),
+  responseUrl: z.string().nullable().default(null),
+  cancelUrl: z.string().nullable().default(null),
   status: meshGenerationJobStatusSchema,
   providerStatus: z.string().nullable().default(null),
   providerLogs: z.array(z.string()).default([]),
@@ -101,6 +104,9 @@ type MeshJobRow = {
   provider: string
   model: string
   provider_request_id: string | null
+  status_url: string | null
+  response_url: string | null
+  cancel_url: string | null
   status: string
   provider_status: string | null
   provider_logs: unknown
@@ -187,6 +193,9 @@ export function mapMeshJobRow(row: MeshJobRow): MeshGenerationJob {
     provider: row.provider,
     model: row.model,
     providerRequestId: row.provider_request_id,
+    statusUrl: row.status_url,
+    responseUrl: row.response_url,
+    cancelUrl: row.cancel_url,
     status: row.status,
     providerStatus: row.provider_status,
     providerLogs,
@@ -200,7 +209,7 @@ export function mapMeshJobRow(row: MeshJobRow): MeshGenerationJob {
 export async function loadMeshJobById(client: DatabaseClient, jobId: string) {
   const response = await client
     .from('mesh_generation_jobs')
-    .select('id, project_id, draft_id, definition_key, source_image_asset_key, target_mesh_asset_key, provider, model, provider_request_id, status, provider_status, provider_logs, error_message, storage_path, created_at, updated_at')
+    .select('id, project_id, draft_id, definition_key, source_image_asset_key, target_mesh_asset_key, provider, model, provider_request_id, status_url, response_url, cancel_url, status, provider_status, provider_logs, error_message, storage_path, created_at, updated_at')
     .eq('id', jobId)
     .maybeSingle()
 
@@ -211,7 +220,7 @@ export async function loadMeshJobById(client: DatabaseClient, jobId: string) {
 export async function loadMeshJobsForDraft(client: DatabaseClient, draftId: string) {
   const response = await client
     .from('mesh_generation_jobs')
-    .select('id, project_id, draft_id, definition_key, source_image_asset_key, target_mesh_asset_key, provider, model, provider_request_id, status, provider_status, provider_logs, error_message, storage_path, created_at, updated_at')
+    .select('id, project_id, draft_id, definition_key, source_image_asset_key, target_mesh_asset_key, provider, model, provider_request_id, status_url, response_url, cancel_url, status, provider_status, provider_logs, error_message, storage_path, created_at, updated_at')
     .eq('draft_id', draftId)
     .order('created_at', { ascending: false })
 
@@ -222,7 +231,7 @@ export async function loadMeshJobsForDraft(client: DatabaseClient, draftId: stri
 export async function loadActiveMeshJobsForDefinition(client: DatabaseClient, draftId: string, definitionKey: string) {
   const response = await client
     .from('mesh_generation_jobs')
-    .select('id, project_id, draft_id, definition_key, source_image_asset_key, target_mesh_asset_key, provider, model, provider_request_id, status, provider_status, provider_logs, error_message, storage_path, created_at, updated_at')
+    .select('id, project_id, draft_id, definition_key, source_image_asset_key, target_mesh_asset_key, provider, model, provider_request_id, status_url, response_url, cancel_url, status, provider_status, provider_logs, error_message, storage_path, created_at, updated_at')
     .eq('draft_id', draftId)
     .eq('definition_key', definitionKey)
     .in('status', [...activeMeshJobStatuses])
@@ -235,7 +244,7 @@ export async function loadActiveMeshJobsForDefinition(client: DatabaseClient, dr
 export async function loadLatestMeshJobForDefinition(client: DatabaseClient, draftId: string, definitionKey: string) {
   const response = await client
     .from('mesh_generation_jobs')
-    .select('id, project_id, draft_id, definition_key, source_image_asset_key, target_mesh_asset_key, provider, model, provider_request_id, status, provider_status, provider_logs, error_message, storage_path, created_at, updated_at')
+    .select('id, project_id, draft_id, definition_key, source_image_asset_key, target_mesh_asset_key, provider, model, provider_request_id, status_url, response_url, cancel_url, status, provider_status, provider_logs, error_message, storage_path, created_at, updated_at')
     .eq('draft_id', draftId)
     .eq('definition_key', definitionKey)
     .order('created_at', { ascending: false })

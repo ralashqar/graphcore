@@ -1,4 +1,4 @@
-import type { WorldBuildPlanItem } from '../../domain/worldBuild'
+import type { WorldBuildPlanItem, WorldBuildPlannerMode } from '../../domain/worldBuild'
 import {
   cinematicFormatSubtypeSchema,
   coerceFormatSubtypeForPresetFamily,
@@ -12,7 +12,7 @@ import { EntityIcon } from '../../shared/entityIcons'
 
 type WorldBuildPlanModalProps = {
   isStarting: boolean
-  plannerMode?: 'world_build' | 'cinematic_build'
+  plannerMode?: WorldBuildPlannerMode
   cinematicPlan?: {
     entityRefs?: Array<{ id: string; sourceName: string; role: string; resolution: 'existing' | 'create'; definitionKey?: string | null }>
     relationshipRefs?: Array<{ id: string; type: string; sourceRefId: string; targetRefId: string }>

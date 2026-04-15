@@ -20,6 +20,7 @@ import {
   type GraphScaffold,
 } from '../_shared/world-build-placeholders.ts'
 import { slugifyWorldBuildName, uniqueWorldBuildKey } from '../_shared/world-build.ts'
+import { loadCharacterDefinition, upsertDefinitionComponent } from '../_shared/mesh-generation.ts'
 
 // Hosted bundling for this function depends on the entrypoint hash changing when shared
 // world-build request/response contracts change.
@@ -191,17 +192,56 @@ async function insertPlaceholderAsset(
   userId: string,
   asset: PlaceholderAsset,
 ) {
-  const response = await client.from('project_assets').insert({
-    project_id: projectId,
-    key: asset.key,
-    name: asset.name,
-    kind: 'image',
-    mime_type: 'image/png',
-    storage_path: `world-build/${asset.key}.png`,
-    metadata: asset.metadata,
-    llm_hints: {},
-    created_by: userId,
-  }).select('id, key, name, kind, mime_type, storage_path, metadata, llm_hints').single()
+  const existing = await client
+    .from('project_assets')
+    .select('id, key, name, kind, mime_type, storage_path, metadata, llm_hints')
+    .eq('project_id', projectId)
+    .eq('key', asset.key)
+    .maybeSingle()
+
+  if (existing.error) {
+    throw new Error(existing.error.message)
+  }
+
+  const currentMetadata =
+    existing.data?.metadata && typeof existing.data.metadata === 'object'
+      ? existing.data.metadata as Record<string, unknown>
+      : {}
+
+  const response = existing.data
+    ? await client.from('project_assets').update({
+        name: asset.name,
+        kind: 'image',
+        mime_type: 'image/png',
+        storage_path: `world-build/${asset.key}.png`,
+        metadata: {
+          ...currentMetadata,
+          ...asset.metadata,
+          placeholder: true,
+          generationStatus: 'queued',
+          generationError: null,
+          sourceUrl: null,
+          previewUrl: null,
+        },
+      }).eq('id', existing.data.id).select('id, key, name, kind, mime_type, storage_path, metadata, llm_hints').single()
+    : await client.from('project_assets').insert({
+        project_id: projectId,
+        key: asset.key,
+        name: asset.name,
+        kind: 'image',
+        mime_type: 'image/png',
+        storage_path: `world-build/${asset.key}.png`,
+        metadata: {
+          ...asset.metadata,
+          placeholder: true,
+          generationStatus: 'queued',
+          generationError: null,
+          sourceUrl: null,
+          previewUrl: null,
+        },
+        llm_hints: {},
+        created_by: userId,
+      }).select('id, key, name, kind, mime_type, storage_path, metadata, llm_hints').single()
 
   if (response.error || !response.data) {
     throw new Error(response.error?.message ?? `Failed to create placeholder asset ${asset.key}.`)
@@ -217,6 +257,57 @@ async function insertPlaceholderAsset(
     metadata: response.data.metadata ?? {},
     llmHints: response.data.llm_hints ?? {},
   }
+}
+
+async function bindExistingDefinitionConceptAsset(
+  client: Awaited<ReturnType<typeof requireUserClient>>['client'],
+  draftId: string,
+  definitionKey: string,
+  assetKey: string,
+) {
+  const definition = await loadCharacterDefinition(client, draftId, definitionKey)
+  if (!definition) {
+    throw new Error(`Existing definition ${definitionKey} was not found.`)
+  }
+
+  const componentType = definition.kind === 'environment' ? 'environment_render_binding' : 'render_3d_binding'
+  const existingComponent = definition.components.find((component) => component.type === componentType)
+  const currentConfig =
+    existingComponent?.config && typeof existingComponent.config === 'object'
+      ? existingComponent.config as Record<string, unknown>
+      : definition.kind === 'environment'
+        ? {
+            primaryMeshAssetKey: null,
+            previewImageAssetKey: null,
+            lightingProfile: '',
+            generationPrompt: null,
+            generationStyle: null,
+          }
+        : {
+            primaryMeshAssetKey: null,
+            previewImageAssetKey: null,
+            conceptPrompt: null,
+            generationPrompt: null,
+            generationStyle: null,
+          }
+
+  await upsertDefinitionComponent(client, definition.id, componentType, {
+    ...currentConfig,
+    previewImageAssetKey: assetKey,
+  })
+
+  if (definition.kind === 'item' || definition.kind === 'environment') {
+    const definitionUpdate = await client
+      .from('project_definitions')
+      .update({ icon_asset_key: assetKey })
+      .eq('id', definition.id)
+
+    if (definitionUpdate.error) {
+      throw new Error(definitionUpdate.error.message)
+    }
+  }
+
+  return await loadCharacterDefinition(client, draftId, definitionKey)
 }
 
 async function insertPlaceholderDefinition(
@@ -423,35 +514,44 @@ Deno.serve(async (request) => {
     for (const item of enabledItems) {
       if (item.kind === 'narrative_graph' || item.kind === 'cinematic_graph') continue
 
-      const definitionJobId = crypto.randomUUID()
-      const definitionKey = buildDefinitionKey(item.kind === 'character' ? 'character' : item.kind === 'environment' ? 'environment' : 'item', item.name, definitionKeyState)
-      planJobIds.set(item.id, definitionJobId)
-      planTargetKeys.set(item.id, { definitionKey })
-      jobsToInsert.push({
-        id: definitionJobId,
-        batch_id: batchId,
-        plan_item_id: item.id,
-        kind: `${item.kind}_definition`,
-        status: 'queued',
-        depends_on_job_ids: [],
-        target_keys: { definitionKey },
-        prompt: payload.prompt,
-        options: item.generationOptions,
-        result_context: null,
-        error_message: null,
-        order_index: nextOrder(),
-      })
-      if ((item.kind === 'character' || item.kind === 'item') && item.generationOptions.generateConceptImage) {
-        const assetKey = buildAssetKey(item.name, 'concept', assetKeyState)
+      const existingDefinitionKey = item.generationOptions.existingDefinitionKey?.trim() || null
+      const definitionKey = existingDefinitionKey
+        ? existingDefinitionKey
+        : buildDefinitionKey(item.kind === 'character' ? 'character' : item.kind === 'environment' ? 'environment' : 'item', item.name, definitionKeyState)
+      const definitionJobId = existingDefinitionKey ? null : crypto.randomUUID()
+
+      if (definitionJobId) {
+        planJobIds.set(item.id, definitionJobId)
+        jobsToInsert.push({
+          id: definitionJobId,
+          batch_id: batchId,
+          plan_item_id: item.id,
+          kind: `${item.kind}_definition`,
+          status: 'queued',
+          depends_on_job_ids: [],
+          target_keys: { definitionKey },
+          prompt: payload.prompt,
+          options: item.generationOptions,
+          result_context: null,
+          error_message: null,
+          order_index: nextOrder(),
+        })
+      }
+
+      const targetKeys: Record<string, string> = { definitionKey }
+      const conceptDependencyIds = definitionJobId ? [definitionJobId] : []
+
+      if ((item.kind === 'character' || item.kind === 'item' || item.kind === 'environment') && item.generationOptions.generateConceptImage) {
+        const assetKey = item.generationOptions.existingAssetKey?.trim() || buildAssetKey(item.name, item.kind === 'environment' ? 'hero' : 'concept', assetKeyState)
         const assetJobId = crypto.randomUUID()
         jobsToInsert.push({
           id: assetJobId,
           batch_id: batchId,
           plan_item_id: item.id,
-          kind: `${item.kind}_concept_image`,
+          kind: item.kind === 'environment' ? 'environment_concept_image' : `${item.kind}_concept_image`,
           status: 'queued',
-          depends_on_job_ids: [definitionJobId],
-          target_keys: { definitionKey, assetKey },
+          depends_on_job_ids: conceptDependencyIds,
+          target_keys: item.kind === 'environment' ? { definitionKey, assetKey, view: 'hero' } : { definitionKey, assetKey },
           prompt: payload.prompt,
           options: item.generationOptions,
           result_context: null,
@@ -459,11 +559,10 @@ Deno.serve(async (request) => {
           order_index: nextOrder(),
         })
         assetJobIds.set(assetKey, assetJobId)
-        planTargetKeys.set(item.id, { definitionKey, assetKey })
+        targetKeys.assetKey = assetKey
       }
 
-      if (item.kind === 'environment' && item.generationOptions.generateConceptGallery) {
-        const targetKeys = { definitionKey } as Record<string, string>
+      if (item.kind === 'environment' && item.generationOptions.generateConceptGallery && !existingDefinitionKey) {
         for (const view of item.generationOptions.environmentViews ?? WORLD_BUILD_ENVIRONMENT_VIEWS) {
           const assetKey = buildAssetKey(item.name, view, assetKeyState)
           const assetJobId = crypto.randomUUID()
@@ -484,8 +583,9 @@ Deno.serve(async (request) => {
           })
           assetJobIds.set(assetKey, assetJobId)
         }
-        planTargetKeys.set(item.id, targetKeys)
       }
+
+      planTargetKeys.set(item.id, targetKeys)
     }
 
     for (const item of enabledItems.filter((entry) => entry.kind === 'narrative_graph')) {
@@ -666,23 +766,25 @@ Deno.serve(async (request) => {
       if (item.kind === 'character' || item.kind === 'item' || item.kind === 'environment') {
         const targetKeys = planTargetKeys.get(item.id) ?? {}
         const definitionKey = targetKeys.definitionKey
+        const existingDefinitionKey = item.generationOptions.existingDefinitionKey?.trim() || null
         const definitionJobId = planJobIds.get(item.id)
-        if (!definitionKey || !definitionJobId) continue
+        if (!definitionKey || (!definitionJobId && !existingDefinitionKey)) continue
 
         const placeholderAssets: PlaceholderAsset[] = []
 
-        if ((item.kind === 'character' || item.kind === 'item') && targetKeys.assetKey) {
+        if ((item.kind === 'character' || item.kind === 'item' || (item.kind === 'environment' && item.generationOptions.generateConceptImage)) && targetKeys.assetKey) {
           placeholderAssets.push({
             key: targetKeys.assetKey,
-            name: `${item.name} Concept`,
+            name: item.kind === 'environment' ? `${item.name} Hero` : `${item.name} Concept`,
             metadata: {
-              generation: createGenerationMetadata(batchId, assetJobIds.get(targetKeys.assetKey) ?? definitionJobId),
+              generation: createGenerationMetadata(batchId, assetJobIds.get(targetKeys.assetKey) ?? definitionJobId ?? crypto.randomUUID()),
               placeholderLabel: 'Pending concept image',
+              ...(item.kind === 'environment' ? { conceptView: 'hero' } : {}),
             },
           })
         }
 
-        if (item.kind === 'environment') {
+        if (item.kind === 'environment' && !existingDefinitionKey) {
           for (const view of item.generationOptions.environmentViews ?? WORLD_BUILD_ENVIRONMENT_VIEWS) {
             const assetKey = targetKeys[`assetKey:${view}`]
             if (!assetKey) continue
@@ -702,6 +804,16 @@ Deno.serve(async (request) => {
           placeholderAssets.map((asset) => insertPlaceholderAsset(client, snapshot.project.id, user.id, asset)),
         )
         createdAssets.push(...insertedAssets)
+
+        if (existingDefinitionKey) {
+          if (targetKeys.assetKey) {
+            const updatedDefinition = await bindExistingDefinitionConceptAsset(client, snapshot.draft.id, existingDefinitionKey, targetKeys.assetKey)
+            if (updatedDefinition) {
+              createdDefinitions.push(updatedDefinition)
+            }
+          }
+          continue
+        }
 
         let components = buildDefaultDefinitionComponents(item.kind === 'character' ? 'character' : item.kind === 'environment' ? 'environment' : 'item')
         let assetRefs: Array<Record<string, unknown>> = []
@@ -739,7 +851,7 @@ Deno.serve(async (request) => {
           summary: item.summary,
           iconAssetKey:
             item.kind === 'environment'
-              ? (targetKeys['assetKey:hero'] ?? null)
+              ? (targetKeys.assetKey ?? targetKeys['assetKey:hero'] ?? null)
               : (targetKeys.assetKey ?? null),
           metadata: {
             generation: createGenerationMetadata(batchId, definitionJobId),
@@ -889,6 +1001,10 @@ Deno.serve(async (request) => {
         targetKeys: job.target_keys ?? {},
         prompt: job.prompt ?? '',
         options: job.options ?? {},
+        providerRequestId: null,
+        statusUrl: null,
+        responseUrl: null,
+        cancelUrl: null,
         resultContext: null,
         errorMessage: null,
         orderIndex: job.order_index,

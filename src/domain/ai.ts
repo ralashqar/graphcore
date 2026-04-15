@@ -32,6 +32,9 @@ export type FalInvokeRequest = {
   model?: string
   input?: Record<string, unknown>
   requestId?: string
+  statusUrl?: string
+  responseUrl?: string
+  cancelUrl?: string
   logs?: boolean
   webhookUrl?: string
   headers?: Record<string, string>
@@ -47,6 +50,9 @@ export type FalInvokeResult = {
   action: FalAction
   model: string
   requestId: string | null
+  statusUrl?: string | null
+  responseUrl?: string | null
+  cancelUrl?: string | null
   status?: string
   statusData?: Record<string, unknown>
   data: Record<string, unknown>

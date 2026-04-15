@@ -49,7 +49,7 @@ export function ActivityWorkspace({
               <div className="editor-section compact-section">
                 <div className="section-head">
                   <div>
-                    <span className="eyebrow">World Build Plan</span>
+                    <span className="eyebrow">{selectedWorldBuild.plannerMode === 'direct_asset_generation' ? 'Asset Generation Job' : 'World Build Plan'}</span>
                     <h3>{selectedWorldBuild.planItems.length} item{selectedWorldBuild.planItems.length === 1 ? '' : 's'}</h3>
                   </div>
                 </div>

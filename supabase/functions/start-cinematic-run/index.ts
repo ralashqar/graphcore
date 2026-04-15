@@ -35,6 +35,7 @@ import {
   toCinematicRun,
   toCinematicRunJob,
 } from '../_shared/cinematics.ts'
+import { buildFalWebhookUrl } from '../_shared/fal-webhooks.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
 
 function readFalQueueUrl(value: unknown) {
@@ -553,6 +554,7 @@ Deno.serve(async (request) => {
           body: {
             action: 'submit',
             model: storyboardStillModel,
+            webhookUrl: buildFalWebhookUrl(),
             input: {
               prompt: storyboardJob.prompt,
               ...(referenceImageUrls.length > 0 ? { image_urls: referenceImageUrls } : {}),

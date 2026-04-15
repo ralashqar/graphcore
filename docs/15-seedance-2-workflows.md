@@ -174,6 +174,16 @@ For `preview_storyboard_still` and other cinematic preview image jobs:
 4. `poll-cinematic-run` uses those exact provider URLs to fetch completion state.
 5. On success, `poll-cinematic-run` updates the reserved asset row in place with final `sourceUrl` and `previewUrl`.
 
+GraphCore now also passes Fal `webhook_url` on these queue submissions.
+
+Current completion order is:
+
+1. Fal webhook posts a terminal result to `fal-webhook`
+2. `fal-webhook` verifies the Fal signature and finalizes the reserved asset when the payload is usable
+3. `poll-cinematic-run` remains the fallback path if webhook delivery fails or the webhook payload is not sufficient to materialize the asset
+
+Treat polling as recovery, not the only completion mechanism.
+
 Do not change this back to a blocking one-shot subscribe flow for slow storyboard edit jobs. The request can exceed Supabase edge idle limits before the provider completes.
 
 ### Fal Nano Banana Edit Notes

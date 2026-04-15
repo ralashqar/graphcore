@@ -40,6 +40,7 @@ import {
   toCinematicRun,
   toCinematicRunJob,
 } from '../_shared/cinematics.ts'
+import { buildFalWebhookUrl } from '../_shared/fal-webhooks.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
 
 const falQueueBaseUrl = 'https://queue.fal.run'
@@ -93,11 +94,18 @@ async function submitFalRequest(input: {
   apiKey: string
   model: string
   payload: Record<string, unknown>
+  webhookUrl?: string | null
 }) {
+  const body = input.webhookUrl
+    ? {
+        ...input.payload,
+        webhook_url: input.webhookUrl,
+      }
+    : input.payload
   return fetchFalJson(`${falQueueBaseUrl}/${input.model}`, {
     method: 'POST',
     headers: buildFalHeaders(input.apiKey),
-    body: JSON.stringify(input.payload),
+    body: JSON.stringify(body),
   })
 }
 
@@ -551,6 +559,7 @@ Deno.serve(async (request) => {
               resolution: settings.stillResolution,
               ...(imageUrls.length > 0 ? { image_urls: imageUrls } : {}),
             },
+            webhookUrl: buildFalWebhookUrl(),
           })
 
           const requestId = typeof submitResult.body.request_id === 'string' ? submitResult.body.request_id : null

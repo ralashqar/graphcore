@@ -3,6 +3,7 @@ import '@supabase/functions-js/edge-runtime.d.ts'
 import { z } from 'npm:zod@4'
 
 import { createAdminClient, requireUserClient } from '../_shared/auth.ts'
+import { buildFalWebhookUrl } from '../_shared/fal-webhooks.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
 import {
   bindCharacterMeshAsset,
@@ -272,6 +273,7 @@ Deno.serve(async (request) => {
         body: {
           action: 'submit',
           model: job.model,
+          webhookUrl: buildFalWebhookUrl(),
           input: {
             image_url: sourceImageUrl,
             resolution: 1024,
@@ -332,6 +334,15 @@ Deno.serve(async (request) => {
       await updateMeshJob(client, job.id, {
         status: 'running',
         provider_request_id: submitRequestId,
+        status_url: typeof (submitResponse.data as { statusUrl?: unknown } | null)?.statusUrl === 'string'
+          ? String((submitResponse.data as { statusUrl: string }).statusUrl)
+          : null,
+        response_url: typeof (submitResponse.data as { responseUrl?: unknown } | null)?.responseUrl === 'string'
+          ? String((submitResponse.data as { responseUrl: string }).responseUrl)
+          : null,
+        cancel_url: typeof (submitResponse.data as { cancelUrl?: unknown } | null)?.cancelUrl === 'string'
+          ? String((submitResponse.data as { cancelUrl: string }).cancelUrl)
+          : null,
         provider_status: 'IN_QUEUE',
         provider_logs: formatFalLogMessages(submitData.data),
         error_message: null,
@@ -353,6 +364,7 @@ Deno.serve(async (request) => {
         action: 'status',
         model: job.model,
         requestId: job.providerRequestId,
+        statusUrl: job.statusUrl,
         logs: true,
       },
     })
@@ -389,6 +401,7 @@ Deno.serve(async (request) => {
           action: 'result',
           model: job.model,
           requestId: job.providerRequestId,
+          responseUrl: job.responseUrl,
         },
       })
 

@@ -74,6 +74,7 @@ Deno.serve(async (request) => {
             action: 'cancel',
             model: job.model,
             requestId: job.providerRequestId,
+            cancelUrl: job.cancelUrl,
           },
         })
         const cancelStatusData = (cancelResponse.data as { data?: unknown } | null)?.data

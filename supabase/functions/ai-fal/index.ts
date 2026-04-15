@@ -10,6 +10,9 @@ type FalInvokeRequest = {
   model?: string
   input?: Record<string, unknown>
   requestId?: string
+  statusUrl?: string
+  responseUrl?: string
+  cancelUrl?: string
   logs?: boolean
   webhookUrl?: string
   headers?: Record<string, string>
@@ -22,6 +25,33 @@ type FalInvokeRequest = {
 
 const defaultModel = 'fal-ai/nano-banana-2/edit'
 const queueBaseUrl = 'https://queue.fal.run'
+
+function readQueueUrl(value: unknown) {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null
+}
+
+function extractQueueUrls(body: Record<string, unknown>) {
+  const urls = body.urls && typeof body.urls === 'object' && body.urls !== null
+    ? body.urls as Record<string, unknown>
+    : {}
+  return {
+    statusUrl: readQueueUrl(body.status_url) ?? readQueueUrl(body.statusUrl) ?? readQueueUrl(urls.status) ?? readQueueUrl(urls.status_url),
+    responseUrl: readQueueUrl(body.response_url) ?? readQueueUrl(body.responseUrl) ?? readQueueUrl(urls.response) ?? readQueueUrl(urls.response_url),
+    cancelUrl: readQueueUrl(body.cancel_url) ?? readQueueUrl(body.cancelUrl) ?? readQueueUrl(urls.cancel) ?? readQueueUrl(urls.cancel_url),
+  }
+}
+
+function summarizeFalBody(body: Record<string, unknown>) {
+  return {
+    topLevelKeys: Object.keys(body),
+    requestId: typeof body.request_id === 'string' ? body.request_id : null,
+    status: typeof body.status === 'string' ? body.status : null,
+    statusUrl: readQueueUrl(body.status_url) ?? readQueueUrl(body.statusUrl) ?? null,
+    responseUrl: readQueueUrl(body.response_url) ?? readQueueUrl(body.responseUrl) ?? null,
+    cancelUrl: readQueueUrl(body.cancel_url) ?? readQueueUrl(body.cancelUrl) ?? null,
+    urls: body.urls ?? null,
+  }
+}
 
 function buildFalHeaders(payload: FalInvokeRequest, apiKey: string) {
   const headers = new Headers({
@@ -68,8 +98,26 @@ async function getStatus(model: string, requestId: string, logs: boolean, header
   })
 }
 
+async function getStatusByUrl(statusUrl: string, logs: boolean, headers: HeadersInit) {
+  const url = new URL(statusUrl)
+  if (logs) {
+    url.searchParams.set('logs', '1')
+  }
+  return fetchFalJson(url.toString(), {
+    method: 'GET',
+    headers,
+  })
+}
+
 async function getResult(model: string, requestId: string, headers: HeadersInit) {
   return fetchFalJson(`${queueBaseUrl}/${model}/requests/${requestId}/response`, {
+    method: 'GET',
+    headers,
+  })
+}
+
+async function getResultByUrl(responseUrl: string, headers: HeadersInit) {
+  return fetchFalJson(responseUrl, {
     method: 'GET',
     headers,
   })
@@ -106,23 +154,41 @@ Deno.serve(async (request) => {
       }
 
       const submitBody: Record<string, unknown> = { ...payload.input }
+      const submitUrl = new URL(`${queueBaseUrl}/${model}`)
 
       if (payload.webhookUrl) {
+        submitUrl.searchParams.set('fal_webhook', payload.webhookUrl)
         submitBody.webhook_url = payload.webhookUrl
       }
 
-      const { response, body } = await fetchFalJson(`${queueBaseUrl}/${model}`, {
+      const { response, body } = await fetchFalJson(submitUrl.toString(), {
         method: 'POST',
         headers,
         body: JSON.stringify(submitBody),
       })
 
+      const queueUrls = extractQueueUrls(body)
+      console.info('[ai-fal] submit response.', {
+        model,
+        action,
+        webhookUrl: payload.webhookUrl ?? null,
+        submitUrl: submitUrl.toString(),
+        requestId: typeof body.request_id === 'string' ? body.request_id : null,
+        statusUrl: queueUrls.statusUrl,
+        responseUrl: queueUrls.responseUrl,
+        cancelUrl: queueUrls.cancelUrl,
+        httpStatus: response.status,
+        rawProviderBody: summarizeFalBody(body),
+      })
       return json(
         {
           provider: 'fal',
           action,
           model,
           requestId: typeof body.request_id === 'string' ? body.request_id : null,
+          statusUrl: queueUrls.statusUrl,
+          responseUrl: queueUrls.responseUrl,
+          cancelUrl: queueUrls.cancelUrl,
           data: body,
         },
         { status: response.status },
@@ -134,7 +200,9 @@ Deno.serve(async (request) => {
     }
 
     if (action === 'status') {
-      const { response, body } = await getStatus(model, payload.requestId, payload.logs ?? false, headers)
+      const { response, body } = payload.statusUrl?.trim()
+        ? await getStatusByUrl(payload.statusUrl.trim(), payload.logs ?? false, headers)
+        : await getStatus(model, payload.requestId, payload.logs ?? false, headers)
 
       return json(
         {
@@ -142,6 +210,7 @@ Deno.serve(async (request) => {
           action,
           model,
           requestId: payload.requestId,
+          statusUrl: payload.statusUrl ?? null,
           data: body,
         },
         { status: response.status },
@@ -149,7 +218,9 @@ Deno.serve(async (request) => {
     }
 
     if (action === 'result') {
-      const { response, body } = await getResult(model, payload.requestId, headers)
+      const { response, body } = payload.responseUrl?.trim()
+        ? await getResultByUrl(payload.responseUrl.trim(), headers)
+        : await getResult(model, payload.requestId, headers)
       const normalizedData =
         body && typeof body.response === 'object' && body.response !== null
           ? body.response
@@ -161,6 +232,7 @@ Deno.serve(async (request) => {
           action,
           model,
           requestId: payload.requestId,
+          responseUrl: payload.responseUrl ?? null,
           data: normalizedData,
           status: typeof body.status === 'string' ? body.status : undefined,
           statusData: body,
@@ -170,7 +242,8 @@ Deno.serve(async (request) => {
     }
 
     if (action === 'cancel') {
-      const { response, body } = await fetchFalJson(`${queueBaseUrl}/${model}/requests/${payload.requestId}/cancel`, {
+      const cancelUrl = payload.cancelUrl?.trim() || `${queueBaseUrl}/${model}/requests/${payload.requestId}/cancel`
+      const { response, body } = await fetchFalJson(cancelUrl, {
         method: 'POST',
         headers,
       })
@@ -181,6 +254,7 @@ Deno.serve(async (request) => {
           action,
           model,
           requestId: payload.requestId,
+          cancelUrl: payload.cancelUrl ?? null,
           data: body,
         },
         { status: response.status },
@@ -204,12 +278,16 @@ Deno.serve(async (request) => {
     })
 
     if (!submitResult.response.ok) {
+      const queueUrls = extractQueueUrls(submitResult.body)
       return json(
         {
           provider: 'fal',
           action,
           model,
           requestId: typeof submitResult.body.request_id === 'string' ? submitResult.body.request_id : null,
+          statusUrl: queueUrls.statusUrl,
+          responseUrl: queueUrls.responseUrl,
+          cancelUrl: queueUrls.cancelUrl,
           data: submitResult.body,
         },
         { status: submitResult.response.status },
@@ -221,6 +299,7 @@ Deno.serve(async (request) => {
     if (!requestId) {
       throw new HttpError(502, 'Fal did not return a request id.')
     }
+    const queueUrls = extractQueueUrls(submitResult.body)
 
     const timeoutMs = payload.timeoutMs ?? 120000
     const pollIntervalMs = payload.pollIntervalMs ?? 1500
@@ -242,6 +321,9 @@ Deno.serve(async (request) => {
           action,
           model,
           requestId,
+          statusUrl: queueUrls.statusUrl,
+          responseUrl: queueUrls.responseUrl,
+          cancelUrl: queueUrls.cancelUrl,
           status,
           statusData: statusResult.body,
           data: normalizedData,
@@ -251,13 +333,16 @@ Deno.serve(async (request) => {
       if (typeof statusResult.body.error === 'string') {
         return json(
           {
-            provider: 'fal',
-            action,
-            model,
-            requestId,
-            status,
-            data: statusResult.body,
-          },
+          provider: 'fal',
+          action,
+          model,
+          requestId,
+          statusUrl: queueUrls.statusUrl,
+          responseUrl: queueUrls.responseUrl,
+          cancelUrl: queueUrls.cancelUrl,
+          status,
+          data: statusResult.body,
+        },
           { status: statusResult.response.status || 500 },
         )
       }
@@ -271,6 +356,9 @@ Deno.serve(async (request) => {
         action,
         model,
         requestId,
+        statusUrl: queueUrls.statusUrl,
+        responseUrl: queueUrls.responseUrl,
+        cancelUrl: queueUrls.cancelUrl,
         status: 'TIMEOUT',
         error: 'Fal request timed out before completion.',
       },

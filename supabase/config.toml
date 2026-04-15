@@ -146,6 +146,12 @@ verify_jwt = false
 [functions.ai-fal]
 verify_jwt = false
 
+[functions.fal-webhook]
+verify_jwt = false
+
+[functions.cleanup-active-generation]
+verify_jwt = false
+
 [functions.apply-patch]
 verify_jwt = false
 

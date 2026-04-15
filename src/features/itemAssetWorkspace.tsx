@@ -1,10 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 
-import { visualAssetGenerationService } from '../application/services/visualAssetGenerationService'
 import { getArtStylePresetLabel } from '../domain/artStylePresets'
-import { buildAssetSlug } from '../domain/assets'
 import { getResolvedRender3dBinding } from '../domain/render3d'
-import { buildItemConceptPrompt } from '../domain/visualAssetGeneration'
 import { getResourceGenerationMetadata, isPendingGenerationResource } from '../domain/worldBuild'
 import type { MeshGenerationJob } from '../domain/meshGeneration'
 import { isTerminalMeshGenerationJobStatus } from '../domain/meshGeneration'
@@ -56,7 +53,7 @@ export function ContentWorkspace({
   deletingGeneratedMeshDefinitionKey = null,
   deletingItemKey = null,
   gameSpec = null,
-  projectSummary = null,
+  projectSummary: _projectSummary = null,
   graphKeys,
   items,
   meshGenerationJobs = [],
@@ -70,13 +67,13 @@ export function ContentWorkspace({
   onCreateArchetype,
   onCreateDefinitionOfKind,
   onCreateItem,
-  onCreateUrlAsset,
   onDeleteGeneratedMesh,
   onDeleteItem,
   onRemoveArchetypeField,
   onSelectAsset: _onSelectAsset,
   onSelectArchetype,
   onSelectItem,
+  onGenerateConceptImage,
   onStartMeshGeneration,
   onPersistDefinitionPreviewImageBinding,
   onUpdateArchetypeField,
@@ -261,50 +258,8 @@ export function ContentWorkspace({
     setItemConceptMessage(null)
 
     try {
-      const archetypeLabel = archetypes.find((archetype) => archetype.key === selectedContentItem.archetypeKey)?.name ?? selectedContentItem.archetypeKey ?? null
-      const conceptAssetName = `${buildAssetSlug(selectedContentItem.name) || 'item'}_conceptart`
-      const prompt = buildItemConceptPrompt({
-        itemName: selectedContentItem.name,
-        physicalSubtype: selectedItemPhysicalProfile?.physicalSubtype ?? 'pickup',
-        archetypeLabel,
-        artStylePresetLabel: getArtStylePresetLabel(typeof gameSpec?.theme?.artStylePreset === 'string' ? gameSpec.theme.artStylePreset : null),
-        artStyleDescription: typeof gameSpec?.theme?.artStyleDescription === 'string' ? gameSpec.theme.artStyleDescription : null,
-        projectContextDescription: projectSummary,
-        worldPlacementRole: selectedItemPhysicalProfile?.worldPlacementRole ?? null,
-        pickupContext: selectedItemPhysicalProfile?.pickupContext ?? null,
-        visualDescription: conceptPrompt,
-      })
-      const result = await visualAssetGenerationService.generateConceptImage({
-        prompt,
-        aspectRatio: '1:1',
-      })
-      const imageUrl = result.imageUrls[0] ?? null
-      if (!imageUrl) {
-        throw new Error('Fal returned no concept image URL.')
-      }
-      const assetKey = onCreateUrlAsset(imageUrl, 'image', {
-        existingAssetKey: selectedItemRenderBinding.previewImageAssetKey,
-        name: conceptAssetName,
-        metadata: {
-          generatedBy: 'item_concept',
-          provider: result.provider,
-          model: result.model,
-          requestId: result.requestId,
-          prompt,
-          previewUrl: imageUrl,
-          sourceUrl: imageUrl,
-          generatedAt: new Date().toISOString(),
-        },
-        openAssetsTab: false,
-        selectAsset: false,
-      })
-      if (!assetKey) {
-        throw new Error('The generated concept image could not be stored as a project asset.')
-      }
-      updateSelectedItemRenderBinding({ previewImageAssetKey: assetKey })
-      onUpdateItemIdentity(selectedContentItem.key, { iconAssetKey: assetKey })
-      await persistItemPreviewImage(assetKey)
-      setItemConceptMessage(`Concept image generated with ${result.model}.`)
+      await onGenerateConceptImage(selectedContentItem.key)
+      setItemConceptMessage('Concept image generation queued.')
     } catch (error) {
       setItemConceptMessage(error instanceof Error ? error.message : 'Item concept generation failed.')
     } finally {
