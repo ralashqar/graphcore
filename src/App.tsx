@@ -57,6 +57,7 @@ import { WorkspaceTopbar } from './features/shell/WorkspaceTopbar'
 import { useEditorStore } from './state/editorStore'
 import type { AuthMode, GameSummary, LoadedState, PatchSessionView, WorkspaceTab } from './shared/workspace'
 import { workspaceTabs } from './shared/workspace'
+import { supabase } from './utils/supabase'
 
 const GraphWorkspace = lazy(() =>
   import('./features/graphWorkspace').then((module) => ({ default: module.GraphWorkspace })),
@@ -664,6 +665,7 @@ export default function App() {
   const worldBuildPollFailureCountRef = useRef(0)
   const meshGenerationPollInFlightRef = useRef(false)
   const cinematicRunPollInFlightRef = useRef(false)
+  const cinematicRunRealtimeSignalAtRef = useRef(new Map<string, number>())
   const meshGenerationPollFailureCountsRef = useRef(new Map<string, number>())
 
   function markStoryboardNodePending(nodeKey: string) {
@@ -943,6 +945,7 @@ export default function App() {
       reconciledWorldBuildBatchIdsRef.current = new Set()
       announcedCinematicRunIdsRef.current = new Set()
       reconciledCinematicRunIdsRef.current = new Set()
+      cinematicRunRealtimeSignalAtRef.current = new Map()
       seededWorldBuildBatchHistoryRef.current = false
       seededWorldBuildBatchDraftIdRef.current = snapshot.draft.id
     }
@@ -1211,29 +1214,47 @@ export default function App() {
     }
   }, [loadedState?.source, snapshot])
 
+  const activeCinematicRunIdSignature = useMemo(() => {
+    if (!snapshot) return ''
+    return snapshot.cinematicRuns
+      .filter((run) => !isTerminalCinematicRunStatus(run.status))
+      .map((run) => run.id)
+      .sort()
+      .join('|')
+  }, [snapshot?.cinematicRuns])
+
   useEffect(() => {
     if (loadedState?.source !== 'supabase') return
 
     let cancelled = false
 
-    async function pollActiveCinematicRuns() {
-      if (cinematicRunPollInFlightRef.current || cancelled) return
+    async function pollCinematicRuns(runIds: string[], source: 'realtime' | 'watchdog') {
+      if (cinematicRunPollInFlightRef.current || cancelled || runIds.length === 0) return
       const currentSnapshot = snapshotRef.current
       if (!currentSnapshot) return
-      const activeRuns = currentSnapshot.cinematicRuns.filter((run) => !isTerminalCinematicRunStatus(run.status))
+      const activeRunsById = new Map(
+        currentSnapshot.cinematicRuns
+          .filter((run) => !isTerminalCinematicRunStatus(run.status))
+          .map((run) => [run.id, run] as const),
+      )
+      const activeRuns = runIds
+        .map((runId) => activeRunsById.get(runId) ?? null)
+        .filter((run): run is NonNullable<typeof run> => Boolean(run))
       if (activeRuns.length === 0) return
       cinematicRunPollInFlightRef.current = true
 
       try {
         let workingSnapshot = currentSnapshot
         for (const run of activeRuns) {
-          console.info('[GraphCore] polling cinematic run.', {
-            runId: run.id,
-            graphKey: run.graphKey,
-            mode: run.mode,
-            status: run.status,
-            shotNodeKey: run.shotNodeKey,
-          })
+          if (source === 'watchdog') {
+            console.info('[GraphCore] watchdog polling cinematic run.', {
+              runId: run.id,
+              graphKey: run.graphKey,
+              mode: run.mode,
+              status: run.status,
+              shotNodeKey: run.shotNodeKey,
+            })
+          }
           const status = await workspaceService.pollCinematicRun({
             runId: run.id,
             snapshot: workingSnapshot,
@@ -1279,17 +1300,83 @@ export default function App() {
       }
     }
 
-    const interval = window.setInterval(() => {
-      void pollActiveCinematicRuns()
-    }, 3000)
+    const currentSnapshot = snapshotRef.current
+    const activeRuns = currentSnapshot?.cinematicRuns.filter((run) => !isTerminalCinematicRunStatus(run.status)) ?? []
+    if (activeRuns.length === 0) return
 
-    void pollActiveCinematicRuns()
+    const signalMap = cinematicRunRealtimeSignalAtRef.current
+    const activeRunIds = new Set(activeRuns.map((run) => run.id))
+    const now = Date.now()
+    Array.from(signalMap.keys()).forEach((runId) => {
+      if (!activeRunIds.has(runId)) signalMap.delete(runId)
+    })
+    activeRuns.forEach((run) => {
+      if (!signalMap.has(run.id)) signalMap.set(run.id, now)
+    })
+
+    const refreshTimeouts = new Map<string, number>()
+    const noteRealtimeSignal = (runId: string) => {
+      if (cancelled) return
+      signalMap.set(runId, Date.now())
+      const existingTimeout = refreshTimeouts.get(runId)
+      if (typeof existingTimeout === 'number') {
+        window.clearTimeout(existingTimeout)
+      }
+      const timeout = window.setTimeout(() => {
+        refreshTimeouts.delete(runId)
+        void pollCinematicRuns([runId], 'realtime')
+      }, 180)
+      refreshTimeouts.set(runId, timeout)
+    }
+
+    const channels = activeRuns.flatMap((run) => {
+      const runChannel = supabase
+        .channel(`graphcore-cinematic-run-${run.id}`)
+        .on('postgres_changes', {
+          event: '*',
+          schema: 'public',
+          table: 'cinematic_runs',
+          filter: `id=eq.${run.id}`,
+        }, () => {
+          noteRealtimeSignal(run.id)
+        })
+        .subscribe()
+
+      const jobChannel = supabase
+        .channel(`graphcore-cinematic-run-jobs-${run.id}`)
+        .on('postgres_changes', {
+          event: '*',
+          schema: 'public',
+          table: 'cinematic_run_jobs',
+          filter: `run_id=eq.${run.id}`,
+        }, () => {
+          noteRealtimeSignal(run.id)
+        })
+        .subscribe()
+
+      return [runChannel, jobChannel]
+    })
+
+    const interval = window.setInterval(() => {
+      const fallbackSnapshot = snapshotRef.current
+      if (!fallbackSnapshot) return
+      const staleRunIds = fallbackSnapshot.cinematicRuns
+        .filter((run) => !isTerminalCinematicRunStatus(run.status))
+        .filter((run) => (Date.now() - (signalMap.get(run.id) ?? 0)) >= 15000)
+        .map((run) => run.id)
+      if (staleRunIds.length === 0) return
+      void pollCinematicRuns(staleRunIds, 'watchdog')
+    }, 15000)
 
     return () => {
       cancelled = true
       window.clearInterval(interval)
+      refreshTimeouts.forEach((timeout) => window.clearTimeout(timeout))
+      channels.forEach((channel) => {
+        void supabase.removeChannel(channel)
+      })
     }
-  }, [loadedState?.source])
+  }, [activeCinematicRunIdSignature, loadedState?.source, snapshot?.draft.id])
 
   useEffect(() => {
     if (activeTab !== 'cinematics') return

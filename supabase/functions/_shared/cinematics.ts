@@ -1069,34 +1069,25 @@ export function buildStillPrompt(input: {
   })
 
   return [
-    `Create a cinematic keyframe still for the project "${input.snapshot.project.name}".`,
+    'Create one cinematic keyframe still.',
     ...formatProjectArtDirection(input.snapshot.gameSpec ?? null),
-    `Preset family: ${getCinematicPresetLabel(settings.presetFamily)}.`,
-    settings.formatSubtype ? `Format subtype: ${getCinematicFormatSubtypeLabel(settings.formatSubtype)}.` : null,
-    settings.formulaFamily ? `Planned script formula: ${getCinematicFormulaFamilyLabel(settings.formulaFamily)}.` : null,
-    settings.dominantTrigger ? `Dominant trigger: ${settings.dominantTrigger.replace(/_/g, ' ')}.` : null,
     describePresetPromptStyle(settings.presetFamily),
     describeSubtypePromptStyle(shot.formatSubtype ?? settings.formatSubtype ?? null),
     `Target aspect ratio: ${settings.stillAspectRatio}.`,
     `Target still resolution: ${settings.stillResolution}.`,
-    `Shot title: ${input.shotNode.title}.`,
     shot.shotType !== 'custom' ? `Shot type: ${shot.shotType}.` : null,
     shot.framing.trim() ? `Framing: ${shot.framing.trim()}.` : null,
     shot.cameraAngle.trim() ? `Camera angle: ${shot.cameraAngle.trim()}.` : null,
     shot.cameraMovement.trim() ? `Camera movement intent: ${shot.cameraMovement.trim()}.` : null,
     shot.lensPreference.trim() ? `Lens preference: ${shot.lensPreference.trim()}.` : null,
-    shot.formatSubtype ? `Shot subtype: ${getCinematicFormatSubtypeLabel(shot.formatSubtype)}.` : null,
-    shot.formulaFamily ? `Shot formula: ${getCinematicFormulaFamilyLabel(shot.formulaFamily)}.` : null,
-    shot.dominantTrigger ? `Shot trigger: ${shot.dominantTrigger.replace(/_/g, ' ')}.` : null,
     shot.contrastAxis.trim() ? `Contrast axis: ${shot.contrastAxis.trim()}.` : null,
     shot.proofMoment.trim() ? `Proof moment: ${shot.proofMoment.trim()}.` : null,
-    shot.ctaStyle.trim() ? `CTA style: ${shot.ctaStyle.trim()}.` : null,
     input.shotNode.body?.text ? `Script beat: ${String(input.shotNode.body.text).trim()}.` : null,
     shot.visualPrompt.trim() ? `Additional visual direction: ${shot.visualPrompt.trim()}.` : null,
     shot.compositionGuide.trim() ? `Composition guide: ${shot.compositionGuide.trim()}.` : null,
-    ...formatOverlayCues(shot.audio),
     ...sourceDescriptions,
-    'Use literal visual staging and readable proof. Avoid poetic metaphor or polished ad copy.',
+    'Describe and render only what should be visibly present in the final frame.',
+    'Use literal visual staging and readable proof. Avoid poetic metaphor, production metadata, or polished ad copy.',
     subtypeLooksLikeAd(shot.formatSubtype ?? settings.formatSubtype ?? null)
       ? 'If the product is present, show it doing its job with visible proof instead of acting like a passive prop.'
       : null,
@@ -1104,7 +1095,7 @@ export function buildStillPrompt(input: {
       ? 'Keep both poles readable in the frame and make the stronger winner state immediately obvious.'
       : null,
     'Compose all supplied sources into one coherent scene with consistent scale, lighting, staging, and continuity.',
-    'No subtitles, logos, watermarks, borders, split panels, or collage layout.',
+    'Do not render written words, letters, signage, brand marks, captions, subtitles, logos, watermarks, borders, split panels, or collage layout unless a supplied visual reference explicitly requires a specific real-world marking to remain consistent.',
   ].filter(Boolean).join(' ')
 }
 
@@ -1122,29 +1113,23 @@ export function buildTakeStillPrompt(input: {
     .filter((entry): entry is typeof sequence.shots[number] => Boolean(entry))
 
   return [
-    `Create one representative still frame for the cinematic take "${input.takeNode.title}" in "${input.snapshot.project.name}".`,
+    'Create one representative still frame from this cinematic take.',
     ...formatProjectArtDirection(input.snapshot.gameSpec ?? null),
-    `Preset family: ${getCinematicPresetLabel(settings.presetFamily)}.`,
-    take.formatSubtype ? `Format subtype: ${getCinematicFormatSubtypeLabel(take.formatSubtype)}.` : null,
-    take.formulaFamily ? `Planned script formula: ${getCinematicFormulaFamilyLabel(take.formulaFamily)}.` : null,
-    take.dominantTrigger ? `Dominant trigger: ${take.dominantTrigger.replace(/_/g, ' ')}.` : null,
     describePresetPromptStyle(settings.presetFamily),
     describeSubtypePromptStyle(take.formatSubtype ?? settings.formatSubtype ?? null),
     `Target aspect ratio: ${settings.stillAspectRatio}.`,
     `Target still resolution: ${settings.stillResolution}.`,
     take.contrastAxis.trim() ? `Contrast axis: ${take.contrastAxis.trim()}.` : null,
     take.proofMoment.trim() ? `Proof moment: ${take.proofMoment.trim()}.` : null,
-    take.ctaStyle.trim() ? `CTA style: ${take.ctaStyle.trim()}.` : null,
     ...takeShots.map((shot, index) => [
-      `Take shot ${index + 1}: ${shot.title}.`,
       shot.beat.trim() ? `Beat: ${shot.beat.trim()}.` : null,
       shot.framing.trim() ? `Framing: ${shot.framing.trim()}.` : null,
       shot.cameraMovement.trim() ? `Movement: ${shot.cameraMovement.trim()}.` : null,
       shot.visualPrompt.trim() ? `Visual direction: ${shot.visualPrompt.trim()}.` : null,
-      ...formatOverlayCues(shot.audio),
     ].filter(Boolean).join(' ')),
     ...input.sourceInputs.map((entry) => `${entry.role ?? 'source'}: ${entry.definition?.name ?? entry.node.title}.`),
-    'Use literal visual phrasing and visible proof instead of polished ad copy or metaphor.',
+    'Describe and render only what should be visibly present in the final frame.',
+    'Use literal visual phrasing and visible proof instead of polished ad copy, project metadata, or metaphor.',
     settings.presetFamily === 'story_movie_tv'
       ? 'Choose the strongest storyboard-like keyframe that communicates the take with clear cinematic continuity.'
       : settings.presetFamily === 'ugc_direct_response_ad'
@@ -1155,7 +1140,7 @@ export function buildTakeStillPrompt(input: {
     take.formatSubtype === 'contrast_narrative'
       ? 'Keep both poles legible and choose the frame where the gap or winner state is most obvious.'
       : null,
-    'No subtitles, logos, watermarks, borders, split panels, or collage layout.',
+    'Do not render written words, letters, signage, brand marks, captions, subtitles, logos, watermarks, borders, split panels, or collage layout unless a supplied visual reference explicitly requires a specific real-world marking to remain consistent.',
   ].filter(Boolean).join(' ')
 }
 
