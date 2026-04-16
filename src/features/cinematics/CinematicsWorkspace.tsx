@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { resolveAssetPreviewUrl, resolveAssetSourceUrl } from '../../domain/assets'
 import { compileCinematicGraphFromScriptDoc } from '../../domain/cinematicScriptCompiler'
-import { buildTakeFirstCinematicDocument } from '../../domain/cinematicGraphProjection'
+import { buildTakeFirstCinematicDocument, layoutCinematicTakeOnlyNodes } from '../../domain/cinematicGraphProjection'
 import {
   buildCinematicSettingsPatchFromFormatSubtype,
   buildCinematicSettingsPatchFromPresetFamily,
@@ -777,7 +777,12 @@ function applyEditedSequenceToGraph(graph: GraphDefinition, nextSequenceInput: C
       ...(graph.metadata ?? {}),
       cinematicSequence: nextSequence,
     },
-    nodes: [...preservedNodes, ...nextTakeNodes],
+    nodes: layoutCinematicTakeOnlyNodes({
+      nodes: [...preservedNodes, ...nextTakeNodes],
+      sequence: nextSequence,
+      preserveTakePositions: existingTakeNodes.length > 0,
+      preserveExistingPositions: true,
+    }),
     edges: [...retainedEdges, ...takeEdges],
   }
 }
@@ -1528,6 +1533,20 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
     })
   }
 
+  function organizeCurrentGraph() {
+    if (!currentGraph) return
+    const sequence = getCinematicSequence(currentGraph.metadata)
+    if (!sequence) return
+    onUpdateGraph(currentGraph.key, {
+      nodes: layoutCinematicTakeOnlyNodes({
+        nodes: currentGraph.nodes,
+        sequence,
+        preserveTakePositions: false,
+        preserveExistingPositions: false,
+      }),
+    })
+  }
+
   return (
     <div
       className="focus-layout graph-layout cinematics-layout"
@@ -1548,9 +1567,6 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
               {cinematicGraphs.map((graph) => (
                 <button key={graph.key} className={graph.key === currentGraph?.key ? 'rail-button is-active' : 'rail-button'} onClick={() => onSelectGraph(graph.key)} type="button">
                   <strong>{graph.name}</strong>
-                  <span className={isPendingGenerationResource(graph) ? 'world-build-rail-status' : undefined}>
-                    {isPendingGenerationResource(graph) ? <><span className="button-spinner item-row-spinner" aria-hidden="true" />Generating...</> : getResourceGenerationMetadata(graph)?.state === 'failed' ? 'Generation failed' : graph.summary || graph.graphType}
-                  </span>
                 </button>
               ))}
               {cinematicGraphs.length === 0 ? <div className="inline-note">No cinematic graphs yet. Create one to start sequencing shots.</div> : null}
@@ -1652,6 +1668,7 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
               {subtypeOptions.map((option) => <option key={option} value={option}>{getCinematicFormatSubtypeLabel(option)}</option>)}
             </select>
           ) : null}
+          <button className="ghost-button compact" disabled={!currentGraph} onClick={organizeCurrentGraph} type="button">Organize</button>
           <button className="ghost-button compact" onClick={() => currentGraph && onDuplicateGraph(currentGraph.key)} type="button">Duplicate</button>
           <button className={isDeletingSelectedGraph ? 'ghost-button compact button-with-spinner' : 'ghost-button compact'} disabled={isDeletingSelectedGraph} onClick={() => currentGraph && onDeleteGraph(currentGraph.key)} type="button">{isDeletingSelectedGraph ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}</button>
         </div>

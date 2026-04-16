@@ -8,6 +8,20 @@ import {
 import type { GraphDefinition, NodeDefinition } from './graphcore.ts'
 import { normalizeNode } from './nodeLibrary.ts'
 
+const CINEMATIC_REF_X = 180
+const CINEMATIC_REF_START_Y = 180
+const CINEMATIC_REF_GAP_Y = 126
+const CINEMATIC_START_X = 460
+const CINEMATIC_TAKE_Y = 92
+const CINEMATIC_START_WIDTH = 240
+const CINEMATIC_TAKE_WIDTH = 420
+const CINEMATIC_TAKE_GAP_X = 120
+const CINEMATIC_TAKE_START_X = CINEMATIC_START_X + CINEMATIC_START_WIDTH + 150
+const CINEMATIC_TAKE_STEP_X = CINEMATIC_TAKE_WIDTH + CINEMATIC_TAKE_GAP_X
+const CINEMATIC_END_GAP_X = 260
+
+const CINEMATIC_REF_NODE_TYPES = new Set(['asset_ref', 'composite_ref', 'storyboard_ref'])
+
 type TakeDocumentShotLike = {
   title: string
   beat: string
@@ -111,6 +125,96 @@ function deriveDefaultTakePosition(
   }
 
   return { x: 620 + index * 420, y: 520 }
+}
+
+export function layoutCinematicTakeOnlyNodes(input: {
+  nodes: GraphDefinition['nodes']
+  sequence: CinematicSequence
+  preserveTakePositions?: boolean
+  preserveExistingPositions?: boolean
+}) {
+  const takePositionById = new Map<string, { x: number; y: number }>()
+  const existingNodeByKey = new Map(input.nodes.map((node) => [node.key, node] as const))
+  let nextTakeX = CINEMATIC_TAKE_START_X
+
+  for (const take of input.sequence.takes) {
+    const takeNode = input.nodes.find((node) => node.type === 'cinematic_take' && getCinematicTakeNodeConfig(node).id === take.id) ?? null
+    const preservedPosition = (input.preserveExistingPositions || input.preserveTakePositions) && takeNode?.position
+      ? { x: takeNode.position.x, y: input.preserveExistingPositions ? takeNode.position.y : CINEMATIC_TAKE_Y }
+      : null
+    const position = preservedPosition ?? { x: nextTakeX, y: CINEMATIC_TAKE_Y }
+    takePositionById.set(take.id, position)
+    nextTakeX = Math.max(nextTakeX, position.x + CINEMATIC_TAKE_STEP_X)
+  }
+
+  const lastTake = input.sequence.takes[input.sequence.takes.length - 1] ?? null
+  const lastTakePosition = lastTake ? takePositionById.get(lastTake.id) ?? null : null
+  const endX = (lastTakePosition?.x ?? CINEMATIC_START_X) + CINEMATIC_TAKE_WIDTH + CINEMATIC_END_GAP_X
+
+  const orderedRefNodes = input.nodes
+    .filter((node) => CINEMATIC_REF_NODE_TYPES.has(node.type))
+    .slice()
+    .sort((left, right) => {
+      const leftType = left.type
+      const rightType = right.type
+      if (leftType !== rightType) return leftType.localeCompare(rightType)
+      return left.title.localeCompare(right.title)
+    })
+
+  const refIndexByKey = new Map(orderedRefNodes.map((node, index) => [node.key, index] as const))
+
+  return input.nodes.map((node) => {
+    if (CINEMATIC_REF_NODE_TYPES.has(node.type)) {
+      if (input.preserveExistingPositions) {
+        const existingNode = existingNodeByKey.get(node.key)
+        if (existingNode?.position) return node
+      }
+      const index = refIndexByKey.get(node.key) ?? 0
+      return {
+        ...node,
+        position: {
+          x: CINEMATIC_REF_X,
+          y: CINEMATIC_REF_START_Y + index * CINEMATIC_REF_GAP_Y,
+        },
+      }
+    }
+
+    if (node.type === 'start') {
+      if (input.preserveExistingPositions) {
+        const existingNode = existingNodeByKey.get(node.key)
+        if (existingNode?.position) return node
+      }
+      return {
+        ...node,
+        position: { x: CINEMATIC_START_X, y: CINEMATIC_TAKE_Y },
+      }
+    }
+
+    if (node.type === 'end') {
+      if (input.preserveExistingPositions) {
+        const existingNode = existingNodeByKey.get(node.key)
+        if (existingNode?.position) return node
+      }
+      return {
+        ...node,
+        position: { x: endX, y: CINEMATIC_TAKE_Y },
+      }
+    }
+
+    if (node.type === 'cinematic_take') {
+      if (input.preserveExistingPositions) {
+        const existingNode = existingNodeByKey.get(node.key)
+        if (existingNode?.position) return node
+      }
+      const takeId = getCinematicTakeNodeConfig(node).id
+      return {
+        ...node,
+        position: takePositionById.get(takeId) ?? node.position,
+      }
+    }
+
+    return node
+  })
 }
 
 export function projectSequenceToTakeOnlyGraph(
@@ -250,6 +354,13 @@ export function projectSequenceToTakeOnlyGraph(
     })
   }
 
+  const laidOutNodes = layoutCinematicTakeOnlyNodes({
+    nodes: [...preservedNodes, ...nextTakeNodes],
+    sequence,
+    preserveTakePositions: existingTakeNodes.length > 0 && !graph.nodes.some((node) => node.type === 'cinematic_shot'),
+    preserveExistingPositions: existingTakeNodes.length > 0 && !graph.nodes.some((node) => node.type === 'cinematic_shot'),
+  })
+
   return {
     ...graph,
     metadata: {
@@ -257,7 +368,7 @@ export function projectSequenceToTakeOnlyGraph(
       cinematicSequence: sequence,
       cinematicScript: scriptDoc,
     },
-    nodes: [...preservedNodes, ...nextTakeNodes],
+    nodes: laidOutNodes,
     edges: nextEdges,
   } satisfies GraphDefinition
 }

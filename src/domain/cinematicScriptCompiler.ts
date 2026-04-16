@@ -1,4 +1,7 @@
 import {
+  layoutCinematicTakeOnlyNodes,
+} from './cinematicGraphProjection.ts'
+import {
   buildCinematicSequenceFromScriptDoc,
   compileCinematicSequence,
   cinematicTakeSpecSchema,
@@ -256,7 +259,11 @@ export function compileCinematicGraphFromSequence(input: CompileCinematicGraphFr
     metadata: {},
   })
   nodes.push(endNode)
-  const normalizedNodes = normalizeGraphLayoutPositions(nodes)
+  const normalizedNodes = layoutCinematicTakeOnlyNodes({
+    nodes: normalizeGraphLayoutPositions(nodes),
+    sequence: cinematicSequence,
+    preserveTakePositions: false,
+  })
   const existingGeneration =
     resourceGenerationMetadataSchema.safeParse(input.existingMetadata?.generation ?? null).success
       ? resourceGenerationMetadataSchema.parse(input.existingMetadata?.generation)
