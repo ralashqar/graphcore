@@ -358,6 +358,39 @@ function updateSequenceShotBindingsInGraph(
   }
 }
 
+function updateSequenceTakeBindingsInGraph(
+  graph: SnapshotGraph,
+  takeId: string,
+  changes: {
+    metadata: Partial<ReturnType<typeof getCinematicTakeNodeConfig>>
+  },
+) {
+  const sequence = getCinematicSequence(graph.metadata)
+  const existingTake = sequence.takes.find((take) => take.id === takeId) ?? null
+  if (!existingTake) return graph
+
+  const nextSequence = {
+    ...sequence,
+    takes: sequence.takes.map((take) => (
+      take.id === takeId
+        ? {
+            ...take,
+            ...changes.metadata,
+          }
+        : take
+    )),
+  }
+
+  return {
+    ...graph,
+    metadata: {
+      ...asRecord(graph.metadata),
+      cinematicSequence: nextSequence,
+      cinematicScript: deriveCinematicScriptFromSequence(nextSequence),
+    },
+  }
+}
+
 function isAssetDependencyEdge(graph: SnapshotGraph, edge: SnapshotRecord) {
   const sourcePort = asString(asRecord(edge.source).portId)
   const targetPort = asString(asRecord(edge.target).portId)
@@ -1351,6 +1384,22 @@ export async function reserveGeneratedImageAsset(input: {
   return toAssetDefinition(persistedAsset.data)
 }
 
+export function buildGraphScopedTakeAssetKey(input: {
+  graphKey: string
+  takeNodeKey: string
+  kind: 'storyboard' | 'still' | 'video'
+}) {
+  const graphSlug = buildAssetSlug(input.graphKey) || 'graph'
+  const takeSlug = buildAssetSlug(input.takeNodeKey) || 'take'
+  const suffix = input.kind === 'storyboard'
+    ? 'storyboard'
+    : input.kind === 'still'
+      ? 'still'
+      : 'video'
+  const assetKind = input.kind === 'video' ? 'video' : 'image'
+  return `${assetKind}.cinematic_take_${graphSlug}_${takeSlug}_${suffix}`
+}
+
 export async function completeReservedGeneratedImageAsset(input: {
   client: ReturnType<typeof createClient>
   projectId: string
@@ -1627,7 +1676,7 @@ export async function persistTakeBindingsIfPresent(
     metadata: Partial<ReturnType<typeof getCinematicTakeNodeConfig>>
   },
 ) {
-  const graphRow = await client.from('draft_graphs').select('id').eq('draft_id', draftId).eq('key', graphKey).maybeSingle()
+  const graphRow = await client.from('draft_graphs').select('id, metadata').eq('draft_id', draftId).eq('key', graphKey).maybeSingle()
   if (graphRow.error || !graphRow.data) return
 
   const nodeRow = await client
@@ -1642,6 +1691,27 @@ export async function persistTakeBindingsIfPresent(
   const currentBody = asRecord(nodeRow.data.body)
   const currentMetadata = asRecord(nodeRow.data.metadata)
   const currentDisplay = asRecord(nodeRow.data.display)
+  const resolvedTakeId = changes.metadata.takeId ?? getCinematicTakeNodeConfig({ metadata: currentMetadata }).id
+
+  if (resolvedTakeId) {
+    const nextMetadata = updateSequenceTakeBindingsInGraph({
+      key: graphKey,
+      name: graphKey,
+      nodes: [],
+      edges: [],
+      metadata: asRecord(graphRow.data.metadata),
+    } as SnapshotGraph, resolvedTakeId, {
+      metadata: {
+        ...changes.metadata,
+        takeId: resolvedTakeId,
+      },
+    }).metadata
+
+    await client
+      .from('draft_graphs')
+      .update({ metadata: nextMetadata })
+      .eq('id', graphRow.data.id)
+  }
 
   await client
     .from('draft_graph_nodes')
@@ -1754,9 +1824,14 @@ export function applyTakeBindingToGraph(
     metadata: Partial<ReturnType<typeof getCinematicTakeNodeConfig>>
   },
 ) {
+  const currentTakeNode = graph.nodes.find((node) => node.key === takeNodeKey) ?? null
+  const takeId = changes.metadata.takeId
+    ?? (currentTakeNode ? getCinematicTakeNodeConfig(currentTakeNode).id : null)
+  const nextGraph = takeId ? updateSequenceTakeBindingsInGraph(graph, takeId, { metadata: changes.metadata }) : graph
+
   return {
-    ...graph,
-    nodes: graph.nodes.map((node) => {
+    ...nextGraph,
+    nodes: nextGraph.nodes.map((node) => {
       if (node.key !== takeNodeKey) return node
       const currentBody = asRecord(node.body)
       return {

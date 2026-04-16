@@ -1178,9 +1178,64 @@ export function buildCinematicSequenceFromScriptDoc(scriptDoc: CinematicScriptDo
   })
 }
 
+function preserveCompiledShotRuntimeFields(
+  compiledSequence: CinematicSequence,
+  sourceSequence: CinematicSequence,
+) {
+  const sourceShotById = new Map(sourceSequence.shots.map((shot) => [shot.id, shot] as const))
+  return compiledSequence.shots.map((shot) => {
+    const source = sourceShotById.get(shot.id)
+    if (!source) return shot
+    return {
+      ...shot,
+      stillAssetKey: source.stillAssetKey ?? null,
+      videoAssetKey: source.videoAssetKey ?? null,
+      lastRunId: source.lastRunId ?? null,
+      lastStillJobId: source.lastStillJobId ?? null,
+      lastVideoJobId: source.lastVideoJobId ?? null,
+      provider: source.provider ?? null,
+      providerModel: source.providerModel ?? null,
+      providerRequestId: source.providerRequestId ?? null,
+      executionPlan: source.executionPlan ?? null,
+    }
+  })
+}
+
+function preserveCompiledTakeRuntimeFields(
+  compiledSequence: CinematicSequence,
+  sourceSequence: CinematicSequence,
+) {
+  const sourceTakeById = new Map(sourceSequence.takes.map((take) => [take.id, take] as const))
+  return compiledSequence.takes.map((take) => {
+    const source = sourceTakeById.get(take.id)
+    if (!source) return take
+    return {
+      ...take,
+      storyboardAssetKey: source.storyboardAssetKey ?? null,
+      outputVideoAssetKey: source.outputVideoAssetKey ?? null,
+      outputStillAssetKey: source.outputStillAssetKey ?? null,
+      approvedForVideo: source.approvedForVideo ?? false,
+      approvalNotes: source.approvalNotes ?? '',
+      lastRunId: source.lastRunId ?? null,
+      lastStoryboardJobId: source.lastStoryboardJobId ?? null,
+      lastStillJobId: source.lastStillJobId ?? null,
+      lastVideoJobId: source.lastVideoJobId ?? null,
+      provider: source.provider ?? null,
+      providerModel: source.providerModel ?? null,
+      providerRequestId: source.providerRequestId ?? null,
+      executionPlan: source.executionPlan ?? null,
+    }
+  })
+}
+
 export function compileCinematicSequence(sequence: CinematicSequence): CinematicSequence {
   const parsedSequence = cinematicSequenceSchema.parse(sequence)
-  return buildCinematicSequenceFromScriptDoc(deriveCinematicScriptFromSequence(parsedSequence))
+  const compiledSequence = buildCinematicSequenceFromScriptDoc(deriveCinematicScriptFromSequence(parsedSequence))
+  return cinematicSequenceSchema.parse({
+    ...compiledSequence,
+    shots: preserveCompiledShotRuntimeFields(compiledSequence, parsedSequence),
+    takes: preserveCompiledTakeRuntimeFields(compiledSequence, parsedSequence),
+  })
 }
 
 export function deriveCinematicScriptFromSequence(sequence: CinematicSequence): CinematicScriptDoc {

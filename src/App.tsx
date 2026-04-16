@@ -16,6 +16,7 @@ import {
   getCinematicSequence,
   getCinematicTakeNodeConfig,
   getStoryboardRefNodeConfig,
+  updateNodeMetadataWithTake,
   type CinematicPresetFamily,
   type CinematicRunStatusResponse,
   type CinematicSettings,
@@ -281,17 +282,176 @@ function isTerminalCinematicRunStatus(status: ProjectSnapshot['cinematicRuns'][n
   return ['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(status)
 }
 
+function logCinematicTargetNodeState(
+  phase: 'merged' | 'hydrated',
+  graph: ProjectSnapshot['graphs'][number] | null | undefined,
+  targetNodeKey: string | null | undefined,
+  mode: CinematicRunStatusResponse['run']['mode'] | null,
+) {
+  if (!graph || !targetNodeKey) return
+  if (mode && !['preview_storyboard_still', 'preview_take_still'].includes(mode)) return
+  const node = graph.nodes.find((entry) => entry.key === targetNodeKey) ?? null
+  if (!node) {
+    console.info('[GraphCore][cinematic-debug] target node missing.', {
+      phase,
+      graphKey: graph.key,
+      mode,
+      targetNodeKey,
+      nodeCount: graph.nodes.length,
+    })
+    return
+  }
+
+  if (node.type === 'cinematic_take') {
+    const take = getCinematicTakeNodeConfig(node)
+    console.info('[GraphCore][cinematic-debug] take node state.', {
+      phase,
+      graphKey: graph.key,
+      mode,
+      targetNodeKey,
+      nodeType: node.type,
+      bodyImageAssetKey: node.body.imageAssetKey ?? null,
+      displayIconAssetKey: node.display.iconAssetKey ?? null,
+      storyboardAssetKey: take.storyboardAssetKey,
+      outputStillAssetKey: take.outputStillAssetKey,
+      outputVideoAssetKey: take.outputVideoAssetKey,
+    })
+    return
+  }
+
+  if (node.type === 'storyboard_ref') {
+    const storyboard = getStoryboardRefNodeConfig(node)
+    console.info('[GraphCore][cinematic-debug] storyboard node state.', {
+      phase,
+      graphKey: graph.key,
+      mode,
+      targetNodeKey,
+      nodeType: node.type,
+      bodyImageAssetKey: node.body.imageAssetKey ?? null,
+      displayIconAssetKey: node.display.iconAssetKey ?? null,
+      assetKey: storyboard.assetKey,
+    })
+  }
+}
+
+function overlayCinematicRunBindingsOntoGraphs(
+  graphs: ProjectSnapshot['graphs'],
+  run: CinematicRunStatusResponse['run'],
+) {
+  return graphs.map((graph) => {
+    if (graph.key !== run.graphKey) return graph
+
+    let nextGraph = graph
+
+    for (const job of run.jobs) {
+      if (job.shotNodeKey.trim().length === 0) continue
+      if (job.kind !== 'storyboard_still' && job.kind !== 'take_still' && job.kind !== 'take_video') continue
+      if (job.status !== 'succeeded') continue
+
+      const targetNode = nextGraph.nodes.find((node) => node.key === job.shotNodeKey) ?? null
+      if (!targetNode || targetNode.type !== 'cinematic_take') continue
+
+      const takeConfig = getCinematicTakeNodeConfig(targetNode)
+      const nextTakeMetadata =
+        job.kind === 'storyboard_still'
+          ? {
+              storyboardAssetKey: job.stillAssetKey ?? takeConfig.storyboardAssetKey,
+              lastRunId: run.id,
+              lastStoryboardJobId: job.id,
+              provider: job.provider ?? takeConfig.provider,
+              providerModel: job.model ?? takeConfig.providerModel,
+              providerRequestId: job.providerRequestId ?? takeConfig.providerRequestId,
+            }
+          : job.kind === 'take_still'
+            ? {
+                outputStillAssetKey: job.stillAssetKey ?? takeConfig.outputStillAssetKey,
+                lastRunId: run.id,
+                lastStillJobId: job.id,
+                provider: job.provider ?? takeConfig.provider,
+                providerModel: job.model ?? takeConfig.providerModel,
+                providerRequestId: job.providerRequestId ?? takeConfig.providerRequestId,
+              }
+            : {
+                outputVideoAssetKey: job.videoAssetKey ?? takeConfig.outputVideoAssetKey,
+                lastRunId: run.id,
+                lastVideoJobId: job.id,
+                provider: job.provider ?? takeConfig.provider,
+                providerModel: job.model ?? takeConfig.providerModel,
+                providerRequestId: job.providerRequestId ?? takeConfig.providerRequestId,
+              }
+
+      const previewImageAssetKey =
+        job.kind === 'storyboard_still'
+          ? job.stillAssetKey ?? null
+          : job.kind === 'take_still'
+            ? job.stillAssetKey ?? null
+            : targetNode.body.imageAssetKey ?? null
+
+      nextGraph = {
+        ...nextGraph,
+        metadata: {
+          ...(nextGraph.metadata ?? {}),
+          cinematicSequence: {
+            ...getCinematicSequence(nextGraph.metadata),
+            takes: getCinematicSequence(nextGraph.metadata).takes.map((take) => (
+              take.id === takeConfig.id
+                ? {
+                    ...take,
+                    ...nextTakeMetadata,
+                  }
+                : take
+            )),
+          },
+        },
+        nodes: nextGraph.nodes.map((node) => {
+          if (node.key !== job.shotNodeKey) return node
+          return {
+            ...node,
+            body: previewImageAssetKey
+              ? {
+                  ...node.body,
+                  imageAssetKey: previewImageAssetKey,
+                }
+              : node.body,
+            display: previewImageAssetKey
+              ? {
+                  ...node.display,
+                  iconAssetKey: previewImageAssetKey,
+                }
+              : node.display,
+            metadata: updateNodeMetadataWithTake(node.metadata, nextTakeMetadata),
+          }
+        }),
+      }
+    }
+
+    return nextGraph
+  })
+}
+
 function mergeCinematicRunStatusIntoSnapshot(snapshot: ProjectSnapshot, status: CinematicRunStatusResponse) {
   const nextRuns = snapshot.cinematicRuns.some((run) => run.id === status.run.id)
     ? snapshot.cinematicRuns.map((run) => (run.id === status.run.id ? status.run : run))
     : [status.run, ...snapshot.cinematicRuns]
-
-  return normalizeSnapshot({
+  const currentGraphByKey = new Map(snapshot.graphs.map((graph) => [graph.key, graph] as const))
+  const incomingGraphs = (status.graphs as ProjectSnapshot['graphs']).map((graph) => {
+    const currentGraph = currentGraphByKey.get(graph.key) ?? null
+    if (!currentGraph) return graph
+    const currentNodeByKey = new Map(currentGraph.nodes.map((node) => [node.key, node] as const))
+    return {
+      ...graph,
+      nodes: graph.nodes.map((node) => ({
+        ...node,
+        position: currentNodeByKey.get(node.key)?.position ?? node.position,
+      })),
+    }
+  })
+  const nextSnapshot = normalizeSnapshot({
     ...snapshot,
-    graphs: mergeWorldBuildResourcesByKey(
+    graphs: overlayCinematicRunBindingsOntoGraphs(mergeWorldBuildResourcesByKey(
       snapshot.graphs as Array<ProjectSnapshot['graphs'][number]>,
-      status.graphs as ProjectSnapshot['graphs'],
-    ),
+      incomingGraphs,
+    ), status.run),
     assets: mergeWorldBuildResourcesByKey(
       snapshot.assets as Array<ProjectSnapshot['assets'][number]>,
       status.assets as ProjectSnapshot['assets'],
@@ -300,6 +460,9 @@ function mergeCinematicRunStatusIntoSnapshot(snapshot: ProjectSnapshot, status: 
       new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()
     )),
   })
+  const mergedGraph = nextSnapshot.graphs.find((graph) => graph.key === status.run.graphKey) ?? null
+  logCinematicTargetNodeState('merged', mergedGraph, status.run.shotNodeKey, status.run.mode)
+  return nextSnapshot
 }
 
 function buildCinematicRunErrorMessage(status: CinematicRunStatusResponse) {
@@ -559,13 +722,28 @@ export default function App() {
     const nextArchetype = snapshotToHydrate.archetypes.find((archetype) => archetype.key === selectedArchetypeKey) ?? snapshotToHydrate.archetypes[0] ?? null
     const nextGraph = snapshotToHydrate.graphs.find((graph) => graph.key === selectedGraphKey) ?? snapshotToHydrate.graphs[0] ?? null
     const nextAsset = snapshotToHydrate.assets.find((asset) => asset.key === selectedAssetKey) ?? snapshotToHydrate.assets[0] ?? null
+    const nextSelectedNodeKey = selectedNodeKey && nextGraph?.nodes.some((node) => node.key === selectedNodeKey)
+      ? selectedNodeKey
+      : null
+    const nextSelectedEdgeKey = selectedEdgeKey && nextGraph?.edges.some((edge) => edge.key === selectedEdgeKey)
+      ? selectedEdgeKey
+      : null
+
+    if (selectedNodeKey && !nextSelectedNodeKey && nextGraph?.graphType === 'cinematic_flow') {
+      console.info('[GraphCore][cinematic-debug] selected node dropped during workspace hydrate.', {
+        selectedGraphKey,
+        selectedNodeKey,
+        nextGraphKey: nextGraph.key,
+        nodeCount: nextGraph.nodes.length,
+      })
+    }
 
     startTransition(() => {
       setLoadedState({ source: state.source, reason: state.reason })
       setSnapshot(snapshotToHydrate)
       setPatchPreview(null)
-      setSelectedNodeKey(null)
-      setSelectedEdgeKey(null)
+      setSelectedNodeKey(nextSelectedNodeKey)
+      setSelectedEdgeKey(nextSelectedEdgeKey)
       setSelectedGraphKey(nextGraph?.key ?? null)
       setSelectedDefinitionKey(nextDefinition?.key ?? null)
       setSelectedAssetKey(nextAsset?.key ?? null)
@@ -574,6 +752,10 @@ export default function App() {
       setHasLocalSnapshotChanges(restoredUnsavedSnapshot)
       setBundle(compileBundle(snapshotToHydrate))
     })
+
+    if (nextGraph?.graphType === 'cinematic_flow') {
+      logCinematicTargetNodeState('hydrated', nextGraph, nextSelectedNodeKey, null)
+    }
   }
 
   async function refreshWorkspaceState(
@@ -1022,9 +1204,6 @@ export default function App() {
 
       if (!reconciledCinematicRunIdsRef.current.has(run.id) && loadedState?.source === 'supabase') {
         reconciledCinematicRunIdsRef.current.add(run.id)
-        void refreshWorkspaceState(undefined, { ignoreUnsavedCache: true }).catch((refreshError) => {
-          console.error('[GraphCore] cinematic reconciliation refresh failed.', refreshError)
-        })
       }
     }
   }, [loadedState?.source, snapshot])
@@ -1068,11 +1247,17 @@ export default function App() {
             runId: status.run.id,
             status: status.run.status,
             assetCount: status.assets.length,
+            assetKeys: status.assets.map((asset) => asset.key),
             jobs: status.run.jobs.map((job) => ({
               id: job.id,
               kind: job.kind,
               status: job.status,
               nodeKey: job.shotNodeKey,
+              stillAssetKey: job.stillAssetKey ?? null,
+              videoAssetKey: job.videoAssetKey ?? null,
+              resultAssetKey: job.resultContext && typeof job.resultContext === 'object' && typeof job.resultContext.assetKey === 'string'
+                ? job.resultContext.assetKey
+                : null,
               error: job.errorMessage ?? null,
             })),
           })

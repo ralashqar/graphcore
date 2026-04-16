@@ -100,23 +100,13 @@ export function FlowNodeCard({ data }: { data: GraphNodeData }) {
                           </div>
                           <span>{isExpanded ? 'Hide' : 'Show'}</span>
                         </button>
-                        {shot.chips && shot.chips.length > 0 ? (
-                          <div className="flow-node-chip-row flow-node-chip-row-secondary">
-                            {shot.chips.map((chip, chipIndex) => (
-                              <span key={`${chip.label}-${chipIndex}`} className={chip.tone === 'muted' ? 'flow-node-chip is-muted' : 'flow-node-chip'}>
-                                <span>{chip.label}</span>
-                              </span>
-                            ))}
-                          </div>
-                        ) : null}
                         {isExpanded ? (
                           <div className="flow-node-take-shot-body">
-                            {shot.tags && shot.tags.length > 0 ? (
+                            {shot.chips && shot.chips.length > 0 ? (
                               <div className="flow-node-chip-row flow-node-chip-row-secondary">
-                                {shot.tags.map((tag, tagIndex) => (
-                                  <span key={`${tag.label}-${tagIndex}`} className={tag.tone === 'muted' ? 'flow-node-chip is-muted' : 'flow-node-chip'}>
-                                    {tag.iconId ? <EntityIcon id={tag.iconId} /> : null}
-                                    <span>{tag.label}</span>
+                                {shot.chips.map((chip, chipIndex) => (
+                                  <span key={`${chip.label}-${chipIndex}`} className={chip.tone === 'muted' ? 'flow-node-chip is-muted' : 'flow-node-chip'}>
+                                    <span>{chip.label}</span>
                                   </span>
                                 ))}
                               </div>

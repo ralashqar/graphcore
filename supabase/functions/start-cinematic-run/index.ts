@@ -21,6 +21,7 @@ import {
   buildTakeSeedanceExecutionPlan,
   buildSeedanceExecutionPlan,
   buildStillPrompt,
+  buildGraphScopedTakeAssetKey,
   findGraph,
   findNode,
   markGeneratedImageAssetFailed,
@@ -352,14 +353,13 @@ Deno.serve(async (request) => {
       const takeNode = findNode(graph, takeNodeKey)
       if (!takeNode) continue
       const sourceInputs = resolveTakeSources(payload.snapshot, graph, takeNodeKey)
-      const takeConfig = getCinematicTakeNodeConfig(takeNode)
       const reservedTakeStillAsset = payload.mode === 'preview_take_still'
         ? await reserveGeneratedImageAsset({
             client,
             projectId: payload.snapshot.project.id,
             userId: user.id,
-            assetKey: takeConfig.outputStillAssetKey,
-            name: `${takeNode.title} Still`,
+            assetKey: buildGraphScopedTakeAssetKey({ graphKey: graph.key, takeNodeKey, kind: 'still' }),
+            name: `${graph.name} / ${takeNode.title} / Still`,
             metadata: {
               generatedBy: 'cinematic_take_still',
               graphKey: graph.key,
@@ -459,7 +459,7 @@ Deno.serve(async (request) => {
       if (!storyboardNode) continue
       const isTakeStoryboard = storyboardNode.type === 'cinematic_take'
       const storyboardAssetKey = isTakeStoryboard
-        ? getCinematicTakeNodeConfig(storyboardNode).storyboardAssetKey
+        ? buildGraphScopedTakeAssetKey({ graphKey: graph.key, takeNodeKey: storyboardNodeKey, kind: 'storyboard' })
         : getStoryboardRefNodeConfig(storyboardNode).assetKey
       const sourceInputs = isTakeStoryboard
         ? resolveTakeSources(payload.snapshot, graph, storyboardNodeKey)
@@ -469,7 +469,9 @@ Deno.serve(async (request) => {
         projectId: payload.snapshot.project.id,
         userId: user.id,
         assetKey: storyboardAssetKey,
-        name: `${storyboardNode.title} Storyboard`,
+        name: isTakeStoryboard
+          ? `${graph.name} / ${storyboardNode.title} / Storyboard`
+          : `${storyboardNode.title} Storyboard`,
         metadata: {
           generatedBy: isTakeStoryboard ? 'cinematic_take_storyboard_still' : 'cinematic_storyboard_still',
           graphKey: graph.key,
@@ -522,6 +524,7 @@ Deno.serve(async (request) => {
       previousJobId = stillJobId
       if (isTakeStoryboard) {
         updatedGraph = applyTakeBindingToGraph(updatedGraph, storyboardNodeKey, {
+          bodyImageAssetKey: reservedStoryboardAsset.key,
           metadata: {
             storyboardAssetKey: reservedStoryboardAsset.key,
             lastRunId: runId,
@@ -529,6 +532,7 @@ Deno.serve(async (request) => {
           },
         })
         await persistTakeBindingsIfPresent(client, payload.snapshot.draft.id, graph.key, storyboardNodeKey, {
+          bodyImageAssetKey: reservedStoryboardAsset.key,
           metadata: {
             storyboardAssetKey: reservedStoryboardAsset.key,
             lastRunId: runId,
@@ -678,6 +682,7 @@ Deno.serve(async (request) => {
 
         if (storyboardNode.type === 'cinematic_take') {
           updatedGraph = applyTakeBindingToGraph(updatedGraph, storyboardNodeKey, {
+            bodyImageAssetKey: storyboardJob.stillAssetKey,
             metadata: {
               storyboardAssetKey: storyboardJob.stillAssetKey,
               lastRunId: runId,
@@ -688,6 +693,7 @@ Deno.serve(async (request) => {
             },
           })
           await persistTakeBindingsIfPresent(client, payload.snapshot.draft.id, graph.key, storyboardNodeKey, {
+            bodyImageAssetKey: storyboardJob.stillAssetKey,
             metadata: {
               storyboardAssetKey: storyboardJob.stillAssetKey,
               lastRunId: runId,

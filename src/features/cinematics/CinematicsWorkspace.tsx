@@ -602,17 +602,19 @@ function rederiveTakeSpec(input: {
     proofMoment: takeFieldValueFromShots(includedShots, (shot) => shot.proofMoment, ''),
     ctaStyle: takeFieldValueFromShots(includedShots, (shot) => shot.ctaStyle, ''),
     requiredSourceRefIds,
-    approvedForVideo: false,
+    storyboardAssetKey: existingTake?.storyboardAssetKey ?? null,
+    outputStillAssetKey: existingTake?.outputStillAssetKey ?? null,
+    outputVideoAssetKey: existingTake?.outputVideoAssetKey ?? null,
+    approvedForVideo: existingTake?.approvedForVideo ?? false,
     approvalNotes: existingTake?.approvalNotes ?? '',
-    outputStillAssetKey: null,
-    outputVideoAssetKey: null,
-    lastRunId: null,
-    lastStillJobId: null,
-    lastVideoJobId: null,
-    provider: null,
-    providerModel: null,
-    providerRequestId: null,
-    executionPlan: null,
+    lastRunId: existingTake?.lastRunId ?? null,
+    lastStoryboardJobId: existingTake?.lastStoryboardJobId ?? null,
+    lastStillJobId: existingTake?.lastStillJobId ?? null,
+    lastVideoJobId: existingTake?.lastVideoJobId ?? null,
+    provider: existingTake?.provider ?? null,
+    providerModel: existingTake?.providerModel ?? null,
+    providerRequestId: existingTake?.providerRequestId ?? null,
+    executionPlan: existingTake?.executionPlan ?? null,
   })
 }
 
@@ -697,8 +699,13 @@ function applyEditedSequenceToGraph(graph: GraphDefinition, nextSequenceInput: C
       body: {
         ...(existingNode?.body ?? { text: null, imageAssetKey: null, audioAssetKey: null, choices: [] }),
         text: take.shotIds.join(', '),
+        imageAssetKey: take.storyboardAssetKey ?? take.outputStillAssetKey ?? existingNode?.body?.imageAssetKey ?? null,
       },
       position: existingNode?.position ?? { x: 620 + index * 420, y: 520 },
+      display: {
+        ...(existingNode?.display ?? { iconAssetKey: null, compactPreview: false }),
+        iconAssetKey: take.storyboardAssetKey ?? take.outputStillAssetKey ?? existingNode?.display?.iconAssetKey ?? null,
+      },
       metadata: updateNodeMetadataWithTake(existingNode?.metadata as Record<string, unknown> | undefined, take),
     })
 
@@ -1066,18 +1073,11 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
           128,
         )
         const takeShotsPreview = takeShots.map((shot) => {
-          const tags = [
-            ...aggregateLabels(shot.participantRefIds, ['character']).map((entry) => ({ label: entry.label, iconId: 'character' as const })),
-            ...aggregateLabels(shot.locationRefId ? [shot.locationRefId] : [], ['environment']).map((entry) => ({ label: entry.label, iconId: 'environment' as const, tone: 'muted' as const })),
-            ...aggregateLabels(shot.propRefIds, ['item']).map((entry) => ({ label: entry.label, iconId: 'item' as const, tone: 'muted' as const })),
-          ].slice(0, 5)
           const shotJobs = currentGraphRuns.flatMap((run) => run.jobs
             .filter((job) => job.shotNodeKey === node.key && job.shotId === shot.id)
             .map((job) => ({ run, job })))
           const latestShotJob = shotJobs[0] ?? null
           const shotStatusChips = [
-            { label: `${shot.durationSeconds}s`, tone: 'default' as const },
-            { label: shot.hookRole ?? shot.shotType, tone: 'muted' as const },
             ...(shot.stillAssetKey ? [{ label: 'still ready', tone: 'muted' as const }] : []),
             ...(shot.videoAssetKey ? [{ label: 'clip ready', tone: 'muted' as const }] : []),
             ...(!shot.stillAssetKey && latestShotJob?.run.mode === 'preview_still' && !['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(latestShotJob.run.status)
@@ -1089,29 +1089,29 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
           ]
           const dialogueLine = shot.dialogue[0]
           const actionBeat = shot.actions[0]
+          const actionSummary = actionBeat
+            ? truncateGraphLine([
+                actionBeat.actorRefId ? referenceLabelById.get(actionBeat.actorRefId)?.label ?? 'Actor' : 'Actor',
+                actionBeat.verb,
+                actionBeat.targetRefId ? referenceLabelById.get(actionBeat.targetRefId)?.label ?? 'Target' : null,
+                !actionBeat.targetRefId && actionBeat.stagingNotes.trim() ? actionBeat.stagingNotes.trim() : null,
+              ].filter(Boolean).join(' '), 78)
+            : (shot.beat.trim() ? truncateGraphLine(shot.beat, 82) : '')
           return {
             id: shot.id,
             title: shot.title,
             kicker: truncateGraphLine(`${shot.hookRole ?? shot.shotType} · ${shot.durationSeconds}s`, 56),
             chips: shotStatusChips,
-            tags,
             lines: [
+              ...(actionSummary ? [{
+                type: 'action' as const,
+                text: actionSummary,
+              }] : []),
               ...(dialogueLine ? [{
                 type: 'dialogue' as const,
                 speaker: dialogueLine.speakerRefId ? referenceLabelById.get(dialogueLine.speakerRefId)?.label ?? 'Speaker' : 'Speaker',
                 text: truncateGraphLine(dialogueLine.line, 72),
               }] : []),
-              ...(actionBeat ? [{
-                type: 'action' as const,
-                text: truncateGraphLine([
-                  actionBeat.actorRefId ? referenceLabelById.get(actionBeat.actorRefId)?.label ?? 'Actor' : 'Actor',
-                  actionBeat.verb,
-                  actionBeat.targetRefId ? referenceLabelById.get(actionBeat.targetRefId)?.label ?? 'Target' : null,
-                ].filter(Boolean).join(' '), 72),
-              }] : []),
-              ...(!dialogueLine && !actionBeat && shot.beat.trim()
-                ? [truncateGraphLine(shot.beat, 88)]
-                : []),
             ],
           }
         })
@@ -4113,7 +4113,13 @@ function resolveNodePreviewAsset(node: NodeDefinition, definitions: DefinitionBa
 
   if (node.type === 'cinematic_take') {
     const take = getCinematicTakeNodeConfig(node)
-    return assets.find((asset) => asset.key === (take.storyboardAssetKey ?? take.outputStillAssetKey ?? null)) ?? null
+    return assets.find((asset) => asset.key === (
+      take.storyboardAssetKey
+      ?? take.outputStillAssetKey
+      ?? node.body.imageAssetKey
+      ?? node.display.iconAssetKey
+      ?? null
+    )) ?? null
   }
 
   return assets.find((asset) => asset.key === (node.display.iconAssetKey ?? node.body.imageAssetKey)) ?? null

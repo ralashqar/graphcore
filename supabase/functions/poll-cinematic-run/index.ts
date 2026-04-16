@@ -6,7 +6,6 @@ import {
   cinematicRunStatusResponseSchema,
   getCinematicSettings,
   getCinematicShotNodeConfig,
-  getCinematicTakeNodeConfig,
 } from '../../../src/domain/cinematics.ts'
 import { extractFalImageUrls } from '../../../src/domain/visualAssetGeneration.ts'
 import { createAdminClient, requireUserClient } from '../_shared/auth.ts'
@@ -21,6 +20,7 @@ import {
   buildTakeSeedanceExecutionPlan,
   buildSeedanceExecutionPlan,
   buildStillPrompt,
+  buildGraphScopedTakeAssetKey,
   completeReservedGeneratedImageAsset,
   createStoredGeneratedAsset,
   extractFalVideoUrl,
@@ -303,6 +303,7 @@ function rebuildGraphFromRunJobs(
     if (job.kind === 'storyboard_still' && job.stillAssetKey) {
       if (targetNode?.type === 'cinematic_take') {
         nextGraph = applyTakeBindingToGraph(nextGraph, job.shotNodeKey, {
+          bodyImageAssetKey: job.stillAssetKey,
           metadata: {
             storyboardAssetKey: job.stillAssetKey,
             provider: job.provider,
@@ -940,6 +941,7 @@ Deno.serve(async (request) => {
         } else if (job.kind === 'storyboard_still') {
           if (isTakeStoryboardJob) {
             updatedGraph = applyTakeBindingToGraph(updatedGraph, job.shotNodeKey, {
+              bodyImageAssetKey: storedAsset.key,
               metadata: {
                 storyboardAssetKey: storedAsset.key,
                 provider: 'fal',
@@ -948,6 +950,7 @@ Deno.serve(async (request) => {
               },
             })
             await persistTakeBindingsIfPresent(client, payload.snapshot.draft.id, updatedGraph.key, job.shotNodeKey, {
+              bodyImageAssetKey: storedAsset.key,
               metadata: {
                 storyboardAssetKey: storedAsset.key,
                 provider: 'fal',
@@ -1095,8 +1098,13 @@ Deno.serve(async (request) => {
           sourceUrl: videoUrl,
           graphKey: updatedGraph.key,
           runId: payload.runId,
-          name: `${targetNode.title} Clip`,
+          name: isTakeJob
+            ? `${updatedGraph.name} / ${targetNode.title} / Clip`
+            : `${targetNode.title} Clip`,
           kind: 'video',
+          existingAssetKey: isTakeJob
+            ? buildGraphScopedTakeAssetKey({ graphKey: updatedGraph.key, takeNodeKey: job.shotNodeKey, kind: 'video' })
+            : undefined,
           metadata: {
             generatedBy: isTakeJob ? 'cinematic_take_video' : 'cinematic_video',
             provider: 'fal',

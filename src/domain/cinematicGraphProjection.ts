@@ -56,6 +56,25 @@ function buildTakeTagBundle(shots: TakeDocumentShotLike[]) {
   }
 }
 
+function pickTakeRuntimeFields(take: Partial<CinematicSequence['takes'][number]> | null | undefined) {
+  if (!take) return {}
+  return {
+    storyboardAssetKey: take.storyboardAssetKey ?? null,
+    outputVideoAssetKey: take.outputVideoAssetKey ?? null,
+    outputStillAssetKey: take.outputStillAssetKey ?? null,
+    approvedForVideo: take.approvedForVideo ?? false,
+    approvalNotes: take.approvalNotes ?? '',
+    lastRunId: take.lastRunId ?? null,
+    lastStoryboardJobId: take.lastStoryboardJobId ?? null,
+    lastStillJobId: take.lastStillJobId ?? null,
+    lastVideoJobId: take.lastVideoJobId ?? null,
+    provider: take.provider ?? null,
+    providerModel: take.providerModel ?? null,
+    providerRequestId: take.providerRequestId ?? null,
+    executionPlan: take.executionPlan ?? null,
+  }
+}
+
 function readTakeNodeMetadata(graph: GraphDefinition | null | undefined) {
   if (!graph) return new Map<string, ReturnType<typeof getCinematicTakeNodeConfig>>()
   return new Map(
@@ -97,7 +116,15 @@ export function projectSequenceToTakeOnlyGraph(
   graph: GraphDefinition,
   sequenceInput: CinematicSequence,
 ) {
-  const sequence = compileCinematicSequence(sequenceInput)
+  const compiledSequence = compileCinematicSequence(sequenceInput)
+  const runtimeTakeById = new Map(sequenceInput.takes.map((take) => [take.id, pickTakeRuntimeFields(take)] as const))
+  const sequence = {
+    ...compiledSequence,
+    takes: compiledSequence.takes.map((take) => ({
+      ...take,
+      ...(runtimeTakeById.get(take.id) ?? {}),
+    })),
+  } satisfies CinematicSequence
   const scriptDoc = deriveCinematicScriptFromSequence(sequence)
   const existingTakeNodes = graph.nodes.filter((node) => node.type === 'cinematic_take')
   const existingTakeNodeByTakeId = new Map<string, NodeDefinition>()
@@ -147,12 +174,17 @@ export function projectSequenceToTakeOnlyGraph(
       body: {
         ...(existingNode?.body ?? { text: null, imageAssetKey: null, audioAssetKey: null, choices: [] }),
         text: take.shotIds.join(', '),
+        imageAssetKey: take.storyboardAssetKey ?? take.outputStillAssetKey ?? existingNode?.body?.imageAssetKey ?? null,
       },
       position: deriveDefaultTakePosition(graph, take, index, existingNode),
       metadata: {
         ...(existingNode?.metadata ?? {}),
         ...take,
         takeId: take.id,
+      },
+      display: {
+        ...(existingNode?.display ?? { iconAssetKey: null, compactPreview: false }),
+        iconAssetKey: take.storyboardAssetKey ?? take.outputStillAssetKey ?? existingNode?.display?.iconAssetKey ?? null,
       },
     })
   })
@@ -244,7 +276,15 @@ export function buildTakeFirstCinematicDocument(input: {
   graph?: GraphDefinition | null
   sequence: CinematicSequence
 }) {
-  const sequence = compileCinematicSequence(input.sequence)
+  const compiledSequence = compileCinematicSequence(input.sequence)
+  const runtimeTakeById = new Map(input.sequence.takes.map((take) => [take.id, pickTakeRuntimeFields(take)] as const))
+  const sequence = {
+    ...compiledSequence,
+    takes: compiledSequence.takes.map((take) => ({
+      ...take,
+      ...(runtimeTakeById.get(take.id) ?? {}),
+    })),
+  } satisfies CinematicSequence
   const takeNodeConfigByTakeId = readTakeNodeMetadata(input.graph)
   const shotById = new Map(sequence.shots.map((shot, index) => [shot.id, { shot, sequenceIndex: index }] as const))
 
