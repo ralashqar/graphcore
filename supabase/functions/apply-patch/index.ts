@@ -605,6 +605,50 @@ Deno.serve(async (request) => {
           updated_by: user.id,
         }).eq('draft_id', payload.draftId).eq('key', operation.key).select('id, key').single()
         if (result.error) return json({ error: result.error.message, operation }, { status: 400 })
+
+        if (Array.isArray(changes.nodes)) {
+          const deleteEdgesResult = await client.from('draft_graph_edges').delete().eq('graph_id', result.data.id)
+          if (deleteEdgesResult.error) return json({ error: deleteEdgesResult.error.message, operation }, { status: 400 })
+
+          const deleteNodesResult = await client.from('draft_graph_nodes').delete().eq('graph_id', result.data.id)
+          if (deleteNodesResult.error) return json({ error: deleteNodesResult.error.message, operation }, { status: 400 })
+
+          if (changes.nodes.length > 0) {
+            const nodeResult = await client.from('draft_graph_nodes').insert(changes.nodes.map((node: Record<string, any>) => ({
+              graph_id: result.data.id,
+              key: node.key,
+              node_type: node.type,
+              title: node.title,
+              template_key: node.templateKey ?? null,
+              subtitle: node.subtitle ?? null,
+              position_x: node.position?.x ?? 0,
+              position_y: node.position?.y ?? 0,
+              body: node.body ?? {},
+              condition_expr: node.condition ?? null,
+              effect_ops: node.effects ?? [],
+              ports: node.ports ?? [],
+              display: node.display ?? { iconAssetKey: null, compactPreview: false },
+              metadata: { ...(node.metadata ?? {}), templateKey: node.templateKey ?? null, subtitle: node.subtitle ?? null, display: node.display ?? { iconAssetKey: null, compactPreview: false } },
+            })))
+            if (nodeResult.error) return json({ error: nodeResult.error.message, operation }, { status: 400 })
+          }
+
+          if (Array.isArray(changes.edges) && changes.edges.length > 0) {
+            const edgeResult = await client.from('draft_graph_edges').insert(changes.edges.map((edge: Record<string, any>) => ({
+              graph_id: result.data.id,
+              key: edge.key,
+              source_node_key: edge.source?.nodeKey,
+              source_port: edge.source?.portId ?? null,
+              target_node_key: edge.target?.nodeKey,
+              target_port: edge.target?.portId ?? null,
+              label: edge.label ?? null,
+              condition_expr: edge.condition ?? null,
+              metadata: edge.metadata ?? {},
+            })))
+            if (edgeResult.error) return json({ error: edgeResult.error.message, operation }, { status: 400 })
+          }
+        }
+
         results.push(result.data as Record<string, unknown>)
         continue
       }

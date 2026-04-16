@@ -61,6 +61,7 @@ import {
   summarizeCondition,
   summarizeEffects,
 } from '../../domain/nodeLibrary'
+import { getArtStylePresetLabel, getArtStylePresetsByGroup, resolveArtStylePresetForCinematic } from '../../domain/artStylePresets'
 import { getResolvedDefinition3dBinding } from '../../domain/render3d'
 import { getResourceGenerationMetadata, isPendingGenerationResource } from '../../domain/worldBuild'
 import { EntityIcon, iconForDefinitionKind, type EntityIconId } from '../../shared/entityIcons'
@@ -171,6 +172,33 @@ function moveArrayItem<TValue>(items: TValue[], fromIndex: number, toIndex: numb
   return nextItems
 }
 
+function ArtStylePresetSelect({
+  label = 'Art Style Override',
+  value,
+  onChange,
+}: {
+  label?: string
+  value: string | null
+  onChange: (value: string | null) => void
+}) {
+  const presetGroups = getArtStylePresetsByGroup()
+  return (
+    <label className="field-block compact-block">
+      <span>{label}</span>
+      <select value={value ?? ''} onChange={(event) => onChange(event.target.value || null)}>
+        <option value="">Auto / Recommended</option>
+        {presetGroups.map((entry) => (
+          <optgroup key={entry.group} label={entry.group}>
+            {entry.presets.map((preset) => (
+              <option key={preset.id} value={preset.id}>{preset.label}</option>
+            ))}
+          </optgroup>
+        ))}
+      </select>
+    </label>
+  )
+}
+
 function parseCommaSeparatedIds(value: string) {
   return value
     .split(',')
@@ -262,7 +290,14 @@ function validateScriptDoc(scriptDoc: CinematicScriptDoc): ScriptValidationIssue
         message: `Shot "${shot.title || shot.id}" points to a missing scene.`,
       })
     }
-    for (const refId of [...shot.participantRefIds, ...shot.propRefIds, ...shot.requiredSourceRefIds, ...shot.compositeRefIds, ...shot.storyboardRefIds]) {
+    const referencedBindingIds = new Set([
+      ...shot.participantRefIds,
+      ...shot.propRefIds,
+      ...shot.requiredSourceRefIds,
+      ...shot.compositeRefIds,
+      ...shot.storyboardRefIds,
+    ])
+    for (const refId of referencedBindingIds) {
       if (refId && !bindingIds.has(refId) && !refId.startsWith('storyboard_') && !refId.startsWith('panel_') && !refId.startsWith('composite_')) {
         issues.push({
           id: `shot-${shot.id}-ref-${refId}`,
@@ -658,15 +693,16 @@ function applyEditedSequenceToGraph(graph: GraphDefinition, nextSequenceInput: C
   const existingTakeNodeByIndex = new Map<number, NodeDefinition>()
 
   existingTakeNodes.forEach((node, index) => {
-    existingTakeNodeByIndex.set(index, node)
-    existingTakeNodeByTakeId.set(getCinematicTakeNodeConfig(node).id, node)
+    const config = getCinematicTakeNodeConfig(node)
+    existingTakeNodeByTakeId.set(config.id, node)
+    existingTakeNodeByIndex.set(typeof config.takeIndex === 'number' ? config.takeIndex : index, node)
   })
 
   const preservedNodes = graph.nodes.filter((node) => node.type !== 'cinematic_take' && node.type !== 'cinematic_shot')
 
   const usedKeys = new Set(preservedNodes.map((node) => node.key))
   const nextTakeNodes = nextSequence.takes.map((take, index) => {
-    const existingNode = existingTakeNodeByTakeId.get(take.id) ?? existingTakeNodeByIndex.get(index) ?? null
+    const existingNode = existingTakeNodeByIndex.get(index) ?? existingTakeNodeByTakeId.get(take.id) ?? null
     const baseKey = `${graph.key}.cinematic_take_${index + 1}`
     let nextKey = existingNode?.key ?? baseKey
     if (!existingNode) {
@@ -713,7 +749,10 @@ function applyEditedSequenceToGraph(graph: GraphDefinition, nextSequenceInput: C
     return nextNode
   })
 
-  const takeNodeKeyByTakeId = new Map(nextTakeNodes.map((node) => [getCinematicTakeNodeConfig(node).id, node.key]))
+  const takeNodeKeyByTakeIndex = new Map(nextTakeNodes.map((node) => {
+    const config = getCinematicTakeNodeConfig(node)
+    return [typeof config.takeIndex === 'number' ? config.takeIndex : 0, node.key] as const
+  }))
   const retainedEdges = graph.edges.filter((edge) => {
     const sourceNode = graph.nodes.find((node) => node.key === edge.source.nodeKey) ?? null
     const targetNode = graph.nodes.find((node) => node.key === edge.target.nodeKey) ?? null
@@ -726,8 +765,8 @@ function applyEditedSequenceToGraph(graph: GraphDefinition, nextSequenceInput: C
   const startNodeKey = graph.nodes.find((node) => node.type === 'start')?.key ?? null
   const endNodeKey = graph.nodes.find((node) => node.type === 'end')?.key ?? null
 
-  nextSequence.takes.forEach((take, takeIndex) => {
-    const takeNodeKey = takeNodeKeyByTakeId.get(take.id)
+  nextSequence.takes.forEach((_take, takeIndex) => {
+    const takeNodeKey = takeNodeKeyByTakeIndex.get(takeIndex)
     if (!takeNodeKey) return
     if (takeIndex === 0 && startNodeKey) {
       takeEdges.push({
@@ -741,7 +780,7 @@ function applyEditedSequenceToGraph(graph: GraphDefinition, nextSequenceInput: C
       })
     }
     if (takeIndex > 0) {
-      const previousTakeNodeKey = takeNodeKeyByTakeId.get(nextSequence.takes[takeIndex - 1].id)
+      const previousTakeNodeKey = takeNodeKeyByTakeIndex.get(takeIndex - 1)
       if (previousTakeNodeKey) {
         takeEdges.push({
           id: `edge-take-flow-${takeIndex}`,
@@ -757,7 +796,7 @@ function applyEditedSequenceToGraph(graph: GraphDefinition, nextSequenceInput: C
   })
 
   const lastTakeNodeKey = nextSequence.takes.length > 0
-    ? takeNodeKeyByTakeId.get(nextSequence.takes[nextSequence.takes.length - 1].id) ?? null
+    ? takeNodeKeyByTakeIndex.get(nextSequence.takes.length - 1) ?? null
     : null
   if (endNodeKey && (lastTakeNodeKey || startNodeKey)) {
     takeEdges.push({
@@ -978,7 +1017,12 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
 
       if (node.type === 'cinematic_shot') {
         const config = getCinematicShotNodeConfig(node)
-        const take = config.takeId ? sequence?.takes.find((entry) => entry.id === config.takeId) ?? null : null
+        const take =
+          typeof config.takeIndex === 'number'
+            ? sequence?.takes[config.takeIndex] ?? null
+            : config.takeId
+              ? sequence?.takes.find((entry) => entry.id === config.takeId) ?? null
+              : null
         const shotTags = [
           config.shotType ? { label: config.shotType.replace(/_/g, ' '), tone: 'default' as const } : null,
           typeof config.durationSeconds === 'number' ? { label: `${config.durationSeconds}s ${config.durationSource === 'manual' ? 'manual' : 'inferred'}`, tone: 'default' as const } : null,
@@ -1805,6 +1849,7 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
               canRunCinematics={canRunCinematics}
               currentGraph={currentGraph}
               definitions={definitions}
+              projectArtStylePreset={typeof gameSpec?.theme?.artStylePreset === 'string' ? gameSpec.theme.artStylePreset : null}
               onExtractShot={extractShotFromTake}
               onGenerateStill={handleGenerateStillFromTake}
               onGenerateStoryboard={handleGenerateStoryboardFromTake}
@@ -1834,6 +1879,7 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
               canRunCinematics={canRunCinematics}
               currentGraph={currentGraph}
               definitions={definitions}
+              projectArtStylePreset={typeof gameSpec?.theme?.artStylePreset === 'string' ? gameSpec.theme.artStylePreset : null}
               node={currentNode}
               runs={currentGraphRuns}
               onApplyTemplateChange={(templateKey) => applyTemplateChange(currentNode.key, templateKey)}
@@ -1849,6 +1895,7 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
             currentSettings={graphSettings}
             diagnostics={diagnostics.filter((item) => item.graphKey === currentGraph.key)}
             graph={currentGraph}
+            projectArtStylePreset={typeof gameSpec?.theme?.artStylePreset === 'string' ? gameSpec.theme.artStylePreset : null}
             onAddPresetNode={placeTemplate}
             onResetGraphPresetOverride={resetGraphPresetOverride}
             onUpdate={(changes) => onUpdateGraph(currentGraph.key, changes)}
@@ -1870,6 +1917,7 @@ function CinematicGraphInspector({
   currentSettings,
   diagnostics,
   graph,
+  projectArtStylePreset,
   onAddPresetNode,
   onResetGraphPresetOverride,
   onUpdate,
@@ -1878,11 +1926,20 @@ function CinematicGraphInspector({
   currentSettings: CinematicSettings
   diagnostics: Diagnostic[]
   graph: GraphDefinition
+  projectArtStylePreset: string | null
   onAddPresetNode: (templateKey: string) => void
   onResetGraphPresetOverride: () => void
   onUpdate: (changes: Partial<GraphDefinition>) => void
   onUpdateGraphCinematics: (changes: Partial<CinematicSettings>) => void
 }) {
+  const effectiveArtStyle = resolveArtStylePresetForCinematic({
+    graphArtStylePreset: currentSettings.artStylePreset,
+    inferredGraphArtStylePreset: currentSettings.inferredArtStylePreset,
+    projectArtStylePreset,
+    presetFamily: currentSettings.presetFamily,
+    formatSubtype: currentSettings.formatSubtype,
+    useInferredArtStyle: currentSettings.useInferredArtStyle,
+  })
   return (
     <div className="detail-stack compact">
       <span className="eyebrow">Cinematic Flow</span>
@@ -1918,7 +1975,10 @@ function CinematicGraphInspector({
         <div className="inline-note">
           Effective preset: {getCinematicPresetLabel(currentSettings.presetFamily)}{currentSettings.formatSubtype ? ` Â· ${getCinematicFormatSubtypeLabel(currentSettings.formatSubtype)}` : ''}{currentSettings.formulaFamily ? ` Â· ${getCinematicFormulaFamilyLabel(currentSettings.formulaFamily)}` : ''}
         </div>
-        <CinematicSettingsEditor settings={currentSettings} onChange={onUpdateGraphCinematics} />
+        <div className="inline-note">
+          Effective art style: {getArtStylePresetLabel(effectiveArtStyle.presetId)}{effectiveArtStyle.source === 'graph' ? ' (graph override)' : effectiveArtStyle.source === 'inferred' ? ' (inferred capture override)' : effectiveArtStyle.source === 'recommended' ? ' (recommended capture override)' : effectiveArtStyle.source === 'project' ? ' (project global)' : ''}
+        </div>
+        <CinematicSettingsEditor settings={currentSettings} projectArtStylePreset={projectArtStylePreset} onChange={onUpdateGraphCinematics} />
       </div>
 
       <div className="editor-section compact-section">
@@ -2077,6 +2137,7 @@ function ScriptPreviewSurface({
           proofType: '',
           ctaType: '',
           platformTarget: null,
+          artStylePreset: null,
           shotType: 'custom',
           framing: '',
           cameraAngle: '',
@@ -2814,6 +2875,7 @@ function CinematicTakeInspector({
   isGeneratingStill,
   isGeneratingStoryboard,
   node,
+  projectArtStylePreset,
   onExtractShot,
   onGenerateShot,
   onGenerateStill,
@@ -2838,6 +2900,7 @@ function CinematicTakeInspector({
   isGeneratingStill: boolean
   isGeneratingStoryboard: boolean
   node: NodeDefinition
+  projectArtStylePreset: string | null
   onExtractShot: (takeId: string, shotId: string) => void
   onGenerateShot: (takeNode: NodeDefinition, shotId: string, mode: Extract<CinematicRunMode, 'preview_still' | 'preview_video'>) => void
   onGenerateStill: (takeNode: NodeDefinition) => void
@@ -2857,6 +2920,16 @@ function CinematicTakeInspector({
 }) {
   const template = node.templateKey ? graphNodeTemplatesByKey.get(node.templateKey) : null
   const config = getCinematicTakeNodeConfig(node)
+  const graphSettings = getCinematicSettings({}, currentGraph.metadata)
+  const effectiveArtStyle = resolveArtStylePresetForCinematic({
+    nodeArtStylePreset: config.artStylePreset,
+    graphArtStylePreset: graphSettings.artStylePreset,
+    inferredGraphArtStylePreset: graphSettings.inferredArtStylePreset,
+    projectArtStylePreset,
+    presetFamily: graphSettings.presetFamily,
+    formatSubtype: config.formatSubtype ?? graphSettings.formatSubtype,
+    useInferredArtStyle: graphSettings.useInferredArtStyle,
+  })
   const storyboardAsset = assets.find((asset) => asset.key === config.storyboardAssetKey) ?? null
   const stillAsset = assets.find((asset) => asset.key === config.outputStillAssetKey) ?? null
   const videoAsset = assets.find((asset) => asset.key === config.outputVideoAssetKey) ?? null
@@ -2965,6 +3038,10 @@ function CinematicTakeInspector({
             <option value="image-to-video">image-to-video</option>
           </select>
         </label>
+        <ArtStylePresetSelect
+          value={config.artStylePreset}
+          onChange={(value) => onUpdate({ metadata: updateNodeMetadataWithTake(node.metadata, { artStylePreset: value }) })}
+        />
       </div>
       <label className="field-block full-width">
         <span>Approval Notes</span>
@@ -3012,6 +3089,10 @@ function CinematicTakeInspector({
         <div className="inline-note">
           <strong>Approval</strong>
           <span> {config.approvedForVideo ? 'Approved for video render' : 'Not approved yet'}</span>
+        </div>
+        <div className="inline-note">
+          <strong>Effective art style</strong>
+          <span> {getArtStylePresetLabel(effectiveArtStyle.presetId)}{effectiveArtStyle.source === 'node' ? ' · take override' : effectiveArtStyle.source === 'graph' ? ' · graph override' : effectiveArtStyle.source === 'inferred' ? ' · inferred graph override' : effectiveArtStyle.source === 'recommended' ? ' · recommended override' : effectiveArtStyle.source === 'project' ? ' · project global' : ''}</span>
         </div>
         {config.formatSubtype ? (
           <div className="inline-note">
@@ -3330,6 +3411,7 @@ function CinematicShotInspector({
   currentGraph,
   definitions,
   node,
+  projectArtStylePreset,
   runs,
   onApplyTemplateChange,
   onDelete,
@@ -3341,6 +3423,7 @@ function CinematicShotInspector({
   currentGraph: GraphDefinition
   definitions: DefinitionBase[]
   node: NodeDefinition
+  projectArtStylePreset: string | null
   runs: CinematicRun[]
   onApplyTemplateChange: (templateKey: string) => void
   onDelete: () => void
@@ -3350,6 +3433,15 @@ function CinematicShotInspector({
   const template = node.templateKey ? graphNodeTemplatesByKey.get(node.templateKey) : null
   const config = getCinematicShotNodeConfig(node)
   const currentSettings = getCinematicSettings({}, currentGraph.metadata)
+  const effectiveArtStyle = resolveArtStylePresetForCinematic({
+    nodeArtStylePreset: config.artStylePreset,
+    graphArtStylePreset: currentSettings.artStylePreset,
+    inferredGraphArtStylePreset: currentSettings.inferredArtStylePreset,
+    projectArtStylePreset,
+    presetFamily: currentSettings.presetFamily,
+    formatSubtype: config.formatSubtype ?? currentSettings.formatSubtype,
+    useInferredArtStyle: currentSettings.useInferredArtStyle,
+  })
   const sources = collectShotSources(currentGraph, node, definitions, assets)
   const missingSources = sources.filter((source) => !resolveAssetSourceUrl(source.asset))
   const expectedSourceRefIds = useMemo<string[]>(
@@ -3412,7 +3504,12 @@ function CinematicShotInspector({
   const videoAsset = assets.find((asset) => asset.key === config.videoAssetKey) ?? null
   const latestRun = runs.find((run) => run.jobs.some((job) => job.shotNodeKey === node.key)) ?? null
   const sequence = getCinematicSequence(currentGraph.metadata)
-  const take = config.takeId ? sequence?.takes.find((entry) => entry.id === config.takeId) ?? null : null
+  const take =
+    typeof config.takeIndex === 'number'
+      ? sequence?.takes[config.takeIndex] ?? null
+      : config.takeId
+        ? sequence?.takes.find((entry) => entry.id === config.takeId) ?? null
+        : null
 
   return (
     <div className="detail-stack compact">
@@ -3454,6 +3551,10 @@ function CinematicShotInspector({
           <span> {getCinematicFormatSubtypeLabel(config.formatSubtype)}{config.formulaFamily ? ` Â· ${getCinematicFormulaFamilyLabel(config.formulaFamily)}` : ''}</span>
         </div>
       ) : null}
+      <div className="inline-note">
+        <strong>Effective art style</strong>
+        <span> {getArtStylePresetLabel(effectiveArtStyle.presetId)}{effectiveArtStyle.source === 'node' ? ' · shot override' : effectiveArtStyle.source === 'graph' ? ' · graph override' : effectiveArtStyle.source === 'inferred' ? ' · inferred graph override' : effectiveArtStyle.source === 'recommended' ? ' · recommended override' : effectiveArtStyle.source === 'project' ? ' · project global' : ''}</span>
+      </div>
       {config.timingSummary ? (
         <div className="inline-note">
           <strong>Timing basis</strong>
@@ -3470,6 +3571,10 @@ function CinematicShotInspector({
       </label>
 
       <div className="editor-grid compact cinematic-field-grid">
+        <ArtStylePresetSelect
+          value={config.artStylePreset}
+          onChange={(value) => onUpdate({ metadata: updateNodeMetadataWithShot(node.metadata, { artStylePreset: value }) })}
+        />
         <label className="field-block compact-block">
           <span>Shot Type</span>
           <select value={config.shotType} onChange={(event) => onUpdate({ metadata: updateNodeMetadataWithShot(node.metadata, { shotType: event.target.value as typeof config.shotType }) })}>
@@ -3775,14 +3880,36 @@ function CinematicShotInspector({
 
 function CinematicSettingsEditor({
   settings,
+  projectArtStylePreset,
   onChange,
 }: {
   settings: CinematicSettings
+  projectArtStylePreset: string | null
   onChange: (changes: Partial<CinematicSettings>) => void
 }) {
   const subtypeOptions = getSubtypeOptionsForPresetFamily(settings.presetFamily)
+  const effectiveArtStyle = resolveArtStylePresetForCinematic({
+    graphArtStylePreset: settings.artStylePreset,
+    inferredGraphArtStylePreset: settings.inferredArtStylePreset,
+    projectArtStylePreset,
+    presetFamily: settings.presetFamily,
+    formatSubtype: settings.formatSubtype,
+    useInferredArtStyle: settings.useInferredArtStyle,
+  })
   return (
     <div className="editor-grid compact cinematic-field-grid">
+      <ArtStylePresetSelect value={settings.artStylePreset} onChange={(value) => onChange({ artStylePreset: value })} />
+      <label className="field-block compact-block checkbox-field">
+        <span>Use Inferred Style</span>
+        <input type="checkbox" checked={settings.useInferredArtStyle} onChange={(event) => onChange({ useInferredArtStyle: event.target.checked })} />
+      </label>
+      <label className="field-block compact-block">
+        <span>Inferred Capture</span>
+        <input disabled value={settings.inferredArtStylePreset ? getArtStylePresetLabel(settings.inferredArtStylePreset) : 'None'} />
+      </label>
+      <div className="inline-note" style={{ gridColumn: '1 / -1' }}>
+        Effective art style: {getArtStylePresetLabel(effectiveArtStyle.presetId)}{effectiveArtStyle.source === 'graph' ? ' · graph override' : effectiveArtStyle.source === 'inferred' ? ' · inferred capture override' : effectiveArtStyle.source === 'project' ? ' · project global' : effectiveArtStyle.source === 'recommended' ? ' · recommended capture override' : ''}
+      </div>
       <label className="field-block compact-block">
         <span>Preset</span>
         <select value={settings.presetFamily} onChange={(event) => onChange(buildCinematicSettingsPatchFromPresetFamily(event.target.value as CinematicPresetFamily))}>

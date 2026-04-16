@@ -37,9 +37,11 @@ import {
 } from '../domain/meshGeneration'
 import {
   getResourceGenerationMetadata,
+  worldBuildAuthorCinematicRequestSchema,
   worldBuildPlanResponseSchema,
   worldBuildDeletePlaceholderResponseSchema,
   worldBuildStatusResponseSchema,
+  type WorldBuildAuthorCinematicRequest,
   type WorldBuildPlanRequest,
   type WorldBuildPlanResponse,
   type WorldBuildDeletePlaceholderRequest,
@@ -2580,6 +2582,18 @@ export async function startWorldBuild(request: WorldBuildStartRequest): Promise<
   }
 
   return worldBuildStatusResponseSchema.parse(response.data)
+}
+
+export async function authorCinematicScript(request: WorldBuildAuthorCinematicRequest): Promise<WorldBuildStatusResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before authoring a cinematic script.')
+
+  if (!hasLiveSnapshotIds(request.snapshot)) {
+    throw new Error('Sign in and load a live GraphCore draft before authoring a cinematic script.')
+  }
+
+  const payload = worldBuildAuthorCinematicRequestSchema.parse(request)
+  const response = await invokeAuthedFunctionDirect('author-cinematic-script', payload, session)
+  return worldBuildStatusResponseSchema.parse(response)
 }
 
 export async function startCinematicRun(request: CinematicRunStartRequest): Promise<CinematicRunStatusResponse> {

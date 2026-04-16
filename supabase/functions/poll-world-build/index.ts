@@ -35,13 +35,11 @@ import {
   buildFallbackAudioBeats,
   buildFallbackDialogueBeats,
   cinematicScriptPlannerSystemPrompt,
-  cinematicScriptRepairSystemPrompt,
   coerceCinematicPlannerRaw,
   evaluateCinematicScriptQuality,
   inferPromptDirectedActionBinding,
   materializeCinematicPlan,
   resolveTargetShotCount,
-  scriptNeedsMultiBeatFallback,
   shotImpliesAction,
   shotImpliesDialogue,
 } from '../_shared/world-build-cinematics.ts'
@@ -2455,6 +2453,77 @@ Deno.serve(async (request) => {
               }
             })
 
+            {
+              const persistedCinematicPlan = cinematicPlanSchema.parse({
+                ...cinematicPlan.data,
+                entityRefs: resolvedEntityRefs,
+              })
+              if (JSON.stringify(persistedCinematicPlan.entityRefs) !== JSON.stringify(cinematicPlan.data.entityRefs)) {
+                await updateBatch(client, batch.id, {
+                  cinematic_plan: persistedCinematicPlan,
+                })
+                batch = {
+                  ...batch,
+                  cinematic_plan: persistedCinematicPlan,
+                }
+              }
+
+              const graphRow = await client
+                .from('draft_graphs')
+                .select('metadata')
+                .eq('draft_id', batch.draft_id)
+                .eq('key', graphKey)
+                .maybeSingle()
+              if (graphRow.error || !graphRow.data) {
+                throw new Error(graphRow.error?.message ?? `Graph ${graphKey} was not found.`)
+              }
+
+              const graphMetadata =
+                typeof graphRow.data.metadata === 'object' && graphRow.data.metadata !== null
+                  ? graphRow.data.metadata as Record<string, unknown>
+                  : {}
+              const graphGeneration =
+                typeof graphMetadata.generation === 'object' && graphMetadata.generation !== null
+                  ? graphMetadata.generation as Record<string, unknown>
+                  : {}
+              const graphAuthoring =
+                typeof graphMetadata.cinematicAuthoring === 'object' && graphMetadata.cinematicAuthoring !== null
+                  ? graphMetadata.cinematicAuthoring as Record<string, unknown>
+                  : {}
+              const graphCompiled =
+                graphGeneration.batchId === batch.id
+                && graphGeneration.jobId === job.id
+                && graphGeneration.placeholder === false
+                && (graphGeneration.state === 'completed' || graphAuthoring.phase === 'completed')
+              const nextPhase = graphCompiled
+                ? 'graph_compiled'
+                : persistedCinematicPlan.scriptDoc
+                  ? 'authored'
+                  : 'ready_for_authorship'
+
+              await updateJob(client, job.id, {
+                status: graphCompiled ? 'succeeded' : 'running',
+                result_context: {
+                  ...(job.result_context ?? {}),
+                  graphKey,
+                  resolvedEntityRefs,
+                  phase: nextPhase,
+                },
+                error_message: null,
+              })
+
+              if (graphCompiled) {
+                await markGraphGenerationState(client, batch.draft_id, graphKey, {
+                  batchId: batch.id,
+                  jobId: job.id,
+                  state: 'completed',
+                  placeholder: false,
+                  source: 'global_prompt',
+                })
+              }
+            }
+            if (false) {
+
             let authoredCinematicPlan = cinematicPlan.data
             const plannerDiagnostics: string[] = []
             let authoringFlags = {
@@ -2498,7 +2567,6 @@ Deno.serve(async (request) => {
                 schema: z.record(z.string(), z.unknown()),
                 maxOutputTokens: 10000,
               })
-              let latestDraftRaw: unknown = cinematicDraftRaw
               let cinematicDraft = coerceCinematicPlannerRaw(cinematicDraftRaw, {
                 lockedEntityRefs: resolvedEntityRefs,
                 allowEntityCreation: false,
@@ -2532,112 +2600,17 @@ Deno.serve(async (request) => {
                 scriptDoc: cinematicScriptDocSchema.parse(draftPlan.scriptDoc),
               })
               plannerDiagnostics.push(...qualityReport.failures)
-              if (qualityReport.shouldRepair) {
-                console.warn('[GraphCore] cinematic script draft requires repair.', {
+              if (qualityReport.hardFailures.length > 0 || qualityReport.softFailures.length > 0) {
+                console.warn('[GraphCore] cinematic script draft has quality findings.', {
                   batchId: batch.id,
                   worldBuildJobId: job.id,
                   graphKey,
-                  qualityFailures: qualityReport.failures,
+                  hardQualityFailures: qualityReport.hardFailures,
+                  softQualityWarnings: qualityReport.softFailures,
                 })
               }
-
-              if (qualityReport.shouldRepair) {
-                authoringFlags.usedRepairPass = true
-                await updateJob(client, job.id, {
-                  result_context: {
-                    ...(job.result_context ?? {}),
-                    graphKey,
-                    phase: 'repairing_script',
-                    qualityFailures: qualityReport.failures,
-                  },
-                })
-
-                const repairedDraftRaw = await runStructuredWorldBuildModel({
-                  model: payload.model,
-                  passLabel: 'Cinematic script repair',
-                  systemText: cinematicScriptRepairSystemPrompt(
-                    effectiveSettings.presetFamily,
-                    effectiveSettings.formatSubtype,
-                    targetShotCount,
-                  ),
-                  promptContext: {
-                    prompt: batch.prompt,
-                    project: snapshot.project,
-                    draft: snapshot.draft,
-                    gameSpec: snapshot.gameSpec ?? null,
-                    requestSummary: batch.request_summary,
-                    graphName: draftPlan.graphName,
-                    graphSummary: draftPlan.graphSummary,
-                    lockedEntityRefs: resolvedEntityRefs,
-                    qualityFailures: qualityReport.failures,
-                    draftScript: draftPlan.scriptDoc,
-                  },
-                  schema: z.record(z.string(), z.unknown()),
-                  maxOutputTokens: 10000,
-                })
-                cinematicDraft = coerceCinematicPlannerRaw(repairedDraftRaw, {
-                  lockedEntityRefs: resolvedEntityRefs,
-                  allowEntityCreation: false,
-                  promptText: batch.prompt,
-                  enableFallbackShaping: false,
-                })
-                latestDraftRaw = repairedDraftRaw
-                plannerDiagnostics.push(...cinematicDraft.diagnostics)
-                draftPlan = materializeCinematicPlan({
-                  ...cinematicDraft,
-                  requestSummary: cinematicDraft.requestSummary || batch.request_summary,
-                  graphName: cinematicDraft.graphName || draftPlan.graphName,
-                  graphSummary: cinematicDraft.graphSummary || draftPlan.graphSummary,
-                  entityRefs: resolvedEntityRefs,
-                })
-                qualityReport = evaluateCinematicScriptQuality({
-                  promptText: batch.prompt,
-                  scriptDoc: cinematicScriptDocSchema.parse(draftPlan.scriptDoc),
-                })
-                plannerDiagnostics.push(...qualityReport.failures)
-                if (qualityReport.shouldRepair) {
-                  console.warn('[GraphCore] cinematic script repair left residual quality concerns.', {
-                    batchId: batch.id,
-                    worldBuildJobId: job.id,
-                    graphKey,
-                    qualityFailures: qualityReport.failures,
-                  })
-                }
-              }
-
-              const shouldUseMultiBeatFallback = scriptNeedsMultiBeatFallback({
-                promptText: batch.prompt,
-                scriptDoc: cinematicScriptDocSchema.parse(draftPlan.scriptDoc),
-              })
-              if (shouldUseMultiBeatFallback) {
-                const fallbackDraft = coerceCinematicPlannerRaw(latestDraftRaw, {
-                  lockedEntityRefs: resolvedEntityRefs,
-                  allowEntityCreation: false,
-                  promptText: batch.prompt,
-                  enableFallbackShaping: true,
-                })
-                plannerDiagnostics.push(...fallbackDraft.diagnostics)
-                authoredCinematicPlan = materializeCinematicPlan({
-                  ...fallbackDraft,
-                  requestSummary: fallbackDraft.requestSummary || batch.request_summary,
-                  graphName: fallbackDraft.graphName || draftPlan.graphName,
-                  graphSummary: fallbackDraft.graphSummary || draftPlan.graphSummary,
-                  entityRefs: resolvedEntityRefs,
-                })
-                authoringFlags.usedFallbackPrimaryShot = fallbackDraft.diagnostics.some((entry) => entry.includes('fallback primary beat'))
-                authoringFlags.usedTemporalExpansionFallback = fallbackDraft.diagnostics.some((entry) => entry.includes('temporal shots'))
-                authoringFlags.usedDialogueFallback = fallbackDraft.diagnostics.some((entry) => entry.includes('placeholder or summary dialogue'))
-                console.warn('[GraphCore] cinematic script authoring fell back to heuristic shaping.', {
-                  batchId: batch.id,
-                  worldBuildJobId: job.id,
-                  graphKey,
-                  fallbackReason: 'under_segmented_script',
-                  diagnostics: fallbackDraft.diagnostics,
-                })
-              } else {
-                authoredCinematicPlan = draftPlan
-                authoringFlags.usedDialogueFallback = qualityReport.flags.usedDialogueFallback
-              }
+              authoredCinematicPlan = draftPlan
+              authoringFlags.usedDialogueFallback = qualityReport.flags.usedDialogueFallback
             }
 
             const cinematicDefinitions = await loadDefinitionRecordsByKeys(
@@ -3104,6 +3077,7 @@ Deno.serve(async (request) => {
                 },
                 error_message: null,
               })
+            }
             }
           } else if (job.kind === 'narrative_graph') {
             const graphKey = job.target_keys?.graphKey

@@ -41,13 +41,29 @@ export function WorldBuildCompletionModal({ batch, onClose }: WorldBuildCompleti
             const hasFailure = relatedJobs.some((job) => job.status === 'failed')
             const isComplete = relatedJobs.length > 0 && relatedJobs.every((job) => job.status === 'succeeded' || job.status === 'skipped')
             const firstFailure = relatedJobs.find((job) => job.status === 'failed' && job.errorMessage)
+            const cinematicPhase =
+              item.kind === 'cinematic_graph'
+                ? relatedJobs.find((job) => (
+                  job.resultContext
+                  && typeof job.resultContext === 'object'
+                  && typeof job.resultContext.phase === 'string'
+                ))?.resultContext?.phase
+                : null
+            const phaseLabel =
+              typeof cinematicPhase === 'string'
+                ? cinematicPhase.replace(/_/g, ' ')
+                : hasFailure
+                  ? 'Failed'
+                  : isComplete
+                    ? 'Completed'
+                    : 'In progress'
 
             return (
               <div key={item.id} className={hasFailure ? 'world-build-completion-row is-error' : 'world-build-completion-row is-success'}>
                 <span className="world-build-plan-icon"><EntityIcon id={iconForPlanKind(item.kind)} /></span>
                 <div>
                   <strong>{item.name}</strong>
-                  <span>{hasFailure ? 'Failed' : isComplete ? 'Completed' : 'In progress'}</span>
+                  <span>{phaseLabel}</span>
                   {firstFailure?.errorMessage ? <p className="subtle-line">{firstFailure.errorMessage}</p> : null}
                 </div>
                 <span className="world-build-completion-mark">{hasFailure ? '!' : 'OK'}</span>

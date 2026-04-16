@@ -1,4 +1,5 @@
 import {
+  authorCinematicScript,
   applyPatchProposal,
   bootstrapLiveWorkspace,
   cancelCinematicRun,
@@ -24,6 +25,7 @@ import {
 
 export const graphcoreWorkspaceAdapter = {
   applyPatchProposal,
+  authorCinematicScript,
   bootstrapLiveWorkspace,
   cancelCinematicRun,
   compileSnapshot,

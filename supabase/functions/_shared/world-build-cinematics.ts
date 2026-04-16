@@ -28,6 +28,20 @@ import {
   storyboardSpecSchema,
 } from '../../../src/domain/cinematics.ts'
 import {
+  correctUgcPresetSelectionForPromptText,
+  deriveUgcShotDefaults,
+  getUgcPresetProfile,
+  inferCinematicFormatSubtypeFromPromptText,
+  inferCinematicPresetFamilyFromPromptText,
+  isDominantTriggerAllowedForFormatSubtype,
+  isFormulaFamilyAllowedForFormatSubtype,
+} from '../../../src/domain/ugcPresetProfiles.ts'
+import {
+  getArtStylePresetLabel,
+  getArtStylePresetPromptDirectives,
+  resolveArtStylePresetForCinematic,
+} from '../../../src/domain/artStylePresets.ts'
+import {
   cinematicCompositeRefPlanSchema,
   cinematicGraphSettingsSchema,
   cinematicPlanSchema,
@@ -45,54 +59,58 @@ type SnapshotDefinition = {
 }
 
 export function inferCinematicPresetFamilyFromPrompt(prompt: string) {
-  const normalized = prompt.toLowerCase()
-  if (/\b(ad|ads|roas|conversion|direct response|product page)\b/.test(normalized)) {
-    return cinematicPresetFamilySchema.parse('ugc_direct_response_ad')
-  }
-  if (/\b(podcast|faceless|explainer|demo loop)\b/.test(normalized)) {
-    return cinematicPresetFamilySchema.parse('ugc_faceless_format')
-  }
-  if (/\b(ugc|creator|tiktok|reels|shorts)\b/.test(normalized)) {
-    return cinematicPresetFamilySchema.parse('ugc_creator')
-  }
-  if (/\b(film|movie|tv|trailer|cutscene|storyboard)\b/.test(normalized)) {
-    return cinematicPresetFamilySchema.parse('story_movie_tv')
-  }
-  return cinematicPresetFamilySchema.parse('story_movie_tv')
+  return cinematicPresetFamilySchema.parse(inferCinematicPresetFamilyFromPromptText(prompt))
 }
 
 export function inferCinematicFormatSubtypeFromPrompt(
   prompt: string,
   presetFamily: z.infer<typeof cinematicPresetFamilySchema>,
 ) {
-  const normalized = prompt.toLowerCase()
-  if (/\b(rich vs poor|poor vs rich|pay[- ]?to[- ]?win|comparison|contrast|vs)\b/.test(normalized)) {
-    return cinematicFormatSubtypeSchema.parse('contrast_narrative')
+  return cinematicFormatSubtypeSchema.parse(
+    inferCinematicFormatSubtypeFromPromptText(prompt, presetFamily) ?? deriveDefaultFormatSubtypeFromPresetFamily(presetFamily),
+  )
+}
+
+export function correctUgcPresetSelectionForPrompt(input: {
+  prompt: string
+  presetFamily: z.infer<typeof cinematicPresetFamilySchema>
+  formatSubtype: z.infer<typeof cinematicFormatSubtypeSchema> | null | undefined
+}) {
+  const corrected = correctUgcPresetSelectionForPromptText(input)
+  return {
+    presetFamily: cinematicPresetFamilySchema.parse(corrected.presetFamily),
+    formatSubtype: corrected.formatSubtype ? cinematicFormatSubtypeSchema.parse(corrected.formatSubtype) : null,
   }
-  if (/\b(before\/after|before and after|before after|transformation|glow up)\b/.test(normalized)) {
-    return presetFamily === 'ugc_direct_response_ad'
-      ? cinematicFormatSubtypeSchema.parse('ad_before_after')
-      : cinematicFormatSubtypeSchema.parse('contrast_narrative')
-  }
-  if (presetFamily === 'ugc_creator') {
-    if (/\b(reframe|redirect|overthink)\b/.test(normalized)) return cinematicFormatSubtypeSchema.parse('creator_reframe')
-    if (/\b(validation|validate|it'?s okay|you are not alone|permission)\b/.test(normalized)) return cinematicFormatSubtypeSchema.parse('creator_validation')
-    return cinematicFormatSubtypeSchema.parse('creator_problem_solution')
-  }
-  if (presetFamily === 'ugc_direct_response_ad') {
-    if (/\b(mechanism|proof|how it works)\b/.test(normalized)) return cinematicFormatSubtypeSchema.parse('ad_mechanism_proof')
-    if (/\b(comparison|versus|vs)\b/.test(normalized)) return cinematicFormatSubtypeSchema.parse('ad_comparison')
-    return cinematicFormatSubtypeSchema.parse('ad_problem_solution')
-  }
-  if (presetFamily === 'ugc_faceless_format') {
-    if (/\b(workflow|process)\b/.test(normalized)) return cinematicFormatSubtypeSchema.parse('faceless_process')
-    if (/\b(explainer|how it works|doing it wrong)\b/.test(normalized)) return cinematicFormatSubtypeSchema.parse('faceless_explainer')
-    return cinematicFormatSubtypeSchema.parse('faceless_demo')
-  }
-  return deriveDefaultFormatSubtypeFromPresetFamily(presetFamily)
+}
+
+function nonEmptyString(value: string | null | undefined, fallback = '') {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : fallback
+}
+
+function formatExactEnumOptions(options: readonly string[]) {
+  return options.map((option) => `"${option}"`).join(', ')
+}
+
+function exactPlannerEnumInstructions(input: {
+  presetFamily: z.infer<typeof cinematicPresetFamilySchema>
+  formatSubtype: z.infer<typeof cinematicFormatSubtypeSchema> | null
+}) {
+  const profile = getUgcPresetProfile(input.formatSubtype, input.presetFamily)
+  return [
+    `graphSettings.presetFamily must be exactly one of: ${formatExactEnumOptions(cinematicPresetFamilySchema.options)}.`,
+    `graphSettings.formatSubtype must be exactly one of: ${formatExactEnumOptions(cinematicFormatSubtypeSchema.options)} or null when not needed.`,
+    `graphSettings.formulaFamily must be exactly one of: ${formatExactEnumOptions(cinematicFormulaFamilySchema.options)} or null when not needed.`,
+    `graphSettings.dominantTrigger must be exactly one of: ${formatExactEnumOptions(cinematicDominantTriggerSchema.options)} or null when not needed.`,
+    `Every shot.hookRole must be exactly one of: ${formatExactEnumOptions(cinematicHookRoleSchema.options)} or null when omitted.`,
+    `Every shot.platformTarget must be exactly one of: ${formatExactEnumOptions(cinematicPlatformTargetSchema.options)} or null when omitted.`,
+    profile ? `For this locked format subtype, prefer only these exact formulaFamily values: ${formatExactEnumOptions(profile.allowedFormulaFamilies)}.` : null,
+    profile ? `For this locked format subtype, prefer only these exact dominantTrigger values: ${formatExactEnumOptions(profile.allowedDominantTriggers)}.` : null,
+    input.formatSubtype ? `Use graphSettings.presetFamily = "${input.presetFamily}" and graphSettings.formatSubtype = "${input.formatSubtype}". Do not rename or paraphrase those enum values.` : `Use graphSettings.presetFamily = "${input.presetFamily}". Do not rename or paraphrase that enum value.`,
+  ].filter((entry): entry is string => Boolean(entry))
 }
 
 function subtypePlannerInstructions(formatSubtype: z.infer<typeof cinematicFormatSubtypeSchema> | null) {
+  const profile = getUgcPresetProfile(formatSubtype)
   switch (formatSubtype) {
     case 'creator_problem_solution':
       return [
@@ -111,6 +129,12 @@ function subtypePlannerInstructions(formatSubtype: z.infer<typeof cinematicForma
         'Structure beats as hook, emotional recognition, validating statement, and soft resolution.',
         'Bias toward emotional recognition and parasocial trust instead of hard selling.',
         'Dialogue can dominate, but keep it intimate and short. Use narrator overlay text sparingly so the clip still feels creator-native instead of over-produced.',
+      ]
+    case 'creator_serialized_drama':
+      return [
+        'Structure beats as hook, conflict setup, suffering or escalation, reveal, redemption, and soft CTA.',
+        'Open with the taboo rupture or juicy social problem before explaining context, and do not let the product interrupt too early.',
+        'Keep the tone intimate and story-led like creator gossip or storytime content. The product should enter as the reveal or resolution mechanism.',
       ]
     case 'ad_problem_solution':
       return [
@@ -136,6 +160,12 @@ function subtypePlannerInstructions(formatSubtype: z.infer<typeof cinematicForma
         'Keep the winning side obvious in every beat and escalate proof instead of repeating the same comparison.',
         'Prefer visual comparison first. Dialogue should stay brief, and narrator overlay text can help anchor the comparison or winner state without explaining every frame.',
       ]
+    case 'ad_trojan_horse_drama':
+      return [
+        'Structure beats as setup, betrayal or conflict, suffering, reveal, redemption, and CTA.',
+        'Use the story as the delivery vehicle. Do not introduce the app or product until the tension is already established, but do reveal it before the ending.',
+        'Keep the conversion logic visible: the product should clearly resolve the conflict, restore order, or unlock the better outcome on screen.',
+      ]
     case 'faceless_demo':
       return [
         'Structure beats as pattern interrupt, product or process, proof, and CTA.',
@@ -154,6 +184,12 @@ function subtypePlannerInstructions(formatSubtype: z.infer<typeof cinematicForma
         'Each beat should introduce a visibly new stage of the process rather than repeating the same view.',
         'Dialogue is usually unnecessary. If text is needed, prefer short narrator overlay text that labels stages without dominating the visuals.',
       ]
+    case 'faceless_serialized_drama':
+      return [
+        'Structure beats as absurd hook, conflict setup, suffering, reveal, redemption, and light CTA.',
+        'Make the unserious packaging immediately obvious, but keep the emotional conflict legible and real enough to sustain attention.',
+        'The product or app should visibly restore order, connection, or relief. Keep the beats visual-first and avoid talk-heavy scenes.',
+      ]
     case 'contrast_narrative':
       return [
         'Treat this as a contrast-led multi-scene narrative, not a talking-head script.',
@@ -165,7 +201,16 @@ function subtypePlannerInstructions(formatSubtype: z.infer<typeof cinematicForma
         'Narrator overlay text is optional and should be used sparingly for chaptering, contrast labels, or final payoff language when it improves sound-off clarity.',
       ]
     default:
-      return []
+      return profile
+        ? [
+            `Target use case: ${profile.targetUseCase}`,
+            `Audience intent: ${profile.audienceIntent}`,
+            `First-frame hook style: ${profile.firstFrameHookStyle}`,
+            `Proof expectation: ${profile.proofExpectation}`,
+            `Pacing guidance: ${profile.pacingGuidance}`,
+            `Reference strategy: ${profile.referenceStrategy}`,
+          ]
+        : []
   }
 }
 
@@ -173,6 +218,7 @@ function presetPlannerInstructions(
   presetFamily: z.infer<typeof cinematicPresetFamilySchema>,
   formatSubtype: z.infer<typeof cinematicFormatSubtypeSchema> | null,
 ) {
+  const profile = getUgcPresetProfile(formatSubtype, presetFamily)
   switch (presetFamily) {
     case 'story_movie_tv':
       return [
@@ -185,6 +231,9 @@ function presetPlannerInstructions(
         'Bias toward 9:16 beats that move from hook to personal claim to demo to soft CTA.',
         'Storyboard refs are optional; creator and product continuity matter more than boards.',
         'Keep the language conversational, creator-believable, and less polished than a commercial storyboard.',
+        profile ? `Locked shot job order: ${profile.shotRoleSequence.join(' -> ')}.` : null,
+        profile ? `Tone rules: ${profile.toneRules}` : null,
+        profile ? `Default CTA style: ${profile.defaultCtaStyle}` : null,
         formatSubtype ? `Locked format subtype: ${getCinematicFormatSubtypeLabel(formatSubtype)}.` : null,
       ].filter((entry): entry is string => Boolean(entry))
     case 'ugc_direct_response_ad':
@@ -192,6 +241,9 @@ function presetPlannerInstructions(
         'Plan this as a short-form direct-response ad.',
         'Bias toward hook then pain then mechanism then proof then CTA, with product visibility early.',
         'Make the product readable early and make the proof or payoff obvious before the ending.',
+        profile ? `Locked shot job order: ${profile.shotRoleSequence.join(' -> ')}.` : null,
+        profile ? `Proof expectation: ${profile.proofExpectation}` : null,
+        profile ? `Default CTA style: ${profile.defaultCtaStyle}` : null,
         formatSubtype ? `Locked format subtype: ${getCinematicFormatSubtypeLabel(formatSubtype)}.` : null,
       ].filter((entry): entry is string => Boolean(entry))
     case 'ugc_faceless_format':
@@ -199,9 +251,185 @@ function presetPlannerInstructions(
         'Plan this as a faceless short-form format.',
         'Bias toward objects, process, screens, podcast-style framing, or demo loops with minimal face dependence.',
         'Prioritize process clarity and readable objects or screens over facial performance.',
+        profile ? `Locked shot job order: ${profile.shotRoleSequence.join(' -> ')}.` : null,
+        profile ? `Proof expectation: ${profile.proofExpectation}` : null,
+        profile ? `Reference strategy: ${profile.referenceStrategy}` : null,
         formatSubtype ? `Locked format subtype: ${getCinematicFormatSubtypeLabel(formatSubtype)}.` : null,
       ].filter((entry): entry is string => Boolean(entry))
   }
+}
+
+function resolveAuthorshipArtStylePreset(input: {
+  graphSettings?: Partial<CinematicPlan['graphSettings']> | null
+  presetFamily: z.infer<typeof cinematicPresetFamilySchema>
+  formatSubtype: z.infer<typeof cinematicFormatSubtypeSchema> | null
+  projectArtStylePreset?: string | null
+}) {
+  const resolution = resolveArtStylePresetForCinematic({
+    graphArtStylePreset: input.graphSettings?.artStylePreset ?? null,
+    inferredGraphArtStylePreset: input.graphSettings?.inferredArtStylePreset ?? null,
+    projectArtStylePreset: input.projectArtStylePreset ?? null,
+    presetFamily: input.presetFamily,
+    formatSubtype: input.formatSubtype,
+    useInferredArtStyle: input.graphSettings?.useInferredArtStyle ?? true,
+  })
+  return resolution
+}
+
+function sharedUgcAuthorshipRules(
+  formatSubtype: z.infer<typeof cinematicFormatSubtypeSchema> | null,
+) {
+  const profile = getUgcPresetProfile(formatSubtype)
+  return [
+    'Preset choice is the creative contract. Preserve the locked preset, subtype, formula, trigger, proof pattern, CTA style, contrast axis, and persona style instead of free-styling a generic ad.',
+    'Identity protection comes before selling. Make the viewer feel accurately recognized before pushing the product.',
+    'Self-relevance comes before solution language. Anchor the first beats in a behavior, pain, tension, or curiosity image the viewer instantly recognizes.',
+    'Visible mechanism beats are better than abstract claims. When the preset expects proof, show the product, process, screen, or comparison doing something legible on screen.',
+    'Use one clear attention device in the first frame: a confession, a mistake, a wrong belief, a concrete contrast, a taboo rupture, or a visually obvious proof setup.',
+    'Keep the shots native to short-form mobile viewing: readable on mute, immediate, concrete, and visually distinct from one another.',
+    'Do not let multiple middle shots restate the same point. Each middle beat should escalate through a new visible dimension such as time, money, stress, convenience, status, proof, or transformation.',
+    profile?.proofExpectation ? `Proof contract: ${profile.proofExpectation}` : null,
+    profile?.toneRules ? `Tone contract: ${profile.toneRules}` : null,
+    profile?.pacingGuidance ? `Pacing contract: ${profile.pacingGuidance}` : null,
+    profile?.referenceStrategy ? `Reference strategy: ${profile.referenceStrategy}` : null,
+  ].filter((entry): entry is string => Boolean(entry))
+}
+
+function subtypeAuthorshipRules(
+  presetFamily: z.infer<typeof cinematicPresetFamilySchema>,
+  formatSubtype: z.infer<typeof cinematicFormatSubtypeSchema> | null,
+) {
+  switch (formatSubtype) {
+    case 'creator_problem_solution':
+      return [
+        'Write this like real creator advice from lived experience, not like a polished brand spot.',
+        'Hook with a recognizable pain confession or nightly pattern, then move into a protective explanation, a believable use case, a calmer payoff, and a soft recommendation.',
+        'Give hook, setup, proof, and CTA beats actual spoken lines that sound like a person talking to camera.',
+        'Do not make the creator sound like a hard closer before the final beat.',
+      ]
+    case 'creator_reframe':
+      return [
+        'Use the creator voice to remove shame or false interpretation, then replace it with a more accurate framing.',
+        'The reframe should feel emotionally precise and relieving, not clever for its own sake.',
+        'Dialogue should sound screenshot-worthy and intimate, not ad-polished.',
+      ]
+    case 'creator_validation':
+      return [
+        'Make validation the point of the script, not just the hook.',
+        'Keep product language light and secondary unless the locked shot explicitly serves proof or CTA.',
+        'Do not over-explain; let recognition and reassurance do most of the work.',
+      ]
+    case 'creator_serialized_drama':
+      return [
+        'Keep the structure readable as conflict, suffering, reveal, redemption.',
+        'Open on the juicy rupture first. The product should arrive as the twist or the relief, not as early sponsor copy.',
+        'Even when dialogue-led, every beat should still create a clear visual escalation.',
+      ]
+    case 'ad_problem_solution':
+      return [
+        'This is a direct-response flow: pain first, then solution, then visible proof, then CTA.',
+        'Show the product or app doing the job in-frame before the ending. Do not leave proof as a verbal promise.',
+        'Dialogue should support the visible proof path instead of carrying the whole persuasion burden.',
+      ]
+    case 'ad_mechanism_proof':
+      return [
+        'Make the hidden cause or mechanism legible in plain language, then demonstrate it on screen.',
+        'Proof shots should show readable screens, steps, comparisons, or state changes, not generic “it works” language.',
+        'Use the product as the explanation engine and the proof engine, not as a passive prop.',
+      ]
+    case 'ad_before_after':
+      return [
+        'Drive this with unmistakable before/after contrast. The state change should be obvious at a glance.',
+        'Keep dialogue sparse and let the contrast carry the persuasion.',
+      ]
+    case 'ad_comparison':
+      return [
+        'Make the winning side obvious in each comparison beat.',
+        'Do not repeat the same winner argument. Escalate through different visible proof dimensions.',
+      ]
+    case 'ad_trojan_horse_drama':
+      return [
+        'Use story tension as the delivery vehicle. Hold the conflict long enough that the reveal feels like relief.',
+        'The product should visibly resolve the conflict, not just be mentioned after it.',
+      ]
+    case 'faceless_demo':
+      return [
+        'Keep this process-first and object-first. Screens, hands, packaging, and proof should do the storytelling.',
+        'Avoid unnecessary direct-to-camera speech. If text is needed, keep it short and functional.',
+      ]
+    case 'faceless_explainer':
+      return [
+        'Structure it as wrong belief, simple explanation, visible mechanism, result.',
+        'Keep the explanation clean and highly legible on mute.',
+      ]
+    case 'faceless_process':
+      return [
+        'Each shot should add a new visual stage of the process.',
+        'Avoid redundant angles that repeat the same stage with different wording.',
+      ]
+    case 'faceless_serialized_drama':
+      return [
+        'Keep the absurd packaging obvious, but make the conflict, suffering, reveal, and redemption visually distinct.',
+        'This should stay visual-first. Avoid turning it into a talk-heavy creator script.',
+      ]
+    case 'contrast_narrative':
+      return [
+        'Widen the gap across multiple visible dimensions, not just one repeated comparison.',
+        'Most beats should work fully on mute and feel storyboard-clear.',
+        'Use dialogue sparingly and only when it sharpens the contrast.',
+      ]
+    default:
+      return presetFamily === 'ugc_creator'
+        ? ['Creator-native outputs need believable spoken language and identity-safe tone.']
+        : presetFamily === 'ugc_direct_response_ad'
+          ? ['Direct-response outputs need visible proof before the CTA.']
+          : presetFamily === 'ugc_faceless_format'
+            ? ['Faceless outputs need visual process clarity over face-led performance.']
+            : []
+  }
+}
+
+function roleAuthorshipRules(
+  presetFamily: z.infer<typeof cinematicPresetFamilySchema>,
+  formatSubtype: z.infer<typeof cinematicFormatSubtypeSchema> | null,
+) {
+  return [
+    'Per-shot job contract:',
+    'hook must create a stop-scroll attention device immediately through a confession, wrong belief, contrast, taboo rupture, or unmistakable problem image.',
+    'setup must clarify the problem, belief, or frame without collapsing into generic summary language.',
+    'proof must show visible evidence, mechanism, product function, screen interaction, comparison state, or concrete behavioral change in frame.',
+    'payoff must show the changed state as something visible and credible, not just a promised feeling.',
+    'cta must obey the preset tone. Creator CTAs stay soft and friend-like. Direct-response CTAs can be clearer but only after proof. Faceless CTAs should stay visual and brief.',
+    presetFamily === 'ugc_creator'
+      ? 'For creator shots with hook, setup, proof, or cta roles, include at least one spoken dialogue line and at least one visible action beat.'
+      : null,
+    presetFamily === 'ugc_direct_response_ad'
+      ? 'For direct-response proof shots, include at least one visible action beat showing the product, app, or mechanism doing something specific.'
+      : null,
+    presetFamily === 'ugc_faceless_format'
+      ? 'For faceless shots, avoid direct-to-camera creator performance unless the locked subtype explicitly depends on it. Prefer hands, objects, screens, tabletop process, or staged proof.'
+      : null,
+    formatSubtype === 'contrast_narrative'
+      ? 'Contrast-narrative middle beats must escalate through new visible dimensions instead of repeating the same comparison.'
+      : null,
+  ].filter((entry): entry is string => Boolean(entry))
+}
+
+function authorshipGoodBadExamples(
+  presetFamily: z.infer<typeof cinematicPresetFamilySchema>,
+  formatSubtype: z.infer<typeof cinematicFormatSubtypeSchema> | null,
+) {
+  const examples: string[] = []
+  if (presetFamily === 'ugc_creator') {
+    examples.push('Creator dialogue example: bad = "She explains the app helps with stress." good = "If this is the hour where you always feel like you need something to take the edge off, you are not weak."')
+  }
+  if (formatSubtype === 'ad_mechanism_proof' || presetFamily === 'ugc_direct_response_ad') {
+    examples.push('Mechanism proof example: bad = "The app works and makes her calmer." good = "She opens the app and the screen maps the evening stress loop, then starts a guided reset so the mechanism is visible in-frame."')
+  }
+  if (presetFamily === 'ugc_faceless_format') {
+    examples.push('Faceless example: bad = "A creator talks to camera about the workflow." good = "Hands move through the workflow on screen while short overlay or sparse narration labels the mistake and the fix."')
+  }
+  return examples
 }
 
 export const cinematicIntentSchema = z.object({
@@ -485,6 +713,11 @@ export function resolveTargetShotCount(promptText: string, formatSubtype: z.infe
     return Math.min(10, Math.max(4, Math.round(explicitCount)))
   }
   if (formatSubtype === 'contrast_narrative') return 8
+  if (
+    formatSubtype === 'creator_serialized_drama'
+    || formatSubtype === 'ad_trojan_horse_drama'
+    || formatSubtype === 'faceless_serialized_drama'
+  ) return 5
   if (formatSubtype === 'creator_validation' || formatSubtype === 'creator_reframe') return 4
   return 5
 }
@@ -992,6 +1225,35 @@ function dialogueLooksLikePlaceholder(line: string, speakerName: string) {
   ].some((pattern) => normalizedLine.includes(pattern))
 }
 
+function beatLooksLikeStructuralPlaceholder(beat: string) {
+  const normalized = normalizeMatchKey(beat)
+  if (!normalized) return true
+  return [
+    'hook',
+    'setup',
+    'proof',
+    'payoff',
+    'cta',
+    'problem',
+    'solution',
+    'personal problem',
+    'use case',
+    'soft proof',
+    'soft cta',
+    'reframe',
+    'validation',
+    'mechanism',
+    'comparison',
+  ].includes(normalized)
+}
+
+function beatLooksUnderwritten(beat: string) {
+  const normalized = normalizeMatchKey(beat)
+  if (!normalized) return true
+  if (beatLooksLikeStructuralPlaceholder(beat)) return true
+  return normalized.split(/\s+/).filter(Boolean).length < 6
+}
+
 function findParticipantByMention(
   beat: string,
   participants: Array<{ id: string; sourceName: string }>,
@@ -1298,6 +1560,15 @@ function coerceArrayWithSchema<TOutput>(value: unknown, schema: z.ZodType<TOutpu
     .map((entry) => schema.safeParse(entry))
     .filter((entry): entry is { success: true; data: TOutput } => entry.success)
     .map((entry) => entry.data)
+}
+
+function sanitizeNarrativeSummaryText(value: string) {
+  const trimmed = value.trim()
+  if (!trimmed) return ''
+  if (/^generate the cinematic script and graph from the resolved prompt/i.test(trimmed)) return ''
+  if (/^prompt:/i.test(trimmed)) return ''
+  if (/^using these locked refs:/i.test(trimmed)) return ''
+  return trimmed
 }
 
 function buildFallbackShot(input: {
@@ -2077,6 +2348,9 @@ export function coerceCinematicPlannerRaw(input: unknown, options: CoerceCinemat
       : asRecord(assistantNotesValue)
         ? JSON.stringify(assistantNotesValue)
         : undefined
+  const sanitizedGraphSummary = sanitizeNarrativeSummaryText(graphSummary)
+  const sanitizedRecordLogline = sanitizeNarrativeSummaryText(pickFirstString(scriptRecord, ['logline', 'summary']))
+  const sanitizedMarkdownLogline = sanitizeNarrativeSummaryText(markdownParsed?.logline ?? '')
 
   const scenes = rawScenes
     .map((entry, index) => {
@@ -2087,7 +2361,7 @@ export function coerceCinematicPlannerRaw(input: unknown, options: CoerceCinemat
       return {
         id: pickFirstString(scene, ['id', 'key']) || `scene_${index + 1}`,
         title,
-        summary: pickFirstString(scene, ['summary', 'description']),
+        summary: sanitizeNarrativeSummaryText(pickFirstString(scene, ['summary', 'description'])),
         locationRefId: (() => {
           const locationName = pickFirstString(scene, ['locationRefId', 'location', 'environment', 'setting'])
           return locationName ? resolveEntityRefId(locationName, entityLookup) : null
@@ -2116,7 +2390,7 @@ export function coerceCinematicPlannerRaw(input: unknown, options: CoerceCinemat
       ? [{
           id: 'scene_1',
           title: pickFirstString(scriptRecord, ['sceneTitle']) || 'Scene 1',
-          summary: graphSummary,
+          summary: sanitizedGraphSummary,
           locationRefId: normalizedShotsWithDefaultLocation[0]?.locationRefId ?? null,
           shotIds: normalizedShotsWithDefaultLocation.map((shot) => shot.id),
           continuityNotes: pickFirstString(scriptRecord, ['continuityNotes']) || '',
@@ -2125,7 +2399,7 @@ export function coerceCinematicPlannerRaw(input: unknown, options: CoerceCinemat
       : [])
   const scriptDoc = cinematicScriptDocSchema.parse({
     title: markdownParsed?.title || pickFirstString(scriptRecord, ['title']) || graphName,
-    logline: markdownParsed?.logline || pickFirstString(scriptRecord, ['logline', 'summary']) || graphSummary,
+    logline: sanitizedMarkdownLogline || sanitizedRecordLogline || sanitizedGraphSummary,
     tone: markdownParsed?.tone || pickFirstString(scriptRecord, ['tone']),
     continuityNotes: pickFirstString(scriptRecord, ['continuityNotes']),
     statusPayoffType: pickFirstString(scriptRecord, ['statusPayoffType']),
@@ -2291,6 +2565,7 @@ export function coerceCinematicPlannerRaw(input: unknown, options: CoerceCinemat
       const graphSettings = asRecord(record.graphSettings ?? record.settings) ?? {}
       return {
         ...graphSettings,
+        presetFamily: parseNullableEnumValue(cinematicPresetFamilySchema, graphSettings.presetFamily) ?? undefined,
         formatSubtype: parseNullableEnumValue(cinematicFormatSubtypeSchema, graphSettings.formatSubtype),
         formulaFamily: parseNullableEnumValue(cinematicFormulaFamilySchema, graphSettings.formulaFamily),
         dominantTrigger: parseNullableEnumValue(cinematicDominantTriggerSchema, graphSettings.dominantTrigger),
@@ -2483,6 +2758,7 @@ export function cinematicScriptRepairSystemPrompt(
   formatSubtype: z.infer<typeof cinematicFormatSubtypeSchema> | null = null,
   targetShotCount = 5,
 ) {
+  const profile = getUgcPresetProfile(formatSubtype, presetFamily)
   return [
     'You repair a weak GraphCore cinematic sequence draft into a stronger authored sequence.',
     'Return JSON only.',
@@ -2493,7 +2769,7 @@ export function cinematicScriptRepairSystemPrompt(
     'sequence must be valid structured JSON, not markdown.',
     'sequence must include: title, logline, tone, continuityNotes, references, scenes, storyboard, shots.',
     'sequence.references must use only locked reference ids and include only refs actually used by the authored shots.',
-    'sequence.shots must be ordered and each shot must include: id, sceneId, title, beat, shotType, participantRefIds, locationRefId, propRefIds, requiredSourceRefIds, visualPrompt, compositionGuide, dialogue, actions, audio.',
+    'sequence.shots must be ordered and each shot must include: id, sceneId, title, beat, hookRole, formatSubtype, formulaFamily, dominantTrigger, hookType, targetEmotion, personaStyle, contrastAxis, proofMoment, ctaStyle, proofType, ctaType, shotType, participantRefIds, locationRefId, propRefIds, requiredSourceRefIds, visualPrompt, compositionGuide, dialogue, actions, audio.',
     'Use requiredSourceRefIds for the actual continuity-critical inputs the runtime should wire into the shot.',
     'If a shot needs a hard take split, set forceTakeBreak to true on that shot. Do not author takes directly.',
     'If you use Role, only use these exact values: hook, setup, proof, payoff, cta.',
@@ -2503,6 +2779,9 @@ export function cinematicScriptRepairSystemPrompt(
     'Keep Action literal, visual, and specific. Do not summarize the whole ad in one block.',
     `Locked preset family: ${getCinematicPresetLabel(presetFamily)}.`,
     formatSubtype ? `Locked format subtype: ${getCinematicFormatSubtypeLabel(formatSubtype)}.` : null,
+    profile ? `Locked shot job order: ${profile.shotRoleSequence.join(' -> ')}.` : null,
+    profile ? `Allowed formula families: ${profile.allowedFormulaFamilies.join(', ')}.` : null,
+    profile ? `Allowed dominant triggers: ${profile.allowedDominantTriggers.join(', ')}.` : null,
     'Make the first UGC shot a stronger stop-scroll image when it only sets up the situation without a real hook, contrast, or problem.',
     'Replace abstract payoff language like control, confidence, handled, winning, or calm with visible in-frame evidence whenever possible.',
     'If consecutive middle shots repeat the same payoff dimension, diversify them so the sequence escalates through different visible dimensions such as time, money, stress, energy, proof, or convenience.',
@@ -2539,7 +2818,7 @@ function shotUsesWriterlyOrMetaphoricalLanguage(text: string) {
 function shotContainsVisibleProofCue(text: string) {
   const normalized = normalizeMatchKey(text)
   if (!normalized) return false
-  return /\b(app|screen|receipt|receipts|container|labeled|checklist|calendar|plan|grocery|price|prices|charge|charges|total|totals|before after|split screen|side by side|demo|proof|comparison|tracking|mapped out|list|lists)\b/.test(normalized)
+  return /\b(app|open app|screen|receipt|receipts|container|labeled|checklist|calendar|plan|grocery|price|prices|charge|charges|total|totals|before after|split screen|side by side|demo|proof|comparison|tracking|mapped out|list|lists|download|install|profile|match|task board)\b/.test(normalized)
 }
 
 function shotUsesAbstractPayoffLanguage(text: string) {
@@ -2554,6 +2833,9 @@ function shotHasStrongHookImage(text: string, formatSubtype: z.infer<typeof cine
   if (formatSubtype === 'contrast_narrative') {
     return /\b(split|split screen|side by side|two versions|versus|vs|contrast|before after|left|right)\b/.test(normalized)
       && /\b(empty|mess|chaos|stare|stress|crash|panic|late|receipts|stack|winner|clean|proof|product)\b/.test(normalized)
+  }
+  if (isSerializedDramaSubtype(formatSubtype)) {
+    return /\b(drama|gossip|betrayal|cheating|secret|caught|meltdown|chaos|fruit|cartoon|personified|absurd)\b/.test(normalized)
   }
   return /\b(problem|pain|wrong|empty|mess|chaos|crash|caught|stare|reveal|receipt|proof|split|comparison|before|after|stack)\b/.test(normalized)
 }
@@ -2584,6 +2866,83 @@ function shotShowsProductFunction(text: string) {
   return /\b(open|opens|tap|taps|check|checks|show|shows|track|tracks|map|maps|plan|plans|calculate|calculates|organize|organizes|queue|queues|schedule|schedules|display|displays|compare|compares|generat|sort|preps)\b/.test(normalized)
 }
 
+function shotUsesIdentityAttackLanguage(text: string) {
+  const normalized = normalizeMatchKey(text)
+  if (!normalized) return false
+  return /\b(your fault|lack of discipline|no discipline|lazy|just stop|should have known|wrong with you|failing because you)\b/.test(normalized)
+}
+
+function ctaStyleLooksAggressive(text: string) {
+  const normalized = normalizeMatchKey(text)
+  if (!normalized) return false
+  return /\b(buy now|shop now|order now|limited time|act now|hurry|don t miss out|comment now|dm now)\b/.test(normalized)
+}
+
+function shotDialogueText(shot: z.infer<typeof cinematicScriptShotSchema>) {
+  return shot.dialogue.map((entry) => entry.line).filter(Boolean).join(' ')
+}
+
+function creatorShotSoundsSalesyTooEarly(shot: z.infer<typeof cinematicScriptShotSchema>) {
+  if (shot.hookRole === 'cta') return false
+  const normalized = normalizeMatchKey([shot.beat, shotDialogueText(shot)].join(' '))
+  if (!normalized) return false
+  return /\b(buy now|shop now|order now|tap the link|link in bio|download now|start now|sign up now|get yours|limited time|sale)\b/.test(normalized)
+}
+
+function shotMissingAuthoredVisualDirection(shot: z.infer<typeof cinematicScriptShotSchema>) {
+  return (
+    !shot.framing.trim()
+    || !shot.cameraAngle.trim()
+    || !shot.cameraMovement.trim()
+    || !shot.lensPreference.trim()
+    || !shot.visualPrompt.trim()
+    || !shot.compositionGuide.trim()
+  )
+}
+
+function facelessShotLooksFaceDependent(shot: z.infer<typeof cinematicScriptShotSchema>) {
+  const normalized = normalizeMatchKey([
+    shot.beat,
+    shot.visualPrompt,
+    shot.compositionGuide,
+    shotDialogueText(shot),
+  ].join(' '))
+  if (!normalized) return false
+  return /\b(looks into camera|direct to camera|talking head|selfie|face fills frame|creator speaks to camera|eye contact)\b/.test(normalized)
+}
+
+function mechanismShotLacksVisibleMechanismCue(shot: z.infer<typeof cinematicScriptShotSchema>) {
+  const normalized = normalizeMatchKey(shotTextForCreativeChecks(shot))
+  if (!normalized) return true
+  return !/\b(screen|step|graph|shows|showing|maps|tracking|tap|taps|state change|before after|comparison|scan|timer|check in|progress|guided|receipt|dashboard)\b/.test(normalized)
+}
+
+function isSerializedDramaSubtype(formatSubtype: z.infer<typeof cinematicFormatSubtypeSchema> | null) {
+  return (
+    formatSubtype === 'creator_serialized_drama'
+    || formatSubtype === 'ad_trojan_horse_drama'
+    || formatSubtype === 'faceless_serialized_drama'
+  )
+}
+
+function shotHasDramaConflictCue(text: string) {
+  const normalized = normalizeMatchKey(text)
+  if (!normalized) return false
+  return /\b(drama|gossip|betrayal|cheating|secret|caught|argument|conflict|lonely|rejected|chaos|meltdown|affair|taboo)\b/.test(normalized)
+}
+
+function shotHasRevealCue(text: string) {
+  const normalized = normalizeMatchKey(text)
+  if (!normalized) return false
+  return /\b(reveal|discover|discovers|found|finds|finally|then|suddenly|app|product|solution|download|installs|opens)\b/.test(normalized)
+}
+
+function shotHasRedemptionCue(text: string) {
+  const normalized = normalizeMatchKey(text)
+  if (!normalized) return false
+  return /\b(redemption|relief|restored|restore|reunited|resolved|resolution|calm|control|better|organized|connection|transformed|wins)\b/.test(normalized)
+}
+
 export function scriptNeedsMultiBeatFallback(input: {
   promptText: string
   scriptDoc: z.infer<typeof cinematicScriptDocSchema>
@@ -2591,8 +2950,10 @@ export function scriptNeedsMultiBeatFallback(input: {
   const shots = input.scriptDoc.shots
   const firstShot = shots[0] ?? null
   const hasContrastNarrative = shots.some((shot) => shot.formatSubtype === 'contrast_narrative')
+  const hasSerializedDrama = shots.some((shot) => isSerializedDramaSubtype(shot.formatSubtype ?? null))
   if (shots.length === 0) return true
   if (hasContrastNarrative && shots.length < 4) return true
+  if (hasSerializedDrama && shots.length < 4) return true
   if (promptSuggestsMultiBeatNarrative(input.promptText) && shots.length < 2) return true
   if (!firstShot) return false
   return shots.length === 1 && shotLooksLikeCatchAllSummary({
@@ -2602,11 +2963,37 @@ export function scriptNeedsMultiBeatFallback(input: {
   })
 }
 
+function isHardCinematicQualityFailure(message: string) {
+  const normalized = normalizeMatchKey(message)
+  if (!normalized) return false
+  return (
+    normalized.includes('collapsed into one generic summary shot')
+    || normalized.includes('prompt implies a multi beat sequence')
+    || normalized.includes('contrast narrative output is under segmented')
+    || normalized.includes('serialized drama output is under segmented')
+    || normalized.includes('serialized drama content needs a real reveal beat')
+    || normalized.includes('serialized drama content needs a redemption beat')
+    || normalized.includes('serialized drama content needs a clearer conflict')
+    || normalized.includes('beat text is placeholder like')
+    || normalized.includes('creator shot') && normalized.includes('missing spoken dialogue')
+    || normalized.includes('must include at least one visible action beat')
+    || normalized.includes('does not make the mechanism visually legible enough')
+    || normalized.includes('describes payoff abstractly without enough visible proof')
+    || normalized.includes('relies on face led or direct to camera language')
+  )
+}
+
 export function evaluateCinematicScriptQuality(input: {
   promptText: string
   scriptDoc: z.infer<typeof cinematicScriptDocSchema>
 }) {
   const failures: string[] = []
+  const rawDiagnostics: Array<{
+    scope: 'graph' | 'shot'
+    shotId: string | null
+    category: 'schema' | 'preset_fit' | 'hook' | 'proof' | 'dialogue' | 'action' | 'camera' | 'cta' | 'structure'
+    message: string
+  }> = []
   const flags = {
     usedFallbackPrimaryShot: false,
     usedTemporalExpansionFallback: false,
@@ -2620,6 +3007,21 @@ export function evaluateCinematicScriptQuality(input: {
   const isUgcFlow = isUgcCreativeFlow(input)
   const firstShot = input.scriptDoc.shots[0] ?? null
   const lastShot = input.scriptDoc.shots[input.scriptDoc.shots.length - 1] ?? null
+  const recordFailure = (
+    message: string,
+    options: {
+      shotId?: string | null
+      category?: 'schema' | 'preset_fit' | 'hook' | 'proof' | 'dialogue' | 'action' | 'camera' | 'cta' | 'structure'
+    } = {},
+  ) => {
+    failures.push(message)
+    rawDiagnostics.push({
+      scope: options.shotId ? 'shot' : 'graph',
+      shotId: options.shotId ?? null,
+      category: options.category ?? 'structure',
+      message,
+    })
+  }
 
   for (const shot of input.scriptDoc.shots) {
     const impliesDialogue = shotImpliesDialogue({
@@ -2630,15 +3032,24 @@ export function evaluateCinematicScriptQuality(input: {
     })
     if (isGenericShotTitle(shot.title)) {
       flags.genericShotTitles = true
-      failures.push(`Shot "${shot.id}" has a generic title.`)
+      recordFailure(`Shot "${shot.id}" has a generic title.`, { shotId: shot.id, category: 'schema' })
     }
     if (beatLooksLikePromptEcho(shot.beat, input.promptText)) {
       flags.promptEchoShots = true
-      failures.push(`Shot "${shot.id}" beat text echoes the prompt instead of authored prose.`)
+      recordFailure(`Shot "${shot.id}" beat text echoes the prompt instead of authored prose.`, { shotId: shot.id, category: 'action' })
+    }
+    if (beatLooksUnderwritten(shot.beat)) {
+      recordFailure(`Shot "${shot.id}" beat text is placeholder-like or underwritten and must describe a literal on-screen moment.`, { shotId: shot.id, category: 'action' })
     }
     if (impliesDialogue && shot.dialogue.length === 0) {
       flags.usedDialogueFallback = true
-      failures.push(`Shot "${shot.id}" implies dialogue but provides no dialogue beats.`)
+      recordFailure(`Shot "${shot.id}" implies dialogue but provides no dialogue beats.`, { shotId: shot.id, category: 'dialogue' })
+    }
+    if (shot.actions.length === 0) {
+      recordFailure(`Shot "${shot.id}" must include at least one visible action beat.`, { shotId: shot.id, category: 'action' })
+    }
+    if (isUgcFlow && shotMissingAuthoredVisualDirection(shot)) {
+      recordFailure(`Shot "${shot.id}" is missing final camera or visual-prompt direction. Authorship must fill framing, camera, lens, visualPrompt, and compositionGuide.`, { shotId: shot.id, category: 'camera' })
     }
     for (const dialogue of shot.dialogue) {
       const speakerName =
@@ -2647,16 +3058,26 @@ export function evaluateCinematicScriptQuality(input: {
         ?? ''
       if (!dialogue.line.trim() || dialogueLooksLikePlaceholder(dialogue.line, speakerName)) {
         flags.usedDialogueFallback = true
-        failures.push(`Shot "${shot.id}" contains placeholder or summary dialogue.`)
+        recordFailure(`Shot "${shot.id}" contains placeholder or summary dialogue.`, { shotId: shot.id, category: 'dialogue' })
         break
       }
     }
     if (!isUgcFlow) continue
 
+    const formatSubtype = shot.formatSubtype ?? null
+    const profile = getUgcPresetProfile(formatSubtype)
     const shotText = shotTextForCreativeChecks(shot)
     if (shotUsesWriterlyOrMetaphoricalLanguage(shotText)) {
       flags.ugcCreativeWeakness = true
-      failures.push(`UGC shot "${shot.id}" uses writerly or metaphorical phrasing instead of literal on-screen description.`)
+      recordFailure(`UGC shot "${shot.id}" uses writerly or metaphorical phrasing instead of literal on-screen description.`, { shotId: shot.id, category: 'action' })
+    }
+    if (profile && shot.formulaFamily && !isFormulaFamilyAllowedForFormatSubtype(formatSubtype, shot.formulaFamily)) {
+      flags.ugcCreativeWeakness = true
+      recordFailure(`UGC shot "${shot.id}" uses formulaFamily "${shot.formulaFamily}" which does not match the ${getCinematicFormatSubtypeLabel(formatSubtype!)} preset profile.`, { shotId: shot.id, category: 'preset_fit' })
+    }
+    if (profile && shot.dominantTrigger && !isDominantTriggerAllowedForFormatSubtype(formatSubtype, shot.dominantTrigger)) {
+      flags.ugcCreativeWeakness = true
+      recordFailure(`UGC shot "${shot.id}" uses dominantTrigger "${shot.dominantTrigger}" which does not match the ${getCinematicFormatSubtypeLabel(formatSubtype!)} preset profile.`, { shotId: shot.id, category: 'preset_fit' })
     }
     if (
       (shot.hookRole === 'proof' || shot.hookRole === 'payoff' || shot.hookRole === 'cta' || subtypeLooksAdLike(shot.formatSubtype))
@@ -2664,7 +3085,36 @@ export function evaluateCinematicScriptQuality(input: {
       && !shotContainsVisibleProofCue(shotText)
     ) {
       flags.ugcCreativeWeakness = true
-      failures.push(`UGC shot "${shot.id}" describes payoff abstractly without enough visible proof.`)
+      recordFailure(`UGC shot "${shot.id}" describes payoff abstractly without enough visible proof.`, { shotId: shot.id, category: 'proof' })
+    }
+    if (typeof formatSubtype === 'string' && formatSubtype.startsWith('creator_') && shotUsesIdentityAttackLanguage(shotText)) {
+      flags.ugcCreativeWeakness = true
+      recordFailure(`UGC creator shot "${shot.id}" attacks the viewer's identity instead of protecting it.`, { shotId: shot.id, category: 'preset_fit' })
+    }
+    if (typeof formatSubtype === 'string' && formatSubtype.startsWith('creator_') && ctaStyleLooksAggressive(shot.ctaStyle)) {
+      flags.ugcCreativeWeakness = true
+      recordFailure(`UGC creator shot "${shot.id}" uses an overly aggressive CTA style for a creator-native preset.`, { shotId: shot.id, category: 'cta' })
+    }
+    if (typeof formatSubtype === 'string' && formatSubtype.startsWith('creator_') && creatorShotSoundsSalesyTooEarly(shot)) {
+      flags.ugcCreativeWeakness = true
+      recordFailure(`UGC creator shot "${shot.id}" sounds too salesy before the close. Protect identity and lead with recognition before pitching.`, { shotId: shot.id, category: 'preset_fit' })
+    }
+    if (
+      typeof formatSubtype === 'string'
+      && formatSubtype.startsWith('creator_')
+      && ['hook', 'setup', 'proof', 'cta'].includes(shot.hookRole ?? '')
+      && shot.dialogue.length === 0
+    ) {
+      flags.usedDialogueFallback = true
+      recordFailure(`UGC creator shot "${shot.id}" is missing spoken dialogue for a creator-led beat.`, { shotId: shot.id, category: 'dialogue' })
+    }
+    if (formatSubtype === 'ad_mechanism_proof' && (shot.hookRole === 'setup' || shot.hookRole === 'proof') && mechanismShotLacksVisibleMechanismCue(shot)) {
+      flags.ugcCreativeWeakness = true
+      recordFailure(`UGC mechanism-proof shot "${shot.id}" does not make the mechanism visually legible enough.`, { shotId: shot.id, category: 'proof' })
+    }
+    if (typeof formatSubtype === 'string' && formatSubtype.startsWith('faceless_') && facelessShotLooksFaceDependent(shot)) {
+      flags.ugcCreativeWeakness = true
+      recordFailure(`Faceless shot "${shot.id}" relies on face-led or direct-to-camera language instead of object, screen, or process clarity.`, { shotId: shot.id, category: 'preset_fit' })
     }
   }
 
@@ -2672,7 +3122,7 @@ export function evaluateCinematicScriptQuality(input: {
     const firstShotText = shotTextForCreativeChecks(firstShot)
     if (!shotHasStrongHookImage(firstShotText, firstShot.formatSubtype ?? null)) {
       flags.ugcCreativeWeakness = true
-      failures.push(`UGC first shot "${firstShot.id}" needs a clearer stop-scroll hook image or immediate problem/contrast.`)
+      recordFailure(`UGC first shot "${firstShot.id}" needs a clearer stop-scroll hook image or immediate problem/contrast.`, { shotId: firstShot.id, category: 'hook' })
     }
     if (input.scriptDoc.shots.length === 1 && shotLooksLikeCatchAllSummary({
       title: firstShot.title,
@@ -2680,13 +3130,13 @@ export function evaluateCinematicScriptQuality(input: {
       compositionGuide: firstShot.compositionGuide,
     })) {
       flags.ugcCreativeWeakness = true
-      failures.push('UGC script collapsed into one generic summary shot instead of authored beats.')
+      recordFailure('UGC script collapsed into one generic summary shot instead of authored beats.', { category: 'structure' })
     }
   }
 
   if (isUgcFlow && promptSuggestsMultiBeatNarrative(input.promptText) && input.scriptDoc.shots.length < 2) {
     flags.ugcCreativeWeakness = true
-    failures.push('Prompt implies a multi-beat sequence, but the authored script does not break the sequence into enough shots.')
+    recordFailure('Prompt implies a multi-beat sequence, but the authored script does not break the sequence into enough shots.', { category: 'structure' })
   }
 
   if (isUgcFlow) {
@@ -2697,7 +3147,12 @@ export function evaluateCinematicScriptQuality(input: {
       && !adLikeShots.some((shot) => shotShowsProductFunction(shotTextForCreativeChecks(shot)))
     ) {
       flags.ugcCreativeWeakness = true
-      failures.push('UGC ad sequence shows the product but does not clearly show the product doing its job on screen.')
+      recordFailure('UGC ad sequence shows the product but does not clearly show the product doing its job on screen.', { category: 'proof' })
+    }
+    const nonFinalAdLikeShots = adLikeShots.slice(0, Math.max(0, adLikeShots.length - 1))
+    if (adLikeShots.length > 0 && nonFinalAdLikeShots.length > 0 && !nonFinalAdLikeShots.some((shot) => shotContainsVisibleProofCue(shotTextForCreativeChecks(shot)))) {
+      flags.ugcCreativeWeakness = true
+      recordFailure('UGC direct-response flow delays visible proof until the ending. Land proof before the final frame.', { category: 'proof' })
     }
   }
 
@@ -2713,14 +3168,14 @@ export function evaluateCinematicScriptQuality(input: {
     }
     if (repeatedDimensionPairs >= 2) {
       flags.ugcCreativeWeakness = true
-      failures.push('UGC middle shots repeat the same payoff or pain dimension too often instead of escalating through new visible dimensions.')
+      recordFailure('UGC middle shots repeat the same payoff or pain dimension too often instead of escalating through new visible dimensions.', { category: 'structure' })
     }
   }
 
   if (isUgcFlow && input.scriptDoc.shots.some((shot) => shot.formatSubtype === 'contrast_narrative')) {
     if (input.scriptDoc.shots.length < 4) {
       flags.ugcCreativeWeakness = true
-      failures.push('Contrast narrative output is under-segmented and needs multiple escalating shots, not a collapsed summary beat.')
+      recordFailure('Contrast narrative output is under-segmented and needs multiple escalating shots, not a collapsed summary beat.', { category: 'structure' })
     }
     const distinctDimensions = new Set<string>()
     for (const shot of input.scriptDoc.shots) {
@@ -2728,7 +3183,7 @@ export function evaluateCinematicScriptQuality(input: {
     }
     if (distinctDimensions.size < 3) {
       flags.ugcCreativeWeakness = true
-      failures.push('Contrast narrative beats should widen the gap across multiple visible dimensions instead of repeating one flat comparison.')
+      recordFailure('Contrast narrative beats should widen the gap across multiple visible dimensions instead of repeating one flat comparison.', { category: 'preset_fit' })
     }
     const dialogueHeavyShots = input.scriptDoc.shots.filter((shot) => shot.dialogue.length > 1).length
     const dualSpeakerShots = input.scriptDoc.shots.filter((shot) => new Set(shot.dialogue.map((entry) => entry.speakerRefId ?? `unknown_${entry.id}`)).size > 1).length
@@ -2736,15 +3191,15 @@ export function evaluateCinematicScriptQuality(input: {
     const shotsWithDialogue = input.scriptDoc.shots.filter((shot) => shot.dialogue.length > 0).length
     if (shotsWithDialogue > Math.ceil(input.scriptDoc.shots.length / 2)) {
       flags.ugcCreativeWeakness = true
-      failures.push('Contrast narrative dialogue should be sparse. Too many shots rely on spoken lines instead of visual comparison.')
+      recordFailure('Contrast narrative dialogue should be sparse. Too many shots rely on spoken lines instead of visual comparison.', { category: 'dialogue' })
     }
     if (dialogueHeavyShots > 1 || dualSpeakerShots > 1) {
       flags.ugcCreativeWeakness = true
-      failures.push('Contrast narrative should avoid frequent back-and-forth dialogue. Keep most beats visual and keep any spoken contrast extremely short.')
+      recordFailure('Contrast narrative should avoid frequent back-and-forth dialogue. Keep most beats visual and keep any spoken contrast extremely short.', { category: 'dialogue' })
     }
     if (overlayHeavyShots > 1) {
       flags.ugcCreativeWeakness = true
-      failures.push('Contrast narrative narrator overlay text is too dense. Use overlay text sparingly so the comparison remains instantly readable.')
+      recordFailure('Contrast narrative narrator overlay text is too dense. Use overlay text sparingly so the comparison remains instantly readable.', { category: 'dialogue' })
     }
   }
 
@@ -2752,7 +3207,30 @@ export function evaluateCinematicScriptQuality(input: {
     const facelessDialogueShots = input.scriptDoc.shots.filter((shot) => typeof shot.formatSubtype === 'string' && shot.formatSubtype.startsWith('faceless_') && shot.dialogue.length > 0).length
     if (facelessDialogueShots > Math.ceil(input.scriptDoc.shots.length / 2)) {
       flags.ugcCreativeWeakness = true
-      failures.push('Faceless formats should usually stay visual-first. Too many shots rely on dialogue instead of process, object, or screen clarity.')
+      recordFailure('Faceless formats should usually stay visual-first. Too many shots rely on dialogue instead of process, object, or screen clarity.', { category: 'dialogue' })
+    }
+  }
+
+  if (isUgcFlow && input.scriptDoc.shots.some((shot) => isSerializedDramaSubtype(shot.formatSubtype ?? null))) {
+    const serializedShots = input.scriptDoc.shots.filter((shot) => isSerializedDramaSubtype(shot.formatSubtype ?? null))
+    if (serializedShots.length < 4) {
+      flags.ugcCreativeWeakness = true
+      recordFailure('Serialized-drama output is under-segmented. Keep the conflict, reveal, and redemption as separate beats instead of collapsing them.', { category: 'structure' })
+    }
+    const hasConflictBeat = serializedShots.some((shot) => shotHasDramaConflictCue(shotTextForCreativeChecks(shot)))
+    const hasRevealBeat = serializedShots.some((shot) => shot.hookRole === 'proof' && shotHasRevealCue(shotTextForCreativeChecks(shot)))
+    const hasRedemptionBeat = serializedShots.some((shot) => (shot.hookRole === 'payoff' || shot.hookRole === 'cta') && shotHasRedemptionCue(shotTextForCreativeChecks(shot)))
+    if (!hasConflictBeat) {
+      flags.ugcCreativeWeakness = true
+      recordFailure('Serialized-drama content needs a clearer conflict or taboo rupture before the product appears.', { category: 'preset_fit' })
+    }
+    if (!hasRevealBeat) {
+      flags.ugcCreativeWeakness = true
+      recordFailure('Serialized-drama content needs a real reveal beat where the app or product enters as the twist or answer.', { category: 'structure' })
+    }
+    if (!hasRedemptionBeat) {
+      flags.ugcCreativeWeakness = true
+      recordFailure('Serialized-drama content needs a redemption beat that visibly resolves the tension before the CTA.', { category: 'structure' })
     }
   }
 
@@ -2763,7 +3241,7 @@ export function evaluateCinematicScriptQuality(input: {
       && !/\b(winner|wins|final|ending|payoff|cta|proof|strongest|contrast|obvious)\b/.test(normalizeMatchKey(lastShotText))
     ) {
       flags.ugcCreativeWeakness = true
-      failures.push(`UGC final shot "${lastShot.id}" should land as the clearest proof, payoff, or winner frame.`)
+      recordFailure(`UGC final shot "${lastShot.id}" should land as the clearest proof, payoff, or winner frame.`, { shotId: lastShot.id, category: 'hook' })
     }
   }
 
@@ -2772,13 +3250,31 @@ export function evaluateCinematicScriptQuality(input: {
     const targetBinding = input.scriptDoc.entityBindings.find((binding) => binding.id === relationship.targetRefId) ?? null
     if (targetBinding?.kind === 'item' && isIncidentalPropName(targetBinding.sourceName || targetBinding.label)) {
       flags.incidentalPropRelationships = true
-      failures.push(`Relationship "${relationship.id}" over-emphasizes incidental prop "${targetBinding.label}".`)
+      recordFailure(`Relationship "${relationship.id}" over-emphasizes incidental prop "${targetBinding.label}".`, { category: 'schema' })
     }
   }
 
+  const uniqueFailures = Array.from(new Set(failures))
+  const hardFailures = uniqueFailures.filter((failure) => isHardCinematicQualityFailure(failure))
+  const softFailures = uniqueFailures.filter((failure) => !isHardCinematicQualityFailure(failure))
+  const diagnostics = Array.from(
+    new Map(
+      rawDiagnostics.map((entry) => [
+        `${entry.scope}:${entry.shotId ?? ''}:${entry.category}:${entry.message}`,
+        {
+          ...entry,
+          severity: isHardCinematicQualityFailure(entry.message) ? 'hard' as const : 'soft' as const,
+        },
+      ]),
+    ).values(),
+  )
+
   return {
-    failures: Array.from(new Set(failures)),
-    shouldRepair: failures.length > 0,
+    failures: uniqueFailures,
+    hardFailures,
+    softFailures,
+    diagnostics,
+    shouldRepair: hardFailures.length > 0,
     flags,
   }
 }
@@ -2788,6 +3284,7 @@ export function cinematicScriptPlannerSystemPrompt(
   formatSubtype: z.infer<typeof cinematicFormatSubtypeSchema> | null = null,
   targetShotCount = 5,
 ) {
+  const profile = getUgcPresetProfile(formatSubtype, presetFamily)
   return [
     'You are the GraphCore cinematic script planner.',
     'Return JSON only.',
@@ -2799,7 +3296,8 @@ export function cinematicScriptPlannerSystemPrompt(
     'sequence must include: title, logline, tone, continuityNotes, references, scenes, storyboard, shots.',
     'sequence.references must use only locked reference ids and include only refs that are actually needed by the authored shots.',
     'sequence.scenes should group shots by scene and location when useful.',
-    'Each shot must include: id, sceneId, title, beat, shotType, participantRefIds, locationRefId, propRefIds, requiredSourceRefIds, durationSeconds or null, forceTakeBreak, framing, cameraAngle, cameraMovement, lensPreference, visualPrompt, compositionGuide, dialogue, actions, audio.',
+    'Before writing the shots, decide and set graphSettings for presetFamily, formatSubtype, formulaFamily, dominantTrigger, proofMoment, ctaStyle, and contrastAxis when applicable.',
+    'Each shot must include: id, sceneId, title, beat, hookRole, formatSubtype, formulaFamily, dominantTrigger, hookType, targetEmotion, personaStyle, contrastAxis, proofMoment, ctaStyle, proofType, ctaType, shotType, participantRefIds, locationRefId, propRefIds, requiredSourceRefIds, durationSeconds or null, forceTakeBreak, framing, cameraAngle, cameraMovement, lensPreference, visualPrompt, compositionGuide, dialogue, actions, audio.',
     'Use requiredSourceRefIds for the continuity-critical inputs the runtime should connect into the shot.',
     'Do not author takes directly. Takes are derived later from the shot sequence.',
     'If you use Role, only use these exact values: hook, setup, proof, payoff, cta.',
@@ -2808,10 +3306,18 @@ export function cinematicScriptPlannerSystemPrompt(
     'Only use Props for recurring hero or continuity-critical refs. Everyday carrier objects, staging objects, packaging, surfaces, and background clutter should usually stay inside Action or Composition.',
     'Do not invent new reusable item refs from generic props. If an object is not already in the locked entity set and is not clearly a specific recurring hero object, keep it inside Action or Composition.',
     'When the prompt names multiple phases, split them into separate shot blocks instead of compressing them into one.',
+    'beat must be 1 to 3 full sentences of literal on-screen description. Never use placeholders like "hook", "setup", "proof", "payoff", "cta", "use case", or "soft proof" as beat text.',
+    'title may be short shorthand. beat may not repeat the role label, summary label, or a one-word outline tag.',
     'Dialogue must use actual spoken lines. Do not summarize what the character says.',
     'Action is the canonical shot script. It must describe only what is visibly happening on screen.',
     `Locked preset family: ${getCinematicPresetLabel(presetFamily)}.`,
     formatSubtype ? `Locked format subtype: ${getCinematicFormatSubtypeLabel(formatSubtype)}.` : null,
+    profile ? `Target use case: ${profile.targetUseCase}` : null,
+    profile ? `Audience intent: ${profile.audienceIntent}` : null,
+    profile ? `Locked shot job order: ${profile.shotRoleSequence.join(' -> ')}.` : null,
+    profile ? `Allowed formula families: ${profile.allowedFormulaFamilies.join(', ')}.` : null,
+    profile ? `Allowed dominant triggers: ${profile.allowedDominantTriggers.join(', ')}.` : null,
+    ...exactPlannerEnumInstructions({ presetFamily, formatSubtype }),
     ...presetPlannerInstructions(presetFamily, formatSubtype),
     ...subtypePlannerInstructions(formatSubtype),
     presetFamily !== 'story_movie_tv'
@@ -2825,6 +3331,9 @@ export function cinematicScriptPlannerSystemPrompt(
       : null,
     presetFamily !== 'story_movie_tv'
       ? 'Dialogue and narrator overlay text should follow the format. Some presets are dialogue-led, others should stay mostly visual.'
+      : null,
+    presetFamily === 'ugc_creator'
+      ? 'For creator-led formats, include actual spoken dialogue in most shots, especially hook, setup, proof, and CTA beats.'
       : null,
     presetFamily !== 'story_movie_tv'
       ? 'Give each UGC shot one primary job in the arc: hook, pain, mechanism, proof, payoff, or CTA. Use Role to reflect that shot job when helpful.'
@@ -2846,6 +3355,429 @@ export function cinematicScriptPlannerSystemPrompt(
 }
 
 export const cinematicPlannerSystemPrompt = cinematicScriptPlannerSystemPrompt
+
+export function cinematicShotSkeletonPlannerSystemPrompt(
+  presetFamily: z.infer<typeof cinematicPresetFamilySchema> = 'story_movie_tv',
+  formatSubtype: z.infer<typeof cinematicFormatSubtypeSchema> | null = null,
+  targetShotCount = 5,
+) {
+  const profile = getUgcPresetProfile(formatSubtype, presetFamily)
+  return [
+    'You are the GraphCore cinematic shot planner.',
+    'Return JSON only.',
+    'Return exactly one JSON object with top-level keys: requestSummary, graphName, graphSummary, graphSettings, shots, diagnostics, assistantNotes.',
+    'This is a planning pass, not a final script-writing pass.',
+    'Plan a locked shot skeleton only.',
+    'Do not invent new entities, rename them, or change their ids.',
+    `Write about ${targetShotCount} ordered shots unless the prompt explicitly asks for a nearby count.`,
+    'Before planning the shots, decide and set graphSettings for presetFamily, formatSubtype, formulaFamily, dominantTrigger, proofMoment, ctaStyle, and contrastAxis when applicable.',
+    'Each shot must include: id, sceneId, title, beat, hookRole, formatSubtype, formulaFamily, dominantTrigger, hookType, targetEmotion, personaStyle, contrastAxis, proofMoment, ctaStyle, proofType, ctaType, shotType, participantRefIds, locationRefId, propRefIds, requiredSourceRefIds, durationSeconds or null, forceTakeBreak, framing, cameraAngle, cameraMovement, lensPreference, visualPrompt, compositionGuide, dialogue, actions, audio.',
+    'This planning pass should keep authored content minimal.',
+    'beat should be a short planning note about the visible purpose of the shot, not a finished script paragraph.',
+    'Set framing, cameraAngle, cameraMovement, lensPreference, visualPrompt, and compositionGuide to empty strings unless a very short structural note is necessary to disambiguate the skeleton.',
+    'dialogue, actions, and audio should be empty arrays in this pass unless the prompt makes a non-empty placeholder structurally unavoidable.',
+    'Do not author final spoken lines in this planning pass.',
+    'Do not author detailed action choreography in this planning pass.',
+    'Do not author final camera language or polished visual prompts in this planning pass.',
+    'Do not return sequence or scriptDoc in this pass.',
+    'Only use Role values hook, setup, proof, payoff, cta.',
+    'Only use reference ids from the locked entity set.',
+    `Locked preset family: ${getCinematicPresetLabel(presetFamily)}.`,
+    formatSubtype ? `Locked format subtype: ${getCinematicFormatSubtypeLabel(formatSubtype)}.` : null,
+    profile ? `Target use case: ${profile.targetUseCase}` : null,
+    profile ? `Audience intent: ${profile.audienceIntent}` : null,
+    profile ? `Locked shot job order: ${profile.shotRoleSequence.join(' -> ')}.` : null,
+    profile ? `Allowed formula families: ${profile.allowedFormulaFamilies.join(', ')}.` : null,
+    profile ? `Allowed dominant triggers: ${profile.allowedDominantTriggers.join(', ')}.` : null,
+    ...exactPlannerEnumInstructions({ presetFamily, formatSubtype }),
+    ...presetPlannerInstructions(presetFamily, formatSubtype),
+    ...subtypePlannerInstructions(formatSubtype),
+    presetFamily !== 'story_movie_tv'
+      ? 'For UGC planning, keep the shot plan visual-first, structurally clear, and easy to author later.'
+      : null,
+    'graphSettings should only include fields that matter for this cinematic.',
+  ].filter((entry): entry is string => Boolean(entry)).join('\n')
+}
+
+export const cinematicShotAuthorshipRawSchema = z.object({
+  shots: z.preprocess((value) => {
+    if (!Array.isArray(value)) return []
+    return value.map((entry, shotIndex) => {
+      const shot = asRecord(entry)
+      if (!shot) {
+        return {
+          id: `shot_${shotIndex + 1}`,
+          beat: '',
+          framing: '',
+          cameraAngle: '',
+          cameraMovement: '',
+          lensPreference: '',
+          visualPrompt: '',
+          compositionGuide: '',
+          dialogue: [],
+          actions: [],
+          audio: [],
+        }
+      }
+
+      const shotId = pickFirstString(shot, ['id', 'shotId']) || `shot_${shotIndex + 1}`
+      const normalizeDialogue = (dialogueEntry: unknown, dialogueIndex: number) => {
+        const parsed = dialogueBeatSchema.safeParse(dialogueEntry)
+        if (parsed.success) return parsed.data
+        if (typeof dialogueEntry === 'string') {
+          const trimmed = dialogueEntry.trim()
+          if (!trimmed) return null
+          const speakerMatch = trimmed.match(/^([^:]{1,80}):\s+(.+)$/)
+          return {
+            id: `${shotId}_dialogue_${dialogueIndex + 1}`,
+            speakerRefId: null,
+            line: speakerMatch?.[2]?.trim() || trimmed,
+            delivery: speakerMatch?.[1]?.trim() || '',
+            startSeconds: null,
+            endSeconds: null,
+            lipSync: true,
+          }
+        }
+        const record = asRecord(dialogueEntry)
+        if (!record) return null
+        const line = pickFirstString(record, ['line', 'text', 'dialogue', 'spokenLine', 'content'])
+        if (!line) return null
+        return {
+          id: pickFirstString(record, ['id']) || `${shotId}_dialogue_${dialogueIndex + 1}`,
+          speakerRefId: pickFirstString(record, ['speakerRefId', 'speakerId']) || null,
+          line,
+          delivery: pickFirstString(record, ['delivery', 'tone', 'style', 'speaker']) || '',
+          startSeconds: typeof record.startSeconds === 'number' ? record.startSeconds : null,
+          endSeconds: typeof record.endSeconds === 'number' ? record.endSeconds : null,
+          lipSync: typeof record.lipSync === 'boolean' ? record.lipSync : true,
+        }
+      }
+      const normalizeAction = (actionEntry: unknown, actionIndex: number) => {
+        const parsed = actionBeatSchema.safeParse(actionEntry)
+        if (parsed.success) return parsed.data
+        if (typeof actionEntry === 'string') {
+          const trimmed = actionEntry.trim()
+          if (!trimmed) return null
+          return {
+            id: `${shotId}_action_${actionIndex + 1}`,
+            actorRefId: null,
+            targetRefId: null,
+            verb: trimmed,
+            propRefId: null,
+            stagingNotes: '',
+            startSeconds: null,
+            endSeconds: null,
+          }
+        }
+        const record = asRecord(actionEntry)
+        if (!record) return null
+        const verb = pickFirstString(record, ['verb', 'action', 'text', 'description', 'stagingNotes'])
+        if (!verb) return null
+        return {
+          id: pickFirstString(record, ['id']) || `${shotId}_action_${actionIndex + 1}`,
+          actorRefId: pickFirstString(record, ['actorRefId', 'actorId']) || null,
+          targetRefId: pickFirstString(record, ['targetRefId', 'targetId']) || null,
+          verb,
+          propRefId: pickFirstString(record, ['propRefId', 'propId']) || null,
+          stagingNotes: pickFirstString(record, ['stagingNotes', 'notes']) || '',
+          startSeconds: typeof record.startSeconds === 'number' ? record.startSeconds : null,
+          endSeconds: typeof record.endSeconds === 'number' ? record.endSeconds : null,
+        }
+      }
+      const normalizeAudio = (audioEntry: unknown, audioIndex: number) => {
+        const parsed = audioBeatSchema.safeParse(audioEntry)
+        if (parsed.success) return parsed.data
+        if (typeof audioEntry === 'string') {
+          const trimmed = audioEntry.trim()
+          if (!trimmed) return null
+          return {
+            id: `${shotId}_audio_${audioIndex + 1}`,
+            kind: 'ambience' as const,
+            cue: trimmed,
+            sourceRefId: null,
+            startSeconds: null,
+            endSeconds: null,
+          }
+        }
+        const record = asRecord(audioEntry)
+        if (!record) return null
+        const cue = pickFirstString(record, ['cue', 'text', 'audio', 'sound', 'description'])
+        if (!cue) return null
+        return {
+          id: pickFirstString(record, ['id']) || `${shotId}_audio_${audioIndex + 1}`,
+          kind: parseNullableEnumValue(cinematicAudioCueKindSchema, record.kind) ?? 'ambience',
+          cue,
+          sourceRefId: pickFirstString(record, ['sourceRefId', 'sourceId']) || null,
+          startSeconds: typeof record.startSeconds === 'number' ? record.startSeconds : null,
+          endSeconds: typeof record.endSeconds === 'number' ? record.endSeconds : null,
+        }
+      }
+
+      return {
+        id: shotId,
+        beat: pickFirstString(shot, ['beat', 'summary', 'description']),
+        framing: pickFirstString(shot, ['framing']),
+        cameraAngle: pickFirstString(shot, ['cameraAngle']),
+        cameraMovement: pickFirstString(shot, ['cameraMovement']),
+        lensPreference: pickFirstString(shot, ['lensPreference']),
+        visualPrompt: pickFirstString(shot, ['visualPrompt', 'prompt']),
+        compositionGuide: pickFirstString(shot, ['compositionGuide', 'stagingNotes']),
+        dialogue: Array.isArray(shot.dialogue ?? shot.lines)
+          ? (shot.dialogue ?? shot.lines)
+              .map((dialogueEntry, dialogueIndex) => normalizeDialogue(dialogueEntry, dialogueIndex))
+              .filter((dialogueEntry): dialogueEntry is z.infer<typeof dialogueBeatSchema> => dialogueEntry !== null)
+          : [],
+        actions: Array.isArray(shot.actions)
+          ? shot.actions
+              .map((actionEntry, actionIndex) => normalizeAction(actionEntry, actionIndex))
+              .filter((actionEntry): actionEntry is z.infer<typeof actionBeatSchema> => actionEntry !== null)
+          : [],
+        audio: Array.isArray(shot.audio ?? shot.sound)
+          ? (shot.audio ?? shot.sound)
+              .map((audioEntry, audioIndex) => normalizeAudio(audioEntry, audioIndex))
+              .filter((audioEntry): audioEntry is z.infer<typeof audioBeatSchema> => audioEntry !== null)
+          : [],
+      }
+    })
+  }, z.array(z.object({
+    id: z.string(),
+    beat: z.string().default(''),
+    framing: z.string().default(''),
+    cameraAngle: z.string().default(''),
+    cameraMovement: z.string().default(''),
+    lensPreference: z.string().default(''),
+    visualPrompt: z.string().default(''),
+    compositionGuide: z.string().default(''),
+    dialogue: z.array(dialogueBeatSchema).default([]),
+    actions: z.array(actionBeatSchema).default([]),
+    audio: z.array(audioBeatSchema).default([]),
+  }))).default([]),
+  diagnostics: z.preprocess((value) => {
+    if (Array.isArray(value)) return asStringArray(value)
+    const record = asRecord(value)
+    if (record) return Object.entries(record).map(([key, item]) => `${key}: ${String(item)}`)
+    return []
+  }, z.array(z.string()).default([])),
+  assistantNotes: z.preprocess((value) => {
+    if (typeof value === 'string') return value
+    if (Array.isArray(value)) return asStringArray(value).join('\n')
+    const record = asRecord(value)
+    if (record) return JSON.stringify(record)
+    return undefined
+  }, z.string().optional()),
+})
+
+export function cinematicShotAuthorshipSystemPrompt(
+  input: {
+    presetFamily?: z.infer<typeof cinematicPresetFamilySchema>
+    formatSubtype?: z.infer<typeof cinematicFormatSubtypeSchema> | null
+    formulaFamily?: z.infer<typeof cinematicFormulaFamilySchema> | null
+    dominantTrigger?: z.infer<typeof cinematicDominantTriggerSchema> | null
+    proofMoment?: string | null
+    ctaStyle?: string | null
+    contrastAxis?: string | null
+    graphSettings?: Partial<CinematicPlan['graphSettings']> | null
+    projectArtStylePreset?: string | null
+  } = {},
+) {
+  const presetFamily = input.presetFamily ?? 'story_movie_tv'
+  const formatSubtype = input.formatSubtype ?? null
+  const profile = getUgcPresetProfile(formatSubtype, presetFamily)
+  const artStyleResolution = resolveAuthorshipArtStylePreset({
+    graphSettings: input.graphSettings ?? null,
+    presetFamily,
+    formatSubtype,
+    projectArtStylePreset: input.projectArtStylePreset ?? null,
+  })
+  return [
+    'You are the GraphCore cinematic shot author.',
+    'Return JSON only.',
+    'Return exactly one JSON object with top-level keys: shots, diagnostics, assistantNotes.',
+    'You are filling authored content for an already locked shot skeleton.',
+    'Do not change shot ids, shot count, shot order, participants, locations, props, preset settings, or graph topology.',
+    'For each supplied shot id, write authored content only for: beat, framing, cameraAngle, cameraMovement, lensPreference, visualPrompt, compositionGuide, dialogue, actions, audio.',
+    'beat must be 1 to 3 full sentences of literal on-screen description.',
+    'beat may not be placeholders like hook, setup, proof, payoff, cta, use case, soft proof, or generic outline tags.',
+    'Write the final camera and prompt language here. This is the canonical creative-writing pass for shot direction.',
+    'framing, cameraAngle, cameraMovement, lensPreference, visualPrompt, and compositionGuide should all be intentionally authored unless the shot is truly static and obvious.',
+    'Dialogue must use actual spoken lines. Do not summarize what someone says.',
+    'Actions must describe only visible on-screen behavior.',
+    'Audio should describe spoken dialogue, ambience, or intentional sound cues only when they materially support the shot.',
+    'If a shot should stay silent, audio may be empty.',
+    'Creator-led formats should include real spoken dialogue in most hook, setup, proof, and CTA shots.',
+    'This output is invalid if preset-required dialogue, actions, or proof are missing.',
+    'Every authored shot must include at least one action beat.',
+    'Do not invent new entities or new reusable refs.',
+    `Locked preset family: ${getCinematicPresetLabel(presetFamily)}.`,
+    formatSubtype ? `Locked format subtype: ${getCinematicFormatSubtypeLabel(formatSubtype)}.` : null,
+    input.formulaFamily ? `Locked formula family: ${input.formulaFamily}.` : null,
+    input.dominantTrigger ? `Locked dominant trigger: ${input.dominantTrigger}.` : null,
+    input.proofMoment ? `Locked proof pattern: ${input.proofMoment}.` : null,
+    input.ctaStyle ? `Locked CTA style: ${input.ctaStyle}.` : null,
+    input.contrastAxis ? `Locked contrast axis: ${input.contrastAxis}.` : null,
+    profile ? `Target use case: ${profile.targetUseCase}` : null,
+    profile ? `Audience intent: ${profile.audienceIntent}` : null,
+    artStyleResolution ? `Effective art style: ${getArtStylePresetLabel(artStyleResolution.presetId)} (${artStyleResolution.source}).` : null,
+    ...getArtStylePresetPromptDirectives(artStyleResolution.presetId),
+    ...presetPlannerInstructions(presetFamily, formatSubtype),
+    ...subtypePlannerInstructions(formatSubtype),
+    ...(presetFamily !== 'story_movie_tv' ? sharedUgcAuthorshipRules(formatSubtype) : []),
+    ...(presetFamily !== 'story_movie_tv' ? subtypeAuthorshipRules(presetFamily, formatSubtype) : []),
+    ...(presetFamily !== 'story_movie_tv' ? roleAuthorshipRules(presetFamily, formatSubtype) : []),
+    ...authorshipGoodBadExamples(presetFamily, formatSubtype),
+    presetFamily === 'ugc_creator'
+      ? 'Creator dialogue should sound like a person speaking privately to camera, not like polished ad copy or broad brand claims.'
+      : null,
+    presetFamily === 'ugc_direct_response_ad'
+      ? 'Direct-response dialogue and visuals should move quickly from pain or curiosity into visible proof. Product function must be legible before the CTA.'
+      : null,
+    presetFamily === 'ugc_faceless_format'
+      ? 'Faceless outputs should stay visual-first. Prefer readable process, screen, or object staging over face-led confessional language.'
+      : null,
+  ].filter((entry): entry is string => Boolean(entry)).join('\n')
+}
+
+function resolveEffectiveGraphSettingsFromRawPlan(rawPlan: z.infer<typeof cinematicPlannerRawSchema>) {
+  const rawGraphSettings = {
+    ...(rawPlan.graphSettings ?? {}),
+    presetFamily: parseNullableEnumValue(cinematicPresetFamilySchema, rawPlan.graphSettings?.presetFamily),
+    formatSubtype: parseNullableEnumValue(cinematicFormatSubtypeSchema, rawPlan.graphSettings?.formatSubtype),
+    formulaFamily: parseNullableEnumValue(cinematicFormulaFamilySchema, rawPlan.graphSettings?.formulaFamily),
+    dominantTrigger: parseNullableEnumValue(cinematicDominantTriggerSchema, rawPlan.graphSettings?.dominantTrigger),
+  }
+  const inferredPresetFamily =
+    rawGraphSettings?.presetFamily
+    ?? inferCinematicPresetFamilyFromPrompt(`${rawPlan.requestSummary} ${rawPlan.graphSummary}`)
+  const correctedSelection = correctUgcPresetSelectionForPromptText({
+    prompt: `${rawPlan.requestSummary} ${rawPlan.graphSummary}`,
+    presetFamily: inferredPresetFamily,
+    formatSubtype: rawGraphSettings?.formatSubtype
+      ?? inferCinematicFormatSubtypeFromPrompt(`${rawPlan.requestSummary} ${rawPlan.graphSummary}`, inferredPresetFamily),
+  })
+  const correctedPresetFamily = correctedSelection.presetFamily
+  const inferredFormatSubtype = coerceFormatSubtypeForPresetFamily(
+    correctedPresetFamily,
+    correctedSelection.formatSubtype,
+  )
+  const presetPatch = buildCinematicSettingsPatchFromPresetFamily(correctedPresetFamily)
+  const subtypePatch = buildCinematicSettingsPatchFromFormatSubtype(correctedPresetFamily, inferredFormatSubtype)
+  const effectiveGraphSettings = {
+    ...presetPatch,
+    ...subtypePatch,
+    ...rawGraphSettings,
+    formatSubtype: inferredFormatSubtype,
+    formulaFamily: rawGraphSettings.formulaFamily ?? subtypePatch.formulaFamily ?? deriveDefaultFormulaFamilyFromFormatSubtype(inferredFormatSubtype),
+    dominantTrigger: rawGraphSettings.dominantTrigger ?? subtypePatch.dominantTrigger ?? deriveDefaultDominantTriggerFromFormatSubtype(inferredFormatSubtype),
+    presetFamily: correctedPresetFamily,
+  }
+
+  return {
+    rawGraphSettings,
+    inferredPresetFamily: correctedPresetFamily,
+    inferredFormatSubtype,
+    effectiveGraphSettings,
+  }
+}
+
+export function materializeCinematicPlanSkeleton(rawPlan: z.infer<typeof cinematicPlannerRawSchema>) {
+  const {
+    inferredPresetFamily,
+    effectiveGraphSettings,
+  } = resolveEffectiveGraphSettingsFromRawPlan(rawPlan)
+  const normalizedShots = rawPlan.shots.map((rawShot) => cinematicShotPlanSchema.parse({
+    ...rawShot,
+    beat: typeof rawShot.beat === 'string' ? rawShot.beat : '',
+    framing: '',
+    cameraAngle: '',
+    cameraMovement: '',
+    lensPreference: '',
+    visualPrompt: '',
+    compositionGuide: '',
+    dialogue: [],
+    actions: [],
+    audio: [],
+  }))
+  const normalizedDerivedShots = normalizedShots.map((shot, index, allShots) => applyPresetDefaultsToShotPlan({
+    shot,
+    presetFamily: inferredPresetFamily,
+    formatSubtype: effectiveGraphSettings.formatSubtype ?? null,
+    formulaFamily: effectiveGraphSettings.formulaFamily ?? null,
+    dominantTrigger: effectiveGraphSettings.dominantTrigger ?? null,
+    contrastAxis: effectiveGraphSettings.contrastAxis ?? '',
+    proofMoment: effectiveGraphSettings.proofMoment ?? '',
+    ctaStyle: effectiveGraphSettings.ctaStyle ?? '',
+    shotIndex: index,
+    shotCount: allShots.length,
+  })).map((shot) => ({
+    ...shot,
+    dialogue: [],
+    actions: [],
+    audio: [],
+  }))
+
+  if (normalizedDerivedShots.length === 0) {
+    throw new Error('Cinematic planner produced zero shots. The cinematic plan is invalid.')
+  }
+
+  return cinematicPlanSchema.parse({
+    graphName: rawPlan.graphName,
+    graphSummary: rawPlan.graphSummary,
+    entityRefs: rawPlan.entityRefs,
+    rawScriptMarkdown: '',
+    scriptDoc: null,
+    relationshipRefs: rawPlan.relationshipRefs,
+    compositeRefPlans: rawPlan.compositeRefPlans,
+    storyboardPlan: rawPlan.storyboardPlan,
+    shots: normalizedDerivedShots,
+    graphSettings: effectiveGraphSettings,
+    autoRun: false,
+  })
+}
+
+export function authorCinematicPlanSkeleton(input: {
+  plan: CinematicPlan
+  authoredShots: z.infer<typeof cinematicShotAuthorshipRawSchema>['shots']
+}) {
+  const authoredById = new Map(input.authoredShots.map((shot) => [shot.id, shot]))
+  return materializeCinematicPlan({
+    requestSummary: input.plan.graphSummary || input.plan.graphName,
+    graphName: input.plan.graphName,
+    graphSummary: input.plan.graphSummary,
+    rawScriptMarkdown: input.plan.rawScriptMarkdown ?? '',
+    entityRefs: input.plan.entityRefs,
+    relationshipRefs: input.plan.relationshipRefs,
+    compositeRefPlans: input.plan.compositeRefPlans,
+    storyboardPlan: input.plan.storyboardPlan,
+    graphSettings: input.plan.graphSettings ?? {},
+    diagnostics: [],
+    assistantNotes: undefined,
+    shots: input.plan.shots.map((shot) => {
+      const authored = authoredById.get(shot.id)
+      const defaultParticipantRefId = shot.participantRefIds.length === 1 ? shot.participantRefIds[0] : null
+      return cinematicShotPlanSchema.parse({
+        ...shot,
+        beat: authored?.beat?.trim() || shot.beat || '',
+        framing: authored?.framing?.trim() || shot.framing || '',
+        cameraAngle: authored?.cameraAngle?.trim() || shot.cameraAngle || '',
+        cameraMovement: authored?.cameraMovement?.trim() || shot.cameraMovement || '',
+        lensPreference: authored?.lensPreference?.trim() || shot.lensPreference || '',
+        visualPrompt: authored?.visualPrompt?.trim() || shot.visualPrompt || '',
+        compositionGuide: authored?.compositionGuide?.trim() || shot.compositionGuide || '',
+        dialogue: (authored?.dialogue ?? shot.dialogue ?? []).map((entry) => ({
+          ...entry,
+          speakerRefId: entry.speakerRefId ?? defaultParticipantRefId,
+        })),
+        actions: (authored?.actions ?? shot.actions ?? []).map((entry) => ({
+          ...entry,
+          actorRefId: entry.actorRefId ?? defaultParticipantRefId,
+        })),
+        audio: authored?.audio ?? shot.audio ?? [],
+      })
+    }),
+    scriptDoc: null,
+    sequence: null,
+  })
+}
 
 export function cinematicGraphAuthorSystemPrompt() {
   return [
@@ -2915,9 +3847,51 @@ export function finalizeCinematicEntityRefs(
   })
 }
 
+function applyPresetDefaultsToShotPlan(input: {
+  shot: z.infer<typeof cinematicShotPlanSchema>
+  presetFamily: z.infer<typeof cinematicPresetFamilySchema>
+  formatSubtype: z.infer<typeof cinematicFormatSubtypeSchema> | null
+  formulaFamily: z.infer<typeof cinematicFormulaFamilySchema> | null
+  dominantTrigger: z.infer<typeof cinematicDominantTriggerSchema> | null
+  contrastAxis: string
+  proofMoment: string
+  ctaStyle: string
+  shotIndex: number
+  shotCount: number
+}) {
+  const effectiveFormatSubtype = coerceFormatSubtypeForPresetFamily(
+    input.presetFamily,
+    input.shot.formatSubtype ?? input.formatSubtype,
+  )
+  const defaults = deriveUgcShotDefaults({
+    presetFamily: input.presetFamily,
+    formatSubtype: effectiveFormatSubtype,
+    shotIndex: input.shotIndex,
+    shotCount: input.shotCount,
+    hookRole: input.shot.hookRole ?? null,
+  })
+
+  return cinematicShotPlanSchema.parse({
+    ...input.shot,
+    hookRole: input.shot.hookRole ?? defaults.hookRole,
+    formatSubtype: effectiveFormatSubtype,
+    formulaFamily: input.shot.formulaFamily ?? input.formulaFamily ?? defaults.formulaFamily,
+    dominantTrigger: input.shot.dominantTrigger ?? input.dominantTrigger ?? defaults.dominantTrigger,
+    hookType: nonEmptyString(input.shot.hookType, defaults.hookType),
+    targetEmotion: nonEmptyString(input.shot.targetEmotion, defaults.targetEmotion),
+    personaStyle: nonEmptyString(input.shot.personaStyle, defaults.personaStyle),
+    contrastAxis: nonEmptyString(input.shot.contrastAxis, input.contrastAxis || defaults.contrastAxis),
+    proofMoment: nonEmptyString(input.shot.proofMoment, input.proofMoment || defaults.proofMoment),
+    ctaStyle: nonEmptyString(input.shot.ctaStyle, input.ctaStyle || defaults.ctaStyle),
+    proofType: nonEmptyString(input.shot.proofType, defaults.proofType),
+    ctaType: nonEmptyString(input.shot.ctaType, defaults.ctaType),
+  })
+}
+
 export function materializeCinematicPlan(rawPlan: z.infer<typeof cinematicPlannerRawSchema>) {
   const rawGraphSettings = {
     ...(rawPlan.graphSettings ?? {}),
+    presetFamily: parseNullableEnumValue(cinematicPresetFamilySchema, rawPlan.graphSettings?.presetFamily),
     formatSubtype: parseNullableEnumValue(cinematicFormatSubtypeSchema, rawPlan.graphSettings?.formatSubtype),
     formulaFamily: parseNullableEnumValue(cinematicFormulaFamilySchema, rawPlan.graphSettings?.formulaFamily),
     dominantTrigger: parseNullableEnumValue(cinematicDominantTriggerSchema, rawPlan.graphSettings?.dominantTrigger),
@@ -2925,13 +3899,19 @@ export function materializeCinematicPlan(rawPlan: z.infer<typeof cinematicPlanne
   const inferredPresetFamily =
     rawGraphSettings?.presetFamily
     ?? inferCinematicPresetFamilyFromPrompt(`${rawPlan.requestSummary} ${rawPlan.graphSummary}`)
-  const inferredFormatSubtype = coerceFormatSubtypeForPresetFamily(
-    inferredPresetFamily,
-    rawGraphSettings?.formatSubtype
+  const correctedSelection = correctUgcPresetSelectionForPromptText({
+    prompt: `${rawPlan.requestSummary} ${rawPlan.graphSummary}`,
+    presetFamily: inferredPresetFamily,
+    formatSubtype: rawGraphSettings?.formatSubtype
       ?? inferCinematicFormatSubtypeFromPrompt(`${rawPlan.requestSummary} ${rawPlan.graphSummary}`, inferredPresetFamily),
+  })
+  const correctedPresetFamily = correctedSelection.presetFamily
+  const inferredFormatSubtype = coerceFormatSubtypeForPresetFamily(
+    correctedPresetFamily,
+    correctedSelection.formatSubtype,
   )
-  const presetPatch = buildCinematicSettingsPatchFromPresetFamily(inferredPresetFamily)
-  const subtypePatch = buildCinematicSettingsPatchFromFormatSubtype(inferredPresetFamily, inferredFormatSubtype)
+  const presetPatch = buildCinematicSettingsPatchFromPresetFamily(correctedPresetFamily)
+  const subtypePatch = buildCinematicSettingsPatchFromFormatSubtype(correctedPresetFamily, inferredFormatSubtype)
   const effectiveGraphSettings = {
     ...presetPatch,
     ...subtypePatch,
@@ -2939,6 +3919,7 @@ export function materializeCinematicPlan(rawPlan: z.infer<typeof cinematicPlanne
     formatSubtype: inferredFormatSubtype,
     formulaFamily: rawGraphSettings.formulaFamily ?? subtypePatch.formulaFamily ?? deriveDefaultFormulaFamilyFromFormatSubtype(inferredFormatSubtype),
     dominantTrigger: rawGraphSettings.dominantTrigger ?? subtypePatch.dominantTrigger ?? deriveDefaultDominantTriggerFromFormatSubtype(inferredFormatSubtype),
+    presetFamily: correctedPresetFamily,
   }
   const sequence = rawPlan.sequence
     ? compileCinematicSequence(cinematicSequenceSchema.parse(rawPlan.sequence))
@@ -3023,6 +4004,12 @@ export function materializeCinematicPlan(rawPlan: z.infer<typeof cinematicPlanne
         compositeRefs: rawPlan.compositeRefPlans,
         storyboard: rawPlan.storyboardPlan,
       }))
+  if (sequence.shots.length === 0) {
+    throw new Error('Cinematic plan materialization produced zero shots. The authored cinematic plan is invalid.')
+  }
+  if (sequence.takes.length === 0) {
+    throw new Error('Cinematic plan materialization produced zero takes. The authored cinematic plan is invalid.')
+  }
   const scriptDoc = deriveCinematicScriptFromSequence(sequence)
   const derivedShots = scriptDoc.shots.map((shot) => cinematicShotPlanSchema.parse({
     id: shot.id,
@@ -3062,17 +4049,47 @@ export function materializeCinematicPlan(rawPlan: z.infer<typeof cinematicPlanne
     actions: shot.actions,
     audio: shot.audio,
   }))
+  const normalizedDerivedShots = derivedShots.map((shot, index, allShots) => applyPresetDefaultsToShotPlan({
+    shot,
+    presetFamily: correctedPresetFamily,
+    formatSubtype: effectiveGraphSettings.formatSubtype ?? null,
+    formulaFamily: effectiveGraphSettings.formulaFamily ?? null,
+    dominantTrigger: effectiveGraphSettings.dominantTrigger ?? null,
+    contrastAxis: effectiveGraphSettings.contrastAxis ?? '',
+    proofMoment: effectiveGraphSettings.proofMoment ?? '',
+    ctaStyle: effectiveGraphSettings.ctaStyle ?? '',
+    shotIndex: index,
+    shotCount: allShots.length,
+  }))
+  const normalizedScriptDoc = cinematicScriptDocSchema.parse({
+    ...scriptDoc,
+    shots: scriptDoc.shots.map((shot, index) => ({
+      ...shot,
+      hookRole: normalizedDerivedShots[index]?.hookRole ?? shot.hookRole,
+      formatSubtype: normalizedDerivedShots[index]?.formatSubtype ?? shot.formatSubtype,
+      formulaFamily: normalizedDerivedShots[index]?.formulaFamily ?? shot.formulaFamily,
+      dominantTrigger: normalizedDerivedShots[index]?.dominantTrigger ?? shot.dominantTrigger,
+      hookType: normalizedDerivedShots[index]?.hookType ?? shot.hookType,
+      targetEmotion: normalizedDerivedShots[index]?.targetEmotion ?? shot.targetEmotion,
+      personaStyle: normalizedDerivedShots[index]?.personaStyle ?? shot.personaStyle,
+      contrastAxis: normalizedDerivedShots[index]?.contrastAxis ?? shot.contrastAxis,
+      proofMoment: normalizedDerivedShots[index]?.proofMoment ?? shot.proofMoment,
+      ctaStyle: normalizedDerivedShots[index]?.ctaStyle ?? shot.ctaStyle,
+      proofType: normalizedDerivedShots[index]?.proofType ?? shot.proofType,
+      ctaType: normalizedDerivedShots[index]?.ctaType ?? shot.ctaType,
+    })),
+  })
 
   return cinematicPlanSchema.parse({
     graphName: rawPlan.graphName,
     graphSummary: rawPlan.graphSummary,
     entityRefs: rawPlan.entityRefs,
     rawScriptMarkdown: rawPlan.rawScriptMarkdown ?? '',
-    scriptDoc,
-    relationshipRefs: scriptDoc.relationships,
-    compositeRefPlans: scriptDoc.compositeRefs,
-    storyboardPlan: scriptDoc.storyboard,
-    shots: derivedShots,
+    scriptDoc: normalizedScriptDoc,
+    relationshipRefs: normalizedScriptDoc.relationships,
+    compositeRefPlans: normalizedScriptDoc.compositeRefs,
+    storyboardPlan: normalizedScriptDoc.storyboard,
+    shots: normalizedDerivedShots,
     graphSettings: effectiveGraphSettings,
     autoRun: false,
   })

@@ -164,6 +164,12 @@ verify_jwt = false
 [functions.poll-world-build]
 verify_jwt = false
 
+[functions.author-cinematic-script]
+verify_jwt = false
+
+[functions.repair-cinematic-script]
+verify_jwt = false
+
 [functions.start-cinematic-run]
 verify_jwt = false
 

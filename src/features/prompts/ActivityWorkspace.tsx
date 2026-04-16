@@ -17,6 +17,26 @@ export function ActivityWorkspace({
 }: ActivityWorkspaceProps) {
   const groupedOperations = selectedPatch ? groupPatchOperations(selectedPatch.operations) : null
   const selectedWorldBuild = selectedPatch?.worldBuildBatch ?? null
+  const selectedCinematicJob = selectedWorldBuild?.jobs.find((job) => job.kind === 'cinematic_graph') ?? null
+  const authoringDiagnosticEntries =
+    selectedCinematicJob?.resultContext && typeof selectedCinematicJob.resultContext === 'object' && Array.isArray(selectedCinematicJob.resultContext.authoringDiagnosticEntries)
+      ? selectedCinematicJob.resultContext.authoringDiagnosticEntries as Array<{
+          scope?: string
+          shotId?: string | null
+          category?: string
+          message?: string
+          severity?: string
+        }>
+      : []
+  const groupedAuthoringDiagnosticEntries = Array.from(
+    authoringDiagnosticEntries.reduce((map, entry) => {
+      const key = entry.shotId ? `shot:${entry.shotId}` : 'graph'
+      const current = map.get(key) ?? []
+      current.push(entry)
+      map.set(key, current)
+      return map
+    }, new Map<string, typeof authoringDiagnosticEntries>()),
+  )
 
   return (
     <div className="focus-layout prompts-layout">
@@ -82,7 +102,7 @@ export function ActivityWorkspace({
                     {!selectedWorldBuild.cinematicPlan.scriptDoc ? (
                       <div className="inline-note">
                         <strong>Script</strong>
-                        <span> authored during the cinematic graph job</span>
+                        <span> planned as a shot skeleton and authored explicitly later</span>
                       </div>
                     ) : null}
                     {selectedWorldBuild.cinematicPlan.scriptDoc ? (
@@ -134,7 +154,32 @@ export function ActivityWorkspace({
                   {selectedWorldBuild.jobs.map((job) => (
                     <div key={job.id} className="inline-note">
                       <strong>{job.kind}</strong>
-                      <span> {job.status}{job.errorMessage ? ` - ${job.errorMessage}` : ''}</span>
+                      <span> {job.status}{job.resultContext && typeof job.resultContext === 'object' && typeof job.resultContext.phase === 'string' ? ` / ${job.resultContext.phase}` : ''}{job.resultContext && typeof job.resultContext === 'object' && Array.isArray(job.resultContext.qualityHardFailures) ? ` / hard ${job.resultContext.qualityHardFailures.length}` : ''}{job.resultContext && typeof job.resultContext === 'object' && Array.isArray(job.resultContext.qualitySoftFailures) ? ` / soft ${job.resultContext.qualitySoftFailures.length}` : ''}{job.errorMessage ? ` - ${job.errorMessage}` : ''}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            {selectedWorldBuild ? (
+              <div className="editor-section compact-section">
+                <div className="section-head">
+                  <div>
+                    <span className="eyebrow">Authorship Diagnostics</span>
+                    <h3>{authoringDiagnosticEntries.length} issue{authoringDiagnosticEntries.length === 1 ? '' : 's'}</h3>
+                  </div>
+                </div>
+                <div className="diagnostic-stack">
+                  {selectedCinematicJob?.resultContext && typeof selectedCinematicJob.resultContext === 'object' && typeof selectedCinematicJob.resultContext.authorshipModelUsed === 'string' ? (
+                    <div className="inline-note">
+                      <strong>Authorship model</strong>
+                      <span> {selectedCinematicJob.resultContext.authorshipModelUsed}{typeof selectedCinematicJob.resultContext.authorshipModelTier === 'string' ? ` / ${selectedCinematicJob.resultContext.authorshipModelTier}` : ''}{typeof selectedCinematicJob.resultContext.correctedFormatSubtype === 'string' ? ` / subtype ${selectedCinematicJob.resultContext.correctedFormatSubtype}` : ''}</span>
+                    </div>
+                  ) : null}
+                  {authoringDiagnosticEntries.length === 0 ? <div className="inline-note">No authored-script diagnostics.</div> : null}
+                  {groupedAuthoringDiagnosticEntries.map(([groupKey, entries]) => (
+                    <div key={groupKey} className="inline-note">
+                      <strong>{groupKey === 'graph' ? 'Graph' : groupKey.replace(/^shot:/, 'Shot ')}</strong>
+                      <span> {entries.map((entry) => `${entry.category ?? 'issue'}${entry.severity ? ` / ${entry.severity}` : ''}: ${entry.message ?? ''}`).join(' | ')}</span>
                     </div>
                   ))}
                 </div>

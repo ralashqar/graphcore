@@ -49,6 +49,15 @@ function createUniqueEdgeKey(edges: GraphDefinition['edges'], source: string, ta
   return candidate
 }
 
+function buildShortDeterministicId(input: string) {
+  let hash = 2166136261
+  for (let index = 0; index < input.length; index += 1) {
+    hash ^= input.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  return (hash >>> 0).toString(36).slice(0, 6) || 'takeid'
+}
+
 function buildTakeSummary(shots: TakeDocumentShotLike[]) {
   const beat = shots.map((shot) => shot.beat.trim()).find((entry) => entry.length > 0)
   if (beat) return truncateLine(beat, 180)
@@ -97,7 +106,7 @@ function readTakeNodeMetadata(graph: GraphDefinition | null | undefined) {
       .filter((node) => node.type === 'cinematic_take')
       .map((node) => {
         const config = getCinematicTakeNodeConfig(node)
-        return [config.id, config] as const
+        return [typeof config.takeIndex === 'number' ? `index:${config.takeIndex}` : `id:${config.id}`, config] as const
       }),
   )
 }
@@ -133,22 +142,26 @@ export function layoutCinematicTakeOnlyNodes(input: {
   preserveTakePositions?: boolean
   preserveExistingPositions?: boolean
 }) {
-  const takePositionById = new Map<string, { x: number; y: number }>()
+  const takePositionByIndex = new Map<number, { x: number; y: number }>()
   const existingNodeByKey = new Map(input.nodes.map((node) => [node.key, node] as const))
   let nextTakeX = CINEMATIC_TAKE_START_X
 
-  for (const take of input.sequence.takes) {
-    const takeNode = input.nodes.find((node) => node.type === 'cinematic_take' && getCinematicTakeNodeConfig(node).id === take.id) ?? null
+  for (const [index, take] of input.sequence.takes.entries()) {
+    const takeNode = input.nodes.find((node) => {
+      if (node.type !== 'cinematic_take') return false
+      const config = getCinematicTakeNodeConfig(node)
+      return (typeof config.takeIndex === 'number' ? config.takeIndex === index : config.id === take.id)
+    }) ?? null
     const preservedPosition = (input.preserveExistingPositions || input.preserveTakePositions) && takeNode?.position
       ? { x: takeNode.position.x, y: input.preserveExistingPositions ? takeNode.position.y : CINEMATIC_TAKE_Y }
       : null
     const position = preservedPosition ?? { x: nextTakeX, y: CINEMATIC_TAKE_Y }
-    takePositionById.set(take.id, position)
+    takePositionByIndex.set(index, position)
     nextTakeX = Math.max(nextTakeX, position.x + CINEMATIC_TAKE_STEP_X)
   }
 
-  const lastTake = input.sequence.takes[input.sequence.takes.length - 1] ?? null
-  const lastTakePosition = lastTake ? takePositionById.get(lastTake.id) ?? null : null
+  const lastTakeIndex = input.sequence.takes.length - 1
+  const lastTakePosition = lastTakeIndex >= 0 ? takePositionByIndex.get(lastTakeIndex) ?? null : null
   const endX = (lastTakePosition?.x ?? CINEMATIC_START_X) + CINEMATIC_TAKE_WIDTH + CINEMATIC_END_GAP_X
 
   const orderedRefNodes = input.nodes
@@ -206,10 +219,11 @@ export function layoutCinematicTakeOnlyNodes(input: {
         const existingNode = existingNodeByKey.get(node.key)
         if (existingNode?.position) return node
       }
-      const takeId = getCinematicTakeNodeConfig(node).id
+      const takeConfig = getCinematicTakeNodeConfig(node)
+      const takeIndex = typeof takeConfig.takeIndex === 'number' ? takeConfig.takeIndex : null
       return {
         ...node,
-        position: takePositionById.get(takeId) ?? node.position,
+        position: (takeIndex !== null ? takePositionByIndex.get(takeIndex) : null) ?? node.position,
       }
     }
 
@@ -222,12 +236,12 @@ export function projectSequenceToTakeOnlyGraph(
   sequenceInput: CinematicSequence,
 ) {
   const compiledSequence = compileCinematicSequence(sequenceInput)
-  const runtimeTakeById = new Map(sequenceInput.takes.map((take) => [take.id, pickTakeRuntimeFields(take)] as const))
+  const runtimeTakeByIndex = new Map(sequenceInput.takes.map((take, index) => [index, pickTakeRuntimeFields(take)] as const))
   const sequence = {
     ...compiledSequence,
-    takes: compiledSequence.takes.map((take) => ({
+    takes: compiledSequence.takes.map((take, index) => ({
       ...take,
-      ...(runtimeTakeById.get(take.id) ?? {}),
+      ...(runtimeTakeByIndex.get(index) ?? {}),
     })),
   } satisfies CinematicSequence
   const scriptDoc = deriveCinematicScriptFromSequence(sequence)
@@ -236,15 +250,17 @@ export function projectSequenceToTakeOnlyGraph(
   const existingTakeNodeByIndex = new Map<number, NodeDefinition>()
 
   existingTakeNodes.forEach((node, index) => {
-    existingTakeNodeByIndex.set(index, node)
-    existingTakeNodeByTakeId.set(getCinematicTakeNodeConfig(node).id, node)
+    const config = getCinematicTakeNodeConfig(node)
+    existingTakeNodeByTakeId.set(config.id, node)
+    existingTakeNodeByIndex.set(typeof config.takeIndex === 'number' ? config.takeIndex : index, node)
   })
 
   const preservedNodes = graph.nodes.filter((node) => node.type !== 'cinematic_take' && node.type !== 'cinematic_shot')
   const usedKeys = new Set(preservedNodes.map((node) => node.key))
   const nextTakeNodes = sequence.takes.map((take, index) => {
-    const existingNode = existingTakeNodeByTakeId.get(take.id) ?? existingTakeNodeByIndex.get(index) ?? null
-    const baseKey = `${graph.key}.cinematic_take_${index + 1}`
+    const existingNode = existingTakeNodeByIndex.get(index) ?? existingTakeNodeByTakeId.get(take.id) ?? null
+    const takeKeySuffix = buildShortDeterministicId(`${graph.key}|${take.id}|${index}`)
+    const baseKey = `${graph.key}.cinematic_take_${index + 1}_${takeKeySuffix}`
     let nextKey = existingNode?.key ?? baseKey
     if (!existingNode) {
       let counter = 1
@@ -286,6 +302,7 @@ export function projectSequenceToTakeOnlyGraph(
         ...(existingNode?.metadata ?? {}),
         ...take,
         takeId: take.id,
+        takeIndex: index,
       },
       display: {
         ...(existingNode?.display ?? { iconAssetKey: null, compactPreview: false }),
@@ -294,7 +311,10 @@ export function projectSequenceToTakeOnlyGraph(
     })
   })
 
-  const takeNodeKeyByTakeId = new Map(nextTakeNodes.map((node) => [getCinematicTakeNodeConfig(node).id, node.key] as const))
+  const takeNodeKeyByTakeIndex = new Map(nextTakeNodes.map((node) => {
+    const config = getCinematicTakeNodeConfig(node)
+    return [typeof config.takeIndex === 'number' ? config.takeIndex : 0, node.key] as const
+  }))
   const retainedEdges = graph.edges.filter((edge) => {
     const sourceNode = graph.nodes.find((node) => node.key === edge.source.nodeKey) ?? null
     const targetNode = graph.nodes.find((node) => node.key === edge.target.nodeKey) ?? null
@@ -309,8 +329,8 @@ export function projectSequenceToTakeOnlyGraph(
   const startNodeKey = preservedNodes.find((node) => node.type === 'start')?.key ?? null
   const endNodeKey = preservedNodes.find((node) => node.type === 'end')?.key ?? null
 
-  sequence.takes.forEach((take, index) => {
-    const takeNodeKey = takeNodeKeyByTakeId.get(take.id)
+  sequence.takes.forEach((_take, index) => {
+    const takeNodeKey = takeNodeKeyByTakeIndex.get(index)
     if (!takeNodeKey) return
     if (index === 0 && startNodeKey) {
       nextEdges.push({
@@ -324,7 +344,7 @@ export function projectSequenceToTakeOnlyGraph(
       })
     }
     if (index > 0) {
-      const previousTakeNodeKey = takeNodeKeyByTakeId.get(sequence.takes[index - 1].id)
+      const previousTakeNodeKey = takeNodeKeyByTakeIndex.get(index - 1)
       if (previousTakeNodeKey) {
         nextEdges.push({
           id: `edge-take-flow-${index}`,
@@ -340,7 +360,7 @@ export function projectSequenceToTakeOnlyGraph(
   })
 
   const lastTakeNodeKey = sequence.takes.length > 0
-    ? takeNodeKeyByTakeId.get(sequence.takes[sequence.takes.length - 1].id) ?? null
+    ? takeNodeKeyByTakeIndex.get(sequence.takes.length - 1) ?? null
     : null
   if (endNodeKey && (lastTakeNodeKey || startNodeKey)) {
     nextEdges.push({
@@ -389,15 +409,15 @@ export function buildTakeFirstCinematicDocument(input: {
   sequence: CinematicSequence
 }) {
   const compiledSequence = compileCinematicSequence(input.sequence)
-  const runtimeTakeById = new Map(input.sequence.takes.map((take) => [take.id, pickTakeRuntimeFields(take)] as const))
+  const runtimeTakeByIndex = new Map(input.sequence.takes.map((take, index) => [index, pickTakeRuntimeFields(take)] as const))
   const sequence = {
     ...compiledSequence,
-    takes: compiledSequence.takes.map((take) => ({
+    takes: compiledSequence.takes.map((take, index) => ({
       ...take,
-      ...(runtimeTakeById.get(take.id) ?? {}),
+      ...(runtimeTakeByIndex.get(index) ?? {}),
     })),
   } satisfies CinematicSequence
-  const takeNodeConfigByTakeId = readTakeNodeMetadata(input.graph)
+  const takeNodeConfigByTakeIdentity = readTakeNodeMetadata(input.graph)
   const shotById = new Map(sequence.shots.map((shot, index) => [shot.id, { shot, sequenceIndex: index }] as const))
 
   return {
@@ -413,7 +433,10 @@ export function buildTakeFirstCinematicDocument(input: {
     compositeRefs: sequence.compositeRefs,
     storyboard: sequence.storyboard,
     takes: sequence.takes.map((take, index) => {
-      const runtimeTake = takeNodeConfigByTakeId.get(take.id)
+      const runtimeTake =
+        takeNodeConfigByTakeIdentity.get(`index:${index}`)
+        ?? takeNodeConfigByTakeIdentity.get(`id:${take.id}`)
+        ?? null
       const shots = take.shotIds
         .map((shotId, takeShotIndex) => {
           const resolved = shotById.get(shotId)

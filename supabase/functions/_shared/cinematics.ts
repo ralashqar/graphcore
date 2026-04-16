@@ -23,9 +23,9 @@ import {
 } from '../../../src/domain/cinematics.ts'
 import { buildAssetSlug } from '../../../src/domain/assets.ts'
 import {
-  getArtStylePresetDescription,
+  getArtStylePresetPromptDirectives,
   getArtStylePresetLabel,
-  getArtStylePromptLabel,
+  resolveArtStylePresetForCinematic,
 } from '../../../src/domain/artStylePresets.ts'
 import { gameSpecSchema } from '../../../src/domain/gameSpec.ts'
 
@@ -96,6 +96,8 @@ function describeSubtypePromptStyle(formatSubtype: ReturnType<typeof getCinemati
       return 'Bias toward naming the viewer behavior, reframing it, and landing an emotional payoff through believable creator delivery.'
     case 'creator_validation':
       return 'Bias toward emotional recognition, reassurance, and low-pressure delivery instead of hard selling.'
+    case 'creator_serialized_drama':
+      return 'Bias toward creator-native storytime or gossip pacing with a strong conflict hook, a delayed reveal, and a soft redemption-led close.'
     case 'ad_problem_solution':
       return 'Bias toward pain, product, proof, and direct response clarity with concrete visible evidence.'
     case 'ad_mechanism_proof':
@@ -104,12 +106,16 @@ function describeSubtypePromptStyle(formatSubtype: ReturnType<typeof getCinemati
       return 'Bias toward transformation framing with before, intervention, and after contrast that reads clearly on mute.'
     case 'ad_comparison':
       return 'Bias toward side-by-side or option-versus-option clarity with a clear winner and visible proof.'
+    case 'ad_trojan_horse_drama':
+      return 'Bias toward story-led social tension where the product arrives as the reveal or rescue, then clearly resolves the problem before the CTA.'
     case 'faceless_demo':
       return 'Bias toward object, product, or workflow readability without relying on a face.'
     case 'faceless_explainer':
       return 'Bias toward wrong-belief hooks, explanation, mechanism, and clean visual reasoning.'
     case 'faceless_process':
       return 'Bias toward process progression, reveal, and satisfying payoff through visibly different stages.'
+    case 'faceless_serialized_drama':
+      return 'Bias toward absurd visual packaging, personified conflict, and a visual reveal/redemption sequence that still reads clearly on mute.'
     case 'contrast_narrative':
       return 'Bias toward escalating two-pole contrast, status or transformation payoff, and loopable visual storytelling. Keep both poles readable and widen the gap each beat.'
     default:
@@ -121,62 +127,88 @@ function subtypeLooksLikeAd(formatSubtype: ReturnType<typeof getCinematicSetting
   return typeof formatSubtype === 'string' && (formatSubtype.startsWith('ad_') || formatSubtype === 'contrast_narrative')
 }
 
+function isSerializedDramaSubtype(formatSubtype: ReturnType<typeof getCinematicSettings>['formatSubtype']) {
+  return (
+    formatSubtype === 'creator_serialized_drama'
+    || formatSubtype === 'ad_trojan_horse_drama'
+    || formatSubtype === 'faceless_serialized_drama'
+  )
+}
+
 function formatOverlayCues(audio: ReturnType<typeof getCinematicShotNodeConfig>['audio']) {
   return audio
     .filter((cue) => cue.kind === 'offscreen' && cue.cue.trim())
     .map((cue) => `Narrator overlay: ${cue.cue.trim()}.`)
 }
 
-function getProjectArtDirection(gameSpec: unknown | null | undefined) {
+function getProjectArtDirection(gameSpec: unknown | null | undefined, graphMetadata?: unknown | null, nodeMetadata?: unknown | null) {
   const rawGameSpec = asRecord(gameSpec)
   const rawTheme = asRecord(rawGameSpec.theme)
+  const rawGraphMetadata = asRecord(graphMetadata)
+  const rawGraphCinematics = asRecord(rawGraphMetadata.cinematics)
+  const rawNodeMetadata = asRecord(nodeMetadata)
   const rawArtStylePreset = asString(rawTheme.artStylePreset)?.trim() ?? ''
   const rawArtStyleDescription = asString(rawTheme.artStyleDescription)?.trim() ?? ''
   const parsed = gameSpecSchema.safeParse(gameSpec ?? null)
   const parsedArtStylePreset = parsed.success ? parsed.data.theme.artStylePreset.trim() : ''
   const parsedArtStyleDescription = parsed.success ? parsed.data.theme.artStyleDescription.trim() : ''
+  const cinematicSettings = getCinematicSettings(gameSpec ?? null, graphMetadata ?? null)
+  const nodeFormatSubtype = asString(rawNodeMetadata.formatSubtype)?.trim() ?? null
+  const nodePresetFamily = asString(rawNodeMetadata.presetFamily)?.trim() ?? null
+  const resolvedArtStyle = resolveArtStylePresetForCinematic({
+    nodeArtStylePreset: asString(rawNodeMetadata.artStylePreset)?.trim() ?? null,
+    graphArtStylePreset: asString(rawGraphCinematics.artStylePreset)?.trim() ?? null,
+    inferredGraphArtStylePreset: cinematicSettings.inferredArtStylePreset,
+    projectArtStylePreset: rawArtStylePreset || parsedArtStylePreset || null,
+    presetFamily: nodePresetFamily || cinematicSettings.presetFamily,
+    formatSubtype: nodeFormatSubtype || cinematicSettings.formatSubtype,
+    useInferredArtStyle: cinematicSettings.useInferredArtStyle,
+  })
 
   return {
-    artStylePreset: rawArtStylePreset || parsedArtStylePreset,
+    artStylePreset: resolvedArtStyle.presetId,
+    projectArtStylePreset: rawArtStylePreset || parsedArtStylePreset,
     artStyleDescription: rawArtStyleDescription || parsedArtStyleDescription,
+    artStyleSource: resolvedArtStyle.source,
+    artStyleReason: resolvedArtStyle.reason,
+    recommendedArtStylePreset: resolvedArtStyle.recommendedPresetId,
   }
 }
 
-function formatProjectArtDirection(gameSpec: unknown | null | undefined) {
-  const direction = getProjectArtDirection(gameSpec)
+function formatProjectArtDirection(gameSpec: unknown | null | undefined, graphMetadata?: unknown | null, nodeMetadata?: unknown | null) {
+  const direction = getProjectArtDirection(gameSpec, graphMetadata, nodeMetadata)
   const presetIdOrLabel = direction.artStylePreset || null
   const presetLabel = getArtStylePresetLabel(presetIdOrLabel)
-  const presetPromptLabel = getArtStylePromptLabel(presetIdOrLabel)
-  const presetDescription = getArtStylePresetDescription(presetIdOrLabel)
-  const styleDescription = direction.artStyleDescription || presetDescription
   return [
     `Art style: ${presetLabel}.`,
-    presetPromptLabel ? `Style target: ${presetPromptLabel}.` : null,
-    styleDescription ? `Style direction: ${styleDescription}.` : null,
+    direction.artStyleSource === 'recommended' || direction.artStyleSource === 'inferred' ? `Cinematic capture override: ${presetLabel}. ${direction.artStyleReason}` : null,
+    ...getArtStylePresetPromptDirectives(presetIdOrLabel),
+    direction.artStyleDescription ? `Custom art direction override: ${direction.artStyleDescription}.` : null,
     'Treat this art direction as a strong style anchor and keep the final rendering language consistent throughout the image.',
   ].filter((entry): entry is string => Boolean(entry))
 }
 
-function buildStoryboardStyleAnchor(gameSpec: unknown | null | undefined, sourceInputs: Array<{ imageUrl?: string | null }>) {
-  const direction = getProjectArtDirection(gameSpec)
+function buildStoryboardStyleAnchor(gameSpec: unknown | null | undefined, graphMetadata: unknown | null | undefined, sourceInputs: Array<{ imageUrl?: string | null }>) {
+  const direction = getProjectArtDirection(gameSpec, graphMetadata, null)
   const presetIdOrLabel = direction.artStylePreset || null
   const presetLabel = getArtStylePresetLabel(presetIdOrLabel)
   const hasImageReferences = sourceInputs.some((entry) => typeof entry.imageUrl === 'string' && entry.imageUrl.trim().length > 0)
   if (hasImageReferences) {
     return [
       `Art style: ${presetLabel}.`,
+      direction.artStyleSource === 'recommended' || direction.artStyleSource === 'inferred' ? `Cinematic capture override: ${presetLabel}. ${direction.artStyleReason}` : null,
+      ...getArtStylePresetPromptDirectives(presetIdOrLabel),
+      direction.artStyleDescription ? `Custom art direction override: ${direction.artStyleDescription}.` : null,
       'Use the provided reference images as the canonical source for character identity, environment design, props, materials, lighting, and overall rendering style.',
       'Place the referenced characters, environments, and objects into the requested panels in the same reference art style.',
     ]
   }
 
-  const presetPromptLabel = getArtStylePromptLabel(presetIdOrLabel)
-  const styleDescription = direction.artStyleDescription || getArtStylePresetDescription(presetIdOrLabel)
-
   return [
     `Use the project art style: ${presetLabel}.`,
-    presetPromptLabel ? `Style target: ${presetPromptLabel}.` : null,
-    styleDescription ? `Style direction: ${styleDescription}.` : null,
+    direction.artStyleSource === 'recommended' || direction.artStyleSource === 'inferred' ? `Cinematic capture override: ${presetLabel}. ${direction.artStyleReason}` : null,
+    ...getArtStylePresetPromptDirectives(presetIdOrLabel),
+    direction.artStyleDescription ? `Custom art direction override: ${direction.artStyleDescription}.` : null,
   ].filter((entry): entry is string => Boolean(entry))
 }
 
@@ -360,21 +392,35 @@ function updateSequenceShotBindingsInGraph(
 
 function updateSequenceTakeBindingsInGraph(
   graph: SnapshotGraph,
-  takeId: string,
+  identifiers: {
+    takeId?: string | null
+    takeIndex?: number | null
+  },
   changes: {
     metadata: Partial<ReturnType<typeof getCinematicTakeNodeConfig>>
   },
 ) {
   const sequence = getCinematicSequence(graph.metadata)
-  const existingTake = sequence.takes.find((take) => take.id === takeId) ?? null
+  const indexedTake = typeof identifiers.takeIndex === 'number' && identifiers.takeIndex >= 0
+    ? sequence.takes[identifiers.takeIndex] ?? null
+    : null
+  const existingTake = indexedTake ?? (
+    identifiers.takeId
+      ? sequence.takes.find((take) => take.id === identifiers.takeId) ?? null
+      : null
+  )
   if (!existingTake) return graph
+  const resolvedTakeIndex = indexedTake
+    ? identifiers.takeIndex ?? sequence.takes.findIndex((take) => take.id === existingTake.id)
+    : sequence.takes.findIndex((take) => take.id === existingTake.id)
 
   const nextSequence = {
     ...sequence,
-    takes: sequence.takes.map((take) => (
-      take.id === takeId
+    takes: sequence.takes.map((take, index) => (
+      index === resolvedTakeIndex
         ? {
             ...take,
+            takeIndex: index,
             ...changes.metadata,
           }
         : take
@@ -817,6 +863,7 @@ export function buildSeedanceExecutionPlan(input: {
 }): SeedanceExecutionPlan {
   const settings = getCinematicSettings(input.snapshot.gameSpec ?? null, input.graph.metadata)
   const shot = getCinematicShotNodeConfig(input.shotNode)
+  const artDirection = getProjectArtDirection(input.snapshot.gameSpec ?? null, input.graph.metadata, input.shotNode.metadata ?? null)
   const sortedInputs = [...input.sourceInputs]
     .filter((entry) => Boolean(entry.assetUrl))
     .sort((left, right) => right.priority - left.priority)
@@ -846,6 +893,8 @@ export function buildSeedanceExecutionPlan(input: {
 
   const promptLines = [
     `Shot: ${input.shotNode.title}.`,
+    `Art style: ${getArtStylePresetLabel(artDirection.artStylePreset)}.`,
+    ...getArtStylePresetPromptDirectives(artDirection.artStylePreset),
     input.shotNode.body?.text ? `Action: ${String(input.shotNode.body.text).trim()}.` : null,
     shot.visualPrompt.trim() ? `Visual direction: ${shot.visualPrompt.trim()}.` : null,
     shot.compositionGuide.trim() ? `Composition: ${shot.compositionGuide.trim()}.` : null,
@@ -902,6 +951,7 @@ export function buildTakeSeedanceExecutionPlan(input: {
 }) {
   const settings = getCinematicSettings(input.snapshot.gameSpec ?? null, input.graph.metadata)
   const take = getCinematicTakeNodeConfig(input.takeNode)
+  const artDirection = getProjectArtDirection(input.snapshot.gameSpec ?? null, input.graph.metadata, input.takeNode.metadata ?? null)
   const sequence = getCinematicSequence(input.graph.metadata)
   const shots = take.shotIds
     .map((shotId) => sequence.shots.find((entry) => entry.id === shotId) ?? null)
@@ -929,6 +979,7 @@ export function buildTakeSeedanceExecutionPlan(input: {
   const droppedRefIds = referenceInputs.filter((entry) => entry.truncated).map((entry) => entry.sourceRefId ?? entry.id)
   const prompt = buildSeedanceTakePrompt({
     projectSummary: input.snapshot.project.summary,
+    artStylePreset: artDirection.artStylePreset,
     take,
     takeTitle: input.takeNode.title,
     presetFamily: settings.presetFamily,
@@ -963,6 +1014,7 @@ export function buildTakeSeedanceExecutionPlan(input: {
 
 function buildSeedanceTakePrompt(input: {
   projectSummary: string
+  artStylePreset: string
   take: ReturnType<typeof getCinematicTakeNodeConfig>
   takeTitle: string
   presetFamily: ReturnType<typeof getCinematicSettings>['presetFamily']
@@ -1024,6 +1076,8 @@ function buildSeedanceTakePrompt(input: {
 
   return [
     `Create one continuous ${input.take.durationSeconds}-second video take titled "${input.takeTitle}".`,
+    `Art style: ${getArtStylePresetLabel(input.artStylePreset)}.`,
+    ...getArtStylePresetPromptDirectives(input.artStylePreset),
     `Preset family: ${getCinematicPresetLabel(input.presetFamily)}.`,
     subtypeLabel ? `Format subtype: ${subtypeLabel}.` : null,
     formulaLabel ? `Planned script formula: ${formulaLabel}.` : null,
@@ -1042,6 +1096,9 @@ function buildSeedanceTakePrompt(input: {
     'Use one dominant action arc and one primary camera path across the take.',
     input.take.formatSubtype === 'contrast_narrative'
       ? 'Keep both poles visible and readable whenever possible, and make the last beat the strongest winner or payoff image.'
+      : null,
+    isSerializedDramaSubtype(input.take.formatSubtype ?? null)
+      ? 'Keep the conflict, reveal, and redemption visually distinct. Let the product or app arrive as the twist or rescue, not as an early interruption.'
       : null,
     subtypeLooksLikeAd(input.take.formatSubtype ?? null)
       ? 'Show the product or mechanism doing its job on screen and make proof legible early.'
@@ -1070,7 +1127,7 @@ export function buildStillPrompt(input: {
 
   return [
     'Create one cinematic keyframe still.',
-    ...formatProjectArtDirection(input.snapshot.gameSpec ?? null),
+    ...formatProjectArtDirection(input.snapshot.gameSpec ?? null, input.graph.metadata, input.shotNode.metadata ?? null),
     describePresetPromptStyle(settings.presetFamily),
     describeSubtypePromptStyle(shot.formatSubtype ?? settings.formatSubtype ?? null),
     `Target aspect ratio: ${settings.stillAspectRatio}.`,
@@ -1094,6 +1151,9 @@ export function buildStillPrompt(input: {
     shot.formatSubtype === 'contrast_narrative'
       ? 'Keep both poles readable in the frame and make the stronger winner state immediately obvious.'
       : null,
+    isSerializedDramaSubtype(shot.formatSubtype ?? settings.formatSubtype ?? null)
+      ? 'If this is a serialized-drama frame, make the emotional conflict or reveal legible in a single glance instead of relying on explanation.'
+      : null,
     'Compose all supplied sources into one coherent scene with consistent scale, lighting, staging, and continuity.',
     'Do not render written words, letters, signage, brand marks, captions, subtitles, logos, watermarks, borders, split panels, or collage layout unless a supplied visual reference explicitly requires a specific real-world marking to remain consistent.',
   ].filter(Boolean).join(' ')
@@ -1114,7 +1174,7 @@ export function buildTakeStillPrompt(input: {
 
   return [
     'Create one representative still frame from this cinematic take.',
-    ...formatProjectArtDirection(input.snapshot.gameSpec ?? null),
+    ...formatProjectArtDirection(input.snapshot.gameSpec ?? null, input.graph.metadata, input.takeNode.metadata ?? null),
     describePresetPromptStyle(settings.presetFamily),
     describeSubtypePromptStyle(take.formatSubtype ?? settings.formatSubtype ?? null),
     `Target aspect ratio: ${settings.stillAspectRatio}.`,
@@ -1140,6 +1200,9 @@ export function buildTakeStillPrompt(input: {
     take.formatSubtype === 'contrast_narrative'
       ? 'Keep both poles legible and choose the frame where the gap or winner state is most obvious.'
       : null,
+    isSerializedDramaSubtype(take.formatSubtype ?? settings.formatSubtype ?? null)
+      ? 'Choose the most legible conflict, reveal, or redemption frame so the serialized story reads even as a single still.'
+      : null,
     'Do not render written words, letters, signage, brand marks, captions, subtitles, logos, watermarks, borders, split panels, or collage layout unless a supplied visual reference explicitly requires a specific real-world marking to remain consistent.',
   ].filter(Boolean).join(' ')
 }
@@ -1154,7 +1217,7 @@ export function buildStoryboardStillPrompt(input: {
   const config = getStoryboardRefNodeConfig(input.storyboardNode)
   const shots = resolveStoryboardTargetShots(input.graph, input.storyboardNode.key)
   const sourceDescriptions = buildStoryboardSourceDescriptions(input.sourceInputs)
-  const styleAnchor = buildStoryboardStyleAnchor(input.snapshot.gameSpec ?? null, input.sourceInputs)
+  const styleAnchor = buildStoryboardStyleAnchor(input.snapshot.gameSpec ?? null, input.graph.metadata, input.sourceInputs)
 
   if (config.storyboardKind === 'sequence_board') {
     const panelCount = Math.min(shots.length, 9)
@@ -1201,7 +1264,7 @@ export function buildTakeStoryboardStillPrompt(input: {
     .map((shotId) => sequence.shots.find((shot) => shot.id === shotId) ?? null)
     .filter((shot): shot is typeof sequence.shots[number] => Boolean(shot))
   const sourceDescriptions = buildStoryboardSourceDescriptions(input.sourceInputs)
-  const styleAnchor = buildStoryboardStyleAnchor(input.snapshot.gameSpec ?? null, input.sourceInputs)
+  const styleAnchor = buildStoryboardStyleAnchor(input.snapshot.gameSpec ?? null, input.graph.metadata, input.sourceInputs)
   const panelCount = Math.min(shots.length, 9)
 
   return [
@@ -1264,6 +1327,34 @@ function inferStorageFileExtension(kind: 'image' | 'video', sourceUrl: string | 
   return '.png'
 }
 
+function normalizeStorageSlug(value: string, maxLength = 48) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, maxLength)
+}
+
+function hashStorageIdentity(value: string) {
+  let hash = 2166136261
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  return (hash >>> 0).toString(36)
+}
+
+function buildDeterministicScopedIdentity(value: string) {
+  const primary = hashStorageIdentity(value)
+  const secondary = hashStorageIdentity(`v2|${value}|take_asset`)
+  return `${primary}${secondary}`
+}
+
+function isProjectAssetStoragePathConflict(message: string | null | undefined) {
+  return typeof message === 'string'
+    && message.includes('project_assets_project_id_storage_path_key')
+}
+
 function toAssetDefinition(row: {
   id: string
   key: string
@@ -1286,10 +1377,22 @@ function toAssetDefinition(row: {
   }
 }
 
-function buildExternalGeneratedImageStoragePath(assetKey: string, sourceUrl: string | null, requestId: string | null) {
+function buildExternalGeneratedImageStoragePath(
+  assetKey: string,
+  sourceUrl: string | null,
+  requestId: string | null,
+  variant?: string | null,
+) {
   const extension = inferStorageFileExtension('image', sourceUrl, null)
-  const storageSlug = buildAssetSlug(`${assetKey}_${requestId ?? 'generated'}`) || buildAssetSlug(assetKey) || 'generated_asset'
-  return `external/generated/${storageSlug}${extension}`
+  const assetSlug = normalizeStorageSlug(assetKey, 48) || 'generated_asset'
+  const requestSlug = normalizeStorageSlug(requestId ?? 'generated', 20) || 'generated'
+  const identity = hashStorageIdentity([
+    assetKey,
+    requestId ?? 'generated',
+    sourceUrl ?? '',
+    variant ?? '',
+  ].join('|'))
+  return `external/generated/${assetSlug}_${requestSlug}_${identity}${extension}`
 }
 
 async function loadProjectAssetByKey(
@@ -1324,7 +1427,6 @@ export async function reserveGeneratedImageAsset(input: {
   const currentMetadata = existingAsset?.metadata && typeof existingAsset.metadata === 'object'
     ? existingAsset.metadata as Record<string, unknown>
     : {}
-  const storagePath = buildExternalGeneratedImageStoragePath(assetKey, null, null)
   const desiredMetadata = {
     ...currentMetadata,
     ...input.metadata,
@@ -1333,34 +1435,42 @@ export async function reserveGeneratedImageAsset(input: {
     generationError: null,
   }
 
-  const persistedAsset = existingAsset
-    ? await input.client
-        .from('project_assets')
-        .update({
-          name: input.name,
-          kind: 'image',
-          mime_type: 'image/png',
-          storage_path: storagePath,
-          metadata: desiredMetadata,
-        })
-        .eq('id', existingAsset.id)
-        .select('id, key, name, kind, mime_type, storage_path, metadata, llm_hints')
-        .single()
-    : await input.client
-        .from('project_assets')
-        .insert({
-          project_id: input.projectId,
-          key: assetKey,
-          name: input.name,
-          kind: 'image',
-          mime_type: 'image/png',
-          storage_path: storagePath,
-          metadata: desiredMetadata,
-          llm_hints: {},
-          created_by: input.userId,
-        })
-        .select('id, key, name, kind, mime_type, storage_path, metadata, llm_hints')
-        .single()
+  const persistReservedAsset = async (variant?: string | null) => {
+    const storagePath = buildExternalGeneratedImageStoragePath(assetKey, null, null, variant)
+    return existingAsset
+      ? await input.client
+          .from('project_assets')
+          .update({
+            name: input.name,
+            kind: 'image',
+            mime_type: 'image/png',
+            storage_path: storagePath,
+            metadata: desiredMetadata,
+          })
+          .eq('id', existingAsset.id)
+          .select('id, key, name, kind, mime_type, storage_path, metadata, llm_hints')
+          .single()
+      : await input.client
+          .from('project_assets')
+          .insert({
+            project_id: input.projectId,
+            key: assetKey,
+            name: input.name,
+            kind: 'image',
+            mime_type: 'image/png',
+            storage_path: storagePath,
+            metadata: desiredMetadata,
+            llm_hints: {},
+            created_by: input.userId,
+          })
+          .select('id, key, name, kind, mime_type, storage_path, metadata, llm_hints')
+          .single()
+  }
+
+  let persistedAsset = await persistReservedAsset()
+  if (persistedAsset.error && isProjectAssetStoragePathConflict(persistedAsset.error.message)) {
+    persistedAsset = await persistReservedAsset(crypto.randomUUID())
+  }
 
   if (persistedAsset.error || !persistedAsset.data) {
     throw new Error(persistedAsset.error?.message ?? 'Failed to reserve generated image asset.')
@@ -1373,16 +1483,25 @@ export function buildGraphScopedTakeAssetKey(input: {
   graphKey: string
   takeNodeKey: string
   kind: 'storyboard' | 'still' | 'video'
+  uniqueScope?: string | null
 }) {
-  const graphSlug = buildAssetSlug(input.graphKey) || 'graph'
-  const takeSlug = buildAssetSlug(input.takeNodeKey) || 'take'
+  const graphHint = normalizeStorageSlug(input.graphKey.split('.').pop() ?? input.graphKey, 16) || 'graph'
+  const takeHint = normalizeStorageSlug(input.takeNodeKey.split('.').pop() ?? input.takeNodeKey, 16) || 'take'
+  const identity = buildDeterministicScopedIdentity([
+    'cinematic_take_asset',
+    'v3',
+    input.kind,
+    input.graphKey,
+    input.takeNodeKey,
+    input.uniqueScope ?? '',
+  ].join('|'))
   const suffix = input.kind === 'storyboard'
     ? 'storyboard'
     : input.kind === 'still'
       ? 'still'
       : 'video'
   const assetKind = input.kind === 'video' ? 'video' : 'image'
-  return `${assetKind}.cinematic_take_${graphSlug}_${takeSlug}_${suffix}`
+  return `${assetKind}.cinematic_take_v3_${graphHint}_${takeHint}_${identity}_${suffix}`
 }
 
 export async function completeReservedGeneratedImageAsset(input: {
@@ -1402,28 +1521,35 @@ export async function completeReservedGeneratedImageAsset(input: {
     ? existingAsset.metadata as Record<string, unknown>
     : {}
   const requestId = typeof input.metadata.requestId === 'string' ? input.metadata.requestId : null
-  const storagePath = buildExternalGeneratedImageStoragePath(input.assetKey, input.imageUrl, requestId)
-  const persistedAsset = await input.client
-    .from('project_assets')
-    .update({
-      name: input.name?.trim() || existingAsset.name,
-      kind: 'image',
-      mime_type: inferStorageFileExtension('image', input.imageUrl, null) === '.webp' ? 'image/webp' : 'image/png',
-      storage_path: storagePath,
-      metadata: {
-        ...currentMetadata,
-        ...input.metadata,
-        placeholder: false,
-        generationStatus: 'completed',
-        generationError: null,
-        sourceUrl: input.imageUrl,
-        previewUrl: input.imageUrl,
-        generatedAt: new Date().toISOString(),
-      },
-    })
-    .eq('id', existingAsset.id)
-    .select('id, key, name, kind, mime_type, storage_path, metadata, llm_hints')
-    .single()
+  const persistCompletedAsset = async (variant?: string | null) => {
+    const storagePath = buildExternalGeneratedImageStoragePath(input.assetKey, input.imageUrl, requestId, variant)
+    return input.client
+      .from('project_assets')
+      .update({
+        name: input.name?.trim() || existingAsset.name,
+        kind: 'image',
+        mime_type: inferStorageFileExtension('image', input.imageUrl, null) === '.webp' ? 'image/webp' : 'image/png',
+        storage_path: storagePath,
+        metadata: {
+          ...currentMetadata,
+          ...input.metadata,
+          placeholder: false,
+          generationStatus: 'completed',
+          generationError: null,
+          sourceUrl: input.imageUrl,
+          previewUrl: input.imageUrl,
+          generatedAt: new Date().toISOString(),
+        },
+      })
+      .eq('id', existingAsset.id)
+      .select('id, key, name, kind, mime_type, storage_path, metadata, llm_hints')
+      .single()
+  }
+
+  let persistedAsset = await persistCompletedAsset()
+  if (persistedAsset.error && isProjectAssetStoragePathConflict(persistedAsset.error.message)) {
+    persistedAsset = await persistCompletedAsset(crypto.randomUUID())
+  }
 
   if (persistedAsset.error || !persistedAsset.data) {
     throw new Error(persistedAsset.error?.message ?? `Failed to complete generated image asset "${input.assetKey}".`)
@@ -1491,8 +1617,7 @@ export async function createStoredGeneratedAsset(input: {
   if (input.kind === 'image') {
     const extension = inferStorageFileExtension(input.kind, input.sourceUrl, null)
     mimeType = extension === '.webp' ? 'image/webp' : 'image/png'
-    const storageSlug = buildAssetSlug(`${assetKey}_${input.runId}`) || buildAssetSlug(assetKey) || 'generated_asset'
-    storagePath = `external/generated/${storageSlug}${extension}`
+    storagePath = buildExternalGeneratedImageStoragePath(assetKey, input.sourceUrl, input.runId)
   } else {
     const uploadSource = await fetch(input.sourceUrl)
     if (!uploadSource.ok) {
@@ -1540,37 +1665,53 @@ export async function createStoredGeneratedAsset(input: {
     throw new Error(existingAsset.error.message)
   }
 
-  const persistedAsset = existingAsset?.data
-    ? await input.client
-        .from('project_assets')
-        .update({
-          name: input.name,
-          kind: input.kind,
-          mime_type: mimeType,
-          storage_path: storagePath,
-          metadata: {
-            ...((existingAsset.data.metadata ?? {}) as Record<string, unknown>),
-            ...desiredMetadata,
-          },
-        })
-        .eq('id', existingAsset.data.id)
-        .select('id, key, name, kind, mime_type, storage_path, metadata, llm_hints')
-        .single()
-    : await input.client
-        .from('project_assets')
-        .insert({
-          project_id: input.projectId,
-          key: assetKey,
-          name: input.name,
-          kind: input.kind,
-          mime_type: mimeType,
-          storage_path: storagePath,
-          metadata: desiredMetadata,
-          llm_hints: {},
-          created_by: input.userId,
-        })
-        .select('id, key, name, kind, mime_type, storage_path, metadata, llm_hints')
-        .single()
+  const persistStoredAsset = async (variant?: string | null) => {
+    const effectiveStoragePath =
+      input.kind === 'image'
+        ? buildExternalGeneratedImageStoragePath(assetKey, input.sourceUrl, input.runId, variant)
+        : storagePath
+
+    return existingAsset?.data
+      ? await input.client
+          .from('project_assets')
+          .update({
+            name: input.name,
+            kind: input.kind,
+            mime_type: mimeType,
+            storage_path: effectiveStoragePath,
+            metadata: {
+              ...((existingAsset.data.metadata ?? {}) as Record<string, unknown>),
+              ...desiredMetadata,
+            },
+          })
+          .eq('id', existingAsset.data.id)
+          .select('id, key, name, kind, mime_type, storage_path, metadata, llm_hints')
+          .single()
+      : await input.client
+          .from('project_assets')
+          .insert({
+            project_id: input.projectId,
+            key: assetKey,
+            name: input.name,
+            kind: input.kind,
+            mime_type: mimeType,
+            storage_path: effectiveStoragePath,
+            metadata: desiredMetadata,
+            llm_hints: {},
+            created_by: input.userId,
+          })
+          .select('id, key, name, kind, mime_type, storage_path, metadata, llm_hints')
+          .single()
+  }
+
+  let persistedAsset = await persistStoredAsset()
+  if (
+    input.kind === 'image'
+    && persistedAsset.error
+    && isProjectAssetStoragePathConflict(persistedAsset.error.message)
+  ) {
+    persistedAsset = await persistStoredAsset(crypto.randomUUID())
+  }
 
   if (persistedAsset.error || !persistedAsset.data) {
     throw new Error(persistedAsset.error?.message ?? `Failed to store generated ${input.kind} asset.`)
@@ -1676,19 +1817,30 @@ export async function persistTakeBindingsIfPresent(
   const currentBody = asRecord(nodeRow.data.body)
   const currentMetadata = asRecord(nodeRow.data.metadata)
   const currentDisplay = asRecord(nodeRow.data.display)
-  const resolvedTakeId = changes.metadata.takeId ?? getCinematicTakeNodeConfig({ metadata: currentMetadata }).id
+  const currentTakeConfig = getCinematicTakeNodeConfig({ metadata: currentMetadata })
+  const resolvedTakeId = changes.metadata.takeId ?? currentTakeConfig.id
+  const resolvedTakeIndex =
+    typeof changes.metadata.takeIndex === 'number'
+      ? changes.metadata.takeIndex
+      : typeof currentTakeConfig.takeIndex === 'number'
+        ? currentTakeConfig.takeIndex
+        : null
 
-  if (resolvedTakeId) {
+  if (resolvedTakeId || resolvedTakeIndex !== null) {
     const nextMetadata = updateSequenceTakeBindingsInGraph({
       key: graphKey,
       name: graphKey,
       nodes: [],
       edges: [],
       metadata: asRecord(graphRow.data.metadata),
-    } as SnapshotGraph, resolvedTakeId, {
+    } as SnapshotGraph, {
+      takeId: resolvedTakeId,
+      takeIndex: resolvedTakeIndex,
+    }, {
       metadata: {
         ...changes.metadata,
         takeId: resolvedTakeId,
+        takeIndex: resolvedTakeIndex,
       },
     }).metadata
 
@@ -1810,9 +1962,19 @@ export function applyTakeBindingToGraph(
   },
 ) {
   const currentTakeNode = graph.nodes.find((node) => node.key === takeNodeKey) ?? null
+  const currentTakeConfig = currentTakeNode ? getCinematicTakeNodeConfig(currentTakeNode) : null
   const takeId = changes.metadata.takeId
-    ?? (currentTakeNode ? getCinematicTakeNodeConfig(currentTakeNode).id : null)
-  const nextGraph = takeId ? updateSequenceTakeBindingsInGraph(graph, takeId, { metadata: changes.metadata }) : graph
+    ?? currentTakeConfig?.id
+    ?? null
+  const takeIndex =
+    typeof changes.metadata.takeIndex === 'number'
+      ? changes.metadata.takeIndex
+      : typeof currentTakeConfig?.takeIndex === 'number'
+        ? currentTakeConfig.takeIndex
+        : null
+  const nextGraph = (takeId || takeIndex !== null)
+    ? updateSequenceTakeBindingsInGraph(graph, { takeId, takeIndex }, { metadata: { ...changes.metadata, takeId, takeIndex } })
+    : graph
 
   return {
     ...nextGraph,

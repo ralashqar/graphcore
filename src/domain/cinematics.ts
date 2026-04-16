@@ -1,4 +1,10 @@
 import { z } from 'zod'
+import {
+  deriveUgcShotDefaults,
+  getDefaultUgcFormatSubtypeForPresetFamily,
+  getUgcPresetProfile,
+} from './ugcPresetProfiles.ts'
+import { getRecommendedArtStylePresetForCinematic } from './artStylePresets.ts'
 
 const rawRecordSchema = z.record(z.string(), z.unknown())
 const normalizeEnumCandidate = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
@@ -22,13 +28,16 @@ export const cinematicFormatSubtypeSchema = z.enum([
   'creator_problem_solution',
   'creator_reframe',
   'creator_validation',
+  'creator_serialized_drama',
   'ad_problem_solution',
   'ad_mechanism_proof',
   'ad_before_after',
   'ad_comparison',
+  'ad_trojan_horse_drama',
   'faceless_demo',
   'faceless_explainer',
   'faceless_process',
+  'faceless_serialized_drama',
   'contrast_narrative',
 ])
 export const cinematicFormulaFamilySchema = z.enum([
@@ -75,6 +84,9 @@ export const cinematicSettingsSchema = z.object({
   videoResolution: cinematicVideoResolutionSchema.default('720p'),
   defaultClipSeconds: z.number().int().min(4).max(15).default(5),
   defaultFps: z.number().int().positive().max(60).default(24),
+  artStylePreset: z.string().nullable().default(null),
+  inferredArtStylePreset: z.string().nullable().default(null),
+  useInferredArtStyle: z.boolean().default(true),
   presetFamily: cinematicPresetFamilySchema.default('story_movie_tv'),
   presetId: z.string().default('story_movie_tv'),
   formatSubtype: z.preprocess(coerceEnumLikeValue(cinematicFormatSubtypeSchema.options), cinematicFormatSubtypeSchema.nullable()).default(null),
@@ -226,6 +238,7 @@ export const cinematicScriptShotSchema = z.object({
   proofType: z.string().default(''),
   ctaType: z.string().default(''),
   platformTarget: cinematicPlatformTargetSchema.nullable().default(null),
+  artStylePreset: z.string().nullable().default(null),
   shotType: z.enum(['establishing', 'dialogue', 'reveal', 'action', 'insert', 'transition', 'custom']).default('custom'),
   framing: z.string().default(''),
   cameraAngle: z.string().default(''),
@@ -314,6 +327,7 @@ export const cinematicShotSpecSchema = z.object({
   proofType: z.string().default(''),
   ctaType: z.string().default(''),
   platformTarget: cinematicPlatformTargetSchema.nullable().default(null),
+  artStylePreset: z.string().nullable().default(null),
   shotType: z.enum(['establishing', 'dialogue', 'reveal', 'action', 'insert', 'transition', 'custom']).default('custom'),
   framing: z.string().default(''),
   cameraAngle: z.string().default(''),
@@ -353,6 +367,7 @@ export const cinematicShotNodeConfigSchema = cinematicShotSpecSchema
 
 export const cinematicTakeSpecSchema = z.object({
   id: z.string(),
+  takeIndex: z.number().int().nonnegative().nullable().default(null),
   title: z.string(),
   shotIds: z.array(z.string()).default([]),
   durationSeconds: z.number().int().min(4).max(15),
@@ -364,6 +379,7 @@ export const cinematicTakeSpecSchema = z.object({
   formatSubtype: z.preprocess(coerceEnumLikeValue(cinematicFormatSubtypeSchema.options), cinematicFormatSubtypeSchema.nullable()).default(null),
   formulaFamily: z.preprocess(coerceEnumLikeValue(cinematicFormulaFamilySchema.options), cinematicFormulaFamilySchema.nullable()).default(null),
   dominantTrigger: z.preprocess(coerceEnumLikeValue(cinematicDominantTriggerSchema.options), cinematicDominantTriggerSchema.nullable()).default(null),
+  artStylePreset: z.string().nullable().default(null),
   contrastAxis: z.string().default(''),
   proofMoment: z.string().default(''),
   ctaStyle: z.string().default(''),
@@ -534,6 +550,7 @@ export type CinematicPresetFamily = z.infer<typeof cinematicPresetFamilySchema>
 export type CinematicFormatSubtype = z.infer<typeof cinematicFormatSubtypeSchema>
 export type CinematicFormulaFamily = z.infer<typeof cinematicFormulaFamilySchema>
 export type CinematicDominantTrigger = z.infer<typeof cinematicDominantTriggerSchema>
+export type CinematicHookRole = z.infer<typeof cinematicHookRoleSchema>
 export type CinematicReference = z.infer<typeof cinematicReferenceSchema>
 export type CinematicCompositeReference = z.infer<typeof cinematicCompositeReferenceSchema>
 export type CinematicRelationship = z.infer<typeof cinematicRelationshipSchema>
@@ -589,10 +606,7 @@ export function isUgcPresetFamily(presetFamily: CinematicPresetFamily) {
 }
 
 export function deriveDefaultFormatSubtypeFromPresetFamily(presetFamily: CinematicPresetFamily): CinematicFormatSubtype | null {
-  if (presetFamily === 'ugc_creator') return 'creator_problem_solution'
-  if (presetFamily === 'ugc_direct_response_ad') return 'ad_problem_solution'
-  if (presetFamily === 'ugc_faceless_format') return 'faceless_demo'
-  return null
+  return getDefaultUgcFormatSubtypeForPresetFamily(presetFamily)
 }
 
 export function deriveDefaultStillAspectRatioFromPresetFamily(presetFamily: CinematicPresetFamily): CinematicSettings['stillAspectRatio'] {
@@ -600,61 +614,11 @@ export function deriveDefaultStillAspectRatioFromPresetFamily(presetFamily: Cine
 }
 
 export function deriveDefaultFormulaFamilyFromFormatSubtype(formatSubtype: CinematicFormatSubtype | null | undefined): CinematicFormulaFamily | null {
-  switch (formatSubtype) {
-    case 'creator_problem_solution':
-      return 'problem_solution'
-    case 'creator_reframe':
-      return 'reframe'
-    case 'creator_validation':
-      return 'validation'
-    case 'ad_problem_solution':
-      return 'problem_solution'
-    case 'ad_mechanism_proof':
-      return 'mechanism_proof'
-    case 'ad_before_after':
-      return 'before_after'
-    case 'ad_comparison':
-      return 'contrast_comparison'
-    case 'faceless_demo':
-      return 'mechanism_proof'
-    case 'faceless_explainer':
-      return 'doing_it_wrong'
-    case 'faceless_process':
-      return 'result_reveal'
-    case 'contrast_narrative':
-      return 'contrast_narrative'
-    default:
-      return null
-  }
+  return getUgcPresetProfile(formatSubtype)?.defaultFormulaFamily ?? null
 }
 
 export function deriveDefaultDominantTriggerFromFormatSubtype(formatSubtype: CinematicFormatSubtype | null | undefined): CinematicDominantTrigger | null {
-  switch (formatSubtype) {
-    case 'creator_problem_solution':
-      return 'curiosity_gap'
-    case 'creator_reframe':
-      return 'belief_reset'
-    case 'creator_validation':
-      return 'parasocial_reassurance'
-    case 'ad_problem_solution':
-      return 'transformation_desire'
-    case 'ad_mechanism_proof':
-      return 'curiosity_gap'
-    case 'ad_before_after':
-      return 'transformation_desire'
-    case 'ad_comparison':
-      return 'status_comparison'
-    case 'faceless_demo':
-      return 'curiosity_gap'
-    case 'faceless_explainer':
-      return 'belief_reset'
-    case 'faceless_process':
-      return 'transformation_desire'
-    case 'contrast_narrative':
-      return 'status_comparison'
-    default:
-      return null
-  }
+  return getUgcPresetProfile(formatSubtype)?.defaultDominantTrigger ?? null
 }
 
 export function isFormatSubtypeAllowedForPresetFamily(
@@ -700,6 +664,8 @@ export function getCinematicFormatSubtypeLabel(formatSubtype: CinematicFormatSub
       return 'Creator Reframe'
     case 'creator_validation':
       return 'Creator Validation'
+    case 'creator_serialized_drama':
+      return 'Creator Serialized Drama'
     case 'ad_problem_solution':
       return 'Ad Problem / Solution'
     case 'ad_mechanism_proof':
@@ -708,12 +674,16 @@ export function getCinematicFormatSubtypeLabel(formatSubtype: CinematicFormatSub
       return 'Ad Before / After'
     case 'ad_comparison':
       return 'Ad Comparison'
+    case 'ad_trojan_horse_drama':
+      return 'Ad Trojan Horse Drama'
     case 'faceless_demo':
       return 'Faceless Demo'
     case 'faceless_explainer':
       return 'Faceless Explainer'
     case 'faceless_process':
       return 'Faceless Process'
+    case 'faceless_serialized_drama':
+      return 'Faceless Serialized Drama'
     case 'contrast_narrative':
       return 'Contrast Narrative'
   }
@@ -749,25 +719,38 @@ export function getCinematicFormulaFamilyLabel(formulaFamily: CinematicFormulaFa
 export function buildCinematicSettingsPatchFromFormatSubtype(
   presetFamily: CinematicPresetFamily,
   formatSubtype: CinematicFormatSubtype | null,
-): Pick<CinematicSettings, 'formatSubtype' | 'formulaFamily' | 'dominantTrigger'> {
+): Pick<CinematicSettings, 'formatSubtype' | 'formulaFamily' | 'dominantTrigger' | 'proofMoment' | 'ctaStyle' | 'contrastAxis' | 'stillAspectRatio' | 'defaultClipSeconds' | 'inferredArtStylePreset'> {
   const nextSubtype = coerceFormatSubtypeForPresetFamily(presetFamily, formatSubtype)
+  const profile = getUgcPresetProfile(nextSubtype, presetFamily)
   return {
     formatSubtype: nextSubtype,
     formulaFamily: deriveDefaultFormulaFamilyFromFormatSubtype(nextSubtype),
     dominantTrigger: deriveDefaultDominantTriggerFromFormatSubtype(nextSubtype),
+    proofMoment: profile?.defaultProofMoment ?? '',
+    ctaStyle: profile?.defaultCtaStyle ?? '',
+    contrastAxis: profile?.defaultContrastAxis ?? '',
+    stillAspectRatio: profile?.preferredAspectRatio ?? deriveDefaultStillAspectRatioFromPresetFamily(presetFamily),
+    defaultClipSeconds: profile?.preferredClipSeconds ?? defaultCinematicSettings.defaultClipSeconds,
+    inferredArtStylePreset: getRecommendedArtStylePresetForCinematic({ presetFamily, formatSubtype: nextSubtype }),
   }
 }
 
-export function buildCinematicSettingsPatchFromPresetFamily(presetFamily: CinematicPresetFamily): Pick<CinematicSettings, 'presetFamily' | 'presetId' | 'specializationMode' | 'formatSubtype' | 'formulaFamily' | 'dominantTrigger' | 'stillAspectRatio'> {
+export function buildCinematicSettingsPatchFromPresetFamily(presetFamily: CinematicPresetFamily): Pick<CinematicSettings, 'presetFamily' | 'presetId' | 'specializationMode' | 'formatSubtype' | 'formulaFamily' | 'dominantTrigger' | 'proofMoment' | 'ctaStyle' | 'contrastAxis' | 'stillAspectRatio' | 'defaultClipSeconds' | 'inferredArtStylePreset'> {
   const formatSubtype = coerceFormatSubtypeForPresetFamily(presetFamily, null)
+  const profile = getUgcPresetProfile(formatSubtype, presetFamily)
   return {
     presetFamily,
     presetId: presetFamily,
-    stillAspectRatio: deriveDefaultStillAspectRatioFromPresetFamily(presetFamily),
+    stillAspectRatio: profile?.preferredAspectRatio ?? deriveDefaultStillAspectRatioFromPresetFamily(presetFamily),
+    defaultClipSeconds: profile?.preferredClipSeconds ?? defaultCinematicSettings.defaultClipSeconds,
     formatSubtype,
     formulaFamily: deriveDefaultFormulaFamilyFromFormatSubtype(formatSubtype),
     dominantTrigger: deriveDefaultDominantTriggerFromFormatSubtype(formatSubtype),
+    proofMoment: profile?.defaultProofMoment ?? '',
+    ctaStyle: profile?.defaultCtaStyle ?? '',
+    contrastAxis: profile?.defaultContrastAxis ?? '',
     specializationMode: deriveSpecializationModeFromPresetFamily(presetFamily),
+    inferredArtStylePreset: getRecommendedArtStylePresetForCinematic({ presetFamily, formatSubtype }),
   }
 }
 
@@ -894,13 +877,29 @@ function fillBeatTimingsForShot(shot: CinematicScriptShot, durationSeconds: numb
     }
   })
 
+  const unspecifiedActions = shot.actions.filter((action) => typeof action.startSeconds !== 'number' && typeof action.endSeconds !== 'number')
+  const actionSlotSeconds = unspecifiedActions.length > 0 ? durationSeconds / unspecifiedActions.length : durationSeconds
+  let unspecifiedActionIndex = 0
   const nextActions = shot.actions.map((action) => {
     const actionDuration = typeof action.startSeconds === 'number' && typeof action.endSeconds === 'number'
       ? Math.max(0, action.endSeconds - action.startSeconds)
       : estimateActionDurationSeconds(action)
-    const startSeconds = action.startSeconds ?? Math.min(cursor, Math.max(0, durationSeconds - 1))
-    const endSeconds = action.endSeconds ?? Math.min(durationSeconds, startSeconds + actionDuration)
-    cursor = Math.max(cursor, endSeconds)
+    const hasExplicitTiming = typeof action.startSeconds === 'number' || typeof action.endSeconds === 'number'
+    const inferredStartSeconds = hasExplicitTiming
+      ? null
+      : Math.min(
+          Math.max(0, durationSeconds - 1),
+          Math.max(0, Math.round(actionSlotSeconds * unspecifiedActionIndex)),
+        )
+    const inferredEndSeconds = hasExplicitTiming
+      ? null
+      : Math.min(durationSeconds, (inferredStartSeconds ?? 0) + Math.max(1, Math.min(3, actionDuration)))
+    if (!hasExplicitTiming) {
+      unspecifiedActionIndex += 1
+    }
+    const startSeconds = action.startSeconds ?? inferredStartSeconds
+    const endSeconds = action.endSeconds ?? inferredEndSeconds
+    cursor = Math.max(cursor, endSeconds ?? cursor)
     return {
       ...action,
       startSeconds,
@@ -1026,6 +1025,7 @@ function buildCompiledTakes(shots: Array<CinematicScriptShot & {
         : 'reference-to-video'
     takes.push(cinematicTakeSpecSchema.parse({
       id: `take_${takes.length + 1}`,
+      takeIndex: takes.length,
       title: `Take ${takes.length + 1}`,
       shotIds,
       durationSeconds,
@@ -1206,9 +1206,8 @@ function preserveCompiledTakeRuntimeFields(
   compiledSequence: CinematicSequence,
   sourceSequence: CinematicSequence,
 ) {
-  const sourceTakeById = new Map(sourceSequence.takes.map((take) => [take.id, take] as const))
-  return compiledSequence.takes.map((take) => {
-    const source = sourceTakeById.get(take.id)
+  return compiledSequence.takes.map((take, index) => {
+    const source = sourceSequence.takes[index] ?? null
     if (!source) return take
     return {
       ...take,
@@ -1233,10 +1232,17 @@ function preserveCompiledTakeRuntimeFields(
 export function compileCinematicSequence(sequence: CinematicSequence): CinematicSequence {
   const parsedSequence = cinematicSequenceSchema.parse(sequence)
   const compiledSequence = buildCinematicSequenceFromScriptDoc(deriveCinematicScriptFromSequence(parsedSequence))
-  return cinematicSequenceSchema.parse({
+  const indexedCompiledSequence = {
     ...compiledSequence,
-    shots: preserveCompiledShotRuntimeFields(compiledSequence, parsedSequence),
-    takes: preserveCompiledTakeRuntimeFields(compiledSequence, parsedSequence),
+    takes: compiledSequence.takes.map((take, index) => ({
+      ...take,
+      takeIndex: index,
+    })),
+  } as CinematicSequence
+  return cinematicSequenceSchema.parse({
+    ...indexedCompiledSequence,
+    shots: preserveCompiledShotRuntimeFields(indexedCompiledSequence, parsedSequence),
+    takes: preserveCompiledTakeRuntimeFields(indexedCompiledSequence, parsedSequence),
   })
 }
 
@@ -1344,19 +1350,27 @@ export function deriveCinematicScriptFromSequence(sequence: CinematicSequence): 
 }
 
 export function getCinematicSettings(gameSpec: unknown, graphMetadata: unknown): CinematicSettings {
+  const rawProjectCinematics =
+    gameSpec && typeof gameSpec === 'object' && (gameSpec as { cinematics?: unknown }).cinematics && typeof (gameSpec as { cinematics?: unknown }).cinematics === 'object'
+      ? (gameSpec as { cinematics?: Record<string, unknown> }).cinematics ?? {}
+      : {}
+  const rawGraphCinematics =
+    graphMetadata && typeof graphMetadata === 'object' && (graphMetadata as { cinematics?: unknown }).cinematics && typeof (graphMetadata as { cinematics?: unknown }).cinematics === 'object'
+      ? (graphMetadata as { cinematics?: Record<string, unknown> }).cinematics ?? {}
+      : {}
   const gameSpecCinematics = cinematicSettingsSchema.partial().safeParse(
-    gameSpec && typeof gameSpec === 'object' && (gameSpec as { cinematics?: unknown }).cinematics
-      ? (gameSpec as { cinematics?: unknown }).cinematics
-      : {},
+    rawProjectCinematics,
   )
   const graphCinematics = cinematicSettingsSchema.partial().safeParse(
-    graphMetadata && typeof graphMetadata === 'object' && (graphMetadata as { cinematics?: unknown }).cinematics
-      ? (graphMetadata as { cinematics?: unknown }).cinematics
-      : {},
+    rawGraphCinematics,
   )
 
-  const projectOverrides = gameSpecCinematics.success ? gameSpecCinematics.data : {}
-  const graphOverrides = graphCinematics.success ? graphCinematics.data : {}
+  const projectOverrides: Partial<CinematicSettings> = gameSpecCinematics.success
+    ? Object.fromEntries(Object.keys(rawProjectCinematics).map((key) => [key, gameSpecCinematics.data[key as keyof typeof gameSpecCinematics.data]])) as Partial<CinematicSettings>
+    : {}
+  const graphOverrides: Partial<CinematicSettings> = graphCinematics.success
+    ? Object.fromEntries(Object.keys(rawGraphCinematics).map((key) => [key, graphCinematics.data[key as keyof typeof graphCinematics.data]])) as Partial<CinematicSettings>
+    : {}
   const presetFamily =
     graphOverrides.presetFamily
     ?? projectOverrides.presetFamily
@@ -1383,20 +1397,59 @@ export function getCinematicSettings(gameSpec: unknown, graphMetadata: unknown):
     graphOverrides.dominantTrigger
     ?? projectOverrides.dominantTrigger
     ?? deriveDefaultDominantTriggerFromFormatSubtype(formatSubtype)
+  const formatDefaults = deriveUgcShotDefaults({
+    presetFamily,
+    formatSubtype,
+    shotIndex: 0,
+    shotCount: 1,
+    hookRole: 'hook',
+  })
   const stillAspectRatio =
     graphOverrides.stillAspectRatio
     ?? projectOverrides.stillAspectRatio
+    ?? getUgcPresetProfile(formatSubtype, presetFamily)?.preferredAspectRatio
     ?? deriveDefaultStillAspectRatioFromPresetFamily(presetFamily)
 
   return {
     ...defaultCinematicSettings,
     ...projectOverrides,
     ...graphOverrides,
+    artStylePreset:
+      (typeof graphOverrides.artStylePreset === 'string' && graphOverrides.artStylePreset.trim().length > 0 ? graphOverrides.artStylePreset : null)
+      ?? (typeof projectOverrides.artStylePreset === 'string' && projectOverrides.artStylePreset.trim().length > 0 ? projectOverrides.artStylePreset : null)
+      ?? null,
+    inferredArtStylePreset:
+      (typeof graphOverrides.inferredArtStylePreset === 'string' && graphOverrides.inferredArtStylePreset.trim().length > 0 ? graphOverrides.inferredArtStylePreset : null)
+      ?? (typeof projectOverrides.inferredArtStylePreset === 'string' && projectOverrides.inferredArtStylePreset.trim().length > 0 ? projectOverrides.inferredArtStylePreset : null)
+      ?? getRecommendedArtStylePresetForCinematic({ presetFamily, formatSubtype }),
+    useInferredArtStyle:
+      typeof graphOverrides.useInferredArtStyle === 'boolean'
+        ? graphOverrides.useInferredArtStyle
+        : typeof projectOverrides.useInferredArtStyle === 'boolean'
+          ? projectOverrides.useInferredArtStyle
+          : defaultCinematicSettings.useInferredArtStyle,
     presetFamily,
     presetId,
     formatSubtype,
     formulaFamily,
     dominantTrigger,
+    proofMoment:
+      (typeof graphOverrides.proofMoment === 'string' && graphOverrides.proofMoment.trim().length > 0 ? graphOverrides.proofMoment : null)
+      ?? (typeof projectOverrides.proofMoment === 'string' && projectOverrides.proofMoment.trim().length > 0 ? projectOverrides.proofMoment : null)
+      ?? formatDefaults.proofMoment,
+    ctaStyle:
+      (typeof graphOverrides.ctaStyle === 'string' && graphOverrides.ctaStyle.trim().length > 0 ? graphOverrides.ctaStyle : null)
+      ?? (typeof projectOverrides.ctaStyle === 'string' && projectOverrides.ctaStyle.trim().length > 0 ? projectOverrides.ctaStyle : null)
+      ?? formatDefaults.ctaStyle,
+    contrastAxis:
+      (typeof graphOverrides.contrastAxis === 'string' && graphOverrides.contrastAxis.trim().length > 0 ? graphOverrides.contrastAxis : null)
+      ?? (typeof projectOverrides.contrastAxis === 'string' && projectOverrides.contrastAxis.trim().length > 0 ? projectOverrides.contrastAxis : null)
+      ?? formatDefaults.contrastAxis,
+    defaultClipSeconds:
+      graphOverrides.defaultClipSeconds
+      ?? projectOverrides.defaultClipSeconds
+      ?? getUgcPresetProfile(formatSubtype, presetFamily)?.preferredClipSeconds
+      ?? defaultCinematicSettings.defaultClipSeconds,
     stillAspectRatio,
     specializationMode: deriveSpecializationModeFromPresetFamily(presetFamily),
   }
@@ -1442,12 +1495,24 @@ export function getStoryboardRefNodeConfig(node: { metadata?: unknown } | null |
 
 export function getCinematicTakeNodeConfig(node: { metadata?: unknown; key?: unknown; title?: unknown } | null | undefined): CinematicTakeNodeConfig {
   const metadata = node?.metadata && typeof node.metadata === 'object' ? node.metadata as Record<string, unknown> : {}
+  const inferredTakeIndex =
+    typeof node?.key === 'string'
+      ? (() => {
+          const match = node.key.match(/\.cinematic_take_(\d+)(?:_|$)/)
+          if (!match) return null
+          const parsed = Number(match[1])
+          return Number.isFinite(parsed) && parsed > 0 ? parsed - 1 : null
+        })()
+      : null
   const parsed = cinematicTakeNodeConfigSchema.safeParse({
-    id: typeof metadata.takeId === 'string'
-      ? metadata.takeId
+    id: typeof metadata.id === 'string'
+      ? metadata.id
+      : typeof metadata.takeId === 'string'
+        ? metadata.takeId
       : typeof node?.key === 'string'
         ? node.key
         : defaultTakeNodeConfig.id,
+    takeIndex: typeof metadata.takeIndex === 'number' ? metadata.takeIndex : inferredTakeIndex,
     title: typeof node?.title === 'string' ? node.title : defaultTakeNodeConfig.title,
     ...metadata,
   })
@@ -1505,10 +1570,22 @@ export function updateNodeMetadataWithTake(
   metadata: Record<string, unknown> | undefined,
   changes: Partial<CinematicTakeNodeConfig>,
 ) {
+  const current = getCinematicTakeNodeConfig({ metadata })
+  const resolvedId =
+    typeof changes.id === 'string' && changes.id.trim().length > 0
+      ? changes.id
+      : current.id
+  const resolvedTakeIndex =
+    typeof changes.takeIndex === 'number'
+      ? changes.takeIndex
+      : current.takeIndex
   return {
     ...(metadata ?? {}),
-    ...getCinematicTakeNodeConfig({ metadata }),
+    ...current,
     ...changes,
+    id: resolvedId,
+    takeId: resolvedId,
+    takeIndex: resolvedTakeIndex,
   }
 }
 
@@ -1516,9 +1593,16 @@ export function updateNodeMetadataWithShot(
   metadata: Record<string, unknown> | undefined,
   changes: Partial<CinematicShotNodeConfig>,
 ) {
+  const current = getCinematicShotNodeConfig({ metadata })
+  const resolvedId =
+    typeof changes.id === 'string' && changes.id.trim().length > 0
+      ? changes.id
+      : current.id
   return {
     ...(metadata ?? {}),
-    ...getCinematicShotNodeConfig({ metadata }),
+    ...current,
     ...changes,
+    id: resolvedId,
+    sequenceShotId: resolvedId,
   }
 }

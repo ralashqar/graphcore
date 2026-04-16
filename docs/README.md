@@ -30,3 +30,9 @@ Those older docs are still useful as background, but when they disagree with the
 
 - [`16-cinematic-presets-and-ugc-research.md`](./16-cinematic-presets-and-ugc-research.md)
   - Research base for cinematic preset families, UGC workflows, Seedance 2 patterns, and manual take-node still generation planning.
+- [`17-world-build-context-and-ugc-current-state.md`](./17-world-build-context-and-ugc-current-state.md)
+  - Current-state study of how GraphCore turns prompts into characters, environments, items, graphs, and cinematics, plus where UGC support already exists in code.
+- [`18-art-style-preset-range-and-ugc-capture-profiles.md`](./18-art-style-preset-range-and-ugc-capture-profiles.md)
+  - Current direction for expanding art style presets, especially photoreal UGC capture profiles, camera assumptions, and realism guardrails.
+- [`ugc-mastery/README.md`](./ugc-mastery/README.md)
+  - Distilled GraphCore-owned knowledge base for UGC psychology, virality mechanics, script formulas, format systems, and preset integration guidance.

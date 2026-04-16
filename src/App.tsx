@@ -22,6 +22,7 @@ import {
   type CinematicSettings,
 } from './domain/cinematics'
 import { normalizeCinematicGraphProjection } from './domain/cinematicGraphProjection'
+import { compileCinematicGraphFromScriptDoc } from './domain/cinematicScriptCompiler'
 import { compileBundle } from './domain/compiler'
 import { createEnvironmentBlueprint } from './domain/environmentBlueprint'
 import { createGameSpecFromArchetype } from './domain/gameArchetypes'
@@ -40,6 +41,7 @@ import type {
 } from './domain/graphcore'
 import { createAssemblyGraph } from './domain/environmentAssembly'
 import { createGraphScaffold } from './domain/graphScaffold'
+import { applyPatchOperations } from './domain/patchUtils'
 import { getResolvedDefinition3dBinding, getResolvedRender3dBinding } from './domain/render3d'
 import type { PromptPatchResponse } from './domain/prompting'
 import { normalizeNode } from './domain/nodeLibrary'
@@ -354,6 +356,12 @@ function overlayCinematicRunBindingsOntoGraphs(
       if (!targetNode || targetNode.type !== 'cinematic_take') continue
 
       const takeConfig = getCinematicTakeNodeConfig(targetNode)
+      const resolvedTakeIndex =
+        typeof takeConfig.takeIndex === 'number'
+          ? takeConfig.takeIndex
+          : nextGraph.nodes
+              .filter((node) => node.type === 'cinematic_take')
+              .findIndex((node) => node.key === job.shotNodeKey)
       const nextTakeMetadata =
         job.kind === 'storyboard_still'
           ? {
@@ -361,6 +369,7 @@ function overlayCinematicRunBindingsOntoGraphs(
               storyboardAssetKey: job.stillAssetKey ?? takeConfig.storyboardAssetKey,
               lastRunId: run.id,
               lastStoryboardJobId: job.id,
+              takeIndex: resolvedTakeIndex >= 0 ? resolvedTakeIndex : takeConfig.takeIndex,
               provider: job.provider ?? takeConfig.provider,
               providerModel: job.model ?? takeConfig.providerModel,
               providerRequestId: job.providerRequestId ?? takeConfig.providerRequestId,
@@ -371,6 +380,7 @@ function overlayCinematicRunBindingsOntoGraphs(
                 outputStillAssetKey: job.stillAssetKey ?? takeConfig.outputStillAssetKey,
                 lastRunId: run.id,
                 lastStillJobId: job.id,
+                takeIndex: resolvedTakeIndex >= 0 ? resolvedTakeIndex : takeConfig.takeIndex,
                 provider: job.provider ?? takeConfig.provider,
                 providerModel: job.model ?? takeConfig.providerModel,
                 providerRequestId: job.providerRequestId ?? takeConfig.providerRequestId,
@@ -379,6 +389,7 @@ function overlayCinematicRunBindingsOntoGraphs(
                 outputVideoAssetKey: job.videoAssetKey ?? takeConfig.outputVideoAssetKey,
                 lastRunId: run.id,
                 lastVideoJobId: job.id,
+                takeIndex: resolvedTakeIndex >= 0 ? resolvedTakeIndex : takeConfig.takeIndex,
                 provider: job.provider ?? takeConfig.provider,
                 providerModel: job.model ?? takeConfig.providerModel,
                 providerRequestId: job.providerRequestId ?? takeConfig.providerRequestId,
@@ -397,8 +408,8 @@ function overlayCinematicRunBindingsOntoGraphs(
           ...(nextGraph.metadata ?? {}),
           cinematicSequence: {
             ...getCinematicSequence(nextGraph.metadata),
-            takes: getCinematicSequence(nextGraph.metadata).takes.map((take) => (
-              take.id === takeConfig.id
+            takes: getCinematicSequence(nextGraph.metadata).takes.map((take, index) => (
+              index === resolvedTakeIndex
                 ? {
                     ...take,
                     ...nextTakeMetadata,
@@ -662,6 +673,7 @@ export default function App() {
   const sessionRef = useRef<Session | null>(null)
   const snapshotRef = useRef<ProjectSnapshot | null>(null)
   const worldBuildPollInFlightRef = useRef(false)
+  const worldBuildCinematicAuthorInFlightRef = useRef(new Set<string>())
   const worldBuildPollFailureCountRef = useRef(0)
   const meshGenerationPollInFlightRef = useRef(false)
   const cinematicRunPollInFlightRef = useRef(false)
@@ -1054,6 +1066,9 @@ export default function App() {
           snapshotRef.current = nextSnapshot
           setSnapshot(nextSnapshot)
           setBundle(compileBundle(nextSnapshot))
+          if (status.batch.plannerMode === 'cinematic_build') {
+            workingSnapshot = await continueWorldBuildCinematicAuthorship(status, workingSnapshot)
+          }
         }
         worldBuildPollFailureCountRef.current = 0
       } catch (pollError) {
@@ -1246,52 +1261,106 @@ export default function App() {
       try {
         let workingSnapshot = currentSnapshot
         for (const run of activeRuns) {
-          if (source === 'watchdog') {
-            console.info('[GraphCore] watchdog polling cinematic run.', {
+          try {
+            if (!workingSnapshot.graphs.some((graph) => graph.key === run.graphKey)) {
+              console.warn('[GraphCore] active cinematic run graph missing from snapshot. Cancelling stale run.', {
+                runId: run.id,
+                graphKey: run.graphKey,
+                mode: run.mode,
+                shotNodeKey: run.shotNodeKey,
+              })
+              const cancelStatus = await workspaceService.cancelCinematicRun({
+                snapshot: workingSnapshot,
+                runId: run.id,
+              })
+              if (cancelled) return
+              const cancelMergeBase = snapshotRef.current ?? workingSnapshot
+              const cancelSnapshot = mergeCinematicRunStatusIntoSnapshot(cancelMergeBase, cancelStatus)
+              workingSnapshot = cancelSnapshot
+              snapshotRef.current = cancelSnapshot
+              setSnapshot(cancelSnapshot)
+              setBundle(compileBundle(cancelSnapshot))
+              continue
+            }
+
+            if (source === 'watchdog') {
+              console.info('[GraphCore] watchdog polling cinematic run.', {
+                runId: run.id,
+                graphKey: run.graphKey,
+                mode: run.mode,
+                status: run.status,
+                shotNodeKey: run.shotNodeKey,
+              })
+            }
+            const status = await workspaceService.pollCinematicRun({
+              runId: run.id,
+              snapshot: workingSnapshot,
+              graphKey: run.graphKey,
+              mode: run.mode,
+              targetNodeKey: run.shotNodeKey,
+              targetNodeKeys: [],
+              shotNodeKey: run.shotNodeKey,
+            })
+
+            if (cancelled) return
+
+            console.info('[GraphCore] cinematic run polled.', {
+              runId: status.run.id,
+              status: status.run.status,
+              assetCount: status.assets.length,
+              assetKeys: status.assets.map((asset) => asset.key),
+              jobs: status.run.jobs.map((job) => ({
+                id: job.id,
+                kind: job.kind,
+                status: job.status,
+                nodeKey: job.shotNodeKey,
+                stillAssetKey: job.stillAssetKey ?? null,
+                videoAssetKey: job.videoAssetKey ?? null,
+                resultAssetKey: job.resultContext && typeof job.resultContext === 'object' && typeof job.resultContext.assetKey === 'string'
+                  ? job.resultContext.assetKey
+                  : null,
+                error: job.errorMessage ?? null,
+              })),
+            })
+
+            const mergeBase = snapshotRef.current ?? workingSnapshot
+            const nextSnapshot = mergeCinematicRunStatusIntoSnapshot(mergeBase, status)
+            workingSnapshot = nextSnapshot
+            snapshotRef.current = nextSnapshot
+            setSnapshot(nextSnapshot)
+            setBundle(compileBundle(nextSnapshot))
+          } catch (runPollError) {
+            const message = runPollError instanceof Error ? runPollError.message : 'Cinematic polling failed.'
+            console.error('[GraphCore] cinematic polling failed for run.', {
               runId: run.id,
               graphKey: run.graphKey,
               mode: run.mode,
-              status: run.status,
               shotNodeKey: run.shotNodeKey,
+              error: runPollError,
             })
+            if (!message.includes('was not found in the current snapshot')) {
+              continue
+            }
+            try {
+              const cancelStatus = await workspaceService.cancelCinematicRun({
+                snapshot: workingSnapshot,
+                runId: run.id,
+              })
+              if (cancelled) return
+              const cancelMergeBase = snapshotRef.current ?? workingSnapshot
+              const cancelSnapshot = mergeCinematicRunStatusIntoSnapshot(cancelMergeBase, cancelStatus)
+              workingSnapshot = cancelSnapshot
+              snapshotRef.current = cancelSnapshot
+              setSnapshot(cancelSnapshot)
+              setBundle(compileBundle(cancelSnapshot))
+            } catch (cancelError) {
+              console.error('[GraphCore] stale cinematic run auto-cancel failed.', {
+                runId: run.id,
+                graphKey: run.graphKey,
+                error: cancelError,
+              })
+            }
           }
-          const status = await workspaceService.pollCinematicRun({
-            runId: run.id,
-            snapshot: workingSnapshot,
-            graphKey: run.graphKey,
-            mode: run.mode,
-            targetNodeKey: run.shotNodeKey,
-            targetNodeKeys: [],
-            shotNodeKey: run.shotNodeKey,
-          })
-
-          if (cancelled) return
-
-          console.info('[GraphCore] cinematic run polled.', {
-            runId: status.run.id,
-            status: status.run.status,
-            assetCount: status.assets.length,
-            assetKeys: status.assets.map((asset) => asset.key),
-            jobs: status.run.jobs.map((job) => ({
-              id: job.id,
-              kind: job.kind,
-              status: job.status,
-              nodeKey: job.shotNodeKey,
-              stillAssetKey: job.stillAssetKey ?? null,
-              videoAssetKey: job.videoAssetKey ?? null,
-              resultAssetKey: job.resultContext && typeof job.resultContext === 'object' && typeof job.resultContext.assetKey === 'string'
-                ? job.resultContext.assetKey
-                : null,
-              error: job.errorMessage ?? null,
-            })),
-          })
-
-          const mergeBase = snapshotRef.current ?? workingSnapshot
-          const nextSnapshot = mergeCinematicRunStatusIntoSnapshot(mergeBase, status)
-          workingSnapshot = nextSnapshot
-          snapshotRef.current = nextSnapshot
-          setSnapshot(nextSnapshot)
-          setBundle(compileBundle(nextSnapshot))
         }
       } catch (pollError) {
         console.error('[GraphCore] cinematic polling failed.', pollError)
@@ -1486,6 +1555,149 @@ export default function App() {
       }),
     }))
     if (changes.key && selectedGraphKey === graphKey) setSelectedGraphKey(changes.key)
+  }
+
+  async function continueWorldBuildCinematicAuthorship(
+    batchStatus: WorldBuildStatusResponse,
+    workingSnapshot: ProjectSnapshot,
+  ) {
+    const cinematicJob = batchStatus.batch.jobs.find((job) => job.kind === 'cinematic_graph') ?? null
+    if (!cinematicJob) return workingSnapshot
+
+    const phase =
+      cinematicJob.resultContext && typeof cinematicJob.resultContext === 'object' && typeof cinematicJob.resultContext.phase === 'string'
+        ? cinematicJob.resultContext.phase
+        : null
+    if (phase !== 'ready_for_authorship' && phase !== 'authored') return workingSnapshot
+
+    const graphKey = typeof cinematicJob.targetKeys?.graphKey === 'string' ? cinematicJob.targetKeys.graphKey : null
+    if (!graphKey) return workingSnapshot
+
+    const authoringToken = `${batchStatus.batch.id}:${cinematicJob.id}`
+    if (worldBuildCinematicAuthorInFlightRef.current.has(authoringToken)) {
+      return workingSnapshot
+    }
+
+    worldBuildCinematicAuthorInFlightRef.current.add(authoringToken)
+    try {
+      let nextSnapshot = workingSnapshot
+      let nextBatchStatus = batchStatus
+
+      if (phase === 'ready_for_authorship') {
+        const authoredStatus = await workspaceService.authorCinematicScript({
+          batchId: batchStatus.batch.id,
+          snapshot: nextSnapshot,
+          model: promptModel,
+        })
+        nextSnapshot = mergeWorldBuildStatusIntoSnapshot(snapshotRef.current ?? nextSnapshot, authoredStatus)
+        snapshotRef.current = nextSnapshot
+        setSnapshot(nextSnapshot)
+        setBundle(compileBundle(nextSnapshot))
+        nextBatchStatus = authoredStatus
+      }
+
+      const latestBatch = nextBatchStatus.batch
+      const latestCinematicJob = latestBatch.jobs.find((job) => job.kind === 'cinematic_graph') ?? null
+      const latestPhase =
+        latestCinematicJob?.resultContext && typeof latestCinematicJob.resultContext === 'object' && typeof latestCinematicJob.resultContext.phase === 'string'
+          ? latestCinematicJob.resultContext.phase
+          : null
+      if (!latestCinematicJob || latestPhase === 'needs_repair') {
+        return nextSnapshot
+      }
+
+      const authoredPlan = latestBatch.cinematicPlan
+      if (!authoredPlan?.scriptDoc) {
+        return nextSnapshot
+      }
+      if (authoredPlan.scriptDoc.shots.length === 0) {
+        throw new Error(`Cinematic authorship for graph "${graphKey}" produced zero shots. Refusing to compile an empty cinematic graph.`)
+      }
+
+      const currentGraph = nextSnapshot.graphs.find((graph) => graph.key === graphKey) ?? null
+      const currentGeneration =
+        currentGraph && typeof currentGraph.metadata?.generation === 'object' && currentGraph.metadata.generation !== null
+          ? currentGraph.metadata.generation as Record<string, unknown>
+          : {}
+      const alreadyPersisted =
+        currentGeneration.batchId === latestBatch.id
+        && currentGeneration.jobId === latestCinematicJob.id
+        && currentGeneration.placeholder === false
+        && currentGeneration.state === 'completed'
+      if (alreadyPersisted) {
+        return nextSnapshot
+      }
+
+      const compiledGraph = compileCinematicGraphFromScriptDoc({
+        graphKey,
+        graphName: authoredPlan.graphName,
+        graphSummary: authoredPlan.graphSummary,
+        graphSettings: authoredPlan.graphSettings ?? {},
+        scriptDoc: authoredPlan.scriptDoc,
+        existingMetadata: {
+          ...(currentGraph?.metadata ?? {}),
+          generation: {
+            batchId: latestBatch.id,
+            jobId: latestCinematicJob.id,
+            state: 'completed',
+            placeholder: false,
+            source: 'global_prompt',
+          },
+          cinematicAuthoring: {
+            phase: 'completed',
+            scriptDirty: false,
+            parsedShotCount: authoredPlan.scriptDoc.shots.length,
+            diagnostics:
+              latestCinematicJob.resultContext && typeof latestCinematicJob.resultContext === 'object' && Array.isArray(latestCinematicJob.resultContext.authoringDiagnostics)
+                ? latestCinematicJob.resultContext.authoringDiagnostics
+                : [],
+          },
+        },
+      })
+      const compiledSequence = getCinematicSequence(compiledGraph.metadata)
+      if (compiledSequence.takes.length === 0) {
+        throw new Error(`Cinematic graph "${graphKey}" compiled with zero takes. Refusing to persist invalid cinematic output.`)
+      }
+
+      await workspaceService.applyPatchProposal(nextSnapshot, [{
+        op: 'update_graph',
+        key: graphKey,
+        changes: compiledGraph as unknown as Record<string, unknown>,
+      }])
+
+      nextSnapshot = normalizeSnapshot({
+        ...applyPatchOperations(nextSnapshot, [{
+          op: 'update_graph',
+          key: graphKey,
+          changes: compiledGraph as unknown as Record<string, unknown>,
+        }]),
+        worldBuildBatches: nextSnapshot.worldBuildBatches.map((batch) => (
+          batch.id !== latestBatch.id
+            ? batch
+            : {
+                ...batch,
+                cinematicPlan: authoredPlan,
+                jobs: batch.jobs.map((job) => (
+                  job.id !== latestCinematicJob.id
+                    ? job
+                    : {
+                        ...job,
+                        resultContext: {
+                          ...(job.resultContext ?? {}),
+                          phase: 'graph_compiled',
+                        },
+                      }
+                )),
+              }
+        )),
+      })
+      snapshotRef.current = nextSnapshot
+      setSnapshot(nextSnapshot)
+      setBundle(compileBundle(nextSnapshot))
+      return nextSnapshot
+    } finally {
+      worldBuildCinematicAuthorInFlightRef.current.delete(authoringToken)
+    }
   }
 
   function applyWorldBuildPlaceholderDeletionLocally(result: Awaited<ReturnType<typeof workspaceService.deleteWorldBuildPlaceholder>>) {
@@ -3038,10 +3250,14 @@ export default function App() {
     }
 
     const sequence = getCinematicSequence(graph.metadata)
-    const takeNodeByTakeId = new Map(
+    const takeNodeByTakeIndex = new Map(
       graph.nodes
         .filter((node) => node.type === 'cinematic_take')
-        .map((node) => [getCinematicTakeNodeConfig(node).id, node.key] as const),
+        .map((node) => {
+          const config = getCinematicTakeNodeConfig(node)
+          const takeIndex = typeof config.takeIndex === 'number' ? config.takeIndex : null
+          return [takeIndex ?? -1, node.key] as const
+        }),
     )
 
     const runQueue: CinematicPreflightQueueItem[] = graph.nodes.flatMap((node): CinematicPreflightQueueItem[] => {
@@ -3055,7 +3271,10 @@ export default function App() {
     }).concat(
       request.includeShots
         ? sequence.shots.flatMap((shot: typeof sequence.shots[number]): CinematicPreflightQueueItem[] => {
-            const takeNodeKey = shot.takeId ? takeNodeByTakeId.get(shot.takeId) ?? null : null
+            const takeNodeKey =
+              typeof shot.takeIndex === 'number'
+                ? takeNodeByTakeIndex.get(shot.takeIndex) ?? null
+                : null
             if (!takeNodeKey || shot.stillAssetKey) return []
             return [{ nodeKey: takeNodeKey, shotId: shot.id, mode: 'preview_still' as const }]
           })

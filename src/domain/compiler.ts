@@ -10,9 +10,14 @@ import type {
   ProjectSnapshot,
 } from './graphcore.ts'
 import { compileAssemblyGraph } from './environmentAssemblyCompiler.ts'
-import { estimateShotContentDurationSeconds, getCinematicSequence, getCinematicSettings } from './cinematics.ts'
+import { estimateShotContentDurationSeconds, getCinematicSequence, getCinematicSettings, type CinematicFormatSubtype } from './cinematics.ts'
 import { graphNodeTemplatesByKey } from './nodeLibrary.ts'
 import { PRESET_CATALOG_VERSION } from './presetCatalog.ts'
+import {
+  getUgcPresetProfile,
+  isDominantTriggerAllowedForFormatSubtype,
+  isFormulaFamilyAllowedForFormatSubtype,
+} from './ugcPresetProfiles.ts'
 
 function isLikelyReferenceKey(value: string) {
   return /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/i.test(value)
@@ -27,6 +32,10 @@ function getComponent<TType extends DefinitionBase['components'][number]['type']
 
 function pushDiagnostic(diagnostics: Diagnostic[], diagnostic: Diagnostic) {
   diagnostics.push(diagnostic)
+}
+
+function ctaStyleLooksAggressive(text: string) {
+  return /\b(buy now|shop now|order now|limited time|act now|hurry|dm now|comment now)\b/i.test(text)
 }
 
 export function compileBundle(snapshot: ProjectSnapshot): GameSystemBundle {
@@ -784,10 +793,10 @@ export function validateGraph(
     )
     .filter((value): value is string => Boolean(value))
   const cinematicSequence = graph.graphType === 'cinematic_flow' ? getCinematicSequence(graph.metadata) : null
-  const takeNodeKeyByTakeId = new Map(
+  const takeNodeKeyByTakeIndex = new Map(
     graph.nodes
       .filter((node) => node.type === 'cinematic_take')
-      .map((node) => [typeof node.metadata.takeId === 'string' ? node.metadata.takeId : node.key, node.key] as const),
+      .map((node, index) => [typeof node.metadata.takeIndex === 'number' ? node.metadata.takeIndex : index, node.key] as const),
   )
 
   if (startNodes.length !== 1) {
@@ -1087,6 +1096,8 @@ export function validateGraph(
         const isCreatorSubtype = typeof formatSubtype === 'string' && formatSubtype.startsWith('creator_')
         const isAdSubtype = typeof formatSubtype === 'string' && (formatSubtype.startsWith('ad_') || formatSubtype === 'contrast_narrative')
         const isFacelessSubtype = typeof formatSubtype === 'string' && formatSubtype.startsWith('faceless_')
+        const typedFormatSubtype = typeof formatSubtype === 'string' ? formatSubtype as CinematicFormatSubtype : null
+        const profile = getUgcPresetProfile(typedFormatSubtype, cinematicSettings.presetFamily)
         if (node.key === graph.nodes.find((candidate) => candidate.type === 'cinematic_shot')?.key && !hookRole && !stillAssetKey && !videoAssetKey) {
           diagnostics.push({
             level: 'warning',
@@ -1114,11 +1125,29 @@ export function validateGraph(
             nodeKey: node.key,
           })
         }
-        if (isAdPreset && !hasProductContinuity) {
+        if (profile && formulaFamily && !isFormulaFamilyAllowedForFormatSubtype(typedFormatSubtype, formulaFamily as never)) {
           diagnostics.push({
             level: 'warning',
-            code: 'ugc_ad_missing_product_or_proof_ref',
-            message: `UGC ad shot "${node.key}" should connect product or proof continuity refs earlier in the sequence.`,
+            code: 'ugc_shot_formula_family_mismatch',
+            message: `UGC shot "${node.key}" uses formulaFamily "${formulaFamily}" outside the expected ${profile.formatSubtype} preset profile.`,
+            graphKey: graph.key,
+            nodeKey: node.key,
+          })
+        }
+        if (profile && dominantTrigger && !isDominantTriggerAllowedForFormatSubtype(typedFormatSubtype, dominantTrigger as never)) {
+          diagnostics.push({
+            level: 'warning',
+            code: 'ugc_shot_dominant_trigger_mismatch',
+            message: `UGC shot "${node.key}" uses dominantTrigger "${dominantTrigger}" outside the expected ${profile.formatSubtype} preset profile.`,
+            graphKey: graph.key,
+            nodeKey: node.key,
+          })
+        }
+        if (profile?.requiresProductOrProofContinuity && !hasProductContinuity) {
+          diagnostics.push({
+            level: 'warning',
+            code: 'ugc_preset_missing_product_or_proof_ref',
+            message: `UGC shot "${node.key}" should connect product or proof continuity refs for the ${profile.formatSubtype} preset profile.`,
             graphKey: graph.key,
             nodeKey: node.key,
           })
@@ -1146,6 +1175,15 @@ export function validateGraph(
             level: 'warning',
             code: 'ugc_creator_missing_persona_style',
             message: `UGC creator shot "${node.key}" should capture the creator persona or delivery style.`,
+            graphKey: graph.key,
+            nodeKey: node.key,
+          })
+        }
+        if (isCreatorSubtype && ctaStyleLooksAggressive(ctaStyle)) {
+          diagnostics.push({
+            level: 'warning',
+            code: 'ugc_creator_cta_too_aggressive',
+            message: `UGC creator shot "${node.key}" uses a CTA style that feels too aggressive for a creator-native preset.`,
             graphKey: graph.key,
             nodeKey: node.key,
           })
@@ -1186,11 +1224,11 @@ export function validateGraph(
             nodeKey: node.key,
           })
         }
-        if (formatSubtype === 'contrast_narrative' && node.key === graph.nodes.find((candidate) => candidate.type === 'cinematic_shot')?.key && !hasStoryboardInput) {
+        if (profile?.prefersStoryboardSupport && node.key === graph.nodes.find((candidate) => candidate.type === 'cinematic_shot')?.key && !hasStoryboardInput) {
           diagnostics.push({
             level: 'warning',
-            code: 'ugc_contrast_missing_storyboard_support',
-            message: `Contrast narrative shot "${node.key}" should usually be supported by storyboard or board-style references.`,
+            code: 'ugc_preset_missing_storyboard_support',
+            message: `UGC shot "${node.key}" should usually be supported by storyboard or board-style references for the ${profile.formatSubtype} preset profile.`,
             graphKey: graph.key,
             nodeKey: node.key,
           })
@@ -1274,7 +1312,20 @@ export function validateGraph(
           nodeKey: node.key,
         })
       }
-
+      if (
+        (formatSubtype === 'creator_serialized_drama'
+          || formatSubtype === 'ad_trojan_horse_drama'
+          || formatSubtype === 'faceless_serialized_drama')
+        && shotIds.length < 4
+      ) {
+        diagnostics.push({
+          level: 'warning',
+          code: 'ugc_serialized_drama_take_too_short',
+          message: `Serialized drama take "${node.key}" should usually compile separate conflict, reveal, and redemption beats instead of fewer than 4 shots.`,
+          graphKey: graph.key,
+          nodeKey: node.key,
+        })
+      }
       if (outputVideoAssetKey && !assetKeys.has(outputVideoAssetKey)) {
         diagnostics.push({
           level: 'error',
@@ -1376,7 +1427,9 @@ export function validateGraph(
     const firstShotId = cinematicSequence.shots[0]?.id ?? null
 
     for (const shot of cinematicSequence.shots) {
-      const nodeKey = takeNodeKeyByTakeId.get(shot.takeId ?? '') ?? null
+      const nodeKey =
+        (typeof shot.takeIndex === 'number' ? takeNodeKeyByTakeIndex.get(shot.takeIndex) : null)
+        ?? null
       const referencedNodes = availableRefNodes.filter((candidate) => {
         const refId =
           typeof candidate.metadata.entityRefId === 'string'
@@ -1488,6 +1541,8 @@ export function validateGraph(
         const isCreatorSubtype = typeof formatSubtype === 'string' && formatSubtype.startsWith('creator_')
         const isAdSubtype = typeof formatSubtype === 'string' && (formatSubtype.startsWith('ad_') || formatSubtype === 'contrast_narrative')
         const isFacelessSubtype = typeof formatSubtype === 'string' && formatSubtype.startsWith('faceless_')
+        const typedFormatSubtype = typeof formatSubtype === 'string' ? formatSubtype as CinematicFormatSubtype : null
+        const profile = getUgcPresetProfile(typedFormatSubtype, cinematicSettings.presetFamily)
         if (shot.id === firstShotId && !hookRole && !shot.stillAssetKey && !shot.videoAssetKey) {
           diagnostics.push({
             level: 'warning',
@@ -1515,11 +1570,29 @@ export function validateGraph(
             nodeKey,
           })
         }
-        if (isAdPreset && !hasProductContinuity) {
+        if (profile && formulaFamily && !isFormulaFamilyAllowedForFormatSubtype(typedFormatSubtype, formulaFamily as never)) {
           diagnostics.push({
             level: 'warning',
-            code: 'ugc_ad_missing_product_or_proof_ref',
-            message: `UGC ad shot "${shot.id}" should connect product or proof continuity refs earlier in the sequence.`,
+            code: 'ugc_shot_formula_family_mismatch',
+            message: `UGC shot "${shot.id}" uses formulaFamily "${formulaFamily}" outside the expected ${profile.formatSubtype} preset profile.`,
+            graphKey: graph.key,
+            nodeKey,
+          })
+        }
+        if (profile && dominantTrigger && !isDominantTriggerAllowedForFormatSubtype(typedFormatSubtype, dominantTrigger as never)) {
+          diagnostics.push({
+            level: 'warning',
+            code: 'ugc_shot_dominant_trigger_mismatch',
+            message: `UGC shot "${shot.id}" uses dominantTrigger "${dominantTrigger}" outside the expected ${profile.formatSubtype} preset profile.`,
+            graphKey: graph.key,
+            nodeKey,
+          })
+        }
+        if (profile?.requiresProductOrProofContinuity && !hasProductContinuity) {
+          diagnostics.push({
+            level: 'warning',
+            code: 'ugc_preset_missing_product_or_proof_ref',
+            message: `UGC shot "${shot.id}" should connect product or proof continuity refs for the ${profile.formatSubtype} preset profile.`,
             graphKey: graph.key,
             nodeKey,
           })
@@ -1547,6 +1620,15 @@ export function validateGraph(
             level: 'warning',
             code: 'ugc_creator_missing_persona_style',
             message: `UGC creator shot "${shot.id}" should capture the creator persona or delivery style.`,
+            graphKey: graph.key,
+            nodeKey,
+          })
+        }
+        if (isCreatorSubtype && ctaStyleLooksAggressive(ctaStyle)) {
+          diagnostics.push({
+            level: 'warning',
+            code: 'ugc_creator_cta_too_aggressive',
+            message: `UGC creator shot "${shot.id}" uses a CTA style that feels too aggressive for a creator-native preset.`,
             graphKey: graph.key,
             nodeKey,
           })
@@ -1587,11 +1669,11 @@ export function validateGraph(
             nodeKey,
           })
         }
-        if (formatSubtype === 'contrast_narrative' && shot.id === firstShotId && !hasStoryboardInput) {
+        if (profile?.prefersStoryboardSupport && shot.id === firstShotId && !hasStoryboardInput) {
           diagnostics.push({
             level: 'warning',
-            code: 'ugc_contrast_missing_storyboard_support',
-            message: `Contrast narrative shot "${shot.id}" should usually be supported by storyboard or board-style references.`,
+            code: 'ugc_preset_missing_storyboard_support',
+            message: `UGC shot "${shot.id}" should usually be supported by storyboard or board-style references for the ${profile.formatSubtype} preset profile.`,
             graphKey: graph.key,
             nodeKey,
           })

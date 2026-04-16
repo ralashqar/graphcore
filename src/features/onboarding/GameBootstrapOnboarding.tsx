@@ -1,6 +1,6 @@
 import { useState } from 'react'
 
-import { ART_STYLE_PRESETS, getArtStylePresetDescription, getArtStylePresetsByGroup } from '../../domain/artStylePresets'
+import { ART_STYLE_PRESETS, getArtStylePresetBestFor, getArtStylePresetDescription, getArtStylePresetsByGroup } from '../../domain/artStylePresets'
 import { GAME_ARCHETYPES, gameArchetypeMap } from '../../domain/gameArchetypes'
 
 type GameBootstrapOnboardingProps = {
@@ -123,6 +123,7 @@ export function GameBootstrapOnboarding({
               <div className="inline-note">
                 <strong>{ART_STYLE_PRESETS.find((preset) => preset.id === artStylePreset)?.label ?? 'Custom'}</strong>
                 <p className="subtle-line">{getArtStylePresetDescription(artStylePreset)}</p>
+                <p className="subtle-line">Best for: {getArtStylePresetBestFor(artStylePreset)}</p>
               </div>
             </div>
           ) : null}

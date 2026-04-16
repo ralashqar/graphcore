@@ -182,6 +182,18 @@ function getFalErrorMessage(body: Record<string, unknown>, fallback: string) {
   return fallback
 }
 
+function isNonTerminalFalProgressMessage(body: Record<string, unknown>, providerStatus: string | null) {
+  const errorMessage = typeof body.error === 'string' ? body.error.trim().toLowerCase() : ''
+  const detailMessage = typeof body.detail === 'string' ? body.detail.trim().toLowerCase() : ''
+  const message = errorMessage || detailMessage
+  const status = providerStatus?.trim().toUpperCase() ?? null
+  const indicatesProgressMessage = message === 'request is still in progress'
+    || message === 'still in progress'
+    || message === 'request in progress'
+  const indicatesProgressStatus = status === 'IN_PROGRESS' || status === 'IN_QUEUE' || status === 'QUEUED'
+  return indicatesProgressMessage && indicatesProgressStatus
+}
+
 function resolveStillSourceAssetUrl(
   snapshot: z.infer<typeof requestSchema>['snapshot'],
   graph: NonNullable<ReturnType<typeof findGraph>>,
@@ -827,12 +839,12 @@ Deno.serve(async (request) => {
           statusUrl: providerStatusUrl,
         })
         const providerStatus = typeof statusResult.body.status === 'string' ? statusResult.body.status : null
-        if (typeof statusResult.body.error === 'string') {
-          const message = getFalErrorMessage(
-            statusResult.body,
-            'The still-generation provider returned an error.',
-          )
-          await client.from('cinematic_run_jobs').update({
+          if (typeof statusResult.body.error === 'string' && !isNonTerminalFalProgressMessage(statusResult.body, providerStatus)) {
+            const message = getFalErrorMessage(
+              statusResult.body,
+              'The still-generation provider returned an error.',
+            )
+            await client.from('cinematic_run_jobs').update({
             status: 'failed',
             error_message: message,
           }).eq('id', job.id)
@@ -847,9 +859,25 @@ Deno.serve(async (request) => {
               requestId: providerRequestId,
               prompt: job.prompt ?? stillPrompt,
             },
-          })
-          break
-        }
+            })
+            break
+          }
+
+          if (isNonTerminalFalProgressMessage(statusResult.body, providerStatus)) {
+            await client.from('cinematic_run_jobs').update({
+              status: 'running',
+              provider: 'fal',
+              model: job.model ?? stillModel,
+              provider_request_id: providerRequestId,
+              result_context: {
+                ...(job.resultContext && typeof job.resultContext === 'object' ? job.resultContext : {}),
+                lastObservedProviderStatus: providerStatus,
+                lastStatusCheckAt: new Date().toISOString(),
+              },
+              error_message: null,
+            }).eq('id', job.id)
+            break
+          }
 
         let storedAsset
         try {
@@ -1109,7 +1137,7 @@ Deno.serve(async (request) => {
             : `${targetNode.title} Clip`,
           kind: 'video',
           existingAssetKey: isTakeJob
-            ? buildGraphScopedTakeAssetKey({ graphKey: updatedGraph.key, takeNodeKey: job.shotNodeKey, kind: 'video' })
+            ? buildGraphScopedTakeAssetKey({ graphKey: updatedGraph.key, takeNodeKey: job.shotNodeKey, kind: 'video', uniqueScope: job.id })
             : undefined,
           metadata: {
             generatedBy: isTakeJob ? 'cinematic_take_video' : 'cinematic_video',

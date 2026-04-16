@@ -48,6 +48,10 @@ type ExistingKeyState = {
   reclaimedKeys: Set<string>
 }
 
+type ExistingKeyStateOptions = {
+  allowPlaceholderReuse?: boolean
+}
+
 type WorldBuildStartSnapshot = {
   project: { id: string }
   draft: { id: string }
@@ -104,7 +108,9 @@ function buildDefinitionKey(kind: DefinitionKind, name: string, keyState: Existi
 }
 
 function buildGraphKey(name: string, keyState: ExistingKeyState) {
-  const baseKey = `graph.${slugifyWorldBuildName(name) || 'generated'}`
+  const baseSlug = slugifyWorldBuildName(name) || 'generated'
+  const uniqueSuffix = crypto.randomUUID().replace(/-/g, '').slice(0, 8)
+  const baseKey = `graph.${baseSlug}_${uniqueSuffix}`
   return buildWorldBuildKey(baseKey, keyState)
 }
 
@@ -113,14 +119,19 @@ function buildAssetKey(name: string, suffix: string, keyState: ExistingKeyState)
   return buildWorldBuildKey(baseKey, keyState)
 }
 
-function createExistingKeyState(localKeys: string[], remoteRows: ExistingRemoteResourceRow[]) {
+function createExistingKeyState(
+  localKeys: string[],
+  remoteRows: ExistingRemoteResourceRow[],
+  options: ExistingKeyStateOptions = {},
+) {
   const localKeySet = new Set(localKeys)
   const occupiedKeys = new Set(localKeys)
   const reclaimableKeys = new Set<string>()
+  const allowPlaceholderReuse = options.allowPlaceholderReuse ?? true
 
   for (const row of remoteRows) {
     const generation = getResourceGenerationMetadata({ metadata: row.metadata })
-    const reclaimable = !localKeySet.has(row.key) && generation?.source === 'global_prompt'
+    const reclaimable = allowPlaceholderReuse && !localKeySet.has(row.key) && generation?.source === 'global_prompt'
     if (reclaimable) {
       reclaimableKeys.add(row.key)
       continue
@@ -502,7 +513,11 @@ Deno.serve(async (request) => {
     const batchId = batchInsert.data.id
     const existingRemoteKeys = await loadExistingWorldBuildKeys(client, snapshot.draft.id, snapshot.project.id)
     const definitionKeyState = createExistingKeyState(snapshot.definitions.map((definition) => definition.key), existingRemoteKeys.definitionRows)
-    const graphKeyState = createExistingKeyState(snapshot.graphs.map((graph) => graph.key), existingRemoteKeys.graphRows)
+    const graphKeyState = createExistingKeyState(
+      snapshot.graphs.map((graph) => graph.key),
+      existingRemoteKeys.graphRows,
+      { allowPlaceholderReuse: false },
+    )
     const assetKeyState = createExistingKeyState(snapshot.assets.map((asset) => asset.key), existingRemoteKeys.assetRows)
     const jobsToInsert: Array<Record<string, unknown>> = []
     const planJobIds = new Map<string, string>()

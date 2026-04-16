@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import type { GameSystemBundle } from '../../domain/graphcore'
-import { ART_STYLE_PRESETS, getArtStylePresetDescription, getArtStylePresetsByGroup } from '../../domain/artStylePresets'
+import { ART_STYLE_PRESETS, getArtStylePresetBestFor, getArtStylePresetDescription, getArtStylePresetsByGroup } from '../../domain/artStylePresets'
 
 type ReleaseEntry = {
   id: string
@@ -176,6 +176,7 @@ export function GlobalWorkspace({
               <div className="global-preset-preview">
                 <strong>{selectedPreset.label}</strong>
                 <span>{getArtStylePresetDescription(draftArtStylePreset)}</span>
+                <span className="subtle-line">Best for: {getArtStylePresetBestFor(draftArtStylePreset)}</span>
               </div>
               <label className="field-block full-width">
                 <span>Custom Art Style Notes</span>

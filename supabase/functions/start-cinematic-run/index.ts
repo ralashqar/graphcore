@@ -136,8 +136,14 @@ function buildAffectedTakeOrder(
   targetNodeKeys: string[] = [],
 ) {
   const sequence = getCinematicSequence(graph.metadata)
+  const takeNodes = graph.nodes.filter((node) => node.type === 'cinematic_take')
   const orderedTakeNodeKeys = sequence.takes
-    .map((take) => graph.nodes.find((node) => node.type === 'cinematic_take' && typeof node.metadata?.takeId === 'string' && node.metadata.takeId === take.id)?.key ?? null)
+    .map((_take, index) => takeNodes.find((node) => {
+      const config = getCinematicTakeNodeConfig(node)
+      return typeof config.takeIndex === 'number'
+        ? config.takeIndex === index
+        : config.id === sequence.takes[index]?.id
+    })?.key ?? null)
     .filter((value): value is string => typeof value === 'string' && value.length > 0)
 
   if (targetNodeKeys.length === 0) {
@@ -352,13 +358,14 @@ Deno.serve(async (request) => {
     for (const takeNodeKey of takeNodeKeys) {
       const takeNode = findNode(graph, takeNodeKey)
       if (!takeNode) continue
+      const takeConfig = getCinematicTakeNodeConfig(takeNode)
       const sourceInputs = resolveTakeSources(payload.snapshot, graph, takeNodeKey)
       const reservedTakeStillAsset = payload.mode === 'preview_take_still'
         ? await reserveGeneratedImageAsset({
             client,
             projectId: payload.snapshot.project.id,
             userId: user.id,
-            assetKey: buildGraphScopedTakeAssetKey({ graphKey: graph.key, takeNodeKey, kind: 'still' }),
+            assetKey: buildGraphScopedTakeAssetKey({ graphKey: graph.key, takeNodeKey, kind: 'still', uniqueScope: runId }),
             name: `${graph.name} / ${takeNode.title} / Still`,
             metadata: {
               generatedBy: 'cinematic_take_still',
@@ -400,7 +407,8 @@ Deno.serve(async (request) => {
           }),
           result_context: {
             mode: payload.mode,
-            takeId: takeNode.metadata?.takeId ?? null,
+            takeId: takeConfig.id,
+            takeIndex: takeConfig.takeIndex,
             assetKey: reservedTakeStillAsset?.key ?? null,
           },
         })
@@ -419,7 +427,8 @@ Deno.serve(async (request) => {
           result_context: {
             mode: payload.mode,
             executionPlan,
-            takeId: takeNode.metadata?.takeId ?? null,
+            takeId: takeConfig.id,
+            takeIndex: takeConfig.takeIndex,
           },
         })
       }
@@ -465,7 +474,7 @@ Deno.serve(async (request) => {
       if (!storyboardNode) continue
       const isTakeStoryboard = storyboardNode.type === 'cinematic_take'
       const storyboardAssetKey = isTakeStoryboard
-        ? buildGraphScopedTakeAssetKey({ graphKey: graph.key, takeNodeKey: storyboardNodeKey, kind: 'storyboard' })
+        ? buildGraphScopedTakeAssetKey({ graphKey: graph.key, takeNodeKey: storyboardNodeKey, kind: 'storyboard', uniqueScope: runId })
         : getStoryboardRefNodeConfig(storyboardNode).assetKey
       const sourceInputs = isTakeStoryboard
         ? resolveTakeSources(payload.snapshot, graph, storyboardNodeKey)

@@ -17,6 +17,10 @@ function previewJson(value: unknown, maxLength = 4000) {
   return `${text.slice(0, maxLength)}...<truncated>`
 }
 
+function stringifyJson(value: unknown) {
+  return typeof value === 'string' ? value : JSON.stringify(value, null, 2)
+}
+
 function formatIssues(issues: Array<{ path: PropertyKey[]; message: string }>) {
   return issues.map((issue) => `${issue.path.join('.') || '<root>'}: ${issue.message}`).join(' | ')
 }
@@ -78,13 +82,13 @@ export async function runStructuredWorldBuildModel<TPayload>({
   const debugEnabled = shouldDebugWorldBuildOpenAi()
 
   if (debugEnabled) {
-    console.log(`[world-build-debug] ${passLabel} request`, previewJson({
+    console.log(`[world-build-debug] ${passLabel} request-meta`, previewJson({
       model,
       passLabel,
-      systemText,
-      promptContext,
       maxOutputTokens,
     }))
+    console.log(`[world-build-debug] ${passLabel} request-systemText`, systemText)
+    console.log(`[world-build-debug] ${passLabel} request-promptContext`, stringifyJson(promptContext))
   }
 
   const aiResponse = await runOpenAiResponses({

@@ -58,6 +58,15 @@ function normalizeGraphLayoutPositions(nodes: GraphDefinition['nodes']) {
   }))
 }
 
+function buildShortDeterministicId(input: string) {
+  let hash = 2166136261
+  for (let index = 0; index < input.length; index += 1) {
+    hash ^= input.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  return (hash >>> 0).toString(36).slice(0, 6) || 'takeid'
+}
+
 export function compileCinematicGraphFromSequence(input: CompileCinematicGraphFromSequenceInput): GraphDefinition {
   const cinematicSequence = compileCinematicSequence(input.sequence)
   const scriptDoc = deriveCinematicScriptFromSequence(cinematicSequence)
@@ -202,7 +211,8 @@ export function compileCinematicGraphFromSequence(input: CompileCinematicGraphFr
   let previousTakeNodeKey: string | null = null
   for (const [index, take] of cinematicSequence.takes.entries()) {
     const parsedTake = cinematicTakeSpecSchema.parse(take)
-    const key = `${graph.key}.cinematic_take_${index + 1}`
+    const takeKeySuffix = buildShortDeterministicId(`${graph.key}|${parsedTake.id}|${index}`)
+    const key = `${graph.key}.cinematic_take_${index + 1}_${takeKeySuffix}`
     const node = normalizeNode({
       id: `node-cinematic-take-${parsedTake.id}-${index}`,
       key,

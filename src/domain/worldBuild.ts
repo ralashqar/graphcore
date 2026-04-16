@@ -80,7 +80,7 @@ export const cinematicShotPlanSchema = z.object({
   id: z.string(),
   sceneId: z.string().nullable().default(null),
   title: z.string(),
-  beat: z.string(),
+  beat: z.string().default(''),
   hookRole: cinematicHookRoleSchema.nullable().default(null),
   formatSubtype: z.preprocess(coerceEnumLikeValue(cinematicFormatSubtypeSchema.options), cinematicFormatSubtypeSchema.nullable()).default(null),
   formulaFamily: z.preprocess(coerceEnumLikeValue(cinematicFormulaFamilySchema.options), cinematicFormulaFamilySchema.nullable()).default(null),
@@ -127,7 +127,10 @@ export const cinematicGraphSettingsSchema = z.object({
   videoResolution: z.enum(['480p', '720p', '1080p']).optional(),
   defaultClipSeconds: z.number().int().positive().min(4).max(15).optional(),
   defaultFps: z.number().int().positive().max(60).optional(),
-  presetFamily: cinematicPresetFamilySchema.optional(),
+  artStylePreset: z.string().nullable().optional(),
+  inferredArtStylePreset: z.string().nullable().optional(),
+  useInferredArtStyle: z.boolean().optional(),
+  presetFamily: z.preprocess(coerceEnumLikeValue(cinematicPresetFamilySchema.options), cinematicPresetFamilySchema).optional(),
   presetId: z.string().optional(),
   formatSubtype: z.preprocess(coerceEnumLikeValue(cinematicFormatSubtypeSchema.options), cinematicFormatSubtypeSchema.nullable()).optional(),
   formulaFamily: z.preprocess(coerceEnumLikeValue(cinematicFormulaFamilySchema.options), cinematicFormulaFamilySchema.nullable()).optional(),
@@ -263,6 +266,21 @@ export const worldBuildPollRequestSchema = z.object({
   model: z.string().min(1),
 })
 
+export const worldBuildAuthorCinematicRequestSchema = z.object({
+  batchId: z.string(),
+  snapshot: worldBuildPlanRequestSchema.shape.snapshot,
+  model: z.string().min(1),
+})
+
+export const worldBuildRepairCinematicRequestSchema = z.object({
+  batchId: z.string(),
+  snapshot: worldBuildPlanRequestSchema.shape.snapshot,
+  model: z.string().min(1),
+  shotIds: z.array(z.string()).default([]),
+  failureCategories: z.array(z.enum(['schema', 'preset_fit', 'hook', 'proof', 'dialogue', 'action', 'camera', 'cta', 'structure'])).default([]),
+  fieldScopes: z.array(z.enum(['beat', 'framing', 'cameraAngle', 'cameraMovement', 'lensPreference', 'visualPrompt', 'compositionGuide', 'dialogue', 'actions', 'audio'])).default([]),
+})
+
 export const worldBuildDeletePlaceholderRequestSchema = z.object({
   snapshot: worldBuildPlanRequestSchema.shape.snapshot,
   resourceType: z.enum(['definition', 'graph', 'asset']),
@@ -289,6 +307,8 @@ export type WorldBuildBatch = z.infer<typeof worldBuildBatchSchema>
 export type WorldBuildJob = z.infer<typeof worldBuildJobSchema>
 export type WorldBuildStatusResponse = z.infer<typeof worldBuildStatusResponseSchema>
 export type WorldBuildPollRequest = z.infer<typeof worldBuildPollRequestSchema>
+export type WorldBuildAuthorCinematicRequest = z.infer<typeof worldBuildAuthorCinematicRequestSchema>
+export type WorldBuildRepairCinematicRequest = z.infer<typeof worldBuildRepairCinematicRequestSchema>
 export type WorldBuildDeletePlaceholderRequest = z.infer<typeof worldBuildDeletePlaceholderRequestSchema>
 export type WorldBuildDeletePlaceholderResponse = z.infer<typeof worldBuildDeletePlaceholderResponseSchema>
 export type WorldBuildPlannerMode = z.infer<typeof worldBuildPlannerModeSchema>
