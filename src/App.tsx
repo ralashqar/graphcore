@@ -312,6 +312,7 @@ function logCinematicTargetNodeState(
       nodeType: node.type,
       bodyImageAssetKey: node.body.imageAssetKey ?? null,
       displayIconAssetKey: node.display.iconAssetKey ?? null,
+      previewImageAssetKey: take.previewImageAssetKey ?? null,
       storyboardAssetKey: take.storyboardAssetKey,
       outputStillAssetKey: take.outputStillAssetKey,
       outputVideoAssetKey: take.outputVideoAssetKey,
@@ -355,6 +356,7 @@ function overlayCinematicRunBindingsOntoGraphs(
       const nextTakeMetadata =
         job.kind === 'storyboard_still'
           ? {
+              previewImageAssetKey: job.stillAssetKey ?? takeConfig.previewImageAssetKey,
               storyboardAssetKey: job.stillAssetKey ?? takeConfig.storyboardAssetKey,
               lastRunId: run.id,
               lastStoryboardJobId: job.id,
@@ -364,6 +366,7 @@ function overlayCinematicRunBindingsOntoGraphs(
             }
           : job.kind === 'take_still'
             ? {
+                previewImageAssetKey: job.stillAssetKey ?? takeConfig.previewImageAssetKey,
                 outputStillAssetKey: job.stillAssetKey ?? takeConfig.outputStillAssetKey,
                 lastRunId: run.id,
                 lastStillJobId: job.id,

@@ -602,6 +602,7 @@ function rederiveTakeSpec(input: {
     proofMoment: takeFieldValueFromShots(includedShots, (shot) => shot.proofMoment, ''),
     ctaStyle: takeFieldValueFromShots(includedShots, (shot) => shot.ctaStyle, ''),
     requiredSourceRefIds,
+    previewImageAssetKey: existingTake?.previewImageAssetKey ?? null,
     storyboardAssetKey: existingTake?.storyboardAssetKey ?? null,
     outputStillAssetKey: existingTake?.outputStillAssetKey ?? null,
     outputVideoAssetKey: existingTake?.outputVideoAssetKey ?? null,
@@ -699,12 +700,12 @@ function applyEditedSequenceToGraph(graph: GraphDefinition, nextSequenceInput: C
       body: {
         ...(existingNode?.body ?? { text: null, imageAssetKey: null, audioAssetKey: null, choices: [] }),
         text: take.shotIds.join(', '),
-        imageAssetKey: take.storyboardAssetKey ?? take.outputStillAssetKey ?? existingNode?.body?.imageAssetKey ?? null,
+        imageAssetKey: existingNode?.body?.imageAssetKey ?? take.previewImageAssetKey ?? take.outputStillAssetKey ?? take.storyboardAssetKey ?? null,
       },
       position: existingNode?.position ?? { x: 620 + index * 420, y: 520 },
       display: {
         ...(existingNode?.display ?? { iconAssetKey: null, compactPreview: false }),
-        iconAssetKey: take.storyboardAssetKey ?? take.outputStillAssetKey ?? existingNode?.display?.iconAssetKey ?? null,
+        iconAssetKey: existingNode?.display?.iconAssetKey ?? take.previewImageAssetKey ?? take.outputStillAssetKey ?? take.storyboardAssetKey ?? null,
       },
       metadata: updateNodeMetadataWithTake(existingNode?.metadata as Record<string, unknown> | undefined, take),
     })
@@ -912,7 +913,9 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
   }, [inspectorWidth])
 
   const buildNodeData = useCallback((node: NodeDefinition) => {
-    const previewAsset = resolveNodePreviewAsset(node, definitions, assets)
+    const previewAsset = node.type === 'cinematic_take'
+      ? resolveLatestTakeRunPreviewAsset(node.key, currentGraphRuns, assets) ?? resolveNodePreviewAsset(node, definitions, assets)
+      : resolveNodePreviewAsset(node, definitions, assets)
     const shotRunStatus = ['cinematic_shot', 'cinematic_take'].includes(node.type)
       ? currentGraphRuns.find((run) => run.jobs.some((job) => job.shotNodeKey === node.key)) ?? null
       : null
@@ -4114,15 +4117,36 @@ function resolveNodePreviewAsset(node: NodeDefinition, definitions: DefinitionBa
   if (node.type === 'cinematic_take') {
     const take = getCinematicTakeNodeConfig(node)
     return assets.find((asset) => asset.key === (
-      take.storyboardAssetKey
-      ?? take.outputStillAssetKey
-      ?? node.body.imageAssetKey
+      node.body.imageAssetKey
       ?? node.display.iconAssetKey
+      ?? take.previewImageAssetKey
+      ?? take.outputStillAssetKey
+      ?? take.storyboardAssetKey
       ?? null
     )) ?? null
   }
 
   return assets.find((asset) => asset.key === (node.display.iconAssetKey ?? node.body.imageAssetKey)) ?? null
+}
+
+function resolveLatestTakeRunPreviewAsset(
+  nodeKey: string,
+  runs: CinematicRun[],
+  assets: AssetDefinition[],
+) {
+  for (const run of runs) {
+    for (const job of run.jobs) {
+      if (job.shotNodeKey !== nodeKey) continue
+      if (job.kind !== 'take_still' && job.kind !== 'storyboard_still') continue
+      if (typeof job.stillAssetKey !== 'string' || job.stillAssetKey.trim().length === 0) continue
+      const asset = assets.find((entry) => entry.key === job.stillAssetKey) ?? null
+      if (asset && resolveAssetPreviewUrl(asset)) {
+        return asset
+      }
+    }
+  }
+
+  return null
 }
 
 function resolveDefinitionPreviewAsset(definition: DefinitionBase | null, assets: AssetDefinition[]) {

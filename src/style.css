@@ -1059,8 +1059,9 @@ code {
 
 .flow-node-banner {
   width: 100%;
-  max-height: 172px;
-  object-fit: cover;
+  height: auto;
+  display: block;
+  object-fit: contain;
   border-radius: 14px;
   border: 1px solid rgba(255, 255, 255, 0.1);
   background: rgba(255, 255, 255, 0.03);

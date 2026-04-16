@@ -430,7 +430,10 @@ Deno.serve(async (request) => {
           : {}),
         metadata: {
           ...(reservedTakeStillAsset
-            ? { outputStillAssetKey: reservedTakeStillAsset.key }
+            ? {
+                previewImageAssetKey: reservedTakeStillAsset.key,
+                outputStillAssetKey: reservedTakeStillAsset.key,
+              }
             : {}),
           lastRunId: runId,
           lastStillJobId: takeStillJobId,
@@ -444,7 +447,10 @@ Deno.serve(async (request) => {
           : {}),
         metadata: {
           ...(reservedTakeStillAsset
-            ? { outputStillAssetKey: reservedTakeStillAsset.key }
+            ? {
+                previewImageAssetKey: reservedTakeStillAsset.key,
+                outputStillAssetKey: reservedTakeStillAsset.key,
+              }
             : {}),
           lastRunId: runId,
           lastStillJobId: takeStillJobId,
@@ -526,6 +532,7 @@ Deno.serve(async (request) => {
         updatedGraph = applyTakeBindingToGraph(updatedGraph, storyboardNodeKey, {
           bodyImageAssetKey: reservedStoryboardAsset.key,
           metadata: {
+            previewImageAssetKey: reservedStoryboardAsset.key,
             storyboardAssetKey: reservedStoryboardAsset.key,
             lastRunId: runId,
             lastStoryboardJobId: stillJobId,
@@ -534,6 +541,7 @@ Deno.serve(async (request) => {
         await persistTakeBindingsIfPresent(client, payload.snapshot.draft.id, graph.key, storyboardNodeKey, {
           bodyImageAssetKey: reservedStoryboardAsset.key,
           metadata: {
+            previewImageAssetKey: reservedStoryboardAsset.key,
             storyboardAssetKey: reservedStoryboardAsset.key,
             lastRunId: runId,
             lastStoryboardJobId: stillJobId,
@@ -684,6 +692,7 @@ Deno.serve(async (request) => {
           updatedGraph = applyTakeBindingToGraph(updatedGraph, storyboardNodeKey, {
             bodyImageAssetKey: storyboardJob.stillAssetKey,
             metadata: {
+              previewImageAssetKey: storyboardJob.stillAssetKey,
               storyboardAssetKey: storyboardJob.stillAssetKey,
               lastRunId: runId,
               lastStoryboardJobId: storyboardJob.id,
@@ -695,6 +704,7 @@ Deno.serve(async (request) => {
           await persistTakeBindingsIfPresent(client, payload.snapshot.draft.id, graph.key, storyboardNodeKey, {
             bodyImageAssetKey: storyboardJob.stillAssetKey,
             metadata: {
+              previewImageAssetKey: storyboardJob.stillAssetKey,
               storyboardAssetKey: storyboardJob.stillAssetKey,
               lastRunId: runId,
               lastStoryboardJobId: storyboardJob.id,

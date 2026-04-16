@@ -291,6 +291,7 @@ function rebuildGraphFromRunJobs(
       nextGraph = applyTakeBindingToGraph(nextGraph, job.shotNodeKey, {
         bodyImageAssetKey: job.stillAssetKey,
         metadata: {
+          previewImageAssetKey: job.stillAssetKey,
           outputStillAssetKey: job.stillAssetKey,
           provider: job.provider,
           providerModel: job.model,
@@ -305,6 +306,7 @@ function rebuildGraphFromRunJobs(
         nextGraph = applyTakeBindingToGraph(nextGraph, job.shotNodeKey, {
           bodyImageAssetKey: job.stillAssetKey,
           metadata: {
+            previewImageAssetKey: job.stillAssetKey,
             storyboardAssetKey: job.stillAssetKey,
             provider: job.provider,
             providerModel: job.model,
@@ -923,6 +925,7 @@ Deno.serve(async (request) => {
           updatedGraph = applyTakeBindingToGraph(updatedGraph, job.shotNodeKey, {
             bodyImageAssetKey: storedAsset.key,
             metadata: {
+              previewImageAssetKey: storedAsset.key,
               outputStillAssetKey: storedAsset.key,
               provider: 'fal',
               providerModel: String(job.model ?? stillModel),
@@ -932,6 +935,7 @@ Deno.serve(async (request) => {
           await persistTakeBindingsIfPresent(client, payload.snapshot.draft.id, updatedGraph.key, job.shotNodeKey, {
             bodyImageAssetKey: storedAsset.key,
             metadata: {
+              previewImageAssetKey: storedAsset.key,
               outputStillAssetKey: storedAsset.key,
               provider: 'fal',
               providerModel: String(job.model ?? stillModel),
@@ -943,6 +947,7 @@ Deno.serve(async (request) => {
             updatedGraph = applyTakeBindingToGraph(updatedGraph, job.shotNodeKey, {
               bodyImageAssetKey: storedAsset.key,
               metadata: {
+                previewImageAssetKey: storedAsset.key,
                 storyboardAssetKey: storedAsset.key,
                 provider: 'fal',
                 providerModel: String(job.model ?? stillModel),
@@ -952,6 +957,7 @@ Deno.serve(async (request) => {
             await persistTakeBindingsIfPresent(client, payload.snapshot.draft.id, updatedGraph.key, job.shotNodeKey, {
               bodyImageAssetKey: storedAsset.key,
               metadata: {
+                previewImageAssetKey: storedAsset.key,
                 storyboardAssetKey: storedAsset.key,
                 provider: 'fal',
                 providerModel: String(job.model ?? stillModel),

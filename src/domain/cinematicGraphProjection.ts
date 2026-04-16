@@ -59,6 +59,7 @@ function buildTakeTagBundle(shots: TakeDocumentShotLike[]) {
 function pickTakeRuntimeFields(take: Partial<CinematicSequence['takes'][number]> | null | undefined) {
   if (!take) return {}
   return {
+    previewImageAssetKey: take.previewImageAssetKey ?? null,
     storyboardAssetKey: take.storyboardAssetKey ?? null,
     outputVideoAssetKey: take.outputVideoAssetKey ?? null,
     outputStillAssetKey: take.outputStillAssetKey ?? null,
@@ -174,7 +175,7 @@ export function projectSequenceToTakeOnlyGraph(
       body: {
         ...(existingNode?.body ?? { text: null, imageAssetKey: null, audioAssetKey: null, choices: [] }),
         text: take.shotIds.join(', '),
-        imageAssetKey: take.storyboardAssetKey ?? take.outputStillAssetKey ?? existingNode?.body?.imageAssetKey ?? null,
+        imageAssetKey: existingNode?.body?.imageAssetKey ?? take.previewImageAssetKey ?? take.outputStillAssetKey ?? take.storyboardAssetKey ?? null,
       },
       position: deriveDefaultTakePosition(graph, take, index, existingNode),
       metadata: {
@@ -184,7 +185,7 @@ export function projectSequenceToTakeOnlyGraph(
       },
       display: {
         ...(existingNode?.display ?? { iconAssetKey: null, compactPreview: false }),
-        iconAssetKey: take.storyboardAssetKey ?? take.outputStillAssetKey ?? existingNode?.display?.iconAssetKey ?? null,
+        iconAssetKey: existingNode?.display?.iconAssetKey ?? take.previewImageAssetKey ?? take.outputStillAssetKey ?? take.storyboardAssetKey ?? null,
       },
     })
   })

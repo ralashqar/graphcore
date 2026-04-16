@@ -368,6 +368,7 @@ export const cinematicTakeSpecSchema = z.object({
   proofMoment: z.string().default(''),
   ctaStyle: z.string().default(''),
   requiredSourceRefIds: z.array(z.string()).default([]),
+  previewImageAssetKey: z.string().nullable().default(null),
   storyboardAssetKey: z.string().nullable().default(null),
   outputVideoAssetKey: z.string().nullable().default(null),
   outputStillAssetKey: z.string().nullable().default(null),
@@ -1211,6 +1212,7 @@ function preserveCompiledTakeRuntimeFields(
     if (!source) return take
     return {
       ...take,
+      previewImageAssetKey: source.previewImageAssetKey ?? null,
       storyboardAssetKey: source.storyboardAssetKey ?? null,
       outputVideoAssetKey: source.outputVideoAssetKey ?? null,
       outputStillAssetKey: source.outputStillAssetKey ?? null,
