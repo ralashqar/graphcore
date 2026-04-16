@@ -70,6 +70,266 @@ Example:
 Shot 1: Character A draws Sword B and rushes Character C across the temple floor. Camera tracks left at waist height and then pushes in on the clash. Keep the lit doorway behind Character C and make the sword silhouette readable. Dialogue: "Move." @Image1 is the shot panel. @Image2 is Character A with Sword B. @Image3 is the temple environment.
 ```
 
+## Directing Model, Not Description Model
+
+Treat Seedance like a compact film set, not a text-to-video lottery box.
+
+The model behaves best when GraphCore gives it:
+
+- anchored subject identity
+- one dominant action
+- one dominant camera move
+- clear visual styling
+- explicit continuity guardrails
+
+If GraphCore asks Seedance to invent identity, action, camera, mood, and pacing all at once from a loose paragraph, outputs drift. The more the system can lock visually before generation, the more usable the clip becomes.
+
+This is especially important for:
+
+- creator-led UGC
+- product demos
+- app proof shots
+- emotional dialogue beats
+- multi-beat takes that need continuity
+
+## The Five-Layer Prompt Stack
+
+The most reliable Seedance prompt structure is:
+
+1. Subject
+2. Action
+3. Camera
+4. Style
+5. Constraints
+
+This should increasingly become GraphCore's take-prompt assembly model.
+
+### 1. Subject
+
+The subject layer is the identity anchor.
+
+It should specify:
+
+- who or what is central
+- the most important visual markers
+- what part of the body or object is visible
+- where the subject sits in frame
+
+Good subject anchors reduce face drift, wardrobe drift, and prop substitution.
+
+For GraphCore this means take outputs should preserve enough specific identity markers to survive generation:
+
+- age range or life-stage when relevant
+- hair silhouette
+- signature accessories
+- wardrobe state
+- product or prop state
+- readable screen role when a phone is the proof surface
+
+### 2. Action
+
+Seedance responds best to one dominant motion beat plus at most a small number of secondary micro-motions.
+
+Good dominant actions:
+
+- walks toward camera
+- lifts the phone into frame
+- turns to show the app screen
+- pauses with hand over the drink
+- sits down and exhales
+
+Good micro-motions:
+
+- subtle head turn
+- small hand gesture
+- fabric shift
+- hair movement
+- blink or tiny expression change
+
+GraphCore should avoid prompting a take as a pile of events. A take should usually have one main motion arc, with the authored `actions` list supporting that arc rather than competing with it.
+
+### 3. Camera
+
+Camera is first-class instruction, not decorative phrasing.
+
+Each shot or take should prefer one primary move:
+
+- locked tripod
+- static handheld
+- slow push-in
+- orbit
+- pan
+- dolly follow
+
+If the take output mixes several camera intentions without a clear lead instruction, the result is less stable.
+
+For GraphCore this means authored fields like:
+
+- `framing`
+- `cameraAngle`
+- `cameraMovement`
+- `lensPreference`
+
+should resolve to one coherent movement grammar, not several competing ideas in one take.
+
+### 4. Style
+
+Style should be concrete and visual, not abstract mood language.
+
+Prefer:
+
+- lighting direction
+- palette
+- texture
+- environmental particles or haze
+- realism level
+
+Avoid relying on vague words like:
+
+- cinematic
+- epic
+- beautiful
+- stunning
+- lots of movement
+
+Those words do not tell the model what pixels to render.
+
+### 5. Constraints
+
+Constraints are what stop drift.
+
+Useful constraints include:
+
+- exact duration
+- realism level
+- stable face and wardrobe
+- no jitter
+- no morphing
+- smooth pacing
+- readable product or screen
+- continuity of prop position
+
+GraphCore should treat constraints as part of the take package, not as optional suffix text.
+
+## How This Should Change GraphCore Take Outputs
+
+The final take output is not just script metadata. It is the basis of the generation prompt that will be sent into Seedance. That means take authoring should increasingly package each take as a directable generation unit.
+
+Recommended translation from GraphCore fields into the Seedance mental model:
+
+- `beat`
+  - summarize the dominant visual event, not every event that happens
+- `dialogue`
+  - keep lines spoken and shootable, not essay-like
+- `actions`
+  - support one dominant motion beat plus a few micro-motions
+- `framing`, `cameraAngle`, `cameraMovement`, `lensPreference`
+  - resolve into one clear camera plan
+- `visualPrompt`
+  - carry subject, action, camera, and style in that order
+- `compositionGuide`
+  - carry continuity, readability, and blocking constraints
+- `audio`
+  - stay concrete and physical rather than abstract
+
+Practical take-writing guidance:
+
+- one take should usually revolve around one dominant action
+- one take should usually have one dominant camera move
+- style should decorate the motion, not replace it
+- prompts should explicitly protect identity and prop continuity
+- the system should avoid overloading a take with too many action changes
+
+## Reference-Led Generation
+
+The cleanest Seedance results usually come from reference-led prompting.
+
+References should carry most of the burden for:
+
+- identity
+- wardrobe
+- prop continuity
+- composition
+- motion rhythm
+- mood
+
+Then the text prompt can act more like direction than invention.
+
+GraphCore should keep pushing toward reference-first generation for:
+
+- characters
+- products
+- app screens
+- storyboard layouts
+- composite subject-plus-prop packs
+
+## Character Concept Art Should Be Reference-Ready
+
+Character concept art for Seedance-adjacent workflows should not default to poster art.
+
+For video continuity, the most useful character reference set is:
+
+- neutral front or three-quarter portrait
+- side profile
+- full-body view
+- stable wardrobe state
+- clean or low-noise background
+- consistent lighting and lens feel
+
+The goal is not just "beautiful character art." The goal is a reusable identity lock that can survive into:
+
+- take stills
+- shot stills
+- storyboard panels
+- composite refs
+- final video generation
+
+For GraphCore this implies:
+
+- character concept prompts should preserve a small set of signature markers
+- wardrobe and accessories should stay stable unless a change is intentional
+- backgrounds should not overpower the subject when the image is meant to act as a reference
+- a concept image intended for continuity should prefer clarity and reuse over spectacle
+
+## Product, App, And Proof-Surface References
+
+For product or app-led takes, GraphCore should treat proof surfaces as dedicated subject anchors.
+
+Examples:
+
+- product in hand with label readable
+- phone screen in over-shoulder orientation
+- app UI in a believable hand-held context
+- receipt, package, or countertop proof framed for legibility
+
+The take prompt should be explicit about whether the proof surface is:
+
+- the hero subject
+- a secondary subject
+- a continuity prop
+- an insert proof beat
+
+## Prompt Hygiene And Failure Modes
+
+Words that often degrade output unless qualified:
+
+- fast
+- epic
+- beautiful
+- stunning
+- cinematic
+- lots of movement
+
+Instead of those labels, specify:
+
+- what moves
+- how fast it moves
+- what the camera does
+- what the lighting looks like
+- what must stay stable
+
+If a phrase does not help Seedance decide visible pixels, motion, or continuity, it is probably noise.
+
 ## Storyboard Guidance
 
 Use a sequence board when:
@@ -99,6 +359,14 @@ Good cases:
 
 Composite references should be generated as clean continuity frames, not poster art.
 
+When a take needs strong identity retention, it is often better to use:
+
+- neutral subject refs
+- composite subject-plus-prop refs
+- storyboard layout refs
+
+than to rely on descriptive prompt text alone.
+
 ## Dialogue And Audio
 
 Dialogue and audio are now first-class shot data.
@@ -119,6 +387,41 @@ Use audio beats for:
 - intentional silence
 
 Keep audio direction concrete. Seedance generates native audio, so prompts like `metal scrapes on stone`, `wind through broken arches`, or `breathing close to mic` work better than abstract mood labels.
+
+For creator-led UGC specifically, prefer audio cues like:
+
+- close mic room tone
+- soft breath before speaking
+- thumb tap on phone glass
+- distant kitchen ambience
+- bedding rustle
+
+over abstract mood labels like `cozy`, `emotional`, or `cinematic tension`.
+
+## Integration Checklist For GraphCore
+
+When GraphCore prepares a take for Seedance, the system should increasingly ensure:
+
+- the take has one clear subject anchor
+- the take has one dominant action
+- the take has one primary camera move
+- style language is concrete and visual
+- continuity constraints are explicit
+- proof surfaces are named and readable when required
+- reference roles are clear:
+  - subject lock
+  - prop lock
+  - environment lock
+  - storyboard/layout lock
+  - style lock
+
+This should influence not only final take prompt assembly, but also:
+
+- character concept art generation
+- product concept and proof still generation
+- storyboard layout generation
+- composite reference generation
+- preset-specific UGC capture recommendations
 
 ## GraphCore Example
 

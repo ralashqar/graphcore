@@ -88,6 +88,35 @@ Examples:
 
 The preset system should not only power dropdown labels. The cinematic prompt builders should inject the richer camera, lighting, texture, and guardrail directives into prompt assembly.
 
+### 5. Treat concept art as future reference material when video generation is the destination
+
+When GraphCore is generating characters, products, or props that will later feed Seedance-style video workflows, the "concept art" should often behave more like a reusable continuity sheet than a poster.
+
+That means reference-oriented concept outputs should prefer:
+
+- stable identity markers
+- repeatable wardrobe and accessories
+- readable silhouette
+- clean or quiet backgrounds
+- neutral-to-controlled lighting
+- angles that are useful for later continuity locking
+
+Good examples:
+
+- neutral three-quarter character portrait
+- side profile of the same character
+- full-body wardrobe reference
+- phone-in-hand creator reference
+- product-in-hand continuity frame
+
+Weak examples:
+
+- dramatic poster key art with extreme lighting
+- heavy fog, bokeh, or effects that obscure face and wardrobe
+- glamorous beauty-pass rendering that will not match UGC capture
+
+The downstream goal is not just attractive art. It is stable video-ready reference material.
+
 ## Integration Notes
 
 The current integration path is:
@@ -97,6 +126,12 @@ The current integration path is:
 - `supabase/functions/_shared/cinematics.ts`
   - inject preset-owned style directives into still and storyboard prompt assembly
   - resolve an effective cinematic art style so UGC graphs can use subtype-appropriate capture presets without changing the project-global style
+- world-build and cinematic planning
+  - concept art prompts should distinguish between:
+    - showcase art
+    - continuity art
+    - proof-surface art
+  - when the asset is likely to become a video reference, bias toward continuity art
 - global workspace and onboarding
   - show richer "best for" guidance when selecting presets
 - cinematics workspace
@@ -124,6 +159,12 @@ High-sensitivity photoreal presets will improve further if each preset eventuall
 - one or more reference stills
 - negative examples
 - short prompt exemplars
+
+For continuity-heavy presets, it would also help to include:
+
+- "good reference" examples
+- "bad poster art" examples
+- examples of stable phone-in-hand or product-in-hand compositions
 
 ### 3. Split project-global style from per-graph capture profile
 
