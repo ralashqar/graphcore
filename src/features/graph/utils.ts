@@ -14,6 +14,13 @@ const hiddenCinematicTemplateKeys = new Set([
   'wardrobe_ref',
   'sequence_board_ref',
   'shot_panel_ref',
+  'cinematic_shot',
+  'cinematic_establishing',
+  'cinematic_dialogue',
+  'cinematic_reveal',
+  'cinematic_action',
+  'cinematic_insert',
+  'cinematic_transition',
 ])
 
 export function getPlacementPosition(

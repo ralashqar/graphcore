@@ -3,8 +3,10 @@ import { z } from 'npm:zod@4'
 import {
   actionBeatSchema,
   audioBeatSchema,
+  buildCinematicSequenceFromScriptDoc,
   buildCinematicSettingsPatchFromFormatSubtype,
   buildCinematicSettingsPatchFromPresetFamily,
+  compileCinematicSequence,
   cinematicBeatSchema,
   cinematicDominantTriggerSchema,
   cinematicFormatSubtypeSchema,
@@ -16,6 +18,7 @@ import {
   cinematicScriptDocSchema,
   cinematicSequenceSchema,
   coerceFormatSubtypeForPresetFamily,
+  deriveCinematicScriptFromSequence,
   deriveDefaultDominantTriggerFromFormatSubtype,
   deriveDefaultFormulaFamilyFromFormatSubtype,
   deriveDefaultFormatSubtypeFromPresetFamily,
@@ -32,6 +35,7 @@ import {
   type CinematicEntityRef,
   type CinematicPlan,
 } from '../../../src/domain/worldBuild.ts'
+import { compileCinematicGraphFromSequence } from '../../../src/domain/cinematicScriptCompiler.ts'
 
 type SnapshotDefinition = {
   key: string
@@ -236,6 +240,7 @@ export const cinematicPlannerRawSchema = z.object({
     definitionKey: z.string().nullable().optional(),
     planItemId: z.string().nullable().optional(),
   })).default([]),
+  sequence: cinematicSequenceSchema.nullable().default(null),
   scriptDoc: cinematicScriptDocSchema.nullable().default(null),
   relationshipRefs: z.array(cinematicRelationshipSchema).default([]),
   compositeRefPlans: z.array(cinematicCompositeRefPlanSchema).default([]),
@@ -1646,7 +1651,8 @@ export function coerceCinematicPlannerRaw(input: unknown, options: CoerceCinemat
   const requestSummary = pickFirstString(record, ['requestSummary', 'summary', 'title']) || 'Cinematic build plan'
   const graphName = pickFirstString(record, ['graphName', 'name', 'title']) || 'Prompt Cinematic'
   const graphSummary = pickFirstString(record, ['graphSummary', 'summary', 'description']) || requestSummary
-  const scriptRecord = asRecord(record.scriptDoc) ?? record
+  const rawSequenceRecord = asRecord(record.sequence)
+  const scriptRecord = asRecord(record.scriptDoc) ?? rawSequenceRecord ?? record
   const rawScriptMarkdown = asString(record.rawScriptMarkdown ?? record.scriptMarkdown)
   const lockedEntityRefs = options.lockedEntityRefs
     ? options.lockedEntityRefs.map((entry) => ({ ...entry }))
@@ -1708,9 +1714,15 @@ export function coerceCinematicPlannerRaw(input: unknown, options: CoerceCinemat
     })
     .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
 
-  const rawScenes = Array.isArray(scriptRecord.scenes) ? scriptRecord.scenes : []
+  const rawScenes = Array.isArray(rawSequenceRecord?.scenes)
+    ? rawSequenceRecord.scenes
+    : Array.isArray(scriptRecord.scenes)
+      ? scriptRecord.scenes
+      : []
 
-  const rawShots = Array.isArray(scriptRecord.shots)
+  const rawShots = Array.isArray(rawSequenceRecord?.shots)
+    ? rawSequenceRecord.shots
+    : Array.isArray(scriptRecord.shots)
     ? scriptRecord.shots
     : Array.isArray(scriptRecord.beats)
       ? scriptRecord.beats
@@ -1889,8 +1901,15 @@ export function coerceCinematicPlannerRaw(input: unknown, options: CoerceCinemat
                 ? shot.duration
                 : null,
         }),
+        forceTakeBreak: Boolean(shot.forceTakeBreak ?? shot.breakAfter ?? shot.forceBreak ?? false),
         visualPrompt: pickFirstString(shot, ['visualPrompt', 'prompt', 'visualDescription']),
         compositionGuide: pickFirstString(shot, ['compositionGuide', 'blocking', 'sceneComposition', 'ingredientGuide', 'stagingNotes']),
+        requiredSourceRefIds: Array.from(new Set(collectNamedLabels(
+          shot.requiredSourceRefIds
+          ?? shot.sourceRefIds
+          ?? shot.sources
+          ?? [],
+        ))),
         compositeRefIds: Array.from(new Set(collectNamedLabels(shot.compositeRefIds ?? shot.composites ?? shot.compositeRefs))),
         storyboardRefIds: Array.from(new Set(collectNamedLabels(shot.storyboardRefIds ?? shot.storyboards ?? shot.storyboardRefs))),
         beats: coerceArrayWithSchema(shot.beats, cinematicBeatSchema),
@@ -2109,6 +2128,8 @@ export function coerceCinematicPlannerRaw(input: unknown, options: CoerceCinemat
     logline: markdownParsed?.logline || pickFirstString(scriptRecord, ['logline', 'summary']) || graphSummary,
     tone: markdownParsed?.tone || pickFirstString(scriptRecord, ['tone']),
     continuityNotes: pickFirstString(scriptRecord, ['continuityNotes']),
+    statusPayoffType: pickFirstString(scriptRecord, ['statusPayoffType']),
+    narrativeArcTemplate: pickFirstString(scriptRecord, ['narrativeArcTemplate']),
     entityBindings: entityRefs.map((entityRef) => ({
       id: entityRef.id,
       kind: entityRef.kind,
@@ -2155,16 +2176,21 @@ export function coerceCinematicPlannerRaw(input: unknown, options: CoerceCinemat
       participantRefIds: shot.participantRefIds,
       locationRefId: shot.locationRefId,
       propRefIds: shot.propRefIds,
-      requiredSourceRefIds: Array.from(new Set([
-        ...(shot.storyboardRefIds ?? []),
-        ...(shot.compositeRefIds ?? []),
-        ...shot.participantRefIds,
-        ...(shot.locationRefId ? [shot.locationRefId] : []),
-        ...shot.propRefIds,
-      ])),
+      requiredSourceRefIds: Array.from(new Set(
+        shot.requiredSourceRefIds.length > 0
+          ? shot.requiredSourceRefIds
+          : [
+              ...(shot.storyboardRefIds ?? []),
+              ...(shot.compositeRefIds ?? []),
+              ...shot.participantRefIds,
+              ...(shot.locationRefId ? [shot.locationRefId] : []),
+              ...shot.propRefIds,
+            ],
+      )),
       compositeRefIds: shot.compositeRefIds,
       storyboardRefIds: shot.storyboardRefIds,
       durationSeconds: shot.durationSeconds,
+      forceTakeBreak: shot.forceTakeBreak,
       beats: shot.beats,
       dialogue: shot.dialogue,
       actions: shot.actions,
@@ -2177,6 +2203,77 @@ export function coerceCinematicPlannerRaw(input: unknown, options: CoerceCinemat
     })),
     storyboard: storyboardPlan,
   })
+  const sequence = compileCinematicSequence(
+    rawSequenceRecord
+      ? cinematicSequenceSchema.parse({
+          ...rawSequenceRecord,
+          title: pickFirstString(rawSequenceRecord, ['title']) || scriptDoc.title,
+          logline: pickFirstString(rawSequenceRecord, ['logline', 'summary']) || scriptDoc.logline,
+          tone: pickFirstString(rawSequenceRecord, ['tone']) || scriptDoc.tone,
+          continuityNotes: pickFirstString(rawSequenceRecord, ['continuityNotes']) || scriptDoc.continuityNotes,
+          statusPayoffType: pickFirstString(rawSequenceRecord, ['statusPayoffType']) || scriptDoc.statusPayoffType,
+          narrativeArcTemplate: pickFirstString(rawSequenceRecord, ['narrativeArcTemplate']) || scriptDoc.narrativeArcTemplate,
+          references: scriptDoc.entityBindings.map((binding) => ({
+            id: binding.id,
+            refKind: binding.definitionKey ? 'definition' : binding.kind === 'audio' ? 'audio' : binding.kind === 'style' ? 'style' : 'asset',
+            role: binding.role,
+            label: binding.label,
+            summary: binding.summary,
+            definitionKey: binding.definitionKey,
+            assetKey: binding.assetKey,
+            assetRole: binding.kind === 'audio' ? 'audio' : binding.kind === 'style' ? 'style' : binding.kind,
+            stagingNotes: binding.stagingNotes,
+            priority: binding.priority,
+            required: binding.required,
+          })),
+          scenes: normalizedScenes,
+          compositeRefs: scriptDoc.compositeRefs,
+          relationships: scriptDoc.relationships,
+          storyboard: scriptDoc.storyboard,
+          shots: scriptDoc.shots.map((shot) => ({
+            id: shot.id,
+            sceneId: shot.sceneId,
+            title: shot.title,
+            subtitle: shot.subtitle,
+            beat: shot.beat,
+            emotionalBeat: shot.emotionalBeat,
+            hookRole: shot.hookRole,
+            formatSubtype: shot.formatSubtype,
+            formulaFamily: shot.formulaFamily,
+            dominantTrigger: shot.dominantTrigger,
+            hookType: shot.hookType,
+            targetEmotion: shot.targetEmotion,
+            personaStyle: shot.personaStyle,
+            contrastAxis: shot.contrastAxis,
+            proofMoment: shot.proofMoment,
+            ctaStyle: shot.ctaStyle,
+            proofType: shot.proofType,
+            ctaType: shot.ctaType,
+            platformTarget: shot.platformTarget,
+            shotType: shot.shotType,
+            framing: shot.framing,
+            cameraAngle: shot.cameraAngle,
+            cameraMovement: shot.cameraMovement,
+            lensPreference: shot.lensPreference,
+            visualPrompt: shot.visualPrompt,
+            compositionGuide: shot.compositionGuide,
+            participantRefIds: shot.participantRefIds,
+            locationRefId: shot.locationRefId,
+            propRefIds: shot.propRefIds,
+            requiredSourceRefIds: shot.requiredSourceRefIds,
+            compositeRefIds: shot.compositeRefIds,
+            storyboardRefIds: shot.storyboardRefIds,
+            durationSeconds: shot.durationSeconds,
+            forceTakeBreak: shot.forceTakeBreak,
+            beats: shot.beats,
+            dialogue: shot.dialogue,
+            actions: shot.actions,
+            audio: shot.audio,
+          })),
+          takes: Array.isArray(rawSequenceRecord.takes) ? rawSequenceRecord.takes : [],
+        })
+      : buildCinematicSequenceFromScriptDoc(scriptDoc),
+  )
 
   return cinematicPlannerRawSchema.parse({
     requestSummary,
@@ -2184,6 +2281,7 @@ export function coerceCinematicPlannerRaw(input: unknown, options: CoerceCinemat
     graphSummary,
     rawScriptMarkdown,
     entityRefs,
+    sequence,
     scriptDoc,
     relationshipRefs,
     compositeRefPlans,
@@ -2386,40 +2484,22 @@ export function cinematicScriptRepairSystemPrompt(
   targetShotCount = 5,
 ) {
   return [
-    'You repair a weak GraphCore cinematic script draft into a stronger authored script.',
+    'You repair a weak GraphCore cinematic sequence draft into a stronger authored sequence.',
     'Return JSON only.',
-    'Return exactly one JSON object with top-level keys: requestSummary, graphName, graphSummary, rawScriptMarkdown, graphSettings, diagnostics, assistantNotes.',
+    'Return exactly one JSON object with top-level keys: requestSummary, graphName, graphSummary, graphSettings, sequence, diagnostics, assistantNotes.',
     'Preserve the same story intent, locked entity ids, and overall cinematic shape unless one of the reported quality failures requires adjustment.',
     'Do not invent new entities, rename existing entities, or change locked ids.',
-    `Write the script in this exact markdown contract with ${targetShotCount} shot blocks unless the quality failures explicitly justify fewer:`,
-    '# Title',
-    'Logline: ...',
-    'Tone: ...',
-    '',
-    '## References',
-    '- ref_id | kind | Human Label',
-    '',
-    '## Shot 1',
-    'Role: hook',
-    'Environment: environment_ref_id',
-    'Characters: character_ref_a, character_ref_b',
-    'Props: item_ref_a, item_ref_b',
-    'Action: Literal on-screen action only.',
-    'Dialogue:',
-    '- character_ref_a: "Actual line"',
-    'Narrator Overlay:',
-    '- Short on-screen overlay or narrator text.',
-    'Composition: Short framing note.',
-    '',
-    'Repeat the same format for every shot.',
-    'Action is required for every shot. Environment and Characters are required for every shot. Props, Role, Dialogue, Narrator Overlay, and Composition are optional.',
+    `Return a sequence object with about ${targetShotCount} shots unless the quality failures explicitly justify fewer.`,
+    'sequence must be valid structured JSON, not markdown.',
+    'sequence must include: title, logline, tone, continuityNotes, references, scenes, storyboard, shots.',
+    'sequence.references must use only locked reference ids and include only refs actually used by the authored shots.',
+    'sequence.shots must be ordered and each shot must include: id, sceneId, title, beat, shotType, participantRefIds, locationRefId, propRefIds, requiredSourceRefIds, visualPrompt, compositionGuide, dialogue, actions, audio.',
+    'Use requiredSourceRefIds for the actual continuity-critical inputs the runtime should wire into the shot.',
+    'If a shot needs a hard take split, set forceTakeBreak to true on that shot. Do not author takes directly.',
     'If you use Role, only use these exact values: hook, setup, proof, payoff, cta.',
     'Use setup for normal support, context, or problem beats. Use proof for escalation, mechanism, comparison, or visible evidence beats. Do not invent extra role labels like support or escalation.',
-    'Do not return scriptDoc JSON. Put the full script inside rawScriptMarkdown as one markdown string.',
     'Do not invent new reference ids. Use only the locked ids from the provided reference list.',
-    'Only include refs in ## References when they are genuinely used by the authored shots. Do not mechanically repeat every locked ref.',
     'Only use Props for recurring hero or continuity-critical refs. Everyday carrier objects, staging objects, packaging, surfaces, and background clutter should usually stay inside Action or Composition instead of becoming reusable props.',
-    'Narrator Overlay is optional and should be used only when short on-screen text improves sound-off clarity. Keep it brief and mobile-readable.',
     'Keep Action literal, visual, and specific. Do not summarize the whole ad in one block.',
     `Locked preset family: ${getCinematicPresetLabel(presetFamily)}.`,
     formatSubtype ? `Locked format subtype: ${getCinematicFormatSubtypeLabel(formatSubtype)}.` : null,
@@ -2711,42 +2791,22 @@ export function cinematicScriptPlannerSystemPrompt(
   return [
     'You are the GraphCore cinematic script planner.',
     'Return JSON only.',
-    'Return exactly one JSON object with top-level keys: requestSummary, graphName, graphSummary, rawScriptMarkdown, graphSettings, diagnostics, assistantNotes.',
-    'rawScriptMarkdown must contain the full authored script in markdown. Do not return scriptDoc JSON.',
-    'Plan a cinematic script, not patch operations or graph nodes.',
+    'Return exactly one JSON object with top-level keys: requestSummary, graphName, graphSummary, graphSettings, sequence, diagnostics, assistantNotes.',
+    'Plan a cinematic sequence in structured JSON, not markdown, patch operations, or graph nodes.',
     'The prompt context includes a locked entity set that has already been resolved against the project.',
     'Do not invent new entities, rename them, or change their ids.',
-    `Write exactly ${targetShotCount} shot blocks unless the prompt explicitly asks for a nearby count.`,
-    'Use this exact markdown contract inside rawScriptMarkdown:',
-    '# Title',
-    'Logline: ...',
-    'Tone: ...',
-    '',
-    '## References',
-    '- ref_id | kind | Human Label',
-    '',
-    '## Shot 1',
-    'Role: hook',
-    'Environment: environment_ref_id',
-    'Characters: character_ref_a, character_ref_b',
-    'Props: item_ref_a, item_ref_b',
-    'Action: Literal on-screen action only.',
-    'Dialogue:',
-    '- character_ref_a: "Actual line"',
-    'Narrator Overlay:',
-    '- Short on-screen overlay or narrator text.',
-    'Composition: Short framing note.',
-    '',
-    'Repeat the same format for every shot.',
-    'Required per shot: Shot heading, Environment, Characters, Action.',
-    'Optional per shot: Role, Props, Dialogue, Narrator Overlay, Composition.',
+    `Write about ${targetShotCount} ordered shots unless the prompt explicitly asks for a nearby count.`,
+    'sequence must include: title, logline, tone, continuityNotes, references, scenes, storyboard, shots.',
+    'sequence.references must use only locked reference ids and include only refs that are actually needed by the authored shots.',
+    'sequence.scenes should group shots by scene and location when useful.',
+    'Each shot must include: id, sceneId, title, beat, shotType, participantRefIds, locationRefId, propRefIds, requiredSourceRefIds, durationSeconds or null, forceTakeBreak, framing, cameraAngle, cameraMovement, lensPreference, visualPrompt, compositionGuide, dialogue, actions, audio.',
+    'Use requiredSourceRefIds for the continuity-critical inputs the runtime should connect into the shot.',
+    'Do not author takes directly. Takes are derived later from the shot sequence.',
     'If you use Role, only use these exact values: hook, setup, proof, payoff, cta.',
     'Use setup for support, context, or problem beats. Use proof for escalation, mechanism, comparison, or visible evidence beats. Do not invent labels like support or escalation.',
-    'Only use reference ids from the locked entity set in the References section and shot blocks.',
-    'Only list refs in ## References when they are actually needed by the authored shots. Do not repeat every available locked ref by default.',
+    'Only use reference ids from the locked entity set in sequence.references and sequence.shots.',
     'Only use Props for recurring hero or continuity-critical refs. Everyday carrier objects, staging objects, packaging, surfaces, and background clutter should usually stay inside Action or Composition.',
     'Do not invent new reusable item refs from generic props. If an object is not already in the locked entity set and is not clearly a specific recurring hero object, keep it inside Action or Composition.',
-    'Narrator Overlay is optional and should be used only when short on-screen text improves sound-off clarity. Keep it brief and mobile-readable.',
     'When the prompt names multiple phases, split them into separate shot blocks instead of compressing them into one.',
     'Dialogue must use actual spoken lines. Do not summarize what the character says.',
     'Action is the canonical shot script. It must describe only what is visibly happening on screen.',
@@ -2880,9 +2940,11 @@ export function materializeCinematicPlan(rawPlan: z.infer<typeof cinematicPlanne
     formulaFamily: rawGraphSettings.formulaFamily ?? subtypePatch.formulaFamily ?? deriveDefaultFormulaFamilyFromFormatSubtype(inferredFormatSubtype),
     dominantTrigger: rawGraphSettings.dominantTrigger ?? subtypePatch.dominantTrigger ?? deriveDefaultDominantTriggerFromFormatSubtype(inferredFormatSubtype),
   }
-  const scriptDoc = rawPlan.scriptDoc
-    ? cinematicScriptDocSchema.parse(rawPlan.scriptDoc)
-    : cinematicScriptDocSchema.parse({
+  const sequence = rawPlan.sequence
+    ? compileCinematicSequence(cinematicSequenceSchema.parse(rawPlan.sequence))
+    : buildCinematicSequenceFromScriptDoc(rawPlan.scriptDoc
+      ? cinematicScriptDocSchema.parse(rawPlan.scriptDoc)
+      : cinematicScriptDocSchema.parse({
         title: rawPlan.graphName,
         logline: rawPlan.graphSummary,
         entityBindings: rawPlan.entityRefs.map((entityRef) => ({
@@ -2939,25 +3001,32 @@ export function materializeCinematicPlan(rawPlan: z.infer<typeof cinematicPlanne
           participantRefIds: shot.participantRefIds,
           locationRefId: shot.locationRefId,
           propRefIds: shot.propRefIds,
-          requiredSourceRefIds: Array.from(new Set([
-            ...shot.participantRefIds,
-            ...(shot.locationRefId ? [shot.locationRefId] : []),
-            ...shot.propRefIds,
-          ])),
-          compositeRefIds: [],
-          storyboardRefIds: [],
+          requiredSourceRefIds: Array.from(new Set(
+            shot.requiredSourceRefIds.length > 0
+              ? shot.requiredSourceRefIds
+              : [
+                  ...shot.participantRefIds,
+                  ...(shot.locationRefId ? [shot.locationRefId] : []),
+                  ...shot.propRefIds,
+                ],
+          )),
+          compositeRefIds: shot.compositeRefIds,
+          storyboardRefIds: shot.storyboardRefIds,
           durationSeconds: shot.durationSeconds,
+          forceTakeBreak: shot.forceTakeBreak,
           beats: shot.beats,
           dialogue: shot.dialogue,
           actions: shot.actions,
           audio: shot.audio,
-        })),
+          })),
         relationships: rawPlan.relationshipRefs,
         compositeRefs: rawPlan.compositeRefPlans,
         storyboard: rawPlan.storyboardPlan,
-      })
+      }))
+  const scriptDoc = deriveCinematicScriptFromSequence(sequence)
   const derivedShots = scriptDoc.shots.map((shot) => cinematicShotPlanSchema.parse({
     id: shot.id,
+    sceneId: shot.sceneId,
     title: shot.title,
     beat: shot.beat,
     hookRole: shot.hookRole,
@@ -2976,12 +3045,16 @@ export function materializeCinematicPlan(rawPlan: z.infer<typeof cinematicPlanne
     participantRefIds: shot.participantRefIds,
     locationRefId: shot.locationRefId,
     propRefIds: shot.propRefIds,
+    requiredSourceRefIds: shot.requiredSourceRefIds,
+    compositeRefIds: shot.compositeRefIds,
+    storyboardRefIds: shot.storyboardRefIds,
     shotType: shot.shotType,
     framing: shot.framing,
     cameraAngle: shot.cameraAngle,
     cameraMovement: shot.cameraMovement,
     lensPreference: shot.lensPreference,
     durationSeconds: shot.durationSeconds,
+    forceTakeBreak: shot.forceTakeBreak,
     visualPrompt: shot.visualPrompt,
     compositionGuide: shot.compositionGuide,
     beats: shot.beats,
@@ -3013,236 +3086,101 @@ export function buildCinematicGraphFromAuthorPlan(input: {
   cinematicPlan?: CinematicPlan | null
   authorPlan: z.infer<typeof cinematicGraphAuthorSchema>
 }) {
-  const graph = createGraphScaffold({
-    key: input.graphKey,
-    name: input.graphName,
-    graphType: 'cinematic_flow',
-    summary: input.graphSummary,
-  })
-
-  const startNode = graph.nodes[0]
-  const endNode = graph.nodes[1]
-  const nodes = [startNode]
-  const edges: GraphScaffold['edges'] = []
-  const assetNodeKeyByRefId = new Map<string, string>()
-
-  for (const [index, ref] of input.authorPlan.assetRefs.entries()) {
-    const key = `${graph.key}.${ref.nodeType}_${index + 1}`
-    const templateKey =
-      ref.templateKey
-      || (ref.nodeType === 'composite_ref' ? 'equipped_character_ref' : ref.nodeType === 'storyboard_ref' ? 'shot_panel_ref' : 'asset_ref')
-    const node = normalizeNode({
-      id: `node-${ref.nodeType}-${Date.now()}-${index}`,
-      key,
-      type: ref.nodeType,
-      title: ref.title,
-      templateKey,
-      subtitle: ref.subtitle ?? ref.assetRole,
-      position: { x: 280, y: 120 + index * 130 },
-      body: { text: null, imageAssetKey: null, audioAssetKey: null, choices: [] },
-      condition: null,
-      effects: [],
-      ports: [],
-      display: { iconAssetKey: null, compactPreview: true },
-      metadata: {
-        entityRefId: ref.nodeType === 'asset_ref' ? ref.id : null,
+  const sequence = cinematicSequenceSchema.parse({
+    title: input.authorPlan.graphName || input.graphName,
+    logline: input.authorPlan.graphSummary || input.graphSummary,
+    tone: '',
+    continuityNotes: '',
+    statusPayoffType: '',
+    narrativeArcTemplate: '',
+    references: input.authorPlan.assetRefs
+      .filter((ref) => ref.nodeType === 'asset_ref')
+      .map((ref) => ({
+        id: ref.id,
+        refKind: ref.definitionKey ? 'definition' : ref.assetRole === 'audio' ? 'audio' : ref.assetRole === 'style' ? 'style' : 'asset',
+        role: ref.role,
+        label: ref.title,
+        summary: ref.subtitle ?? '',
         definitionKey: ref.definitionKey,
         assetKey: ref.assetKey,
-        refKind:
-          ref.nodeType === 'storyboard_ref'
-            ? 'storyboard'
-            : ref.nodeType === 'composite_ref'
-              ? 'composite'
-              : ref.definitionKey
-                ? 'definition'
-                : 'asset',
         assetRole: ref.assetRole,
-        role: ref.role,
-        priority: ref.priority,
         stagingNotes: ref.stagingNotes,
-        compositeRefId: ref.nodeType === 'composite_ref' ? ref.id : undefined,
+        priority: ref.priority,
+        required: true,
+      })),
+    scenes: input.cinematicPlan?.scriptDoc?.scenes ?? (input.authorPlan.shots.length > 0 ? [{
+      id: 'scene_1',
+      title: 'Scene 1',
+      summary: input.authorPlan.graphSummary || input.graphSummary,
+      locationRefId: input.authorPlan.shots[0]?.locationRefId ?? null,
+      shotIds: input.authorPlan.shots.map((shot) => shot.id),
+      continuityNotes: '',
+      orderIndex: 0,
+    }] : []),
+    compositeRefs: input.authorPlan.assetRefs
+      .filter((ref) => ref.nodeType === 'composite_ref')
+      .map((ref) => ({
+        id: ref.id,
+        title: ref.title,
+        summary: ref.subtitle ?? '',
+        relationshipType: ref.relationshipType ?? 'equip',
         sourceRefIds: ref.sourceRefIds,
-        relationshipType: ref.relationshipType,
-        outputAssetKey: ref.nodeType === 'composite_ref' ? ref.assetKey : undefined,
-        storyboardId: ref.nodeType === 'storyboard_ref' ? ref.id : undefined,
-        panelId: ref.nodeType === 'storyboard_ref' && templateKey === 'shot_panel_ref' ? ref.id : undefined,
-        shotId: ref.nodeType === 'storyboard_ref' && templateKey === 'shot_panel_ref'
-          ? (input.cinematicPlan?.storyboardPlan?.panels.find((panel) => panel.id === ref.id)?.shotId ?? null)
-          : undefined,
-        storyboardKind: ref.nodeType === 'storyboard_ref' && templateKey === 'sequence_board_ref' ? 'sequence_board' : 'shot_panel',
-        notes: ref.nodeType === 'storyboard_ref' ? ref.stagingNotes : undefined,
-      },
-    })
-    nodes.push(node)
-    assetNodeKeyByRefId.set(ref.id, key)
-  }
-
-  let previousFlowNodeKey = startNode.key
-  for (const [index, shot] of input.authorPlan.shots.entries()) {
-    const key = `${graph.key}.cinematic_shot_${index + 1}`
-    const shotNode = normalizeNode({
-      id: `node-cinematic-shot-${Date.now()}-${index}`,
-      key,
-      type: 'cinematic_shot',
-      title: shot.title,
-      templateKey: shot.shotType === 'custom' ? 'cinematic_shot' : `cinematic_${shot.shotType}`,
-      subtitle: shot.subtitle ?? null,
-      position: { x: 720 + index * 360, y: 240 },
-      body: { text: shot.beat, imageAssetKey: null, audioAssetKey: null, choices: [] },
-      condition: null,
-      effects: [],
-      ports: [],
-      display: { iconAssetKey: null, compactPreview: false },
-      metadata: {
-        shotType: shot.shotType,
-        framing: shot.framing,
-        cameraAngle: shot.cameraAngle,
-        cameraMovement: shot.cameraMovement,
-        lensPreference: shot.lensPreference,
-        durationSeconds: shot.durationSeconds,
-        visualPrompt: shot.visualPrompt,
-        compositionGuide: shot.compositionGuide,
-        participantRefIds: shot.participantRefIds,
-        locationRefId: shot.locationRefId,
-        propRefIds: shot.propRefIds,
-        requiredSourceRefIds: shot.sourceRefIds,
-        compositeRefIds: shot.compositeRefIds,
-        storyboardRefIds: shot.storyboardRefIds,
-        beats: shot.beats,
-        dialogue: shot.dialogue,
-        actions: shot.actions,
-        audio: shot.audio,
-        sequenceShotId: shot.id,
-        seedanceModePreference:
-          shot.storyboardRefIds.length > 0 || shot.compositeRefIds.length > 0 || shot.sourceRefIds.length > 1
-            ? 'reference-to-video'
-            : 'auto',
-      },
-    })
-    nodes.push(shotNode)
-    edges.push({
-      id: `edge-flow-${index}`,
-      key: `edge.${previousFlowNodeKey.split('.').pop() ?? 'flow'}_${key.split('.').pop() ?? 'shot'}`,
-      source: { nodeKey: previousFlowNodeKey, portId: 'out' },
-      target: { nodeKey: key, portId: 'flow_in' },
-      label: null,
-      condition: null,
-      metadata: {},
-    })
-    previousFlowNodeKey = key
-
-    for (const sourceRefId of shot.sourceRefIds) {
-      const sourceNodeKey = assetNodeKeyByRefId.get(sourceRefId)
-      if (!sourceNodeKey) continue
-      edges.push({
-        id: `edge-asset-${index}-${sourceRefId}`,
-        key: `edge.${sourceNodeKey.split('.').pop() ?? 'asset'}_${key.split('.').pop() ?? 'shot'}`,
-        source: { nodeKey: sourceNodeKey, portId: 'asset_out' },
-        target: { nodeKey: key, portId: 'asset_in' },
-        label: null,
-        condition: null,
-        metadata: {},
-      })
-    }
-  }
-
-  edges.push({
-    id: 'edge-flow-end',
-    key: `edge.${previousFlowNodeKey.split('.').pop() ?? 'shot'}_${endNode.key.split('.').pop() ?? 'end'}`,
-    source: { nodeKey: previousFlowNodeKey, portId: 'out' },
-    target: { nodeKey: endNode.key, portId: 'in' },
-    label: null,
-    condition: null,
-    metadata: {},
-  })
-  nodes.push(endNode)
-
-  return {
-    ...graph,
-    name: input.authorPlan.graphName || input.graphName,
-    summary: input.authorPlan.graphSummary || input.graphSummary,
-    metadata: {
-      ...graph.metadata,
-      cinematics: input.graphSettings,
-      cinematicSequence: cinematicSequenceSchema.parse({
-        references: input.authorPlan.assetRefs
-          .filter((ref) => ref.nodeType === 'asset_ref')
-          .map((ref) => ({
+        outputAssetKey: ref.assetKey,
+        generationPrompt: ref.stagingNotes,
+        stagingNotes: ref.stagingNotes,
+        priority: ref.priority,
+      })),
+    relationships: input.cinematicPlan?.relationshipRefs ?? [],
+    storyboard:
+      input.cinematicPlan?.storyboardPlan
+      ?? {
+        mode: input.authorPlan.assetRefs.some((ref) => ref.nodeType === 'storyboard_ref') ? 'hybrid' : 'none',
+        summary: '',
+        sequenceAssetKey: input.authorPlan.assetRefs.find((ref) => ref.templateKey === 'sequence_board_ref')?.assetKey ?? null,
+        panels: input.authorPlan.assetRefs
+          .filter((ref) => ref.nodeType === 'storyboard_ref' && ref.templateKey !== 'sequence_board_ref')
+          .map((ref, index) => ({
             id: ref.id,
-            refKind: ref.definitionKey ? 'definition' : ref.assetRole === 'audio' ? 'audio' : ref.assetRole === 'style' ? 'style' : 'asset',
-            role: ref.role,
-            label: ref.title,
-            summary: ref.subtitle ?? '',
-            definitionKey: ref.definitionKey,
-            assetKey: ref.assetKey,
-            assetRole: ref.assetRole,
-            stagingNotes: ref.stagingNotes,
-            priority: ref.priority,
-            required: true,
-          })),
-        compositeRefs: input.authorPlan.assetRefs
-          .filter((ref) => ref.nodeType === 'composite_ref')
-          .map((ref) => ({
-            id: ref.id,
+            shotId: input.cinematicPlan?.storyboardPlan?.panels.find((panel) => panel.id === ref.id)?.shotId ?? null,
             title: ref.title,
-            summary: ref.subtitle ?? '',
-            relationshipType: ref.relationshipType ?? 'equip',
-            sourceRefIds: ref.sourceRefIds,
-            outputAssetKey: ref.assetKey,
-            generationPrompt: ref.stagingNotes,
-            stagingNotes: ref.stagingNotes,
-            priority: ref.priority,
+            assetKey: ref.assetKey,
+            notes: ref.stagingNotes,
+            orderIndex: index,
           })),
-        relationships: input.cinematicPlan?.relationshipRefs ?? [],
-        storyboard:
-          input.cinematicPlan?.storyboardPlan
-          ?? {
-            mode: input.authorPlan.assetRefs.some((ref) => ref.nodeType === 'storyboard_ref') ? 'hybrid' : 'none',
-            summary: '',
-            sequenceAssetKey: input.authorPlan.assetRefs.find((ref) => ref.templateKey === 'sequence_board_ref')?.assetKey ?? null,
-            panels: input.authorPlan.assetRefs
-              .filter((ref) => ref.nodeType === 'storyboard_ref' && ref.templateKey !== 'sequence_board_ref')
-              .map((ref, index) => ({
-                id: ref.id,
-                shotId: null,
-                title: ref.title,
-                assetKey: ref.assetKey,
-                notes: ref.stagingNotes,
-                orderIndex: index,
-              })),
-          },
-        shots: input.authorPlan.shots.map((shot) => ({
-          id: shot.id,
-          title: shot.title,
-          subtitle: shot.subtitle,
-          beat: shot.beat,
-          shotType: shot.shotType,
-          framing: shot.framing,
-          cameraAngle: shot.cameraAngle,
-          cameraMovement: shot.cameraMovement,
-          lensPreference: shot.lensPreference,
-          visualPrompt: shot.visualPrompt,
-          compositionGuide: shot.compositionGuide,
-          participantRefIds: shot.participantRefIds,
-          locationRefId: shot.locationRefId,
-          propRefIds: shot.propRefIds,
-          requiredSourceRefIds: shot.sourceRefIds,
-          compositeRefIds: shot.compositeRefIds,
-          storyboardRefIds: shot.storyboardRefIds,
-          durationSeconds: shot.durationSeconds,
-          seedanceModePreference:
-            shot.storyboardRefIds.length > 0 || shot.compositeRefIds.length > 0 || shot.sourceRefIds.length > 1
-              ? 'reference-to-video'
-              : 'auto',
-          beats: shot.beats,
-          dialogue: shot.dialogue,
-          actions: shot.actions,
-          audio: shot.audio,
-        })),
-      }),
-      generation: graph.metadata.generation,
-    },
-    nodes,
-    edges,
-  }
+      },
+    shots: input.authorPlan.shots.map((shot) => ({
+      id: shot.id,
+      sceneId: input.cinematicPlan?.scriptDoc?.shots.find((entry) => entry.id === shot.id)?.sceneId ?? 'scene_1',
+      title: shot.title,
+      subtitle: shot.subtitle,
+      beat: shot.beat,
+      shotType: shot.shotType,
+      framing: shot.framing,
+      cameraAngle: shot.cameraAngle,
+      cameraMovement: shot.cameraMovement,
+      lensPreference: shot.lensPreference,
+      visualPrompt: shot.visualPrompt,
+      compositionGuide: shot.compositionGuide,
+      participantRefIds: shot.participantRefIds,
+      locationRefId: shot.locationRefId,
+      propRefIds: shot.propRefIds,
+      requiredSourceRefIds: shot.sourceRefIds,
+      compositeRefIds: shot.compositeRefIds,
+      storyboardRefIds: shot.storyboardRefIds,
+      durationSeconds: shot.durationSeconds,
+      beats: shot.beats,
+      dialogue: shot.dialogue,
+      actions: shot.actions,
+      audio: shot.audio,
+    })),
+    takes: [],
+  })
+
+  return compileCinematicGraphFromSequence({
+    graphKey: input.graphKey,
+    graphName: input.authorPlan.graphName || input.graphName,
+    graphSummary: input.authorPlan.graphSummary || input.graphSummary,
+    graphSettings: input.graphSettings,
+    sequence,
+  })
 }

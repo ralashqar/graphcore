@@ -378,7 +378,7 @@ Deno.serve(async (request) => {
           enabled: true,
           generationOptions:
             entityRef.kind === 'environment'
-              ? { generateConceptGallery: true, environmentViews: ['hero', 'wide_alt', 'detail_area'] }
+              ? { generateConceptImage: true }
               : { generateConceptImage: true },
         }))
 
@@ -455,7 +455,7 @@ Deno.serve(async (request) => {
             : item.kind === 'item'
               ? { generateConceptImage: true }
               : item.kind === 'environment'
-                ? { generateConceptGallery: true, environmentViews: ['hero', 'wide_alt', 'detail_area'] }
+                ? { generateConceptImage: true }
                 : {},
       })),
       cinematicPlan: null,

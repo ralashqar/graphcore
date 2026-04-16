@@ -14,7 +14,8 @@ type WorldBuildPlanModalProps = {
   isStarting: boolean
   plannerMode?: WorldBuildPlannerMode
   cinematicPlan?: {
-    entityRefs?: Array<{ id: string; sourceName: string; role: string; resolution: 'existing' | 'create'; definitionKey?: string | null }>
+    graphSummary?: string
+    entityRefs?: Array<{ id: string; kind: 'character' | 'environment' | 'item'; sourceName: string; role: string; resolution: 'existing' | 'create'; definitionKey?: string | null }>
     relationshipRefs?: Array<{ id: string; type: string; sourceRefId: string; targetRefId: string }>
     compositeRefPlans?: Array<{ id: string; title: string }>
     graphSettings?: { presetFamily?: string; presetId?: string; presetSource?: string; specializationMode?: string; formatSubtype?: string | null; formulaFamily?: string | null } | null
@@ -23,9 +24,9 @@ type WorldBuildPlanModalProps = {
       title?: string
       logline?: string
       scenes?: Array<{ id: string; title: string; shotIds?: string[] }>
-      shots?: Array<{ id: string; title: string; beat?: string; dialogue?: Array<unknown>; actions?: Array<unknown>; audio?: Array<unknown> }>
+      shots?: Array<{ id: string; title: string; beat?: string; durationSeconds?: number | null; dialogue?: Array<unknown>; actions?: Array<unknown>; audio?: Array<unknown> }>
     } | null
-    shots?: Array<{ id: string; title: string; beat: string }>
+    shots?: Array<{ id: string; title: string; beat: string; durationSeconds?: number | null }>
   } | null
   planItems: WorldBuildPlanItem[]
   prompt: string
@@ -74,6 +75,15 @@ export function WorldBuildPlanModal({
   const formatSubtype = isUgcPreset
     ? coerceFormatSubtypeForPresetFamily(presetFamily, (cinematicPlan?.graphSettings?.formatSubtype as CinematicFormatSubtype | undefined) ?? null)
     : null
+  const previewShots = cinematicPlan?.scriptDoc?.shots ?? cinematicPlan?.shots ?? []
+  const previewEntities = cinematicPlan?.entityRefs ?? []
+  const estimatedRuntimeSeconds = previewShots.reduce((sum, shot) => {
+    const duration =
+      'durationSeconds' in shot && typeof shot.durationSeconds === 'number'
+        ? shot.durationSeconds
+        : null
+    return sum + (duration ?? 0)
+  }, 0)
 
   return (
     <div className="bootstrap-overlay" onClick={onCancel} role="presentation">
@@ -114,6 +124,43 @@ export function WorldBuildPlanModal({
               ) : null}
             </div>
           ) : null}
+          {plannerMode === 'cinematic_build' && cinematicPlan ? (
+            <div className="editor-section compact-section">
+              <div className="section-head">
+                <div>
+                  <span className="eyebrow">Cinematic Preview</span>
+                  <h3>{cinematicPlan.graphSummary ?? 'Prompt cinematic'}</h3>
+                </div>
+              </div>
+              <div className="diagnostic-stack">
+                <div className="inline-note">
+                  <strong>Preset</strong>
+                  <span> {getCinematicPresetLabel(presetFamily)}{formatSubtype ? ` · ${getCinematicFormatSubtypeLabel(formatSubtype)}` : ''}</span>
+                </div>
+                <div className="inline-note">
+                  <strong>Resolved refs</strong>
+                  <span> {previewEntities.length}</span>
+                </div>
+                <div className="inline-note">
+                  <strong>Shots</strong>
+                  <span> {previewShots.length}{estimatedRuntimeSeconds > 0 ? ` · ~${estimatedRuntimeSeconds}s` : ''}</span>
+                </div>
+              </div>
+              {previewEntities.length > 0 ? (
+                <div className="script-chip-row">
+                  {previewEntities.map((entity) => (
+                    <div key={entity.id} className="script-binding-chip">
+                      <span className="script-binding-chip-icon"><EntityIcon id={entity.kind} /></span>
+                      <div className="script-binding-chip-copy">
+                        <strong>{entity.sourceName}</strong>
+                        <span>{entity.kind} / {entity.role} / {entity.resolution}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           {plannerMode === 'cinematic_build' && cinematicPlan?.scriptDoc ? (
             <div className="editor-section compact-section">
               <div className="section-head">
@@ -130,7 +177,25 @@ export function WorldBuildPlanModal({
                     <span> {(scene.shotIds?.length ?? 0)} shot{(scene.shotIds?.length ?? 0) === 1 ? '' : 's'}</span>
                   </div>
                 ))}
-                {(cinematicPlan.scriptDoc.shots ?? []).map((shot) => (
+                {(cinematicPlan.scriptDoc.shots ?? []).slice(0, 4).map((shot) => (
+                  <div key={shot.id} className="inline-note">
+                    <strong>{shot.title}</strong>
+                    <span> {shot.beat?.trim() || 'No description yet'}{typeof (shot as { durationSeconds?: unknown }).durationSeconds === 'number' ? ` · ${(shot as { durationSeconds: number }).durationSeconds}s` : ''}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          {plannerMode === 'cinematic_build' && !cinematicPlan?.scriptDoc && previewShots.length > 0 ? (
+            <div className="editor-section compact-section">
+              <div className="section-head">
+                <div>
+                  <span className="eyebrow">Shot Breakdown</span>
+                  <h3>{previewShots.length} planned shot{previewShots.length === 1 ? '' : 's'}</h3>
+                </div>
+              </div>
+              <div className="diagnostic-stack">
+                {previewShots.slice(0, 4).map((shot) => (
                   <div key={shot.id} className="inline-note">
                     <strong>{shot.title}</strong>
                     <span> {shot.beat?.trim() || 'No description yet'}</span>
@@ -154,7 +219,7 @@ export function WorldBuildPlanModal({
                 </div>
                 <p>{item.summary}</p>
                 {item.dependsOn.length > 0 ? <div className="inline-note">Depends on: {item.dependsOn.join(', ')}</div> : null}
-                {item.kind === 'character' || item.kind === 'item' ? (
+                {item.kind === 'character' || item.kind === 'item' || item.kind === 'environment' ? (
                   <label className="world-build-option-row">
                     <input
                       checked={Boolean(item.generationOptions.generateConceptImage)}
@@ -163,17 +228,6 @@ export function WorldBuildPlanModal({
                       type="checkbox"
                     />
                     <span>Generate concept image</span>
-                  </label>
-                ) : null}
-                {item.kind === 'environment' ? (
-                  <label className="world-build-option-row">
-                    <input
-                      checked={Boolean(item.generationOptions.generateConceptGallery)}
-                      disabled={!item.enabled}
-                      onChange={(event) => onToggleOption(item.id, 'generateConceptGallery', event.target.checked)}
-                      type="checkbox"
-                    />
-                    <span>Generate concept gallery</span>
                   </label>
                 ) : null}
               </article>

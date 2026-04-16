@@ -16,6 +16,7 @@ import {
   applyTakeBindingToGraph,
   applyStoryboardBindingToGraph,
   applyShotBindingToGraph,
+  buildVirtualShotNode,
   buildTakeStillPrompt,
   buildTakeSeedanceExecutionPlan,
   buildSeedanceExecutionPlan,
@@ -42,25 +43,59 @@ function readFalQueueUrl(value: unknown) {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null
 }
 
-function buildAffectedShotOrder(
+function resolveStoryboardStillFalModel(hasImageReferences: boolean) {
+  if (hasImageReferences) {
+    return Deno.env.get('CINEMATIC_STORYBOARD_EDIT_FAL_MODEL')
+      ?? Deno.env.get('CINEMATIC_STILL_FAL_MODEL')
+      ?? 'fal-ai/nano-banana-2/edit'
+  }
+
+  return Deno.env.get('CINEMATIC_STORYBOARD_TEXT_FAL_MODEL')
+    ?? Deno.env.get('CINEMATIC_STILL_TEXT_FAL_MODEL')
+    ?? 'fal-ai/nano-banana-2'
+}
+
+function buildAffectedShotTargets(
   mode: 'graph_run' | 'preview_still' | 'preview_video' | 'preview_take_still' | 'preview_storyboard_still',
   graph: NonNullable<ReturnType<typeof findGraph>>,
   targetNodeKey: string | null | undefined,
+  shotId: string | null | undefined,
 ) {
   if (mode === 'graph_run' || mode === 'preview_take_still' || mode === 'preview_storyboard_still') {
     return []
   }
 
   if (!targetNodeKey) {
-    throw new HttpError(400, 'A cinematic shot node is required for preview runs.')
+    throw new HttpError(400, 'A cinematic take node or cinematic shot node is required for preview runs.')
   }
 
   const node = findNode(graph, targetNodeKey)
-  if (!node || node.type !== 'cinematic_shot') {
-    throw new HttpError(404, `Cinematic shot "${targetNodeKey}" was not found.`)
+  if (node?.type === 'cinematic_shot') {
+    return [{
+      nodeKey: targetNodeKey,
+      shotId: getCinematicShotNodeConfig(node).id,
+      shotNode: node,
+    }]
   }
 
-  return [targetNodeKey]
+  if (!shotId) {
+    throw new HttpError(400, 'A shot id is required when previewing a nested shot inside a take.')
+  }
+
+  if (!node || node.type !== 'cinematic_take') {
+    throw new HttpError(404, `Cinematic take "${targetNodeKey}" was not found.`)
+  }
+
+  const virtualShotNode = buildVirtualShotNode(graph, shotId, targetNodeKey)
+  if (!virtualShotNode) {
+    throw new HttpError(404, `Cinematic shot "${shotId}" was not found in the sequence.`)
+  }
+
+  return [{
+    nodeKey: targetNodeKey,
+    shotId,
+    shotNode: virtualShotNode,
+  }]
 }
 
 function buildAffectedTakePreviewOrder(
@@ -167,7 +202,7 @@ Deno.serve(async (request) => {
       throw new HttpError(404, `Cinematic graph "${payload.graphKey}" was not found.`)
     }
 
-    const shotNodeKeys = buildAffectedShotOrder(payload.mode, graph, targetNodeKey)
+    const shotTargets = buildAffectedShotTargets(payload.mode, graph, targetNodeKey, payload.shotId ?? null)
     const takeNodeKeys = payload.mode === 'graph_run'
       ? buildAffectedTakeOrder(graph, payload.targetNodeKeys ?? [])
       : buildAffectedTakePreviewOrder(payload.mode, graph, targetNodeKey)
@@ -175,8 +210,8 @@ Deno.serve(async (request) => {
     if (payload.mode === 'graph_run' && takeNodeKeys.length === 0) {
       throw new HttpError(400, 'This cinematic graph has no compiled cinematic takes to run.')
     }
-    if ((payload.mode === 'preview_still' || payload.mode === 'preview_video') && shotNodeKeys.length === 0) {
-      throw new HttpError(400, 'This cinematic graph has no reachable cinematic shot nodes to run.')
+    if ((payload.mode === 'preview_still' || payload.mode === 'preview_video') && shotTargets.length === 0) {
+      throw new HttpError(400, 'This cinematic graph has no reachable cinematic shots to run.')
     }
     if (payload.mode === 'preview_take_still' && takeNodeKeys.length === 0) {
       throw new HttpError(400, 'This cinematic graph has no cinematic take node selected for still preview.')
@@ -211,10 +246,9 @@ Deno.serve(async (request) => {
     let previousJobId: string | null = null
     let updatedGraph = graph
 
-    for (const shotNodeKey of shotNodeKeys) {
-      const shotNode = findNode(graph, shotNodeKey)
-      if (!shotNode) continue
-      const sourceInputs = resolveShotSources(payload.snapshot, graph, shotNodeKey)
+    for (const target of shotTargets) {
+      const shotNode = target.shotNode
+      const sourceInputs = resolveShotSources(payload.snapshot, graph, target.nodeKey, target.shotId)
       const stillPrompt = buildStillPrompt({
         snapshot: payload.snapshot,
         graph,
@@ -241,7 +275,8 @@ Deno.serve(async (request) => {
             metadata: {
               generatedBy: 'cinematic_still',
               graphKey: graph.key,
-              shotNodeKey,
+              shotNodeKey: target.nodeKey,
+              shotId: target.shotId,
               runId,
             },
           })
@@ -255,7 +290,7 @@ Deno.serve(async (request) => {
           id: stillJobId,
           run_id: runId,
           graph_key: graph.key,
-          shot_node_key: shotNodeKey,
+          shot_node_key: target.nodeKey,
           kind: 'shot_still',
           status: 'queued',
           still_asset_key: reservedShotStillAsset?.key ?? null,
@@ -265,6 +300,7 @@ Deno.serve(async (request) => {
           result_context: {
             mode: payload.mode,
             assetKey: reservedShotStillAsset?.key ?? null,
+            shotId: target.shotId,
           },
         })
       }
@@ -275,7 +311,7 @@ Deno.serve(async (request) => {
           id: videoJobId,
           run_id: runId,
           graph_key: graph.key,
-          shot_node_key: shotNodeKey,
+          shot_node_key: target.nodeKey,
           kind: 'shot_video',
           status: 'queued',
           order_index: jobsToInsert.length,
@@ -284,12 +320,13 @@ Deno.serve(async (request) => {
           result_context: {
             mode: payload.mode,
             executionPlan,
+            shotId: target.shotId,
           },
         })
       }
 
       previousJobId = videoJobId ?? stillJobId ?? previousJobId
-      updatedGraph = applyShotBindingToGraph(updatedGraph, shotNodeKey, {
+      updatedGraph = applyShotBindingToGraph(updatedGraph, target.nodeKey, target.shotId, {
         ...(reservedShotStillAsset ? { bodyImageAssetKey: reservedShotStillAsset.key } : {}),
         metadata: {
           ...(reservedShotStillAsset ? { stillAssetKey: reservedShotStillAsset.key } : {}),
@@ -299,7 +336,7 @@ Deno.serve(async (request) => {
           executionPlan,
         },
       })
-      await persistShotBindingsIfPresent(client, payload.snapshot.draft.id, graph.key, shotNodeKey, {
+      await persistShotBindingsIfPresent(client, payload.snapshot.draft.id, graph.key, target.nodeKey, target.shotId, {
         ...(reservedShotStillAsset ? { bodyImageAssetKey: reservedShotStillAsset.key } : {}),
         metadata: {
           ...(reservedShotStillAsset ? { stillAssetKey: reservedShotStillAsset.key } : {}),
@@ -442,6 +479,28 @@ Deno.serve(async (request) => {
       })
       const stillJobId = crypto.randomUUID()
       reservedAssets.push(reservedStoryboardAsset)
+      const storyboardPrompt = isTakeStoryboard
+        ? buildTakeStoryboardStillPrompt({
+            snapshot: payload.snapshot,
+            graph,
+            takeNode: storyboardNode,
+            sourceInputs: sourceInputs as ReturnType<typeof resolveTakeSources>,
+          })
+        : buildStoryboardStillPrompt({
+            snapshot: payload.snapshot,
+            graph,
+            storyboardNode,
+            sourceInputs: sourceInputs as ReturnType<typeof resolveStoryboardSources>,
+          })
+
+      console.info('[start-cinematic-run] compiled storyboard prompt.', {
+        runId,
+        graphKey: graph.key,
+        storyboardNodeKey,
+        isTakeStoryboard,
+        prompt: storyboardPrompt,
+      })
+
       jobsToInsert.push({
         id: stillJobId,
         run_id: runId,
@@ -452,19 +511,7 @@ Deno.serve(async (request) => {
         still_asset_key: reservedStoryboardAsset.key,
         order_index: jobsToInsert.length,
         depends_on_job_ids: previousJobId ? [previousJobId] : [],
-        prompt: isTakeStoryboard
-          ? buildTakeStoryboardStillPrompt({
-              snapshot: payload.snapshot,
-              graph,
-              takeNode: storyboardNode,
-              sourceInputs: sourceInputs as ReturnType<typeof resolveTakeSources>,
-            })
-          : buildStoryboardStillPrompt({
-              snapshot: payload.snapshot,
-              graph,
-              storyboardNode,
-              sourceInputs: sourceInputs as ReturnType<typeof resolveStoryboardSources>,
-            }),
+        prompt: storyboardPrompt,
         result_context: {
           mode: payload.mode,
           storyboardKind: storyboardNode.type === 'storyboard_ref' ? storyboardNode.metadata?.storyboardKind ?? null : 'take_sequence_board',
@@ -546,9 +593,16 @@ Deno.serve(async (request) => {
               storyboardNodeKey,
               resolveStoryboardSources(payload.snapshot, updatedGraph, storyboardNodeKey),
             )
-        const storyboardStillModel = referenceImageUrls.length > 0
-          ? Deno.env.get('CINEMATIC_STILL_FAL_MODEL') ?? 'fal-ai/nano-banana-2/edit'
-          : Deno.env.get('CINEMATIC_STILL_TEXT_FAL_MODEL') ?? 'fal-ai/nano-banana-2'
+        const storyboardStillModel = resolveStoryboardStillFalModel(referenceImageUrls.length > 0)
+        console.info('[start-cinematic-run] storyboard model selection.', {
+          runId,
+          jobId: storyboardJob.id,
+          graphKey: graph.key,
+          storyboardNodeKey,
+          sourceImageCount: referenceImageUrls.length,
+          referenceImageUrls,
+          selectedModel: storyboardStillModel,
+        })
 
         const falResponse = await client.functions.invoke('ai-fal', {
           body: {

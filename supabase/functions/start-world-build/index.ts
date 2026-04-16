@@ -1,6 +1,12 @@
 import '@supabase/functions-js/edge-runtime.d.ts'
 
-import { buildCinematicSequenceFromScriptDoc, cinematicScriptDocSchema } from '../../../src/domain/cinematics.ts'
+import {
+  buildCinematicSequenceFromScriptDoc,
+  cinematicScriptDocSchema,
+  cinematicSequenceSchema,
+  compileCinematicSequence,
+  deriveCinematicScriptFromSequence,
+} from '../../../src/domain/cinematics.ts'
 import {
   WORLD_BUILD_ENVIRONMENT_VIEWS,
   getResourceGenerationMetadata,
@@ -945,28 +951,45 @@ Deno.serve(async (request) => {
           graphType: 'cinematic_flow',
           summary: item.summary,
         })
-        const scriptDoc = persistedCinematicPlan?.scriptDoc
-          ? cinematicScriptDocSchema.parse({
-              ...persistedCinematicPlan.scriptDoc,
-              compositeRefs: persistedCinematicPlan.scriptDoc.compositeRefs,
-              storyboard: persistedCinematicPlan.scriptDoc.storyboard,
-            })
+        const sequence = persistedCinematicPlan
+          ? compileCinematicSequence(
+              persistedCinematicPlan.scriptDoc
+                ? buildCinematicSequenceFromScriptDoc(cinematicScriptDocSchema.parse({
+                    ...persistedCinematicPlan.scriptDoc,
+                    compositeRefs: persistedCinematicPlan.scriptDoc.compositeRefs,
+                    storyboard: persistedCinematicPlan.scriptDoc.storyboard,
+                  }))
+                : cinematicSequenceSchema.parse({
+                    title: persistedCinematicPlan.graphName,
+                    logline: persistedCinematicPlan.graphSummary,
+                    tone: '',
+                    continuityNotes: '',
+                    statusPayoffType: '',
+                    narrativeArcTemplate: '',
+                    references: [],
+                    scenes: persistedCinematicPlan.shots.length > 0 ? [{
+                      id: 'scene_1',
+                      title: 'Scene 1',
+                      summary: persistedCinematicPlan.graphSummary,
+                      locationRefId: persistedCinematicPlan.shots[0]?.locationRefId ?? null,
+                      shotIds: persistedCinematicPlan.shots.map((shot) => shot.id),
+                      continuityNotes: '',
+                      orderIndex: 0,
+                    }] : [],
+                    compositeRefs: persistedCinematicPlan.compositeRefPlans,
+                    relationships: persistedCinematicPlan.relationshipRefs,
+                    storyboard: persistedCinematicPlan.storyboardPlan ?? null,
+                    shots: persistedCinematicPlan.shots,
+                    takes: [],
+                  }),
+            )
           : null
+        const scriptDoc = sequence ? deriveCinematicScriptFromSequence(sequence) : null
         graph.metadata = {
           generation: createGenerationMetadata(batchId, graphJobId),
           cinematics: persistedCinematicPlan?.graphSettings ?? {},
           cinematicScript: scriptDoc ?? undefined,
-          cinematicSequence: persistedCinematicPlan
-            ? (scriptDoc
-              ? buildCinematicSequenceFromScriptDoc(scriptDoc)
-              : {
-                  references: [],
-                  compositeRefs: persistedCinematicPlan.compositeRefPlans,
-                  relationships: persistedCinematicPlan.relationshipRefs,
-                  storyboard: persistedCinematicPlan.storyboardPlan ?? null,
-                  shots: persistedCinematicPlan.shots,
-                })
-            : undefined,
+          cinematicSequence: sequence ?? undefined,
         }
         createdGraphs.push(await insertPlaceholderGraph(client, snapshot.draft.id, user.id, graph))
       }

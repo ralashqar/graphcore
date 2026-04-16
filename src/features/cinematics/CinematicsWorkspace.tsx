@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { resolveAssetPreviewUrl, resolveAssetSourceUrl } from '../../domain/assets'
 import { compileCinematicGraphFromScriptDoc } from '../../domain/cinematicScriptCompiler'
+import { buildTakeFirstCinematicDocument } from '../../domain/cinematicGraphProjection'
 import {
   buildCinematicSettingsPatchFromFormatSubtype,
   buildCinematicSettingsPatchFromPresetFamily,
@@ -113,7 +114,7 @@ type CinematicsWorkspaceProps = {
   onSelectEdge: (key: string | null) => void
   onSelectGraph: (key: string | null) => void
   onSelectNode: (key: string | null) => void
-  onStartCinematicRun: (request: { graphKey: string; mode: CinematicRunMode; targetNodeKey?: string | null; targetNodeKeys?: string[] }) => void
+  onStartCinematicRun: (request: { graphKey: string; mode: CinematicRunMode; targetNodeKey?: string | null; targetNodeKeys?: string[]; shotId?: string | null }) => void
   onUpdateEdge: (graphKey: string, edgeKey: string, changes: Partial<EdgeDefinition>) => void
   onUpdateGameSpecCinematics: (changes: Partial<CinematicSettings>) => void
   onUpdateGraph: (graphKey: string, changes: Partial<GraphDefinition>) => void
@@ -168,6 +169,13 @@ function moveArrayItem<TValue>(items: TValue[], fromIndex: number, toIndex: numb
   const [entry] = nextItems.splice(fromIndex, 1)
   nextItems.splice(toIndex, 0, entry)
   return nextItems
+}
+
+function parseCommaSeparatedIds(value: string) {
+  return value
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry, index, items) => entry.length > 0 && items.indexOf(entry) === index)
 }
 
 function buildNextId(prefix: string, existingIds: string[]) {
@@ -349,51 +357,6 @@ function validateScriptDoc(scriptDoc: CinematicScriptDoc): ScriptValidationIssue
 function buildScriptEntitySummaryLabel(binding: CinematicScriptEntityBinding) {
   const detail = [binding.kind, binding.role].filter(Boolean).join(' / ')
   return detail ? `${binding.label} ${detail}` : binding.label
-}
-
-function buildReadableScriptExport(scriptDoc: CinematicScriptDoc) {
-  const orderedScenes = [...scriptDoc.scenes].sort((left, right) => left.orderIndex - right.orderIndex)
-  const orderedShots = [...scriptDoc.shots].sort((left, right) => left.orderIndex - right.orderIndex)
-  const bindingById = new Map(scriptDoc.entityBindings.map((binding) => [binding.id, binding]))
-  const sceneById = new Map(orderedScenes.map((scene) => [scene.id, scene]))
-  const lines: string[] = []
-
-  lines.push(`# ${scriptDoc.title || 'Generated Script'}`)
-  if (scriptDoc.logline.trim()) lines.push(`Logline: ${scriptDoc.logline.trim()}`)
-  if (scriptDoc.tone.trim()) lines.push(`Tone: ${scriptDoc.tone.trim()}`)
-  if (scriptDoc.continuityNotes.trim()) lines.push(`Continuity: ${scriptDoc.continuityNotes.trim()}`)
-  lines.push('')
-
-  if (scriptDoc.entityBindings.length > 0) {
-    lines.push('Bindings:')
-    for (const binding of scriptDoc.entityBindings) {
-      lines.push(`- ${binding.label} (${binding.kind} / ${binding.role})`)
-    }
-    lines.push('')
-  }
-
-  for (const shot of orderedShots) {
-    const scene = shot.sceneId ? sceneById.get(shot.sceneId) ?? null : null
-    lines.push(`## ${scene?.title ?? shot.title}`)
-    if (scene && scene.title !== shot.title) lines.push(`Shot: ${shot.title}`)
-    if (shot.beat.trim()) lines.push(shot.beat.trim())
-    if (shot.compositionGuide.trim()) lines.push(`Composition: ${shot.compositionGuide.trim()}`)
-    if (shot.dialogue.length > 0) {
-      lines.push('Dialogue:')
-      for (const line of shot.dialogue) {
-        const speaker = line.speakerRefId ? bindingById.get(line.speakerRefId)?.label ?? line.speakerRefId : 'Unknown'
-        lines.push(`- ${speaker}: "${line.line.trim()}"${line.delivery.trim() ? ` (${line.delivery.trim()})` : ''}`)
-      }
-    }
-    const narratorOverlay = shot.audio.filter((cue) => cue.kind === 'offscreen' && cue.cue.trim())
-    if (narratorOverlay.length > 0) {
-      lines.push('Narrator Overlay:')
-      for (const cue of narratorOverlay) lines.push(`- ${cue.cue.trim()}`)
-    }
-    lines.push('')
-  }
-
-  return lines.join('\n').trim()
 }
 
 function truncateGraphLine(value: string, max = 84) {
@@ -611,6 +574,13 @@ function rederiveTakeSpec(input: {
     .map((shotId) => input.sequence.shots.find((shot) => shot.id === shotId) ?? null)
     .filter((shot): shot is CinematicSequence['shots'][number] => Boolean(shot))
   const requiredSourceRefIds = buildTakeRequiredSourceRefIds(includedShots)
+  const continuityRefIds = Array.from(new Set(includedShots.flatMap((shot) => [
+    ...shot.participantRefIds,
+    ...(shot.locationRefId ? [shot.locationRefId] : []),
+    ...shot.propRefIds,
+    ...shot.compositeRefIds,
+    ...shot.storyboardRefIds,
+  ])))
   const durationSeconds = Math.min(15, Math.max(4, includedShots.reduce((total, shot) => total + (shot.durationSeconds ?? 4), 0)))
   const endpoint = inferTakeEndpointFromShots(includedShots, requiredSourceRefIds)
   const existingTake = input.existingTake ?? null
@@ -622,6 +592,8 @@ function rederiveTakeSpec(input: {
     durationSeconds,
     startSeconds: input.startSeconds,
     endSeconds: input.startSeconds + durationSeconds,
+    breakReason: existingTake?.breakReason ?? '',
+    continuityRefIds,
     seedanceEndpoint: existingTake?.seedanceEndpoint ?? endpoint,
     formatSubtype: takeFieldValueFromShots(includedShots, (shot) => shot.formatSubtype, null),
     formulaFamily: takeFieldValueFromShots(includedShots, (shot) => shot.formulaFamily, null),
@@ -678,43 +650,18 @@ function reconcileEditedSequence(sequence: CinematicSequence) {
 
 function applyEditedSequenceToGraph(graph: GraphDefinition, nextSequenceInput: CinematicSequence) {
   const nextSequence = reconcileEditedSequence(nextSequenceInput)
-  const shotNodeByShotId = new Map<string, NodeDefinition>()
   const existingTakeNodes = graph.nodes.filter((node) => node.type === 'cinematic_take')
   const existingTakeNodeByTakeId = new Map<string, NodeDefinition>()
   const existingTakeNodeByIndex = new Map<number, NodeDefinition>()
 
-  graph.nodes.forEach((node) => {
-    if (node.type === 'cinematic_shot') {
-      const shotId = getCinematicShotNodeConfig(node).id
-      shotNodeByShotId.set(shotId, node)
-    }
-  })
   existingTakeNodes.forEach((node, index) => {
     existingTakeNodeByIndex.set(index, node)
     existingTakeNodeByTakeId.set(getCinematicTakeNodeConfig(node).id, node)
   })
 
-  const shotNodes = graph.nodes
-    .filter((node) => node.type !== 'cinematic_take')
-    .map((node) => {
-      if (node.type !== 'cinematic_shot') return node
-      const shotId = getCinematicShotNodeConfig(node).id
-      const shot = nextSequence.shots.find((entry) => entry.id === shotId) ?? null
-      if (!shot) return node
-      return {
-        ...node,
-        metadata: updateNodeMetadataWithShot(node.metadata, {
-          takeId: shot.takeId,
-          takeIndex: shot.takeIndex,
-          durationSeconds: shot.durationSeconds,
-          inferredDurationSeconds: shot.inferredDurationSeconds,
-          durationSource: shot.durationSource,
-          timingSummary: shot.timingSummary,
-        }),
-      }
-    })
+  const preservedNodes = graph.nodes.filter((node) => node.type !== 'cinematic_take' && node.type !== 'cinematic_shot')
 
-  const usedKeys = new Set(shotNodes.map((node) => node.key))
+  const usedKeys = new Set(preservedNodes.map((node) => node.key))
   const nextTakeNodes = nextSequence.takes.map((take, index) => {
     const existingNode = existingTakeNodeByTakeId.get(take.id) ?? existingTakeNodeByIndex.get(index) ?? null
     const baseKey = `${graph.key}.cinematic_take_${index + 1}`
@@ -762,26 +709,29 @@ function applyEditedSequenceToGraph(graph: GraphDefinition, nextSequenceInput: C
   const retainedEdges = graph.edges.filter((edge) => {
     const sourceNode = graph.nodes.find((node) => node.key === edge.source.nodeKey) ?? null
     const targetNode = graph.nodes.find((node) => node.key === edge.target.nodeKey) ?? null
-    return sourceNode?.type !== 'cinematic_take' && targetNode?.type !== 'cinematic_take'
+    return sourceNode?.type !== 'cinematic_take'
+      && targetNode?.type !== 'cinematic_take'
+      && sourceNode?.type !== 'cinematic_shot'
+      && targetNode?.type !== 'cinematic_shot'
   })
   const takeEdges: EdgeDefinition[] = []
+  const startNodeKey = graph.nodes.find((node) => node.type === 'start')?.key ?? null
+  const endNodeKey = graph.nodes.find((node) => node.type === 'end')?.key ?? null
 
   nextSequence.takes.forEach((take, takeIndex) => {
     const takeNodeKey = takeNodeKeyByTakeId.get(take.id)
     if (!takeNodeKey) return
-    take.shotIds.forEach((shotId, shotIndex) => {
-      const shotNodeKey = shotNodeByShotId.get(shotId)?.key
-      if (!shotNodeKey) return
+    if (takeIndex === 0 && startNodeKey) {
       takeEdges.push({
-        id: `edge-shot-take-${takeIndex}-${shotIndex}`,
-        key: uniqueEdgeKey({ ...graph, edges: [...retainedEdges, ...takeEdges] }, shotNodeKey, takeNodeKey),
-        source: { nodeKey: shotNodeKey, portId: 'out' },
+        id: `edge-start-take-${takeIndex}`,
+        key: uniqueEdgeKey({ ...graph, edges: [...retainedEdges, ...takeEdges] }, startNodeKey, takeNodeKey),
+        source: { nodeKey: startNodeKey, portId: 'out' },
         target: { nodeKey: takeNodeKey, portId: 'in' },
         label: null,
         condition: null,
         metadata: {},
       })
-    })
+    }
     if (takeIndex > 0) {
       const previousTakeNodeKey = takeNodeKeyByTakeId.get(nextSequence.takes[takeIndex - 1].id)
       if (previousTakeNodeKey) {
@@ -798,13 +748,28 @@ function applyEditedSequenceToGraph(graph: GraphDefinition, nextSequenceInput: C
     }
   })
 
+  const lastTakeNodeKey = nextSequence.takes.length > 0
+    ? takeNodeKeyByTakeId.get(nextSequence.takes[nextSequence.takes.length - 1].id) ?? null
+    : null
+  if (endNodeKey && (lastTakeNodeKey || startNodeKey)) {
+    takeEdges.push({
+      id: 'edge-take-end',
+      key: uniqueEdgeKey({ ...graph, edges: [...retainedEdges, ...takeEdges] }, lastTakeNodeKey ?? startNodeKey!, endNodeKey),
+      source: { nodeKey: lastTakeNodeKey ?? startNodeKey!, portId: 'out' },
+      target: { nodeKey: endNodeKey, portId: 'in' },
+      label: null,
+      condition: null,
+      metadata: {},
+    })
+  }
+
   return {
     ...graph,
     metadata: {
       ...(graph.metadata ?? {}),
       cinematicSequence: nextSequence,
     },
-    nodes: [...shotNodes, ...nextTakeNodes],
+    nodes: [...preservedNodes, ...nextTakeNodes],
     edges: [...retainedEdges, ...takeEdges],
   }
 }
@@ -1053,18 +1018,125 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
         const takeShots = config.shotIds
           .map((shotId) => sequence?.shots.find((entry) => entry.id === shotId) ?? null)
           .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
+        const referenceLabelById = new Map<string, { label: string; kind: ScriptReferenceOption['kind'] | 'composite' | 'storyboard' }>()
+        scriptDoc?.entityBindings.forEach((binding) => {
+          referenceLabelById.set(binding.id, { label: binding.label, kind: binding.kind })
+        })
+        sequence?.compositeRefs.forEach((composite) => {
+          referenceLabelById.set(composite.id, { label: composite.title, kind: 'composite' })
+        })
+        if (sequence?.storyboard?.sequenceAssetKey) {
+          referenceLabelById.set('storyboard_sequence', { label: 'Sequence Board', kind: 'storyboard' })
+        }
+        sequence?.storyboard?.panels.forEach((panel) => {
+          referenceLabelById.set(panel.id, { label: panel.title || panel.id, kind: 'storyboard' })
+        })
+        const aggregateLabels = (refIds: string[], kinds?: Array<ScriptReferenceOption['kind'] | 'composite' | 'storyboard'>) => {
+          const results: Array<{ label: string; kind: ScriptReferenceOption['kind'] | 'composite' | 'storyboard' }> = []
+          const seen = new Set<string>()
+          for (const refId of refIds) {
+            const entry = referenceLabelById.get(refId) ?? null
+            if (!entry) continue
+            if (kinds && !kinds.includes(entry.kind)) continue
+            const key = `${entry.kind}:${entry.label}`
+            if (seen.has(key)) continue
+            seen.add(key)
+            results.push(entry)
+          }
+          return results
+        }
+        const characterChips = aggregateLabels(takeShots.flatMap((shot) => shot.participantRefIds), ['character'])
+          .slice(0, 3)
+          .map((entry) => ({ label: entry.label, iconId: 'character' as const }))
+        const environmentChips = aggregateLabels(
+          takeShots.map((shot) => shot.locationRefId).filter((entry): entry is string => Boolean(entry)),
+          ['environment'],
+        )
+          .slice(0, 2)
+          .map((entry) => ({ label: entry.label, iconId: 'environment' as const, tone: 'muted' as const }))
+        const itemChips = aggregateLabels(takeShots.flatMap((shot) => shot.propRefIds), ['item'])
+          .slice(0, 2)
+          .map((entry) => ({ label: entry.label, iconId: 'item' as const, tone: 'muted' as const }))
+        const storyboardReady = Boolean(config.storyboardAssetKey)
+        const stillReady = Boolean(config.outputStillAssetKey)
+        const videoReady = Boolean(config.outputVideoAssetKey)
+        const takeSummary = truncateGraphLine(
+          takeShots.map((shot) => shot.beat.trim()).find((entry) => entry.length > 0)
+            ?? takeShots.map((shot) => shot.title).join(' -> '),
+          128,
+        )
+        const takeShotsPreview = takeShots.map((shot) => {
+          const tags = [
+            ...aggregateLabels(shot.participantRefIds, ['character']).map((entry) => ({ label: entry.label, iconId: 'character' as const })),
+            ...aggregateLabels(shot.locationRefId ? [shot.locationRefId] : [], ['environment']).map((entry) => ({ label: entry.label, iconId: 'environment' as const, tone: 'muted' as const })),
+            ...aggregateLabels(shot.propRefIds, ['item']).map((entry) => ({ label: entry.label, iconId: 'item' as const, tone: 'muted' as const })),
+          ].slice(0, 5)
+          const shotJobs = currentGraphRuns.flatMap((run) => run.jobs
+            .filter((job) => job.shotNodeKey === node.key && job.shotId === shot.id)
+            .map((job) => ({ run, job })))
+          const latestShotJob = shotJobs[0] ?? null
+          const shotStatusChips = [
+            { label: `${shot.durationSeconds}s`, tone: 'default' as const },
+            { label: shot.hookRole ?? shot.shotType, tone: 'muted' as const },
+            ...(shot.stillAssetKey ? [{ label: 'still ready', tone: 'muted' as const }] : []),
+            ...(shot.videoAssetKey ? [{ label: 'clip ready', tone: 'muted' as const }] : []),
+            ...(!shot.stillAssetKey && latestShotJob?.run.mode === 'preview_still' && !['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(latestShotJob.run.status)
+              ? [{ label: 'still rendering', tone: 'muted' as const }]
+              : []),
+            ...(!shot.videoAssetKey && latestShotJob?.run.mode === 'preview_video' && !['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(latestShotJob.run.status)
+              ? [{ label: 'clip rendering', tone: 'muted' as const }]
+              : []),
+          ]
+          const dialogueLine = shot.dialogue[0]
+          const actionBeat = shot.actions[0]
+          return {
+            id: shot.id,
+            title: shot.title,
+            kicker: truncateGraphLine(`${shot.hookRole ?? shot.shotType} · ${shot.durationSeconds}s`, 56),
+            chips: shotStatusChips,
+            tags,
+            lines: [
+              ...(dialogueLine ? [{
+                type: 'dialogue' as const,
+                speaker: dialogueLine.speakerRefId ? referenceLabelById.get(dialogueLine.speakerRefId)?.label ?? 'Speaker' : 'Speaker',
+                text: truncateGraphLine(dialogueLine.line, 72),
+              }] : []),
+              ...(actionBeat ? [{
+                type: 'action' as const,
+                text: truncateGraphLine([
+                  actionBeat.actorRefId ? referenceLabelById.get(actionBeat.actorRefId)?.label ?? 'Actor' : 'Actor',
+                  actionBeat.verb,
+                  actionBeat.targetRefId ? referenceLabelById.get(actionBeat.targetRefId)?.label ?? 'Target' : null,
+                ].filter(Boolean).join(' '), 72),
+              }] : []),
+              ...(!dialogueLine && !actionBeat && shot.beat.trim()
+                ? [truncateGraphLine(shot.beat, 88)]
+                : []),
+            ],
+          }
+        })
         return {
           variant: 'take' as const,
           iconId: 'asset' as const,
-          kicker: config.storyboardAssetKey ? 'storyboard ready' : config.outputVideoAssetKey ? 'rendered clip' : 'compiled take',
+          kicker: config.storyboardAssetKey ? 'storyboard ready' : config.outputVideoAssetKey ? 'rendered clip' : 'take master',
           chips: [
             { label: `${config.durationSeconds}s`, tone: 'default' as const },
             { label: config.seedanceEndpoint, tone: 'muted' as const },
             { label: `${config.shotIds.length} shots`, tone: 'muted' as const },
+            ...(storyboardReady ? [{ label: 'board', tone: 'muted' as const }] : []),
+            ...(stillReady ? [{ label: 'still', tone: 'muted' as const }] : []),
+            ...(videoReady ? [{ label: 'video', tone: 'muted' as const }] : []),
             ...(config.approvedForVideo ? [{ label: 'approved', tone: 'default' as const }] : []),
           ],
-          lines: takeShots.slice(0, 3).map((shot) => truncateGraphLine(shot.title, 52)),
-          ambience: config.outputVideoAssetKey ? 'video ready' : 'waiting to render',
+          secondaryChips: [...characterChips, ...environmentChips, ...itemChips],
+          summary: takeSummary || null,
+          takeShots: takeShotsPreview,
+          lines: config.breakReason.trim() ? [truncateGraphLine(config.breakReason, 88)] : [],
+          ambience: config.outputVideoAssetKey
+            ? 'video ready'
+            : config.outputStillAssetKey
+              ? 'take still ready'
+              : 'waiting to render',
         }
       }
 
@@ -1169,6 +1241,16 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
     })
   }, [currentGraph, onGenerateTakeStill])
 
+  const handleGenerateShotFromTake = useCallback((takeNode: NodeDefinition, shotId: string, mode: Extract<CinematicRunMode, 'preview_still' | 'preview_video'>) => {
+    if (!currentGraph || takeNode.type !== 'cinematic_take') return
+    onStartCinematicRun({
+      graphKey: currentGraph.key,
+      mode,
+      targetNodeKey: takeNode.key,
+      shotId,
+    })
+  }, [currentGraph, onStartCinematicRun])
+
   const graphSettings = getCinematicSettings(gameSpec ?? {}, currentGraph?.metadata ?? {})
   const subtypeOptions = getSubtypeOptionsForPresetFamily(graphSettings.presetFamily)
   const currentPreflightStatus = preflightStatus?.graphKey === currentGraph?.key ? preflightStatus : null
@@ -1213,7 +1295,7 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
       cinematicAuthoring?: { scriptDirty?: unknown }
     }).cinematicAuthoring?.scriptDirty)
   }, [currentGraph])
-  const [contentMode, setContentMode] = useState<'script' | 'graph' | 'runs'>('graph')
+  const [contentMode, setContentMode] = useState<'script' | 'graph' | 'runs'>('script')
 
   useEffect(() => {
     if (!currentGraph) return
@@ -1253,7 +1335,7 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
       edges: rebuiltGraph.edges,
     })
     onClearSelection()
-    setContentMode('graph')
+    setContentMode('script')
   }
 
   function updateCurrentScript(mutator: (scriptDoc: CinematicScriptDoc) => CinematicScriptDoc) {
@@ -1288,6 +1370,13 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
       edges: updatedGraph.edges,
     })
     onClearSelection()
+  }
+
+  function updateShotInSequence(shotId: string, mutator: (shot: CinematicSequence['shots'][number]) => CinematicSequence['shots'][number]) {
+    updateCurrentSequence((sequence) => ({
+      ...sequence,
+      shots: sequence.shots.map((shot) => (shot.id === shotId ? mutator(shot) : shot)),
+    }))
   }
 
   function moveShotWithinTake(takeId: string, shotId: string, direction: -1 | 1) {
@@ -1542,7 +1631,7 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
             {cinematicGraphs.map((graph) => <option key={graph.key} value={graph.key}>{graph.name}</option>)}
           </select>
           <div className="segmented-control">
-            <button className={contentMode === 'script' ? 'segment-button is-active' : 'segment-button'} onClick={() => setContentMode('script')} type="button">Script</button>
+            <button className={contentMode === 'script' ? 'segment-button is-active' : 'segment-button'} onClick={() => setContentMode('script')} type="button">Shots / Takes</button>
             <button className={contentMode === 'graph' ? 'segment-button is-active' : 'segment-button'} onClick={() => setContentMode('graph')} type="button">Graph</button>
             <button className={contentMode === 'runs' ? 'segment-button is-active' : 'segment-button'} onClick={() => setContentMode('runs')} type="button">Runs</button>
           </div>
@@ -1708,6 +1797,9 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
               onMergeTake={mergeTakeWithNeighbor}
               onMoveShot={moveShotWithinTake}
               onCancelRun={onCancelCinematicRun}
+              onGenerateShot={handleGenerateShotFromTake}
+              onUpdateShot={updateShotInSequence}
+              referenceOptions={currentScriptReferenceOptions}
               runs={currentGraphRuns}
               onApplyTemplateChange={(templateKey) => applyTemplateChange(currentNode.key, templateKey)}
               onDelete={() => onDeleteNode(currentGraph.key, currentNode.key)}
@@ -1822,12 +1914,6 @@ function CinematicGraphInspector({
             ['composite_ref', 'Composite Ref'],
             ['storyboard_ref', 'Storyboard Ref'],
             ['cinematic_take', 'Take Output'],
-            ['cinematic_establishing', 'Establishing'],
-            ['cinematic_dialogue', 'Dialogue'],
-            ['cinematic_reveal', 'Reveal'],
-            ['cinematic_action', 'Action'],
-            ['cinematic_insert', 'Insert'],
-            ['cinematic_transition', 'Transition'],
           ].map(([templateKey, label]) => (
             <button key={templateKey} className="library-button cinematic-preset-card" onClick={() => onAddPresetNode(templateKey)} type="button">
               <strong>{label}</strong>
@@ -1887,17 +1973,26 @@ function ScriptPreviewSurface({
     [previewSequence],
   )
   const bindingById = new Map(scriptDoc.entityBindings.map((binding) => [binding.id, binding]))
+  const auxiliaryRefLabelById = new Map<string, string>([
+    ...scriptDoc.compositeRefs.map((composite) => [composite.id, composite.title] as const),
+    ...((scriptDoc.storyboard?.sequenceAssetKey ? [['storyboard_sequence', 'Sequence Board'] as const] : [])),
+    ...((scriptDoc.storyboard?.panels ?? []).map((panel) => [panel.id, panel.title || panel.id] as const)),
+  ])
   const sceneById = new Map(orderedScenes.map((scene) => [scene.id, scene]))
   const characterOptions = referenceOptions.filter((entry) => entry.kind === 'character')
   const environmentOptions = referenceOptions.filter((entry) => entry.kind === 'environment')
   const itemOptions = referenceOptions.filter((entry) => entry.kind === 'item')
   const [showRawScript, setShowRawScript] = useState(false)
-  const authoredRawScriptMarkdown = typeof ((currentGraph.metadata as { cinematicAuthoring?: Record<string, unknown> }).cinematicAuthoring?.rawScriptMarkdown) === 'string'
-    ? String((currentGraph.metadata as { cinematicAuthoring?: Record<string, unknown> }).cinematicAuthoring?.rawScriptMarkdown ?? '')
-    : ''
-  const rawScriptExport = useMemo(
-    () => authoredRawScriptMarkdown.trim() || buildReadableScriptExport(scriptDoc),
-    [authoredRawScriptMarkdown, scriptDoc],
+  const jsonExport = useMemo(
+    () => JSON.stringify(
+      buildTakeFirstCinematicDocument({
+        graph: currentGraph,
+        sequence: previewSequence ?? getCinematicSequence(currentGraph.metadata),
+      }),
+      null,
+      2,
+    ),
+    [currentGraph, currentGraph.metadata, previewSequence],
   )
 
   function updateShot(shotId: string, mutator: (shot: CinematicScriptShot) => CinematicScriptShot) {
@@ -1991,7 +2086,7 @@ function ScriptPreviewSurface({
     <div className="detail-stack cinematic-script-surface">
       <div className="script-editor-toolbar">
         <div className="script-editor-status">
-          <span className="eyebrow">Canonical Script</span>
+          <span className="eyebrow">Canonical Shots / Takes</span>
           <div className={scriptDirty ? 'script-status-pill is-warning' : 'script-status-pill'}>
             {scriptDirty ? 'Graph out of date' : 'Script clean'}
           </div>
@@ -2000,17 +2095,17 @@ function ScriptPreviewSurface({
         </div>
         <div className="script-row-controls">
           <button className="ghost-button compact" onClick={() => setShowRawScript((current) => !current)} type="button">
-            {showRawScript ? 'Hide Raw Script' : 'Preview Raw Script'}
+            {showRawScript ? 'Hide JSON' : 'Preview JSON'}
           </button>
-          <button className="ghost-button compact" onClick={() => void navigator.clipboard.writeText(rawScriptExport)} type="button">Copy Raw Script</button>
-          <button className="primary-button compact" disabled={validationErrors.length > 0 || orderedShots.length === 0} onClick={onRebuild} type="button">Rebuild From Script</button>
+          <button className="ghost-button compact" onClick={() => void navigator.clipboard.writeText(jsonExport)} type="button">Copy JSON</button>
+          <button className="primary-button compact" disabled={validationErrors.length > 0 || orderedShots.length === 0} onClick={onRebuild} type="button">Rebuild Runtime Graph</button>
         </div>
       </div>
 
       <div className="inline-note">
-        Script edits are canonical and save immediately. The graph is a compiled projection and will stay unchanged until you rebuild from script.
+        Shot and take edits are canonical and save immediately. The graph is a compiled projection and stays unchanged until you rebuild the runtime graph.
       </div>
-      <div className="inline-note">The primary scripting flow is descriptive shot prose plus optional tagged dialogue. Action and ambience micro-structure are no longer emphasized in the main editor.</div>
+      <div className="inline-note">JSON is exposed as a take-first nested document for review and export; the internal authored model still keeps stable shots and derived takes.</div>
       {scriptDirty ? <div className="inline-note is-warning">Script changed. Rebuild graph to sync runtime projection.</div> : null}
       {validationIssues.length > 0 ? (
         <div className="diagnostic-stack">
@@ -2023,13 +2118,13 @@ function ScriptPreviewSurface({
         <div className="editor-section compact-section">
           <div className="section-head">
             <div>
-              <span className="eyebrow">Raw Script Output</span>
-              <h3>{authoredRawScriptMarkdown.trim() ? 'Authored markdown' : 'Readable export'}</h3>
+              <span className="eyebrow">Canonical JSON</span>
+              <h3>Take-first cinematic document</h3>
             </div>
           </div>
           <label className="field-block full-width">
-            <span>Raw script</span>
-            <textarea readOnly rows={20} value={rawScriptExport} />
+            <span>Take JSON</span>
+            <textarea readOnly rows={20} value={jsonExport} />
           </label>
         </div>
       ) : null}
@@ -2128,6 +2223,12 @@ function ScriptPreviewSurface({
                   <span>
                     Take {takeIndex + 1} · {take.durationSeconds}s · {take.seedanceEndpoint} · {take.shotIds.length} shot{take.shotIds.length === 1 ? '' : 's'}
                   </span>
+                  {take.breakReason ? <span>{take.breakReason}</span> : null}
+                  {take.continuityRefIds.length > 0 ? (
+                    <span>
+                      Continuity: {take.continuityRefIds.map((refId) => bindingById.get(refId)?.label ?? auxiliaryRefLabelById.get(refId) ?? refId).join(', ')}
+                    </span>
+                  ) : null}
                 </div>
               </div>
             ))}
@@ -2166,6 +2267,21 @@ function ScriptPreviewSurface({
               ) : null}
               {take ? <span className="script-mini-chip">{take.title} · {take.durationSeconds}s</span> : null}
               {shot.forceTakeBreak ? <span className="script-mini-chip">forces new take</span> : null}
+              {(compiledShot?.requiredSourceRefIds.length ?? 0) > 0 ? (
+                <span className="script-mini-chip">
+                  sources: {compiledShot?.requiredSourceRefIds.map((refId) => bindingById.get(refId)?.label ?? auxiliaryRefLabelById.get(refId) ?? refId).join(', ')}
+                </span>
+              ) : null}
+              {(compiledShot?.compositeRefIds.length ?? 0) > 0 ? (
+                <span className="script-mini-chip">
+                  composites: {compiledShot?.compositeRefIds.map((refId) => auxiliaryRefLabelById.get(refId) ?? refId).join(', ')}
+                </span>
+              ) : null}
+              {(compiledShot?.storyboardRefIds.length ?? 0) > 0 ? (
+                <span className="script-mini-chip">
+                  storyboards: {compiledShot?.storyboardRefIds.map((refId) => auxiliaryRefLabelById.get(refId) ?? refId).join(', ')}
+                </span>
+              ) : null}
               <span className="script-mini-chip">{shot.dialogue.length} dialogue</span>
             </div>
 
@@ -2679,12 +2795,15 @@ function CinematicTakeInspector({
   isGeneratingStoryboard,
   node,
   onExtractShot,
+  onGenerateShot,
   onGenerateStill,
   onGenerateStoryboard,
   onMergeTake,
   onMoveShot,
+  onUpdateShot,
   onCancelRun,
   onPullAdjacentShot,
+  referenceOptions,
   onSplitTake,
   runs,
   onApplyTemplateChange,
@@ -2700,12 +2819,15 @@ function CinematicTakeInspector({
   isGeneratingStoryboard: boolean
   node: NodeDefinition
   onExtractShot: (takeId: string, shotId: string) => void
+  onGenerateShot: (takeNode: NodeDefinition, shotId: string, mode: Extract<CinematicRunMode, 'preview_still' | 'preview_video'>) => void
   onGenerateStill: (takeNode: NodeDefinition) => void
   onGenerateStoryboard: (takeNode: NodeDefinition) => void
   onMergeTake: (takeId: string, direction: -1 | 1) => void
   onMoveShot: (takeId: string, shotId: string, direction: -1 | 1) => void
+  onUpdateShot: (shotId: string, mutator: (shot: CinematicSequence['shots'][number]) => CinematicSequence['shots'][number]) => void
   onCancelRun: (runId: string) => void
   onPullAdjacentShot: (takeId: string, direction: -1 | 1) => void
+  referenceOptions: ScriptReferenceOption[]
   onSplitTake: (takeId: string, shotId: string) => void
   runs: CinematicRun[]
   onApplyTemplateChange: (templateKey: string) => void
@@ -2726,7 +2848,27 @@ function CinematicTakeInspector({
   const takeIndex = sequence.takes.findIndex((take) => take.id === config.id)
   const previousTake = takeIndex > 0 ? sequence.takes[takeIndex - 1] ?? null : null
   const nextTake = takeIndex >= 0 && takeIndex < sequence.takes.length - 1 ? sequence.takes[takeIndex + 1] ?? null : null
-  const includedLabels = includedShots.map((shot) => shot.title)
+  const referenceLabelById = new Map(referenceOptions.map((option) => [option.id, option.label] as const))
+  sequence.compositeRefs.forEach((entry) => referenceLabelById.set(entry.id, entry.title))
+  sequence.storyboard?.panels.forEach((entry) => referenceLabelById.set(entry.id, entry.title || entry.id))
+  if (sequence.storyboard?.sequenceAssetKey) {
+    referenceLabelById.set('storyboard_sequence', 'Sequence Board')
+  }
+  const characterTags = Array.from(new Set(
+    includedShots.flatMap((shot) => shot.participantRefIds)
+      .map((refId) => referenceOptions.find((option) => option.id === refId && option.kind === 'character')?.label ?? null)
+      .filter((value): value is string => Boolean(value)),
+  ))
+  const environmentTags = Array.from(new Set(
+    includedShots
+      .map((shot) => shot.locationRefId ? referenceOptions.find((option) => option.id === shot.locationRefId && option.kind === 'environment')?.label ?? null : null)
+      .filter((value): value is string => Boolean(value)),
+  ))
+  const itemTags = Array.from(new Set(
+    includedShots.flatMap((shot) => shot.propRefIds)
+      .map((refId) => referenceOptions.find((option) => option.id === refId && option.kind === 'item')?.label ?? null)
+      .filter((value): value is string => Boolean(value)),
+  ))
   const sourceLabels = config.requiredSourceRefIds.map((refId: string) => {
     const refNode = currentGraph.nodes.find((entry) => {
       if (entry.type === 'asset_ref') return getAssetRefNodeConfig(entry).entityRefId === refId
@@ -2744,6 +2886,32 @@ function CinematicTakeInspector({
       return definition?.name ?? refNode.title
     }
     return refNode.title
+  })
+  const continuityLabels = config.continuityRefIds.map((refId: string) => {
+    const definition = definitions.find((entry) => entry.key === refId) ?? null
+    if (definition) return definition.name
+    const sequenceRef = sequence.references.find((reference) => reference.id === refId) ?? null
+    if (sequenceRef) return sequenceRef.label
+    const compositeRef = sequence.compositeRefs.find((reference) => reference.id === refId) ?? null
+    if (compositeRef) return compositeRef.title
+    const storyboardPanel = sequence.storyboard?.panels.find((panel) => panel.id === refId) ?? null
+    if (storyboardPanel) return storyboardPanel.title || storyboardPanel.id
+    if (refId === 'storyboard_sequence') return 'Sequence Board'
+    return refId
+  })
+  const shotRuns = runs.flatMap((run) => run.jobs.map((job) => ({ run, job })))
+  const resolveShotAsset = (assetKey: string | null | undefined) => assetKey ? assets.find((asset) => asset.key === assetKey) ?? null : null
+  const buildShotTagLabels = (shot: CinematicSequence['shots'][number]) => ({
+    participants: shot.participantRefIds.map((refId) => referenceLabelById.get(refId) ?? refId),
+    location: shot.locationRefId ? (referenceLabelById.get(shot.locationRefId) ?? shot.locationRefId) : null,
+    props: shot.propRefIds.map((refId) => referenceLabelById.get(refId) ?? refId),
+    composites: shot.compositeRefIds.map((refId) => referenceLabelById.get(refId) ?? refId),
+    storyboards: shot.storyboardRefIds.map((refId) => referenceLabelById.get(refId) ?? refId),
+  })
+  const resolveShotRuns = (shotId: string) => ({
+    latest: shotRuns.find(({ job }) => job.shotNodeKey === node.key && job.shotId === shotId) ?? null,
+    activeStill: shotRuns.find(({ run, job }) => !['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(run.status) && run.mode === 'preview_still' && job.shotNodeKey === node.key && job.shotId === shotId) ?? null,
+    activeVideo: shotRuns.find(({ run, job }) => !['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(run.status) && run.mode === 'preview_video' && job.shotNodeKey === node.key && job.shotId === shotId) ?? null,
   })
 
   return (
@@ -2784,17 +2952,43 @@ function CinematicTakeInspector({
       </label>
       <div className="diagnostic-stack">
         <div className="inline-note">
-          <strong>Included shots</strong>
-          <span> {includedLabels.join(', ') || 'none'}</span>
-        </div>
-        <div className="inline-note">
-          <strong>Shot timing</strong>
-          <span> {includedShots.map((shot) => `${shot.title} (${shot.durationSeconds}s)`).join(', ') || 'none'}</span>
+          <strong>Take summary</strong>
+          <span> {config.shotIds.length} shot{config.shotIds.length === 1 ? '' : 's'} · {config.durationSeconds}s total</span>
         </div>
         <div className="inline-note">
           <strong>Reference pack</strong>
           <span> {sourceLabels.join(', ') || 'none'}</span>
         </div>
+        {characterTags.length > 0 ? (
+          <div className="inline-note">
+            <strong>Characters</strong>
+            <span> {characterTags.join(', ')}</span>
+          </div>
+        ) : null}
+        {environmentTags.length > 0 ? (
+          <div className="inline-note">
+            <strong>Environments</strong>
+            <span> {environmentTags.join(', ')}</span>
+          </div>
+        ) : null}
+        {itemTags.length > 0 ? (
+          <div className="inline-note">
+            <strong>Items</strong>
+            <span> {itemTags.join(', ')}</span>
+          </div>
+        ) : null}
+        {config.breakReason.trim() ? (
+          <div className="inline-note">
+            <strong>Split reason</strong>
+            <span> {config.breakReason.trim()}</span>
+          </div>
+        ) : null}
+        {continuityLabels.length > 0 ? (
+          <div className="inline-note">
+            <strong>Continuity anchors</strong>
+            <span> {continuityLabels.join(', ')}</span>
+          </div>
+        ) : null}
         <div className="inline-note">
           <strong>Approval</strong>
           <span> {config.approvedForVideo ? 'Approved for video render' : 'Not approved yet'}</span>
@@ -2832,24 +3026,183 @@ function CinematicTakeInspector({
       <div className="editor-section compact-section">
         <div className="section-head">
           <div>
-            <span className="eyebrow">Take Shots</span>
-            <h3>Ordered Segments</h3>
+            <span className="eyebrow">Nested Shots</span>
+            <h3>Take Master Editor</h3>
           </div>
         </div>
         <div className="diagnostic-stack">
-          {includedShots.map((shot, index) => (
-            <div key={shot.id} className="inline-note">
-              <strong>{index + 1}. {shot.title}</strong>
-              <span> {shot.durationSeconds}s · {shot.hookRole ?? 'beat'}{shot.proofMoment ? ` · ${shot.proofMoment}` : ''}</span>
-              <span>
-                {' '}
-                <button className="ghost-button compact" disabled={index === 0} onClick={() => onMoveShot(config.id, shot.id, -1)} type="button">Up</button>
-                <button className="ghost-button compact" disabled={index === includedShots.length - 1} onClick={() => onMoveShot(config.id, shot.id, 1)} type="button">Down</button>
-                <button className="ghost-button compact" disabled={index === includedShots.length - 1} onClick={() => onSplitTake(config.id, shot.id)} type="button">Split After</button>
-                <button className="ghost-button compact" disabled={includedShots.length <= 1} onClick={() => onExtractShot(config.id, shot.id)} type="button">Extract</button>
-              </span>
-            </div>
-          ))}
+          {includedShots.map((shot, index) => {
+            const shotStatus = resolveShotRuns(shot.id)
+            const shotStillAsset = resolveShotAsset(shot.stillAssetKey)
+            const shotVideoAsset = resolveShotAsset(shot.videoAssetKey)
+            const tagLabels = buildShotTagLabels(shot)
+
+            return (
+              <details key={`nested-${shot.id}`} className="schema-card">
+                <summary className="inline-note">
+                  <strong>{index + 1}. {shot.title}</strong>
+                  <span> {shot.durationSeconds}s · {shot.hookRole ?? shot.shotType} · {tagLabels.participants.concat(tagLabels.location ? [tagLabels.location] : [], tagLabels.props).join(', ') || 'no tags'}</span>
+                </summary>
+                <div className="detail-stack compact">
+                  <div className="detail-actions cinematic-action-row">
+                    <button className="ghost-button compact" disabled={index === 0} onClick={() => onMoveShot(config.id, shot.id, -1)} type="button">Up</button>
+                    <button className="ghost-button compact" disabled={index === includedShots.length - 1} onClick={() => onMoveShot(config.id, shot.id, 1)} type="button">Down</button>
+                    <button className="ghost-button compact" disabled={index === includedShots.length - 1} onClick={() => onSplitTake(config.id, shot.id)} type="button">Split After</button>
+                    <button className="ghost-button compact" disabled={includedShots.length <= 1} onClick={() => onExtractShot(config.id, shot.id)} type="button">Extract</button>
+                    <button className="ghost-button compact" disabled={!canRunCinematics || Boolean(shotStatus.activeStill)} onClick={() => onGenerateShot(node, shot.id, 'preview_still')} type="button">Still</button>
+                    <button className="primary-button compact" disabled={!canRunCinematics || Boolean(shotStatus.activeVideo)} onClick={() => onGenerateShot(node, shot.id, 'preview_video')} type="button">Clip</button>
+                    {shotStatus.activeStill ? <button className="ghost-button compact" onClick={() => onCancelRun(shotStatus.activeStill!.run.id)} type="button">Cancel Still</button> : null}
+                    {shotStatus.activeVideo ? <button className="ghost-button compact" onClick={() => onCancelRun(shotStatus.activeVideo!.run.id)} type="button">Cancel Clip</button> : null}
+                  </div>
+
+                  <label className="field-block">
+                    <span>Title</span>
+                    <input value={shot.title} onChange={(event) => onUpdateShot(shot.id, (currentShot) => ({ ...currentShot, title: event.target.value }))} />
+                  </label>
+                  <label className="field-block full-width">
+                    <span>Beat</span>
+                    <textarea rows={3} value={shot.beat} onChange={(event) => onUpdateShot(shot.id, (currentShot) => ({ ...currentShot, beat: event.target.value }))} />
+                  </label>
+
+                  <div className="editor-grid compact cinematic-field-grid">
+                    <label className="field-block compact-block">
+                      <span>Role</span>
+                      <select value={shot.hookRole ?? ''} onChange={(event) => onUpdateShot(shot.id, (currentShot) => ({ ...currentShot, hookRole: event.target.value ? event.target.value as NonNullable<typeof currentShot.hookRole> : null }))}>
+                        <option value="">None</option>
+                        <option value="hook">Hook</option>
+                        <option value="setup">Setup</option>
+                        <option value="proof">Proof</option>
+                        <option value="payoff">Payoff</option>
+                        <option value="cta">CTA</option>
+                      </select>
+                    </label>
+                    <label className="field-block compact-block">
+                      <span>Duration</span>
+                      <input type="number" min="1" max="15" value={shot.durationSeconds ?? 4} onChange={(event) => onUpdateShot(shot.id, (currentShot) => ({ ...currentShot, durationSeconds: Math.min(15, Math.max(1, Number(event.target.value) || currentShot.durationSeconds || 4)), durationSource: 'manual' }))} />
+                    </label>
+                    <label className="field-block compact-block">
+                      <span>Framing</span>
+                      <input value={shot.framing} onChange={(event) => onUpdateShot(shot.id, (currentShot) => ({ ...currentShot, framing: event.target.value }))} />
+                    </label>
+                    <label className="field-block compact-block">
+                      <span>Camera Angle</span>
+                      <input value={shot.cameraAngle} onChange={(event) => onUpdateShot(shot.id, (currentShot) => ({ ...currentShot, cameraAngle: event.target.value }))} />
+                    </label>
+                    <label className="field-block compact-block">
+                      <span>Camera Move</span>
+                      <input value={shot.cameraMovement} onChange={(event) => onUpdateShot(shot.id, (currentShot) => ({ ...currentShot, cameraMovement: event.target.value }))} />
+                    </label>
+                    <label className="field-block compact-block">
+                      <span>Lens</span>
+                      <input value={shot.lensPreference} onChange={(event) => onUpdateShot(shot.id, (currentShot) => ({ ...currentShot, lensPreference: event.target.value }))} />
+                    </label>
+                    <label className="field-block compact-block">
+                      <span>Force Take Break</span>
+                      <input checked={shot.forceTakeBreak} onChange={(event) => onUpdateShot(shot.id, (currentShot) => ({ ...currentShot, forceTakeBreak: event.target.checked }))} type="checkbox" />
+                    </label>
+                  </div>
+
+                  <label className="field-block full-width">
+                    <span>Visual Prompt</span>
+                    <textarea rows={3} value={shot.visualPrompt} onChange={(event) => onUpdateShot(shot.id, (currentShot) => ({ ...currentShot, visualPrompt: event.target.value }))} />
+                  </label>
+                  <label className="field-block full-width">
+                    <span>Composition Guide</span>
+                    <textarea rows={3} value={shot.compositionGuide} onChange={(event) => onUpdateShot(shot.id, (currentShot) => ({ ...currentShot, compositionGuide: event.target.value }))} />
+                  </label>
+
+                  <div className="editor-grid compact cinematic-field-grid">
+                    <label className="field-block compact-block">
+                      <span>Participants</span>
+                      <input value={shot.participantRefIds.join(', ')} onChange={(event) => onUpdateShot(shot.id, (currentShot) => ({ ...currentShot, participantRefIds: parseCommaSeparatedIds(event.target.value) }))} />
+                    </label>
+                    <label className="field-block compact-block">
+                      <span>Location</span>
+                      <input value={shot.locationRefId ?? ''} onChange={(event) => onUpdateShot(shot.id, (currentShot) => ({ ...currentShot, locationRefId: event.target.value.trim() || null }))} />
+                    </label>
+                    <label className="field-block compact-block">
+                      <span>Props</span>
+                      <input value={shot.propRefIds.join(', ')} onChange={(event) => onUpdateShot(shot.id, (currentShot) => ({ ...currentShot, propRefIds: parseCommaSeparatedIds(event.target.value) }))} />
+                    </label>
+                    <label className="field-block compact-block">
+                      <span>Required Sources</span>
+                      <input value={shot.requiredSourceRefIds.join(', ')} onChange={(event) => onUpdateShot(shot.id, (currentShot) => ({ ...currentShot, requiredSourceRefIds: parseCommaSeparatedIds(event.target.value) }))} />
+                    </label>
+                    <label className="field-block compact-block">
+                      <span>Composites</span>
+                      <input value={shot.compositeRefIds.join(', ')} onChange={(event) => onUpdateShot(shot.id, (currentShot) => ({ ...currentShot, compositeRefIds: parseCommaSeparatedIds(event.target.value) }))} />
+                    </label>
+                    <label className="field-block compact-block">
+                      <span>Storyboards</span>
+                      <input value={shot.storyboardRefIds.join(', ')} onChange={(event) => onUpdateShot(shot.id, (currentShot) => ({ ...currentShot, storyboardRefIds: parseCommaSeparatedIds(event.target.value) }))} />
+                    </label>
+                  </div>
+
+                  <div className="diagnostic-stack">
+                    {tagLabels.participants.length > 0 ? <div className="inline-note"><strong>Characters</strong><span> {tagLabels.participants.join(', ')}</span></div> : null}
+                    {tagLabels.location ? <div className="inline-note"><strong>Environment</strong><span> {tagLabels.location}</span></div> : null}
+                    {tagLabels.props.length > 0 ? <div className="inline-note"><strong>Items</strong><span> {tagLabels.props.join(', ')}</span></div> : null}
+                    {tagLabels.composites.length > 0 ? <div className="inline-note"><strong>Composites</strong><span> {tagLabels.composites.join(', ')}</span></div> : null}
+                    {tagLabels.storyboards.length > 0 ? <div className="inline-note"><strong>Storyboards</strong><span> {tagLabels.storyboards.join(', ')}</span></div> : null}
+                    {shotStatus.latest ? <div className="inline-note"><strong>Latest run</strong><span> {shotStatus.latest.run.mode} · {shotStatus.latest.job.status}</span></div> : null}
+                  </div>
+
+                  <div className="editor-section compact-section">
+                    <div className="section-head">
+                      <div>
+                        <span className="eyebrow">Action Beats</span>
+                        <h3>{shot.actions.length} beat{shot.actions.length === 1 ? '' : 's'}</h3>
+                      </div>
+                    </div>
+                    <ActionBeatEditor
+                      actions={shot.actions}
+                      referenceOptions={referenceOptions}
+                      onChange={(actions) => onUpdateShot(shot.id, (currentShot) => ({ ...currentShot, actions }))}
+                    />
+                  </div>
+
+                  <div className="editor-section compact-section">
+                    <div className="section-head">
+                      <div>
+                        <span className="eyebrow">Dialogue</span>
+                        <h3>{shot.dialogue.length} line{shot.dialogue.length === 1 ? '' : 's'}</h3>
+                      </div>
+                    </div>
+                    <DialogueBeatEditor
+                      dialogue={shot.dialogue}
+                      referenceOptions={referenceOptions.filter((option) => option.kind === 'character')}
+                      onChange={(dialogue) => onUpdateShot(shot.id, (currentShot) => ({ ...currentShot, dialogue }))}
+                    />
+                  </div>
+
+                  <div className="editor-section compact-section">
+                    <div className="section-head">
+                      <div>
+                        <span className="eyebrow">Audio</span>
+                        <h3>{shot.audio.length} cue{shot.audio.length === 1 ? '' : 's'}</h3>
+                      </div>
+                    </div>
+                    <AudioBeatEditor
+                      audio={shot.audio}
+                      referenceOptions={referenceOptions}
+                      onChange={(audio) => onUpdateShot(shot.id, (currentShot) => ({ ...currentShot, audio }))}
+                    />
+                  </div>
+
+                  <div className="editor-grid compact cinematic-field-grid">
+                    <div className="field-block compact-block">
+                      <span>Still</span>
+                      {shotStillAsset ? <AssetPreview asset={shotStillAsset} /> : <div className="inline-note">No still yet.</div>}
+                    </div>
+                    <div className="field-block compact-block">
+                      <span>Clip</span>
+                      {shotVideoAsset ? <AssetPreview asset={shotVideoAsset} /> : <div className="inline-note">No clip yet.</div>}
+                    </div>
+                  </div>
+                </div>
+              </details>
+            )
+          })}
         </div>
       </div>
       <div className="editor-section compact-section">
@@ -3812,7 +4165,16 @@ function buildCinematicConnectionEdge(connection: Connection, graph: GraphDefini
   const targetIsRefNode = ['asset_ref', 'composite_ref', 'storyboard_ref'].includes(targetNode.type)
   const sourceIsTakeNode = sourceNode.type === 'cinematic_take'
   const targetIsTakeNode = targetNode.type === 'cinematic_take'
+  const graphHasSequence = Boolean(
+    graph.metadata
+    && typeof graph.metadata === 'object'
+    && (
+      'cinematicSequence' in (graph.metadata as Record<string, unknown>)
+      || 'cinematicScript' in (graph.metadata as Record<string, unknown>)
+    ),
+  )
 
+  if (graphHasSequence && (sourceNode.type === 'cinematic_shot' || targetNode.type === 'cinematic_shot')) return null
   if (sourceNode.type === 'cinematic_shot' && targetNode.type !== 'cinematic_shot' && !targetIsTakeNode) return null
   if (sourceIsTakeNode && !targetIsTakeNode) return null
   if (sourceIsRefNode && targetNode.type === 'cinematic_shot') return null

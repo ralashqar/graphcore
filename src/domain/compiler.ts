@@ -10,7 +10,7 @@ import type {
   ProjectSnapshot,
 } from './graphcore.ts'
 import { compileAssemblyGraph } from './environmentAssemblyCompiler.ts'
-import { estimateShotContentDurationSeconds, getCinematicSettings } from './cinematics.ts'
+import { estimateShotContentDurationSeconds, getCinematicSequence, getCinematicSettings } from './cinematics.ts'
 import { graphNodeTemplatesByKey } from './nodeLibrary.ts'
 import { PRESET_CATALOG_VERSION } from './presetCatalog.ts'
 
@@ -769,6 +769,26 @@ export function validateGraph(
   const nodeKeys = new Set<string>()
   const startNodes = graph.nodes.filter((node) => node.type === 'start')
   const endNodes = graph.nodes.filter((node) => node.type === 'end')
+  const availableRefNodes = graph.nodes.filter((candidate) => ['asset_ref', 'composite_ref', 'storyboard_ref'].includes(candidate.type))
+  const availableRefIds = availableRefNodes
+    .map((candidate) =>
+      typeof candidate.metadata.entityRefId === 'string'
+        ? candidate.metadata.entityRefId
+        : typeof candidate.metadata.compositeRefId === 'string'
+          ? candidate.metadata.compositeRefId
+          : typeof candidate.metadata.panelId === 'string'
+            ? candidate.metadata.panelId
+            : typeof candidate.metadata.storyboardId === 'string'
+              ? candidate.metadata.storyboardId
+              : null,
+    )
+    .filter((value): value is string => Boolean(value))
+  const cinematicSequence = graph.graphType === 'cinematic_flow' ? getCinematicSequence(graph.metadata) : null
+  const takeNodeKeyByTakeId = new Map(
+    graph.nodes
+      .filter((node) => node.type === 'cinematic_take')
+      .map((node) => [typeof node.metadata.takeId === 'string' ? node.metadata.takeId : node.key, node.key] as const),
+  )
 
   if (startNodes.length !== 1) {
     diagnostics.push({
@@ -1334,6 +1354,276 @@ export function validateGraph(
           graphKey: graph.key,
           nodeKey: node.key,
         })
+      }
+    }
+  }
+
+  if (cinematicSequence && graph.nodes.some((node) => node.type === 'cinematic_shot')) {
+    diagnostics.push({
+      level: 'warning',
+      code: 'legacy_cinematic_shot_nodes_present',
+      message: `Cinematic graph "${graph.key}" still contains legacy shot nodes even though a cinematic sequence is present. Rebuild or resave the graph to normalize it to take-only projection.`,
+      graphKey: graph.key,
+      nodeKey: graph.nodes.find((node) => node.type === 'cinematic_shot')?.key ?? null,
+    })
+  }
+
+  if (cinematicSequence && !graph.nodes.some((node) => node.type === 'cinematic_shot')) {
+    const cinematicSettings = getCinematicSettings({}, graph.metadata)
+    const isStoryPreset = cinematicSettings.presetFamily === 'story_movie_tv'
+    const isAdPreset = cinematicSettings.presetFamily === 'ugc_direct_response_ad'
+    const isUgcPreset = !isStoryPreset
+    const firstShotId = cinematicSequence.shots[0]?.id ?? null
+
+    for (const shot of cinematicSequence.shots) {
+      const nodeKey = takeNodeKeyByTakeId.get(shot.takeId ?? '') ?? null
+      const referencedNodes = availableRefNodes.filter((candidate) => {
+        const refId =
+          typeof candidate.metadata.entityRefId === 'string'
+            ? candidate.metadata.entityRefId
+            : typeof candidate.metadata.compositeRefId === 'string'
+              ? candidate.metadata.compositeRefId
+              : typeof candidate.metadata.panelId === 'string'
+                ? candidate.metadata.panelId
+                : typeof candidate.metadata.storyboardId === 'string'
+                  ? candidate.metadata.storyboardId
+                  : null
+        return typeof refId === 'string' && shot.requiredSourceRefIds.includes(refId)
+      })
+
+      if (shot.stillAssetKey && !assetKeys.has(shot.stillAssetKey)) {
+        diagnostics.push({
+          level: 'error',
+          code: 'missing_cinematic_still',
+          message: `Cinematic shot "${shot.id}" references missing still asset "${shot.stillAssetKey}".`,
+          graphKey: graph.key,
+          nodeKey,
+        })
+      }
+
+      if (shot.videoAssetKey && !assetKeys.has(shot.videoAssetKey)) {
+        diagnostics.push({
+          level: 'error',
+          code: 'missing_cinematic_video',
+          message: `Cinematic shot "${shot.id}" references missing video asset "${shot.videoAssetKey}".`,
+          graphKey: graph.key,
+          nodeKey,
+        })
+      }
+
+      if (shot.durationSource === 'manual') {
+        const estimated = estimateShotContentDurationSeconds({
+          shotType: shot.shotType,
+          beat: shot.beat,
+          dialogue: shot.dialogue,
+          actions: shot.actions,
+          audio: shot.audio,
+        })
+        if (estimated.inferredDurationSeconds - (shot.durationSeconds ?? 0) >= 2) {
+          diagnostics.push({
+            level: 'warning',
+            code: 'cinematic_shot_manual_duration_too_short',
+            message: `Cinematic shot "${shot.id}" has a manual ${shot.durationSeconds ?? 0}s duration, but its dialogue/action content suggests closer to ${estimated.inferredDurationSeconds}s.`,
+            graphKey: graph.key,
+            nodeKey,
+          })
+        }
+      }
+
+      const missingRequiredSourceRefIds = shot.requiredSourceRefIds.filter((refId) => !availableRefIds.includes(refId))
+      if (missingRequiredSourceRefIds.length > 0) {
+        diagnostics.push({
+          level: 'warning',
+          code: 'cinematic_shot_missing_required_refs',
+          message: `Cinematic shot "${shot.id}" is missing ${missingRequiredSourceRefIds.length} required reference input${missingRequiredSourceRefIds.length === 1 ? '' : 's'}.`,
+          graphKey: graph.key,
+          nodeKey,
+        })
+      }
+
+      const hasStoryboardInput = referencedNodes.some((candidate) => candidate.type === 'storyboard_ref')
+      const hasCompositeInput = referencedNodes.some((candidate) => candidate.type === 'composite_ref')
+      const storyboardMode =
+        cinematicSequence.storyboard && typeof cinematicSequence.storyboard.mode === 'string'
+          ? cinematicSequence.storyboard.mode
+          : 'none'
+      const participantCount = shot.participantRefIds.length
+      const propCount = shot.propRefIds.length
+
+      if ((participantCount + propCount >= 3) && !hasCompositeInput) {
+        diagnostics.push({
+          level: 'warning',
+          code: 'cinematic_shot_missing_composite_ref',
+          message: isUgcPreset
+            ? `Cinematic shot "${shot.id}" should usually include a creator, product, or proof continuity composite for this preset.`
+            : `Cinematic shot "${shot.id}" should usually include a composite reference for multi-subject or subject-plus-prop continuity.`,
+          graphKey: graph.key,
+          nodeKey,
+        })
+      }
+      if (isStoryPreset && participantCount + propCount >= 2 && !hasStoryboardInput && storyboardMode !== 'none') {
+        diagnostics.push({
+          level: 'warning',
+          code: 'cinematic_shot_missing_storyboard_ref',
+          message: `Cinematic shot "${shot.id}" should usually include a storyboard or panel reference for clearer continuity.`,
+          graphKey: graph.key,
+          nodeKey,
+        })
+      }
+      if (isUgcPreset) {
+        const hookRole = shot.hookRole
+        const formatSubtype = shot.formatSubtype ?? cinematicSettings.formatSubtype
+        const formulaFamily = shot.formulaFamily?.trim() ?? (cinematicSettings.formulaFamily ?? '')
+        const dominantTrigger = shot.dominantTrigger?.trim() ?? (cinematicSettings.dominantTrigger ?? '')
+        const targetEmotion = shot.targetEmotion.trim()
+        const proofType = shot.proofType.trim()
+        const personaStyle = shot.personaStyle.trim()
+        const contrastAxis = shot.contrastAxis.trim()
+        const proofMoment = shot.proofMoment.trim()
+        const ctaStyle = shot.ctaStyle.trim()
+        const hasProductContinuity = referencedNodes.some((candidate) => {
+          const role = typeof candidate.metadata.role === 'string' ? candidate.metadata.role : ''
+          return /product|proof|creator/i.test(role)
+        })
+        const isCreatorSubtype = typeof formatSubtype === 'string' && formatSubtype.startsWith('creator_')
+        const isAdSubtype = typeof formatSubtype === 'string' && (formatSubtype.startsWith('ad_') || formatSubtype === 'contrast_narrative')
+        const isFacelessSubtype = typeof formatSubtype === 'string' && formatSubtype.startsWith('faceless_')
+        if (shot.id === firstShotId && !hookRole && !shot.stillAssetKey && !shot.videoAssetKey) {
+          diagnostics.push({
+            level: 'warning',
+            code: 'ugc_shot_missing_hook',
+            message: `UGC shot "${shot.id}" should establish a clearer hook on the first shot for short-form performance.`,
+            graphKey: graph.key,
+            nodeKey,
+          })
+        }
+        if (!formulaFamily) {
+          diagnostics.push({
+            level: 'warning',
+            code: 'ugc_shot_missing_formula_family',
+            message: `UGC shot "${shot.id}" should specify a formulaFamily so the script structure is intentional.`,
+            graphKey: graph.key,
+            nodeKey,
+          })
+        }
+        if (!dominantTrigger) {
+          diagnostics.push({
+            level: 'warning',
+            code: 'ugc_shot_missing_dominant_trigger',
+            message: `UGC shot "${shot.id}" should define its dominantTrigger for stronger short-form psychology.`,
+            graphKey: graph.key,
+            nodeKey,
+          })
+        }
+        if (isAdPreset && !hasProductContinuity) {
+          diagnostics.push({
+            level: 'warning',
+            code: 'ugc_ad_missing_product_or_proof_ref',
+            message: `UGC ad shot "${shot.id}" should connect product or proof continuity refs earlier in the sequence.`,
+            graphKey: graph.key,
+            nodeKey,
+          })
+        }
+        if ((hookRole === 'proof' || hookRole === 'cta') && !proofType && isAdPreset) {
+          diagnostics.push({
+            level: 'warning',
+            code: 'ugc_ad_missing_proof_type',
+            message: `UGC ad shot "${shot.id}" should specify a proofType for proof or CTA beats.`,
+            graphKey: graph.key,
+            nodeKey,
+          })
+        }
+        if (isCreatorSubtype && !hasProductContinuity) {
+          diagnostics.push({
+            level: 'warning',
+            code: 'ugc_creator_missing_creator_product_continuity',
+            message: `UGC creator shot "${shot.id}" should connect creator or product continuity refs.`,
+            graphKey: graph.key,
+            nodeKey,
+          })
+        }
+        if (!personaStyle && cinematicSettings.presetFamily === 'ugc_creator') {
+          diagnostics.push({
+            level: 'warning',
+            code: 'ugc_creator_missing_persona_style',
+            message: `UGC creator shot "${shot.id}" should capture the creator persona or delivery style.`,
+            graphKey: graph.key,
+            nodeKey,
+          })
+        }
+        if (isAdSubtype && !proofMoment) {
+          diagnostics.push({
+            level: 'warning',
+            code: 'ugc_ad_missing_proof_moment',
+            message: `UGC ad shot "${shot.id}" should define when the proof or payoff lands.`,
+            graphKey: graph.key,
+            nodeKey,
+          })
+        }
+        if (isAdSubtype && !ctaStyle) {
+          diagnostics.push({
+            level: 'warning',
+            code: 'ugc_ad_missing_cta_style',
+            message: `UGC ad shot "${shot.id}" should define a CTA style instead of leaving it implicit.`,
+            graphKey: graph.key,
+            nodeKey,
+          })
+        }
+        if (isFacelessSubtype && participantCount > 1 && propCount === 0) {
+          diagnostics.push({
+            level: 'warning',
+            code: 'ugc_faceless_missing_object_process_focus',
+            message: `UGC faceless shot "${shot.id}" should emphasize a dominant object, screen, or process subject.`,
+            graphKey: graph.key,
+            nodeKey,
+          })
+        }
+        if (formatSubtype === 'contrast_narrative' && !contrastAxis) {
+          diagnostics.push({
+            level: 'warning',
+            code: 'ugc_contrast_missing_axis',
+            message: `Contrast narrative shot "${shot.id}" should define a contrastAxis such as before/after or rich vs poor.`,
+            graphKey: graph.key,
+            nodeKey,
+          })
+        }
+        if (formatSubtype === 'contrast_narrative' && shot.id === firstShotId && !hasStoryboardInput) {
+          diagnostics.push({
+            level: 'warning',
+            code: 'ugc_contrast_missing_storyboard_support',
+            message: `Contrast narrative shot "${shot.id}" should usually be supported by storyboard or board-style references.`,
+            graphKey: graph.key,
+            nodeKey,
+          })
+        }
+        if (!targetEmotion) {
+          diagnostics.push({
+            level: 'warning',
+            code: 'ugc_shot_missing_target_emotion',
+            message: `UGC shot "${shot.id}" should define its target emotion or viewer response for stronger short-form pacing.`,
+            graphKey: graph.key,
+            nodeKey,
+          })
+        }
+      }
+
+      const executionPlan = shot.executionPlan
+      if (executionPlan && typeof executionPlan === 'object') {
+        const droppedRefIds = Array.isArray((executionPlan as { droppedRefIds?: unknown }).droppedRefIds)
+          ? (executionPlan as { droppedRefIds: unknown[] }).droppedRefIds.filter((value): value is string => typeof value === 'string')
+          : []
+        const referenceInputs = Array.isArray((executionPlan as { referenceInputs?: unknown }).referenceInputs)
+          ? (executionPlan as { referenceInputs: unknown[] }).referenceInputs
+          : []
+        if (referenceInputs.length > 12 || droppedRefIds.length > 0) {
+          diagnostics.push({
+            level: 'warning',
+            code: 'cinematic_shot_seedance_pack_trimmed',
+            message: `Cinematic shot "${shot.id}" exceeds the preferred Seedance reference budget and will trim lower-priority inputs.`,
+            graphKey: graph.key,
+            nodeKey,
+          })
+        }
       }
     }
   }

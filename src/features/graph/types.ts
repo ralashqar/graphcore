@@ -55,6 +55,22 @@ export type GraphNodeData = {
           text: string
         }
     >
+    summary?: string | null
+    takeShots?: Array<{
+      id: string
+      title: string
+      kicker?: string | null
+      chips?: Array<{ label: string; tone?: 'default' | 'muted' }>
+      tags?: Array<{ label: string; iconId?: EntityIconId | null; tone?: 'default' | 'muted' }>
+      lines?: Array<
+        | string
+        | {
+            type: 'dialogue' | 'action'
+            speaker?: string | null
+            text: string
+          }
+      >
+    }>
     ambience?: string | null
   } | null
   onAddChoice?: () => void

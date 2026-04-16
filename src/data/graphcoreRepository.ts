@@ -1764,6 +1764,7 @@ export async function loadProjectSnapshot(
           runId: job.run_id,
           graphKey: job.graph_key,
           shotNodeKey: job.shot_node_key,
+          shotId: typeof job.result_context?.shotId === 'string' ? job.result_context.shotId : null,
           kind: job.kind,
           status: job.status,
           orderIndex: job.order_index,

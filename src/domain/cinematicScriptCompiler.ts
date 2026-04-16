@@ -1,8 +1,10 @@
 import {
   buildCinematicSequenceFromScriptDoc,
+  compileCinematicSequence,
   cinematicTakeSpecSchema,
-  cinematicShotSpecSchema,
   cinematicScriptDocSchema,
+  deriveCinematicScriptFromSequence,
+  type CinematicSequence,
   type CinematicScriptDoc,
   type CinematicSettings,
 } from './cinematics.ts'
@@ -11,13 +13,20 @@ import { createGraphScaffold } from './graphScaffold.ts'
 import { normalizeNode } from './nodeLibrary.ts'
 import { resourceGenerationMetadataSchema } from './worldBuild.ts'
 
-type CompileCinematicGraphFromScriptInput = {
+type CompileCinematicGraphInputBase = {
   graphKey: string
   graphName: string
   graphSummary: string
   graphSettings: Partial<CinematicSettings> | Record<string, unknown>
-  scriptDoc: CinematicScriptDoc
   existingMetadata?: Record<string, unknown>
+}
+
+type CompileCinematicGraphFromScriptInput = CompileCinematicGraphInputBase & {
+  scriptDoc: CinematicScriptDoc
+}
+
+type CompileCinematicGraphFromSequenceInput = CompileCinematicGraphInputBase & {
+  sequence: CinematicSequence
 }
 
 function assetRoleForBinding(binding: CinematicScriptDoc['entityBindings'][number]) {
@@ -46,9 +55,9 @@ function normalizeGraphLayoutPositions(nodes: GraphDefinition['nodes']) {
   }))
 }
 
-export function compileCinematicGraphFromScriptDoc(input: CompileCinematicGraphFromScriptInput): GraphDefinition {
-  const scriptDoc = cinematicScriptDocSchema.parse(input.scriptDoc)
-  const cinematicSequence = buildCinematicSequenceFromScriptDoc(scriptDoc)
+export function compileCinematicGraphFromSequence(input: CompileCinematicGraphFromSequenceInput): GraphDefinition {
+  const cinematicSequence = compileCinematicSequence(input.sequence)
+  const scriptDoc = deriveCinematicScriptFromSequence(cinematicSequence)
   const graph = createGraphScaffold({
     key: input.graphKey,
     name: input.graphName,
@@ -187,45 +196,6 @@ export function compileCinematicGraphFromScriptDoc(input: CompileCinematicGraphF
     sourceNodeKeyByRefId.set(storyboardRef.id, key)
   }
 
-  let previousFlowNodeKey = startNode.key
-  const orderedShots = [...cinematicSequence.shots]
-  const shotNodeKeyByShotId = new Map<string, string>()
-
-  for (const [index, sequenceShot] of orderedShots.entries()) {
-    const parsedShot = cinematicShotSpecSchema.parse(sequenceShot)
-    const key = `${graph.key}.cinematic_shot_${index + 1}`
-    const node = normalizeNode({
-      id: `node-cinematic-shot-${parsedShot.id}-${index}`,
-      key,
-      type: 'cinematic_shot',
-      title: parsedShot.title,
-      templateKey: parsedShot.shotType === 'custom' ? 'cinematic_shot' : `cinematic_${parsedShot.shotType}`,
-      subtitle: parsedShot.subtitle,
-      position: { x: 620 + index * 360, y: 220 },
-      body: { text: parsedShot.beat, imageAssetKey: null, audioAssetKey: null, choices: [] },
-      condition: null,
-      effects: [],
-      ports: [],
-      display: { iconAssetKey: null, compactPreview: false },
-      metadata: {
-        ...parsedShot,
-        sequenceShotId: parsedShot.id,
-      },
-    })
-    nodes.push(node)
-    shotNodeKeyByShotId.set(parsedShot.id, key)
-    edges.push({
-      id: `edge-flow-${index}`,
-      key: `edge.${previousFlowNodeKey.split('.').pop() ?? 'flow'}_${key.split('.').pop() ?? 'shot'}`,
-      source: { nodeKey: previousFlowNodeKey, portId: 'out' },
-      target: { nodeKey: key, portId: 'flow_in' },
-      label: null,
-      condition: null,
-      metadata: {},
-    })
-    previousFlowNodeKey = key
-  }
-
   let previousTakeNodeKey: string | null = null
   for (const [index, take] of cinematicSequence.takes.entries()) {
     const parsedTake = cinematicTakeSpecSchema.parse(take)
@@ -237,7 +207,7 @@ export function compileCinematicGraphFromScriptDoc(input: CompileCinematicGraphF
       title: parsedTake.title,
       templateKey: 'cinematic_take',
       subtitle: `${parsedTake.durationSeconds}s`,
-      position: { x: 620 + index * 420, y: 520 },
+      position: { x: 620 + index * 420, y: 220 },
       body: { text: parsedTake.shotIds.join(', '), imageAssetKey: null, audioAssetKey: null, choices: [] },
       condition: null,
       effects: [],
@@ -250,13 +220,11 @@ export function compileCinematicGraphFromScriptDoc(input: CompileCinematicGraphF
     })
     nodes.push(node)
 
-    for (const [shotIndex, shotId] of parsedTake.shotIds.entries()) {
-      const shotNodeKey = shotNodeKeyByShotId.get(shotId)
-      if (!shotNodeKey) continue
+    if (index === 0) {
       edges.push({
-        id: `edge-shot-take-${index}-${shotIndex}`,
-        key: `edge.${shotNodeKey.split('.').pop() ?? 'shot'}_${key.split('.').pop() ?? 'take'}_${shotIndex + 1}`,
-        source: { nodeKey: shotNodeKey, portId: 'out' },
+        id: `edge-flow-start-take-${index}`,
+        key: `edge.${startNode.key.split('.').pop() ?? 'start'}_${key.split('.').pop() ?? 'take'}`,
+        source: { nodeKey: startNode.key, portId: 'out' },
         target: { nodeKey: key, portId: 'in' },
         label: null,
         condition: null,
@@ -280,8 +248,8 @@ export function compileCinematicGraphFromScriptDoc(input: CompileCinematicGraphF
 
   edges.push({
     id: 'edge-flow-end',
-    key: `edge.${previousFlowNodeKey.split('.').pop() ?? 'shot'}_${endNode.key.split('.').pop() ?? 'end'}`,
-    source: { nodeKey: previousFlowNodeKey, portId: 'out' },
+    key: `edge.${(previousTakeNodeKey ?? startNode.key).split('.').pop() ?? 'take'}_${endNode.key.split('.').pop() ?? 'end'}`,
+    source: { nodeKey: previousTakeNodeKey ?? startNode.key, portId: 'out' },
     target: { nodeKey: endNode.key, portId: 'in' },
     label: null,
     condition: null,
@@ -308,4 +276,12 @@ export function compileCinematicGraphFromScriptDoc(input: CompileCinematicGraphF
     nodes: normalizedNodes,
     edges,
   }
+}
+
+export function compileCinematicGraphFromScriptDoc(input: CompileCinematicGraphFromScriptInput): GraphDefinition {
+  const scriptDoc = cinematicScriptDocSchema.parse(input.scriptDoc)
+  return compileCinematicGraphFromSequence({
+    ...input,
+    sequence: buildCinematicSequenceFromScriptDoc(scriptDoc),
+  })
 }

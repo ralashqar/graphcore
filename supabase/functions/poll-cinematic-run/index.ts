@@ -17,6 +17,7 @@ import {
   applyStoryboardBindingToGraph,
   applyTakeBindingToGraph,
   applyShotBindingToGraph,
+  buildVirtualShotNode,
   buildTakeSeedanceExecutionPlan,
   buildSeedanceExecutionPlan,
   buildStillPrompt,
@@ -67,6 +68,7 @@ const requestSchema = z.object({
   mode: z.enum(['graph_run', 'preview_still', 'preview_video', 'preview_take_still', 'preview_storyboard_still']),
   targetNodeKey: z.string().nullable().optional(),
   shotNodeKey: z.string().nullable().optional(),
+  shotId: z.string().nullable().optional(),
 })
 
 function buildFalHeaders(apiKey: string) {
@@ -128,6 +130,22 @@ async function getFalStatus(input: {
   })
 }
 
+function resolveStoryboardStillFalModel(hasImageReferences: boolean) {
+  if (hasImageReferences) {
+    return Deno.env.get('CINEMATIC_STORYBOARD_EDIT_FAL_MODEL')
+      ?? Deno.env.get('CINEMATIC_STILL_FAL_MODEL')
+      ?? 'fal-ai/nano-banana-2/edit'
+  }
+
+  return Deno.env.get('CINEMATIC_STORYBOARD_TEXT_FAL_MODEL')
+    ?? Deno.env.get('CINEMATIC_STILL_TEXT_FAL_MODEL')
+    ?? 'fal-ai/nano-banana-2'
+}
+
+function isFalEditModel(model: string) {
+  return model.includes('/edit')
+}
+
 async function getFalResult(input: {
   apiKey: string
   model: string
@@ -168,8 +186,12 @@ function resolveStillSourceAssetUrl(
   snapshot: z.infer<typeof requestSchema>['snapshot'],
   graph: NonNullable<ReturnType<typeof findGraph>>,
   shotNodeKey: string,
+  shotId: string | null,
 ) {
-  const shotNode = findNode(graph, shotNodeKey)
+  const shotNode = shotId
+    ? buildVirtualShotNode(graph, shotId, shotNodeKey)
+    : findNode(graph, shotNodeKey)
+  if (!shotNode || shotNode.type !== 'cinematic_shot') return null
   const shotConfig = getCinematicShotNodeConfig(shotNode)
   const assets = Array.isArray(snapshot.assets) ? snapshot.assets.map((entry) => (entry && typeof entry === 'object' ? entry : {})) : []
   const stillAsset = assets.find((asset) => (asset as { key?: unknown }).key === shotConfig.stillAssetKey) as { metadata?: unknown } | undefined
@@ -249,10 +271,11 @@ function rebuildGraphFromRunJobs(
 
   for (const job of jobs) {
     const targetNode = findNode(nextGraph, job.shotNodeKey)
-    if (!targetNode) continue
+    const shotNode = job.shotId ? buildVirtualShotNode(nextGraph, job.shotId, job.shotNodeKey) : null
+    if (!targetNode && !shotNode) continue
 
     if (job.kind === 'shot_still' && job.stillAssetKey) {
-      nextGraph = applyShotBindingToGraph(nextGraph, job.shotNodeKey, {
+      nextGraph = applyShotBindingToGraph(nextGraph, job.shotNodeKey, job.shotId, {
         bodyImageAssetKey: job.stillAssetKey,
         metadata: {
           stillAssetKey: job.stillAssetKey,
@@ -278,7 +301,7 @@ function rebuildGraphFromRunJobs(
     }
 
     if (job.kind === 'storyboard_still' && job.stillAssetKey) {
-      if (targetNode.type === 'cinematic_take') {
+      if (targetNode?.type === 'cinematic_take') {
         nextGraph = applyTakeBindingToGraph(nextGraph, job.shotNodeKey, {
           metadata: {
             storyboardAssetKey: job.stillAssetKey,
@@ -304,7 +327,7 @@ function rebuildGraphFromRunJobs(
     if (job.status !== 'succeeded') continue
 
     if (job.kind === 'shot_video' && job.videoAssetKey) {
-      nextGraph = applyShotBindingToGraph(nextGraph, job.shotNodeKey, {
+      nextGraph = applyShotBindingToGraph(nextGraph, job.shotNodeKey, job.shotId, {
         metadata: {
           videoAssetKey: job.videoAssetKey,
           provider: job.provider,
@@ -441,17 +464,22 @@ Deno.serve(async (request) => {
       if (!allDependenciesSucceeded) continue
 
       const targetNode = findNode(updatedGraph, job.shotNodeKey)
-      if (!targetNode) {
+      const nestedShotNode = job.shotId ? buildVirtualShotNode(updatedGraph, job.shotId, job.shotNodeKey) : null
+      if (!targetNode && !nestedShotNode) {
         await client.from('cinematic_run_jobs').update({
           status: 'failed',
-          error_message: `Cinematic node "${job.shotNodeKey}" was not found.`,
+          error_message: job.shotId
+            ? `Cinematic shot "${job.shotId}" or target node "${job.shotNodeKey}" was not found.`
+            : `Cinematic node "${job.shotNodeKey}" was not found.`,
         }).eq('id', job.id)
         break
       }
       const isTakeJob = job.kind === 'take_video' || job.kind === 'take_still'
       const isStoryboardJob = job.kind === 'storyboard_still'
       const isTakeStoryboardJob = isStoryboardJob && targetNode?.type === 'cinematic_take'
-      const shotNode = !isTakeJob && !isStoryboardJob ? targetNode : null
+      const shotNode = !isTakeJob && !isStoryboardJob
+        ? (targetNode?.type === 'cinematic_shot' ? targetNode : nestedShotNode)
+        : null
       const takeNode = (isTakeJob || isTakeStoryboardJob) ? targetNode : null
       const storyboardNode = isStoryboardJob ? targetNode : null
 
@@ -462,13 +490,13 @@ Deno.serve(async (request) => {
           ? isTakeStoryboardJob
             ? resolveTakeSources(payload.snapshot, updatedGraph, job.shotNodeKey)
             : resolveStoryboardSources(payload.snapshot, updatedGraph, job.shotNodeKey)
-          : resolveShotSources(payload.snapshot, updatedGraph, job.shotNodeKey)
+          : resolveShotSources(payload.snapshot, updatedGraph, job.shotNodeKey, job.shotId)
 
       if (job.kind === 'shot_still' || job.kind === 'take_still' || job.kind === 'storyboard_still') {
         if (job.kind === 'shot_still' && !shotNode) {
           await client.from('cinematic_run_jobs').update({
             status: 'failed',
-            error_message: 'Still jobs require a cinematic shot node.',
+            error_message: 'Still jobs require a cinematic shot target.',
           }).eq('id', job.id)
           break
         }
@@ -495,9 +523,11 @@ Deno.serve(async (request) => {
               ? resolveTakeStillReferenceImageUrls(payload.snapshot, updatedGraph, job.shotNodeKey, sourceInputs as ReturnType<typeof resolveTakeSources>)
               : resolveStoryboardStillReferenceImageUrls(payload.snapshot, updatedGraph, job.shotNodeKey, sourceInputs as ReturnType<typeof resolveStoryboardSources>)
           : sourceInputs.map((entry) => entry.imageUrl).filter((entry): entry is string => Boolean(entry))
-        const stillModel = imageUrls.length > 0
-          ? Deno.env.get('CINEMATIC_STILL_FAL_MODEL') ?? 'fal-ai/nano-banana-2/edit'
-          : Deno.env.get('CINEMATIC_STILL_TEXT_FAL_MODEL') ?? 'fal-ai/nano-banana-2'
+        const stillModel = job.kind === 'storyboard_still'
+          ? resolveStoryboardStillFalModel(imageUrls.length > 0)
+          : imageUrls.length > 0
+            ? Deno.env.get('CINEMATIC_STILL_FAL_MODEL') ?? 'fal-ai/nano-banana-2/edit'
+            : Deno.env.get('CINEMATIC_STILL_TEXT_FAL_MODEL') ?? 'fal-ai/nano-banana-2'
         const stillPrompt = job.prompt || (
           job.kind === 'take_still'
             ? buildTakeStillPrompt({
@@ -519,7 +549,7 @@ Deno.serve(async (request) => {
                     graph: updatedGraph,
                     storyboardNode: storyboardNode!,
                     sourceInputs: sourceInputs as ReturnType<typeof resolveStoryboardSources>,
-                  })
+              })
             : buildStillPrompt({
                 snapshot: payload.snapshot,
                 graph: updatedGraph,
@@ -572,8 +602,9 @@ Deno.serve(async (request) => {
             console.error('[poll-cinematic-run] still submit failed.', {
               runId: payload.runId,
               jobId: job.id,
-              shotNodeKey: job.shotNodeKey,
-              kind: job.kind,
+            shotNodeKey: job.shotNodeKey,
+            shotId: job.shotId,
+            kind: job.kind,
               model: stillModel,
               requestId,
               message,
@@ -682,7 +713,7 @@ Deno.serve(async (request) => {
           requestId: providerRequestId,
           responseUrl: providerResponseUrl,
         })
-        if (job.kind === 'storyboard_still' && (job.model ?? stillModel).includes('nano-banana-2/edit')) {
+        if (job.kind === 'storyboard_still' && isFalEditModel(job.model ?? stillModel)) {
           console.info('[poll-cinematic-run] storyboard edit result payload.', {
             runId: payload.runId,
             jobId: job.id,
@@ -709,7 +740,7 @@ Deno.serve(async (request) => {
             statusUrl: providerStatusUrl,
           })
           const providerStatus = typeof statusResult.body.status === 'string' ? statusResult.body.status : null
-          if (job.kind === 'storyboard_still' && (job.model ?? stillModel).includes('nano-banana-2/edit')) {
+          if (job.kind === 'storyboard_still' && isFalEditModel(job.model ?? stillModel)) {
             console.info('[poll-cinematic-run] storyboard edit status payload.', {
               runId: payload.runId,
               jobId: job.id,
@@ -945,7 +976,7 @@ Deno.serve(async (request) => {
             })
           }
         } else {
-          updatedGraph = applyShotBindingToGraph(updatedGraph, job.shotNodeKey, {
+          updatedGraph = applyShotBindingToGraph(updatedGraph, job.shotNodeKey, job.shotId, {
             bodyImageAssetKey: storedAsset.key,
             metadata: {
               stillAssetKey: storedAsset.key,
@@ -954,7 +985,7 @@ Deno.serve(async (request) => {
               providerRequestId: String(providerRequestId),
             },
           })
-          await persistShotBindingsIfPresent(client, payload.snapshot.draft.id, updatedGraph.key, job.shotNodeKey, {
+          await persistShotBindingsIfPresent(client, payload.snapshot.draft.id, updatedGraph.key, job.shotNodeKey, job.shotId, {
             bodyImageAssetKey: storedAsset.key,
             metadata: {
               stillAssetKey: storedAsset.key,
@@ -986,7 +1017,7 @@ Deno.serve(async (request) => {
       const fallbackStillUrl = resolveStillSourceAssetUrl({
         ...payload.snapshot,
         assets: [...payload.snapshot.assets, ...createdAssets],
-      }, updatedGraph, job.shotNodeKey)
+      }, updatedGraph, job.shotNodeKey, job.shotId)
       if (executionPlan.endpoint === 'image-to-video' && !executionPlan.imageUrl && !fallbackStillUrl && !isTakeJob) {
         await client.from('cinematic_run_jobs').update({
           status: 'failed',
@@ -1126,7 +1157,7 @@ Deno.serve(async (request) => {
           },
         })
       } else {
-        updatedGraph = applyShotBindingToGraph(updatedGraph, job.shotNodeKey, {
+        updatedGraph = applyShotBindingToGraph(updatedGraph, job.shotNodeKey, job.shotId, {
           metadata: {
             videoAssetKey: storedAsset.key,
             provider: 'fal',
@@ -1135,7 +1166,7 @@ Deno.serve(async (request) => {
             executionPlan,
           },
         })
-        await persistShotBindingsIfPresent(client, payload.snapshot.draft.id, updatedGraph.key, job.shotNodeKey, {
+        await persistShotBindingsIfPresent(client, payload.snapshot.draft.id, updatedGraph.key, job.shotNodeKey, job.shotId, {
           metadata: {
             videoAssetKey: storedAsset.key,
             provider: 'fal',

@@ -13,13 +13,14 @@ import {
   buildCinematicSettingsPatchFromFormatSubtype,
   buildCinematicSettingsPatchFromPresetFamily,
   type CinematicFormatSubtype,
-  getCinematicShotNodeConfig,
+  getCinematicSequence,
   getCinematicTakeNodeConfig,
   getStoryboardRefNodeConfig,
   type CinematicPresetFamily,
   type CinematicRunStatusResponse,
   type CinematicSettings,
 } from './domain/cinematics'
+import { normalizeCinematicGraphProjection } from './domain/cinematicGraphProjection'
 import { compileBundle } from './domain/compiler'
 import { createEnvironmentBlueprint } from './domain/environmentBlueprint'
 import { createGameSpecFromArchetype } from './domain/gameArchetypes'
@@ -175,7 +176,20 @@ function normalizeDefinitionIdentityConflicts(snapshot: ProjectSnapshot) {
 }
 
 function normalizeSnapshot(snapshot: ProjectSnapshot) {
-  return normalizeDefinitionIdentityConflicts(dedupeAssetsByKey(snapshot))
+  const dedupedSnapshot = normalizeDefinitionIdentityConflicts(dedupeAssetsByKey(snapshot))
+  let graphsChanged = false
+  const normalizedGraphs = dedupedSnapshot.graphs.map((graph) => {
+    const nextGraph = normalizeCinematicGraphProjection(graph)
+    if (nextGraph !== graph) graphsChanged = true
+    return nextGraph
+  })
+
+  return graphsChanged
+    ? {
+        ...dedupedSnapshot,
+        graphs: normalizedGraphs,
+      }
+    : dedupedSnapshot
 }
 
 function mergeWorldBuildResourcesByKey<T extends { key: string; metadata?: unknown }>(
@@ -429,6 +443,7 @@ type CinematicPreflightStatus = {
 
 type CinematicPreflightQueueItem = {
   nodeKey: string
+  shotId?: string | null
   mode: 'preview_still' | 'preview_storyboard_still' | 'preview_take_still'
 }
 
@@ -2678,6 +2693,7 @@ export default function App() {
     mode: 'graph_run' | 'preview_still' | 'preview_video' | 'preview_take_still' | 'preview_storyboard_still'
     targetNodeKey?: string | null
     targetNodeKeys?: string[]
+    shotId?: string | null
   }) {
     let workingSnapshot = request.snapshot
     let status = await workspaceService.startCinematicRun({
@@ -2687,6 +2703,7 @@ export default function App() {
       targetNodeKey: request.targetNodeKey ?? null,
       targetNodeKeys: request.targetNodeKeys ?? [],
       shotNodeKey: request.targetNodeKey ?? null,
+      shotId: request.shotId ?? null,
     })
     workingSnapshot = applyCinematicStatus(status) ?? workingSnapshot
 
@@ -2700,6 +2717,7 @@ export default function App() {
         targetNodeKey: request.targetNodeKey ?? null,
         targetNodeKeys: request.targetNodeKeys ?? [],
         shotNodeKey: request.targetNodeKey ?? null,
+        shotId: request.shotId ?? null,
       })
       workingSnapshot = applyCinematicStatus(status) ?? workingSnapshot
     }
@@ -2744,10 +2762,14 @@ export default function App() {
       return
     }
 
+    const sequence = getCinematicSequence(graph.metadata)
+    const takeNodeByTakeId = new Map(
+      graph.nodes
+        .filter((node) => node.type === 'cinematic_take')
+        .map((node) => [getCinematicTakeNodeConfig(node).id, node.key] as const),
+    )
+
     const runQueue: CinematicPreflightQueueItem[] = graph.nodes.flatMap((node): CinematicPreflightQueueItem[] => {
-      if (request.includeShots && node.type === 'cinematic_shot' && !getCinematicShotNodeConfig(node).stillAssetKey) {
-        return [{ nodeKey: node.key, mode: 'preview_still' as const }]
-      }
       if (request.includeStoryboards && node.type === 'storyboard_ref' && !getStoryboardRefNodeConfig(node).assetKey) {
         return [{ nodeKey: node.key, mode: 'preview_storyboard_still' as const }]
       }
@@ -2755,7 +2777,15 @@ export default function App() {
         return [{ nodeKey: node.key, mode: 'preview_take_still' as const }]
       }
       return []
-    })
+    }).concat(
+      request.includeShots
+        ? sequence.shots.flatMap((shot: typeof sequence.shots[number]): CinematicPreflightQueueItem[] => {
+            const takeNodeKey = shot.takeId ? takeNodeByTakeId.get(shot.takeId) ?? null : null
+            if (!takeNodeKey || shot.stillAssetKey) return []
+            return [{ nodeKey: takeNodeKey, shotId: shot.id, mode: 'preview_still' as const }]
+          })
+        : [],
+    )
 
     const labels: string[] = []
     if (request.includeShots) labels.push('shot stills')
@@ -2810,6 +2840,7 @@ export default function App() {
           graphKey: request.graphKey,
           mode: item.mode,
           targetNodeKey: item.nodeKey,
+          shotId: item.shotId ?? null,
         })
         workingSnapshot = result.snapshot
         if (result.status.run.status === 'failed' || result.status.run.status === 'completed_with_errors') {
@@ -2853,6 +2884,7 @@ export default function App() {
     mode: 'graph_run' | 'preview_still' | 'preview_video' | 'preview_take_still' | 'preview_storyboard_still'
     targetNodeKey?: string | null
     targetNodeKeys?: string[]
+    shotId?: string | null
   }) {
     if (!snapshot || loadedState?.source !== 'supabase') {
       setPromptRuntimeError('Cinematic generation requires a live Supabase workspace.')
@@ -2876,6 +2908,7 @@ export default function App() {
         targetNodeKey: request.targetNodeKey ?? null,
         targetNodeKeys: request.targetNodeKeys ?? [],
         shotNodeKey: request.targetNodeKey ?? null,
+        shotId: request.shotId ?? null,
       })
 
       setPromptRuntimeError(null)

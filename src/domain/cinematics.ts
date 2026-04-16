@@ -194,7 +194,7 @@ export const cinematicScriptEntityBindingSchema = z.object({
   required: z.boolean().default(true),
 })
 
-export const cinematicScriptSceneSchema = z.object({
+export const cinematicSequenceSceneSchema = z.object({
   id: z.string(),
   title: z.string(),
   summary: z.string().default(''),
@@ -203,6 +203,7 @@ export const cinematicScriptSceneSchema = z.object({
   continuityNotes: z.string().default(''),
   orderIndex: z.number().int().default(0),
 })
+export const cinematicScriptSceneSchema = cinematicSequenceSceneSchema
 
 export const cinematicScriptShotSchema = z.object({
   id: z.string(),
@@ -295,6 +296,7 @@ export const seedanceExecutionPlanSchema = z.object({
 
 export const cinematicShotSpecSchema = z.object({
   id: z.string(),
+  sceneId: z.string().nullable().default(null),
   title: z.string(),
   subtitle: z.string().nullable().default(null),
   beat: z.string().default(''),
@@ -356,6 +358,8 @@ export const cinematicTakeSpecSchema = z.object({
   durationSeconds: z.number().int().min(4).max(15),
   startSeconds: z.number().nonnegative().default(0),
   endSeconds: z.number().nonnegative().default(0),
+  breakReason: z.string().default(''),
+  continuityRefIds: z.array(z.string()).default([]),
   seedanceEndpoint: seedanceEndpointSchema.default('reference-to-video'),
   formatSubtype: z.preprocess(coerceEnumLikeValue(cinematicFormatSubtypeSchema.options), cinematicFormatSubtypeSchema.nullable()).default(null),
   formulaFamily: z.preprocess(coerceEnumLikeValue(cinematicFormulaFamilySchema.options), cinematicFormulaFamilySchema.nullable()).default(null),
@@ -381,7 +385,14 @@ export const cinematicTakeSpecSchema = z.object({
 export const cinematicTakeNodeConfigSchema = cinematicTakeSpecSchema
 
 export const cinematicSequenceSchema = z.object({
+  title: z.string().default('Prompt Cinematic'),
+  logline: z.string().default(''),
+  tone: z.string().default(''),
+  continuityNotes: z.string().default(''),
+  statusPayoffType: z.string().default(''),
+  narrativeArcTemplate: z.string().default(''),
   references: z.array(cinematicReferenceSchema).default([]),
+  scenes: z.array(cinematicSequenceSceneSchema).default([]),
   compositeRefs: z.array(cinematicCompositeReferenceSchema).default([]),
   relationships: z.array(cinematicRelationshipSchema).default([]),
   storyboard: storyboardSpecSchema.nullable().default(null),
@@ -447,6 +458,7 @@ export const cinematicRunJobSchema = z.object({
   runId: z.string(),
   graphKey: z.string(),
   shotNodeKey: z.string(),
+  shotId: z.string().nullable().default(null),
   kind: cinematicRunJobKindSchema,
   status: cinematicRunJobStatusSchema,
   orderIndex: z.number().int().default(0),
@@ -502,6 +514,7 @@ export const cinematicRunStartRequestSchema = z.object({
   targetNodeKey: z.string().nullable().optional(),
   targetNodeKeys: z.array(z.string()).default([]),
   shotNodeKey: z.string().nullable().optional(),
+  shotId: z.string().nullable().optional(),
 })
 
 export const cinematicRunCancelRequestSchema = z.object({
@@ -535,6 +548,7 @@ export type CinematicScriptDoc = z.infer<typeof cinematicScriptDocSchema>
 export type SeedanceExecutionPlan = z.infer<typeof seedanceExecutionPlanSchema>
 export type CinematicShotSpec = z.infer<typeof cinematicShotSpecSchema>
 export type CinematicTakeSpec = z.infer<typeof cinematicTakeSpecSchema>
+export type CinematicSequenceScene = z.infer<typeof cinematicSequenceSceneSchema>
 export type CinematicSequence = z.infer<typeof cinematicSequenceSchema>
 export type AssetRefNodeConfig = z.infer<typeof assetRefNodeConfigSchema>
 export type CompositeRefNodeConfig = z.infer<typeof compositeRefNodeConfigSchema>
@@ -920,6 +934,18 @@ function buildTakeSourceRefIds(shots: Array<CinematicScriptShot>) {
   ))
 }
 
+function buildTakeContinuityRefIds(shots: Array<CinematicScriptShot>) {
+  return Array.from(new Set(
+    shots.flatMap((shot) => [
+      ...shot.participantRefIds,
+      ...(shot.locationRefId ? [shot.locationRefId] : []),
+      ...shot.propRefIds,
+      ...shot.compositeRefIds,
+      ...shot.storyboardRefIds,
+    ]).filter((entry) => entry.trim().length > 0),
+  ))
+}
+
 function sharesTakeParticipants(
   left: CinematicScriptShot & { _compiledDurationSeconds: number },
   right: CinematicScriptShot & { _compiledDurationSeconds: number },
@@ -952,6 +978,31 @@ function coalesceTakeField<TValue>(shots: Array<CinematicScriptShot & { _compile
   return fallback
 }
 
+function describeTakeBreakReason(input: {
+  shot: CinematicScriptShot & { _compiledDurationSeconds: number }
+  previousShot: (CinematicScriptShot & { _compiledDurationSeconds: number }) | null
+  currentDuration: number
+}) {
+  const { shot, previousShot, currentDuration } = input
+  if (shot.forceTakeBreak) return 'Explicit take break.'
+  if (currentDuration + shot._compiledDurationSeconds > 15) return 'Split to stay within the 15-second take limit.'
+  if (!previousShot) return ''
+
+  const locationChanged = previousShot.locationRefId !== shot.locationRefId
+  const sceneChanged = previousShot.sceneId !== shot.sceneId
+  const sharedParticipants = sharesTakeParticipants(previousShot, shot)
+  const formatChanged = isStrongTakeFormatBreak(previousShot, shot)
+  const hardLocationJump = locationChanged && !sharedParticipants
+  const hardSceneJump = sceneChanged && locationChanged && !sharedParticipants
+  const softContinuityShift = (locationChanged || sceneChanged) && !hardLocationJump && !hardSceneJump
+
+  if (formatChanged) return 'Split on a strong format or messaging shift.'
+  if (hardSceneJump) return 'Split on a scene and location change with no shared participants.'
+  if (hardLocationJump) return 'Split on a hard location change with no shared participants.'
+  if (softContinuityShift && currentDuration >= 10) return 'Split on a softer continuity shift after a long take.'
+  return ''
+}
+
 function buildCompiledTakes(shots: Array<CinematicScriptShot & {
   _compiledDurationSeconds: number
   _seedanceModePreference: z.infer<typeof seedanceModePreferenceSchema>
@@ -960,12 +1011,14 @@ function buildCompiledTakes(shots: Array<CinematicScriptShot & {
   let currentShots: typeof shots = []
   let currentDuration = 0
   let currentStart = 0
+  let currentBreakReason = ''
 
   function flushTake() {
     if (currentShots.length === 0) return
     const durationSeconds = Math.min(15, Math.max(4, currentDuration))
     const shotIds = currentShots.map((shot) => shot.id)
     const requiredSourceRefIds = buildTakeSourceRefIds(currentShots)
+    const continuityRefIds = buildTakeContinuityRefIds(currentShots)
     const endpoint =
       currentShots.length === 1 && currentShots[0]._seedanceModePreference === 'image-to-video' && requiredSourceRefIds.length <= 1
         ? 'image-to-video'
@@ -977,6 +1030,8 @@ function buildCompiledTakes(shots: Array<CinematicScriptShot & {
       durationSeconds,
       startSeconds: currentStart,
       endSeconds: currentStart + durationSeconds,
+      breakReason: currentBreakReason,
+      continuityRefIds,
       seedanceEndpoint: endpoint,
       formatSubtype: coalesceTakeField(currentShots, (shot) => shot.formatSubtype, null),
       formulaFamily: coalesceTakeField(currentShots, (shot) => shot.formulaFamily, null),
@@ -989,6 +1044,7 @@ function buildCompiledTakes(shots: Array<CinematicScriptShot & {
     currentStart += durationSeconds
     currentShots = []
     currentDuration = 0
+    currentBreakReason = ''
   }
 
   for (const shot of shots) {
@@ -1008,7 +1064,15 @@ function buildCompiledTakes(shots: Array<CinematicScriptShot & {
       || hardSceneJump
       || (softContinuityShift && currentDuration >= 10)
     )
-    if (continuityBreak) flushTake()
+    if (continuityBreak) {
+      const nextBreakReason = describeTakeBreakReason({
+        shot,
+        previousShot,
+        currentDuration,
+      })
+      flushTake()
+      currentBreakReason = nextBreakReason
+    }
     currentShots.push(shot)
     currentDuration += shot._compiledDurationSeconds
   }
@@ -1041,6 +1105,12 @@ export function buildCinematicSequenceFromScriptDoc(scriptDoc: CinematicScriptDo
   })
 
   return cinematicSequenceSchema.parse({
+    title: scriptDoc.title,
+    logline: scriptDoc.logline,
+    tone: scriptDoc.tone,
+    continuityNotes: scriptDoc.continuityNotes,
+    statusPayoffType: scriptDoc.statusPayoffType,
+    narrativeArcTemplate: scriptDoc.narrativeArcTemplate,
     references: scriptDoc.entityBindings.map((binding) => ({
       id: binding.id,
       refKind: inferSequenceReferenceKindFromBinding(binding),
@@ -1054,10 +1124,12 @@ export function buildCinematicSequenceFromScriptDoc(scriptDoc: CinematicScriptDo
       priority: binding.priority,
       required: binding.required,
     })),
+    scenes: scriptDoc.scenes,
     compositeRefs: scriptDoc.compositeRefs,
     relationships: scriptDoc.relationships,
     storyboard: scriptDoc.storyboard,
     shots: compiledShots.map((shot) => ({
+      sceneId: shot.sceneId,
       id: shot.id,
       title: shot.title,
       subtitle: shot.subtitle,
@@ -1106,18 +1178,44 @@ export function buildCinematicSequenceFromScriptDoc(scriptDoc: CinematicScriptDo
   })
 }
 
+export function compileCinematicSequence(sequence: CinematicSequence): CinematicSequence {
+  const parsedSequence = cinematicSequenceSchema.parse(sequence)
+  return buildCinematicSequenceFromScriptDoc(deriveCinematicScriptFromSequence(parsedSequence))
+}
+
 export function deriveCinematicScriptFromSequence(sequence: CinematicSequence): CinematicScriptDoc {
-  const sceneId = 'scene_1'
+  const parsedSequence = cinematicSequenceSchema.parse(sequence)
+  const normalizedScenes = parsedSequence.scenes.length > 0
+    ? [...parsedSequence.scenes]
+      .sort((left, right) => left.orderIndex - right.orderIndex)
+      .map((scene, index) => ({
+        ...scene,
+        shotIds: scene.shotIds.filter((shotId) => parsedSequence.shots.some((shot) => shot.id === shotId)),
+        orderIndex: index,
+      }))
+    : (parsedSequence.shots.length > 0
+      ? [{
+          id: 'scene_1',
+          title: 'Scene 1',
+          summary: parsedSequence.logline,
+          locationRefId: parsedSequence.shots[0]?.locationRefId ?? null,
+          shotIds: parsedSequence.shots.map((shot) => shot.id),
+          continuityNotes: parsedSequence.continuityNotes,
+          orderIndex: 0,
+        }]
+      : [])
+  const fallbackSceneId = normalizedScenes[0]?.id ?? null
+
   return cinematicScriptDocSchema.parse({
-    title: sequence.shots[0]?.title ? `${sequence.shots[0].title} Sequence` : 'Prompt Cinematic',
-    logline: sequence.shots.map((shot) => shot.beat).filter((entry) => entry.trim().length > 0).join(' '),
-    tone: '',
-    continuityNotes: '',
-    statusPayoffType: '',
-    narrativeArcTemplate: '',
-    sceneCount: sequence.shots.length > 0 ? sequence.shots.length : null,
+    title: parsedSequence.title || (parsedSequence.shots[0]?.title ? `${parsedSequence.shots[0].title} Sequence` : 'Prompt Cinematic'),
+    logline: parsedSequence.logline || parsedSequence.shots.map((shot) => shot.beat).filter((entry) => entry.trim().length > 0).join(' '),
+    tone: parsedSequence.tone,
+    continuityNotes: parsedSequence.continuityNotes,
+    statusPayoffType: parsedSequence.statusPayoffType,
+    narrativeArcTemplate: parsedSequence.narrativeArcTemplate,
+    sceneCount: normalizedScenes.length > 0 ? normalizedScenes.length : null,
     referenceVault: [],
-    entityBindings: sequence.references.map((reference) => ({
+    entityBindings: parsedSequence.references.map((reference) => ({
       id: reference.id,
       kind:
         reference.assetRole === 'audio'
@@ -1139,18 +1237,10 @@ export function deriveCinematicScriptFromSequence(sequence: CinematicSequence): 
       priority: reference.priority,
       required: reference.required,
     })),
-    scenes: sequence.shots.length > 0 ? [{
-      id: sceneId,
-      title: 'Scene 1',
-      summary: '',
-      locationRefId: sequence.shots[0]?.locationRefId ?? null,
-      shotIds: sequence.shots.map((shot) => shot.id),
-      continuityNotes: '',
-      orderIndex: 0,
-    }] : [],
-    shots: sequence.shots.map((shot, index) => ({
+    scenes: normalizedScenes,
+    shots: parsedSequence.shots.map((shot, index) => ({
       id: shot.id,
-      sceneId,
+      sceneId: shot.sceneId ?? normalizedScenes.find((scene) => scene.shotIds.includes(shot.id))?.id ?? fallbackSceneId,
       orderIndex: index,
       title: shot.title,
       subtitle: shot.subtitle,
@@ -1190,9 +1280,9 @@ export function deriveCinematicScriptFromSequence(sequence: CinematicSequence): 
       actions: shot.actions,
       audio: shot.audio,
     })),
-    relationships: sequence.relationships,
-    compositeRefs: sequence.compositeRefs,
-    storyboard: sequence.storyboard,
+    relationships: parsedSequence.relationships,
+    compositeRefs: parsedSequence.compositeRefs,
+    storyboard: parsedSequence.storyboard,
   })
 }
 
@@ -1259,11 +1349,10 @@ export function getCinematicScript(graphMetadata: unknown): CinematicScriptDoc |
   const metadata = graphMetadata && typeof graphMetadata === 'object'
     ? graphMetadata as { cinematicScript?: unknown; cinematicSequence?: unknown }
     : {}
+  const parsedSequence = cinematicSequenceSchema.safeParse(metadata.cinematicSequence ?? null)
+  if (parsedSequence.success) return deriveCinematicScriptFromSequence(compileCinematicSequence(parsedSequence.data))
   const parsedScript = cinematicScriptDocSchema.safeParse(metadata.cinematicScript ?? null)
   if (parsedScript.success) return parsedScript.data
-
-  const parsedSequence = cinematicSequenceSchema.safeParse(metadata.cinematicSequence ?? null)
-  if (parsedSequence.success) return deriveCinematicScriptFromSequence(parsedSequence.data)
 
   return null
 }
@@ -1273,7 +1362,7 @@ export function getCinematicSequence(graphMetadata: unknown): CinematicSequence 
     ? graphMetadata as { cinematicSequence?: unknown; cinematicScript?: unknown }
     : {}
   const parsed = cinematicSequenceSchema.safeParse(metadata.cinematicSequence ?? {})
-  if (parsed.success) return parsed.data
+  if (parsed.success) return compileCinematicSequence(parsed.data)
 
   const parsedScript = cinematicScriptDocSchema.safeParse(metadata.cinematicScript ?? null)
   return parsedScript.success ? buildCinematicSequenceFromScriptDoc(parsedScript.data) : cinematicSequenceSchema.parse({})

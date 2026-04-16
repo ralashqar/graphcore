@@ -78,6 +78,7 @@ export const cinematicCompositeRefPlanSchema = z.object({
 
 export const cinematicShotPlanSchema = z.object({
   id: z.string(),
+  sceneId: z.string().nullable().default(null),
   title: z.string(),
   beat: z.string(),
   hookRole: cinematicHookRoleSchema.nullable().default(null),
@@ -96,12 +97,16 @@ export const cinematicShotPlanSchema = z.object({
   participantRefIds: z.array(z.string()).default([]),
   locationRefId: z.string().nullable().default(null),
   propRefIds: z.array(z.string()).default([]),
+  requiredSourceRefIds: z.array(z.string()).default([]),
+  compositeRefIds: z.array(z.string()).default([]),
+  storyboardRefIds: z.array(z.string()).default([]),
   shotType: z.enum(['establishing', 'dialogue', 'reveal', 'action', 'insert', 'transition', 'custom']).default('custom'),
   framing: z.string().default(''),
   cameraAngle: z.string().default(''),
   cameraMovement: z.string().default(''),
   lensPreference: z.string().default(''),
   durationSeconds: z.number().int().positive().max(15).nullable().default(null),
+  forceTakeBreak: z.boolean().default(false),
   visualPrompt: z.string().default(''),
   compositionGuide: z.string().default(''),
   beats: z.array(z.object({

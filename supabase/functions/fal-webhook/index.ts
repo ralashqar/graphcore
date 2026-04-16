@@ -428,6 +428,9 @@ async function handleCinematicStillWebhook(
 ) {
   const assetKey = job.still_asset_key
     ?? (typeof asRecord(job.result_context).assetKey === 'string' ? String(asRecord(job.result_context).assetKey) : null)
+  const targetShotId = typeof asRecord(job.result_context).shotId === 'string'
+    ? String(asRecord(job.result_context).shotId)
+    : null
 
   if (payload.status === 'ERROR') {
     const message = readFalWebhookErrorMessage(payload)
@@ -551,7 +554,7 @@ async function handleCinematicStillWebhook(
       })
     }
   } else {
-    await persistShotBindingsIfPresent(admin, run.draft_id, run.graph_key, job.shot_node_key, {
+    await persistShotBindingsIfPresent(admin, run.draft_id, run.graph_key, job.shot_node_key, targetShotId, {
       bodyImageAssetKey: storedAsset.key,
       metadata: {
         stillAssetKey: storedAsset.key,
@@ -571,6 +574,9 @@ async function handleCinematicVideoWebhook(
   job: CinematicRunJobRow,
   payload: z.infer<typeof falWebhookPayloadOnlySchema>,
 ) {
+  const targetShotId = typeof asRecord(job.result_context).shotId === 'string'
+    ? String(asRecord(job.result_context).shotId)
+    : null
   if (payload.status === 'ERROR') {
     const message = readFalWebhookErrorMessage(payload)
     const updateResponse = await admin
@@ -655,7 +661,7 @@ async function handleCinematicVideoWebhook(
       },
     })
   } else {
-    await persistShotBindingsIfPresent(admin, run.draft_id, run.graph_key, job.shot_node_key, {
+    await persistShotBindingsIfPresent(admin, run.draft_id, run.graph_key, job.shot_node_key, targetShotId, {
       metadata: {
         videoAssetKey: storedAsset.key,
         provider: 'fal',

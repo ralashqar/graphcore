@@ -1,6 +1,7 @@
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
 import {
+  deriveCinematicScriptFromSequence,
   getCinematicFormulaFamilyLabel,
   getCinematicFormatSubtypeLabel,
   getCinematicPresetLabel,
@@ -152,13 +153,41 @@ function formatProjectArtDirection(gameSpec: unknown | null | undefined) {
     `Art style: ${presetLabel}.`,
     presetPromptLabel ? `Style target: ${presetPromptLabel}.` : null,
     styleDescription ? `Style direction: ${styleDescription}.` : null,
+    'Treat this art direction as a strong style anchor and keep the final rendering language consistent throughout the image.',
+  ].filter((entry): entry is string => Boolean(entry))
+}
+
+function buildStoryboardStyleAnchor(gameSpec: unknown | null | undefined, sourceInputs: Array<{ imageUrl?: string | null }>) {
+  const direction = getProjectArtDirection(gameSpec)
+  const presetIdOrLabel = direction.artStylePreset || null
+  const presetLabel = getArtStylePresetLabel(presetIdOrLabel)
+  const hasImageReferences = sourceInputs.some((entry) => typeof entry.imageUrl === 'string' && entry.imageUrl.trim().length > 0)
+  if (hasImageReferences) {
+    return [
+      `Art style: ${presetLabel}.`,
+      'Use the provided reference images as the canonical source for character identity, environment design, props, materials, lighting, and overall rendering style.',
+      'Place the referenced characters, environments, and objects into the requested panels in the same reference art style.',
+    ]
+  }
+
+  const presetPromptLabel = getArtStylePromptLabel(presetIdOrLabel)
+  const styleDescription = direction.artStyleDescription || getArtStylePresetDescription(presetIdOrLabel)
+
+  return [
+    `Use the project art style: ${presetLabel}.`,
+    presetPromptLabel ? `Style target: ${presetPromptLabel}.` : null,
+    styleDescription ? `Style direction: ${styleDescription}.` : null,
   ].filter((entry): entry is string => Boolean(entry))
 }
 
 function buildStoryboardReferenceStyleInstruction(sourceInputs: Array<{ imageUrl?: string | null }>) {
   const hasImageReferences = sourceInputs.some((entry) => typeof entry.imageUrl === 'string' && entry.imageUrl.trim().length > 0)
   if (!hasImageReferences) return null
-  return 'Match the same character identity, wardrobe, props, environment details, and rendering style shown in the provided reference images. Use the same style as the added reference images representing the actors and scene elements.'
+  return [
+    'Treat the provided reference images as the canonical source for character identity, wardrobe, props, environment details, materials, lighting response, and final rendering style.',
+    'Keep the output in the same visual family, rendering language, surface treatment, lighting quality, and overall finish as the reference images.',
+    'Do not reinterpret the references into a different art direction or rendering style.',
+  ].join(' ')
 }
 
 function ordinalLabel(index: number) {
@@ -226,8 +255,8 @@ function describeStoryboardGrid(panelCount: number, aspectRatio: string) {
 function describeStoryboardPanelStyling(aspectRatio: string) {
   return [
     `Each panel should read as a ${aspectRatio} frame.`,
-    'Give each panel slightly rounded corners.',
-    'Leave a bit of clean whitespace between panels so the grid feels organized and easy to read.',
+    'Present the board as a clean premium contact sheet of finished cinematic frames, not as hand-drawn storyboard art.',
+    'Use simple neutral gutters between panels with no decorative border treatment.',
   ].join(' ')
 }
 
@@ -269,6 +298,64 @@ export function findNode(graph: SnapshotGraph, nodeKey: string) {
     body: asRecord(node.body),
     metadata: asRecord(node.metadata),
   } as SnapshotNode
+}
+
+function findSequenceShot(graph: SnapshotGraph, shotId: string) {
+  return getCinematicSequence(graph.metadata).shots.find((shot) => shot.id === shotId) ?? null
+}
+
+export function buildVirtualShotNode(graph: SnapshotGraph, shotId: string, takeNodeKey?: string | null) {
+  const shot = findSequenceShot(graph, shotId)
+  if (!shot) return null
+
+  return {
+    key: takeNodeKey?.trim() || `sequence-shot-${shot.id}`,
+    type: 'cinematic_shot',
+    title: shot.title,
+    body: {
+      text: shot.beat,
+      imageAssetKey: shot.stillAssetKey ?? null,
+      audioAssetKey: null,
+      choices: [],
+    },
+    metadata: updateNodeMetadataWithShot({}, {
+      ...shot,
+      sequenceShotId: shot.id,
+    }),
+  } as SnapshotNode
+}
+
+function updateSequenceShotBindingsInGraph(
+  graph: SnapshotGraph,
+  shotId: string,
+  changes: {
+    metadata: Partial<ReturnType<typeof getCinematicShotNodeConfig>>
+  },
+) {
+  const sequence = getCinematicSequence(graph.metadata)
+  const existingShot = sequence.shots.find((shot) => shot.id === shotId) ?? null
+  if (!existingShot) return graph
+
+  const nextSequence = {
+    ...sequence,
+    shots: sequence.shots.map((shot) => (
+      shot.id === shotId
+        ? {
+            ...shot,
+            ...changes.metadata,
+          }
+        : shot
+    )),
+  }
+
+  return {
+    ...graph,
+    metadata: {
+      ...asRecord(graph.metadata),
+      cinematicSequence: nextSequence,
+      cinematicScript: deriveCinematicScriptFromSequence(nextSequence),
+    },
+  }
 }
 
 function isAssetDependencyEdge(graph: SnapshotGraph, edge: SnapshotRecord) {
@@ -448,7 +535,12 @@ function buildResolvedSourceEntries(input: {
     .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
 }
 
-export function resolveShotSources(snapshot: { definitions?: unknown[]; assets?: unknown[] }, graph: SnapshotGraph, shotNodeKey: string) {
+export function resolveShotSources(
+  snapshot: { definitions?: unknown[]; assets?: unknown[] },
+  graph: SnapshotGraph,
+  shotNodeKey: string,
+  shotId?: string | null,
+) {
   const edgeSources = graph.edges
     .filter((edge) => asString(asRecord(edge.target).nodeKey) === shotNodeKey)
     .filter((edge) => isAssetDependencyEdge(graph, edge))
@@ -488,8 +580,10 @@ export function resolveShotSources(snapshot: { definitions?: unknown[]; assets?:
     .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
   if (edgeSources.length > 0) return edgeSources
 
-  const shotNode = findNode(graph, shotNodeKey)
-  if (!shotNode) return []
+  const shotNode = shotId
+    ? buildVirtualShotNode(graph, shotId, shotNodeKey)
+    : findNode(graph, shotNodeKey)
+  if (!shotNode || shotNode.type !== 'cinematic_shot') return []
   const shot = getCinematicShotNodeConfig(shotNode)
   const refIds = Array.from(new Set(
     shot.requiredSourceRefIds.length > 0
@@ -1042,36 +1136,32 @@ export function buildStoryboardStillPrompt(input: {
   const config = getStoryboardRefNodeConfig(input.storyboardNode)
   const shots = resolveStoryboardTargetShots(input.graph, input.storyboardNode.key)
   const sourceDescriptions = buildStoryboardSourceDescriptions(input.sourceInputs)
-  const referenceStyleInstruction = buildStoryboardReferenceStyleInstruction(input.sourceInputs)
+  const styleAnchor = buildStoryboardStyleAnchor(input.snapshot.gameSpec ?? null, input.sourceInputs)
 
   if (config.storyboardKind === 'sequence_board') {
     const panelCount = Math.min(shots.length, 9)
     return [
-      'Create a cinematic storyboard sequence board.',
-      ...formatProjectArtDirection(input.snapshot.gameSpec ?? null),
+      'Create one clean cinematic sequence board.',
+      ...styleAnchor,
       `Use a ${settings.stillAspectRatio} frame ratio for every panel.`,
-      'Render this as one clean multi-panel sequence image that clearly progresses through the action.',
+      'Render the result as a simple multi-panel image that clearly progresses through the action.',
       describeStoryboardGrid(panelCount, settings.stillAspectRatio),
-      describeStoryboardPanelStyling(settings.stillAspectRatio),
-      'Keep all panels the same size and preserve consistent framing discipline across the whole board.',
-      referenceStyleInstruction,
+      'Keep the panels consistent in size and overall finish.',
+      'For each panel, place the referenced subjects into the described scene and preserve continuity across the board.',
       ...shots.slice(0, 9).map((shot, index) => buildStoryboardPanelDirection(shot, index)),
       config.notes.trim() ? `Additional scene direction: ${config.notes.trim()}.` : null,
       config.generationPrompt.trim() ? `Additional visual direction: ${config.generationPrompt.trim()}.` : null,
       ...sourceDescriptions,
-      'No captions, panel numbers, text labels, handwritten notes, speech bubbles, comic halftones, watermarks, or decorative mockup chrome.',
-      'Each panel should look like a real image frame from the project, not a sketch overlay.',
+      'No captions, panel numbers, text labels, handwritten notes, speech bubbles, watermarks, or decorative mockup chrome.',
     ].filter(Boolean).join(' ')
   }
 
   const primaryShot = shots[0] ?? null
   return [
-    'Create one storyboard panel.',
-    ...formatProjectArtDirection(input.snapshot.gameSpec ?? null),
+    'Create one clean cinematic panel.',
+    ...styleAnchor,
     `Use a ${settings.stillAspectRatio} frame ratio.`,
-    'Render this as a single clean cinematic frame in the project final visual language with clear blocking and readable composition.',
-    referenceStyleInstruction,
-    describeStoryboardPanelStyling(settings.stillAspectRatio),
+    'Place the referenced subjects into the described scene with clear blocking and readable composition.',
     primaryShot ? buildStoryboardPanelDirection(primaryShot, 0) : null,
     config.notes.trim() ? `Additional scene direction: ${config.notes.trim()}.` : null,
     config.generationPrompt.trim() ? `Additional visual direction: ${config.generationPrompt.trim()}.` : null,
@@ -1093,25 +1183,23 @@ export function buildTakeStoryboardStillPrompt(input: {
     .map((shotId) => sequence.shots.find((shot) => shot.id === shotId) ?? null)
     .filter((shot): shot is typeof sequence.shots[number] => Boolean(shot))
   const sourceDescriptions = buildStoryboardSourceDescriptions(input.sourceInputs)
-  const referenceStyleInstruction = buildStoryboardReferenceStyleInstruction(input.sourceInputs)
+  const styleAnchor = buildStoryboardStyleAnchor(input.snapshot.gameSpec ?? null, input.sourceInputs)
   const panelCount = Math.min(shots.length, 9)
 
   return [
-    'Create a cinematic storyboard sequence board.',
-    ...formatProjectArtDirection(input.snapshot.gameSpec ?? null),
+    'Create one clean cinematic sequence board.',
+    ...styleAnchor,
     `Use a ${settings.stillAspectRatio} frame ratio for every panel.`,
-    'Render this as one clean multi-panel sequence image that clearly progresses through the sequence.',
+    'Render the result as a simple multi-panel image that clearly progresses through the sequence.',
     describeStoryboardGrid(panelCount, settings.stillAspectRatio),
-    describeStoryboardPanelStyling(settings.stillAspectRatio),
-    'Keep all panels the same size with the same final rendering style across the whole board.',
-    referenceStyleInstruction,
+    'Keep the panels consistent in size and overall finish.',
+    'For each panel, place the referenced subjects into the described scene and preserve continuity across the board.',
     ...shots.slice(0, 9).map((shot, index) => buildStoryboardPanelDirection(shot, index)),
     take.proofMoment.trim() ? `Make this proof moment visually obvious: ${take.proofMoment.trim()}.` : null,
     take.contrastAxis.trim() ? `Make this contrast visually clear: ${take.contrastAxis.trim()}.` : null,
     ...sourceDescriptions,
     'Use referenced characters, environments, and hero objects when valid image refs are available; otherwise infer missing details from the sequence beats.',
-    'No captions, panel numbers, text labels, handwritten notes, speech bubbles, comic halftones, watermarks, or decorative mockup chrome.',
-    'Every panel should read as a real image frame from the project rather than a sketch with notes.',
+    'No captions, panel numbers, text labels, handwritten notes, speech bubbles, watermarks, or decorative mockup chrome.',
   ].filter(Boolean).join(' ')
 }
 
@@ -1471,13 +1559,29 @@ export async function persistShotBindingsIfPresent(
   draftId: string,
   graphKey: string,
   shotNodeKey: string,
+  shotId: string | null,
   changes: {
     bodyImageAssetKey?: string | null
     metadata: Partial<ReturnType<typeof getCinematicShotNodeConfig>>
   },
 ) {
-  const graphRow = await client.from('draft_graphs').select('id').eq('draft_id', draftId).eq('key', graphKey).maybeSingle()
+  const graphRow = await client.from('draft_graphs').select('id, metadata').eq('draft_id', draftId).eq('key', graphKey).maybeSingle()
   if (graphRow.error || !graphRow.data) return
+
+  if (shotId) {
+    const nextMetadata = updateSequenceShotBindingsInGraph({
+      key: graphKey,
+      name: graphKey,
+      nodes: [],
+      edges: [],
+      metadata: asRecord(graphRow.data.metadata),
+    } as SnapshotGraph, shotId, { metadata: changes.metadata }).metadata
+
+    await client
+      .from('draft_graphs')
+      .update({ metadata: nextMetadata })
+      .eq('id', graphRow.data.id)
+  }
 
   const nodeRow = await client
     .from('draft_graph_nodes')
@@ -1610,14 +1714,16 @@ export async function persistStoryboardBindingsIfPresent(
 export function applyShotBindingToGraph(
   graph: SnapshotGraph,
   shotNodeKey: string,
+  shotId: string | null,
   changes: {
     bodyImageAssetKey?: string | null
     metadata: Partial<ReturnType<typeof getCinematicShotNodeConfig>>
   },
 ) {
+  const nextGraph = shotId ? updateSequenceShotBindingsInGraph(graph, shotId, { metadata: changes.metadata }) : graph
   return {
-    ...graph,
-    nodes: graph.nodes.map((node) => {
+    ...nextGraph,
+    nodes: nextGraph.nodes.map((node) => {
       if (node.key !== shotNodeKey) return node
       const currentBody = asRecord(node.body)
       return {
@@ -1727,11 +1833,13 @@ export function toCinematicRun(input: {
 }
 
 export function toCinematicRunJob(row: Record<string, unknown>) {
+  const resultContext = row.result_context ? asRecord(row.result_context) : null
   return cinematicRunJobSchema.parse({
     id: row.id,
     runId: row.run_id,
     graphKey: row.graph_key,
     shotNodeKey: row.shot_node_key,
+    shotId: typeof resultContext?.shotId === 'string' ? resultContext.shotId : null,
     kind: row.kind,
     status: row.status,
     orderIndex: row.order_index ?? 0,
@@ -1743,7 +1851,7 @@ export function toCinematicRunJob(row: Record<string, unknown>) {
     providerRequestId: row.provider_request_id ?? null,
     errorMessage: row.error_message ?? null,
     prompt: typeof row.prompt === 'string' ? row.prompt : '',
-    resultContext: row.result_context ? asRecord(row.result_context) : null,
+    resultContext,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   })
