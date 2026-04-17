@@ -563,24 +563,51 @@ Deno.serve(async (request) => {
       const conceptDependencyIds = definitionJobId ? [definitionJobId] : []
 
       if ((item.kind === 'character' || item.kind === 'item' || item.kind === 'environment') && item.generationOptions.generateConceptImage) {
-        const assetKey = item.generationOptions.existingAssetKey?.trim() || buildAssetKey(item.name, item.kind === 'environment' ? 'hero' : 'concept', assetKeyState)
-        const assetJobId = crypto.randomUUID()
-        jobsToInsert.push({
-          id: assetJobId,
-          batch_id: batchId,
-          plan_item_id: item.id,
-          kind: item.kind === 'environment' ? 'environment_concept_image' : `${item.kind}_concept_image`,
-          status: 'queued',
-          depends_on_job_ids: conceptDependencyIds,
-          target_keys: item.kind === 'environment' ? { definitionKey, assetKey, view: 'hero' } : { definitionKey, assetKey },
-          prompt: payload.prompt,
-          options: item.generationOptions,
-          result_context: null,
-          error_message: null,
-          order_index: nextOrder(),
+        const conceptVariants = item.kind === 'environment'
+          ? ['hero']
+          : (item.generationOptions.conceptVariantSet && item.generationOptions.conceptVariantSet.length > 0
+            ? item.generationOptions.conceptVariantSet
+            : item.kind === 'character' && item.generationOptions.conceptArtMode === 'continuity'
+              ? ['three_quarter_portrait', 'side_profile', 'full_body']
+              : item.kind === 'item' && item.generationOptions.conceptArtMode === 'proof_surface'
+                ? ['neutral_packshot', 'in_hand_or_in_use', 'readable_close_proof']
+            : ['default'])
+        let primaryAssetKey: string | null = null
+        conceptVariants.forEach((variant, variantIndex) => {
+          const normalizedVariant = variant.trim() || 'default'
+          const assetKey = (
+            variantIndex === 0 && item.generationOptions.existingAssetKey?.trim()
+              ? item.generationOptions.existingAssetKey.trim()
+              : buildAssetKey(item.name, item.kind === 'environment' ? 'hero' : normalizedVariant, assetKeyState)
+          )
+          const assetJobId = crypto.randomUUID()
+          jobsToInsert.push({
+            id: assetJobId,
+            batch_id: batchId,
+            plan_item_id: item.id,
+            kind: item.kind === 'environment' ? 'environment_concept_image' : `${item.kind}_concept_image`,
+            status: 'queued',
+            depends_on_job_ids: conceptDependencyIds,
+            target_keys: item.kind === 'environment'
+              ? { definitionKey, assetKey, view: 'hero', variant: normalizedVariant }
+              : { definitionKey, assetKey, variant: normalizedVariant },
+            prompt: payload.prompt,
+            options: {
+              ...item.generationOptions,
+              conceptVariantSet: conceptVariants,
+              conceptVariant: normalizedVariant,
+            },
+            result_context: null,
+            error_message: null,
+            order_index: nextOrder(),
+          })
+          assetJobIds.set(assetKey, assetJobId)
+          if (!primaryAssetKey) primaryAssetKey = assetKey
+          targetKeys[`assetKey:${normalizedVariant}`] = assetKey
         })
-        assetJobIds.set(assetKey, assetJobId)
-        targetKeys.assetKey = assetKey
+        if (primaryAssetKey) {
+          targetKeys.assetKey = primaryAssetKey
+        }
       }
 
       if (item.kind === 'environment' && item.generationOptions.generateConceptGallery && !existingDefinitionKey) {
@@ -794,15 +821,24 @@ Deno.serve(async (request) => {
         const placeholderAssets: PlaceholderAsset[] = []
 
         if ((item.kind === 'character' || item.kind === 'item' || (item.kind === 'environment' && item.generationOptions.generateConceptImage)) && targetKeys.assetKey) {
-          placeholderAssets.push({
-            key: targetKeys.assetKey,
-            name: item.kind === 'environment' ? `${item.name} Hero` : `${item.name} Concept`,
-            metadata: {
-              generation: createGenerationMetadata(batchId, assetJobIds.get(targetKeys.assetKey) ?? definitionJobId ?? crypto.randomUUID()),
-              placeholderLabel: 'Pending concept image',
-              ...(item.kind === 'environment' ? { conceptView: 'hero' } : {}),
-            },
-          })
+          const variantAssetEntries = Object.entries(targetKeys)
+            .filter(([key]) => key === 'assetKey' || key.startsWith('assetKey:'))
+          for (const [targetKey, assetKey] of variantAssetEntries) {
+            const variant = targetKey === 'assetKey' ? 'default' : targetKey.replace(/^assetKey:/, '')
+            placeholderAssets.push({
+              key: assetKey,
+              name: item.kind === 'environment' ? `${item.name} Hero` : variant === 'default' ? `${item.name} Concept` : `${item.name} ${variant.replace(/_/g, ' ')}`,
+              metadata: {
+                generation: createGenerationMetadata(batchId, assetJobIds.get(assetKey) ?? definitionJobId ?? crypto.randomUUID()),
+                placeholderLabel: 'Pending concept image',
+                conceptArtMode: item.generationOptions.conceptArtMode ?? null,
+                variant,
+                captureProfile: item.generationOptions.captureProfileOverride ?? null,
+                downstreamUse: item.generationOptions.conceptArtMode === 'proof_surface' ? 'proof_surface' : item.generationOptions.conceptArtMode === 'continuity' ? 'continuity' : 'showcase',
+                ...(item.kind === 'environment' ? { conceptView: 'hero' } : {}),
+              },
+            })
+          }
         }
 
         if (item.kind === 'environment' && !existingDefinitionKey) {

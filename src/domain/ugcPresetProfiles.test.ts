@@ -10,9 +10,14 @@ import {
 import {
   correctUgcPresetSelectionForPromptText,
   deriveUgcShotDefaults,
+  getUgcDefaultShotDurationSeconds,
   getUgcPresetProfile,
+  getUgcVariationBlueprints,
+  normalizeUgcPlannedShotDuration,
   inferCinematicFormatSubtypeFromPromptText,
   inferCinematicPresetFamilyFromPromptText,
+  resolveUgcCreativeProfile,
+  resolveUgcShotCommunicationContract,
 } from './ugcPresetProfiles.ts'
 
 test('creator prompts infer creator preset family and subtype', () => {
@@ -90,6 +95,8 @@ test('format subtype patch applies subtype-specific defaults', () => {
   assert.equal(patch.formatSubtype, 'creator_validation')
   assert.equal(patch.formulaFamily, 'validation')
   assert.equal(patch.dominantTrigger, 'parasocial_reassurance')
+  assert.equal(patch.creativeTreatment, 'creator_direct_to_camera')
+  assert.equal(patch.narrationMode, 'spoken_to_camera')
   assert.ok(patch.ctaStyle.includes('soft') || patch.ctaStyle.includes('Soft'))
 })
 
@@ -154,4 +161,90 @@ test('serialized drama profiles preserve absurd packaging and storyboard prefere
   assert.equal(profile?.prefersStoryboardSupport, true)
   assert.equal(profile?.visualFirst, true)
   assert.equal(profile?.defaultContrastAxis, 'chaos vs restored order')
+})
+
+test('creator reframe profile exposes short-form pacing defaults', () => {
+  const profile = getUgcPresetProfile('creator_reframe')
+
+  assert.ok(profile)
+  assert.deepEqual(profile?.pacingContract.targetTotalDurationRangeSeconds, [18, 30])
+  assert.equal(getUgcDefaultShotDurationSeconds({ formatSubtype: 'creator_reframe', hookRole: 'hook' }), 3)
+  assert.equal(normalizeUgcPlannedShotDuration({ formatSubtype: 'creator_reframe', hookRole: 'proof', durationSeconds: 15 }), 6)
+})
+
+test('backdrop-led prompts resolve narrator-over-footage creative defaults', () => {
+  const creativeProfile = resolveUgcCreativeProfile({
+    prompt: 'Make an ad for a wellness app with calm mesmerizing footage as backdrop while a narrator explains the nightly stress loop',
+    presetFamily: 'ugc_direct_response_ad',
+    formatSubtype: 'ad_problem_solution',
+  })
+
+  assert.equal(creativeProfile.creativeTreatment, 'aesthetic_mismatch')
+  assert.equal(creativeProfile.narrationMode, 'spoken_over_footage')
+  assert.equal(creativeProfile.backdropRole, 'aesthetic_backdrop')
+  assert.ok(creativeProfile.backdropStrategy.length > 0)
+})
+
+test('creator reframe profile exposes a spoken-to-camera default communication contract', () => {
+  const profile = getUgcPresetProfile('creator_reframe')
+
+  assert.ok(profile)
+  assert.equal(profile?.defaultCommunicationMode, 'spoken_to_camera')
+  assert.ok(profile?.allowedCommunicationModes.includes('spoken_over_footage'))
+  assert.equal(profile?.dialogueExpectationByRole.hook, 'required')
+})
+
+test('shot communication contract relaxes creator dialogue requirements for narrator-over-footage variants', () => {
+  const contract = resolveUgcShotCommunicationContract({
+    formatSubtype: 'creator_reframe',
+    presetFamily: 'ugc_creator',
+    creativeTreatment: 'narrator_over_backdrop',
+    narrationMode: 'spoken_over_footage',
+    hookRole: 'hook',
+  })
+
+  assert.equal(contract.communicationMode, 'spoken_over_footage')
+  assert.equal(contract.requiresSpokenDialogue, false)
+  assert.equal(contract.canUseVoiceover, true)
+  assert.equal(contract.minimumSignal, 'spoken_audio_or_dialogue')
+})
+
+test('faceless process contract allows fully visual communication without dialogue', () => {
+  const contract = resolveUgcShotCommunicationContract({
+    formatSubtype: 'faceless_process',
+    presetFamily: 'ugc_faceless_format',
+    hookRole: 'proof',
+  })
+
+  assert.equal(contract.communicationMode, 'visual_only')
+  assert.equal(contract.canBeFullyVisual, true)
+  assert.equal(contract.dialogueExpectation, 'forbidden')
+  assert.equal(contract.minimumSignal, 'visible_action_or_proof')
+})
+
+test('contrast narrative contract prefers overlay-friendly communication', () => {
+  const contract = resolveUgcShotCommunicationContract({
+    formatSubtype: 'contrast_narrative',
+    presetFamily: 'ugc_direct_response_ad',
+    hookRole: 'hook',
+  })
+
+  assert.equal(contract.communicationMode, 'sparse_overlay')
+  assert.equal(contract.canUseOverlay, true)
+  assert.equal(contract.overlayExpectation, 'required')
+})
+
+test('UGC variation blueprints produce a primary and alternates without drifting off-strategy', () => {
+  const variants = getUgcVariationBlueprints({
+    prompt: 'Create a relatable wellness UGC creator ad about stress drinking at night',
+    presetFamily: 'ugc_creator',
+    formatSubtype: 'creator_reframe',
+    requestedCount: 3,
+  })
+
+  assert.equal(variants.length, 3)
+  assert.equal(variants[0]?.isPrimary, true)
+  assert.equal(variants[0]?.creativeTreatment, 'creator_direct_to_camera')
+  assert.ok(variants.some((entry) => entry.creativeTreatment === 'narrator_over_backdrop'))
+  assert.ok(variants.some((entry) => entry.creativeTreatment === 'faceless_proof_demo'))
 })

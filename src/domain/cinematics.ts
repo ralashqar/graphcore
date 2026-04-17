@@ -2,7 +2,10 @@ import { z } from 'zod'
 import {
   deriveUgcShotDefaults,
   getDefaultUgcFormatSubtypeForPresetFamily,
+  getUgcDefaultShotDurationSeconds,
+  getUgcDurationRangeForShot,
   getUgcPresetProfile,
+  resolveUgcCreativeProfile,
 } from './ugcPresetProfiles.ts'
 import { getRecommendedArtStylePresetForCinematic } from './artStylePresets.ts'
 
@@ -63,6 +66,35 @@ export const cinematicDominantTriggerSchema = z.enum([
   'guilt_pressure',
   'defiance_trigger',
 ])
+export const cinematicCreativeTreatmentSchema = z.enum([
+  'creator_direct_to_camera',
+  'narrator_over_backdrop',
+  'faceless_proof_demo',
+  'contrast_split',
+  'aesthetic_mismatch',
+  'comedic_absurd_container',
+])
+export const cinematicHookFamilySchema = z.enum([
+  'sharp_pain_confession',
+  'wrong_belief_interrupt',
+  'danger_reframe',
+  'status_or_before_after_contrast',
+  'social_drama_open_loop',
+  'odd_visual_plus_serious_narration',
+])
+export const cinematicNarrationModeSchema = z.enum([
+  'spoken_to_camera',
+  'spoken_over_footage',
+  'sparse_overlay',
+  'visual_only',
+])
+export const cinematicBackdropRoleSchema = z.enum([
+  'engagement_backdrop',
+  'proof_backdrop',
+  'contrast_backdrop',
+  'comedic_backdrop',
+  'aesthetic_backdrop',
+])
 export const cinematicReferenceKindSchema = z.enum(['definition', 'asset', 'video', 'audio', 'style', 'storyboard', 'composite'])
 export const cinematicNodeAssetRoleSchema = z.enum(['character', 'environment', 'item', 'audio', 'style', 'storyboard', 'composite'])
 export const cinematicReferencePrioritySchema = z.number().int().min(0).max(100)
@@ -77,6 +109,44 @@ export const seedanceInputModalitySchema = z.enum(['image', 'video', 'audio'])
 export const cinematicDurationSourceSchema = z.enum(['manual', 'inferred'])
 export const cinematicHookRoleSchema = z.enum(['hook', 'setup', 'proof', 'payoff', 'cta'])
 export const cinematicPlatformTargetSchema = z.enum(['tiktok', 'instagram_reels', 'youtube_shorts', 'facebook', 'x', 'web', 'general'])
+export const cinematicReferenceRoleSchema = z.enum([
+  'subject_lock',
+  'prop_lock',
+  'environment_lock',
+  'composite_lock',
+  'board_lock',
+  'style_lock',
+  'proof_surface_lock',
+])
+export const cinematicDownstreamUseSchema = z.enum(['showcase', 'continuity', 'proof_surface'])
+export const cinematicDirectingPackageSchema = z.object({
+  subjectAnchor: z.string().default(''),
+  dominantAction: z.string().default(''),
+  primaryCameraMove: z.string().default(''),
+  styleDirectives: z.array(z.string()).default([]),
+  continuityConstraints: z.array(z.string()).default([]),
+  proofSurfaceRole: z.string().default(''),
+})
+export const cinematicReferencePlanSchema = z.object({
+  requiredRoles: z.array(cinematicReferenceRoleSchema).default([]),
+  preferredPrimaryRefRole: cinematicReferenceRoleSchema.nullable().default(null),
+  maxReferenceCount: z.number().int().min(1).max(12).default(6),
+  dropOrder: z.array(cinematicReferenceRoleSchema).default([]),
+})
+const defaultCinematicDirectingPackage = () => ({
+  subjectAnchor: '',
+  dominantAction: '',
+  primaryCameraMove: '',
+  styleDirectives: [] as string[],
+  continuityConstraints: [] as string[],
+  proofSurfaceRole: '',
+})
+const defaultCinematicReferencePlan = () => ({
+  requiredRoles: [] as z.infer<typeof cinematicReferenceRoleSchema>[],
+  preferredPrimaryRefRole: null as z.infer<typeof cinematicReferenceRoleSchema> | null,
+  maxReferenceCount: 6,
+  dropOrder: [] as z.infer<typeof cinematicReferenceRoleSchema>[],
+})
 
 export const cinematicSettingsSchema = z.object({
   stillAspectRatio: cinematicAspectRatioSchema.default('16:9'),
@@ -92,6 +162,11 @@ export const cinematicSettingsSchema = z.object({
   formatSubtype: z.preprocess(coerceEnumLikeValue(cinematicFormatSubtypeSchema.options), cinematicFormatSubtypeSchema.nullable()).default(null),
   formulaFamily: z.preprocess(coerceEnumLikeValue(cinematicFormulaFamilySchema.options), cinematicFormulaFamilySchema.nullable()).default(null),
   dominantTrigger: z.preprocess(coerceEnumLikeValue(cinematicDominantTriggerSchema.options), cinematicDominantTriggerSchema.nullable()).default(null),
+  creativeTreatment: z.preprocess(coerceEnumLikeValue(cinematicCreativeTreatmentSchema.options), cinematicCreativeTreatmentSchema.nullable()).default(null),
+  hookFamily: z.preprocess(coerceEnumLikeValue(cinematicHookFamilySchema.options), cinematicHookFamilySchema.nullable()).default(null),
+  narrationMode: z.preprocess(coerceEnumLikeValue(cinematicNarrationModeSchema.options), cinematicNarrationModeSchema.nullable()).default(null),
+  backdropRole: z.preprocess(coerceEnumLikeValue(cinematicBackdropRoleSchema.options), cinematicBackdropRoleSchema.nullable()).default(null),
+  backdropStrategy: z.string().default(''),
   contrastAxis: z.string().default(''),
   proofMoment: z.string().default(''),
   ctaStyle: z.string().default(''),
@@ -110,6 +185,9 @@ export const cinematicReferenceSchema = z.object({
   stagingNotes: z.string().default(''),
   priority: cinematicReferencePrioritySchema.default(50),
   required: z.boolean().default(false),
+  referenceRole: cinematicReferenceRoleSchema.nullable().default(null),
+  downstreamUse: cinematicDownstreamUseSchema.nullable().default(null),
+  captureProfile: z.string().nullable().default(null),
 })
 
 export const cinematicRelationshipSchema = z.object({
@@ -130,6 +208,9 @@ export const cinematicCompositeReferenceSchema = z.object({
   generationPrompt: z.string().default(''),
   stagingNotes: z.string().default(''),
   priority: cinematicReferencePrioritySchema.default(80),
+  referenceRole: cinematicReferenceRoleSchema.nullable().default(null),
+  downstreamUse: cinematicDownstreamUseSchema.nullable().default(null),
+  captureProfile: z.string().nullable().default(null),
 })
 
 export const dialogueBeatSchema = z.object({
@@ -177,6 +258,9 @@ export const storyboardPanelSchema = z.object({
   assetKey: z.string().nullable().default(null),
   notes: z.string().default(''),
   orderIndex: z.number().int().default(0),
+  referenceRole: cinematicReferenceRoleSchema.nullable().default(null),
+  downstreamUse: cinematicDownstreamUseSchema.nullable().default(null),
+  captureProfile: z.string().nullable().default(null),
 })
 
 export const storyboardSpecSchema = z.object({
@@ -204,6 +288,9 @@ export const cinematicScriptEntityBindingSchema = z.object({
   stagingNotes: z.string().default(''),
   priority: cinematicReferencePrioritySchema.default(50),
   required: z.boolean().default(true),
+  referenceRole: cinematicReferenceRoleSchema.nullable().default(null),
+  downstreamUse: cinematicDownstreamUseSchema.nullable().default(null),
+  captureProfile: z.string().nullable().default(null),
 })
 
 export const cinematicSequenceSceneSchema = z.object({
@@ -229,6 +316,13 @@ export const cinematicScriptShotSchema = z.object({
   formatSubtype: z.preprocess(coerceEnumLikeValue(cinematicFormatSubtypeSchema.options), cinematicFormatSubtypeSchema.nullable()).default(null),
   formulaFamily: z.preprocess(coerceEnumLikeValue(cinematicFormulaFamilySchema.options), cinematicFormulaFamilySchema.nullable()).default(null),
   dominantTrigger: z.preprocess(coerceEnumLikeValue(cinematicDominantTriggerSchema.options), cinematicDominantTriggerSchema.nullable()).default(null),
+  creativeTreatment: z.preprocess(coerceEnumLikeValue(cinematicCreativeTreatmentSchema.options), cinematicCreativeTreatmentSchema.nullable()).default(null),
+  hookFamily: z.preprocess(coerceEnumLikeValue(cinematicHookFamilySchema.options), cinematicHookFamilySchema.nullable()).default(null),
+  narrationMode: z.preprocess(coerceEnumLikeValue(cinematicNarrationModeSchema.options), cinematicNarrationModeSchema.nullable()).default(null),
+  backdropRole: z.preprocess(coerceEnumLikeValue(cinematicBackdropRoleSchema.options), cinematicBackdropRoleSchema.nullable()).default(null),
+  backdropStrategy: z.string().default(''),
+  variationGroupId: z.string().default(''),
+  variationLabel: z.string().default(''),
   hookType: z.string().default(''),
   targetEmotion: z.string().default(''),
   personaStyle: z.string().default(''),
@@ -250,9 +344,12 @@ export const cinematicScriptShotSchema = z.object({
   participantRefIds: z.array(z.string()).default([]),
   locationRefId: z.string().nullable().default(null),
   propRefIds: z.array(z.string()).default([]),
+  backdropRefIds: z.array(z.string()).default([]),
   requiredSourceRefIds: z.array(z.string()).default([]),
   compositeRefIds: z.array(z.string()).default([]),
   storyboardRefIds: z.array(z.string()).default([]),
+  directingPackage: cinematicDirectingPackageSchema.default(defaultCinematicDirectingPackage),
+  referencePlan: cinematicReferencePlanSchema.default(defaultCinematicReferencePlan),
   durationSeconds: z.number().int().positive().max(15).nullable().default(null),
   forceTakeBreak: z.boolean().default(false),
   beats: z.array(cinematicBeatSchema).default([]),
@@ -318,6 +415,13 @@ export const cinematicShotSpecSchema = z.object({
   formatSubtype: z.preprocess(coerceEnumLikeValue(cinematicFormatSubtypeSchema.options), cinematicFormatSubtypeSchema.nullable()).default(null),
   formulaFamily: z.preprocess(coerceEnumLikeValue(cinematicFormulaFamilySchema.options), cinematicFormulaFamilySchema.nullable()).default(null),
   dominantTrigger: z.preprocess(coerceEnumLikeValue(cinematicDominantTriggerSchema.options), cinematicDominantTriggerSchema.nullable()).default(null),
+  creativeTreatment: z.preprocess(coerceEnumLikeValue(cinematicCreativeTreatmentSchema.options), cinematicCreativeTreatmentSchema.nullable()).default(null),
+  hookFamily: z.preprocess(coerceEnumLikeValue(cinematicHookFamilySchema.options), cinematicHookFamilySchema.nullable()).default(null),
+  narrationMode: z.preprocess(coerceEnumLikeValue(cinematicNarrationModeSchema.options), cinematicNarrationModeSchema.nullable()).default(null),
+  backdropRole: z.preprocess(coerceEnumLikeValue(cinematicBackdropRoleSchema.options), cinematicBackdropRoleSchema.nullable()).default(null),
+  backdropStrategy: z.string().default(''),
+  variationGroupId: z.string().default(''),
+  variationLabel: z.string().default(''),
   hookType: z.string().default(''),
   targetEmotion: z.string().default(''),
   personaStyle: z.string().default(''),
@@ -338,9 +442,12 @@ export const cinematicShotSpecSchema = z.object({
   participantRefIds: z.array(z.string()).default([]),
   locationRefId: z.string().nullable().default(null),
   propRefIds: z.array(z.string()).default([]),
+  backdropRefIds: z.array(z.string()).default([]),
   requiredSourceRefIds: z.array(z.string()).default([]),
   compositeRefIds: z.array(z.string()).default([]),
   storyboardRefIds: z.array(z.string()).default([]),
+  directingPackage: cinematicDirectingPackageSchema.default(defaultCinematicDirectingPackage),
+  referencePlan: cinematicReferencePlanSchema.default(defaultCinematicReferencePlan),
   durationSeconds: z.number().int().positive().max(15).nullable().default(null),
   inferredDurationSeconds: z.number().int().positive().max(15).nullable().default(null),
   durationSource: cinematicDurationSourceSchema.default('inferred'),
@@ -379,11 +486,20 @@ export const cinematicTakeSpecSchema = z.object({
   formatSubtype: z.preprocess(coerceEnumLikeValue(cinematicFormatSubtypeSchema.options), cinematicFormatSubtypeSchema.nullable()).default(null),
   formulaFamily: z.preprocess(coerceEnumLikeValue(cinematicFormulaFamilySchema.options), cinematicFormulaFamilySchema.nullable()).default(null),
   dominantTrigger: z.preprocess(coerceEnumLikeValue(cinematicDominantTriggerSchema.options), cinematicDominantTriggerSchema.nullable()).default(null),
+  creativeTreatment: z.preprocess(coerceEnumLikeValue(cinematicCreativeTreatmentSchema.options), cinematicCreativeTreatmentSchema.nullable()).default(null),
+  hookFamily: z.preprocess(coerceEnumLikeValue(cinematicHookFamilySchema.options), cinematicHookFamilySchema.nullable()).default(null),
+  narrationMode: z.preprocess(coerceEnumLikeValue(cinematicNarrationModeSchema.options), cinematicNarrationModeSchema.nullable()).default(null),
+  backdropRole: z.preprocess(coerceEnumLikeValue(cinematicBackdropRoleSchema.options), cinematicBackdropRoleSchema.nullable()).default(null),
+  backdropStrategy: z.string().default(''),
+  variationGroupId: z.string().default(''),
+  variationLabel: z.string().default(''),
   artStylePreset: z.string().nullable().default(null),
   contrastAxis: z.string().default(''),
   proofMoment: z.string().default(''),
   ctaStyle: z.string().default(''),
   requiredSourceRefIds: z.array(z.string()).default([]),
+  directingPackage: cinematicDirectingPackageSchema.default(defaultCinematicDirectingPackage),
+  referencePlan: cinematicReferencePlanSchema.default(defaultCinematicReferencePlan),
   previewImageAssetKey: z.string().nullable().default(null),
   storyboardAssetKey: z.string().nullable().default(null),
   outputVideoAssetKey: z.string().nullable().default(null),
@@ -426,6 +542,9 @@ export const assetRefNodeConfigSchema = z.object({
   role: z.string().default('reference'),
   priority: cinematicReferencePrioritySchema.default(50),
   stagingNotes: z.string().default(''),
+  referenceRole: cinematicReferenceRoleSchema.nullable().default(null),
+  downstreamUse: cinematicDownstreamUseSchema.nullable().default(null),
+  captureProfile: z.string().nullable().default(null),
 })
 
 export const compositeRefNodeConfigSchema = z.object({
@@ -437,6 +556,9 @@ export const compositeRefNodeConfigSchema = z.object({
   generationPrompt: z.string().default(''),
   stagingNotes: z.string().default(''),
   priority: cinematicReferencePrioritySchema.default(80),
+  referenceRole: cinematicReferenceRoleSchema.nullable().default(null),
+  downstreamUse: cinematicDownstreamUseSchema.nullable().default(null),
+  captureProfile: z.string().nullable().default(null),
 })
 
 export const storyboardRefNodeConfigSchema = z.object({
@@ -449,6 +571,9 @@ export const storyboardRefNodeConfigSchema = z.object({
   generationPrompt: z.string().default(''),
   notes: z.string().default(''),
   priority: cinematicReferencePrioritySchema.default(90),
+  referenceRole: cinematicReferenceRoleSchema.nullable().default(null),
+  downstreamUse: cinematicDownstreamUseSchema.nullable().default(null),
+  captureProfile: z.string().nullable().default(null),
   lastRunId: z.string().nullable().default(null),
   lastStillJobId: z.string().nullable().default(null),
   provider: z.string().nullable().default(null),
@@ -551,6 +676,14 @@ export type CinematicFormatSubtype = z.infer<typeof cinematicFormatSubtypeSchema
 export type CinematicFormulaFamily = z.infer<typeof cinematicFormulaFamilySchema>
 export type CinematicDominantTrigger = z.infer<typeof cinematicDominantTriggerSchema>
 export type CinematicHookRole = z.infer<typeof cinematicHookRoleSchema>
+export type CinematicCreativeTreatment = z.infer<typeof cinematicCreativeTreatmentSchema>
+export type CinematicHookFamily = z.infer<typeof cinematicHookFamilySchema>
+export type CinematicNarrationMode = z.infer<typeof cinematicNarrationModeSchema>
+export type CinematicBackdropRole = z.infer<typeof cinematicBackdropRoleSchema>
+export type CinematicReferenceRole = z.infer<typeof cinematicReferenceRoleSchema>
+export type CinematicDownstreamUse = z.infer<typeof cinematicDownstreamUseSchema>
+export type CinematicDirectingPackage = z.infer<typeof cinematicDirectingPackageSchema>
+export type CinematicReferencePlan = z.infer<typeof cinematicReferencePlanSchema>
 export type CinematicReference = z.infer<typeof cinematicReferenceSchema>
 export type CinematicCompositeReference = z.infer<typeof cinematicCompositeReferenceSchema>
 export type CinematicRelationship = z.infer<typeof cinematicRelationshipSchema>
@@ -716,16 +849,72 @@ export function getCinematicFormulaFamilyLabel(formulaFamily: CinematicFormulaFa
   }
 }
 
+export function getCinematicCreativeTreatmentLabel(creativeTreatment: CinematicCreativeTreatment) {
+  switch (creativeTreatment) {
+    case 'creator_direct_to_camera':
+      return 'Creator Direct to Camera'
+    case 'narrator_over_backdrop':
+      return 'Narrator Over Backdrop'
+    case 'faceless_proof_demo':
+      return 'Faceless Proof Demo'
+    case 'contrast_split':
+      return 'Contrast Split'
+    case 'aesthetic_mismatch':
+      return 'Aesthetic Mismatch'
+    case 'comedic_absurd_container':
+      return 'Comedic / Absurd Container'
+  }
+}
+
+export function getCinematicNarrationModeLabel(narrationMode: CinematicNarrationMode) {
+  switch (narrationMode) {
+    case 'spoken_to_camera':
+      return 'Spoken to Camera'
+    case 'spoken_over_footage':
+      return 'Spoken Over Footage'
+    case 'sparse_overlay':
+      return 'Sparse Overlay'
+    case 'visual_only':
+      return 'Visual Only'
+  }
+}
+
+export function getCinematicHookFamilyLabel(hookFamily: CinematicHookFamily) {
+  switch (hookFamily) {
+    case 'sharp_pain_confession':
+      return 'Sharp Pain Confession'
+    case 'wrong_belief_interrupt':
+      return 'Wrong Belief Interrupt'
+    case 'danger_reframe':
+      return 'Danger Reframe'
+    case 'status_or_before_after_contrast':
+      return 'Status / Before-After Contrast'
+    case 'social_drama_open_loop':
+      return 'Social Drama Open Loop'
+    case 'odd_visual_plus_serious_narration':
+      return 'Odd Visual Plus Serious Narration'
+  }
+}
+
 export function buildCinematicSettingsPatchFromFormatSubtype(
   presetFamily: CinematicPresetFamily,
   formatSubtype: CinematicFormatSubtype | null,
-): Pick<CinematicSettings, 'formatSubtype' | 'formulaFamily' | 'dominantTrigger' | 'proofMoment' | 'ctaStyle' | 'contrastAxis' | 'stillAspectRatio' | 'defaultClipSeconds' | 'inferredArtStylePreset'> {
+): Pick<CinematicSettings, 'formatSubtype' | 'formulaFamily' | 'dominantTrigger' | 'creativeTreatment' | 'hookFamily' | 'narrationMode' | 'backdropRole' | 'backdropStrategy' | 'proofMoment' | 'ctaStyle' | 'contrastAxis' | 'stillAspectRatio' | 'defaultClipSeconds' | 'inferredArtStylePreset'> {
   const nextSubtype = coerceFormatSubtypeForPresetFamily(presetFamily, formatSubtype)
   const profile = getUgcPresetProfile(nextSubtype, presetFamily)
+  const creativeProfile = resolveUgcCreativeProfile({
+    formatSubtype: nextSubtype,
+    presetFamily,
+  })
   return {
     formatSubtype: nextSubtype,
     formulaFamily: deriveDefaultFormulaFamilyFromFormatSubtype(nextSubtype),
     dominantTrigger: deriveDefaultDominantTriggerFromFormatSubtype(nextSubtype),
+    creativeTreatment: creativeProfile.creativeTreatment,
+    hookFamily: creativeProfile.hookFamily,
+    narrationMode: creativeProfile.narrationMode,
+    backdropRole: creativeProfile.backdropRole,
+    backdropStrategy: creativeProfile.backdropStrategy,
     proofMoment: profile?.defaultProofMoment ?? '',
     ctaStyle: profile?.defaultCtaStyle ?? '',
     contrastAxis: profile?.defaultContrastAxis ?? '',
@@ -735,9 +924,13 @@ export function buildCinematicSettingsPatchFromFormatSubtype(
   }
 }
 
-export function buildCinematicSettingsPatchFromPresetFamily(presetFamily: CinematicPresetFamily): Pick<CinematicSettings, 'presetFamily' | 'presetId' | 'specializationMode' | 'formatSubtype' | 'formulaFamily' | 'dominantTrigger' | 'proofMoment' | 'ctaStyle' | 'contrastAxis' | 'stillAspectRatio' | 'defaultClipSeconds' | 'inferredArtStylePreset'> {
+export function buildCinematicSettingsPatchFromPresetFamily(presetFamily: CinematicPresetFamily): Pick<CinematicSettings, 'presetFamily' | 'presetId' | 'specializationMode' | 'formatSubtype' | 'formulaFamily' | 'dominantTrigger' | 'creativeTreatment' | 'hookFamily' | 'narrationMode' | 'backdropRole' | 'backdropStrategy' | 'proofMoment' | 'ctaStyle' | 'contrastAxis' | 'stillAspectRatio' | 'defaultClipSeconds' | 'inferredArtStylePreset'> {
   const formatSubtype = coerceFormatSubtypeForPresetFamily(presetFamily, null)
   const profile = getUgcPresetProfile(formatSubtype, presetFamily)
+  const creativeProfile = resolveUgcCreativeProfile({
+    formatSubtype,
+    presetFamily,
+  })
   return {
     presetFamily,
     presetId: presetFamily,
@@ -746,12 +939,254 @@ export function buildCinematicSettingsPatchFromPresetFamily(presetFamily: Cinema
     formatSubtype,
     formulaFamily: deriveDefaultFormulaFamilyFromFormatSubtype(formatSubtype),
     dominantTrigger: deriveDefaultDominantTriggerFromFormatSubtype(formatSubtype),
+    creativeTreatment: creativeProfile.creativeTreatment,
+    hookFamily: creativeProfile.hookFamily,
+    narrationMode: creativeProfile.narrationMode,
+    backdropRole: creativeProfile.backdropRole,
+    backdropStrategy: creativeProfile.backdropStrategy,
     proofMoment: profile?.defaultProofMoment ?? '',
     ctaStyle: profile?.defaultCtaStyle ?? '',
     contrastAxis: profile?.defaultContrastAxis ?? '',
     specializationMode: deriveSpecializationModeFromPresetFamily(presetFamily),
     inferredArtStylePreset: getRecommendedArtStylePresetForCinematic({ presetFamily, formatSubtype }),
   }
+}
+
+const UGC_REFERENCE_DROP_ORDER: CinematicReferenceRole[] = [
+  'proof_surface_lock',
+  'board_lock',
+  'composite_lock',
+  'subject_lock',
+  'prop_lock',
+  'environment_lock',
+  'style_lock',
+]
+
+const STORY_REFERENCE_DROP_ORDER: CinematicReferenceRole[] = [
+  'board_lock',
+  'composite_lock',
+  'subject_lock',
+  'environment_lock',
+  'prop_lock',
+  'style_lock',
+  'proof_surface_lock',
+]
+
+function uniqueStrings(values: string[]) {
+  return Array.from(new Set(values.map((value) => value.trim()).filter((value) => value.length > 0)))
+}
+
+function splitDirectingClauses(...values: Array<string | null | undefined>) {
+  return uniqueStrings(values.flatMap((value) => {
+    if (typeof value !== 'string') return []
+    return value
+      .split(/[.;]\s+|\n+/)
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0)
+  }))
+}
+
+function clipText(value: string, max = 140) {
+  const normalized = value.trim().replace(/\s+/g, ' ')
+  return normalized.length <= max ? normalized : `${normalized.slice(0, Math.max(0, max - 1)).trimEnd()}…`
+}
+
+export function inferShotProofSurfaceRole(shot: Pick<CinematicScriptShot, 'proofType' | 'proofMoment' | 'ctaType' | 'beat' | 'visualPrompt' | 'compositionGuide' | 'hookRole' | 'formatSubtype' | 'propRefIds'>) {
+  const combined = [
+    shot.proofType,
+    shot.proofMoment,
+    shot.ctaType,
+    shot.beat,
+    shot.visualPrompt,
+    shot.compositionGuide,
+  ].join(' ').toLowerCase()
+  const subtype = shot.formatSubtype ?? null
+  const adLike = typeof subtype === 'string' && (subtype.startsWith('ad_') || subtype === 'contrast_narrative')
+  if (/\b(phone|screen|app|receipt|label|product|proof|package|countertop|demo)\b/.test(combined)) {
+    return /\bapp|phone|screen\b/.test(combined)
+      ? 'readable phone or app proof surface'
+      : /\breceipt|countertop|label|package\b/.test(combined)
+        ? 'readable proof surface'
+        : 'product proof surface'
+  }
+  if ((shot.hookRole === 'proof' || shot.hookRole === 'cta' || adLike) && shot.propRefIds.length > 0) {
+    return 'proof-carrying prop or product surface'
+  }
+  return ''
+}
+
+export function inferShotDirectingPackage(input: {
+  shot: Pick<CinematicScriptShot, 'beat' | 'cameraMovement' | 'framing' | 'cameraAngle' | 'lensPreference' | 'visualPrompt' | 'compositionGuide' | 'proofType' | 'proofMoment' | 'ctaType' | 'hookRole' | 'formatSubtype' | 'participantRefIds' | 'propRefIds' | 'locationRefId' | 'actions'>
+  current?: Partial<CinematicDirectingPackage> | null
+}) {
+  const proofSurfaceRole = inferShotProofSurfaceRole(input.shot)
+  const firstAction = input.shot.actions.find((action) => action.verb.trim().length > 0)
+  const subjectAnchor =
+    input.current?.subjectAnchor?.trim()
+    || (proofSurfaceRole && input.shot.participantRefIds.length === 0 ? proofSurfaceRole : '')
+    || (input.shot.participantRefIds.length > 1
+      ? `locked primary subject with ${input.shot.participantRefIds.length - 1} supporting participants`
+      : input.shot.participantRefIds.length === 1
+        ? 'locked primary subject'
+        : input.shot.propRefIds.length > 0
+          ? 'locked hero prop or product'
+          : input.shot.locationRefId
+            ? 'locked environment anchor'
+            : clipText(input.shot.beat))
+  const dominantAction =
+    input.current?.dominantAction?.trim()
+    || firstAction?.verb.trim()
+    || clipText(input.shot.beat)
+  const primaryCameraMove =
+    input.current?.primaryCameraMove?.trim()
+    || input.shot.cameraMovement.trim()
+    || [input.shot.framing.trim(), input.shot.cameraAngle.trim()].filter(Boolean).join(', ')
+  const styleDirectives = uniqueStrings([
+    ...(input.current?.styleDirectives ?? []),
+    ...splitDirectingClauses(input.shot.lensPreference, input.shot.visualPrompt),
+  ])
+  const continuityConstraints = uniqueStrings([
+    ...(input.current?.continuityConstraints ?? []),
+    ...splitDirectingClauses(
+      input.shot.compositionGuide,
+      proofSurfaceRole ? `keep ${proofSurfaceRole} readable and stable` : '',
+      input.shot.participantRefIds.length > 0 ? 'preserve subject identity and wardrobe continuity' : '',
+      input.shot.propRefIds.length > 0 ? 'preserve prop position and continuity' : '',
+      input.shot.locationRefId ? 'preserve environment continuity' : '',
+    ),
+  ])
+  return cinematicDirectingPackageSchema.parse({
+    subjectAnchor,
+    dominantAction,
+    primaryCameraMove,
+    styleDirectives,
+    continuityConstraints,
+    proofSurfaceRole: input.current?.proofSurfaceRole?.trim() || proofSurfaceRole,
+  })
+}
+
+export function inferShotReferencePlan(input: {
+  shot: Pick<CinematicScriptShot, 'participantRefIds' | 'propRefIds' | 'locationRefId' | 'compositeRefIds' | 'storyboardRefIds' | 'proofType' | 'proofMoment' | 'ctaType' | 'beat' | 'visualPrompt' | 'compositionGuide' | 'hookRole' | 'formatSubtype'>
+  current?: Partial<CinematicReferencePlan> | null
+  presetFamily: CinematicPresetFamily
+}) {
+  const proofSurfaceRole = inferShotProofSurfaceRole({
+    ...input.shot,
+    ctaType: input.shot.ctaType,
+  })
+  const requiredRoles = uniqueStrings([
+    ...(input.current?.requiredRoles ?? []),
+    ...(input.shot.storyboardRefIds.length > 0 ? ['board_lock'] : []),
+    ...(input.shot.compositeRefIds.length > 0 ? ['composite_lock'] : []),
+    ...(input.shot.participantRefIds.length > 0 ? ['subject_lock'] : []),
+    ...(input.shot.propRefIds.length > 0 ? ['prop_lock'] : []),
+    ...(input.shot.locationRefId ? ['environment_lock'] : []),
+    ...(proofSurfaceRole ? ['proof_surface_lock'] : []),
+  ]) as CinematicReferenceRole[]
+  const dropOrder = (
+    input.current?.dropOrder?.length
+      ? input.current.dropOrder
+      : input.presetFamily === 'story_movie_tv'
+        ? STORY_REFERENCE_DROP_ORDER
+        : UGC_REFERENCE_DROP_ORDER
+  ).filter((role) => requiredRoles.includes(role) || role === 'style_lock')
+  const preferredPrimaryRefRole =
+    input.current?.preferredPrimaryRefRole
+    ?? (requiredRoles.includes('proof_surface_lock')
+      ? 'proof_surface_lock'
+      : requiredRoles.includes('board_lock')
+        ? 'board_lock'
+        : requiredRoles.includes('composite_lock')
+          ? 'composite_lock'
+          : requiredRoles.includes('subject_lock')
+            ? 'subject_lock'
+            : requiredRoles[0] ?? null)
+  return cinematicReferencePlanSchema.parse({
+    requiredRoles,
+    preferredPrimaryRefRole,
+    maxReferenceCount: input.current?.maxReferenceCount ?? (input.presetFamily === 'story_movie_tv' ? 8 : 6),
+    dropOrder,
+  })
+}
+
+export function inferReferenceRoleFromBinding(binding: Pick<CinematicScriptEntityBinding, 'kind' | 'role'>): CinematicReferenceRole | null {
+  const roleText = `${binding.kind} ${binding.role}`.toLowerCase()
+  if (binding.kind === 'style') return 'style_lock'
+  if (/\bproof|receipt|screen|phone|product\b/.test(roleText)) return 'proof_surface_lock'
+  if (/\bcreator|character|speaker|subject\b/.test(roleText) || binding.kind === 'character') return 'subject_lock'
+  if (/\benvironment|location|setting\b/.test(roleText) || binding.kind === 'environment') return 'environment_lock'
+  if (binding.kind === 'item') return 'prop_lock'
+  return null
+}
+
+export function inferReferenceDownstreamUse(input: {
+  current: CinematicDownstreamUse | null | undefined
+  referenceRole: CinematicReferenceRole | null | undefined
+  required: boolean
+  isUgcFlow: boolean
+}) {
+  if (input.current) return input.current
+  if (input.isUgcFlow && input.required) return 'continuity' as const
+  if (input.referenceRole === 'proof_surface_lock') return 'proof_surface' as const
+  return null
+}
+
+export function inferTakeDirectingPackage(
+  shots: Array<CinematicScriptShot & { directingPackage: CinematicDirectingPackage }>,
+  current?: Partial<CinematicDirectingPackage> | null,
+) {
+  return cinematicDirectingPackageSchema.parse({
+    subjectAnchor:
+      current?.subjectAnchor?.trim()
+      || shots.map((shot) => shot.directingPackage.subjectAnchor).find((value) => value.trim().length > 0)
+      || '',
+    dominantAction:
+      current?.dominantAction?.trim()
+      || clipText(shots.map((shot) => shot.directingPackage.dominantAction).filter((value) => value.trim().length > 0).join(' -> '), 160),
+    primaryCameraMove:
+      current?.primaryCameraMove?.trim()
+      || clipText(uniqueStrings(shots.map((shot) => shot.directingPackage.primaryCameraMove)).join(' -> '), 160),
+    styleDirectives: uniqueStrings([
+      ...(current?.styleDirectives ?? []),
+      ...shots.flatMap((shot) => shot.directingPackage.styleDirectives),
+    ]),
+    continuityConstraints: uniqueStrings([
+      ...(current?.continuityConstraints ?? []),
+      ...shots.flatMap((shot) => shot.directingPackage.continuityConstraints),
+    ]),
+    proofSurfaceRole:
+      current?.proofSurfaceRole?.trim()
+      || shots.map((shot) => shot.directingPackage.proofSurfaceRole).find((value) => value.trim().length > 0)
+      || '',
+  })
+}
+
+export function inferTakeReferencePlan(
+  shots: Array<CinematicScriptShot & { referencePlan: CinematicReferencePlan }>,
+  presetFamily: CinematicPresetFamily,
+  current?: Partial<CinematicReferencePlan> | null,
+) {
+  const requiredRoles = uniqueStrings([
+    ...(current?.requiredRoles ?? []),
+    ...shots.flatMap((shot) => shot.referencePlan.requiredRoles),
+  ]) as CinematicReferenceRole[]
+  const baseDropOrder =
+    current?.dropOrder?.length
+      ? current.dropOrder
+      : presetFamily === 'story_movie_tv'
+        ? STORY_REFERENCE_DROP_ORDER
+        : UGC_REFERENCE_DROP_ORDER
+  return cinematicReferencePlanSchema.parse({
+    requiredRoles,
+    preferredPrimaryRefRole:
+      current?.preferredPrimaryRefRole
+      ?? shots.map((shot) => shot.referencePlan.preferredPrimaryRefRole).find((value): value is CinematicReferenceRole => Boolean(value))
+      ?? (requiredRoles[0] ?? null),
+    maxReferenceCount:
+      current?.maxReferenceCount
+      ?? Math.min(12, Math.max(4, shots.reduce((max, shot) => Math.max(max, shot.referencePlan.maxReferenceCount), presetFamily === 'story_movie_tv' ? 8 : 6))),
+    dropOrder: baseDropOrder.filter((role) => requiredRoles.includes(role) || role === 'style_lock'),
+  })
 }
 
 function inferSequenceReferenceKindFromBinding(binding: CinematicScriptEntityBinding): CinematicReference['refKind'] {
@@ -775,6 +1210,7 @@ function buildRequiredSourceRefIdsForScriptShot(shot: CinematicScriptShot) {
         ...shot.participantRefIds,
         ...(shot.locationRefId ? [shot.locationRefId] : []),
         ...shot.propRefIds,
+        ...shot.backdropRefIds,
       ]
   return Array.from(new Set(sourceRefIds.filter((entry) => entry.trim().length > 0)))
 }
@@ -838,6 +1274,10 @@ export function estimateShotContentDurationSeconds(shot: Pick<CinematicScriptSho
   }
 }
 
+function countDialogueWords(shot: Pick<CinematicScriptShot, 'dialogue'>) {
+  return shot.dialogue.reduce((total, line) => total + line.line.trim().split(/\s+/).filter(Boolean).length, 0)
+}
+
 function inferShotDuration(shot: CinematicScriptShot) {
   if (typeof shot.durationSeconds === 'number' && Number.isFinite(shot.durationSeconds)) {
     return {
@@ -848,7 +1288,24 @@ function inferShotDuration(shot: CinematicScriptShot) {
   }
 
   const estimated = estimateShotContentDurationSeconds(shot)
-  const inferred = estimated.inferredDurationSeconds
+  let inferred = estimated.inferredDurationSeconds
+  const ugcProfile = getUgcPresetProfile(shot.formatSubtype)
+  if (ugcProfile) {
+    const roleRange = getUgcDurationRangeForShot({
+      formatSubtype: shot.formatSubtype,
+      hookRole: shot.hookRole,
+    }) ?? ugcProfile.pacingContract.idealShotDurationRangeSeconds
+    const defaultDuration = getUgcDefaultShotDurationSeconds({
+      formatSubtype: shot.formatSubtype,
+      hookRole: shot.hookRole,
+    }) ?? inferred
+    const dialogueWords = countDialogueWords(shot)
+    const overDialogueLimit = dialogueWords > ugcProfile.pacingContract.maxDialogueWordsPerShot
+    const biased = overDialogueLimit
+      ? Math.min(roleRange[1], Math.max(defaultDuration, inferred - 1))
+      : Math.round((Math.min(roleRange[1], inferred) + defaultDuration) / 2)
+    inferred = clampShotDuration(Math.min(roleRange[1], Math.max(roleRange[0], biased)))
+  }
 
   return {
     durationSeconds: inferred,
@@ -940,6 +1397,7 @@ function buildTakeContinuityRefIds(shots: Array<CinematicScriptShot>) {
       ...shot.participantRefIds,
       ...(shot.locationRefId ? [shot.locationRefId] : []),
       ...shot.propRefIds,
+      ...shot.backdropRefIds,
       ...shot.compositeRefIds,
       ...shot.storyboardRefIds,
     ]).filter((entry) => entry.trim().length > 0),
@@ -959,9 +1417,13 @@ function isStrongTakeFormatBreak(
   right: CinematicScriptShot & { _compiledDurationSeconds: number },
 ) {
   return (
-    (left.formatSubtype ?? null) !== (right.formatSubtype ?? null)
+    (left.variationGroupId.trim() || '') !== (right.variationGroupId.trim() || '')
+    || (left.variationLabel.trim() || '') !== (right.variationLabel.trim() || '')
+    || (left.formatSubtype ?? null) !== (right.formatSubtype ?? null)
     || (left.formulaFamily ?? null) !== (right.formulaFamily ?? null)
     || (left.dominantTrigger ?? null) !== (right.dominantTrigger ?? null)
+    || (left.creativeTreatment ?? null) !== (right.creativeTreatment ?? null)
+    || (left.narrationMode ?? null) !== (right.narrationMode ?? null)
     || (left.contrastAxis.trim() || '') !== (right.contrastAxis.trim() || '')
   )
 }
@@ -996,16 +1458,53 @@ function describeTakeBreakReason(input: {
   const hardSceneJump = sceneChanged && locationChanged && !sharedParticipants
   const softContinuityShift = (locationChanged || sceneChanged) && !hardLocationJump && !hardSceneJump
 
+  if (previousShot.variationGroupId.trim() !== shot.variationGroupId.trim()) return 'Split on a variation pack boundary.'
   if (formatChanged) return 'Split on a strong format or messaging shift.'
   if (hardSceneJump) return 'Split on a scene and location change with no shared participants.'
   if (hardLocationJump) return 'Split on a hard location change with no shared participants.'
   if (softContinuityShift && currentDuration >= 10) return 'Split on a softer continuity shift after a long take.'
+  if (isUgcShot(shot) && previousShot && shouldBreakForUgcEditorialRhythm({ shot, previousShot, currentDuration })) {
+    return 'Split on a UGC editorial beat boundary or dominant-action change.'
+  }
   return ''
+}
+
+function isUgcShot(shot: Pick<CinematicScriptShot, 'formatSubtype'>) {
+  return shot.formatSubtype !== null
+}
+
+function getShotPrimaryActionSignature(shot: Pick<CinematicScriptShot, 'actions' | 'beat' | 'directingPackage'>) {
+  const action = shot.directingPackage.dominantAction.trim() || shot.actions[0]?.verb.trim() || shot.beat.trim()
+  return action.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+}
+
+function shouldBreakForUgcEditorialRhythm(input: {
+  shot: CinematicScriptShot & { _compiledDurationSeconds: number }
+  previousShot: (CinematicScriptShot & { _compiledDurationSeconds: number }) | null
+  currentDuration: number
+}) {
+  const { shot, previousShot, currentDuration } = input
+  if (!previousShot) return false
+  const actionChanged = getShotPrimaryActionSignature(previousShot) !== getShotPrimaryActionSignature(shot)
+  const roleBoundary =
+    (previousShot.hookRole === 'hook' && ['setup', 'proof', 'payoff', 'cta'].includes(shot.hookRole ?? ''))
+    || (previousShot.hookRole === 'proof' && ['payoff', 'cta'].includes(shot.hookRole ?? ''))
+  const proofBeforeCloseBoundary =
+    (shot.hookRole === 'payoff' || shot.hookRole === 'cta')
+    && previousShot.hookRole !== 'proof'
+    && currentDuration >= 5
+  return (
+    (currentDuration >= 6 && actionChanged)
+    || (currentDuration >= 5 && roleBoundary)
+    || proofBeforeCloseBoundary
+  )
 }
 
 function buildCompiledTakes(shots: Array<CinematicScriptShot & {
   _compiledDurationSeconds: number
   _seedanceModePreference: z.infer<typeof seedanceModePreferenceSchema>
+  directingPackage: z.infer<typeof cinematicDirectingPackageSchema>
+  referencePlan: z.infer<typeof cinematicReferencePlanSchema>
 }>) {
   const takes: Array<z.infer<typeof cinematicTakeSpecSchema>> = []
   let currentShots: typeof shots = []
@@ -1037,6 +1536,13 @@ function buildCompiledTakes(shots: Array<CinematicScriptShot & {
       formatSubtype: coalesceTakeField(currentShots, (shot) => shot.formatSubtype, null),
       formulaFamily: coalesceTakeField(currentShots, (shot) => shot.formulaFamily, null),
       dominantTrigger: coalesceTakeField(currentShots, (shot) => shot.dominantTrigger, null),
+      creativeTreatment: coalesceTakeField(currentShots, (shot) => shot.creativeTreatment, null),
+      hookFamily: coalesceTakeField(currentShots, (shot) => shot.hookFamily, null),
+      narrationMode: coalesceTakeField(currentShots, (shot) => shot.narrationMode, null),
+      backdropRole: coalesceTakeField(currentShots, (shot) => shot.backdropRole, null),
+      backdropStrategy: coalesceTakeField(currentShots, (shot) => shot.backdropStrategy, ''),
+      variationGroupId: coalesceTakeField(currentShots, (shot) => shot.variationGroupId, ''),
+      variationLabel: coalesceTakeField(currentShots, (shot) => shot.variationLabel, ''),
       contrastAxis: coalesceTakeField(currentShots, (shot) => shot.contrastAxis, ''),
       proofMoment: coalesceTakeField(currentShots, (shot) => shot.proofMoment, ''),
       ctaStyle: coalesceTakeField(currentShots, (shot) => shot.ctaStyle, ''),
@@ -1057,6 +1563,7 @@ function buildCompiledTakes(shots: Array<CinematicScriptShot & {
     const hardLocationJump = locationChanged && !sharedParticipants
     const hardSceneJump = sceneChanged && locationChanged && !sharedParticipants
     const softContinuityShift = (locationChanged || sceneChanged) && !hardLocationJump && !hardSceneJump
+    const ugcTake = currentShots.some((candidate) => isUgcShot(candidate)) || isUgcShot(shot)
     const continuityBreak = currentShots.length > 0 && (
       shot.forceTakeBreak
       || currentDuration + shot._compiledDurationSeconds > 15
@@ -1064,6 +1571,7 @@ function buildCompiledTakes(shots: Array<CinematicScriptShot & {
       || hardLocationJump
       || hardSceneJump
       || (softContinuityShift && currentDuration >= 10)
+      || (ugcTake && shouldBreakForUgcEditorialRhythm({ shot, previousShot, currentDuration }))
     )
     if (continuityBreak) {
       const nextBreakReason = describeTakeBreakReason({
@@ -1087,6 +1595,16 @@ export function buildCinematicSequenceFromScriptDoc(scriptDoc: CinematicScriptDo
     const inferredTiming = inferShotDuration(shot)
     const timedShot = fillBeatTimingsForShot(shot, inferredTiming.durationSeconds)
     const sourceRefIds = buildRequiredSourceRefIdsForScriptShot(timedShot)
+    const presetFamily = timedShot.formatSubtype ? 'ugc_creator' as const : 'story_movie_tv' as const
+    const directingPackage = inferShotDirectingPackage({
+      shot: timedShot,
+      current: timedShot.directingPackage,
+    })
+    const referencePlan = inferShotReferencePlan({
+      shot: timedShot,
+      current: timedShot.referencePlan,
+      presetFamily,
+    })
     return {
       ...timedShot,
       _compiledDurationSeconds: inferredTiming.durationSeconds,
@@ -1097,8 +1615,11 @@ export function buildCinematicSequenceFromScriptDoc(scriptDoc: CinematicScriptDo
           ? 'reference-to-video' as const
           : 'auto' as const,
       _requiredSourceRefIds: sourceRefIds,
+      directingPackage,
+      referencePlan,
     }
   })
+  const isUgcFlow = compiledShots.some((shot) => shot.formatSubtype !== null)
   const takes = buildCompiledTakes(compiledShots)
   const takeByShotId = new Map<string, { id: string; index: number }>()
   takes.forEach((take, index) => {
@@ -1124,11 +1645,44 @@ export function buildCinematicSequenceFromScriptDoc(scriptDoc: CinematicScriptDo
       stagingNotes: binding.stagingNotes,
       priority: binding.priority,
       required: binding.required,
+      referenceRole: binding.referenceRole ?? inferReferenceRoleFromBinding(binding),
+      downstreamUse: inferReferenceDownstreamUse({
+        current: binding.downstreamUse,
+        referenceRole: binding.referenceRole ?? inferReferenceRoleFromBinding(binding),
+        required: binding.required,
+        isUgcFlow,
+      }),
+      captureProfile: binding.captureProfile,
     })),
     scenes: scriptDoc.scenes,
-    compositeRefs: scriptDoc.compositeRefs,
+    compositeRefs: scriptDoc.compositeRefs.map((reference) => ({
+      ...reference,
+      referenceRole: reference.referenceRole ?? 'composite_lock',
+      downstreamUse: inferReferenceDownstreamUse({
+        current: reference.downstreamUse,
+        referenceRole: reference.referenceRole ?? 'composite_lock',
+        required: true,
+        isUgcFlow,
+      }),
+      captureProfile: reference.captureProfile,
+    })),
     relationships: scriptDoc.relationships,
-    storyboard: scriptDoc.storyboard,
+    storyboard: scriptDoc.storyboard
+      ? {
+          ...scriptDoc.storyboard,
+          panels: scriptDoc.storyboard.panels.map((panel) => ({
+            ...panel,
+            referenceRole: panel.referenceRole ?? 'board_lock',
+            downstreamUse: inferReferenceDownstreamUse({
+              current: panel.downstreamUse,
+              referenceRole: panel.referenceRole ?? 'board_lock',
+              required: true,
+              isUgcFlow,
+            }),
+            captureProfile: panel.captureProfile,
+          })),
+        }
+      : null,
     shots: compiledShots.map((shot) => ({
       sceneId: shot.sceneId,
       id: shot.id,
@@ -1140,6 +1694,13 @@ export function buildCinematicSequenceFromScriptDoc(scriptDoc: CinematicScriptDo
       formatSubtype: shot.formatSubtype,
       formulaFamily: shot.formulaFamily,
       dominantTrigger: shot.dominantTrigger,
+      creativeTreatment: shot.creativeTreatment,
+      hookFamily: shot.hookFamily,
+      narrationMode: shot.narrationMode,
+      backdropRole: shot.backdropRole,
+      backdropStrategy: shot.backdropStrategy,
+      variationGroupId: shot.variationGroupId,
+      variationLabel: shot.variationLabel,
       hookType: shot.hookType,
       targetEmotion: shot.targetEmotion,
       personaStyle: shot.personaStyle,
@@ -1159,9 +1720,12 @@ export function buildCinematicSequenceFromScriptDoc(scriptDoc: CinematicScriptDo
       participantRefIds: shot.participantRefIds,
       locationRefId: shot.locationRefId,
       propRefIds: shot.propRefIds,
+      backdropRefIds: shot.backdropRefIds,
       requiredSourceRefIds: shot._requiredSourceRefIds,
       compositeRefIds: shot.compositeRefIds,
       storyboardRefIds: shot.storyboardRefIds,
+      directingPackage: shot.directingPackage,
+      referencePlan: shot.referencePlan,
       durationSeconds: shot._compiledDurationSeconds,
       inferredDurationSeconds: shot._durationSource === 'inferred' ? shot._compiledDurationSeconds : null,
       durationSource: shot._durationSource,
@@ -1175,7 +1739,21 @@ export function buildCinematicSequenceFromScriptDoc(scriptDoc: CinematicScriptDo
       actions: shot.actions,
       audio: shot.audio,
     })),
-    takes,
+    takes: takes.map((take) => {
+      const takeShots = compiledShots.filter((shot) => take.shotIds.includes(shot.id))
+      return {
+        ...take,
+        directingPackage: inferTakeDirectingPackage(takeShots, take.directingPackage),
+        referencePlan: inferTakeReferencePlan(
+          takeShots.map((shot) => ({
+            ...shot,
+            referencePlan: shot.referencePlan,
+          })),
+          isUgcFlow ? 'ugc_creator' : 'story_movie_tv',
+          take.referencePlan,
+        ),
+      }
+    }),
   })
 }
 
@@ -1299,6 +1877,9 @@ export function deriveCinematicScriptFromSequence(sequence: CinematicSequence): 
       stagingNotes: reference.stagingNotes,
       priority: reference.priority,
       required: reference.required,
+      referenceRole: reference.referenceRole,
+      downstreamUse: reference.downstreamUse,
+      captureProfile: reference.captureProfile,
     })),
     scenes: normalizedScenes,
     shots: parsedSequence.shots.map((shot, index) => ({
@@ -1313,6 +1894,13 @@ export function deriveCinematicScriptFromSequence(sequence: CinematicSequence): 
       formatSubtype: shot.formatSubtype,
       formulaFamily: shot.formulaFamily,
       dominantTrigger: shot.dominantTrigger,
+      creativeTreatment: shot.creativeTreatment,
+      hookFamily: shot.hookFamily,
+      narrationMode: shot.narrationMode,
+      backdropRole: shot.backdropRole,
+      backdropStrategy: shot.backdropStrategy,
+      variationGroupId: shot.variationGroupId,
+      variationLabel: shot.variationLabel,
       hookType: shot.hookType,
       targetEmotion: shot.targetEmotion,
       personaStyle: shot.personaStyle,
@@ -1333,9 +1921,12 @@ export function deriveCinematicScriptFromSequence(sequence: CinematicSequence): 
       participantRefIds: shot.participantRefIds,
       locationRefId: shot.locationRefId,
       propRefIds: shot.propRefIds,
+      backdropRefIds: shot.backdropRefIds,
       requiredSourceRefIds: shot.requiredSourceRefIds,
       compositeRefIds: shot.compositeRefIds,
       storyboardRefIds: shot.storyboardRefIds,
+      directingPackage: shot.directingPackage,
+      referencePlan: shot.referencePlan,
       durationSeconds: shot.durationSeconds,
       forceTakeBreak: shot.forceTakeBreak,
       beats: shot.beats,

@@ -241,6 +241,24 @@ async function updateBatch(
   if (response.error) throw new Error(response.error.message)
 }
 
+function readNumericResultContextValue(resultContext: Record<string, unknown> | null | undefined, key: string) {
+  const value = resultContext?.[key]
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+function buildBatchFailureStatus(jobs: JobRow[], failedJobId: string) {
+  const nextJobs = jobs.map((job) => (
+    job.id === failedJobId
+      ? { ...job, status: 'failed' }
+      : job
+  ))
+  const hasFailed = nextJobs.some((job) => job.status === 'failed')
+  const hasRunning = nextJobs.some((job) => job.status === 'queued' || job.status === 'running')
+  if (hasRunning) return 'running'
+  if (hasFailed && nextJobs.some((job) => job.status === 'succeeded')) return 'completed_with_errors'
+  return 'failed'
+}
+
 function selectRepairModel(requestedModel: string, presetFamily: string | null | undefined) {
   const normalized = requestedModel.trim().toLowerCase()
   const shouldUpgradeForUgc =
@@ -260,14 +278,23 @@ Deno.serve(async (request) => {
   const preflight = maybeHandleOptions(request)
   if (preflight) return preflight
 
+  let failureClient: Awaited<ReturnType<typeof requireUserClient>>['client'] | null = null
+  let failureBatch: BatchRow | null = null
+  let failureJobs: JobRow[] = []
+  let failureCinematicJob: JobRow | null = null
+
   try {
     if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed.')
 
     const { client } = await requireUserClient(request, 'repair-cinematic-script')
+    failureClient = client
     const payload = worldBuildRepairCinematicRequestSchema.parse(await request.json())
     const loaded = await loadBatch(client, payload.batchId)
     const batch = loaded.batch
     const cinematicJob = loaded.jobs.find((job) => job.kind === 'cinematic_graph') ?? null
+    failureBatch = batch
+    failureJobs = loaded.jobs
+    failureCinematicJob = cinematicJob
 
     if (!cinematicJob) throw new HttpError(404, `World build batch ${payload.batchId} does not have a cinematic graph job.`)
 
@@ -313,6 +340,11 @@ Deno.serve(async (request) => {
         formatSubtype: effectiveSettings.formatSubtype,
         formulaFamily: effectiveSettings.formulaFamily,
         dominantTrigger: effectiveSettings.dominantTrigger,
+        creativeTreatment: shot.creativeTreatment || effectiveSettings.creativeTreatment || null,
+        hookFamily: shot.hookFamily || effectiveSettings.hookFamily || null,
+        narrationMode: shot.narrationMode || effectiveSettings.narrationMode || null,
+        backdropRole: shot.backdropRole || effectiveSettings.backdropRole || null,
+        backdropStrategy: shot.backdropStrategy || effectiveSettings.backdropStrategy || '',
         contrastAxis: shot.contrastAxis || effectiveSettings.contrastAxis || '',
         proofMoment: shot.proofMoment || effectiveSettings.proofMoment || '',
         ctaStyle: shot.ctaStyle || effectiveSettings.ctaStyle || '',
@@ -323,11 +355,18 @@ Deno.serve(async (request) => {
     }
 
     const repairModel = selectRepairModel(payload.model, effectiveSettings.presetFamily)
+    const existingResultContext = cinematicJob.result_context ?? {}
+    const repairAttempts = readNumericResultContextValue(existingResultContext, 'repairAttempts') + 1
+    const authoringAttempts = Math.max(1, readNumericResultContextValue(existingResultContext, 'authoringAttempts'))
+    const maxRepairAttempts = Math.max(1, readNumericResultContextValue(existingResultContext, 'maxRepairAttempts') || 1)
 
     await updateJob(client, cinematicJob.id, {
       result_context: {
-        ...(cinematicJob.result_context ?? {}),
+        ...existingResultContext,
         phase: 'repairing_script',
+        authoringAttempts,
+        repairAttempts,
+        maxRepairAttempts,
         repairShotIds: targetShotIds,
         repairFailureCategories: payload.failureCategories,
         repairFieldScopes: payload.fieldScopes,
@@ -385,6 +424,11 @@ Deno.serve(async (request) => {
           formatSubtype: effectiveSettings.formatSubtype,
           formulaFamily: effectiveSettings.formulaFamily,
           dominantTrigger: effectiveSettings.dominantTrigger,
+          creativeTreatment: effectiveSettings.creativeTreatment,
+          hookFamily: effectiveSettings.hookFamily,
+          narrationMode: effectiveSettings.narrationMode,
+          backdropRole: effectiveSettings.backdropRole,
+          backdropStrategy: effectiveSettings.backdropStrategy,
           proofMoment: effectiveSettings.proofMoment,
           ctaStyle: effectiveSettings.ctaStyle,
           contrastAxis: effectiveSettings.contrastAxis,
@@ -415,16 +459,26 @@ Deno.serve(async (request) => {
       ...qualityReport.failures,
     ]))
 
-    const nextPhase = qualityReport.hardFailures.length > 0 ? 'needs_repair' : 'authored'
+    const repairStillFailing = qualityReport.hardFailures.length > 0
+    const repairExhausted = repairStillFailing && repairAttempts >= maxRepairAttempts
+    const nextPhase = repairStillFailing
+      ? (repairExhausted ? 'repair_failed' : 'needs_repair')
+      : 'authored'
 
     await updateBatch(client, batch.id, {
       cinematic_plan: repairedPlan,
       diagnostics: nextDiagnostics,
+      ...(repairExhausted ? { status: buildBatchFailureStatus(loaded.jobs, cinematicJob.id) } : {}),
     })
     await updateJob(client, cinematicJob.id, {
+      status: repairExhausted ? 'failed' : 'running',
       result_context: {
-        ...(cinematicJob.result_context ?? {}),
+        ...existingResultContext,
         phase: nextPhase,
+        authoringAttempts,
+        repairAttempts,
+        maxRepairAttempts,
+        repairQueuedAt: repairStillFailing && !repairExhausted ? new Date().toISOString() : null,
         authoringDiagnostics: qualityReport.failures,
         authoringDiagnosticEntries: qualityReport.diagnostics,
         qualityHardFailures: qualityReport.hardFailures,
@@ -464,6 +518,35 @@ Deno.serve(async (request) => {
       cinematicRuns: [],
     }))
   } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Failed to repair cinematic script.'
+    if (failureClient && failureBatch && failureCinematicJob) {
+      const existingResultContext = failureCinematicJob.result_context ?? {}
+      const nextDiagnostics = Array.from(new Set([
+        ...(Array.isArray(failureBatch.diagnostics) ? failureBatch.diagnostics : []),
+        `Cinematic repair failed: ${errorMessage}`,
+      ]))
+      try {
+        await updateJob(failureClient, failureCinematicJob.id, {
+          status: 'failed',
+          result_context: {
+            ...existingResultContext,
+            phase: 'repair_failed',
+            authoringAttempts: Math.max(1, readNumericResultContextValue(existingResultContext, 'authoringAttempts')),
+            repairAttempts: readNumericResultContextValue(existingResultContext, 'repairAttempts') + 1,
+            maxRepairAttempts: Math.max(1, readNumericResultContextValue(existingResultContext, 'maxRepairAttempts') || 1),
+            lastErrorMessage: errorMessage,
+            failedAt: new Date().toISOString(),
+          },
+          error_message: errorMessage,
+        })
+        await updateBatch(failureClient, failureBatch.id, {
+          status: buildBatchFailureStatus(failureJobs, failureCinematicJob.id),
+          diagnostics: nextDiagnostics,
+        })
+      } catch (persistError) {
+        console.error('[GraphCore] failed to persist cinematic repair failure state.', persistError)
+      }
+    }
     return errorResponse(error, 'Failed to repair cinematic script.')
   }
 })

@@ -2,12 +2,20 @@ import { z } from 'zod'
 import {
   actionBeatSchema,
   audioBeatSchema,
+  cinematicBackdropRoleSchema,
+  cinematicCreativeTreatmentSchema,
+  cinematicDirectingPackageSchema,
   cinematicDominantTriggerSchema,
+  cinematicDownstreamUseSchema,
   cinematicFormatSubtypeSchema,
   cinematicFormulaFamilySchema,
+  cinematicHookFamilySchema,
   cinematicHookRoleSchema,
+  cinematicNarrationModeSchema,
   cinematicPlatformTargetSchema,
   cinematicPresetFamilySchema,
+  cinematicReferencePlanSchema,
+  cinematicReferenceRoleSchema,
   cinematicScriptDocSchema,
   cinematicRelationshipSchema,
   cinematicRunSchema,
@@ -27,6 +35,22 @@ const coerceEnumLikeValue = <TOption extends string>(options: readonly TOption[]
   return matched ?? null
 }
 
+const defaultCinematicDirectingPackage = () => ({
+  subjectAnchor: '',
+  dominantAction: '',
+  primaryCameraMove: '',
+  styleDirectives: [] as string[],
+  continuityConstraints: [] as string[],
+  proofSurfaceRole: '',
+})
+
+const defaultCinematicReferencePlan = () => ({
+  requiredRoles: [] as Array<'subject_lock' | 'prop_lock' | 'environment_lock' | 'composite_lock' | 'board_lock' | 'style_lock' | 'proof_surface_lock'>,
+  preferredPrimaryRefRole: null as 'subject_lock' | 'prop_lock' | 'environment_lock' | 'composite_lock' | 'board_lock' | 'style_lock' | 'proof_surface_lock' | null,
+  maxReferenceCount: 6,
+  dropOrder: [] as Array<'subject_lock' | 'prop_lock' | 'environment_lock' | 'composite_lock' | 'board_lock' | 'style_lock' | 'proof_surface_lock'>,
+})
+
 export const WORLD_BUILD_ENVIRONMENT_VIEWS = ['hero', 'wide_alt', 'detail_area'] as const
 
 export const worldBuildPlanItemKindSchema = z.enum(['character', 'environment', 'item', 'narrative_graph', 'cinematic_graph'])
@@ -34,6 +58,7 @@ export const worldBuildBatchStatusSchema = z.enum(['planned', 'running', 'comple
 export const worldBuildJobStatusSchema = z.enum(['queued', 'running', 'succeeded', 'failed', 'skipped'])
 export const resourceGenerationStateSchema = z.enum(['pending', 'running', 'completed', 'failed'])
 export const worldBuildPlannerModeSchema = z.enum(['world_build', 'cinematic_build', 'direct_asset_generation'])
+export const conceptArtModeSchema = z.enum(['showcase', 'continuity', 'proof_surface'])
 
 export const worldBuildGenerationOptionsSchema = z.object({
   generateConceptImage: z.boolean().optional(),
@@ -41,6 +66,9 @@ export const worldBuildGenerationOptionsSchema = z.object({
   environmentViews: z.array(z.enum(WORLD_BUILD_ENVIRONMENT_VIEWS)).optional(),
   existingDefinitionKey: z.string().min(1).optional(),
   existingAssetKey: z.string().min(1).nullable().optional(),
+  conceptArtMode: conceptArtModeSchema.optional(),
+  conceptVariantSet: z.array(z.string().min(1)).optional(),
+  captureProfileOverride: z.string().min(1).nullable().optional(),
 }).default({})
 
 export const worldBuildPlanItemSchema = z.object({
@@ -62,6 +90,11 @@ export const cinematicEntityRefSchema = z.object({
   resolution: z.enum(['existing', 'create']),
   definitionKey: z.string().nullable().optional(),
   planItemId: z.string().nullable().optional(),
+  referenceRole: cinematicReferenceRoleSchema.nullable().optional(),
+  downstreamUse: cinematicDownstreamUseSchema.nullable().optional(),
+  captureProfile: z.string().nullable().optional(),
+  conceptArtMode: conceptArtModeSchema.nullable().optional(),
+  conceptVariantSet: z.array(z.string()).optional(),
 })
 
 export const cinematicCompositeRefPlanSchema = z.object({
@@ -74,6 +107,9 @@ export const cinematicCompositeRefPlanSchema = z.object({
   outputAssetKey: z.string().nullable().default(null),
   stagingNotes: z.string().default(''),
   priority: z.number().int().min(0).max(100).default(80),
+  referenceRole: cinematicReferenceRoleSchema.nullable().default(null),
+  downstreamUse: cinematicDownstreamUseSchema.nullable().default(null),
+  captureProfile: z.string().nullable().default(null),
 })
 
 export const cinematicShotPlanSchema = z.object({
@@ -85,6 +121,13 @@ export const cinematicShotPlanSchema = z.object({
   formatSubtype: z.preprocess(coerceEnumLikeValue(cinematicFormatSubtypeSchema.options), cinematicFormatSubtypeSchema.nullable()).default(null),
   formulaFamily: z.preprocess(coerceEnumLikeValue(cinematicFormulaFamilySchema.options), cinematicFormulaFamilySchema.nullable()).default(null),
   dominantTrigger: z.preprocess(coerceEnumLikeValue(cinematicDominantTriggerSchema.options), cinematicDominantTriggerSchema.nullable()).default(null),
+  creativeTreatment: z.preprocess(coerceEnumLikeValue(cinematicCreativeTreatmentSchema.options), cinematicCreativeTreatmentSchema.nullable()).default(null),
+  hookFamily: z.preprocess(coerceEnumLikeValue(cinematicHookFamilySchema.options), cinematicHookFamilySchema.nullable()).default(null),
+  narrationMode: z.preprocess(coerceEnumLikeValue(cinematicNarrationModeSchema.options), cinematicNarrationModeSchema.nullable()).default(null),
+  backdropRole: z.preprocess(coerceEnumLikeValue(cinematicBackdropRoleSchema.options), cinematicBackdropRoleSchema.nullable()).default(null),
+  backdropStrategy: z.string().default(''),
+  variationGroupId: z.string().default(''),
+  variationLabel: z.string().default(''),
   hookType: z.string().default(''),
   targetEmotion: z.string().default(''),
   personaStyle: z.string().default(''),
@@ -97,9 +140,12 @@ export const cinematicShotPlanSchema = z.object({
   participantRefIds: z.array(z.string()).default([]),
   locationRefId: z.string().nullable().default(null),
   propRefIds: z.array(z.string()).default([]),
+  backdropRefIds: z.array(z.string()).default([]),
   requiredSourceRefIds: z.array(z.string()).default([]),
   compositeRefIds: z.array(z.string()).default([]),
   storyboardRefIds: z.array(z.string()).default([]),
+  directingPackage: cinematicDirectingPackageSchema.default(defaultCinematicDirectingPackage),
+  referencePlan: cinematicReferencePlanSchema.default(defaultCinematicReferencePlan),
   shotType: z.enum(['establishing', 'dialogue', 'reveal', 'action', 'insert', 'transition', 'custom']).default('custom'),
   framing: z.string().default(''),
   cameraAngle: z.string().default(''),
@@ -135,6 +181,11 @@ export const cinematicGraphSettingsSchema = z.object({
   formatSubtype: z.preprocess(coerceEnumLikeValue(cinematicFormatSubtypeSchema.options), cinematicFormatSubtypeSchema.nullable()).optional(),
   formulaFamily: z.preprocess(coerceEnumLikeValue(cinematicFormulaFamilySchema.options), cinematicFormulaFamilySchema.nullable()).optional(),
   dominantTrigger: z.preprocess(coerceEnumLikeValue(cinematicDominantTriggerSchema.options), cinematicDominantTriggerSchema.nullable()).optional(),
+  creativeTreatment: z.preprocess(coerceEnumLikeValue(cinematicCreativeTreatmentSchema.options), cinematicCreativeTreatmentSchema.nullable()).optional(),
+  hookFamily: z.preprocess(coerceEnumLikeValue(cinematicHookFamilySchema.options), cinematicHookFamilySchema.nullable()).optional(),
+  narrationMode: z.preprocess(coerceEnumLikeValue(cinematicNarrationModeSchema.options), cinematicNarrationModeSchema.nullable()).optional(),
+  backdropRole: z.preprocess(coerceEnumLikeValue(cinematicBackdropRoleSchema.options), cinematicBackdropRoleSchema.nullable()).optional(),
+  backdropStrategy: z.string().optional(),
   contrastAxis: z.string().optional(),
   proofMoment: z.string().optional(),
   ctaStyle: z.string().optional(),
@@ -277,8 +328,8 @@ export const worldBuildRepairCinematicRequestSchema = z.object({
   snapshot: worldBuildPlanRequestSchema.shape.snapshot,
   model: z.string().min(1),
   shotIds: z.array(z.string()).default([]),
-  failureCategories: z.array(z.enum(['schema', 'preset_fit', 'hook', 'proof', 'dialogue', 'action', 'camera', 'cta', 'structure'])).default([]),
-  fieldScopes: z.array(z.enum(['beat', 'framing', 'cameraAngle', 'cameraMovement', 'lensPreference', 'visualPrompt', 'compositionGuide', 'dialogue', 'actions', 'audio'])).default([]),
+  failureCategories: z.array(z.enum(['schema', 'preset_fit', 'hook', 'proof', 'dialogue', 'action', 'camera', 'cta', 'structure', 'directing', 'continuity', 'reference_roles', 'proof_surface', 'pacing', 'concept_mode'])).default([]),
+  fieldScopes: z.array(z.enum(['beat', 'framing', 'cameraAngle', 'cameraMovement', 'lensPreference', 'visualPrompt', 'compositionGuide', 'directingPackage', 'referencePlan', 'dialogue', 'actions', 'audio'])).default([]),
 })
 
 export const worldBuildDeletePlaceholderRequestSchema = z.object({

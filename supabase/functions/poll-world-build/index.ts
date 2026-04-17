@@ -505,6 +505,22 @@ function conceptPromptFromDefinition(definition: SnapshotDefinition, job: JobRow
       ? String((job.result_context as { visualDirection: string }).visualDirection)
       : visualDescription
   const view = typeof job.target_keys?.view === 'string' ? job.target_keys.view.replace(/_/g, ' ') : null
+  const conceptArtMode =
+    typeof job.options?.conceptArtMode === 'string'
+      ? job.options.conceptArtMode
+      : null
+  const conceptVariant =
+    typeof job.options?.conceptVariant === 'string'
+      ? job.options.conceptVariant
+      : typeof job.target_keys?.variant === 'string'
+        ? job.target_keys.variant
+        : null
+  const captureProfile =
+    typeof job.options?.captureProfileOverride === 'string'
+      ? job.options.captureProfileOverride
+      : typeof (definition.metadata as { captureProfile?: unknown } | null)?.captureProfile === 'string'
+        ? String((definition.metadata as { captureProfile: string }).captureProfile)
+        : null
 
   if (job.kind === 'character_concept_image') {
     const subtype =
@@ -516,6 +532,9 @@ function conceptPromptFromDefinition(definition: SnapshotDefinition, job: JobRow
       characterName: definition.name,
       subtype,
       archetypeLabel: typeof definition.archetypeKey === 'string' ? definition.archetypeKey : null,
+      conceptArtMode: conceptArtMode as 'showcase' | 'continuity' | 'proof_surface' | null,
+      conceptVariant,
+      captureProfile,
       artStylePresetLabel: getArtStylePresetLabel(artStylePreset),
       artStyleDescription,
       projectContextDescription: snapshot.project.summary,
@@ -543,6 +562,9 @@ function conceptPromptFromDefinition(definition: SnapshotDefinition, job: JobRow
       archetypeLabel: typeof definition.archetypeKey === 'string' ? definition.archetypeKey : null,
       worldPlacementRole,
       pickupContext,
+      conceptArtMode: conceptArtMode as 'showcase' | 'continuity' | 'proof_surface' | null,
+      conceptVariant,
+      captureProfile,
       artStylePresetLabel: getArtStylePresetLabel(artStylePreset),
       artStyleDescription,
       projectContextDescription: snapshot.project.summary,
@@ -571,6 +593,9 @@ function conceptPromptFromDefinition(definition: SnapshotDefinition, job: JobRow
     subtype,
     archetypeLabel: typeof definition.archetypeKey === 'string' ? definition.archetypeKey : null,
     lightingProfile,
+    conceptArtMode: conceptArtMode as 'showcase' | 'continuity' | 'proof_surface' | null,
+    conceptVariant,
+    captureProfile,
     artStylePresetLabel: getArtStylePresetLabel(artStylePreset),
     artStyleDescription,
     projectContextDescription: snapshot.project.summary,
@@ -2063,6 +2088,13 @@ Deno.serve(async (request) => {
                   : job.kind === 'item_concept_image'
                     ? 'item_concept'
                     : 'environment_concept',
+                conceptArtMode: typeof job.options?.conceptArtMode === 'string' ? job.options.conceptArtMode : null,
+                variant: typeof job.options?.conceptVariant === 'string' ? job.options.conceptVariant : (typeof job.target_keys?.variant === 'string' ? job.target_keys.variant : null),
+                captureProfile: typeof job.options?.captureProfileOverride === 'string' ? job.options.captureProfileOverride : null,
+                downstreamUse:
+                  typeof job.options?.conceptArtMode === 'string'
+                    ? (job.options.conceptArtMode === 'proof_surface' ? 'proof_surface' : job.options.conceptArtMode === 'continuity' ? 'continuity' : 'showcase')
+                    : null,
                 provider: 'fal',
                 model: resultPayload.model ?? 'fal-ai/nano-banana-2',
                 requestId: queueMetadata.providerRequestId,
@@ -2495,21 +2527,92 @@ Deno.serve(async (request) => {
                 && graphGeneration.jobId === job.id
                 && graphGeneration.placeholder === false
                 && (graphGeneration.state === 'completed' || graphAuthoring.phase === 'completed')
+              const currentResultContext =
+                typeof job.result_context === 'object' && job.result_context !== null
+                  ? job.result_context as Record<string, unknown>
+                  : {}
+              const currentPhase =
+                typeof currentResultContext.phase === 'string'
+                  ? currentResultContext.phase
+                  : null
+              const repairAttempts =
+                typeof currentResultContext.repairAttempts === 'number' && Number.isFinite(currentResultContext.repairAttempts)
+                  ? currentResultContext.repairAttempts
+                  : 0
+              const maxRepairAttempts =
+                typeof currentResultContext.maxRepairAttempts === 'number' && Number.isFinite(currentResultContext.maxRepairAttempts)
+                  ? Math.max(1, currentResultContext.maxRepairAttempts)
+                  : 1
+              const repairQueuedAt =
+                typeof currentResultContext.repairQueuedAt === 'string'
+                  ? Date.parse(currentResultContext.repairQueuedAt)
+                  : Number.NaN
+              const phaseUpdatedAt =
+                typeof job.updated_at === 'string'
+                  ? Date.parse(job.updated_at)
+                  : Number.NaN
+              const readyForAuthorshipTimedOut =
+                currentPhase === 'ready_for_authorship'
+                && Number.isFinite(phaseUpdatedAt)
+                && (Date.now() - phaseUpdatedAt) >= 60000
+              const authoringTimedOut =
+                (currentPhase === 'authoring_script' || currentPhase === 'repairing_script')
+                && Number.isFinite(phaseUpdatedAt)
+                && (Date.now() - phaseUpdatedAt) >= 120000
+              const repairTimedOut =
+                currentPhase === 'needs_repair'
+                && Number.isFinite(repairQueuedAt)
+                && (Date.now() - repairQueuedAt) >= 30000
+              const repairExhausted =
+                currentPhase === 'needs_repair'
+                && (repairAttempts >= maxRepairAttempts || repairTimedOut)
+              const authorshipExhausted = readyForAuthorshipTimedOut || authoringTimedOut
+              const inProgressPhase =
+                currentPhase === 'authoring_script'
+                || currentPhase === 'repairing_script'
+              const terminalFailurePhase =
+                authorshipExhausted
+                || repairExhausted
+                || (
+                currentPhase === 'authorship_failed'
+                || currentPhase === 'repair_failed'
+                || currentPhase === 'failed'
+                )
+              const exhaustedFailurePhase = authorshipExhausted
+                ? 'authorship_failed'
+                : repairExhausted
+                  ? 'repair_failed'
+                  : null
               const nextPhase = graphCompiled
                 ? 'graph_compiled'
-                : persistedCinematicPlan.scriptDoc
-                  ? 'authored'
-                  : 'ready_for_authorship'
+                : exhaustedFailurePhase
+                  ? exhaustedFailurePhase
+                  : terminalFailurePhase
+                    ? currentPhase
+                    : inProgressPhase || currentPhase === 'needs_repair'
+                      ? currentPhase
+                      : persistedCinematicPlan.scriptDoc
+                        ? 'authored'
+                        : 'ready_for_authorship'
+              const nextJobStatus = graphCompiled
+                ? 'succeeded'
+                : (job.status === 'failed' || terminalFailurePhase)
+                  ? 'failed'
+                  : 'running'
 
               await updateJob(client, job.id, {
-                status: graphCompiled ? 'succeeded' : 'running',
+                status: nextJobStatus,
                 result_context: {
-                  ...(job.result_context ?? {}),
+                  ...currentResultContext,
                   graphKey,
                   resolvedEntityRefs,
                   phase: nextPhase,
                 },
-                error_message: null,
+                error_message: authorshipExhausted
+                  ? (job.error_message ?? 'Cinematic authorship did not complete within the allowed time window.')
+                  : repairExhausted
+                    ? (job.error_message ?? 'Cinematic repair did not resolve hard failures within the retry budget.')
+                    : null,
               })
 
               if (graphCompiled) {

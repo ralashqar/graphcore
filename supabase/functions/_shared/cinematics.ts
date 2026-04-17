@@ -2,8 +2,11 @@ import { createClient } from 'npm:@supabase/supabase-js@2'
 
 import {
   deriveCinematicScriptFromSequence,
+  getCinematicCreativeTreatmentLabel,
   getCinematicFormulaFamilyLabel,
   getCinematicFormatSubtypeLabel,
+  getCinematicHookFamilyLabel,
+  getCinematicNarrationModeLabel,
   getCinematicPresetLabel,
   cinematicRunJobSchema,
   cinematicRunSchema,
@@ -73,6 +76,27 @@ function asString(value: unknown) {
 
 function asStringArray(value: unknown) {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : []
+}
+
+const UGC_REFERENCE_PRIORITY_ORDER = ['proof_surface_lock', 'board_lock', 'composite_lock', 'subject_lock', 'prop_lock', 'environment_lock', 'style_lock'] as const
+const STORY_REFERENCE_PRIORITY_ORDER = ['board_lock', 'composite_lock', 'subject_lock', 'environment_lock', 'prop_lock', 'style_lock', 'proof_surface_lock'] as const
+
+function normalizeReferenceRole(value: unknown) {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null
+}
+
+function getReferenceRolePriority(presetFamily: ReturnType<typeof getCinematicSettings>['presetFamily'], referenceRole: string | null, basePriority: number) {
+  const order = presetFamily === 'story_movie_tv' ? STORY_REFERENCE_PRIORITY_ORDER : UGC_REFERENCE_PRIORITY_ORDER
+  const index = referenceRole ? order.indexOf(referenceRole as typeof order[number]) : -1
+  return (index >= 0 ? 1000 - index * 100 : 200) + basePriority
+}
+
+function formatPromptSection(label: string, values: Array<string | null | undefined>) {
+  const joined = values
+    .map((value) => (typeof value === 'string' ? value.trim() : ''))
+    .filter((value) => value.length > 0)
+    .join(' ')
+  return joined ? `${label}: ${joined}.` : null
 }
 
 function describePresetPromptStyle(presetFamily: ReturnType<typeof getCinematicSettings>['presetFamily']) {
@@ -517,6 +541,9 @@ function resolveNodeAssetSnapshot(input: {
       config: sourceConfig,
       refId: sourceConfig.entityRefId,
       role: sourceConfig.assetRole ?? sourceConfig.role,
+      referenceRole: normalizeReferenceRole(sourceConfig.referenceRole),
+      downstreamUse: asString(sourceConfig.downstreamUse),
+      captureProfile: asString(sourceConfig.captureProfile),
       priority: sourceConfig.priority,
       label: definition?.name ?? sourceConfig.definitionKey ?? sourceConfig.assetKey ?? input.sourceNode.title,
     }
@@ -533,6 +560,9 @@ function resolveNodeAssetSnapshot(input: {
       config: sourceConfig,
       refId: sourceConfig.compositeRefId,
       role: 'composite',
+      referenceRole: normalizeReferenceRole(sourceConfig.referenceRole) ?? 'composite_lock',
+      downstreamUse: asString(sourceConfig.downstreamUse),
+      captureProfile: asString(sourceConfig.captureProfile),
       priority: sourceConfig.priority,
       label: sourceConfig.title || input.sourceNode.title,
     }
@@ -549,6 +579,9 @@ function resolveNodeAssetSnapshot(input: {
       config: sourceConfig,
       refId: sourceConfig.panelId ?? sourceConfig.storyboardId,
       role: 'storyboard',
+      referenceRole: normalizeReferenceRole(sourceConfig.referenceRole) ?? 'board_lock',
+      downstreamUse: asString(sourceConfig.downstreamUse),
+      captureProfile: asString(sourceConfig.captureProfile),
       priority: sourceConfig.priority,
       label: input.sourceNode.title,
     }
@@ -608,6 +641,9 @@ function buildResolvedSourceEntries(input: {
         refId: resolved.refId,
         role: resolved.role,
         priority: resolved.priority,
+        referenceRole: resolved.referenceRole,
+        downstreamUse: resolved.downstreamUse,
+        captureProfile: resolved.captureProfile,
         label: resolved.label,
       }
     })
@@ -653,6 +689,9 @@ export function resolveShotSources(
         refId: resolved.refId,
         role: resolved.role,
         priority: resolved.priority,
+        referenceRole: resolved.referenceRole,
+        downstreamUse: resolved.downstreamUse,
+        captureProfile: resolved.captureProfile,
         label: resolved.label,
       }
     })
@@ -777,6 +816,9 @@ export function resolveStoryboardSources(snapshot: { definitions?: unknown[]; as
         refId: resolved.refId,
         role: resolved.role,
         priority: resolved.priority,
+        referenceRole: resolved.referenceRole,
+        downstreamUse: resolved.downstreamUse,
+        captureProfile: resolved.captureProfile,
         label: resolved.label,
       }
     })
@@ -866,7 +908,9 @@ export function buildSeedanceExecutionPlan(input: {
   const artDirection = getProjectArtDirection(input.snapshot.gameSpec ?? null, input.graph.metadata, input.shotNode.metadata ?? null)
   const sortedInputs = [...input.sourceInputs]
     .filter((entry) => Boolean(entry.assetUrl))
-    .sort((left, right) => right.priority - left.priority)
+    .sort((left, right) =>
+      getReferenceRolePriority(settings.presetFamily, right.referenceRole ?? null, right.priority)
+      - getReferenceRolePriority(settings.presetFamily, left.referenceRole ?? null, left.priority))
 
   const endpoint =
     shot.seedanceModePreference === 'image-to-video'
@@ -884,7 +928,7 @@ export function buildSeedanceExecutionPlan(input: {
     label: entry.label,
     modality: entry.modality,
     url: entry.assetUrl ?? '',
-    priority: entry.priority,
+    priority: getReferenceRolePriority(settings.presetFamily, entry.referenceRole ?? null, entry.priority),
     truncated: index >= 12,
   }))
 
@@ -893,28 +937,44 @@ export function buildSeedanceExecutionPlan(input: {
 
   const promptLines = [
     `Shot: ${input.shotNode.title}.`,
-    `Art style: ${getArtStylePresetLabel(artDirection.artStylePreset)}.`,
-    ...getArtStylePresetPromptDirectives(artDirection.artStylePreset),
-    input.shotNode.body?.text ? `Action: ${String(input.shotNode.body.text).trim()}.` : null,
-    shot.visualPrompt.trim() ? `Visual direction: ${shot.visualPrompt.trim()}.` : null,
-    shot.compositionGuide.trim() ? `Composition: ${shot.compositionGuide.trim()}.` : null,
-    shot.framing.trim() ? `Framing: ${shot.framing.trim()}.` : null,
-    shot.cameraAngle.trim() ? `Camera angle: ${shot.cameraAngle.trim()}.` : null,
-    shot.cameraMovement.trim() ? `Camera movement: ${shot.cameraMovement.trim()}.` : null,
-    shot.lensPreference.trim() ? `Lens: ${shot.lensPreference.trim()}.` : null,
+    formatPromptSection('Subject', [
+      shot.directingPackage.subjectAnchor,
+      shot.framing,
+    ]),
+    formatPromptSection('Action', [
+      shot.directingPackage.dominantAction,
+      input.shotNode.body?.text ? String(input.shotNode.body.text).trim() : null,
+    ]),
+    formatPromptSection('Camera', [
+      shot.directingPackage.primaryCameraMove,
+      shot.cameraAngle,
+      shot.lensPreference,
+    ]),
+    formatPromptSection('Style', [
+      `Art style ${getArtStylePresetLabel(artDirection.artStylePreset)}`,
+      ...getArtStylePresetPromptDirectives(artDirection.artStylePreset),
+      ...shot.directingPackage.styleDirectives,
+    ]),
+    formatPromptSection('Constraints', [
+      shot.directingPackage.proofSurfaceRole ? `keep ${shot.directingPackage.proofSurfaceRole} readable` : null,
+      ...shot.directingPackage.continuityConstraints,
+      shot.compositionGuide,
+    ]),
     ...shot.dialogue.map((entry) => `Dialogue: ${entry.line}${entry.delivery ? ` (${entry.delivery})` : ''}.`),
     ...formatOverlayCues(shot.audio),
   ].filter((entry): entry is string => Boolean(entry))
 
   const referenceDirectives = keptReferenceInputs.map((entry, index) => {
     const tag = entry.modality === 'image' ? `@Image${index + 1}` : entry.modality === 'video' ? `@Video${index + 1}` : `@Audio${index + 1}`
-    return `${tag} is ${entry.label}.`
+    const matchingSource = input.sourceInputs.find((candidate) => (candidate.refId ?? candidate.node.key) === (entry.sourceRefId ?? entry.nodeKey))
+    const roleText = matchingSource?.referenceRole ? ` (${matchingSource.referenceRole})` : ''
+    return `${tag} is ${entry.label}${roleText}.`
   })
 
   const prompt = [
     `Shot 1: ${promptLines.join(' ')}`,
     ...referenceDirectives,
-    'Keep one primary action and one primary camera move. Preserve subject continuity across all references.',
+    'Keep one primary action and one primary camera move. Preserve subject continuity, prop continuity, and readable proof surfaces across all references.',
   ].join(' ')
 
   const imageInputs = keptReferenceInputs.filter((entry) => entry.modality === 'image')
@@ -958,7 +1018,9 @@ export function buildTakeSeedanceExecutionPlan(input: {
     .filter((entry): entry is typeof sequence.shots[number] => Boolean(entry))
   const sortedInputs = [...input.sourceInputs]
     .filter((entry) => Boolean(entry.assetUrl))
-    .sort((left, right) => right.priority - left.priority)
+    .sort((left, right) =>
+      getReferenceRolePriority(settings.presetFamily, right.referenceRole ?? null, right.priority)
+      - getReferenceRolePriority(settings.presetFamily, left.referenceRole ?? null, left.priority))
   const endpoint =
     take.seedanceEndpoint === 'image-to-video'
       ? 'image-to-video'
@@ -972,7 +1034,7 @@ export function buildTakeSeedanceExecutionPlan(input: {
     label: entry.label,
     modality: entry.modality,
     url: entry.assetUrl ?? '',
-    priority: entry.priority,
+    priority: getReferenceRolePriority(settings.presetFamily, entry.referenceRole ?? null, entry.priority),
     truncated: index >= 12,
   }))
   const keptReferenceInputs = referenceInputs.filter((entry, index) => !entry.truncated && index < 12)
@@ -1026,6 +1088,25 @@ function buildSeedanceTakePrompt(input: {
   }>
 }) {
   const continuityAnchors = input.keptReferenceInputs.slice(0, 5).map((entry) => entry.label)
+  const subjectSection = formatPromptSection('Subject', [
+    input.take.directingPackage.subjectAnchor,
+    continuityAnchors.length > 0 ? `continuity anchors ${continuityAnchors.join(', ')}` : null,
+  ])
+  const actionSection = formatPromptSection('Action', [
+    input.take.directingPackage.dominantAction,
+  ])
+  const cameraSection = formatPromptSection('Camera', [
+    input.take.directingPackage.primaryCameraMove,
+  ])
+  const styleSection = formatPromptSection('Style', [
+    `Art style ${getArtStylePresetLabel(input.artStylePreset)}`,
+    ...getArtStylePresetPromptDirectives(input.artStylePreset),
+    ...input.take.directingPackage.styleDirectives,
+  ])
+  const constraintSection = formatPromptSection('Constraints', [
+    input.take.directingPackage.proofSurfaceRole ? `keep ${input.take.directingPackage.proofSurfaceRole} readable` : null,
+    ...input.take.directingPackage.continuityConstraints,
+  ])
   const arcSummary =
     input.shots.length === 0
       ? null
@@ -1076,11 +1157,20 @@ function buildSeedanceTakePrompt(input: {
 
   return [
     `Create one continuous ${input.take.durationSeconds}-second video take titled "${input.takeTitle}".`,
-    `Art style: ${getArtStylePresetLabel(input.artStylePreset)}.`,
-    ...getArtStylePresetPromptDirectives(input.artStylePreset),
+    subjectSection,
+    actionSection,
+    cameraSection,
+    styleSection,
+    constraintSection,
     `Preset family: ${getCinematicPresetLabel(input.presetFamily)}.`,
     subtypeLabel ? `Format subtype: ${subtypeLabel}.` : null,
     formulaLabel ? `Planned script formula: ${formulaLabel}.` : null,
+    input.take.creativeTreatment ? `Creative treatment: ${getCinematicCreativeTreatmentLabel(input.take.creativeTreatment)}.` : null,
+    input.take.hookFamily ? `Hook family: ${getCinematicHookFamilyLabel(input.take.hookFamily)}.` : null,
+    input.take.narrationMode ? `Narration mode: ${getCinematicNarrationModeLabel(input.take.narrationMode)}.` : null,
+    input.take.backdropRole ? `Backdrop role: ${input.take.backdropRole.replace(/_/g, ' ')}.` : null,
+    input.take.backdropStrategy.trim() ? `Backdrop strategy: ${input.take.backdropStrategy.trim()}.` : null,
+    input.take.variationLabel.trim() ? `Variation angle: ${input.take.variationLabel.trim()}.` : null,
     input.take.dominantTrigger ? `Dominant trigger: ${input.take.dominantTrigger.replace(/_/g, ' ')}.` : null,
     input.take.contrastAxis.trim() ? `Contrast axis: ${input.take.contrastAxis.trim()}.` : null,
     input.take.proofMoment.trim() ? `Proof moment: ${input.take.proofMoment.trim()}.` : null,
@@ -1088,12 +1178,23 @@ function buildSeedanceTakePrompt(input: {
     ...presetDirectives,
     subtypeStyle,
     arcSummary ? `Overall arc: ${arcSummary}` : null,
-    'Write motion and staging literally. Avoid metaphor, slogan copy, or polished ad-agency phrasing.',
+    'Write motion and staging literally in Subject -> Action -> Camera -> Style -> Constraints order.',
     'Make each beat readable on mute from the visuals alone.',
-    continuityAnchors.length > 0 ? `Lock continuity for these anchors across the whole take: ${continuityAnchors.join(', ')}.` : null,
     ...beatLines,
     ...referenceDirectives,
     'Use one dominant action arc and one primary camera path across the take.',
+    input.take.narrationMode === 'spoken_over_footage'
+      ? 'Let the backdrop or footage do real visual work while narration stays concise and punchy. Do not default to a talking head unless the references require it.'
+      : null,
+    input.take.narrationMode === 'sparse_overlay'
+      ? 'Keep spoken language minimal and let the visuals or sparse overlays carry the structure.'
+      : null,
+    input.take.creativeTreatment === 'aesthetic_mismatch'
+      ? 'Exploit the mismatch between calm or pleasing visuals and sharper narration before interrupting with concrete proof.'
+      : null,
+    input.take.creativeTreatment === 'comedic_absurd_container'
+      ? 'Use absurd or funny packaging as the stop-scroll device, but keep the product payoff sincere and legible.'
+      : null,
     input.take.formatSubtype === 'contrast_narrative'
       ? 'Keep both poles visible and readable whenever possible, and make the last beat the strongest winner or payoff image.'
       : null,
@@ -1132,6 +1233,10 @@ export function buildStillPrompt(input: {
     describeSubtypePromptStyle(shot.formatSubtype ?? settings.formatSubtype ?? null),
     `Target aspect ratio: ${settings.stillAspectRatio}.`,
     `Target still resolution: ${settings.stillResolution}.`,
+    shot.creativeTreatment ? `Creative treatment: ${getCinematicCreativeTreatmentLabel(shot.creativeTreatment)}.` : null,
+    shot.hookFamily ? `Hook family: ${getCinematicHookFamilyLabel(shot.hookFamily)}.` : null,
+    shot.narrationMode ? `Narration mode: ${getCinematicNarrationModeLabel(shot.narrationMode)}.` : null,
+    shot.backdropStrategy.trim() ? `Backdrop strategy: ${shot.backdropStrategy.trim()}.` : null,
     shot.shotType !== 'custom' ? `Shot type: ${shot.shotType}.` : null,
     shot.framing.trim() ? `Framing: ${shot.framing.trim()}.` : null,
     shot.cameraAngle.trim() ? `Camera angle: ${shot.cameraAngle.trim()}.` : null,
@@ -1179,6 +1284,10 @@ export function buildTakeStillPrompt(input: {
     describeSubtypePromptStyle(take.formatSubtype ?? settings.formatSubtype ?? null),
     `Target aspect ratio: ${settings.stillAspectRatio}.`,
     `Target still resolution: ${settings.stillResolution}.`,
+    take.creativeTreatment ? `Creative treatment: ${getCinematicCreativeTreatmentLabel(take.creativeTreatment)}.` : null,
+    take.hookFamily ? `Hook family: ${getCinematicHookFamilyLabel(take.hookFamily)}.` : null,
+    take.narrationMode ? `Narration mode: ${getCinematicNarrationModeLabel(take.narrationMode)}.` : null,
+    take.backdropStrategy.trim() ? `Backdrop strategy: ${take.backdropStrategy.trim()}.` : null,
     take.contrastAxis.trim() ? `Contrast axis: ${take.contrastAxis.trim()}.` : null,
     take.proofMoment.trim() ? `Proof moment: ${take.proofMoment.trim()}.` : null,
     ...takeShots.map((shot, index) => [
@@ -1300,6 +1409,10 @@ export function buildVideoPrompt(input: {
     `Preset family: ${getCinematicPresetLabel(settings.presetFamily)}.`,
     shot.formatSubtype ? `Format subtype: ${getCinematicFormatSubtypeLabel(shot.formatSubtype)}.` : null,
     shot.formulaFamily ? `Planned script formula: ${getCinematicFormulaFamilyLabel(shot.formulaFamily)}.` : null,
+    shot.creativeTreatment ? `Creative treatment: ${getCinematicCreativeTreatmentLabel(shot.creativeTreatment)}.` : null,
+    shot.hookFamily ? `Hook family: ${getCinematicHookFamilyLabel(shot.hookFamily)}.` : null,
+    shot.narrationMode ? `Narration mode: ${getCinematicNarrationModeLabel(shot.narrationMode)}.` : null,
+    shot.backdropStrategy.trim() ? `Backdrop strategy: ${shot.backdropStrategy.trim()}.` : null,
     shot.dominantTrigger ? `Dominant trigger: ${shot.dominantTrigger.replace(/_/g, ' ')}.` : null,
     input.shotNode.body?.text ? `Script beat: ${String(input.shotNode.body.text).trim()}.` : null,
     shot.visualPrompt.trim() ? `Additional visual direction: ${shot.visualPrompt.trim()}.` : null,
@@ -1312,6 +1425,12 @@ export function buildVideoPrompt(input: {
     describePresetPromptStyle(settings.presetFamily),
     describeSubtypePromptStyle(shot.formatSubtype ?? settings.formatSubtype ?? null),
     'Use literal visual phrasing and readable on-screen action rather than polished advertising copy.',
+    shot.narrationMode === 'spoken_over_footage'
+      ? 'Let the backdrop or footage carry the visual engagement while narration stays concise and product-relevant.'
+      : null,
+    shot.creativeTreatment === 'contrast_split'
+      ? 'Keep the contrast immediately legible and avoid collapsing into a generic single-subject frame.'
+      : null,
     subtypeLooksLikeAd(shot.formatSubtype ?? settings.formatSubtype ?? null)
       ? 'Show the product or mechanism doing its job and make proof readable in frame.'
       : null,

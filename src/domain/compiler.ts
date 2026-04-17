@@ -10,7 +10,7 @@ import type {
   ProjectSnapshot,
 } from './graphcore.ts'
 import { compileAssemblyGraph } from './environmentAssemblyCompiler.ts'
-import { estimateShotContentDurationSeconds, getCinematicSequence, getCinematicSettings, type CinematicFormatSubtype } from './cinematics.ts'
+import { estimateShotContentDurationSeconds, getCinematicSequence, getCinematicSettings, inferShotProofSurfaceRole, type CinematicFormatSubtype } from './cinematics.ts'
 import { graphNodeTemplatesByKey } from './nodeLibrary.ts'
 import { PRESET_CATALOG_VERSION } from './presetCatalog.ts'
 import {
@@ -36,6 +36,10 @@ function pushDiagnostic(diagnostics: Diagnostic[], diagnostic: Diagnostic) {
 
 function ctaStyleLooksAggressive(text: string) {
   return /\b(buy now|shop now|order now|limited time|act now|hurry|dm now|comment now)\b/i.test(text)
+}
+
+function shotHasMixedCameraIntent(text: string) {
+  return /\bthen\b|\band then\b|,.*\bpan\b.*\bpush\b|,.*\bpush\b.*\borbit\b|,.*\borbit\b.*\bdolly\b/i.test(text)
 }
 
 export function compileBundle(snapshot: ProjectSnapshot): GameSystemBundle {
@@ -1242,6 +1246,72 @@ export function validateGraph(
             nodeKey: node.key,
           })
         }
+        const directingPackage =
+          node.metadata.directingPackage && typeof node.metadata.directingPackage === 'object'
+            ? node.metadata.directingPackage as Record<string, unknown>
+            : {}
+        const referencePlan =
+          node.metadata.referencePlan && typeof node.metadata.referencePlan === 'object'
+            ? node.metadata.referencePlan as Record<string, unknown>
+            : {}
+        if (typeof directingPackage.dominantAction !== 'string' || !String(directingPackage.dominantAction).trim()) {
+          diagnostics.push({
+            level: 'warning',
+            code: 'ugc_shot_missing_dominant_action',
+            message: `UGC shot "${node.key}" should declare one dominant action in directingPackage.`,
+            graphKey: graph.key,
+            nodeKey: node.key,
+          })
+        }
+        if (typeof directingPackage.primaryCameraMove !== 'string' || !String(directingPackage.primaryCameraMove).trim()) {
+          diagnostics.push({
+            level: 'warning',
+            code: 'ugc_shot_missing_primary_camera_move',
+            message: `UGC shot "${node.key}" should declare one primary camera move in directingPackage.`,
+            graphKey: graph.key,
+            nodeKey: node.key,
+          })
+        }
+        if (shotHasMixedCameraIntent(typeof node.metadata.cameraMovement === 'string' ? node.metadata.cameraMovement : '')) {
+          diagnostics.push({
+            level: 'warning',
+            code: 'ugc_shot_mixed_camera_intent',
+            message: `UGC shot "${node.key}" mixes multiple camera intentions. Keep one primary move.`,
+            graphKey: graph.key,
+            nodeKey: node.key,
+          })
+        }
+        const requiredRoles = Array.isArray(referencePlan.requiredRoles)
+          ? referencePlan.requiredRoles.filter((value): value is string => typeof value === 'string')
+          : []
+        if (requiredRoles.length === 0) {
+          diagnostics.push({
+            level: 'warning',
+            code: 'ugc_shot_missing_reference_roles',
+            message: `UGC shot "${node.key}" should define required reference roles for prompt packing and continuity.`,
+            graphKey: graph.key,
+            nodeKey: node.key,
+          })
+        }
+        if ((hookRole === 'proof' || hookRole === 'cta' || isAdSubtype) && !String(directingPackage.proofSurfaceRole ?? '').trim() && inferShotProofSurfaceRole({
+          proofType,
+          proofMoment,
+          ctaType: typeof node.metadata.ctaType === 'string' ? node.metadata.ctaType : '',
+          beat: typeof node.metadata.beat === 'string' ? node.metadata.beat : '',
+          visualPrompt: typeof node.metadata.visualPrompt === 'string' ? node.metadata.visualPrompt : '',
+          compositionGuide: typeof node.metadata.compositionGuide === 'string' ? node.metadata.compositionGuide : '',
+          hookRole: hookRole as never,
+          formatSubtype: typedFormatSubtype,
+          propRefIds: Array.isArray(node.metadata.propRefIds) ? node.metadata.propRefIds.filter((value): value is string => typeof value === 'string') : [],
+        })) {
+          diagnostics.push({
+            level: 'warning',
+            code: 'ugc_shot_missing_proof_surface_role',
+            message: `UGC shot "${node.key}" should define proofSurfaceRole when proof readability matters.`,
+            graphKey: graph.key,
+            nodeKey: node.key,
+          })
+        }
       }
 
       const executionPlan = node.metadata.executionPlan
@@ -1272,6 +1342,9 @@ export function validateGraph(
         : []
       const formatSubtype = typeof node.metadata.formatSubtype === 'string' ? node.metadata.formatSubtype : cinematicSettings.formatSubtype
       const contrastAxis = typeof node.metadata.contrastAxis === 'string' ? node.metadata.contrastAxis.trim() : ''
+      const creativeTreatment = typeof node.metadata.creativeTreatment === 'string' ? node.metadata.creativeTreatment.trim() : ''
+      const narrationMode = typeof node.metadata.narrationMode === 'string' ? node.metadata.narrationMode.trim() : ''
+      const backdropStrategy = typeof node.metadata.backdropStrategy === 'string' ? node.metadata.backdropStrategy.trim() : ''
       const outputVideoAssetKey = typeof node.metadata.outputVideoAssetKey === 'string' ? node.metadata.outputVideoAssetKey : null
       const outputStillAssetKey = typeof node.metadata.outputStillAssetKey === 'string' ? node.metadata.outputStillAssetKey : null
 
@@ -1308,6 +1381,20 @@ export function validateGraph(
           level: 'warning',
           code: 'ugc_contrast_take_missing_axis',
           message: `Contrast narrative take "${node.key}" should carry a contrastAxis for prompt assembly and review.`,
+          graphKey: graph.key,
+          nodeKey: node.key,
+        })
+      }
+      if (
+        (narrationMode === 'spoken_over_footage'
+          || creativeTreatment === 'narrator_over_backdrop'
+          || creativeTreatment === 'aesthetic_mismatch')
+        && !backdropStrategy
+      ) {
+        diagnostics.push({
+          level: 'warning',
+          code: 'cinematic_take_missing_backdrop_strategy',
+          message: `Cinematic take "${node.key}" uses a backdrop-led treatment but is missing a backdrop strategy.`,
           graphKey: graph.key,
           nodeKey: node.key,
         })
@@ -1683,6 +1770,99 @@ export function validateGraph(
             level: 'warning',
             code: 'ugc_shot_missing_target_emotion',
             message: `UGC shot "${shot.id}" should define its target emotion or viewer response for stronger short-form pacing.`,
+            graphKey: graph.key,
+            nodeKey,
+          })
+        }
+        if (!shot.creativeTreatment) {
+          diagnostics.push({
+            level: 'warning',
+            code: 'ugc_shot_missing_creative_treatment',
+            message: `UGC shot "${shot.id}" should define a creativeTreatment so the format engine is explicit.`,
+            graphKey: graph.key,
+            nodeKey,
+          })
+        }
+        if (!shot.hookFamily) {
+          diagnostics.push({
+            level: 'warning',
+            code: 'ugc_shot_missing_hook_family',
+            message: `UGC shot "${shot.id}" should define a hookFamily so the attention pattern is intentional.`,
+            graphKey: graph.key,
+            nodeKey,
+          })
+        }
+        if ((shot.narrationMode === 'spoken_over_footage' || shot.narrationMode === 'sparse_overlay') && !shot.backdropStrategy.trim()) {
+          diagnostics.push({
+            level: 'warning',
+            code: 'ugc_shot_missing_backdrop_strategy',
+            message: `UGC shot "${shot.id}" uses ${shot.narrationMode} but is missing a backdropStrategy.`,
+            graphKey: graph.key,
+            nodeKey,
+          })
+        }
+        if (
+          ['narrator_over_backdrop', 'contrast_split', 'aesthetic_mismatch', 'comedic_absurd_container'].includes(shot.creativeTreatment ?? '')
+          && !shot.backdropRole
+        ) {
+          diagnostics.push({
+            level: 'warning',
+            code: 'ugc_shot_missing_backdrop_role',
+            message: `UGC shot "${shot.id}" uses a backdrop-led treatment but is missing backdropRole metadata.`,
+            graphKey: graph.key,
+            nodeKey,
+          })
+        }
+        if (shot.variationGroupId.trim() && !shot.variationLabel.trim()) {
+          diagnostics.push({
+            level: 'warning',
+            code: 'ugc_shot_missing_variation_label',
+            message: `UGC shot "${shot.id}" belongs to a variation group but is missing a variationLabel.`,
+            graphKey: graph.key,
+            nodeKey,
+          })
+        }
+        if (!shot.directingPackage.dominantAction.trim()) {
+          diagnostics.push({
+            level: 'warning',
+            code: 'ugc_shot_missing_dominant_action',
+            message: `UGC shot "${shot.id}" should declare one dominant action in directingPackage.`,
+            graphKey: graph.key,
+            nodeKey,
+          })
+        }
+        if (!shot.directingPackage.primaryCameraMove.trim()) {
+          diagnostics.push({
+            level: 'warning',
+            code: 'ugc_shot_missing_primary_camera_move',
+            message: `UGC shot "${shot.id}" should declare one primary camera move in directingPackage.`,
+            graphKey: graph.key,
+            nodeKey,
+          })
+        }
+        if (shotHasMixedCameraIntent(shot.cameraMovement)) {
+          diagnostics.push({
+            level: 'warning',
+            code: 'ugc_shot_mixed_camera_intent',
+            message: `UGC shot "${shot.id}" mixes multiple camera intentions. Keep one primary move.`,
+            graphKey: graph.key,
+            nodeKey,
+          })
+        }
+        if (shot.referencePlan.requiredRoles.length === 0) {
+          diagnostics.push({
+            level: 'warning',
+            code: 'ugc_shot_missing_reference_roles',
+            message: `UGC shot "${shot.id}" should define required reference roles for prompt packing and continuity.`,
+            graphKey: graph.key,
+            nodeKey,
+          })
+        }
+        if ((hookRole === 'proof' || hookRole === 'cta' || isAdSubtype) && !shot.directingPackage.proofSurfaceRole.trim() && inferShotProofSurfaceRole(shot).trim().length > 0) {
+          diagnostics.push({
+            level: 'warning',
+            code: 'ugc_shot_missing_proof_surface_role',
+            message: `UGC shot "${shot.id}" should define proofSurfaceRole when proof readability matters.`,
             graphKey: graph.key,
             nodeKey,
           })

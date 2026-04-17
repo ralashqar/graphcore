@@ -2,14 +2,22 @@ import {
   coerceFormatSubtypeForPresetFamily,
 } from './cinematics.ts'
 import type {
+  CinematicBackdropRole,
+  CinematicCreativeTreatment,
   CinematicDominantTrigger,
   CinematicFormatSubtype,
   CinematicFormulaFamily,
+  CinematicHookFamily,
   CinematicHookRole,
+  CinematicNarrationMode,
   CinematicPresetFamily,
 } from './cinematics.ts'
 
 type UgcPresetFamily = Exclude<CinematicPresetFamily, 'story_movie_tv'>
+
+export type UgcCommunicationExpectation = 'required' | 'preferred' | 'optional' | 'forbidden'
+
+export type UgcCommunicationExpectationByRole = Partial<Record<CinematicHookRole, UgcCommunicationExpectation>>
 
 export type UgcPresetProfile = {
   presetFamily: UgcPresetFamily
@@ -35,8 +43,27 @@ export type UgcPresetProfile = {
   defaultContrastAxis: string
   preferredAspectRatio: '9:16'
   preferredClipSeconds: number
+  pacingContract: {
+    targetTotalDurationRangeSeconds: readonly [number, number]
+    targetShotCountRange: readonly [number, number]
+    idealShotDurationRangeSeconds: readonly [number, number]
+    roleDurationRangeSeconds: Partial<Record<CinematicHookRole, readonly [number, number]>>
+    proofShouldLandByShotIndex: number | null
+    maxActionBeatsPerShot: number
+    maxDialogueWordsPerShot: number
+  }
   pacingGuidance: string
   referenceStrategy: string
+  defaultCommunicationMode: CinematicNarrationMode | null
+  allowedCommunicationModes: CinematicNarrationMode[]
+  dialogueExpectationByRole: UgcCommunicationExpectationByRole
+  audioExpectationByRole: UgcCommunicationExpectationByRole
+  overlayExpectationByRole: UgcCommunicationExpectationByRole
+  defaultCreativeTreatment?: CinematicCreativeTreatment | null
+  defaultHookFamily?: CinematicHookFamily | null
+  defaultNarrationMode?: CinematicNarrationMode | null
+  defaultBackdropRole?: CinematicBackdropRole | null
+  defaultBackdropStrategy?: string
   requiresPersonaStyle: boolean
   requiresCreatorOrProductContinuity: boolean
   requiresProductOrProofContinuity: boolean
@@ -45,11 +72,434 @@ export type UgcPresetProfile = {
   promptKeywords: string[]
 }
 
+export type UgcCreativeProfile = {
+  creativeTreatment: CinematicCreativeTreatment | null
+  hookFamily: CinematicHookFamily | null
+  narrationMode: CinematicNarrationMode | null
+  backdropRole: CinematicBackdropRole | null
+  backdropStrategy: string
+}
+
+export type UgcVariationBlueprint = UgcCreativeProfile & {
+  id: string
+  label: string
+  isPrimary: boolean
+  proofBias: 'early' | 'mid'
+  ctaSoftness: 'soft' | 'direct'
+}
+
+export type UgcShotCommunicationContract = {
+  communicationMode: CinematicNarrationMode | null
+  allowedCommunicationModes: CinematicNarrationMode[]
+  dialogueExpectation: UgcCommunicationExpectation
+  audioExpectation: UgcCommunicationExpectation
+  overlayExpectation: UgcCommunicationExpectation
+  requiresSpokenDialogue: boolean
+  canUseVoiceover: boolean
+  canUseOverlay: boolean
+  canBeFullyVisual: boolean
+  minimumSignal: 'spoken_dialogue' | 'spoken_audio_or_dialogue' | 'overlay_or_visual_readability' | 'visible_action_or_proof'
+}
+
 const FAMILY_DEFAULT_SUBTYPE: Record<UgcPresetFamily, CinematicFormatSubtype> = {
   ugc_creator: 'creator_problem_solution',
   ugc_direct_response_ad: 'ad_problem_solution',
   ugc_faceless_format: 'faceless_demo',
 }
+
+const pacingContract = (
+  targetTotalDurationRangeSeconds: readonly [number, number],
+  targetShotCountRange: readonly [number, number],
+  idealShotDurationRangeSeconds: readonly [number, number],
+  roleDurationRangeSeconds: Partial<Record<CinematicHookRole, readonly [number, number]>>,
+  proofShouldLandByShotIndex: number | null,
+  maxActionBeatsPerShot: number,
+  maxDialogueWordsPerShot: number,
+) => ({
+  targetTotalDurationRangeSeconds,
+  targetShotCountRange,
+  idealShotDurationRangeSeconds,
+  roleDurationRangeSeconds,
+  proofShouldLandByShotIndex,
+  maxActionBeatsPerShot,
+  maxDialogueWordsPerShot,
+})
+
+const communicationExpectations = (
+  defaultCommunicationMode: CinematicNarrationMode,
+  allowedCommunicationModes: CinematicNarrationMode[],
+  dialogueExpectationByRole: UgcCommunicationExpectationByRole,
+  audioExpectationByRole: UgcCommunicationExpectationByRole,
+  overlayExpectationByRole: UgcCommunicationExpectationByRole,
+) => ({
+  defaultCommunicationMode,
+  allowedCommunicationModes,
+  dialogueExpectationByRole,
+  audioExpectationByRole,
+  overlayExpectationByRole,
+})
+
+const CREATOR_DIRECT_COMMUNICATION = communicationExpectations(
+  'spoken_to_camera',
+  ['spoken_to_camera', 'spoken_over_footage', 'sparse_overlay'],
+  {
+    hook: 'required',
+    setup: 'required',
+    proof: 'preferred',
+    payoff: 'optional',
+    cta: 'required',
+  },
+  {
+    hook: 'optional',
+    setup: 'optional',
+    proof: 'optional',
+    payoff: 'optional',
+    cta: 'optional',
+  },
+  {
+    hook: 'optional',
+    setup: 'optional',
+    proof: 'optional',
+    payoff: 'optional',
+    cta: 'optional',
+  },
+)
+
+const DIRECT_RESPONSE_NARRATED_COMMUNICATION = communicationExpectations(
+  'spoken_over_footage',
+  ['spoken_over_footage', 'spoken_to_camera', 'sparse_overlay'],
+  {
+    hook: 'optional',
+    setup: 'optional',
+    proof: 'optional',
+    payoff: 'optional',
+    cta: 'optional',
+  },
+  {
+    hook: 'preferred',
+    setup: 'preferred',
+    proof: 'preferred',
+    payoff: 'optional',
+    cta: 'preferred',
+  },
+  {
+    hook: 'optional',
+    setup: 'optional',
+    proof: 'preferred',
+    payoff: 'optional',
+    cta: 'preferred',
+  },
+)
+
+const FACELESS_PROOF_COMMUNICATION = communicationExpectations(
+  'sparse_overlay',
+  ['sparse_overlay', 'spoken_over_footage', 'visual_only'],
+  {
+    hook: 'optional',
+    setup: 'optional',
+    proof: 'optional',
+    payoff: 'optional',
+    cta: 'optional',
+  },
+  {
+    hook: 'optional',
+    setup: 'optional',
+    proof: 'preferred',
+    payoff: 'optional',
+    cta: 'optional',
+  },
+  {
+    hook: 'preferred',
+    setup: 'preferred',
+    proof: 'required',
+    payoff: 'preferred',
+    cta: 'preferred',
+  },
+)
+
+const FACELESS_EXPLAINER_COMMUNICATION = communicationExpectations(
+  'spoken_over_footage',
+  ['spoken_over_footage', 'sparse_overlay', 'visual_only'],
+  {
+    hook: 'optional',
+    setup: 'optional',
+    proof: 'optional',
+    payoff: 'optional',
+    cta: 'optional',
+  },
+  {
+    hook: 'preferred',
+    setup: 'preferred',
+    proof: 'preferred',
+    payoff: 'optional',
+    cta: 'optional',
+  },
+  {
+    hook: 'preferred',
+    setup: 'preferred',
+    proof: 'required',
+    payoff: 'preferred',
+    cta: 'optional',
+  },
+)
+
+const VISUAL_ONLY_PROCESS_COMMUNICATION = communicationExpectations(
+  'visual_only',
+  ['visual_only', 'sparse_overlay', 'spoken_over_footage'],
+  {
+    hook: 'forbidden',
+    setup: 'forbidden',
+    proof: 'forbidden',
+    payoff: 'forbidden',
+    cta: 'forbidden',
+  },
+  {
+    hook: 'optional',
+    setup: 'optional',
+    proof: 'optional',
+    payoff: 'optional',
+    cta: 'optional',
+  },
+  {
+    hook: 'preferred',
+    setup: 'preferred',
+    proof: 'preferred',
+    payoff: 'preferred',
+    cta: 'optional',
+  },
+)
+
+const CONTRAST_COMMUNICATION = communicationExpectations(
+  'sparse_overlay',
+  ['sparse_overlay', 'spoken_over_footage', 'visual_only'],
+  {
+    hook: 'optional',
+    setup: 'optional',
+    proof: 'optional',
+    payoff: 'optional',
+    cta: 'optional',
+  },
+  {
+    hook: 'optional',
+    setup: 'optional',
+    proof: 'optional',
+    payoff: 'optional',
+    cta: 'optional',
+  },
+  {
+    hook: 'required',
+    setup: 'preferred',
+    proof: 'required',
+    payoff: 'preferred',
+    cta: 'preferred',
+  },
+)
+
+const CREATOR_PACING = pacingContract(
+  [18, 30],
+  [4, 6],
+  [3, 6],
+  {
+    hook: [2, 4],
+    setup: [4, 6],
+    proof: [4, 6],
+    payoff: [3, 5],
+    cta: [2, 4],
+  },
+  3,
+  2,
+  32,
+)
+
+const CREATOR_VALIDATION_PACING = pacingContract(
+  [12, 22],
+  [3, 5],
+  [3, 5],
+  {
+    hook: [2, 4],
+    setup: [3, 5],
+    payoff: [3, 5],
+    cta: [2, 4],
+  },
+  null,
+  2,
+  28,
+)
+
+const SERIALIZED_CREATOR_PACING = pacingContract(
+  [22, 36],
+  [5, 6],
+  [3, 7],
+  {
+    hook: [2, 4],
+    setup: [4, 6],
+    proof: [4, 6],
+    payoff: [4, 6],
+    cta: [2, 4],
+  },
+  4,
+  2,
+  30,
+)
+
+const DIRECT_RESPONSE_PACING = pacingContract(
+  [16, 28],
+  [4, 6],
+  [3, 6],
+  {
+    hook: [2, 4],
+    setup: [3, 5],
+    proof: [4, 6],
+    payoff: [3, 5],
+    cta: [2, 4],
+  },
+  3,
+  2,
+  24,
+)
+
+const MECHANISM_PROOF_PACING = pacingContract(
+  [16, 26],
+  [4, 5],
+  [3, 6],
+  {
+    hook: [2, 4],
+    setup: [3, 4],
+    proof: [4, 6],
+    payoff: [3, 5],
+    cta: [2, 4],
+  },
+  2,
+  2,
+  22,
+)
+
+const BEFORE_AFTER_PACING = pacingContract(
+  [14, 24],
+  [4, 5],
+  [3, 5],
+  {
+    hook: [2, 3],
+    setup: [3, 4],
+    proof: [3, 5],
+    payoff: [3, 4],
+    cta: [2, 3],
+  },
+  3,
+  2,
+  18,
+)
+
+const COMPARISON_PACING = pacingContract(
+  [14, 24],
+  [4, 5],
+  [3, 5],
+  {
+    hook: [2, 3],
+    setup: [3, 4],
+    proof: [3, 5],
+    payoff: [3, 4],
+    cta: [2, 3],
+  },
+  3,
+  2,
+  18,
+)
+
+const TROJAN_HORSE_PACING = pacingContract(
+  [20, 32],
+  [5, 6],
+  [3, 6],
+  {
+    hook: [2, 4],
+    setup: [4, 6],
+    proof: [4, 6],
+    payoff: [4, 5],
+    cta: [2, 4],
+  },
+  4,
+  2,
+  26,
+)
+
+const FACELESS_DEMO_PACING = pacingContract(
+  [12, 22],
+  [3, 5],
+  [3, 5],
+  {
+    hook: [2, 3],
+    setup: [3, 4],
+    proof: [3, 5],
+    payoff: [3, 4],
+    cta: [2, 3],
+  },
+  2,
+  2,
+  14,
+)
+
+const FACELESS_EXPLAINER_PACING = pacingContract(
+  [14, 24],
+  [4, 5],
+  [3, 5],
+  {
+    hook: [2, 3],
+    setup: [3, 4],
+    proof: [3, 5],
+    payoff: [3, 4],
+    cta: [2, 3],
+  },
+  3,
+  2,
+  16,
+)
+
+const FACELESS_PROCESS_PACING = pacingContract(
+  [12, 22],
+  [4, 5],
+  [2, 5],
+  {
+    hook: [2, 3],
+    proof: [3, 5],
+    payoff: [3, 4],
+    cta: [2, 3],
+  },
+  3,
+  2,
+  12,
+)
+
+const FACELESS_SERIALIZED_PACING = pacingContract(
+  [18, 30],
+  [5, 6],
+  [3, 6],
+  {
+    hook: [2, 4],
+    setup: [3, 5],
+    proof: [4, 6],
+    payoff: [4, 5],
+    cta: [2, 4],
+  },
+  4,
+  2,
+  18,
+)
+
+const CONTRAST_PACING = pacingContract(
+  [20, 34],
+  [6, 8],
+  [2, 5],
+  {
+    hook: [2, 3],
+    setup: [2, 4],
+    proof: [2, 4],
+    payoff: [3, 4],
+    cta: [2, 3],
+  },
+  3,
+  2,
+  12,
+)
 
 export const UGC_PRESET_PROFILES: Record<CinematicFormatSubtype, UgcPresetProfile> = {
   creator_problem_solution: {
@@ -82,8 +532,10 @@ export const UGC_PRESET_PROFILES: Record<CinematicFormatSubtype, UgcPresetProfil
     defaultContrastAxis: '',
     preferredAspectRatio: '9:16',
     preferredClipSeconds: 5,
+    pacingContract: CREATOR_PACING,
     pacingGuidance: 'Hook fast, then move through pain to believable proof without sounding scripted.',
     referenceStrategy: 'Prioritize creator identity plus product continuity; storyboard support is optional.',
+    ...CREATOR_DIRECT_COMMUNICATION,
     requiresPersonaStyle: true,
     requiresCreatorOrProductContinuity: true,
     requiresProductOrProofContinuity: false,
@@ -121,8 +573,10 @@ export const UGC_PRESET_PROFILES: Record<CinematicFormatSubtype, UgcPresetProfil
     defaultContrastAxis: '',
     preferredAspectRatio: '9:16',
     preferredClipSeconds: 5,
+    pacingContract: CREATOR_PACING,
     pacingGuidance: 'Open with the behavior immediately and move quickly into the new interpretation.',
     referenceStrategy: 'Prioritize creator identity; product continuity is secondary unless the prompt is explicitly sponsored.',
+    ...CREATOR_DIRECT_COMMUNICATION,
     requiresPersonaStyle: true,
     requiresCreatorOrProductContinuity: true,
     requiresProductOrProofContinuity: false,
@@ -159,8 +613,10 @@ export const UGC_PRESET_PROFILES: Record<CinematicFormatSubtype, UgcPresetProfil
     defaultContrastAxis: '',
     preferredAspectRatio: '9:16',
     preferredClipSeconds: 5,
+    pacingContract: CREATOR_VALIDATION_PACING,
     pacingGuidance: 'Keep the language sparse and let the validating statement do most of the work.',
     referenceStrategy: 'Prioritize creator identity and intimacy; product continuity is optional.',
+    ...CREATOR_DIRECT_COMMUNICATION,
     requiresPersonaStyle: true,
     requiresCreatorOrProductContinuity: false,
     requiresProductOrProofContinuity: false,
@@ -198,8 +654,10 @@ export const UGC_PRESET_PROFILES: Record<CinematicFormatSubtype, UgcPresetProfil
     defaultContrastAxis: 'conflict vs resolution',
     preferredAspectRatio: '9:16',
     preferredClipSeconds: 5,
+    pacingContract: SERIALIZED_CREATOR_PACING,
     pacingGuidance: 'Establish conflict fast, hold tension through the middle, and let the product arrive as the twist or rescue.',
     referenceStrategy: 'Use creator identity plus recurring character or object continuity if the series format matters.',
+    ...CREATOR_DIRECT_COMMUNICATION,
     requiresPersonaStyle: true,
     requiresCreatorOrProductContinuity: true,
     requiresProductOrProofContinuity: false,
@@ -237,8 +695,10 @@ export const UGC_PRESET_PROFILES: Record<CinematicFormatSubtype, UgcPresetProfil
     defaultContrastAxis: '',
     preferredAspectRatio: '9:16',
     preferredClipSeconds: 5,
+    pacingContract: DIRECT_RESPONSE_PACING,
     pacingGuidance: 'Surface the pain immediately, show the product early, and land proof before the ending.',
     referenceStrategy: 'Prioritize product and proof continuity first, then creator continuity.',
+    ...DIRECT_RESPONSE_NARRATED_COMMUNICATION,
     requiresPersonaStyle: false,
     requiresCreatorOrProductContinuity: false,
     requiresProductOrProofContinuity: true,
@@ -275,8 +735,10 @@ export const UGC_PRESET_PROFILES: Record<CinematicFormatSubtype, UgcPresetProfil
     defaultContrastAxis: '',
     preferredAspectRatio: '9:16',
     preferredClipSeconds: 5,
+    pacingContract: MECHANISM_PROOF_PACING,
     pacingGuidance: 'Keep each beat visually legible and move from hidden cause to demonstration fast.',
     referenceStrategy: 'Product and proof refs are mandatory; creator refs are optional.',
+    ...DIRECT_RESPONSE_NARRATED_COMMUNICATION,
     requiresPersonaStyle: false,
     requiresCreatorOrProductContinuity: false,
     requiresProductOrProofContinuity: true,
@@ -314,8 +776,10 @@ export const UGC_PRESET_PROFILES: Record<CinematicFormatSubtype, UgcPresetProfil
     defaultContrastAxis: 'before vs after',
     preferredAspectRatio: '9:16',
     preferredClipSeconds: 5,
+    pacingContract: BEFORE_AFTER_PACING,
     pacingGuidance: 'Do not over-explain; let the contrast do the persuasion.',
     referenceStrategy: 'Proof refs and comparison states matter more than persona.',
+    ...CONTRAST_COMMUNICATION,
     requiresPersonaStyle: false,
     requiresCreatorOrProductContinuity: false,
     requiresProductOrProofContinuity: true,
@@ -353,8 +817,10 @@ export const UGC_PRESET_PROFILES: Record<CinematicFormatSubtype, UgcPresetProfil
     defaultContrastAxis: 'option A vs option B',
     preferredAspectRatio: '9:16',
     preferredClipSeconds: 5,
+    pacingContract: COMPARISON_PACING,
     pacingGuidance: 'Keep each beat comparison-led and avoid repeating the same evidence twice.',
     referenceStrategy: 'Product, competitor/comparison, and proof refs should stay readable through the sequence.',
+    ...CONTRAST_COMMUNICATION,
     requiresPersonaStyle: false,
     requiresCreatorOrProductContinuity: false,
     requiresProductOrProofContinuity: true,
@@ -392,8 +858,10 @@ export const UGC_PRESET_PROFILES: Record<CinematicFormatSubtype, UgcPresetProfil
     defaultContrastAxis: 'suffering vs redemption',
     preferredAspectRatio: '9:16',
     preferredClipSeconds: 5,
+    pacingContract: TROJAN_HORSE_PACING,
     pacingGuidance: 'Use setup, betrayal, suffering, reveal, and redemption. Delay the product until the twist, but not until after the ending.',
     referenceStrategy: 'Use product and proof continuity plus recurring story actors or social objects when the narrative repeats across a series.',
+    ...DIRECT_RESPONSE_NARRATED_COMMUNICATION,
     requiresPersonaStyle: false,
     requiresCreatorOrProductContinuity: false,
     requiresProductOrProofContinuity: true,
@@ -430,8 +898,10 @@ export const UGC_PRESET_PROFILES: Record<CinematicFormatSubtype, UgcPresetProfil
     defaultContrastAxis: '',
     preferredAspectRatio: '9:16',
     preferredClipSeconds: 5,
+    pacingContract: FACELESS_DEMO_PACING,
     pacingGuidance: 'Keep the object or screen as the hero and avoid unnecessary exposition.',
     referenceStrategy: 'Product, screen, and proof refs are primary; faces are optional.',
+    ...FACELESS_PROOF_COMMUNICATION,
     requiresPersonaStyle: false,
     requiresCreatorOrProductContinuity: false,
     requiresProductOrProofContinuity: true,
@@ -468,8 +938,10 @@ export const UGC_PRESET_PROFILES: Record<CinematicFormatSubtype, UgcPresetProfil
     defaultContrastAxis: '',
     preferredAspectRatio: '9:16',
     preferredClipSeconds: 5,
+    pacingContract: FACELESS_EXPLAINER_PACING,
     pacingGuidance: 'Move quickly from the mistaken assumption to the visible correction.',
     referenceStrategy: 'Objects, screens, and proof states matter more than people.',
+    ...FACELESS_EXPLAINER_COMMUNICATION,
     requiresPersonaStyle: false,
     requiresCreatorOrProductContinuity: false,
     requiresProductOrProofContinuity: true,
@@ -506,8 +978,10 @@ export const UGC_PRESET_PROFILES: Record<CinematicFormatSubtype, UgcPresetProfil
     defaultContrastAxis: '',
     preferredAspectRatio: '9:16',
     preferredClipSeconds: 5,
+    pacingContract: FACELESS_PROCESS_PACING,
     pacingGuidance: 'Each beat should advance the process or reveal, not linger on one stage.',
     referenceStrategy: 'Use object, process, and result refs; faces are usually unnecessary.',
+    ...VISUAL_ONLY_PROCESS_COMMUNICATION,
     requiresPersonaStyle: false,
     requiresCreatorOrProductContinuity: false,
     requiresProductOrProofContinuity: true,
@@ -545,8 +1019,10 @@ export const UGC_PRESET_PROFILES: Record<CinematicFormatSubtype, UgcPresetProfil
     defaultContrastAxis: 'chaos vs restored order',
     preferredAspectRatio: '9:16',
     preferredClipSeconds: 5,
+    pacingContract: FACELESS_SERIALIZED_PACING,
     pacingGuidance: 'Use serious conflict inside unserious packaging, keep the beats visual, and make the product the visible answer.',
     referenceStrategy: 'Use recurring non-human or object-character continuity, plus storyboard support when the serialized sequence matters.',
+    ...FACELESS_PROOF_COMMUNICATION,
     requiresPersonaStyle: false,
     requiresCreatorOrProductContinuity: false,
     requiresProductOrProofContinuity: true,
@@ -584,8 +1060,10 @@ export const UGC_PRESET_PROFILES: Record<CinematicFormatSubtype, UgcPresetProfil
     defaultContrastAxis: 'winner vs loser',
     preferredAspectRatio: '9:16',
     preferredClipSeconds: 4,
+    pacingContract: CONTRAST_PACING,
     pacingGuidance: 'Use short escalating beats, keep most shots visual, and land the clearest winner frame at the end.',
     referenceStrategy: 'Storyboard and comparison support matter alongside proof and continuity refs.',
+    ...CONTRAST_COMMUNICATION,
     requiresPersonaStyle: false,
     requiresCreatorOrProductContinuity: false,
     requiresProductOrProofContinuity: true,
@@ -629,6 +1107,470 @@ export function getUgcPresetProfile(
       ? FAMILY_DEFAULT_SUBTYPE[presetFamily]
       : null
   return fallbackSubtype ? UGC_PRESET_PROFILES[fallbackSubtype] : null
+}
+
+function midpoint(range: readonly [number, number]) {
+  return Math.round((range[0] + range[1]) / 2)
+}
+
+function inferDefaultCreativeTreatment(formatSubtype: CinematicFormatSubtype | null | undefined): CinematicCreativeTreatment | null {
+  switch (formatSubtype) {
+    case 'creator_problem_solution':
+    case 'creator_reframe':
+    case 'creator_validation':
+    case 'creator_serialized_drama':
+      return 'creator_direct_to_camera'
+    case 'ad_problem_solution':
+    case 'ad_mechanism_proof':
+    case 'faceless_explainer':
+      return 'narrator_over_backdrop'
+    case 'ad_before_after':
+    case 'ad_comparison':
+    case 'contrast_narrative':
+      return 'contrast_split'
+    case 'ad_trojan_horse_drama':
+    case 'faceless_serialized_drama':
+      return 'comedic_absurd_container'
+    case 'faceless_demo':
+    case 'faceless_process':
+      return 'faceless_proof_demo'
+    default:
+      return null
+  }
+}
+
+function inferDefaultHookFamily(formatSubtype: CinematicFormatSubtype | null | undefined): CinematicHookFamily | null {
+  switch (formatSubtype) {
+    case 'creator_problem_solution':
+    case 'creator_validation':
+    case 'ad_problem_solution':
+      return 'sharp_pain_confession'
+    case 'creator_reframe':
+    case 'ad_mechanism_proof':
+    case 'faceless_demo':
+      return 'wrong_belief_interrupt'
+    case 'ad_before_after':
+    case 'ad_comparison':
+    case 'contrast_narrative':
+      return 'status_or_before_after_contrast'
+    case 'creator_serialized_drama':
+    case 'ad_trojan_horse_drama':
+    case 'faceless_serialized_drama':
+      return 'social_drama_open_loop'
+    case 'faceless_process':
+      return 'odd_visual_plus_serious_narration'
+    case 'faceless_explainer':
+      return 'danger_reframe'
+    default:
+      return null
+  }
+}
+
+function inferDefaultNarrationMode(formatSubtype: CinematicFormatSubtype | null | undefined): CinematicNarrationMode | null {
+  switch (formatSubtype) {
+    case 'creator_problem_solution':
+    case 'creator_reframe':
+    case 'creator_validation':
+    case 'creator_serialized_drama':
+      return 'spoken_to_camera'
+    case 'ad_problem_solution':
+    case 'ad_mechanism_proof':
+    case 'ad_trojan_horse_drama':
+    case 'faceless_explainer':
+    case 'faceless_serialized_drama':
+      return 'spoken_over_footage'
+    case 'ad_before_after':
+    case 'ad_comparison':
+    case 'contrast_narrative':
+    case 'faceless_demo':
+      return 'sparse_overlay'
+    case 'faceless_process':
+      return 'visual_only'
+    default:
+      return null
+  }
+}
+
+function inferDefaultBackdropRole(input: {
+  formatSubtype: CinematicFormatSubtype | null | undefined
+  creativeTreatment: CinematicCreativeTreatment | null
+}): CinematicBackdropRole | null {
+  switch (input.creativeTreatment) {
+    case 'narrator_over_backdrop':
+      return 'engagement_backdrop'
+    case 'contrast_split':
+      return 'contrast_backdrop'
+    case 'aesthetic_mismatch':
+      return 'aesthetic_backdrop'
+    case 'comedic_absurd_container':
+      return 'comedic_backdrop'
+    case 'faceless_proof_demo':
+      return 'proof_backdrop'
+    default:
+      return null
+  }
+}
+
+function inferDefaultBackdropStrategy(input: {
+  formatSubtype: CinematicFormatSubtype | null | undefined
+  creativeTreatment: CinematicCreativeTreatment | null
+}): string {
+  switch (input.creativeTreatment) {
+    case 'creator_direct_to_camera':
+      return 'Use a native lived-in backdrop that supports intimacy without competing with the creator.'
+    case 'narrator_over_backdrop':
+      return 'Use visually engaging B-roll or backdrop footage that earns the stop-scroll while narration advances the argument.'
+    case 'faceless_proof_demo':
+      return 'Keep the screen, object, or process as the hero and make every proof surface readable.'
+    case 'contrast_split':
+      return 'Use split-screen or alternating winner-vs-loser framing so the contrast is legible in frame one.'
+    case 'aesthetic_mismatch':
+      return 'Pair beautiful, satisfying, or calm footage with sharper narration before interrupting with concrete proof.'
+    case 'comedic_absurd_container':
+      return 'Use funny or absurd footage as the attention mechanism, then let the product resolve the real underlying problem.'
+    default:
+      return ''
+  }
+}
+
+function getProfileCreativeDefaults(profile: UgcPresetProfile | null | undefined): UgcCreativeProfile {
+  const creativeTreatment = profile?.defaultCreativeTreatment ?? inferDefaultCreativeTreatment(profile?.formatSubtype)
+  const hookFamily = profile?.defaultHookFamily ?? inferDefaultHookFamily(profile?.formatSubtype)
+  const narrationMode = profile?.defaultNarrationMode ?? profile?.defaultCommunicationMode ?? inferDefaultNarrationMode(profile?.formatSubtype)
+  const backdropRole = profile?.defaultBackdropRole ?? inferDefaultBackdropRole({
+    formatSubtype: profile?.formatSubtype,
+    creativeTreatment,
+  })
+  const backdropStrategy = profile?.defaultBackdropStrategy ?? inferDefaultBackdropStrategy({
+    formatSubtype: profile?.formatSubtype,
+    creativeTreatment,
+  })
+
+  return {
+    creativeTreatment,
+    hookFamily,
+    narrationMode,
+    backdropRole,
+    backdropStrategy,
+  }
+}
+
+function resolveExpectationForRole(
+  expectations: UgcCommunicationExpectationByRole,
+  hookRole: CinematicHookRole | null | undefined,
+  fallback: UgcCommunicationExpectation,
+) {
+  if (hookRole && expectations[hookRole]) return expectations[hookRole] as UgcCommunicationExpectation
+  if (expectations.setup) return expectations.setup as UgcCommunicationExpectation
+  return fallback
+}
+
+export function resolveUgcShotCommunicationContract(input: {
+  formatSubtype: CinematicFormatSubtype | null | undefined
+  presetFamily?: CinematicPresetFamily | null
+  creativeTreatment?: CinematicCreativeTreatment | null
+  narrationMode?: CinematicNarrationMode | null
+  hookRole?: CinematicHookRole | null
+}): UgcShotCommunicationContract {
+  const profile = getUgcPresetProfile(input.formatSubtype, input.presetFamily)
+  const communicationMode =
+    input.narrationMode
+    ?? profile?.defaultCommunicationMode
+    ?? profile?.defaultNarrationMode
+    ?? inferDefaultNarrationMode(input.formatSubtype)
+    ?? null
+
+  const creativeTreatment =
+    input.creativeTreatment
+    ?? profile?.defaultCreativeTreatment
+    ?? inferDefaultCreativeTreatment(input.formatSubtype)
+    ?? null
+
+  const profileAllowedModes = profile?.allowedCommunicationModes ?? (communicationMode ? [communicationMode] : [])
+  const allowedCommunicationModes = Array.from(new Set(
+    communicationMode ? [communicationMode, ...profileAllowedModes] : profileAllowedModes,
+  ))
+
+  let dialogueExpectation = resolveExpectationForRole(profile?.dialogueExpectationByRole ?? {}, input.hookRole, 'optional')
+  let audioExpectation = resolveExpectationForRole(profile?.audioExpectationByRole ?? {}, input.hookRole, 'optional')
+  let overlayExpectation = resolveExpectationForRole(profile?.overlayExpectationByRole ?? {}, input.hookRole, 'optional')
+
+  if (communicationMode === 'spoken_to_camera') {
+    dialogueExpectation = dialogueExpectation === 'forbidden' ? 'required' : (dialogueExpectation === 'optional' ? 'required' : dialogueExpectation)
+    audioExpectation = audioExpectation === 'forbidden' ? 'optional' : audioExpectation
+  } else if (communicationMode === 'spoken_over_footage') {
+    dialogueExpectation = dialogueExpectation === 'required' ? 'optional' : dialogueExpectation
+    audioExpectation = audioExpectation === 'optional' ? 'preferred' : (audioExpectation === 'forbidden' ? 'preferred' : audioExpectation)
+  } else if (communicationMode === 'sparse_overlay') {
+    dialogueExpectation = dialogueExpectation === 'required' ? 'optional' : dialogueExpectation
+    overlayExpectation = overlayExpectation === 'optional' ? 'preferred' : (overlayExpectation === 'forbidden' ? 'preferred' : overlayExpectation)
+  } else if (communicationMode === 'visual_only') {
+    dialogueExpectation = 'forbidden'
+    overlayExpectation = overlayExpectation === 'forbidden' ? 'optional' : overlayExpectation
+  }
+
+  if (creativeTreatment === 'narrator_over_backdrop' || creativeTreatment === 'aesthetic_mismatch') {
+    dialogueExpectation = dialogueExpectation === 'required' ? 'optional' : dialogueExpectation
+    audioExpectation = audioExpectation === 'optional' ? 'preferred' : audioExpectation
+  } else if (creativeTreatment === 'contrast_split') {
+    dialogueExpectation = dialogueExpectation === 'required' ? 'optional' : dialogueExpectation
+    overlayExpectation = overlayExpectation === 'optional' ? 'preferred' : overlayExpectation
+  } else if (creativeTreatment === 'faceless_proof_demo') {
+    dialogueExpectation = dialogueExpectation === 'required' ? 'optional' : dialogueExpectation
+    overlayExpectation = overlayExpectation === 'optional' ? 'preferred' : overlayExpectation
+  }
+
+  const requiresSpokenDialogue = communicationMode === 'spoken_to_camera' && dialogueExpectation === 'required'
+  const canUseVoiceover = communicationMode === 'spoken_over_footage'
+  const canUseOverlay = communicationMode === 'sparse_overlay' || overlayExpectation === 'preferred' || overlayExpectation === 'required'
+  const canBeFullyVisual = communicationMode === 'visual_only'
+
+  let minimumSignal: UgcShotCommunicationContract['minimumSignal'] = 'visible_action_or_proof'
+  if (requiresSpokenDialogue) {
+    minimumSignal = 'spoken_dialogue'
+  } else if (canUseVoiceover || audioExpectation === 'required' || audioExpectation === 'preferred') {
+    minimumSignal = 'spoken_audio_or_dialogue'
+  } else if (canUseOverlay || overlayExpectation === 'required' || overlayExpectation === 'preferred') {
+    minimumSignal = 'overlay_or_visual_readability'
+  }
+
+  return {
+    communicationMode,
+    allowedCommunicationModes,
+    dialogueExpectation,
+    audioExpectation,
+    overlayExpectation,
+    requiresSpokenDialogue,
+    canUseVoiceover,
+    canUseOverlay,
+    canBeFullyVisual,
+    minimumSignal,
+  }
+}
+
+export function getUgcDurationRangeForShot(input: {
+  formatSubtype: CinematicFormatSubtype | null | undefined
+  presetFamily?: CinematicPresetFamily | null
+  hookRole?: CinematicHookRole | null
+}) {
+  const profile = getUgcPresetProfile(input.formatSubtype, input.presetFamily)
+  if (!profile) return null
+  return profile.pacingContract.roleDurationRangeSeconds[input.hookRole ?? 'setup']
+    ?? profile.pacingContract.idealShotDurationRangeSeconds
+}
+
+export function resolveUgcCreativeProfile(input: {
+  prompt?: string | null
+  formatSubtype: CinematicFormatSubtype | null | undefined
+  presetFamily?: CinematicPresetFamily | null
+}) {
+  const profile = getUgcPresetProfile(input.formatSubtype, input.presetFamily)
+  const defaults = getProfileCreativeDefaults(profile)
+  const prompt = normalizePrompt(input.prompt ?? '')
+  if (!prompt) return defaults
+
+  const hasNarratorBackdropCue = /\b(narrat(or|ion)|voice ?over|voiceover|spoken over|over footage|broll|b roll|b-roll|backdrop|montage|background footage)\b/.test(prompt)
+  const hasContrastCue = /\b(split screen|split-screen|before after|before and after|versus| vs |comparison|winner|loser|rich vs poor|poor vs rich)\b/.test(prompt)
+  const hasAbsurdCue = /\b(funny|comedic|absurd|unhinged|fruit drama|soap opera|personified|cartoon drama|gossip container)\b/.test(prompt)
+  const hasAestheticCue = /\b(mesmerizing|satisfying|beautiful|calm footage|aesthetic|pretty footage|soothing|odd visual)\b/.test(prompt)
+  const hasFacelessCue = /\b(faceless|screen recording|screen-led|process|workflow|demo loop|podcast)\b/.test(prompt)
+
+  if (hasContrastCue) {
+    return {
+      creativeTreatment: 'contrast_split',
+      hookFamily: 'status_or_before_after_contrast',
+      narrationMode: defaults.narrationMode === 'spoken_to_camera' ? 'sparse_overlay' : (defaults.narrationMode ?? 'sparse_overlay'),
+      backdropRole: 'contrast_backdrop',
+      backdropStrategy: 'Use a two-pole contrast with a clear winner-vs-loser or before-vs-after frame one.',
+    } satisfies UgcCreativeProfile
+  }
+
+  if (hasAbsurdCue) {
+    return {
+      creativeTreatment: 'comedic_absurd_container',
+      hookFamily: 'social_drama_open_loop',
+      narrationMode: hasNarratorBackdropCue ? 'spoken_over_footage' : (defaults.narrationMode ?? 'spoken_over_footage'),
+      backdropRole: 'comedic_backdrop',
+      backdropStrategy: 'Use absurd or funny footage that makes the viewer stop, then pivot into real product proof.',
+    } satisfies UgcCreativeProfile
+  }
+
+  if (hasAestheticCue && hasNarratorBackdropCue) {
+    return {
+      creativeTreatment: 'aesthetic_mismatch',
+      hookFamily: 'odd_visual_plus_serious_narration',
+      narrationMode: 'spoken_over_footage',
+      backdropRole: 'aesthetic_backdrop',
+      backdropStrategy: 'Use calm, beautiful, or mesmerizing backdrop footage while the narration carries a sharper problem or reframe.',
+    } satisfies UgcCreativeProfile
+  }
+
+  if (hasNarratorBackdropCue) {
+    return {
+      creativeTreatment: 'narrator_over_backdrop',
+      hookFamily: defaults.hookFamily ?? 'sharp_pain_confession',
+      narrationMode: 'spoken_over_footage',
+      backdropRole: 'engagement_backdrop',
+      backdropStrategy: 'Use backdrop footage with a real engagement function while concise narration advances the argument and proof interrupts before the close.',
+    } satisfies UgcCreativeProfile
+  }
+
+  if (hasFacelessCue) {
+    return {
+      creativeTreatment: 'faceless_proof_demo',
+      hookFamily: defaults.hookFamily ?? 'wrong_belief_interrupt',
+      narrationMode: defaults.narrationMode ?? 'sparse_overlay',
+      backdropRole: 'proof_backdrop',
+      backdropStrategy: 'Keep the object, app, or process as the visual hero and make the proof surface legible throughout.',
+    } satisfies UgcCreativeProfile
+  }
+
+  return defaults
+}
+
+export function getUgcVariationBlueprints(input: {
+  prompt: string
+  presetFamily: CinematicPresetFamily
+  formatSubtype: CinematicFormatSubtype | null | undefined
+  requestedCount?: number | null
+}) {
+  if (input.presetFamily === 'story_movie_tv') return [] as UgcVariationBlueprint[]
+
+  const primary = resolveUgcCreativeProfile(input)
+  const baseCtaSoftness = input.presetFamily === 'ugc_creator' ? 'soft' : 'direct'
+  const defaults = getProfileCreativeDefaults(getUgcPresetProfile(input.formatSubtype, input.presetFamily))
+  const blueprints: UgcVariationBlueprint[] = [
+    {
+      id: 'primary',
+      label: 'Primary Recommended',
+      isPrimary: true,
+      proofBias: input.presetFamily === 'ugc_direct_response_ad' ? 'early' : 'mid',
+      ctaSoftness: baseCtaSoftness,
+      ...primary,
+    },
+  ]
+
+  if (input.presetFamily === 'ugc_creator') {
+    blueprints.push(
+      {
+        id: 'narrator_reframe',
+        label: 'Narrator Backdrop',
+        isPrimary: false,
+        proofBias: 'mid',
+        ctaSoftness: 'soft',
+        creativeTreatment: 'narrator_over_backdrop',
+        hookFamily: primary.hookFamily ?? defaults.hookFamily ?? 'wrong_belief_interrupt',
+        narrationMode: 'spoken_over_footage',
+        backdropRole: 'engagement_backdrop',
+        backdropStrategy: 'Use calm or visually interesting backdrop footage while the narration reframes the problem, then interrupt with visible proof.',
+      },
+      {
+        id: 'proof_forward',
+        label: 'Proof-Forward Demo',
+        isPrimary: false,
+        proofBias: 'early',
+        ctaSoftness: 'soft',
+        creativeTreatment: 'faceless_proof_demo',
+        hookFamily: 'wrong_belief_interrupt',
+        narrationMode: 'spoken_over_footage',
+        backdropRole: 'proof_backdrop',
+        backdropStrategy: 'Open on screen or product proof earlier while keeping the creator voice concise and emotionally grounded.',
+      },
+    )
+  } else if (input.presetFamily === 'ugc_direct_response_ad') {
+    blueprints.push(
+      {
+        id: 'creator_angle',
+        label: 'Creator Testimonial',
+        isPrimary: false,
+        proofBias: 'mid',
+        ctaSoftness: 'soft',
+        creativeTreatment: 'creator_direct_to_camera',
+        hookFamily: defaults.hookFamily ?? 'sharp_pain_confession',
+        narrationMode: 'spoken_to_camera',
+        backdropRole: null,
+        backdropStrategy: 'Use a creator-native talking-head container with concise pain, proof, and CTA beats.',
+      },
+      {
+        id: 'proof_demo',
+        label: 'Screen / Proof Demo',
+        isPrimary: false,
+        proofBias: 'early',
+        ctaSoftness: 'direct',
+        creativeTreatment: 'faceless_proof_demo',
+        hookFamily: 'wrong_belief_interrupt',
+        narrationMode: 'spoken_over_footage',
+        backdropRole: 'proof_backdrop',
+        backdropStrategy: 'Make the product or app the visual hero and land visible proof before the final CTA beat.',
+      },
+    )
+  } else {
+    blueprints.push(
+      {
+        id: 'backdrop_angle',
+        label: 'Narrated Backdrop',
+        isPrimary: false,
+        proofBias: 'mid',
+        ctaSoftness: 'direct',
+        creativeTreatment: 'narrator_over_backdrop',
+        hookFamily: defaults.hookFamily ?? 'odd_visual_plus_serious_narration',
+        narrationMode: 'spoken_over_footage',
+        backdropRole: 'engagement_backdrop',
+        backdropStrategy: 'Use engaging object or process footage with concise narration that explains the problem and interrupts with proof.',
+      },
+      {
+        id: 'contrast_angle',
+        label: 'Contrast Split',
+        isPrimary: false,
+        proofBias: 'early',
+        ctaSoftness: 'direct',
+        creativeTreatment: 'contrast_split',
+        hookFamily: 'status_or_before_after_contrast',
+        narrationMode: 'sparse_overlay',
+        backdropRole: 'contrast_backdrop',
+        backdropStrategy: 'Use a comparison-led or split-frame treatment so the winner is obvious in the first seconds.',
+      },
+    )
+  }
+
+  const requestedCount = Math.max(1, Math.min(8, Math.round(input.requestedCount ?? 3)))
+  return blueprints.slice(0, requestedCount)
+}
+
+export function getUgcDefaultShotDurationSeconds(input: {
+  formatSubtype: CinematicFormatSubtype | null | undefined
+  presetFamily?: CinematicPresetFamily | null
+  hookRole?: CinematicHookRole | null
+}) {
+  const range = getUgcDurationRangeForShot(input)
+  return range ? midpoint(range) : null
+}
+
+export function normalizeUgcPlannedShotDuration(input: {
+  formatSubtype: CinematicFormatSubtype | null | undefined
+  presetFamily?: CinematicPresetFamily | null
+  hookRole?: CinematicHookRole | null
+  durationSeconds: number | null | undefined
+}) {
+  if (typeof input.durationSeconds !== 'number' || !Number.isFinite(input.durationSeconds)) return null
+  const range = getUgcDurationRangeForShot(input)
+  const rounded = Math.round(input.durationSeconds)
+  if (!range) return Math.min(15, Math.max(1, rounded))
+  return Math.min(15, Math.max(1, Math.min(range[1], Math.max(range[0], rounded))))
+}
+
+export function getUgcTargetTotalDurationRange(
+  formatSubtype: CinematicFormatSubtype | null | undefined,
+  presetFamily?: CinematicPresetFamily | null,
+) {
+  return getUgcPresetProfile(formatSubtype, presetFamily)?.pacingContract.targetTotalDurationRangeSeconds ?? null
+}
+
+export function getUgcTargetShotCountRange(
+  formatSubtype: CinematicFormatSubtype | null | undefined,
+  presetFamily?: CinematicPresetFamily | null,
+) {
+  return getUgcPresetProfile(formatSubtype, presetFamily)?.pacingContract.targetShotCountRange ?? null
 }
 
 export function inferCinematicPresetFamilyFromPromptText(prompt: string): CinematicPresetFamily {

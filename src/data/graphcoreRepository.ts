@@ -40,12 +40,14 @@ import {
   worldBuildAuthorCinematicRequestSchema,
   worldBuildPlanResponseSchema,
   worldBuildDeletePlaceholderResponseSchema,
+  worldBuildRepairCinematicRequestSchema,
   worldBuildStatusResponseSchema,
   type WorldBuildAuthorCinematicRequest,
   type WorldBuildPlanRequest,
   type WorldBuildPlanResponse,
   type WorldBuildDeletePlaceholderRequest,
   type WorldBuildDeletePlaceholderResponse,
+  type WorldBuildRepairCinematicRequest,
   type WorldBuildStartRequest,
   type WorldBuildStatusResponse,
 } from '../domain/worldBuild'
@@ -2593,6 +2595,18 @@ export async function authorCinematicScript(request: WorldBuildAuthorCinematicRe
 
   const payload = worldBuildAuthorCinematicRequestSchema.parse(request)
   const response = await invokeAuthedFunctionDirect('author-cinematic-script', payload, session)
+  return worldBuildStatusResponseSchema.parse(response)
+}
+
+export async function repairCinematicScript(request: WorldBuildRepairCinematicRequest): Promise<WorldBuildStatusResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before repairing a cinematic script.')
+
+  if (!hasLiveSnapshotIds(request.snapshot)) {
+    throw new Error('Sign in and load a live GraphCore draft before repairing a cinematic script.')
+  }
+
+  const payload = worldBuildRepairCinematicRequestSchema.parse(request)
+  const response = await invokeAuthedFunctionDirect('repair-cinematic-script', payload, session)
   return worldBuildStatusResponseSchema.parse(response)
 }
 

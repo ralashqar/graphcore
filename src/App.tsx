@@ -501,6 +501,25 @@ function buildCinematicRunErrorMessage(status: CinematicRunStatusResponse) {
   return 'Cinematic run completed without producing the expected output.'
 }
 
+const MAX_AUTOMATIC_CINEMATIC_REPAIR_ATTEMPTS = 1
+
+function readWorldBuildJobResultContext(job: WorldBuildBatch['jobs'][number] | null | undefined) {
+  return job?.resultContext && typeof job.resultContext === 'object'
+    ? job.resultContext as Record<string, unknown>
+    : null
+}
+
+function readWorldBuildJobPhase(job: WorldBuildBatch['jobs'][number] | null | undefined) {
+  const resultContext = readWorldBuildJobResultContext(job)
+  return typeof resultContext?.phase === 'string' ? resultContext.phase : null
+}
+
+function readWorldBuildJobNumericResult(job: WorldBuildBatch['jobs'][number] | null | undefined, key: string) {
+  const resultContext = readWorldBuildJobResultContext(job)
+  const rawValue = resultContext?.[key]
+  return typeof rawValue === 'number' && Number.isFinite(rawValue) ? rawValue : null
+}
+
 function buildLocalMeshGenerationFailureStatus(
   job: ProjectSnapshot['meshGenerationJobs'][number],
   errorMessage: string,
@@ -1047,10 +1066,13 @@ export default function App() {
       try {
         let workingSnapshot = currentSnapshot
         for (const batch of activeBatches) {
+          const cinematicJob = batch.jobs.find((job) => job.kind === 'cinematic_graph') ?? null
           console.info('[GraphCore] polling world build batch.', {
             batchId: batch.id,
             plannerMode: batch.plannerMode,
             status: batch.status,
+            cinematicJobStatus: cinematicJob?.status ?? null,
+            cinematicPhase: readWorldBuildJobPhase(cinematicJob),
           })
           const status = await workspaceService.pollWorldBuild({
             batchId: batch.id,
@@ -1564,11 +1586,8 @@ export default function App() {
     const cinematicJob = batchStatus.batch.jobs.find((job) => job.kind === 'cinematic_graph') ?? null
     if (!cinematicJob) return workingSnapshot
 
-    const phase =
-      cinematicJob.resultContext && typeof cinematicJob.resultContext === 'object' && typeof cinematicJob.resultContext.phase === 'string'
-        ? cinematicJob.resultContext.phase
-        : null
-    if (phase !== 'ready_for_authorship' && phase !== 'authored') return workingSnapshot
+    const phase = readWorldBuildJobPhase(cinematicJob)
+    if (phase !== 'ready_for_authorship' && phase !== 'needs_repair' && phase !== 'authored') return workingSnapshot
 
     const graphKey = typeof cinematicJob.targetKeys?.graphKey === 'string' ? cinematicJob.targetKeys.graphKey : null
     if (!graphKey) return workingSnapshot
@@ -1596,13 +1615,34 @@ export default function App() {
         nextBatchStatus = authoredStatus
       }
 
-      const latestBatch = nextBatchStatus.batch
-      const latestCinematicJob = latestBatch.jobs.find((job) => job.kind === 'cinematic_graph') ?? null
-      const latestPhase =
-        latestCinematicJob?.resultContext && typeof latestCinematicJob.resultContext === 'object' && typeof latestCinematicJob.resultContext.phase === 'string'
-          ? latestCinematicJob.resultContext.phase
-          : null
-      if (!latestCinematicJob || latestPhase === 'needs_repair') {
+      let latestBatch = nextBatchStatus.batch
+      let latestCinematicJob = latestBatch.jobs.find((job) => job.kind === 'cinematic_graph') ?? null
+      let latestPhase = readWorldBuildJobPhase(latestCinematicJob)
+
+      if (latestCinematicJob && latestPhase === 'needs_repair' && latestCinematicJob.status !== 'failed') {
+        const repairAttempts = readWorldBuildJobNumericResult(latestCinematicJob, 'repairAttempts') ?? 0
+        const maxRepairAttempts = readWorldBuildJobNumericResult(latestCinematicJob, 'maxRepairAttempts') ?? MAX_AUTOMATIC_CINEMATIC_REPAIR_ATTEMPTS
+        if (repairAttempts < maxRepairAttempts) {
+          const repairedStatus = await workspaceService.repairCinematicScript({
+            batchId: batchStatus.batch.id,
+            snapshot: nextSnapshot,
+            model: promptModel,
+            shotIds: [],
+            failureCategories: [],
+            fieldScopes: [],
+          })
+          nextSnapshot = mergeWorldBuildStatusIntoSnapshot(snapshotRef.current ?? nextSnapshot, repairedStatus)
+          snapshotRef.current = nextSnapshot
+          setSnapshot(nextSnapshot)
+          setBundle(compileBundle(nextSnapshot))
+          nextBatchStatus = repairedStatus
+          latestBatch = repairedStatus.batch
+          latestCinematicJob = latestBatch.jobs.find((job) => job.kind === 'cinematic_graph') ?? null
+          latestPhase = readWorldBuildJobPhase(latestCinematicJob)
+        }
+      }
+
+      if (!latestCinematicJob || latestCinematicJob.status === 'failed' || latestPhase === 'needs_repair') {
         return nextSnapshot
       }
 

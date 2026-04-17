@@ -14,6 +14,7 @@ export const workspaceService = {
   planWorldBuild: graphcoreWorkspaceAdapter.planWorldBuild,
   pollMeshGeneration: graphcoreWorkspaceAdapter.pollMeshGeneration,
   pollWorldBuild: graphcoreWorkspaceAdapter.pollWorldBuild,
+  repairCinematicScript: graphcoreWorkspaceAdapter.repairCinematicScript,
   startCinematicRun: graphcoreWorkspaceAdapter.startCinematicRun,
   startMeshGeneration: graphcoreWorkspaceAdapter.startMeshGeneration,
   startWorldBuild: graphcoreWorkspaceAdapter.startWorldBuild,
