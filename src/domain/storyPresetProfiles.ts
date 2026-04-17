@@ -99,17 +99,23 @@ const STORY_SCREENWRITING_CONTRACT: StoryScreenwritingContract = {
     'Treat the selected story scene and language presets as biases, not rigid templates. Preserve room for original scene writing inside those guardrails.',
     'Plan scenes around dramatic turns, escalation, and memorable images rather than evenly filling a fixed preset formula.',
     'Enter the dramatic situation as late as possible while preserving clarity, and avoid spending shots repeating information the audience already understands.',
+    'Avoid planning scenes around generic atmospheric padding, placeholder taunts, or abstract status language when a concrete event can carry the beat.',
   ],
   authorshipDirectives: [
     'Write like a strong film or television scene: specific, playable, visual, and character-shaped rather than schematic.',
     'Prefer concrete staging, action, behavior, silence, and reaction over explanatory prose about what the scene means.',
     'Keep dialogue sharp, character-specific, and necessary. Cut filler, placeholder taunts, and generic scene-summary lines.',
     'Let escalation stay jagged and surprising instead of making every beat the same size or function.',
+    'Do not use purple prose, pseudo-poetic atmosphere lines, or stock cinematic filler such as “the air tightens,” “the crowd falls away,” “dust hangs,” or “the balance shifts” unless the beat truly depends on it.',
+    'If a sentence does not describe a visible action, staging change, reaction, sound consequence, or clear image, cut it or rewrite it.',
+    'If a line of dialogue could belong to any generic action scene, remove it. Silence is better than cliché.',
+    'Do not summarize power, tension, or momentum abstractly when you can show the concrete cause in the same beat.',
   ],
   repairDirectives: [
     'If the scene feels templated, restore irregular escalation, stronger character-specific choices, and a more memorable visual turn.',
     'If the scene feels over-explained, replace summary language with concrete action, staging, reaction, or consequence.',
     'If coverage feels mechanical, merge redundant beats and save cuts for genuine changes in tension, information, leverage, or perspective.',
+    'If the scene feels writerly or AI-polished, strip out stock atmosphere phrases, abstract emotional labels, and interchangeable dialogue until only playable, visual beats remain.',
   ],
 }
 

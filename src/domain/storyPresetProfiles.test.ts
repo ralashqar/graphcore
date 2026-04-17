@@ -56,6 +56,7 @@ test('story screenwriting contract exposes shared movie tv writing guidance', ()
   assert.equal(contract.label, 'Movie / TV Screenwriting Contract')
   assert.ok(contract.creativePrinciples.some((entry) => /Enter the scene late and leave early/i.test(entry)))
   assert.ok(contract.authorshipDirectives.some((entry) => /character-specific/i.test(entry)))
+  assert.ok(contract.authorshipDirectives.some((entry) => /purple prose|pseudo-poetic|stock cinematic filler/i.test(entry)))
   assert.ok(contract.repairDirectives.some((entry) => /templated|over-explained/i.test(entry)))
 })
 
