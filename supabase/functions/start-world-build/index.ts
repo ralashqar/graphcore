@@ -6,11 +6,12 @@ import {
   cinematicSequenceSchema,
   compileCinematicSequence,
   deriveCinematicScriptFromSequence,
-  getCinematicSettings,
+  materializeCinematicGraphSettings,
 } from '../../../src/domain/cinematics.ts'
 import {
   WORLD_BUILD_ENVIRONMENT_VIEWS,
   getResourceGenerationMetadata,
+  normalizeCinematicPlanForTransport,
   type WorldBuildPlanItem,
   worldBuildBatchSchema,
   worldBuildJobSchema,
@@ -487,11 +488,11 @@ Deno.serve(async (request) => {
     const snapshot = payload.snapshot as WorldBuildStartSnapshot
     const normalizedCinematicPlan =
       payload.plannerMode === 'cinematic_build' && payload.cinematicPlan
-        ? {
+        ? normalizeCinematicPlanForTransport({
             ...payload.cinematicPlan,
             autoRun: false,
-          }
-        : payload.cinematicPlan ?? null
+          })
+        : normalizeCinematicPlanForTransport(payload.cinematicPlan ?? null)
     const enabledItems = payload.planItems.filter((item) => item.enabled)
 
     const batchInsert = await client.from('world_build_batches').insert({
@@ -1037,9 +1038,7 @@ Deno.serve(async (request) => {
             )
           : null
         const scriptDoc = sequence ? deriveCinematicScriptFromSequence(sequence) : null
-        const effectiveGraphSettings = getCinematicSettings(payload.snapshot.gameSpec ?? null, {
-          cinematics: persistedCinematicPlan?.graphSettings ?? {},
-        })
+        const effectiveGraphSettings = materializeCinematicGraphSettings(persistedCinematicPlan?.graphSettings ?? {})
         graph.metadata = {
           generation: createGenerationMetadata(batchId, graphJobId),
           cinematics: effectiveGraphSettings,
@@ -1066,7 +1065,7 @@ Deno.serve(async (request) => {
       status: batchInsert.data.status,
       diagnostics: batchInsert.data.diagnostics ?? [],
       planItems: batchInsert.data.plan_json ?? [],
-      cinematicPlan: persistedCinematicPlan ?? batchInsert.data.cinematic_plan ?? null,
+      cinematicPlan: normalizeCinematicPlanForTransport(persistedCinematicPlan ?? batchInsert.data.cinematic_plan ?? null),
       createdAt: batchInsert.data.created_at,
       updatedAt: batchInsert.data.updated_at,
       jobs: jobsToInsert.map((job) => ({

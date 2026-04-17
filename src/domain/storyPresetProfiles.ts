@@ -27,6 +27,10 @@ export type StoryScenePresetProfile = StoryPromptDirectiveSet & {
   endingShape: string
   maxDialogueWordsPerShot: number | null
   maxActionBeatsPerShot: number | null
+  maxActionMicroBeatsPerShot: number | null
+  actionExchangeBundling: 'strict' | 'moderate' | 'aggressive'
+  actionDensityBias: 'low' | 'medium' | 'high'
+  storyboardPanelDensityBias: 'low' | 'medium' | 'high'
   promptKeywords: readonly string[]
 }
 
@@ -63,6 +67,10 @@ export type StoryRuntimeContract = {
   endingShape: string
   maxDialogueWordsPerShot: number | null
   maxActionBeatsPerShot: number | null
+  maxActionMicroBeatsPerShot: number | null
+  actionExchangeBundling: 'strict' | 'moderate' | 'aggressive'
+  actionDensityBias: 'low' | 'medium' | 'high'
+  storyboardPanelDensityBias: 'low' | 'medium' | 'high'
   plannerDirectives: string[]
   authorshipDirectives: string[]
   repairDirectives: string[]
@@ -89,6 +97,10 @@ const STORY_SCENE_PROFILES: Record<CinematicStoryScenePreset, StoryScenePresetPr
     endingShape: 'End on the line or reaction that changes the relationship dynamic.',
     maxDialogueWordsPerShot: 50,
     maxActionBeatsPerShot: 2,
+    maxActionMicroBeatsPerShot: 2,
+    actionExchangeBundling: 'strict',
+    actionDensityBias: 'low',
+    storyboardPanelDensityBias: 'low',
     promptKeywords: ['conversation', 'dialogue', 'two people', 'two-hander', 'argue quietly', 'talk across', 'private scene', 'tense talk'],
     plannerDirectives: [
       'Anchor the first shot in shared geography before isolating viewpoints.',
@@ -120,6 +132,10 @@ const STORY_SCENE_PROFILES: Record<CinematicStoryScenePreset, StoryScenePresetPr
     endingShape: 'End on the revealed truth, the visible crack, or a reversal that changes who now has control.',
     maxDialogueWordsPerShot: 42,
     maxActionBeatsPerShot: 2,
+    maxActionMicroBeatsPerShot: 2,
+    actionExchangeBundling: 'strict',
+    actionDensityBias: 'low',
+    storyboardPanelDensityBias: 'low',
     promptKeywords: ['interrogation', 'questioning', 'interview room', 'detective', 'suspect', 'pressure cooker', 'confession'],
     plannerDirectives: [
       'Open on asymmetry, suspicion, or a visible imbalance of control.',
@@ -151,6 +167,10 @@ const STORY_SCENE_PROFILES: Record<CinematicStoryScenePreset, StoryScenePresetPr
     endingShape: 'End on the discovery becoming undeniable or on the next move it forces.',
     maxDialogueWordsPerShot: 34,
     maxActionBeatsPerShot: 3,
+    maxActionMicroBeatsPerShot: 3,
+    actionExchangeBundling: 'strict',
+    actionDensityBias: 'low',
+    storyboardPanelDensityBias: 'low',
     promptKeywords: ['investigate', 'discovery', 'forensic', 'analyze', 'evidence', 'procedural', 'lab', 'clue'],
     plannerDirectives: [
       'Make each shot advance the chain of discovery through one clear new clue, process step, or realization.',
@@ -182,6 +202,10 @@ const STORY_SCENE_PROFILES: Record<CinematicStoryScenePreset, StoryScenePresetPr
     endingShape: 'End on the new unstable truth, not the original reveal alone.',
     maxDialogueWordsPerShot: 40,
     maxActionBeatsPerShot: 2,
+    maxActionMicroBeatsPerShot: 2,
+    actionExchangeBundling: 'strict',
+    actionDensityBias: 'low',
+    storyboardPanelDensityBias: 'low',
     promptKeywords: ['reveal', 'twist', 'reversal', 'double cross', 'turns out', 'unexpected response', 'countermove'],
     plannerDirectives: [
       'Separate reveal and reversal into distinct beats; do not collapse them into the same shot unless the prompt explicitly demands it.',
@@ -213,6 +237,10 @@ const STORY_SCENE_PROFILES: Record<CinematicStoryScenePreset, StoryScenePresetPr
     endingShape: 'End on the reveal image or the immediate reaction it forces.',
     maxDialogueWordsPerShot: 24,
     maxActionBeatsPerShot: 2,
+    maxActionMicroBeatsPerShot: 2,
+    actionExchangeBundling: 'strict',
+    actionDensityBias: 'low',
+    storyboardPanelDensityBias: 'low',
     promptKeywords: ['dread', 'ominous', 'slow reveal', 'suspense', 'creeping', 'unsettling', 'horror', 'what is behind'],
     plannerDirectives: [
       'Delay full information until late, but keep tension escalating through new visual uncertainty.',
@@ -244,6 +272,10 @@ const STORY_SCENE_PROFILES: Record<CinematicStoryScenePreset, StoryScenePresetPr
     endingShape: 'End on the person newly exposed, newly in control, or emotionally abandoned.',
     maxDialogueWordsPerShot: 48,
     maxActionBeatsPerShot: 2,
+    maxActionMicroBeatsPerShot: 2,
+    actionExchangeBundling: 'strict',
+    actionDensityBias: 'low',
+    storyboardPanelDensityBias: 'low',
     promptKeywords: ['family argument', 'parents and child', 'domestic conflict', 'kitchen argument', 'power shift', 'fight at home'],
     plannerDirectives: [
       'Make the turning point a visible change in who owns the room or the emotional truth.',
@@ -274,19 +306,27 @@ const STORY_SCENE_PROFILES: Record<CinematicStoryScenePreset, StoryScenePresetPr
     soundSilenceStrategy: 'Let breaths, footwork, metal, cloth, and impact rhythms carry the tension between brief spoken beats.',
     endingShape: 'End on the strike, disarm, mercy beat, or stare-down that clearly changes who controls the fight.',
     maxDialogueWordsPerShot: 22,
-    maxActionBeatsPerShot: 3,
+    maxActionBeatsPerShot: 5,
+    maxActionMicroBeatsPerShot: 6,
+    actionExchangeBundling: 'moderate',
+    actionDensityBias: 'high',
+    storyboardPanelDensityBias: 'high',
     promptKeywords: ['duel', 'showdown', 'face off', 'fight', 'versus', 'vs', 'clash', 'swordfight', 'one on one combat'],
     plannerDirectives: [
       'Keep the spatial axis of the duel readable before pushing into impact or reaction detail.',
       'Make every turn of advantage visible through blocking, timing, or who forces the other to yield ground.',
+      'One shot may contain several linked combat beats when the exchange is continuous.',
+      'Do not split every sword clash into its own shot. Cut on feint, counter, disarm, reversal, or decisive distance change.',
     ],
     authorshipDirectives: [
       'Write action as tactical exchanges, not generic flurries.',
       'Let brief threat lines or reaction beats sharpen the fight instead of turning it into a conversation scene.',
+      'Bundle linked sword or melee beats into one readable exchange before cutting to the next tactical turn.',
     ],
     repairDirectives: [
       'If the duel feels mushy, simplify the geography and isolate one cleaner reversal of advantage.',
       'If the action feels repetitive, give one combat beat a clearer tactical intention such as bait, counter, disarm, or finish.',
+      'If the duel is over-cut, merge tiny clash-only shots into fewer exchanges and save cuts for tactical turns.',
     ],
   },
   chase_escape_fragmented: {
@@ -305,19 +345,26 @@ const STORY_SCENE_PROFILES: Record<CinematicStoryScenePreset, StoryScenePresetPr
     soundSilenceStrategy: 'Footfalls, engines, breath, crowd wash, and collision cues should drive momentum more than speech.',
     endingShape: 'End on escape, capture, or a sudden route change that flips immediate control.',
     maxDialogueWordsPerShot: 12,
-    maxActionBeatsPerShot: 3,
+    maxActionBeatsPerShot: 4,
+    maxActionMicroBeatsPerShot: 5,
+    actionExchangeBundling: 'moderate',
+    actionDensityBias: 'high',
+    storyboardPanelDensityBias: 'high',
     promptKeywords: ['chase', 'escape', 'pursuit', 'runs from', 'hunted through', 'get away', 'flee', 'race through'],
     plannerDirectives: [
       'Treat obstacles and route changes as structural beats, not filler motion.',
       'Keep the relative distance between pursuer and pursued legible as it tightens or loosens.',
+      'Do not cut on every stride or impact. Let one shot carry several linked movement beats until the obstacle or route changes.',
     ],
     authorshipDirectives: [
       'Use movement-driven cuts and changing vantage to keep urgency high without losing orientation.',
       'Reserve the biggest editorial spike for the near-capture, breakthrough, or escape turn.',
+      'Bundle continuous running, vaulting, and recovery into the same shot when the pursuit vector stays clear.',
     ],
     repairDirectives: [
       'If the chase feels repetitive, add a clearer obstacle or route change that alters advantage.',
       'If orientation is breaking down, restore one stronger anchor shot that resets direction of travel.',
+      'If the chase is too chopped up, merge tiny travel beats until each cut lands on an obstacle, near-capture, or direction change.',
     ],
   },
   ambush_counterambush: {
@@ -336,19 +383,26 @@ const STORY_SCENE_PROFILES: Record<CinematicStoryScenePreset, StoryScenePresetPr
     soundSilenceStrategy: 'Use the rupture from quiet into impact, then let command barks and weapon or collision cues define the counterattack.',
     endingShape: 'End on the sprung counter, regained control, or exposed vulnerability that changes the tactical balance.',
     maxDialogueWordsPerShot: 14,
-    maxActionBeatsPerShot: 3,
+    maxActionBeatsPerShot: 5,
+    maxActionMicroBeatsPerShot: 6,
+    actionExchangeBundling: 'moderate',
+    actionDensityBias: 'high',
+    storyboardPanelDensityBias: 'high',
     promptKeywords: ['ambush', 'trap', 'springs the trap', 'surrounded', 'counterambush', 'attack from cover', 'hidden attackers'],
     plannerDirectives: [
       'The audience should understand both the original trap and the moment it fails or is inverted.',
       'Use one clean reveal beat to show how the counter-ambush changes the field.',
+      'Let one shot hold several linked attack beats when the same tactical burst is still unfolding.',
     ],
     authorshipDirectives: [
       'Write the attack beat with immediate sensory clarity, then shift into tactical readability for the counter.',
       'Do not let the counter-turn happen only in dialogue; it must be visible in blocking and movement.',
+      'Cut on the tactical inversion, not on every impact inside the same burst of violence.',
     ],
     repairDirectives: [
       'If the trap is unclear, strengthen concealment before the strike and clarify the attack vector.',
       'If the counter-turn feels arbitrary, add one cleaner tactical beat that motivates it on screen.',
+      'If the ambush is over-segmented, merge single-hit fragments into one coherent burst before the counter-turn.',
     ],
   },
   battlefield_push_and_collapse: {
@@ -367,19 +421,26 @@ const STORY_SCENE_PROFILES: Record<CinematicStoryScenePreset, StoryScenePresetPr
     soundSilenceStrategy: 'Layer crowd pressure, impacts, distant battle beds, and shouted commands into a readable escalation pattern.',
     endingShape: 'End on the broken push, retreat, or overwhelmed frame that makes the collapse undeniable.',
     maxDialogueWordsPerShot: 18,
-    maxActionBeatsPerShot: 3,
+    maxActionBeatsPerShot: 4,
+    maxActionMicroBeatsPerShot: 5,
+    actionExchangeBundling: 'moderate',
+    actionDensityBias: 'high',
+    storyboardPanelDensityBias: 'high',
     promptKeywords: ['battlefield', 'battle', 'war', 'army', 'armies', 'front line', 'skirmish', 'warband', 'charge'],
     plannerDirectives: [
       'Make the scene progress from local confidence to visible disintegration or overmatch.',
       'Use wider scale beats sparingly but decisively to show the push becoming a collapse.',
+      'Do not isolate every clash. Let each shot hold a pocket of battlefield action until the line shifts or breaks.',
     ],
     authorshipDirectives: [
       'Balance battlefield scale with a few readable human anchors so the collapse has emotional weight.',
       'Write the turning point as a visual loss of formation, position, or command coherence.',
+      'Bundle local strikes, pushes, and recoveries into one continuous exchange when they belong to the same battlefield lane.',
     ],
     repairDirectives: [
       'If the battle feels shapeless, clarify the initial push before showing the break.',
       'If scale overwhelms readability, reduce the number of simultaneous actions and strengthen one human anchor beat.',
+      'If the battle is over-cut, merge small clash fragments until cuts land on breach, collapse, or command loss.',
     ],
   },
   heroic_arrival_reversal: {
@@ -398,19 +459,26 @@ const STORY_SCENE_PROFILES: Record<CinematicStoryScenePreset, StoryScenePresetPr
     soundSilenceStrategy: 'Use a pressure bed or near-defeat quiet, then give the arrival a strong sonic break, impact, or reaction swell.',
     endingShape: 'End on the new advantage, the changed morale, or the counterattack the arrival makes possible.',
     maxDialogueWordsPerShot: 24,
-    maxActionBeatsPerShot: 3,
+    maxActionBeatsPerShot: 5,
+    maxActionMicroBeatsPerShot: 6,
+    actionExchangeBundling: 'moderate',
+    actionDensityBias: 'medium',
+    storyboardPanelDensityBias: 'medium',
     promptKeywords: ['heroic arrival', 'arrives in time', 'reinforcements arrive', 'rescue arrives', 'saves them', 'turns the tide'],
     plannerDirectives: [
       'Spend enough time on the losing state that the arrival genuinely feels like a reversal.',
       'Let the first clear arrival image do the dramatic work before layering aftermath.',
+      'A single shot can carry several linked rescue or combat beats if the momentum shift is continuous.',
     ],
     authorshipDirectives: [
       'Write strong reaction beats around the arrival so the emotional and tactical reversal registers immediately.',
       'Avoid flattening the arrival into generic spectacle; the new advantage must become concrete.',
+      'Cut on the arrival turn and the new advantage, not on every strike that follows the entrance.',
     ],
     repairDirectives: [
       'If the arrival feels unearned, strengthen the pre-arrival danger and delay the reveal slightly.',
       'If the reversal is weak, add a clearer frame showing how the entrant changes control of the scene.',
+      'If the arrival section feels too choppy, merge linked rescue beats and keep the strongest cut for the reversal image.',
     ],
   },
   siege_last_stand: {
@@ -429,19 +497,26 @@ const STORY_SCENE_PROFILES: Record<CinematicStoryScenePreset, StoryScenePresetPr
     soundSilenceStrategy: 'Use sustained pressure beds, impacts, strain, and ragged commands; let any quiet beat feel like the eye of a siege storm.',
     endingShape: 'End on the threshold holding at cost, finally breaking, or the defender\'s last decisive act.',
     maxDialogueWordsPerShot: 20,
-    maxActionBeatsPerShot: 3,
+    maxActionBeatsPerShot: 4,
+    maxActionMicroBeatsPerShot: 5,
+    actionExchangeBundling: 'moderate',
+    actionDensityBias: 'high',
+    storyboardPanelDensityBias: 'high',
     promptKeywords: ['siege', 'last stand', 'hold the line', 'hold the gate', 'defend the wall', 'final defense', 'gate breach'],
     plannerDirectives: [
       'Keep returning to the defended threshold so the audience feels mounting pressure against one clear line.',
       'Escalate through breaches, dwindling options, or mounting cost rather than generic repetition.',
+      'Let one shot absorb several linked hold-the-line beats before cutting to the next breach, sacrifice, or loss of ground.',
     ],
     authorshipDirectives: [
       'Write the stand as endurance under pressure, not just as interchangeable combat beats.',
       'Make the final hold, breach, or sacrifice visible in the blocking and damage to the defended space.',
+      'Bundle repeated strikes, shields, and staggered recovery into one exchange when the threshold has not yet changed.',
     ],
     repairDirectives: [
       'If the siege feels repetitive, add a more decisive breach or narrowing of options.',
       'If the last-stand feeling is weak, strengthen exhaustion, attrition, or the sense of dwindling space.',
+      'If the defense is over-cut, merge small hold-and-hit fragments until cuts land on a breach or sacrifice.',
     ],
   },
 }
@@ -737,6 +812,10 @@ export function resolveStoryRuntimeContract(input: {
     endingShape: sceneProfile.endingShape,
     maxDialogueWordsPerShot: sceneProfile.maxDialogueWordsPerShot,
     maxActionBeatsPerShot: sceneProfile.maxActionBeatsPerShot,
+    maxActionMicroBeatsPerShot: sceneProfile.maxActionMicroBeatsPerShot,
+    actionExchangeBundling: sceneProfile.actionExchangeBundling,
+    actionDensityBias: sceneProfile.actionDensityBias,
+    storyboardPanelDensityBias: sceneProfile.storyboardPanelDensityBias,
     plannerDirectives: [...sceneProfile.plannerDirectives, ...languageProfile.plannerDirectives],
     authorshipDirectives: [...sceneProfile.authorshipDirectives, ...languageProfile.authorshipDirectives],
     repairDirectives: [...sceneProfile.repairDirectives, ...languageProfile.repairDirectives],

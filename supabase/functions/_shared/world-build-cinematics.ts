@@ -326,6 +326,7 @@ function storyPresetPlannerInstructions(
   storyLanguagePreset: z.infer<typeof cinematicStoryLanguagePresetSchema> | null,
 ) {
   const contract = resolveStoryRuntimeContract({ storyScenePreset, storyLanguagePreset })
+  const actionPreset = contract.actionDensityBias !== 'low'
   return [
     `Locked story scene preset: ${getCinematicStoryScenePresetLabel(contract.scenePreset)}.`,
     `Locked story language preset: ${getCinematicStoryLanguagePresetLabel(contract.languagePreset)}.`,
@@ -339,6 +340,9 @@ function storyPresetPlannerInstructions(
     `Continuity strategy: ${contract.continuityStrategy}`,
     `Sound and silence strategy: ${contract.soundSilenceStrategy}`,
     `Ending shape: ${contract.endingShape}`,
+    actionPreset ? `Action exchange bundling: ${contract.actionExchangeBundling}. Keep one shot on a continuous exchange until a tactical turn, geography change, obstacle, or reversal justifies the cut.` : null,
+    actionPreset ? `Storyboard panel density bias: ${contract.storyboardPanelDensityBias}. Dense action may expand into extra comic panels without inventing extra camera cuts.` : null,
+    contract.scenePreset === 'duel_showdown' ? 'Do not split every sword clash into its own shot.' : null,
     ...contract.plannerDirectives,
   ].filter((entry): entry is string => Boolean(entry))
 }
@@ -348,6 +352,7 @@ function storyAuthorshipRules(input: {
   storyLanguagePreset: z.infer<typeof cinematicStoryLanguagePresetSchema> | null
 }) {
   const contract = resolveStoryRuntimeContract(input)
+  const actionPreset = contract.actionDensityBias !== 'low'
   return [
     'Treat the story presets as the dramatic and camera contract for the scene. Preserve them instead of defaulting to generic film language.',
     `Dialogue density guidance: ${contract.dialogueDensityGuidance}`,
@@ -359,6 +364,8 @@ function storyAuthorshipRules(input: {
     `Rhythm guidance: ${contract.rhythmGuidance}`,
     `Sound and silence strategy: ${contract.soundSilenceStrategy}`,
     `Ending shape: ${contract.endingShape}`,
+    actionPreset ? `One shot may contain several linked combat or pursuit beats when the movement is continuous. Cut on tactical change, geography change, reversal, obstacle, or emotional turn, not on every impact.` : null,
+    contract.scenePreset === 'duel_showdown' ? 'Do not split every sword clash into its own shot. Let one readable exchange carry multiple parry or strike beats before the cut.' : null,
     ...contract.authorshipDirectives,
   ]
 }
@@ -368,10 +375,12 @@ function storyRepairRules(input: {
   storyLanguagePreset: z.infer<typeof cinematicStoryLanguagePresetSchema> | null
 }) {
   const contract = resolveStoryRuntimeContract(input)
+  const actionPreset = contract.actionDensityBias !== 'low'
   return [
     `Preserve the dramatic purpose: ${contract.dramaticPurpose}`,
     `Preserve the coverage strategy: ${contract.coverageStrategy}`,
     `Preserve the camera behavior rules: ${contract.cameraBehaviorRules}`,
+    actionPreset ? 'If action is over-cut, merge tiny clash-only fragments into fewer tactical exchanges and move cuts to reversals, obstacles, or changed advantage.' : null,
     ...contract.repairDirectives,
   ]
 }
@@ -828,8 +837,8 @@ function buildPacingContractInstructions(
       contract.maxDialogueWordsPerShot !== null
         ? `Keep spoken dialogue near ${contract.maxDialogueWordsPerShot} words or fewer per shot unless the scene specifically demands a longer exchange.`
         : null,
-      contract.maxActionBeatsPerShot !== null
-        ? `Keep most shots to ${contract.maxActionBeatsPerShot} visible action beat${contract.maxActionBeatsPerShot === 1 ? '' : 's'} or fewer.`
+      contract.maxActionMicroBeatsPerShot !== null
+        ? `Keep most shots to about ${contract.maxActionMicroBeatsPerShot} linked action micro-beats or fewer before a real tactical turn, obstacle, or reversal justifies the cut.`
         : null,
       'Treat 15 seconds as the maximum render length for one Seedance clip, not a default beat length.',
     ].filter((entry): entry is string => Boolean(entry))
@@ -3719,6 +3728,35 @@ function groupShotsByVariation(shots: z.infer<typeof cinematicScriptDocSchema>['
   return Array.from(groups.values())
 }
 
+function isStoryActionPreset(scenePreset: string | null | undefined) {
+  return [
+    'duel_showdown',
+    'chase_escape_fragmented',
+    'ambush_counterambush',
+    'battlefield_push_and_collapse',
+    'heroic_arrival_reversal',
+    'siege_last_stand',
+  ].includes(scenePreset ?? '')
+}
+
+function storyActionShotText(shot: z.infer<typeof cinematicScriptDocSchema>['shots'][number]) {
+  return normalizeMatchKey([
+    shot.beat,
+    shot.compositionGuide,
+    shot.visualPrompt,
+    shot.cameraMovement,
+    ...shot.actions.map((action) => `${action.verb} ${action.stagingNotes}`),
+  ].join(' '))
+}
+
+function storyActionShotHasTurnCue(shot: z.infer<typeof cinematicScriptDocSchema>['shots'][number]) {
+  return /\b(counter|reversal|reverse|disarm|breach|breaks through|collapse|collapses|stumble|falls|drop|yield|retreat|arrival|arrives|rescue|escape|capture|near capture|obstacle|barrier|door|gate|wall|corner|distance change|power shift)\b/.test(storyActionShotText(shot))
+}
+
+function storyActionShotHasTacticalShift(shot: z.infer<typeof cinematicScriptDocSchema>['shots'][number]) {
+  return /\b(counter|reversal|reverse|disarm|breach|collapse|collapse|retreat|yield|knock|stagger|gain ground|lose ground|arrives|rescue|escape|captures?|breaks the line|obstacle|route change)\b/.test(storyActionShotText(shot))
+}
+
 export function evaluateCinematicScriptQuality(input: {
   promptText: string
   scriptDoc: z.infer<typeof cinematicScriptDocSchema>
@@ -3835,7 +3873,15 @@ export function evaluateCinematicScriptQuality(input: {
     if (!shot.referencePlan.preferredPrimaryRefRole && shot.referencePlan.requiredRoles.length > 0) {
       recordFailure(`Shot "${shot.id}" is missing preferredPrimaryRefRole in referencePlan.`, { shotId: shot.id, category: 'reference_roles' })
     }
-    if (shot.actions.length > 2) {
+    const storyActionBudget =
+      storyContract?.maxActionMicroBeatsPerShot
+      ?? storyContract?.maxActionBeatsPerShot
+      ?? null
+    if (storyContract) {
+      if (storyActionBudget !== null && shot.actions.length > storyActionBudget) {
+        recordFailure(`Story shot "${shot.id}" exceeds the ${getCinematicStoryScenePresetLabel(storyContract.scenePreset)} action micro-beat budget. Keep the beat under ${storyActionBudget} linked micro-beats or split at a real tactical turn.`, { shotId: shot.id, category: 'pacing' })
+      }
+    } else if (shot.actions.length > 2) {
       recordFailure(`Shot "${shot.id}" piles up too many action beats. Lock one dominant action and keep the rest as micro-motions.`, { shotId: shot.id, category: 'pacing' })
     }
     if (/\bthen\b|\band then\b|,.*\bpan\b.*\bpush\b|,.*\bpush\b.*\borbit\b/i.test(shot.cameraMovement)) {
@@ -4221,6 +4267,46 @@ export function evaluateCinematicScriptQuality(input: {
       && input.scriptDoc.shots.filter((shot) => shot.dialogue.length > 0).length > Math.ceil(input.scriptDoc.shots.length / 2)
     ) {
       recordFailure('Dread-build scene is too dialogue-heavy. Let silence, movement, and withheld information carry more of the tension.', { category: 'dialogue' })
+    }
+    if (isStoryActionPreset(storyContract.scenePreset)) {
+      for (let index = 0; index < input.scriptDoc.shots.length - 1; index += 1) {
+        const current = input.scriptDoc.shots[index]
+        const next = input.scriptDoc.shots[index + 1]
+        if (current.actions.length === 0 || next.actions.length === 0) continue
+        const currentParticipants = [...current.participantRefIds].sort().join('|')
+        const nextParticipants = [...next.participantRefIds].sort().join('|')
+        const sameParticipants = currentParticipants.length > 0 && currentParticipants === nextParticipants
+        const sameLocation = (current.locationRefId ?? null) === (next.locationRefId ?? null)
+        if (
+          sameParticipants
+          && sameLocation
+          && current.actions.length <= 1
+          && next.actions.length <= 1
+          && !storyActionShotHasTurnCue(current)
+          && !storyActionShotHasTurnCue(next)
+        ) {
+          recordFailure(`Story action scene looks over-segmented around "${current.title}" and "${next.title}". Merge tiny clash-only cuts unless a clear tactical turn or geography change justifies the break.`, {
+            shotId: next.id,
+            category: 'pacing',
+          })
+          break
+        }
+        const coverageChanged =
+          normalizeMatchKey(`${current.framing} ${current.cameraMovement} ${current.cameraAngle}`) !== normalizeMatchKey(`${next.framing} ${next.cameraMovement} ${next.cameraAngle}`)
+        if (
+          sameParticipants
+          && sameLocation
+          && coverageChanged
+          && !storyActionShotHasTacticalShift(current)
+          && !storyActionShotHasTacticalShift(next)
+        ) {
+          recordFailure(`Story action coverage changes between "${current.title}" and "${next.title}" without a clear tactical shift, reveal, distance change, or advantage change.`, {
+            shotId: next.id,
+            category: 'camera',
+          })
+          break
+        }
+      }
     }
   }
 
@@ -4817,12 +4903,21 @@ function resolveEffectiveGraphSettingsFromRawPlan(rawPlan: z.infer<typeof cinema
   const inferredPresetFamily =
     rawGraphSettings?.presetFamily
     ?? inferCinematicPresetFamilyFromPrompt(`${rawPlan.requestSummary} ${rawPlan.graphSummary}`)
-  const correctedSelection = correctUgcPresetSelectionForPromptText({
-    prompt: `${rawPlan.requestSummary} ${rawPlan.graphSummary}`,
-    presetFamily: inferredPresetFamily,
-    formatSubtype: rawGraphSettings?.formatSubtype
-      ?? inferCinematicFormatSubtypeFromPrompt(`${rawPlan.requestSummary} ${rawPlan.graphSummary}`, inferredPresetFamily),
-  })
+  const storyPresetLocked =
+    inferredPresetFamily === 'story_movie_tv'
+    || Boolean(rawGraphSettings.storyScenePreset)
+    || Boolean(rawGraphSettings.storyLanguagePreset)
+  const correctedSelection = storyPresetLocked
+    ? {
+        presetFamily: 'story_movie_tv' as const,
+        formatSubtype: null,
+      }
+    : correctUgcPresetSelectionForPromptText({
+        prompt: `${rawPlan.requestSummary} ${rawPlan.graphSummary}`,
+        presetFamily: inferredPresetFamily,
+        formatSubtype: rawGraphSettings?.formatSubtype
+          ?? inferCinematicFormatSubtypeFromPrompt(`${rawPlan.requestSummary} ${rawPlan.graphSummary}`, inferredPresetFamily),
+      })
   const correctedPresetFamily = correctedSelection.presetFamily
   const inferredFormatSubtype = coerceFormatSubtypeForPresetFamily(
     correctedPresetFamily,
@@ -5497,12 +5592,21 @@ export function materializeCinematicPlan(rawPlan: z.infer<typeof cinematicPlanne
   const inferredPresetFamily =
     rawGraphSettings?.presetFamily
     ?? inferCinematicPresetFamilyFromPrompt(`${rawPlan.requestSummary} ${rawPlan.graphSummary}`)
-  const correctedSelection = correctUgcPresetSelectionForPromptText({
-    prompt: `${rawPlan.requestSummary} ${rawPlan.graphSummary}`,
-    presetFamily: inferredPresetFamily,
-    formatSubtype: rawGraphSettings?.formatSubtype
-      ?? inferCinematicFormatSubtypeFromPrompt(`${rawPlan.requestSummary} ${rawPlan.graphSummary}`, inferredPresetFamily),
-  })
+  const storyPresetLocked =
+    inferredPresetFamily === 'story_movie_tv'
+    || Boolean(rawGraphSettings.storyScenePreset)
+    || Boolean(rawGraphSettings.storyLanguagePreset)
+  const correctedSelection = storyPresetLocked
+    ? {
+        presetFamily: 'story_movie_tv' as const,
+        formatSubtype: null,
+      }
+    : correctUgcPresetSelectionForPromptText({
+        prompt: `${rawPlan.requestSummary} ${rawPlan.graphSummary}`,
+        presetFamily: inferredPresetFamily,
+        formatSubtype: rawGraphSettings?.formatSubtype
+          ?? inferCinematicFormatSubtypeFromPrompt(`${rawPlan.requestSummary} ${rawPlan.graphSummary}`, inferredPresetFamily),
+      })
   const correctedPresetFamily = correctedSelection.presetFamily
   const inferredFormatSubtype = coerceFormatSubtypeForPresetFamily(
     correctedPresetFamily,

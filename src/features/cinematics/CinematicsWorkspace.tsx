@@ -11,6 +11,7 @@ import {
   buildCinematicSettingsPatchFromStoryPresets,
   cinematicSequenceSchema,
   cinematicTakeSpecSchema,
+  deriveTakeStoryboardPanelArtifacts,
   cinematicDominantTriggerSchema,
   cinematicFormatSubtypeSchema,
   cinematicStoryLanguagePresetSchema,
@@ -31,6 +32,7 @@ import {
   getCinematicTakeNodeConfig,
   getCompositeRefNodeConfig,
   getStoryboardRefNodeConfig,
+  materializeCinematicGraphSettings,
   updateNodeMetadataWithAssetRef,
   updateNodeMetadataWithCompositeRef,
   updateNodeMetadataWithTake,
@@ -44,6 +46,7 @@ import {
   type CinematicSequence,
   type CinematicScriptDoc,
   type CinematicScriptEntityBinding,
+  type CinematicScriptScene,
   type CinematicScriptShot,
   type CinematicTakeSpec,
   type CinematicSettings,
@@ -709,10 +712,15 @@ function rederiveTakeSpec(input: {
   const durationSeconds = Math.min(15, Math.max(4, includedShots.reduce((total, shot) => total + (shot.durationSeconds ?? 4), 0)))
   const endpoint = inferTakeEndpointFromShots(includedShots, requiredSourceRefIds)
   const existingTake = input.existingTake ?? null
+  const title = existingTake?.title ?? `Take ${input.index + 1}`
+  const storyboardPanels = deriveTakeStoryboardPanelArtifacts({
+    title,
+    shots: includedShots,
+  })
 
   return cinematicTakeSpecSchema.parse({
     id: existingTake?.id ?? `take_${input.index + 1}`,
-    title: existingTake?.title ?? `Take ${input.index + 1}`,
+    title,
     shotIds: includedShots.map((shot) => shot.id),
     durationSeconds,
     startSeconds: input.startSeconds,
@@ -723,10 +731,16 @@ function rederiveTakeSpec(input: {
     formatSubtype: takeFieldValueFromShots(includedShots, (shot) => shot.formatSubtype, null),
     formulaFamily: takeFieldValueFromShots(includedShots, (shot) => shot.formulaFamily, null),
     dominantTrigger: takeFieldValueFromShots(includedShots, (shot) => shot.dominantTrigger, null),
+    storyScenePreset: takeFieldValueFromShots(includedShots, (shot) => shot.storyScenePreset, null),
+    storyLanguagePreset: takeFieldValueFromShots(includedShots, (shot) => shot.storyLanguagePreset, null),
     contrastAxis: takeFieldValueFromShots(includedShots, (shot) => shot.contrastAxis, ''),
     proofMoment: takeFieldValueFromShots(includedShots, (shot) => shot.proofMoment, ''),
     ctaStyle: takeFieldValueFromShots(includedShots, (shot) => shot.ctaStyle, ''),
     requiredSourceRefIds,
+    storyboardPanelPlan: storyboardPanels.storyboardPanelPlan,
+    storyboardPanelScriptText: storyboardPanels.storyboardPanelScriptText,
+    storyboardPanelPlanVersion: storyboardPanels.storyboardPanelPlanVersion,
+    storyboardPanelStatus: storyboardPanels.storyboardPanelStatus,
     previewImageAssetKey: existingTake?.previewImageAssetKey ?? null,
     storyboardAssetKey: existingTake?.storyboardAssetKey ?? null,
     outputStillAssetKey: existingTake?.outputStillAssetKey ?? null,
@@ -1495,6 +1509,7 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
     }).cinematicAuthoring?.scriptDirty)
   }, [currentGraph])
   const [contentMode, setContentMode] = useState<'script' | 'graph' | 'runs'>('graph')
+  const [isRebuildingRuntimeGraph, setIsRebuildingRuntimeGraph] = useState(false)
 
   useEffect(() => {
     if (!currentGraph) return
@@ -1508,37 +1523,51 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
     }
   }, [currentGraph, railMode])
 
-  function rebuildCurrentGraphFromScript() {
-    if (!currentGraph || !currentScript || currentScriptValidationErrors.length > 0) return
-    const existingAuthoring =
-      currentGraph.metadata && typeof currentGraph.metadata === 'object'
-        ? ((currentGraph.metadata as { cinematicAuthoring?: Record<string, unknown> }).cinematicAuthoring ?? {})
-        : {}
-    const rebuiltGraph = compileCinematicGraphFromScriptDoc({
-      graphKey: currentGraph.key,
-      graphName: currentGraph.name,
-      graphSummary: currentGraph.summary,
-      graphSettings,
-      scriptDoc: currentScript,
-      existingMetadata: {
-        ...(currentGraph.metadata ?? {}),
-        cinematicAuthoring: {
-          ...existingAuthoring,
-          scriptDirty: false,
-          scriptValidation: [],
+  async function rebuildCurrentGraphFromScript() {
+    if (!currentGraph || !currentScript || currentScriptValidationErrors.length > 0 || isRebuildingRuntimeGraph) return
+    setIsRebuildingRuntimeGraph(true)
+    await new Promise<void>((resolve) => {
+      window.setTimeout(resolve, 0)
+    })
+    try {
+      const existingAuthoring =
+        currentGraph.metadata && typeof currentGraph.metadata === 'object'
+          ? ((currentGraph.metadata as { cinematicAuthoring?: Record<string, unknown> }).cinematicAuthoring ?? {})
+          : {}
+      const graphLocalSettings =
+        currentGraph.metadata
+        && typeof currentGraph.metadata === 'object'
+        && (currentGraph.metadata as { cinematics?: unknown }).cinematics
+          ? (currentGraph.metadata as { cinematics?: unknown }).cinematics
+          : {}
+      const rebuiltGraph = compileCinematicGraphFromScriptDoc({
+        graphKey: currentGraph.key,
+        graphName: currentGraph.name,
+        graphSummary: currentGraph.summary,
+        graphSettings: materializeCinematicGraphSettings(graphLocalSettings),
+        scriptDoc: currentScript,
+        existingMetadata: {
+          ...(currentGraph.metadata ?? {}),
+          cinematicAuthoring: {
+            ...existingAuthoring,
+            scriptDirty: false,
+            scriptValidation: [],
+          },
         },
-      },
-    })
-    onUpdateGraph(currentGraph.key, {
-      name: rebuiltGraph.name,
-      summary: rebuiltGraph.summary,
-      entryNodeKey: rebuiltGraph.entryNodeKey,
-      metadata: rebuiltGraph.metadata,
-      nodes: rebuiltGraph.nodes,
-      edges: rebuiltGraph.edges,
-    })
-    onClearSelection()
-    setContentMode('script')
+      })
+      onUpdateGraph(currentGraph.key, {
+        name: rebuiltGraph.name,
+        summary: rebuiltGraph.summary,
+        entryNodeKey: rebuiltGraph.entryNodeKey,
+        metadata: rebuiltGraph.metadata,
+        nodes: rebuiltGraph.nodes,
+        edges: rebuiltGraph.edges,
+      })
+      onClearSelection()
+      setContentMode('graph')
+    } finally {
+      setIsRebuildingRuntimeGraph(false)
+    }
   }
 
   function updateCurrentScript(mutator: (scriptDoc: CinematicScriptDoc) => CinematicScriptDoc) {
@@ -1940,6 +1969,7 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
         {contentMode === 'script' ? (
           <ScriptPreviewSurface
             currentGraph={currentGraph}
+            isRebuildingRuntimeGraph={isRebuildingRuntimeGraph}
             rawScriptMarkdown={currentGraphRawScript}
             onRebuild={rebuildCurrentGraphFromScript}
             onUpdateScript={updateCurrentScript}
@@ -2182,6 +2212,7 @@ function CinematicGraphInspector({
 
 function ScriptPreviewSurface({
   currentGraph,
+  isRebuildingRuntimeGraph,
   rawScriptMarkdown,
   onRebuild,
   onUpdateScript,
@@ -2191,29 +2222,28 @@ function ScriptPreviewSurface({
   validationIssues,
 }: {
   currentGraph: GraphDefinition | null
+  isRebuildingRuntimeGraph: boolean
   rawScriptMarkdown: string
-  onRebuild: () => void
+  onRebuild: () => void | Promise<void>
   onUpdateScript: (mutator: (scriptDoc: CinematicScriptDoc) => CinematicScriptDoc) => void
   referenceOptions: ScriptReferenceOption[]
   scriptDirty: boolean
   scriptDoc: CinematicScriptDoc | null
   validationIssues: ScriptValidationIssue[]
 }) {
-  if (!currentGraph || !scriptDoc) {
-    return (
-      <div className="detail-stack compact cinematic-script-surface">
-        <span className="eyebrow">Script</span>
-        <h3>No cinematic script yet</h3>
-        <div className="inline-note">Generate or select a cinematic flow to inspect the canonical script.</div>
-      </div>
-    )
-  }
-
+  const [showRawScript, setShowRawScript] = useState(false)
   const validationErrors = validationIssues.filter((issue) => issue.level === 'error')
   const validationWarnings = validationIssues.filter((issue) => issue.level === 'warning')
-  const orderedShots = [...scriptDoc.shots].sort((left, right) => left.orderIndex - right.orderIndex)
-  const orderedScenes = [...scriptDoc.scenes].sort((left, right) => left.orderIndex - right.orderIndex)
+  const orderedShots = useMemo(
+    () => scriptDoc ? [...scriptDoc.shots].sort((left, right) => left.orderIndex - right.orderIndex) : [],
+    [scriptDoc],
+  )
+  const orderedScenes = useMemo(
+    () => scriptDoc ? [...scriptDoc.scenes].sort((left, right) => left.orderIndex - right.orderIndex) : [],
+    [scriptDoc],
+  )
   const previewSequence = useMemo(() => {
+    if (!scriptDoc) return null
     try {
       return buildCinematicSequenceFromScriptDoc(scriptDoc)
     } catch {
@@ -2224,6 +2254,27 @@ function ScriptPreviewSurface({
     () => new Map(previewSequence?.shots.map((shot) => [shot.id, shot]) ?? []),
     [previewSequence],
   )
+  const plainTextExport = useMemo(() => scriptDoc ? buildPlainTextScriptExport(scriptDoc) : '', [scriptDoc])
+  const jsonExport = useMemo(
+    () => currentGraph && previewSequence
+      ? JSON.stringify(buildTakeFirstCinematicDocument({
+        graph: currentGraph,
+        sequence: previewSequence,
+      }), null, 2)
+      : '',
+    [currentGraph, previewSequence],
+  )
+
+  if (!currentGraph || !scriptDoc) {
+    return (
+      <div className="detail-stack compact cinematic-script-surface">
+        <span className="eyebrow">Script</span>
+        <h3>No cinematic script yet</h3>
+        <div className="inline-note">Generate or select a cinematic flow to inspect the canonical script.</div>
+      </div>
+    )
+  }
+
   const bindingById = new Map(scriptDoc.entityBindings.map((binding) => [binding.id, binding]))
   const auxiliaryRefLabelById = new Map<string, string>([
     ...scriptDoc.compositeRefs.map((composite) => [composite.id, composite.title] as const),
@@ -2234,59 +2285,49 @@ function ScriptPreviewSurface({
   const characterOptions = referenceOptions.filter((entry) => entry.kind === 'character')
   const environmentOptions = referenceOptions.filter((entry) => entry.kind === 'environment')
   const itemOptions = referenceOptions.filter((entry) => entry.kind === 'item')
-  const [showRawScript, setShowRawScript] = useState(false)
-  const jsonExport = useMemo(
-    () => JSON.stringify(
-      buildTakeFirstCinematicDocument({
-        graph: currentGraph,
-        sequence: previewSequence ?? getCinematicSequence(currentGraph.metadata),
-      }),
-      null,
-      2,
-    ),
-    [currentGraph, currentGraph.metadata, previewSequence],
-  )
-  const plainTextExport = useMemo(() => buildPlainTextScriptExport(scriptDoc), [scriptDoc])
-  const displayedScriptText = rawScriptMarkdown.trim().length > 0 ? rawScriptMarkdown : plainTextExport
-
-  return (
-    <div className="detail-stack cinematic-script-surface">
-      <div className="script-editor-toolbar">
-        <div className="script-editor-status">
-          <span className="eyebrow">Script</span>
-          <div className={scriptDirty ? 'script-status-pill is-warning' : 'script-status-pill'}>
-            {scriptDirty ? 'Graph out of date' : 'Script clean'}
-          </div>
-          {validationErrors.length > 0 ? <div className="script-status-pill is-danger">{validationErrors.length} error{validationErrors.length === 1 ? '' : 's'}</div> : null}
-          {validationWarnings.length > 0 ? <div className="script-status-pill is-muted">{validationWarnings.length} warning{validationWarnings.length === 1 ? '' : 's'}</div> : null}
-        </div>
-        <div className="script-row-controls">
-          <button className="ghost-button compact" onClick={() => void navigator.clipboard.writeText(displayedScriptText)} type="button">Copy Script</button>
-          <button className="primary-button compact" disabled={validationErrors.length > 0 || scriptDoc.shots.length === 0} onClick={onRebuild} type="button">Rebuild Runtime Graph</button>
-        </div>
-      </div>
-
-      {scriptDirty ? <div className="inline-note is-warning">Script changed. Rebuild graph to sync runtime projection.</div> : null}
-      {rawScriptMarkdown.trim().length === 0 ? <div className="inline-note">Showing the normalized script export because no raw authored script markdown was stored for this cinematic.</div> : null}
-      {validationIssues.length > 0 ? (
-        <div className="diagnostic-stack">
-          {validationIssues.map((issue) => (
-            <div key={issue.id} className={`inline-note ${issue.level === 'error' ? 'is-danger' : 'is-warning'}`}>{issue.message}</div>
-          ))}
-        </div>
-      ) : null}
-      <label className="field-block full-width">
-        <span>Script</span>
-        <textarea readOnly rows={28} value={displayedScriptText} />
-      </label>
-    </div>
-  )
 
   function updateShot(shotId: string, mutator: (shot: CinematicScriptShot) => CinematicScriptShot) {
     onUpdateScript((currentScript) => ({
       ...currentScript,
       shots: currentScript.shots.map((shot) => shot.id === shotId ? mutator(shot) : shot),
     }))
+  }
+
+  function updateScene(sceneId: string, mutator: (scene: CinematicScriptScene) => CinematicScriptScene) {
+    onUpdateScript((currentScript) => ({
+      ...currentScript,
+      scenes: currentScript.scenes.map((scene) => scene.id === sceneId ? mutator(scene) : scene),
+    }))
+  }
+
+  function addScene() {
+    onUpdateScript((currentScript) => ({
+      ...currentScript,
+      scenes: [
+        ...currentScript.scenes,
+        {
+          id: buildNextId('scene', currentScript.scenes.map((scene) => scene.id)),
+          title: `Scene ${currentScript.scenes.length + 1}`,
+          summary: '',
+          locationRefId: environmentOptions[0]?.id ?? null,
+          shotIds: [],
+          continuityNotes: '',
+          orderIndex: currentScript.scenes.length,
+        },
+      ],
+    }))
+  }
+
+  function removeScene(sceneId: string) {
+    onUpdateScript((currentScript) => {
+      const remainingScenes = currentScript.scenes.filter((scene) => scene.id !== sceneId)
+      const fallbackSceneId = remainingScenes[0]?.id ?? null
+      return {
+        ...currentScript,
+        scenes: remainingScenes,
+        shots: currentScript.shots.map((shot) => shot.sceneId === sceneId ? { ...shot, sceneId: fallbackSceneId } : shot),
+      }
+    })
   }
 
   function moveShot(shotId: string, delta: -1 | 1) {
@@ -2313,9 +2354,8 @@ function ScriptPreviewSurface({
     }))
   }
 
-  function addShot() {
-    const nextShotId = buildNextId('shot', scriptDoc!.shots.map((shot) => shot.id))
-    const defaultSceneId = orderedScenes[orderedScenes.length - 1]?.id ?? orderedScenes[0]?.id ?? null
+  function addShot(preferredSceneId?: string | null) {
+    const defaultSceneId = preferredSceneId ?? orderedScenes[orderedScenes.length - 1]?.id ?? orderedScenes[0]?.id ?? null
     const defaultLocationRefId = orderedScenes.find((scene) => scene.id === defaultSceneId)?.locationRefId
       ?? environmentOptions[0]?.id
       ?? null
@@ -2324,7 +2364,7 @@ function ScriptPreviewSurface({
       shots: [
         ...currentScript.shots,
         {
-          id: nextShotId,
+          id: buildNextId('shot', currentScript.shots.map((shot) => shot.id)),
           sceneId: defaultSceneId,
           orderIndex: currentScript.shots.length,
           title: 'New Shot',
@@ -2420,7 +2460,9 @@ function ScriptPreviewSurface({
           {rawScriptMarkdown.trim().length > 0 ? (
             <button className="ghost-button compact" onClick={() => void navigator.clipboard.writeText(rawScriptMarkdown)} type="button">Copy Raw Script</button>
           ) : null}
-          <button className="primary-button compact" disabled={validationErrors.length > 0 || orderedShots.length === 0} onClick={onRebuild} type="button">Rebuild Runtime Graph</button>
+          <button className={isRebuildingRuntimeGraph ? 'primary-button compact button-with-spinner' : 'primary-button compact'} disabled={validationErrors.length > 0 || orderedShots.length === 0 || isRebuildingRuntimeGraph} onClick={() => void onRebuild()} type="button">
+            {isRebuildingRuntimeGraph ? <><span className="button-spinner" aria-hidden="true" />Rebuilding...</> : 'Rebuild Runtime Graph'}
+          </button>
         </div>
       </div>
 
@@ -2511,14 +2553,45 @@ function ScriptPreviewSurface({
             <span className="eyebrow">Scenes</span>
             <h3>{orderedScenes.length} scene{orderedScenes.length === 1 ? '' : 's'}</h3>
           </div>
+          <button className="ghost-button compact" onClick={addScene} type="button">Add Scene</button>
         </div>
         {orderedScenes.length === 0 ? <div className="inline-note">No explicit scene groupings were stored for this script.</div> : (
-          <div className="script-chip-row">
+          <div className="diagnostic-stack">
             {orderedScenes.map((scene) => (
-              <div key={scene.id} className="script-binding-chip script-scene-pill">
-                <div className="script-binding-chip-copy">
-                  <strong className="script-scene-pill-title">{scene.title}</strong>
-                  <span>{scene.shotIds.length} shot{scene.shotIds.length === 1 ? '' : 's'}{scene.summary ? ` · ${scene.summary}` : ''}</span>
+              <div key={scene.id} className="schema-card">
+                <div className="section-head">
+                  <div>
+                    <span className="eyebrow">Scene</span>
+                    <h3>{scene.title}</h3>
+                  </div>
+                  <div className="script-row-controls">
+                    <button className="ghost-button compact" onClick={() => addShot(scene.id)} type="button">Add Shot</button>
+                    <button className="ghost-button compact" disabled={orderedScenes.length === 1} onClick={() => removeScene(scene.id)} type="button">Remove</button>
+                  </div>
+                </div>
+                <div className="editor-grid compact cinematic-field-grid">
+                  <label className="field-block compact-block">
+                    <span>Title</span>
+                    <input value={scene.title} onChange={(event) => updateScene(scene.id, (currentScene) => ({ ...currentScene, title: event.target.value }))} />
+                  </label>
+                  <label className="field-block compact-block">
+                    <span>Location</span>
+                    <select value={scene.locationRefId ?? ''} onChange={(event) => updateScene(scene.id, (currentScene) => ({ ...currentScene, locationRefId: event.target.value || null }))}>
+                      <option value="">No location</option>
+                      {environmentOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+                    </select>
+                  </label>
+                  <label className="field-block full-width">
+                    <span>Summary</span>
+                    <textarea rows={2} value={scene.summary} onChange={(event) => updateScene(scene.id, (currentScene) => ({ ...currentScene, summary: event.target.value }))} />
+                  </label>
+                  <label className="field-block full-width">
+                    <span>Continuity Notes</span>
+                    <textarea rows={2} value={scene.continuityNotes} onChange={(event) => updateScene(scene.id, (currentScene) => ({ ...currentScene, continuityNotes: event.target.value }))} />
+                  </label>
+                </div>
+                <div className="inline-note">
+                  {scene.shotIds.length} shot{scene.shotIds.length === 1 ? '' : 's'} in this scene
                 </div>
               </div>
             ))}
@@ -2532,7 +2605,7 @@ function ScriptPreviewSurface({
             <span className="eyebrow">Shots</span>
             <h3>{orderedShots.length} shot{orderedShots.length === 1 ? '' : 's'}</h3>
           </div>
-          <button className="ghost-button compact" onClick={addShot} type="button">Add Shot</button>
+          <button className="ghost-button compact" onClick={() => addShot()} type="button">Add Shot</button>
         </div>
       </div>
 
@@ -2611,7 +2684,9 @@ function ScriptPreviewSurface({
                   storyboards: {compiledShot?.storyboardRefIds.map((refId) => auxiliaryRefLabelById.get(refId) ?? refId).join(', ')}
                 </span>
               ) : null}
+              <span className="script-mini-chip">{shot.actions.length} action</span>
               <span className="script-mini-chip">{shot.dialogue.length} dialogue</span>
+              <span className="script-mini-chip">{shot.audio.length} audio</span>
             </div>
 
             {shotIssues.length > 0 ? (
@@ -2634,6 +2709,20 @@ function ScriptPreviewSurface({
             <div className="editor-section compact-section">
               <div className="section-head">
                 <div>
+                  <span className="eyebrow">Action</span>
+                  <h3>{shot.actions.length} beat{shot.actions.length === 1 ? '' : 's'}</h3>
+                </div>
+              </div>
+              <ActionBeatEditor
+                actions={shot.actions}
+                referenceOptions={referenceOptions}
+                onChange={(actions) => updateShot(shot.id, (currentShot) => ({ ...currentShot, actions }))}
+              />
+            </div>
+
+            <div className="editor-section compact-section">
+              <div className="section-head">
+                <div>
                   <span className="eyebrow">Dialogue</span>
                   <h3>{shot.dialogue.length} line{shot.dialogue.length === 1 ? '' : 's'}</h3>
                 </div>
@@ -2644,6 +2733,15 @@ function ScriptPreviewSurface({
                 onChange={(dialogue) => updateShot(shot.id, (currentShot) => ({ ...currentShot, dialogue }))}
               />
             </div>
+
+            <details className="script-advanced-panel">
+              <summary>Audio cues</summary>
+              <AudioBeatEditor
+                audio={shot.audio}
+                referenceOptions={referenceOptions}
+                onChange={(audio) => updateShot(shot.id, (currentShot) => ({ ...currentShot, audio }))}
+              />
+            </details>
 
             <details className="script-advanced-panel">
               <summary>Advanced shot fields</summary>
@@ -3139,6 +3237,8 @@ function CinematicTakeInspector({
   const stillAsset = assets.find((asset) => asset.key === config.outputStillAssetKey) ?? null
   const videoAsset = assets.find((asset) => asset.key === config.outputVideoAssetKey) ?? null
   const sequence = getCinematicSequence(currentGraph.metadata)
+  const compiledTake = sequence.takes.find((take) => take.id === config.id) ?? null
+  const effectiveTake = compiledTake ?? config
   const includedShots = sequence?.shots.filter((shot) => config.shotIds.includes(shot.id)) ?? []
   const latestRun = runs.find((run) => run.jobs.some((job) => job.shotNodeKey === node.key)) ?? null
   const activeStoryboardRun = runs.find((run) => !['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(run.status) && run.mode === 'preview_storyboard_still' && run.shotNodeKey === node.key) ?? null
@@ -3304,10 +3404,18 @@ function CinematicTakeInspector({
             <strong>Preset contract</strong>
             <span> {getPresetSummaryLabel({
               presetFamily: graphSettings.presetFamily,
-              formatSubtype: config.formatSubtype ?? graphSettings.formatSubtype,
-              storyScenePreset: config.storyScenePreset ?? graphSettings.storyScenePreset,
-              storyLanguagePreset: config.storyLanguagePreset ?? graphSettings.storyLanguagePreset,
+              formatSubtype: effectiveTake.formatSubtype ?? graphSettings.formatSubtype,
+              storyScenePreset: effectiveTake.storyScenePreset ?? graphSettings.storyScenePreset,
+              storyLanguagePreset: effectiveTake.storyLanguagePreset ?? graphSettings.storyLanguagePreset,
             })}</span>
+          </div>
+        ) : null}
+        {effectiveTake.storyboardPanelStatus !== 'none' ? (
+          <div className="inline-note">
+            <strong>Storyboard script</strong>
+            <span> {effectiveTake.storyboardPanelStatus === 'generated'
+              ? `${effectiveTake.storyboardPanelPlan?.panels.length ?? 0} panel${(effectiveTake.storyboardPanelPlan?.panels.length ?? 0) === 1 ? '' : 's'} ready`
+              : 'stale'}</span>
           </div>
         ) : null}
         {config.formulaFamily ? (
@@ -3589,6 +3697,38 @@ function CinematicTakeInspector({
         <button className="primary-button compact" disabled={!canRunCinematics || includedShots.length === 0} onClick={() => onGenerate('graph_run')} type="button">Generate Clip</button>
       </div>
       {!canRunCinematics ? <div className="inline-note">Connect to a live Supabase workspace before starting cinematic generation jobs.</div> : null}
+      <div className="editor-section compact-section">
+        <div className="section-head">
+          <div>
+            <span className="eyebrow">Storyboard Script</span>
+            <h3>{effectiveTake.storyboardPanelStatus === 'generated' ? `${effectiveTake.storyboardPanelPlan?.panels.length ?? 0} Panel${(effectiveTake.storyboardPanelPlan?.panels.length ?? 0) === 1 ? '' : 's'}` : 'Not generated for this take'}</h3>
+          </div>
+        </div>
+        {effectiveTake.storyboardPanelStatus === 'generated' && effectiveTake.storyboardPanelPlan?.panels.length ? (
+          <div className="diagnostic-stack">
+            {effectiveTake.storyboardPanelPlan.panels.map((panel, index) => (
+              <div className="schema-card" key={panel.id}>
+                <div className="inline-note">
+                  <strong>{index + 1}. {panel.title || `Panel ${index + 1}`}</strong>
+                  <span> {panel.cameraAngle || 'eye level'} · {panel.cameraMotion || 'static'}</span>
+                </div>
+                <div className="inline-note">
+                  <strong>Description</strong>
+                  <span> {panel.description}</span>
+                </div>
+              </div>
+            ))}
+            <label className="field-block full-width">
+              <span>Raw Storyboard Script</span>
+              <textarea readOnly rows={Math.min(16, Math.max(6, (effectiveTake.storyboardPanelPlan.panels.length ?? 1) * 3))} value={effectiveTake.storyboardPanelScriptText} />
+            </label>
+          </div>
+        ) : effectiveTake.storyboardPanelStatus === 'stale' ? (
+          <div className="inline-note">This take needs its storyboard script regenerated from the latest shot structure.</div>
+        ) : (
+          <div className="inline-note">Action-dense takes automatically derive a storyboard panel script. Quieter takes stay on the simpler shot-driven storyboard path.</div>
+        )}
+      </div>
       <div className="editor-section compact-section">
         <div className="section-head">
           <div>

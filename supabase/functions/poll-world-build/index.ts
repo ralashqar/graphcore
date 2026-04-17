@@ -628,23 +628,29 @@ function compositePromptForPlan(plan: z.infer<typeof cinematicPlanSchema>, compo
 
 function storyboardPromptForPlan(plan: z.infer<typeof cinematicPlanSchema>, storyboardAssetId: string) {
   if (storyboardAssetId === 'storyboard_sequence') {
+    const panelCount = Math.min(16, Math.max(4, plan.shots.length * 2))
+    const gridLabel = panelCount <= 4 ? '2x2' : panelCount <= 9 ? '3x3' : '4x4'
     return [
-      `Create a cinematic storyboard sheet for "${plan.graphName}".`,
+      `Create a comic-ink storyboard board for "${plan.graphName}".`,
       plan.storyboardPlan?.summary ? `Brief: ${plan.storyboardPlan.summary}.` : null,
       `Cover these beats: ${plan.shots.map((shot) => shot.title).join(', ')}.`,
-      'Lay out readable storyboard panels with clear camera continuity and blocking.',
-      'Minimal lettering only when needed for shot numbering.',
+      `Lay out readable storyboard panels in a ${gridLabel} board with clean gutters.`,
+      'Use monochrome or restrained grayscale wash, bold inked silhouettes, and clear blocking.',
+      'For fast action, expand continuous choreography into multiple panels instead of inventing extra camera cuts.',
+      'No lettering, captions, speech bubbles, or polished finished-frame treatment.',
     ].filter(Boolean).join(' ')
   }
 
   const panel = plan.storyboardPlan?.panels.find((entry) => entry.id === storyboardAssetId) ?? null
   const shot = panel?.shotId ? plan.shots.find((entry) => entry.id === panel.shotId) ?? null : null
   return [
-    `Create a storyboard panel for "${panel?.title ?? storyboardAssetId}".`,
+    `Create a comic-ink storyboard panel for "${panel?.title ?? storyboardAssetId}".`,
     shot ? `Shot beat: ${shot.beat}.` : null,
     shot?.compositionGuide ? `Composition: ${shot.compositionGuide}.` : null,
     panel?.notes ? `Notes: ${panel.notes}.` : null,
-    'Make the panel clear, high-contrast, and suitable as a visual continuity reference.',
+    'Make the panel clear, high-contrast, inked, and suitable as a visual continuity reference.',
+    'Use monochrome or restrained grayscale wash with strong silhouette readability.',
+    'No captions, speech bubbles, or decorative borders.',
   ].filter(Boolean).join(' ')
 }
 
@@ -1690,10 +1696,11 @@ Deno.serve(async (request) => {
       import('../../../src/domain/assets.ts'),
       import('../_shared/world-build-cinematics.ts'),
     ])
-    const { cinematicRunStatusResponseSchema, cinematicScriptDocSchema, getCinematicSettings } = cinematicsDomain
+    const { cinematicRunStatusResponseSchema, cinematicScriptDocSchema, materializeCinematicGraphSettings } = cinematicsDomain
     const { compileCinematicGraphFromScriptDoc } = cinematicCompilerDomain
     const {
       cinematicPlanSchema,
+      normalizeCinematicPlanForTransport,
       worldBuildBatchSchema,
       worldBuildJobSchema,
       worldBuildPollRequestSchema,
@@ -2720,7 +2727,7 @@ Deno.serve(async (request) => {
               usedRepairPass: false,
             }
             if (!authoredCinematicPlan.scriptDoc) {
-              const effectiveSettings = getCinematicSettings(snapshot.gameSpec ?? null, { cinematics: authoredCinematicPlan.graphSettings })
+              const effectiveSettings = materializeCinematicGraphSettings(authoredCinematicPlan.graphSettings ?? {})
               const targetShotCount = resolveTargetShotCount(batch.prompt, effectiveSettings.formatSubtype)
               await updateJob(client, job.id, {
                 result_context: {
@@ -2771,6 +2778,25 @@ Deno.serve(async (request) => {
                   graphName: cinematicDraft.graphName || authoredCinematicPlan.graphName,
                   graphSummary: cinematicDraft.graphSummary || authoredCinematicPlan.graphSummary,
                   entityRefs: resolvedEntityRefs,
+                  graphSettings: effectiveSettings.presetFamily === 'story_movie_tv'
+                    ? {
+                        ...(cinematicDraft.graphSettings ?? {}),
+                        presetFamily: 'story_movie_tv' as const,
+                        formatSubtype: null,
+                        storyScenePreset: effectiveSettings.storyScenePreset ?? null,
+                        storyLanguagePreset: effectiveSettings.storyLanguagePreset ?? null,
+                        formulaFamily: effectiveSettings.formulaFamily,
+                        dominantTrigger: effectiveSettings.dominantTrigger,
+                        creativeTreatment: effectiveSettings.creativeTreatment,
+                        hookFamily: effectiveSettings.hookFamily,
+                        narrationMode: effectiveSettings.narrationMode,
+                        backdropRole: effectiveSettings.backdropRole,
+                        backdropStrategy: effectiveSettings.backdropStrategy,
+                        contrastAxis: effectiveSettings.contrastAxis,
+                        proofMoment: effectiveSettings.proofMoment,
+                        ctaStyle: effectiveSettings.ctaStyle,
+                      }
+                    : cinematicDraft.graphSettings,
                 })
               } catch (error) {
                 console.error('[GraphCore] materializeCinematicPlan failed during writing_script.', {
@@ -3480,7 +3506,7 @@ Deno.serve(async (request) => {
         status: finalLoaded.batch.status,
         diagnostics: finalLoaded.batch.diagnostics ?? [],
         planItems: finalLoaded.batch.plan_json ?? [],
-        cinematicPlan: finalLoaded.batch.cinematic_plan ?? null,
+        cinematicPlan: normalizeCinematicPlanForTransport(finalLoaded.batch.cinematic_plan ?? null),
         createdAt: finalLoaded.batch.created_at,
         updatedAt: finalLoaded.batch.updated_at,
         jobs: finalJobs,

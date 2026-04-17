@@ -201,10 +201,10 @@ export const cinematicGraphSettingsSchema = z.object({
   narrationMode: z.preprocess(coerceEnumLikeValue(cinematicNarrationModeSchema.options), cinematicNarrationModeSchema.nullable()).optional(),
   authorshipPipeline: z.preprocess(coerceEnumLikeValue(cinematicAuthorshipPipelineSchema.options), cinematicAuthorshipPipelineSchema).optional(),
   backdropRole: z.preprocess(coerceEnumLikeValue(cinematicBackdropRoleSchema.options), cinematicBackdropRoleSchema.nullable()).optional(),
-  backdropStrategy: z.string().optional(),
-  contrastAxis: z.string().optional(),
-  proofMoment: z.string().optional(),
-  ctaStyle: z.string().optional(),
+  backdropStrategy: z.string().nullable().optional(),
+  contrastAxis: z.string().nullable().optional(),
+  proofMoment: z.string().nullable().optional(),
+  ctaStyle: z.string().nullable().optional(),
   targetTotalDurationSeconds: z.number().int().positive().max(90).nullable().optional(),
   targetTotalDurationRangeSeconds: z.tuple([z.number().int().positive(), z.number().int().positive()]).nullable().optional(),
   targetShotCount: z.number().int().positive().max(20).nullable().optional(),
@@ -230,6 +230,21 @@ export const cinematicPlanSchema = z.object({
   graphSettings: cinematicGraphSettingsSchema,
   autoRun: z.boolean().default(false),
 })
+
+export function normalizeCinematicPlanForTransport(plan: unknown) {
+  if (plan === null || plan === undefined) return null
+  const parsed = cinematicPlanSchema.parse(plan)
+  return cinematicPlanSchema.parse({
+    ...parsed,
+    graphSettings: {
+      ...parsed.graphSettings,
+      backdropStrategy: parsed.graphSettings.backdropStrategy ?? '',
+      contrastAxis: parsed.graphSettings.contrastAxis ?? '',
+      proofMoment: parsed.graphSettings.proofMoment ?? '',
+      ctaStyle: parsed.graphSettings.ctaStyle ?? '',
+    },
+  })
+}
 
 export const worldBuildPlanRequestSchema = z.object({
   prompt: z.string().min(1),

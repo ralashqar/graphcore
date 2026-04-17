@@ -363,9 +363,10 @@ Deno.serve(async (request) => {
       buildCinematicSettingsPatchFromPresetFamily,
       buildCinematicSettingsPatchFromStoryPresets,
       cinematicScriptDocSchema,
-      getCinematicSettings,
+      materializeCinematicGraphSettings,
     } = cinematicsDomain
     const {
+      normalizeCinematicPlanForTransport,
       worldBuildAuthorCinematicRequestSchema,
       worldBuildBatchSchema,
       worldBuildJobSchema,
@@ -439,25 +440,49 @@ Deno.serve(async (request) => {
       }))
     }
 
-    const baseSettings = getCinematicSettings(payload.snapshot.gameSpec ?? null, { cinematics: cinematicPlan.graphSettings })
-    const correctedPresetSelection = correctUgcPresetSelectionForPrompt({
-      prompt: batch.prompt,
-      presetFamily: baseSettings.presetFamily,
-      formatSubtype: baseSettings.formatSubtype,
-    })
-    const effectiveSettings = {
-      ...baseSettings,
-      ...buildCinematicSettingsPatchFromPresetFamily(correctedPresetSelection.presetFamily),
-      ...buildCinematicSettingsPatchFromFormatSubtype(correctedPresetSelection.presetFamily, correctedPresetSelection.formatSubtype),
-      ...(cinematicPlan.graphSettings ?? {}),
-      presetFamily: correctedPresetSelection.presetFamily,
-      formatSubtype: correctedPresetSelection.formatSubtype,
-    }
+    const baseSettings = materializeCinematicGraphSettings(cinematicPlan.graphSettings ?? {})
+    const storyPresetLocked =
+      baseSettings.presetFamily === 'story_movie_tv'
+      || Boolean(baseSettings.storyScenePreset)
+      || Boolean(baseSettings.storyLanguagePreset)
+    const correctedPresetSelection = storyPresetLocked
+      ? {
+          presetFamily: 'story_movie_tv' as const,
+          formatSubtype: null,
+        }
+      : correctUgcPresetSelectionForPrompt({
+          prompt: batch.prompt,
+          presetFamily: baseSettings.presetFamily,
+          formatSubtype: baseSettings.formatSubtype,
+        })
+    const effectiveSettings = correctedPresetSelection.presetFamily === 'story_movie_tv'
+      ? {
+          ...baseSettings,
+          ...buildCinematicSettingsPatchFromStoryPresets(
+            baseSettings.storyScenePreset ?? null,
+            baseSettings.storyLanguagePreset ?? null,
+          ),
+          ...(cinematicPlan.graphSettings ?? {}),
+          presetFamily: 'story_movie_tv' as const,
+          formatSubtype: null,
+          storyScenePreset: baseSettings.storyScenePreset ?? null,
+          storyLanguagePreset: baseSettings.storyLanguagePreset ?? null,
+        }
+      : {
+          ...baseSettings,
+          ...buildCinematicSettingsPatchFromPresetFamily(correctedPresetSelection.presetFamily),
+          ...buildCinematicSettingsPatchFromFormatSubtype(correctedPresetSelection.presetFamily, correctedPresetSelection.formatSubtype),
+          ...(cinematicPlan.graphSettings ?? {}),
+          presetFamily: correctedPresetSelection.presetFamily,
+          formatSubtype: correctedPresetSelection.formatSubtype,
+        }
     const correctedPlanForAuthorship = {
       ...cinematicPlan,
       graphSettings: {
         ...(cinematicPlan.graphSettings ?? {}),
         presetFamily: effectiveSettings.presetFamily,
+        storyScenePreset: effectiveSettings.storyScenePreset,
+        storyLanguagePreset: effectiveSettings.storyLanguagePreset,
         formatSubtype: effectiveSettings.formatSubtype,
         formulaFamily: effectiveSettings.formulaFamily,
         dominantTrigger: effectiveSettings.dominantTrigger,
@@ -473,6 +498,8 @@ Deno.serve(async (request) => {
       },
       shots: cinematicPlan.shots.map((shot) => ({
         ...shot,
+        storyScenePreset: shot.storyScenePreset || effectiveSettings.storyScenePreset || null,
+        storyLanguagePreset: shot.storyLanguagePreset || effectiveSettings.storyLanguagePreset || null,
         formatSubtype: effectiveSettings.formatSubtype,
         formulaFamily: effectiveSettings.formulaFamily,
         dominantTrigger: effectiveSettings.dominantTrigger,
@@ -532,6 +559,20 @@ Deno.serve(async (request) => {
             ),
             ...effectiveSettings,
             ...(skeletonDraft.graphSettings ?? {}),
+            presetFamily: 'story_movie_tv' as const,
+            formatSubtype: null,
+            storyScenePreset: effectiveSettings.storyScenePreset ?? null,
+            storyLanguagePreset: effectiveSettings.storyLanguagePreset ?? null,
+            formulaFamily: effectiveSettings.formulaFamily,
+            dominantTrigger: effectiveSettings.dominantTrigger,
+            creativeTreatment: effectiveSettings.creativeTreatment,
+            hookFamily: effectiveSettings.hookFamily,
+            narrationMode: effectiveSettings.narrationMode,
+            backdropRole: effectiveSettings.backdropRole,
+            backdropStrategy: effectiveSettings.backdropStrategy,
+            contrastAxis: effectiveSettings.contrastAxis,
+            proofMoment: effectiveSettings.proofMoment,
+            ctaStyle: effectiveSettings.ctaStyle,
           }
           : {
             ...buildCinematicSettingsPatchFromPresetFamily(effectiveSettings.presetFamily),
@@ -722,7 +763,7 @@ Deno.serve(async (request) => {
         status: refreshed.batch.status,
         diagnostics: refreshed.batch.diagnostics ?? [],
         planItems: refreshed.batch.plan_json ?? [],
-        cinematicPlan: refreshed.batch.cinematic_plan ?? null,
+        cinematicPlan: normalizeCinematicPlanForTransport(refreshed.batch.cinematic_plan ?? null),
         createdAt: refreshed.batch.created_at,
         updatedAt: refreshed.batch.updated_at,
         jobs: refreshed.jobs.map(parseWorldBuildJob),

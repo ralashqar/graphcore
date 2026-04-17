@@ -7,10 +7,13 @@ import {
   buildCinematicSettingsPatchFromPresetFamily,
   buildCinematicSettingsPatchFromStoryPresets,
   cinematicScriptDocSchema,
+  deriveTakeStoryboardPanelArtifacts,
   deriveCinematicScriptFromSequence,
+  materializeCinematicGraphSettings,
 } from './cinematics.ts'
+import { compileCinematicGraphFromScriptDoc } from './cinematicScriptCompiler.ts'
 import { ingestCinematicCreativeScriptToAuthoredShots } from './cinematicCreativeScript.ts'
-import { cinematicPlanSchema } from './worldBuild.ts'
+import { cinematicGraphSettingsSchema, cinematicPlanSchema } from './worldBuild.ts'
 
 test('legacy UGC shots derive directing and reference packages', () => {
   const script = cinematicScriptDocSchema.parse({
@@ -220,7 +223,341 @@ test('action story preset patches derive combat pacing defaults', () => {
   assert.deepEqual(settings.targetShotCountRange, [4, 8])
   assert.deepEqual(settings.idealShotDurationRangeSeconds, [2, 6])
   assert.equal(settings.maxDialogueWordsPerShot, 22)
-  assert.equal(settings.maxActionBeatsPerShot, 3)
+  assert.equal(settings.maxActionBeatsPerShot, 5)
+})
+
+test('materialized graph settings preserve explicit story presets without project overrides', () => {
+  const settings = materializeCinematicGraphSettings({
+    presetFamily: 'story_movie_tv',
+    storyScenePreset: 'duel_showdown',
+    storyLanguagePreset: 'tactical_combat',
+  })
+
+  assert.equal(settings.presetFamily, 'story_movie_tv')
+  assert.equal(settings.storyScenePreset, 'duel_showdown')
+  assert.equal(settings.storyLanguagePreset, 'tactical_combat')
+  assert.equal(settings.formatSubtype, null)
+})
+
+test('world build cinematic graph settings allow nullable story string fields', () => {
+  const parsed = cinematicGraphSettingsSchema.parse({
+    presetFamily: 'story_movie_tv',
+    storyScenePreset: 'duel_showdown',
+    storyLanguagePreset: 'tactical_combat',
+    ctaStyle: null,
+    proofMoment: null,
+  })
+
+  assert.equal(parsed.ctaStyle, null)
+  assert.equal(parsed.proofMoment, null)
+})
+
+test('story duel shots keep dense continuous action inside one readable exchange', () => {
+  const script = cinematicScriptDocSchema.parse({
+    title: 'Duel',
+    entityBindings: [
+      { id: 'fighter_1', kind: 'character', role: 'fighter', label: 'Kharzag', sourceName: 'Kharzag' },
+      { id: 'fighter_2', kind: 'character', role: 'fighter', label: 'Brakk', sourceName: 'Brakk' },
+      { id: 'arena_1', kind: 'environment', role: 'arena', label: 'Arena', sourceName: 'Arena' },
+    ],
+    shots: [{
+      id: 'shot_1',
+      orderIndex: 0,
+      title: 'Continuous exchange',
+      beat: 'Kharzag and Brakk close, trade steel in one continuous exchange, then Kharzag drives Brakk backward before the next reset.',
+      hookRole: 'proof',
+      storyScenePreset: 'duel_showdown',
+      storyLanguagePreset: 'tactical_combat',
+      participantRefIds: ['fighter_1', 'fighter_2'],
+      locationRefId: 'arena_1',
+      actions: [
+        { id: 'a1', actorRefId: 'fighter_1', targetRefId: 'fighter_2', verb: 'closes the distance with his sword raised' },
+        { id: 'a2', actorRefId: 'fighter_2', targetRefId: 'fighter_1', verb: 'parries and circles left' },
+        { id: 'a3', actorRefId: 'fighter_1', targetRefId: 'fighter_2', verb: 'presses with another linked strike' },
+        { id: 'a4', actorRefId: 'fighter_2', targetRefId: 'fighter_1', verb: 'blocks and stumbles back a half step' },
+        { id: 'a5', actorRefId: 'fighter_1', targetRefId: 'fighter_2', verb: 'drives him backward with the final heavy clash' },
+      ],
+    }],
+  })
+
+  const sequence = buildCinematicSequenceFromScriptDoc(script)
+
+  assert.equal(sequence.shots.length, 1)
+  assert.equal(sequence.shots[0]?.actions.length, 5)
+  assert.ok((sequence.shots[0]?.durationSeconds ?? 0) >= 3)
+  assert.ok((sequence.shots[0]?.durationSeconds ?? 0) <= 6)
+  assert.equal(sequence.takes[0]?.storyboardPanelStatus, 'generated')
+  assert.ok((sequence.takes[0]?.storyboardPanelPlan?.panels.length ?? 0) >= 2)
+  assert.match(sequence.takes[0]?.storyboardPanelScriptText ?? '', /PANEL 1/)
+})
+
+test('story duel sequence packs tactical beats into fewer action takes', () => {
+  const script = cinematicScriptDocSchema.parse({
+    title: 'Arena duel',
+    entityBindings: [
+      { id: 'fighter_1', kind: 'character', role: 'fighter', label: 'Kharzag', sourceName: 'Kharzag' },
+      { id: 'fighter_2', kind: 'character', role: 'fighter', label: 'Brakk', sourceName: 'Brakk' },
+      { id: 'arena_1', kind: 'environment', role: 'arena', label: 'Arena', sourceName: 'Arena' },
+    ],
+    shots: [
+      {
+        id: 'shot_1',
+        orderIndex: 0,
+        title: 'Arena lock-in',
+        beat: 'The arena pit opens wide under hard lights with both fighters reading the distance and line of attack.',
+        hookRole: 'hook',
+        storyScenePreset: 'duel_showdown',
+        storyLanguagePreset: 'tactical_combat',
+        participantRefIds: ['fighter_1', 'fighter_2'],
+        locationRefId: 'arena_1',
+        actions: [
+          { id: 'a1', actorRefId: 'fighter_1', targetRefId: 'fighter_2', verb: 'tightens his grip and squares up' },
+          { id: 'a2', actorRefId: 'fighter_2', targetRefId: 'fighter_1', verb: 'plants his stance on the center line' },
+        ],
+      },
+      {
+        id: 'shot_2',
+        orderIndex: 1,
+        title: 'First test',
+        beat: 'Kharzag probes Brakk and Brakk absorbs the first test without giving ground.',
+        hookRole: 'setup',
+        storyScenePreset: 'duel_showdown',
+        storyLanguagePreset: 'tactical_combat',
+        participantRefIds: ['fighter_1', 'fighter_2'],
+        locationRefId: 'arena_1',
+        actions: [
+          { id: 'a3', actorRefId: 'fighter_1', targetRefId: 'fighter_2', verb: 'steps in with a short cleaver probe' },
+          { id: 'a4', actorRefId: 'fighter_2', targetRefId: 'fighter_1', verb: 'catches the line on a compact guard' },
+        ],
+      },
+      {
+        id: 'shot_3',
+        orderIndex: 2,
+        title: 'Advantage shifts',
+        beat: 'Brakk surges forward and forces Kharzag to give ground under pressure.',
+        hookRole: 'proof',
+        storyScenePreset: 'duel_showdown',
+        storyLanguagePreset: 'tactical_combat',
+        participantRefIds: ['fighter_1', 'fighter_2'],
+        locationRefId: 'arena_1',
+        actions: [
+          { id: 'a5', actorRefId: 'fighter_2', targetRefId: 'fighter_1', verb: 'surges forward and owns the center line' },
+          { id: 'a6', actorRefId: 'fighter_1', targetRefId: 'fighter_2', verb: 'yields a step while guarding high' },
+        ],
+      },
+      {
+        id: 'shot_4',
+        orderIndex: 3,
+        title: 'Disarm turn',
+        beat: 'Kharzag slips inside the pressure and turns the angle with a tight counter.',
+        hookRole: 'proof',
+        storyScenePreset: 'duel_showdown',
+        storyLanguagePreset: 'tactical_combat',
+        participantRefIds: ['fighter_1', 'fighter_2'],
+        locationRefId: 'arena_1',
+        actions: [
+          { id: 'a7', actorRefId: 'fighter_1', targetRefId: 'fighter_2', verb: 'slips inside and cuts across the line' },
+          { id: 'a8', actorRefId: 'fighter_2', targetRefId: 'fighter_1', verb: 'recoils as the angle breaks' },
+        ],
+      },
+      {
+        id: 'shot_5',
+        orderIndex: 4,
+        title: 'Final control',
+        beat: 'Both fighters slow and reset, but Kharzag now holds the better ground in the arena.',
+        hookRole: 'payoff',
+        storyScenePreset: 'duel_showdown',
+        storyLanguagePreset: 'tactical_combat',
+        participantRefIds: ['fighter_1', 'fighter_2'],
+        locationRefId: 'arena_1',
+        actions: [
+          { id: 'a9', actorRefId: 'fighter_1', targetRefId: 'fighter_2', verb: 'holds center with the cleaver low and ready' },
+          { id: 'a10', actorRefId: 'fighter_2', targetRefId: 'fighter_1', verb: 'steps back and resets his shoulders' },
+        ],
+      },
+    ],
+  })
+
+  const sequence = buildCinematicSequenceFromScriptDoc(script)
+
+  assert.ok(sequence.takes.length <= 2)
+  assert.ok((sequence.takes[0]?.shotIds.length ?? 0) >= 3)
+})
+
+test('story action sequences ignore overused forced take breaks inside one continuous arena exchange', () => {
+  const script = cinematicScriptDocSchema.parse({
+    title: 'Forced break duel',
+    entityBindings: [
+      { id: 'fighter_1', kind: 'character', role: 'fighter', label: 'Kharzag', sourceName: 'Kharzag' },
+      { id: 'fighter_2', kind: 'character', role: 'fighter', label: 'Brakk', sourceName: 'Brakk' },
+      { id: 'arena_1', kind: 'environment', role: 'arena', label: 'Arena', sourceName: 'Arena' },
+    ],
+    shots: [
+      {
+        id: 'shot_1',
+        orderIndex: 0,
+        title: 'Entry',
+        beat: 'Kharzag enters fast and Brakk absorbs the opening clash.',
+        hookRole: 'hook',
+        storyScenePreset: 'duel_showdown',
+        storyLanguagePreset: 'tactical_combat',
+        participantRefIds: ['fighter_1', 'fighter_2'],
+        locationRefId: 'arena_1',
+        forceTakeBreak: true,
+        actions: [
+          { id: 'a1', actorRefId: 'fighter_1', targetRefId: 'fighter_2', verb: 'drives in with a chopping advance' },
+          { id: 'a2', actorRefId: 'fighter_2', targetRefId: 'fighter_1', verb: 'turns the attack aside with force' },
+        ],
+      },
+      {
+        id: 'shot_2',
+        orderIndex: 1,
+        title: 'Pressure',
+        beat: 'Brakk crowds Kharzag back and the footing battle takes over the center lane.',
+        hookRole: 'proof',
+        storyScenePreset: 'duel_showdown',
+        storyLanguagePreset: 'tactical_combat',
+        participantRefIds: ['fighter_1', 'fighter_2'],
+        locationRefId: 'arena_1',
+        forceTakeBreak: true,
+        actions: [
+          { id: 'a3', actorRefId: 'fighter_2', targetRefId: 'fighter_1', verb: 'drives the shoulder line forward' },
+          { id: 'a4', actorRefId: 'fighter_1', targetRefId: 'fighter_2', verb: 'slides aside and retakes a sliver of space' },
+        ],
+      },
+      {
+        id: 'shot_3',
+        orderIndex: 2,
+        title: 'Reversal',
+        beat: 'Kharzag turns the next push into a visible reversal and breaks Brakk off the center.',
+        hookRole: 'payoff',
+        storyScenePreset: 'duel_showdown',
+        storyLanguagePreset: 'tactical_combat',
+        participantRefIds: ['fighter_1', 'fighter_2'],
+        locationRefId: 'arena_1',
+        forceTakeBreak: true,
+        actions: [
+          { id: 'a5', actorRefId: 'fighter_1', targetRefId: 'fighter_2', verb: 'twists the line and yanks the guard open' },
+          { id: 'a6', actorRefId: 'fighter_2', targetRefId: 'fighter_1', verb: 'stumbles off the center' },
+        ],
+      },
+    ],
+  })
+
+  const sequence = buildCinematicSequenceFromScriptDoc(script)
+
+  assert.ok(sequence.takes.length <= 2)
+  assert.ok(sequence.takes.some((take) => take.shotIds.length >= 2))
+})
+
+test('story action take packing tolerates missing per-shot story preset metadata', () => {
+  const script = cinematicScriptDocSchema.parse({
+    title: 'Metadata drift duel',
+    entityBindings: [
+      { id: 'fighter_1', kind: 'character', role: 'fighter', label: 'Kharzag', sourceName: 'Kharzag' },
+      { id: 'fighter_2', kind: 'character', role: 'fighter', label: 'Brakk', sourceName: 'Brakk' },
+      { id: 'arena_1', kind: 'environment', role: 'arena', label: 'Arena', sourceName: 'Arena' },
+    ],
+    shots: [
+      {
+        id: 'shot_1',
+        orderIndex: 0,
+        title: 'Face-off',
+        beat: 'Kharzag and Brakk square off in the center lane of the arena.',
+        hookRole: 'hook',
+        storyScenePreset: 'duel_showdown',
+        storyLanguagePreset: 'tactical_combat',
+        participantRefIds: ['fighter_1', 'fighter_2'],
+        locationRefId: 'arena_1',
+        actions: [
+          { id: 'a1', actorRefId: 'fighter_1', targetRefId: 'fighter_2', verb: 'plants the cleaver low' },
+          { id: 'a2', actorRefId: 'fighter_2', targetRefId: 'fighter_1', verb: 'holds the center line' },
+        ],
+      },
+      {
+        id: 'shot_2',
+        orderIndex: 1,
+        title: 'First entry',
+        beat: 'Kharzag bursts in and Brakk meets the first clash head on.',
+        hookRole: 'setup',
+        storyScenePreset: null,
+        storyLanguagePreset: null,
+        participantRefIds: ['fighter_1', 'fighter_2'],
+        locationRefId: 'arena_1',
+        actions: [
+          { id: 'a3', actorRefId: 'fighter_1', targetRefId: 'fighter_2', verb: 'drives in with a chopping advance' },
+          { id: 'a4', actorRefId: 'fighter_2', targetRefId: 'fighter_1', verb: 'catches and shoves the attack off-line' },
+        ],
+      },
+      {
+        id: 'shot_3',
+        orderIndex: 2,
+        title: 'Pressure trade',
+        beat: 'Brakk presses forward and Kharzag slips aside to reclaim a sliver of space.',
+        hookRole: 'proof',
+        storyScenePreset: null,
+        storyLanguagePreset: null,
+        participantRefIds: ['fighter_1', 'fighter_2'],
+        locationRefId: 'arena_1',
+        actions: [
+          { id: 'a5', actorRefId: 'fighter_2', targetRefId: 'fighter_1', verb: 'crowds the line with shoulder pressure' },
+          { id: 'a6', actorRefId: 'fighter_1', targetRefId: 'fighter_2', verb: 'slides off and resets the lane' },
+        ],
+      },
+    ],
+  })
+
+  const sequence = buildCinematicSequenceFromScriptDoc(script)
+
+  assert.ok(sequence.takes.length <= 2)
+  assert.ok(sequence.takes.some((take) => take.shotIds.length >= 2))
+})
+
+test('quiet dialogue takes skip storyboard panel scripting', () => {
+  const panels = deriveTakeStoryboardPanelArtifacts({
+    title: 'Quiet exchange',
+    shots: [{
+      id: 'shot_1',
+      title: 'Shared silence',
+      beat: 'They hold eye contact across the table and let the silence sit.',
+      cameraAngle: 'eye level',
+      cameraMovement: 'static',
+      framing: 'medium two-shot',
+      participantRefIds: ['speaker_1', 'speaker_2'],
+      locationRefId: 'room_1',
+      propRefIds: [],
+      storyScenePreset: 'dialogue_two_hander',
+      storyLanguagePreset: 'grounded_naturalist',
+      actions: [{ id: 'a1', actorRefId: 'speaker_1', targetRefId: 'speaker_2', verb: 'holds eye contact across the table' }],
+    }],
+  })
+
+  assert.equal(panels.storyboardPanelStatus, 'none')
+  assert.equal(panels.storyboardPanelPlan, null)
+  assert.equal(panels.storyboardPanelScriptText, '')
+})
+
+test('combat-flavored take beats generate storyboard panel scripts even with light action arrays', () => {
+  const panels = deriveTakeStoryboardPanelArtifacts({
+    title: 'Arena fight',
+    shots: [{
+      id: 'shot_1',
+      title: 'Steel meets in the arena',
+      beat: 'Kharzag fights Brakk in the arena, closing hard and forcing Brakk to give ground while the camera tracks the clash.',
+      cameraAngle: 'low angle',
+      cameraMovement: 'fast lateral tracking',
+      framing: 'wide combat two-shot',
+      participantRefIds: ['kharzag', 'brakk'],
+      locationRefId: 'arena_1',
+      propRefIds: [],
+      storyScenePreset: null,
+      storyLanguagePreset: null,
+      actions: [{ id: 'a1', actorRefId: 'kharzag', targetRefId: 'brakk', verb: 'drives forward into the fight' }],
+    }],
+  })
+
+  assert.equal(panels.storyboardPanelStatus, 'generated')
+  assert.ok((panels.storyboardPanelPlan?.panels.length ?? 0) >= 2)
 })
 
 test('story shots compile into story takes without relying on formatSubtype', () => {
@@ -399,4 +736,119 @@ test('visual-only creative scripts ingest without dialogue and keep visible acti
   assert.equal(ingested.authoredShots[0]?.dialogue.length, 0)
   assert.ok((ingested.authoredShots[0]?.actions[0]?.verb ?? '').includes('phone fills the frame'))
   assert.equal(ingested.authoredShots[0]?.audio[0]?.cue, 'Soft thumb taps only.')
+})
+
+test('story duel keeps packing across mixed shot-level preset metadata when continuity is continuous', () => {
+  const script = cinematicScriptDocSchema.parse({
+    title: 'Mixed metadata duel',
+    entityBindings: [
+      { id: 'fighter_1', kind: 'character', role: 'fighter', label: 'Kharzag', sourceName: 'Kharzag' },
+      { id: 'fighter_2', kind: 'character', role: 'fighter', label: 'Brakk', sourceName: 'Brakk' },
+      { id: 'arena_1', kind: 'environment', role: 'arena', label: 'Arena', sourceName: 'Arena' },
+    ],
+    shots: [
+      {
+        id: 'shot_1',
+        orderIndex: 0,
+        title: 'Face-off',
+        beat: 'Both fighters read the line in the center lane before the first collision.',
+        storyScenePreset: 'duel_showdown',
+        storyLanguagePreset: 'tactical_combat',
+        participantRefIds: ['fighter_1', 'fighter_2'],
+        locationRefId: 'arena_1',
+        actions: [
+          { id: 'a1', actorRefId: 'fighter_1', targetRefId: 'fighter_2', verb: 'sets the cleaver low and forward' },
+          { id: 'a2', actorRefId: 'fighter_2', targetRefId: 'fighter_1', verb: 'holds the center line' },
+        ],
+      },
+      {
+        id: 'shot_2',
+        orderIndex: 1,
+        title: 'First clash',
+        beat: 'Kharzag crashes in and Brakk redirects the strike without losing ground.',
+        storyScenePreset: null,
+        storyLanguagePreset: null,
+        participantRefIds: ['fighter_1', 'fighter_2'],
+        locationRefId: 'arena_1',
+        actions: [
+          { id: 'a3', actorRefId: 'fighter_1', targetRefId: 'fighter_2', verb: 'swings high on entry' },
+          { id: 'a4', actorRefId: 'fighter_2', targetRefId: 'fighter_1', verb: 'catches and shoves the line aside' },
+        ],
+      },
+      {
+        id: 'shot_3',
+        orderIndex: 2,
+        title: 'Pressure line',
+        beat: 'Brakk presses across the arena floor and forces Kharzag into a defensive retreat.',
+        storyScenePreset: 'duel_showdown',
+        storyLanguagePreset: 'grounded_naturalist',
+        participantRefIds: ['fighter_1', 'fighter_2'],
+        locationRefId: 'arena_1',
+        actions: [
+          { id: 'a5', actorRefId: 'fighter_2', targetRefId: 'fighter_1', verb: 'drives through the center lane' },
+          { id: 'a6', actorRefId: 'fighter_1', targetRefId: 'fighter_2', verb: 'gives ground while guarding high' },
+        ],
+      },
+      {
+        id: 'shot_4',
+        orderIndex: 3,
+        title: 'Turn',
+        beat: 'Kharzag cuts inside and flips the angle with a sharp reversal.',
+        storyScenePreset: 'duel_showdown',
+        storyLanguagePreset: 'tactical_combat',
+        participantRefIds: ['fighter_1', 'fighter_2'],
+        locationRefId: 'arena_1',
+        actions: [
+          { id: 'a7', actorRefId: 'fighter_1', targetRefId: 'fighter_2', verb: 'slips inside and twists the exchange' },
+          { id: 'a8', actorRefId: 'fighter_2', targetRefId: 'fighter_1', verb: 'stumbles off the center' },
+        ],
+      },
+    ],
+  })
+
+  const sequence = buildCinematicSequenceFromScriptDoc(script)
+
+  assert.ok(sequence.takes.length <= 2)
+  assert.ok((sequence.takes[0]?.shotIds.length ?? 0) >= 2)
+})
+
+test('compiled cinematic graphs persist fully materialized story settings from partial story graph settings', () => {
+  const script = cinematicScriptDocSchema.parse({
+    title: 'Story graph settings persistence',
+    entityBindings: [],
+    shots: [{
+      id: 'shot_1',
+      orderIndex: 0,
+      title: 'Duel beat',
+      beat: 'Kharzag and Brakk close into a tactical duel exchange.',
+      storyScenePreset: 'duel_showdown',
+      storyLanguagePreset: 'tactical_combat',
+      participantRefIds: [],
+      propRefIds: [],
+      dialogue: [],
+      actions: [],
+      audio: [],
+    }],
+  })
+
+  const graph = compileCinematicGraphFromScriptDoc({
+    graphKey: 'graph.story_test',
+    graphName: 'Story Test',
+    graphSummary: 'Story graph',
+    graphSettings: {
+      presetFamily: 'story_movie_tv',
+      storyScenePreset: 'duel_showdown',
+      storyLanguagePreset: 'tactical_combat',
+      formatSubtype: null,
+    },
+    scriptDoc: script,
+  })
+
+  const cinematics = (graph.metadata as { cinematics?: unknown }).cinematics
+  const settings = materializeCinematicGraphSettings(cinematics ?? {})
+
+  assert.equal(settings.presetFamily, 'story_movie_tv')
+  assert.equal(settings.storyScenePreset, 'duel_showdown')
+  assert.equal(settings.storyLanguagePreset, 'tactical_combat')
+  assert.equal(settings.formatSubtype, null)
 })

@@ -185,6 +185,14 @@ const defaultCinematicReferencePlan = () => ({
   dropOrder: [] as z.infer<typeof cinematicReferenceRoleSchema>[],
 })
 
+function isCinematicReferenceRole(value: string | null | undefined): value is CinematicReferenceRole {
+  return cinematicReferenceRoleSchema.options.includes(value as CinematicReferenceRole)
+}
+
+function sanitizeCinematicReferenceRoles(values: Array<string | null | undefined> | null | undefined) {
+  return uniqueStrings((values ?? []).filter((value): value is CinematicReferenceRole => isCinematicReferenceRole(value)))
+}
+
 export const cinematicSettingsSchema = z.object({
   stillAspectRatio: cinematicAspectRatioSchema.default('16:9'),
   stillResolution: cinematicStillResolutionSchema.default('1K'),
@@ -297,6 +305,21 @@ export const cinematicBeatSchema = z.object({
   summary: z.string().default(''),
   startSeconds: z.number().nonnegative().nullable().default(null),
   endSeconds: z.number().nonnegative().nullable().default(null),
+})
+
+export const cinematicTakeStoryboardPanelStatusSchema = z.enum(['none', 'generated', 'stale'])
+
+export const cinematicTakeStoryboardPanelSchema = z.object({
+  id: z.string(),
+  shotId: z.string().nullable().default(null),
+  title: z.string().default(''),
+  description: z.string().default(''),
+  cameraAngle: z.string().default(''),
+  cameraMotion: z.string().default(''),
+})
+
+export const cinematicTakeStoryboardPanelPlanSchema = z.object({
+  panels: z.array(cinematicTakeStoryboardPanelSchema).default([]),
 })
 
 export const storyboardPanelSchema = z.object({
@@ -566,6 +589,10 @@ export const cinematicTakeSpecSchema = z.object({
   requiredSourceRefIds: z.array(z.string()).default([]),
   directingPackage: cinematicDirectingPackageSchema.default(defaultCinematicDirectingPackage),
   referencePlan: cinematicReferencePlanSchema.default(defaultCinematicReferencePlan),
+  storyboardPanelPlan: cinematicTakeStoryboardPanelPlanSchema.nullable().default(null),
+  storyboardPanelScriptText: z.string().default(''),
+  storyboardPanelPlanVersion: z.string().nullable().default(null),
+  storyboardPanelStatus: cinematicTakeStoryboardPanelStatusSchema.default('none'),
   previewImageAssetKey: z.string().nullable().default(null),
   storyboardAssetKey: z.string().nullable().default(null),
   outputVideoAssetKey: z.string().nullable().default(null),
@@ -759,6 +786,9 @@ export type DialogueBeat = z.infer<typeof dialogueBeatSchema>
 export type ActionBeat = z.infer<typeof actionBeatSchema>
 export type AudioBeat = z.infer<typeof audioBeatSchema>
 export type CinematicBeat = z.infer<typeof cinematicBeatSchema>
+export type CinematicTakeStoryboardPanelStatus = z.infer<typeof cinematicTakeStoryboardPanelStatusSchema>
+export type CinematicTakeStoryboardPanel = z.infer<typeof cinematicTakeStoryboardPanelSchema>
+export type CinematicTakeStoryboardPanelPlan = z.infer<typeof cinematicTakeStoryboardPanelPlanSchema>
 export type StoryboardSpec = z.infer<typeof storyboardSpecSchema>
 export type CinematicScriptEntityBinding = z.infer<typeof cinematicScriptEntityBindingSchema>
 export type CinematicScriptScene = z.infer<typeof cinematicScriptSceneSchema>
@@ -1404,24 +1434,25 @@ export function inferShotReferencePlan(input: {
     ...input.shot,
     ctaType: input.shot.ctaType,
   })
-  const requiredRoles = uniqueStrings([
-    ...(input.current?.requiredRoles ?? []),
+  const currentRequiredRoles = sanitizeCinematicReferenceRoles(input.current?.requiredRoles)
+  const requiredRoles = sanitizeCinematicReferenceRoles([
+    ...currentRequiredRoles,
     ...(input.shot.storyboardRefIds.length > 0 ? ['board_lock'] : []),
     ...(input.shot.compositeRefIds.length > 0 ? ['composite_lock'] : []),
     ...(input.shot.participantRefIds.length > 0 ? ['subject_lock'] : []),
     ...(input.shot.propRefIds.length > 0 ? ['prop_lock'] : []),
     ...(input.shot.locationRefId ? ['environment_lock'] : []),
     ...(proofSurfaceRole ? ['proof_surface_lock'] : []),
-  ]) as CinematicReferenceRole[]
+  ])
   const dropOrder = (
-    input.current?.dropOrder?.length
-      ? input.current.dropOrder
+    sanitizeCinematicReferenceRoles(input.current?.dropOrder).length
+      ? sanitizeCinematicReferenceRoles(input.current?.dropOrder)
       : input.presetFamily === 'story_movie_tv'
         ? STORY_REFERENCE_DROP_ORDER
         : UGC_REFERENCE_DROP_ORDER
   ).filter((role) => requiredRoles.includes(role) || role === 'style_lock')
   const preferredPrimaryRefRole =
-    input.current?.preferredPrimaryRefRole
+    (isCinematicReferenceRole(input.current?.preferredPrimaryRefRole) ? input.current?.preferredPrimaryRefRole : null)
     ?? (requiredRoles.includes('proof_surface_lock')
       ? 'proof_surface_lock'
       : requiredRoles.includes('board_lock')
@@ -1496,20 +1527,20 @@ export function inferTakeReferencePlan(
   presetFamily: CinematicPresetFamily,
   current?: Partial<CinematicReferencePlan> | null,
 ) {
-  const requiredRoles = uniqueStrings([
-    ...(current?.requiredRoles ?? []),
+  const requiredRoles = sanitizeCinematicReferenceRoles([
+    ...sanitizeCinematicReferenceRoles(current?.requiredRoles),
     ...shots.flatMap((shot) => shot.referencePlan.requiredRoles),
-  ]) as CinematicReferenceRole[]
+  ])
   const baseDropOrder =
-    current?.dropOrder?.length
-      ? current.dropOrder
+    sanitizeCinematicReferenceRoles(current?.dropOrder).length
+      ? sanitizeCinematicReferenceRoles(current?.dropOrder)
       : presetFamily === 'story_movie_tv'
         ? STORY_REFERENCE_DROP_ORDER
         : UGC_REFERENCE_DROP_ORDER
   return cinematicReferencePlanSchema.parse({
     requiredRoles,
     preferredPrimaryRefRole:
-      current?.preferredPrimaryRefRole
+      (isCinematicReferenceRole(current?.preferredPrimaryRefRole) ? current?.preferredPrimaryRefRole : null)
       ?? shots.map((shot) => shot.referencePlan.preferredPrimaryRefRole).find((value): value is CinematicReferenceRole => Boolean(value))
       ?? (requiredRoles[0] ?? null),
     maxReferenceCount:
@@ -1616,6 +1647,256 @@ function clampDurationToRange(value: number, minDurationSeconds: number | null, 
   return Math.min(nextMaximum, Math.max(nextMinimum, clampShotDuration(value)))
 }
 
+function normalizeActionPacingText(value: string | null | undefined) {
+  return (value ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+}
+
+function isStoryActionScenePreset(scenePreset: string | null | undefined) {
+  return [
+    'duel_showdown',
+    'chase_escape_fragmented',
+    'ambush_counterambush',
+    'battlefield_push_and_collapse',
+    'heroic_arrival_reversal',
+    'siege_last_stand',
+  ].includes(scenePreset ?? '')
+}
+
+function actionTextHasTurnCue(text: string) {
+  return /\b(counter|reversal|reverse|disarm|breach|breaks through|collapse|collapses|stumble|falls|drop|yield|retreat|arrival|arrives|rescue|escape|capture|obstacle|barrier|door|gate|wall|corner)\b/.test(text)
+}
+
+function actionTextIsCombatLike(text: string) {
+  return /\b(clash|strike|parry|slash|stab|lunge|feint|block|riposte|swing|duel|melee|fight|weapon|blade|sword|hit|kick|punch)\b/.test(text)
+}
+
+function actionTextIsChaseLike(text: string) {
+  return /\b(run|sprint|chase|pursue|pursuit|flee|escape|vault|jump|leap|duck|scramble|rush|dodge|weave|slide|climb)\b/.test(text)
+}
+
+function shotReadsAsActionSetPiece(shot: Pick<CinematicScriptShot, 'actions' | 'beat' | 'storyScenePreset' | 'participantRefIds'>) {
+  if (isStoryActionScenePreset(shot.storyScenePreset)) return true
+  const normalizedBeat = normalizeActionPacingText(shot.beat)
+  const actionText = normalizeActionPacingText(
+    shot.actions.map((action) => `${action.verb} ${action.stagingNotes}`).join(' '),
+  )
+  const actionLike =
+    actionTextIsCombatLike(normalizedBeat)
+    || actionTextIsChaseLike(normalizedBeat)
+    || actionTextIsCombatLike(actionText)
+    || actionTextIsChaseLike(actionText)
+  return actionLike && (shot.participantRefIds.length >= 2 || shot.actions.length >= 2)
+}
+
+function shouldBreakForStoryActionRhythm(input: {
+  shot: CinematicScriptShot & { _compiledDurationSeconds: number }
+  previousShot: (CinematicScriptShot & { _compiledDurationSeconds: number }) | null
+  currentDuration: number
+}) {
+  const { shot, previousShot, currentDuration } = input
+  if (!previousShot) return false
+  const previousIsAction = shotReadsAsActionSetPiece(previousShot)
+  const currentIsAction = shotReadsAsActionSetPiece(shot)
+  if (!previousIsAction && !currentIsAction) return false
+
+  const normalizedBeat = normalizeActionPacingText(shot.beat)
+  const previousBeat = normalizeActionPacingText(previousShot.beat)
+  const currentIsTurn = actionTextHasTurnCue(normalizedBeat)
+  const previousIsTurn = actionTextHasTurnCue(previousBeat)
+  const settleCue = /\b(reset|stare|staredown|standoff|hold|holds|measure|measuring|control|advancing|forced to respect|forced back|breathing)\b/.test(normalizedBeat)
+
+  if (currentDuration >= 13) return true
+  if (currentDuration >= 11 && (currentIsTurn || previousIsTurn)) return true
+  if (currentDuration >= 9 && settleCue) return true
+  return false
+}
+
+function preferredMinimumStoryActionShotsPerTake(
+  shots: Array<Pick<CinematicScriptShot, 'storyScenePreset'>>,
+) {
+  const scenePresets = shots.map((shot) => shot.storyScenePreset).filter((value): value is NonNullable<typeof value> => Boolean(value))
+  if (scenePresets.includes('duel_showdown')) return 3
+  if (scenePresets.includes('battlefield_push_and_collapse')) return 3
+  if (scenePresets.includes('siege_last_stand')) return 3
+  return 2
+}
+
+function countStoryActionExchanges(shot: Pick<CinematicScriptShot, 'actions' | 'beat' | 'storyScenePreset'>) {
+  if (!isStoryActionScenePreset(shot.storyScenePreset) || shot.actions.length === 0) {
+    return {
+      exchangeCount: shot.actions.length,
+      microBeatCount: shot.actions.length,
+    }
+  }
+
+  let exchangeCount = 0
+  let previousAction: CinematicScriptShot['actions'][number] | null = null
+  let previousText = normalizeActionPacingText(shot.beat)
+
+  for (const action of shot.actions) {
+    const actionText = normalizeActionPacingText(`${action.verb} ${action.stagingNotes}`)
+    const currentCombatLike = actionTextIsCombatLike(actionText) || actionTextIsCombatLike(previousText)
+    const currentChaseLike = actionTextIsChaseLike(actionText) || actionTextIsChaseLike(previousText)
+    const sameActorPair =
+      previousAction !== null
+      && previousAction.actorRefId === action.actorRefId
+      && previousAction.targetRefId === action.targetRefId
+    const reversedActorPair =
+      previousAction !== null
+      && previousAction.actorRefId === action.targetRefId
+      && previousAction.targetRefId === action.actorRefId
+    const sameProp = previousAction !== null && previousAction.propRefId === action.propRefId
+    const sameVector =
+      previousAction !== null
+      && (
+        sameActorPair
+        || (currentCombatLike && reversedActorPair)
+        || (currentChaseLike && previousAction.actorRefId === action.actorRefId)
+      )
+    const shouldSplit =
+      previousAction === null
+      || actionTextHasTurnCue(actionText)
+      || actionTextHasTurnCue(previousText)
+      || !sameVector
+      || (!sameProp && !currentCombatLike && !currentChaseLike)
+
+    if (shouldSplit) exchangeCount += 1
+
+    previousAction = action
+    previousText = actionText || previousText
+  }
+
+  return {
+    exchangeCount: Math.max(1, exchangeCount),
+    microBeatCount: shot.actions.length,
+  }
+}
+
+function takeQualifiesForStoryboardPanelPlan(shots: Array<Pick<CinematicScriptShot, 'actions' | 'beat' | 'storyScenePreset' | 'participantRefIds'>>) {
+  if (shots.length === 0) return false
+  const totalActionMicroBeats = shots.reduce((total, shot) => total + shot.actions.length, 0)
+  return (
+    shots.some((shot) => shotReadsAsActionSetPiece(shot))
+    || totalActionMicroBeats >= 4
+    || shots.some((shot) => shot.actions.length >= 3)
+  )
+}
+
+function deriveTakeStoryboardActionDensity(shots: Array<Pick<CinematicScriptShot, 'actions' | 'storyScenePreset' | 'beat' | 'participantRefIds'>>) {
+  const totalActionMicroBeats = shots.reduce((total, shot) => total + shot.actions.length, 0)
+  if (totalActionMicroBeats >= 8 || shots.some((shot) => isStoryActionScenePreset(shot.storyScenePreset) && shot.actions.length >= 4)) return 'high' as const
+  if (totalActionMicroBeats >= 4 || shots.some((shot) => shot.actions.length >= 2) || shots.some((shot) => shotReadsAsActionSetPiece(shot))) return 'medium' as const
+  return 'low' as const
+}
+
+function buildStoryboardPanelPhases(panelCount: number) {
+  if (panelCount >= 5) return ['engage', 'exchange', 'exchange', 'turn', 'payoff']
+  if (panelCount === 4) return ['engage', 'exchange', 'turn', 'payoff']
+  if (panelCount === 3) return ['engage', 'exchange', 'turn/payoff']
+  if (panelCount === 2) return ['engage', 'exchange']
+  return ['hold']
+}
+
+function formatTakeStoryboardPanelScriptText(input: {
+  title: string
+  panels: CinematicTakeStoryboardPanel[]
+}) {
+  const sections = [
+    `TAKE: ${input.title}`,
+    ...input.panels.map((panel, index) => [
+      `PANEL ${index + 1}`,
+      panel.shotId ? `SHOT: ${panel.shotId}` : null,
+      panel.title ? `TITLE: ${panel.title}` : null,
+      `DESCRIPTION: ${panel.description}`,
+      panel.cameraAngle ? `CAMERA_ANGLE: ${panel.cameraAngle}` : null,
+      panel.cameraMotion ? `CAMERA_MOTION: ${panel.cameraMotion}` : null,
+    ].filter((entry): entry is string => Boolean(entry)).join('\n')),
+  ]
+
+  return sections.filter((entry): entry is string => Boolean(entry)).join('\n\n')
+}
+
+export function deriveTakeStoryboardPanelArtifacts(input: {
+  title: string
+  shots: Array<Pick<CinematicScriptShot, 'id' | 'title' | 'beat' | 'cameraAngle' | 'cameraMovement' | 'framing' | 'participantRefIds' | 'locationRefId' | 'propRefIds' | 'storyScenePreset' | 'storyLanguagePreset' | 'actions'>>
+}) {
+  if (!takeQualifiesForStoryboardPanelPlan(input.shots)) {
+    return {
+      storyboardPanelPlan: null,
+      storyboardPanelScriptText: '',
+      storyboardPanelPlanVersion: null,
+      storyboardPanelStatus: 'none' as const,
+    }
+  }
+
+  const panels: CinematicTakeStoryboardPanel[] = []
+  for (const shot of input.shots) {
+    const storyContract =
+      shot.storyScenePreset || shot.storyLanguagePreset
+        ? resolveStoryRuntimeContract({
+            storyScenePreset: shot.storyScenePreset ?? null,
+            storyLanguagePreset: shot.storyLanguagePreset ?? null,
+          })
+        : null
+    const densityBias = storyContract?.storyboardPanelDensityBias ?? deriveTakeStoryboardActionDensity([shot])
+    const actionPressure =
+      shot.actions.length
+      + (actionTextIsCombatLike(normalizeActionPacingText(shot.beat)) || actionTextIsChaseLike(normalizeActionPacingText(shot.beat)) ? 1 : 0)
+    let panelCount = 1
+    if (densityBias === 'high') {
+      panelCount = actionPressure >= 5 ? 4 : actionPressure >= 3 ? 3 : actionPressure >= 2 ? 2 : 1
+    } else if (densityBias === 'medium') {
+      panelCount = actionPressure >= 4 ? 3 : actionPressure >= 2 ? 2 : 1
+    } else if (actionPressure >= 3) {
+      panelCount = 2
+    }
+
+    const phases = buildStoryboardPanelPhases(panelCount)
+    for (let index = 0; index < phases.length; index += 1) {
+      const phase = phases[index]
+      const action = shot.actions[Math.min(index, Math.max(0, shot.actions.length - 1))] ?? null
+      const actionLine =
+        action
+          ? [(action.verb ?? '').trim(), (action.stagingNotes ?? '').trim()].filter((entry) => entry.length > 0).join('. ')
+          : shot.beat.trim()
+      const description =
+        panelCount === 1
+          ? (shot.beat.trim() || actionLine || shot.title)
+          : `${(actionLine || shot.beat || shot.title).replace(/\.$/, '')}. Focus this panel on the ${phase} portion of the same continuous take, keeping the action and camera geography readable.`
+      panels.push(cinematicTakeStoryboardPanelSchema.parse({
+        id: `${shot.id}_panel_${index + 1}`,
+        shotId: shot.id,
+        title: panelCount === 1 ? shot.title : `${shot.title} (${phase})`,
+        description,
+        cameraAngle: shot.cameraAngle.trim() || 'eye level',
+        cameraMotion: shot.cameraMovement.trim() || 'motivated follow-through',
+      }))
+    }
+  }
+
+  if (panels.length === 0) {
+    return {
+      storyboardPanelPlan: null,
+      storyboardPanelScriptText: '',
+      storyboardPanelPlanVersion: 'v1',
+      storyboardPanelStatus: 'stale' as const,
+    }
+  }
+
+  const storyboardPanelPlan = cinematicTakeStoryboardPanelPlanSchema.parse({
+    panels,
+  })
+  return {
+    storyboardPanelPlan,
+    storyboardPanelScriptText: formatTakeStoryboardPanelScriptText({
+      title: input.title,
+      panels,
+    }),
+    storyboardPanelPlanVersion: 'v1',
+    storyboardPanelStatus: 'generated' as const,
+  }
+}
+
 function resolveShotEditorialDurationContract(shot: CinematicScriptShot) {
   const storyContract =
     shot.storyScenePreset || shot.storyLanguagePreset
@@ -1690,16 +1971,44 @@ function inferShotDuration(shot: CinematicScriptShot) {
     const roleRange = editorialContract.roleRange
     const defaultDuration = editorialContract.targetDurationSeconds ?? inferred
     const dialogueWords = countDialogueWords(shot)
+    const actionGrouping = countStoryActionExchanges(shot)
     const overDialogueLimit =
       editorialContract.storyContract.maxDialogueWordsPerShot !== null
       && dialogueWords > editorialContract.storyContract.maxDialogueWordsPerShot
     const actionOverflow =
-      editorialContract.storyContract.maxActionBeatsPerShot !== null
-      && shot.actions.length > editorialContract.storyContract.maxActionBeatsPerShot
+      editorialContract.storyContract.maxActionMicroBeatsPerShot !== null
+      && actionGrouping.microBeatCount > editorialContract.storyContract.maxActionMicroBeatsPerShot
+    const bundledActionBias =
+      isStoryActionScenePreset(editorialContract.storyContract.scenePreset)
+        ? Math.min(
+            roleRange[1],
+            Math.max(
+              roleRange[0],
+              defaultDuration
+              + Math.max(0, actionGrouping.exchangeCount - 1)
+              + (actionGrouping.microBeatCount >= 4 ? 1 : 0),
+            ),
+          )
+        : Math.min(roleRange[1], inferred)
+    const compressedActionBias =
+      isStoryActionScenePreset(editorialContract.storyContract.scenePreset)
+        ? Math.max(
+            roleRange[0],
+            Math.min(
+              roleRange[1],
+              defaultDuration
+              - (dialogueWords === 0 ? 1 : 0)
+              - (actionGrouping.exchangeCount <= 1 ? 1 : 0)
+              + (actionGrouping.microBeatCount >= 4 ? 1 : 0),
+            ),
+          )
+        : defaultDuration
     const targetBias = Math.round(((defaultDuration * 2) + Math.min(roleRange[1], inferred)) / 3)
     const biased = overDialogueLimit || actionOverflow
       ? Math.min(roleRange[1], Math.max(roleRange[0], defaultDuration))
-      : targetBias
+      : isStoryActionScenePreset(editorialContract.storyContract.scenePreset)
+        ? Math.round((targetBias + bundledActionBias + compressedActionBias) / 3)
+        : targetBias
     inferred = clampDurationToRange(
       Math.min(roleRange[1], Math.max(roleRange[0], biased)),
       editorialContract.minDurationSeconds,
@@ -1707,12 +2016,21 @@ function inferShotDuration(shot: CinematicScriptShot) {
     )
   }
 
+  const actionSummary = (() => {
+    if (shot.actions.length === 0) return null
+    const groupedActions = countStoryActionExchanges(shot)
+    if (isStoryActionScenePreset(shot.storyScenePreset)) {
+      return `${groupedActions.microBeatCount} action micro-beat${groupedActions.microBeatCount === 1 ? '' : 's'} in ${groupedActions.exchangeCount} exchange${groupedActions.exchangeCount === 1 ? '' : 's'} ~${Math.round(estimated.actionSeconds * 10) / 10}s`
+    }
+    return `${shot.actions.length} action beat${shot.actions.length === 1 ? '' : 's'} ~${Math.round(estimated.actionSeconds * 10) / 10}s`
+  })()
+
   return {
     durationSeconds: inferred,
     durationSource: 'inferred' as const,
     timingSummary: [
       shot.dialogue.length > 0 ? `${shot.dialogue.length} dialogue beat${shot.dialogue.length === 1 ? '' : 's'} ~${Math.round(estimated.dialogueSeconds * 10) / 10}s` : null,
-      shot.actions.length > 0 ? `${shot.actions.length} action beat${shot.actions.length === 1 ? '' : 's'} ~${Math.round(estimated.actionSeconds * 10) / 10}s` : null,
+      actionSummary,
       shot.shotType !== 'custom' ? `${shot.shotType} shot` : null,
     ].filter((entry): entry is string => Boolean(entry)).join(' · ') || 'Default cinematic pacing.',
   }
@@ -1830,6 +2148,41 @@ function isStrongTakeFormatBreak(
   )
 }
 
+function isStoryTakeMetadataBreak(
+  left: CinematicScriptShot & { _compiledDurationSeconds: number },
+  right: CinematicScriptShot & { _compiledDurationSeconds: number },
+) {
+  const leftFamily = inferPresetFamilyForShot(left)
+  const rightFamily = inferPresetFamilyForShot(right)
+  if (leftFamily !== 'story_movie_tv' || rightFamily !== 'story_movie_tv') return false
+  return (
+    (left.storyScenePreset ?? null) !== (right.storyScenePreset ?? null)
+    || (left.storyLanguagePreset ?? null) !== (right.storyLanguagePreset ?? null)
+  )
+}
+
+function shouldHonorForcedTakeBreak(input: {
+  shot: CinematicScriptShot & { _compiledDurationSeconds: number }
+  previousShot: (CinematicScriptShot & { _compiledDurationSeconds: number }) | null
+}) {
+  const { shot, previousShot } = input
+  if (!shot.forceTakeBreak) return false
+  if (!previousShot) return true
+
+  const storyActionBoundary = shotReadsAsActionSetPiece(shot) || shotReadsAsActionSetPiece(previousShot)
+  const locationChanged = previousShot.locationRefId !== shot.locationRefId
+  const sceneChanged = previousShot.sceneId !== shot.sceneId
+  const sharedParticipants = sharesTakeParticipants(previousShot, shot)
+  const formatChanged = isStrongTakeFormatBreak(previousShot, shot)
+  const storyMetadataOnlyBreak = isStoryTakeMetadataBreak(previousShot, shot)
+
+  if (!storyActionBoundary) return true
+  if (formatChanged && !storyMetadataOnlyBreak) return true
+  if (sceneChanged || locationChanged) return true
+  if (!sharedParticipants) return true
+  return false
+}
+
 function coalesceTakeField<TValue>(shots: Array<CinematicScriptShot & { _compiledDurationSeconds: number }>, selector: (shot: CinematicScriptShot) => TValue, fallback: TValue) {
   for (const shot of shots) {
     const value = selector(shot)
@@ -1848,7 +2201,7 @@ function describeTakeBreakReason(input: {
   currentDuration: number
 }) {
   const { shot, previousShot, currentDuration } = input
-  if (shot.forceTakeBreak) return 'Explicit take break.'
+  if (shouldHonorForcedTakeBreak({ shot, previousShot })) return 'Explicit take break.'
   if (currentDuration + shot._compiledDurationSeconds > 15) return 'Split to stay within the 15-second take limit.'
   if (!previousShot) return ''
 
@@ -1856,15 +2209,19 @@ function describeTakeBreakReason(input: {
   const sceneChanged = previousShot.sceneId !== shot.sceneId
   const sharedParticipants = sharesTakeParticipants(previousShot, shot)
   const formatChanged = isStrongTakeFormatBreak(previousShot, shot)
+  const storyMetadataOnlyBreak = isStoryTakeMetadataBreak(previousShot, shot)
   const hardLocationJump = locationChanged && !sharedParticipants
   const hardSceneJump = sceneChanged && locationChanged && !sharedParticipants
   const softContinuityShift = (locationChanged || sceneChanged) && !hardLocationJump && !hardSceneJump
 
   if (previousShot.variationGroupId.trim() !== shot.variationGroupId.trim()) return 'Split on a variation pack boundary.'
-  if (formatChanged) return 'Split on a strong format or messaging shift.'
+  if (formatChanged && !storyMetadataOnlyBreak) return 'Split on a strong format or messaging shift.'
   if (hardSceneJump) return 'Split on a scene and location change with no shared participants.'
   if (hardLocationJump) return 'Split on a hard location change with no shared participants.'
   if (softContinuityShift && currentDuration >= 10) return 'Split on a softer continuity shift after a long take.'
+  if (shouldBreakForStoryActionRhythm({ shot, previousShot, currentDuration })) {
+    return 'Split on a major action turn or settle point after a sustained combat exchange.'
+  }
   if (isUgcShot(shot) && previousShot && shouldBreakForUgcEditorialRhythm({ shot, previousShot, currentDuration })) {
     return 'Split on a UGC editorial beat boundary or dominant-action change.'
   }
@@ -1980,6 +2337,11 @@ function buildCompiledTakes(shots: Array<CinematicScriptShot & {
     const shotIds = currentShots.map((shot) => shot.id)
     const requiredSourceRefIds = buildTakeSourceRefIds(currentShots)
     const continuityRefIds = buildTakeContinuityRefIds(currentShots)
+    const title = `Take ${takes.length + 1}`
+    const storyboardPanels = deriveTakeStoryboardPanelArtifacts({
+      title,
+      shots: currentShots,
+    })
     const endpoint =
       currentShots.length === 1 && currentShots[0]._seedanceModePreference === 'image-to-video' && requiredSourceRefIds.length <= 1
         ? 'image-to-video'
@@ -1987,7 +2349,7 @@ function buildCompiledTakes(shots: Array<CinematicScriptShot & {
     takes.push(cinematicTakeSpecSchema.parse({
       id: `take_${takes.length + 1}`,
       takeIndex: takes.length,
-      title: `Take ${takes.length + 1}`,
+      title,
       shotIds,
       durationSeconds,
       startSeconds: currentStart,
@@ -2011,6 +2373,10 @@ function buildCompiledTakes(shots: Array<CinematicScriptShot & {
       proofMoment: coalesceTakeField(currentShots, (shot) => shot.proofMoment, ''),
       ctaStyle: coalesceTakeField(currentShots, (shot) => shot.ctaStyle, ''),
       requiredSourceRefIds,
+      storyboardPanelPlan: storyboardPanels.storyboardPanelPlan,
+      storyboardPanelScriptText: storyboardPanels.storyboardPanelScriptText,
+      storyboardPanelPlanVersion: storyboardPanels.storyboardPanelPlanVersion,
+      storyboardPanelStatus: storyboardPanels.storyboardPanelStatus,
     }))
     currentStart += durationSeconds
     currentShots = []
@@ -2020,6 +2386,7 @@ function buildCompiledTakes(shots: Array<CinematicScriptShot & {
 
   for (const shot of shots) {
     const previousShot = currentShots.length > 0 ? currentShots[currentShots.length - 1] : null
+    const honorForcedBreak = shouldHonorForcedTakeBreak({ shot, previousShot })
     const locationChanged = Boolean(previousShot && previousShot.locationRefId !== shot.locationRefId)
     const sceneChanged = Boolean(previousShot && previousShot.sceneId !== shot.sceneId)
     const sharedParticipants = previousShot ? sharesTakeParticipants(previousShot, shot) : false
@@ -2028,13 +2395,29 @@ function buildCompiledTakes(shots: Array<CinematicScriptShot & {
     const hardSceneJump = sceneChanged && locationChanged && !sharedParticipants
     const softContinuityShift = (locationChanged || sceneChanged) && !hardLocationJump && !hardSceneJump
     const ugcTake = currentShots.some((candidate) => isUgcShot(candidate)) || isUgcShot(shot)
+    const storyActionTake = currentShots.some((candidate) => shotReadsAsActionSetPiece(candidate)) || shotReadsAsActionSetPiece(shot)
+    const storyTake = currentShots.some((candidate) => inferPresetFamilyForShot(candidate) === 'story_movie_tv') || inferPresetFamilyForShot(shot) === 'story_movie_tv'
+    const minimumStoryActionShots = preferredMinimumStoryActionShotsPerTake([...currentShots, shot])
+    const canUseSoftStoryActionBreaks = currentShots.length >= minimumStoryActionShots
+    const sameStoryContinuityRun = Boolean(
+      previousShot
+      && storyTake
+      && previousShot.sceneId === shot.sceneId
+      && previousShot.locationRefId === shot.locationRefId
+      && sharedParticipants,
+    )
+    const protectedStoryEarlyPack =
+      sameStoryContinuityRun
+      && currentShots.length < Math.max(2, minimumStoryActionShots)
+      && currentDuration < 10
     const continuityBreak = currentShots.length > 0 && (
-      shot.forceTakeBreak
+      honorForcedBreak
       || currentDuration + shot._compiledDurationSeconds > 15
-      || formatChanged
+      || (formatChanged && !protectedStoryEarlyPack)
       || hardLocationJump
       || hardSceneJump
-      || (softContinuityShift && currentDuration >= 10)
+      || (softContinuityShift && currentDuration >= (storyActionTake ? 13 : 10) && (!storyActionTake || canUseSoftStoryActionBreaks))
+      || (storyActionTake && canUseSoftStoryActionBreaks && shouldBreakForStoryActionRhythm({ shot, previousShot, currentDuration }))
       || (ugcTake && shouldBreakForUgcEditorialRhythm({ shot, previousShot, currentDuration }))
     )
     if (continuityBreak) {
@@ -2056,9 +2439,23 @@ function buildCompiledTakes(shots: Array<CinematicScriptShot & {
 
 export function buildCinematicSequenceFromScriptDoc(scriptDoc: CinematicScriptDoc): CinematicSequence {
   const shapedScriptShots = applyUgcEditorialShaping(scriptDoc.shots)
+  const dominantStoryScenePreset =
+    shapedScriptShots.find((shot) => shot.storyScenePreset)?.storyScenePreset
+    ?? null
+  const dominantStoryLanguagePreset =
+    shapedScriptShots.find((shot) => shot.storyLanguagePreset)?.storyLanguagePreset
+    ?? null
   const compiledShots = shapedScriptShots.map((shot) => {
-    const inferredTiming = inferShotDuration(shot)
-    const timedShot = fillBeatTimingsForShot(shot, inferredTiming.durationSeconds)
+    const normalizedStoryShot =
+      shot.formatSubtype || shot.formulaFamily || shot.dominantTrigger
+        ? shot
+        : {
+            ...shot,
+            storyScenePreset: shot.storyScenePreset ?? dominantStoryScenePreset,
+            storyLanguagePreset: shot.storyLanguagePreset ?? dominantStoryLanguagePreset,
+          }
+    const inferredTiming = inferShotDuration(normalizedStoryShot)
+    const timedShot = fillBeatTimingsForShot(normalizedStoryShot, inferredTiming.durationSeconds)
     const sourceRefIds = buildRequiredSourceRefIdsForScriptShot(timedShot)
     const presetFamily = inferPresetFamilyForShot(timedShot)
     const directingPackage = inferShotDirectingPackage({
@@ -2580,6 +2977,33 @@ export function getCinematicSettings(gameSpec: unknown, graphMetadata: unknown):
     stillAspectRatio,
     specializationMode: deriveSpecializationModeFromPresetFamily(presetFamily),
   }
+}
+
+export function materializeCinematicGraphSettings(
+  graphSettings: unknown,
+): CinematicSettings {
+  const overrides = cinematicSettingsSchema.partial().parse(graphSettings ?? {})
+  const inferredPresetFamily =
+    overrides.presetFamily
+    ?? (overrides.storyScenePreset || overrides.storyLanguagePreset ? 'story_movie_tv' : null)
+    ?? (
+      overrides.formatSubtype
+        ? overrides.formatSubtype.startsWith('ad_')
+          ? 'ugc_direct_response_ad'
+          : overrides.formatSubtype.startsWith('faceless_')
+            ? 'ugc_faceless_format'
+            : 'ugc_creator'
+        : null
+    )
+    ?? (overrides.specializationMode ? derivePresetFamilyFromSpecializationMode(overrides.specializationMode) : null)
+    ?? defaultCinematicSettings.presetFamily
+
+  return getCinematicSettings({}, {
+    cinematics: {
+      ...overrides,
+      presetFamily: inferredPresetFamily,
+    },
+  })
 }
 
 export function getCinematicScript(graphMetadata: unknown): CinematicScriptDoc | null {

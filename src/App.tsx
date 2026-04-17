@@ -13,7 +13,7 @@ import {
   buildCinematicSettingsPatchFromFormatSubtype,
   buildCinematicSettingsPatchFromPresetFamily,
   buildCinematicSettingsPatchFromStoryPresets,
-  getCinematicSettings,
+  materializeCinematicGraphSettings,
   type CinematicFormatSubtype,
   type CinematicStoryLanguagePreset,
   type CinematicStoryScenePreset,
@@ -1701,9 +1701,7 @@ export default function App() {
         return nextSnapshot
       }
 
-      const effectiveGraphSettings = getCinematicSettings(nextSnapshot.gameSpec ?? null, {
-        cinematics: authoredPlan.graphSettings ?? {},
-      })
+      const effectiveGraphSettings = materializeCinematicGraphSettings(authoredPlan.graphSettings ?? {})
       const compiledGraph = compileCinematicGraphFromScriptDoc({
         graphKey,
         graphName: authoredPlan.graphName,

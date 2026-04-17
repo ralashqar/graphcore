@@ -7,6 +7,7 @@ import {
   cinematicTakeSpecSchema,
   cinematicScriptDocSchema,
   deriveCinematicScriptFromSequence,
+  materializeCinematicGraphSettings,
   type CinematicSequence,
   type CinematicScriptDoc,
   type CinematicSettings,
@@ -70,6 +71,7 @@ function buildShortDeterministicId(input: string) {
 export function compileCinematicGraphFromSequence(input: CompileCinematicGraphFromSequenceInput): GraphDefinition {
   const cinematicSequence = compileCinematicSequence(input.sequence)
   const scriptDoc = deriveCinematicScriptFromSequence(cinematicSequence)
+  const resolvedGraphSettings = materializeCinematicGraphSettings(input.graphSettings)
   const graph = createGraphScaffold({
     key: input.graphKey,
     name: input.graphName,
@@ -285,7 +287,7 @@ export function compileCinematicGraphFromSequence(input: CompileCinematicGraphFr
     summary: input.graphSummary,
     metadata: {
       ...(input.existingMetadata ?? {}),
-      cinematics: input.graphSettings,
+      cinematics: resolvedGraphSettings,
       cinematicScript: scriptDoc,
       cinematicSequence,
       generation: existingGeneration,

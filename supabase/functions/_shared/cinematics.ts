@@ -33,6 +33,7 @@ import {
   resolveArtStylePresetForCinematic,
 } from '../../../src/domain/artStylePresets.ts'
 import { gameSpecSchema } from '../../../src/domain/gameSpec.ts'
+import { resolveStoryRuntimeContract } from '../../../src/domain/storyPresetProfiles.ts'
 
 type SnapshotRecord = Record<string, unknown>
 type SnapshotGraph = SnapshotRecord & {
@@ -257,14 +258,101 @@ function buildStoryboardPanelDirection(shot: {
   beat: string
   framing: string
   cameraAngle: string
+  cameraMovement?: string
 }, index: number) {
   const parts = [
     `In the ${ordinalLabel(index)} frame, show ${shot.title}.`,
     shot.beat.trim() ? shot.beat.trim().replace(/\.$/, '') + '.' : null,
     shot.framing.trim() ? `Use ${shot.framing.trim()} framing.` : null,
     shot.cameraAngle.trim() ? `Use a ${shot.cameraAngle.trim()} camera angle.` : null,
+    shot.cameraMovement?.trim() ? `Camera motion: ${shot.cameraMovement.trim()}.` : null,
   ]
   return parts.filter((entry): entry is string => Boolean(entry)).join(' ')
+}
+
+type StoryboardPanelBeat = {
+  title: string
+  beat: string
+  framing: string
+  cameraAngle: string
+  cameraMovement?: string
+}
+
+function normalizeStoryboardBeatText(value: string | null | undefined) {
+  return (value ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+}
+
+function isStoryboardActionScenePreset(scenePreset: string | null | undefined) {
+  return [
+    'duel_showdown',
+    'chase_escape_fragmented',
+    'ambush_counterambush',
+    'battlefield_push_and_collapse',
+    'heroic_arrival_reversal',
+    'siege_last_stand',
+  ].includes(scenePreset ?? '')
+}
+
+function buildDerivedStoryboardPanelBeats(shots: Array<{
+  title: string
+  beat: string
+  framing: string
+  cameraAngle: string
+  actions?: Array<{ verb?: string; stagingNotes?: string }>
+  storyScenePreset?: string | null
+  storyLanguagePreset?: string | null
+}>) {
+  const derivedPanels: StoryboardPanelBeat[] = []
+  for (const shot of shots) {
+    const actionCount = Array.isArray(shot.actions) ? shot.actions.length : 0
+    const storyContract =
+      shot.storyScenePreset || shot.storyLanguagePreset
+        ? resolveStoryRuntimeContract({
+            storyScenePreset: shot.storyScenePreset ?? null,
+            storyLanguagePreset: shot.storyLanguagePreset ?? null,
+          })
+        : null
+    const isActionPreset = isStoryboardActionScenePreset(shot.storyScenePreset)
+    const densityBias = storyContract?.storyboardPanelDensityBias ?? 'low'
+    const normalizedBeat = normalizeStoryboardBeatText(shot.beat)
+    const actionPressure =
+      actionCount
+      + (/\b(clash|parry|counter|sword|strike|feint|disarm|fight|duel|battle|breach|collapse|chase|escape|vault|sprint|pursuit)\b/.test(normalizedBeat) ? 1 : 0)
+    let panelCount = 1
+    if (isActionPreset) {
+      if (densityBias === 'high') {
+        panelCount = actionPressure >= 5 ? 4 : actionPressure >= 3 ? 3 : 2
+      } else if (densityBias === 'medium') {
+        panelCount = actionPressure >= 4 ? 3 : actionPressure >= 2 ? 2 : 1
+      } else {
+        panelCount = actionPressure >= 3 ? 2 : 1
+      }
+    }
+
+    const microBeatLabels = panelCount >= 4
+      ? ['engage', 'exchange', 'turn', 'recover/payoff']
+      : panelCount === 3
+        ? ['engage', 'exchange', 'turn/payoff']
+        : panelCount === 2
+          ? ['engage', 'exchange']
+          : ['hold']
+
+    for (let index = 0; index < panelCount; index += 1) {
+      const label = microBeatLabels[index] ?? `beat ${index + 1}`
+      const panelBeat =
+        panelCount === 1
+          ? shot.beat
+          : `${shot.beat.replace(/\.$/, '')}. Focus this panel on the ${label} beat of the same continuous action.`
+      derivedPanels.push({
+        title: panelCount === 1 ? shot.title : `${shot.title} (${label})`,
+        beat: panelBeat,
+        framing: shot.framing,
+        cameraAngle: shot.cameraAngle,
+      })
+    }
+  }
+
+  return derivedPanels.slice(0, 16)
 }
 
 function buildStoryboardSourceDescriptions(
@@ -287,34 +375,20 @@ function isUsableAssetUrl(asset: SnapshotAsset | null | undefined, url: string |
 }
 
 function describeStoryboardGrid(panelCount: number, aspectRatio: string) {
-  const isVertical = aspectRatio === '9:16' || aspectRatio === '3:4'
-  const isSquareish = aspectRatio === '1:1' || aspectRatio === '4:3'
   if (panelCount <= 1) {
     return `Use a single full-frame panel matching a ${aspectRatio} composition.`
   }
-  if (isVertical) {
-    if (panelCount <= 4) return `Arrange the sequence as a 2x2 grid of tall ${aspectRatio} panels with noticeable whitespace gutters between panels.`
-    if (panelCount <= 6) return `Arrange the sequence as a 2x3 grid of tall ${aspectRatio} panels with noticeable whitespace gutters between panels.`
-    if (panelCount <= 9) return `Arrange the sequence as a 3x3 grid of tall ${aspectRatio} panels with noticeable whitespace gutters between panels.`
-    return `Arrange the sequence as a 3x4 contact-sheet style grid of tall ${aspectRatio} panels with noticeable whitespace gutters, using only as many panels as needed.`
-  }
-  if (isSquareish) {
-    if (panelCount <= 4) return `Arrange the sequence as an evenly sized 2x2 grid of ${aspectRatio} panels with noticeable whitespace gutters between panels.`
-    if (panelCount <= 6) return `Arrange the sequence as an evenly sized 3x2 grid of ${aspectRatio} panels with noticeable whitespace gutters between panels.`
-    if (panelCount <= 9) return `Arrange the sequence as an evenly sized 3x3 grid of ${aspectRatio} panels with noticeable whitespace gutters between panels.`
-    return `Arrange the sequence as an evenly sized 4x4 contact-sheet style grid of ${aspectRatio} panels with noticeable whitespace gutters, using only as many panels as needed.`
-  }
-  if (panelCount <= 4) return `Arrange the sequence as an evenly sized 2x2 grid of wide ${aspectRatio} panels with noticeable whitespace gutters between panels.`
-  if (panelCount <= 6) return `Arrange the sequence as an evenly sized 3x2 grid of wide ${aspectRatio} panels with noticeable whitespace gutters between panels.`
-  if (panelCount <= 9) return `Arrange the sequence as an evenly sized 3x3 grid of wide ${aspectRatio} panels with noticeable whitespace gutters between panels.`
-  return `Arrange the sequence as an evenly sized 4x4 contact-sheet style grid of wide ${aspectRatio} panels with noticeable whitespace gutters, using only as many panels as needed.`
+  if (panelCount <= 4) return `Arrange the board as a clean 2x2 grid of ${aspectRatio} panels with clear gutters.`
+  if (panelCount <= 9) return `Arrange the board as a clean 3x3 grid of ${aspectRatio} panels with clear gutters.`
+  return `Arrange the board as a clean 4x4 grid of ${aspectRatio} panels with clear gutters, using only as many panels as needed.`
 }
 
 function describeStoryboardPanelStyling(aspectRatio: string) {
   return [
     `Each panel should read as a ${aspectRatio} frame.`,
-    'Present the board as a clean premium contact sheet of finished cinematic frames, not as hand-drawn storyboard art.',
-    'Use simple neutral gutters between panels with no decorative border treatment.',
+    'Render the board as a comic-ink storyboard, not as finished cinematic frames or a polished contact sheet.',
+    'Use monochrome or restrained grayscale wash with bold inked silhouettes, readable action lines, and clean gutters.',
+    'Do not add speech bubbles, handwritten notes, or decorative border treatment.',
   ].join(' ')
 }
 
@@ -1343,35 +1417,41 @@ export function buildStoryboardStillPrompt(input: {
   const shots = resolveStoryboardTargetShots(input.graph, input.storyboardNode.key)
   const sourceDescriptions = buildStoryboardSourceDescriptions(input.sourceInputs)
   const styleAnchor = buildStoryboardStyleAnchor(input.snapshot.gameSpec ?? null, input.graph.metadata, input.sourceInputs)
+  const derivedPanels = buildDerivedStoryboardPanelBeats(shots)
 
   if (config.storyboardKind === 'sequence_board') {
-    const panelCount = Math.min(shots.length, 9)
+    const panelCount = Math.max(1, derivedPanels.length)
     return [
-      'Create one clean cinematic sequence board.',
+      'Create one comic-ink storyboard board.',
       ...styleAnchor,
       `Use a ${settings.stillAspectRatio} frame ratio for every panel.`,
-      'Render the result as a simple multi-panel image that clearly progresses through the action.',
+      'Render the result as a multi-panel storyboard that clearly progresses through the action choreography.',
       describeStoryboardGrid(panelCount, settings.stillAspectRatio),
-      'Keep the panels consistent in size and overall finish.',
+      describeStoryboardPanelStyling(settings.stillAspectRatio),
+      'Keep the panels consistent in size, silhouette clarity, and costume continuity.',
       'For each panel, place the referenced subjects into the described scene and preserve continuity across the board.',
-      ...shots.slice(0, 9).map((shot, index) => buildStoryboardPanelDirection(shot, index)),
+      'For fast action, expand one continuous shot into multiple comic panels instead of inventing extra camera cuts.',
+      ...derivedPanels.map((panel, index) => buildStoryboardPanelDirection(panel, index)),
       config.notes.trim() ? `Additional scene direction: ${config.notes.trim()}.` : null,
       config.generationPrompt.trim() ? `Additional visual direction: ${config.generationPrompt.trim()}.` : null,
       ...sourceDescriptions,
+      'Keep character likeness, costume continuity, and hero props faithful to the references.',
       'No captions, panel numbers, text labels, handwritten notes, speech bubbles, watermarks, or decorative mockup chrome.',
     ].filter(Boolean).join(' ')
   }
 
   const primaryShot = shots[0] ?? null
   return [
-    'Create one clean cinematic panel.',
+    'Create one comic-ink storyboard panel.',
     ...styleAnchor,
     `Use a ${settings.stillAspectRatio} frame ratio.`,
+    describeStoryboardPanelStyling(settings.stillAspectRatio),
     'Place the referenced subjects into the described scene with clear blocking and readable composition.',
     primaryShot ? buildStoryboardPanelDirection(primaryShot, 0) : null,
     config.notes.trim() ? `Additional scene direction: ${config.notes.trim()}.` : null,
     config.generationPrompt.trim() ? `Additional visual direction: ${config.generationPrompt.trim()}.` : null,
     ...sourceDescriptions,
+    'Keep character likeness, costume continuity, and hero props faithful to the references.',
     'No captions, text labels, handwritten notes, sketch marks, multi-panel layout, watermarks, or decorative borders.',
   ].filter(Boolean).join(' ')
 }
@@ -1385,26 +1465,41 @@ export function buildTakeStoryboardStillPrompt(input: {
   const settings = getCinematicSettings(input.snapshot.gameSpec ?? null, input.graph.metadata)
   const take = getCinematicTakeNodeConfig(input.takeNode)
   const sequence = getCinematicSequence(input.graph.metadata)
+  const compiledTake = sequence.takes.find((entry) => entry.id === take.id) ?? null
+  const storyboardTake = compiledTake ?? take
   const shots = take.shotIds
     .map((shotId) => sequence.shots.find((shot) => shot.id === shotId) ?? null)
     .filter((shot): shot is typeof sequence.shots[number] => Boolean(shot))
   const sourceDescriptions = buildStoryboardSourceDescriptions(input.sourceInputs)
   const styleAnchor = buildStoryboardStyleAnchor(input.snapshot.gameSpec ?? null, input.graph.metadata, input.sourceInputs)
-  const panelCount = Math.min(shots.length, 9)
+  const scriptedPanels = storyboardTake.storyboardPanelPlan?.panels.map((panel) => ({
+    title: panel.title || `Panel ${panel.id}`,
+    beat: panel.description,
+    framing: '',
+    cameraAngle: panel.cameraAngle,
+    cameraMovement: panel.cameraMotion,
+  })) ?? []
+  const derivedPanels = scriptedPanels.length > 0 ? scriptedPanels : buildDerivedStoryboardPanelBeats(shots)
+  const panelCount = Math.max(1, derivedPanels.length)
 
   return [
-    'Create one clean cinematic sequence board.',
+    'Create one comic-ink storyboard board.',
     ...styleAnchor,
     `Use a ${settings.stillAspectRatio} frame ratio for every panel.`,
-    'Render the result as a simple multi-panel image that clearly progresses through the sequence.',
+    'Render the result as a multi-panel storyboard that clearly progresses through the sequence.',
     describeStoryboardGrid(panelCount, settings.stillAspectRatio),
-    'Keep the panels consistent in size and overall finish.',
+    describeStoryboardPanelStyling(settings.stillAspectRatio),
+    'Keep the panels consistent in size, silhouette clarity, and overall continuity.',
+    scriptedPanels.length > 0
+      ? 'Follow the supplied panel script closely. Treat each panel as a storyboard beat inside the same take, not as a separate editorial cut unless the panel description itself implies one.'
+      : 'For action-heavy takes, split one continuous shot into multiple comic panels for engage, exchange, turn, and payoff beats when needed.',
     'For each panel, place the referenced subjects into the described scene and preserve continuity across the board.',
-    ...shots.slice(0, 9).map((shot, index) => buildStoryboardPanelDirection(shot, index)),
-    take.proofMoment.trim() ? `Make this proof moment visually obvious: ${take.proofMoment.trim()}.` : null,
-    take.contrastAxis.trim() ? `Make this contrast visually clear: ${take.contrastAxis.trim()}.` : null,
+    ...derivedPanels.map((panel, index) => buildStoryboardPanelDirection(panel, index)),
+    storyboardTake.proofMoment.trim() ? `Make this proof moment visually obvious: ${storyboardTake.proofMoment.trim()}.` : null,
+    storyboardTake.contrastAxis.trim() ? `Make this contrast visually clear: ${storyboardTake.contrastAxis.trim()}.` : null,
     ...sourceDescriptions,
     'Use referenced characters, environments, and hero objects when valid image refs are available; otherwise infer missing details from the sequence beats.',
+    'Keep character likeness, costume continuity, and hero props faithful to the references.',
     'No captions, panel numbers, text labels, handwritten notes, speech bubbles, watermarks, or decorative mockup chrome.',
   ].filter(Boolean).join(' ')
 }
