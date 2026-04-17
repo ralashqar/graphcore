@@ -120,6 +120,7 @@ type CinematicsWorkspaceProps = {
   onMoveNode: (graphKey: string, nodeKey: string, position: NodeDefinition['position']) => void
   onRunCinematicPreflight: (request: { graphKey: string; includeShots?: boolean; includeStoryboards?: boolean; includeTakes?: boolean }) => void
   onSelectEdge: (key: string | null) => void
+  onOpenDefinitionLink: (definitionKey: string, kind: DefinitionBase['kind']) => void
   onSelectGraph: (key: string | null) => void
   onSelectNode: (key: string | null) => void
   onStartCinematicRun: (request: { graphKey: string; mode: CinematicRunMode; targetNodeKey?: string | null; targetNodeKeys?: string[]; shotId?: string | null }) => void
@@ -944,6 +945,7 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
     onGenerateTakeStill,
     onGenerateTakeStoryboard,
     onMoveNode,
+    onOpenDefinitionLink,
     onSelectEdge,
     onSelectGraph,
     onSelectNode,
@@ -986,6 +988,18 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
     }
     return null
   }, [currentGraphGeneration?.jobId, worldBuildBatches])
+  function getGraphGenerationPhase(graph: GraphDefinition) {
+    const jobId = getResourceGenerationMetadata(graph)?.jobId
+    if (!jobId) return null
+    for (const batch of worldBuildBatches) {
+      const job = batch.jobs.find((entry) => entry.id === jobId)
+      const phase = job?.resultContext && typeof job.resultContext === 'object'
+        ? (job.resultContext as { phase?: unknown }).phase
+        : null
+      if (typeof phase === 'string' && phase.trim().length > 0) return phase
+    }
+    return null
+  }
   const currentGraphRawScript = useMemo(() => {
     const metadataRawScript =
       currentGraph && typeof currentGraph.metadata === 'object' && currentGraph.metadata !== null
@@ -1739,7 +1753,19 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
             <div className="rail-list">
               {cinematicGraphs.map((graph) => (
                 <button key={graph.key} className={graph.key === currentGraph?.key ? 'rail-button is-active' : 'rail-button'} onClick={() => onSelectGraph(graph.key)} type="button">
-                  <strong>{graph.name}</strong>
+                  <div className="item-row">
+                    <div className="media-thumb cinematic-rail-icon">
+                      <EntityIcon id="cinematic" />
+                    </div>
+                    <div className="item-row-copy">
+                      <strong>{graph.name}</strong>
+                      <span className={isPendingGenerationResource(graph) ? 'world-build-rail-status' : undefined}>
+                        {isPendingGenerationResource(graph) ? (
+                          <><span className="button-spinner item-row-spinner" aria-hidden="true" />{renderGenerationPhaseLabel(getGraphGenerationPhase(graph))}</>
+                        ) : getResourceGenerationMetadata(graph)?.state === 'failed' ? 'Generation failed' : 'cinematic flow'}
+                      </span>
+                    </div>
+                  </div>
                 </button>
               ))}
               {cinematicGraphs.length === 0 ? <div className="inline-note">No cinematic graphs yet. Create one to start sequencing shots.</div> : null}
@@ -1823,7 +1849,7 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
             {cinematicGraphs.map((graph) => <option key={graph.key} value={graph.key}>{graph.name}</option>)}
           </select>
           <div className="segmented-control">
-            <button className={contentMode === 'script' ? 'segment-button is-active' : 'segment-button'} onClick={() => setContentMode('script')} type="button">Shots / Takes</button>
+            <button className={contentMode === 'script' ? 'segment-button is-active' : 'segment-button'} onClick={() => setContentMode('script')} type="button">Script</button>
             <button className={contentMode === 'graph' ? 'segment-button is-active' : 'segment-button'} onClick={() => setContentMode('graph')} type="button">Graph</button>
             <button className={contentMode === 'runs' ? 'segment-button is-active' : 'segment-button'} onClick={() => setContentMode('runs')} type="button">Runs</button>
           </div>
@@ -1972,6 +1998,7 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
               currentGraph={currentGraph}
               definitions={definitions}
               node={currentNode}
+              onOpenDefinitionLink={onOpenDefinitionLink}
               onApplyTemplateChange={(templateKey) => applyTemplateChange(currentNode.key, templateKey)}
               onDelete={() => onDeleteNode(currentGraph.key, currentNode.key)}
               onUpdate={(changes) => onUpdateNode(currentGraph.key, currentNode.key, changes)}
@@ -2239,6 +2266,40 @@ function ScriptPreviewSurface({
     [currentGraph, currentGraph.metadata, previewSequence],
   )
   const plainTextExport = useMemo(() => buildPlainTextScriptExport(scriptDoc), [scriptDoc])
+  const displayedScriptText = rawScriptMarkdown.trim().length > 0 ? rawScriptMarkdown : plainTextExport
+
+  return (
+    <div className="detail-stack cinematic-script-surface">
+      <div className="script-editor-toolbar">
+        <div className="script-editor-status">
+          <span className="eyebrow">Script</span>
+          <div className={scriptDirty ? 'script-status-pill is-warning' : 'script-status-pill'}>
+            {scriptDirty ? 'Graph out of date' : 'Script clean'}
+          </div>
+          {validationErrors.length > 0 ? <div className="script-status-pill is-danger">{validationErrors.length} error{validationErrors.length === 1 ? '' : 's'}</div> : null}
+          {validationWarnings.length > 0 ? <div className="script-status-pill is-muted">{validationWarnings.length} warning{validationWarnings.length === 1 ? '' : 's'}</div> : null}
+        </div>
+        <div className="script-row-controls">
+          <button className="ghost-button compact" onClick={() => void navigator.clipboard.writeText(displayedScriptText)} type="button">Copy Script</button>
+          <button className="primary-button compact" disabled={validationErrors.length > 0 || scriptDoc.shots.length === 0} onClick={onRebuild} type="button">Rebuild Runtime Graph</button>
+        </div>
+      </div>
+
+      {scriptDirty ? <div className="inline-note is-warning">Script changed. Rebuild graph to sync runtime projection.</div> : null}
+      {rawScriptMarkdown.trim().length === 0 ? <div className="inline-note">Showing the normalized script export because no raw authored script markdown was stored for this cinematic.</div> : null}
+      {validationIssues.length > 0 ? (
+        <div className="diagnostic-stack">
+          {validationIssues.map((issue) => (
+            <div key={issue.id} className={`inline-note ${issue.level === 'error' ? 'is-danger' : 'is-warning'}`}>{issue.message}</div>
+          ))}
+        </div>
+      ) : null}
+      <label className="field-block full-width">
+        <span>Script</span>
+        <textarea readOnly rows={28} value={displayedScriptText} />
+      </label>
+    </div>
+  )
 
   function updateShot(shotId: string, mutator: (shot: CinematicScriptShot) => CinematicScriptShot) {
     onUpdateScript((currentScript) => ({
@@ -2420,25 +2481,25 @@ function ScriptPreviewSurface({
         <div className="section-head">
           <div>
             <span className="eyebrow">Script Header</span>
-            <h3>{scriptDoc.title || currentGraph.name}</h3>
+            <h3>{scriptDoc!.title || currentGraph!.name}</h3>
           </div>
         </div>
         <div className="editor-grid compact cinematic-field-grid">
           <label className="field-block">
             <span>Title</span>
-            <input value={scriptDoc.title} onChange={(event) => onUpdateScript((currentScript) => ({ ...currentScript, title: event.target.value }))} />
+            <input value={scriptDoc!.title} onChange={(event) => onUpdateScript((currentScript) => ({ ...currentScript, title: event.target.value }))} />
           </label>
           <label className="field-block full-width">
             <span>Logline</span>
-            <textarea rows={2} value={scriptDoc.logline} onChange={(event) => onUpdateScript((currentScript) => ({ ...currentScript, logline: event.target.value }))} />
+            <textarea rows={2} value={scriptDoc!.logline} onChange={(event) => onUpdateScript((currentScript) => ({ ...currentScript, logline: event.target.value }))} />
           </label>
           <label className="field-block compact-block">
             <span>Tone</span>
-            <input value={scriptDoc.tone} onChange={(event) => onUpdateScript((currentScript) => ({ ...currentScript, tone: event.target.value }))} />
+            <input value={scriptDoc!.tone} onChange={(event) => onUpdateScript((currentScript) => ({ ...currentScript, tone: event.target.value }))} />
           </label>
           <label className="field-block full-width">
             <span>Continuity Notes</span>
-            <textarea rows={2} value={scriptDoc.continuityNotes} onChange={(event) => onUpdateScript((currentScript) => ({ ...currentScript, continuityNotes: event.target.value }))} />
+            <textarea rows={2} value={scriptDoc!.continuityNotes} onChange={(event) => onUpdateScript((currentScript) => ({ ...currentScript, continuityNotes: event.target.value }))} />
           </label>
         </div>
       </div>
@@ -2447,11 +2508,11 @@ function ScriptPreviewSurface({
         <div className="section-head">
           <div>
             <span className="eyebrow">Bindings</span>
-            <h3>{scriptDoc.entityBindings.length} source{scriptDoc.entityBindings.length === 1 ? '' : 's'}</h3>
+            <h3>{scriptDoc!.entityBindings.length} source{scriptDoc!.entityBindings.length === 1 ? '' : 's'}</h3>
           </div>
         </div>
         <div className="script-chip-row">
-          {scriptDoc.entityBindings.map((binding) => (
+          {scriptDoc!.entityBindings.map((binding) => (
             <div key={binding.id} className="script-binding-chip">
               <span className="script-binding-chip-icon"><EntityIcon id={iconForScriptBindingKind(binding.kind)} /></span>
               <div className="script-binding-chip-copy">
@@ -2499,11 +2560,11 @@ function ScriptPreviewSurface({
           <div className="section-head">
             <div>
               <span className="eyebrow">Compiled Takes</span>
-              <h3>{previewSequence.takes.length} take{previewSequence.takes.length === 1 ? '' : 's'}</h3>
+              <h3>{previewSequence!.takes.length} take{previewSequence!.takes.length === 1 ? '' : 's'}</h3>
             </div>
           </div>
           <div className="script-chip-row">
-            {previewSequence.takes.map((take, takeIndex) => (
+            {previewSequence!.takes.map((take, takeIndex) => (
               <div key={take.id} className="script-binding-chip script-scene-pill">
                 <div className="script-binding-chip-copy">
                   <strong className="script-scene-pill-title">{take.title}</strong>
@@ -2780,6 +2841,7 @@ function AssetRefInspector({
   currentGraph,
   definitions,
   node,
+  onOpenDefinitionLink,
   onApplyTemplateChange,
   onDelete,
   onUpdate,
@@ -2788,6 +2850,7 @@ function AssetRefInspector({
   currentGraph: GraphDefinition
   definitions: DefinitionBase[]
   node: NodeDefinition
+  onOpenDefinitionLink: (definitionKey: string, kind: DefinitionBase['kind']) => void
   onApplyTemplateChange: (templateKey: string) => void
   onDelete: () => void
   onUpdate: (changes: Partial<NodeDefinition>) => void
@@ -2857,6 +2920,13 @@ function AssetRefInspector({
             <h3>{selectedDefinition?.name ?? 'No source selected'}</h3>
           </div>
         </div>
+        {selectedDefinition ? (
+          <div className="script-row-controls">
+            <button className="ghost-button compact" onClick={() => onOpenDefinitionLink(selectedDefinition.key, selectedDefinition.kind)} type="button">
+              Open {selectedDefinition.kind}
+            </button>
+          </div>
+        ) : null}
         {previewAsset ? <AssetPreview asset={previewAsset} /> : <div className="inline-note">Bind a project character, environment, or item here. Preview art improves shot control, but text-only source context can still be used.</div>}
       </div>
     </div>

@@ -6,6 +6,7 @@ import {
   cinematicSequenceSchema,
   compileCinematicSequence,
   deriveCinematicScriptFromSequence,
+  getCinematicSettings,
 } from '../../../src/domain/cinematics.ts'
 import {
   WORLD_BUILD_ENVIRONMENT_VIEWS,
@@ -1036,9 +1037,12 @@ Deno.serve(async (request) => {
             )
           : null
         const scriptDoc = sequence ? deriveCinematicScriptFromSequence(sequence) : null
+        const effectiveGraphSettings = getCinematicSettings(payload.snapshot.gameSpec ?? null, {
+          cinematics: persistedCinematicPlan?.graphSettings ?? {},
+        })
         graph.metadata = {
           generation: createGenerationMetadata(batchId, graphJobId),
-          cinematics: persistedCinematicPlan?.graphSettings ?? {},
+          cinematics: effectiveGraphSettings,
           cinematicScript: scriptDoc ?? undefined,
           cinematicSequence: sequence ?? undefined,
         }

@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState, useTransition } from 'react'
 
 import { getArtStylePresetLabel } from '../../domain/artStylePresets'
-import type { ArchetypeDefinition, AssetDefinition, AssemblyGraphDefinition, DefinitionBase, EnvironmentBlueprintV1, FieldDefinition, FieldValue, GameSpec } from '../../domain/graphcore'
+import type { ArchetypeDefinition, AssetDefinition, AssemblyGraphDefinition, DefinitionBase, EnvironmentBlueprintV1, FieldDefinition, FieldValue, GameSpec, GraphDefinition } from '../../domain/graphcore'
 import { getEnvironmentProfile, getResolvedDefinition3dBinding, getResolvedRender3dBinding } from '../../domain/render3d'
 import { getResourceGenerationMetadata, isPendingGenerationResource } from '../../domain/worldBuild'
 import type { MeshGenerationJob } from '../../domain/meshGeneration'
 import { isTerminalMeshGenerationJobStatus } from '../../domain/meshGeneration'
-import { iconForDefinitionKind } from '../../shared/entityIcons'
+import { EntityIcon, iconForDefinitionKind } from '../../shared/entityIcons'
 import { DefinitionEditor } from './DefinitionEditor'
 import { EnvironmentAssemblyWorkspace } from './EnvironmentAssemblyWorkspace'
 import { AssetPickerDialog, EmptyEditor, MediaThumb, findAssetByKey, resolveDefinitionDisplayAssetKey } from './shared'
@@ -21,6 +21,7 @@ type SpecializedDefinitionWorkspaceProps = {
   archetypes: ArchetypeDefinition[]
   assets: AssetDefinition[]
   definitions: DefinitionBase[]
+  graphs: GraphDefinition[]
   graphKeys: string[]
   assemblyGraphs: AssemblyGraphDefinition[]
   environmentBlueprints?: EnvironmentBlueprintV1[]
@@ -44,6 +45,7 @@ type SpecializedDefinitionWorkspaceProps = {
   onChangePromptText: (value: string) => void
   onGeneratePrompt: () => void
   onGenerateConceptImage: (definitionKey: string) => Promise<void>
+  onOpenCinematicGraph: (graphKey: string) => void
   onStartMeshGeneration: (definitionKey: string) => void
   onPersistDefinitionPreviewImageBinding: (definitionKey: string, assetKey: string | null) => Promise<void>
   onSelectAsset: (key: string | null) => void
@@ -63,6 +65,7 @@ export function SpecializedDefinitionWorkspace({
   archetypes,
   assets,
   definitions,
+  graphs,
   graphKeys,
   assemblyGraphs,
   environmentBlueprints = [],
@@ -86,6 +89,7 @@ export function SpecializedDefinitionWorkspace({
   onChangePromptText,
   onGeneratePrompt,
   onGenerateConceptImage,
+  onOpenCinematicGraph,
   onStartMeshGeneration,
   onPersistDefinitionPreviewImageBinding,
   onSelectAsset: _onSelectAsset,
@@ -176,6 +180,33 @@ export function SpecializedDefinitionWorkspace({
   const isEnvironmentConceptAssetPending = isPendingGenerationResource(selectedEnvironmentPreviewAsset)
   const isEnvironmentConceptBusy = environmentConceptPending || isEnvironmentConceptAssetPending
   const isDeletingGeneratedMesh = effectiveSelection?.key === deletingGeneratedMeshDefinitionKey
+  const linkedCinematicGraphs = useMemo(() => {
+    if (!effectiveSelection) return []
+    return graphs
+      .filter((graph) => graph.graphType === 'cinematic_flow')
+      .filter((graph) => {
+        const metadata = graph.metadata && typeof graph.metadata === 'object'
+          ? graph.metadata as {
+              cinematicScript?: { entityBindings?: Array<{ definitionKey?: string | null }> }
+            }
+          : {}
+        const boundInScript = Array.isArray(metadata.cinematicScript?.entityBindings)
+          && metadata.cinematicScript.entityBindings.some((binding) => binding?.definitionKey === effectiveSelection.key)
+        const boundInNodes = graph.nodes.some((node) => (
+          node.type === 'asset_ref'
+          && node.metadata
+          && typeof node.metadata === 'object'
+          && (node.metadata as { definitionKey?: unknown }).definitionKey === effectiveSelection.key
+        ))
+        return boundInScript || boundInNodes
+      })
+      .map((graph) => ({
+        key: graph.key,
+        name: graph.name,
+        pending: isPendingGenerationResource(graph),
+        failed: getResourceGenerationMetadata(graph)?.state === 'failed',
+      }))
+  }, [effectiveSelection, graphs])
   const selectedAssemblyGraph = useMemo(() => {
     if (effectiveSelection?.kind !== 'environment') return null
     const geometryBinding = effectiveSelection.components.find((component) => component.type === 'environment_geometry_binding')
@@ -216,6 +247,34 @@ export function SpecializedDefinitionWorkspace({
       >
         3D
       </button>
+    </div>
+  ) : null
+
+  const linkedCinematicsSection = effectiveSelection && linkedCinematicGraphs.length > 0 ? (
+    <div className="editor-section compact-section">
+      <div className="section-head">
+        <div>
+          <span className="eyebrow">Links</span>
+          <h3>Linked Cinematics</h3>
+        </div>
+      </div>
+      <div className="rail-list">
+        {linkedCinematicGraphs.map((graph) => (
+          <button key={graph.key} className="rail-button item-row" onClick={() => onOpenCinematicGraph(graph.key)} type="button">
+            <div className="media-thumb">
+              <EntityIcon id="cinematic" />
+            </div>
+            <div className="item-row-copy">
+              <strong>{graph.name}</strong>
+              <span className={graph.pending ? 'world-build-rail-status' : undefined}>
+                {graph.pending ? (
+                  <><span className="button-spinner item-row-spinner" aria-hidden="true" />Generating...</>
+                ) : graph.failed ? 'Generation failed' : 'Open cinematic'}
+              </span>
+            </div>
+          </button>
+        ))}
+      </div>
     </div>
   ) : null
 
@@ -704,6 +763,7 @@ export function SpecializedDefinitionWorkspace({
                   </div>
                 </div>
               )}
+              {linkedCinematicsSection}
               {panelMode === '3d' ? (
                 <Definition3dPanel
                   assets={assets}

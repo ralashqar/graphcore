@@ -3322,6 +3322,17 @@ button:disabled {
   color: var(--muted);
 }
 
+.cinematic-rail-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+}
+
+.cinematic-rail-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
 .upload-card strong {
   font-size: 0.98rem;
 }

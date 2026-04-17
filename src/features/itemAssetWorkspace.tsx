@@ -50,6 +50,7 @@ export function ContentWorkspace({
   archetypes,
   assets,
   definitions,
+  graphs,
   deletingGeneratedMeshDefinitionKey = null,
   deletingItemKey = null,
   gameSpec = null,
@@ -74,6 +75,7 @@ export function ContentWorkspace({
   onSelectArchetype,
   onSelectItem,
   onGenerateConceptImage,
+  onOpenCinematicGraph,
   onStartMeshGeneration,
   onPersistDefinitionPreviewImageBinding,
   onUpdateArchetypeField,
@@ -113,6 +115,33 @@ export function ContentWorkspace({
       : null
   const isDeletingSelectedItem = selectedContentItem?.key === deletingItemKey
   const isDeletingGeneratedMesh = selectedContentItem?.key === deletingGeneratedMeshDefinitionKey
+  const linkedCinematicGraphs = useMemo(() => {
+    if (!selectedContentItem || selectedContentItem.kind !== 'item') return []
+    return graphs
+      .filter((graph) => graph.graphType === 'cinematic_flow')
+      .filter((graph) => {
+        const metadata = graph.metadata && typeof graph.metadata === 'object'
+          ? graph.metadata as {
+              cinematicScript?: { entityBindings?: Array<{ definitionKey?: string | null }> }
+            }
+          : {}
+        const boundInScript = Array.isArray(metadata.cinematicScript?.entityBindings)
+          && metadata.cinematicScript.entityBindings.some((binding) => binding?.definitionKey === selectedContentItem.key)
+        const boundInNodes = graph.nodes.some((node) => (
+          node.type === 'asset_ref'
+          && node.metadata
+          && typeof node.metadata === 'object'
+          && (node.metadata as { definitionKey?: unknown }).definitionKey === selectedContentItem.key
+        ))
+        return boundInScript || boundInNodes
+      })
+      .map((graph) => ({
+        key: graph.key,
+        name: graph.name,
+        pending: isPendingGenerationResource(graph),
+        failed: getResourceGenerationMetadata(graph)?.state === 'failed',
+      }))
+  }, [graphs, selectedContentItem])
 
   const filteredItems = useMemo(() => {
     const query = itemSearch.trim().toLowerCase()
@@ -571,6 +600,34 @@ export function ContentWorkspace({
                   </div>
                 </div>
               </div>
+
+              {linkedCinematicGraphs.length > 0 ? (
+                <div className="editor-section compact-section">
+                  <div className="section-head">
+                    <div>
+                      <span className="eyebrow">Links</span>
+                      <h3>Linked Cinematics</h3>
+                    </div>
+                  </div>
+                  <div className="rail-list">
+                    {linkedCinematicGraphs.map((graph) => (
+                      <button key={graph.key} className="rail-button item-row" onClick={() => onOpenCinematicGraph(graph.key)} type="button">
+                        <div className="media-thumb">
+                          <EntityIcon id="cinematic" />
+                        </div>
+                        <div className="item-row-copy">
+                          <strong>{graph.name}</strong>
+                          <span className={graph.pending ? 'world-build-rail-status' : undefined}>
+                            {graph.pending ? (
+                              <><span className="button-spinner item-row-spinner" aria-hidden="true" />Generating...</>
+                            ) : graph.failed ? 'Generation failed' : 'Open cinematic'}
+                          </span>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
 
               {itemPanelMode === '3d' ? (
                 <Definition3dPanel

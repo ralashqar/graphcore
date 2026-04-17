@@ -13,6 +13,7 @@ import {
   buildCinematicSettingsPatchFromFormatSubtype,
   buildCinematicSettingsPatchFromPresetFamily,
   buildCinematicSettingsPatchFromStoryPresets,
+  getCinematicSettings,
   type CinematicFormatSubtype,
   type CinematicStoryLanguagePreset,
   type CinematicStoryScenePreset,
@@ -1543,6 +1544,22 @@ export default function App() {
         ? 'environment'
         : 'content'
 
+  function openDefinitionWorkspace(definitionKey: string, kind: DefinitionBase['kind']) {
+    if (kind === 'character') {
+      setActiveTab('characters')
+    } else if (kind === 'environment') {
+      setActiveTab('environments')
+    } else {
+      setActiveTab('content')
+    }
+    setSelectedDefinitionKey(definitionKey)
+  }
+
+  function openCinematicWorkspace(graphKey: string) {
+    setActiveTab('cinematics')
+    setSelectedGraphKey(graphKey)
+  }
+
   function applySnapshotUpdate(mutator: (current: ProjectSnapshot) => ProjectSnapshot) {
     setSnapshot((current) => {
       if (!current) return current
@@ -1684,11 +1701,14 @@ export default function App() {
         return nextSnapshot
       }
 
+      const effectiveGraphSettings = getCinematicSettings(nextSnapshot.gameSpec ?? null, {
+        cinematics: authoredPlan.graphSettings ?? {},
+      })
       const compiledGraph = compileCinematicGraphFromScriptDoc({
         graphKey,
         graphName: authoredPlan.graphName,
         graphSummary: authoredPlan.graphSummary,
-        graphSettings: authoredPlan.graphSettings ?? {},
+        graphSettings: effectiveGraphSettings,
         scriptDoc: authoredPlan.scriptDoc,
         existingMetadata: {
           ...(currentGraph?.metadata ?? {}),
@@ -2941,8 +2961,14 @@ export default function App() {
         model: promptModel,
       })
 
-      if (status.batch.plannerMode === 'cinematic_build' && status.graphs.some((graph) => graph.graphType === 'cinematic_flow')) {
+      const startedCinematicGraph =
+        status.batch.plannerMode === 'cinematic_build'
+          ? status.graphs.find((graph) => graph.graphType === 'cinematic_flow') ?? null
+          : null
+
+      if (startedCinematicGraph && typeof startedCinematicGraph.key === 'string') {
         setActiveTab('cinematics')
+        setSelectedGraphKey(startedCinematicGraph.key)
       }
 
       setSnapshot((current) => {
@@ -3752,6 +3778,7 @@ export default function App() {
                 onGenerateTakeStill={handleStartTakeStillGeneration}
                 onGenerateTakeStoryboard={handleStartTakeStoryboardGeneration}
                 onMoveNode={moveNode}
+                onOpenDefinitionLink={openDefinitionWorkspace}
                 onRunCinematicPreflight={handleRunCinematicPreflight}
                 onSelectEdge={setSelectedEdgeKey}
                 onSelectGraph={setSelectedGraphKey}
@@ -3771,6 +3798,7 @@ export default function App() {
                 deletingGeneratedMeshDefinitionKey={deletingGeneratedMeshDefinitionKey}
                 definitions={snapshot.definitions}
                 gameSpec={snapshot.gameSpec}
+                graphs={snapshot.graphs}
                 projectSummary={snapshot.project.summary}
                 graphKeys={snapshot.graphs.map((graph) => graph.key)}
                 items={definitionEntries}
@@ -3788,6 +3816,7 @@ export default function App() {
                 onDeleteGeneratedMesh={deleteGeneratedMesh}
                 onDeleteItem={deleteDefinition}
                 onGenerateConceptImage={(definitionKey) => handleStartDefinitionConceptGeneration(definitionKey)}
+                onOpenCinematicGraph={openCinematicWorkspace}
                 onRemoveArchetypeField={removeArchetypeField}
                 onSelectAsset={setSelectedAssetKey}
                 onSelectArchetype={setSelectedArchetypeKey}
@@ -3809,6 +3838,7 @@ export default function App() {
                 archetypes={snapshot.archetypes}
                 assets={snapshot.assets}
                 definitions={snapshot.definitions}
+                graphs={snapshot.graphs}
                 graphKeys={snapshot.graphs.map((graph) => graph.key)}
                 assemblyGraphs={snapshot.assemblyGraphs}
                 environmentBlueprints={snapshot.environmentBlueprints}
@@ -3832,6 +3862,7 @@ export default function App() {
                 onDeleteEnvironmentBlueprint={deleteEnvironmentBlueprint}
                 onGeneratePrompt={handleGeneratePatch}
                 onGenerateConceptImage={(definitionKey) => handleStartDefinitionConceptGeneration(definitionKey)}
+                onOpenCinematicGraph={openCinematicWorkspace}
                 onStartMeshGeneration={(definitionKey) => void startMeshGenerationForDefinition(definitionKey)}
                 onPersistDefinitionPreviewImageBinding={(definitionKey, assetKey) => workspaceService.persistDefinitionPreviewImageBinding(snapshot, definitionKey, assetKey)}
                 onSelectAsset={setSelectedAssetKey}
@@ -3852,6 +3883,7 @@ export default function App() {
                 archetypes={snapshot.archetypes}
                 assets={snapshot.assets}
                 definitions={snapshot.definitions}
+                graphs={snapshot.graphs}
                 graphKeys={snapshot.graphs.map((graph) => graph.key)}
                 assemblyGraphs={snapshot.assemblyGraphs}
                 environmentBlueprints={snapshot.environmentBlueprints}
@@ -3875,6 +3907,7 @@ export default function App() {
                 onDeleteEnvironmentBlueprint={deleteEnvironmentBlueprint}
                 onGeneratePrompt={handleGeneratePatch}
                 onGenerateConceptImage={(definitionKey) => handleStartDefinitionConceptGeneration(definitionKey)}
+                onOpenCinematicGraph={openCinematicWorkspace}
                 onStartMeshGeneration={(definitionKey) => void startMeshGenerationForDefinition(definitionKey)}
                 onPersistDefinitionPreviewImageBinding={(definitionKey, assetKey) => workspaceService.persistDefinitionPreviewImageBinding(snapshot, definitionKey, assetKey)}
                 onSelectAsset={setSelectedAssetKey}

@@ -5,6 +5,7 @@ import type {
   FieldDefinition,
   FieldValue,
   GameSpec,
+  GraphDefinition,
 } from '../../domain/graphcore'
 import type { AssetUrlCreateOptions, AssetUrlCreationKind } from '../../domain/assets'
 import type { MeshGenerationJob } from '../../domain/meshGeneration'
@@ -27,6 +28,7 @@ export type ContentWorkspaceProps = {
   archetypes: ArchetypeDefinition[]
   assets: AssetDefinition[]
   definitions: DefinitionBase[]
+  graphs: GraphDefinition[]
   graphKeys: string[]
   items: DefinitionBase[]
   gameSpec?: GameSpec | null
@@ -58,6 +60,7 @@ export type ContentWorkspaceProps = {
   onGenerateConceptImage: (definitionKey: string) => Promise<void>
   onStartMeshGeneration: (definitionKey: string) => void
   onPersistDefinitionPreviewImageBinding: (definitionKey: string, assetKey: string | null) => Promise<void>
+  onOpenCinematicGraph: (graphKey: string) => void
 }
 
 export type AssetsWorkspaceProps = {
