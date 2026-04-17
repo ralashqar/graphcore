@@ -2,32 +2,7 @@ import '@supabase/functions-js/edge-runtime.d.ts'
 
 import { z } from 'npm:zod@4'
 
-import {
-  buildCinematicSettingsPatchFromFormatSubtype,
-  buildCinematicSettingsPatchFromPresetFamily,
-  getCinematicSettings,
-} from '../../../src/domain/cinematics.ts'
-import { worldBuildPlanRequestSchema, worldBuildPlanResponseSchema } from '../../../src/domain/worldBuild.ts'
-import { requireUserClient } from '../_shared/auth.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
-import { runStructuredWorldBuildModel } from '../_shared/world-build.ts'
-import {
-  buildCinematicDefinitionCatalog,
-  cinematicShotSkeletonPlannerSystemPrompt,
-  buildPromptMatchedEntityRefs,
-  correctUgcPresetSelectionForPrompt,
-  coerceCinematicEntityExtractionRaw,
-  coerceCinematicPlannerRaw,
-  cinematicEntityExtractionSystemPrompt,
-  cinematicEntityResolutionSystemPrompt,
-  cinematicIntentSchema,
-  cinematicIntentSystemPrompt,
-  finalizeCinematicEntityRefs,
-  inferCinematicFormatSubtypeFromPrompt,
-  inferCinematicPresetFamilyFromPrompt,
-  materializeCinematicPlanSkeleton,
-  resolveTargetShotCount,
-} from '../_shared/world-build-cinematics.ts'
 
 const plannerItemSchema = z.object({
   id: z.string(),
@@ -102,21 +77,6 @@ function hasExplicitCinematicIntent(prompt: string) {
   const sequenceTerms = ['shot', 'shots', 'scene', 'sequence']
   const cameraTerms = ['camera', 'framing', 'lens', 'angle', 'close up', 'closeup', 'wide shot', 'establishing shot']
   return sequenceTerms.some((term) => normalized.includes(term)) && cameraTerms.some((term) => normalized.includes(term))
-}
-
-function buildPlanItemSummaryForEntity(entityRef: {
-  kind: 'character' | 'environment' | 'item'
-  sourceName: string
-  summary: string
-  role: string
-}) {
-  if (entityRef.summary.trim()) {
-    return entityRef.summary.trim()
-  }
-
-  return entityRef.kind === 'environment'
-    ? `Create the environment "${entityRef.sourceName}" so it can anchor the ${entityRef.role} cinematic beats.`
-    : `Create ${entityRef.kind} "${entityRef.sourceName}" so it can be used in the ${entityRef.role} cinematic action.`
 }
 
 function normalizeEntityToken(value: string) {
@@ -241,6 +201,21 @@ function describeTopLevelKeys(value: unknown) {
   return keys.length > 0 ? keys.join(', ') : '<no-keys>'
 }
 
+function buildPlanItemSummaryForEntity(entityRef: {
+  kind: 'character' | 'environment' | 'item'
+  sourceName: string
+  summary: string
+  role: string
+}) {
+  if (entityRef.summary.trim()) {
+    return entityRef.summary.trim()
+  }
+
+  return entityRef.kind === 'environment'
+    ? `Create the environment "${entityRef.sourceName}" so it can anchor the ${entityRef.role} cinematic beats.`
+    : `Create ${entityRef.kind} "${entityRef.sourceName}" so it can be used in the ${entityRef.role} cinematic action.`
+}
+
 function mergeCinematicEntityRefs<T extends {
   id: string
   kind: 'character' | 'environment' | 'item'
@@ -274,13 +249,53 @@ Deno.serve(async (request) => {
   if (preflight) return preflight
 
   try {
+    const [
+      cinematicsDomain,
+      worldBuildDomain,
+      authModule,
+      worldBuildModule,
+      worldBuildCinematicsModule,
+    ] = await Promise.all([
+      import('../../../src/domain/cinematics.ts'),
+      import('../../../src/domain/worldBuild.ts'),
+      import('../_shared/auth.ts'),
+      import('../_shared/world-build.ts'),
+      import('../_shared/world-build-cinematics.ts'),
+    ])
+    const {
+      buildCinematicSettingsPatchFromFormatSubtype,
+      buildCinematicSettingsPatchFromPresetFamily,
+      buildCinematicSettingsPatchFromStoryPresets,
+      getCinematicSettings,
+    } = cinematicsDomain
+    const { worldBuildPlanRequestSchema, worldBuildPlanResponseSchema } = worldBuildDomain
+    const { requireUserClient } = authModule
+    const { runStructuredWorldBuildModel } = worldBuildModule
+    const {
+      buildCinematicDefinitionCatalog,
+      buildPromptMatchedEntityRefs,
+      coerceCinematicEntityExtractionRaw,
+      correctUgcPresetSelectionForPrompt,
+      cinematicEntityExtractionSystemPrompt,
+      cinematicEntityResolutionSystemPrompt,
+      cinematicIntentSchema,
+      cinematicIntentSystemPrompt,
+      finalizeCinematicEntityRefs,
+      inferCinematicFormatSubtypeFromPrompt,
+      inferCinematicPresetFamilyFromPrompt,
+      inferStoryLanguagePresetFromPrompt,
+      inferStoryScenePresetFromPrompt,
+    } = worldBuildCinematicsModule
     if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed.')
 
     await requireUserClient(request, 'plan-world-build')
     const payload = worldBuildPlanRequestSchema.parse(await request.json())
 
+    const plannerModeHint = payload.plannerModeHint ?? null
     const explicitCinematicIntent = hasExplicitCinematicIntent(payload.prompt)
-    const intent = explicitCinematicIntent
+    const intent = plannerModeHint === 'cinematic_build'
+      ? { plannerMode: 'cinematic_build' as const, reason: 'Client requested cinematic planning context.' }
+      : explicitCinematicIntent
       ? { plannerMode: 'cinematic_build' as const, reason: 'Matched explicit cinematic prompt keywords.' }
       : await runStructuredWorldBuildModel({
         model: payload.model,
@@ -343,12 +358,11 @@ Deno.serve(async (request) => {
       })
       const resolvedEntities = coerceCinematicEntityExtractionRaw(resolvedEntitiesRaw)
       const resolvedEntityRefs = finalizeCinematicEntityRefs(
-        mergeCinematicEntityRefs(
-          mergeCinematicEntityRefs(promptMatchedEntityRefs, resolvedEntities.entityRefs),
-          extractedEntities.entityRefs,
-        ),
+        mergeCinematicEntityRefs(promptMatchedEntityRefs, resolvedEntities.entityRefs),
         catalog,
+        payload.prompt,
       )
+      const requestSummary = extractedEntities.requestSummary || trimPromptForSummary(payload.prompt, 96) || 'Cinematic build plan'
       const filteredEntityRefs = pruneIncidentalCinematicEntityRefs(resolvedEntityRefs)
       const graphName = buildDeferredCinematicGraphName(filteredEntityRefs, payload.prompt)
       const graphSummary = buildDeferredCinematicGraphSummary(payload.prompt, filteredEntityRefs)
@@ -356,16 +370,24 @@ Deno.serve(async (request) => {
         payload.snapshot.gameSpec && typeof payload.snapshot.gameSpec === 'object' && (payload.snapshot.gameSpec as { cinematics?: unknown }).cinematics && typeof (payload.snapshot.gameSpec as { cinematics?: unknown }).cinematics === 'object'
           ? (payload.snapshot.gameSpec as { cinematics?: Record<string, unknown> }).cinematics ?? {}
           : {}
-      const hasLockedProjectPreset =
+      const hasExplicitProjectPresetOverride =
+        rawProjectCinematics.presetSource === 'manual_override'
+      const hasLockedProjectPreset = hasExplicitProjectPresetOverride && (
         typeof rawProjectCinematics.presetFamily === 'string'
         || typeof rawProjectCinematics.presetId === 'string'
         || typeof rawProjectCinematics.specializationMode === 'string'
+        || typeof rawProjectCinematics.storyScenePreset === 'string'
+        || typeof rawProjectCinematics.storyLanguagePreset === 'string'
         || typeof rawProjectCinematics.formatSubtype === 'string'
+      )
+      const lockedProjectSettings = hasLockedProjectPreset
+        ? getCinematicSettings(payload.snapshot.gameSpec ?? null, {})
+        : null
       const resolvedPresetFamily = hasLockedProjectPreset
-        ? getCinematicSettings(payload.snapshot.gameSpec ?? null, {}).presetFamily
+        ? lockedProjectSettings?.presetFamily ?? 'story_movie_tv'
         : inferCinematicPresetFamilyFromPrompt(payload.prompt)
       const initiallyResolvedFormatSubtype = hasLockedProjectPreset
-        ? getCinematicSettings(payload.snapshot.gameSpec ?? null, {}).formatSubtype
+        ? lockedProjectSettings?.formatSubtype ?? null
         : inferCinematicFormatSubtypeFromPrompt(payload.prompt, resolvedPresetFamily)
       const correctedPresetSelection = correctUgcPresetSelectionForPrompt({
         prompt: payload.prompt,
@@ -374,56 +396,36 @@ Deno.serve(async (request) => {
       })
       const resolvedFormatSubtype = correctedPresetSelection.formatSubtype
       const resolvedEffectivePresetFamily = correctedPresetSelection.presetFamily
+      const resolvedStoryScenePreset = resolvedEffectivePresetFamily === 'story_movie_tv'
+        ? (hasLockedProjectPreset ? lockedProjectSettings?.storyScenePreset ?? null : inferStoryScenePresetFromPrompt(payload.prompt))
+        : null
+      const resolvedStoryLanguagePreset = resolvedEffectivePresetFamily === 'story_movie_tv'
+        ? (hasLockedProjectPreset ? lockedProjectSettings?.storyLanguagePreset ?? null : inferStoryLanguagePresetFromPrompt(payload.prompt))
+        : null
       const presetSource = hasLockedProjectPreset ? 'project_default' : 'prompt_inference'
-      const targetShotCount = resolveTargetShotCount(payload.prompt, resolvedFormatSubtype)
-      const cinematicSkeletonRaw = await runStructuredWorldBuildModel({
-        model: payload.model,
-        passLabel: 'Cinematic shot planner',
-        systemText: cinematicShotSkeletonPlannerSystemPrompt(
-          resolvedEffectivePresetFamily,
-          resolvedFormatSubtype,
-          targetShotCount,
-        ),
-        promptContext: {
-          prompt: payload.prompt,
-          project: payload.snapshot.project,
-          draft: payload.snapshot.draft,
-          gameSpec: payload.snapshot.gameSpec ?? null,
-          requestSummary: extractedEntities.requestSummary || 'Cinematic build plan',
-          graphName,
-          graphSummary,
-          lockedEntityRefs: filteredEntityRefs,
-          existingEntityRefs: filteredEntityRefs.filter((entry) => entry.resolution === 'existing'),
-          createEntityRefs: [],
-        },
-        schema: z.record(z.string(), z.unknown()),
-        maxOutputTokens: 7000,
-      })
-      const cinematicSkeletonDraft = coerceCinematicPlannerRaw(cinematicSkeletonRaw, {
-        lockedEntityRefs: filteredEntityRefs,
-        allowEntityCreation: false,
-        promptText: payload.prompt,
-        enableFallbackShaping: false,
-      })
-      const cinematicSkeletonPlan = materializeCinematicPlanSkeleton({
-        ...cinematicSkeletonDraft,
-        requestSummary: extractedEntities.requestSummary || 'Cinematic build plan',
+      const graphSettings =
+        resolvedEffectivePresetFamily === 'story_movie_tv'
+          ? {
+            ...buildCinematicSettingsPatchFromStoryPresets(resolvedStoryScenePreset, resolvedStoryLanguagePreset),
+            presetSource,
+          }
+          : {
+            ...buildCinematicSettingsPatchFromPresetFamily(resolvedEffectivePresetFamily),
+            ...buildCinematicSettingsPatchFromFormatSubtype(resolvedEffectivePresetFamily, resolvedFormatSubtype),
+            presetSource,
+          }
+      const cinematicPlan = {
         graphName,
         graphSummary,
         entityRefs: filteredEntityRefs,
-        graphSettings: {
-          ...buildCinematicSettingsPatchFromPresetFamily(resolvedEffectivePresetFamily),
-          ...buildCinematicSettingsPatchFromFormatSubtype(resolvedEffectivePresetFamily, resolvedFormatSubtype),
-          ...(cinematicSkeletonDraft.graphSettings ?? {}),
-          presetSource,
-        },
-      })
-      const cinematicPlan = {
-        ...cinematicSkeletonPlan,
-        graphSettings: {
-          ...(cinematicSkeletonPlan.graphSettings ?? {}),
-          presetSource,
-        },
+        rawScriptMarkdown: '',
+        scriptDoc: null,
+        relationshipRefs: [],
+        compositeRefPlans: [],
+        storyboardPlan: null,
+        shots: [],
+        graphSettings,
+        autoRun: false,
       } as const
       const missingPlanItems = filteredEntityRefs
         .filter((entityRef) => entityRef.resolution === 'create' && entityRef.planItemId)
@@ -434,15 +436,12 @@ Deno.serve(async (request) => {
           summary: buildPlanItemSummaryForEntity(entityRef),
           dependsOn: [],
           enabled: true,
-          generationOptions:
-            entityRef.kind === 'environment'
-              ? { generateConceptImage: true }
-              : { generateConceptImage: true },
+          generationOptions: { generateConceptImage: true },
         }))
 
       const responseDraft = {
         plannerMode: 'cinematic_build' as const,
-        requestSummary: extractedEntities.requestSummary || 'Cinematic build plan',
+        requestSummary,
         planItems: [
           ...missingPlanItems,
           {
@@ -459,13 +458,14 @@ Deno.serve(async (request) => {
         diagnostics: [
           ...extractedEntities.diagnostics,
           ...resolvedEntities.diagnostics,
-          ...cinematicSkeletonDraft.diagnostics,
-          ...(filteredEntityRefs.length !== resolvedEntityRefs.length ? ['Filtered incidental cinematic set-dressing refs from generation plan.'] : []),
+          'Detailed cinematic shot planning is deferred to generation start so preview returns quickly.',
         ],
         assistantNotes: [
           extractedEntities.assistantNotes,
           resolvedEntities.assistantNotes,
-          cinematicSkeletonDraft.assistantNotes,
+          filteredEntityRefs.length > 0
+            ? `Matched ${filteredEntityRefs.length} cinematic reference${filteredEntityRefs.length === 1 ? '' : 's'} for preview.`
+            : 'No cinematic references were locked during preview.',
         ].filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0).join('\n\n') || undefined,
       }
 

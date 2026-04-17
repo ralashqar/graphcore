@@ -8,10 +8,13 @@ import { buildTakeFirstCinematicDocument, layoutCinematicTakeOnlyNodes } from '.
 import {
   buildCinematicSettingsPatchFromFormatSubtype,
   buildCinematicSettingsPatchFromPresetFamily,
+  buildCinematicSettingsPatchFromStoryPresets,
   cinematicSequenceSchema,
   cinematicTakeSpecSchema,
   cinematicDominantTriggerSchema,
   cinematicFormatSubtypeSchema,
+  cinematicStoryLanguagePresetSchema,
+  cinematicStoryScenePresetSchema,
   buildCinematicSequenceFromScriptDoc,
   cinematicScriptDocSchema,
   coerceFormatSubtypeForPresetFamily,
@@ -19,6 +22,8 @@ import {
   getCinematicFormulaFamilyLabel,
   getCinematicFormatSubtypeLabel,
   getCinematicPresetLabel,
+  getCinematicStoryLanguagePresetLabel,
+  getCinematicStoryScenePresetLabel,
   getCinematicSequence,
   getCinematicScript,
   getCinematicSettings,
@@ -42,6 +47,8 @@ import {
   type CinematicScriptShot,
   type CinematicTakeSpec,
   type CinematicSettings,
+  type CinematicStoryLanguagePreset,
+  type CinematicStoryScenePreset,
   type DialogueBeat,
 } from '../../domain/cinematics'
 import type {
@@ -162,6 +169,25 @@ function getSubtypeOptionsForPresetFamily(presetFamily: CinematicPresetFamily) {
   return cinematicFormatSubtypeSchema.options.filter((option) => option === 'contrast_narrative' || coerceFormatSubtypeForPresetFamily(presetFamily, option) === option)
 }
 
+function getPresetSummaryLabel(input: {
+  presetFamily: CinematicPresetFamily
+  formatSubtype?: CinematicFormatSubtype | null
+  storyScenePreset?: CinematicStoryScenePreset | null
+  storyLanguagePreset?: CinematicStoryLanguagePreset | null
+}) {
+  if (input.presetFamily === 'story_movie_tv') {
+    return [
+      getCinematicPresetLabel(input.presetFamily),
+      getCinematicStoryScenePresetLabel(input.storyScenePreset ?? 'dialogue_two_hander'),
+      getCinematicStoryLanguagePresetLabel(input.storyLanguagePreset ?? 'grounded_naturalist'),
+    ].join(' · ')
+  }
+  return [
+    getCinematicPresetLabel(input.presetFamily),
+    input.formatSubtype ? getCinematicFormatSubtypeLabel(input.formatSubtype) : null,
+  ].filter((entry): entry is string => Boolean(entry)).join(' · ')
+}
+
 function moveArrayItem<TValue>(items: TValue[], fromIndex: number, toIndex: number) {
   if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0 || fromIndex >= items.length || toIndex >= items.length) {
     return items
@@ -247,6 +273,69 @@ function normalizeEditedScriptDoc(scriptDoc: CinematicScriptDoc) {
     scenes: normalizedScenes,
     shots: normalizedShots,
   })
+}
+
+function buildPlainTextScriptExport(scriptDoc: CinematicScriptDoc) {
+  const orderedScenes = [...scriptDoc.scenes].sort((left, right) => left.orderIndex - right.orderIndex)
+  const orderedShots = [...scriptDoc.shots].sort((left, right) => left.orderIndex - right.orderIndex)
+  const bindingById = new Map(scriptDoc.entityBindings.map((binding) => [binding.id, binding]))
+  const shotsBySceneId = new Map<string, CinematicScriptShot[]>()
+
+  for (const shot of orderedShots) {
+    const sceneId = shot.sceneId ?? '__unscened__'
+    const current = shotsBySceneId.get(sceneId) ?? []
+    current.push(shot)
+    shotsBySceneId.set(sceneId, current)
+  }
+
+  const renderDialogue = (shot: CinematicScriptShot) =>
+    shot.dialogue.map((line) => {
+      const speaker = line.speakerRefId ? bindingById.get(line.speakerRefId)?.label ?? bindingById.get(line.speakerRefId)?.sourceName ?? 'Speaker' : 'Speaker'
+      return `${speaker}: ${line.line.trim()}`
+    })
+
+  const renderActions = (shot: CinematicScriptShot) =>
+    shot.actions
+      .map((action) => action.verb.trim())
+      .filter((entry) => entry.length > 0)
+      .map((entry) => `Action: ${entry}`)
+
+  const renderAudio = (shot: CinematicScriptShot) =>
+    shot.audio
+      .map((cue) => cue.cue.trim())
+      .filter((entry) => entry.length > 0)
+      .map((entry) => `Audio: ${entry}`)
+
+  const renderShot = (shot: CinematicScriptShot, index: number) => [
+    `Shot ${index + 1}: ${shot.title || shot.id}`,
+    shot.beat.trim(),
+    ...renderDialogue(shot),
+    ...renderActions(shot),
+    ...renderAudio(shot),
+  ].filter((entry) => entry.length > 0).join('\n')
+
+  const sceneBlocks = orderedScenes.map((scene) => {
+    const sceneShots = shotsBySceneId.get(scene.id) ?? []
+    const locationName = scene.locationRefId ? bindingById.get(scene.locationRefId)?.label ?? bindingById.get(scene.locationRefId)?.sourceName ?? '' : ''
+    const header = [
+      `Scene ${scene.orderIndex + 1}: ${scene.title || scene.id}`,
+      scene.summary.trim(),
+      locationName ? `Location: ${locationName}` : '',
+    ].filter((entry) => entry.length > 0).join('\n')
+    const shotsText = sceneShots.map((shot, index) => renderShot(shot, index)).join('\n\n')
+    return [header, shotsText].filter((entry) => entry.length > 0).join('\n\n')
+  })
+
+  const unscenedShots = (shotsBySceneId.get('__unscened__') ?? []).map((shot, index) => renderShot(shot, index))
+
+  return [
+    scriptDoc.title.trim(),
+    scriptDoc.logline.trim(),
+    scriptDoc.tone.trim() ? `Tone: ${scriptDoc.tone.trim()}` : '',
+    scriptDoc.continuityNotes.trim() ? `Continuity: ${scriptDoc.continuityNotes.trim()}` : '',
+    ...sceneBlocks,
+    ...unscenedShots,
+  ].filter((entry) => entry.length > 0).join('\n\n')
 }
 
 function validateScriptDoc(scriptDoc: CinematicScriptDoc): ScriptValidationIssue[] {
@@ -1600,6 +1689,8 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
         : {}
     delete explicitGraphSettings.presetFamily
     delete explicitGraphSettings.presetId
+    delete explicitGraphSettings.storyScenePreset
+    delete explicitGraphSettings.storyLanguagePreset
     delete explicitGraphSettings.formatSubtype
     delete explicitGraphSettings.formulaFamily
     delete explicitGraphSettings.dominantTrigger
@@ -1742,6 +1833,28 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
             <option value="ugc_direct_response_ad">UGC Direct Response Ad</option>
             <option value="ugc_faceless_format">UGC Faceless Format</option>
           </select>
+          {graphSettings.presetFamily === 'story_movie_tv' ? (
+            <>
+              <select
+                value={graphSettings.storyScenePreset ?? 'dialogue_two_hander'}
+                onChange={(event) => updateGraphCinematics(buildCinematicSettingsPatchFromStoryPresets(
+                  event.target.value as CinematicStoryScenePreset,
+                  graphSettings.storyLanguagePreset ?? 'grounded_naturalist',
+                ))}
+              >
+                {cinematicStoryScenePresetSchema.options.map((option) => <option key={option} value={option}>{getCinematicStoryScenePresetLabel(option)}</option>)}
+              </select>
+              <select
+                value={graphSettings.storyLanguagePreset ?? 'grounded_naturalist'}
+                onChange={(event) => updateGraphCinematics(buildCinematicSettingsPatchFromStoryPresets(
+                  graphSettings.storyScenePreset ?? 'dialogue_two_hander',
+                  event.target.value as CinematicStoryLanguagePreset,
+                ))}
+              >
+                {cinematicStoryLanguagePresetSchema.options.map((option) => <option key={option} value={option}>{getCinematicStoryLanguagePresetLabel(option)}</option>)}
+              </select>
+            </>
+          ) : null}
           {graphSettings.presetFamily !== 'story_movie_tv' && graphSettings.formatSubtype ? (
             <select
               value={graphSettings.formatSubtype}
@@ -1788,7 +1901,12 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
               {isCurrentGraphPending ? <div className="inline-note">{renderGenerationPhaseLabel(currentGraphGenerationPhase)}</div> : null}
               {currentGraph ? (
                 <div className="inline-note">
-                  Preset: {getCinematicPresetLabel(graphSettings.presetFamily)}{graphPresetOverrideActive ? ' (graph override)' : ' (project default)'}{graphSettings.formatSubtype ? ` Â· ${getCinematicFormatSubtypeLabel(graphSettings.formatSubtype)}` : ''}
+                  Preset: {getPresetSummaryLabel({
+                    presetFamily: graphSettings.presetFamily,
+                    formatSubtype: graphSettings.formatSubtype,
+                    storyScenePreset: graphSettings.storyScenePreset,
+                    storyLanguagePreset: graphSettings.storyLanguagePreset,
+                  })}{graphPresetOverrideActive ? ' (graph override)' : ' (project default)'}
                 </div>
               ) : null}
               {currentGraph && graphSettings.formulaFamily ? (
@@ -2012,7 +2130,12 @@ function CinematicGraphInspector({
           <button className="ghost-button compact" onClick={onResetGraphPresetOverride} type="button">Use Project Preset</button>
         </div>
         <div className="inline-note">
-          Effective preset: {getCinematicPresetLabel(currentSettings.presetFamily)}{currentSettings.formatSubtype ? ` Â· ${getCinematicFormatSubtypeLabel(currentSettings.formatSubtype)}` : ''}{currentSettings.formulaFamily ? ` Â· ${getCinematicFormulaFamilyLabel(currentSettings.formulaFamily)}` : ''}
+          Effective preset: {getPresetSummaryLabel({
+            presetFamily: currentSettings.presetFamily,
+            formatSubtype: currentSettings.formatSubtype,
+            storyScenePreset: currentSettings.storyScenePreset,
+            storyLanguagePreset: currentSettings.storyLanguagePreset,
+          })}{currentSettings.formulaFamily ? ` Â· ${getCinematicFormulaFamilyLabel(currentSettings.formulaFamily)}` : ''}
         </div>
         <div className="inline-note">
           Effective art style: {getArtStylePresetLabel(effectiveArtStyle.presetId)}{effectiveArtStyle.source === 'graph' ? ' (graph override)' : effectiveArtStyle.source === 'inferred' ? ' (inferred capture override)' : effectiveArtStyle.source === 'recommended' ? ' (recommended capture override)' : effectiveArtStyle.source === 'project' ? ' (project global)' : ''}
@@ -2115,6 +2238,7 @@ function ScriptPreviewSurface({
     ),
     [currentGraph, currentGraph.metadata, previewSequence],
   )
+  const plainTextExport = useMemo(() => buildPlainTextScriptExport(scriptDoc), [scriptDoc])
 
   function updateShot(shotId: string, mutator: (shot: CinematicScriptShot) => CinematicScriptShot) {
     onUpdateScript((currentScript) => ({
@@ -2166,6 +2290,8 @@ function ScriptPreviewSurface({
           beat: '',
           emotionalBeat: '',
           hookRole: null,
+          storyScenePreset: null,
+          storyLanguagePreset: null,
           formatSubtype: null,
           formulaFamily: null,
           dominantTrigger: null,
@@ -2248,6 +2374,7 @@ function ScriptPreviewSurface({
             {showRawScript ? 'Hide JSON' : 'Preview JSON'}
           </button>
           <button className="ghost-button compact" onClick={() => void navigator.clipboard.writeText(jsonExport)} type="button">Copy JSON</button>
+          <button className="ghost-button compact" onClick={() => void navigator.clipboard.writeText(plainTextExport)} type="button">Copy Script Text</button>
           {rawScriptMarkdown.trim().length > 0 ? (
             <button className="ghost-button compact" onClick={() => void navigator.clipboard.writeText(rawScriptMarkdown)} type="button">Copy Raw Script</button>
           ) : null}
@@ -3173,10 +3300,15 @@ function CinematicTakeInspector({
           <strong>Effective art style</strong>
           <span> {getArtStylePresetLabel(effectiveArtStyle.presetId)}{effectiveArtStyle.source === 'node' ? ' · take override' : effectiveArtStyle.source === 'graph' ? ' · graph override' : effectiveArtStyle.source === 'inferred' ? ' · inferred graph override' : effectiveArtStyle.source === 'recommended' ? ' · recommended override' : effectiveArtStyle.source === 'project' ? ' · project global' : ''}</span>
         </div>
-        {config.formatSubtype ? (
+        {graphSettings.presetFamily === 'story_movie_tv' || config.formatSubtype ? (
           <div className="inline-note">
-            <strong>Format subtype</strong>
-            <span> {getCinematicFormatSubtypeLabel(config.formatSubtype)}</span>
+            <strong>Preset contract</strong>
+            <span> {getPresetSummaryLabel({
+              presetFamily: graphSettings.presetFamily,
+              formatSubtype: config.formatSubtype ?? graphSettings.formatSubtype,
+              storyScenePreset: config.storyScenePreset ?? graphSettings.storyScenePreset,
+              storyLanguagePreset: config.storyLanguagePreset ?? graphSettings.storyLanguagePreset,
+            })}</span>
           </div>
         ) : null}
         {config.formulaFamily ? (
@@ -3403,10 +3535,15 @@ function CinematicTakeInspector({
                 <strong>Reason</strong>
                 <span> {config.executionPlan.modeReason || 'No reason stored.'}</span>
               </div>
-              {config.formatSubtype ? (
+              {graphSettings.presetFamily === 'story_movie_tv' || config.formatSubtype ? (
                 <div className="inline-note">
-                  <strong>Subtype</strong>
-                  <span> {getCinematicFormatSubtypeLabel(config.formatSubtype)}</span>
+                  <strong>Preset contract</strong>
+                  <span> {getPresetSummaryLabel({
+                    presetFamily: graphSettings.presetFamily,
+                    formatSubtype: config.formatSubtype ?? graphSettings.formatSubtype,
+                    storyScenePreset: config.storyScenePreset ?? graphSettings.storyScenePreset,
+                    storyLanguagePreset: config.storyLanguagePreset ?? graphSettings.storyLanguagePreset,
+                  })}</span>
                 </div>
               ) : null}
               {config.formulaFamily ? (
@@ -3628,6 +3765,17 @@ function CinematicShotInspector({
         <div className="inline-note">
           <strong>UGC subtype</strong>
           <span> {getCinematicFormatSubtypeLabel(config.formatSubtype)}{config.formulaFamily ? ` Â· ${getCinematicFormulaFamilyLabel(config.formulaFamily)}` : ''}</span>
+        </div>
+      ) : null}
+      {currentSettings.presetFamily === 'story_movie_tv' ? (
+        <div className="inline-note">
+          <strong>Story contract</strong>
+          <span> {getPresetSummaryLabel({
+            presetFamily: currentSettings.presetFamily,
+            formatSubtype: config.formatSubtype ?? currentSettings.formatSubtype,
+            storyScenePreset: config.storyScenePreset ?? currentSettings.storyScenePreset,
+            storyLanguagePreset: config.storyLanguagePreset ?? currentSettings.storyLanguagePreset,
+          })}</span>
         </div>
       ) : null}
       <div className="inline-note">
@@ -3889,10 +4037,15 @@ function CinematicShotInspector({
                 <strong>Reason</strong>
                 <span> {config.executionPlan.modeReason || 'No reason stored.'}</span>
               </div>
-              {config.formatSubtype ? (
+              {currentSettings.presetFamily === 'story_movie_tv' || config.formatSubtype ? (
                 <div className="inline-note">
-                  <strong>Subtype</strong>
-                  <span> {getCinematicFormatSubtypeLabel(config.formatSubtype)}</span>
+                  <strong>Preset contract</strong>
+                  <span> {getPresetSummaryLabel({
+                    presetFamily: currentSettings.presetFamily,
+                    formatSubtype: config.formatSubtype ?? currentSettings.formatSubtype,
+                    storyScenePreset: config.storyScenePreset ?? currentSettings.storyScenePreset,
+                    storyLanguagePreset: config.storyLanguagePreset ?? currentSettings.storyLanguagePreset,
+                  })}</span>
                 </div>
               ) : null}
               {config.formulaFamily ? (
@@ -3998,6 +4151,34 @@ function CinematicSettingsEditor({
           <option value="ugc_faceless_format">UGC Faceless Format</option>
         </select>
       </label>
+      {settings.presetFamily === 'story_movie_tv' ? (
+        <label className="field-block compact-block">
+          <span>Scene Preset</span>
+          <select
+            value={settings.storyScenePreset ?? 'dialogue_two_hander'}
+            onChange={(event) => onChange(buildCinematicSettingsPatchFromStoryPresets(
+              event.target.value as CinematicStoryScenePreset,
+              settings.storyLanguagePreset ?? 'grounded_naturalist',
+            ))}
+          >
+            {cinematicStoryScenePresetSchema.options.map((option) => <option key={option} value={option}>{getCinematicStoryScenePresetLabel(option)}</option>)}
+          </select>
+        </label>
+      ) : null}
+      {settings.presetFamily === 'story_movie_tv' ? (
+        <label className="field-block compact-block">
+          <span>Language Preset</span>
+          <select
+            value={settings.storyLanguagePreset ?? 'grounded_naturalist'}
+            onChange={(event) => onChange(buildCinematicSettingsPatchFromStoryPresets(
+              settings.storyScenePreset ?? 'dialogue_two_hander',
+              event.target.value as CinematicStoryLanguagePreset,
+            ))}
+          >
+            {cinematicStoryLanguagePresetSchema.options.map((option) => <option key={option} value={option}>{getCinematicStoryLanguagePresetLabel(option)}</option>)}
+          </select>
+        </label>
+      ) : null}
       {settings.presetFamily !== 'story_movie_tv' && settings.formatSubtype ? (
         <label className="field-block compact-block">
           <span>Subtype</span>
@@ -4044,6 +4225,12 @@ function CinematicSettingsEditor({
         <span>Mode</span>
         <input disabled value={settings.specializationMode === 'story' ? 'Story' : 'UGC'} />
       </label>
+      {settings.presetFamily === 'story_movie_tv' ? (
+        <label className="field-block compact-block">
+          <span>Story Contract</span>
+          <input disabled value={`${getCinematicStoryScenePresetLabel(settings.storyScenePreset)} · ${getCinematicStoryLanguagePresetLabel(settings.storyLanguagePreset)}`} />
+        </label>
+      ) : null}
       {settings.presetFamily !== 'story_movie_tv' ? (
         <label className="field-block compact-block">
           <span>Planned Formula</span>

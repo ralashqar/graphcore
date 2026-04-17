@@ -325,6 +325,7 @@ Deno.serve(async (request) => {
     const currentQuality = evaluateCinematicScriptQuality({
       promptText: batch.prompt,
       scriptDoc: currentScriptDoc,
+      graphSettings: effectiveSettings,
     })
 
     const fallbackShotIds = currentQuality.diagnostics
@@ -388,6 +389,8 @@ Deno.serve(async (request) => {
           systemText: [
             cinematicCreativeScriptAuthorshipSystemPrompt({
               presetFamily: effectiveSettings.presetFamily,
+              storyScenePreset: effectiveSettings.storyScenePreset,
+              storyLanguagePreset: effectiveSettings.storyLanguagePreset,
               formatSubtype: effectiveSettings.formatSubtype,
               formulaFamily: effectiveSettings.formulaFamily,
               dominantTrigger: effectiveSettings.dominantTrigger,
@@ -425,6 +428,8 @@ Deno.serve(async (request) => {
           systemText: [
             cinematicShotAuthorshipSystemPrompt({
               presetFamily: effectiveSettings.presetFamily,
+              storyScenePreset: effectiveSettings.storyScenePreset,
+              storyLanguagePreset: effectiveSettings.storyLanguagePreset,
               formatSubtype: effectiveSettings.formatSubtype,
               formulaFamily: effectiveSettings.formulaFamily,
               dominantTrigger: effectiveSettings.dominantTrigger,
@@ -508,6 +513,7 @@ Deno.serve(async (request) => {
     const qualityReport = evaluateCinematicScriptQuality({
       promptText: batch.prompt,
       scriptDoc: repairedScriptDoc,
+      graphSettings: effectiveSettings,
     })
 
     const nextDiagnostics = Array.from(new Set([

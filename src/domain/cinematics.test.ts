@@ -5,7 +5,9 @@ import assert from 'node:assert/strict'
 import {
   buildCinematicSequenceFromScriptDoc,
   buildCinematicSettingsPatchFromPresetFamily,
+  buildCinematicSettingsPatchFromStoryPresets,
   cinematicScriptDocSchema,
+  deriveCinematicScriptFromSequence,
 } from './cinematics.ts'
 import { ingestCinematicCreativeScriptToAuthoredShots } from './cinematicCreativeScript.ts'
 import { cinematicPlanSchema } from './worldBuild.ts'
@@ -194,6 +196,83 @@ test('UGC preset families default to the creative-script ingestion pipeline', ()
 
   assert.equal(ugcSettings.authorshipPipeline, 'ugc_script_ingest_v1')
   assert.equal(storySettings.authorshipPipeline, 'json_shot_authoring_v1')
+})
+
+test('story preset patches lock scene and language selectors with story pacing defaults', () => {
+  const settings = buildCinematicSettingsPatchFromStoryPresets('interrogation_pressure_cooker', 'precision_procedural')
+
+  assert.equal(settings.presetFamily, 'story_movie_tv')
+  assert.equal(settings.storyScenePreset, 'interrogation_pressure_cooker')
+  assert.equal(settings.storyLanguagePreset, 'precision_procedural')
+  assert.equal(settings.formatSubtype, null)
+  assert.equal(settings.authorshipPipeline, 'json_shot_authoring_v1')
+  assert.deepEqual(settings.targetShotCountRange, [5, 9])
+  assert.deepEqual(settings.idealShotDurationRangeSeconds, [3, 7])
+})
+
+test('action story preset patches derive combat pacing defaults', () => {
+  const settings = buildCinematicSettingsPatchFromStoryPresets('duel_showdown', 'tactical_combat')
+
+  assert.equal(settings.presetFamily, 'story_movie_tv')
+  assert.equal(settings.storyScenePreset, 'duel_showdown')
+  assert.equal(settings.storyLanguagePreset, 'tactical_combat')
+  assert.equal(settings.authorshipPipeline, 'json_shot_authoring_v1')
+  assert.deepEqual(settings.targetShotCountRange, [4, 8])
+  assert.deepEqual(settings.idealShotDurationRangeSeconds, [2, 6])
+  assert.equal(settings.maxDialogueWordsPerShot, 22)
+  assert.equal(settings.maxActionBeatsPerShot, 3)
+})
+
+test('story shots compile into story takes without relying on formatSubtype', () => {
+  const script = cinematicScriptDocSchema.parse({
+    title: 'Interrogation',
+    entityBindings: [
+      { id: 'detective_1', kind: 'character', role: 'detective', label: 'Detective', sourceName: 'Detective' },
+      { id: 'suspect_1', kind: 'character', role: 'suspect', label: 'Suspect', sourceName: 'Suspect' },
+      { id: 'room_1', kind: 'environment', role: 'interrogation_room', label: 'Interview Room', sourceName: 'Interview Room' },
+    ],
+    shots: [
+      {
+        id: 'shot_1',
+        sceneId: 'scene_1',
+        orderIndex: 0,
+        title: 'Asymmetry',
+        beat: 'The detective leans in across the metal table while the suspect stays pinned in silence.',
+        hookRole: 'hook',
+        storyScenePreset: 'interrogation_pressure_cooker',
+        storyLanguagePreset: 'precision_procedural',
+        participantRefIds: ['detective_1', 'suspect_1'],
+        locationRefId: 'room_1',
+        actions: [{ id: 'a1', actorRefId: 'detective_1', targetRefId: 'suspect_1', verb: 'leans in across the table' }],
+      },
+      {
+        id: 'shot_2',
+        sceneId: 'scene_1',
+        orderIndex: 1,
+        title: 'Crack',
+        beat: 'The suspect finally looks down and admits he hid the ledger under the sink.',
+        hookRole: 'proof',
+        storyScenePreset: 'interrogation_pressure_cooker',
+        storyLanguagePreset: 'precision_procedural',
+        participantRefIds: ['suspect_1'],
+        locationRefId: 'room_1',
+        actions: [{ id: 'a2', actorRefId: 'suspect_1', verb: 'looks down and admits the truth' }],
+        dialogue: [{ id: 'd1', speakerRefId: 'suspect_1', line: 'It is under the sink.', delivery: 'cracking under pressure' }],
+      },
+    ],
+  })
+
+  const sequence = buildCinematicSequenceFromScriptDoc(script)
+  const roundTrippedScript = deriveCinematicScriptFromSequence(sequence)
+
+  assert.ok(sequence.takes.length >= 1)
+  assert.equal(sequence.shots[0]?.storyScenePreset, 'interrogation_pressure_cooker')
+  assert.equal(sequence.shots[0]?.storyLanguagePreset, 'precision_procedural')
+  assert.equal(sequence.shots[0]?.formatSubtype, null)
+  assert.equal(sequence.takes[0]?.storyScenePreset, 'interrogation_pressure_cooker')
+  assert.equal(sequence.takes[0]?.storyLanguagePreset, 'precision_procedural')
+  assert.equal(roundTrippedScript.shots[0]?.storyScenePreset, 'interrogation_pressure_cooker')
+  assert.equal(roundTrippedScript.shots[0]?.formatSubtype, null)
 })
 
 test('creative script ingestion preserves shot ids and dialogue verbatim', () => {

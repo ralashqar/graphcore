@@ -1366,6 +1366,8 @@ export function createDefaultGameSpec(packIds: string[] = ['pack.rpg_core']): Ga
       defaultFps: 24,
       presetFamily: 'story_movie_tv',
       presetId: 'story_movie_tv',
+      storyScenePreset: 'dialogue_two_hander',
+      storyLanguagePreset: 'grounded_naturalist',
       artStylePreset: null,
       inferredArtStylePreset: null,
       useInferredArtStyle: true,

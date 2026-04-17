@@ -2,32 +2,7 @@ import '@supabase/functions-js/edge-runtime.d.ts'
 
 import { z } from 'npm:zod@4'
 
-import {
-  buildCinematicSequenceFromScriptDoc,
-  buildCinematicSettingsPatchFromFormatSubtype,
-  buildCinematicSettingsPatchFromPresetFamily,
-  cinematicScriptDocSchema,
-  getCinematicSettings,
-} from '../../../src/domain/cinematics.ts'
-import {
-  worldBuildAuthorCinematicRequestSchema,
-  worldBuildBatchSchema,
-  worldBuildJobSchema,
-  worldBuildStatusResponseSchema,
-} from '../../../src/domain/worldBuild.ts'
-import { requireUserClient } from '../_shared/auth.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
-import { runStructuredWorldBuildModel } from '../_shared/world-build.ts'
-import {
-  authorCinematicPlanSkeleton,
-  cinematicCreativeScriptAuthorshipRawSchema,
-  cinematicCreativeScriptAuthorshipSystemPrompt,
-  correctUgcPresetSelectionForPrompt,
-  ingestCreativeScriptPlan,
-  cinematicShotAuthorshipRawSchema,
-  cinematicShotAuthorshipSystemPrompt,
-  evaluateCinematicScriptQuality,
-} from '../_shared/world-build-cinematics.ts'
 
 type BatchRow = {
   id: string
@@ -65,8 +40,14 @@ type JobRow = {
   updated_at: string
 }
 
+let worldBuildAuthorCinematicRequestSchemaRuntime: z.ZodTypeAny | null = null
+let worldBuildBatchSchemaRuntime: z.ZodTypeAny | null = null
+let worldBuildBatchCinematicPlanSchemaRuntime: z.ZodTypeAny | null = null
+let worldBuildJobSchemaRuntime: z.ZodTypeAny | null = null
+let worldBuildStatusResponseSchemaRuntime: z.ZodTypeAny | null = null
+
 async function loadBatch(
-  client: Awaited<ReturnType<typeof requireUserClient>>['client'],
+  client: any,
   batchId: string,
 ) {
   const batchResponse = await client
@@ -96,7 +77,7 @@ async function loadBatch(
 }
 
 async function loadBatchResources(
-  client: Awaited<ReturnType<typeof requireUserClient>>['client'],
+  client: any,
   draftId: string,
   projectId: string,
   batchId: string,
@@ -267,7 +248,10 @@ async function loadBatchResources(
 }
 
 function parseWorldBuildJob(row: JobRow) {
-  return worldBuildJobSchema.parse({
+  if (!worldBuildJobSchemaRuntime) {
+    throw new Error('worldBuildJobSchema is not initialized.')
+  }
+  return worldBuildJobSchemaRuntime.parse({
     id: row.id,
     batchId: row.batch_id,
     planItemId: row.plan_item_id,
@@ -290,7 +274,7 @@ function parseWorldBuildJob(row: JobRow) {
 }
 
 async function updateJob(
-  client: Awaited<ReturnType<typeof requireUserClient>>['client'],
+  client: any,
   jobId: string,
   changes: Record<string, unknown>,
 ) {
@@ -299,7 +283,7 @@ async function updateJob(
 }
 
 async function updateBatch(
-  client: Awaited<ReturnType<typeof requireUserClient>>['client'],
+  client: any,
   batchId: string,
   changes: Record<string, unknown>,
 ) {
@@ -352,7 +336,7 @@ Deno.serve(async (request) => {
   const preflight = maybeHandleOptions(request)
   if (preflight) return preflight
 
-  let failureClient: Awaited<ReturnType<typeof requireUserClient>>['client'] | null = null
+  let failureClient: any = null
   let failureBatch: BatchRow | null = null
   let failureJobs: JobRow[] = []
   let failureCinematicJob: JobRow | null = null
@@ -360,9 +344,58 @@ Deno.serve(async (request) => {
   try {
     if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed.')
 
+    const [
+      cinematicsDomain,
+      worldBuildDomain,
+      authModule,
+      worldBuildModule,
+      worldBuildCinematicsModule,
+    ] = await Promise.all([
+      import('../../../src/domain/cinematics.ts'),
+      import('../../../src/domain/worldBuild.ts'),
+      import('../_shared/auth.ts'),
+      import('../_shared/world-build.ts'),
+      import('../_shared/world-build-cinematics.ts'),
+    ])
+    const {
+      buildCinematicSequenceFromScriptDoc,
+      buildCinematicSettingsPatchFromFormatSubtype,
+      buildCinematicSettingsPatchFromPresetFamily,
+      buildCinematicSettingsPatchFromStoryPresets,
+      cinematicScriptDocSchema,
+      getCinematicSettings,
+    } = cinematicsDomain
+    const {
+      worldBuildAuthorCinematicRequestSchema,
+      worldBuildBatchSchema,
+      worldBuildJobSchema,
+      worldBuildStatusResponseSchema,
+    } = worldBuildDomain
+    const { requireUserClient } = authModule
+    const { runStructuredWorldBuildModel } = worldBuildModule
+    const {
+      authorCinematicPlanSkeleton,
+      cinematicCreativeScriptAuthorshipRawSchema,
+      cinematicCreativeScriptAuthorshipSystemPrompt,
+      cinematicShotSkeletonPlannerSystemPrompt,
+      coerceCinematicPlannerRaw,
+      correctUgcPresetSelectionForPrompt,
+      ingestCreativeScriptPlan,
+      cinematicShotAuthorshipRawSchema,
+      cinematicShotAuthorshipSystemPrompt,
+      evaluateCinematicScriptQuality,
+      materializeCinematicPlanSkeleton,
+      resolveTargetShotCount,
+    } = worldBuildCinematicsModule
+    worldBuildAuthorCinematicRequestSchemaRuntime = worldBuildAuthorCinematicRequestSchema
+    worldBuildBatchSchemaRuntime = worldBuildBatchSchema
+    worldBuildBatchCinematicPlanSchemaRuntime = worldBuildBatchSchema.shape.cinematicPlan
+    worldBuildJobSchemaRuntime = worldBuildJobSchema
+    worldBuildStatusResponseSchemaRuntime = worldBuildStatusResponseSchema
+
     const { client } = await requireUserClient(request, 'author-cinematic-script')
     failureClient = client
-    const payload = worldBuildAuthorCinematicRequestSchema.parse(await request.json())
+    const payload = worldBuildAuthorCinematicRequestSchemaRuntime.parse(await request.json())
     const loaded = await loadBatch(client, payload.batchId)
     const batch = loaded.batch
     const cinematicJob = loaded.jobs.find((job) => job.kind === 'cinematic_graph') ?? null
@@ -374,15 +407,17 @@ Deno.serve(async (request) => {
       throw new HttpError(404, `World build batch ${payload.batchId} does not have a cinematic graph job.`)
     }
 
-    const cinematicPlan = batch.cinematic_plan ? worldBuildBatchSchema.shape.cinematicPlan.parse(batch.cinematic_plan) : null
+    const cinematicPlan = batch.cinematic_plan && worldBuildBatchCinematicPlanSchemaRuntime
+      ? worldBuildBatchCinematicPlanSchemaRuntime.parse(batch.cinematic_plan)
+      : null
     if (!cinematicPlan) {
       throw new HttpError(400, `World build batch ${payload.batchId} does not have a cinematic plan.`)
     }
 
     if (cinematicPlan.scriptDoc) {
       const resources = await loadBatchResources(client, batch.draft_id, batch.project_id, payload.batchId)
-      return json(worldBuildStatusResponseSchema.parse({
-        batch: worldBuildBatchSchema.parse({
+      return json(worldBuildStatusResponseSchemaRuntime.parse({
+        batch: worldBuildBatchSchemaRuntime.parse({
           id: batch.id,
           projectId: batch.project_id,
           draftId: batch.draft_id,
@@ -451,6 +486,73 @@ Deno.serve(async (request) => {
         ctaStyle: shot.ctaStyle || effectiveSettings.ctaStyle || '',
       })),
     }
+    let planForAuthorship = correctedPlanForAuthorship
+    const skeletonPlannerDiagnostics: string[] = []
+
+    if (planForAuthorship.shots.length === 0) {
+      const targetShotCount = resolveTargetShotCount(batch.prompt, effectiveSettings.formatSubtype)
+      const skeletonRaw = await runStructuredWorldBuildModel({
+        model: payload.model,
+        passLabel: 'Cinematic shot planner',
+        systemText: cinematicShotSkeletonPlannerSystemPrompt(
+          effectiveSettings.presetFamily,
+          effectiveSettings.formatSubtype,
+          targetShotCount,
+          effectiveSettings.storyScenePreset ?? null,
+          effectiveSettings.storyLanguagePreset ?? null,
+        ),
+        promptContext: {
+          prompt: batch.prompt,
+          project: payload.snapshot.project,
+          draft: payload.snapshot.draft,
+          gameSpec: payload.snapshot.gameSpec ?? null,
+          requestSummary: batch.request_summary,
+          graphName: cinematicPlan.graphName,
+          graphSummary: cinematicPlan.graphSummary,
+          lockedEntityRefs: cinematicPlan.entityRefs,
+          existingEntityRefs: cinematicPlan.entityRefs.filter((entry) => entry.resolution === 'existing'),
+          createEntityRefs: [],
+        },
+        schema: z.record(z.string(), z.unknown()),
+        maxOutputTokens: 6000,
+      })
+      const skeletonDraft = coerceCinematicPlannerRaw(skeletonRaw, {
+        lockedEntityRefs: cinematicPlan.entityRefs,
+        allowEntityCreation: false,
+        promptText: batch.prompt,
+        enableFallbackShaping: false,
+      })
+      skeletonPlannerDiagnostics.push(...skeletonDraft.diagnostics)
+      const nextGraphSettings =
+        effectiveSettings.presetFamily === 'story_movie_tv'
+          ? {
+            ...buildCinematicSettingsPatchFromStoryPresets(
+              effectiveSettings.storyScenePreset ?? null,
+              effectiveSettings.storyLanguagePreset ?? null,
+            ),
+            ...effectiveSettings,
+            ...(skeletonDraft.graphSettings ?? {}),
+          }
+          : {
+            ...buildCinematicSettingsPatchFromPresetFamily(effectiveSettings.presetFamily),
+            ...buildCinematicSettingsPatchFromFormatSubtype(effectiveSettings.presetFamily, effectiveSettings.formatSubtype),
+            ...effectiveSettings,
+            ...(skeletonDraft.graphSettings ?? {}),
+          }
+
+      planForAuthorship = materializeCinematicPlanSkeleton({
+        ...skeletonDraft,
+        requestSummary: skeletonDraft.requestSummary || batch.request_summary,
+        graphName: skeletonDraft.graphName || cinematicPlan.graphName,
+        graphSummary: skeletonDraft.graphSummary || cinematicPlan.graphSummary,
+        entityRefs: cinematicPlan.entityRefs,
+        graphSettings: nextGraphSettings,
+      })
+
+      await updateBatch(client, batch.id, {
+        cinematic_plan: planForAuthorship,
+      })
+    }
     const authorshipModel = selectAuthorshipModel(payload.model, effectiveSettings.presetFamily)
     const existingResultContext = cinematicJob.result_context ?? {}
     const authoringAttempts = readNumericResultContextValue(existingResultContext, 'authoringAttempts') + 1
@@ -478,6 +580,8 @@ Deno.serve(async (request) => {
           passLabel: 'Cinematic creative script authorship',
           systemText: cinematicCreativeScriptAuthorshipSystemPrompt({
             presetFamily: effectiveSettings.presetFamily,
+            storyScenePreset: effectiveSettings.storyScenePreset,
+            storyLanguagePreset: effectiveSettings.storyLanguagePreset,
             formatSubtype: effectiveSettings.formatSubtype,
             formulaFamily: effectiveSettings.formulaFamily,
             dominantTrigger: effectiveSettings.dominantTrigger,
@@ -493,11 +597,11 @@ Deno.serve(async (request) => {
             draft: payload.snapshot.draft,
             gameSpec: payload.snapshot.gameSpec ?? null,
             requestSummary: batch.request_summary,
-            graphName: cinematicPlan.graphName,
-            graphSummary: cinematicPlan.graphSummary,
+            graphName: planForAuthorship.graphName,
+            graphSummary: planForAuthorship.graphSummary,
             lockedGraphSettings: effectiveSettings,
-            lockedEntityRefs: cinematicPlan.entityRefs,
-            plannedShots: correctedPlanForAuthorship.shots,
+            lockedEntityRefs: planForAuthorship.entityRefs,
+            plannedShots: planForAuthorship.shots,
           },
           schema: cinematicCreativeScriptAuthorshipRawSchema,
           maxOutputTokens: 9000,
@@ -507,6 +611,8 @@ Deno.serve(async (request) => {
           passLabel: 'Cinematic shot authorship',
           systemText: cinematicShotAuthorshipSystemPrompt({
             presetFamily: effectiveSettings.presetFamily,
+            storyScenePreset: effectiveSettings.storyScenePreset,
+            storyLanguagePreset: effectiveSettings.storyLanguagePreset,
             formatSubtype: effectiveSettings.formatSubtype,
             formulaFamily: effectiveSettings.formulaFamily,
             dominantTrigger: effectiveSettings.dominantTrigger,
@@ -522,11 +628,11 @@ Deno.serve(async (request) => {
             draft: payload.snapshot.draft,
             gameSpec: payload.snapshot.gameSpec ?? null,
             requestSummary: batch.request_summary,
-            graphName: cinematicPlan.graphName,
-            graphSummary: cinematicPlan.graphSummary,
+            graphName: planForAuthorship.graphName,
+            graphSummary: planForAuthorship.graphSummary,
             lockedGraphSettings: effectiveSettings,
-            lockedEntityRefs: cinematicPlan.entityRefs,
-            plannedShots: correctedPlanForAuthorship.shots,
+            lockedEntityRefs: planForAuthorship.entityRefs,
+            plannedShots: planForAuthorship.shots,
           },
           schema: cinematicShotAuthorshipRawSchema,
           maxOutputTokens: 9000,
@@ -534,7 +640,7 @@ Deno.serve(async (request) => {
 
     const ingestionResult = useCreativeScriptPipeline
       ? ingestCreativeScriptPlan({
-          plan: correctedPlanForAuthorship,
+          plan: planForAuthorship,
           rawScriptMarkdown: authoredRaw.rawScriptMarkdown,
         })
       : {
@@ -543,9 +649,9 @@ Deno.serve(async (request) => {
         }
 
     const authoredPlan = authorCinematicPlanSkeleton({
-      plan: correctedPlanForAuthorship,
+      plan: planForAuthorship,
       authoredShots: ingestionResult.authoredShots,
-      rawScriptMarkdown: useCreativeScriptPipeline ? authoredRaw.rawScriptMarkdown : correctedPlanForAuthorship.rawScriptMarkdown,
+      rawScriptMarkdown: useCreativeScriptPipeline ? authoredRaw.rawScriptMarkdown : planForAuthorship.rawScriptMarkdown,
     })
 
     const authoredScriptDoc = cinematicScriptDocSchema.parse(authoredPlan.scriptDoc)
@@ -560,10 +666,12 @@ Deno.serve(async (request) => {
     const qualityReport = evaluateCinematicScriptQuality({
       promptText: batch.prompt,
       scriptDoc: authoredScriptDoc,
+      graphSettings: effectiveSettings,
     })
 
     const nextDiagnostics = Array.from(new Set([
       ...(Array.isArray(batch.diagnostics) ? batch.diagnostics : []),
+      ...skeletonPlannerDiagnostics,
       ...(authoredRaw.diagnostics ?? []),
       ...ingestionResult.diagnostics,
       ...qualityReport.failures,
@@ -583,7 +691,7 @@ Deno.serve(async (request) => {
         repairAttempts,
         maxRepairAttempts,
         repairQueuedAt: nextPhase === 'needs_repair' ? new Date().toISOString() : null,
-        plannerDiagnostics: authoredRaw.diagnostics ?? [],
+        plannerDiagnostics: [...skeletonPlannerDiagnostics, ...(authoredRaw.diagnostics ?? [])],
         creativeScriptDiagnostics: useCreativeScriptPipeline ? authoredRaw.diagnostics ?? [] : [],
         ingestorDiagnostics: ingestionResult.diagnostics,
         authoringDiagnostics: qualityReport.failures,
@@ -603,8 +711,8 @@ Deno.serve(async (request) => {
     const refreshed = await loadBatch(client, payload.batchId)
     const resources = await loadBatchResources(client, refreshed.batch.draft_id, refreshed.batch.project_id, payload.batchId)
 
-    return json(worldBuildStatusResponseSchema.parse({
-      batch: worldBuildBatchSchema.parse({
+    return json(worldBuildStatusResponseSchemaRuntime.parse({
+      batch: worldBuildBatchSchemaRuntime.parse({
         id: refreshed.batch.id,
         projectId: refreshed.batch.project_id,
         draftId: refreshed.batch.draft_id,

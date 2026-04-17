@@ -12,7 +12,10 @@ import { DEFAULT_ART_STYLE_PRESET } from './domain/artStylePresets'
 import {
   buildCinematicSettingsPatchFromFormatSubtype,
   buildCinematicSettingsPatchFromPresetFamily,
+  buildCinematicSettingsPatchFromStoryPresets,
   type CinematicFormatSubtype,
+  type CinematicStoryLanguagePreset,
+  type CinematicStoryScenePreset,
   getCinematicSequence,
   getCinematicTakeNodeConfig,
   getStoryboardRefNodeConfig,
@@ -2846,6 +2849,46 @@ export default function App() {
     })
   }
 
+  function updateWorldBuildStoryScenePreset(storyScenePreset: CinematicStoryScenePreset) {
+    setWorldBuildPlanPreview((current) => {
+      if (!current?.cinematicPlan) return current
+      const storyLanguagePreset =
+        (current.cinematicPlan.graphSettings?.storyLanguagePreset as CinematicStoryLanguagePreset | undefined)
+        ?? 'grounded_naturalist'
+      return {
+        ...current,
+        cinematicPlan: {
+          ...current.cinematicPlan,
+          graphSettings: {
+            ...(current.cinematicPlan.graphSettings ?? {}),
+            ...buildCinematicSettingsPatchFromStoryPresets(storyScenePreset, storyLanguagePreset),
+            presetSource: 'manual_override',
+          },
+        },
+      }
+    })
+  }
+
+  function updateWorldBuildStoryLanguagePreset(storyLanguagePreset: CinematicStoryLanguagePreset) {
+    setWorldBuildPlanPreview((current) => {
+      if (!current?.cinematicPlan) return current
+      const storyScenePreset =
+        (current.cinematicPlan.graphSettings?.storyScenePreset as CinematicStoryScenePreset | undefined)
+        ?? 'dialogue_two_hander'
+      return {
+        ...current,
+        cinematicPlan: {
+          ...current.cinematicPlan,
+          graphSettings: {
+            ...(current.cinematicPlan.graphSettings ?? {}),
+            ...buildCinematicSettingsPatchFromStoryPresets(storyScenePreset, storyLanguagePreset),
+            presetSource: 'manual_override',
+          },
+        },
+      }
+    })
+  }
+
   async function handlePlanWorldBuild() {
     if (!snapshot) return
     if (!session) {
@@ -2867,6 +2910,7 @@ export default function App() {
     try {
       const plan = await workspaceService.planWorldBuild({
         prompt: promptText,
+        plannerModeHint: activeTab === 'cinematics' ? 'cinematic_build' : 'world_build',
         snapshot,
         model: promptModel,
       })
@@ -3214,6 +3258,13 @@ export default function App() {
   }
 
   function updateGameSpecCinematics(changes: Partial<CinematicSettings>) {
+    const includesPresetOverride =
+      Object.prototype.hasOwnProperty.call(changes, 'presetFamily')
+      || Object.prototype.hasOwnProperty.call(changes, 'presetId')
+      || Object.prototype.hasOwnProperty.call(changes, 'specializationMode')
+      || Object.prototype.hasOwnProperty.call(changes, 'storyScenePreset')
+      || Object.prototype.hasOwnProperty.call(changes, 'storyLanguagePreset')
+      || Object.prototype.hasOwnProperty.call(changes, 'formatSubtype')
     applySnapshotUpdate((current) => ({
       ...current,
       gameSpec: gameSpecSchema.parse({
@@ -3221,6 +3272,7 @@ export default function App() {
         cinematics: {
           ...(current.gameSpec?.cinematics ?? {}),
           ...changes,
+          ...(includesPresetOverride ? { presetSource: 'manual_override' as const } : {}),
         },
       }),
     }))
@@ -3906,6 +3958,8 @@ export default function App() {
           onCancel={() => setWorldBuildPlanPreview(null)}
           onChangePresetFamily={updateWorldBuildCinematicPreset}
           onChangeFormatSubtype={updateWorldBuildCinematicFormatSubtype}
+          onChangeStoryScenePreset={updateWorldBuildStoryScenePreset}
+          onChangeStoryLanguagePreset={updateWorldBuildStoryLanguagePreset}
           onConfirm={handleStartWorldBuild}
           onToggleEnabled={(itemId, enabled) => updateWorldBuildPlanItem(itemId, (item) => ({ ...item, enabled }))}
           onToggleOption={(itemId, optionKey, enabled) =>

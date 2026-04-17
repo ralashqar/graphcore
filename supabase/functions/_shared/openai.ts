@@ -12,6 +12,21 @@ export type OpenAiResponsesRequest = {
   previousResponseId?: string
   store?: boolean
   extraBody?: Record<string, unknown>
+  timeoutMs?: number
+}
+
+const DEFAULT_OPENAI_TIMEOUT_MS = 45_000
+
+function resolveOpenAiTimeoutMs(override: number | undefined) {
+  if (Number.isFinite(override) && typeof override === 'number' && override > 0) {
+    return Math.max(1_000, Math.floor(override))
+  }
+
+  const rawEnv = Deno.env.get('OPENAI_REQUEST_TIMEOUT_MS')
+  if (!rawEnv) return DEFAULT_OPENAI_TIMEOUT_MS
+  const parsed = Number(rawEnv)
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_OPENAI_TIMEOUT_MS
+  return Math.max(1_000, Math.floor(parsed))
 }
 
 export function extractOutputText(payload: Record<string, unknown>) {
@@ -68,16 +83,33 @@ export async function runOpenAiResponses(payload: OpenAiResponsesRequest) {
   if (payload.previousResponseId) upstreamBody.previous_response_id = payload.previousResponseId
   if (payload.store !== undefined) upstreamBody.store = payload.store
 
-  const response = await fetch(`${baseUrl.replace(/\/+$/, '')}/responses`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(upstreamBody),
-  })
+  const timeoutMs = resolveOpenAiTimeoutMs(payload.timeoutMs)
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(`OpenAI responses request timed out after ${timeoutMs}ms.`), timeoutMs)
 
-  const body = (await response.json().catch(() => ({}))) as Record<string, unknown>
+  let response: Response
+  let body: Record<string, unknown>
+
+  try {
+    response = await fetch(`${baseUrl.replace(/\/+$/, '')}/responses`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(upstreamBody),
+      signal: controller.signal,
+    })
+    body = (await response.json().catch(() => ({}))) as Record<string, unknown>
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (message.includes('timed out after')) {
+      throw new Error(message)
+    }
+    throw error
+  } finally {
+    clearTimeout(timeoutId)
+  }
 
   return {
     response,

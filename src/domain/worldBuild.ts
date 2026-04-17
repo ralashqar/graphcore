@@ -11,6 +11,8 @@ import {
   cinematicFormulaFamilySchema,
   cinematicHookFamilySchema,
   cinematicHookRoleSchema,
+  cinematicStoryLanguagePresetSchema,
+  cinematicStoryScenePresetSchema,
   cinematicNarrationModeSchema,
   cinematicAuthorshipPipelineSchema,
   cinematicPlatformTargetSchema,
@@ -25,15 +27,17 @@ import {
 } from './cinematics.ts'
 
 const normalizeEnumCandidate = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
-const coerceEnumLikeValue = <TOption extends string>(options: readonly TOption[]) => (value: unknown) => {
-  if (value === null || value === undefined) return value
-  if (typeof value !== 'string') return null
-  const trimmed = value.trim()
-  if (!trimmed) return null
-  if (options.includes(trimmed as TOption)) return trimmed
-  const normalized = normalizeEnumCandidate(trimmed)
-  const matched = options.find((option) => normalizeEnumCandidate(option) === normalized)
-  return matched ?? null
+function coerceEnumLikeValue<TOption extends string>(options: readonly TOption[]) {
+  return (value: unknown) => {
+    if (value === null || value === undefined) return value
+    if (typeof value !== 'string') return null
+    const trimmed = value.trim()
+    if (!trimmed) return null
+    if (options.includes(trimmed as TOption)) return trimmed
+    const normalized = normalizeEnumCandidate(trimmed)
+    const matched = options.find((option) => normalizeEnumCandidate(option) === normalized)
+    return matched ?? null
+  }
 }
 
 const defaultCinematicDirectingPackage = () => ({
@@ -119,6 +123,8 @@ export const cinematicShotPlanSchema = z.object({
   title: z.string(),
   beat: z.string().default(''),
   hookRole: cinematicHookRoleSchema.nullable().default(null),
+  storyScenePreset: z.preprocess(coerceEnumLikeValue(cinematicStoryScenePresetSchema.options), cinematicStoryScenePresetSchema.nullable()).default(null),
+  storyLanguagePreset: z.preprocess(coerceEnumLikeValue(cinematicStoryLanguagePresetSchema.options), cinematicStoryLanguagePresetSchema.nullable()).default(null),
   formatSubtype: z.preprocess(coerceEnumLikeValue(cinematicFormatSubtypeSchema.options), cinematicFormatSubtypeSchema.nullable()).default(null),
   formulaFamily: z.preprocess(coerceEnumLikeValue(cinematicFormulaFamilySchema.options), cinematicFormulaFamilySchema.nullable()).default(null),
   dominantTrigger: z.preprocess(coerceEnumLikeValue(cinematicDominantTriggerSchema.options), cinematicDominantTriggerSchema.nullable()).default(null),
@@ -185,6 +191,8 @@ export const cinematicGraphSettingsSchema = z.object({
   useInferredArtStyle: z.boolean().optional(),
   presetFamily: z.preprocess(coerceEnumLikeValue(cinematicPresetFamilySchema.options), cinematicPresetFamilySchema).optional(),
   presetId: z.string().optional(),
+  storyScenePreset: z.preprocess(coerceEnumLikeValue(cinematicStoryScenePresetSchema.options), cinematicStoryScenePresetSchema.nullable()).optional(),
+  storyLanguagePreset: z.preprocess(coerceEnumLikeValue(cinematicStoryLanguagePresetSchema.options), cinematicStoryLanguagePresetSchema.nullable()).optional(),
   formatSubtype: z.preprocess(coerceEnumLikeValue(cinematicFormatSubtypeSchema.options), cinematicFormatSubtypeSchema.nullable()).optional(),
   formulaFamily: z.preprocess(coerceEnumLikeValue(cinematicFormulaFamilySchema.options), cinematicFormulaFamilySchema.nullable()).optional(),
   dominantTrigger: z.preprocess(coerceEnumLikeValue(cinematicDominantTriggerSchema.options), cinematicDominantTriggerSchema.nullable()).optional(),
@@ -225,6 +233,7 @@ export const cinematicPlanSchema = z.object({
 
 export const worldBuildPlanRequestSchema = z.object({
   prompt: z.string().min(1),
+  plannerModeHint: worldBuildPlannerModeSchema.optional(),
   snapshot: z.object({
     workspace: z.object({
       id: z.string(),

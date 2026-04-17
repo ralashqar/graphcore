@@ -8,6 +8,8 @@ import {
   getCinematicHookFamilyLabel,
   getCinematicNarrationModeLabel,
   getCinematicPresetLabel,
+  getCinematicStoryLanguagePresetLabel,
+  getCinematicStoryScenePresetLabel,
   cinematicRunJobSchema,
   cinematicRunSchema,
   getAssetRefNodeConfig,
@@ -1149,6 +1151,14 @@ function buildSeedanceTakePrompt(input: {
             ]
   const subtypeLabel = input.take.formatSubtype ? getCinematicFormatSubtypeLabel(input.take.formatSubtype) : null
   const formulaLabel = input.take.formulaFamily ? getCinematicFormulaFamilyLabel(input.take.formulaFamily) : null
+  const storySceneLabel =
+    input.presetFamily === 'story_movie_tv'
+      ? getCinematicStoryScenePresetLabel(input.take.storyScenePreset ?? null)
+      : null
+  const storyLanguageLabel =
+    input.presetFamily === 'story_movie_tv'
+      ? getCinematicStoryLanguagePresetLabel(input.take.storyLanguagePreset ?? null)
+      : null
   const subtypeStyle = describeSubtypePromptStyle(input.take.formatSubtype ?? null)
   const referenceDirectives = input.keptReferenceInputs.map((entry, index) => {
     const tag = entry.modality === 'image' ? `@Image${index + 1}` : entry.modality === 'video' ? `@Video${index + 1}` : `@Audio${index + 1}`
@@ -1163,6 +1173,8 @@ function buildSeedanceTakePrompt(input: {
     styleSection,
     constraintSection,
     `Preset family: ${getCinematicPresetLabel(input.presetFamily)}.`,
+    storySceneLabel ? `Story scene preset: ${storySceneLabel}.` : null,
+    storyLanguageLabel ? `Story language preset: ${storyLanguageLabel}.` : null,
     subtypeLabel ? `Format subtype: ${subtypeLabel}.` : null,
     formulaLabel ? `Planned script formula: ${formulaLabel}.` : null,
     input.take.creativeTreatment ? `Creative treatment: ${getCinematicCreativeTreatmentLabel(input.take.creativeTreatment)}.` : null,
@@ -1230,6 +1242,8 @@ export function buildStillPrompt(input: {
     'Create one cinematic keyframe still.',
     ...formatProjectArtDirection(input.snapshot.gameSpec ?? null, input.graph.metadata, input.shotNode.metadata ?? null),
     describePresetPromptStyle(settings.presetFamily),
+    settings.presetFamily === 'story_movie_tv' ? `Story scene preset: ${getCinematicStoryScenePresetLabel(shot.storyScenePreset ?? settings.storyScenePreset ?? null)}.` : null,
+    settings.presetFamily === 'story_movie_tv' ? `Story language preset: ${getCinematicStoryLanguagePresetLabel(shot.storyLanguagePreset ?? settings.storyLanguagePreset ?? null)}.` : null,
     describeSubtypePromptStyle(shot.formatSubtype ?? settings.formatSubtype ?? null),
     `Target aspect ratio: ${settings.stillAspectRatio}.`,
     `Target still resolution: ${settings.stillResolution}.`,
@@ -1281,6 +1295,8 @@ export function buildTakeStillPrompt(input: {
     'Create one representative still frame from this cinematic take.',
     ...formatProjectArtDirection(input.snapshot.gameSpec ?? null, input.graph.metadata, input.takeNode.metadata ?? null),
     describePresetPromptStyle(settings.presetFamily),
+    settings.presetFamily === 'story_movie_tv' ? `Story scene preset: ${getCinematicStoryScenePresetLabel(take.storyScenePreset ?? settings.storyScenePreset ?? null)}.` : null,
+    settings.presetFamily === 'story_movie_tv' ? `Story language preset: ${getCinematicStoryLanguagePresetLabel(take.storyLanguagePreset ?? settings.storyLanguagePreset ?? null)}.` : null,
     describeSubtypePromptStyle(take.formatSubtype ?? settings.formatSubtype ?? null),
     `Target aspect ratio: ${settings.stillAspectRatio}.`,
     `Target still resolution: ${settings.stillResolution}.`,
@@ -1407,6 +1423,8 @@ export function buildVideoPrompt(input: {
     movementLabel,
     `Create a ${shot.durationSeconds ?? settings.defaultClipSeconds}-second cinematic clip for "${input.shotNode.title}".`,
     `Preset family: ${getCinematicPresetLabel(settings.presetFamily)}.`,
+    settings.presetFamily === 'story_movie_tv' ? `Story scene preset: ${getCinematicStoryScenePresetLabel(shot.storyScenePreset ?? settings.storyScenePreset ?? null)}.` : null,
+    settings.presetFamily === 'story_movie_tv' ? `Story language preset: ${getCinematicStoryLanguagePresetLabel(shot.storyLanguagePreset ?? settings.storyLanguagePreset ?? null)}.` : null,
     shot.formatSubtype ? `Format subtype: ${getCinematicFormatSubtypeLabel(shot.formatSubtype)}.` : null,
     shot.formulaFamily ? `Planned script formula: ${getCinematicFormulaFamilyLabel(shot.formulaFamily)}.` : null,
     shot.creativeTreatment ? `Creative treatment: ${getCinematicCreativeTreatmentLabel(shot.creativeTreatment)}.` : null,

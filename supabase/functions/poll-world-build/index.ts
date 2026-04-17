@@ -2,47 +2,7 @@ import '@supabase/functions-js/edge-runtime.d.ts'
 
 import { z } from 'npm:zod@4'
 
-import { cinematicRunStatusResponseSchema, cinematicScriptDocSchema, getCinematicSettings } from '../../../src/domain/cinematics.ts'
-import { compileCinematicGraphFromScriptDoc } from '../../../src/domain/cinematicScriptCompiler.ts'
-import {
-  type CinematicPlan,
-  type WorldBuildJob,
-  cinematicPlanSchema,
-  worldBuildBatchSchema,
-  worldBuildJobSchema,
-  worldBuildPollRequestSchema,
-  worldBuildStatusResponseSchema,
-} from '../../../src/domain/worldBuild.ts'
-import { getArtStylePresetLabel } from '../../../src/domain/artStylePresets.ts'
-import { buildCharacterConceptPrompt, buildEnvironmentConceptPrompt, buildItemConceptPrompt, extractFalImageUrls } from '../../../src/domain/visualAssetGeneration.ts'
-import { requireUserClient } from '../_shared/auth.ts'
-import {
-  completeReservedGeneratedImageAsset,
-  isTerminalCinematicRunStatus,
-  markGeneratedImageAssetFailed,
-  resolveDefinitionDisplayAssetKey,
-  resolveAssetUrl,
-  toCinematicRun,
-  toCinematicRunJob,
-} from '../_shared/cinematics.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
-import { buildDefaultDefinitionComponents } from '../_shared/world-build-placeholders.ts'
-import { buildFalWebhookUrl } from '../_shared/fal-webhooks.ts'
-import { runStructuredWorldBuildModel, isTerminalWorldBuildStatus } from '../_shared/world-build.ts'
-import { buildAssetSlug } from '../../../src/domain/assets.ts'
-import {
-  buildFallbackActionBeats,
-  buildFallbackAudioBeats,
-  buildFallbackDialogueBeats,
-  cinematicScriptPlannerSystemPrompt,
-  coerceCinematicPlannerRaw,
-  evaluateCinematicScriptQuality,
-  inferPromptDirectedActionBinding,
-  materializeCinematicPlan,
-  resolveTargetShotCount,
-  shotImpliesAction,
-  shotImpliesDialogue,
-} from '../_shared/world-build-cinematics.ts'
 
 const contentGenerationSchema = z.object({
   name: z.string(),
@@ -100,6 +60,7 @@ const CANONICAL_ENVIRONMENT_SUBTYPES = ['interior', 'exterior', 'dungeon', 'sett
 const CANONICAL_TRAVERSAL_TYPES = ['walk', 'climb', 'swim', 'fly', 'mixed'] as const
 const CANONICAL_SCALE_TIERS = ['room', 'site', 'zone', 'region'] as const
 const CANONICAL_PHYSICAL_SUBTYPES = ['prop', 'equipment', 'weapon', 'pickup', 'world_object'] as const
+let worldBuildJobSchemaRuntime: z.ZodTypeAny | null = null
 
 function normalizeGeneratedToken(value: string) {
   return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
@@ -679,13 +640,16 @@ function readSubmittedAt(resultContext: Record<string, unknown> | null | undefin
 }
 
 function parseWorldBuildJob(row: JobRow) {
+  if (!worldBuildJobSchemaRuntime) {
+    throw new Error('worldBuildJobSchema is not initialized.')
+  }
   const queueMetadata = readWorldBuildQueueMetadata(row.result_context, {
     providerRequestId: row.provider_request_id,
     statusUrl: row.status_url,
     responseUrl: row.response_url,
     cancelUrl: row.cancel_url,
   })
-  return worldBuildJobSchema.parse({
+  return worldBuildJobSchemaRuntime.parse({
     id: row.id,
     batchId: row.batch_id,
     planItemId: row.plan_item_id,
@@ -1650,6 +1614,72 @@ Deno.serve(async (request) => {
   if (preflight) return preflight
 
   try {
+    const [
+      cinematicsDomain,
+      cinematicCompilerDomain,
+      worldBuildDomain,
+      artStylePresetsDomain,
+      visualAssetGenerationDomain,
+      authModule,
+      sharedCinematicsModule,
+      worldBuildPlaceholdersModule,
+      falWebhooksModule,
+      worldBuildModule,
+      assetsDomain,
+      worldBuildCinematicsModule,
+    ] = await Promise.all([
+      import('../../../src/domain/cinematics.ts'),
+      import('../../../src/domain/cinematicScriptCompiler.ts'),
+      import('../../../src/domain/worldBuild.ts'),
+      import('../../../src/domain/artStylePresets.ts'),
+      import('../../../src/domain/visualAssetGeneration.ts'),
+      import('../_shared/auth.ts'),
+      import('../_shared/cinematics.ts'),
+      import('../_shared/world-build-placeholders.ts'),
+      import('../_shared/fal-webhooks.ts'),
+      import('../_shared/world-build.ts'),
+      import('../../../src/domain/assets.ts'),
+      import('../_shared/world-build-cinematics.ts'),
+    ])
+    const { cinematicRunStatusResponseSchema, cinematicScriptDocSchema, getCinematicSettings } = cinematicsDomain
+    const { compileCinematicGraphFromScriptDoc } = cinematicCompilerDomain
+    const {
+      cinematicPlanSchema,
+      worldBuildBatchSchema,
+      worldBuildJobSchema,
+      worldBuildPollRequestSchema,
+      worldBuildStatusResponseSchema,
+    } = worldBuildDomain
+    worldBuildJobSchemaRuntime = worldBuildJobSchema
+    const { getArtStylePresetLabel } = artStylePresetsDomain
+    const { buildCharacterConceptPrompt, buildEnvironmentConceptPrompt, buildItemConceptPrompt, extractFalImageUrls } = visualAssetGenerationDomain
+    const { requireUserClient } = authModule
+    const {
+      completeReservedGeneratedImageAsset,
+      isTerminalCinematicRunStatus,
+      markGeneratedImageAssetFailed,
+      resolveDefinitionDisplayAssetKey,
+      resolveAssetUrl,
+      toCinematicRun,
+      toCinematicRunJob,
+    } = sharedCinematicsModule
+    const { buildDefaultDefinitionComponents } = worldBuildPlaceholdersModule
+    const { buildFalWebhookUrl } = falWebhooksModule
+    const { runStructuredWorldBuildModel, isTerminalWorldBuildStatus } = worldBuildModule
+    const { buildAssetSlug } = assetsDomain
+    const {
+      buildFallbackActionBeats,
+      buildFallbackAudioBeats,
+      buildFallbackDialogueBeats,
+      cinematicScriptPlannerSystemPrompt,
+      coerceCinematicPlannerRaw,
+      evaluateCinematicScriptQuality,
+      inferPromptDirectedActionBinding,
+      materializeCinematicPlan,
+      resolveTargetShotCount,
+      shotImpliesAction,
+      shotImpliesDialogue,
+    } = worldBuildCinematicsModule
     if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed.')
 
     const { client, user } = await requireUserClient(request, 'poll-world-build')
@@ -2654,6 +2684,8 @@ Deno.serve(async (request) => {
                   effectiveSettings.presetFamily,
                   effectiveSettings.formatSubtype,
                   targetShotCount,
+                  effectiveSettings.storyScenePreset ?? null,
+                  effectiveSettings.storyLanguagePreset ?? null,
                 ),
                 promptContext: {
                   prompt: batch.prompt,
@@ -2701,6 +2733,7 @@ Deno.serve(async (request) => {
               let qualityReport = evaluateCinematicScriptQuality({
                 promptText: batch.prompt,
                 scriptDoc: cinematicScriptDocSchema.parse(draftPlan.scriptDoc),
+                graphSettings: effectiveSettings,
               })
               plannerDiagnostics.push(...qualityReport.failures)
               if (qualityReport.hardFailures.length > 0 || qualityReport.softFailures.length > 0) {

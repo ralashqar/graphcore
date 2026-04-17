@@ -7,19 +7,28 @@ import {
   getUgcPresetProfile,
   resolveUgcCreativeProfile,
 } from './ugcPresetProfiles.ts'
+import {
+  getDefaultStoryLanguagePreset,
+  getDefaultStoryScenePreset,
+  getStoryLanguagePresetLabel,
+  getStoryScenePresetLabel,
+  resolveStoryRuntimeContract,
+} from './storyPresetProfiles.ts'
 import { getRecommendedArtStylePresetForCinematic } from './artStylePresets.ts'
 
 const rawRecordSchema = z.record(z.string(), z.unknown())
 const normalizeEnumCandidate = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
-const coerceEnumLikeValue = <TOption extends string>(options: readonly TOption[]) => (value: unknown) => {
-  if (value === null || value === undefined) return value
-  if (typeof value !== 'string') return null
-  const trimmed = value.trim()
-  if (!trimmed) return null
-  if (options.includes(trimmed as TOption)) return trimmed
-  const normalized = normalizeEnumCandidate(trimmed)
-  const matched = options.find((option) => normalizeEnumCandidate(option) === normalized)
-  return matched ?? null
+function coerceEnumLikeValue<TOption extends string>(options: readonly TOption[]) {
+  return (value: unknown) => {
+    if (value === null || value === undefined) return value
+    if (typeof value !== 'string') return null
+    const trimmed = value.trim()
+    if (!trimmed) return null
+    if (options.includes(trimmed as TOption)) return trimmed
+    const normalized = normalizeEnumCandidate(trimmed)
+    const matched = options.find((option) => normalizeEnumCandidate(option) === normalized)
+    return matched ?? null
+  }
 }
 
 export const cinematicAspectRatioSchema = z.enum(['1:1', '4:3', '3:4', '16:9', '9:16', '21:9'])
@@ -27,6 +36,30 @@ export const cinematicStillResolutionSchema = z.enum(['1K', '2K'])
 export const cinematicVideoResolutionSchema = z.enum(['480p', '720p', '1080p'])
 export const cinematicSpecializationModeSchema = z.enum(['story', 'ugc'])
 export const cinematicPresetFamilySchema = z.enum(['story_movie_tv', 'ugc_creator', 'ugc_direct_response_ad', 'ugc_faceless_format'])
+export const cinematicStoryScenePresetSchema = z.enum([
+  'dialogue_two_hander',
+  'interrogation_pressure_cooker',
+  'procedural_discovery',
+  'reveal_then_reversal',
+  'dread_build_reveal',
+  'family_argument_power_shift',
+  'duel_showdown',
+  'chase_escape_fragmented',
+  'ambush_counterambush',
+  'battlefield_push_and_collapse',
+  'heroic_arrival_reversal',
+  'siege_last_stand',
+])
+export const cinematicStoryLanguagePresetSchema = z.enum([
+  'grounded_naturalist',
+  'precision_procedural',
+  'lyrical_intimate',
+  'handheld_chaos',
+  'tactical_combat',
+  'operatic_epic',
+  'war_immersion',
+  'mythic_tableau',
+])
 export const cinematicFormatSubtypeSchema = z.enum([
   'creator_problem_solution',
   'creator_reframe',
@@ -163,6 +196,8 @@ export const cinematicSettingsSchema = z.object({
   useInferredArtStyle: z.boolean().default(true),
   presetFamily: cinematicPresetFamilySchema.default('story_movie_tv'),
   presetId: z.string().default('story_movie_tv'),
+  storyScenePreset: z.preprocess(coerceEnumLikeValue(cinematicStoryScenePresetSchema.options), cinematicStoryScenePresetSchema.nullable()).default(null),
+  storyLanguagePreset: z.preprocess(coerceEnumLikeValue(cinematicStoryLanguagePresetSchema.options), cinematicStoryLanguagePresetSchema.nullable()).default(null),
   formatSubtype: z.preprocess(coerceEnumLikeValue(cinematicFormatSubtypeSchema.options), cinematicFormatSubtypeSchema.nullable()).default(null),
   formulaFamily: z.preprocess(coerceEnumLikeValue(cinematicFormulaFamilySchema.options), cinematicFormulaFamilySchema.nullable()).default(null),
   dominantTrigger: z.preprocess(coerceEnumLikeValue(cinematicDominantTriggerSchema.options), cinematicDominantTriggerSchema.nullable()).default(null),
@@ -326,6 +361,8 @@ export const cinematicScriptShotSchema = z.object({
   beat: z.string().default(''),
   emotionalBeat: z.string().default(''),
   hookRole: cinematicHookRoleSchema.nullable().default(null),
+  storyScenePreset: z.preprocess(coerceEnumLikeValue(cinematicStoryScenePresetSchema.options), cinematicStoryScenePresetSchema.nullable()).default(null),
+  storyLanguagePreset: z.preprocess(coerceEnumLikeValue(cinematicStoryLanguagePresetSchema.options), cinematicStoryLanguagePresetSchema.nullable()).default(null),
   formatSubtype: z.preprocess(coerceEnumLikeValue(cinematicFormatSubtypeSchema.options), cinematicFormatSubtypeSchema.nullable()).default(null),
   formulaFamily: z.preprocess(coerceEnumLikeValue(cinematicFormulaFamilySchema.options), cinematicFormulaFamilySchema.nullable()).default(null),
   dominantTrigger: z.preprocess(coerceEnumLikeValue(cinematicDominantTriggerSchema.options), cinematicDominantTriggerSchema.nullable()).default(null),
@@ -431,6 +468,8 @@ export const cinematicShotSpecSchema = z.object({
   beat: z.string().default(''),
   emotionalBeat: z.string().default(''),
   hookRole: cinematicHookRoleSchema.nullable().default(null),
+  storyScenePreset: z.preprocess(coerceEnumLikeValue(cinematicStoryScenePresetSchema.options), cinematicStoryScenePresetSchema.nullable()).default(null),
+  storyLanguagePreset: z.preprocess(coerceEnumLikeValue(cinematicStoryLanguagePresetSchema.options), cinematicStoryLanguagePresetSchema.nullable()).default(null),
   formatSubtype: z.preprocess(coerceEnumLikeValue(cinematicFormatSubtypeSchema.options), cinematicFormatSubtypeSchema.nullable()).default(null),
   formulaFamily: z.preprocess(coerceEnumLikeValue(cinematicFormulaFamilySchema.options), cinematicFormulaFamilySchema.nullable()).default(null),
   dominantTrigger: z.preprocess(coerceEnumLikeValue(cinematicDominantTriggerSchema.options), cinematicDominantTriggerSchema.nullable()).default(null),
@@ -508,6 +547,8 @@ export const cinematicTakeSpecSchema = z.object({
   breakReason: z.string().default(''),
   continuityRefIds: z.array(z.string()).default([]),
   seedanceEndpoint: seedanceEndpointSchema.default('reference-to-video'),
+  storyScenePreset: z.preprocess(coerceEnumLikeValue(cinematicStoryScenePresetSchema.options), cinematicStoryScenePresetSchema.nullable()).default(null),
+  storyLanguagePreset: z.preprocess(coerceEnumLikeValue(cinematicStoryLanguagePresetSchema.options), cinematicStoryLanguagePresetSchema.nullable()).default(null),
   formatSubtype: z.preprocess(coerceEnumLikeValue(cinematicFormatSubtypeSchema.options), cinematicFormatSubtypeSchema.nullable()).default(null),
   formulaFamily: z.preprocess(coerceEnumLikeValue(cinematicFormulaFamilySchema.options), cinematicFormulaFamilySchema.nullable()).default(null),
   dominantTrigger: z.preprocess(coerceEnumLikeValue(cinematicDominantTriggerSchema.options), cinematicDominantTriggerSchema.nullable()).default(null),
@@ -697,6 +738,8 @@ export const cinematicRunStatusResponseSchema = z.object({
 
 export type CinematicSettings = z.infer<typeof cinematicSettingsSchema>
 export type CinematicPresetFamily = z.infer<typeof cinematicPresetFamilySchema>
+export type CinematicStoryScenePreset = z.infer<typeof cinematicStoryScenePresetSchema>
+export type CinematicStoryLanguagePreset = z.infer<typeof cinematicStoryLanguagePresetSchema>
 export type CinematicFormatSubtype = z.infer<typeof cinematicFormatSubtypeSchema>
 export type CinematicFormulaFamily = z.infer<typeof cinematicFormulaFamilySchema>
 export type CinematicDominantTrigger = z.infer<typeof cinematicDominantTriggerSchema>
@@ -771,6 +814,24 @@ export function deriveDefaultStillAspectRatioFromPresetFamily(presetFamily: Cine
   return isUgcPresetFamily(presetFamily) ? '9:16' : '16:9'
 }
 
+export function coerceStoryScenePresetForPresetFamily(
+  presetFamily: CinematicPresetFamily,
+  storyScenePreset: z.infer<typeof cinematicStoryScenePresetSchema> | null | undefined,
+) {
+  return presetFamily === 'story_movie_tv'
+    ? (storyScenePreset ?? getDefaultStoryScenePreset())
+    : null
+}
+
+export function coerceStoryLanguagePresetForPresetFamily(
+  presetFamily: CinematicPresetFamily,
+  storyLanguagePreset: z.infer<typeof cinematicStoryLanguagePresetSchema> | null | undefined,
+) {
+  return presetFamily === 'story_movie_tv'
+    ? (storyLanguagePreset ?? getDefaultStoryLanguagePreset())
+    : null
+}
+
 export function deriveDefaultFormulaFamilyFromFormatSubtype(formatSubtype: CinematicFormatSubtype | null | undefined): CinematicFormulaFamily | null {
   return getUgcPresetProfile(formatSubtype)?.defaultFormulaFamily ?? null
 }
@@ -814,6 +875,14 @@ export function getCinematicPresetLabel(presetFamily: CinematicPresetFamily) {
   }
 }
 
+export function getCinematicStoryScenePresetLabel(storyScenePreset: z.infer<typeof cinematicStoryScenePresetSchema> | null | undefined) {
+  return getStoryScenePresetLabel(storyScenePreset ?? getDefaultStoryScenePreset())
+}
+
+export function getCinematicStoryLanguagePresetLabel(storyLanguagePreset: z.infer<typeof cinematicStoryLanguagePresetSchema> | null | undefined) {
+  return getStoryLanguagePresetLabel(storyLanguagePreset ?? getDefaultStoryLanguagePreset())
+}
+
 export function getCinematicFormatSubtypeLabel(formatSubtype: CinematicFormatSubtype) {
   switch (formatSubtype) {
     case 'creator_problem_solution':
@@ -844,6 +913,98 @@ export function getCinematicFormatSubtypeLabel(formatSubtype: CinematicFormatSub
       return 'Faceless Serialized Drama'
     case 'contrast_narrative':
       return 'Contrast Narrative'
+  }
+}
+
+export type CinematicPresetContract = {
+  presetFamily: CinematicPresetFamily
+  kind: 'story' | 'ugc'
+  formatSubtype: CinematicFormatSubtype | null
+  storyScenePreset: z.infer<typeof cinematicStoryScenePresetSchema> | null
+  storyLanguagePreset: z.infer<typeof cinematicStoryLanguagePresetSchema> | null
+  shotRoleSequence: CinematicHookRole[]
+  targetTotalDurationRangeSeconds: readonly [number, number] | null
+  targetShotCountRange: readonly [number, number] | null
+  idealShotDurationRangeSeconds: readonly [number, number] | null
+  proofDeadlineShotIndex: number | null
+  maxDialogueWordsPerShot: number | null
+  maxActionBeatsPerShot: number | null
+  plannerDirectives: string[]
+  authorshipDirectives: string[]
+  repairDirectives: string[]
+}
+
+function buildStorySettingsPacingPatch(
+  storyScenePreset: z.infer<typeof cinematicStoryScenePresetSchema> | null | undefined,
+  storyLanguagePreset: z.infer<typeof cinematicStoryLanguagePresetSchema> | null | undefined,
+): Pick<CinematicSettings, 'targetTotalDurationSeconds' | 'targetTotalDurationRangeSeconds' | 'targetShotCount' | 'targetShotCountRange' | 'proofDeadlineShotIndex' | 'idealShotDurationRangeSeconds' | 'maxDialogueWordsPerShot' | 'maxActionBeatsPerShot'> {
+  const contract = resolveStoryRuntimeContract({
+    storyScenePreset,
+    storyLanguagePreset,
+  })
+  return {
+    targetTotalDurationSeconds: Math.round((contract.targetSceneDurationRangeSeconds[0] + contract.targetSceneDurationRangeSeconds[1]) / 2),
+    targetTotalDurationRangeSeconds: [...contract.targetSceneDurationRangeSeconds] as [number, number],
+    targetShotCount: Math.round((contract.targetShotCountRange[0] + contract.targetShotCountRange[1]) / 2),
+    targetShotCountRange: [...contract.targetShotCountRange] as [number, number],
+    proofDeadlineShotIndex: contract.revealDeadlineShotIndex,
+    idealShotDurationRangeSeconds: [...contract.idealShotDurationRangeSeconds] as [number, number],
+    maxDialogueWordsPerShot: contract.maxDialogueWordsPerShot,
+    maxActionBeatsPerShot: contract.maxActionBeatsPerShot,
+  }
+}
+
+export function getCinematicPresetContract(input: {
+  presetFamily: CinematicPresetFamily
+  formatSubtype?: CinematicFormatSubtype | null
+  storyScenePreset?: z.infer<typeof cinematicStoryScenePresetSchema> | null
+  storyLanguagePreset?: z.infer<typeof cinematicStoryLanguagePresetSchema> | null
+}): CinematicPresetContract | null {
+  if (input.presetFamily === 'story_movie_tv') {
+    const storyScenePreset = coerceStoryScenePresetForPresetFamily(input.presetFamily, input.storyScenePreset)
+    const storyLanguagePreset = coerceStoryLanguagePresetForPresetFamily(input.presetFamily, input.storyLanguagePreset)
+    const contract = resolveStoryRuntimeContract({
+      storyScenePreset,
+      storyLanguagePreset,
+    })
+    return {
+      presetFamily: input.presetFamily,
+      kind: 'story',
+      formatSubtype: null,
+      storyScenePreset,
+      storyLanguagePreset,
+      shotRoleSequence: contract.shotRoleSequence,
+      targetTotalDurationRangeSeconds: contract.targetSceneDurationRangeSeconds,
+      targetShotCountRange: contract.targetShotCountRange,
+      idealShotDurationRangeSeconds: contract.idealShotDurationRangeSeconds,
+      proofDeadlineShotIndex: contract.revealDeadlineShotIndex,
+      maxDialogueWordsPerShot: contract.maxDialogueWordsPerShot,
+      maxActionBeatsPerShot: contract.maxActionBeatsPerShot,
+      plannerDirectives: contract.plannerDirectives,
+      authorshipDirectives: contract.authorshipDirectives,
+      repairDirectives: contract.repairDirectives,
+    }
+  }
+
+  const formatSubtype = coerceFormatSubtypeForPresetFamily(input.presetFamily, input.formatSubtype)
+  const profile = getUgcPresetProfile(formatSubtype, input.presetFamily)
+  if (!profile) return null
+  return {
+    presetFamily: input.presetFamily,
+    kind: 'ugc',
+    formatSubtype,
+    storyScenePreset: null,
+    storyLanguagePreset: null,
+    shotRoleSequence: profile.shotRoleSequence,
+    targetTotalDurationRangeSeconds: profile.pacingContract.targetTotalDurationRangeSeconds,
+    targetShotCountRange: profile.pacingContract.targetShotCountRange,
+    idealShotDurationRangeSeconds: profile.pacingContract.idealShotDurationRangeSeconds,
+    proofDeadlineShotIndex: profile.pacingContract.proofShouldLandByShotIndex,
+    maxDialogueWordsPerShot: profile.pacingContract.maxDialogueWordsPerShot,
+    maxActionBeatsPerShot: profile.pacingContract.maxActionBeatsPerShot,
+    plannerDirectives: [],
+    authorshipDirectives: [],
+    repairDirectives: [],
   }
 }
 
@@ -956,10 +1117,52 @@ function getDefaultAuthorshipPipelineForPresetFamily(presetFamily: CinematicPres
   return presetFamily === 'story_movie_tv' ? 'json_shot_authoring_v1' as const : 'ugc_script_ingest_v1' as const
 }
 
+function resolveStoryPresetSelection(input: {
+  presetFamily: CinematicPresetFamily
+  storyScenePreset?: z.infer<typeof cinematicStoryScenePresetSchema> | null
+  storyLanguagePreset?: z.infer<typeof cinematicStoryLanguagePresetSchema> | null
+}) {
+  const storyScenePreset = coerceStoryScenePresetForPresetFamily(input.presetFamily, input.storyScenePreset)
+  const storyLanguagePreset = coerceStoryLanguagePresetForPresetFamily(input.presetFamily, input.storyLanguagePreset)
+  return {
+    storyScenePreset,
+    storyLanguagePreset,
+    contract:
+      input.presetFamily === 'story_movie_tv'
+        ? resolveStoryRuntimeContract({ storyScenePreset, storyLanguagePreset })
+        : null,
+  }
+}
+
 export function buildCinematicSettingsPatchFromFormatSubtype(
   presetFamily: CinematicPresetFamily,
   formatSubtype: CinematicFormatSubtype | null,
-): Pick<CinematicSettings, 'formatSubtype' | 'formulaFamily' | 'dominantTrigger' | 'creativeTreatment' | 'hookFamily' | 'narrationMode' | 'authorshipPipeline' | 'backdropRole' | 'backdropStrategy' | 'proofMoment' | 'ctaStyle' | 'contrastAxis' | 'stillAspectRatio' | 'defaultClipSeconds' | 'inferredArtStylePreset' | 'targetTotalDurationSeconds' | 'targetTotalDurationRangeSeconds' | 'targetShotCount' | 'targetShotCountRange' | 'proofDeadlineShotIndex' | 'idealShotDurationRangeSeconds' | 'maxDialogueWordsPerShot' | 'maxActionBeatsPerShot'> {
+): Pick<CinematicSettings, 'storyScenePreset' | 'storyLanguagePreset' | 'formatSubtype' | 'formulaFamily' | 'dominantTrigger' | 'creativeTreatment' | 'hookFamily' | 'narrationMode' | 'authorshipPipeline' | 'backdropRole' | 'backdropStrategy' | 'proofMoment' | 'ctaStyle' | 'contrastAxis' | 'stillAspectRatio' | 'defaultClipSeconds' | 'inferredArtStylePreset' | 'targetTotalDurationSeconds' | 'targetTotalDurationRangeSeconds' | 'targetShotCount' | 'targetShotCountRange' | 'proofDeadlineShotIndex' | 'idealShotDurationRangeSeconds' | 'maxDialogueWordsPerShot' | 'maxActionBeatsPerShot'> {
+  if (presetFamily === 'story_movie_tv') {
+    const storyScenePreset = getDefaultStoryScenePreset()
+    const storyLanguagePreset = getDefaultStoryLanguagePreset()
+    return {
+      ...buildStorySettingsPacingPatch(storyScenePreset, storyLanguagePreset),
+      storyScenePreset,
+      storyLanguagePreset,
+      formatSubtype: null,
+      formulaFamily: null,
+      dominantTrigger: null,
+      creativeTreatment: null,
+      hookFamily: null,
+      narrationMode: null,
+      authorshipPipeline: getDefaultAuthorshipPipelineForPresetFamily(presetFamily),
+      backdropRole: null,
+      backdropStrategy: '',
+      proofMoment: '',
+      ctaStyle: '',
+      contrastAxis: '',
+      stillAspectRatio: deriveDefaultStillAspectRatioFromPresetFamily(presetFamily),
+      defaultClipSeconds: defaultCinematicSettings.defaultClipSeconds,
+      inferredArtStylePreset: getRecommendedArtStylePresetForCinematic({ presetFamily, formatSubtype: null }),
+    }
+  }
+
   const nextSubtype = coerceFormatSubtypeForPresetFamily(presetFamily, formatSubtype)
   const profile = getUgcPresetProfile(nextSubtype, presetFamily)
   const creativeProfile = resolveUgcCreativeProfile({
@@ -968,6 +1171,8 @@ export function buildCinematicSettingsPatchFromFormatSubtype(
   })
   return {
     ...buildUgcSettingsPacingPatch(nextSubtype, presetFamily),
+    storyScenePreset: null,
+    storyLanguagePreset: null,
     formatSubtype: nextSubtype,
     formulaFamily: deriveDefaultFormulaFamilyFromFormatSubtype(nextSubtype),
     dominantTrigger: deriveDefaultDominantTriggerFromFormatSubtype(nextSubtype),
@@ -986,7 +1191,35 @@ export function buildCinematicSettingsPatchFromFormatSubtype(
   }
 }
 
-export function buildCinematicSettingsPatchFromPresetFamily(presetFamily: CinematicPresetFamily): Pick<CinematicSettings, 'presetFamily' | 'presetId' | 'specializationMode' | 'formatSubtype' | 'formulaFamily' | 'dominantTrigger' | 'creativeTreatment' | 'hookFamily' | 'narrationMode' | 'authorshipPipeline' | 'backdropRole' | 'backdropStrategy' | 'proofMoment' | 'ctaStyle' | 'contrastAxis' | 'stillAspectRatio' | 'defaultClipSeconds' | 'inferredArtStylePreset' | 'targetTotalDurationSeconds' | 'targetTotalDurationRangeSeconds' | 'targetShotCount' | 'targetShotCountRange' | 'proofDeadlineShotIndex' | 'idealShotDurationRangeSeconds' | 'maxDialogueWordsPerShot' | 'maxActionBeatsPerShot'> {
+export function buildCinematicSettingsPatchFromPresetFamily(presetFamily: CinematicPresetFamily): Pick<CinematicSettings, 'presetFamily' | 'presetId' | 'specializationMode' | 'storyScenePreset' | 'storyLanguagePreset' | 'formatSubtype' | 'formulaFamily' | 'dominantTrigger' | 'creativeTreatment' | 'hookFamily' | 'narrationMode' | 'authorshipPipeline' | 'backdropRole' | 'backdropStrategy' | 'proofMoment' | 'ctaStyle' | 'contrastAxis' | 'stillAspectRatio' | 'defaultClipSeconds' | 'inferredArtStylePreset' | 'targetTotalDurationSeconds' | 'targetTotalDurationRangeSeconds' | 'targetShotCount' | 'targetShotCountRange' | 'proofDeadlineShotIndex' | 'idealShotDurationRangeSeconds' | 'maxDialogueWordsPerShot' | 'maxActionBeatsPerShot'> {
+  if (presetFamily === 'story_movie_tv') {
+    const storyScenePreset = getDefaultStoryScenePreset()
+    const storyLanguagePreset = getDefaultStoryLanguagePreset()
+    return {
+      ...buildStorySettingsPacingPatch(storyScenePreset, storyLanguagePreset),
+      presetFamily,
+      presetId: presetFamily,
+      storyScenePreset,
+      storyLanguagePreset,
+      formatSubtype: null,
+      formulaFamily: null,
+      dominantTrigger: null,
+      creativeTreatment: null,
+      hookFamily: null,
+      narrationMode: null,
+      authorshipPipeline: getDefaultAuthorshipPipelineForPresetFamily(presetFamily),
+      backdropRole: null,
+      backdropStrategy: '',
+      proofMoment: '',
+      ctaStyle: '',
+      contrastAxis: '',
+      specializationMode: deriveSpecializationModeFromPresetFamily(presetFamily),
+      stillAspectRatio: deriveDefaultStillAspectRatioFromPresetFamily(presetFamily),
+      defaultClipSeconds: defaultCinematicSettings.defaultClipSeconds,
+      inferredArtStylePreset: getRecommendedArtStylePresetForCinematic({ presetFamily, formatSubtype: null }),
+    }
+  }
+
   const formatSubtype = coerceFormatSubtypeForPresetFamily(presetFamily, null)
   const profile = getUgcPresetProfile(formatSubtype, presetFamily)
   const creativeProfile = resolveUgcCreativeProfile({
@@ -997,6 +1230,8 @@ export function buildCinematicSettingsPatchFromPresetFamily(presetFamily: Cinema
     ...buildUgcSettingsPacingPatch(formatSubtype, presetFamily),
     presetFamily,
     presetId: presetFamily,
+    storyScenePreset: null,
+    storyLanguagePreset: null,
     stillAspectRatio: profile?.preferredAspectRatio ?? deriveDefaultStillAspectRatioFromPresetFamily(presetFamily),
     defaultClipSeconds: profile?.preferredClipSeconds ?? defaultCinematicSettings.defaultClipSeconds,
     formatSubtype,
@@ -1013,6 +1248,37 @@ export function buildCinematicSettingsPatchFromPresetFamily(presetFamily: Cinema
     contrastAxis: profile?.defaultContrastAxis ?? '',
     specializationMode: deriveSpecializationModeFromPresetFamily(presetFamily),
     inferredArtStylePreset: getRecommendedArtStylePresetForCinematic({ presetFamily, formatSubtype }),
+  }
+}
+
+export function buildCinematicSettingsPatchFromStoryPresets(
+  storyScenePreset: z.infer<typeof cinematicStoryScenePresetSchema> | null,
+  storyLanguagePreset: z.infer<typeof cinematicStoryLanguagePresetSchema> | null,
+): Pick<CinematicSettings, 'presetFamily' | 'presetId' | 'specializationMode' | 'storyScenePreset' | 'storyLanguagePreset' | 'formatSubtype' | 'formulaFamily' | 'dominantTrigger' | 'creativeTreatment' | 'hookFamily' | 'narrationMode' | 'authorshipPipeline' | 'backdropRole' | 'backdropStrategy' | 'proofMoment' | 'ctaStyle' | 'contrastAxis' | 'stillAspectRatio' | 'defaultClipSeconds' | 'inferredArtStylePreset' | 'targetTotalDurationSeconds' | 'targetTotalDurationRangeSeconds' | 'targetShotCount' | 'targetShotCountRange' | 'proofDeadlineShotIndex' | 'idealShotDurationRangeSeconds' | 'maxDialogueWordsPerShot' | 'maxActionBeatsPerShot'> {
+  const resolvedStoryScenePreset = storyScenePreset ?? getDefaultStoryScenePreset()
+  const resolvedStoryLanguagePreset = storyLanguagePreset ?? getDefaultStoryLanguagePreset()
+  return {
+    ...buildStorySettingsPacingPatch(resolvedStoryScenePreset, resolvedStoryLanguagePreset),
+    presetFamily: 'story_movie_tv',
+    presetId: 'story_movie_tv',
+    specializationMode: 'story',
+    storyScenePreset: resolvedStoryScenePreset,
+    storyLanguagePreset: resolvedStoryLanguagePreset,
+    formatSubtype: null,
+    formulaFamily: null,
+    dominantTrigger: null,
+    creativeTreatment: null,
+    hookFamily: null,
+    narrationMode: null,
+    authorshipPipeline: 'json_shot_authoring_v1',
+    backdropRole: null,
+    backdropStrategy: '',
+    proofMoment: '',
+    ctaStyle: '',
+    contrastAxis: '',
+    stillAspectRatio: '16:9',
+    defaultClipSeconds: defaultCinematicSettings.defaultClipSeconds,
+    inferredArtStylePreset: getRecommendedArtStylePresetForCinematic({ presetFamily: 'story_movie_tv', formatSubtype: null }),
   }
 }
 
@@ -1351,13 +1617,20 @@ function clampDurationToRange(value: number, minDurationSeconds: number | null, 
 }
 
 function resolveShotEditorialDurationContract(shot: CinematicScriptShot) {
+  const storyContract =
+    shot.storyScenePreset || shot.storyLanguagePreset
+      ? resolveStoryRuntimeContract({
+        storyScenePreset: shot.storyScenePreset ?? null,
+        storyLanguagePreset: shot.storyLanguagePreset ?? null,
+      })
+      : null
   const ugcProfile = getUgcPresetProfile(shot.formatSubtype)
   const roleRange = ugcProfile
     ? (getUgcDurationRangeForShot({
         formatSubtype: shot.formatSubtype,
         hookRole: shot.hookRole,
       }) ?? ugcProfile.pacingContract.idealShotDurationRangeSeconds)
-    : null
+    : storyContract?.idealShotDurationRangeSeconds ?? null
   const minDurationSeconds = shot.minDurationSeconds ?? roleRange?.[0] ?? null
   const maxDurationSeconds = shot.maxDurationSeconds ?? roleRange?.[1] ?? null
   const targetDurationSeconds =
@@ -1369,6 +1642,7 @@ function resolveShotEditorialDurationContract(shot: CinematicScriptShot) {
     ?? (roleRange ? Math.round((roleRange[0] + roleRange[1]) / 2) : null)
 
   return {
+    storyContract,
     ugcProfile,
     roleRange,
     minDurationSeconds,
@@ -1403,6 +1677,25 @@ function inferShotDuration(shot: CinematicScriptShot) {
     const dialogueWords = countDialogueWords(shot)
     const overDialogueLimit = dialogueWords > ugcProfile.pacingContract.maxDialogueWordsPerShot
     const actionOverflow = shot.actions.length > ugcProfile.pacingContract.maxActionBeatsPerShot
+    const targetBias = Math.round(((defaultDuration * 2) + Math.min(roleRange[1], inferred)) / 3)
+    const biased = overDialogueLimit || actionOverflow
+      ? Math.min(roleRange[1], Math.max(roleRange[0], defaultDuration))
+      : targetBias
+    inferred = clampDurationToRange(
+      Math.min(roleRange[1], Math.max(roleRange[0], biased)),
+      editorialContract.minDurationSeconds,
+      editorialContract.maxDurationSeconds,
+    )
+  } else if (editorialContract.storyContract && editorialContract.roleRange) {
+    const roleRange = editorialContract.roleRange
+    const defaultDuration = editorialContract.targetDurationSeconds ?? inferred
+    const dialogueWords = countDialogueWords(shot)
+    const overDialogueLimit =
+      editorialContract.storyContract.maxDialogueWordsPerShot !== null
+      && dialogueWords > editorialContract.storyContract.maxDialogueWordsPerShot
+    const actionOverflow =
+      editorialContract.storyContract.maxActionBeatsPerShot !== null
+      && shot.actions.length > editorialContract.storyContract.maxActionBeatsPerShot
     const targetBias = Math.round(((defaultDuration * 2) + Math.min(roleRange[1], inferred)) / 3)
     const biased = overDialogueLimit || actionOverflow
       ? Math.min(roleRange[1], Math.max(roleRange[0], defaultDuration))
@@ -1526,6 +1819,8 @@ function isStrongTakeFormatBreak(
   return (
     (left.variationGroupId.trim() || '') !== (right.variationGroupId.trim() || '')
     || (left.variationLabel.trim() || '') !== (right.variationLabel.trim() || '')
+    || (left.storyScenePreset ?? null) !== (right.storyScenePreset ?? null)
+    || (left.storyLanguagePreset ?? null) !== (right.storyLanguagePreset ?? null)
     || (left.formatSubtype ?? null) !== (right.formatSubtype ?? null)
     || (left.formulaFamily ?? null) !== (right.formulaFamily ?? null)
     || (left.dominantTrigger ?? null) !== (right.dominantTrigger ?? null)
@@ -1576,8 +1871,14 @@ function describeTakeBreakReason(input: {
   return ''
 }
 
-function isUgcShot(shot: Pick<CinematicScriptShot, 'formatSubtype'>) {
-  return shot.formatSubtype !== null
+function inferPresetFamilyForShot(shot: Pick<CinematicScriptShot, 'storyScenePreset' | 'storyLanguagePreset' | 'formatSubtype' | 'formulaFamily' | 'dominantTrigger'>) {
+  if (shot.storyScenePreset || shot.storyLanguagePreset) return 'story_movie_tv' as const
+  if (shot.formatSubtype || shot.formulaFamily || shot.dominantTrigger) return 'ugc_creator' as const
+  return 'story_movie_tv' as const
+}
+
+function isUgcShot(shot: Pick<CinematicScriptShot, 'storyScenePreset' | 'storyLanguagePreset' | 'formatSubtype' | 'formulaFamily' | 'dominantTrigger'>) {
+  return inferPresetFamilyForShot(shot) !== 'story_movie_tv'
 }
 
 function getShotPrimaryActionSignature(shot: Pick<CinematicScriptShot, 'actions' | 'beat' | 'directingPackage'>) {
@@ -1656,6 +1957,7 @@ function shapeUgcVariationShots(shots: CinematicScriptShot[]) {
 }
 
 function applyUgcEditorialShaping(shots: CinematicScriptShot[]) {
+  if (!shots.every((shot) => isUgcShot(shot))) return shots
   const grouped = groupUgcShotsByVariation(shots)
   return grouped.flatMap((variationShots) => shapeUgcVariationShots(variationShots))
 }
@@ -1693,6 +1995,8 @@ function buildCompiledTakes(shots: Array<CinematicScriptShot & {
       breakReason: currentBreakReason,
       continuityRefIds,
       seedanceEndpoint: endpoint,
+      storyScenePreset: coalesceTakeField(currentShots, (shot) => shot.storyScenePreset, null),
+      storyLanguagePreset: coalesceTakeField(currentShots, (shot) => shot.storyLanguagePreset, null),
       formatSubtype: coalesceTakeField(currentShots, (shot) => shot.formatSubtype, null),
       formulaFamily: coalesceTakeField(currentShots, (shot) => shot.formulaFamily, null),
       dominantTrigger: coalesceTakeField(currentShots, (shot) => shot.dominantTrigger, null),
@@ -1756,7 +2060,7 @@ export function buildCinematicSequenceFromScriptDoc(scriptDoc: CinematicScriptDo
     const inferredTiming = inferShotDuration(shot)
     const timedShot = fillBeatTimingsForShot(shot, inferredTiming.durationSeconds)
     const sourceRefIds = buildRequiredSourceRefIdsForScriptShot(timedShot)
-    const presetFamily = timedShot.formatSubtype ? 'ugc_creator' as const : 'story_movie_tv' as const
+    const presetFamily = inferPresetFamilyForShot(timedShot)
     const directingPackage = inferShotDirectingPackage({
       shot: timedShot,
       current: timedShot.directingPackage,
@@ -1780,7 +2084,7 @@ export function buildCinematicSequenceFromScriptDoc(scriptDoc: CinematicScriptDo
       referencePlan,
     }
   })
-  const isUgcFlow = compiledShots.some((shot) => shot.formatSubtype !== null)
+  const isUgcFlow = compiledShots.some((shot) => isUgcShot(shot))
   const takes = buildCompiledTakes(compiledShots)
   const takeByShotId = new Map<string, { id: string; index: number }>()
   takes.forEach((take, index) => {
@@ -1852,6 +2156,8 @@ export function buildCinematicSequenceFromScriptDoc(scriptDoc: CinematicScriptDo
       beat: shot.beat,
       emotionalBeat: shot.emotionalBeat,
       hookRole: shot.hookRole,
+      storyScenePreset: shot.storyScenePreset,
+      storyLanguagePreset: shot.storyLanguagePreset,
       formatSubtype: shot.formatSubtype,
       formulaFamily: shot.formulaFamily,
       dominantTrigger: shot.dominantTrigger,
@@ -1916,7 +2222,7 @@ export function buildCinematicSequenceFromScriptDoc(scriptDoc: CinematicScriptDo
             ...shot,
             referencePlan: shot.referencePlan,
           })),
-          isUgcFlow ? 'ugc_creator' : 'story_movie_tv',
+          take.storyScenePreset || take.storyLanguagePreset ? 'story_movie_tv' : (isUgcFlow ? 'ugc_creator' : 'story_movie_tv'),
           take.referencePlan,
         ),
       }
@@ -2058,6 +2364,8 @@ export function deriveCinematicScriptFromSequence(sequence: CinematicSequence): 
       beat: shot.beat,
       emotionalBeat: shot.emotionalBeat,
       hookRole: shot.hookRole,
+      storyScenePreset: shot.storyScenePreset,
+      storyLanguagePreset: shot.storyLanguagePreset,
       formatSubtype: shot.formatSubtype,
       formulaFamily: shot.formulaFamily,
       dominantTrigger: shot.dominantTrigger,
@@ -2153,6 +2461,15 @@ export function getCinematicSettings(gameSpec: unknown, graphMetadata: unknown):
     ?? projectOverrides.formatSubtype
     ?? null,
   )
+  const {
+    storyScenePreset,
+    storyLanguagePreset,
+    contract: storyContract,
+  } = resolveStoryPresetSelection({
+    presetFamily,
+    storyScenePreset: graphOverrides.storyScenePreset ?? projectOverrides.storyScenePreset ?? null,
+    storyLanguagePreset: graphOverrides.storyLanguagePreset ?? projectOverrides.storyLanguagePreset ?? null,
+  })
   const formulaFamily =
     graphOverrides.formulaFamily
     ?? projectOverrides.formulaFamily
@@ -2161,13 +2478,15 @@ export function getCinematicSettings(gameSpec: unknown, graphMetadata: unknown):
     graphOverrides.dominantTrigger
     ?? projectOverrides.dominantTrigger
     ?? deriveDefaultDominantTriggerFromFormatSubtype(formatSubtype)
-  const formatDefaults = deriveUgcShotDefaults({
-    presetFamily,
-    formatSubtype,
-    shotIndex: 0,
-    shotCount: 1,
-    hookRole: 'hook',
-  })
+  const formatDefaults = isUgcPresetFamily(presetFamily)
+    ? deriveUgcShotDefaults({
+        presetFamily,
+        formatSubtype,
+        shotIndex: 0,
+        shotCount: 1,
+        hookRole: 'hook',
+      })
+    : null
   const stillAspectRatio =
     graphOverrides.stillAspectRatio
     ?? projectOverrides.stillAspectRatio
@@ -2194,17 +2513,21 @@ export function getCinematicSettings(gameSpec: unknown, graphMetadata: unknown):
           : defaultCinematicSettings.useInferredArtStyle,
     presetFamily,
     presetId,
+    storyScenePreset,
+    storyLanguagePreset,
     formatSubtype,
     formulaFamily,
     dominantTrigger,
     proofMoment:
       (typeof graphOverrides.proofMoment === 'string' && graphOverrides.proofMoment.trim().length > 0 ? graphOverrides.proofMoment : null)
       ?? (typeof projectOverrides.proofMoment === 'string' && projectOverrides.proofMoment.trim().length > 0 ? projectOverrides.proofMoment : null)
-      ?? formatDefaults.proofMoment,
+      ?? formatDefaults?.proofMoment
+      ?? '',
     ctaStyle:
       (typeof graphOverrides.ctaStyle === 'string' && graphOverrides.ctaStyle.trim().length > 0 ? graphOverrides.ctaStyle : null)
       ?? (typeof projectOverrides.ctaStyle === 'string' && projectOverrides.ctaStyle.trim().length > 0 ? projectOverrides.ctaStyle : null)
-      ?? formatDefaults.ctaStyle,
+      ?? formatDefaults?.ctaStyle
+      ?? '',
     authorshipPipeline:
       graphOverrides.authorshipPipeline
       ?? projectOverrides.authorshipPipeline
@@ -2212,12 +2535,48 @@ export function getCinematicSettings(gameSpec: unknown, graphMetadata: unknown):
     contrastAxis:
       (typeof graphOverrides.contrastAxis === 'string' && graphOverrides.contrastAxis.trim().length > 0 ? graphOverrides.contrastAxis : null)
       ?? (typeof projectOverrides.contrastAxis === 'string' && projectOverrides.contrastAxis.trim().length > 0 ? projectOverrides.contrastAxis : null)
-      ?? formatDefaults.contrastAxis,
+      ?? formatDefaults?.contrastAxis
+      ?? '',
     defaultClipSeconds:
       graphOverrides.defaultClipSeconds
       ?? projectOverrides.defaultClipSeconds
       ?? getUgcPresetProfile(formatSubtype, presetFamily)?.preferredClipSeconds
       ?? defaultCinematicSettings.defaultClipSeconds,
+    targetTotalDurationSeconds:
+      graphOverrides.targetTotalDurationSeconds
+      ?? projectOverrides.targetTotalDurationSeconds
+      ?? (storyContract ? Math.round((storyContract.targetSceneDurationRangeSeconds[0] + storyContract.targetSceneDurationRangeSeconds[1]) / 2) : defaultCinematicSettings.targetTotalDurationSeconds),
+    targetTotalDurationRangeSeconds:
+      graphOverrides.targetTotalDurationRangeSeconds
+      ?? projectOverrides.targetTotalDurationRangeSeconds
+      ?? (storyContract ? [...storyContract.targetSceneDurationRangeSeconds] as [number, number] : defaultCinematicSettings.targetTotalDurationRangeSeconds),
+    targetShotCount:
+      graphOverrides.targetShotCount
+      ?? projectOverrides.targetShotCount
+      ?? (storyContract ? Math.round((storyContract.targetShotCountRange[0] + storyContract.targetShotCountRange[1]) / 2) : defaultCinematicSettings.targetShotCount),
+    targetShotCountRange:
+      graphOverrides.targetShotCountRange
+      ?? projectOverrides.targetShotCountRange
+      ?? (storyContract ? [...storyContract.targetShotCountRange] as [number, number] : defaultCinematicSettings.targetShotCountRange),
+    proofDeadlineShotIndex:
+      graphOverrides.proofDeadlineShotIndex
+      ?? projectOverrides.proofDeadlineShotIndex
+      ?? storyContract?.revealDeadlineShotIndex
+      ?? defaultCinematicSettings.proofDeadlineShotIndex,
+    idealShotDurationRangeSeconds:
+      graphOverrides.idealShotDurationRangeSeconds
+      ?? projectOverrides.idealShotDurationRangeSeconds
+      ?? (storyContract ? [...storyContract.idealShotDurationRangeSeconds] as [number, number] : defaultCinematicSettings.idealShotDurationRangeSeconds),
+    maxDialogueWordsPerShot:
+      graphOverrides.maxDialogueWordsPerShot
+      ?? projectOverrides.maxDialogueWordsPerShot
+      ?? storyContract?.maxDialogueWordsPerShot
+      ?? defaultCinematicSettings.maxDialogueWordsPerShot,
+    maxActionBeatsPerShot:
+      graphOverrides.maxActionBeatsPerShot
+      ?? projectOverrides.maxActionBeatsPerShot
+      ?? storyContract?.maxActionBeatsPerShot
+      ?? defaultCinematicSettings.maxActionBeatsPerShot,
     stillAspectRatio,
     specializationMode: deriveSpecializationModeFromPresetFamily(presetFamily),
   }

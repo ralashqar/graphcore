@@ -1,12 +1,18 @@
 import type { WorldBuildPlanItem, WorldBuildPlannerMode } from '../../domain/worldBuild'
 import {
   cinematicFormatSubtypeSchema,
+  cinematicStoryLanguagePresetSchema,
+  cinematicStoryScenePresetSchema,
   coerceFormatSubtypeForPresetFamily,
   getCinematicFormatSubtypeLabel,
   getCinematicPresetLabel,
+  getCinematicStoryLanguagePresetLabel,
+  getCinematicStoryScenePresetLabel,
   isUgcPresetFamily,
   type CinematicFormatSubtype,
   type CinematicPresetFamily,
+  type CinematicStoryLanguagePreset,
+  type CinematicStoryScenePreset,
 } from '../../domain/cinematics'
 import { EntityIcon } from '../../shared/entityIcons'
 
@@ -18,7 +24,7 @@ type WorldBuildPlanModalProps = {
     entityRefs?: Array<{ id: string; kind: 'character' | 'environment' | 'item'; sourceName: string; role: string; resolution: 'existing' | 'create'; definitionKey?: string | null }>
     relationshipRefs?: Array<{ id: string; type: string; sourceRefId: string; targetRefId: string }>
     compositeRefPlans?: Array<{ id: string; title: string }>
-    graphSettings?: { presetFamily?: string; presetId?: string; presetSource?: string; specializationMode?: string; formatSubtype?: string | null; formulaFamily?: string | null } | null
+    graphSettings?: { presetFamily?: string; presetId?: string; presetSource?: string; specializationMode?: string; storyScenePreset?: string | null; storyLanguagePreset?: string | null; formatSubtype?: string | null; formulaFamily?: string | null } | null
     storyboardPlan?: { mode?: string; panels?: Array<{ id: string; title: string }> } | null
     scriptDoc?: {
       title?: string
@@ -35,6 +41,8 @@ type WorldBuildPlanModalProps = {
   onConfirm: () => void
   onChangePresetFamily?: (presetFamily: CinematicPresetFamily) => void
   onChangeFormatSubtype?: (formatSubtype: CinematicFormatSubtype) => void
+  onChangeStoryScenePreset?: (storyScenePreset: CinematicStoryScenePreset) => void
+  onChangeStoryLanguagePreset?: (storyLanguagePreset: CinematicStoryLanguagePreset) => void
   onToggleEnabled: (itemId: string, enabled: boolean) => void
   onToggleOption: (itemId: string, optionKey: 'generateConceptImage' | 'generateConceptGallery', enabled: boolean) => void
 }
@@ -64,6 +72,8 @@ export function WorldBuildPlanModal({
   onCancel,
   onChangePresetFamily,
   onChangeFormatSubtype,
+  onChangeStoryLanguagePreset,
+  onChangeStoryScenePreset,
   onConfirm,
   onToggleEnabled,
   onToggleOption,
@@ -71,6 +81,12 @@ export function WorldBuildPlanModal({
   const hasPlanItems = planItems.length > 0
   const presetFamily = (cinematicPlan?.graphSettings?.presetFamily as CinematicPresetFamily | undefined) ?? 'story_movie_tv'
   const isUgcPreset = isUgcPresetFamily(presetFamily)
+  const storyScenePreset = presetFamily === 'story_movie_tv'
+    ? ((cinematicPlan?.graphSettings?.storyScenePreset as CinematicStoryScenePreset | undefined) ?? 'dialogue_two_hander')
+    : null
+  const storyLanguagePreset = presetFamily === 'story_movie_tv'
+    ? ((cinematicPlan?.graphSettings?.storyLanguagePreset as CinematicStoryLanguagePreset | undefined) ?? 'grounded_naturalist')
+    : null
   const subtypeOptions = cinematicFormatSubtypeSchema.options.filter((option) => option === 'contrast_narrative' || coerceFormatSubtypeForPresetFamily(presetFamily, option) === option)
   const formatSubtype = isUgcPreset
     ? coerceFormatSubtypeForPresetFamily(presetFamily, (cinematicPlan?.graphSettings?.formatSubtype as CinematicFormatSubtype | undefined) ?? null)
@@ -122,6 +138,28 @@ export function WorldBuildPlanModal({
                   </select>
                 </label>
               ) : null}
+              {!isUgcPreset && storyScenePreset ? (
+                <label className="field-block compact-block">
+                  <span>Scene preset</span>
+                  <select
+                    value={storyScenePreset}
+                    onChange={(event) => onChangeStoryScenePreset?.(event.target.value as CinematicStoryScenePreset)}
+                  >
+                    {cinematicStoryScenePresetSchema.options.map((option) => <option key={option} value={option}>{getCinematicStoryScenePresetLabel(option)}</option>)}
+                  </select>
+                </label>
+              ) : null}
+              {!isUgcPreset && storyLanguagePreset ? (
+                <label className="field-block compact-block">
+                  <span>Language preset</span>
+                  <select
+                    value={storyLanguagePreset}
+                    onChange={(event) => onChangeStoryLanguagePreset?.(event.target.value as CinematicStoryLanguagePreset)}
+                  >
+                    {cinematicStoryLanguagePresetSchema.options.map((option) => <option key={option} value={option}>{getCinematicStoryLanguagePresetLabel(option)}</option>)}
+                  </select>
+                </label>
+              ) : null}
             </div>
           ) : null}
           {plannerMode === 'cinematic_build' && cinematicPlan ? (
@@ -135,7 +173,15 @@ export function WorldBuildPlanModal({
               <div className="diagnostic-stack">
                 <div className="inline-note">
                   <strong>Preset</strong>
-                  <span> {getCinematicPresetLabel(presetFamily)}{formatSubtype ? ` · ${getCinematicFormatSubtypeLabel(formatSubtype)}` : ''}</span>
+                  <span>
+                    {' '}
+                    {getCinematicPresetLabel(presetFamily)}
+                    {presetFamily === 'story_movie_tv' && storyScenePreset && storyLanguagePreset
+                      ? ` · ${getCinematicStoryScenePresetLabel(storyScenePreset)} · ${getCinematicStoryLanguagePresetLabel(storyLanguagePreset)}`
+                      : formatSubtype
+                        ? ` · ${getCinematicFormatSubtypeLabel(formatSubtype)}`
+                        : ''}
+                  </span>
                 </div>
                 <div className="inline-note">
                   <strong>Resolved refs</strong>
