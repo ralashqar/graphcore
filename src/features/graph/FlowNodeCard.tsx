@@ -5,7 +5,7 @@ import type { GraphNodeData } from './types'
 import { EntityIcon } from '../../shared/entityIcons'
 
 export function FlowNodeCard({ data }: { data: GraphNodeData }) {
-  const { cinematicCard, node, previewUrl, conditionSummary, effectSummary, onAddChoice, onUpdateChoiceLabel } = data
+  const { cinematicCard, node, previewUrl, conditionSummary, effectSummary, onAddChoice, onOpenDefinitionLink, onUpdateChoiceLabel } = data
   const isWideTakePreview = node.type === 'cinematic_take' && Boolean(previewUrl)
   const [shotsExpanded, setShotsExpanded] = useState(false)
   const [expandedShotIds, setExpandedShotIds] = useState<string[]>([])
@@ -78,6 +78,11 @@ export function FlowNodeCard({ data }: { data: GraphNodeData }) {
               ))}
             </div>
           ) : node.body.text ? <p>{node.body.text}</p> : null}
+          {node.type === 'asset_ref' && onOpenDefinitionLink ? (
+            <button className="flow-node-link-button nodrag nopan" onClick={() => onOpenDefinitionLink()} type="button">
+              Open Entity
+            </button>
+          ) : null}
           {cinematicCard.variant === 'take' && cinematicCard.takeShots && cinematicCard.takeShots.length > 0 ? (
             <div className="flow-node-take-sections">
               <button

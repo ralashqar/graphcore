@@ -1028,24 +1028,19 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
       .sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()),
     [cinematicRuns, currentGraph],
   )
-  const [railMode, setRailMode] = useState<RailMode | 'runs'>('graphs')
-  const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
+  const [railMode, setRailMode] = useState<RailMode>('graphs')
+  const [graphSearch, setGraphSearch] = useState('')
   const [inspectorWidth, setInspectorWidth] = useState(360)
   const inspectorResizeState = useRef<{ startX: number; startWidth: number } | null>(null)
   const isDeletingSelectedGraph = currentGraph?.key === deletingGraphKey
-  const selectedRun = currentGraphRuns.find((run) => run.id === selectedRunId) ?? currentGraphRuns[0] ?? null
-
-  useEffect(() => {
-    if (!selectedRunId && currentGraphRuns.length > 0) {
-      setSelectedRunId(currentGraphRuns[0].id)
-      return
-    }
-
-    if (selectedRunId && currentGraphRuns.every((run) => run.id !== selectedRunId)) {
-      setSelectedRunId(currentGraphRuns[0]?.id ?? null)
-    }
-  }, [currentGraphRuns, selectedRunId])
-
+  const filteredCinematicGraphs = useMemo(() => {
+    const query = graphSearch.trim().toLowerCase()
+    if (!query) return cinematicGraphs
+    return cinematicGraphs.filter((graph) =>
+      graph.name.toLowerCase().includes(query)
+      || graph.summary.toLowerCase().includes(query),
+    )
+  }, [cinematicGraphs, graphSearch])
   useEffect(() => {
     const handlePointerMove = (event: MouseEvent) => {
       const state = inspectorResizeState.current
@@ -1339,10 +1334,21 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
     return {
       previewUrl: resolveAssetPreviewUrl(previewAsset),
       cinematicCard,
+      onOpenDefinitionLink:
+        node.type === 'asset_ref'
+          ? (() => {
+              const definitionKey = getAssetRefNodeConfig(node).definitionKey
+              const definition = definitionKey
+                ? definitions.find((entry) => entry.key === definitionKey) ?? null
+                : null
+              if (!definition) return null
+              return () => onOpenDefinitionLink(definition.key, definition.kind)
+            })()
+          : null,
       conditionSummary: summarizeCondition(node.condition),
       effectSummary: buildNodeMetaLines(node, shotRunStatus),
     }
-  }, [assets, currentGraph, currentGraphRuns, definitions])
+  }, [assets, currentGraph, currentGraphRuns, definitions, onOpenDefinitionLink, pendingStoryboardNodeKeys])
 
   const {
     applyTemplateChange,
@@ -1488,13 +1494,17 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
       cinematicAuthoring?: { scriptDirty?: unknown }
     }).cinematicAuthoring?.scriptDirty)
   }, [currentGraph])
-  const [contentMode, setContentMode] = useState<'script' | 'graph' | 'runs'>('script')
+  const [contentMode, setContentMode] = useState<'script' | 'graph' | 'runs'>('graph')
 
   useEffect(() => {
     if (!currentGraph) return
-    if (railMode === 'runs') {
-      setContentMode('runs')
-      return
+    setContentMode('graph')
+  }, [currentGraph?.key])
+
+  useEffect(() => {
+    if (!currentGraph) return
+    if (contentMode === 'runs') {
+      setContentMode('script')
     }
   }, [currentGraph, railMode])
 
@@ -1744,14 +1754,22 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
           <div className="segmented-control">
             <button className={railMode === 'graphs' ? 'segment-button is-active' : 'segment-button'} onClick={() => setRailMode('graphs')} type="button">Flows</button>
             <button className={railMode === 'library' ? 'segment-button is-active' : 'segment-button'} onClick={() => setRailMode('library')} type="button">Library</button>
-            <button className={railMode === 'runs' ? 'segment-button is-active' : 'segment-button'} onClick={() => setRailMode('runs')} type="button">Runs</button>
           </div>
         </div>
         {railMode === 'graphs' ? (
           <div className="graph-rail-stack">
             <button className="primary-button compact" onClick={createGraph} type="button">+ New Cinematic</button>
+            <label className="field-block compact-block">
+              <span>Search</span>
+              <input
+                className="collection-search"
+                onChange={(event) => setGraphSearch(event.target.value)}
+                placeholder="Search cinematics"
+                value={graphSearch}
+              />
+            </label>
             <div className="rail-list">
-              {cinematicGraphs.map((graph) => (
+              {filteredCinematicGraphs.map((graph) => (
                 <button key={graph.key} className={graph.key === currentGraph?.key ? 'rail-button is-active' : 'rail-button'} onClick={() => onSelectGraph(graph.key)} type="button">
                   <div className="item-row">
                     <div className="media-thumb cinematic-rail-icon">
@@ -1769,6 +1787,7 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
                 </button>
               ))}
               {cinematicGraphs.length === 0 ? <div className="inline-note">No cinematic graphs yet. Create one to start sequencing shots.</div> : null}
+              {cinematicGraphs.length > 0 && filteredCinematicGraphs.length === 0 ? <div className="inline-note">No cinematic flows match that search.</div> : null}
             </div>
           </div>
         ) : null}
@@ -1806,40 +1825,6 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
             ))}
           </div>
         ) : null}
-        {railMode === 'runs' ? (
-          <div className="graph-library cinematic-run-rail">
-            <div className="rail-section">
-              <span className="section-label">Recent Runs</span>
-              <div className="rail-list">
-                {currentGraphRuns.map((run) => (
-                  <button key={run.id} className={run.id === selectedRun?.id ? 'rail-button is-active' : 'rail-button'} onClick={() => setSelectedRunId(run.id)} type="button">
-                    <strong>{run.graphName}</strong>
-                    <span>{formatRunLabel(run)}</span>
-                  </button>
-                ))}
-                {currentGraphRuns.length === 0 ? <div className="inline-note">No runs yet for this cinematic workspace.</div> : null}
-              </div>
-            </div>
-            {selectedRun ? (
-              <div className="rail-section">
-                <span className="section-label">Run Jobs</span>
-                {!['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(selectedRun.status) ? (
-                  <div className="detail-actions cinematic-action-row">
-                    <button className="ghost-button compact" onClick={() => onCancelCinematicRun(selectedRun.id)} type="button">Cancel Run</button>
-                  </div>
-                ) : null}
-                <div className="diagnostic-stack">
-                  {selectedRun.jobs.map((job) => (
-                    <div key={job.id} className="inline-note">
-                      <strong>{job.kind}</strong>
-                      <span> {job.shotNodeKey} - {job.status}{job.errorMessage ? ` - ${job.errorMessage}` : ''}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
       </aside>
 
       <section className="main-surface graph-surface">
@@ -1848,10 +1833,9 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
             {cinematicGraphs.length === 0 ? <option value="">No cinematic flows</option> : null}
             {cinematicGraphs.map((graph) => <option key={graph.key} value={graph.key}>{graph.name}</option>)}
           </select>
-          <div className="segmented-control">
+          <div className="segmented-control cinematic-content-mode-toggle">
             <button className={contentMode === 'script' ? 'segment-button is-active' : 'segment-button'} onClick={() => setContentMode('script')} type="button">Script</button>
             <button className={contentMode === 'graph' ? 'segment-button is-active' : 'segment-button'} onClick={() => setContentMode('graph')} type="button">Graph</button>
-            <button className={contentMode === 'runs' ? 'segment-button is-active' : 'segment-button'} onClick={() => setContentMode('runs')} type="button">Runs</button>
           </div>
           <select value={graphSettings.presetFamily} onChange={(event) => updateGraphCinematics(buildCinematicSettingsPatchFromPresetFamily(event.target.value as CinematicPresetFamily))}>
             <option value="story_movie_tv">Movie / TV Story</option>
@@ -1964,9 +1948,6 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
             scriptDoc={currentScript}
             validationIssues={currentScriptValidation}
           />
-        ) : null}
-        {contentMode === 'runs' ? (
-          <CinematicRunsSurface assets={assets} currentGraph={currentGraph} runs={currentGraphRuns} selectedRun={selectedRun} onSelectRun={setSelectedRunId} />
         ) : null}
       </section>
 
@@ -2781,58 +2762,6 @@ function ScriptEntityChip({ binding }: { binding: CinematicScriptEntityBinding }
       <EntityIcon id={iconForScriptBindingKind(binding.kind)} />
       <span>{buildScriptEntitySummaryLabel(binding)}</span>
     </span>
-  )
-}
-
-function CinematicRunsSurface({
-  assets,
-  currentGraph,
-  runs,
-  selectedRun,
-  onSelectRun,
-}: {
-  assets: AssetDefinition[]
-  currentGraph: GraphDefinition | null
-  runs: CinematicRun[]
-  selectedRun: CinematicRun | null
-  onSelectRun: (runId: string) => void
-}) {
-  return (
-    <div className="detail-stack">
-      <span className="eyebrow">Runs</span>
-      <h2>{currentGraph?.name ?? 'Cinematic Runs'}</h2>
-      <div className="diagnostic-stack">
-        {runs.length === 0 ? <div className="inline-note">No runs yet for this cinematic flow.</div> : null}
-        {runs.map((run) => (
-          <button key={run.id} className={run.id === selectedRun?.id ? 'rail-button is-active' : 'rail-button'} onClick={() => onSelectRun(run.id)} type="button">
-            <strong>{formatRunLabel(run)}</strong>
-            <span>{run.jobs.length} job{run.jobs.length === 1 ? '' : 's'}</span>
-          </button>
-        ))}
-      </div>
-      {selectedRun ? (
-        <div className="editor-section compact-section">
-          <div className="section-head">
-            <div>
-              <span className="eyebrow">Selected Run</span>
-              <h3>{formatRunLabel(selectedRun)}</h3>
-            </div>
-          </div>
-          <div className="diagnostic-stack">
-            {selectedRun.jobs.map((job) => {
-              const assetKey = job.videoAssetKey ?? job.stillAssetKey ?? null
-              const asset = assetKey ? assets.find((entry) => entry.key === assetKey) ?? null : null
-              return (
-                <div key={job.id} className="inline-note">
-                  <strong>{job.kind}</strong>
-                  <span> {job.shotNodeKey} - {job.status}{asset ? ` - ${asset.name}` : ''}{job.errorMessage ? ` - ${job.errorMessage}` : ''}</span>
-                </div>
-              )
-            })}
-          </div>
-        </div>
-      ) : null}
-    </div>
   )
 }
 

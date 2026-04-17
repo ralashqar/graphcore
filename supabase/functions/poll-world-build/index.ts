@@ -61,6 +61,46 @@ const CANONICAL_TRAVERSAL_TYPES = ['walk', 'climb', 'swim', 'fly', 'mixed'] as c
 const CANONICAL_SCALE_TIERS = ['room', 'site', 'zone', 'region'] as const
 const CANONICAL_PHYSICAL_SUBTYPES = ['prop', 'equipment', 'weapon', 'pickup', 'world_object'] as const
 let worldBuildJobSchemaRuntime: z.ZodTypeAny | null = null
+let getArtStylePresetLabelRuntime: ((presetId: string | null | undefined) => string) | null = null
+let buildCharacterConceptPromptRuntime: ((input: {
+  characterName: string
+  subtype?: string | null
+  archetypeLabel?: string | null
+  conceptArtMode?: 'showcase' | 'continuity' | 'proof_surface' | null
+  conceptVariant?: string | null
+  captureProfile?: string | null
+  artStylePresetLabel?: string | null
+  artStyleDescription?: string | null
+  projectContextDescription?: string | null
+  visualDescription: string
+}) => string) | null = null
+let buildItemConceptPromptRuntime: ((input: {
+  itemName: string
+  physicalSubtype?: string | null
+  archetypeLabel?: string | null
+  worldPlacementRole?: string | null
+  pickupContext?: string | null
+  conceptArtMode?: 'showcase' | 'continuity' | 'proof_surface' | null
+  conceptVariant?: string | null
+  captureProfile?: string | null
+  artStylePresetLabel?: string | null
+  artStyleDescription?: string | null
+  projectContextDescription?: string | null
+  visualDescription: string
+}) => string) | null = null
+let buildEnvironmentConceptPromptRuntime: ((input: {
+  environmentName: string
+  subtype?: string | null
+  archetypeLabel?: string | null
+  lightingProfile?: string | null
+  conceptArtMode?: 'showcase' | 'continuity' | 'proof_surface' | null
+  conceptVariant?: string | null
+  captureProfile?: string | null
+  artStylePresetLabel?: string | null
+  artStyleDescription?: string | null
+  projectContextDescription?: string | null
+  visualDescription: string
+}) => string) | null = null
 
 function normalizeGeneratedToken(value: string) {
   return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
@@ -437,6 +477,15 @@ function promptMakesPropHero(promptText: string, propName: string) {
 }
 
 function conceptPromptFromDefinition(definition: SnapshotDefinition, job: JobRow, snapshot: WorldBuildPollSnapshot) {
+  if (
+    !getArtStylePresetLabelRuntime
+    || !buildCharacterConceptPromptRuntime
+    || !buildItemConceptPromptRuntime
+    || !buildEnvironmentConceptPromptRuntime
+  ) {
+    throw new Error('Visual asset generation helpers are not initialized.')
+  }
+
   const renderBinding = Array.isArray(definition.components)
     ? definition.components.find((component) => component.type === 'render_3d_binding')
     : null
@@ -496,7 +545,7 @@ function conceptPromptFromDefinition(definition: SnapshotDefinition, job: JobRow
       conceptArtMode: conceptArtMode as 'showcase' | 'continuity' | 'proof_surface' | null,
       conceptVariant,
       captureProfile,
-      artStylePresetLabel: getArtStylePresetLabel(artStylePreset),
+      artStylePresetLabel: getArtStylePresetLabelRuntime(artStylePreset),
       artStyleDescription,
       projectContextDescription: snapshot.project.summary,
       visualDescription,
@@ -517,7 +566,7 @@ function conceptPromptFromDefinition(definition: SnapshotDefinition, job: JobRow
         ? String(physicalItemProfile.config.pickupContext)
         : null
 
-    return buildItemConceptPrompt({
+    return buildItemConceptPromptRuntime({
       itemName: definition.name,
       physicalSubtype,
       archetypeLabel: typeof definition.archetypeKey === 'string' ? definition.archetypeKey : null,
@@ -526,7 +575,7 @@ function conceptPromptFromDefinition(definition: SnapshotDefinition, job: JobRow
       conceptArtMode: conceptArtMode as 'showcase' | 'continuity' | 'proof_surface' | null,
       conceptVariant,
       captureProfile,
-      artStylePresetLabel: getArtStylePresetLabel(artStylePreset),
+      artStylePresetLabel: getArtStylePresetLabelRuntime(artStylePreset),
       artStyleDescription,
       projectContextDescription: snapshot.project.summary,
       visualDescription,
@@ -549,7 +598,7 @@ function conceptPromptFromDefinition(definition: SnapshotDefinition, job: JobRow
     view ? `Preferred environment view: ${view}.` : null,
   ].filter((entry): entry is string => Boolean(entry)).join(' ')
 
-  return buildEnvironmentConceptPrompt({
+  return buildEnvironmentConceptPromptRuntime({
     environmentName: definition.name,
     subtype,
     archetypeLabel: typeof definition.archetypeKey === 'string' ? definition.archetypeKey : null,
@@ -557,7 +606,7 @@ function conceptPromptFromDefinition(definition: SnapshotDefinition, job: JobRow
     conceptArtMode: conceptArtMode as 'showcase' | 'continuity' | 'proof_surface' | null,
     conceptVariant,
     captureProfile,
-    artStylePresetLabel: getArtStylePresetLabel(artStylePreset),
+    artStylePresetLabel: getArtStylePresetLabelRuntime(artStylePreset),
     artStyleDescription,
     projectContextDescription: snapshot.project.summary,
     visualDescription: environmentVisualDescription || visualDescription,
@@ -1653,6 +1702,10 @@ Deno.serve(async (request) => {
     worldBuildJobSchemaRuntime = worldBuildJobSchema
     const { getArtStylePresetLabel } = artStylePresetsDomain
     const { buildCharacterConceptPrompt, buildEnvironmentConceptPrompt, buildItemConceptPrompt, extractFalImageUrls } = visualAssetGenerationDomain
+    getArtStylePresetLabelRuntime = getArtStylePresetLabel
+    buildCharacterConceptPromptRuntime = buildCharacterConceptPrompt
+    buildItemConceptPromptRuntime = buildItemConceptPrompt
+    buildEnvironmentConceptPromptRuntime = buildEnvironmentConceptPrompt
     const { requireUserClient } = authModule
     const {
       completeReservedGeneratedImageAsset,

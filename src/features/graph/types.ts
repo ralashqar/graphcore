@@ -41,6 +41,7 @@ export type GraphNodeData = {
   previewUrl: string | null
   conditionSummary: string
   effectSummary: string[]
+  onOpenDefinitionLink?: (() => void) | null
   cinematicCard?: {
     variant: 'entity-ref' | 'composite-ref' | 'storyboard-ref' | 'shot' | 'take'
     iconId?: EntityIconId | null
