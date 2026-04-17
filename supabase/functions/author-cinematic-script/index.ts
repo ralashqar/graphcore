@@ -20,7 +20,10 @@ import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/h
 import { runStructuredWorldBuildModel } from '../_shared/world-build.ts'
 import {
   authorCinematicPlanSkeleton,
+  cinematicCreativeScriptAuthorshipRawSchema,
+  cinematicCreativeScriptAuthorshipSystemPrompt,
   correctUgcPresetSelectionForPrompt,
+  ingestCreativeScriptPlan,
   cinematicShotAuthorshipRawSchema,
   cinematicShotAuthorshipSystemPrompt,
   evaluateCinematicScriptQuality,
@@ -426,6 +429,7 @@ Deno.serve(async (request) => {
         creativeTreatment: effectiveSettings.creativeTreatment,
         hookFamily: effectiveSettings.hookFamily,
         narrationMode: effectiveSettings.narrationMode,
+        authorshipPipeline: effectiveSettings.authorshipPipeline,
         backdropRole: effectiveSettings.backdropRole,
         backdropStrategy: effectiveSettings.backdropStrategy,
         proofMoment: effectiveSettings.proofMoment,
@@ -467,39 +471,81 @@ Deno.serve(async (request) => {
       error_message: null,
     })
 
-    const authoredRaw = await runStructuredWorldBuildModel({
-      model: authorshipModel.model,
-      passLabel: 'Cinematic shot authorship',
-      systemText: cinematicShotAuthorshipSystemPrompt({
-        presetFamily: effectiveSettings.presetFamily,
-        formatSubtype: effectiveSettings.formatSubtype,
-        formulaFamily: effectiveSettings.formulaFamily,
-        dominantTrigger: effectiveSettings.dominantTrigger,
-        proofMoment: effectiveSettings.proofMoment,
-        ctaStyle: effectiveSettings.ctaStyle,
-        contrastAxis: effectiveSettings.contrastAxis,
-        graphSettings: cinematicPlan.graphSettings ?? {},
-        projectArtStylePreset: effectiveSettings.artStylePreset ?? null,
-      }),
-      promptContext: {
-        prompt: batch.prompt,
-        project: payload.snapshot.project,
-        draft: payload.snapshot.draft,
-        gameSpec: payload.snapshot.gameSpec ?? null,
-        requestSummary: batch.request_summary,
-        graphName: cinematicPlan.graphName,
-        graphSummary: cinematicPlan.graphSummary,
-        lockedGraphSettings: effectiveSettings,
-        lockedEntityRefs: cinematicPlan.entityRefs,
-        plannedShots: correctedPlanForAuthorship.shots,
-      },
-      schema: cinematicShotAuthorshipRawSchema,
-      maxOutputTokens: 9000,
-    })
+    const useCreativeScriptPipeline = effectiveSettings.authorshipPipeline === 'ugc_script_ingest_v1'
+    const authoredRaw = useCreativeScriptPipeline
+      ? await runStructuredWorldBuildModel({
+          model: authorshipModel.model,
+          passLabel: 'Cinematic creative script authorship',
+          systemText: cinematicCreativeScriptAuthorshipSystemPrompt({
+            presetFamily: effectiveSettings.presetFamily,
+            formatSubtype: effectiveSettings.formatSubtype,
+            formulaFamily: effectiveSettings.formulaFamily,
+            dominantTrigger: effectiveSettings.dominantTrigger,
+            proofMoment: effectiveSettings.proofMoment,
+            ctaStyle: effectiveSettings.ctaStyle,
+            contrastAxis: effectiveSettings.contrastAxis,
+            graphSettings: cinematicPlan.graphSettings ?? {},
+            projectArtStylePreset: effectiveSettings.artStylePreset ?? null,
+          }),
+          promptContext: {
+            prompt: batch.prompt,
+            project: payload.snapshot.project,
+            draft: payload.snapshot.draft,
+            gameSpec: payload.snapshot.gameSpec ?? null,
+            requestSummary: batch.request_summary,
+            graphName: cinematicPlan.graphName,
+            graphSummary: cinematicPlan.graphSummary,
+            lockedGraphSettings: effectiveSettings,
+            lockedEntityRefs: cinematicPlan.entityRefs,
+            plannedShots: correctedPlanForAuthorship.shots,
+          },
+          schema: cinematicCreativeScriptAuthorshipRawSchema,
+          maxOutputTokens: 9000,
+        })
+      : await runStructuredWorldBuildModel({
+          model: authorshipModel.model,
+          passLabel: 'Cinematic shot authorship',
+          systemText: cinematicShotAuthorshipSystemPrompt({
+            presetFamily: effectiveSettings.presetFamily,
+            formatSubtype: effectiveSettings.formatSubtype,
+            formulaFamily: effectiveSettings.formulaFamily,
+            dominantTrigger: effectiveSettings.dominantTrigger,
+            proofMoment: effectiveSettings.proofMoment,
+            ctaStyle: effectiveSettings.ctaStyle,
+            contrastAxis: effectiveSettings.contrastAxis,
+            graphSettings: cinematicPlan.graphSettings ?? {},
+            projectArtStylePreset: effectiveSettings.artStylePreset ?? null,
+          }),
+          promptContext: {
+            prompt: batch.prompt,
+            project: payload.snapshot.project,
+            draft: payload.snapshot.draft,
+            gameSpec: payload.snapshot.gameSpec ?? null,
+            requestSummary: batch.request_summary,
+            graphName: cinematicPlan.graphName,
+            graphSummary: cinematicPlan.graphSummary,
+            lockedGraphSettings: effectiveSettings,
+            lockedEntityRefs: cinematicPlan.entityRefs,
+            plannedShots: correctedPlanForAuthorship.shots,
+          },
+          schema: cinematicShotAuthorshipRawSchema,
+          maxOutputTokens: 9000,
+        })
+
+    const ingestionResult = useCreativeScriptPipeline
+      ? ingestCreativeScriptPlan({
+          plan: correctedPlanForAuthorship,
+          rawScriptMarkdown: authoredRaw.rawScriptMarkdown,
+        })
+      : {
+          diagnostics: [] as string[],
+          authoredShots: authoredRaw.shots,
+        }
 
     const authoredPlan = authorCinematicPlanSkeleton({
       plan: correctedPlanForAuthorship,
-      authoredShots: authoredRaw.shots,
+      authoredShots: ingestionResult.authoredShots,
+      rawScriptMarkdown: useCreativeScriptPipeline ? authoredRaw.rawScriptMarkdown : correctedPlanForAuthorship.rawScriptMarkdown,
     })
 
     const authoredScriptDoc = cinematicScriptDocSchema.parse(authoredPlan.scriptDoc)
@@ -519,6 +565,7 @@ Deno.serve(async (request) => {
     const nextDiagnostics = Array.from(new Set([
       ...(Array.isArray(batch.diagnostics) ? batch.diagnostics : []),
       ...(authoredRaw.diagnostics ?? []),
+      ...ingestionResult.diagnostics,
       ...qualityReport.failures,
     ]))
 
@@ -537,6 +584,8 @@ Deno.serve(async (request) => {
         maxRepairAttempts,
         repairQueuedAt: nextPhase === 'needs_repair' ? new Date().toISOString() : null,
         plannerDiagnostics: authoredRaw.diagnostics ?? [],
+        creativeScriptDiagnostics: useCreativeScriptPipeline ? authoredRaw.diagnostics ?? [] : [],
+        ingestorDiagnostics: ingestionResult.diagnostics,
         authoringDiagnostics: qualityReport.failures,
         authoringDiagnosticEntries: qualityReport.diagnostics,
         qualityHardFailures: qualityReport.hardFailures,
@@ -544,6 +593,7 @@ Deno.serve(async (request) => {
         authorshipModelRequested: authorshipModel.requestedModel,
         authorshipModelUsed: authorshipModel.model,
         authorshipModelTier: authorshipModel.qualityTier,
+        authorshipPipeline: effectiveSettings.authorshipPipeline,
         correctedPresetFamily: effectiveSettings.presetFamily,
         correctedFormatSubtype: effectiveSettings.formatSubtype,
       },

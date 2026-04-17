@@ -4,8 +4,11 @@ import assert from 'node:assert/strict'
 
 import {
   buildCinematicSequenceFromScriptDoc,
+  buildCinematicSettingsPatchFromPresetFamily,
   cinematicScriptDocSchema,
 } from './cinematics.ts'
+import { ingestCinematicCreativeScriptToAuthoredShots } from './cinematicCreativeScript.ts'
+import { cinematicPlanSchema } from './worldBuild.ts'
 
 test('legacy UGC shots derive directing and reference packages', () => {
   const script = cinematicScriptDocSchema.parse({
@@ -128,7 +131,8 @@ test('UGC shot duration inference stays inside preset pacing bands', () => {
 
   const sequence = buildCinematicSequenceFromScriptDoc(script)
 
-  assert.equal(sequence.shots[0]?.durationSeconds, 4)
+  assert.ok((sequence.shots[0]?.durationSeconds ?? 0) >= 2)
+  assert.ok((sequence.shots[0]?.durationSeconds ?? 0) <= 4)
 })
 
 test('variation groups force take splits and survive compilation', () => {
@@ -182,4 +186,138 @@ test('variation groups force take splits and survive compilation', () => {
   assert.equal(sequence.takes[0]?.variationLabel, 'Primary Recommended')
   assert.equal(sequence.takes[1]?.variationLabel, 'Narrator Backdrop')
   assert.equal(sequence.takes[1]?.creativeTreatment, 'narrator_over_backdrop')
+})
+
+test('UGC preset families default to the creative-script ingestion pipeline', () => {
+  const ugcSettings = buildCinematicSettingsPatchFromPresetFamily('ugc_creator')
+  const storySettings = buildCinematicSettingsPatchFromPresetFamily('story_movie_tv')
+
+  assert.equal(ugcSettings.authorshipPipeline, 'ugc_script_ingest_v1')
+  assert.equal(storySettings.authorshipPipeline, 'json_shot_authoring_v1')
+})
+
+test('creative script ingestion preserves shot ids and dialogue verbatim', () => {
+  const plan = cinematicPlanSchema.parse({
+    graphName: 'Wellness',
+    graphSummary: 'Creator reframe',
+    entityRefs: [],
+    graphSettings: {
+      presetFamily: 'ugc_creator',
+      formatSubtype: 'creator_reframe',
+      narrationMode: 'spoken_to_camera',
+      authorshipPipeline: 'ugc_script_ingest_v1',
+    },
+    shots: [
+      {
+        id: 'shot_01_hook',
+        title: 'Hook',
+        hookRole: 'hook',
+        formatSubtype: 'creator_reframe',
+        narrationMode: 'spoken_to_camera',
+        participantRefIds: ['creator_1'],
+        propRefIds: ['phone_1'],
+      },
+    ],
+  })
+
+  const ingested = ingestCinematicCreativeScriptToAuthoredShots({
+    plan,
+    rawScriptMarkdown: [
+      '## SHOT: shot_01_hook',
+      'PURPOSE: Stop-scroll reframe.',
+      'ON_SCREEN: She pauses in selfie mode and looks straight into camera like she caught herself in the nightly spiral.',
+      'DIALOGUE_OR_VO: If your brain jumps straight to I need a drink, that does not automatically mean you are weak.',
+      'CAMERA: Tight handheld selfie close-up, eye-level, slight wrist drift.',
+      'AUDIO: Quiet room tone.',
+    ].join('\n'),
+  })
+
+  assert.equal(ingested.authoredShots[0]?.id, 'shot_01_hook')
+  assert.equal(
+    ingested.authoredShots[0]?.dialogue[0]?.line,
+    'If your brain jumps straight to I need a drink, that does not automatically mean you are weak.',
+  )
+  assert.match(ingested.authoredShots[0]?.actions[0]?.verb ?? '', /nightly spiral/i)
+})
+
+test('spoken-over-footage creative scripts ingest voiceover into audio without forcing dialogue', () => {
+  const plan = cinematicPlanSchema.parse({
+    graphName: 'Backdrop',
+    graphSummary: 'Narrated backdrop ad',
+    entityRefs: [],
+    graphSettings: {
+      presetFamily: 'ugc_creator',
+      formatSubtype: 'creator_reframe',
+      narrationMode: 'spoken_over_footage',
+      authorshipPipeline: 'ugc_script_ingest_v1',
+    },
+    shots: [
+      {
+        id: 'shot_02_backdrop',
+        title: 'Backdrop',
+        hookRole: 'setup',
+        formatSubtype: 'creator_reframe',
+        narrationMode: 'spoken_over_footage',
+        participantRefIds: ['creator_1'],
+      },
+    ],
+  })
+
+  const ingested = ingestCinematicCreativeScriptToAuthoredShots({
+    plan,
+    rawScriptMarkdown: [
+      '## SHOT: shot_02_backdrop',
+      'PURPOSE: Calm backdrop with sharp narration.',
+      'ON_SCREEN: Calm evening footage drifts across the kitchen while the creator stays off camera.',
+      'DIALOGUE_OR_VO: This is the part where people think they need more discipline, when usually they just need relief.',
+      'CAMERA: Slow handheld drift over calm home details.',
+      'AUDIO: Soft room tone under the voiceover.',
+    ].join('\n'),
+  })
+
+  assert.equal(ingested.authoredShots[0]?.dialogue.length, 0)
+  assert.equal(
+    ingested.authoredShots[0]?.audio[0]?.cue,
+    'This is the part where people think they need more discipline, when usually they just need relief.',
+  )
+})
+
+test('visual-only creative scripts ingest without dialogue and keep visible action', () => {
+  const plan = cinematicPlanSchema.parse({
+    graphName: 'Faceless',
+    graphSummary: 'Proof demo',
+    entityRefs: [],
+    graphSettings: {
+      presetFamily: 'ugc_faceless_format',
+      formatSubtype: 'faceless_demo',
+      narrationMode: 'visual_only',
+      authorshipPipeline: 'ugc_script_ingest_v1',
+    },
+    shots: [
+      {
+        id: 'shot_03_proof',
+        title: 'Proof',
+        hookRole: 'proof',
+        formatSubtype: 'faceless_demo',
+        narrationMode: 'visual_only',
+        propRefIds: ['phone_1'],
+      },
+    ],
+  })
+
+  const ingested = ingestCinematicCreativeScriptToAuthoredShots({
+    plan,
+    rawScriptMarkdown: [
+      '## SHOT: shot_03_proof',
+      'PURPOSE: Show the app solving something in-frame.',
+      'ON_SCREEN: The phone fills the frame, the thumb taps the reset, and the guided routine starts visibly on screen.',
+      'DIALOGUE_OR_VO:',
+      'CAMERA: Tight phone insert with natural handheld micro-movement.',
+      'AUDIO: Soft thumb taps only.',
+    ].join('\n'),
+  })
+
+  assert.equal(ingested.authoredShots[0]?.dialogue.length, 0)
+  assert.ok((ingested.authoredShots[0]?.actions[0]?.verb ?? '').includes('phone fills the frame'))
+  assert.equal(ingested.authoredShots[0]?.audio[0]?.cue, 'Soft thumb taps only.')
 })

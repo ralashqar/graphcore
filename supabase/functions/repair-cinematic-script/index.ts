@@ -12,10 +12,13 @@ import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/h
 import { runStructuredWorldBuildModel } from '../_shared/world-build.ts'
 import {
   authorCinematicPlanSkeleton,
+  cinematicCreativeScriptAuthorshipRawSchema,
+  cinematicCreativeScriptAuthorshipSystemPrompt,
   cinematicShotAuthorshipRawSchema,
   cinematicShotAuthorshipSystemPrompt,
   correctUgcPresetSelectionForPrompt,
   evaluateCinematicScriptQuality,
+  ingestCreativeScriptPlan,
 } from '../_shared/world-build-cinematics.ts'
 
 type BatchRow = {
@@ -377,47 +380,104 @@ Deno.serve(async (request) => {
       error_message: null,
     })
 
-    const repairedRaw = await runStructuredWorldBuildModel({
-      model: repairModel.model,
-      passLabel: 'Cinematic shot repair',
-      systemText: [
-        cinematicShotAuthorshipSystemPrompt({
-          presetFamily: effectiveSettings.presetFamily,
-          formatSubtype: effectiveSettings.formatSubtype,
-          formulaFamily: effectiveSettings.formulaFamily,
-          dominantTrigger: effectiveSettings.dominantTrigger,
-          proofMoment: effectiveSettings.proofMoment,
-          ctaStyle: effectiveSettings.ctaStyle,
-          contrastAxis: effectiveSettings.contrastAxis,
-          graphSettings: cinematicPlan.graphSettings ?? {},
-          projectArtStylePreset: effectiveSettings.artStylePreset ?? null,
-        }),
-        `Repair scope: only repair these shot ids: ${targetShotIds.join(', ')}.`,
-        payload.failureCategories.length > 0 ? `Target these failure categories: ${payload.failureCategories.join(', ')}.` : 'Target the currently failing authored fields only.',
-        payload.fieldScopes.length > 0 ? `Only rewrite these field scopes when possible: ${payload.fieldScopes.join(', ')}.` : 'Repair whichever authored fields are needed to resolve the failures.',
-        'Do not change unaffected shots.',
-      ].join('\n'),
-      promptContext: {
-        prompt: batch.prompt,
-        project: payload.snapshot.project,
-        draft: payload.snapshot.draft,
-        gameSpec: payload.snapshot.gameSpec ?? null,
-        requestSummary: batch.request_summary,
-        graphName: cinematicPlan.graphName,
-        graphSummary: cinematicPlan.graphSummary,
-        lockedGraphSettings: effectiveSettings,
-        lockedEntityRefs: cinematicPlan.entityRefs,
-        plannedShots: targetedShots,
-        currentShotState: currentScriptDoc.shots.filter((shot) => targetShotIds.includes(shot.id)),
-        currentDiagnostics: currentQuality.diagnostics.filter((entry) => !entry.shotId || targetShotIds.includes(entry.shotId)),
-      },
-      schema: cinematicShotAuthorshipRawSchema,
-      maxOutputTokens: 9000,
-    })
+    const useCreativeScriptPipeline = effectiveSettings.authorshipPipeline === 'ugc_script_ingest_v1'
+    const repairedRaw = useCreativeScriptPipeline
+      ? await runStructuredWorldBuildModel({
+          model: repairModel.model,
+          passLabel: 'Cinematic creative script repair',
+          systemText: [
+            cinematicCreativeScriptAuthorshipSystemPrompt({
+              presetFamily: effectiveSettings.presetFamily,
+              formatSubtype: effectiveSettings.formatSubtype,
+              formulaFamily: effectiveSettings.formulaFamily,
+              dominantTrigger: effectiveSettings.dominantTrigger,
+              proofMoment: effectiveSettings.proofMoment,
+              ctaStyle: effectiveSettings.ctaStyle,
+              contrastAxis: effectiveSettings.contrastAxis,
+              graphSettings: cinematicPlan.graphSettings ?? {},
+              projectArtStylePreset: effectiveSettings.artStylePreset ?? null,
+            }),
+            `Repair scope: only repair these shot ids: ${targetShotIds.join(', ')}.`,
+            payload.failureCategories.length > 0 ? `Target these failure categories: ${payload.failureCategories.join(', ')}.` : 'Target the currently failing authored fields only.',
+            payload.fieldScopes.length > 0 ? `Only rewrite these field scopes when possible: ${payload.fieldScopes.join(', ')}.` : 'Repair whichever authored fields are needed to resolve the failures.',
+            'Do not change unaffected shots.',
+          ].join('\n'),
+          promptContext: {
+            prompt: batch.prompt,
+            project: payload.snapshot.project,
+            draft: payload.snapshot.draft,
+            gameSpec: payload.snapshot.gameSpec ?? null,
+            requestSummary: batch.request_summary,
+            graphName: cinematicPlan.graphName,
+            graphSummary: cinematicPlan.graphSummary,
+            lockedGraphSettings: effectiveSettings,
+            lockedEntityRefs: cinematicPlan.entityRefs,
+            plannedShots: targetedShots,
+            currentShotState: currentScriptDoc.shots.filter((shot) => targetShotIds.includes(shot.id)),
+            currentDiagnostics: currentQuality.diagnostics.filter((entry) => !entry.shotId || targetShotIds.includes(entry.shotId)),
+          },
+          schema: cinematicCreativeScriptAuthorshipRawSchema,
+          maxOutputTokens: 9000,
+        })
+      : await runStructuredWorldBuildModel({
+          model: repairModel.model,
+          passLabel: 'Cinematic shot repair',
+          systemText: [
+            cinematicShotAuthorshipSystemPrompt({
+              presetFamily: effectiveSettings.presetFamily,
+              formatSubtype: effectiveSettings.formatSubtype,
+              formulaFamily: effectiveSettings.formulaFamily,
+              dominantTrigger: effectiveSettings.dominantTrigger,
+              proofMoment: effectiveSettings.proofMoment,
+              ctaStyle: effectiveSettings.ctaStyle,
+              contrastAxis: effectiveSettings.contrastAxis,
+              graphSettings: cinematicPlan.graphSettings ?? {},
+              projectArtStylePreset: effectiveSettings.artStylePreset ?? null,
+            }),
+            `Repair scope: only repair these shot ids: ${targetShotIds.join(', ')}.`,
+            payload.failureCategories.length > 0 ? `Target these failure categories: ${payload.failureCategories.join(', ')}.` : 'Target the currently failing authored fields only.',
+            payload.fieldScopes.length > 0 ? `Only rewrite these field scopes when possible: ${payload.fieldScopes.join(', ')}.` : 'Repair whichever authored fields are needed to resolve the failures.',
+            'Do not change unaffected shots.',
+          ].join('\n'),
+          promptContext: {
+            prompt: batch.prompt,
+            project: payload.snapshot.project,
+            draft: payload.snapshot.draft,
+            gameSpec: payload.snapshot.gameSpec ?? null,
+            requestSummary: batch.request_summary,
+            graphName: cinematicPlan.graphName,
+            graphSummary: cinematicPlan.graphSummary,
+            lockedGraphSettings: effectiveSettings,
+            lockedEntityRefs: cinematicPlan.entityRefs,
+            plannedShots: targetedShots,
+            currentShotState: currentScriptDoc.shots.filter((shot) => targetShotIds.includes(shot.id)),
+            currentDiagnostics: currentQuality.diagnostics.filter((entry) => !entry.shotId || targetShotIds.includes(entry.shotId)),
+          },
+          schema: cinematicShotAuthorshipRawSchema,
+          maxOutputTokens: 9000,
+        })
+
+    const planForRepair = {
+      ...cinematicPlan,
+      shots: cinematicPlan.shots.map((shot) => (
+        targetShotIds.includes(shot.id)
+          ? targetedShots.find((targeted) => targeted.id === shot.id) ?? shot
+          : shot
+      )),
+    }
+    const ingestionResult = useCreativeScriptPipeline
+      ? ingestCreativeScriptPlan({
+          plan: planForRepair,
+          rawScriptMarkdown: repairedRaw.rawScriptMarkdown,
+        })
+      : {
+          diagnostics: [] as string[],
+          authoredShots: repairedRaw.shots,
+        }
 
     const repairedPlan = authorCinematicPlanSkeleton({
       plan: {
-        ...cinematicPlan,
+        ...planForRepair,
         graphSettings: {
           ...(cinematicPlan.graphSettings ?? {}),
           presetFamily: effectiveSettings.presetFamily,
@@ -427,19 +487,16 @@ Deno.serve(async (request) => {
           creativeTreatment: effectiveSettings.creativeTreatment,
           hookFamily: effectiveSettings.hookFamily,
           narrationMode: effectiveSettings.narrationMode,
+          authorshipPipeline: effectiveSettings.authorshipPipeline,
           backdropRole: effectiveSettings.backdropRole,
           backdropStrategy: effectiveSettings.backdropStrategy,
           proofMoment: effectiveSettings.proofMoment,
           ctaStyle: effectiveSettings.ctaStyle,
           contrastAxis: effectiveSettings.contrastAxis,
         },
-        shots: cinematicPlan.shots.map((shot) => (
-          targetShotIds.includes(shot.id)
-            ? targetedShots.find((targeted) => targeted.id === shot.id) ?? shot
-            : shot
-        )),
       },
-      authoredShots: repairedRaw.shots,
+      authoredShots: ingestionResult.authoredShots,
+      rawScriptMarkdown: useCreativeScriptPipeline ? repairedRaw.rawScriptMarkdown : cinematicPlan.rawScriptMarkdown,
     })
 
     const repairedScriptDoc = cinematicScriptDocSchema.parse(repairedPlan.scriptDoc)
@@ -456,6 +513,7 @@ Deno.serve(async (request) => {
     const nextDiagnostics = Array.from(new Set([
       ...(Array.isArray(batch.diagnostics) ? batch.diagnostics : []),
       ...(repairedRaw.diagnostics ?? []),
+      ...ingestionResult.diagnostics,
       ...qualityReport.failures,
     ]))
 
@@ -486,9 +544,11 @@ Deno.serve(async (request) => {
         repairShotIds: targetShotIds,
         repairFailureCategories: payload.failureCategories,
         repairFieldScopes: payload.fieldScopes,
+        ingestorDiagnostics: ingestionResult.diagnostics,
         repairModelRequested: repairModel.requestedModel,
         repairModelUsed: repairModel.model,
         repairModelTier: repairModel.qualityTier,
+        authorshipPipeline: effectiveSettings.authorshipPipeline,
       },
       error_message: null,
     })

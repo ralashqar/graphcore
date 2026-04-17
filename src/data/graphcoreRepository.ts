@@ -2527,32 +2527,21 @@ export async function proposePatch(request: PromptPatchRequest): Promise<PromptP
 }
 
 export async function applyPatchProposal(snapshot: ProjectSnapshot, operations: PatchOperation[], patchSetId?: string) {
-  const {
-    data: { session },
-  } = await supabase.auth.getSession()
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before applying a patch.')
 
-  if (!session || !isLiveSnapshot(snapshot)) {
+  if (!isLiveSnapshot(snapshot)) {
     return { source: 'local' as const }
   }
 
-  const response = await supabase.functions.invoke('apply-patch', {
-    headers: {
-      Authorization: `Bearer ${session.access_token}`,
-    },
-    body: {
-      draftId: snapshot.draft.id,
-      patchSetId,
-      operations,
-    },
-  })
-
-  if (response.error) {
-    throw new Error(response.error.message)
-  }
+  const response = await invokeAuthedFunctionDirect('apply-patch', {
+    draftId: snapshot.draft.id,
+    patchSetId,
+    operations,
+  }, session)
 
   return {
     source: 'supabase' as const,
-    data: response.data,
+    data: response,
   }
 }
 

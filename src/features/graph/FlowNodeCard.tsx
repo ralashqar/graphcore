@@ -113,7 +113,7 @@ export function FlowNodeCard({ data }: { data: GraphNodeData }) {
                             ) : null}
                             {shot.lines && shot.lines.length > 0 ? (
                               <div className="flow-node-line-stack">
-                                {shot.lines.slice(0, 3).map((line, lineIndex) => (
+                                {shot.lines.map((line, lineIndex) => (
                                   typeof line === 'string' ? (
                                     <p key={`${line}-${lineIndex}`}>{line}</p>
                                   ) : line.type === 'dialogue' ? (

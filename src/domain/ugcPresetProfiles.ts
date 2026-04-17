@@ -1328,6 +1328,8 @@ export function resolveUgcShotCommunicationContract(input: {
   let minimumSignal: UgcShotCommunicationContract['minimumSignal'] = 'visible_action_or_proof'
   if (requiresSpokenDialogue) {
     minimumSignal = 'spoken_dialogue'
+  } else if (canBeFullyVisual && overlayExpectation !== 'required') {
+    minimumSignal = 'visible_action_or_proof'
   } else if (canUseVoiceover || audioExpectation === 'required' || audioExpectation === 'preferred') {
     minimumSignal = 'spoken_audio_or_dialogue'
   } else if (canUseOverlay || overlayExpectation === 'required' || overlayExpectation === 'preferred') {

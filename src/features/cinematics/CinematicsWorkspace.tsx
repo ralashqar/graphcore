@@ -897,6 +897,26 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
     }
     return null
   }, [currentGraphGeneration?.jobId, worldBuildBatches])
+  const currentGraphRawScript = useMemo(() => {
+    const metadataRawScript =
+      currentGraph && typeof currentGraph.metadata === 'object' && currentGraph.metadata !== null
+        ? (currentGraph.metadata as { cinematicAuthoring?: { rawScriptMarkdown?: unknown } }).cinematicAuthoring?.rawScriptMarkdown
+        : null
+    if (typeof metadataRawScript === 'string' && metadataRawScript.trim().length > 0) {
+      return metadataRawScript
+    }
+    const jobId = currentGraphGeneration?.jobId
+    if (!jobId) return ''
+    for (const batch of worldBuildBatches) {
+      const job = batch.jobs.find((entry) => entry.id === jobId)
+      if (!job) continue
+      const rawScriptMarkdown = batch.cinematicPlan?.rawScriptMarkdown
+      if (typeof rawScriptMarkdown === 'string' && rawScriptMarkdown.trim().length > 0) {
+        return rawScriptMarkdown
+      }
+    }
+    return ''
+  }, [currentGraph, currentGraphGeneration?.jobId, worldBuildBatches])
   const currentNode = currentGraph?.nodes.find((node) => node.key === selectedNode?.key) ?? null
   const currentEdge = currentGraph?.edges.find((edge) => edge.key === selectedEdge?.key) ?? null
   const currentGraphRuns = useMemo(
@@ -1139,31 +1159,49 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
               ? [{ label: 'clip rendering', tone: 'muted' as const }]
               : []),
           ]
-          const dialogueLine = shot.dialogue[0]
-          const actionBeat = shot.actions[0]
-          const actionSummary = actionBeat
-            ? truncateGraphLine([
-                actionBeat.actorRefId ? referenceLabelById.get(actionBeat.actorRefId)?.label ?? 'Actor' : 'Actor',
-                actionBeat.verb,
-                actionBeat.targetRefId ? referenceLabelById.get(actionBeat.targetRefId)?.label ?? 'Target' : null,
-                !actionBeat.targetRefId && actionBeat.stagingNotes.trim() ? actionBeat.stagingNotes.trim() : null,
-              ].filter(Boolean).join(' '), 78)
-            : (shot.beat.trim() ? truncateGraphLine(shot.beat, 82) : '')
+          const actionLines = shot.actions
+            .map((action) => {
+              const actorLabel = action.actorRefId ? referenceLabelById.get(action.actorRefId)?.label ?? 'Actor' : 'Actor'
+              const targetLabel = action.targetRefId ? referenceLabelById.get(action.targetRefId)?.label ?? 'Target' : null
+              const stagingNotes = !action.targetRefId && action.stagingNotes.trim() ? action.stagingNotes.trim() : null
+              const text = [
+                actorLabel,
+                action.verb,
+                targetLabel,
+                stagingNotes,
+              ].filter(Boolean).join(' ').trim()
+              return text.length > 0 ? {
+                type: 'action' as const,
+                text,
+              } : null
+            })
+            .filter((line): line is { type: 'action'; text: string } => line !== null)
+          const dialogueLines = shot.dialogue
+            .map((line) => {
+              const text = line.line.trim()
+              if (!text) return null
+              return {
+                type: 'dialogue' as const,
+                speaker: line.speakerRefId ? referenceLabelById.get(line.speakerRefId)?.label ?? 'Speaker' : 'Speaker',
+                text,
+              }
+            })
+            .filter((line): line is { type: 'dialogue'; speaker: string; text: string } => line !== null)
+          const fallbackBeatLine = shot.beat.trim()
+            ? [{
+                type: 'action' as const,
+                text: shot.beat.trim(),
+              }]
+            : []
           return {
             id: shot.id,
             title: shot.title,
             kicker: truncateGraphLine(`${shot.hookRole ?? shot.shotType} · ${shot.durationSeconds}s`, 56),
             chips: shotStatusChips,
             lines: [
-              ...(actionSummary ? [{
-                type: 'action' as const,
-                text: actionSummary,
-              }] : []),
-              ...(dialogueLine ? [{
-                type: 'dialogue' as const,
-                speaker: dialogueLine.speakerRefId ? referenceLabelById.get(dialogueLine.speakerRefId)?.label ?? 'Speaker' : 'Speaker',
-                text: truncateGraphLine(dialogueLine.line, 72),
-              }] : []),
+              ...actionLines,
+              ...dialogueLines,
+              ...(actionLines.length === 0 && dialogueLines.length === 0 ? fallbackBeatLine : []),
             ],
           }
         })
@@ -1774,6 +1812,7 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
         {contentMode === 'script' ? (
           <ScriptPreviewSurface
             currentGraph={currentGraph}
+            rawScriptMarkdown={currentGraphRawScript}
             onRebuild={rebuildCurrentGraphFromScript}
             onUpdateScript={updateCurrentScript}
             referenceOptions={currentScriptReferenceOptions}
@@ -2012,6 +2051,7 @@ function CinematicGraphInspector({
 
 function ScriptPreviewSurface({
   currentGraph,
+  rawScriptMarkdown,
   onRebuild,
   onUpdateScript,
   referenceOptions,
@@ -2020,6 +2060,7 @@ function ScriptPreviewSurface({
   validationIssues,
 }: {
   currentGraph: GraphDefinition | null
+  rawScriptMarkdown: string
   onRebuild: () => void
   onUpdateScript: (mutator: (scriptDoc: CinematicScriptDoc) => CinematicScriptDoc) => void
   referenceOptions: ScriptReferenceOption[]
@@ -2135,6 +2176,12 @@ function ScriptPreviewSurface({
           backdropStrategy: '',
           variationGroupId: '',
           variationLabel: '',
+          shotJob: '',
+          targetDurationSeconds: null,
+          minDurationSeconds: null,
+          maxDurationSeconds: null,
+          cutTrigger: '',
+          communicationGoal: '',
           hookType: '',
           targetEmotion: '',
           personaStyle: '',
@@ -2201,6 +2248,9 @@ function ScriptPreviewSurface({
             {showRawScript ? 'Hide JSON' : 'Preview JSON'}
           </button>
           <button className="ghost-button compact" onClick={() => void navigator.clipboard.writeText(jsonExport)} type="button">Copy JSON</button>
+          {rawScriptMarkdown.trim().length > 0 ? (
+            <button className="ghost-button compact" onClick={() => void navigator.clipboard.writeText(rawScriptMarkdown)} type="button">Copy Raw Script</button>
+          ) : null}
           <button className="primary-button compact" disabled={validationErrors.length > 0 || orderedShots.length === 0} onClick={onRebuild} type="button">Rebuild Runtime Graph</button>
         </div>
       </div>
@@ -2209,6 +2259,7 @@ function ScriptPreviewSurface({
         Shot and take edits are canonical and save immediately. The graph is a compiled projection and stays unchanged until you rebuild the runtime graph.
       </div>
       <div className="inline-note">JSON is exposed as a take-first nested document for review and export; the internal authored model still keeps stable shots and derived takes.</div>
+      {rawScriptMarkdown.trim().length > 0 ? <div className="inline-note">Raw script shows the authored creative-script pass before ingestion into the canonical shot/take model.</div> : null}
       {scriptDirty ? <div className="inline-note is-warning">Script changed. Rebuild graph to sync runtime projection.</div> : null}
       {validationIssues.length > 0 ? (
         <div className="diagnostic-stack">
@@ -2229,6 +2280,12 @@ function ScriptPreviewSurface({
             <span>Take JSON</span>
             <textarea readOnly rows={20} value={jsonExport} />
           </label>
+          {rawScriptMarkdown.trim().length > 0 ? (
+            <label className="field-block full-width">
+              <span>Raw Authored Script</span>
+              <textarea readOnly rows={18} value={rawScriptMarkdown} />
+            </label>
+          ) : null}
         </div>
       ) : null}
 

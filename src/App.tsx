@@ -1655,6 +1655,19 @@ export default function App() {
       }
 
       const currentGraph = nextSnapshot.graphs.find((graph) => graph.key === graphKey) ?? null
+      if (!currentGraph) {
+        console.warn('[GraphCore] cinematic authored plan is ready but the target graph is missing from the live snapshot. Refreshing before apply-patch.', {
+          batchId: latestBatch.id,
+          jobId: latestCinematicJob.id,
+          graphKey,
+          phase: latestPhase,
+        })
+        const refreshedState = await refreshWorkspaceState(undefined, { ignoreUnsavedCache: true })
+        if (refreshedState.source === 'supabase') {
+          return refreshedState.snapshot
+        }
+        return nextSnapshot
+      }
       const currentGeneration =
         currentGraph && typeof currentGraph.metadata?.generation === 'object' && currentGraph.metadata.generation !== null
           ? currentGraph.metadata.generation as Record<string, unknown>
@@ -1687,6 +1700,7 @@ export default function App() {
             phase: 'completed',
             scriptDirty: false,
             parsedShotCount: authoredPlan.scriptDoc.shots.length,
+            rawScriptMarkdown: authoredPlan.rawScriptMarkdown ?? '',
             diagnostics:
               latestCinematicJob.resultContext && typeof latestCinematicJob.resultContext === 'object' && Array.isArray(latestCinematicJob.resultContext.authoringDiagnostics)
                 ? latestCinematicJob.resultContext.authoringDiagnostics
@@ -1699,11 +1713,22 @@ export default function App() {
         throw new Error(`Cinematic graph "${graphKey}" compiled with zero takes. Refusing to persist invalid cinematic output.`)
       }
 
-      await workspaceService.applyPatchProposal(nextSnapshot, [{
-        op: 'update_graph',
-        key: graphKey,
-        changes: compiledGraph as unknown as Record<string, unknown>,
-      }])
+      try {
+        await workspaceService.applyPatchProposal(nextSnapshot, [{
+          op: 'update_graph',
+          key: graphKey,
+          changes: compiledGraph as unknown as Record<string, unknown>,
+        }])
+      } catch (applyError) {
+        console.error('[GraphCore] cinematic graph apply-patch failed.', {
+          batchId: latestBatch.id,
+          jobId: latestCinematicJob.id,
+          graphKey,
+          phase: latestPhase,
+          error: applyError,
+        })
+        throw applyError
+      }
 
       nextSnapshot = normalizeSnapshot({
         ...applyPatchOperations(nextSnapshot, [{

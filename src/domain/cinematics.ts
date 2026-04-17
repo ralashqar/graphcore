@@ -88,6 +88,10 @@ export const cinematicNarrationModeSchema = z.enum([
   'sparse_overlay',
   'visual_only',
 ])
+export const cinematicAuthorshipPipelineSchema = z.enum([
+  'json_shot_authoring_v1',
+  'ugc_script_ingest_v1',
+])
 export const cinematicBackdropRoleSchema = z.enum([
   'engagement_backdrop',
   'proof_backdrop',
@@ -165,11 +169,20 @@ export const cinematicSettingsSchema = z.object({
   creativeTreatment: z.preprocess(coerceEnumLikeValue(cinematicCreativeTreatmentSchema.options), cinematicCreativeTreatmentSchema.nullable()).default(null),
   hookFamily: z.preprocess(coerceEnumLikeValue(cinematicHookFamilySchema.options), cinematicHookFamilySchema.nullable()).default(null),
   narrationMode: z.preprocess(coerceEnumLikeValue(cinematicNarrationModeSchema.options), cinematicNarrationModeSchema.nullable()).default(null),
+  authorshipPipeline: z.preprocess(coerceEnumLikeValue(cinematicAuthorshipPipelineSchema.options), cinematicAuthorshipPipelineSchema).default('json_shot_authoring_v1'),
   backdropRole: z.preprocess(coerceEnumLikeValue(cinematicBackdropRoleSchema.options), cinematicBackdropRoleSchema.nullable()).default(null),
   backdropStrategy: z.string().default(''),
   contrastAxis: z.string().default(''),
   proofMoment: z.string().default(''),
   ctaStyle: z.string().default(''),
+  targetTotalDurationSeconds: z.number().int().positive().max(90).nullable().default(null),
+  targetTotalDurationRangeSeconds: z.tuple([z.number().int().positive(), z.number().int().positive()]).nullable().default(null),
+  targetShotCount: z.number().int().positive().max(20).nullable().default(null),
+  targetShotCountRange: z.tuple([z.number().int().positive(), z.number().int().positive()]).nullable().default(null),
+  proofDeadlineShotIndex: z.number().int().positive().max(20).nullable().default(null),
+  idealShotDurationRangeSeconds: z.tuple([z.number().int().positive(), z.number().int().positive()]).nullable().default(null),
+  maxDialogueWordsPerShot: z.number().int().positive().max(120).nullable().default(null),
+  maxActionBeatsPerShot: z.number().int().positive().max(10).nullable().default(null),
   specializationMode: cinematicSpecializationModeSchema.default('story'),
 })
 
@@ -323,6 +336,12 @@ export const cinematicScriptShotSchema = z.object({
   backdropStrategy: z.string().default(''),
   variationGroupId: z.string().default(''),
   variationLabel: z.string().default(''),
+  shotJob: z.string().default(''),
+  targetDurationSeconds: z.number().int().positive().max(15).nullable().default(null),
+  minDurationSeconds: z.number().int().positive().max(15).nullable().default(null),
+  maxDurationSeconds: z.number().int().positive().max(15).nullable().default(null),
+  cutTrigger: z.string().default(''),
+  communicationGoal: z.string().default(''),
   hookType: z.string().default(''),
   targetEmotion: z.string().default(''),
   personaStyle: z.string().default(''),
@@ -422,6 +441,12 @@ export const cinematicShotSpecSchema = z.object({
   backdropStrategy: z.string().default(''),
   variationGroupId: z.string().default(''),
   variationLabel: z.string().default(''),
+  shotJob: z.string().default(''),
+  targetDurationSeconds: z.number().int().positive().max(15).nullable().default(null),
+  minDurationSeconds: z.number().int().positive().max(15).nullable().default(null),
+  maxDurationSeconds: z.number().int().positive().max(15).nullable().default(null),
+  cutTrigger: z.string().default(''),
+  communicationGoal: z.string().default(''),
   hookType: z.string().default(''),
   targetEmotion: z.string().default(''),
   personaStyle: z.string().default(''),
@@ -896,10 +921,45 @@ export function getCinematicHookFamilyLabel(hookFamily: CinematicHookFamily) {
   }
 }
 
+function buildUgcSettingsPacingPatch(
+  formatSubtype: CinematicFormatSubtype | null,
+  presetFamily: CinematicPresetFamily,
+): Pick<CinematicSettings, 'targetTotalDurationSeconds' | 'targetTotalDurationRangeSeconds' | 'targetShotCount' | 'targetShotCountRange' | 'proofDeadlineShotIndex' | 'idealShotDurationRangeSeconds' | 'maxDialogueWordsPerShot' | 'maxActionBeatsPerShot'> {
+  const profile = getUgcPresetProfile(formatSubtype, presetFamily)
+  if (!profile) {
+    return {
+      targetTotalDurationSeconds: null,
+      targetTotalDurationRangeSeconds: null,
+      targetShotCount: null,
+      targetShotCountRange: null,
+      proofDeadlineShotIndex: null,
+      idealShotDurationRangeSeconds: null,
+      maxDialogueWordsPerShot: null,
+      maxActionBeatsPerShot: null,
+    }
+  }
+  const targetTotalDurationRangeSeconds = profile.pacingContract.targetTotalDurationRangeSeconds
+  const targetShotCountRange = profile.pacingContract.targetShotCountRange
+  return {
+    targetTotalDurationSeconds: Math.round((targetTotalDurationRangeSeconds[0] + targetTotalDurationRangeSeconds[1]) / 2),
+    targetTotalDurationRangeSeconds: [...targetTotalDurationRangeSeconds] as [number, number],
+    targetShotCount: Math.round((targetShotCountRange[0] + targetShotCountRange[1]) / 2),
+    targetShotCountRange: [...targetShotCountRange] as [number, number],
+    proofDeadlineShotIndex: profile.pacingContract.proofShouldLandByShotIndex,
+    idealShotDurationRangeSeconds: [...profile.pacingContract.idealShotDurationRangeSeconds] as [number, number],
+    maxDialogueWordsPerShot: profile.pacingContract.maxDialogueWordsPerShot,
+    maxActionBeatsPerShot: profile.pacingContract.maxActionBeatsPerShot,
+  }
+}
+
+function getDefaultAuthorshipPipelineForPresetFamily(presetFamily: CinematicPresetFamily) {
+  return presetFamily === 'story_movie_tv' ? 'json_shot_authoring_v1' as const : 'ugc_script_ingest_v1' as const
+}
+
 export function buildCinematicSettingsPatchFromFormatSubtype(
   presetFamily: CinematicPresetFamily,
   formatSubtype: CinematicFormatSubtype | null,
-): Pick<CinematicSettings, 'formatSubtype' | 'formulaFamily' | 'dominantTrigger' | 'creativeTreatment' | 'hookFamily' | 'narrationMode' | 'backdropRole' | 'backdropStrategy' | 'proofMoment' | 'ctaStyle' | 'contrastAxis' | 'stillAspectRatio' | 'defaultClipSeconds' | 'inferredArtStylePreset'> {
+): Pick<CinematicSettings, 'formatSubtype' | 'formulaFamily' | 'dominantTrigger' | 'creativeTreatment' | 'hookFamily' | 'narrationMode' | 'authorshipPipeline' | 'backdropRole' | 'backdropStrategy' | 'proofMoment' | 'ctaStyle' | 'contrastAxis' | 'stillAspectRatio' | 'defaultClipSeconds' | 'inferredArtStylePreset' | 'targetTotalDurationSeconds' | 'targetTotalDurationRangeSeconds' | 'targetShotCount' | 'targetShotCountRange' | 'proofDeadlineShotIndex' | 'idealShotDurationRangeSeconds' | 'maxDialogueWordsPerShot' | 'maxActionBeatsPerShot'> {
   const nextSubtype = coerceFormatSubtypeForPresetFamily(presetFamily, formatSubtype)
   const profile = getUgcPresetProfile(nextSubtype, presetFamily)
   const creativeProfile = resolveUgcCreativeProfile({
@@ -907,12 +967,14 @@ export function buildCinematicSettingsPatchFromFormatSubtype(
     presetFamily,
   })
   return {
+    ...buildUgcSettingsPacingPatch(nextSubtype, presetFamily),
     formatSubtype: nextSubtype,
     formulaFamily: deriveDefaultFormulaFamilyFromFormatSubtype(nextSubtype),
     dominantTrigger: deriveDefaultDominantTriggerFromFormatSubtype(nextSubtype),
     creativeTreatment: creativeProfile.creativeTreatment,
     hookFamily: creativeProfile.hookFamily,
     narrationMode: creativeProfile.narrationMode,
+    authorshipPipeline: getDefaultAuthorshipPipelineForPresetFamily(presetFamily),
     backdropRole: creativeProfile.backdropRole,
     backdropStrategy: creativeProfile.backdropStrategy,
     proofMoment: profile?.defaultProofMoment ?? '',
@@ -924,7 +986,7 @@ export function buildCinematicSettingsPatchFromFormatSubtype(
   }
 }
 
-export function buildCinematicSettingsPatchFromPresetFamily(presetFamily: CinematicPresetFamily): Pick<CinematicSettings, 'presetFamily' | 'presetId' | 'specializationMode' | 'formatSubtype' | 'formulaFamily' | 'dominantTrigger' | 'creativeTreatment' | 'hookFamily' | 'narrationMode' | 'backdropRole' | 'backdropStrategy' | 'proofMoment' | 'ctaStyle' | 'contrastAxis' | 'stillAspectRatio' | 'defaultClipSeconds' | 'inferredArtStylePreset'> {
+export function buildCinematicSettingsPatchFromPresetFamily(presetFamily: CinematicPresetFamily): Pick<CinematicSettings, 'presetFamily' | 'presetId' | 'specializationMode' | 'formatSubtype' | 'formulaFamily' | 'dominantTrigger' | 'creativeTreatment' | 'hookFamily' | 'narrationMode' | 'authorshipPipeline' | 'backdropRole' | 'backdropStrategy' | 'proofMoment' | 'ctaStyle' | 'contrastAxis' | 'stillAspectRatio' | 'defaultClipSeconds' | 'inferredArtStylePreset' | 'targetTotalDurationSeconds' | 'targetTotalDurationRangeSeconds' | 'targetShotCount' | 'targetShotCountRange' | 'proofDeadlineShotIndex' | 'idealShotDurationRangeSeconds' | 'maxDialogueWordsPerShot' | 'maxActionBeatsPerShot'> {
   const formatSubtype = coerceFormatSubtypeForPresetFamily(presetFamily, null)
   const profile = getUgcPresetProfile(formatSubtype, presetFamily)
   const creativeProfile = resolveUgcCreativeProfile({
@@ -932,6 +994,7 @@ export function buildCinematicSettingsPatchFromPresetFamily(presetFamily: Cinema
     presetFamily,
   })
   return {
+    ...buildUgcSettingsPacingPatch(formatSubtype, presetFamily),
     presetFamily,
     presetId: presetFamily,
     stillAspectRatio: profile?.preferredAspectRatio ?? deriveDefaultStillAspectRatioFromPresetFamily(presetFamily),
@@ -942,6 +1005,7 @@ export function buildCinematicSettingsPatchFromPresetFamily(presetFamily: Cinema
     creativeTreatment: creativeProfile.creativeTreatment,
     hookFamily: creativeProfile.hookFamily,
     narrationMode: creativeProfile.narrationMode,
+    authorshipPipeline: getDefaultAuthorshipPipelineForPresetFamily(presetFamily),
     backdropRole: creativeProfile.backdropRole,
     backdropStrategy: creativeProfile.backdropStrategy,
     proofMoment: profile?.defaultProofMoment ?? '',
@@ -1278,33 +1342,76 @@ function countDialogueWords(shot: Pick<CinematicScriptShot, 'dialogue'>) {
   return shot.dialogue.reduce((total, line) => total + line.line.trim().split(/\s+/).filter(Boolean).length, 0)
 }
 
+function clampDurationToRange(value: number, minDurationSeconds: number | null, maxDurationSeconds: number | null) {
+  const minimum = typeof minDurationSeconds === 'number' ? clampShotDuration(minDurationSeconds) : 1
+  const maximum = typeof maxDurationSeconds === 'number' ? clampShotDuration(maxDurationSeconds) : 15
+  const nextMinimum = Math.min(minimum, maximum)
+  const nextMaximum = Math.max(minimum, maximum)
+  return Math.min(nextMaximum, Math.max(nextMinimum, clampShotDuration(value)))
+}
+
+function resolveShotEditorialDurationContract(shot: CinematicScriptShot) {
+  const ugcProfile = getUgcPresetProfile(shot.formatSubtype)
+  const roleRange = ugcProfile
+    ? (getUgcDurationRangeForShot({
+        formatSubtype: shot.formatSubtype,
+        hookRole: shot.hookRole,
+      }) ?? ugcProfile.pacingContract.idealShotDurationRangeSeconds)
+    : null
+  const minDurationSeconds = shot.minDurationSeconds ?? roleRange?.[0] ?? null
+  const maxDurationSeconds = shot.maxDurationSeconds ?? roleRange?.[1] ?? null
+  const targetDurationSeconds =
+    shot.targetDurationSeconds
+    ?? getUgcDefaultShotDurationSeconds({
+      formatSubtype: shot.formatSubtype,
+      hookRole: shot.hookRole,
+    })
+    ?? (roleRange ? Math.round((roleRange[0] + roleRange[1]) / 2) : null)
+
+  return {
+    ugcProfile,
+    roleRange,
+    minDurationSeconds,
+    maxDurationSeconds,
+    targetDurationSeconds,
+  }
+}
+
 function inferShotDuration(shot: CinematicScriptShot) {
+  const editorialContract = resolveShotEditorialDurationContract(shot)
   if (typeof shot.durationSeconds === 'number' && Number.isFinite(shot.durationSeconds)) {
+    const durationSeconds = clampDurationToRange(
+      shot.durationSeconds,
+      editorialContract.minDurationSeconds,
+      editorialContract.maxDurationSeconds,
+    )
     return {
-      durationSeconds: clampShotDuration(shot.durationSeconds),
+      durationSeconds,
       durationSource: 'manual' as const,
-      timingSummary: 'Manual shot duration override.',
+      timingSummary: editorialContract.targetDurationSeconds
+        ? `Manual shot duration override shaped to the editorial contract around ${editorialContract.targetDurationSeconds}s.`
+        : 'Manual shot duration override.',
     }
   }
 
   const estimated = estimateShotContentDurationSeconds(shot)
   let inferred = estimated.inferredDurationSeconds
-  const ugcProfile = getUgcPresetProfile(shot.formatSubtype)
+  const ugcProfile = editorialContract.ugcProfile
   if (ugcProfile) {
-    const roleRange = getUgcDurationRangeForShot({
-      formatSubtype: shot.formatSubtype,
-      hookRole: shot.hookRole,
-    }) ?? ugcProfile.pacingContract.idealShotDurationRangeSeconds
-    const defaultDuration = getUgcDefaultShotDurationSeconds({
-      formatSubtype: shot.formatSubtype,
-      hookRole: shot.hookRole,
-    }) ?? inferred
+    const roleRange = editorialContract.roleRange ?? ugcProfile.pacingContract.idealShotDurationRangeSeconds
+    const defaultDuration = editorialContract.targetDurationSeconds ?? inferred
     const dialogueWords = countDialogueWords(shot)
     const overDialogueLimit = dialogueWords > ugcProfile.pacingContract.maxDialogueWordsPerShot
-    const biased = overDialogueLimit
-      ? Math.min(roleRange[1], Math.max(defaultDuration, inferred - 1))
-      : Math.round((Math.min(roleRange[1], inferred) + defaultDuration) / 2)
-    inferred = clampShotDuration(Math.min(roleRange[1], Math.max(roleRange[0], biased)))
+    const actionOverflow = shot.actions.length > ugcProfile.pacingContract.maxActionBeatsPerShot
+    const targetBias = Math.round(((defaultDuration * 2) + Math.min(roleRange[1], inferred)) / 3)
+    const biased = overDialogueLimit || actionOverflow
+      ? Math.min(roleRange[1], Math.max(roleRange[0], defaultDuration))
+      : targetBias
+    inferred = clampDurationToRange(
+      Math.min(roleRange[1], Math.max(roleRange[0], biased)),
+      editorialContract.minDurationSeconds,
+      editorialContract.maxDurationSeconds,
+    )
   }
 
   return {
@@ -1489,15 +1596,68 @@ function shouldBreakForUgcEditorialRhythm(input: {
   const roleBoundary =
     (previousShot.hookRole === 'hook' && ['setup', 'proof', 'payoff', 'cta'].includes(shot.hookRole ?? ''))
     || (previousShot.hookRole === 'proof' && ['payoff', 'cta'].includes(shot.hookRole ?? ''))
+    || (previousShot.hookRole !== null && shot.hookRole !== null && previousShot.hookRole !== shot.hookRole)
   const proofBeforeCloseBoundary =
     (shot.hookRole === 'payoff' || shot.hookRole === 'cta')
     && previousShot.hookRole !== 'proof'
     && currentDuration >= 5
+  const previousTargetDuration = previousShot.targetDurationSeconds ?? previousShot._compiledDurationSeconds
   return (
-    (currentDuration >= 6 && actionChanged)
-    || (currentDuration >= 5 && roleBoundary)
+    (currentDuration >= 4 && actionChanged)
+    || (roleBoundary && currentDuration >= Math.min(4, Math.max(2, previousTargetDuration - 1)))
     || proofBeforeCloseBoundary
   )
+}
+
+function groupUgcShotsByVariation(shots: CinematicScriptShot[]) {
+  const groups = new Map<string, CinematicScriptShot[]>()
+  for (const shot of shots) {
+    const key = shot.variationGroupId.trim() || '__primary'
+    const current = groups.get(key)
+    if (current) {
+      current.push(shot)
+      continue
+    }
+    groups.set(key, [shot])
+  }
+  return Array.from(groups.values())
+}
+
+function shapeUgcVariationShots(shots: CinematicScriptShot[]) {
+  if (shots.length === 0) return shots
+  const profile = getUgcPresetProfile(shots[0].formatSubtype)
+  let nextShots = shots.map((shot) => {
+    const editorialContract = resolveShotEditorialDurationContract(shot)
+    const maxActionBeats = editorialContract.ugcProfile?.pacingContract.maxActionBeatsPerShot ?? shot.actions.length
+    const nextActions = shot.actions.slice(0, Math.max(1, maxActionBeats))
+    const targetDurationSeconds = editorialContract.targetDurationSeconds
+    return {
+      ...shot,
+      targetDurationSeconds,
+      minDurationSeconds: editorialContract.minDurationSeconds,
+      maxDurationSeconds: editorialContract.maxDurationSeconds,
+      durationSeconds: typeof shot.durationSeconds === 'number'
+        ? clampDurationToRange(shot.durationSeconds, editorialContract.minDurationSeconds, editorialContract.maxDurationSeconds)
+        : targetDurationSeconds,
+      actions: nextActions,
+    }
+  })
+
+  if (!profile || profile.pacingContract.proofShouldLandByShotIndex === null) return nextShots
+  const proofDeadlineIndex = Math.max(0, profile.pacingContract.proofShouldLandByShotIndex - 1)
+  const proofIndex = nextShots.findIndex((shot) => shot.hookRole === 'proof')
+  if (proofIndex > proofDeadlineIndex) {
+    const [proofShot] = nextShots.splice(proofIndex, 1)
+    const targetIndex = Math.min(proofDeadlineIndex, nextShots.length)
+    nextShots.splice(targetIndex, 0, proofShot)
+  }
+
+  return nextShots
+}
+
+function applyUgcEditorialShaping(shots: CinematicScriptShot[]) {
+  const grouped = groupUgcShotsByVariation(shots)
+  return grouped.flatMap((variationShots) => shapeUgcVariationShots(variationShots))
 }
 
 function buildCompiledTakes(shots: Array<CinematicScriptShot & {
@@ -1591,7 +1751,8 @@ function buildCompiledTakes(shots: Array<CinematicScriptShot & {
 }
 
 export function buildCinematicSequenceFromScriptDoc(scriptDoc: CinematicScriptDoc): CinematicSequence {
-  const compiledShots = scriptDoc.shots.map((shot) => {
+  const shapedScriptShots = applyUgcEditorialShaping(scriptDoc.shots)
+  const compiledShots = shapedScriptShots.map((shot) => {
     const inferredTiming = inferShotDuration(shot)
     const timedShot = fillBeatTimingsForShot(shot, inferredTiming.durationSeconds)
     const sourceRefIds = buildRequiredSourceRefIdsForScriptShot(timedShot)
@@ -1701,6 +1862,12 @@ export function buildCinematicSequenceFromScriptDoc(scriptDoc: CinematicScriptDo
       backdropStrategy: shot.backdropStrategy,
       variationGroupId: shot.variationGroupId,
       variationLabel: shot.variationLabel,
+      shotJob: shot.shotJob,
+      targetDurationSeconds: shot.targetDurationSeconds,
+      minDurationSeconds: shot.minDurationSeconds,
+      maxDurationSeconds: shot.maxDurationSeconds,
+      cutTrigger: shot.cutTrigger,
+      communicationGoal: shot.communicationGoal,
       hookType: shot.hookType,
       targetEmotion: shot.targetEmotion,
       personaStyle: shot.personaStyle,
@@ -1901,6 +2068,12 @@ export function deriveCinematicScriptFromSequence(sequence: CinematicSequence): 
       backdropStrategy: shot.backdropStrategy,
       variationGroupId: shot.variationGroupId,
       variationLabel: shot.variationLabel,
+      shotJob: shot.shotJob,
+      targetDurationSeconds: shot.targetDurationSeconds,
+      minDurationSeconds: shot.minDurationSeconds,
+      maxDurationSeconds: shot.maxDurationSeconds,
+      cutTrigger: shot.cutTrigger,
+      communicationGoal: shot.communicationGoal,
       hookType: shot.hookType,
       targetEmotion: shot.targetEmotion,
       personaStyle: shot.personaStyle,
@@ -2032,6 +2205,10 @@ export function getCinematicSettings(gameSpec: unknown, graphMetadata: unknown):
       (typeof graphOverrides.ctaStyle === 'string' && graphOverrides.ctaStyle.trim().length > 0 ? graphOverrides.ctaStyle : null)
       ?? (typeof projectOverrides.ctaStyle === 'string' && projectOverrides.ctaStyle.trim().length > 0 ? projectOverrides.ctaStyle : null)
       ?? formatDefaults.ctaStyle,
+    authorshipPipeline:
+      graphOverrides.authorshipPipeline
+      ?? projectOverrides.authorshipPipeline
+      ?? getDefaultAuthorshipPipelineForPresetFamily(presetFamily),
     contrastAxis:
       (typeof graphOverrides.contrastAxis === 'string' && graphOverrides.contrastAxis.trim().length > 0 ? graphOverrides.contrastAxis : null)
       ?? (typeof projectOverrides.contrastAxis === 'string' && projectOverrides.contrastAxis.trim().length > 0 ? projectOverrides.contrastAxis : null)
