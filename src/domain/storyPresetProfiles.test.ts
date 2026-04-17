@@ -7,6 +7,7 @@ import {
   DEFAULT_STORY_SCENE_PRESET,
   getStoryLanguagePresetLabel,
   getStoryScenePresetLabel,
+  getStoryScreenwritingContract,
   inferStoryLanguagePresetFromPromptText,
   inferStoryScenePresetFromPromptText,
   resolveStoryRuntimeContract,
@@ -49,6 +50,15 @@ test('story inference covers war-scale and epic language prompts', () => {
   assert.equal(inferStoryLanguagePresetFromPromptText(prompt), 'war_immersion')
 })
 
+test('story screenwriting contract exposes shared movie tv writing guidance', () => {
+  const contract = getStoryScreenwritingContract()
+
+  assert.equal(contract.label, 'Movie / TV Screenwriting Contract')
+  assert.ok(contract.creativePrinciples.some((entry) => /Enter the scene late and leave early/i.test(entry)))
+  assert.ok(contract.authorshipDirectives.some((entry) => /character-specific/i.test(entry)))
+  assert.ok(contract.repairDirectives.some((entry) => /templated|over-explained/i.test(entry)))
+})
+
 test('story runtime contract merges scene and language directives', () => {
   const contract = resolveStoryRuntimeContract({
     storyScenePreset: 'dread_build_reveal',
@@ -73,14 +83,17 @@ test('action story runtime contract carries combat pacing and coverage rules', (
 
   assert.equal(contract.scenePreset, 'duel_showdown')
   assert.equal(contract.languagePreset, 'tactical_combat')
-  assert.deepEqual(contract.targetShotCountRange, [4, 8])
-  assert.deepEqual(contract.idealShotDurationRangeSeconds, [2, 6])
-  assert.equal(contract.maxDialogueWordsPerShot, 22)
+  assert.deepEqual(contract.targetShotCountRange, [3, 6])
+  assert.deepEqual(contract.idealShotDurationRangeSeconds, [2, 5])
+  assert.equal(contract.maxDialogueWordsPerShot, 14)
   assert.equal(contract.maxActionBeatsPerShot, 5)
   assert.equal(contract.maxActionMicroBeatsPerShot, 6)
   assert.equal(contract.actionExchangeBundling, 'moderate')
   assert.equal(contract.actionDensityBias, 'high')
   assert.equal(contract.storyboardPanelDensityBias, 'high')
-  assert.match(contract.coverageStrategy, /shared combat geography|impact inserts/i)
+  assert.match(contract.coverageStrategy, /shared combat geography|contact quickly|impact/i)
   assert.match(contract.cameraBehaviorRules, /combat coverage|shifting advantage/i)
+  assert.ok(contract.plannerDirectives.some((entry) => /first contact quickly|actual combat interaction/i.test(entry)))
+  assert.ok(contract.authorshipDirectives.some((entry) => /hard physical verbs|generic lines like/i.test(entry)))
+  assert.ok(contract.repairDirectives.some((entry) => /filler taunts|clearer physical beats/i.test(entry)))
 })

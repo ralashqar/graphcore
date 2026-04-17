@@ -10,6 +10,11 @@ type StoryPromptDirectiveSet = {
   repairDirectives: string[]
 }
 
+export type StoryScreenwritingContract = StoryPromptDirectiveSet & {
+  label: string
+  creativePrinciples: string[]
+}
+
 export type StoryScenePresetProfile = StoryPromptDirectiveSet & {
   scenePreset: CinematicStoryScenePreset
   label: string
@@ -78,6 +83,35 @@ export type StoryRuntimeContract = {
 
 export const DEFAULT_STORY_SCENE_PRESET: CinematicStoryScenePreset = 'dialogue_two_hander'
 export const DEFAULT_STORY_LANGUAGE_PRESET: CinematicStoryLanguagePreset = 'grounded_naturalist'
+
+const STORY_SCREENWRITING_CONTRACT: StoryScreenwritingContract = {
+  label: 'Movie / TV Screenwriting Contract',
+  creativePrinciples: [
+    'Enter the scene late and leave early once the dramatic turn has landed.',
+    'Every beat should change tension, information, leverage, or emotional temperature.',
+    'Prefer specific physical behavior, staging, and consequence over abstract explanation.',
+    'Dialogue should sound character-specific and playable, not generic, placeholder, or purely expositional.',
+    'Escalation should feel uneven and alive rather than mechanically stepped.',
+    'Cuts and coverage changes must earn something: new information, new pressure, new alignment, or a clearer dramatic turn.',
+    'Each scene should land at least one memorable image, reversal, or emotional consequence.',
+  ],
+  plannerDirectives: [
+    'Treat the selected story scene and language presets as biases, not rigid templates. Preserve room for original scene writing inside those guardrails.',
+    'Plan scenes around dramatic turns, escalation, and memorable images rather than evenly filling a fixed preset formula.',
+    'Enter the dramatic situation as late as possible while preserving clarity, and avoid spending shots repeating information the audience already understands.',
+  ],
+  authorshipDirectives: [
+    'Write like a strong film or television scene: specific, playable, visual, and character-shaped rather than schematic.',
+    'Prefer concrete staging, action, behavior, silence, and reaction over explanatory prose about what the scene means.',
+    'Keep dialogue sharp, character-specific, and necessary. Cut filler, placeholder taunts, and generic scene-summary lines.',
+    'Let escalation stay jagged and surprising instead of making every beat the same size or function.',
+  ],
+  repairDirectives: [
+    'If the scene feels templated, restore irregular escalation, stronger character-specific choices, and a more memorable visual turn.',
+    'If the scene feels over-explained, replace summary language with concrete action, staging, reaction, or consequence.',
+    'If coverage feels mechanical, merge redundant beats and save cuts for genuine changes in tension, information, leverage, or perspective.',
+  ],
+}
 
 const STORY_SCENE_PROFILES: Record<CinematicStoryScenePreset, StoryScenePresetProfile> = {
   dialogue_two_hander: {
@@ -294,18 +328,18 @@ const STORY_SCENE_PROFILES: Record<CinematicStoryScenePreset, StoryScenePresetPr
     scenePreset: 'duel_showdown',
     label: 'Duel Showdown',
     dramaticPurpose: 'Stage a focused one-on-one confrontation where momentum, threat, and tactical advantage visibly trade hands.',
-    shotRoleSequence: ['hook', 'setup', 'proof', 'proof', 'payoff'],
-    targetSceneDurationRangeSeconds: [24, 55],
-    targetShotCountRange: [4, 8],
-    idealShotDurationRangeSeconds: [2, 6],
+    shotRoleSequence: ['hook', 'proof', 'proof', 'proof', 'payoff'],
+    targetSceneDurationRangeSeconds: [18, 42],
+    targetShotCountRange: [3, 6],
+    idealShotDurationRangeSeconds: [2, 5],
     revealDeadlineShotIndex: 4,
-    dialogueDensityGuidance: 'Keep dialogue minimal and charged. Threats, taunts, or brief tactical lines should punctuate action rather than replace it.',
-    blockingGuidance: 'Track distance, circling, feints, entries, and reversals of advantage so the duel geography stays legible.',
-    coverageStrategy: 'Open with readable shared combat geography, then alternate tactical mediums, impact inserts, and decisive reversals.',
+    dialogueDensityGuidance: 'Keep dialogue extremely sparse and specific. Use at most one or two short tactical or character-revealing lines; avoid generic taunts and let the fight speak through action.',
+    blockingGuidance: 'Track distance, circling, feints, entries, binds, forced retreats, and reversals of advantage so the duel geography stays legible while the exchange keeps moving.',
+    coverageStrategy: 'Establish shared combat geography once, then get into contact quickly. Favor tactical mediums, impact framings, bind breaks, and decisive reversals over repeated setup beats.',
     continuityStrategy: 'Preserve facing direction, weapon-hand continuity, and distance changes so the viewer can track advantage clearly.',
     soundSilenceStrategy: 'Let breaths, footwork, metal, cloth, and impact rhythms carry the tension between brief spoken beats.',
     endingShape: 'End on the strike, disarm, mercy beat, or stare-down that clearly changes who controls the fight.',
-    maxDialogueWordsPerShot: 22,
+    maxDialogueWordsPerShot: 14,
     maxActionBeatsPerShot: 5,
     maxActionMicroBeatsPerShot: 6,
     actionExchangeBundling: 'moderate',
@@ -313,20 +347,23 @@ const STORY_SCENE_PROFILES: Record<CinematicStoryScenePreset, StoryScenePresetPr
     storyboardPanelDensityBias: 'high',
     promptKeywords: ['duel', 'showdown', 'face off', 'fight', 'versus', 'vs', 'clash', 'swordfight', 'one on one combat'],
     plannerDirectives: [
-      'Keep the spatial axis of the duel readable before pushing into impact or reaction detail.',
-      'Make every turn of advantage visible through blocking, timing, or who forces the other to yield ground.',
+      'Establish geography once, then force first contact quickly instead of spending multiple shots on posture or approach.',
+      'Make every turn of advantage visible through a concrete physical event such as a jam, bind break, knockback, stumble, forced retreat, or disarm.',
       'One shot may contain several linked combat beats when the exchange is continuous.',
       'Do not split every sword clash into its own shot. Cut on feint, counter, disarm, reversal, or decisive distance change.',
+      'After the first attack begins, most remaining shots should contain actual combat interaction or its immediate physical consequence.',
     ],
     authorshipDirectives: [
-      'Write action as tactical exchanges, not generic flurries.',
-      'Let brief threat lines or reaction beats sharpen the fight instead of turning it into a conversation scene.',
+      'Write action as chained tactical exchanges with hard physical verbs such as crash, jam, wrench, tear, slip, drive, stagger, or break.',
+      'Avoid abstract phrasing like "the balance shifts" unless that shift is shown through a concrete combat event in the same beat.',
+      'Let brief threat lines or reaction beats sharpen the fight instead of turning it into a conversation scene, and avoid generic lines like "come on," "too slow," or "this is not over."',
       'Bundle linked sword or melee beats into one readable exchange before cutting to the next tactical turn.',
     ],
     repairDirectives: [
       'If the duel feels mushy, simplify the geography and isolate one cleaner reversal of advantage.',
       'If the action feels repetitive, give one combat beat a clearer tactical intention such as bait, counter, disarm, or finish.',
       'If the duel is over-cut, merge tiny clash-only shots into fewer exchanges and save cuts for tactical turns.',
+      'If the scene feels talky or generic, remove filler taunts and replace them with stronger physical action or one sharper line of character-specific threat.',
     ],
   },
   chase_escape_fragmented: {
@@ -615,16 +652,18 @@ const STORY_LANGUAGE_PROFILES: Record<CinematicStoryLanguagePreset, StoryLanguag
     continuityStyle: 'Protect combat axis, body orientation, and direction of force so the viewer can track who is winning the exchange.',
     promptKeywords: ['tactical combat', 'fight', 'duel', 'combat', 'melee', 'sword', 'parry', 'counter', 'martial'],
     plannerDirectives: [
-      'Prioritize legible action geography before stylized fragmentation.',
-      'Treat each combat beat as a tactical decision that changes advantage.',
+      'Prioritize legible action geography before stylized fragmentation, then stay close to the cause-and-effect of the exchange.',
+      'Treat each combat beat as a tactical decision that changes advantage through contact, evasion, bind, break, pursuit, or forced retreat.',
     ],
     authorshipDirectives: [
-      'Write action coverage around readable cause and effect in the exchange.',
-      'Do not mistake constant motion for clarity; let one decisive combat beat read fully.',
+      'Write action coverage around readable cause and effect in the exchange, not around vague momentum summaries.',
+      'Do not mistake constant motion for clarity; let one decisive combat beat read fully, but keep chained beats inside the same shot when they belong to one continuous exchange.',
+      'Favor specific physical verbs and visible consequences over generic combat description or ornamental camera language.',
     ],
     repairDirectives: [
       'If the fight feels muddy, restore cleaner geography and isolate one clearer tactical exchange.',
       'If impacts feel weightless, cut closer only on the decisive contact or reversal beat.',
+      'If the scene feels too safe, replace explanatory beats with a harder contact beat, clearer breach, or more forceful displacement.',
     ],
   },
   operatic_epic: {
@@ -709,6 +748,10 @@ export function getDefaultStoryScenePreset() {
 
 export function getDefaultStoryLanguagePreset() {
   return DEFAULT_STORY_LANGUAGE_PRESET
+}
+
+export function getStoryScreenwritingContract() {
+  return STORY_SCREENWRITING_CONTRACT
 }
 
 export function getStoryScenePresetProfile(

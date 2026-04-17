@@ -1797,6 +1797,57 @@ function buildStoryboardPanelPhases(panelCount: number) {
   return ['hold']
 }
 
+function buildTakeStoryboardPanelDescription(input: {
+  shot: Pick<CinematicScriptShot, 'beat' | 'title'>
+  actionLine: string
+  phase: string
+  panelCount: number
+  panelIndex: number
+}) {
+  const baseLine = (input.actionLine || input.shot.beat || input.shot.title).trim().replace(/\.$/, '')
+  if (!baseLine) return input.shot.title
+  if (input.panelCount === 1) return `${baseLine}.`
+
+  const panelPrefix =
+    input.phase === 'engage'
+      ? 'Show the opening commitment of the exchange'
+      : input.phase === 'exchange'
+        ? 'Show the next visible change in pressure or movement'
+        : input.phase === 'turn'
+          ? 'Show the decisive turn in the exchange'
+          : input.phase === 'turn/payoff'
+            ? 'Show the clearest turn or payoff of the exchange'
+            : input.phase === 'payoff'
+              ? 'Show the payoff image or consequence of the exchange'
+              : input.phase === 'hold'
+                ? 'Show the held visual beat'
+                : `Show panel beat ${input.panelIndex + 1}`
+
+  return `${panelPrefix}: ${baseLine}. Keep this panel visually distinct from the previous one and preserve continuous choreography and screen geography.`
+}
+
+function buildTakeStoryboardPanelTitle(input: {
+  shotTitle: string
+  phase: string
+  panelCount: number
+  panelIndex: number
+}) {
+  if (input.panelCount === 1) return input.shotTitle
+  const suffix =
+    input.phase === 'engage'
+      ? 'Opening commitment'
+      : input.phase === 'exchange'
+        ? 'Pressure change'
+        : input.phase === 'turn'
+          ? 'Reversal'
+          : input.phase === 'turn/payoff'
+            ? 'Turn / payoff'
+            : input.phase === 'payoff'
+              ? 'Payoff image'
+              : `Panel ${input.panelIndex + 1}`
+  return `${input.shotTitle} - ${suffix}`
+}
+
 function formatTakeStoryboardPanelScriptText(input: {
   title: string
   panels: CinematicTakeStoryboardPanel[]
@@ -1814,6 +1865,50 @@ function formatTakeStoryboardPanelScriptText(input: {
   ]
 
   return sections.filter((entry): entry is string => Boolean(entry)).join('\n\n')
+}
+
+export function parseTakeStoryboardPanelScriptText(storyboardPanelScriptText: string | null | undefined) {
+  const normalized = typeof storyboardPanelScriptText === 'string'
+    ? storyboardPanelScriptText.replace(/\r\n/g, '\n').trim()
+    : ''
+  if (!normalized || !/\bPANEL\s+\d+\b/i.test(normalized)) return []
+
+  const rawBlocks = normalized
+    .split(/\n(?=PANEL\s+\d+\b)/g)
+    .map((entry) => entry.trim())
+    .filter((entry) => /^PANEL\s+\d+\b/i.test(entry))
+
+  const knownLabels = new Set(['SHOT', 'TITLE', 'DESCRIPTION', 'CAMERA_ANGLE', 'CAMERA_MOTION'])
+  return rawBlocks.map((block, index) => {
+    const lines = block.split('\n')
+    const parsedValues: Record<string, string> = {}
+    let activeLabel: string | null = null
+
+    for (const rawLine of lines.slice(1)) {
+      const line = rawLine.trim()
+      if (!line) continue
+      const labelMatch = line.match(/^([A-Z_]+):\s*(.*)$/)
+      if (labelMatch && knownLabels.has(labelMatch[1])) {
+        activeLabel = labelMatch[1]
+        parsedValues[activeLabel] = labelMatch[2] ?? ''
+        continue
+      }
+      if (activeLabel) {
+        parsedValues[activeLabel] = parsedValues[activeLabel]
+          ? `${parsedValues[activeLabel]} ${line}`.trim()
+          : line
+      }
+    }
+
+    return cinematicTakeStoryboardPanelSchema.parse({
+      id: `parsed_panel_${index + 1}`,
+      shotId: parsedValues.SHOT?.trim() || null,
+      title: parsedValues.TITLE?.trim() || `Panel ${index + 1}`,
+      description: parsedValues.DESCRIPTION?.trim() || '',
+      cameraAngle: parsedValues.CAMERA_ANGLE?.trim() || '',
+      cameraMotion: parsedValues.CAMERA_MOTION?.trim() || '',
+    })
+  })
 }
 
 export function deriveTakeStoryboardPanelArtifacts(input: {
@@ -1859,14 +1954,22 @@ export function deriveTakeStoryboardPanelArtifacts(input: {
         action
           ? [(action.verb ?? '').trim(), (action.stagingNotes ?? '').trim()].filter((entry) => entry.length > 0).join('. ')
           : shot.beat.trim()
-      const description =
-        panelCount === 1
-          ? (shot.beat.trim() || actionLine || shot.title)
-          : `${(actionLine || shot.beat || shot.title).replace(/\.$/, '')}. Focus this panel on the ${phase} portion of the same continuous take, keeping the action and camera geography readable.`
+      const description = buildTakeStoryboardPanelDescription({
+        shot,
+        actionLine,
+        phase,
+        panelCount,
+        panelIndex: index,
+      })
       panels.push(cinematicTakeStoryboardPanelSchema.parse({
         id: `${shot.id}_panel_${index + 1}`,
         shotId: shot.id,
-        title: panelCount === 1 ? shot.title : `${shot.title} (${phase})`,
+        title: buildTakeStoryboardPanelTitle({
+          shotTitle: shot.title,
+          phase,
+          panelCount,
+          panelIndex: index,
+        }),
         description,
         cameraAngle: shot.cameraAngle.trim() || 'eye level',
         cameraMotion: shot.cameraMovement.trim() || 'motivated follow-through',

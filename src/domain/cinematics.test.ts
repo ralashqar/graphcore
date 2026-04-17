@@ -10,6 +10,7 @@ import {
   deriveTakeStoryboardPanelArtifacts,
   deriveCinematicScriptFromSequence,
   materializeCinematicGraphSettings,
+  parseTakeStoryboardPanelScriptText,
 } from './cinematics.ts'
 import { compileCinematicGraphFromScriptDoc } from './cinematicScriptCompiler.ts'
 import { ingestCinematicCreativeScriptToAuthoredShots } from './cinematicCreativeScript.ts'
@@ -220,9 +221,9 @@ test('action story preset patches derive combat pacing defaults', () => {
   assert.equal(settings.storyScenePreset, 'duel_showdown')
   assert.equal(settings.storyLanguagePreset, 'tactical_combat')
   assert.equal(settings.authorshipPipeline, 'json_shot_authoring_v1')
-  assert.deepEqual(settings.targetShotCountRange, [4, 8])
-  assert.deepEqual(settings.idealShotDurationRangeSeconds, [2, 6])
-  assert.equal(settings.maxDialogueWordsPerShot, 22)
+  assert.deepEqual(settings.targetShotCountRange, [3, 6])
+  assert.deepEqual(settings.idealShotDurationRangeSeconds, [2, 5])
+  assert.equal(settings.maxDialogueWordsPerShot, 14)
   assert.equal(settings.maxActionBeatsPerShot, 5)
 })
 
@@ -558,6 +559,34 @@ test('combat-flavored take beats generate storyboard panel scripts even with lig
 
   assert.equal(panels.storyboardPanelStatus, 'generated')
   assert.ok((panels.storyboardPanelPlan?.panels.length ?? 0) >= 2)
+  assert.doesNotMatch(panels.storyboardPanelScriptText, /Focus this panel on the/i)
+  assert.match(panels.storyboardPanelScriptText, /visually distinct from the previous one/i)
+})
+
+test('storyboard panel script text parses back into panel metadata', () => {
+  const panels = parseTakeStoryboardPanelScriptText(`
+TAKE: Take 1
+
+PANEL 1
+SHOT: shot_1
+TITLE: Arena lock-in
+DESCRIPTION: Kharzag and Brakk hold the line across the pit.
+CAMERA_ANGLE: Eye-level wide.
+CAMERA_MOTION: Slow push.
+
+PANEL 2
+SHOT: shot_2
+TITLE: First clash
+DESCRIPTION: Kharzag crashes in and Brakk jams the entry.
+CAMERA_ANGLE: Chest-high combat angle.
+CAMERA_MOTION: Lateral follow.
+  `)
+
+  assert.equal(panels.length, 2)
+  assert.equal(panels[0]?.shotId, 'shot_1')
+  assert.equal(panels[1]?.title, 'First clash')
+  assert.match(panels[1]?.description ?? '', /Brakk jams the entry/i)
+  assert.match(panels[1]?.cameraMotion ?? '', /Lateral follow/i)
 })
 
 test('story shots compile into story takes without relying on formatSubtype', () => {

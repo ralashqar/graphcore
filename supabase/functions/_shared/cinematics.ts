@@ -19,6 +19,7 @@ import {
   getCinematicSettings,
   getCinematicShotNodeConfig,
   getStoryboardRefNodeConfig,
+  parseTakeStoryboardPanelScriptText,
   updateNodeMetadataWithStoryboardRef,
   updateNodeMetadataWithTake,
   updateNodeMetadataWithShot,
@@ -218,24 +219,18 @@ function formatProjectArtDirection(gameSpec: unknown | null | undefined, graphMe
 function buildStoryboardStyleAnchor(gameSpec: unknown | null | undefined, graphMetadata: unknown | null | undefined, sourceInputs: Array<{ imageUrl?: string | null }>) {
   const direction = getProjectArtDirection(gameSpec, graphMetadata, null)
   const presetIdOrLabel = direction.artStylePreset || null
-  const presetLabel = getArtStylePresetLabel(presetIdOrLabel)
   const hasImageReferences = sourceInputs.some((entry) => typeof entry.imageUrl === 'string' && entry.imageUrl.trim().length > 0)
   if (hasImageReferences) {
     return [
-      `Art style: ${presetLabel}.`,
-      direction.artStyleSource === 'recommended' || direction.artStyleSource === 'inferred' ? `Cinematic capture override: ${presetLabel}. ${direction.artStyleReason}` : null,
-      ...getArtStylePresetPromptDirectives(presetIdOrLabel),
-      direction.artStyleDescription ? `Custom art direction override: ${direction.artStyleDescription}.` : null,
-      'Use the provided reference images as the canonical source for character identity, environment design, props, materials, lighting, and overall rendering style.',
-      'Place the referenced characters, environments, and objects into the requested panels in the same reference art style.',
+      'Use the provided reference images as the canonical source for character identity, environment design, props, materials, and rendering style.',
+      'Keep characters, environments, and hero objects on-model and in the same visual family as the reference images.',
     ]
   }
 
   return [
-    `Use the project art style: ${presetLabel}.`,
-    direction.artStyleSource === 'recommended' || direction.artStyleSource === 'inferred' ? `Cinematic capture override: ${presetLabel}. ${direction.artStyleReason}` : null,
-    ...getArtStylePresetPromptDirectives(presetIdOrLabel),
-    direction.artStyleDescription ? `Custom art direction override: ${direction.artStyleDescription}.` : null,
+    `Use the project art style: ${getArtStylePresetLabel(presetIdOrLabel)}.`,
+    ...getArtStylePresetPromptDirectives(presetIdOrLabel).slice(0, 2),
+    direction.artStyleDescription ? `Art direction override: ${direction.artStyleDescription}.` : null,
   ].filter((entry): entry is string => Boolean(entry))
 }
 
@@ -249,10 +244,6 @@ function buildStoryboardReferenceStyleInstruction(sourceInputs: Array<{ imageUrl
   ].join(' ')
 }
 
-function ordinalLabel(index: number) {
-  return ['first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth'][index] ?? `${index + 1}th`
-}
-
 function buildStoryboardPanelDirection(shot: {
   title: string
   beat: string
@@ -261,7 +252,7 @@ function buildStoryboardPanelDirection(shot: {
   cameraMovement?: string
 }, index: number) {
   const parts = [
-    `In the ${ordinalLabel(index)} frame, show ${shot.title}.`,
+    `PANEL ${index + 1}: ${shot.title}.`,
     shot.beat.trim() ? shot.beat.trim().replace(/\.$/, '') + '.' : null,
     shot.framing.trim() ? `Use ${shot.framing.trim()} framing.` : null,
     shot.cameraAngle.trim() ? `Use a ${shot.cameraAngle.trim()} camera angle.` : null,
@@ -330,21 +321,21 @@ function buildDerivedStoryboardPanelBeats(shots: Array<{
     }
 
     const microBeatLabels = panelCount >= 4
-      ? ['engage', 'exchange', 'turn', 'recover/payoff']
+      ? ['opening commitment', 'pressure change', 'reversal', 'payoff image']
       : panelCount === 3
-        ? ['engage', 'exchange', 'turn/payoff']
+        ? ['opening commitment', 'pressure change', 'turn / payoff']
         : panelCount === 2
-          ? ['engage', 'exchange']
-          : ['hold']
+          ? ['opening commitment', 'pressure change']
+          : ['held beat']
 
     for (let index = 0; index < panelCount; index += 1) {
       const label = microBeatLabels[index] ?? `beat ${index + 1}`
       const panelBeat =
         panelCount === 1
           ? shot.beat
-          : `${shot.beat.replace(/\.$/, '')}. Focus this panel on the ${label} beat of the same continuous action.`
+          : `Show the ${label} of the same continuous action: ${shot.beat.replace(/\.$/, '')}. Keep this panel visually distinct from the previous one while preserving choreography and screen geography.`
       derivedPanels.push({
-        title: panelCount === 1 ? shot.title : `${shot.title} (${label})`,
+        title: panelCount === 1 ? shot.title : `${shot.title} - ${label}`,
         beat: panelBeat,
         framing: shot.framing,
         cameraAngle: shot.cameraAngle,
@@ -361,9 +352,7 @@ function buildStoryboardSourceDescriptions(
   return sourceInputs.map((entry) => {
     const label = entry.definition?.name ?? entry.node.title
     const role = entry.role ?? 'reference'
-    return entry.imageUrl
-      ? `Reference image for ${role}: ${label}.`
-      : `Reference for ${role}: ${label}.`
+    return `${role}: ${label}.`
   })
 }
 
@@ -378,9 +367,34 @@ function describeStoryboardGrid(panelCount: number, aspectRatio: string) {
   if (panelCount <= 1) {
     return `Use a single full-frame panel matching a ${aspectRatio} composition.`
   }
-  if (panelCount <= 4) return `Arrange the board as a clean 2x2 grid of ${aspectRatio} panels with clear gutters.`
-  if (panelCount <= 9) return `Arrange the board as a clean 3x3 grid of ${aspectRatio} panels with clear gutters.`
-  return `Arrange the board as a clean 4x4 grid of ${aspectRatio} panels with clear gutters, using only as many panels as needed.`
+  if (panelCount === 2) return `Arrange exactly 2 panels in a clean 1x2 horizontal storyboard strip of ${aspectRatio} panels with clear gutters. Do not turn this into a 2x2 board.`
+  if (panelCount === 3) return `Arrange exactly 3 panels in a clean 1x3 horizontal storyboard strip of ${aspectRatio} panels with clear gutters. Do not collapse or expand the board.`
+  if (panelCount === 4) return `Arrange exactly 4 panels in a clean 2x2 grid of ${aspectRatio} panels with clear gutters.`
+  if (panelCount <= 6) return `Arrange exactly ${panelCount} panels in a clean 2x3 storyboard grid of ${aspectRatio} panels with clear gutters, leaving no more space than needed.`
+  if (panelCount <= 8) return `Arrange exactly ${panelCount} panels in a clean 2x4 storyboard grid of ${aspectRatio} panels with clear gutters, preserving reading order left-to-right then top-to-bottom.`
+  if (panelCount === 9) return `Arrange exactly 9 panels in a clean 3x3 grid of ${aspectRatio} panels with clear gutters. Do not collapse the board to a 2x2 or any smaller layout.`
+  if (panelCount <= 12) return `Arrange exactly ${panelCount} panels in a clean 3x4 storyboard grid of ${aspectRatio} panels with clear gutters, preserving reading order left-to-right then top-to-bottom.`
+  return `Arrange exactly ${panelCount} panels in a clean 4x4 storyboard grid of ${aspectRatio} panels with clear gutters, using all required panels and not collapsing the board to a smaller layout.`
+}
+
+function countTakeStoryboardPanels(take: { storyboardPanelPlan?: { panels?: Array<unknown> | null } | null } | null | undefined) {
+  const planCount = Array.isArray(take?.storyboardPanelPlan?.panels) ? take.storyboardPanelPlan?.panels.length ?? 0 : 0
+  if (planCount > 0) return planCount
+  return typeof (take as { storyboardPanelScriptText?: unknown } | null | undefined)?.storyboardPanelScriptText === 'string'
+    ? parseTakeStoryboardPanelScriptText((take as { storyboardPanelScriptText?: string }).storyboardPanelScriptText).length
+    : 0
+}
+
+function resolveTakeStoryboardPromptSource(input: {
+  nodeTake: ReturnType<typeof getCinematicTakeNodeConfig>
+  compiledTake: ReturnType<typeof getCinematicSequence>['takes'][number] | null
+}) {
+  const nodePanelCount = countTakeStoryboardPanels(input.nodeTake)
+  const compiledPanelCount = countTakeStoryboardPanels(input.compiledTake)
+
+  if (nodePanelCount > compiledPanelCount) return input.nodeTake
+  if (compiledPanelCount > 0) return input.compiledTake
+  return input.compiledTake ?? input.nodeTake
 }
 
 function describeStoryboardPanelStyling(aspectRatio: string) {
@@ -1314,30 +1328,20 @@ export function buildStillPrompt(input: {
 
   return [
     'Create one cinematic keyframe still.',
-    ...formatProjectArtDirection(input.snapshot.gameSpec ?? null, input.graph.metadata, input.shotNode.metadata ?? null),
-    describePresetPromptStyle(settings.presetFamily),
-    settings.presetFamily === 'story_movie_tv' ? `Story scene preset: ${getCinematicStoryScenePresetLabel(shot.storyScenePreset ?? settings.storyScenePreset ?? null)}.` : null,
-    settings.presetFamily === 'story_movie_tv' ? `Story language preset: ${getCinematicStoryLanguagePresetLabel(shot.storyLanguagePreset ?? settings.storyLanguagePreset ?? null)}.` : null,
-    describeSubtypePromptStyle(shot.formatSubtype ?? settings.formatSubtype ?? null),
-    `Target aspect ratio: ${settings.stillAspectRatio}.`,
-    `Target still resolution: ${settings.stillResolution}.`,
-    shot.creativeTreatment ? `Creative treatment: ${getCinematicCreativeTreatmentLabel(shot.creativeTreatment)}.` : null,
-    shot.hookFamily ? `Hook family: ${getCinematicHookFamilyLabel(shot.hookFamily)}.` : null,
-    shot.narrationMode ? `Narration mode: ${getCinematicNarrationModeLabel(shot.narrationMode)}.` : null,
-    shot.backdropStrategy.trim() ? `Backdrop strategy: ${shot.backdropStrategy.trim()}.` : null,
-    shot.shotType !== 'custom' ? `Shot type: ${shot.shotType}.` : null,
+    ...buildStoryboardStyleAnchor(input.snapshot.gameSpec ?? null, input.graph.metadata, input.sourceInputs),
+    settings.presetFamily === 'story_movie_tv' ? `Scene bias: ${getCinematicStoryScenePresetLabel(shot.storyScenePreset ?? settings.storyScenePreset ?? null)}.` : null,
+    settings.presetFamily === 'story_movie_tv' ? `Camera bias: ${getCinematicStoryLanguagePresetLabel(shot.storyLanguagePreset ?? settings.storyLanguagePreset ?? null)}.` : null,
     shot.framing.trim() ? `Framing: ${shot.framing.trim()}.` : null,
     shot.cameraAngle.trim() ? `Camera angle: ${shot.cameraAngle.trim()}.` : null,
-    shot.cameraMovement.trim() ? `Camera movement intent: ${shot.cameraMovement.trim()}.` : null,
+    shot.cameraMovement.trim() ? `Implied camera movement: ${shot.cameraMovement.trim()}.` : null,
     shot.lensPreference.trim() ? `Lens preference: ${shot.lensPreference.trim()}.` : null,
-    shot.contrastAxis.trim() ? `Contrast axis: ${shot.contrastAxis.trim()}.` : null,
-    shot.proofMoment.trim() ? `Proof moment: ${shot.proofMoment.trim()}.` : null,
-    input.shotNode.body?.text ? `Script beat: ${String(input.shotNode.body.text).trim()}.` : null,
-    shot.visualPrompt.trim() ? `Additional visual direction: ${shot.visualPrompt.trim()}.` : null,
-    shot.compositionGuide.trim() ? `Composition guide: ${shot.compositionGuide.trim()}.` : null,
+    input.shotNode.body?.text ? `Show this moment: ${String(input.shotNode.body.text).trim()}.` : null,
+    shot.visualPrompt.trim() ? `Visual detail: ${shot.visualPrompt.trim()}.` : null,
+    shot.compositionGuide.trim() ? `Composition: ${shot.compositionGuide.trim()}.` : null,
     ...sourceDescriptions,
-    'Describe and render only what should be visibly present in the final frame.',
-    'Use literal visual staging and readable proof. Avoid poetic metaphor, production metadata, or polished ad copy.',
+    'Move the referenced characters, props, and environments into one coherent frame.',
+    'Describe only what should be visible on screen.',
+    'Use direct visual language. No ad copy, metaphor, or production-note filler.',
     subtypeLooksLikeAd(shot.formatSubtype ?? settings.formatSubtype ?? null)
       ? 'If the product is present, show it doing its job with visible proof instead of acting like a passive prop.'
       : null,
@@ -1367,28 +1371,19 @@ export function buildTakeStillPrompt(input: {
 
   return [
     'Create one representative still frame from this cinematic take.',
-    ...formatProjectArtDirection(input.snapshot.gameSpec ?? null, input.graph.metadata, input.takeNode.metadata ?? null),
-    describePresetPromptStyle(settings.presetFamily),
-    settings.presetFamily === 'story_movie_tv' ? `Story scene preset: ${getCinematicStoryScenePresetLabel(take.storyScenePreset ?? settings.storyScenePreset ?? null)}.` : null,
-    settings.presetFamily === 'story_movie_tv' ? `Story language preset: ${getCinematicStoryLanguagePresetLabel(take.storyLanguagePreset ?? settings.storyLanguagePreset ?? null)}.` : null,
-    describeSubtypePromptStyle(take.formatSubtype ?? settings.formatSubtype ?? null),
-    `Target aspect ratio: ${settings.stillAspectRatio}.`,
-    `Target still resolution: ${settings.stillResolution}.`,
-    take.creativeTreatment ? `Creative treatment: ${getCinematicCreativeTreatmentLabel(take.creativeTreatment)}.` : null,
-    take.hookFamily ? `Hook family: ${getCinematicHookFamilyLabel(take.hookFamily)}.` : null,
-    take.narrationMode ? `Narration mode: ${getCinematicNarrationModeLabel(take.narrationMode)}.` : null,
-    take.backdropStrategy.trim() ? `Backdrop strategy: ${take.backdropStrategy.trim()}.` : null,
-    take.contrastAxis.trim() ? `Contrast axis: ${take.contrastAxis.trim()}.` : null,
-    take.proofMoment.trim() ? `Proof moment: ${take.proofMoment.trim()}.` : null,
+    ...buildStoryboardStyleAnchor(input.snapshot.gameSpec ?? null, input.graph.metadata, input.sourceInputs),
+    settings.presetFamily === 'story_movie_tv' ? `Scene bias: ${getCinematicStoryScenePresetLabel(take.storyScenePreset ?? settings.storyScenePreset ?? null)}.` : null,
+    settings.presetFamily === 'story_movie_tv' ? `Camera bias: ${getCinematicStoryLanguagePresetLabel(take.storyLanguagePreset ?? settings.storyLanguagePreset ?? null)}.` : null,
     ...takeShots.map((shot, index) => [
-      shot.beat.trim() ? `Beat: ${shot.beat.trim()}.` : null,
+      shot.beat.trim() ? `Beat ${index + 1}: ${shot.beat.trim()}.` : null,
       shot.framing.trim() ? `Framing: ${shot.framing.trim()}.` : null,
       shot.cameraMovement.trim() ? `Movement: ${shot.cameraMovement.trim()}.` : null,
-      shot.visualPrompt.trim() ? `Visual direction: ${shot.visualPrompt.trim()}.` : null,
+      shot.visualPrompt.trim() ? `Visual detail: ${shot.visualPrompt.trim()}.` : null,
     ].filter(Boolean).join(' ')),
     ...input.sourceInputs.map((entry) => `${entry.role ?? 'source'}: ${entry.definition?.name ?? entry.node.title}.`),
-    'Describe and render only what should be visibly present in the final frame.',
-    'Use literal visual phrasing and visible proof instead of polished ad copy, project metadata, or metaphor.',
+    'Choose one frame that best represents the take.',
+    'Move the referenced characters, props, and environments into one coherent frame.',
+    'Use direct visual language. No ad copy, metaphor, or production-note filler.',
     settings.presetFamily === 'story_movie_tv'
       ? 'Choose the strongest storyboard-like keyframe that communicates the take with clear cinematic continuity.'
       : settings.presetFamily === 'ugc_direct_response_ad'
@@ -1422,21 +1417,19 @@ export function buildStoryboardStillPrompt(input: {
   if (config.storyboardKind === 'sequence_board') {
     const panelCount = Math.max(1, derivedPanels.length)
     return [
-      'Create one comic-ink storyboard board.',
+      'Create one multi-panel comic-ink storyboard board.',
       ...styleAnchor,
-      `Use a ${settings.stillAspectRatio} frame ratio for every panel.`,
-      'Render the result as a multi-panel storyboard that clearly progresses through the action choreography.',
       describeStoryboardGrid(panelCount, settings.stillAspectRatio),
-      describeStoryboardPanelStyling(settings.stillAspectRatio),
-      'Keep the panels consistent in size, silhouette clarity, and costume continuity.',
-      'For each panel, place the referenced subjects into the described scene and preserve continuity across the board.',
-      'For fast action, expand one continuous shot into multiple comic panels instead of inventing extra camera cuts.',
+      'Use monochrome or restrained grayscale wash with bold silhouettes, clear action, and clean gutters.',
+      `You must render exactly ${panelCount} distinct panels, matching PANEL 1 through PANEL ${panelCount} below in reading order.`,
+      'Do not merge panels together, omit panels, duplicate panels, or invent extra panels beyond the numbered list.',
+      'Place the referenced characters, props, and environments into each panel and preserve continuity across the board.',
       ...derivedPanels.map((panel, index) => buildStoryboardPanelDirection(panel, index)),
-      config.notes.trim() ? `Additional scene direction: ${config.notes.trim()}.` : null,
-      config.generationPrompt.trim() ? `Additional visual direction: ${config.generationPrompt.trim()}.` : null,
+      config.notes.trim() ? `Scene note: ${config.notes.trim()}.` : null,
+      config.generationPrompt.trim() ? `Visual note: ${config.generationPrompt.trim()}.` : null,
       ...sourceDescriptions,
       'Keep character likeness, costume continuity, and hero props faithful to the references.',
-      'No captions, panel numbers, text labels, handwritten notes, speech bubbles, watermarks, or decorative mockup chrome.',
+      'No captions, speech bubbles, handwritten notes, watermarks, or decorative mockup chrome.',
     ].filter(Boolean).join(' ')
   }
 
@@ -1444,12 +1437,11 @@ export function buildStoryboardStillPrompt(input: {
   return [
     'Create one comic-ink storyboard panel.',
     ...styleAnchor,
-    `Use a ${settings.stillAspectRatio} frame ratio.`,
-    describeStoryboardPanelStyling(settings.stillAspectRatio),
+    'Use monochrome or restrained grayscale wash with bold silhouettes and readable action.',
     'Place the referenced subjects into the described scene with clear blocking and readable composition.',
     primaryShot ? buildStoryboardPanelDirection(primaryShot, 0) : null,
-    config.notes.trim() ? `Additional scene direction: ${config.notes.trim()}.` : null,
-    config.generationPrompt.trim() ? `Additional visual direction: ${config.generationPrompt.trim()}.` : null,
+    config.notes.trim() ? `Scene note: ${config.notes.trim()}.` : null,
+    config.generationPrompt.trim() ? `Visual note: ${config.generationPrompt.trim()}.` : null,
     ...sourceDescriptions,
     'Keep character likeness, costume continuity, and hero props faithful to the references.',
     'No captions, text labels, handwritten notes, sketch marks, multi-panel layout, watermarks, or decorative borders.',
@@ -1466,39 +1458,42 @@ export function buildTakeStoryboardStillPrompt(input: {
   const take = getCinematicTakeNodeConfig(input.takeNode)
   const sequence = getCinematicSequence(input.graph.metadata)
   const compiledTake = sequence.takes.find((entry) => entry.id === take.id) ?? null
-  const storyboardTake = compiledTake ?? take
-  const shots = take.shotIds
+  const storyboardTake = resolveTakeStoryboardPromptSource({ nodeTake: take, compiledTake })
+  const shots = storyboardTake.shotIds
     .map((shotId) => sequence.shots.find((shot) => shot.id === shotId) ?? null)
     .filter((shot): shot is typeof sequence.shots[number] => Boolean(shot))
   const sourceDescriptions = buildStoryboardSourceDescriptions(input.sourceInputs)
   const styleAnchor = buildStoryboardStyleAnchor(input.snapshot.gameSpec ?? null, input.graph.metadata, input.sourceInputs)
-  const scriptedPanels = storyboardTake.storyboardPanelPlan?.panels.map((panel) => ({
+  const scriptedPanelSource = (storyboardTake.storyboardPanelPlan?.panels?.length ?? 0) > 0
+    ? storyboardTake.storyboardPanelPlan?.panels ?? []
+    : parseTakeStoryboardPanelScriptText(storyboardTake.storyboardPanelScriptText)
+  const scriptedPanels = scriptedPanelSource.map((panel) => ({
     title: panel.title || `Panel ${panel.id}`,
     beat: panel.description,
     framing: '',
     cameraAngle: panel.cameraAngle,
     cameraMovement: panel.cameraMotion,
-  })) ?? []
+  }))
   const derivedPanels = scriptedPanels.length > 0 ? scriptedPanels : buildDerivedStoryboardPanelBeats(shots)
   const panelCount = Math.max(1, derivedPanels.length)
 
   return [
-    'Create one comic-ink storyboard board.',
+    'Create one multi-panel comic-ink storyboard board.',
     ...styleAnchor,
-    `Use a ${settings.stillAspectRatio} frame ratio for every panel.`,
-    'Render the result as a multi-panel storyboard that clearly progresses through the sequence.',
     describeStoryboardGrid(panelCount, settings.stillAspectRatio),
-    describeStoryboardPanelStyling(settings.stillAspectRatio),
+    'Use monochrome or restrained grayscale wash with bold silhouettes, clear action, and clean gutters.',
+    `You must render exactly ${panelCount} distinct panels, matching PANEL 1 through PANEL ${panelCount} below in reading order.`,
+    'Do not merge panels together, omit panels, duplicate panels, or invent extra panels beyond the numbered list.',
     'Keep the panels consistent in size, silhouette clarity, and overall continuity.',
     scriptedPanels.length > 0
       ? 'Follow the supplied panel script closely. Treat each panel as a storyboard beat inside the same take, not as a separate editorial cut unless the panel description itself implies one.'
-      : 'For action-heavy takes, split one continuous shot into multiple comic panels for engage, exchange, turn, and payoff beats when needed.',
-    'For each panel, place the referenced subjects into the described scene and preserve continuity across the board.',
+      : 'Split continuous action into extra panels only when the choreography needs it.',
+    'Place the referenced characters, props, and environments into each panel and preserve continuity across the board.',
     ...derivedPanels.map((panel, index) => buildStoryboardPanelDirection(panel, index)),
-    storyboardTake.proofMoment.trim() ? `Make this proof moment visually obvious: ${storyboardTake.proofMoment.trim()}.` : null,
-    storyboardTake.contrastAxis.trim() ? `Make this contrast visually clear: ${storyboardTake.contrastAxis.trim()}.` : null,
+    storyboardTake.proofMoment.trim() ? `Show this proof visually: ${storyboardTake.proofMoment.trim()}.` : null,
+    storyboardTake.contrastAxis.trim() ? `Show this contrast visually: ${storyboardTake.contrastAxis.trim()}.` : null,
     ...sourceDescriptions,
-    'Use referenced characters, environments, and hero objects when valid image refs are available; otherwise infer missing details from the sequence beats.',
+    'Use referenced characters, environments, and hero objects when valid image refs are available; otherwise infer only missing details from the sequence beats.',
     'Keep character likeness, costume continuity, and hero props faithful to the references.',
     'No captions, panel numbers, text labels, handwritten notes, speech bubbles, watermarks, or decorative mockup chrome.',
   ].filter(Boolean).join(' ')

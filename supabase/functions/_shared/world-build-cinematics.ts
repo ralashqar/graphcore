@@ -61,6 +61,7 @@ import {
   resolveUgcCreativeProfile,
 } from '../../../src/domain/ugcPresetProfiles.ts'
 import {
+  getStoryScreenwritingContract,
   inferStoryLanguagePresetFromPromptText,
   inferStoryScenePresetFromPromptText,
   resolveStoryRuntimeContract,
@@ -325,11 +326,14 @@ function storyPresetPlannerInstructions(
   storyScenePreset: z.infer<typeof cinematicStoryScenePresetSchema> | null,
   storyLanguagePreset: z.infer<typeof cinematicStoryLanguagePresetSchema> | null,
 ) {
+  const screenwritingContract = getStoryScreenwritingContract()
   const contract = resolveStoryRuntimeContract({ storyScenePreset, storyLanguagePreset })
   const actionPreset = contract.actionDensityBias !== 'low'
   return [
-    `Locked story scene preset: ${getCinematicStoryScenePresetLabel(contract.scenePreset)}.`,
-    `Locked story language preset: ${getCinematicStoryLanguagePresetLabel(contract.languagePreset)}.`,
+    `${screenwritingContract.label}:`,
+    ...screenwritingContract.creativePrinciples.map((entry) => `- ${entry}`),
+    `Selected story scene bias: ${getCinematicStoryScenePresetLabel(contract.scenePreset)}.`,
+    `Selected story language bias: ${getCinematicStoryLanguagePresetLabel(contract.languagePreset)}.`,
     `Dramatic purpose: ${contract.dramaticPurpose}`,
     `Shot role sequence guidance: ${contract.shotRoleSequence.join(' -> ')}.`,
     `Dialogue density guidance: ${contract.dialogueDensityGuidance}`,
@@ -342,7 +346,10 @@ function storyPresetPlannerInstructions(
     `Ending shape: ${contract.endingShape}`,
     actionPreset ? `Action exchange bundling: ${contract.actionExchangeBundling}. Keep one shot on a continuous exchange until a tactical turn, geography change, obstacle, or reversal justifies the cut.` : null,
     actionPreset ? `Storyboard panel density bias: ${contract.storyboardPanelDensityBias}. Dense action may expand into extra comic panels without inventing extra camera cuts.` : null,
+    actionPreset ? 'For action presets, establish geography fast and then get into visible contact or pressure quickly. Do not spend multiple late shots only restating posture, approach, or momentum.' : null,
+    actionPreset ? 'Describe combat through concrete physical events and consequences such as jammed entries, binds, guard breaks, forced retreats, stumbles, knockbacks, and reversals, not abstract commentary about who has advantage.' : null,
     contract.scenePreset === 'duel_showdown' ? 'Do not split every sword clash into its own shot.' : null,
+    ...screenwritingContract.plannerDirectives,
     ...contract.plannerDirectives,
   ].filter((entry): entry is string => Boolean(entry))
 }
@@ -351,10 +358,12 @@ function storyAuthorshipRules(input: {
   storyScenePreset: z.infer<typeof cinematicStoryScenePresetSchema> | null
   storyLanguagePreset: z.infer<typeof cinematicStoryLanguagePresetSchema> | null
 }) {
+  const screenwritingContract = getStoryScreenwritingContract()
   const contract = resolveStoryRuntimeContract(input)
   const actionPreset = contract.actionDensityBias !== 'low'
   return [
-    'Treat the story presets as the dramatic and camera contract for the scene. Preserve them instead of defaulting to generic film language.',
+    'Treat the story presets as scene and camera biases, not rigid templates. Preserve their intent without flattening the writing into formula.',
+    'Write the most exciting readable version of the scene, not the safest readable version.',
     `Dialogue density guidance: ${contract.dialogueDensityGuidance}`,
     `Blocking guidance: ${contract.blockingGuidance}`,
     `Coverage strategy: ${contract.coverageStrategy}`,
@@ -365,7 +374,12 @@ function storyAuthorshipRules(input: {
     `Sound and silence strategy: ${contract.soundSilenceStrategy}`,
     `Ending shape: ${contract.endingShape}`,
     actionPreset ? `One shot may contain several linked combat or pursuit beats when the movement is continuous. Cut on tactical change, geography change, reversal, obstacle, or emotional turn, not on every impact.` : null,
+    actionPreset ? 'For action presets, once the first attack or pressure move begins, keep most remaining shots on visible combat interaction, evasive response, or immediate physical consequence rather than commentary or reset beats.' : null,
+    actionPreset ? 'Use hard physical verbs and specific tactical events. Avoid generic taunts and abstract lines about momentum unless the same beat shows the concrete cause.' : null,
+    actionPreset ? 'Do not spend multiple shots restating stance, approach, or mutual readiness once geography is clear. Push quickly into contact, pressure, or consequence.' : null,
+    actionPreset ? 'Make at least one beat feel forceful, surprising, or memorable through a sharper reversal, harder contact, or clearer displacement.' : null,
     contract.scenePreset === 'duel_showdown' ? 'Do not split every sword clash into its own shot. Let one readable exchange carry multiple parry or strike beats before the cut.' : null,
+    ...screenwritingContract.authorshipDirectives,
     ...contract.authorshipDirectives,
   ]
 }
@@ -374,6 +388,7 @@ function storyRepairRules(input: {
   storyScenePreset: z.infer<typeof cinematicStoryScenePresetSchema> | null
   storyLanguagePreset: z.infer<typeof cinematicStoryLanguagePresetSchema> | null
 }) {
+  const screenwritingContract = getStoryScreenwritingContract()
   const contract = resolveStoryRuntimeContract(input)
   const actionPreset = contract.actionDensityBias !== 'low'
   return [
@@ -381,6 +396,8 @@ function storyRepairRules(input: {
     `Preserve the coverage strategy: ${contract.coverageStrategy}`,
     `Preserve the camera behavior rules: ${contract.cameraBehaviorRules}`,
     actionPreset ? 'If action is over-cut, merge tiny clash-only fragments into fewer tactical exchanges and move cuts to reversals, obstacles, or changed advantage.' : null,
+    actionPreset ? 'If action feels explanatory or generic, replace abstract momentum language and filler taunts with clearer physical beats, harder verbs, and a more decisive combat consequence.' : null,
+    ...screenwritingContract.repairDirectives,
     ...contract.repairDirectives,
   ]
 }
@@ -3483,8 +3500,8 @@ export function cinematicScriptRepairSystemPrompt(
     'Only use Props for recurring hero or continuity-critical refs. Everyday carrier objects, staging objects, packaging, surfaces, and background clutter should usually stay inside Action or Composition instead of becoming reusable props.',
     'Keep Action literal, visual, and specific. Do not summarize the whole ad in one block.',
     `Locked preset family: ${getCinematicPresetLabel(presetFamily)}.`,
-    storyContract ? `Locked story scene preset: ${getCinematicStoryScenePresetLabel(storyContract.scenePreset)}.` : null,
-    storyContract ? `Locked story language preset: ${getCinematicStoryLanguagePresetLabel(storyContract.languagePreset)}.` : null,
+    storyContract ? `Selected story scene bias: ${getCinematicStoryScenePresetLabel(storyContract.scenePreset)}.` : null,
+    storyContract ? `Selected story language bias: ${getCinematicStoryLanguagePresetLabel(storyContract.languagePreset)}.` : null,
     formatSubtype ? `Locked format subtype: ${getCinematicFormatSubtypeLabel(formatSubtype)}.` : null,
     profile ? `Locked shot job order: ${profile.shotRoleSequence.join(' -> ')}.` : null,
     profile ? `Allowed formula families: ${profile.allowedFormulaFamilies.join(', ')}.` : null,
@@ -4403,8 +4420,8 @@ export function cinematicScriptPlannerSystemPrompt(
     'Dialogue must use actual spoken lines. Do not summarize what the character says.',
     'Action is the canonical shot script. It must describe only what is visibly happening on screen.',
     `Locked preset family: ${getCinematicPresetLabel(presetFamily)}.`,
-    storyContract ? `Locked story scene preset: ${getCinematicStoryScenePresetLabel(storyContract.scenePreset)}.` : null,
-    storyContract ? `Locked story language preset: ${getCinematicStoryLanguagePresetLabel(storyContract.languagePreset)}.` : null,
+    storyContract ? `Selected story scene bias: ${getCinematicStoryScenePresetLabel(storyContract.scenePreset)}.` : null,
+    storyContract ? `Selected story language bias: ${getCinematicStoryLanguagePresetLabel(storyContract.languagePreset)}.` : null,
     formatSubtype ? `Locked format subtype: ${getCinematicFormatSubtypeLabel(formatSubtype)}.` : null,
     profile ? `Target use case: ${profile.targetUseCase}` : null,
     profile ? `Audience intent: ${profile.audienceIntent}` : null,
@@ -4493,8 +4510,8 @@ export function cinematicShotSkeletonPlannerSystemPrompt(
     'Only use Role values hook, setup, proof, payoff, cta.',
     'Only use reference ids from the locked entity set.',
     `Locked preset family: ${getCinematicPresetLabel(presetFamily)}.`,
-    storyContract ? `Locked story scene preset: ${getCinematicStoryScenePresetLabel(storyContract.scenePreset)}.` : null,
-    storyContract ? `Locked story language preset: ${getCinematicStoryLanguagePresetLabel(storyContract.languagePreset)}.` : null,
+    storyContract ? `Selected story scene bias: ${getCinematicStoryScenePresetLabel(storyContract.scenePreset)}.` : null,
+    storyContract ? `Selected story language bias: ${getCinematicStoryLanguagePresetLabel(storyContract.languagePreset)}.` : null,
     formatSubtype ? `Locked format subtype: ${getCinematicFormatSubtypeLabel(formatSubtype)}.` : null,
     profile ? `Target use case: ${profile.targetUseCase}` : null,
     profile ? `Audience intent: ${profile.audienceIntent}` : null,
@@ -4762,8 +4779,8 @@ export function cinematicShotAuthorshipSystemPrompt(
       : 'If the scene has a reveal or power turn, make it legible in frame and not only in dialogue.',
     'Do not invent new entities or new reusable refs.',
     `Locked preset family: ${getCinematicPresetLabel(presetFamily)}.`,
-    storyContract ? `Locked story scene preset: ${getCinematicStoryScenePresetLabel(storyContract.scenePreset)}.` : null,
-    storyContract ? `Locked story language preset: ${getCinematicStoryLanguagePresetLabel(storyContract.languagePreset)}.` : null,
+    storyContract ? `Selected story scene bias: ${getCinematicStoryScenePresetLabel(storyContract.scenePreset)}.` : null,
+    storyContract ? `Selected story language bias: ${getCinematicStoryLanguagePresetLabel(storyContract.languagePreset)}.` : null,
     formatSubtype ? `Locked format subtype: ${getCinematicFormatSubtypeLabel(formatSubtype)}.` : null,
     input.formulaFamily ? `Locked formula family: ${input.formulaFamily}.` : null,
     input.dominantTrigger ? `Locked dominant trigger: ${input.dominantTrigger}.` : null,
@@ -4855,8 +4872,8 @@ export function cinematicCreativeScriptAuthorshipSystemPrompt(
     'Proof shots must show the product or app doing something legible on screen by the planned proof deadline.',
     'Keep DIALOGUE_OR_VO concise enough to fit the planned targetDurationSeconds. Shorten lines instead of lengthening beats.',
     `Locked preset family: ${getCinematicPresetLabel(presetFamily)}.`,
-    storyContract ? `Locked story scene preset: ${getCinematicStoryScenePresetLabel(storyContract.scenePreset)}.` : null,
-    storyContract ? `Locked story language preset: ${getCinematicStoryLanguagePresetLabel(storyContract.languagePreset)}.` : null,
+    storyContract ? `Selected story scene bias: ${getCinematicStoryScenePresetLabel(storyContract.scenePreset)}.` : null,
+    storyContract ? `Selected story language bias: ${getCinematicStoryLanguagePresetLabel(storyContract.languagePreset)}.` : null,
     formatSubtype ? `Locked format subtype: ${getCinematicFormatSubtypeLabel(formatSubtype)}.` : null,
     input.formulaFamily ? `Locked formula family: ${input.formulaFamily}.` : null,
     input.dominantTrigger ? `Locked dominant trigger: ${input.dominantTrigger}.` : null,
