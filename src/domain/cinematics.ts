@@ -123,6 +123,7 @@ export const cinematicNarrationModeSchema = z.enum([
 ])
 export const cinematicAuthorshipPipelineSchema = z.enum([
   'json_shot_authoring_v1',
+  'story_script_ingest_v1',
   'ugc_script_ingest_v1',
 ])
 export const cinematicBackdropRoleSchema = z.enum([
@@ -212,7 +213,7 @@ export const cinematicSettingsSchema = z.object({
   creativeTreatment: z.preprocess(coerceEnumLikeValue(cinematicCreativeTreatmentSchema.options), cinematicCreativeTreatmentSchema.nullable()).default(null),
   hookFamily: z.preprocess(coerceEnumLikeValue(cinematicHookFamilySchema.options), cinematicHookFamilySchema.nullable()).default(null),
   narrationMode: z.preprocess(coerceEnumLikeValue(cinematicNarrationModeSchema.options), cinematicNarrationModeSchema.nullable()).default(null),
-  authorshipPipeline: z.preprocess(coerceEnumLikeValue(cinematicAuthorshipPipelineSchema.options), cinematicAuthorshipPipelineSchema).default('json_shot_authoring_v1'),
+  authorshipPipeline: z.preprocess(coerceEnumLikeValue(cinematicAuthorshipPipelineSchema.options), cinematicAuthorshipPipelineSchema).default('story_script_ingest_v1'),
   backdropRole: z.preprocess(coerceEnumLikeValue(cinematicBackdropRoleSchema.options), cinematicBackdropRoleSchema.nullable()).default(null),
   backdropStrategy: z.string().default(''),
   contrastAxis: z.string().default(''),
@@ -1144,7 +1145,7 @@ function buildUgcSettingsPacingPatch(
 }
 
 function getDefaultAuthorshipPipelineForPresetFamily(presetFamily: CinematicPresetFamily) {
-  return presetFamily === 'story_movie_tv' ? 'json_shot_authoring_v1' as const : 'ugc_script_ingest_v1' as const
+  return presetFamily === 'story_movie_tv' ? 'story_script_ingest_v1' as const : 'ugc_script_ingest_v1' as const
 }
 
 function resolveStoryPresetSelection(input: {
@@ -1300,7 +1301,7 @@ export function buildCinematicSettingsPatchFromStoryPresets(
     creativeTreatment: null,
     hookFamily: null,
     narrationMode: null,
-    authorshipPipeline: 'json_shot_authoring_v1',
+    authorshipPipeline: 'story_script_ingest_v1',
     backdropRole: null,
     backdropStrategy: '',
     proofMoment: '',

@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "test": "node --experimental-strip-types --test src/domain/ugcPresetProfiles.test.ts src/domain/artStylePresets.test.ts src/domain/storyPresetProfiles.test.ts src/domain/cinematics.test.ts src/domain/visualAssetGeneration.test.ts",
+    "test": "node --experimental-strip-types --test src/domain/ugcPresetProfiles.test.ts src/domain/artStylePresets.test.ts src/domain/storyPresetProfiles.test.ts src/domain/storyPromptBuilders.test.ts src/domain/cinematics.test.ts src/domain/visualAssetGeneration.test.ts",
     "supabase:start": "npx supabase start",
     "supabase:stop": "npx supabase stop",
     "supabase:status": "npx supabase status",

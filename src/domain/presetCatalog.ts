@@ -1377,7 +1377,7 @@ export function createDefaultGameSpec(packIds: string[] = ['pack.rpg_core']): Ga
       creativeTreatment: null,
       hookFamily: null,
       narrationMode: null,
-      authorshipPipeline: 'json_shot_authoring_v1',
+      authorshipPipeline: 'story_script_ingest_v1',
       backdropRole: null,
       backdropStrategy: '',
       contrastAxis: '',

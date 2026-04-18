@@ -14,7 +14,9 @@ import { cinematicPlanSchema, type CinematicPlan, type CinematicShotPlan } from 
 const CREATIVE_SCRIPT_FIELDS = [
   'PURPOSE',
   'ON_SCREEN',
+  'ACTION',
   'DIALOGUE_OR_VO',
+  'DIALOGUE',
   'CAMERA',
   'AUDIO',
   'NOTES',
@@ -56,6 +58,7 @@ export const cinematicCreativeScriptAuthorshipRawSchema = z.object({
 
 export const cinematicCreativeScriptBlockSchema = z.object({
   shotId: z.string(),
+  sceneTitle: z.string().default(''),
   purpose: z.string().default(''),
   onScreen: z.string().default(''),
   dialogueOrVo: z.string().default(''),
@@ -100,6 +103,22 @@ function splitCreativeTextIntoLines(value: string) {
 
 function normalizeDialogueLine(value: string) {
   return value.replace(/^["']+|["']+$/g, '').trim()
+}
+
+function parseDialogueLine(value: string) {
+  const trimmed = normalizeDialogueLine(value)
+  if (!trimmed) return { speakerLabel: '', line: '' }
+  const speakerMatch = trimmed.match(/^([^:]{1,80}):\s+(.+)$/)
+  if (!speakerMatch) {
+    return {
+      speakerLabel: '',
+      line: trimmed,
+    }
+  }
+  return {
+    speakerLabel: speakerMatch[1].trim(),
+    line: speakerMatch[2].trim(),
+  }
 }
 
 function inferFramingFromCamera(camera: string, fallback: string) {
@@ -177,6 +196,7 @@ export function parseCinematicCreativeScriptMarkdown(input: {
   const blocks: Array<z.infer<typeof cinematicCreativeScriptBlockSchema>> = []
   let currentBlock: z.infer<typeof cinematicCreativeScriptBlockSchema> | null = null
   let currentField: CreativeScriptField | null = null
+  let currentSceneTitle = ''
 
   const flushCurrentBlock = () => {
     if (!currentBlock) return
@@ -198,6 +218,7 @@ export function parseCinematicCreativeScriptMarkdown(input: {
       const shotId = shotHeading[1].trim()
       currentBlock = {
         shotId,
+        sceneTitle: currentSceneTitle,
         purpose: '',
         onScreen: '',
         dialogueOrVo: '',
@@ -211,13 +232,20 @@ export function parseCinematicCreativeScriptMarkdown(input: {
       continue
     }
 
-    const fieldMatch = trimmed.match(/^(PURPOSE|ON_SCREEN|DIALOGUE_OR_VO|CAMERA|AUDIO|NOTES):\s*(.*)$/i)
+    const sceneHeading = trimmed.match(/^#\s*SCENE\b\s*[:\-]?\s*(.+)$/i)
+    if (sceneHeading) {
+      currentSceneTitle = sceneHeading[1].trim()
+      currentField = null
+      continue
+    }
+
+    const fieldMatch = trimmed.match(/^(PURPOSE|ON_SCREEN|ACTION|DIALOGUE_OR_VO|DIALOGUE|CAMERA|AUDIO|NOTES):\s*(.*)$/i)
     if (fieldMatch && currentBlock) {
       currentField = fieldMatch[1].toUpperCase() as CreativeScriptField
       const inlineValue = fieldMatch[2].trim()
       if (currentField === 'PURPOSE') currentBlock.purpose = appendFieldValue(currentBlock.purpose, inlineValue)
-      if (currentField === 'ON_SCREEN') currentBlock.onScreen = appendFieldValue(currentBlock.onScreen, inlineValue)
-      if (currentField === 'DIALOGUE_OR_VO') currentBlock.dialogueOrVo = appendFieldValue(currentBlock.dialogueOrVo, inlineValue)
+      if (currentField === 'ON_SCREEN' || currentField === 'ACTION') currentBlock.onScreen = appendFieldValue(currentBlock.onScreen, inlineValue)
+      if (currentField === 'DIALOGUE_OR_VO' || currentField === 'DIALOGUE') currentBlock.dialogueOrVo = appendFieldValue(currentBlock.dialogueOrVo, inlineValue)
       if (currentField === 'CAMERA') currentBlock.camera = appendFieldValue(currentBlock.camera, inlineValue)
       if (currentField === 'AUDIO') currentBlock.audio = appendFieldValue(currentBlock.audio, inlineValue)
       if (currentField === 'NOTES') currentBlock.notes = appendFieldValue(currentBlock.notes, inlineValue)
@@ -227,8 +255,8 @@ export function parseCinematicCreativeScriptMarkdown(input: {
     if (!currentBlock || !currentField) continue
 
     if (currentField === 'PURPOSE') currentBlock.purpose = appendFieldValue(currentBlock.purpose, trimmed)
-    if (currentField === 'ON_SCREEN') currentBlock.onScreen = appendFieldValue(currentBlock.onScreen, trimmed)
-    if (currentField === 'DIALOGUE_OR_VO') currentBlock.dialogueOrVo = appendFieldValue(currentBlock.dialogueOrVo, trimmed)
+    if (currentField === 'ON_SCREEN' || currentField === 'ACTION') currentBlock.onScreen = appendFieldValue(currentBlock.onScreen, trimmed)
+    if (currentField === 'DIALOGUE_OR_VO' || currentField === 'DIALOGUE') currentBlock.dialogueOrVo = appendFieldValue(currentBlock.dialogueOrVo, trimmed)
     if (currentField === 'CAMERA') currentBlock.camera = appendFieldValue(currentBlock.camera, trimmed)
     if (currentField === 'AUDIO') currentBlock.audio = appendFieldValue(currentBlock.audio, trimmed)
     if (currentField === 'NOTES') currentBlock.notes = appendFieldValue(currentBlock.notes, trimmed)
@@ -266,15 +294,21 @@ function buildDialogueBeats(input: {
   const lines = splitCreativeTextIntoLines(input.dialogueText)
   if (lines.length === 0) return [] as z.infer<typeof dialogueBeatSchema>[]
   const defaultSpeakerRefId = input.shot.participantRefIds.length === 1 ? input.shot.participantRefIds[0] : null
-  return lines.map((line, index) => ({
-    id: `${input.shot.id}_dialogue_${index + 1}`,
-    speakerRefId: defaultSpeakerRefId,
-    line: normalizeDialogueLine(line),
-    delivery: '',
-    startSeconds: null,
-    endSeconds: null,
-    lipSync: true,
-  }))
+  return lines
+    .map((line, index) => {
+      const parsedLine = parseDialogueLine(line)
+      if (!parsedLine.line) return null
+      return {
+        id: `${input.shot.id}_dialogue_${index + 1}`,
+        speakerRefId: defaultSpeakerRefId,
+        line: parsedLine.line,
+        delivery: parsedLine.speakerLabel,
+        startSeconds: null,
+        endSeconds: null,
+        lipSync: true,
+      }
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
 }
 
 function buildVoiceoverAudioBeats(input: {

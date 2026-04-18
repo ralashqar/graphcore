@@ -3186,12 +3186,24 @@ Deno.serve(async (request) => {
             })
             const shouldAutoRunCinematic = false
             const authoringDiagnostics = [...plannerDiagnostics, ...scriptRepairDiagnostics]
+            const authorshipPipeline =
+              typeof job.result_context?.authorshipPipeline === 'string'
+                ? job.result_context.authorshipPipeline
+                : typeof authoredCinematicPlan.graphSettings?.authorshipPipeline === 'string'
+                  ? authoredCinematicPlan.graphSettings.authorshipPipeline
+                  : null
+            const authorshipPromptVersion =
+              typeof job.result_context?.authorshipPromptVersion === 'string'
+                ? job.result_context.authorshipPromptVersion
+                : null
             authoredGraph = {
               ...authoredGraph,
               metadata: {
                 ...authoredGraph.metadata,
                 cinematicAuthoring: {
                   phase: 'completed',
+                  authorshipPipeline,
+                  authorshipPromptVersion,
                   repairApplied: authoringFlags.usedRepairPass || scriptRepairDiagnostics.length > 0,
                   usedRepairPass: authoringFlags.usedRepairPass,
                   usedFallbackPrimaryShot: authoringFlags.usedFallbackPrimaryShot,

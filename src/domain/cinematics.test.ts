@@ -199,7 +199,7 @@ test('UGC preset families default to the creative-script ingestion pipeline', ()
   const storySettings = buildCinematicSettingsPatchFromPresetFamily('story_movie_tv')
 
   assert.equal(ugcSettings.authorshipPipeline, 'ugc_script_ingest_v1')
-  assert.equal(storySettings.authorshipPipeline, 'json_shot_authoring_v1')
+  assert.equal(storySettings.authorshipPipeline, 'story_script_ingest_v1')
 })
 
 test('story preset patches lock scene and language selectors with story pacing defaults', () => {
@@ -209,7 +209,7 @@ test('story preset patches lock scene and language selectors with story pacing d
   assert.equal(settings.storyScenePreset, 'interrogation_pressure_cooker')
   assert.equal(settings.storyLanguagePreset, 'precision_procedural')
   assert.equal(settings.formatSubtype, null)
-  assert.equal(settings.authorshipPipeline, 'json_shot_authoring_v1')
+  assert.equal(settings.authorshipPipeline, 'story_script_ingest_v1')
   assert.deepEqual(settings.targetShotCountRange, [5, 9])
   assert.deepEqual(settings.idealShotDurationRangeSeconds, [3, 7])
 })
@@ -220,7 +220,7 @@ test('action story preset patches derive combat pacing defaults', () => {
   assert.equal(settings.presetFamily, 'story_movie_tv')
   assert.equal(settings.storyScenePreset, 'duel_showdown')
   assert.equal(settings.storyLanguagePreset, 'tactical_combat')
-  assert.equal(settings.authorshipPipeline, 'json_shot_authoring_v1')
+  assert.equal(settings.authorshipPipeline, 'story_script_ingest_v1')
   assert.deepEqual(settings.targetShotCountRange, [3, 6])
   assert.deepEqual(settings.idealShotDurationRangeSeconds, [2, 5])
   assert.equal(settings.maxDialogueWordsPerShot, 14)
@@ -765,6 +765,46 @@ test('visual-only creative scripts ingest without dialogue and keep visible acti
   assert.equal(ingested.authoredShots[0]?.dialogue.length, 0)
   assert.ok((ingested.authoredShots[0]?.actions[0]?.verb ?? '').includes('phone fills the frame'))
   assert.equal(ingested.authoredShots[0]?.audio[0]?.cue, 'Soft thumb taps only.')
+})
+
+test('story creative scripts ingest scene headings and speaker-prefixed dialogue', () => {
+  const plan = cinematicPlanSchema.parse({
+    graphName: 'Arena Duel',
+    graphSummary: 'Kharzag fights Brakk in the arena.',
+    entityRefs: [],
+    graphSettings: {
+      presetFamily: 'story_movie_tv',
+      storyScenePreset: 'duel_showdown',
+      storyLanguagePreset: 'tactical_combat',
+      authorshipPipeline: 'story_script_ingest_v1',
+    },
+    shots: [
+      {
+        id: 'shot_01_faceoff',
+        title: 'Face-off',
+        sceneId: 'scene_1',
+        participantRefIds: ['kharzag', 'brakk'],
+        locationRefId: 'arena_1',
+      },
+    ],
+  })
+
+  const ingested = ingestCinematicCreativeScriptToAuthoredShots({
+    plan,
+    rawScriptMarkdown: [
+      '# SCENE: Arena Floor',
+      '## SHOT: shot_01_faceoff',
+      'ACTION: Kharzag and Brakk circle in the torchlit sand until Kharzag snaps forward first.',
+      'DIALOGUE: Kharzag: Move.',
+      'CAMERA: Wide combat two-shot, low angle, fast lateral track.',
+      'AUDIO: Crowd hush, chain rattle, then the scrape of boots in sand.',
+    ].join('\n'),
+  })
+
+  assert.equal(ingested.authoredShots[0]?.dialogue[0]?.delivery, 'Kharzag')
+  assert.equal(ingested.authoredShots[0]?.dialogue[0]?.line, 'Move.')
+  assert.match(ingested.authoredShots[0]?.actions[0]?.verb ?? '', /circle in the torchlit sand/i)
+  assert.match(ingested.authoredShots[0]?.cameraMovement ?? '', /fast lateral track/i)
 })
 
 test('story duel keeps packing across mixed shot-level preset metadata when continuity is continuous', () => {

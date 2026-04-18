@@ -2,6 +2,11 @@ import '@supabase/functions-js/edge-runtime.d.ts'
 
 import { buildCinematicSequenceFromScriptDoc, buildCinematicSettingsPatchFromFormatSubtype, buildCinematicSettingsPatchFromPresetFamily, cinematicScriptDocSchema, getCinematicSettings } from '../../../src/domain/cinematics.ts'
 import {
+  STORY_PROMPT_VERSION,
+  STORY_SCRIPT_INGEST_PIPELINE,
+  buildStoryCreativeScriptPrompt,
+} from '../../../src/domain/storyPromptBuilders.ts'
+import {
   worldBuildBatchSchema,
   worldBuildJobSchema,
   worldBuildRepairCinematicRequestSchema,
@@ -249,6 +254,75 @@ function readNumericResultContextValue(resultContext: Record<string, unknown> | 
   return typeof value === 'number' && Number.isFinite(value) ? value : 0
 }
 
+function buildStoryPromptContext(input: {
+  prompt: string
+  requestSummary: string
+  graphName: string
+  graphSummary: string
+  entityRefs: Array<{
+    id: string
+    kind: string
+    role: string
+    sourceName: string
+    summary?: string | null
+  }>
+  shots: Array<{
+    id: string
+    sceneId?: string | null
+    title: string
+    beat?: string
+    hookRole?: string | null
+    shotType?: string | null
+    participantRefIds: string[]
+    locationRefId?: string | null
+    propRefIds: string[]
+  }>
+  currentShotState?: Array<{
+    id: string
+    beat?: string
+    dialogue?: Array<{ line?: string | null }>
+    actions?: Array<{ verb?: string | null }>
+  }>
+  currentDiagnostics?: Array<{ shotId?: string | null; category: string; message: string }>
+}) {
+  const entityById = new Map(input.entityRefs.map((entry) => [entry.id, entry]))
+  return {
+    prompt: input.prompt,
+    requestSummary: input.requestSummary,
+    graphName: input.graphName,
+    graphSummary: input.graphSummary,
+    lockedEntities: input.entityRefs.map((entry) => ({
+      id: entry.id,
+      kind: entry.kind,
+      role: entry.role,
+      name: entry.sourceName,
+      summary: entry.summary?.trim() || `${entry.kind} locked for scene continuity.`,
+    })),
+    plannedShots: input.shots.map((shot) => ({
+      id: shot.id,
+      sceneId: shot.sceneId ?? 'scene_1',
+      title: shot.title,
+      beat: shot.beat ?? '',
+      hookRole: shot.hookRole ?? null,
+      shotType: shot.shotType ?? null,
+      participants: shot.participantRefIds.map((refId) => entityById.get(refId)?.sourceName ?? refId),
+      location: shot.locationRefId ? (entityById.get(shot.locationRefId)?.sourceName ?? shot.locationRefId) : null,
+      props: shot.propRefIds.map((refId) => entityById.get(refId)?.sourceName ?? refId),
+    })),
+    currentShotState: (input.currentShotState ?? []).map((shot) => ({
+      id: shot.id,
+      beat: shot.beat ?? '',
+      dialogue: (shot.dialogue ?? []).map((entry) => entry.line ?? '').filter((entry) => entry.trim().length > 0),
+      actions: (shot.actions ?? []).map((entry) => entry.verb ?? '').filter((entry) => entry.trim().length > 0),
+    })),
+    currentDiagnostics: (input.currentDiagnostics ?? []).map((entry) => ({
+      shotId: entry.shotId ?? null,
+      category: entry.category,
+      message: entry.message,
+    })),
+  }
+}
+
 function buildBatchFailureStatus(jobs: JobRow[], failedJobId: string) {
   const nextJobs = jobs.map((job) => (
     job.id === failedJobId
@@ -363,6 +437,15 @@ Deno.serve(async (request) => {
     const repairAttempts = readNumericResultContextValue(existingResultContext, 'repairAttempts') + 1
     const authoringAttempts = Math.max(1, readNumericResultContextValue(existingResultContext, 'authoringAttempts'))
     const maxRepairAttempts = Math.max(1, readNumericResultContextValue(existingResultContext, 'maxRepairAttempts') || 1)
+    const useStoryScriptIngestPipeline = effectiveSettings.authorshipPipeline === STORY_SCRIPT_INGEST_PIPELINE
+    const useCreativeScriptPipeline =
+      effectiveSettings.authorshipPipeline === 'ugc_script_ingest_v1'
+      || useStoryScriptIngestPipeline
+    const authorshipPromptVersion = useStoryScriptIngestPipeline
+      ? STORY_PROMPT_VERSION
+      : useCreativeScriptPipeline
+        ? 'ugc_creative_script_prompt_v1'
+        : 'legacy_json_shot_authoring_v1'
 
     await updateJob(client, cinematicJob.id, {
       result_context: {
@@ -377,48 +460,67 @@ Deno.serve(async (request) => {
         repairModelRequested: repairModel.requestedModel,
         repairModelUsed: repairModel.model,
         repairModelTier: repairModel.qualityTier,
+        authorshipPipeline: effectiveSettings.authorshipPipeline,
+        authorshipPromptVersion,
       },
       error_message: null,
     })
 
-    const useCreativeScriptPipeline = effectiveSettings.authorshipPipeline === 'ugc_script_ingest_v1'
     const repairedRaw = useCreativeScriptPipeline
       ? await runStructuredWorldBuildModel({
           model: repairModel.model,
-          passLabel: 'Cinematic creative script repair',
+          passLabel: useStoryScriptIngestPipeline ? 'Story creative script repair' : 'Cinematic creative script repair',
           systemText: [
-            cinematicCreativeScriptAuthorshipSystemPrompt({
-              presetFamily: effectiveSettings.presetFamily,
-              storyScenePreset: effectiveSettings.storyScenePreset,
-              storyLanguagePreset: effectiveSettings.storyLanguagePreset,
-              formatSubtype: effectiveSettings.formatSubtype,
-              formulaFamily: effectiveSettings.formulaFamily,
-              dominantTrigger: effectiveSettings.dominantTrigger,
-              proofMoment: effectiveSettings.proofMoment,
-              ctaStyle: effectiveSettings.ctaStyle,
-              contrastAxis: effectiveSettings.contrastAxis,
-              graphSettings: cinematicPlan.graphSettings ?? {},
-              projectArtStylePreset: effectiveSettings.artStylePreset ?? null,
-            }),
+            useStoryScriptIngestPipeline
+              ? buildStoryCreativeScriptPrompt({
+                  storyScenePreset: effectiveSettings.storyScenePreset ?? null,
+                  storyLanguagePreset: effectiveSettings.storyLanguagePreset ?? null,
+                  repairMode: true,
+                })
+              : cinematicCreativeScriptAuthorshipSystemPrompt({
+                  presetFamily: effectiveSettings.presetFamily,
+                  storyScenePreset: effectiveSettings.storyScenePreset,
+                  storyLanguagePreset: effectiveSettings.storyLanguagePreset,
+                  formatSubtype: effectiveSettings.formatSubtype,
+                  formulaFamily: effectiveSettings.formulaFamily,
+                  dominantTrigger: effectiveSettings.dominantTrigger,
+                  proofMoment: effectiveSettings.proofMoment,
+                  ctaStyle: effectiveSettings.ctaStyle,
+                  contrastAxis: effectiveSettings.contrastAxis,
+                  graphSettings: cinematicPlan.graphSettings ?? {},
+                  projectArtStylePreset: effectiveSettings.artStylePreset ?? null,
+                }),
             `Repair scope: only repair these shot ids: ${targetShotIds.join(', ')}.`,
             payload.failureCategories.length > 0 ? `Target these failure categories: ${payload.failureCategories.join(', ')}.` : 'Target the currently failing authored fields only.',
             payload.fieldScopes.length > 0 ? `Only rewrite these field scopes when possible: ${payload.fieldScopes.join(', ')}.` : 'Repair whichever authored fields are needed to resolve the failures.',
             'Do not change unaffected shots.',
+            useStoryScriptIngestPipeline ? 'Fix late contact, generic dialogue, abstract momentum language, repetitive reset beats, and weak final images before cosmetic polish.' : null,
           ].join('\n'),
-          promptContext: {
-            prompt: batch.prompt,
-            project: payload.snapshot.project,
-            draft: payload.snapshot.draft,
-            gameSpec: payload.snapshot.gameSpec ?? null,
-            requestSummary: batch.request_summary,
-            graphName: cinematicPlan.graphName,
-            graphSummary: cinematicPlan.graphSummary,
-            lockedGraphSettings: effectiveSettings,
-            lockedEntityRefs: cinematicPlan.entityRefs,
-            plannedShots: targetedShots,
-            currentShotState: currentScriptDoc.shots.filter((shot) => targetShotIds.includes(shot.id)),
-            currentDiagnostics: currentQuality.diagnostics.filter((entry) => !entry.shotId || targetShotIds.includes(entry.shotId)),
-          },
+          promptContext: useStoryScriptIngestPipeline
+            ? buildStoryPromptContext({
+                prompt: batch.prompt,
+                requestSummary: batch.request_summary,
+                graphName: cinematicPlan.graphName,
+                graphSummary: cinematicPlan.graphSummary,
+                entityRefs: cinematicPlan.entityRefs,
+                shots: targetedShots,
+                currentShotState: currentScriptDoc.shots.filter((shot) => targetShotIds.includes(shot.id)),
+                currentDiagnostics: currentQuality.diagnostics.filter((entry) => !entry.shotId || targetShotIds.includes(entry.shotId)),
+              })
+            : {
+                prompt: batch.prompt,
+                project: payload.snapshot.project,
+                draft: payload.snapshot.draft,
+                gameSpec: payload.snapshot.gameSpec ?? null,
+                requestSummary: batch.request_summary,
+                graphName: cinematicPlan.graphName,
+                graphSummary: cinematicPlan.graphSummary,
+                lockedGraphSettings: effectiveSettings,
+                lockedEntityRefs: cinematicPlan.entityRefs,
+                plannedShots: targetedShots,
+                currentShotState: currentScriptDoc.shots.filter((shot) => targetShotIds.includes(shot.id)),
+                currentDiagnostics: currentQuality.diagnostics.filter((entry) => !entry.shotId || targetShotIds.includes(entry.shotId)),
+              },
           schema: cinematicCreativeScriptAuthorshipRawSchema,
           maxOutputTokens: 9000,
         })
@@ -555,6 +657,7 @@ Deno.serve(async (request) => {
         repairModelUsed: repairModel.model,
         repairModelTier: repairModel.qualityTier,
         authorshipPipeline: effectiveSettings.authorshipPipeline,
+        authorshipPromptVersion,
       },
       error_message: null,
     })
