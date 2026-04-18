@@ -2,6 +2,7 @@ import '@supabase/functions-js/edge-runtime.d.ts'
 
 import { z } from 'npm:zod@4'
 
+import { normalizeProviderQueueHandle } from '../../../src/core/providerQueue.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
 
 const contentGenerationSchema = z.object({
@@ -663,28 +664,10 @@ function readWorldBuildQueueMetadata(
     cancelUrl?: string | null
   },
 ) {
-  const context = resultContext && typeof resultContext === 'object'
-    ? resultContext
-    : {}
-
-  return {
-    providerRequestId: typeof overrides?.providerRequestId === 'string'
-      ? overrides.providerRequestId
-      : typeof context.providerRequestId === 'string'
-      ? context.providerRequestId
-      : typeof context.requestId === 'string'
-        ? context.requestId
-        : null,
-    statusUrl: typeof overrides?.statusUrl === 'string'
-      ? overrides.statusUrl
-      : typeof context.statusUrl === 'string' ? context.statusUrl : null,
-    responseUrl: typeof overrides?.responseUrl === 'string'
-      ? overrides.responseUrl
-      : typeof context.responseUrl === 'string' ? context.responseUrl : null,
-    cancelUrl: typeof overrides?.cancelUrl === 'string'
-      ? overrides.cancelUrl
-      : typeof context.cancelUrl === 'string' ? context.cancelUrl : null,
-  }
+  return normalizeProviderQueueHandle({
+    resultContext,
+    overrides,
+  })
 }
 
 function readSubmittedAt(resultContext: Record<string, unknown> | null | undefined) {

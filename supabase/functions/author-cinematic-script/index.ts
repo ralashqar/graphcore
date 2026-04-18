@@ -2,299 +2,25 @@ import '@supabase/functions-js/edge-runtime.d.ts'
 
 import { z } from 'npm:zod@4'
 
+import { mergeWorldBuildJobContext, readWorldBuildAttemptCount } from '../../../src/core/generationWorkflow.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
-
-type BatchRow = {
-  id: string
-  draft_id: string
-  project_id: string
-  prompt: string
-  request_summary: string
-  planner_mode: string | null
-  status: string
-  diagnostics: string[] | null
-  plan_json: unknown[]
-  cinematic_plan: Record<string, unknown> | null
-  created_at: string
-  updated_at: string
-}
-
-type JobRow = {
-  id: string
-  batch_id: string
-  plan_item_id: string
-  kind: string
-  status: string
-  depends_on_job_ids: string[] | null
-  target_keys: Record<string, string> | null
-  prompt: string
-  options: Record<string, unknown> | null
-  provider_request_id: string | null
-  status_url: string | null
-  response_url: string | null
-  cancel_url: string | null
-  result_context: Record<string, unknown> | null
-  error_message: string | null
-  order_index: number
-  created_at: string
-  updated_at: string
-}
+import {
+  type WorldBuildBatchRow as BatchRow,
+  type WorldBuildJobRow as JobRow,
+  buildWorldBuildBatchFailureStatus as buildBatchFailureStatus,
+  loadWorldBuildBatch as loadBatch,
+  loadWorldBuildBatchResources as loadBatchResources,
+  parseWorldBuildJobRow as parseWorldBuildJob,
+  readWorldBuildNumericResultContextValue as readNumericResultContextValue,
+  updateWorldBuildBatch as updateBatch,
+  updateWorldBuildJob as updateJob,
+} from '../_shared/world-build-repository.ts'
 
 let worldBuildAuthorCinematicRequestSchemaRuntime: z.ZodTypeAny | null = null
 let worldBuildBatchSchemaRuntime: z.ZodTypeAny | null = null
 let worldBuildBatchCinematicPlanSchemaRuntime: z.ZodTypeAny | null = null
 let worldBuildJobSchemaRuntime: z.ZodTypeAny | null = null
 let worldBuildStatusResponseSchemaRuntime: z.ZodTypeAny | null = null
-
-async function loadBatch(
-  client: any,
-  batchId: string,
-) {
-  const batchResponse = await client
-    .from('world_build_batches')
-    .select('id, draft_id, project_id, prompt, request_summary, planner_mode, status, diagnostics, plan_json, cinematic_plan, created_at, updated_at')
-    .eq('id', batchId)
-    .single()
-
-  if (batchResponse.error || !batchResponse.data) {
-    throw new Error(batchResponse.error?.message ?? `World build batch ${batchId} was not found.`)
-  }
-
-  const jobsResponse = await client
-    .from('world_build_jobs')
-    .select('id, batch_id, plan_item_id, kind, status, depends_on_job_ids, target_keys, prompt, options, provider_request_id, status_url, response_url, cancel_url, result_context, error_message, order_index, created_at, updated_at')
-    .eq('batch_id', batchId)
-    .order('order_index', { ascending: true })
-
-  if (jobsResponse.error) {
-    throw new Error(jobsResponse.error.message)
-  }
-
-  return {
-    batch: batchResponse.data as BatchRow,
-    jobs: (jobsResponse.data ?? []) as JobRow[],
-  }
-}
-
-async function loadBatchResources(
-  client: any,
-  draftId: string,
-  projectId: string,
-  batchId: string,
-) {
-  const batchJobsResponse = await client
-    .from('world_build_jobs')
-    .select('kind, target_keys')
-    .eq('batch_id', batchId)
-
-  if (batchJobsResponse.error) {
-    throw new Error(batchJobsResponse.error.message)
-  }
-
-  const existingDefinitionKeys = Array.from(new Set(
-    ((batchJobsResponse.data ?? []) as Array<{ kind?: string | null; target_keys?: Record<string, unknown> | null }>)
-      .flatMap((job) => {
-        const definitionKey = typeof job.target_keys?.definitionKey === 'string' ? job.target_keys.definitionKey : null
-        if (!definitionKey) return []
-        if (job.kind === 'character_concept_image' || job.kind === 'item_concept_image' || job.kind === 'environment_concept_image') {
-          return [definitionKey]
-        }
-        return []
-      }),
-  ))
-
-  const [definitionsResponse, graphsResponse, graphNodesResponse, graphEdgesResponse, assetsResponse] = await Promise.all([
-    client
-      .from('project_definitions')
-      .select('id, key, kind, name, summary, status, icon_asset_key, archetype_key, tags, schema_version, metadata, llm_hints, asset_refs, definition_data')
-      .eq('draft_id', draftId)
-      .contains('metadata', { generation: { batchId } }),
-    client
-      .from('draft_graphs')
-      .select('id, key, name, graph_type, summary, entry_node_key, metadata, llm_hints')
-      .eq('draft_id', draftId)
-      .contains('metadata', { generation: { batchId } }),
-    client
-      .from('draft_graph_nodes')
-      .select('id, graph_id, key, node_type, title, template_key, subtitle, position_x, position_y, body, condition_expr, effect_ops, ports, display, metadata'),
-    client
-      .from('draft_graph_edges')
-      .select('id, graph_id, key, source_node_key, source_port, target_node_key, target_port, label, condition_expr, metadata'),
-    client
-      .from('project_assets')
-      .select('id, key, name, kind, mime_type, storage_path, metadata, llm_hints')
-      .eq('project_id', projectId)
-      .contains('metadata', { generation: { batchId } }),
-  ])
-
-  if (definitionsResponse.error || graphsResponse.error || assetsResponse.error || graphNodesResponse.error || graphEdgesResponse.error) {
-    throw new Error(
-      definitionsResponse.error?.message
-      ?? graphsResponse.error?.message
-      ?? graphNodesResponse.error?.message
-      ?? graphEdgesResponse.error?.message
-      ?? assetsResponse.error?.message
-      ?? 'Failed to load world build resources.',
-    )
-  }
-
-  const directDefinitionsResponse = existingDefinitionKeys.length > 0
-    ? await client
-        .from('project_definitions')
-        .select('id, key, kind, name, summary, status, icon_asset_key, archetype_key, tags, schema_version, metadata, llm_hints, asset_refs, definition_data')
-        .eq('draft_id', draftId)
-        .in('key', existingDefinitionKeys)
-    : { data: [], error: null }
-
-  if (directDefinitionsResponse.error) {
-    throw new Error(directDefinitionsResponse.error.message)
-  }
-
-  const mergedDefinitionRows = Array.from(
-    new Map(
-      [...(definitionsResponse.data ?? []), ...(directDefinitionsResponse.data ?? [])].map((definition) => [definition.key, definition]),
-    ).values(),
-  )
-
-  const definitions = await Promise.all(mergedDefinitionRows.map(async (definition) => {
-    const componentsResponse = await client
-      .from('project_definition_components')
-      .select('component_type, config')
-      .eq('definition_id', definition.id)
-
-    if (componentsResponse.error) {
-      throw new Error(componentsResponse.error.message)
-    }
-
-    return {
-      id: definition.id,
-      key: definition.key,
-      kind: definition.kind,
-      name: definition.name,
-      summary: definition.summary ?? '',
-      status: definition.status,
-      iconAssetKey: definition.icon_asset_key,
-      archetypeKey: definition.archetype_key,
-      tags: definition.tags ?? [],
-      schemaVersion: definition.schema_version ?? 1,
-      metadata: definition.metadata ?? {},
-      llmHints: definition.llm_hints ?? {},
-      assetRefs: definition.asset_refs ?? [],
-      definitionData: definition.definition_data ?? {},
-      fieldValues: [],
-      customFields: [],
-      components: (componentsResponse.data ?? []).map((component) => ({
-        type: component.component_type,
-        config: component.config ?? {},
-      })),
-    }
-  }))
-
-  const graphRows = graphsResponse.data ?? []
-  const nodes = graphNodesResponse.data ?? []
-  const edges = graphEdgesResponse.data ?? []
-
-  const graphs = graphRows.map((graph) => ({
-    id: graph.id,
-    key: graph.key,
-    name: graph.name,
-    graphType: graph.graph_type,
-    summary: graph.summary ?? '',
-    entryNodeKey: graph.entry_node_key,
-    metadata: graph.metadata ?? {},
-    llmHints: graph.llm_hints ?? {},
-    nodes: nodes
-      .filter((node) => node.graph_id === graph.id)
-      .map((node) => ({
-        id: node.id,
-        key: node.key,
-        type: node.node_type,
-        title: node.title,
-        templateKey: node.template_key,
-        subtitle: node.subtitle,
-        position: { x: Number(node.position_x), y: Number(node.position_y) },
-        body: node.body ?? {},
-        condition: node.condition_expr,
-        effects: node.effect_ops ?? [],
-        ports: node.ports ?? [],
-        display: node.display ?? {},
-        metadata: node.metadata ?? {},
-      })),
-    edges: edges
-      .filter((edge) => edge.graph_id === graph.id)
-      .map((edge) => ({
-        id: edge.id,
-        key: edge.key,
-        source: { nodeKey: edge.source_node_key, portId: edge.source_port },
-        target: { nodeKey: edge.target_node_key, portId: edge.target_port },
-        label: edge.label,
-        condition: edge.condition_expr,
-        metadata: edge.metadata ?? {},
-      })),
-  }))
-
-  const assets = (assetsResponse.data ?? []).map((asset) => ({
-    id: asset.id,
-    key: asset.key,
-    name: asset.name,
-    kind: asset.kind,
-    mimeType: asset.mime_type,
-    storagePath: asset.storage_path,
-    metadata: asset.metadata ?? {},
-    llmHints: asset.llm_hints ?? {},
-  }))
-
-  return { definitions, graphs, assets }
-}
-
-function parseWorldBuildJob(row: JobRow) {
-  if (!worldBuildJobSchemaRuntime) {
-    throw new Error('worldBuildJobSchema is not initialized.')
-  }
-  return worldBuildJobSchemaRuntime.parse({
-    id: row.id,
-    batchId: row.batch_id,
-    planItemId: row.plan_item_id,
-    kind: row.kind,
-    status: row.status,
-    dependsOnJobIds: row.depends_on_job_ids ?? [],
-    targetKeys: row.target_keys ?? {},
-    prompt: row.prompt ?? '',
-    options: row.options ?? {},
-    providerRequestId: row.provider_request_id,
-    statusUrl: row.status_url,
-    responseUrl: row.response_url,
-    cancelUrl: row.cancel_url,
-    resultContext: row.result_context ?? null,
-    errorMessage: row.error_message ?? null,
-    orderIndex: row.order_index,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  })
-}
-
-async function updateJob(
-  client: any,
-  jobId: string,
-  changes: Record<string, unknown>,
-) {
-  const response = await client.from('world_build_jobs').update(changes).eq('id', jobId)
-  if (response.error) throw new Error(response.error.message)
-}
-
-async function updateBatch(
-  client: any,
-  batchId: string,
-  changes: Record<string, unknown>,
-) {
-  const response = await client.from('world_build_batches').update(changes).eq('id', batchId)
-  if (response.error) throw new Error(response.error.message)
-}
-
-function readNumericResultContextValue(resultContext: Record<string, unknown> | null | undefined, key: string) {
-  const value = resultContext?.[key]
-  return typeof value === 'number' && Number.isFinite(value) ? value : 0
-}
 
 function buildStoryPromptContext(input: {
   prompt: string
@@ -345,19 +71,6 @@ function buildStoryPromptContext(input: {
       props: shot.propRefIds.map((refId) => entityById.get(refId)?.sourceName ?? refId),
     })),
   }
-}
-
-function buildBatchFailureStatus(jobs: JobRow[], failedJobId: string) {
-  const nextJobs = jobs.map((job) => (
-    job.id === failedJobId
-      ? { ...job, status: 'failed' }
-      : job
-  ))
-  const hasFailed = nextJobs.some((job) => job.status === 'failed')
-  const hasRunning = nextJobs.some((job) => job.status === 'queued' || job.status === 'running')
-  if (hasRunning) return 'running'
-  if (hasFailed && nextJobs.some((job) => job.status === 'succeeded')) return 'completed_with_errors'
-  return 'failed'
 }
 
 function selectAuthorshipModel(requestedModel: string, presetFamily: string | null | undefined) {
@@ -490,7 +203,7 @@ Deno.serve(async (request) => {
           cinematicPlan,
           createdAt: batch.created_at,
           updatedAt: batch.updated_at,
-          jobs: loaded.jobs.map(parseWorldBuildJob),
+          jobs: loaded.jobs.map((row) => parseWorldBuildJob(row, worldBuildJobSchemaRuntime!)),
         }),
         definitions: resources.definitions,
         graphs: resources.graphs,
@@ -674,6 +387,7 @@ Deno.serve(async (request) => {
     const authoringAttempts = readNumericResultContextValue(existingResultContext, 'authoringAttempts') + 1
     const repairAttempts = readNumericResultContextValue(existingResultContext, 'repairAttempts')
     const maxRepairAttempts = Math.max(1, readNumericResultContextValue(existingResultContext, 'maxRepairAttempts') || 1)
+    const workflowAttemptCount = Math.max(cinematicJob.attempt_count ?? 0, readWorldBuildAttemptCount(existingResultContext)) + 1
     const useCreativeScriptPipeline =
       effectiveSettings.authorshipPipeline === 'ugc_script_ingest_v1'
       || effectiveSettings.authorshipPipeline === STORY_SCRIPT_INGEST_PIPELINE
@@ -682,11 +396,19 @@ Deno.serve(async (request) => {
       : useCreativeScriptPipeline
         ? 'ugc_creative_script_prompt_v1'
         : 'legacy_json_shot_authoring_v1'
-
-    await updateJob(client, cinematicJob.id, {
-      result_context: {
-        ...existingResultContext,
-        phase: 'authoring_script',
+    const authoringContext = mergeWorldBuildJobContext({
+      kind: cinematicJob.kind,
+      current: existingResultContext,
+      phase: 'authoring_script',
+      attemptCount: workflowAttemptCount,
+      transitionReason: 'cinematic_authorship_started',
+      errorCategory: 'none',
+      diagnostics: [{
+        category: 'none',
+        message: 'Cinematic authorship started.',
+        source: 'author-cinematic-script',
+      }],
+      patch: {
         authoringAttempts,
         repairAttempts,
         maxRepairAttempts,
@@ -696,6 +418,13 @@ Deno.serve(async (request) => {
         authorshipPipeline: effectiveSettings.authorshipPipeline,
         authorshipPromptVersion,
       },
+    })
+
+    await updateJob(client, cinematicJob.id, {
+      attempt_count: workflowAttemptCount,
+      lease_expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+      next_retry_at: null,
+      result_context: authoringContext,
       error_message: null,
     })
 
@@ -823,28 +552,41 @@ Deno.serve(async (request) => {
       diagnostics: nextDiagnostics,
     })
     await updateJob(client, cinematicJob.id, {
-      result_context: {
-        ...existingResultContext,
+      lease_expires_at: null,
+      next_retry_at: nextPhase === 'needs_repair' ? new Date().toISOString() : null,
+      result_context: mergeWorldBuildJobContext({
+        kind: cinematicJob.kind,
+        current: authoringContext,
         phase: nextPhase,
-        authoringAttempts,
-        repairAttempts,
-        maxRepairAttempts,
-        repairQueuedAt: nextPhase === 'needs_repair' ? new Date().toISOString() : null,
-        plannerDiagnostics: [...skeletonPlannerDiagnostics, ...(authoredRaw.diagnostics ?? [])],
-        creativeScriptDiagnostics: useCreativeScriptPipeline ? authoredRaw.diagnostics ?? [] : [],
-        ingestorDiagnostics: ingestionResult.diagnostics,
-        authoringDiagnostics: qualityReport.failures,
-        authoringDiagnosticEntries: qualityReport.diagnostics,
-        qualityHardFailures: qualityReport.hardFailures,
-        qualitySoftFailures: qualityReport.softFailures,
-        authorshipModelRequested: authorshipModel.requestedModel,
-        authorshipModelUsed: authorshipModel.model,
-        authorshipModelTier: authorshipModel.qualityTier,
-        authorshipPipeline: effectiveSettings.authorshipPipeline,
-        authorshipPromptVersion,
-        correctedPresetFamily: effectiveSettings.presetFamily,
-        correctedFormatSubtype: effectiveSettings.formatSubtype,
-      },
+        attemptCount: workflowAttemptCount,
+        transitionReason: nextPhase === 'needs_repair' ? 'quality_gate_failed' : 'cinematic_authorship_completed',
+        errorCategory: nextPhase === 'needs_repair' ? 'quality_gate' : 'none',
+        diagnostics: qualityReport.failures.map((message) => ({
+          category: 'quality_gate',
+          message,
+          source: 'author-cinematic-script',
+        })),
+        patch: {
+          authoringAttempts,
+          repairAttempts,
+          maxRepairAttempts,
+          repairQueuedAt: nextPhase === 'needs_repair' ? new Date().toISOString() : null,
+          plannerDiagnostics: [...skeletonPlannerDiagnostics, ...(authoredRaw.diagnostics ?? [])],
+          creativeScriptDiagnostics: useCreativeScriptPipeline ? authoredRaw.diagnostics ?? [] : [],
+          ingestorDiagnostics: ingestionResult.diagnostics,
+          authoringDiagnostics: qualityReport.failures,
+          authoringDiagnosticEntries: qualityReport.diagnostics,
+          qualityHardFailures: qualityReport.hardFailures,
+          qualitySoftFailures: qualityReport.softFailures,
+          authorshipModelRequested: authorshipModel.requestedModel,
+          authorshipModelUsed: authorshipModel.model,
+          authorshipModelTier: authorshipModel.qualityTier,
+          authorshipPipeline: effectiveSettings.authorshipPipeline,
+          authorshipPromptVersion,
+          correctedPresetFamily: effectiveSettings.presetFamily,
+          correctedFormatSubtype: effectiveSettings.formatSubtype,
+        },
+      }),
       error_message: null,
     })
 
@@ -865,7 +607,7 @@ Deno.serve(async (request) => {
         cinematicPlan: normalizeCinematicPlanForTransport(refreshed.batch.cinematic_plan ?? null),
         createdAt: refreshed.batch.created_at,
         updatedAt: refreshed.batch.updated_at,
-        jobs: refreshed.jobs.map(parseWorldBuildJob),
+        jobs: refreshed.jobs.map((row) => parseWorldBuildJob(row, worldBuildJobSchemaRuntime!)),
       }),
       definitions: resources.definitions,
       graphs: resources.graphs,
@@ -883,15 +625,27 @@ Deno.serve(async (request) => {
       try {
         await updateJob(failureClient, failureCinematicJob.id, {
           status: 'failed',
-          result_context: {
-            ...existingResultContext,
+          lease_expires_at: null,
+          result_context: mergeWorldBuildJobContext({
+            kind: failureCinematicJob.kind,
+            current: existingResultContext,
             phase: 'authorship_failed',
-            authoringAttempts: readNumericResultContextValue(existingResultContext, 'authoringAttempts') + 1,
-            repairAttempts: readNumericResultContextValue(existingResultContext, 'repairAttempts'),
-            maxRepairAttempts: Math.max(1, readNumericResultContextValue(existingResultContext, 'maxRepairAttempts') || 1),
-            lastErrorMessage: errorMessage,
-            failedAt: new Date().toISOString(),
-          },
+            attemptCount: Math.max(failureCinematicJob.attempt_count ?? 0, readWorldBuildAttemptCount(existingResultContext), 1),
+            transitionReason: 'cinematic_authorship_failed',
+            errorCategory: 'authorship',
+            diagnostics: [{
+              category: 'authorship',
+              message: errorMessage,
+              source: 'author-cinematic-script',
+            }],
+            patch: {
+              authoringAttempts: readNumericResultContextValue(existingResultContext, 'authoringAttempts') + 1,
+              repairAttempts: readNumericResultContextValue(existingResultContext, 'repairAttempts'),
+              maxRepairAttempts: Math.max(1, readNumericResultContextValue(existingResultContext, 'maxRepairAttempts') || 1),
+              lastErrorMessage: errorMessage,
+              failedAt: new Date().toISOString(),
+            },
+          }),
           error_message: errorMessage,
         })
         await updateBatch(failureClient, failureBatch.id, {

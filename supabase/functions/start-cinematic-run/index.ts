@@ -1,5 +1,6 @@
 import '@supabase/functions-js/edge-runtime.d.ts'
 
+import { extractProviderQueueHandleFromBody } from '../../../src/core/providerQueue.ts'
 import {
   cinematicRunStartRequestSchema,
   cinematicRunStatusResponseSchema,
@@ -39,10 +40,6 @@ import {
 } from '../_shared/cinematics.ts'
 import { buildFalWebhookUrl } from '../_shared/fal-webhooks.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
-
-function readFalQueueUrl(value: unknown) {
-  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null
-}
 
 function resolveStoryboardStillFalModel(hasImageReferences: boolean) {
   if (hasImageReferences) {
@@ -654,14 +651,9 @@ Deno.serve(async (request) => {
         const falSubmitData = falResult.data && typeof falResult.data === 'object'
           ? falResult.data as Record<string, unknown>
           : {}
-        const statusUrl =
-          readFalQueueUrl(falSubmitData.status_url)
-          ?? readFalQueueUrl(falSubmitData.statusUrl)
-          ?? readFalQueueUrl((falSubmitData.urls && typeof falSubmitData.urls === 'object' ? (falSubmitData.urls as Record<string, unknown>).status : null))
-        const responseUrl =
-          readFalQueueUrl(falSubmitData.response_url)
-          ?? readFalQueueUrl(falSubmitData.responseUrl)
-          ?? readFalQueueUrl((falSubmitData.urls && typeof falSubmitData.urls === 'object' ? (falSubmitData.urls as Record<string, unknown>).response : null))
+        const queueHandle = extractProviderQueueHandleFromBody(falSubmitData)
+        const statusUrl = queueHandle.statusUrl
+        const responseUrl = queueHandle.responseUrl
         console.info('[start-cinematic-run] storyboard submit payload.', {
           runId,
           jobId: storyboardJob.id,

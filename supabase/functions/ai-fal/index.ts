@@ -1,5 +1,6 @@
 import '@supabase/functions-js/edge-runtime.d.ts'
 
+import { extractProviderQueueHandleFromBody } from '../../../src/core/providerQueue.ts'
 import { requireUserClient } from '../_shared/auth.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
 
@@ -26,29 +27,15 @@ type FalInvokeRequest = {
 const defaultModel = 'fal-ai/nano-banana-2/edit'
 const queueBaseUrl = 'https://queue.fal.run'
 
-function readQueueUrl(value: unknown) {
-  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null
-}
-
-function extractQueueUrls(body: Record<string, unknown>) {
-  const urls = body.urls && typeof body.urls === 'object' && body.urls !== null
-    ? body.urls as Record<string, unknown>
-    : {}
-  return {
-    statusUrl: readQueueUrl(body.status_url) ?? readQueueUrl(body.statusUrl) ?? readQueueUrl(urls.status) ?? readQueueUrl(urls.status_url),
-    responseUrl: readQueueUrl(body.response_url) ?? readQueueUrl(body.responseUrl) ?? readQueueUrl(urls.response) ?? readQueueUrl(urls.response_url),
-    cancelUrl: readQueueUrl(body.cancel_url) ?? readQueueUrl(body.cancelUrl) ?? readQueueUrl(urls.cancel) ?? readQueueUrl(urls.cancel_url),
-  }
-}
-
 function summarizeFalBody(body: Record<string, unknown>) {
+  const queueHandle = extractProviderQueueHandleFromBody(body)
   return {
     topLevelKeys: Object.keys(body),
     requestId: typeof body.request_id === 'string' ? body.request_id : null,
     status: typeof body.status === 'string' ? body.status : null,
-    statusUrl: readQueueUrl(body.status_url) ?? readQueueUrl(body.statusUrl) ?? null,
-    responseUrl: readQueueUrl(body.response_url) ?? readQueueUrl(body.responseUrl) ?? null,
-    cancelUrl: readQueueUrl(body.cancel_url) ?? readQueueUrl(body.cancelUrl) ?? null,
+    statusUrl: queueHandle.statusUrl,
+    responseUrl: queueHandle.responseUrl,
+    cancelUrl: queueHandle.cancelUrl,
     urls: body.urls ?? null,
   }
 }
@@ -167,16 +154,16 @@ Deno.serve(async (request) => {
         body: JSON.stringify(submitBody),
       })
 
-      const queueUrls = extractQueueUrls(body)
+      const queueHandle = extractProviderQueueHandleFromBody(body)
       console.info('[ai-fal] submit response.', {
         model,
         action,
         webhookUrl: payload.webhookUrl ?? null,
         submitUrl: submitUrl.toString(),
         requestId: typeof body.request_id === 'string' ? body.request_id : null,
-        statusUrl: queueUrls.statusUrl,
-        responseUrl: queueUrls.responseUrl,
-        cancelUrl: queueUrls.cancelUrl,
+        statusUrl: queueHandle.statusUrl,
+        responseUrl: queueHandle.responseUrl,
+        cancelUrl: queueHandle.cancelUrl,
         httpStatus: response.status,
         rawProviderBody: summarizeFalBody(body),
       })
@@ -185,10 +172,10 @@ Deno.serve(async (request) => {
           provider: 'fal',
           action,
           model,
-          requestId: typeof body.request_id === 'string' ? body.request_id : null,
-          statusUrl: queueUrls.statusUrl,
-          responseUrl: queueUrls.responseUrl,
-          cancelUrl: queueUrls.cancelUrl,
+          requestId: queueHandle.providerRequestId,
+          statusUrl: queueHandle.statusUrl,
+          responseUrl: queueHandle.responseUrl,
+          cancelUrl: queueHandle.cancelUrl,
           data: body,
         },
         { status: response.status },
