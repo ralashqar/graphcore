@@ -35,6 +35,7 @@ import {
   resolveAssetUrl,
   resolveStoryboardStillReferenceImageUrls,
   resolveStoryboardSources,
+  resolveTakeStoryboardReferenceImageUrls,
   resolveTakeStillReferenceImageUrls,
   resolveTakeSources,
   resolveShotSources,
@@ -535,43 +536,86 @@ Deno.serve(async (request) => {
           ? resolveTakeStillReferenceImageUrls(payload.snapshot, updatedGraph, job.shotNodeKey, sourceInputs as ReturnType<typeof resolveTakeSources>)
           : job.kind === 'storyboard_still'
             ? isTakeStoryboardJob
-              ? resolveTakeStillReferenceImageUrls(payload.snapshot, updatedGraph, job.shotNodeKey, sourceInputs as ReturnType<typeof resolveTakeSources>)
+              ? resolveTakeStoryboardReferenceImageUrls(payload.snapshot, updatedGraph, job.shotNodeKey)
               : resolveStoryboardStillReferenceImageUrls(payload.snapshot, updatedGraph, job.shotNodeKey, sourceInputs as ReturnType<typeof resolveStoryboardSources>)
-          : sourceInputs.map((entry) => entry.imageUrl).filter((entry): entry is string => Boolean(entry))
+            : sourceInputs.map((entry) => entry.imageUrl).filter((entry): entry is string => Boolean(entry))
+        if (job.kind === 'storyboard_still' && isTakeStoryboardJob && imageUrls.length !== 1) {
+          const message = 'Take storyboard generation requires exactly one representative still reference image. Refusing text-only or multi-reference fallback.'
+          await client.from('cinematic_run_jobs').update({
+            status: 'failed',
+            error_message: message,
+          }).eq('id', job.id)
+          if (job.stillAssetKey) {
+            await markGeneratedImageAssetFailed({
+              client,
+              projectId: payload.snapshot.project.id,
+              assetKey: job.stillAssetKey,
+              errorMessage: message,
+              metadata: {
+                kind: job.kind,
+                shotNodeKey: job.shotNodeKey,
+              },
+            })
+          }
+          break
+        }
         const stillModel = job.kind === 'storyboard_still'
           ? resolveStoryboardStillFalModel(imageUrls.length > 0)
           : imageUrls.length > 0
             ? Deno.env.get('CINEMATIC_STILL_FAL_MODEL') ?? 'fal-ai/nano-banana-2/edit'
             : Deno.env.get('CINEMATIC_STILL_TEXT_FAL_MODEL') ?? 'fal-ai/nano-banana-2'
-        const stillPrompt = job.prompt || (
-          job.kind === 'take_still'
-            ? buildTakeStillPrompt({
-                snapshot: payload.snapshot,
-                graph: updatedGraph,
-                takeNode: takeNode!,
-                sourceInputs: sourceInputs as ReturnType<typeof resolveTakeSources>,
-              })
-            : job.kind === 'storyboard_still'
-              ? isTakeStoryboardJob
-                ? buildTakeStoryboardStillPrompt({
+        let stillPrompt: string
+        try {
+          stillPrompt =
+            job.kind === 'take_still'
+              ? buildTakeStillPrompt({
+                  snapshot: payload.snapshot,
+                  graph: updatedGraph,
+                  takeNode: takeNode!,
+                  sourceInputs: sourceInputs as ReturnType<typeof resolveTakeSources>,
+                })
+              : job.kind === 'storyboard_still'
+                ? isTakeStoryboardJob
+                  ? buildTakeStoryboardStillPrompt({
+                      snapshot: payload.snapshot,
+                      graph: updatedGraph,
+                      takeNode: targetNode!,
+                      sourceInputs: sourceInputs as ReturnType<typeof resolveTakeSources>,
+                    })
+                  : buildStoryboardStillPrompt({
+                      snapshot: payload.snapshot,
+                      graph: updatedGraph,
+                      storyboardNode: storyboardNode!,
+                      sourceInputs: sourceInputs as ReturnType<typeof resolveStoryboardSources>,
+                    })
+                : buildStillPrompt({
                     snapshot: payload.snapshot,
                     graph: updatedGraph,
-                    takeNode: targetNode!,
-                    sourceInputs: sourceInputs as ReturnType<typeof resolveTakeSources>,
+                    shotNode: shotNode!,
+                    sourceInputs: sourceInputs as ReturnType<typeof resolveShotSources>,
                   })
-                : buildStoryboardStillPrompt({
-                    snapshot: payload.snapshot,
-                    graph: updatedGraph,
-                    storyboardNode: storyboardNode!,
-                    sourceInputs: sourceInputs as ReturnType<typeof resolveStoryboardSources>,
-              })
-            : buildStillPrompt({
-                snapshot: payload.snapshot,
-                graph: updatedGraph,
-                shotNode: shotNode!,
-                sourceInputs: sourceInputs as ReturnType<typeof resolveShotSources>,
-              })
-        )
+        } catch (promptError) {
+          const message = promptError instanceof Error
+            ? promptError.message
+            : 'Still prompt assembly failed.'
+          await client.from('cinematic_run_jobs').update({
+            status: 'failed',
+            error_message: message,
+          }).eq('id', job.id)
+          if (job.stillAssetKey) {
+            await markGeneratedImageAssetFailed({
+              client,
+              projectId: payload.snapshot.project.id,
+              assetKey: job.stillAssetKey,
+              errorMessage: message,
+              metadata: {
+                kind: job.kind,
+                shotNodeKey: job.shotNodeKey,
+              },
+            })
+          }
+          break
+        }
         const reservedStillAssetKey =
           job.stillAssetKey
           ?? (
@@ -771,6 +815,22 @@ Deno.serve(async (request) => {
           imageUrl = extractFalImageUrls(statusResult.body)[0] ?? null
 
           if (typeof statusResult.body.error === 'string') {
+            if (isNonTerminalFalProgressMessage(statusResult.body, providerStatus)) {
+              await client.from('cinematic_run_jobs').update({
+                status: 'running',
+                provider: 'fal',
+                model: job.model ?? stillModel,
+                provider_request_id: providerRequestId,
+                result_context: {
+                  ...(job.resultContext && typeof job.resultContext === 'object' ? job.resultContext : {}),
+                  lastObservedProviderStatus: providerStatus,
+                  lastStatusCheckAt: new Date().toISOString(),
+                },
+                error_message: null,
+              }).eq('id', job.id)
+              break
+            }
+
             await client.from('cinematic_run_jobs').update({
               status: 'failed',
               error_message: statusResult.body.error,
@@ -972,11 +1032,16 @@ Deno.serve(async (request) => {
           })
         } else if (job.kind === 'storyboard_still') {
           if (isTakeStoryboardJob) {
+            const sourceStillAssetKey =
+              typeof job.resultContext?.sourceStillAssetKey === 'string' && job.resultContext.sourceStillAssetKey.trim().length > 0
+                ? job.resultContext.sourceStillAssetKey
+                : null
             updatedGraph = applyTakeBindingToGraph(updatedGraph, job.shotNodeKey, {
               bodyImageAssetKey: storedAsset.key,
               metadata: {
                 previewImageAssetKey: storedAsset.key,
                 storyboardAssetKey: storedAsset.key,
+                storyboardSourceStillAssetKey: sourceStillAssetKey,
                 provider: 'fal',
                 providerModel: String(job.model ?? stillModel),
                 providerRequestId: String(providerRequestId),
@@ -987,6 +1052,7 @@ Deno.serve(async (request) => {
               metadata: {
                 previewImageAssetKey: storedAsset.key,
                 storyboardAssetKey: storedAsset.key,
+                storyboardSourceStillAssetKey: sourceStillAssetKey,
                 provider: 'fal',
                 providerModel: String(job.model ?? stillModel),
                 providerRequestId: String(providerRequestId),

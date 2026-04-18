@@ -6,6 +6,8 @@ import {
   buildCinematicSequenceFromScriptDoc,
   buildCinematicSettingsPatchFromPresetFamily,
   buildCinematicSettingsPatchFromStoryPresets,
+  buildStoryStoryboardBoardPrompt,
+  buildStoryTakeStillImagePrompt,
   cinematicScriptDocSchema,
   deriveTakeStoryboardPanelArtifacts,
   deriveCinematicScriptFromSequence,
@@ -560,7 +562,9 @@ test('combat-flavored take beats generate storyboard panel scripts even with lig
   assert.equal(panels.storyboardPanelStatus, 'generated')
   assert.ok((panels.storyboardPanelPlan?.panels.length ?? 0) >= 2)
   assert.doesNotMatch(panels.storyboardPanelScriptText, /Focus this panel on the/i)
-  assert.match(panels.storyboardPanelScriptText, /visually distinct from the previous one/i)
+  assert.doesNotMatch(panels.storyboardPanelScriptText, /visually distinct from the previous one/i)
+  assert.doesNotMatch(panels.storyboardPanelScriptText, /Opening commitment|Pressure change|Turn \/ payoff/i)
+  assert.ok((panels.storyboardPanelPlan?.panels ?? []).every((panel) => panel.cameraAngle === '' && panel.cameraMotion === ''))
 })
 
 test('storyboard panel script text parses back into panel metadata', () => {
@@ -765,6 +769,67 @@ test('visual-only creative scripts ingest without dialogue and keep visible acti
   assert.equal(ingested.authoredShots[0]?.dialogue.length, 0)
   assert.ok((ingested.authoredShots[0]?.actions[0]?.verb ?? '').includes('phone fills the frame'))
   assert.equal(ingested.authoredShots[0]?.audio[0]?.cue, 'Soft thumb taps only.')
+})
+
+test('story takes derive a representative still prompt', () => {
+  const script = cinematicScriptDocSchema.parse({
+    title: 'Arena Duel',
+    entityBindings: [
+      { id: 'kharzag', kind: 'character', role: 'fighter', label: 'Kharzag', sourceName: 'Kharzag', summary: 'orc warrior' },
+      { id: 'brakk', kind: 'character', role: 'fighter', label: 'Brakk', sourceName: 'Brakk', summary: 'tauren bull-man' },
+    ],
+    shots: [{
+      id: 'shot_1',
+      orderIndex: 0,
+      title: 'Clash',
+      beat: 'Kharzag and Brakk crash together in the arena and lock blades at the center of the pit.',
+      visualPrompt: 'Kharzag and Brakk clash swords in the arena',
+      storyScenePreset: 'duel_showdown',
+      storyLanguagePreset: 'tactical_combat',
+      participantRefIds: ['kharzag', 'brakk'],
+      actions: [{ id: 'a1', actorRefId: 'kharzag', targetRefId: 'brakk', verb: 'crashes into the duel' }],
+      dialogue: [],
+      audio: [],
+    }],
+  })
+
+  const sequence = buildCinematicSequenceFromScriptDoc(script)
+
+  assert.match(sequence.takes[0]?.representativeStillPrompt ?? '', /Kharzag|Brakk|arena/i)
+})
+
+test('story take still prompt stays compact and visual', () => {
+  const prompt = buildStoryTakeStillImagePrompt({
+    representativeStillPrompt: 'Kharzag and Brakk clash swords in the arena',
+    sceneBias: 'duel showdown',
+    cameraBias: 'tactical combat',
+    entitySummaries: ['Kharzag: orc warrior.', 'Brakk: tauren bull-man.'],
+  })
+
+  assert.match(prompt, /Moment: Kharzag and Brakk clash swords in the arena\./i)
+  assert.match(prompt, /Kharzag: orc warrior\./i)
+  assert.doesNotMatch(prompt, /Scene bias:/i)
+  assert.doesNotMatch(prompt, /Camera bias:/i)
+  assert.doesNotMatch(prompt, /Composition:/i)
+  assert.doesNotMatch(prompt, /directing package/i)
+})
+
+test('story storyboard board prompt uses simple panel beats and omits heavy style framing', () => {
+  const prompt = buildStoryStoryboardBoardPrompt({
+    panelDescriptions: [
+      'Kharzag and Brakk clash swords',
+      'Kharzag grabs Brakk by the neck',
+      'Brakk drives him back into the railing',
+    ],
+    entitySummaries: ['Kharzag: orc warrior.', 'Brakk: tauren bull-man.'],
+  })
+
+  assert.match(prompt, /3x3|2x3|2x2|1x2/i)
+  assert.match(prompt, /PANEL 1: Kharzag and Brakk clash swords\./i)
+  assert.match(prompt, /Brakk: tauren bull-man\./i)
+  assert.doesNotMatch(prompt, /grayscale wash/i)
+  assert.doesNotMatch(prompt, /clean gutters/i)
+  assert.doesNotMatch(prompt, /composition/i)
 })
 
 test('story creative scripts ingest scene headings and speaker-prefixed dialogue', () => {

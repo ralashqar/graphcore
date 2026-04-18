@@ -33,6 +33,7 @@ import {
   resolveStoryboardSources,
   resolveStoryboardStillReferenceImageUrls,
   resolveTakeSources,
+  resolveTakeStoryboardReferenceImageUrls,
   resolveTakeStillReferenceImageUrls,
   resolveShotSources,
   toCinematicRun,
@@ -470,12 +471,79 @@ Deno.serve(async (request) => {
       const storyboardNode = findNode(graph, storyboardNodeKey)
       if (!storyboardNode) continue
       const isTakeStoryboard = storyboardNode.type === 'cinematic_take'
+      const cinematicSettings = getCinematicSettings(payload.snapshot.gameSpec ?? null, graph.metadata)
       const storyboardAssetKey = isTakeStoryboard
         ? buildGraphScopedTakeAssetKey({ graphKey: graph.key, takeNodeKey: storyboardNodeKey, kind: 'storyboard', uniqueScope: runId })
         : getStoryboardRefNodeConfig(storyboardNode).assetKey
       const sourceInputs = isTakeStoryboard
         ? resolveTakeSources(payload.snapshot, graph, storyboardNodeKey)
         : resolveStoryboardSources(payload.snapshot, graph, storyboardNodeKey)
+      let storyboardSourceStillAssetKey =
+        isTakeStoryboard
+          ? (() => {
+              const takeConfig = getCinematicTakeNodeConfig(storyboardNode)
+              return takeConfig.storyboardSourceStillAssetKey ?? takeConfig.outputStillAssetKey ?? null
+            })()
+          : null
+      if (isTakeStoryboard && cinematicSettings.presetFamily === 'story_movie_tv' && !storyboardSourceStillAssetKey) {
+        const reservedTakeStillAsset = await reserveGeneratedImageAsset({
+          client,
+          projectId: payload.snapshot.project.id,
+          userId: user.id,
+          assetKey: buildGraphScopedTakeAssetKey({ graphKey: graph.key, takeNodeKey: storyboardNodeKey, kind: 'still', uniqueScope: runId }),
+          name: `${graph.name} / ${storyboardNode.title} / Still`,
+          metadata: {
+            generatedBy: 'cinematic_take_still',
+            graphKey: graph.key,
+            takeNodeKey: storyboardNodeKey,
+            runId,
+          },
+        })
+        const takeStillJobId = crypto.randomUUID()
+        reservedAssets.push(reservedTakeStillAsset)
+        jobsToInsert.push({
+          id: takeStillJobId,
+          run_id: runId,
+          graph_key: graph.key,
+          shot_node_key: storyboardNodeKey,
+          kind: 'take_still',
+          status: 'queued',
+          still_asset_key: reservedTakeStillAsset.key,
+          order_index: jobsToInsert.length,
+          depends_on_job_ids: previousJobId ? [previousJobId] : [],
+          prompt: buildTakeStillPrompt({
+            snapshot: payload.snapshot,
+            graph,
+            takeNode: storyboardNode,
+            sourceInputs: sourceInputs as ReturnType<typeof resolveTakeSources>,
+          }),
+          result_context: {
+            mode: payload.mode,
+            takeId: getCinematicTakeNodeConfig(storyboardNode).id,
+            assetKey: reservedTakeStillAsset.key,
+          },
+        })
+        previousJobId = takeStillJobId
+        storyboardSourceStillAssetKey = reservedTakeStillAsset.key
+        updatedGraph = applyTakeBindingToGraph(updatedGraph, storyboardNodeKey, {
+          bodyImageAssetKey: reservedTakeStillAsset.key,
+          metadata: {
+            previewImageAssetKey: reservedTakeStillAsset.key,
+            outputStillAssetKey: reservedTakeStillAsset.key,
+            lastRunId: runId,
+            lastStillJobId: takeStillJobId,
+          },
+        })
+        await persistTakeBindingsIfPresent(client, payload.snapshot.draft.id, graph.key, storyboardNodeKey, {
+          bodyImageAssetKey: reservedTakeStillAsset.key,
+          metadata: {
+            previewImageAssetKey: reservedTakeStillAsset.key,
+            outputStillAssetKey: reservedTakeStillAsset.key,
+            lastRunId: runId,
+            lastStillJobId: takeStillJobId,
+          },
+        })
+      }
       const reservedStoryboardAsset = await reserveGeneratedImageAsset({
         client,
         projectId: payload.snapshot.project.id,
@@ -531,6 +599,7 @@ Deno.serve(async (request) => {
           storyboardKind: storyboardNode.type === 'storyboard_ref' ? storyboardNode.metadata?.storyboardKind ?? null : 'take_sequence_board',
           takeId: storyboardNode.type === 'cinematic_take' ? getCinematicTakeNodeConfig(storyboardNode).id : null,
           assetKey: reservedStoryboardAsset.key,
+          sourceStillAssetKey: storyboardSourceStillAssetKey,
         },
       })
       previousJobId = stillJobId
@@ -540,6 +609,7 @@ Deno.serve(async (request) => {
           metadata: {
             previewImageAssetKey: reservedStoryboardAsset.key,
             storyboardAssetKey: reservedStoryboardAsset.key,
+            storyboardSourceStillAssetKey,
             lastRunId: runId,
             lastStoryboardJobId: stillJobId,
           },
@@ -549,6 +619,7 @@ Deno.serve(async (request) => {
           metadata: {
             previewImageAssetKey: reservedStoryboardAsset.key,
             storyboardAssetKey: reservedStoryboardAsset.key,
+            storyboardSourceStillAssetKey,
             lastRunId: runId,
             lastStoryboardJobId: stillJobId,
           },
@@ -598,12 +669,22 @@ Deno.serve(async (request) => {
       }
 
       try {
+        const storyboardSourceStillAssetKey =
+          storyboardNode?.type === 'cinematic_take'
+            ? (
+                (typeof storyboardJob.resultContext?.sourceStillAssetKey === 'string' && storyboardJob.resultContext.sourceStillAssetKey.trim().length > 0
+                  ? storyboardJob.resultContext.sourceStillAssetKey
+                  : null)
+                ?? getCinematicTakeNodeConfig(storyboardNode).storyboardSourceStillAssetKey
+                ?? getCinematicTakeNodeConfig(storyboardNode).outputStillAssetKey
+                ?? null
+              )
+            : null
         const referenceImageUrls = storyboardNode.type === 'cinematic_take'
-          ? resolveTakeStillReferenceImageUrls(
+          ? resolveTakeStoryboardReferenceImageUrls(
               payload.snapshot,
               updatedGraph,
               storyboardNodeKey,
-              resolveTakeSources(payload.snapshot, updatedGraph, storyboardNodeKey),
             )
           : resolveStoryboardStillReferenceImageUrls(
               payload.snapshot,
@@ -611,6 +692,9 @@ Deno.serve(async (request) => {
               storyboardNodeKey,
               resolveStoryboardSources(payload.snapshot, updatedGraph, storyboardNodeKey),
             )
+        if (storyboardNode.type === 'cinematic_take' && referenceImageUrls.length !== 1) {
+          throw new Error('Take storyboard generation requires exactly one representative still reference image. Refusing text-only or multi-reference fallback.')
+        }
         const storyboardStillModel = resolveStoryboardStillFalModel(referenceImageUrls.length > 0)
         console.info('[start-cinematic-run] storyboard model selection.', {
           runId,
@@ -682,6 +766,7 @@ Deno.serve(async (request) => {
               assetKey: storyboardJob.stillAssetKey,
               imageUrls: referenceImageUrls,
               sourceImageCount: referenceImageUrls.length,
+              sourceStillAssetKey: storyboardSourceStillAssetKey,
               submittedAt: new Date().toISOString(),
               statusUrl,
               responseUrl,
@@ -695,6 +780,7 @@ Deno.serve(async (request) => {
             metadata: {
               previewImageAssetKey: storyboardJob.stillAssetKey,
               storyboardAssetKey: storyboardJob.stillAssetKey,
+              storyboardSourceStillAssetKey,
               lastRunId: runId,
               lastStoryboardJobId: storyboardJob.id,
               provider: falResult.provider ?? 'fal',
@@ -707,6 +793,7 @@ Deno.serve(async (request) => {
             metadata: {
               previewImageAssetKey: storyboardJob.stillAssetKey,
               storyboardAssetKey: storyboardJob.stillAssetKey,
+              storyboardSourceStillAssetKey,
               lastRunId: runId,
               lastStoryboardJobId: storyboardJob.id,
               provider: falResult.provider ?? 'fal',

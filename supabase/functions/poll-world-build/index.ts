@@ -627,31 +627,61 @@ function compositePromptForPlan(plan: z.infer<typeof cinematicPlanSchema>, compo
   ].filter(Boolean).join(' ')
 }
 
-function storyboardPromptForPlan(plan: z.infer<typeof cinematicPlanSchema>, storyboardAssetId: string) {
-  if (storyboardAssetId === 'storyboard_sequence') {
-    const panelCount = Math.min(16, Math.max(4, plan.shots.length * 2))
-    const gridLabel = panelCount <= 4 ? '2x2' : panelCount <= 9 ? '3x3' : '4x4'
-    return [
-      `Create a comic-ink storyboard board for "${plan.graphName}".`,
-      plan.storyboardPlan?.summary ? `Brief: ${plan.storyboardPlan.summary}.` : null,
-      `Cover these beats: ${plan.shots.map((shot) => shot.title).join(', ')}.`,
-      `Lay out readable storyboard panels in a ${gridLabel} board with clean gutters.`,
-      'Use monochrome or restrained grayscale wash, bold inked silhouettes, and clear blocking.',
-      'For fast action, expand continuous choreography into multiple panels instead of inventing extra camera cuts.',
-      'No lettering, captions, speech bubbles, or polished finished-frame treatment.',
-    ].filter(Boolean).join(' ')
-  }
+function isStoryPlan(plan: z.infer<typeof cinematicPlanSchema>) {
+  return plan.graphSettings?.presetFamily === 'story_movie_tv'
+}
 
-  const panel = plan.storyboardPlan?.panels.find((entry) => entry.id === storyboardAssetId) ?? null
-  const shot = panel?.shotId ? plan.shots.find((entry) => entry.id === panel.shotId) ?? null : null
+function buildPlanEntitySummaries(plan: z.infer<typeof cinematicPlanSchema>) {
+  return plan.entityRefs.map((entityRef) => {
+    const label = entityRef.sourceName || entityRef.role || entityRef.id
+    const summary = (entityRef.summary || entityRef.role || '').trim().replace(/\.$/, '')
+    return summary ? `${label}: ${summary}.` : `${label}.`
+  })
+}
+
+function takeStillPromptForPlan(
+  plan: z.infer<typeof cinematicPlanSchema>,
+  takeId: string,
+  options?: { representativeStillPrompt?: unknown },
+) {
+  const representativeStillPrompt =
+    typeof options?.representativeStillPrompt === 'string' && options.representativeStillPrompt.trim().length > 0
+      ? options.representativeStillPrompt.trim().replace(/\.$/, '')
+      : ''
+  if (!representativeStillPrompt) {
+    throw new Error(`Take "${takeId}" is missing representativeStillPrompt. Refusing world-build still fallback.`)
+  }
   return [
-    `Create a comic-ink storyboard panel for "${panel?.title ?? storyboardAssetId}".`,
-    shot ? `Shot beat: ${shot.beat}.` : null,
-    shot?.compositionGuide ? `Composition: ${shot.compositionGuide}.` : null,
-    panel?.notes ? `Notes: ${panel.notes}.` : null,
-    'Make the panel clear, high-contrast, inked, and suitable as a visual continuity reference.',
-    'Use monochrome or restrained grayscale wash with strong silhouette readability.',
-    'No captions, speech bubbles, or decorative borders.',
+    'Create one representative still frame from this cinematic take.',
+    `Moment: ${representativeStillPrompt}.`,
+    ...buildPlanEntitySummaries(plan),
+    'Show only what should be visible on screen.',
+    'No text or borders.',
+  ].filter(Boolean).join(' ')
+}
+
+function storyboardPromptForPlan(
+  plan: z.infer<typeof cinematicPlanSchema>,
+  storyboardAssetId: string,
+  options?: { panelDescriptions?: unknown },
+) {
+  const panelDescriptions = Array.isArray(options?.panelDescriptions)
+    ? options.panelDescriptions
+        .map((entry) => typeof entry === 'string' ? entry.trim().replace(/\.$/, '') : '')
+        .filter((entry) => entry.length > 0)
+        .slice(0, 16)
+    : []
+  if (panelDescriptions.length === 0) {
+    throw new Error(`Storyboard "${storyboardAssetId}" is missing panel descriptions. Refusing world-build storyboard fallback.`)
+  }
+  const panelCount = Math.max(1, panelDescriptions.length)
+  const gridLabel = panelCount <= 1 ? '1x1' : panelCount <= 2 ? '1x2' : panelCount <= 4 ? '2x2' : panelCount <= 6 ? '2x3' : panelCount <= 9 ? '3x3' : '4x4'
+  return [
+    `Draw the actors and entities in a cinematic sequence in a ${gridLabel} grid.`,
+    'Use the reference image as the representative look of the take.',
+    ...panelDescriptions.map((description, index) => `PANEL ${index + 1}: ${description}.`),
+    ...buildPlanEntitySummaries(plan),
+    'No text or borders.',
   ].filter(Boolean).join(' ')
 }
 
@@ -2223,7 +2253,7 @@ Deno.serve(async (request) => {
               },
               error_message: null,
             })
-          } else if (job.kind === 'cinematic_composite_image' || job.kind === 'cinematic_storyboard_image') {
+          } else if (job.kind === 'cinematic_composite_image' || job.kind === 'cinematic_storyboard_image' || job.kind === 'cinematic_take_still_image') {
             const assetKey = job.target_keys?.assetKey
             const cinematicPlan = cinematicPlanSchema.safeParse(batch.cinematic_plan)
             if (!assetKey || !cinematicPlan.success) {
@@ -2233,11 +2263,45 @@ Deno.serve(async (request) => {
             const prompt =
               job.kind === 'cinematic_composite_image'
                 ? compositePromptForPlan(cinematicPlan.data, String(job.target_keys?.compositeRefId ?? ''))
-                : storyboardPromptForPlan(cinematicPlan.data, String(job.target_keys?.storyboardAssetId ?? ''))
+                : job.kind === 'cinematic_take_still_image'
+                  ? takeStillPromptForPlan(cinematicPlan.data, String(job.target_keys?.takeId ?? ''), {
+                      representativeStillPrompt: job.target_keys?.representativeStillPrompt,
+                    })
+                  : storyboardPromptForPlan(cinematicPlan.data, String(job.target_keys?.storyboardAssetId ?? ''), {
+                      panelDescriptions: job.target_keys?.panelDescriptions,
+                    })
             const currentResultContext = job.result_context ?? {}
             const queueMetadata = readWorldBuildQueueMetadata(currentResultContext)
 
             if (job.status === 'queued') {
+              const referenceImageUrls =
+                job.kind === 'cinematic_storyboard_image' && isStoryPlan(cinematicPlan.data)
+                  ? (() => {
+                      const dependentAssetKeys = jobs
+                        .filter((candidate) => candidate.kind === 'cinematic_take_still_image' && (job.depends_on_job_ids ?? []).includes(candidate.id))
+                        .map((candidate) => typeof candidate.target_keys?.assetKey === 'string' ? candidate.target_keys.assetKey : null)
+                        .filter((value): value is string => Boolean(value))
+                      return dependentAssetKeys
+                    })()
+                  : []
+              const referenceImageAssets = referenceImageUrls.length === 0
+                ? []
+                : ((await client
+                  .from('project_assets')
+                  .select('key, storage_path, metadata')
+                  .eq('project_id', batch.project_id)
+                  .in('key', referenceImageUrls)).data ?? [])
+              const usableReferenceImageUrls = referenceImageAssets
+                .map((asset) => resolveAssetUrl({
+                  key: String(asset.key ?? ''),
+                  storagePath: typeof asset.storage_path === 'string' ? asset.storage_path : undefined,
+                  metadata: typeof asset.metadata === 'object' && asset.metadata !== null ? asset.metadata as Record<string, unknown> : undefined,
+                }))
+                .filter((value): value is string => typeof value === 'string' && /^https?:\/\//i.test(value))
+                .slice(0, 1)
+              if (job.kind === 'cinematic_storyboard_image' && isStoryPlan(cinematicPlan.data) && usableReferenceImageUrls.length !== 1) {
+                throw new Error('Story world-build storyboard generation requires exactly one representative still reference image. Refusing fallback submission.')
+              }
               const falResponse = await client.functions.invoke('ai-fal', {
                 body: {
                   action: 'submit',
@@ -2245,6 +2309,7 @@ Deno.serve(async (request) => {
                   webhookUrl: buildFalWebhookUrl(),
                   input: {
                     prompt,
+                    ...(usableReferenceImageUrls.length > 0 ? { image_urls: usableReferenceImageUrls } : {}),
                     num_images: 1,
                     aspect_ratio: '16:9',
                     output_format: 'png',
@@ -2489,7 +2554,12 @@ Deno.serve(async (request) => {
               assetKey,
               imageUrl,
               metadata: {
-                generatedBy: job.kind === 'cinematic_composite_image' ? 'cinematic_composite' : 'cinematic_storyboard',
+                generatedBy:
+                  job.kind === 'cinematic_composite_image'
+                    ? 'cinematic_composite'
+                    : job.kind === 'cinematic_take_still_image'
+                      ? 'cinematic_take_still'
+                      : 'cinematic_storyboard',
                 provider: 'fal',
                 model: resultPayload.model ?? 'fal-ai/nano-banana-2',
                 requestId: queueMetadata.providerRequestId,
@@ -3409,7 +3479,7 @@ Deno.serve(async (request) => {
             })
           }
 
-          if ((job.kind.includes('concept_image') || job.kind === 'cinematic_composite_image' || job.kind === 'cinematic_storyboard_image') && job.target_keys?.assetKey) {
+          if ((job.kind.includes('concept_image') || job.kind === 'cinematic_composite_image' || job.kind === 'cinematic_storyboard_image' || job.kind === 'cinematic_take_still_image') && job.target_keys?.assetKey) {
             const assetRow = await client.from('project_assets').select('metadata').eq('project_id', batch.project_id).eq('key', job.target_keys.assetKey).maybeSingle()
             if (!assetRow.error && assetRow.data) {
               const currentMetadata =

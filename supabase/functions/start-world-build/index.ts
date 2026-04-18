@@ -6,6 +6,7 @@ import {
   cinematicSequenceSchema,
   compileCinematicSequence,
   deriveCinematicScriptFromSequence,
+  getCinematicSettings,
   materializeCinematicGraphSettings,
 } from '../../../src/domain/cinematics.ts'
 import {
@@ -62,7 +63,7 @@ type WorldBuildStartSnapshot = {
   assets: Array<{ key: string }>
 }
 
-const SHOULD_GENERATE_CINEMATIC_REFERENCE_ASSETS = false
+const SHOULD_GENERATE_CINEMATIC_REFERENCE_ASSETS = true
 
 function createGenerationMetadata(batchId: string, jobId: string) {
   return {
@@ -668,6 +669,16 @@ Deno.serve(async (request) => {
 
       if (normalizedCinematicPlan) {
         if (SHOULD_GENERATE_CINEMATIC_REFERENCE_ASSETS) {
+          const compiledSequence = normalizedCinematicPlan.scriptDoc
+            ? compileCinematicSequence(buildCinematicSequenceFromScriptDoc(cinematicScriptDocSchema.parse(normalizedCinematicPlan.scriptDoc)))
+            : null
+          const cinematicSettings = getCinematicSettings(snapshot.gameSpec ?? null, {
+            cinematics: normalizedCinematicPlan.graphSettings ?? {},
+          })
+          const storyBoardOnly = cinematicSettings.presetFamily === 'story_movie_tv'
+          if (storyBoardOnly && normalizedCinematicPlan.storyboardPlan && normalizedCinematicPlan.storyboardPlan.mode !== 'none' && !compiledSequence) {
+            throw new Error('Story storyboard generation requires compiled take data with representative still prompts. Refusing world-build storyboard fallback.')
+          }
           for (const composite of normalizedCinematicPlan.compositeRefPlans) {
             const assetKey = buildAssetKey(composite.title, 'composite', assetKeyState)
             const assetJobId = crypto.randomUUID()
@@ -690,8 +701,47 @@ Deno.serve(async (request) => {
           }
 
           if (normalizedCinematicPlan.storyboardPlan && normalizedCinematicPlan.storyboardPlan.mode !== 'none') {
+            const takeStillJobIds: string[] = []
+            if (storyBoardOnly && compiledSequence) {
+              for (const take of compiledSequence.takes) {
+                const assetKey = buildAssetKey(take.title || take.id, 'take_still', assetKeyState)
+                const assetJobId = crypto.randomUUID()
+                cinematicStoryboardAssetKeys.set(`take_still_${take.id}`, assetKey)
+                assetJobIds.set(assetKey, assetJobId)
+                takeStillJobIds.push(assetJobId)
+                jobsToInsert.push({
+                  id: assetJobId,
+                  batch_id: batchId,
+                  plan_item_id: item.id,
+                  kind: 'cinematic_take_still_image',
+                  status: 'queued',
+                  depends_on_job_ids: dependencyJobIds,
+                  target_keys: {
+                    takeId: take.id,
+                    assetKey,
+                    takeTitle: take.title,
+                    representativeStillPrompt: take.representativeStillPrompt,
+                  },
+                  prompt: payload.prompt,
+                  options: { takeId: take.id },
+                  result_context: null,
+                  error_message: null,
+                  order_index: nextOrder(),
+                })
+              }
+            }
             const sequenceAssetKey = buildAssetKey(item.name, 'storyboard_sequence', assetKeyState)
             const sequenceJobId = crypto.randomUUID()
+            const sequencePanelDescriptions = storyBoardOnly && compiledSequence
+              ? compiledSequence.takes
+                  .flatMap((take) => take.storyboardPanelPlan?.panels?.map((panel) => panel.description) ?? [])
+                  .map((entry) => entry.trim())
+                  .filter((entry) => entry.length > 0)
+                  .slice(0, 16)
+              : []
+            if (storyBoardOnly && sequencePanelDescriptions.length === 0) {
+              throw new Error('Story storyboard generation requires explicit take storyboard panel descriptions. Refusing world-build storyboard fallback.')
+            }
             cinematicStoryboardAssetKeys.set('storyboard_sequence', sequenceAssetKey)
             assetJobIds.set(sequenceAssetKey, sequenceJobId)
             jobsToInsert.push({
@@ -700,34 +750,42 @@ Deno.serve(async (request) => {
               plan_item_id: item.id,
               kind: 'cinematic_storyboard_image',
               status: 'queued',
-              depends_on_job_ids: dependencyJobIds,
-              target_keys: { storyboardAssetId: 'storyboard_sequence', assetKey: sequenceAssetKey },
+              depends_on_job_ids: storyBoardOnly && takeStillJobIds.length > 0 ? [...dependencyJobIds, ...takeStillJobIds] : dependencyJobIds,
+              target_keys: {
+                storyboardAssetId: 'storyboard_sequence',
+                assetKey: sequenceAssetKey,
+                ...(storyBoardOnly ? { panelDescriptions: sequencePanelDescriptions } : {}),
+              },
               prompt: payload.prompt,
               options: { storyboardAssetId: 'storyboard_sequence' },
               result_context: null,
               error_message: null,
               order_index: nextOrder(),
             })
+            graphDependencyJobIds.push(sequenceJobId, ...takeStillJobIds)
 
-            for (const panel of normalizedCinematicPlan.storyboardPlan.panels) {
-              const assetKey = buildAssetKey(panel.title || panel.id, 'storyboard_panel', assetKeyState)
-              const panelJobId = crypto.randomUUID()
-              cinematicStoryboardAssetKeys.set(panel.id, assetKey)
-              assetJobIds.set(assetKey, panelJobId)
-              jobsToInsert.push({
-                id: panelJobId,
-                batch_id: batchId,
-                plan_item_id: item.id,
-                kind: 'cinematic_storyboard_image',
-                status: 'queued',
-                depends_on_job_ids: dependencyJobIds,
-                target_keys: { storyboardAssetId: panel.id, assetKey, shotId: panel.shotId ?? '' },
-                prompt: payload.prompt,
-                options: { storyboardAssetId: panel.id, shotId: panel.shotId ?? '' },
-                result_context: null,
-                error_message: null,
-                order_index: nextOrder(),
-              })
+            if (!storyBoardOnly) {
+              for (const panel of normalizedCinematicPlan.storyboardPlan.panels) {
+                const assetKey = buildAssetKey(panel.title || panel.id, 'storyboard_panel', assetKeyState)
+                const panelJobId = crypto.randomUUID()
+                cinematicStoryboardAssetKeys.set(panel.id, assetKey)
+                assetJobIds.set(assetKey, panelJobId)
+                graphDependencyJobIds.push(panelJobId)
+                jobsToInsert.push({
+                  id: panelJobId,
+                  batch_id: batchId,
+                  plan_item_id: item.id,
+                  kind: 'cinematic_storyboard_image',
+                  status: 'queued',
+                  depends_on_job_ids: dependencyJobIds,
+                  target_keys: { storyboardAssetId: panel.id, assetKey, shotId: panel.shotId ?? '' },
+                  prompt: payload.prompt,
+                  options: { storyboardAssetId: panel.id, shotId: panel.shotId ?? '' },
+                  result_context: null,
+                  error_message: null,
+                  order_index: nextOrder(),
+                })
+              }
             }
           }
         }
@@ -769,6 +827,11 @@ Deno.serve(async (request) => {
     const createdAssets: Awaited<ReturnType<typeof insertPlaceholderAsset>>[] = []
     const createdDefinitions: Awaited<ReturnType<typeof insertPlaceholderDefinition>>[] = []
     const createdGraphs: Awaited<ReturnType<typeof insertPlaceholderGraph>>[] = []
+    const storyBoardOnly = normalizedCinematicPlan
+      ? getCinematicSettings(snapshot.gameSpec ?? null, {
+          cinematics: normalizedCinematicPlan.graphSettings ?? {},
+        }).presetFamily === 'story_movie_tv'
+      : false
     const persistedCinematicPlan = normalizedCinematicPlan
       ? {
           ...normalizedCinematicPlan,
@@ -787,7 +850,7 @@ Deno.serve(async (request) => {
                         ?? null,
                       panels: normalizedCinematicPlan.scriptDoc.storyboard.panels.map((panel) => ({
                         ...panel,
-                        assetKey: cinematicStoryboardAssetKeys.get(panel.id) ?? panel.assetKey ?? null,
+                        assetKey: storyBoardOnly ? null : (cinematicStoryboardAssetKeys.get(panel.id) ?? panel.assetKey ?? null),
                       })),
                     }
                   : null,
@@ -805,7 +868,7 @@ Deno.serve(async (request) => {
                   ?? null,
                 panels: normalizedCinematicPlan.storyboardPlan.panels.map((panel) => ({
                   ...panel,
-                  assetKey: cinematicStoryboardAssetKeys.get(panel.id) ?? panel.assetKey ?? null,
+                  assetKey: storyBoardOnly ? null : (cinematicStoryboardAssetKeys.get(panel.id) ?? panel.assetKey ?? null),
                 })),
               }
             : null,
@@ -943,6 +1006,13 @@ Deno.serve(async (request) => {
         if (!graphJobId || !graphKey) continue
 
         const storyboardPlan = normalizedCinematicPlan?.storyboardPlan
+        const compiledSequence = normalizedCinematicPlan?.scriptDoc
+          ? compileCinematicSequence(buildCinematicSequenceFromScriptDoc(cinematicScriptDocSchema.parse(normalizedCinematicPlan.scriptDoc)))
+          : null
+        const cinematicSettings = getCinematicSettings(snapshot.gameSpec ?? null, {
+          cinematics: normalizedCinematicPlan?.graphSettings ?? {},
+        })
+        const storyBoardOnly = cinematicSettings.presetFamily === 'story_movie_tv'
         const compositePlans = normalizedCinematicPlan?.compositeRefPlans ?? []
         const placeholderAssets: PlaceholderAsset[] = SHOULD_GENERATE_CINEMATIC_REFERENCE_ASSETS ? [
           ...compositePlans.map((composite) => {
@@ -973,7 +1043,21 @@ Deno.serve(async (request) => {
                     },
                   }
                 })(),
-                ...storyboardPlan.panels.map((panel) => {
+                ...(storyBoardOnly && compiledSequence
+                  ? compiledSequence.takes.map((take) => {
+                      const assetKey = cinematicStoryboardAssetKeys.get(`take_still_${take.id}`)
+                      if (!assetKey) return null
+                      return {
+                        key: assetKey,
+                        name: `${take.title} Still`,
+                        metadata: {
+                          generation: createGenerationMetadata(batchId, assetJobIds.get(assetKey) ?? graphJobId),
+                          placeholderLabel: 'Pending representative still',
+                          takeId: take.id,
+                        },
+                      }
+                    })
+                  : storyboardPlan.panels.map((panel) => {
                   const assetKey = cinematicStoryboardAssetKeys.get(panel.id)
                   if (!assetKey) return null
                   return {
@@ -986,7 +1070,7 @@ Deno.serve(async (request) => {
                       shotId: panel.shotId,
                     },
                   }
-                }),
+                })),
               ]
             : []),
         ].filter((asset): asset is PlaceholderAsset => asset !== null) : []
@@ -1004,7 +1088,7 @@ Deno.serve(async (request) => {
           graphType: 'cinematic_flow',
           summary: item.summary,
         })
-        const sequence = persistedCinematicPlan
+        const baseSequence = persistedCinematicPlan
           ? compileCinematicSequence(
               persistedCinematicPlan.scriptDoc
                 ? buildCinematicSequenceFromScriptDoc(cinematicScriptDocSchema.parse({
@@ -1036,6 +1120,15 @@ Deno.serve(async (request) => {
                     takes: [],
                   }),
             )
+          : null
+        const sequence = baseSequence
+          ? cinematicSequenceSchema.parse({
+              ...baseSequence,
+              takes: baseSequence.takes.map((take) => ({
+                ...take,
+                outputStillAssetKey: cinematicStoryboardAssetKeys.get(`take_still_${take.id}`) ?? take.outputStillAssetKey ?? null,
+              })),
+            })
           : null
         const scriptDoc = sequence ? deriveCinematicScriptFromSequence(sequence) : null
         const effectiveGraphSettings = materializeCinematicGraphSettings(persistedCinematicPlan?.graphSettings ?? {})

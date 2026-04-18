@@ -138,6 +138,7 @@ function worldBuildGeneratedBy(kind: string, targetKeys: Record<string, unknown>
   if (kind === 'item_concept_image') return 'item_concept'
   if (kind === 'environment_concept_image') return 'environment_concept'
   if (kind === 'cinematic_composite_image') return 'cinematic_composite'
+  if (kind === 'cinematic_take_still_image') return 'cinematic_take_still'
   if (kind === 'cinematic_storyboard_image') return 'cinematic_storyboard'
   if (typeof targetKeys?.storyboardAssetId === 'string') return 'cinematic_storyboard'
   return 'generated_image'
@@ -157,6 +158,9 @@ function worldBuildImageAssetName(job: WorldBuildJobRow) {
   }
   if (job.kind === 'cinematic_composite_image') {
     return typeof targetKeys.compositeRefTitle === 'string' ? `${targetKeys.compositeRefTitle} Composite` : 'Composite'
+  }
+  if (job.kind === 'cinematic_take_still_image') {
+    return typeof targetKeys.takeTitle === 'string' ? `${targetKeys.takeTitle} Still` : 'Take Still'
   }
   if (job.kind === 'cinematic_storyboard_image') {
     return typeof targetKeys.storyboardTitle === 'string' ? `${targetKeys.storyboardTitle} Storyboard` : 'Storyboard'
@@ -524,9 +528,14 @@ async function handleCinematicStillWebhook(
     })
   } else if (job.kind === 'storyboard_still') {
     if (isTakeStoryboardJob) {
+      const sourceStillAssetKey =
+        typeof asRecord(job.result_context).sourceStillAssetKey === 'string'
+          ? String(asRecord(job.result_context).sourceStillAssetKey)
+          : null
       await persistTakeBindingsIfPresent(admin, run.draft_id, run.graph_key, job.shot_node_key, {
         metadata: {
           storyboardAssetKey: storedAsset.key,
+          storyboardSourceStillAssetKey: sourceStillAssetKey,
           provider: 'fal',
           providerModel: String(job.model ?? ''),
           providerRequestId: payload.request_id,

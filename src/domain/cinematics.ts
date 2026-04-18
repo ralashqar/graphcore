@@ -587,6 +587,7 @@ export const cinematicTakeSpecSchema = z.object({
   contrastAxis: z.string().default(''),
   proofMoment: z.string().default(''),
   ctaStyle: z.string().default(''),
+  representativeStillPrompt: z.string().default(''),
   requiredSourceRefIds: z.array(z.string()).default([]),
   directingPackage: cinematicDirectingPackageSchema.default(defaultCinematicDirectingPackage),
   referencePlan: cinematicReferencePlanSchema.default(defaultCinematicReferencePlan),
@@ -596,6 +597,7 @@ export const cinematicTakeSpecSchema = z.object({
   storyboardPanelStatus: cinematicTakeStoryboardPanelStatusSchema.default('none'),
   previewImageAssetKey: z.string().nullable().default(null),
   storyboardAssetKey: z.string().nullable().default(null),
+  storyboardSourceStillAssetKey: z.string().nullable().default(null),
   outputVideoAssetKey: z.string().nullable().default(null),
   outputStillAssetKey: z.string().nullable().default(null),
   approvedForVideo: z.boolean().default(false),
@@ -1807,24 +1809,7 @@ function buildTakeStoryboardPanelDescription(input: {
 }) {
   const baseLine = (input.actionLine || input.shot.beat || input.shot.title).trim().replace(/\.$/, '')
   if (!baseLine) return input.shot.title
-  if (input.panelCount === 1) return `${baseLine}.`
-
-  const panelPrefix =
-    input.phase === 'engage'
-      ? 'Show the opening commitment of the exchange'
-      : input.phase === 'exchange'
-        ? 'Show the next visible change in pressure or movement'
-        : input.phase === 'turn'
-          ? 'Show the decisive turn in the exchange'
-          : input.phase === 'turn/payoff'
-            ? 'Show the clearest turn or payoff of the exchange'
-            : input.phase === 'payoff'
-              ? 'Show the payoff image or consequence of the exchange'
-              : input.phase === 'hold'
-                ? 'Show the held visual beat'
-                : `Show panel beat ${input.panelIndex + 1}`
-
-  return `${panelPrefix}: ${baseLine}. Keep this panel visually distinct from the previous one and preserve continuous choreography and screen geography.`
+  return `${baseLine}.`
 }
 
 function buildTakeStoryboardPanelTitle(input: {
@@ -1834,19 +1819,7 @@ function buildTakeStoryboardPanelTitle(input: {
   panelIndex: number
 }) {
   if (input.panelCount === 1) return input.shotTitle
-  const suffix =
-    input.phase === 'engage'
-      ? 'Opening commitment'
-      : input.phase === 'exchange'
-        ? 'Pressure change'
-        : input.phase === 'turn'
-          ? 'Reversal'
-          : input.phase === 'turn/payoff'
-            ? 'Turn / payoff'
-            : input.phase === 'payoff'
-              ? 'Payoff image'
-              : `Panel ${input.panelIndex + 1}`
-  return `${input.shotTitle} - ${suffix}`
+  return `${input.shotTitle} - Panel ${input.panelIndex + 1}`
 }
 
 function formatTakeStoryboardPanelScriptText(input: {
@@ -1912,6 +1885,70 @@ export function parseTakeStoryboardPanelScriptText(storyboardPanelScriptText: st
   })
 }
 
+function buildTakeRepresentativeStillPrompt(input: {
+  title: string
+  shots: Array<Pick<CinematicScriptShot, 'title' | 'beat' | 'visualPrompt' | 'hookRole' | 'actions'>>
+}) {
+  const rankedShots = [...input.shots].sort((left, right) => {
+    const leftScore =
+      (left.hookRole === 'payoff' ? 40 : left.hookRole === 'proof' ? 30 : left.hookRole === 'hook' ? 20 : 0)
+      + ((left.actions?.length ?? 0) * 3)
+      + (left.visualPrompt.trim() ? 2 : 0)
+      + (left.beat.trim() ? 1 : 0)
+    const rightScore =
+      (right.hookRole === 'payoff' ? 40 : right.hookRole === 'proof' ? 30 : right.hookRole === 'hook' ? 20 : 0)
+      + ((right.actions?.length ?? 0) * 3)
+      + (right.visualPrompt.trim() ? 2 : 0)
+      + (right.beat.trim() ? 1 : 0)
+    return rightScore - leftScore
+  })
+  const anchorShot = rankedShots[0] ?? null
+  if (!anchorShot) return input.title
+  const anchorText = [anchorShot.visualPrompt.trim(), anchorShot.beat.trim(), anchorShot.title.trim()]
+    .find((entry) => entry.length > 0)
+    ?? input.title
+  return anchorText.replace(/\s+/g, ' ').replace(/\.$/, '').trim()
+}
+
+export function buildSimpleStoryboardGridLabel(panelCount: number) {
+  if (panelCount <= 1) return '1x1'
+  if (panelCount <= 2) return '1x2'
+  if (panelCount <= 4) return '2x2'
+  if (panelCount <= 6) return '2x3'
+  if (panelCount <= 9) return '3x3'
+  if (panelCount <= 12) return '3x4'
+  return '4x4'
+}
+
+export function buildStoryTakeStillImagePrompt(input: {
+  representativeStillPrompt: string
+  sceneBias?: string | null
+  cameraBias?: string | null
+  entitySummaries?: string[]
+}) {
+  return [
+    'Create one representative still frame from this cinematic take.',
+    input.representativeStillPrompt.trim() ? `Moment: ${input.representativeStillPrompt.trim().replace(/\.$/, '')}.` : null,
+    ...(input.entitySummaries ?? []),
+    'Show only what should be visible on screen.',
+    'No text or borders.',
+  ].filter((entry): entry is string => Boolean(entry)).join(' ')
+}
+
+export function buildStoryStoryboardBoardPrompt(input: {
+  panelDescriptions: string[]
+  entitySummaries?: string[]
+}) {
+  const panelCount = Math.max(1, input.panelDescriptions.length)
+  return [
+    `Draw the actors and entities in a cinematic sequence in a ${buildSimpleStoryboardGridLabel(panelCount)} grid.`,
+    'Use the reference image as the representative look of the take.',
+    ...input.panelDescriptions.map((description, index) => `PANEL ${index + 1}: ${description.replace(/\s+/g, ' ').replace(/\.$/, '')}.`),
+    ...(input.entitySummaries ?? []),
+    'No text or borders.',
+  ].filter((entry): entry is string => Boolean(entry)).join(' ')
+}
+
 export function deriveTakeStoryboardPanelArtifacts(input: {
   title: string
   shots: Array<Pick<CinematicScriptShot, 'id' | 'title' | 'beat' | 'cameraAngle' | 'cameraMovement' | 'framing' | 'participantRefIds' | 'locationRefId' | 'propRefIds' | 'storyScenePreset' | 'storyLanguagePreset' | 'actions'>>
@@ -1972,8 +2009,8 @@ export function deriveTakeStoryboardPanelArtifacts(input: {
           panelIndex: index,
         }),
         description,
-        cameraAngle: shot.cameraAngle.trim() || 'eye level',
-        cameraMotion: shot.cameraMovement.trim() || 'motivated follow-through',
+        cameraAngle: '',
+        cameraMotion: '',
       }))
     }
   }
@@ -2446,6 +2483,10 @@ function buildCompiledTakes(shots: Array<CinematicScriptShot & {
       title,
       shots: currentShots,
     })
+    const representativeStillPrompt = buildTakeRepresentativeStillPrompt({
+      title,
+      shots: currentShots,
+    })
     const endpoint =
       currentShots.length === 1 && currentShots[0]._seedanceModePreference === 'image-to-video' && requiredSourceRefIds.length <= 1
         ? 'image-to-video'
@@ -2476,6 +2517,7 @@ function buildCompiledTakes(shots: Array<CinematicScriptShot & {
       contrastAxis: coalesceTakeField(currentShots, (shot) => shot.contrastAxis, ''),
       proofMoment: coalesceTakeField(currentShots, (shot) => shot.proofMoment, ''),
       ctaStyle: coalesceTakeField(currentShots, (shot) => shot.ctaStyle, ''),
+      representativeStillPrompt,
       requiredSourceRefIds,
       storyboardPanelPlan: storyboardPanels.storyboardPanelPlan,
       storyboardPanelScriptText: storyboardPanels.storyboardPanelScriptText,
