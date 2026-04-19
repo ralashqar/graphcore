@@ -3,6 +3,7 @@ import '@supabase/functions-js/edge-runtime.d.ts'
 import { z } from 'npm:zod@4'
 
 import { normalizeProviderQueueHandle } from '../../../src/core/providerQueue.ts'
+import { normalizeCharacterConceptArtMode, resolveConceptImageAspectRatio } from '../../../src/domain/visualAssetGeneration.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
 
 const contentGenerationSchema = z.object({
@@ -67,7 +68,7 @@ let buildCharacterConceptPromptRuntime: ((input: {
   characterName: string
   subtype?: string | null
   archetypeLabel?: string | null
-  conceptArtMode?: 'showcase' | 'continuity' | 'proof_surface' | null
+  conceptArtMode?: 'showcase' | 'design_sheet' | 'continuity' | 'proof_surface' | null
   conceptVariant?: string | null
   captureProfile?: string | null
   artStylePresetLabel?: string | null
@@ -81,7 +82,7 @@ let buildItemConceptPromptRuntime: ((input: {
   archetypeLabel?: string | null
   worldPlacementRole?: string | null
   pickupContext?: string | null
-  conceptArtMode?: 'showcase' | 'continuity' | 'proof_surface' | null
+  conceptArtMode?: 'showcase' | 'design_sheet' | 'continuity' | 'proof_surface' | null
   conceptVariant?: string | null
   captureProfile?: string | null
   artStylePresetLabel?: string | null
@@ -94,7 +95,7 @@ let buildEnvironmentConceptPromptRuntime: ((input: {
   subtype?: string | null
   archetypeLabel?: string | null
   lightingProfile?: string | null
-  conceptArtMode?: 'showcase' | 'continuity' | 'proof_surface' | null
+  conceptArtMode?: 'showcase' | 'design_sheet' | 'continuity' | 'proof_surface' | null
   conceptVariant?: string | null
   captureProfile?: string | null
   artStylePresetLabel?: string | null
@@ -102,6 +103,14 @@ let buildEnvironmentConceptPromptRuntime: ((input: {
   projectContextDescription?: string | null
   visualDescription: string
 }) => string) | null = null
+
+function isNonTerminalFalProgressMessage(body: Record<string, unknown>, providerStatus: string | null) {
+  const message = typeof body.error === 'string' ? body.error.trim().toLowerCase() : ''
+  const normalizedStatus = providerStatus?.trim().toUpperCase() ?? null
+  const indicatesProgressMessage = message === 'request is still in progress'
+    || message === 'still in progress'
+  return indicatesProgressMessage && normalizedStatus === 'IN_PROGRESS'
+}
 
 function normalizeGeneratedToken(value: string) {
   return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
@@ -520,6 +529,10 @@ function conceptPromptFromDefinition(definition: SnapshotDefinition, job: JobRow
     typeof job.options?.conceptArtMode === 'string'
       ? job.options.conceptArtMode
       : null
+  const normalizedCharacterConceptArtMode =
+    job.kind === 'character_concept_image'
+      ? normalizeCharacterConceptArtMode(conceptArtMode as 'showcase' | 'design_sheet' | 'continuity' | 'proof_surface' | null | undefined)
+      : null
   const conceptVariant =
     typeof job.options?.conceptVariant === 'string'
       ? job.options.conceptVariant
@@ -539,11 +552,11 @@ function conceptPromptFromDefinition(definition: SnapshotDefinition, job: JobRow
         ? String(characterProfile.config.subtype)
         : null
 
-    return buildCharacterConceptPrompt({
+    return buildCharacterConceptPromptRuntime({
       characterName: definition.name,
       subtype,
       archetypeLabel: typeof definition.archetypeKey === 'string' ? definition.archetypeKey : null,
-      conceptArtMode: conceptArtMode as 'showcase' | 'continuity' | 'proof_surface' | null,
+      conceptArtMode: normalizedCharacterConceptArtMode,
       conceptVariant,
       captureProfile,
       artStylePresetLabel: getArtStylePresetLabelRuntime(artStylePreset),
@@ -573,7 +586,7 @@ function conceptPromptFromDefinition(definition: SnapshotDefinition, job: JobRow
       archetypeLabel: typeof definition.archetypeKey === 'string' ? definition.archetypeKey : null,
       worldPlacementRole,
       pickupContext,
-      conceptArtMode: conceptArtMode as 'showcase' | 'continuity' | 'proof_surface' | null,
+      conceptArtMode: conceptArtMode as 'showcase' | 'design_sheet' | 'continuity' | 'proof_surface' | null,
       conceptVariant,
       captureProfile,
       artStylePresetLabel: getArtStylePresetLabelRuntime(artStylePreset),
@@ -604,7 +617,7 @@ function conceptPromptFromDefinition(definition: SnapshotDefinition, job: JobRow
     subtype,
     archetypeLabel: typeof definition.archetypeKey === 'string' ? definition.archetypeKey : null,
     lightingProfile,
-    conceptArtMode: conceptArtMode as 'showcase' | 'continuity' | 'proof_surface' | null,
+    conceptArtMode: conceptArtMode as 'showcase' | 'design_sheet' | 'continuity' | 'proof_surface' | null,
     conceptVariant,
     captureProfile,
     artStylePresetLabel: getArtStylePresetLabelRuntime(artStylePreset),
@@ -1895,6 +1908,13 @@ Deno.serve(async (request) => {
             const assetKey = job.target_keys?.assetKey
             const definition = snapshot.definitions.find((entry) => entry.key === definitionKey)
             if (!definition || !assetKey) throw new Error(`Placeholder resources for job ${job.id} were not found.`)
+            const rawConceptArtMode = typeof job.options?.conceptArtMode === 'string'
+              ? job.options.conceptArtMode
+              : null
+            const normalizedCharacterConceptArtMode =
+              job.kind === 'character_concept_image'
+                ? normalizeCharacterConceptArtMode(rawConceptArtMode as 'showcase' | 'design_sheet' | 'continuity' | 'proof_surface' | null | undefined)
+                : null
             const prompt = conceptPromptFromDefinition(definition, job, snapshot)
             const currentResultContext = job.result_context ?? {}
             const queueMetadata = readWorldBuildQueueMetadata(currentResultContext)
@@ -1908,7 +1928,10 @@ Deno.serve(async (request) => {
                   input: {
                     prompt,
                     num_images: 1,
-                    aspect_ratio: job.kind === 'environment_concept_image' ? '16:9' : '1:1',
+                    aspect_ratio: resolveConceptImageAspectRatio({
+                      jobKind: job.kind,
+                      conceptArtMode: job.kind === 'character_concept_image' ? normalizedCharacterConceptArtMode : rawConceptArtMode,
+                    }),
                     output_format: 'png',
                     resolution: '1K',
                   },
@@ -2099,7 +2122,10 @@ Deno.serve(async (request) => {
               statusData = statusPayload
               imageUrl = extractFalImageUrls(statusPayload)[0] ?? null
 
-              if (typeof (statusPayload as { error?: unknown }).error === 'string') {
+              if (
+                typeof (statusPayload as { error?: unknown }).error === 'string'
+                && !isNonTerminalFalProgressMessage(statusPayload as Record<string, unknown>, providerStatus)
+              ) {
                 const message = String((statusPayload as { error: string }).error)
                 await updateJob(client, job.id, {
                   status: 'failed',
@@ -2118,6 +2144,10 @@ Deno.serve(async (request) => {
                   },
                 })
                 break
+              }
+
+              if (isNonTerminalFalProgressMessage(statusPayload as Record<string, unknown>, providerStatus)) {
+                providerStatus = 'IN_PROGRESS'
               }
 
               if (!imageUrl && providerStatus !== 'COMPLETED') {
@@ -2191,12 +2221,31 @@ Deno.serve(async (request) => {
                   : job.kind === 'item_concept_image'
                     ? 'item_concept'
                     : 'environment_concept',
-                conceptArtMode: typeof job.options?.conceptArtMode === 'string' ? job.options.conceptArtMode : null,
-                variant: typeof job.options?.conceptVariant === 'string' ? job.options.conceptVariant : (typeof job.target_keys?.variant === 'string' ? job.target_keys.variant : null),
+                conceptArtMode: job.kind === 'character_concept_image'
+                  ? normalizedCharacterConceptArtMode
+                  : rawConceptArtMode,
+                variant:
+                  typeof job.options?.conceptVariant === 'string'
+                    ? job.options.conceptVariant
+                    : typeof job.target_keys?.variant === 'string'
+                      ? job.target_keys.variant
+                      : job.kind === 'character_concept_image' && normalizedCharacterConceptArtMode === 'design_sheet'
+                        ? 'design_sheet_default'
+                        : null,
                 captureProfile: typeof job.options?.captureProfileOverride === 'string' ? job.options.captureProfileOverride : null,
                 downstreamUse:
-                  typeof job.options?.conceptArtMode === 'string'
-                    ? (job.options.conceptArtMode === 'proof_surface' ? 'proof_surface' : job.options.conceptArtMode === 'continuity' ? 'continuity' : 'showcase')
+                  (job.kind === 'character_concept_image'
+                    ? normalizedCharacterConceptArtMode
+                    : rawConceptArtMode)
+                    ? ((job.kind === 'character_concept_image'
+                      ? normalizedCharacterConceptArtMode
+                      : rawConceptArtMode) === 'proof_surface'
+                        ? 'proof_surface'
+                        : (job.kind === 'character_concept_image'
+                          ? normalizedCharacterConceptArtMode
+                          : rawConceptArtMode) === 'continuity'
+                          ? 'continuity'
+                          : 'showcase')
                     : null,
                 provider: 'fal',
                 model: resultPayload.model ?? 'fal-ai/nano-banana-2',
@@ -2471,7 +2520,10 @@ Deno.serve(async (request) => {
               statusData = statusPayload
               imageUrl = extractFalImageUrls(statusPayload)[0] ?? null
 
-              if (typeof (statusPayload as { error?: unknown }).error === 'string') {
+              if (
+                typeof (statusPayload as { error?: unknown }).error === 'string'
+                && !isNonTerminalFalProgressMessage(statusPayload as Record<string, unknown>, providerStatus)
+              ) {
                 const message = String((statusPayload as { error: string }).error)
                 await updateJob(client, job.id, {
                   status: 'failed',
@@ -2490,6 +2542,10 @@ Deno.serve(async (request) => {
                   },
                 })
                 break
+              }
+
+              if (isNonTerminalFalProgressMessage(statusPayload as Record<string, unknown>, providerStatus)) {
+                providerStatus = 'IN_PROGRESS'
               }
 
               if (!imageUrl && providerStatus !== 'COMPLETED') {

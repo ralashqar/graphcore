@@ -72,6 +72,10 @@ import {
   resolveArtStylePresetForCinematic,
 } from '../../../src/domain/artStylePresets.ts'
 import {
+  normalizeCharacterConceptArtMode,
+  resolveCharacterConceptVariantSet,
+} from '../../../src/domain/visualAssetGeneration.ts'
+import {
   conceptArtModeSchema,
   cinematicCompositeRefPlanSchema,
   cinematicGraphSettingsSchema,
@@ -5320,6 +5324,11 @@ function inferEntityConceptArtMode(input: {
   entityRef: z.infer<typeof cinematicPlannerRawSchema>['entityRefs'][number]
   presetFamily: z.infer<typeof cinematicPresetFamilySchema>
 }) {
+  if (input.entityRef.kind === 'character') {
+    return normalizeCharacterConceptArtMode(
+      input.entityRef.conceptArtMode as 'showcase' | 'design_sheet' | 'continuity' | 'proof_surface' | null | undefined,
+    )
+  }
   if (input.entityRef.conceptArtMode) return input.entityRef.conceptArtMode
   if (input.presetFamily === 'story_movie_tv') return 'showcase' as const
   if (input.entityRef.kind === 'item') {
@@ -5338,15 +5347,11 @@ function inferEntityConceptVariantSet(input: {
   if (Array.isArray(input.entityRef.conceptVariantSet) && input.entityRef.conceptVariantSet.length > 0) {
     return input.entityRef.conceptVariantSet
   }
-  if (input.entityRef.kind === 'character' && input.conceptArtMode === 'continuity') {
-    const text = `${input.entityRef.role} ${input.entityRef.sourceName} ${input.entityRef.summary}`.toLowerCase()
-    return [
-      'three_quarter_portrait',
-      'side_profile',
-      'full_body',
-      ...(text.includes('phone') || text.includes('creator') ? ['phone_in_hand'] : []),
-      ...(text.includes('product') || text.includes('app') ? ['product_hold'] : []),
-    ]
+  if (input.entityRef.kind === 'character') {
+    return resolveCharacterConceptVariantSet({
+      conceptArtMode: input.conceptArtMode,
+      descriptiveText: `${input.entityRef.role} ${input.entityRef.sourceName} ${input.entityRef.summary}`,
+    })
   }
   if (input.entityRef.kind === 'item' && input.conceptArtMode === 'proof_surface') {
     return ['neutral_packshot', 'in_hand_or_in_use', 'readable_close_proof']

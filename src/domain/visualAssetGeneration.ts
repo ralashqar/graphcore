@@ -34,7 +34,7 @@ export type CharacterConceptPromptInput = {
   artStylePresetLabel?: string | null
   archetypeLabel?: string | null
   characterName?: string | null
-  conceptArtMode?: 'showcase' | 'continuity' | 'proof_surface' | null
+  conceptArtMode?: 'showcase' | 'design_sheet' | 'continuity' | 'proof_surface' | null
   conceptVariant?: string | null
   captureProfile?: string | null
   projectContextDescription?: string | null
@@ -46,7 +46,7 @@ export type ItemConceptPromptInput = {
   artStyleDescription?: string | null
   artStylePresetLabel?: string | null
   archetypeLabel?: string | null
-  conceptArtMode?: 'showcase' | 'continuity' | 'proof_surface' | null
+  conceptArtMode?: 'showcase' | 'design_sheet' | 'continuity' | 'proof_surface' | null
   conceptVariant?: string | null
   captureProfile?: string | null
   itemName?: string | null
@@ -61,7 +61,7 @@ export type EnvironmentConceptPromptInput = {
   artStyleDescription?: string | null
   artStylePresetLabel?: string | null
   archetypeLabel?: string | null
-  conceptArtMode?: 'showcase' | 'continuity' | 'proof_surface' | null
+  conceptArtMode?: 'showcase' | 'design_sheet' | 'continuity' | 'proof_surface' | null
   conceptVariant?: string | null
   captureProfile?: string | null
   environmentName?: string | null
@@ -168,10 +168,53 @@ export function extractFalImageUrls(data: unknown): string[] {
   return []
 }
 
+export function normalizeCharacterConceptArtMode(
+  mode: 'showcase' | 'design_sheet' | 'continuity' | 'proof_surface' | null | undefined,
+) {
+  return mode === 'continuity' || mode === 'proof_surface'
+    ? mode
+    : 'design_sheet'
+}
+
+export function resolveCharacterConceptVariantSet(input: {
+  conceptArtMode?: 'showcase' | 'design_sheet' | 'continuity' | 'proof_surface' | null
+  descriptiveText?: string | null
+}) {
+  const normalizedMode = normalizeCharacterConceptArtMode(input.conceptArtMode)
+  if (normalizedMode === 'design_sheet') {
+    return ['design_sheet_default']
+  }
+  if (normalizedMode === 'proof_surface') {
+    return ['default']
+  }
+  if (normalizedMode !== 'continuity') {
+    return []
+  }
+
+  const text = (input.descriptiveText ?? '').toLowerCase()
+  return [
+    'three_quarter_portrait',
+    'side_profile',
+    'full_body',
+    ...(text.includes('phone') || text.includes('creator') ? ['phone_in_hand'] : []),
+    ...(text.includes('product') || text.includes('app') ? ['product_hold'] : []),
+  ]
+}
+
+export function resolveConceptImageAspectRatio(input: {
+  jobKind: 'character_concept_image' | 'item_concept_image' | 'environment_concept_image'
+  conceptArtMode?: 'showcase' | 'design_sheet' | 'continuity' | 'proof_surface' | null
+}) {
+  if (input.jobKind === 'environment_concept_image') return '16:9' as const
+  if (input.jobKind === 'character_concept_image' && normalizeCharacterConceptArtMode(input.conceptArtMode) === 'design_sheet') {
+    return '4:3' as const
+  }
+  return '1:1' as const
+}
+
 export function buildCharacterConceptPrompt(input: CharacterConceptPromptInput) {
   const subtype = input.subtype?.trim() ?? ''
-  const isHumanoid = subtype.length === 0 || subtype === 'humanoid'
-  const mode = input.conceptArtMode ?? 'showcase'
+  const mode = normalizeCharacterConceptArtMode(input.conceptArtMode)
   const variant = input.conceptVariant?.trim() ?? ''
   const poseDirection = mode === 'continuity'
     ? (
@@ -185,18 +228,31 @@ export function buildCharacterConceptPrompt(input: CharacterConceptPromptInput) 
               ? 'Show the character in a controlled continuity pose holding the product or hero prop in a stable, readable way.'
               : 'Show a neutral three-quarter continuity portrait with stable face, hair, wardrobe, and accessories.'
     )
-    : isHumanoid
-      ? 'Show the full-body character in a neutral T-pose concept-sheet stance for modeling reference.'
-      : 'Show the full character clearly, fully visible, centered in frame.'
+    : 'Show the same character in one full-body front view and one full-body three-quarter view from a second angle.'
+  if (mode === 'design_sheet') {
+    return [
+      input.characterName?.trim() ? `Character: ${input.characterName.trim()}.` : null,
+      subtype ? `Subtype: ${subtype}.` : null,
+      input.archetypeLabel?.trim() ? `Archetype: ${input.archetypeLabel.trim()}.` : null,
+      'Character sheet, three-view, full figure only, clean white studio background, 3 square panels on the right for the head and other important features.',
+      'Render as a playable in-engine character asset, not as a loose illustration, sketch, mood board, or poster art.',
+      input.artStylePresetLabel?.trim() ? `Use the project art style guide: ${input.artStylePresetLabel.trim()}.` : null,
+      input.artStyleDescription?.trim() ? `Additional art direction: ${input.artStyleDescription.trim()}.` : null,
+      'Show three full-figure views of the same character: front view, side view, and three-quarter view. Keep these main views large, clear, and fully readable.',
+      'Use the 3 square panels for the head and the most important defining features such as face, weapon, armor, or another distinctive accessory or material detail.',
+      'Use crisp materials, sharp readable forms, clean silhouette separation, and high-end production character-sheet rendering.',
+      'Keep the character identical across all views with stable identity, costume, proportions, silhouette, and materials.',
+      'Use a clean white studio background with soft grounded shadow. No action pose. No environment. No text. No decorative layout.',
+      `Character visual description: ${input.visualDescription.trim()}.`,
+    ].filter(Boolean).join(' ')
+  }
   const sections = [
     input.characterName?.trim() ? `Character: ${input.characterName.trim()}.` : null,
     subtype ? `Subtype: ${subtype}.` : null,
     input.archetypeLabel?.trim() ? `Archetype: ${input.archetypeLabel.trim()}.` : null,
     mode === 'continuity'
       ? 'Create a square continuity-ready character reference image for downstream still and video generation.'
-      : mode === 'proof_surface'
-        ? 'Create a square proof-surface-ready character reference image where the held phone, app, or product stays readable.'
-        : 'Create a square game concept art image for a playable in-engine character asset.',
+      : 'Create a square proof-surface-ready character reference image where the held phone, app, or product stays readable.',
     'Render it in the game’s final visual language, not as a loose illustration, sketch, mood board, or cinematic poster.',
     input.artStylePresetLabel?.trim() ? `Universal game art style: ${input.artStylePresetLabel.trim()}.` : null,
     input.artStyleDescription?.trim() ? `Additional art direction: ${input.artStyleDescription.trim()}.` : null,

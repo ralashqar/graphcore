@@ -63,7 +63,7 @@ export const worldBuildBatchStatusSchema = z.enum(['planned', 'running', 'comple
 export const worldBuildJobStatusSchema = z.enum(['queued', 'running', 'succeeded', 'failed', 'skipped'])
 export const resourceGenerationStateSchema = z.enum(['pending', 'running', 'completed', 'failed'])
 export const worldBuildPlannerModeSchema = z.enum(['world_build', 'cinematic_build', 'direct_asset_generation'])
-export const conceptArtModeSchema = z.enum(['showcase', 'continuity', 'proof_surface'])
+export const conceptArtModeSchema = z.enum(['showcase', 'design_sheet', 'continuity', 'proof_surface'])
 
 export const worldBuildGenerationOptionsSchema = z.object({
   generateConceptImage: z.boolean().optional(),
