@@ -6,7 +6,7 @@ This folder now contains two kinds of documents:
 - current-state docs: the files below, which describe how the project is actually wired today
 
 If you are an AI agent trying to understand the codebase, start with the current-state docs first.
-HELLO!! :)
+
 ## Read Order
 
 1. [`09-current-architecture.md`](./09-current-architecture.md)
