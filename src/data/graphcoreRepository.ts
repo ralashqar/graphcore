@@ -53,6 +53,7 @@ import {
 } from '../domain/worldBuild'
 import type { GameSummary } from '../shared/workspace'
 import { supabase } from '../utils/supabase'
+import { supabasePublishableKey, supabaseUrl } from '../config/supabaseConfig'
 import type { FunctionsHttpError, Session } from '@supabase/supabase-js'
 
 function isUuidLike(value: string) {
@@ -603,8 +604,7 @@ async function invokeAuthedFunctionDirect(
   body: Record<string, unknown>,
   session: Session,
 ) {
-  const publishableKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY
-  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
+  const publishableKey = supabasePublishableKey
 
   if (!publishableKey) {
     throw new Error('Missing Supabase publishable key. Check VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY.')
@@ -2840,7 +2840,7 @@ export async function pollCinematicRun(request: CinematicRunStartRequest & { run
 
 export async function cancelCinematicRun(request: CinematicRunCancelRequest): Promise<CinematicRunStatusResponse> {
   const session = await getValidatedSession('Sign in and load a live GraphCore draft before cancelling a cinematic run.')
-  const publishableKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY
+  const publishableKey = supabasePublishableKey
 
   if (!hasLiveSnapshotIds(request.snapshot)) {
     throw new Error('Sign in and load a live GraphCore draft before cancelling a cinematic run.')
@@ -2851,7 +2851,7 @@ export async function cancelCinematicRun(request: CinematicRunCancelRequest): Pr
   }
 
   async function invokeDirect(accessToken: string) {
-    return fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/cancel-cinematic-run`, {
+    return fetch(`${supabaseUrl}/functions/v1/cancel-cinematic-run`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${accessToken}`,
