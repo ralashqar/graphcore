@@ -3038,6 +3038,7 @@ export default function App() {
         generateConceptImage: true,
         existingDefinitionKey: definition.key,
         existingAssetKey,
+        ...(definition.kind === 'character' ? { conceptArtMode: 'design_sheet' as const } : {}),
       },
     }
 

@@ -10,6 +10,10 @@ import {
   materializeCinematicGraphSettings,
 } from '../../../src/domain/cinematics.ts'
 import {
+  normalizeCharacterConceptArtMode,
+  resolveCharacterConceptVariantSet,
+} from '../../../src/domain/visualAssetGeneration.ts'
+import {
   WORLD_BUILD_ENVIRONMENT_VIEWS,
   getResourceGenerationMetadata,
   normalizeCinematicPlanForTransport,
@@ -564,14 +568,21 @@ Deno.serve(async (request) => {
 
       const targetKeys: Record<string, string> = { definitionKey }
       const conceptDependencyIds = definitionJobId ? [definitionJobId] : []
+      const normalizedConceptArtMode =
+        item.kind === 'character'
+          ? normalizeCharacterConceptArtMode(item.generationOptions.conceptArtMode)
+          : item.generationOptions.conceptArtMode
 
       if ((item.kind === 'character' || item.kind === 'item' || item.kind === 'environment') && item.generationOptions.generateConceptImage) {
         const conceptVariants = item.kind === 'environment'
           ? ['hero']
           : (item.generationOptions.conceptVariantSet && item.generationOptions.conceptVariantSet.length > 0
             ? item.generationOptions.conceptVariantSet
-            : item.kind === 'character' && item.generationOptions.conceptArtMode === 'continuity'
-              ? ['three_quarter_portrait', 'side_profile', 'full_body']
+            : item.kind === 'character'
+              ? resolveCharacterConceptVariantSet({
+                  conceptArtMode: normalizedConceptArtMode,
+                  descriptiveText: `${item.name} ${item.summary}`,
+                })
               : item.kind === 'item' && item.generationOptions.conceptArtMode === 'proof_surface'
                 ? ['neutral_packshot', 'in_hand_or_in_use', 'readable_close_proof']
             : ['default'])
@@ -597,6 +608,7 @@ Deno.serve(async (request) => {
             prompt: payload.prompt,
             options: {
               ...item.generationOptions,
+              ...(item.kind === 'character' ? { conceptArtMode: normalizedConceptArtMode } : {}),
               conceptVariantSet: conceptVariants,
               conceptVariant: normalizedVariant,
             },
@@ -881,6 +893,10 @@ Deno.serve(async (request) => {
         const definitionKey = targetKeys.definitionKey
         const existingDefinitionKey = item.generationOptions.existingDefinitionKey?.trim() || null
         const definitionJobId = planJobIds.get(item.id)
+        const normalizedConceptArtMode =
+          item.kind === 'character'
+            ? normalizeCharacterConceptArtMode(item.generationOptions.conceptArtMode)
+            : item.generationOptions.conceptArtMode
         if (!definitionKey || (!definitionJobId && !existingDefinitionKey)) continue
 
         const placeholderAssets: PlaceholderAsset[] = []
@@ -888,7 +904,10 @@ Deno.serve(async (request) => {
         if ((item.kind === 'character' || item.kind === 'item' || (item.kind === 'environment' && item.generationOptions.generateConceptImage)) && targetKeys.assetKey) {
           const variantAssetEntries = Object.entries(targetKeys)
             .filter(([key]) => key === 'assetKey' || key.startsWith('assetKey:'))
+          const seenAssetKeys = new Set<string>()
           for (const [targetKey, assetKey] of variantAssetEntries) {
+            if (seenAssetKeys.has(assetKey)) continue
+            seenAssetKeys.add(assetKey)
             const variant = targetKey === 'assetKey' ? 'default' : targetKey.replace(/^assetKey:/, '')
             placeholderAssets.push({
               key: assetKey,
@@ -896,10 +915,15 @@ Deno.serve(async (request) => {
               metadata: {
                 generation: createGenerationMetadata(batchId, assetJobIds.get(assetKey) ?? definitionJobId ?? crypto.randomUUID()),
                 placeholderLabel: 'Pending concept image',
-                conceptArtMode: item.generationOptions.conceptArtMode ?? null,
+                conceptArtMode: item.kind === 'character' ? normalizedConceptArtMode : (item.generationOptions.conceptArtMode ?? null),
                 variant,
                 captureProfile: item.generationOptions.captureProfileOverride ?? null,
-                downstreamUse: item.generationOptions.conceptArtMode === 'proof_surface' ? 'proof_surface' : item.generationOptions.conceptArtMode === 'continuity' ? 'continuity' : 'showcase',
+                downstreamUse:
+                  (item.kind === 'character' ? normalizedConceptArtMode : item.generationOptions.conceptArtMode) === 'proof_surface'
+                    ? 'proof_surface'
+                    : (item.kind === 'character' ? normalizedConceptArtMode : item.generationOptions.conceptArtMode) === 'continuity'
+                      ? 'continuity'
+                      : 'showcase',
                 ...(item.kind === 'environment' ? { conceptView: 'hero' } : {}),
               },
             })
