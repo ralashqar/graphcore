@@ -431,6 +431,9 @@ export const cinematicScriptShotSchema = z.object({
   directingPackage: cinematicDirectingPackageSchema.default(defaultCinematicDirectingPackage),
   referencePlan: cinematicReferencePlanSchema.default(defaultCinematicReferencePlan),
   durationSeconds: z.number().int().positive().max(15).nullable().default(null),
+  startSeconds: z.number().nonnegative().default(0),
+  endSeconds: z.number().nonnegative().default(0),
+  approvedForTake: z.boolean().default(false),
   forceTakeBreak: z.boolean().default(false),
   beats: z.array(cinematicBeatSchema).default([]),
   dialogue: z.array(dialogueBeatSchema).default([]),
@@ -537,11 +540,14 @@ export const cinematicShotSpecSchema = z.object({
   directingPackage: cinematicDirectingPackageSchema.default(defaultCinematicDirectingPackage),
   referencePlan: cinematicReferencePlanSchema.default(defaultCinematicReferencePlan),
   durationSeconds: z.number().int().positive().max(15).nullable().default(null),
+  startSeconds: z.number().nonnegative().default(0),
+  endSeconds: z.number().nonnegative().default(0),
   inferredDurationSeconds: z.number().int().positive().max(15).nullable().default(null),
   durationSource: cinematicDurationSourceSchema.default('inferred'),
   timingSummary: z.string().default(''),
   takeId: z.string().nullable().default(null),
   takeIndex: z.number().int().nullable().default(null),
+  approvedForTake: z.boolean().default(false),
   forceTakeBreak: z.boolean().default(false),
   seedanceModePreference: seedanceModePreferenceSchema.default('auto'),
   beats: z.array(cinematicBeatSchema).default([]),
@@ -812,6 +818,13 @@ export type CinematicRunJob = z.infer<typeof cinematicRunJobSchema>
 export type CinematicRunCancelRequest = z.infer<typeof cinematicRunCancelRequestSchema>
 export type CinematicRunStartRequest = z.infer<typeof cinematicRunStartRequestSchema>
 export type CinematicRunStatusResponse = z.infer<typeof cinematicRunStatusResponseSchema>
+
+export type CinematicShotTiming = {
+  id: string
+  durationSeconds: number
+  startSeconds: number
+  endSeconds: number
+}
 
 const defaultCinematicSettings = cinematicSettingsSchema.parse({})
 const defaultAssetRefNodeConfig = assetRefNodeConfigSchema.parse({})
@@ -2073,6 +2086,33 @@ function resolveShotEditorialDurationContract(shot: CinematicScriptShot) {
   }
 }
 
+function normalizeTimelineShotDuration(durationSeconds: number | null | undefined) {
+  if (typeof durationSeconds === 'number' && Number.isFinite(durationSeconds)) {
+    return Math.min(15, Math.max(1, Math.round(durationSeconds)))
+  }
+  return 4
+}
+
+export function buildCinematicShotTimingMap<TShot extends { id: string; durationSeconds: number | null | undefined }>(shots: TShot[]) {
+  const timingMap = new Map<string, CinematicShotTiming>()
+  let currentStartSeconds = 0
+
+  for (const shot of shots) {
+    const durationSeconds = normalizeTimelineShotDuration(shot.durationSeconds)
+    const startSeconds = currentStartSeconds
+    const endSeconds = startSeconds + durationSeconds
+    timingMap.set(shot.id, {
+      id: shot.id,
+      durationSeconds,
+      startSeconds,
+      endSeconds,
+    })
+    currentStartSeconds = endSeconds
+  }
+
+  return timingMap
+}
+
 function inferShotDuration(shot: CinematicScriptShot) {
   const editorialContract = resolveShotEditorialDurationContract(shot)
   if (typeof shot.durationSeconds === 'number' && Number.isFinite(shot.durationSeconds)) {
@@ -2629,6 +2669,10 @@ export function buildCinematicSequenceFromScriptDoc(scriptDoc: CinematicScriptDo
   })
   const isUgcFlow = compiledShots.some((shot) => isUgcShot(shot))
   const takes = buildCompiledTakes(compiledShots)
+  const shotTimingById = buildCinematicShotTimingMap(compiledShots.map((shot) => ({
+    id: shot.id,
+    durationSeconds: shot._compiledDurationSeconds,
+  })))
   const takeByShotId = new Map<string, { id: string; index: number }>()
   takes.forEach((take, index) => {
     take.shotIds.forEach((shotId) => takeByShotId.set(shotId, { id: take.id, index }))
@@ -2692,6 +2736,12 @@ export function buildCinematicSequenceFromScriptDoc(scriptDoc: CinematicScriptDo
         }
       : null,
     shots: compiledShots.map((shot) => ({
+      ...(shotTimingById.get(shot.id) ?? {
+        id: shot.id,
+        durationSeconds: shot._compiledDurationSeconds,
+        startSeconds: 0,
+        endSeconds: shot._compiledDurationSeconds,
+      }),
       sceneId: shot.sceneId,
       id: shot.id,
       title: shot.title,
@@ -2748,6 +2798,7 @@ export function buildCinematicSequenceFromScriptDoc(scriptDoc: CinematicScriptDo
       timingSummary: shot._timingSummary,
       takeId: takeByShotId.get(shot.id)?.id ?? null,
       takeIndex: takeByShotId.get(shot.id)?.index ?? null,
+      approvedForTake: shot.approvedForTake ?? false,
       forceTakeBreak: shot.forceTakeBreak,
       seedanceModePreference: shot._seedanceModePreference,
       beats: shot.beats,
@@ -2952,6 +3003,9 @@ export function deriveCinematicScriptFromSequence(sequence: CinematicSequence): 
       directingPackage: shot.directingPackage,
       referencePlan: shot.referencePlan,
       durationSeconds: shot.durationSeconds,
+      startSeconds: shot.startSeconds,
+      endSeconds: shot.endSeconds,
+      approvedForTake: shot.approvedForTake,
       forceTakeBreak: shot.forceTakeBreak,
       beats: shot.beats,
       dialogue: shot.dialogue,

@@ -6,6 +6,7 @@ import { resolveAssetPreviewUrl, resolveAssetSourceUrl } from '../../domain/asse
 import { compileCinematicGraphFromScriptDoc } from '../../domain/cinematicScriptCompiler'
 import { buildTakeFirstCinematicDocument, layoutCinematicTakeOnlyNodes } from '../../domain/cinematicGraphProjection'
 import {
+  buildCinematicShotTimingMap,
   buildCinematicSettingsPatchFromFormatSubtype,
   buildCinematicSettingsPatchFromPresetFamily,
   buildCinematicSettingsPatchFromStoryPresets,
@@ -54,6 +55,7 @@ import {
   type CinematicStoryScenePreset,
   type DialogueBeat,
 } from '../../domain/cinematics'
+import { CinematicTimelineSurface } from './CinematicTimelineSurface'
 import type {
   AssetDefinition,
   DefinitionBase,
@@ -759,6 +761,10 @@ function rederiveTakeSpec(input: {
 }
 
 function reconcileEditedSequence(sequence: CinematicSequence) {
+  const shotTimingById = buildCinematicShotTimingMap(sequence.shots.map((shot) => ({
+    id: shot.id,
+    durationSeconds: shot.durationSeconds,
+  })))
   let currentStart = 0
   const takes = sequence.takes
     .map((take, index) => rederiveTakeSpec({
@@ -783,6 +789,9 @@ function reconcileEditedSequence(sequence: CinematicSequence) {
     ...sequence,
     shots: sequence.shots.map((shot) => ({
       ...shot,
+      startSeconds: shotTimingById.get(shot.id)?.startSeconds ?? 0,
+      endSeconds: shotTimingById.get(shot.id)?.endSeconds ?? 0,
+      durationSeconds: shotTimingById.get(shot.id)?.durationSeconds ?? shot.durationSeconds ?? 4,
       takeId: takeByShotId.get(shot.id)?.id ?? null,
       takeIndex: takeByShotId.get(shot.id)?.index ?? null,
     })),
@@ -1465,6 +1474,10 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
   }, [currentGraph, onStartCinematicRun])
 
   const graphSettings = getCinematicSettings(gameSpec ?? {}, currentGraph?.metadata ?? {})
+  const currentSequence = useMemo(
+    () => (currentGraph ? getCinematicSequence(currentGraph.metadata) : null),
+    [currentGraph],
+  )
   const subtypeOptions = getSubtypeOptionsForPresetFamily(graphSettings.presetFamily)
   const currentPreflightStatus = preflightStatus?.graphKey === currentGraph?.key ? preflightStatus : null
   const graphPresetOverrideActive = Boolean(
@@ -1508,12 +1521,12 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
       cinematicAuthoring?: { scriptDirty?: unknown }
     }).cinematicAuthoring?.scriptDirty)
   }, [currentGraph])
-  const [contentMode, setContentMode] = useState<'script' | 'graph' | 'runs'>('graph')
+  const [contentMode, setContentMode] = useState<'timeline' | 'script' | 'graph' | 'runs'>('timeline')
   const [isRebuildingRuntimeGraph, setIsRebuildingRuntimeGraph] = useState(false)
 
   useEffect(() => {
     if (!currentGraph) return
-    setContentMode('graph')
+    setContentMode('timeline')
   }, [currentGraph?.key])
 
   useEffect(() => {
@@ -1610,6 +1623,68 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
       shots: sequence.shots.map((shot) => (shot.id === shotId ? mutator(shot) : shot)),
     }))
   }
+
+  function updateTakeInSequence(takeId: string, mutator: (take: CinematicSequence['takes'][number]) => CinematicSequence['takes'][number]) {
+    updateCurrentSequence((sequence) => ({
+      ...sequence,
+      takes: sequence.takes.map((take) => (take.id === takeId ? mutator(take) : take)),
+    }))
+  }
+
+  const takeNodeKeyByTakeId = useMemo(() => new Map(
+    currentTakeNodes.map((node) => {
+      const config = getCinematicTakeNodeConfig(node)
+      return [config.id, node.key] as const
+    }),
+  ), [currentTakeNodes])
+
+  const handleGenerateStillFromTakeId = useCallback((takeId: string) => {
+    const takeNodeKey = takeNodeKeyByTakeId.get(takeId)
+    if (!takeNodeKey || !currentGraph) return
+    onGenerateTakeStill({
+      graphKey: currentGraph.key,
+      takeNodeKey,
+    })
+  }, [currentGraph, onGenerateTakeStill, takeNodeKeyByTakeId])
+
+  const handleGenerateStoryboardFromTakeId = useCallback((takeId: string) => {
+    const takeNodeKey = takeNodeKeyByTakeId.get(takeId)
+    if (!takeNodeKey || !currentGraph) return
+    onGenerateTakeStoryboard({
+      graphKey: currentGraph.key,
+      takeNodeKey,
+    })
+  }, [currentGraph, onGenerateTakeStoryboard, takeNodeKeyByTakeId])
+
+  const handleGenerateTakeVideoFromTimeline = useCallback((takeId: string) => {
+    const takeNodeKey = takeNodeKeyByTakeId.get(takeId)
+    if (!takeNodeKey || !currentGraph) return
+    onStartCinematicRun({
+      graphKey: currentGraph.key,
+      mode: 'graph_run',
+      targetNodeKey: takeNodeKey,
+      targetNodeKeys: [takeNodeKey],
+    })
+  }, [currentGraph, onStartCinematicRun, takeNodeKeyByTakeId])
+
+  const handleGenerateShotFromTimeline = useCallback((shotId: string, mode: 'preview_still' | 'preview_video') => {
+    if (!currentSequence || !currentGraph) return
+    const shot = currentSequence.shots.find((entry) => entry.id === shotId) ?? null
+    if (!shot) return
+    const takeId =
+      typeof shot.takeIndex === 'number'
+        ? currentSequence.takes[shot.takeIndex]?.id ?? shot.takeId
+        : shot.takeId
+    if (!takeId) return
+    const takeNodeKey = takeNodeKeyByTakeId.get(takeId)
+    if (!takeNodeKey) return
+    onStartCinematicRun({
+      graphKey: currentGraph.key,
+      mode,
+      targetNodeKey: takeNodeKey,
+      shotId,
+    })
+  }, [currentGraph, currentSequence, onStartCinematicRun, takeNodeKeyByTakeId])
 
   function moveShotWithinTake(takeId: string, shotId: string, direction: -1 | 1) {
     updateCurrentSequence((sequence) => ({
@@ -1856,14 +1931,15 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
         ) : null}
       </aside>
 
-      <section className="main-surface graph-surface">
+      <section className={contentMode === 'timeline' ? 'main-surface graph-surface graph-surface-timeline' : 'main-surface graph-surface'}>
         <div className="graph-toolbar cinematic-toolbar">
           <select value={currentGraph?.key ?? ''} onChange={(event) => onSelectGraph(event.target.value || null)}>
             {cinematicGraphs.length === 0 ? <option value="">No cinematic flows</option> : null}
             {cinematicGraphs.map((graph) => <option key={graph.key} value={graph.key}>{graph.name}</option>)}
           </select>
           <div className="segmented-control cinematic-content-mode-toggle">
-            <button className={contentMode === 'script' ? 'segment-button is-active' : 'segment-button'} onClick={() => setContentMode('script')} type="button">Script</button>
+            <button className={contentMode === 'timeline' ? 'segment-button is-active' : 'segment-button'} onClick={() => { onClearSelection(); setContentMode('timeline') }} type="button">Timeline</button>
+            <button className={contentMode === 'script' ? 'segment-button is-active' : 'segment-button'} onClick={() => { onClearSelection(); setContentMode('script') }} type="button">Script</button>
             <button className={contentMode === 'graph' ? 'segment-button is-active' : 'segment-button'} onClick={() => setContentMode('graph')} type="button">Graph</button>
           </div>
           <select value={graphSettings.presetFamily} onChange={(event) => updateGraphCinematics(buildCinematicSettingsPatchFromPresetFamily(event.target.value as CinematicPresetFamily))}>
@@ -1906,6 +1982,29 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
           <button className="ghost-button compact" onClick={() => currentGraph && onDuplicateGraph(currentGraph.key)} type="button">Duplicate</button>
           <button className={isDeletingSelectedGraph ? 'ghost-button compact button-with-spinner' : 'ghost-button compact'} disabled={isDeletingSelectedGraph} onClick={() => currentGraph && onDeleteGraph(currentGraph.key)} type="button">{isDeletingSelectedGraph ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}</button>
         </div>
+        {contentMode === 'timeline' ? (
+          <CinematicTimelineSurface
+            assets={assets}
+            canRunCinematics={canRunCinematics}
+            currentGraph={currentGraph}
+            currentRuns={currentGraphRuns}
+            definitions={definitions}
+            graphSettings={graphSettings}
+            sequence={currentSequence}
+            onGenerateShot={handleGenerateShotFromTimeline}
+            onGenerateTakeStill={handleGenerateStillFromTakeId}
+            onGenerateTakeStoryboard={handleGenerateStoryboardFromTakeId}
+            onGenerateTakeVideo={handleGenerateTakeVideoFromTimeline}
+            onToggleShotApproval={(shotId, approved) => updateShotInSequence(shotId, (shot) => ({ ...shot, approvedForTake: approved }))}
+            onToggleTakeApproval={(takeId, approved) => updateTakeInSequence(takeId, (take) => ({ ...take, approvedForVideo: approved }))}
+            onUpdateShotDuration={(shotId, durationSeconds) => updateShotInSequence(shotId, (shot) => ({
+              ...shot,
+              durationSeconds,
+              durationSource: 'manual',
+              approvedForTake: false,
+            }))}
+          />
+        ) : null}
         {contentMode === 'graph' ? (
           <>
             <GraphCanvasStage
@@ -2430,6 +2529,9 @@ function ScriptPreviewSurface({
             dropOrder: [],
           },
           durationSeconds: null,
+          startSeconds: 0,
+          endSeconds: 0,
+          approvedForTake: false,
           forceTakeBreak: false,
           beats: [],
           dialogue: [],
@@ -3311,6 +3413,12 @@ function CinematicTakeInspector({
     activeStill: shotRuns.find(({ run, job }) => !['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(run.status) && run.mode === 'preview_still' && job.shotNodeKey === node.key && job.shotId === shotId) ?? null,
     activeVideo: shotRuns.find(({ run, job }) => !['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(run.status) && run.mode === 'preview_video' && job.shotNodeKey === node.key && job.shotId === shotId) ?? null,
   })
+  const hasPrimaryTakeImage = Boolean(config.previewImageAssetKey || config.outputStillAssetKey || config.storyboardAssetKey || includedShots.some((shot) => shot.stillAssetKey))
+  const pendingShotApprovals = includedShots.filter((shot) => !shot.approvedForTake)
+  const shotsMissingStills = includedShots.filter((shot) => !shot.stillAssetKey)
+  const takeHasProofBeat = includedShots.some((shot) => shot.hookRole === 'proof' || shot.proofMoment.trim().length > 0 || shot.proofType.trim().length > 0)
+  const canApproveTake = pendingShotApprovals.length === 0 && hasPrimaryTakeImage
+  const canGenerateTakeVideo = canRunCinematics && includedShots.length > 0 && config.approvedForVideo && hasPrimaryTakeImage
 
   return (
     <div className="detail-stack compact">
@@ -3395,6 +3503,30 @@ function CinematicTakeInspector({
           <strong>Approval</strong>
           <span> {config.approvedForVideo ? 'Approved for video render' : 'Not approved yet'}</span>
         </div>
+        {pendingShotApprovals.length > 0 ? (
+          <div className="inline-note is-warning">
+            <strong>Shot approvals</strong>
+            <span> {pendingShotApprovals.length} shot{pendingShotApprovals.length === 1 ? '' : 's'} still need shot-level approval.</span>
+          </div>
+        ) : null}
+        {shotsMissingStills.length > 0 ? (
+          <div className="inline-note is-warning">
+            <strong>Missing stills</strong>
+            <span> {shotsMissingStills.length} shot{shotsMissingStills.length === 1 ? '' : 's'} do not have shot still previews yet.</span>
+          </div>
+        ) : null}
+        {!hasPrimaryTakeImage ? (
+          <div className="inline-note is-danger">
+            <strong>Primary image</strong>
+            <span> Generate a take still, storyboard, or at least one shot still before rendering video.</span>
+          </div>
+        ) : null}
+        {!takeHasProofBeat ? (
+          <div className="inline-note is-warning">
+            <strong>Proof beat</strong>
+            <span> This take does not currently show a clear proof or payoff beat.</span>
+          </div>
+        ) : null}
         <div className="inline-note">
           <strong>Effective art style</strong>
           <span> {getArtStylePresetLabel(effectiveArtStyle.presetId)}{effectiveArtStyle.source === 'node' ? ' · take override' : effectiveArtStyle.source === 'graph' ? ' · graph override' : effectiveArtStyle.source === 'inferred' ? ' · inferred graph override' : effectiveArtStyle.source === 'recommended' ? ' · recommended override' : effectiveArtStyle.source === 'project' ? ' · project global' : ''}</span>
@@ -3435,7 +3567,7 @@ function CinematicTakeInspector({
         {config.approvedForVideo ? (
           <button className="ghost-button compact" onClick={() => onUpdate({ metadata: updateNodeMetadataWithTake(node.metadata, { approvedForVideo: false }) })} type="button">Unapprove</button>
         ) : (
-          <button className="ghost-button compact" onClick={() => onUpdate({ metadata: updateNodeMetadataWithTake(node.metadata, { approvedForVideo: true }) })} type="button">Approve for Video</button>
+          <button className="ghost-button compact" disabled={!canApproveTake} onClick={() => onUpdate({ metadata: updateNodeMetadataWithTake(node.metadata, { approvedForVideo: true }) })} type="button">Approve for Video</button>
         )}
         <button className="ghost-button compact" disabled={!previousTake} onClick={() => onMergeTake(config.id, -1)} type="button">Merge Prev</button>
         <button className="ghost-button compact" disabled={!nextTake} onClick={() => onMergeTake(config.id, 1)} type="button">Merge Next</button>
@@ -3694,7 +3826,7 @@ function CinematicTakeInspector({
         <button className={isGeneratingStill ? 'ghost-button compact button-with-spinner' : 'ghost-button compact'} disabled={!canRunCinematics || includedShots.length === 0 || isGeneratingStill} onClick={() => onGenerateStill(node)} type="button">{isGeneratingStill ? <><span className="button-spinner" aria-hidden="true" />Generating Still...</> : 'Generate Still'}</button>
         {activeStoryboardRun ? <button className="ghost-button compact" onClick={() => onCancelRun(activeStoryboardRun.id)} type="button">Cancel Storyboard</button> : null}
         {activeStillRun ? <button className="ghost-button compact" onClick={() => onCancelRun(activeStillRun.id)} type="button">Cancel Still</button> : null}
-        <button className="primary-button compact" disabled={!canRunCinematics || includedShots.length === 0} onClick={() => onGenerate('graph_run')} type="button">Generate Clip</button>
+        <button className="primary-button compact" disabled={!canGenerateTakeVideo} onClick={() => onGenerate('graph_run')} type="button">Generate Clip</button>
       </div>
       {!canRunCinematics ? <div className="inline-note">Connect to a live Supabase workspace before starting cinematic generation jobs.</div> : null}
       <div className="editor-section compact-section">

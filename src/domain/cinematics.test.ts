@@ -3,6 +3,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  buildCinematicShotTimingMap,
   buildCinematicSequenceFromScriptDoc,
   buildCinematicSettingsPatchFromPresetFamily,
   buildCinematicSettingsPatchFromStoryPresets,
@@ -14,6 +15,11 @@ import {
   materializeCinematicGraphSettings,
   parseTakeStoryboardPanelScriptText,
 } from './cinematics.ts'
+import {
+  buildCinematicTimelineProjection,
+  findTimelineShotAtSeconds,
+  findTimelineTakeAtSeconds,
+} from './cinematicTimelineProjection.ts'
 import { compileCinematicGraphFromScriptDoc } from './cinematicScriptCompiler.ts'
 import { ingestCinematicCreativeScriptToAuthoredShots } from './cinematicCreativeScript.ts'
 import {
@@ -258,6 +264,131 @@ test('world build cinematic graph settings allow nullable story string fields', 
 
   assert.equal(parsed.ctaStyle, null)
   assert.equal(parsed.proofMoment, null)
+})
+
+test('shot timing round-trips through script and sequence without drift', () => {
+  const script = cinematicScriptDocSchema.parse({
+    title: 'Roundtrip',
+    entityBindings: [
+      { id: 'creator_1', kind: 'character', role: 'creator', label: 'Creator', sourceName: 'Creator' },
+    ],
+    shots: [
+      {
+        id: 'shot_1',
+        orderIndex: 0,
+        title: 'Opening',
+        beat: 'The creator turns toward the camera and starts the hook.',
+        participantRefIds: ['creator_1'],
+        durationSeconds: 3,
+        dialogue: [{ id: 'd1', speakerRefId: 'creator_1', line: 'Wait, stop doing this.', startSeconds: 0, endSeconds: 2 }],
+        actions: [{ id: 'a1', actorRefId: 'creator_1', verb: 'turns toward the camera', startSeconds: 0, endSeconds: 3 }],
+      },
+      {
+        id: 'shot_2',
+        orderIndex: 1,
+        title: 'Proof',
+        beat: 'The phone screen fills frame and shows the product working.',
+        hookRole: 'proof',
+        participantRefIds: ['creator_1'],
+        durationSeconds: 5,
+        dialogue: [],
+        actions: [{ id: 'a2', actorRefId: 'creator_1', verb: 'holds the phone toward camera', startSeconds: 0, endSeconds: 4 }],
+      },
+    ],
+  })
+
+  const sequence = buildCinematicSequenceFromScriptDoc(script)
+  const roundTrip = deriveCinematicScriptFromSequence(sequence)
+
+  assert.equal(sequence.shots[0]?.startSeconds, 0)
+  assert.equal(sequence.shots[0]?.endSeconds, 3)
+  assert.equal(sequence.shots[1]?.startSeconds, 3)
+  assert.equal(sequence.shots[1]?.endSeconds, 8)
+  assert.equal(roundTrip.shots[0]?.startSeconds, 0)
+  assert.equal(roundTrip.shots[0]?.endSeconds, 3)
+  assert.equal(roundTrip.shots[1]?.startSeconds, 3)
+  assert.equal(roundTrip.shots[1]?.endSeconds, 8)
+})
+
+test('shot timing map reflows contiguous durations and updates take windows', () => {
+  const timingMap = buildCinematicShotTimingMap([
+    { id: 'shot_1', durationSeconds: 2 },
+    { id: 'shot_2', durationSeconds: 4 },
+    { id: 'shot_3', durationSeconds: 3 },
+  ])
+
+  assert.deepEqual(timingMap.get('shot_1'), { id: 'shot_1', durationSeconds: 2, startSeconds: 0, endSeconds: 2 })
+  assert.deepEqual(timingMap.get('shot_2'), { id: 'shot_2', durationSeconds: 4, startSeconds: 2, endSeconds: 6 })
+  assert.deepEqual(timingMap.get('shot_3'), { id: 'shot_3', durationSeconds: 3, startSeconds: 6, endSeconds: 9 })
+})
+
+test('timeline projection resolves cue timing, preview fallback, and active ranges', () => {
+  const sequence = buildCinematicSequenceFromScriptDoc(cinematicScriptDocSchema.parse({
+    title: 'Timeline Projection',
+    entityBindings: [
+      { id: 'creator_1', kind: 'character', role: 'creator', label: 'Creator', sourceName: 'Creator' },
+      { id: 'product_1', kind: 'item', role: 'product', label: 'Product', sourceName: 'Product' },
+    ],
+    storyboard: {
+      mode: 'shot_panels',
+      summary: '',
+      sequenceAssetKey: 'asset.sequence_board',
+      panels: [{
+        id: 'panel_1',
+        shotId: 'shot_1',
+        title: 'Hook Panel',
+        assetKey: 'asset.panel_1',
+        notes: '',
+        orderIndex: 0,
+      }],
+    },
+    shots: [
+      {
+        id: 'shot_1',
+        orderIndex: 0,
+        title: 'Hook',
+        beat: 'The creator points at the phone and opens with a sharp hook.',
+        hookRole: 'hook',
+        participantRefIds: ['creator_1'],
+        propRefIds: ['product_1'],
+        storyboardRefIds: ['panel_1'],
+        durationSeconds: 3,
+        dialogue: [{
+          id: 'd1',
+          speakerRefId: 'creator_1',
+          line: 'This changes everything.',
+          startSeconds: 1,
+          endSeconds: 3,
+        }],
+        actions: [{ id: 'a1', actorRefId: 'creator_1', verb: 'points at the phone', startSeconds: 0, endSeconds: 2 }],
+      },
+      {
+        id: 'shot_2',
+        orderIndex: 1,
+        title: 'Payoff',
+        beat: 'The phone stays in frame as the creator shows the result.',
+        hookRole: 'payoff',
+        participantRefIds: ['creator_1'],
+        propRefIds: ['product_1'],
+        durationSeconds: 4,
+        dialogue: [],
+        actions: [{ id: 'a2', actorRefId: 'creator_1', verb: 'shows the result screen', startSeconds: 0, endSeconds: 4 }],
+      },
+    ],
+  }))
+  const projection = buildCinematicTimelineProjection({
+    ...sequence,
+    shots: sequence.shots.map((shot) => shot.id === 'shot_2' ? { ...shot, stillAssetKey: 'asset.shot_2' } : shot),
+    takes: sequence.takes.map((take, index) => index === 0 ? { ...take, previewImageAssetKey: 'asset.take_1' } : take),
+  })
+
+  assert.equal(projection.shots[0]?.previewAssetKey, 'asset.panel_1')
+  assert.equal(projection.shots[1]?.previewAssetKey, 'asset.shot_2')
+  assert.equal(projection.dialogueCues[0]?.startSeconds, 1)
+  assert.equal(projection.dialogueCues[0]?.endSeconds, 3)
+  assert.equal(findTimelineShotAtSeconds(projection, 0.5)?.id, 'shot_1')
+  assert.equal(findTimelineShotAtSeconds(projection, 3.5)?.id, 'shot_2')
+  assert.equal(findTimelineTakeAtSeconds(projection, 1.5)?.id, projection.takes[0]?.id)
 })
 
 test('world build request and response schemas accept story authorship pipeline for cinematic graphs', () => {
