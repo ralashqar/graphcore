@@ -23,6 +23,11 @@ type TimelineSurfaceProps = {
   currentGraph: GraphDefinition | null
   currentRuns: CinematicRun[]
   definitions: DefinitionBase[]
+  generatingShotStillIds: Set<string>
+  generatingShotVideoIds: Set<string>
+  generatingTakeStillIds: Set<string>
+  generatingTakeStoryboardIds: Set<string>
+  generatingTakeVideoIds: Set<string>
   graphSettings: CinematicSettings
   sequence: CinematicSequence | null
   onGenerateShot: (shotId: string, mode: 'preview_still' | 'preview_video') => void
@@ -165,6 +170,11 @@ export function CinematicTimelineSurface({
   canRunCinematics,
   currentGraph,
   currentRuns,
+  generatingShotStillIds,
+  generatingShotVideoIds,
+  generatingTakeStillIds,
+  generatingTakeStoryboardIds,
+  generatingTakeVideoIds,
   graphSettings,
   sequence,
   onGenerateShot,
@@ -448,6 +458,11 @@ export function CinematicTimelineSurface({
     activeShot?.previewAssetKeys ?? activeTake?.previewAssetKeys ?? [],
   )
   const activeTakeBlockers = activeTake ? takeBlockers({ projection, take: activeTake }) : []
+  const activeShotStillGenerating = Boolean(activeShot && generatingShotStillIds.has(activeShot.id))
+  const activeShotVideoGenerating = Boolean(activeShot && generatingShotVideoIds.has(activeShot.id))
+  const activeTakeStillGenerating = Boolean(activeTake && generatingTakeStillIds.has(activeTake.id))
+  const activeTakeStoryboardGenerating = Boolean(activeTake && generatingTakeStoryboardIds.has(activeTake.id))
+  const activeTakeVideoGenerating = Boolean(activeTake && generatingTakeVideoIds.has(activeTake.id))
   const canApproveTake = activeTake ? activeTakeBlockers.every((blocker) => blocker.id.endsWith('-proof') || blocker.id.endsWith('-shot-stills') ? true : blocker.id === `${activeTake.id}-approval`) : false
   const canGenerateTakeVideo = Boolean(
     canRunCinematics
@@ -751,8 +766,22 @@ export function CinematicTimelineSurface({
                   {formatTimecode(activeShot.startSeconds)} - {formatTimecode(activeShot.endSeconds)} · {activeShot.durationSeconds}s · {activeShot.hookRole ?? activeShot.shotType}
                 </div>
                 <div className="timeline-sidebar-actions">
-                  <button className="ghost-button compact" disabled={!canRunCinematics} onClick={() => onGenerateShot(activeShot.id, 'preview_still')} type="button">Generate Still</button>
-                  <button className="ghost-button compact" disabled={!canRunCinematics} onClick={() => onGenerateShot(activeShot.id, 'preview_video')} type="button">Generate Clip</button>
+                  <button
+                    className={activeShotStillGenerating ? 'ghost-button compact button-with-spinner' : 'ghost-button compact'}
+                    disabled={!canRunCinematics || activeShotStillGenerating}
+                    onClick={() => onGenerateShot(activeShot.id, 'preview_still')}
+                    type="button"
+                  >
+                    {activeShotStillGenerating ? <><span className="button-spinner" aria-hidden="true" />Generating Still...</> : 'Generate Still'}
+                  </button>
+                  <button
+                    className={activeShotVideoGenerating ? 'ghost-button compact button-with-spinner' : 'ghost-button compact'}
+                    disabled={!canRunCinematics || activeShotVideoGenerating}
+                    onClick={() => onGenerateShot(activeShot.id, 'preview_video')}
+                    type="button"
+                  >
+                    {activeShotVideoGenerating ? <><span className="button-spinner" aria-hidden="true" />Generating Clip...</> : 'Generate Clip'}
+                  </button>
                   <button
                     className="primary-button compact"
                     disabled={!activeShot.previewAssetKey}
@@ -762,6 +791,7 @@ export function CinematicTimelineSurface({
                     {activeShot.approvedForTake ? 'Unapprove Shot' : 'Approve Shot'}
                   </button>
                 </div>
+                {activeShotStillGenerating ? <div className="inline-note"><span className="button-spinner" aria-hidden="true" />Shot still is generating.</div> : null}
                 {!activeShot.previewAssetKey ? <div className="inline-note is-warning">Generate a shot still before approving composition and timing.</div> : null}
                 <label className="field-block compact-block">
                   <span>Duration</span>
@@ -787,8 +817,22 @@ export function CinematicTimelineSurface({
                   {formatTimecode(activeTake.startSeconds)} - {formatTimecode(activeTake.endSeconds)} · {activeTake.durationSeconds}s · {graphSettings.presetFamily === 'story_movie_tv' ? 'story' : 'ugc'}
                 </div>
                 <div className="timeline-sidebar-actions">
-                  <button className="ghost-button compact" disabled={!canRunCinematics} onClick={() => onGenerateTakeStoryboard(activeTake.id)} type="button">Generate Storyboard</button>
-                  <button className="ghost-button compact" disabled={!canRunCinematics} onClick={() => onGenerateTakeStill(activeTake.id)} type="button">Generate Still</button>
+                  <button
+                    className={activeTakeStoryboardGenerating ? 'ghost-button compact button-with-spinner' : 'ghost-button compact'}
+                    disabled={!canRunCinematics || activeTakeStoryboardGenerating}
+                    onClick={() => onGenerateTakeStoryboard(activeTake.id)}
+                    type="button"
+                  >
+                    {activeTakeStoryboardGenerating ? <><span className="button-spinner" aria-hidden="true" />Generating Storyboard...</> : 'Generate Storyboard'}
+                  </button>
+                  <button
+                    className={activeTakeStillGenerating ? 'ghost-button compact button-with-spinner' : 'ghost-button compact'}
+                    disabled={!canRunCinematics || activeTakeStillGenerating}
+                    onClick={() => onGenerateTakeStill(activeTake.id)}
+                    type="button"
+                  >
+                    {activeTakeStillGenerating ? <><span className="button-spinner" aria-hidden="true" />Generating Still...</> : 'Generate Still'}
+                  </button>
                   <button
                     className="ghost-button compact"
                     disabled={activeTake.approvedForVideo ? false : !canApproveTake}
@@ -797,8 +841,17 @@ export function CinematicTimelineSurface({
                   >
                     {activeTake.approvedForVideo ? 'Unapprove Take' : 'Approve Take'}
                   </button>
-                  <button className="primary-button compact" disabled={!canGenerateTakeVideo} onClick={() => onGenerateTakeVideo(activeTake.id)} type="button">Generate Video</button>
+                  <button
+                    className={activeTakeVideoGenerating ? 'primary-button compact button-with-spinner' : 'primary-button compact'}
+                    disabled={!canGenerateTakeVideo || activeTakeVideoGenerating}
+                    onClick={() => onGenerateTakeVideo(activeTake.id)}
+                    type="button"
+                  >
+                    {activeTakeVideoGenerating ? <><span className="button-spinner" aria-hidden="true" />Generating Video...</> : 'Generate Video'}
+                  </button>
                 </div>
+                {activeTakeStillGenerating ? <div className="inline-note"><span className="button-spinner" aria-hidden="true" />Take still is generating.</div> : null}
+                {activeTakeStoryboardGenerating ? <div className="inline-note"><span className="button-spinner" aria-hidden="true" />Storyboard is generating.</div> : null}
                 <div className="diagnostic-stack">
                   {activeTakeBlockers.length > 0 ? activeTakeBlockers.map((blocker) => (
                     <div className={`inline-note ${blocker.level === 'error' ? 'is-danger' : 'is-warning'}`} key={blocker.id}>{blocker.message}</div>

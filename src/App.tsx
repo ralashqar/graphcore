@@ -593,6 +593,58 @@ function readUnsavedSnapshot(draftId: string) {
   }
 }
 
+function reconcileStaleGeneratedResourcesByKey<T extends { key: string; metadata?: unknown }>(
+  cached: T[],
+  incoming: T[],
+) {
+  const incomingByKey = new Map(incoming.map((entry) => [entry.key, entry] as const))
+  let changed = false
+  const nextEntries = cached.map((entry) => {
+    const incomingEntry = incomingByKey.get(entry.key)
+    if (!incomingEntry) return entry
+
+    const cachedGeneration = getResourceGenerationMetadata(entry)
+    const incomingGeneration = getResourceGenerationMetadata(incomingEntry)
+    const cachedPending =
+      cachedGeneration?.state === 'pending'
+      || cachedGeneration?.state === 'running'
+    const incomingTerminal =
+      incomingGeneration?.state === 'completed'
+      || incomingGeneration?.state === 'failed'
+
+    if (!cachedPending || !incomingTerminal) return entry
+    if (cachedGeneration.batchId !== incomingGeneration.batchId || cachedGeneration.jobId !== incomingGeneration.jobId) {
+      return entry
+    }
+
+    changed = true
+    return incomingEntry
+  })
+
+  return changed ? nextEntries : cached
+}
+
+function reconcileStaleGeneratedSnapshot(cached: ProjectSnapshot, incoming: ProjectSnapshot) {
+  const nextDefinitions = reconcileStaleGeneratedResourcesByKey(cached.definitions, incoming.definitions)
+  const nextGraphs = reconcileStaleGeneratedResourcesByKey(cached.graphs, incoming.graphs)
+  const nextAssets = reconcileStaleGeneratedResourcesByKey(cached.assets, incoming.assets)
+
+  if (
+    nextDefinitions === cached.definitions
+    && nextGraphs === cached.graphs
+    && nextAssets === cached.assets
+  ) {
+    return cached
+  }
+
+  return {
+    ...cached,
+    definitions: nextDefinitions,
+    graphs: nextGraphs,
+    assets: nextAssets,
+  }
+}
+
 function writeUnsavedSnapshot(snapshot: ProjectSnapshot) {
   if (typeof window === 'undefined') return
 
@@ -765,7 +817,10 @@ export default function App() {
       cachedUnsavedSnapshot
       && cachedUnsavedSnapshot.project.id === normalizedIncomingSnapshot.project.id
       && cachedUnsavedSnapshot.draft.id === normalizedIncomingSnapshot.draft.id
-        ? normalizeSnapshot(cachedUnsavedSnapshot)
+        ? normalizeSnapshot(reconcileStaleGeneratedSnapshot(
+            normalizeSnapshot(cachedUnsavedSnapshot),
+            normalizedIncomingSnapshot,
+          ))
         : normalizedIncomingSnapshot
     const restoredUnsavedSnapshot = snapshotToHydrate !== state.snapshot
 

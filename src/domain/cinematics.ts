@@ -774,6 +774,37 @@ export const cinematicRunStatusResponseSchema = z.object({
   assets: z.array(rawRecordSchema).default([]),
 })
 
+function clampReferencePriority(priority: unknown) {
+  if (typeof priority !== 'number' || !Number.isFinite(priority)) return 50
+  return Math.min(100, Math.max(0, Math.round(priority)))
+}
+
+function normalizeSeedanceReferenceInput(
+  input: Partial<z.infer<typeof seedanceReferenceInputSchema>> | null | undefined,
+): z.infer<typeof seedanceReferenceInputSchema> | null {
+  if (!input || typeof input !== 'object') return null
+  const parsed = seedanceReferenceInputSchema.safeParse({
+    ...input,
+    priority: clampReferencePriority(input.priority),
+  })
+  return parsed.success ? parsed.data : null
+}
+
+function normalizeSeedanceExecutionPlan(
+  input: Partial<z.infer<typeof seedanceExecutionPlanSchema>> | null | undefined,
+): z.infer<typeof seedanceExecutionPlanSchema> | null {
+  if (!input || typeof input !== 'object') return null
+  const parsed = seedanceExecutionPlanSchema.safeParse({
+    ...input,
+    referenceInputs: Array.isArray(input.referenceInputs)
+      ? input.referenceInputs
+          .map((entry) => normalizeSeedanceReferenceInput(entry))
+          .filter((entry): entry is z.infer<typeof seedanceReferenceInputSchema> => Boolean(entry))
+      : [],
+  })
+  return parsed.success ? parsed.data : null
+}
+
 export type CinematicSettings = z.infer<typeof cinematicSettingsSchema>
 export type CinematicPresetFamily = z.infer<typeof cinematicPresetFamilySchema>
 export type CinematicStoryScenePreset = z.infer<typeof cinematicStoryScenePresetSchema>
@@ -1943,12 +1974,13 @@ export function buildStoryTakeStillImagePrompt(input: {
   entitySummaries?: string[]
 }) {
   return [
-    'Create one representative still frame from this cinematic take.',
-    input.representativeStillPrompt.trim() ? `Moment: ${input.representativeStillPrompt.trim().replace(/\.$/, '')}.` : null,
-    typeof input.representativeFrameSeconds === 'number' ? `Representative frame: around ${input.representativeFrameSeconds}s.` : null,
+    'Create one cinematic still image.',
+    'Use the supplied reference images as the canonical look for character identity, wardrobe, props, environment, lighting, and materials.',
+    input.representativeStillPrompt.trim() ? `Visual: ${input.representativeStillPrompt.trim().replace(/\.$/, '')}.` : null,
     ...(input.entitySummaries ?? []),
+    'Keep the framing, staging, and visible ingredients grounded in that described image.',
     'Show only what should be visible on screen.',
-    'No text or borders.',
+    'No text, captions, or borders.',
   ].filter((entry): entry is string => Boolean(entry)).join(' ')
 }
 
@@ -2940,7 +2972,7 @@ function preserveCompiledShotRuntimeFields(
       provider: source.provider ?? null,
       providerModel: source.providerModel ?? null,
       providerRequestId: source.providerRequestId ?? null,
-      executionPlan: source.executionPlan ?? null,
+      executionPlan: normalizeSeedanceExecutionPlan(source.executionPlan),
     }
   })
 }
@@ -2967,7 +2999,7 @@ function preserveCompiledTakeRuntimeFields(
       provider: source.provider ?? null,
       providerModel: source.providerModel ?? null,
       providerRequestId: source.providerRequestId ?? null,
-      executionPlan: source.executionPlan ?? null,
+      executionPlan: normalizeSeedanceExecutionPlan(source.executionPlan),
     }
   })
 }
@@ -3364,6 +3396,7 @@ export function getCinematicTakeNodeConfig(node: { metadata?: unknown; key?: unk
         : defaultTakeNodeConfig.id,
     takeIndex: typeof metadata.takeIndex === 'number' ? metadata.takeIndex : inferredTakeIndex,
     title: typeof node?.title === 'string' ? node.title : defaultTakeNodeConfig.title,
+    executionPlan: normalizeSeedanceExecutionPlan(metadata.executionPlan as Partial<SeedanceExecutionPlan> | null | undefined),
     ...metadata,
   })
   return parsed.success ? parsed.data : defaultTakeNodeConfig
@@ -3378,6 +3411,7 @@ export function getCinematicShotNodeConfig(node: { metadata?: unknown; key?: unk
         ? node.key
         : defaultShotNodeConfig.id,
     title: typeof node?.title === 'string' ? node.title : defaultShotNodeConfig.title,
+    executionPlan: normalizeSeedanceExecutionPlan(metadata.executionPlan as Partial<SeedanceExecutionPlan> | null | undefined),
     ...metadata,
   })
   return parsed.success ? parsed.data : defaultShotNodeConfig

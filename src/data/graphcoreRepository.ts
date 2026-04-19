@@ -2,6 +2,7 @@ import { compileBundle } from '../domain/compiler'
 import { BASELINE_ARCHETYPES, hasMissingBaselineArchetypes } from '../domain/bootstrapSeeds'
 import { demoProjectSnapshot } from '../domain/demo-data'
 import { environmentBlueprintV1Schema } from '../domain/environmentBlueprint'
+import { normalizeCinematicGraphProjection } from '../domain/cinematicGraphProjection'
 import { createGameSpecFromArchetype } from '../domain/gameArchetypes'
 import {
   type AssemblyNodeDefinition,
@@ -2598,7 +2599,21 @@ export async function startCinematicRun(request: CinematicRunStartRequest): Prom
     throw new Error('Sign in and load a live GraphCore draft before starting a cinematic run.')
   }
 
-  const response = await invokeAuthedFunctionWithSessionRecovery<CinematicRunStatusResponse>('start-cinematic-run', request, session)
+  const sanitizedRequest: CinematicRunStartRequest = {
+    ...request,
+    snapshot: {
+      ...request.snapshot,
+      graphs: request.snapshot.graphs.map((graph) => {
+        if (!graph || typeof graph !== 'object') return graph
+        const typedGraph = graph as GraphDefinition
+        return typedGraph.graphType === 'cinematic_flow'
+          ? normalizeCinematicGraphProjection(typedGraph)
+          : typedGraph
+      }),
+    },
+  }
+
+  const response = await invokeAuthedFunctionWithSessionRecovery<CinematicRunStatusResponse>('start-cinematic-run', sanitizedRequest, session)
   if (response.error || !response.data) {
     throw new Error(response.error ? await readFunctionsErrorMessage(response.error) : 'Starting cinematic run returned no data.')
   }
@@ -2606,7 +2621,7 @@ export async function startCinematicRun(request: CinematicRunStartRequest): Prom
   const parsed = cinematicRunStatusResponseSchema.parse(response.data)
   return {
     ...parsed,
-    assets: await hydrateStorageAssetUrls(request.snapshot.project.id, parsed.assets as AssetDefinition[]),
+    assets: await hydrateStorageAssetUrls(sanitizedRequest.snapshot.project.id, parsed.assets as AssetDefinition[]),
   }
 }
 

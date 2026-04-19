@@ -35,6 +35,7 @@ import {
   resolveAssetUrl,
   resolveStoryboardStillReferenceImageUrls,
   resolveStoryboardSources,
+  resolveShotStillReferenceImageUrls,
   resolveTakeStoryboardReferenceImageUrls,
   resolveTakeStillReferenceImageUrls,
   resolveTakeSources,
@@ -538,7 +539,7 @@ Deno.serve(async (request) => {
             ? isTakeStoryboardJob
               ? resolveTakeStoryboardReferenceImageUrls(payload.snapshot, updatedGraph, job.shotNodeKey)
               : resolveStoryboardStillReferenceImageUrls(payload.snapshot, updatedGraph, job.shotNodeKey, sourceInputs as ReturnType<typeof resolveStoryboardSources>)
-            : sourceInputs.map((entry) => entry.imageUrl).filter((entry): entry is string => Boolean(entry))
+            : resolveShotStillReferenceImageUrls(payload.snapshot, updatedGraph, sourceInputs as ReturnType<typeof resolveShotSources>)
         if (job.kind === 'storyboard_still' && isTakeStoryboardJob && imageUrls.length !== 1) {
           const message = 'Take storyboard generation requires exactly one representative still reference image. Refusing text-only or multi-reference fallback.'
           await client.from('cinematic_run_jobs').update({

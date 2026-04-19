@@ -97,6 +97,10 @@ function getReferenceRolePriority(presetFamily: ReturnType<typeof getCinematicSe
   return (index >= 0 ? 1000 - index * 100 : 200) + basePriority
 }
 
+function normalizeReferenceInputPriority(priority: number) {
+  return Math.max(0, Math.min(100, Math.round(priority / 10)))
+}
+
 function formatPromptSection(label: string, values: Array<string | null | undefined>) {
   const joined = values
     .map((value) => (typeof value === 'string' ? value.trim() : ''))
@@ -297,28 +301,57 @@ function buildDerivedStoryboardPanelBeats(shots: Array<{
 
 function buildConciseSourceSummaries(
   sourceInputs: Array<{
+    referenceRole?: string | null
     role?: string | null
-    definition?: { name?: string | null; summary?: string | null; description?: string | null } | null
+    definition?: { kind?: string | null; name?: string | null; summary?: string | null; description?: string | null } | null
     config?: { stagingNotes?: string | null } | null
     node: { title: string }
   }>,
 ) {
   const seen = new Set<string>()
+  const normalizeSummary = (value: string | null | undefined) => value?.replace(/\s+/g, ' ').replace(/\.$/, '').trim() ?? ''
+  const inferSourceKindLabel = (entry: typeof sourceInputs[number]) => {
+    const definitionKind = asString(entry.definition?.kind)
+    if (definitionKind === 'character') return 'Character'
+    if (definitionKind === 'environment') return 'Environment'
+    if (definitionKind === 'item') return 'Item'
+    if ((entry.referenceRole ?? '').includes('environment')) return 'Environment'
+    if ((entry.referenceRole ?? '').includes('prop')) return 'Item'
+    if ((entry.referenceRole ?? '').includes('subject')) return 'Character'
+    return 'Reference'
+  }
   return sourceInputs.flatMap((entry) => {
     const label = (entry.definition?.name ?? entry.node.title ?? '').trim()
     if (!label) return []
-    const summary = (
-      asString(entry.definition?.summary)
-      ?? asString(entry.definition?.description)
-      ?? asString(entry.config?.stagingNotes)
-      ?? asString(entry.role)
-    )?.replace(/\s+/g, ' ').replace(/\.$/, '').trim() ?? ''
-    const line = summary ? `${label}: ${summary}.` : `${label}.`
+    const summary = [
+      normalizeSummary(asString(entry.definition?.summary)),
+      normalizeSummary(asString(entry.definition?.description)),
+      normalizeSummary(asString(entry.config?.stagingNotes)),
+      normalizeSummary(asString(entry.role)),
+    ].find((value) => value.length > 0) ?? ''
+    const kindLabel = inferSourceKindLabel(entry)
+    const line = summary ? `${kindLabel} - ${label}: ${summary}.` : `${kindLabel} - ${label}.`
     const dedupeKey = line.toLowerCase()
     if (seen.has(dedupeKey)) return []
     seen.add(dedupeKey)
     return [line]
   })
+}
+
+export function resolveShotStillReferenceImageUrls(
+  snapshot: { gameSpec?: unknown | null },
+  graph: SnapshotGraph,
+  sourceInputs: ReturnType<typeof resolveShotSources>,
+) {
+  const settings = getCinematicSettings(snapshot.gameSpec ?? null, graph.metadata)
+  return Array.from(new Set(
+    [...sourceInputs]
+      .filter((entry): entry is typeof entry & { imageUrl: string } => typeof entry.imageUrl === 'string' && entry.imageUrl.length > 0)
+      .sort((left, right) =>
+        getReferenceRolePriority(settings.presetFamily, right.referenceRole ?? null, right.priority)
+        - getReferenceRolePriority(settings.presetFamily, left.referenceRole ?? null, left.priority))
+      .map((entry) => entry.imageUrl),
+  )).slice(0, 6)
 }
 
 function isUsableAssetUrl(asset: SnapshotAsset | null | undefined, url: string | null) {
@@ -997,7 +1030,7 @@ export function buildSeedanceExecutionPlan(input: {
     label: entry.label,
     modality: entry.modality,
     url: entry.assetUrl ?? '',
-    priority: getReferenceRolePriority(settings.presetFamily, entry.referenceRole ?? null, entry.priority),
+    priority: normalizeReferenceInputPriority(getReferenceRolePriority(settings.presetFamily, entry.referenceRole ?? null, entry.priority)),
     truncated: index >= 12,
   }))
 
@@ -1103,7 +1136,7 @@ export function buildTakeSeedanceExecutionPlan(input: {
     label: entry.label,
     modality: entry.modality,
     url: entry.assetUrl ?? '',
-    priority: getReferenceRolePriority(settings.presetFamily, entry.referenceRole ?? null, entry.priority),
+    priority: normalizeReferenceInputPriority(getReferenceRolePriority(settings.presetFamily, entry.referenceRole ?? null, entry.priority)),
     truncated: index >= 12,
   }))
   const keptReferenceInputs = referenceInputs.filter((entry, index) => !entry.truncated && index < 12)
@@ -1302,7 +1335,6 @@ export function buildStillPrompt(input: {
       || (input.shotNode.body?.text ? String(input.shotNode.body.text).trim() : '')
       || shot.beat.trim()
       || shot.title,
-    representativeFrameSeconds: shot.stillAtSeconds ?? null,
     sceneBias: settings.presetFamily === 'story_movie_tv'
       ? getCinematicStoryScenePresetLabel(shot.storyScenePreset ?? settings.storyScenePreset ?? null)
       : null,

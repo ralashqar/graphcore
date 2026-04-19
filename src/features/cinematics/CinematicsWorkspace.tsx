@@ -128,7 +128,7 @@ type CinematicsWorkspaceProps = {
   onOpenDefinitionLink: (definitionKey: string, kind: DefinitionBase['kind']) => void
   onSelectGraph: (key: string | null) => void
   onSelectNode: (key: string | null) => void
-  onStartCinematicRun: (request: { graphKey: string; mode: CinematicRunMode; targetNodeKey?: string | null; targetNodeKeys?: string[]; shotId?: string | null }) => void
+  onStartCinematicRun: (request: { graphKey: string; mode: CinematicRunMode; targetNodeKey?: string | null; targetNodeKeys?: string[]; shotId?: string | null }) => void | Promise<void>
   onUpdateEdge: (graphKey: string, edgeKey: string, changes: Partial<EdgeDefinition>) => void
   onUpdateGameSpecCinematics: (changes: Partial<CinematicSettings>) => void
   onUpdateGraph: (graphKey: string, changes: Partial<GraphDefinition>) => void
@@ -1524,6 +1524,11 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
   }, [currentGraph])
   const [contentMode, setContentMode] = useState<'timeline' | 'script' | 'graph' | 'runs'>('timeline')
   const [isRebuildingRuntimeGraph, setIsRebuildingRuntimeGraph] = useState(false)
+  const [optimisticShotStillIds, setOptimisticShotStillIds] = useState<string[]>([])
+  const [optimisticShotVideoIds, setOptimisticShotVideoIds] = useState<string[]>([])
+  const [optimisticTakeStillIds, setOptimisticTakeStillIds] = useState<string[]>([])
+  const [optimisticTakeStoryboardIds, setOptimisticTakeStoryboardIds] = useState<string[]>([])
+  const [optimisticTakeVideoIds, setOptimisticTakeVideoIds] = useState<string[]>([])
 
   useEffect(() => {
     if (!currentGraph) return
@@ -1638,33 +1643,148 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
       return [config.id, node.key] as const
     }),
   ), [currentTakeNodes])
+  const takeIdByNodeKey = useMemo(() => new Map(
+    Array.from(takeNodeKeyByTakeId.entries()).map(([takeId, nodeKey]) => [nodeKey, takeId] as const),
+  ), [takeNodeKeyByTakeId])
+
+  const generatingTimelineRunIds = useMemo(
+    () => new Set(
+      currentGraphRuns
+        .filter((run) => !['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(run.status))
+        .map((run) => run.id),
+    ),
+    [currentGraphRuns],
+  )
+  const generatingShotStillIds = useMemo(
+    () => new Set(
+      currentGraphRuns
+        .filter((run) => generatingTimelineRunIds.has(run.id) && run.mode === 'preview_still')
+        .flatMap((run) => run.jobs.map((job) => job.shotId).filter((shotId): shotId is string => typeof shotId === 'string' && shotId.length > 0)),
+    ),
+    [currentGraphRuns, generatingTimelineRunIds],
+  )
+  const generatingShotVideoIds = useMemo(
+    () => new Set(
+      currentGraphRuns
+        .filter((run) => generatingTimelineRunIds.has(run.id) && run.mode === 'preview_video')
+        .flatMap((run) => run.jobs.map((job) => job.shotId).filter((shotId): shotId is string => typeof shotId === 'string' && shotId.length > 0)),
+    ),
+    [currentGraphRuns, generatingTimelineRunIds],
+  )
+  const generatingTakeStillIds = useMemo(
+    () => new Set(
+      currentGraphRuns
+        .filter((run) => generatingTimelineRunIds.has(run.id) && run.mode === 'preview_take_still')
+        .flatMap((run) => {
+          const takeId = run.shotNodeKey ? takeIdByNodeKey.get(run.shotNodeKey) ?? null : null
+          return takeId ? [takeId] : []
+        }),
+    ),
+    [currentGraphRuns, generatingTimelineRunIds, takeIdByNodeKey],
+  )
+  const generatingTakeStoryboardIds = useMemo(
+    () => new Set(
+      currentGraphRuns
+        .filter((run) => generatingTimelineRunIds.has(run.id) && run.mode === 'preview_storyboard_still')
+        .flatMap((run) => {
+          const takeId = run.shotNodeKey ? takeIdByNodeKey.get(run.shotNodeKey) ?? null : null
+          return takeId ? [takeId] : []
+        }),
+    ),
+    [currentGraphRuns, generatingTimelineRunIds, takeIdByNodeKey],
+  )
+  const generatingTakeVideoIds = useMemo(
+    () => new Set(
+      currentGraphRuns
+        .filter((run) => generatingTimelineRunIds.has(run.id) && run.mode === 'graph_run')
+        .flatMap((run) => {
+          const takeId = run.shotNodeKey ? takeIdByNodeKey.get(run.shotNodeKey) ?? null : null
+          return takeId ? [takeId] : []
+        }),
+    ),
+    [currentGraphRuns, generatingTimelineRunIds, takeIdByNodeKey],
+  )
+  const displayedGeneratingShotStillIds = useMemo(
+    () => new Set([...generatingShotStillIds, ...optimisticShotStillIds]),
+    [generatingShotStillIds, optimisticShotStillIds],
+  )
+  const displayedGeneratingShotVideoIds = useMemo(
+    () => new Set([...generatingShotVideoIds, ...optimisticShotVideoIds]),
+    [generatingShotVideoIds, optimisticShotVideoIds],
+  )
+  const displayedGeneratingTakeStillIds = useMemo(
+    () => new Set([...generatingTakeStillIds, ...optimisticTakeStillIds]),
+    [generatingTakeStillIds, optimisticTakeStillIds],
+  )
+  const displayedGeneratingTakeStoryboardIds = useMemo(
+    () => new Set([...generatingTakeStoryboardIds, ...optimisticTakeStoryboardIds]),
+    [generatingTakeStoryboardIds, optimisticTakeStoryboardIds],
+  )
+  const displayedGeneratingTakeVideoIds = useMemo(
+    () => new Set([...generatingTakeVideoIds, ...optimisticTakeVideoIds]),
+    [generatingTakeVideoIds, optimisticTakeVideoIds],
+  )
+
+  useEffect(() => {
+    if (generatingShotStillIds.size === 0) return
+    setOptimisticShotStillIds((current) => current.filter((id) => !generatingShotStillIds.has(id)))
+  }, [generatingShotStillIds])
+
+  useEffect(() => {
+    if (generatingShotVideoIds.size === 0) return
+    setOptimisticShotVideoIds((current) => current.filter((id) => !generatingShotVideoIds.has(id)))
+  }, [generatingShotVideoIds])
+
+  useEffect(() => {
+    if (generatingTakeStillIds.size === 0) return
+    setOptimisticTakeStillIds((current) => current.filter((id) => !generatingTakeStillIds.has(id)))
+  }, [generatingTakeStillIds])
+
+  useEffect(() => {
+    if (generatingTakeStoryboardIds.size === 0) return
+    setOptimisticTakeStoryboardIds((current) => current.filter((id) => !generatingTakeStoryboardIds.has(id)))
+  }, [generatingTakeStoryboardIds])
+
+  useEffect(() => {
+    if (generatingTakeVideoIds.size === 0) return
+    setOptimisticTakeVideoIds((current) => current.filter((id) => !generatingTakeVideoIds.has(id)))
+  }, [generatingTakeVideoIds])
 
   const handleGenerateStillFromTakeId = useCallback((takeId: string) => {
     const takeNodeKey = takeNodeKeyByTakeId.get(takeId)
     if (!takeNodeKey || !currentGraph) return
-    onGenerateTakeStill({
+    setOptimisticTakeStillIds((current) => current.includes(takeId) ? current : [...current, takeId])
+    Promise.resolve(onGenerateTakeStill({
       graphKey: currentGraph.key,
       takeNodeKey,
+    })).catch(() => {
+      setOptimisticTakeStillIds((current) => current.filter((id) => id !== takeId))
     })
   }, [currentGraph, onGenerateTakeStill, takeNodeKeyByTakeId])
 
   const handleGenerateStoryboardFromTakeId = useCallback((takeId: string) => {
     const takeNodeKey = takeNodeKeyByTakeId.get(takeId)
     if (!takeNodeKey || !currentGraph) return
-    onGenerateTakeStoryboard({
+    setOptimisticTakeStoryboardIds((current) => current.includes(takeId) ? current : [...current, takeId])
+    Promise.resolve(onGenerateTakeStoryboard({
       graphKey: currentGraph.key,
       takeNodeKey,
+    })).catch(() => {
+      setOptimisticTakeStoryboardIds((current) => current.filter((id) => id !== takeId))
     })
   }, [currentGraph, onGenerateTakeStoryboard, takeNodeKeyByTakeId])
 
   const handleGenerateTakeVideoFromTimeline = useCallback((takeId: string) => {
     const takeNodeKey = takeNodeKeyByTakeId.get(takeId)
     if (!takeNodeKey || !currentGraph) return
-    onStartCinematicRun({
+    setOptimisticTakeVideoIds((current) => current.includes(takeId) ? current : [...current, takeId])
+    Promise.resolve(onStartCinematicRun({
       graphKey: currentGraph.key,
       mode: 'graph_run',
       targetNodeKey: takeNodeKey,
       targetNodeKeys: [takeNodeKey],
+    })).catch(() => {
+      setOptimisticTakeVideoIds((current) => current.filter((id) => id !== takeId))
     })
   }, [currentGraph, onStartCinematicRun, takeNodeKeyByTakeId])
 
@@ -1679,11 +1799,22 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
     if (!takeId) return
     const takeNodeKey = takeNodeKeyByTakeId.get(takeId)
     if (!takeNodeKey) return
-    onStartCinematicRun({
+    if (mode === 'preview_still') {
+      setOptimisticShotStillIds((current) => current.includes(shotId) ? current : [...current, shotId])
+    } else {
+      setOptimisticShotVideoIds((current) => current.includes(shotId) ? current : [...current, shotId])
+    }
+    Promise.resolve(onStartCinematicRun({
       graphKey: currentGraph.key,
       mode,
       targetNodeKey: takeNodeKey,
       shotId,
+    })).catch(() => {
+      if (mode === 'preview_still') {
+        setOptimisticShotStillIds((current) => current.filter((id) => id !== shotId))
+      } else {
+        setOptimisticShotVideoIds((current) => current.filter((id) => id !== shotId))
+      }
     })
   }, [currentGraph, currentSequence, onStartCinematicRun, takeNodeKeyByTakeId])
 
@@ -1997,6 +2128,11 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
               currentGraph={currentGraph}
               currentRuns={currentGraphRuns}
               definitions={definitions}
+              generatingShotStillIds={displayedGeneratingShotStillIds}
+              generatingShotVideoIds={displayedGeneratingShotVideoIds}
+              generatingTakeStillIds={displayedGeneratingTakeStillIds}
+              generatingTakeStoryboardIds={displayedGeneratingTakeStoryboardIds}
+              generatingTakeVideoIds={displayedGeneratingTakeVideoIds}
               graphSettings={graphSettings}
               sequence={currentSequence}
               onGenerateShot={handleGenerateShotFromTimeline}
