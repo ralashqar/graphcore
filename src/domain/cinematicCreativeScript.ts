@@ -105,6 +105,30 @@ function normalizeDialogueLine(value: string) {
   return value.replace(/^["']+|["']+$/g, '').trim()
 }
 
+function parseLeadingTimeRange(value: string) {
+  const trimmed = value.trim()
+  const match = trimmed.match(/^(?:\[(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)\]|(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?))\s+(.*)$/)
+  if (!match) {
+    return {
+      text: trimmed,
+      startSeconds: null as number | null,
+      endSeconds: null as number | null,
+    }
+  }
+
+  const startCandidate = match[1] ?? match[3] ?? null
+  const endCandidate = match[2] ?? match[4] ?? null
+  const remainder = match[5]?.trim() ?? ''
+  const startSeconds = startCandidate !== null ? Number(startCandidate) : null
+  const endSeconds = endCandidate !== null ? Number(endCandidate) : null
+
+  return {
+    text: remainder,
+    startSeconds: Number.isFinite(startSeconds) ? startSeconds : null,
+    endSeconds: Number.isFinite(endSeconds) ? endSeconds : null,
+  }
+}
+
 function parseDialogueLine(value: string) {
   const trimmed = normalizeDialogueLine(value)
   if (!trimmed) return { speakerLabel: '', line: '' }
@@ -296,15 +320,16 @@ function buildDialogueBeats(input: {
   const defaultSpeakerRefId = input.shot.participantRefIds.length === 1 ? input.shot.participantRefIds[0] : null
   return lines
     .map((line, index) => {
-      const parsedLine = parseDialogueLine(line)
+      const timed = parseLeadingTimeRange(line)
+      const parsedLine = parseDialogueLine(timed.text)
       if (!parsedLine.line) return null
       return {
         id: `${input.shot.id}_dialogue_${index + 1}`,
         speakerRefId: defaultSpeakerRefId,
         line: parsedLine.line,
         delivery: parsedLine.speakerLabel,
-        startSeconds: null,
-        endSeconds: null,
+        startSeconds: timed.startSeconds,
+        endSeconds: timed.endSeconds,
         lipSync: true,
       }
     })
@@ -316,14 +341,21 @@ function buildVoiceoverAudioBeats(input: {
   voiceoverText: string
 }) {
   const lines = splitCreativeTextIntoLines(input.voiceoverText)
-  return lines.map((line, index) => ({
-    id: `${input.shot.id}_audio_vo_${index + 1}`,
-    kind: 'ambience' as const,
-    cue: normalizeDialogueLine(line),
-    sourceRefId: null,
-    startSeconds: null,
-    endSeconds: null,
-  }))
+  return lines
+    .map((line, index) => {
+      const timed = parseLeadingTimeRange(line)
+      const cue = normalizeDialogueLine(timed.text)
+      if (!cue) return null
+      return {
+        id: `${input.shot.id}_audio_vo_${index + 1}`,
+        kind: 'offscreen' as const,
+        cue,
+        sourceRefId: null,
+        startSeconds: timed.startSeconds,
+        endSeconds: timed.endSeconds,
+      }
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
 }
 
 function buildAudioBeats(input: {
@@ -331,14 +363,32 @@ function buildAudioBeats(input: {
   audioText: string
 }) {
   const lines = splitCreativeTextIntoLines(input.audioText)
-  return lines.map((line, index) => ({
-    id: `${input.shot.id}_audio_${index + 1}`,
-    kind: 'ambience' as const,
-    cue: line,
-    sourceRefId: null,
-    startSeconds: null,
-    endSeconds: null,
-  }))
+  return lines
+    .map((line, index) => {
+      const timed = parseLeadingTimeRange(line)
+      const cue = timed.text.trim()
+      if (!cue) return null
+      const lower = cue.toLowerCase()
+      const kind =
+        lower.includes('silence')
+          ? 'silence' as const
+          : lower.includes('music')
+            ? 'music' as const
+            : lower.includes('voiceover')
+              ? 'offscreen' as const
+              : lower.includes('crowd') || lower.includes('wind') || lower.includes('room tone') || lower.includes('ambience')
+                ? 'ambience' as const
+                : 'sfx' as const
+      return {
+        id: `${input.shot.id}_audio_${index + 1}`,
+        kind,
+        cue,
+        sourceRefId: null,
+        startSeconds: timed.startSeconds,
+        endSeconds: timed.endSeconds,
+      }
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
 }
 
 function buildActionBeats(input: {
@@ -348,16 +398,23 @@ function buildActionBeats(input: {
   const lines = splitCreativeTextIntoLines(input.onScreenText)
   const actionLines = lines.length > 0 ? lines : [input.shot.beat].filter(Boolean)
   const defaultActorRefId = input.shot.participantRefIds.length === 1 ? input.shot.participantRefIds[0] : null
-  return actionLines.map((line, index) => ({
-    id: `${input.shot.id}_action_${index + 1}`,
-    actorRefId: defaultActorRefId,
-    targetRefId: null,
-    verb: line,
-    propRefId: input.shot.propRefIds[0] ?? null,
-    stagingNotes: '',
-    startSeconds: null,
-    endSeconds: null,
-  }))
+  return actionLines
+    .map((line, index) => {
+      const timed = parseLeadingTimeRange(line)
+      const verb = timed.text.trim()
+      if (!verb) return null
+      return {
+        id: `${input.shot.id}_action_${index + 1}`,
+        actorRefId: defaultActorRefId,
+        targetRefId: null,
+        verb,
+        propRefId: input.shot.propRefIds[0] ?? null,
+        stagingNotes: '',
+        startSeconds: timed.startSeconds,
+        endSeconds: timed.endSeconds,
+      }
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
 }
 
 export function ingestCinematicCreativeScriptToAuthoredShots(input: {

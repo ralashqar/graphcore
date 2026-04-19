@@ -2217,63 +2217,115 @@ function inferShotDuration(shot: CinematicScriptShot) {
   }
 }
 
+function clampRelativeSeconds(value: number, durationSeconds: number) {
+  return Math.round(Math.max(0, Math.min(durationSeconds, value)) * 10) / 10
+}
+
+function normalizeTimedShotEntries<TEntry extends {
+  startSeconds: number | null
+  endSeconds: number | null
+}>(
+  entries: TEntry[],
+  durationSeconds: number,
+  options: {
+    inferDurationSeconds: (entry: TEntry) => number
+    minWindowSeconds?: number
+    singleEntryDefaultsToFullShot?: boolean
+  },
+) {
+  if (entries.length === 0) return entries
+  const minWindowSeconds = options.minWindowSeconds ?? 0.6
+  return entries.map((entry, index) => {
+    const hasExplicitStart = typeof entry.startSeconds === 'number' && Number.isFinite(entry.startSeconds)
+    const hasExplicitEnd = typeof entry.endSeconds === 'number' && Number.isFinite(entry.endSeconds)
+    const slotStart = durationSeconds * (index / entries.length)
+    const slotEnd = durationSeconds * ((index + 1) / entries.length)
+    const estimatedDuration = Math.max(minWindowSeconds, options.inferDurationSeconds(entry))
+
+    if (!hasExplicitStart && !hasExplicitEnd && entries.length === 1 && options.singleEntryDefaultsToFullShot) {
+      return {
+        ...entry,
+        startSeconds: 0,
+        endSeconds: clampRelativeSeconds(durationSeconds, durationSeconds),
+      }
+    }
+
+    let startSeconds = hasExplicitStart
+      ? clampRelativeSeconds(entry.startSeconds ?? 0, durationSeconds)
+      : clampRelativeSeconds(slotStart, durationSeconds)
+    let endSeconds = hasExplicitEnd
+      ? clampRelativeSeconds(entry.endSeconds ?? durationSeconds, durationSeconds)
+      : clampRelativeSeconds(Math.min(durationSeconds, startSeconds + estimatedDuration), durationSeconds)
+
+    if (!hasExplicitStart && hasExplicitEnd) {
+      startSeconds = clampRelativeSeconds(
+        Math.max(0, endSeconds - estimatedDuration),
+        durationSeconds,
+      )
+    }
+
+    if (hasExplicitStart && !hasExplicitEnd) {
+      const slotBoundedEnd = entries.length > 1
+        ? Math.min(durationSeconds, Math.max(startSeconds + minWindowSeconds, slotEnd))
+        : durationSeconds
+      endSeconds = clampRelativeSeconds(
+        Math.min(durationSeconds, Math.max(startSeconds + minWindowSeconds, Math.min(slotBoundedEnd, startSeconds + estimatedDuration))),
+        durationSeconds,
+      )
+    }
+
+    if (!hasExplicitStart && !hasExplicitEnd && entries.length > 1) {
+      const boundedSlotEnd = Math.max(slotStart + minWindowSeconds, slotEnd)
+      startSeconds = clampRelativeSeconds(slotStart, durationSeconds)
+      endSeconds = clampRelativeSeconds(
+        Math.min(durationSeconds, Math.max(startSeconds + minWindowSeconds, Math.min(boundedSlotEnd, startSeconds + estimatedDuration))),
+        durationSeconds,
+      )
+    }
+
+    if (endSeconds <= startSeconds) {
+      endSeconds = clampRelativeSeconds(Math.min(durationSeconds, startSeconds + minWindowSeconds), durationSeconds)
+      if (endSeconds <= startSeconds) {
+        startSeconds = clampRelativeSeconds(Math.max(0, startSeconds - minWindowSeconds), durationSeconds)
+        endSeconds = clampRelativeSeconds(Math.min(durationSeconds, startSeconds + minWindowSeconds), durationSeconds)
+      }
+    }
+
+    return {
+      ...entry,
+      startSeconds,
+      endSeconds,
+    }
+  })
+}
+
 function fillBeatTimingsForShot(shot: CinematicScriptShot, durationSeconds: number) {
-  let cursor = 0
-  const nextDialogue = shot.dialogue.map((line) => {
-    const lineDuration = typeof line.startSeconds === 'number' && typeof line.endSeconds === 'number'
-      ? Math.max(0, line.endSeconds - line.startSeconds)
-      : estimateDialogueDurationSeconds(line)
-    const startSeconds = line.startSeconds ?? Math.min(cursor, Math.max(0, durationSeconds - 1))
-    const endSeconds = line.endSeconds ?? Math.min(durationSeconds, startSeconds + lineDuration)
-    cursor = Math.max(cursor, endSeconds)
-    return {
-      ...line,
-      startSeconds,
-      endSeconds,
-    }
+  const nextDialogue = normalizeTimedShotEntries(shot.dialogue, durationSeconds, {
+    inferDurationSeconds: (line) => estimateDialogueDurationSeconds(line),
+    minWindowSeconds: 0.8,
   })
 
-  const unspecifiedActions = shot.actions.filter((action) => typeof action.startSeconds !== 'number' && typeof action.endSeconds !== 'number')
-  const actionSlotSeconds = unspecifiedActions.length > 0 ? durationSeconds / unspecifiedActions.length : durationSeconds
-  let unspecifiedActionIndex = 0
-  const nextActions = shot.actions.map((action) => {
-    const actionDuration = typeof action.startSeconds === 'number' && typeof action.endSeconds === 'number'
-      ? Math.max(0, action.endSeconds - action.startSeconds)
-      : estimateActionDurationSeconds(action)
-    const hasExplicitTiming = typeof action.startSeconds === 'number' || typeof action.endSeconds === 'number'
-    const inferredStartSeconds = hasExplicitTiming
-      ? null
-      : Math.min(
-          Math.max(0, durationSeconds - 1),
-          Math.max(0, Math.round(actionSlotSeconds * unspecifiedActionIndex)),
-        )
-    const inferredEndSeconds = hasExplicitTiming
-      ? null
-      : Math.min(durationSeconds, (inferredStartSeconds ?? 0) + Math.max(1, Math.min(3, actionDuration)))
-    if (!hasExplicitTiming) {
-      unspecifiedActionIndex += 1
-    }
-    const startSeconds = action.startSeconds ?? inferredStartSeconds
-    const endSeconds = action.endSeconds ?? inferredEndSeconds
-    cursor = Math.max(cursor, endSeconds ?? cursor)
-    return {
-      ...action,
-      startSeconds,
-      endSeconds,
-    }
+  const nextActions = normalizeTimedShotEntries(shot.actions, durationSeconds, {
+    inferDurationSeconds: (action) => Math.max(0.9, Math.min(3, estimateActionDurationSeconds(action))),
+    minWindowSeconds: 0.9,
   })
 
-  const nextAudio = shot.audio.map((cue) => ({
-    ...cue,
-    startSeconds: cue.startSeconds ?? 0,
-    endSeconds: cue.endSeconds ?? durationSeconds,
-  }))
+  const nextAudio = normalizeTimedShotEntries(shot.audio, durationSeconds, {
+    inferDurationSeconds: (cue) => {
+      if (cue.kind === 'ambience' || cue.kind === 'music' || cue.kind === 'silence') {
+        return durationSeconds
+      }
+      return Math.max(0.8, durationSeconds / Math.max(1, shot.audio.length))
+    },
+    minWindowSeconds: 0.8,
+    singleEntryDefaultsToFullShot: true,
+  })
 
-  const nextBeats = shot.beats.map((beat) => ({
-    ...beat,
-    startSeconds: beat.startSeconds ?? 0,
-    endSeconds: beat.endSeconds ?? durationSeconds,
-  }))
+  const nextBeats = normalizeTimedShotEntries(shot.beats, durationSeconds, {
+    inferDurationSeconds: () => Math.max(0.8, durationSeconds / Math.max(1, shot.beats.length)),
+    minWindowSeconds: 0.8,
+    singleEntryDefaultsToFullShot: true,
+  })
 
   return {
     ...shot,

@@ -1,4 +1,5 @@
 import '@supabase/functions-js/edge-runtime.d.ts'
+import { z } from 'npm:zod@4'
 
 import { buildCinematicSequenceFromScriptDoc, buildCinematicSettingsPatchFromFormatSubtype, buildCinematicSettingsPatchFromPresetFamily, cinematicScriptDocSchema, getCinematicSettings } from '../../../src/domain/cinematics.ts'
 import { mergeWorldBuildJobContext, readWorldBuildAttemptCount } from '../../../src/core/generationWorkflow.ts'

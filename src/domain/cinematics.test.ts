@@ -310,6 +310,50 @@ test('shot timing round-trips through script and sequence without drift', () => 
   assert.equal(roundTrip.shots[1]?.endSeconds, 8)
 })
 
+test('compiler fills ordered local timing windows for untimed shot beats', () => {
+  const script = cinematicScriptDocSchema.parse({
+    title: 'Local Timing Fill',
+    entityBindings: [
+      { id: 'creator_1', kind: 'character', role: 'creator', label: 'Creator', sourceName: 'Creator' },
+    ],
+    shots: [
+      {
+        id: 'shot_1',
+        orderIndex: 0,
+        title: 'Hook',
+        beat: 'The creator demonstrates the problem and then points at the fix.',
+        participantRefIds: ['creator_1'],
+        durationSeconds: 6,
+        dialogue: [
+          { id: 'd1', speakerRefId: 'creator_1', line: 'This is the part everyone gets wrong.' },
+          { id: 'd2', speakerRefId: 'creator_1', line: 'Here is the fix.' },
+        ],
+        actions: [
+          { id: 'a1', actorRefId: 'creator_1', verb: 'holds up the product' },
+          { id: 'a2', actorRefId: 'creator_1', verb: 'points at the result screen' },
+        ],
+        audio: [
+          { id: 'au1', kind: 'sfx', cue: 'soft whoosh accent' },
+          { id: 'au2', kind: 'music', cue: 'uplift sting' },
+        ],
+      },
+    ],
+  })
+
+  const sequence = buildCinematicSequenceFromScriptDoc(script)
+  const shot = sequence.shots[0]
+
+  assert.ok(typeof shot?.dialogue[0]?.startSeconds === 'number')
+  assert.ok(typeof shot?.dialogue[0]?.endSeconds === 'number')
+  assert.ok(typeof shot?.dialogue[1]?.startSeconds === 'number')
+  assert.ok(typeof shot?.dialogue[1]?.endSeconds === 'number')
+  assert.ok((shot?.dialogue[0]?.endSeconds ?? 0) <= (shot?.dialogue[1]?.startSeconds ?? 0))
+  assert.ok((shot?.actions[0]?.endSeconds ?? 0) <= (shot?.actions[1]?.startSeconds ?? 0))
+  assert.notEqual(shot?.audio[0]?.endSeconds, shot?.durationSeconds)
+  assert.equal(shot?.audio[1]?.endSeconds, shot?.durationSeconds)
+  assert.ok((shot?.audio[0]?.startSeconds ?? 0) < (shot?.audio[1]?.startSeconds ?? 0))
+})
+
 test('shot timing map reflows contiguous durations and updates take windows', () => {
   const timingMap = buildCinematicShotTimingMap([
     { id: 'shot_1', durationSeconds: 2 },
@@ -1057,6 +1101,58 @@ test('story creative scripts ingest scene headings and speaker-prefixed dialogue
   assert.equal(ingested.authoredShots[0]?.dialogue[0]?.line, 'Move.')
   assert.match(ingested.authoredShots[0]?.actions[0]?.verb ?? '', /circle in the torchlit sand/i)
   assert.match(ingested.authoredShots[0]?.cameraMovement ?? '', /fast lateral track/i)
+})
+
+test('story creative scripts ingest local shot timing for action dialogue and audio bullets', () => {
+  const plan = cinematicPlanSchema.parse({
+    graphName: 'Arena Duel',
+    graphSummary: 'Kharzag fights Brakk in the arena.',
+    entityRefs: [],
+    graphSettings: {
+      presetFamily: 'story_movie_tv',
+      storyScenePreset: 'duel_showdown',
+      storyLanguagePreset: 'tactical_combat',
+      authorshipPipeline: 'story_script_ingest_v1',
+    },
+    shots: [
+      {
+        id: 'shot_02_entry',
+        title: 'First Entry',
+        sceneId: 'scene_1',
+        participantRefIds: ['kharzag', 'brakk'],
+        locationRefId: 'arena_1',
+        propRefIds: ['cleaver_1'],
+      },
+    ],
+  })
+
+  const ingested = ingestCinematicCreativeScriptToAuthoredShots({
+    plan,
+    rawScriptMarkdown: [
+      '# SCENE: Arena Floor',
+      '## SHOT: shot_02_entry',
+      'ACTION:',
+      '- 0.0-1.0 Kharzag drops into a low feint and loads his weight forward.',
+      '- 1.0-2.2 He explodes toward Brakk with the cleaver low.',
+      '- 2.2-3.4 Brakk pivots inside the line and checks the entry on contact.',
+      'DIALOGUE:',
+      '- 0.8-1.2 Kharzag: Move.',
+      'CAMERA: Wide combat two-shot, low angle, fast lateral track.',
+      'AUDIO:',
+      '- 0.0-1.0 Crowd hush.',
+      '- 1.0-2.2 Heavy footfall.',
+      '- 2.2-3.4 Metal scrape on contact.',
+    ].join('\n'),
+  })
+
+  assert.equal(ingested.authoredShots[0]?.actions.length, 3)
+  assert.equal(ingested.authoredShots[0]?.actions[0]?.startSeconds, 0)
+  assert.equal(ingested.authoredShots[0]?.actions[1]?.startSeconds, 1)
+  assert.equal(ingested.authoredShots[0]?.actions[2]?.endSeconds, 3.4)
+  assert.equal(ingested.authoredShots[0]?.dialogue[0]?.startSeconds, 0.8)
+  assert.equal(ingested.authoredShots[0]?.dialogue[0]?.endSeconds, 1.2)
+  assert.equal(ingested.authoredShots[0]?.audio[0]?.startSeconds, 0)
+  assert.equal(ingested.authoredShots[0]?.audio[2]?.endSeconds, 3.4)
 })
 
 test('story duel keeps packing across mixed shot-level preset metadata when continuity is continuous', () => {

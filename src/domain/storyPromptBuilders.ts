@@ -9,7 +9,7 @@ import {
 } from './storyPresetProfiles.ts'
 
 export const STORY_SCRIPT_INGEST_PIPELINE = 'story_script_ingest_v1' as const
-export const STORY_PROMPT_VERSION = 'story_prompt_slim_v1' as const
+export const STORY_PROMPT_VERSION = 'story_prompt_timeline_v2' as const
 
 type StoryPromptInput = {
   targetShotCount?: number
@@ -72,11 +72,18 @@ export function buildStoryCreativeScriptPrompt(input: StoryPromptInput = {}) {
     'Write rawScriptMarkdown using this exact structure:',
     '# SCENE: <scene title> when the scene changes',
     '## SHOT: <shot_id>',
-    'ACTION: <direct visual prose, 1 to 3 concise sentences>',
-    'DIALOGUE: <spoken lines only, blank if the shot should stay silent; speaker prefixes are allowed>',
+    'ACTION:',
+    '- <optional local shot timing start-end in seconds> <visible action beat>',
+    '- <optional local shot timing start-end in seconds> <next visible action beat>',
+    'DIALOGUE:',
+    '- <optional local shot timing start-end in seconds> <Speaker: spoken line>',
     'CAMERA: <short camera note only when it materially helps the beat>',
-    'AUDIO: <optional material sound cue, ambience, or silence note>',
+    'AUDIO:',
+    '- <optional local shot timing start-end in seconds> <material sound cue, ambience, or silence note>',
     'NOTES: <optional short note only when needed>',
+    'If useful, local timing should look like "0.0-1.4" at the start of a bullet line. Use shot-local seconds only, never global sequence timestamps.',
+    'Use multiple bullets in ACTION, DIALOGUE, or AUDIO when a shot contains multiple distinct beats.',
+    'Do not just repeat the full shot prose in ACTION. Break the shot into playable visible beats.',
     'Write a strong scene, not GraphCore packaging.',
     'Prefer visible cause and effect over abstract summaries of tension, power, or momentum.',
     'Keep dialogue sparse, playable, and character-specific. Silence is better than generic filler.',
