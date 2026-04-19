@@ -1,3 +1,5 @@
+import { useEditorStore } from '../../state/editorStore'
+
 type PromptDockProps = {
   currentContextLabel: string
   isApplyingPatch: boolean
@@ -5,10 +7,10 @@ type PromptDockProps = {
   model: string
   needsInitialization: boolean
   promptRuntimeError: string | null
-  promptText: string
+  promptText?: string
   sessionEmail?: string | null
   onChangeModel: (value: string) => void
-  onChangePromptText: (value: string) => void
+  onChangePromptText?: (value: string) => void
   onGenerate: () => void
   onOpenOnboarding: () => void
 }
@@ -20,13 +22,17 @@ export function PromptDock({
   model,
   needsInitialization,
   promptRuntimeError,
-  promptText,
+  promptText: promptTextProp,
   sessionEmail,
   onChangeModel,
-  onChangePromptText,
+  onChangePromptText: onChangePromptTextProp,
   onGenerate,
   onOpenOnboarding,
 }: PromptDockProps) {
+  const storePromptText = useEditorStore((state) => state.promptText)
+  const setStorePromptText = useEditorStore((state) => state.setPromptText)
+  const promptText = promptTextProp ?? storePromptText
+  const onChangePromptText = onChangePromptTextProp ?? setStorePromptText
   const isBusy = isGeneratingPatch || isApplyingPatch
   const buttonDisabled = isBusy || (!needsInitialization && promptText.trim().length === 0)
 

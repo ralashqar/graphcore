@@ -15,6 +15,9 @@ const CREATIVE_SCRIPT_FIELDS = [
   'PURPOSE',
   'ON_SCREEN',
   'ACTION',
+  'DURATION',
+  'VISUAL',
+  'STILL_AT',
   'DIALOGUE_OR_VO',
   'DIALOGUE',
   'CAMERA',
@@ -61,6 +64,9 @@ export const cinematicCreativeScriptBlockSchema = z.object({
   sceneTitle: z.string().default(''),
   purpose: z.string().default(''),
   onScreen: z.string().default(''),
+  duration: z.string().default(''),
+  visual: z.string().default(''),
+  stillAt: z.string().default(''),
   dialogueOrVo: z.string().default(''),
   camera: z.string().default(''),
   audio: z.string().default(''),
@@ -81,6 +87,8 @@ export const cinematicCreativeScriptIngestedShotSchema = z.object({
   narrationMode: cinematicNarrationModeSchema.nullable().default(null),
   backdropRole: cinematicBackdropRoleSchema.nullable().default(null),
   backdropStrategy: z.string().default(''),
+  durationSeconds: z.number().int().positive().max(15).nullable().default(null),
+  stillAtSeconds: z.number().nonnegative().nullable().default(null),
   dialogue: z.array(dialogueBeatSchema).default([]),
   actions: z.array(actionBeatSchema).default([]),
   audio: z.array(audioBeatSchema).default([]),
@@ -127,6 +135,61 @@ function parseLeadingTimeRange(value: string) {
     startSeconds: Number.isFinite(startSeconds) ? startSeconds : null,
     endSeconds: Number.isFinite(endSeconds) ? endSeconds : null,
   }
+}
+
+function stripTimingPrefixesFromBlockText(value: string) {
+  return splitCreativeTextIntoLines(value)
+    .map((line) => parseLeadingTimeRange(line).text.trim())
+    .filter(Boolean)
+    .join(' ')
+    .trim()
+}
+
+function parseShotDurationSeconds(value: string) {
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  const match = trimmed.match(/(\d+(?:\.\d+)?)/)
+  if (!match) return null
+  const parsed = Number(match[1])
+  if (!Number.isFinite(parsed) || parsed <= 0) return null
+  return Math.min(15, Math.max(1, Math.ceil(parsed)))
+}
+
+function parseShotRelativeSeconds(value: string) {
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  const match = trimmed.match(/(\d+(?:\.\d+)?)/)
+  if (!match) return null
+  const parsed = Number(match[1])
+  if (!Number.isFinite(parsed) || parsed < 0) return null
+  return Math.round(parsed * 10) / 10
+}
+
+function inferShotDurationSecondsFromTimedBeats(input: {
+  actions: Array<{ startSeconds: number | null, endSeconds: number | null }>
+  dialogue: Array<{ startSeconds: number | null, endSeconds: number | null }>
+  audio: Array<{ startSeconds: number | null, endSeconds: number | null }>
+}) {
+  const maxTimedEnd = Math.max(
+    0,
+    ...input.actions.flatMap((entry) => [entry.startSeconds ?? 0, entry.endSeconds ?? 0]),
+    ...input.dialogue.flatMap((entry) => [entry.startSeconds ?? 0, entry.endSeconds ?? 0]),
+    ...input.audio.flatMap((entry) => [entry.startSeconds ?? 0, entry.endSeconds ?? 0]),
+  )
+  if (!(maxTimedEnd > 0)) return null
+  return Math.min(15, Math.max(1, Math.ceil(maxTimedEnd)))
+}
+
+function resolveStillAtSeconds(input: {
+  explicitStillAtSeconds: number | null
+  durationSeconds: number | null
+}) {
+  if (input.explicitStillAtSeconds !== null) {
+    if (input.durationSeconds === null) return input.explicitStillAtSeconds
+    return Math.round(Math.max(0, Math.min(input.durationSeconds, input.explicitStillAtSeconds)) * 10) / 10
+  }
+  if (input.durationSeconds === null) return null
+  return Math.round((input.durationSeconds / 2) * 10) / 10
 }
 
 function parseDialogueLine(value: string) {
@@ -245,6 +308,9 @@ export function parseCinematicCreativeScriptMarkdown(input: {
         sceneTitle: currentSceneTitle,
         purpose: '',
         onScreen: '',
+        duration: '',
+        visual: '',
+        stillAt: '',
         dialogueOrVo: '',
         camera: '',
         audio: '',
@@ -263,12 +329,15 @@ export function parseCinematicCreativeScriptMarkdown(input: {
       continue
     }
 
-    const fieldMatch = trimmed.match(/^(PURPOSE|ON_SCREEN|ACTION|DIALOGUE_OR_VO|DIALOGUE|CAMERA|AUDIO|NOTES):\s*(.*)$/i)
+    const fieldMatch = trimmed.match(/^(PURPOSE|ON_SCREEN|ACTION|DURATION|VISUAL|STILL_AT|DIALOGUE_OR_VO|DIALOGUE|CAMERA|AUDIO|NOTES):\s*(.*)$/i)
     if (fieldMatch && currentBlock) {
       currentField = fieldMatch[1].toUpperCase() as CreativeScriptField
       const inlineValue = fieldMatch[2].trim()
       if (currentField === 'PURPOSE') currentBlock.purpose = appendFieldValue(currentBlock.purpose, inlineValue)
       if (currentField === 'ON_SCREEN' || currentField === 'ACTION') currentBlock.onScreen = appendFieldValue(currentBlock.onScreen, inlineValue)
+      if (currentField === 'DURATION') currentBlock.duration = appendFieldValue(currentBlock.duration, inlineValue)
+      if (currentField === 'VISUAL') currentBlock.visual = appendFieldValue(currentBlock.visual, inlineValue)
+      if (currentField === 'STILL_AT') currentBlock.stillAt = appendFieldValue(currentBlock.stillAt, inlineValue)
       if (currentField === 'DIALOGUE_OR_VO' || currentField === 'DIALOGUE') currentBlock.dialogueOrVo = appendFieldValue(currentBlock.dialogueOrVo, inlineValue)
       if (currentField === 'CAMERA') currentBlock.camera = appendFieldValue(currentBlock.camera, inlineValue)
       if (currentField === 'AUDIO') currentBlock.audio = appendFieldValue(currentBlock.audio, inlineValue)
@@ -280,6 +349,9 @@ export function parseCinematicCreativeScriptMarkdown(input: {
 
     if (currentField === 'PURPOSE') currentBlock.purpose = appendFieldValue(currentBlock.purpose, trimmed)
     if (currentField === 'ON_SCREEN' || currentField === 'ACTION') currentBlock.onScreen = appendFieldValue(currentBlock.onScreen, trimmed)
+    if (currentField === 'DURATION') currentBlock.duration = appendFieldValue(currentBlock.duration, trimmed)
+    if (currentField === 'VISUAL') currentBlock.visual = appendFieldValue(currentBlock.visual, trimmed)
+    if (currentField === 'STILL_AT') currentBlock.stillAt = appendFieldValue(currentBlock.stillAt, trimmed)
     if (currentField === 'DIALOGUE_OR_VO' || currentField === 'DIALOGUE') currentBlock.dialogueOrVo = appendFieldValue(currentBlock.dialogueOrVo, trimmed)
     if (currentField === 'CAMERA') currentBlock.camera = appendFieldValue(currentBlock.camera, trimmed)
     if (currentField === 'AUDIO') currentBlock.audio = appendFieldValue(currentBlock.audio, trimmed)
@@ -422,6 +494,7 @@ export function ingestCinematicCreativeScriptToAuthoredShots(input: {
   rawScriptMarkdown: string
 }) {
   const plan = cinematicPlanSchema.parse(input.plan)
+  const isStoryScriptPipeline = plan.graphSettings.authorshipPipeline === 'story_script_ingest_v1'
   const parsed = parseCinematicCreativeScriptMarkdown({
     markdown: input.rawScriptMarkdown,
     plannedShots: plan.shots.map((shot) => ({ id: shot.id })),
@@ -429,9 +502,23 @@ export function ingestCinematicCreativeScriptToAuthoredShots(input: {
   const blockByShotId = new Map(parsed.blocks.map((block) => [block.shotId, block]))
   const diagnostics = [...parsed.diagnostics]
 
+  if (isStoryScriptPipeline) {
+    for (const plannedShot of plan.shots) {
+      const block = blockByShotId.get(plannedShot.id)
+      if (!block) continue
+      if (!block.duration.trim()) {
+        diagnostics.push(`Creative script shot "${plannedShot.id}" is missing required DURATION.`)
+      }
+      if (!block.visual.trim()) {
+        diagnostics.push(`Creative script shot "${plannedShot.id}" is missing required VISUAL.`)
+      }
+    }
+  }
+
   const authoredShots = plan.shots.map((shot) => {
     const block = blockByShotId.get(shot.id)
-    const beat = block?.onScreen.trim() || shot.beat || block?.purpose.trim() || ''
+    const cleanOnScreen = stripTimingPrefixesFromBlockText(block?.onScreen ?? '')
+    const beat = cleanOnScreen || shot.beat || block?.purpose.trim() || ''
     const camera = block?.camera.trim() || ''
     const notes = block?.notes.trim() || ''
     const purpose = block?.purpose.trim() || ''
@@ -449,9 +536,32 @@ export function ingestCinematicCreativeScriptToAuthoredShots(input: {
         : []
     const audio = [...voiceoverAudio, ...buildAudioBeats({ shot, audioText: explicitAudio })]
     const actions = buildActionBeats({ shot, onScreenText: block?.onScreen ?? '' })
+    const explicitDurationSeconds = parseShotDurationSeconds(block?.duration ?? '')
+    const inferredTimedDurationSeconds = inferShotDurationSecondsFromTimedBeats({
+      actions,
+      dialogue: spokenDialogue,
+      audio,
+    })
+    const durationSeconds =
+      explicitDurationSeconds !== null || inferredTimedDurationSeconds !== null
+        ? Math.max(explicitDurationSeconds ?? 0, inferredTimedDurationSeconds ?? 0)
+        : null
+    const stillAtSeconds = resolveStillAtSeconds({
+      explicitStillAtSeconds: parseShotRelativeSeconds(block?.stillAt ?? ''),
+      durationSeconds,
+    })
 
     if (!block) {
       diagnostics.push(`Ingestor used the planned skeleton for missing creative-script shot "${shot.id}".`)
+    }
+    if (
+      explicitDurationSeconds !== null
+      && inferredTimedDurationSeconds !== null
+      && inferredTimedDurationSeconds > explicitDurationSeconds
+    ) {
+      diagnostics.push(
+        `Creative script shot "${shot.id}" declared ${explicitDurationSeconds}s but timed beats reached ${inferredTimedDurationSeconds}s. Using the longer authored timing.`,
+      )
     }
 
     return cinematicCreativeScriptIngestedShotSchema.parse({
@@ -461,13 +571,15 @@ export function ingestCinematicCreativeScriptToAuthoredShots(input: {
       cameraAngle: inferCameraAngle(camera) || shot.cameraAngle || '',
       cameraMovement: inferCameraMovement(camera) || shot.cameraMovement || '',
       lensPreference: inferLensPreference(camera, beat) || shot.lensPreference || '',
-      visualPrompt: [beat, camera].filter(Boolean).join(' ').trim(),
+      visualPrompt: block?.visual.trim() || [beat, camera].filter(Boolean).join(' ').trim(),
       compositionGuide: [purpose, notes].filter(Boolean).join(' ').trim(),
       creativeTreatment: shot.creativeTreatment ?? plan.graphSettings.creativeTreatment ?? null,
       hookFamily: shot.hookFamily ?? plan.graphSettings.hookFamily ?? null,
       narrationMode: shot.narrationMode ?? plan.graphSettings.narrationMode ?? null,
       backdropRole: shot.backdropRole ?? plan.graphSettings.backdropRole ?? null,
       backdropStrategy: shot.backdropStrategy || plan.graphSettings.backdropStrategy || '',
+      durationSeconds,
+      stillAtSeconds,
       dialogue: spokenDialogue,
       actions,
       audio,

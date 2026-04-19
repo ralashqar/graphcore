@@ -431,6 +431,7 @@ export const cinematicScriptShotSchema = z.object({
   directingPackage: cinematicDirectingPackageSchema.default(defaultCinematicDirectingPackage),
   referencePlan: cinematicReferencePlanSchema.default(defaultCinematicReferencePlan),
   durationSeconds: z.number().int().positive().max(15).nullable().default(null),
+  stillAtSeconds: z.number().nonnegative().nullable().default(null),
   startSeconds: z.number().nonnegative().default(0),
   endSeconds: z.number().nonnegative().default(0),
   approvedForTake: z.boolean().default(false),
@@ -540,6 +541,7 @@ export const cinematicShotSpecSchema = z.object({
   directingPackage: cinematicDirectingPackageSchema.default(defaultCinematicDirectingPackage),
   referencePlan: cinematicReferencePlanSchema.default(defaultCinematicReferencePlan),
   durationSeconds: z.number().int().positive().max(15).nullable().default(null),
+  stillAtSeconds: z.number().nonnegative().nullable().default(null),
   startSeconds: z.number().nonnegative().default(0),
   endSeconds: z.number().nonnegative().default(0),
   inferredDurationSeconds: z.number().int().positive().max(15).nullable().default(null),
@@ -1935,6 +1937,7 @@ export function buildSimpleStoryboardGridLabel(panelCount: number) {
 
 export function buildStoryTakeStillImagePrompt(input: {
   representativeStillPrompt: string
+  representativeFrameSeconds?: number | null
   sceneBias?: string | null
   cameraBias?: string | null
   entitySummaries?: string[]
@@ -1942,6 +1945,7 @@ export function buildStoryTakeStillImagePrompt(input: {
   return [
     'Create one representative still frame from this cinematic take.',
     input.representativeStillPrompt.trim() ? `Moment: ${input.representativeStillPrompt.trim().replace(/\.$/, '')}.` : null,
+    typeof input.representativeFrameSeconds === 'number' ? `Representative frame: around ${input.representativeFrameSeconds}s.` : null,
     ...(input.entitySummaries ?? []),
     'Show only what should be visible on screen.',
     'No text or borders.',
@@ -2093,6 +2097,30 @@ function normalizeTimelineShotDuration(durationSeconds: number | null | undefine
   return 4
 }
 
+function resolveCompiledShotStillAtSeconds(input: {
+  stillAtSeconds: number | null | undefined
+  durationSeconds: number
+}) {
+  if (typeof input.stillAtSeconds === 'number' && Number.isFinite(input.stillAtSeconds)) {
+    return Math.round(Math.max(0, Math.min(input.durationSeconds, input.stillAtSeconds)) * 10) / 10
+  }
+  return Math.round((input.durationSeconds / 2) * 10) / 10
+}
+
+function deriveAuthoredLocalTimingDurationSeconds(
+  shot: Pick<CinematicScriptShot, 'dialogue' | 'actions' | 'audio' | 'beats'>,
+) {
+  const maxTimedEnd = Math.max(
+    0,
+    ...shot.dialogue.flatMap((entry) => [entry.startSeconds ?? 0, entry.endSeconds ?? 0]),
+    ...shot.actions.flatMap((entry) => [entry.startSeconds ?? 0, entry.endSeconds ?? 0]),
+    ...shot.audio.flatMap((entry) => [entry.startSeconds ?? 0, entry.endSeconds ?? 0]),
+    ...shot.beats.flatMap((entry) => [entry.startSeconds ?? 0, entry.endSeconds ?? 0]),
+  )
+  if (!(maxTimedEnd > 0)) return null
+  return Math.min(15, Math.max(1, Math.ceil(maxTimedEnd)))
+}
+
 export function buildCinematicShotTimingMap<TShot extends { id: string; durationSeconds: number | null | undefined }>(shots: TShot[]) {
   const timingMap = new Map<string, CinematicShotTiming>()
   let currentStartSeconds = 0
@@ -2127,6 +2155,20 @@ function inferShotDuration(shot: CinematicScriptShot) {
       timingSummary: editorialContract.targetDurationSeconds
         ? `Manual shot duration override shaped to the editorial contract around ${editorialContract.targetDurationSeconds}s.`
         : 'Manual shot duration override.',
+    }
+  }
+
+  const authoredTimedDurationSeconds = deriveAuthoredLocalTimingDurationSeconds(shot)
+  if (typeof authoredTimedDurationSeconds === 'number' && Number.isFinite(authoredTimedDurationSeconds)) {
+    const durationSeconds = clampDurationToRange(
+      authoredTimedDurationSeconds,
+      editorialContract.minDurationSeconds,
+      editorialContract.maxDurationSeconds,
+    )
+    return {
+      durationSeconds,
+      durationSource: 'inferred' as const,
+      timingSummary: `Authored local beat timing reaches ${Math.round(authoredTimedDurationSeconds * 10) / 10}s.`,
     }
   }
 
@@ -2845,6 +2887,10 @@ export function buildCinematicSequenceFromScriptDoc(scriptDoc: CinematicScriptDo
       directingPackage: shot.directingPackage,
       referencePlan: shot.referencePlan,
       durationSeconds: shot._compiledDurationSeconds,
+      stillAtSeconds: resolveCompiledShotStillAtSeconds({
+        stillAtSeconds: shot.stillAtSeconds ?? null,
+        durationSeconds: shot._compiledDurationSeconds,
+      }),
       inferredDurationSeconds: shot._durationSource === 'inferred' ? shot._compiledDurationSeconds : null,
       durationSource: shot._durationSource,
       timingSummary: shot._timingSummary,
@@ -3055,6 +3101,7 @@ export function deriveCinematicScriptFromSequence(sequence: CinematicSequence): 
       directingPackage: shot.directingPackage,
       referencePlan: shot.referencePlan,
       durationSeconds: shot.durationSeconds,
+      stillAtSeconds: shot.stillAtSeconds,
       startSeconds: shot.startSeconds,
       endSeconds: shot.endSeconds,
       approvedForTake: shot.approvedForTake,

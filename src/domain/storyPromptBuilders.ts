@@ -9,7 +9,7 @@ import {
 } from './storyPresetProfiles.ts'
 
 export const STORY_SCRIPT_INGEST_PIPELINE = 'story_script_ingest_v1' as const
-export const STORY_PROMPT_VERSION = 'story_prompt_timeline_v2' as const
+export const STORY_PROMPT_VERSION = 'story_prompt_timeline_v4' as const
 
 type StoryPromptInput = {
   targetShotCount?: number
@@ -72,17 +72,26 @@ export function buildStoryCreativeScriptPrompt(input: StoryPromptInput = {}) {
     'Write rawScriptMarkdown using this exact structure:',
     '# SCENE: <scene title> when the scene changes',
     '## SHOT: <shot_id>',
+    'DURATION: <shot duration in seconds, for example 3.4s>',
+    'VISUAL: <one concise visual still brief describing the representative image for this shot>',
+    'STILL_AT: <optional representative frame moment in shot-local seconds, for example 2.1s>',
     'ACTION:',
-    '- <optional local shot timing start-end in seconds> <visible action beat>',
-    '- <optional local shot timing start-end in seconds> <next visible action beat>',
+    '- <required local shot timing start-end in seconds> <visible action beat>',
+    '- <required local shot timing start-end in seconds> <next visible action beat>',
     'DIALOGUE:',
-    '- <optional local shot timing start-end in seconds> <Speaker: spoken line>',
+    '- <required local shot timing start-end in seconds> <Speaker: spoken line>',
     'CAMERA: <short camera note only when it materially helps the beat>',
     'AUDIO:',
-    '- <optional local shot timing start-end in seconds> <material sound cue, ambience, or silence note>',
+    '- <required local shot timing start-end in seconds> <material sound cue, ambience, or silence note>',
     'NOTES: <optional short note only when needed>',
-    'If useful, local timing should look like "0.0-1.4" at the start of a bullet line. Use shot-local seconds only, never global sequence timestamps.',
+    'Local timing must look like "0.0-1.4" at the start of each bullet line. Use shot-local seconds only, never global sequence timestamps.',
+    'Every shot must declare DURATION, every shot must declare VISUAL, and every ACTION bullet must start with a local timing range.',
+    'If a shot contains dialogue, every DIALOGUE bullet must start with a local timing range.',
+    'Every AUDIO bullet must start with a local timing range unless one ambience, room-tone, music, or silence bed intentionally spans the full shot from 0.0 to DURATION.',
+    'VISUAL should describe the single best representative frame for shot still generation, using concrete subject, environment, framing, and lighting language.',
+    'STILL_AT is optional, but when present it must point at the representative frame moment inside the shot.',
     'Use multiple bullets in ACTION, DIALOGUE, or AUDIO when a shot contains multiple distinct beats.',
+    'The last timed beat in the shot should land at or very near the declared DURATION.',
     'Do not just repeat the full shot prose in ACTION. Break the shot into playable visible beats.',
     'Write a strong scene, not GraphCore packaging.',
     'Prefer visible cause and effect over abstract summaries of tension, power, or momentum.',

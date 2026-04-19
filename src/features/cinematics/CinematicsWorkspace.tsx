@@ -1024,22 +1024,23 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
     return null
   }
   const currentGraphRawScript = useMemo(() => {
+    const jobId = currentGraphGeneration?.jobId
+    if (jobId) {
+      for (const batch of worldBuildBatches) {
+        const job = batch.jobs.find((entry) => entry.id === jobId)
+        if (!job) continue
+        const rawScriptMarkdown = batch.cinematicPlan?.rawScriptMarkdown
+        if (typeof rawScriptMarkdown === 'string' && rawScriptMarkdown.trim().length > 0) {
+          return rawScriptMarkdown
+        }
+      }
+    }
     const metadataRawScript =
       currentGraph && typeof currentGraph.metadata === 'object' && currentGraph.metadata !== null
         ? (currentGraph.metadata as { cinematicAuthoring?: { rawScriptMarkdown?: unknown } }).cinematicAuthoring?.rawScriptMarkdown
         : null
     if (typeof metadataRawScript === 'string' && metadataRawScript.trim().length > 0) {
       return metadataRawScript
-    }
-    const jobId = currentGraphGeneration?.jobId
-    if (!jobId) return ''
-    for (const batch of worldBuildBatches) {
-      const job = batch.jobs.find((entry) => entry.id === jobId)
-      if (!job) continue
-      const rawScriptMarkdown = batch.cinematicPlan?.rawScriptMarkdown
-      if (typeof rawScriptMarkdown === 'string' && rawScriptMarkdown.trim().length > 0) {
-        return rawScriptMarkdown
-      }
     }
     return ''
   }, [currentGraph, currentGraphGeneration?.jobId, worldBuildBatches])
@@ -1983,27 +1984,35 @@ export function CinematicsWorkspace(props: CinematicsWorkspaceProps) {
           <button className={isDeletingSelectedGraph ? 'ghost-button compact button-with-spinner' : 'ghost-button compact'} disabled={isDeletingSelectedGraph} onClick={() => currentGraph && onDeleteGraph(currentGraph.key)} type="button">{isDeletingSelectedGraph ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}</button>
         </div>
         {contentMode === 'timeline' ? (
-          <CinematicTimelineSurface
-            assets={assets}
-            canRunCinematics={canRunCinematics}
-            currentGraph={currentGraph}
-            currentRuns={currentGraphRuns}
-            definitions={definitions}
-            graphSettings={graphSettings}
-            sequence={currentSequence}
-            onGenerateShot={handleGenerateShotFromTimeline}
-            onGenerateTakeStill={handleGenerateStillFromTakeId}
-            onGenerateTakeStoryboard={handleGenerateStoryboardFromTakeId}
-            onGenerateTakeVideo={handleGenerateTakeVideoFromTimeline}
-            onToggleShotApproval={(shotId, approved) => updateShotInSequence(shotId, (shot) => ({ ...shot, approvedForTake: approved }))}
-            onToggleTakeApproval={(takeId, approved) => updateTakeInSequence(takeId, (take) => ({ ...take, approvedForVideo: approved }))}
-            onUpdateShotDuration={(shotId, durationSeconds) => updateShotInSequence(shotId, (shot) => ({
-              ...shot,
-              durationSeconds,
-              durationSource: 'manual',
-              approvedForTake: false,
-            }))}
-          />
+          isCurrentGraphPending ? (
+            <div className="detail-stack compact world-build-loading-shell graph-loading-shell">
+              <span className="eyebrow">Generating Graph</span>
+              <h3>{currentGraph?.name ?? 'Pending cinematic flow'}</h3>
+              <div className="inline-note world-build-status-note"><span className="button-spinner" aria-hidden="true" />This cinematic flow is still being generated. Nodes and edges will appear when the background job completes.</div>
+            </div>
+          ) : (
+            <CinematicTimelineSurface
+              assets={assets}
+              canRunCinematics={canRunCinematics}
+              currentGraph={currentGraph}
+              currentRuns={currentGraphRuns}
+              definitions={definitions}
+              graphSettings={graphSettings}
+              sequence={currentSequence}
+              onGenerateShot={handleGenerateShotFromTimeline}
+              onGenerateTakeStill={handleGenerateStillFromTakeId}
+              onGenerateTakeStoryboard={handleGenerateStoryboardFromTakeId}
+              onGenerateTakeVideo={handleGenerateTakeVideoFromTimeline}
+              onToggleShotApproval={(shotId, approved) => updateShotInSequence(shotId, (shot) => ({ ...shot, approvedForTake: approved }))}
+              onToggleTakeApproval={(takeId, approved) => updateTakeInSequence(takeId, (take) => ({ ...take, approvedForVideo: approved }))}
+              onUpdateShotDuration={(shotId, durationSeconds) => updateShotInSequence(shotId, (shot) => ({
+                ...shot,
+                durationSeconds,
+                durationSource: 'manual',
+                approvedForTake: false,
+              }))}
+            />
+          )
         ) : null}
         {contentMode === 'graph' ? (
           <>
@@ -2529,6 +2538,7 @@ function ScriptPreviewSurface({
             dropOrder: [],
           },
           durationSeconds: null,
+          stillAtSeconds: null,
           startSeconds: 0,
           endSeconds: 0,
           approvedForTake: false,

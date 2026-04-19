@@ -1032,12 +1032,14 @@ test('story takes derive a representative still prompt', () => {
 test('story take still prompt stays compact and visual', () => {
   const prompt = buildStoryTakeStillImagePrompt({
     representativeStillPrompt: 'Kharzag and Brakk clash swords in the arena',
+    representativeFrameSeconds: 2.2,
     sceneBias: 'duel showdown',
     cameraBias: 'tactical combat',
     entitySummaries: ['Kharzag: orc warrior.', 'Brakk: tauren bull-man.'],
   })
 
   assert.match(prompt, /Moment: Kharzag and Brakk clash swords in the arena\./i)
+  assert.match(prompt, /Representative frame: around 2.2s\./i)
   assert.match(prompt, /Kharzag: orc warrior\./i)
   assert.doesNotMatch(prompt, /Scene bias:/i)
   assert.doesNotMatch(prompt, /Camera bias:/i)
@@ -1131,6 +1133,9 @@ test('story creative scripts ingest local shot timing for action dialogue and au
     rawScriptMarkdown: [
       '# SCENE: Arena Floor',
       '## SHOT: shot_02_entry',
+      'DURATION: 3.4s',
+      'VISUAL: Low wide two-shot at center pit, Kharzag driving in low toward Brakk under hard stone tiers.',
+      'STILL_AT: 2.2s',
       'ACTION:',
       '- 0.0-1.0 Kharzag drops into a low feint and loads his weight forward.',
       '- 1.0-2.2 He explodes toward Brakk with the cleaver low.',
@@ -1153,6 +1158,113 @@ test('story creative scripts ingest local shot timing for action dialogue and au
   assert.equal(ingested.authoredShots[0]?.dialogue[0]?.endSeconds, 1.2)
   assert.equal(ingested.authoredShots[0]?.audio[0]?.startSeconds, 0)
   assert.equal(ingested.authoredShots[0]?.audio[2]?.endSeconds, 3.4)
+  assert.equal(ingested.authoredShots[0]?.durationSeconds, 4)
+  assert.equal(ingested.authoredShots[0]?.stillAtSeconds, 2.2)
+  assert.match(ingested.authoredShots[0]?.visualPrompt ?? '', /Low wide two-shot/i)
+})
+
+test('story creative scripts report missing required visual fields', () => {
+  const plan = cinematicPlanSchema.parse({
+    graphName: 'Arena Duel',
+    graphSummary: 'Kharzag fights Brakk in the arena.',
+    entityRefs: [],
+    graphSettings: {
+      presetFamily: 'story_movie_tv',
+      storyScenePreset: 'duel_showdown',
+      storyLanguagePreset: 'tactical_combat',
+      authorshipPipeline: 'story_script_ingest_v1',
+    },
+    shots: [
+      {
+        id: 'shot_03_missing_visual',
+        title: 'Missing Visual',
+        sceneId: 'scene_1',
+        participantRefIds: ['kharzag', 'brakk'],
+        locationRefId: 'arena_1',
+      },
+    ],
+  })
+
+  const ingested = ingestCinematicCreativeScriptToAuthoredShots({
+    plan,
+    rawScriptMarkdown: [
+      '# SCENE: Arena Floor',
+      '## SHOT: shot_03_missing_visual',
+      'DURATION: 3.0s',
+      'ACTION:',
+      '- 0.0-3.0 Kharzag advances while Brakk holds center.',
+      'CAMERA: Wide tactical two-shot.',
+      'AUDIO:',
+      '- 0.0-3.0 Crowd murmur and boots on stone.',
+    ].join('\n'),
+  })
+
+  assert.ok(ingested.diagnostics.some((entry) => /missing required VISUAL/i.test(entry)))
+})
+
+test('story shot duration inference follows authored local timing windows', () => {
+  const script = cinematicScriptDocSchema.parse({
+    title: 'Authored timing wins',
+    entityBindings: [
+      { id: 'fighter_1', kind: 'character', role: 'fighter', label: 'Kharzag', sourceName: 'Kharzag' },
+      { id: 'fighter_2', kind: 'character', role: 'fighter', label: 'Brakk', sourceName: 'Brakk' },
+    ],
+    shots: [
+      {
+        id: 'shot_1',
+        orderIndex: 0,
+        title: 'Entry',
+        beat: 'Kharzag feints, surges, and collides with Brakk at center.',
+        storyScenePreset: 'duel_showdown',
+        storyLanguagePreset: 'tactical_combat',
+        participantRefIds: ['fighter_1', 'fighter_2'],
+        actions: [
+          { id: 'a1', actorRefId: 'fighter_1', verb: 'drops into a low feint', startSeconds: 0, endSeconds: 1 },
+          { id: 'a2', actorRefId: 'fighter_1', verb: 'surges forward', startSeconds: 1, endSeconds: 2.2 },
+          { id: 'a3', actorRefId: 'fighter_2', verb: 'checks the entry on contact', startSeconds: 2.2, endSeconds: 3.4 },
+        ],
+        dialogue: [
+          { id: 'd1', speakerRefId: 'fighter_1', line: 'Move.', startSeconds: 0.8, endSeconds: 1.2 },
+        ],
+        audio: [
+          { id: 'au1', kind: 'ambience', cue: 'Crowd hush.', startSeconds: 0, endSeconds: 1 },
+          { id: 'au2', kind: 'sfx', cue: 'Metal scrape on contact.', startSeconds: 2.2, endSeconds: 3.4 },
+        ],
+      },
+    ],
+  })
+
+  const sequence = buildCinematicSequenceFromScriptDoc(script)
+
+  assert.equal(sequence.shots[0]?.durationSeconds, 4)
+  assert.equal(sequence.shots[0]?.stillAtSeconds, 2)
+  assert.equal(sequence.shots[0]?.startSeconds, 0)
+  assert.equal(sequence.shots[0]?.endSeconds, 4)
+})
+
+test('story shot still markers round-trip through script and compiled sequence', () => {
+  const script = cinematicScriptDocSchema.parse({
+    title: 'Still marker roundtrip',
+    entityBindings: [],
+    shots: [
+      {
+        id: 'shot_1',
+        orderIndex: 0,
+        title: 'Reveal',
+        beat: 'The fighter turns into the light at the pit rim.',
+        visualPrompt: 'Low rim-lit reveal of the fighter turning into the arena light.',
+        stillAtSeconds: 2.3,
+        durationSeconds: 4,
+      },
+    ],
+  })
+
+  const sequence = buildCinematicSequenceFromScriptDoc(script)
+  const roundTrip = deriveCinematicScriptFromSequence(sequence)
+
+  assert.equal(sequence.shots[0]?.visualPrompt, 'Low rim-lit reveal of the fighter turning into the arena light.')
+  assert.equal(sequence.shots[0]?.stillAtSeconds, 2.3)
+  assert.equal(roundTrip.shots[0]?.stillAtSeconds, 2.3)
 })
 
 test('story duel keeps packing across mixed shot-level preset metadata when continuity is continuous', () => {

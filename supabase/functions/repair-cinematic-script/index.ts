@@ -401,6 +401,14 @@ Deno.serve(async (request) => {
           authoredShots: repairedRaw.shots,
         }
 
+    const creativeScriptContractFailures =
+      useStoryScriptIngestPipeline
+        ? ingestionResult.diagnostics.filter((message) => /missing required (DURATION|VISUAL)/i.test(message))
+        : []
+    if (creativeScriptContractFailures.length > 0) {
+      throw new Error(`Story creative script omitted required fields: ${creativeScriptContractFailures.join(' ')}`)
+    }
+
     const repairedPlan = authorCinematicPlanSkeleton({
       plan: {
         ...planForRepair,

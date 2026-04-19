@@ -11,7 +11,7 @@ import {
 
 test('story prompt builders expose the new story ingest pipeline constants', () => {
   assert.equal(STORY_SCRIPT_INGEST_PIPELINE, 'story_script_ingest_v1')
-  assert.equal(STORY_PROMPT_VERSION, 'story_prompt_timeline_v2')
+  assert.equal(STORY_PROMPT_VERSION, 'story_prompt_timeline_v4')
 })
 
 test('story skeleton planner prompt stays narrow and excludes packaging wall fields', () => {
@@ -37,9 +37,15 @@ test('story creative prompt uses screenplay-style labels and keeps the rules com
 
   assert.match(prompt, /# SCENE:/)
   assert.match(prompt, /## SHOT:/)
+  assert.match(prompt, /DURATION:/)
+  assert.match(prompt, /VISUAL:/)
+  assert.match(prompt, /STILL_AT:/)
   assert.match(prompt, /ACTION:/)
   assert.match(prompt, /DIALOGUE:/)
   assert.match(prompt, /0\.0-1\.4/)
+  assert.match(prompt, /Every shot must declare DURATION, every shot must declare VISUAL/i)
+  assert.match(prompt, /VISUAL should describe the single best representative frame/i)
+  assert.match(prompt, /last timed beat in the shot should land at or very near the declared DURATION/i)
   assert.match(prompt, /Use multiple bullets in ACTION, DIALOGUE, or AUDIO/)
   assert.match(prompt, /Write a strong scene, not GraphCore packaging\./)
   assert.doesNotMatch(prompt, /graphSettings/i)

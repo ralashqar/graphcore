@@ -5091,11 +5091,13 @@ export function authorCinematicPlanSkeleton(input: {
     lensPreference?: string
     visualPrompt?: string
     compositionGuide?: string
+    stillAtSeconds?: number | null
     creativeTreatment?: z.infer<typeof cinematicCreativeTreatmentSchema> | null
     hookFamily?: z.infer<typeof cinematicHookFamilySchema> | null
     narrationMode?: z.infer<typeof cinematicNarrationModeSchema> | null
     backdropRole?: z.infer<typeof cinematicBackdropRoleSchema> | null
     backdropStrategy?: string
+    durationSeconds?: number | null
     directingPackage?: z.infer<typeof cinematicDirectingPackageSchema>
     referencePlan?: z.infer<typeof cinematicReferencePlanSchema>
     dialogue?: Array<z.infer<typeof dialogueBeatSchema>>
@@ -5141,6 +5143,8 @@ export function authorCinematicPlanSkeleton(input: {
         targetDurationSeconds: shot.targetDurationSeconds,
         minDurationSeconds: shot.minDurationSeconds,
         maxDurationSeconds: shot.maxDurationSeconds,
+        durationSeconds: authored?.durationSeconds ?? shot.durationSeconds ?? null,
+        stillAtSeconds: authored?.stillAtSeconds ?? shot.stillAtSeconds ?? null,
         cutTrigger: shot.cutTrigger,
         communicationGoal: shot.communicationGoal,
         dialogue: (authored?.dialogue ?? shot.dialogue ?? []).map((entry) => {
@@ -5772,6 +5776,7 @@ export function materializeCinematicPlan(rawPlan: z.infer<typeof cinematicPlanne
           directingPackage: shot.directingPackage,
           referencePlan: shot.referencePlan,
           durationSeconds: shot.durationSeconds,
+          stillAtSeconds: shot.stillAtSeconds,
           forceTakeBreak: shot.forceTakeBreak,
           beats: shot.beats,
           dialogue: shot.dialogue,
@@ -5831,6 +5836,7 @@ export function materializeCinematicPlan(rawPlan: z.infer<typeof cinematicPlanne
     cameraMovement: shot.cameraMovement,
     lensPreference: shot.lensPreference,
     durationSeconds: shot.durationSeconds,
+    stillAtSeconds: shot.stillAtSeconds,
     forceTakeBreak: shot.forceTakeBreak,
     visualPrompt: shot.visualPrompt,
     compositionGuide: shot.compositionGuide,
@@ -5881,6 +5887,7 @@ export function materializeCinematicPlan(rawPlan: z.infer<typeof cinematicPlanne
       ctaType: normalizedDerivedShots[index]?.ctaType ?? shot.ctaType,
       backdropRefIds: normalizedDerivedShots[index]?.backdropRefIds ?? shot.backdropRefIds,
       durationSeconds: normalizedDerivedShots[index]?.durationSeconds ?? shot.durationSeconds,
+      stillAtSeconds: normalizedDerivedShots[index]?.stillAtSeconds ?? shot.stillAtSeconds,
       directingPackage: normalizedDerivedShots[index]?.directingPackage ?? shot.directingPackage,
       referencePlan: normalizedDerivedShots[index]?.referencePlan ?? shot.referencePlan,
     })),

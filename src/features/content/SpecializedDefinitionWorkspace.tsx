@@ -6,6 +6,7 @@ import { getEnvironmentProfile, getResolvedDefinition3dBinding, getResolvedRende
 import { getResourceGenerationMetadata, isPendingGenerationResource } from '../../domain/worldBuild'
 import type { MeshGenerationJob } from '../../domain/meshGeneration'
 import { isTerminalMeshGenerationJobStatus } from '../../domain/meshGeneration'
+import { useEditorStore } from '../../state/editorStore'
 import { EntityIcon, iconForDefinitionKind } from '../../shared/entityIcons'
 import { DefinitionEditor } from './DefinitionEditor'
 import { EnvironmentAssemblyWorkspace } from './EnvironmentAssemblyWorkspace'
@@ -42,7 +43,7 @@ type SpecializedDefinitionWorkspaceProps = {
   onDeleteGeneratedMesh: (definitionKey: string) => void
   onDeleteAssemblyGraph: (graphKey: string) => void
   onDeleteEnvironmentBlueprint: (blueprintId: string) => void
-  onChangePromptText: (value: string) => void
+  onChangePromptText?: (value: string) => void
   onGeneratePrompt: () => void
   onGenerateConceptImage: (definitionKey: string) => Promise<void>
   onOpenCinematicGraph: (graphKey: string) => void
@@ -55,7 +56,7 @@ type SpecializedDefinitionWorkspaceProps = {
   onUpdateComponents: (itemKey: string, components: DefinitionBase['components']) => void
   onUpdateFieldValue: (itemKey: string, fieldKey: string, value: FieldValue['value']) => void
   onUpdateItemIdentity: (key: string, changes: Partial<Pick<DefinitionBase, 'name' | 'key' | 'summary' | 'iconAssetKey' | 'archetypeKey'>>) => void
-  promptText: string
+  promptText?: string
 }
 
 export function SpecializedDefinitionWorkspace({
@@ -86,7 +87,7 @@ export function SpecializedDefinitionWorkspace({
   onDeleteGeneratedMesh,
   onDeleteAssemblyGraph,
   onDeleteEnvironmentBlueprint,
-  onChangePromptText,
+  onChangePromptText: onChangePromptTextProp,
   onGeneratePrompt,
   onGenerateConceptImage,
   onOpenCinematicGraph,
@@ -99,8 +100,12 @@ export function SpecializedDefinitionWorkspace({
   onUpdateComponents,
   onUpdateFieldValue,
   onUpdateItemIdentity,
-  promptText,
+  promptText: promptTextProp,
 }: SpecializedDefinitionWorkspaceProps) {
+  const storePromptText = useEditorStore((state) => state.promptText)
+  const setStorePromptText = useEditorStore((state) => state.setPromptText)
+  const promptText = promptTextProp ?? storePromptText
+  const onChangePromptText = onChangePromptTextProp ?? setStorePromptText
   const [search, setSearch] = useState('')
   const [panelMode, setPanelMode] = useState<SpecializedPanelMode>('details')
   const [isSelectionIconPickerOpen, setIsSelectionIconPickerOpen] = useState(false)

@@ -1302,6 +1302,7 @@ export function buildStillPrompt(input: {
       || (input.shotNode.body?.text ? String(input.shotNode.body.text).trim() : '')
       || shot.beat.trim()
       || shot.title,
+    representativeFrameSeconds: shot.stillAtSeconds ?? null,
     sceneBias: settings.presetFamily === 'story_movie_tv'
       ? getCinematicStoryScenePresetLabel(shot.storyScenePreset ?? settings.storyScenePreset ?? null)
       : null,

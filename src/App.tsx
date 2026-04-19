@@ -692,7 +692,14 @@ export default function App() {
   const [pendingStoryboardNodeKeys, setPendingStoryboardNodeKeys] = useState<string[]>([])
   const [globalWorkspaceAutoFocusReleasesNonce, setGlobalWorkspaceAutoFocusReleasesNonce] = useState(0)
   const [isPending, startTransition] = useTransition()
-  const { promptText, selectedDefinitionKey, selectedEdgeKey, selectedGraphKey, selectedNodeKey, setPromptText, setSelectedDefinitionKey, setSelectedEdgeKey, setSelectedGraphKey, setSelectedNodeKey } = useEditorStore()
+  const selectedDefinitionKey = useEditorStore((state) => state.selectedDefinitionKey)
+  const selectedEdgeKey = useEditorStore((state) => state.selectedEdgeKey)
+  const selectedGraphKey = useEditorStore((state) => state.selectedGraphKey)
+  const selectedNodeKey = useEditorStore((state) => state.selectedNodeKey)
+  const setSelectedDefinitionKey = useEditorStore((state) => state.setSelectedDefinitionKey)
+  const setSelectedEdgeKey = useEditorStore((state) => state.setSelectedEdgeKey)
+  const setSelectedGraphKey = useEditorStore((state) => state.setSelectedGraphKey)
+  const setSelectedNodeKey = useEditorStore((state) => state.setSelectedNodeKey)
   const sessionRef = useRef<Session | null>(null)
   const snapshotRef = useRef<ProjectSnapshot | null>(null)
   const worldBuildPollInFlightRef = useRef(false)
@@ -702,6 +709,10 @@ export default function App() {
   const cinematicRunPollInFlightRef = useRef(false)
   const cinematicRunRealtimeSignalAtRef = useRef(new Map<string, number>())
   const meshGenerationPollFailureCountsRef = useRef(new Map<string, number>())
+
+  function readPromptText() {
+    return useEditorStore.getState().promptText
+  }
 
   function markStoryboardNodePending(nodeKey: string) {
     setPendingStoryboardNodeKeys((current) => current.includes(nodeKey) ? current : [...current, nodeKey])
@@ -2734,6 +2745,7 @@ export default function App() {
 
   async function handleGeneratePatch() {
     if (!snapshot) return
+    const promptText = readPromptText()
     if (!session) {
       setPromptRuntimeError('Sign in to use hosted prompt generation.')
       setAuthOpen(true)
@@ -2909,6 +2921,7 @@ export default function App() {
 
   async function handlePlanWorldBuild() {
     if (!snapshot) return
+    const promptText = readPromptText()
     if (!session) {
       setPromptRuntimeError('Sign in to use hosted world building.')
       setAuthOpen(true)
@@ -2944,6 +2957,7 @@ export default function App() {
 
   async function handleStartWorldBuild() {
     if (!snapshot || !worldBuildPlanPreview) return
+    const promptText = readPromptText()
 
     setIsStartingWorldBuild(true)
     setPromptRuntimeError(null)
@@ -3854,7 +3868,6 @@ export default function App() {
                 onCreateEnvironmentBlueprint={createEnvironmentBlueprintForEnvironment}
                 onCreateAssemblyGraph={createEnvironmentAssemblyGraph}
                 onCreateDefinition={createCharacter}
-                onChangePromptText={setPromptText}
                 onDeleteDefinition={deleteDefinition}
                 onDeleteGeneratedMesh={deleteGeneratedMesh}
                 onDeleteAssemblyGraph={deleteAssemblyGraph}
@@ -3871,7 +3884,6 @@ export default function App() {
                 onUpdateComponents={updateDefinitionComponents}
                 onUpdateFieldValue={updateItemFieldValue}
                 onUpdateItemIdentity={updateItemIdentity}
-                promptText={promptText}
               />
             ) : null}
             {activeTab === 'environments' ? (
@@ -3899,7 +3911,6 @@ export default function App() {
                 onCreateEnvironmentBlueprint={createEnvironmentBlueprintForEnvironment}
                 onCreateAssemblyGraph={createEnvironmentAssemblyGraph}
                 onCreateDefinition={createEnvironment}
-                onChangePromptText={setPromptText}
                 onDeleteDefinition={deleteDefinition}
                 onDeleteGeneratedMesh={deleteGeneratedMesh}
                 onDeleteAssemblyGraph={deleteAssemblyGraph}
@@ -3916,7 +3927,6 @@ export default function App() {
                 onUpdateComponents={updateDefinitionComponents}
                 onUpdateFieldValue={updateItemFieldValue}
                 onUpdateItemIdentity={updateItemIdentity}
-                promptText={promptText}
               />
             ) : null}
             {activeTab === 'assets' ? <AssetsWorkspace assets={snapshot.assets} deletingAssetKey={deletingAssetKey} selectedAsset={selectedAsset} selectedItem={selectedDefinition} onAssignAssetToSelectedItem={assignAssetToSelectedItem} onCreateUrlAsset={createUrlAsset} onDeleteAsset={deleteAsset} onSelectAsset={setSelectedAssetKey} onUploadAsset={handleAssetUpload} onUpdateAsset={updateAssetIdentity} /> : null}
@@ -3944,10 +3954,8 @@ export default function App() {
           model={promptModel}
           needsInitialization={activeGameIsEmpty}
           promptRuntimeError={promptRuntimeError}
-          promptText={promptText}
           sessionEmail={session?.user.email ?? null}
           onChangeModel={setPromptModel}
-          onChangePromptText={setPromptText}
           onGenerate={handlePlanWorldBuild}
           onOpenOnboarding={handleOpenBootstrapOnboarding}
         />
@@ -3985,7 +3993,7 @@ export default function App() {
           isStarting={isStartingWorldBuild}
           plannerMode={worldBuildPlanPreview.plannerMode}
           planItems={worldBuildPlanPreview.planItems}
-          prompt={promptText}
+          prompt={readPromptText()}
           requestSummary={worldBuildPlanPreview.requestSummary}
           onCancel={() => setWorldBuildPlanPreview(null)}
           onChangePresetFamily={updateWorldBuildCinematicPreset}

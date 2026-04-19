@@ -165,6 +165,7 @@ export const cinematicShotPlanSchema = z.object({
   cameraMovement: z.string().default(''),
   lensPreference: z.string().default(''),
   durationSeconds: z.number().int().positive().max(15).nullable().default(null),
+  stillAtSeconds: z.number().nonnegative().nullable().default(null),
   forceTakeBreak: z.boolean().default(false),
   visualPrompt: z.string().default(''),
   compositionGuide: z.string().default(''),
@@ -369,7 +370,7 @@ export const worldBuildRepairCinematicRequestSchema = z.object({
   model: z.string().min(1),
   shotIds: z.array(z.string()).default([]),
   failureCategories: z.array(z.enum(['schema', 'preset_fit', 'hook', 'proof', 'dialogue', 'action', 'camera', 'cta', 'structure', 'directing', 'continuity', 'reference_roles', 'proof_surface', 'pacing', 'concept_mode'])).default([]),
-  fieldScopes: z.array(z.enum(['beat', 'framing', 'cameraAngle', 'cameraMovement', 'lensPreference', 'visualPrompt', 'compositionGuide', 'directingPackage', 'referencePlan', 'dialogue', 'actions', 'audio'])).default([]),
+  fieldScopes: z.array(z.enum(['beat', 'framing', 'cameraAngle', 'cameraMovement', 'lensPreference', 'stillAtSeconds', 'visualPrompt', 'compositionGuide', 'directingPackage', 'referencePlan', 'dialogue', 'actions', 'audio'])).default([]),
 })
 
 export const worldBuildDeletePlaceholderRequestSchema = z.object({

@@ -37,6 +37,7 @@ import {
 import { createAssemblyCompileCache, compileAssemblyGraph } from '../../domain/environmentAssemblyCompiler'
 import type { DefinitionBase } from '../../domain/graphcore'
 import { getResolvedEnvironmentGeometryBinding } from '../../domain/render3d'
+import { useEditorStore } from '../../state/editorStore'
 import { ThreeSceneViewport } from '../viewer3d/ThreeSceneViewport'
 
 type EnvironmentAssemblyWorkspaceProps = {
@@ -46,7 +47,7 @@ type EnvironmentAssemblyWorkspaceProps = {
   isGeneratingPrompt: boolean
   isOpeningPreview: boolean
   mode?: 'full' | 'graph_only'
-  onChangePromptText: (value: string) => void
+  onChangePromptText?: (value: string) => void
   onCreateEnvironmentBlueprint: (environmentKey: string) => string | null
   onCreateAssemblyGraph: (environmentKey: string) => string | null
   onDeleteAssemblyGraph: (graphKey: string) => void
@@ -56,7 +57,7 @@ type EnvironmentAssemblyWorkspaceProps = {
   onUpsertAssemblyGraph: (graph: AssemblyGraphDefinition) => void
   onUpsertEnvironmentBlueprint: (blueprint: EnvironmentBlueprintV1) => void
   onUpdateComponents: (itemKey: string, components: DefinitionBase['components']) => void
-  promptText: string
+  promptText?: string
 }
 
 type GeometryBindingChanges =
@@ -253,7 +254,7 @@ export function EnvironmentAssemblyWorkspace({
   isGeneratingPrompt,
   isOpeningPreview,
   mode = 'full',
-  onChangePromptText,
+  onChangePromptText: onChangePromptTextProp,
   onCreateEnvironmentBlueprint,
   onCreateAssemblyGraph,
   onDeleteAssemblyGraph,
@@ -263,8 +264,12 @@ export function EnvironmentAssemblyWorkspace({
   onUpsertAssemblyGraph,
   onUpsertEnvironmentBlueprint,
   onUpdateComponents,
-  promptText,
+  promptText: promptTextProp,
 }: EnvironmentAssemblyWorkspaceProps) {
+  const storePromptText = useEditorStore((state) => state.promptText)
+  const setStorePromptText = useEditorStore((state) => state.setPromptText)
+  const promptText = promptTextProp ?? storePromptText
+  const onChangePromptText = onChangePromptTextProp ?? setStorePromptText
   const geometryBinding = useMemo(() => getResolvedEnvironmentGeometryBinding(environment), [environment])
   const boundGraph = useMemo(
     () => {
