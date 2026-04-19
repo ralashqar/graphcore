@@ -145,6 +145,14 @@ export async function runStructuredWorldBuildModel<TPayload>({
     console.log(`[world-build-debug] ${passLabel} parsed-json`, previewJson(parsedJson))
   }
 
+  if (!schema || typeof (schema as { safeParse?: unknown }).safeParse !== 'function') {
+    const schemaKeys =
+      schema && typeof schema === 'object'
+        ? Object.keys(schema as Record<string, unknown>)
+        : []
+    throw new Error(`${passLabel} was invoked with an invalid schema object. keys=${schemaKeys.join(',') || '<none>'}`)
+  }
+
   const validated = schema.safeParse(parsedJson)
   if (!validated.success) {
     if (debugEnabled) {

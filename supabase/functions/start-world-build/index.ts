@@ -37,6 +37,8 @@ import { loadCharacterDefinition, upsertDefinitionComponent } from '../_shared/m
 
 // Hosted bundling for this function depends on the entrypoint hash changing when shared
 // world-build request/response contracts change.
+const WORLD_BUILD_CONTRACT_VERSION = '2026-04-19-story-authorship-pipeline-v1'
+void WORLD_BUILD_CONTRACT_VERSION
 
 type PlaceholderAsset = {
   key: string

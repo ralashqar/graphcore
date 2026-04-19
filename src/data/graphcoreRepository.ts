@@ -606,14 +606,6 @@ async function invokeAuthedFunctionDirect(
 ) {
   const publishableKey = supabasePublishableKey
 
-  if (!publishableKey) {
-    throw new Error('Missing Supabase publishable key. Check VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY.')
-  }
-
-  if (!supabaseUrl) {
-    throw new Error('Missing Supabase URL. Check VITE_SUPABASE_URL.')
-  }
-
   async function invokeDirect(accessToken: string) {
     return fetch(`${supabaseUrl}/functions/v1/${functionName}`, {
       method: 'POST',
@@ -2844,10 +2836,6 @@ export async function cancelCinematicRun(request: CinematicRunCancelRequest): Pr
 
   if (!hasLiveSnapshotIds(request.snapshot)) {
     throw new Error('Sign in and load a live GraphCore draft before cancelling a cinematic run.')
-  }
-
-  if (!publishableKey) {
-    throw new Error('Missing Supabase publishable key. Check VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY.')
   }
 
   async function invokeDirect(accessToken: string) {

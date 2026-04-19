@@ -29,7 +29,6 @@ import {
 } from '../_shared/world-build-repository.ts'
 import {
   authorCinematicPlanSkeleton,
-  cinematicCreativeScriptAuthorshipRawSchema,
   cinematicCreativeScriptAuthorshipSystemPrompt,
   cinematicShotAuthorshipRawSchema,
   cinematicShotAuthorshipSystemPrompt,
@@ -37,6 +36,38 @@ import {
   evaluateCinematicScriptQuality,
   ingestCreativeScriptPlan,
 } from '../_shared/world-build-cinematics.ts'
+
+const REPAIR_CINEMATIC_CONTRACT_VERSION = '2026-04-19-story-authorship-pipeline-v2'
+void REPAIR_CINEMATIC_CONTRACT_VERSION
+const creativeScriptAuthorshipSchemaRuntime = z.object({
+  rawScriptMarkdown: z.preprocess((value) => {
+    if (typeof value === 'string') return value
+    if (Array.isArray(value)) {
+      return value.filter((entry): entry is string => typeof entry === 'string').join('\n')
+    }
+    return ''
+  }, z.string().default('')),
+  diagnostics: z.preprocess((value) => {
+    if (Array.isArray(value)) {
+      return value.filter((entry): entry is string => typeof entry === 'string').map((entry) => entry.trim()).filter(Boolean)
+    }
+    if (typeof value === 'string') {
+      return value.split('\n').map((entry) => entry.trim()).filter(Boolean)
+    }
+    if (value && typeof value === 'object') {
+      return Object.entries(value as Record<string, unknown>).map(([key, entry]) => `${key}: ${String(entry)}`)
+    }
+    return []
+  }, z.array(z.string()).default([])),
+  assistantNotes: z.preprocess((value) => {
+    if (typeof value === 'string') return value
+    if (Array.isArray(value)) {
+      return value.filter((entry): entry is string => typeof entry === 'string').join('\n')
+    }
+    if (value && typeof value === 'object') return JSON.stringify(value)
+    return undefined
+  }, z.string().optional()),
+})
 
 function buildStoryPromptContext(input: {
   prompt: string
@@ -308,7 +339,7 @@ Deno.serve(async (request) => {
                 currentShotState: currentScriptDoc.shots.filter((shot) => targetShotIds.includes(shot.id)),
                 currentDiagnostics: currentQuality.diagnostics.filter((entry) => !entry.shotId || targetShotIds.includes(entry.shotId)),
               },
-          schema: cinematicCreativeScriptAuthorshipRawSchema,
+          schema: creativeScriptAuthorshipSchemaRuntime,
           maxOutputTokens: 9000,
         })
       : await runStructuredWorldBuildModel({

@@ -16,7 +16,12 @@ import {
 } from './cinematics.ts'
 import { compileCinematicGraphFromScriptDoc } from './cinematicScriptCompiler.ts'
 import { ingestCinematicCreativeScriptToAuthoredShots } from './cinematicCreativeScript.ts'
-import { cinematicGraphSettingsSchema, cinematicPlanSchema } from './worldBuild.ts'
+import {
+  cinematicGraphSettingsSchema,
+  cinematicPlanSchema,
+  worldBuildPlanResponseSchema,
+  worldBuildStartRequestSchema,
+} from './worldBuild.ts'
 
 test('legacy UGC shots derive directing and reference packages', () => {
   const script = cinematicScriptDocSchema.parse({
@@ -253,6 +258,57 @@ test('world build cinematic graph settings allow nullable story string fields', 
 
   assert.equal(parsed.ctaStyle, null)
   assert.equal(parsed.proofMoment, null)
+})
+
+test('world build request and response schemas accept story authorship pipeline for cinematic graphs', () => {
+  const cinematicPlan = cinematicPlanSchema.parse({
+    graphName: 'Arena Duel',
+    graphSummary: 'Kharzag fights Brakk in the arena.',
+    entityRefs: [],
+    graphSettings: {
+      presetFamily: 'story_movie_tv',
+      storyScenePreset: 'duel_showdown',
+      storyLanguagePreset: 'tactical_combat',
+      authorshipPipeline: 'story_script_ingest_v1',
+    },
+    shots: [
+      {
+        id: 'shot_01_faceoff',
+        title: 'Face-off',
+        participantRefIds: ['kharzag', 'brakk'],
+        locationRefId: 'arena_1',
+      },
+    ],
+  })
+
+  const planResponse = worldBuildPlanResponseSchema.parse({
+    plannerMode: 'cinematic_build',
+    requestSummary: 'Build a cinematic duel.',
+    planItems: [],
+    cinematicPlan,
+    diagnostics: [],
+  })
+
+  const startRequest = worldBuildStartRequestSchema.parse({
+    plannerMode: 'cinematic_build',
+    prompt: 'Create a cinematic where Kharzag fights Brakk in the arena.',
+    requestSummary: 'Build a cinematic duel.',
+    snapshot: {
+      workspace: { id: 'workspace_1', name: 'Workspace', slug: 'workspace', role: 'owner' },
+      project: { id: 'project_1', name: 'Project', slug: 'project', summary: '', visibility: 'private' },
+      draft: { id: 'draft_1', name: 'Draft', version: 1, isPrimary: true, updatedAt: '2026-04-19T00:00:00.000Z', metadata: {} },
+      definitions: [],
+      graphs: [],
+      assets: [],
+      gameSpec: null,
+    },
+    planItems: [],
+    cinematicPlan: planResponse.cinematicPlan,
+    model: 'gpt-5.4',
+  })
+
+  assert.equal(planResponse.cinematicPlan?.graphSettings.authorshipPipeline, 'story_script_ingest_v1')
+  assert.equal(startRequest.cinematicPlan?.graphSettings.authorshipPipeline, 'story_script_ingest_v1')
 })
 
 test('story duel shots keep dense continuous action inside one readable exchange', () => {

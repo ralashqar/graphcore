@@ -21,6 +21,37 @@ let worldBuildBatchSchemaRuntime: z.ZodTypeAny | null = null
 let worldBuildBatchCinematicPlanSchemaRuntime: z.ZodTypeAny | null = null
 let worldBuildJobSchemaRuntime: z.ZodTypeAny | null = null
 let worldBuildStatusResponseSchemaRuntime: z.ZodTypeAny | null = null
+const AUTHOR_CINEMATIC_CONTRACT_VERSION = '2026-04-19-story-authorship-pipeline-v2'
+void AUTHOR_CINEMATIC_CONTRACT_VERSION
+const creativeScriptAuthorshipSchemaRuntime = z.object({
+  rawScriptMarkdown: z.preprocess((value) => {
+    if (typeof value === 'string') return value
+    if (Array.isArray(value)) {
+      return value.filter((entry): entry is string => typeof entry === 'string').join('\n')
+    }
+    return ''
+  }, z.string().default('')),
+  diagnostics: z.preprocess((value) => {
+    if (Array.isArray(value)) {
+      return value.filter((entry): entry is string => typeof entry === 'string').map((entry) => entry.trim()).filter(Boolean)
+    }
+    if (typeof value === 'string') {
+      return value.split('\n').map((entry) => entry.trim()).filter(Boolean)
+    }
+    if (value && typeof value === 'object') {
+      return Object.entries(value as Record<string, unknown>).map(([key, entry]) => `${key}: ${String(entry)}`)
+    }
+    return []
+  }, z.array(z.string()).default([])),
+  assistantNotes: z.preprocess((value) => {
+    if (typeof value === 'string') return value
+    if (Array.isArray(value)) {
+      return value.filter((entry): entry is string => typeof entry === 'string').join('\n')
+    }
+    if (value && typeof value === 'object') return JSON.stringify(value)
+    return undefined
+  }, z.string().optional()),
+})
 
 function buildStoryPromptContext(input: {
   prompt: string
@@ -148,7 +179,6 @@ Deno.serve(async (request) => {
     const { runStructuredWorldBuildModel } = worldBuildModule
     const {
       authorCinematicPlanSkeleton,
-      cinematicCreativeScriptAuthorshipRawSchema,
       cinematicCreativeScriptAuthorshipSystemPrompt,
       cinematicShotSkeletonPlannerSystemPrompt,
       coerceCinematicPlannerRaw,
@@ -471,7 +501,7 @@ Deno.serve(async (request) => {
                 lockedEntityRefs: planForAuthorship.entityRefs,
                 plannedShots: planForAuthorship.shots,
               },
-          schema: cinematicCreativeScriptAuthorshipRawSchema,
+          schema: creativeScriptAuthorshipSchemaRuntime,
           maxOutputTokens: 9000,
         })
       : await runStructuredWorldBuildModel({

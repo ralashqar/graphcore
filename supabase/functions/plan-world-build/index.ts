@@ -4,6 +4,9 @@ import { z } from 'npm:zod@4'
 
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
 
+const WORLD_BUILD_CONTRACT_VERSION = '2026-04-19-story-authorship-pipeline-v1'
+void WORLD_BUILD_CONTRACT_VERSION
+
 const plannerItemSchema = z.object({
   id: z.string(),
   kind: z.enum(['character', 'environment', 'item']),
