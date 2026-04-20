@@ -1035,12 +1035,13 @@ test('story take still prompt stays compact and visual', () => {
     representativeFrameSeconds: 2.2,
     sceneBias: 'duel showdown',
     cameraBias: 'tactical combat',
-    entitySummaries: ['Kharzag: orc warrior.', 'Brakk: tauren bull-man.'],
+    entitySummaries: ['Ingredient refs: Kharzag, Brakk.'],
   })
 
   assert.match(prompt, /Create one cinematic still image\./i)
   assert.match(prompt, /Visual: Kharzag and Brakk clash swords in the arena\./i)
-  assert.match(prompt, /Kharzag: orc warrior\./i)
+  assert.match(prompt, /Ingredient refs: Kharzag, Brakk\./i)
+  assert.doesNotMatch(prompt, /Use the supplied reference images as the canonical look/i)
   assert.doesNotMatch(prompt, /Scene bias:/i)
   assert.doesNotMatch(prompt, /Camera bias:/i)
   assert.doesNotMatch(prompt, /Representative frame:/i)

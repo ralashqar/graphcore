@@ -39,7 +39,7 @@ export type PatchSessionView = {
 export type AuthMode = 'sign_in' | 'sign_up' | 'magic_link'
 
 export const workspaceTabs: Array<{ id: WorkspaceTab; label: string; icon: EntityIconId }> = [
-  { id: 'graph', label: 'Graph', icon: 'graph' },
+  { id: 'graph', label: 'World', icon: 'graph' },
   { id: 'content', label: 'Content', icon: 'content' },
   { id: 'characters', label: 'Characters', icon: 'character' },
   { id: 'environments', label: 'Environments', icon: 'environment' },

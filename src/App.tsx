@@ -44,6 +44,21 @@ import type {
   ProjectSnapshot,
 } from './domain/graphcore'
 import { createAssemblyGraph } from './domain/environmentAssembly'
+import type {
+  WorldEntity,
+  WorldEntityCreateInput,
+  WorldRelationshipCreateInput,
+  WorldViewCreateInput,
+} from './domain/worldGraph'
+import {
+  buildLocalExpansion,
+  buildLocalStarterWorld,
+  createDefaultWorldView,
+  definitionKindForWorldEntity,
+  deriveMissingWorldEntities,
+  deriveMissingWorldViews,
+  hasMissingWorldGraphBackfill,
+} from './domain/worldGraphHelpers'
 import { createGraphScaffold } from './domain/graphScaffold'
 import { applyPatchOperations } from './domain/patchUtils'
 import { getResolvedDefinition3dBinding, getResolvedRender3dBinding } from './domain/render3d'
@@ -65,8 +80,8 @@ import type { AuthMode, GameSummary, LoadedState, PatchSessionView, WorkspaceTab
 import { workspaceTabs } from './shared/workspace'
 import { supabase } from './utils/supabase'
 
-const GraphWorkspace = lazy(() =>
-  import('./features/graphWorkspace').then((module) => ({ default: module.GraphWorkspace })),
+const WorldGraphPage = lazy(() =>
+  import('./features/worldGraphPage').then((module) => ({ default: module.WorldGraphPage })),
 )
 const ContentWorkspace = lazy(() =>
   import('./features/itemAssetWorkspace').then((module) => ({ default: module.ContentWorkspace })),
@@ -183,8 +198,27 @@ function normalizeDefinitionIdentityConflicts(snapshot: ProjectSnapshot) {
   }
 }
 
+function ensureWorldGraphBackfill(snapshot: ProjectSnapshot) {
+  const backfilledEntities = deriveMissingWorldEntities(snapshot)
+  const hasViews = snapshot.worldViews.length > 0
+  const defaultView = deriveMissingWorldViews({
+    worldEntities: [...snapshot.worldEntities, ...backfilledEntities],
+    worldViews: snapshot.worldViews,
+  })
+
+  if (backfilledEntities.length === 0 && defaultView.length === 0) {
+    return snapshot
+  }
+
+  return {
+    ...snapshot,
+    worldEntities: [...snapshot.worldEntities, ...backfilledEntities],
+    worldViews: hasViews ? snapshot.worldViews : defaultView,
+  }
+}
+
 function normalizeSnapshot(snapshot: ProjectSnapshot) {
-  const dedupedSnapshot = normalizeDefinitionIdentityConflicts(dedupeAssetsByKey(snapshot))
+  const dedupedSnapshot = ensureWorldGraphBackfill(normalizeDefinitionIdentityConflicts(dedupeAssetsByKey(snapshot)))
   let graphsChanged = false
   const normalizedGraphs = dedupedSnapshot.graphs.map((graph) => {
     const nextGraph = normalizeCinematicGraphProjection(graph)
@@ -748,12 +782,17 @@ export default function App() {
   const selectedEdgeKey = useEditorStore((state) => state.selectedEdgeKey)
   const selectedGraphKey = useEditorStore((state) => state.selectedGraphKey)
   const selectedNodeKey = useEditorStore((state) => state.selectedNodeKey)
+  const selectedWorldEntityKey = useEditorStore((state) => state.selectedWorldEntityKey)
+  const selectedWorldViewKey = useEditorStore((state) => state.selectedWorldViewKey)
   const setSelectedDefinitionKey = useEditorStore((state) => state.setSelectedDefinitionKey)
   const setSelectedEdgeKey = useEditorStore((state) => state.setSelectedEdgeKey)
   const setSelectedGraphKey = useEditorStore((state) => state.setSelectedGraphKey)
   const setSelectedNodeKey = useEditorStore((state) => state.setSelectedNodeKey)
+  const setSelectedWorldEntityKey = useEditorStore((state) => state.setSelectedWorldEntityKey)
+  const setSelectedWorldViewKey = useEditorStore((state) => state.setSelectedWorldViewKey)
   const sessionRef = useRef<Session | null>(null)
   const snapshotRef = useRef<ProjectSnapshot | null>(null)
+  const worldGraphSyncPromiseRef = useRef<Promise<ProjectSnapshot> | null>(null)
   const worldBuildPollInFlightRef = useRef(false)
   const worldBuildCinematicAuthorInFlightRef = useRef(new Set<string>())
   const worldBuildPollFailureCountRef = useRef(0)
@@ -828,6 +867,8 @@ export default function App() {
     const nextArchetype = snapshotToHydrate.archetypes.find((archetype) => archetype.key === selectedArchetypeKey) ?? snapshotToHydrate.archetypes[0] ?? null
     const nextGraph = snapshotToHydrate.graphs.find((graph) => graph.key === selectedGraphKey) ?? snapshotToHydrate.graphs[0] ?? null
     const nextAsset = snapshotToHydrate.assets.find((asset) => asset.key === selectedAssetKey) ?? snapshotToHydrate.assets[0] ?? null
+    const nextWorldEntity = snapshotToHydrate.worldEntities.find((entity) => entity.key === selectedWorldEntityKey) ?? snapshotToHydrate.worldEntities[0] ?? null
+    const nextWorldView = snapshotToHydrate.worldViews.find((view) => view.key === selectedWorldViewKey) ?? snapshotToHydrate.worldViews[0] ?? null
     const nextSelectedNodeKey = selectedNodeKey && nextGraph?.nodes.some((node) => node.key === selectedNodeKey)
       ? selectedNodeKey
       : null
@@ -854,6 +895,8 @@ export default function App() {
       setSelectedDefinitionKey(nextDefinition?.key ?? null)
       setSelectedAssetKey(nextAsset?.key ?? null)
       setSelectedArchetypeKey(nextArchetype?.key ?? null)
+      setSelectedWorldEntityKey(nextWorldEntity?.key ?? null)
+      setSelectedWorldViewKey(nextWorldView?.key ?? null)
       setSelectedPatchIndex(0)
       setHasLocalSnapshotChanges(restoredUnsavedSnapshot)
       setBundle(compileBundle(snapshotToHydrate))
@@ -1605,7 +1648,7 @@ export default function App() {
   const selectedArchetype = useMemo(() => snapshot?.archetypes.find((archetype) => archetype.key === selectedArchetypeKey) ?? snapshot?.archetypes[0] ?? null, [selectedArchetypeKey, snapshot])
   const promptTarget =
     activeTab === 'graph'
-      ? (selectedNode ? 'node' : 'graph')
+      ? 'graph'
       : activeTab === 'environments'
         ? 'environment'
         : 'content'
@@ -1635,6 +1678,41 @@ export default function App() {
       return next
     })
   }
+
+  function commitPersistedSnapshot(nextSnapshot: ProjectSnapshot) {
+    const normalizedSnapshot = normalizeSnapshot(nextSnapshot)
+    setSnapshot(normalizedSnapshot)
+    setHasLocalSnapshotChanges(false)
+    setBundle(compileBundle(normalizedSnapshot))
+  }
+
+  async function syncWorldGraphBackfillIfNeeded(baseSnapshot: ProjectSnapshot) {
+    if (loadedState?.source !== 'supabase') return baseSnapshot
+    if (!hasMissingWorldGraphBackfill(baseSnapshot)) return baseSnapshot
+
+    if (!worldGraphSyncPromiseRef.current) {
+      worldGraphSyncPromiseRef.current = workspaceService
+        .syncWorldGraphFromDefinitions(baseSnapshot)
+        .then((nextSnapshot) => {
+          commitPersistedSnapshot(nextSnapshot)
+          return nextSnapshot
+        })
+        .finally(() => {
+          worldGraphSyncPromiseRef.current = null
+        })
+    }
+
+    return worldGraphSyncPromiseRef.current
+  }
+
+  useEffect(() => {
+    if (!snapshot || loadedState?.source !== 'supabase') return
+    if (!hasMissingWorldGraphBackfill(snapshot)) return
+
+    void syncWorldGraphBackfillIfNeeded(snapshot).catch((error) => {
+      console.error('[GraphCore] world graph definition sync failed.', error)
+    })
+  }, [loadedState?.source, snapshot])
 
   function createGraph(input: GraphCreateInput) {
     const suffix = uniqueKey(snapshot?.graphs.map((graph) => graph.key) ?? [], input.key.replace(/^graph\./, ''))
@@ -2069,6 +2147,338 @@ export default function App() {
   function createEnvironment(archetypeKey: string | null = null) {
     createDefinitionOfKind('environment', archetypeKey)
     setActiveTab('environments')
+  }
+
+  function buildLocalWorldLinkedDefinition(current: ProjectSnapshot, input: WorldEntityCreateInput) {
+    const definitionKind = definitionKindForWorldEntity(input.nodeType)
+    if (!definitionKind || input.linkedDefinitionKey) {
+      return { definitions: current.definitions, linkedDefinitionKey: input.linkedDefinitionKey ?? null }
+    }
+
+    const kindPrefix = `${definitionKind}.`
+    const existingKindKeys = current.definitions
+      .filter((definition) => definition.kind === definitionKind)
+      .map((definition) => definition.key.startsWith(kindPrefix) ? definition.key.slice(kindPrefix.length) : definition.key)
+    const nextKey = `${definitionKind}.${uniqueKey(existingKindKeys, input.name)}`
+    const nextDefinition: DefinitionBase = {
+      id: createLocalEntityId('definition-item'),
+      key: nextKey,
+      kind: definitionKind,
+      name: input.name,
+      summary: input.summary,
+      status: 'draft',
+      iconAssetKey: input.thumbnailAssetKey ?? null,
+      archetypeKey: null,
+      tags: input.tags ?? [],
+      schemaVersion: 1,
+      metadata: {},
+      llmHints: {},
+      assetRefs: [],
+      definitionData: {},
+      fieldValues: [],
+      customFields: [],
+      components: buildDefaultDefinitionComponents(definitionKind),
+    }
+
+    return {
+      definitions: [nextDefinition, ...current.definitions],
+      linkedDefinitionKey: nextDefinition.key,
+    }
+  }
+
+  function createWorldEntityLocally(input: WorldEntityCreateInput) {
+    if (!snapshot) return
+    let createdEntityKey: string | null = null
+    let createdViewKey: string | null = null
+    applySnapshotUpdate((current) => {
+      const linkResult = buildLocalWorldLinkedDefinition(current, input)
+      const nextKey = `world.${input.nodeType}.${uniqueKey(current.worldEntities.map((entity) => entity.key.replace(/^world\.[^.]+\./, '')), input.name)}`
+      const nextEntity: WorldEntity = {
+        id: createLocalEntityId('world-entity'),
+        key: nextKey,
+        name: input.name,
+        summary: input.summary,
+        nodeType: input.nodeType,
+        aliases: input.aliases ?? [],
+        tags: input.tags ?? [],
+        status: input.status ?? 'active',
+        thumbnailAssetKey: input.thumbnailAssetKey ?? null,
+        linkedDefinitionKey: linkResult.linkedDefinitionKey,
+        source: input.source ?? 'user',
+        customProperties: input.customProperties ?? {},
+        metadata: input.metadata ?? {},
+      }
+      createdEntityKey = nextEntity.key
+      const nextViews = current.worldViews.length > 0 ? current.worldViews : [createDefaultWorldView()]
+      createdViewKey = nextViews[0]?.key ?? null
+      return {
+        ...current,
+        definitions: linkResult.definitions,
+        worldEntities: [...current.worldEntities, nextEntity],
+        worldViews: nextViews,
+      }
+    })
+    if (createdEntityKey) setSelectedWorldEntityKey(createdEntityKey)
+    if (createdViewKey) setSelectedWorldViewKey(createdViewKey)
+  }
+
+  async function createWorldEntity(input: WorldEntityCreateInput) {
+    if (!snapshot) return
+    if (loadedState?.source === 'supabase') {
+      const syncedSnapshot = await syncWorldGraphBackfillIfNeeded(snapshot)
+      const nextSnapshot = await workspaceService.createWorldEntity(syncedSnapshot, input)
+      commitPersistedSnapshot(nextSnapshot)
+      return
+    }
+    createWorldEntityLocally(input)
+  }
+
+  async function updateWorldEntity(entityKey: string, changes: Partial<WorldEntityCreateInput>) {
+    if (!snapshot) return
+    if (loadedState?.source === 'supabase') {
+      const syncedSnapshot = await syncWorldGraphBackfillIfNeeded(snapshot)
+      const nextSnapshot = await workspaceService.updateWorldEntity(syncedSnapshot, entityKey, changes)
+      commitPersistedSnapshot(nextSnapshot)
+      return
+    }
+    applySnapshotUpdate((current) => ({
+      ...current,
+      worldEntities: current.worldEntities.map((entity) => entity.key === entityKey ? { ...entity, ...changes } : entity),
+    }))
+  }
+
+  async function deleteWorldEntity(entityKey: string) {
+    if (!snapshot) return
+    if (loadedState?.source === 'supabase') {
+      const syncedSnapshot = await syncWorldGraphBackfillIfNeeded(snapshot)
+      const nextSnapshot = await workspaceService.deleteWorldEntity(syncedSnapshot, entityKey)
+      commitPersistedSnapshot(nextSnapshot)
+    } else {
+      applySnapshotUpdate((current) => ({
+        ...current,
+        worldEntities: current.worldEntities.filter((entity) => entity.key !== entityKey),
+        worldRelationships: current.worldRelationships.filter((relationship) => relationship.sourceEntityKey !== entityKey && relationship.targetEntityKey !== entityKey),
+        worldViews: current.worldViews.map((view) => ({
+          ...view,
+          rootEntityKey: view.rootEntityKey === entityKey ? null : view.rootEntityKey,
+          nodePositions: Object.fromEntries(Object.entries(view.nodePositions).filter(([key]) => key !== entityKey)),
+        })),
+      }))
+    }
+    if (selectedWorldEntityKey === entityKey) setSelectedWorldEntityKey(null)
+  }
+
+  async function createWorldRelationship(input: WorldRelationshipCreateInput) {
+    if (!snapshot) return
+    if (loadedState?.source === 'supabase') {
+      const syncedSnapshot = await syncWorldGraphBackfillIfNeeded(snapshot)
+      const nextSnapshot = await workspaceService.createWorldRelationship(syncedSnapshot, input)
+      commitPersistedSnapshot(nextSnapshot)
+      return
+    }
+    applySnapshotUpdate((current) => ({
+      ...current,
+      worldRelationships: [
+        ...current.worldRelationships,
+        {
+          id: createLocalEntityId('world-relationship'),
+          key: `world.relationship.${uniqueKey(current.worldRelationships.map((relationship) => relationship.key.replace(/^world\.relationship\./, '')), `${input.sourceEntityKey}-${input.verb}-${input.targetEntityKey}`)}`,
+          sourceEntityKey: input.sourceEntityKey,
+          targetEntityKey: input.targetEntityKey,
+          verb: input.verb,
+          direction: input.direction ?? 'outbound',
+          strength: input.strength ?? null,
+          confidence: input.confidence ?? null,
+          source: input.source ?? 'user',
+          notes: input.notes ?? '',
+          state: input.state ?? 'confirmed',
+          metadata: input.metadata ?? {},
+        },
+      ],
+    }))
+  }
+
+  async function deleteWorldRelationship(relationshipKey: string) {
+    if (!snapshot) return
+    if (loadedState?.source === 'supabase') {
+      const syncedSnapshot = await syncWorldGraphBackfillIfNeeded(snapshot)
+      const nextSnapshot = await workspaceService.deleteWorldRelationship(syncedSnapshot, relationshipKey)
+      commitPersistedSnapshot(nextSnapshot)
+      return
+    }
+    applySnapshotUpdate((current) => ({
+      ...current,
+      worldRelationships: current.worldRelationships.filter((relationship) => relationship.key !== relationshipKey),
+    }))
+  }
+
+  async function createWorldView(input: WorldViewCreateInput) {
+    if (!snapshot) return
+    if (loadedState?.source === 'supabase') {
+      const syncedSnapshot = await syncWorldGraphBackfillIfNeeded(snapshot)
+      const nextSnapshot = await workspaceService.createWorldView(syncedSnapshot, input)
+      commitPersistedSnapshot(nextSnapshot)
+      const latestView = nextSnapshot.worldViews[nextSnapshot.worldViews.length - 1] ?? null
+      if (latestView) setSelectedWorldViewKey(latestView.key)
+      return
+    }
+
+    const nextView = {
+      ...createDefaultWorldView(input.name),
+      ...input,
+      id: createLocalEntityId('world-view'),
+      key: `world.view.${uniqueKey(snapshot.worldViews.map((view) => view.key.replace(/^world\.view\./, '')), input.name)}`,
+    }
+    applySnapshotUpdate((current) => ({
+      ...current,
+      worldViews: [...current.worldViews, nextView],
+    }))
+    setSelectedWorldViewKey(nextView.key)
+  }
+
+  async function updateWorldView(viewKey: string, changes: Partial<WorldViewCreateInput>) {
+    if (!snapshot) return
+    if (loadedState?.source === 'supabase') {
+      const syncedSnapshot = await syncWorldGraphBackfillIfNeeded(snapshot)
+      const nextSnapshot = await workspaceService.updateWorldView(syncedSnapshot, viewKey, changes)
+      commitPersistedSnapshot(nextSnapshot)
+      return
+    }
+    applySnapshotUpdate((current) => ({
+      ...current,
+      worldViews: current.worldViews.map((view) => view.key === viewKey ? { ...view, ...changes } : view),
+    }))
+  }
+
+  async function generateStarterWorld(prompt: string) {
+    if (!snapshot) return
+    if (loadedState?.source === 'supabase') {
+      const syncedSnapshot = await syncWorldGraphBackfillIfNeeded(snapshot)
+      const nextSnapshot = await workspaceService.generateStarterWorld({
+        prompt,
+        snapshot: {
+          project: {
+            id: syncedSnapshot.project.id,
+            name: syncedSnapshot.project.name,
+            summary: syncedSnapshot.project.summary,
+          },
+          draft: {
+            id: syncedSnapshot.draft.id,
+            name: syncedSnapshot.draft.name,
+          },
+          definitions: syncedSnapshot.definitions.map((definition) => ({
+            key: definition.key,
+            kind: definition.kind,
+            name: definition.name,
+            summary: definition.summary,
+          })),
+          worldEntities: syncedSnapshot.worldEntities,
+          worldRelationships: syncedSnapshot.worldRelationships,
+        },
+        model: promptModel,
+      })
+      commitPersistedSnapshot(nextSnapshot)
+      return
+    }
+
+    const starter = buildLocalStarterWorld(prompt)
+    applySnapshotUpdate((current) => ({
+      ...current,
+      definitions: [
+        ...starter.definitions
+          .filter((entry) => !current.definitions.some((definition) => definition.key === entry.key))
+          .map((entry) => ({
+            id: createLocalEntityId('definition-item'),
+            key: entry.key,
+            kind: entry.kind,
+            name: entry.name,
+            summary: entry.summary,
+            status: 'draft' as const,
+            iconAssetKey: null,
+            archetypeKey: null,
+            tags: [],
+            schemaVersion: 1,
+            metadata: {},
+            llmHints: {},
+            assetRefs: [],
+            definitionData: {},
+            fieldValues: [],
+            customFields: [],
+            components: buildDefaultDefinitionComponents(entry.kind),
+          })),
+        ...current.definitions,
+      ],
+      worldEntities: current.worldEntities.length > 0 ? current.worldEntities : starter.entities,
+      worldRelationships: current.worldRelationships.length > 0 ? current.worldRelationships : starter.relationships,
+      worldViews: current.worldViews.length > 0 ? current.worldViews : [starter.view],
+    }))
+  }
+
+  async function generateWorldExpansion(entityKey: string) {
+    if (!snapshot) return
+    const rootEntity = snapshot.worldEntities.find((entity) => entity.key === entityKey) ?? null
+    if (!rootEntity) return
+
+    if (loadedState?.source === 'supabase') {
+      const syncedSnapshot = await syncWorldGraphBackfillIfNeeded(snapshot)
+      const nextSnapshot = await workspaceService.generateWorldExpansion({
+        rootEntityKey: entityKey,
+        snapshot: {
+          project: {
+            id: syncedSnapshot.project.id,
+            name: syncedSnapshot.project.name,
+            summary: syncedSnapshot.project.summary,
+          },
+          draft: {
+            id: syncedSnapshot.draft.id,
+            name: syncedSnapshot.draft.name,
+          },
+          definitions: syncedSnapshot.definitions.map((definition) => ({
+            key: definition.key,
+            kind: definition.kind,
+            name: definition.name,
+            summary: definition.summary,
+          })),
+          worldEntities: syncedSnapshot.worldEntities,
+          worldRelationships: syncedSnapshot.worldRelationships,
+        },
+        model: promptModel,
+      })
+      commitPersistedSnapshot(nextSnapshot)
+      return
+    }
+
+    const expansion = buildLocalExpansion(rootEntity)
+    applySnapshotUpdate((current) => ({
+      ...current,
+      definitions: [
+        ...expansion.definitions
+          .filter((entry) => !current.definitions.some((definition) => definition.key === entry.key))
+          .map((entry) => ({
+            id: createLocalEntityId('definition-item'),
+            key: entry.key,
+            kind: entry.kind,
+            name: entry.name,
+            summary: entry.summary,
+            status: 'draft' as const,
+            iconAssetKey: null,
+            archetypeKey: null,
+            tags: [],
+            schemaVersion: 1,
+            metadata: {},
+            llmHints: {},
+            assetRefs: [],
+            definitionData: {},
+            fieldValues: [],
+            customFields: [],
+            components: buildDefaultDefinitionComponents(entry.kind),
+          })),
+        ...current.definitions,
+      ],
+      worldEntities: [...current.worldEntities, ...expansion.entities.filter((entity) => !current.worldEntities.some((existing) => existing.key === entity.key))],
+      worldRelationships: [...current.worldRelationships, ...expansion.relationships.filter((relationship) => !current.worldRelationships.some((existing) => existing.key === relationship.key))],
+      worldViews: current.worldViews.length > 0 ? current.worldViews : [createDefaultWorldView()],
+    }))
   }
 
   function createEnvironmentAssemblyGraph(environmentKey: string) {
@@ -3789,32 +4199,55 @@ export default function App() {
         <section className="workspace-stage">
           <Suspense fallback={<div className="detail-stack compact"><span className="eyebrow">Loading</span><h3>Preparing workspace…</h3></div>}>
             {activeTab === 'graph' ? (
-              <GraphWorkspace
+              <WorldGraphPage
                 assets={snapshot.assets}
-                deletingGraphKey={deletingGraphKey}
                 definitions={snapshot.definitions}
-                diagnostics={bundle.diagnostics}
-                worldBuildBatches={snapshot.worldBuildBatches}
-                selectedEdge={selectedEdge}
-                selectedGraph={selectedGraph}
-                selectedNode={selectedNode}
                 snapshotGraphs={snapshot.graphs}
-                onClearSelection={clearGraphSelection}
-                onConnectEdge={connectEdge}
-                onCreateGraph={createGraph}
-                onCreateNode={createNode}
-                onDeleteEdge={deleteEdge}
-                onDeleteGraph={deleteGraph}
-                onDeleteNode={deleteNode}
-                onDuplicateGraph={duplicateGraph}
-                onDuplicateNode={duplicateNode}
-                onMoveNode={moveNode}
-                onSelectEdge={setSelectedEdgeKey}
-                onSelectGraph={setSelectedGraphKey}
-                onSelectNode={setSelectedNodeKey}
-                onUpdateEdge={updateEdge}
-                onUpdateGraph={updateGraph}
-                onUpdateNode={updateNode}
+                worldEntities={snapshot.worldEntities}
+                worldRelationships={snapshot.worldRelationships}
+                worldViews={snapshot.worldViews}
+                selectedWorldEntityKey={selectedWorldEntityKey}
+                selectedWorldViewKey={selectedWorldViewKey}
+                onSelectWorldEntity={setSelectedWorldEntityKey}
+                onSelectWorldView={setSelectedWorldViewKey}
+                onCreateWorldEntity={createWorldEntity}
+                onUpdateWorldEntity={updateWorldEntity}
+                onDeleteWorldEntity={deleteWorldEntity}
+                onCreateWorldRelationship={createWorldRelationship}
+                onDeleteWorldRelationship={deleteWorldRelationship}
+                onCreateWorldView={createWorldView}
+                onUpdateWorldView={updateWorldView}
+                onGenerateStarterWorld={generateStarterWorld}
+                onGenerateWorldExpansion={generateWorldExpansion}
+                onOpenDefinitionLink={openDefinitionWorkspace}
+                onOpenCinematicGraph={openCinematicWorkspace}
+                legacyGraphProps={{
+                  assets: snapshot.assets,
+                  deletingGraphKey,
+                  definitions: snapshot.definitions,
+                  diagnostics: bundle.diagnostics,
+                  worldBuildBatches: snapshot.worldBuildBatches,
+                  selectedEdge,
+                  selectedGraph,
+                  selectedNode,
+                  snapshotGraphs: snapshot.graphs,
+                  onClearSelection: clearGraphSelection,
+                  onConnectEdge: connectEdge,
+                  onCreateGraph: createGraph,
+                  onCreateNode: createNode,
+                  onDeleteEdge: deleteEdge,
+                  onDeleteGraph: deleteGraph,
+                  onDeleteNode: deleteNode,
+                  onDuplicateGraph: duplicateGraph,
+                  onDuplicateNode: duplicateNode,
+                  onMoveNode: moveNode,
+                  onSelectEdge: setSelectedEdgeKey,
+                  onSelectGraph: setSelectedGraphKey,
+                  onSelectNode: setSelectedNodeKey,
+                  onUpdateEdge: updateEdge,
+                  onUpdateGraph: updateGraph,
+                  onUpdateNode: updateNode,
+                }}
               />
             ) : null}
             {activeTab === 'cinematics' ? (

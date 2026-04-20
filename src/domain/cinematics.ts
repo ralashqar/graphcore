@@ -1975,11 +1975,8 @@ export function buildStoryTakeStillImagePrompt(input: {
 }) {
   return [
     'Create one cinematic still image.',
-    'Use the supplied reference images as the canonical look for character identity, wardrobe, props, environment, lighting, and materials.',
     input.representativeStillPrompt.trim() ? `Visual: ${input.representativeStillPrompt.trim().replace(/\.$/, '')}.` : null,
     ...(input.entitySummaries ?? []),
-    'Keep the framing, staging, and visible ingredients grounded in that described image.',
-    'Show only what should be visible on screen.',
     'No text, captions, or borders.',
   ].filter((entry): entry is string => Boolean(entry)).join(' ')
 }

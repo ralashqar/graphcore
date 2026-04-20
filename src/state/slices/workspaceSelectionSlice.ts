@@ -3,10 +3,14 @@ export type WorkspaceSelectionSlice = {
   selectedGraphKey: string | null
   selectedNodeKey: string | null
   selectedEdgeKey: string | null
+  selectedWorldEntityKey: string | null
+  selectedWorldViewKey: string | null
   setSelectedDefinitionKey: (key: string | null) => void
   setSelectedGraphKey: (key: string | null) => void
   setSelectedNodeKey: (key: string | null) => void
   setSelectedEdgeKey: (key: string | null) => void
+  setSelectedWorldEntityKey: (key: string | null) => void
+  setSelectedWorldViewKey: (key: string | null) => void
 }
 
 export const createWorkspaceSelectionSlice = (
@@ -16,6 +20,8 @@ export const createWorkspaceSelectionSlice = (
   selectedGraphKey: null,
   selectedNodeKey: null,
   selectedEdgeKey: null,
+  selectedWorldEntityKey: null,
+  selectedWorldViewKey: null,
   setSelectedDefinitionKey: (selectedDefinitionKey) =>
     set((state) => (state.selectedDefinitionKey === selectedDefinitionKey ? state : { selectedDefinitionKey })),
   setSelectedGraphKey: (selectedGraphKey) =>
@@ -36,4 +42,8 @@ export const createWorkspaceSelectionSlice = (
         ? state
         : { selectedEdgeKey, selectedNodeKey: null },
     ),
+  setSelectedWorldEntityKey: (selectedWorldEntityKey) =>
+    set((state) => (state.selectedWorldEntityKey === selectedWorldEntityKey ? state : { selectedWorldEntityKey })),
+  setSelectedWorldViewKey: (selectedWorldViewKey) =>
+    set((state) => (state.selectedWorldViewKey === selectedWorldViewKey ? state : { selectedWorldViewKey })),
 })

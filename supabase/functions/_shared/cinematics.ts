@@ -338,6 +338,22 @@ function buildConciseSourceSummaries(
   })
 }
 
+function buildStillIngredientRefs(
+  sourceInputs: Array<{
+    definition?: { name?: string | null } | null
+    node: { title: string }
+  }>,
+) {
+  const labels = Array.from(new Set(
+    sourceInputs
+      .map((entry) => (entry.definition?.name ?? entry.node.title ?? '').trim())
+      .filter((entry) => entry.length > 0),
+  ))
+
+  if (labels.length === 0) return []
+  return [`Ingredient refs: ${labels.join(', ')}.`]
+}
+
 export function resolveShotStillReferenceImageUrls(
   snapshot: { gameSpec?: unknown | null },
   graph: SnapshotGraph,
@@ -1327,7 +1343,6 @@ export function buildStillPrompt(input: {
   shotNode: SnapshotNode
   sourceInputs: ReturnType<typeof resolveShotSources>
 }) {
-  const settings = getCinematicSettings(input.snapshot.gameSpec ?? null, input.graph.metadata)
   const shot = getCinematicShotNodeConfig(input.shotNode)
   return buildStoryTakeStillImagePrompt({
     representativeStillPrompt:
@@ -1335,13 +1350,7 @@ export function buildStillPrompt(input: {
       || (input.shotNode.body?.text ? String(input.shotNode.body.text).trim() : '')
       || shot.beat.trim()
       || shot.title,
-    sceneBias: settings.presetFamily === 'story_movie_tv'
-      ? getCinematicStoryScenePresetLabel(shot.storyScenePreset ?? settings.storyScenePreset ?? null)
-      : null,
-    cameraBias: settings.presetFamily === 'story_movie_tv'
-      ? getCinematicStoryLanguagePresetLabel(shot.storyLanguagePreset ?? settings.storyLanguagePreset ?? null)
-      : null,
-    entitySummaries: buildConciseSourceSummaries(input.sourceInputs),
+    entitySummaries: buildStillIngredientRefs(input.sourceInputs),
   })
 }
 
@@ -1351,20 +1360,13 @@ export function buildTakeStillPrompt(input: {
   takeNode: SnapshotNode
   sourceInputs: ReturnType<typeof resolveTakeSources>
 }) {
-  const settings = getCinematicSettings(input.snapshot.gameSpec ?? null, input.graph.metadata)
   const take = getCinematicTakeNodeConfig(input.takeNode)
   return buildStoryTakeStillImagePrompt({
     representativeStillPrompt: requireRepresentativeStillPrompt(
       take.representativeStillPrompt,
       `Take "${input.takeNode.title}"`,
     ),
-    sceneBias: settings.presetFamily === 'story_movie_tv'
-      ? getCinematicStoryScenePresetLabel(take.storyScenePreset ?? settings.storyScenePreset ?? null)
-      : null,
-    cameraBias: settings.presetFamily === 'story_movie_tv'
-      ? getCinematicStoryLanguagePresetLabel(take.storyLanguagePreset ?? settings.storyLanguagePreset ?? null)
-      : null,
-    entitySummaries: buildConciseSourceSummaries(input.sourceInputs),
+    entitySummaries: buildStillIngredientRefs(input.sourceInputs),
   })
 }
 
