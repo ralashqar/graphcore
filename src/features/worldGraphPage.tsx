@@ -3,17 +3,21 @@ import '@xyflow/react/dist/style.css'
 import ELK from 'elkjs/lib/elk.bundled.js'
 import {
   Background,
+  BaseEdge,
   Controls,
+  EdgeLabelRenderer,
   Handle,
   Position,
   ReactFlow,
+  getBezierPath,
   type Connection,
   type Edge,
+  type EdgeProps,
   type Node,
   type NodeProps,
   type ReactFlowInstance,
 } from '@xyflow/react'
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react'
+import { memo, useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react'
 
 import { resolveAssetSourceUrl } from '../domain/assets'
 import type { AssetDefinition, DefinitionBase, GraphDefinition } from '../domain/graphcore'
@@ -105,6 +109,8 @@ type WorldNodeData = {
 
 type WorldFlowEdgeData = {
   kind: 'relationship' | 'connection'
+  onSelect?: (edgeKey: string) => void
+  onContextMenu?: (edgeKey: string, position: { x: number; y: number }) => void
 }
 
 type EntityComposerState = {
@@ -150,8 +156,15 @@ type ContextMenuState =
 
 const elk = new ELK()
 
-const nodeTypes = {
-  worldNode: WorldNodeCard,
+type EntityOverviewDraftState = {
+  entityKey: string
+  name: string
+  summary: string
+  dirty: boolean
+}
+
+function keyForWorldNodeRecord(record: WorldGraphNodeRecord) {
+  return record.kind === 'entity' ? record.entity.key : record.kind === 'operator' ? record.operator.key : record.result.key
 }
 
 function nodeShellStyle(record: WorldGraphNodeRecord, selected: boolean, dimmed: boolean): CSSProperties {
@@ -223,6 +236,71 @@ function WorldNodeCard({ data, selected }: NodeProps<Node<WorldNodeData>>) {
   )
 }
 
+function WorldEdge({
+  id,
+  sourceX,
+  sourceY,
+  targetX,
+  targetY,
+  sourcePosition,
+  targetPosition,
+  markerEnd,
+  style,
+  data,
+  label,
+  selected,
+}: EdgeProps<Edge<WorldFlowEdgeData>>) {
+  const [edgePath, labelX, labelY] = getBezierPath({
+    sourceX,
+    sourceY,
+    sourcePosition,
+    targetX,
+    targetY,
+    targetPosition,
+  })
+  const labelText = typeof label === 'string' ? label.trim() : ''
+
+  return (
+    <>
+      <BaseEdge id={id} path={edgePath} markerEnd={markerEnd} style={style} interactionWidth={28} />
+      {labelText ? (
+        <EdgeLabelRenderer>
+          <button
+            className={`world-edge-label${selected ? ' is-selected' : ''}`}
+            onClick={(event) => {
+              event.preventDefault()
+              event.stopPropagation()
+              data?.onSelect?.(id)
+            }}
+            onContextMenu={(event) => {
+              event.preventDefault()
+              event.stopPropagation()
+              data?.onContextMenu?.(id, { x: event.clientX, y: event.clientY })
+            }}
+            style={{
+              transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
+            }}
+            type="button"
+          >
+            {labelText}
+          </button>
+        </EdgeLabelRenderer>
+      ) : null}
+    </>
+  )
+}
+
+const MemoWorldNodeCard = memo(WorldNodeCard)
+const MemoWorldEdge = memo(WorldEdge)
+
+const nodeTypes = {
+  worldNode: MemoWorldNodeCard,
+}
+
+const edgeTypes = {
+  worldEdge: MemoWorldEdge,
+}
+
 function defaultNameForWorldNodeType(nodeType: WorldEntity['nodeType']) {
   switch (nodeType) {
     case 'actor':
@@ -238,6 +316,14 @@ function defaultNameForWorldNodeType(nodeType: WorldEntity['nodeType']) {
     case 'event':
       return 'New Event'
   }
+}
+
+function getFlowNodeElement(nodeId: string) {
+  if (typeof document === 'undefined') return null
+  const escapedNodeId = typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
+    ? CSS.escape(nodeId)
+    : nodeId.replace(/"/g, '\\"')
+  return document.querySelector<HTMLElement>(`.react-flow__node[data-id="${escapedNodeId}"]`)
 }
 
 export function WorldGraphPage({
@@ -279,6 +365,8 @@ export function WorldGraphPage({
   legacyGraphProps,
 }: WorldGraphPageProps) {
   const flowRef = useRef<ReactFlowInstance<Node<WorldNodeData>, Edge<WorldFlowEdgeData>> | null>(null)
+  const nodePositionPersistTimeoutRef = useRef<number | null>(null)
+  const entityOverviewPersistTimeoutRef = useRef<number | null>(null)
   const [legacyMode, setLegacyMode] = useState(false)
   const [viewMode, setViewMode] = useState<WorldView['mode']>('graph')
   const [search, setSearch] = useState('')
@@ -301,6 +389,7 @@ export function WorldGraphPage({
   const [isStarterPending, setIsStarterPending] = useState(false)
   const [isExpansionPending, setIsExpansionPending] = useState(false)
   const [busyMessage, setBusyMessage] = useState<string | null>(null)
+  const [entityOverviewDraft, setEntityOverviewDraft] = useState<EntityOverviewDraftState | null>(null)
 
   const selectedView = useMemo(
     () => worldViews.find((view) => view.key === selectedWorldViewKey) ?? worldViews[0] ?? createDefaultWorldView(),
@@ -310,14 +399,8 @@ export function WorldGraphPage({
     () => worldEntities.find((entity) => entity.key === selectedWorldEntityKey) ?? worldEntities.find((entity) => entity.key === selectedWorldNodeKey) ?? null,
     [selectedWorldEntityKey, selectedWorldNodeKey, worldEntities],
   )
-  const selectedOperator = useMemo(
-    () => worldOperators.find((entry) => entry.key === selectedWorldNodeKey) ?? null,
-    [selectedWorldNodeKey, worldOperators],
-  )
-  const selectedResult = useMemo(
-    () => worldResults.find((entry) => entry.key === selectedWorldNodeKey) ?? null,
-    [selectedWorldNodeKey, worldResults],
-  )
+  const deferredEntityOverviewName = useDeferredValue(entityOverviewDraft?.name ?? '')
+  const deferredEntityOverviewSummary = useDeferredValue(entityOverviewDraft?.summary ?? '')
 
   useEffect(() => {
     setViewMode(selectedView.mode)
@@ -354,6 +437,7 @@ export function WorldGraphPage({
   }, [selectedWorldNodeKey])
 
   const assetByKey = useMemo(() => new Map(assets.map((asset) => [asset.key, asset])), [assets])
+  const entityByKey = useMemo(() => new Map(worldEntities.map((entity) => [entity.key, entity])), [worldEntities])
   const definitionByKey = useMemo(() => new Map(definitions.map((definition) => [definition.key, definition])), [definitions])
   const usageByEntityKey = useMemo(() => (
     new Map(worldEntities.map((entity) => [entity.key, getWorldEntityUsage(entity, snapshotGraphs)]))
@@ -393,7 +477,19 @@ export function WorldGraphPage({
 
   const filteredEntityKeys = useMemo(() => new Set(filteredEntities.map((entity) => entity.key)), [filteredEntities])
   const pinnedRootKey = selectedView.rootEntityKey
-  const focusRootKey = selectedWorldNodeKey ?? pinnedRootKey ?? null
+  const focusRootKey = pinnedRootKey ?? null
+  const focusedEntity = useMemo(
+    () => (focusRootKey ? worldEntities.find((entity) => entity.key === focusRootKey) ?? null : null),
+    [focusRootKey, worldEntities],
+  )
+  const focusedOperator = useMemo(
+    () => (focusRootKey ? worldOperators.find((entry) => entry.key === focusRootKey) ?? null : null),
+    [focusRootKey, worldOperators],
+  )
+  const focusedResult = useMemo(
+    () => (focusRootKey ? worldResults.find((entry) => entry.key === focusRootKey) ?? null : null),
+    [focusRootKey, worldResults],
+  )
 
   const visibleNodeKeys = useMemo(() => {
     const mixedAdjacency = new Map<string, Set<string>>()
@@ -442,18 +538,24 @@ export function WorldGraphPage({
   const nodeRecords = useMemo(() => {
     const result = new Map<string, WorldGraphNodeRecord>()
     for (const entity of worldEntities) {
+      const displayName = entityOverviewDraft?.entityKey === entity.key ? deferredEntityOverviewName : entity.name
+      const displaySummary = entityOverviewDraft?.entityKey === entity.key ? deferredEntityOverviewSummary : entity.summary
       result.set(entity.key, {
         kind: 'entity',
         entity,
-        title: entity.name,
+        title: displayName,
         subtitle: labelForWorldEntity(entity.nodeType),
-        summary: entity.summary,
+        summary: displaySummary,
         imageUrl: imageUrlByEntityKey.get(entity.key) ?? null,
       })
     }
     for (const operator of worldOperators) {
       const inputNames = operator.inputEntityKeys
-        .map((key) => worldEntities.find((entity) => entity.key === key)?.name ?? key)
+        .map((key) => {
+          const entity = entityByKey.get(key) ?? null
+          if (!entity) return key
+          return entityOverviewDraft?.entityKey === entity.key ? deferredEntityOverviewName : entity.name
+        })
         .join(' + ')
       result.set(operator.key, {
         kind: 'operator',
@@ -475,7 +577,17 @@ export function WorldGraphPage({
       })
     }
     return result
-  }, [imageUrlByEntityKey, imageUrlByResultKey, worldEntities, worldOperators, worldResults])
+  }, [
+    deferredEntityOverviewName,
+    deferredEntityOverviewSummary,
+    entityByKey,
+    entityOverviewDraft?.entityKey,
+    imageUrlByEntityKey,
+    imageUrlByResultKey,
+    worldEntities,
+    worldOperators,
+    worldResults,
+  ])
 
   useEffect(() => {
     if (inspectorNodeKey && !nodeRecords.has(inspectorNodeKey)) {
@@ -498,7 +610,7 @@ export function WorldGraphPage({
           [resolvedEntity.key]: resolution.canvasPosition,
         }
         setDraftPositions(nextPositions)
-        await persistViewChanges({ nodePositions: nextPositions })
+        queueNodePositionPersist(nextPositions)
       }
 
       if (resolution.relationshipDefaults.sourceEntityKey) {
@@ -537,12 +649,33 @@ export function WorldGraphPage({
       : []),
     [showDerivedLayer, visibleNodeKeys, worldGraphConnections],
   )
+  const visibleLayoutNodes = useMemo(() => (
+    visibleNodeRecords.map((record) => {
+      const key = keyForWorldNodeRecord(record)
+      const width = record.kind === 'entity'
+        ? record.entity.nodeType === 'place'
+          ? 250
+          : 220
+        : record.kind === 'operator'
+          ? 160
+          : 250
+      const height = record.kind === 'result' ? 210 : record.kind === 'operator' ? 110 : 170
+      return { id: key, width, height }
+    })
+  ), [visibleNodeRecords])
+  const layoutStructureKey = useMemo(() => (
+    [
+      visibleLayoutNodes.map((node) => `${node.id}:${node.width}x${node.height}`).join('|'),
+      visibleRelationships.map((relationship) => `${relationship.key}:${relationship.sourceEntityKey}>${relationship.targetEntityKey}`).join('|'),
+      visibleConnections.map((connection) => `${connection.key}:${connection.sourceNodeKey}>${connection.targetNodeKey}`).join('|'),
+    ].join('__')
+  ), [visibleConnections, visibleLayoutNodes, visibleRelationships])
 
   useEffect(() => {
     let cancelled = false
 
     async function layoutVisibleGraph() {
-      if (viewMode !== 'graph' || visibleNodeRecords.length === 0) {
+      if (viewMode !== 'graph' || visibleLayoutNodes.length === 0) {
         if (!cancelled) setLayoutPositions({})
         return
       }
@@ -555,22 +688,7 @@ export function WorldGraphPage({
           'elk.layered.spacing.nodeNodeBetweenLayers': '120',
           'elk.spacing.nodeNode': '70',
         },
-        children: visibleNodeRecords.map((record) => {
-          const key = record.kind === 'entity' ? record.entity.key : record.kind === 'operator' ? record.operator.key : record.result.key
-          const width = record.kind === 'entity'
-            ? record.entity.nodeType === 'place'
-              ? 250
-              : 220
-            : record.kind === 'operator'
-              ? 160
-              : 250
-          const height = record.kind === 'result' ? 210 : record.kind === 'operator' ? 110 : 170
-          return {
-            id: key,
-            width,
-            height,
-          }
-        }),
+        children: visibleLayoutNodes,
         edges: [
           ...visibleRelationships.map((relationship) => ({
             id: relationship.key,
@@ -595,7 +713,7 @@ export function WorldGraphPage({
     return () => {
       cancelled = true
     }
-  }, [autoLayoutNonce, viewMode, visibleConnections, visibleNodeRecords, visibleRelationships])
+  }, [autoLayoutNonce, layoutStructureKey, viewMode])
 
   useEffect(() => {
     if (!selectedView.key || viewMode !== 'graph' || visibleNodeRecords.length === 0) return
@@ -613,7 +731,7 @@ export function WorldGraphPage({
     if (!changed) return
 
     setDraftPositions(nextPositions)
-    void persistViewChanges({ nodePositions: nextPositions })
+    queueNodePositionPersist(nextPositions)
   }, [draftPositions, layoutPositions, selectedView.key, viewMode, visibleNodeRecords])
 
   const relationCountByNodeKey = useMemo(() => {
@@ -658,42 +776,72 @@ export function WorldGraphPage({
     return [
       ...visibleRelationships.map((relationship) => ({
         id: relationship.key,
+        type: 'worldEdge',
         source: relationship.sourceEntityKey,
         target: relationship.targetEntityKey,
         selected: selectedWorldEdgeKey === relationship.key,
         label: showLabels ? (relationship.notes.trim() || undefined) : undefined,
         animated: relationship.state !== 'confirmed',
-        data: { kind: 'relationship' as const },
+        interactionWidth: 28,
+        zIndex: selectedWorldEdgeKey === relationship.key ? 6 : 4,
+        data: {
+          kind: 'relationship' as const,
+          onSelect: selectWorldEdge,
+          onContextMenu: (edgeKey: string, position: { x: number; y: number }) => {
+            selectWorldEdge(edgeKey)
+            setContextMenu({ kind: 'relationship', x: position.x, y: position.y, relationshipKey: edgeKey })
+          },
+        },
         style: {
           stroke: relationship.state === 'confirmed' ? 'rgba(148, 163, 184, 0.54)' : relationship.state === 'suggested' ? 'rgba(94, 234, 212, 0.54)' : 'rgba(244, 114, 182, 0.42)',
           strokeDasharray: relationship.state === 'confirmed' ? undefined : '7 5',
           strokeWidth: relationship.strength ? 1 + relationship.strength * 2 : 1.4,
         },
-        labelStyle: {
-          fill: '#cbd5e1',
-          fontSize: 12,
-        },
       })),
+      ...(edgeEditor?.mode === 'create' && visibleNodeKeys.has(edgeEditor.sourceEntityKey) && visibleNodeKeys.has(edgeEditor.targetEntityKey)
+        ? [{
+            id: 'world.relationship.pending',
+            type: 'worldEdge',
+            source: edgeEditor.sourceEntityKey,
+            target: edgeEditor.targetEntityKey,
+            label: showLabels ? (edgeEditor.notes.trim() || 'New relationship') : undefined,
+            animated: true,
+            interactionWidth: 28,
+            zIndex: 7,
+            data: { kind: 'relationship' as const },
+            style: {
+              stroke: 'rgba(94, 234, 212, 0.72)',
+              strokeDasharray: '7 5',
+              strokeWidth: 1.8,
+            },
+          } satisfies Edge<WorldFlowEdgeData>]
+        : []),
       ...visibleConnections.map((connection) => ({
         id: connection.key,
+        type: 'worldEdge',
         source: connection.sourceNodeKey,
         target: connection.targetNodeKey,
         selected: selectedWorldEdgeKey === connection.key,
         label: showLabels ? connection.role : undefined,
         animated: false,
-        data: { kind: 'connection' as const },
+        interactionWidth: 24,
+        zIndex: selectedWorldEdgeKey === connection.key ? 5 : 3,
+        data: {
+          kind: 'connection' as const,
+          onSelect: selectWorldEdge,
+          onContextMenu: (edgeKey: string, position: { x: number; y: number }) => {
+            selectWorldEdge(edgeKey)
+            setContextMenu({ kind: 'connection', x: position.x, y: position.y, connectionKey: edgeKey })
+          },
+        },
         style: {
           stroke: 'rgba(255, 255, 255, 0.16)',
           strokeDasharray: '5 4',
           strokeWidth: 1.2,
         },
-        labelStyle: {
-          fill: '#94a3b8',
-          fontSize: 11,
-        },
       })),
     ]
-  }, [selectedWorldEdgeKey, showLabels, visibleConnections, visibleRelationships])
+  }, [edgeEditor, selectedWorldEdgeKey, showLabels, visibleConnections, visibleNodeKeys, visibleRelationships])
 
   const groupedEntities = useMemo(() => ({
     actor: filteredEntities.filter((entity) => entity.nodeType === 'actor'),
@@ -734,17 +882,135 @@ export function WorldGraphPage({
     : []
 
   useEffect(() => {
+    if (!inspectorEntity) {
+      setEntityOverviewDraft(null)
+      return
+    }
+    setEntityOverviewDraft((current) => {
+      if (current?.entityKey === inspectorEntity.key && current.dirty) {
+        return current
+      }
+      if (
+        current?.entityKey === inspectorEntity.key
+        && current.name === inspectorEntity.name
+        && current.summary === inspectorEntity.summary
+      ) {
+        return current
+      }
+      return {
+        entityKey: inspectorEntity.key,
+        name: inspectorEntity.name,
+        summary: inspectorEntity.summary,
+        dirty: false,
+      }
+    })
+  }, [inspectorEntity])
+
+  const displayedInspectorEntity = useMemo(() => {
+    if (!inspectorEntity) return null
+    if (entityOverviewDraft?.entityKey !== inspectorEntity.key) return inspectorEntity
+    return {
+      ...inspectorEntity,
+      name: entityOverviewDraft.name,
+      summary: entityOverviewDraft.summary,
+    }
+  }, [entityOverviewDraft, inspectorEntity])
+  const edgeEditorPosition = useMemo(() => {
+    if (!edgeEditor) return null
+    const sourceElement = getFlowNodeElement(edgeEditor.sourceEntityKey)
+    const targetElement = getFlowNodeElement(edgeEditor.targetEntityKey)
+    if (!sourceElement || !targetElement) return null
+
+    const sourceRect = sourceElement.getBoundingClientRect()
+    const targetRect = targetElement.getBoundingClientRect()
+    const midpointX = (sourceRect.left + sourceRect.width / 2 + targetRect.left + targetRect.width / 2) / 2
+    const midpointY = (sourceRect.top + sourceRect.height / 2 + targetRect.top + targetRect.height / 2) / 2
+    const popupWidth = 360
+    const gutter = 24
+
+    return {
+      left: Math.max(gutter + popupWidth / 2, Math.min(window.innerWidth - gutter - popupWidth / 2, midpointX)),
+      top: Math.max(120, midpointY),
+    }
+  }, [draftPositions, edgeEditor, layoutPositions, visibleNodeRecords])
+
+  useEffect(() => {
     setRelationshipInspectorNotes(inspectorRelationship?.notes ?? '')
   }, [inspectorRelationship?.key, inspectorRelationship?.notes])
+
+  useEffect(() => {
+    return () => {
+      if (nodePositionPersistTimeoutRef.current !== null) {
+        window.clearTimeout(nodePositionPersistTimeoutRef.current)
+      }
+      if (entityOverviewPersistTimeoutRef.current !== null) {
+        window.clearTimeout(entityOverviewPersistTimeoutRef.current)
+      }
+    }
+  }, [])
 
   async function persistViewChanges(changes: Partial<WorldViewCreateInput>) {
     if (!selectedView.key || worldViews.length === 0) return
     await onUpdateWorldView(selectedView.key, changes)
   }
 
+  function queueNodePositionPersist(nextPositions: Record<string, { x: number; y: number }>, delay = 180) {
+    if (!selectedView.key || worldViews.length === 0) return
+    if (nodePositionPersistTimeoutRef.current !== null) {
+      window.clearTimeout(nodePositionPersistTimeoutRef.current)
+    }
+    const viewKey = selectedView.key
+    nodePositionPersistTimeoutRef.current = window.setTimeout(() => {
+      nodePositionPersistTimeoutRef.current = null
+      void onUpdateWorldView(viewKey, { nodePositions: nextPositions })
+    }, delay)
+  }
+
+  async function persistEntityOverviewDraft(entityKey: string, name: string, summary: string) {
+    const entity = worldEntities.find((entry) => entry.key === entityKey) ?? null
+    if (!entity) return
+
+    const changes: Partial<WorldEntityCreateInput> = {}
+    if (name !== entity.name) changes.name = name
+    if (summary !== entity.summary) changes.summary = summary
+    if (Object.keys(changes).length === 0) {
+      setEntityOverviewDraft((current) => (
+        current?.entityKey === entityKey && current.name === name && current.summary === summary
+          ? { ...current, dirty: false }
+          : current
+      ))
+      return
+    }
+
+    await onUpdateWorldEntity(entityKey, changes)
+    setEntityOverviewDraft((current) => (
+      current?.entityKey === entityKey && current.name === name && current.summary === summary
+        ? { ...current, dirty: false }
+        : current
+    ))
+  }
+
+  function queueEntityOverviewPersist(nextDraft: EntityOverviewDraftState, delay = 360) {
+    if (entityOverviewPersistTimeoutRef.current !== null) {
+      window.clearTimeout(entityOverviewPersistTimeoutRef.current)
+    }
+    entityOverviewPersistTimeoutRef.current = window.setTimeout(() => {
+      entityOverviewPersistTimeoutRef.current = null
+      void persistEntityOverviewDraft(nextDraft.entityKey, nextDraft.name, nextDraft.summary)
+    }, delay)
+  }
+
+  function flushEntityOverviewPersist() {
+    if (!entityOverviewDraft?.dirty) return
+    if (entityOverviewPersistTimeoutRef.current !== null) {
+      window.clearTimeout(entityOverviewPersistTimeoutRef.current)
+      entityOverviewPersistTimeoutRef.current = null
+    }
+    void persistEntityOverviewDraft(entityOverviewDraft.entityKey, entityOverviewDraft.name, entityOverviewDraft.summary)
+  }
+
   function selectWorldNode(key: string | null) {
     onSelectWorldNode(key)
-    onSelectWorldEdge(null)
     const entity = key ? worldEntities.find((entry) => entry.key === key) ?? null : null
     onSelectWorldEntity(entity?.key ?? null)
     setInspectorNodeKey(key)
@@ -752,18 +1018,17 @@ export function WorldGraphPage({
 
   function selectWorldEdge(key: string | null) {
     onSelectWorldEdge(key)
-    onSelectWorldNode(null)
     onSelectWorldEntity(null)
     setInspectorNodeKey(null)
   }
 
-  async function handleNodeDragStop(_event: unknown, node: Node<WorldNodeData>) {
+  function handleNodeDragStop(_event: unknown, node: Node<WorldNodeData>) {
     const nextPositions = {
       ...draftPositions,
       [node.id]: node.position,
     }
     setDraftPositions(nextPositions)
-    await persistViewChanges({ nodePositions: nextPositions })
+    queueNodePositionPersist(nextPositions)
   }
 
   async function handleAutoLayout() {
@@ -1096,11 +1361,11 @@ export function WorldGraphPage({
           </div>
         </div>
 
-        {selectedWorldNodeKey ? (
+        {focusRootKey ? (
           <div className="world-focus-banner">
             <span className="section-label">Focus Mode</span>
-            <strong>{selectedEntity?.name ?? selectedOperator?.label ?? selectedResult?.title ?? 'Selection'}</strong>
-            <button className="ghost-button compact" onClick={() => selectWorldNode(null)} type="button">Exit Focus</button>
+            <strong>{focusedEntity?.name ?? focusedOperator?.label ?? focusedResult?.title ?? 'Selection'}</strong>
+            <button className="ghost-button compact" onClick={() => void persistViewChanges({ rootEntityKey: null })} type="button">Exit Focus</button>
             <button className="ghost-button compact" onClick={() => void persistViewChanges({ focusDepth: Math.min(2, selectedView.focusDepth + 1) })} type="button">Expand 1 Level</button>
             <button className="ghost-button compact" onClick={() => void persistViewChanges({ rootEntityKey: selectedEntity?.key ?? null })} type="button">Pin Neighborhood</button>
             <button className="ghost-button compact" onClick={() => void handleSaveCurrentView()} type="button">Save As View</button>
@@ -1140,6 +1405,7 @@ export function WorldGraphPage({
             <ReactFlow
               fitView
               nodeTypes={nodeTypes}
+              edgeTypes={edgeTypes}
               nodes={flowNodes}
               edges={flowEdges}
               onInit={(instance) => {
@@ -1169,12 +1435,15 @@ export function WorldGraphPage({
               }}
               onNodeContextMenu={(event, node) => openNodeContextMenu(event, node.id)}
               onNodeDragStop={handleNodeDragStop}
-              onEdgeClick={(_, edge) => {
+              onEdgeClick={(event, edge) => {
+                event.preventDefault()
+                event.stopPropagation()
                 selectWorldEdge(edge.id)
                 setEdgeEditor(null)
               }}
               onEdgeContextMenu={(event, edge) => {
                 event.preventDefault()
+                event.stopPropagation()
                 selectWorldEdge(edge.id)
                 const relationship = worldRelationships.find((entry) => entry.key === edge.id) ?? null
                 setContextMenu(relationship
@@ -1206,7 +1475,15 @@ export function WorldGraphPage({
         )}
 
         {edgeEditor ? (
-          <div className="world-overlay-card world-edge-popup">
+          <div
+            className="world-overlay-card world-edge-popup"
+            style={edgeEditorPosition
+              ? {
+                  left: edgeEditorPosition.left,
+                  top: edgeEditorPosition.top,
+                }
+              : undefined}
+          >
             <div className="world-popup-head">
               <div>
                 <span className="eyebrow">Relationship</span>
@@ -1560,12 +1837,12 @@ export function WorldGraphPage({
               />
             ) : null}
           </div>
-        ) : inspectorEntity ? (
+        ) : displayedInspectorEntity ? (
           <div className="detail-stack compact">
             <div className="drawer-head">
               <div>
-                <span className="eyebrow">{labelForWorldEntity(inspectorEntity.nodeType)}</span>
-                <h3>{inspectorEntity.name}</h3>
+                <span className="eyebrow">{labelForWorldEntity(displayedInspectorEntity.nodeType)}</span>
+                <h3>{displayedInspectorEntity.name}</h3>
               </div>
             </div>
             <div className="segmented-control">
@@ -1585,26 +1862,53 @@ export function WorldGraphPage({
               <div className="editor-section compact-section">
                 <label className="field-block">
                   <span>Name</span>
-                  <input value={inspectorEntity.name} onChange={(event) => void onUpdateWorldEntity(inspectorEntity.key, { name: event.target.value })} />
+                  <input
+                    value={entityOverviewDraft?.entityKey === displayedInspectorEntity.key ? entityOverviewDraft.name : displayedInspectorEntity.name}
+                    onBlur={flushEntityOverviewPersist}
+                    onChange={(event) => {
+                      const nextDraft: EntityOverviewDraftState = {
+                        entityKey: displayedInspectorEntity.key,
+                        name: event.target.value,
+                        summary: entityOverviewDraft?.entityKey === displayedInspectorEntity.key ? entityOverviewDraft.summary : displayedInspectorEntity.summary,
+                        dirty: true,
+                      }
+                      setEntityOverviewDraft(nextDraft)
+                      queueEntityOverviewPersist(nextDraft)
+                    }}
+                  />
                 </label>
                 <label className="field-block">
                   <span>Summary</span>
-                  <textarea rows={4} value={inspectorEntity.summary} onChange={(event) => void onUpdateWorldEntity(inspectorEntity.key, { summary: event.target.value })} />
+                  <textarea
+                    rows={4}
+                    value={entityOverviewDraft?.entityKey === displayedInspectorEntity.key ? entityOverviewDraft.summary : displayedInspectorEntity.summary}
+                    onBlur={flushEntityOverviewPersist}
+                    onChange={(event) => {
+                      const nextDraft: EntityOverviewDraftState = {
+                        entityKey: displayedInspectorEntity.key,
+                        name: entityOverviewDraft?.entityKey === displayedInspectorEntity.key ? entityOverviewDraft.name : displayedInspectorEntity.name,
+                        summary: event.target.value,
+                        dirty: true,
+                      }
+                      setEntityOverviewDraft(nextDraft)
+                      queueEntityOverviewPersist(nextDraft)
+                    }}
+                  />
                 </label>
                 <div className="world-inspector-actions">
-                  {inspectorEntity.linkedDefinitionKey ? (
+                  {displayedInspectorEntity.linkedDefinitionKey ? (
                     <button className="ghost-button compact" onClick={() => {
-                      const kind = inspectorEntity.nodeType === 'actor' ? 'character' : inspectorEntity.nodeType === 'place' ? 'environment' : inspectorEntity.nodeType === 'object' ? 'item' : null
-                      if (kind) onOpenDefinitionLink(inspectorEntity.linkedDefinitionKey!, kind)
+                      const kind = displayedInspectorEntity.nodeType === 'actor' ? 'character' : displayedInspectorEntity.nodeType === 'place' ? 'environment' : displayedInspectorEntity.nodeType === 'object' ? 'item' : null
+                      if (kind) onOpenDefinitionLink(displayedInspectorEntity.linkedDefinitionKey!, kind)
                     }} type="button">Open Linked Record</button>
                   ) : null}
                 <button className="ghost-button compact" onClick={() => setEntityComposer({
                   mode: 'related',
                   defaults: { nodeType: 'actor', source: 'user' },
-                  relationshipDefaults: { sourceEntityKey: inspectorEntity.key, verb: 'related to' },
+                  relationshipDefaults: { sourceEntityKey: displayedInspectorEntity.key, verb: 'related to' },
                   canvasPosition: null,
                 })} type="button">Add Related Entity</button>
-                  <button className="ghost-button compact danger" onClick={() => void onDeleteWorldEntity(inspectorEntity.key)} type="button">Delete</button>
+                  <button className="ghost-button compact danger" onClick={() => void onDeleteWorldEntity(displayedInspectorEntity.key)} type="button">Delete</button>
                 </div>
               </div>
             ) : null}
@@ -1617,7 +1921,7 @@ export function WorldGraphPage({
                     <h3>Relationships</h3>
                   </div>
                   <button className="ghost-button compact" onClick={() => setRelationshipComposer({
-                    sourceEntityKey: inspectorEntity.key,
+                    sourceEntityKey: displayedInspectorEntity.key,
                     targetEntityKey: '',
                     notes: '',
                   })} type="button">Add Relationship</button>
@@ -1625,7 +1929,7 @@ export function WorldGraphPage({
                 {inspectorEntityRelationships.length === 0 ? <div className="inline-note">This entity has no relationships yet.</div> : null}
                 {inspectorEntityRelationships.map((relationship) => {
                   const counterpart = worldEntities.find((entity) => (
-                    relationship.sourceEntityKey === inspectorEntity.key ? entity.key === relationship.targetEntityKey : entity.key === relationship.sourceEntityKey
+                    relationship.sourceEntityKey === displayedInspectorEntity.key ? entity.key === relationship.targetEntityKey : entity.key === relationship.sourceEntityKey
                   )) ?? null
                   return (
                     <div key={relationship.key} className="schema-card world-relationship-card">
@@ -1685,7 +1989,7 @@ export function WorldGraphPage({
                     source: 'user',
                   },
                   relationshipDefaults: {
-                    sourceEntityKey: suggestion.relationshipDefaults?.sourceEntityKey ?? inspectorEntity.key,
+                    sourceEntityKey: suggestion.relationshipDefaults?.sourceEntityKey ?? displayedInspectorEntity.key,
                     targetEntityKey: suggestion.relationshipDefaults?.targetEntityKey,
                     verb: suggestion.relationshipDefaults?.verb ?? 'related to',
                   },

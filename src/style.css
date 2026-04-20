@@ -1247,10 +1247,10 @@ code {
 }
 
 .world-edge-popup {
-  top: 108px;
-  left: auto;
-  right: 22px;
-  transform: none;
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
   width: min(360px, calc(100% - 44px));
   padding: 16px;
 }
@@ -1279,6 +1279,51 @@ code {
 
 .world-popup-close:hover {
   background: rgba(255, 255, 255, 0.1);
+}
+
+.world-graph-canvas {
+  --xy-edge-label-background-color: rgba(10, 15, 24, 0.94);
+  --xy-edge-label-color: #e2e8f0;
+}
+
+.world-graph-canvas .react-flow__edgelabel-renderer {
+  z-index: 24;
+  pointer-events: none;
+}
+
+.world-edge-label {
+  position: absolute;
+  z-index: 24;
+  min-width: 44px;
+  max-width: 220px;
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  background: rgba(9, 13, 20, 0.96);
+  box-shadow: 0 8px 22px rgba(2, 6, 12, 0.34);
+  color: #e2e8f0;
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  line-height: 1.2;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: all;
+  backdrop-filter: blur(12px);
+}
+
+.world-edge-label:hover,
+.world-edge-label.is-selected {
+  border-color: rgba(94, 234, 212, 0.32);
+  background: rgba(11, 18, 28, 0.98);
+  color: #f8fafc;
+}
+
+.world-edge-label.is-selected {
+  box-shadow: 0 0 0 1px rgba(94, 234, 212, 0.18), 0 10px 26px rgba(2, 6, 12, 0.4);
 }
 
 .world-overlay-grid {
