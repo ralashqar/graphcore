@@ -20,10 +20,16 @@ import {
 } from './cinematics.ts'
 import {
   worldEntitySchema,
+  worldGraphConnectionSchema,
+  worldOperatorSchema,
   worldRelationshipSchema,
+  worldResultSchema,
   worldViewSchema,
   type WorldEntity,
+  type WorldGraphConnection,
+  type WorldOperator,
   type WorldRelationship,
+  type WorldResult,
   type WorldView,
 } from './worldGraph.ts'
 
@@ -712,6 +718,9 @@ export const projectSnapshotSchema = z.object({
   worldEntities: z.array(worldEntitySchema).default([]),
   worldRelationships: z.array(worldRelationshipSchema).default([]),
   worldViews: z.array(worldViewSchema).default([]),
+  worldOperators: z.array(worldOperatorSchema).default([]),
+  worldResults: z.array(worldResultSchema).default([]),
+  worldGraphConnections: z.array(worldGraphConnectionSchema).default([]),
   worldBuildBatches: z.array(worldBuildBatchSchema).default([]),
   meshGenerationJobs: z.array(meshGenerationJobSchema).default([]),
   cinematicRuns: z.array(cinematicRunSchema).default([]),
@@ -1122,7 +1131,7 @@ export type GraphEditorSelection = {
   edgeKey: string | null
 }
 export type GameSpec = z.infer<typeof gameSpecSchema>
-export type { WorldEntity, WorldRelationship, WorldView }
+export type { WorldEntity, WorldGraphConnection, WorldOperator, WorldRelationship, WorldResult, WorldView }
 export type NodeTemplateDefinition = {
   key: string
   label: string
@@ -1375,6 +1384,9 @@ export const schemaCatalog = {
   patchOperationSchema,
   projectSnapshotSchema,
   worldEntitySchema,
+  worldGraphConnectionSchema,
+  worldOperatorSchema,
   worldRelationshipSchema,
+  worldResultSchema,
   worldViewSchema,
 }

@@ -21,26 +21,42 @@ import {
 import {
   worldEntityCreateInputSchema,
   worldEntityUpdateInputSchema,
+  worldDerivedCompositionCreateInputSchema,
+  worldDerivedCompositionUpdateInputSchema,
   worldGraphExpansionRequestSchema,
   worldGraphSnapshotSchema,
   worldGraphSeedRequestSchema,
   worldRelationshipCreateInputSchema,
   worldRelationshipUpdateInputSchema,
+  worldViewSchema,
   worldViewCreateInputSchema,
   worldViewUpdateInputSchema,
+  type WorldDerivedCompositionCreateInput,
+  type WorldDerivedCompositionUpdateInput,
   type WorldEntity,
   type WorldEntityCreateInput,
   type WorldEntityUpdateInput,
+  type WorldGraphConnection,
   type WorldGraphExpansionRequest,
   type WorldGraphSeedRequest,
+  type WorldOperator,
   type WorldRelationship,
   type WorldRelationshipCreateInput,
   type WorldRelationshipUpdateInput,
+  type WorldResult,
   type WorldView,
   type WorldViewCreateInput,
   type WorldViewUpdateInput,
 } from '../domain/worldGraph'
-import { deriveMissingWorldEntities, deriveMissingWorldViews } from '../domain/worldGraphHelpers'
+import {
+  buildPreviewAssetKeyForComposition,
+  buildWorldDerivedCompositionTitle,
+  deriveMissingWorldEntities,
+  deriveMissingWorldViews,
+  isAutoDerivedWorldEntity,
+  isAutoDerivedWorldView,
+  resultTypeForOperatorType,
+} from '../domain/worldGraphHelpers'
 import {
   cinematicRunSchema,
   cinematicRunStatusResponseSchema,
@@ -442,6 +458,66 @@ function buildWorldViewKey(existingKeys: string[], seed: string) {
   return candidate
 }
 
+function buildWorldOperatorKey(existingKeys: string[], sourceEntityKey: string, operatorType: WorldOperator['operatorType'], targetEntityKey: string) {
+  const sourceSeed = sourceEntityKey.split('.').slice(-1)[0] ?? 'source'
+  const targetSeed = targetEntityKey.split('.').slice(-1)[0] ?? 'target'
+  const base = `world.operator.${slugify(`${sourceSeed}-${operatorType}-${targetSeed}`) || 'operator'}`
+  let candidate = base
+  let index = 2
+  while (existingKeys.includes(candidate)) {
+    candidate = `${base}-${index}`
+    index += 1
+  }
+  return candidate
+}
+
+function buildWorldResultKey(existingKeys: string[], seed: string) {
+  const base = `world.result.${slugify(seed) || 'result'}`
+  let candidate = base
+  let index = 2
+  while (existingKeys.includes(candidate)) {
+    candidate = `${base}-${index}`
+    index += 1
+  }
+  return candidate
+}
+
+function buildWorldGraphConnectionKey(existingKeys: string[], seed: string) {
+  const base = `world.connection.${slugify(seed) || 'connection'}`
+  let candidate = base
+  let index = 2
+  while (existingKeys.includes(candidate)) {
+    candidate = `${base}-${index}`
+    index += 1
+  }
+  return candidate
+}
+
+async function resolvePersistedWorldEntityId(
+  snapshot: ProjectSnapshot,
+  entity: Pick<WorldEntity, 'id' | 'key'>,
+) {
+  if (isUuidLike(entity.id)) {
+    return entity.id
+  }
+
+  const entityResponse = await supabase
+    .from('world_entities')
+    .select('id')
+    .eq('draft_id', snapshot.draft.id)
+    .eq('key', entity.key)
+    .maybeSingle()
+
+  if (entityResponse.error) {
+    throw new Error(entityResponse.error.message)
+  }
+  if (!entityResponse.data?.id) {
+    throw new Error(`World entity "${entity.key}" was not found in Supabase.`)
+  }
+
+  return entityResponse.data.id
+}
+
 async function reloadLiveSnapshot(snapshot: ProjectSnapshot) {
   const reloaded = await loadProjectSnapshot({
     projectId: snapshot.project.id,
@@ -455,11 +531,14 @@ async function reloadLiveSnapshot(snapshot: ProjectSnapshot) {
   return reloaded.snapshot
 }
 
-async function createLinkedDefinitionForWorldEntity(snapshot: ProjectSnapshot, input: WorldEntityCreateInput) {
+async function createLinkedDefinitionForWorldEntity(
+  snapshot: ProjectSnapshot,
+  input: WorldEntityCreateInput,
+): Promise<{ linkedDefinitionKey: string | null; linkedDefinition: ProjectSnapshot['definitions'][number] | null }> {
   const definitionKind = definitionKindForWorldNodeType(input.nodeType)
-  if (!definitionKind) return null
-  if (input.linkedDefinitionKey) return input.linkedDefinitionKey
-  if (!input.ensureLinkedDefinition) return null
+  if (!definitionKind) return { linkedDefinitionKey: null, linkedDefinition: null }
+  if (input.linkedDefinitionKey) return { linkedDefinitionKey: input.linkedDefinitionKey, linkedDefinition: null }
+  if (!input.ensureLinkedDefinition) return { linkedDefinitionKey: null, linkedDefinition: null }
 
   const existingDefinitionKeys = snapshot.definitions
     .filter((definition) => definition.kind === definitionKind)
@@ -509,7 +588,28 @@ async function createLinkedDefinitionForWorldEntity(snapshot: ProjectSnapshot, i
     }
   }
 
-  return definitionInsert.data.key
+  return {
+    linkedDefinitionKey: definitionInsert.data.key,
+    linkedDefinition: {
+      id: definitionInsert.data.id,
+      key: definitionInsert.data.key,
+      kind: definitionKind,
+      name: input.name,
+      summary: input.summary,
+      status: 'draft' as const,
+      iconAssetKey: input.thumbnailAssetKey,
+      archetypeKey: null,
+      tags: input.tags,
+      schemaVersion: 1,
+      metadata: {},
+      llmHints: {},
+      assetRefs: [],
+      definitionData: {},
+      fieldValues: [],
+      customFields: [],
+      components: defaultComponentsForKind(definitionKind),
+    },
+  }
 }
 
 function localPatchDiagnostics(fallbackReason: string | null) {
@@ -1159,12 +1259,186 @@ type WorldViewRow = {
   focus_depth: number | null
   show_suggestions: boolean | null
   show_labels: boolean | null
+  show_derived_layer: boolean | null
   node_positions: Record<string, unknown> | null
   collapsed_state: Record<string, unknown> | null
   sort_mode: WorldView['sortMode'] | null
   metadata: Record<string, unknown> | null
   created_at: string
   updated_at: string
+}
+
+type WorldOperatorRow = {
+  id: string
+  key: string
+  operator_type: WorldOperator['operatorType']
+  input_entity_keys: string[] | null
+  label: string | null
+  status: WorldOperator['status']
+  metadata: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+
+type WorldResultRow = {
+  id: string
+  key: string
+  result_type: WorldResult['resultType']
+  source_operator_key: string
+  title: string
+  summary: string | null
+  preview_asset_key: string | null
+  status: WorldResult['status']
+  metadata: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+
+type WorldGraphConnectionRow = {
+  id: string
+  key: string
+  source_node_key: string
+  source_node_kind: WorldGraphConnection['sourceNodeKind']
+  target_node_key: string
+  target_node_kind: WorldGraphConnection['targetNodeKind']
+  role: WorldGraphConnection['role']
+  metadata: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+
+const WORLD_ENTITY_SELECT =
+  'id, key, name, summary, node_type, aliases, tags, status, thumbnail_asset_key, linked_definition_key, source, custom_properties, metadata, created_at, updated_at'
+const WORLD_RELATIONSHIP_SELECT =
+  'id, key, source_entity_id, target_entity_id, verb, direction, strength, confidence, source, notes, state, metadata, created_at, updated_at'
+const WORLD_VIEW_SELECT =
+  'id, key, name, mode, filters, search, root_entity_key, camera, focus_depth, show_suggestions, show_labels, show_derived_layer, node_positions, collapsed_state, sort_mode, metadata, created_at, updated_at'
+const WORLD_OPERATOR_SELECT =
+  'id, key, operator_type, input_entity_keys, label, status, metadata, created_at, updated_at'
+const WORLD_RESULT_SELECT =
+  'id, key, result_type, source_operator_key, title, summary, preview_asset_key, status, metadata, created_at, updated_at'
+const WORLD_CONNECTION_SELECT =
+  'id, key, source_node_key, source_node_kind, target_node_key, target_node_kind, role, metadata, created_at, updated_at'
+
+function upsertEntryByKey<T extends { key: string }>(entries: T[], nextEntry: T) {
+  const existingIndex = entries.findIndex((entry) => entry.key === nextEntry.key)
+  if (existingIndex === -1) {
+    return [...entries, nextEntry]
+  }
+
+  return entries.map((entry, index) => (index === existingIndex ? nextEntry : entry))
+}
+
+function mapWorldEntityRow(entity: WorldEntityRow): WorldEntity {
+  return {
+    id: entity.id,
+    key: entity.key,
+    name: entity.name,
+    summary: entity.summary ?? '',
+    nodeType: entity.node_type,
+    aliases: entity.aliases ?? [],
+    tags: entity.tags ?? [],
+    status: entity.status,
+    thumbnailAssetKey: entity.thumbnail_asset_key,
+    linkedDefinitionKey: entity.linked_definition_key,
+    source: entity.source,
+    customProperties: entity.custom_properties ?? {},
+    metadata: entity.metadata ?? {},
+    createdAt: entity.created_at,
+    updatedAt: entity.updated_at,
+  }
+}
+
+function mapWorldRelationshipRow(
+  relationship: WorldRelationshipRow,
+  worldEntities: Array<Pick<WorldEntity, 'id' | 'key'>>,
+): WorldRelationship {
+  const sourceEntity = worldEntities.find((entity) => entity.id === relationship.source_entity_id) ?? null
+  const targetEntity = worldEntities.find((entity) => entity.id === relationship.target_entity_id) ?? null
+  return {
+    id: relationship.id,
+    key: relationship.key,
+    sourceEntityKey: sourceEntity?.key ?? relationship.source_entity_id,
+    targetEntityKey: targetEntity?.key ?? relationship.target_entity_id,
+    verb: relationship.verb,
+    direction: relationship.direction,
+    strength: relationship.strength,
+    confidence: relationship.confidence,
+    source: relationship.source,
+    notes: relationship.notes ?? '',
+    state: relationship.state,
+    metadata: relationship.metadata ?? {},
+    createdAt: relationship.created_at,
+    updatedAt: relationship.updated_at,
+  }
+}
+
+function mapWorldViewRow(view: WorldViewRow): WorldView {
+  return worldViewSchema.parse({
+    id: view.id,
+    key: view.key,
+    name: view.name,
+    mode: view.mode,
+    filters: view.filters ?? {},
+    search: view.search ?? '',
+    rootEntityKey: view.root_entity_key,
+    camera: view.camera ?? {},
+    focusDepth: view.focus_depth ?? 1,
+    showSuggestions: view.show_suggestions ?? true,
+    showLabels: view.show_labels ?? true,
+    showDerivedLayer: view.show_derived_layer ?? true,
+    nodePositions: view.node_positions ?? {},
+    collapsedState: view.collapsed_state ?? {},
+    sortMode: view.sort_mode ?? 'manual',
+    metadata: view.metadata ?? {},
+    createdAt: view.created_at,
+    updatedAt: view.updated_at,
+  })
+}
+
+function mapWorldOperatorRow(entry: WorldOperatorRow): WorldOperator {
+  return {
+    id: entry.id,
+    key: entry.key,
+    operatorType: entry.operator_type,
+    inputEntityKeys: entry.input_entity_keys ?? [],
+    label: entry.label ?? '',
+    status: entry.status,
+    metadata: entry.metadata ?? {},
+    createdAt: entry.created_at,
+    updatedAt: entry.updated_at,
+  }
+}
+
+function mapWorldResultRow(entry: WorldResultRow): WorldResult {
+  return {
+    id: entry.id,
+    key: entry.key,
+    resultType: entry.result_type,
+    sourceOperatorKey: entry.source_operator_key,
+    title: entry.title,
+    summary: entry.summary ?? '',
+    previewAssetKey: entry.preview_asset_key,
+    status: entry.status,
+    metadata: entry.metadata ?? {},
+    createdAt: entry.created_at,
+    updatedAt: entry.updated_at,
+  }
+}
+
+function mapWorldGraphConnectionRow(entry: WorldGraphConnectionRow): WorldGraphConnection {
+  return {
+    id: entry.id,
+    key: entry.key,
+    sourceNodeKey: entry.source_node_key,
+    sourceNodeKind: entry.source_node_kind,
+    targetNodeKey: entry.target_node_key,
+    targetNodeKind: entry.target_node_kind,
+    role: entry.role,
+    metadata: entry.metadata ?? {},
+    createdAt: entry.created_at,
+    updatedAt: entry.updated_at,
+  }
 }
 
 type WorldBuildBatchRow = {
@@ -1487,6 +1761,9 @@ export async function loadProjectSnapshot(
     worldEntitiesResponse,
     worldRelationshipsResponse,
     worldViewsResponse,
+    worldOperatorsResponse,
+    worldResultsResponse,
+    worldGraphConnectionsResponse,
     worldBuildBatchesResponse,
     meshGenerationJobsResponse,
     cinematicRunsResponse,
@@ -1577,7 +1854,22 @@ export async function loadProjectSnapshot(
       .order('created_at', { ascending: true }),
     supabase
       .from('world_views')
-      .select('id, key, name, mode, filters, search, root_entity_key, camera, focus_depth, show_suggestions, show_labels, node_positions, collapsed_state, sort_mode, metadata, created_at, updated_at')
+      .select('id, key, name, mode, filters, search, root_entity_key, camera, focus_depth, show_suggestions, show_labels, show_derived_layer, node_positions, collapsed_state, sort_mode, metadata, created_at, updated_at')
+      .eq('draft_id', draft.id)
+      .order('created_at', { ascending: true }),
+    supabase
+      .from('world_operators')
+      .select('id, key, operator_type, input_entity_keys, label, status, metadata, created_at, updated_at')
+      .eq('draft_id', draft.id)
+      .order('created_at', { ascending: true }),
+    supabase
+      .from('world_results')
+      .select('id, key, result_type, source_operator_key, title, summary, preview_asset_key, status, metadata, created_at, updated_at')
+      .eq('draft_id', draft.id)
+      .order('created_at', { ascending: true }),
+    supabase
+      .from('world_graph_connections')
+      .select('id, key, source_node_key, source_node_kind, target_node_key, target_node_kind, role, metadata, created_at, updated_at')
       .eq('draft_id', draft.id)
       .order('created_at', { ascending: true }),
     supabase
@@ -1624,9 +1916,15 @@ export async function loadProjectSnapshot(
     worldEntitiesResponse.status === 404
     || worldRelationshipsResponse.status === 404
     || worldViewsResponse.status === 404
+    || worldOperatorsResponse.status === 404
+    || worldResultsResponse.status === 404
+    || worldGraphConnectionsResponse.status === 404
     || isMissingRelationError(worldEntitiesResponse.error, 'world_entities')
     || isMissingRelationError(worldRelationshipsResponse.error, 'world_relationships')
     || isMissingRelationError(worldViewsResponse.error, 'world_views')
+    || isMissingRelationError(worldOperatorsResponse.error, 'world_operators')
+    || isMissingRelationError(worldResultsResponse.error, 'world_results')
+    || isMissingRelationError(worldGraphConnectionsResponse.error, 'world_graph_connections')
   const meshGenerationSchemaMissing =
     meshGenerationJobsResponse.status === 404
     || isMissingRelationError(meshGenerationJobsResponse.error, 'mesh_generation_jobs')
@@ -1659,6 +1957,9 @@ export async function loadProjectSnapshot(
   const worldEntities = worldGraphSchemaMissing ? [] : (worldEntitiesResponse.data as WorldEntityRow[] | null) ?? []
   const worldRelationships = worldGraphSchemaMissing ? [] : (worldRelationshipsResponse.data as WorldRelationshipRow[] | null) ?? []
   const worldViews = worldGraphSchemaMissing ? [] : (worldViewsResponse.data as WorldViewRow[] | null) ?? []
+  const worldOperators = worldGraphSchemaMissing ? [] : (worldOperatorsResponse.data as WorldOperatorRow[] | null) ?? []
+  const worldResults = worldGraphSchemaMissing ? [] : (worldResultsResponse.data as WorldResultRow[] | null) ?? []
+  const worldGraphConnections = worldGraphSchemaMissing ? [] : (worldGraphConnectionsResponse.data as WorldGraphConnectionRow[] | null) ?? []
   const worldBuildBatches = worldBuildSchemaMissing ? [] : (worldBuildBatchesResponse.data as WorldBuildBatchRow[] | null) ?? []
   const meshGenerationJobs = meshGenerationSchemaMissing ? [] : (meshGenerationJobsResponse.data as MeshGenerationJobRow[] | null) ?? []
   const cinematicRuns = cinematicRunSchemaMissing ? [] : (cinematicRunsResponse.data as CinematicRunRow[] | null) ?? []
@@ -1939,12 +2240,49 @@ export async function loadProjectSnapshot(
       focusDepth: view.focus_depth ?? 1,
       showSuggestions: view.show_suggestions ?? true,
       showLabels: view.show_labels ?? true,
+      showDerivedLayer: view.show_derived_layer ?? true,
       nodePositions: view.node_positions ?? {},
       collapsedState: view.collapsed_state ?? {},
       sortMode: view.sort_mode ?? 'manual',
       metadata: view.metadata ?? {},
       createdAt: view.created_at,
       updatedAt: view.updated_at,
+    })),
+    worldOperators: worldOperators.map((entry) => ({
+      id: entry.id,
+      key: entry.key,
+      operatorType: entry.operator_type,
+      inputEntityKeys: entry.input_entity_keys ?? [],
+      label: entry.label ?? '',
+      status: entry.status,
+      metadata: entry.metadata ?? {},
+      createdAt: entry.created_at,
+      updatedAt: entry.updated_at,
+    })),
+    worldResults: worldResults.map((entry) => ({
+      id: entry.id,
+      key: entry.key,
+      resultType: entry.result_type,
+      sourceOperatorKey: entry.source_operator_key,
+      title: entry.title,
+      summary: entry.summary ?? '',
+      previewAssetKey: entry.preview_asset_key,
+      status: entry.status,
+      metadata: entry.metadata ?? {},
+      createdAt: entry.created_at,
+      updatedAt: entry.updated_at,
+    })),
+    worldGraphConnections: worldGraphConnections.map((entry) => ({
+      id: entry.id,
+      key: entry.key,
+      sourceNodeKey: entry.source_node_key,
+      sourceNodeKind: entry.source_node_kind,
+      targetNodeKey: entry.target_node_key,
+      targetNodeKind: entry.target_node_kind,
+      role: entry.role,
+      metadata: entry.metadata ?? {},
+      createdAt: entry.created_at,
+      updatedAt: entry.updated_at,
     })),
     worldBuildBatches: worldBuildBatches.map((batch) => ({
       id: batch.id,
@@ -3230,6 +3568,9 @@ export async function loadWorldGraph(snapshot: ProjectSnapshot) {
       worldEntities: snapshot.worldEntities,
       worldRelationships: snapshot.worldRelationships,
       worldViews: snapshot.worldViews,
+      worldOperators: snapshot.worldOperators,
+      worldResults: snapshot.worldResults,
+      worldGraphConnections: snapshot.worldGraphConnections,
     })
   }
 
@@ -3238,6 +3579,9 @@ export async function loadWorldGraph(snapshot: ProjectSnapshot) {
     worldEntities: refreshed.worldEntities,
     worldRelationships: refreshed.worldRelationships,
     worldViews: refreshed.worldViews,
+    worldOperators: refreshed.worldOperators,
+    worldResults: refreshed.worldResults,
+    worldGraphConnections: refreshed.worldGraphConnections,
   })
 }
 
@@ -3248,11 +3592,42 @@ export async function syncWorldGraphFromDefinitions(snapshot: ProjectSnapshot) {
     throw new Error('Sign in and load a live GraphCore draft before syncing the world graph.')
   }
 
-  const derivedEntities = deriveMissingWorldEntities(snapshot, { autoDerived: false })
-  const derivedViews = deriveMissingWorldViews({
-    worldEntities: [...snapshot.worldEntities, ...derivedEntities],
-    worldViews: snapshot.worldViews,
-  }, { autoDerived: false })
+  const pendingAutoDerivedEntities = snapshot.worldEntities
+    .filter((entity) => isAutoDerivedWorldEntity(entity))
+    .map((entity) => ({
+      ...entity,
+      metadata: {
+        ...(entity.metadata ?? {}),
+        autoDerived: undefined,
+      },
+    }))
+    .map((entity) => ({
+      ...entity,
+      metadata: Object.fromEntries(Object.entries(entity.metadata ?? {}).filter(([, value]) => value !== undefined)),
+    }))
+  const pendingAutoDerivedViews = snapshot.worldViews
+    .filter((view) => isAutoDerivedWorldView(view))
+    .map((view) => ({
+      ...view,
+      metadata: {
+        ...(view.metadata ?? {}),
+        autoDerived: undefined,
+      },
+    }))
+    .map((view) => ({
+      ...view,
+      metadata: Object.fromEntries(Object.entries(view.metadata ?? {}).filter(([, value]) => value !== undefined)),
+    }))
+
+  const derivedEntities = pendingAutoDerivedEntities.length > 0
+    ? pendingAutoDerivedEntities
+    : deriveMissingWorldEntities(snapshot, { autoDerived: false })
+  const derivedViews = pendingAutoDerivedViews.length > 0
+    ? pendingAutoDerivedViews
+    : deriveMissingWorldViews({
+        worldEntities: [...snapshot.worldEntities, ...derivedEntities],
+        worldViews: snapshot.worldViews,
+      }, { autoDerived: false })
 
   if (derivedEntities.length === 0 && derivedViews.length === 0) {
     return snapshot
@@ -3299,6 +3674,7 @@ export async function syncWorldGraphFromDefinitions(snapshot: ProjectSnapshot) {
         focus_depth: view.focusDepth,
         show_suggestions: view.showSuggestions,
         show_labels: view.showLabels,
+        show_derived_layer: view.showDerivedLayer,
         node_positions: view.nodePositions,
         collapsed_state: view.collapsedState,
         sort_mode: view.sortMode,
@@ -3323,7 +3699,7 @@ export async function createWorldEntity(snapshot: ProjectSnapshot, input: WorldE
   }
 
   const payload = worldEntityCreateInputSchema.parse(input)
-  const linkedDefinitionKey = await createLinkedDefinitionForWorldEntity(snapshot, payload)
+  const { linkedDefinitionKey, linkedDefinition } = await createLinkedDefinitionForWorldEntity(snapshot, payload)
   const key = buildWorldEntityKey(snapshot.worldEntities.map((entity) => entity.key), payload.nodeType, payload.name)
 
   const insertResponse = await supabase
@@ -3343,12 +3719,19 @@ export async function createWorldEntity(snapshot: ProjectSnapshot, input: WorldE
       custom_properties: payload.customProperties,
       metadata: payload.metadata,
     })
+    .select(WORLD_ENTITY_SELECT)
+    .single()
 
   if (insertResponse.error) {
     throw new Error(insertResponse.error.message)
   }
 
-  return reloadLiveSnapshot(snapshot)
+  const nextEntity = mapWorldEntityRow(insertResponse.data as WorldEntityRow)
+  return {
+    ...snapshot,
+    definitions: linkedDefinition ? upsertEntryByKey(snapshot.definitions, linkedDefinition) : snapshot.definitions,
+    worldEntities: upsertEntryByKey(snapshot.worldEntities, nextEntity),
+  }
 }
 
 export async function updateWorldEntity(snapshot: ProjectSnapshot, entityKey: string, changes: WorldEntityUpdateInput) {
@@ -3378,12 +3761,17 @@ export async function updateWorldEntity(snapshot: ProjectSnapshot, entityKey: st
     .update(updatePayload)
     .eq('draft_id', snapshot.draft.id)
     .eq('key', entityKey)
+    .select(WORLD_ENTITY_SELECT)
+    .single()
 
   if (updateResponse.error) {
     throw new Error(updateResponse.error.message)
   }
 
-  return reloadLiveSnapshot(snapshot)
+  return {
+    ...snapshot,
+    worldEntities: upsertEntryByKey(snapshot.worldEntities, mapWorldEntityRow(updateResponse.data as WorldEntityRow)),
+  }
 }
 
 export async function deleteWorldEntity(snapshot: ProjectSnapshot, entityKey: string) {
@@ -3391,6 +3779,22 @@ export async function deleteWorldEntity(snapshot: ProjectSnapshot, entityKey: st
 
   if (!hasLiveSnapshotIds(snapshot)) {
     throw new Error('Sign in and load a live GraphCore draft before deleting a world entity.')
+  }
+
+  const dependentOperators = snapshot.worldOperators
+    .filter((entry) => entry.inputEntityKeys.includes(entityKey))
+    .map((entry) => entry.key)
+  for (const operatorKey of dependentOperators) {
+    await deleteWorldDerivedComposition(snapshot, operatorKey)
+  }
+
+  const connectionDelete = await supabase
+    .from('world_graph_connections')
+    .delete()
+    .eq('draft_id', snapshot.draft.id)
+    .or(`source_node_key.eq.${entityKey},target_node_key.eq.${entityKey}`)
+  if (connectionDelete.error) {
+    throw new Error(connectionDelete.error.message)
   }
 
   const deleteResponse = await supabase
@@ -3419,6 +3823,8 @@ export async function createWorldRelationship(snapshot: ProjectSnapshot, input: 
   if (!sourceEntity || !targetEntity) {
     throw new Error('Both world entities must exist before creating a relationship.')
   }
+  const sourceEntityId = await resolvePersistedWorldEntityId(snapshot, sourceEntity)
+  const targetEntityId = await resolvePersistedWorldEntityId(snapshot, targetEntity)
 
   const key = buildWorldRelationshipKey(
     snapshot.worldRelationships.map((relationship) => relationship.key),
@@ -3432,8 +3838,8 @@ export async function createWorldRelationship(snapshot: ProjectSnapshot, input: 
     .insert({
       draft_id: snapshot.draft.id,
       key,
-      source_entity_id: sourceEntity.id,
-      target_entity_id: targetEntity.id,
+      source_entity_id: sourceEntityId,
+      target_entity_id: targetEntityId,
       verb: payload.verb,
       direction: payload.direction,
       strength: payload.strength,
@@ -3443,12 +3849,18 @@ export async function createWorldRelationship(snapshot: ProjectSnapshot, input: 
       state: payload.state,
       metadata: payload.metadata,
     })
+    .select(WORLD_RELATIONSHIP_SELECT)
+    .single()
 
   if (insertResponse.error) {
     throw new Error(insertResponse.error.message)
   }
 
-  return reloadLiveSnapshot(snapshot)
+  const nextRelationship = mapWorldRelationshipRow(insertResponse.data as WorldRelationshipRow, snapshot.worldEntities)
+  return {
+    ...snapshot,
+    worldRelationships: upsertEntryByKey(snapshot.worldRelationships, nextRelationship),
+  }
 }
 
 export async function updateWorldRelationship(snapshot: ProjectSnapshot, relationshipKey: string, changes: WorldRelationshipUpdateInput) {
@@ -3463,12 +3875,12 @@ export async function updateWorldRelationship(snapshot: ProjectSnapshot, relatio
   if (payload.sourceEntityKey) {
     const sourceEntity = snapshot.worldEntities.find((entity) => entity.key === payload.sourceEntityKey) ?? null
     if (!sourceEntity) throw new Error('The updated source entity was not found.')
-    updatePayload.source_entity_id = sourceEntity.id
+    updatePayload.source_entity_id = await resolvePersistedWorldEntityId(snapshot, sourceEntity)
   }
   if (payload.targetEntityKey) {
     const targetEntity = snapshot.worldEntities.find((entity) => entity.key === payload.targetEntityKey) ?? null
     if (!targetEntity) throw new Error('The updated target entity was not found.')
-    updatePayload.target_entity_id = targetEntity.id
+    updatePayload.target_entity_id = await resolvePersistedWorldEntityId(snapshot, targetEntity)
   }
   if (payload.verb !== undefined) updatePayload.verb = payload.verb
   if (payload.direction !== undefined) updatePayload.direction = payload.direction
@@ -3484,12 +3896,20 @@ export async function updateWorldRelationship(snapshot: ProjectSnapshot, relatio
     .update(updatePayload)
     .eq('draft_id', snapshot.draft.id)
     .eq('key', relationshipKey)
+    .select(WORLD_RELATIONSHIP_SELECT)
+    .single()
 
   if (updateResponse.error) {
     throw new Error(updateResponse.error.message)
   }
 
-  return reloadLiveSnapshot(snapshot)
+  return {
+    ...snapshot,
+    worldRelationships: upsertEntryByKey(
+      snapshot.worldRelationships,
+      mapWorldRelationshipRow(updateResponse.data as WorldRelationshipRow, snapshot.worldEntities),
+    ),
+  }
 }
 
 export async function deleteWorldRelationship(snapshot: ProjectSnapshot, relationshipKey: string) {
@@ -3509,7 +3929,10 @@ export async function deleteWorldRelationship(snapshot: ProjectSnapshot, relatio
     throw new Error(deleteResponse.error.message)
   }
 
-  return reloadLiveSnapshot(snapshot)
+  return {
+    ...snapshot,
+    worldRelationships: snapshot.worldRelationships.filter((relationship) => relationship.key !== relationshipKey),
+  }
 }
 
 export async function createWorldView(snapshot: ProjectSnapshot, input: WorldViewCreateInput) {
@@ -3536,17 +3959,23 @@ export async function createWorldView(snapshot: ProjectSnapshot, input: WorldVie
       focus_depth: payload.focusDepth,
       show_suggestions: payload.showSuggestions,
       show_labels: payload.showLabels,
+      show_derived_layer: payload.showDerivedLayer,
       node_positions: payload.nodePositions,
       collapsed_state: payload.collapsedState,
       sort_mode: payload.sortMode,
       metadata: payload.metadata,
     })
+    .select(WORLD_VIEW_SELECT)
+    .single()
 
   if (insertResponse.error) {
     throw new Error(insertResponse.error.message)
   }
 
-  return reloadLiveSnapshot(snapshot)
+  return {
+    ...snapshot,
+    worldViews: upsertEntryByKey(snapshot.worldViews, mapWorldViewRow(insertResponse.data as WorldViewRow)),
+  }
 }
 
 export async function updateWorldView(snapshot: ProjectSnapshot, viewKey: string, changes: WorldViewUpdateInput) {
@@ -3567,6 +3996,7 @@ export async function updateWorldView(snapshot: ProjectSnapshot, viewKey: string
   if (payload.focusDepth !== undefined) updatePayload.focus_depth = payload.focusDepth
   if (payload.showSuggestions !== undefined) updatePayload.show_suggestions = payload.showSuggestions
   if (payload.showLabels !== undefined) updatePayload.show_labels = payload.showLabels
+  if (payload.showDerivedLayer !== undefined) updatePayload.show_derived_layer = payload.showDerivedLayer
   if (payload.nodePositions !== undefined) updatePayload.node_positions = payload.nodePositions
   if (payload.collapsedState !== undefined) updatePayload.collapsed_state = payload.collapsedState
   if (payload.sortMode !== undefined) updatePayload.sort_mode = payload.sortMode
@@ -3577,12 +4007,17 @@ export async function updateWorldView(snapshot: ProjectSnapshot, viewKey: string
     .update(updatePayload)
     .eq('draft_id', snapshot.draft.id)
     .eq('key', viewKey)
+    .select(WORLD_VIEW_SELECT)
+    .single()
 
   if (updateResponse.error) {
     throw new Error(updateResponse.error.message)
   }
 
-  return reloadLiveSnapshot(snapshot)
+  return {
+    ...snapshot,
+    worldViews: upsertEntryByKey(snapshot.worldViews, mapWorldViewRow(updateResponse.data as WorldViewRow)),
+  }
 }
 
 export async function deleteWorldView(snapshot: ProjectSnapshot, viewKey: string) {
@@ -3602,7 +4037,335 @@ export async function deleteWorldView(snapshot: ProjectSnapshot, viewKey: string
     throw new Error(deleteResponse.error.message)
   }
 
+  return {
+    ...snapshot,
+    worldViews: snapshot.worldViews.filter((view) => view.key !== viewKey),
+  }
+}
+
+export async function createWorldRelationshipFromGraphGesture(snapshot: ProjectSnapshot, input: WorldRelationshipCreateInput) {
+  return createWorldRelationship(snapshot, input)
+}
+
+export async function createWorldDerivedComposition(snapshot: ProjectSnapshot, input: WorldDerivedCompositionCreateInput) {
+  await getValidatedSession('Sign in and load a live GraphCore draft before creating a derived world composition.')
+
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Sign in and load a live GraphCore draft before creating a derived world composition.')
+  }
+
+  const payload = worldDerivedCompositionCreateInputSchema.parse(input)
+  const sourceEntity = snapshot.worldEntities.find((entity) => entity.key === payload.sourceEntityKey) ?? null
+  const targetEntity = snapshot.worldEntities.find((entity) => entity.key === payload.targetEntityKey) ?? null
+  if (!sourceEntity || !targetEntity) {
+    throw new Error('Both world entities must exist before creating a derived composition.')
+  }
+
+  const operatorKey = buildWorldOperatorKey(
+    snapshot.worldOperators.map((entry) => entry.key),
+    sourceEntity.key,
+    payload.operatorType,
+    targetEntity.key,
+  )
+  const title = payload.title?.trim() || buildWorldDerivedCompositionTitle(sourceEntity, targetEntity, payload.operatorType)
+  const resultKey = buildWorldResultKey(snapshot.worldResults.map((entry) => entry.key), title)
+  const previewAssetKey = payload.previewAssetKey ?? buildPreviewAssetKeyForComposition(snapshot, [sourceEntity, targetEntity])
+
+  const operatorInsert = await supabase
+    .from('world_operators')
+    .insert({
+      draft_id: snapshot.draft.id,
+      key: operatorKey,
+      operator_type: payload.operatorType,
+      input_entity_keys: [sourceEntity.key, targetEntity.key],
+      label: '',
+      status: 'active',
+      metadata: payload.metadata,
+    })
+    .select(WORLD_OPERATOR_SELECT)
+    .single()
+
+  if (operatorInsert.error) {
+    throw new Error(operatorInsert.error.message)
+  }
+
+  const resultInsert = await supabase
+    .from('world_results')
+    .insert({
+      draft_id: snapshot.draft.id,
+      key: resultKey,
+      result_type: resultTypeForOperatorType(payload.operatorType),
+      source_operator_key: operatorKey,
+      title,
+      summary: payload.summary,
+      preview_asset_key: previewAssetKey,
+      status: 'ready',
+      metadata: {
+        inputEntityKeys: [sourceEntity.key, targetEntity.key],
+        ...payload.metadata,
+      },
+    })
+    .select(WORLD_RESULT_SELECT)
+    .single()
+
+  if (resultInsert.error) {
+    throw new Error(resultInsert.error.message)
+  }
+
+  const existingConnectionKeys = snapshot.worldGraphConnections.map((entry) => entry.key)
+  const connectionInsert = await supabase
+    .from('world_graph_connections')
+    .insert([
+      {
+        draft_id: snapshot.draft.id,
+        key: buildWorldGraphConnectionKey(existingConnectionKeys, `${sourceEntity.key}-input-${operatorKey}`),
+        source_node_key: sourceEntity.key,
+        source_node_kind: 'entity',
+        target_node_key: operatorKey,
+        target_node_kind: 'operator',
+        role: 'input',
+        metadata: {},
+      },
+      {
+        draft_id: snapshot.draft.id,
+        key: buildWorldGraphConnectionKey([...existingConnectionKeys, 'reserved-1'], `${targetEntity.key}-input-${operatorKey}`),
+        source_node_key: targetEntity.key,
+        source_node_kind: 'entity',
+        target_node_key: operatorKey,
+        target_node_kind: 'operator',
+        role: 'input',
+        metadata: {},
+      },
+      {
+        draft_id: snapshot.draft.id,
+        key: buildWorldGraphConnectionKey([...existingConnectionKeys, 'reserved-1', 'reserved-2'], `${operatorKey}-output-${resultKey}`),
+        source_node_key: operatorKey,
+        source_node_kind: 'operator',
+        target_node_key: resultKey,
+        target_node_kind: 'result',
+        role: 'output',
+        metadata: {},
+      },
+    ])
+    .select(WORLD_CONNECTION_SELECT)
+
+  if (connectionInsert.error) {
+    throw new Error(connectionInsert.error.message)
+  }
+
+  const nextOperator = mapWorldOperatorRow(operatorInsert.data as WorldOperatorRow)
+  const nextResult = mapWorldResultRow(resultInsert.data as WorldResultRow)
+  const nextConnections = ((connectionInsert.data as WorldGraphConnectionRow[] | null) ?? []).map(mapWorldGraphConnectionRow)
+
+  return {
+    ...snapshot,
+    worldOperators: upsertEntryByKey(snapshot.worldOperators, nextOperator),
+    worldResults: upsertEntryByKey(snapshot.worldResults, nextResult),
+    worldGraphConnections: [
+      ...snapshot.worldGraphConnections.filter((entry) => !nextConnections.some((connection) => connection.key === entry.key)),
+      ...nextConnections,
+    ],
+  }
+}
+
+export async function updateWorldDerivedComposition(snapshot: ProjectSnapshot, operatorKey: string, changes: WorldDerivedCompositionUpdateInput) {
+  await getValidatedSession('Sign in and load a live GraphCore draft before updating a derived world composition.')
+
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Sign in and load a live GraphCore draft before updating a derived world composition.')
+  }
+
+  const payload = worldDerivedCompositionUpdateInputSchema.parse(changes)
+  const operator = snapshot.worldOperators.find((entry) => entry.key === operatorKey) ?? null
+  const result = snapshot.worldResults.find((entry) => entry.sourceOperatorKey === operatorKey) ?? null
+  if (!operator || !result) {
+    throw new Error(`Derived world composition "${operatorKey}" was not found.`)
+  }
+
+  if (payload.operatorChanges.inputEntityKeys && payload.operatorChanges.inputEntityKeys.length < 2) {
+    throw new Error('Derived compositions require at least two input entities.')
+  }
+
+  const nextOperatorType = payload.operatorChanges.operatorType ?? operator.operatorType
+  const nextInputEntityKeys = payload.operatorChanges.inputEntityKeys ?? operator.inputEntityKeys
+  const inputEntities = nextInputEntityKeys
+    .map((entityKey) => snapshot.worldEntities.find((entity) => entity.key === entityKey) ?? null)
+    .filter((entity): entity is WorldEntity => Boolean(entity))
+
+  const operatorUpdatePayload: Record<string, unknown> = {}
+  if (payload.operatorChanges.operatorType !== undefined) operatorUpdatePayload.operator_type = payload.operatorChanges.operatorType
+  if (payload.operatorChanges.inputEntityKeys !== undefined) operatorUpdatePayload.input_entity_keys = payload.operatorChanges.inputEntityKeys
+  if (payload.operatorChanges.label !== undefined) operatorUpdatePayload.label = payload.operatorChanges.label
+  if (payload.operatorChanges.status !== undefined) operatorUpdatePayload.status = payload.operatorChanges.status
+  if (payload.operatorChanges.metadata !== undefined) operatorUpdatePayload.metadata = payload.operatorChanges.metadata
+
+  if (Object.keys(operatorUpdatePayload).length > 0) {
+    const operatorUpdate = await supabase
+      .from('world_operators')
+      .update(operatorUpdatePayload)
+      .eq('draft_id', snapshot.draft.id)
+      .eq('key', operatorKey)
+    if (operatorUpdate.error) {
+      throw new Error(operatorUpdate.error.message)
+    }
+  }
+
+  const resultUpdatePayload: Record<string, unknown> = {}
+  if (payload.resultChanges.resultType !== undefined) resultUpdatePayload.result_type = payload.resultChanges.resultType
+  else if (payload.operatorChanges.operatorType !== undefined) resultUpdatePayload.result_type = resultTypeForOperatorType(nextOperatorType)
+  if (payload.resultChanges.title !== undefined) resultUpdatePayload.title = payload.resultChanges.title
+  if (payload.resultChanges.summary !== undefined) resultUpdatePayload.summary = payload.resultChanges.summary
+  if (payload.resultChanges.previewAssetKey !== undefined) resultUpdatePayload.preview_asset_key = payload.resultChanges.previewAssetKey
+  else if (payload.operatorChanges.inputEntityKeys !== undefined && inputEntities.length > 0 && !result.previewAssetKey) {
+    resultUpdatePayload.preview_asset_key = buildPreviewAssetKeyForComposition(snapshot, inputEntities)
+  }
+  if (payload.resultChanges.status !== undefined) resultUpdatePayload.status = payload.resultChanges.status
+  if (payload.resultChanges.metadata !== undefined || payload.operatorChanges.inputEntityKeys !== undefined) {
+    resultUpdatePayload.metadata = {
+      ...(result.metadata ?? {}),
+      ...(payload.resultChanges.metadata ?? {}),
+      inputEntityKeys: nextInputEntityKeys,
+    }
+  }
+
+  if (Object.keys(resultUpdatePayload).length > 0) {
+    const resultUpdate = await supabase
+      .from('world_results')
+      .update(resultUpdatePayload)
+      .eq('draft_id', snapshot.draft.id)
+      .eq('key', result.key)
+    if (resultUpdate.error) {
+      throw new Error(resultUpdate.error.message)
+    }
+  }
+
+  const nextOperator: WorldOperator = {
+    ...operator,
+    ...(payload.operatorChanges ?? {}),
+  }
+  const nextResult: WorldResult = {
+    ...result,
+    ...(payload.resultChanges ?? {}),
+    resultType: payload.resultChanges.resultType ?? (payload.operatorChanges.operatorType ? resultTypeForOperatorType(nextOperatorType) : result.resultType),
+    previewAssetKey:
+      payload.resultChanges.previewAssetKey !== undefined
+        ? payload.resultChanges.previewAssetKey
+        : payload.operatorChanges.inputEntityKeys !== undefined && inputEntities.length > 0 && !result.previewAssetKey
+          ? buildPreviewAssetKeyForComposition(snapshot, inputEntities)
+          : result.previewAssetKey,
+    metadata:
+      payload.resultChanges.metadata !== undefined || payload.operatorChanges.inputEntityKeys !== undefined
+        ? {
+            ...(result.metadata ?? {}),
+            ...(payload.resultChanges.metadata ?? {}),
+            inputEntityKeys: nextInputEntityKeys,
+          }
+        : result.metadata,
+  }
+
+  return {
+    ...snapshot,
+    worldOperators: upsertEntryByKey(snapshot.worldOperators, nextOperator),
+    worldResults: upsertEntryByKey(snapshot.worldResults, nextResult),
+  }
+}
+
+export async function deleteWorldDerivedComposition(snapshot: ProjectSnapshot, operatorKey: string) {
+  await getValidatedSession('Sign in and load a live GraphCore draft before deleting a derived world composition.')
+
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Sign in and load a live GraphCore draft before deleting a derived world composition.')
+  }
+
+  const resultKeys = snapshot.worldResults
+    .filter((entry) => entry.sourceOperatorKey === operatorKey)
+    .map((entry) => entry.key)
+  const deleteOperatorConnections = await supabase
+    .from('world_graph_connections')
+    .delete()
+    .eq('draft_id', snapshot.draft.id)
+    .or(`source_node_key.eq.${operatorKey},target_node_key.eq.${operatorKey}`)
+  if (deleteOperatorConnections.error) {
+    throw new Error(deleteOperatorConnections.error.message)
+  }
+
+  if (resultKeys.length > 0) {
+    const deleteResultConnections = await supabase
+      .from('world_graph_connections')
+      .delete()
+      .eq('draft_id', snapshot.draft.id)
+      .in('target_node_key', resultKeys)
+    if (deleteResultConnections.error) {
+      throw new Error(deleteResultConnections.error.message)
+    }
+  }
+
+  const deleteResults = await supabase
+    .from('world_results')
+    .delete()
+    .eq('draft_id', snapshot.draft.id)
+    .eq('source_operator_key', operatorKey)
+  if (deleteResults.error) {
+    throw new Error(deleteResults.error.message)
+  }
+
+  const deleteOperator = await supabase
+    .from('world_operators')
+    .delete()
+    .eq('draft_id', snapshot.draft.id)
+    .eq('key', operatorKey)
+  if (deleteOperator.error) {
+    throw new Error(deleteOperator.error.message)
+  }
+
   return reloadLiveSnapshot(snapshot)
+}
+
+export async function generateWorldResultPreview(snapshot: ProjectSnapshot, resultKey: string) {
+  await getValidatedSession('Sign in and load a live GraphCore draft before generating a world result preview.')
+
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Sign in and load a live GraphCore draft before generating a world result preview.')
+  }
+
+  const result = snapshot.worldResults.find((entry) => entry.key === resultKey) ?? null
+  if (!result) {
+    throw new Error(`World result "${resultKey}" was not found.`)
+  }
+
+  const operator = snapshot.worldOperators.find((entry) => entry.key === result.sourceOperatorKey) ?? null
+  if (!operator) {
+    throw new Error(`World operator "${result.sourceOperatorKey}" was not found.`)
+  }
+
+  const inputEntities = operator.inputEntityKeys
+    .map((entityKey) => snapshot.worldEntities.find((entity) => entity.key === entityKey) ?? null)
+    .filter((entity): entity is WorldEntity => Boolean(entity))
+  const previewAssetKey = buildPreviewAssetKeyForComposition(snapshot, inputEntities)
+
+  const updateResponse = await supabase
+    .from('world_results')
+    .update({
+      preview_asset_key: previewAssetKey,
+      status: 'ready',
+      metadata: {
+        ...(result.metadata ?? {}),
+        lastPreviewGeneratedAt: new Date().toISOString(),
+      },
+    })
+    .eq('draft_id', snapshot.draft.id)
+    .eq('key', resultKey)
+    .select(WORLD_RESULT_SELECT)
+    .single()
+
+  if (updateResponse.error) {
+    throw new Error(updateResponse.error.message)
+  }
+
+  return {
+    ...snapshot,
+    worldResults: upsertEntryByKey(snapshot.worldResults, mapWorldResultRow(updateResponse.data as WorldResultRow)),
+  }
 }
 
 export async function generateStarterWorld(request: WorldGraphSeedRequest) {

@@ -6,6 +6,12 @@ export const worldEntitySourceSchema = z.enum(['user', 'ai', 'inferred'])
 export const worldRelationshipStateSchema = z.enum(['confirmed', 'suggested', 'inferred'])
 export const worldRelationshipDirectionSchema = z.enum(['outbound', 'inbound', 'bidirectional'])
 export const worldViewModeSchema = z.enum(['graph', 'table', 'timeline', 'board'])
+export const worldOperatorTypeSchema = z.enum(['wear', 'equip', 'hold', 'place_in', 'paired_with', 'stage_scene'])
+export const worldOperatorStatusSchema = z.enum(['draft', 'active', 'archived'])
+export const worldResultTypeSchema = z.enum(['look_variant', 'equipped_variant', 'staged_character', 'paired_subject', 'scene_setup'])
+export const worldResultStatusSchema = z.enum(['draft', 'ready', 'generating', 'archived'])
+export const worldGraphNodeKindSchema = z.enum(['entity', 'operator', 'result'])
+export const worldGraphConnectionRoleSchema = z.enum(['input', 'output'])
 
 const looseRecordSchema = z.record(z.string(), z.unknown())
 
@@ -82,9 +88,49 @@ export const worldViewSchema = z.object({
   focusDepth: z.number().int().min(1).max(2).default(1),
   showSuggestions: z.boolean().default(true),
   showLabels: z.boolean().default(true),
+  showDerivedLayer: z.boolean().default(true),
   nodePositions: z.record(z.string(), z.object({ x: z.number(), y: z.number() })).default({}),
   collapsedState: z.record(z.string(), z.boolean()).default({}),
   sortMode: z.enum(['manual', 'recent', 'alphabetical', 'relationship_count']).default('manual'),
+  metadata: looseRecordSchema.default({}),
+  createdAt: z.string().optional(),
+  updatedAt: z.string().optional(),
+})
+
+export const worldOperatorSchema = z.object({
+  id: z.string(),
+  key: z.string(),
+  operatorType: worldOperatorTypeSchema,
+  inputEntityKeys: z.array(z.string()).min(2),
+  label: z.string().default(''),
+  status: worldOperatorStatusSchema.default('active'),
+  metadata: looseRecordSchema.default({}),
+  createdAt: z.string().optional(),
+  updatedAt: z.string().optional(),
+})
+
+export const worldResultSchema = z.object({
+  id: z.string(),
+  key: z.string(),
+  resultType: worldResultTypeSchema,
+  sourceOperatorKey: z.string(),
+  title: z.string(),
+  summary: z.string().default(''),
+  previewAssetKey: z.string().nullable().default(null),
+  status: worldResultStatusSchema.default('draft'),
+  metadata: looseRecordSchema.default({}),
+  createdAt: z.string().optional(),
+  updatedAt: z.string().optional(),
+})
+
+export const worldGraphConnectionSchema = z.object({
+  id: z.string(),
+  key: z.string(),
+  sourceNodeKey: z.string(),
+  sourceNodeKind: worldGraphNodeKindSchema,
+  targetNodeKey: z.string(),
+  targetNodeKind: worldGraphNodeKindSchema,
+  role: worldGraphConnectionRoleSchema.default('input'),
   metadata: looseRecordSchema.default({}),
   createdAt: z.string().optional(),
   updatedAt: z.string().optional(),
@@ -94,6 +140,9 @@ export const worldGraphSnapshotSchema = z.object({
   worldEntities: z.array(worldEntitySchema).default([]),
   worldRelationships: z.array(worldRelationshipSchema).default([]),
   worldViews: z.array(worldViewSchema).default([]),
+  worldOperators: z.array(worldOperatorSchema).default([]),
+  worldResults: z.array(worldResultSchema).default([]),
+  worldGraphConnections: z.array(worldGraphConnectionSchema).default([]),
 })
 
 export const worldLinkedDefinitionKindSchema = z.enum(['character', 'environment', 'item'])
@@ -151,6 +200,7 @@ export const worldViewCreateInputSchema = z.object({
   focusDepth: z.number().int().min(1).max(2).default(1),
   showSuggestions: z.boolean().default(true),
   showLabels: z.boolean().default(true),
+  showDerivedLayer: z.boolean().default(true),
   nodePositions: z.record(z.string(), z.object({ x: z.number(), y: z.number() })).default({}),
   collapsedState: z.record(z.string(), z.boolean()).default({}),
   sortMode: z.enum(['manual', 'recent', 'alphabetical', 'relationship_count']).default('manual'),
@@ -158,6 +208,54 @@ export const worldViewCreateInputSchema = z.object({
 })
 
 export const worldViewUpdateInputSchema = worldViewCreateInputSchema.partial()
+
+export const worldOperatorCreateInputSchema = z.object({
+  operatorType: worldOperatorTypeSchema,
+  inputEntityKeys: z.array(z.string()).min(2),
+  label: z.string().default(''),
+  status: worldOperatorStatusSchema.default('active'),
+  metadata: looseRecordSchema.default({}),
+})
+
+export const worldOperatorUpdateInputSchema = worldOperatorCreateInputSchema.partial()
+
+export const worldResultCreateInputSchema = z.object({
+  resultType: worldResultTypeSchema,
+  sourceOperatorKey: z.string().min(1),
+  title: z.string().min(1),
+  summary: z.string().default(''),
+  previewAssetKey: z.string().nullable().default(null),
+  status: worldResultStatusSchema.default('draft'),
+  metadata: looseRecordSchema.default({}),
+})
+
+export const worldResultUpdateInputSchema = worldResultCreateInputSchema.partial()
+
+export const worldGraphConnectionCreateInputSchema = z.object({
+  sourceNodeKey: z.string().min(1),
+  sourceNodeKind: worldGraphNodeKindSchema,
+  targetNodeKey: z.string().min(1),
+  targetNodeKind: worldGraphNodeKindSchema,
+  role: worldGraphConnectionRoleSchema.default('input'),
+  metadata: looseRecordSchema.default({}),
+})
+
+export const worldGraphConnectionUpdateInputSchema = worldGraphConnectionCreateInputSchema.partial()
+
+export const worldDerivedCompositionCreateInputSchema = z.object({
+  sourceEntityKey: z.string().min(1),
+  targetEntityKey: z.string().min(1),
+  operatorType: worldOperatorTypeSchema,
+  title: z.string().min(1).optional(),
+  summary: z.string().default(''),
+  previewAssetKey: z.string().nullable().default(null),
+  metadata: looseRecordSchema.default({}),
+})
+
+export const worldDerivedCompositionUpdateInputSchema = z.object({
+  operatorChanges: worldOperatorUpdateInputSchema.default({}),
+  resultChanges: worldResultUpdateInputSchema.default({}),
+})
 
 export const worldGraphSeedRequestSchema = z.object({
   prompt: z.string().min(1),
@@ -179,6 +277,9 @@ export const worldGraphSeedRequestSchema = z.object({
     })).default([]),
     worldEntities: z.array(worldEntitySchema).default([]),
     worldRelationships: z.array(worldRelationshipSchema).default([]),
+    worldOperators: z.array(worldOperatorSchema).default([]),
+    worldResults: z.array(worldResultSchema).default([]),
+    worldGraphConnections: z.array(worldGraphConnectionSchema).default([]),
   }),
   model: z.string().min(1).default('gpt-5-mini'),
 })
@@ -203,6 +304,9 @@ export const worldGraphExpansionRequestSchema = z.object({
     })).default([]),
     worldEntities: z.array(worldEntitySchema).default([]),
     worldRelationships: z.array(worldRelationshipSchema).default([]),
+    worldOperators: z.array(worldOperatorSchema).default([]),
+    worldResults: z.array(worldResultSchema).default([]),
+    worldGraphConnections: z.array(worldGraphConnectionSchema).default([]),
   }),
   model: z.string().min(1).default('gpt-5-mini'),
 })
@@ -239,6 +343,9 @@ export const worldGraphGeneratorResultSchema = z.object({
 export type WorldEntity = z.infer<typeof worldEntitySchema>
 export type WorldRelationship = z.infer<typeof worldRelationshipSchema>
 export type WorldView = z.infer<typeof worldViewSchema>
+export type WorldOperator = z.infer<typeof worldOperatorSchema>
+export type WorldResult = z.infer<typeof worldResultSchema>
+export type WorldGraphConnection = z.infer<typeof worldGraphConnectionSchema>
 export type WorldGraphSnapshot = z.infer<typeof worldGraphSnapshotSchema>
 export type WorldEntityCreateInput = z.infer<typeof worldEntityCreateInputSchema>
 export type WorldEntityUpdateInput = z.infer<typeof worldEntityUpdateInputSchema>
@@ -246,6 +353,14 @@ export type WorldRelationshipCreateInput = z.infer<typeof worldRelationshipCreat
 export type WorldRelationshipUpdateInput = z.infer<typeof worldRelationshipUpdateInputSchema>
 export type WorldViewCreateInput = z.infer<typeof worldViewCreateInputSchema>
 export type WorldViewUpdateInput = z.infer<typeof worldViewUpdateInputSchema>
+export type WorldOperatorCreateInput = z.infer<typeof worldOperatorCreateInputSchema>
+export type WorldOperatorUpdateInput = z.infer<typeof worldOperatorUpdateInputSchema>
+export type WorldResultCreateInput = z.infer<typeof worldResultCreateInputSchema>
+export type WorldResultUpdateInput = z.infer<typeof worldResultUpdateInputSchema>
+export type WorldGraphConnectionCreateInput = z.infer<typeof worldGraphConnectionCreateInputSchema>
+export type WorldGraphConnectionUpdateInput = z.infer<typeof worldGraphConnectionUpdateInputSchema>
+export type WorldDerivedCompositionCreateInput = z.infer<typeof worldDerivedCompositionCreateInputSchema>
+export type WorldDerivedCompositionUpdateInput = z.infer<typeof worldDerivedCompositionUpdateInputSchema>
 export type WorldGraphSeedRequest = z.infer<typeof worldGraphSeedRequestSchema>
 export type WorldGraphExpansionRequest = z.infer<typeof worldGraphExpansionRequestSchema>
 export type WorldGraphGeneratorResult = z.infer<typeof worldGraphGeneratorResultSchema>

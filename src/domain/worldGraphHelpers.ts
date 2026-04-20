@@ -3,8 +3,11 @@ import type { DefinitionBase, GraphDefinition, ProjectSnapshot } from './graphco
 import type {
   WorldEntity,
   WorldEntityCreateInput,
+  WorldGraphConnection,
+  WorldOperator,
   WorldRelationship,
   WorldRelationshipCreateInput,
+  WorldResult,
   WorldView,
 } from './worldGraph'
 
@@ -15,6 +18,12 @@ export type WorldSuggestion = {
   cta: 'add' | 'link' | 'generate' | 'ignore'
   entityDefaults?: Partial<WorldEntityCreateInput>
   relationshipDefaults?: Partial<WorldRelationshipCreateInput>
+}
+
+export type WorldDerivedOperationOption = {
+  operatorType: WorldOperator['operatorType']
+  resultType: WorldResult['resultType']
+  label: string
 }
 
 function createWorldLocalId(prefix: string) {
@@ -139,6 +148,8 @@ export function deriveMissingWorldViews(
 export function hasMissingWorldGraphBackfill(
   snapshot: Pick<ProjectSnapshot, 'definitions' | 'worldEntities' | 'worldViews'>,
 ) {
+  if (snapshot.worldEntities.some((entity) => isAutoDerivedWorldEntity(entity))) return true
+  if (snapshot.worldViews.some((view) => isAutoDerivedWorldView(view))) return true
   const derivedEntities = deriveMissingWorldEntities(snapshot)
   if (derivedEntities.length > 0) return true
   return deriveMissingWorldViews({
@@ -212,11 +223,257 @@ export function createDefaultWorldView(seed = 'Core World'): WorldView {
     focusDepth: 1,
     showSuggestions: true,
     showLabels: true,
+    showDerivedLayer: true,
     nodePositions: {},
     collapsedState: {},
     sortMode: 'manual',
     metadata: {},
   }
+}
+
+export function labelForWorldOperator(operatorType: WorldOperator['operatorType']) {
+  switch (operatorType) {
+    case 'wear':
+      return 'Wear'
+    case 'equip':
+      return 'Equip'
+    case 'hold':
+      return 'Hold'
+    case 'place_in':
+      return 'Place In'
+    case 'paired_with':
+      return 'Pair With'
+    case 'stage_scene':
+      return 'Stage In'
+  }
+}
+
+export function labelForWorldResult(resultType: WorldResult['resultType']) {
+  switch (resultType) {
+    case 'look_variant':
+      return 'Look Variant'
+    case 'equipped_variant':
+      return 'Equipped Variant'
+    case 'staged_character':
+      return 'Staged Character'
+    case 'paired_subject':
+      return 'Paired Subject'
+    case 'scene_setup':
+      return 'Scene Setup'
+  }
+}
+
+export function resultTypeForOperatorType(operatorType: WorldOperator['operatorType']): WorldResult['resultType'] {
+  switch (operatorType) {
+    case 'wear':
+      return 'look_variant'
+    case 'equip':
+    case 'hold':
+      return 'equipped_variant'
+    case 'place_in':
+      return 'scene_setup'
+    case 'paired_with':
+      return 'paired_subject'
+    case 'stage_scene':
+      return 'staged_character'
+  }
+}
+
+export function isCanonicalWorldNodeType(nodeType: string): nodeType is WorldEntity['nodeType'] {
+  return ['actor', 'group', 'place', 'object', 'concept', 'event'].includes(nodeType)
+}
+
+export function getDerivedOperationsForEntityPair(
+  source: WorldEntity,
+  target: WorldEntity,
+): WorldDerivedOperationOption[] {
+  if (source.nodeType === 'actor' && target.nodeType === 'object') {
+    return [
+      { operatorType: 'wear', resultType: 'look_variant', label: 'Wear' },
+      { operatorType: 'equip', resultType: 'equipped_variant', label: 'Equip' },
+      { operatorType: 'hold', resultType: 'equipped_variant', label: 'Hold' },
+    ]
+  }
+
+  if (source.nodeType === 'object' && target.nodeType === 'actor') {
+    return [
+      { operatorType: 'equip', resultType: 'equipped_variant', label: 'Equipped By' },
+    ]
+  }
+
+  if (source.nodeType === 'actor' && target.nodeType === 'place') {
+    return [
+      { operatorType: 'place_in', resultType: 'scene_setup', label: 'Place In' },
+      { operatorType: 'stage_scene', resultType: 'staged_character', label: 'Stage In' },
+    ]
+  }
+
+  if (source.nodeType === 'place' && target.nodeType === 'actor') {
+    return [
+      { operatorType: 'stage_scene', resultType: 'staged_character', label: 'Hosts' },
+    ]
+  }
+
+  if (source.nodeType === 'actor' && target.nodeType === 'actor') {
+    return [
+      { operatorType: 'paired_with', resultType: 'paired_subject', label: 'Pair With' },
+    ]
+  }
+
+  return []
+}
+
+function slugifyWorldKeySegment(seed: string) {
+  return seed
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
+function uniqueWorldKey(existing: Set<string>, prefix: string, seed: string) {
+  const slug = slugifyWorldKeySegment(seed) || 'entry'
+  let candidate = `${prefix}.${slug}`
+  let index = 2
+  while (existing.has(candidate)) {
+    candidate = `${prefix}.${slug}-${index}`
+    index += 1
+  }
+  existing.add(candidate)
+  return candidate
+}
+
+function findPreviewAssetKeyForWorldEntity(
+  snapshot: Pick<ProjectSnapshot, 'definitions'>,
+  entity: WorldEntity | null,
+) {
+  if (!entity) return null
+  if (entity.thumbnailAssetKey) return entity.thumbnailAssetKey
+  if (!entity.linkedDefinitionKey) return null
+  const definition = snapshot.definitions.find((entry) => entry.key === entity.linkedDefinitionKey) ?? null
+  return definition?.iconAssetKey ?? null
+}
+
+export function buildPreviewAssetKeyForComposition(
+  snapshot: Pick<ProjectSnapshot, 'definitions'>,
+  inputEntities: WorldEntity[],
+) {
+  for (const entity of inputEntities) {
+    const assetKey = findPreviewAssetKeyForWorldEntity(snapshot, entity)
+    if (assetKey) return assetKey
+  }
+  return null
+}
+
+export function buildWorldDerivedCompositionTitle(
+  source: WorldEntity,
+  target: WorldEntity,
+  operatorType: WorldOperator['operatorType'],
+) {
+  switch (operatorType) {
+    case 'wear':
+      return `${source.name} / ${target.name}`
+    case 'equip':
+    case 'hold':
+      return `${source.name} with ${target.name}`
+    case 'place_in':
+      return `${source.name} in ${target.name}`
+    case 'paired_with':
+      return `${source.name} + ${target.name}`
+    case 'stage_scene':
+      return `${source.name} staged in ${target.name}`
+  }
+}
+
+export function buildLocalWorldDerivedComposition(
+  snapshot: Pick<ProjectSnapshot, 'definitions' | 'worldEntities' | 'worldOperators' | 'worldResults' | 'worldGraphConnections'>,
+  input: {
+    sourceEntityKey: string
+    targetEntityKey: string
+    operatorType: WorldOperator['operatorType']
+    title?: string
+    summary?: string
+    previewAssetKey?: string | null
+    metadata?: Record<string, unknown>
+  },
+) {
+  const sourceEntity = snapshot.worldEntities.find((entity) => entity.key === input.sourceEntityKey) ?? null
+  const targetEntity = snapshot.worldEntities.find((entity) => entity.key === input.targetEntityKey) ?? null
+  if (!sourceEntity || !targetEntity) {
+    throw new Error('Both source and target world entities must exist to create a derived composition.')
+  }
+
+  const operatorKeys = new Set(snapshot.worldOperators.map((entry) => entry.key))
+  const resultKeys = new Set(snapshot.worldResults.map((entry) => entry.key))
+  const connectionKeys = new Set(snapshot.worldGraphConnections.map((entry) => entry.key))
+  const operatorKey = uniqueWorldKey(
+    operatorKeys,
+    'world.operator',
+    `${sourceEntity.name}-${input.operatorType}-${targetEntity.name}`,
+  )
+  const title = input.title?.trim() || buildWorldDerivedCompositionTitle(sourceEntity, targetEntity, input.operatorType)
+  const resultKey = uniqueWorldKey(
+    resultKeys,
+    'world.result',
+    title,
+  )
+
+  const operator: WorldOperator = {
+    id: createWorldLocalId('world-operator'),
+    key: operatorKey,
+    operatorType: input.operatorType,
+    inputEntityKeys: [sourceEntity.key, targetEntity.key],
+    label: labelForWorldOperator(input.operatorType),
+    status: 'active',
+    metadata: input.metadata ?? {},
+  }
+  const result: WorldResult = {
+    id: createWorldLocalId('world-result'),
+    key: resultKey,
+    resultType: resultTypeForOperatorType(input.operatorType),
+    sourceOperatorKey: operator.key,
+    title,
+    summary: input.summary?.trim() ?? '',
+    previewAssetKey: input.previewAssetKey ?? buildPreviewAssetKeyForComposition(snapshot, [sourceEntity, targetEntity]),
+    status: 'ready',
+    metadata: {
+      inputEntityKeys: [sourceEntity.key, targetEntity.key],
+      ...(input.metadata ?? {}),
+    },
+  }
+  const connections: WorldGraphConnection[] = [
+    {
+      id: createWorldLocalId('world-connection'),
+      key: uniqueWorldKey(connectionKeys, 'world.connection', `${sourceEntity.name}-to-${operator.key}`),
+      sourceNodeKey: sourceEntity.key,
+      sourceNodeKind: 'entity',
+      targetNodeKey: operator.key,
+      targetNodeKind: 'operator',
+      role: 'input',
+      metadata: {},
+    },
+    {
+      id: createWorldLocalId('world-connection'),
+      key: uniqueWorldKey(connectionKeys, 'world.connection', `${targetEntity.name}-to-${operator.key}`),
+      sourceNodeKey: targetEntity.key,
+      sourceNodeKind: 'entity',
+      targetNodeKey: operator.key,
+      targetNodeKind: 'operator',
+      role: 'input',
+      metadata: {},
+    },
+    {
+      id: createWorldLocalId('world-connection'),
+      key: uniqueWorldKey(connectionKeys, 'world.connection', `${operator.key}-to-${result.key}`),
+      sourceNodeKey: operator.key,
+      sourceNodeKind: 'operator',
+      targetNodeKey: result.key,
+      targetNodeKind: 'result',
+      role: 'output',
+      metadata: {},
+    },
+  ]
+
+  return { operator, result, connections }
 }
 
 export function getWorldEntityUsage(entity: WorldEntity, graphs: GraphDefinition[]) {
