@@ -2,6 +2,7 @@ import '@xyflow/react/dist/style.css'
 
 import ELK from 'elkjs/lib/elk.bundled.js'
 import {
+  applyNodeChanges,
   Background,
   BaseEdge,
   Controls,
@@ -14,6 +15,7 @@ import {
   type Edge,
   type EdgeProps,
   type Node,
+  type NodeChange,
   type NodeProps,
   type ReactFlowInstance,
 } from '@xyflow/react'
@@ -165,6 +167,32 @@ type EntityOverviewDraftState = {
 
 function keyForWorldNodeRecord(record: WorldGraphNodeRecord) {
   return record.kind === 'entity' ? record.entity.key : record.kind === 'operator' ? record.operator.key : record.result.key
+}
+
+function worldNodeRecordEqual(left: WorldGraphNodeRecord, right: WorldGraphNodeRecord) {
+  if (left.kind !== right.kind) return false
+  if (left.title !== right.title || left.subtitle !== right.subtitle || left.summary !== right.summary || left.imageUrl !== right.imageUrl) {
+    return false
+  }
+  if (left.kind === 'entity' && right.kind === 'entity') {
+    return left.entity.key === right.entity.key && left.entity.status === right.entity.status && left.entity.thumbnailAssetKey === right.entity.thumbnailAssetKey
+  }
+  if (left.kind === 'operator' && right.kind === 'operator') {
+    return left.operator.key === right.operator.key && left.operator.operatorType === right.operator.operatorType && left.operator.label === right.operator.label
+  }
+  if (left.kind === 'result' && right.kind === 'result') {
+    return left.result.key === right.result.key && left.result.previewAssetKey === right.result.previewAssetKey && left.result.title === right.result.title
+  }
+  return false
+}
+
+function worldNodeDataEqual(left: WorldNodeData, right: WorldNodeData) {
+  return (
+    left.relationCount === right.relationCount
+    && left.usageCount === right.usageCount
+    && left.dimmed === right.dimmed
+    && worldNodeRecordEqual(left.record, right.record)
+  )
 }
 
 function nodeShellStyle(record: WorldGraphNodeRecord, selected: boolean, dimmed: boolean): CSSProperties {
@@ -375,6 +403,7 @@ export function WorldGraphPage({
   const [showLabels, setShowLabels] = useState(true)
   const [showDerivedLayer, setShowDerivedLayer] = useState(true)
   const [draftPositions, setDraftPositions] = useState<Record<string, { x: number; y: number }>>({})
+  const [canvasNodes, setCanvasNodes] = useState<Node<WorldNodeData>[]>([])
   const [autoLayoutNonce, setAutoLayoutNonce] = useState(0)
   const [layoutPositions, setLayoutPositions] = useState<Record<string, { x: number; y: number }>>({})
   const [inspectorNodeKey, setInspectorNodeKey] = useState<string | null>(selectedWorldNodeKey)
@@ -772,6 +801,38 @@ export function WorldGraphPage({
     })
   }, [draftPositions, focusRootKey, layoutPositions, relationCountByNodeKey, usageByEntityKey, viewMode, visibleNodeKeys, visibleNodeRecords])
 
+  useEffect(() => {
+    setCanvasNodes((current) => {
+      const currentById = new Map(current.map((node) => [node.id, node]))
+      let changed = current.length !== flowNodes.length
+      const nextNodes = flowNodes.map((node) => {
+        const previousNode = currentById.get(node.id)
+        if (!previousNode) {
+          changed = true
+          return node
+        }
+
+        const samePosition = previousNode.position.x === node.position.x && previousNode.position.y === node.position.y
+        const sameDraggable = previousNode.draggable === node.draggable
+        const sameData = worldNodeDataEqual(previousNode.data, node.data)
+
+        if (samePosition && sameDraggable && sameData) {
+          return previousNode
+        }
+
+        changed = true
+        return {
+          ...previousNode,
+          position: samePosition ? previousNode.position : node.position,
+          draggable: node.draggable,
+          data: sameData ? previousNode.data : node.data,
+        }
+      })
+
+      return changed ? nextNodes : current
+    })
+  }, [flowNodes])
+
   const flowEdges = useMemo<Edge<WorldFlowEdgeData>[]>(() => {
     return [
       ...visibleRelationships.map((relationship) => ({
@@ -1020,6 +1081,10 @@ export function WorldGraphPage({
     onSelectWorldEdge(key)
     onSelectWorldEntity(null)
     setInspectorNodeKey(null)
+  }
+
+  function handleNodesChange(changes: NodeChange<Node<WorldNodeData>>[]) {
+    setCanvasNodes((current) => applyNodeChanges(changes, current))
   }
 
   function handleNodeDragStop(_event: unknown, node: Node<WorldNodeData>) {
@@ -1406,7 +1471,7 @@ export function WorldGraphPage({
               fitView
               nodeTypes={nodeTypes}
               edgeTypes={edgeTypes}
-              nodes={flowNodes}
+              nodes={canvasNodes}
               edges={flowEdges}
               onInit={(instance) => {
                 flowRef.current = instance
@@ -1434,6 +1499,7 @@ export function WorldGraphPage({
                 void persistViewChanges({ rootEntityKey: entity?.key ?? null })
               }}
               onNodeContextMenu={(event, node) => openNodeContextMenu(event, node.id)}
+              onNodesChange={handleNodesChange}
               onNodeDragStop={handleNodeDragStop}
               onEdgeClick={(event, edge) => {
                 event.preventDefault()
