@@ -320,6 +320,61 @@ Deno.serve(async (request) => {
         name: string
         summary?: string | null
       }>)
+      const lockedEntityRefs = Array.isArray(payload.lockedEntityRefs) && payload.lockedEntityRefs.length > 0
+        ? payload.lockedEntityRefs
+        : null
+      if (lockedEntityRefs) {
+        const filteredEntityRefs = pruneIncidentalCinematicEntityRefs(lockedEntityRefs)
+        const requestSummary = trimPromptForSummary(payload.prompt, 96) || 'Cinematic build plan'
+        const graphName = buildDeferredCinematicGraphName(filteredEntityRefs, payload.prompt)
+        const graphSummary = buildDeferredCinematicGraphSummary(payload.prompt, filteredEntityRefs)
+        const resolvedPresetFamily = inferCinematicPresetFamilyFromPrompt(payload.prompt)
+        const resolvedFormatSubtype = inferCinematicFormatSubtypeFromPrompt(payload.prompt, resolvedPresetFamily)
+        const resolvedStoryScenePreset = resolvedPresetFamily === 'story_movie_tv' ? inferStoryScenePresetFromPrompt(payload.prompt) : null
+        const resolvedStoryLanguagePreset = resolvedPresetFamily === 'story_movie_tv' ? inferStoryLanguagePresetFromPrompt(payload.prompt) : null
+        const graphSettings =
+          resolvedPresetFamily === 'story_movie_tv'
+            ? {
+              ...buildCinematicSettingsPatchFromStoryPresets(resolvedStoryScenePreset, resolvedStoryLanguagePreset),
+              presetSource: 'manual_override',
+            }
+            : {
+              ...buildCinematicSettingsPatchFromPresetFamily(resolvedPresetFamily),
+              ...buildCinematicSettingsPatchFromFormatSubtype(resolvedPresetFamily, resolvedFormatSubtype),
+              presetSource: 'manual_override',
+            }
+        const cinematicPlan = {
+          graphName,
+          graphSummary,
+          entityRefs: filteredEntityRefs,
+          rawScriptMarkdown: '',
+          scriptDoc: null,
+          relationshipRefs: [],
+          compositeRefPlans: [],
+          storyboardPlan: null,
+          shots: [],
+          graphSettings,
+          autoRun: false,
+        } as const
+        return json(worldBuildPlanResponseSchema.parse({
+          plannerMode: 'cinematic_build',
+          requestSummary,
+          planItems: [
+            {
+              id: 'cinematic_graph',
+              kind: 'cinematic_graph',
+              name: cinematicPlan.graphName,
+              summary: cinematicPlan.graphSummary,
+              dependsOn: [],
+              enabled: true,
+              generationOptions: {},
+            },
+          ],
+          cinematicPlan,
+          diagnostics: [`Locked ${filteredEntityRefs.length} continuity reference${filteredEntityRefs.length === 1 ? '' : 's'} from the source thread.`],
+          assistantNotes: 'Using locked world-thread references so the cinematic preview preserves world continuity.',
+        }))
+      }
       const promptMatchedEntityRefs = buildPromptMatchedEntityRefs(payload.prompt, catalog)
       const extractedEntitiesRaw = await runStructuredWorldBuildModel({
         model: payload.model,

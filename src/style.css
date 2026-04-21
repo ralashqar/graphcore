@@ -1023,11 +1023,78 @@ code {
   grid-template-columns: 320px minmax(0, 1fr) 360px;
 }
 
+.world-graph-layout.is-grow-mode {
+  grid-template-columns: minmax(380px, 0.95fr) minmax(0, 1.15fr) 360px;
+}
+
 .world-graph-rail,
 .world-graph-drawer {
   background:
     linear-gradient(180deg, rgba(94, 234, 212, 0.04), transparent 18%),
     rgba(7, 11, 18, 0.92);
+}
+
+.world-grow-workbench {
+  gap: 14px;
+}
+
+.world-prompt-workbench-panel {
+  gap: 14px;
+}
+
+.world-prompt-workbench-panel .editor-section {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.world-prompt-preview-card {
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: linear-gradient(180deg, rgba(17, 24, 39, 0.92), rgba(12, 17, 25, 0.94));
+}
+
+.world-preview-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.world-thread-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.world-thread-card.is-selected {
+  border-color: rgba(96, 165, 250, 0.42);
+  box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.2);
+}
+
+.world-prompt-suggestion-card {
+  display: grid;
+  gap: 0.3rem;
+  width: 100%;
+  padding: 0.85rem 0.95rem;
+  border-radius: 0.9rem;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(15, 23, 42, 0.72);
+  color: inherit;
+  text-align: left;
+}
+
+.world-prompt-suggestion-card.is-primary {
+  border-color: rgba(96, 165, 250, 0.45);
+  background: linear-gradient(180deg, rgba(30, 41, 59, 0.95), rgba(15, 23, 42, 0.92));
+}
+
+.world-prompt-suggestion-card strong {
+  font-size: 0.95rem;
+}
+
+.world-prompt-suggestion-card span,
+.world-prompt-suggestion-card small {
+  color: rgba(226, 232, 240, 0.78);
+}
+
+.chip-button {
+  border: 0;
+  cursor: pointer;
 }
 
 .world-graph-surface {

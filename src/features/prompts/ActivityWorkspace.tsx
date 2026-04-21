@@ -17,6 +17,7 @@ export function ActivityWorkspace({
 }: ActivityWorkspaceProps) {
   const groupedOperations = selectedPatch ? groupPatchOperations(selectedPatch.operations) : null
   const selectedWorldBuild = selectedPatch?.worldBuildBatch ?? null
+  const selectedWorldPromptTurn = selectedPatch?.worldPromptTurn ?? null
   const selectedCinematicJob = selectedWorldBuild?.jobs.find((job) => job.kind === 'cinematic_graph') ?? null
   const authoringDiagnosticEntries =
     selectedCinematicJob?.resultContext && typeof selectedCinematicJob.resultContext === 'object' && Array.isArray(selectedCinematicJob.resultContext.authoringDiagnosticEntries)
@@ -61,10 +62,26 @@ export function ActivityWorkspace({
             <p className="subtle-line">{selectedPatch.prompt}</p>
             <div className="chip-row">
               <span className="chip">{selectedPatch.status}</span>
-              {selectedWorldBuild ? <span className="chip">{selectedWorldBuild.jobs.length} jobs</span> : <span className="chip">{selectedPatch.operations.length} operations</span>}
+              {selectedWorldBuild ? <span className="chip">{selectedWorldBuild.jobs.length} jobs</span> : selectedWorldPromptTurn ? <span className="chip">world prompt</span> : <span className="chip">{selectedPatch.operations.length} operations</span>}
               {selectedPatch.executionPlan ? <span className="chip">{selectedPatch.executionPlan.classification}</span> : null}
             </div>
             {selectedPatch.assistantNotes ? <div className="inline-note">{selectedPatch.assistantNotes}</div> : null}
+            {selectedWorldPromptTurn ? (
+              <div className="editor-section compact-section">
+                <div className="section-head">
+                  <div>
+                    <span className="eyebrow">World Prompt Turn</span>
+                    <h3>{selectedWorldPromptTurn.status}</h3>
+                  </div>
+                </div>
+                <div className="diagnostic-stack">
+                  <div className="inline-note"><strong>Model</strong><span> {selectedWorldPromptTurn.model}</span></div>
+                  <div className="inline-note"><strong>Approval</strong><span> {selectedWorldPromptTurn.approvalState}</span></div>
+                  {selectedWorldPromptTurn.assistantSummary ? <div className="inline-note"><strong>Summary</strong><span> {selectedWorldPromptTurn.assistantSummary}</span></div> : null}
+                  {selectedWorldPromptTurn.errorMessage ? <div className="inline-note"><strong>Error</strong><span> {selectedWorldPromptTurn.errorMessage}</span></div> : null}
+                </div>
+              </div>
+            ) : null}
             {selectedWorldBuild ? (
               <div className="editor-section compact-section">
                 <div className="section-head">

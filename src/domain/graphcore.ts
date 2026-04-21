@@ -32,6 +32,13 @@ import {
   type WorldResult,
   type WorldView,
 } from './worldGraph.ts'
+import {
+  worldPromptEventSchema,
+  worldPromptMessageSchema,
+  worldPromptSessionSchema,
+  worldPromptTurnSchema,
+} from './worldPrompt.ts'
+import { worldThreadSchema } from './worldThread.ts'
 
 export const definitionKindSchema = z.enum([
   'item',
@@ -721,6 +728,11 @@ export const projectSnapshotSchema = z.object({
   worldOperators: z.array(worldOperatorSchema).default([]),
   worldResults: z.array(worldResultSchema).default([]),
   worldGraphConnections: z.array(worldGraphConnectionSchema).default([]),
+  worldPromptSessions: z.array(worldPromptSessionSchema).default([]),
+  worldPromptTurns: z.array(worldPromptTurnSchema).default([]),
+  worldPromptMessages: z.array(worldPromptMessageSchema).default([]),
+  worldPromptEvents: z.array(worldPromptEventSchema).default([]),
+  worldThreads: z.array(worldThreadSchema).default([]),
   worldBuildBatches: z.array(worldBuildBatchSchema).default([]),
   meshGenerationJobs: z.array(meshGenerationJobSchema).default([]),
   cinematicRuns: z.array(cinematicRunSchema).default([]),
@@ -1386,6 +1398,10 @@ export const schemaCatalog = {
   worldEntitySchema,
   worldGraphConnectionSchema,
   worldOperatorSchema,
+  worldPromptEventSchema,
+  worldPromptMessageSchema,
+  worldPromptSessionSchema,
+  worldPromptTurnSchema,
   worldRelationshipSchema,
   worldResultSchema,
   worldViewSchema,

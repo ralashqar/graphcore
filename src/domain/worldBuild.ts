@@ -250,6 +250,7 @@ export function normalizeCinematicPlanForTransport(plan: unknown) {
 export const worldBuildPlanRequestSchema = z.object({
   prompt: z.string().min(1),
   plannerModeHint: worldBuildPlannerModeSchema.optional(),
+  lockedEntityRefs: z.array(cinematicEntityRefSchema).optional(),
   snapshot: z.object({
     workspace: z.object({
       id: z.string(),

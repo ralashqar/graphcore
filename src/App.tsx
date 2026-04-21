@@ -56,6 +56,17 @@ import type {
   WorldViewCreateInput,
 } from './domain/worldGraph'
 import {
+  worldPromptEventPayloadSchema,
+  worldPromptMessageSchema,
+  worldPromptSessionSchema,
+  worldPromptTurnSchema,
+  type WorldPromptEvent,
+  type WorldPromptMessage,
+  type WorldPromptSession,
+  type WorldPromptTurn,
+} from './domain/worldPrompt'
+import type { WorldThread } from './domain/worldThread'
+import {
   buildLocalWorldDerivedComposition,
   buildLocalExpansion,
   buildLocalStarterWorld,
@@ -332,6 +343,21 @@ function mergePersistedWorldGraphSnapshot(current: ProjectSnapshot, incoming: Pr
     worldOperators: mergeResourcesByKey(current.worldOperators, incoming.worldOperators),
     worldResults: mergeResourcesByKey(current.worldResults, incoming.worldResults),
     worldGraphConnections: mergeResourcesByKey(current.worldGraphConnections, incoming.worldGraphConnections),
+    worldThreads: mergeResourcesByKey(current.worldThreads, incoming.worldThreads).sort((left, right) => (
+      new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()
+    )),
+    worldPromptSessions: mergeResourcesById(current.worldPromptSessions, incoming.worldPromptSessions).sort((left, right) => (
+      new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()
+    )),
+    worldPromptTurns: mergeResourcesById(current.worldPromptTurns, incoming.worldPromptTurns).sort((left, right) => (
+      new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
+    )),
+    worldPromptMessages: mergeResourcesById(current.worldPromptMessages, incoming.worldPromptMessages).sort((left, right) => (
+      new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
+    )),
+    worldPromptEvents: mergeResourcesById(current.worldPromptEvents, incoming.worldPromptEvents).sort((left, right) => (
+      new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime() || left.sequence - right.sequence
+    )),
   })
 }
 
@@ -348,6 +374,107 @@ function mergeWorldBuildStatusIntoSnapshot(snapshot: ProjectSnapshot, status: Wo
       ? snapshot.worldBuildBatches.map((batch) => (batch.id === status.batch.id ? status.batch : batch))
       : [status.batch, ...snapshot.worldBuildBatches],
   })
+}
+
+function mergeWorldPromptStateIntoSnapshot(snapshot: ProjectSnapshot, input: {
+  sessions?: WorldPromptSession[]
+  turns?: WorldPromptTurn[]
+  messages?: WorldPromptMessage[]
+  events?: WorldPromptEvent[]
+  threads?: WorldThread[]
+}) {
+  return normalizeSnapshot({
+    ...snapshot,
+    worldPromptSessions: input.sessions
+      ? mergeResourcesById(snapshot.worldPromptSessions, input.sessions).sort((left, right) => (
+        new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()
+      ))
+      : snapshot.worldPromptSessions,
+    worldPromptTurns: input.turns
+      ? mergeResourcesById(snapshot.worldPromptTurns, input.turns).sort((left, right) => (
+        new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
+      ))
+      : snapshot.worldPromptTurns,
+    worldPromptMessages: input.messages
+      ? mergeResourcesById(snapshot.worldPromptMessages, input.messages).sort((left, right) => (
+        new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
+      ))
+      : snapshot.worldPromptMessages,
+    worldPromptEvents: input.events
+      ? mergeResourcesById(snapshot.worldPromptEvents, input.events).sort((left, right) => (
+        new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime() || left.sequence - right.sequence
+      ))
+      : snapshot.worldPromptEvents,
+    worldThreads: input.threads
+      ? mergeResourcesByKey(snapshot.worldThreads, input.threads).sort((left, right) => (
+        new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()
+      ))
+      : snapshot.worldThreads,
+  })
+}
+
+function mergeWorldPromptEventIntoSnapshot(snapshot: ProjectSnapshot, event: WorldPromptEvent) {
+  let nextSnapshot = mergeWorldPromptStateIntoSnapshot(snapshot, { events: [event] })
+  const parsedPayload = worldPromptEventPayloadSchema.safeParse(event.payload)
+  if (!parsedPayload.success) {
+    return nextSnapshot
+  }
+  const payload = parsedPayload.data
+
+  if (payload.session) {
+    const sessionPayload = payload.session
+    const current = nextSnapshot.worldPromptSessions.find((entry) => entry.id === sessionPayload.id || entry.key === sessionPayload.key) ?? null
+    const candidate = current ? { ...current, ...sessionPayload } : worldPromptSessionSchema.safeParse(sessionPayload).success ? worldPromptSessionSchema.parse(sessionPayload) : null
+    if (candidate) {
+      nextSnapshot = mergeWorldPromptStateIntoSnapshot(nextSnapshot, { sessions: [candidate] })
+    }
+  }
+
+  if (payload.turn) {
+    const turnPayload = payload.turn
+    const current = nextSnapshot.worldPromptTurns.find((entry) => entry.id === turnPayload.id) ?? null
+    const candidate = current ? { ...current, ...turnPayload } : worldPromptTurnSchema.safeParse(turnPayload).success ? worldPromptTurnSchema.parse(turnPayload) : null
+    if (candidate) {
+      nextSnapshot = mergeWorldPromptStateIntoSnapshot(nextSnapshot, { turns: [candidate] })
+    }
+  }
+
+  if (payload.message) {
+    const messagePayload = payload.message
+    const current = nextSnapshot.worldPromptMessages.find((entry) => entry.id === messagePayload.id) ?? null
+    const candidate = current ? { ...current, ...messagePayload } : worldPromptMessageSchema.safeParse(messagePayload).success ? worldPromptMessageSchema.parse(messagePayload) : null
+    if (candidate) {
+      nextSnapshot = mergeWorldPromptStateIntoSnapshot(nextSnapshot, { messages: [candidate] })
+    }
+  }
+
+  if (payload.threads.length > 0) {
+    nextSnapshot = mergeWorldPromptStateIntoSnapshot(nextSnapshot, { threads: payload.threads })
+  }
+
+  if (payload.applied) {
+    nextSnapshot = normalizeSnapshot({
+      ...nextSnapshot,
+      worldEntities: payload.applied.worldEntities ? mergeResourcesByKey(nextSnapshot.worldEntities, payload.applied.worldEntities) : nextSnapshot.worldEntities,
+      worldRelationships: payload.applied.worldRelationships ? mergeResourcesByKey(nextSnapshot.worldRelationships, payload.applied.worldRelationships) : nextSnapshot.worldRelationships,
+      worldOperators: payload.applied.worldOperators ? mergeResourcesByKey(nextSnapshot.worldOperators, payload.applied.worldOperators) : nextSnapshot.worldOperators,
+      worldResults: payload.applied.worldResults ? mergeResourcesByKey(nextSnapshot.worldResults, payload.applied.worldResults) : nextSnapshot.worldResults,
+      worldGraphConnections: payload.applied.worldGraphConnections ? mergeResourcesByKey(nextSnapshot.worldGraphConnections, payload.applied.worldGraphConnections) : nextSnapshot.worldGraphConnections,
+      worldViews: payload.applied.worldViews ? mergeResourcesByKey(nextSnapshot.worldViews, payload.applied.worldViews) : nextSnapshot.worldViews,
+    })
+  }
+
+  if (payload.queue?.batch) {
+    nextSnapshot = mergeWorldBuildStatusIntoSnapshot(nextSnapshot, {
+      batch: payload.queue.batch as unknown as WorldBuildStatusResponse['batch'],
+      definitions: (payload.queue.definitions ?? []) as unknown as WorldBuildStatusResponse['definitions'],
+      graphs: (payload.queue.graphs ?? []) as unknown as WorldBuildStatusResponse['graphs'],
+      assets: (payload.queue.assets ?? []) as unknown as WorldBuildStatusResponse['assets'],
+      cinematicRuns: (payload.queue.cinematicRuns ?? []) as unknown as WorldBuildStatusResponse['cinematicRuns'],
+    })
+  }
+
+  return nextSnapshot
 }
 
 function mergeMeshGenerationStatusIntoSnapshot(snapshot: ProjectSnapshot, status: MeshGenerationStatusResponse) {
@@ -799,6 +926,10 @@ type CinematicPreflightQueueItem = {
   mode: 'preview_still' | 'preview_storyboard_still' | 'preview_take_still'
 }
 
+type WorldBuildPlanSource =
+  | { kind: 'thread'; threadKey: string }
+  | null
+
 export default function App() {
   const [session, setSession] = useState<Session | null>(null)
   const [loadedState, setLoadedState] = useState<LoadedState | null>(null)
@@ -819,6 +950,7 @@ export default function App() {
   const [isPlanningWorldBuild, setIsPlanningWorldBuild] = useState(false)
   const [isStartingWorldBuild, setIsStartingWorldBuild] = useState(false)
   const [worldBuildPlanPreview, setWorldBuildPlanPreview] = useState<WorldBuildPlanResponse | null>(null)
+  const [worldBuildPlanSource, setWorldBuildPlanSource] = useState<WorldBuildPlanSource>(null)
   const [cinematicPreflightStatus, setCinematicPreflightStatus] = useState<CinematicPreflightStatus | null>(null)
   const [completedWorldBuildBatch, setCompletedWorldBuildBatch] = useState<WorldBuildBatch | null>(null)
   const [historyOpen, setHistoryOpen] = useState(false)
@@ -1320,6 +1452,58 @@ export default function App() {
   }, [loadedState?.source, promptModel])
 
   useEffect(() => {
+    if (loadedState?.source !== 'supabase' || !snapshot?.draft.id) return
+
+    const channel = workspaceService.subscribeWorldPromptEvents({
+      draftId: snapshot.draft.id,
+      onSession: (session) => {
+        const current = snapshotRef.current
+        if (!current) return
+        const nextSnapshot = mergeWorldPromptStateIntoSnapshot(current, { sessions: [session] })
+        snapshotRef.current = nextSnapshot
+        setSnapshot(nextSnapshot)
+        setBundle(compileBundle(nextSnapshot))
+      },
+      onTurn: (turn) => {
+        const current = snapshotRef.current
+        if (!current) return
+        const nextSnapshot = mergeWorldPromptStateIntoSnapshot(current, { turns: [turn] })
+        snapshotRef.current = nextSnapshot
+        setSnapshot(nextSnapshot)
+        setBundle(compileBundle(nextSnapshot))
+      },
+      onMessage: (message) => {
+        const current = snapshotRef.current
+        if (!current) return
+        const nextSnapshot = mergeWorldPromptStateIntoSnapshot(current, { messages: [message] })
+        snapshotRef.current = nextSnapshot
+        setSnapshot(nextSnapshot)
+        setBundle(compileBundle(nextSnapshot))
+      },
+      onEvent: (event) => {
+        const current = snapshotRef.current
+        if (!current) return
+        const nextSnapshot = mergeWorldPromptEventIntoSnapshot(current, event)
+        snapshotRef.current = nextSnapshot
+        setSnapshot(nextSnapshot)
+        setBundle(compileBundle(nextSnapshot))
+      },
+      onThread: (thread) => {
+        const current = snapshotRef.current
+        if (!current) return
+        const nextSnapshot = mergeWorldPromptStateIntoSnapshot(current, { threads: [thread] })
+        snapshotRef.current = nextSnapshot
+        setSnapshot(nextSnapshot)
+        setBundle(compileBundle(nextSnapshot))
+      },
+    })
+
+    return () => {
+      void supabase.removeChannel(channel)
+    }
+  }, [loadedState?.source, snapshot?.draft.id])
+
+  useEffect(() => {
     if (loadedState?.source !== 'supabase') return
 
     let cancelled = false
@@ -1709,6 +1893,21 @@ export default function App() {
     }))
   }, [snapshot])
 
+  const persistedWorldPromptHistory = useMemo<PatchSessionView[]>(() => {
+    return (snapshot?.worldPromptTurns ?? []).slice().reverse().map((turn) => ({
+      id: turn.id,
+      kind: 'world_prompt',
+      summary: turn.assistantSummary || turn.prompt,
+      requestSummary: turn.assistantSummary || turn.prompt,
+      prompt: turn.prompt,
+      status: turn.status,
+      operations: [],
+      diagnostics: turn.errorMessage ? [turn.errorMessage] : [],
+      assistantNotes: turn.assistantSummary || undefined,
+      worldPromptTurn: turn,
+    }))
+  }, [snapshot?.worldPromptTurns])
+
   const patchHistory = useMemo<PatchSessionView[]>(() => {
     const generated = patchPreview
       ? [
@@ -1728,8 +1927,8 @@ export default function App() {
         ]
       : []
 
-    return [...generated, ...persistedWorldBuildHistory, ...persistedPatchHistory]
-  }, [patchPreview, persistedPatchHistory, persistedWorldBuildHistory])
+    return [...generated, ...persistedWorldPromptHistory, ...persistedWorldBuildHistory, ...persistedPatchHistory]
+  }, [patchPreview, persistedPatchHistory, persistedWorldBuildHistory, persistedWorldPromptHistory])
 
   const selectedPatch = patchHistory[selectedPatchIndex] ?? patchHistory[0] ?? null
   const selectedArchetype = useMemo(() => snapshot?.archetypes.find((archetype) => archetype.key === selectedArchetypeKey) ?? snapshot?.archetypes[0] ?? null, [selectedArchetypeKey, snapshot])
@@ -3065,6 +3264,151 @@ export default function App() {
     }))
   }
 
+  async function startWorldPromptTurn(input: {
+    prompt: string
+    sessionKey?: string | null
+    selectedRootEntityKey?: string | null
+    selectedViewKey?: string | null
+    selectedThreadKey?: string | null
+  }) {
+    if (!snapshot) return
+    if (loadedState?.source !== 'supabase') {
+      throw new Error('World prompt sessions require a live Supabase-backed draft.')
+    }
+    const syncedSnapshot = await syncWorldGraphBackfillIfNeeded(snapshot)
+    const result = await workspaceService.startWorldPromptTurn(syncedSnapshot, {
+      prompt: input.prompt,
+      model: promptModel,
+      sessionKey: input.sessionKey ?? null,
+      selectedRootEntityKey: input.selectedRootEntityKey ?? null,
+      selectedViewKey: input.selectedViewKey ?? null,
+      selectedThreadKey: input.selectedThreadKey ?? null,
+    })
+    const nextSnapshot = mergeWorldPromptStateIntoSnapshot(syncedSnapshot, {
+      sessions: [result.session],
+      turns: [result.turn],
+    })
+    snapshotRef.current = nextSnapshot
+    setSnapshot(nextSnapshot)
+    setBundle(compileBundle(nextSnapshot))
+  }
+
+  async function approveWorldPromptOp(input: { turnId: string; opId: string }) {
+    if (!snapshot) return
+    if (loadedState?.source !== 'supabase') {
+      throw new Error('World prompt approvals require a live Supabase-backed draft.')
+    }
+    const syncedSnapshot = await syncWorldGraphBackfillIfNeeded(snapshot)
+    const result = await workspaceService.approveWorldPromptOp(syncedSnapshot, input)
+    const nextSnapshot = mergeWorldPromptStateIntoSnapshot(syncedSnapshot, {
+      turns: [result.turn],
+    })
+    snapshotRef.current = nextSnapshot
+    setSnapshot(nextSnapshot)
+    setBundle(compileBundle(nextSnapshot))
+  }
+
+  async function rejectWorldPromptOp(input: { turnId: string; opId: string }) {
+    if (!snapshot) return
+    if (loadedState?.source !== 'supabase') {
+      throw new Error('World prompt approvals require a live Supabase-backed draft.')
+    }
+    const syncedSnapshot = await syncWorldGraphBackfillIfNeeded(snapshot)
+    const result = await workspaceService.rejectWorldPromptOp(syncedSnapshot, input)
+    const nextSnapshot = mergeWorldPromptStateIntoSnapshot(syncedSnapshot, {
+      turns: [result.turn],
+    })
+    snapshotRef.current = nextSnapshot
+    setSnapshot(nextSnapshot)
+    setBundle(compileBundle(nextSnapshot))
+  }
+
+  async function applyWorldPromptPreview(input: { turnId: string }) {
+    if (!snapshot) return
+    if (loadedState?.source !== 'supabase') {
+      throw new Error('World prompt previews require a live Supabase-backed draft.')
+    }
+    const syncedSnapshot = await syncWorldGraphBackfillIfNeeded(snapshot)
+    const result = await workspaceService.applyWorldPromptPreview(syncedSnapshot, input)
+    const nextSnapshot = mergeWorldPromptStateIntoSnapshot(syncedSnapshot, {
+      turns: [result.turn],
+    })
+    snapshotRef.current = nextSnapshot
+    setSnapshot(nextSnapshot)
+    setBundle(compileBundle(nextSnapshot))
+  }
+
+  async function cancelWorldPromptTurn(input: { turnId: string }) {
+    if (!snapshot) return
+    if (loadedState?.source !== 'supabase') {
+      throw new Error('World prompt sessions require a live Supabase-backed draft.')
+    }
+    const syncedSnapshot = await syncWorldGraphBackfillIfNeeded(snapshot)
+    const result = await workspaceService.cancelWorldPromptTurn(syncedSnapshot, input)
+    const nextSnapshot = mergeWorldPromptStateIntoSnapshot(syncedSnapshot, {
+      turns: [result.turn],
+    })
+    snapshotRef.current = nextSnapshot
+    setSnapshot(nextSnapshot)
+    setBundle(compileBundle(nextSnapshot))
+  }
+
+  async function resolveWorldThread(input: { threadKey: string }) {
+    if (!snapshot) return
+    const nextSnapshot = await workspaceService.resolveWorldThread(snapshot, input.threadKey)
+    snapshotRef.current = nextSnapshot
+    setSnapshot(nextSnapshot)
+    setBundle(compileBundle(nextSnapshot))
+  }
+
+  async function parkWorldThread(input: { threadKey: string }) {
+    if (!snapshot) return
+    const nextSnapshot = await workspaceService.parkWorldThread(snapshot, input.threadKey)
+    snapshotRef.current = nextSnapshot
+    setSnapshot(nextSnapshot)
+    setBundle(compileBundle(nextSnapshot))
+  }
+
+  async function setWorldEntityCanonLock(input: {
+    entityKey: string
+    locked: boolean
+    reason?: string
+    lockedByTurnId?: string | null
+  }) {
+    if (!snapshot) return
+    const nextSnapshot = await workspaceService.setWorldEntityCanonLock(snapshot, input.entityKey, input)
+    snapshotRef.current = nextSnapshot
+    setSnapshot(nextSnapshot)
+    setBundle(compileBundle(nextSnapshot))
+  }
+
+  async function setWorldRelationshipCanonLock(input: {
+    relationshipKey: string
+    locked: boolean
+    reason?: string
+    lockedByTurnId?: string | null
+  }) {
+    if (!snapshot) return
+    const nextSnapshot = await workspaceService.setWorldRelationshipCanonLock(snapshot, input.relationshipKey, input)
+    snapshotRef.current = nextSnapshot
+    setSnapshot(nextSnapshot)
+    setBundle(compileBundle(nextSnapshot))
+  }
+
+  async function extractWorldThreadToCinematicPreview(input: {
+    threadKey: string
+    mode?: 'teaser' | 'scene'
+  }) {
+    if (!snapshot) return
+    const plan = await workspaceService.extractWorldThreadToCinematicPreview(snapshot, {
+      threadKey: input.threadKey,
+      mode: input.mode,
+      model: promptModel,
+    })
+    setWorldBuildPlanSource({ kind: 'thread', threadKey: input.threadKey })
+    setWorldBuildPlanPreview(plan)
+  }
+
   function createEnvironmentAssemblyGraph(environmentKey: string) {
     if (!snapshot) return null
     const environment = snapshot.definitions.find((definition) => definition.key === environmentKey && definition.kind === 'environment')
@@ -3994,6 +4338,7 @@ export default function App() {
         snapshot,
         model: promptModel,
       })
+      setWorldBuildPlanSource(null)
       setWorldBuildPlanPreview(plan)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'World build planning failed.'
@@ -4032,13 +4377,21 @@ export default function App() {
         setSelectedGraphKey(startedCinematicGraph.key)
       }
 
-      setSnapshot((current) => {
-        if (!current) return current
-        const nextSnapshot = mergeWorldBuildStatusIntoSnapshot(current, status)
-        setBundle(compileBundle(nextSnapshot))
-        return nextSnapshot
-      })
+      let nextSnapshot = mergeWorldBuildStatusIntoSnapshot(snapshot, status)
+      if (startedCinematicGraph && typeof startedCinematicGraph.key === 'string' && worldBuildPlanSource?.kind === 'thread') {
+        nextSnapshot = await workspaceService.updateWorldThread(nextSnapshot, worldBuildPlanSource.threadKey, {
+          metadata: {
+            ...(nextSnapshot.worldThreads.find((thread) => thread.key === worldBuildPlanSource.threadKey)?.metadata ?? {}),
+            cinematicGraphKey: startedCinematicGraph.key,
+          },
+        })
+      }
+
+      snapshotRef.current = nextSnapshot
+      setSnapshot(nextSnapshot)
+      setBundle(compileBundle(nextSnapshot))
       setWorldBuildPlanPreview(null)
+      setWorldBuildPlanSource(null)
       setSelectedPatchIndex(0)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Starting world build failed.'
@@ -4793,6 +5146,11 @@ export default function App() {
                 worldOperators={snapshot.worldOperators}
                 worldResults={snapshot.worldResults}
                 worldGraphConnections={snapshot.worldGraphConnections}
+                worldThreads={snapshot.worldThreads}
+                worldPromptSessions={snapshot.worldPromptSessions}
+                worldPromptTurns={snapshot.worldPromptTurns}
+                worldPromptMessages={snapshot.worldPromptMessages}
+                worldPromptEvents={snapshot.worldPromptEvents}
                 selectedWorldNodeKey={selectedWorldNodeKey}
                 selectedWorldEdgeKey={selectedWorldEdgeKey}
                 selectedWorldEntityKey={selectedWorldEntityKey}
@@ -4817,6 +5175,16 @@ export default function App() {
                 onUpdateWorldView={updateWorldView}
                 onGenerateStarterWorld={generateStarterWorld}
                 onGenerateWorldExpansion={generateWorldExpansion}
+                onStartWorldPromptTurn={startWorldPromptTurn}
+                onApproveWorldPromptOp={approveWorldPromptOp}
+                onRejectWorldPromptOp={rejectWorldPromptOp}
+                onApplyWorldPromptPreview={applyWorldPromptPreview}
+                onCancelWorldPromptTurn={cancelWorldPromptTurn}
+                onResolveWorldThread={resolveWorldThread}
+                onParkWorldThread={parkWorldThread}
+                onSetWorldEntityCanonLock={setWorldEntityCanonLock}
+                onSetWorldRelationshipCanonLock={setWorldRelationshipCanonLock}
+                onExtractWorldThreadToCinematicPreview={extractWorldThreadToCinematicPreview}
                 onOpenDefinitionLink={openDefinitionWorkspace}
                 onOpenCinematicGraph={openCinematicWorkspace}
                 legacyGraphProps={{
@@ -5081,7 +5449,10 @@ export default function App() {
           planItems={worldBuildPlanPreview.planItems}
           prompt={readPromptText()}
           requestSummary={worldBuildPlanPreview.requestSummary}
-          onCancel={() => setWorldBuildPlanPreview(null)}
+          onCancel={() => {
+            setWorldBuildPlanPreview(null)
+            setWorldBuildPlanSource(null)
+          }}
           onChangePresetFamily={updateWorldBuildCinematicPreset}
           onChangeFormatSubtype={updateWorldBuildCinematicFormatSubtype}
           onChangeStoryScenePreset={updateWorldBuildStoryScenePreset}

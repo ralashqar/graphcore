@@ -49,6 +49,29 @@ import {
   type WorldViewUpdateInput,
 } from '../domain/worldGraph'
 import {
+  worldPromptApplyPreviewResponseSchema,
+  worldPromptCancelTurnResponseSchema,
+  worldPromptResolveOpResponseSchema,
+  worldPromptSessionSchema,
+  worldPromptStartTurnRequestSchema,
+  worldPromptStartTurnResponseSchema,
+  worldPromptTurnSchema,
+  type WorldPromptEvent,
+  type WorldPromptMessage,
+  type WorldPromptApplyPreviewRequest,
+  type WorldPromptCancelTurnRequest,
+  type WorldPromptResolveOpRequest,
+  type WorldPromptSession,
+  type WorldPromptStartTurnRequest,
+  type WorldPromptTurn,
+} from '../domain/worldPrompt'
+import {
+  worldThreadSchema,
+  worldThreadUpdateInputSchema,
+  type WorldThread,
+  type WorldThreadUpdateInput,
+} from '../domain/worldThread'
+import {
   buildPreviewAssetKeyForComposition,
   buildWorldDerivedCompositionTitle,
   deriveMissingWorldEntities,
@@ -1307,6 +1330,80 @@ type WorldGraphConnectionRow = {
   updated_at: string
 }
 
+type WorldPromptSessionRow = {
+  id: string
+  draft_id: string
+  key: string
+  title: string
+  status: WorldPromptSession['status']
+  is_active: boolean
+  summary_memory: string | null
+  last_context: Record<string, unknown> | null
+  selected_root_entity_key: string | null
+  selected_view_key: string | null
+  model: string | null
+  metadata: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+
+type WorldPromptTurnRow = {
+  id: string
+  session_id: string
+  draft_id: string
+  prompt: string
+  status: WorldPromptTurn['status']
+  model: string | null
+  resolved_context: Record<string, unknown> | null
+  approval_state: WorldPromptTurn['approvalState']
+  assistant_summary: string | null
+  error_message: string | null
+  response_id: string | null
+  metadata: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+
+type WorldPromptMessageRow = {
+  id: string
+  session_id: string
+  turn_id: string | null
+  draft_id: string
+  role: WorldPromptMessage['role']
+  content: string
+  metadata: Record<string, unknown> | null
+  created_at: string
+}
+
+type WorldPromptEventRow = {
+  id: string
+  session_id: string
+  turn_id: string
+  draft_id: string
+  sequence: number
+  event_type: WorldPromptEvent['eventType']
+  op_id: string | null
+  payload: Record<string, unknown> | null
+  metadata: Record<string, unknown> | null
+  created_at: string
+}
+
+type WorldThreadRow = {
+  id: string
+  draft_id: string
+  key: string
+  title: string
+  summary: string | null
+  status: WorldThread['status']
+  priority: WorldThread['priority']
+  linked_entity_keys: string[] | null
+  source_turn_id: string | null
+  last_turn_id: string | null
+  metadata: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+
 const WORLD_ENTITY_SELECT =
   'id, key, name, summary, node_type, aliases, tags, status, thumbnail_asset_key, linked_definition_key, source, custom_properties, metadata, created_at, updated_at'
 const WORLD_RELATIONSHIP_SELECT =
@@ -1319,6 +1416,16 @@ const WORLD_RESULT_SELECT =
   'id, key, result_type, source_operator_key, title, summary, preview_asset_key, status, metadata, created_at, updated_at'
 const WORLD_CONNECTION_SELECT =
   'id, key, source_node_key, source_node_kind, target_node_key, target_node_kind, role, metadata, created_at, updated_at'
+const WORLD_PROMPT_SESSION_SELECT =
+  'id, draft_id, key, title, status, is_active, summary_memory, last_context, selected_root_entity_key, selected_view_key, model, metadata, created_at, updated_at'
+const WORLD_PROMPT_TURN_SELECT =
+  'id, session_id, draft_id, prompt, status, model, resolved_context, approval_state, assistant_summary, error_message, response_id, metadata, created_at, updated_at'
+const WORLD_PROMPT_MESSAGE_SELECT =
+  'id, session_id, turn_id, draft_id, role, content, metadata, created_at'
+const WORLD_PROMPT_EVENT_SELECT =
+  'id, session_id, turn_id, draft_id, sequence, event_type, op_id, payload, metadata, created_at'
+const WORLD_THREAD_SELECT =
+  'id, draft_id, key, title, summary, status, priority, linked_entity_keys, source_turn_id, last_turn_id, metadata, created_at, updated_at'
 
 function upsertEntryByKey<T extends { key: string }>(entries: T[], nextEntry: T) {
   const existingIndex = entries.findIndex((entry) => entry.key === nextEntry.key)
@@ -1439,6 +1546,90 @@ function mapWorldGraphConnectionRow(entry: WorldGraphConnectionRow): WorldGraphC
     createdAt: entry.created_at,
     updatedAt: entry.updated_at,
   }
+}
+
+function mapWorldPromptSessionRow(entry: WorldPromptSessionRow): WorldPromptSession {
+  return worldPromptSessionSchema.parse({
+    id: entry.id,
+    key: entry.key,
+    draftId: entry.draft_id,
+    title: entry.title,
+    status: entry.status,
+    isActive: entry.is_active,
+    summaryMemory: entry.summary_memory ?? '',
+    lastContext: entry.last_context ?? {},
+    selectedRootEntityKey: entry.selected_root_entity_key,
+    selectedViewKey: entry.selected_view_key,
+    model: entry.model ?? 'gpt-5.4-mini',
+    metadata: entry.metadata ?? {},
+    createdAt: entry.created_at,
+    updatedAt: entry.updated_at,
+  })
+}
+
+function mapWorldPromptTurnRow(entry: WorldPromptTurnRow): WorldPromptTurn {
+  return worldPromptTurnSchema.parse({
+    id: entry.id,
+    sessionId: entry.session_id,
+    draftId: entry.draft_id,
+    prompt: entry.prompt,
+    status: entry.status,
+    model: entry.model ?? 'gpt-5.4-mini',
+    resolvedContext: entry.resolved_context ?? {},
+    approvalState: entry.approval_state,
+    assistantSummary: entry.assistant_summary ?? '',
+    errorMessage: entry.error_message,
+    responseId: entry.response_id,
+    metadata: entry.metadata ?? {},
+    createdAt: entry.created_at,
+    updatedAt: entry.updated_at,
+  })
+}
+
+function mapWorldPromptMessageRow(entry: WorldPromptMessageRow): WorldPromptMessage {
+  return {
+    id: entry.id,
+    sessionId: entry.session_id,
+    turnId: entry.turn_id,
+    draftId: entry.draft_id,
+    role: entry.role,
+    content: entry.content,
+    metadata: entry.metadata ?? {},
+    createdAt: entry.created_at,
+  }
+}
+
+function mapWorldPromptEventRow(entry: WorldPromptEventRow): WorldPromptEvent {
+  return {
+    id: entry.id,
+    sessionId: entry.session_id,
+    turnId: entry.turn_id,
+    draftId: entry.draft_id,
+    sequence: entry.sequence,
+    eventType: entry.event_type,
+    opId: entry.op_id,
+    payload: entry.payload ?? {},
+    metadata: entry.metadata ?? {},
+    createdAt: entry.created_at,
+  }
+}
+
+function mapWorldThreadRow(entry: WorldThreadRow): WorldThread {
+  return worldThreadSchema.parse({
+    id: entry.id,
+    draftId: entry.draft_id,
+    key: entry.key,
+    title: entry.title,
+    summary: entry.summary ?? '',
+    status: entry.status,
+    priority: entry.priority,
+    linkedEntityKeys: entry.linked_entity_keys ?? [],
+    sourceTurnId: entry.source_turn_id,
+    lastTurnId: entry.last_turn_id,
+    metadata: entry.metadata ?? {},
+    createdAt: entry.created_at,
+    updatedAt: entry.updated_at,
+  })
 }
 
 type WorldBuildBatchRow = {
@@ -1764,6 +1955,11 @@ export async function loadProjectSnapshot(
     worldOperatorsResponse,
     worldResultsResponse,
     worldGraphConnectionsResponse,
+    worldPromptSessionsResponse,
+    worldPromptTurnsResponse,
+    worldPromptMessagesResponse,
+    worldPromptEventsResponse,
+    worldThreadsResponse,
     worldBuildBatchesResponse,
     meshGenerationJobsResponse,
     cinematicRunsResponse,
@@ -1873,6 +2069,31 @@ export async function loadProjectSnapshot(
       .eq('draft_id', draft.id)
       .order('created_at', { ascending: true }),
     supabase
+      .from('world_prompt_sessions')
+      .select(WORLD_PROMPT_SESSION_SELECT)
+      .eq('draft_id', draft.id)
+      .order('updated_at', { ascending: false }),
+    supabase
+      .from('world_prompt_turns')
+      .select(WORLD_PROMPT_TURN_SELECT)
+      .eq('draft_id', draft.id)
+      .order('created_at', { ascending: false }),
+    supabase
+      .from('world_prompt_messages')
+      .select(WORLD_PROMPT_MESSAGE_SELECT)
+      .eq('draft_id', draft.id)
+      .order('created_at', { ascending: true }),
+    supabase
+      .from('world_prompt_events')
+      .select(WORLD_PROMPT_EVENT_SELECT)
+      .eq('draft_id', draft.id)
+      .order('created_at', { ascending: true }),
+    supabase
+      .from('world_threads')
+      .select(WORLD_THREAD_SELECT)
+      .eq('draft_id', draft.id)
+      .order('updated_at', { ascending: false }),
+    supabase
       .from('world_build_batches')
       .select('id, draft_id, project_id, prompt, request_summary, planner_mode, status, diagnostics, plan_json, cinematic_plan, created_at, updated_at')
       .eq('draft_id', draft.id)
@@ -1925,6 +2146,18 @@ export async function loadProjectSnapshot(
     || isMissingRelationError(worldOperatorsResponse.error, 'world_operators')
     || isMissingRelationError(worldResultsResponse.error, 'world_results')
     || isMissingRelationError(worldGraphConnectionsResponse.error, 'world_graph_connections')
+  const worldPromptSchemaMissing =
+    worldPromptSessionsResponse.status === 404
+    || worldPromptTurnsResponse.status === 404
+    || worldPromptMessagesResponse.status === 404
+    || worldPromptEventsResponse.status === 404
+    || isMissingRelationError(worldPromptSessionsResponse.error, 'world_prompt_sessions')
+    || isMissingRelationError(worldPromptTurnsResponse.error, 'world_prompt_turns')
+    || isMissingRelationError(worldPromptMessagesResponse.error, 'world_prompt_messages')
+    || isMissingRelationError(worldPromptEventsResponse.error, 'world_prompt_events')
+  const worldThreadSchemaMissing =
+    worldThreadsResponse.status === 404
+    || isMissingRelationError(worldThreadsResponse.error, 'world_threads')
   const meshGenerationSchemaMissing =
     meshGenerationJobsResponse.status === 404
     || isMissingRelationError(meshGenerationJobsResponse.error, 'mesh_generation_jobs')
@@ -1960,6 +2193,11 @@ export async function loadProjectSnapshot(
   const worldOperators = worldGraphSchemaMissing ? [] : (worldOperatorsResponse.data as WorldOperatorRow[] | null) ?? []
   const worldResults = worldGraphSchemaMissing ? [] : (worldResultsResponse.data as WorldResultRow[] | null) ?? []
   const worldGraphConnections = worldGraphSchemaMissing ? [] : (worldGraphConnectionsResponse.data as WorldGraphConnectionRow[] | null) ?? []
+  const worldPromptSessions = worldPromptSchemaMissing ? [] : (worldPromptSessionsResponse.data as WorldPromptSessionRow[] | null) ?? []
+  const worldPromptTurns = worldPromptSchemaMissing ? [] : (worldPromptTurnsResponse.data as WorldPromptTurnRow[] | null) ?? []
+  const worldPromptMessages = worldPromptSchemaMissing ? [] : (worldPromptMessagesResponse.data as WorldPromptMessageRow[] | null) ?? []
+  const worldPromptEvents = worldPromptSchemaMissing ? [] : (worldPromptEventsResponse.data as WorldPromptEventRow[] | null) ?? []
+  const worldThreads = worldThreadSchemaMissing ? [] : (worldThreadsResponse.data as WorldThreadRow[] | null) ?? []
   const worldBuildBatches = worldBuildSchemaMissing ? [] : (worldBuildBatchesResponse.data as WorldBuildBatchRow[] | null) ?? []
   const meshGenerationJobs = meshGenerationSchemaMissing ? [] : (meshGenerationJobsResponse.data as MeshGenerationJobRow[] | null) ?? []
   const cinematicRuns = cinematicRunSchemaMissing ? [] : (cinematicRunsResponse.data as CinematicRunRow[] | null) ?? []
@@ -2284,6 +2522,11 @@ export async function loadProjectSnapshot(
       createdAt: entry.created_at,
       updatedAt: entry.updated_at,
     })),
+    worldPromptSessions: worldPromptSessions.map((entry) => mapWorldPromptSessionRow(entry)),
+    worldPromptTurns: worldPromptTurns.map((entry) => mapWorldPromptTurnRow(entry)),
+    worldPromptMessages: worldPromptMessages.map((entry) => mapWorldPromptMessageRow(entry)),
+    worldPromptEvents: worldPromptEvents.map((entry) => mapWorldPromptEventRow(entry)),
+    worldThreads: worldThreads.map((entry) => mapWorldThreadRow(entry)),
     worldBuildBatches: worldBuildBatches.map((batch) => ({
       id: batch.id,
       projectId: batch.project_id,
@@ -3774,6 +4017,36 @@ export async function updateWorldEntity(snapshot: ProjectSnapshot, entityKey: st
   }
 }
 
+export async function setWorldEntityCanonLock(snapshot: ProjectSnapshot, entityKey: string, input: {
+  locked: boolean
+  reason?: string
+  lockedByTurnId?: string | null
+}) {
+  const entity = snapshot.worldEntities.find((entry) => entry.key === entityKey) ?? null
+  if (!entity) {
+    throw new Error(`World entity "${entityKey}" was not found.`)
+  }
+  const canonMetadata = input.locked
+    ? {
+      locked: true,
+      reason: input.reason ?? '',
+      lockedAt: new Date().toISOString(),
+      lockedByTurnId: input.lockedByTurnId ?? null,
+    }
+    : {
+      locked: false,
+      reason: '',
+      lockedAt: null,
+      lockedByTurnId: null,
+    }
+  return updateWorldEntity(snapshot, entityKey, {
+    metadata: {
+      ...(entity.metadata ?? {}),
+      canon: canonMetadata,
+    },
+  })
+}
+
 export async function deleteWorldEntity(snapshot: ProjectSnapshot, entityKey: string) {
   await getValidatedSession('Sign in and load a live GraphCore draft before deleting a world entity.')
 
@@ -3910,6 +4183,36 @@ export async function updateWorldRelationship(snapshot: ProjectSnapshot, relatio
       mapWorldRelationshipRow(updateResponse.data as WorldRelationshipRow, snapshot.worldEntities),
     ),
   }
+}
+
+export async function setWorldRelationshipCanonLock(snapshot: ProjectSnapshot, relationshipKey: string, input: {
+  locked: boolean
+  reason?: string
+  lockedByTurnId?: string | null
+}) {
+  const relationship = snapshot.worldRelationships.find((entry) => entry.key === relationshipKey) ?? null
+  if (!relationship) {
+    throw new Error(`World relationship "${relationshipKey}" was not found.`)
+  }
+  const canonMetadata = input.locked
+    ? {
+      locked: true,
+      reason: input.reason ?? '',
+      lockedAt: new Date().toISOString(),
+      lockedByTurnId: input.lockedByTurnId ?? null,
+    }
+    : {
+      locked: false,
+      reason: '',
+      lockedAt: null,
+      lockedByTurnId: null,
+    }
+  return updateWorldRelationship(snapshot, relationshipKey, {
+    metadata: {
+      ...(relationship.metadata ?? {}),
+      canon: canonMetadata,
+    },
+  })
 }
 
 export async function deleteWorldRelationship(snapshot: ProjectSnapshot, relationshipKey: string) {
@@ -4420,6 +4723,356 @@ export async function generateWorldExpansion(request: WorldGraphExpansionRequest
     throw new Error(refreshed.reason ?? 'World graph expansion completed but the live snapshot could not be reloaded.')
   }
   return refreshed.snapshot
+}
+
+function buildWorldPromptSnapshot(snapshot: ProjectSnapshot): WorldPromptStartTurnRequest['snapshot'] {
+  return {
+    workspace: {
+      id: snapshot.workspace.id,
+      name: snapshot.workspace.name,
+      slug: snapshot.workspace.slug,
+      role: snapshot.workspace.role,
+    },
+    project: {
+      id: snapshot.project.id,
+      name: snapshot.project.name,
+      slug: snapshot.project.slug,
+      summary: snapshot.project.summary,
+      visibility: snapshot.project.visibility,
+    },
+    draft: {
+      id: snapshot.draft.id,
+      name: snapshot.draft.name,
+      version: snapshot.draft.version,
+      isPrimary: snapshot.draft.isPrimary,
+      updatedAt: snapshot.draft.updatedAt,
+      metadata: snapshot.draft.metadata ?? {},
+    },
+    definitions: snapshot.definitions.map((definition) => ({
+      key: definition.key,
+      kind: definition.kind,
+      name: definition.name,
+      summary: definition.summary,
+    })),
+    graphs: snapshot.graphs.map((graph) => ({
+      key: graph.key,
+      name: graph.name,
+      summary: graph.summary,
+      graphType: graph.graphType,
+    })),
+    assets: snapshot.assets.map((asset) => ({
+      key: asset.key,
+      name: asset.name,
+      kind: asset.kind,
+    })),
+    worldEntities: snapshot.worldEntities,
+    worldRelationships: snapshot.worldRelationships,
+    worldViews: snapshot.worldViews,
+    worldOperators: snapshot.worldOperators,
+    worldResults: snapshot.worldResults,
+    worldGraphConnections: snapshot.worldGraphConnections,
+    worldThreads: snapshot.worldThreads,
+    gameSpec: snapshot.gameSpec as Record<string, unknown> | null,
+  }
+}
+
+export function listWorldThreads(snapshot: ProjectSnapshot) {
+  return [...snapshot.worldThreads].sort((left, right) => (
+    new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()
+  ))
+}
+
+export async function updateWorldThread(snapshot: ProjectSnapshot, threadKey: string, changes: WorldThreadUpdateInput) {
+  await getValidatedSession('Sign in and load a live GraphCore draft before updating a world thread.')
+
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Sign in and load a live GraphCore draft before updating a world thread.')
+  }
+
+  const payload = worldThreadUpdateInputSchema.parse(changes)
+  const updatePayload: Record<string, unknown> = {}
+  if (payload.title !== undefined) updatePayload.title = payload.title
+  if (payload.summary !== undefined) updatePayload.summary = payload.summary
+  if (payload.status !== undefined) updatePayload.status = payload.status
+  if (payload.priority !== undefined) updatePayload.priority = payload.priority
+  if (payload.linkedEntityKeys !== undefined) updatePayload.linked_entity_keys = payload.linkedEntityKeys
+  if (payload.sourceTurnId !== undefined) updatePayload.source_turn_id = payload.sourceTurnId
+  if (payload.lastTurnId !== undefined) updatePayload.last_turn_id = payload.lastTurnId
+  if (payload.metadata !== undefined) updatePayload.metadata = payload.metadata
+
+  const response = await supabase
+    .from('world_threads')
+    .update(updatePayload)
+    .eq('draft_id', snapshot.draft.id)
+    .eq('key', threadKey)
+    .select(WORLD_THREAD_SELECT)
+    .single()
+
+  if (response.error) {
+    throw new Error(response.error.message)
+  }
+
+  const nextThread = mapWorldThreadRow(response.data as WorldThreadRow)
+  return {
+    ...snapshot,
+    worldThreads: upsertEntryByKey(snapshot.worldThreads, nextThread),
+  }
+}
+
+export async function resolveWorldThread(snapshot: ProjectSnapshot, threadKey: string) {
+  return updateWorldThread(snapshot, threadKey, { status: 'resolved' })
+}
+
+export async function parkWorldThread(snapshot: ProjectSnapshot, threadKey: string) {
+  return updateWorldThread(snapshot, threadKey, { status: 'parked' })
+}
+
+function buildLockedEntityRefsFromThread(snapshot: ProjectSnapshot, thread: WorldThread) {
+  return thread.linkedEntityKeys
+    .map((entityKey) => snapshot.worldEntities.find((entity) => entity.key === entityKey) ?? null)
+    .filter((entity): entity is WorldEntity => Boolean(entity))
+    .map((entity) => {
+      const definition = entity.linkedDefinitionKey
+        ? snapshot.definitions.find((entry) => entry.key === entity.linkedDefinitionKey) ?? null
+        : null
+      const kind =
+        entity.nodeType === 'actor'
+          ? 'character'
+          : entity.nodeType === 'place'
+            ? 'environment'
+            : entity.nodeType === 'object'
+              ? 'item'
+              : null
+      if (!kind) return null
+      return {
+        id: entity.key,
+        kind: kind as 'character' | 'environment' | 'item',
+        role: (kind === 'environment' ? 'location' : kind === 'item' ? 'prop' : 'participant') as 'location' | 'prop' | 'participant',
+        sourceName: entity.name,
+        summary: entity.summary,
+        resolution: 'existing' as const,
+        definitionKey: definition?.key ?? entity.linkedDefinitionKey ?? null,
+        planItemId: null,
+        referenceRole: null,
+        downstreamUse: null,
+        captureProfile: null,
+        conceptArtMode: null,
+        conceptVariantSet: [],
+      }
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
+}
+
+export async function extractWorldThreadToCinematicPreview(snapshot: ProjectSnapshot, input: {
+  threadKey: string
+  mode?: 'teaser' | 'scene'
+  model: string
+}) {
+  const thread = snapshot.worldThreads.find((entry) => entry.key === input.threadKey) ?? null
+  if (!thread) {
+    throw new Error(`World thread "${input.threadKey}" was not found.`)
+  }
+  const lockedEntityRefs = buildLockedEntityRefsFromThread(snapshot, thread)
+  if (lockedEntityRefs.length === 0) {
+    throw new Error('This thread does not have enough linked visual entities to plan a cinematic preview.')
+  }
+  const mode = input.mode ?? 'teaser'
+  const prompt =
+    mode === 'scene'
+      ? `Plan a cinematic scene from the world thread "${thread.title}". Preserve the locked continuity refs and focus on ${thread.summary || thread.title}.`
+      : `Plan a cinematic teaser from the world thread "${thread.title}". Preserve the locked continuity refs and focus on ${thread.summary || thread.title}.`
+  return planWorldBuild({
+    prompt,
+    plannerModeHint: 'cinematic_build',
+    lockedEntityRefs,
+    snapshot,
+    model: input.model,
+  })
+}
+
+export function listWorldPromptSessions(snapshot: ProjectSnapshot) {
+  return [...snapshot.worldPromptSessions].sort((left, right) => (
+    new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()
+  ))
+}
+
+export function loadWorldPromptSession(snapshot: ProjectSnapshot, sessionId: string | null) {
+  const session = sessionId
+    ? snapshot.worldPromptSessions.find((entry) => entry.id === sessionId || entry.key === sessionId) ?? null
+    : snapshot.worldPromptSessions.find((entry) => entry.isActive) ?? snapshot.worldPromptSessions[0] ?? null
+  if (!session) {
+    return {
+      session: null,
+      turns: [],
+      messages: [],
+      events: [],
+    }
+  }
+  return {
+    session,
+    turns: snapshot.worldPromptTurns
+      .filter((turn) => turn.sessionId === session.id)
+      .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()),
+    messages: snapshot.worldPromptMessages
+      .filter((message) => message.sessionId === session.id)
+      .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()),
+    events: snapshot.worldPromptEvents
+      .filter((event) => event.sessionId === session.id)
+      .sort((left, right) => (
+        new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
+        || left.sequence - right.sequence
+      )),
+  }
+}
+
+export async function startWorldPromptTurn(snapshot: ProjectSnapshot, request: Omit<WorldPromptStartTurnRequest, 'snapshot'>) {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before starting a world prompt turn.')
+  const payload = worldPromptStartTurnRequestSchema.parse({
+    ...request,
+    snapshot: buildWorldPromptSnapshot(snapshot),
+  })
+
+  if (!hasLiveSnapshotIds(payload.snapshot)) {
+    throw new Error('Sign in and load a live GraphCore draft before starting a world prompt turn.')
+  }
+
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'start-world-prompt-turn',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  return worldPromptStartTurnResponseSchema.parse(response.data)
+}
+
+export async function approveWorldPromptOp(snapshot: ProjectSnapshot, request: Omit<WorldPromptResolveOpRequest, 'snapshot'>) {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before approving a world prompt op.')
+  const payload = {
+    ...request,
+    snapshot: buildWorldPromptSnapshot(snapshot),
+  }
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'approve-world-prompt-op',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  return worldPromptResolveOpResponseSchema.parse(response.data)
+}
+
+export async function rejectWorldPromptOp(snapshot: ProjectSnapshot, request: Omit<WorldPromptResolveOpRequest, 'snapshot'>) {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before rejecting a world prompt op.')
+  const payload = {
+    ...request,
+    snapshot: buildWorldPromptSnapshot(snapshot),
+  }
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'reject-world-prompt-op',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  return worldPromptResolveOpResponseSchema.parse(response.data)
+}
+
+export async function applyWorldPromptPreview(snapshot: ProjectSnapshot, request: Omit<WorldPromptApplyPreviewRequest, 'snapshot'>) {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before applying a world prompt preview.')
+  const payload = {
+    ...request,
+    snapshot: buildWorldPromptSnapshot(snapshot),
+  }
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'apply-world-prompt-preview',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  return worldPromptApplyPreviewResponseSchema.parse(response.data)
+}
+
+export async function cancelWorldPromptTurn(snapshot: ProjectSnapshot, request: Omit<WorldPromptCancelTurnRequest, 'snapshot'>) {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before cancelling a world prompt turn.')
+  const payload = {
+    ...request,
+    snapshot: buildWorldPromptSnapshot(snapshot),
+  }
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'cancel-world-prompt-turn',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  return worldPromptCancelTurnResponseSchema.parse(response.data)
+}
+
+export function subscribeWorldPromptEvents(input: {
+  draftId: string
+  onSession?: (session: WorldPromptSession) => void
+  onTurn?: (turn: WorldPromptTurn) => void
+  onMessage?: (message: WorldPromptMessage) => void
+  onEvent?: (event: WorldPromptEvent) => void
+  onThread?: (thread: WorldThread) => void
+}) {
+  const channel = supabase
+    .channel(`graphcore-world-prompt-${input.draftId}`)
+    .on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'world_prompt_sessions',
+      filter: `draft_id=eq.${input.draftId}`,
+    }, (payload) => {
+      if (!payload.new || typeof payload.new !== 'object') return
+      input.onSession?.(mapWorldPromptSessionRow(payload.new as WorldPromptSessionRow))
+    })
+    .on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'world_prompt_turns',
+      filter: `draft_id=eq.${input.draftId}`,
+    }, (payload) => {
+      if (!payload.new || typeof payload.new !== 'object') return
+      input.onTurn?.(mapWorldPromptTurnRow(payload.new as WorldPromptTurnRow))
+    })
+    .on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'world_prompt_messages',
+      filter: `draft_id=eq.${input.draftId}`,
+    }, (payload) => {
+      if (!payload.new || typeof payload.new !== 'object') return
+      input.onMessage?.(mapWorldPromptMessageRow(payload.new as WorldPromptMessageRow))
+    })
+    .on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'world_prompt_events',
+      filter: `draft_id=eq.${input.draftId}`,
+    }, (payload) => {
+      if (!payload.new || typeof payload.new !== 'object') return
+      input.onEvent?.(mapWorldPromptEventRow(payload.new as WorldPromptEventRow))
+    })
+    .on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'world_threads',
+      filter: `draft_id=eq.${input.draftId}`,
+    }, (payload) => {
+      if (!payload.new || typeof payload.new !== 'object') return
+      input.onThread?.(mapWorldThreadRow(payload.new as WorldThreadRow))
+    })
+
+  void channel.subscribe()
+  return channel
 }
 
 export async function compileSnapshot(snapshot: ProjectSnapshot) {

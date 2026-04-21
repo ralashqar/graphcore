@@ -1,5 +1,6 @@
 import type { PatchOperation } from '../domain/graphcore'
 import type { PromptActivityEntry, PromptExecutionPlan } from '../domain/prompting'
+import type { WorldPromptTurn } from '../domain/worldPrompt'
 import type { WorldBuildBatch } from '../domain/worldBuild'
 import type { EntityIconId } from './entityIcons'
 
@@ -23,7 +24,7 @@ export type WorkspaceTab = 'graph' | 'content' | 'characters' | 'environments' |
 
 export type PatchSessionView = {
   id: string
-  kind?: 'patch' | 'world_build'
+  kind?: 'patch' | 'world_build' | 'world_prompt'
   summary: string
   requestSummary?: string
   prompt: string
@@ -34,6 +35,7 @@ export type PatchSessionView = {
   diagnostics: string[]
   assistantNotes?: string
   worldBuildBatch?: WorldBuildBatch
+  worldPromptTurn?: WorldPromptTurn
 }
 
 export type AuthMode = 'sign_in' | 'sign_up' | 'magic_link'
