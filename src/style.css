@@ -241,6 +241,40 @@ code {
   flex-wrap: wrap;
 }
 
+.topbar-credit-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(250, 204, 21, 0.22);
+  background:
+    radial-gradient(circle at top left, rgba(250, 204, 21, 0.14), transparent 48%),
+    rgba(255, 255, 255, 0.03);
+  color: rgba(248, 250, 252, 0.92);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.topbar-credit-pill svg {
+  width: 16px;
+  height: 16px;
+  color: #fbbf24;
+}
+
+.topbar-credit-pill span {
+  color: rgba(226, 232, 240, 0.72);
+  font-size: 0.74rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.topbar-credit-pill strong {
+  font-size: 0.92rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
 .topbar-context-cluster {
   display: flex;
   align-items: center;
@@ -1077,11 +1111,11 @@ code {
 }
 
 .world-graph-layout {
-  grid-template-columns: 88px minmax(340px, var(--world-grow-workbench-width, 420px)) 10px minmax(0, 1fr) 380px;
+  grid-template-columns: minmax(340px, var(--world-grow-workbench-width, 420px)) 10px minmax(0, 1fr) 380px;
 }
 
-.world-graph-layout.is-grow-mode {
-  grid-template-columns: 88px minmax(340px, var(--world-grow-workbench-width, 420px)) 10px minmax(0, 1fr) 380px;
+.world-graph-layout-legacy {
+  grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
 }
 
 .world-graph-rail,
@@ -1217,15 +1251,6 @@ code {
   background: rgba(255, 255, 255, 0.03);
 }
 
-.world-shell-creation-head {
-  gap: 14px;
-}
-
-.world-shell-creation-title {
-  display: grid;
-  gap: 14px;
-}
-
 .world-shell-view-select,
 .world-shell-search {
   display: grid;
@@ -1249,14 +1274,14 @@ code {
   color: var(--text);
 }
 
-.world-shell-subtabs {
+.world-shell-creation-body {
+  min-height: 720px;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
-.world-shell-creation-body {
-  min-height: 520px;
-  display: grid;
+.world-shell-creation-body.is-single-stream {
+  padding: 18px;
+  background: linear-gradient(180deg, rgba(10, 14, 22, 0.9), rgba(7, 11, 18, 0.94));
 }
 
 .world-shell-stage {
@@ -1285,15 +1310,6 @@ code {
   align-items: center;
   justify-content: flex-end;
   flex-wrap: wrap;
-}
-
-.world-shell-view-tabs {
-  display: flex;
-  gap: 8px;
-  padding: 5px;
-  border-radius: 16px;
-  border: 1px solid rgba(148, 163, 184, 0.14);
-  background: rgba(255, 255, 255, 0.03);
 }
 
 .world-shell-search {
@@ -1385,10 +1401,10 @@ code {
 
 .world-prompt-chat-shell {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto auto auto minmax(0, 1fr) auto;
   min-height: 0;
   height: 100%;
-  gap: 12px;
+  gap: 14px;
 }
 
 .world-prompt-chat-head {
@@ -1396,6 +1412,31 @@ code {
   gap: 12px;
   align-items: end;
   justify-content: space-between;
+}
+
+.world-prompt-flow-head {
+  align-items: flex-start;
+}
+
+.world-prompt-flow-copy {
+  display: grid;
+  gap: 8px;
+}
+
+.world-prompt-flow-copy h3 {
+  margin: 0;
+}
+
+.world-prompt-flow-copy p {
+  margin: 0;
+  color: rgba(226, 232, 240, 0.74);
+  line-height: 1.5;
+}
+
+.world-prompt-head-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
 }
 
 .world-prompt-session-select {
@@ -1420,21 +1461,41 @@ code {
   color: var(--text);
 }
 
-.world-prompt-context-line {
+.world-prompt-context-pills {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
-  color: rgba(226, 232, 240, 0.72);
-  font-size: 0.8rem;
 }
 
-.world-prompt-transcript {
-  min-height: 0;
-  overflow: auto;
+.world-prompt-status-pill.is-working,
+.world-prompt-status-pill.is-plan_preview {
+  border-color: rgba(96, 165, 250, 0.32);
+}
+
+.world-prompt-status-pill.is-needs_clarification {
+  border-color: rgba(250, 204, 21, 0.34);
+}
+
+.world-prompt-status-pill.is-approval_required {
+  border-color: rgba(251, 146, 60, 0.34);
+}
+
+.world-prompt-status-pill.is-completed {
+  border-color: rgba(74, 222, 128, 0.32);
+}
+
+.world-prompt-status-pill.is-blocked {
+  border-color: rgba(248, 113, 113, 0.36);
+}
+
+.world-prompt-composer-label {
   display: grid;
-  gap: 12px;
-  padding: 4px 4px 2px 0;
-  align-content: start;
+  gap: 6px;
+}
+
+.world-prompt-composer-label span:last-child {
+  color: rgba(226, 232, 240, 0.76);
+  line-height: 1.45;
 }
 
 .world-prompt-empty {
@@ -1493,6 +1554,11 @@ code {
   background: rgba(255, 255, 255, 0.03);
 }
 
+.world-prompt-row-system.is-clarify {
+  border-color: rgba(250, 204, 21, 0.28);
+  background: rgba(80, 55, 12, 0.16);
+}
+
 .world-prompt-row-system.is-error {
   border-color: rgba(248, 113, 113, 0.36);
   background: rgba(127, 29, 29, 0.22);
@@ -1512,8 +1578,12 @@ code {
 .world-prompt-composer {
   display: grid;
   gap: 10px;
-  padding-top: 10px;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 16px;
+  border-radius: 20px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background:
+    radial-gradient(circle at top left, rgba(96, 165, 250, 0.08), transparent 34%),
+    rgba(11, 17, 26, 0.84);
 }
 
 .world-prompt-composer textarea {
@@ -1533,6 +1603,105 @@ code {
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
+}
+
+.world-prompt-state-card {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 20px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: linear-gradient(180deg, rgba(16, 22, 32, 0.92), rgba(10, 15, 23, 0.94));
+}
+
+.world-prompt-state-card h4 {
+  margin: 0;
+}
+
+.world-prompt-state-card p {
+  margin: 0;
+  color: rgba(226, 232, 240, 0.8);
+  line-height: 1.52;
+}
+
+.world-prompt-state-card.is-blocked {
+  border-color: rgba(248, 113, 113, 0.32);
+  background: linear-gradient(180deg, rgba(60, 15, 20, 0.34), rgba(16, 12, 18, 0.94));
+}
+
+.world-prompt-state-card.is-needs_clarification {
+  border-color: rgba(250, 204, 21, 0.26);
+}
+
+.world-prompt-state-card.is-completed {
+  border-color: rgba(74, 222, 128, 0.24);
+}
+
+.world-prompt-state-card.is-plan_preview,
+.world-prompt-state-card.is-working {
+  border-color: rgba(96, 165, 250, 0.28);
+}
+
+.world-prompt-state-head {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.world-prompt-state-group {
+  display: grid;
+  gap: 10px;
+}
+
+.world-prompt-group-label {
+  color: rgba(226, 232, 240, 0.6);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.world-prompt-change-list {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.world-prompt-approval-list {
+  display: grid;
+  gap: 10px;
+}
+
+.world-prompt-approval-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.world-prompt-transcript-shell {
+  min-height: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.world-prompt-transcript-head {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.world-prompt-transcript {
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  gap: 12px;
+  padding: 0 4px 2px 0;
+  align-content: start;
 }
 
 .world-grow-resizer {
@@ -1601,6 +1770,65 @@ code {
   padding: 0 12px 12px;
 }
 
+.world-prompt-drawers {
+  display: grid;
+  gap: 10px;
+}
+
+.world-prompt-context-drawer {
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.world-prompt-context-drawer summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.world-prompt-context-drawer summary::-webkit-details-marker {
+  display: none;
+}
+
+.world-prompt-context-drawer[open] summary {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.world-prompt-drawer-body {
+  display: grid;
+  gap: 12px;
+  padding: 12px 14px 14px;
+}
+
+.world-prompt-history-list {
+  display: grid;
+  gap: 8px;
+}
+
+.world-prompt-history-item {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.world-prompt-history-item strong {
+  font-size: 0.9rem;
+  line-height: 1.35;
+}
+
+.world-prompt-history-item span {
+  color: rgba(226, 232, 240, 0.64);
+  font-size: 0.8rem;
+}
+
 .world-prompt-preview-card {
   border: 1px solid rgba(148, 163, 184, 0.18);
   background: linear-gradient(180deg, rgba(17, 24, 39, 0.92), rgba(12, 17, 25, 0.94));
@@ -1659,10 +1887,6 @@ code {
 .world-graph-toolbar {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
-}
-
-.world-graph-toolbar.is-grow-mode {
-  padding-bottom: 0;
 }
 
 .world-toolbar-actions,
@@ -2100,7 +2324,7 @@ code {
   justify-content: space-between;
   gap: 12px;
   align-items: center;
-  padding: 14px 18px 10px;
+  padding: 10px 16px 8px;
   flex-wrap: wrap;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
@@ -2165,6 +2389,27 @@ code {
   background: rgba(9, 13, 20, 0.96);
   border: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+}
+
+.world-prompt-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 36;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(2, 6, 12, 0.54);
+  backdrop-filter: blur(10px);
+}
+
+.world-prompt-modal {
+  position: relative;
+  top: auto;
+  left: auto;
+  transform: none;
+  width: min(560px, calc(100% - 40px));
+  max-height: calc(100vh - 64px);
+  overflow: auto;
 }
 
 .world-edge-popup {
@@ -5435,9 +5680,12 @@ button:disabled {
     grid-template-columns: 240px minmax(0, 1fr);
   }
 
-  .world-graph-layout,
-  .world-graph-layout.is-grow-mode {
-    grid-template-columns: 88px minmax(300px, var(--world-grow-workbench-width, 360px)) 10px minmax(0, 1fr);
+  .world-graph-layout {
+    grid-template-columns: minmax(300px, var(--world-grow-workbench-width, 360px)) 10px minmax(0, 1fr);
+  }
+
+  .world-graph-layout-legacy {
+    grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
   }
 
   .cinematics-layout {
@@ -5522,8 +5770,11 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 
-  .world-graph-layout,
-  .world-graph-layout.is-grow-mode {
+  .world-graph-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .world-graph-layout-legacy {
     grid-template-columns: 1fr;
   }
 

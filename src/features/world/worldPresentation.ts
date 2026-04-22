@@ -33,6 +33,31 @@ export type WorldPromptTranscriptEntry =
   | { id: string; createdAt: string; kind: 'queue_started'; label: string; detail?: string }
   | { id: string; createdAt: string; kind: 'suggestion_row' | 'choice_row'; suggestions: WorldPromptSuggestion[]; label?: string }
 
+export type WorldPromptRailState =
+  | 'idle'
+  | 'working'
+  | 'needs_clarification'
+  | 'plan_preview'
+  | 'approval_required'
+  | 'completed'
+  | 'blocked'
+
+export type WorldPromptRailViewModel = {
+  state: WorldPromptRailState
+  title: string
+  detail: string
+  statusLabel: string
+  primaryActionLabel: string
+  primaryActionKind: 'generate' | 'apply_preview' | 'review_approval' | 'continue'
+  latestSuggestions: WorldPromptSuggestion[]
+  preview: WorldPromptPlanPreview | null
+  approvalOps: PromptToWorldOp[]
+  appliedEntities: string[]
+  appliedRelationships: string[]
+  queuedLabels: string[]
+  latestPlannerStatus: string | null
+}
+
 export type WorldInspectorViewModel = {
   title: string
   kicker: string
@@ -331,6 +356,238 @@ export function buildWorldPromptTranscriptEntries(input: {
   }
 
   return entries
+}
+
+function detailForBlockedClassification(classification: WorldPromptTurn['metadata']['classification'] | undefined) {
+  switch (classification) {
+    case 'not_graphable':
+      return 'The request did not contain actionable worldbuilding changes. Rewrite it as something that adds or connects story material.'
+    case 'contradictory_or_low_confidence':
+      return 'The planner found conflicting or ambiguous instructions. Choose a clarification path or tighten the request.'
+    default:
+      return 'The prompt needs a clearer instruction before it can change the graph.'
+  }
+}
+
+function summarizeAppliedChanges(input: {
+  turnId: string | null
+  events: WorldPromptEvent[]
+  entityByKey: Map<string, WorldEntity>
+}) {
+  const appliedEntities: string[] = []
+  const appliedRelationships: string[] = []
+  const queuedLabels: string[] = []
+
+  const relevantEvents = input.turnId
+    ? input.events.filter((event) => event.turnId === input.turnId)
+    : []
+
+  for (const event of relevantEvents) {
+    const parsed = worldPromptEventPayloadSchema.safeParse(event.payload)
+    if (!parsed.success) continue
+    const payload = parsed.data
+
+    if (event.eventType === 'op_applied') {
+      for (const entity of payload.applied?.worldEntities ?? []) {
+        appliedEntities.push(entity.name)
+      }
+      for (const relationship of payload.applied?.worldRelationships ?? []) {
+        const sourceName = input.entityByKey.get(relationship.sourceEntityKey)?.name ?? relationship.sourceEntityKey
+        const targetName = input.entityByKey.get(relationship.targetEntityKey)?.name ?? relationship.targetEntityKey
+        appliedRelationships.push(`${sourceName} -> ${targetName}`)
+      }
+    }
+
+    if (event.eventType === 'queue_started') {
+      if (payload.queue?.type === 'cinematic_generation') {
+        queuedLabels.push('Cinematic queued')
+      } else if (payload.queue?.targetEntityKey) {
+        const entityName = input.entityByKey.get(payload.queue.targetEntityKey)?.name ?? payload.queue.targetEntityKey
+        queuedLabels.push(`Image queued for ${entityName}`)
+      } else {
+        queuedLabels.push('Image queued')
+      }
+    }
+  }
+
+  return {
+    appliedEntities,
+    appliedRelationships,
+    queuedLabels,
+  }
+}
+
+export function buildWorldPromptRailViewModel(input: {
+  activeTurn: WorldPromptTurn | null
+  turns: WorldPromptTurn[]
+  events: WorldPromptEvent[]
+  entityByKey: Map<string, WorldEntity>
+  promptError?: string | null
+}) {
+  const latestTurn = input.turns.at(-1) ?? null
+  const effectiveTurn = input.activeTurn ?? latestTurn
+  const preview = activePreviewForTurn(effectiveTurn)
+  const relevantEvents = effectiveTurn
+    ? input.events.filter((event) => event.turnId === effectiveTurn.id)
+    : input.events
+
+  let latestSuggestions: WorldPromptSuggestion[] = []
+  let latestPlannerStatus: string | null = null
+
+  for (const event of [...relevantEvents].reverse()) {
+    const parsed = worldPromptEventPayloadSchema.safeParse(event.payload)
+    if (!parsed.success) continue
+    if (!latestPlannerStatus && parsed.data.plannerStatus) {
+      latestPlannerStatus = describePlannerStatus(parsed.data.plannerStatus)
+    }
+    if (latestSuggestions.length === 0 && parsed.data.suggestions.length > 0) {
+      latestSuggestions = parsed.data.suggestions
+    }
+    if (latestSuggestions.length > 0 && latestPlannerStatus) break
+  }
+
+  const approvalOps = (preview?.pendingOps ?? []).filter((op) => op.applyMode === 'needs_approval' || op.status === 'pending')
+  const { appliedEntities, appliedRelationships, queuedLabels } = summarizeAppliedChanges({
+    turnId: effectiveTurn?.id ?? null,
+    events: input.events,
+    entityByKey: input.entityByKey,
+  })
+
+  const classification = effectiveTurn?.metadata?.classification
+  const latestSummary = stripInternalPlannerDiagnostics(effectiveTurn?.assistantSummary ?? '')
+  const latestDetail = latestSummary || effectiveTurn?.errorMessage || ''
+  const hasClarificationChoices = latestSuggestions.length > 1 || latestSuggestions.some((suggestion) => suggestion.kind === 'repair_prompt')
+  const isBlockedClassification = classification === 'not_graphable' || classification === 'contradictory_or_low_confidence'
+
+  if (input.promptError || effectiveTurn?.status === 'failed' || isBlockedClassification) {
+    return {
+      state: 'blocked',
+      title: 'Prompt needs repair',
+      detail: input.promptError ?? effectiveTurn?.errorMessage ?? detailForBlockedClassification(classification),
+      statusLabel: 'Blocked',
+      primaryActionLabel: 'Generate',
+      primaryActionKind: 'generate',
+      latestSuggestions,
+      preview,
+      approvalOps,
+      appliedEntities,
+      appliedRelationships,
+      queuedLabels,
+      latestPlannerStatus,
+    } satisfies WorldPromptRailViewModel
+  }
+
+  if (effectiveTurn?.status === 'awaiting_approval' || approvalOps.length > 0) {
+    return {
+      state: 'approval_required',
+      title: approvalOps.length > 0 ? `${approvalOps.length} change${approvalOps.length === 1 ? '' : 's'} need approval` : 'Approval required',
+      detail: latestDetail || 'Review the pending canon-touching operations before the graph changes land.',
+      statusLabel: 'Approval Required',
+      primaryActionLabel: 'Review approvals',
+      primaryActionKind: 'review_approval',
+      latestSuggestions,
+      preview,
+      approvalOps,
+      appliedEntities,
+      appliedRelationships,
+      queuedLabels,
+      latestPlannerStatus,
+    } satisfies WorldPromptRailViewModel
+  }
+
+  if (preview) {
+    return {
+      state: 'plan_preview',
+      title: preview.mode === 'plan_only' ? 'Preview available' : 'First wave ready',
+      detail: preview.requestSummary || latestDetail || 'Review the proposed first wave before applying it to the graph.',
+      statusLabel: preview.mode === 'plan_only' ? 'Preview' : 'Staged Wave',
+      primaryActionLabel: 'Apply first wave',
+      primaryActionKind: 'apply_preview',
+      latestSuggestions,
+      preview,
+      approvalOps,
+      appliedEntities,
+      appliedRelationships,
+      queuedLabels,
+      latestPlannerStatus,
+    } satisfies WorldPromptRailViewModel
+  }
+
+  if (input.activeTurn && ['queued', 'streaming'].includes(input.activeTurn.status)) {
+    return {
+      state: 'working',
+      title: 'Building the next graph neighborhood',
+      detail: latestDetail || 'The planner is resolving entities, relationships, and next moves.',
+      statusLabel: latestPlannerStatus ?? 'Working',
+      primaryActionLabel: 'Generate',
+      primaryActionKind: 'generate',
+      latestSuggestions,
+      preview,
+      approvalOps,
+      appliedEntities,
+      appliedRelationships,
+      queuedLabels,
+      latestPlannerStatus,
+    } satisfies WorldPromptRailViewModel
+  }
+
+  if (hasClarificationChoices) {
+    return {
+      state: 'needs_clarification',
+      title: 'Clarification required',
+      detail: latestDetail || 'Choose one path below or rewrite the prompt so the graph can continue cleanly.',
+      statusLabel: 'Needs Clarification',
+      primaryActionLabel: 'Generate',
+      primaryActionKind: 'generate',
+      latestSuggestions,
+      preview,
+      approvalOps,
+      appliedEntities,
+      appliedRelationships,
+      queuedLabels,
+      latestPlannerStatus,
+    } satisfies WorldPromptRailViewModel
+  }
+
+  if (effectiveTurn?.status === 'completed' && (appliedEntities.length > 0 || appliedRelationships.length > 0 || queuedLabels.length > 0 || latestSuggestions.length > 0)) {
+    const addedSummary = [
+      appliedEntities.length > 0 ? `${appliedEntities.length} entities` : null,
+      appliedRelationships.length > 0 ? `${appliedRelationships.length} links` : null,
+      queuedLabels.length > 0 ? `${queuedLabels.length} queues` : null,
+    ].filter(Boolean).join(' · ')
+
+    return {
+      state: 'completed',
+      title: 'Graph updated',
+      detail: latestDetail || (addedSummary ? `This turn added ${addedSummary}.` : 'The graph has new material ready for expansion.'),
+      statusLabel: 'Completed',
+      primaryActionLabel: 'Continue building',
+      primaryActionKind: 'continue',
+      latestSuggestions,
+      preview,
+      approvalOps,
+      appliedEntities,
+      appliedRelationships,
+      queuedLabels,
+      latestPlannerStatus,
+    } satisfies WorldPromptRailViewModel
+  }
+
+  return {
+    state: 'idle',
+    title: 'Describe what to add next',
+    detail: 'Use one prompt to create entities, connect them, or clarify pressure points in the same stream.',
+    statusLabel: 'Ready',
+    primaryActionLabel: 'Generate',
+    primaryActionKind: 'generate',
+    latestSuggestions,
+    preview,
+    approvalOps,
+    appliedEntities,
+    appliedRelationships,
+    queuedLabels,
+    latestPlannerStatus,
+  } satisfies WorldPromptRailViewModel
 }
 
 export function buildWorldInspectorViewModel(input: {

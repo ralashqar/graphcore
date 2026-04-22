@@ -1,6 +1,8 @@
 import type { GameSummary, WorkspaceTab } from '../../shared/workspace'
 import { EntityIcon, type EntityIconId } from '../../shared/entityIcons'
 
+const STUB_USER_AI_CREDITS = 1280
+
 type WorkspaceTopbarProps = {
   activeTab: WorkspaceTab
   activeGameId?: string | null
@@ -76,6 +78,11 @@ export function WorkspaceTopbar({
             </label>
           </div>
         ) : null}
+        <div className="topbar-credit-pill" aria-label={`AI credits ${STUB_USER_AI_CREDITS}`}>
+          <EntityIcon id="credits" />
+          <span>AI Credits</span>
+          <strong>{STUB_USER_AI_CREDITS.toLocaleString()}</strong>
+        </div>
         <details className="topbar-utility-menu">
           <summary className="ghost-button topbar-utility-trigger">Workspace</summary>
           <div className="topbar-utility-panel">

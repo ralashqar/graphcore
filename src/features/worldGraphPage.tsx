@@ -57,6 +57,7 @@ import { EntityIcon } from '../shared/entityIcons'
 import {
   activePreviewForTurn,
   buildWorldInspectorViewModel,
+  buildWorldPromptRailViewModel,
   nodeShellStyle,
   worldNodeDataEqual,
   type WorldGraphNodeRecord,
@@ -212,8 +213,6 @@ type EntityOverviewDraftState = {
   summary: string
   dirty: boolean
 }
-
-type WorldGraphSurfaceMode = 'grow' | 'graph'
 
 const GROW_WORKBENCH_WIDTH_STORAGE_KEY = 'graphcore.world.grow-workbench-width.v1'
 const GROW_WORKBENCH_WIDTH_DEFAULT = 420
@@ -651,7 +650,7 @@ export function WorldGraphPage({
   onSelectWorldNode,
   onSelectWorldEdge,
   onSelectWorldEntity,
-  onSelectWorldView,
+  onSelectWorldView: _onSelectWorldView,
   onCreateWorldEntity,
   onUpdateWorldEntity,
   onDeleteWorldEntity,
@@ -688,11 +687,6 @@ export function WorldGraphPage({
   const [legacyMode, setLegacyMode] = useState(false)
   const [viewMode, setViewMode] = useState<WorldView['mode']>('graph')
   const [search, setSearch] = useState('')
-  const [surfaceMode, setSurfaceMode] = useState<WorldGraphSurfaceMode>(() => {
-    if (typeof window === 'undefined') return 'graph'
-    const raw = window.localStorage.getItem('graphcore.world.surface-mode.v1')
-    return raw === 'grow' ? 'grow' : 'graph'
-  })
   const [growWorkbenchWidth, setGrowWorkbenchWidth] = useState(() => {
     if (typeof window === 'undefined') return GROW_WORKBENCH_WIDTH_DEFAULT
     const raw = Number(window.localStorage.getItem(GROW_WORKBENCH_WIDTH_STORAGE_KEY) ?? '')
@@ -700,7 +694,6 @@ export function WorldGraphPage({
       ? Math.min(GROW_WORKBENCH_WIDTH_MAX, Math.max(GROW_WORKBENCH_WIDTH_MIN, raw))
       : GROW_WORKBENCH_WIDTH_DEFAULT
   })
-  const [activeRailTab, setActiveRailTab] = useState<'chat' | 'activity' | 'threads'>('chat')
   const [activeInspectorTab, setActiveInspectorTab] = useState<'overview' | 'relationships' | 'usage' | 'suggestions'>('overview')
   const [showSuggestions, setShowSuggestions] = useState(true)
   const [showLabels, setShowLabels] = useState(true)
@@ -808,24 +801,8 @@ export function WorldGraphPage({
   }, [selectedPromptThreadKey, worldThreads])
 
   useEffect(() => {
-    window.localStorage.setItem('graphcore.world.surface-mode.v1', surfaceMode)
-  }, [surfaceMode])
-
-  useEffect(() => {
     window.localStorage.setItem(GROW_WORKBENCH_WIDTH_STORAGE_KEY, String(growWorkbenchWidth))
   }, [growWorkbenchWidth])
-
-  useEffect(() => {
-    if (worldEntities.length === 0 || activePromptTurn) {
-      setSurfaceMode('grow')
-    }
-  }, [activePromptTurn, worldEntities.length])
-
-  useEffect(() => {
-    if (worldEntities.length === 0) {
-      setActiveRailTab('chat')
-    }
-  }, [worldEntities.length])
 
   useEffect(() => {
     setViewMode('graph')
@@ -1375,7 +1352,6 @@ export function WorldGraphPage({
     inspectorResult,
   ])
   const activePromptPreview = useMemo(() => activePreviewForTurn(activePromptTurn), [activePromptTurn])
-  const recentEntities = useMemo(() => [...worldEntities].slice(-5).reverse(), [worldEntities])
 
   useEffect(() => {
     if (!inspectorEntity) {
@@ -1597,9 +1573,7 @@ export function WorldGraphPage({
     if (!prompt) return
     setWorldPromptError(null)
     setIsPromptSubmitting(true)
-    setBusyMessage('Growing the world from prompt...')
-    setSurfaceMode('grow')
-    setActiveRailTab('chat')
+    setBusyMessage('Generating world updates from prompt...')
     try {
       await onStartWorldPromptTurn({
         prompt,
@@ -1707,7 +1681,7 @@ export function WorldGraphPage({
 
   if (legacyMode) {
     return (
-      <div className="focus-layout graph-layout world-graph-layout">
+      <div className="focus-layout graph-layout world-graph-layout world-graph-layout-legacy">
         <aside className="focus-rail graph-rail world-graph-rail">
           <div className="detail-stack compact">
             <span className="eyebrow">Legacy Flow Graphs</span>
@@ -1727,281 +1701,51 @@ export function WorldGraphPage({
 
   return (
     <div
-      className={surfaceMode === 'grow' ? 'focus-layout graph-layout world-graph-layout is-grow-mode' : 'focus-layout graph-layout world-graph-layout'}
+      className="focus-layout graph-layout world-graph-layout"
       onClick={() => setContextMenu(null)}
       style={{ '--world-grow-workbench-width': `${growWorkbenchWidth}px` } as CSSProperties}
     >
-      <aside className="world-shell-nav" onClick={(event) => event.stopPropagation()}>
-        <div className="world-shell-brand">
-          <div className="world-shell-brand-mark">
-            <EntityIcon id="graph" />
-          </div>
-          <div className="world-shell-brand-copy">
-            <strong>GraphCore</strong>
-            <span>World OS</span>
-          </div>
-        </div>
-
-        <div className="world-shell-nav-group">
-          <button
-            className={surfaceMode === 'grow' && activeRailTab === 'chat' ? 'world-shell-nav-button is-active' : 'world-shell-nav-button'}
-            onClick={() => {
-              setSurfaceMode('grow')
-              setActiveRailTab('chat')
-            }}
-            type="button"
-          >
-            <EntityIcon id="content" />
-            <span>Grow</span>
-          </button>
-          <button
-            className={surfaceMode === 'graph' ? 'world-shell-nav-button is-active' : 'world-shell-nav-button'}
-            disabled={Boolean(activePromptTurn)}
-            onClick={() => setSurfaceMode('graph')}
-            type="button"
-          >
-            <EntityIcon id="graph" />
-            <span>Graph</span>
-          </button>
-          <button
-            className={activeRailTab === 'activity' ? 'world-shell-nav-button is-active' : 'world-shell-nav-button'}
-            onClick={() => setActiveRailTab('activity')}
-            type="button"
-          >
-            <EntityIcon id="activity" />
-            <span>Activity</span>
-          </button>
-          <button
-            className={activeRailTab === 'threads' ? 'world-shell-nav-button is-active' : 'world-shell-nav-button'}
-            onClick={() => setActiveRailTab('threads')}
-            type="button"
-          >
-            <EntityIcon id="release" />
-            <span>Threads</span>
-          </button>
-        </div>
-
-        <button className="world-shell-nav-button world-shell-nav-button-secondary" onClick={() => setLegacyMode(true)} type="button">
-          <EntityIcon id="asset" />
-          <span>Legacy</span>
-        </button>
-      </aside>
-
       <aside className="focus-rail graph-rail world-graph-rail world-shell-creation-rail" onClick={(event) => event.stopPropagation()}>
-        <div className="detail-stack compact world-shell-panel world-shell-creation-head">
-          <div className="world-shell-creation-title">
-            <div>
-              <span className="eyebrow">Prompt-first worldbuilding</span>
-              <h2>{selectedView.name || 'Living World'}</h2>
-              <div className="inline-note">Treat Grow as the creation stream and Graph as its spatial memory.</div>
-            </div>
-            <label className="world-shell-view-select">
-              <span>World lens</span>
-              <select value={selectedView.key ?? ''} onChange={(event) => onSelectWorldView(event.target.value)}>
-                {worldViews.length === 0 ? <option value="">Current view</option> : null}
-                {worldViews.map((view) => <option key={view.key} value={view.key}>{view.name}</option>)}
-              </select>
-            </label>
-          </div>
-
-          <div className="segmented-control">
-            {(['grow', 'graph'] as const).map((mode) => (
-              <button
-                key={mode}
-                className={surfaceMode === mode ? 'segment-button is-active' : 'segment-button'}
-                disabled={Boolean(activePromptTurn) && mode === 'graph'}
-                onClick={() => setSurfaceMode(mode)}
-                type="button"
-              >
-                {mode === 'grow' ? 'Grow' : 'Graph'}
-              </button>
-            ))}
-          </div>
-
-          <div className="segmented-control world-shell-subtabs">
-            {([
-              ['chat', 'Creation Stream'],
-              ['activity', 'Events'],
-              ['threads', 'Threads'],
-            ] as const).map(([tabKey, label]) => (
-              <button
-                key={tabKey}
-                className={activeRailTab === tabKey ? 'segment-button is-active' : 'segment-button'}
-                onClick={() => setActiveRailTab(tabKey)}
-                type="button"
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-
-          <div className="world-graph-actions">
-            <button className="primary-button compact" onClick={() => setEntityComposer({ mode: 'global', defaults: { nodeType: 'actor', source: 'user' }, relationshipDefaults: {}, canvasPosition: null })} type="button">Add Entity</button>
-            <button className="ghost-button compact" onClick={() => void handleSaveCurrentView()} type="button">Save View</button>
-            <button
-              className={showDerivedLayer ? 'ghost-button compact is-active' : 'ghost-button compact'}
-              onClick={() => {
-                const nextValue = !showDerivedLayer
-                setShowDerivedLayer(nextValue)
-                void persistViewChanges({ showDerivedLayer: nextValue })
-              }}
-              type="button"
-            >
-              Derived Layer
-            </button>
-          </div>
-        </div>
-
-        {activePromptPreview ? (
-          <div className="editor-section compact-section world-prompt-preview-card world-shell-panel">
-            <div className="section-head">
-              <div>
-                <span className="eyebrow">{activePromptPreview.mode === 'plan_only' ? 'Plan Preview' : 'Staged Wave'}</span>
-                <h3>{activePromptPreview.requestSummary || 'Latest prompt preview'}</h3>
-              </div>
-            </div>
-            <div className="chip-row">
-              <span className="chip">{activePromptPreview.scopeDecision.mode}</span>
-              <span className="chip">{activePromptPreview.scopeDecision.counts.entityOps} entity ops</span>
-              <span className="chip">{activePromptPreview.scopeDecision.counts.relationshipOps} links</span>
-            </div>
-            <div className="world-preview-list">
-              {activePromptPreview.items.slice(0, 3).map((item) => (
-                <div key={item.id} className="schema-card">
-                  <div className="schema-card-head">
-                    <strong>{item.title}</strong>
-                    <span className="chip">{item.kind.replace(/_/g, ' ')}</span>
-                  </div>
-                  {item.summary ? <div className="inline-note">{item.summary}</div> : null}
-                </div>
-              ))}
-            </div>
-            {activePromptPreview.canApplyFirstWave && activePromptTurn ? (
-              <div className="world-inspector-actions">
-                <button className="primary-button compact" onClick={() => void _onApplyWorldPromptPreview({ turnId: activePromptTurn.id })} type="button">Apply First Wave</button>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-
-        {entityComposer ? (
-          <EntityComposer
-            entityComposer={entityComposer}
-            onCancel={() => setEntityComposer(null)}
-            onCreate={handleCreateEntity}
+        <div className="world-shell-panel world-shell-creation-body is-single-stream">
+          <WorldPromptChatPanel
+            activePromptPreview={activePromptPreview}
+            activePromptTurn={activePromptTurn}
+            busy={isPromptSubmitting || isPromptCancelling}
+            cancelBusy={isPromptCancelling}
+            promptText={worldPromptText}
+            promptError={worldPromptError}
+            entityByKey={entityByKey}
+            selectedEntity={selectedEntity}
+            selectedSession={selectedPromptSession}
+            selectedThreadKey={selectedPromptThread?.key ?? null}
+            selectedView={selectedView}
+            sessionEvents={sessionEvents}
+            sessionMessages={sessionMessages}
+            sessionTurns={sessionTurns}
+            worldThreads={activeWorldThreads}
+            worldPromptSessions={worldPromptSessions}
+            onApplyPreview={(turnId) => void _onApplyWorldPromptPreview({ turnId })}
+            onApproveOp={(turnId, opId) => void _onApproveWorldPromptOp({ turnId, opId })}
+            onCancelTurn={handleCancelPromptTurn}
+            onChangePromptText={setWorldPromptText}
+            onOpenEntityComposer={() => setEntityComposer({ mode: 'global', defaults: { nodeType: 'actor', source: 'user' }, relationshipDefaults: {}, canvasPosition: null })}
+            onRejectOp={(turnId, opId) => void _onRejectWorldPromptOp({ turnId, opId })}
+            onResolveThread={(threadKey) => void _onResolveWorldThread({ threadKey })}
+            onRunSuggestion={handleRunPromptSuggestion}
+            onOpenLegacy={() => setLegacyMode(true)}
+            onSelectSession={setSelectedPromptSessionKey}
+            onSelectThread={setSelectedPromptThreadKey}
+            onSubmit={handleSubmitWorldPrompt}
+            onParkThread={(threadKey) => void _onParkWorldThread({ threadKey })}
+            onSaveView={() => void handleSaveCurrentView()}
+            onToggleDerivedLayer={() => {
+              const nextValue = !showDerivedLayer
+              setShowDerivedLayer(nextValue)
+              void persistViewChanges({ showDerivedLayer: nextValue })
+            }}
+            showDerivedLayer={showDerivedLayer}
+            variant="grow"
           />
-        ) : null}
-
-        {relationshipComposer ? (
-          <div className="editor-section compact-section world-composer-card">
-            <div className="section-head">
-              <div>
-                <span className="eyebrow">Direct Link</span>
-                <h3>Create Relationship</h3>
-              </div>
-            </div>
-            <RelationshipComposer
-              entities={worldEntities.filter((entity) => entity.key !== relationshipComposer.sourceEntityKey)}
-              state={relationshipComposer}
-              onCancel={() => setRelationshipComposer(null)}
-              onCreate={async (input) => {
-                await onCreateWorldRelationship(input)
-                setRelationshipComposer(null)
-              }}
-            />
-          </div>
-        ) : null}
-
-        {compositionComposer ? (
-          <div className="editor-section compact-section world-composer-card">
-            <div className="section-head">
-              <div>
-                <span className="eyebrow">Derived Layer</span>
-                <h3>Create Composition</h3>
-              </div>
-            </div>
-            <CompositionComposer
-              entities={worldEntities}
-              state={compositionComposer}
-              onCancel={() => setCompositionComposer(null)}
-              onCreate={async (input) => {
-                await onCreateWorldDerivedComposition(input)
-                setCompositionComposer(null)
-              }}
-            />
-          </div>
-        ) : null}
-
-        <div className="world-shell-panel world-shell-creation-body">
-          {activeRailTab === 'chat' ? (
-            <WorldPromptChatPanel
-              activePromptTurn={activePromptTurn}
-              busy={isPromptSubmitting || isPromptCancelling}
-              cancelBusy={isPromptCancelling}
-              promptText={worldPromptText}
-              promptError={worldPromptError}
-              entityByKey={entityByKey}
-              selectedEntity={selectedEntity}
-              selectedSession={selectedPromptSession}
-              selectedThreadKey={selectedPromptThread?.key ?? null}
-              selectedView={selectedView}
-              sessionMessages={sessionMessages}
-              sessionEvents={sessionEvents}
-              worldThreads={activeWorldThreads}
-              worldPromptSessions={worldPromptSessions}
-              variant="grow"
-              onCancelTurn={handleCancelPromptTurn}
-              onChangePromptText={setWorldPromptText}
-              onRunSuggestion={handleRunPromptSuggestion}
-              onSelectSession={setSelectedPromptSessionKey}
-              onSubmit={handleSubmitWorldPrompt}
-            />
-          ) : activeRailTab === 'activity' ? (
-            <WorldPromptActivityPanel
-              selectedSession={selectedPromptSession}
-              sessionEvents={sessionEvents}
-              sessionTurns={sessionTurns}
-            />
-          ) : (
-            <WorldPromptThreadsPanel
-              selectedThreadKey={selectedPromptThread?.key ?? null}
-              threads={activeWorldThreads}
-              onParkThread={(threadKey) => void _onParkWorldThread({ threadKey })}
-              onResolveThread={(threadKey) => void _onResolveWorldThread({ threadKey })}
-              onSelectThread={setSelectedPromptThreadKey}
-            />
-          )}
-        </div>
-
-        <div className="detail-stack compact world-shell-panel">
-          <div className="section-head">
-            <div>
-              <span className="eyebrow">Recent Additions</span>
-              <h3>New graph material</h3>
-            </div>
-          </div>
-          <div className="rail-list">
-            {recentEntities.length === 0 ? <div className="inline-note">Your latest additions will appear here once the world starts growing.</div> : null}
-            {recentEntities.map((entity) => (
-              <button
-                key={entity.key}
-                className={entity.key === selectedEntity?.key ? 'rail-button item-row is-active' : 'rail-button item-row'}
-                onClick={() => {
-                  selectWorldNode(entity.key)
-                  setActiveInspectorTab('overview')
-                }}
-                type="button"
-              >
-                <div className="media-thumb">
-                  <EntityIcon id={iconForWorldEntity(entity.nodeType)} />
-                </div>
-                <div className="item-row-copy">
-                  <strong>{entity.name}</strong>
-                  <span>{labelForWorldEntity(entity.nodeType)}</span>
-                </div>
-              </button>
-            ))}
-          </div>
         </div>
       </aside>
 
@@ -2014,15 +1758,11 @@ export function WorldGraphPage({
       />
 
       <section className="main-surface graph-surface world-graph-surface world-shell-stage">
-        <div className={`world-graph-toolbar world-shell-stage-toolbar${surfaceMode === 'grow' ? ' is-grow-mode' : ''}`}>
+        <div className="world-graph-toolbar world-shell-stage-toolbar">
           <div className="world-toolbar-heading">
-            <span className="eyebrow">{surfaceMode === 'grow' ? 'Grow + Graph Hybrid' : 'Spatial Graph View'}</span>
             <h3>{selectedView.name || 'Living World'}</h3>
           </div>
           <div className="world-graph-toolbar-actions world-shell-toolbar-main">
-            <div className="world-shell-view-tabs">
-              <button className="segment-button is-active" type="button">Graph</button>
-            </div>
             <label className="world-shell-search">
               <input
                 placeholder="Search entities, aliases, tags, or lore"
@@ -2035,13 +1775,25 @@ export function WorldGraphPage({
                 {isExpansionPending ? 'Generating...' : 'Generate From Selection'}
               </button>
             ) : null}
-            <button className={showLabels ? 'ghost-button compact is-active' : 'ghost-button compact'} onClick={() => {
-              const nextValue = !showLabels
-              setShowLabels(nextValue)
-              void persistViewChanges({ showLabels: nextValue })
-            }} type="button">Labels</button>
-            <button className="ghost-button compact" onClick={() => void handleAutoLayout()} type="button">Auto Layout</button>
             <button className="ghost-button compact" onClick={() => flowRef.current?.fitView({ padding: 0.18, duration: 300 })} type="button">Fit</button>
+            <details className="world-toolbar-more">
+              <summary className="ghost-button compact">View</summary>
+              <div className="world-toolbar-more-panel">
+                <button
+                  className={showLabels ? 'ghost-button compact is-active' : 'ghost-button compact'}
+                  onClick={() => {
+                    const nextValue = !showLabels
+                    setShowLabels(nextValue)
+                    void persistViewChanges({ showLabels: nextValue })
+                  }}
+                  type="button"
+                >
+                  {showLabels ? 'Hide Labels' : 'Show Labels'}
+                </button>
+                <button className="ghost-button compact" onClick={() => void handleAutoLayout()} type="button">Auto Layout</button>
+                <button className="ghost-button compact" onClick={() => void handleSaveCurrentView()} type="button">Save View</button>
+              </div>
+            </details>
           </div>
         </div>
 
@@ -2395,6 +2147,80 @@ export function WorldGraphPage({
         ) : null}
       </section>
 
+      {entityComposer || relationshipComposer || compositionComposer ? (
+        <div className="world-prompt-modal-backdrop" onClick={() => {
+          setEntityComposer(null)
+          setRelationshipComposer(null)
+          setCompositionComposer(null)
+        }}>
+          <div
+            className="world-overlay-card world-prompt-modal"
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+          >
+            {entityComposer ? (
+              <>
+                <div className="world-popup-head">
+                  <div>
+                    <span className="eyebrow">{entityComposer.mode === 'related' ? 'Related Entity' : 'Manual Creation'}</span>
+                    <h3>{entityComposer.mode === 'related' ? 'Add Related Entity' : 'Create Entity'}</h3>
+                  </div>
+                  <button className="world-popup-close" onClick={() => setEntityComposer(null)} type="button" aria-label="Close entity editor">×</button>
+                </div>
+                <EntityComposer
+                  entityComposer={entityComposer}
+                  onCancel={() => setEntityComposer(null)}
+                  onCreate={handleCreateEntity}
+                />
+              </>
+            ) : null}
+
+            {relationshipComposer ? (
+              <>
+                <div className="world-popup-head">
+                  <div>
+                    <span className="eyebrow">Direct Link</span>
+                    <h3>Create Relationship</h3>
+                  </div>
+                  <button className="world-popup-close" onClick={() => setRelationshipComposer(null)} type="button" aria-label="Close relationship editor">×</button>
+                </div>
+                <RelationshipComposer
+                  entities={worldEntities.filter((entity) => entity.key !== relationshipComposer.sourceEntityKey)}
+                  state={relationshipComposer}
+                  onCancel={() => setRelationshipComposer(null)}
+                  onCreate={async (input) => {
+                    await onCreateWorldRelationship(input)
+                    setRelationshipComposer(null)
+                  }}
+                />
+              </>
+            ) : null}
+
+            {compositionComposer ? (
+              <>
+                <div className="world-popup-head">
+                  <div>
+                    <span className="eyebrow">Derived Layer</span>
+                    <h3>Create Composition</h3>
+                  </div>
+                  <button className="world-popup-close" onClick={() => setCompositionComposer(null)} type="button" aria-label="Close composition editor">×</button>
+                </div>
+                <CompositionComposer
+                  entities={worldEntities}
+                  state={compositionComposer}
+                  onCancel={() => setCompositionComposer(null)}
+                  onCreate={async (input) => {
+                    await onCreateWorldDerivedComposition(input)
+                    setCompositionComposer(null)
+                  }}
+                />
+              </>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
       <aside className="context-drawer world-graph-drawer world-shell-inspector" onClick={(event) => event.stopPropagation()}>
         <div className="world-shell-dossier-head">
           {inspectorViewModel ? (
@@ -2510,7 +2336,7 @@ export function WorldGraphPage({
           <div className="detail-stack compact">
             <span className="eyebrow">World Summary</span>
             <h3>{selectedView.name || 'Living World'}</h3>
-            <div className="inline-note">Select a node to inspect it. Use Grow Mode when you want guided prompts, threads, and suggested next moves.</div>
+            <div className="inline-note">Select a node to inspect it. The prompt stream and graph stay synchronized in one unified workspace.</div>
             <div className="editor-section compact-section">
               <div className="section-head">
                 <div>
@@ -2766,6 +2592,7 @@ export function WorldGraphPage({
 }
 
 function WorldPromptChatPanel({
+  activePromptPreview,
   activePromptTurn,
   busy,
   cancelBusy,
@@ -2778,15 +2605,28 @@ function WorldPromptChatPanel({
   selectedView,
   sessionEvents,
   sessionMessages,
+  sessionTurns,
   worldThreads,
   worldPromptSessions,
+  onApplyPreview,
+  onApproveOp,
   variant,
   onCancelTurn,
   onChangePromptText,
+  onOpenEntityComposer,
+  onOpenLegacy,
+  onRejectOp,
+  onResolveThread,
   onRunSuggestion,
   onSelectSession,
+  onSelectThread,
   onSubmit,
+  onParkThread,
+  onSaveView,
+  onToggleDerivedLayer,
+  showDerivedLayer,
 }: {
+  activePromptPreview: ReturnType<typeof activePreviewForTurn>
   activePromptTurn: WorldPromptTurn | null
   busy: boolean
   cancelBusy: boolean
@@ -2799,14 +2639,26 @@ function WorldPromptChatPanel({
   selectedView: WorldView
   sessionEvents: WorldPromptEvent[]
   sessionMessages: WorldPromptMessage[]
+  sessionTurns: WorldPromptTurn[]
   worldThreads: WorldThread[]
   worldPromptSessions: WorldPromptSession[]
+  onApplyPreview: (turnId: string) => Promise<void> | void
+  onApproveOp: (turnId: string, opId: string) => Promise<void> | void
   variant: 'drawer' | 'grow'
   onCancelTurn: (turnId: string) => Promise<void> | void
   onChangePromptText: (value: string) => void
+  onOpenEntityComposer: () => void
+  onOpenLegacy: () => void
+  onRejectOp: (turnId: string, opId: string) => Promise<void> | void
+  onResolveThread: (threadKey: string) => Promise<void> | void
   onRunSuggestion: (suggestion: WorldPromptSuggestion) => Promise<void> | void
   onSelectSession: (key: string | null) => void
+  onSelectThread: (threadKey: string | null) => void
   onSubmit: (promptOverride?: string) => Promise<void> | void
+  onParkThread: (threadKey: string) => Promise<void> | void
+  onSaveView: () => void
+  onToggleDerivedLayer: () => void
+  showDerivedLayer: boolean
 }) {
   const transcriptRef = useRef<HTMLDivElement | null>(null)
   const transcriptEndRef = useRef<HTMLDivElement | null>(null)
@@ -2824,6 +2676,17 @@ function WorldPromptChatPanel({
     () => worldThreads.find((thread) => thread.key === selectedThreadKey) ?? null,
     [selectedThreadKey, worldThreads],
   )
+  const railView = useMemo(
+    () => buildWorldPromptRailViewModel({
+      activeTurn: activePromptTurn,
+      turns: sessionTurns,
+      events: sessionEvents,
+      entityByKey,
+      promptError,
+    }),
+    [activePromptTurn, entityByKey, promptError, sessionEvents, sessionTurns],
+  )
+  const effectivePreview = activePromptPreview ?? railView.preview
   const activeSuggestionRowId = useMemo(() => {
     for (const entry of [...transcriptEntries].reverse()) {
       if (entry.kind === 'suggestion_row' || entry.kind === 'choice_row') {
@@ -2846,103 +2709,61 @@ function WorldPromptChatPanel({
     setStickToBottom(distanceFromBottom <= threshold)
   }
 
+  const recentTurns = useMemo(
+    () => [...sessionTurns].reverse().slice(0, 6),
+    [sessionTurns],
+  )
+  const recentEvents = useMemo(
+    () => sessionEvents.slice(-8).reverse().map((event) => {
+      const parsedPayload = worldPromptEventPayloadSchema.safeParse(event.payload)
+      const label = parsedPayload.success && parsedPayload.data.op
+        ? describePromptOp(parsedPayload.data.op)
+        : parsedPayload.success && parsedPayload.data.note
+          ? parsedPayload.data.note
+          : event.eventType
+      return {
+        id: event.id,
+        title: event.eventType.replace(/_/g, ' '),
+        detail: label,
+        sequence: event.sequence,
+      }
+    }),
+    [sessionEvents],
+  )
+  const previewTurnId = activePromptTurn?.id ?? sessionTurns.at(-1)?.id ?? null
+  const suggestionSectionLabel = railView.state === 'needs_clarification' ? 'Clarify to continue' : 'Suggested next moves'
+  const composerLabel = railView.primaryActionKind === 'continue'
+    ? 'Continue building'
+    : railView.primaryActionKind === 'generate'
+      ? 'Generate'
+      : 'Use prompt'
+
   return (
     <div className={`world-prompt-chat-shell${variant === 'grow' ? ' is-grow' : ''}`}>
-      <div className="world-prompt-chat-head">
-        <div>
-          <span className="eyebrow">Prompt To World</span>
-          <h3>{selectedSession?.title ?? 'World Session'}</h3>
+      <div className="world-prompt-chat-head world-prompt-flow-head">
+        <div className="world-prompt-flow-copy">
+          <span className="eyebrow">Prompt-first creation</span>
+          <h3>{selectedView.name || selectedSession?.title || 'Living World'}</h3>
+          <p>One stream for prompts, clarifications, applied graph changes, and next moves.</p>
         </div>
-        <label className="world-prompt-session-select">
-          <span>Session</span>
-          <select value={selectedSession?.key ?? ''} onChange={(event) => onSelectSession(event.target.value || null)}>
-            {worldPromptSessions.length === 0 ? <option value="">Default session</option> : null}
-            {worldPromptSessions.map((session) => (
-              <option key={session.id} value={session.key}>{session.title}</option>
-            ))}
-          </select>
-        </label>
+        <div className="world-prompt-head-actions">
+          <button className="ghost-button compact" onClick={onOpenEntityComposer} type="button">Manual Add</button>
+        </div>
       </div>
 
-      <div className="world-prompt-context-line">
-        {selectedEntity ? <span>Focus: <strong>{selectedEntity.name}</strong></span> : null}
-        {selectedThread ? <span>Thread: <strong>{selectedThread.title}</strong></span> : null}
-        <span>View: <strong>{selectedView.name || 'World'}</strong></span>
-        {activePromptTurn ? <span>Status: <strong>{activePromptTurn.status}</strong></span> : null}
-      </div>
-
-      <div className="world-prompt-transcript" onScroll={handleTranscriptScroll} ref={transcriptRef}>
-        {transcriptEntries.length === 0 && !promptError ? (
-          <div className="world-prompt-empty">
-            <span className="eyebrow">Ready</span>
-            <strong>Describe the first characters, places, lore, or conflicts you want in this world.</strong>
-          </div>
-        ) : null}
-        {transcriptEntries.map((entry) => {
-          if (entry.kind === 'suggestion_row' || entry.kind === 'choice_row') {
-            return (
-              <div key={entry.id} className="world-prompt-row world-prompt-row-system">
-                <span className="world-prompt-row-label">{entry.label ?? 'Next move'}</span>
-                <div className="world-prompt-inline-choices">
-                  {entry.suggestions.map((suggestion) => (
-                    <button
-                      key={suggestion.id}
-                      className={`world-prompt-suggestion-card${suggestion.style === 'primary' ? ' is-primary' : ''}`}
-                      disabled={busy}
-                      onClick={() => void onRunSuggestion(suggestion)}
-                      type="button"
-                    >
-                      <strong>{suggestion.label}</strong>
-                      {suggestion.summary ? <span>{suggestion.summary}</span> : null}
-                      {promptSuggestionImpactLabel(suggestion) ? <small>{promptSuggestionImpactLabel(suggestion)}</small> : null}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )
-          }
-
-          if (entry.kind === 'user_message' || entry.kind === 'assistant_message') {
-            return (
-              <div key={entry.id} className={`world-prompt-row ${entry.kind === 'user_message' ? 'world-prompt-row-user' : 'world-prompt-row-assistant'}`}>
-                <span className="world-prompt-row-label">{entry.kind === 'user_message' ? 'You' : 'GraphCore'}</span>
-                <div className={`world-prompt-bubble${entry.pending ? ' is-pending' : ''}`}>
-                  {entry.content}
-                </div>
-              </div>
-            )
-          }
-
-          if (entry.kind === 'system_status' || entry.kind === 'entity_created' || entry.kind === 'relationship_created' || entry.kind === 'queue_started') {
-            return (
-              <div
-                key={entry.id}
-                className={`world-prompt-row world-prompt-row-system${entry.kind === 'system_status' && entry.tone === 'error' ? ' is-error' : ''}`}
-              >
-                <span className="world-prompt-row-label">{entry.label}</span>
-                {entry.detail ? <div className="world-prompt-line">{entry.detail}</div> : null}
-              </div>
-            )
-          }
-
-          return null
-        })}
-        {promptError ? (
-          <div className="world-prompt-row world-prompt-row-system is-error">
-            <span className="world-prompt-row-label">Error</span>
-            <div className="world-prompt-line">{promptError}</div>
-          </div>
-        ) : null}
-        {!activePromptTurn && activeSuggestionRowId ? (
-          <div className="world-prompt-row world-prompt-row-system">
-            <span className="world-prompt-row-label">Continue</span>
-            <div className="world-prompt-line">Choose a next move or type a follow-up below.</div>
-          </div>
-        ) : null}
-        <div ref={transcriptEndRef} />
+      <div className="world-prompt-context-pills">
+        <span className="chip">World {selectedView.name || 'Default'}</span>
+        <span className="chip">Session {selectedSession?.title ?? 'Current'}</span>
+        {selectedEntity ? <span className="chip">Focus {selectedEntity.name}</span> : null}
+        {selectedThread ? <span className="chip">Thread {selectedThread.title}</span> : null}
+        <span className={`chip world-prompt-status-pill is-${railView.state}`}>{railView.statusLabel}</span>
       </div>
 
       <div className="world-prompt-composer">
+        <label className="world-prompt-composer-label">
+          <span className="eyebrow">Prompt</span>
+          <span>Describe the next entity, relationship, conflict, or lore change.</span>
+        </label>
         <textarea
           rows={variant === 'grow' ? 4 : 3}
           placeholder="Add two rival siblings, establish their shared history, and give one a ruined observatory as a base."
@@ -2955,18 +2776,282 @@ function WorldPromptChatPanel({
               Cancel Turn
             </button>
           ) : (
-            <span className="inline-note">{busy ? 'Working...' : 'Prompt stays with this session.'}</span>
+            <span className="inline-note">{busy ? 'Working...' : 'This prompt continues in the current session stream.'}</span>
           )}
-          <button className="primary-button compact" disabled={busy || !promptText.trim()} onClick={() => void onSubmit()} type="button">
-            {busy ? 'Growing...' : 'Send'}
+          <button className={railView.primaryActionKind === 'generate' || railView.primaryActionKind === 'continue' ? 'primary-button compact' : 'ghost-button compact'} disabled={busy || !promptText.trim()} onClick={() => void onSubmit()} type="button">
+            {busy ? 'Generating...' : composerLabel}
           </button>
         </div>
+      </div>
+
+      <div className={`world-prompt-state-card is-${railView.state}`}>
+        <div className="world-prompt-state-head">
+          <div>
+            <span className="eyebrow">{railView.statusLabel}</span>
+            <h4>{railView.title}</h4>
+          </div>
+          {railView.latestPlannerStatus ? <span className="chip">{railView.latestPlannerStatus}</span> : null}
+        </div>
+        <p>{railView.detail}</p>
+
+        {effectivePreview ? (
+          <div className="world-prompt-state-group">
+            <div className="chip-row">
+              <span className="chip">{effectivePreview.scopeDecision.mode}</span>
+              <span className="chip">{effectivePreview.scopeDecision.counts.entityOps} entity ops</span>
+              <span className="chip">{effectivePreview.scopeDecision.counts.relationshipOps} links</span>
+            </div>
+            <div className="world-preview-list">
+              {effectivePreview.items.slice(0, 3).map((item) => (
+                <div key={item.id} className="schema-card">
+                  <div className="schema-card-head">
+                    <strong>{item.title}</strong>
+                    <span className="chip">{item.kind.replace(/_/g, ' ')}</span>
+                  </div>
+                  {item.summary ? <div className="inline-note">{item.summary}</div> : null}
+                </div>
+              ))}
+            </div>
+            {effectivePreview.canApplyFirstWave && previewTurnId ? (
+              <div className="world-inspector-actions">
+                <button className="primary-button compact" onClick={() => void onApplyPreview(previewTurnId)} type="button">Apply First Wave</button>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {(railView.appliedEntities.length > 0 || railView.appliedRelationships.length > 0 || railView.queuedLabels.length > 0) ? (
+          <div className="world-prompt-state-group">
+            <span className="world-prompt-group-label">Graph Changes Applied</span>
+            <div className="world-prompt-change-list">
+              {railView.appliedEntities.slice(0, 4).map((label) => <span key={`entity:${label}`} className="chip">{label}</span>)}
+              {railView.appliedRelationships.slice(0, 3).map((label) => <span key={`relationship:${label}`} className="chip">{label}</span>)}
+              {railView.queuedLabels.slice(0, 2).map((label) => <span key={`queue:${label}`} className="chip">{label}</span>)}
+            </div>
+          </div>
+        ) : null}
+
+        {railView.approvalOps.length > 0 && activePromptTurn ? (
+          <div className="world-prompt-state-group">
+            <span className="world-prompt-group-label">Approval Required</span>
+            <div className="world-prompt-approval-list">
+              {railView.approvalOps.map((op) => (
+                <div key={op.id} className="world-prompt-approval-card">
+                  <div>
+                    <strong>{describePromptOp(op)}</strong>
+                    {op.rationale ? <div className="inline-note">{op.rationale}</div> : null}
+                  </div>
+                  <div className="world-inspector-actions">
+                    <button className="ghost-button compact" onClick={() => void onRejectOp(activePromptTurn.id, op.id)} type="button">Reject</button>
+                    <button className="primary-button compact" onClick={() => void onApproveOp(activePromptTurn.id, op.id)} type="button">Approve</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {railView.latestSuggestions.length > 0 && railView.state === 'completed' ? (
+          <div className="world-prompt-state-group">
+            <span className="world-prompt-group-label">{suggestionSectionLabel}</span>
+            <div className="world-prompt-inline-choices">
+              {railView.latestSuggestions.slice(0, 3).map((suggestion) => (
+                <button
+                  key={suggestion.id}
+                  className={`world-prompt-suggestion-card${suggestion.style === 'primary' ? ' is-primary' : ''}`}
+                  disabled={busy}
+                  onClick={() => void onRunSuggestion(suggestion)}
+                  type="button"
+                >
+                  <strong>{suggestion.label}</strong>
+                  {suggestion.summary ? <span>{suggestion.summary}</span> : null}
+                  {promptSuggestionImpactLabel(suggestion) ? <small>{promptSuggestionImpactLabel(suggestion)}</small> : null}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {railView.state === 'idle' ? (
+          <div className="world-prompt-state-group">
+            <span className="world-prompt-group-label">What you can do</span>
+            <div className="world-prompt-change-list">
+              <span className="chip">Create a protagonist</span>
+              <span className="chip">Establish a city or faction</span>
+              <span className="chip">Add a conflict or prophecy</span>
+            </div>
+          </div>
+        ) : null}
+      </div>
+
+      <div className="world-prompt-transcript-shell">
+        <div className="world-prompt-transcript-head">
+          <span className="eyebrow">Creation Stream</span>
+          <span className="inline-note">{transcriptEntries.length} entries</span>
+        </div>
+        <div className="world-prompt-transcript" onScroll={handleTranscriptScroll} ref={transcriptRef}>
+          {transcriptEntries.length === 0 && !promptError ? (
+            <div className="world-prompt-empty">
+              <span className="eyebrow">Ready</span>
+              <strong>Describe the first characters, places, lore, or conflicts you want in this world.</strong>
+            </div>
+          ) : null}
+          {transcriptEntries.map((entry) => {
+            if (entry.kind === 'suggestion_row' || entry.kind === 'choice_row') {
+              const choiceTone = entry.suggestions.some((suggestion) => suggestion.kind === 'repair_prompt') ? ' is-clarify' : ''
+              return (
+                <div key={entry.id} className={`world-prompt-row world-prompt-row-system${choiceTone}`}>
+                  <span className="world-prompt-row-label">
+                    {entry.suggestions.some((suggestion) => suggestion.kind === 'repair_prompt') ? 'Clarification Required' : entry.label ?? 'Next move'}
+                  </span>
+                  <div className="world-prompt-inline-choices">
+                    {entry.suggestions.map((suggestion) => (
+                      <button
+                        key={suggestion.id}
+                        className={`world-prompt-suggestion-card${suggestion.style === 'primary' ? ' is-primary' : ''}`}
+                        disabled={busy}
+                        onClick={() => void onRunSuggestion(suggestion)}
+                        type="button"
+                      >
+                        <strong>{suggestion.label}</strong>
+                        {suggestion.summary ? <span>{suggestion.summary}</span> : null}
+                        {promptSuggestionImpactLabel(suggestion) ? <small>{promptSuggestionImpactLabel(suggestion)}</small> : null}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )
+            }
+
+            if (entry.kind === 'user_message' || entry.kind === 'assistant_message') {
+              return (
+                <div key={entry.id} className={`world-prompt-row ${entry.kind === 'user_message' ? 'world-prompt-row-user' : 'world-prompt-row-assistant'}`}>
+                  <span className="world-prompt-row-label">{entry.kind === 'user_message' ? 'You' : 'GraphCore'}</span>
+                  <div className={`world-prompt-bubble${entry.pending ? ' is-pending' : ''}`}>
+                    {entry.content}
+                  </div>
+                </div>
+              )
+            }
+
+            if (entry.kind === 'system_status' || entry.kind === 'entity_created' || entry.kind === 'relationship_created' || entry.kind === 'queue_started') {
+              return (
+                <div
+                  key={entry.id}
+                  className={`world-prompt-row world-prompt-row-system${entry.kind === 'system_status' && entry.tone === 'error' ? ' is-error' : ''}`}
+                >
+                  <span className="world-prompt-row-label">{entry.label}</span>
+                  {entry.detail ? <div className="world-prompt-line">{entry.detail}</div> : null}
+                </div>
+              )
+            }
+
+            return null
+          })}
+          {promptError ? (
+            <div className="world-prompt-row world-prompt-row-system is-error">
+              <span className="world-prompt-row-label">Error</span>
+              <div className="world-prompt-line">{promptError}</div>
+            </div>
+          ) : null}
+          {!activePromptTurn && activeSuggestionRowId ? (
+            <div className="world-prompt-row world-prompt-row-system">
+              <span className="world-prompt-row-label">Continue</span>
+              <div className="world-prompt-line">Choose a next move or type a follow-up below.</div>
+            </div>
+          ) : null}
+          <div ref={transcriptEndRef} />
+        </div>
+      </div>
+
+      <div className="world-prompt-drawers">
+        <details className="world-prompt-context-drawer">
+          <summary>
+            <span>History</span>
+            <span className="chip">{sessionTurns.length} turns</span>
+          </summary>
+          <div className="world-prompt-drawer-body">
+            <label className="world-prompt-session-select">
+              <span>Session</span>
+              <select value={selectedSession?.key ?? ''} onChange={(event) => onSelectSession(event.target.value || null)}>
+                {worldPromptSessions.length === 0 ? <option value="">Default session</option> : null}
+                {worldPromptSessions.map((session) => (
+                  <option key={session.id} value={session.key}>{session.title}</option>
+                ))}
+              </select>
+            </label>
+            <div className="world-prompt-history-list">
+              {recentTurns.length === 0 ? <div className="inline-note">No turns in this session yet.</div> : null}
+              {recentTurns.map((turn) => (
+                <div key={turn.id} className="world-prompt-history-item">
+                  <strong>{turn.prompt}</strong>
+                  <span>{turn.status}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </details>
+
+        <details className="world-prompt-context-drawer">
+          <summary>
+            <span>Threads</span>
+            <span className="chip">{worldThreads.length}</span>
+          </summary>
+          <div className="world-prompt-drawer-body">
+            {worldThreads.length === 0 ? <div className="inline-note">No active threads yet. Unresolved tensions will surface here.</div> : null}
+            <div className="world-thread-list">
+              {worldThreads.map((thread) => (
+                <div key={thread.key} className={thread.key === selectedThreadKey ? 'schema-card world-thread-card is-selected' : 'schema-card world-thread-card'}>
+                  <div className="schema-card-head">
+                    <div>
+                      <strong>{thread.title}</strong>
+                      <div className="inline-note">{thread.priority} priority</div>
+                    </div>
+                    <button className="ghost-button compact" onClick={() => onSelectThread(thread.key === selectedThreadKey ? null : thread.key)} type="button">
+                      {thread.key === selectedThreadKey ? 'Focused' : 'Focus'}
+                    </button>
+                  </div>
+                  {thread.summary ? <div className="inline-note">{thread.summary}</div> : null}
+                  <div className="world-inspector-actions">
+                    <button className="ghost-button compact" onClick={() => void onParkThread(thread.key)} type="button">Park</button>
+                    <button className="primary-button compact" onClick={() => void onResolveThread(thread.key)} type="button">Resolve</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </details>
+
+        <details className="world-prompt-context-drawer">
+          <summary>
+            <span>Workspace</span>
+            <span className="chip">{showDerivedLayer ? 'Derived on' : 'Derived off'}</span>
+          </summary>
+          <div className="world-prompt-drawer-body">
+            <div className="world-inspector-actions">
+              <button className="ghost-button compact" onClick={onOpenLegacy} type="button">Legacy Editor</button>
+              <button className="ghost-button compact" onClick={onSaveView} type="button">Save View</button>
+              <button className={showDerivedLayer ? 'ghost-button compact is-active' : 'ghost-button compact'} onClick={onToggleDerivedLayer} type="button">
+                Derived Layer
+              </button>
+            </div>
+            <div className="world-prompt-history-list">
+              {recentEvents.length === 0 ? <div className="inline-note">No activity yet.</div> : null}
+              {recentEvents.map((event) => (
+                <div key={event.id} className="world-prompt-history-item">
+                  <strong>{event.title}</strong>
+                  <span>#{event.sequence} · {event.detail}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </details>
       </div>
     </div>
   )
 }
 
-function WorldPromptActivityPanel({
+export function WorldPromptActivityPanel({
   selectedSession,
   sessionEvents,
   sessionTurns,
@@ -3012,7 +3097,7 @@ function WorldPromptActivityPanel({
   )
 }
 
-function WorldPromptThreadsPanel({
+export function WorldPromptThreadsPanel({
   selectedThreadKey,
   threads,
   onParkThread,

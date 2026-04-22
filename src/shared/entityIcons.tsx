@@ -3,6 +3,7 @@ import type { CSSProperties } from 'react'
 export type EntityIconId =
   | 'graph'
   | 'content'
+  | 'credits'
   | 'item'
   | 'character'
   | 'environment'
@@ -45,6 +46,14 @@ function IconPath({ id }: { id: EntityIconId }) {
         <>
           <rect x="4.5" y="5" width="15" height="14" rx="2.5" {...stroke} />
           <path d="M8 9.5h8M8 13h6M8 16.5h5" {...stroke} />
+        </>
+      )
+    case 'credits':
+      return (
+        <>
+          <ellipse cx="12" cy="12" rx="7.2" ry="7.2" {...stroke} />
+          <path d="M9.2 9.8h5.6M9.2 14.2h5.6" {...stroke} />
+          <path d="M10.2 7.8v8.4M13.8 7.8v8.4" {...stroke} />
         </>
       )
     case 'item':
