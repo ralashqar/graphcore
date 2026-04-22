@@ -419,6 +419,7 @@ export type GlobalProjectContextUpdate = {
 }
 
 export type ProjectOnboardingContextUpdate = {
+  projectName?: string
   projectContext: ProjectContext
 }
 
@@ -3807,6 +3808,7 @@ export async function persistProjectOnboardingContext(
   snapshot: ProjectSnapshot,
   updates: ProjectOnboardingContextUpdate,
 ): Promise<{
+  project: ProjectSnapshot['project']
   draft: ProjectSnapshot['draft']
   gameSpec: ProjectSnapshot['gameSpec']
   projectContext: ProjectSnapshot['projectContext']
@@ -3816,6 +3818,22 @@ export async function persistProjectOnboardingContext(
   if (!hasLiveSnapshotIds(snapshot)) {
     throw new Error('Sign in and load a live GraphCore draft before saving project onboarding.')
   }
+
+  const nextProjectName = typeof updates.projectName === 'string' ? updates.projectName.trim() : snapshot.project.name
+  if (!nextProjectName) {
+    throw new Error('Project name cannot be empty.')
+  }
+
+  const projectResponse = await supabase
+    .from('projects')
+    .update({
+      name: nextProjectName,
+    })
+    .eq('id', snapshot.project.id)
+    .select('id, name, slug, summary, visibility')
+    .single()
+
+  if (projectResponse.error) throw new Error(projectResponse.error.message)
 
   const nextProjectContext = projectContextSchema.parse(updates.projectContext)
   const nextGameArchetypeId = getGameArchetypeIdForProjectSubtype(nextProjectContext.projectSubtype)
@@ -3878,6 +3896,13 @@ export async function persistProjectOnboardingContext(
   if (draftResponse.error) throw new Error(draftResponse.error.message)
 
   return {
+    project: {
+      id: projectResponse.data.id,
+      name: projectResponse.data.name,
+      slug: projectResponse.data.slug,
+      summary: projectResponse.data.summary ?? '',
+      visibility: projectResponse.data.visibility,
+    },
     draft: {
       id: draftResponse.data.id,
       name: draftResponse.data.name,

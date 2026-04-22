@@ -25,7 +25,7 @@ type ProjectWorldOnboardingProps = {
   projectName: string
   initialProjectContext: ProjectContext | null
   isSaving: boolean
-  onSubmit: (projectContext: ProjectContext) => Promise<void> | void
+  onSubmit: (values: { projectContext: ProjectContext; projectName: string }) => Promise<void> | void
 }
 
 const ONBOARDING_STEP_LABELS = ['Project Type', 'Subtype', 'Art Style'] as const
@@ -103,7 +103,12 @@ export function ProjectWorldOnboarding({
   const [projectSubtype, setProjectSubtype] = useState<ProjectSubtype>(fallbackContext.projectSubtype)
   const [artStylePreset, setArtStylePreset] = useState<ArtStylePresetId>(fallbackContext.artStylePreset as ArtStylePresetId)
   const [artStyleDescription, setArtStyleDescription] = useState(fallbackContext.artStyleDescription)
+  const [draftProjectName, setDraftProjectName] = useState(projectName)
   const [confirmOpen, setConfirmOpen] = useState(false)
+
+  useEffect(() => {
+    setDraftProjectName(projectName)
+  }, [projectName])
 
   useEffect(() => {
     const validSubtypes = getProjectSubtypeOptions(projectType)
@@ -126,6 +131,7 @@ export function ProjectWorldOnboarding({
   const customStyleRequiresDescription = artStylePreset === 'custom'
   const hasCustomStyleDescription = artStyleDescription.trim().length > 0
   const canProceedFromStyleStep = !customStyleRequiresDescription || hasCustomStyleDescription
+  const hasProjectName = draftProjectName.trim().length > 0
   const selectedProjectTypeOption = PROJECT_TYPE_OPTIONS.find((option) => option.id === projectType) ?? PROJECT_TYPE_OPTIONS[0]
   const summary = getProjectOnboardingSummary({
     projectType,
@@ -213,7 +219,7 @@ export function ProjectWorldOnboarding({
   }, [confirmOpen, step, stagePrimaryDisabled])
 
   async function handleConfirm() {
-    if (!canProceedFromStyleStep) return
+    if (!canProceedFromStyleStep || !hasProjectName) return
     const nextContext = buildProjectContext({
       projectType,
       projectSubtype,
@@ -221,7 +227,10 @@ export function ProjectWorldOnboarding({
       artStyleDescription,
       completed: true,
     })
-    await onSubmit(nextContext)
+    await onSubmit({
+      projectContext: nextContext,
+      projectName: draftProjectName.trim(),
+    })
     setConfirmOpen(false)
   }
 
@@ -469,6 +478,21 @@ export function ProjectWorldOnboarding({
             </div>
 
             <div className="world-onboarding-confirm-grid">
+              <label className="field-block world-onboarding-confirm-row is-wide">
+                <span>Project name</span>
+                <input
+                  autoFocus
+                  disabled={isSaving}
+                  onChange={(event) => setDraftProjectName(event.target.value)}
+                  placeholder="Name the project"
+                  value={draftProjectName}
+                />
+                {!hasProjectName ? (
+                  <small className="world-onboarding-validation-message">
+                    Add a project name before starting.
+                  </small>
+                ) : null}
+              </label>
               <div className="world-onboarding-confirm-row">
                 <span>Project type</span>
                 <strong>{getProjectTypeLabel(projectType)}</strong>
@@ -497,7 +521,7 @@ export function ProjectWorldOnboarding({
               <button className="ghost-button" disabled={isSaving} onClick={() => setConfirmOpen(false)} type="button">
                 Back
               </button>
-              <button className="primary-button button-with-spinner" disabled={isSaving} onClick={() => void handleConfirm()} type="button">
+              <button className="primary-button button-with-spinner" disabled={isSaving || !hasProjectName} onClick={() => void handleConfirm()} type="button">
                 {isSaving ? <><span className="button-spinner" aria-hidden="true" />Saving...</> : 'Confirm and start'}
               </button>
             </div>

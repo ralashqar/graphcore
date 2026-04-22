@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 
 import type { GameSystemBundle } from '../../domain/graphcore'
 import { ART_STYLE_PRESETS, getArtStylePresetBestFor, getArtStylePresetDescription, getArtStylePresetsByGroup } from '../../domain/artStylePresets'
+import type { ProjectContext } from '../../domain/projectContext'
+import { getBrainProfileSummary, getProjectSubtypeLabel, getProjectTypeLabel, isProjectOnboardingComplete } from '../../domain/projectContextProfiles'
 
 type ReleaseEntry = {
   id: string
@@ -17,6 +19,7 @@ type GlobalWorkspaceProps = {
   artStyleDescription: string
   artStylePreset: string
   projectDescription: string
+  projectContext: ProjectContext | null
   projectName: string
   releases: ReleaseEntry[]
   sourceReason?: string
@@ -35,6 +38,7 @@ export function GlobalWorkspace({
   artStyleDescription,
   artStylePreset,
   projectDescription,
+  projectContext,
   projectName,
   releases,
   sourceReason,
@@ -63,6 +67,7 @@ export function GlobalWorkspace({
 
   const presetGroups = useMemo(() => getArtStylePresetsByGroup(), [])
   const selectedPreset = ART_STYLE_PRESETS.find((preset) => preset.id === draftArtStylePreset) ?? ART_STYLE_PRESETS[0]
+  const onboardingComplete = isProjectOnboardingComplete(projectContext)
   const isDirty =
     draftProjectName !== projectName
     || draftProjectDescription !== projectDescription
@@ -103,9 +108,15 @@ export function GlobalWorkspace({
               <strong>{selectedPreset.label}</strong>
               <p className="subtle-line">{selectedPreset.description}</p>
             </div>
+            {projectContext ? (
+              <div className="inline-note">
+                <strong>{getProjectTypeLabel(projectContext.projectType)} · {getProjectSubtypeLabel(projectContext.projectSubtype)}</strong>
+                <p className="subtle-line">{getBrainProfileSummary(projectContext.projectSubtype)}</p>
+              </div>
+            ) : null}
             <div className="inline-note">
               <strong>AI context</strong>
-              <p className="subtle-line">Project description and art direction are reused by world building, prompt planning, and concept generation.</p>
+              <p className="subtle-line">Project setup, description, and art direction are reused by world building, prompt planning, and concept generation.</p>
             </div>
           </div>
         </div>
@@ -134,7 +145,7 @@ export function GlobalWorkspace({
             <div className="section-head">
               <span className="section-label">Project</span>
               <h3>Project identity</h3>
-              <p className="subtle-line">Project-level fields describe the game itself and are shared across drafts.</p>
+              <p className="subtle-line">Project-level fields describe the project itself and are shared across drafts.</p>
             </div>
             <div className="editor-grid">
               <label className="field-block">
@@ -156,9 +167,41 @@ export function GlobalWorkspace({
 
           <section className="global-card">
             <div className="section-head">
+              <span className="section-label">Onboarding Profile</span>
+              <h3>Project setup context</h3>
+              <p className="subtle-line">These values come from the empty-world onboarding and steer the AI planning profile used in the world workspace.</p>
+            </div>
+            {projectContext ? (
+              <div className="editor-grid compact">
+                <div className="global-preset-preview">
+                  <strong>Project type</strong>
+                  <span>{getProjectTypeLabel(projectContext.projectType)}</span>
+                </div>
+                <div className="global-preset-preview">
+                  <strong>Subtype</strong>
+                  <span>{getProjectSubtypeLabel(projectContext.projectSubtype)}</span>
+                </div>
+                <div className="global-preset-preview">
+                  <strong>AI brain</strong>
+                  <span>{projectContext.brainProfile}</span>
+                  <span className="subtle-line">{getBrainProfileSummary(projectContext.projectSubtype)}</span>
+                </div>
+                <div className="global-preset-preview">
+                  <strong>Setup status</strong>
+                  <span>{onboardingComplete ? 'Completed' : 'Not completed'}</span>
+                  <span className="subtle-line">{projectContext.onboardingVersion}</span>
+                </div>
+              </div>
+            ) : (
+              <div className="inline-note">No onboarding profile has been saved yet. Start from an empty world in the World tab to create one.</div>
+            )}
+          </section>
+
+          <section className="global-card">
+            <div className="section-head">
               <span className="section-label">Creative Direction</span>
               <h3>Universal art style</h3>
-              <p className="subtle-line">Draft-scoped visual direction used by prompts, world building, concept art, and downstream generation flows.</p>
+              <p className="subtle-line">Draft-scoped visual direction used by prompts, world building, concept art, and downstream generation flows. When an onboarding profile exists, saving here updates that profile too.</p>
             </div>
             <div className="editor-grid">
               <label className="field-block">

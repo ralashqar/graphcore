@@ -4729,6 +4729,7 @@ export default function App() {
         project: persisted.project,
         draft: persisted.draft,
         gameSpec: persisted.gameSpec,
+        projectContext: persisted.projectContext,
       }
       setBundle(compileBundle(nextSnapshot))
       return nextSnapshot
@@ -4741,18 +4742,19 @@ export default function App() {
     )))
   }
 
-  async function handleCompleteProjectOnboarding(projectContext: ProjectContext) {
+  async function handleCompleteProjectOnboarding(values: { projectContext: ProjectContext; projectName: string }) {
     if (!snapshot) return
 
     setProjectOnboardingSaving(true)
     setPromptRuntimeError(null)
 
     try {
-      const persisted = await workspaceService.persistProjectOnboardingContext(snapshot, { projectContext })
+      const persisted = await workspaceService.persistProjectOnboardingContext(snapshot, values)
       setSnapshot((current) => {
         if (!current) return current
         const nextSnapshot = {
           ...current,
+          project: persisted.project,
           draft: persisted.draft,
           gameSpec: persisted.gameSpec,
           projectContext: persisted.projectContext,
@@ -4760,6 +4762,11 @@ export default function App() {
         setBundle(compileBundle(nextSnapshot))
         return nextSnapshot
       })
+      setGames((current) => current.map((game) => (
+        game.projectId === snapshot.project.id
+          ? { ...game, projectName: persisted.project.name }
+          : game
+      )))
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Saving project onboarding failed.'
       console.error('[GraphCore] save project onboarding failed.', error)
@@ -5466,11 +5473,24 @@ export default function App() {
             {activeTab === 'global' ? (
               <GlobalWorkspace
                 autoFocusReleasesNonce={globalWorkspaceAutoFocusReleasesNonce}
-                artStyleDescription={typeof snapshot.gameSpec?.theme?.artStyleDescription === 'string' ? snapshot.gameSpec.theme.artStyleDescription : ''}
-                artStylePreset={typeof snapshot.gameSpec?.theme?.artStylePreset === 'string' ? snapshot.gameSpec.theme.artStylePreset : DEFAULT_ART_STYLE_PRESET}
+                artStyleDescription={
+                  typeof snapshot.projectContext?.artStyleDescription === 'string'
+                    ? snapshot.projectContext.artStyleDescription
+                    : typeof snapshot.gameSpec?.theme?.artStyleDescription === 'string'
+                      ? snapshot.gameSpec.theme.artStyleDescription
+                      : ''
+                }
+                artStylePreset={
+                  typeof snapshot.projectContext?.artStylePreset === 'string'
+                    ? snapshot.projectContext.artStylePreset
+                    : typeof snapshot.gameSpec?.theme?.artStylePreset === 'string'
+                      ? snapshot.gameSpec.theme.artStylePreset
+                      : DEFAULT_ART_STYLE_PRESET
+                }
                 bundle={bundle}
                 canEdit={loadedState?.source === 'supabase'}
                 projectDescription={snapshot.project.summary}
+                projectContext={snapshot.projectContext}
                 projectName={snapshot.project.name}
                 releases={snapshot.releases}
                 sourceReason={loadedState?.reason}

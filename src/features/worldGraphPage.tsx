@@ -23,7 +23,6 @@ import { Suspense, lazy, memo, useDeferredValue, useEffect, useMemo, useRef, use
 import { resolveAssetSourceUrl } from '../domain/assets'
 import type { AssetDefinition, DefinitionBase, GraphDefinition } from '../domain/graphcore'
 import type { ProjectContext } from '../domain/projectContext'
-import { getBrainProfileSummary, getProjectTypeLabel } from '../domain/projectContextProfiles'
 import type {
   WorldEntity,
   WorldEntityCreateInput,
@@ -128,7 +127,7 @@ type WorldGraphPageProps = {
   onUpdateWorldView: (viewKey: string, changes: Partial<WorldViewCreateInput>) => Promise<void> | void
   onGenerateStarterWorld: (prompt: string) => Promise<void> | void
   onGenerateWorldExpansion: (entityKey: string) => Promise<void> | void
-  onCompleteProjectOnboarding: (projectContext: ProjectContext) => Promise<void> | void
+  onCompleteProjectOnboarding: (values: { projectContext: ProjectContext; projectName: string }) => Promise<void> | void
   onStartWorldPromptTurn: (input: {
     prompt: string
     sessionKey?: string | null
@@ -3709,21 +3708,14 @@ function WorldPromptChatPanel({
     }))
   }, [sessionSuggestionCountBySessionId, worldPromptSessions, worldPromptTurns])
   const isPromptCenter = !busy && !activePromptTurn && transcriptStream.length === 0 && sessionTurns.length === 0
-  const sessionTitle = selectedSession?.title ?? (selectedSessionKey ? 'New chat' : 'World chat')
-  const sessionSubline = selectedSession
+  const sessionTitle = selectedSession?.title ?? (selectedSessionKey ? 'New chat' : 'Chat')
+  const sessionSubline = selectedSession && sessionTurns.length > 0
     ? `${sessionTurns.length} turn${sessionTurns.length === 1 ? '' : 's'}`
-    : selectedSessionKey
-      ? 'Fresh context window'
-      : 'World-aware creation stream'
+    : ''
   const promptTypeAccelerators = useMemo(() => getWorldPromptTypeAccelerators(projectContext), [projectContext])
   const promptStarterCards = useMemo(() => getWorldPromptStarterCards(projectContext), [projectContext])
   const promptSmartPrompts = useMemo(() => getWorldPromptSmartPrompts(projectContext), [projectContext])
-  const promptCenterHeading = projectContext
-    ? `What do you want to create for this ${getProjectTypeLabel(projectContext.projectType).toLowerCase()} project?`
-    : 'What would you like to create?'
-  const promptCenterSubline = projectContext
-    ? `${getProjectTypeLabel(projectContext.projectType)} · ${getBrainProfileSummary(projectContext.projectSubtype)}`
-    : 'Describe anything. GraphCore will build it and connect it into the world.'
+  const promptCenterHeading = 'What do you want to create?'
   const composerLabel = railView.primaryActionKind === 'continue'
     ? 'Continue building'
     : railView.primaryActionKind === 'generate'
@@ -3908,9 +3900,8 @@ function WorldPromptChatPanel({
     <div className={`world-prompt-chat-shell${variant === 'grow' ? ' is-grow' : ''}${isPromptCenter ? ' is-prompt-center' : ''}`}>
       <div className="world-prompt-chat-head">
         <div className="world-prompt-chat-meta">
-          <span className="eyebrow">World chat</span>
           <h3>{sessionTitle}</h3>
-          <div className="world-prompt-chat-subline">{sessionSubline}</div>
+          {sessionSubline ? <div className="world-prompt-chat-subline">{sessionSubline}</div> : null}
         </div>
         <div className="world-prompt-head-actions">
           <button className="world-prompt-icon-button" onClick={onOpenHistory} type="button" aria-label="Open history">
@@ -3934,9 +3925,7 @@ function WorldPromptChatPanel({
       {isPromptCenter ? (
         <div className="world-prompt-center">
           <div className="world-prompt-center-copy">
-            <span className="eyebrow">Prompt-first worldbuilding</span>
             <h2>{promptCenterHeading}</h2>
-            <p>{promptCenterSubline}</p>
           </div>
 
           <div className="world-prompt-composer world-prompt-composer-center">
@@ -3948,7 +3937,6 @@ function WorldPromptChatPanel({
               onChange={(event) => onChangePromptText(event.target.value)}
             />
             <div className="world-prompt-composer-actions">
-              <span className="inline-note">A new chat starts with the current world context, view, and focus.</span>
               <button className="primary-button compact" disabled={busy || !promptText.trim()} onClick={() => void onSubmit()} type="button">
                 {busy ? 'Generating...' : 'Generate'}
               </button>
@@ -3974,10 +3962,6 @@ function WorldPromptChatPanel({
           </div>
 
           <div className="world-prompt-smart-list">
-            <div className="world-prompt-smart-head">
-              <span className="eyebrow">Smart prompts</span>
-              <span className="inline-note">Quick ways to start the thread.</span>
-            </div>
             <div className="world-prompt-smart-grid">
               {promptSmartPrompts.map((prompt) => (
                 <button key={prompt} className="world-prompt-smart-chip" onClick={() => seedPrompt(prompt)} type="button">
@@ -3990,10 +3974,6 @@ function WorldPromptChatPanel({
       ) : (
         <>
           <div className="world-prompt-transcript-shell">
-            <div className="world-prompt-transcript-head">
-              <span className="eyebrow">Creation stream</span>
-              <span className="inline-note">{transcriptStream.length} entries</span>
-            </div>
             <div className="world-prompt-transcript" onScroll={handleTranscriptScroll} ref={transcriptRef}>
               {transcriptStream.length === 0 && busy ? (
                 <div className="world-prompt-row world-prompt-row-system world-prompt-card">
@@ -4025,9 +4005,7 @@ function WorldPromptChatPanel({
                 <button className="ghost-button compact" disabled={cancelBusy} onClick={() => void onCancelTurn(activePromptTurn!.id)} type="button">
                   Cancel turn
                 </button>
-              ) : (
-                <span className="inline-note">Stay in one thread, or open history to jump to another session.</span>
-              )}
+              ) : null}
               {sessionSuggestions.length > 0 ? (
                 <button className="ghost-button compact" disabled={busy} onClick={onContinueWithoutSuggestion} type="button">
                   Continue with my own prompt
