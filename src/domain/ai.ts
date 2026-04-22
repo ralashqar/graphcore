@@ -25,6 +25,43 @@ export type OpenAiResponsesResult = {
   raw: Record<string, unknown>
 }
 
+export type OpenAiImageBinaryInput = {
+  data: string
+  filename?: string
+  mimeType: string
+}
+
+export type OpenAiImagesRequest = {
+  action?: 'generate' | 'edit'
+  model?: string
+  prompt: string
+  size?: string
+  quality?: 'low' | 'medium' | 'high' | 'auto'
+  background?: 'transparent' | 'opaque' | 'auto'
+  moderation?: 'low' | 'auto'
+  outputFormat?: 'png' | 'jpeg' | 'webp'
+  outputCompression?: number
+  n?: number
+  images?: OpenAiImageBinaryInput[]
+  mask?: OpenAiImageBinaryInput | null
+  user?: string
+  extraBody?: Record<string, unknown>
+}
+
+export type OpenAiImagesResult = {
+  provider: 'openai'
+  action: 'generate' | 'edit'
+  model: string
+  created: number | null
+  requestId: string | null
+  images: Array<{
+    b64Json: string | null
+    revisedPrompt: string | null
+    url: string | null
+  }>
+  raw: Record<string, unknown>
+}
+
 export type FalAction = 'submit' | 'status' | 'result' | 'cancel' | 'subscribe'
 
 export type FalInvokeRequest = {

@@ -54,6 +54,16 @@ import {
   labelForWorldResult,
 } from '../domain/worldGraphHelpers'
 import { EntityIcon } from '../shared/entityIcons'
+import {
+  activePreviewForTurn,
+  buildWorldInspectorViewModel,
+  nodeShellStyle,
+  worldNodeDataEqual,
+  type WorldGraphNodeRecord,
+  type WorldInspectorViewModel,
+  type WorldNodeData,
+  type WorldPromptTranscriptEntry,
+} from './world/worldPresentation'
 import type { GraphWorkspaceProps } from './graph/types'
 
 const LegacyGraphWorkspace = lazy(() =>
@@ -127,19 +137,6 @@ type WorldGraphPageProps = {
   onOpenDefinitionLink: (definitionKey: string, kind: DefinitionBase['kind']) => void
   onOpenCinematicGraph: (graphKey: string) => void
   legacyGraphProps: GraphWorkspaceProps
-}
-
-type WorldGraphNodeRecord =
-  | { kind: 'entity'; entity: WorldEntity; title: string; subtitle: string; summary: string; imageUrl: string | null }
-  | { kind: 'operator'; operator: WorldOperator; title: string; subtitle: string; summary: string; imageUrl: string | null }
-  | { kind: 'result'; result: WorldResult; title: string; subtitle: string; summary: string; imageUrl: string | null }
-
-type WorldNodeData = {
-  record: WorldGraphNodeRecord
-  relationCount: number
-  usageCount: number
-  dimmed: boolean
-  animateIn: boolean
 }
 
 type WorldFlowEdgeData = {
@@ -216,14 +213,6 @@ type EntityOverviewDraftState = {
   dirty: boolean
 }
 
-type WorldPromptTranscriptEntry =
-  | { id: string; createdAt: string; kind: 'user_message' | 'assistant_message'; content: string; pending?: boolean }
-  | { id: string; createdAt: string; kind: 'system_status'; label: string; detail?: string; tone?: 'normal' | 'error' }
-  | { id: string; createdAt: string; kind: 'entity_created'; label: string; detail?: string; entityKey: string }
-  | { id: string; createdAt: string; kind: 'relationship_created'; label: string; detail?: string; relationshipKey: string }
-  | { id: string; createdAt: string; kind: 'queue_started'; label: string; detail?: string }
-  | { id: string; createdAt: string; kind: 'suggestion_row' | 'choice_row'; suggestions: WorldPromptSuggestion[]; label?: string }
-
 type WorldGraphSurfaceMode = 'grow' | 'graph'
 
 const GROW_WORKBENCH_WIDTH_STORAGE_KEY = 'graphcore.world.grow-workbench-width.v1'
@@ -235,64 +224,17 @@ function keyForWorldNodeRecord(record: WorldGraphNodeRecord) {
   return record.kind === 'entity' ? record.entity.key : record.kind === 'operator' ? record.operator.key : record.result.key
 }
 
-function worldNodeRecordEqual(left: WorldGraphNodeRecord, right: WorldGraphNodeRecord) {
-  if (left.kind !== right.kind) return false
-  if (left.title !== right.title || left.subtitle !== right.subtitle || left.summary !== right.summary || left.imageUrl !== right.imageUrl) {
-    return false
-  }
-  if (left.kind === 'entity' && right.kind === 'entity') {
-    return left.entity.key === right.entity.key && left.entity.status === right.entity.status && left.entity.thumbnailAssetKey === right.entity.thumbnailAssetKey
-  }
-  if (left.kind === 'operator' && right.kind === 'operator') {
-    return left.operator.key === right.operator.key && left.operator.operatorType === right.operator.operatorType && left.operator.label === right.operator.label
-  }
-  if (left.kind === 'result' && right.kind === 'result') {
-    return left.result.key === right.result.key && left.result.previewAssetKey === right.result.previewAssetKey && left.result.title === right.result.title
-  }
-  return false
-}
-
-function worldNodeDataEqual(left: WorldNodeData, right: WorldNodeData) {
-  return (
-    left.relationCount === right.relationCount
-    && left.usageCount === right.usageCount
-    && left.dimmed === right.dimmed
-    && left.animateIn === right.animateIn
-    && worldNodeRecordEqual(left.record, right.record)
-  )
-}
-
-function nodeShellStyle(record: WorldGraphNodeRecord, selected: boolean, dimmed: boolean): CSSProperties {
-  const palette =
-    record.kind === 'entity'
-      ? record.entity.nodeType === 'actor'
-        ? ['rgba(148, 163, 184, 0.32)', 'rgba(56, 189, 248, 0.14)']
-        : record.entity.nodeType === 'group'
-          ? ['rgba(253, 224, 71, 0.24)', 'rgba(245, 158, 11, 0.12)']
-          : record.entity.nodeType === 'place'
-            ? ['rgba(52, 211, 153, 0.24)', 'rgba(16, 185, 129, 0.12)']
-            : record.entity.nodeType === 'object'
-              ? ['rgba(244, 114, 182, 0.22)', 'rgba(236, 72, 153, 0.1)']
-              : record.entity.nodeType === 'concept'
-                ? ['rgba(192, 132, 252, 0.22)', 'rgba(139, 92, 246, 0.08)']
-                : ['rgba(251, 146, 60, 0.22)', 'rgba(249, 115, 22, 0.12)']
-      : record.kind === 'operator'
-        ? ['rgba(96, 165, 250, 0.28)', 'rgba(59, 130, 246, 0.08)']
-        : ['rgba(255, 255, 255, 0.18)', 'rgba(148, 163, 184, 0.08)']
-
-  return {
-    opacity: dimmed ? 0.22 : 1,
-    borderColor: selected ? 'rgba(255,255,255,0.34)' : palette[0],
-    background: `linear-gradient(180deg, rgba(12, 17, 25, 0.96), ${palette[1]})`,
-    boxShadow: selected ? '0 0 0 1px rgba(255,255,255,0.1), 0 18px 38px rgba(5, 8, 14, 0.45)' : '0 14px 32px rgba(5, 8, 14, 0.28)',
-  }
-}
-
 function WorldNodeCard({ data, selected }: NodeProps<Node<WorldNodeData>>) {
   const { record, relationCount, usageCount, dimmed } = data
   const title = record.title
   const summary = record.summary
   const imageUrl = record.imageUrl
+  const toneClass =
+    record.kind === 'entity'
+      ? `is-${record.entity.nodeType}`
+      : record.kind === 'operator'
+        ? 'is-operator'
+        : 'is-result'
   const kicker =
     record.kind === 'entity'
       ? labelForWorldEntity(record.entity.nodeType)
@@ -313,29 +255,52 @@ function WorldNodeCard({ data, selected }: NodeProps<Node<WorldNodeData>>) {
     record.kind === 'entity'
       ? record.entity.metadata?.canon && typeof record.entity.metadata.canon === 'object' && (record.entity.metadata.canon as { locked?: unknown }).locked === true
       : false
+  const summaryText = summary.trim()
+  const hasImage = Boolean(imageUrl)
 
   return (
-    <div className={`world-node-card world-node-card-${record.kind}${data.animateIn ? ' is-new' : ''}`} style={nodeShellStyle(record, selected, dimmed)}>
+    <div className={`world-node-card world-node-card-${record.kind} ${toneClass}${data.animateIn ? ' is-new' : ''}`} style={nodeShellStyle(record, selected, dimmed)}>
       {record.kind === 'entity' ? <Handle className="world-node-handle" position={Position.Left} type="target" /> : null}
       {record.kind === 'entity' ? <Handle className="world-node-handle" position={Position.Right} type="source" /> : null}
-      <div className="world-node-kicker">
-        <EntityIcon id={iconId} />
+      <div className="world-node-corners" aria-hidden="true">
+        <span className="world-node-corner world-node-corner-tl" />
+        <span className="world-node-corner world-node-corner-tr" />
+        <span className="world-node-corner world-node-corner-bl" />
+        <span className="world-node-corner world-node-corner-br" />
+      </div>
+      <div className="world-node-frame">
+        <div className="world-node-headline">
+          <div className="world-node-crest">
+            <EntityIcon id={iconId} />
+          </div>
+          <div className="world-node-kicker">
         <span>{kicker}</span>
         {record.kind === 'result' ? <span className="world-node-badge">Derived</span> : null}
         {isCanonLocked ? <span className="world-node-badge">Canon</span> : null}
         {isGenerating ? <span className="world-node-badge">Generating…</span> : null}
       </div>
-      {imageUrl ? (
+      </div>
+      {hasImage ? (
         <div className="world-node-media">
-          <img alt={title} src={imageUrl} />
+          <img alt={title} src={imageUrl!} />
+          <div className="world-node-media-shade" />
         </div>
-      ) : null}
-      <strong>{title}</strong>
-      {record.subtitle ? <span className="world-node-subtitle">{record.subtitle}</span> : null}
-      {!imageUrl && summary ? <p>{summary}</p> : null}
+      ) : (
+        <div className="world-node-emblem">
+          <div className="world-node-emblem-ring">
+            <EntityIcon id={iconId} />
+          </div>
+        </div>
+      )}
+      <div className="world-node-body">
+        <strong>{title}</strong>
+        {record.subtitle ? <span className="world-node-subtitle">{record.subtitle}</span> : null}
+        {summaryText ? <p>{summaryText}</p> : null}
+      </div>
       <div className="world-node-meta">
         <span>{relationCount} links</span>
         <span>{usageCount} uses</span>
+      </div>
       </div>
     </div>
   )
@@ -735,7 +700,7 @@ export function WorldGraphPage({
       ? Math.min(GROW_WORKBENCH_WIDTH_MAX, Math.max(GROW_WORKBENCH_WIDTH_MIN, raw))
       : GROW_WORKBENCH_WIDTH_DEFAULT
   })
-  const [activeRailTab, setActiveRailTab] = useState<'inspect' | 'chat' | 'activity'>('inspect')
+  const [activeRailTab, setActiveRailTab] = useState<'chat' | 'activity' | 'threads'>('chat')
   const [activeInspectorTab, setActiveInspectorTab] = useState<'overview' | 'relationships' | 'usage' | 'suggestions'>('overview')
   const [showSuggestions, setShowSuggestions] = useState(true)
   const [showLabels, setShowLabels] = useState(true)
@@ -863,7 +828,7 @@ export function WorldGraphPage({
   }, [worldEntities.length])
 
   useEffect(() => {
-    setViewMode(selectedView.mode)
+    setViewMode('graph')
     setSearch(selectedView.search)
     setShowSuggestions(selectedView.showSuggestions)
     setShowLabels(selectedView.showLabels)
@@ -1365,15 +1330,6 @@ export function WorldGraphPage({
     ]
   }, [edgeEditor, selectedWorldEdgeKey, showLabels, visibleConnections, visibleNodeKeys, visibleRelationships])
 
-  const groupedEntities = useMemo(() => ({
-    actor: filteredEntities.filter((entity) => entity.nodeType === 'actor'),
-    group: filteredEntities.filter((entity) => entity.nodeType === 'group'),
-    place: filteredEntities.filter((entity) => entity.nodeType === 'place'),
-    object: filteredEntities.filter((entity) => entity.nodeType === 'object'),
-    concept: filteredEntities.filter((entity) => entity.nodeType === 'concept'),
-    event: filteredEntities.filter((entity) => entity.nodeType === 'event'),
-  }), [filteredEntities])
-
   const inspectorEntity = useMemo(
     () => worldEntities.find((entity) => entity.key === inspectorNodeKey) ?? null,
     [inspectorNodeKey, worldEntities],
@@ -1398,6 +1354,28 @@ export function WorldGraphPage({
   const inspectorEntityRelationships = inspectorEntity
     ? worldRelationships.filter((relationship) => relationship.sourceEntityKey === inspectorEntity.key || relationship.targetEntityKey === inspectorEntity.key)
     : []
+  const inspectorViewModel = useMemo<WorldInspectorViewModel | null>(() => buildWorldInspectorViewModel({
+    entity: inspectorEntity,
+    operator: inspectorOperator,
+    result: inspectorResult,
+    imageUrl: inspectorEntity
+      ? imageUrlByEntityKey.get(inspectorEntity.key) ?? null
+      : inspectorResult
+        ? imageUrlByResultKey.get(inspectorResult.key) ?? null
+        : null,
+    relationCount: inspectorEntityRelationships.length,
+    usageCount: inspectorEntityUsage.length,
+  }), [
+    imageUrlByEntityKey,
+    imageUrlByResultKey,
+    inspectorEntity,
+    inspectorEntityRelationships.length,
+    inspectorEntityUsage.length,
+    inspectorOperator,
+    inspectorResult,
+  ])
+  const activePromptPreview = useMemo(() => activePreviewForTurn(activePromptTurn), [activePromptTurn])
+  const recentEntities = useMemo(() => [...worldEntities].slice(-5).reverse(), [worldEntities])
 
   useEffect(() => {
     if (!inspectorEntity) {
@@ -1562,7 +1540,7 @@ export function WorldGraphPage({
     const baseName = selectedEntity ? `${selectedEntity.name} Focus` : 'Saved World View'
     await onCreateWorldView({
       name: baseName,
-      mode: viewMode,
+      mode: 'graph',
       filters: selectedView.filters,
       search,
       rootEntityKey: focusRootKey && worldEntities.some((entity) => entity.key === focusRootKey) ? focusRootKey : null,
@@ -1751,287 +1729,323 @@ export function WorldGraphPage({
     <div
       className={surfaceMode === 'grow' ? 'focus-layout graph-layout world-graph-layout is-grow-mode' : 'focus-layout graph-layout world-graph-layout'}
       onClick={() => setContextMenu(null)}
-      style={surfaceMode === 'grow'
-        ? ({ '--world-grow-workbench-width': `${growWorkbenchWidth}px` } as CSSProperties)
-        : undefined}
+      style={{ '--world-grow-workbench-width': `${growWorkbenchWidth}px` } as CSSProperties}
     >
-      {surfaceMode === 'grow' ? (
-        <aside className="focus-rail graph-rail world-graph-rail world-grow-workbench">
-          <div className="detail-stack compact">
-            <div className="segmented-control">
-              {(['grow', 'graph'] as const).map((mode) => (
-                <button
-                  key={mode}
-                  className={surfaceMode === mode ? 'segment-button is-active' : 'segment-button'}
-                  disabled={Boolean(activePromptTurn) && mode === 'graph'}
-                  onClick={() => setSurfaceMode(mode)}
-                  type="button"
-                >
-                  {mode === 'grow' ? 'Grow' : 'Graph'}
-                </button>
-              ))}
-            </div>
+      <aside className="world-shell-nav" onClick={(event) => event.stopPropagation()}>
+        <div className="world-shell-brand">
+          <div className="world-shell-brand-mark">
+            <EntityIcon id="graph" />
           </div>
-          <WorldPromptChatPanel
-            activePromptTurn={activePromptTurn}
-            busy={isPromptSubmitting || isPromptCancelling}
-            cancelBusy={isPromptCancelling}
-            promptText={worldPromptText}
-            promptError={worldPromptError}
-            entityByKey={entityByKey}
-            selectedEntity={selectedEntity}
-            selectedSession={selectedPromptSession}
-            selectedThreadKey={selectedPromptThread?.key ?? null}
-            selectedView={selectedView}
-            sessionMessages={sessionMessages}
-            sessionEvents={sessionEvents}
-            worldThreads={activeWorldThreads}
-            worldPromptSessions={worldPromptSessions}
-            variant="grow"
-            onCancelTurn={handleCancelPromptTurn}
-            onChangePromptText={setWorldPromptText}
-            onRunSuggestion={handleRunPromptSuggestion}
-            onSelectSession={setSelectedPromptSessionKey}
-            onSubmit={handleSubmitWorldPrompt}
-          />
-        </aside>
-      ) : (
-        <aside className="focus-rail graph-rail world-graph-rail">
-          <div className="detail-stack compact">
-            <div className="segmented-control">
-              {(['grow', 'graph'] as const).map((mode) => (
-                <button
-                  key={mode}
-                  className={surfaceMode === mode ? 'segment-button is-active' : 'segment-button'}
-                  disabled={Boolean(activePromptTurn) && mode === 'graph'}
-                  onClick={() => setSurfaceMode(mode)}
-                  type="button"
-                >
-                  {mode === 'grow' ? 'Grow' : 'Graph'}
-                </button>
-              ))}
-            </div>
+          <div className="world-shell-brand-copy">
+            <strong>GraphCore</strong>
+            <span>World OS</span>
+          </div>
+        </div>
+
+        <div className="world-shell-nav-group">
+          <button
+            className={surfaceMode === 'grow' && activeRailTab === 'chat' ? 'world-shell-nav-button is-active' : 'world-shell-nav-button'}
+            onClick={() => {
+              setSurfaceMode('grow')
+              setActiveRailTab('chat')
+            }}
+            type="button"
+          >
+            <EntityIcon id="content" />
+            <span>Grow</span>
+          </button>
+          <button
+            className={surfaceMode === 'graph' ? 'world-shell-nav-button is-active' : 'world-shell-nav-button'}
+            disabled={Boolean(activePromptTurn)}
+            onClick={() => setSurfaceMode('graph')}
+            type="button"
+          >
+            <EntityIcon id="graph" />
+            <span>Graph</span>
+          </button>
+          <button
+            className={activeRailTab === 'activity' ? 'world-shell-nav-button is-active' : 'world-shell-nav-button'}
+            onClick={() => setActiveRailTab('activity')}
+            type="button"
+          >
+            <EntityIcon id="activity" />
+            <span>Activity</span>
+          </button>
+          <button
+            className={activeRailTab === 'threads' ? 'world-shell-nav-button is-active' : 'world-shell-nav-button'}
+            onClick={() => setActiveRailTab('threads')}
+            type="button"
+          >
+            <EntityIcon id="release" />
+            <span>Threads</span>
+          </button>
+        </div>
+
+        <button className="world-shell-nav-button world-shell-nav-button-secondary" onClick={() => setLegacyMode(true)} type="button">
+          <EntityIcon id="asset" />
+          <span>Legacy</span>
+        </button>
+      </aside>
+
+      <aside className="focus-rail graph-rail world-graph-rail world-shell-creation-rail" onClick={(event) => event.stopPropagation()}>
+        <div className="detail-stack compact world-shell-panel world-shell-creation-head">
+          <div className="world-shell-creation-title">
             <div>
-              <span className="eyebrow">World Graph</span>
+              <span className="eyebrow">Prompt-first worldbuilding</span>
               <h2>{selectedView.name || 'Living World'}</h2>
-              <div className="inline-note">Structured like a knowledge base, connected like a living universe map.</div>
+              <div className="inline-note">Treat Grow as the creation stream and Graph as its spatial memory.</div>
             </div>
-            <div className="world-graph-actions">
-              <button className="primary-button compact" onClick={() => setEntityComposer({ mode: 'global', defaults: { nodeType: 'actor', source: 'user' }, relationshipDefaults: {}, canvasPosition: null })} type="button">Add Entity</button>
-              <button className="ghost-button compact" onClick={() => setLegacyMode(true)} type="button">Legacy Flow Graphs</button>
-              <button className="ghost-button compact" onClick={() => void handleSaveCurrentView()} type="button">Save View</button>
-            </div>
-            <label className="field-block">
-              <span>Search</span>
-              <input placeholder="Search title, aliases, tags, description" value={search} onChange={(event) => setSearch(event.target.value)} />
+            <label className="world-shell-view-select">
+              <span>World lens</span>
+              <select value={selectedView.key ?? ''} onChange={(event) => onSelectWorldView(event.target.value)}>
+                {worldViews.length === 0 ? <option value="">Current view</option> : null}
+                {worldViews.map((view) => <option key={view.key} value={view.key}>{view.name}</option>)}
+              </select>
             </label>
-            <details className="world-inline-disclosure">
-              <summary>Filters</summary>
-              <div className="world-filter-grid">
-                {(['actor', 'group', 'place', 'object', 'concept', 'event'] as const).map((nodeType) => {
-                  const active = selectedView.filters.nodeTypes.includes(nodeType)
-                  return (
-                    <button
-                      key={nodeType}
-                      className={active ? 'segment-button is-active' : 'segment-button'}
-                      onClick={() => {
-                        const nodeTypes = active
-                          ? selectedView.filters.nodeTypes.filter((value) => value !== nodeType)
-                          : [...selectedView.filters.nodeTypes, nodeType]
-                        void persistViewChanges({ filters: { ...selectedView.filters, nodeTypes } })
-                      }}
-                      type="button"
-                    >
-                      {labelForWorldEntity(nodeType)}
-                    </button>
-                  )
-                })}
-              </div>
-            </details>
           </div>
 
-          {entityComposer ? (
-            <EntityComposer
-              entityComposer={entityComposer}
-              onCancel={() => setEntityComposer(null)}
-              onCreate={handleCreateEntity}
-            />
-          ) : null}
-
-          {relationshipComposer ? (
-            <div className="editor-section compact-section world-composer-card">
-              <div className="section-head">
-                <div>
-                  <span className="eyebrow">Direct Link</span>
-                  <h3>Create Relationship</h3>
-                </div>
-              </div>
-              <RelationshipComposer
-                entities={worldEntities.filter((entity) => entity.key !== relationshipComposer.sourceEntityKey)}
-                state={relationshipComposer}
-                onCancel={() => setRelationshipComposer(null)}
-                onCreate={async (input) => {
-                  await onCreateWorldRelationship(input)
-                  setRelationshipComposer(null)
-                }}
-              />
-            </div>
-          ) : null}
-
-          {compositionComposer ? (
-            <div className="editor-section compact-section world-composer-card">
-              <div className="section-head">
-                <div>
-                  <span className="eyebrow">Derived Layer</span>
-                  <h3>Create Composition</h3>
-                </div>
-              </div>
-              <CompositionComposer
-                entities={worldEntities}
-                state={compositionComposer}
-                onCancel={() => setCompositionComposer(null)}
-                onCreate={async (input) => {
-                  await onCreateWorldDerivedComposition(input)
-                  setCompositionComposer(null)
-                }}
-              />
-            </div>
-          ) : null}
-
-          <div className="detail-stack compact">
-            <div className="section-head">
-              <div>
-                <span className="eyebrow">Saved Views</span>
-                <h3>Views</h3>
-              </div>
-            </div>
-            <div className="rail-list">
-              {worldViews.length === 0 ? <div className="inline-note">No saved views yet. Save the current layout once you have a useful neighborhood.</div> : null}
-              {worldViews.map((view) => (
-                <button
-                  key={view.key}
-                  className={view.key === selectedView.key ? 'rail-button is-active' : 'rail-button'}
-                  onClick={() => onSelectWorldView(view.key)}
-                  type="button"
-                >
-                  <strong>{view.name}</strong>
-                  <span>{view.rootEntityKey ? 'Focused' : 'Overview'}</span>
-                </button>
-              ))}
-            </div>
+          <div className="segmented-control">
+            {(['grow', 'graph'] as const).map((mode) => (
+              <button
+                key={mode}
+                className={surfaceMode === mode ? 'segment-button is-active' : 'segment-button'}
+                disabled={Boolean(activePromptTurn) && mode === 'graph'}
+                onClick={() => setSurfaceMode(mode)}
+                type="button"
+              >
+                {mode === 'grow' ? 'Grow' : 'Graph'}
+              </button>
+            ))}
           </div>
 
-          <div className="detail-stack compact">
+          <div className="segmented-control world-shell-subtabs">
+            {([
+              ['chat', 'Creation Stream'],
+              ['activity', 'Events'],
+              ['threads', 'Threads'],
+            ] as const).map(([tabKey, label]) => (
+              <button
+                key={tabKey}
+                className={activeRailTab === tabKey ? 'segment-button is-active' : 'segment-button'}
+                onClick={() => setActiveRailTab(tabKey)}
+                type="button"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          <div className="world-graph-actions">
+            <button className="primary-button compact" onClick={() => setEntityComposer({ mode: 'global', defaults: { nodeType: 'actor', source: 'user' }, relationshipDefaults: {}, canvasPosition: null })} type="button">Add Entity</button>
+            <button className="ghost-button compact" onClick={() => void handleSaveCurrentView()} type="button">Save View</button>
+            <button
+              className={showDerivedLayer ? 'ghost-button compact is-active' : 'ghost-button compact'}
+              onClick={() => {
+                const nextValue = !showDerivedLayer
+                setShowDerivedLayer(nextValue)
+                void persistViewChanges({ showDerivedLayer: nextValue })
+              }}
+              type="button"
+            >
+              Derived Layer
+            </button>
+          </div>
+        </div>
+
+        {activePromptPreview ? (
+          <div className="editor-section compact-section world-prompt-preview-card world-shell-panel">
             <div className="section-head">
               <div>
-                <span className="eyebrow">Entities</span>
-                <h3>World Structure</h3>
+                <span className="eyebrow">{activePromptPreview.mode === 'plan_only' ? 'Plan Preview' : 'Staged Wave'}</span>
+                <h3>{activePromptPreview.requestSummary || 'Latest prompt preview'}</h3>
               </div>
             </div>
-            <div className="world-entity-group-list">
-              {Object.entries(groupedEntities).map(([nodeType, entities]) => (
-                entities.length > 0 ? (
-                  <div key={nodeType} className="rail-section">
-                    <span className="section-label">{labelForWorldEntity(nodeType as WorldEntity['nodeType'])}s</span>
-                    <div className="rail-list">
-                      {entities.map((entity) => (
-                        <button
-                          key={entity.key}
-                          className={entity.key === selectedEntity?.key ? 'rail-button item-row is-active' : 'rail-button item-row'}
-                          onClick={() => {
-                            selectWorldNode(entity.key)
-                            setActiveInspectorTab('overview')
-                          }}
-                          type="button"
-                        >
-                          <div className="media-thumb">
-                            <EntityIcon id={iconForWorldEntity(entity.nodeType)} />
-                          </div>
-                          <div className="item-row-copy">
-                            <strong>{entity.name}</strong>
-                            <span>{labelForWorldEntity(entity.nodeType)}</span>
-                          </div>
-                        </button>
-                      ))}
-                    </div>
+            <div className="chip-row">
+              <span className="chip">{activePromptPreview.scopeDecision.mode}</span>
+              <span className="chip">{activePromptPreview.scopeDecision.counts.entityOps} entity ops</span>
+              <span className="chip">{activePromptPreview.scopeDecision.counts.relationshipOps} links</span>
+            </div>
+            <div className="world-preview-list">
+              {activePromptPreview.items.slice(0, 3).map((item) => (
+                <div key={item.id} className="schema-card">
+                  <div className="schema-card-head">
+                    <strong>{item.title}</strong>
+                    <span className="chip">{item.kind.replace(/_/g, ' ')}</span>
                   </div>
-                ) : null
+                  {item.summary ? <div className="inline-note">{item.summary}</div> : null}
+                </div>
               ))}
             </div>
+            {activePromptPreview.canApplyFirstWave && activePromptTurn ? (
+              <div className="world-inspector-actions">
+                <button className="primary-button compact" onClick={() => void _onApplyWorldPromptPreview({ turnId: activePromptTurn.id })} type="button">Apply First Wave</button>
+              </div>
+            ) : null}
           </div>
-        </aside>
-      )}
+        ) : null}
 
-      {surfaceMode === 'grow' ? (
-        <div
-          aria-label="Resize grow panel"
-          className="world-grow-resizer"
-          onDoubleClick={() => setGrowWorkbenchWidth(GROW_WORKBENCH_WIDTH_DEFAULT)}
-          onMouseDown={handleGrowWorkbenchResizeStart}
-          role="separator"
-        />
-      ) : null}
+        {entityComposer ? (
+          <EntityComposer
+            entityComposer={entityComposer}
+            onCancel={() => setEntityComposer(null)}
+            onCreate={handleCreateEntity}
+          />
+        ) : null}
 
-      <section className="main-surface graph-surface world-graph-surface">
-        <div className={`world-graph-toolbar${surfaceMode === 'grow' ? ' is-grow-mode' : ''}`}>
+        {relationshipComposer ? (
+          <div className="editor-section compact-section world-composer-card">
+            <div className="section-head">
+              <div>
+                <span className="eyebrow">Direct Link</span>
+                <h3>Create Relationship</h3>
+              </div>
+            </div>
+            <RelationshipComposer
+              entities={worldEntities.filter((entity) => entity.key !== relationshipComposer.sourceEntityKey)}
+              state={relationshipComposer}
+              onCancel={() => setRelationshipComposer(null)}
+              onCreate={async (input) => {
+                await onCreateWorldRelationship(input)
+                setRelationshipComposer(null)
+              }}
+            />
+          </div>
+        ) : null}
+
+        {compositionComposer ? (
+          <div className="editor-section compact-section world-composer-card">
+            <div className="section-head">
+              <div>
+                <span className="eyebrow">Derived Layer</span>
+                <h3>Create Composition</h3>
+              </div>
+            </div>
+            <CompositionComposer
+              entities={worldEntities}
+              state={compositionComposer}
+              onCancel={() => setCompositionComposer(null)}
+              onCreate={async (input) => {
+                await onCreateWorldDerivedComposition(input)
+                setCompositionComposer(null)
+              }}
+            />
+          </div>
+        ) : null}
+
+        <div className="world-shell-panel world-shell-creation-body">
+          {activeRailTab === 'chat' ? (
+            <WorldPromptChatPanel
+              activePromptTurn={activePromptTurn}
+              busy={isPromptSubmitting || isPromptCancelling}
+              cancelBusy={isPromptCancelling}
+              promptText={worldPromptText}
+              promptError={worldPromptError}
+              entityByKey={entityByKey}
+              selectedEntity={selectedEntity}
+              selectedSession={selectedPromptSession}
+              selectedThreadKey={selectedPromptThread?.key ?? null}
+              selectedView={selectedView}
+              sessionMessages={sessionMessages}
+              sessionEvents={sessionEvents}
+              worldThreads={activeWorldThreads}
+              worldPromptSessions={worldPromptSessions}
+              variant="grow"
+              onCancelTurn={handleCancelPromptTurn}
+              onChangePromptText={setWorldPromptText}
+              onRunSuggestion={handleRunPromptSuggestion}
+              onSelectSession={setSelectedPromptSessionKey}
+              onSubmit={handleSubmitWorldPrompt}
+            />
+          ) : activeRailTab === 'activity' ? (
+            <WorldPromptActivityPanel
+              selectedSession={selectedPromptSession}
+              sessionEvents={sessionEvents}
+              sessionTurns={sessionTurns}
+            />
+          ) : (
+            <WorldPromptThreadsPanel
+              selectedThreadKey={selectedPromptThread?.key ?? null}
+              threads={activeWorldThreads}
+              onParkThread={(threadKey) => void _onParkWorldThread({ threadKey })}
+              onResolveThread={(threadKey) => void _onResolveWorldThread({ threadKey })}
+              onSelectThread={setSelectedPromptThreadKey}
+            />
+          )}
+        </div>
+
+        <div className="detail-stack compact world-shell-panel">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Recent Additions</span>
+              <h3>New graph material</h3>
+            </div>
+          </div>
+          <div className="rail-list">
+            {recentEntities.length === 0 ? <div className="inline-note">Your latest additions will appear here once the world starts growing.</div> : null}
+            {recentEntities.map((entity) => (
+              <button
+                key={entity.key}
+                className={entity.key === selectedEntity?.key ? 'rail-button item-row is-active' : 'rail-button item-row'}
+                onClick={() => {
+                  selectWorldNode(entity.key)
+                  setActiveInspectorTab('overview')
+                }}
+                type="button"
+              >
+                <div className="media-thumb">
+                  <EntityIcon id={iconForWorldEntity(entity.nodeType)} />
+                </div>
+                <div className="item-row-copy">
+                  <strong>{entity.name}</strong>
+                  <span>{labelForWorldEntity(entity.nodeType)}</span>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      </aside>
+
+      <div
+        aria-label="Resize creation rail"
+        className="world-grow-resizer"
+        onDoubleClick={() => setGrowWorkbenchWidth(GROW_WORKBENCH_WIDTH_DEFAULT)}
+        onMouseDown={handleGrowWorkbenchResizeStart}
+        role="separator"
+      />
+
+      <section className="main-surface graph-surface world-graph-surface world-shell-stage">
+        <div className={`world-graph-toolbar world-shell-stage-toolbar${surfaceMode === 'grow' ? ' is-grow-mode' : ''}`}>
           <div className="world-toolbar-heading">
-            <span className="eyebrow">{surfaceMode === 'grow' ? 'Live Graph' : 'Graph Mode'}</span>
+            <span className="eyebrow">{surfaceMode === 'grow' ? 'Grow + Graph Hybrid' : 'Spatial Graph View'}</span>
             <h3>{selectedView.name || 'Living World'}</h3>
           </div>
-          <div className="world-graph-toolbar-actions">
-            {surfaceMode !== 'grow' ? (
-              <button className="primary-button compact" onClick={() => setEntityComposer({ mode: 'global', defaults: { nodeType: 'actor', source: 'user' }, relationshipDefaults: {}, canvasPosition: null })} type="button">Add Entity</button>
-            ) : null}
-            {surfaceMode !== 'grow' && selectedEntity ? (
+          <div className="world-graph-toolbar-actions world-shell-toolbar-main">
+            <div className="world-shell-view-tabs">
+              <button className="segment-button is-active" type="button">Graph</button>
+            </div>
+            <label className="world-shell-search">
+              <input
+                placeholder="Search entities, aliases, tags, or lore"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
+            </label>
+            {selectedEntity ? (
               <button className="ghost-button compact" disabled={isExpansionPending} onClick={() => void handleGenerateExpansion()} type="button">
                 {isExpansionPending ? 'Generating...' : 'Generate From Selection'}
               </button>
             ) : null}
-            {surfaceMode === 'grow' ? (
-              <>
-                <button className="ghost-button compact" onClick={() => flowRef.current?.fitView({ padding: 0.18, duration: 300 })} type="button">Fit</button>
-                <button className="ghost-button compact" onClick={() => void handleAutoLayout()} type="button">Auto Layout</button>
-              </>
-            ) : (
-            <details className="world-toolbar-more">
-              <summary className="ghost-button compact">More</summary>
-              <div className="world-toolbar-more-panel">
-                <div className="world-choice-list">
-                  {(['graph', 'table', 'timeline', 'board'] as const).map((mode) => (
-                    <button
-                      key={mode}
-                      className={viewMode === mode ? 'segment-button is-active' : 'segment-button'}
-                      onClick={() => {
-                        setViewMode(mode)
-                        void persistViewChanges({ mode })
-                      }}
-                      type="button"
-                    >
-                      {mode[0].toUpperCase() + mode.slice(1)}
-                    </button>
-                  ))}
-                </div>
-                <div className="world-choice-list">
-                  <button className={showDerivedLayer ? 'ghost-button compact is-active' : 'ghost-button compact'} onClick={() => {
-                    const nextValue = !showDerivedLayer
-                    setShowDerivedLayer(nextValue)
-                    void persistViewChanges({ showDerivedLayer: nextValue })
-                  }} type="button">Show Derived Layer</button>
-                  <button className={showLabels ? 'ghost-button compact is-active' : 'ghost-button compact'} onClick={() => {
-                    const nextValue = !showLabels
-                    setShowLabels(nextValue)
-                    void persistViewChanges({ showLabels: nextValue })
-                  }} type="button">Labels</button>
-                  <button className="ghost-button compact" onClick={() => void handleAutoLayout()} type="button">Auto Layout</button>
-                  <button className="ghost-button compact" onClick={() => flowRef.current?.fitView({ padding: 0.18, duration: 300 })} type="button">Fit</button>
-                </div>
-              </div>
-            </details>
-            )}
+            <button className={showLabels ? 'ghost-button compact is-active' : 'ghost-button compact'} onClick={() => {
+              const nextValue = !showLabels
+              setShowLabels(nextValue)
+              void persistViewChanges({ showLabels: nextValue })
+            }} type="button">Labels</button>
+            <button className="ghost-button compact" onClick={() => void handleAutoLayout()} type="button">Auto Layout</button>
+            <button className="ghost-button compact" onClick={() => flowRef.current?.fitView({ padding: 0.18, duration: 300 })} type="button">Fit</button>
           </div>
         </div>
 
-        {surfaceMode !== 'grow' && focusRootKey ? (
+        {focusRootKey ? (
           <div className="world-focus-banner">
             <span className="section-label">Focus Mode</span>
             <strong>{focusedEntity?.name ?? focusedOperator?.label ?? focusedResult?.title ?? 'Selection'}</strong>
@@ -2044,14 +2058,7 @@ export function WorldGraphPage({
 
         {busyMessage ? <div className="inline-note">{busyMessage}</div> : null}
 
-        {surfaceMode !== 'grow' && viewMode !== 'graph' ? (
-          <div className="world-view-stub">
-            <span className="eyebrow">{viewMode[0].toUpperCase() + viewMode.slice(1)} Mode</span>
-            <h2>{viewMode[0].toUpperCase() + viewMode.slice(1)} view is stubbed in v1</h2>
-            <div className="inline-note">Graph is the production-ready mode in this first release. The saved-view, filter, and inspector model is already structured to support richer table, timeline, and board surfaces next.</div>
-          </div>
-        ) : (
-          <div className="canvas-stage graph-canvas world-graph-canvas">
+        <div className="canvas-stage graph-canvas world-graph-canvas world-shell-stage-canvas">
             {worldEntities.length === 0 ? (
               <div className="world-graph-canvas-empty-hint">
                 <span className="eyebrow">Empty world</span>
@@ -2128,8 +2135,7 @@ export function WorldGraphPage({
               <Background />
               <Controls />
             </ReactFlow>
-          </div>
-        )}
+        </div>
 
         {edgeEditor ? (
           <div
@@ -2389,57 +2395,39 @@ export function WorldGraphPage({
         ) : null}
       </section>
 
-      {surfaceMode !== 'grow' ? (
-      <aside className="context-drawer world-graph-drawer">
-        {
-          <>
-            <div className="segmented-control">
-              {([
-                ['inspect', 'Inspect'],
-                ['chat', 'Chat'],
-                ['activity', 'Activity'],
-              ] as const).map(([tabKey, label]) => (
-                <button
-                  key={tabKey}
-                  className={activeRailTab === tabKey ? 'segment-button is-active' : 'segment-button'}
-                  onClick={() => setActiveRailTab(tabKey)}
-                  type="button"
-                >
-                  {label}
-                </button>
-              ))}
+      <aside className="context-drawer world-graph-drawer world-shell-inspector" onClick={(event) => event.stopPropagation()}>
+        <div className="world-shell-dossier-head">
+          {inspectorViewModel ? (
+            <>
+              {inspectorViewModel.imageUrl ? (
+                <div className="world-shell-dossier-media">
+                  <img alt={inspectorViewModel.title} src={inspectorViewModel.imageUrl} />
+                </div>
+              ) : null}
+              <div className="world-shell-dossier-copy">
+                <span className="eyebrow">{inspectorViewModel.kicker}</span>
+                <h3>{inspectorViewModel.title}</h3>
+                <p>{inspectorViewModel.summary || 'Select a node or relationship to inspect its state, usage, and next moves.'}</p>
+                <div className="chip-row">
+                  {inspectorViewModel.stats.map((stat) => <span key={stat} className="chip">{stat}</span>)}
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="world-shell-dossier-copy">
+              <span className="eyebrow">World Dossier</span>
+              <h3>{selectedView.name || 'Living World'}</h3>
+              <p>Select a node or relationship to open its dossier. The canvas stays spatial; the right rail stays editorial.</p>
+              <div className="chip-row">
+                <span className="chip">{worldEntities.length} entities</span>
+                <span className="chip">{worldRelationships.length} relationships</span>
+                <span className="chip">{activeWorldThreads.length} open threads</span>
+              </div>
             </div>
+          )}
+        </div>
 
-            {activeRailTab === 'chat' ? (
-          <WorldPromptChatPanel
-            activePromptTurn={activePromptTurn}
-            busy={isPromptSubmitting || isPromptCancelling}
-            cancelBusy={isPromptCancelling}
-            promptText={worldPromptText}
-            promptError={worldPromptError}
-            entityByKey={entityByKey}
-            selectedEntity={selectedEntity}
-            selectedSession={selectedPromptSession}
-            selectedThreadKey={selectedPromptThread?.key ?? null}
-            selectedView={selectedView}
-            sessionMessages={sessionMessages}
-            sessionEvents={sessionEvents}
-            worldThreads={activeWorldThreads}
-            worldPromptSessions={worldPromptSessions}
-            variant="drawer"
-            onCancelTurn={handleCancelPromptTurn}
-            onChangePromptText={setWorldPromptText}
-            onRunSuggestion={handleRunPromptSuggestion}
-            onSelectSession={setSelectedPromptSessionKey}
-            onSubmit={handleSubmitWorldPrompt}
-          />
-        ) : activeRailTab === 'activity' ? (
-          <WorldPromptActivityPanel
-            selectedSession={selectedPromptSession}
-            sessionEvents={sessionEvents}
-            sessionTurns={sessionTurns}
-          />
-        ) : inspectorRelationship ? (
+        {inspectorRelationship ? (
           <div className="detail-stack compact">
             <div className="drawer-head">
               <div>
@@ -2551,7 +2539,7 @@ export function WorldGraphPage({
                 <h3>{displayedInspectorEntity.name}</h3>
               </div>
             </div>
-            <div className="segmented-control">
+            <div className="segmented-control world-dossier-tabs">
               {(['overview', 'relationships', 'usage', 'suggestions'] as const).map((tab) => (
                 <button
                   key={tab}
@@ -2772,10 +2760,7 @@ export function WorldGraphPage({
             <h3>Nothing selected</h3>
           </div>
         )}
-          </>
-        }
       </aside>
-      ) : null}
     </div>
   )
 }
@@ -3022,6 +3007,56 @@ function WorldPromptActivityPanel({
             )
           })}
         </div>
+      </div>
+    </div>
+  )
+}
+
+function WorldPromptThreadsPanel({
+  selectedThreadKey,
+  threads,
+  onParkThread,
+  onResolveThread,
+  onSelectThread,
+}: {
+  selectedThreadKey: string | null
+  threads: WorldThread[]
+  onParkThread: (threadKey: string) => Promise<void> | void
+  onResolveThread: (threadKey: string) => Promise<void> | void
+  onSelectThread: (threadKey: string | null) => void
+}) {
+  return (
+    <div className="detail-stack compact">
+      <div className="drawer-head">
+        <div>
+          <span className="eyebrow">Open Threads</span>
+          <h3>Story pressure points</h3>
+        </div>
+      </div>
+      {threads.length === 0 ? <div className="inline-note">No active threads yet. Prompts that introduce unresolved tensions will surface here.</div> : null}
+      <div className="world-thread-list">
+        {threads.map((thread) => (
+          <div key={thread.key} className={thread.key === selectedThreadKey ? 'schema-card world-thread-card is-selected' : 'schema-card world-thread-card'}>
+            <div className="schema-card-head">
+              <div>
+                <strong>{thread.title}</strong>
+                <div className="inline-note">{thread.priority} priority</div>
+              </div>
+              <button className="ghost-button compact" onClick={() => onSelectThread(thread.key)} type="button">
+                {thread.key === selectedThreadKey ? 'Selected' : 'Focus'}
+              </button>
+            </div>
+            {thread.summary ? <div className="inline-note">{thread.summary}</div> : null}
+            <div className="chip-row">
+              <span className="chip">{thread.status}</span>
+              <span className="chip">{thread.linkedEntityKeys.length} linked</span>
+            </div>
+            <div className="world-inspector-actions">
+              <button className="ghost-button compact" onClick={() => void onParkThread(thread.key)} type="button">Park</button>
+              <button className="primary-button compact" onClick={() => void onResolveThread(thread.key)} type="button">Resolve</button>
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   )

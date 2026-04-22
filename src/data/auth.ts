@@ -1,5 +1,6 @@
 import type { AuthChangeEvent, Session } from '@supabase/supabase-js'
 
+import { appRedirectUrl } from '../shared/appRoutes'
 import { supabase } from '../utils/supabase'
 
 export async function getCurrentSession() {
@@ -43,7 +44,7 @@ export async function signUpWithPassword(email: string, password: string) {
     email,
     password,
     options: {
-      emailRedirectTo: window.location.origin,
+      emailRedirectTo: appRedirectUrl(),
     },
   })
 
@@ -58,7 +59,7 @@ export async function sendMagicLink(email: string) {
   const { error } = await supabase.auth.signInWithOtp({
     email,
     options: {
-      emailRedirectTo: window.location.origin,
+      emailRedirectTo: appRedirectUrl(),
     },
   })
 
@@ -72,7 +73,7 @@ export async function resendSignupConfirmation(email: string) {
     type: 'signup',
     email,
     options: {
-      emailRedirectTo: window.location.origin,
+      emailRedirectTo: appRedirectUrl(),
     },
   })
 
@@ -85,7 +86,7 @@ export async function signInWithGoogle() {
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: 'google',
     options: {
-      redirectTo: window.location.origin,
+      redirectTo: appRedirectUrl(),
       scopes: 'email profile',
     },
   })

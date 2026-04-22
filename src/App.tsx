@@ -89,6 +89,7 @@ import { getResourceGenerationMetadata, isTerminalWorldBuildBatchStatus } from '
 import { WorkspaceBanner } from './features/shell/WorkspaceBanner'
 import { WorkspaceTopbar } from './features/shell/WorkspaceTopbar'
 import { useEditorStore } from './state/editorStore'
+import { APP_ROUTE_PATH, navigateToPath, routeFromPathname, type AppRoute } from './shared/appRoutes'
 import type { AuthMode, GameSummary, LoadedState, PatchSessionView, WorkspaceTab } from './shared/workspace'
 import { workspaceTabs } from './shared/workspace'
 import { resetProjectWorld as persistResetProjectWorld } from './data/graphcoreRepository'
@@ -129,6 +130,9 @@ const CinematicsWorkspace = lazy(() =>
 )
 const GlobalWorkspace = lazy(() =>
   import('./features/global/GlobalWorkspace').then((module) => ({ default: module.GlobalWorkspace })),
+)
+const LandingPage = lazy(() =>
+  import('./features/landing/LandingPage').then((module) => ({ default: module.LandingPage })),
 )
 
 function uniqueKey(existingKeys: string[], seed: string) {
@@ -941,6 +945,9 @@ type WorldBuildPlanSource =
   | null
 
 export default function App() {
+  const [appRoute, setAppRoute] = useState<AppRoute>(() => (
+    typeof window === 'undefined' ? 'app' : routeFromPathname(window.location.pathname)
+  ))
   const [session, setSession] = useState<Session | null>(null)
   const [loadedState, setLoadedState] = useState<LoadedState | null>(null)
   const [games, setGames] = useState<GameSummary[]>([])
@@ -1011,6 +1018,19 @@ export default function App() {
   const cinematicRunPollInFlightRef = useRef(false)
   const cinematicRunRealtimeSignalAtRef = useRef(new Map<string, number>())
   const meshGenerationPollFailureCountsRef = useRef(new Map<string, number>())
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    function handleRouteChange() {
+      setAppRoute(routeFromPathname(window.location.pathname))
+    }
+
+    window.addEventListener('popstate', handleRouteChange)
+    return () => {
+      window.removeEventListener('popstate', handleRouteChange)
+    }
+  }, [])
 
   function readPromptText() {
     return useEditorStore.getState().promptText
@@ -1150,11 +1170,15 @@ export default function App() {
   useEffect(() => {
     let active = true
     async function bootstrap() {
-      setLoading(true)
+      setLoading(appRoute === 'app')
       try {
         const currentSession = await authService.getCurrentSession()
         if (!active) return
         setSession(currentSession)
+        if (appRoute !== 'app') {
+          setLoading(false)
+          return
+        }
         const state = await workspaceService.ensureLiveWorkspace()
         if (!active) return
         const nextGames = state.source === 'supabase' ? await workspaceService.listGames() : []
@@ -1172,7 +1196,7 @@ export default function App() {
     return () => {
       active = false
     }
-  }, [setSelectedDefinitionKey, setSelectedGraphKey])
+  }, [appRoute, setSelectedDefinitionKey, setSelectedGraphKey])
 
   useEffect(() => {
     let cancelled = false
@@ -4199,6 +4223,16 @@ export default function App() {
     }
   }
 
+  function handleEnterApp(options?: { openAuth?: boolean }) {
+    navigateToPath(APP_ROUTE_PATH)
+    if (options?.openAuth) {
+      setAuthMode('sign_in')
+      setAuthError(null)
+      setAuthInfo(null)
+      setAuthOpen(true)
+    }
+  }
+
   async function handleGeneratePatch() {
     if (!snapshot) return
     const promptText = readPromptText()
@@ -5125,6 +5159,18 @@ export default function App() {
       console.error('[GraphCore] cinematic run failed to cancel.', cancelError)
       setPromptRuntimeError(cancelError instanceof Error ? cancelError.message : 'Cinematic run failed to cancel.')
     }
+  }
+
+  if (appRoute !== 'app') {
+    return (
+      <Suspense fallback={<main className="app-shell loading-shell"><p>Preparing GraphCore...</p></main>}>
+        <LandingPage
+          isSignedIn={Boolean(session)}
+          onEnterApp={() => handleEnterApp()}
+          onOpenAuth={() => handleEnterApp({ openAuth: true })}
+        />
+      </Suspense>
+    )
   }
 
   if (loading) return <main className="app-shell loading-shell"><p>Booting GraphCore workspace...</p></main>

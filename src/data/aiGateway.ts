@@ -1,6 +1,8 @@
 import type {
   FalInvokeRequest,
   FalInvokeResult,
+  OpenAiImagesRequest,
+  OpenAiImagesResult,
   OpenAiResponsesRequest,
   OpenAiResponsesResult,
 } from '../domain/ai'
@@ -114,6 +116,15 @@ export async function invokeOpenAiResponses(request: OpenAiResponsesRequest) {
     'Sign in before invoking OpenAI through Supabase.',
     'OpenAI request failed.',
   ) as OpenAiResponsesResult
+}
+
+export async function invokeOpenAiImages(request: OpenAiImagesRequest) {
+  return await invokeWithSessionRecovery<OpenAiImagesResult>(
+    'ai-openai-images',
+    request,
+    'Sign in before invoking OpenAI image generation through Supabase.',
+    'OpenAI image request failed.',
+  ) as OpenAiImagesResult
 }
 
 export async function invokeFal(request: FalInvokeRequest) {

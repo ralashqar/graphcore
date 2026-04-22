@@ -15,6 +15,30 @@ export type OpenAiResponsesRequest = {
   timeoutMs?: number
 }
 
+export type OpenAiImageBinaryInput = {
+  data: string
+  filename?: string
+  mimeType: string
+}
+
+export type OpenAiImagesRequest = {
+  action?: 'generate' | 'edit'
+  model?: string
+  prompt: string
+  size?: string
+  quality?: 'low' | 'medium' | 'high' | 'auto'
+  background?: 'transparent' | 'opaque' | 'auto'
+  moderation?: 'low' | 'auto'
+  outputFormat?: 'png' | 'jpeg' | 'webp'
+  outputCompression?: number
+  n?: number
+  images?: OpenAiImageBinaryInput[]
+  mask?: OpenAiImageBinaryInput | null
+  user?: string
+  extraBody?: Record<string, unknown>
+  timeoutMs?: number
+}
+
 const DEFAULT_OPENAI_TIMEOUT_MS = 45_000
 
 function resolveOpenAiTimeoutMs(override: number | undefined) {
@@ -115,5 +139,113 @@ export async function runOpenAiResponses(payload: OpenAiResponsesRequest) {
     response,
     body,
     outputText: extractOutputText(body),
+  }
+}
+
+function decodeBase64ToUint8Array(base64: string) {
+  const normalized = base64.includes(',') ? base64.slice(base64.indexOf(',') + 1) : base64
+  const binary = atob(normalized)
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0))
+}
+
+function toOpenAiFile(input: OpenAiImageBinaryInput, fallbackName: string) {
+  return new File([decodeBase64ToUint8Array(input.data)], input.filename ?? fallbackName, { type: input.mimeType })
+}
+
+export async function runOpenAiImages(payload: OpenAiImagesRequest) {
+  const apiKey = Deno.env.get('OPENAI_API_KEY')
+  const baseUrl = Deno.env.get('OPENAI_BASE_URL') ?? 'https://api.openai.com/v1'
+
+  if (!apiKey) {
+    throw new Error('OPENAI_API_KEY is not configured.')
+  }
+
+  const action = payload.action === 'edit' ? 'edit' : 'generate'
+  const model = payload.model?.trim() || 'gpt-image-2'
+  const timeoutMs = resolveOpenAiTimeoutMs(payload.timeoutMs)
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(`OpenAI images request timed out after ${timeoutMs}ms.`), timeoutMs)
+
+  let response: Response
+  let body: Record<string, unknown>
+
+  try {
+    if (action === 'edit') {
+      const formData = new FormData()
+      formData.set('model', model)
+      formData.set('prompt', payload.prompt)
+      for (const [index, image] of (payload.images ?? []).entries()) {
+        formData.append('image[]', toOpenAiFile(image, `image-${index}.png`))
+      }
+      if (payload.mask) {
+        formData.set('mask', toOpenAiFile(payload.mask, 'mask.png'))
+      }
+      if (payload.size) formData.set('size', payload.size)
+      if (payload.quality) formData.set('quality', payload.quality)
+      if (payload.background) formData.set('background', payload.background)
+      if (payload.moderation) formData.set('moderation', payload.moderation)
+      if (payload.outputFormat) formData.set('output_format', payload.outputFormat)
+      if (payload.outputCompression !== undefined) formData.set('output_compression', String(payload.outputCompression))
+      if (payload.n !== undefined) formData.set('n', String(payload.n))
+      if (payload.user) formData.set('user', payload.user)
+      for (const [key, value] of Object.entries(payload.extraBody ?? {})) {
+        if (value !== undefined && value !== null) {
+          formData.set(key, typeof value === 'string' ? value : JSON.stringify(value))
+        }
+      }
+
+      response = await fetch(`${baseUrl.replace(/\/+$/, '')}/images/edits`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: formData,
+        signal: controller.signal,
+      })
+    } else {
+      const upstreamBody: Record<string, unknown> = {
+        model,
+        prompt: payload.prompt,
+        ...payload.extraBody,
+      }
+      if (payload.size) upstreamBody.size = payload.size
+      if (payload.quality) upstreamBody.quality = payload.quality
+      if (payload.background) upstreamBody.background = payload.background
+      if (payload.moderation) upstreamBody.moderation = payload.moderation
+      if (payload.outputFormat) upstreamBody.output_format = payload.outputFormat
+      if (payload.outputCompression !== undefined) upstreamBody.output_compression = payload.outputCompression
+      if (payload.n !== undefined) upstreamBody.n = payload.n
+      if (payload.user) upstreamBody.user = payload.user
+      if (payload.images && payload.images.length > 0) {
+        upstreamBody.image = payload.images.map((image) => `data:${image.mimeType};base64,${image.data}`)
+      }
+
+      response = await fetch(`${baseUrl.replace(/\/+$/, '')}/images/generations`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(upstreamBody),
+        signal: controller.signal,
+      })
+    }
+
+    body = (await response.json().catch(() => ({}))) as Record<string, unknown>
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (message.includes('timed out after')) {
+      throw new Error(message)
+    }
+    throw error
+  } finally {
+    clearTimeout(timeoutId)
+  }
+
+  return {
+    action,
+    model,
+    response,
+    body,
   }
 }
