@@ -91,6 +91,7 @@ import { WorkspaceTopbar } from './features/shell/WorkspaceTopbar'
 import { useEditorStore } from './state/editorStore'
 import type { AuthMode, GameSummary, LoadedState, PatchSessionView, WorkspaceTab } from './shared/workspace'
 import { workspaceTabs } from './shared/workspace'
+import { resetProjectWorld as persistResetProjectWorld } from './data/graphcoreRepository'
 import { supabase } from './utils/supabase'
 
 const WorldGraphPage = lazy(() =>
@@ -913,7 +914,7 @@ function sleep(ms: number) {
 }
 
 type DeleteConfirmationTarget = {
-  resourceType: 'definition' | 'graph' | 'asset' | 'generated_mesh'
+  resourceType: 'definition' | 'graph' | 'asset' | 'generated_mesh' | 'world_reset'
   key: string
   label: string
 }
@@ -2610,6 +2611,20 @@ export default function App() {
       commitPersistedSnapshot(nextSnapshot)
     } else {
       applySnapshotUpdate((current) => {
+        const removedEntity = current.worldEntities.find((entity) => entity.key === entityKey) ?? null
+        const linkedDefinitionKey = removedEntity?.linkedDefinitionKey ?? null
+        const linkedDefinition = linkedDefinitionKey
+          ? current.definitions.find((definition) => definition.key === linkedDefinitionKey) ?? null
+          : null
+        const shouldDeleteLinkedDefinition = Boolean(
+          removedEntity
+          && linkedDefinition
+          && (
+            (removedEntity.nodeType === 'actor' && linkedDefinition.kind === 'character')
+            || (removedEntity.nodeType === 'place' && linkedDefinition.kind === 'environment')
+            || (removedEntity.nodeType === 'object' && linkedDefinition.kind === 'item')
+          ),
+        )
         const removedOperatorKeys = current.worldOperators
           .filter((entry) => entry.inputEntityKeys.includes(entityKey))
           .map((entry) => entry.key)
@@ -2618,6 +2633,9 @@ export default function App() {
           .map((entry) => entry.key)
         return {
           ...current,
+          definitions: shouldDeleteLinkedDefinition
+            ? current.definitions.filter((definition) => definition.key !== linkedDefinitionKey)
+            : current.definitions,
           worldEntities: current.worldEntities.filter((entity) => entity.key !== entityKey),
           worldRelationships: current.worldRelationships.filter((relationship) => relationship.sourceEntityKey !== entityKey && relationship.targetEntityKey !== entityKey),
           worldOperators: current.worldOperators.filter((entry) => !removedOperatorKeys.includes(entry.key)),
@@ -2642,6 +2660,38 @@ export default function App() {
     }
     if (selectedWorldNodeKey === entityKey) setSelectedWorldNodeKey(null)
     if (selectedWorldEntityKey === entityKey) setSelectedWorldEntityKey(null)
+  }
+
+  async function resetProjectWorld() {
+    if (!snapshot) return
+    if (loadedState?.source === 'supabase') {
+      const syncedSnapshot = await syncWorldGraphBackfillIfNeeded(snapshot)
+      const resetProjectWorldAction = typeof workspaceService.resetProjectWorld === 'function'
+        ? workspaceService.resetProjectWorld
+        : persistResetProjectWorld
+      const nextSnapshot = await resetProjectWorldAction(syncedSnapshot)
+      commitPersistedSnapshot(nextSnapshot)
+    } else {
+      applySnapshotUpdate((current) => ({
+        ...current,
+        worldEntities: [],
+        worldRelationships: [],
+        worldViews: [],
+        worldOperators: [],
+        worldResults: [],
+        worldGraphConnections: [],
+        worldThreads: [],
+        worldPromptSessions: [],
+        worldPromptTurns: [],
+        worldPromptMessages: [],
+        worldPromptEvents: [],
+        worldBuildBatches: [],
+      }))
+    }
+    setSelectedWorldNodeKey(null)
+    setSelectedWorldEdgeKey(null)
+    setSelectedWorldEntityKey(null)
+    setSelectedWorldViewKey(null)
   }
 
   async function createWorldRelationship(input: WorldRelationshipCreateInput) {
@@ -3880,6 +3930,15 @@ export default function App() {
     })
   }
 
+  function handleRequestResetProjectWorld() {
+    if (!snapshot) return
+    setPendingDeleteTarget({
+      resourceType: 'world_reset',
+      key: snapshot.project.id,
+      label: `${snapshot.project.name} world graph`,
+    })
+  }
+
   async function handleConfirmDelete() {
     if (!pendingDeleteTarget) return
     setDeletingTarget(pendingDeleteTarget)
@@ -3891,6 +3950,8 @@ export default function App() {
         await performDeleteDefinition(pendingDeleteTarget.key)
       } else if (pendingDeleteTarget.resourceType === 'generated_mesh') {
         await deleteGeneratedMeshForDefinition(pendingDeleteTarget.key)
+      } else if (pendingDeleteTarget.resourceType === 'world_reset') {
+        await resetProjectWorld()
       } else {
         await performDeleteAsset(pendingDeleteTarget.key)
       }
@@ -5075,6 +5136,7 @@ export default function App() {
         <WorkspaceTopbar
           activeTab={activeTab}
           activeGameId={snapshot.project.id}
+          canResetProjectWorld={loadedState?.source === 'supabase'}
           currentUserEmail={session?.user.email ?? null}
           draftName={snapshot.draft.name}
           games={games}
@@ -5082,6 +5144,7 @@ export default function App() {
           onOpenActivity={() => setHistoryOpen(true)}
           onOpenAuth={() => setAuthOpen(true)}
           onOpenNewGame={handleOpenNewGame}
+          onResetProjectWorld={handleRequestResetProjectWorld}
           onSelectGame={handleSelectGame}
           onSetActiveTab={setActiveTab}
           onSignOut={handleSignOut}
@@ -5102,15 +5165,15 @@ export default function App() {
         {activeGameIsEmpty && !bootstrapOnboardingOpen ? (
           <section className="workspace-empty-game">
             <div className="workspace-empty-game-copy">
-              <span className="eyebrow">Game Setup</span>
+              <span className="eyebrow">Project Setup</span>
               <h2>{activeGame?.projectName ?? snapshot.project.name} is still empty.</h2>
               <p>
-                This game now lives in its own isolated project and draft. Initialize it when ready, or switch back to another game from the top bar.
+                This project now lives in its own isolated draft. Initialize it when ready, or switch back to another project from the top bar.
               </p>
             </div>
             <div className="workspace-empty-game-actions">
               <button className="primary-button" onClick={handleOpenBootstrapOnboarding} type="button">
-                Initialize Game
+                Initialize Project
               </button>
             </div>
           </section>

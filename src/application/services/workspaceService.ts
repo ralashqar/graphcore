@@ -34,6 +34,7 @@ export const workspaceService = {
   pollMeshGeneration: graphcoreWorkspaceAdapter.pollMeshGeneration,
   pollWorldBuild: graphcoreWorkspaceAdapter.pollWorldBuild,
   rejectWorldPromptOp: graphcoreWorkspaceAdapter.rejectWorldPromptOp,
+  resetProjectWorld: graphcoreWorkspaceAdapter.resetProjectWorld,
   resolveWorldThread: graphcoreWorkspaceAdapter.resolveWorldThread,
   repairCinematicScript: graphcoreWorkspaceAdapter.repairCinematicScript,
   setWorldEntityCanonLock: graphcoreWorkspaceAdapter.setWorldEntityCanonLock,

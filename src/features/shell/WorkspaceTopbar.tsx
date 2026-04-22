@@ -4,11 +4,13 @@ import { EntityIcon, type EntityIconId } from '../../shared/entityIcons'
 type WorkspaceTopbarProps = {
   activeTab: WorkspaceTab
   activeGameId?: string | null
+  canResetProjectWorld?: boolean
   currentUserEmail?: string | null
   games: GameSummary[]
   onOpenActivity: () => void
   onOpenAuth: () => void
   onOpenNewGame: () => void
+  onResetProjectWorld?: () => void
   onSelectGame: (projectId: string) => void
   onSetActiveTab: (tab: WorkspaceTab) => void
   onSignOut: () => void
@@ -23,6 +25,7 @@ type WorkspaceTopbarProps = {
 export function WorkspaceTopbar({
   activeTab,
   activeGameId,
+  canResetProjectWorld,
   currentUserEmail,
   draftName,
   games,
@@ -30,6 +33,7 @@ export function WorkspaceTopbar({
   onOpenActivity,
   onOpenAuth,
   onOpenNewGame,
+  onResetProjectWorld,
   onSelectGame,
   onSetActiveTab,
   onSignOut,
@@ -61,7 +65,7 @@ export function WorkspaceTopbar({
         {games.length > 0 ? (
           <div className="topbar-context-cluster">
             <label className="topbar-select-wrap">
-              <span className="topbar-select-label">Game</span>
+              <span className="topbar-select-label">Project</span>
               <select className="topbar-select" value={activeGameId ?? ''} onChange={(event) => onSelectGame(event.target.value)}>
                 {games.map((game) => (
                   <option key={game.projectId} value={game.projectId}>
@@ -80,8 +84,11 @@ export function WorkspaceTopbar({
               <strong>{sourceLabel}</strong>
               <span>{currentUserEmail ?? 'Not signed in'}</span>
             </div>
-            <button className="ghost-button compact" onClick={onOpenNewGame} type="button">New Game</button>
+            <button className="ghost-button compact" onClick={onOpenNewGame} type="button">New Project</button>
             <button className="ghost-button compact" onClick={onOpenActivity} type="button">History</button>
+            {canResetProjectWorld && onResetProjectWorld ? (
+              <button className="ghost-button compact danger" onClick={onResetProjectWorld} type="button">Reset Project World</button>
+            ) : null}
             {isSignedIn
               ? <button className="ghost-button compact" onClick={onSignOut} type="button">Sign out</button>
               : <button className="ghost-button compact" onClick={onOpenAuth} type="button">Sign in</button>}

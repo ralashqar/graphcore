@@ -263,7 +263,7 @@ export const worldPromptSessionSchema = z.object({
 const worldPromptTurnMetadataSchema = z.object({
   scopeDecision: worldPromptScopeDecisionSchema.optional(),
   classification: worldPromptClassificationSchema.optional(),
-  preview: worldPromptPlanPreviewSchema.optional(),
+  preview: worldPromptPlanPreviewSchema.nullable().optional(),
 }).catchall(z.unknown())
 
 export const worldPromptTurnSchema = z.object({
@@ -317,7 +317,7 @@ export const worldPromptEventPayloadSchema = z.object({
   classification: worldPromptClassificationSchema.optional(),
   suggestions: z.array(worldPromptSuggestionSchema).default([]),
   scope: worldPromptScopeDecisionSchema.optional(),
-  preview: worldPromptPlanPreviewSchema.optional(),
+  preview: worldPromptPlanPreviewSchema.nullable().optional(),
   queue: z.object({
     type: worldPromptQueueTypeSchema,
     batchId: z.string().nullable().default(null),

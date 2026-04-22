@@ -221,6 +221,15 @@ function formatIssues(issues: Array<{ path: PropertyKey[]; message: string }>) {
   return issues.map((issue) => `${issue.path.join('.') || '<root>'}: ${issue.message}`).join(' | ')
 }
 
+function stripInternalPlannerDiagnostics(text: string) {
+  if (!text.trim()) return ''
+  return text
+    .replace(/\s*World prompt planner returned JSON that did not match the expected schema\.[\s\S]*$/i, '')
+    .replace(/\s*Planner (?:output|response) validation failed\.[\s\S]*$/i, '')
+    .replace(/\s*Cinematic planner response validation failed\.[\s\S]*$/i, '')
+    .trim()
+}
+
 function normalizePlannerOperation(rawOp: unknown, index: number) {
   if (!rawOp || typeof rawOp !== 'object') {
     return rawOp
@@ -1525,6 +1534,16 @@ function annotatePromptOpMetadata(input: {
   return input.op
 }
 
+function forcePromptOpAutoApply(op: PromptToWorldOp) {
+  const nextOp = structuredClone(op) as PromptToWorldOp
+  nextOp.applyMode = 'auto'
+  if (nextOp.metadata && typeof nextOp.metadata === 'object') {
+    const { approvalReason: _ignored, ...rest } = nextOp.metadata
+    nextOp.metadata = rest
+  }
+  return nextOp
+}
+
 async function upsertWorldThreads(input: {
   client: SupabaseClient
   draftId: string
@@ -1761,25 +1780,17 @@ function classifyPromptExecution(input: {
   }
   return {
     classification: 'graphable_broad',
-    mode: 'preview',
+    mode: 'direct',
     scope,
     selectedOps: staged.selectedOps,
     deferredOps: staged.deferredOps,
     suggestions: stagedSuggestions,
-    note: 'This request asked for a lot in one turn, so I prepared a compact first wave preview to keep the graph readable and responsive.',
-    preview: buildPlanPreview({
-      mode: 'staged_first_wave',
-      requestSummary: input.assistantSummary || input.prompt,
-      scope,
-      selectedOps: staged.selectedOps.filter((op) => op.op !== 'assistant_note'),
-      suggestions: stagedSuggestions,
-      canApplyFirstWave: true,
-    }),
+    note: 'This request asked for a lot in one turn, so I started with a compact first wave to keep the graph readable and responsive.',
+    preview: null,
   }
 }
 
 function projectSanitizedOpIntoSnapshot(snapshot: WorldPromptSnapshot, op: PromptToWorldOp) {
-  if (op.applyMode === 'needs_approval') return
   if (op.op !== 'upsert_entity') return
   if (op.payload.targetEntityKey && snapshot.worldEntities.some((entity) => entity.key === op.payload.targetEntityKey)) {
     return
@@ -1966,7 +1977,7 @@ async function generatePromptPlan(input: {
     'Do not invent deletions or archival actions.',
     'If the prompt asks for plan only, preview only, or no mutations, put the proposed applyable ops in wave1Ops, set classification to graphable_plan_only, and do not assume they will be applied immediately.',
     'When referring to existing world items, prefer targetEntityKey when obvious, otherwise use entity names and let the resolver match them.',
-    'If a change would rename or substantially rewrite an existing entity, set applyMode to needs_approval.',
+    'Default to applyMode auto. Favor additive graph growth and avoid proposing semantic rewrites that would require human confirmation.',
     'Use graphable_broad when the request wants too much for one turn. In that case, keep only the best first wave in wave1Ops and place follow-up ideas in wave2Ideas/optionalIdeas.',
     'Use not_graphable or contradictory_or_low_confidence when the prompt cannot be mapped cleanly. In that case, wave1Ops may be empty and suggestionCandidates should repair the request.',
     'threadCandidates should describe the main unresolved narrative or lore threads implied by the prompt and resulting graph changes.',
@@ -2990,7 +3001,7 @@ export async function startWorldPromptTurn(input: {
     const sanitizedOps: PromptToWorldOp[] = []
     const plannerOps = generated.wave1Ops.length > 0 ? generated.wave1Ops : generated.operations
     for (const operation of plannerOps) {
-      const sanitized = sanitizePromptOp({ op: operation, snapshot: planningSnapshot })
+      const sanitized = forcePromptOpAutoApply(sanitizePromptOp({ op: operation, snapshot: planningSnapshot }))
       sanitizedOps.push(sanitized)
       projectSanitizedOpIntoSnapshot(planningSnapshot, sanitized)
     }
@@ -3040,7 +3051,6 @@ export async function startWorldPromptTurn(input: {
     })
 
     const mutableSnapshot = structuredClone(payload.snapshot) as WorldPromptSnapshot
-    let pendingApprovals = 0
     const opsToRun = execution.selectedOps
 
     if (execution.mode === 'blocked') {
@@ -3051,13 +3061,13 @@ export async function startWorldPromptTurn(input: {
         preview: execution.preview ?? undefined,
         suggestions: execution.suggestions,
         threads: persistedThreads,
-        note: execution.note,
+        note: stripInternalPlannerDiagnostics(execution.note),
         turn: { id: turn.id },
       })
     } else if (execution.mode === 'preview') {
       await writeEvent('assistant_note', {
         classification: execution.classification,
-        note: execution.note,
+        note: stripInternalPlannerDiagnostics(execution.note),
         preview: execution.preview ?? undefined,
         scope: execution.scope,
         suggestions: execution.suggestions,
@@ -3080,18 +3090,7 @@ export async function startWorldPromptTurn(input: {
         if (op.op === 'assistant_note') {
           await writeEvent('assistant_note', {
             op,
-            note: op.payload.message,
-            classification: execution.classification,
-            scope: execution.scope,
-          }, { opId: op.id })
-          continue
-        }
-
-        if (op.applyMode === 'needs_approval') {
-          pendingApprovals += 1
-          await writeEvent('op_needs_approval', {
-            op,
-            diagnostics: ['This change requires approval before it can be applied.'],
+            note: stripInternalPlannerDiagnostics(op.payload.message),
             classification: execution.classification,
             scope: execution.scope,
           }, { opId: op.id })
@@ -3110,7 +3109,7 @@ export async function startWorldPromptTurn(input: {
         if (result.note) {
           await writeEvent('assistant_note', {
             op,
-            note: result.note,
+            note: stripInternalPlannerDiagnostics(result.note),
             classification: execution.classification,
             scope: execution.scope,
           }, { opId: op.id })
@@ -3137,7 +3136,7 @@ export async function startWorldPromptTurn(input: {
     if (execution.note || execution.suggestions.length > 0) {
       await writeEvent('assistant_note', {
         classification: execution.classification,
-        note: execution.note,
+        note: stripInternalPlannerDiagnostics(execution.note),
         preview: execution.preview ?? undefined,
         suggestions: execution.suggestions,
         scope: execution.scope,
@@ -3145,9 +3144,9 @@ export async function startWorldPromptTurn(input: {
       })
     }
 
-    const generatedSummary = generated.assistantSummary.trim()
+    const generatedSummary = stripInternalPlannerDiagnostics(generated.assistantSummary.trim())
     const assistantSummary = [
-      execution.note || null,
+      stripInternalPlannerDiagnostics(execution.note || ''),
       execution.mode === 'blocked'
         ? generatedSummary || null
         : generatedSummary || summarizeAppliedOps(opsToRun),
@@ -3175,12 +3174,12 @@ export async function startWorldPromptTurn(input: {
     })
 
     turn = await updateTurn(input.client, turn.id, {
-      status: execution.mode === 'direct' && pendingApprovals > 0 ? 'awaiting_approval' : 'completed',
-      approval_state: pendingApprovals > 0 ? 'pending' : 'not_required',
+      status: 'completed',
+      approval_state: 'not_required',
       assistant_summary: assistantSummary,
       metadata: {
         opCount: opsToRun.length,
-        pendingApprovalCount: pendingApprovals,
+        pendingApprovalCount: 0,
         classification: execution.classification,
         preview: execution.preview,
         scopeDecision: execution.scope,
@@ -3189,7 +3188,7 @@ export async function startWorldPromptTurn(input: {
     })
 
     await writeEvent('planner_status', {
-      plannerStatus: execution.mode === 'direct' && pendingApprovals > 0 ? 'awaiting_approval' : 'completed',
+      plannerStatus: 'completed',
       classification: execution.classification,
       preview: execution.preview ?? undefined,
       scope: execution.scope,
@@ -3203,7 +3202,7 @@ export async function startWorldPromptTurn(input: {
       classification: execution.classification,
       preview: execution.preview ?? undefined,
       threads: persistedThreads,
-      note: pendingApprovals > 0 ? `${pendingApprovals} change(s) waiting for approval.` : assistantSummary,
+      note: assistantSummary,
     })
     return worldPromptStartTurnResponseSchema.parse({
       ok: true,
@@ -3408,11 +3407,10 @@ export async function applyWorldPromptPreview(input: {
 
   const mutableSnapshot = structuredClone(payload.snapshot) as WorldPromptSnapshot
   const appliedOpIds: string[] = []
-  let pendingApprovals = 0
 
   for (const rawOp of preview.pendingOps) {
     await throwIfTurnCancelled(input.client, turn.id)
-    const op = sanitizePromptOp({ op: rawOp, snapshot: mutableSnapshot })
+    const op = forcePromptOpAutoApply(sanitizePromptOp({ op: rawOp, snapshot: mutableSnapshot }))
 
     if (op.op === 'assistant_note') {
       await writeEvent('assistant_note', {
@@ -3421,18 +3419,6 @@ export async function applyWorldPromptPreview(input: {
         note: op.payload.message,
         preview,
         scope: preview.scopeDecision,
-      }, { opId: op.id })
-      continue
-    }
-
-    if (op.applyMode === 'needs_approval') {
-      pendingApprovals += 1
-      await writeEvent('op_needs_approval', {
-        classification: turn.metadata?.classification as WorldPromptClassification | undefined,
-        op,
-        preview,
-        scope: preview.scopeDecision,
-        diagnostics: ['This preview op now requires approval before it can be applied.'],
       }, { opId: op.id })
       continue
     }
@@ -3486,8 +3472,8 @@ export async function applyWorldPromptPreview(input: {
   ].filter(Boolean).join('\n\n')
 
   turn = await updateTurn(input.client, turn.id, {
-    status: pendingApprovals > 0 ? 'awaiting_approval' : 'completed',
-    approval_state: pendingApprovals > 0 ? 'pending' : turn.approvalState,
+    status: 'completed',
+    approval_state: 'not_required',
     assistant_summary: assistantSummary,
     metadata: {
       ...(turn.metadata ?? {}),
@@ -3505,7 +3491,7 @@ export async function applyWorldPromptPreview(input: {
   })
 
   await writeEvent('planner_status', {
-    plannerStatus: pendingApprovals > 0 ? 'awaiting_approval' : 'completed',
+    plannerStatus: 'completed',
     classification: turn.metadata?.classification as WorldPromptClassification | undefined,
     preview: nextPreview,
     scope: nextPreview.scopeDecision,
@@ -3516,7 +3502,7 @@ export async function applyWorldPromptPreview(input: {
   await writeEvent('turn_completed', {
     classification: turn.metadata?.classification as WorldPromptClassification | undefined,
     preview: nextPreview,
-    note: pendingApprovals > 0 ? `${pendingApprovals} preview change(s) waiting for approval.` : 'Preview first wave applied.',
+    note: 'Preview first wave applied.',
     turn,
   })
 

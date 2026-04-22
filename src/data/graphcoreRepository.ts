@@ -25,6 +25,8 @@ import {
   worldDerivedCompositionUpdateInputSchema,
   worldGraphExpansionRequestSchema,
   worldGraphSnapshotSchema,
+  resetProjectWorldRequestSchema,
+  resetProjectWorldResponseSchema,
   worldGraphSeedRequestSchema,
   worldRelationshipCreateInputSchema,
   worldRelationshipUpdateInputSchema,
@@ -39,6 +41,7 @@ import {
   type WorldGraphConnection,
   type WorldGraphExpansionRequest,
   type WorldGraphSeedRequest,
+  type ResetProjectWorldResponse,
   type WorldOperator,
   type WorldRelationship,
   type WorldRelationshipCreateInput,
@@ -4069,6 +4072,13 @@ export async function deleteWorldEntity(snapshot: ProjectSnapshot, entityKey: st
     throw new Error('Sign in and load a live GraphCore draft before deleting a world entity.')
   }
 
+  const entity = snapshot.worldEntities.find((entry) => entry.key === entityKey) ?? null
+  const linkedDefinitionKey = entity?.linkedDefinitionKey ?? null
+  const linkedDefinition = linkedDefinitionKey
+    ? snapshot.definitions.find((entry) => entry.key === linkedDefinitionKey) ?? null
+    : null
+  const expectedLinkedDefinitionKind = entity ? definitionKindForWorldNodeType(entity.nodeType) : null
+
   const dependentOperators = snapshot.worldOperators
     .filter((entry) => entry.inputEntityKeys.includes(entityKey))
     .map((entry) => entry.key)
@@ -4094,6 +4104,49 @@ export async function deleteWorldEntity(snapshot: ProjectSnapshot, entityKey: st
   if (deleteResponse.error) {
     throw new Error(deleteResponse.error.message)
   }
+
+  if (
+    linkedDefinitionKey
+    && linkedDefinition
+    && expectedLinkedDefinitionKind
+    && linkedDefinition.kind === expectedLinkedDefinitionKind
+  ) {
+    const definitionDelete = await supabase
+      .from('project_definitions')
+      .delete()
+      .eq('draft_id', snapshot.draft.id)
+      .eq('key', linkedDefinitionKey)
+
+    if (definitionDelete.error) {
+      throw new Error(definitionDelete.error.message)
+    }
+  }
+
+  return reloadLiveSnapshot(snapshot)
+}
+
+export async function resetProjectWorld(snapshot: ProjectSnapshot) {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before resetting the project world.')
+
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Sign in and load a live GraphCore draft before resetting the project world.')
+  }
+
+  const request = resetProjectWorldRequestSchema.parse({
+    projectId: snapshot.project.id,
+    draftId: snapshot.draft.id,
+  })
+
+  const response = await invokeAuthedFunctionWithSessionRecovery<ResetProjectWorldResponse>(
+    'reset-project-world',
+    request,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+
+  resetProjectWorldResponseSchema.parse(response.data)
 
   return reloadLiveSnapshot(snapshot)
 }

@@ -36,11 +36,8 @@ import type {
 import {
   worldPromptEventPayloadSchema,
   type PromptToWorldOp,
-  type WorldPromptClassification,
   type WorldPromptEvent,
   type WorldPromptMessage,
-  type WorldPromptPlanPreview,
-  type WorldPromptScopeDecision,
   type WorldPromptSession,
   type WorldPromptSuggestion,
   type WorldPromptTurn,
@@ -142,6 +139,7 @@ type WorldNodeData = {
   relationCount: number
   usageCount: number
   dimmed: boolean
+  animateIn: boolean
 }
 
 type WorldFlowEdgeData = {
@@ -218,14 +216,15 @@ type EntityOverviewDraftState = {
   dirty: boolean
 }
 
-type WorldPromptPendingOp = {
-  turn: WorldPromptTurn
-  event: WorldPromptEvent
-  op: PromptToWorldOp
-}
+type WorldPromptTranscriptEntry =
+  | { id: string; createdAt: string; kind: 'user_message' | 'assistant_message'; content: string; pending?: boolean }
+  | { id: string; createdAt: string; kind: 'system_status'; label: string; detail?: string; tone?: 'normal' | 'error' }
+  | { id: string; createdAt: string; kind: 'entity_created'; label: string; detail?: string; entityKey: string }
+  | { id: string; createdAt: string; kind: 'relationship_created'; label: string; detail?: string; relationshipKey: string }
+  | { id: string; createdAt: string; kind: 'queue_started'; label: string; detail?: string }
+  | { id: string; createdAt: string; kind: 'suggestion_row' | 'choice_row'; suggestions: WorldPromptSuggestion[]; label?: string }
 
 type WorldGraphSurfaceMode = 'grow' | 'graph'
-type WorldGrowRailTab = 'inspect' | 'views' | 'filters'
 
 const GROW_WORKBENCH_WIDTH_STORAGE_KEY = 'graphcore.world.grow-workbench-width.v1'
 const GROW_WORKBENCH_WIDTH_DEFAULT = 420
@@ -258,6 +257,7 @@ function worldNodeDataEqual(left: WorldNodeData, right: WorldNodeData) {
     left.relationCount === right.relationCount
     && left.usageCount === right.usageCount
     && left.dimmed === right.dimmed
+    && left.animateIn === right.animateIn
     && worldNodeRecordEqual(left.record, right.record)
   )
 }
@@ -315,7 +315,7 @@ function WorldNodeCard({ data, selected }: NodeProps<Node<WorldNodeData>>) {
       : false
 
   return (
-    <div className={`world-node-card world-node-card-${record.kind}`} style={nodeShellStyle(record, selected, dimmed)}>
+    <div className={`world-node-card world-node-card-${record.kind}${data.animateIn ? ' is-new' : ''}`} style={nodeShellStyle(record, selected, dimmed)}>
       {record.kind === 'entity' ? <Handle className="world-node-handle" position={Position.Left} type="target" /> : null}
       {record.kind === 'entity' ? <Handle className="world-node-handle" position={Position.Right} type="source" /> : null}
       <div className="world-node-kicker">
@@ -452,41 +452,6 @@ function describePromptOp(op: PromptToWorldOp) {
   }
 }
 
-function collectPendingPromptOps(
-  turns: WorldPromptTurn[],
-  events: WorldPromptEvent[],
-) {
-  const turnById = new Map(turns.map((turn) => [turn.id, turn]))
-  const eventsByOpId = new Map<string, WorldPromptEvent[]>()
-  for (const event of events) {
-    if (!event.opId) continue
-    const current = eventsByOpId.get(event.opId) ?? []
-    current.push(event)
-    eventsByOpId.set(event.opId, current)
-  }
-
-  const pending: WorldPromptPendingOp[] = []
-  for (const [, opEvents] of eventsByOpId) {
-    const requested = opEvents.find((event) => event.eventType === 'op_needs_approval') ?? null
-    if (!requested) continue
-    const resolved = opEvents.some((event) => ['op_approved', 'op_rejected', 'op_applied'].includes(event.eventType))
-    if (resolved) continue
-    const parsedPayload = worldPromptEventPayloadSchema.safeParse(requested.payload)
-    if (!parsedPayload.success || !parsedPayload.data.op) continue
-    const turn = turnById.get(requested.turnId) ?? null
-    if (!turn) continue
-    pending.push({
-      turn,
-      event: requested,
-      op: parsedPayload.data.op,
-    })
-  }
-
-  return pending.sort((left, right) => (
-    new Date(left.event.createdAt).getTime() - new Date(right.event.createdAt).getTime()
-  ))
-}
-
 function describePlannerStatus(status: NonNullable<ReturnType<typeof worldPromptEventPayloadSchema.safeParse>['data']>['plannerStatus']) {
   switch (status) {
     case 'planning':
@@ -506,81 +471,6 @@ function describePlannerStatus(status: NonNullable<ReturnType<typeof worldPrompt
   }
 }
 
-function latestPromptSuggestions(turns: WorldPromptTurn[], events: WorldPromptEvent[]) {
-  const latestTurnId = turns[turns.length - 1]?.id ?? null
-  const relevantEvents = latestTurnId ? events.filter((event) => event.turnId === latestTurnId) : events
-  for (const event of [...relevantEvents].reverse()) {
-    const parsed = worldPromptEventPayloadSchema.safeParse(event.payload)
-    if (parsed.success && parsed.data.suggestions.length > 0) {
-      return parsed.data.suggestions
-    }
-  }
-  return [] as WorldPromptSuggestion[]
-}
-
-function latestPromptClassification(turns: WorldPromptTurn[], events: WorldPromptEvent[]) {
-  const latestTurn = turns[turns.length - 1] ?? null
-  const turnClassification = latestTurn?.metadata?.classification
-  if (typeof turnClassification === 'string') {
-    return turnClassification as WorldPromptClassification
-  }
-  for (const event of [...events].reverse()) {
-    const parsed = worldPromptEventPayloadSchema.safeParse(event.payload)
-    if (parsed.success && parsed.data.classification) {
-      return parsed.data.classification
-    }
-  }
-  return null
-}
-
-function latestPromptScopeDecision(turns: WorldPromptTurn[], events: WorldPromptEvent[]) {
-  const latestTurn = turns[turns.length - 1] ?? null
-  const turnScope = latestTurn?.metadata?.scopeDecision
-  if (turnScope && typeof turnScope === 'object') {
-    return turnScope as WorldPromptScopeDecision
-  }
-  for (const event of [...events].reverse()) {
-    const parsed = worldPromptEventPayloadSchema.safeParse(event.payload)
-    if (parsed.success && parsed.data.scope) {
-      return parsed.data.scope
-    }
-  }
-  return null
-}
-
-function latestPromptPreview(turns: WorldPromptTurn[], events: WorldPromptEvent[]) {
-  const latestTurn = turns[turns.length - 1] ?? null
-  const turnPreview = latestTurn?.metadata?.preview
-  if (turnPreview && typeof turnPreview === 'object') {
-    return turnPreview as WorldPromptPlanPreview
-  }
-  const relevantEvents = latestTurn ? events.filter((event) => event.turnId === latestTurn.id) : events
-  for (const event of [...relevantEvents].reverse()) {
-    const parsed = worldPromptEventPayloadSchema.safeParse(event.payload)
-    if (parsed.success && parsed.data.preview) {
-      return parsed.data.preview
-    }
-  }
-  return null
-}
-
-function describePromptClassification(classification: WorldPromptClassification | null) {
-  switch (classification) {
-    case 'graphable_direct':
-      return 'Direct'
-    case 'graphable_broad':
-      return 'Broad'
-    case 'graphable_plan_only':
-      return 'Plan Only'
-    case 'contradictory_or_low_confidence':
-      return 'Low Confidence'
-    case 'not_graphable':
-      return 'Needs Rewrite'
-    default:
-      return ''
-  }
-}
-
 function promptSuggestionImpactLabel(suggestion: WorldPromptSuggestion) {
   const parts = [
     suggestion.estimatedNodeCount > 0 ? `+${suggestion.estimatedNodeCount} nodes` : null,
@@ -591,31 +481,187 @@ function promptSuggestionImpactLabel(suggestion: WorldPromptSuggestion) {
   return parts.join(' · ')
 }
 
-function describePromptFeedEvent(event: WorldPromptEvent) {
-  const parsed = worldPromptEventPayloadSchema.safeParse(event.payload)
-  if (!parsed.success) {
-    return { label: event.eventType, detail: '' }
-  }
-  const payload = parsed.data
-  if (event.eventType === 'planner_status' && payload.plannerStatus) {
-    return {
-      label: describePlannerStatus(payload.plannerStatus),
-      detail: payload.note ?? (payload.scope ? `${payload.scope.mode} scope` : ''),
+function buildTranscriptSuggestionsEntry(event: WorldPromptEvent, suggestions: WorldPromptSuggestion[]) {
+  return {
+    id: `suggestions:${event.id}`,
+    createdAt: event.createdAt,
+    kind: suggestions.length > 1 ? 'choice_row' : 'suggestion_row',
+    suggestions,
+    label: suggestions.length > 1 ? 'Choose how to continue' : 'Next move',
+  } satisfies WorldPromptTranscriptEntry
+}
+
+function stripInternalPlannerDiagnostics(text: string) {
+  if (!text.trim()) return ''
+  return text
+    .replace(/\s*World prompt planner returned JSON that did not match the expected schema\.[\s\S]*$/i, '')
+    .replace(/\s*Planner (?:output|response) validation failed\.[\s\S]*$/i, '')
+    .replace(/\s*Cinematic planner response validation failed\.[\s\S]*$/i, '')
+    .trim()
+}
+
+function buildWorldPromptTranscriptEntries(input: {
+  events: WorldPromptEvent[]
+  messages: WorldPromptMessage[]
+  entityByKey: Map<string, WorldEntity>
+}) {
+  const sources = [
+    ...input.messages.map((message) => ({ source: 'message' as const, createdAt: message.createdAt, id: `message:${message.id}`, message })),
+    ...input.events
+      .filter((event) => !['turn_started', 'message_created', 'op_needs_approval', 'op_approved', 'op_rejected'].includes(event.eventType))
+      .map((event) => ({ source: 'event' as const, createdAt: event.createdAt, id: `event:${event.id}`, event })),
+  ].sort((left, right) => {
+    const timeDelta = new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
+    return timeDelta !== 0 ? timeDelta : left.id.localeCompare(right.id)
+  })
+
+  const entries: WorldPromptTranscriptEntry[] = []
+  let lastSuggestionSignature: string | null = null
+
+  for (const source of sources) {
+    if (source.source === 'message') {
+      entries.push({
+        id: source.id,
+        createdAt: source.message.createdAt,
+        kind: source.message.role === 'user' ? 'user_message' : 'assistant_message',
+        content: source.message.role === 'assistant'
+          ? stripInternalPlannerDiagnostics(source.message.content)
+          : source.message.content,
+        pending: false,
+      })
+      continue
+    }
+
+    const parsed = worldPromptEventPayloadSchema.safeParse(source.event.payload)
+    if (!parsed.success) {
+      entries.push({
+        id: source.id,
+        createdAt: source.event.createdAt,
+        kind: 'system_status',
+        label: source.event.eventType,
+      })
+      continue
+    }
+
+    const payload = parsed.data
+    switch (source.event.eventType) {
+      case 'planner_status':
+        if (payload.plannerStatus) {
+          entries.push({
+            id: source.id,
+            createdAt: source.event.createdAt,
+            kind: 'system_status',
+            label: describePlannerStatus(payload.plannerStatus),
+            detail: payload.note ?? (payload.scope ? `${payload.scope.mode} scope` : ''),
+          })
+        }
+        break
+      case 'assistant_note':
+        if (payload.note) {
+          entries.push({
+            id: source.id,
+            createdAt: source.event.createdAt,
+            kind: 'assistant_message',
+            content: stripInternalPlannerDiagnostics(payload.note),
+            pending: true,
+          })
+        }
+        break
+      case 'op_applied': {
+        const applied = payload.applied
+        for (const entity of applied?.worldEntities ?? []) {
+          entries.push({
+            id: `${source.id}:entity:${entity.key}`,
+            createdAt: source.event.createdAt,
+            kind: 'entity_created',
+            label: `Added ${entity.name}`,
+            detail: labelForWorldEntity(entity.nodeType),
+            entityKey: entity.key,
+          })
+        }
+        for (const relationship of applied?.worldRelationships ?? []) {
+          const sourceName = input.entityByKey.get(relationship.sourceEntityKey)?.name ?? relationship.sourceEntityKey
+          const targetName = input.entityByKey.get(relationship.targetEntityKey)?.name ?? relationship.targetEntityKey
+          entries.push({
+            id: `${source.id}:relationship:${relationship.key}`,
+            createdAt: source.event.createdAt,
+            kind: 'relationship_created',
+            label: `Linked ${sourceName} and ${targetName}`,
+            detail: relationship.notes.trim() || relationship.verb,
+            relationshipKey: relationship.key,
+          })
+        }
+        for (const worldResult of applied?.worldResults ?? []) {
+          entries.push({
+            id: `${source.id}:result:${worldResult.key}`,
+            createdAt: source.event.createdAt,
+            kind: 'system_status',
+            label: `Created ${worldResult.title}`,
+            detail: 'Derived result',
+          })
+        }
+        break
+      }
+      case 'queue_started': {
+        const label = payload.queue?.type === 'cinematic_generation'
+          ? 'Started cinematic generation'
+          : 'Started image generation'
+        const detail = payload.queue?.targetEntityKey
+          ? input.entityByKey.get(payload.queue.targetEntityKey)?.name ?? payload.queue.targetEntityKey
+          : payload.queue?.graphKey ?? ''
+        entries.push({
+          id: source.id,
+          createdAt: source.event.createdAt,
+          kind: 'queue_started',
+          label,
+          detail,
+        })
+        break
+      }
+      case 'turn_cancel_requested':
+        entries.push({
+          id: source.id,
+          createdAt: source.event.createdAt,
+          kind: 'system_status',
+          label: 'Cancelling turn',
+          detail: payload.note ?? 'Stopping future ops for this turn.',
+        })
+        break
+      case 'turn_failed':
+        entries.push({
+          id: source.id,
+          createdAt: source.event.createdAt,
+          kind: 'system_status',
+          label: 'Turn failed',
+          detail: payload.diagnostics?.[0] ?? payload.note ?? 'World prompt turn failed.',
+          tone: 'error',
+        })
+        break
+      case 'turn_completed':
+        if (payload.note) {
+          entries.push({
+            id: source.id,
+            createdAt: source.event.createdAt,
+            kind: 'system_status',
+            label: 'Turn completed',
+            detail: payload.note,
+          })
+        }
+        break
+      default:
+        break
+    }
+
+    if (payload.suggestions.length > 0) {
+      const signature = payload.suggestions.map((suggestion) => `${suggestion.id}:${suggestion.prompt}`).join('|')
+      if (signature && signature !== lastSuggestionSignature) {
+        entries.push(buildTranscriptSuggestionsEntry(source.event, payload.suggestions))
+        lastSuggestionSignature = signature
+      }
     }
   }
-  if (event.eventType === 'turn_cancel_requested') {
-    return {
-      label: 'Cancellation Requested',
-      detail: payload.note ?? 'Stopping future ops for this turn.',
-    }
-  }
-  if (payload.note) {
-    return { label: event.eventType === 'assistant_note' ? 'Assistant' : event.eventType, detail: payload.note }
-  }
-  if (payload.op) {
-    return { label: event.eventType, detail: describePromptOp(payload.op) }
-  }
-  return { label: event.eventType, detail: '' }
+
+  return entries
 }
 
 export function WorldGraphPage({
@@ -655,18 +701,18 @@ export function WorldGraphPage({
   onCreateCinematicReferenceFromWorldResult,
   onCreateWorldView,
   onUpdateWorldView,
-  onGenerateStarterWorld,
+  onGenerateStarterWorld: _onGenerateStarterWorld,
   onGenerateWorldExpansion,
   onStartWorldPromptTurn,
-  onApproveWorldPromptOp,
-  onRejectWorldPromptOp,
-  onApplyWorldPromptPreview,
+  onApproveWorldPromptOp: _onApproveWorldPromptOp,
+  onRejectWorldPromptOp: _onRejectWorldPromptOp,
+  onApplyWorldPromptPreview: _onApplyWorldPromptPreview,
   onCancelWorldPromptTurn,
-  onResolveWorldThread,
-  onParkWorldThread,
+  onResolveWorldThread: _onResolveWorldThread,
+  onParkWorldThread: _onParkWorldThread,
   onSetWorldEntityCanonLock,
   onSetWorldRelationshipCanonLock,
-  onExtractWorldThreadToCinematicPreview,
+  onExtractWorldThreadToCinematicPreview: _onExtractWorldThreadToCinematicPreview,
   onOpenDefinitionLink,
   onOpenCinematicGraph,
   legacyGraphProps,
@@ -690,13 +736,13 @@ export function WorldGraphPage({
       : GROW_WORKBENCH_WIDTH_DEFAULT
   })
   const [activeRailTab, setActiveRailTab] = useState<'inspect' | 'chat' | 'activity'>('inspect')
-  const [activeGrowRailTab, setActiveGrowRailTab] = useState<WorldGrowRailTab>('inspect')
   const [activeInspectorTab, setActiveInspectorTab] = useState<'overview' | 'relationships' | 'usage' | 'suggestions'>('overview')
   const [showSuggestions, setShowSuggestions] = useState(true)
   const [showLabels, setShowLabels] = useState(true)
   const [showDerivedLayer, setShowDerivedLayer] = useState(true)
   const [draftPositions, setDraftPositions] = useState<Record<string, { x: number; y: number }>>({})
   const [canvasNodes, setCanvasNodes] = useState<Node<WorldNodeData>[]>([])
+  const [animatedNodeKeys, setAnimatedNodeKeys] = useState<string[]>([])
   const [autoLayoutNonce, setAutoLayoutNonce] = useState(0)
   const [layoutPositions, setLayoutPositions] = useState<Record<string, { x: number; y: number }>>({})
   const [inspectorNodeKey, setInspectorNodeKey] = useState<string | null>(selectedWorldNodeKey)
@@ -707,8 +753,6 @@ export function WorldGraphPage({
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [edgeEditor, setEdgeEditor] = useState<EdgeEditorState | null>(null)
   const [relationshipInspectorNotes, setRelationshipInspectorNotes] = useState('')
-  const [starterPrompt, setStarterPrompt] = useState('')
-  const [isStarterPending, setIsStarterPending] = useState(false)
   const [isExpansionPending, setIsExpansionPending] = useState(false)
   const [busyMessage, setBusyMessage] = useState<string | null>(null)
   const [entityOverviewDraft, setEntityOverviewDraft] = useState<EntityOverviewDraftState | null>(null)
@@ -717,9 +761,7 @@ export function WorldGraphPage({
   const [worldPromptText, setWorldPromptText] = useState('')
   const [worldPromptError, setWorldPromptError] = useState<string | null>(null)
   const [isPromptSubmitting, setIsPromptSubmitting] = useState(false)
-  const [isPromptPreviewApplying, setIsPromptPreviewApplying] = useState(false)
   const [isPromptCancelling, setIsPromptCancelling] = useState(false)
-  const [resolvingPromptOpIds, setResolvingPromptOpIds] = useState<string[]>([])
 
   const selectedView = useMemo(
     () => worldViews.find((view) => view.key === selectedWorldViewKey) ?? worldViews[0] ?? createDefaultWorldView(),
@@ -757,29 +799,9 @@ export function WorldGraphPage({
       : [],
     [selectedPromptSession, worldPromptEvents],
   )
-  const pendingPromptOps = useMemo(
-    () => collectPendingPromptOps(sessionTurns, sessionEvents),
-    [sessionEvents, sessionTurns],
-  )
   const activePromptTurn = useMemo(
     () => [...sessionTurns].reverse().find((turn) => ['queued', 'streaming', 'awaiting_approval'].includes(turn.status)) ?? null,
     [sessionTurns],
-  )
-  const promptSuggestions = useMemo(
-    () => latestPromptSuggestions(sessionTurns, sessionEvents),
-    [sessionEvents, sessionTurns],
-  )
-  const promptClassification = useMemo(
-    () => latestPromptClassification(sessionTurns, sessionEvents),
-    [sessionEvents, sessionTurns],
-  )
-  const promptScopeDecision = useMemo(
-    () => latestPromptScopeDecision(sessionTurns, sessionEvents),
-    [sessionEvents, sessionTurns],
-  )
-  const promptPreview = useMemo(
-    () => latestPromptPreview(sessionTurns, sessionEvents),
-    [sessionEvents, sessionTurns],
   )
   const activeWorldThreads = useMemo(
     () => worldThreads
@@ -882,6 +904,24 @@ export function WorldGraphPage({
       setAutoLayoutNonce((value) => value + 1)
       flowRef.current?.fitView({ padding: 0.18, duration: 280 })
     }, 40)
+  }, [sessionEvents])
+
+  useEffect(() => {
+    const latestEvent = sessionEvents[sessionEvents.length - 1]
+    if (!latestEvent || latestEvent.eventType !== 'op_applied') return
+    const parsed = worldPromptEventPayloadSchema.safeParse(latestEvent.payload)
+    if (!parsed.success) return
+    const nextKeys = [
+      ...(parsed.data.applied?.worldEntities ?? []).map((entity) => entity.key),
+      ...(parsed.data.applied?.worldOperators ?? []).map((operator) => operator.key),
+      ...(parsed.data.applied?.worldResults ?? []).map((result) => result.key),
+    ]
+    if (nextKeys.length === 0) return
+    setAnimatedNodeKeys((current) => Array.from(new Set([...current, ...nextKeys])))
+    const timeoutId = window.setTimeout(() => {
+      setAnimatedNodeKeys((current) => current.filter((key) => !nextKeys.includes(key)))
+    }, 1400)
+    return () => window.clearTimeout(timeoutId)
   }, [sessionEvents])
 
   const assetByKey = useMemo(() => new Map(assets.map((asset) => [asset.key, asset])), [assets])
@@ -1216,10 +1256,11 @@ export function WorldGraphPage({
               ? 1
               : 0,
           dimmed: Boolean(focusRootKey) && !visibleNodeKeys.has(key),
+          animateIn: animatedNodeKeys.includes(key),
         },
       }
     })
-  }, [draftPositions, focusRootKey, layoutPositions, relationCountByNodeKey, usageByEntityKey, viewMode, visibleNodeKeys, visibleNodeRecords])
+  }, [animatedNodeKeys, draftPositions, focusRootKey, layoutPositions, relationCountByNodeKey, usageByEntityKey, viewMode, visibleNodeKeys, visibleNodeRecords])
 
   useEffect(() => {
     setCanvasNodes((current) => {
@@ -1548,19 +1589,6 @@ export function WorldGraphPage({
     setEntityComposer(null)
   }
 
-  async function handleGenerateStarter() {
-    if (!starterPrompt.trim()) return
-    setIsStarterPending(true)
-    setBusyMessage('Generating starter world...')
-    try {
-      await onGenerateStarterWorld(starterPrompt.trim())
-      setStarterPrompt('')
-    } finally {
-      setIsStarterPending(false)
-      setBusyMessage(null)
-    }
-  }
-
   async function handleGenerateExpansion() {
     if (!selectedEntity) return
     setIsExpansionPending(true)
@@ -1614,37 +1642,8 @@ export function WorldGraphPage({
     }
   }
 
-  async function handleApprovePromptOp(turnId: string, opId: string) {
-    setResolvingPromptOpIds((current) => current.includes(opId) ? current : [...current, opId])
-    try {
-      await onApproveWorldPromptOp({ turnId, opId })
-    } finally {
-      setResolvingPromptOpIds((current) => current.filter((entry) => entry !== opId))
-    }
-  }
-
-  async function handleRejectPromptOp(turnId: string, opId: string) {
-    setResolvingPromptOpIds((current) => current.includes(opId) ? current : [...current, opId])
-    try {
-      await onRejectWorldPromptOp({ turnId, opId })
-    } finally {
-      setResolvingPromptOpIds((current) => current.filter((entry) => entry !== opId))
-    }
-  }
-
   async function handleRunPromptSuggestion(suggestion: WorldPromptSuggestion) {
     await handleSubmitWorldPrompt(suggestion.prompt)
-  }
-
-  async function handleApplyPromptPreview(turnId: string) {
-    setIsPromptPreviewApplying(true)
-    setBusyMessage('Applying preview first wave...')
-    try {
-      await onApplyWorldPromptPreview({ turnId })
-    } finally {
-      setIsPromptPreviewApplying(false)
-      setBusyMessage(null)
-    }
   }
 
   async function handleCancelPromptTurn(turnId: string) {
@@ -1775,13 +1774,11 @@ export function WorldGraphPage({
           </div>
           <WorldPromptChatPanel
             activePromptTurn={activePromptTurn}
-            busy={isPromptSubmitting || isPromptPreviewApplying || isPromptCancelling}
+            busy={isPromptSubmitting || isPromptCancelling}
             cancelBusy={isPromptCancelling}
-            pendingOps={pendingPromptOps}
             promptText={worldPromptText}
-            promptClassification={promptClassification}
-            promptPreview={promptPreview}
             promptError={worldPromptError}
+            entityByKey={entityByKey}
             selectedEntity={selectedEntity}
             selectedSession={selectedPromptSession}
             selectedThreadKey={selectedPromptThread?.key ?? null}
@@ -1790,21 +1787,11 @@ export function WorldGraphPage({
             sessionEvents={sessionEvents}
             worldThreads={activeWorldThreads}
             worldPromptSessions={worldPromptSessions}
-            promptSuggestions={promptSuggestions}
-            promptScopeDecision={promptScopeDecision}
-            resolvingPromptOpIds={resolvingPromptOpIds}
             variant="grow"
-            onApplyPreview={handleApplyPromptPreview}
-            onApprove={handleApprovePromptOp}
             onCancelTurn={handleCancelPromptTurn}
             onChangePromptText={setWorldPromptText}
-            onExtractThreadToCinematic={(threadKey, mode) => onExtractWorldThreadToCinematicPreview({ threadKey, mode })}
-            onParkThread={(threadKey) => onParkWorldThread({ threadKey })}
-            onReject={handleRejectPromptOp}
             onRunSuggestion={handleRunPromptSuggestion}
             onSelectSession={setSelectedPromptSessionKey}
-            onSelectThread={setSelectedPromptThreadKey}
-            onResolveThread={(threadKey) => onResolveWorldThread({ threadKey })}
             onSubmit={handleSubmitWorldPrompt}
           />
         </aside>
@@ -1986,18 +1973,26 @@ export function WorldGraphPage({
       ) : null}
 
       <section className="main-surface graph-surface world-graph-surface">
-        <div className="world-graph-toolbar">
+        <div className={`world-graph-toolbar${surfaceMode === 'grow' ? ' is-grow-mode' : ''}`}>
           <div className="world-toolbar-heading">
-            <span className="eyebrow">Graph Mode</span>
+            <span className="eyebrow">{surfaceMode === 'grow' ? 'Live Graph' : 'Graph Mode'}</span>
             <h3>{selectedView.name || 'Living World'}</h3>
           </div>
           <div className="world-graph-toolbar-actions">
-            <button className="primary-button compact" onClick={() => setEntityComposer({ mode: 'global', defaults: { nodeType: 'actor', source: 'user' }, relationshipDefaults: {}, canvasPosition: null })} type="button">Add Entity</button>
-            {selectedEntity ? (
+            {surfaceMode !== 'grow' ? (
+              <button className="primary-button compact" onClick={() => setEntityComposer({ mode: 'global', defaults: { nodeType: 'actor', source: 'user' }, relationshipDefaults: {}, canvasPosition: null })} type="button">Add Entity</button>
+            ) : null}
+            {surfaceMode !== 'grow' && selectedEntity ? (
               <button className="ghost-button compact" disabled={isExpansionPending} onClick={() => void handleGenerateExpansion()} type="button">
                 {isExpansionPending ? 'Generating...' : 'Generate From Selection'}
               </button>
             ) : null}
+            {surfaceMode === 'grow' ? (
+              <>
+                <button className="ghost-button compact" onClick={() => flowRef.current?.fitView({ padding: 0.18, duration: 300 })} type="button">Fit</button>
+                <button className="ghost-button compact" onClick={() => void handleAutoLayout()} type="button">Auto Layout</button>
+              </>
+            ) : (
             <details className="world-toolbar-more">
               <summary className="ghost-button compact">More</summary>
               <div className="world-toolbar-more-panel">
@@ -2032,10 +2027,11 @@ export function WorldGraphPage({
                 </div>
               </div>
             </details>
+            )}
           </div>
         </div>
 
-        {focusRootKey ? (
+        {surfaceMode !== 'grow' && focusRootKey ? (
           <div className="world-focus-banner">
             <span className="section-label">Focus Mode</span>
             <strong>{focusedEntity?.name ?? focusedOperator?.label ?? focusedResult?.title ?? 'Selection'}</strong>
@@ -2048,39 +2044,7 @@ export function WorldGraphPage({
 
         {busyMessage ? <div className="inline-note">{busyMessage}</div> : null}
 
-        {worldEntities.length === 0 ? (
-          <div className="world-graph-empty">
-            <span className="eyebrow">Start Growing</span>
-            <h2>Grow this world from a prompt</h2>
-            <p>Use the chat rail to add characters, places, lore, events, and relationships live as the graph forms. The older starter generator is still here as a one-shot fallback.</p>
-            <div className="world-empty-actions">
-              <button className="primary-button" onClick={() => {
-                setSurfaceMode('grow')
-                setActiveRailTab('chat')
-              }} type="button">Open World Chat</button>
-            </div>
-            <div className="editor-section compact-section">
-              <div className="section-head">
-                <div>
-                  <span className="eyebrow">Quick Seed Fallback</span>
-                  <h3>Starter Generator</h3>
-                </div>
-              </div>
-              <textarea
-                className="world-seed-textarea"
-                rows={4}
-                placeholder="A fractured kingdom where rival groups compete for power"
-                value={starterPrompt}
-                onChange={(event) => setStarterPrompt(event.target.value)}
-              />
-              <div className="world-empty-actions">
-                <button className="ghost-button" disabled={isStarterPending || !starterPrompt.trim()} onClick={() => void handleGenerateStarter()} type="button">
-                  {isStarterPending ? 'Generating...' : 'Generate Starter World'}
-                </button>
-              </div>
-            </div>
-          </div>
-        ) : viewMode !== 'graph' ? (
+        {surfaceMode !== 'grow' && viewMode !== 'graph' ? (
           <div className="world-view-stub">
             <span className="eyebrow">{viewMode[0].toUpperCase() + viewMode.slice(1)} Mode</span>
             <h2>{viewMode[0].toUpperCase() + viewMode.slice(1)} view is stubbed in v1</h2>
@@ -2088,6 +2052,12 @@ export function WorldGraphPage({
           </div>
         ) : (
           <div className="canvas-stage graph-canvas world-graph-canvas">
+            {worldEntities.length === 0 ? (
+              <div className="world-graph-canvas-empty-hint">
+                <span className="eyebrow">Empty world</span>
+                <strong>Start typing to add characters, places, lore, and relationships.</strong>
+              </div>
+            ) : null}
             <ReactFlow
               fitView
               nodeTypes={nodeTypes}
@@ -2302,6 +2272,10 @@ export function WorldGraphPage({
                   void onUpdateWorldEntity(contextMenu.entityKey, { status: 'archived' })
                   setContextMenu(null)
                 }} type="button">Archive</button>
+                <button className="world-context-action danger" onClick={() => {
+                  void onDeleteWorldEntity(contextMenu.entityKey)
+                  setContextMenu(null)
+                }} type="button">Delete Node</button>
               </>
             ) : null}
 
@@ -2415,139 +2389,9 @@ export function WorldGraphPage({
         ) : null}
       </section>
 
+      {surfaceMode !== 'grow' ? (
       <aside className="context-drawer world-graph-drawer">
-        {surfaceMode === 'grow' ? (
-          <>
-            <div className="segmented-control">
-              {([
-                ['inspect', 'Inspect'],
-                ['views', 'Views'],
-                ['filters', 'Filters'],
-              ] as const).map(([tabKey, label]) => (
-                <button
-                  key={tabKey}
-                  className={activeGrowRailTab === tabKey ? 'segment-button is-active' : 'segment-button'}
-                  onClick={() => setActiveGrowRailTab(tabKey)}
-                  type="button"
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-
-            {activeGrowRailTab === 'views' ? (
-              <div className="detail-stack compact">
-                <div className="drawer-head">
-                  <div>
-                    <span className="eyebrow">Saved Views</span>
-                    <h3>World Views</h3>
-                  </div>
-                </div>
-                <div className="world-inspector-actions">
-                  <button className="primary-button compact" onClick={() => void handleSaveCurrentView()} type="button">Save View</button>
-                  <button className="ghost-button compact" onClick={() => setLegacyMode(true)} type="button">Legacy Flow Graphs</button>
-                </div>
-                <div className="rail-list">
-                  {worldViews.length === 0 ? <div className="inline-note">No saved views yet. Save the current graph once it has a useful neighborhood.</div> : null}
-                  {worldViews.map((view) => (
-                    <button
-                      key={view.key}
-                      className={view.key === selectedView.key ? 'rail-button is-active' : 'rail-button'}
-                      onClick={() => onSelectWorldView(view.key)}
-                      type="button"
-                    >
-                      <strong>{view.name}</strong>
-                      <span>{view.rootEntityKey ? 'Focused' : 'Overview'}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ) : activeGrowRailTab === 'filters' ? (
-              <div className="detail-stack compact">
-                <div className="drawer-head">
-                  <div>
-                    <span className="eyebrow">Filters</span>
-                    <h3>Graph Controls</h3>
-                  </div>
-                </div>
-                <div className="world-inspector-actions">
-                  <button className="primary-button compact" onClick={() => setEntityComposer({ mode: 'global', defaults: { nodeType: 'actor', source: 'user' }, relationshipDefaults: {}, canvasPosition: null })} type="button">Add Entity</button>
-                  <button className="ghost-button compact" onClick={() => void handleGenerateExpansion()} disabled={!selectedEntity || isExpansionPending} type="button">
-                    {isExpansionPending ? 'Generating...' : 'Generate From Selection'}
-                  </button>
-                </div>
-                <label className="field-block">
-                  <span>Search</span>
-                  <input placeholder="Search title, aliases, tags, description" value={search} onChange={(event) => setSearch(event.target.value)} />
-                </label>
-                <div className="world-filter-grid">
-                  {(['actor', 'group', 'place', 'object', 'concept', 'event'] as const).map((nodeType) => {
-                    const active = selectedView.filters.nodeTypes.includes(nodeType)
-                    return (
-                      <button
-                        key={nodeType}
-                        className={active ? 'segment-button is-active' : 'segment-button'}
-                        onClick={() => {
-                          const nodeTypes = active
-                            ? selectedView.filters.nodeTypes.filter((value) => value !== nodeType)
-                            : [...selectedView.filters.nodeTypes, nodeType]
-                          void persistViewChanges({ filters: { ...selectedView.filters, nodeTypes } })
-                        }}
-                        type="button"
-                      >
-                        {labelForWorldEntity(nodeType)}
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>
-            ) : (
-              <div className="detail-stack compact">
-                <div className="drawer-head">
-                  <div>
-                    <span className="eyebrow">Inspect</span>
-                    <h3>{selectedEntity?.name ?? 'World Structure'}</h3>
-                  </div>
-                </div>
-                {selectedEntity ? <div className="inline-note">{selectedEntity.summary || labelForWorldEntity(selectedEntity.nodeType)}</div> : <div className="inline-note">Select a node to focus it, or browse the current world structure below.</div>}
-                <div className="chip-row">
-                  <span className="chip">{worldEntities.length} entities</span>
-                  <span className="chip">{worldRelationships.length} relationships</span>
-                </div>
-                <div className="world-entity-group-list">
-                  {Object.entries(groupedEntities).map(([nodeType, entities]) => (
-                    entities.length > 0 ? (
-                      <div key={nodeType} className="rail-section">
-                        <span className="section-label">{labelForWorldEntity(nodeType as WorldEntity['nodeType'])}s</span>
-                        <div className="rail-list">
-                          {entities.map((entity) => (
-                            <button
-                              key={entity.key}
-                              className={entity.key === selectedEntity?.key ? 'rail-button item-row is-active' : 'rail-button item-row'}
-                              onClick={() => {
-                                selectWorldNode(entity.key)
-                                setActiveInspectorTab('overview')
-                              }}
-                              type="button"
-                            >
-                              <div className="media-thumb">
-                                <EntityIcon id={iconForWorldEntity(entity.nodeType)} />
-                              </div>
-                              <div className="item-row-copy">
-                                <strong>{entity.name}</strong>
-                                <span>{labelForWorldEntity(entity.nodeType)}</span>
-                              </div>
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    ) : null
-                  ))}
-                </div>
-              </div>
-            )}
-          </>
-        ) : (
+        {
           <>
             <div className="segmented-control">
               {([
@@ -2569,13 +2413,11 @@ export function WorldGraphPage({
             {activeRailTab === 'chat' ? (
           <WorldPromptChatPanel
             activePromptTurn={activePromptTurn}
-            busy={isPromptSubmitting || isPromptPreviewApplying || isPromptCancelling}
+            busy={isPromptSubmitting || isPromptCancelling}
             cancelBusy={isPromptCancelling}
-            pendingOps={pendingPromptOps}
             promptText={worldPromptText}
-            promptClassification={promptClassification}
-            promptPreview={promptPreview}
             promptError={worldPromptError}
+            entityByKey={entityByKey}
             selectedEntity={selectedEntity}
             selectedSession={selectedPromptSession}
             selectedThreadKey={selectedPromptThread?.key ?? null}
@@ -2584,21 +2426,11 @@ export function WorldGraphPage({
             sessionEvents={sessionEvents}
             worldThreads={activeWorldThreads}
             worldPromptSessions={worldPromptSessions}
-            promptSuggestions={promptSuggestions}
-            promptScopeDecision={promptScopeDecision}
-            resolvingPromptOpIds={resolvingPromptOpIds}
             variant="drawer"
-            onApplyPreview={handleApplyPromptPreview}
-            onApprove={handleApprovePromptOp}
             onCancelTurn={handleCancelPromptTurn}
             onChangePromptText={setWorldPromptText}
-            onExtractThreadToCinematic={(threadKey, mode) => onExtractWorldThreadToCinematicPreview({ threadKey, mode })}
-            onParkThread={(threadKey) => onParkWorldThread({ threadKey })}
-            onReject={handleRejectPromptOp}
             onRunSuggestion={handleRunPromptSuggestion}
             onSelectSession={setSelectedPromptSessionKey}
-            onSelectThread={setSelectedPromptThreadKey}
-            onResolveThread={(threadKey) => onResolveWorldThread({ threadKey })}
             onSubmit={handleSubmitWorldPrompt}
           />
         ) : activeRailTab === 'activity' ? (
@@ -2914,7 +2746,7 @@ export function WorldGraphPage({
               <button className="ghost-button compact danger" onClick={() => void onDeleteWorldDerivedComposition(inspectorOperator.key)} type="button">Delete Operation</button>
             </div>
           </div>
-        ) : inspectorResult ? (
+            ) : inspectorResult ? (
           <div className="detail-stack compact">
             <span className="eyebrow">Derived Result</span>
             <h3>{inspectorResult.title}</h3>
@@ -2941,8 +2773,9 @@ export function WorldGraphPage({
           </div>
         )}
           </>
-        )}
+        }
       </aside>
+      ) : null}
     </div>
   )
 }
@@ -2951,11 +2784,9 @@ function WorldPromptChatPanel({
   activePromptTurn,
   busy,
   cancelBusy,
-  pendingOps,
   promptText,
-  promptClassification,
   promptError,
-  promptPreview,
+  entityByKey,
   selectedEntity,
   selectedSession,
   selectedThreadKey,
@@ -2964,31 +2795,19 @@ function WorldPromptChatPanel({
   sessionMessages,
   worldThreads,
   worldPromptSessions,
-  promptSuggestions,
-  promptScopeDecision,
-  resolvingPromptOpIds,
   variant,
-  onApplyPreview,
-  onApprove,
   onCancelTurn,
   onChangePromptText,
-  onExtractThreadToCinematic,
-  onParkThread,
-  onReject,
   onRunSuggestion,
   onSelectSession,
-  onSelectThread,
-  onResolveThread,
   onSubmit,
 }: {
   activePromptTurn: WorldPromptTurn | null
   busy: boolean
   cancelBusy: boolean
-  pendingOps: WorldPromptPendingOp[]
   promptText: string
-  promptClassification: WorldPromptClassification | null
   promptError: string | null
-  promptPreview: WorldPromptPlanPreview | null
+  entityByKey: Map<string, WorldEntity>
   selectedEntity: WorldEntity | null
   selectedSession: WorldPromptSession | null
   selectedThreadKey: string | null
@@ -2997,264 +2816,165 @@ function WorldPromptChatPanel({
   sessionMessages: WorldPromptMessage[]
   worldThreads: WorldThread[]
   worldPromptSessions: WorldPromptSession[]
-  promptSuggestions: WorldPromptSuggestion[]
-  promptScopeDecision: WorldPromptScopeDecision | null
-  resolvingPromptOpIds: string[]
   variant: 'drawer' | 'grow'
-  onApplyPreview: (turnId: string) => Promise<void> | void
-  onApprove: (turnId: string, opId: string) => Promise<void> | void
   onCancelTurn: (turnId: string) => Promise<void> | void
   onChangePromptText: (value: string) => void
-  onExtractThreadToCinematic: (threadKey: string, mode?: 'teaser' | 'scene') => Promise<void> | void
-  onParkThread: (threadKey: string) => Promise<void> | void
-  onReject: (turnId: string, opId: string) => Promise<void> | void
   onRunSuggestion: (suggestion: WorldPromptSuggestion) => Promise<void> | void
   onSelectSession: (key: string | null) => void
-  onSelectThread: (key: string | null) => void
-  onResolveThread: (threadKey: string) => Promise<void> | void
   onSubmit: (promptOverride?: string) => Promise<void> | void
 }) {
-  const feed = sessionEvents.slice(-20).reverse()
-  const previewItems = promptPreview?.items ?? []
-  const previewTurnId = activePromptTurn?.id ?? sessionEvents[sessionEvents.length - 1]?.turnId ?? null
-  const previewImpact = previewItems.reduce((totals, item) => ({
-    nodeCount: totals.nodeCount + item.estimatedImpact.nodeCount,
-    edgeCount: totals.edgeCount + item.estimatedImpact.edgeCount,
-    queueCount: totals.queueCount + item.estimatedImpact.queueCount,
-  }), { nodeCount: 0, edgeCount: 0, queueCount: 0 })
-  const canApplyPreview = Boolean(promptPreview?.canApplyFirstWave && !promptPreview.appliedAt && selectedSession)
+  const transcriptRef = useRef<HTMLDivElement | null>(null)
+  const transcriptEndRef = useRef<HTMLDivElement | null>(null)
+  const [stickToBottom, setStickToBottom] = useState(true)
+  const transcriptEntries = useMemo(
+    () => buildWorldPromptTranscriptEntries({
+      events: sessionEvents,
+      messages: sessionMessages,
+      entityByKey,
+    }),
+    [entityByKey, sessionEvents, sessionMessages],
+  )
   const canCancelTurn = Boolean(activePromptTurn && ['queued', 'streaming', 'awaiting_approval'].includes(activePromptTurn.status))
-  const runThreadPrompt = (thread: WorldThread, mode: 'continue' | 'plan') => {
-    onSelectThread(thread.key)
-    const prompt = mode === 'plan'
-      ? `Plan only the next best beat for the world thread "${thread.title}". Preserve existing canon and do not apply graph mutations.`
-      : `Continue the world thread "${thread.title}" with one compact additive step. Build on: ${thread.summary || thread.title}.`
-    return onSubmit(prompt)
+  const selectedThread = useMemo(
+    () => worldThreads.find((thread) => thread.key === selectedThreadKey) ?? null,
+    [selectedThreadKey, worldThreads],
+  )
+  const activeSuggestionRowId = useMemo(() => {
+    for (const entry of [...transcriptEntries].reverse()) {
+      if (entry.kind === 'suggestion_row' || entry.kind === 'choice_row') {
+        return entry.id
+      }
+    }
+    return null
+  }, [transcriptEntries])
+
+  useEffect(() => {
+    if (!stickToBottom) return
+    transcriptEndRef.current?.scrollIntoView({ block: 'end', behavior: activePromptTurn ? 'smooth' : 'auto' })
+  }, [activePromptTurn, stickToBottom, transcriptEntries.length])
+
+  function handleTranscriptScroll() {
+    const element = transcriptRef.current
+    if (!element) return
+    const threshold = 56
+    const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight
+    setStickToBottom(distanceFromBottom <= threshold)
   }
+
   return (
-    <div className={variant === 'grow' ? 'detail-stack compact world-prompt-workbench-panel' : 'detail-stack compact'}>
-      <div className="drawer-head">
+    <div className={`world-prompt-chat-shell${variant === 'grow' ? ' is-grow' : ''}`}>
+      <div className="world-prompt-chat-head">
         <div>
           <span className="eyebrow">Prompt To World</span>
           <h3>{selectedSession?.title ?? 'World Session'}</h3>
         </div>
-      </div>
-
-      <label className="field-block">
-        <span>Session</span>
-        <select value={selectedSession?.key ?? ''} onChange={(event) => onSelectSession(event.target.value || null)}>
-          {worldPromptSessions.length === 0 ? <option value="">Default session</option> : null}
-          {worldPromptSessions.map((session) => (
-            <option key={session.id} value={session.key}>{session.title}</option>
-          ))}
-        </select>
-      </label>
-
-      <div className="inline-note">
-        {selectedEntity ? `Focus: ${selectedEntity.name}. ` : ''}
-        {selectedThreadKey ? `Thread: ${worldThreads.find((thread) => thread.key === selectedThreadKey)?.title ?? selectedThreadKey}. ` : ''}
-        View: {selectedView.name}
-        {activePromptTurn ? ` · ${activePromptTurn.status}` : ''}
-        {promptScopeDecision ? ` · ${promptScopeDecision.mode}` : ''}
-        {promptClassification ? ` · ${describePromptClassification(promptClassification)}` : ''}
-      </div>
-
-      {promptError ? <div className="inline-note is-error">{promptError}</div> : null}
-
-      <div className="editor-section compact-section">
-        <label className="field-block">
-          <span>Prompt</span>
-          <textarea
-            rows={variant === 'grow' ? 5 : 4}
-            placeholder="Add two rival siblings, establish their shared history, and give one a ruined observatory as a base."
-            value={promptText}
-            onChange={(event) => onChangePromptText(event.target.value)}
-          />
+        <label className="world-prompt-session-select">
+          <span>Session</span>
+          <select value={selectedSession?.key ?? ''} onChange={(event) => onSelectSession(event.target.value || null)}>
+            {worldPromptSessions.length === 0 ? <option value="">Default session</option> : null}
+            {worldPromptSessions.map((session) => (
+              <option key={session.id} value={session.key}>{session.title}</option>
+            ))}
+          </select>
         </label>
-        <div className="world-inspector-actions">
-          <button className="primary-button compact" disabled={busy || !promptText.trim()} onClick={() => void onSubmit()} type="button">
-            {busy ? 'Growing...' : 'Grow World'}
-          </button>
+      </div>
+
+      <div className="world-prompt-context-line">
+        {selectedEntity ? <span>Focus: <strong>{selectedEntity.name}</strong></span> : null}
+        {selectedThread ? <span>Thread: <strong>{selectedThread.title}</strong></span> : null}
+        <span>View: <strong>{selectedView.name || 'World'}</strong></span>
+        {activePromptTurn ? <span>Status: <strong>{activePromptTurn.status}</strong></span> : null}
+      </div>
+
+      <div className="world-prompt-transcript" onScroll={handleTranscriptScroll} ref={transcriptRef}>
+        {transcriptEntries.length === 0 && !promptError ? (
+          <div className="world-prompt-empty">
+            <span className="eyebrow">Ready</span>
+            <strong>Describe the first characters, places, lore, or conflicts you want in this world.</strong>
+          </div>
+        ) : null}
+        {transcriptEntries.map((entry) => {
+          if (entry.kind === 'suggestion_row' || entry.kind === 'choice_row') {
+            return (
+              <div key={entry.id} className="world-prompt-row world-prompt-row-system">
+                <span className="world-prompt-row-label">{entry.label ?? 'Next move'}</span>
+                <div className="world-prompt-inline-choices">
+                  {entry.suggestions.map((suggestion) => (
+                    <button
+                      key={suggestion.id}
+                      className={`world-prompt-suggestion-card${suggestion.style === 'primary' ? ' is-primary' : ''}`}
+                      disabled={busy}
+                      onClick={() => void onRunSuggestion(suggestion)}
+                      type="button"
+                    >
+                      <strong>{suggestion.label}</strong>
+                      {suggestion.summary ? <span>{suggestion.summary}</span> : null}
+                      {promptSuggestionImpactLabel(suggestion) ? <small>{promptSuggestionImpactLabel(suggestion)}</small> : null}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )
+          }
+
+          if (entry.kind === 'user_message' || entry.kind === 'assistant_message') {
+            return (
+              <div key={entry.id} className={`world-prompt-row ${entry.kind === 'user_message' ? 'world-prompt-row-user' : 'world-prompt-row-assistant'}`}>
+                <span className="world-prompt-row-label">{entry.kind === 'user_message' ? 'You' : 'GraphCore'}</span>
+                <div className={`world-prompt-bubble${entry.pending ? ' is-pending' : ''}`}>
+                  {entry.content}
+                </div>
+              </div>
+            )
+          }
+
+          if (entry.kind === 'system_status' || entry.kind === 'entity_created' || entry.kind === 'relationship_created' || entry.kind === 'queue_started') {
+            return (
+              <div
+                key={entry.id}
+                className={`world-prompt-row world-prompt-row-system${entry.kind === 'system_status' && entry.tone === 'error' ? ' is-error' : ''}`}
+              >
+                <span className="world-prompt-row-label">{entry.label}</span>
+                {entry.detail ? <div className="world-prompt-line">{entry.detail}</div> : null}
+              </div>
+            )
+          }
+
+          return null
+        })}
+        {promptError ? (
+          <div className="world-prompt-row world-prompt-row-system is-error">
+            <span className="world-prompt-row-label">Error</span>
+            <div className="world-prompt-line">{promptError}</div>
+          </div>
+        ) : null}
+        {!activePromptTurn && activeSuggestionRowId ? (
+          <div className="world-prompt-row world-prompt-row-system">
+            <span className="world-prompt-row-label">Continue</span>
+            <div className="world-prompt-line">Choose a next move or type a follow-up below.</div>
+          </div>
+        ) : null}
+        <div ref={transcriptEndRef} />
+      </div>
+
+      <div className="world-prompt-composer">
+        <textarea
+          rows={variant === 'grow' ? 4 : 3}
+          placeholder="Add two rival siblings, establish their shared history, and give one a ruined observatory as a base."
+          value={promptText}
+          onChange={(event) => onChangePromptText(event.target.value)}
+        />
+        <div className="world-prompt-composer-actions">
           {canCancelTurn ? (
             <button className="ghost-button compact" disabled={cancelBusy} onClick={() => void onCancelTurn(activePromptTurn!.id)} type="button">
               Cancel Turn
             </button>
-          ) : null}
-        </div>
-      </div>
-
-      <div className="editor-section compact-section">
-        <div className="section-head">
-          <div>
-            <span className="eyebrow">Live Steps</span>
-            <h3>{feed.length} event{feed.length === 1 ? '' : 's'}</h3>
-          </div>
-        </div>
-        {feed.length === 0 ? <div className="inline-note">Prompt this world to begin streaming planner steps and graph updates.</div> : null}
-        <div className="diagnostic-stack">
-          {feed.map((event) => {
-            const description = describePromptFeedEvent(event)
-            return (
-              <div key={event.id} className="inline-note">
-                <strong>{description.label}</strong>
-                {description.detail ? <span> {description.detail}</span> : null}
-              </div>
-            )
-          })}
-        </div>
-      </div>
-
-      {promptPreview ? (
-        <div className="editor-section compact-section world-prompt-preview-card">
-          <div className="section-head">
-            <div>
-              <span className="eyebrow">Preview</span>
-              <h3>{promptPreview.mode === 'plan_only' ? 'Plan Only' : 'First Wave Ready'}</h3>
-            </div>
-          </div>
-          <div className="inline-note">{promptPreview.requestSummary || 'Previewed prompt actions for this turn.'}</div>
-          <div className="chip-row">
-            <span className="chip">{promptPreview.mode === 'plan_only' ? 'No mutations yet' : 'Staged first wave'}</span>
-            {previewImpact.nodeCount > 0 ? <span className="chip">+{previewImpact.nodeCount} nodes</span> : null}
-            {previewImpact.edgeCount > 0 ? <span className="chip">+{previewImpact.edgeCount} links</span> : null}
-            {previewImpact.queueCount > 0 ? <span className="chip">{previewImpact.queueCount} queue{previewImpact.queueCount === 1 ? '' : 's'}</span> : null}
-            {promptPreview.appliedAt ? <span className="chip">Applied</span> : null}
-          </div>
-          {previewItems.length > 0 ? (
-            <div className="world-preview-list">
-              {previewItems.map((item) => (
-                <div key={item.id} className="schema-card">
-                  <div className="schema-card-head">
-                    <strong>{item.title}</strong>
-                    <span>{item.status}</span>
-                  </div>
-                  {item.summary ? <div className="inline-note">{item.summary}</div> : null}
-                  <div className="chip-row">
-                    <span className="chip">{item.diffMode === 'touches_existing' ? 'Touches Existing' : 'New'}</span>
-                    {item.touchesCanon ? <span className="chip">Canon Touch</span> : null}
-                    {item.approvalRequired ? <span className="chip">Approval Required</span> : null}
-                    {item.estimatedImpact.nodeCount > 0 ? <span className="chip">+{item.estimatedImpact.nodeCount} nodes</span> : null}
-                    {item.estimatedImpact.edgeCount > 0 ? <span className="chip">+{item.estimatedImpact.edgeCount} links</span> : null}
-                    {item.estimatedImpact.queueCount > 0 ? <span className="chip">{item.estimatedImpact.queueCount} queue</span> : null}
-                  </div>
-                </div>
-              ))}
-            </div>
           ) : (
-            <div className="inline-note">No coherent first-wave items were retained for preview.</div>
+            <span className="inline-note">{busy ? 'Working...' : 'Prompt stays with this session.'}</span>
           )}
-          <div className="world-inspector-actions">
-            <button className="primary-button compact" disabled={busy || !canApplyPreview || !previewTurnId} onClick={() => previewTurnId ? void onApplyPreview(previewTurnId) : undefined} type="button">
-              {promptPreview.appliedAt ? 'Applied' : 'Apply First Wave'}
-            </button>
-          </div>
-        </div>
-      ) : null}
-
-      <div className="editor-section compact-section">
-        <div className="section-head">
-          <div>
-            <span className="eyebrow">Threads</span>
-            <h3>{worldThreads.length} active</h3>
-          </div>
-        </div>
-        {worldThreads.length === 0 ? <div className="inline-note">No active world threads yet. Broad prompts will start creating them as the world takes shape.</div> : null}
-        <div className="world-thread-list">
-          {worldThreads.map((thread) => (
-            <div key={thread.id} className={`schema-card world-thread-card${selectedThreadKey === thread.key ? ' is-selected' : ''}`}>
-              <div className="schema-card-head">
-                <strong>{thread.title}</strong>
-                <span>{thread.priority}</span>
-              </div>
-              {thread.summary ? <div className="inline-note">{thread.summary}</div> : null}
-              <div className="chip-row">
-                <span className="chip">{thread.status}</span>
-                <span className="chip">{thread.linkedEntityKeys.length} linked</span>
-              </div>
-              <div className="world-inspector-actions">
-                <button className="ghost-button compact" onClick={() => onSelectThread(thread.key)} type="button">Select</button>
-                <button className="primary-button compact" disabled={busy} onClick={() => void runThreadPrompt(thread, 'continue')} type="button">Continue Thread</button>
-                <button className="ghost-button compact" disabled={busy} onClick={() => void runThreadPrompt(thread, 'plan')} type="button">Plan Next Beat</button>
-                <button className="ghost-button compact" disabled={busy} onClick={() => void onExtractThreadToCinematic(thread.key, 'teaser')} type="button">Extract To Cinematic</button>
-                <button className="ghost-button compact" disabled={busy} onClick={() => void onResolveThread(thread.key)} type="button">Resolve</button>
-                <button className="ghost-button compact" disabled={busy} onClick={() => void onParkThread(thread.key)} type="button">Park</button>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="editor-section compact-section">
-        <div className="section-head">
-          <div>
-            <span className="eyebrow">Next Moves</span>
-            <h3>{promptSuggestions.length} suggestion{promptSuggestions.length === 1 ? '' : 's'}</h3>
-          </div>
-        </div>
-        {promptSuggestions.length === 0 ? <div className="inline-note">No narrowing suggestions on the current turn.</div> : null}
-        <div className="world-choice-list">
-          {promptSuggestions.map((suggestion) => (
-            <button
-              key={suggestion.id}
-              className={`world-prompt-suggestion-card${suggestion.style === 'primary' ? ' is-primary' : ''}`}
-              disabled={busy}
-              onClick={() => void onRunSuggestion(suggestion)}
-              type="button"
-            >
-              <strong>{suggestion.label}</strong>
-              {suggestion.threadKey ? <small>Thread-backed</small> : null}
-              {suggestion.summary ? <span>{suggestion.summary}</span> : null}
-              {promptSuggestionImpactLabel(suggestion) ? <small>{promptSuggestionImpactLabel(suggestion)}</small> : null}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="editor-section compact-section">
-        <div className="section-head">
-          <div>
-            <span className="eyebrow">Pending Approval</span>
-            <h3>{pendingOps.length} op{pendingOps.length === 1 ? '' : 's'}</h3>
-          </div>
-        </div>
-        {pendingOps.length === 0 ? <div className="inline-note">No held changes.</div> : null}
-        <div className="diagnostic-stack">
-          {pendingOps.map((entry) => {
-            const resolving = resolvingPromptOpIds.includes(entry.op.id)
-            return (
-              <div key={entry.op.id} className="schema-card world-relationship-card">
-                <div className="schema-card-head">
-                  <strong>{describePromptOp(entry.op)}</strong>
-                  <span>{entry.turn.prompt}</span>
-                </div>
-                <div className="inline-note">{entry.op.rationale || 'Requires approval before applying to the existing graph.'}</div>
-                <div className="world-inspector-actions">
-                  <button className="primary-button compact" disabled={resolving} onClick={() => void onApprove(entry.turn.id, entry.op.id)} type="button">
-                    {resolving ? 'Working...' : 'Approve'}
-                  </button>
-                  <button className="ghost-button compact" disabled={resolving} onClick={() => void onReject(entry.turn.id, entry.op.id)} type="button">Reject</button>
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      </div>
-
-      <div className="editor-section compact-section">
-        <div className="section-head">
-          <div>
-            <span className="eyebrow">Conversation</span>
-            <h3>{sessionMessages.length} message{sessionMessages.length === 1 ? '' : 's'}</h3>
-          </div>
-        </div>
-        {sessionMessages.length === 0 ? <div className="inline-note">Prompt this world to begin growing the graph live.</div> : null}
-        <div className="diagnostic-stack">
-          {sessionMessages.slice(-12).map((message) => (
-            <div key={message.id} className="inline-note">
-              <strong>{message.role}</strong>
-              <span> {message.content}</span>
-            </div>
-          ))}
+          <button className="primary-button compact" disabled={busy || !promptText.trim()} onClick={() => void onSubmit()} type="button">
+            {busy ? 'Growing...' : 'Send'}
+          </button>
         </div>
       </div>
     </div>

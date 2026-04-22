@@ -173,6 +173,9 @@ verify_jwt = false
 [functions.cancel-world-prompt-turn]
 verify_jwt = false
 
+[functions.reset-project-world]
+verify_jwt = false
+
 [functions.start-world-build]
 verify_jwt = false
 

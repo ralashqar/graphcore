@@ -311,6 +311,32 @@ export const worldGraphExpansionRequestSchema = z.object({
   model: z.string().min(1).default('gpt-5-mini'),
 })
 
+export const resetProjectWorldRequestSchema = z.object({
+  projectId: z.string().min(1),
+  draftId: z.string().min(1),
+})
+
+export const resetProjectWorldResponseSchema = z.object({
+  ok: z.literal(true),
+  projectId: z.string().min(1),
+  draftId: z.string().min(1),
+  deleted: z.object({
+    worldPromptEvents: z.number().int().nonnegative().default(0),
+    worldPromptMessages: z.number().int().nonnegative().default(0),
+    worldPromptTurns: z.number().int().nonnegative().default(0),
+    worldPromptSessions: z.number().int().nonnegative().default(0),
+    worldThreads: z.number().int().nonnegative().default(0),
+    worldBuildBatches: z.number().int().nonnegative().default(0),
+    worldGraphConnections: z.number().int().nonnegative().default(0),
+    worldResults: z.number().int().nonnegative().default(0),
+    worldOperators: z.number().int().nonnegative().default(0),
+    worldRelationships: z.number().int().nonnegative().default(0),
+    worldViews: z.number().int().nonnegative().default(0),
+    worldEntities: z.number().int().nonnegative().default(0),
+    projectDefinitions: z.number().int().nonnegative().default(0),
+  }),
+})
+
 export const worldGraphGeneratorEntitySchema = z.object({
   name: z.string(),
   summary: z.string().default(''),
@@ -364,3 +390,5 @@ export type WorldDerivedCompositionUpdateInput = z.infer<typeof worldDerivedComp
 export type WorldGraphSeedRequest = z.infer<typeof worldGraphSeedRequestSchema>
 export type WorldGraphExpansionRequest = z.infer<typeof worldGraphExpansionRequestSchema>
 export type WorldGraphGeneratorResult = z.infer<typeof worldGraphGeneratorResultSchema>
+export type ResetProjectWorldRequest = z.infer<typeof resetProjectWorldRequestSchema>
+export type ResetProjectWorldResponse = z.infer<typeof resetProjectWorldResponseSchema>
