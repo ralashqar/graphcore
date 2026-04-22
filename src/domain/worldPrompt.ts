@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { projectContextSchema } from './projectContext.ts'
 
 import {
   worldEntityCreateInputSchema,
@@ -405,6 +406,7 @@ export const worldPromptSnapshotSchema = z.object({
   worldGraphConnections: z.array(worldGraphConnectionSchema).default([]),
   worldThreads: z.array(worldThreadSchema).default([]),
   gameSpec: looseRecordSchema.nullable().default(null),
+  projectContext: projectContextSchema.nullable().default(null),
 })
 
 export const worldPromptStartTurnRequestSchema = z.object({

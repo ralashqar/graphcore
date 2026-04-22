@@ -7,6 +7,7 @@ import {
   getArtStylePresetBestFor,
   getArtStylePresetPromptDirectives,
   getArtStylePresetsByGroup,
+  getOnboardingArtStylePresets,
   getRecommendedArtStylePresetForCinematic,
   resolveArtStylePresetForCinematic,
 } from './artStylePresets.ts'
@@ -35,6 +36,25 @@ test('best-for guidance is available for UGC presets', () => {
 
   assert.match(bestFor, /creator/i)
   assert.match(bestFor, /validation|reframe|confession/i)
+})
+
+test('story onboarding exposes live-action cinematic as a first-class story style', () => {
+  const presets = getOnboardingArtStylePresets({
+    projectType: 'story',
+    projectSubtype: 'feature_film',
+  })
+
+  assert.ok(presets.some((preset) => preset.id === 'live_action_cinematic'))
+  assert.equal(presets[0]?.id, 'live_action_cinematic')
+})
+
+test('custom onboarding style stays last after story style ranking', () => {
+  const presets = getOnboardingArtStylePresets({
+    projectType: 'story',
+    projectSubtype: 'feature_film',
+  })
+
+  assert.equal(presets.at(-1)?.id, 'custom')
 })
 
 test('cinematic subtype recommendations map creator and faceless UGC to appropriate capture presets', () => {

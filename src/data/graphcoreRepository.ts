@@ -100,6 +100,13 @@ import {
   type CinematicRunStartRequest,
 } from '../domain/cinematics'
 import { gameSpecSchema } from '../domain/gameSpec'
+import { projectContextSchema, type ProjectContext } from '../domain/projectContext'
+import {
+  buildProjectContext,
+  getCinematicFormatSubtypeForProjectSubtype,
+  getCinematicPresetFamilyForProjectSubtype,
+  getGameArchetypeIdForProjectSubtype,
+} from '../domain/projectContextProfiles'
 import { buildBootstrapPatch, createDefaultGameSpec } from '../domain/presetCatalog'
 import type { PromptPatchRequest, PromptPatchResponse } from '../domain/prompting'
 import {
@@ -189,6 +196,9 @@ function filterSupportedArchetypeSeedsForEnumError<TSeed extends { appliesToKind
 ) {
   return seeds.filter((seed) => {
     if (isMissingAbilityEnumError(message) && seed.appliesToKind === 'ability') return false
+    if (isMissingDefinitionKindEnumError(message, 'group') && seed.appliesToKind === 'group') return false
+    if (isMissingDefinitionKindEnumError(message, 'concept') && seed.appliesToKind === 'concept') return false
+    if (isMissingDefinitionKindEnumError(message, 'event') && seed.appliesToKind === 'event') return false
     if (isMissingDefinitionKindEnumError(message, 'environment') && seed.appliesToKind === 'environment') return false
     if (isMissingDefinitionKindEnumError(message, 'world_model') && seed.appliesToKind === 'world_model') return false
     return true
@@ -408,6 +418,10 @@ export type GlobalProjectContextUpdate = {
   artStyleDescription: string
 }
 
+export type ProjectOnboardingContextUpdate = {
+  projectContext: ProjectContext
+}
+
 type DraftSummaryRow = {
   id: string
   project_id: string
@@ -449,10 +463,16 @@ function definitionKindForWorldNodeType(nodeType: WorldEntity['nodeType']): Defi
   switch (nodeType) {
     case 'actor':
       return 'character'
+    case 'group':
+      return 'group'
     case 'place':
       return 'environment'
     case 'object':
       return 'item'
+    case 'concept':
+      return 'concept'
+    case 'event':
+      return 'event'
     default:
       return null
   }
@@ -2339,6 +2359,10 @@ export async function loadProjectSnapshot(
       draft.metadata && typeof draft.metadata === 'object' && draft.metadata !== null && 'gameSpec' in draft.metadata
         ? (draft.metadata as { gameSpec?: unknown }).gameSpec
         : null,
+    projectContext:
+      draft.metadata && typeof draft.metadata === 'object' && draft.metadata !== null && 'projectContext' in draft.metadata
+        ? (draft.metadata as { projectContext?: unknown }).projectContext
+        : null,
     archetypes: archetypes.map((archetype) => ({
       id: archetype.id,
       key: archetype.key,
@@ -3695,6 +3719,7 @@ export async function persistGlobalProjectContext(
   project: ProjectSnapshot['project']
   draft: ProjectSnapshot['draft']
   gameSpec: ProjectSnapshot['gameSpec']
+  projectContext: ProjectSnapshot['projectContext']
 }> {
   await getValidatedSession('Sign in and load a live GraphCore draft before updating global project context.')
 
@@ -3735,6 +3760,7 @@ export async function persistGlobalProjectContext(
   const nextDraftMetadata = {
     ...(snapshot.draft.metadata ?? {}),
     gameSpec: nextGameSpec,
+    projectContext: snapshot.projectContext,
   }
 
   const draftResponse = await supabase
@@ -3765,6 +3791,95 @@ export async function persistGlobalProjectContext(
       metadata: draftResponse.data.metadata ?? {},
     },
     gameSpec: nextGameSpec,
+    projectContext: snapshot.projectContext,
+  }
+}
+
+export async function persistProjectOnboardingContext(
+  snapshot: ProjectSnapshot,
+  updates: ProjectOnboardingContextUpdate,
+): Promise<{
+  draft: ProjectSnapshot['draft']
+  gameSpec: ProjectSnapshot['gameSpec']
+  projectContext: ProjectSnapshot['projectContext']
+}> {
+  await getValidatedSession('Sign in and load a live GraphCore draft before saving project onboarding.')
+
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Sign in and load a live GraphCore draft before saving project onboarding.')
+  }
+
+  const nextProjectContext = projectContextSchema.parse(updates.projectContext)
+  const nextGameArchetypeId = getGameArchetypeIdForProjectSubtype(nextProjectContext.projectSubtype)
+  const nextGameSpec = nextGameArchetypeId
+    ? gameSpecSchema.parse({
+        ...createGameSpecFromArchetype(nextGameArchetypeId),
+        ...(snapshot.gameSpec ?? {}),
+        theme: {
+          ...(snapshot.gameSpec?.theme ?? {}),
+          artStylePreset: nextProjectContext.artStylePreset,
+          artStyleDescription: nextProjectContext.artStyleDescription,
+        },
+        cinematics: {
+          ...(snapshot.gameSpec?.cinematics ?? {}),
+          ...(getCinematicPresetFamilyForProjectSubtype(nextProjectContext.projectSubtype)
+            ? {
+                presetFamily: getCinematicPresetFamilyForProjectSubtype(nextProjectContext.projectSubtype),
+                formatSubtype: getCinematicFormatSubtypeForProjectSubtype(nextProjectContext.projectSubtype) ?? undefined,
+                presetSource: 'manual_override',
+              }
+            : {}),
+        },
+      })
+    : snapshot.gameSpec
+      ? gameSpecSchema.parse({
+          ...snapshot.gameSpec,
+          theme: {
+            ...(snapshot.gameSpec?.theme ?? {}),
+            artStylePreset: nextProjectContext.artStylePreset,
+            artStyleDescription: nextProjectContext.artStyleDescription,
+          },
+          cinematics: {
+            ...(snapshot.gameSpec?.cinematics ?? {}),
+            ...(getCinematicPresetFamilyForProjectSubtype(nextProjectContext.projectSubtype)
+              ? {
+                  presetFamily: getCinematicPresetFamilyForProjectSubtype(nextProjectContext.projectSubtype),
+                  formatSubtype: getCinematicFormatSubtypeForProjectSubtype(nextProjectContext.projectSubtype) ?? undefined,
+                  presetSource: 'manual_override',
+                }
+              : {}),
+          },
+        })
+      : null
+
+  const nextDraftMetadata = {
+    ...(snapshot.draft.metadata ?? {}),
+    ...(nextGameSpec ? { gameSpec: nextGameSpec } : {}),
+    projectContext: nextProjectContext,
+  }
+
+  const draftResponse = await supabase
+    .from('project_drafts')
+    .update({
+      metadata: nextDraftMetadata,
+    })
+    .eq('id', snapshot.draft.id)
+    .select('id, name, version, is_primary, updated_at, metadata')
+    .single()
+
+  if (draftResponse.error) throw new Error(draftResponse.error.message)
+
+  return {
+    draft: {
+      id: draftResponse.data.id,
+      name: draftResponse.data.name,
+      version: draftResponse.data.version,
+      isPrimary: draftResponse.data.is_primary,
+      updatedAt: draftResponse.data.updated_at,
+      metadata: draftResponse.data.metadata ?? {},
+    },
+    gameSpec: nextGameSpec,
+    projectContext: nextProjectContext,
   }
 }
 
@@ -4221,6 +4336,28 @@ export async function resetProjectWorld(snapshot: ProjectSnapshot) {
   }
 
   resetProjectWorldResponseSchema.parse(response.data)
+
+  if (snapshot.projectContext) {
+    const nextProjectContext = buildProjectContext({
+      projectType: snapshot.projectContext.projectType,
+      projectSubtype: snapshot.projectContext.projectSubtype,
+      artStylePreset: snapshot.projectContext.artStylePreset,
+      artStyleDescription: snapshot.projectContext.artStyleDescription,
+      source: snapshot.projectContext.source,
+      completed: false,
+    })
+    const draftMetadata = {
+      ...(snapshot.draft.metadata ?? {}),
+      projectContext: nextProjectContext,
+    }
+    const metadataUpdate = await supabase
+      .from('project_drafts')
+      .update({ metadata: draftMetadata })
+      .eq('id', snapshot.draft.id)
+    if (metadataUpdate.error) {
+      throw new Error(metadataUpdate.error.message)
+    }
+  }
 
   return reloadLiveSnapshot(snapshot)
 }
@@ -4915,6 +5052,7 @@ function buildWorldPromptSnapshot(snapshot: ProjectSnapshot): WorldPromptStartTu
     worldGraphConnections: snapshot.worldGraphConnections,
     worldThreads: snapshot.worldThreads,
     gameSpec: snapshot.gameSpec as Record<string, unknown> | null,
+    projectContext: snapshot.projectContext,
   }
 }
 

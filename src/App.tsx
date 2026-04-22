@@ -30,8 +30,8 @@ import { normalizeCinematicGraphProjection } from './domain/cinematicGraphProjec
 import { compileCinematicGraphFromScriptDoc } from './domain/cinematicScriptCompiler'
 import { compileBundle } from './domain/compiler'
 import { createEnvironmentBlueprint } from './domain/environmentBlueprint'
-import { createGameSpecFromArchetype } from './domain/gameArchetypes'
 import { gameSpecSchema } from './domain/gameSpec'
+import type { ProjectContext } from './domain/projectContext'
 import { buildDefaultDefinitionComponents, projectSnapshotSchema, schemaCatalog } from './domain/graphcore'
 import type {
   AssemblyGraphDefinition,
@@ -113,9 +113,6 @@ const ActivityWorkspace = lazy(() =>
 )
 const PromptDock = lazy(() =>
   import('./features/prompts/PromptDock').then((module) => ({ default: module.PromptDock })),
-)
-const GameBootstrapOnboarding = lazy(() =>
-  import('./features/onboarding/GameBootstrapOnboarding').then((module) => ({ default: module.GameBootstrapOnboarding })),
 )
 const WorldBuildPlanModal = lazy(() =>
   import('./features/prompts/WorldBuildPlanModal').then((module) => ({ default: module.WorldBuildPlanModal })),
@@ -1004,11 +1001,7 @@ export default function App() {
   const [authPendingConfirmation, setAuthPendingConfirmation] = useState(false)
   const [workspaceBootstrapPending, setWorkspaceBootstrapPending] = useState(false)
   const [workspaceBootstrapError, setWorkspaceBootstrapError] = useState<string | null>(null)
-  const [bootstrapGameArchetypeId, setBootstrapGameArchetypeId] = useState('rpg')
-  const [bootstrapConceptPrompt, setBootstrapConceptPrompt] = useState('')
-  const [bootstrapArtStylePreset, setBootstrapArtStylePreset] = useState<string>(DEFAULT_ART_STYLE_PRESET)
-  const [bootstrapArtStyleDescription, setBootstrapArtStyleDescription] = useState('')
-  const [bootstrapOnboardingOpen, setBootstrapOnboardingOpen] = useState(false)
+  const [projectOnboardingSaving, setProjectOnboardingSaving] = useState(false)
   const [hasLocalSnapshotChanges, setHasLocalSnapshotChanges] = useState(false)
   const [pendingStoryboardNodeKeys, setPendingStoryboardNodeKeys] = useState<string[]>([])
   const globalWorkspaceAutoFocusReleasesNonce = 0
@@ -1299,8 +1292,11 @@ export default function App() {
   const selectedNode = useMemo(() => selectedGraph?.nodes.find((node) => node.key === selectedNodeKey) ?? null, [selectedGraph, selectedNodeKey])
   const selectedEdge = useMemo(() => selectedGraph?.edges.find((edge) => edge.key === selectedEdgeKey) ?? null, [selectedEdgeKey, selectedGraph])
   const selectedAsset = useMemo(() => snapshot?.assets.find((asset) => asset.key === selectedAssetKey) ?? snapshot?.assets[0] ?? null, [selectedAssetKey, snapshot])
-  const activeGame = useMemo(() => games.find((game) => game.projectId === snapshot?.project.id) ?? null, [games, snapshot?.project.id])
-  const activeGameIsEmpty = loadedState?.source === 'supabase' && (!!snapshot && !snapshot.gameSpec && snapshot.definitions.length === 0 && snapshot.graphs.length === 0)
+  const activeGameIsEmpty = loadedState?.source === 'supabase'
+    && !!snapshot
+    && snapshot.worldEntities.length === 0
+    && !snapshot.projectContext?.onboardingCompletedAt
+  const shouldShowWorldOnboarding = activeTab === 'graph' && activeGameIsEmpty
 
   useEffect(() => {
     if (loading) return
@@ -1310,26 +1306,6 @@ export default function App() {
     }
     setPromptRuntimeError(null)
   }, [loading, session])
-
-  useEffect(() => {
-    if (!snapshot) return
-    const nextArchetypeId = typeof snapshot.gameSpec?.overrides?.gameArchetypeId === 'string'
-      ? snapshot.gameSpec.overrides.gameArchetypeId
-      : 'rpg'
-    const nextConceptPrompt = typeof snapshot.gameSpec?.overrides?.gameConceptPrompt === 'string'
-      ? snapshot.gameSpec.overrides.gameConceptPrompt
-      : ''
-    const nextArtStylePreset = typeof snapshot.gameSpec?.theme?.artStylePreset === 'string'
-      ? snapshot.gameSpec.theme.artStylePreset
-      : DEFAULT_ART_STYLE_PRESET
-    const nextArtStyleDescription = typeof snapshot.gameSpec?.theme?.artStyleDescription === 'string'
-      ? snapshot.gameSpec.theme.artStyleDescription
-      : ''
-    setBootstrapGameArchetypeId(nextArchetypeId)
-    setBootstrapConceptPrompt(nextConceptPrompt)
-    setBootstrapArtStylePreset(nextArtStylePreset)
-    setBootstrapArtStyleDescription(nextArtStyleDescription)
-  }, [snapshot?.draft.id, snapshot?.gameSpec])
 
   useEffect(() => {
     if (!snapshot) return
@@ -2674,11 +2650,7 @@ export default function App() {
         const shouldDeleteLinkedDefinition = Boolean(
           removedEntity
           && linkedDefinition
-          && (
-            (removedEntity.nodeType === 'actor' && linkedDefinition.kind === 'character')
-            || (removedEntity.nodeType === 'place' && linkedDefinition.kind === 'environment')
-            || (removedEntity.nodeType === 'object' && linkedDefinition.kind === 'item')
-          ),
+          && definitionKindForWorldEntity(removedEntity.nodeType) === linkedDefinition.kind,
         )
         const removedOperatorKeys = current.worldOperators
           .filter((entry) => entry.inputEntityKeys.includes(entityKey))
@@ -4371,6 +4343,7 @@ export default function App() {
         intent: 'create_content',
         phase: 'content',
         gameSpec: activeGameSpec,
+        projectContext: snapshot.projectContext,
         gameArchetypeId: typeof snapshot.gameSpec?.overrides?.gameArchetypeId === 'string' ? snapshot.gameSpec.overrides.gameArchetypeId : undefined,
         selectedPresetIds,
         allowedPresetIds: selectedPresetIds,
@@ -4692,11 +4665,7 @@ export default function App() {
   }
 
   function handleOpenBootstrapOnboarding() {
-    setBootstrapGameArchetypeId('rpg')
-    setBootstrapConceptPrompt('')
-    setBootstrapArtStylePreset(DEFAULT_ART_STYLE_PRESET)
-    setBootstrapArtStyleDescription('')
-    setBootstrapOnboardingOpen(true)
+    setActiveTab('graph')
   }
 
   async function handleOpenNewGame() {
@@ -4711,15 +4680,8 @@ export default function App() {
     setPromptRuntimeError(null)
 
     try {
-      const state = await refreshWorkspaceState(() => workspaceService.createGame())
-      setBootstrapGameArchetypeId('rpg')
-      setBootstrapConceptPrompt('')
-      setBootstrapArtStylePreset(DEFAULT_ART_STYLE_PRESET)
-      setBootstrapArtStyleDescription('')
+      await refreshWorkspaceState(() => workspaceService.createGame())
       setActiveTab('graph')
-      if (state.source === 'supabase') {
-        setBootstrapOnboardingOpen(true)
-      }
     } catch (createError) {
       console.error('[GraphCore] create game failed.', createError)
       const message = createError instanceof Error ? createError.message : 'Creating a new game failed.'
@@ -4736,122 +4698,17 @@ export default function App() {
     if (!nextGame || nextGame.projectId === snapshot.project.id) return
 
     setLoading(true)
-    setBootstrapOnboardingOpen(false)
     setPromptRuntimeError(null)
 
     try {
-      const state = await refreshWorkspaceState(() => workspaceService.setActiveGame(nextGame.projectId, nextGame.draftId))
+      await refreshWorkspaceState(() => workspaceService.setActiveGame(nextGame.projectId, nextGame.draftId))
       setActiveTab('graph')
-      if (state.source === 'supabase') {
-        setBootstrapGameArchetypeId(
-          typeof state.snapshot.gameSpec?.overrides?.gameArchetypeId === 'string'
-            ? state.snapshot.gameSpec.overrides.gameArchetypeId
-            : 'rpg',
-        )
-        setBootstrapConceptPrompt(
-          typeof state.snapshot.gameSpec?.overrides?.gameConceptPrompt === 'string'
-            ? state.snapshot.gameSpec.overrides.gameConceptPrompt
-            : '',
-        )
-        setBootstrapArtStylePreset(
-          typeof state.snapshot.gameSpec?.theme?.artStylePreset === 'string'
-            ? state.snapshot.gameSpec.theme.artStylePreset
-            : DEFAULT_ART_STYLE_PRESET,
-        )
-        setBootstrapArtStyleDescription(
-          typeof state.snapshot.gameSpec?.theme?.artStyleDescription === 'string'
-            ? state.snapshot.gameSpec.theme.artStyleDescription
-            : '',
-        )
-      }
     } catch (switchError) {
       console.error('[GraphCore] switch game failed.', switchError)
       const message = switchError instanceof Error ? switchError.message : 'Switching games failed.'
       setPromptRuntimeError(message)
     } finally {
       setLoading(false)
-    }
-  }
-
-  async function handleBootstrapGeneration() {
-    if (!snapshot) return
-    if (!session) {
-      setPromptRuntimeError('Sign in to initialize the live workspace.')
-      setAuthOpen(true)
-      return
-    }
-    if (loadedState?.source !== 'supabase') {
-      setPromptRuntimeError(loadedState?.reason ?? 'You are signed in, but the editor is still showing the bundled demo snapshot. Load or create a live GraphCore workspace/draft before using onboarding.')
-      return
-    }
-
-    setPromptRuntimeError(null)
-    setIsGeneratingPatch(true)
-
-    try {
-      const conceptPrompt = bootstrapConceptPrompt.trim()
-      const prompt = conceptPrompt.length > 0
-        ? conceptPrompt
-        : `Initialize a ${bootstrapGameArchetypeId.replace(/[_-]+/g, ' ')} game with a compact starter data layer.`
-      const baseBootstrapSpec = createGameSpecFromArchetype(bootstrapGameArchetypeId, conceptPrompt)
-      const bootstrapGameSpec = {
-        ...baseBootstrapSpec,
-        theme: {
-          ...baseBootstrapSpec.theme,
-          artStylePreset: bootstrapArtStylePreset,
-          artStyleDescription: bootstrapArtStyleDescription.trim(),
-        },
-      }
-      const nextPatch = await promptGenerationService.generate({
-        prompt,
-        snapshot,
-        mode: 'orchestrate',
-        autoApply: true,
-        intent: 'bootstrap_game',
-        phase: 'bootstrap_orchestrator',
-        gameSpec: bootstrapGameSpec,
-        gameArchetypeId: bootstrapGameArchetypeId,
-        gameConceptPrompt: conceptPrompt,
-        model: promptModel,
-      })
-
-      setPatchPreview({
-        id: nextPatch.patchSetId ?? `preview-${Date.now()}`,
-        prompt,
-        status: nextPatch.operations.length > 0 ? 'proposed' : 'rejected',
-        ...nextPatch,
-      })
-
-      if (nextPatch.operations.length > 0) {
-        setIsApplyingPatch(true)
-        await patchApplyService.apply(snapshot, nextPatch.operations, nextPatch.patchSetId)
-      }
-
-      await refreshWorkspaceState()
-      setPatchPreview((current) => current ? {
-        ...current,
-        status: nextPatch.operations.length > 0 ? 'applied' : current.status,
-        appliedOperations: nextPatch.operations,
-        activityEntries: [
-          ...(current.activityEntries ?? []),
-          {
-            phase: 'merge_and_apply',
-            status: nextPatch.operations.length > 0 ? 'applied' : 'failed',
-            title: nextPatch.operations.length > 0 ? 'Starter game applied.' : 'No starter operations were generated.',
-            detail: nextPatch.operations.length > 0
-              ? `${nextPatch.operations.length} operation${nextPatch.operations.length === 1 ? '' : 's'} committed to the live draft.`
-              : 'The orchestrator returned no material changes.',
-          },
-        ],
-      } : current)
-      setBootstrapOnboardingOpen(false)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Bootstrap generation failed.'
-      console.error('[GraphCore] bootstrap generation failed.', error)
-      setPromptRuntimeError(message)
-    } finally {
-      setIsApplyingPatch(false)
-      setIsGeneratingPatch(false)
     }
   }
 
@@ -4882,6 +4739,35 @@ export default function App() {
         ? { ...game, projectName: persisted.project.name }
         : game
     )))
+  }
+
+  async function handleCompleteProjectOnboarding(projectContext: ProjectContext) {
+    if (!snapshot) return
+
+    setProjectOnboardingSaving(true)
+    setPromptRuntimeError(null)
+
+    try {
+      const persisted = await workspaceService.persistProjectOnboardingContext(snapshot, { projectContext })
+      setSnapshot((current) => {
+        if (!current) return current
+        const nextSnapshot = {
+          ...current,
+          draft: persisted.draft,
+          gameSpec: persisted.gameSpec,
+          projectContext: persisted.projectContext,
+        }
+        setBundle(compileBundle(nextSnapshot))
+        return nextSnapshot
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Saving project onboarding failed.'
+      console.error('[GraphCore] save project onboarding failed.', error)
+      setPromptRuntimeError(message)
+      throw error
+    } finally {
+      setProjectOnboardingSaving(false)
+    }
   }
 
   function updateGameSpecCinematics(changes: Partial<CinematicSettings>) {
@@ -5314,23 +5200,6 @@ export default function App() {
           />
         ) : null}
 
-        {activeGameIsEmpty && !bootstrapOnboardingOpen ? (
-          <section className="workspace-empty-game">
-            <div className="workspace-empty-game-copy">
-              <span className="eyebrow">Project Setup</span>
-              <h2>{activeGame?.projectName ?? snapshot.project.name} is still empty.</h2>
-              <p>
-                This project now lives in its own isolated draft. Initialize it when ready, or switch back to another project from the top bar.
-              </p>
-            </div>
-            <div className="workspace-empty-game-actions">
-              <button className="primary-button" onClick={handleOpenBootstrapOnboarding} type="button">
-                Initialize Project
-              </button>
-            </div>
-          </section>
-        ) : null}
-
         <section className="workspace-stage">
           <Suspense fallback={<div className="detail-stack compact"><span className="eyebrow">Loading</span><h3>Preparing workspace…</h3></div>}>
             {activeTab === 'graph' ? (
@@ -5350,6 +5219,9 @@ export default function App() {
                 worldPromptMessages={snapshot.worldPromptMessages}
                 worldPromptEvents={snapshot.worldPromptEvents}
                 worldPromptSuggestions={snapshot.worldPromptSuggestions}
+                projectContext={snapshot.projectContext}
+                showProjectOnboarding={shouldShowWorldOnboarding}
+                projectOnboardingSaving={projectOnboardingSaving}
                 selectedWorldNodeKey={selectedWorldNodeKey}
                 selectedWorldEdgeKey={selectedWorldEdgeKey}
                 selectedWorldEntityKey={selectedWorldEntityKey}
@@ -5374,6 +5246,7 @@ export default function App() {
                 onUpdateWorldView={updateWorldView}
                 onGenerateStarterWorld={generateStarterWorld}
                 onGenerateWorldExpansion={generateWorldExpansion}
+                onCompleteProjectOnboarding={handleCompleteProjectOnboarding}
                 onStartWorldPromptTurn={startWorldPromptTurn}
                 onCreateWorldPromptSession={createWorldPromptSession}
                 onRefreshWorldPromptSuggestions={refreshWorldPromptSuggestions}
@@ -5635,24 +5508,6 @@ export default function App() {
             <ActivityWorkspace patchHistory={patchHistory} selectedPatch={selectedPatch} selectedPatchIndex={selectedPatchIndex} onSelectPatch={setSelectedPatchIndex} />
           </div>
         </div>
-      ) : null}
-      {bootstrapOnboardingOpen ? (
-        <Suspense fallback={null}>
-          <GameBootstrapOnboarding
-            canClose
-            artStyleDescription={bootstrapArtStyleDescription}
-            artStylePreset={bootstrapArtStylePreset}
-            conceptPrompt={bootstrapConceptPrompt}
-            gameArchetypeId={bootstrapGameArchetypeId}
-            isGenerating={isGeneratingPatch || isApplyingPatch}
-            onChangeArtStyleDescription={setBootstrapArtStyleDescription}
-            onChangeArtStylePreset={setBootstrapArtStylePreset}
-            onChangeConceptPrompt={setBootstrapConceptPrompt}
-            onChangeGameArchetypeId={setBootstrapGameArchetypeId}
-            onClose={() => setBootstrapOnboardingOpen(false)}
-            onGenerate={handleBootstrapGeneration}
-          />
-        </Suspense>
       ) : null}
       {worldBuildPlanPreview ? (
         <Suspense fallback={null}>

@@ -5,6 +5,9 @@ export type EntityIconId =
   | 'content'
   | 'credits'
   | 'item'
+  | 'group'
+  | 'concept'
+  | 'event'
   | 'character'
   | 'environment'
   | 'asset'
@@ -15,6 +18,7 @@ export type EntityIconId =
   | 'archetype'
   | 'expand'
   | 'close'
+  | 'check'
   | 'plus'
 
 type EntityIconProps = {
@@ -64,6 +68,29 @@ function IconPath({ id }: { id: EntityIconId }) {
         <>
           <path d="M12 3.8 19 8v8l-7 4.2L5 16V8l7-4.2Z" {...stroke} />
           <path d="M12 3.8v16.4M5 8l7 4.2L19 8" {...stroke} />
+        </>
+      )
+    case 'group':
+      return (
+        <>
+          <circle cx="8" cy="9" r="2.3" {...stroke} />
+          <circle cx="16" cy="9" r="2.3" {...stroke} />
+          <circle cx="12" cy="6.6" r="2.1" {...stroke} />
+          <path d="M5.4 18c.5-2.4 1.9-4 3.8-4.6M18.6 18c-.5-2.4-1.9-4-3.8-4.6M9.6 18c.4-2.7 1.8-4.7 2.4-4.7s2 2 2.4 4.7" {...stroke} />
+        </>
+      )
+    case 'concept':
+      return (
+        <>
+          <path d="M12 4.5 14.2 9.1 19 12l-4.8 2.9L12 19.5l-2.2-4.6L5 12l4.8-2.9L12 4.5Z" {...stroke} />
+          <circle cx="12" cy="12" r="1.5" {...stroke} />
+        </>
+      )
+    case 'event':
+      return (
+        <>
+          <path d="M12 4.8v4.2M12 15v4.2M4.8 12H9M15 12h4.2M7.3 7.3l2.9 2.9M13.8 13.8l2.9 2.9M16.7 7.3l-2.9 2.9M10.2 13.8l-2.9 2.9" {...stroke} />
+          <circle cx="12" cy="12" r="2.2" {...stroke} />
         </>
       )
     case 'character':
@@ -144,6 +171,12 @@ function IconPath({ id }: { id: EntityIconId }) {
           <path d="m7.2 7.2 9.6 9.6M16.8 7.2l-9.6 9.6" {...stroke} />
         </>
       )
+    case 'check':
+      return (
+        <>
+          <path d="M6.8 12.4 10.4 16l6.8-7.2" {...stroke} />
+        </>
+      )
     case 'plus':
       return (
         <>
@@ -167,6 +200,12 @@ export function iconForDefinitionKind(kind: string | null | undefined): EntityIc
   switch (kind) {
     case 'character':
       return 'character'
+    case 'group':
+      return 'group'
+    case 'concept':
+      return 'concept'
+    case 'event':
+      return 'event'
     case 'environment':
       return 'environment'
     case 'item':

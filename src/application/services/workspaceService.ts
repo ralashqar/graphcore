@@ -30,6 +30,7 @@ export const workspaceService = {
   loadWorldPromptSession: graphcoreWorkspaceAdapter.loadWorldPromptSession,
   persistDefinitionPreviewImageBinding: graphcoreWorkspaceAdapter.persistDefinitionPreviewImageBinding,
   persistGlobalProjectContext: graphcoreWorkspaceAdapter.persistGlobalProjectContext,
+  persistProjectOnboardingContext: graphcoreWorkspaceAdapter.persistProjectOnboardingContext,
   approveWorldPromptOp: graphcoreWorkspaceAdapter.approveWorldPromptOp,
   pollCinematicRun: graphcoreWorkspaceAdapter.pollCinematicRun,
   planWorldBuild: graphcoreWorkspaceAdapter.planWorldBuild,

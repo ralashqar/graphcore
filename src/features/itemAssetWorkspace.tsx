@@ -1,7 +1,7 @@
 import { Suspense, lazy, useEffect, useMemo, useState } from 'react'
 
 import { getArtStylePresetLabel } from '../domain/artStylePresets'
-import { getResolvedRender3dBinding } from '../domain/render3d'
+import { getResolvedDefinition3dBinding } from '../domain/render3d'
 import { getResourceGenerationMetadata, isPendingGenerationResource } from '../domain/worldBuild'
 import type { MeshGenerationJob } from '../domain/meshGeneration'
 import { useEditorStore } from '../state/editorStore'
@@ -30,6 +30,9 @@ const Definition3dPanel = lazy(() =>
 )
 
 const contentKinds = [
+  { kind: 'group', label: 'Group', helper: 'Houses, factions, cults, orders' },
+  { kind: 'concept', label: 'Concept', helper: 'Prophecies, laws, beliefs, lore' },
+  { kind: 'event', label: 'Event', helper: 'Wars, rituals, coronations, betrayals' },
   { kind: 'item', label: 'Item', helper: 'Objects, pickups, equipment' },
   { kind: 'ability', label: 'Ability', helper: 'Actions, powers, spells' },
   { kind: 'quest', label: 'Quest', helper: 'Objectives and progress' },
@@ -132,7 +135,7 @@ export function ContentWorkspace({
   const isDeletingGeneratedMesh = selectedContentItem?.key === deletingGeneratedMeshDefinitionKey
 
   const linkedCinematicGraphs = useMemo(() => {
-    if (!selectedContentItem || selectedContentItem.kind !== 'item') return []
+    if (!selectedContentItem) return []
     return graphs
       .filter((graph) => graph.graphType === 'cinematic_flow')
       .filter((graph) => {
@@ -192,8 +195,8 @@ export function ContentWorkspace({
   }, [meshGenerationJobs])
 
   const selectedItemRenderBinding = useMemo(() => {
-    if (selectedContentItem?.kind !== 'item') return null
-    return getResolvedRender3dBinding(selectedContentItem)
+    if (!selectedContentItem) return null
+    return getResolvedDefinition3dBinding(selectedContentItem)
   }, [selectedContentItem])
 
   const selectedItemPhysicalProfile = useMemo(() => {
@@ -245,7 +248,7 @@ export function ContentWorkspace({
   }, [selectedContentItem?.key])
 
   function updateSelectedItemRenderBinding(changes: Partial<NonNullable<typeof selectedItemRenderBinding>>) {
-    if (selectedContentItem?.kind !== 'item' || !selectedItemRenderBinding) return
+    if (!selectedContentItem || !selectedItemRenderBinding) return
     const nextConfig = {
       ...selectedItemRenderBinding,
       ...changes,
@@ -270,7 +273,7 @@ export function ContentWorkspace({
   }
 
   async function handleGenerateItemConcept() {
-    if (selectedContentItem?.kind !== 'item' || !selectedItemRenderBinding) return
+    if (!selectedContentItem || !selectedItemRenderBinding) return
     const conceptPrompt = selectedItemRenderBinding.conceptPrompt?.trim() ?? ''
     if (!conceptPrompt) return
 
@@ -281,7 +284,7 @@ export function ContentWorkspace({
       await onGenerateConceptImage(selectedContentItem.key)
       setItemConceptMessage('Concept image generation queued.')
     } catch (error) {
-      setItemConceptMessage(error instanceof Error ? error.message : 'Item concept generation failed.')
+      setItemConceptMessage(error instanceof Error ? error.message : 'Concept image generation failed.')
     } finally {
       setItemConceptPending(false)
     }
@@ -468,27 +471,31 @@ export function ContentWorkspace({
                 ))}
               </select>
             </label>
-            <label className="inline-head-field">
-              <span>Subtype</span>
-              <select
-                value={selectedItemPhysicalProfile?.physicalSubtype ?? 'pickup'}
-                onChange={(event) => updateSelectedItemPhysicalProfile({ physicalSubtype: event.target.value as 'pickup' | 'prop' | 'equipment' | 'weapon' | 'world_object' })}
-              >
-                <option value="pickup">Pickup</option>
-                <option value="prop">Prop</option>
-                <option value="equipment">Equipment</option>
-                <option value="weapon">Weapon</option>
-                <option value="world_object">World Object</option>
-              </select>
-            </label>
-            <label className="inline-head-field">
-              <span>Placement</span>
-              <input
-                value={selectedItemPhysicalProfile?.worldPlacementRole ?? ''}
-                onChange={(event) => updateSelectedItemPhysicalProfile({ worldPlacementRole: event.target.value })}
-                placeholder="inventory_item"
-              />
-            </label>
+            {selectedContentItem.kind === 'item' ? (
+              <>
+                <label className="inline-head-field">
+                  <span>Subtype</span>
+                  <select
+                    value={selectedItemPhysicalProfile?.physicalSubtype ?? 'pickup'}
+                    onChange={(event) => updateSelectedItemPhysicalProfile({ physicalSubtype: event.target.value as 'pickup' | 'prop' | 'equipment' | 'weapon' | 'world_object' })}
+                  >
+                    <option value="pickup">Pickup</option>
+                    <option value="prop">Prop</option>
+                    <option value="equipment">Equipment</option>
+                    <option value="weapon">Weapon</option>
+                    <option value="world_object">World Object</option>
+                  </select>
+                </label>
+                <label className="inline-head-field">
+                  <span>Placement</span>
+                  <input
+                    value={selectedItemPhysicalProfile?.worldPlacementRole ?? ''}
+                    onChange={(event) => updateSelectedItemPhysicalProfile({ worldPlacementRole: event.target.value })}
+                    placeholder="inventory_item"
+                  />
+                </label>
+              </>
+            ) : null}
           </div>
           <label className="field-block character-header-textarea">
             <span>Summary</span>
@@ -496,7 +503,15 @@ export function ContentWorkspace({
               rows={3}
               value={selectedContentItem.summary}
               onChange={(event) => onUpdateItemIdentity(selectedContentItem.key, { summary: event.target.value })}
-              placeholder="Describe the item role, readability, use case, and gameplay value."
+              placeholder={
+                selectedContentItem.kind === 'group'
+                  ? 'Describe this group’s role, power base, values, and why it matters in the world.'
+                  : selectedContentItem.kind === 'concept'
+                    ? 'Describe this concept, doctrine, law, or piece of lore and how it shapes the world.'
+                    : selectedContentItem.kind === 'event'
+                      ? 'Describe what happened, who it affected, and the lasting impact on the world.'
+                      : 'Describe the item role, readability, use case, and gameplay value.'
+              }
             />
           </label>
           <div className="character-concept-prompt-row">
@@ -506,7 +521,15 @@ export function ContentWorkspace({
                 rows={4}
                 value={selectedItemRenderBinding?.conceptPrompt ?? ''}
                 onChange={(event) => updateSelectedItemRenderBinding({ conceptPrompt: event.target.value || null })}
-                placeholder="Describe silhouette, materials, wear, shape language, scale cues, and must-have visual details."
+                placeholder={
+                  selectedContentItem.kind === 'group'
+                    ? 'Describe heraldry, attire, banners, insignia, architecture, mood, and the visual language of the faction.'
+                    : selectedContentItem.kind === 'concept'
+                      ? 'Describe the symbolic imagery, motifs, materials, diagrams, script, and atmosphere tied to this concept.'
+                      : selectedContentItem.kind === 'event'
+                        ? 'Describe the key image of this event: setting, participants, lighting, action, aftermath, and emotional tone.'
+                        : 'Describe silhouette, materials, wear, shape language, scale cues, and must-have visual details.'
+                }
               />
             </label>
             <div className="character-concept-actions">
@@ -705,15 +728,18 @@ export function ContentWorkspace({
     <>
       <DefinitionAuthoringShell
         title="Content"
-        subtitle="Keep item and systemic content generation in the same prompt-first shell as the rest of the workspace."
+        subtitle="Keep world records and systemic content in the same prompt-first shell, with groups, concepts, and events surfaced first."
         promptLabel="Content generation stream"
-        promptPlaceholder="Create an ancient relic that reveals hidden routes, define how it is found, and describe its visual language."
+        promptPlaceholder="Create a noble house sworn to the Ashen Crown, define its values, and describe the crest and doctrine that set it apart."
         promptText={promptText}
         promptBusyLabel="Generating..."
         promptStatus={activeSurface === 'template'
           ? (selectedContentArchetype ? `Editing template ${selectedContentArchetype.name}` : 'Template Studio')
           : (selectedContentItem ? `Focused on ${selectedContentItem.name}` : projectSummary || 'No content selected')}
         promptSuggestions={[
+          { label: 'Create faction', prompt: 'Create a new faction with a clear agenda, power base, visual identity, and relationship to the current conflict.' },
+          { label: 'Add prophecy', prompt: 'Create a prophecy or doctrine that shapes the world, define who believes it, and what danger it introduces.' },
+          { label: 'Stage inciting event', prompt: 'Create a major world event that changed the balance of power, with who caused it and who still suffers from it.' },
           { label: 'Create relic', prompt: 'Create a rare relic with a distinct visual silhouette, clear gameplay purpose, and a short lore hook.' },
           { label: 'Add quest item', prompt: 'Create a quest-critical item connected to a locked environment and explain why it matters.' },
           { label: 'Define prop set', prompt: 'Create a set of environmental props for a ruined temple and define their material language and function.' },
@@ -812,7 +838,7 @@ export function ContentWorkspace({
         </div>
       ) : null}
 
-      {activeSurface === 'item' && selectedContentItem?.kind === 'item' && isItemImagePickerOpen ? (
+      {activeSurface === 'item' && selectedContentItem && isItemImagePickerOpen ? (
         <AssetPickerDialog
           assets={imageAssets}
           clearLabel="Clear image"

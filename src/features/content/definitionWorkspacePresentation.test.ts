@@ -57,5 +57,8 @@ test('builds dossier state for a definition', () => {
 })
 
 test('returns readable labels for supported kinds', () => {
+  assert.equal(labelForDefinitionKind('group'), 'Group')
+  assert.equal(labelForDefinitionKind('concept'), 'Concept')
+  assert.equal(labelForDefinitionKind('event'), 'Event')
   assert.equal(labelForDefinitionKind('world_model'), 'World Model')
 })

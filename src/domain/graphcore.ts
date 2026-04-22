@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { gameSpecSchema } from './gameSpec.ts'
+import { projectContextSchema } from './projectContext.ts'
 import {
   resourceGenerationMetadataSchema,
   worldBuildBatchSchema,
@@ -42,6 +43,9 @@ import {
 import { worldThreadSchema } from './worldThread.ts'
 
 export const definitionKindSchema = z.enum([
+  'group',
+  'concept',
+  'event',
   'item',
   'stat',
   'quest',
@@ -717,6 +721,7 @@ export const projectSnapshotSchema = z.object({
     metadata: metadataRecordSchema.default({}),
   }),
   gameSpec: gameSpecSchema.nullable().default(null),
+  projectContext: projectContextSchema.nullable().default(null),
   archetypes: z.array(archetypeDefinitionSchema).default([]),
   definitions: z.array(definitionBaseSchema),
   graphs: z.array(graphDefinitionSchema),
@@ -1170,6 +1175,21 @@ export type NodeLibraryGroup = {
 
 export function buildDefaultDefinitionComponents(kind: DefinitionKind): ComponentEnvelope[] {
   switch (kind) {
+    case 'group':
+    case 'concept':
+    case 'event':
+      return [
+        {
+          type: 'render_3d_binding',
+          config: {
+            primaryMeshAssetKey: null,
+            previewImageAssetKey: null,
+            conceptPrompt: null,
+            generationPrompt: null,
+            generationStyle: null,
+          },
+        },
+      ]
     case 'item':
       return [
         {

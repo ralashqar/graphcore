@@ -83,8 +83,11 @@ export function deriveMissingWorldEntities(
 
   const linkedDefinitionKinds: Array<{ kind: DefinitionBase['kind']; nodeType: WorldEntity['nodeType'] }> = [
     { kind: 'character', nodeType: 'actor' },
+    { kind: 'group', nodeType: 'group' },
     { kind: 'environment', nodeType: 'place' },
     { kind: 'item', nodeType: 'object' },
+    { kind: 'concept', nodeType: 'concept' },
+    { kind: 'event', nodeType: 'event' },
   ]
 
   for (const { kind, nodeType } of linkedDefinitionKinds) {
@@ -162,10 +165,16 @@ export function definitionKindForWorldEntity(nodeType: WorldEntity['nodeType']):
   switch (nodeType) {
     case 'actor':
       return 'character'
+    case 'group':
+      return 'group'
     case 'place':
       return 'environment'
     case 'object':
       return 'item'
+    case 'concept':
+      return 'concept'
+    case 'event':
+      return 'event'
     default:
       return null
   }
@@ -175,12 +184,16 @@ export function iconForWorldEntity(nodeType: WorldEntity['nodeType']): EntityIco
   switch (nodeType) {
     case 'actor':
       return 'character'
+    case 'group':
+      return 'group'
     case 'place':
       return 'environment'
     case 'object':
       return 'item'
+    case 'concept':
+      return 'concept'
     case 'event':
-      return 'activity'
+      return 'event'
     default:
       return 'content'
   }
@@ -197,7 +210,7 @@ export function labelForWorldEntity(nodeType: WorldEntity['nodeType']) {
     case 'object':
       return 'Item'
     case 'concept':
-      return 'Lore'
+      return 'Concept'
     case 'event':
       return 'Event'
   }

@@ -9,6 +9,9 @@ export type EntityIconId =
   | 'content'
   | 'credits'
   | 'item'
+  | 'group'
+  | 'concept'
+  | 'event'
   | 'character'
   | 'environment'
   | 'asset'
@@ -40,6 +43,9 @@ export type DefinitionDossierViewModel = {
 
 const definitionKindLabels: Partial<Record<DefinitionBase['kind'], string>> = {
   character: 'Character',
+  group: 'Group',
+  concept: 'Concept',
+  event: 'Event',
   environment: 'Environment',
   item: 'Item',
   ability: 'Ability',
@@ -58,6 +64,12 @@ function iconForDefinitionKind(kind: string | null | undefined): EntityIconId {
   switch (kind) {
     case 'character':
       return 'character'
+    case 'group':
+      return 'group'
+    case 'concept':
+      return 'concept'
+    case 'event':
+      return 'event'
     case 'environment':
       return 'environment'
     case 'item':

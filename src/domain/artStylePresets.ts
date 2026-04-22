@@ -1,3 +1,5 @@
+import type { ProjectSubtype, ProjectType } from './projectContext.ts'
+
 export const ART_STYLE_PRESET_GROUPS = [
   'Premium 3D',
   'Stylized 3D',
@@ -31,6 +33,37 @@ export type ArtStylePresetDefinition = {
   textureProfile?: string
   colorProfile?: string
   negativeGuardrails?: readonly string[]
+  allowedProjectTypes?: readonly ProjectType[]
+  recommendedProjectSubtypes?: readonly ProjectSubtype[]
+  thumbnailUrl?: string
+}
+
+type ArtStylePresetOnboardingMetadata = {
+  allowedProjectTypes: readonly ProjectType[]
+  recommendedProjectSubtypes?: readonly ProjectSubtype[]
+  thumbnailUrl: string
+}
+
+function buildArtStyleThumbnailUrl(seed: string, palette: [string, string, string]) {
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="960" height="720" viewBox="0 0 960 720" fill="none">
+      <defs>
+        <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="${palette[0]}"/>
+          <stop offset="50%" stop-color="${palette[1]}"/>
+          <stop offset="100%" stop-color="${palette[2]}"/>
+        </linearGradient>
+      </defs>
+      <rect width="960" height="720" fill="url(#bg)"/>
+      <circle cx="730" cy="220" r="164" fill="rgba(255,255,255,0.08)"/>
+      <circle cx="214" cy="536" r="190" fill="rgba(255,255,255,0.06)"/>
+      <rect x="120" y="112" width="720" height="496" rx="36" fill="rgba(7,10,18,0.18)" stroke="rgba(255,255,255,0.18)" />
+      <path d="M186 470c84-116 158-171 224-166 62 4 118 45 174 124 33 47 59 70 76 70 30 0 59-28 88-84l112 126H150l36-70Z" fill="rgba(255,255,255,0.16)"/>
+      <path d="M182 486c72-88 130-132 176-132 44 0 90 33 140 100 31 41 61 62 90 62 36 0 78-32 126-96" stroke="rgba(255,255,255,0.32)" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="120" y="654" fill="rgba(255,255,255,0.72)" font-family="Inter, Arial, sans-serif" font-size="28" letter-spacing="6">${seed.toUpperCase()}</text>
+    </svg>
+  `.trim()
+  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`
 }
 
 export type ArtStylePresetResolution = {
@@ -106,6 +139,22 @@ export const ART_STYLE_PRESETS: readonly ArtStylePresetDefinition[] = [
     captureMedium: 'graphic illustration',
     cameraProfile: 'poster-clear composition with strong shape language',
     lightingProfile: 'simple graphic light and shadow blocking',
+  },
+  {
+    id: 'live_action_cinematic',
+    label: 'Live-Action Cinematic',
+    promptLabel: 'photoreal live-action cinematic still, real actors, premium production design, film-grade lighting, grounded blockbuster realism',
+    group: 'Photoreal People',
+    description: 'Grounded live-action film and series imagery with real actors, cinematic lighting, and premium production value.',
+    modality: 'photo',
+    sensitivity: 'medium',
+    bestFor: 'feature films, prestige series, grounded blockbuster worlds, live-action story development',
+    captureMedium: 'live-action cinematic still',
+    cameraProfile: 'premium film-camera framing with real actors, clear blocking, and production-ready scene composition',
+    lensProfile: 'cinematic live-action lensing with grounded depth and believable subject scale',
+    lightingProfile: 'film-grade live-action lighting with strong separation and grounded realism',
+    textureProfile: 'real fabrics, skin, environments, and production materials with non-game realism',
+    colorProfile: 'restrained cinematic grade with natural skin tones and grounded contrast',
   },
   {
     id: 'photoreal_game_cg',
@@ -500,7 +549,134 @@ export type ArtStylePresetId = (typeof ART_STYLE_PRESETS)[number]['id']
 
 export const DEFAULT_ART_STYLE_PRESET: ArtStylePresetId = 'premium_stylized_3d'
 
-export const artStylePresetMap = new Map(ART_STYLE_PRESETS.map((preset) => [preset.id, preset]))
+const ART_STYLE_PRESET_ONBOARDING_METADATA: Partial<Record<ArtStylePresetId, ArtStylePresetOnboardingMetadata>> = {
+  premium_stylized_3d: {
+    allowedProjectTypes: ['story', 'game'],
+    recommendedProjectSubtypes: ['animated_story', 'action_rpg', 'open_world_sandbox'],
+    thumbnailUrl: buildArtStyleThumbnailUrl('premium 3d', ['#252d4a', '#9b5b3b', '#f4cf8a']),
+  },
+  stylized_hero_3d: {
+    allowedProjectTypes: ['story', 'game', 'brand'],
+    recommendedProjectSubtypes: ['animated_story', 'action_rpg', 'open_world_sandbox', 'mascot_ip'],
+    thumbnailUrl: buildArtStyleThumbnailUrl('stylized hero', ['#1b2f3f', '#4f84b2', '#e7bb6a']),
+  },
+  cartoon_3d: {
+    allowedProjectTypes: ['game', 'brand'],
+    recommendedProjectSubtypes: ['social_sim', 'platformer_metroidvania', 'mascot_ip'],
+    thumbnailUrl: buildArtStyleThumbnailUrl('toon 3d', ['#19334a', '#4aa8ff', '#f4d35e']),
+  },
+  anime_cg: {
+    allowedProjectTypes: ['story', 'game'],
+    recommendedProjectSubtypes: ['animated_story', 'action_rpg', 'narrative_adventure', 'platformer_metroidvania'],
+    thumbnailUrl: buildArtStyleThumbnailUrl('anime cg', ['#141e3a', '#7340c6', '#ff8fa0']),
+  },
+  toon_illustration: {
+    allowedProjectTypes: ['story', 'brand'],
+    recommendedProjectSubtypes: ['shortform_series', 'brand_education_explainer'],
+    thumbnailUrl: buildArtStyleThumbnailUrl('toon illustration', ['#253245', '#7f5af0', '#f9bc60']),
+  },
+  live_action_cinematic: {
+    allowedProjectTypes: ['story'],
+    recommendedProjectSubtypes: ['feature_film', 'tv_streaming_series', 'short_film'],
+    thumbnailUrl: buildArtStyleThumbnailUrl('live action', ['#1b1f28', '#4f5f73', '#d2b48c']),
+  },
+  photoreal_game_cg: {
+    allowedProjectTypes: ['story', 'game'],
+    recommendedProjectSubtypes: ['feature_film', 'tv_streaming_series', 'shooter_combat', 'horror_mystery'],
+    thumbnailUrl: buildArtStyleThumbnailUrl('photoreal cg', ['#1b2029', '#4d596d', '#d4b483']),
+  },
+  brand_advertising_people: {
+    allowedProjectTypes: ['brand'],
+    recommendedProjectSubtypes: ['campaign_world'],
+    thumbnailUrl: buildArtStyleThumbnailUrl('campaign photo', ['#1d1f28', '#6f6f7a', '#d8c0a8']),
+  },
+  product_packshot: {
+    allowedProjectTypes: ['brand'],
+    recommendedProjectSubtypes: ['product_storytelling'],
+    thumbnailUrl: buildArtStyleThumbnailUrl('product cg', ['#1b2433', '#495a77', '#cfd8ea']),
+  },
+  product_advertising: {
+    allowedProjectTypes: ['brand'],
+    recommendedProjectSubtypes: ['product_storytelling'],
+    thumbnailUrl: buildArtStyleThumbnailUrl('product hero', ['#221d25', '#9b6b43', '#f2d1a8']),
+  },
+  storybook_illustration: {
+    allowedProjectTypes: ['story', 'brand'],
+    recommendedProjectSubtypes: ['short_film', 'brand_education_explainer'],
+    thumbnailUrl: buildArtStyleThumbnailUrl('graphic illustration', ['#243140', '#4f7d8f', '#f1c27d']),
+  },
+  stylized_fantasy: {
+    allowedProjectTypes: ['story'],
+    recommendedProjectSubtypes: ['feature_film', 'tv_streaming_series'],
+    thumbnailUrl: buildArtStyleThumbnailUrl('stylized world', ['#1f2738', '#5e6a92', '#e4b26f']),
+  },
+  pixel_art: {
+    allowedProjectTypes: ['game'],
+    recommendedProjectSubtypes: ['strategy_builder', 'social_sim', 'platformer_metroidvania'],
+    thumbnailUrl: buildArtStyleThumbnailUrl('pixel art', ['#1a1d28', '#3f7d4c', '#e3b23c']),
+  },
+  minimal_flat: {
+    allowedProjectTypes: ['brand'],
+    recommendedProjectSubtypes: ['brand_education_explainer'],
+    thumbnailUrl: buildArtStyleThumbnailUrl('editorial graphic', ['#20242d', '#60758b', '#ddd9cf']),
+  },
+  custom: {
+    allowedProjectTypes: ['story', 'game', 'brand', 'ugc'],
+    thumbnailUrl: buildArtStyleThumbnailUrl('custom style', ['#202432', '#565a72', '#d9dce7']),
+  },
+  ugc_phone_selfie_soft_daylight: {
+    allowedProjectTypes: ['ugc'],
+    recommendedProjectSubtypes: ['creator_organic'],
+    thumbnailUrl: buildArtStyleThumbnailUrl('selfie creator', ['#3a2c2f', '#a46f5b', '#f7d9c4']),
+  },
+  ugc_phone_rear_28_home_demo: {
+    allowedProjectTypes: ['ugc'],
+    recommendedProjectSubtypes: ['creator_organic', 'direct_response_ad'],
+    thumbnailUrl: buildArtStyleThumbnailUrl('home demo', ['#1e2933', '#728394', '#f1ddc6']),
+  },
+  ugc_phone_35_testimonial: {
+    allowedProjectTypes: ['ugc'],
+    recommendedProjectSubtypes: ['direct_response_ad', 'serialized_social_drama'],
+    thumbnailUrl: buildArtStyleThumbnailUrl('testimonial', ['#201f25', '#5d6b7d', '#d5c2aa']),
+  },
+  ugc_creator_desk_windowlight: {
+    allowedProjectTypes: ['ugc'],
+    recommendedProjectSubtypes: ['creator_organic'],
+    thumbnailUrl: buildArtStyleThumbnailUrl('founder desk', ['#202733', '#6d7d90', '#d6c8b6']),
+  },
+  ugc_app_demo_over_shoulder_phone: {
+    allowedProjectTypes: ['ugc'],
+    recommendedProjectSubtypes: ['faceless_explainer_demo'],
+    thumbnailUrl: buildArtStyleThumbnailUrl('app demo', ['#1c2430', '#3d7ea6', '#b7d5e5']),
+  },
+  ugc_tabletop_daylight_demo: {
+    allowedProjectTypes: ['ugc'],
+    recommendedProjectSubtypes: ['faceless_explainer_demo'],
+    thumbnailUrl: buildArtStyleThumbnailUrl('tabletop demo', ['#1f2128', '#8f7357', '#f2dfc6']),
+  },
+  ugc_founder_softbox_clean: {
+    allowedProjectTypes: ['ugc'],
+    recommendedProjectSubtypes: ['direct_response_ad'],
+    thumbnailUrl: buildArtStyleThumbnailUrl('founder', ['#23242a', '#5c6f7d', '#ddd4c8']),
+  },
+}
+
+export const artStylePresetMap = new Map(
+  ART_STYLE_PRESETS.map((preset) => {
+    const metadata = ART_STYLE_PRESET_ONBOARDING_METADATA[preset.id as ArtStylePresetId]
+    return [
+      preset.id,
+      metadata
+        ? {
+            ...preset,
+            allowedProjectTypes: metadata.allowedProjectTypes,
+            recommendedProjectSubtypes: metadata.recommendedProjectSubtypes,
+            thumbnailUrl: metadata.thumbnailUrl,
+          }
+        : preset,
+    ] as const
+  }),
+)
 
 export function getArtStylePreset(presetId: string | null | undefined): ArtStylePresetDefinition {
   return artStylePresetMap.get((presetId ?? DEFAULT_ART_STYLE_PRESET) as ArtStylePresetId)
@@ -679,6 +855,28 @@ export function resolveArtStylePresetForCinematic(input: {
 export function getArtStylePresetsByGroup() {
   return ART_STYLE_PRESET_GROUPS.map((group) => ({
     group,
-    presets: ART_STYLE_PRESETS.filter((preset) => preset.group === group),
+    presets: ART_STYLE_PRESETS.map((preset) => getArtStylePreset(preset.id)).filter((preset) => preset.group === group),
   })).filter((entry) => entry.presets.length > 0)
+}
+
+export function getOnboardingArtStylePresets(input: {
+  projectType: ProjectType
+  projectSubtype?: ProjectSubtype | null
+}) {
+  return ART_STYLE_PRESETS
+    .map((preset) => getArtStylePreset(preset.id))
+    .filter((preset) => preset.allowedProjectTypes?.includes(input.projectType))
+    .sort((left, right) => {
+      const leftIsCustom = left.id === 'custom' ? 1 : 0
+      const rightIsCustom = right.id === 'custom' ? 1 : 0
+      if (leftIsCustom !== rightIsCustom) return leftIsCustom - rightIsCustom
+      const leftRecommended = input.projectSubtype && left.recommendedProjectSubtypes?.includes(input.projectSubtype) ? 1 : 0
+      const rightRecommended = input.projectSubtype && right.recommendedProjectSubtypes?.includes(input.projectSubtype) ? 1 : 0
+      if (leftRecommended !== rightRecommended) return rightRecommended - leftRecommended
+      return left.label.localeCompare(right.label)
+    })
+}
+
+export function getArtStylePresetThumbnailUrl(presetId: string | null | undefined) {
+  return getArtStylePreset(presetId).thumbnailUrl ?? null
 }

@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="600" viewBox="0 0 960 600" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="76" y1="38" x2="812" y2="562" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#db8d66"/>
+      <stop offset="52%" stop-color="#3d5274"/>
+      <stop offset="100%" stop-color="#0b1018"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(726 118) rotate(115) scale(326 402)">
+      <stop stop-color="rgba(255, 228, 179, 0.42)"/>
+      <stop offset="1" stop-color="rgba(255, 228, 179, 0)"/>
+    </radialGradient>
+    <linearGradient id="veil" x1="480" y1="54" x2="480" y2="546" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="rgba(255,255,255,0.14)"/>
+      <stop offset="100%" stop-color="rgba(4,8,14,0.08)"/>
+    </linearGradient>
+  </defs>
+  <rect width="960" height="600" rx="0" fill="url(#bg)"/>
+  <rect width="960" height="600" fill="url(#glow)"/>
+  <circle cx="782" cy="118" r="148" fill="rgba(255, 228, 179, 0.08)"/>
+  <circle cx="188" cy="530" r="176" fill="rgba(255, 228, 179, 0.06)"/>
+  <rect x="50" y="50" width="860" height="500" rx="36" fill="url(#veil)" stroke="rgba(255,255,255,0.16)" stroke-width="2"/>
+  <rect x="84" y="84" width="792" height="432" rx="28" fill="rgba(7,11,18,0.10)" stroke="rgba(255,255,255,0.08)" stroke-width="2"/>
+  
+        <path d="M160 468c132-138 248-206 350-206 82 0 172 32 270 96v116H152l8-6Z" fill="rgba(255, 228, 179, 0.16)"/>
+        <path d="M292 388c26-71 56-115 92-131 36-16 72-4 108 36 22 24 42 35 58 35 26 0 52-18 80-55" stroke="rgba(255, 228, 179, 0.5)" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="622" cy="194" r="74" fill="rgba(255, 228, 179, 0.14)"/>
+      
+  <path d="M86 478c98 10 188 14 270 14 180 0 352-20 516-60" stroke="rgba(255,255,255,0.12)" stroke-width="2" stroke-linecap="round"/>
+</svg>

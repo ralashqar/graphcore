@@ -1,4 +1,5 @@
 import type { GameSpec, GraphType, PatchOperation, ProjectSnapshot } from './graphcore.ts'
+import type { ProjectContext } from './projectContext.ts'
 
 export type PromptTarget = 'graph' | 'node' | 'content' | 'environment'
 export type PromptTargetMode = 'current_graph' | 'new_graph' | 'auto'
@@ -64,6 +65,7 @@ export type PromptPatchRequest = {
   mode?: PromptMode
   autoApply?: boolean
   gameSpec?: GameSpec | null
+  projectContext?: ProjectContext | null
   gameArchetypeId?: string
   gameConceptPrompt?: string
   selectedPresetIds?: string[]

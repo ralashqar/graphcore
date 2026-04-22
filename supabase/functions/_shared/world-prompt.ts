@@ -163,12 +163,31 @@ type WorldThreadRow = {
   updated_at: string
 }
 
+type WorldEntityRow = {
+  id: string
+  key: string
+  name: string
+  summary: string | null
+  node_type: WorldEntity['nodeType']
+  aliases: string[] | null
+  tags: string[] | null
+  status: WorldEntity['status']
+  thumbnail_asset_key: string | null
+  linked_definition_key: string | null
+  source: WorldEntity['source']
+  custom_properties: Record<string, unknown> | null
+  metadata: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+
 const SESSION_SELECT = 'id, draft_id, key, title, status, is_active, summary_memory, last_context, selected_root_entity_key, selected_view_key, model, metadata, created_at, updated_at'
 const TURN_SELECT = 'id, session_id, draft_id, prompt, status, model, resolved_context, approval_state, assistant_summary, error_message, response_id, metadata, created_at, updated_at'
 const MESSAGE_SELECT = 'id, session_id, turn_id, draft_id, role, content, metadata, created_at'
 const EVENT_SELECT = 'id, session_id, turn_id, draft_id, sequence, event_type, op_id, payload, metadata, created_at'
 const SUGGESTION_SELECT = 'id, draft_id, session_id, turn_id, thread_key, label, prompt, kind, style, source, summary, estimated_node_count, estimated_edge_count, will_queue_images, will_queue_cinematics, state, rank, used_turn_id, dismissed_at, metadata, created_at, updated_at'
 const THREAD_SELECT = 'id, draft_id, key, title, summary, status, priority, linked_entity_keys, source_turn_id, last_turn_id, metadata, created_at, updated_at'
+const WORLD_ENTITY_SELECT = 'id, key, name, summary, node_type, aliases, tags, status, thumbnail_asset_key, linked_definition_key, source, custom_properties, metadata, created_at, updated_at'
 
 const plannerThreadCandidateSchema = z.object({
   key: z.string(),
@@ -551,6 +570,26 @@ function mapThreadRow(row: WorldThreadRow): WorldThread {
     linkedEntityKeys: row.linked_entity_keys ?? [],
     sourceTurnId: row.source_turn_id,
     lastTurnId: row.last_turn_id,
+    metadata: row.metadata ?? {},
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  })
+}
+
+function mapWorldEntityRow(row: WorldEntityRow): WorldEntity {
+  return worldEntitySchema.parse({
+    id: row.id,
+    key: row.key,
+    name: row.name,
+    summary: row.summary ?? '',
+    nodeType: row.node_type,
+    aliases: row.aliases ?? [],
+    tags: row.tags ?? [],
+    status: row.status,
+    thumbnailAssetKey: row.thumbnail_asset_key,
+    linkedDefinitionKey: row.linked_definition_key,
+    source: row.source,
+    customProperties: row.custom_properties ?? {},
     metadata: row.metadata ?? {},
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -1097,10 +1136,16 @@ function determineDefinitionKind(nodeType: WorldEntity['nodeType']): DefinitionB
   switch (nodeType) {
     case 'actor':
       return 'character'
+    case 'group':
+      return 'group'
     case 'place':
       return 'environment'
     case 'object':
       return 'item'
+    case 'concept':
+      return 'concept'
+    case 'event':
+      return 'event'
     default:
       return null
   }
@@ -1514,27 +1559,28 @@ function buildFallbackPlannerOpsFromWorldGraph(input: {
     })
   }
 
+  const suggestionSeed = buildProjectContextSuggestionSeed(input.payload.snapshot.projectContext)
   const suggestionTail = input.payload.snapshot.worldEntities.length === 0
     ? [
         buildPromptSuggestion({
           id: 'fallback-add-characters',
-          label: 'Add Key Characters',
-          prompt: `Continue this world by adding 2 or 3 key characters to "${input.requestSummary}" and connect them to the main conflict.`,
+          label: suggestionSeed.primaryLabel,
+          prompt: `${suggestionSeed.primaryPrompt} Ground it in "${input.requestSummary}".`,
           kind: 'continue_scope',
           style: 'primary',
           source: 'wave2',
-          summary: 'Add a compact first cast and tie them into the seeded world conflict.',
+          summary: suggestionSeed.primarySummary,
           estimatedNodeCount: 3,
           estimatedEdgeCount: 3,
         }),
         buildPromptSuggestion({
           id: 'fallback-add-lore',
-          label: 'Add Lore Layer',
-          prompt: `Continue this world by adding one hidden piece of lore and one event that deepens "${input.requestSummary}".`,
+          label: suggestionSeed.secondaryLabel,
+          prompt: `${suggestionSeed.secondaryPrompt} Make it specific to "${input.requestSummary}".`,
           kind: 'continue_scope',
           style: 'secondary',
           source: 'wave2',
-          summary: 'Deepen the seed with one lore thread and one consequence.',
+          summary: suggestionSeed.secondarySummary,
           estimatedNodeCount: 2,
           estimatedEdgeCount: 2,
         }),
@@ -1639,17 +1685,18 @@ function looksContradictoryOrLowConfidence(prompt: string) {
 
 function buildBlockedSuggestions(prompt: string, snapshot: WorldPromptSnapshot) {
   const hasWorld = snapshot.worldEntities.length > 0
+  const suggestionSeed = buildProjectContextSuggestionSeed(snapshot.projectContext)
   return dedupeSuggestions([
     buildPromptSuggestion({
       id: 'repair-characters',
-      label: 'Add Characters',
+      label: suggestionSeed.repairLabel,
       prompt: hasWorld
-        ? 'Continue from the current world by adding a protagonist and a rival, then connect them to the existing graph.'
-        : 'Start this world by adding a protagonist and a rival, then connect them with a central conflict.',
+        ? `${suggestionSeed.primaryPrompt} Use the existing world state instead of starting over.`
+        : suggestionSeed.repairPrompt,
       kind: 'repair_prompt',
       style: 'primary',
       source: 'repair',
-      summary: 'Add one hero, one rival, and a clear conflict anchor.',
+      summary: suggestionSeed.repairSummary,
       estimatedNodeCount: 2,
       estimatedEdgeCount: 2,
     }),
@@ -2382,12 +2429,109 @@ async function createEventWriter(input: {
   }
 }
 
+function describeProjectContextForPlanner(projectContext: WorldPromptSnapshot['projectContext']) {
+  if (!projectContext) return null
+  const projectLabel =
+    projectContext.projectType === 'game'
+      ? 'video game'
+      : projectContext.projectType === 'ugc'
+        ? 'UGC / social-native project'
+        : projectContext.projectType
+  const subtypeLabel = projectContext.projectSubtype.replace(/_/g, ' ')
+  const styleLabel = projectContext.artStylePreset.replace(/_/g, ' ')
+  const styleNotes = projectContext.artStyleDescription.trim()
+  const brainGuidance =
+    projectContext.brainProfile === 'game'
+      ? 'Bias generation toward factions, regions, world objects, progression landmarks, quest hooks, and gameplay-supportive world structure.'
+      : projectContext.brainProfile === 'brand'
+        ? 'Bias generation toward symbolic systems, signature assets, mascots, message pillars, campaign moments, and audience-facing world language.'
+        : projectContext.brainProfile === 'ugc'
+          ? 'Bias generation toward hooks, proof beats, scenarios, creator personas, use-case objects, and repeatable social-native episodes.'
+          : 'Bias generation toward cast, factions, places, lore, conflicts, prophecy, secrets, and inciting events.'
+  return [
+    `Project type: ${projectLabel}.`,
+    `Project subtype: ${subtypeLabel}.`,
+    `Brain profile: ${projectContext.brainProfile}.`,
+    `Art style preset: ${styleLabel}.`,
+    styleNotes ? `Art style notes: ${styleNotes}.` : null,
+    brainGuidance,
+  ].filter(Boolean).join(' ')
+}
+
+function buildProjectContextSuggestionSeed(projectContext: WorldPromptSnapshot['projectContext']) {
+  if (!projectContext) {
+    return {
+      primaryLabel: 'Add Key Characters',
+      primaryPrompt: 'Continue this world by adding 2 or 3 key characters and connect them to the main conflict.',
+      primarySummary: 'Add a compact first cast and tie them into the seeded world conflict.',
+      secondaryLabel: 'Add Lore Layer',
+      secondaryPrompt: 'Continue this world by adding one hidden piece of lore and one event that deepen the central tension.',
+      secondarySummary: 'Deepen the seed with one lore thread and one consequence.',
+      repairLabel: 'Add Characters',
+      repairPrompt: 'Start this world by adding a protagonist and a rival, then connect them with a central conflict.',
+      repairSummary: 'Add one hero, one rival, and a clear conflict anchor.',
+    }
+  }
+
+  switch (projectContext.brainProfile) {
+    case 'game':
+      return {
+        primaryLabel: 'Add Factions And Regions',
+        primaryPrompt: 'Continue this game world by adding 2 factions, one playable region, and the pressure connecting them.',
+        primarySummary: 'Add a gameplay-supportive slice with one region and faction pressure.',
+        secondaryLabel: 'Add Progression Hook',
+        secondaryPrompt: 'Continue this game world by adding one quest hook, one landmark, and one object tied to progression.',
+        secondarySummary: 'Seed a concrete progression hook with place and object support.',
+        repairLabel: 'Add A Playable Hook',
+        repairPrompt: 'Start this game world by adding one faction, one place, and one progression hook players can act on immediately.',
+        repairSummary: 'Turn the vague request into a playable worldbuilding beat.',
+      }
+    case 'brand':
+      return {
+        primaryLabel: 'Add Signature Symbols',
+        primaryPrompt: 'Continue this brand world by adding one symbolic group, one signature object, and one campaign moment.',
+        primarySummary: 'Expand the symbolic system with one memorable asset and event.',
+        secondaryLabel: 'Add Mascot Layer',
+        secondaryPrompt: 'Continue this brand world by adding a mascot or spokesperson figure tied to the main message pillars.',
+        secondarySummary: 'Add a recognizable face or figure to carry the world.',
+        repairLabel: 'Add Brand Anchors',
+        repairPrompt: 'Start this brand world with one symbolic concept, one signature object, and one audience-facing event.',
+        repairSummary: 'Turn the vague request into a clearer branded world structure.',
+      }
+    case 'ugc':
+      return {
+        primaryLabel: 'Add Hook And Proof',
+        primaryPrompt: 'Continue this UGC world by adding one stronger hook, one proof-driven event, and the object that makes the payoff believable.',
+        primarySummary: 'Expand the social-native thread with a stronger hook and proof beat.',
+        secondaryLabel: 'Add Creator Persona',
+        secondaryPrompt: 'Continue this UGC world by adding the creator or audience persona best suited to carry the next beat.',
+        secondarySummary: 'Add the human point of view that makes the scenario feel native.',
+        repairLabel: 'Add A Social Scenario',
+        repairPrompt: 'Start this UGC world with one creator persona, one use-case object, and one proof-led scenario.',
+        repairSummary: 'Turn the vague request into a hook, persona, and payoff structure.',
+      }
+    default:
+      return {
+        primaryLabel: 'Add Key Characters',
+        primaryPrompt: 'Continue this world by adding 2 or 3 key characters and connect them to the main conflict.',
+        primarySummary: 'Add a compact first cast and tie them into the seeded world conflict.',
+        secondaryLabel: 'Add Lore Layer',
+        secondaryPrompt: 'Continue this world by adding one hidden piece of lore and one event that deepen the central tension.',
+        secondarySummary: 'Deepen the seed with one lore thread and one consequence.',
+        repairLabel: 'Add Characters',
+        repairPrompt: 'Start this world by adding a protagonist and a rival, then connect them with a central conflict.',
+        repairSummary: 'Add one hero, one rival, and a clear conflict anchor.',
+      }
+  }
+}
+
 async function generatePromptPlan(input: {
   payload: WorldPromptStartTurnRequest
   session: WorldPromptSession
   summaryMemory: string
   recentMessages: WorldPromptMessage[]
 }) {
+  const projectContextGuidance = describeProjectContextForPlanner(input.payload.snapshot.projectContext)
   const debugEnabled = shouldDebugWorldPromptOpenAi()
   const instructions = [
     'You are the GraphCore prompt-to-world graph planner.',
@@ -2406,8 +2550,9 @@ async function generatePromptPlan(input: {
     'Use not_graphable or contradictory_or_low_confidence when the prompt cannot be mapped cleanly. In that case, wave1Ops may be empty and suggestionCandidates should repair the request.',
     'threadCandidates should describe the main unresolved narrative or lore threads implied by the prompt and resulting graph changes.',
     'Suggestion ideas should be concrete and world-specific, not generic categories.',
+    projectContextGuidance ? `Project guidance: ${projectContextGuidance}` : null,
     'Keep operations compact and high-signal.',
-  ].join('\n')
+  ].filter(Boolean).join('\n')
 
   const prompt = JSON.stringify({
     session: {
@@ -2423,6 +2568,7 @@ async function generatePromptPlan(input: {
     selectedViewKey: input.payload.selectedViewKey,
     selectedThreadKey: input.payload.selectedThreadKey,
     prompt: input.payload.prompt,
+    projectContext: input.payload.snapshot.projectContext,
     snapshot: {
       project: input.payload.snapshot.project,
       draft: input.payload.snapshot.draft,
@@ -2737,41 +2883,12 @@ async function applyPromptOp(input: {
       ? input.snapshot.worldEntities.find((entity) => entity.key === input.op.payload.targetEntityKey) ?? null
       : null
     if (target) {
-      const nextAliases = Array.from(new Set([...target.aliases, ...(input.op.payload.entity.aliases ?? [])]))
-      const nextTags = Array.from(new Set([...target.tags, ...(input.op.payload.entity.tags ?? [])]))
-      const nextSummary = target.summary.trim() ? target.summary : input.op.payload.entity.summary
-      const updateResponse = await input.client
-        .from('world_entities')
-        .update({
-          aliases: nextAliases,
-          tags: nextTags,
-          summary: nextSummary,
-          metadata: {
-            ...(target.metadata ?? {}),
-            ...(input.op.payload.entity.metadata ?? {}),
-          },
-        })
-        .eq('draft_id', input.snapshot.draft.id)
-        .eq('key', target.key)
-        .select('id, key, name, summary, node_type, aliases, tags, status, thumbnail_asset_key, linked_definition_key, source, custom_properties, metadata, created_at, updated_at')
-        .single()
-      if (updateResponse.error) throw new Error(updateResponse.error.message)
-      const updatedEntity = worldEntitySchema.parse({
-        id: updateResponse.data.id,
-        key: updateResponse.data.key,
-        name: updateResponse.data.name,
-        summary: updateResponse.data.summary ?? '',
-        nodeType: updateResponse.data.node_type,
-        aliases: updateResponse.data.aliases ?? [],
-        tags: updateResponse.data.tags ?? [],
-        status: updateResponse.data.status,
-        thumbnailAssetKey: updateResponse.data.thumbnail_asset_key,
-        linkedDefinitionKey: updateResponse.data.linked_definition_key,
-        source: updateResponse.data.source,
-        customProperties: updateResponse.data.custom_properties ?? {},
-        metadata: updateResponse.data.metadata ?? {},
-        createdAt: updateResponse.data.created_at,
-        updatedAt: updateResponse.data.updated_at,
+      const updatedEntity = await mergePromptEntityIntoExisting({
+        client: input.client,
+        draftId: input.snapshot.draft.id,
+        target,
+        incoming: input.op.payload.entity,
+        linkedDefinitionKey: target.linkedDefinitionKey,
       })
       input.snapshot.worldEntities = input.snapshot.worldEntities.map((entity) => entity.key === updatedEntity.key ? updatedEntity : entity)
       return { applied: { worldEntities: [updatedEntity] }, queue: null, note: null }
@@ -2783,6 +2900,21 @@ async function applyPromptOp(input: {
       entity: input.op.payload.entity,
     })
     const key = input.op.payload.targetEntityKey || buildWorldEntityKey(input.snapshot, input.op.payload.entity.nodeType, input.op.payload.entity.name)
+    const dbTarget = await loadWorldEntityByDraftAndKey(input.client, input.snapshot.draft.id, key)
+    if (dbTarget) {
+      const updatedEntity = await mergePromptEntityIntoExisting({
+        client: input.client,
+        draftId: input.snapshot.draft.id,
+        target: dbTarget,
+        incoming: input.op.payload.entity,
+        linkedDefinitionKey,
+      })
+      input.snapshot.worldEntities = [
+        ...input.snapshot.worldEntities.filter((entity) => entity.key !== updatedEntity.key),
+        updatedEntity,
+      ]
+      return { applied: { worldEntities: [updatedEntity] }, queue: null, note: null }
+    }
     const insertResponse = await input.client
       .from('world_entities')
       .insert({
@@ -2800,26 +2932,30 @@ async function applyPromptOp(input: {
         custom_properties: input.op.payload.entity.customProperties,
         metadata: input.op.payload.entity.metadata,
       })
-      .select('id, key, name, summary, node_type, aliases, tags, status, thumbnail_asset_key, linked_definition_key, source, custom_properties, metadata, created_at, updated_at')
+      .select(WORLD_ENTITY_SELECT)
       .single()
-    if (insertResponse.error) throw new Error(insertResponse.error.message)
-    const createdEntity = worldEntitySchema.parse({
-      id: insertResponse.data.id,
-      key: insertResponse.data.key,
-      name: insertResponse.data.name,
-      summary: insertResponse.data.summary ?? '',
-      nodeType: insertResponse.data.node_type,
-      aliases: insertResponse.data.aliases ?? [],
-      tags: insertResponse.data.tags ?? [],
-      status: insertResponse.data.status,
-      thumbnailAssetKey: insertResponse.data.thumbnail_asset_key,
-      linkedDefinitionKey: insertResponse.data.linked_definition_key,
-      source: insertResponse.data.source,
-      customProperties: insertResponse.data.custom_properties ?? {},
-      metadata: insertResponse.data.metadata ?? {},
-      createdAt: insertResponse.data.created_at,
-      updatedAt: insertResponse.data.updated_at,
-    })
+    if (insertResponse.error) {
+      const message = insertResponse.error.message ?? ''
+      if (message.includes('world_entities_draft_id_key_key')) {
+        const collidedEntity = await loadWorldEntityByDraftAndKey(input.client, input.snapshot.draft.id, key)
+        if (collidedEntity) {
+          const updatedEntity = await mergePromptEntityIntoExisting({
+            client: input.client,
+            draftId: input.snapshot.draft.id,
+            target: collidedEntity,
+            incoming: input.op.payload.entity,
+            linkedDefinitionKey,
+          })
+          input.snapshot.worldEntities = [
+            ...input.snapshot.worldEntities.filter((entity) => entity.key !== updatedEntity.key),
+            updatedEntity,
+          ]
+          return { applied: { worldEntities: [updatedEntity] }, queue: null, note: null }
+        }
+      }
+      throw new Error(message)
+    }
+    const createdEntity = mapWorldEntityRow(insertResponse.data as WorldEntityRow)
     input.snapshot.worldEntities = [
       ...input.snapshot.worldEntities.filter((entity) => entity.key !== createdEntity.key),
       createdEntity,
@@ -3310,6 +3446,52 @@ async function loadActiveSessionSuggestions(client: SupabaseClient, sessionId: s
     .order('created_at', { ascending: true })
   if (response.error) throw new Error(response.error.message)
   return (response.data ?? []).map((row) => mapSuggestionRow(row as WorldPromptSuggestionRow))
+}
+
+async function loadWorldEntityByDraftAndKey(client: SupabaseClient, draftId: string, entityKey: string) {
+  const response = await client
+    .from('world_entities')
+    .select(WORLD_ENTITY_SELECT)
+    .eq('draft_id', draftId)
+    .eq('key', entityKey)
+    .maybeSingle()
+  if (response.error) throw new Error(response.error.message)
+  return response.data ? mapWorldEntityRow(response.data as WorldEntityRow) : null
+}
+
+async function mergePromptEntityIntoExisting(input: {
+  client: SupabaseClient
+  draftId: string
+  target: WorldEntity
+  incoming: WorldEntityCreateInput
+  linkedDefinitionKey: string | null
+}) {
+  const nextAliases = Array.from(new Set([...input.target.aliases, ...(input.incoming.aliases ?? [])]))
+  const nextTags = Array.from(new Set([...input.target.tags, ...(input.incoming.tags ?? [])]))
+  const nextSummary = input.target.summary.trim() ? input.target.summary : input.incoming.summary
+  const updateResponse = await input.client
+    .from('world_entities')
+    .update({
+      aliases: nextAliases,
+      tags: nextTags,
+      summary: nextSummary,
+      thumbnail_asset_key: input.target.thumbnailAssetKey ?? input.incoming.thumbnailAssetKey,
+      linked_definition_key: input.target.linkedDefinitionKey ?? input.linkedDefinitionKey,
+      custom_properties: {
+        ...(input.target.customProperties ?? {}),
+        ...(input.incoming.customProperties ?? {}),
+      },
+      metadata: {
+        ...(input.target.metadata ?? {}),
+        ...(input.incoming.metadata ?? {}),
+      },
+    })
+    .eq('draft_id', input.draftId)
+    .eq('key', input.target.key)
+    .select(WORLD_ENTITY_SELECT)
+    .single()
+  if (updateResponse.error) throw new Error(updateResponse.error.message)
+  return mapWorldEntityRow(updateResponse.data as WorldEntityRow)
 }
 
 async function refreshTurnSuggestions(input: {

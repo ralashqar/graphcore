@@ -22,6 +22,8 @@ import { Suspense, lazy, memo, useDeferredValue, useEffect, useMemo, useRef, use
 
 import { resolveAssetSourceUrl } from '../domain/assets'
 import type { AssetDefinition, DefinitionBase, GraphDefinition } from '../domain/graphcore'
+import type { ProjectContext } from '../domain/projectContext'
+import { getBrainProfileSummary, getProjectTypeLabel } from '../domain/projectContextProfiles'
 import type {
   WorldEntity,
   WorldEntityCreateInput,
@@ -47,6 +49,7 @@ import type { WorldThread } from '../domain/worldThread'
 import {
   buildSuggestionsForEntity,
   createDefaultWorldView,
+  definitionKindForWorldEntity,
   getDerivedOperationsForEntityPair,
   getWorldEntityUsage,
   iconForWorldEntity,
@@ -67,6 +70,7 @@ import {
   type WorldPromptTranscriptEntry,
 } from './world/worldPresentation'
 import type { GraphWorkspaceProps } from './graph/types'
+import { ProjectWorldOnboarding } from './onboarding/ProjectWorldOnboarding'
 
 const LegacyGraphWorkspace = lazy(() =>
   import('./graphWorkspace').then((module) => ({ default: module.GraphWorkspace })),
@@ -88,6 +92,9 @@ type WorldGraphPageProps = {
   worldPromptMessages: WorldPromptMessage[]
   worldPromptEvents: WorldPromptEvent[]
   worldPromptSuggestions: WorldPromptSuggestionRecord[]
+  projectContext: ProjectContext | null
+  showProjectOnboarding: boolean
+  projectOnboardingSaving: boolean
   selectedWorldNodeKey: string | null
   selectedWorldEdgeKey: string | null
   selectedWorldEntityKey: string | null
@@ -121,6 +128,7 @@ type WorldGraphPageProps = {
   onUpdateWorldView: (viewKey: string, changes: Partial<WorldViewCreateInput>) => Promise<void> | void
   onGenerateStarterWorld: (prompt: string) => Promise<void> | void
   onGenerateWorldExpansion: (entityKey: string) => Promise<void> | void
+  onCompleteProjectOnboarding: (projectContext: ProjectContext) => Promise<void> | void
   onStartWorldPromptTurn: (input: {
     prompt: string
     sessionKey?: string | null
@@ -752,6 +760,9 @@ export function WorldGraphPage({
   worldPromptMessages,
   worldPromptEvents,
   worldPromptSuggestions,
+  projectContext,
+  showProjectOnboarding,
+  projectOnboardingSaving,
   selectedWorldNodeKey,
   selectedWorldEdgeKey,
   selectedWorldEntityKey,
@@ -776,6 +787,7 @@ export function WorldGraphPage({
   onUpdateWorldView,
   onGenerateStarterWorld: _onGenerateStarterWorld,
   onGenerateWorldExpansion,
+  onCompleteProjectOnboarding,
   onStartWorldPromptTurn,
   onCreateWorldPromptSession,
   onRefreshWorldPromptSuggestions,
@@ -1968,6 +1980,24 @@ export function WorldGraphPage({
     )
   }
 
+  const isOnboardingMode = showProjectOnboarding && worldEntities.length === 0
+
+  if (isOnboardingMode) {
+    return (
+      <div
+        className="focus-layout graph-layout world-graph-layout world-graph-layout-onboarding"
+        onClick={() => setContextMenu(null)}
+      >
+        <ProjectWorldOnboarding
+          initialProjectContext={projectContext}
+          isSaving={projectOnboardingSaving}
+          onSubmit={onCompleteProjectOnboarding}
+          projectName={selectedView.name || 'New world'}
+        />
+      </div>
+    )
+  }
+
   return (
     <div
       className="focus-layout graph-layout world-graph-layout"
@@ -1986,6 +2016,7 @@ export function WorldGraphPage({
             cancelBusy={isPromptCancelling}
             promptText={worldPromptText}
             promptError={worldPromptError}
+            projectContext={projectContext}
             entityByKey={entityByKey}
             selectedEntity={selectedEntity}
             selectedSession={selectedPromptSession}
@@ -2293,7 +2324,7 @@ export function WorldGraphPage({
                 <button className="world-context-action" onClick={() => {
                   const entity = worldEntities.find((entry) => entry.key === contextMenu.entityKey) ?? null
                   if (entity?.linkedDefinitionKey) {
-                    const kind = entity.nodeType === 'actor' ? 'character' : entity.nodeType === 'place' ? 'environment' : entity.nodeType === 'object' ? 'item' : null
+                    const kind = definitionKindForWorldEntity(entity.nodeType)
                     if (kind) onOpenDefinitionLink(entity.linkedDefinitionKey, kind)
                   }
                   setContextMenu(null)
@@ -2711,7 +2742,7 @@ export function WorldGraphPage({
                 <div className="world-inspector-actions">
                   {displayedInspectorEntity.linkedDefinitionKey ? (
                     <button className="ghost-button compact" onClick={() => {
-                      const kind = displayedInspectorEntity.nodeType === 'actor' ? 'character' : displayedInspectorEntity.nodeType === 'place' ? 'environment' : displayedInspectorEntity.nodeType === 'object' ? 'item' : null
+                      const kind = definitionKindForWorldEntity(displayedInspectorEntity.nodeType)
                       if (kind) onOpenDefinitionLink(displayedInspectorEntity.linkedDefinitionKey!, kind)
                     }} type="button">Open Linked Record</button>
                   ) : null}
@@ -3337,44 +3368,160 @@ function LegacyWorldPromptChatPanel({
 
 void LegacyWorldPromptChatPanel
 
-const WORLD_PROMPT_TYPE_ACCELERATORS: Array<{
-  iconId: ReturnType<typeof iconForWorldEntity>
-  label: string
-  prompt: string
-}> = [
-  { iconId: 'character', label: 'Character', prompt: 'Create a new character with a strong flaw, secret motive, and clear place in the world.' },
-  { iconId: 'content', label: 'Group', prompt: 'Create a faction, order, or house with a goal, identity, and tension with existing powers.' },
-  { iconId: 'environment', label: 'Place', prompt: 'Create a place with atmosphere, purpose, and links to the main conflicts in this world.' },
-  { iconId: 'item', label: 'Object', prompt: 'Create an important object or relic with meaning, history, and who wants it.' },
-  { iconId: 'content', label: 'Concept', prompt: 'Create a belief, law, prophecy, or abstract concept that shapes this world.' },
-  { iconId: 'activity', label: 'Event', prompt: 'Create a major event with consequences, participants, and lingering fallout.' },
-  { iconId: 'graph', label: 'Any', prompt: 'Create whatever this world most needs next and connect it meaningfully.' },
-]
+function getWorldPromptTypeAccelerators(projectContext: ProjectContext | null) {
+  switch (projectContext?.brainProfile) {
+    case 'game':
+      return [
+        { iconId: 'character' as const, label: 'Character', prompt: 'Create a playable or story-critical character with a gameplay role, pressure point, and ties to the world.' },
+        { iconId: 'content' as const, label: 'Group', prompt: 'Create a faction with territory, methods, allies, and a reason the player will encounter them.' },
+        { iconId: 'environment' as const, label: 'Place', prompt: 'Create a region, hub, or traversal space with atmosphere, gameplay purpose, and faction pressure.' },
+        { iconId: 'item' as const, label: 'Object', prompt: 'Create an item or world object with utility, desire, and a place in progression.' },
+        { iconId: 'content' as const, label: 'Concept', prompt: 'Create a rule, belief, or lore concept that shapes the playable world.' },
+        { iconId: 'activity' as const, label: 'Event', prompt: 'Create an event that changes stakes, unlocks new pressure, or alters world state.' },
+        { iconId: 'graph' as const, label: 'Any', prompt: 'Create whatever this game world most needs next and connect it to progression.' },
+      ]
+    case 'brand':
+      return [
+        { iconId: 'content' as const, label: 'Group', prompt: 'Create a branded faction, audience cluster, or campaign-side force with a clear identity and purpose.' },
+        { iconId: 'item' as const, label: 'Object', prompt: 'Create a signature product-world object, icon, or symbolic asset with strong recall.' },
+        { iconId: 'content' as const, label: 'Concept', prompt: 'Create a belief, message pillar, ritual, or symbolic rule that defines the brand world.' },
+        { iconId: 'activity' as const, label: 'Event', prompt: 'Create a campaign event, launch beat, or branded world moment people can rally around.' },
+        { iconId: 'character' as const, label: 'Character', prompt: 'Create a mascot, spokesperson, or human lead who can carry the brand world.' },
+        { iconId: 'environment' as const, label: 'Place', prompt: 'Create a branded setting or signature place that anchors the project visually.' },
+        { iconId: 'graph' as const, label: 'Any', prompt: 'Create whatever symbolic element would sharpen this brand world next.' },
+      ]
+    case 'ugc':
+      return [
+        { iconId: 'character' as const, label: 'Persona', prompt: 'Create a creator persona, audience proxy, or witness character for this UGC world.' },
+        { iconId: 'item' as const, label: 'Object', prompt: 'Create the key product, prop, or proof object this world revolves around.' },
+        { iconId: 'activity' as const, label: 'Scenario', prompt: 'Create a scenario or event that naturally produces a hook, proof moment, and payoff.' },
+        { iconId: 'content' as const, label: 'Concept', prompt: 'Create a central hook, belief reset, or proof idea that drives the next UGC thread.' },
+        { iconId: 'content' as const, label: 'Group', prompt: 'Create a customer type, creator cluster, or audience segment that belongs in this world.' },
+        { iconId: 'environment' as const, label: 'Place', prompt: 'Create a location or setup where this social-native story naturally unfolds.' },
+        { iconId: 'graph' as const, label: 'Any', prompt: 'Create whatever would strengthen the next hook, proof, or social beat.' },
+      ]
+    default:
+      return [
+        { iconId: 'character' as const, label: 'Character', prompt: 'Create a new character with a strong flaw, secret motive, and clear place in the world.' },
+        { iconId: 'content' as const, label: 'Group', prompt: 'Create a faction, order, or house with a goal, identity, and tension with existing powers.' },
+        { iconId: 'environment' as const, label: 'Place', prompt: 'Create a place with atmosphere, purpose, and links to the main conflicts in this world.' },
+        { iconId: 'item' as const, label: 'Object', prompt: 'Create an important object or relic with meaning, history, and who wants it.' },
+        { iconId: 'content' as const, label: 'Concept', prompt: 'Create a belief, law, prophecy, or abstract concept that shapes this world.' },
+        { iconId: 'activity' as const, label: 'Event', prompt: 'Create a major event with consequences, participants, and lingering fallout.' },
+        { iconId: 'graph' as const, label: 'Any', prompt: 'Create whatever this world most needs next and connect it meaningfully.' },
+      ]
+  }
+}
 
-const WORLD_PROMPT_STARTER_CARDS = [
-  {
-    title: 'Create a character',
-    summary: 'Introduce a protagonist, rival, mentor, or witness who matters to the core tension.',
-    prompt: 'Create a compelling new character for this world and connect them to the central conflict.',
-  },
-  {
-    title: 'Create a faction',
-    summary: 'Add a house, cult, guild, or government with loyalties, enemies, and cultural texture.',
-    prompt: 'Create a new faction for this world with goals, rivals, and a visible role in the power structure.',
-  },
-  {
-    title: 'Create a place',
-    summary: 'Add a city, stronghold, district, ruin, or natural landmark worth returning to.',
-    prompt: 'Create a memorable place in this world with atmosphere, function, and relationships to other entities.',
-  },
-]
+function getWorldPromptStarterCards(projectContext: ProjectContext | null) {
+  switch (projectContext?.brainProfile) {
+    case 'game':
+      return [
+        {
+          title: 'Create a faction',
+          summary: 'Define a force the player will encounter, ally with, or fight against.',
+          prompt: 'Create a faction for this game world with territory, goals, methods, and one immediate world-level tension.',
+        },
+        {
+          title: 'Create a region',
+          summary: 'Add a playable place with traversal identity, pressure, and rewards.',
+          prompt: 'Create a memorable region or hub for this game world with atmosphere, gameplay purpose, and ties to existing forces.',
+        },
+        {
+          title: 'Create a hook',
+          summary: 'Seed an item, landmark, or problem that opens a progression path.',
+          prompt: 'Create a compelling world hook for this game project and connect it to factions, places, or progression.',
+        },
+      ]
+    case 'brand':
+      return [
+        {
+          title: 'Create a campaign world',
+          summary: 'Define the symbolic world, tone, and power structure around the brand.',
+          prompt: 'Create a branded campaign world with clear values, tension, and one signature symbolic element.',
+        },
+        {
+          title: 'Create a mascot',
+          summary: 'Add a lead figure or identity anchor people can remember instantly.',
+          prompt: 'Create a mascot or leading character for this brand world with a role, tone, and signature visual cue.',
+        },
+        {
+          title: 'Create a signature asset',
+          summary: 'Add the object, ritual, or symbol the world revolves around.',
+          prompt: 'Create a signature object or symbol for this brand world and connect it to the message pillars.',
+        },
+      ]
+    case 'ugc':
+      return [
+        {
+          title: 'Create a hook',
+          summary: 'Start with a problem, confession, or belief reset the audience understands immediately.',
+          prompt: 'Create a high-performing social hook for this world and tie it to a clear scenario, persona, or proof object.',
+        },
+        {
+          title: 'Create a proof beat',
+          summary: 'Add the event, demo, or scenario where the promise gets verified.',
+          prompt: 'Create a proof-driven event or scenario for this UGC world with clear payoff and continuation potential.',
+        },
+        {
+          title: 'Create a persona',
+          summary: 'Define the creator voice, witness, or audience surrogate who belongs in the thread.',
+          prompt: 'Create the core creator or audience persona for this UGC world and connect them to the main hook.',
+        },
+      ]
+    default:
+      return [
+        {
+          title: 'Create a character',
+          summary: 'Introduce a protagonist, rival, mentor, or witness who matters to the core tension.',
+          prompt: 'Create a compelling new character for this world and connect them to the central conflict.',
+        },
+        {
+          title: 'Create a faction',
+          summary: 'Add a house, cult, guild, or government with loyalties, enemies, and cultural texture.',
+          prompt: 'Create a new faction for this world with goals, rivals, and a visible role in the power structure.',
+        },
+        {
+          title: 'Create a place',
+          summary: 'Add a city, stronghold, district, ruin, or natural landmark worth returning to.',
+          prompt: 'Create a memorable place in this world with atmosphere, function, and relationships to other entities.',
+        },
+      ]
+  }
+}
 
-const WORLD_PROMPT_SMART_PROMPTS = [
-  'Add a hidden heir who threatens the current order',
-  'Create the city where trade, spies, and rumors converge',
-  'Design a relic that changes who can wield power',
-  'Create the prophecy everyone interprets differently',
-]
+function getWorldPromptSmartPrompts(projectContext: ProjectContext | null) {
+  switch (projectContext?.brainProfile) {
+    case 'game':
+      return [
+        'Add a frontier region where survival and faction pressure collide',
+        'Create a relic that unlocks a dangerous traversal path',
+        'Introduce a rival faction controlling the safest route forward',
+        'Design the first quest hook players will talk about',
+      ]
+    case 'brand':
+      return [
+        'Create the core symbolic rule that defines this brand world',
+        'Add a mascot-level figure with a recognizable emotional role',
+        'Design the signature object the whole campaign revolves around',
+        'Create a campaign moment that people would want to share',
+      ]
+    case 'ugc':
+      return [
+        'Add the hook that stops someone mid-scroll',
+        'Create the proof moment that makes the claim believable',
+        'Design the creator persona who naturally tells this story',
+        'Create the scenario that turns into an episodic thread',
+      ]
+    default:
+      return [
+        'Add a hidden heir who threatens the current order',
+        'Create the city where trade, spies, and rumors converge',
+        'Design a relic that changes who can wield power',
+        'Create the prophecy everyone interprets differently',
+      ]
+  }
+}
 
 function WorldPromptChatPanel({
   activePromptPreview,
@@ -3383,6 +3530,7 @@ function WorldPromptChatPanel({
   cancelBusy,
   promptText,
   promptError,
+  projectContext,
   entityByKey,
   selectedEntity,
   selectedSession,
@@ -3419,6 +3567,7 @@ function WorldPromptChatPanel({
   cancelBusy: boolean
   promptText: string
   promptError: string | null
+  projectContext: ProjectContext | null
   entityByKey: Map<string, WorldEntity>
   selectedEntity: WorldEntity | null
   selectedSession: WorldPromptSession | null
@@ -3566,6 +3715,15 @@ function WorldPromptChatPanel({
     : selectedSessionKey
       ? 'Fresh context window'
       : 'World-aware creation stream'
+  const promptTypeAccelerators = useMemo(() => getWorldPromptTypeAccelerators(projectContext), [projectContext])
+  const promptStarterCards = useMemo(() => getWorldPromptStarterCards(projectContext), [projectContext])
+  const promptSmartPrompts = useMemo(() => getWorldPromptSmartPrompts(projectContext), [projectContext])
+  const promptCenterHeading = projectContext
+    ? `What do you want to create for this ${getProjectTypeLabel(projectContext.projectType).toLowerCase()} project?`
+    : 'What would you like to create?'
+  const promptCenterSubline = projectContext
+    ? `${getProjectTypeLabel(projectContext.projectType)} · ${getBrainProfileSummary(projectContext.projectSubtype)}`
+    : 'Describe anything. GraphCore will build it and connect it into the world.'
   const composerLabel = railView.primaryActionKind === 'continue'
     ? 'Continue building'
     : railView.primaryActionKind === 'generate'
@@ -3777,8 +3935,8 @@ function WorldPromptChatPanel({
         <div className="world-prompt-center">
           <div className="world-prompt-center-copy">
             <span className="eyebrow">Prompt-first worldbuilding</span>
-            <h2>What would you like to create?</h2>
-            <p>Describe anything. GraphCore will build it and connect it into the world.</p>
+            <h2>{promptCenterHeading}</h2>
+            <p>{promptCenterSubline}</p>
           </div>
 
           <div className="world-prompt-composer world-prompt-composer-center">
@@ -3798,7 +3956,7 @@ function WorldPromptChatPanel({
           </div>
 
           <div className="world-prompt-type-chips">
-            {WORLD_PROMPT_TYPE_ACCELERATORS.map((chip) => (
+            {promptTypeAccelerators.map((chip) => (
               <button key={chip.label} className="world-prompt-type-chip" onClick={() => seedPrompt(chip.prompt)} type="button">
                 <EntityIcon id={chip.iconId} />
                 <span>{chip.label}</span>
@@ -3807,7 +3965,7 @@ function WorldPromptChatPanel({
           </div>
 
           <div className="world-prompt-starter-grid">
-            {WORLD_PROMPT_STARTER_CARDS.map((card) => (
+            {promptStarterCards.map((card) => (
               <button key={card.title} className="world-prompt-starter-card" onClick={() => seedPrompt(card.prompt)} type="button">
                 <strong>{card.title}</strong>
                 <span>{card.summary}</span>
@@ -3821,7 +3979,7 @@ function WorldPromptChatPanel({
               <span className="inline-note">Quick ways to start the thread.</span>
             </div>
             <div className="world-prompt-smart-grid">
-              {WORLD_PROMPT_SMART_PROMPTS.map((prompt) => (
+              {promptSmartPrompts.map((prompt) => (
                 <button key={prompt} className="world-prompt-smart-chip" onClick={() => seedPrompt(prompt)} type="button">
                   <span>{prompt}</span>
                 </button>
