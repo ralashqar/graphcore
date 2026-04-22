@@ -5,9 +5,7 @@ type WorkspaceTopbarProps = {
   activeTab: WorkspaceTab
   activeGameId?: string | null
   currentUserEmail?: string | null
-  isCompiling: boolean
   games: GameSummary[]
-  onCompile: () => void
   onOpenActivity: () => void
   onOpenAuth: () => void
   onOpenNewGame: () => void
@@ -28,9 +26,7 @@ export function WorkspaceTopbar({
   currentUserEmail,
   draftName,
   games,
-  isCompiling,
   isSignedIn,
-  onCompile,
   onOpenActivity,
   onOpenAuth,
   onOpenNewGame,
@@ -63,25 +59,34 @@ export function WorkspaceTopbar({
       </div>
       <div className="topbar-actions">
         {games.length > 0 ? (
-          <label className="topbar-select-wrap">
-            <span className="topbar-select-label">Game</span>
-            <select className="topbar-select" value={activeGameId ?? ''} onChange={(event) => onSelectGame(event.target.value)}>
-              {games.map((game) => (
-                <option key={game.projectId} value={game.projectId}>
-                  {game.projectName}
-                </option>
-              ))}
-            </select>
-          </label>
+          <div className="topbar-context-cluster">
+            <label className="topbar-select-wrap">
+              <span className="topbar-select-label">Game</span>
+              <select className="topbar-select" value={activeGameId ?? ''} onChange={(event) => onSelectGame(event.target.value)}>
+                {games.map((game) => (
+                  <option key={game.projectId} value={game.projectId}>
+                    {game.projectName}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
         ) : null}
-        <div className="signal-pill"><span>{sourceLabel}</span></div>
-        <div className="signal-pill"><span>{currentUserEmail ?? 'Not signed in'}</span></div>
-        <button className="ghost-button" onClick={onOpenNewGame} type="button">New Game</button>
-        <button className="ghost-button" onClick={onOpenActivity} type="button">History</button>
-        {isSignedIn
-          ? <button className="ghost-button" onClick={onSignOut} type="button">Sign out</button>
-          : <button className="ghost-button" onClick={onOpenAuth} type="button">Sign in</button>}
-        <button className="primary-button" onClick={onCompile} type="button">{isCompiling ? 'Compiling...' : 'Publish bundle'}</button>
+        <details className="topbar-utility-menu">
+          <summary className="ghost-button topbar-utility-trigger">Workspace</summary>
+          <div className="topbar-utility-panel">
+            <div className="topbar-utility-meta">
+              <span className="section-label">Workspace</span>
+              <strong>{sourceLabel}</strong>
+              <span>{currentUserEmail ?? 'Not signed in'}</span>
+            </div>
+            <button className="ghost-button compact" onClick={onOpenNewGame} type="button">New Game</button>
+            <button className="ghost-button compact" onClick={onOpenActivity} type="button">History</button>
+            {isSignedIn
+              ? <button className="ghost-button compact" onClick={onSignOut} type="button">Sign out</button>
+              : <button className="ghost-button compact" onClick={onOpenAuth} type="button">Sign in</button>}
+          </div>
+        </details>
       </div>
     </header>
   )

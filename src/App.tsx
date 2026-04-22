@@ -5,7 +5,6 @@ import { Suspense, lazy, useEffect, useMemo, useRef, useState, useTransition } f
 import { authService } from './application/services/authService'
 import { patchApplyService } from './application/services/patchApplyService'
 import { promptGenerationService } from './application/services/promptGenerationService'
-import { publishService } from './application/services/publishService'
 import { workspaceService } from './application/services/workspaceService'
 import { buildAssetSlug, getAssetKeyPrefix, inferAssetKindFromUpload, inferRemoteAssetMimeType, inferUploadMimeType, isSupportedMeshPath, resolveAssetSourceUrl, type AssetUrlCreateOptions, type AssetUrlCreationKind } from './domain/assets'
 import { DEFAULT_ART_STYLE_PRESET } from './domain/artStylePresets'
@@ -87,11 +86,6 @@ import type { MeshGenerationStatusResponse } from './domain/meshGeneration'
 import { isTerminalMeshGenerationJobStatus } from './domain/meshGeneration'
 import type { WorldBuildBatch, WorldBuildPlanItem, WorldBuildPlanResponse, WorldBuildStatusResponse } from './domain/worldBuild'
 import { getResourceGenerationMetadata, isTerminalWorldBuildBatchStatus } from './domain/worldBuild'
-import { AuthDialog } from './features/auth/AuthDialog'
-import { GameBootstrapOnboarding } from './features/onboarding/GameBootstrapOnboarding'
-import { PromptDock } from './features/prompts/PromptDock'
-import { WorldBuildCompletionModal } from './features/prompts/WorldBuildCompletionModal'
-import { WorldBuildPlanModal } from './features/prompts/WorldBuildPlanModal'
 import { WorkspaceBanner } from './features/shell/WorkspaceBanner'
 import { WorkspaceTopbar } from './features/shell/WorkspaceTopbar'
 import { useEditorStore } from './state/editorStore'
@@ -113,6 +107,21 @@ const SpecializedDefinitionWorkspace = lazy(() =>
 )
 const ActivityWorkspace = lazy(() =>
   import('./features/prompts/ActivityWorkspace').then((module) => ({ default: module.ActivityWorkspace })),
+)
+const PromptDock = lazy(() =>
+  import('./features/prompts/PromptDock').then((module) => ({ default: module.PromptDock })),
+)
+const GameBootstrapOnboarding = lazy(() =>
+  import('./features/onboarding/GameBootstrapOnboarding').then((module) => ({ default: module.GameBootstrapOnboarding })),
+)
+const WorldBuildPlanModal = lazy(() =>
+  import('./features/prompts/WorldBuildPlanModal').then((module) => ({ default: module.WorldBuildPlanModal })),
+)
+const WorldBuildCompletionModal = lazy(() =>
+  import('./features/prompts/WorldBuildCompletionModal').then((module) => ({ default: module.WorldBuildCompletionModal })),
+)
+const AuthDialog = lazy(() =>
+  import('./features/auth/AuthDialog').then((module) => ({ default: module.AuthDialog })),
 )
 const CinematicsWorkspace = lazy(() =>
   import('./features/cinematics/CinematicsWorkspace').then((module) => ({ default: module.CinematicsWorkspace })),
@@ -957,7 +966,6 @@ export default function App() {
   const [pendingDeleteTarget, setPendingDeleteTarget] = useState<DeleteConfirmationTarget | null>(null)
   const [deletingTarget, setDeletingTarget] = useState<DeleteConfirmationTarget | null>(null)
   const [authOpen, setAuthOpen] = useState(false)
-  const [authAutoOpened, setAuthAutoOpened] = useState(false)
   const [authMode, setAuthMode] = useState<AuthMode>('sign_in')
   const [authEmail, setAuthEmail] = useState('')
   const [authPassword, setAuthPassword] = useState('')
@@ -973,8 +981,8 @@ export default function App() {
   const [bootstrapOnboardingOpen, setBootstrapOnboardingOpen] = useState(false)
   const [hasLocalSnapshotChanges, setHasLocalSnapshotChanges] = useState(false)
   const [pendingStoryboardNodeKeys, setPendingStoryboardNodeKeys] = useState<string[]>([])
-  const [globalWorkspaceAutoFocusReleasesNonce, setGlobalWorkspaceAutoFocusReleasesNonce] = useState(0)
-  const [isPending, startTransition] = useTransition()
+  const globalWorkspaceAutoFocusReleasesNonce = 0
+  const [, startTransition] = useTransition()
   const selectedDefinitionKey = useEditorStore((state) => state.selectedDefinitionKey)
   const selectedEdgeKey = useEditorStore((state) => state.selectedEdgeKey)
   const selectedGraphKey = useEditorStore((state) => state.selectedGraphKey)
@@ -1254,12 +1262,6 @@ export default function App() {
     }
     setPromptRuntimeError(null)
   }, [loading, session])
-
-  useEffect(() => {
-    if (loading || session || authAutoOpened) return
-    setAuthOpen(true)
-    setAuthAutoOpened(true)
-  }, [authAutoOpened, loading, session])
 
   useEffect(() => {
     if (!snapshot) return
@@ -4652,23 +4654,6 @@ export default function App() {
     }
   }
 
-  async function handleCompile() {
-    if (!snapshot) return
-    if (!session) {
-      setPromptRuntimeError('Sign in to publish bundles from the live workspace.')
-      setAuthOpen(true)
-      return
-    }
-    if (loadedState?.source !== 'supabase') {
-      setPromptRuntimeError(loadedState?.reason ?? 'You are signed in, but the editor is still showing the bundled demo snapshot. Load or create a live GraphCore workspace/draft before publishing.')
-      return
-    }
-    const nextBundle = await publishService.publish(snapshot)
-    setBundle(nextBundle)
-    setActiveTab('global')
-    setGlobalWorkspaceAutoFocusReleasesNonce((current) => current + 1)
-  }
-
   async function handleSaveGlobalProjectContext(values: {
     projectName: string
     projectDescription: string
@@ -5093,9 +5078,7 @@ export default function App() {
           currentUserEmail={session?.user.email ?? null}
           draftName={snapshot.draft.name}
           games={games}
-          isCompiling={isPending}
           isSignedIn={Boolean(session)}
-          onCompile={handleCompile}
           onOpenActivity={() => setHistoryOpen(true)}
           onOpenAuth={() => setAuthOpen(true)}
           onOpenNewGame={handleOpenNewGame}
@@ -5401,18 +5384,23 @@ export default function App() {
           </Suspense>
         </section>
 
-        <PromptDock
-          currentContextLabel={selectedNode?.key ?? selectedDefinition?.key ?? selectedArchetype?.key ?? selectedGraph?.key ?? snapshot.project.slug}
-          isApplyingPatch={isApplyingPatch || isStartingWorldBuild}
-          isGeneratingPatch={isGeneratingPatch || isPlanningWorldBuild}
-          model={promptModel}
-          needsInitialization={activeGameIsEmpty}
-          promptRuntimeError={promptRuntimeError}
-          sessionEmail={session?.user.email ?? null}
-          onChangeModel={setPromptModel}
-          onGenerate={handlePlanWorldBuild}
-          onOpenOnboarding={handleOpenBootstrapOnboarding}
-        />
+        {activeTab !== 'graph' ? (
+          <Suspense fallback={null}>
+            <PromptDock
+              activeTab={activeTab}
+              currentContextLabel={selectedNode?.key ?? selectedDefinition?.key ?? selectedArchetype?.key ?? selectedGraph?.key ?? snapshot.project.slug}
+              isApplyingPatch={isApplyingPatch || isStartingWorldBuild}
+              isGeneratingPatch={isGeneratingPatch || isPlanningWorldBuild}
+              model={promptModel}
+              needsInitialization={activeGameIsEmpty}
+              promptRuntimeError={promptRuntimeError}
+              sessionEmail={session?.user.email ?? null}
+              onChangeModel={setPromptModel}
+              onGenerate={handlePlanWorldBuild}
+              onOpenOnboarding={handleOpenBootstrapOnboarding}
+            />
+          </Suspense>
+        ) : null}
       </div>
       {historyOpen ? (
         <div className="bootstrap-overlay" onClick={() => setHistoryOpen(false)} role="presentation">
@@ -5426,55 +5414,61 @@ export default function App() {
         </div>
       ) : null}
       {bootstrapOnboardingOpen ? (
-        <GameBootstrapOnboarding
-          canClose
-          artStyleDescription={bootstrapArtStyleDescription}
-          artStylePreset={bootstrapArtStylePreset}
-          conceptPrompt={bootstrapConceptPrompt}
-          gameArchetypeId={bootstrapGameArchetypeId}
-          isGenerating={isGeneratingPatch || isApplyingPatch}
-          onChangeArtStyleDescription={setBootstrapArtStyleDescription}
-          onChangeArtStylePreset={setBootstrapArtStylePreset}
-          onChangeConceptPrompt={setBootstrapConceptPrompt}
-          onChangeGameArchetypeId={setBootstrapGameArchetypeId}
-          onClose={() => setBootstrapOnboardingOpen(false)}
-          onGenerate={handleBootstrapGeneration}
-        />
+        <Suspense fallback={null}>
+          <GameBootstrapOnboarding
+            canClose
+            artStyleDescription={bootstrapArtStyleDescription}
+            artStylePreset={bootstrapArtStylePreset}
+            conceptPrompt={bootstrapConceptPrompt}
+            gameArchetypeId={bootstrapGameArchetypeId}
+            isGenerating={isGeneratingPatch || isApplyingPatch}
+            onChangeArtStyleDescription={setBootstrapArtStyleDescription}
+            onChangeArtStylePreset={setBootstrapArtStylePreset}
+            onChangeConceptPrompt={setBootstrapConceptPrompt}
+            onChangeGameArchetypeId={setBootstrapGameArchetypeId}
+            onClose={() => setBootstrapOnboardingOpen(false)}
+            onGenerate={handleBootstrapGeneration}
+          />
+        </Suspense>
       ) : null}
       {worldBuildPlanPreview ? (
-        <WorldBuildPlanModal
-          cinematicPlan={worldBuildPlanPreview.cinematicPlan ?? null}
-          isStarting={isStartingWorldBuild}
-          plannerMode={worldBuildPlanPreview.plannerMode}
-          planItems={worldBuildPlanPreview.planItems}
-          prompt={readPromptText()}
-          requestSummary={worldBuildPlanPreview.requestSummary}
-          onCancel={() => {
-            setWorldBuildPlanPreview(null)
-            setWorldBuildPlanSource(null)
-          }}
-          onChangePresetFamily={updateWorldBuildCinematicPreset}
-          onChangeFormatSubtype={updateWorldBuildCinematicFormatSubtype}
-          onChangeStoryScenePreset={updateWorldBuildStoryScenePreset}
-          onChangeStoryLanguagePreset={updateWorldBuildStoryLanguagePreset}
-          onConfirm={handleStartWorldBuild}
-          onToggleEnabled={(itemId, enabled) => updateWorldBuildPlanItem(itemId, (item) => ({ ...item, enabled }))}
-          onToggleOption={(itemId, optionKey, enabled) =>
-            updateWorldBuildPlanItem(itemId, (item) => ({
-              ...item,
-              generationOptions: {
-                ...item.generationOptions,
-                [optionKey]: enabled,
-              },
-            }))
-          }
-        />
+        <Suspense fallback={null}>
+          <WorldBuildPlanModal
+            cinematicPlan={worldBuildPlanPreview.cinematicPlan ?? null}
+            isStarting={isStartingWorldBuild}
+            plannerMode={worldBuildPlanPreview.plannerMode}
+            planItems={worldBuildPlanPreview.planItems}
+            prompt={readPromptText()}
+            requestSummary={worldBuildPlanPreview.requestSummary}
+            onCancel={() => {
+              setWorldBuildPlanPreview(null)
+              setWorldBuildPlanSource(null)
+            }}
+            onChangePresetFamily={updateWorldBuildCinematicPreset}
+            onChangeFormatSubtype={updateWorldBuildCinematicFormatSubtype}
+            onChangeStoryScenePreset={updateWorldBuildStoryScenePreset}
+            onChangeStoryLanguagePreset={updateWorldBuildStoryLanguagePreset}
+            onConfirm={handleStartWorldBuild}
+            onToggleEnabled={(itemId, enabled) => updateWorldBuildPlanItem(itemId, (item) => ({ ...item, enabled }))}
+            onToggleOption={(itemId, optionKey, enabled) =>
+              updateWorldBuildPlanItem(itemId, (item) => ({
+                ...item,
+                generationOptions: {
+                  ...item.generationOptions,
+                  [optionKey]: enabled,
+                },
+              }))
+            }
+          />
+        </Suspense>
       ) : null}
       {completedWorldBuildBatch ? (
-        <WorldBuildCompletionModal
-          batch={completedWorldBuildBatch}
-          onClose={() => setCompletedWorldBuildBatch(null)}
-        />
+        <Suspense fallback={null}>
+          <WorldBuildCompletionModal
+            batch={completedWorldBuildBatch}
+            onClose={() => setCompletedWorldBuildBatch(null)}
+          />
+        </Suspense>
       ) : null}
       {pendingDeleteTarget ? (
         <div className="bootstrap-overlay" onClick={() => !deletingTarget && setPendingDeleteTarget(null)} role="presentation">
@@ -5494,7 +5488,11 @@ export default function App() {
           </section>
         </div>
       ) : null}
-      {authOpen ? <AuthDialog authEmail={authEmail} authError={authError} authInfo={authInfo} authMode={authMode} authPassword={authPassword} authPendingConfirmation={authPendingConfirmation} onClose={() => setAuthOpen(false)} onEmailChange={setAuthEmail} onGoogleAuth={handleGoogleAuth} onModeChange={(mode) => { setAuthMode(mode); setAuthError(null); setAuthInfo(null); if (mode !== 'sign_up') setAuthPendingConfirmation(false) }} onPasswordChange={setAuthPassword} onResendConfirmation={handleResendConfirmation} onSubmit={handleAuthSubmit} /> : null}
+      {authOpen ? (
+        <Suspense fallback={null}>
+          <AuthDialog authEmail={authEmail} authError={authError} authInfo={authInfo} authMode={authMode} authPassword={authPassword} authPendingConfirmation={authPendingConfirmation} onClose={() => setAuthOpen(false)} onEmailChange={setAuthEmail} onGoogleAuth={handleGoogleAuth} onModeChange={(mode) => { setAuthMode(mode); setAuthError(null); setAuthInfo(null); if (mode !== 'sign_up') setAuthPendingConfirmation(false) }} onPasswordChange={setAuthPassword} onResendConfirmation={handleResendConfirmation} onSubmit={handleAuthSubmit} />
+        </Suspense>
+      ) : null}
     </main>
   )
 }

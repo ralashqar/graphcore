@@ -158,6 +158,21 @@ verify_jwt = false
 [functions.plan-world-build]
 verify_jwt = false
 
+[functions.start-world-prompt-turn]
+verify_jwt = false
+
+[functions.approve-world-prompt-op]
+verify_jwt = false
+
+[functions.reject-world-prompt-op]
+verify_jwt = false
+
+[functions.apply-world-prompt-preview]
+verify_jwt = false
+
+[functions.cancel-world-prompt-turn]
+verify_jwt = false
+
 [functions.start-world-build]
 verify_jwt = false
 

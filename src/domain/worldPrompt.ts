@@ -8,8 +8,8 @@ import {
   worldRelationshipSchema,
   worldResultSchema,
   worldViewSchema,
-} from './worldGraph'
-import { worldThreadSchema } from './worldThread'
+} from './worldGraph.ts'
+import { worldThreadSchema } from './worldThread.ts'
 
 const looseRecordSchema = z.record(z.string(), z.unknown())
 

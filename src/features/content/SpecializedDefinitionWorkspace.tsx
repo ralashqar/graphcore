@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useTransition } from 'react'
+import { Suspense, lazy, useEffect, useMemo, useState, useTransition } from 'react'
 
 import { getArtStylePresetLabel } from '../../domain/artStylePresets'
 import type { ArchetypeDefinition, AssetDefinition, AssemblyGraphDefinition, DefinitionBase, EnvironmentBlueprintV1, FieldDefinition, FieldValue, GameSpec, GraphDefinition } from '../../domain/graphcore'
@@ -11,7 +11,9 @@ import { EntityIcon, iconForDefinitionKind } from '../../shared/entityIcons'
 import { DefinitionEditor } from './DefinitionEditor'
 import { EnvironmentAssemblyWorkspace } from './EnvironmentAssemblyWorkspace'
 import { AssetPickerDialog, EmptyEditor, MediaThumb, findAssetByKey, resolveDefinitionDisplayAssetKey } from './shared'
-import { Definition3dPanel } from '../viewer3d/Character3dPanel'
+const Definition3dPanel = lazy(() =>
+  import('../viewer3d/Character3dPanel').then((module) => ({ default: module.Definition3dPanel })),
+)
 
 type SpecializedPanelMode = 'details' | 'graph' | '3d'
 
@@ -770,18 +772,20 @@ export function SpecializedDefinitionWorkspace({
               )}
               {linkedCinematicsSection}
               {panelMode === '3d' ? (
-                <Definition3dPanel
-                  assets={assets}
-                  assemblyGraph={selectedAssemblyGraph}
-                  environmentBlueprint={selectedEnvironmentBlueprint}
-                  definition={effectiveSelection}
-                  isDeletingGeneratedMesh={effectiveSelection.kind === 'character' ? isDeletingGeneratedMesh : false}
-                  meshGenerationJob={effectiveSelection.kind === 'character' ? selectedCharacterMeshJob : null}
-                  onDeleteGeneratedMesh={effectiveSelection.kind === 'character' ? () => onDeleteGeneratedMesh(effectiveSelection.key) : null}
-                  onRequestGenerateMesh={effectiveSelection.kind === 'character' ? () => onStartMeshGeneration(effectiveSelection.key) : null}
-                  onRequestGenerateConceptArt={effectiveSelection.kind === 'character' ? requestCharacterConceptFrom3d : null}
-                  onUpdateComponents={onUpdateComponents}
-                />
+                <Suspense fallback={<div className="detail-stack compact"><span className="eyebrow">Loading</span><h3>Preparing 3D panel…</h3></div>}>
+                  <Definition3dPanel
+                    assets={assets}
+                    assemblyGraph={selectedAssemblyGraph}
+                    environmentBlueprint={selectedEnvironmentBlueprint}
+                    definition={effectiveSelection}
+                    isDeletingGeneratedMesh={effectiveSelection.kind === 'character' ? isDeletingGeneratedMesh : false}
+                    meshGenerationJob={effectiveSelection.kind === 'character' ? selectedCharacterMeshJob : null}
+                    onDeleteGeneratedMesh={effectiveSelection.kind === 'character' ? () => onDeleteGeneratedMesh(effectiveSelection.key) : null}
+                    onRequestGenerateMesh={effectiveSelection.kind === 'character' ? () => onStartMeshGeneration(effectiveSelection.key) : null}
+                    onRequestGenerateConceptArt={effectiveSelection.kind === 'character' ? requestCharacterConceptFrom3d : null}
+                    onUpdateComponents={onUpdateComponents}
+                  />
+                </Suspense>
               ) : panelMode === 'graph' && effectiveSelection.kind === 'environment' ? (
                 <EnvironmentAssemblyWorkspace
                   assemblyGraphs={assemblyGraphs}

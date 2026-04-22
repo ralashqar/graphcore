@@ -51,8 +51,8 @@ import {
   type WorldBuildPlanResponse,
   type WorldBuildStatusResponse,
 } from '../../../src/domain/worldBuild.ts'
-import { normalizeStrictJsonSchema } from './structured-output.ts'
-import { extractOutputText, runOpenAiResponses } from './openai.ts'
+import { runOpenAiResponses } from './openai.ts'
+import { generateExpansionPlan, generateSeedPlan } from './world-graph.ts'
 
 type SupabaseClient = any
 
@@ -181,6 +181,182 @@ const STAGED_SCOPE_CAPS = {
   existingEntityModificationOps: 2,
   queueOps: 2,
   derivedResultOps: 1,
+}
+
+function isTruthyEnv(value: string | undefined | null) {
+  if (!value) return false
+  return ['1', 'true', 'yes', 'on', 'debug'].includes(value.trim().toLowerCase())
+}
+
+function shouldDebugWorldPromptOpenAi() {
+  return isTruthyEnv(Deno.env.get('WORLD_PROMPT_DEBUG_OPENAI'))
+    || isTruthyEnv(Deno.env.get('WORLD_BUILD_DEBUG_OPENAI'))
+}
+
+function previewJson(value: unknown, maxLength = 4000) {
+  const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2)
+  if (text.length <= maxLength) return text
+  return `${text.slice(0, maxLength)}...<truncated>`
+}
+
+function extractJsonBlock(text: string) {
+  const trimmed = text.trim()
+  if (!trimmed) return null
+
+  try {
+    return JSON.parse(trimmed) as Record<string, unknown>
+  } catch {
+    const fencedMatch = trimmed.match(/```json\s*([\s\S]*?)```/i) ?? trimmed.match(/```([\s\S]*?)```/i)
+    if (!fencedMatch?.[1]) return null
+
+    try {
+      return JSON.parse(fencedMatch[1].trim()) as Record<string, unknown>
+    } catch {
+      return null
+    }
+  }
+}
+
+function formatIssues(issues: Array<{ path: PropertyKey[]; message: string }>) {
+  return issues.map((issue) => `${issue.path.join('.') || '<root>'}: ${issue.message}`).join(' | ')
+}
+
+function normalizePlannerOperation(rawOp: unknown, index: number) {
+  if (!rawOp || typeof rawOp !== 'object') {
+    return rawOp
+  }
+
+  const record = { ...(rawOp as Record<string, unknown>) }
+  const op = typeof record.op === 'string' ? record.op : null
+  if (!op) {
+    return record
+  }
+
+  if (typeof record.id !== 'string' || !record.id.trim()) {
+    record.id = `planner-op-${index + 1}-${slugify(op)}`
+  }
+
+  if (record.payload && typeof record.payload === 'object') {
+    return record
+  }
+
+  switch (op) {
+    case 'upsert_entity':
+      if (record.entity && typeof record.entity === 'object') {
+        record.payload = {
+          targetEntityKey: typeof record.targetEntityKey === 'string' ? record.targetEntityKey : null,
+          entity: record.entity,
+        }
+      }
+      break
+    case 'update_entity':
+      if (typeof record.targetEntityKey === 'string') {
+        record.payload = {
+          targetEntityKey: record.targetEntityKey,
+          changes: record.changes && typeof record.changes === 'object' ? record.changes : {},
+        }
+      }
+      break
+    case 'upsert_relationship': {
+      const relationship = record.relationship && typeof record.relationship === 'object'
+        ? record.relationship
+        : {
+            sourceEntityKey: typeof record.sourceEntityKey === 'string' ? record.sourceEntityKey : null,
+            targetEntityKey: typeof record.targetEntityKey === 'string' ? record.targetEntityKey : null,
+            sourceRef: record.sourceRef,
+            targetRef: record.targetRef,
+            verb: record.verb,
+            direction: record.direction,
+            strength: record.strength,
+            confidence: record.relationshipConfidence ?? record.confidence,
+            source: record.source,
+            notes: record.notes,
+            state: record.state,
+            metadata: record.relationshipMetadata ?? record.metadata,
+          }
+      record.payload = {
+        targetRelationshipKey: typeof record.targetRelationshipKey === 'string' ? record.targetRelationshipKey : null,
+        relationship,
+      }
+      break
+    }
+    case 'update_relationship':
+      if (typeof record.targetRelationshipKey === 'string') {
+        record.payload = {
+          targetRelationshipKey: record.targetRelationshipKey,
+          changes: record.changes && typeof record.changes === 'object'
+            ? record.changes
+            : {
+                sourceEntityKey: record.sourceEntityKey,
+                targetEntityKey: record.targetEntityKey,
+                verb: record.verb,
+                direction: record.direction,
+                strength: record.strength,
+                confidence: record.relationshipConfidence ?? record.confidence,
+                source: record.source,
+                notes: record.notes,
+                state: record.state,
+                metadata: record.relationshipMetadata ?? record.metadata,
+              },
+        }
+      }
+      break
+    case 'create_derived_result':
+      record.payload = {
+        sourceEntityKey: record.sourceEntityKey,
+        targetEntityKey: record.targetEntityKey,
+        operatorType: record.operatorType,
+        title: record.title,
+        summary: record.summary,
+        metadata: record.metadata,
+      }
+      break
+    case 'queue_image_generation':
+      record.payload = {
+        targetEntityKey: record.targetEntityKey,
+        definitionKey: record.definitionKey ?? null,
+        prompt: record.prompt,
+        reason: record.reason,
+        queueType: 'image_generation',
+      }
+      break
+    case 'queue_cinematic_generation':
+      record.payload = {
+        prompt: record.prompt,
+        title: record.title,
+        relatedEntityKeys: Array.isArray(record.relatedEntityKeys) ? record.relatedEntityKeys : [],
+        resultKey: record.resultKey ?? null,
+        queueType: 'cinematic_generation',
+      }
+      break
+    case 'assistant_note':
+      if (typeof record.message === 'string' || typeof record.note === 'string' || typeof record.text === 'string') {
+        record.payload = {
+          message: typeof record.message === 'string'
+            ? record.message
+            : typeof record.note === 'string'
+              ? record.note
+              : String(record.text),
+        }
+      }
+      break
+    default:
+      break
+  }
+
+  return record
+}
+
+function normalizePlannerJson(raw: Record<string, unknown>) {
+  const normalized = { ...raw }
+  const normalizeOpArray = (value: unknown) => Array.isArray(value)
+    ? value.map((entry, index) => normalizePlannerOperation(entry, index))
+    : value
+
+  normalized.operations = normalizeOpArray(normalized.operations)
+  normalized.wave1Ops = normalizeOpArray(normalized.wave1Ops)
+
+  return normalized
 }
 
 type PromptScopeCounts = WorldPromptScopeDecision['counts']
@@ -802,6 +978,221 @@ function summarizeImpact(ops: PromptToWorldOp[]) {
       queueCount: totals.queueCount + impact.queueCount,
     }
   }, { nodeCount: 0, edgeCount: 0, queueCount: 0 })
+}
+
+function buildFallbackPlannerOpsFromWorldGraph(input: {
+  payload: WorldPromptStartTurnRequest
+  requestSummary: string
+  assistantSummary: string
+  entities: Array<{
+    name: string
+    summary: string
+    nodeType: WorldEntity['nodeType']
+    aliases: string[]
+    tags: string[]
+  }>
+  relationships: Array<{
+    sourceName: string
+    targetName: string
+    verb: string
+    direction: 'outbound' | 'inbound' | 'bidirectional'
+    notes: string
+  }>
+}) {
+  const wave1Ops: PromptToWorldOp[] = []
+
+  for (const entity of input.entities) {
+    wave1Ops.push({
+      id: `fallback-entity-${slugify(entity.name)}`,
+      op: 'upsert_entity',
+      confidence: 0.62,
+      applyMode: 'auto',
+      dependencyOpIds: [],
+      rationale: 'Fallback world prompt seed generated inside the edge function.',
+      status: 'pending',
+      metadata: {
+        fallbackPlanner: true,
+      },
+      payload: {
+        targetEntityKey: null,
+        entity: {
+          name: entity.name,
+          summary: entity.summary,
+          nodeType: entity.nodeType,
+          aliases: entity.aliases,
+          tags: entity.tags,
+          status: 'active',
+          thumbnailAssetKey: null,
+          linkedDefinitionKey: null,
+          source: 'ai',
+          customProperties: {},
+          metadata: {
+            fallbackPlanner: true,
+          },
+          ensureLinkedDefinition: true,
+        },
+      },
+    })
+  }
+
+  for (const relationship of input.relationships) {
+    wave1Ops.push({
+      id: `fallback-relationship-${slugify(`${relationship.sourceName}-${relationship.verb}-${relationship.targetName}`)}`,
+      op: 'upsert_relationship',
+      confidence: 0.58,
+      applyMode: 'auto',
+      dependencyOpIds: [],
+      rationale: 'Fallback relationship generated inside the edge function.',
+      status: 'pending',
+      metadata: {
+        fallbackPlanner: true,
+      },
+      payload: {
+        targetRelationshipKey: null,
+        relationship: {
+          sourceEntityKey: null,
+          targetEntityKey: null,
+          sourceRef: {
+            entityKey: null,
+            definitionKey: null,
+            name: relationship.sourceName,
+            alias: null,
+            matchCandidateEntityKeys: [],
+          },
+          targetRef: {
+            entityKey: null,
+            definitionKey: null,
+            name: relationship.targetName,
+            alias: null,
+            matchCandidateEntityKeys: [],
+          },
+          verb: relationship.verb,
+          direction: relationship.direction,
+          strength: null,
+          confidence: 0.58,
+          source: 'ai',
+          notes: relationship.notes,
+          state: 'confirmed',
+          metadata: {
+            fallbackPlanner: true,
+          },
+        },
+      },
+    })
+  }
+
+  const suggestionTail = input.payload.snapshot.worldEntities.length === 0
+    ? [
+        buildPromptSuggestion({
+          id: 'fallback-add-characters',
+          label: 'Add Key Characters',
+          prompt: `Continue this world by adding 2 or 3 key characters to "${input.requestSummary}" and connect them to the main conflict.`,
+          kind: 'continue_scope',
+          style: 'primary',
+          source: 'wave2',
+          summary: 'Add a compact first cast and tie them into the seeded world conflict.',
+          estimatedNodeCount: 3,
+          estimatedEdgeCount: 3,
+        }),
+        buildPromptSuggestion({
+          id: 'fallback-add-lore',
+          label: 'Add Lore Layer',
+          prompt: `Continue this world by adding one hidden piece of lore and one event that deepens "${input.requestSummary}".`,
+          kind: 'continue_scope',
+          style: 'secondary',
+          source: 'wave2',
+          summary: 'Deepen the seed with one lore thread and one consequence.',
+          estimatedNodeCount: 2,
+          estimatedEdgeCount: 2,
+        }),
+      ]
+    : [
+        buildPromptSuggestion({
+          id: 'fallback-expand-selection',
+          label: 'Expand The Selection',
+          prompt: input.payload.selectedRootEntityKey
+            ? `Continue by expanding the selected world entity "${input.payload.selectedRootEntityKey}" with one compact additive beat.`
+            : 'Continue this world with one compact additive beat around the main conflict.',
+          kind: 'continue_scope',
+          style: 'primary',
+          source: 'wave2',
+          summary: 'Push the world one step outward without broadening too fast.',
+          estimatedNodeCount: 2,
+          estimatedEdgeCount: 2,
+        }),
+      ]
+
+  return worldPromptPlannerSchema.parse({
+    classification: isPlanOnlyPrompt(input.payload.prompt) ? 'graphable_plan_only' : 'graphable_direct',
+    assistantSummary: input.assistantSummary,
+    operations: wave1Ops,
+    wave1Ops,
+    wave2Ideas: [],
+    optionalIdeas: [],
+    threadCandidates: [
+      {
+        key: `thread-${slugify(input.requestSummary)}`,
+        title: input.requestSummary.slice(0, 90) || 'World Seed',
+        summary: input.assistantSummary,
+        status: 'open',
+        priority: input.payload.snapshot.worldEntities.length === 0 ? 'primary' : 'secondary',
+        linkedEntityKeys: [],
+        metadata: {
+          fallbackPlanner: true,
+        },
+      },
+    ],
+    suggestionCandidates: dedupeSuggestions([
+      ...suggestionTail,
+      buildPromptSuggestion({
+        id: 'fallback-plan-only',
+        label: 'Plan Only',
+        prompt: 'Plan only the next best additions for this world. Preserve canon and do not apply graph mutations.',
+        kind: 'plan_only',
+        style: 'secondary',
+        source: 'wave2',
+        summary: 'Preview the next beat without mutating the graph.',
+      }),
+    ]),
+  })
+}
+
+async function buildFallbackPromptPlan(input: {
+  payload: WorldPromptStartTurnRequest
+  plannerError: unknown
+}) {
+  const assistantPrefix = 'Hosted prompt planning was unavailable, so GraphCore used a local fallback seed.'
+
+  if (
+    input.payload.selectedRootEntityKey
+    && input.payload.snapshot.worldEntities.some((entity) => entity.key === input.payload.selectedRootEntityKey)
+  ) {
+    const expansion = await generateExpansionPlan({
+      snapshot: input.payload.snapshot,
+      rootEntityKey: input.payload.selectedRootEntityKey,
+      model: input.payload.model,
+    })
+    return buildFallbackPlannerOpsFromWorldGraph({
+      payload: input.payload,
+      requestSummary: expansion.requestSummary || 'World Expansion',
+      assistantSummary: [assistantPrefix, expansion.assistantNote].filter(Boolean).join(' '),
+      entities: expansion.entities,
+      relationships: expansion.relationships,
+    })
+  }
+
+  const seed = await generateSeedPlan({
+    snapshot: input.payload.snapshot,
+    prompt: input.payload.prompt,
+    model: input.payload.model,
+  })
+  return buildFallbackPlannerOpsFromWorldGraph({
+    payload: input.payload,
+    requestSummary: seed.requestSummary || 'Starter World',
+    assistantSummary: [assistantPrefix, seed.assistantNote].filter(Boolean).join(' '),
+    entities: seed.entities,
+    relationships: seed.relationships,
+  })
 }
 
 function looksContradictoryOrLowConfidence(prompt: string) {
@@ -1562,6 +1953,7 @@ async function generatePromptPlan(input: {
   summaryMemory: string
   recentMessages: WorldPromptMessage[]
 }) {
+  const debugEnabled = shouldDebugWorldPromptOpenAi()
   const instructions = [
     'You are the GraphCore prompt-to-world graph planner.',
     'Return compact JSON only.',
@@ -1607,22 +1999,78 @@ async function generatePromptPlan(input: {
     },
   })
 
-  const response = await runOpenAiResponses({
-    model: input.payload.model,
-    input: prompt,
-    instructions,
-    text: {
-      format: {
-        type: 'json_schema',
-        name: 'world_prompt_plan',
-        schema: normalizeStrictJsonSchema(z.toJSONSchema(worldPromptPlannerSchema)),
-      },
-    },
-    timeoutMs: 45_000,
-  })
+  try {
+    if (debugEnabled) {
+      console.log('[world-prompt-debug] planner request-meta', previewJson({
+        model: input.payload.model,
+        selectedRootEntityKey: input.payload.selectedRootEntityKey,
+        selectedViewKey: input.payload.selectedViewKey,
+        selectedThreadKey: input.payload.selectedThreadKey,
+      }))
+      console.log('[world-prompt-debug] planner request-instructions', instructions)
+      console.log('[world-prompt-debug] planner request-prompt', prompt)
+    }
 
-  const raw = extractOutputText(response.body) || response.outputText
-  return worldPromptPlannerSchema.parse(JSON.parse(raw))
+    const response = await runOpenAiResponses({
+      model: input.payload.model,
+      input: [
+        { role: 'system', content: [{ type: 'input_text', text: instructions }] },
+        { role: 'user', content: [{ type: 'input_text', text: prompt }] },
+      ],
+      text: {
+        format: {
+          type: 'json_object',
+        },
+      },
+      reasoning: { effort: 'low' },
+      metadata: {
+        feature: 'world-prompt',
+        surface: 'grow-mode',
+      },
+      store: false,
+      timeoutMs: 45_000,
+    })
+
+    if (debugEnabled) {
+      console.log('[world-prompt-debug] planner response-meta', previewJson({
+        ok: response.response.ok,
+        status: response.response.status,
+        requestId: response.response.headers.get('x-request-id'),
+        outputText: response.outputText,
+        body: response.body,
+      }))
+    }
+
+    if (!response.response.ok) {
+      const upstreamMessage =
+        typeof response.body.error === 'object' && response.body.error !== null
+          ? ((response.body.error as { message?: string }).message ?? 'OpenAI request failed.')
+          : 'OpenAI request failed.'
+      throw new Error(`[world-prompt-planner] ${upstreamMessage}`)
+    }
+
+    const parsedJson = extractJsonBlock(response.outputText)
+    if (!parsedJson) {
+      throw new Error('World prompt planner returned invalid JSON.')
+    }
+
+    const normalizedJson = normalizePlannerJson(parsedJson)
+    const validated = worldPromptPlannerSchema.safeParse(normalizedJson)
+    if (!validated.success) {
+      if (debugEnabled) {
+        console.log('[world-prompt-debug] planner schema-failed', previewJson(validated.error.issues))
+      }
+      throw new Error(`World prompt planner returned JSON that did not match the expected schema. ${formatIssues(validated.error.issues)}`)
+    }
+
+    return validated.data
+  } catch (error) {
+    console.error('[world-prompt] planner failed, using fallback plan.', error)
+    return buildFallbackPromptPlan({
+      payload: input.payload,
+      plannerError: error,
+    })
+  }
 }
 
 function sanitizePromptOp(input: {

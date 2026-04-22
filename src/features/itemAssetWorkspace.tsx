@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { Suspense, lazy, useEffect, useMemo, useState } from 'react'
 
 import { getArtStylePresetLabel } from '../domain/artStylePresets'
 import { getResolvedRender3dBinding } from '../domain/render3d'
@@ -21,7 +21,9 @@ import type {
   DefinitionKindFilter,
   DefinitionPanelMode,
 } from './content/types'
-import { Definition3dPanel } from './viewer3d/Character3dPanel'
+const Definition3dPanel = lazy(() =>
+  import('./viewer3d/Character3dPanel').then((module) => ({ default: module.Definition3dPanel })),
+)
 
 const contentKinds = [
   { kind: 'item', label: 'Item', helper: 'Objects, pickups, equipment' },
@@ -630,16 +632,18 @@ export function ContentWorkspace({
               ) : null}
 
               {itemPanelMode === '3d' ? (
-                <Definition3dPanel
-                  assets={assets}
-                  definition={selectedContentItem}
-                  isDeletingGeneratedMesh={isDeletingGeneratedMesh}
-                  meshGenerationJob={selectedItemMeshJob}
-                  onDeleteGeneratedMesh={() => onDeleteGeneratedMesh(selectedContentItem.key)}
-                  onRequestGenerateConceptArt={requestItemConceptFrom3d}
-                  onRequestGenerateMesh={() => onStartMeshGeneration(selectedContentItem.key)}
-                  onUpdateComponents={onUpdateComponents}
-                />
+                <Suspense fallback={<div className="detail-stack compact"><span className="eyebrow">Loading</span><h3>Preparing 3D panel…</h3></div>}>
+                  <Definition3dPanel
+                    assets={assets}
+                    definition={selectedContentItem}
+                    isDeletingGeneratedMesh={isDeletingGeneratedMesh}
+                    meshGenerationJob={selectedItemMeshJob}
+                    onDeleteGeneratedMesh={() => onDeleteGeneratedMesh(selectedContentItem.key)}
+                    onRequestGenerateConceptArt={requestItemConceptFrom3d}
+                    onRequestGenerateMesh={() => onStartMeshGeneration(selectedContentItem.key)}
+                    onUpdateComponents={onUpdateComponents}
+                  />
+                </Suspense>
               ) : (
                 <DefinitionEditor
                   archetypes={archetypes}

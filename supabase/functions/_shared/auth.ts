@@ -7,8 +7,12 @@ export async function requireUserClient(request: Request, functionName: string) 
   const anonKey = Deno.env.get('SUPABASE_ANON_KEY')
   const authHeader = request.headers.get('Authorization')
 
-  if (!supabaseUrl || !anonKey || !authHeader) {
+  if (!supabaseUrl || !anonKey) {
     throw new HttpError(500, `Supabase environment is incomplete for ${functionName}.`)
+  }
+
+  if (!authHeader) {
+    throw new HttpError(401, 'Authorization token is required.')
   }
 
   const accessToken = authHeader.replace(/^Bearer\s+/i, '').trim()

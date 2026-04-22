@@ -126,6 +126,10 @@ code {
   gap: 16px;
   padding: 14px 18px;
   border-radius: 22px;
+  position: relative;
+  z-index: 70;
+  overflow: visible;
+  isolation: isolate;
 }
 
 .brand-cluster,
@@ -232,9 +236,16 @@ code {
   flex-wrap: wrap;
 }
 
+.topbar-context-cluster {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .topbar-select-wrap {
-  display: grid;
-  gap: 4px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
   min-width: 190px;
 }
 
@@ -243,10 +254,11 @@ code {
   font-size: 0.74rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .topbar-select {
-  width: 100%;
+  width: min(240px, 100%);
   min-height: 42px;
   padding: 10px 12px;
   border-radius: 14px;
@@ -259,6 +271,45 @@ code {
 .topbar-select:focus {
   border-color: rgba(94, 234, 212, 0.24);
   box-shadow: 0 0 0 4px rgba(94, 234, 212, 0.08);
+}
+
+.topbar-utility-menu {
+  position: relative;
+  z-index: 80;
+}
+
+.topbar-utility-menu summary {
+  list-style: none;
+}
+
+.topbar-utility-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.topbar-utility-trigger {
+  min-width: 108px;
+}
+
+.topbar-utility-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 10px);
+  z-index: 90;
+  min-width: 220px;
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: rgba(7, 11, 18, 0.98);
+  box-shadow: 0 20px 44px rgba(0, 0, 0, 0.28);
+}
+
+.topbar-utility-meta {
+  display: grid;
+  gap: 4px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .signal-pill,
@@ -1024,7 +1075,7 @@ code {
 }
 
 .world-graph-layout.is-grow-mode {
-  grid-template-columns: minmax(380px, 0.95fr) minmax(0, 1.15fr) 360px;
+  grid-template-columns: minmax(340px, var(--world-grow-workbench-width, 420px)) 10px minmax(0, 1fr) 360px;
 }
 
 .world-graph-rail,
@@ -1038,12 +1089,70 @@ code {
   gap: 14px;
 }
 
+.world-grow-resizer {
+  position: relative;
+  min-height: 0;
+  cursor: col-resize;
+  border-radius: 999px;
+  background: transparent;
+}
+
+.world-grow-resizer::before {
+  content: '';
+  position: absolute;
+  inset: 0 3px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  transition: background 160ms ease;
+}
+
+.world-grow-resizer:hover::before,
+.world-grow-resizer:active::before {
+  background: rgba(94, 234, 212, 0.32);
+}
+
 .world-prompt-workbench-panel {
   gap: 14px;
 }
 
 .world-prompt-workbench-panel .editor-section {
   background: rgba(255, 255, 255, 0.03);
+}
+
+.world-inline-disclosure,
+.world-toolbar-more,
+.activity-disclosure {
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 16px;
+  background: rgba(15, 23, 42, 0.52);
+}
+
+.world-inline-disclosure summary,
+.activity-disclosure-summary,
+.world-toolbar-more summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.world-inline-disclosure summary::-webkit-details-marker,
+.activity-disclosure-summary::-webkit-details-marker,
+.world-toolbar-more summary::-webkit-details-marker {
+  display: none;
+}
+
+.world-inline-disclosure summary {
+  padding: 10px 12px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.world-inline-disclosure[open] summary {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.world-inline-disclosure > .world-choice-list,
+.world-inline-disclosure > .world-filter-grid {
+  padding: 0 12px 12px;
 }
 
 .world-prompt-preview-card {
@@ -1285,6 +1394,35 @@ code {
   gap: 8px;
   align-items: center;
   flex-wrap: wrap;
+}
+
+.world-toolbar-heading {
+  display: grid;
+  gap: 2px;
+}
+
+.world-toolbar-heading h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.world-toolbar-more {
+  position: relative;
+}
+
+.world-toolbar-more-panel {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 30;
+  min-width: 280px;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 18px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(7, 11, 18, 0.98);
+  box-shadow: 0 20px 44px rgba(0, 0, 0, 0.28);
 }
 
 .world-focus-banner {
@@ -2346,6 +2484,22 @@ code {
     var(--bg-elev-1);
 }
 
+.prompt-dock-contextual {
+  display: grid;
+  gap: 12px;
+  padding: 14px 16px;
+}
+
+.prompt-dock-context-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.prompt-dock-context-copy h2 {
+  font-size: 1rem;
+  font-weight: 620;
+}
+
 .prompt-dock-row {
   display: grid;
   grid-template-columns: 220px minmax(0, 1fr) auto;
@@ -2483,6 +2637,38 @@ button:disabled {
 .prompt-review-grid {
   display: grid;
   gap: 16px;
+}
+
+.section-heading {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.activity-disclosure {
+  overflow: hidden;
+}
+
+.activity-disclosure-summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+}
+
+.activity-disclosure-summary h3 {
+  margin: 2px 0 0;
+}
+
+.activity-disclosure-summary span:last-child {
+  color: var(--muted);
+  font-size: 0.82rem;
+  text-align: right;
+}
+
+.activity-disclosure-body {
+  padding: 0 14px 14px;
 }
 
 .compact-section {
@@ -3991,6 +4177,12 @@ button:disabled {
     justify-content: flex-start;
   }
 
+  .topbar-utility-panel,
+  .world-toolbar-more-panel {
+    right: auto;
+    left: 0;
+  }
+
   .prompt-actions,
   .prompt-dock-head {
     flex-direction: column;
@@ -4001,8 +4193,24 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 
+  .world-toolbar-more,
+  .topbar-utility-menu {
+    width: 100%;
+  }
+
+  .world-toolbar-more-panel,
+  .topbar-utility-panel {
+    position: static;
+    min-width: 0;
+    margin-top: 8px;
+  }
+
   .focus-layout {
     grid-template-columns: 240px minmax(0, 1fr);
+  }
+
+  .world-graph-layout.is-grow-mode {
+    grid-template-columns: minmax(280px, var(--world-grow-workbench-width, 360px)) 10px minmax(0, 1fr);
   }
 
   .cinematics-layout {
@@ -4010,6 +4218,10 @@ button:disabled {
   }
 
   .cinematic-drawer-resizer {
+    display: none;
+  }
+
+  .world-grow-resizer {
     display: none;
   }
 
@@ -4076,6 +4288,10 @@ button:disabled {
   .prompts-layout,
   .releases-layout,
   .global-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .world-graph-layout.is-grow-mode {
     grid-template-columns: 1fr;
   }
 

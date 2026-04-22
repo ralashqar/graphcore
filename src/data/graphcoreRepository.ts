@@ -858,6 +858,7 @@ async function invokeAuthedFunction<TResponse>(
   functionsClient.setAuth(session.access_token)
   return functionsClient.invoke<TResponse>(functionName, {
     headers: {
+      apikey: supabasePublishableKey,
       Authorization: `Bearer ${session.access_token}`,
     },
     body,
@@ -927,6 +928,7 @@ async function invokeAuthedFunctionWithSessionRecovery<TResponse>(
   body: Record<string, unknown>,
   session: Session,
 ) {
+  let activeSession = session
   let response = await invokeAuthedFunction<TResponse>(functionName, body, session)
 
   if (response.error && isUnauthorizedFunctionsError(response.error)) {
@@ -939,7 +941,20 @@ async function invokeAuthedFunctionWithSessionRecovery<TResponse>(
       throw new Error('No authenticated Supabase session was available after refresh.')
     }
 
-    response = await invokeAuthedFunction<TResponse>(functionName, body, refreshed.data.session)
+    activeSession = refreshed.data.session
+    response = await invokeAuthedFunction<TResponse>(functionName, body, activeSession)
+  }
+
+  if (response.error && isUnauthorizedFunctionsError(response.error)) {
+    try {
+      const directData = await invokeAuthedFunctionDirect(functionName, body, activeSession) as TResponse
+      return {
+        data: directData,
+        error: null,
+      }
+    } catch (directError) {
+      console.error(`[GraphCore] ${functionName} direct fallback after SDK 401 failed.`, directError)
+    }
   }
 
   if (!response.error) {

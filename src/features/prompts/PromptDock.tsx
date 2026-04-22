@@ -1,6 +1,8 @@
+import type { WorkspaceTab } from '../../shared/workspace'
 import { useEditorStore } from '../../state/editorStore'
 
 type PromptDockProps = {
+  activeTab: WorkspaceTab
   currentContextLabel: string
   isApplyingPatch: boolean
   isGeneratingPatch: boolean
@@ -16,6 +18,7 @@ type PromptDockProps = {
 }
 
 export function PromptDock({
+  activeTab,
   currentContextLabel: _currentContextLabel,
   isApplyingPatch,
   isGeneratingPatch,
@@ -35,9 +38,31 @@ export function PromptDock({
   const onChangePromptText = onChangePromptTextProp ?? setStorePromptText
   const isBusy = isGeneratingPatch || isApplyingPatch
   const buttonDisabled = isBusy || (!needsInitialization && promptText.trim().length === 0)
+  const tabLabel = activeTab === 'characters'
+    ? 'Characters'
+    : activeTab === 'environments'
+      ? 'Environments'
+      : activeTab === 'cinematics'
+        ? 'Cinematics'
+        : activeTab === 'assets'
+          ? 'Assets'
+          : activeTab === 'global'
+            ? 'Global'
+            : 'Content'
+  const promptPlaceholder = activeTab === 'cinematics'
+    ? 'Plan a teaser built around the harbor bells and the cathedral reveal.'
+    : activeTab === 'characters'
+      ? 'Add a rival scholar with a cracked relic and one signature ability.'
+      : activeTab === 'environments'
+        ? 'Create a ruined harbor district with traversal hooks and a hidden shrine.'
+        : 'Add a fire mage enemy with a vendor quest hub and one starter narrative graph.'
 
   return (
-    <section className="prompt-dock">
+    <section className="prompt-dock prompt-dock-contextual">
+      <div className="prompt-dock-context-copy">
+        <span className="eyebrow">{tabLabel} Prompt</span>
+        <h2>Plan the next focused change</h2>
+      </div>
       <div className="prompt-dock-row">
         <label className="field-block compact-block">
           <span>Model</span>
@@ -53,7 +78,7 @@ export function PromptDock({
             aria-label="Prompt editor"
             className="prompt-composer prompt-composer-inline"
             onChange={(event) => onChangePromptText(event.target.value)}
-            placeholder="Add a fire mage enemy with a vendor quest hub and one starter narrative graph."
+            placeholder={promptPlaceholder}
             type="text"
             value={promptText}
           />

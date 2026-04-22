@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import type { PatchOperation } from '../../domain/graphcore'
 import { describePatchOperation, groupPatchOperations } from '../../domain/patchUtils'
 import type { PatchSessionView } from '../../shared/workspace'
@@ -43,12 +44,15 @@ export function ActivityWorkspace({
     <div className="focus-layout prompts-layout">
       <aside className="focus-rail">
         <div className="rail-section">
-          <span className="section-label">Activity</span>
+          <div className="section-heading">
+            <span className="section-label">History</span>
+            <div className="inline-note">Resume, inspect, or replay prior work without reopening every diagnostic at once.</div>
+          </div>
           <div className="rail-list">
             {patchHistory.map((patch, index) => (
               <button key={`${patch.id}-${index}`} className={index === selectedPatchIndex ? 'rail-button is-active' : 'rail-button'} onClick={() => onSelectPatch(index)} type="button">
                 <strong>{patch.requestSummary ?? patch.summary}</strong>
-                <span>{patch.status}</span>
+                <span>{patch.worldPromptTurn ? 'world prompt' : patch.worldBuildBatch ? 'world build' : patch.status}</span>
               </button>
             ))}
           </div>
@@ -159,14 +163,15 @@ export function ActivityWorkspace({
                 </div>
               </div>
             ) : null}
+            {!selectedWorldBuild ? (
+              <div className="prompt-review-grid">
+                {groupedOperations && groupedOperations.graphs.length > 0 ? <PatchGroup title="Graphs" operations={groupedOperations.graphs} /> : null}
+                {groupedOperations && groupedOperations.nodesAndEdges.length > 0 ? <PatchGroup title="Nodes and edges" operations={groupedOperations.nodesAndEdges} /> : null}
+                {groupedOperations && groupedOperations.definitions.length > 0 ? <PatchGroup title="Definitions" operations={groupedOperations.definitions} /> : null}
+              </div>
+            ) : null}
             {selectedWorldBuild ? (
-              <div className="editor-section compact-section">
-                <div className="section-head">
-                  <div>
-                    <span className="eyebrow">Jobs</span>
-                    <h3>{selectedWorldBuild.jobs.length} job{selectedWorldBuild.jobs.length === 1 ? '' : 's'}</h3>
-                  </div>
-                </div>
+              <ActivityDisclosure title="Jobs" summary={`${selectedWorldBuild.jobs.length} background item${selectedWorldBuild.jobs.length === 1 ? '' : 's'}`}>
                 <div className="diagnostic-stack">
                   {selectedWorldBuild.jobs.map((job) => (
                     <div key={job.id} className="inline-note">
@@ -175,16 +180,10 @@ export function ActivityWorkspace({
                     </div>
                   ))}
                 </div>
-              </div>
+              </ActivityDisclosure>
             ) : null}
             {selectedWorldBuild ? (
-              <div className="editor-section compact-section">
-                <div className="section-head">
-                  <div>
-                    <span className="eyebrow">Authorship Diagnostics</span>
-                    <h3>{authoringDiagnosticEntries.length} issue{authoringDiagnosticEntries.length === 1 ? '' : 's'}</h3>
-                  </div>
-                </div>
+              <ActivityDisclosure title="Authorship Diagnostics" summary={`${authoringDiagnosticEntries.length} authored issue${authoringDiagnosticEntries.length === 1 ? '' : 's'}`}>
                 <div className="diagnostic-stack">
                   {selectedCinematicJob?.resultContext && typeof selectedCinematicJob.resultContext === 'object' && typeof selectedCinematicJob.resultContext.authorshipModelUsed === 'string' ? (
                     <div className="inline-note">
@@ -200,66 +199,43 @@ export function ActivityWorkspace({
                     </div>
                   ))}
                 </div>
-              </div>
+              </ActivityDisclosure>
             ) : null}
             {selectedWorldBuild ? (
-              <div className="editor-section compact-section">
-                <div className="section-head">
-                  <div>
-                    <span className="eyebrow">Batch Diagnostics</span>
-                    <h3>{selectedWorldBuild.diagnostics.length} note{selectedWorldBuild.diagnostics.length === 1 ? '' : 's'}</h3>
-                  </div>
-                </div>
+              <ActivityDisclosure title="Batch Diagnostics" summary={`${selectedWorldBuild.diagnostics.length} diagnostic note${selectedWorldBuild.diagnostics.length === 1 ? '' : 's'}`}>
                 <div className="diagnostic-stack">
                   {selectedWorldBuild.diagnostics.length === 0 ? <div className="inline-note">No batch diagnostics.</div> : null}
                   {selectedWorldBuild.diagnostics.map((diagnostic, index) => (
                     <div key={`${diagnostic}-${index}`} className="inline-note">{diagnostic}</div>
                   ))}
                 </div>
-              </div>
+              </ActivityDisclosure>
             ) : null}
             {selectedPatch.executionPlan ? (
-              <div className="editor-section compact-section">
-                <div className="section-head">
-                  <div>
-                    <span className="eyebrow">Execution Plan</span>
-                    <h3>{selectedPatch.executionPlan.graphJobCount} graph job{selectedPatch.executionPlan.graphJobCount === 1 ? '' : 's'}</h3>
-                  </div>
-                </div>
+              <ActivityDisclosure title="Execution Plan" summary={`${selectedPatch.executionPlan.graphJobCount} graph job${selectedPatch.executionPlan.graphJobCount === 1 ? '' : 's'}`}>
                 <div className="diagnostic-stack">
                   <div className="inline-note">Dependencies: {selectedPatch.executionPlan.dependencyKinds.length > 0 ? selectedPatch.executionPlan.dependencyKinds.join(', ') : 'none'}</div>
                   {selectedPatch.executionPlan.graphJobs.map((job, index) => (
                     <div key={`${job.title}-${index}`} className="inline-note">{job.title}: {job.prompt}</div>
                   ))}
                 </div>
-              </div>
+              </ActivityDisclosure>
             ) : null}
             {selectedPatch.activityEntries && selectedPatch.activityEntries.length > 0 ? (
-              <div className="editor-section compact-section">
-                <div className="section-head">
-                  <div>
-                    <span className="eyebrow">Run Log</span>
-                    <h3>{selectedPatch.activityEntries.length} step{selectedPatch.activityEntries.length === 1 ? '' : 's'}</h3>
-                  </div>
-                </div>
+              <ActivityDisclosure title="Run Log" summary={`${selectedPatch.activityEntries.length} streamed step${selectedPatch.activityEntries.length === 1 ? '' : 's'}`}>
                 <div className="diagnostic-stack">
                   {selectedPatch.activityEntries.map((entry, index) => (
                     <div key={`${entry.phase}-${index}`} className="inline-note"><strong>{entry.title}</strong><span> {entry.detail ?? entry.phase}</span></div>
                   ))}
                 </div>
-              </div>
+              </ActivityDisclosure>
             ) : null}
-            {!selectedWorldBuild ? (
-              <div className="prompt-review-grid">
-                {groupedOperations && groupedOperations.graphs.length > 0 ? <PatchGroup title="Graphs" operations={groupedOperations.graphs} /> : null}
-                {groupedOperations && groupedOperations.nodesAndEdges.length > 0 ? <PatchGroup title="Nodes and edges" operations={groupedOperations.nodesAndEdges} /> : null}
-                {groupedOperations && groupedOperations.definitions.length > 0 ? <PatchGroup title="Definitions" operations={groupedOperations.definitions} /> : null}
+            <ActivityDisclosure title="Diagnostics" summary={selectedPatch.diagnostics.length === 0 ? 'No diagnostics returned' : `${selectedPatch.diagnostics.length} diagnostic item${selectedPatch.diagnostics.length === 1 ? '' : 's'}`}>
+              <div className="diagnostic-stack">
+                {selectedPatch.diagnostics.length === 0 ? <div className="inline-note">No diagnostics were returned for this activity.</div> : null}
+                {selectedPatch.diagnostics.map((diagnostic, index) => <div key={`${diagnostic}-${index}`} className="inline-note">{diagnostic}</div>)}
               </div>
-            ) : null}
-            <div className="diagnostic-stack">
-              {selectedPatch.diagnostics.length === 0 ? <div className="inline-note">No diagnostics were returned for this activity.</div> : null}
-              {selectedPatch.diagnostics.map((diagnostic, index) => <div key={`${diagnostic}-${index}`} className="inline-note">{diagnostic}</div>)}
-            </div>
+            </ActivityDisclosure>
           </div>
         ) : null}
       </section>
@@ -280,5 +256,30 @@ function PatchGroup({ operations, title }: { operations: PatchOperation[]; title
         {operations.map((operation, index) => <div key={`${operation.op}-${index}`} className="inline-note">{describePatchOperation(operation)}</div>)}
       </div>
     </div>
+  )
+}
+
+function ActivityDisclosure({
+  children,
+  summary,
+  title,
+}: {
+  children: ReactNode
+  summary: string
+  title: string
+}) {
+  return (
+    <details className="activity-disclosure">
+      <summary className="activity-disclosure-summary">
+        <div>
+          <span className="eyebrow">Details</span>
+          <h3>{title}</h3>
+        </div>
+        <span>{summary}</span>
+      </summary>
+      <div className="activity-disclosure-body">
+        {children}
+      </div>
+    </details>
   )
 }
