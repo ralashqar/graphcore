@@ -58,9 +58,13 @@ export type ContentWorkspaceProps = {
   onUpdateItemIdentity: (key: string, changes: ItemIdentityChanges) => void
   onUpdateComponents: (itemKey: string, components: DefinitionBase['components']) => void
   onGenerateConceptImage: (definitionKey: string) => Promise<void>
+  isGeneratingPrompt?: boolean
+  onChangePromptText?: (value: string) => void
+  onGeneratePrompt?: () => void
   onStartMeshGeneration: (definitionKey: string) => void
   onPersistDefinitionPreviewImageBinding: (definitionKey: string, assetKey: string | null) => Promise<void>
   onOpenCinematicGraph: (graphKey: string) => void
+  promptText?: string
 }
 
 export type AssetsWorkspaceProps = {

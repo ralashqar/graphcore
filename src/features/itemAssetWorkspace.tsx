@@ -4,23 +4,27 @@ import { getArtStylePresetLabel } from '../domain/artStylePresets'
 import { getResolvedRender3dBinding } from '../domain/render3d'
 import { getResourceGenerationMetadata, isPendingGenerationResource } from '../domain/worldBuild'
 import type { MeshGenerationJob } from '../domain/meshGeneration'
-import { isTerminalMeshGenerationJobStatus } from '../domain/meshGeneration'
+import { useEditorStore } from '../state/editorStore'
 import { EntityIcon, iconForDefinitionKind } from '../shared/entityIcons'
 import { ArchetypeEditor } from './content/ArchetypeEditor'
+import { DefinitionAuthoringShell } from './content/DefinitionAuthoringShell'
 import { AssetsWorkspace as AssetsWorkspaceView } from './content/AssetsWorkspace'
 import { DefinitionEditor } from './content/DefinitionEditor'
 import {
   AssetPickerDialog,
+  DefinitionImagePreviewOverlay,
+  EmptyEditor,
   MediaThumb,
   findAssetByKey,
-  resolveDefinitionDisplayAssetKey,
+  resolveItemFields,
 } from './content/shared'
+import { buildDefinitionCollectionItemViewModel, buildDefinitionDossierViewModel, labelForDefinitionKind } from './content/definitionWorkspacePresentation'
 import type {
-  ContentMode,
   ContentWorkspaceProps,
   DefinitionKindFilter,
   DefinitionPanelMode,
 } from './content/types'
+
 const Definition3dPanel = lazy(() =>
   import('./viewer3d/Character3dPanel').then((module) => ({ default: module.Definition3dPanel })),
 )
@@ -41,6 +45,7 @@ const contentKindOptions: Array<{ value: DefinitionKindFilter; label: string }> 
 ]
 
 type ContentKind = (typeof contentKinds)[number]['kind']
+type ContentSurface = 'item' | 'template'
 
 const contentKindSet = new Set<ContentKind>(contentKinds.map((entry) => entry.kind))
 
@@ -51,13 +56,13 @@ function isContentKind(kind: string): kind is ContentKind {
 export function ContentWorkspace({
   archetypes,
   assets,
-  definitions,
+  definitions: _definitions,
   graphs,
   deletingGeneratedMeshDefinitionKey = null,
   deletingItemKey = null,
   gameSpec = null,
-  projectSummary: _projectSummary = null,
-  graphKeys,
+  projectSummary = null,
+  graphKeys: _graphKeys,
   items,
   meshGenerationJobs = [],
   selectedAsset,
@@ -77,28 +82,36 @@ export function ContentWorkspace({
   onSelectArchetype,
   onSelectItem,
   onGenerateConceptImage,
+  isGeneratingPrompt = false,
+  onChangePromptText: onChangePromptTextProp,
+  onGeneratePrompt,
   onOpenCinematicGraph,
   onStartMeshGeneration,
   onPersistDefinitionPreviewImageBinding,
   onUpdateArchetypeField,
   onUpdateArchetypeIdentity,
-  onUpdateFieldValue,
+  onUpdateFieldValue: _onUpdateFieldValue,
   onUpdateItemIdentity,
   onUpdateComponents,
+  promptText: promptTextProp,
 }: ContentWorkspaceProps) {
-  const [mode, setMode] = useState<ContentMode>('items')
+  const storePromptText = useEditorStore((state) => state.promptText)
+  const setStorePromptText = useEditorStore((state) => state.setPromptText)
+  const promptText = promptTextProp ?? storePromptText
+  const onChangePromptText = onChangePromptTextProp ?? setStorePromptText
+
+  const [activeSurface, setActiveSurface] = useState<ContentSurface>('item')
   const [itemPanelMode, setItemPanelMode] = useState<DefinitionPanelMode>('details')
   const [isCreateContentOpen, setIsCreateContentOpen] = useState(false)
   const [createTemplateKindFilter, setCreateTemplateKindFilter] = useState<DefinitionKindFilter>('all')
   const [itemSearch, setItemSearch] = useState('')
   const [itemFilterKind, setItemFilterKind] = useState<DefinitionKindFilter>('all')
-  const [archetypeSearch, setArchetypeSearch] = useState('')
-  const [archetypeKindFilter, setArchetypeKindFilter] = useState<DefinitionKindFilter>('all')
   const [itemConceptMessage, setItemConceptMessage] = useState<string | null>(null)
   const [itemConceptPending, setItemConceptPending] = useState(false)
   const [isItemImagePickerOpen, setIsItemImagePickerOpen] = useState(false)
+  const [isItemPreviewOpen, setIsItemPreviewOpen] = useState(false)
 
-  const imageAssets = assets.filter((asset) => asset.kind === 'image')
+  const imageAssets = useMemo(() => assets.filter((asset) => asset.kind === 'image'), [assets])
   const contentItems = useMemo(
     () => items.filter((item) => isContentKind(item.kind)),
     [items],
@@ -117,6 +130,7 @@ export function ContentWorkspace({
       : null
   const isDeletingSelectedItem = selectedContentItem?.key === deletingItemKey
   const isDeletingGeneratedMesh = selectedContentItem?.key === deletingGeneratedMeshDefinitionKey
+
   const linkedCinematicGraphs = useMemo(() => {
     if (!selectedContentItem || selectedContentItem.kind !== 'item') return []
     return graphs
@@ -150,31 +164,16 @@ export function ContentWorkspace({
     return contentItems
       .filter((item) => {
         const matchesQuery =
-          query.length === 0 ||
-          item.name.toLowerCase().includes(query) ||
-          item.key.toLowerCase().includes(query) ||
-          item.summary.toLowerCase().includes(query) ||
-          item.tags.some((tag) => tag.toLowerCase().includes(query))
+          query.length === 0
+          || item.name.toLowerCase().includes(query)
+          || item.key.toLowerCase().includes(query)
+          || item.summary.toLowerCase().includes(query)
+          || item.tags.some((tag) => tag.toLowerCase().includes(query))
         const matchesKind = itemFilterKind === 'all' ? true : item.kind === itemFilterKind
         return matchesQuery && matchesKind
       })
       .sort((left, right) => left.name.localeCompare(right.name))
   }, [contentItems, itemFilterKind, itemSearch])
-
-  const filteredArchetypes = useMemo(() => {
-    const query = archetypeSearch.trim().toLowerCase()
-    return contentArchetypes
-      .filter((archetype) => {
-        const matchesQuery =
-          query.length === 0 ||
-          archetype.name.toLowerCase().includes(query) ||
-          archetype.key.toLowerCase().includes(query) ||
-          archetype.summary.toLowerCase().includes(query)
-        const matchesKind = archetypeKindFilter === 'all' ? true : archetype.appliesToKind === archetypeKindFilter
-        return matchesQuery && matchesKind
-      })
-      .sort((left, right) => left.name.localeCompare(right.name))
-  }, [archetypeKindFilter, archetypeSearch, contentArchetypes])
 
   const createModalTemplates = useMemo(() => {
     return contentArchetypes
@@ -228,18 +227,10 @@ export function ContentWorkspace({
   const hasSelectedItemGenerationFailed = getResourceGenerationMetadata(selectedContentItem)?.state === 'failed'
 
   useEffect(() => {
-    if (mode !== 'items') return
     if (selectedContentItem && filteredItems.some((item) => item.key === selectedContentItem.key)) return
     if (selectedItem && !isContentKind(selectedItem.kind)) return
     onSelectItem(filteredItems[0]?.key ?? null)
-  }, [filteredItems, mode, onSelectItem, selectedContentItem, selectedItem])
-
-  useEffect(() => {
-    if (mode !== 'archetypes') return
-    if (selectedContentArchetype && filteredArchetypes.some((archetype) => archetype.key === selectedContentArchetype.key)) return
-    if (selectedArchetype && !isContentKind(selectedArchetype.appliesToKind)) return
-    onSelectArchetype(filteredArchetypes[0]?.key ?? null)
-  }, [filteredArchetypes, mode, onSelectArchetype, selectedArchetype, selectedContentArchetype])
+  }, [filteredItems, onSelectItem, selectedContentItem, selectedItem])
 
   useEffect(() => {
     if (!supportsItem3dPanel && itemPanelMode !== 'details') {
@@ -249,10 +240,8 @@ export function ContentWorkspace({
 
   useEffect(() => {
     setItemConceptMessage(null)
-  }, [selectedContentItem?.key])
-
-  useEffect(() => {
     setIsItemImagePickerOpen(false)
+    setIsItemPreviewOpen(false)
   }, [selectedContentItem?.key])
 
   function updateSelectedItemRenderBinding(changes: Partial<NonNullable<typeof selectedItemRenderBinding>>) {
@@ -307,399 +296,444 @@ export function ContentWorkspace({
     await onPersistDefinitionPreviewImageBinding(selectedContentItem.key, assetKey)
   }
 
-  const itemPanelControls = supportsItem3dPanel ? (
-    <div className="segmented-control panel-mode-control" aria-label="Item panel mode">
-      <button
-        className={itemPanelMode === 'details' ? 'segment-button is-active' : 'segment-button'}
-        onClick={() => setItemPanelMode('details')}
-        type="button"
-      >
-        Details
-      </button>
-      <button
-        className={itemPanelMode === '3d' ? 'segment-button is-active' : 'segment-button'}
-        onClick={() => setItemPanelMode('3d')}
-        type="button"
-      >
-        3D
-      </button>
-    </div>
-  ) : null
-
-  return (
-    <div className="focus-layout item-layout item-layout-wide">
-      <aside className="focus-rail">
-        <div className="rail-collection-head">
-          <div className="segmented-control" aria-label="Content collections">
-            <button
-              className={mode === 'items' ? 'segment-button is-active' : 'segment-button'}
-              onClick={() => setMode('items')}
-              type="button"
-            >
-              Content
-            </button>
-            <button
-              className={mode === 'archetypes' ? 'segment-button is-active' : 'segment-button'}
-              onClick={() => setMode('archetypes')}
-              type="button"
-            >
-              Templates
-            </button>
-          </div>
+  const promptSecondary = (
+    <div className="world-shell-panel definition-authoring-side-panel">
+      <div className="definition-authoring-side-head">
+        <div>
+          <span className="section-label">Templates</span>
+          <strong>{contentArchetypes.length} available</strong>
+        </div>
+        <button className="ghost-button compact" onClick={onCreateArchetype} type="button">
+          New template
+        </button>
+      </div>
+      <div className="definition-authoring-mini-list">
+        {contentArchetypes.slice(0, 6).map((archetype) => (
           <button
-            className="primary-button compact"
+            key={archetype.key}
+            className={archetype.key === selectedContentArchetype?.key && activeSurface === 'template' ? 'definition-authoring-mini-item is-active' : 'definition-authoring-mini-item'}
             onClick={() => {
-              if (mode === 'items') {
-                setCreateTemplateKindFilter('all')
-                setIsCreateContentOpen(true)
-                return
-              }
-              onCreateArchetype()
+              setActiveSurface('template')
+              onSelectArchetype(archetype.key)
             }}
             type="button"
           >
-            {mode === 'items' ? 'New Content' : '+ New template'}
+            <span>{archetype.name}</span>
+            <small>{labelForDefinitionKind(archetype.appliesToKind)}</small>
           </button>
-        </div>
+        ))}
+      </div>
+    </div>
+  )
 
-        <div className="collection-controls">
-          <label className="field-block compact-block">
-            <span>Search</span>
-            <input
-              className="collection-search"
-              onChange={(event) => (mode === 'items' ? setItemSearch(event.target.value) : setArchetypeSearch(event.target.value))}
-              placeholder={mode === 'items' ? 'Search content' : 'Search templates'}
-              value={mode === 'items' ? itemSearch : archetypeSearch}
+  const stageHeader = (
+    <div className="definition-authoring-stage-head">
+      <div className="definition-authoring-stage-copy">
+        <span className="eyebrow">Content Registry</span>
+        <h3>Content</h3>
+      </div>
+      <div className="definition-authoring-stage-controls">
+        <label className="world-shell-search">
+          <span>Search</span>
+          <input
+            onChange={(event) => setItemSearch(event.target.value)}
+            placeholder="Search content"
+            value={itemSearch}
+          />
+        </label>
+        <label className="world-shell-view-select">
+          <span>Kind</span>
+          <select value={itemFilterKind} onChange={(event) => setItemFilterKind(event.target.value as DefinitionKindFilter)}>
+            {contentKindOptions.map((entry) => (
+              <option key={entry.value} value={entry.value}>
+                {entry.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button
+          className="primary-button compact"
+          onClick={() => {
+            setCreateTemplateKindFilter('all')
+            setIsCreateContentOpen(true)
+          }}
+          type="button"
+        >
+          + New Content
+        </button>
+      </div>
+    </div>
+  )
+
+  const collectionPane = (
+    <div className="definition-authoring-collection-list">
+      <div className="definition-authoring-collection-summary">
+        <span className="section-label">Visible</span>
+        <strong>{filteredItems.length} entries</strong>
+      </div>
+      {filteredItems.map((item) => {
+        const viewModel = buildDefinitionCollectionItemViewModel({
+          archetypes,
+          assets,
+          definition: item,
+          isActive: item.key === selectedContentItem?.key && activeSurface === 'item',
+          meshJob: meshJobByDefinitionKey.get(item.key) ?? null,
+        })
+        return (
+          <button
+            key={item.key}
+            className={viewModel.isActive ? 'definition-collection-card is-active' : 'definition-collection-card'}
+            onClick={() => {
+              setActiveSurface('item')
+              onSelectItem(item.key)
+            }}
+            type="button"
+          >
+            <MediaThumb asset={viewModel.imageAsset} fallbackIcon={viewModel.icon} label={viewModel.title} />
+            <div className="definition-collection-card-copy">
+              <strong>{viewModel.title}</strong>
+              <span>{viewModel.subtitle}</span>
+              <small className={`definition-collection-status is-${viewModel.statusTone}`}>{viewModel.meta}</small>
+            </div>
+          </button>
+        )
+      })}
+    </div>
+  )
+
+  const selectedItemFieldCount = selectedContentItem
+    ? resolveItemFields(selectedContentItem, contentArchetypes.find((archetype) => archetype.key === selectedContentItem.archetypeKey) ?? null).length
+    : 0
+  const selectedItemDossier = buildDefinitionDossierViewModel({
+    archetypes,
+    assets,
+    definition: selectedContentItem,
+    linkedCinematicCount: linkedCinematicGraphs.length,
+    fieldCount: selectedItemFieldCount,
+  })
+
+  const itemDetailPane = selectedContentItem ? (
+    <>
+      <div className="definition-focus-hero">
+        <div className="definition-focus-media-shell">
+          <button className="icon-button definition-focus-media-button" onClick={() => setIsItemImagePickerOpen(true)} type="button">
+            {isItemConceptAssetPending ? (
+              <span className="character-concept-art-overlay">
+                <span className="button-spinner" aria-hidden="true" />
+              </span>
+            ) : null}
+            <MediaThumb
+              asset={selectedItemPreviewAsset}
+              fallbackIcon={iconForDefinitionKind(selectedContentItem.kind)}
+              label={selectedContentItem.name}
+              large
+            />
+          </button>
+          {selectedItemPreviewAsset ? (
+            <button
+              aria-label="Expand image preview"
+              className="definition-focus-media-expand"
+              onClick={() => setIsItemPreviewOpen(true)}
+              type="button"
+            >
+              <EntityIcon id="expand" />
+            </button>
+          ) : null}
+        </div>
+        <div className="definition-focus-hero-copy">
+          <div className="definition-focus-hero-topline">
+            <span className="chip">{labelForDefinitionKind(selectedContentItem.kind)}</span>
+            {selectedContentItem.archetypeKey ? <span className="chip">{selectedContentItem.archetypeKey}</span> : null}
+            {hasSelectedItemGenerationFailed ? <span className="inline-note danger">Background generation failed.</span> : null}
+          </div>
+          <div className="definition-focus-head-grid">
+            <label className="inline-head-field">
+              <span>Name</span>
+              <input
+                value={selectedContentItem.name}
+                onChange={(event) => onUpdateItemIdentity(selectedContentItem.key, { name: event.target.value })}
+              />
+            </label>
+            <label className="inline-head-field">
+              <span>Template</span>
+              <select
+                value={selectedContentItem.archetypeKey ?? ''}
+                onChange={(event) => onUpdateItemIdentity(selectedContentItem.key, { archetypeKey: event.target.value || null })}
+              >
+                <option value="">No template</option>
+                {contentArchetypes.filter((archetype) => archetype.appliesToKind === selectedContentItem.kind).map((archetype) => (
+                  <option key={archetype.key} value={archetype.key}>
+                    {archetype.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="inline-head-field">
+              <span>Subtype</span>
+              <select
+                value={selectedItemPhysicalProfile?.physicalSubtype ?? 'pickup'}
+                onChange={(event) => updateSelectedItemPhysicalProfile({ physicalSubtype: event.target.value as 'pickup' | 'prop' | 'equipment' | 'weapon' | 'world_object' })}
+              >
+                <option value="pickup">Pickup</option>
+                <option value="prop">Prop</option>
+                <option value="equipment">Equipment</option>
+                <option value="weapon">Weapon</option>
+                <option value="world_object">World Object</option>
+              </select>
+            </label>
+            <label className="inline-head-field">
+              <span>Placement</span>
+              <input
+                value={selectedItemPhysicalProfile?.worldPlacementRole ?? ''}
+                onChange={(event) => updateSelectedItemPhysicalProfile({ worldPlacementRole: event.target.value })}
+                placeholder="inventory_item"
+              />
+            </label>
+          </div>
+          <label className="field-block character-header-textarea">
+            <span>Summary</span>
+            <textarea
+              rows={3}
+              value={selectedContentItem.summary}
+              onChange={(event) => onUpdateItemIdentity(selectedContentItem.key, { summary: event.target.value })}
+              placeholder="Describe the item role, readability, use case, and gameplay value."
             />
           </label>
-        </div>
-
-        {mode === 'items' ? (
-          <>
-            <div className="rail-section rail-section-first">
-              <div className="collection-status">
-                <span className="section-label">Browse Content</span>
-                <strong>{filteredItems.length} visible</strong>
-              </div>
-              <label className="field-block compact-block">
-                <span>Kind</span>
-                <select value={itemFilterKind} onChange={(event) => setItemFilterKind(event.target.value as DefinitionKindFilter)}>
-                  {contentKindOptions.map((entry) => (
-                    <option key={entry.value} value={entry.value}>
-                      {entry.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <div className="rail-list">
-                {filteredItems.map((item) => {
-                  const itemMeshJob = meshJobByDefinitionKey.get(item.key) ?? null
-                  const isMeshPending = Boolean(itemMeshJob && !isTerminalMeshGenerationJobStatus(itemMeshJob.status))
-                  const isDefinitionPending = isPendingGenerationResource(item)
-
-                  return (
-                    <button
-                      key={`${item.id}:${item.key}`}
-                      className={item.key === selectedContentItem?.key ? 'rail-button item-row is-active' : 'rail-button item-row'}
-                      onClick={() => onSelectItem(item.key)}
-                      type="button"
-                    >
-                      <MediaThumb
-                        asset={findAssetByKey(assets, resolveDefinitionDisplayAssetKey(item, archetypes))}
-                        fallbackIcon={iconForDefinitionKind(item.kind)}
-                        label={item.name}
-                      />
-                      <div className="item-row-copy">
-                        <strong>{item.name}</strong>
-                        <span>{contentKinds.find((entry) => entry.kind === item.kind)?.label ?? item.kind}</span>
-                        <span className={isDefinitionPending || isMeshPending ? 'world-build-rail-status' : undefined}>
-                          {isDefinitionPending ? (
-                            <><span className="button-spinner item-row-spinner" aria-hidden="true" />Generating...</>
-                          ) : isMeshPending ? (
-                            <><span className="button-spinner item-row-spinner" aria-hidden="true" />Generating 3D...</>
-                          ) : getResourceGenerationMetadata(item)?.state === 'failed' ? 'Generation failed' : item.archetypeKey ?? 'No template'}
-                        </span>
-                      </div>
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-          </>
-        ) : (
-          <>
-            <div className="rail-section rail-section-first">
-              <div className="collection-status">
-                <span className="section-label">Templates</span>
-                <strong>Shared structure and defaults</strong>
-              </div>
-            </div>
-
-            <div className="rail-section">
-              <div className="collection-status">
-                <span className="section-label">Browse Templates</span>
-                <strong>{filteredArchetypes.length} visible</strong>
-              </div>
-              <div className="filter-chip-row" role="tablist" aria-label="Template kind filter">
-                {contentKindOptions.map((entry) => (
-                  <button
-                    key={entry.value}
-                    className={archetypeKindFilter === entry.value ? 'filter-chip-button is-active' : 'filter-chip-button'}
-                    onClick={() => setArchetypeKindFilter(entry.value)}
-                    type="button"
-                  >
-                    {entry.label}
+          <div className="character-concept-prompt-row">
+            <label className="field-block character-header-textarea">
+              <span>Visual Description</span>
+              <textarea
+                rows={4}
+                value={selectedItemRenderBinding?.conceptPrompt ?? ''}
+                onChange={(event) => updateSelectedItemRenderBinding({ conceptPrompt: event.target.value || null })}
+                placeholder="Describe silhouette, materials, wear, shape language, scale cues, and must-have visual details."
+              />
+            </label>
+            <div className="character-concept-actions">
+              <div className="definition-focus-action-row">
+                <button
+                  className={isItemConceptBusy ? 'primary-button button-with-spinner' : 'primary-button'}
+                  disabled={isItemConceptBusy || !(selectedItemRenderBinding?.conceptPrompt?.trim())}
+                  onClick={() => void handleGenerateItemConcept()}
+                  type="button"
+                >
+                  {isItemConceptBusy ? <><span className="button-spinner" aria-hidden="true" />Generating...</> : 'Generate concept image'}
+                </button>
+                {supportsItem3dPanel ? (
+                  <button className={itemPanelMode === '3d' ? 'ghost-button compact is-selected' : 'ghost-button compact'} onClick={() => setItemPanelMode('3d')} type="button">
+                    3D Preview
                   </button>
-                ))}
+                ) : null}
+                <button className={itemPanelMode === 'details' ? 'ghost-button compact is-selected' : 'ghost-button compact'} onClick={() => setItemPanelMode('details')} type="button">
+                  Details
+                </button>
+                <button className={isDeletingSelectedItem ? 'ghost-button compact danger button-with-spinner' : 'ghost-button compact danger'} disabled={isDeletingSelectedItem} onClick={() => onDeleteItem(selectedContentItem.key)} type="button">
+                  {isDeletingSelectedItem ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}
+                </button>
               </div>
-              <div className="rail-list">
-                {filteredArchetypes.map((archetype) => (
-                  <button
-                    key={`${archetype.id}:${archetype.key}`}
-                    className={archetype.key === selectedContentArchetype?.key ? 'rail-button item-row is-active' : 'rail-button item-row'}
-                    onClick={() => onSelectArchetype(archetype.key)}
-                    type="button"
-                  >
-                    <MediaThumb asset={findAssetByKey(assets, archetype.iconAssetKey)} fallbackIcon="archetype" label={archetype.name} />
-                    <div className="item-row-copy">
-                      <strong>{archetype.name}</strong>
-                      <span>{contentKinds.find((entry) => entry.kind === archetype.appliesToKind)?.label ?? archetype.appliesToKind}</span>
-                      <span>{archetype.fields.length} shared fields</span>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </div>
-          </>
-        )}
-      </aside>
-
-      <section className="main-surface detail-surface item-editor-surface">
-        {mode === 'items' ? (
-          selectedContentItem && isPendingGenerationResource(selectedContentItem) ? (
-            <div className="detail-stack compact world-build-loading-shell">
-              <span className="eyebrow">Generating Content</span>
-              <h3>{selectedContentItem.name}</h3>
-              <div className="inline-note world-build-status-note"><span className="button-spinner" aria-hidden="true" />This placeholder is still being generated. Fields will appear here when the background job finishes.</div>
-              <div className="editor-head-controls">
-                <button className={isDeletingSelectedItem ? 'ghost-button compact danger button-with-spinner' : 'ghost-button compact danger'} disabled={isDeletingSelectedItem} onClick={() => onDeleteItem(selectedContentItem.key)} type="button">{isDeletingSelectedItem ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}</button>
-              </div>
-            </div>
-          ) : selectedContentItem?.kind === 'item' ? (
-            <div key={selectedContentItem.key} className="character-panel-shell">
-              <div className="character-concept-header">
-                <div className="character-concept-media">
-                  <button className="icon-button character-concept-art-button" onClick={() => setIsItemImagePickerOpen(true)} type="button">
-                    {isItemConceptAssetPending ? (
-                      <span className="character-concept-art-overlay">
-                        <span className="button-spinner" aria-hidden="true" />
-                      </span>
-                    ) : null}
-                    <MediaThumb
-                      asset={selectedItemPreviewAsset}
-                      fallbackIcon={iconForDefinitionKind(selectedContentItem.kind)}
-                      label={selectedContentItem.name}
-                      large
-                    />
-                  </button>
-                </div>
-                <div className="editor-heading-copy character-concept-copy">
-                  <div className="editor-head-toolbar character-head-toolbar">
-                    <div className="editor-head-controls">
-                      <button className={isDeletingSelectedItem ? 'ghost-button compact danger button-with-spinner' : 'ghost-button compact danger'} disabled={isDeletingSelectedItem} onClick={() => onDeleteItem(selectedContentItem.key)} type="button">{isDeletingSelectedItem ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}</button>
-                      {hasSelectedItemGenerationFailed ? <span className="inline-note danger">Background generation failed. You can edit or delete this entry.</span> : null}
-                      {itemPanelControls}
-                    </div>
-                  </div>
-                  <div className="character-header-rows">
-                    <div className="editor-head-inline-fields">
-                      <label className="inline-head-field">
-                        <span>Name</span>
-                        <input
-                          value={selectedContentItem.name}
-                          onChange={(event) => onUpdateItemIdentity(selectedContentItem.key, { name: event.target.value })}
-                        />
-                      </label>
-                    </div>
-                    <div className="character-header-triple">
-                      <label className="inline-head-field">
-                        <span>Template</span>
-                        <select
-                          value={selectedContentItem.archetypeKey ?? ''}
-                          onChange={(event) => onUpdateItemIdentity(selectedContentItem.key, { archetypeKey: event.target.value || null })}
-                        >
-                          <option value="">No template</option>
-                          {contentArchetypes.filter((archetype) => archetype.appliesToKind === 'item').map((archetype) => (
-                            <option key={archetype.key} value={archetype.key}>
-                              {archetype.name}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label className="inline-head-field">
-                        <span>Subtype</span>
-                        <select
-                          value={selectedItemPhysicalProfile?.physicalSubtype ?? 'pickup'}
-                          onChange={(event) => updateSelectedItemPhysicalProfile({ physicalSubtype: event.target.value as 'pickup' | 'prop' | 'equipment' | 'weapon' | 'world_object' })}
-                        >
-                          <option value="pickup">Pickup</option>
-                          <option value="prop">Prop</option>
-                          <option value="equipment">Equipment</option>
-                          <option value="weapon">Weapon</option>
-                          <option value="world_object">World Object</option>
-                        </select>
-                      </label>
-                      <label className="inline-head-field">
-                        <span>Placement</span>
-                        <input
-                          value={selectedItemPhysicalProfile?.worldPlacementRole ?? ''}
-                          onChange={(event) => updateSelectedItemPhysicalProfile({ worldPlacementRole: event.target.value })}
-                          placeholder="inventory_item"
-                        />
-                      </label>
-                    </div>
-                    {itemPanelMode !== '3d' ? (
-                      <>
-                        <label className="field-block character-header-textarea">
-                          <span>Summary</span>
-                          <textarea
-                            rows={3}
-                            value={selectedContentItem.summary}
-                            onChange={(event) => onUpdateItemIdentity(selectedContentItem.key, { summary: event.target.value })}
-                            placeholder="Describe the item role, readability, use case, and gameplay value."
-                          />
-                        </label>
-                        <div className="character-concept-prompt-row">
-                          <label className="field-block character-header-textarea">
-                            <span>Visual Description</span>
-                            <textarea
-                              rows={4}
-                              value={selectedItemRenderBinding?.conceptPrompt ?? ''}
-                              onChange={(event) => updateSelectedItemRenderBinding({ conceptPrompt: event.target.value || null })}
-                              placeholder="Describe silhouette, materials, wear, shape language, scale cues, and any must-have visual details."
-                            />
-                          </label>
-                          <div className="character-concept-actions">
-                            <button
-                              className={isItemConceptBusy ? 'primary-button button-with-spinner' : 'primary-button'}
-                              disabled={isItemConceptBusy || !(selectedItemRenderBinding?.conceptPrompt?.trim())}
-                              onClick={() => void handleGenerateItemConcept()}
-                              type="button"
-                            >
-                              {isItemConceptBusy ? <><span className="button-spinner" aria-hidden="true" />Generating...</> : 'Generate concept image'}
-                            </button>
-                            <span className="subtle-line">
-                              Style: {getArtStylePresetLabel(typeof gameSpec?.theme?.artStylePreset === 'string' ? gameSpec.theme.artStylePreset : null)}
-                            </span>
-                            {typeof gameSpec?.theme?.artStyleDescription === 'string' && gameSpec.theme.artStyleDescription.trim() ? (
-                              <span className="subtle-line">{gameSpec.theme.artStyleDescription.trim()}</span>
-                            ) : null}
-                            {itemConceptMessage ? <div className="inline-note">{itemConceptMessage}</div> : null}
-                          </div>
-                        </div>
-                      </>
-                    ) : null}
-                  </div>
-                </div>
-              </div>
-
-              {linkedCinematicGraphs.length > 0 ? (
-                <div className="editor-section compact-section">
-                  <div className="section-head">
-                    <div>
-                      <span className="eyebrow">Links</span>
-                      <h3>Linked Cinematics</h3>
-                    </div>
-                  </div>
-                  <div className="rail-list">
-                    {linkedCinematicGraphs.map((graph) => (
-                      <button key={graph.key} className="rail-button item-row" onClick={() => onOpenCinematicGraph(graph.key)} type="button">
-                        <div className="media-thumb">
-                          <EntityIcon id="cinematic" />
-                        </div>
-                        <div className="item-row-copy">
-                          <strong>{graph.name}</strong>
-                          <span className={graph.pending ? 'world-build-rail-status' : undefined}>
-                            {graph.pending ? (
-                              <><span className="button-spinner item-row-spinner" aria-hidden="true" />Generating...</>
-                            ) : graph.failed ? 'Generation failed' : 'Open cinematic'}
-                          </span>
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                </div>
+              <span className="subtle-line">
+                Style: {getArtStylePresetLabel(typeof gameSpec?.theme?.artStylePreset === 'string' ? gameSpec.theme.artStylePreset : null)}
+              </span>
+              {typeof gameSpec?.theme?.artStyleDescription === 'string' && gameSpec.theme.artStyleDescription.trim() ? (
+                <span className="subtle-line">{gameSpec.theme.artStyleDescription.trim()}</span>
               ) : null}
-
-              {itemPanelMode === '3d' ? (
-                <Suspense fallback={<div className="detail-stack compact"><span className="eyebrow">Loading</span><h3>Preparing 3D panel…</h3></div>}>
-                  <Definition3dPanel
-                    assets={assets}
-                    definition={selectedContentItem}
-                    isDeletingGeneratedMesh={isDeletingGeneratedMesh}
-                    meshGenerationJob={selectedItemMeshJob}
-                    onDeleteGeneratedMesh={() => onDeleteGeneratedMesh(selectedContentItem.key)}
-                    onRequestGenerateConceptArt={requestItemConceptFrom3d}
-                    onRequestGenerateMesh={() => onStartMeshGeneration(selectedContentItem.key)}
-                    onUpdateComponents={onUpdateComponents}
-                  />
-                </Suspense>
-              ) : (
-                <DefinitionEditor
-                  archetypes={archetypes}
-                  assets={assets}
-                  definitions={definitions}
-                  graphKeys={graphKeys}
-                  imageAssets={imageAssets}
-                  selectedArchetype={selectedContentArchetype}
-                  selectedAsset={selectedAsset}
-                  selectedItem={selectedContentItem}
-                  hideArchetypeField
-                  hideHeader
-                  hideManualSections
-                  suppressSummaryField
-                  onAddCustomField={onAddCustomField}
-                  onCreateItem={onCreateItem}
-                  onUpdateComponents={onUpdateComponents}
-                  onUpdateFieldValue={onUpdateFieldValue}
-                  onUpdateItemIdentity={onUpdateItemIdentity}
-                />
-              )}
+              {itemConceptMessage ? <div className="inline-note">{itemConceptMessage}</div> : null}
             </div>
-          ) : (
-            <DefinitionEditor
-              archetypes={archetypes}
+          </div>
+        </div>
+      </div>
+
+      <DefinitionEditor
+        archetypes={archetypes}
+        assets={assets}
+        imageAssets={imageAssets}
+        selectedArchetype={selectedContentArchetype}
+        selectedAsset={selectedAsset}
+        selectedItem={selectedContentItem}
+        hideArchetypeField
+        hideHeader
+        suppressSummaryField
+        onAddCustomField={onAddCustomField}
+        onCreateItem={onCreateItem}
+        onUpdateItemIdentity={onUpdateItemIdentity}
+      />
+    </>
+  ) : null
+
+  const focusPane = activeSurface === 'template' ? (
+    <div className="definition-focus-shell">
+      <div className="definition-focus-compact-head">
+        <div>
+          <span className="eyebrow">Template Studio</span>
+          <h3>{selectedContentArchetype?.name ?? 'No template selected'}</h3>
+        </div>
+        <button className="ghost-button compact" onClick={() => setActiveSurface('item')} type="button">
+          Back to content
+        </button>
+      </div>
+      <ArchetypeEditor
+        imageAssets={imageAssets}
+        selectedArchetype={selectedContentArchetype}
+        selectedAsset={selectedAsset}
+        onAddArchetypeField={onAddArchetypeField}
+        onAssignArchetypeIcon={onAssignArchetypeIcon}
+        onCreateArchetype={onCreateArchetype}
+        onRemoveArchetypeField={onRemoveArchetypeField}
+        onUpdateArchetypeField={onUpdateArchetypeField}
+        onUpdateArchetypeIdentity={onUpdateArchetypeIdentity}
+      />
+    </div>
+  ) : selectedContentItem && isPendingGenerationResource(selectedContentItem) ? (
+    <div className="detail-stack compact world-build-loading-shell">
+      <span className="eyebrow">Generating Content</span>
+      <h3>{selectedContentItem.name}</h3>
+      <div className="inline-note world-build-status-note"><span className="button-spinner" aria-hidden="true" />This content entry is still being generated. Fields will appear when the background job finishes.</div>
+      <div className="editor-head-controls">
+        <button className={isDeletingSelectedItem ? 'ghost-button compact danger button-with-spinner' : 'ghost-button compact danger'} disabled={isDeletingSelectedItem} onClick={() => onDeleteItem(selectedContentItem.key)} type="button">
+          {isDeletingSelectedItem ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}
+        </button>
+      </div>
+    </div>
+  ) : selectedContentItem ? (
+    <div className="definition-focus-shell">
+      {itemPanelMode === '3d' ? (
+        <>
+          <div className="definition-focus-compact-head">
+            <div>
+              <span className="eyebrow">3D Preview</span>
+              <h3>{selectedContentItem.name}</h3>
+            </div>
+            <div className="definition-focus-meta-actions">
+              <button className="ghost-button compact" onClick={() => setItemPanelMode('details')} type="button">Back to details</button>
+            </div>
+          </div>
+          <Suspense fallback={<div className="detail-stack compact"><span className="eyebrow">Loading</span><h3>Preparing 3D panel...</h3></div>}>
+            <Definition3dPanel
               assets={assets}
-              definitions={definitions}
-              graphKeys={graphKeys}
-              imageAssets={imageAssets}
-              selectedArchetype={selectedContentArchetype}
-              selectedAsset={selectedAsset}
-              selectedItem={selectedContentItem}
-              headerControls={selectedContentItem ? <><button className={isDeletingSelectedItem ? 'ghost-button compact danger button-with-spinner' : 'ghost-button compact danger'} disabled={isDeletingSelectedItem} onClick={() => onDeleteItem(selectedContentItem.key)} type="button">{isDeletingSelectedItem ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}</button>{getResourceGenerationMetadata(selectedContentItem)?.state === 'failed' ? <span className="inline-note danger">Background generation failed. You can edit or delete this entry.</span> : null}</> : undefined}
-              hideManualSections
-              onAddCustomField={onAddCustomField}
-              onCreateItem={onCreateItem}
+              definition={selectedContentItem}
+              isDeletingGeneratedMesh={isDeletingGeneratedMesh}
+              meshGenerationJob={selectedItemMeshJob}
+              onDeleteGeneratedMesh={() => onDeleteGeneratedMesh(selectedContentItem.key)}
+              onRequestGenerateConceptArt={requestItemConceptFrom3d}
+              onRequestGenerateMesh={() => onStartMeshGeneration(selectedContentItem.key)}
               onUpdateComponents={onUpdateComponents}
-              onUpdateFieldValue={onUpdateFieldValue}
-              onUpdateItemIdentity={onUpdateItemIdentity}
             />
-          )
-        ) : (
-          <ArchetypeEditor
-            imageAssets={imageAssets}
-            selectedArchetype={selectedContentArchetype}
-            selectedAsset={selectedAsset}
-            onAddArchetypeField={onAddArchetypeField}
-            onAssignArchetypeIcon={onAssignArchetypeIcon}
-            onCreateArchetype={onCreateArchetype}
-            onRemoveArchetypeField={onRemoveArchetypeField}
-            onUpdateArchetypeField={onUpdateArchetypeField}
-            onUpdateArchetypeIdentity={onUpdateArchetypeIdentity}
-          />
-        )}
-      </section>
-      {mode === 'items' && isCreateContentOpen ? (
+          </Suspense>
+        </>
+      ) : (
+        itemDetailPane
+      )}
+    </div>
+  ) : (
+    <EmptyEditor
+      actionLabel="+ New content"
+      body="Create a new content entry or use the prompt rail to generate one from a short brief."
+      icon="content"
+      onAction={() => setIsCreateContentOpen(true)}
+      title="No content selected"
+    />
+  )
+
+  const focusMeta = activeSurface === 'template'
+    ? (
+      selectedContentArchetype ? (
+        <div className="definition-authoring-focus-meta">
+          <div className="definition-focus-meta-head">
+            <div className="definition-focus-meta-copy">
+              <span className="section-label">Template Details</span>
+              <h4>{selectedContentArchetype.name}</h4>
+              <p>{selectedContentArchetype.summary || 'Shared structure and defaults for content entries.'}</p>
+            </div>
+            <div className="definition-focus-meta-actions">
+              <button className="ghost-button compact" onClick={() => setActiveSurface('item')} type="button">Back to content</button>
+            </div>
+          </div>
+          <div className="definition-focus-meta-grid">
+            <div className="definition-authoring-stat">
+              <span>Fields</span>
+              <strong>{selectedContentArchetype.fields.length}</strong>
+            </div>
+            <div className="definition-authoring-stat">
+              <span>Kind</span>
+              <strong>{labelForDefinitionKind(selectedContentArchetype.appliesToKind)}</strong>
+            </div>
+          </div>
+        </div>
+      ) : null
+    )
+    : selectedContentItem && itemPanelMode === 'details'
+      ? (
+        <div className="definition-authoring-focus-meta">
+          <div className="definition-focus-meta-head">
+            <div className="definition-focus-meta-copy">
+              <span className="section-label">Selection Details</span>
+              <h4>{selectedItemDossier.title}</h4>
+              <p>{selectedItemDossier.summary}</p>
+            </div>
+            <div className="definition-focus-meta-actions">
+              {supportsItem3dPanel ? <button className="ghost-button compact" onClick={() => setItemPanelMode('3d')} type="button">3D Preview</button> : null}
+            </div>
+          </div>
+          <div className="definition-focus-meta-grid">
+            {selectedItemDossier.stats.map((stat) => (
+              <div key={stat.label} className="definition-authoring-stat">
+                <span>{stat.label}</span>
+                <strong>{stat.value}</strong>
+              </div>
+            ))}
+          </div>
+          {selectedItemDossier.tags.length > 0 ? (
+            <div className="chip-row">
+              {selectedItemDossier.tags.map((tag) => <span key={tag} className="chip">{tag}</span>)}
+            </div>
+          ) : null}
+          {linkedCinematicGraphs.length > 0 ? (
+            <div className="definition-authoring-mini-list">
+              {linkedCinematicGraphs.map((graph) => (
+                <button key={graph.key} className="definition-authoring-mini-item" onClick={() => onOpenCinematicGraph(graph.key)} type="button">
+                  <span>{graph.name}</span>
+                  <small>{graph.pending ? 'Generating...' : graph.failed ? 'Generation failed' : 'Open cinematic'}</small>
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      )
+      : null
+
+  return (
+    <>
+      <DefinitionAuthoringShell
+        title="Content"
+        subtitle="Keep item and systemic content generation in the same prompt-first shell as the rest of the workspace."
+        promptLabel="Content generation stream"
+        promptPlaceholder="Create an ancient relic that reveals hidden routes, define how it is found, and describe its visual language."
+        promptText={promptText}
+        promptBusyLabel="Generating..."
+        promptStatus={activeSurface === 'template'
+          ? (selectedContentArchetype ? `Editing template ${selectedContentArchetype.name}` : 'Template Studio')
+          : (selectedContentItem ? `Focused on ${selectedContentItem.name}` : projectSummary || 'No content selected')}
+        promptSuggestions={[
+          { label: 'Create relic', prompt: 'Create a rare relic with a distinct visual silhouette, clear gameplay purpose, and a short lore hook.' },
+          { label: 'Add quest item', prompt: 'Create a quest-critical item connected to a locked environment and explain why it matters.' },
+          { label: 'Define prop set', prompt: 'Create a set of environmental props for a ruined temple and define their material language and function.' },
+        ]}
+        promptFocusLabel={activeSurface === 'template' ? selectedContentArchetype?.name ?? null : selectedContentItem?.name ?? null}
+        promptFocusMeta={activeSurface === 'template'
+          ? (selectedContentArchetype ? `${labelForDefinitionKind(selectedContentArchetype.appliesToKind)} template` : null)
+          : (selectedContentItem ? `${labelForDefinitionKind(selectedContentItem.kind)} • ${selectedItemFieldCount} fields` : null)}
+        promptSecondary={promptSecondary}
+        isPromptBusy={isGeneratingPrompt}
+        onPromptChange={onChangePromptText}
+        onPromptSubmit={() => onGeneratePrompt?.()}
+        onPromptSuggestionSelect={(nextPrompt) => onChangePromptText(nextPrompt)}
+        stageHeader={stageHeader}
+        collectionPane={collectionPane}
+        focusPane={focusPane}
+        focusMeta={focusMeta}
+      />
+
+      {isCreateContentOpen ? (
         <div className="content-create-overlay" onClick={() => setIsCreateContentOpen(false)} role="presentation">
           <div className="content-create-dialog" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Create content">
             <div className="content-create-head">
@@ -777,7 +811,8 @@ export function ContentWorkspace({
           </div>
         </div>
       ) : null}
-      {mode === 'items' && selectedContentItem?.kind === 'item' && isItemImagePickerOpen ? (
+
+      {activeSurface === 'item' && selectedContentItem?.kind === 'item' && isItemImagePickerOpen ? (
         <AssetPickerDialog
           assets={imageAssets}
           clearLabel="Clear image"
@@ -796,7 +831,15 @@ export function ContentWorkspace({
           title={`Choose concept image for ${selectedContentItem.name}`}
         />
       ) : null}
-    </div>
+
+      {selectedContentItem && activeSurface === 'item' && isItemPreviewOpen ? (
+        <DefinitionImagePreviewOverlay
+          asset={selectedItemPreviewAsset}
+          label={selectedContentItem.name}
+          onClose={() => setIsItemPreviewOpen(false)}
+        />
+      ) : null}
+    </>
   )
 }
 

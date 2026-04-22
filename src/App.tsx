@@ -999,6 +999,7 @@ export default function App() {
   const selectedWorldEdgeKey = useEditorStore((state) => state.selectedWorldEdgeKey)
   const selectedWorldEntityKey = useEditorStore((state) => state.selectedWorldEntityKey)
   const selectedWorldViewKey = useEditorStore((state) => state.selectedWorldViewKey)
+  const setPromptText = useEditorStore((state) => state.setPromptText)
   const setSelectedDefinitionKey = useEditorStore((state) => state.setSelectedDefinitionKey)
   const setSelectedEdgeKey = useEditorStore((state) => state.setSelectedEdgeKey)
   const setSelectedGraphKey = useEditorStore((state) => state.setSelectedGraphKey)
@@ -5375,6 +5376,9 @@ export default function App() {
                 onDeleteGeneratedMesh={deleteGeneratedMesh}
                 onDeleteItem={deleteDefinition}
                 onGenerateConceptImage={(definitionKey) => handleStartDefinitionConceptGeneration(definitionKey)}
+                isGeneratingPrompt={isGeneratingPatch}
+                onChangePromptText={setPromptText}
+                onGeneratePrompt={handleGeneratePatch}
                 onOpenCinematicGraph={openCinematicWorkspace}
                 onRemoveArchetypeField={removeArchetypeField}
                 onSelectAsset={setSelectedAssetKey}
@@ -5387,6 +5391,7 @@ export default function App() {
                 onUpdateComponents={updateDefinitionComponents}
                 onStartMeshGeneration={(definitionKey) => void startMeshGenerationForDefinition(definitionKey)}
                 onPersistDefinitionPreviewImageBinding={(definitionKey, assetKey) => workspaceService.persistDefinitionPreviewImageBinding(snapshot, definitionKey, assetKey)}
+                promptText={readPromptText()}
               />
             ) : null}
             {activeTab === 'characters' ? (

@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { isSupportedMeshPath, resolveAssetPreviewUrl, type AssetUrlCreateOptions, type AssetUrlCreationKind } from '../../domain/assets'
-import { getResolvedDefinition3dBinding } from '../../domain/render3d'
-import { EntityIcon, type EntityIconId } from '../../shared/entityIcons'
+import { isSupportedMeshPath, resolveAssetPreviewUrl, type AssetUrlCreateOptions, type AssetUrlCreationKind } from '../../domain/assets.ts'
+import { getResolvedDefinition3dBinding } from '../../domain/render3d.ts'
+import { EntityIcon, type EntityIconId } from '../../shared/entityIcons.tsx'
 
 import type {
   ArchetypeDefinition,
@@ -10,7 +10,7 @@ import type {
   DefinitionBase,
   FieldDefinition,
   FieldValue,
-} from '../../domain/graphcore'
+} from '../../domain/graphcore.ts'
 
 export function EditableField({
   assets,
@@ -407,6 +407,31 @@ export function AssetPickerDialog({
   }
 
   return createPortal(dialog, document.body)
+}
+
+export function DefinitionImagePreviewOverlay({
+  asset,
+  label,
+  onClose,
+}: {
+  asset: AssetDefinition | null
+  label: string
+  onClose: () => void
+}) {
+  const previewUrl = resolveAssetPreviewUrl(asset)
+  if (!previewUrl) return null
+
+  const overlay = (
+    <button className="asset-preview-overlay" onClick={onClose} type="button">
+      <img alt={label} className="asset-preview-overlay-image" src={previewUrl} />
+    </button>
+  )
+
+  if (typeof document === 'undefined') {
+    return overlay
+  }
+
+  return createPortal(overlay, document.body)
 }
 
 export function MediaThumb({

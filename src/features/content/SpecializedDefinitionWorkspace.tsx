@@ -2,20 +2,22 @@ import { Suspense, lazy, useEffect, useMemo, useState, useTransition } from 'rea
 
 import { getArtStylePresetLabel } from '../../domain/artStylePresets'
 import type { ArchetypeDefinition, AssetDefinition, AssemblyGraphDefinition, DefinitionBase, EnvironmentBlueprintV1, FieldDefinition, FieldValue, GameSpec, GraphDefinition } from '../../domain/graphcore'
+import type { MeshGenerationJob } from '../../domain/meshGeneration'
 import { getEnvironmentProfile, getResolvedDefinition3dBinding, getResolvedRender3dBinding } from '../../domain/render3d'
 import { getResourceGenerationMetadata, isPendingGenerationResource } from '../../domain/worldBuild'
-import type { MeshGenerationJob } from '../../domain/meshGeneration'
-import { isTerminalMeshGenerationJobStatus } from '../../domain/meshGeneration'
 import { useEditorStore } from '../../state/editorStore'
 import { EntityIcon, iconForDefinitionKind } from '../../shared/entityIcons'
+import { DefinitionAuthoringShell } from './DefinitionAuthoringShell'
 import { DefinitionEditor } from './DefinitionEditor'
 import { EnvironmentAssemblyWorkspace } from './EnvironmentAssemblyWorkspace'
-import { AssetPickerDialog, EmptyEditor, MediaThumb, findAssetByKey, resolveDefinitionDisplayAssetKey } from './shared'
+import { AssetPickerDialog, DefinitionImagePreviewOverlay, EmptyEditor, MediaThumb, findAssetByKey, resolveItemFields } from './shared'
+import { buildDefinitionCollectionItemViewModel, buildDefinitionDossierViewModel, labelForDefinitionKind } from './definitionWorkspacePresentation'
+
 const Definition3dPanel = lazy(() =>
   import('../viewer3d/Character3dPanel').then((module) => ({ default: module.Definition3dPanel })),
 )
 
-type SpecializedPanelMode = 'details' | 'graph' | '3d'
+type SpecializedPanelMode = 'editor' | 'assembly' | '3d'
 
 type SpecializedDefinitionWorkspaceProps = {
   title: string
@@ -61,6 +63,19 @@ type SpecializedDefinitionWorkspaceProps = {
   promptText?: string
 }
 
+const promptSuggestionsByKind: Partial<Record<DefinitionBase['kind'], Array<{ label: string; prompt: string }>>> = {
+  character: [
+    { label: 'Add a rival', prompt: 'Create a rival character who directly challenges the current protagonist and define why they clash.' },
+    { label: 'Define motivation', prompt: 'Clarify this character’s driving motivation, internal flaw, and what they are willing to sacrifice.' },
+    { label: 'Generate portrait brief', prompt: 'Write a visual description for a cinematic portrait of this character with silhouette, outfit, palette, and mood.' },
+  ],
+  environment: [
+    { label: 'Add a district', prompt: 'Create a new district or sub-area connected to the selected environment and define its mood and purpose.' },
+    { label: 'Define atmosphere', prompt: 'Expand the selected environment with climate, lighting, soundscape, and traversal feel.' },
+    { label: 'Generate concept brief', prompt: 'Write a visual description for a concept image of this environment including layout, materials, lighting, and landmarks.' },
+  ],
+}
+
 export function SpecializedDefinitionWorkspace({
   title,
   subtitle,
@@ -69,11 +84,11 @@ export function SpecializedDefinitionWorkspace({
   assets,
   definitions,
   graphs,
-  graphKeys,
+  graphKeys: _graphKeys,
   assemblyGraphs,
   environmentBlueprints = [],
   gameSpec = null,
-  projectSummary: _projectSummary = null,
+  projectSummary = null,
   selectedAsset,
   selectedDefinition,
   deletingDefinitionKey = null,
@@ -100,7 +115,7 @@ export function SpecializedDefinitionWorkspace({
   onUpsertAssemblyGraph,
   onUpsertEnvironmentBlueprint,
   onUpdateComponents,
-  onUpdateFieldValue,
+  onUpdateFieldValue: _onUpdateFieldValue,
   onUpdateItemIdentity,
   promptText: promptTextProp,
 }: SpecializedDefinitionWorkspaceProps) {
@@ -109,14 +124,13 @@ export function SpecializedDefinitionWorkspace({
   const promptText = promptTextProp ?? storePromptText
   const onChangePromptText = onChangePromptTextProp ?? setStorePromptText
   const [search, setSearch] = useState('')
-  const [panelMode, setPanelMode] = useState<SpecializedPanelMode>('details')
+  const [panelMode, setPanelMode] = useState<SpecializedPanelMode>('editor')
   const [isSelectionIconPickerOpen, setIsSelectionIconPickerOpen] = useState(false)
-  const [characterConceptMessage, setCharacterConceptMessage] = useState<string | null>(null)
-  const [environmentConceptMessage, setEnvironmentConceptMessage] = useState<string | null>(null)
-  const [characterConceptPending, setCharacterConceptPending] = useState(false)
-  const [environmentConceptPending, setEnvironmentConceptPending] = useState(false)
+  const [isSelectionPreviewOpen, setIsSelectionPreviewOpen] = useState(false)
+  const [conceptMessage, setConceptMessage] = useState<string | null>(null)
+  const [conceptPending, setConceptPending] = useState(false)
   const [isOpeningPreview, startOpeningPreview] = useTransition()
-  const isCharacterWorkspace = kind === 'character'
+
   const filteredDefinitions = useMemo(() => {
     const query = search.trim().toLowerCase()
     return definitions
@@ -135,27 +149,7 @@ export function SpecializedDefinitionWorkspace({
     () => archetypes.filter((archetype) => archetype.appliesToKind === kind).sort((left, right) => left.name.localeCompare(right.name)),
     [archetypes, kind],
   )
-  const imageAssets = assets.filter((asset) => asset.kind === 'image')
-  const hasSelectedDefinitionForKind =
-    selectedDefinition?.kind === kind
-    && filteredDefinitions.some((definition) => definition.key === selectedDefinition.key)
-  const effectiveSelection = hasSelectedDefinitionForKind ? selectedDefinition : filteredDefinitions[0] ?? null
-  const supports3dPanel = (kind === 'character' || kind === 'environment') && Boolean(effectiveSelection)
-  const supportsGraphPanel = kind === 'environment' && Boolean(effectiveSelection)
-  const isDeletingSelection = effectiveSelection?.key === deletingDefinitionKey
-  const selectedCharacterProfile = useMemo(() => {
-    if (effectiveSelection?.kind !== 'character') return null
-    const profile = effectiveSelection.components.find((component) => component.type === 'character_profile')
-    return profile?.type === 'character_profile' ? profile.config : null
-  }, [effectiveSelection])
-  const selectedCharacterRenderBinding = useMemo(() => {
-    if (effectiveSelection?.kind !== 'character') return null
-    return getResolvedRender3dBinding(effectiveSelection)
-  }, [effectiveSelection])
-  const selectedCharacterPreviewAsset = useMemo(() => {
-    if (!selectedCharacterRenderBinding?.previewImageAssetKey) return null
-    return findAssetByKey(assets, selectedCharacterRenderBinding.previewImageAssetKey)
-  }, [assets, selectedCharacterRenderBinding?.previewImageAssetKey])
+  const imageAssets = useMemo(() => assets.filter((asset) => asset.kind === 'image'), [assets])
   const meshJobByDefinitionKey = useMemo(() => {
     const map = new Map<string, MeshGenerationJob>()
     for (const job of meshGenerationJobs) {
@@ -165,10 +159,21 @@ export function SpecializedDefinitionWorkspace({
     }
     return map
   }, [meshGenerationJobs])
-  const selectedCharacterMeshJob = useMemo(() => {
+
+  const hasSelectedDefinitionForKind =
+    selectedDefinition?.kind === kind
+    && filteredDefinitions.some((definition) => definition.key === selectedDefinition.key)
+  const effectiveSelection = hasSelectedDefinitionForKind ? selectedDefinition : filteredDefinitions[0] ?? null
+
+  const selectedCharacterProfile = useMemo(() => {
     if (effectiveSelection?.kind !== 'character') return null
-    return meshJobByDefinitionKey.get(effectiveSelection.key) ?? null
-  }, [effectiveSelection, meshJobByDefinitionKey])
+    const profile = effectiveSelection.components.find((component) => component.type === 'character_profile')
+    return profile?.type === 'character_profile' ? profile.config : null
+  }, [effectiveSelection])
+  const selectedCharacterRenderBinding = useMemo(() => {
+    if (effectiveSelection?.kind !== 'character') return null
+    return getResolvedRender3dBinding(effectiveSelection)
+  }, [effectiveSelection])
   const selectedEnvironmentProfile = useMemo(() => {
     if (effectiveSelection?.kind !== 'environment') return null
     return getEnvironmentProfile(effectiveSelection)?.config ?? null
@@ -177,16 +182,31 @@ export function SpecializedDefinitionWorkspace({
     if (effectiveSelection?.kind !== 'environment') return null
     return getResolvedDefinition3dBinding(effectiveSelection)
   }, [effectiveSelection])
-  const selectedEnvironmentPreviewAsset = useMemo(() => {
+  const selectedPreviewAsset = useMemo(() => {
+    if (!effectiveSelection) return null
+    if (effectiveSelection.kind === 'character') {
+      return selectedCharacterRenderBinding?.previewImageAssetKey
+        ? findAssetByKey(assets, selectedCharacterRenderBinding.previewImageAssetKey)
+        : null
+    }
+    if (effectiveSelection.kind === 'environment') {
+      const previewAssetKey = selectedEnvironmentRenderBinding?.previewImageAssetKey ?? effectiveSelection.iconAssetKey ?? null
+      return previewAssetKey ? findAssetByKey(assets, previewAssetKey) : null
+    }
+    return null
+  }, [assets, effectiveSelection, selectedCharacterRenderBinding, selectedEnvironmentRenderBinding])
+  const selectedAssemblyGraph = useMemo(() => {
     if (effectiveSelection?.kind !== 'environment') return null
-    const previewAssetKey = selectedEnvironmentRenderBinding?.previewImageAssetKey ?? effectiveSelection.iconAssetKey ?? null
-    return previewAssetKey ? findAssetByKey(assets, previewAssetKey) : null
-  }, [assets, effectiveSelection, selectedEnvironmentRenderBinding])
-  const isCharacterConceptAssetPending = isPendingGenerationResource(selectedCharacterPreviewAsset)
-  const isCharacterConceptBusy = characterConceptPending || isCharacterConceptAssetPending
-  const isEnvironmentConceptAssetPending = isPendingGenerationResource(selectedEnvironmentPreviewAsset)
-  const isEnvironmentConceptBusy = environmentConceptPending || isEnvironmentConceptAssetPending
-  const isDeletingGeneratedMesh = effectiveSelection?.key === deletingGeneratedMeshDefinitionKey
+    const geometryBinding = effectiveSelection.components.find((component) => component.type === 'environment_geometry_binding')
+    const graphKey = geometryBinding?.type === 'environment_geometry_binding' ? geometryBinding.config.assemblyGraphKey : null
+    return assemblyGraphs.find((graph) => graph.key === graphKey) ?? null
+  }, [assemblyGraphs, effectiveSelection])
+  const selectedEnvironmentBlueprint = useMemo(() => {
+    if (effectiveSelection?.kind !== 'environment') return null
+    const geometryBinding = effectiveSelection.components.find((component) => component.type === 'environment_geometry_binding')
+    const blueprintId = geometryBinding?.type === 'environment_geometry_binding' ? geometryBinding.config.environmentBlueprintKey : null
+    return environmentBlueprints.find((blueprint) => blueprint.id === blueprintId) ?? null
+  }, [effectiveSelection, environmentBlueprints])
   const linkedCinematicGraphs = useMemo(() => {
     if (!effectiveSelection) return []
     return graphs
@@ -214,91 +234,54 @@ export function SpecializedDefinitionWorkspace({
         failed: getResourceGenerationMetadata(graph)?.state === 'failed',
       }))
   }, [effectiveSelection, graphs])
-  const selectedAssemblyGraph = useMemo(() => {
-    if (effectiveSelection?.kind !== 'environment') return null
-    const geometryBinding = effectiveSelection.components.find((component) => component.type === 'environment_geometry_binding')
-    const graphKey = geometryBinding?.type === 'environment_geometry_binding' ? geometryBinding.config.assemblyGraphKey : null
-    return assemblyGraphs.find((graph) => graph.key === graphKey) ?? null
-  }, [assemblyGraphs, effectiveSelection])
-  const selectedEnvironmentBlueprint = useMemo(() => {
-    if (effectiveSelection?.kind !== 'environment') return null
-    const geometryBinding = effectiveSelection.components.find((component) => component.type === 'environment_geometry_binding')
-    const blueprintId = geometryBinding?.type === 'environment_geometry_binding' ? geometryBinding.config.environmentBlueprintKey : null
-    return environmentBlueprints.find((blueprint) => blueprint.id === blueprintId) ?? null
-  }, [effectiveSelection, environmentBlueprints])
+  const selectedFieldCount = effectiveSelection
+    ? resolveItemFields(effectiveSelection, compatibleArchetypes.find((entry) => entry.key === effectiveSelection.archetypeKey) ?? null).length
+    : 0
+  const supports3dPanel = (kind === 'character' || kind === 'environment') && Boolean(effectiveSelection)
+  const supportsAssemblyPanel = kind === 'environment' && Boolean(effectiveSelection)
+  const isDeletingSelection = effectiveSelection?.key === deletingDefinitionKey
+  const isDeletingGeneratedMesh = effectiveSelection?.key === deletingGeneratedMeshDefinitionKey
   const isSelectionPending = isPendingGenerationResource(effectiveSelection)
-  const selectionGeneration = getResourceGenerationMetadata(effectiveSelection)
-  const hasSelectionGenerationFailed = selectionGeneration?.state === 'failed'
-  const definitionPanelControls = supports3dPanel ? (
-    <div className="segmented-control panel-mode-control" aria-label="Character panel mode">
-      <button
-        className={panelMode === 'details' ? 'segment-button is-active' : 'segment-button'}
-        onClick={() => setPanelMode('details')}
-        type="button"
-      >
-        Details
-      </button>
-      {supportsGraphPanel ? (
-        <button
-          className={panelMode === 'graph' ? 'segment-button is-active' : 'segment-button'}
-          onClick={() => setPanelMode('graph')}
-          type="button"
-        >
-          Graph
-        </button>
-      ) : null}
-      <button
-        className={panelMode === '3d' ? 'segment-button is-active' : 'segment-button'}
-        onClick={() => setPanelMode('3d')}
-        type="button"
-      >
-        3D
-      </button>
-    </div>
-  ) : null
+  const hasSelectionGenerationFailed = getResourceGenerationMetadata(effectiveSelection)?.state === 'failed'
+  const dossierViewModel = useMemo(() => buildDefinitionDossierViewModel({
+    archetypes,
+    assets,
+    definition: effectiveSelection,
+    linkedCinematicCount: linkedCinematicGraphs.length,
+    fieldCount: selectedFieldCount,
+  }), [archetypes, assets, effectiveSelection, linkedCinematicGraphs.length, selectedFieldCount])
 
-  const linkedCinematicsSection = effectiveSelection && linkedCinematicGraphs.length > 0 ? (
-    <div className="editor-section compact-section">
-      <div className="section-head">
-        <div>
-          <span className="eyebrow">Links</span>
-          <h3>Linked Cinematics</h3>
-        </div>
-      </div>
-      <div className="rail-list">
-        {linkedCinematicGraphs.map((graph) => (
-          <button key={graph.key} className="rail-button item-row" onClick={() => onOpenCinematicGraph(graph.key)} type="button">
-            <div className="media-thumb">
-              <EntityIcon id="cinematic" />
-            </div>
-            <div className="item-row-copy">
-              <strong>{graph.name}</strong>
-              <span className={graph.pending ? 'world-build-rail-status' : undefined}>
-                {graph.pending ? (
-                  <><span className="button-spinner item-row-spinner" aria-hidden="true" />Generating...</>
-                ) : graph.failed ? 'Generation failed' : 'Open cinematic'}
-              </span>
-            </div>
-          </button>
-        ))}
-      </div>
-    </div>
-  ) : null
+  useEffect(() => {
+    if (!hasSelectedDefinitionForKind && effectiveSelection && selectedDefinition?.key !== effectiveSelection.key) {
+      onSelectDefinition(effectiveSelection.key)
+    }
+  }, [effectiveSelection, hasSelectedDefinitionForKind, onSelectDefinition, selectedDefinition?.key])
 
-  function updateCharacterComponents(config: Record<string, unknown>) {
-    if (effectiveSelection?.kind !== 'character') return
-    const nextComponents = effectiveSelection.components.some((component) => component.type === 'render_3d_binding')
-      ? effectiveSelection.components.map((component) => component.type === 'render_3d_binding' ? { ...component, config } : component)
-      : [...effectiveSelection.components, { type: 'render_3d_binding', config } as DefinitionBase['components'][number]]
-    onUpdateComponents(effectiveSelection.key, nextComponents as DefinitionBase['components'])
-  }
+  useEffect(() => {
+    if (panelMode === 'assembly' && !supportsAssemblyPanel) {
+      setPanelMode('editor')
+    }
+    if (panelMode === '3d' && !supports3dPanel) {
+      setPanelMode('editor')
+    }
+  }, [panelMode, supports3dPanel, supportsAssemblyPanel])
+
+  useEffect(() => {
+    setConceptMessage(null)
+    setIsSelectionIconPickerOpen(false)
+    setIsSelectionPreviewOpen(false)
+  }, [effectiveSelection?.key])
 
   function updateCharacterRenderBinding(changes: Partial<NonNullable<typeof selectedCharacterRenderBinding>>) {
-    if (!selectedCharacterRenderBinding) return
-    updateCharacterComponents({
+    if (!selectedCharacterRenderBinding || effectiveSelection?.kind !== 'character') return
+    const nextConfig = {
       ...selectedCharacterRenderBinding,
       ...changes,
-    })
+    }
+    const nextComponents = effectiveSelection.components.some((component) => component.type === 'render_3d_binding')
+      ? effectiveSelection.components.map((component) => component.type === 'render_3d_binding' ? { ...component, config: nextConfig } : component)
+      : [...effectiveSelection.components, { type: 'render_3d_binding', config: nextConfig } as DefinitionBase['components'][number]]
+    onUpdateComponents(effectiveSelection.key, nextComponents as DefinitionBase['components'])
   }
 
   function updateCharacterProfile(changes: Partial<NonNullable<typeof selectedCharacterProfile>>) {
@@ -348,540 +331,505 @@ export function SpecializedDefinitionWorkspace({
     onUpdateComponents(effectiveSelection.key, nextComponents as DefinitionBase['components'])
   }
 
-  async function handleGenerateCharacterConcept() {
-    if (effectiveSelection?.kind !== 'character' || !selectedCharacterRenderBinding) return
-    const conceptPrompt = selectedCharacterRenderBinding.conceptPrompt?.trim() ?? ''
-    if (!conceptPrompt) return
+  async function handleGenerateConcept() {
+    if (!effectiveSelection) return
+    const prompt = effectiveSelection.kind === 'character'
+      ? selectedCharacterRenderBinding?.conceptPrompt?.trim() ?? ''
+      : selectedEnvironmentRenderBinding?.generationPrompt?.trim() ?? ''
+    if (!prompt) return
 
-    setCharacterConceptPending(true)
-    setCharacterConceptMessage(null)
-
+    setConceptPending(true)
+    setConceptMessage(null)
     try {
       await onGenerateConceptImage(effectiveSelection.key)
-      setCharacterConceptMessage('Concept image generation queued.')
+      setConceptMessage('Concept image generation queued.')
     } catch (error) {
-      setCharacterConceptMessage(error instanceof Error ? error.message : 'Character concept generation failed.')
+      setConceptMessage(error instanceof Error ? error.message : 'Concept image generation failed.')
     } finally {
-      setCharacterConceptPending(false)
+      setConceptPending(false)
     }
   }
 
-  async function handleGenerateEnvironmentConcept() {
-    if (effectiveSelection?.kind !== 'environment' || !selectedEnvironmentRenderBinding) return
-    const visualDescription = selectedEnvironmentRenderBinding.generationPrompt?.trim() ?? ''
-    if (!visualDescription) return
+  const promptStatus = effectiveSelection
+    ? `Focused on ${effectiveSelection.name}`
+    : projectSummary || `No ${title.toLowerCase()} selected`
 
-    setEnvironmentConceptPending(true)
-    setEnvironmentConceptMessage(null)
+  const promptSecondary = (
+    <div className="world-shell-panel definition-authoring-side-panel">
+      <div className="definition-authoring-side-head">
+        <div>
+          <span className="section-label">Templates</span>
+          <strong>{compatibleArchetypes.length} compatible</strong>
+        </div>
+        <button className="ghost-button compact" onClick={() => onCreateDefinition()} type="button">
+          New {title.slice(0, -1)}
+        </button>
+      </div>
+      <div className="definition-authoring-mini-list">
+        {compatibleArchetypes.slice(0, 5).map((archetype) => (
+          <button
+            key={archetype.key}
+            className="definition-authoring-mini-item"
+            onClick={() => {
+              if (effectiveSelection) {
+                onUpdateItemIdentity(effectiveSelection.key, { archetypeKey: archetype.key })
+                return
+              }
+              onCreateDefinition(archetype.key)
+            }}
+            type="button"
+          >
+            <span>{archetype.name}</span>
+            <small>{archetype.summary || archetype.key}</small>
+          </button>
+        ))}
+      </div>
+    </div>
+  )
 
-    try {
-      await onGenerateConceptImage(effectiveSelection.key)
-      setEnvironmentConceptMessage('Concept image generation queued.')
-    } catch (error) {
-      setEnvironmentConceptMessage(error instanceof Error ? error.message : 'Environment concept generation failed.')
-    } finally {
-      setEnvironmentConceptPending(false)
-    }
-  }
+  const stageHeader = (
+    <div className="definition-authoring-stage-head">
+      <div className="definition-authoring-stage-copy">
+        <span className="eyebrow">Registry</span>
+        <h3>{title}</h3>
+      </div>
+      <div className="definition-authoring-stage-controls">
+        <label className="world-shell-search">
+          <span>Search</span>
+          <input
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder={`Search ${title.toLowerCase()}`}
+            value={search}
+          />
+        </label>
+        <button className="primary-button compact" onClick={() => onCreateDefinition()} type="button">
+          + New {title.slice(0, -1)}
+        </button>
+      </div>
+    </div>
+  )
 
-  function requestCharacterConceptFrom3d() {
-    void handleGenerateCharacterConcept()
-  }
+  const collectionPane = (
+    <div className="definition-authoring-collection-list">
+      <div className="definition-authoring-collection-summary">
+        <span className="section-label">Visible</span>
+        <strong>{filteredDefinitions.length} entries</strong>
+      </div>
+      {filteredDefinitions.map((definition) => {
+        const viewModel = buildDefinitionCollectionItemViewModel({
+          archetypes,
+          assets,
+          definition,
+          isActive: definition.key === effectiveSelection?.key,
+          meshJob: meshJobByDefinitionKey.get(definition.key) ?? null,
+        })
+        return (
+          <button
+            key={definition.key}
+            className={viewModel.isActive ? 'definition-collection-card is-active' : 'definition-collection-card'}
+            onClick={() => {
+              onSelectDefinition(definition.key)
+              setPanelMode('editor')
+            }}
+            type="button"
+          >
+            <MediaThumb asset={viewModel.imageAsset} fallbackIcon={viewModel.icon} label={viewModel.title} />
+            <div className="definition-collection-card-copy">
+              <strong>{viewModel.title}</strong>
+              <span>{viewModel.subtitle}</span>
+              <small className={`definition-collection-status is-${viewModel.statusTone}`}>{viewModel.meta}</small>
+            </div>
+          </button>
+        )
+      })}
+    </div>
+  )
 
-  useEffect(() => {
-    if (!hasSelectedDefinitionForKind && effectiveSelection && selectedDefinition?.key !== effectiveSelection.key) {
-      onSelectDefinition(effectiveSelection.key)
-    }
-  }, [effectiveSelection, hasSelectedDefinitionForKind, onSelectDefinition, selectedDefinition?.key])
-
-  useEffect(() => {
-    if (kind !== 'character' && kind !== 'environment' && panelMode !== 'details') {
-      setPanelMode('details')
-    }
-    if (kind !== 'environment' && panelMode === 'graph') {
-      setPanelMode('details')
-    }
-  }, [kind, panelMode])
-
-  useEffect(() => {
-    setCharacterConceptMessage(null)
-    setEnvironmentConceptMessage(null)
-  }, [effectiveSelection?.key])
-
-  useEffect(() => {
-    setIsSelectionIconPickerOpen(false)
-  }, [effectiveSelection?.key])
-
-  return (
-    <div className="focus-layout item-layout item-layout-wide">
-      <aside className="focus-rail">
-        <div className="rail-collection-head">
-          <div>
-            <span className="section-label">{title}</span>
-            <strong>{filteredDefinitions.length} entries</strong>
-          </div>
-          {!isCharacterWorkspace ? (
-            <button className="primary-button compact" onClick={() => onCreateDefinition()} type="button">
-              + New {title.slice(0, -1)}
+  const detailEditorPane = effectiveSelection ? (
+    <>
+      <div className="definition-focus-hero">
+        <div className="definition-focus-media-shell">
+          <button className="icon-button definition-focus-media-button" onClick={() => setIsSelectionIconPickerOpen(true)} type="button">
+            {conceptPending ? (
+              <span className="character-concept-art-overlay">
+                <span className="button-spinner" aria-hidden="true" />
+              </span>
+            ) : null}
+            <MediaThumb
+              asset={selectedPreviewAsset}
+              fallbackIcon={iconForDefinitionKind(effectiveSelection.kind)}
+              label={effectiveSelection.name}
+              large
+            />
+          </button>
+          {selectedPreviewAsset ? (
+            <button
+              aria-label="Expand image preview"
+              className="definition-focus-media-expand"
+              onClick={() => setIsSelectionPreviewOpen(true)}
+              type="button"
+            >
+              <EntityIcon id="expand" />
             </button>
           ) : null}
         </div>
-
-        <div className="collection-controls">
-          <label className="field-block compact-block">
-            <span>Search</span>
-            <input
-              className="collection-search"
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder={`Search ${title.toLowerCase()}`}
-              value={search}
+        <div className="definition-focus-hero-copy">
+          <div className="definition-focus-hero-topline">
+            <span className="chip">{labelForDefinitionKind(effectiveSelection.kind)}</span>
+            {effectiveSelection.archetypeKey ? <span className="chip">{effectiveSelection.archetypeKey}</span> : null}
+            {hasSelectionGenerationFailed ? <span className="inline-note danger">Background generation failed.</span> : null}
+          </div>
+          <div className="definition-focus-head-grid">
+            <label className="inline-head-field">
+              <span>Name</span>
+              <input
+                value={effectiveSelection.name}
+                onChange={(event) => onUpdateItemIdentity(effectiveSelection.key, { name: event.target.value })}
+              />
+            </label>
+            <label className="inline-head-field">
+              <span>Template</span>
+              <select
+                value={effectiveSelection.archetypeKey ?? ''}
+                onChange={(event) => onUpdateItemIdentity(effectiveSelection.key, { archetypeKey: event.target.value || null })}
+              >
+                <option value="">No template</option>
+                {compatibleArchetypes.map((archetype) => (
+                  <option key={archetype.key} value={archetype.key}>
+                    {archetype.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {effectiveSelection.kind === 'character' ? (
+              <>
+                <label className="inline-head-field">
+                  <span>Subtype</span>
+                  <select
+                    value={selectedCharacterProfile?.subtype ?? 'humanoid'}
+                    onChange={(event) => updateCharacterProfile({ subtype: event.target.value as NonNullable<typeof selectedCharacterProfile>['subtype'], bodyClass: event.target.value === 'vehicle' ? 'vehicle' : 'humanoid' })}
+                  >
+                    <option value="humanoid">Humanoid</option>
+                    <option value="beast">Beast</option>
+                    <option value="construct">Construct</option>
+                    <option value="undead">Undead</option>
+                    <option value="vehicle">Vehicle</option>
+                    <option value="spirit">Spirit</option>
+                  </select>
+                </label>
+                <label className="inline-head-field">
+                  <span>Control</span>
+                  <select
+                    value={selectedCharacterProfile?.controlMode ?? 'ai'}
+                    onChange={(event) => updateCharacterProfile({ controlMode: event.target.value as NonNullable<typeof selectedCharacterProfile>['controlMode'] })}
+                  >
+                    <option value="player">Player</option>
+                    <option value="ai">AI</option>
+                    <option value="scripted">Scripted</option>
+                    <option value="neutral">Neutral</option>
+                  </select>
+                </label>
+              </>
+            ) : (
+              <>
+                <label className="inline-head-field">
+                  <span>Subtype</span>
+                  <select
+                    value={selectedEnvironmentProfile?.subtype ?? 'exterior'}
+                    onChange={(event) =>
+                      updateEnvironmentProfile({
+                        subtype: event.target.value as NonNullable<typeof selectedEnvironmentProfile>['subtype'],
+                        isInterior: event.target.value === 'interior' || event.target.value === 'dungeon',
+                      })
+                    }
+                  >
+                    <option value="interior">Interior</option>
+                    <option value="exterior">Exterior</option>
+                    <option value="dungeon">Dungeon</option>
+                    <option value="settlement">Settlement</option>
+                    <option value="wilderness">Wilderness</option>
+                    <option value="structure">Structure</option>
+                    <option value="biome">Biome</option>
+                    <option value="poi">POI</option>
+                  </select>
+                </label>
+                <label className="inline-head-field">
+                  <span>Lighting</span>
+                  <input
+                    value={selectedEnvironmentRenderBinding?.lightingProfile ?? ''}
+                    onChange={(event) => updateEnvironmentRenderBinding({ lightingProfile: event.target.value })}
+                    placeholder="Moody torchlight"
+                  />
+                </label>
+              </>
+            )}
+          </div>
+          <label className="field-block character-header-textarea">
+            <span>Summary</span>
+            <textarea
+              rows={3}
+              value={effectiveSelection.summary}
+              onChange={(event) => onUpdateItemIdentity(effectiveSelection.key, { summary: event.target.value })}
+              placeholder={effectiveSelection.kind === 'character' ? 'Describe the role, personality, and gameplay purpose of this character.' : 'Describe the setting, atmosphere, and narrative role of this environment.'}
             />
           </label>
-          {!isCharacterWorkspace ? <div className="inline-note">{subtitle}</div> : null}
-        </div>
-
-        <div className="rail-section">
-          <div className="collection-status">
-            <span className="section-label">Registry</span>
-            <strong>{filteredDefinitions.length} visible</strong>
-          </div>
-          <div className="rail-list">
-            {filteredDefinitions.map((definition) => {
-              const isDefinitionPending = isPendingGenerationResource(definition)
-              const generation = getResourceGenerationMetadata(definition)
-              return (
-              <button
-                key={`${definition.id}:${definition.key}`}
-                className={definition.key === effectiveSelection?.key ? 'rail-button item-row is-active' : 'rail-button item-row'}
-                onClick={() => onSelectDefinition(definition.key)}
-                type="button"
-              >
-                <MediaThumb
-                        asset={findAssetByKey(assets, resolveDefinitionDisplayAssetKey(definition, archetypes))}
-                  fallbackIcon={iconForDefinitionKind(definition.kind)}
-                  label={definition.name}
-                />
-                <div className="item-row-copy">
-                  <strong>{definition.name}</strong>
-                  <span className={isDefinitionPending || (kind === 'character' && meshJobByDefinitionKey.get(definition.key) && !isTerminalMeshGenerationJobStatus(meshJobByDefinitionKey.get(definition.key)!.status)) ? 'world-build-rail-status' : undefined}>
-                    {isDefinitionPending ? (
-                      <><span className="button-spinner item-row-spinner" aria-hidden="true" />Generating...</>
-                    ) : kind === 'character' && meshJobByDefinitionKey.get(definition.key) && !isTerminalMeshGenerationJobStatus(meshJobByDefinitionKey.get(definition.key)!.status) ? (
-                      <><span className="button-spinner item-row-spinner" aria-hidden="true" />Generating 3D...</>
-                    ) : generation?.state === 'failed' ? 'Generation failed' : definition.archetypeKey ?? 'No archetype'}
-                  </span>
-                </div>
-              </button>
-              )
-            })}
-          </div>
-        </div>
-
-        {!isCharacterWorkspace ? (
-          <div className="rail-section">
-            <div className="collection-status">
-              <span className="section-label">Compatible Archetypes</span>
-              <strong>{compatibleArchetypes.length} available</strong>
-            </div>
-            <div className="rail-list">
-              {compatibleArchetypes.map((archetype) => (
+          <div className="character-concept-prompt-row">
+            <label className="field-block character-header-textarea">
+              <span>Visual Description</span>
+              <textarea
+                rows={4}
+                value={effectiveSelection.kind === 'character' ? (selectedCharacterRenderBinding?.conceptPrompt ?? '') : (selectedEnvironmentRenderBinding?.generationPrompt ?? '')}
+                onChange={(event) => {
+                  if (effectiveSelection.kind === 'character') {
+                    updateCharacterRenderBinding({ conceptPrompt: event.target.value || null })
+                  } else {
+                    updateEnvironmentRenderBinding({ generationPrompt: event.target.value || null })
+                  }
+                }}
+                placeholder={effectiveSelection.kind === 'character'
+                  ? 'Describe face, silhouette, outfit, props, palette, mood, and must-have visual cues.'
+                  : 'Describe layout, architecture, materials, lighting, mood, and signature landmarks.'}
+              />
+            </label>
+            <div className="character-concept-actions">
+              <div className="definition-focus-action-row">
                 <button
-                  key={archetype.id}
-                  className={effectiveSelection?.archetypeKey === archetype.key ? 'rail-button item-row is-active' : 'rail-button item-row'}
-                  onClick={() => {
-                    if (effectiveSelection) {
-                      onUpdateItemIdentity(effectiveSelection.key, { archetypeKey: archetype.key })
-                      return
-                    }
-                    onCreateDefinition(archetype.key)
-                  }}
+                  className={conceptPending ? 'primary-button button-with-spinner' : 'primary-button'}
+                  disabled={conceptPending}
+                  onClick={() => void handleGenerateConcept()}
                   type="button"
                 >
-                  <MediaThumb asset={findAssetByKey(assets, archetype.iconAssetKey)} fallbackIcon="archetype" label={archetype.name} />
-                  <div className="item-row-copy">
-                    <strong>{archetype.name}</strong>
-                    <span>{archetype.summary || archetype.key}</span>
-                  </div>
+                  {conceptPending ? <><span className="button-spinner" aria-hidden="true" />Generating...</> : 'Generate concept image'}
                 </button>
-              ))}
+                {supports3dPanel ? (
+                  <button className={panelMode === '3d' ? 'ghost-button compact is-selected' : 'ghost-button compact'} onClick={() => setPanelMode('3d')} type="button">
+                    3D Preview
+                  </button>
+                ) : null}
+                {supportsAssemblyPanel ? (
+                  <button className={panelMode === 'assembly' ? 'ghost-button compact is-selected' : 'ghost-button compact'} onClick={() => setPanelMode('assembly')} type="button">
+                    Assembly
+                  </button>
+                ) : null}
+                <button className={panelMode === 'editor' ? 'ghost-button compact is-selected' : 'ghost-button compact'} onClick={() => setPanelMode('editor')} type="button">
+                  Details
+                </button>
+                <button className={isDeletingSelection ? 'ghost-button compact danger button-with-spinner' : 'ghost-button compact danger'} disabled={isDeletingSelection} onClick={() => onDeleteDefinition(effectiveSelection.key)} type="button">
+                  {isDeletingSelection ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}
+                </button>
+              </div>
+              <span className="subtle-line">
+                Style: {getArtStylePresetLabel(typeof gameSpec?.theme?.artStylePreset === 'string' ? gameSpec.theme.artStylePreset : null)}
+              </span>
+              {typeof gameSpec?.theme?.artStyleDescription === 'string' && gameSpec.theme.artStyleDescription.trim() ? (
+                <span className="subtle-line">{gameSpec.theme.artStyleDescription.trim()}</span>
+              ) : null}
+              {conceptMessage ? <div className="inline-note">{conceptMessage}</div> : null}
             </div>
           </div>
-        ) : null}
-      </aside>
+        </div>
+      </div>
 
-      <section className="main-surface detail-surface item-editor-surface">
-        {effectiveSelection ? (
-          isSelectionPending ? (
-            <div className="detail-stack compact world-build-loading-shell">
-              <span className="eyebrow">Generating {effectiveSelection.kind === 'character' ? 'Character' : 'Environment'}</span>
-              <h3>{effectiveSelection.name}</h3>
-              <div className="inline-note world-build-status-note"><span className="button-spinner" aria-hidden="true" />This placeholder is still being generated. The editor will unlock when the background job completes.</div>
-              <div className="editor-head-controls">
-                <button className={isDeletingSelection ? 'ghost-button compact danger button-with-spinner' : 'ghost-button compact danger'} disabled={isDeletingSelection} onClick={() => onDeleteDefinition(effectiveSelection.key)} type="button">{isDeletingSelection ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}</button>
+      <DefinitionEditor
+        archetypes={compatibleArchetypes}
+        assets={assets}
+        imageAssets={imageAssets}
+        selectedArchetype={compatibleArchetypes.find((archetype) => archetype.key === effectiveSelection.archetypeKey) ?? null}
+        selectedAsset={selectedAsset}
+        selectedItem={effectiveSelection}
+        hideHeader
+        suppressSummaryField
+        onAddCustomField={onAddCustomField}
+        onCreateItem={(archetypeKey) => onCreateDefinition(archetypeKey)}
+        onUpdateItemIdentity={onUpdateItemIdentity}
+      />
+    </>
+  ) : null
+
+  const focusPane = effectiveSelection ? (
+    isSelectionPending ? (
+      <div className="detail-stack compact world-build-loading-shell">
+        <span className="eyebrow">Generating {labelForDefinitionKind(effectiveSelection.kind)}</span>
+        <h3>{effectiveSelection.name}</h3>
+        <div className="inline-note world-build-status-note"><span className="button-spinner" aria-hidden="true" />This entry is still being generated. The focused editor will unlock when the background job finishes.</div>
+        <div className="editor-head-controls">
+          <button className={isDeletingSelection ? 'ghost-button compact danger button-with-spinner' : 'ghost-button compact danger'} disabled={isDeletingSelection} onClick={() => onDeleteDefinition(effectiveSelection.key)} type="button">
+            {isDeletingSelection ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}
+          </button>
+        </div>
+      </div>
+    ) : (
+      <div className="definition-focus-shell">
+        {panelMode === '3d' && supports3dPanel ? (
+          <>
+            <div className="definition-focus-compact-head">
+              <div>
+                <span className="eyebrow">3D Preview</span>
+                <h3>{effectiveSelection.name}</h3>
+              </div>
+              <div className="definition-focus-meta-actions">
+                <button className="ghost-button compact" onClick={() => setPanelMode('editor')} type="button">Back to details</button>
+                {supportsAssemblyPanel ? <button className="ghost-button compact" onClick={() => setPanelMode('assembly')} type="button">Assembly</button> : null}
               </div>
             </div>
-          ) : supports3dPanel ? (
-            <div key={effectiveSelection.key} className="character-panel-shell">
-              {effectiveSelection.kind === 'character' ? (
-                <>
-                  <div className="character-concept-header">
-                    <div className="character-concept-media">
-                      <button className="icon-button character-concept-art-button" onClick={() => setIsSelectionIconPickerOpen(true)} type="button">
-                        {isCharacterConceptAssetPending ? (
-                          <span className="character-concept-art-overlay">
-                            <span className="button-spinner" aria-hidden="true" />
-                          </span>
-                        ) : null}
-                        <MediaThumb
-                          asset={selectedCharacterPreviewAsset}
-                          fallbackIcon="character"
-                          label={effectiveSelection.name}
-                          large
-                        />
-                    </button>
-                    </div>
-                    <div className="editor-heading-copy character-concept-copy">
-                      <div className="editor-head-toolbar character-head-toolbar">
-                        <div className="editor-head-controls">
-                          <button className={isDeletingSelection ? 'ghost-button compact danger button-with-spinner' : 'ghost-button compact danger'} disabled={isDeletingSelection} onClick={() => onDeleteDefinition(effectiveSelection.key)} type="button">{isDeletingSelection ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}</button>
-                          {hasSelectionGenerationFailed ? <span className="inline-note danger">Background generation failed. You can edit or delete this entry.</span> : null}
-                          {definitionPanelControls}
-                        </div>
-                      </div>
-                      <div className="character-header-rows">
-                        <div className="editor-head-inline-fields">
-                          <label className="inline-head-field">
-                            <span>Name</span>
-                            <input
-                              value={effectiveSelection.name}
-                              onChange={(event) => onUpdateItemIdentity(effectiveSelection.key, { name: event.target.value })}
-                            />
-                          </label>
-                        </div>
-                        <div className="character-header-triple">
-                          <label className="inline-head-field">
-                            <span>Archetype</span>
-                            <select
-                              value={effectiveSelection.archetypeKey ?? ''}
-                              onChange={(event) => onUpdateItemIdentity(effectiveSelection.key, { archetypeKey: event.target.value || null })}
-                            >
-                              <option value="">No archetype</option>
-                              {compatibleArchetypes.map((archetype) => (
-                                <option key={archetype.key} value={archetype.key}>
-                                  {archetype.name}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                          <label className="inline-head-field">
-                            <span>Subtype</span>
-                            <select
-                              value={selectedCharacterProfile?.subtype ?? 'humanoid'}
-                              onChange={(event) => updateCharacterProfile({ subtype: event.target.value as NonNullable<typeof selectedCharacterProfile>['subtype'], bodyClass: event.target.value === 'vehicle' ? 'vehicle' : 'humanoid' })}
-                            >
-                              <option value="humanoid">Humanoid</option>
-                              <option value="beast">Beast</option>
-                              <option value="construct">Construct</option>
-                              <option value="undead">Undead</option>
-                              <option value="vehicle">Vehicle</option>
-                              <option value="spirit">Spirit</option>
-                            </select>
-                          </label>
-                          <label className="inline-head-field">
-                            <span>Control</span>
-                            <select
-                              value={selectedCharacterProfile?.controlMode ?? 'ai'}
-                              onChange={(event) => updateCharacterProfile({ controlMode: event.target.value as NonNullable<typeof selectedCharacterProfile>['controlMode'] })}
-                            >
-                              <option value="player">Player</option>
-                              <option value="ai">AI</option>
-                              <option value="scripted">Scripted</option>
-                              <option value="neutral">Neutral</option>
-                            </select>
-                          </label>
-                        </div>
-                        {panelMode !== '3d' ? (
-                          <>
-                            <label className="field-block character-header-textarea">
-                              <span>Summary</span>
-                              <textarea
-                                rows={3}
-                                value={effectiveSelection.summary}
-                                onChange={(event) => onUpdateItemIdentity(effectiveSelection.key, { summary: event.target.value })}
-                                placeholder="Describe the role, personality, and gameplay purpose of this character."
-                              />
-                            </label>
-                            <div className="character-concept-prompt-row">
-                              <label className="field-block character-header-textarea">
-                                <span>Visual Description</span>
-                                <textarea
-                                  rows={4}
-                                  value={selectedCharacterRenderBinding?.conceptPrompt ?? ''}
-                                  onChange={(event) => updateCharacterRenderBinding({ conceptPrompt: event.target.value || null })}
-                                  placeholder="Describe face, silhouette, outfit, props, palette, mood, and any must-have visual cues."
-                                />
-                              </label>
-                              <div className="character-concept-actions">
-                                <button
-                                  className={isCharacterConceptBusy ? 'primary-button button-with-spinner' : 'primary-button'}
-                                  disabled={isCharacterConceptBusy || !(selectedCharacterRenderBinding?.conceptPrompt?.trim())}
-                                  onClick={() => void handleGenerateCharacterConcept()}
-                                  type="button"
-                                >
-                                  {isCharacterConceptBusy ? <><span className="button-spinner" aria-hidden="true" />Generating...</> : 'Generate concept image'}
-                                </button>
-                                <span className="subtle-line">
-                                  Style: {getArtStylePresetLabel(typeof gameSpec?.theme?.artStylePreset === 'string' ? gameSpec.theme.artStylePreset : null)}
-                                </span>
-                                {typeof gameSpec?.theme?.artStyleDescription === 'string' && gameSpec.theme.artStyleDescription.trim() ? (
-                                  <span className="subtle-line">{gameSpec.theme.artStyleDescription.trim()}</span>
-                                ) : null}
-                                {characterConceptMessage ? <div className="inline-note">{characterConceptMessage}</div> : null}
-                              </div>
-                            </div>
-                          </>
-                        ) : null}
-                      </div>
-                    </div>
-                  </div>
-                </>
-              ) : (
-                <div className="character-concept-header">
-                  <div className="character-concept-media">
-                    <button className="icon-button character-concept-art-button" onClick={() => setIsSelectionIconPickerOpen(true)} type="button">
-                      {isEnvironmentConceptAssetPending ? (
-                        <span className="character-concept-art-overlay">
-                          <span className="button-spinner" aria-hidden="true" />
-                        </span>
-                      ) : null}
-                      <MediaThumb
-                        asset={selectedEnvironmentPreviewAsset}
-                        fallbackIcon={iconForDefinitionKind(effectiveSelection.kind)}
-                        label={effectiveSelection.name}
-                        large
-                      />
-                    </button>
-                  </div>
-                  <div className="editor-heading-copy character-concept-copy">
-                    <div className="editor-head-toolbar character-head-toolbar">
-                      <div className="editor-head-controls">
-                        <button className={isDeletingSelection ? 'ghost-button compact danger button-with-spinner' : 'ghost-button compact danger'} disabled={isDeletingSelection} onClick={() => onDeleteDefinition(effectiveSelection.key)} type="button">{isDeletingSelection ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}</button>
-                        {hasSelectionGenerationFailed ? <span className="inline-note danger">Background generation failed. You can edit or delete this entry.</span> : null}
-                        {definitionPanelControls}
-                      </div>
-                    </div>
-                    <div className="character-header-rows">
-                      <div className="editor-head-inline-fields">
-                        <label className="inline-head-field">
-                          <span>Name</span>
-                          <input
-                            value={effectiveSelection.name}
-                            onChange={(event) => onUpdateItemIdentity(effectiveSelection.key, { name: event.target.value })}
-                          />
-                        </label>
-                      </div>
-                      <div className="character-header-triple">
-                        <label className="inline-head-field">
-                          <span>Template</span>
-                          <select
-                            value={effectiveSelection.archetypeKey ?? ''}
-                            onChange={(event) => onUpdateItemIdentity(effectiveSelection.key, { archetypeKey: event.target.value || null })}
-                          >
-                            <option value="">No template</option>
-                            {compatibleArchetypes.map((archetype) => (
-                              <option key={archetype.key} value={archetype.key}>
-                                {archetype.name}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        <label className="inline-head-field">
-                          <span>Subtype</span>
-                          <select
-                            value={selectedEnvironmentProfile?.subtype ?? 'exterior'}
-                            onChange={(event) =>
-                              updateEnvironmentProfile({
-                                subtype: event.target.value as NonNullable<typeof selectedEnvironmentProfile>['subtype'],
-                                isInterior: event.target.value === 'interior' || event.target.value === 'dungeon',
-                              })
-                            }
-                          >
-                            <option value="interior">Interior</option>
-                            <option value="exterior">Exterior</option>
-                            <option value="dungeon">Dungeon</option>
-                            <option value="settlement">Settlement</option>
-                            <option value="wilderness">Wilderness</option>
-                            <option value="structure">Structure</option>
-                            <option value="biome">Biome</option>
-                            <option value="poi">POI</option>
-                          </select>
-                        </label>
-                        <label className="inline-head-field">
-                          <span>Lighting</span>
-                          <input
-                            value={selectedEnvironmentRenderBinding?.lightingProfile ?? ''}
-                            onChange={(event) => updateEnvironmentRenderBinding({ lightingProfile: event.target.value })}
-                            placeholder="Moody torchlight"
-                          />
-                        </label>
-                      </div>
-                      {panelMode !== '3d' ? (
-                        <>
-                          <label className="field-block character-header-textarea">
-                            <span>Summary</span>
-                            <textarea
-                              rows={3}
-                              value={effectiveSelection.summary}
-                              onChange={(event) => onUpdateItemIdentity(effectiveSelection.key, { summary: event.target.value })}
-                              placeholder="Describe the setting, atmosphere, and narrative role of this environment."
-                            />
-                          </label>
-                          <div className="character-concept-prompt-row">
-                            <label className="field-block character-header-textarea">
-                              <span>Visual Description</span>
-                              <textarea
-                                rows={4}
-                                value={selectedEnvironmentRenderBinding?.generationPrompt ?? ''}
-                                onChange={(event) => updateEnvironmentRenderBinding({ generationPrompt: event.target.value || null })}
-                                placeholder="Describe the layout, architecture, materials, lighting, mood, and signature landmarks."
-                              />
-                            </label>
-                            <div className="character-concept-actions">
-                              <button
-                                className={isEnvironmentConceptBusy ? 'primary-button button-with-spinner' : 'primary-button'}
-                                disabled={isEnvironmentConceptBusy || !(selectedEnvironmentRenderBinding?.generationPrompt?.trim())}
-                                onClick={() => void handleGenerateEnvironmentConcept()}
-                                type="button"
-                              >
-                                {isEnvironmentConceptBusy ? <><span className="button-spinner" aria-hidden="true" />Generating...</> : 'Generate concept image'}
-                              </button>
-                              <span className="subtle-line">
-                                Style: {getArtStylePresetLabel(typeof gameSpec?.theme?.artStylePreset === 'string' ? gameSpec.theme.artStylePreset : null)}
-                              </span>
-                              {typeof gameSpec?.theme?.artStyleDescription === 'string' && gameSpec.theme.artStyleDescription.trim() ? (
-                                <span className="subtle-line">{gameSpec.theme.artStyleDescription.trim()}</span>
-                              ) : null}
-                              {environmentConceptMessage ? <div className="inline-note">{environmentConceptMessage}</div> : null}
-                            </div>
-                          </div>
-                        </>
-                      ) : null}
-                    </div>
-                  </div>
-                </div>
-              )}
-              {linkedCinematicsSection}
-              {panelMode === '3d' ? (
-                <Suspense fallback={<div className="detail-stack compact"><span className="eyebrow">Loading</span><h3>Preparing 3D panel…</h3></div>}>
-                  <Definition3dPanel
-                    assets={assets}
-                    assemblyGraph={selectedAssemblyGraph}
-                    environmentBlueprint={selectedEnvironmentBlueprint}
-                    definition={effectiveSelection}
-                    isDeletingGeneratedMesh={effectiveSelection.kind === 'character' ? isDeletingGeneratedMesh : false}
-                    meshGenerationJob={effectiveSelection.kind === 'character' ? selectedCharacterMeshJob : null}
-                    onDeleteGeneratedMesh={effectiveSelection.kind === 'character' ? () => onDeleteGeneratedMesh(effectiveSelection.key) : null}
-                    onRequestGenerateMesh={effectiveSelection.kind === 'character' ? () => onStartMeshGeneration(effectiveSelection.key) : null}
-                    onRequestGenerateConceptArt={effectiveSelection.kind === 'character' ? requestCharacterConceptFrom3d : null}
-                    onUpdateComponents={onUpdateComponents}
-                  />
-                </Suspense>
-              ) : panelMode === 'graph' && effectiveSelection.kind === 'environment' ? (
-                <EnvironmentAssemblyWorkspace
-                  assemblyGraphs={assemblyGraphs}
-                  environmentBlueprints={environmentBlueprints}
-                  environment={effectiveSelection}
-                  isGeneratingPrompt={isGeneratingPrompt}
-                  isOpeningPreview={isOpeningPreview}
-                  mode="graph_only"
-                  onChangePromptText={onChangePromptText}
-                  onCreateEnvironmentBlueprint={onCreateEnvironmentBlueprint}
-                  onCreateAssemblyGraph={onCreateAssemblyGraph}
-                  onDeleteAssemblyGraph={onDeleteAssemblyGraph}
-                  onDeleteEnvironmentBlueprint={onDeleteEnvironmentBlueprint}
-                  onGeneratePrompt={onGeneratePrompt}
-                  onOpenPreview={() => startOpeningPreview(() => setPanelMode('3d'))}
-                  onUpsertAssemblyGraph={onUpsertAssemblyGraph}
-                  onUpsertEnvironmentBlueprint={onUpsertEnvironmentBlueprint}
-                  onUpdateComponents={onUpdateComponents}
-                  promptText={promptText}
-                />
-              ) : effectiveSelection.kind === 'environment' ? null : (
-                <DefinitionEditor
-                  archetypes={compatibleArchetypes}
-                  assets={assets}
-                  definitions={definitions}
-                  graphKeys={graphKeys}
-                  imageAssets={imageAssets}
-                  selectedArchetype={compatibleArchetypes.find((archetype) => archetype.key === effectiveSelection.archetypeKey) ?? null}
-                  selectedAsset={selectedAsset}
-                  selectedItem={effectiveSelection}
-                  headerControls={<><button className={isDeletingSelection ? 'ghost-button compact danger button-with-spinner' : 'ghost-button compact danger'} disabled={isDeletingSelection} onClick={() => onDeleteDefinition(effectiveSelection.key)} type="button">{isDeletingSelection ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}</button></>}
-                  hideHeader
-                  hideArchetypeField={effectiveSelection.kind === 'character'}
-                  hideManualSections={effectiveSelection.kind === 'character' || effectiveSelection.kind === 'item'}
-                  suppressSummaryField={effectiveSelection.kind === 'character'}
-                  onAddCustomField={onAddCustomField}
-                  onCreateItem={(archetypeKey) => onCreateDefinition(archetypeKey)}
-                  onUpdateComponents={onUpdateComponents}
-                  onUpdateFieldValue={onUpdateFieldValue}
-                  onUpdateItemIdentity={onUpdateItemIdentity}
-                />
-              )}
-            </div>
-          ) : (
-            <DefinitionEditor
-              archetypes={compatibleArchetypes}
+          <Suspense fallback={<div className="detail-stack compact"><span className="eyebrow">Loading</span><h3>Preparing 3D panel...</h3></div>}>
+            <Definition3dPanel
               assets={assets}
-              definitions={definitions}
-              graphKeys={graphKeys}
-              imageAssets={imageAssets}
-              selectedArchetype={compatibleArchetypes.find((archetype) => archetype.key === effectiveSelection.archetypeKey) ?? null}
-              selectedAsset={selectedAsset}
-              selectedItem={effectiveSelection}
-              headerControls={<><button className={isDeletingSelection ? 'ghost-button compact danger button-with-spinner' : 'ghost-button compact danger'} disabled={isDeletingSelection} onClick={() => onDeleteDefinition(effectiveSelection.key)} type="button">{isDeletingSelection ? <><span className="button-spinner" aria-hidden="true" />Deleting...</> : 'Delete'}</button>{hasSelectionGenerationFailed ? <span className="inline-note danger">Background generation failed. You can edit or delete this entry.</span> : null}</>}
-              hideManualSections={effectiveSelection.kind === 'item'}
-              onAddCustomField={onAddCustomField}
-              onCreateItem={(archetypeKey) => onCreateDefinition(archetypeKey)}
+              assemblyGraph={selectedAssemblyGraph}
+              environmentBlueprint={selectedEnvironmentBlueprint}
+              definition={effectiveSelection}
+              isDeletingGeneratedMesh={effectiveSelection.kind === 'character' ? isDeletingGeneratedMesh : false}
+              meshGenerationJob={effectiveSelection.kind === 'character' ? (meshJobByDefinitionKey.get(effectiveSelection.key) ?? null) : null}
+              onDeleteGeneratedMesh={effectiveSelection.kind === 'character' ? () => onDeleteGeneratedMesh(effectiveSelection.key) : null}
+              onRequestGenerateMesh={effectiveSelection.kind === 'character' ? () => onStartMeshGeneration(effectiveSelection.key) : null}
+              onRequestGenerateConceptArt={effectiveSelection.kind === 'character' ? () => void handleGenerateConcept() : null}
               onUpdateComponents={onUpdateComponents}
-              onUpdateFieldValue={onUpdateFieldValue}
-              onUpdateItemIdentity={onUpdateItemIdentity}
             />
-          )
+          </Suspense>
+          </>
+        ) : panelMode === 'assembly' && effectiveSelection.kind === 'environment' ? (
+          <>
+            <div className="definition-focus-compact-head">
+              <div>
+                <span className="eyebrow">Assembly</span>
+                <h3>{effectiveSelection.name}</h3>
+              </div>
+              <div className="definition-focus-meta-actions">
+                <button className="ghost-button compact" onClick={() => setPanelMode('editor')} type="button">Back to details</button>
+                {supports3dPanel ? <button className="ghost-button compact" onClick={() => setPanelMode('3d')} type="button">3D Preview</button> : null}
+              </div>
+            </div>
+            <EnvironmentAssemblyWorkspace
+              assemblyGraphs={assemblyGraphs}
+              environmentBlueprints={environmentBlueprints}
+              environment={effectiveSelection}
+              isGeneratingPrompt={isGeneratingPrompt}
+              isOpeningPreview={isOpeningPreview}
+              mode="graph_only"
+              onChangePromptText={onChangePromptText}
+              onCreateEnvironmentBlueprint={onCreateEnvironmentBlueprint}
+              onCreateAssemblyGraph={onCreateAssemblyGraph}
+              onDeleteAssemblyGraph={onDeleteAssemblyGraph}
+              onDeleteEnvironmentBlueprint={onDeleteEnvironmentBlueprint}
+              onGeneratePrompt={onGeneratePrompt}
+              onOpenPreview={() => startOpeningPreview(() => setPanelMode('3d'))}
+              onUpsertAssemblyGraph={onUpsertAssemblyGraph}
+              onUpsertEnvironmentBlueprint={onUpsertEnvironmentBlueprint}
+              onUpdateComponents={onUpdateComponents}
+              promptText={promptText}
+            />
+          </>
         ) : (
-          <EmptyEditor
-            actionLabel={`+ New ${title.slice(0, -1)}`}
-            body={subtitle}
-            icon={isCharacterWorkspace ? 'character' : kind === 'environment' ? 'environment' : 'content'}
-            onAction={() => onCreateDefinition()}
-            title={`No ${title.toLowerCase()} yet`}
-          />
+          detailEditorPane
         )}
+      </div>
+    )
+  ) : (
+    <EmptyEditor
+      actionLabel={`+ New ${title.slice(0, -1)}`}
+      body={subtitle}
+      icon={kind === 'character' ? 'character' : 'environment'}
+      onAction={() => onCreateDefinition()}
+      title={`No ${title.toLowerCase()} yet`}
+    />
+  )
 
-        {(kind === 'character' || kind === 'environment') && supports3dPanel && effectiveSelection && isSelectionIconPickerOpen ? (
-          <AssetPickerDialog
-            assets={imageAssets}
-            clearLabel="Clear image"
-            fallbackIcon={kind === 'environment' ? 'environment' : 'character'}
-            onClose={() => setIsSelectionIconPickerOpen(false)}
-            onPickAsset={(assetKey) => {
-              if (kind === 'environment') {
-                updateEnvironmentRenderBinding({ previewImageAssetKey: assetKey })
-                onUpdateItemIdentity(effectiveSelection.key, { iconAssetKey: assetKey })
-                void onPersistDefinitionPreviewImageBinding(effectiveSelection.key, assetKey).catch((error) => {
-                  setEnvironmentConceptMessage(error instanceof Error ? error.message : 'Could not save the environment concept image binding.')
-                })
-              } else {
-                updateCharacterRenderBinding({ previewImageAssetKey: assetKey })
-              }
-              setIsSelectionIconPickerOpen(false)
-            }}
-            selectedAssetKey={kind === 'environment' ? (selectedEnvironmentRenderBinding?.previewImageAssetKey ?? null) : (selectedCharacterRenderBinding?.previewImageAssetKey ?? null)}
-            selectedLabel={effectiveSelection.name}
-            title={`Choose concept image for ${effectiveSelection.name}`}
-          />
-        ) : null}
-      </section>
+  const focusMeta = effectiveSelection && panelMode === 'editor' ? (
+    <div className="definition-authoring-focus-meta">
+      <div className="definition-focus-meta-head">
+        <div className="definition-focus-meta-copy">
+          <span className="section-label">Selection Details</span>
+          <h4>{dossierViewModel.title}</h4>
+          <p>{dossierViewModel.summary}</p>
+        </div>
+        <div className="definition-focus-meta-actions">
+          {supports3dPanel ? <button className="ghost-button compact" onClick={() => setPanelMode('3d')} type="button">3D Preview</button> : null}
+          {supportsAssemblyPanel ? <button className="ghost-button compact" onClick={() => setPanelMode('assembly')} type="button">Assembly</button> : null}
+        </div>
+      </div>
+      <div className="definition-focus-meta-grid">
+        {dossierViewModel.stats.map((stat) => (
+          <div key={stat.label} className="definition-authoring-stat">
+            <span>{stat.label}</span>
+            <strong>{stat.value}</strong>
+          </div>
+        ))}
+      </div>
+      {dossierViewModel.tags.length > 0 ? (
+        <div className="chip-row">
+          {dossierViewModel.tags.map((tag) => <span key={tag} className="chip">{tag}</span>)}
+        </div>
+      ) : null}
+      {linkedCinematicGraphs.length > 0 ? (
+        <div className="definition-authoring-mini-list">
+          {linkedCinematicGraphs.map((graph) => (
+            <button key={graph.key} className="definition-authoring-mini-item" onClick={() => onOpenCinematicGraph(graph.key)} type="button">
+              <span>{graph.name}</span>
+              <small>{graph.pending ? 'Generating...' : graph.failed ? 'Generation failed' : 'Open cinematic'}</small>
+            </button>
+          ))}
+        </div>
+      ) : null}
     </div>
+  ) : null
+
+  return (
+    <>
+      <DefinitionAuthoringShell
+        title={title}
+        subtitle={subtitle}
+        promptLabel={kind === 'character' ? 'Character creation stream' : 'Environment creation stream'}
+        promptPlaceholder={kind === 'character'
+          ? 'Create a disgraced knight who hides a forbidden pact and define how they threaten the current story.'
+          : 'Create a ruined coastal fortress with storm-battered walls, hidden tunnels, and a sense of looming history.'}
+        promptText={promptText}
+        promptBusyLabel="Generating..."
+        promptStatus={promptStatus}
+        promptSuggestions={promptSuggestionsByKind[kind] ?? []}
+        promptFocusLabel={effectiveSelection?.name ?? null}
+        promptFocusMeta={effectiveSelection ? `${labelForDefinitionKind(effectiveSelection.kind)} • ${selectedFieldCount} fields` : null}
+        promptSecondary={promptSecondary}
+        isPromptBusy={isGeneratingPrompt}
+        onPromptChange={onChangePromptText}
+        onPromptSubmit={onGeneratePrompt}
+        onPromptSuggestionSelect={(nextPrompt) => onChangePromptText(nextPrompt)}
+        stageHeader={stageHeader}
+        collectionPane={collectionPane}
+        focusPane={focusPane}
+        focusMeta={focusMeta}
+      />
+
+      {(kind === 'character' || kind === 'environment') && supports3dPanel && effectiveSelection && isSelectionIconPickerOpen ? (
+        <AssetPickerDialog
+          assets={imageAssets}
+          clearLabel="Clear image"
+          fallbackIcon={kind === 'environment' ? 'environment' : 'character'}
+          onClose={() => setIsSelectionIconPickerOpen(false)}
+          onPickAsset={(assetKey) => {
+            if (kind === 'environment') {
+              updateEnvironmentRenderBinding({ previewImageAssetKey: assetKey })
+              onUpdateItemIdentity(effectiveSelection.key, { iconAssetKey: assetKey })
+              void onPersistDefinitionPreviewImageBinding(effectiveSelection.key, assetKey).catch((error) => {
+                setConceptMessage(error instanceof Error ? error.message : 'Could not save the environment concept image binding.')
+              })
+            } else {
+              updateCharacterRenderBinding({ previewImageAssetKey: assetKey })
+            }
+            setIsSelectionIconPickerOpen(false)
+          }}
+          selectedAssetKey={kind === 'environment' ? (selectedEnvironmentRenderBinding?.previewImageAssetKey ?? null) : (selectedCharacterRenderBinding?.previewImageAssetKey ?? null)}
+          selectedLabel={effectiveSelection.name}
+          title={`Choose concept image for ${effectiveSelection.name}`}
+        />
+      ) : null}
+
+      {effectiveSelection && isSelectionPreviewOpen ? (
+        <DefinitionImagePreviewOverlay
+          asset={selectedPreviewAsset}
+          label={effectiveSelection.name}
+          onClose={() => setIsSelectionPreviewOpen(false)}
+        />
+      ) : null}
+    </>
   )
 }

@@ -1,24 +1,18 @@
 import type { ReactNode } from 'react'
-import type { ArchetypeDefinition, AssetDefinition, DefinitionBase, FieldDefinition, FieldValue } from '../../domain/graphcore'
+import type { ArchetypeDefinition, AssetDefinition, DefinitionBase, FieldDefinition } from '../../domain/graphcore'
 import { iconForDefinitionKind } from '../../shared/entityIcons'
-import { DefinitionComponentsEditor } from './DefinitionComponentsEditor'
 import {
   AddFieldForm,
-  EditableField,
   EmptyEditor,
   MediaThumb,
   findAssetByKey,
-  getFieldValue,
   resolveDefinitionDisplayAssetKey,
-  resolveItemFields,
 } from './shared'
 import type { ItemIdentityChanges } from './types'
 
 export function DefinitionEditor({
   archetypes,
   assets,
-  definitions,
-  graphKeys,
   imageAssets: _imageAssets,
   selectedArchetype,
   selectedAsset: _selectedAsset,
@@ -30,14 +24,10 @@ export function DefinitionEditor({
   suppressSummaryField = false,
   onAddCustomField,
   onCreateItem,
-  onUpdateComponents,
-  onUpdateFieldValue,
   onUpdateItemIdentity,
 }: {
   archetypes: ArchetypeDefinition[]
   assets: AssetDefinition[]
-  definitions: DefinitionBase[]
-  graphKeys: string[]
   imageAssets: AssetDefinition[]
   selectedArchetype: ArchetypeDefinition | null
   selectedAsset: AssetDefinition | null
@@ -49,8 +39,6 @@ export function DefinitionEditor({
   suppressSummaryField?: boolean
   onAddCustomField: (itemKey: string, field: FieldDefinition) => void
   onCreateItem: (archetypeKey?: string | null) => void
-  onUpdateComponents: (itemKey: string, components: DefinitionBase['components']) => void
-  onUpdateFieldValue: (itemKey: string, fieldKey: string, value: FieldValue['value']) => void
   onUpdateItemIdentity: (key: string, changes: ItemIdentityChanges) => void
 }) {
   if (!selectedItem) {
@@ -66,17 +54,7 @@ export function DefinitionEditor({
   }
 
   const definition = selectedItem
-  const selectedArchetypeForItem =
-    archetypes.find((archetype) => archetype.key === definition.archetypeKey) ?? null
   const compatibleArchetypes = archetypes.filter((archetype) => archetype.appliesToKind === definition.kind)
-  const resolvedFields = resolveItemFields(definition, selectedArchetypeForItem)
-
-  function updateComponentConfig(itemKey: string, componentType: DefinitionBase['components'][number]['type'], config: Record<string, unknown>) {
-    const nextComponents = definition.components.some((component) => component.type === componentType)
-      ? definition.components.map((component) => component.type === componentType ? { ...component, config } : component)
-      : [...definition.components, { type: componentType, config } as DefinitionBase['components'][number]]
-    onUpdateComponents(itemKey, nextComponents as DefinitionBase['components'])
-  }
 
   return (
     <div className="item-editor">
@@ -97,7 +75,6 @@ export function DefinitionEditor({
               <div className="chip-row">
                 <span className="chip">{definition.kind}</span>
                 <span className="chip">{definition.archetypeKey ?? 'No archetype'}</span>
-                <span className="chip">{resolvedFields.length} fields</span>
               </div>
               {headerControls ? <div className="editor-head-controls">{headerControls}</div> : null}
             </div>
@@ -157,49 +134,6 @@ export function DefinitionEditor({
 
       {!hideManualSections ? (
         <>
-          <div className="editor-section">
-            <div className="section-head">
-              <div>
-                <span className="eyebrow">Structured Values</span>
-                <h3>{selectedArchetypeForItem?.name ?? 'Definition-specific values'}</h3>
-              </div>
-              <p className="subtle-line">
-                {selectedArchetypeForItem?.summary ??
-                  'Add values here so prompts and manual edits target known fields instead of freeform JSON.'}
-              </p>
-            </div>
-            <div className="field-grid">
-              {resolvedFields.map((field) => (
-                <EditableField
-                  key={field.key}
-                  assets={assets}
-                  definitions={definitions}
-                  field={field}
-                  value={getFieldValue(definition, field)}
-                  onChange={(value) => onUpdateFieldValue(definition.key, field.key, value)}
-                />
-              ))}
-            </div>
-          </div>
-
-          <div className="editor-section">
-            <div className="section-head">
-              <div>
-                <span className="eyebrow">Components</span>
-                <h3>Runtime-linked config</h3>
-              </div>
-              <p className="subtle-line">
-                Preset-backed definitions can still be tuned locally through component data.
-              </p>
-            </div>
-            <DefinitionComponentsEditor
-              definition={definition}
-              definitions={definitions}
-              graphKeys={graphKeys}
-              onUpdateComponent={(componentType, config) => updateComponentConfig(definition.key, componentType, config)}
-            />
-          </div>
-
           <div className="editor-section">
             <div className="section-head">
               <div>

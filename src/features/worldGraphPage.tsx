@@ -218,6 +218,10 @@ const GROW_WORKBENCH_WIDTH_STORAGE_KEY = 'graphcore.world.grow-workbench-width.v
 const GROW_WORKBENCH_WIDTH_DEFAULT = 420
 const GROW_WORKBENCH_WIDTH_MIN = 340
 const GROW_WORKBENCH_WIDTH_MAX = 620
+const WORLD_INSPECTOR_WIDTH_STORAGE_KEY = 'graphcore.world.inspector-width.v1'
+const WORLD_INSPECTOR_WIDTH_DEFAULT = 520
+const WORLD_INSPECTOR_WIDTH_MIN = 360
+const WORLD_INSPECTOR_WIDTH_MAX = 520
 
 function keyForWorldNodeRecord(record: WorldGraphNodeRecord) {
   return record.kind === 'entity' ? record.entity.key : record.kind === 'operator' ? record.operator.key : record.result.key
@@ -694,6 +698,13 @@ export function WorldGraphPage({
       ? Math.min(GROW_WORKBENCH_WIDTH_MAX, Math.max(GROW_WORKBENCH_WIDTH_MIN, raw))
       : GROW_WORKBENCH_WIDTH_DEFAULT
   })
+  const [inspectorWidth, setInspectorWidth] = useState(() => {
+    if (typeof window === 'undefined') return WORLD_INSPECTOR_WIDTH_DEFAULT
+    const raw = Number(window.localStorage.getItem(WORLD_INSPECTOR_WIDTH_STORAGE_KEY) ?? '')
+    return Number.isFinite(raw)
+      ? Math.min(WORLD_INSPECTOR_WIDTH_MAX, Math.max(WORLD_INSPECTOR_WIDTH_MIN, raw))
+      : WORLD_INSPECTOR_WIDTH_DEFAULT
+  })
   const [activeInspectorTab, setActiveInspectorTab] = useState<'overview' | 'relationships' | 'usage' | 'suggestions'>('overview')
   const [showSuggestions, setShowSuggestions] = useState(true)
   const [showLabels, setShowLabels] = useState(true)
@@ -803,6 +814,10 @@ export function WorldGraphPage({
   useEffect(() => {
     window.localStorage.setItem(GROW_WORKBENCH_WIDTH_STORAGE_KEY, String(growWorkbenchWidth))
   }, [growWorkbenchWidth])
+
+  useEffect(() => {
+    window.localStorage.setItem(WORLD_INSPECTOR_WIDTH_STORAGE_KEY, String(inspectorWidth))
+  }, [inspectorWidth])
 
   useEffect(() => {
     setViewMode('graph')
@@ -1679,6 +1694,26 @@ export function WorldGraphPage({
     window.addEventListener('mouseup', handlePointerUp)
   }
 
+  function handleInspectorResizeStart(event: ReactMouseEvent<HTMLDivElement>) {
+    event.preventDefault()
+    const startX = event.clientX
+    const startWidth = inspectorWidth
+
+    function handlePointerMove(moveEvent: MouseEvent) {
+      const deltaX = startX - moveEvent.clientX
+      const nextWidth = Math.min(WORLD_INSPECTOR_WIDTH_MAX, Math.max(WORLD_INSPECTOR_WIDTH_MIN, startWidth + deltaX))
+      setInspectorWidth(nextWidth)
+    }
+
+    function handlePointerUp() {
+      window.removeEventListener('mousemove', handlePointerMove)
+      window.removeEventListener('mouseup', handlePointerUp)
+    }
+
+    window.addEventListener('mousemove', handlePointerMove)
+    window.addEventListener('mouseup', handlePointerUp)
+  }
+
   if (legacyMode) {
     return (
       <div className="focus-layout graph-layout world-graph-layout world-graph-layout-legacy">
@@ -1703,7 +1738,10 @@ export function WorldGraphPage({
     <div
       className="focus-layout graph-layout world-graph-layout"
       onClick={() => setContextMenu(null)}
-      style={{ '--world-grow-workbench-width': `${growWorkbenchWidth}px` } as CSSProperties}
+      style={{
+        '--world-grow-workbench-width': `${growWorkbenchWidth}px`,
+        '--world-inspector-width': `${inspectorWidth}px`,
+      } as CSSProperties}
     >
       <aside className="focus-rail graph-rail world-graph-rail world-shell-creation-rail" onClick={(event) => event.stopPropagation()}>
         <div className="world-shell-panel world-shell-creation-body is-single-stream">
@@ -2220,6 +2258,14 @@ export function WorldGraphPage({
           </div>
         </div>
       ) : null}
+
+      <div
+        aria-label="Resize inspector"
+        className="world-inspector-resizer"
+        onDoubleClick={() => setInspectorWidth(WORLD_INSPECTOR_WIDTH_DEFAULT)}
+        onMouseDown={handleInspectorResizeStart}
+        role="separator"
+      />
 
       <aside className="context-drawer world-graph-drawer world-shell-inspector" onClick={(event) => event.stopPropagation()}>
         <div className="world-shell-dossier-head">
