@@ -3757,10 +3757,18 @@ export async function persistGlobalProjectContext(
     },
   })
 
+  const nextProjectContext = snapshot.projectContext
+    ? projectContextSchema.parse({
+        ...snapshot.projectContext,
+        artStylePreset: nextArtStylePreset,
+        artStyleDescription: nextArtStyleDescription,
+      })
+    : snapshot.projectContext
+
   const nextDraftMetadata = {
     ...(snapshot.draft.metadata ?? {}),
     gameSpec: nextGameSpec,
-    projectContext: snapshot.projectContext,
+    projectContext: nextProjectContext,
   }
 
   const draftResponse = await supabase
@@ -3791,7 +3799,7 @@ export async function persistGlobalProjectContext(
       metadata: draftResponse.data.metadata ?? {},
     },
     gameSpec: nextGameSpec,
-    projectContext: snapshot.projectContext,
+    projectContext: nextProjectContext,
   }
 }
 
