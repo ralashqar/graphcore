@@ -54,8 +54,11 @@ import {
 import {
   worldPromptApplyPreviewResponseSchema,
   worldPromptCancelTurnResponseSchema,
+  worldPromptCreateSessionResponseSchema,
+  worldPromptDismissSuggestionResponseSchema,
   worldPromptResolveOpResponseSchema,
   worldPromptSessionSchema,
+  worldPromptSuggestionRecordSchema,
   worldPromptStartTurnRequestSchema,
   worldPromptStartTurnResponseSchema,
   worldPromptTurnSchema,
@@ -63,8 +66,11 @@ import {
   type WorldPromptMessage,
   type WorldPromptApplyPreviewRequest,
   type WorldPromptCancelTurnRequest,
+  type WorldPromptCreateSessionRequest,
+  type WorldPromptDismissSuggestionRequest,
   type WorldPromptResolveOpRequest,
   type WorldPromptSession,
+  type WorldPromptSuggestionRecord,
   type WorldPromptStartTurnRequest,
   type WorldPromptTurn,
 } from '../domain/worldPrompt'
@@ -1406,6 +1412,31 @@ type WorldPromptEventRow = {
   created_at: string
 }
 
+type WorldPromptSuggestionRow = {
+  id: string
+  draft_id: string
+  session_id: string
+  turn_id: string | null
+  thread_key: string | null
+  label: string
+  prompt: string
+  kind: WorldPromptSuggestionRecord['kind']
+  style: WorldPromptSuggestionRecord['style']
+  source: WorldPromptSuggestionRecord['source']
+  summary: string | null
+  estimated_node_count: number | null
+  estimated_edge_count: number | null
+  will_queue_images: boolean | null
+  will_queue_cinematics: boolean | null
+  state: WorldPromptSuggestionRecord['state']
+  rank: number | null
+  used_turn_id: string | null
+  dismissed_at: string | null
+  metadata: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+
 type WorldThreadRow = {
   id: string
   draft_id: string
@@ -1442,6 +1473,8 @@ const WORLD_PROMPT_MESSAGE_SELECT =
   'id, session_id, turn_id, draft_id, role, content, metadata, created_at'
 const WORLD_PROMPT_EVENT_SELECT =
   'id, session_id, turn_id, draft_id, sequence, event_type, op_id, payload, metadata, created_at'
+const WORLD_PROMPT_SUGGESTION_SELECT =
+  'id, draft_id, session_id, turn_id, thread_key, label, prompt, kind, style, source, summary, estimated_node_count, estimated_edge_count, will_queue_images, will_queue_cinematics, state, rank, used_turn_id, dismissed_at, metadata, created_at, updated_at'
 const WORLD_THREAD_SELECT =
   'id, draft_id, key, title, summary, status, priority, linked_entity_keys, source_turn_id, last_turn_id, metadata, created_at, updated_at'
 
@@ -1630,6 +1663,33 @@ function mapWorldPromptEventRow(entry: WorldPromptEventRow): WorldPromptEvent {
     metadata: entry.metadata ?? {},
     createdAt: entry.created_at,
   }
+}
+
+function mapWorldPromptSuggestionRow(entry: WorldPromptSuggestionRow): WorldPromptSuggestionRecord {
+  return worldPromptSuggestionRecordSchema.parse({
+    id: entry.id,
+    draftId: entry.draft_id,
+    sessionId: entry.session_id,
+    turnId: entry.turn_id,
+    threadKey: entry.thread_key,
+    label: entry.label,
+    prompt: entry.prompt,
+    kind: entry.kind,
+    style: entry.style,
+    source: entry.source,
+    summary: entry.summary ?? '',
+    estimatedNodeCount: entry.estimated_node_count,
+    estimatedEdgeCount: entry.estimated_edge_count,
+    willQueueImages: entry.will_queue_images,
+    willQueueCinematics: entry.will_queue_cinematics,
+    state: entry.state,
+    rank: entry.rank,
+    usedTurnId: entry.used_turn_id,
+    dismissedAt: entry.dismissed_at,
+    metadata: entry.metadata ?? {},
+    createdAt: entry.created_at,
+    updatedAt: entry.updated_at,
+  })
 }
 
 function mapWorldThreadRow(entry: WorldThreadRow): WorldThread {
@@ -1977,6 +2037,7 @@ export async function loadProjectSnapshot(
     worldPromptTurnsResponse,
     worldPromptMessagesResponse,
     worldPromptEventsResponse,
+    worldPromptSuggestionsResponse,
     worldThreadsResponse,
     worldBuildBatchesResponse,
     meshGenerationJobsResponse,
@@ -2107,6 +2168,12 @@ export async function loadProjectSnapshot(
       .eq('draft_id', draft.id)
       .order('created_at', { ascending: true }),
     supabase
+      .from('world_prompt_suggestions')
+      .select(WORLD_PROMPT_SUGGESTION_SELECT)
+      .eq('draft_id', draft.id)
+      .order('rank', { ascending: true })
+      .order('created_at', { ascending: false }),
+    supabase
       .from('world_threads')
       .select(WORLD_THREAD_SELECT)
       .eq('draft_id', draft.id)
@@ -2169,10 +2236,12 @@ export async function loadProjectSnapshot(
     || worldPromptTurnsResponse.status === 404
     || worldPromptMessagesResponse.status === 404
     || worldPromptEventsResponse.status === 404
+    || worldPromptSuggestionsResponse.status === 404
     || isMissingRelationError(worldPromptSessionsResponse.error, 'world_prompt_sessions')
     || isMissingRelationError(worldPromptTurnsResponse.error, 'world_prompt_turns')
     || isMissingRelationError(worldPromptMessagesResponse.error, 'world_prompt_messages')
     || isMissingRelationError(worldPromptEventsResponse.error, 'world_prompt_events')
+    || isMissingRelationError(worldPromptSuggestionsResponse.error, 'world_prompt_suggestions')
   const worldThreadSchemaMissing =
     worldThreadsResponse.status === 404
     || isMissingRelationError(worldThreadsResponse.error, 'world_threads')
@@ -2215,6 +2284,7 @@ export async function loadProjectSnapshot(
   const worldPromptTurns = worldPromptSchemaMissing ? [] : (worldPromptTurnsResponse.data as WorldPromptTurnRow[] | null) ?? []
   const worldPromptMessages = worldPromptSchemaMissing ? [] : (worldPromptMessagesResponse.data as WorldPromptMessageRow[] | null) ?? []
   const worldPromptEvents = worldPromptSchemaMissing ? [] : (worldPromptEventsResponse.data as WorldPromptEventRow[] | null) ?? []
+  const worldPromptSuggestions = worldPromptSchemaMissing ? [] : (worldPromptSuggestionsResponse.data as WorldPromptSuggestionRow[] | null) ?? []
   const worldThreads = worldThreadSchemaMissing ? [] : (worldThreadsResponse.data as WorldThreadRow[] | null) ?? []
   const worldBuildBatches = worldBuildSchemaMissing ? [] : (worldBuildBatchesResponse.data as WorldBuildBatchRow[] | null) ?? []
   const meshGenerationJobs = meshGenerationSchemaMissing ? [] : (meshGenerationJobsResponse.data as MeshGenerationJobRow[] | null) ?? []
@@ -2544,6 +2614,7 @@ export async function loadProjectSnapshot(
     worldPromptTurns: worldPromptTurns.map((entry) => mapWorldPromptTurnRow(entry)),
     worldPromptMessages: worldPromptMessages.map((entry) => mapWorldPromptMessageRow(entry)),
     worldPromptEvents: worldPromptEvents.map((entry) => mapWorldPromptEventRow(entry)),
+    worldPromptSuggestions: worldPromptSuggestions.map((entry) => mapWorldPromptSuggestionRow(entry)),
     worldThreads: worldThreads.map((entry) => mapWorldThreadRow(entry)),
     worldBuildBatches: worldBuildBatches.map((batch) => ({
       id: batch.id,
@@ -4974,6 +5045,7 @@ export function loadWorldPromptSession(snapshot: ProjectSnapshot, sessionId: str
       turns: [],
       messages: [],
       events: [],
+      suggestions: [],
     }
   }
   return {
@@ -4989,6 +5061,12 @@ export function loadWorldPromptSession(snapshot: ProjectSnapshot, sessionId: str
       .sort((left, right) => (
         new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
         || left.sequence - right.sequence
+      )),
+    suggestions: snapshot.worldPromptSuggestions
+      .filter((suggestion) => suggestion.sessionId === session.id)
+      .sort((left, right) => (
+        left.rank - right.rank
+        || new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
       )),
   }
 }
@@ -5013,6 +5091,36 @@ export async function startWorldPromptTurn(snapshot: ProjectSnapshot, request: O
     throw new Error(await readFunctionsErrorMessage(response.error))
   }
   return worldPromptStartTurnResponseSchema.parse(response.data)
+}
+
+export async function createWorldPromptSession(snapshot: ProjectSnapshot, request: Omit<WorldPromptCreateSessionRequest, 'snapshot'>) {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before creating a world prompt session.')
+  const payload = {
+    ...request,
+    snapshot: buildWorldPromptSnapshot(snapshot),
+  }
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'create-world-prompt-session',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  return worldPromptCreateSessionResponseSchema.parse(response.data)
+}
+
+export async function dismissWorldPromptSuggestion(request: WorldPromptDismissSuggestionRequest) {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before dismissing a world prompt suggestion.')
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'dismiss-world-prompt-suggestion',
+    request,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  return worldPromptDismissSuggestionResponseSchema.parse(response.data)
 }
 
 export async function approveWorldPromptOp(snapshot: ProjectSnapshot, request: Omit<WorldPromptResolveOpRequest, 'snapshot'>) {
@@ -5089,6 +5197,7 @@ export function subscribeWorldPromptEvents(input: {
   onTurn?: (turn: WorldPromptTurn) => void
   onMessage?: (message: WorldPromptMessage) => void
   onEvent?: (event: WorldPromptEvent) => void
+  onSuggestion?: (suggestion: WorldPromptSuggestionRecord) => void
   onThread?: (thread: WorldThread) => void
 }) {
   const channel = supabase
@@ -5128,6 +5237,15 @@ export function subscribeWorldPromptEvents(input: {
     }, (payload) => {
       if (!payload.new || typeof payload.new !== 'object') return
       input.onEvent?.(mapWorldPromptEventRow(payload.new as WorldPromptEventRow))
+    })
+    .on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'world_prompt_suggestions',
+      filter: `draft_id=eq.${input.draftId}`,
+    }, (payload) => {
+      if (!payload.new || typeof payload.new !== 'object') return
+      input.onSuggestion?.(mapWorldPromptSuggestionRow(payload.new as WorldPromptSuggestionRow))
     })
     .on('postgres_changes', {
       event: '*',

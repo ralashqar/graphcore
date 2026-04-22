@@ -62,6 +62,7 @@ import {
   type WorldPromptEvent,
   type WorldPromptMessage,
   type WorldPromptSession,
+  type WorldPromptSuggestionRecord,
   type WorldPromptTurn,
 } from './domain/worldPrompt'
 import type { WorldThread } from './domain/worldThread'
@@ -372,6 +373,9 @@ function mergePersistedWorldGraphSnapshot(current: ProjectSnapshot, incoming: Pr
     worldPromptEvents: mergeResourcesById(current.worldPromptEvents, incoming.worldPromptEvents).sort((left, right) => (
       new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime() || left.sequence - right.sequence
     )),
+    worldPromptSuggestions: mergeResourcesById(current.worldPromptSuggestions, incoming.worldPromptSuggestions).sort((left, right) => (
+      left.rank - right.rank || new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+    )),
   })
 }
 
@@ -395,6 +399,7 @@ function mergeWorldPromptStateIntoSnapshot(snapshot: ProjectSnapshot, input: {
   turns?: WorldPromptTurn[]
   messages?: WorldPromptMessage[]
   events?: WorldPromptEvent[]
+  suggestions?: WorldPromptSuggestionRecord[]
   threads?: WorldThread[]
 }) {
   return normalizeSnapshot({
@@ -419,6 +424,11 @@ function mergeWorldPromptStateIntoSnapshot(snapshot: ProjectSnapshot, input: {
         new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime() || left.sequence - right.sequence
       ))
       : snapshot.worldPromptEvents,
+    worldPromptSuggestions: input.suggestions
+      ? mergeResourcesById(snapshot.worldPromptSuggestions, input.suggestions).sort((left, right) => (
+        left.rank - right.rank || new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+      ))
+      : snapshot.worldPromptSuggestions,
     worldThreads: input.threads
       ? mergeResourcesByKey(snapshot.worldThreads, input.threads).sort((left, right) => (
         new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()
@@ -459,6 +469,18 @@ function mergeWorldPromptEventIntoSnapshot(snapshot: ProjectSnapshot, event: Wor
     const candidate = current ? { ...current, ...messagePayload } : worldPromptMessageSchema.safeParse(messagePayload).success ? worldPromptMessageSchema.parse(messagePayload) : null
     if (candidate) {
       nextSnapshot = mergeWorldPromptStateIntoSnapshot(nextSnapshot, { messages: [candidate] })
+    }
+  }
+
+  if (Array.isArray(payload.suggestionIds) && payload.suggestionIds.length > 0) {
+    const candidates = payload.suggestionIds
+      .map((value) => {
+        const current = nextSnapshot.worldPromptSuggestions.find((entry) => entry.id === value) ?? null
+        return current ? { ...current, metadata: { ...(current.metadata ?? {}), tracedFromEventId: event.id } } : null
+      })
+      .filter(Boolean) as WorldPromptSuggestionRecord[]
+    if (candidates.length > 0) {
+      nextSnapshot = mergeWorldPromptStateIntoSnapshot(nextSnapshot, { suggestions: candidates })
     }
   }
 
@@ -1512,6 +1534,14 @@ export default function App() {
         const current = snapshotRef.current
         if (!current) return
         const nextSnapshot = mergeWorldPromptEventIntoSnapshot(current, event)
+        snapshotRef.current = nextSnapshot
+        setSnapshot(nextSnapshot)
+        setBundle(compileBundle(nextSnapshot))
+      },
+      onSuggestion: (suggestion) => {
+        const current = snapshotRef.current
+        if (!current) return
+        const nextSnapshot = mergeWorldPromptStateIntoSnapshot(current, { suggestions: [suggestion] })
         snapshotRef.current = nextSnapshot
         setSnapshot(nextSnapshot)
         setBundle(compileBundle(nextSnapshot))
@@ -2710,6 +2740,7 @@ export default function App() {
         worldPromptTurns: [],
         worldPromptMessages: [],
         worldPromptEvents: [],
+        worldPromptSuggestions: [],
         worldBuildBatches: [],
       }))
     }
@@ -3344,6 +3375,7 @@ export default function App() {
   async function startWorldPromptTurn(input: {
     prompt: string
     sessionKey?: string | null
+    selectedSuggestionId?: string | null
     selectedRootEntityKey?: string | null
     selectedViewKey?: string | null
     selectedThreadKey?: string | null
@@ -3357,6 +3389,7 @@ export default function App() {
       prompt: input.prompt,
       model: promptModel,
       sessionKey: input.sessionKey ?? null,
+      selectedSuggestionId: input.selectedSuggestionId ?? null,
       selectedRootEntityKey: input.selectedRootEntityKey ?? null,
       selectedViewKey: input.selectedViewKey ?? null,
       selectedThreadKey: input.selectedThreadKey ?? null,
@@ -3364,6 +3397,50 @@ export default function App() {
     const nextSnapshot = mergeWorldPromptStateIntoSnapshot(syncedSnapshot, {
       sessions: [result.session],
       turns: [result.turn],
+    })
+    snapshotRef.current = nextSnapshot
+    setSnapshot(nextSnapshot)
+    setBundle(compileBundle(nextSnapshot))
+  }
+
+  async function createWorldPromptSession(input: {
+    sessionKey?: string | null
+    title?: string
+    selectedRootEntityKey?: string | null
+    selectedViewKey?: string | null
+    selectedThreadKey?: string | null
+  }) {
+    if (!snapshot) return null
+    if (loadedState?.source !== 'supabase') {
+      throw new Error('World prompt sessions require a live Supabase-backed draft.')
+    }
+    const syncedSnapshot = await syncWorldGraphBackfillIfNeeded(snapshot)
+    const result = await workspaceService.createWorldPromptSession(syncedSnapshot, {
+      sessionKey: input.sessionKey ?? null,
+      title: input.title ?? 'New chat',
+      model: promptModel,
+      selectedRootEntityKey: input.selectedRootEntityKey ?? null,
+      selectedViewKey: input.selectedViewKey ?? null,
+      selectedThreadKey: input.selectedThreadKey ?? null,
+    })
+    const nextSnapshot = mergeWorldPromptStateIntoSnapshot(syncedSnapshot, {
+      sessions: [result.session],
+    })
+    snapshotRef.current = nextSnapshot
+    setSnapshot(nextSnapshot)
+    setBundle(compileBundle(nextSnapshot))
+    return result.session
+  }
+
+  async function dismissWorldPromptSuggestion(input: { suggestionId: string }) {
+    if (!snapshot) return
+    if (loadedState?.source !== 'supabase') {
+      throw new Error('World prompt suggestions require a live Supabase-backed draft.')
+    }
+    const result = await workspaceService.dismissWorldPromptSuggestion(input)
+    const current = snapshotRef.current ?? snapshot
+    const nextSnapshot = mergeWorldPromptStateIntoSnapshot(current, {
+      suggestions: [result.suggestion],
     })
     snapshotRef.current = nextSnapshot
     setSnapshot(nextSnapshot)
@@ -5244,6 +5321,7 @@ export default function App() {
                 worldPromptTurns={snapshot.worldPromptTurns}
                 worldPromptMessages={snapshot.worldPromptMessages}
                 worldPromptEvents={snapshot.worldPromptEvents}
+                worldPromptSuggestions={snapshot.worldPromptSuggestions}
                 selectedWorldNodeKey={selectedWorldNodeKey}
                 selectedWorldEdgeKey={selectedWorldEdgeKey}
                 selectedWorldEntityKey={selectedWorldEntityKey}
@@ -5269,10 +5347,12 @@ export default function App() {
                 onGenerateStarterWorld={generateStarterWorld}
                 onGenerateWorldExpansion={generateWorldExpansion}
                 onStartWorldPromptTurn={startWorldPromptTurn}
+                onCreateWorldPromptSession={createWorldPromptSession}
                 onApproveWorldPromptOp={approveWorldPromptOp}
                 onRejectWorldPromptOp={rejectWorldPromptOp}
                 onApplyWorldPromptPreview={applyWorldPromptPreview}
                 onCancelWorldPromptTurn={cancelWorldPromptTurn}
+                onDismissWorldPromptSuggestion={dismissWorldPromptSuggestion}
                 onResolveWorldThread={resolveWorldThread}
                 onParkWorldThread={parkWorldThread}
                 onSetWorldEntityCanonLock={setWorldEntityCanonLock}

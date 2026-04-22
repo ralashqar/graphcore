@@ -14,6 +14,8 @@ export type EntityIconId =
   | 'release'
   | 'archetype'
   | 'expand'
+  | 'close'
+  | 'plus'
 
 type EntityIconProps = {
   className?: string
@@ -134,6 +136,18 @@ function IconPath({ id }: { id: EntityIconId }) {
           <path d="m14.6 4.6 4.6 4.6" {...stroke} />
           <path d="m4.8 14.8 4.6 4.6" {...stroke} />
           <path d="m14.6 19.4 4.6-4.6" {...stroke} />
+        </>
+      )
+    case 'close':
+      return (
+        <>
+          <path d="m7.2 7.2 9.6 9.6M16.8 7.2l-9.6 9.6" {...stroke} />
+        </>
+      )
+    case 'plus':
+      return (
+        <>
+          <path d="M12 5.2v13.6M5.2 12h13.6" {...stroke} />
         </>
       )
     default:

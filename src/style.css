@@ -2280,6 +2280,42 @@ code {
   text-align: left;
 }
 
+.world-prompt-suggestion-action {
+  display: grid;
+  gap: 0.3rem;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.world-prompt-suggestion-dismiss {
+  justify-self: end;
+  width: 1.9rem;
+  height: 1.9rem;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(15, 23, 42, 0.78);
+  color: rgba(226, 232, 240, 0.78);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.world-prompt-suggestion-dismiss:hover {
+  border-color: rgba(167, 139, 250, 0.45);
+  color: rgba(244, 244, 245, 0.96);
+}
+
+.world-prompt-suggestion-dismiss svg {
+  width: 0.9rem;
+  height: 0.9rem;
+}
+
 .world-prompt-suggestion-card.is-primary {
   border-color: rgba(96, 165, 250, 0.45);
   background: linear-gradient(180deg, rgba(30, 41, 59, 0.95), rgba(15, 23, 42, 0.92));
@@ -2292,6 +2328,349 @@ code {
 .world-prompt-suggestion-card span,
 .world-prompt-suggestion-card small {
   color: rgba(226, 232, 240, 0.78);
+}
+
+.world-prompt-chat-shell {
+  position: relative;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  gap: 12px;
+}
+
+.world-prompt-chat-shell.is-prompt-center {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.world-prompt-chat-head {
+  align-items: start;
+}
+
+.world-prompt-chat-meta {
+  display: grid;
+  gap: 4px;
+}
+
+.world-prompt-chat-meta h3 {
+  margin: 0;
+}
+
+.world-prompt-chat-subline {
+  color: rgba(226, 232, 240, 0.68);
+  font-size: 0.88rem;
+}
+
+.world-prompt-head-actions {
+  gap: 10px;
+}
+
+.world-prompt-icon-button {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(7, 11, 18, 0.84);
+  color: rgba(226, 232, 240, 0.9);
+  cursor: pointer;
+}
+
+.world-prompt-icon-button:hover {
+  border-color: rgba(94, 234, 212, 0.24);
+  background: rgba(12, 18, 27, 0.94);
+}
+
+.world-prompt-icon-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.world-prompt-icon-button.is-close svg {
+  transform: rotate(45deg);
+}
+
+.world-prompt-center {
+  min-height: 0;
+  display: grid;
+  gap: 16px;
+  align-content: start;
+  padding: 16px 0 6px;
+  overflow: auto;
+}
+
+.world-prompt-center-copy {
+  display: grid;
+  gap: 8px;
+  text-align: center;
+  justify-items: center;
+}
+
+.world-prompt-center-copy h2 {
+  margin: 0;
+  font-size: clamp(2rem, 1.5rem + 1.6vw, 2.9rem);
+  line-height: 0.96;
+  letter-spacing: -0.04em;
+  text-wrap: balance;
+}
+
+.world-prompt-center-copy p {
+  max-width: 28ch;
+  margin: 0;
+  color: rgba(226, 232, 240, 0.72);
+  line-height: 1.55;
+  text-wrap: pretty;
+}
+
+.world-prompt-composer-center {
+  gap: 12px;
+  padding: 18px;
+}
+
+.world-prompt-composer-center textarea {
+  min-height: 152px;
+}
+
+.world-prompt-type-chips {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.world-prompt-type-chip {
+  min-height: 52px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  padding: 0 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(255, 255, 255, 0.025);
+  color: rgba(226, 232, 240, 0.9);
+  cursor: pointer;
+}
+
+.world-prompt-type-chip:hover {
+  border-color: rgba(167, 139, 250, 0.26);
+  background: rgba(167, 139, 250, 0.08);
+}
+
+.world-prompt-type-chip svg {
+  width: 16px;
+  height: 16px;
+}
+
+.world-prompt-starter-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.world-prompt-starter-card {
+  display: grid;
+  gap: 6px;
+  padding: 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02)),
+    rgba(9, 14, 23, 0.78);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.world-prompt-starter-card:hover {
+  border-color: rgba(94, 234, 212, 0.22);
+  background: rgba(18, 28, 42, 0.9);
+}
+
+.world-prompt-starter-card span {
+  color: rgba(226, 232, 240, 0.72);
+  line-height: 1.45;
+}
+
+.world-prompt-smart-list {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.world-prompt-smart-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.world-prompt-smart-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.world-prompt-smart-chip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(255, 255, 255, 0.025);
+  color: rgba(226, 232, 240, 0.88);
+  text-align: left;
+  cursor: pointer;
+}
+
+.world-prompt-smart-chip:hover {
+  border-color: rgba(94, 234, 212, 0.2);
+  background: rgba(94, 234, 212, 0.05);
+}
+
+.world-prompt-transcript-shell {
+  min-height: 0;
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 20px;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.world-prompt-transcript {
+  gap: 14px;
+  padding-right: 6px;
+}
+
+.world-prompt-card {
+  padding: 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(15, 23, 42, 0.56);
+}
+
+.world-prompt-card.is-preview {
+  border-color: rgba(96, 165, 250, 0.28);
+  background: linear-gradient(180deg, rgba(20, 30, 48, 0.92), rgba(10, 16, 25, 0.9));
+}
+
+.world-prompt-card.is-approval,
+.world-prompt-card.is-clarify {
+  border-color: rgba(250, 204, 21, 0.24);
+  background: linear-gradient(180deg, rgba(43, 32, 13, 0.4), rgba(18, 14, 11, 0.92));
+}
+
+.world-prompt-card.is-error {
+  border-color: rgba(248, 113, 113, 0.3);
+  background: linear-gradient(180deg, rgba(68, 20, 25, 0.42), rgba(19, 11, 15, 0.92));
+}
+
+.world-prompt-row-result {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+}
+
+.world-prompt-entry-icon {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(226, 232, 240, 0.92);
+}
+
+.world-prompt-entry-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.world-prompt-entry-copy {
+  display: grid;
+  gap: 5px;
+}
+
+.world-prompt-entry-route {
+  color: rgba(148, 163, 184, 0.82);
+  font-size: 0.82rem;
+}
+
+.world-prompt-composer-pinned {
+  padding: 14px;
+  background:
+    radial-gradient(circle at top left, rgba(96, 165, 250, 0.08), transparent 34%),
+    rgba(11, 17, 26, 0.92);
+}
+
+.world-prompt-composer-pinned textarea {
+  min-height: 96px;
+}
+
+.world-prompt-history-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 18;
+  display: grid;
+  align-items: start;
+  padding: 56px 0 0;
+  background: rgba(5, 8, 13, 0.46);
+  backdrop-filter: blur(6px);
+}
+
+.world-prompt-history-panel {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border-radius: 20px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(7, 11, 18, 0.96);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.34);
+}
+
+.world-prompt-history-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.world-prompt-history-head h4 {
+  margin: 4px 0 0;
+}
+
+.world-prompt-history-draft {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(167, 139, 250, 0.22);
+  background: rgba(167, 139, 250, 0.08);
+}
+
+.world-prompt-history-draft span {
+  color: rgba(226, 232, 240, 0.72);
+  line-height: 1.45;
+}
+
+.world-prompt-history-item {
+  cursor: pointer;
+}
+
+.world-prompt-history-item.is-active {
+  border-color: rgba(94, 234, 212, 0.24);
+  background: rgba(94, 234, 212, 0.06);
+}
+
+.world-prompt-history-item.is-static {
+  cursor: default;
+}
+
+.world-prompt-history-turns {
+  display: grid;
+  gap: 12px;
 }
 
 .chip-button {

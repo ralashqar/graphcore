@@ -28,9 +28,11 @@ export type WorldNodeData = {
 export type WorldPromptTranscriptEntry =
   | { id: string; createdAt: string; kind: 'user_message' | 'assistant_message'; content: string; pending?: boolean }
   | { id: string; createdAt: string; kind: 'system_status'; label: string; detail?: string; tone?: 'normal' | 'error' }
-  | { id: string; createdAt: string; kind: 'entity_created'; label: string; detail?: string; entityKey: string }
-  | { id: string; createdAt: string; kind: 'relationship_created'; label: string; detail?: string; relationshipKey: string }
+  | { id: string; createdAt: string; kind: 'entity_created'; label: string; detail?: string; entityKey: string; entityNodeType: WorldEntity['nodeType'] }
+  | { id: string; createdAt: string; kind: 'relationship_created'; label: string; detail?: string; relationshipKey: string; sourceLabel: string; targetLabel: string }
   | { id: string; createdAt: string; kind: 'queue_started'; label: string; detail?: string }
+  | { id: string; createdAt: string; kind: 'preview_available'; label: string; detail?: string; turnId: string; preview: WorldPromptPlanPreview }
+  | { id: string; createdAt: string; kind: 'approval_required'; label: string; detail?: string; turnId: string; ops: PromptToWorldOp[] }
   | { id: string; createdAt: string; kind: 'suggestion_row' | 'choice_row'; suggestions: WorldPromptSuggestion[]; label?: string }
 
 export type WorldPromptRailState =
@@ -211,6 +213,8 @@ export function buildWorldPromptTranscriptEntries(input: {
 
   const entries: WorldPromptTranscriptEntry[] = []
   let lastSuggestionSignature: string | null = null
+  let lastPreviewSignature: string | null = null
+  let lastApprovalSignature: string | null = null
 
   for (const source of sources) {
     if (source.source === 'message') {
@@ -271,6 +275,7 @@ export function buildWorldPromptTranscriptEntries(input: {
             label: `Added ${entity.name}`,
             detail: labelForWorldEntity(entity.nodeType),
             entityKey: entity.key,
+            entityNodeType: entity.nodeType,
           })
         }
         for (const relationship of applied?.worldRelationships ?? []) {
@@ -283,6 +288,8 @@ export function buildWorldPromptTranscriptEntries(input: {
             label: `Linked ${sourceName} and ${targetName}`,
             detail: relationship.notes.trim() || relationship.verb,
             relationshipKey: relationship.key,
+            sourceLabel: sourceName,
+            targetLabel: targetName,
           })
         }
         for (const worldResult of applied?.worldResults ?? []) {
@@ -344,6 +351,37 @@ export function buildWorldPromptTranscriptEntries(input: {
         break
       default:
         break
+    }
+
+    if (payload.preview) {
+      const previewSignature = `${source.event.turnId}:${payload.preview.mode}:${payload.preview.items.map((item) => item.id).join('|')}`
+      if (previewSignature && previewSignature !== lastPreviewSignature) {
+        entries.push({
+          id: `${source.id}:preview`,
+          createdAt: source.event.createdAt,
+          kind: 'preview_available',
+          label: payload.preview.mode === 'plan_only' ? 'Preview available' : 'First wave ready',
+          detail: payload.preview.requestSummary || 'Review the proposed graph changes before applying them.',
+          turnId: source.event.turnId,
+          preview: payload.preview,
+        })
+        lastPreviewSignature = previewSignature
+      }
+
+      const pendingOps = payload.preview.pendingOps.filter((op) => op.applyMode === 'needs_approval' || op.status === 'pending')
+      const approvalSignature = `${source.event.turnId}:${pendingOps.map((op) => op.id).join('|')}`
+      if (pendingOps.length > 0 && approvalSignature !== lastApprovalSignature) {
+        entries.push({
+          id: `${source.id}:approval`,
+          createdAt: source.event.createdAt,
+          kind: 'approval_required',
+          label: 'Approval required',
+          detail: `${pendingOps.length} pending change${pendingOps.length === 1 ? '' : 's'} need review.`,
+          turnId: source.event.turnId,
+          ops: pendingOps,
+        })
+        lastApprovalSignature = approvalSignature
+      }
     }
 
     if (payload.suggestions.length > 0) {

@@ -97,6 +97,73 @@ test('buildWorldPromptTranscriptEntries folds applied events into readable rows'
 
   assert.equal(entries.length, 2)
   assert.equal(entries[1]?.kind, 'entity_created')
+  assert.equal(entries[1]?.entityNodeType, 'actor')
+})
+
+test('buildWorldPromptTranscriptEntries emits preview and approval rows', () => {
+  const pendingOp: PromptToWorldOp = {
+    id: 'op1',
+    op: 'update_entity',
+    confidence: 0.9,
+    applyMode: 'needs_approval',
+    dependencyOpIds: [],
+    rationale: 'Touches canon facts.',
+    status: 'pending',
+    metadata: {},
+    payload: {
+      targetEntityKey: 'world.actor.hero',
+      changes: {
+        summary: 'Raised by the order.',
+      },
+    },
+  }
+
+  const events: WorldPromptEvent[] = [{
+    id: 'e2',
+    sessionId: 's1',
+    turnId: 't2',
+    draftId: 'd2',
+    sequence: 1,
+    eventType: 'planner_status',
+    opId: null,
+    payload: {
+      plannerStatus: 'awaiting_approval',
+      preview: {
+        mode: 'staged_first_wave',
+        requestSummary: 'Add a secret order around the hero.',
+        scopeDecision: {
+          mode: 'staged',
+          counts: {
+            actionableOps: 1,
+            entityOps: 0,
+            relationshipOps: 0,
+            existingEntityModificationOps: 1,
+            queueOps: 0,
+            derivedResultOps: 0,
+          },
+          starterPackApplied: false,
+        },
+        items: [],
+        suggestions: [],
+        canApplyFirstWave: false,
+        pendingOps: [pendingOp],
+        appliedAt: null,
+      },
+      suggestions: [],
+      diagnostics: [],
+    },
+    metadata: {},
+    createdAt: '2026-04-22T10:02:00.000Z',
+  }]
+
+  const entries = buildWorldPromptTranscriptEntries({
+    events,
+    messages: [],
+    entityByKey: new Map(),
+  })
+
+  assert.ok(entries.some((entry) => entry.kind === 'preview_available' && entry.turnId === 't2'))
+  assert.ok(entries.some((entry) => entry.kind === 'approval_required' && entry.turnId === 't2'))
 })
 
 test('buildWorldInspectorViewModel formats entity cards', () => {

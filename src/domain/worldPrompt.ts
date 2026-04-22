@@ -37,6 +37,7 @@ export const worldPromptQueueTypeSchema = z.enum(['image_generation', 'cinematic
 export const worldPromptSuggestionKindSchema = z.enum(['continue_scope', 'plan_only', 'repair_prompt'])
 export const worldPromptSuggestionStyleSchema = z.enum(['primary', 'secondary'])
 export const worldPromptSuggestionSourceSchema = z.enum(['thread', 'wave2', 'repair'])
+export const worldPromptSuggestionStateSchema = z.enum(['active', 'used', 'dismissed', 'superseded'])
 export const worldPromptPlannerStatusSchema = z.enum(['planning', 'scoping', 'applying', 'awaiting_approval', 'blocked', 'completed'])
 export const worldPromptScopeModeSchema = z.enum(['direct', 'staged', 'blocked'])
 export const worldPromptClassificationSchema = z.enum([
@@ -163,6 +164,19 @@ export const worldPromptSuggestionSchema = z.object({
   estimatedEdgeCount: z.number().int().nonnegative().default(0),
   willQueueImages: z.boolean().default(false),
   willQueueCinematics: z.boolean().default(false),
+})
+
+export const worldPromptSuggestionRecordSchema = worldPromptSuggestionSchema.extend({
+  draftId: z.string(),
+  sessionId: z.string(),
+  turnId: z.string().nullable().default(null),
+  state: worldPromptSuggestionStateSchema.default('active'),
+  rank: z.number().int().nonnegative().default(0),
+  usedTurnId: z.string().nullable().default(null),
+  dismissedAt: z.string().nullable().default(null),
+  metadata: looseRecordSchema.default({}),
+  createdAt: z.string(),
+  updatedAt: z.string(),
 })
 
 export const worldPromptScopeCountsSchema = z.object({
@@ -316,6 +330,7 @@ export const worldPromptEventPayloadSchema = z.object({
   plannerStatus: worldPromptPlannerStatusSchema.optional(),
   classification: worldPromptClassificationSchema.optional(),
   suggestions: z.array(worldPromptSuggestionSchema).default([]),
+  suggestionIds: z.array(z.string()).default([]).optional(),
   scope: worldPromptScopeDecisionSchema.optional(),
   preview: worldPromptPlanPreviewSchema.nullable().optional(),
   queue: z.object({
@@ -396,6 +411,7 @@ export const worldPromptStartTurnRequestSchema = z.object({
   prompt: z.string().min(1),
   model: z.string().min(1).default('gpt-5.4-mini'),
   sessionKey: z.string().nullable().default(null),
+  selectedSuggestionId: z.string().nullable().default(null),
   selectedRootEntityKey: z.string().nullable().default(null),
   selectedViewKey: z.string().nullable().default(null),
   selectedThreadKey: z.string().nullable().default(null),
@@ -439,16 +455,42 @@ export const worldPromptCancelTurnResponseSchema = z.object({
   turn: worldPromptTurnSchema,
 })
 
+export const worldPromptCreateSessionRequestSchema = z.object({
+  sessionKey: z.string().nullable().default(null),
+  title: z.string().min(1).default('New chat'),
+  model: z.string().min(1).default('gpt-5.4-mini'),
+  selectedRootEntityKey: z.string().nullable().default(null),
+  selectedViewKey: z.string().nullable().default(null),
+  selectedThreadKey: z.string().nullable().default(null),
+  snapshot: worldPromptSnapshotSchema,
+})
+
+export const worldPromptCreateSessionResponseSchema = z.object({
+  ok: z.literal(true),
+  session: worldPromptSessionSchema,
+})
+
+export const worldPromptDismissSuggestionRequestSchema = z.object({
+  suggestionId: z.string().min(1),
+})
+
+export const worldPromptDismissSuggestionResponseSchema = z.object({
+  ok: z.literal(true),
+  suggestion: worldPromptSuggestionRecordSchema,
+})
+
 export const worldPromptStateSchema = z.object({
   worldPromptSessions: z.array(worldPromptSessionSchema).default([]),
   worldPromptTurns: z.array(worldPromptTurnSchema).default([]),
   worldPromptMessages: z.array(worldPromptMessageSchema).default([]),
   worldPromptEvents: z.array(worldPromptEventSchema).default([]),
+  worldPromptSuggestions: z.array(worldPromptSuggestionRecordSchema).default([]),
   worldThreads: z.array(worldThreadSchema).default([]),
 })
 
 export type PromptToWorldOp = z.infer<typeof promptToWorldOpSchema>
 export type WorldPromptSuggestion = z.infer<typeof worldPromptSuggestionSchema>
+export type WorldPromptSuggestionRecord = z.infer<typeof worldPromptSuggestionRecordSchema>
 export type WorldPromptScopeDecision = z.infer<typeof worldPromptScopeDecisionSchema>
 export type WorldPromptClassification = z.infer<typeof worldPromptClassificationSchema>
 export type WorldPromptPlanPreviewItem = z.infer<typeof worldPromptPreviewItemSchema>
@@ -467,3 +509,7 @@ export type WorldPromptApplyPreviewRequest = z.infer<typeof worldPromptApplyPrev
 export type WorldPromptApplyPreviewResponse = z.infer<typeof worldPromptApplyPreviewResponseSchema>
 export type WorldPromptCancelTurnRequest = z.infer<typeof worldPromptCancelTurnRequestSchema>
 export type WorldPromptCancelTurnResponse = z.infer<typeof worldPromptCancelTurnResponseSchema>
+export type WorldPromptCreateSessionRequest = z.infer<typeof worldPromptCreateSessionRequestSchema>
+export type WorldPromptCreateSessionResponse = z.infer<typeof worldPromptCreateSessionResponseSchema>
+export type WorldPromptDismissSuggestionRequest = z.infer<typeof worldPromptDismissSuggestionRequestSchema>
+export type WorldPromptDismissSuggestionResponse = z.infer<typeof worldPromptDismissSuggestionResponseSchema>

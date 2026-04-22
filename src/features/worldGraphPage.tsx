@@ -40,6 +40,7 @@ import {
   type WorldPromptMessage,
   type WorldPromptSession,
   type WorldPromptSuggestion,
+  type WorldPromptSuggestionRecord,
   type WorldPromptTurn,
 } from '../domain/worldPrompt'
 import type { WorldThread } from '../domain/worldThread'
@@ -86,6 +87,7 @@ type WorldGraphPageProps = {
   worldPromptTurns: WorldPromptTurn[]
   worldPromptMessages: WorldPromptMessage[]
   worldPromptEvents: WorldPromptEvent[]
+  worldPromptSuggestions: WorldPromptSuggestionRecord[]
   selectedWorldNodeKey: string | null
   selectedWorldEdgeKey: string | null
   selectedWorldEntityKey: string | null
@@ -122,14 +124,23 @@ type WorldGraphPageProps = {
   onStartWorldPromptTurn: (input: {
     prompt: string
     sessionKey?: string | null
+    selectedSuggestionId?: string | null
     selectedRootEntityKey?: string | null
     selectedViewKey?: string | null
     selectedThreadKey?: string | null
   }) => Promise<void> | void
+  onCreateWorldPromptSession: (input: {
+    sessionKey?: string | null
+    title?: string
+    selectedRootEntityKey?: string | null
+    selectedViewKey?: string | null
+    selectedThreadKey?: string | null
+  }) => Promise<WorldPromptSession | null> | WorldPromptSession | null
   onApproveWorldPromptOp: (input: { turnId: string; opId: string }) => Promise<void> | void
   onRejectWorldPromptOp: (input: { turnId: string; opId: string }) => Promise<void> | void
   onApplyWorldPromptPreview: (input: { turnId: string }) => Promise<void> | void
   onCancelWorldPromptTurn: (input: { turnId: string }) => Promise<void> | void
+  onDismissWorldPromptSuggestion: (input: { suggestionId: string }) => Promise<void> | void
   onResolveWorldThread: (input: { threadKey: string }) => Promise<void> | void
   onParkWorldThread: (input: { threadKey: string }) => Promise<void> | void
   onSetWorldEntityCanonLock: (input: { entityKey: string; locked: boolean; reason?: string; lockedByTurnId?: string | null }) => Promise<void> | void
@@ -222,6 +233,13 @@ const WORLD_INSPECTOR_WIDTH_STORAGE_KEY = 'graphcore.world.inspector-width.v1'
 const WORLD_INSPECTOR_WIDTH_DEFAULT = 520
 const WORLD_INSPECTOR_WIDTH_MIN = 360
 const WORLD_INSPECTOR_WIDTH_MAX = 520
+
+function createWorldPromptSessionKey() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `world.prompt.${crypto.randomUUID()}`
+  }
+  return `world.prompt.${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
 
 function keyForWorldNodeRecord(record: WorldGraphNodeRecord) {
   return record.kind === 'entity' ? record.entity.key : record.kind === 'operator' ? record.operator.key : record.result.key
@@ -545,6 +563,7 @@ function buildWorldPromptTranscriptEntries(input: {
             label: `Added ${entity.name}`,
             detail: labelForWorldEntity(entity.nodeType),
             entityKey: entity.key,
+            entityNodeType: entity.nodeType,
           })
         }
         for (const relationship of applied?.worldRelationships ?? []) {
@@ -557,6 +576,8 @@ function buildWorldPromptTranscriptEntries(input: {
             label: `Linked ${sourceName} and ${targetName}`,
             detail: relationship.notes.trim() || relationship.verb,
             relationshipKey: relationship.key,
+            sourceLabel: sourceName,
+            targetLabel: targetName,
           })
         }
         for (const worldResult of applied?.worldResults ?? []) {
@@ -647,6 +668,7 @@ export function WorldGraphPage({
   worldPromptTurns,
   worldPromptMessages,
   worldPromptEvents,
+  worldPromptSuggestions,
   selectedWorldNodeKey,
   selectedWorldEdgeKey,
   selectedWorldEntityKey,
@@ -672,10 +694,12 @@ export function WorldGraphPage({
   onGenerateStarterWorld: _onGenerateStarterWorld,
   onGenerateWorldExpansion,
   onStartWorldPromptTurn,
+  onCreateWorldPromptSession,
   onApproveWorldPromptOp: _onApproveWorldPromptOp,
   onRejectWorldPromptOp: _onRejectWorldPromptOp,
   onApplyWorldPromptPreview: _onApplyWorldPromptPreview,
   onCancelWorldPromptTurn,
+  onDismissWorldPromptSuggestion,
   onResolveWorldThread: _onResolveWorldThread,
   onParkWorldThread: _onParkWorldThread,
   onSetWorldEntityCanonLock,
@@ -727,6 +751,7 @@ export function WorldGraphPage({
   const [entityOverviewDraft, setEntityOverviewDraft] = useState<EntityOverviewDraftState | null>(null)
   const [selectedPromptSessionKey, setSelectedPromptSessionKey] = useState<string | null>(worldPromptSessions[0]?.key ?? null)
   const [selectedPromptThreadKey, setSelectedPromptThreadKey] = useState<string | null>(null)
+  const [historyOpen, setHistoryOpen] = useState(false)
   const [worldPromptText, setWorldPromptText] = useState('')
   const [worldPromptError, setWorldPromptError] = useState<string | null>(null)
   const [isPromptSubmitting, setIsPromptSubmitting] = useState(false)
@@ -741,7 +766,9 @@ export function WorldGraphPage({
     [selectedWorldEntityKey, selectedWorldNodeKey, worldEntities],
   )
   const selectedPromptSession = useMemo(
-    () => worldPromptSessions.find((session) => session.key === selectedPromptSessionKey) ?? worldPromptSessions[0] ?? null,
+    () => selectedPromptSessionKey
+      ? worldPromptSessions.find((session) => session.key === selectedPromptSessionKey) ?? null
+      : worldPromptSessions[0] ?? null,
     [selectedPromptSessionKey, worldPromptSessions],
   )
   const sessionTurns = useMemo(
@@ -767,6 +794,26 @@ export function WorldGraphPage({
           .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime() || left.sequence - right.sequence)
       : [],
     [selectedPromptSession, worldPromptEvents],
+  )
+  const sessionSuggestions = useMemo(
+    () => selectedPromptSession
+      ? worldPromptSuggestions
+          .filter((suggestion) => suggestion.sessionId === selectedPromptSession.id)
+          .sort((left, right) => left.rank - right.rank || new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
+      : [],
+    [selectedPromptSession, worldPromptSuggestions],
+  )
+  const activeSessionSuggestions = useMemo(
+    () => sessionSuggestions.filter((suggestion) => suggestion.state === 'active'),
+    [sessionSuggestions],
+  )
+  const activeSuggestionCountBySessionId = useMemo(
+    () => worldPromptSuggestions.reduce<Record<string, number>>((counts, suggestion) => {
+      if (suggestion.state !== 'active') return counts
+      counts[suggestion.sessionId] = (counts[suggestion.sessionId] ?? 0) + 1
+      return counts
+    }, {}),
+    [worldPromptSuggestions],
   )
   const activePromptTurn = useMemo(
     () => [...sessionTurns].reverse().find((turn) => ['queued', 'streaming', 'awaiting_approval'].includes(turn.status)) ?? null,
@@ -798,10 +845,6 @@ export function WorldGraphPage({
   useEffect(() => {
     if (!selectedPromptSessionKey && worldPromptSessions.length > 0) {
       setSelectedPromptSessionKey(worldPromptSessions[0].key)
-      return
-    }
-    if (selectedPromptSessionKey && !worldPromptSessions.some((session) => session.key === selectedPromptSessionKey)) {
-      setSelectedPromptSessionKey(worldPromptSessions[0]?.key ?? null)
     }
   }, [selectedPromptSessionKey, worldPromptSessions])
 
@@ -1583,20 +1626,23 @@ export function WorldGraphPage({
     }
   }
 
-  async function handleSubmitWorldPrompt(promptOverride?: string) {
+  async function handleSubmitWorldPrompt(promptOverride?: string, selectedSuggestionId?: string | null) {
     const prompt = (promptOverride ?? worldPromptText).trim()
     if (!prompt) return
+    const sessionKey = selectedPromptSessionKey ?? selectedPromptSession?.key ?? createWorldPromptSessionKey()
     setWorldPromptError(null)
     setIsPromptSubmitting(true)
     setBusyMessage('Generating world updates from prompt...')
     try {
       await onStartWorldPromptTurn({
         prompt,
-        sessionKey: selectedPromptSession?.key ?? null,
+        sessionKey,
+        selectedSuggestionId: selectedSuggestionId ?? null,
         selectedRootEntityKey: selectedEntity?.key ?? null,
         selectedViewKey: selectedView.key,
         selectedThreadKey: selectedPromptThread?.key ?? null,
       })
+      setSelectedPromptSessionKey(sessionKey)
       if (!promptOverride) {
         setWorldPromptText('')
       }
@@ -1609,8 +1655,29 @@ export function WorldGraphPage({
     }
   }
 
-  async function handleRunPromptSuggestion(suggestion: WorldPromptSuggestion) {
-    await handleSubmitWorldPrompt(suggestion.prompt)
+  async function handleRunPromptSuggestion(suggestion: WorldPromptSuggestion | WorldPromptSuggestionRecord) {
+    await handleSubmitWorldPrompt(suggestion.prompt, 'sessionId' in suggestion ? suggestion.id : null)
+  }
+
+  async function handleStartNewPromptSession() {
+    const sessionKey = createWorldPromptSessionKey()
+    setWorldPromptError(null)
+    try {
+      const createdSession = await onCreateWorldPromptSession({
+        sessionKey,
+        title: 'New chat',
+        selectedRootEntityKey: selectedEntity?.key ?? null,
+        selectedViewKey: selectedView.key,
+        selectedThreadKey: selectedPromptThread?.key ?? null,
+      })
+      setSelectedPromptSessionKey(createdSession?.key ?? sessionKey)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not create a new world chat.'
+      setWorldPromptError(message)
+      setSelectedPromptSessionKey(sessionKey)
+    }
+    setWorldPromptText('')
+    setHistoryOpen(false)
   }
 
   async function handleCancelPromptTurn(turnId: string) {
@@ -1755,33 +1822,29 @@ export function WorldGraphPage({
             entityByKey={entityByKey}
             selectedEntity={selectedEntity}
             selectedSession={selectedPromptSession}
+            selectedSessionKey={selectedPromptSessionKey}
             selectedThreadKey={selectedPromptThread?.key ?? null}
             selectedView={selectedView}
             sessionEvents={sessionEvents}
             sessionMessages={sessionMessages}
+            sessionSuggestions={activeSessionSuggestions}
             sessionTurns={sessionTurns}
+            sessionSuggestionCountBySessionId={activeSuggestionCountBySessionId}
             worldThreads={activeWorldThreads}
             worldPromptSessions={worldPromptSessions}
             onApplyPreview={(turnId) => void _onApplyWorldPromptPreview({ turnId })}
             onApproveOp={(turnId, opId) => void _onApproveWorldPromptOp({ turnId, opId })}
             onCancelTurn={handleCancelPromptTurn}
             onChangePromptText={setWorldPromptText}
-            onOpenEntityComposer={() => setEntityComposer({ mode: 'global', defaults: { nodeType: 'actor', source: 'user' }, relationshipDefaults: {}, canvasPosition: null })}
+            onDismissSuggestion={(suggestionId) => void onDismissWorldPromptSuggestion({ suggestionId })}
             onRejectOp={(turnId, opId) => void _onRejectWorldPromptOp({ turnId, opId })}
-            onResolveThread={(threadKey) => void _onResolveWorldThread({ threadKey })}
             onRunSuggestion={handleRunPromptSuggestion}
-            onOpenLegacy={() => setLegacyMode(true)}
+            onOpenHistory={() => setHistoryOpen(true)}
+            onCloseHistory={() => setHistoryOpen(false)}
             onSelectSession={setSelectedPromptSessionKey}
-            onSelectThread={setSelectedPromptThreadKey}
+            onStartNewSession={handleStartNewPromptSession}
             onSubmit={handleSubmitWorldPrompt}
-            onParkThread={(threadKey) => void _onParkWorldThread({ threadKey })}
-            onSaveView={() => void handleSaveCurrentView()}
-            onToggleDerivedLayer={() => {
-              const nextValue = !showDerivedLayer
-              setShowDerivedLayer(nextValue)
-              void persistViewChanges({ showDerivedLayer: nextValue })
-            }}
-            showDerivedLayer={showDerivedLayer}
+            historyOpen={historyOpen}
             variant="grow"
           />
         </div>
@@ -2637,7 +2700,7 @@ export function WorldGraphPage({
   )
 }
 
-function WorldPromptChatPanel({
+function LegacyWorldPromptChatPanel({
   activePromptPreview,
   activePromptTurn,
   busy,
@@ -3093,6 +3156,579 @@ function WorldPromptChatPanel({
           </div>
         </details>
       </div>
+    </div>
+  )
+}
+
+void LegacyWorldPromptChatPanel
+
+const WORLD_PROMPT_TYPE_ACCELERATORS: Array<{
+  iconId: ReturnType<typeof iconForWorldEntity>
+  label: string
+  prompt: string
+}> = [
+  { iconId: 'character', label: 'Character', prompt: 'Create a new character with a strong flaw, secret motive, and clear place in the world.' },
+  { iconId: 'content', label: 'Group', prompt: 'Create a faction, order, or house with a goal, identity, and tension with existing powers.' },
+  { iconId: 'environment', label: 'Place', prompt: 'Create a place with atmosphere, purpose, and links to the main conflicts in this world.' },
+  { iconId: 'item', label: 'Object', prompt: 'Create an important object or relic with meaning, history, and who wants it.' },
+  { iconId: 'content', label: 'Concept', prompt: 'Create a belief, law, prophecy, or abstract concept that shapes this world.' },
+  { iconId: 'activity', label: 'Event', prompt: 'Create a major event with consequences, participants, and lingering fallout.' },
+  { iconId: 'graph', label: 'Any', prompt: 'Create whatever this world most needs next and connect it meaningfully.' },
+]
+
+const WORLD_PROMPT_STARTER_CARDS = [
+  {
+    title: 'Create a character',
+    summary: 'Introduce a protagonist, rival, mentor, or witness who matters to the core tension.',
+    prompt: 'Create a compelling new character for this world and connect them to the central conflict.',
+  },
+  {
+    title: 'Create a faction',
+    summary: 'Add a house, cult, guild, or government with loyalties, enemies, and cultural texture.',
+    prompt: 'Create a new faction for this world with goals, rivals, and a visible role in the power structure.',
+  },
+  {
+    title: 'Create a place',
+    summary: 'Add a city, stronghold, district, ruin, or natural landmark worth returning to.',
+    prompt: 'Create a memorable place in this world with atmosphere, function, and relationships to other entities.',
+  },
+]
+
+const WORLD_PROMPT_SMART_PROMPTS = [
+  'Add a hidden heir who threatens the current order',
+  'Create the city where trade, spies, and rumors converge',
+  'Design a relic that changes who can wield power',
+  'Create the prophecy everyone interprets differently',
+]
+
+function WorldPromptChatPanel({
+  activePromptPreview,
+  activePromptTurn,
+  busy,
+  cancelBusy,
+  promptText,
+  promptError,
+  entityByKey,
+  selectedEntity,
+  selectedSession,
+  selectedSessionKey,
+  selectedThreadKey,
+  selectedView,
+  sessionEvents,
+  sessionMessages,
+  sessionSuggestions,
+  sessionTurns,
+  sessionSuggestionCountBySessionId,
+  worldThreads,
+  worldPromptSessions,
+  onApplyPreview,
+  onApproveOp,
+  onCancelTurn,
+  onChangePromptText,
+  onDismissSuggestion,
+  onRejectOp,
+  onRunSuggestion,
+  onSelectSession,
+  onStartNewSession,
+  onSubmit,
+  onOpenHistory,
+  onCloseHistory,
+  historyOpen,
+  variant,
+}: {
+  activePromptPreview: ReturnType<typeof activePreviewForTurn>
+  activePromptTurn: WorldPromptTurn | null
+  busy: boolean
+  cancelBusy: boolean
+  promptText: string
+  promptError: string | null
+  entityByKey: Map<string, WorldEntity>
+  selectedEntity: WorldEntity | null
+  selectedSession: WorldPromptSession | null
+  selectedSessionKey: string | null
+  selectedThreadKey: string | null
+  selectedView: WorldView
+  sessionEvents: WorldPromptEvent[]
+  sessionMessages: WorldPromptMessage[]
+  sessionSuggestions: WorldPromptSuggestionRecord[]
+  sessionTurns: WorldPromptTurn[]
+  sessionSuggestionCountBySessionId: Record<string, number>
+  worldThreads: WorldThread[]
+  worldPromptSessions: WorldPromptSession[]
+  onApplyPreview: (turnId: string) => Promise<void> | void
+  onApproveOp: (turnId: string, opId: string) => Promise<void> | void
+  onCancelTurn: (turnId: string) => Promise<void> | void
+  onChangePromptText: (value: string) => void
+  onDismissSuggestion: (suggestionId: string) => Promise<void> | void
+  onRejectOp: (turnId: string, opId: string) => Promise<void> | void
+  onRunSuggestion: (suggestion: WorldPromptSuggestion | WorldPromptSuggestionRecord) => Promise<void> | void
+  onSelectSession: (key: string | null) => void
+  onStartNewSession: () => void
+  onSubmit: (promptOverride?: string) => Promise<void> | void
+  onOpenHistory: () => void
+  onCloseHistory: () => void
+  historyOpen: boolean
+  variant: 'drawer' | 'grow'
+}) {
+  const composerRef = useRef<HTMLTextAreaElement | null>(null)
+  const transcriptRef = useRef<HTMLDivElement | null>(null)
+  const transcriptEndRef = useRef<HTMLDivElement | null>(null)
+  const [stickToBottom, setStickToBottom] = useState(true)
+  const transcriptEntries = useMemo(
+    () => buildWorldPromptTranscriptEntries({
+      events: sessionEvents,
+      messages: sessionMessages,
+      entityByKey,
+    }),
+    [entityByKey, sessionEvents, sessionMessages],
+  )
+  const canCancelTurn = Boolean(activePromptTurn && ['queued', 'streaming', 'awaiting_approval'].includes(activePromptTurn.status))
+  const selectedThread = useMemo(
+    () => worldThreads.find((thread) => thread.key === selectedThreadKey) ?? null,
+    [selectedThreadKey, worldThreads],
+  )
+  const railView = useMemo(
+    () => buildWorldPromptRailViewModel({
+      activeTurn: activePromptTurn,
+      turns: sessionTurns,
+      events: sessionEvents,
+      entityByKey,
+      promptError,
+    }),
+    [activePromptTurn, entityByKey, promptError, sessionEvents, sessionTurns],
+  )
+  const transcriptStream = useMemo(() => {
+    const entries = [...transcriptEntries]
+    const previewTurnId = activePromptTurn?.id ?? sessionTurns.at(-1)?.id ?? null
+    if (activePromptPreview && previewTurnId && !entries.some((entry) => entry.kind === 'preview_available' && entry.turnId === previewTurnId)) {
+      entries.push({
+        id: `preview:fallback:${previewTurnId}`,
+        createdAt: activePromptTurn?.updatedAt ?? sessionTurns.at(-1)?.updatedAt ?? new Date().toISOString(),
+        kind: 'preview_available',
+        label: activePromptPreview.mode === 'plan_only' ? 'Preview available' : 'First wave ready',
+        detail: activePromptPreview.requestSummary || 'Review the proposed graph changes before applying them.',
+        turnId: previewTurnId,
+        preview: activePromptPreview,
+      })
+    }
+    if (
+      activePromptTurn
+      && railView.approvalOps.length > 0
+      && !entries.some((entry) => entry.kind === 'approval_required' && entry.turnId === activePromptTurn.id)
+    ) {
+      entries.push({
+        id: `approval:fallback:${activePromptTurn.id}`,
+        createdAt: activePromptTurn.updatedAt,
+        kind: 'approval_required',
+        label: 'Approval required',
+        detail: `${railView.approvalOps.length} pending change${railView.approvalOps.length === 1 ? '' : 's'} need review.`,
+        turnId: activePromptTurn.id,
+        ops: railView.approvalOps,
+      })
+    }
+    if (
+      sessionSuggestions.length > 0
+      && !entries.some((entry) => entry.kind === 'suggestion_row' || entry.kind === 'choice_row')
+    ) {
+      entries.push({
+        id: `persisted-suggestions:${selectedSession?.id ?? selectedSessionKey ?? 'session'}`,
+        createdAt: sessionSuggestions[0]?.updatedAt ?? selectedSession?.updatedAt ?? new Date().toISOString(),
+        kind: 'suggestion_row',
+        label: 'Next moves',
+        suggestions: sessionSuggestions.map((suggestion) => ({
+          id: suggestion.id,
+          label: suggestion.label,
+          prompt: suggestion.prompt,
+          kind: suggestion.kind,
+          style: suggestion.style,
+          source: suggestion.source,
+          threadKey: suggestion.threadKey,
+          summary: suggestion.summary,
+          estimatedNodeCount: suggestion.estimatedNodeCount,
+          estimatedEdgeCount: suggestion.estimatedEdgeCount,
+          willQueueImages: suggestion.willQueueImages,
+          willQueueCinematics: suggestion.willQueueCinematics,
+        })),
+      })
+    }
+    return entries.sort((left, right) => {
+      const timeDelta = new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
+      return timeDelta !== 0 ? timeDelta : left.id.localeCompare(right.id)
+    })
+  }, [activePromptPreview, activePromptTurn, railView.approvalOps, selectedSession?.id, selectedSession?.updatedAt, selectedSessionKey, sessionSuggestions, sessionTurns, transcriptEntries])
+  const recentTurns = useMemo(
+    () => [...sessionTurns].reverse().slice(0, 6),
+    [sessionTurns],
+  )
+  const isPromptCenter = !busy && !activePromptTurn && transcriptStream.length === 0 && sessionTurns.length === 0
+  const sessionTitle = selectedSession?.title ?? (selectedSessionKey ? 'New chat' : 'World chat')
+  const sessionSubline = selectedSession
+    ? `${sessionTurns.length} turn${sessionTurns.length === 1 ? '' : 's'}`
+    : selectedSessionKey
+      ? 'Fresh context window'
+      : 'World-aware creation stream'
+  const composerLabel = railView.primaryActionKind === 'continue'
+    ? 'Continue building'
+    : railView.primaryActionKind === 'generate'
+      ? 'Generate'
+      : 'Use prompt'
+
+  useEffect(() => {
+    if (!stickToBottom || isPromptCenter) return
+    transcriptEndRef.current?.scrollIntoView({ block: 'end', behavior: activePromptTurn ? 'smooth' : 'auto' })
+  }, [activePromptTurn, isPromptCenter, stickToBottom, transcriptStream.length])
+
+  function handleTranscriptScroll() {
+    const element = transcriptRef.current
+    if (!element) return
+    const threshold = 56
+    const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight
+    setStickToBottom(distanceFromBottom <= threshold)
+  }
+
+  function seedPrompt(prompt: string) {
+    onChangePromptText(prompt)
+    requestAnimationFrame(() => composerRef.current?.focus())
+  }
+
+  function renderEntry(entry: WorldPromptTranscriptEntry) {
+    if (entry.kind === 'suggestion_row' || entry.kind === 'choice_row') {
+      const needsRepair = entry.suggestions.some((suggestion) => suggestion.kind === 'repair_prompt')
+      return (
+        <div key={entry.id} className={`world-prompt-row world-prompt-row-system world-prompt-card${needsRepair ? ' is-clarify' : ''}`}>
+          <span className="world-prompt-row-label">{needsRepair ? 'Clarification required' : entry.label ?? 'Next move'}</span>
+          <div className="world-prompt-inline-choices">
+            {entry.suggestions.map((suggestion) => (
+              <div
+                key={suggestion.id}
+                className={`world-prompt-suggestion-card${suggestion.style === 'primary' ? ' is-primary' : ''}`}
+              >
+                <button
+                  className="world-prompt-suggestion-action"
+                  disabled={busy}
+                  onClick={() => void onRunSuggestion(suggestion)}
+                  type="button"
+                >
+                  <strong>{suggestion.label}</strong>
+                  {suggestion.summary ? <span>{suggestion.summary}</span> : null}
+                  {promptSuggestionImpactLabel(suggestion) ? <small>{promptSuggestionImpactLabel(suggestion)}</small> : null}
+                </button>
+                {sessionSuggestions.some((record) => record.id === suggestion.id) ? (
+                  <button
+                    aria-label="Dismiss suggestion"
+                    className="world-prompt-suggestion-dismiss"
+                    disabled={busy}
+                    onClick={() => void onDismissSuggestion(suggestion.id)}
+                    type="button"
+                  >
+                    <EntityIcon id="close" />
+                  </button>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        </div>
+      )
+    }
+
+    if (entry.kind === 'user_message' || entry.kind === 'assistant_message') {
+      return (
+        <div key={entry.id} className={`world-prompt-row ${entry.kind === 'user_message' ? 'world-prompt-row-user' : 'world-prompt-row-assistant'}`}>
+          <span className="world-prompt-row-label">{entry.kind === 'user_message' ? 'You' : 'GraphCore'}</span>
+          <div className={`world-prompt-bubble${entry.pending ? ' is-pending' : ''}`}>
+            {entry.content}
+          </div>
+        </div>
+      )
+    }
+
+    if (entry.kind === 'preview_available') {
+      return (
+        <div key={entry.id} className="world-prompt-row world-prompt-row-system world-prompt-card is-preview">
+          <span className="world-prompt-row-label">{entry.label}</span>
+          {entry.detail ? <div className="world-prompt-line">{entry.detail}</div> : null}
+          <div className="chip-row">
+            <span className="chip">{entry.preview.scopeDecision.mode}</span>
+            <span className="chip">{entry.preview.scopeDecision.counts.entityOps} entity ops</span>
+            <span className="chip">{entry.preview.scopeDecision.counts.relationshipOps} links</span>
+          </div>
+          {entry.preview.items.length > 0 ? (
+            <div className="world-preview-list">
+              {entry.preview.items.slice(0, 3).map((item) => (
+                <div key={item.id} className="schema-card">
+                  <div className="schema-card-head">
+                    <strong>{item.title}</strong>
+                    <span className="chip">{item.kind.replace(/_/g, ' ')}</span>
+                  </div>
+                  {item.summary ? <div className="inline-note">{item.summary}</div> : null}
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {entry.preview.canApplyFirstWave ? (
+            <div className="world-inspector-actions">
+              <button className="primary-button compact" onClick={() => void onApplyPreview(entry.turnId)} type="button">Apply first wave</button>
+            </div>
+          ) : null}
+        </div>
+      )
+    }
+
+    if (entry.kind === 'approval_required') {
+      return (
+        <div key={entry.id} className="world-prompt-row world-prompt-row-system world-prompt-card is-approval">
+          <span className="world-prompt-row-label">{entry.label}</span>
+          {entry.detail ? <div className="world-prompt-line">{entry.detail}</div> : null}
+          <div className="world-prompt-approval-list">
+            {entry.ops.map((op) => (
+              <div key={op.id} className="world-prompt-approval-card">
+                <div>
+                  <strong>{describePromptOp(op)}</strong>
+                  {op.rationale ? <div className="inline-note">{op.rationale}</div> : null}
+                </div>
+                <div className="world-inspector-actions">
+                  <button className="ghost-button compact" onClick={() => void onRejectOp(entry.turnId, op.id)} type="button">Reject</button>
+                  <button className="primary-button compact" onClick={() => void onApproveOp(entry.turnId, op.id)} type="button">Approve</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )
+    }
+
+    if (
+      entry.kind !== 'system_status'
+      && entry.kind !== 'entity_created'
+      && entry.kind !== 'relationship_created'
+      && entry.kind !== 'queue_started'
+    ) {
+      return null
+    }
+
+    const iconId = entry.kind === 'entity_created'
+      ? iconForWorldEntity(entry.entityNodeType)
+      : entry.kind === 'relationship_created'
+        ? 'graph'
+        : entry.kind === 'queue_started'
+          ? 'activity'
+          : 'content'
+
+    return (
+      <div
+        key={entry.id}
+        className={`world-prompt-row world-prompt-row-system world-prompt-card world-prompt-row-result${entry.kind === 'system_status' && entry.tone === 'error' ? ' is-error' : ''}`}
+      >
+        <div className="world-prompt-entry-icon">
+          <EntityIcon id={iconId} />
+        </div>
+        <div className="world-prompt-entry-copy">
+          <span className="world-prompt-row-label">{entry.label}</span>
+          {entry.detail ? <div className="world-prompt-line">{entry.detail}</div> : null}
+          {entry.kind === 'relationship_created' ? (
+            <div className="world-prompt-entry-route">{entry.sourceLabel} -&gt; {entry.targetLabel}</div>
+          ) : null}
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className={`world-prompt-chat-shell${variant === 'grow' ? ' is-grow' : ''}${isPromptCenter ? ' is-prompt-center' : ''}`}>
+      <div className="world-prompt-chat-head">
+        <div className="world-prompt-chat-meta">
+          <span className="eyebrow">World chat</span>
+          <h3>{sessionTitle}</h3>
+          <div className="world-prompt-chat-subline">{sessionSubline}</div>
+        </div>
+        <div className="world-prompt-head-actions">
+          <button className="world-prompt-icon-button" onClick={onOpenHistory} type="button" aria-label="Open history">
+            <EntityIcon id="activity" />
+          </button>
+          <button className="world-prompt-icon-button" onClick={onStartNewSession} type="button" aria-label="Start new chat">
+            <EntityIcon id="plus" />
+          </button>
+        </div>
+      </div>
+
+      {!isPromptCenter ? (
+        <div className="world-prompt-context-pills">
+          <span className="chip">World {selectedView.name || 'Default'}</span>
+          {selectedEntity ? <span className="chip">Focus {selectedEntity.name}</span> : null}
+          {selectedThread ? <span className="chip">Thread {selectedThread.title}</span> : null}
+          <span className={`chip world-prompt-status-pill is-${railView.state}`}>{busy ? 'Generating' : railView.statusLabel}</span>
+        </div>
+      ) : null}
+
+      {isPromptCenter ? (
+        <div className="world-prompt-center">
+          <div className="world-prompt-center-copy">
+            <span className="eyebrow">Prompt-first worldbuilding</span>
+            <h2>What would you like to create?</h2>
+            <p>Describe anything. GraphCore will build it and connect it into the world.</p>
+          </div>
+
+          <div className="world-prompt-composer world-prompt-composer-center">
+            <textarea
+              ref={composerRef}
+              rows={6}
+              placeholder="Create a secret order that manipulates events from the shadows and tie it to two existing factions."
+              value={promptText}
+              onChange={(event) => onChangePromptText(event.target.value)}
+            />
+            <div className="world-prompt-composer-actions">
+              <span className="inline-note">A new chat starts with the current world context, view, and focus.</span>
+              <button className="primary-button compact" disabled={busy || !promptText.trim()} onClick={() => void onSubmit()} type="button">
+                {busy ? 'Generating...' : 'Generate'}
+              </button>
+            </div>
+          </div>
+
+          <div className="world-prompt-type-chips">
+            {WORLD_PROMPT_TYPE_ACCELERATORS.map((chip) => (
+              <button key={chip.label} className="world-prompt-type-chip" onClick={() => seedPrompt(chip.prompt)} type="button">
+                <EntityIcon id={chip.iconId} />
+                <span>{chip.label}</span>
+              </button>
+            ))}
+          </div>
+
+          <div className="world-prompt-starter-grid">
+            {WORLD_PROMPT_STARTER_CARDS.map((card) => (
+              <button key={card.title} className="world-prompt-starter-card" onClick={() => seedPrompt(card.prompt)} type="button">
+                <strong>{card.title}</strong>
+                <span>{card.summary}</span>
+              </button>
+            ))}
+          </div>
+
+          <div className="world-prompt-smart-list">
+            <div className="world-prompt-smart-head">
+              <span className="eyebrow">Smart prompts</span>
+              <span className="inline-note">Quick ways to start the thread.</span>
+            </div>
+            <div className="world-prompt-smart-grid">
+              {WORLD_PROMPT_SMART_PROMPTS.map((prompt) => (
+                <button key={prompt} className="world-prompt-smart-chip" onClick={() => seedPrompt(prompt)} type="button">
+                  <span>{prompt}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="world-prompt-transcript-shell">
+            <div className="world-prompt-transcript-head">
+              <span className="eyebrow">Creation stream</span>
+              <span className="inline-note">{transcriptStream.length} entries</span>
+            </div>
+            <div className="world-prompt-transcript" onScroll={handleTranscriptScroll} ref={transcriptRef}>
+              {transcriptStream.length === 0 && busy ? (
+                <div className="world-prompt-row world-prompt-row-system world-prompt-card">
+                  <span className="world-prompt-row-label">Generating</span>
+                  <div className="world-prompt-line">Collecting the world context and planning the next graph changes.</div>
+                </div>
+              ) : null}
+              {transcriptStream.map(renderEntry)}
+              {promptError ? (
+                <div className="world-prompt-row world-prompt-row-system world-prompt-card is-error">
+                  <span className="world-prompt-row-label">Error</span>
+                  <div className="world-prompt-line">{promptError}</div>
+                </div>
+              ) : null}
+              <div ref={transcriptEndRef} />
+            </div>
+          </div>
+
+          <div className="world-prompt-composer world-prompt-composer-pinned">
+            <textarea
+              ref={composerRef}
+              rows={variant === 'grow' ? 3 : 2}
+              placeholder="Describe the next character, relationship, place, or turn in the story."
+              value={promptText}
+              onChange={(event) => onChangePromptText(event.target.value)}
+            />
+            <div className="world-prompt-composer-actions">
+              {canCancelTurn ? (
+                <button className="ghost-button compact" disabled={cancelBusy} onClick={() => void onCancelTurn(activePromptTurn!.id)} type="button">
+                  Cancel turn
+                </button>
+              ) : (
+                <span className="inline-note">Stay in one thread, or open history to jump to another session.</span>
+              )}
+              <button
+                className={railView.primaryActionKind === 'generate' || railView.primaryActionKind === 'continue' ? 'primary-button compact' : 'ghost-button compact'}
+                disabled={busy || !promptText.trim()}
+                onClick={() => void onSubmit()}
+                type="button"
+              >
+                {busy ? 'Generating...' : composerLabel}
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {historyOpen ? (
+        <div className="world-prompt-history-overlay" onClick={onCloseHistory} role="presentation">
+          <div className="world-prompt-history-panel" onClick={(event) => event.stopPropagation()}>
+            <div className="world-prompt-history-head">
+              <div>
+                <span className="eyebrow">History</span>
+                <h4>Context windows</h4>
+              </div>
+              <button className="world-prompt-icon-button is-close" onClick={onCloseHistory} type="button" aria-label="Close history">
+                <EntityIcon id="plus" />
+              </button>
+            </div>
+
+            {selectedSessionKey && !selectedSession ? (
+              <div className="world-prompt-history-draft">
+                <strong>New chat</strong>
+                <span>This fresh context is ready. Submit a first prompt to persist it.</span>
+              </div>
+            ) : null}
+
+            <div className="world-prompt-history-list">
+              {worldPromptSessions.length === 0 ? <div className="inline-note">No saved chats yet.</div> : null}
+              {worldPromptSessions.map((session) => (
+                <button
+                  key={session.id}
+                  className={`world-prompt-history-item${session.key === (selectedSession?.key ?? selectedSessionKey) ? ' is-active' : ''}`}
+                  onClick={() => {
+                    onSelectSession(session.key)
+                    onCloseHistory()
+                  }}
+                  type="button"
+                >
+                  <strong>{session.title}</strong>
+                  <span>
+                    {session.updatedAt ? new Date(session.updatedAt).toLocaleString() : 'Recent session'}
+                    {sessionSuggestionCountBySessionId[session.id] ? ` · ${sessionSuggestionCountBySessionId[session.id]} active suggestion${sessionSuggestionCountBySessionId[session.id] === 1 ? '' : 's'}` : ''}
+                  </span>
+                </button>
+              ))}
+            </div>
+
+            <div className="world-prompt-history-turns">
+              <div className="world-prompt-smart-head">
+                <span className="eyebrow">Recent turns</span>
+                <span className="inline-note">{recentTurns.length} in this session</span>
+              </div>
+              <div className="world-prompt-history-list">
+                {recentTurns.length === 0 ? <div className="inline-note">No turns in this context window yet.</div> : null}
+                {recentTurns.map((turn) => (
+                  <div key={turn.id} className="world-prompt-history-item is-static">
+                    <strong>{turn.prompt}</strong>
+                    <span>{turn.status}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

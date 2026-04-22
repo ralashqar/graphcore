@@ -36,6 +36,7 @@ import {
   worldPromptEventSchema,
   worldPromptMessageSchema,
   worldPromptSessionSchema,
+  worldPromptSuggestionRecordSchema,
   worldPromptTurnSchema,
 } from './worldPrompt.ts'
 import { worldThreadSchema } from './worldThread.ts'
@@ -732,6 +733,7 @@ export const projectSnapshotSchema = z.object({
   worldPromptTurns: z.array(worldPromptTurnSchema).default([]),
   worldPromptMessages: z.array(worldPromptMessageSchema).default([]),
   worldPromptEvents: z.array(worldPromptEventSchema).default([]),
+  worldPromptSuggestions: z.array(worldPromptSuggestionRecordSchema).default([]),
   worldThreads: z.array(worldThreadSchema).default([]),
   worldBuildBatches: z.array(worldBuildBatchSchema).default([]),
   meshGenerationJobs: z.array(meshGenerationJobSchema).default([]),
