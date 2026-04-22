@@ -166,6 +166,87 @@ test('buildWorldPromptTranscriptEntries emits preview and approval rows', () => 
   assert.ok(entries.some((entry) => entry.kind === 'approval_required' && entry.turnId === 't2'))
 })
 
+test('buildWorldPromptTranscriptEntries renders clarification question and answer rows', () => {
+  const messages: WorldPromptMessage[] = [{
+    id: 'm-clarify-answer',
+    sessionId: 's1',
+    turnId: 't-answer',
+    draftId: 'd1',
+    role: 'user',
+    content: 'Add the occult influence.',
+    metadata: {
+      selectedSuggestionId: 'sg-1',
+      selectedSuggestionLabel: 'Add occult influence',
+      selectedSuggestionUiKind: 'clarification',
+      continuationMode: 'answered_clarification',
+    },
+    createdAt: '2026-04-22T10:03:00.000Z',
+  }]
+
+  const events: WorldPromptEvent[] = [{
+    id: 'e-clarify',
+    sessionId: 's1',
+    turnId: 't-clarify',
+    draftId: 'd1',
+    sequence: 1,
+    eventType: 'planner_status',
+    opId: null,
+    payload: {
+      plannerStatus: 'blocked',
+      suggestions: [{
+        id: 'sg-1',
+        label: 'Add occult influence',
+        prompt: 'Add occult influence to the succession crisis.',
+        kind: 'repair_prompt',
+        style: 'primary',
+        source: 'repair',
+        threadKey: null,
+        summary: 'Clarify what kind of darkness you want.',
+        estimatedNodeCount: 1,
+        estimatedEdgeCount: 1,
+        willQueueImages: false,
+        willQueueCinematics: false,
+      }],
+      diagnostics: [],
+    },
+    metadata: {},
+    createdAt: '2026-04-22T10:02:00.000Z',
+  }]
+
+  const entries = buildWorldPromptTranscriptEntries({
+    events,
+    messages,
+    entityByKey: new Map(),
+  })
+
+  assert.ok(entries.some((entry) => entry.kind === 'clarification_question'))
+  assert.ok(entries.some((entry) => entry.kind === 'clarification_answer' && entry.detail === 'Add occult influence'))
+})
+
+test('buildWorldPromptTranscriptEntries renders continuation without suggestion rows', () => {
+  const messages: WorldPromptMessage[] = [{
+    id: 'm-freeform',
+    sessionId: 's1',
+    turnId: 't-freeform',
+    draftId: 'd1',
+    role: 'user',
+    content: 'Actually expand the prophecy instead.',
+    metadata: {
+      continuationMode: 'freeform_after_suggestions',
+    },
+    createdAt: '2026-04-22T10:04:00.000Z',
+  }]
+
+  const entries = buildWorldPromptTranscriptEntries({
+    events: [],
+    messages,
+    entityByKey: new Map(),
+  })
+
+  assert.ok(entries.some((entry) => entry.kind === 'continuation_without_suggestion'))
+  assert.ok(entries.some((entry) => entry.kind === 'user_message' && entry.content === 'Actually expand the prophecy instead.'))
+})
+
 test('buildWorldInspectorViewModel formats entity cards', () => {
   const entity = {
     id: '1',

@@ -56,6 +56,7 @@ import {
   worldPromptCancelTurnResponseSchema,
   worldPromptCreateSessionResponseSchema,
   worldPromptDismissSuggestionResponseSchema,
+  worldPromptRefreshSuggestionsResponseSchema,
   worldPromptResolveOpResponseSchema,
   worldPromptSessionSchema,
   worldPromptSuggestionRecordSchema,
@@ -68,9 +69,11 @@ import {
   type WorldPromptCancelTurnRequest,
   type WorldPromptCreateSessionRequest,
   type WorldPromptDismissSuggestionRequest,
+  type WorldPromptRefreshSuggestionsRequest,
   type WorldPromptResolveOpRequest,
   type WorldPromptSession,
   type WorldPromptSuggestionRecord,
+  type WorldPromptRefreshSuggestionsResponse,
   type WorldPromptStartTurnRequest,
   type WorldPromptTurn,
 } from '../domain/worldPrompt'
@@ -5121,6 +5124,23 @@ export async function dismissWorldPromptSuggestion(request: WorldPromptDismissSu
     throw new Error(await readFunctionsErrorMessage(response.error))
   }
   return worldPromptDismissSuggestionResponseSchema.parse(response.data)
+}
+
+export async function refreshWorldPromptSuggestions(snapshot: ProjectSnapshot, request: Omit<WorldPromptRefreshSuggestionsRequest, 'snapshot'>) {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before refreshing world prompt suggestions.')
+  const payload = {
+    ...request,
+    snapshot: buildWorldPromptSnapshot(snapshot),
+  }
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'refresh-world-prompt-suggestions',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  return worldPromptRefreshSuggestionsResponseSchema.parse(response.data) as WorldPromptRefreshSuggestionsResponse
 }
 
 export async function approveWorldPromptOp(snapshot: ProjectSnapshot, request: Omit<WorldPromptResolveOpRequest, 'snapshot'>) {

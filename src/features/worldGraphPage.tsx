@@ -136,6 +136,14 @@ type WorldGraphPageProps = {
     selectedViewKey?: string | null
     selectedThreadKey?: string | null
   }) => Promise<WorldPromptSession | null> | WorldPromptSession | null
+  onRefreshWorldPromptSuggestions: (input: {
+    sessionId?: string | null
+    sessionKey?: string | null
+    selectedRootEntityKey?: string | null
+    selectedViewKey?: string | null
+    selectedThreadKey?: string | null
+    reason?: string
+  }) => Promise<void> | void
   onApproveWorldPromptOp: (input: { turnId: string; opId: string }) => Promise<void> | void
   onRejectWorldPromptOp: (input: { turnId: string; opId: string }) => Promise<void> | void
   onApplyWorldPromptPreview: (input: { turnId: string }) => Promise<void> | void
@@ -468,12 +476,13 @@ function promptSuggestionImpactLabel(suggestion: WorldPromptSuggestion) {
 }
 
 function buildTranscriptSuggestionsEntry(event: WorldPromptEvent, suggestions: WorldPromptSuggestion[]) {
+  const hasClarification = suggestions.some((suggestion) => suggestion.kind === 'repair_prompt')
   return {
     id: `suggestions:${event.id}`,
     createdAt: event.createdAt,
-    kind: suggestions.length > 1 ? 'choice_row' : 'suggestion_row',
+    kind: hasClarification ? 'clarification_question' : 'suggestion_set',
     suggestions,
-    label: suggestions.length > 1 ? 'Choose how to continue' : 'Next move',
+    label: hasClarification ? 'Clarification required' : 'Next move',
   } satisfies WorldPromptTranscriptEntry
 }
 
@@ -503,9 +512,52 @@ function buildWorldPromptTranscriptEntries(input: {
 
   const entries: WorldPromptTranscriptEntry[] = []
   let lastSuggestionSignature: string | null = null
+  let lastPreviewSignature: string | null = null
+  let lastApprovalSignature: string | null = null
 
   for (const source of sources) {
     if (source.source === 'message') {
+      if (source.message.role === 'user') {
+        const selectedSuggestionLabel = typeof source.message.metadata?.selectedSuggestionLabel === 'string'
+          ? source.message.metadata.selectedSuggestionLabel
+          : null
+        const selectedSuggestionUiKind = source.message.metadata?.selectedSuggestionUiKind === 'clarification'
+          ? 'clarification'
+          : 'next_move'
+        const continuationMode = typeof source.message.metadata?.continuationMode === 'string'
+          ? source.message.metadata.continuationMode
+          : null
+
+        if (selectedSuggestionLabel) {
+          entries.push({
+            id: `${source.id}:selection`,
+            createdAt: source.message.createdAt,
+            kind: selectedSuggestionUiKind === 'clarification' ? 'clarification_answer' : 'system_status',
+            label: selectedSuggestionUiKind === 'clarification' ? 'Answered clarification' : 'Used suggestion',
+            detail: selectedSuggestionLabel,
+          })
+          continue
+        }
+
+        if (continuationMode === 'freeform_after_suggestions') {
+          entries.push({
+            id: `${source.id}:continuation`,
+            createdAt: source.message.createdAt,
+            kind: 'continuation_without_suggestion',
+            label: 'Continued with your own prompt',
+            detail: 'You skipped the suggested next moves and continued freeform.',
+          })
+        } else if (continuationMode === 'freeform_after_clarification') {
+          entries.push({
+            id: `${source.id}:continuation`,
+            createdAt: source.message.createdAt,
+            kind: 'continuation_without_suggestion',
+            label: 'Continued without answering clarification',
+            detail: 'You skipped the clarification options and sent a new prompt instead.',
+          })
+        }
+      }
+
       entries.push({
         id: source.id,
         createdAt: source.message.createdAt,
@@ -540,6 +592,37 @@ function buildWorldPromptTranscriptEntries(input: {
             label: describePlannerStatus(payload.plannerStatus),
             detail: payload.note ?? (payload.scope ? `${payload.scope.mode} scope` : ''),
           })
+        }
+        if (payload.preview) {
+          const previewSignature = `${source.event.turnId}:${payload.preview.mode}:${payload.preview.items.map((item) => item.id).join('|')}`
+          if (previewSignature !== lastPreviewSignature) {
+            entries.push({
+              id: `${source.id}:preview`,
+              createdAt: source.event.createdAt,
+              kind: 'preview_available',
+              label: payload.preview.mode === 'plan_only' ? 'Preview available' : 'First wave ready',
+              detail: payload.preview.requestSummary || 'Review the proposed graph changes before applying them.',
+              turnId: source.event.turnId,
+              preview: payload.preview,
+            })
+            lastPreviewSignature = previewSignature
+          }
+          const pendingApprovalOps = payload.preview.pendingOps.filter((op) => op.applyMode === 'needs_approval' && op.status === 'pending')
+          if (pendingApprovalOps.length > 0) {
+            const approvalSignature = `${source.event.turnId}:${pendingApprovalOps.map((op) => `${op.id}:${op.status}`).join('|')}`
+            if (approvalSignature !== lastApprovalSignature) {
+              entries.push({
+                id: `${source.id}:approval`,
+                createdAt: source.event.createdAt,
+                kind: 'approval_required',
+                label: 'Approval required',
+                detail: `${pendingApprovalOps.length} pending change${pendingApprovalOps.length === 1 ? '' : 's'} need review.`,
+                turnId: source.event.turnId,
+                ops: pendingApprovalOps,
+              })
+              lastApprovalSignature = approvalSignature
+            }
+          }
         }
         break
       case 'assistant_note':
@@ -695,6 +778,7 @@ export function WorldGraphPage({
   onGenerateWorldExpansion,
   onStartWorldPromptTurn,
   onCreateWorldPromptSession,
+  onRefreshWorldPromptSuggestions,
   onApproveWorldPromptOp: _onApproveWorldPromptOp,
   onRejectWorldPromptOp: _onRejectWorldPromptOp,
   onApplyWorldPromptPreview: _onApplyWorldPromptPreview,
@@ -815,6 +899,23 @@ export function WorldGraphPage({
     }, {}),
     [worldPromptSuggestions],
   )
+
+  async function refreshSelectedPromptSuggestions(reason: string, overrides?: {
+    selectedRootEntityKey?: string | null
+    selectedViewKey?: string | null
+    selectedThreadKey?: string | null
+  }) {
+    if (!selectedPromptSession) return
+    await onRefreshWorldPromptSuggestions({
+      sessionId: selectedPromptSession.id,
+      sessionKey: selectedPromptSession.key,
+      selectedRootEntityKey: overrides?.selectedRootEntityKey ?? selectedEntity?.key ?? null,
+      selectedViewKey: overrides?.selectedViewKey ?? selectedView.key,
+      selectedThreadKey: overrides?.selectedThreadKey ?? selectedPromptThread?.key ?? null,
+      reason,
+    })
+  }
+
   const activePromptTurn = useMemo(
     () => [...sessionTurns].reverse().find((turn) => ['queued', 'streaming', 'awaiting_approval'].includes(turn.status)) ?? null,
     [sessionTurns],
@@ -1102,7 +1203,7 @@ export function WorldGraphPage({
       }
 
       if (resolution.relationshipDefaults.sourceEntityKey) {
-        await onCreateWorldRelationship({
+        await createWorldRelationshipAndRefresh({
           sourceEntityKey: resolution.relationshipDefaults.sourceEntityKey,
           targetEntityKey: resolvedEntity.key,
           verb: 'related to',
@@ -1512,7 +1613,7 @@ export function WorldGraphPage({
       return
     }
 
-    await onUpdateWorldEntity(entityKey, changes)
+    await updateWorldEntityAndRefresh(entityKey, changes, 'manual_entity_overview_update')
     setEntityOverviewDraft((current) => (
       current?.entityKey === entityKey && current.name === name && current.summary === summary
         ? { ...current, dirty: false }
@@ -1598,6 +1699,7 @@ export function WorldGraphPage({
       relationshipDefaults: entityComposer?.relationshipDefaults ?? {},
     })
     await onCreateWorldEntity(input)
+    await refreshSelectedPromptSuggestions('manual_entity_create')
     setEntityComposer(null)
   }
 
@@ -1691,6 +1793,70 @@ export function WorldGraphPage({
     }
   }
 
+  async function updateWorldEntityAndRefresh(entityKey: string, changes: Partial<WorldEntityCreateInput>, reason = 'manual_entity_update') {
+    await onUpdateWorldEntity(entityKey, changes)
+    await refreshSelectedPromptSuggestions(reason, { selectedRootEntityKey: entityKey })
+  }
+
+  async function deleteWorldEntityAndRefresh(entityKey: string) {
+    await onDeleteWorldEntity(entityKey)
+    await refreshSelectedPromptSuggestions('manual_entity_delete')
+  }
+
+  async function createWorldRelationshipAndRefresh(input: WorldRelationshipCreateInput, reason = 'manual_relationship_create') {
+    await onCreateWorldRelationship(input)
+    await refreshSelectedPromptSuggestions(reason)
+  }
+
+  async function createWorldRelationshipFromGestureAndRefresh(input: WorldRelationshipCreateInput) {
+    await onCreateWorldRelationshipFromGraphGesture(input)
+    await refreshSelectedPromptSuggestions('manual_relationship_create')
+  }
+
+  async function updateWorldRelationshipAndRefresh(relationshipKey: string, changes: Partial<WorldRelationshipCreateInput>, reason = 'manual_relationship_update') {
+    await onUpdateWorldRelationship(relationshipKey, changes)
+    await refreshSelectedPromptSuggestions(reason)
+  }
+
+  async function deleteWorldRelationshipAndRefresh(relationshipKey: string) {
+    await onDeleteWorldRelationship(relationshipKey)
+    await refreshSelectedPromptSuggestions('manual_relationship_delete')
+  }
+
+  async function createWorldDerivedCompositionAndRefresh(input: {
+    sourceEntityKey: string
+    targetEntityKey: string
+    operatorType: WorldOperator['operatorType']
+    title?: string
+    summary?: string
+  }) {
+    await onCreateWorldDerivedComposition(input)
+    await refreshSelectedPromptSuggestions('manual_composition_create')
+  }
+
+  async function updateWorldDerivedCompositionAndRefresh(operatorKey: string, changes: {
+    operatorChanges?: Partial<Pick<WorldOperator, 'operatorType' | 'inputEntityKeys' | 'label' | 'status' | 'metadata'>>
+    resultChanges?: Partial<Pick<WorldResult, 'resultType' | 'title' | 'summary' | 'previewAssetKey' | 'status' | 'metadata'>>
+  }) {
+    await onUpdateWorldDerivedComposition(operatorKey, changes)
+    await refreshSelectedPromptSuggestions('manual_composition_update')
+  }
+
+  async function deleteWorldDerivedCompositionAndRefresh(operatorKey: string) {
+    await onDeleteWorldDerivedComposition(operatorKey)
+    await refreshSelectedPromptSuggestions('manual_composition_delete')
+  }
+
+  async function setWorldEntityCanonLockAndRefresh(entityKey: string, locked: boolean) {
+    await onSetWorldEntityCanonLock({ entityKey, locked })
+    await refreshSelectedPromptSuggestions('manual_entity_canon_lock', { selectedRootEntityKey: entityKey })
+  }
+
+  async function setWorldRelationshipCanonLockAndRefresh(relationshipKey: string, locked: boolean) {
+    await onSetWorldRelationshipCanonLock({ relationshipKey, locked })
+    await refreshSelectedPromptSuggestions('manual_relationship_canon_lock')
+  }
+
   function closeMenus() {
     setContextMenu(null)
     setEdgeEditor(null)
@@ -1721,6 +1887,7 @@ export function WorldGraphPage({
       metadata: {},
       ensureLinkedDefinition: true,
     })
+    await refreshSelectedPromptSuggestions('manual_entity_create')
   }
 
   function openNodeContextMenu(event: ReactMouseEvent, nodeId: string) {
@@ -1830,6 +1997,7 @@ export function WorldGraphPage({
             sessionSuggestions={activeSessionSuggestions}
             sessionTurns={sessionTurns}
             sessionSuggestionCountBySessionId={activeSuggestionCountBySessionId}
+            worldPromptTurns={worldPromptTurns}
             worldThreads={activeWorldThreads}
             worldPromptSessions={worldPromptSessions}
             onApplyPreview={(turnId) => void _onApplyWorldPromptPreview({ turnId })}
@@ -1839,6 +2007,13 @@ export function WorldGraphPage({
             onDismissSuggestion={(suggestionId) => void onDismissWorldPromptSuggestion({ suggestionId })}
             onRejectOp={(turnId, opId) => void _onRejectWorldPromptOp({ turnId, opId })}
             onRunSuggestion={handleRunPromptSuggestion}
+            onContinueWithoutSuggestion={() => {
+              setWorldPromptError(null)
+              requestAnimationFrame(() => {
+                const activeElement = document.querySelector('.world-prompt-composer textarea') as HTMLTextAreaElement | null
+                activeElement?.focus()
+              })
+            }}
             onOpenHistory={() => setHistoryOpen(true)}
             onCloseHistory={() => setHistoryOpen(false)}
             onSelectSession={setSelectedPromptSessionKey}
@@ -2021,7 +2196,7 @@ export function WorldGraphPage({
                 className="primary-button compact"
                 onClick={() => void (async () => {
                   if (edgeEditor.mode === 'create') {
-                    await onCreateWorldRelationshipFromGraphGesture({
+                    await createWorldRelationshipFromGestureAndRefresh({
                       sourceEntityKey: edgeEditor.sourceEntityKey,
                       targetEntityKey: edgeEditor.targetEntityKey,
                       verb: 'related to',
@@ -2034,7 +2209,7 @@ export function WorldGraphPage({
                       metadata: { creationMode: 'graph_gesture' },
                     })
                   } else if (edgeEditor.relationshipKey) {
-                    await onUpdateWorldRelationship(edgeEditor.relationshipKey, {
+                    await updateWorldRelationshipAndRefresh(edgeEditor.relationshipKey, {
                       verb: 'related to',
                       notes: edgeEditor.notes.trim(),
                     })
@@ -2128,11 +2303,11 @@ export function WorldGraphPage({
                   setContextMenu(null)
                 }} type="button">Save Neighborhood As View</button>
                 <button className="world-context-action danger" onClick={() => {
-                  void onUpdateWorldEntity(contextMenu.entityKey, { status: 'archived' })
+                  void updateWorldEntityAndRefresh(contextMenu.entityKey, { status: 'archived' }, 'manual_entity_archive')
                   setContextMenu(null)
                 }} type="button">Archive</button>
                 <button className="world-context-action danger" onClick={() => {
-                  void onDeleteWorldEntity(contextMenu.entityKey)
+                  void deleteWorldEntityAndRefresh(contextMenu.entityKey)
                   setContextMenu(null)
                 }} type="button">Delete Node</button>
               </>
@@ -2156,7 +2331,7 @@ export function WorldGraphPage({
                 <button className="world-context-action" onClick={() => {
                   const relationship = worldRelationships.find((entry) => entry.key === contextMenu.relationshipKey)
                   if (relationship) {
-                    void onUpdateWorldRelationship(relationship.key, {
+                    void updateWorldRelationshipAndRefresh(relationship.key, {
                       sourceEntityKey: relationship.targetEntityKey,
                       targetEntityKey: relationship.sourceEntityKey,
                     })
@@ -2164,7 +2339,7 @@ export function WorldGraphPage({
                   setContextMenu(null)
                 }} type="button">Flip Direction</button>
                 <button className="world-context-action danger" onClick={() => {
-                  void onDeleteWorldRelationship(contextMenu.relationshipKey)
+                  void deleteWorldRelationshipAndRefresh(contextMenu.relationshipKey)
                   setContextMenu(null)
                 }} type="button">Delete Link</button>
               </>
@@ -2184,7 +2359,7 @@ export function WorldGraphPage({
                 <button className="world-context-action" onClick={() => {
                   const operator = worldOperators.find((entry) => entry.key === contextMenu.operatorKey)
                   if (operator) {
-                    void onUpdateWorldDerivedComposition(operator.key, {
+                    void updateWorldDerivedCompositionAndRefresh(operator.key, {
                       operatorChanges: {
                         inputEntityKeys: [...operator.inputEntityKeys].reverse(),
                       },
@@ -2202,7 +2377,7 @@ export function WorldGraphPage({
                   setContextMenu(null)
                 }} type="button">Change Operation</button>
                 <button className="world-context-action danger" onClick={() => {
-                  void onDeleteWorldDerivedComposition(contextMenu.operatorKey)
+                  void deleteWorldDerivedCompositionAndRefresh(contextMenu.operatorKey)
                   setContextMenu(null)
                 }} type="button">Delete Operation</button>
               </>
@@ -2223,7 +2398,7 @@ export function WorldGraphPage({
                   const operator = resultNode ? worldOperators.find((entry) => entry.key === resultNode.sourceOperatorKey) ?? null : null
                   const firstEntityKey = operator?.inputEntityKeys[0] ?? null
                   if (firstEntityKey && resultNode?.previewAssetKey) {
-                    void onUpdateWorldEntity(firstEntityKey, { thumbnailAssetKey: resultNode.previewAssetKey })
+                    void updateWorldEntityAndRefresh(firstEntityKey, { thumbnailAssetKey: resultNode.previewAssetKey }, 'manual_entity_preview_bind')
                   }
                   setContextMenu(null)
                 }} type="button">Pin As Node Cover</button>
@@ -2239,7 +2414,7 @@ export function WorldGraphPage({
                 }} type="button">Open In Cinematics</button>
                 <button className="world-context-action danger" onClick={() => {
                   const resultNode = worldResults.find((entry) => entry.key === contextMenu.resultKey)
-                  if (resultNode) void onDeleteWorldDerivedComposition(resultNode.sourceOperatorKey)
+                  if (resultNode) void deleteWorldDerivedCompositionAndRefresh(resultNode.sourceOperatorKey)
                   setContextMenu(null)
                 }} type="button">Delete Result</button>
               </>
@@ -2291,7 +2466,7 @@ export function WorldGraphPage({
                   state={relationshipComposer}
                   onCancel={() => setRelationshipComposer(null)}
                   onCreate={async (input) => {
-                    await onCreateWorldRelationship(input)
+                    await createWorldRelationshipAndRefresh(input)
                     setRelationshipComposer(null)
                   }}
                 />
@@ -2312,7 +2487,7 @@ export function WorldGraphPage({
                   state={compositionComposer}
                   onCancel={() => setCompositionComposer(null)}
                   onCreate={async (input) => {
-                    await onCreateWorldDerivedComposition(input)
+                    await createWorldDerivedCompositionAndRefresh(input)
                     setCompositionComposer(null)
                   }}
                 />
@@ -2388,7 +2563,7 @@ export function WorldGraphPage({
               <div className="world-inspector-actions">
                 <button
                   className="primary-button compact"
-                  onClick={() => void onUpdateWorldRelationship(inspectorRelationship.key, {
+                  onClick={() => void updateWorldRelationshipAndRefresh(inspectorRelationship.key, {
                     verb: 'related to',
                     notes: relationshipInspectorNotes.trim(),
                   })}
@@ -2410,7 +2585,7 @@ export function WorldGraphPage({
                 </button>
                 <button
                   className="ghost-button compact"
-                  onClick={() => void onUpdateWorldRelationship(inspectorRelationship.key, {
+                  onClick={() => void updateWorldRelationshipAndRefresh(inspectorRelationship.key, {
                     sourceEntityKey: inspectorRelationship.targetEntityKey,
                     targetEntityKey: inspectorRelationship.sourceEntityKey,
                   })}
@@ -2418,21 +2593,21 @@ export function WorldGraphPage({
                 >
                   Flip Direction
                 </button>
-                <button className="ghost-button compact danger" onClick={() => void onDeleteWorldRelationship(inspectorRelationship.key)} type="button">Delete</button>
+                <button className="ghost-button compact danger" onClick={() => void deleteWorldRelationshipAndRefresh(inspectorRelationship.key)} type="button">Delete</button>
               </div>
               <details className="world-inline-disclosure">
                 <summary>{inspectorRelationship.metadata?.canon && typeof inspectorRelationship.metadata.canon === 'object' && (inspectorRelationship.metadata.canon as { locked?: unknown }).locked === true ? 'Canon Locked' : 'Canon Controls'}</summary>
                 <div className="world-choice-list">
                   <button
                     className="ghost-button compact"
-                    onClick={() => void onSetWorldRelationshipCanonLock({
-                      relationshipKey: inspectorRelationship.key,
-                      locked: !(
+                    onClick={() => void setWorldRelationshipCanonLockAndRefresh(
+                      inspectorRelationship.key,
+                      !(
                         inspectorRelationship.metadata?.canon
                         && typeof inspectorRelationship.metadata.canon === 'object'
                         && (inspectorRelationship.metadata.canon as { locked?: unknown }).locked === true
                       ),
-                    })}
+                    )}
                     type="button"
                   >
                     {inspectorRelationship.metadata?.canon && typeof inspectorRelationship.metadata.canon === 'object' && (inspectorRelationship.metadata.canon as { locked?: unknown }).locked === true ? 'Unlock Canon' : 'Lock Canon'}
@@ -2546,21 +2721,21 @@ export function WorldGraphPage({
                     relationshipDefaults: { sourceEntityKey: displayedInspectorEntity.key, verb: 'related to' },
                     canvasPosition: null,
                   })} type="button">Add Related Entity</button>
-                  <button className="ghost-button compact danger" onClick={() => void onDeleteWorldEntity(displayedInspectorEntity.key)} type="button">Delete</button>
+                  <button className="ghost-button compact danger" onClick={() => void deleteWorldEntityAndRefresh(displayedInspectorEntity.key)} type="button">Delete</button>
                 </div>
                 <details className="world-inline-disclosure">
                   <summary>{displayedInspectorEntity.metadata?.canon && typeof displayedInspectorEntity.metadata.canon === 'object' && (displayedInspectorEntity.metadata.canon as { locked?: unknown }).locked === true ? 'Canon Locked' : 'Canon Controls'}</summary>
                   <div className="world-choice-list">
                     <button
                       className="ghost-button compact"
-                      onClick={() => void onSetWorldEntityCanonLock({
-                        entityKey: displayedInspectorEntity.key,
-                        locked: !(
+                      onClick={() => void setWorldEntityCanonLockAndRefresh(
+                        displayedInspectorEntity.key,
+                        !(
                           displayedInspectorEntity.metadata?.canon
                           && typeof displayedInspectorEntity.metadata.canon === 'object'
                           && (displayedInspectorEntity.metadata.canon as { locked?: unknown }).locked === true
                         ),
-                      })}
+                      )}
                       type="button"
                     >
                       {displayedInspectorEntity.metadata?.canon && typeof displayedInspectorEntity.metadata.canon === 'object' && (displayedInspectorEntity.metadata.canon as { locked?: unknown }).locked === true ? 'Unlock Canon' : 'Lock Canon'}
@@ -2601,7 +2776,7 @@ export function WorldGraphPage({
                             targetEntityKey: relationship.targetEntityKey,
                             notes: relationship.notes,
                           })} type="button">Edit</button>
-                          <button className="ghost-button compact danger" onClick={() => void onDeleteWorldRelationship(relationship.key)} type="button">Remove</button>
+                          <button className="ghost-button compact danger" onClick={() => void deleteWorldRelationshipAndRefresh(relationship.key)} type="button">Remove</button>
                         </div>
                       </div>
                       <div className="inline-note">{counterpart?.name ?? 'Missing link'} · {relationship.direction} · {relationship.source}</div>
@@ -2665,8 +2840,8 @@ export function WorldGraphPage({
                 const resultNode = worldResults.find((entry) => entry.sourceOperatorKey === inspectorOperator.key)
                 if (resultNode) void onGenerateWorldResultPreview(resultNode.key)
               }} type="button">Regenerate Result</button>
-              <button className="ghost-button compact" onClick={() => void onUpdateWorldDerivedComposition(inspectorOperator.key, { operatorChanges: { inputEntityKeys: [...inspectorOperator.inputEntityKeys].reverse() } })} type="button">Swap Inputs</button>
-              <button className="ghost-button compact danger" onClick={() => void onDeleteWorldDerivedComposition(inspectorOperator.key)} type="button">Delete Operation</button>
+              <button className="ghost-button compact" onClick={() => void updateWorldDerivedCompositionAndRefresh(inspectorOperator.key, { operatorChanges: { inputEntityKeys: [...inspectorOperator.inputEntityKeys].reverse() } })} type="button">Swap Inputs</button>
+              <button className="ghost-button compact danger" onClick={() => void deleteWorldDerivedCompositionAndRefresh(inspectorOperator.key)} type="button">Delete Operation</button>
             </div>
           </div>
             ) : inspectorResult ? (
@@ -2686,7 +2861,7 @@ export function WorldGraphPage({
                 const graphKey = typeof inspectorResult.metadata?.cinematicGraphKey === 'string' ? inspectorResult.metadata.cinematicGraphKey : null
                 if (graphKey) onOpenCinematicGraph(graphKey)
               }} type="button">Open In Cinematics</button>
-              <button className="ghost-button compact danger" onClick={() => void onDeleteWorldDerivedComposition(inspectorResult.sourceOperatorKey)} type="button">Delete Result</button>
+              <button className="ghost-button compact danger" onClick={() => void deleteWorldDerivedCompositionAndRefresh(inspectorResult.sourceOperatorKey)} type="button">Delete Result</button>
             </div>
           </div>
         ) : (
@@ -2798,7 +2973,7 @@ function LegacyWorldPromptChatPanel({
   const effectivePreview = activePromptPreview ?? railView.preview
   const activeSuggestionRowId = useMemo(() => {
     for (const entry of [...transcriptEntries].reverse()) {
-      if (entry.kind === 'suggestion_row' || entry.kind === 'choice_row') {
+      if (entry.kind === 'suggestion_set' || entry.kind === 'clarification_question') {
         return entry.id
       }
     }
@@ -3006,12 +3181,12 @@ function LegacyWorldPromptChatPanel({
             </div>
           ) : null}
           {transcriptEntries.map((entry) => {
-            if (entry.kind === 'suggestion_row' || entry.kind === 'choice_row') {
-              const choiceTone = entry.suggestions.some((suggestion) => suggestion.kind === 'repair_prompt') ? ' is-clarify' : ''
+            if (entry.kind === 'suggestion_set' || entry.kind === 'clarification_question') {
+              const choiceTone = entry.kind === 'clarification_question' ? ' is-clarify' : ''
               return (
                 <div key={entry.id} className={`world-prompt-row world-prompt-row-system${choiceTone}`}>
                   <span className="world-prompt-row-label">
-                    {entry.suggestions.some((suggestion) => suggestion.kind === 'repair_prompt') ? 'Clarification Required' : entry.label ?? 'Next move'}
+                    {entry.kind === 'clarification_question' ? 'Clarification Required' : entry.label ?? 'Next move'}
                   </span>
                   <div className="world-prompt-inline-choices">
                     {entry.suggestions.map((suggestion) => (
@@ -3219,6 +3394,7 @@ function WorldPromptChatPanel({
   sessionSuggestions,
   sessionTurns,
   sessionSuggestionCountBySessionId,
+  worldPromptTurns,
   worldThreads,
   worldPromptSessions,
   onApplyPreview,
@@ -3228,6 +3404,7 @@ function WorldPromptChatPanel({
   onDismissSuggestion,
   onRejectOp,
   onRunSuggestion,
+  onContinueWithoutSuggestion,
   onSelectSession,
   onStartNewSession,
   onSubmit,
@@ -3253,6 +3430,7 @@ function WorldPromptChatPanel({
   sessionSuggestions: WorldPromptSuggestionRecord[]
   sessionTurns: WorldPromptTurn[]
   sessionSuggestionCountBySessionId: Record<string, number>
+  worldPromptTurns: WorldPromptTurn[]
   worldThreads: WorldThread[]
   worldPromptSessions: WorldPromptSession[]
   onApplyPreview: (turnId: string) => Promise<void> | void
@@ -3262,6 +3440,7 @@ function WorldPromptChatPanel({
   onDismissSuggestion: (suggestionId: string) => Promise<void> | void
   onRejectOp: (turnId: string, opId: string) => Promise<void> | void
   onRunSuggestion: (suggestion: WorldPromptSuggestion | WorldPromptSuggestionRecord) => Promise<void> | void
+  onContinueWithoutSuggestion: () => void
   onSelectSession: (key: string | null) => void
   onStartNewSession: () => void
   onSubmit: (promptOverride?: string) => Promise<void> | void
@@ -3328,13 +3507,14 @@ function WorldPromptChatPanel({
     }
     if (
       sessionSuggestions.length > 0
-      && !entries.some((entry) => entry.kind === 'suggestion_row' || entry.kind === 'choice_row')
+      && !entries.some((entry) => entry.kind === 'suggestion_set' || entry.kind === 'clarification_question')
     ) {
+      const hasClarification = sessionSuggestions.some((suggestion) => suggestion.metadata?.uiKind === 'clarification')
       entries.push({
         id: `persisted-suggestions:${selectedSession?.id ?? selectedSessionKey ?? 'session'}`,
         createdAt: sessionSuggestions[0]?.updatedAt ?? selectedSession?.updatedAt ?? new Date().toISOString(),
-        kind: 'suggestion_row',
-        label: 'Next moves',
+        kind: hasClarification ? 'clarification_question' : 'suggestion_set',
+        label: hasClarification ? 'Clarification required' : 'Next moves',
         suggestions: sessionSuggestions.map((suggestion) => ({
           id: suggestion.id,
           label: suggestion.label,
@@ -3343,7 +3523,7 @@ function WorldPromptChatPanel({
           style: suggestion.style,
           source: suggestion.source,
           threadKey: suggestion.threadKey,
-          summary: suggestion.summary,
+          summary: suggestion.summary || (typeof suggestion.metadata?.generatedReason === 'string' ? suggestion.metadata.generatedReason : ''),
           estimatedNodeCount: suggestion.estimatedNodeCount,
           estimatedEdgeCount: suggestion.estimatedEdgeCount,
           willQueueImages: suggestion.willQueueImages,
@@ -3360,6 +3540,25 @@ function WorldPromptChatPanel({
     () => [...sessionTurns].reverse().slice(0, 6),
     [sessionTurns],
   )
+  const sessionStatusByKey = useMemo(() => {
+    return Object.fromEntries(worldPromptSessions.map((session) => {
+      const turnsForSession = worldPromptTurns
+        .filter((turn) => turn.sessionId === session.id)
+        .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime())
+      const currentTurn = turnsForSession.at(-1) ?? null
+      const currentClassification = currentTurn?.metadata?.classification
+      const hasPreview = Boolean(currentTurn?.metadata?.preview)
+      const activeSuggestionCount = sessionSuggestionCountBySessionId[session.id] ?? 0
+      const status = currentTurn?.status === 'awaiting_approval'
+        ? 'approval'
+        : activeSuggestionCount > 0 && (currentClassification === 'contradictory_or_low_confidence' || currentClassification === 'not_graphable')
+          ? 'clarification'
+          : hasPreview
+            ? 'preview'
+            : currentTurn?.status ?? 'empty'
+      return [session.key, status]
+    }))
+  }, [sessionSuggestionCountBySessionId, worldPromptSessions, worldPromptTurns])
   const isPromptCenter = !busy && !activePromptTurn && transcriptStream.length === 0 && sessionTurns.length === 0
   const sessionTitle = selectedSession?.title ?? (selectedSessionKey ? 'New chat' : 'World chat')
   const sessionSubline = selectedSession
@@ -3392,8 +3591,8 @@ function WorldPromptChatPanel({
   }
 
   function renderEntry(entry: WorldPromptTranscriptEntry) {
-    if (entry.kind === 'suggestion_row' || entry.kind === 'choice_row') {
-      const needsRepair = entry.suggestions.some((suggestion) => suggestion.kind === 'repair_prompt')
+    if (entry.kind === 'suggestion_set' || entry.kind === 'clarification_question') {
+      const needsRepair = entry.kind === 'clarification_question'
       return (
         <div key={entry.id} className={`world-prompt-row world-prompt-row-system world-prompt-card${needsRepair ? ' is-clarify' : ''}`}>
           <span className="world-prompt-row-label">{needsRepair ? 'Clarification required' : entry.label ?? 'Next move'}</span>
@@ -3427,6 +3626,20 @@ function WorldPromptChatPanel({
               </div>
             ))}
           </div>
+          <div className="world-inspector-actions">
+            <button className="ghost-button compact" disabled={busy} onClick={onContinueWithoutSuggestion} type="button">
+              Continue with my own prompt
+            </button>
+          </div>
+        </div>
+      )
+    }
+
+    if (entry.kind === 'clarification_answer' || entry.kind === 'continuation_without_suggestion') {
+      return (
+        <div key={entry.id} className="world-prompt-row world-prompt-row-system world-prompt-card">
+          <span className="world-prompt-row-label">{entry.label}</span>
+          {entry.detail ? <div className="world-prompt-line">{entry.detail}</div> : null}
         </div>
       )
     }
@@ -3657,6 +3870,11 @@ function WorldPromptChatPanel({
               ) : (
                 <span className="inline-note">Stay in one thread, or open history to jump to another session.</span>
               )}
+              {sessionSuggestions.length > 0 ? (
+                <button className="ghost-button compact" disabled={busy} onClick={onContinueWithoutSuggestion} type="button">
+                  Continue with my own prompt
+                </button>
+              ) : null}
               <button
                 className={railView.primaryActionKind === 'generate' || railView.primaryActionKind === 'continue' ? 'primary-button compact' : 'ghost-button compact'}
                 disabled={busy || !promptText.trim()}
@@ -3706,6 +3924,7 @@ function WorldPromptChatPanel({
                   <span>
                     {session.updatedAt ? new Date(session.updatedAt).toLocaleString() : 'Recent session'}
                     {sessionSuggestionCountBySessionId[session.id] ? ` · ${sessionSuggestionCountBySessionId[session.id]} active suggestion${sessionSuggestionCountBySessionId[session.id] === 1 ? '' : 's'}` : ''}
+                    {sessionStatusByKey[session.key] ? ` · ${sessionStatusByKey[session.key]}` : ''}
                   </span>
                 </button>
               ))}

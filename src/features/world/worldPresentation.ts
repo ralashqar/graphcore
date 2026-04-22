@@ -33,7 +33,10 @@ export type WorldPromptTranscriptEntry =
   | { id: string; createdAt: string; kind: 'queue_started'; label: string; detail?: string }
   | { id: string; createdAt: string; kind: 'preview_available'; label: string; detail?: string; turnId: string; preview: WorldPromptPlanPreview }
   | { id: string; createdAt: string; kind: 'approval_required'; label: string; detail?: string; turnId: string; ops: PromptToWorldOp[] }
-  | { id: string; createdAt: string; kind: 'suggestion_row' | 'choice_row'; suggestions: WorldPromptSuggestion[]; label?: string }
+  | { id: string; createdAt: string; kind: 'suggestion_set'; suggestions: WorldPromptSuggestion[]; label?: string }
+  | { id: string; createdAt: string; kind: 'clarification_question'; suggestions: WorldPromptSuggestion[]; label?: string }
+  | { id: string; createdAt: string; kind: 'clarification_answer'; label: string; detail?: string }
+  | { id: string; createdAt: string; kind: 'continuation_without_suggestion'; label: string; detail?: string }
 
 export type WorldPromptRailState =
   | 'idle'
@@ -187,12 +190,13 @@ export function stripInternalPlannerDiagnostics(text: string) {
 }
 
 function buildTranscriptSuggestionsEntry(event: WorldPromptEvent, suggestions: WorldPromptSuggestion[]) {
+  const hasClarification = suggestions.some((suggestion) => suggestion.kind === 'repair_prompt')
   return {
     id: `suggestions:${event.id}`,
     createdAt: event.createdAt,
-    kind: suggestions.length > 1 ? 'choice_row' : 'suggestion_row',
+    kind: hasClarification ? 'clarification_question' : 'suggestion_set',
     suggestions,
-    label: suggestions.length > 1 ? 'Choose how to continue' : 'Next move',
+    label: hasClarification ? 'Clarification required' : 'Next move',
   } satisfies WorldPromptTranscriptEntry
 }
 
@@ -218,6 +222,49 @@ export function buildWorldPromptTranscriptEntries(input: {
 
   for (const source of sources) {
     if (source.source === 'message') {
+      if (source.message.role === 'user') {
+        const selectedSuggestionLabel = typeof source.message.metadata?.selectedSuggestionLabel === 'string'
+          ? source.message.metadata.selectedSuggestionLabel
+          : null
+        const selectedSuggestionUiKind = source.message.metadata?.selectedSuggestionUiKind === 'clarification'
+          ? 'clarification'
+          : 'next_move'
+        const continuationMode = typeof source.message.metadata?.continuationMode === 'string'
+          ? source.message.metadata.continuationMode
+          : null
+
+        if (selectedSuggestionLabel) {
+          entries.push({
+            id: `${source.id}:selection`,
+            createdAt: source.message.createdAt,
+            kind: selectedSuggestionUiKind === 'clarification' ? 'clarification_answer' : 'system_status',
+            label: selectedSuggestionUiKind === 'clarification' ? 'Answered clarification' : 'Used suggestion',
+            detail: selectedSuggestionLabel,
+          })
+          continue
+        }
+
+        if (continuationMode === 'freeform_after_suggestions') {
+          entries.push({
+            id: `${source.id}:continuation`,
+            createdAt: source.message.createdAt,
+            kind: 'continuation_without_suggestion',
+            label: 'Continued with your own prompt',
+            detail: 'You skipped the suggested next moves and continued freeform.',
+          })
+        }
+
+        if (continuationMode === 'freeform_after_clarification') {
+          entries.push({
+            id: `${source.id}:continuation`,
+            createdAt: source.message.createdAt,
+            kind: 'continuation_without_suggestion',
+            label: 'Continued without answering clarification',
+            detail: 'You skipped the clarification options and sent a new prompt instead.',
+          })
+        }
+      }
+
       entries.push({
         id: source.id,
         createdAt: source.message.createdAt,

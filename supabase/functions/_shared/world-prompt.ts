@@ -13,6 +13,8 @@ import {
   worldPromptDismissSuggestionResponseSchema,
   worldPromptEventPayloadSchema,
   worldPromptPlanPreviewSchema,
+  worldPromptRefreshSuggestionsRequestSchema,
+  worldPromptRefreshSuggestionsResponseSchema,
   worldPromptSessionSchema,
   worldPromptSuggestionRecordSchema,
   worldPromptSuggestionSchema,
@@ -610,6 +612,9 @@ async function ensurePromptSession(input: {
       model: input.payload.model,
       metadata: {
         titleSource: 'auto',
+        hasUnreadUpdates: false,
+        lastSuggestionRefreshAt: null,
+        sessionMode: 'normal',
       },
     })
     .select(SESSION_SELECT)
@@ -654,6 +659,8 @@ export async function createWorldPromptSession(input: {
       metadata: {
         ...(session.metadata ?? {}),
         titleSource: 'auto',
+        hasUnreadUpdates: false,
+        sessionMode: 'normal',
       },
       last_context: {
         ...(session.lastContext ?? {}),
@@ -690,6 +697,75 @@ export async function dismissWorldPromptSuggestion(input: {
   return worldPromptDismissSuggestionResponseSchema.parse({
     ok: true,
     suggestion: mapSuggestionRow(response.data as WorldPromptSuggestionRow),
+  })
+}
+
+export async function refreshWorldPromptSuggestions(input: {
+  client: SupabaseClient
+  payload: unknown
+}) {
+  const payload = worldPromptRefreshSuggestionsRequestSchema.parse(input.payload)
+  const sessionResponse = payload.sessionId
+    ? await input.client
+      .from('world_prompt_sessions')
+      .select(SESSION_SELECT)
+      .eq('id', payload.sessionId)
+      .maybeSingle()
+    : await input.client
+      .from('world_prompt_sessions')
+      .select(SESSION_SELECT)
+      .eq('draft_id', payload.snapshot.draft.id)
+      .eq('key', payload.sessionKey ?? '')
+      .maybeSingle()
+  if (sessionResponse.error) throw new Error(sessionResponse.error.message)
+  if (!sessionResponse.data) {
+    throw new Error('World prompt session not found.')
+  }
+  const session = mapSessionRow(sessionResponse.data as WorldPromptSessionRow)
+
+  const latestTurnResponse = await input.client
+    .from('world_prompt_turns')
+    .select(TURN_SELECT)
+    .eq('session_id', session.id)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (latestTurnResponse.error) throw new Error(latestTurnResponse.error.message)
+  const latestTurn = latestTurnResponse.data ? mapTurnRow(latestTurnResponse.data as WorldPromptTurnRow) : null
+  const preview = latestTurn?.metadata?.preview ? worldPromptPlanPreviewSchema.safeParse(latestTurn.metadata.preview).data ?? null : null
+  const sessionThreadKey = typeof session.lastContext?.selectedThreadKey === 'string'
+    ? session.lastContext.selectedThreadKey
+    : null
+  const seededSuggestions = Array.isArray(latestTurn?.metadata?.suggestions)
+    ? z.array(worldPromptSuggestionSchema).safeParse(latestTurn?.metadata?.suggestions).data ?? []
+    : preview?.suggestions ?? []
+  const nextSuggestions = finalizeSuggestionSet({
+    snapshot: payload.snapshot,
+    selectedThreadKey: payload.selectedThreadKey ?? sessionThreadKey,
+    suggestions: seededSuggestions,
+  })
+  const persistedSuggestions = await persistSessionSuggestions({
+    client: input.client,
+    draftId: payload.snapshot.draft.id,
+    sessionId: session.id,
+    turnId: latestTurn?.id ?? null,
+    selectedThreadKey: payload.selectedThreadKey ?? sessionThreadKey,
+    suggestions: nextSuggestions,
+  })
+  const updatedSession = await updateSessionLifecycle({
+    client: input.client,
+    session,
+    prompt: latestTurn?.prompt ?? payload.reason,
+    assistantSummary: latestTurn?.assistantSummary ?? 'Suggestions refreshed after a manual world edit.',
+    selectedRootEntityKey: payload.selectedRootEntityKey ?? session.selectedRootEntityKey,
+    selectedViewKey: payload.selectedViewKey ?? session.selectedViewKey,
+    selectedThreadKey: payload.selectedThreadKey ?? sessionThreadKey,
+    summaryMemory: session.summaryMemory,
+  })
+  return worldPromptRefreshSuggestionsResponseSchema.parse({
+    ok: true,
+    session: updatedSession,
+    suggestions: persistedSuggestions,
   })
 }
 
@@ -741,16 +817,57 @@ function buildRollingSessionMemory(input: {
       touchedEntityKeys.add(entityKey)
     }
   }
+  const unresolvedThreads = [...input.snapshot.worldThreads]
+    .filter((thread) => thread.status === 'open')
+    .sort((left, right) => {
+      const leftPriority = left.priority === 'primary' ? 0 : left.priority === 'secondary' ? 1 : 2
+      const rightPriority = right.priority === 'primary' ? 0 : right.priority === 'secondary' ? 1 : 2
+      return leftPriority - rightPriority
+    })
+    .slice(0, 4)
+  const memoryEnvelope = {
+    recentUserIntent: input.turn.prompt.trim(),
+    latestAssistantSummary: input.assistantSummary.trim(),
+    selectedThreadKey: input.selectedThreadKey ?? null,
+    selectedRootEntityKey: typeof input.turn.resolvedContext?.selectedRootEntityKey === 'string' ? input.turn.resolvedContext.selectedRootEntityKey : null,
+    selectedViewKey: typeof input.turn.resolvedContext?.selectedViewKey === 'string' ? input.turn.resolvedContext.selectedViewKey : null,
+    touchedEntityKeys: Array.from(touchedEntityKeys).slice(0, 8),
+    unresolvedThreads: unresolvedThreads.map((thread) => ({
+      key: thread.key,
+      title: thread.title,
+      priority: thread.priority,
+    })),
+    lastPreviewOutcome: preview?.appliedAt ? 'preview_applied' : preview ? 'preview_available' : 'none',
+  }
   const contextLines = [
     input.session.summaryMemory.trim(),
-    `Prompt: ${input.turn.prompt.trim()}`,
-    input.assistantSummary.trim() ? `Assistant: ${input.assistantSummary.trim()}` : '',
-    input.selectedThreadKey ? `Thread: ${input.selectedThreadKey}` : '',
-    touchedEntityKeys.size > 0 ? `Touched entities: ${Array.from(touchedEntityKeys).slice(0, 8).join(', ')}` : '',
-    input.turn.resolvedContext?.selectedRootEntityKey ? `Focused entity: ${String(input.turn.resolvedContext.selectedRootEntityKey)}` : '',
-    input.turn.resolvedContext?.selectedViewKey ? `View: ${String(input.turn.resolvedContext.selectedViewKey)}` : '',
+    `Memory: ${JSON.stringify(memoryEnvelope)}`,
   ].filter(Boolean)
   return contextLines.join('\n').slice(-4000)
+}
+
+function suggestionUiKind(suggestion: WorldPromptSuggestion) {
+  return suggestion.kind === 'repair_prompt' ? 'clarification' : 'next_move'
+}
+
+function suggestionGeneratedReason(input: {
+  suggestion: WorldPromptSuggestion
+  selectedThreadKey?: string | null
+}) {
+  if (input.suggestion.threadKey || input.selectedThreadKey) {
+    return 'continues selected thread'
+  }
+  if (input.suggestion.kind === 'repair_prompt') {
+    return 'clarifies the current request'
+  }
+  if (input.suggestion.willQueueImages || input.suggestion.willQueueCinematics) {
+    return 'expands the latest additions with media generation'
+  }
+  return input.suggestion.source === 'wave2'
+    ? 'expands latest additions'
+    : input.suggestion.source === 'thread'
+      ? 'continues an unresolved thread'
+      : 'offers the next likely move'
 }
 
 function finalizeSuggestionSet(input: {
@@ -769,30 +886,35 @@ function finalizeSuggestionSet(input: {
 }
 
 async function supersedeActiveSessionSuggestions(client: SupabaseClient, sessionId: string, excludeIds: string[] = []) {
-  let query = client
-    .from('world_prompt_suggestions')
-    .update({
-      state: 'superseded',
-      metadata: {
-        supersededAt: new Date().toISOString(),
-      },
-    })
-    .eq('session_id', sessionId)
-    .eq('state', 'active')
-  if (excludeIds.length > 0) {
-    query = query.not('id', 'in', `(${excludeIds.map((id) => `"${id}"`).join(',')})`)
-  }
-  const response = await query
-  if (response.error) throw new Error(response.error.message)
+  const activeSuggestions = await loadActiveSessionSuggestions(client, sessionId)
+  const targets = activeSuggestions.filter((suggestion) => !excludeIds.includes(suggestion.id))
+  if (targets.length === 0) return
+
+  const timestamp = new Date().toISOString()
+  await Promise.all(targets.map(async (suggestion) => {
+    const response = await client
+      .from('world_prompt_suggestions')
+      .update({
+        state: 'superseded',
+        metadata: {
+          ...(suggestion.metadata ?? {}),
+          supersededAt: timestamp,
+        },
+      })
+      .eq('id', suggestion.id)
+    if (response.error) throw new Error(response.error.message)
+  }))
 }
 
 async function markSuggestionUsed(client: SupabaseClient, suggestionId: string, usedTurnId: string) {
+  const suggestion = await loadSuggestionById(client, suggestionId)
   const response = await client
     .from('world_prompt_suggestions')
     .update({
       state: 'used',
       used_turn_id: usedTurnId,
       metadata: {
+        ...(suggestion?.metadata ?? {}),
         usedAt: new Date().toISOString(),
       },
     })
@@ -834,6 +956,12 @@ async function persistSessionSuggestions(input: {
       rank: index,
       metadata: {
         promptSuggestionId: suggestion.id,
+        generatedFromTurnId: input.turnId,
+        generatedReason: suggestionGeneratedReason({
+          suggestion,
+          selectedThreadKey: input.selectedThreadKey,
+        }),
+        uiKind: suggestionUiKind(suggestion),
       },
     })))
     .select(SUGGESTION_SELECT)
@@ -876,6 +1004,9 @@ async function updateSessionLifecycle(input: {
       metadata: {
         ...currentMetadata,
         titleSource,
+        hasUnreadUpdates: false,
+        lastSuggestionRefreshAt: new Date().toISOString(),
+        sessionMode: typeof currentMetadata.sessionMode === 'string' ? currentMetadata.sessionMode : 'normal',
       },
     })
     .eq('id', input.session.id)
@@ -3159,6 +3290,28 @@ async function loadSessionById(client: SupabaseClient, sessionId: string) {
   return mapSessionRow(response.data as WorldPromptSessionRow)
 }
 
+async function loadSuggestionById(client: SupabaseClient, suggestionId: string) {
+  const response = await client
+    .from('world_prompt_suggestions')
+    .select(SUGGESTION_SELECT)
+    .eq('id', suggestionId)
+    .maybeSingle()
+  if (response.error) throw new Error(response.error.message)
+  return response.data ? mapSuggestionRow(response.data as WorldPromptSuggestionRow) : null
+}
+
+async function loadActiveSessionSuggestions(client: SupabaseClient, sessionId: string) {
+  const response = await client
+    .from('world_prompt_suggestions')
+    .select(SUGGESTION_SELECT)
+    .eq('session_id', sessionId)
+    .eq('state', 'active')
+    .order('rank', { ascending: true })
+    .order('created_at', { ascending: true })
+  if (response.error) throw new Error(response.error.message)
+  return (response.data ?? []).map((row) => mapSuggestionRow(row as WorldPromptSuggestionRow))
+}
+
 async function refreshTurnSuggestions(input: {
   client: SupabaseClient
   session: WorldPromptSession
@@ -3301,6 +3454,25 @@ export async function startWorldPromptTurn(input: {
       turn,
     })
 
+    const selectedSuggestion = payload.selectedSuggestionId
+      ? await loadSuggestionById(input.client, payload.selectedSuggestionId)
+      : null
+    const activeSessionSuggestions = payload.selectedSuggestionId
+      ? []
+      : await loadActiveSessionSuggestions(input.client, workingSession.id)
+    const selectedSuggestionUiKind = selectedSuggestion
+      ? (selectedSuggestion.metadata?.uiKind === 'clarification' ? 'clarification' : 'next_move')
+      : null
+    const continuationMode = payload.selectedSuggestionId
+      ? selectedSuggestionUiKind === 'clarification'
+        ? 'answered_clarification'
+        : 'used_suggestion'
+      : activeSessionSuggestions.length > 0
+        ? activeSessionSuggestions.some((suggestion) => suggestion.metadata?.uiKind === 'clarification' || suggestion.kind === 'repair_prompt')
+          ? 'freeform_after_clarification'
+          : 'freeform_after_suggestions'
+        : 'freeform_initial'
+
     const userMessage = await insertPromptMessage({
       client: input.client,
       sessionId: workingSession.id,
@@ -3308,6 +3480,12 @@ export async function startWorldPromptTurn(input: {
       draftId: payload.snapshot.draft.id,
       role: 'user',
       content: payload.prompt,
+      metadata: {
+        selectedSuggestionId: payload.selectedSuggestionId,
+        selectedSuggestionLabel: selectedSuggestion?.label ?? null,
+        selectedSuggestionUiKind,
+        continuationMode,
+      },
     })
     await writeEvent('message_created', {
       message: userMessage,
@@ -3537,6 +3715,7 @@ export async function startWorldPromptTurn(input: {
         scopeDecision: execution.scope,
         selectedThreadKey: payload.selectedThreadKey,
         selectedSuggestionId: payload.selectedSuggestionId,
+        continuationMode,
         suggestions: finalizedSuggestions,
         suggestionIds: persistedSuggestions.map((suggestion) => suggestion.id),
       },

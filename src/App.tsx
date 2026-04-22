@@ -3447,6 +3447,34 @@ export default function App() {
     setBundle(compileBundle(nextSnapshot))
   }
 
+  async function refreshWorldPromptSuggestions(input: {
+    sessionId?: string | null
+    sessionKey?: string | null
+    selectedRootEntityKey?: string | null
+    selectedViewKey?: string | null
+    selectedThreadKey?: string | null
+    reason?: string
+  }) {
+    if (!snapshot) return
+    if (loadedState?.source !== 'supabase') return
+    const syncedSnapshot = await syncWorldGraphBackfillIfNeeded(snapshot)
+    const result = await workspaceService.refreshWorldPromptSuggestions(syncedSnapshot, {
+      sessionId: input.sessionId ?? null,
+      sessionKey: input.sessionKey ?? null,
+      selectedRootEntityKey: input.selectedRootEntityKey ?? null,
+      selectedViewKey: input.selectedViewKey ?? null,
+      selectedThreadKey: input.selectedThreadKey ?? null,
+      reason: input.reason ?? 'manual_world_edit',
+    })
+    const nextSnapshot = mergeWorldPromptStateIntoSnapshot(snapshotRef.current ?? syncedSnapshot, {
+      sessions: [result.session],
+      suggestions: result.suggestions,
+    })
+    snapshotRef.current = nextSnapshot
+    setSnapshot(nextSnapshot)
+    setBundle(compileBundle(nextSnapshot))
+  }
+
   async function approveWorldPromptOp(input: { turnId: string; opId: string }) {
     if (!snapshot) return
     if (loadedState?.source !== 'supabase') {
@@ -5348,6 +5376,7 @@ export default function App() {
                 onGenerateWorldExpansion={generateWorldExpansion}
                 onStartWorldPromptTurn={startWorldPromptTurn}
                 onCreateWorldPromptSession={createWorldPromptSession}
+                onRefreshWorldPromptSuggestions={refreshWorldPromptSuggestions}
                 onApproveWorldPromptOp={approveWorldPromptOp}
                 onRejectWorldPromptOp={rejectWorldPromptOp}
                 onApplyWorldPromptPreview={applyWorldPromptPreview}

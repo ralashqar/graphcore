@@ -479,6 +479,22 @@ export const worldPromptDismissSuggestionResponseSchema = z.object({
   suggestion: worldPromptSuggestionRecordSchema,
 })
 
+export const worldPromptRefreshSuggestionsRequestSchema = z.object({
+  sessionId: z.string().min(1).nullable().default(null),
+  sessionKey: z.string().min(1).nullable().default(null),
+  selectedRootEntityKey: z.string().nullable().default(null),
+  selectedViewKey: z.string().nullable().default(null),
+  selectedThreadKey: z.string().nullable().default(null),
+  reason: z.string().min(1).default('manual_world_edit'),
+  snapshot: worldPromptSnapshotSchema,
+})
+
+export const worldPromptRefreshSuggestionsResponseSchema = z.object({
+  ok: z.literal(true),
+  session: worldPromptSessionSchema,
+  suggestions: z.array(worldPromptSuggestionRecordSchema).default([]),
+})
+
 export const worldPromptStateSchema = z.object({
   worldPromptSessions: z.array(worldPromptSessionSchema).default([]),
   worldPromptTurns: z.array(worldPromptTurnSchema).default([]),
@@ -513,3 +529,5 @@ export type WorldPromptCreateSessionRequest = z.infer<typeof worldPromptCreateSe
 export type WorldPromptCreateSessionResponse = z.infer<typeof worldPromptCreateSessionResponseSchema>
 export type WorldPromptDismissSuggestionRequest = z.infer<typeof worldPromptDismissSuggestionRequestSchema>
 export type WorldPromptDismissSuggestionResponse = z.infer<typeof worldPromptDismissSuggestionResponseSchema>
+export type WorldPromptRefreshSuggestionsRequest = z.infer<typeof worldPromptRefreshSuggestionsRequestSchema>
+export type WorldPromptRefreshSuggestionsResponse = z.infer<typeof worldPromptRefreshSuggestionsResponseSchema>
