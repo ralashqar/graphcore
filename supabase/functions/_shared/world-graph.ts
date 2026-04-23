@@ -57,67 +57,6 @@ function uniqueKey(existingKeys: Set<string>, base: string) {
   return candidate
 }
 
-function fallbackSeedPlan(prompt: string): WorldGraphGeneratorResult {
-  const normalized = prompt.toLowerCase()
-  const placeName = normalized.includes('kingdom') ? 'Capital City' : 'Anchor Place'
-  const conceptName = normalized.includes('power') ? 'Power' : 'Founding Doctrine'
-  const eventName = normalized.includes('succession') ? 'Succession Crisis' : 'Catalyst Event'
-  const groupAName = normalized.includes('court') || normalized.includes('kingdom') ? 'Royal Court' : 'Core Circle'
-  const groupBName = normalized.includes('rival') || normalized.includes('compete') ? 'Rival Alliance' : 'Outer Faction'
-
-  return {
-    requestSummary: `Starter world from: ${prompt}`,
-    entities: [
-      { name: groupAName, summary: `A core faction shaped by the prompt: ${prompt}`, nodeType: 'group', aliases: [], tags: [] },
-      { name: groupBName, summary: `A competing faction shaped by the prompt: ${prompt}`, nodeType: 'group', aliases: [], tags: [] },
-      { name: placeName, summary: `A primary setting generated from: ${prompt}`, nodeType: 'place', aliases: [], tags: [] },
-      { name: conceptName, summary: 'A driving idea inside this world.', nodeType: 'concept', aliases: [], tags: [] },
-      { name: eventName, summary: 'A defining event that creates dramatic pressure.', nodeType: 'event', aliases: [], tags: [] },
-    ],
-    relationships: [
-      { sourceName: groupAName, targetName: placeName, verb: 'controls', direction: 'outbound', notes: '' },
-      { sourceName: groupBName, targetName: groupAName, verb: 'opposes', direction: 'outbound', notes: '' },
-      { sourceName: conceptName, targetName: eventName, verb: 'influences', direction: 'outbound', notes: '' },
-      { sourceName: eventName, targetName: placeName, verb: 'occurs in', direction: 'outbound', notes: '' },
-    ],
-    view: {
-      name: 'Core World',
-      rootEntityName: null,
-    },
-    assistantNote: 'Fallback starter world was generated locally inside the edge function because hosted planning was unavailable.',
-  }
-}
-
-function fallbackExpansionPlan(root: WorldEntity): WorldGraphGeneratorResult {
-  if (root.nodeType === 'actor') {
-    return {
-      requestSummary: `Expand ${root.name}`,
-      entities: [
-        { name: `${root.name} Rival`, summary: `A recurring rival for ${root.name}.`, nodeType: 'actor', aliases: [], tags: [] },
-        { name: `${root.name} Base`, summary: `A place tied closely to ${root.name}.`, nodeType: 'place', aliases: [], tags: [] },
-      ],
-      relationships: [
-        { sourceName: `${root.name} Rival`, targetName: root.name, verb: 'opposes', direction: 'outbound', notes: '' },
-        { sourceName: root.name, targetName: `${root.name} Base`, verb: 'lives in', direction: 'outbound', notes: '' },
-      ],
-      view: null,
-      assistantNote: 'Fallback expansion was generated locally inside the edge function.',
-    }
-  }
-
-  return {
-    requestSummary: `Expand ${root.name}`,
-    entities: [
-      { name: `${root.name} Circle`, summary: `A new group or cluster around ${root.name}.`, nodeType: 'group', aliases: [], tags: [] },
-    ],
-    relationships: [
-      { sourceName: `${root.name} Circle`, targetName: root.name, verb: 'linked to', direction: 'outbound', notes: '' },
-    ],
-    view: null,
-    assistantNote: 'Fallback expansion was generated locally inside the edge function.',
-  }
-}
-
 function safeJsonParse(text: string) {
   try {
     return JSON.parse(text) as Record<string, unknown>
@@ -166,16 +105,15 @@ export async function generateSeedPlan(request: WorldGraphSeedRequest) {
     currentEntityCount: request.snapshot.worldEntities.length,
   })
 
-  try {
-    const generated = await generateWithOpenAi({
-      instructions,
-      prompt,
-      model: request.model,
-    })
-    return generated ?? fallbackSeedPlan(request.prompt)
-  } catch {
-    return fallbackSeedPlan(request.prompt)
+  const generated = await generateWithOpenAi({
+    instructions,
+    prompt,
+    model: request.model,
+  })
+  if (!generated) {
+    throw new Error('World graph planner returned invalid JSON.')
   }
+  return generated
 }
 
 export async function generateExpansionPlan(request: WorldGraphExpansionRequest) {
@@ -200,16 +138,15 @@ export async function generateExpansionPlan(request: WorldGraphExpansionRequest)
     )),
   })
 
-  try {
-    const generated = await generateWithOpenAi({
-      instructions,
-      prompt,
-      model: request.model,
-    })
-    return generated ?? fallbackExpansionPlan(root)
-  } catch {
-    return fallbackExpansionPlan(root)
+  const generated = await generateWithOpenAi({
+    instructions,
+    prompt,
+    model: request.model,
+  })
+  if (!generated) {
+    throw new Error('World graph expansion planner returned invalid JSON.')
   }
+  return generated
 }
 
 export async function persistWorldGraphPlan(input: {

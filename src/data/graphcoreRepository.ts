@@ -1635,7 +1635,7 @@ function mapWorldPromptSessionRow(entry: WorldPromptSessionRow): WorldPromptSess
     lastContext: entry.last_context ?? {},
     selectedRootEntityKey: entry.selected_root_entity_key,
     selectedViewKey: entry.selected_view_key,
-    model: entry.model ?? 'gpt-5.4-mini',
+    model: entry.model ?? 'gpt-5.4',
     metadata: entry.metadata ?? {},
     createdAt: entry.created_at,
     updatedAt: entry.updated_at,
@@ -1649,7 +1649,7 @@ function mapWorldPromptTurnRow(entry: WorldPromptTurnRow): WorldPromptTurn {
     draftId: entry.draft_id,
     prompt: entry.prompt,
     status: entry.status,
-    model: entry.model ?? 'gpt-5.4-mini',
+    model: entry.model ?? 'gpt-5.4',
     resolvedContext: entry.resolved_context ?? {},
     approvalState: entry.approval_state,
     assistantSummary: entry.assistant_summary ?? '',
@@ -1689,19 +1689,42 @@ function mapWorldPromptEventRow(entry: WorldPromptEventRow): WorldPromptEvent {
   }
 }
 
-function mapWorldPromptSuggestionRow(entry: WorldPromptSuggestionRow): WorldPromptSuggestionRecord {
+function sanitizeWorldPromptSuggestionText(value: unknown) {
+  if (typeof value !== 'string') return ''
+  return value
+    .replace(/^Hosted prompt planning was unavailable, so GraphCore used a local fallback seed\.\s*/i, '')
+    .replace(/\s*Immediate JSON[^\n]*?(?:\.\s*|$)/i, '')
+    .replace(/^oneOf is not permitted in operations\.?\s*/i, '')
+    .replace(/\s*World prompt planner returned JSON that did not match the expected schema\.[\s\S]*$/i, '')
+    .replace(/\s*Planner (?:output|response) validation failed\.[\s\S]*$/i, '')
+    .replace(/\s*Cinematic planner response validation failed\.[\s\S]*$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function mapWorldPromptSuggestionRow(entry: WorldPromptSuggestionRow): WorldPromptSuggestionRecord | null {
+  const label = sanitizeWorldPromptSuggestionText(entry.label)
+  const prompt = sanitizeWorldPromptSuggestionText(entry.prompt)
+  const summary = sanitizeWorldPromptSuggestionText(entry.summary ?? '')
+  const resolvedLabel = label || summary
+  const resolvedPrompt = prompt || ''
+
+  if (!resolvedLabel || !resolvedPrompt) {
+    return null
+  }
+
   return worldPromptSuggestionRecordSchema.parse({
     id: entry.id,
     draftId: entry.draft_id,
     sessionId: entry.session_id,
     turnId: entry.turn_id,
     threadKey: entry.thread_key,
-    label: entry.label,
-    prompt: entry.prompt,
+    label: resolvedLabel,
+    prompt: resolvedPrompt,
     kind: entry.kind,
     style: entry.style,
     source: entry.source,
-    summary: entry.summary ?? '',
+    summary,
     estimatedNodeCount: entry.estimated_node_count,
     estimatedEdgeCount: entry.estimated_edge_count,
     willQueueImages: entry.will_queue_images,
@@ -2642,7 +2665,9 @@ export async function loadProjectSnapshot(
     worldPromptTurns: worldPromptTurns.map((entry) => mapWorldPromptTurnRow(entry)),
     worldPromptMessages: worldPromptMessages.map((entry) => mapWorldPromptMessageRow(entry)),
     worldPromptEvents: worldPromptEvents.map((entry) => mapWorldPromptEventRow(entry)),
-    worldPromptSuggestions: worldPromptSuggestions.map((entry) => mapWorldPromptSuggestionRow(entry)),
+    worldPromptSuggestions: worldPromptSuggestions
+      .map((entry) => mapWorldPromptSuggestionRow(entry))
+      .filter((entry): entry is WorldPromptSuggestionRecord => Boolean(entry)),
     worldThreads: worldThreads.map((entry) => mapWorldThreadRow(entry)),
     worldBuildBatches: worldBuildBatches.map((batch) => ({
       id: batch.id,
@@ -5436,7 +5461,10 @@ export function subscribeWorldPromptEvents(input: {
       filter: `draft_id=eq.${input.draftId}`,
     }, (payload) => {
       if (!payload.new || typeof payload.new !== 'object') return
-      input.onSuggestion?.(mapWorldPromptSuggestionRow(payload.new as WorldPromptSuggestionRow))
+      const nextSuggestion = mapWorldPromptSuggestionRow(payload.new as WorldPromptSuggestionRow)
+      if (nextSuggestion) {
+        input.onSuggestion?.(nextSuggestion)
+      }
     })
     .on('postgres_changes', {
       event: '*',

@@ -5,6 +5,7 @@ import {
   buildWorldPromptRailViewModel,
   buildWorldInspectorViewModel,
   buildWorldPromptTranscriptEntries,
+  describePlannerFailureCategory,
   promptSuggestionImpactLabel,
   stripInternalPlannerDiagnostics,
 } from './worldPresentation.ts'
@@ -14,6 +15,11 @@ import type { WorldEntity } from '../../domain/worldGraph.ts'
 test('stripInternalPlannerDiagnostics removes planner validation tails', () => {
   const input = 'Working summary. Planner output validation failed. extra diagnostics follow'
   assert.equal(stripInternalPlannerDiagnostics(input), 'Working summary.')
+})
+
+test('stripInternalPlannerDiagnostics removes fallback and schema-operation prefixes', () => {
+  const input = 'Hosted prompt planning was unavailable, so GraphCore used a local fallback seed. oneOf is not permitted in operations. Immediate JSON response invalid. Keep the world compact.'
+  assert.equal(stripInternalPlannerDiagnostics(input), 'Keep the world compact.')
 })
 
 test('promptSuggestionImpactLabel joins impact parts', () => {
@@ -33,6 +39,10 @@ test('promptSuggestionImpactLabel joins impact parts', () => {
   } satisfies WorldPromptSuggestion
 
   assert.equal(promptSuggestionImpactLabel(suggestion), '+2 nodes · +3 links · images')
+})
+
+test('describePlannerFailureCategory returns readable labels', () => {
+  assert.equal(describePlannerFailureCategory('schema_validation_failed'), 'planner schema mismatch')
 })
 
 test('buildWorldPromptTranscriptEntries folds applied events into readable rows', () => {
@@ -223,6 +233,46 @@ test('buildWorldPromptTranscriptEntries renders clarification question and answe
   assert.ok(entries.some((entry) => entry.kind === 'clarification_answer' && entry.detail === 'Add occult influence'))
 })
 
+test('buildWorldPromptTranscriptEntries drops diagnostic-only suggestions', () => {
+  const events: WorldPromptEvent[] = [{
+    id: 'e-diagnostic-suggestion',
+    sessionId: 's1',
+    turnId: 't-diagnostic',
+    draftId: 'd1',
+    sequence: 1,
+    eventType: 'planner_status',
+    opId: null,
+    payload: {
+      plannerStatus: 'blocked',
+      suggestions: [{
+        id: 'sg-bad',
+        label: 'Hosted prompt planning was unavailable, so GraphCore used a local fallback seed.',
+        prompt: 'oneOf is not permitted in operations.',
+        kind: 'repair_prompt',
+        style: 'primary',
+        source: 'repair',
+        threadKey: null,
+        summary: 'Immediate JSON response invalid.',
+        estimatedNodeCount: 0,
+        estimatedEdgeCount: 0,
+        willQueueImages: false,
+        willQueueCinematics: false,
+      }],
+      diagnostics: [],
+    },
+    metadata: {},
+    createdAt: '2026-04-22T10:02:00.000Z',
+  }]
+
+  const entries = buildWorldPromptTranscriptEntries({
+    events,
+    messages: [],
+    entityByKey: new Map(),
+  })
+
+  assert.equal(entries.some((entry) => entry.kind === 'suggestion_set' || entry.kind === 'clarification_question'), false)
+})
+
 test('buildWorldPromptTranscriptEntries renders continuation without suggestion rows', () => {
   const messages: WorldPromptMessage[] = [{
     id: 'm-freeform',
@@ -397,6 +447,12 @@ test('buildWorldPromptRailViewModel returns blocked for contradictory classifica
   const blockedTurn = makeTurn({
     metadata: {
       classification: 'contradictory_or_low_confidence',
+      plannerFailure: {
+        category: 'timeout',
+        message: 'OpenAI responses request timed out after 60000ms.',
+        fallbackUsed: true,
+        occurredAt: '2026-04-22T10:00:00.000Z',
+      },
     },
   })
 
@@ -409,6 +465,7 @@ test('buildWorldPromptRailViewModel returns blocked for contradictory classifica
 
   assert.equal(viewModel.state, 'blocked')
   assert.equal(viewModel.statusLabel, 'Blocked')
+  assert.equal(viewModel.plannerFailure?.category, 'timeout')
 })
 
 test('buildWorldPromptRailViewModel returns approval state when preview ops need approval', () => {

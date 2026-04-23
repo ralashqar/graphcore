@@ -28,6 +28,7 @@ import {
   type WorldPromptEvent,
   type WorldPromptMessage,
   type WorldPromptPlanPreview,
+  type WorldPromptPlannerFailure,
   type WorldPromptPlanPreviewItem,
   type WorldPromptScopeDecision,
   type WorldPromptSession,
@@ -60,6 +61,7 @@ import {
   type WorldBuildStatusResponse,
 } from '../../../src/domain/worldBuild.ts'
 import { runOpenAiResponses } from './openai.ts'
+import { normalizeStrictJsonSchema } from './structured-output.ts'
 import { generateExpansionPlan, generateSeedPlan } from './world-graph.ts'
 
 type SupabaseClient = any
@@ -277,10 +279,58 @@ function formatIssues(issues: Array<{ path: PropertyKey[]; message: string }>) {
 function stripInternalPlannerDiagnostics(text: string) {
   if (!text.trim()) return ''
   return text
+    .replace(/^Hosted prompt planning was unavailable, so GraphCore used a local fallback seed\.\s*/i, '')
+    .replace(/\s*Immediate JSON[^\n]*?(?:\.\s*|$)/i, '')
+    .replace(/^oneOf is not permitted in operations\.?\s*/i, '')
     .replace(/\s*World prompt planner returned JSON that did not match the expected schema\.[\s\S]*$/i, '')
     .replace(/\s*Planner (?:output|response) validation failed\.[\s\S]*$/i, '')
     .replace(/\s*Cinematic planner response validation failed\.[\s\S]*$/i, '')
     .trim()
+}
+
+function sanitizeSuggestionText(value: unknown) {
+  if (typeof value !== 'string') return ''
+  return stripInternalPlannerDiagnostics(value).replace(/\s+/g, ' ').trim()
+}
+
+function sanitizeSuggestionRecord(input: {
+  id: string
+  label: unknown
+  prompt: unknown
+  summary: unknown
+  kind: WorldPromptSuggestion['kind']
+  style: WorldPromptSuggestion['style']
+  source: WorldPromptSuggestion['source']
+  threadKey?: string | null
+  estimatedNodeCount?: number | null
+  estimatedEdgeCount?: number | null
+  willQueueImages?: boolean | null
+  willQueueCinematics?: boolean | null
+}) {
+  const label = sanitizeSuggestionText(input.label)
+  const prompt = sanitizeSuggestionText(input.prompt)
+  const summary = sanitizeSuggestionText(input.summary)
+  const resolvedLabel = label || summary
+  const resolvedPrompt = prompt || ''
+
+  if (!resolvedLabel || !resolvedPrompt) {
+    return null
+  }
+
+  return {
+    id: input.id,
+    label: resolvedLabel,
+    prompt: resolvedPrompt,
+    kind: input.kind,
+    style: input.style,
+    source: input.source,
+    threadKey: input.threadKey ?? null,
+    summary,
+    estimatedNodeCount: input.estimatedNodeCount ?? 0,
+    estimatedEdgeCount: input.estimatedEdgeCount ?? 0,
+    willQueueImages: input.willQueueImages ?? false,
+    willQueueCinematics: input.willQueueCinematics ?? false,
+  } satisfies WorldPromptSuggestion
 }
 
 function normalizePlannerOperation(rawOp: unknown, index: number) {
@@ -444,6 +494,47 @@ function normalizeName(value: string) {
   return value.toLowerCase().trim().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ')
 }
 
+function suggestionTextForComparison(value: string) {
+  return stripInternalPlannerDiagnostics(value)
+    .toLowerCase()
+    .replace(/["'`]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function suggestionLooksLikePromptEcho(suggestionPrompt: string, sourcePrompt: string) {
+  const suggestionText = suggestionTextForComparison(suggestionPrompt)
+  const sourceText = suggestionTextForComparison(sourcePrompt)
+  if (!suggestionText || !sourceText) return false
+  if (suggestionText === sourceText) return true
+  if (suggestionText.length >= 20 && sourceText.includes(suggestionText)) return true
+  if (sourceText.length >= 20 && suggestionText.includes(sourceText)) return true
+  const similarity = diceCoefficient(normalizeName(suggestionText), normalizeName(sourceText))
+  return similarity >= 0.9
+}
+
+function suggestionIsActionable(suggestion: Pick<WorldPromptSuggestion, 'label' | 'prompt' | 'summary' | 'kind'>, sourcePrompt?: string | null) {
+  const label = stripInternalPlannerDiagnostics(suggestion.label).replace(/\s+/g, ' ').trim()
+  const prompt = stripInternalPlannerDiagnostics(suggestion.prompt).replace(/\s+/g, ' ').trim()
+  const summary = stripInternalPlannerDiagnostics(suggestion.summary ?? '').replace(/\s+/g, ' ').trim()
+  if (!label || !prompt) return false
+  if (!/[a-z0-9]/i.test(prompt)) return false
+  if (label.toLowerCase() === 'plan only' && suggestion.kind === 'plan_only' && !summary) return false
+  if (sourcePrompt && suggestionLooksLikePromptEcho(prompt, sourcePrompt)) return false
+  return true
+}
+
+function buildNameVariants(value: string) {
+  const normalized = normalizeName(value)
+  if (!normalized) return []
+  const stripped = normalized
+    .replace(/^(the|a|an)\s+/i, '')
+    .replace(/^(king|queen|lord|lady|prince|princess|duke|duchess|emperor|empress|captain|chief|master)\s+/i, '')
+    .replace(/^(house|kingdom|realm|faction|order|circle|guild|clan|empire|city|village|fortress)\s+/i, '')
+    .trim()
+  return Array.from(new Set([normalized, stripped].filter(Boolean)))
+}
+
 function diceCoefficient(left: string, right: string) {
   if (!left || !right) return 0
   if (left === right) return 1
@@ -477,7 +568,7 @@ function mapSessionRow(row: WorldPromptSessionRow): WorldPromptSession {
     lastContext: row.last_context ?? {},
     selectedRootEntityKey: row.selected_root_entity_key,
     selectedViewKey: row.selected_view_key,
-    model: row.model ?? 'gpt-5.4-mini',
+    model: row.model ?? 'gpt-5.4',
     metadata: row.metadata ?? {},
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -491,7 +582,7 @@ function mapTurnRow(row: WorldPromptTurnRow): WorldPromptTurn {
     draftId: row.draft_id,
     prompt: row.prompt,
     status: row.status,
-    model: row.model ?? 'gpt-5.4-mini',
+    model: row.model ?? 'gpt-5.4',
     resolvedContext: row.resolved_context ?? {},
     approvalState: row.approval_state,
     assistantSummary: row.assistant_summary ?? '',
@@ -531,23 +622,42 @@ function mapEventRow(row: WorldPromptEventRow): WorldPromptEvent {
   }
 }
 
-function mapSuggestionRow(row: WorldPromptSuggestionRow): WorldPromptSuggestionRecord {
+function mapSuggestionRow(row: WorldPromptSuggestionRow): WorldPromptSuggestionRecord | null {
+  const sanitized = sanitizeSuggestionRecord({
+    id: row.id,
+    label: row.label,
+    prompt: row.prompt,
+    summary: row.summary,
+    kind: row.kind,
+    style: row.style,
+    source: row.source,
+    threadKey: row.thread_key,
+    estimatedNodeCount: row.estimated_node_count,
+    estimatedEdgeCount: row.estimated_edge_count,
+    willQueueImages: row.will_queue_images,
+    willQueueCinematics: row.will_queue_cinematics,
+  })
+
+  if (!sanitized) {
+    return null
+  }
+
   return worldPromptSuggestionRecordSchema.parse({
     id: row.id,
     draftId: row.draft_id,
     sessionId: row.session_id,
     turnId: row.turn_id,
-    threadKey: row.thread_key,
-    label: row.label,
-    prompt: row.prompt,
-    kind: row.kind,
-    style: row.style,
-    source: row.source,
-    summary: row.summary ?? '',
-    estimatedNodeCount: row.estimated_node_count,
-    estimatedEdgeCount: row.estimated_edge_count,
-    willQueueImages: row.will_queue_images,
-    willQueueCinematics: row.will_queue_cinematics,
+    threadKey: sanitized.threadKey,
+    label: sanitized.label,
+    prompt: sanitized.prompt,
+    kind: sanitized.kind,
+    style: sanitized.style,
+    source: sanitized.source,
+    summary: sanitized.summary,
+    estimatedNodeCount: sanitized.estimatedNodeCount,
+    estimatedEdgeCount: sanitized.estimatedEdgeCount,
+    willQueueImages: sanitized.willQueueImages,
+    willQueueCinematics: sanitized.willQueueCinematics,
     state: row.state as WorldPromptSuggestionRecord['state'],
     rank: row.rank,
     usedTurnId: row.used_turn_id,
@@ -836,10 +946,39 @@ function deriveAutoSessionTitle(input: {
   prompt: string
   assistantSummary?: string | null
 }) {
-  const seed = input.assistantSummary?.trim() || input.prompt.trim() || 'New chat'
+  const sanitizedAssistantSummary = (input.assistantSummary ?? '')
+    .replace(/^Hosted prompt planning was unavailable, so GraphCore used a local fallback seed\.\s*/i, '')
+    .replace(/^Plan-only mode: no graph mutations were applied\.\s*Review the preview and apply the first wave only if it looks right\.\s*/i, '')
+    .trim()
+  const seed = sanitizedAssistantSummary || input.prompt.trim() || 'New chat'
   const normalized = seed.replace(/\s+/g, ' ').trim()
   if (!normalized) return 'New chat'
   return normalized.length > 72 ? `${normalized.slice(0, 69).trimEnd()}...` : normalized
+}
+
+function classifyPlannerFailure(error: unknown): WorldPromptPlannerFailure {
+  const rawMessage = error instanceof Error ? error.message : String(error)
+  const normalizedMessage = rawMessage.trim() || 'Hosted prompt planning failed.'
+  let category: WorldPromptPlannerFailure['category'] = 'unknown'
+  let message = normalizedMessage
+
+  if (/timed out after/i.test(normalizedMessage)) {
+    category = 'timeout'
+  } else if (normalizedMessage.includes('[world-prompt-planner]')) {
+    category = 'upstream_error'
+    message = normalizedMessage.replace(/^\[world-prompt-planner\]\s*/i, '').trim() || 'OpenAI request failed.'
+  } else if (/returned invalid json/i.test(normalizedMessage)) {
+    category = 'invalid_json'
+  } else if (/did not match the expected schema/i.test(normalizedMessage)) {
+    category = 'schema_validation_failed'
+  }
+
+  return {
+    category,
+    message: message.length > 280 ? `${message.slice(0, 277).trimEnd()}...` : message,
+    fallbackUsed: true,
+    occurredAt: new Date().toISOString(),
+  }
 }
 
 function buildRollingSessionMemory(input: {
@@ -912,16 +1051,34 @@ function suggestionGeneratedReason(input: {
 function finalizeSuggestionSet(input: {
   snapshot: WorldPromptSnapshot
   selectedThreadKey?: string | null
+  sourcePrompt?: string | null
   suggestions: WorldPromptSuggestion[]
 }) {
-  const fallback = buildThreadAwareSuggestions({
-    snapshot: input.snapshot,
-    selectedThreadKey: input.selectedThreadKey,
-  })
+  const seededSuggestions = dedupeSuggestions(input.suggestions)
+    .filter((suggestion) => suggestionIsActionable(suggestion, input.sourcePrompt))
+  const hasFocusedNonThreadSuggestion = seededSuggestions.some((suggestion) => (
+    suggestion.source !== 'thread' && suggestion.kind !== 'plan_only'
+  ))
+  const fallback = input.selectedThreadKey
+    ? buildThreadAwareSuggestions({
+        snapshot: input.snapshot,
+        selectedThreadKey: input.selectedThreadKey,
+      }).filter((suggestion) => !suggestion.threadKey || suggestion.threadKey === input.selectedThreadKey)
+    : hasFocusedNonThreadSuggestion
+      ? buildThreadAwareSuggestions({
+          snapshot: input.snapshot,
+          selectedThreadKey: input.selectedThreadKey,
+        }).filter((suggestion) => suggestion.kind === 'plan_only')
+      : buildThreadAwareSuggestions({
+          snapshot: input.snapshot,
+          selectedThreadKey: input.selectedThreadKey,
+        })
   return dedupeSuggestions([
-    ...input.suggestions,
+    ...seededSuggestions,
     ...fallback,
-  ]).slice(0, 6)
+  ])
+    .filter((suggestion) => suggestionIsActionable(suggestion, input.sourcePrompt))
+    .slice(0, 6)
 }
 
 async function supersedeActiveSessionSuggestions(client: SupabaseClient, sessionId: string, excludeIds: string[] = []) {
@@ -970,13 +1127,16 @@ async function persistSessionSuggestions(input: {
   sessionId: string
   turnId: string | null
   selectedThreadKey?: string | null
+  sourcePrompt?: string | null
   suggestions: WorldPromptSuggestion[]
 }) {
   await supersedeActiveSessionSuggestions(input.client, input.sessionId)
-  if (input.suggestions.length === 0) return []
+  const sanitizedSuggestions = dedupeSuggestions(input.suggestions)
+    .filter((suggestion) => suggestionIsActionable(suggestion, input.sourcePrompt))
+  if (sanitizedSuggestions.length === 0) return []
   const response = await input.client
     .from('world_prompt_suggestions')
-    .insert(input.suggestions.map((suggestion, index) => ({
+    .insert(sanitizedSuggestions.map((suggestion, index) => ({
       draft_id: input.draftId,
       session_id: input.sessionId,
       turn_id: input.turnId,
@@ -1005,7 +1165,9 @@ async function persistSessionSuggestions(input: {
     })))
     .select(SUGGESTION_SELECT)
   if (response.error) throw new Error(response.error.message)
-  return ((response.data ?? []) as WorldPromptSuggestionRow[]).map(mapSuggestionRow)
+  return ((response.data ?? []) as WorldPromptSuggestionRow[])
+    .map(mapSuggestionRow)
+    .filter((suggestion): suggestion is WorldPromptSuggestionRecord => Boolean(suggestion))
 }
 
 async function updateSessionLifecycle(input: {
@@ -1095,14 +1257,21 @@ function resolveEntityReference(
     return { entity: byDefinitionKey, candidates: [byDefinitionKey], matchType: 'definition' as const }
   }
 
-  const probe = normalizeName(input.name ?? input.alias ?? '')
-  if (!probe) {
+  const probeVariants = Array.from(new Set([
+    ...buildNameVariants(input.name ?? ''),
+    ...buildNameVariants(input.alias ?? ''),
+  ]))
+  const probe = probeVariants[0] ?? ''
+  if (!probeVariants.length) {
     return { entity: null, candidates: [], matchType: 'none' as const }
   }
 
   const exactCandidates = snapshot.worldEntities.filter((entity) => {
     const names = [entity.name, ...entity.aliases]
-    return names.some((value) => normalizeName(value) === probe)
+    return names.some((value) => {
+      const variants = buildNameVariants(value)
+      return variants.some((variant) => probeVariants.includes(variant))
+    })
   })
   if (exactCandidates.length === 1) {
     return { entity: exactCandidates[0], candidates: exactCandidates, matchType: 'exact_name' as const }
@@ -1111,12 +1280,33 @@ function resolveEntityReference(
     return { entity: null, candidates: exactCandidates, matchType: 'ambiguous_exact' as const }
   }
 
+  const containmentCandidates = snapshot.worldEntities.filter((entity) => {
+    const names = [entity.name, ...entity.aliases]
+    return names.some((value) => {
+      const variants = buildNameVariants(value)
+      return variants.some((variant) => (
+        probeVariants.some((probeVariant) => (
+          probeVariant.length >= 4
+          && variant.length >= 4
+          && (variant.includes(probeVariant) || probeVariant.includes(variant))
+        ))
+      ))
+    })
+  })
+  if (containmentCandidates.length === 1) {
+    return { entity: containmentCandidates[0], candidates: containmentCandidates, matchType: 'containment' as const }
+  }
+  if (containmentCandidates.length > 1) {
+    return { entity: null, candidates: containmentCandidates, matchType: 'ambiguous_containment' as const }
+  }
+
   const scored = snapshot.worldEntities
     .map((entity) => ({
       entity,
       score: Math.max(
-        diceCoefficient(probe, normalizeName(entity.name)),
-        ...entity.aliases.map((alias) => diceCoefficient(probe, normalizeName(alias))),
+        ...[entity.name, ...entity.aliases].flatMap((value) => (
+          buildNameVariants(value).flatMap((variant) => probeVariants.map((probeVariant) => diceCoefficient(probeVariant, variant)))
+        )),
       ),
     }))
     .filter((entry) => entry.score >= 0.82)
@@ -1326,26 +1516,27 @@ function buildPromptSuggestion(input: {
   willQueueImages?: boolean
   willQueueCinematics?: boolean
 }) {
-  return {
+  return sanitizeSuggestionRecord({
     id: input.id,
     label: input.label,
     prompt: input.prompt,
+    summary: input.summary ?? '',
     kind: input.kind,
     style: input.style ?? 'secondary',
     source: input.source ?? 'repair',
     threadKey: input.threadKey ?? null,
-    summary: input.summary ?? '',
     estimatedNodeCount: input.estimatedNodeCount ?? 0,
     estimatedEdgeCount: input.estimatedEdgeCount ?? 0,
     willQueueImages: input.willQueueImages ?? false,
     willQueueCinematics: input.willQueueCinematics ?? false,
-  } satisfies WorldPromptSuggestion
+  })
 }
 
 function dedupeSuggestions(suggestions: WorldPromptSuggestion[]) {
   const seen = new Set<string>()
   const deduped: WorldPromptSuggestion[] = []
   for (const suggestion of suggestions) {
+    if (!suggestion.label.trim() || !suggestion.prompt.trim()) continue
     if (seen.has(suggestion.label)) continue
     seen.add(suggestion.label)
     deduped.push(suggestion)
@@ -1367,20 +1558,23 @@ function suggestionsFromPlannerIdeas(input: {
   ideas: Array<z.infer<typeof plannerIdeaSchema>>
   fallbackKind: WorldPromptSuggestion['kind']
 }) {
-  return input.ideas.map((idea) => buildPromptSuggestion({
-    id: idea.id,
-    label: idea.label,
-    prompt: idea.prompt,
-    kind: idea.kind ?? input.fallbackKind,
-    style: idea.style,
-    source: idea.source,
-    threadKey: idea.threadKey,
-    summary: idea.summary,
-    estimatedNodeCount: idea.estimatedNodeCount,
-    estimatedEdgeCount: idea.estimatedEdgeCount,
-    willQueueImages: idea.willQueueImages,
-    willQueueCinematics: idea.willQueueCinematics,
-  }))
+  return input.ideas.flatMap((idea) => {
+    const suggestion = buildPromptSuggestion({
+      id: idea.id,
+      label: idea.label,
+      prompt: idea.prompt,
+      kind: idea.kind ?? input.fallbackKind,
+      style: idea.style,
+      source: idea.source,
+      threadKey: idea.threadKey,
+      summary: idea.summary,
+      estimatedNodeCount: idea.estimatedNodeCount,
+      estimatedEdgeCount: idea.estimatedEdgeCount,
+      willQueueImages: idea.willQueueImages,
+      willQueueCinematics: idea.willQueueCinematics,
+    })
+    return suggestion ? [suggestion] : []
+  })
 }
 
 function buildThreadAwareSuggestions(input: {
@@ -1405,27 +1599,33 @@ function buildThreadAwareSuggestions(input: {
   ].filter((thread): thread is WorldThread => Boolean(thread)).slice(0, 3)
 
   return dedupeSuggestions([
-    ...seedThreads.map((thread, index) => buildPromptSuggestion({
-      id: `thread-${thread.key}-continue`,
-      label: thread.title,
-      prompt: canonicalThreadPrompt({ thread, mode: 'continue' }),
-      kind: 'continue_scope',
-      style: index === 0 ? 'primary' : 'secondary',
-      source: 'thread',
-      threadKey: thread.key,
-      summary: thread.summary || 'Continue this active world thread with one compact additive beat.',
-      estimatedNodeCount: 2,
-      estimatedEdgeCount: 2,
-    })),
-    buildPromptSuggestion({
-      id: 'thread-plan-only',
-      label: 'Plan Only',
-      prompt: 'Plan only the next best world beat from the active threads. Preserve canon and do not apply graph mutations.',
-      kind: 'plan_only',
-      style: 'secondary',
-      source: 'thread',
-      summary: 'Preview the next story-gardening beat without mutating the graph.',
+    ...seedThreads.flatMap((thread, index) => {
+      const suggestion = buildPromptSuggestion({
+        id: `thread-${thread.key}-continue`,
+        label: thread.title,
+        prompt: canonicalThreadPrompt({ thread, mode: 'continue' }),
+        kind: 'continue_scope',
+        style: index === 0 ? 'primary' : 'secondary',
+        source: 'thread',
+        threadKey: thread.key,
+        summary: thread.summary || 'Continue this active world thread with one compact additive beat.',
+        estimatedNodeCount: 2,
+        estimatedEdgeCount: 2,
+      })
+      return suggestion ? [suggestion] : []
     }),
+    ...(() => {
+      const suggestion = buildPromptSuggestion({
+        id: 'thread-plan-only',
+        label: 'Plan Only',
+        prompt: 'Plan only the next best world beat from the active threads. Preserve canon and do not apply graph mutations.',
+        kind: 'plan_only',
+        style: 'secondary',
+        source: 'thread',
+        summary: 'Preview the next story-gardening beat without mutating the graph.',
+      })
+      return suggestion ? [suggestion] : []
+    })(),
   ])
 }
 
@@ -1584,7 +1784,7 @@ function buildFallbackPlannerOpsFromWorldGraph(input: {
           estimatedNodeCount: 2,
           estimatedEdgeCount: 2,
         }),
-      ]
+      ].filter((suggestion): suggestion is WorldPromptSuggestion => Boolean(suggestion))
     : [
         buildPromptSuggestion({
           id: 'fallback-expand-selection',
@@ -1599,7 +1799,7 @@ function buildFallbackPlannerOpsFromWorldGraph(input: {
           estimatedNodeCount: 2,
           estimatedEdgeCount: 2,
         }),
-      ]
+      ].filter((suggestion): suggestion is WorldPromptSuggestion => Boolean(suggestion))
 
   return worldPromptPlannerSchema.parse({
     classification: isPlanOnlyPrompt(input.payload.prompt) ? 'graphable_plan_only' : 'graphable_direct',
@@ -1623,7 +1823,8 @@ function buildFallbackPlannerOpsFromWorldGraph(input: {
     ],
     suggestionCandidates: dedupeSuggestions([
       ...suggestionTail,
-      buildPromptSuggestion({
+      ...(() => {
+        const suggestion = buildPromptSuggestion({
         id: 'fallback-plan-only',
         label: 'Plan Only',
         prompt: 'Plan only the next best additions for this world. Preserve canon and do not apply graph mutations.',
@@ -1631,7 +1832,9 @@ function buildFallbackPlannerOpsFromWorldGraph(input: {
         style: 'secondary',
         source: 'wave2',
         summary: 'Preview the next beat without mutating the graph.',
-      }),
+        })
+        return suggestion ? [suggestion] : []
+      })(),
     ]),
   })
 }
@@ -1640,8 +1843,6 @@ async function buildFallbackPromptPlan(input: {
   payload: WorldPromptStartTurnRequest
   plannerError: unknown
 }) {
-  const assistantPrefix = 'Hosted prompt planning was unavailable, so GraphCore used a local fallback seed.'
-
   if (
     input.payload.selectedRootEntityKey
     && input.payload.snapshot.worldEntities.some((entity) => entity.key === input.payload.selectedRootEntityKey)
@@ -1654,7 +1855,7 @@ async function buildFallbackPromptPlan(input: {
     return buildFallbackPlannerOpsFromWorldGraph({
       payload: input.payload,
       requestSummary: expansion.requestSummary || 'World Expansion',
-      assistantSummary: [assistantPrefix, expansion.assistantNote].filter(Boolean).join(' '),
+      assistantSummary: stripInternalPlannerDiagnostics(expansion.assistantNote ?? ''),
       entities: expansion.entities,
       relationships: expansion.relationships,
     })
@@ -1668,7 +1869,7 @@ async function buildFallbackPromptPlan(input: {
   return buildFallbackPlannerOpsFromWorldGraph({
     payload: input.payload,
     requestSummary: seed.requestSummary || 'Starter World',
-    assistantSummary: [assistantPrefix, seed.assistantNote].filter(Boolean).join(' '),
+    assistantSummary: stripInternalPlannerDiagnostics(seed.assistantNote ?? ''),
     entities: seed.entities,
     relationships: seed.relationships,
   })
@@ -1730,7 +1931,7 @@ function buildBlockedSuggestions(prompt: string, snapshot: WorldPromptSnapshot) 
       source: 'repair',
       summary: 'Preview the next best world-building moves without changing the graph.',
     }),
-  ])
+  ].filter((suggestion): suggestion is WorldPromptSuggestion => Boolean(suggestion)))
 }
 
 function buildStagedSuggestions(input: {
@@ -1790,7 +1991,7 @@ function buildStagedSuggestions(input: {
   ].filter((entry): entry is WorldPromptSuggestion => Boolean(entry))
 
   if (suggestions.length < 4) {
-    suggestions.unshift(buildPromptSuggestion({
+    const conflictSuggestion = buildPromptSuggestion({
       id: 'continue-conflict',
       label: 'Continue Conflict',
       prompt: `Continue from "${input.prompt}" by expanding only the main conflict, alliances, and rivalries that should come next.`,
@@ -1800,7 +2001,10 @@ function buildStagedSuggestions(input: {
       summary: 'Continue only the conflict cluster instead of broadening every axis at once.',
       estimatedNodeCount: 2,
       estimatedEdgeCount: 4,
-    }))
+    })
+    if (conflictSuggestion) {
+      suggestions.unshift(conflictSuggestion)
+    }
   }
 
   return dedupeSuggestions(suggestions)
@@ -2533,11 +2737,12 @@ async function generatePromptPlan(input: {
 }) {
   const projectContextGuidance = describeProjectContextForPlanner(input.payload.snapshot.projectContext)
   const debugEnabled = shouldDebugWorldPromptOpenAi()
+  const plannerResponseSchema = normalizeStrictJsonSchema(z.toJSONSchema(worldPromptPlannerSchema))
   const instructions = [
     'You are the GraphCore prompt-to-world graph planner.',
-    'Return compact JSON only.',
+    'Return compact JSON only that matches the provided schema exactly.',
     'Generate world-graph actions, not prose conversation.',
-    'Return top-level keys: classification, assistantSummary, wave1Ops, wave2Ideas, optionalIdeas, threadCandidates, suggestionCandidates.',
+    'Return top-level keys: classification, assistantSummary, operations, wave1Ops, wave2Ideas, optionalIdeas, threadCandidates, suggestionCandidates.',
     'Allowed operations for wave1Ops: upsert_entity, update_entity, upsert_relationship, update_relationship, create_derived_result, queue_image_generation, queue_cinematic_generation, assistant_note.',
     'Favor additive graph growth.',
     'Use queue_image_generation only for actor, place, or object nodes when the prompt is visually explicit.',
@@ -2546,10 +2751,13 @@ async function generatePromptPlan(input: {
     'If the prompt asks for plan only, preview only, or no mutations, put the proposed applyable ops in wave1Ops, set classification to graphable_plan_only, and do not assume they will be applied immediately.',
     'When referring to existing world items, prefer targetEntityKey when obvious, otherwise use entity names and let the resolver match them.',
     'Default to applyMode auto. Favor additive graph growth and avoid proposing semantic rewrites that would require human confirmation.',
+    'When the user explicitly names entities, places, groups, concepts, or events, preserve those proper nouns verbatim and create graph nodes for them instead of inventing replacements.',
+    'If the prompt says something like "kingdom called X", "character called Y", "faction called Z", or "king called Q", infer the obvious world entity types directly.',
+    'For a simple direct creation prompt, wave1Ops should contain the named entities and the most obvious relationships before proposing any optional follow-up suggestions.',
     'Use graphable_broad when the request wants too much for one turn. In that case, keep only the best first wave in wave1Ops and place follow-up ideas in wave2Ideas/optionalIdeas.',
     'Use not_graphable or contradictory_or_low_confidence when the prompt cannot be mapped cleanly. In that case, wave1Ops may be empty and suggestionCandidates should repair the request.',
     'threadCandidates should describe the main unresolved narrative or lore threads implied by the prompt and resulting graph changes.',
-    'Suggestion ideas should be concrete and world-specific, not generic categories.',
+    'Suggestion ideas should be concrete and world-specific, not generic categories, and should never just paraphrase or repeat the user prompt.',
     projectContextGuidance ? `Project guidance: ${projectContextGuidance}` : null,
     'Keep operations compact and high-signal.',
   ].filter(Boolean).join('\n')
@@ -2594,13 +2802,13 @@ async function generatePromptPlan(input: {
 
     const response = await runOpenAiResponses({
       model: input.payload.model,
-      input: [
-        { role: 'system', content: [{ type: 'input_text', text: instructions }] },
-        { role: 'user', content: [{ type: 'input_text', text: prompt }] },
-      ],
+      input: prompt,
+      instructions,
       text: {
         format: {
-          type: 'json_object',
+          type: 'json_schema',
+          name: 'world_prompt_plan',
+          schema: plannerResponseSchema,
         },
       },
       reasoning: { effort: 'low' },
@@ -2609,7 +2817,7 @@ async function generatePromptPlan(input: {
         surface: 'grow-mode',
       },
       store: false,
-      timeoutMs: 45_000,
+      timeoutMs: 60_000,
     })
 
     if (debugEnabled) {
@@ -2644,13 +2852,19 @@ async function generatePromptPlan(input: {
       throw new Error(`World prompt planner returned JSON that did not match the expected schema. ${formatIssues(validated.error.issues)}`)
     }
 
-    return validated.data
+    return {
+      plan: validated.data,
+      plannerFailure: null,
+    }
   } catch (error) {
-    console.error('[world-prompt] planner failed, using fallback plan.', error)
-    return buildFallbackPromptPlan({
-      payload: input.payload,
-      plannerError: error,
+    const plannerFailure = classifyPlannerFailure(error)
+    console.error('[world-prompt] planner failed; world prompt turn will fail without fallback.', {
+      error,
+      plannerFailure,
     })
+    const plannerError = new Error(`Hosted prompt planning failed: ${plannerFailure.message}`)
+    ;(plannerError as Error & { plannerFailure?: WorldPromptPlannerFailure }).plannerFailure = plannerFailure
+    throw plannerError
   }
 }
 
@@ -3049,13 +3263,39 @@ async function applyPromptOp(input: {
     }
 
     if (!relationship.sourceEntityKey || !relationship.targetEntityKey) {
-      throw new Error('Relationship endpoints must be resolved before apply.')
+      const resolvedSource = resolveEntityReference(input.snapshot, {
+        entityKey: relationship.sourceEntityKey,
+        definitionKey: relationship.sourceRef?.definitionKey,
+        name: relationship.sourceRef?.name ?? relationship.sourceEntityKey,
+        alias: relationship.sourceRef?.alias,
+      })
+      const resolvedTarget = resolveEntityReference(input.snapshot, {
+        entityKey: relationship.targetEntityKey,
+        definitionKey: relationship.targetRef?.definitionKey,
+        name: relationship.targetRef?.name ?? relationship.targetEntityKey,
+        alias: relationship.targetRef?.alias,
+      })
+      if (resolvedSource.entity && resolvedTarget.entity && resolvedSource.candidates.length === 1 && resolvedTarget.candidates.length === 1) {
+        relationship.sourceEntityKey = resolvedSource.entity.key
+        relationship.targetEntityKey = resolvedTarget.entity.key
+      }
+    }
+    if (!relationship.sourceEntityKey || !relationship.targetEntityKey) {
+      return {
+        applied: {},
+        queue: null,
+        note: 'Skipped one relationship because its endpoints could not be resolved cleanly from the current world state.',
+      }
     }
     const key = buildWorldRelationshipKey(input.snapshot, relationship.sourceEntityKey, relationship.verb, relationship.targetEntityKey)
     const sourceEntity = input.snapshot.worldEntities.find((entity) => entity.key === relationship.sourceEntityKey) ?? null
     const targetEntity = input.snapshot.worldEntities.find((entity) => entity.key === relationship.targetEntityKey) ?? null
     if (!sourceEntity || !targetEntity) {
-      throw new Error('Relationship endpoints are missing.')
+      return {
+        applied: {},
+        queue: null,
+        note: 'Skipped one relationship because one or both endpoints were still missing after entity creation.',
+      }
     }
     const insertResponse = await input.client
       .from('world_relationships')
@@ -3445,7 +3685,9 @@ async function loadActiveSessionSuggestions(client: SupabaseClient, sessionId: s
     .order('rank', { ascending: true })
     .order('created_at', { ascending: true })
   if (response.error) throw new Error(response.error.message)
-  return (response.data ?? []).map((row) => mapSuggestionRow(row as WorldPromptSuggestionRow))
+  return (response.data ?? [])
+    .map((row) => mapSuggestionRow(row as WorldPromptSuggestionRow))
+    .filter((suggestion): suggestion is WorldPromptSuggestionRecord => Boolean(suggestion))
 }
 
 async function loadWorldEntityByDraftAndKey(client: SupabaseClient, draftId: string, entityKey: string) {
@@ -3508,6 +3750,7 @@ async function refreshTurnSuggestions(input: {
   const finalizedSuggestions = finalizeSuggestionSet({
     snapshot: input.snapshot,
     selectedThreadKey: input.selectedThreadKey,
+    sourcePrompt: input.turn.prompt,
     suggestions: assistantSuggestions.length > 0 ? assistantSuggestions : (preview?.suggestions ?? []),
   })
   return persistSessionSuggestions({
@@ -3516,6 +3759,7 @@ async function refreshTurnSuggestions(input: {
     sessionId: input.session.id,
     turnId: input.turn.id,
     selectedThreadKey: input.selectedThreadKey,
+    sourcePrompt: input.turn.prompt,
     suggestions: finalizedSuggestions,
   })
 }
@@ -3639,9 +3883,12 @@ export async function startWorldPromptTurn(input: {
     const selectedSuggestion = payload.selectedSuggestionId
       ? await loadSuggestionById(input.client, payload.selectedSuggestionId)
       : null
-    const activeSessionSuggestions = payload.selectedSuggestionId
+    const rawActiveSessionSuggestions = payload.selectedSuggestionId
       ? []
       : await loadActiveSessionSuggestions(input.client, workingSession.id)
+    const activeSessionSuggestions = rawActiveSessionSuggestions.filter((suggestion) => (
+      suggestionIsActionable(suggestion, payload.prompt)
+    ))
     const selectedSuggestionUiKind = selectedSuggestion
       ? (selectedSuggestion.metadata?.uiKind === 'clarification' ? 'clarification' : 'next_move')
       : null
@@ -3679,22 +3926,30 @@ export async function startWorldPromptTurn(input: {
       turn: { id: turn.id },
     })
 
-    const generated = await generatePromptPlan({
+    const generatedResult = await generatePromptPlan({
       payload,
       session: workingSession,
       summaryMemory: compacted.summaryMemory,
       recentMessages: compacted.recentMessages,
     })
+    const generated = generatedResult.plan
+    const plannerFailure = generatedResult.plannerFailure
     await throwIfTurnCancelled(input.client, turn.id)
 
     const planningSnapshot = structuredClone(payload.snapshot) as WorldPromptSnapshot
-    const sanitizedOps: PromptToWorldOp[] = []
+    const sanitizedById = new Map<string, PromptToWorldOp>()
     const plannerOps = generated.wave1Ops.length > 0 ? generated.wave1Ops : generated.operations
-    for (const operation of plannerOps) {
+    for (const operation of plannerOps.filter((op) => op.op === 'upsert_entity')) {
       const sanitized = forcePromptOpAutoApply(sanitizePromptOp({ op: operation, snapshot: planningSnapshot }))
-      sanitizedOps.push(sanitized)
+      sanitizedById.set(operation.id, sanitized)
       projectSanitizedOpIntoSnapshot(planningSnapshot, sanitized)
     }
+    for (const operation of plannerOps.filter((op) => op.op !== 'upsert_entity')) {
+      const sanitized = forcePromptOpAutoApply(sanitizePromptOp({ op: operation, snapshot: planningSnapshot }))
+      sanitizedById.set(operation.id, sanitized)
+      projectSanitizedOpIntoSnapshot(planningSnapshot, sanitized)
+    }
+    const sanitizedOps = plannerOps.map((operation) => sanitizedById.get(operation.id) ?? operation)
 
     const persistedThreads = await upsertWorldThreads({
       client: input.client,
@@ -3732,6 +3987,7 @@ export async function startWorldPromptTurn(input: {
     const finalizedSuggestions = finalizeSuggestionSet({
       snapshot: planningSnapshot,
       selectedThreadKey: payload.selectedThreadKey,
+      sourcePrompt: payload.prompt,
       suggestions: execution.suggestions,
     })
     const persistedSuggestions = await persistSessionSuggestions({
@@ -3740,6 +3996,7 @@ export async function startWorldPromptTurn(input: {
       sessionId: workingSession.id,
       turnId: turn.id,
       selectedThreadKey: payload.selectedThreadKey,
+      sourcePrompt: payload.prompt,
       suggestions: finalizedSuggestions,
     })
     if (payload.selectedSuggestionId) {
@@ -3748,6 +4005,7 @@ export async function startWorldPromptTurn(input: {
 
     await writeEvent('planner_status', {
       plannerStatus: 'scoping',
+      plannerFailure: plannerFailure ?? undefined,
       classification: execution.classification,
       scope: execution.scope,
       preview: execution.preview ?? undefined,
@@ -3763,6 +4021,7 @@ export async function startWorldPromptTurn(input: {
     if (execution.mode === 'blocked') {
       await writeEvent('planner_status', {
         plannerStatus: 'blocked',
+        plannerFailure: plannerFailure ?? undefined,
         classification: execution.classification,
         scope: execution.scope,
         preview: execution.preview ?? undefined,
@@ -3775,6 +4034,7 @@ export async function startWorldPromptTurn(input: {
     } else if (execution.mode === 'preview') {
       await writeEvent('assistant_note', {
         classification: execution.classification,
+        plannerFailure: plannerFailure ?? undefined,
         note: stripInternalPlannerDiagnostics(execution.note),
         preview: execution.preview ?? undefined,
         scope: execution.scope,
@@ -3786,6 +4046,7 @@ export async function startWorldPromptTurn(input: {
     } else {
       await writeEvent('planner_status', {
         plannerStatus: 'applying',
+        plannerFailure: plannerFailure ?? undefined,
         classification: execution.classification,
         scope: execution.scope,
         preview: execution.preview ?? undefined,
@@ -3846,6 +4107,7 @@ export async function startWorldPromptTurn(input: {
     if (execution.note || finalizedSuggestions.length > 0) {
       await writeEvent('assistant_note', {
         classification: execution.classification,
+        plannerFailure: plannerFailure ?? undefined,
         note: stripInternalPlannerDiagnostics(execution.note),
         preview: execution.preview ?? undefined,
         suggestions: finalizedSuggestions,
@@ -3871,6 +4133,7 @@ export async function startWorldPromptTurn(input: {
       role: 'assistant',
       content: assistantSummary,
       metadata: {
+        plannerFailure: plannerFailure ?? undefined,
         opCount: opsToRun.length,
         classification: execution.classification,
         preview: execution.preview,
@@ -3890,6 +4153,8 @@ export async function startWorldPromptTurn(input: {
       approval_state: 'not_required',
       assistant_summary: assistantSummary,
       metadata: {
+        ...(turn.metadata ?? {}),
+        plannerFailure: plannerFailure ?? undefined,
         opCount: opsToRun.length,
         pendingApprovalCount: 0,
         classification: execution.classification,
@@ -3921,6 +4186,7 @@ export async function startWorldPromptTurn(input: {
 
     await writeEvent('planner_status', {
       plannerStatus: 'completed',
+      plannerFailure: plannerFailure ?? undefined,
       classification: execution.classification,
       preview: execution.preview ?? undefined,
       scope: execution.scope,
@@ -3932,6 +4198,7 @@ export async function startWorldPromptTurn(input: {
     })
 
     await writeEvent('turn_completed', {
+      plannerFailure: plannerFailure ?? undefined,
       turn,
       classification: execution.classification,
       preview: execution.preview ?? undefined,
@@ -3997,14 +4264,24 @@ export async function startWorldPromptTurn(input: {
         turn,
       })
     }
+    const plannerFailure = (
+      error instanceof Error
+        ? (error as Error & { plannerFailure?: WorldPromptPlannerFailure }).plannerFailure ?? null
+        : null
+    )
     turn = await updateTurn(input.client, turn.id, {
       status: 'failed',
       approval_state: 'not_required',
       error_message: error instanceof Error ? error.message : 'World prompt turn failed.',
+      metadata: {
+        ...(turn.metadata ?? {}),
+        plannerFailure: plannerFailure ?? undefined,
+      },
     })
     await writeEvent('turn_failed', {
       turn,
       diagnostics: [error instanceof Error ? error.message : 'World prompt turn failed.'],
+      plannerFailure: plannerFailure ?? undefined,
       session: workingSession,
     })
     throw error

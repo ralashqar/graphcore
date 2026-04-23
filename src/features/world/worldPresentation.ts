@@ -4,6 +4,7 @@ import type {
   PromptToWorldOp,
   WorldPromptEvent,
   WorldPromptMessage,
+  WorldPromptPlannerFailure,
   WorldPromptPlanPreview,
   WorldPromptSuggestion,
   WorldPromptTurn,
@@ -61,6 +62,7 @@ export type WorldPromptRailViewModel = {
   appliedRelationships: string[]
   queuedLabels: string[]
   latestPlannerStatus: string | null
+  plannerFailure: WorldPromptPlannerFailure | null
 }
 
 export type WorldInspectorViewModel = {
@@ -183,19 +185,55 @@ export function promptSuggestionImpactLabel(suggestion: WorldPromptSuggestion) {
 export function stripInternalPlannerDiagnostics(text: string) {
   if (!text.trim()) return ''
   return text
+    .replace(/^Hosted prompt planning was unavailable, so GraphCore used a local fallback seed\.\s*/i, '')
+    .replace(/\s*Immediate JSON[^\n]*?(?:\.\s*|$)/i, '')
+    .replace(/^oneOf is not permitted in operations\.?\s*/i, '')
     .replace(/\s*World prompt planner returned JSON that did not match the expected schema\.[\s\S]*$/i, '')
     .replace(/\s*Planner (?:output|response) validation failed\.[\s\S]*$/i, '')
     .replace(/\s*Cinematic planner response validation failed\.[\s\S]*$/i, '')
     .trim()
 }
 
+export function describePlannerFailureCategory(category: WorldPromptPlannerFailure['category']) {
+  switch (category) {
+    case 'timeout':
+      return 'timeout'
+    case 'upstream_error':
+      return 'upstream API error'
+    case 'invalid_json':
+      return 'invalid planner JSON'
+    case 'schema_validation_failed':
+      return 'planner schema mismatch'
+    default:
+      return 'unknown planner error'
+  }
+}
+
 function buildTranscriptSuggestionsEntry(event: WorldPromptEvent, suggestions: WorldPromptSuggestion[]) {
-  const hasClarification = suggestions.some((suggestion) => suggestion.kind === 'repair_prompt')
+  const sanitizedSuggestions = suggestions
+    .map((suggestion) => {
+      const label = stripInternalPlannerDiagnostics(suggestion.label).replace(/\s+/g, ' ').trim()
+      const prompt = stripInternalPlannerDiagnostics(suggestion.prompt).replace(/\s+/g, ' ').trim()
+      const summary = stripInternalPlannerDiagnostics(suggestion.summary).replace(/\s+/g, ' ').trim()
+      const resolvedLabel = label || summary
+      if (!resolvedLabel || !prompt) return null
+      return {
+        ...suggestion,
+        label: resolvedLabel,
+        prompt,
+        summary,
+      }
+    })
+    .filter((suggestion): suggestion is WorldPromptSuggestion => Boolean(suggestion))
+  if (sanitizedSuggestions.length === 0) {
+    return null
+  }
+  const hasClarification = sanitizedSuggestions.some((suggestion) => suggestion.kind === 'repair_prompt')
   return {
     id: `suggestions:${event.id}`,
     createdAt: event.createdAt,
     kind: hasClarification ? 'clarification_question' : 'suggestion_set',
-    suggestions,
+    suggestions: sanitizedSuggestions,
     label: hasClarification ? 'Clarification required' : 'Next move',
   } satisfies WorldPromptTranscriptEntry
 }
@@ -432,9 +470,10 @@ export function buildWorldPromptTranscriptEntries(input: {
     }
 
     if (payload.suggestions.length > 0) {
-      const signature = payload.suggestions.map((suggestion) => `${suggestion.id}:${suggestion.prompt}`).join('|')
-      if (signature && signature !== lastSuggestionSignature) {
-        entries.push(buildTranscriptSuggestionsEntry(source.event, payload.suggestions))
+      const entry = buildTranscriptSuggestionsEntry(source.event, payload.suggestions)
+      const signature = (entry?.suggestions ?? []).map((suggestion) => `${suggestion.id}:${suggestion.prompt}`).join('|')
+      if (entry && signature && signature !== lastSuggestionSignature) {
+        entries.push(entry)
         lastSuggestionSignature = signature
       }
     }
@@ -527,6 +566,20 @@ export function buildWorldPromptRailViewModel(input: {
     }
     if (latestSuggestions.length === 0 && parsed.data.suggestions.length > 0) {
       latestSuggestions = parsed.data.suggestions
+        .map((suggestion) => {
+          const label = stripInternalPlannerDiagnostics(suggestion.label).replace(/\s+/g, ' ').trim()
+          const prompt = stripInternalPlannerDiagnostics(suggestion.prompt).replace(/\s+/g, ' ').trim()
+          const summary = stripInternalPlannerDiagnostics(suggestion.summary).replace(/\s+/g, ' ').trim()
+          const resolvedLabel = label || summary
+          if (!resolvedLabel || !prompt) return null
+          return {
+            ...suggestion,
+            label: resolvedLabel,
+            prompt,
+            summary,
+          }
+        })
+        .filter((suggestion): suggestion is WorldPromptSuggestion => Boolean(suggestion))
     }
     if (latestSuggestions.length > 0 && latestPlannerStatus) break
   }
@@ -539,6 +592,7 @@ export function buildWorldPromptRailViewModel(input: {
   })
 
   const classification = effectiveTurn?.metadata?.classification
+  const plannerFailure = effectiveTurn?.metadata?.plannerFailure ?? null
   const latestSummary = stripInternalPlannerDiagnostics(effectiveTurn?.assistantSummary ?? '')
   const latestDetail = latestSummary || effectiveTurn?.errorMessage || ''
   const hasClarificationChoices = latestSuggestions.length > 1 || latestSuggestions.some((suggestion) => suggestion.kind === 'repair_prompt')
@@ -559,6 +613,7 @@ export function buildWorldPromptRailViewModel(input: {
       appliedRelationships,
       queuedLabels,
       latestPlannerStatus,
+      plannerFailure,
     } satisfies WorldPromptRailViewModel
   }
 
@@ -577,6 +632,7 @@ export function buildWorldPromptRailViewModel(input: {
       appliedRelationships,
       queuedLabels,
       latestPlannerStatus,
+      plannerFailure,
     } satisfies WorldPromptRailViewModel
   }
 
@@ -595,6 +651,7 @@ export function buildWorldPromptRailViewModel(input: {
       appliedRelationships,
       queuedLabels,
       latestPlannerStatus,
+      plannerFailure,
     } satisfies WorldPromptRailViewModel
   }
 
@@ -613,6 +670,7 @@ export function buildWorldPromptRailViewModel(input: {
       appliedRelationships,
       queuedLabels,
       latestPlannerStatus,
+      plannerFailure,
     } satisfies WorldPromptRailViewModel
   }
 
@@ -631,6 +689,7 @@ export function buildWorldPromptRailViewModel(input: {
       appliedRelationships,
       queuedLabels,
       latestPlannerStatus,
+      plannerFailure,
     } satisfies WorldPromptRailViewModel
   }
 
@@ -655,6 +714,7 @@ export function buildWorldPromptRailViewModel(input: {
       appliedRelationships,
       queuedLabels,
       latestPlannerStatus,
+      plannerFailure,
     } satisfies WorldPromptRailViewModel
   }
 
@@ -672,6 +732,7 @@ export function buildWorldPromptRailViewModel(input: {
     appliedRelationships,
     queuedLabels,
     latestPlannerStatus,
+    plannerFailure,
   } satisfies WorldPromptRailViewModel
 }
 

@@ -2943,6 +2943,52 @@ code {
   background: rgba(255, 255, 255, 0.02);
 }
 
+.world-prompt-fallback-alert {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(245, 158, 11, 0.26);
+  background: linear-gradient(180deg, rgba(48, 34, 11, 0.54), rgba(16, 13, 10, 0.92));
+}
+
+.world-prompt-fallback-alert summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.world-prompt-fallback-alert summary::-webkit-details-marker {
+  display: none;
+}
+
+.world-prompt-fallback-chip {
+  border-color: rgba(245, 158, 11, 0.32);
+  background: rgba(245, 158, 11, 0.12);
+  color: rgba(253, 230, 138, 0.94);
+}
+
+.world-prompt-fallback-alert summary strong {
+  font-size: 0.94rem;
+}
+
+.world-prompt-fallback-alert summary span:last-child {
+  color: rgba(251, 191, 36, 0.86);
+  font-size: 0.84rem;
+}
+
+.world-prompt-fallback-body {
+  display: grid;
+  gap: 8px;
+}
+
+.world-prompt-fallback-body p {
+  margin: 0;
+  color: rgba(241, 245, 249, 0.92);
+}
+
 .world-prompt-smart-head {
   display: flex;
   align-items: center;

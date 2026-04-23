@@ -281,7 +281,7 @@ export const worldGraphSeedRequestSchema = z.object({
     worldResults: z.array(worldResultSchema).default([]),
     worldGraphConnections: z.array(worldGraphConnectionSchema).default([]),
   }),
-  model: z.string().min(1).default('gpt-5-mini'),
+  model: z.string().min(1).default('gpt-5.4'),
 })
 
 export const worldGraphExpansionRequestSchema = z.object({
@@ -308,7 +308,7 @@ export const worldGraphExpansionRequestSchema = z.object({
     worldResults: z.array(worldResultSchema).default([]),
     worldGraphConnections: z.array(worldGraphConnectionSchema).default([]),
   }),
-  model: z.string().min(1).default('gpt-5-mini'),
+  model: z.string().min(1).default('gpt-5.4'),
 })
 
 export const resetProjectWorldRequestSchema = z.object({

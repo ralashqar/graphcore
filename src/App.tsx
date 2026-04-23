@@ -979,7 +979,7 @@ export default function App() {
   const [selectedAssetKey, setSelectedAssetKey] = useState<string | null>(null)
   const [selectedArchetypeKey, setSelectedArchetypeKey] = useState<string | null>(null)
   const [selectedPatchIndex, setSelectedPatchIndex] = useState(0)
-  const [promptModel, setPromptModel] = useState('gpt-5.4-mini')
+  const [promptModel, setPromptModel] = useState('gpt-5.4')
   const [promptRuntimeError, setPromptRuntimeError] = useState<string | null>(null)
   const [isGeneratingPatch, setIsGeneratingPatch] = useState(false)
   const [isApplyingPatch, setIsApplyingPatch] = useState(false)
@@ -3366,10 +3366,18 @@ export default function App() {
       selectedViewKey: input.selectedViewKey ?? null,
       selectedThreadKey: input.selectedThreadKey ?? null,
     })
-    const nextSnapshot = mergeWorldPromptStateIntoSnapshot(syncedSnapshot, {
+    let nextSnapshot = mergeWorldPromptStateIntoSnapshot(syncedSnapshot, {
       sessions: [result.session],
       turns: [result.turn],
     })
+    const refreshed = await workspaceService.load({
+      projectId: syncedSnapshot.project.id,
+      draftId: syncedSnapshot.draft.id,
+    })
+    if (refreshed.source === 'supabase') {
+      nextSnapshot = mergePersistedWorldGraphSnapshot(nextSnapshot, refreshed.snapshot)
+      setLoadedState({ source: refreshed.source, reason: refreshed.reason })
+    }
     snapshotRef.current = nextSnapshot
     setSnapshot(nextSnapshot)
     setBundle(compileBundle(nextSnapshot))

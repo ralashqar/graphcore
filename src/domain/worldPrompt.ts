@@ -180,6 +180,13 @@ export const worldPromptSuggestionRecordSchema = worldPromptSuggestionSchema.ext
   updatedAt: z.string(),
 })
 
+export const worldPromptPlannerFailureSchema = z.object({
+  category: z.enum(['timeout', 'upstream_error', 'invalid_json', 'schema_validation_failed', 'unknown']),
+  message: z.string().default('Hosted prompt planning failed.'),
+  fallbackUsed: z.boolean().default(true),
+  occurredAt: z.string(),
+})
+
 export const worldPromptScopeCountsSchema = z.object({
   actionableOps: z.number().int().nonnegative().default(0),
   entityOps: z.number().int().nonnegative().default(0),
@@ -269,7 +276,7 @@ export const worldPromptSessionSchema = z.object({
   lastContext: looseRecordSchema.default({}),
   selectedRootEntityKey: z.string().nullable().default(null),
   selectedViewKey: z.string().nullable().default(null),
-  model: z.string().default('gpt-5.4-mini'),
+  model: z.string().default('gpt-5.4'),
   metadata: looseRecordSchema.default({}),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -279,6 +286,7 @@ const worldPromptTurnMetadataSchema = z.object({
   scopeDecision: worldPromptScopeDecisionSchema.optional(),
   classification: worldPromptClassificationSchema.optional(),
   preview: worldPromptPlanPreviewSchema.nullable().optional(),
+  plannerFailure: worldPromptPlannerFailureSchema.optional(),
 }).catchall(z.unknown())
 
 export const worldPromptTurnSchema = z.object({
@@ -287,7 +295,7 @@ export const worldPromptTurnSchema = z.object({
   draftId: z.string(),
   prompt: z.string(),
   status: worldPromptTurnStatusSchema.default('queued'),
-  model: z.string().default('gpt-5.4-mini'),
+  model: z.string().default('gpt-5.4'),
   resolvedContext: looseRecordSchema.default({}),
   approvalState: worldPromptApprovalStateSchema.default('not_required'),
   assistantSummary: z.string().default(''),
@@ -329,6 +337,7 @@ export const worldPromptEventPayloadSchema = z.object({
   threads: z.array(worldThreadSchema).default([]),
   op: promptToWorldOpSchema.optional(),
   plannerStatus: worldPromptPlannerStatusSchema.optional(),
+  plannerFailure: worldPromptPlannerFailureSchema.optional(),
   classification: worldPromptClassificationSchema.optional(),
   suggestions: z.array(worldPromptSuggestionSchema).default([]),
   suggestionIds: z.array(z.string()).default([]).optional(),
@@ -411,7 +420,7 @@ export const worldPromptSnapshotSchema = z.object({
 
 export const worldPromptStartTurnRequestSchema = z.object({
   prompt: z.string().min(1),
-  model: z.string().min(1).default('gpt-5.4-mini'),
+  model: z.string().min(1).default('gpt-5.4'),
   sessionKey: z.string().nullable().default(null),
   selectedSuggestionId: z.string().nullable().default(null),
   selectedRootEntityKey: z.string().nullable().default(null),
@@ -460,7 +469,7 @@ export const worldPromptCancelTurnResponseSchema = z.object({
 export const worldPromptCreateSessionRequestSchema = z.object({
   sessionKey: z.string().nullable().default(null),
   title: z.string().min(1).default('New chat'),
-  model: z.string().min(1).default('gpt-5.4-mini'),
+  model: z.string().min(1).default('gpt-5.4'),
   selectedRootEntityKey: z.string().nullable().default(null),
   selectedViewKey: z.string().nullable().default(null),
   selectedThreadKey: z.string().nullable().default(null),
@@ -509,6 +518,7 @@ export const worldPromptStateSchema = z.object({
 export type PromptToWorldOp = z.infer<typeof promptToWorldOpSchema>
 export type WorldPromptSuggestion = z.infer<typeof worldPromptSuggestionSchema>
 export type WorldPromptSuggestionRecord = z.infer<typeof worldPromptSuggestionRecordSchema>
+export type WorldPromptPlannerFailure = z.infer<typeof worldPromptPlannerFailureSchema>
 export type WorldPromptScopeDecision = z.infer<typeof worldPromptScopeDecisionSchema>
 export type WorldPromptClassification = z.infer<typeof worldPromptClassificationSchema>
 export type WorldPromptPlanPreviewItem = z.infer<typeof worldPromptPreviewItemSchema>

@@ -1760,16 +1760,46 @@ export function WorldGraphPage({
         setWorldPromptText('')
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'World prompt turn failed.'
-      setWorldPromptError(message)
+      console.error('[GraphCore] world prompt turn failed.', {
+        error,
+        message: error instanceof Error ? error.message : 'World prompt turn failed.',
+        sessionKey,
+        prompt,
+        selectedSuggestionId: selectedSuggestionId ?? null,
+        selectedRootEntityKey: selectedEntity?.key ?? null,
+        selectedViewKey: selectedView.key,
+        selectedThreadKey: selectedPromptThread?.key ?? null,
+      })
+      setWorldPromptError('World prompt failed. Open the browser console for details.')
     } finally {
       setIsPromptSubmitting(false)
       setBusyMessage(null)
     }
   }
 
+  function resolveSelectedSuggestionId(suggestion: WorldPromptSuggestion | WorldPromptSuggestionRecord) {
+    if ('sessionId' in suggestion) {
+      return suggestion.id
+    }
+    const exactMatch = activeSessionSuggestions.find((record) => (
+      record.prompt === suggestion.prompt
+      && record.label === suggestion.label
+      && record.kind === suggestion.kind
+    )) ?? null
+    if (exactMatch) return exactMatch.id
+
+    const promptMatch = activeSessionSuggestions.find((record) => record.prompt === suggestion.prompt) ?? null
+    if (promptMatch) return promptMatch.id
+
+    const labelMatch = activeSessionSuggestions.find((record) => (
+      record.label === suggestion.label
+      && record.kind === suggestion.kind
+    )) ?? null
+    return labelMatch?.id ?? null
+  }
+
   async function handleRunPromptSuggestion(suggestion: WorldPromptSuggestion | WorldPromptSuggestionRecord) {
-    await handleSubmitWorldPrompt(suggestion.prompt, 'sessionId' in suggestion ? suggestion.id : null)
+    await handleSubmitWorldPrompt(suggestion.prompt, resolveSelectedSuggestionId(suggestion))
   }
 
   async function handleStartNewPromptSession() {
@@ -1785,8 +1815,15 @@ export function WorldGraphPage({
       })
       setSelectedPromptSessionKey(createdSession?.key ?? sessionKey)
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Could not create a new world chat.'
-      setWorldPromptError(message)
+      console.error('[GraphCore] create world prompt session failed.', {
+        error,
+        message: error instanceof Error ? error.message : 'Could not create a new world chat.',
+        sessionKey,
+        selectedRootEntityKey: selectedEntity?.key ?? null,
+        selectedViewKey: selectedView.key,
+        selectedThreadKey: selectedPromptThread?.key ?? null,
+      })
+      setWorldPromptError('Could not create a new world chat. Open the browser console for details.')
       setSelectedPromptSessionKey(sessionKey)
     }
     setWorldPromptText('')
@@ -3051,7 +3088,6 @@ function LegacyWorldPromptChatPanel({
     : railView.primaryActionKind === 'generate'
       ? 'Generate'
       : 'Use prompt'
-
   return (
     <div className={`world-prompt-chat-shell${variant === 'grow' ? ' is-grow' : ''}`}>
       <div className="world-prompt-chat-head world-prompt-flow-head">
@@ -3264,8 +3300,8 @@ function LegacyWorldPromptChatPanel({
           })}
           {promptError ? (
             <div className="world-prompt-row world-prompt-row-system is-error">
-              <span className="world-prompt-row-label">Error</span>
-              <div className="world-prompt-line">{promptError}</div>
+              <span className="world-prompt-row-label">Prompt failed</span>
+              <div className="world-prompt-line">Open the browser console for the full debug error.</div>
             </div>
           ) : null}
           {!activePromptTurn && activeSuggestionRowId ? (
@@ -3600,6 +3636,7 @@ function WorldPromptChatPanel({
   const composerRef = useRef<HTMLTextAreaElement | null>(null)
   const transcriptRef = useRef<HTMLDivElement | null>(null)
   const transcriptEndRef = useRef<HTMLDivElement | null>(null)
+  const plannerFailureLogKeyRef = useRef<string | null>(null)
   const [stickToBottom, setStickToBottom] = useState(true)
   const transcriptEntries = useMemo(
     () => buildWorldPromptTranscriptEntries({
@@ -3726,6 +3763,37 @@ function WorldPromptChatPanel({
     if (!stickToBottom || isPromptCenter) return
     transcriptEndRef.current?.scrollIntoView({ block: 'end', behavior: activePromptTurn ? 'smooth' : 'auto' })
   }, [activePromptTurn, isPromptCenter, stickToBottom, transcriptStream.length])
+
+  useEffect(() => {
+    if (!railView.plannerFailure) return
+    const logKey = [
+      railView.plannerFailure.occurredAt,
+      railView.plannerFailure.category,
+      railView.plannerFailure.message,
+      activePromptTurn?.id ?? sessionTurns.at(-1)?.id ?? '',
+    ].join(':')
+    if (plannerFailureLogKeyRef.current === logKey) return
+    plannerFailureLogKeyRef.current = logKey
+    console.error('[GraphCore] hosted world prompt planner fell back to local planning.', {
+      plannerFailure: railView.plannerFailure,
+      turnId: activePromptTurn?.id ?? sessionTurns.at(-1)?.id ?? null,
+      sessionId: selectedSession?.id ?? null,
+      sessionKey: selectedSession?.key ?? selectedSessionKey ?? null,
+      selectedEntityKey: selectedEntity?.key ?? null,
+      selectedThreadKey,
+      selectedViewKey: selectedView.key,
+    })
+  }, [
+    activePromptTurn?.id,
+    railView.plannerFailure,
+    selectedEntity?.key,
+    selectedSession?.id,
+    selectedSession?.key,
+    selectedSessionKey,
+    selectedThreadKey,
+    selectedView.key,
+    sessionTurns,
+  ])
 
   function handleTranscriptScroll() {
     const element = transcriptRef.current
@@ -3984,8 +4052,8 @@ function WorldPromptChatPanel({
               {transcriptStream.map(renderEntry)}
               {promptError ? (
                 <div className="world-prompt-row world-prompt-row-system world-prompt-card is-error">
-                  <span className="world-prompt-row-label">Error</span>
-                  <div className="world-prompt-line">{promptError}</div>
+                  <span className="world-prompt-row-label">Prompt failed</span>
+                  <div className="world-prompt-line">Open the browser console for the full debug error.</div>
                 </div>
               ) : null}
               <div ref={transcriptEndRef} />
