@@ -294,6 +294,63 @@ test('buildWorldPromptTranscriptEntries emits preview and approval rows', () => 
   assert.ok(entries.some((entry) => entry.kind === 'approval_required' && entry.turnId === 't2'))
 })
 
+test('buildWorldPromptTranscriptEntries emits planner progress rows from planner_status events', () => {
+  const events: WorldPromptEvent[] = [
+    {
+      id: 'e-progress-1',
+      sessionId: 's1',
+      turnId: 't-progress',
+      draftId: 'd1',
+      sequence: 1,
+      eventType: 'planner_status',
+      opId: null,
+      payload: {
+        plannerStatus: 'planning',
+        plannerProgress: {
+          phase: 'reading_context',
+          message: 'Reading the current world context.',
+          sequence: 1,
+        },
+      },
+      metadata: {},
+      createdAt: '2026-04-22T10:00:00.000Z',
+    },
+    {
+      id: 'e-progress-2',
+      sessionId: 's1',
+      turnId: 't-progress',
+      draftId: 'd1',
+      sequence: 2,
+      eventType: 'planner_status',
+      opId: null,
+      payload: {
+        plannerStatus: 'planning',
+        plannerProgress: {
+          phase: 'finalizing_plan',
+          message: 'Validated the plan and prepared 2 first-wave steps.',
+          sequence: 6,
+          done: true,
+        },
+        plannerOutline: ['Add Jax', 'Add arena district'],
+      },
+      metadata: {},
+      createdAt: '2026-04-22T10:00:04.000Z',
+    },
+  ]
+
+  const entries = buildWorldPromptTranscriptEntries({
+    events,
+    messages: [],
+    entityByKey: new Map(),
+  })
+
+  const plannerEntries = entries.filter((entry) => entry.kind === 'planner_progress')
+  assert.equal(plannerEntries.length, 2)
+  assert.equal(plannerEntries[0]?.label, 'Reading context')
+  assert.deepEqual(plannerEntries[1]?.outline, ['Add Jax', 'Add arena district'])
+  assert.equal(plannerEntries[1]?.done, true)
+})
+
 test('buildWorldPromptTranscriptEntries renders update rows for refined entities and relationships', () => {
   const hero = {
     id: 'hero-1',
@@ -528,7 +585,7 @@ test('buildWorldPromptTranscriptEntries drops diagnostic-only suggestions', () =
   assert.equal(entries.some((entry) => entry.kind === 'suggestion_set' || entry.kind === 'clarification_question'), false)
 })
 
-test('buildWorldPromptTranscriptEntries renders continuation without suggestion rows', () => {
+test('buildWorldPromptTranscriptEntries keeps freeform continuation as just the user prompt', () => {
   const messages: WorldPromptMessage[] = [{
     id: 'm-freeform',
     sessionId: 's1',
@@ -548,8 +605,59 @@ test('buildWorldPromptTranscriptEntries renders continuation without suggestion 
     entityByKey: new Map(),
   })
 
-  assert.ok(entries.some((entry) => entry.kind === 'continuation_without_suggestion'))
+  assert.equal(entries.some((entry) => entry.kind === 'continuation_without_suggestion'), false)
   assert.ok(entries.some((entry) => entry.kind === 'user_message' && entry.content === 'Actually expand the prophecy instead.'))
+})
+
+test('buildWorldPromptTranscriptEntries renders advisory answers and diagnostic findings once', () => {
+  const events: WorldPromptEvent[] = [makeEvent({
+    turnId: 't-advisory',
+    payload: {
+      plannerStatus: 'scoping',
+      classification: 'graph_diagnosis',
+      answer: 'Raja is strong politically, but the graph does not yet show enough pressure around his heir or the religious fallout.',
+      answerMode: 'answer_plus_options',
+      diagnosticFindings: [{
+        id: 'finding-raja-context',
+        findingType: 'weak_context',
+        title: 'Raja needs richer context',
+        summary: 'Raja has status in the graph, but his political and religious pressure is still underexplained.',
+        targetKeys: ['world.actor.raja'],
+        severity: 'high',
+      }],
+      suggestions: [],
+      diagnostics: [],
+    },
+  }), makeEvent({
+    id: 'e-advisory-duplicate',
+    turnId: 't-advisory',
+    sequence: 2,
+    payload: {
+      plannerStatus: 'completed',
+      classification: 'graph_diagnosis',
+      answer: 'Raja is strong politically, but the graph does not yet show enough pressure around his heir or the religious fallout.',
+      answerMode: 'answer_plus_options',
+      diagnosticFindings: [{
+        id: 'finding-raja-context',
+        findingType: 'weak_context',
+        title: 'Raja needs richer context',
+        summary: 'Raja has status in the graph, but his political and religious pressure is still underexplained.',
+        targetKeys: ['world.actor.raja'],
+        severity: 'high',
+      }],
+      suggestions: [],
+      diagnostics: [],
+    },
+  })]
+
+  const entries = buildWorldPromptTranscriptEntries({
+    events,
+    messages: [],
+    entityByKey: new Map(),
+  })
+
+  assert.equal(entries.filter((entry) => entry.kind === 'advisory_answer').length, 1)
+  assert.equal(entries.filter((entry) => entry.kind === 'diagnostic_finding').length, 1)
 })
 
 test('buildWorldInspectorViewModel formats entity cards', () => {
@@ -723,6 +831,34 @@ test('buildWorldPromptRailViewModel returns blocked for contradictory classifica
   assert.equal(viewModel.state, 'blocked')
   assert.equal(viewModel.statusLabel, 'Blocked')
   assert.equal(viewModel.plannerFailure?.category, 'timeout')
+})
+
+test('buildWorldPromptRailViewModel returns completed diagnosis for advisory turns', () => {
+  const advisoryTurn = makeTurn({
+    assistantSummary: 'Raja is politically central, but his heir and religious liabilities need more context.',
+    metadata: {
+      classification: 'graph_diagnosis',
+      answer: 'Raja is politically central, but his heir and religious liabilities need more context.',
+      diagnosticFindings: [{
+        id: 'finding-raja',
+        findingType: 'weak_context',
+        title: 'Raja needs richer context',
+        summary: 'His political utility and shame dynamic are thin.',
+        targetKeys: ['world.actor.raja'],
+        severity: 'high',
+      }],
+    },
+  })
+
+  const viewModel = buildWorldPromptRailViewModel({
+    activeTurn: null,
+    turns: [advisoryTurn],
+    events: [],
+    entityByKey: new Map(),
+  })
+
+  assert.equal(viewModel.state, 'completed')
+  assert.equal(viewModel.statusLabel, 'Diagnosis')
 })
 
 test('buildWorldPromptRailViewModel returns approval state when preview ops need approval', () => {

@@ -3069,6 +3069,17 @@ code {
   gap: 12px;
 }
 
+.world-prompt-row-progress {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+}
+
+.world-prompt-row-progress.is-complete {
+  border-color: rgba(94, 234, 212, 0.18);
+  background: linear-gradient(180deg, rgba(11, 29, 31, 0.72), rgba(7, 16, 20, 0.9));
+}
+
 .world-prompt-entry-icon {
   width: 34px;
   height: 34px;
@@ -3088,6 +3099,29 @@ code {
 .world-prompt-entry-copy {
   display: grid;
   gap: 5px;
+}
+
+.world-prompt-inline-spinner {
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  border: 2px solid rgba(148, 163, 184, 0.24);
+  border-top-color: rgba(94, 234, 212, 0.92);
+  border-right-color: rgba(125, 211, 252, 0.72);
+  animation: world-prompt-spinner-spin 900ms linear infinite;
+}
+
+.world-prompt-inline-spinner.is-done {
+  animation: none;
+  border-color: rgba(94, 234, 212, 0.24);
+  background: radial-gradient(circle at 50% 50%, rgba(94, 234, 212, 0.88), rgba(94, 234, 212, 0.24));
+}
+
+.world-prompt-outline-list {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 4px;
 }
 
 .world-prompt-entry-route {
@@ -3193,12 +3227,28 @@ code {
 }
 
 .world-prompt-planning-state {
-  min-height: 100%;
   display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
   gap: 14px;
-  justify-items: center;
-  align-content: center;
-  text-align: center;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+  border-radius: 18px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: linear-gradient(180deg, rgba(16, 24, 37, 0.88), rgba(10, 16, 24, 0.92));
+}
+
+.world-prompt-planning-state.has-progress {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  backdrop-filter: blur(10px);
+}
+
+.world-prompt-planning-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
 }
 
 .world-prompt-planning-spinner {

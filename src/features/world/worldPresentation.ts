@@ -2,9 +2,11 @@ import type { CSSProperties } from 'react'
 
 import type {
   PromptToWorldOp,
+  WorldPromptDiagnosticFinding,
   WorldPromptEvent,
   WorldPromptMessage,
   WorldPromptPlannerFailure,
+  WorldPromptPlannerProgress,
   WorldPromptPlanPreview,
   WorldPromptSuggestion,
   WorldPromptTurn,
@@ -29,12 +31,15 @@ export type WorldNodeData = {
 export type WorldPromptTranscriptEntry =
   | { id: string; createdAt: string; kind: 'user_message' | 'assistant_message'; content: string; pending?: boolean }
   | { id: string; createdAt: string; kind: 'system_status'; label: string; detail?: string; tone?: 'normal' | 'error' }
+  | { id: string; createdAt: string; kind: 'planner_progress'; label: string; detail?: string; phase: WorldPromptPlannerProgress['phase']; outline: string[]; done?: boolean }
   | { id: string; createdAt: string; kind: 'entity_created'; label: string; detail?: string; entityKey: string; entityNodeType: WorldEntity['nodeType'] }
   | { id: string; createdAt: string; kind: 'entity_updated'; label: string; detail?: string; entityKey: string; entityNodeType: WorldEntity['nodeType'] }
   | { id: string; createdAt: string; kind: 'entity_replaced'; label: string; detail?: string; entityKey: string; entityNodeType: WorldEntity['nodeType'] }
   | { id: string; createdAt: string; kind: 'relationship_created'; label: string; detail?: string; relationshipKey: string; sourceLabel: string; targetLabel: string }
   | { id: string; createdAt: string; kind: 'relationship_updated'; label: string; detail?: string; relationshipKey: string; sourceLabel: string; targetLabel: string }
   | { id: string; createdAt: string; kind: 'queue_started'; label: string; detail?: string }
+  | { id: string; createdAt: string; kind: 'advisory_answer'; label: string; detail?: string }
+  | { id: string; createdAt: string; kind: 'diagnostic_finding'; label: string; detail?: string; severity: WorldPromptDiagnosticFinding['severity'] }
   | { id: string; createdAt: string; kind: 'preview_available'; label: string; detail?: string; turnId: string; preview: WorldPromptPlanPreview }
   | { id: string; createdAt: string; kind: 'approval_required'; label: string; detail?: string; turnId: string; ops: PromptToWorldOp[] }
   | { id: string; createdAt: string; kind: 'suggestion_set'; suggestions: WorldPromptSuggestion[]; label?: string }
@@ -178,6 +183,23 @@ export function describePlannerStatus(status: NonNullable<ReturnType<typeof worl
   }
 }
 
+export function describePlannerProgressPhase(phase: WorldPromptPlannerProgress['phase']) {
+  switch (phase) {
+    case 'reading_context':
+      return 'Reading context'
+    case 'analyzing_graph':
+      return 'Analyzing graph'
+    case 'planning_entities':
+      return 'Planning entities'
+    case 'planning_relationships':
+      return 'Planning relationships'
+    case 'assembling_first_wave':
+      return 'Assembling first wave'
+    case 'finalizing_plan':
+      return 'Finalizing plan'
+  }
+}
+
 export function promptSuggestionImpactLabel(suggestion: WorldPromptSuggestion) {
   const parts = [
     suggestion.estimatedNodeCount > 0 ? `+${suggestion.estimatedNodeCount} nodes` : null,
@@ -263,6 +285,9 @@ export function buildWorldPromptTranscriptEntries(input: {
   let lastSuggestionSignature: string | null = null
   let lastPreviewSignature: string | null = null
   let lastApprovalSignature: string | null = null
+  let lastAnswerSignature: string | null = null
+  let lastDiagnosticSignature: string | null = null
+  let lastPlannerProgressSignature: string | null = null
 
   for (const source of sources) {
     if (source.source === 'message') {
@@ -273,10 +298,6 @@ export function buildWorldPromptTranscriptEntries(input: {
         const selectedSuggestionUiKind = source.message.metadata?.selectedSuggestionUiKind === 'clarification'
           ? 'clarification'
           : 'next_move'
-        const continuationMode = typeof source.message.metadata?.continuationMode === 'string'
-          ? source.message.metadata.continuationMode
-          : null
-
         if (selectedSuggestionLabel) {
           entries.push({
             id: `${source.id}:selection`,
@@ -286,26 +307,6 @@ export function buildWorldPromptTranscriptEntries(input: {
             detail: selectedSuggestionLabel,
           })
           continue
-        }
-
-        if (continuationMode === 'freeform_after_suggestions') {
-          entries.push({
-            id: `${source.id}:continuation`,
-            createdAt: source.message.createdAt,
-            kind: 'continuation_without_suggestion',
-            label: 'Continued with your own prompt',
-            detail: 'You skipped the suggested next moves and continued freeform.',
-          })
-        }
-
-        if (continuationMode === 'freeform_after_clarification') {
-          entries.push({
-            id: `${source.id}:continuation`,
-            createdAt: source.message.createdAt,
-            kind: 'continuation_without_suggestion',
-            label: 'Continued without answering clarification',
-            detail: 'You skipped the clarification options and sent a new prompt instead.',
-          })
         }
       }
 
@@ -333,9 +334,57 @@ export function buildWorldPromptTranscriptEntries(input: {
     }
 
     const payload = parsed.data
+    const answerSignature = payload.answer ? `${source.event.turnId}:${payload.answer}` : null
+    if (payload.answer && answerSignature !== lastAnswerSignature) {
+      entries.push({
+        id: `${source.id}:answer`,
+        createdAt: source.event.createdAt,
+        kind: 'advisory_answer',
+        label: payload.classification === 'graph_diagnosis' ? 'Diagnosis' : 'Answer',
+        detail: stripInternalPlannerDiagnostics(payload.answer),
+      })
+      lastAnswerSignature = answerSignature
+    }
+    const diagnosticSignature = (payload.diagnosticFindings ?? []).map((finding) => `${finding.id}:${finding.summary}`).join('|')
+    if (diagnosticSignature && diagnosticSignature !== lastDiagnosticSignature) {
+      for (const finding of payload.diagnosticFindings ?? []) {
+        entries.push({
+          id: `${source.id}:finding:${finding.id}`,
+          createdAt: source.event.createdAt,
+          kind: 'diagnostic_finding',
+          label: finding.title,
+          detail: stripInternalPlannerDiagnostics(finding.summary),
+          severity: finding.severity,
+        })
+      }
+      lastDiagnosticSignature = diagnosticSignature
+    }
     switch (source.event.eventType) {
       case 'planner_status':
-        if (payload.plannerStatus) {
+        if (payload.plannerProgress) {
+          const plannerProgressSignature = [
+            source.event.turnId,
+            payload.plannerProgress.phase,
+            payload.plannerProgress.sequence,
+            payload.plannerProgress.message,
+            payload.plannerProgress.done ? 'done' : 'active',
+            (payload.plannerOutline ?? []).join('|'),
+          ].join(':')
+          if (plannerProgressSignature !== lastPlannerProgressSignature) {
+            entries.push({
+              id: `${source.id}:planner-progress`,
+              createdAt: source.event.createdAt,
+              kind: 'planner_progress',
+              label: describePlannerProgressPhase(payload.plannerProgress.phase),
+              detail: payload.plannerProgress.message || payload.note || undefined,
+              phase: payload.plannerProgress.phase,
+              outline: payload.plannerOutline ?? [],
+              done: payload.plannerProgress.done,
+            })
+            lastPlannerProgressSignature = plannerProgressSignature
+          }
+        }
+        if (payload.plannerStatus && !payload.plannerProgress) {
           entries.push({
             id: source.id,
             createdAt: source.event.createdAt,
@@ -658,12 +707,18 @@ export function buildWorldPromptRailViewModel(input: {
 
   let latestSuggestions: WorldPromptSuggestion[] = []
   let latestPlannerStatus: string | null = null
+  let latestPlannerProgressMessage: string | null = null
 
   for (const event of [...relevantEvents].reverse()) {
     const parsed = worldPromptEventPayloadSchema.safeParse(event.payload)
     if (!parsed.success) continue
+    if (!latestPlannerProgressMessage && parsed.data.plannerProgress?.message) {
+      latestPlannerProgressMessage = stripInternalPlannerDiagnostics(parsed.data.plannerProgress.message)
+    }
     if (!latestPlannerStatus && parsed.data.plannerStatus) {
-      latestPlannerStatus = describePlannerStatus(parsed.data.plannerStatus)
+      latestPlannerStatus = parsed.data.plannerProgress
+        ? describePlannerProgressPhase(parsed.data.plannerProgress.phase)
+        : describePlannerStatus(parsed.data.plannerStatus)
     }
     if (latestSuggestions.length === 0 && parsed.data.suggestions.length > 0) {
       latestSuggestions = parsed.data.suggestions
@@ -682,7 +737,7 @@ export function buildWorldPromptRailViewModel(input: {
         })
         .filter((suggestion): suggestion is WorldPromptSuggestion => Boolean(suggestion))
     }
-    if (latestSuggestions.length > 0 && latestPlannerStatus) break
+    if (latestSuggestions.length > 0 && latestPlannerStatus && latestPlannerProgressMessage) break
   }
 
   const approvalOps = (preview?.pendingOps ?? []).filter((op) => op.applyMode === 'needs_approval' || op.status === 'pending')
@@ -694,8 +749,9 @@ export function buildWorldPromptRailViewModel(input: {
 
   const classification = effectiveTurn?.metadata?.classification
   const plannerFailure = effectiveTurn?.metadata?.plannerFailure ?? null
+  const storedAnswer = stripInternalPlannerDiagnostics(typeof effectiveTurn?.metadata?.answer === 'string' ? effectiveTurn.metadata.answer : '')
   const latestSummary = stripInternalPlannerDiagnostics(effectiveTurn?.assistantSummary ?? '')
-  const latestDetail = latestSummary || effectiveTurn?.errorMessage || ''
+  const latestDetail = storedAnswer || latestSummary || effectiveTurn?.errorMessage || ''
   const hasClarificationChoices = latestSuggestions.length > 1 || latestSuggestions.some((suggestion) => suggestion.kind === 'repair_prompt')
   const isBlockedClassification = classification === 'not_graphable' || classification === 'contradictory_or_low_confidence'
 
@@ -760,7 +816,7 @@ export function buildWorldPromptRailViewModel(input: {
     return {
       state: 'working',
       title: 'Building the next graph neighborhood',
-      detail: latestDetail || 'The planner is resolving entities, relationships, and next moves.',
+      detail: latestPlannerProgressMessage || latestDetail || 'The planner is resolving entities, relationships, and next moves.',
       statusLabel: latestPlannerStatus ?? 'Working',
       primaryActionLabel: 'Generate',
       primaryActionKind: 'generate',
@@ -806,6 +862,25 @@ export function buildWorldPromptRailViewModel(input: {
       title: 'Graph updated',
       detail: latestDetail || (addedSummary ? `This turn added ${addedSummary}.` : 'The graph has new material ready for expansion.'),
       statusLabel: 'Completed',
+      primaryActionLabel: 'Continue building',
+      primaryActionKind: 'continue',
+      latestSuggestions,
+      preview,
+      approvalOps,
+      appliedEntities,
+      appliedRelationships,
+      queuedLabels,
+      latestPlannerStatus,
+      plannerFailure,
+    } satisfies WorldPromptRailViewModel
+  }
+
+  if (effectiveTurn?.status === 'completed' && (classification === 'advisory_question' || classification === 'graph_diagnosis' || classification === 'refinement_only')) {
+    return {
+      state: 'completed',
+      title: classification === 'graph_diagnosis' ? 'Diagnosis ready' : classification === 'refinement_only' ? 'Refinement applied' : 'Answer ready',
+      detail: latestDetail || 'The planner answered against the current world state and proposed the next best options.',
+      statusLabel: classification === 'graph_diagnosis' ? 'Diagnosis' : classification === 'refinement_only' ? 'Refined' : 'Answered',
       primaryActionLabel: 'Continue building',
       primaryActionKind: 'continue',
       latestSuggestions,

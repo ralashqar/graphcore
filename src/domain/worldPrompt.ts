@@ -35,18 +35,40 @@ export const worldPromptEventTypeSchema = z.enum([
 export const promptToWorldApplyModeSchema = z.enum(['auto', 'needs_approval'])
 export const worldPromptOpStatusSchema = z.enum(['pending', 'applied', 'approved', 'rejected', 'failed'])
 export const worldPromptQueueTypeSchema = z.enum(['image_generation', 'cinematic_generation'])
-export const worldPromptSuggestionKindSchema = z.enum(['continue_scope', 'plan_only', 'repair_prompt'])
+export const worldPromptSuggestionKindSchema = z.enum([
+  'continue_scope',
+  'plan_only',
+  'repair_prompt',
+  'advisory_option',
+  'diagnostic_gap',
+  'refinement_option',
+  'apply_patch_option',
+])
 export const worldPromptSuggestionStyleSchema = z.enum(['primary', 'secondary'])
-export const worldPromptSuggestionSourceSchema = z.enum(['thread', 'wave2', 'repair'])
+export const worldPromptSuggestionSourceSchema = z.enum(['thread', 'wave2', 'repair', 'analysis', 'advisory'])
 export const worldPromptSuggestionStateSchema = z.enum(['active', 'used', 'dismissed', 'superseded'])
 export const worldPromptPlannerStatusSchema = z.enum(['planning', 'scoping', 'applying', 'awaiting_approval', 'blocked', 'completed'])
-export const worldPromptScopeModeSchema = z.enum(['direct', 'staged', 'blocked'])
+export const worldPromptScopeModeSchema = z.enum(['direct', 'staged', 'blocked', 'advisory'])
 export const worldPromptClassificationSchema = z.enum([
   'graphable_direct',
   'graphable_broad',
   'graphable_plan_only',
+  'advisory_question',
+  'graph_diagnosis',
+  'refinement_only',
   'not_graphable',
   'contradictory_or_low_confidence',
+])
+export const worldPromptSuggestionUiKindSchema = z.enum(['next_move', 'clarification', 'advisory', 'diagnostic'])
+export const worldPromptSuggestionExecutionModeSchema = z.enum(['answer_only', 'plan_only', 'apply_if_selected'])
+export const worldPromptAnswerModeSchema = z.enum(['answer_only', 'answer_plus_options', 'answer_plus_preview'])
+export const worldPromptPlannerProgressPhaseSchema = z.enum([
+  'reading_context',
+  'analyzing_graph',
+  'planning_entities',
+  'planning_relationships',
+  'assembling_first_wave',
+  'finalizing_plan',
 ])
 export const worldPromptPreviewModeSchema = z.enum(['plan_only', 'staged_first_wave'])
 export const worldPromptPreviewItemKindSchema = z.enum([
@@ -180,6 +202,10 @@ export const worldPromptSuggestionSchema = z.object({
   estimatedEdgeCount: z.number().int().nonnegative().default(0),
   willQueueImages: z.boolean().default(false),
   willQueueCinematics: z.boolean().default(false),
+  uiKind: worldPromptSuggestionUiKindSchema.optional(),
+  executionMode: worldPromptSuggestionExecutionModeSchema.optional(),
+  generatedReason: z.string().optional(),
+  generatedFromTurnId: z.string().nullable().optional(),
 })
 
 export const worldPromptSuggestionRecordSchema = worldPromptSuggestionSchema.extend({
@@ -200,6 +226,22 @@ export const worldPromptPlannerFailureSchema = z.object({
   message: z.string().default('Hosted prompt planning failed.'),
   fallbackUsed: z.boolean().default(true),
   occurredAt: z.string(),
+})
+
+export const worldPromptDiagnosticFindingSchema = z.object({
+  id: z.string(),
+  findingType: z.enum([
+    'underconnected_entity',
+    'isolated_world_area',
+    'weak_context',
+    'relationship_gap',
+    'thread_gap',
+    'world_imbalance',
+  ]),
+  title: z.string(),
+  summary: z.string().default(''),
+  targetKeys: z.array(z.string()).default([]),
+  severity: z.enum(['low', 'medium', 'high']).default('medium'),
 })
 
 export const worldPromptScopeCountsSchema = z.object({
@@ -284,6 +326,13 @@ export const worldPromptPlanPreviewSchema = z.object({
   appliedAt: z.string().nullable().default(null),
 })
 
+export const worldPromptPlannerProgressSchema = z.object({
+  phase: worldPromptPlannerProgressPhaseSchema,
+  message: z.string().default(''),
+  sequence: z.number().int().nonnegative().default(0),
+  done: z.boolean().optional(),
+})
+
 export const worldPromptSessionSchema = z.object({
   id: z.string(),
   key: z.string(),
@@ -306,6 +355,9 @@ const worldPromptTurnMetadataSchema = z.object({
   classification: worldPromptClassificationSchema.optional(),
   preview: worldPromptPlanPreviewSchema.nullable().optional(),
   plannerFailure: worldPromptPlannerFailureSchema.optional(),
+  answer: z.string().optional(),
+  answerMode: worldPromptAnswerModeSchema.optional(),
+  diagnosticFindings: z.array(worldPromptDiagnosticFindingSchema).optional(),
 }).catchall(z.unknown())
 
 export const worldPromptTurnSchema = z.object({
@@ -357,7 +409,12 @@ export const worldPromptEventPayloadSchema = z.object({
   op: promptToWorldOpSchema.optional(),
   plannerStatus: worldPromptPlannerStatusSchema.optional(),
   plannerFailure: worldPromptPlannerFailureSchema.optional(),
+  plannerProgress: worldPromptPlannerProgressSchema.optional(),
+  plannerOutline: z.array(z.string()).default([]).optional(),
   classification: worldPromptClassificationSchema.optional(),
+  answer: z.string().optional(),
+  answerMode: worldPromptAnswerModeSchema.optional(),
+  diagnosticFindings: z.array(worldPromptDiagnosticFindingSchema).default([]),
   suggestions: z.array(worldPromptSuggestionSchema).default([]),
   suggestionIds: z.array(z.string()).default([]).optional(),
   scope: worldPromptScopeDecisionSchema.optional(),
@@ -538,6 +595,7 @@ export type PromptToWorldOp = z.infer<typeof promptToWorldOpSchema>
 export type WorldPromptSuggestion = z.infer<typeof worldPromptSuggestionSchema>
 export type WorldPromptSuggestionRecord = z.infer<typeof worldPromptSuggestionRecordSchema>
 export type WorldPromptPlannerFailure = z.infer<typeof worldPromptPlannerFailureSchema>
+export type WorldPromptDiagnosticFinding = z.infer<typeof worldPromptDiagnosticFindingSchema>
 export type WorldPromptScopeDecision = z.infer<typeof worldPromptScopeDecisionSchema>
 export type WorldPromptClassification = z.infer<typeof worldPromptClassificationSchema>
 export type WorldPromptPlanPreviewItem = z.infer<typeof worldPromptPreviewItemSchema>
@@ -547,6 +605,7 @@ export type WorldPromptTurn = z.infer<typeof worldPromptTurnSchema>
 export type WorldPromptMessage = z.infer<typeof worldPromptMessageSchema>
 export type WorldPromptEvent = z.infer<typeof worldPromptEventSchema>
 export type WorldPromptEventPayload = z.infer<typeof worldPromptEventPayloadSchema>
+export type WorldPromptPlannerProgress = z.infer<typeof worldPromptPlannerProgressSchema>
 export type WorldPromptSnapshot = z.infer<typeof worldPromptSnapshotSchema>
 export type WorldPromptStartTurnRequest = z.infer<typeof worldPromptStartTurnRequestSchema>
 export type WorldPromptStartTurnResponse = z.infer<typeof worldPromptStartTurnResponseSchema>

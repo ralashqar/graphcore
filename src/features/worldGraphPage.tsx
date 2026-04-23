@@ -3785,6 +3785,10 @@ function WorldPromptChatPanel({
     () => transcriptStream.filter((entry) => !hiddenTranscriptKinds.has(entry.kind)),
     [transcriptStream],
   )
+  const latestPlannerProgressEntry = useMemo(
+    () => [...visibleTranscriptStream].reverse().find((entry) => entry.kind === 'planner_progress') ?? null,
+    [visibleTranscriptStream],
+  )
   const suggestionSignature = useMemo(
     () => sessionSuggestions.map((suggestion) => `${suggestion.id}:${suggestion.updatedAt}:${suggestion.state}`).join('|'),
     [sessionSuggestions],
@@ -3804,17 +3808,23 @@ function WorldPromptChatPanel({
       const activeSuggestionCount = sessionSuggestionCountBySessionId[session.id] ?? 0
       const status = currentTurn?.status === 'awaiting_approval'
         ? 'approval'
-        : activeSuggestionCount > 0 && (currentClassification === 'contradictory_or_low_confidence' || currentClassification === 'not_graphable')
-          ? 'clarification'
-          : hasPreview
-            ? 'preview'
-            : currentTurn?.status ?? 'empty'
+        : currentClassification === 'graph_diagnosis'
+          ? 'diagnosis'
+          : currentClassification === 'advisory_question'
+            ? 'advisory'
+            : activeSuggestionCount > 0 && (currentClassification === 'contradictory_or_low_confidence' || currentClassification === 'not_graphable')
+              ? 'clarification'
+              : hasPreview
+                ? 'preview'
+                : currentTurn?.status ?? 'empty'
       return [session.key, status]
     }))
   }, [sessionSuggestionCountBySessionId, worldPromptSessions, worldPromptTurns])
   const isPromptCenter = !busy && !activePromptTurn && transcriptStream.length === 0 && sessionTurns.length === 0
   const hasClarificationSuggestions = sessionSuggestions.some((suggestion) => suggestion.metadata?.uiKind === 'clarification')
-  const planningOnlyState = busy && visibleTranscriptStream.length === 0
+  const hasDiagnosticSuggestions = sessionSuggestions.some((suggestion) => suggestion.metadata?.uiKind === 'diagnostic')
+  const hasAdvisorySuggestions = sessionSuggestions.some((suggestion) => suggestion.metadata?.uiKind === 'advisory')
+  const planningOnlyState = busy && visibleTranscriptStream.every((entry) => entry.kind === 'planner_progress')
   const showComposerSuggestions = sessionSuggestions.length > 0 && suppressedSuggestionSignature !== suggestionSignature
   const sessionTitle = selectedSession?.title ?? (selectedSessionKey ? 'New chat' : 'Chat')
   const sessionSubline = selectedSession && sessionTurns.length > 0
@@ -3856,7 +3866,7 @@ function WorldPromptChatPanel({
     ].join(':')
     if (plannerFailureLogKeyRef.current === logKey) return
     plannerFailureLogKeyRef.current = logKey
-    console.error('[GraphCore] hosted world prompt planner fell back to local planning.', {
+    console.error('[GraphCore] hosted world prompt planner reported failure.', {
       plannerFailure: railView.plannerFailure,
       turnId: activePromptTurn?.id ?? sessionTurns.at(-1)?.id ?? null,
       sessionId: selectedSession?.id ?? null,
@@ -3927,6 +3937,27 @@ function WorldPromptChatPanel({
       )
     }
 
+    if (entry.kind === 'planner_progress') {
+      return (
+        <div key={entry.id} className={`world-prompt-row world-prompt-row-system world-prompt-card world-prompt-row-progress${entry.done ? ' is-complete' : ''}`}>
+          <div className="world-prompt-entry-icon">
+            <div className={`world-prompt-inline-spinner${entry.done ? ' is-done' : ''}`} aria-hidden="true" />
+          </div>
+          <div className="world-prompt-entry-copy">
+            <span className="world-prompt-row-label">{entry.label}</span>
+            {entry.detail ? <div className="world-prompt-line">{entry.detail}</div> : null}
+            {entry.outline.length > 0 ? (
+              <div className="world-prompt-outline-list">
+                {entry.outline.map((item) => (
+                  <span key={`${entry.id}:${item}`} className="chip">{item}</span>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      )
+    }
+
     if (entry.kind === 'preview_available') {
       return (
         <div key={entry.id} className="world-prompt-row world-prompt-row-system world-prompt-card is-preview">
@@ -3990,6 +4021,8 @@ function WorldPromptChatPanel({
       && entry.kind !== 'relationship_created'
       && entry.kind !== 'relationship_updated'
       && entry.kind !== 'queue_started'
+      && entry.kind !== 'advisory_answer'
+      && entry.kind !== 'diagnostic_finding'
     ) {
       return null
     }
@@ -3998,6 +4031,10 @@ function WorldPromptChatPanel({
       ? iconForWorldEntity(entry.entityNodeType)
       : entry.kind === 'relationship_created' || entry.kind === 'relationship_updated'
         ? 'graph'
+        : entry.kind === 'advisory_answer'
+          ? 'info'
+          : entry.kind === 'diagnostic_finding'
+            ? 'concept'
         : entry.kind === 'queue_started'
           ? 'activity'
           : 'content'
@@ -4100,10 +4137,15 @@ function WorldPromptChatPanel({
         <>
           <div className="world-prompt-transcript-shell">
             <div className={`world-prompt-transcript${planningOnlyState ? ' is-planning' : ''}`} onScroll={handleTranscriptScroll} ref={transcriptRef}>
-              {planningOnlyState ? (
-                <div className="world-prompt-planning-state">
+              {busy ? (
+                <div className={`world-prompt-planning-state${latestPlannerProgressEntry ? ' has-progress' : ''}`}>
                   <div className="world-prompt-planning-spinner" aria-hidden="true" />
-                  <span className="world-prompt-row-label">Planning</span>
+                  <div className="world-prompt-planning-copy">
+                    <span className="world-prompt-row-label">{latestPlannerProgressEntry?.label ?? railView.statusLabel ?? 'Planning'}</span>
+                    <div className="world-prompt-line">
+                      {latestPlannerProgressEntry?.detail ?? railView.detail ?? 'Working through the next graph changes.'}
+                    </div>
+                  </div>
                 </div>
               ) : null}
               {visibleTranscriptStream.map(renderEntry)}
@@ -4122,7 +4164,13 @@ function WorldPromptChatPanel({
               <div className={`world-prompt-composer-suggestions${hasClarificationSuggestions ? ' is-clarification' : ''}`}>
                 <div className="world-prompt-composer-suggestions-head">
                   <span className="world-prompt-composer-suggestions-label">
-                    {hasClarificationSuggestions ? 'Choose a direction' : 'Next moves'}
+                    {hasClarificationSuggestions
+                      ? 'Choose a direction'
+                      : hasDiagnosticSuggestions
+                        ? 'Weak points to explore'
+                        : hasAdvisorySuggestions
+                          ? 'Options'
+                          : 'Next moves'}
                   </span>
                   <button className="ghost-button compact" disabled={busy} onClick={handleContinueWithoutSuggestion} type="button">
                     Continue with my own prompt
