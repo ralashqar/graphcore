@@ -47,6 +47,12 @@ export async function requireUserClient(request: Request, functionName: string) 
   return { client, user }
 }
 
+export async function requireAuthedAdminClient(request: Request, functionName: string) {
+  const { user } = await requireUserClient(request, functionName)
+  const client = createAdminClient(functionName)
+  return { client, user }
+}
+
 export function createAdminClient(functionName: string) {
   const supabaseUrl = Deno.env.get('SUPABASE_URL')
   const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')

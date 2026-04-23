@@ -165,6 +165,7 @@ export function ContentWorkspace({
   const filteredItems = useMemo(() => {
     const query = itemSearch.trim().toLowerCase()
     return contentItems
+      .filter((item) => item.status !== 'archived')
       .filter((item) => {
         const matchesQuery =
           query.length === 0

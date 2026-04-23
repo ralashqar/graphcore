@@ -135,6 +135,7 @@ export function SpecializedDefinitionWorkspace({
     const query = search.trim().toLowerCase()
     return definitions
       .filter((definition) => definition.kind === kind)
+      .filter((definition) => definition.status !== 'archived')
       .filter((definition) =>
         query.length === 0
         || definition.name.toLowerCase().includes(query)

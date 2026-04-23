@@ -4,6 +4,7 @@ export type EntityIconId =
   | 'graph'
   | 'content'
   | 'credits'
+  | 'info'
   | 'item'
   | 'group'
   | 'concept'
@@ -61,6 +62,14 @@ function IconPath({ id }: { id: EntityIconId }) {
           <ellipse cx="12" cy="12" rx="7.2" ry="7.2" {...stroke} />
           <path d="M9.2 9.8h5.6M9.2 14.2h5.6" {...stroke} />
           <path d="M10.2 7.8v8.4M13.8 7.8v8.4" {...stroke} />
+        </>
+      )
+    case 'info':
+      return (
+        <>
+          <circle cx="12" cy="12" r="7.2" {...stroke} />
+          <path d="M12 10.3v5" {...stroke} />
+          <circle cx="12" cy="7.3" r="0.8" style={{ fill: 'currentColor' }} />
         </>
       )
     case 'item':

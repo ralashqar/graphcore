@@ -53,6 +53,7 @@ import {
   type WorldResult,
   type WorldOperator,
   type WorldGraphConnection,
+  type WorldView,
 } from '../../../src/domain/worldGraph.ts'
 import {
   worldBuildPlanResponseSchema,
@@ -170,6 +171,7 @@ type WorldEntityRow = {
   key: string
   name: string
   summary: string | null
+  context: string | null
   node_type: WorldEntity['nodeType']
   aliases: string[] | null
   tags: string[] | null
@@ -183,13 +185,106 @@ type WorldEntityRow = {
   updated_at: string
 }
 
+type WorldRelationshipRow = {
+  id: string
+  key: string
+  source_entity_id: string
+  target_entity_id: string
+  verb: string
+  direction: WorldRelationship['direction']
+  strength: number | null
+  confidence: number | null
+  source: WorldRelationship['source']
+  notes: string | null
+  state: WorldRelationship['state']
+  metadata: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+
+type WorldViewRow = {
+  id: string
+  key: string
+  name: string
+  mode: WorldView['mode']
+  filters: Record<string, unknown> | null
+  search: string | null
+  root_entity_key: string | null
+  camera: Record<string, unknown> | null
+  focus_depth: number | null
+  show_suggestions: boolean | null
+  show_labels: boolean | null
+  show_derived_layer: boolean | null
+  node_positions: Record<string, unknown> | null
+  collapsed_state: Record<string, unknown> | null
+  sort_mode: string | null
+  metadata: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+
+type WorldOperatorRow = {
+  id: string
+  key: string
+  operator_type: WorldOperator['operatorType']
+  input_entity_keys: string[] | null
+  label: string | null
+  status: WorldOperator['status']
+  metadata: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+
+type WorldResultRow = {
+  id: string
+  key: string
+  result_type: WorldResult['resultType']
+  source_operator_key: string
+  title: string
+  summary: string | null
+  preview_asset_key: string | null
+  status: WorldResult['status']
+  metadata: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+
+type WorldGraphConnectionRow = {
+  id: string
+  key: string
+  source_node_key: string
+  source_node_kind: WorldGraphConnection['sourceNodeKind']
+  target_node_key: string
+  target_node_kind: WorldGraphConnection['targetNodeKind']
+  role: WorldGraphConnection['role']
+  metadata: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+
 const SESSION_SELECT = 'id, draft_id, key, title, status, is_active, summary_memory, last_context, selected_root_entity_key, selected_view_key, model, metadata, created_at, updated_at'
 const TURN_SELECT = 'id, session_id, draft_id, prompt, status, model, resolved_context, approval_state, assistant_summary, error_message, response_id, metadata, created_at, updated_at'
 const MESSAGE_SELECT = 'id, session_id, turn_id, draft_id, role, content, metadata, created_at'
 const EVENT_SELECT = 'id, session_id, turn_id, draft_id, sequence, event_type, op_id, payload, metadata, created_at'
 const SUGGESTION_SELECT = 'id, draft_id, session_id, turn_id, thread_key, label, prompt, kind, style, source, summary, estimated_node_count, estimated_edge_count, will_queue_images, will_queue_cinematics, state, rank, used_turn_id, dismissed_at, metadata, created_at, updated_at'
 const THREAD_SELECT = 'id, draft_id, key, title, summary, status, priority, linked_entity_keys, source_turn_id, last_turn_id, metadata, created_at, updated_at'
-const WORLD_ENTITY_SELECT = 'id, key, name, summary, node_type, aliases, tags, status, thumbnail_asset_key, linked_definition_key, source, custom_properties, metadata, created_at, updated_at'
+const WORLD_ENTITY_SELECT = 'id, key, name, summary, context, node_type, aliases, tags, status, thumbnail_asset_key, linked_definition_key, source, custom_properties, metadata, created_at, updated_at'
+const WORLD_RELATIONSHIP_SELECT = 'id, key, source_entity_id, target_entity_id, verb, direction, strength, confidence, source, notes, state, metadata, created_at, updated_at'
+const WORLD_VIEW_SELECT = 'id, key, name, mode, filters, search, root_entity_key, camera, focus_depth, show_suggestions, show_labels, show_derived_layer, node_positions, collapsed_state, sort_mode, metadata, created_at, updated_at'
+const WORLD_OPERATOR_SELECT = 'id, key, operator_type, input_entity_keys, label, status, metadata, created_at, updated_at'
+const WORLD_RESULT_SELECT = 'id, key, result_type, source_operator_key, title, summary, preview_asset_key, status, metadata, created_at, updated_at'
+const WORLD_GRAPH_CONNECTION_SELECT = 'id, key, source_node_key, source_node_kind, target_node_key, target_node_kind, role, metadata, created_at, updated_at'
+
+type ReplaceWorldEntityRpcResult = {
+  archivedEntityKey: string | null
+  replacementEntityKey: string
+  touchedRelationshipKeys: string[]
+  touchedViewKeys: string[]
+  touchedOperatorKeys: string[]
+  touchedResultKeys: string[]
+  touchedConnectionKeys: string[]
+  touchedThreadKeys: string[]
+}
 
 const plannerThreadCandidateSchema = z.object({
   key: z.string(),
@@ -220,6 +315,17 @@ const worldPromptPlannerSchema = z.object({
   optionalIdeas: z.array(plannerIdeaSchema).default([]),
   threadCandidates: z.array(plannerThreadCandidateSchema).default([]),
   suggestionCandidates: z.array(plannerIdeaSchema).default([]),
+})
+
+const replaceWorldEntityRpcResultSchema = z.object({
+  archivedEntityKey: z.string().nullable().default(null),
+  replacementEntityKey: z.string(),
+  touchedRelationshipKeys: z.array(z.string()).default([]),
+  touchedViewKeys: z.array(z.string()).default([]),
+  touchedOperatorKeys: z.array(z.string()).default([]),
+  touchedResultKeys: z.array(z.string()).default([]),
+  touchedConnectionKeys: z.array(z.string()).default([]),
+  touchedThreadKeys: z.array(z.string()).default([]),
 })
 
 const DIRECT_SCOPE_CAPS = {
@@ -366,6 +472,26 @@ function normalizePlannerOperation(rawOp: unknown, index: number) {
         record.payload = {
           targetEntityKey: record.targetEntityKey,
           changes: record.changes && typeof record.changes === 'object' ? record.changes : {},
+        }
+      }
+      break
+    case 'replace_entity':
+      if (typeof record.targetEntityKey === 'string') {
+        record.payload = {
+          targetEntityKey: record.targetEntityKey,
+          replacementMode: record.replacementMode === 'existing' ? 'existing' : 'create',
+          replacementEntity: record.replacementEntity && typeof record.replacementEntity === 'object'
+            ? record.replacementEntity
+            : record.entity && typeof record.entity === 'object'
+              ? record.entity
+              : null,
+          replacementEntityKey: typeof record.replacementEntityKey === 'string' ? record.replacementEntityKey : null,
+          transferRelationships: record.transferRelationships ?? true,
+          transferGraphConnections: record.transferGraphConnections ?? true,
+          transferDerivedResults: record.transferDerivedResults ?? true,
+          archiveOldEntity: record.archiveOldEntity ?? true,
+          deleteOldEntity: record.deleteOldEntity ?? false,
+          reason: typeof record.reason === 'string' ? record.reason : '',
         }
       }
       break
@@ -692,6 +818,7 @@ function mapWorldEntityRow(row: WorldEntityRow): WorldEntity {
     key: row.key,
     name: row.name,
     summary: row.summary ?? '',
+    context: row.context ?? '',
     nodeType: row.node_type,
     aliases: row.aliases ?? [],
     tags: row.tags ?? [],
@@ -704,6 +831,95 @@ function mapWorldEntityRow(row: WorldEntityRow): WorldEntity {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   })
+}
+
+function mapWorldRelationshipRow(row: WorldRelationshipRow, worldEntities: WorldEntity[]): WorldRelationship {
+  const sourceEntity = worldEntities.find((entity) => entity.id === row.source_entity_id) ?? null
+  const targetEntity = worldEntities.find((entity) => entity.id === row.target_entity_id) ?? null
+  return worldRelationshipSchema.parse({
+    id: row.id,
+    key: row.key,
+    sourceEntityKey: sourceEntity?.key ?? row.source_entity_id,
+    targetEntityKey: targetEntity?.key ?? row.target_entity_id,
+    verb: row.verb,
+    direction: row.direction,
+    strength: row.strength,
+    confidence: row.confidence,
+    source: row.source,
+    notes: row.notes ?? '',
+    state: row.state,
+    metadata: row.metadata ?? {},
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  })
+}
+
+function mapWorldViewRow(row: WorldViewRow) {
+  return worldViewSchema.parse({
+    id: row.id,
+    key: row.key,
+    name: row.name,
+    mode: row.mode,
+    filters: row.filters ?? {},
+    search: row.search ?? '',
+    rootEntityKey: row.root_entity_key,
+    camera: row.camera ?? {},
+    focusDepth: row.focus_depth ?? 1,
+    showSuggestions: row.show_suggestions ?? true,
+    showLabels: row.show_labels ?? true,
+    showDerivedLayer: row.show_derived_layer ?? true,
+    nodePositions: row.node_positions ?? {},
+    collapsedState: row.collapsed_state ?? {},
+    sortMode: row.sort_mode ?? 'manual',
+    metadata: row.metadata ?? {},
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  })
+}
+
+function mapWorldOperatorRow(row: WorldOperatorRow): WorldOperator {
+  return {
+    id: row.id,
+    key: row.key,
+    operatorType: row.operator_type,
+    inputEntityKeys: row.input_entity_keys ?? [],
+    label: row.label ?? '',
+    status: row.status,
+    metadata: row.metadata ?? {},
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
+}
+
+function mapWorldResultRow(row: WorldResultRow): WorldResult {
+  return {
+    id: row.id,
+    key: row.key,
+    resultType: row.result_type,
+    sourceOperatorKey: row.source_operator_key,
+    title: row.title,
+    summary: row.summary ?? '',
+    previewAssetKey: row.preview_asset_key,
+    status: row.status,
+    metadata: row.metadata ?? {},
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
+}
+
+function mapWorldGraphConnectionRow(row: WorldGraphConnectionRow): WorldGraphConnection {
+  return {
+    id: row.id,
+    key: row.key,
+    sourceNodeKey: row.source_node_key,
+    sourceNodeKind: row.source_node_kind,
+    targetNodeKey: row.target_node_key,
+    targetNodeKind: row.target_node_kind,
+    role: row.role,
+    metadata: row.metadata ?? {},
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
 }
 
 async function ensurePromptSession(input: {
@@ -1405,10 +1621,11 @@ function countScopeOps(ops: PromptToWorldOp[], snapshot: WorldPromptSnapshot) {
   for (const op of ops) {
     if (op.op === 'assistant_note') continue
     counts.actionableOps += 1
-    if (op.op === 'upsert_entity' || op.op === 'update_entity') {
+    if (op.op === 'upsert_entity' || op.op === 'update_entity' || op.op === 'replace_entity') {
       counts.entityOps += 1
       const targetsExisting =
         op.op === 'update_entity'
+          || op.op === 'replace_entity'
           || (
             op.op === 'upsert_entity'
             && !isProjectedCreate(op)
@@ -1452,6 +1669,11 @@ function promptIncludesAny(prompt: string, probes: string[]) {
 
 function scorePromptOpForStaging(op: PromptToWorldOp, prompt: string) {
   if (op.op === 'assistant_note') return -10
+  if (op.op === 'replace_entity') {
+    const replacementName = op.payload.replacementMode === 'create' ? op.payload.replacementEntity?.name ?? '' : op.payload.replacementEntityKey ?? ''
+    const nameBoost = promptIncludesAny(prompt, [op.payload.targetEntityKey, replacementName]) ? 40 : 0
+    return 130 + nameBoost
+  }
   if (op.op === 'upsert_entity') {
     const nameBoost = promptIncludesAny(prompt, [op.payload.entity.name, ...op.payload.entity.aliases]) ? 30 : 0
     const anchorBoost = op.payload.entity.nodeType === 'place' || op.payload.entity.nodeType === 'event' ? 20 : 0
@@ -1483,6 +1705,14 @@ function scorePromptOpForStaging(op: PromptToWorldOp, prompt: string) {
 function resolveStagingEntityKeys(op: PromptToWorldOp) {
   if (op.op === 'upsert_entity') {
     return [op.payload.targetEntityKey].filter((value): value is string => Boolean(value))
+  }
+  if (op.op === 'replace_entity') {
+    return [
+      op.payload.targetEntityKey,
+      op.payload.replacementMode === 'existing'
+        ? op.payload.replacementEntityKey
+        : null,
+    ].filter((value): value is string => Boolean(value))
   }
   if (op.op === 'upsert_relationship') {
     return [op.payload.relationship.sourceEntityKey, op.payload.relationship.targetEntityKey].filter((value): value is string => Boolean(value))
@@ -1633,6 +1863,7 @@ function impactForOp(op: PromptToWorldOp) {
   switch (op.op) {
     case 'upsert_entity':
     case 'update_entity':
+    case 'replace_entity':
       return { nodeCount: 1, edgeCount: 0, queueCount: 0 }
     case 'upsert_relationship':
     case 'update_relationship':
@@ -2085,6 +2316,24 @@ function buildPreviewItem(op: PromptToWorldOp): WorldPromptPlanPreviewItem {
         estimatedImpact: impact,
         status: 'preview',
       }
+    case 'replace_entity':
+      return {
+        id: op.id,
+        kind: 'entity',
+        title: op.payload.replacementMode === 'create'
+          ? op.payload.replacementEntity?.name ?? op.payload.targetEntityKey
+          : op.payload.replacementEntityKey ?? op.payload.targetEntityKey,
+        summary: op.payload.reason || 'Replace an existing entity while preserving graph continuity.',
+        targetKeys: [
+          op.payload.targetEntityKey,
+          op.payload.replacementMode === 'existing' ? op.payload.replacementEntityKey : null,
+        ].filter((value): value is string => Boolean(value)),
+        diffMode: 'touches_existing',
+        touchesCanon,
+        approvalRequired: true,
+        estimatedImpact: impact,
+        status: 'preview',
+      }
     case 'upsert_relationship':
       return {
         id: op.id,
@@ -2321,6 +2570,7 @@ function classifyPromptExecution(input: {
   assistantSummary: string
 }): PromptExecutionClassification {
   const actionableOps = input.ops.filter((op) => op.op !== 'assistant_note')
+  const explicitLocalizedCorrection = actionableOps.length > 0 && actionableOps.every((op) => op.op === 'replace_entity')
   const counts = countScopeOps(input.ops, input.snapshot)
   const contradictoryOrLowConfidence = looksContradictoryOrLowConfidence(input.prompt)
   const classificationHint = input.classificationHint ?? null
@@ -2399,7 +2649,9 @@ function classifyPromptExecution(input: {
       scope,
       selectedOps: input.ops,
       deferredOps: [],
-      suggestions: classificationHint === 'graphable_broad'
+      suggestions: explicitLocalizedCorrection
+        ? []
+        : classificationHint === 'graphable_broad'
         ? dedupeSuggestions([
           ...(input.suggestionCandidates ?? []),
           ...buildThreadAwareSuggestions({
@@ -2466,40 +2718,76 @@ function classifyPromptExecution(input: {
 }
 
 function projectSanitizedOpIntoSnapshot(snapshot: WorldPromptSnapshot, op: PromptToWorldOp) {
-  if (op.op !== 'upsert_entity') return
-  if (op.payload.targetEntityKey && snapshot.worldEntities.some((entity) => entity.key === op.payload.targetEntityKey)) {
+  const now = new Date().toISOString()
+  if (op.op === 'upsert_entity') {
+    if (op.payload.targetEntityKey && snapshot.worldEntities.some((entity) => entity.key === op.payload.targetEntityKey)) {
+      return
+    }
+    const key = op.payload.targetEntityKey || buildWorldEntityKey(snapshot, op.payload.entity.nodeType, op.payload.entity.name)
+    op.payload.targetEntityKey = key
+    op.metadata = {
+      ...(op.metadata ?? {}),
+      projectedCreate: true,
+    }
+    snapshot.worldEntities = [
+      ...snapshot.worldEntities,
+      worldEntitySchema.parse({
+        id: `projected:${key}`,
+        key,
+        name: op.payload.entity.name,
+        summary: op.payload.entity.summary,
+        context: op.payload.entity.context,
+        nodeType: op.payload.entity.nodeType,
+        aliases: op.payload.entity.aliases ?? [],
+        tags: op.payload.entity.tags ?? [],
+        status: op.payload.entity.status,
+        thumbnailAssetKey: op.payload.entity.thumbnailAssetKey,
+        linkedDefinitionKey: op.payload.entity.linkedDefinitionKey,
+        source: op.payload.entity.source ?? 'ai',
+        customProperties: op.payload.entity.customProperties ?? {},
+        metadata: {
+          ...(op.payload.entity.metadata ?? {}),
+          projected: true,
+        },
+        createdAt: now,
+        updatedAt: now,
+      }),
+    ]
     return
   }
-  const key = op.payload.targetEntityKey || buildWorldEntityKey(snapshot, op.payload.entity.nodeType, op.payload.entity.name)
-  op.payload.targetEntityKey = key
-  op.metadata = {
-    ...(op.metadata ?? {}),
-    projectedCreate: true,
+
+  if (op.op === 'replace_entity' && op.payload.replacementMode === 'create' && op.payload.replacementEntity) {
+    const key = op.payload.replacementEntityKey || buildWorldEntityKey(snapshot, op.payload.replacementEntity.nodeType, op.payload.replacementEntity.name)
+    op.payload.replacementEntityKey = key
+    if (snapshot.worldEntities.some((entity) => entity.key === key)) {
+      return
+    }
+    snapshot.worldEntities = [
+      ...snapshot.worldEntities,
+      worldEntitySchema.parse({
+        id: `projected:${key}`,
+        key,
+        name: op.payload.replacementEntity.name,
+        summary: op.payload.replacementEntity.summary,
+        context: op.payload.replacementEntity.context,
+        nodeType: op.payload.replacementEntity.nodeType,
+        aliases: op.payload.replacementEntity.aliases ?? [],
+        tags: op.payload.replacementEntity.tags ?? [],
+        status: op.payload.replacementEntity.status,
+        thumbnailAssetKey: op.payload.replacementEntity.thumbnailAssetKey,
+        linkedDefinitionKey: op.payload.replacementEntity.linkedDefinitionKey,
+        source: op.payload.replacementEntity.source ?? 'ai',
+        customProperties: op.payload.replacementEntity.customProperties ?? {},
+        metadata: {
+          ...(op.payload.replacementEntity.metadata ?? {}),
+          projected: true,
+          replacementCandidate: true,
+        },
+        createdAt: now,
+        updatedAt: now,
+      }),
+    ]
   }
-  const now = new Date().toISOString()
-  snapshot.worldEntities = [
-    ...snapshot.worldEntities,
-    worldEntitySchema.parse({
-      id: `projected:${key}`,
-      key,
-      name: op.payload.entity.name,
-      summary: op.payload.entity.summary,
-      nodeType: op.payload.entity.nodeType,
-      aliases: op.payload.entity.aliases ?? [],
-      tags: op.payload.entity.tags ?? [],
-      status: op.payload.entity.status,
-      thumbnailAssetKey: op.payload.entity.thumbnailAssetKey,
-      linkedDefinitionKey: op.payload.entity.linkedDefinitionKey,
-      source: op.payload.entity.source ?? 'ai',
-      customProperties: op.payload.entity.customProperties ?? {},
-      metadata: {
-        ...(op.payload.entity.metadata ?? {}),
-        projected: true,
-      },
-      createdAt: now,
-      updatedAt: now,
-    }),
-  ]
 }
 
 async function ensureLinkedDefinition(input: {
@@ -2743,16 +3031,19 @@ async function generatePromptPlan(input: {
     'Return compact JSON only that matches the provided schema exactly.',
     'Generate world-graph actions, not prose conversation.',
     'Return top-level keys: classification, assistantSummary, operations, wave1Ops, wave2Ideas, optionalIdeas, threadCandidates, suggestionCandidates.',
-    'Allowed operations for wave1Ops: upsert_entity, update_entity, upsert_relationship, update_relationship, create_derived_result, queue_image_generation, queue_cinematic_generation, assistant_note.',
+    'Allowed operations for wave1Ops: upsert_entity, update_entity, replace_entity, upsert_relationship, update_relationship, create_derived_result, queue_image_generation, queue_cinematic_generation, assistant_note.',
     'Favor additive graph growth.',
+    'Use update_entity when the user is refining or clarifying an existing node summary, context, aliases, or tags without changing the node identity.',
+    'Use update_relationship when the user is refining relationship details, tone, notes, or confidence for an existing link.',
     'Use queue_image_generation only for actor, place, or object nodes when the prompt is visually explicit.',
     'Use queue_cinematic_generation only when the prompt explicitly requests a cinematic, scene, shot, trailer, storyboard, or cutscene.',
-    'Do not invent deletions or archival actions.',
+    'Do not invent hard deletions. Use replace_entity only for explicit localized correction prompts where an existing node has the wrong identity or type.',
     'If the prompt asks for plan only, preview only, or no mutations, put the proposed applyable ops in wave1Ops, set classification to graphable_plan_only, and do not assume they will be applied immediately.',
     'When referring to existing world items, prefer targetEntityKey when obvious, otherwise use entity names and let the resolver match them.',
     'Default to applyMode auto. Favor additive graph growth and avoid proposing semantic rewrites that would require human confirmation.',
     'When the user explicitly names entities, places, groups, concepts, or events, preserve those proper nouns verbatim and create graph nodes for them instead of inventing replacements.',
     'If the prompt says something like "kingdom called X", "character called Y", "faction called Z", or "king called Q", infer the obvious world entity types directly.',
+    'When the user says an existing node should be a different kind of thing, or explicitly asks to replace or correct a mistaken node, use replace_entity instead of combining create and update ops.',
     'For a simple direct creation prompt, wave1Ops should contain the named entities and the most obvious relationships before proposing any optional follow-up suggestions.',
     'Use graphable_broad when the request wants too much for one turn. In that case, keep only the best first wave in wave1Ops and place follow-up ideas in wave2Ideas/optionalIdeas.',
     'Use not_graphable or contradictory_or_low_confidence when the prompt cannot be mapped cleanly. In that case, wave1Ops may be empty and suggestionCandidates should repair the request.',
@@ -2932,7 +3223,6 @@ function sanitizePromptOp(input: {
       op.payload.changes.name !== undefined
       || op.payload.changes.nodeType !== undefined
       || op.payload.changes.linkedDefinitionKey !== undefined
-      || (typeof op.payload.changes.summary === 'string' && target.summary.trim() && op.payload.changes.summary.trim() !== target.summary.trim())
     )
     const canonTouch = entityIsCanonLocked(target)
     if (destructive || canonTouch) {
@@ -2943,6 +3233,69 @@ function sanitizePromptOp(input: {
       touchesExisting: true,
       canonTouch,
       approvalReason: destructive ? 'Semantic rewrite of existing entity' : canonTouch ? 'Touches canon-locked entity' : null,
+    })
+  }
+
+  if (op.op === 'replace_entity') {
+    const target = input.snapshot.worldEntities.find((entity) => entity.key === op.payload.targetEntityKey) ?? null
+    if (!target) {
+      op.applyMode = 'needs_approval'
+      return annotatePromptOpMetadata({
+        op,
+        touchesExisting: true,
+        approvalReason: 'Missing entity target',
+      })
+    }
+
+    if (op.payload.replacementMode === 'create' && op.payload.replacementEntity) {
+      op.payload.replacementEntity.source = op.payload.replacementEntity.source ?? 'ai'
+      op.payload.replacementEntity.ensureLinkedDefinition = op.payload.replacementEntity.ensureLinkedDefinition ?? true
+      const resolvedReplacement = resolveEntityReference(input.snapshot, {
+        entityKey: op.payload.replacementEntityKey,
+        definitionKey: op.payload.replacementEntity.linkedDefinitionKey,
+        name: op.payload.replacementEntity.name,
+      })
+      if (resolvedReplacement.candidates.length > 1) {
+        op.applyMode = 'needs_approval'
+        op.metadata = {
+          ...(op.metadata ?? {}),
+          replacementMatchCandidateEntityKeys: resolvedReplacement.candidates.map((candidate) => candidate.key),
+          replacementResolution: resolvedReplacement.matchType,
+        }
+        return annotatePromptOpMetadata({
+          op,
+          touchesExisting: true,
+          approvalReason: 'Ambiguous replacement entity match',
+        })
+      }
+      if (resolvedReplacement.entity && resolvedReplacement.entity.key !== target.key) {
+        op.payload.replacementMode = 'existing'
+        op.payload.replacementEntityKey = resolvedReplacement.entity.key
+        op.payload.replacementEntity = null
+      }
+    }
+
+    if (op.payload.replacementMode === 'existing') {
+      const replacement = op.payload.replacementEntityKey
+        ? input.snapshot.worldEntities.find((entity) => entity.key === op.payload.replacementEntityKey) ?? null
+        : null
+      if (!replacement || replacement.key === target.key) {
+        op.applyMode = 'needs_approval'
+        return annotatePromptOpMetadata({
+          op,
+          touchesExisting: true,
+          approvalReason: 'Replacement entity target is invalid',
+        })
+      }
+    }
+
+    const canonTouch = entityIsCanonLocked(target)
+    op.applyMode = 'needs_approval'
+    return annotatePromptOpMetadata({
+      op,
+      touchesExisting: true,
+      canonTouch,
+      approvalReason: canonTouch ? 'Touches canon-locked entity' : 'Semantic replacement of existing entity',
     })
   }
 
@@ -3076,6 +3429,166 @@ async function invokeEdgeFunction<TResponse>(input: {
   return input.schema ? input.schema.parse(payload) : payload as TResponse
 }
 
+async function createPromptWorldEntity(input: {
+  client: SupabaseClient
+  snapshot: WorldPromptSnapshot
+  entity: WorldEntityCreateInput
+  preferredKey?: string | null
+}) {
+  const linkedDefinitionKey = await ensureLinkedDefinition({
+    client: input.client,
+    snapshot: input.snapshot,
+    entity: input.entity,
+  })
+  const definitionCreated = Boolean(linkedDefinitionKey && !input.snapshot.definitions.some((definition) => definition.key === linkedDefinitionKey))
+  if (definitionCreated && linkedDefinitionKey) {
+    const definitionKind = determineDefinitionKind(input.entity.nodeType)
+    if (definitionKind) {
+      input.snapshot.definitions = [
+        ...input.snapshot.definitions,
+        {
+          key: linkedDefinitionKey,
+          kind: definitionKind,
+          name: input.entity.name,
+          summary: input.entity.summary,
+        },
+      ]
+    }
+  }
+
+  const key = input.preferredKey || buildWorldEntityKey(input.snapshot, input.entity.nodeType, input.entity.name)
+  const insertResponse = await input.client
+    .from('world_entities')
+    .insert({
+      draft_id: input.snapshot.draft.id,
+      key,
+      name: input.entity.name,
+      summary: input.entity.summary,
+      context: input.entity.context,
+      node_type: input.entity.nodeType,
+      aliases: input.entity.aliases,
+      tags: input.entity.tags,
+      status: input.entity.status,
+      thumbnail_asset_key: input.entity.thumbnailAssetKey,
+      linked_definition_key: linkedDefinitionKey,
+      source: input.entity.source ?? 'ai',
+      custom_properties: input.entity.customProperties,
+      metadata: input.entity.metadata,
+    })
+    .select(WORLD_ENTITY_SELECT)
+    .single()
+  if (insertResponse.error) throw new Error(insertResponse.error.message)
+
+  const createdEntity = mapWorldEntityRow(insertResponse.data as WorldEntityRow)
+  input.snapshot.worldEntities = [
+    ...input.snapshot.worldEntities.filter((entity) => entity.key !== createdEntity.key),
+    createdEntity,
+  ]
+
+  return {
+    entity: createdEntity,
+    linkedDefinitionKey,
+    createdDefinitionKey: definitionCreated ? linkedDefinitionKey : null,
+  }
+}
+
+async function replaceWorldEntityGraph(input: {
+  client: SupabaseClient
+  snapshot: WorldPromptSnapshot
+  targetEntityKey: string
+  replacementEntityKey: string
+  reason: string
+  archiveOldEntity: boolean
+  deleteOldEntity: boolean
+  transferRelationships: boolean
+  transferGraphConnections: boolean
+  transferDerivedResults: boolean
+  archiveOldDefinitionKey: string | null
+  replacementDefinitionKey: string | null
+}) {
+  const rpcResponse = await input.client.rpc('replace_world_entity', {
+    p_draft_id: input.snapshot.draft.id,
+    p_target_entity_key: input.targetEntityKey,
+    p_replacement_entity_key: input.replacementEntityKey,
+    p_transfer_relationships: input.transferRelationships,
+    p_transfer_graph_connections: input.transferGraphConnections,
+    p_transfer_derived_results: input.transferDerivedResults,
+    p_archive_old_entity: input.archiveOldEntity,
+    p_delete_old_entity: input.deleteOldEntity,
+    p_reason: input.reason || null,
+    p_archive_old_definition_key: input.archiveOldDefinitionKey,
+    p_replacement_definition_key: input.replacementDefinitionKey,
+  })
+  if (rpcResponse.error) throw new Error(rpcResponse.error.message)
+
+  const rpcResult = replaceWorldEntityRpcResultSchema.parse(rpcResponse.data ?? {})
+  const touchedEntityKeys = [
+    rpcResult.archivedEntityKey,
+    rpcResult.replacementEntityKey,
+  ].filter((value): value is string => Boolean(value))
+
+  const worldEntities = await loadWorldEntitiesByDraftAndKeys(input.client, input.snapshot.draft.id, touchedEntityKeys)
+  input.snapshot.worldEntities = [
+    ...input.snapshot.worldEntities.filter((entity) => !touchedEntityKeys.includes(entity.key)),
+    ...worldEntities,
+  ]
+
+  const worldRelationships = await loadWorldRelationshipsByDraftAndKeys(
+    input.client,
+    input.snapshot.draft.id,
+    rpcResult.touchedRelationshipKeys,
+    input.snapshot.worldEntities,
+  )
+  input.snapshot.worldRelationships = [
+    ...input.snapshot.worldRelationships.filter((relationship) => !rpcResult.touchedRelationshipKeys.includes(relationship.key)),
+    ...worldRelationships,
+  ]
+
+  const worldViews = await loadWorldViewsByDraftAndKeys(input.client, input.snapshot.draft.id, rpcResult.touchedViewKeys)
+  input.snapshot.worldViews = [
+    ...input.snapshot.worldViews.filter((view) => !rpcResult.touchedViewKeys.includes(view.key)),
+    ...worldViews,
+  ]
+
+  const worldOperators = await loadWorldOperatorsByDraftAndKeys(input.client, input.snapshot.draft.id, rpcResult.touchedOperatorKeys)
+  input.snapshot.worldOperators = [
+    ...input.snapshot.worldOperators.filter((operator) => !rpcResult.touchedOperatorKeys.includes(operator.key)),
+    ...worldOperators,
+  ]
+
+  const worldResults = await loadWorldResultsByDraftAndKeys(input.client, input.snapshot.draft.id, rpcResult.touchedResultKeys)
+  input.snapshot.worldResults = [
+    ...input.snapshot.worldResults.filter((result) => !rpcResult.touchedResultKeys.includes(result.key)),
+    ...worldResults,
+  ]
+
+  const worldGraphConnections = await loadWorldGraphConnectionsByDraftAndKeys(
+    input.client,
+    input.snapshot.draft.id,
+    rpcResult.touchedConnectionKeys,
+  )
+  input.snapshot.worldGraphConnections = [
+    ...input.snapshot.worldGraphConnections.filter((connection) => !rpcResult.touchedConnectionKeys.includes(connection.key)),
+    ...worldGraphConnections,
+  ]
+
+  const worldThreads = await loadWorldThreadsByDraftAndKeys(input.client, input.snapshot.draft.id, rpcResult.touchedThreadKeys)
+  input.snapshot.worldThreads = [
+    ...input.snapshot.worldThreads.filter((thread) => !rpcResult.touchedThreadKeys.includes(thread.key)),
+    ...worldThreads,
+  ]
+
+  return {
+    worldEntities,
+    worldRelationships,
+    worldViews,
+    worldOperators,
+    worldResults,
+    worldGraphConnections,
+    worldThreads,
+  }
+}
+
 async function applyPromptOp(input: {
   client: SupabaseClient
   authHeader: string
@@ -3136,6 +3649,7 @@ async function applyPromptOp(input: {
         key,
         name: input.op.payload.entity.name,
         summary: input.op.payload.entity.summary,
+        context: input.op.payload.entity.context,
         node_type: input.op.payload.entity.nodeType,
         aliases: input.op.payload.entity.aliases,
         tags: input.op.payload.entity.tags,
@@ -3183,13 +3697,15 @@ async function applyPromptOp(input: {
     const changes = input.op.payload.changes
     const nextAliases = changes.aliases ? Array.from(new Set([...target.aliases, ...changes.aliases])) : target.aliases
     const nextTags = changes.tags ? Array.from(new Set([...target.tags, ...changes.tags])) : target.tags
-    const nextSummary = typeof changes.summary === 'string' && !target.summary.trim() ? changes.summary : target.summary
+    const nextSummary = mergeEntitySummary(target.summary, changes.summary)
+    const nextContext = mergeEntityContext(target.context, changes.context)
     const updateResponse = await input.client
       .from('world_entities')
       .update({
         aliases: nextAliases,
         tags: nextTags,
         summary: nextSummary,
+        context: nextContext,
         metadata: {
           ...(target.metadata ?? {}),
           ...(changes.metadata ?? {}),
@@ -3197,7 +3713,7 @@ async function applyPromptOp(input: {
       })
       .eq('draft_id', input.snapshot.draft.id)
       .eq('key', target.key)
-      .select('id, key, name, summary, node_type, aliases, tags, status, thumbnail_asset_key, linked_definition_key, source, custom_properties, metadata, created_at, updated_at')
+      .select('id, key, name, summary, context, node_type, aliases, tags, status, thumbnail_asset_key, linked_definition_key, source, custom_properties, metadata, created_at, updated_at')
       .single()
     if (updateResponse.error) throw new Error(updateResponse.error.message)
     const updatedEntity = worldEntitySchema.parse({
@@ -3205,6 +3721,7 @@ async function applyPromptOp(input: {
       key: updateResponse.data.key,
       name: updateResponse.data.name,
       summary: updateResponse.data.summary ?? '',
+      context: updateResponse.data.context ?? '',
       nodeType: updateResponse.data.node_type,
       aliases: updateResponse.data.aliases ?? [],
       tags: updateResponse.data.tags ?? [],
@@ -3221,17 +3738,95 @@ async function applyPromptOp(input: {
     return { applied: { worldEntities: [updatedEntity] }, queue: null, note: null }
   }
 
+  if (input.op.op === 'replace_entity') {
+    const target = input.snapshot.worldEntities.find((entity) => entity.key === input.op.payload.targetEntityKey) ?? null
+    if (!target) throw new Error(`World entity ${input.op.payload.targetEntityKey} not found.`)
+
+    let replacementEntity: WorldEntity | null = null
+    let replacementDefinitionKey: string | null = null
+    let createdReplacementEntityKey: string | null = null
+    let createdReplacementDefinitionKey: string | null = null
+
+    try {
+      if (input.op.payload.replacementMode === 'existing') {
+        replacementEntity = input.op.payload.replacementEntityKey
+          ? input.snapshot.worldEntities.find((entity) => entity.key === input.op.payload.replacementEntityKey) ?? null
+          : null
+        if (!replacementEntity) {
+          throw new Error(`Replacement entity ${input.op.payload.replacementEntityKey} not found.`)
+        }
+        replacementDefinitionKey = replacementEntity.linkedDefinitionKey
+      } else {
+        if (!input.op.payload.replacementEntity) {
+          throw new Error('replace_entity in create mode requires replacementEntity.')
+        }
+        const created = await createPromptWorldEntity({
+          client: input.client,
+          snapshot: input.snapshot,
+          entity: input.op.payload.replacementEntity,
+          preferredKey: input.op.payload.replacementEntityKey,
+        })
+        replacementEntity = created.entity
+        replacementDefinitionKey = created.linkedDefinitionKey
+        createdReplacementEntityKey = created.entity.key
+        createdReplacementDefinitionKey = created.createdDefinitionKey
+      }
+
+      if (!replacementEntity) {
+        throw new Error('Replacement entity could not be resolved.')
+      }
+
+      const replaced = await replaceWorldEntityGraph({
+        client: input.client,
+        snapshot: input.snapshot,
+        targetEntityKey: target.key,
+        replacementEntityKey: replacementEntity.key,
+        reason: input.op.payload.reason,
+        archiveOldEntity: input.op.payload.archiveOldEntity,
+        deleteOldEntity: input.op.payload.deleteOldEntity,
+        transferRelationships: input.op.payload.transferRelationships,
+        transferGraphConnections: input.op.payload.transferGraphConnections,
+        transferDerivedResults: input.op.payload.transferDerivedResults,
+        archiveOldDefinitionKey: target.linkedDefinitionKey,
+        replacementDefinitionKey,
+      })
+
+      return {
+        applied: {
+          worldEntities: replaced.worldEntities,
+          worldRelationships: replaced.worldRelationships,
+          worldViews: replaced.worldViews,
+          worldOperators: replaced.worldOperators,
+          worldResults: replaced.worldResults,
+          worldGraphConnections: replaced.worldGraphConnections,
+        },
+        queue: null,
+        note: null,
+      }
+    } catch (error) {
+      if (createdReplacementEntityKey) {
+        await deleteWorldEntityByKey(input.client, input.snapshot.draft.id, createdReplacementEntityKey).catch(() => undefined)
+      }
+      if (createdReplacementDefinitionKey) {
+        await deleteProjectDefinitionByKey(input.client, input.snapshot.draft.id, createdReplacementDefinitionKey).catch(() => undefined)
+      }
+      throw error
+    }
+  }
+
   if (input.op.op === 'upsert_relationship') {
     const relationship = input.op.payload.relationship
     const existing = input.op.payload.targetRelationshipKey
       ? input.snapshot.worldRelationships.find((entry) => entry.key === input.op.payload.targetRelationshipKey) ?? null
       : null
     if (existing) {
-      const nextNotes = [existing.notes, relationship.notes].filter(Boolean).join('\n').trim()
+      const nextNotes = mergeRelationshipNotes(existing.notes, relationship.notes)
       const updateResponse = await input.client
         .from('world_relationships')
         .update({
           notes: nextNotes,
+          strength: relationship.strength ?? existing.strength,
+          confidence: relationship.confidence ?? existing.confidence,
           metadata: {
             ...(existing.metadata ?? {}),
             ...(relationship.metadata ?? {}),
@@ -3339,11 +3934,13 @@ async function applyPromptOp(input: {
   if (input.op.op === 'update_relationship') {
     const target = input.snapshot.worldRelationships.find((relationship) => relationship.key === input.op.payload.targetRelationshipKey) ?? null
     if (!target) throw new Error(`World relationship ${input.op.payload.targetRelationshipKey} not found.`)
-    const nextNotes = [target.notes, input.op.payload.changes.notes ?? ''].filter(Boolean).join('\n').trim() || target.notes
+    const nextNotes = mergeRelationshipNotes(target.notes, input.op.payload.changes.notes)
     const updateResponse = await input.client
       .from('world_relationships')
       .update({
         notes: nextNotes,
+        strength: input.op.payload.changes.strength ?? target.strength,
+        confidence: input.op.payload.changes.confidence ?? target.confidence,
         metadata: {
           ...(target.metadata ?? {}),
           ...(input.op.payload.changes.metadata ?? {}),
@@ -3521,7 +4118,7 @@ async function applyPromptOp(input: {
       })
       .eq('draft_id', input.snapshot.draft.id)
       .eq('key', target.key)
-      .select('id, key, name, summary, node_type, aliases, tags, status, thumbnail_asset_key, linked_definition_key, source, custom_properties, metadata, created_at, updated_at')
+      .select('id, key, name, summary, context, node_type, aliases, tags, status, thumbnail_asset_key, linked_definition_key, source, custom_properties, metadata, created_at, updated_at')
       .single()
     if (entityUpdate.error) throw new Error(entityUpdate.error.message)
     const updatedEntity = worldEntitySchema.parse({
@@ -3529,6 +4126,7 @@ async function applyPromptOp(input: {
       key: entityUpdate.data.key,
       name: entityUpdate.data.name,
       summary: entityUpdate.data.summary ?? '',
+      context: entityUpdate.data.context ?? '',
       nodeType: entityUpdate.data.node_type,
       aliases: entityUpdate.data.aliases ?? [],
       tags: entityUpdate.data.tags ?? [],
@@ -3701,6 +4299,135 @@ async function loadWorldEntityByDraftAndKey(client: SupabaseClient, draftId: str
   return response.data ? mapWorldEntityRow(response.data as WorldEntityRow) : null
 }
 
+async function loadWorldEntitiesByDraftAndKeys(client: SupabaseClient, draftId: string, entityKeys: string[]) {
+  if (entityKeys.length === 0) return []
+  const response = await client
+    .from('world_entities')
+    .select(WORLD_ENTITY_SELECT)
+    .eq('draft_id', draftId)
+    .in('key', entityKeys)
+  if (response.error) throw new Error(response.error.message)
+  return ((response.data ?? []) as WorldEntityRow[]).map(mapWorldEntityRow)
+}
+
+async function loadWorldRelationshipsByDraftAndKeys(client: SupabaseClient, draftId: string, relationshipKeys: string[], worldEntities: WorldEntity[]) {
+  if (relationshipKeys.length === 0) return []
+  const response = await client
+    .from('world_relationships')
+    .select(WORLD_RELATIONSHIP_SELECT)
+    .eq('draft_id', draftId)
+    .in('key', relationshipKeys)
+  if (response.error) throw new Error(response.error.message)
+  return ((response.data ?? []) as WorldRelationshipRow[]).map((row) => mapWorldRelationshipRow(row, worldEntities))
+}
+
+async function loadWorldViewsByDraftAndKeys(client: SupabaseClient, draftId: string, viewKeys: string[]) {
+  if (viewKeys.length === 0) return []
+  const response = await client
+    .from('world_views')
+    .select(WORLD_VIEW_SELECT)
+    .eq('draft_id', draftId)
+    .in('key', viewKeys)
+  if (response.error) throw new Error(response.error.message)
+  return ((response.data ?? []) as WorldViewRow[]).map(mapWorldViewRow)
+}
+
+async function loadWorldOperatorsByDraftAndKeys(client: SupabaseClient, draftId: string, operatorKeys: string[]) {
+  if (operatorKeys.length === 0) return []
+  const response = await client
+    .from('world_operators')
+    .select(WORLD_OPERATOR_SELECT)
+    .eq('draft_id', draftId)
+    .in('key', operatorKeys)
+  if (response.error) throw new Error(response.error.message)
+  return ((response.data ?? []) as WorldOperatorRow[]).map(mapWorldOperatorRow)
+}
+
+async function loadWorldResultsByDraftAndKeys(client: SupabaseClient, draftId: string, resultKeys: string[]) {
+  if (resultKeys.length === 0) return []
+  const response = await client
+    .from('world_results')
+    .select(WORLD_RESULT_SELECT)
+    .eq('draft_id', draftId)
+    .in('key', resultKeys)
+  if (response.error) throw new Error(response.error.message)
+  return ((response.data ?? []) as WorldResultRow[]).map(mapWorldResultRow)
+}
+
+async function loadWorldGraphConnectionsByDraftAndKeys(client: SupabaseClient, draftId: string, connectionKeys: string[]) {
+  if (connectionKeys.length === 0) return []
+  const response = await client
+    .from('world_graph_connections')
+    .select(WORLD_GRAPH_CONNECTION_SELECT)
+    .eq('draft_id', draftId)
+    .in('key', connectionKeys)
+  if (response.error) throw new Error(response.error.message)
+  return ((response.data ?? []) as WorldGraphConnectionRow[]).map(mapWorldGraphConnectionRow)
+}
+
+async function loadWorldThreadsByDraftAndKeys(client: SupabaseClient, draftId: string, threadKeys: string[]) {
+  if (threadKeys.length === 0) return []
+  const response = await client
+    .from('world_threads')
+    .select(THREAD_SELECT)
+    .eq('draft_id', draftId)
+    .in('key', threadKeys)
+  if (response.error) throw new Error(response.error.message)
+  return ((response.data ?? []) as WorldThreadRow[]).map(mapThreadRow)
+}
+
+async function deleteProjectDefinitionByKey(client: SupabaseClient, draftId: string, definitionKey: string) {
+  const response = await client
+    .from('project_definitions')
+    .delete()
+    .eq('draft_id', draftId)
+    .eq('key', definitionKey)
+  if (response.error) throw new Error(response.error.message)
+}
+
+async function deleteWorldEntityByKey(client: SupabaseClient, draftId: string, entityKey: string) {
+  const response = await client
+    .from('world_entities')
+    .delete()
+    .eq('draft_id', draftId)
+    .eq('key', entityKey)
+  if (response.error) throw new Error(response.error.message)
+}
+
+function normalizePromptTextBlock(value: string | null | undefined) {
+  return (value ?? '').replace(/\r\n/g, '\n').trim()
+}
+
+function mergeEntitySummary(existing: string, incoming?: string | null) {
+  const next = normalizePromptTextBlock(incoming)
+  if (!next) return existing
+  return next
+}
+
+function mergeEntityContext(existing: string, incoming?: string | null) {
+  const current = normalizePromptTextBlock(existing)
+  const next = normalizePromptTextBlock(incoming)
+  if (!next) return existing
+  if (!current) return next
+  if (current === next) return current
+  if (next.includes(current)) return next
+  if (current.includes(next)) return current
+
+  const paragraphs = Array.from(new Set(
+    [current, next]
+      .flatMap((value) => value.split(/\n{2,}/))
+      .map((value) => value.trim())
+      .filter(Boolean),
+  ))
+  return paragraphs.join('\n\n')
+}
+
+function mergeRelationshipNotes(existing: string, incoming?: string | null) {
+  const next = normalizePromptTextBlock(incoming)
+  if (!next) return existing
+  return next
+}
+
 async function mergePromptEntityIntoExisting(input: {
   client: SupabaseClient
   draftId: string
@@ -3710,13 +4437,15 @@ async function mergePromptEntityIntoExisting(input: {
 }) {
   const nextAliases = Array.from(new Set([...input.target.aliases, ...(input.incoming.aliases ?? [])]))
   const nextTags = Array.from(new Set([...input.target.tags, ...(input.incoming.tags ?? [])]))
-  const nextSummary = input.target.summary.trim() ? input.target.summary : input.incoming.summary
+  const nextSummary = mergeEntitySummary(input.target.summary, input.incoming.summary)
+  const nextContext = mergeEntityContext(input.target.context, input.incoming.context)
   const updateResponse = await input.client
     .from('world_entities')
     .update({
       aliases: nextAliases,
       tags: nextTags,
       summary: nextSummary,
+      context: nextContext,
       thumbnail_asset_key: input.target.thumbnailAssetKey ?? input.incoming.thumbnailAssetKey,
       linked_definition_key: input.target.linkedDefinitionKey ?? input.linkedDefinitionKey,
       custom_properties: {
@@ -3805,6 +4534,10 @@ function summarizeAppliedOps(ops: PromptToWorldOp[]) {
       switch (op.op) {
         case 'upsert_entity':
           return op.payload.entity.name
+        case 'replace_entity':
+          return op.payload.replacementMode === 'create'
+            ? `replace ${op.payload.targetEntityKey} with ${op.payload.replacementEntity?.name ?? 'new entity'}`
+            : `replace ${op.payload.targetEntityKey} with ${op.payload.replacementEntityKey ?? 'existing entity'}`
         case 'upsert_relationship':
           return op.payload.relationship.verb
         case 'create_derived_result':

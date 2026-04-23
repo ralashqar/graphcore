@@ -30,7 +30,10 @@ export type WorldPromptTranscriptEntry =
   | { id: string; createdAt: string; kind: 'user_message' | 'assistant_message'; content: string; pending?: boolean }
   | { id: string; createdAt: string; kind: 'system_status'; label: string; detail?: string; tone?: 'normal' | 'error' }
   | { id: string; createdAt: string; kind: 'entity_created'; label: string; detail?: string; entityKey: string; entityNodeType: WorldEntity['nodeType'] }
+  | { id: string; createdAt: string; kind: 'entity_updated'; label: string; detail?: string; entityKey: string; entityNodeType: WorldEntity['nodeType'] }
+  | { id: string; createdAt: string; kind: 'entity_replaced'; label: string; detail?: string; entityKey: string; entityNodeType: WorldEntity['nodeType'] }
   | { id: string; createdAt: string; kind: 'relationship_created'; label: string; detail?: string; relationshipKey: string; sourceLabel: string; targetLabel: string }
+  | { id: string; createdAt: string; kind: 'relationship_updated'; label: string; detail?: string; relationshipKey: string; sourceLabel: string; targetLabel: string }
   | { id: string; createdAt: string; kind: 'queue_started'; label: string; detail?: string }
   | { id: string; createdAt: string; kind: 'preview_available'; label: string; detail?: string; turnId: string; preview: WorldPromptPlanPreview }
   | { id: string; createdAt: string; kind: 'approval_required'; label: string; detail?: string; turnId: string; ops: PromptToWorldOp[] }
@@ -69,6 +72,7 @@ export type WorldInspectorViewModel = {
   title: string
   kicker: string
   summary: string
+  context: string
   imageUrl: string | null
   stats: string[]
 }
@@ -138,6 +142,8 @@ export function describePromptOp(op: PromptToWorldOp) {
       return `Add or extend ${op.payload.entity.name}`
     case 'update_entity':
       return `Update ${op.payload.targetEntityKey}`
+    case 'replace_entity':
+      return `Replace ${op.payload.targetEntityKey}`
     case 'upsert_relationship':
       return `Link ${op.payload.relationship.sourceEntityKey ?? op.payload.relationship.sourceRef?.name ?? 'source'} to ${op.payload.relationship.targetEntityKey ?? op.payload.relationship.targetRef?.name ?? 'target'}`
     case 'update_relationship':
@@ -352,7 +358,71 @@ export function buildWorldPromptTranscriptEntries(input: {
         break
       case 'op_applied': {
         const applied = payload.applied
+        const upsertOp = payload.op?.op === 'upsert_entity' ? payload.op : null
+        const updateOp = payload.op?.op === 'update_entity' ? payload.op : null
+        const replaceOp = payload.op?.op === 'replace_entity' ? payload.op : null
+        const upsertRelationshipOp = payload.op?.op === 'upsert_relationship' ? payload.op : null
+        const updateRelationshipOp = payload.op?.op === 'update_relationship' ? payload.op : null
+        if (replaceOp && applied?.worldEntities && applied.worldEntities.length > 0) {
+          const replacementEntity = applied.worldEntities.find((entity) => entity.key !== replaceOp.payload.targetEntityKey && entity.status !== 'archived')
+            ?? applied.worldEntities.find((entity) => entity.key !== replaceOp.payload.targetEntityKey)
+            ?? applied.worldEntities[0]
+          if (replacementEntity) {
+            const detailParts = [
+              replaceOp.payload.reason.trim() || null,
+              `Now treated as ${labelForWorldEntity(replacementEntity.nodeType)}`,
+            ].filter(Boolean)
+            entries.push({
+              id: `${source.id}:replacement:${replacementEntity.key}`,
+              createdAt: source.event.createdAt,
+              kind: 'entity_replaced',
+              label: `Replaced ${replaceOp.payload.targetEntityKey} with ${replacementEntity.name}`,
+              detail: detailParts.join(' · '),
+              entityKey: replacementEntity.key,
+              entityNodeType: replacementEntity.nodeType,
+            })
+          }
+        }
         for (const entity of applied?.worldEntities ?? []) {
+          if (replaceOp && entity.key === replaceOp.payload.targetEntityKey) {
+            continue
+          }
+          if (
+            upsertOp
+            && !upsertOp.metadata?.projectedCreate
+            && upsertOp.payload.targetEntityKey === entity.key
+          ) {
+            entries.push({
+              id: `${source.id}:entity-upsert:${entity.key}`,
+              createdAt: source.event.createdAt,
+              kind: 'entity_updated',
+              label: `Updated ${entity.name}`,
+              detail: upsertOp.payload.entity.context.trim()
+                ? 'Expanded context'
+                : (upsertOp.payload.entity.summary.trim() ? 'Updated summary' : labelForWorldEntity(entity.nodeType)),
+              entityKey: entity.key,
+              entityNodeType: entity.nodeType,
+            })
+            continue
+          }
+          if (updateOp && entity.key === updateOp.payload.targetEntityKey) {
+            const detailParts = [
+              typeof updateOp.payload.changes.summary === 'string' ? 'Updated summary' : null,
+              typeof updateOp.payload.changes.context === 'string' ? 'Expanded context' : null,
+              updateOp.payload.changes.tags ? 'Updated tags' : null,
+              updateOp.payload.changes.aliases ? 'Updated aliases' : null,
+            ].filter(Boolean)
+            entries.push({
+              id: `${source.id}:entity-update:${entity.key}`,
+              createdAt: source.event.createdAt,
+              kind: 'entity_updated',
+              label: `Updated ${entity.name}`,
+              detail: detailParts.join(' · ') || labelForWorldEntity(entity.nodeType),
+              entityKey: entity.key,
+              entityNodeType: entity.nodeType,
+            })
+            continue
+          }
           entries.push({
             id: `${source.id}:entity:${entity.key}`,
             createdAt: source.event.createdAt,
@@ -366,6 +436,37 @@ export function buildWorldPromptTranscriptEntries(input: {
         for (const relationship of applied?.worldRelationships ?? []) {
           const sourceName = input.entityByKey.get(relationship.sourceEntityKey)?.name ?? relationship.sourceEntityKey
           const targetName = input.entityByKey.get(relationship.targetEntityKey)?.name ?? relationship.targetEntityKey
+          if (upsertRelationshipOp && upsertRelationshipOp.payload.targetRelationshipKey === relationship.key) {
+            entries.push({
+              id: `${source.id}:relationship-upsert:${relationship.key}`,
+              createdAt: source.event.createdAt,
+              kind: 'relationship_updated',
+              label: `Updated link between ${sourceName} and ${targetName}`,
+              detail: relationship.notes.trim() || relationship.verb,
+              relationshipKey: relationship.key,
+              sourceLabel: sourceName,
+              targetLabel: targetName,
+            })
+            continue
+          }
+          if (updateRelationshipOp && relationship.key === updateRelationshipOp.payload.targetRelationshipKey) {
+            const detailParts = [
+              typeof updateRelationshipOp.payload.changes.notes === 'string' ? 'Updated relationship details' : null,
+              typeof updateRelationshipOp.payload.changes.strength !== 'undefined' ? 'Adjusted strength' : null,
+              typeof updateRelationshipOp.payload.changes.confidence !== 'undefined' ? 'Adjusted confidence' : null,
+            ].filter(Boolean)
+            entries.push({
+              id: `${source.id}:relationship-update:${relationship.key}`,
+              createdAt: source.event.createdAt,
+              kind: 'relationship_updated',
+              label: `Updated link between ${sourceName} and ${targetName}`,
+              detail: detailParts.join(' · ') || relationship.notes.trim() || relationship.verb,
+              relationshipKey: relationship.key,
+              sourceLabel: sourceName,
+              targetLabel: targetName,
+            })
+            continue
+          }
           entries.push({
             id: `${source.id}:relationship:${relationship.key}`,
             createdAt: source.event.createdAt,
@@ -749,6 +850,7 @@ export function buildWorldInspectorViewModel(input: {
       title: input.entity.name,
       kicker: labelForWorldEntity(input.entity.nodeType),
       summary: input.entity.summary,
+      context: input.entity.context,
       imageUrl: input.imageUrl ?? null,
       stats: [
         `${input.relationCount ?? 0} relationships`,
@@ -763,6 +865,7 @@ export function buildWorldInspectorViewModel(input: {
       title: input.operator.label || input.operator.operatorType,
       kicker: 'Derived operator',
       summary: `Inputs: ${input.operator.inputEntityKeys.length}`,
+      context: '',
       imageUrl: null,
       stats: [`${input.operator.inputEntityKeys.length} inputs`],
     }
@@ -773,6 +876,7 @@ export function buildWorldInspectorViewModel(input: {
       title: input.result.title,
       kicker: 'Derived result',
       summary: input.result.summary,
+      context: '',
       imageUrl: input.imageUrl ?? null,
       stats: [
         input.result.status,

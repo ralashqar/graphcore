@@ -35,6 +35,7 @@ export const worldEntitySchema = z.object({
   key: z.string(),
   name: z.string(),
   summary: z.string().default(''),
+  context: z.string().default(''),
   nodeType: worldEntityNodeTypeSchema,
   aliases: z.array(z.string()).default([]),
   tags: z.array(z.string()).default([]),
@@ -150,6 +151,7 @@ export const worldLinkedDefinitionKindSchema = z.enum(['character', 'environment
 export const worldEntityCreateInputSchema = z.object({
   name: z.string().min(1),
   summary: z.string().default(''),
+  context: z.string().default(''),
   nodeType: worldEntityNodeTypeSchema,
   aliases: z.array(z.string()).default([]),
   tags: z.array(z.string()).default([]),

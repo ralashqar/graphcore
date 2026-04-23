@@ -89,6 +89,21 @@ const promptToWorldUpdateEntityPayloadSchema = z.object({
   changes: worldEntityCreateInputSchema.partial(),
 })
 
+const promptToWorldReplaceEntityPayloadSchema = z.object({
+  targetEntityKey: z.string(),
+  replacementMode: z.enum(['create', 'existing']).default('create'),
+  replacementEntity: worldEntityCreateInputSchema.extend({
+    ensureLinkedDefinition: worldEntityCreateInputSchema.shape.ensureLinkedDefinition.default(true),
+  }).nullable().default(null),
+  replacementEntityKey: z.string().nullable().default(null),
+  transferRelationships: z.boolean().default(true),
+  transferGraphConnections: z.boolean().default(true),
+  transferDerivedResults: z.boolean().default(true),
+  archiveOldEntity: z.boolean().default(true),
+  deleteOldEntity: z.boolean().default(false),
+  reason: z.string().default(''),
+})
+
 const promptToWorldUpsertRelationshipPayloadSchema = z.object({
   targetRelationshipKey: z.string().nullable().default(null),
   relationship: z.object({
@@ -210,6 +225,10 @@ export const promptToWorldOpSchema = z.discriminatedUnion('op', [
   promptToWorldOpBaseSchema.extend({
     op: z.literal('update_entity'),
     payload: promptToWorldUpdateEntityPayloadSchema,
+  }),
+  promptToWorldOpBaseSchema.extend({
+    op: z.literal('replace_entity'),
+    payload: promptToWorldReplaceEntityPayloadSchema,
   }),
   promptToWorldOpBaseSchema.extend({
     op: z.literal('upsert_relationship'),

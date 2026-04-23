@@ -237,6 +237,7 @@ type EntityOverviewDraftState = {
   entityKey: string
   name: string
   summary: string
+  context: string
   dirty: boolean
 }
 
@@ -645,7 +646,31 @@ function buildWorldPromptTranscriptEntries(input: {
         break
       case 'op_applied': {
         const applied = payload.applied
+        const replaceOp = payload.op?.op === 'replace_entity' ? payload.op : null
+        if (replaceOp && applied?.worldEntities && applied.worldEntities.length > 0) {
+          const replacementEntity = applied.worldEntities.find((entity) => entity.key !== replaceOp.payload.targetEntityKey && entity.status !== 'archived')
+            ?? applied.worldEntities.find((entity) => entity.key !== replaceOp.payload.targetEntityKey)
+            ?? applied.worldEntities[0]
+          if (replacementEntity) {
+            const detailParts = [
+              replaceOp.payload.reason.trim() || null,
+              `Now treated as ${labelForWorldEntity(replacementEntity.nodeType)}`,
+            ].filter(Boolean)
+            entries.push({
+              id: `${source.id}:replacement:${replacementEntity.key}`,
+              createdAt: source.event.createdAt,
+              kind: 'entity_replaced',
+              label: `Replaced ${replaceOp.payload.targetEntityKey} with ${replacementEntity.name}`,
+              detail: detailParts.join(' · '),
+              entityKey: replacementEntity.key,
+              entityNodeType: replacementEntity.nodeType,
+            })
+          }
+        }
         for (const entity of applied?.worldEntities ?? []) {
+          if (replaceOp && entity.key === replaceOp.payload.targetEntityKey) {
+            continue
+          }
           entries.push({
             id: `${source.id}:entity:${entity.key}`,
             createdAt: source.event.createdAt,
@@ -1060,6 +1085,7 @@ export function WorldGraphPage({
   const filteredEntities = useMemo(() => {
     const query = search.trim().toLowerCase()
     return worldEntities.filter((entity) => {
+      if (entity.status === 'archived') return false
       if (effectiveFilters.nodeTypes.length > 0 && !effectiveFilters.nodeTypes.includes(entity.nodeType)) return false
       if (effectiveFilters.linkedOnly && !entity.linkedDefinitionKey) return false
       if (effectiveFilters.unlinkedOnly && entity.linkedDefinitionKey) return false
@@ -1069,6 +1095,7 @@ export function WorldGraphPage({
       return (
         entity.name.toLowerCase().includes(query)
         || entity.summary.toLowerCase().includes(query)
+        || entity.context.toLowerCase().includes(query)
         || entity.aliases.some((alias) => alias.toLowerCase().includes(query))
         || entity.tags.some((tag) => tag.toLowerCase().includes(query))
       )
@@ -1536,6 +1563,7 @@ export function WorldGraphPage({
         current?.entityKey === inspectorEntity.key
         && current.name === inspectorEntity.name
         && current.summary === inspectorEntity.summary
+        && current.context === inspectorEntity.context
       ) {
         return current
       }
@@ -1543,6 +1571,7 @@ export function WorldGraphPage({
         entityKey: inspectorEntity.key,
         name: inspectorEntity.name,
         summary: inspectorEntity.summary,
+        context: inspectorEntity.context,
         dirty: false,
       }
     })
@@ -1555,6 +1584,7 @@ export function WorldGraphPage({
       ...inspectorEntity,
       name: entityOverviewDraft.name,
       summary: entityOverviewDraft.summary,
+      context: entityOverviewDraft.context,
     }
   }, [entityOverviewDraft, inspectorEntity])
   const edgeEditorPosition = useMemo(() => {
@@ -1608,16 +1638,17 @@ export function WorldGraphPage({
     }, delay)
   }
 
-  async function persistEntityOverviewDraft(entityKey: string, name: string, summary: string) {
+  async function persistEntityOverviewDraft(entityKey: string, name: string, summary: string, context: string) {
     const entity = worldEntities.find((entry) => entry.key === entityKey) ?? null
     if (!entity) return
 
     const changes: Partial<WorldEntityCreateInput> = {}
     if (name !== entity.name) changes.name = name
     if (summary !== entity.summary) changes.summary = summary
+    if (context !== entity.context) changes.context = context
     if (Object.keys(changes).length === 0) {
       setEntityOverviewDraft((current) => (
-        current?.entityKey === entityKey && current.name === name && current.summary === summary
+        current?.entityKey === entityKey && current.name === name && current.summary === summary && current.context === context
           ? { ...current, dirty: false }
           : current
       ))
@@ -1626,7 +1657,7 @@ export function WorldGraphPage({
 
     await updateWorldEntityAndRefresh(entityKey, changes, 'manual_entity_overview_update')
     setEntityOverviewDraft((current) => (
-      current?.entityKey === entityKey && current.name === name && current.summary === summary
+      current?.entityKey === entityKey && current.name === name && current.summary === summary && current.context === context
         ? { ...current, dirty: false }
         : current
     ))
@@ -1638,7 +1669,7 @@ export function WorldGraphPage({
     }
     entityOverviewPersistTimeoutRef.current = window.setTimeout(() => {
       entityOverviewPersistTimeoutRef.current = null
-      void persistEntityOverviewDraft(nextDraft.entityKey, nextDraft.name, nextDraft.summary)
+      void persistEntityOverviewDraft(nextDraft.entityKey, nextDraft.name, nextDraft.summary, nextDraft.context)
     }, delay)
   }
 
@@ -1648,7 +1679,7 @@ export function WorldGraphPage({
       window.clearTimeout(entityOverviewPersistTimeoutRef.current)
       entityOverviewPersistTimeoutRef.current = null
     }
-    void persistEntityOverviewDraft(entityOverviewDraft.entityKey, entityOverviewDraft.name, entityOverviewDraft.summary)
+    void persistEntityOverviewDraft(entityOverviewDraft.entityKey, entityOverviewDraft.name, entityOverviewDraft.summary, entityOverviewDraft.context)
   }
 
   function selectWorldNode(key: string | null) {
@@ -1924,6 +1955,7 @@ export function WorldGraphPage({
     await onCreateWorldEntity({
       name: defaultNameForWorldNodeType(nodeType),
       summary: '',
+      context: '',
       nodeType,
       aliases: [],
       tags: [],
@@ -2044,7 +2076,7 @@ export function WorldGraphPage({
       } as CSSProperties}
     >
       <aside className="focus-rail graph-rail world-graph-rail world-shell-creation-rail" onClick={(event) => event.stopPropagation()}>
-        <div className="world-shell-panel world-shell-creation-body is-single-stream">
+        <div className="world-shell-creation-body is-single-stream">
           <WorldPromptChatPanel
             activePromptPreview={activePromptPreview}
             activePromptTurn={activePromptTurn}
@@ -2584,7 +2616,7 @@ export function WorldGraphPage({
               <div className="world-shell-dossier-copy">
                 <span className="eyebrow">{inspectorViewModel.kicker}</span>
                 <h3>{inspectorViewModel.title}</h3>
-                <p>{inspectorViewModel.summary || 'Select a node or relationship to inspect its state, usage, and next moves.'}</p>
+                <p>{inspectorViewModel.summary || inspectorViewModel.context || 'Select a node or relationship to inspect its state, usage, and next moves.'}</p>
                 <div className="chip-row">
                   {inspectorViewModel.stats.map((stat) => <span key={stat} className="chip">{stat}</span>)}
                 </div>
@@ -2741,6 +2773,7 @@ export function WorldGraphPage({
                         entityKey: displayedInspectorEntity.key,
                         name: event.target.value,
                         summary: entityOverviewDraft?.entityKey === displayedInspectorEntity.key ? entityOverviewDraft.summary : displayedInspectorEntity.summary,
+                        context: entityOverviewDraft?.entityKey === displayedInspectorEntity.key ? entityOverviewDraft.context : displayedInspectorEntity.context,
                         dirty: true,
                       }
                       setEntityOverviewDraft(nextDraft)
@@ -2759,6 +2792,26 @@ export function WorldGraphPage({
                         entityKey: displayedInspectorEntity.key,
                         name: entityOverviewDraft?.entityKey === displayedInspectorEntity.key ? entityOverviewDraft.name : displayedInspectorEntity.name,
                         summary: event.target.value,
+                        context: entityOverviewDraft?.entityKey === displayedInspectorEntity.key ? entityOverviewDraft.context : displayedInspectorEntity.context,
+                        dirty: true,
+                      }
+                      setEntityOverviewDraft(nextDraft)
+                      queueEntityOverviewPersist(nextDraft)
+                    }}
+                  />
+                </label>
+                <label className="field-block">
+                  <span>Context</span>
+                  <textarea
+                    rows={7}
+                    value={entityOverviewDraft?.entityKey === displayedInspectorEntity.key ? entityOverviewDraft.context : displayedInspectorEntity.context}
+                    onBlur={flushEntityOverviewPersist}
+                    onChange={(event) => {
+                      const nextDraft: EntityOverviewDraftState = {
+                        entityKey: displayedInspectorEntity.key,
+                        name: entityOverviewDraft?.entityKey === displayedInspectorEntity.key ? entityOverviewDraft.name : displayedInspectorEntity.name,
+                        summary: entityOverviewDraft?.entityKey === displayedInspectorEntity.key ? entityOverviewDraft.summary : displayedInspectorEntity.summary,
+                        context: event.target.value,
                         dirty: true,
                       }
                       setEntityOverviewDraft(nextDraft)
@@ -3284,7 +3337,7 @@ function LegacyWorldPromptChatPanel({
               )
             }
 
-            if (entry.kind === 'system_status' || entry.kind === 'entity_created' || entry.kind === 'relationship_created' || entry.kind === 'queue_started') {
+            if (entry.kind === 'system_status' || entry.kind === 'entity_created' || entry.kind === 'entity_replaced' || entry.kind === 'relationship_created' || entry.kind === 'queue_started') {
               return (
                 <div
                   key={entry.id}
@@ -3584,7 +3637,7 @@ function WorldPromptChatPanel({
   onApproveOp,
   onCancelTurn,
   onChangePromptText,
-  onDismissSuggestion,
+  onDismissSuggestion: _onDismissSuggestion,
   onRejectOp,
   onRunSuggestion,
   onContinueWithoutSuggestion,
@@ -3633,11 +3686,18 @@ function WorldPromptChatPanel({
   historyOpen: boolean
   variant: 'drawer' | 'grow'
 }) {
+  const hiddenTranscriptKinds = new Set<WorldPromptTranscriptEntry['kind']>([
+    'suggestion_set',
+    'clarification_question',
+    'clarification_answer',
+    'continuation_without_suggestion',
+  ])
   const composerRef = useRef<HTMLTextAreaElement | null>(null)
   const transcriptRef = useRef<HTMLDivElement | null>(null)
   const transcriptEndRef = useRef<HTMLDivElement | null>(null)
   const plannerFailureLogKeyRef = useRef<string | null>(null)
   const [stickToBottom, setStickToBottom] = useState(true)
+  const [suppressedSuggestionSignature, setSuppressedSuggestionSignature] = useState<string | null>(null)
   const transcriptEntries = useMemo(
     () => buildWorldPromptTranscriptEntries({
       events: sessionEvents,
@@ -3721,6 +3781,14 @@ function WorldPromptChatPanel({
       return timeDelta !== 0 ? timeDelta : left.id.localeCompare(right.id)
     })
   }, [activePromptPreview, activePromptTurn, railView.approvalOps, selectedSession?.id, selectedSession?.updatedAt, selectedSessionKey, sessionSuggestions, sessionTurns, transcriptEntries])
+  const visibleTranscriptStream = useMemo(
+    () => transcriptStream.filter((entry) => !hiddenTranscriptKinds.has(entry.kind)),
+    [transcriptStream],
+  )
+  const suggestionSignature = useMemo(
+    () => sessionSuggestions.map((suggestion) => `${suggestion.id}:${suggestion.updatedAt}:${suggestion.state}`).join('|'),
+    [sessionSuggestions],
+  )
   const recentTurns = useMemo(
     () => [...sessionTurns].reverse().slice(0, 6),
     [sessionTurns],
@@ -3745,6 +3813,9 @@ function WorldPromptChatPanel({
     }))
   }, [sessionSuggestionCountBySessionId, worldPromptSessions, worldPromptTurns])
   const isPromptCenter = !busy && !activePromptTurn && transcriptStream.length === 0 && sessionTurns.length === 0
+  const hasClarificationSuggestions = sessionSuggestions.some((suggestion) => suggestion.metadata?.uiKind === 'clarification')
+  const planningOnlyState = busy && visibleTranscriptStream.length === 0
+  const showComposerSuggestions = sessionSuggestions.length > 0 && suppressedSuggestionSignature !== suggestionSignature
   const sessionTitle = selectedSession?.title ?? (selectedSessionKey ? 'New chat' : 'Chat')
   const sessionSubline = selectedSession && sessionTurns.length > 0
     ? `${sessionTurns.length} turn${sessionTurns.length === 1 ? '' : 's'}`
@@ -3762,7 +3833,18 @@ function WorldPromptChatPanel({
   useEffect(() => {
     if (!stickToBottom || isPromptCenter) return
     transcriptEndRef.current?.scrollIntoView({ block: 'end', behavior: activePromptTurn ? 'smooth' : 'auto' })
-  }, [activePromptTurn, isPromptCenter, stickToBottom, transcriptStream.length])
+  }, [activePromptTurn, isPromptCenter, stickToBottom, visibleTranscriptStream.length])
+
+  useEffect(() => {
+    if (!suppressedSuggestionSignature) return
+    if (!suggestionSignature || suggestionSignature !== suppressedSuggestionSignature) {
+      setSuppressedSuggestionSignature(null)
+    }
+  }, [suggestionSignature, suppressedSuggestionSignature])
+
+  useEffect(() => {
+    setSuppressedSuggestionSignature(null)
+  }, [selectedSessionKey])
 
   useEffect(() => {
     if (!railView.plannerFailure) return
@@ -3808,59 +3890,31 @@ function WorldPromptChatPanel({
     requestAnimationFrame(() => composerRef.current?.focus())
   }
 
-  function renderEntry(entry: WorldPromptTranscriptEntry) {
-    if (entry.kind === 'suggestion_set' || entry.kind === 'clarification_question') {
-      const needsRepair = entry.kind === 'clarification_question'
-      return (
-        <div key={entry.id} className={`world-prompt-row world-prompt-row-system world-prompt-card${needsRepair ? ' is-clarify' : ''}`}>
-          <span className="world-prompt-row-label">{needsRepair ? 'Clarification required' : entry.label ?? 'Next move'}</span>
-          <div className="world-prompt-inline-choices">
-            {entry.suggestions.map((suggestion) => (
-              <div
-                key={suggestion.id}
-                className={`world-prompt-suggestion-card${suggestion.style === 'primary' ? ' is-primary' : ''}`}
-              >
-                <button
-                  className="world-prompt-suggestion-action"
-                  disabled={busy}
-                  onClick={() => void onRunSuggestion(suggestion)}
-                  type="button"
-                >
-                  <strong>{suggestion.label}</strong>
-                  {suggestion.summary ? <span>{suggestion.summary}</span> : null}
-                  {promptSuggestionImpactLabel(suggestion) ? <small>{promptSuggestionImpactLabel(suggestion)}</small> : null}
-                </button>
-                {sessionSuggestions.some((record) => record.id === suggestion.id) ? (
-                  <button
-                    aria-label="Dismiss suggestion"
-                    className="world-prompt-suggestion-dismiss"
-                    disabled={busy}
-                    onClick={() => void onDismissSuggestion(suggestion.id)}
-                    type="button"
-                  >
-                    <EntityIcon id="close" />
-                  </button>
-                ) : null}
-              </div>
-            ))}
-          </div>
-          <div className="world-inspector-actions">
-            <button className="ghost-button compact" disabled={busy} onClick={onContinueWithoutSuggestion} type="button">
-              Continue with my own prompt
-            </button>
-          </div>
-        </div>
-      )
+  function suppressCurrentSuggestions() {
+    if (suggestionSignature) {
+      setSuppressedSuggestionSignature(suggestionSignature)
     }
+  }
 
-    if (entry.kind === 'clarification_answer' || entry.kind === 'continuation_without_suggestion') {
-      return (
-        <div key={entry.id} className="world-prompt-row world-prompt-row-system world-prompt-card">
-          <span className="world-prompt-row-label">{entry.label}</span>
-          {entry.detail ? <div className="world-prompt-line">{entry.detail}</div> : null}
-        </div>
-      )
+  function handleRunSuggestion(suggestion: WorldPromptSuggestion | WorldPromptSuggestionRecord) {
+    suppressCurrentSuggestions()
+    return onRunSuggestion(suggestion)
+  }
+
+  function handleContinueWithoutSuggestion() {
+    suppressCurrentSuggestions()
+    onContinueWithoutSuggestion()
+  }
+
+  function handleSubmitPrompt(promptOverride?: string) {
+    if (sessionSuggestions.length > 0) {
+      suppressCurrentSuggestions()
     }
+    return onSubmit(promptOverride)
+  }
+
+  function renderEntry(entry: WorldPromptTranscriptEntry) {
+    if (hiddenTranscriptKinds.has(entry.kind)) return null
 
     if (entry.kind === 'user_message' || entry.kind === 'assistant_message') {
       return (
@@ -3931,15 +3985,18 @@ function WorldPromptChatPanel({
     if (
       entry.kind !== 'system_status'
       && entry.kind !== 'entity_created'
+      && entry.kind !== 'entity_updated'
+      && entry.kind !== 'entity_replaced'
       && entry.kind !== 'relationship_created'
+      && entry.kind !== 'relationship_updated'
       && entry.kind !== 'queue_started'
     ) {
       return null
     }
 
-    const iconId = entry.kind === 'entity_created'
+    const iconId = entry.kind === 'entity_created' || entry.kind === 'entity_updated' || entry.kind === 'entity_replaced'
       ? iconForWorldEntity(entry.entityNodeType)
-      : entry.kind === 'relationship_created'
+      : entry.kind === 'relationship_created' || entry.kind === 'relationship_updated'
         ? 'graph'
         : entry.kind === 'queue_started'
           ? 'activity'
@@ -4005,7 +4062,7 @@ function WorldPromptChatPanel({
               onChange={(event) => onChangePromptText(event.target.value)}
             />
             <div className="world-prompt-composer-actions">
-              <button className="primary-button compact" disabled={busy || !promptText.trim()} onClick={() => void onSubmit()} type="button">
+              <button className="primary-button compact" disabled={busy || !promptText.trim()} onClick={() => void handleSubmitPrompt()} type="button">
                 {busy ? 'Generating...' : 'Generate'}
               </button>
             </div>
@@ -4042,14 +4099,14 @@ function WorldPromptChatPanel({
       ) : (
         <>
           <div className="world-prompt-transcript-shell">
-            <div className="world-prompt-transcript" onScroll={handleTranscriptScroll} ref={transcriptRef}>
-              {transcriptStream.length === 0 && busy ? (
-                <div className="world-prompt-row world-prompt-row-system world-prompt-card">
-                  <span className="world-prompt-row-label">Generating</span>
-                  <div className="world-prompt-line">Collecting the world context and planning the next graph changes.</div>
+            <div className={`world-prompt-transcript${planningOnlyState ? ' is-planning' : ''}`} onScroll={handleTranscriptScroll} ref={transcriptRef}>
+              {planningOnlyState ? (
+                <div className="world-prompt-planning-state">
+                  <div className="world-prompt-planning-spinner" aria-hidden="true" />
+                  <span className="world-prompt-row-label">Planning</span>
                 </div>
               ) : null}
-              {transcriptStream.map(renderEntry)}
+              {visibleTranscriptStream.map(renderEntry)}
               {promptError ? (
                 <div className="world-prompt-row world-prompt-row-system world-prompt-card is-error">
                   <span className="world-prompt-row-label">Prompt failed</span>
@@ -4061,6 +4118,45 @@ function WorldPromptChatPanel({
           </div>
 
           <div className="world-prompt-composer world-prompt-composer-pinned">
+            {showComposerSuggestions ? (
+              <div className={`world-prompt-composer-suggestions${hasClarificationSuggestions ? ' is-clarification' : ''}`}>
+                <div className="world-prompt-composer-suggestions-head">
+                  <span className="world-prompt-composer-suggestions-label">
+                    {hasClarificationSuggestions ? 'Choose a direction' : 'Next moves'}
+                  </span>
+                  <button className="ghost-button compact" disabled={busy} onClick={handleContinueWithoutSuggestion} type="button">
+                    Continue with my own prompt
+                  </button>
+                </div>
+                <div className="world-prompt-composer-suggestion-list">
+                  {sessionSuggestions.map((suggestion) => {
+                    const summary = suggestion.summary || (typeof suggestion.metadata?.generatedReason === 'string' ? suggestion.metadata.generatedReason : '')
+                    return (
+                      <div key={suggestion.id} className="world-prompt-composer-suggestion-row">
+                        <button
+                          className="world-prompt-composer-suggestion-button"
+                          disabled={busy}
+                          onClick={() => void handleRunSuggestion(suggestion)}
+                          type="button"
+                        >
+                          <span className="world-prompt-composer-suggestion-title">{suggestion.label}</span>
+                        </button>
+                        {summary ? (
+                          <button
+                            aria-label={`More information about ${suggestion.label}`}
+                            className="world-prompt-composer-suggestion-info"
+                            title={summary}
+                            type="button"
+                          >
+                            <EntityIcon id="info" />
+                          </button>
+                        ) : null}
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            ) : null}
             <textarea
               ref={composerRef}
               rows={variant === 'grow' ? 3 : 2}
@@ -4074,15 +4170,10 @@ function WorldPromptChatPanel({
                   Cancel turn
                 </button>
               ) : null}
-              {sessionSuggestions.length > 0 ? (
-                <button className="ghost-button compact" disabled={busy} onClick={onContinueWithoutSuggestion} type="button">
-                  Continue with my own prompt
-                </button>
-              ) : null}
               <button
                 className={railView.primaryActionKind === 'generate' || railView.primaryActionKind === 'continue' ? 'primary-button compact' : 'ghost-button compact'}
                 disabled={busy || !promptText.trim()}
-                onClick={() => void onSubmit()}
+                onClick={() => void handleSubmitPrompt()}
                 type="button"
               >
                 {busy ? 'Generating...' : composerLabel}
@@ -4299,6 +4390,7 @@ function EntityComposer({
           onClick={() => void onCreate({
             name: name.trim(),
             summary: summary.trim(),
+            context: '',
             nodeType,
             aliases: [],
             tags: [],

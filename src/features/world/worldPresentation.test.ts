@@ -51,6 +51,7 @@ test('buildWorldPromptTranscriptEntries folds applied events into readable rows'
     key: 'world.actor.hero',
     name: 'Hero',
     summary: 'Main character.',
+    context: '',
     nodeType: 'actor',
     aliases: [],
     tags: [],
@@ -108,6 +109,123 @@ test('buildWorldPromptTranscriptEntries folds applied events into readable rows'
   assert.equal(entries.length, 2)
   assert.equal(entries[1]?.kind, 'entity_created')
   assert.equal(entries[1]?.entityNodeType, 'actor')
+})
+
+test('buildWorldPromptTranscriptEntries renders entity replacement rows', () => {
+  const oldEntity = {
+    id: 'old-1',
+    key: 'world.group.zulkin',
+    name: 'Zulkin',
+    summary: 'A faction node created by mistake.',
+    context: '',
+    nodeType: 'group',
+    aliases: [],
+    tags: [],
+    status: 'archived',
+    thumbnailAssetKey: null,
+    linkedDefinitionKey: 'group.zulkin',
+    source: 'ai',
+    customProperties: {},
+    metadata: {
+      replacement: {
+        replacedByEntityKey: 'world.actor.zulkin',
+      },
+    },
+    createdAt: '2026-04-22T10:00:00.000Z',
+    updatedAt: '2026-04-22T10:01:00.000Z',
+  } satisfies WorldEntity
+
+  const replacementEntity = {
+    id: 'new-1',
+    key: 'world.actor.zulkin',
+    name: 'Zulkin',
+    summary: 'Rival claimant.',
+    context: 'A rival claimant with a hidden lineage.',
+    nodeType: 'actor',
+    aliases: [],
+    tags: [],
+    status: 'active',
+    thumbnailAssetKey: null,
+    linkedDefinitionKey: 'character.zulkin',
+    source: 'ai',
+    customProperties: {},
+    metadata: {},
+    createdAt: '2026-04-22T10:00:00.000Z',
+    updatedAt: '2026-04-22T10:01:00.000Z',
+  } satisfies WorldEntity
+
+  const events: WorldPromptEvent[] = [{
+    id: 'e-replace',
+    sessionId: 's1',
+    turnId: 't-replace',
+    draftId: 'd1',
+    sequence: 1,
+    eventType: 'op_applied',
+    opId: 'op-replace',
+    payload: {
+      op: {
+        id: 'op-replace',
+        op: 'replace_entity',
+        confidence: 0.92,
+        applyMode: 'needs_approval',
+        dependencyOpIds: [],
+        rationale: 'Correct the mistaken group node.',
+        status: 'applied',
+        metadata: {},
+        payload: {
+          targetEntityKey: oldEntity.key,
+          replacementMode: 'create',
+          replacementEntity: {
+            key: replacementEntity.key,
+            name: replacementEntity.name,
+            summary: replacementEntity.summary,
+            context: replacementEntity.context,
+            nodeType: replacementEntity.nodeType,
+            aliases: [],
+            tags: [],
+            status: 'active',
+            thumbnailAssetKey: null,
+            linkedDefinitionKey: replacementEntity.linkedDefinitionKey,
+            source: 'ai',
+            customProperties: {},
+            metadata: {},
+          },
+          replacementEntityKey: replacementEntity.key,
+          transferRelationships: true,
+          transferGraphConnections: true,
+          transferDerivedResults: true,
+          archiveOldEntity: true,
+          deleteOldEntity: false,
+          reason: 'Zulkin should be a person, not a faction.',
+        },
+      },
+      applied: {
+        worldEntities: [oldEntity, replacementEntity],
+        worldRelationships: [],
+        worldOperators: [],
+        worldResults: [],
+        worldGraphConnections: [],
+        worldViews: [],
+      },
+      suggestions: [],
+      diagnostics: [],
+    },
+    metadata: {},
+    createdAt: '2026-04-22T10:02:00.000Z',
+  }]
+
+  const entries = buildWorldPromptTranscriptEntries({
+    events,
+    messages: [],
+    entityByKey: new Map<string, WorldEntity>([
+      [oldEntity.key, oldEntity],
+      [replacementEntity.key, replacementEntity],
+    ]),
+  })
+
+  assert.ok(entries.some((entry) => entry.kind === 'entity_replaced' && entry.label === 'Replaced world.group.zulkin with Zulkin'))
+  assert.equal(entries.filter((entry) => entry.kind === 'entity_created' && entry.entityKey === oldEntity.key).length, 0)
+  assert.equal(entries.filter((entry) => entry.kind === 'entity_created' && entry.entityKey === replacementEntity.key).length, 1)
 })
 
 test('buildWorldPromptTranscriptEntries emits preview and approval rows', () => {
@@ -174,6 +292,143 @@ test('buildWorldPromptTranscriptEntries emits preview and approval rows', () => 
 
   assert.ok(entries.some((entry) => entry.kind === 'preview_available' && entry.turnId === 't2'))
   assert.ok(entries.some((entry) => entry.kind === 'approval_required' && entry.turnId === 't2'))
+})
+
+test('buildWorldPromptTranscriptEntries renders update rows for refined entities and relationships', () => {
+  const hero = {
+    id: 'hero-1',
+    key: 'world.actor.hero',
+    name: 'Hero',
+    summary: 'A young claimant.',
+    context: 'Raised in secret by loyalists.',
+    nodeType: 'actor',
+    aliases: [],
+    tags: [],
+    status: 'active',
+    thumbnailAssetKey: null,
+    linkedDefinitionKey: null,
+    source: 'ai',
+    customProperties: {},
+    metadata: {},
+    createdAt: '2026-04-22T10:00:00.000Z',
+    updatedAt: '2026-04-22T10:05:00.000Z',
+  } satisfies WorldEntity
+
+  const entries = buildWorldPromptTranscriptEntries({
+    messages: [],
+    entityByKey: new Map([[hero.key, hero]]),
+    events: [{
+      id: 'e-update',
+      sessionId: 's1',
+      turnId: 't-update',
+      draftId: 'd1',
+      sequence: 1,
+      eventType: 'op_applied',
+      opId: 'op-update',
+      payload: {
+        op: {
+          id: 'op-update',
+          op: 'update_entity',
+          confidence: 0.92,
+          applyMode: 'auto',
+          dependencyOpIds: [],
+          rationale: 'Add clarifying context.',
+          status: 'applied',
+          metadata: {},
+          payload: {
+            targetEntityKey: hero.key,
+            changes: {
+              summary: 'Heir to the broken throne.',
+              context: 'Raised in secret by loyalists and haunted by the throne prophecy.',
+            },
+          },
+        },
+        applied: {
+          worldEntities: [hero],
+          worldRelationships: [{
+            id: 'rel-1',
+            key: 'world.rel.hero-allied-order',
+            sourceEntityKey: hero.key,
+            targetEntityKey: 'world.group.order',
+            verb: 'allied_with',
+            direction: 'outbound',
+            strength: 0.8,
+            confidence: 0.95,
+            source: 'ai',
+            notes: 'The order protects the heir in secret.',
+            state: 'confirmed',
+            metadata: {},
+            createdAt: '2026-04-22T10:05:00.000Z',
+            updatedAt: '2026-04-22T10:05:00.000Z',
+          }],
+          worldOperators: [],
+          worldResults: [],
+          worldGraphConnections: [],
+          worldViews: [],
+        },
+        suggestions: [],
+        diagnostics: [],
+      },
+      metadata: {},
+      createdAt: '2026-04-22T10:05:00.000Z',
+    }, {
+      id: 'e-relationship-update',
+      sessionId: 's1',
+      turnId: 't-update',
+      draftId: 'd1',
+      sequence: 2,
+      eventType: 'op_applied',
+      opId: 'op-relationship-update',
+      payload: {
+        op: {
+          id: 'op-relationship-update',
+          op: 'update_relationship',
+          confidence: 0.9,
+          applyMode: 'auto',
+          dependencyOpIds: [],
+          rationale: 'Clarify the bond.',
+          status: 'applied',
+          metadata: {},
+          payload: {
+            targetRelationshipKey: 'world.rel.hero-allied-order',
+            changes: {
+              notes: 'The order protects the heir in secret.',
+            },
+          },
+        },
+        applied: {
+          worldEntities: [],
+          worldRelationships: [{
+            id: 'rel-1',
+            key: 'world.rel.hero-allied-order',
+            sourceEntityKey: hero.key,
+            targetEntityKey: 'world.group.order',
+            verb: 'allied_with',
+            direction: 'outbound',
+            strength: 0.8,
+            confidence: 0.95,
+            source: 'ai',
+            notes: 'The order protects the heir in secret.',
+            state: 'confirmed',
+            metadata: {},
+            createdAt: '2026-04-22T10:05:00.000Z',
+            updatedAt: '2026-04-22T10:06:00.000Z',
+          }],
+          worldOperators: [],
+          worldResults: [],
+          worldGraphConnections: [],
+          worldViews: [],
+        },
+        suggestions: [],
+        diagnostics: [],
+      },
+      metadata: {},
+      createdAt: '2026-04-22T10:06:00.000Z',
+    }],
+  })
+
+  assert.ok(entries.some((entry) => entry.kind === 'entity_updated' && entry.detail?.includes('Expanded context')))
+  assert.ok(entries.some((entry) => entry.kind === 'relationship_updated' && entry.detail?.includes('Updated relationship details')))
 })
 
 test('buildWorldPromptTranscriptEntries renders clarification question and answer rows', () => {
@@ -303,6 +558,7 @@ test('buildWorldInspectorViewModel formats entity cards', () => {
     key: 'world.place.city',
     name: 'Aster Reach',
     summary: 'Capital city.',
+    context: 'Seat of the fractured crown and center of the succession crisis.',
     nodeType: 'place',
     aliases: [],
     tags: [],
@@ -327,6 +583,7 @@ test('buildWorldInspectorViewModel formats entity cards', () => {
 
   assert.equal(viewModel?.title, 'Aster Reach')
   assert.equal(viewModel?.kicker, 'Place')
+  assert.equal(viewModel?.context, 'Seat of the fractured crown and center of the succession crisis.')
   assert.equal(viewModel?.stats[0], '4 relationships')
 })
 

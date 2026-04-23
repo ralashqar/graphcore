@@ -1288,6 +1288,7 @@ type WorldEntityRow = {
   key: string
   name: string
   summary: string | null
+  context: string | null
   node_type: WorldEntity['nodeType']
   aliases: string[] | null
   tags: string[] | null
@@ -1478,7 +1479,7 @@ type WorldThreadRow = {
 }
 
 const WORLD_ENTITY_SELECT =
-  'id, key, name, summary, node_type, aliases, tags, status, thumbnail_asset_key, linked_definition_key, source, custom_properties, metadata, created_at, updated_at'
+  'id, key, name, summary, context, node_type, aliases, tags, status, thumbnail_asset_key, linked_definition_key, source, custom_properties, metadata, created_at, updated_at'
 const WORLD_RELATIONSHIP_SELECT =
   'id, key, source_entity_id, target_entity_id, verb, direction, strength, confidence, source, notes, state, metadata, created_at, updated_at'
 const WORLD_VIEW_SELECT =
@@ -1517,6 +1518,7 @@ function mapWorldEntityRow(entity: WorldEntityRow): WorldEntity {
     key: entity.key,
     name: entity.name,
     summary: entity.summary ?? '',
+    context: entity.context ?? '',
     nodeType: entity.node_type,
     aliases: entity.aliases ?? [],
     tags: entity.tags ?? [],
@@ -2166,7 +2168,7 @@ export async function loadProjectSnapshot(
       .order('created_at', { ascending: true }),
     supabase
       .from('world_entities')
-      .select('id, key, name, summary, node_type, aliases, tags, status, thumbnail_asset_key, linked_definition_key, source, custom_properties, metadata, created_at, updated_at')
+      .select('id, key, name, summary, context, node_type, aliases, tags, status, thumbnail_asset_key, linked_definition_key, source, custom_properties, metadata, created_at, updated_at')
       .eq('draft_id', draft.id)
       .order('created_at', { ascending: true }),
     supabase
@@ -2573,6 +2575,7 @@ export async function loadProjectSnapshot(
       key: entity.key,
       name: entity.name,
       summary: entity.summary ?? '',
+      context: entity.context ?? '',
       nodeType: entity.node_type,
       aliases: entity.aliases ?? [],
       tags: entity.tags ?? [],
@@ -4149,6 +4152,7 @@ export async function syncWorldGraphFromDefinitions(snapshot: ProjectSnapshot) {
         key: entity.key,
         name: entity.name,
         summary: entity.summary,
+        context: entity.context,
         node_type: entity.nodeType,
         aliases: entity.aliases,
         tags: entity.tags,
@@ -4217,6 +4221,7 @@ export async function createWorldEntity(snapshot: ProjectSnapshot, input: WorldE
       key,
       name: payload.name,
       summary: payload.summary,
+      context: payload.context,
       node_type: payload.nodeType,
       aliases: payload.aliases,
       tags: payload.tags,
@@ -4254,6 +4259,7 @@ export async function updateWorldEntity(snapshot: ProjectSnapshot, entityKey: st
 
   if (payload.name !== undefined) updatePayload.name = payload.name
   if (payload.summary !== undefined) updatePayload.summary = payload.summary
+  if (payload.context !== undefined) updatePayload.context = payload.context
   if (payload.nodeType !== undefined) updatePayload.node_type = payload.nodeType
   if (payload.aliases !== undefined) updatePayload.aliases = payload.aliases
   if (payload.tags !== undefined) updatePayload.tags = payload.tags
