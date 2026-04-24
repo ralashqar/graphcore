@@ -11,6 +11,7 @@ import {
   promptSuggestionImpactLabel,
   stripInternalPlannerDiagnostics,
 } from './worldPresentation.ts'
+import { worldPromptStartTurnResponseSchema } from '../../domain/worldPrompt.ts'
 import type { PromptToWorldOp, WorldPromptEvent, WorldPromptMessage, WorldPromptSuggestion, WorldPromptTurn } from '../../domain/worldPrompt.ts'
 import type { WorldEntity } from '../../domain/worldGraph.ts'
 
@@ -850,6 +851,46 @@ test('buildWorldInspectorViewModel exposes entity refinement history', () => {
   assert.equal(viewModel?.refinementHistory[0]?.resultText, 'Court spymaster. Also commands the queen’s whisper network.')
 })
 
+test('worldPromptStartTurnResponseSchema accepts returned linked definitions', () => {
+  const parsed = worldPromptStartTurnResponseSchema.parse({
+    ok: true,
+    session: {
+      id: 'session-1',
+      draftId: 'draft-1',
+      key: 'world.prompt.session-1',
+      title: 'Session',
+      status: 'active',
+      isActive: true,
+      summaryMemory: '',
+      lastContext: {},
+      createdAt: '2026-04-24T10:00:00.000Z',
+      updatedAt: '2026-04-24T10:00:00.000Z',
+    },
+    turn: makeTurn(),
+    definitions: [{
+      id: 'def-1',
+      key: 'character.elian_vale',
+      kind: 'character',
+      name: 'Elian Vale',
+      summary: 'A lighthouse cartographer.',
+      status: 'draft',
+      iconAssetKey: null,
+      archetypeKey: null,
+      tags: [],
+      schemaVersion: 1,
+      metadata: {},
+      llmHints: {},
+      assetRefs: [],
+      definitionData: {},
+      fieldValues: [],
+      customFields: [],
+      components: [],
+    }],
+  })
+
+  assert.equal(parsed.definitions.length, 1)
+})
+
 function makeTurn(overrides: Partial<WorldPromptTurn> = {}): WorldPromptTurn {
   return {
     id: 't1',
@@ -930,6 +971,61 @@ test('buildWorldPromptRailViewModel returns working while a turn is streaming', 
 
   assert.equal(viewModel.state, 'working')
   assert.equal(viewModel.statusLabel, 'Planning')
+  assert.equal(viewModel.detail, 'The planner is resolving entities, relationships, and next moves.')
+})
+
+test('buildWorldPromptRailViewModel does not reuse stale completed-turn detail while a new turn is working', () => {
+  const previousTurn = makeTurn({
+    id: 't-prev',
+    status: 'completed',
+    assistantSummary: 'Expanded the queen and her council.',
+  })
+  const activeTurn = makeTurn({
+    id: 't-active',
+    status: 'queued',
+    assistantSummary: 'Expanded the queen and her council.',
+  })
+
+  const viewModel = buildWorldPromptRailViewModel({
+    activeTurn,
+    turns: [previousTurn, activeTurn],
+    events: [],
+    entityByKey: new Map(),
+  })
+
+  assert.equal(viewModel.state, 'working')
+  assert.equal(viewModel.statusLabel, 'Planning')
+  assert.equal(viewModel.detail, 'The planner is resolving entities, relationships, and next moves.')
+})
+
+test('buildWorldPromptRailViewModel surfaces apply progress while a turn is applying ops', () => {
+  const activeTurn = makeTurn({
+    id: 't-applying',
+    status: 'streaming',
+  })
+
+  const viewModel = buildWorldPromptRailViewModel({
+    activeTurn,
+    turns: [activeTurn],
+    events: [makeEvent({
+      turnId: 't-applying',
+      payload: {
+        plannerStatus: 'applying',
+        plannerProgress: {
+          phase: 'applying_changes',
+          message: 'Applying 2/5: Add Yara Vale',
+          sequence: 2,
+        },
+        suggestions: [],
+        diagnostics: [],
+      },
+    })],
+    entityByKey: new Map(),
+  })
+
+  assert.equal(viewModel.state, 'working')
+  assert.equal(viewModel.statusLabel, 'Applying changes')
+  assert.equal(viewModel.detail, 'Applying 2/5: Add Yara Vale')
 })
 
 test('buildWorldPromptRailViewModel does not enter preview state for staged preview metadata', () => {

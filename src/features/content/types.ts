@@ -9,6 +9,7 @@ import type {
 } from '../../domain/graphcore'
 import type { AssetUrlCreateOptions, AssetUrlCreationKind } from '../../domain/assets'
 import type { MeshGenerationJob } from '../../domain/meshGeneration'
+import type { WorldEntity, WorldRelationship, WorldEntityCreateInput } from '../../domain/worldGraph'
 
 export type ItemIdentityChanges = Partial<
   Pick<DefinitionBase, 'name' | 'key' | 'summary' | 'iconAssetKey' | 'archetypeKey'>
@@ -64,6 +65,11 @@ export type ContentWorkspaceProps = {
   onStartMeshGeneration: (definitionKey: string) => void
   onPersistDefinitionPreviewImageBinding: (definitionKey: string, assetKey: string | null) => Promise<void>
   onOpenCinematicGraph: (graphKey: string) => void
+  onOpenDefinitionLink: (definitionKey: string, kind: DefinitionBase['kind']) => void
+  onOpenWorldNode: (worldEntityKey: string) => void
+  onUpdateWorldEntity: (entityKey: string, changes: Partial<WorldEntityCreateInput>) => Promise<void> | void
+  worldEntities: WorldEntity[]
+  worldRelationships: WorldRelationship[]
   promptText?: string
 }
 

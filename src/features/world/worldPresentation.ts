@@ -218,6 +218,8 @@ export function describePlannerProgressPhase(phase: WorldPromptPlannerProgress['
       return 'Assembling first wave'
     case 'finalizing_plan':
       return 'Finalizing plan'
+    case 'applying_changes':
+      return 'Applying changes'
   }
 }
 
@@ -842,8 +844,8 @@ export function buildWorldPromptRailViewModel(input: {
     return {
       state: 'working',
       title: 'Building the next graph neighborhood',
-      detail: latestPlannerProgressMessage || latestDetail || 'The planner is resolving entities, relationships, and next moves.',
-      statusLabel: latestPlannerStatus ?? 'Working',
+      detail: latestPlannerProgressMessage || 'The planner is resolving entities, relationships, and next moves.',
+      statusLabel: latestPlannerStatus ?? 'Planning',
       primaryActionLabel: 'Generate',
       primaryActionKind: 'generate',
       latestSuggestions,

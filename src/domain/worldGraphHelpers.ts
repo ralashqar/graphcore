@@ -181,6 +181,25 @@ export function definitionKindForWorldEntity(nodeType: WorldEntity['nodeType']):
   }
 }
 
+export function getLinkedWorldEntityForDefinition(
+  definitionKey: string,
+  worldEntities: WorldEntity[],
+) {
+  return worldEntities.find((entity) => entity.linkedDefinitionKey === definitionKey) ?? null
+}
+
+export function getWorldRelationshipsForDefinition(
+  definitionKey: string,
+  worldEntities: WorldEntity[],
+  worldRelationships: WorldRelationship[],
+) {
+  const entity = getLinkedWorldEntityForDefinition(definitionKey, worldEntities)
+  if (!entity) return []
+  return worldRelationships.filter((relationship) => (
+    relationship.sourceEntityKey === entity.key || relationship.targetEntityKey === entity.key
+  ))
+}
+
 export function iconForWorldEntity(nodeType: WorldEntity['nodeType']): EntityIconId {
   switch (nodeType) {
     case 'actor':

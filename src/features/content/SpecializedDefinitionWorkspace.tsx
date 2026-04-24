@@ -3,6 +3,8 @@ import { Suspense, lazy, useEffect, useMemo, useState, useTransition } from 'rea
 import { getArtStylePresetLabel } from '../../domain/artStylePresets'
 import type { ArchetypeDefinition, AssetDefinition, AssemblyGraphDefinition, DefinitionBase, EnvironmentBlueprintV1, FieldDefinition, FieldValue, GameSpec, GraphDefinition } from '../../domain/graphcore'
 import type { MeshGenerationJob } from '../../domain/meshGeneration'
+import type { WorldEntity, WorldEntityCreateInput, WorldRelationship } from '../../domain/worldGraph'
+import { definitionKindForWorldEntity, getLinkedWorldEntityForDefinition, getWorldRelationshipsForDefinition } from '../../domain/worldGraphHelpers'
 import { getEnvironmentProfile, getResolvedDefinition3dBinding, getResolvedRender3dBinding } from '../../domain/render3d'
 import { getResourceGenerationMetadata, isPendingGenerationResource } from '../../domain/worldBuild'
 import { useEditorStore } from '../../state/editorStore'
@@ -60,6 +62,11 @@ type SpecializedDefinitionWorkspaceProps = {
   onUpdateComponents: (itemKey: string, components: DefinitionBase['components']) => void
   onUpdateFieldValue: (itemKey: string, fieldKey: string, value: FieldValue['value']) => void
   onUpdateItemIdentity: (key: string, changes: Partial<Pick<DefinitionBase, 'name' | 'key' | 'summary' | 'iconAssetKey' | 'archetypeKey'>>) => void
+  onUpdateWorldEntity: (entityKey: string, changes: Partial<WorldEntityCreateInput>) => Promise<void> | void
+  onOpenDefinitionLink: (definitionKey: string, kind: DefinitionBase['kind']) => void
+  onOpenWorldNode: (worldEntityKey: string) => void
+  worldEntities: WorldEntity[]
+  worldRelationships: WorldRelationship[]
   promptText?: string
 }
 
@@ -117,6 +124,11 @@ export function SpecializedDefinitionWorkspace({
   onUpdateComponents,
   onUpdateFieldValue: _onUpdateFieldValue,
   onUpdateItemIdentity,
+  onUpdateWorldEntity,
+  onOpenDefinitionLink,
+  onOpenWorldNode,
+  worldEntities,
+  worldRelationships,
   promptText: promptTextProp,
 }: SpecializedDefinitionWorkspaceProps) {
   const storePromptText = useEditorStore((state) => state.promptText)
@@ -235,6 +247,18 @@ export function SpecializedDefinitionWorkspace({
         failed: getResourceGenerationMetadata(graph)?.state === 'failed',
       }))
   }, [effectiveSelection, graphs])
+  const linkedWorldEntity = useMemo(
+    () => effectiveSelection ? getLinkedWorldEntityForDefinition(effectiveSelection.key, worldEntities) : null,
+    [effectiveSelection, worldEntities],
+  )
+  const linkedWorldRelationships = useMemo(
+    () => effectiveSelection ? getWorldRelationshipsForDefinition(effectiveSelection.key, worldEntities, worldRelationships) : [],
+    [effectiveSelection, worldEntities, worldRelationships],
+  )
+  const [worldContextDraft, setWorldContextDraft] = useState('')
+  useEffect(() => {
+    setWorldContextDraft(linkedWorldEntity?.context ?? '')
+  }, [linkedWorldEntity?.key, linkedWorldEntity?.context])
   const selectedFieldCount = effectiveSelection
     ? resolveItemFields(effectiveSelection, compatibleArchetypes.find((entry) => entry.key === effectiveSelection.archetypeKey) ?? null).length
     : 0
@@ -574,6 +598,57 @@ export function SpecializedDefinitionWorkspace({
               placeholder={effectiveSelection.kind === 'character' ? 'Describe the role, personality, and gameplay purpose of this character.' : 'Describe the setting, atmosphere, and narrative role of this environment.'}
             />
           </label>
+          {linkedWorldEntity ? (
+            <div className="editor-section compact-section definition-world-link-panel">
+              <div className="section-head">
+                <div>
+                  <span className="eyebrow">World Layer</span>
+                  <h3>Context</h3>
+                </div>
+                <div className="world-inspector-actions">
+                  <button className="ghost-button compact" onClick={() => onOpenWorldNode(linkedWorldEntity.key)} type="button">Open In World Graph</button>
+                </div>
+              </div>
+              <label className="field-block">
+                <span>World Context</span>
+                <textarea
+                  rows={5}
+                  value={worldContextDraft}
+                  onBlur={() => {
+                    if (worldContextDraft !== linkedWorldEntity.context) {
+                      void onUpdateWorldEntity(linkedWorldEntity.key, { context: worldContextDraft })
+                    }
+                  }}
+                  onChange={(event) => setWorldContextDraft(event.target.value)}
+                  placeholder="Story-facing context, obligations, secrets, and current pressures."
+                />
+              </label>
+              <div className="inline-note">{linkedWorldRelationships.length} linked relationship{linkedWorldRelationships.length === 1 ? '' : 's'}</div>
+              <div className="definition-world-relationship-list">
+                {linkedWorldRelationships.length === 0 ? <div className="inline-note">No linked world relationships yet.</div> : null}
+                {linkedWorldRelationships.map((relationship) => {
+                  const counterpart = worldEntities.find((entity) => (
+                    relationship.sourceEntityKey === linkedWorldEntity.key ? entity.key === relationship.targetEntityKey : entity.key === relationship.sourceEntityKey
+                  )) ?? null
+                  const counterpartKind = counterpart ? definitionKindForWorldEntity(counterpart.nodeType) : null
+                  return (
+                    <div key={relationship.key} className="schema-card definition-world-relationship-card">
+                      <div className="schema-card-head">
+                        <strong>{counterpart?.name ?? 'Missing link'}</strong>
+                        <div className="world-inspector-actions">
+                          {counterpart ? <button className="ghost-button compact" onClick={() => onOpenWorldNode(counterpart.key)} type="button">World Node</button> : null}
+                          {counterpart?.linkedDefinitionKey && counterpartKind ? (
+                            <button className="ghost-button compact" onClick={() => onOpenDefinitionLink(counterpart.linkedDefinitionKey!, counterpartKind)} type="button">Linked Record</button>
+                          ) : null}
+                        </div>
+                      </div>
+                      <div className="inline-note">{relationship.notes || relationship.verb || 'Relationship'} · {relationship.direction}</div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          ) : null}
           <div className="character-concept-prompt-row">
             <label className="field-block character-header-textarea">
               <span>Visual Description</span>

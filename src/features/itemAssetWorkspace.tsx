@@ -2,6 +2,7 @@ import { Suspense, lazy, useEffect, useMemo, useState } from 'react'
 
 import { getArtStylePresetLabel } from '../domain/artStylePresets'
 import { getResolvedDefinition3dBinding } from '../domain/render3d'
+import { definitionKindForWorldEntity, getLinkedWorldEntityForDefinition, getWorldRelationshipsForDefinition } from '../domain/worldGraphHelpers'
 import { getResourceGenerationMetadata, isPendingGenerationResource } from '../domain/worldBuild'
 import type { MeshGenerationJob } from '../domain/meshGeneration'
 import { useEditorStore } from '../state/editorStore'
@@ -89,13 +90,18 @@ export function ContentWorkspace({
   onChangePromptText: onChangePromptTextProp,
   onGeneratePrompt,
   onOpenCinematicGraph,
+  onOpenDefinitionLink,
+  onOpenWorldNode,
   onStartMeshGeneration,
   onPersistDefinitionPreviewImageBinding,
   onUpdateArchetypeField,
   onUpdateArchetypeIdentity,
   onUpdateFieldValue: _onUpdateFieldValue,
   onUpdateItemIdentity,
+  onUpdateWorldEntity,
   onUpdateComponents,
+  worldEntities,
+  worldRelationships,
   promptText: promptTextProp,
 }: ContentWorkspaceProps) {
   const storePromptText = useEditorStore((state) => state.promptText)
@@ -161,6 +167,18 @@ export function ContentWorkspace({
         failed: getResourceGenerationMetadata(graph)?.state === 'failed',
       }))
   }, [graphs, selectedContentItem])
+  const linkedWorldEntity = useMemo(
+    () => selectedContentItem ? getLinkedWorldEntityForDefinition(selectedContentItem.key, worldEntities) : null,
+    [selectedContentItem, worldEntities],
+  )
+  const linkedWorldRelationships = useMemo(
+    () => selectedContentItem ? getWorldRelationshipsForDefinition(selectedContentItem.key, worldEntities, worldRelationships) : [],
+    [selectedContentItem, worldEntities, worldRelationships],
+  )
+  const [worldContextDraft, setWorldContextDraft] = useState('')
+  useEffect(() => {
+    setWorldContextDraft(linkedWorldEntity?.context ?? '')
+  }, [linkedWorldEntity?.key, linkedWorldEntity?.context])
 
   const filteredItems = useMemo(() => {
     const query = itemSearch.trim().toLowerCase()
@@ -515,6 +533,57 @@ export function ContentWorkspace({
               }
             />
           </label>
+          {linkedWorldEntity ? (
+            <div className="editor-section compact-section definition-world-link-panel">
+              <div className="section-head">
+                <div>
+                  <span className="eyebrow">World Layer</span>
+                  <h3>Context</h3>
+                </div>
+                <div className="world-inspector-actions">
+                  <button className="ghost-button compact" onClick={() => onOpenWorldNode(linkedWorldEntity.key)} type="button">Open In World Graph</button>
+                </div>
+              </div>
+              <label className="field-block">
+                <span>World Context</span>
+                <textarea
+                  rows={5}
+                  value={worldContextDraft}
+                  onBlur={() => {
+                    if (worldContextDraft !== linkedWorldEntity.context) {
+                      void onUpdateWorldEntity(linkedWorldEntity.key, { context: worldContextDraft })
+                    }
+                  }}
+                  onChange={(event) => setWorldContextDraft(event.target.value)}
+                  placeholder="Story-facing context, obligations, symbolism, and current pressure."
+                />
+              </label>
+              <div className="inline-note">{linkedWorldRelationships.length} linked relationship{linkedWorldRelationships.length === 1 ? '' : 's'}</div>
+              <div className="definition-world-relationship-list">
+                {linkedWorldRelationships.length === 0 ? <div className="inline-note">No linked world relationships yet.</div> : null}
+                {linkedWorldRelationships.map((relationship) => {
+                  const counterpart = worldEntities.find((entity) => (
+                    relationship.sourceEntityKey === linkedWorldEntity.key ? entity.key === relationship.targetEntityKey : entity.key === relationship.sourceEntityKey
+                  )) ?? null
+                  const counterpartKind = counterpart ? definitionKindForWorldEntity(counterpart.nodeType) : null
+                  return (
+                    <div key={relationship.key} className="schema-card definition-world-relationship-card">
+                      <div className="schema-card-head">
+                        <strong>{counterpart?.name ?? 'Missing link'}</strong>
+                        <div className="world-inspector-actions">
+                          {counterpart ? <button className="ghost-button compact" onClick={() => onOpenWorldNode(counterpart.key)} type="button">World Node</button> : null}
+                          {counterpart?.linkedDefinitionKey && counterpartKind ? (
+                            <button className="ghost-button compact" onClick={() => onOpenDefinitionLink(counterpart.linkedDefinitionKey!, counterpartKind)} type="button">Linked Record</button>
+                          ) : null}
+                        </div>
+                      </div>
+                      <div className="inline-note">{relationship.notes || relationship.verb || 'Relationship'} · {relationship.direction}</div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          ) : null}
           <div className="character-concept-prompt-row">
             <label className="field-block character-header-textarea">
               <span>Visual Description</span>

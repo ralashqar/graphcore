@@ -73,6 +73,7 @@ export const worldPromptPlannerProgressPhaseSchema = z.enum([
   'planning_relationships',
   'assembling_first_wave',
   'finalizing_plan',
+  'applying_changes',
 ])
 export const worldPromptPreviewModeSchema = z.enum(['plan_only', 'staged_first_wave'])
 export const worldPromptPreviewItemKindSchema = z.enum([
@@ -592,6 +593,7 @@ export const worldPromptStartTurnResponseSchema = z.object({
   ok: z.literal(true),
   session: worldPromptSessionSchema,
   turn: worldPromptTurnSchema,
+  definitions: z.array(looseRecordSchema).default([]),
 })
 
 export const worldPromptResolveOpRequestSchema = z.object({

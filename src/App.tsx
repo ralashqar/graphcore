@@ -1989,6 +1989,12 @@ export default function App() {
     setSelectedGraphKey(graphKey)
   }
 
+  function openWorldNodeFromRecord(worldEntityKey: string) {
+    setActiveTab('graph')
+    setSelectedWorldNodeKey(worldEntityKey)
+    setSelectedWorldEntityKey(worldEntityKey)
+  }
+
   function applySnapshotUpdate(mutator: (current: ProjectSnapshot) => ProjectSnapshot) {
     setSnapshot((current) => {
       if (!current) return current
@@ -2522,6 +2528,44 @@ export default function App() {
     }
   }
 
+  function syncDefinitionFromWorldEntityLocally(
+    current: ProjectSnapshot,
+    entity: Pick<WorldEntity, 'linkedDefinitionKey' | 'nodeType' | 'name' | 'summary' | 'thumbnailAssetKey' | 'tags'>,
+  ) {
+    const linkedDefinitionKey = entity.linkedDefinitionKey ?? null
+    if (!linkedDefinitionKey) return current.definitions
+    const expectedKind = definitionKindForWorldEntity(entity.nodeType)
+    if (!expectedKind) return current.definitions
+    return current.definitions.map((definition) => (
+      definition.key === linkedDefinitionKey && definition.kind === expectedKind
+        ? {
+            ...definition,
+            name: entity.name,
+            summary: entity.summary,
+            iconAssetKey: entity.thumbnailAssetKey ?? null,
+            tags: entity.tags ?? [],
+          }
+        : definition
+    ))
+  }
+
+  function syncWorldEntityFromDefinitionLocally(
+    current: ProjectSnapshot,
+    definitionKey: string,
+    changes: Partial<Pick<DefinitionBase, 'name' | 'summary' | 'iconAssetKey'>>,
+  ) {
+    return current.worldEntities.map((entity) => (
+      entity.linkedDefinitionKey === definitionKey
+        ? {
+            ...entity,
+            ...(changes.name !== undefined ? { name: changes.name } : {}),
+            ...(changes.summary !== undefined ? { summary: changes.summary } : {}),
+            ...(changes.iconAssetKey !== undefined ? { thumbnailAssetKey: changes.iconAssetKey } : {}),
+          }
+        : entity
+    ))
+  }
+
   function createWorldEntityLocally(input: WorldEntityCreateInput) {
     if (!snapshot) return
     let createdViewKey: string | null = null
@@ -2548,7 +2592,10 @@ export default function App() {
       createdViewKey = nextViews[0]?.key ?? null
       return {
         ...current,
-        definitions: linkResult.definitions,
+        definitions: syncDefinitionFromWorldEntityLocally({
+          ...current,
+          definitions: linkResult.definitions,
+        } as ProjectSnapshot, nextEntity),
         worldEntities: [...current.worldEntities, nextEntity],
         worldViews: nextViews,
       }
@@ -2633,6 +2680,11 @@ export default function App() {
     applySnapshotUpdate((current) => ({
       ...current,
       worldEntities: current.worldEntities.map((entity) => entity.key === entityKey ? { ...entity, ...changes } : entity),
+      definitions: (() => {
+        const nextEntity = current.worldEntities.find((entity) => entity.key === entityKey)
+        if (!nextEntity) return current.definitions
+        return syncDefinitionFromWorldEntityLocally(current, { ...nextEntity, ...changes })
+      })(),
     }))
   }
 
@@ -3372,6 +3424,15 @@ export default function App() {
       sessions: [result.session],
       turns: [result.turn],
     })
+    if (Array.isArray(result.definitions) && result.definitions.length > 0) {
+      nextSnapshot = normalizeSnapshot({
+        ...nextSnapshot,
+        definitions: mergeResourcesByKey(
+          nextSnapshot.definitions,
+          result.definitions as ProjectSnapshot['definitions'],
+        ),
+      })
+    }
     const refreshed = await workspaceService.load({
       projectId: syncedSnapshot.project.id,
       draftId: syncedSnapshot.draft.id,
@@ -3754,7 +3815,20 @@ export default function App() {
         }
       })
 
-      return { ...current, definitions: nextDefinitions }
+      const effectiveDefinitionKey = resolvedKey ?? key
+      return {
+        ...current,
+        definitions: nextDefinitions,
+        worldEntities: syncWorldEntityFromDefinitionLocally(current, key, {
+          name: changes.name,
+          summary: changes.summary,
+          iconAssetKey: changes.iconAssetKey,
+        }).map((entity) => (
+          entity.linkedDefinitionKey === key && effectiveDefinitionKey !== key
+            ? { ...entity, linkedDefinitionKey: effectiveDefinitionKey }
+            : entity
+        )),
+      }
     })
     if (resolvedKey && selectedDefinitionKey === key) setSelectedDefinitionKey(resolvedKey)
   }
@@ -5379,6 +5453,8 @@ export default function App() {
                 onChangePromptText={setPromptText}
                 onGeneratePrompt={handleGeneratePatch}
                 onOpenCinematicGraph={openCinematicWorkspace}
+                onOpenDefinitionLink={openDefinitionWorkspace}
+                onOpenWorldNode={openWorldNodeFromRecord}
                 onRemoveArchetypeField={removeArchetypeField}
                 onSelectAsset={setSelectedAssetKey}
                 onSelectArchetype={setSelectedArchetypeKey}
@@ -5387,9 +5463,12 @@ export default function App() {
                 onUpdateArchetypeIdentity={updateArchetypeIdentity}
                 onUpdateFieldValue={updateItemFieldValue}
                 onUpdateItemIdentity={updateItemIdentity}
+                onUpdateWorldEntity={updateWorldEntity}
                 onUpdateComponents={updateDefinitionComponents}
                 onStartMeshGeneration={(definitionKey) => void startMeshGenerationForDefinition(definitionKey)}
                 onPersistDefinitionPreviewImageBinding={(definitionKey, assetKey) => workspaceService.persistDefinitionPreviewImageBinding(snapshot, definitionKey, assetKey)}
+                worldEntities={snapshot.worldEntities}
+                worldRelationships={snapshot.worldRelationships}
                 promptText={readPromptText()}
               />
             ) : null}
@@ -5425,6 +5504,8 @@ export default function App() {
                 onGeneratePrompt={handleGeneratePatch}
                 onGenerateConceptImage={(definitionKey) => handleStartDefinitionConceptGeneration(definitionKey)}
                 onOpenCinematicGraph={openCinematicWorkspace}
+                onOpenDefinitionLink={openDefinitionWorkspace}
+                onOpenWorldNode={openWorldNodeFromRecord}
                 onStartMeshGeneration={(definitionKey) => void startMeshGenerationForDefinition(definitionKey)}
                 onPersistDefinitionPreviewImageBinding={(definitionKey, assetKey) => workspaceService.persistDefinitionPreviewImageBinding(snapshot, definitionKey, assetKey)}
                 onSelectAsset={setSelectedAssetKey}
@@ -5434,6 +5515,9 @@ export default function App() {
                 onUpdateComponents={updateDefinitionComponents}
                 onUpdateFieldValue={updateItemFieldValue}
                 onUpdateItemIdentity={updateItemIdentity}
+                onUpdateWorldEntity={updateWorldEntity}
+                worldEntities={snapshot.worldEntities}
+                worldRelationships={snapshot.worldRelationships}
               />
             ) : null}
             {activeTab === 'environments' ? (
@@ -5468,6 +5552,8 @@ export default function App() {
                 onGeneratePrompt={handleGeneratePatch}
                 onGenerateConceptImage={(definitionKey) => handleStartDefinitionConceptGeneration(definitionKey)}
                 onOpenCinematicGraph={openCinematicWorkspace}
+                onOpenDefinitionLink={openDefinitionWorkspace}
+                onOpenWorldNode={openWorldNodeFromRecord}
                 onStartMeshGeneration={(definitionKey) => void startMeshGenerationForDefinition(definitionKey)}
                 onPersistDefinitionPreviewImageBinding={(definitionKey, assetKey) => workspaceService.persistDefinitionPreviewImageBinding(snapshot, definitionKey, assetKey)}
                 onSelectAsset={setSelectedAssetKey}
@@ -5477,6 +5563,9 @@ export default function App() {
                 onUpdateComponents={updateDefinitionComponents}
                 onUpdateFieldValue={updateItemFieldValue}
                 onUpdateItemIdentity={updateItemIdentity}
+                onUpdateWorldEntity={updateWorldEntity}
+                worldEntities={snapshot.worldEntities}
+                worldRelationships={snapshot.worldRelationships}
               />
             ) : null}
             {activeTab === 'assets' ? <AssetsWorkspace assets={snapshot.assets} deletingAssetKey={deletingAssetKey} selectedAsset={selectedAsset} selectedItem={selectedDefinition} onAssignAssetToSelectedItem={assignAssetToSelectedItem} onCreateUrlAsset={createUrlAsset} onDeleteAsset={deleteAsset} onSelectAsset={setSelectedAssetKey} onUploadAsset={handleAssetUpload} onUpdateAsset={updateAssetIdentity} /> : null}

@@ -3767,6 +3767,13 @@ function WorldPromptChatPanel({
   const sessionSubline = selectedSession && sessionTurns.length > 0
     ? `${sessionTurns.length} turn${sessionTurns.length === 1 ? '' : 's'}`
     : ''
+  const isSubmittingWithoutActiveTurn = busy && !activePromptTurn
+  const liveBusyStatusLabel = isSubmittingWithoutActiveTurn
+    ? 'Planning'
+    : (railView.latestPlannerStatus ?? railView.statusLabel ?? 'Planning')
+  const liveBusyDetail = isSubmittingWithoutActiveTurn
+    ? 'Preparing the next world-building turn.'
+    : (railView.detail || 'Working through the next graph changes.')
   const promptTypeAccelerators = useMemo(() => getWorldPromptTypeAccelerators(projectContext), [projectContext])
   const promptStarterCards = useMemo(() => getWorldPromptStarterCards(projectContext), [projectContext])
   const promptSmartPrompts = useMemo(() => getWorldPromptSmartPrompts(projectContext), [projectContext])
@@ -3969,7 +3976,7 @@ function WorldPromptChatPanel({
           <span className="chip">World {selectedView.name || 'Default'}</span>
           {selectedEntity ? <span className="chip">Focus {selectedEntity.name}</span> : null}
           {selectedThread ? <span className="chip">Thread {selectedThread.title}</span> : null}
-          <span className={`chip world-prompt-status-pill is-${railView.state}`}>{busy ? 'Generating' : railView.statusLabel}</span>
+          <span className={`chip world-prompt-status-pill is-${busy ? 'working' : railView.state}`}>{busy ? liveBusyStatusLabel : railView.statusLabel}</span>
         </div>
       ) : null}
 
@@ -4037,9 +4044,9 @@ function WorldPromptChatPanel({
                 <div className="world-prompt-planning-state">
                   <div className="world-prompt-planning-spinner" aria-hidden="true" />
                   <div className="world-prompt-planning-copy">
-                    <span className="world-prompt-row-label">{railView.latestPlannerStatus ?? railView.statusLabel ?? 'Planning'}</span>
+                    <span className="world-prompt-row-label">{liveBusyStatusLabel}</span>
                     <div className="world-prompt-line">
-                      {railView.detail || 'Working through the next graph changes.'}
+                      {liveBusyDetail}
                     </div>
                   </div>
                 </div>

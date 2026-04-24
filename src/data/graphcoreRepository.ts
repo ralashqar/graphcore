@@ -668,6 +668,49 @@ async function createLinkedDefinitionForWorldEntity(
   }
 }
 
+async function syncLinkedDefinitionFromWorldEntity(
+  snapshot: ProjectSnapshot,
+  entity: Pick<WorldEntity, 'nodeType' | 'name' | 'summary' | 'thumbnailAssetKey' | 'linkedDefinitionKey' | 'tags'>,
+) {
+  const linkedDefinitionKey = entity.linkedDefinitionKey ?? null
+  if (!linkedDefinitionKey) {
+    return { definitions: snapshot.definitions, linkedDefinition: null }
+  }
+  const existingDefinition = snapshot.definitions.find((definition) => definition.key === linkedDefinitionKey) ?? null
+  const expectedKind = definitionKindForWorldNodeType(entity.nodeType)
+  if (!existingDefinition || !expectedKind || existingDefinition.kind !== expectedKind) {
+    return { definitions: snapshot.definitions, linkedDefinition: null }
+  }
+
+  const nextDefinition: ProjectSnapshot['definitions'][number] = {
+    ...existingDefinition,
+    name: entity.name,
+    summary: entity.summary,
+    iconAssetKey: entity.thumbnailAssetKey ?? null,
+    tags: entity.tags ?? [],
+  }
+
+  const updateResponse = await supabase
+    .from('project_definitions')
+    .update({
+      name: nextDefinition.name,
+      summary: nextDefinition.summary,
+      icon_asset_key: nextDefinition.iconAssetKey,
+      tags: nextDefinition.tags,
+    })
+    .eq('draft_id', snapshot.draft.id)
+    .eq('key', linkedDefinitionKey)
+
+  if (updateResponse.error) {
+    throw new Error(updateResponse.error.message)
+  }
+
+  return {
+    definitions: upsertEntryByKey(snapshot.definitions, nextDefinition),
+    linkedDefinition: nextDefinition,
+  }
+}
+
 function localPatchDiagnostics(fallbackReason: string | null) {
   return [
     'Fallback patch generated locally because the prompt backend was unavailable.',
@@ -4254,9 +4297,12 @@ export async function createWorldEntity(snapshot: ProjectSnapshot, input: WorldE
   }
 
   const nextEntity = mapWorldEntityRow(insertResponse.data as WorldEntityRow)
+  const syncedDefinition = await syncLinkedDefinitionFromWorldEntity(snapshot, nextEntity)
   return {
     ...snapshot,
-    definitions: linkedDefinition ? upsertEntryByKey(snapshot.definitions, linkedDefinition) : snapshot.definitions,
+    definitions: linkedDefinition
+      ? upsertEntryByKey(syncedDefinition.definitions, linkedDefinition)
+      : syncedDefinition.definitions,
     worldEntities: upsertEntryByKey(snapshot.worldEntities, nextEntity),
   }
 }
@@ -4296,9 +4342,13 @@ export async function updateWorldEntity(snapshot: ProjectSnapshot, entityKey: st
     throw new Error(updateResponse.error.message)
   }
 
+  const nextEntity = mapWorldEntityRow(updateResponse.data as WorldEntityRow)
+  const syncedDefinition = await syncLinkedDefinitionFromWorldEntity(snapshot, nextEntity)
+
   return {
     ...snapshot,
-    worldEntities: upsertEntryByKey(snapshot.worldEntities, mapWorldEntityRow(updateResponse.data as WorldEntityRow)),
+    definitions: syncedDefinition.definitions,
+    worldEntities: upsertEntryByKey(snapshot.worldEntities, nextEntity),
   }
 }
 

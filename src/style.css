@@ -2227,6 +2227,21 @@ code {
   line-height: 1.5;
 }
 
+.definition-world-link-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.definition-world-relationship-list {
+  display: grid;
+  gap: 10px;
+}
+
+.definition-world-relationship-card {
+  display: grid;
+  gap: 6px;
+}
+
 .world-prompt-drawers {
   display: grid;
   gap: 10px;
@@ -2361,11 +2376,21 @@ code {
 
 .world-prompt-suggestion-card strong {
   font-size: 0.95rem;
+  display: block;
+  line-height: 1.35;
+  white-space: normal;
+  word-break: break-word;
 }
 
 .world-prompt-suggestion-card span,
 .world-prompt-suggestion-card small {
   color: rgba(226, 232, 240, 0.78);
+}
+
+.world-prompt-suggestion-card span {
+  line-height: 1.4;
+  white-space: normal;
+  word-break: break-word;
 }
 
 .world-prompt-chat-shell {
@@ -3225,10 +3250,10 @@ code {
 .world-prompt-composer-suggestion-button {
   min-width: 0;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   width: 100%;
-  min-height: 42px;
-  padding: 0 14px;
+  min-height: 48px;
+  padding: 10px 14px;
   cursor: pointer;
   text-align: left;
 }
@@ -3241,10 +3266,14 @@ code {
 
 .world-prompt-composer-suggestion-title {
   min-width: 0;
-  display: block;
+  display: -webkit-box;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: 0.92rem;
+  line-height: 1.35;
+  white-space: normal;
+  word-break: break-word;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .world-prompt-composer-suggestion-info {

@@ -145,6 +145,7 @@ GraphCore runs AI workloads through protected Supabase Edge Functions that provi
 - Entity relationship inference
 - World state consistency checking
 - Dynamic content expansion
+- World-prompt chat turns now return touched linked definition records alongside world-graph mutations so prompt-created characters, items, and environments appear immediately in their specialized workspaces without waiting on a later refresh cycle.
 
 ### World Prompt Agent (`world-prompt`)
 **Purpose**: Runs GraphCore's live prompt-to-world graph chat for story-gardening style authoring over an ever-growing world graph.
@@ -157,6 +158,9 @@ GraphCore runs AI workloads through protected Supabase Edge Functions that provi
 - Ranks next-step suggestions using both planner ideas and story-seed signals such as protagonist, villain, ruler, factions, lore, and missing inciting events
 - Completes underspecified support entities on direct world-building turns by reusing a strong existing match when available or inventing a concrete named entity instead of emitting placeholder canon
 - Reconciles entity summaries, contexts, and relationship notes additively while preserving prior refinements in append-only metadata history
+- Syncs shared world-entity fields (`name`, `summary`, icon, tags) into linked definition records during prompt-driven world mutations
+- Returns touched linked definition records from `start-world-prompt-turn` so prompt-created or prompt-updated characters, items, groups, concepts, events, and environments appear immediately in their specialized workspaces
+- Exposes linked world context and world-graph relationships inside the specialized definition workspaces through the `linkedDefinitionKey` bridge, including deep links back into the graph and across linked records
 
 **Architecture**:
 - Retrieval-first world authoring instead of generic chat memory
@@ -164,7 +168,7 @@ GraphCore runs AI workloads through protected Supabase Edge Functions that provi
   - `resolvedMode`
   - `resolvedIntent`
   - `resolvedFocus`
-- Conservative mutation policy with approval-preserving sanitization
+- Conservative mutation policy with immediate apply-or-answer execution
 - Structured continuity memory in `world_prompt_sessions.last_context.memoryState`
 - Hybrid retrieval using graph anchors, graph-local expansion, Postgres FTS, and reranking
 
@@ -173,7 +177,7 @@ GraphCore runs AI workloads through protected Supabase Edge Functions that provi
 - Auto-pivots focus when prompts abruptly shift topic
 - Narrows context separately for answer, mutation, and background packets
 - Persists actionable suggestions with machine-readable target metadata
-- Holds risky canon-touching changes for approval instead of silently auto-applying
+- Skips risky unresolved ops with an explicit assistant note instead of creating a pending approval queue
 - Stores retrieval diagnostics for debugging relevance and coherence issues
 
 **Integration**:
@@ -187,6 +191,8 @@ GraphCore runs AI workloads through protected Supabase Edge Functions that provi
 **Operational Notes**:
 - The graph remains the source of truth; chat history is continuity support only
 - Apply paths refresh touched entities and threads from live DB state before mutating
+- Linked definition records are a synced projection layer for shared identity fields; world-only narrative state such as `context`, threads, and relationships remains canonical on the world graph
+- Character, content, and environment workspaces render linked world context and relationships directly from the graph instead of duplicating relationship storage into `project_definitions`
 - Thread search now incorporates linked entity names and aliases for better recall
 - World Prompt canon creation is LLM-authored only; deterministic logic is limited to routing, retrieval, and safety checks
 - Hosted planner output is retried once if it still contains placeholder entities or unresolved descriptor-only relationship endpoints, and mutating turns fail or degrade to non-mutating behavior instead of writing deterministic fallback canon

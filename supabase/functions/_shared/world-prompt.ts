@@ -3411,6 +3411,7 @@ function buildDirectFollowUpSuggestions(input: {
     createdTypes,
     hasActors,
     hasGroups,
+    hasPlaces,
     hasLore,
     hasEvent,
     promptLower,
@@ -4540,14 +4541,20 @@ async function ensureLinkedDefinition(input: {
 }) {
   const definitionKind = determineDefinitionKind(input.entity.nodeType)
   if (!definitionKind || input.entity.ensureLinkedDefinition === false) {
-    return null
+    return {
+      linkedDefinitionKey: null,
+      createdDefinition: null,
+    }
   }
 
   const existingByName = input.snapshot.definitions.find((definition) => (
     definition.kind === definitionKind && normalizeName(definition.name) === normalizeName(input.entity.name)
   )) ?? null
   if (existingByName) {
-    return existingByName.key
+    return {
+      linkedDefinitionKey: existingByName.key,
+      createdDefinition: null,
+    }
   }
 
   let candidateKey = `${definitionKind}.${slugify(input.entity.name).replace(/-/g, '_')}`
@@ -4598,7 +4605,51 @@ async function ensureLinkedDefinition(input: {
       summary: input.entity.summary,
     },
   ]
-  return candidateKey
+  return {
+    linkedDefinitionKey: candidateKey,
+    createdDefinition: {
+      id: inserted.data.id,
+      key: candidateKey,
+      kind: definitionKind,
+      name: input.entity.name,
+      summary: input.entity.summary,
+      status: 'draft',
+      iconAssetKey: input.entity.thumbnailAssetKey,
+      archetypeKey: null,
+      tags: input.entity.tags,
+      schemaVersion: 1,
+      metadata: {},
+      llmHints: {},
+      assetRefs: [],
+      definitionData: {},
+      fieldValues: [],
+      customFields: [],
+      components,
+    } satisfies Record<string, unknown>,
+  }
+}
+
+async function syncLinkedDefinitionFromWorldEntity(input: {
+  client: SupabaseClient
+  draftId: string
+  entity: Pick<WorldEntity, 'nodeType' | 'name' | 'summary' | 'thumbnailAssetKey' | 'linkedDefinitionKey' | 'tags'>
+}) {
+  const linkedDefinitionKey = input.entity.linkedDefinitionKey ?? null
+  if (!linkedDefinitionKey) return
+  const expectedKind = determineDefinitionKind(input.entity.nodeType)
+  if (!expectedKind) return
+  const response = await input.client
+    .from('project_definitions')
+    .update({
+      name: input.entity.name,
+      summary: input.entity.summary,
+      icon_asset_key: input.entity.thumbnailAssetKey ?? null,
+      tags: input.entity.tags ?? [],
+    })
+    .eq('draft_id', input.draftId)
+    .eq('key', linkedDefinitionKey)
+    .eq('kind', expectedKind)
+  if (response.error) throw new Error(response.error.message)
 }
 
 async function insertPromptMessage(input: {
@@ -4783,6 +4834,8 @@ function defaultPlannerProgressMessage(phase: WorldPromptPlannerProgress['phase'
       return 'Assembling the first wave of safe graph changes.'
     case 'finalizing_plan':
       return 'Finalizing the validated plan before execution.'
+    case 'applying_changes':
+      return 'Applying the validated graph changes.'
   }
 }
 
@@ -4814,6 +4867,16 @@ function plannerProgressMessageForPhase(
     default:
       return defaultPlannerProgressMessage(phase)
   }
+}
+
+function buildApplyProgressMessage(input: {
+  index: number
+  total: number
+  op: PromptToWorldOp
+}) {
+  const step = `${input.index}/${input.total}`
+  const label = stripInternalPlannerDiagnostics(describePromptOp(input.op))
+  return label ? `Applying ${step}: ${label}` : `Applying ${step}.`
 }
 
 function describePromptOp(op: PromptToWorldOp) {
@@ -5248,18 +5311,18 @@ function sanitizePromptOp(input: {
     if (resolved.entity) {
       op.payload.targetEntityKey = resolved.entity.key
       const renaming = normalizeName(entity.name) !== normalizeName(resolved.entity.name)
-      const rewritingSummary = Boolean(entity.summary.trim() && resolved.entity.summary.trim() && entity.summary.trim() !== resolved.entity.summary.trim())
       const changingKind = entity.nodeType !== resolved.entity.nodeType
       const relinking = Boolean(entity.linkedDefinitionKey && entity.linkedDefinitionKey !== resolved.entity.linkedDefinitionKey)
       const canonTouch = entityIsCanonLocked(resolved.entity)
-      if (renaming || rewritingSummary || relinking || canonTouch || (changingKind && explicitCorrection)) {
+      const identityRewrite = renaming || relinking || changingKind
+      if (identityRewrite || canonTouch || (changingKind && explicitCorrection)) {
         op.applyMode = 'needs_approval'
       }
       return annotatePromptOpMetadata({
         op,
         touchesExisting: true,
         canonTouch,
-        approvalReason: renaming || rewritingSummary || relinking || (changingKind && explicitCorrection)
+        approvalReason: identityRewrite || (changingKind && explicitCorrection)
           ? 'Semantic rewrite of existing entity'
           : canonTouch ? 'Touches canon-locked entity' : null,
       })
@@ -5503,26 +5566,11 @@ async function createPromptWorldEntity(input: {
   entity: WorldEntityCreateInput
   preferredKey?: string | null
 }) {
-  const linkedDefinitionKey = await ensureLinkedDefinition({
+  const { linkedDefinitionKey, createdDefinition } = await ensureLinkedDefinition({
     client: input.client,
     snapshot: input.snapshot,
     entity: input.entity,
   })
-  const definitionCreated = Boolean(linkedDefinitionKey && !input.snapshot.definitions.some((definition) => definition.key === linkedDefinitionKey))
-  if (definitionCreated && linkedDefinitionKey) {
-    const definitionKind = determineDefinitionKind(input.entity.nodeType)
-    if (definitionKind) {
-      input.snapshot.definitions = [
-        ...input.snapshot.definitions,
-        {
-          key: linkedDefinitionKey,
-          kind: definitionKind,
-          name: input.entity.name,
-          summary: input.entity.summary,
-        },
-      ]
-    }
-  }
 
   const key = input.preferredKey || buildWorldEntityKey(input.snapshot, input.entity.nodeType, input.entity.name)
   const insertResponse = await input.client
@@ -5556,7 +5604,8 @@ async function createPromptWorldEntity(input: {
   return {
     entity: createdEntity,
     linkedDefinitionKey,
-    createdDefinitionKey: definitionCreated ? linkedDefinitionKey : null,
+    createdDefinitionKey: createdDefinition && linkedDefinitionKey ? linkedDefinitionKey : null,
+    createdDefinition,
   }
 }
 
@@ -5685,30 +5734,46 @@ async function applyPromptOp(input: {
         incoming: input.op.payload.entity,
         linkedDefinitionKey: target.linkedDefinitionKey,
       })
+      await syncLinkedDefinitionFromWorldEntity({
+        client: input.client,
+        draftId: input.snapshot.draft.id,
+        entity: updatedEntity,
+      })
       input.snapshot.worldEntities = input.snapshot.worldEntities.map((entity) => entity.key === updatedEntity.key ? updatedEntity : entity)
       return { applied: { worldEntities: [updatedEntity] }, queue: null, note: null }
     }
 
-    const linkedDefinitionKey = await ensureLinkedDefinition({
+    const ensuredDefinition = await ensureLinkedDefinition({
       client: input.client,
       snapshot: input.snapshot,
       entity: input.op.payload.entity,
     })
+    const linkedDefinitionKey = ensuredDefinition.linkedDefinitionKey
     const key = input.op.payload.targetEntityKey || buildWorldEntityKey(input.snapshot, input.op.payload.entity.nodeType, input.op.payload.entity.name)
     const dbTarget = await loadWorldEntityByDraftAndKey(input.client, input.snapshot.draft.id, key)
-    if (dbTarget) {
-      const updatedEntity = await mergePromptEntityIntoExisting({
-        client: input.client,
-        draftId: input.snapshot.draft.id,
-        target: dbTarget,
-        incoming: input.op.payload.entity,
-        linkedDefinitionKey,
-      })
-      input.snapshot.worldEntities = [
-        ...input.snapshot.worldEntities.filter((entity) => entity.key !== updatedEntity.key),
-        updatedEntity,
-      ]
-      return { applied: { worldEntities: [updatedEntity] }, queue: null, note: null }
+      if (dbTarget) {
+        const updatedEntity = await mergePromptEntityIntoExisting({
+          client: input.client,
+          draftId: input.snapshot.draft.id,
+          target: dbTarget,
+          incoming: input.op.payload.entity,
+          linkedDefinitionKey,
+        })
+        await syncLinkedDefinitionFromWorldEntity({
+          client: input.client,
+          draftId: input.snapshot.draft.id,
+          entity: updatedEntity,
+        })
+        input.snapshot.worldEntities = [
+          ...input.snapshot.worldEntities.filter((entity) => entity.key !== updatedEntity.key),
+          updatedEntity,
+        ]
+      return {
+        applied: { worldEntities: [updatedEntity] },
+        definitions: ensuredDefinition.createdDefinition ? [ensuredDefinition.createdDefinition] : [],
+        queue: null,
+        note: null,
+      }
     }
     const insertResponse = await input.client
       .from('world_entities')
@@ -5742,21 +5807,41 @@ async function applyPromptOp(input: {
             incoming: input.op.payload.entity,
             linkedDefinitionKey,
           })
+          await syncLinkedDefinitionFromWorldEntity({
+            client: input.client,
+            draftId: input.snapshot.draft.id,
+            entity: updatedEntity,
+          })
           input.snapshot.worldEntities = [
             ...input.snapshot.worldEntities.filter((entity) => entity.key !== updatedEntity.key),
             updatedEntity,
           ]
-          return { applied: { worldEntities: [updatedEntity] }, queue: null, note: null }
+          return {
+            applied: { worldEntities: [updatedEntity] },
+            definitions: ensuredDefinition.createdDefinition ? [ensuredDefinition.createdDefinition] : [],
+            queue: null,
+            note: null,
+          }
         }
       }
       throw new Error(message)
     }
     const createdEntity = mapWorldEntityRow(insertResponse.data as WorldEntityRow)
+    await syncLinkedDefinitionFromWorldEntity({
+      client: input.client,
+      draftId: input.snapshot.draft.id,
+      entity: createdEntity,
+    })
     input.snapshot.worldEntities = [
       ...input.snapshot.worldEntities.filter((entity) => entity.key !== createdEntity.key),
       createdEntity,
     ]
-    return { applied: { worldEntities: [createdEntity] }, queue: null, note: null }
+    return {
+      applied: { worldEntities: [createdEntity] },
+      definitions: ensuredDefinition.createdDefinition ? [ensuredDefinition.createdDefinition] : [],
+      queue: null,
+      note: null,
+    }
   }
 
   if (input.op.op === 'update_entity') {
@@ -5828,6 +5913,11 @@ async function applyPromptOp(input: {
       createdAt: updateResponse.data.created_at,
       updatedAt: updateResponse.data.updated_at,
     })
+    await syncLinkedDefinitionFromWorldEntity({
+      client: input.client,
+      draftId: input.snapshot.draft.id,
+      entity: updatedEntity,
+    })
     input.snapshot.worldEntities = input.snapshot.worldEntities.map((entity) => entity.key === updatedEntity.key ? updatedEntity : entity)
     return { applied: { worldEntities: [updatedEntity] }, queue: null, note: null }
   }
@@ -5840,6 +5930,7 @@ async function applyPromptOp(input: {
     let replacementDefinitionKey: string | null = null
     let createdReplacementEntityKey: string | null = null
     let createdReplacementDefinitionKey: string | null = null
+    let createdReplacementDefinition: Record<string, unknown> | null = null
 
     try {
       if (input.op.payload.replacementMode === 'existing') {
@@ -5864,6 +5955,7 @@ async function applyPromptOp(input: {
         replacementDefinitionKey = created.linkedDefinitionKey
         createdReplacementEntityKey = created.entity.key
         createdReplacementDefinitionKey = created.createdDefinitionKey
+        createdReplacementDefinition = created.createdDefinition ?? null
       }
 
       if (!replacementEntity) {
@@ -5894,6 +5986,7 @@ async function applyPromptOp(input: {
           worldResults: replaced.worldResults,
           worldGraphConnections: replaced.worldGraphConnections,
         },
+        definitions: createdReplacementDefinition ? [createdReplacementDefinition] : [],
         queue: null,
         note: null,
       }
@@ -7013,6 +7106,7 @@ export async function startWorldPromptTurn(input: {
     })
 
     const mutableSnapshot = structuredClone(refreshedPlanningSnapshot) as WorldPromptSnapshot
+    const appliedDefinitions: Record<string, unknown>[] = []
     const opsToRun = execution.selectedOps
     const { autoOps: autoRunnableOps, approvalOps: skippedRiskyOps } = splitPromptOpsByApproval(opsToRun)
     const executionPreview = null
@@ -7063,6 +7157,7 @@ export async function startWorldPromptTurn(input: {
         turn: { id: turn.id },
       })
     } else {
+      const executableOpCount = autoRunnableOps.filter((op) => op.op !== 'assistant_note').length
       await writeEvent('planner_status', {
         plannerStatus: 'applying',
         plannerFailure: plannerFailure ?? undefined,
@@ -7075,9 +7170,15 @@ export async function startWorldPromptTurn(input: {
         suggestions: finalizedSuggestions,
         suggestionIds: persistedSuggestions.map((suggestion) => suggestion.id),
         threads: persistedThreads,
+        plannerProgress: executableOpCount > 0 ? {
+          phase: 'applying_changes',
+          message: `Applying 0/${executableOpCount}.`,
+          sequence: 0,
+        } : undefined,
         turn: { id: turn.id },
       })
 
+      let appliedStepIndex = 0
       for (const op of autoRunnableOps) {
         await throwIfTurnCancelled(input.client, turn.id)
         if (op.op === 'assistant_note') {
@@ -7090,6 +7191,23 @@ export async function startWorldPromptTurn(input: {
           continue
         }
 
+        appliedStepIndex += 1
+        await writeEvent('planner_status', {
+          plannerStatus: 'applying',
+          classification: execution.classification,
+          scope: execution.scope,
+          plannerProgress: {
+            phase: 'applying_changes',
+            message: buildApplyProgressMessage({
+              index: appliedStepIndex,
+              total: executableOpCount,
+              op,
+            }),
+            sequence: appliedStepIndex,
+          },
+          turn: { id: turn.id },
+        }, { opId: op.id })
+
         const result = await applyPromptOp({
           client: input.client,
           authHeader: input.authHeader,
@@ -7098,6 +7216,13 @@ export async function startWorldPromptTurn(input: {
           prompt: payload.prompt,
           op,
         })
+        if (Array.isArray(result.definitions) && result.definitions.length > 0) {
+          for (const definition of result.definitions) {
+            if (!appliedDefinitions.some((entry) => entry.key === definition.key)) {
+              appliedDefinitions.push(definition)
+            }
+          }
+        }
 
         if (result.note) {
           await writeEvent('assistant_note', {
@@ -7291,6 +7416,7 @@ export async function startWorldPromptTurn(input: {
       ok: true,
       session: workingSession,
       turn,
+      definitions: appliedDefinitions,
     })
   } catch (error) {
     if (isStopExecutionError(error)) {
@@ -7349,6 +7475,7 @@ export async function startWorldPromptTurn(input: {
         ok: true,
         session: workingSession,
         turn,
+        definitions: [],
       })
     }
     const plannerFailure = (
