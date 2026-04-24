@@ -2,9 +2,11 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  buildWorldRefinementHistoryViewModel,
   buildWorldPromptRailViewModel,
   buildWorldInspectorViewModel,
   buildWorldPromptTranscriptEntries,
+  describePromptOp,
   describePlannerFailureCategory,
   promptSuggestionImpactLabel,
   stripInternalPlannerDiagnostics,
@@ -18,7 +20,7 @@ test('stripInternalPlannerDiagnostics removes planner validation tails', () => {
 })
 
 test('stripInternalPlannerDiagnostics removes fallback and schema-operation prefixes', () => {
-  const input = 'Hosted prompt planning was unavailable, so GraphCore used a local fallback seed. oneOf is not permitted in operations. Immediate JSON response invalid. Keep the world compact.'
+  const input = 'Hosted prompt planning was unavailable. oneOf is not permitted in operations. Immediate JSON response invalid. Keep the world compact.'
   assert.equal(stripInternalPlannerDiagnostics(input), 'Keep the world compact.')
 })
 
@@ -43,6 +45,41 @@ test('promptSuggestionImpactLabel joins impact parts', () => {
 
 test('describePlannerFailureCategory returns readable labels', () => {
   assert.equal(describePlannerFailureCategory('schema_validation_failed'), 'planner schema mismatch')
+})
+
+test('describePromptOp prefers resolved display names over placeholder labels', () => {
+  const op = {
+    id: 'op-1',
+    op: 'upsert_entity',
+    confidence: 0.9,
+    applyMode: 'auto',
+    dependencyOpIds: [],
+    rationale: '',
+    status: 'pending',
+    metadata: {
+      displayName: 'Caelan Voss',
+    },
+    payload: {
+      targetEntityKey: null,
+      entity: {
+        name: 'Unnamed Man of the Rival Faction',
+        summary: '',
+        context: '',
+        nodeType: 'actor',
+        aliases: [],
+        tags: [],
+        status: 'active',
+        thumbnailAssetKey: null,
+        linkedDefinitionKey: null,
+        source: 'ai',
+        customProperties: {},
+        metadata: {},
+        ensureLinkedDefinition: true,
+      },
+    },
+  } satisfies PromptToWorldOp
+
+  assert.equal(describePromptOp(op), 'Add or extend Caelan Voss')
 })
 
 test('buildWorldPromptTranscriptEntries folds applied events into readable rows', () => {
@@ -228,7 +265,7 @@ test('buildWorldPromptTranscriptEntries renders entity replacement rows', () => 
   assert.equal(entries.filter((entry) => entry.kind === 'entity_created' && entry.entityKey === replacementEntity.key).length, 1)
 })
 
-test('buildWorldPromptTranscriptEntries emits preview and approval rows', () => {
+test('buildWorldPromptTranscriptEntries drops preview and approval rows from the transcript', () => {
   const pendingOp: PromptToWorldOp = {
     id: 'op1',
     op: 'update_entity',
@@ -290,8 +327,8 @@ test('buildWorldPromptTranscriptEntries emits preview and approval rows', () => 
     entityByKey: new Map(),
   })
 
-  assert.ok(entries.some((entry) => entry.kind === 'preview_available' && entry.turnId === 't2'))
-  assert.ok(entries.some((entry) => entry.kind === 'approval_required' && entry.turnId === 't2'))
+  assert.equal(entries.some((entry) => entry.kind === 'preview_available' && entry.turnId === 't2'), false)
+  assert.equal(entries.some((entry) => entry.kind === 'approval_required' && entry.turnId === 't2'), false)
 })
 
 test('buildWorldPromptTranscriptEntries emits planner progress rows from planner_status events', () => {
@@ -488,6 +525,50 @@ test('buildWorldPromptTranscriptEntries renders update rows for refined entities
   assert.ok(entries.some((entry) => entry.kind === 'relationship_updated' && entry.detail?.includes('Updated relationship details')))
 })
 
+test('buildWorldPromptTranscriptEntries renders derived results as output rows', () => {
+  const entries = buildWorldPromptTranscriptEntries({
+    messages: [],
+    entityByKey: new Map(),
+    events: [{
+      id: 'e-result',
+      sessionId: 's1',
+      turnId: 't-result',
+      draftId: 'd1',
+      sequence: 1,
+      eventType: 'op_applied',
+      opId: 'op-result',
+      payload: {
+        applied: {
+          worldEntities: [],
+          worldRelationships: [],
+          worldOperators: [],
+          worldResults: [{
+            id: 'result-1',
+            key: 'world.result.staged-duel',
+            resultType: 'scene_setup',
+            sourceOperatorKey: 'world.operator.stage-scene',
+            title: 'Staged Duel',
+            summary: 'A duel scene setup.',
+            previewAssetKey: null,
+            status: 'draft',
+            metadata: {},
+            createdAt: '2026-04-22T10:05:00.000Z',
+            updatedAt: '2026-04-22T10:05:00.000Z',
+          }],
+          worldGraphConnections: [],
+          worldViews: [],
+        },
+        suggestions: [],
+        diagnostics: [],
+      },
+      metadata: {},
+      createdAt: '2026-04-22T10:05:00.000Z',
+    }],
+  })
+
+  assert.ok(entries.some((entry) => entry.kind === 'derived_result_created' && entry.label === 'Created Staged Duel'))
+})
+
 test('buildWorldPromptTranscriptEntries renders clarification question and answer rows', () => {
   const messages: WorldPromptMessage[] = [{
     id: 'm-clarify-answer',
@@ -558,7 +639,7 @@ test('buildWorldPromptTranscriptEntries drops diagnostic-only suggestions', () =
       plannerStatus: 'blocked',
       suggestions: [{
         id: 'sg-bad',
-        label: 'Hosted prompt planning was unavailable, so GraphCore used a local fallback seed.',
+        label: 'Hosted prompt planning was unavailable.',
         prompt: 'oneOf is not permitted in operations.',
         kind: 'repair_prompt',
         style: 'primary',
@@ -693,6 +774,80 @@ test('buildWorldInspectorViewModel formats entity cards', () => {
   assert.equal(viewModel?.kicker, 'Place')
   assert.equal(viewModel?.context, 'Seat of the fractured crown and center of the succession crisis.')
   assert.equal(viewModel?.stats[0], '4 relationships')
+  assert.deepEqual(viewModel?.refinementHistory, [])
+})
+
+test('buildWorldRefinementHistoryViewModel parses latest refinement entries', () => {
+  const history = buildWorldRefinementHistoryViewModel({
+    refinementHistory: [
+      {
+        at: '2026-04-21T08:00:00.000Z',
+        field: 'summary',
+        strategy: 'expanded',
+        previousText: 'Old summary.',
+        incomingText: 'New detail.',
+        resultText: 'Old summary. New detail.',
+      },
+      {
+        at: '2026-04-22T09:30:00.000Z',
+        field: 'context',
+        strategy: 'merged_distinct',
+        previousText: 'Role: Keeper.',
+        incomingText: 'Secret: Hides a treaty shard.',
+        resultText: 'Role: Keeper.\nSecret: Hides a treaty shard.',
+      },
+    ],
+  })
+
+  assert.equal(history.length, 2)
+  assert.equal(history[0]?.field, 'context')
+  assert.equal(history[0]?.fieldLabel, 'Context')
+  assert.equal(history[0]?.strategyLabel, 'Merged detail')
+  assert.equal(history[0]?.at, '2026-04-22 09:30 UTC')
+})
+
+test('buildWorldInspectorViewModel exposes entity refinement history', () => {
+  const entity = {
+    id: '2',
+    key: 'world.actor.sable',
+    name: 'Sable',
+    summary: 'Court spymaster.',
+    context: 'Role: Court spymaster.',
+    nodeType: 'actor',
+    aliases: [],
+    tags: [],
+    status: 'active',
+    thumbnailAssetKey: null,
+    linkedDefinitionKey: null,
+    source: 'ai',
+    customProperties: {},
+    metadata: {
+      refinementHistory: [
+        {
+          at: '2026-04-22T12:15:00.000Z',
+          field: 'summary',
+          strategy: 'expanded',
+          previousText: 'Court spymaster.',
+          incomingText: 'Also commands the queen’s whisper network.',
+          resultText: 'Court spymaster. Also commands the queen’s whisper network.',
+        },
+      ],
+    },
+    createdAt: '2026-04-22T10:00:00.000Z',
+    updatedAt: '2026-04-22T12:15:00.000Z',
+  } satisfies WorldEntity
+
+  const viewModel = buildWorldInspectorViewModel({
+    entity,
+    operator: null,
+    result: null,
+    relationCount: 2,
+    usageCount: 1,
+  })
+
+  assert.equal(viewModel?.refinementHistory.length, 1)
+  assert.equal(viewModel?.refinementHistory[0]?.fieldLabel, 'Summary')
+  assert.equal(viewModel?.refinementHistory[0]?.resultText, 'Court spymaster. Also commands the queen’s whisper network.')
 })
 
 function makeTurn(overrides: Partial<WorldPromptTurn> = {}): WorldPromptTurn {
@@ -703,7 +858,15 @@ function makeTurn(overrides: Partial<WorldPromptTurn> = {}): WorldPromptTurn {
     prompt: 'Base prompt',
     status: 'completed',
     model: 'gpt-5.4-mini',
-    resolvedContext: {},
+    resolvedContext: {
+      summaryMemory: '',
+      selectedRootEntityKey: null,
+      selectedViewKey: null,
+      selectedThreadKey: null,
+      resolvedMode: null,
+      resolvedIntent: null,
+      resolvedFocus: null,
+    },
     approvalState: 'not_required',
     assistantSummary: '',
     errorMessage: null,
@@ -769,7 +932,7 @@ test('buildWorldPromptRailViewModel returns working while a turn is streaming', 
   assert.equal(viewModel.statusLabel, 'Planning')
 })
 
-test('buildWorldPromptRailViewModel returns preview when a staged preview exists', () => {
+test('buildWorldPromptRailViewModel does not enter preview state for staged preview metadata', () => {
   const previewTurn = makeTurn({
     metadata: {
       classification: 'graphable_plan_only',
@@ -804,8 +967,7 @@ test('buildWorldPromptRailViewModel returns preview when a staged preview exists
     entityByKey: new Map(),
   })
 
-  assert.equal(viewModel.state, 'plan_preview')
-  assert.equal(viewModel.primaryActionLabel, 'Apply first wave')
+  assert.equal(viewModel.state, 'idle')
 })
 
 test('buildWorldPromptRailViewModel returns blocked for contradictory classification', () => {
@@ -861,7 +1023,7 @@ test('buildWorldPromptRailViewModel returns completed diagnosis for advisory tur
   assert.equal(viewModel.statusLabel, 'Diagnosis')
 })
 
-test('buildWorldPromptRailViewModel returns approval state when preview ops need approval', () => {
+test('buildWorldPromptRailViewModel does not enter approval state when preview ops need approval', () => {
   const pendingOp: PromptToWorldOp = {
     id: 'op1',
     op: 'update_entity',
@@ -915,6 +1077,52 @@ test('buildWorldPromptRailViewModel returns approval state when preview ops need
     entityByKey: new Map(),
   })
 
-  assert.equal(viewModel.state, 'approval_required')
+  assert.notEqual(viewModel.state, 'approval_required')
   assert.equal(viewModel.approvalOps.length, 1)
+})
+
+test('buildWorldPromptRailViewModel keeps pending approval ops out of the primary rail state', () => {
+  const pendingOp: PromptToWorldOp = {
+    id: 'op-event-1',
+    op: 'update_entity',
+    confidence: 1,
+    applyMode: 'needs_approval',
+    dependencyOpIds: [],
+    rationale: '',
+    status: 'pending',
+    metadata: {},
+    payload: {
+      targetEntityKey: 'world.actor.hero',
+      changes: {
+        summary: 'Updated',
+      },
+    },
+  }
+
+  const approvalTurn = makeTurn({
+    status: 'awaiting_approval',
+    approvalState: 'pending',
+    metadata: {
+      classification: 'graphable_direct',
+    },
+  })
+
+  const approvalEvent = makeEvent({
+    eventType: 'op_needs_approval',
+    opId: pendingOp.id,
+    payload: {
+      op: pendingOp,
+      diagnostics: [],
+    },
+  })
+
+  const viewModel = buildWorldPromptRailViewModel({
+    activeTurn: approvalTurn,
+    turns: [approvalTurn],
+    events: [approvalEvent],
+    entityByKey: new Map(),
+  })
+
+  assert.notEqual(viewModel.state, 'approval_required')
+  assert.deepEqual(viewModel.approvalOps.map((op) => op.id), [pendingOp.id])
 })

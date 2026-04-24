@@ -1731,6 +1731,20 @@ function mapWorldPromptSuggestionRow(entry: WorldPromptSuggestionRow): WorldProm
     estimatedEdgeCount: entry.estimated_edge_count,
     willQueueImages: entry.will_queue_images,
     willQueueCinematics: entry.will_queue_cinematics,
+    uiKind: typeof entry.metadata?.uiKind === 'string' ? entry.metadata.uiKind : undefined,
+    executionMode: typeof entry.metadata?.executionMode === 'string' ? entry.metadata.executionMode : undefined,
+    actionMode: typeof entry.metadata?.actionMode === 'string' ? entry.metadata.actionMode : undefined,
+    applyPolicy: typeof entry.metadata?.applyPolicy === 'string' ? entry.metadata.applyPolicy : undefined,
+    targetEntityKeys: Array.isArray(entry.metadata?.targetEntityKeys)
+      ? entry.metadata.targetEntityKeys.filter((value): value is string => typeof value === 'string')
+      : [],
+    targetThreadKeys: Array.isArray(entry.metadata?.targetThreadKeys)
+      ? entry.metadata.targetThreadKeys.filter((value): value is string => typeof value === 'string')
+      : [],
+    focusLayer: typeof entry.metadata?.focusLayer === 'string' ? entry.metadata.focusLayer : undefined,
+    retrievalHint: typeof entry.metadata?.retrievalHint === 'string' ? entry.metadata.retrievalHint : '',
+    generatedReason: typeof entry.metadata?.generatedReason === 'string' ? entry.metadata.generatedReason : undefined,
+    generatedFromTurnId: typeof entry.metadata?.generatedFromTurnId === 'string' ? entry.metadata.generatedFromTurnId : entry.turn_id,
     state: entry.state,
     rank: entry.rank,
     usedTurnId: entry.used_turn_id,

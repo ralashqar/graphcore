@@ -146,6 +146,52 @@ GraphCore runs AI workloads through protected Supabase Edge Functions that provi
 - World state consistency checking
 - Dynamic content expansion
 
+### World Prompt Agent (`world-prompt`)
+**Purpose**: Runs GraphCore's live prompt-to-world graph chat for story-gardening style authoring over an ever-growing world graph.
+
+**Capabilities**:
+- Resolves each turn into explicit answer, preview, apply, or blocked modes before planning
+- Applies actionable world-building changes immediately and answers in advisory mode when the prompt is non-mutating
+- Maintains structured session memory for active focus, background focus, recent turns, and retrieved graph context
+- Persists actionable suggestions with machine-readable target metadata
+- Ranks next-step suggestions using both planner ideas and story-seed signals such as protagonist, villain, ruler, factions, lore, and missing inciting events
+- Completes underspecified support entities on direct world-building turns by reusing a strong existing match when available or inventing a concrete named entity instead of emitting placeholder canon
+- Reconciles entity summaries, contexts, and relationship notes additively while preserving prior refinements in append-only metadata history
+
+**Architecture**:
+- Retrieval-first world authoring instead of generic chat memory
+- Explicit turn contract before planning:
+  - `resolvedMode`
+  - `resolvedIntent`
+  - `resolvedFocus`
+- Conservative mutation policy with approval-preserving sanitization
+- Structured continuity memory in `world_prompt_sessions.last_context.memoryState`
+- Hybrid retrieval using graph anchors, graph-local expansion, Postgres FTS, and reranking
+
+**Capabilities**:
+- Distinguishes advisory turns from graph mutations
+- Auto-pivots focus when prompts abruptly shift topic
+- Narrows context separately for answer, mutation, and background packets
+- Persists actionable suggestions with machine-readable target metadata
+- Holds risky canon-touching changes for approval instead of silently auto-applying
+- Stores retrieval diagnostics for debugging relevance and coherence issues
+
+**Integration**:
+- `create-world-prompt-session`
+- `start-world-prompt-turn`
+- `apply-world-prompt-preview`
+- `approve-world-prompt-op`
+- `reject-world-prompt-op`
+- `refresh-world-prompt-suggestions`
+
+**Operational Notes**:
+- The graph remains the source of truth; chat history is continuity support only
+- Apply paths refresh touched entities and threads from live DB state before mutating
+- Thread search now incorporates linked entity names and aliases for better recall
+- World Prompt canon creation is LLM-authored only; deterministic logic is limited to routing, retrieval, and safety checks
+- Hosted planner output is retried once if it still contains placeholder entities or unresolved descriptor-only relationship endpoints, and mutating turns fail or degrade to non-mutating behavior instead of writing deterministic fallback canon
+- The live chat no longer uses preview/apply-first-wave or manual approval as the default UX; risky unresolved ops are skipped with an immediate assistant note instead of creating a pending review queue
+
 ### UGC Psychology Agent
 **Purpose**: Applies research-backed psychological principles to optimize content for viral spread and user engagement.
 

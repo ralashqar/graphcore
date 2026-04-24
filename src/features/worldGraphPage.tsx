@@ -61,6 +61,7 @@ import {
   activePreviewForTurn,
   buildWorldInspectorViewModel,
   buildWorldPromptRailViewModel,
+  buildWorldRefinementHistoryViewModel,
   nodeShellStyle,
   worldNodeDataEqual,
   type WorldGraphNodeRecord,
@@ -435,8 +436,13 @@ function getFlowNodeElement(nodeId: string) {
 
 function describePromptOp(op: PromptToWorldOp) {
   switch (op.op) {
-    case 'upsert_entity':
-      return `Add or extend ${op.payload.entity.name}`
+    case 'upsert_entity': {
+      const displayName =
+        typeof op.metadata?.displayName === 'string' && op.metadata.displayName.trim()
+          ? op.metadata.displayName.trim()
+          : op.payload.entity.name
+      return `Add or extend ${displayName}`
+    }
     case 'update_entity':
       return `Update ${op.payload.targetEntityKey}`
     case 'upsert_relationship':
@@ -520,8 +526,6 @@ function buildWorldPromptTranscriptEntries(input: {
 
   const entries: WorldPromptTranscriptEntry[] = []
   let lastSuggestionSignature: string | null = null
-  let lastPreviewSignature: string | null = null
-  let lastApprovalSignature: string | null = null
 
   for (const source of sources) {
     if (source.source === 'message') {
@@ -600,37 +604,6 @@ function buildWorldPromptTranscriptEntries(input: {
             label: describePlannerStatus(payload.plannerStatus),
             detail: payload.note ?? (payload.scope ? `${payload.scope.mode} scope` : ''),
           })
-        }
-        if (payload.preview) {
-          const previewSignature = `${source.event.turnId}:${payload.preview.mode}:${payload.preview.items.map((item) => item.id).join('|')}`
-          if (previewSignature !== lastPreviewSignature) {
-            entries.push({
-              id: `${source.id}:preview`,
-              createdAt: source.event.createdAt,
-              kind: 'preview_available',
-              label: payload.preview.mode === 'plan_only' ? 'Preview available' : 'First wave ready',
-              detail: payload.preview.requestSummary || 'Review the proposed graph changes before applying them.',
-              turnId: source.event.turnId,
-              preview: payload.preview,
-            })
-            lastPreviewSignature = previewSignature
-          }
-          const pendingApprovalOps = payload.preview.pendingOps.filter((op) => op.applyMode === 'needs_approval' && op.status === 'pending')
-          if (pendingApprovalOps.length > 0) {
-            const approvalSignature = `${source.event.turnId}:${pendingApprovalOps.map((op) => `${op.id}:${op.status}`).join('|')}`
-            if (approvalSignature !== lastApprovalSignature) {
-              entries.push({
-                id: `${source.id}:approval`,
-                createdAt: source.event.createdAt,
-                kind: 'approval_required',
-                label: 'Approval required',
-                detail: `${pendingApprovalOps.length} pending change${pendingApprovalOps.length === 1 ? '' : 's'} need review.`,
-                turnId: source.event.turnId,
-                ops: pendingApprovalOps,
-              })
-              lastApprovalSignature = approvalSignature
-            }
-          }
         }
         break
       case 'assistant_note':
@@ -849,7 +822,7 @@ export function WorldGraphPage({
       ? Math.min(WORLD_INSPECTOR_WIDTH_MAX, Math.max(WORLD_INSPECTOR_WIDTH_MIN, raw))
       : WORLD_INSPECTOR_WIDTH_DEFAULT
   })
-  const [activeInspectorTab, setActiveInspectorTab] = useState<'overview' | 'relationships' | 'usage' | 'suggestions'>('overview')
+  const [activeInspectorTab, setActiveInspectorTab] = useState<'overview' | 'relationships' | 'usage' | 'suggestions' | 'history'>('overview')
   const [showSuggestions, setShowSuggestions] = useState(true)
   const [showLabels, setShowLabels] = useState(true)
   const [showDerivedLayer, setShowDerivedLayer] = useState(true)
@@ -953,7 +926,7 @@ export function WorldGraphPage({
   }
 
   const activePromptTurn = useMemo(
-    () => [...sessionTurns].reverse().find((turn) => ['queued', 'streaming', 'awaiting_approval'].includes(turn.status)) ?? null,
+    () => [...sessionTurns].reverse().find((turn) => ['queued', 'streaming'].includes(turn.status)) ?? null,
     [sessionTurns],
   )
   const activeWorldThreads = useMemo(
@@ -1523,6 +1496,10 @@ export function WorldGraphPage({
   const inspectorRelationship = useMemo(
     () => worldRelationships.find((relationship) => relationship.key === selectedWorldEdgeKey) ?? null,
     [selectedWorldEdgeKey, worldRelationships],
+  )
+  const inspectorRelationshipRefinementHistory = useMemo(
+    () => buildWorldRefinementHistoryViewModel(inspectorRelationship?.metadata ?? null),
+    [inspectorRelationship?.metadata],
   )
   const inspectorEntityUsage = inspectorEntity ? usageByEntityKey.get(inspectorEntity.key) ?? [] : []
   const inspectorEntityRelationships = inspectorEntity
@@ -2713,6 +2690,24 @@ export function WorldGraphPage({
                   </button>
                 </div>
               </details>
+              <details className="world-inline-disclosure" open={inspectorRelationshipRefinementHistory.length > 0}>
+                <summary>Revision History</summary>
+                <div className="world-refinement-history">
+                  {inspectorRelationshipRefinementHistory.length === 0 ? <div className="inline-note">No relationship revisions yet.</div> : null}
+                  {inspectorRelationshipRefinementHistory.map((entry) => (
+                    <article key={entry.id} className="world-refinement-entry">
+                      <div className="world-refinement-entry-head">
+                        <strong>{entry.fieldLabel}</strong>
+                        <span>{entry.strategyLabel}</span>
+                      </div>
+                      <div className="inline-note">{entry.at}</div>
+                      {entry.previousText ? <p><strong>Was:</strong> {entry.previousText}</p> : null}
+                      <p><strong>Added:</strong> {entry.incomingText}</p>
+                      <p><strong>Now:</strong> {entry.resultText}</p>
+                    </article>
+                  ))}
+                </div>
+              </details>
             </div>
           </div>
         ) : !inspectorNodeKey ? (
@@ -2749,7 +2744,7 @@ export function WorldGraphPage({
               </div>
             </div>
             <div className="segmented-control world-dossier-tabs">
-              {(['overview', 'relationships', 'usage', 'suggestions'] as const).map((tab) => (
+              {(['overview', 'relationships', 'usage', 'suggestions', 'history'] as const).map((tab) => (
                 <button
                   key={tab}
                   className={activeInspectorTab === tab ? 'segment-button is-active' : 'segment-button'}
@@ -2949,6 +2944,32 @@ export function WorldGraphPage({
                 })}
               />
             ) : null}
+
+            {activeInspectorTab === 'history' ? (
+              <div className="editor-section compact-section">
+                <div className="section-head">
+                  <div>
+                    <span className="eyebrow">Canon Revisions</span>
+                    <h3>Refinement History</h3>
+                  </div>
+                </div>
+                {inspectorViewModel?.refinementHistory.length === 0 ? <div className="inline-note">No revisions have been recorded for this entity yet.</div> : null}
+                <div className="world-refinement-history">
+                  {inspectorViewModel?.refinementHistory.map((entry) => (
+                    <article key={entry.id} className="world-refinement-entry">
+                      <div className="world-refinement-entry-head">
+                        <strong>{entry.fieldLabel}</strong>
+                        <span>{entry.strategyLabel}</span>
+                      </div>
+                      <div className="inline-note">{entry.at}</div>
+                      {entry.previousText ? <p><strong>Was:</strong> {entry.previousText}</p> : null}
+                      <p><strong>Added:</strong> {entry.incomingText}</p>
+                      <p><strong>Now:</strong> {entry.resultText}</p>
+                    </article>
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </div>
         ) : inspectorOperator ? (
           <div className="detail-stack compact">
@@ -2996,7 +3017,7 @@ export function WorldGraphPage({
 }
 
 function LegacyWorldPromptChatPanel({
-  activePromptPreview,
+  activePromptPreview: _activePromptPreview,
   activePromptTurn,
   busy,
   cancelBusy,
@@ -3012,14 +3033,14 @@ function LegacyWorldPromptChatPanel({
   sessionTurns,
   worldThreads,
   worldPromptSessions,
-  onApplyPreview,
-  onApproveOp,
+  onApplyPreview: _onApplyPreview,
+  onApproveOp: _onApproveOp,
   variant,
   onCancelTurn,
   onChangePromptText,
   onOpenEntityComposer,
   onOpenLegacy,
-  onRejectOp,
+  onRejectOp: _onRejectOp,
   onResolveThread,
   onRunSuggestion,
   onSelectSession,
@@ -3075,7 +3096,7 @@ function LegacyWorldPromptChatPanel({
     }),
     [entityByKey, sessionEvents, sessionMessages],
   )
-  const canCancelTurn = Boolean(activePromptTurn && ['queued', 'streaming', 'awaiting_approval'].includes(activePromptTurn.status))
+  const canCancelTurn = Boolean(activePromptTurn && ['queued', 'streaming'].includes(activePromptTurn.status))
   const selectedThread = useMemo(
     () => worldThreads.find((thread) => thread.key === selectedThreadKey) ?? null,
     [selectedThreadKey, worldThreads],
@@ -3090,7 +3111,6 @@ function LegacyWorldPromptChatPanel({
     }),
     [activePromptTurn, entityByKey, promptError, sessionEvents, sessionTurns],
   )
-  const effectivePreview = activePromptPreview ?? railView.preview
   const activeSuggestionRowId = useMemo(() => {
     for (const entry of [...transcriptEntries].reverse()) {
       if (entry.kind === 'suggestion_set' || entry.kind === 'clarification_question') {
@@ -3134,7 +3154,6 @@ function LegacyWorldPromptChatPanel({
     }),
     [sessionEvents],
   )
-  const previewTurnId = activePromptTurn?.id ?? sessionTurns.at(-1)?.id ?? null
   const suggestionSectionLabel = railView.state === 'needs_clarification' ? 'Clarify to continue' : 'Suggested next moves'
   const composerLabel = railView.primaryActionKind === 'continue'
     ? 'Continue building'
@@ -3197,32 +3216,6 @@ function LegacyWorldPromptChatPanel({
         </div>
         <p>{railView.detail}</p>
 
-        {effectivePreview ? (
-          <div className="world-prompt-state-group">
-            <div className="chip-row">
-              <span className="chip">{effectivePreview.scopeDecision.mode}</span>
-              <span className="chip">{effectivePreview.scopeDecision.counts.entityOps} entity ops</span>
-              <span className="chip">{effectivePreview.scopeDecision.counts.relationshipOps} links</span>
-            </div>
-            <div className="world-preview-list">
-              {effectivePreview.items.slice(0, 3).map((item) => (
-                <div key={item.id} className="schema-card">
-                  <div className="schema-card-head">
-                    <strong>{item.title}</strong>
-                    <span className="chip">{item.kind.replace(/_/g, ' ')}</span>
-                  </div>
-                  {item.summary ? <div className="inline-note">{item.summary}</div> : null}
-                </div>
-              ))}
-            </div>
-            {effectivePreview.canApplyFirstWave && previewTurnId ? (
-              <div className="world-inspector-actions">
-                <button className="primary-button compact" onClick={() => void onApplyPreview(previewTurnId)} type="button">Apply First Wave</button>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-
         {(railView.appliedEntities.length > 0 || railView.appliedRelationships.length > 0 || railView.queuedLabels.length > 0) ? (
           <div className="world-prompt-state-group">
             <span className="world-prompt-group-label">Graph Changes Applied</span>
@@ -3230,26 +3223,6 @@ function LegacyWorldPromptChatPanel({
               {railView.appliedEntities.slice(0, 4).map((label) => <span key={`entity:${label}`} className="chip">{label}</span>)}
               {railView.appliedRelationships.slice(0, 3).map((label) => <span key={`relationship:${label}`} className="chip">{label}</span>)}
               {railView.queuedLabels.slice(0, 2).map((label) => <span key={`queue:${label}`} className="chip">{label}</span>)}
-            </div>
-          </div>
-        ) : null}
-
-        {railView.approvalOps.length > 0 && activePromptTurn ? (
-          <div className="world-prompt-state-group">
-            <span className="world-prompt-group-label">Approval Required</span>
-            <div className="world-prompt-approval-list">
-              {railView.approvalOps.map((op) => (
-                <div key={op.id} className="world-prompt-approval-card">
-                  <div>
-                    <strong>{describePromptOp(op)}</strong>
-                    {op.rationale ? <div className="inline-note">{op.rationale}</div> : null}
-                  </div>
-                  <div className="world-inspector-actions">
-                    <button className="ghost-button compact" onClick={() => void onRejectOp(activePromptTurn.id, op.id)} type="button">Reject</button>
-                    <button className="primary-button compact" onClick={() => void onApproveOp(activePromptTurn.id, op.id)} type="button">Approve</button>
-                  </div>
-                </div>
-              ))}
             </div>
           </div>
         ) : null}
@@ -3612,7 +3585,7 @@ function getWorldPromptSmartPrompts(projectContext: ProjectContext | null) {
 }
 
 function WorldPromptChatPanel({
-  activePromptPreview,
+  activePromptPreview: _activePromptPreview,
   activePromptTurn,
   busy,
   cancelBusy,
@@ -3633,12 +3606,12 @@ function WorldPromptChatPanel({
   worldPromptTurns,
   worldThreads,
   worldPromptSessions,
-  onApplyPreview,
-  onApproveOp,
+  onApplyPreview: _onApplyPreview,
+  onApproveOp: _onApproveOp,
   onCancelTurn,
   onChangePromptText,
   onDismissSuggestion: _onDismissSuggestion,
-  onRejectOp,
+  onRejectOp: _onRejectOp,
   onRunSuggestion,
   onContinueWithoutSuggestion,
   onSelectSession,
@@ -3691,6 +3664,7 @@ function WorldPromptChatPanel({
     'clarification_question',
     'clarification_answer',
     'continuation_without_suggestion',
+    'planner_progress',
   ])
   const composerRef = useRef<HTMLTextAreaElement | null>(null)
   const transcriptRef = useRef<HTMLDivElement | null>(null)
@@ -3706,7 +3680,7 @@ function WorldPromptChatPanel({
     }),
     [entityByKey, sessionEvents, sessionMessages],
   )
-  const canCancelTurn = Boolean(activePromptTurn && ['queued', 'streaming', 'awaiting_approval'].includes(activePromptTurn.status))
+  const canCancelTurn = Boolean(activePromptTurn && ['queued', 'streaming'].includes(activePromptTurn.status))
   const selectedThread = useMemo(
     () => worldThreads.find((thread) => thread.key === selectedThreadKey) ?? null,
     [selectedThreadKey, worldThreads],
@@ -3723,33 +3697,6 @@ function WorldPromptChatPanel({
   )
   const transcriptStream = useMemo(() => {
     const entries = [...transcriptEntries]
-    const previewTurnId = activePromptTurn?.id ?? sessionTurns.at(-1)?.id ?? null
-    if (activePromptPreview && previewTurnId && !entries.some((entry) => entry.kind === 'preview_available' && entry.turnId === previewTurnId)) {
-      entries.push({
-        id: `preview:fallback:${previewTurnId}`,
-        createdAt: activePromptTurn?.updatedAt ?? sessionTurns.at(-1)?.updatedAt ?? new Date().toISOString(),
-        kind: 'preview_available',
-        label: activePromptPreview.mode === 'plan_only' ? 'Preview available' : 'First wave ready',
-        detail: activePromptPreview.requestSummary || 'Review the proposed graph changes before applying them.',
-        turnId: previewTurnId,
-        preview: activePromptPreview,
-      })
-    }
-    if (
-      activePromptTurn
-      && railView.approvalOps.length > 0
-      && !entries.some((entry) => entry.kind === 'approval_required' && entry.turnId === activePromptTurn.id)
-    ) {
-      entries.push({
-        id: `approval:fallback:${activePromptTurn.id}`,
-        createdAt: activePromptTurn.updatedAt,
-        kind: 'approval_required',
-        label: 'Approval required',
-        detail: `${railView.approvalOps.length} pending change${railView.approvalOps.length === 1 ? '' : 's'} need review.`,
-        turnId: activePromptTurn.id,
-        ops: railView.approvalOps,
-      })
-    }
     if (
       sessionSuggestions.length > 0
       && !entries.some((entry) => entry.kind === 'suggestion_set' || entry.kind === 'clarification_question')
@@ -3780,14 +3727,10 @@ function WorldPromptChatPanel({
       const timeDelta = new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
       return timeDelta !== 0 ? timeDelta : left.id.localeCompare(right.id)
     })
-  }, [activePromptPreview, activePromptTurn, railView.approvalOps, selectedSession?.id, selectedSession?.updatedAt, selectedSessionKey, sessionSuggestions, sessionTurns, transcriptEntries])
+  }, [activePromptTurn, selectedSession?.id, selectedSession?.updatedAt, selectedSessionKey, sessionSuggestions, transcriptEntries])
   const visibleTranscriptStream = useMemo(
     () => transcriptStream.filter((entry) => !hiddenTranscriptKinds.has(entry.kind)),
     [transcriptStream],
-  )
-  const latestPlannerProgressEntry = useMemo(
-    () => [...visibleTranscriptStream].reverse().find((entry) => entry.kind === 'planner_progress') ?? null,
-    [visibleTranscriptStream],
   )
   const suggestionSignature = useMemo(
     () => sessionSuggestions.map((suggestion) => `${suggestion.id}:${suggestion.updatedAt}:${suggestion.state}`).join('|'),
@@ -3804,19 +3747,14 @@ function WorldPromptChatPanel({
         .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime())
       const currentTurn = turnsForSession.at(-1) ?? null
       const currentClassification = currentTurn?.metadata?.classification
-      const hasPreview = Boolean(currentTurn?.metadata?.preview)
       const activeSuggestionCount = sessionSuggestionCountBySessionId[session.id] ?? 0
-      const status = currentTurn?.status === 'awaiting_approval'
-        ? 'approval'
-        : currentClassification === 'graph_diagnosis'
+      const status = currentClassification === 'graph_diagnosis'
           ? 'diagnosis'
           : currentClassification === 'advisory_question'
             ? 'advisory'
             : activeSuggestionCount > 0 && (currentClassification === 'contradictory_or_low_confidence' || currentClassification === 'not_graphable')
               ? 'clarification'
-              : hasPreview
-                ? 'preview'
-                : currentTurn?.status ?? 'empty'
+              : currentTurn?.status ?? 'empty'
       return [session.key, status]
     }))
   }, [sessionSuggestionCountBySessionId, worldPromptSessions, worldPromptTurns])
@@ -3824,7 +3762,6 @@ function WorldPromptChatPanel({
   const hasClarificationSuggestions = sessionSuggestions.some((suggestion) => suggestion.metadata?.uiKind === 'clarification')
   const hasDiagnosticSuggestions = sessionSuggestions.some((suggestion) => suggestion.metadata?.uiKind === 'diagnostic')
   const hasAdvisorySuggestions = sessionSuggestions.some((suggestion) => suggestion.metadata?.uiKind === 'advisory')
-  const planningOnlyState = busy && visibleTranscriptStream.every((entry) => entry.kind === 'planner_progress')
   const showComposerSuggestions = sessionSuggestions.length > 0 && suppressedSuggestionSignature !== suggestionSignature
   const sessionTitle = selectedSession?.title ?? (selectedSessionKey ? 'New chat' : 'Chat')
   const sessionSubline = selectedSession && sessionTurns.length > 0
@@ -3958,61 +3895,6 @@ function WorldPromptChatPanel({
       )
     }
 
-    if (entry.kind === 'preview_available') {
-      return (
-        <div key={entry.id} className="world-prompt-row world-prompt-row-system world-prompt-card is-preview">
-          <span className="world-prompt-row-label">{entry.label}</span>
-          {entry.detail ? <div className="world-prompt-line">{entry.detail}</div> : null}
-          <div className="chip-row">
-            <span className="chip">{entry.preview.scopeDecision.mode}</span>
-            <span className="chip">{entry.preview.scopeDecision.counts.entityOps} entity ops</span>
-            <span className="chip">{entry.preview.scopeDecision.counts.relationshipOps} links</span>
-          </div>
-          {entry.preview.items.length > 0 ? (
-            <div className="world-preview-list">
-              {entry.preview.items.slice(0, 3).map((item) => (
-                <div key={item.id} className="schema-card">
-                  <div className="schema-card-head">
-                    <strong>{item.title}</strong>
-                    <span className="chip">{item.kind.replace(/_/g, ' ')}</span>
-                  </div>
-                  {item.summary ? <div className="inline-note">{item.summary}</div> : null}
-                </div>
-              ))}
-            </div>
-          ) : null}
-          {entry.preview.canApplyFirstWave ? (
-            <div className="world-inspector-actions">
-              <button className="primary-button compact" onClick={() => void onApplyPreview(entry.turnId)} type="button">Apply first wave</button>
-            </div>
-          ) : null}
-        </div>
-      )
-    }
-
-    if (entry.kind === 'approval_required') {
-      return (
-        <div key={entry.id} className="world-prompt-row world-prompt-row-system world-prompt-card is-approval">
-          <span className="world-prompt-row-label">{entry.label}</span>
-          {entry.detail ? <div className="world-prompt-line">{entry.detail}</div> : null}
-          <div className="world-prompt-approval-list">
-            {entry.ops.map((op) => (
-              <div key={op.id} className="world-prompt-approval-card">
-                <div>
-                  <strong>{describePromptOp(op)}</strong>
-                  {op.rationale ? <div className="inline-note">{op.rationale}</div> : null}
-                </div>
-                <div className="world-inspector-actions">
-                  <button className="ghost-button compact" onClick={() => void onRejectOp(entry.turnId, op.id)} type="button">Reject</button>
-                  <button className="primary-button compact" onClick={() => void onApproveOp(entry.turnId, op.id)} type="button">Approve</button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )
-    }
-
     if (
       entry.kind !== 'system_status'
       && entry.kind !== 'entity_created'
@@ -4020,6 +3902,7 @@ function WorldPromptChatPanel({
       && entry.kind !== 'entity_replaced'
       && entry.kind !== 'relationship_created'
       && entry.kind !== 'relationship_updated'
+      && entry.kind !== 'derived_result_created'
       && entry.kind !== 'queue_started'
       && entry.kind !== 'advisory_answer'
       && entry.kind !== 'diagnostic_finding'
@@ -4027,10 +3910,16 @@ function WorldPromptChatPanel({
       return null
     }
 
+    if (entry.kind === 'system_status' && entry.tone !== 'error') {
+      return null
+    }
+
     const iconId = entry.kind === 'entity_created' || entry.kind === 'entity_updated' || entry.kind === 'entity_replaced'
       ? iconForWorldEntity(entry.entityNodeType)
       : entry.kind === 'relationship_created' || entry.kind === 'relationship_updated'
         ? 'graph'
+        : entry.kind === 'derived_result_created'
+          ? 'content'
         : entry.kind === 'advisory_answer'
           ? 'info'
           : entry.kind === 'diagnostic_finding'
@@ -4136,23 +4025,23 @@ function WorldPromptChatPanel({
       ) : (
         <>
           <div className="world-prompt-transcript-shell">
-            <div className={`world-prompt-transcript${planningOnlyState ? ' is-planning' : ''}`} onScroll={handleTranscriptScroll} ref={transcriptRef}>
-              {busy ? (
-                <div className={`world-prompt-planning-state${latestPlannerProgressEntry ? ' has-progress' : ''}`}>
-                  <div className="world-prompt-planning-spinner" aria-hidden="true" />
-                  <div className="world-prompt-planning-copy">
-                    <span className="world-prompt-row-label">{latestPlannerProgressEntry?.label ?? railView.statusLabel ?? 'Planning'}</span>
-                    <div className="world-prompt-line">
-                      {latestPlannerProgressEntry?.detail ?? railView.detail ?? 'Working through the next graph changes.'}
-                    </div>
-                  </div>
-                </div>
-              ) : null}
+            <div className="world-prompt-transcript" onScroll={handleTranscriptScroll} ref={transcriptRef}>
               {visibleTranscriptStream.map(renderEntry)}
               {promptError ? (
                 <div className="world-prompt-row world-prompt-row-system world-prompt-card is-error">
                   <span className="world-prompt-row-label">Prompt failed</span>
                   <div className="world-prompt-line">Open the browser console for the full debug error.</div>
+                </div>
+              ) : null}
+              {busy ? (
+                <div className="world-prompt-planning-state">
+                  <div className="world-prompt-planning-spinner" aria-hidden="true" />
+                  <div className="world-prompt-planning-copy">
+                    <span className="world-prompt-row-label">{railView.latestPlannerStatus ?? railView.statusLabel ?? 'Planning'}</span>
+                    <div className="world-prompt-line">
+                      {railView.detail || 'Working through the next graph changes.'}
+                    </div>
+                  </div>
                 </div>
               ) : null}
               <div ref={transcriptEndRef} />

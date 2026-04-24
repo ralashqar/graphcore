@@ -62,6 +62,10 @@ export const worldPromptClassificationSchema = z.enum([
 export const worldPromptSuggestionUiKindSchema = z.enum(['next_move', 'clarification', 'advisory', 'diagnostic'])
 export const worldPromptSuggestionExecutionModeSchema = z.enum(['answer_only', 'plan_only', 'apply_if_selected'])
 export const worldPromptAnswerModeSchema = z.enum(['answer_only', 'answer_plus_options', 'answer_plus_preview'])
+export const worldPromptResolvedModeSchema = z.enum(['answer_only', 'preview_first_wave', 'apply_compact_wave', 'blocked'])
+export const worldPromptResolvedIntentSchema = z.enum(['graph_build', 'refinement', 'advisory', 'diagnosis'])
+export const worldPromptResolvedFocusSchema = z.enum(['current_focus', 'pivot_focus', 'background_focus'])
+export const worldPromptSuggestionApplyPolicySchema = z.enum(['answer_only', 'preview', 'auto_if_safe', 'approval_if_risky'])
 export const worldPromptPlannerProgressPhaseSchema = z.enum([
   'reading_context',
   'analyzing_graph',
@@ -102,7 +106,7 @@ const promptToWorldOpBaseSchema = z.object({
 const promptToWorldUpsertEntityPayloadSchema = z.object({
   targetEntityKey: z.string().nullable().default(null),
   entity: worldEntityCreateInputSchema.extend({
-    ensureLinkedDefinition: worldEntityCreateInputSchema.shape.ensureLinkedDefinition.default(true),
+    ensureLinkedDefinition: z.boolean().default(true),
   }),
 })
 
@@ -115,7 +119,7 @@ const promptToWorldReplaceEntityPayloadSchema = z.object({
   targetEntityKey: z.string(),
   replacementMode: z.enum(['create', 'existing']).default('create'),
   replacementEntity: worldEntityCreateInputSchema.extend({
-    ensureLinkedDefinition: worldEntityCreateInputSchema.shape.ensureLinkedDefinition.default(true),
+    ensureLinkedDefinition: z.boolean().default(true),
   }).nullable().default(null),
   replacementEntityKey: z.string().nullable().default(null),
   transferRelationships: z.boolean().default(true),
@@ -204,6 +208,12 @@ export const worldPromptSuggestionSchema = z.object({
   willQueueCinematics: z.boolean().default(false),
   uiKind: worldPromptSuggestionUiKindSchema.optional(),
   executionMode: worldPromptSuggestionExecutionModeSchema.optional(),
+  actionMode: worldPromptResolvedModeSchema.optional(),
+  applyPolicy: worldPromptSuggestionApplyPolicySchema.optional(),
+  targetEntityKeys: z.array(z.string()).optional(),
+  targetThreadKeys: z.array(z.string()).optional(),
+  focusLayer: z.enum(['actor', 'group', 'place', 'concept', 'event', 'object', 'general']).optional(),
+  retrievalHint: z.string().optional(),
   generatedReason: z.string().optional(),
   generatedFromTurnId: z.string().nullable().optional(),
 })
@@ -333,6 +343,75 @@ export const worldPromptPlannerProgressSchema = z.object({
   done: z.boolean().optional(),
 })
 
+export const worldPromptSessionFocusStateSchema = z.object({
+  entityKeys: z.array(z.string()).default([]),
+  threadKeys: z.array(z.string()).default([]),
+  focusLayer: z.enum(['actor', 'group', 'place', 'concept', 'event', 'object', 'general']).nullable().default(null),
+  selectedRootEntityKey: z.string().nullable().default(null),
+  selectedViewKey: z.string().nullable().default(null),
+  selectedThreadKey: z.string().nullable().default(null),
+  updatedAt: z.string().default(''),
+})
+
+export const worldPromptRecentTurnSummarySchema = z.object({
+  turnId: z.string().nullable().default(null),
+  prompt: z.string().default(''),
+  assistantSummary: z.string().default(''),
+  classification: worldPromptClassificationSchema.nullable().default(null),
+  focusLayer: z.enum(['actor', 'group', 'place', 'concept', 'event', 'object', 'general']).nullable().default(null),
+  continuityMode: z.enum(['follow_up', 'topic_shift', 'fresh_question']).nullable().default(null),
+  createdAt: z.string().default(''),
+})
+
+export const worldPromptSessionMemoryStateSchema = z.object({
+  activeFocus: worldPromptSessionFocusStateSchema,
+  backgroundFocus: worldPromptSessionFocusStateSchema.nullable().default(null),
+  frontierEntityKeys: z.array(z.string()).default([]),
+  recentThreadKeys: z.array(z.string()).default([]),
+  recentTurnSummaries: z.array(worldPromptRecentTurnSummarySchema).default([]),
+  lastContinuityMode: z.enum(['follow_up', 'topic_shift', 'fresh_question']).nullable().default(null),
+  lastPlannerMode: z.enum(['direct_build', 'refinement', 'advisory_diagnosis']).nullable().default(null),
+  lastRetrievedKeys: z.object({
+    entityKeys: z.array(z.string()).default([]),
+    threadKeys: z.array(z.string()).default([]),
+  }).default({ entityKeys: [], threadKeys: [] }),
+})
+
+export const worldPromptRetrievalDiagnosticsSchema = z.object({
+  anchorEntityKeys: z.array(z.string()).default([]),
+  anchorThreadKeys: z.array(z.string()).default([]),
+  selectedSuggestionId: z.string().nullable().default(null),
+  ftsHits: z.array(z.object({
+    resourceType: z.enum(['entity', 'relationship', 'thread']),
+    resourceKey: z.string(),
+    score: z.number().default(0),
+  })).default([]),
+  rankedEntityScores: z.array(z.object({
+    key: z.string(),
+    score: z.number().default(0),
+  })).default([]),
+  rankedThreadScores: z.array(z.object({
+    key: z.string(),
+    score: z.number().default(0),
+  })).default([]),
+  droppedEntityKeys: z.array(z.string()).default([]),
+  droppedThreadKeys: z.array(z.string()).default([]),
+  chosenFocusLayer: z.enum(['actor', 'group', 'place', 'concept', 'event', 'object', 'general']).nullable().default(null),
+  continuityMode: z.enum(['follow_up', 'topic_shift', 'fresh_question']).nullable().default(null),
+  executionReason: z.string().default(''),
+})
+
+export const worldPromptResolvedContextSchema = z.object({
+  summaryMemory: z.string().default(''),
+  selectedRootEntityKey: z.string().nullable().default(null),
+  selectedViewKey: z.string().nullable().default(null),
+  selectedThreadKey: z.string().nullable().default(null),
+  resolvedMode: worldPromptResolvedModeSchema.nullable().default(null),
+  resolvedIntent: worldPromptResolvedIntentSchema.nullable().default(null),
+  resolvedFocus: worldPromptResolvedFocusSchema.nullable().default(null),
+  sessionMemoryState: worldPromptSessionMemoryStateSchema.optional(),
+}).catchall(z.unknown())
+
 export const worldPromptSessionSchema = z.object({
   id: z.string(),
   key: z.string(),
@@ -358,6 +437,10 @@ const worldPromptTurnMetadataSchema = z.object({
   answer: z.string().optional(),
   answerMode: worldPromptAnswerModeSchema.optional(),
   diagnosticFindings: z.array(worldPromptDiagnosticFindingSchema).optional(),
+  resolvedMode: worldPromptResolvedModeSchema.optional(),
+  resolvedIntent: worldPromptResolvedIntentSchema.optional(),
+  resolvedFocus: worldPromptResolvedFocusSchema.optional(),
+  retrievalDiagnostics: worldPromptRetrievalDiagnosticsSchema.optional(),
 }).catchall(z.unknown())
 
 export const worldPromptTurnSchema = z.object({
@@ -367,7 +450,7 @@ export const worldPromptTurnSchema = z.object({
   prompt: z.string(),
   status: worldPromptTurnStatusSchema.default('queued'),
   model: z.string().default('gpt-5.4'),
-  resolvedContext: looseRecordSchema.default({}),
+  resolvedContext: worldPromptResolvedContextSchema.default(() => worldPromptResolvedContextSchema.parse({})),
   approvalState: worldPromptApprovalStateSchema.default('not_required'),
   assistantSummary: z.string().default(''),
   errorMessage: z.string().nullable().default(null),
@@ -606,6 +689,9 @@ export type WorldPromptMessage = z.infer<typeof worldPromptMessageSchema>
 export type WorldPromptEvent = z.infer<typeof worldPromptEventSchema>
 export type WorldPromptEventPayload = z.infer<typeof worldPromptEventPayloadSchema>
 export type WorldPromptPlannerProgress = z.infer<typeof worldPromptPlannerProgressSchema>
+export type WorldPromptSessionMemoryState = z.infer<typeof worldPromptSessionMemoryStateSchema>
+export type WorldPromptRetrievalDiagnostics = z.infer<typeof worldPromptRetrievalDiagnosticsSchema>
+export type WorldPromptResolvedContext = z.infer<typeof worldPromptResolvedContextSchema>
 export type WorldPromptSnapshot = z.infer<typeof worldPromptSnapshotSchema>
 export type WorldPromptStartTurnRequest = z.infer<typeof worldPromptStartTurnRequestSchema>
 export type WorldPromptStartTurnResponse = z.infer<typeof worldPromptStartTurnResponseSchema>

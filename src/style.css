@@ -2193,6 +2193,40 @@ code {
   padding: 0 12px 12px;
 }
 
+.world-refinement-history {
+  display: grid;
+  gap: 10px;
+}
+
+.world-refinement-entry {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.world-refinement-entry-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.world-refinement-entry-head span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.world-refinement-entry p {
+  margin: 0;
+  color: rgba(226, 232, 240, 0.82);
+  line-height: 1.5;
+}
+
 .world-prompt-drawers {
   display: grid;
   gap: 10px;
@@ -3232,7 +3266,7 @@ code {
   align-items: center;
   gap: 14px;
   padding: 12px 14px;
-  margin-bottom: 10px;
+  margin-top: 10px;
   border-radius: 18px;
   border: 1px solid rgba(148, 163, 184, 0.16);
   background: linear-gradient(180deg, rgba(16, 24, 37, 0.88), rgba(10, 16, 24, 0.92));

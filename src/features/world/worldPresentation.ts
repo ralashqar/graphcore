@@ -15,6 +15,8 @@ import { worldPromptEventPayloadSchema, worldPromptPlanPreviewSchema } from '../
 import type { WorldEntity, WorldOperator, WorldResult } from '../../domain/worldGraph.ts'
 import { labelForWorldEntity } from '../../domain/worldGraphHelpers.ts'
 
+const WORLD_INSPECTOR_REFINEMENT_HISTORY_LIMIT = 5
+
 export type WorldGraphNodeRecord =
   | { kind: 'entity'; entity: WorldEntity; title: string; subtitle: string; summary: string; imageUrl: string | null }
   | { kind: 'operator'; operator: WorldOperator; title: string; subtitle: string; summary: string; imageUrl: string | null }
@@ -37,6 +39,7 @@ export type WorldPromptTranscriptEntry =
   | { id: string; createdAt: string; kind: 'entity_replaced'; label: string; detail?: string; entityKey: string; entityNodeType: WorldEntity['nodeType'] }
   | { id: string; createdAt: string; kind: 'relationship_created'; label: string; detail?: string; relationshipKey: string; sourceLabel: string; targetLabel: string }
   | { id: string; createdAt: string; kind: 'relationship_updated'; label: string; detail?: string; relationshipKey: string; sourceLabel: string; targetLabel: string }
+  | { id: string; createdAt: string; kind: 'derived_result_created'; label: string; detail?: string; resultKey: string }
   | { id: string; createdAt: string; kind: 'queue_started'; label: string; detail?: string }
   | { id: string; createdAt: string; kind: 'advisory_answer'; label: string; detail?: string }
   | { id: string; createdAt: string; kind: 'diagnostic_finding'; label: string; detail?: string; severity: WorldPromptDiagnosticFinding['severity'] }
@@ -80,6 +83,19 @@ export type WorldInspectorViewModel = {
   context: string
   imageUrl: string | null
   stats: string[]
+  refinementHistory: WorldInspectorRefinementHistoryItem[]
+}
+
+export type WorldInspectorRefinementHistoryItem = {
+  id: string
+  at: string
+  field: 'summary' | 'context' | 'notes'
+  fieldLabel: string
+  strategy: string
+  strategyLabel: string
+  previousText: string
+  incomingText: string
+  resultText: string
 }
 
 export function worldNodeRecordEqual(left: WorldGraphNodeRecord, right: WorldGraphNodeRecord) {
@@ -143,8 +159,13 @@ export function nodeShellStyle(record: WorldGraphNodeRecord, selected: boolean, 
 
 export function describePromptOp(op: PromptToWorldOp) {
   switch (op.op) {
-    case 'upsert_entity':
-      return `Add or extend ${op.payload.entity.name}`
+    case 'upsert_entity': {
+      const displayName =
+        typeof op.metadata?.displayName === 'string' && op.metadata.displayName.trim()
+          ? op.metadata.displayName.trim()
+          : op.payload.entity.name
+      return `Add or extend ${displayName}`
+    }
     case 'update_entity':
       return `Update ${op.payload.targetEntityKey}`
     case 'replace_entity':
@@ -213,13 +234,81 @@ export function promptSuggestionImpactLabel(suggestion: WorldPromptSuggestion) {
 export function stripInternalPlannerDiagnostics(text: string) {
   if (!text.trim()) return ''
   return text
-    .replace(/^Hosted prompt planning was unavailable, so GraphCore used a local fallback seed\.\s*/i, '')
+    .replace(/^Hosted prompt planning was unavailable\.\s*/i, '')
     .replace(/\s*Immediate JSON[^\n]*?(?:\.\s*|$)/i, '')
-    .replace(/^oneOf is not permitted in operations\.?\s*/i, '')
+    .replace(/\s*oneOf is not permitted in operations\.?\s*/i, '')
     .replace(/\s*World prompt planner returned JSON that did not match the expected schema\.[\s\S]*$/i, '')
     .replace(/\s*Planner (?:output|response) validation failed\.[\s\S]*$/i, '')
     .replace(/\s*Cinematic planner response validation failed\.[\s\S]*$/i, '')
     .trim()
+}
+
+function refinementFieldLabel(field: 'summary' | 'context' | 'notes') {
+  switch (field) {
+    case 'summary':
+      return 'Summary'
+    case 'context':
+      return 'Context'
+    case 'notes':
+      return 'Relationship note'
+  }
+}
+
+function refinementStrategyLabel(strategy: string) {
+  switch (strategy) {
+    case 'initialized':
+      return 'Initialized'
+    case 'unchanged':
+      return 'Unchanged'
+    case 'expanded':
+      return 'Expanded'
+    case 'preserved_existing':
+      return 'Preserved existing'
+    case 'merged_distinct':
+      return 'Merged detail'
+    default:
+      return 'Reconciled'
+  }
+}
+
+function formatRefinementTimestamp(value: string) {
+  const parsed = Date.parse(value)
+  if (!Number.isFinite(parsed)) return value
+  return `${new Date(parsed).toISOString().replace('T', ' ').slice(0, 16)} UTC`
+}
+
+export function buildWorldRefinementHistoryViewModel(metadata: unknown): WorldInspectorRefinementHistoryItem[] {
+  if (!metadata || typeof metadata !== 'object') return []
+  const rawHistory = (metadata as { refinementHistory?: unknown }).refinementHistory
+  if (!Array.isArray(rawHistory)) return []
+
+  return rawHistory
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry && typeof entry === 'object'))
+    .map((entry, index) => {
+      const field = entry.field === 'summary' || entry.field === 'context' || entry.field === 'notes'
+        ? entry.field
+        : null
+      const previousText = typeof entry.previousText === 'string' ? entry.previousText.trim() : ''
+      const incomingText = typeof entry.incomingText === 'string' ? entry.incomingText.trim() : ''
+      const resultText = typeof entry.resultText === 'string' ? entry.resultText.trim() : ''
+      if (!field || !incomingText || !resultText) return null
+      const at = typeof entry.at === 'string' && entry.at.trim() ? entry.at.trim() : ''
+      const strategy = typeof entry.strategy === 'string' && entry.strategy.trim() ? entry.strategy.trim() : 'merged_distinct'
+      return {
+        id: `${at || 'refinement'}:${field}:${index}`,
+        at: at ? formatRefinementTimestamp(at) : 'Unknown time',
+        field,
+        fieldLabel: refinementFieldLabel(field),
+        strategy,
+        strategyLabel: refinementStrategyLabel(strategy),
+        previousText,
+        incomingText,
+        resultText,
+      } satisfies WorldInspectorRefinementHistoryItem
+    })
+    .filter((entry): entry is WorldInspectorRefinementHistoryItem => Boolean(entry))
+    .sort((left, right) => right.at.localeCompare(left.at))
+    .slice(0, WORLD_INSPECTOR_REFINEMENT_HISTORY_LIMIT)
 }
 
 export function describePlannerFailureCategory(category: WorldPromptPlannerFailure['category']) {
@@ -283,8 +372,6 @@ export function buildWorldPromptTranscriptEntries(input: {
 
   const entries: WorldPromptTranscriptEntry[] = []
   let lastSuggestionSignature: string | null = null
-  let lastPreviewSignature: string | null = null
-  let lastApprovalSignature: string | null = null
   let lastAnswerSignature: string | null = null
   let lastDiagnosticSignature: string | null = null
   let lastPlannerProgressSignature: string | null = null
@@ -531,9 +618,10 @@ export function buildWorldPromptTranscriptEntries(input: {
           entries.push({
             id: `${source.id}:result:${worldResult.key}`,
             createdAt: source.event.createdAt,
-            kind: 'system_status',
+            kind: 'derived_result_created',
             label: `Created ${worldResult.title}`,
             detail: 'Derived result',
+            resultKey: worldResult.key,
           })
         }
         break
@@ -586,37 +674,6 @@ export function buildWorldPromptTranscriptEntries(input: {
         break
       default:
         break
-    }
-
-    if (payload.preview) {
-      const previewSignature = `${source.event.turnId}:${payload.preview.mode}:${payload.preview.items.map((item) => item.id).join('|')}`
-      if (previewSignature && previewSignature !== lastPreviewSignature) {
-        entries.push({
-          id: `${source.id}:preview`,
-          createdAt: source.event.createdAt,
-          kind: 'preview_available',
-          label: payload.preview.mode === 'plan_only' ? 'Preview available' : 'First wave ready',
-          detail: payload.preview.requestSummary || 'Review the proposed graph changes before applying them.',
-          turnId: source.event.turnId,
-          preview: payload.preview,
-        })
-        lastPreviewSignature = previewSignature
-      }
-
-      const pendingOps = payload.preview.pendingOps.filter((op) => op.applyMode === 'needs_approval' || op.status === 'pending')
-      const approvalSignature = `${source.event.turnId}:${pendingOps.map((op) => op.id).join('|')}`
-      if (pendingOps.length > 0 && approvalSignature !== lastApprovalSignature) {
-        entries.push({
-          id: `${source.id}:approval`,
-          createdAt: source.event.createdAt,
-          kind: 'approval_required',
-          label: 'Approval required',
-          detail: `${pendingOps.length} pending change${pendingOps.length === 1 ? '' : 's'} need review.`,
-          turnId: source.event.turnId,
-          ops: pendingOps,
-        })
-        lastApprovalSignature = approvalSignature
-      }
     }
 
     if (payload.suggestions.length > 0) {
@@ -740,7 +797,14 @@ export function buildWorldPromptRailViewModel(input: {
     if (latestSuggestions.length > 0 && latestPlannerStatus && latestPlannerProgressMessage) break
   }
 
-  const approvalOps = (preview?.pendingOps ?? []).filter((op) => op.applyMode === 'needs_approval' || op.status === 'pending')
+  const approvalOps = [
+    ...(preview?.pendingOps ?? []).filter((op) => op.applyMode === 'needs_approval' || op.status === 'pending'),
+    ...input.events
+      .filter((event) => event.turnId === effectiveTurn?.id && event.eventType === 'op_needs_approval')
+      .map((event) => worldPromptEventPayloadSchema.safeParse(event.payload))
+      .map((parsed) => parsed.success ? parsed.data.op : undefined)
+      .filter((op): op is PromptToWorldOp => Boolean(op)),
+  ].filter((op, index, values) => values.findIndex((candidate) => candidate.id === op.id) === index)
   const { appliedEntities, appliedRelationships, queuedLabels } = summarizeAppliedChanges({
     turnId: effectiveTurn?.id ?? null,
     events: input.events,
@@ -763,44 +827,6 @@ export function buildWorldPromptRailViewModel(input: {
       statusLabel: 'Blocked',
       primaryActionLabel: 'Generate',
       primaryActionKind: 'generate',
-      latestSuggestions,
-      preview,
-      approvalOps,
-      appliedEntities,
-      appliedRelationships,
-      queuedLabels,
-      latestPlannerStatus,
-      plannerFailure,
-    } satisfies WorldPromptRailViewModel
-  }
-
-  if (effectiveTurn?.status === 'awaiting_approval' || approvalOps.length > 0) {
-    return {
-      state: 'approval_required',
-      title: approvalOps.length > 0 ? `${approvalOps.length} change${approvalOps.length === 1 ? '' : 's'} need approval` : 'Approval required',
-      detail: latestDetail || 'Review the pending canon-touching operations before the graph changes land.',
-      statusLabel: 'Approval Required',
-      primaryActionLabel: 'Review approvals',
-      primaryActionKind: 'review_approval',
-      latestSuggestions,
-      preview,
-      approvalOps,
-      appliedEntities,
-      appliedRelationships,
-      queuedLabels,
-      latestPlannerStatus,
-      plannerFailure,
-    } satisfies WorldPromptRailViewModel
-  }
-
-  if (preview) {
-    return {
-      state: 'plan_preview',
-      title: preview.mode === 'plan_only' ? 'Preview available' : 'First wave ready',
-      detail: preview.requestSummary || latestDetail || 'Review the proposed first wave before applying it to the graph.',
-      statusLabel: preview.mode === 'plan_only' ? 'Preview' : 'Staged Wave',
-      primaryActionLabel: 'Apply first wave',
-      primaryActionKind: 'apply_preview',
       latestSuggestions,
       preview,
       approvalOps,
@@ -932,6 +958,7 @@ export function buildWorldInspectorViewModel(input: {
         `${input.usageCount ?? 0} usages`,
         input.entity.source === 'ai' ? 'AI-sourced' : 'Manual',
       ],
+      refinementHistory: buildWorldRefinementHistoryViewModel(input.entity.metadata),
     }
   }
 
@@ -943,6 +970,7 @@ export function buildWorldInspectorViewModel(input: {
       context: '',
       imageUrl: null,
       stats: [`${input.operator.inputEntityKeys.length} inputs`],
+      refinementHistory: [],
     }
   }
 
@@ -957,6 +985,7 @@ export function buildWorldInspectorViewModel(input: {
         input.result.status,
         typeof input.result.metadata?.cinematicGraphKey === 'string' ? 'Linked cinematic' : 'Standalone result',
       ],
+      refinementHistory: [],
     }
   }
 
