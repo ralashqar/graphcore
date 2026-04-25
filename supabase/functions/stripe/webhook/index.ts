@@ -1,20 +1,9 @@
 import '@supabase/functions-js/edge-runtime.d.ts'
 
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import Stripe from 'https://esm.sh/stripe@14?target=denonext'
+import Stripe from 'stripe'
 
-const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
-  apiVersion: '2024-11-20',
-})
-const cryptoProvider = Stripe.createSubtleCryptoProvider()
-const stripeWebhookSecret = Deno.env.get('STRIPE_WEBHOOK_SECRET')!
-const supabaseUrl = Deno.env.get('SUPABASE_URL')!
-const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, stripe-signature',
-}
+import { createAdminClient } from '../../_shared/auth.ts'
+import { errorResponse, HttpError, json, maybeHandleOptions } from '../../_shared/http.ts'
 
 const PLAN_CREDITS: Record<string, number> = {
   free: 500,
@@ -23,26 +12,84 @@ const PLAN_CREDITS: Record<string, number> = {
   enterprise: 20000,
 }
 
+type SubscriptionStatus = 'active' | 'past_due' | 'canceled' | 'unpaid' | 'trialing'
+type PlanKey = 'free' | 'starter' | 'pro' | 'enterprise'
+
+type SubscriptionRow = {
+  user_id: string
+}
+
+function getRequiredEnv(name: string) {
+  const value = Deno.env.get(name)?.trim()
+
+  if (!value) {
+    throw new Error(`${name} is not configured.`)
+  }
+
+  return value
+}
+
+const stripe = new Stripe(getRequiredEnv('STRIPE_SECRET_KEY'), {
+  apiVersion: '2024-11-20',
+})
+const cryptoProvider = Stripe.createSubtleCryptoProvider()
+const stripeWebhookSecret = getRequiredEnv('STRIPE_WEBHOOK_SECRET')
+
 function toIsoDate(input: number | null | undefined) {
   if (!input) return null
   return new Date(input * 1000).toISOString()
 }
 
-function normalizeSubscriptionStatus(status: string): 'active' | 'past_due' | 'canceled' | 'unpaid' | 'trialing' {
+function normalizeSubscriptionStatus(status: string): SubscriptionStatus {
   switch (status) {
     case 'active':
     case 'past_due':
-    case 'canceled':
     case 'unpaid':
     case 'trialing':
       return status
+    case 'canceled':
+    case 'incomplete_expired':
+      return 'canceled'
+    case 'incomplete':
+    case 'paused':
+      return 'past_due'
     default:
       return 'active'
   }
 }
 
+function normalizePlan(plan: string | null | undefined, fallback: PlanKey = 'starter'): PlanKey {
+  switch (plan) {
+    case 'free':
+    case 'starter':
+    case 'pro':
+    case 'enterprise':
+      return plan
+    default:
+      return fallback
+  }
+}
+
+function resolveCustomerId(
+  customerId: string | Stripe.Customer | Stripe.DeletedCustomer | null | undefined,
+) {
+  if (typeof customerId === 'string') {
+    return customerId
+  }
+
+  return customerId && 'id' in customerId ? customerId.id : null
+}
+
+function resolvePaymentIntentId(paymentIntent: string | Stripe.PaymentIntent | null) {
+  if (typeof paymentIntent === 'string') {
+    return paymentIntent
+  }
+
+  return paymentIntent?.id ?? null
+}
+
 async function findUserIdForSubscription(
-  supabase: ReturnType<typeof createClient>,
+  supabase: ReturnType<typeof createAdminClient>,
   subscription: Stripe.Subscription | null,
   subscriptionId: string | null,
   customerId: string | Stripe.Customer | Stripe.DeletedCustomer | null | undefined,
@@ -58,16 +105,13 @@ async function findUserIdForSubscription(
       .select('user_id')
       .eq('stripe_subscription_id', subscriptionId)
       .maybeSingle()
-    if (data?.user_id) {
-      return data.user_id as string
+    const row = data as SubscriptionRow | null
+    if (row?.user_id) {
+      return row.user_id
     }
   }
 
-  const resolvedCustomerId = typeof customerId === 'string'
-    ? customerId
-    : customerId && 'id' in customerId
-      ? customerId.id
-      : null
+  const resolvedCustomerId = resolveCustomerId(customerId)
 
   if (resolvedCustomerId) {
     const { data } = await supabase
@@ -75,8 +119,9 @@ async function findUserIdForSubscription(
       .select('user_id')
       .eq('stripe_customer_id', resolvedCustomerId)
       .maybeSingle()
-    if (data?.user_id) {
-      return data.user_id as string
+    const row = data as SubscriptionRow | null
+    if (row?.user_id) {
+      return row.user_id
     }
   }
 
@@ -84,7 +129,7 @@ async function findUserIdForSubscription(
 }
 
 async function addCreditsIfMissing(
-  supabase: ReturnType<typeof createClient>,
+  supabase: ReturnType<typeof createAdminClient>,
   input: {
     userId: string
     amount: number
@@ -98,13 +143,19 @@ async function addCreditsIfMissing(
     return
   }
 
-  const { data: existingTransaction } = await supabase
+  const { data, error: existingTransactionError } = await supabase
     .from('credit_transactions')
     .select('id')
     .eq('user_id', input.userId)
     .eq('reference_type', input.referenceType)
     .eq('reference_id', input.referenceId)
     .maybeSingle()
+
+  const existingTransaction = data as { id: string } | null
+
+  if (existingTransactionError) {
+    throw new HttpError(500, 'Failed to inspect prior credit transactions.')
+  }
 
   if (existingTransaction?.id) {
     return
@@ -124,25 +175,21 @@ async function addCreditsIfMissing(
   }
 }
 
-Deno.serve(async (request) => {
-  if (request.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders })
-  }
+Deno.serve(async (request: Request) => {
+  const preflight = maybeHandleOptions(request)
 
-  if (request.method !== 'POST') {
-    return new Response(
-      JSON.stringify({ error: 'Method not allowed' }),
-      { status: 405, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-    )
+  if (preflight) {
+    return preflight
   }
 
   try {
+    if (request.method !== 'POST') {
+      throw new HttpError(405, 'Method not allowed.')
+    }
+
     const signature = request.headers.get('Stripe-Signature')
     if (!signature) {
-      return new Response(
-        JSON.stringify({ error: 'Missing Stripe-Signature header' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-      )
+      throw new HttpError(400, 'Missing Stripe-Signature header.')
     }
 
     const body = await request.text()
@@ -154,7 +201,7 @@ Deno.serve(async (request) => {
       cryptoProvider,
     )
 
-    const supabase = createClient(supabaseUrl, supabaseServiceKey)
+    const supabase = createAdminClient('stripe/webhook')
 
     console.log('[stripe-webhook] Received event:', event.type, event.id)
 
@@ -164,7 +211,7 @@ Deno.serve(async (request) => {
         const userId = session.client_reference_id || session.metadata?.user_id || null
         const packageId = session.metadata?.package_id
         const credits = Number.parseInt(session.metadata?.credits || '0', 10)
-        const plan = session.metadata?.plan
+        const plan = session.metadata?.plan ? normalizePlan(session.metadata.plan) : null
 
         if (userId && !plan && packageId && credits > 0) {
           await addCreditsIfMissing(supabase, {
@@ -176,26 +223,30 @@ Deno.serve(async (request) => {
             metadata: {
               packageId,
               checkoutSessionId: session.id,
-              paymentIntentId: session.payment_intent,
+              paymentIntentId: resolvePaymentIntentId(session.payment_intent),
             },
           })
 
-          await supabase
+          const { error: purchaseUpdateError } = await supabase
             .from('credit_purchases')
             .update({
               status: 'completed',
-              stripe_payment_intent_id: typeof session.payment_intent === 'string' ? session.payment_intent : null,
+              stripe_payment_intent_id: resolvePaymentIntentId(session.payment_intent),
               updated_at: new Date().toISOString(),
             })
             .eq('stripe_checkout_session_id', session.id)
+
+          if (purchaseUpdateError) {
+            throw new HttpError(500, 'Failed to complete the credit purchase record.')
+          }
         }
 
         if (userId && plan && typeof session.subscription === 'string') {
           const subscription = await stripe.subscriptions.retrieve(session.subscription)
-          await supabase.from('subscriptions').upsert({
+          const { error: subscriptionUpsertError } = await supabase.from('subscriptions').upsert({
             user_id: userId,
             stripe_subscription_id: subscription.id,
-            stripe_customer_id: typeof subscription.customer === 'string' ? subscription.customer : null,
+            stripe_customer_id: resolveCustomerId(subscription.customer),
             plan,
             status: normalizeSubscriptionStatus(subscription.status),
             current_period_start: toIsoDate(subscription.current_period_start),
@@ -203,6 +254,10 @@ Deno.serve(async (request) => {
             cancel_at_period_end: subscription.cancel_at_period_end,
             updated_at: new Date().toISOString(),
           }, { onConflict: 'user_id' })
+
+          if (subscriptionUpsertError) {
+            throw new HttpError(500, 'Failed to upsert the completed subscription.')
+          }
         }
         break
       }
@@ -222,16 +277,16 @@ Deno.serve(async (request) => {
           break
         }
 
-        const plan = subscription.metadata.plan || 'starter'
+        const plan = normalizePlan(subscription.metadata.plan)
         const credits = Number.parseInt(
           subscription.metadata.credits_per_month || String(PLAN_CREDITS[plan] ?? 0),
           10,
         )
 
-        await supabase.from('subscriptions').upsert({
+        const { error: subscriptionUpsertError } = await supabase.from('subscriptions').upsert({
           user_id: userId,
           stripe_subscription_id: subscription.id,
-          stripe_customer_id: typeof subscription.customer === 'string' ? subscription.customer : null,
+          stripe_customer_id: resolveCustomerId(subscription.customer),
           plan,
           status: normalizeSubscriptionStatus(subscription.status),
           current_period_start: toIsoDate(subscription.current_period_start),
@@ -239,6 +294,10 @@ Deno.serve(async (request) => {
           cancel_at_period_end: subscription.cancel_at_period_end,
           updated_at: new Date().toISOString(),
         }, { onConflict: 'user_id' })
+
+        if (subscriptionUpsertError) {
+          throw new HttpError(500, 'Failed to sync the paid subscription.')
+        }
 
         await addCreditsIfMissing(supabase, {
           userId,
@@ -264,11 +323,11 @@ Deno.serve(async (request) => {
           break
         }
 
-        await supabase.from('subscriptions').upsert({
+        const { error: subscriptionUpsertError } = await supabase.from('subscriptions').upsert({
           user_id: userId,
           stripe_subscription_id: subscription.id,
-          stripe_customer_id: typeof subscription.customer === 'string' ? subscription.customer : null,
-          plan: subscription.metadata.plan || 'starter',
+          stripe_customer_id: resolveCustomerId(subscription.customer),
+          plan: normalizePlan(subscription.metadata.plan),
           status: event.type === 'customer.subscription.deleted'
             ? 'canceled'
             : normalizeSubscriptionStatus(subscription.status),
@@ -277,6 +336,10 @@ Deno.serve(async (request) => {
           cancel_at_period_end: subscription.cancel_at_period_end,
           updated_at: new Date().toISOString(),
         }, { onConflict: 'user_id' })
+
+        if (subscriptionUpsertError) {
+          throw new HttpError(500, 'Failed to sync the updated subscription.')
+        }
         break
       }
 
@@ -287,13 +350,17 @@ Deno.serve(async (request) => {
           break
         }
 
-        await supabase
+        const { error: subscriptionUpdateError } = await supabase
           .from('subscriptions')
           .update({
             status: 'past_due',
             updated_at: new Date().toISOString(),
           })
           .eq('stripe_subscription_id', subscriptionId)
+
+        if (subscriptionUpdateError) {
+          throw new HttpError(500, 'Failed to mark the subscription as past due.')
+        }
         break
       }
 
@@ -301,16 +368,8 @@ Deno.serve(async (request) => {
         console.log('[stripe-webhook] Unhandled event type:', event.type)
     }
 
-    return new Response(
-      JSON.stringify({ received: true }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-    )
+    return json({ received: true })
   } catch (error) {
-    console.error('[stripe-webhook] Error:', error)
-    const message = error instanceof Error ? error.message : 'Internal server error'
-    return new Response(
-      JSON.stringify({ error: message }),
-      { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-    )
+    return errorResponse(error, 'Failed to process the Stripe webhook.')
   }
 })

@@ -1,122 +1,166 @@
 import '@supabase/functions-js/edge-runtime.d.ts'
 
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createAdminClient, requireUserClient } from '../../_shared/auth.ts'
+import { errorResponse, HttpError, json, maybeHandleOptions } from '../../_shared/http.ts'
 
-const stripe = Deno.env.get('STRIPE_SECRET_KEY')!
-const supabaseUrl = Deno.env.get('SUPABASE_URL')!
-const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+type CheckoutSessionRequest = {
+  packageId: string
+  successUrl?: string
+  cancelUrl?: string
 }
 
-Deno.serve(async (request) => {
-  if (request.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders })
+type CreditPackageRow = {
+  id: string
+  name: string
+  description: string | null
+  credits: number
+  price_cents: number
+  is_active: boolean
+}
+
+type StripeErrorBody = {
+  message?: string
+}
+
+type StripeCheckoutSessionBody = {
+  id?: string
+  url?: string
+  error?: StripeErrorBody | null
+}
+
+function getRequiredEnv(name: string) {
+  const value = Deno.env.get(name)?.trim()
+
+  if (!value) {
+    throw new Error(`${name} is not configured.`)
+  }
+
+  return value
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function parseCheckoutSessionRequest(value: unknown): CheckoutSessionRequest {
+  if (!isRecord(value)) {
+    throw new HttpError(400, 'Request body must be a JSON object.')
+  }
+
+  const packageId = typeof value.packageId === 'string' ? value.packageId.trim() : ''
+  const successUrl = typeof value.successUrl === 'string' ? value.successUrl.trim() : undefined
+  const cancelUrl = typeof value.cancelUrl === 'string' ? value.cancelUrl.trim() : undefined
+
+  if (!packageId) {
+    throw new HttpError(400, 'packageId is required.')
+  }
+
+  return { packageId, successUrl, cancelUrl }
+}
+
+async function parseStripeCheckoutSessionBody(response: Response): Promise<StripeCheckoutSessionBody> {
+  const raw = await response.json().catch(() => null)
+
+  if (!isRecord(raw)) {
+    return {}
+  }
+
+  const error = isRecord(raw.error)
+    ? { message: typeof raw.error.message === 'string' ? raw.error.message : undefined }
+    : null
+
+  return {
+    id: typeof raw.id === 'string' ? raw.id : undefined,
+    url: typeof raw.url === 'string' ? raw.url : undefined,
+    error,
+  }
+}
+
+const stripeSecretKey = getRequiredEnv('STRIPE_SECRET_KEY')
+
+Deno.serve(async (request: Request) => {
+  const preflight = maybeHandleOptions(request)
+
+  if (preflight) {
+    return preflight
   }
 
   try {
-    const { packageId, successUrl, cancelUrl } = await request.json()
-
-    if (!packageId) {
-      return new Response(
-        JSON.stringify({ error: 'packageId is required' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      )
+    if (request.method !== 'POST') {
+      throw new HttpError(405, 'Method not allowed.')
     }
 
-    // Get package details
-    const supabase = createClient(supabaseUrl, supabaseServiceKey)
-    
-    const { data: package, error: packageError } = await supabase
+    const payload = parseCheckoutSessionRequest(await request.json())
+    const { user } = await requireUserClient(request, 'stripe/create-checkout-session')
+    const supabase = createAdminClient('stripe/create-checkout-session')
+
+    const { data, error: packageError } = await supabase
       .from('credit_packages')
-      .select('*')
-      .eq('id', packageId)
-      .single()
+      .select('id, name, description, credits, price_cents, is_active')
+      .eq('id', payload.packageId)
+      .eq('is_active', true)
+      .maybeSingle()
 
-    if (packageError || !package) {
-      return new Response(
-        JSON.stringify({ error: 'Package not found' }),
-        { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      )
+    const creditPackage = data as CreditPackageRow | null
+
+    if (packageError) {
+      throw new HttpError(500, 'Failed to load credit package.')
     }
 
-    // Get user from auth header
-    const authHeader = request.headers.get('Authorization')
-    if (!authHeader) {
-      return new Response(
-        JSON.stringify({ error: 'Authorization required' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      )
+    if (!creditPackage) {
+      throw new HttpError(404, 'Package not found.')
     }
 
-    const token = authHeader.replace('Bearer ', '')
-    const { data: { user }, error: authError } = await supabase.auth.getUser(token)
-
-    if (authError || !user) {
-      return new Response(
-        JSON.stringify({ error: 'Invalid authentication' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      )
-    }
-
-    // Create Stripe checkout session
-    const stripeRes = await fetch('https://api.stripe.com/v1/checkout/sessions', {
+    const stripeResponse = await fetch('https://api.stripe.com/v1/checkout/sessions', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${stripe}`,
+        Authorization: `Bearer ${stripeSecretKey}`,
         'Content-Type': 'application/x-www-form-urlencoded',
       },
       body: new URLSearchParams({
-        'mode': 'payment',
+        mode: 'payment',
         'payment_method_types[]': 'card',
         'line_items[0][price_data][currency]': 'usd',
-        'line_items[0][price_data][product_data][name]': package.name,
-        'line_items[0][price_data][product_data][description]': package.description || `${package.credits} AI credits`,
-        'line_items[0][price_data][unit_amount]': String(package.price_cents),
+        'line_items[0][price_data][product_data][name]': creditPackage.name,
+        'line_items[0][price_data][product_data][description]': creditPackage.description ?? `${creditPackage.credits} AI credits`,
+        'line_items[0][price_data][unit_amount]': String(creditPackage.price_cents),
         'line_items[0][quantity]': '1',
-        'success_url': successUrl || 'https://graphcore.ai/billing?success=true',
-        'cancel_url': cancelUrl || 'https://graphcore.ai/billing?canceled=true',
-        'client_reference_id': user.id,
+        success_url: payload.successUrl || 'https://graphcore.ai/billing?success=true',
+        cancel_url: payload.cancelUrl || 'https://graphcore.ai/billing?canceled=true',
+        client_reference_id: user.id,
         'metadata[user_id]': user.id,
-        'metadata[package_id]': package.id,
-        'metadata[credits]': String(package.credits),
+        'metadata[package_id]': creditPackage.id,
+        'metadata[credits]': String(creditPackage.credits),
       }).toString(),
     })
 
-    const stripeSession = await stripeRes.json()
+    const stripeSession = await parseStripeCheckoutSessionBody(stripeResponse)
 
-    if (stripeSession.error) {
-      return new Response(
-        JSON.stringify({ error: stripeSession.error.message }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    if (!stripeResponse.ok || stripeSession.error || !stripeSession.id || !stripeSession.url) {
+      throw new HttpError(
+        stripeResponse.ok ? 400 : stripeResponse.status,
+        stripeSession.error?.message ?? 'Unable to create Stripe checkout session.',
       )
     }
 
-    // Create pending purchase record
-    await supabase.from('credit_purchases').insert({
+    const { error: purchaseError } = await supabase.from('credit_purchases').insert({
       user_id: user.id,
-      package_id: package.id,
+      package_id: creditPackage.id,
       stripe_checkout_session_id: stripeSession.id,
-      credits: package.credits,
-      amount_cents: package.price_cents,
+      credits: creditPackage.credits,
+      amount_cents: creditPackage.price_cents,
       status: 'pending',
     })
 
-    return new Response(
-      JSON.stringify({ 
-        url: stripeSession.url,
-        sessionId: stripeSession.id 
-      }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    )
+    if (purchaseError) {
+      throw new HttpError(500, 'Failed to create the pending credit purchase.')
+    }
 
+    return json({
+      url: stripeSession.url,
+      sessionId: stripeSession.id,
+    })
   } catch (error) {
-    console.error('[create-checkout-session] Error:', error)
-    return new Response(
-      JSON.stringify({ error: error.message || 'Internal server error' }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    )
+    return errorResponse(error, 'Failed to create the checkout session.')
   }
 })

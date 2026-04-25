@@ -1,165 +1,221 @@
 import '@supabase/functions-js/edge-runtime.d.ts'
 
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createAdminClient, requireUserClient } from '../../_shared/auth.ts'
+import { errorResponse, HttpError, json, maybeHandleOptions } from '../../_shared/http.ts'
 
-const stripe = Deno.env.get('STRIPE_SECRET_KEY')!
-const supabaseUrl = Deno.env.get('SUPABASE_URL')!
-const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-}
-
-// Subscription plans configuration
 const PLANS = {
-  starter: { name: 'Starter', price_cents: 999, credits_per_month: 1000 },
-  pro: { name: 'Pro', price_cents: 2999, credits_per_month: 5000 },
-  enterprise: { name: 'Enterprise', price_cents: 9999, credits_per_month: 20000 },
+  starter: { name: 'Starter', priceCents: 999, creditsPerMonth: 1000 },
+  pro: { name: 'Pro', priceCents: 2999, creditsPerMonth: 5000 },
+  enterprise: { name: 'Enterprise', priceCents: 9999, creditsPerMonth: 20000 },
+} as const
+
+type PlanKey = keyof typeof PLANS
+
+type CreateSubscriptionRequest = {
+  plan: PlanKey
+  successUrl?: string
+  cancelUrl?: string
 }
 
-type StripeCustomerResponse = {
+type SubscriptionRow = {
+  stripe_customer_id: string | null
+}
+
+type StripeCustomerBody = {
   id?: string
-  error?: { message?: string }
+  error?: { message?: string } | null
 }
 
-type StripeCheckoutSessionResponse = {
+type StripeCheckoutSessionBody = {
   id?: string
   url?: string
-  error?: { message?: string }
+  error?: { message?: string } | null
 }
 
-Deno.serve(async (request) => {
-  if (request.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders })
+function getRequiredEnv(name: string) {
+  const value = Deno.env.get(name)?.trim()
+
+  if (!value) {
+    throw new Error(`${name} is not configured.`)
+  }
+
+  return value
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function parseCreateSubscriptionRequest(value: unknown): CreateSubscriptionRequest {
+  if (!isRecord(value)) {
+    throw new HttpError(400, 'Request body must be a JSON object.')
+  }
+
+  const rawPlan = typeof value.plan === 'string' ? value.plan.trim() : ''
+  const successUrl = typeof value.successUrl === 'string' ? value.successUrl.trim() : undefined
+  const cancelUrl = typeof value.cancelUrl === 'string' ? value.cancelUrl.trim() : undefined
+
+  if (!(rawPlan in PLANS)) {
+    throw new HttpError(400, 'Valid plan is required (starter, pro, enterprise).')
+  }
+
+  return {
+    plan: rawPlan as PlanKey,
+    successUrl,
+    cancelUrl,
+  }
+}
+
+async function parseStripeCustomerBody(response: Response): Promise<StripeCustomerBody> {
+  const raw = await response.json().catch(() => null)
+
+  if (!isRecord(raw)) {
+    return {}
+  }
+
+  return {
+    id: typeof raw.id === 'string' ? raw.id : undefined,
+    error: isRecord(raw.error)
+      ? { message: typeof raw.error.message === 'string' ? raw.error.message : undefined }
+      : null,
+  }
+}
+
+async function parseStripeCheckoutSessionBody(response: Response): Promise<StripeCheckoutSessionBody> {
+  const raw = await response.json().catch(() => null)
+
+  if (!isRecord(raw)) {
+    return {}
+  }
+
+  return {
+    id: typeof raw.id === 'string' ? raw.id : undefined,
+    url: typeof raw.url === 'string' ? raw.url : undefined,
+    error: isRecord(raw.error)
+      ? { message: typeof raw.error.message === 'string' ? raw.error.message : undefined }
+      : null,
+  }
+}
+
+const stripeSecretKey = getRequiredEnv('STRIPE_SECRET_KEY')
+
+Deno.serve(async (request: Request) => {
+  const preflight = maybeHandleOptions(request)
+
+  if (preflight) {
+    return preflight
   }
 
   try {
-    const { plan, successUrl, cancelUrl } = await request.json()
-
-    if (!plan || !PLANS[plan as keyof typeof PLANS]) {
-      return new Response(
-        JSON.stringify({ error: 'Valid plan is required (starter, pro, enterprise)' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      )
+    if (request.method !== 'POST') {
+      throw new HttpError(405, 'Method not allowed.')
     }
 
-    const selectedPlan = PLANS[plan as keyof typeof PLANS]
+    const payload = parseCreateSubscriptionRequest(await request.json())
+    const { user } = await requireUserClient(request, 'stripe/create-subscription')
+    const supabase = createAdminClient('stripe/create-subscription')
 
-    // Get user from auth header
-    const authHeader = request.headers.get('Authorization')
-    if (!authHeader) {
-      return new Response(
-        JSON.stringify({ error: 'Authorization required' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      )
-    }
-
-    const token = authHeader.replace('Bearer ', '')
-    const supabase = createClient(supabaseUrl, supabaseServiceKey)
-
-    const { data: { user }, error: authError } = await supabase.auth.getUser(token)
-
-    if (authError || !user) {
-      return new Response(
-        JSON.stringify({ error: 'Invalid authentication' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      )
-    }
-
-    const { data: existingSubscription } = await supabase
+    const { data, error: subscriptionLookupError } = await supabase
       .from('subscriptions')
       .select('stripe_customer_id')
       .eq('user_id', user.id)
       .maybeSingle()
 
+    const existingSubscription = data as SubscriptionRow | null
+
+    if (subscriptionLookupError) {
+      throw new HttpError(500, 'Failed to load the current subscription.')
+    }
+
     let customerId = existingSubscription?.stripe_customer_id ?? null
+
     if (!customerId) {
-      const customerRes = await fetch('https://api.stripe.com/v1/customers', {
+      const customerResponse = await fetch('https://api.stripe.com/v1/customers', {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${stripe}`,
+          Authorization: `Bearer ${stripeSecretKey}`,
           'Content-Type': 'application/x-www-form-urlencoded',
         },
         body: new URLSearchParams({
           'metadata[user_id]': user.id,
-          'email': user.email || '',
+          email: user.email ?? '',
         }).toString(),
       })
 
-      const customer = await customerRes.json() as StripeCustomerResponse
+      const customer = await parseStripeCustomerBody(customerResponse)
 
-      if (customer.error || !customer.id) {
-        return new Response(
-          JSON.stringify({ error: customer.error?.message ?? 'Unable to create Stripe customer' }),
-          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      if (!customerResponse.ok || customer.error || !customer.id) {
+        throw new HttpError(
+          customerResponse.ok ? 400 : customerResponse.status,
+          customer.error?.message ?? 'Unable to create Stripe customer.',
         )
       }
 
       customerId = customer.id
     }
 
-    const checkoutRes = await fetch('https://api.stripe.com/v1/checkout/sessions', {
+    if (!customerId) {
+      throw new HttpError(500, 'Stripe customer creation did not return an id.')
+    }
+
+    const selectedPlan = PLANS[payload.plan]
+
+    const checkoutResponse = await fetch('https://api.stripe.com/v1/checkout/sessions', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${stripe}`,
+        Authorization: `Bearer ${stripeSecretKey}`,
         'Content-Type': 'application/x-www-form-urlencoded',
       },
       body: new URLSearchParams({
-        'mode': 'subscription',
+        mode: 'subscription',
         'payment_method_types[]': 'card',
-        'customer': customerId,
+        customer: customerId,
         'line_items[0][price_data][currency]': 'usd',
         'line_items[0][price_data][product_data][name]': `${selectedPlan.name} - GraphCore Monthly`,
-        'line_items[0][price_data][product_data][description]': `${selectedPlan.credits_per_month} AI credits every month`,
-        'line_items[0][price_data][unit_amount]': String(selectedPlan.price_cents),
+        'line_items[0][price_data][product_data][description]': `${selectedPlan.creditsPerMonth} AI credits every month`,
+        'line_items[0][price_data][unit_amount]': String(selectedPlan.priceCents),
         'line_items[0][price_data][recurring][interval]': 'month',
         'line_items[0][quantity]': '1',
-        'success_url': successUrl || 'https://graphcore.ai/billing?success=true',
-        'cancel_url': cancelUrl || 'https://graphcore.ai/billing?canceled=true',
-        'client_reference_id': user.id,
+        success_url: payload.successUrl || 'https://graphcore.ai/billing?success=true',
+        cancel_url: payload.cancelUrl || 'https://graphcore.ai/billing?canceled=true',
+        client_reference_id: user.id,
         'metadata[user_id]': user.id,
-        'metadata[plan]': plan,
+        'metadata[plan]': payload.plan,
         'subscription_data[metadata][user_id]': user.id,
-        'subscription_data[metadata][plan]': plan,
-        'subscription_data[metadata][credits_per_month]': String(selectedPlan.credits_per_month),
+        'subscription_data[metadata][plan]': payload.plan,
+        'subscription_data[metadata][credits_per_month]': String(selectedPlan.creditsPerMonth),
       }).toString(),
     })
 
-    const checkoutSession = await checkoutRes.json() as StripeCheckoutSessionResponse
+    const checkoutSession = await parseStripeCheckoutSessionBody(checkoutResponse)
 
-    if (checkoutSession.error || !checkoutSession.id || !checkoutSession.url) {
-      return new Response(
-        JSON.stringify({ error: checkoutSession.error?.message ?? 'Unable to create subscription checkout session' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    if (!checkoutResponse.ok || checkoutSession.error || !checkoutSession.id || !checkoutSession.url) {
+      throw new HttpError(
+        checkoutResponse.ok ? 400 : checkoutResponse.status,
+        checkoutSession.error?.message ?? 'Unable to create subscription checkout session.',
       )
     }
 
-    // Update user subscription record with pending status
-    await supabase.from('subscriptions').upsert({
+    const { error: upsertError } = await supabase.from('subscriptions').upsert({
       user_id: user.id,
       stripe_subscription_id: `pending_${checkoutSession.id}`,
       stripe_customer_id: customerId,
-      plan,
+      plan: payload.plan,
       status: 'trialing',
       current_period_start: null,
       current_period_end: null,
     }, { onConflict: 'user_id' })
 
-    return new Response(
-      JSON.stringify({ 
-        url: checkoutSession.url,
-        sessionId: checkoutSession.id,
-        customerId
-      }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    )
+    if (upsertError) {
+      throw new HttpError(500, 'Failed to stage the subscription record.')
+    }
 
+    return json({
+      url: checkoutSession.url,
+      sessionId: checkoutSession.id,
+      customerId,
+    })
   } catch (error) {
-    console.error('[create-subscription] Error:', error)
-    return new Response(
-      JSON.stringify({ error: error.message || 'Internal server error' }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    )
+    return errorResponse(error, 'Failed to create the subscription checkout session.')
   }
 })

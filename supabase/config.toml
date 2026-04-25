@@ -214,14 +214,17 @@ verify_jwt = false
 
 [functions.stripe-create-checkout-session]
 verify_jwt = true
+import_map = "./functions/stripe/create-checkout-session/deno.json"
 entrypoint = "./functions/stripe/create-checkout-session/index.ts"
 
 [functions.stripe-create-subscription]
 verify_jwt = true
+import_map = "./functions/stripe/create-subscription/deno.json"
 entrypoint = "./functions/stripe/create-subscription/index.ts"
 
 [functions.stripe-webhook]
 verify_jwt = false
+import_map = "./functions/stripe/webhook/deno.json"
 entrypoint = "./functions/stripe/webhook/index.ts"
 
 # Analytics Buckets is available to Supabase Pro plan.
