@@ -18,6 +18,17 @@ const PLANS = {
   enterprise: { name: 'Enterprise', price_cents: 9999, credits_per_month: 20000 },
 }
 
+type StripeCustomerResponse = {
+  id?: string
+  error?: { message?: string }
+}
+
+type StripeCheckoutSessionResponse = {
+  id?: string
+  url?: string
+  error?: { message?: string }
+}
+
 Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders })
@@ -46,7 +57,7 @@ Deno.serve(async (request) => {
 
     const token = authHeader.replace('Bearer ', '')
     const supabase = createClient(supabaseUrl, supabaseServiceKey)
-    
+
     const { data: { user }, error: authError } = await supabase.auth.getUser(token)
 
     if (authError || !user) {
@@ -56,85 +67,38 @@ Deno.serve(async (request) => {
       )
     }
 
-    // Create Stripe customer first
-    const customerRes = await fetch('https://api.stripe.com/v1/customers', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${stripe}`,
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: new URLSearchParams({
-        'metadata[user_id]': user.id,
-        'email': user.email || '',
-      }).toString(),
-    })
+    const { data: existingSubscription } = await supabase
+      .from('subscriptions')
+      .select('stripe_customer_id')
+      .eq('user_id', user.id)
+      .maybeSingle()
 
-    const customer = await customerRes.json()
-
-    if (customer.error) {
-      return new Response(
-        JSON.stringify({ error: customer.error.message }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      )
-    }
-
-    // Create Stripe subscription checkout
-    const priceRes = await fetch('https://api.stripe.com/v1/prices', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${stripe}`,
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: new URLSearchParams({
-        'unit_amount': String(selectedPlan.price_cents),
-        'currency': 'usd',
-        'recurring[interval]': 'month',
-        'product_data[name]': `${selectedPlan.name} - GraphCore Monthly`,
-        'product_data[metadata][plan]': plan,
-        'product_data[metadata][credits]': String(selectedPlan.credits_per_month),
-      }).toString(),
-    })
-
-    const price = await priceRes.json()
-
-    // If price doesn't exist, create product first
-    let priceId = price.id
-    if (price.error && price.error.code === 'resource_missing') {
-      // Create product first
-      const productRes = await fetch('https://api.stripe.com/v1/products', {
+    let customerId = existingSubscription?.stripe_customer_id ?? null
+    if (!customerId) {
+      const customerRes = await fetch('https://api.stripe.com/v1/customers', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${stripe}`,
           'Content-Type': 'application/x-www-form-urlencoded',
         },
         body: new URLSearchParams({
-          'name': `${selectedPlan.name} - GraphCore`,
-          'metadata[plan]': plan,
+          'metadata[user_id]': user.id,
+          'email': user.email || '',
         }).toString(),
       })
 
-      const product = await productRes.json()
+      const customer = await customerRes.json() as StripeCustomerResponse
 
-      // Create price with product
-      const newPriceRes = await fetch('https://api.stripe.com/v1/prices', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${stripe}`,
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-        body: new URLSearchParams({
-          'unit_amount': String(selectedPlan.price_cents),
-          'currency': 'usd',
-          'recurring[interval]': 'month',
-          'product': product.id,
-        }).toString(),
-      })
+      if (customer.error || !customer.id) {
+        return new Response(
+          JSON.stringify({ error: customer.error?.message ?? 'Unable to create Stripe customer' }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        )
+      }
 
-      const newPrice = await newPriceRes.json()
-      priceId = newPrice.id
+      customerId = customer.id
     }
 
-    // Create subscription checkout session
     const checkoutRes = await fetch('https://api.stripe.com/v1/checkout/sessions', {
       method: 'POST',
       headers: {
@@ -144,22 +108,29 @@ Deno.serve(async (request) => {
       body: new URLSearchParams({
         'mode': 'subscription',
         'payment_method_types[]': 'card',
-        'customer': customer.id,
-        'line_items[0][price]': priceId,
+        'customer': customerId,
+        'line_items[0][price_data][currency]': 'usd',
+        'line_items[0][price_data][product_data][name]': `${selectedPlan.name} - GraphCore Monthly`,
+        'line_items[0][price_data][product_data][description]': `${selectedPlan.credits_per_month} AI credits every month`,
+        'line_items[0][price_data][unit_amount]': String(selectedPlan.price_cents),
+        'line_items[0][price_data][recurring][interval]': 'month',
         'line_items[0][quantity]': '1',
         'success_url': successUrl || 'https://graphcore.ai/billing?success=true',
         'cancel_url': cancelUrl || 'https://graphcore.ai/billing?canceled=true',
         'client_reference_id': user.id,
         'metadata[user_id]': user.id,
         'metadata[plan]': plan,
+        'subscription_data[metadata][user_id]': user.id,
+        'subscription_data[metadata][plan]': plan,
+        'subscription_data[metadata][credits_per_month]': String(selectedPlan.credits_per_month),
       }).toString(),
     })
 
-    const checkoutSession = await checkoutRes.json()
+    const checkoutSession = await checkoutRes.json() as StripeCheckoutSessionResponse
 
-    if (checkoutSession.error) {
+    if (checkoutSession.error || !checkoutSession.id || !checkoutSession.url) {
       return new Response(
-        JSON.stringify({ error: checkoutSession.error.message }),
+        JSON.stringify({ error: checkoutSession.error?.message ?? 'Unable to create subscription checkout session' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
@@ -168,18 +139,18 @@ Deno.serve(async (request) => {
     await supabase.from('subscriptions').upsert({
       user_id: user.id,
       stripe_subscription_id: `pending_${checkoutSession.id}`,
-      stripe_customer_id: customer.id,
+      stripe_customer_id: customerId,
       plan,
       status: 'trialing',
-      current_period_start: new Date(),
-      current_period_end: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      current_period_start: null,
+      current_period_end: null,
     }, { onConflict: 'user_id' })
 
     return new Response(
       JSON.stringify({ 
         url: checkoutSession.url,
         sessionId: checkoutSession.id,
-        customerId: customer.id
+        customerId
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )

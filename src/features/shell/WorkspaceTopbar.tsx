@@ -10,6 +10,7 @@ type WorkspaceTopbarProps = {
   games: GameSummary[]
   onOpenActivity: () => void
   onOpenAuth: () => void
+  onOpenBilling?: () => void
   onOpenNewGame: () => void
   onResetProjectWorld?: () => void
   onSelectGame: (projectId: string) => void
@@ -34,6 +35,7 @@ export function WorkspaceTopbar({
   isSignedIn,
   onOpenActivity,
   onOpenAuth,
+  onOpenBilling,
   onOpenNewGame,
   onResetProjectWorld,
   onSelectGame,
@@ -79,11 +81,17 @@ export function WorkspaceTopbar({
             </label>
           </div>
         ) : null}
-        <div className="topbar-credit-pill" aria-label={`AI credits ${displayCredits}`}>
+        <button
+          className="topbar-credit-pill"
+          aria-label={`AI credits ${displayCredits}`}
+          onClick={onOpenBilling}
+          type="button"
+          title="Open billing"
+        >
           <EntityIcon id="credits" />
           <span>AI Credits</span>
           <strong>{displayCredits.toLocaleString()}</strong>
-        </div>
+        </button>
         <details className="topbar-utility-menu">
           <summary className="ghost-button topbar-utility-trigger">Workspace</summary>
           <div className="topbar-utility-panel">

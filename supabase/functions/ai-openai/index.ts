@@ -1,7 +1,6 @@
 import '@supabase/functions-js/edge-runtime.d.ts'
 
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { requireUserClient } from '../_shared/auth.ts'
+import { createAdminClient, requireUserClient } from '../_shared/auth.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
 import { runOpenAiResponses, type OpenAiResponsesRequest } from '../_shared/openai.ts'
 
@@ -14,7 +13,30 @@ const MODEL_COSTS: Record<string, number> = {
   'gpt-3.5-turbo': 0.05,
 }
 
-function calculateCreditCost(usage: { prompt_tokens?: number; completion_tokens?: number }, model: string): number {
+type CreditBalanceRow = {
+  balance: number | null
+  lifetime_earned?: number | null
+  updated_at?: string | null
+}
+
+type OpenAiUsage = {
+  prompt_tokens?: number
+  completion_tokens?: number
+  total_tokens?: number
+}
+
+type OpenAiErrorPayload = {
+  message?: string
+}
+
+type OpenAiResponsesBody = Record<string, unknown> & {
+  id?: string
+  output?: unknown[]
+  usage?: OpenAiUsage | null
+  error?: OpenAiErrorPayload | string | null
+}
+
+function calculateCreditCost(usage: OpenAiUsage | null | undefined, model: string): number {
   const totalTokens = (usage.prompt_tokens || 0) + (usage.completion_tokens || 0)
   const costPer1K = MODEL_COSTS[model] || 0.1
   return Math.ceil((totalTokens / 1000) * costPer1K)
@@ -35,9 +57,7 @@ Deno.serve(async (request) => {
     const userClient = await requireUserClient(request, 'ai-openai')
     const user = userClient.user
 
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!
-    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-    const supabase = createClient(supabaseUrl, supabaseServiceKey)
+    const supabase = createAdminClient('ai-openai')
 
     const payload = (await request.json()) as OpenAiResponsesRequest
 
@@ -54,8 +74,12 @@ Deno.serve(async (request) => {
       user_id: user.id,
     })
 
-    const currentBalance = creditData?.[0]?.balance ?? 0
-    
+    if (creditError) {
+      throw new HttpError(500, 'Failed to load credit balance.')
+    }
+
+    const currentBalance = ((creditData as CreditBalanceRow[] | null)?.[0]?.balance) ?? 0
+
     if (currentBalance < 10) {
       return json(
         {
@@ -69,7 +93,8 @@ Deno.serve(async (request) => {
       )
     }
 
-    const { response: upstreamResponse, body: upstreamJson, outputText } = await runOpenAiResponses(payload)
+    const { response: upstreamResponse, body, outputText } = await runOpenAiResponses(payload)
+    const upstreamJson = body as OpenAiResponsesBody
 
     if (!upstreamResponse.ok) {
       console.error('[ai-openai] upstream request failed', {
@@ -82,7 +107,9 @@ Deno.serve(async (request) => {
       return json(
         {
           error: typeof upstreamJson.error === 'object' && upstreamJson.error !== null
-            ? (upstreamJson.error as { message?: string }).message ?? 'OpenAI request failed.'
+            ? upstreamJson.error.message ?? 'OpenAI request failed.'
+            : typeof upstreamJson.error === 'string'
+              ? upstreamJson.error
             : 'OpenAI request failed.',
           provider: 'openai',
           model: payload.model,
@@ -103,15 +130,15 @@ Deno.serve(async (request) => {
           p_amount: creditCost,
           p_reason: `AI generation: ${payload.model}`,
           p_reference_type: 'ai_generation',
-          p_reference_id: upstreamJson.id,
-          p_metadata: JSON.stringify({
+          p_reference_id: upstreamJson.id ?? null,
+          p_metadata: {
             model: payload.model,
             prompt_tokens: upstreamJson.usage.prompt_tokens,
             completion_tokens: upstreamJson.usage.completion_tokens,
             total_tokens: upstreamJson.usage.total_tokens,
-          }),
+          },
         })
-        
+
         console.log(`[ai-openai] Deducted ${creditCost} credits for user ${user.id}`)
       }
     }
@@ -131,7 +158,7 @@ Deno.serve(async (request) => {
       usage: upstreamJson.usage ?? null,
       credits: {
         cost: calculateCreditCost(upstreamJson.usage || {}, payload.model),
-        balance: updatedCreditData?.[0]?.balance ?? 0,
+        balance: ((updatedCreditData as CreditBalanceRow[] | null)?.[0]?.balance) ?? 0,
       },
       raw: upstreamJson,
     })
