@@ -45,6 +45,7 @@ export function WorkspaceTopbar({
   workspaceName,
 }: WorkspaceTopbarProps) {
   const displayCredits = creditBalance ?? 0
+  return (
     <header className="topbar">
       <div className="brand-cluster">
         <div className="brand-mark">G</div>
