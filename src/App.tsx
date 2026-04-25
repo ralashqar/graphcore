@@ -5266,6 +5266,7 @@ export default function App() {
           activeTab={activeTab}
           activeGameId={snapshot.project.id}
           canResetProjectWorld={loadedState?.source === 'supabase'}
+          creditBalance={null}
           currentUserEmail={session?.user.email ?? null}
           draftName={snapshot.draft.name}
           games={games}
