@@ -432,7 +432,7 @@ export function deriveContinuousWorldScene(input: DeriveWorldSceneInput): Derive
   const focusDepth = clampFocusDepth(input.focusDepth)
   const graphDepthMode = input.graphDepthMode ?? 'nearby'
   const explorationDistance = focusDepth + (graphDepthMode === 'tight' ? 1 : graphDepthMode === 'wide' ? 3 : 2)
-  const includeAllGlobalContext = input.viewKind === 'global_overview' && !input.focusRootKey && graphDepthMode === 'wide'
+  const includeAllGlobalContext = input.viewKind === 'global_overview' && graphDepthMode === 'wide'
 
   const relationshipAdjacency = new Map<string, Set<string>>()
   const relationshipDegree = new Map<string, number>()

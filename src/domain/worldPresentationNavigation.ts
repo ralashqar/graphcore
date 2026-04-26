@@ -7,7 +7,7 @@ export type WorldPresentationMode = 'world' | 'story'
 export type WorldBreadcrumbSegment = {
   id: string
   label: string
-  tone: 'mode' | 'view' | 'thread' | 'focus'
+  tone: 'mode' | 'view' | 'thread' | 'focus' | 'turn'
 }
 
 function sanitizeKeys(values: string[] | undefined | null) {
@@ -33,6 +33,8 @@ export function buildWorldBreadcrumbSegments(input: {
   mode: WorldPresentationMode
   baseViewName: string
   activeThreadTitle?: string | null
+  activeTurnLabel?: string | null
+  activeTurnId?: string | null
   focusLabels?: string[]
 }) {
   const segments: WorldBreadcrumbSegment[] = [
@@ -53,6 +55,14 @@ export function buildWorldBreadcrumbSegments(input: {
       id: `thread:${input.activeThreadTitle}`,
       label: input.activeThreadTitle.trim(),
       tone: 'thread',
+    })
+  }
+
+  if (input.activeTurnLabel?.trim()) {
+    segments.push({
+      id: `turn:${input.activeTurnId ?? input.activeTurnLabel}`,
+      label: input.activeTurnLabel.trim(),
+      tone: 'turn',
     })
   }
 

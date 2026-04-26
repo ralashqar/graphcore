@@ -4280,6 +4280,30 @@ button.world-prompt-row-result {
   color: rgba(236, 253, 245, 0.84);
 }
 
+.world-breadcrumb-turn {
+  color: rgba(251, 191, 36, 0.92);
+}
+
+.world-breadcrumb-clear {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(251, 191, 36, 0.26);
+  border-radius: 999px;
+  background: rgba(251, 191, 36, 0.08);
+  color: rgba(254, 243, 199, 0.82);
+  font-size: 0.68rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.world-breadcrumb-clear:hover {
+  background: rgba(251, 191, 36, 0.18);
+  color: var(--text);
+}
+
 .world-toolbar-heading h3 {
   margin: 0;
   font-size: 1.05rem;
@@ -4425,8 +4449,8 @@ button.world-prompt-row-result {
 
 .world-view-workspace {
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
-  gap: 14px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
   min-height: 0;
   flex: 1;
 }

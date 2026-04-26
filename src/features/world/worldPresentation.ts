@@ -83,25 +83,6 @@ export type WorldPromptTurnLens = {
   }
 }
 
-export type WorldGraphContextChipTone = 'neutral' | 'mode' | 'focus' | 'lens' | 'thread' | 'history'
-
-export type WorldGraphContextChipAction =
-  | 'switch_mode'
-  | 'reset_base_view'
-  | 'exit_focus'
-  | 'center_lens'
-  | 'exit_lens'
-  | 'back'
-
-export type WorldGraphContextChip = {
-  id: string
-  label: string
-  detail: string
-  tone: WorldGraphContextChipTone
-  actionKind: WorldGraphContextChipAction | null
-  secondaryActionKind?: WorldGraphContextChipAction | null
-}
-
 export type WorldEdgeRevealReason = 'lens' | 'selected' | 'focus_hover' | 'story' | 'hidden'
 
 export type WorldEdgeReveal = {
@@ -412,78 +393,6 @@ export function buildWorldGraphGrowthPlaybackModel(input: {
     canGoPrevious: activeIndex > 0,
     canGoNext: activeIndex >= 0 && activeIndex < steps.length - 1,
   }
-}
-
-export function buildWorldGraphContextChips(input: {
-  mode: 'world' | 'story'
-  baseViewName: string
-  baseViewKind?: string | null
-  focusName?: string | null
-  focusDepth?: number | null
-  activeThreadTitle?: string | null
-  activeTurnLens?: Pick<WorldPromptTurnLens, 'label' | 'prompt' | 'counts'> | null
-  canGoBack: boolean
-  isManualSnapshot?: boolean
-}): WorldGraphContextChip[] {
-  const chips: WorldGraphContextChip[] = [
-    {
-      id: 'mode',
-      label: 'Mode',
-      detail: input.mode === 'story' ? 'Story' : 'World',
-      tone: 'mode',
-      actionKind: 'switch_mode',
-    },
-    {
-      id: 'base-view',
-      label: 'Base View',
-      detail: input.isManualSnapshot ? `${input.baseViewName} snapshot` : input.baseViewName,
-      tone: 'neutral',
-      actionKind: 'reset_base_view',
-    },
-  ]
-
-  if (input.mode === 'story' && input.activeThreadTitle) {
-    chips.push({
-      id: 'thread',
-      label: 'Thread',
-      detail: input.activeThreadTitle,
-      tone: 'thread',
-      actionKind: null,
-    })
-  }
-
-  if (input.focusName) {
-    chips.push({
-      id: 'focus',
-      label: 'Focus',
-      detail: input.focusDepth && input.focusDepth > 1 ? `${input.focusName} +${input.focusDepth}` : input.focusName,
-      tone: 'focus',
-      actionKind: 'exit_focus',
-    })
-  }
-
-  if (input.activeTurnLens) {
-    chips.push({
-      id: 'turn-lens',
-      label: 'Turn Lens',
-      detail: input.activeTurnLens.label,
-      tone: 'lens',
-      actionKind: 'center_lens',
-      secondaryActionKind: 'exit_lens',
-    })
-  }
-
-  if (input.canGoBack) {
-    chips.push({
-      id: 'back',
-      label: 'Back',
-      detail: 'Previous graph context',
-      tone: 'history',
-      actionKind: 'back',
-    })
-  }
-
-  return chips
 }
 
 export function buildWorldNodeVisibilityReason(input: {

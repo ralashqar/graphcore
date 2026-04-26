@@ -76,7 +76,6 @@ import {
   activePreviewForTurn,
   DEFAULT_WORLD_GRAPH_DISPLAY_FILTERS,
   buildWorldGraphFilterState,
-  buildWorldGraphContextChips,
   buildWorldGraphGrowthPlaybackModel,
   buildWorldGraphLabelPolicy,
   buildWorldGraphPresentationPresetConfig,
@@ -88,7 +87,6 @@ import {
   nodeShellStyle,
   resolveWorldEdgeReveal,
   worldNodeDataEqual,
-  type WorldGraphContextChip,
   type WorldGraphDisplayFilterKey,
   type WorldGraphDisplayFilters,
   type WorldGraphNodeRecord,
@@ -512,8 +510,8 @@ function WorldNodeCard({ data, selected }: NodeProps<Node<WorldNodeData>>) {
 
   return (
     <div className={className} style={nodeShellStyle(record, selected, dimmed, visualMode)} aria-label={tooltip}>
-      <Handle id={WORLD_NODE_TARGET_HANDLE} className={`world-node-handle${visualMode === 'card' ? '' : ' is-compact'}`} position={Position.Left} type="target" />
-      <Handle id={WORLD_NODE_SOURCE_HANDLE} className={`world-node-handle${visualMode === 'card' ? '' : ' is-compact'}`} position={Position.Right} type="source" />
+      <Handle id={WORLD_NODE_TARGET_HANDLE} className="world-node-handle is-compact" position={Position.Left} type="target" />
+      <Handle id={WORLD_NODE_SOURCE_HANDLE} className="world-node-handle is-compact" position={Position.Right} type="source" />
       <div className="world-node-dot-shell" aria-label={tooltip}>
         <div className="world-node-dot-core">
           {hasImage ? <img alt={title} src={imageUrl!} /> : <EntityIcon id={iconId} />}
@@ -1171,10 +1169,6 @@ export function WorldGraphPage({
     focusDepth: number
     layoutMode: 'preserve' | 'reflow'
   } | null>(null)
-  const [viewHistory, setViewHistory] = useState<Array<{
-    viewKey: string | null
-    transientFocus: { rootEntityKey: string | null; focusDepth: number; layoutMode: 'preserve' | 'reflow' } | null
-  }>>([])
   const defaultWorldViewRef = useRef<WorldView>(createDefaultGlobalWorldView())
   const globalOverviewView = useMemo(
     () => worldViews.find((view) => getWorldViewSemanticMetadata(view).viewKind === 'global_overview') ?? null,
@@ -1403,7 +1397,7 @@ export function WorldGraphPage({
     }),
     [manualGraphDepthMode, presentationMode, presentationPreset],
   )
-  const graphDepthMode: WorldGraphDepthMode = selectedViewMetadata.viewKind === 'global_overview' && !transientFocus
+  const graphDepthMode: WorldGraphDepthMode = (selectedViewMetadata.viewKind === 'global_overview' || Boolean(transientFocus))
     ? 'wide'
     : graphPresetConfig.depthMode
   const protectedPinnedNodeKeys = useMemo(
@@ -1560,8 +1554,8 @@ export function WorldGraphPage({
     })
     setAutoLayoutNonce((value) => value + 1)
   }, [isSavedManualGraphView, selectedView.nodePositions, viewLayoutResetKey])
+  const graphSearchQuery = search.trim().toLowerCase()
   const filteredEntities = useMemo(() => {
-    const query = search.trim().toLowerCase()
     return worldEntities.filter((entity) => {
       if (entity.status === 'archived') return false
       if (effectiveFilters.nodeTypes.length > 0 && !effectiveFilters.nodeTypes.includes(entity.nodeType)) return false
@@ -1569,16 +1563,47 @@ export function WorldGraphPage({
       if (effectiveFilters.unlinkedOnly && entity.linkedDefinitionKey) return false
       if (effectiveFilters.usedInCinematic && (usageByEntityKey.get(entity.key)?.length ?? 0) === 0) return false
       if (effectiveFilters.aiSuggestedOnly && entity.source === 'user') return false
-      if (!query) return true
-      return (
-        entity.name.toLowerCase().includes(query)
-        || entity.summary.toLowerCase().includes(query)
-        || entity.context.toLowerCase().includes(query)
-        || entity.aliases.some((alias) => alias.toLowerCase().includes(query))
-        || entity.tags.some((tag) => tag.toLowerCase().includes(query))
-      )
+      return true
     })
-  }, [effectiveFilters, search, usageByEntityKey, worldEntities])
+  }, [effectiveFilters, usageByEntityKey, worldEntities])
+
+  const graphSearchMatchedNodeKeys = useMemo(() => {
+    if (!graphSearchQuery) return new Set<string>()
+    const matches = new Set<string>()
+    const includesQuery = (value: unknown) => (
+      typeof value === 'string' && value.toLowerCase().includes(graphSearchQuery)
+    )
+    for (const entity of worldEntities) {
+      if (
+        includesQuery(entity.name)
+        || includesQuery(entity.summary)
+        || includesQuery(entity.context)
+        || entity.aliases.some(includesQuery)
+        || entity.tags.some(includesQuery)
+      ) {
+        matches.add(entity.key)
+      }
+    }
+    for (const operator of worldOperators) {
+      if (
+        includesQuery(operator.label)
+        || includesQuery(labelForWorldOperator(operator.operatorType))
+        || operator.inputEntityKeys.some((key) => includesQuery(entityByKey.get(key)?.name ?? key))
+      ) {
+        matches.add(operator.key)
+      }
+    }
+    for (const result of worldResults) {
+      if (
+        includesQuery(result.title)
+        || includesQuery(result.summary)
+        || includesQuery(labelForWorldResult(result.resultType))
+      ) {
+        matches.add(result.key)
+      }
+    }
+    return matches
+  }, [entityByKey, graphSearchQuery, worldEntities, worldOperators, worldResults])
 
   const filteredEntityKeyList = useMemo(
     () => [...new Set([...filteredEntities.map((entity) => entity.key), ...activeLensEntityKeySet])],
@@ -1626,7 +1651,7 @@ export function WorldGraphPage({
       selectedNodeKey: null,
       focusRootKey: selectedView.rootEntityKey,
       presentationMode,
-      viewKind: selectedViewMetadata.viewKind,
+      viewKind: transientFocus ? 'global_overview' : selectedViewMetadata.viewKind,
       focusDepth: selectedView.focusDepth,
       showDerivedLayer: effectiveDerivedLayerVisible,
       graphDepthMode,
@@ -1659,14 +1684,11 @@ export function WorldGraphPage({
     () => (focusRootKey ? worldEntities.find((entity) => entity.key === focusRootKey) ?? null : null),
     [focusRootKey, worldEntities],
   )
-  const focusedOperator = useMemo(
-    () => (focusRootKey ? worldOperators.find((entry) => entry.key === focusRootKey) ?? null : null),
-    [focusRootKey, worldOperators],
-  )
-  const focusedResult = useMemo(
-    () => (focusRootKey ? worldResults.find((entry) => entry.key === focusRootKey) ?? null : null),
-    [focusRootKey, worldResults],
-  )
+  const activeTurnBreadcrumbLabel = useMemo(() => {
+    if (!activeTurnLens) return null
+    const turnIndex = sessionTurns.findIndex((turn) => turn.id === activeTurnLens.turnId)
+    return turnIndex >= 0 ? `Turn ${turnIndex + 1}` : 'Turn changes'
+  }, [activeTurnLens, sessionTurns])
   const breadcrumbSegments = useMemo(
     () => buildWorldBreadcrumbSegments({
       mode: presentationMode,
@@ -1674,38 +1696,12 @@ export function WorldGraphPage({
         ? transientBaseView.name || 'Living World'
         : persistedSelectedView.name || 'Living World',
       activeThreadTitle: presentationMode === 'story' ? activeStoryThread?.title ?? null : null,
+      activeTurnLabel: activeTurnBreadcrumbLabel,
+      activeTurnId: activeTurnLens?.turnId ?? null,
       focusLabels: focusRootKey && focusedEntity ? [focusedEntity.name] : [],
     }),
-    [activeStoryThread?.title, focusRootKey, focusedEntity, persistedSelectedView.name, presentationMode, transientBaseView.name, transientFocus],
+    [activeStoryThread?.title, activeTurnBreadcrumbLabel, activeTurnLens?.turnId, focusRootKey, focusedEntity, persistedSelectedView.name, presentationMode, transientBaseView.name, transientFocus],
   )
-  const focusDisplayName = focusedEntity?.name ?? focusedOperator?.label ?? focusedResult?.title ?? null
-  const graphContextChips = useMemo(
-    () => buildWorldGraphContextChips({
-      mode: presentationMode,
-      baseViewName: transientFocus
-        ? transientBaseView.name || 'Living World'
-        : persistedSelectedView.name || 'Living World',
-      focusName: focusDisplayName,
-      focusDepth: transientFocus?.focusDepth ?? selectedView.focusDepth,
-      activeThreadTitle: presentationMode === 'story' ? activeStoryThread?.title ?? null : null,
-      activeTurnLens,
-      canGoBack: viewHistory.length > 0,
-      isManualSnapshot: isSavedManualGraphView,
-    }),
-    [
-      activeStoryThread?.title,
-      activeTurnLens,
-      focusDisplayName,
-      isSavedManualGraphView,
-      persistedSelectedView.name,
-      presentationMode,
-      selectedView.focusDepth,
-      transientBaseView.name,
-      transientFocus,
-      viewHistory.length,
-    ],
-  )
-
   const visibleNodeKeys = useMemo(
     () => new Set(continuousScene.targetNodeKeys),
     [continuousScene.targetNodeKeys],
@@ -2113,6 +2109,7 @@ export function WorldGraphPage({
       const visualMode = sceneNode?.visualMode ?? worldNodeVisualModeFor(displayTier, key, selectedWorldNodeKey, inspectorNodeKey, selectedAdjacentNodeKeys)
       const transitionState = sceneNode?.transitionState ?? 'stable'
       const highlighted = activeLensNodeKeySet.has(key)
+      const searchDimmed = graphSearchQuery.length > 0 && !graphSearchMatchedNodeKeys.has(key)
       const branchLabel = sceneNode?.firstHopEntityKey ? entityByKey.get(sceneNode.firstHopEntityKey)?.name ?? null : null
       const isTurnLensEndpoint = activeLensRelationshipEndpointKeySet.has(key) && !activeLensNodeKeySet.has(key)
       const visibilityReason = buildWorldNodeVisibilityReason({
@@ -2174,9 +2171,9 @@ export function WorldGraphPage({
             : record.kind === 'result' && typeof record.result.metadata?.cinematicGraphKey === 'string'
               ? 1
               : 0,
-          dimmed: presentationMode === 'story'
+          dimmed: searchDimmed || (presentationMode === 'story'
             ? !inStoryPath && !isPinned
-            : transitionState === 'exiting',
+            : transitionState === 'exiting'),
           pinned: isPinned,
           storyLinked: inStoryPath,
           displayTier,
@@ -2191,7 +2188,7 @@ export function WorldGraphPage({
         },
       }
     })
-  }, [activeLensNodeKeySet, activeLensRelationshipEndpointKeySet, activePinnedNodeKeys, animatedNodeKeys, draftPositions, entityByKey, focusRootKey, graphPresetConfig.preset, hoveredWorldNodeKey, inspectorNodeKey, isSavedManualGraphView, presentationMode, relationCountByNodeKey, renderSceneNodes, sceneRevealNodeKeys, selectedAdjacentNodeKeys, selectedWorldNodeKey, showLabels, usageByEntityKey, viewMode, viewportZoom, visibleNodeRecords, visibleStoryThreadEntityKeys])
+  }, [activeLensNodeKeySet, activeLensRelationshipEndpointKeySet, activePinnedNodeKeys, animatedNodeKeys, draftPositions, entityByKey, focusRootKey, graphPresetConfig.preset, graphSearchMatchedNodeKeys, graphSearchQuery.length, hoveredWorldNodeKey, inspectorNodeKey, isSavedManualGraphView, presentationMode, relationCountByNodeKey, renderSceneNodes, sceneRevealNodeKeys, selectedAdjacentNodeKeys, selectedWorldNodeKey, showLabels, usageByEntityKey, viewMode, viewportZoom, visibleNodeRecords, visibleStoryThreadEntityKeys])
   const flowNodesSignature = useMemo(
     () => flowNodes.map((node) => {
       const record = node.data.record
@@ -2745,46 +2742,17 @@ export function WorldGraphPage({
     viewKey: string | null,
     options?: {
       transientFocus?: { rootEntityKey: string | null; focusDepth: number; layoutMode?: 'preserve' | 'reflow' } | null
-      preserveHistory?: boolean
     },
   ) {
     setActiveTurnLens(null)
     setFlashTurnLens(null)
     const resolvedViewKey = globalOverviewView?.key ?? persistedSelectedView.key ?? viewKey
     const nextTransientFocus = options?.transientFocus ?? null
-    const currentViewKey = globalOverviewView?.key ?? persistedSelectedView.key ?? selectedWorldViewKey ?? null
-    const currentTransient = transientFocus
-      ? {
-          rootEntityKey: transientFocus.rootEntityKey,
-          focusDepth: transientFocus.focusDepth,
-          layoutMode: transientFocus.layoutMode,
-        }
-      : null
-    if (!options?.preserveHistory && (currentViewKey !== viewKey || JSON.stringify(currentTransient) !== JSON.stringify(nextTransientFocus))) {
-      setViewHistory((current) => [
-        ...current.slice(-23),
-        { viewKey: currentViewKey, transientFocus: currentTransient },
-      ])
-    }
     setTransientFocus(nextTransientFocus ? {
       sourceViewKey: resolvedViewKey,
       rootEntityKey: nextTransientFocus.rootEntityKey,
       focusDepth: nextTransientFocus.focusDepth,
       layoutMode: nextTransientFocus.layoutMode ?? 'preserve',
-    } : null)
-    _onSelectWorldView(resolvedViewKey)
-  }
-
-  function handleBackToPreviousView() {
-    const previous = viewHistory[viewHistory.length - 1] ?? null
-    if (!previous) return
-    const resolvedViewKey = globalOverviewView?.key ?? persistedSelectedView.key ?? previous.viewKey
-    setViewHistory((current) => current.slice(0, -1))
-    setTransientFocus(previous.transientFocus ? {
-      sourceViewKey: resolvedViewKey,
-      rootEntityKey: previous.transientFocus.rootEntityKey,
-      focusDepth: previous.transientFocus.focusDepth,
-      layoutMode: previous.transientFocus.layoutMode,
     } : null)
     _onSelectWorldView(resolvedViewKey)
   }
@@ -2870,36 +2838,6 @@ export function WorldGraphPage({
     openGrowthPlaybackStep(steps[nextIndex] ?? null)
   }
 
-  function handleGraphContextChipAction(actionKind: WorldGraphContextChip['actionKind']) {
-    switch (actionKind) {
-      case 'switch_mode':
-        setPresentationMode((mode) => (mode === 'story' ? 'world' : 'story'))
-        break
-      case 'reset_base_view':
-        navigateToWorldView(transientFocus?.sourceViewKey ?? selectedWorldViewKey ?? persistedSelectedView.key, {
-          transientFocus: null,
-          preserveHistory: true,
-        })
-        break
-      case 'exit_focus':
-        clearTransientFocus()
-        break
-      case 'center_lens':
-        if (activeTurnLens) {
-          openTurnLens(activeTurnLens)
-        }
-        break
-      case 'exit_lens':
-        clearTurnLens()
-        break
-      case 'back':
-        handleBackToPreviousView()
-        break
-      case null:
-        break
-    }
-  }
-
   function focusCurrentViewOnEntity(entityKey: string, options?: { layoutMode?: 'preserve' | 'reflow' }) {
     openTransientNeighborhood(entityKey, 1, options?.layoutMode ?? 'preserve')
   }
@@ -2934,14 +2872,28 @@ export function WorldGraphPage({
 
   function handleBreadcrumbClick(segmentId: string) {
     if (segmentId.startsWith('mode:')) {
-      setPresentationMode(segmentId === 'mode:story' ? 'story' : 'world')
+      if (segmentId === 'mode:world') {
+        openGlobalOverview()
+        return
+      }
+      setPresentationMode('story')
+      return
+    }
+    if (segmentId.startsWith('focus:')) {
+      clearTransientFocus()
       return
     }
     if (segmentId.startsWith('view:')) {
       if (transientFocus) {
         clearTransientFocus()
       } else if (persistedSelectedView.key) {
-        navigateToWorldView(persistedSelectedView.key, { transientFocus: null, preserveHistory: true })
+        navigateToWorldView(persistedSelectedView.key, { transientFocus: null })
+      }
+      return
+    }
+    if (segmentId.startsWith('turn:')) {
+      if (activeTurnLens) {
+        openTurnLens(activeTurnLens)
       }
       return
     }
@@ -3510,16 +3462,31 @@ export function WorldGraphPage({
                 {breadcrumbSegments.map((segment, index) => (
                   <span key={segment.id} className="world-breadcrumb-item">
                     {index > 0 ? <span className="world-breadcrumb-separator">/</span> : null}
-                    <button
-                      className={`world-breadcrumb world-breadcrumb-${segment.tone}`}
-                      onClick={() => handleBreadcrumbClick(segment.id)}
-                      type="button"
-                    >
-                      {segment.label}
-                    </button>
-                  </span>
-                ))}
-              </div>
+                <button
+                  className={`world-breadcrumb world-breadcrumb-${segment.tone}`}
+                  onClick={() => handleBreadcrumbClick(segment.id)}
+                  title={segment.tone === 'turn' && activeTurnLens?.prompt ? activeTurnLens.prompt : undefined}
+                  type="button"
+                >
+                  {segment.label}
+                </button>
+                {segment.tone === 'turn' ? (
+                  <button
+                    aria-label="Exit turn view"
+                    className="world-breadcrumb-clear"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      clearTurnLens()
+                    }}
+                    title="Exit turn view"
+                    type="button"
+                  >
+                    x
+                  </button>
+                ) : null}
+              </span>
+            ))}
+          </div>
             </div>
           </div>
           <div className="world-graph-toolbar-actions world-shell-toolbar-main">
@@ -3652,101 +3619,7 @@ export function WorldGraphPage({
         </div>
 
         <div className="world-view-workspace">
-          <aside className="world-view-rail">
-            <div className="world-view-rail-section">
-              <div className="world-view-rail-heading">
-                <span className="eyebrow">Navigation</span>
-                <strong>Global Atlas</strong>
-              </div>
-              <div className="world-view-rail-actions">
-                <button className="ghost-button compact" disabled={viewHistory.length === 0} onClick={handleBackToPreviousView} type="button">Back</button>
-              </div>
-            </div>
-
-            <div className="world-view-rail-section">
-              <span className="eyebrow">Global Overview</span>
-              {globalOverviewView ? (
-                <button
-                  className={globalOverviewView.key === persistedSelectedView.key && !transientFocus ? 'world-view-rail-button is-active' : 'world-view-rail-button'}
-                  onClick={() => openGlobalOverview()}
-                  type="button"
-                >
-                  <strong>{globalOverviewView.name}</strong>
-                  <span>{getWorldViewSemanticMetadata(globalOverviewView).semanticLabel ?? 'Full atlas'}</span>
-                </button>
-              ) : (
-                <button className="world-view-rail-button is-active" onClick={() => openGlobalOverview()} type="button">
-                  <strong>{persistedSelectedView.name || 'Global Overview'}</strong>
-                  <span>Full atlas</span>
-                </button>
-              )}
-            </div>
-
-            {pinnedEntities.length > 0 ? (
-              <div className="world-view-rail-section">
-                <span className="eyebrow">Pinned Nodes</span>
-                <div className="world-view-rail-list">
-                  {pinnedEntities.map((entity) => (
-                    <button
-                      key={entity.key}
-                      className={focusRootKey === entity.key ? 'world-view-rail-button is-active' : 'world-view-rail-button'}
-                      onClick={() => openTransientNeighborhood(entity.key, 1)}
-                      type="button"
-                    >
-                      <strong>{entity.name}</strong>
-                      <span>{entity.summary || labelForWorldEntity(entity.nodeType)}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-          </aside>
-
           <div className="world-view-stage">
-            <div className="world-context-strip" aria-label="Graph context">
-              {graphContextChips.map((chip) => (
-                <div key={chip.id} className={`world-context-chip is-${chip.tone}`}>
-                  <span className="world-context-chip-label">{chip.label}</span>
-                  <button
-                    className="world-context-chip-main"
-                    disabled={!chip.actionKind}
-                    onClick={() => handleGraphContextChipAction(chip.actionKind)}
-                    title={`${chip.label}: ${chip.detail}`}
-                    type="button"
-                  >
-                    {chip.detail}
-                  </button>
-                  {chip.secondaryActionKind ? (
-                    <button
-                      aria-label={`Exit ${chip.label}`}
-                      className="world-context-chip-close"
-                      onClick={() => handleGraphContextChipAction(chip.secondaryActionKind ?? null)}
-                      type="button"
-                    >
-                      x
-                    </button>
-                  ) : null}
-                </div>
-              ))}
-              {focusRootKey ? (
-                <>
-                  <button
-                    className="world-context-strip-action"
-                    onClick={() => setTransientFocus({
-                      sourceViewKey: globalOverviewView?.key ?? transientFocus?.sourceViewKey ?? persistedSelectedView.key ?? selectedWorldViewKey,
-                      rootEntityKey: focusRootKey,
-                      focusDepth: Math.min(2, selectedView.focusDepth + 1),
-                      layoutMode: transientFocus?.layoutMode ?? 'preserve',
-                    })}
-                    type="button"
-                  >
-                    Expand
-                  </button>
-                  <button className="world-context-strip-action" onClick={() => openTransientNeighborhood(focusRootKey, 1)} type="button">Reset</button>
-                </>
-              ) : null}
-            </div>
-
             {growthPlaybackModel.steps.length > 0 ? (
               <div className="world-growth-playback" aria-label="World growth playback">
                 <span className="world-growth-playback-kicker">Growth</span>

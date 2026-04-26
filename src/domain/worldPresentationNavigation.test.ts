@@ -70,9 +70,20 @@ test('buildWorldBreadcrumbSegments creates world and story breadcrumb trails', (
       mode: 'story',
       baseViewName: 'Sea-Mist Vanishings',
       activeThreadTitle: 'Sea-Mist Vanishings',
+      activeTurnLabel: 'Turn 3',
+      activeTurnId: 'turn-3',
       focusLabels: ['Elian Vale'],
     }).map((segment) => segment.label),
-    ['Story', 'Sea-Mist Vanishings', 'Sea-Mist Vanishings', 'Elian Vale'],
+    ['Story', 'Sea-Mist Vanishings', 'Sea-Mist Vanishings', 'Turn 3', 'Elian Vale'],
+  )
+  assert.equal(
+    buildWorldBreadcrumbSegments({
+      mode: 'world',
+      baseViewName: 'Global Overview',
+      activeTurnLabel: 'Turn 3',
+      activeTurnId: 'turn-3',
+    }).find((segment) => segment.tone === 'turn')?.id,
+    'turn:turn-3',
   )
 })
 

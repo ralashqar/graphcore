@@ -3,7 +3,6 @@ import assert from 'node:assert/strict'
 
 import {
   buildWorldGraphFilterState,
-  buildWorldGraphContextChips,
   buildWorldGraphGrowthPlaybackModel,
   buildWorldGraphLabelPolicy,
   buildWorldGraphPresentationPresetConfig,
@@ -307,41 +306,6 @@ test('buildWorldPromptTurnLenses derives relationship and derived-result lens ke
     derived: 2,
     total: 5,
   })
-})
-
-test('buildWorldGraphContextChips orders base orientation state', () => {
-  const chips = buildWorldGraphContextChips({
-    mode: 'world',
-    baseViewName: 'Royal Court',
-    focusName: null,
-    activeTurnLens: null,
-    canGoBack: false,
-  })
-
-  assert.deepEqual(chips.map((chip) => chip.id), ['mode', 'base-view'])
-  assert.equal(chips[0]?.detail, 'World')
-  assert.equal(chips[1]?.detail, 'Royal Court')
-})
-
-test('buildWorldGraphContextChips keeps focus and turn lens independent', () => {
-  const chips = buildWorldGraphContextChips({
-    mode: 'story',
-    baseViewName: 'Court Thread',
-    focusName: 'Mira',
-    focusDepth: 2,
-    activeThreadTitle: 'Succession Crisis',
-    activeTurnLens: {
-      label: '5 nodes / 3 links / 1 derived',
-      prompt: 'Expand the crisis.',
-      counts: { entities: 5, relationships: 3, derived: 1, total: 9 },
-    },
-    canGoBack: true,
-  })
-
-  assert.deepEqual(chips.map((chip) => chip.id), ['mode', 'base-view', 'thread', 'focus', 'turn-lens', 'back'])
-  assert.equal(chips.find((chip) => chip.id === 'focus')?.actionKind, 'exit_focus')
-  assert.equal(chips.find((chip) => chip.id === 'turn-lens')?.actionKind, 'center_lens')
-  assert.equal(chips.find((chip) => chip.id === 'turn-lens')?.secondaryActionKind, 'exit_lens')
 })
 
 test('buildWorldGraphPresentationPresetConfig applies depth defaults and manual override', () => {
