@@ -3599,6 +3599,18 @@ button.world-prompt-row-result {
   transition: opacity 220ms ease;
 }
 
+.world-graph-canvas .react-flow__node.is-flow-mode-nearIcon,
+.world-graph-canvas .react-flow__node.is-flow-mode-farIcon,
+.world-graph-canvas .react-flow__node.is-flow-mode-peripheralDot {
+  pointer-events: none;
+}
+
+.world-graph-canvas .react-flow__node.is-flow-mode-nearIcon .world-node-dot-shell,
+.world-graph-canvas .react-flow__node.is-flow-mode-farIcon .world-node-dot-shell,
+.world-graph-canvas .react-flow__node.is-flow-mode-peripheralDot .world-node-dot-shell {
+  pointer-events: auto;
+}
+
 .world-node-card.is-mode-card.is-tier-focus {
   min-width: 126px;
   max-width: 170px;

@@ -47,6 +47,7 @@ type DeriveWorldSceneInput = {
   graphDepthMode?: WorldGraphDepthMode
   enabledEntityTypes?: WorldEntity['nodeType'][] | null
   protectedNodeKeys?: string[] | null
+  includeAllContext?: boolean
 }
 
 function sanitizeKeys(values: string[] | undefined | null) {
@@ -434,7 +435,8 @@ export function deriveContinuousWorldScene(input: DeriveWorldSceneInput): Derive
   const focusDepth = clampFocusDepth(input.focusDepth)
   const graphDepthMode = input.graphDepthMode ?? 'nearby'
   const explorationDistance = focusDepth + (graphDepthMode === 'tight' ? 1 : graphDepthMode === 'wide' ? 3 : 2)
-  const includeAllGlobalContext = input.viewKind === 'global_overview' && graphDepthMode === 'wide'
+  const includeAllAtlasContext = Boolean(input.includeAllContext) || (input.viewKind === 'global_overview' && graphDepthMode === 'wide')
+  const keepUnreachableContextOuter = Boolean(input.includeAllContext)
 
   const relationshipAdjacency = new Map<string, Set<string>>()
   const relationshipDegree = new Map<string, number>()
@@ -465,7 +467,7 @@ export function deriveContinuousWorldScene(input: DeriveWorldSceneInput): Derive
       const protectedNode = protectedNodeKeySet.has(entity.key) || entity.key === rootEntityKey || pinned || story
       const typeFiltered = Boolean(enabledEntityTypeSet && !enabledEntityTypeSet.has(entity.nodeType) && !protectedNode)
       const reachable = distance !== null
-      if (!reachable && !includeAllGlobalContext && !pinned && !(input.presentationMode === 'story' && story) && !protectedNode) {
+      if (!reachable && !includeAllAtlasContext && !pinned && !(input.presentationMode === 'story' && story) && !protectedNode) {
         return null
       }
       return {
@@ -497,7 +499,7 @@ export function deriveContinuousWorldScene(input: DeriveWorldSceneInput): Derive
     presentationMode: input.presentationMode,
     graphDepthMode,
   })
-  if (includeAllGlobalContext) {
+  if (includeAllAtlasContext) {
     farBudget = Math.max(farBudget, Math.min(64, Math.ceil(candidateCountExcludingRoot * 0.34)))
     peripheralBudget = Math.max(peripheralBudget, candidateCountExcludingRoot)
   }
@@ -520,6 +522,9 @@ export function deriveContinuousWorldScene(input: DeriveWorldSceneInput): Derive
   const nearSelected = new Set<string>()
   const farSelected = new Set<string>()
   const peripheralSelected = new Set<string>()
+  const canPromoteToInnerContext = (candidate: EntityVisibilityCandidate) => (
+    !keepUnreachableContextOuter || candidate.distance !== null || candidate.protected
+  )
 
   const directCandidates = nonRootCandidates.filter((candidate) => candidate.distance === 1)
   for (const candidate of directCandidates.filter((candidate) => !candidate.typeFiltered || candidate.protected)) {
@@ -530,6 +535,7 @@ export function deriveContinuousWorldScene(input: DeriveWorldSceneInput): Derive
   for (const candidate of nonRootCandidates.filter((candidate) => !candidate.typeFiltered || candidate.protected)) {
     if (nearSelected.size >= nearBudget) break
     if (nearSelected.has(candidate.entity.key)) continue
+    if (!canPromoteToInnerContext(candidate)) continue
     nearSelected.add(candidate.entity.key)
   }
 
@@ -550,6 +556,7 @@ export function deriveContinuousWorldScene(input: DeriveWorldSceneInput): Derive
   for (const candidate of nonRootCandidates.filter((candidate) => !candidate.typeFiltered || candidate.protected)) {
     if (farSelected.size >= farBudget) break
     if (nearSelected.has(candidate.entity.key) || farSelected.has(candidate.entity.key)) continue
+    if (!canPromoteToInnerContext(candidate)) continue
     farSelected.add(candidate.entity.key)
   }
 

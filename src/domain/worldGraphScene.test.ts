@@ -303,6 +303,62 @@ test('deriveContinuousWorldScene graph depth mode expands outer radar context wi
   assert.equal(thirdHop.some((entity) => Boolean(wideScene.nodeByKey[entity.key])), true)
 })
 
+test('deriveContinuousWorldScene keeps focused atlas overflow in outer tiers', () => {
+  const root = createEntity({ key: 'world.actor.root', name: 'Root', nodeType: 'actor' })
+  const neighbor = createEntity({ key: 'world.actor.neighbor', name: 'Neighbor', nodeType: 'actor' })
+  const secondHop = createEntity({ key: 'world.place.second', name: 'Second Hop', nodeType: 'place' })
+  const unrelatedNodes = Array.from({ length: 12 }, (_, index) =>
+    createEntity({ key: `world.concept.unrelated${index + 1}`, name: `Unrelated ${index + 1}`, nodeType: 'concept' }))
+  const entities = [root, neighbor, secondHop, ...unrelatedNodes]
+  const relationships: WorldRelationship[] = [
+    createRelationship({ key: 'r-root-neighbor', sourceEntityKey: root.key, targetEntityKey: neighbor.key, verb: 'knows' }),
+    createRelationship({ key: 'r-neighbor-second', sourceEntityKey: neighbor.key, targetEntityKey: secondHop.key, verb: 'guards' }),
+  ]
+
+  const focusedScene = deriveContinuousWorldScene({
+    entities,
+    operators: [] as WorldOperator[],
+    results: [] as WorldResult[],
+    relationships,
+    connections: [],
+    filteredEntityKeys: entities.map((entity) => entity.key),
+    seedEntityKeys: [root.key],
+    pinnedNodeKeys: [],
+    storyThreadEntityKeys: [],
+    selectedNodeKey: null,
+    focusRootKey: root.key,
+    presentationMode: 'world',
+    viewKind: 'entity_neighborhood',
+    focusDepth: 1,
+    showDerivedLayer: true,
+    graphDepthMode: 'tight',
+    includeAllContext: true,
+  })
+  const globalScene = deriveContinuousWorldScene({
+    entities,
+    operators: [] as WorldOperator[],
+    results: [] as WorldResult[],
+    relationships,
+    connections: [],
+    filteredEntityKeys: entities.map((entity) => entity.key),
+    seedEntityKeys: [root.key],
+    pinnedNodeKeys: [],
+    storyThreadEntityKeys: [],
+    selectedNodeKey: null,
+    focusRootKey: root.key,
+    presentationMode: 'world',
+    viewKind: 'global_overview',
+    focusDepth: 1,
+    showDerivedLayer: true,
+    graphDepthMode: 'wide',
+  })
+
+  assert.equal(focusedScene.nodeByKey[neighbor.key]?.tier, 'near')
+  assert.ok(focusedScene.nodeByKey[secondHop.key], 'expected focused context to keep useful second-hop context')
+  assert.equal(unrelatedNodes.every((entity) => focusedScene.nodeByKey[entity.key]?.tier === 'peripheral'), true)
+  assert.equal(unrelatedNodes.every((entity) => Boolean(globalScene.nodeByKey[entity.key])), true)
+})
+
 test('deriveContinuousWorldScene preserves direct neighbors before second-hop overflow', () => {
   const root = createEntity({ key: 'world.actor.root', name: 'Root', nodeType: 'actor' })
   const directNeighbors = Array.from({ length: 6 }, (_, index) =>

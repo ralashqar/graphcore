@@ -296,6 +296,7 @@ const WORLD_GRAPH_DISPLAY_FILTER_OPTIONS: Array<{ key: WorldGraphDisplayFilterKe
   { key: 'pinned', label: 'Pinned' },
   { key: 'recent', label: 'Recent' },
 ]
+const WORLD_GRAPH_NODE_ORIGIN: [number, number] = [0.5, 0.5]
 
 function readStoredWorldGraphPresentationPreset(): WorldGraphPresentationPreset {
   if (typeof window === 'undefined') return 'explore'
@@ -382,37 +383,18 @@ function worldFlowNodeIntersectsViewport(
   return right >= 0 && bottom >= 0 && left <= viewportSize.width && top <= viewportSize.height
 }
 
+function worldNodePointerHitRadius(visualMode: WorldNodeVisualMode) {
+  if (visualMode === 'card') return 96
+  if (visualMode === 'nearIcon') return 32
+  if (visualMode === 'farIcon') return 16
+  return 12
+}
+
 function worldNodeCollisionPadding(visualMode: WorldNodeVisualMode) {
   if (visualMode === 'peripheralDot') return 10
   if (visualMode === 'farIcon') return 14
   if (visualMode === 'nearIcon') return 18
   return 22
-}
-
-function worldNodeCenterToCanvasPosition(
-  centerPosition: { x: number; y: number },
-  record: WorldGraphNodeRecord,
-  displayTier: WorldSceneDisplayTier,
-  visualMode: WorldNodeVisualMode = 'card',
-) {
-  const { width, height } = worldNodeDimensions(record, displayTier, visualMode)
-  return {
-    x: centerPosition.x - width / 2,
-    y: centerPosition.y - height / 2,
-  }
-}
-
-function worldNodeCanvasToCenterPosition(
-  canvasPosition: { x: number; y: number },
-  record: WorldGraphNodeRecord,
-  displayTier: WorldSceneDisplayTier,
-  visualMode: WorldNodeVisualMode = 'card',
-) {
-  const { width, height } = worldNodeDimensions(record, displayTier, visualMode)
-  return {
-    x: canvasPosition.x + width / 2,
-    y: canvasPosition.y + height / 2,
-  }
 }
 
 function resolveWorldNodeCenterCollision(
@@ -1397,9 +1379,11 @@ export function WorldGraphPage({
     }),
     [manualGraphDepthMode, presentationMode, presentationPreset],
   )
-  const graphDepthMode: WorldGraphDepthMode = (selectedViewMetadata.viewKind === 'global_overview' || Boolean(transientFocus))
-    ? 'wide'
-    : graphPresetConfig.depthMode
+  const graphDepthMode: WorldGraphDepthMode = transientFocus
+    ? (manualGraphDepthMode ?? 'tight')
+    : selectedViewMetadata.viewKind === 'global_overview'
+      ? (manualGraphDepthMode ?? 'wide')
+      : graphPresetConfig.depthMode
   const protectedPinnedNodeKeys = useMemo(
     () => new Set(pinnedEntities.map((entity) => entity.key)),
     [pinnedEntities],
@@ -1615,17 +1599,13 @@ export function WorldGraphPage({
       ...activeLensEntityKeySet,
       ...protectedPinnedNodeKeys,
       ...visibleStoryThreadEntityKeys,
-      selectedWorldNodeKey,
-      inspectorNodeKey,
       selectedView.rootEntityKey,
     ].filter((key): key is string => typeof key === 'string' && key.length > 0))),
     [
       activeLensEntityKeySet,
       activeLensNodeKeySet,
-      inspectorNodeKey,
       protectedPinnedNodeKeys,
       selectedView.rootEntityKey,
-      selectedWorldNodeKey,
       visibleStoryThreadEntityKeys,
     ],
   )
@@ -1651,12 +1631,13 @@ export function WorldGraphPage({
       selectedNodeKey: null,
       focusRootKey: selectedView.rootEntityKey,
       presentationMode,
-      viewKind: transientFocus ? 'global_overview' : selectedViewMetadata.viewKind,
+      viewKind: transientFocus ? 'entity_neighborhood' : selectedViewMetadata.viewKind,
       focusDepth: selectedView.focusDepth,
       showDerivedLayer: effectiveDerivedLayerVisible,
       graphDepthMode,
       enabledEntityTypes: graphFilterState.enabledEntityTypes,
       protectedNodeKeys: protectedGraphNodeKeys,
+      includeAllContext: Boolean(transientFocus),
     }),
     [
       activePinnedNodeKeys,
@@ -1669,6 +1650,7 @@ export function WorldGraphPage({
       selectedView.focusDepth,
       selectedView.rootEntityKey,
       selectedViewMetadata.viewKind,
+      transientFocus,
       effectiveDerivedLayerVisible,
       viewSeedEntityKeys,
       visibleStoryThreadEntityKeys,
@@ -1960,8 +1942,7 @@ export function WorldGraphPage({
           : existing
             ? nextPosition
             : preservedPosition
-      const visualModeChanged = existing?.visualMode !== visualMode
-      const collisionResolved = existing && !visualModeChanged
+      const collisionResolved = existing
         ? {
             center: resolvedPosition,
             radius: (() => {
@@ -2152,15 +2133,18 @@ export function WorldGraphPage({
         id: key,
         type: 'worldNode',
         zIndex: nodeLayer,
-        className: transitionState === 'entering'
-          ? 'is-scene-entering'
-          : transitionState === 'exiting'
-            ? 'is-scene-exiting'
-            : 'is-scene-stable',
+        className: [
+          transitionState === 'entering'
+            ? 'is-scene-entering'
+            : transitionState === 'exiting'
+              ? 'is-scene-exiting'
+              : 'is-scene-stable',
+          `is-flow-mode-${visualMode}`,
+        ].join(' '),
         position: sceneNode
           ? (isSavedManualGraphView
-              ? (draftPositions[key] ?? worldNodeCenterToCanvasPosition(sceneNode.position, record, displayTier, visualMode))
-              : worldNodeCenterToCanvasPosition(sceneNode.position, record, displayTier, visualMode))
+              ? (draftPositions[key] ?? sceneNode.position)
+              : sceneNode.position)
           : draftPositions[key] ?? { x: index * 220, y: 0 },
         draggable: viewMode === 'graph' && isSavedManualGraphView,
         data: {
@@ -3038,6 +3022,25 @@ export function WorldGraphPage({
     setInspectorNodeKey(null)
   }
 
+  function resolvePointerSelectedNodeKey(event: ReactMouseEvent | MouseEvent, fallbackKey: string) {
+    const instance = flowRef.current
+    if (!instance) return fallbackKey
+    const pointerPosition = instance.screenToFlowPosition({ x: event.clientX, y: event.clientY })
+    let bestMatch: { key: string; distance: number } | null = null
+    for (const [key, sceneNode] of Object.entries(renderSceneNodesRef.current)) {
+      if (sceneNode.transitionState === 'exiting') continue
+      const dx = pointerPosition.x - sceneNode.position.x
+      const dy = pointerPosition.y - sceneNode.position.y
+      const distance = Math.hypot(dx, dy)
+      const hitRadius = worldNodePointerHitRadius(sceneNode.visualMode)
+      if (distance > hitRadius) continue
+      if (!bestMatch || distance < bestMatch.distance) {
+        bestMatch = { key, distance }
+      }
+    }
+    return bestMatch?.key ?? fallbackKey
+  }
+
   function handleNodesChange(changes: NodeChange<Node<WorldNodeData>>[]) {
     setCanvasNodes((current) => {
       const next = applyNodeChanges(changes, current)
@@ -3060,7 +3063,7 @@ export function WorldGraphPage({
         displayTier,
         visualMode,
         transitionState: 'stable',
-        position: worldNodeCanvasToCenterPosition(node.position, node.data.record, displayTier, visualMode),
+        position: node.position,
         distance: renderSceneNodesRef.current[node.id]?.distance ?? null,
         firstHopEntityKey: renderSceneNodesRef.current[node.id]?.firstHopEntityKey ?? null,
         layoutGroupKey: renderSceneNodesRef.current[node.id]?.layoutGroupKey ?? null,
@@ -3751,6 +3754,7 @@ export function WorldGraphPage({
                   edgeTypes={edgeTypes}
                   nodes={canvasNodes}
                   edges={canvasEdges}
+                  nodeOrigin={WORLD_GRAPH_NODE_ORIGIN}
                   onInit={(instance) => {
                     flowRef.current = instance
                     setViewportZoom(instance.getZoom())
@@ -3771,16 +3775,13 @@ export function WorldGraphPage({
                     })
                     setContextMenu(null)
                   }}
-                  onNodeClick={(_, node) => {
-                    selectWorldNode(node.id)
+                  onNodeClick={(event, node) => {
+                    selectWorldNode(resolvePointerSelectedNodeKey(event, node.id))
                     setActiveInspectorTab('overview')
                   }}
-                  onNodeDoubleClick={(_, node) => {
-                    selectWorldNode(node.id)
-                    const entity = worldEntities.find((entry) => entry.key === node.id) ?? null
-                    if (entity) {
-                      focusCurrentViewOnEntity(entity.key, { layoutMode: 'preserve' })
-                    }
+                  onNodeDoubleClick={(event, node) => {
+                    selectWorldNode(resolvePointerSelectedNodeKey(event, node.id))
+                    setActiveInspectorTab('overview')
                   }}
                   onNodeContextMenu={(event, node) => openNodeContextMenu(event, node.id)}
                   onNodeMouseEnter={(_, node) => {
