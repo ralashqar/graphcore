@@ -74,7 +74,7 @@ test('buildWorldBreadcrumbSegments creates world and story breadcrumb trails', (
       activeTurnId: 'turn-3',
       focusLabels: ['Elian Vale'],
     }).map((segment) => segment.label),
-    ['Story', 'Sea-Mist Vanishings', 'Sea-Mist Vanishings', 'Turn 3', 'Elian Vale'],
+    ['Story', 'Sea-Mist Vanishings', 'Sea-Mist Vanishings', 'Focus: Elian Vale', 'Turn 3'],
   )
   assert.equal(
     buildWorldBreadcrumbSegments({

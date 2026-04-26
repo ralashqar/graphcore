@@ -264,6 +264,16 @@ function positionNodesRadially(nodes: DerivedWorldSceneNode[]) {
   const farSpacing = 34
   const peripheralSpacing = 24
 
+  const compareLayoutNodes = (left: SceneLayoutNode, right: SceneLayoutNode) => {
+    const groupDelta = (left.layoutGroupKey ?? left.firstHopEntityKey ?? left.key)
+      .localeCompare(right.layoutGroupKey ?? right.firstHopEntityKey ?? right.key)
+    if (groupDelta !== 0) return groupDelta
+    if (left.distance !== right.distance) return left.distance - right.distance
+    const priorityDelta = (right.sortPriority ?? 0) - (left.sortPriority ?? 0)
+    if (priorityDelta !== 0) return priorityDelta
+    return left.key.localeCompare(right.key)
+  }
+
   const placeRing = (
     ringNodes: SceneLayoutNode[],
     minRadiusX: number,
@@ -272,15 +282,7 @@ function positionNodesRadially(nodes: DerivedWorldSceneNode[]) {
     offset = -Math.PI / 2,
   ) => {
     if (ringNodes.length === 0) return
-    const sorted = [...ringNodes].sort((left, right) => {
-      const groupDelta = (left.layoutGroupKey ?? left.firstHopEntityKey ?? left.key)
-        .localeCompare(right.layoutGroupKey ?? right.firstHopEntityKey ?? right.key)
-      if (groupDelta !== 0) return groupDelta
-      if (left.distance !== right.distance) return left.distance - right.distance
-      const priorityDelta = (right.sortPriority ?? 0) - (left.sortPriority ?? 0)
-      if (priorityDelta !== 0) return priorityDelta
-      return left.key.localeCompare(right.key)
-    })
+    const sorted = [...ringNodes].sort(compareLayoutNodes)
     const arcWeights = sorted.map((node) => Math.max(node.estimatedWidth, node.estimatedHeight) + minSpacing)
     const totalArcWeight = arcWeights.reduce((sum, weight) => sum + weight, 0)
     const radiusX = Math.max(minRadiusX, totalArcWeight / (2 * Math.PI))

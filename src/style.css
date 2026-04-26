@@ -4304,6 +4304,16 @@ button.world-prompt-row-result {
   color: var(--text);
 }
 
+.world-breadcrumb-clear-focus {
+  border-color: rgba(52, 211, 153, 0.26);
+  background: rgba(52, 211, 153, 0.08);
+  color: rgba(209, 250, 229, 0.82);
+}
+
+.world-breadcrumb-clear-focus:hover {
+  background: rgba(52, 211, 153, 0.18);
+}
+
 .world-toolbar-heading h3 {
   margin: 0;
   font-size: 1.05rem;

@@ -58,19 +58,19 @@ export function buildWorldBreadcrumbSegments(input: {
     })
   }
 
+  for (const label of sanitizeKeys(input.focusLabels)) {
+    segments.push({
+      id: `focus:${label}`,
+      label: `Focus: ${label}`,
+      tone: 'focus',
+    })
+  }
+
   if (input.activeTurnLabel?.trim()) {
     segments.push({
       id: `turn:${input.activeTurnId ?? input.activeTurnLabel}`,
       label: input.activeTurnLabel.trim(),
       tone: 'turn',
-    })
-  }
-
-  for (const label of sanitizeKeys(input.focusLabels)) {
-    segments.push({
-      id: `focus:${label}`,
-      label,
-      tone: 'focus',
     })
   }
 

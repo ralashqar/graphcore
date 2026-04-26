@@ -2602,6 +2602,66 @@ export function WorldGraphPage({
       : [],
     [activeTurnLens, resultByKey],
   )
+  const graphAtlasState = useMemo(() => {
+    const focusName = transientFocus && focusedEntity ? focusedEntity.name : null
+    const turnLabel = activeTurnBreadcrumbLabel
+    const overlayChips = [
+      focusName ? 'Focus overlay' : null,
+      activeTurnLens ? 'Turn overlay' : null,
+      presentationMode === 'story' ? 'Story mode' : 'World mode',
+    ].filter((value): value is string => Boolean(value))
+
+    if (focusName && activeTurnLens) {
+      return {
+        kicker: 'Graph State',
+        title: `${focusName} + ${turnLabel ?? 'Turn changes'}`,
+        summary: `Global atlas with a temporary focus around ${focusName} and highlighted changes from ${turnLabel ?? 'the selected turn'}. These overlays are reversible and do not create saved views.`,
+        chips: [...overlayChips, `${activeTurnLensAffectedEntities.length} affected nodes`, `${activeTurnLens.counts.relationships} links`],
+      }
+    }
+
+    if (focusName) {
+      return {
+        kicker: 'Graph State',
+        title: `Focus: ${focusName}`,
+        summary: `Global atlas with a temporary neighborhood focus. All world nodes remain available; the focus only changes emphasis and navigation context.`,
+        chips: [...overlayChips, `${visibleNodeKeys.size} visible nodes`],
+      }
+    }
+
+    if (activeTurnLens) {
+      return {
+        kicker: 'Graph State',
+        title: turnLabel ?? 'Turn changes',
+        summary: activeTurnLens.prompt || 'Temporary turn overlay highlighting the nodes and links changed by this prompt turn.',
+        chips: [...overlayChips, `${activeTurnLensAffectedEntities.length} affected nodes`, `${activeTurnLens.counts.relationships} links`, `${activeTurnLens.counts.derived} derived`],
+      }
+    }
+
+    return {
+      kicker: 'Graph State',
+      title: 'Global Atlas',
+      summary: 'One global world atlas with transient overlays for focus, search, and prompt-turn changes.',
+      chips: [`${worldEntities.length} entities`, `${worldRelationships.length} relationships`, `${activeWorldThreads.length} open threads`],
+    }
+  }, [activeTurnBreadcrumbLabel, activeTurnLens, activeTurnLensAffectedEntities.length, activeWorldThreads.length, focusedEntity, presentationMode, transientFocus, visibleNodeKeys.size, worldEntities.length, worldRelationships.length])
+  const focusedDirectRelationships = useMemo(
+    () => focusRootKey
+      ? worldRelationships.filter((relationship) => relationship.sourceEntityKey === focusRootKey || relationship.targetEntityKey === focusRootKey)
+      : [],
+    [focusRootKey, worldRelationships],
+  )
+  const focusedDirectEntities = useMemo(() => {
+    if (!focusRootKey) return []
+    const neighborKeys = new Set<string>()
+    for (const relationship of focusedDirectRelationships) {
+      neighborKeys.add(relationship.sourceEntityKey === focusRootKey ? relationship.targetEntityKey : relationship.sourceEntityKey)
+    }
+    return Array.from(neighborKeys)
+      .map((key) => entityByKey.get(key) ?? null)
+      .filter((entity): entity is WorldEntity => Boolean(entity))
+      .slice(0, 8)
+  }, [entityByKey, focusRootKey, focusedDirectRelationships])
   const showTurnLensInspector = Boolean(activeTurnLens && !inspectorViewModel && !inspectorRelationship)
   const activePromptPreview = useMemo(() => activePreviewForTurn(activePromptTurn), [activePromptTurn])
 
@@ -3462,30 +3522,34 @@ export function WorldGraphPage({
                 {breadcrumbSegments.map((segment, index) => (
                   <span key={segment.id} className="world-breadcrumb-item">
                     {index > 0 ? <span className="world-breadcrumb-separator">/</span> : null}
-                <button
-                  className={`world-breadcrumb world-breadcrumb-${segment.tone}`}
-                  onClick={() => handleBreadcrumbClick(segment.id)}
-                  title={segment.tone === 'turn' && activeTurnLens?.prompt ? activeTurnLens.prompt : undefined}
-                  type="button"
-                >
-                  {segment.label}
-                </button>
-                {segment.tone === 'turn' ? (
-                  <button
-                    aria-label="Exit turn view"
-                    className="world-breadcrumb-clear"
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      clearTurnLens()
-                    }}
-                    title="Exit turn view"
-                    type="button"
-                  >
-                    x
-                  </button>
-                ) : null}
-              </span>
-            ))}
+                    <button
+                      className={`world-breadcrumb world-breadcrumb-${segment.tone}`}
+                      onClick={() => handleBreadcrumbClick(segment.id)}
+                      title={segment.tone === 'turn' && activeTurnLens?.prompt ? activeTurnLens.prompt : undefined}
+                      type="button"
+                    >
+                      {segment.label}
+                    </button>
+                    {segment.tone === 'turn' || segment.tone === 'focus' ? (
+                      <button
+                        aria-label={segment.tone === 'turn' ? 'Exit turn overlay' : 'Exit focus overlay'}
+                        className={`world-breadcrumb-clear world-breadcrumb-clear-${segment.tone}`}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          if (segment.tone === 'turn') {
+                            clearTurnLens()
+                          } else {
+                            clearTransientFocus()
+                          }
+                        }}
+                        title={segment.tone === 'turn' ? 'Exit turn overlay' : 'Exit focus overlay'}
+                        type="button"
+                      >
+                        x
+                      </button>
+                    ) : null}
+                  </span>
+                ))}
           </div>
             </div>
           </div>
@@ -4219,27 +4283,20 @@ export function WorldGraphPage({
                 ) : null}
               </div>
             </>
-          ) : showTurnLensInspector && activeTurnLens ? (
-            <div className="world-shell-dossier-copy">
-              <span className="eyebrow">Prompt Turn</span>
-              <h3>{activeTurnLens.label}</h3>
-              <p>{activeTurnLens.prompt || 'This turn changed the world graph.'}</p>
-              <div className="chip-row">
-                <span className="chip">{activeTurnLensAffectedEntities.length} affected nodes</span>
-                <span className="chip">{activeTurnLens.counts.relationships} links</span>
-                <span className="chip">{activeTurnLens.counts.derived} derived</span>
-              </div>
-            </div>
           ) : (
             <div className="world-shell-dossier-copy">
-              <span className="eyebrow">World Dossier</span>
-              <h3>{selectedView.name || 'Living World'}</h3>
-              <p>Select a node or relationship to open its dossier. The canvas stays spatial; the right rail stays editorial.</p>
+              <span className="eyebrow">{graphAtlasState.kicker}</span>
+              <h3>{graphAtlasState.title}</h3>
+              <p>{graphAtlasState.summary}</p>
               <div className="chip-row">
-                <span className="chip">{worldEntities.length} entities</span>
-                <span className="chip">{worldRelationships.length} relationships</span>
-                <span className="chip">{activeWorldThreads.length} open threads</span>
+                {graphAtlasState.chips.map((chip) => <span key={chip} className="chip">{chip}</span>)}
               </div>
+              {(transientFocus || activeTurnLens) ? (
+                <div className="world-inspector-actions">
+                  {transientFocus ? <button className="ghost-button compact" onClick={clearTransientFocus} type="button">Exit Focus</button> : null}
+                  {activeTurnLens ? <button className="ghost-button compact" onClick={clearTurnLens} type="button">Exit Turn</button> : null}
+                </div>
+              ) : null}
             </div>
           )}
         </div>
@@ -4425,14 +4482,46 @@ export function WorldGraphPage({
               </div>
             ) : null}
             <div className="world-inspector-actions">
-              <button className="ghost-button compact" onClick={clearTurnLens} type="button">Exit Lens</button>
+              {transientFocus ? <button className="ghost-button compact" onClick={clearTransientFocus} type="button">Exit Focus</button> : null}
+              <button className="ghost-button compact" onClick={clearTurnLens} type="button">Exit Turn</button>
+            </div>
+          </div>
+        ) : transientFocus && focusedEntity ? (
+          <div className="detail-stack compact">
+            <span className="eyebrow">Focus Overlay</span>
+            <h3>{focusedEntity.name}</h3>
+            <div className="inline-note">Temporary neighborhood focus on top of the global atlas. It changes emphasis and graph hopping only; it is not saved as a view.</div>
+            <div className="editor-section compact-section">
+              <div className="section-head">
+                <div>
+                  <span className="eyebrow">Immediate</span>
+                  <h3>Connected neighbors</h3>
+                </div>
+              </div>
+              {focusedDirectEntities.length === 0 ? (
+                <div className="inline-note">No direct neighbors are connected to this focus node yet.</div>
+              ) : focusedDirectEntities.map((entity) => (
+                <button key={entity.key} className="rail-button item-row" onClick={() => selectWorldNode(entity.key)} type="button">
+                  <div className="media-thumb">
+                    <EntityIcon id={iconForWorldEntity(entity.nodeType)} />
+                  </div>
+                  <div className="item-row-copy">
+                    <strong>{entity.name}</strong>
+                    <span>{labelForWorldEntity(entity.nodeType)}</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+            <div className="world-inspector-actions">
+              <button className="ghost-button compact" onClick={clearTransientFocus} type="button">Exit Focus</button>
+              <button className="ghost-button compact" onClick={() => flowRef.current?.fitView({ padding: 0.24, duration: 300, maxZoom: 0.92 })} type="button">Fit Atlas</button>
             </div>
           </div>
         ) : !inspectorNodeKey ? (
           <div className="detail-stack compact">
             <span className="eyebrow">World Summary</span>
-            <h3>{selectedView.name || 'Living World'}</h3>
-            <div className="inline-note">Select a node to inspect it. The prompt stream and graph stay synchronized in one unified workspace.</div>
+            <h3>Global Atlas</h3>
+            <div className="inline-note">Select a node to inspect it. Focus and turn views are temporary overlays on this single global atlas.</div>
             <div className="editor-section compact-section">
               <div className="section-head">
                 <div>
