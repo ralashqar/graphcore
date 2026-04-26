@@ -2,18 +2,27 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  buildWorldGraphFilterState,
+  buildWorldGraphContextChips,
+  buildWorldGraphGrowthPlaybackModel,
+  buildWorldGraphLabelPolicy,
+  buildWorldGraphPresentationPresetConfig,
+  buildWorldNodeVisibilityReason,
   buildWorldRefinementHistoryViewModel,
   buildWorldPromptRailViewModel,
   buildWorldInspectorViewModel,
   buildWorldPromptTranscriptEntries,
+  buildWorldPromptTurnLens,
+  buildWorldPromptTurnLenses,
   describePromptOp,
   describePlannerFailureCategory,
   promptSuggestionImpactLabel,
+  resolveWorldEdgeReveal,
   stripInternalPlannerDiagnostics,
 } from './worldPresentation.ts'
 import { worldPromptStartTurnResponseSchema } from '../../domain/worldPrompt.ts'
 import type { PromptToWorldOp, WorldPromptEvent, WorldPromptMessage, WorldPromptSuggestion, WorldPromptTurn } from '../../domain/worldPrompt.ts'
-import type { WorldEntity } from '../../domain/worldGraph.ts'
+import type { WorldEntity, WorldGraphConnection, WorldOperator, WorldRelationship, WorldResult } from '../../domain/worldGraph.ts'
 
 test('stripInternalPlannerDiagnostics removes planner validation tails', () => {
   const input = 'Working summary. Planner output validation failed. extra diagnostics follow'
@@ -144,9 +153,373 @@ test('buildWorldPromptTranscriptEntries folds applied events into readable rows'
     entityByKey: new Map([[entity.key, entity]]),
   })
 
-  assert.equal(entries.length, 2)
-  assert.equal(entries[1]?.kind, 'entity_created')
-  assert.equal(entries[1]?.entityNodeType, 'actor')
+  assert.equal(entries.length, 3)
+  assert.equal(entries[1]?.kind, 'turn_lens')
+  const lensEntry = entries[1]
+  if (lensEntry?.kind !== 'turn_lens') {
+    assert.fail('expected turn_lens entry')
+  }
+  assert.equal(lensEntry.turnLens.turnId, 't1')
+  assert.deepEqual(lensEntry.turnLens.entityKeys, [entity.key])
+  assert.deepEqual(lensEntry.turnLens.counts, {
+    entities: 1,
+    relationships: 0,
+    derived: 0,
+    total: 1,
+  })
+  assert.equal(entries.filter((entry) => entry.kind === 'turn_lens').length, 1)
+  const appliedEntry = entries[2]
+  assert.equal(appliedEntry?.kind, 'entity_created')
+  if (appliedEntry?.kind !== 'entity_created') {
+    assert.fail('expected entity_created entry')
+  }
+  assert.equal(appliedEntry.entityNodeType, 'actor')
+})
+
+test('buildWorldPromptTurnLenses derives an entity-only turn lens', () => {
+  const entity = createWorldPresentationTestEntity('world.actor.hero', 'Hero', 'actor')
+  const turn = makeTurn({ id: 'turn-entity', prompt: 'Add a hero.' })
+  const event = makeEvent({
+    id: 'event-entity',
+    turnId: turn.id,
+    eventType: 'op_applied',
+    payload: {
+      applied: {
+        worldEntities: [entity],
+        worldRelationships: [],
+        worldOperators: [],
+        worldResults: [],
+        worldGraphConnections: [],
+        worldViews: [],
+      },
+      suggestions: [],
+      diagnostics: [],
+    },
+  })
+
+  const lens = buildWorldPromptTurnLens({ turnId: turn.id, events: [event], turns: [turn] })
+
+  assert.ok(lens)
+  assert.equal(lens.prompt, 'Add a hero.')
+  assert.equal(lens.rootEntityKey, entity.key)
+  assert.deepEqual(lens.entityKeys, [entity.key])
+  assert.deepEqual(lens.relationshipKeys, [])
+  assert.equal(lens.changeCount, 1)
+  assert.deepEqual(lens.counts, {
+    entities: 1,
+    relationships: 0,
+    derived: 0,
+    total: 1,
+  })
+})
+
+test('buildWorldPromptTurnLenses derives relationship and derived-result lens keys', () => {
+  const hero = createWorldPresentationTestEntity('world.actor.hero', 'Hero', 'actor')
+  const keep = createWorldPresentationTestEntity('world.place.keep', 'Keep', 'place')
+  const relationship: WorldRelationship = {
+    id: 'rel-1',
+    key: 'rel-1',
+    sourceEntityKey: hero.key,
+    targetEntityKey: keep.key,
+    verb: 'defends',
+    direction: 'outbound',
+    strength: null,
+    confidence: null,
+    source: 'ai',
+    notes: '',
+    state: 'confirmed',
+    metadata: {},
+  }
+  const operator: WorldOperator = {
+    id: 'op-1',
+    key: 'op-1',
+    operatorType: 'stage_scene',
+    inputEntityKeys: [hero.key, keep.key],
+    label: 'Stage defense',
+    status: 'active',
+    metadata: {},
+  }
+  const result: WorldResult = {
+    id: 'result-1',
+    key: 'result-1',
+    resultType: 'scene_setup',
+    sourceOperatorKey: operator.key,
+    title: 'Keep Defense',
+    summary: '',
+    previewAssetKey: null,
+    status: 'ready',
+    metadata: {},
+  }
+  const connections: WorldGraphConnection[] = [
+    {
+      id: 'conn-1',
+      key: 'conn-1',
+      sourceNodeKey: hero.key,
+      sourceNodeKind: 'entity',
+      targetNodeKey: operator.key,
+      targetNodeKind: 'operator',
+      role: 'input',
+      metadata: {},
+    },
+    {
+      id: 'conn-2',
+      key: 'conn-2',
+      sourceNodeKey: operator.key,
+      sourceNodeKind: 'operator',
+      targetNodeKey: result.key,
+      targetNodeKind: 'result',
+      role: 'output',
+      metadata: {},
+    },
+  ]
+  const turn = makeTurn({ id: 'turn-mixed', prompt: 'Stage the keep defense.' })
+  const event = makeEvent({
+    id: 'event-mixed',
+    turnId: turn.id,
+    eventType: 'op_applied',
+    payload: {
+      applied: {
+        worldEntities: [hero, keep],
+        worldRelationships: [relationship],
+        worldOperators: [operator],
+        worldResults: [result],
+        worldGraphConnections: connections,
+        worldViews: [],
+      },
+      suggestions: [],
+      diagnostics: [],
+    },
+  })
+
+  const lenses = buildWorldPromptTurnLenses({ events: [event], turns: [turn] })
+  const lens = lenses.get(turn.id)
+
+  assert.ok(lens)
+  assert.deepEqual(lens.entityKeys, [hero.key, keep.key])
+  assert.deepEqual(lens.relationshipKeys, [relationship.key])
+  assert.deepEqual(lens.operatorKeys, [operator.key])
+  assert.deepEqual(lens.resultKeys, [result.key])
+  assert.deepEqual(lens.nodeKeys, [hero.key, keep.key, operator.key, result.key])
+  assert.equal(lens.rootEntityKey, hero.key)
+  assert.deepEqual(lens.counts, {
+    entities: 2,
+    relationships: 1,
+    derived: 2,
+    total: 5,
+  })
+})
+
+test('buildWorldGraphContextChips orders base orientation state', () => {
+  const chips = buildWorldGraphContextChips({
+    mode: 'world',
+    baseViewName: 'Royal Court',
+    focusName: null,
+    activeTurnLens: null,
+    canGoBack: false,
+  })
+
+  assert.deepEqual(chips.map((chip) => chip.id), ['mode', 'base-view'])
+  assert.equal(chips[0]?.detail, 'World')
+  assert.equal(chips[1]?.detail, 'Royal Court')
+})
+
+test('buildWorldGraphContextChips keeps focus and turn lens independent', () => {
+  const chips = buildWorldGraphContextChips({
+    mode: 'story',
+    baseViewName: 'Court Thread',
+    focusName: 'Mira',
+    focusDepth: 2,
+    activeThreadTitle: 'Succession Crisis',
+    activeTurnLens: {
+      label: '5 nodes / 3 links / 1 derived',
+      prompt: 'Expand the crisis.',
+      counts: { entities: 5, relationships: 3, derived: 1, total: 9 },
+    },
+    canGoBack: true,
+  })
+
+  assert.deepEqual(chips.map((chip) => chip.id), ['mode', 'base-view', 'thread', 'focus', 'turn-lens', 'back'])
+  assert.equal(chips.find((chip) => chip.id === 'focus')?.actionKind, 'exit_focus')
+  assert.equal(chips.find((chip) => chip.id === 'turn-lens')?.actionKind, 'center_lens')
+  assert.equal(chips.find((chip) => chip.id === 'turn-lens')?.secondaryActionKind, 'exit_lens')
+})
+
+test('buildWorldGraphPresentationPresetConfig applies depth defaults and manual override', () => {
+  assert.equal(buildWorldGraphPresentationPresetConfig({ preset: 'focus' }).depthMode, 'tight')
+  assert.equal(buildWorldGraphPresentationPresetConfig({ preset: 'wide' }).depthMode, 'wide')
+  assert.equal(buildWorldGraphPresentationPresetConfig({ preset: 'wide', manualDepthMode: 'nearby' }).depthMode, 'nearby')
+  const storyConfig = buildWorldGraphPresentationPresetConfig({ preset: 'explore', mode: 'story' })
+  assert.equal(storyConfig.preset, 'story')
+  assert.equal(storyConfig.emphasizeThreads, true)
+})
+
+test('buildWorldGraphLabelPolicy fades labels by zoom and importance', () => {
+  assert.equal(buildWorldGraphLabelPolicy({
+    zoom: 0.35,
+    showLabels: false,
+    preset: 'focus',
+    visualMode: 'farIcon',
+    displayTier: 'far',
+  }).showNodeLabel, false)
+
+  assert.equal(buildWorldGraphLabelPolicy({
+    zoom: 0.35,
+    showLabels: false,
+    preset: 'focus',
+    visualMode: 'farIcon',
+    displayTier: 'far',
+    highlighted: true,
+  }).showNodeLabel, true)
+
+  assert.equal(buildWorldGraphLabelPolicy({
+    zoom: 0.62,
+    showLabels: false,
+    preset: 'explore',
+    visualMode: 'nearIcon',
+    displayTier: 'near',
+  }).showNodeLabel, true)
+
+  assert.equal(buildWorldGraphLabelPolicy({
+    zoom: 0.5,
+    showLabels: true,
+    preset: 'wide',
+    visualMode: 'farIcon',
+    displayTier: 'far',
+    hasBranchLabel: true,
+  }).showBranchLabel, true)
+})
+
+test('buildWorldGraphFilterState maps display toggles to entity types and derived visibility', () => {
+  const state = buildWorldGraphFilterState({
+    characters: false,
+    derived: false,
+    recent: false,
+  })
+
+  assert.equal(state.enabledEntityTypes.includes('actor'), false)
+  assert.equal(state.enabledEntityTypes.includes('place'), true)
+  assert.equal(state.showDerived, false)
+  assert.equal(state.showRecent, false)
+  assert.equal(state.disabledCount, 3)
+})
+
+test('buildWorldGraphGrowthPlaybackModel orders whole-turn lens steps', () => {
+  const earlyLens = {
+    turnId: 'turn-1',
+    createdAt: '2026-04-22T10:00:00.000Z',
+    label: '2 nodes',
+    prompt: 'Add two nodes',
+    entityKeys: ['a', 'b'],
+    relationshipKeys: [],
+    operatorKeys: [],
+    resultKeys: [],
+    nodeKeys: ['a', 'b'],
+    rootEntityKey: 'a',
+    changeCount: 2,
+    counts: { entities: 2, relationships: 0, derived: 0, total: 2 },
+  }
+  const laterLens = {
+    ...earlyLens,
+    turnId: 'turn-2',
+    createdAt: '2026-04-22T10:05:00.000Z',
+    label: '1 link',
+    prompt: 'Link them',
+    entityKeys: ['a', 'b'],
+    relationshipKeys: ['r1'],
+    nodeKeys: ['a', 'b'],
+    changeCount: 3,
+    counts: { entities: 2, relationships: 1, derived: 0, total: 3 },
+  }
+
+  const model = buildWorldGraphGrowthPlaybackModel({
+    turnLenses: [laterLens, earlyLens],
+    activeTurnId: 'turn-1',
+  })
+
+  assert.deepEqual(model.steps.map((step) => step.turnId), ['turn-1', 'turn-2'])
+  assert.equal(model.activeIndex, 0)
+  assert.equal(model.canGoNext, true)
+  assert.deepEqual(model.activeStep?.fitNodeKeys, ['a', 'b'])
+})
+
+test('buildWorldNodeVisibilityReason prioritizes focus and lens explanations', () => {
+  assert.equal(buildWorldNodeVisibilityReason({
+    nodeKind: 'entity',
+    displayTier: 'focus',
+    isFocusRoot: true,
+    isTurnLensChanged: true,
+  }).kind, 'focus_root')
+
+  assert.equal(buildWorldNodeVisibilityReason({
+    nodeKind: 'entity',
+    displayTier: 'near',
+    distance: 1,
+    isTurnLensChanged: true,
+  }).kind, 'turn_lens_changed')
+
+  assert.equal(buildWorldNodeVisibilityReason({
+    nodeKind: 'entity',
+    displayTier: 'peripheral',
+    distance: 3,
+    branchLabel: 'The Keep',
+  }).label, 'Branch via The Keep')
+})
+
+test('resolveWorldEdgeReveal keeps sparse lens, selection, story, and hover rules', () => {
+  assert.deepEqual(resolveWorldEdgeReveal({
+    edgeKey: 'rel-1',
+    sourceKey: 'a',
+    targetKey: 'b',
+    activeLensEdgeKeys: ['rel-1'],
+  }), { visible: true, reason: 'lens', emphasized: true })
+
+  assert.deepEqual(resolveWorldEdgeReveal({
+    sourceKey: 'a',
+    targetKey: 'b',
+    selectedNodeKey: 'a',
+  }), { visible: true, reason: 'selected', emphasized: false })
+
+  assert.equal(resolveWorldEdgeReveal({
+    sourceKey: 'a',
+    targetKey: 'b',
+    activeEdgeFocusNodeKey: 'a',
+    hoveredNodeKey: 'b',
+  }).reason, 'focus_hover')
+
+  assert.equal(resolveWorldEdgeReveal({
+    sourceKey: 'a',
+    targetKey: 'b',
+    activeEdgeFocusNodeKey: 'a',
+    hoveredNodeKey: 'c',
+  }).visible, false)
+
+  assert.deepEqual(resolveWorldEdgeReveal({
+    sourceKey: 'a',
+    targetKey: 'b',
+    storyNodeKeys: ['a', 'b'],
+    mode: 'story',
+  }), { visible: true, reason: 'story', emphasized: true })
+
+  assert.equal(resolveWorldEdgeReveal({
+    sourceKey: 'a',
+    targetKey: 'b',
+  }).visible, false)
+})
+
+test('buildWorldPromptTurnLens ignores advisory or no-change turns', () => {
+  const turn = makeTurn({ id: 'turn-advisory', prompt: 'What should happen next?' })
+  const event = makeEvent({
+    id: 'event-note',
+    turnId: turn.id,
+    eventType: 'assistant_note',
+    payload: {
+      note: 'A quiet answer.',
+      suggestions: [],
+      diagnostics: [],
+    },
+  })
+
+  assert.equal(buildWorldPromptTurnLens({ turnId: turn.id, events: [event], turns: [turn] }), null)
 })
 
 test('buildWorldPromptTranscriptEntries renders entity replacement rows', () => {
@@ -890,6 +1263,27 @@ test('worldPromptStartTurnResponseSchema accepts returned linked definitions', (
 
   assert.equal(parsed.definitions.length, 1)
 })
+
+function createWorldPresentationTestEntity(key: string, name: string, nodeType: WorldEntity['nodeType']): WorldEntity {
+  return {
+    id: key,
+    key,
+    name,
+    summary: '',
+    context: '',
+    nodeType,
+    aliases: [],
+    tags: [],
+    status: 'active',
+    thumbnailAssetKey: null,
+    linkedDefinitionKey: null,
+    source: 'ai',
+    customProperties: {},
+    metadata: {},
+    createdAt: '2026-04-22T10:00:00.000Z',
+    updatedAt: '2026-04-22T10:00:00.000Z',
+  }
+}
 
 function makeTurn(overrides: Partial<WorldPromptTurn> = {}): WorldPromptTurn {
   return {

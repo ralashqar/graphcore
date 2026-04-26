@@ -46,11 +46,28 @@ import {
 } from '../domain/worldPrompt'
 import type { WorldThread } from '../domain/worldThread'
 import {
+  buildWorldBreadcrumbSegments,
+  chooseStoryModeThreadView,
+  sanitizePinnedNodeKeys,
+  type WorldPresentationMode,
+} from '../domain/worldPresentationNavigation'
+import {
+  deriveContinuousWorldScene,
+  type DerivedWorldScene,
+  type WorldGraphDepthMode,
+  type WorldSceneDisplayTier,
+  type WorldSceneTransitionState,
+} from '../domain/worldGraphScene'
+import {
+  choosePreferredWorldView,
   buildSuggestionsForEntity,
   createDefaultWorldView,
   definitionKindForWorldEntity,
   getDerivedOperationsForEntityPair,
   getWorldEntityUsage,
+  getWorldViewRailGroup,
+  getWorldViewSeedEntityKeys,
+  getWorldViewSemanticMetadata,
   iconForWorldEntity,
   labelForWorldEntity,
   labelForWorldOperator,
@@ -59,15 +76,30 @@ import {
 import { EntityIcon } from '../shared/entityIcons'
 import {
   activePreviewForTurn,
+  DEFAULT_WORLD_GRAPH_DISPLAY_FILTERS,
+  buildWorldGraphFilterState,
+  buildWorldGraphContextChips,
+  buildWorldGraphGrowthPlaybackModel,
+  buildWorldGraphLabelPolicy,
+  buildWorldGraphPresentationPresetConfig,
+  buildWorldNodeVisibilityReason,
+  buildWorldPromptTurnLenses,
   buildWorldInspectorViewModel,
   buildWorldPromptRailViewModel,
   buildWorldRefinementHistoryViewModel,
   nodeShellStyle,
+  resolveWorldEdgeReveal,
   worldNodeDataEqual,
+  type WorldGraphContextChip,
+  type WorldGraphDisplayFilterKey,
+  type WorldGraphDisplayFilters,
   type WorldGraphNodeRecord,
+  type WorldGraphPresentationPreset,
   type WorldInspectorViewModel,
   type WorldNodeData,
+  type WorldNodeVisualMode,
   type WorldPromptTranscriptEntry,
+  type WorldPromptTurnLens,
 } from './world/worldPresentation'
 import type { GraphWorkspaceProps } from './graph/types'
 import { ProjectWorldOnboarding } from './onboarding/ProjectWorldOnboarding'
@@ -206,6 +238,16 @@ type PendingEntityResolutionState = {
   relationshipDefaults: Partial<WorldRelationshipCreateInput>
 }
 
+type RenderSceneNodeState = {
+  displayTier: WorldSceneDisplayTier
+  visualMode: WorldNodeVisualMode
+  transitionState: WorldSceneTransitionState
+  position: { x: number; y: number }
+  distance: number | null
+  firstHopEntityKey?: string | null
+  layoutGroupKey?: string | null
+}
+
 type ContextMenuState =
   | { kind: 'canvas'; x: number; y: number; flowPosition: { x: number; y: number } | null }
   | { kind: 'entity'; x: number; y: number; entityKey: string }
@@ -213,26 +255,6 @@ type ContextMenuState =
   | { kind: 'result'; x: number; y: number; resultKey: string }
   | { kind: 'relationship'; x: number; y: number; relationshipKey: string }
   | { kind: 'connection'; x: number; y: number; connectionKey: string }
-
-type ElkLayoutResult = {
-  children?: Array<{ id: string; x?: number; y?: number }>
-}
-
-let elkInstancePromise: Promise<{
-  layout: (graph: {
-    id: string
-    layoutOptions: Record<string, string>
-    children: Array<{ id: string; width: number; height: number }>
-    edges: Array<{ id: string; sources: string[]; targets: string[] }>
-  }) => Promise<ElkLayoutResult>
-}> | null = null
-
-async function getElkInstance() {
-  if (!elkInstancePromise) {
-    elkInstancePromise = import('elkjs/lib/elk.bundled.js').then((module) => new module.default())
-  }
-  return elkInstancePromise
-}
 
 type EntityOverviewDraftState = {
   entityKey: string
@@ -250,6 +272,162 @@ const WORLD_INSPECTOR_WIDTH_STORAGE_KEY = 'graphcore.world.inspector-width.v1'
 const WORLD_INSPECTOR_WIDTH_DEFAULT = 520
 const WORLD_INSPECTOR_WIDTH_MIN = 360
 const WORLD_INSPECTOR_WIDTH_MAX = 520
+const WORLD_GRAPH_PRESENTATION_PRESET_STORAGE_KEY = 'graphcore.world.graph-presentation-preset.v1'
+const WORLD_GRAPH_DISPLAY_FILTERS_STORAGE_KEY = 'graphcore.world.graph-display-filters.v1'
+const WORLD_NODE_SOURCE_HANDLE = 'world-node-source'
+const WORLD_NODE_TARGET_HANDLE = 'world-node-target'
+const WORLD_GRAPH_PRESENTATION_PRESETS: Array<{ value: WorldGraphPresentationPreset; label: string }> = [
+  { value: 'focus', label: 'Focus' },
+  { value: 'explore', label: 'Explore' },
+  { value: 'story', label: 'Story' },
+  { value: 'recent', label: 'Recent' },
+  { value: 'wide', label: 'Wide' },
+]
+const WORLD_GRAPH_DEPTH_OPTIONS: Array<{ value: WorldGraphDepthMode; label: string }> = [
+  { value: 'tight', label: 'Tight' },
+  { value: 'nearby', label: 'Nearby' },
+  { value: 'wide', label: 'Wide' },
+]
+const WORLD_GRAPH_DISPLAY_FILTER_OPTIONS: Array<{ key: WorldGraphDisplayFilterKey; label: string }> = [
+  { key: 'characters', label: 'Characters' },
+  { key: 'places', label: 'Places' },
+  { key: 'groups', label: 'Groups' },
+  { key: 'objects', label: 'Objects' },
+  { key: 'concepts', label: 'Concepts' },
+  { key: 'events', label: 'Events' },
+  { key: 'threads', label: 'Threads' },
+  { key: 'derived', label: 'Derived' },
+  { key: 'pinned', label: 'Pinned' },
+  { key: 'recent', label: 'Recent' },
+]
+
+function readStoredWorldGraphPresentationPreset(): WorldGraphPresentationPreset {
+  if (typeof window === 'undefined') return 'explore'
+  const raw = window.localStorage.getItem(WORLD_GRAPH_PRESENTATION_PRESET_STORAGE_KEY)
+  return WORLD_GRAPH_PRESENTATION_PRESETS.some((option) => option.value === raw)
+    ? raw as WorldGraphPresentationPreset
+    : 'explore'
+}
+
+function readStoredWorldGraphDisplayFilters(): WorldGraphDisplayFilters {
+  if (typeof window === 'undefined') return DEFAULT_WORLD_GRAPH_DISPLAY_FILTERS
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(WORLD_GRAPH_DISPLAY_FILTERS_STORAGE_KEY) ?? '{}') as Partial<WorldGraphDisplayFilters>
+    return buildWorldGraphFilterState(parsed).filters
+  } catch {
+    return DEFAULT_WORLD_GRAPH_DISPLAY_FILTERS
+  }
+}
+
+function worldNodeVisualModeFor(
+  displayTier: WorldSceneDisplayTier,
+  nodeKey: string,
+  selectedNodeKey: string | null,
+  inspectedNodeKey: string | null,
+  selectedAdjacentNodeKeys?: ReadonlySet<string>,
+): WorldNodeVisualMode {
+  const activeCardNodeKey = inspectedNodeKey ?? selectedNodeKey
+  if (activeCardNodeKey) {
+    if (nodeKey === activeCardNodeKey) return 'card'
+    if (selectedAdjacentNodeKeys?.has(nodeKey)) return 'nearIcon'
+    return displayTier === 'peripheral' ? 'peripheralDot' : 'farIcon'
+  }
+  if (displayTier === 'peripheral') return 'peripheralDot'
+  if (displayTier === 'far') return 'farIcon'
+  return 'nearIcon'
+}
+
+function worldNodeDimensions(record: WorldGraphNodeRecord, _displayTier: WorldSceneDisplayTier, visualMode: WorldNodeVisualMode = 'card') {
+  if (visualMode === 'peripheralDot') {
+    return { width: 16, height: 16 }
+  }
+  if (visualMode === 'farIcon') {
+    return { width: 22, height: 22 }
+  }
+  if (visualMode === 'nearIcon') {
+    return { width: 76, height: 64 }
+  }
+  if (record.kind === 'operator') {
+    return { width: 132, height: 102 }
+  }
+  if (record.kind === 'result') {
+    return { width: 150, height: 108 }
+  }
+  return { width: 148, height: 118 }
+}
+
+function worldNodeCollisionPadding(visualMode: WorldNodeVisualMode) {
+  if (visualMode === 'peripheralDot') return 10
+  if (visualMode === 'farIcon') return 14
+  if (visualMode === 'nearIcon') return 18
+  return 22
+}
+
+function worldNodeCenterToCanvasPosition(
+  centerPosition: { x: number; y: number },
+  record: WorldGraphNodeRecord,
+  displayTier: WorldSceneDisplayTier,
+  visualMode: WorldNodeVisualMode = 'card',
+) {
+  const { width, height } = worldNodeDimensions(record, displayTier, visualMode)
+  return {
+    x: centerPosition.x - width / 2,
+    y: centerPosition.y - height / 2,
+  }
+}
+
+function worldNodeCanvasToCenterPosition(
+  canvasPosition: { x: number; y: number },
+  record: WorldGraphNodeRecord,
+  displayTier: WorldSceneDisplayTier,
+  visualMode: WorldNodeVisualMode = 'card',
+) {
+  const { width, height } = worldNodeDimensions(record, displayTier, visualMode)
+  return {
+    x: canvasPosition.x + width / 2,
+    y: canvasPosition.y + height / 2,
+  }
+}
+
+function resolveWorldNodeCenterCollision(
+  centerPosition: { x: number; y: number },
+  occupiedCenters: Array<{ x: number; y: number; radius: number }>,
+  record: WorldGraphNodeRecord,
+  displayTier: WorldSceneDisplayTier,
+  visualMode: WorldNodeVisualMode = 'card',
+) {
+  const dimensions = worldNodeDimensions(record, displayTier, visualMode)
+  const ownPadding = worldNodeCollisionPadding(visualMode)
+  const ownRadius = Math.max(dimensions.width, dimensions.height) / 2 + ownPadding
+  const collides = (candidate: { x: number; y: number }) => occupiedCenters.some((occupied) => {
+    const dx = candidate.x - occupied.x
+    const dy = candidate.y - occupied.y
+    const minimumDistance = ownRadius + occupied.radius
+    return (dx * dx) + (dy * dy) < minimumDistance * minimumDistance
+  })
+
+  if (!collides(centerPosition)) {
+    return { center: centerPosition, radius: ownRadius }
+  }
+
+  const baseAngle = Math.atan2(centerPosition.y || 1, centerPosition.x || 1)
+  for (let ring = 1; ring <= 8; ring += 1) {
+    const radiusStep = ring * 42
+    const sampleCount = 10 + ring * 4
+    for (let index = 0; index < sampleCount; index += 1) {
+      const angle = baseAngle + ((Math.PI * 2) / sampleCount) * index
+      const candidate = {
+        x: centerPosition.x + Math.cos(angle) * radiusStep,
+        y: centerPosition.y + Math.sin(angle) * radiusStep,
+      }
+      if (!collides(candidate)) {
+        return { center: candidate, radius: ownRadius }
+      }
+    }
+  }
+
+  return { center: centerPosition, radius: ownRadius }
+}
 
 function createWorldPromptSessionKey() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -258,14 +436,10 @@ function createWorldPromptSessionKey() {
   return `world.prompt.${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 }
 
-function keyForWorldNodeRecord(record: WorldGraphNodeRecord) {
-  return record.kind === 'entity' ? record.entity.key : record.kind === 'operator' ? record.operator.key : record.result.key
-}
-
 function WorldNodeCard({ data, selected }: NodeProps<Node<WorldNodeData>>) {
-  const { record, relationCount, usageCount, dimmed } = data
+  const { record, dimmed, pinned, storyLinked, displayTier, visualMode, transitionState, highlighted, showMiniLabel, branchLabel, visibilityReason } = data
   const title = record.title
-  const summary = record.summary
+  const tooltip = `${title} - ${visibilityReason.label}${visibilityReason.detail ? `: ${visibilityReason.detail}` : ''}`
   const imageUrl = record.imageUrl
   const toneClass =
     record.kind === 'entity'
@@ -293,53 +467,66 @@ function WorldNodeCard({ data, selected }: NodeProps<Node<WorldNodeData>>) {
     record.kind === 'entity'
       ? record.entity.metadata?.canon && typeof record.entity.metadata.canon === 'object' && (record.entity.metadata.canon as { locked?: unknown }).locked === true
       : false
-  const summaryText = summary.trim()
   const hasImage = Boolean(imageUrl)
+  const className = [
+    'world-node-card',
+    `world-node-card-${record.kind}`,
+    toneClass,
+    `is-tier-${displayTier}`,
+    `is-mode-${visualMode}`,
+    `is-transition-${transitionState}`,
+    highlighted ? 'is-highlighted' : '',
+    pinned ? 'is-pinned' : '',
+    storyLinked ? 'is-story-linked' : '',
+    data.animateIn ? 'is-new' : '',
+    data.animateSceneEnter ? 'is-scene-reveal' : '',
+  ].filter(Boolean).join(' ')
 
   return (
-    <div className={`world-node-card world-node-card-${record.kind} ${toneClass}${data.animateIn ? ' is-new' : ''}`} style={nodeShellStyle(record, selected, dimmed)}>
-      {record.kind === 'entity' ? <Handle className="world-node-handle" position={Position.Left} type="target" /> : null}
-      {record.kind === 'entity' ? <Handle className="world-node-handle" position={Position.Right} type="source" /> : null}
-      <div className="world-node-corners" aria-hidden="true">
-        <span className="world-node-corner world-node-corner-tl" />
-        <span className="world-node-corner world-node-corner-tr" />
-        <span className="world-node-corner world-node-corner-bl" />
-        <span className="world-node-corner world-node-corner-br" />
-      </div>
-      <div className="world-node-frame">
-        <div className="world-node-headline">
-          <div className="world-node-crest">
-            <EntityIcon id={iconId} />
-          </div>
-          <div className="world-node-kicker">
-        <span>{kicker}</span>
-        {record.kind === 'result' ? <span className="world-node-badge">Derived</span> : null}
-        {isCanonLocked ? <span className="world-node-badge">Canon</span> : null}
-        {isGenerating ? <span className="world-node-badge">Generating…</span> : null}
-      </div>
-      </div>
-      {hasImage ? (
-        <div className="world-node-media">
-          <img alt={title} src={imageUrl!} />
-          <div className="world-node-media-shade" />
+    <div className={className} style={nodeShellStyle(record, selected, dimmed, visualMode)} aria-label={tooltip}>
+      <Handle id={WORLD_NODE_TARGET_HANDLE} className={`world-node-handle${visualMode === 'card' ? '' : ' is-compact'}`} position={Position.Left} type="target" />
+      <Handle id={WORLD_NODE_SOURCE_HANDLE} className={`world-node-handle${visualMode === 'card' ? '' : ' is-compact'}`} position={Position.Right} type="source" />
+      <div className="world-node-dot-shell" aria-label={tooltip}>
+        <div className="world-node-dot-core">
+          {hasImage ? <img alt={title} src={imageUrl!} /> : <EntityIcon id={iconId} />}
         </div>
-      ) : (
-        <div className="world-node-emblem">
-          <div className="world-node-emblem-ring">
-            <EntityIcon id={iconId} />
+      </div>
+      {showMiniLabel ? (
+        <div className="world-node-mini-label">
+          <span>{title}</span>
+          {branchLabel && (visualMode === 'farIcon' || visualMode === 'peripheralDot') ? (
+            <span className="world-node-mini-branch">via {branchLabel}</span>
+          ) : null}
+        </div>
+      ) : null}
+      {visualMode === 'card' ? (
+        <div className="world-node-frame">
+          <div className="world-node-compact-head">
+            {hasImage ? (
+              <div className="world-node-media">
+                <img alt={title} src={imageUrl!} />
+                <div className="world-node-media-shade" />
+              </div>
+            ) : (
+              <div className="world-node-emblem">
+                <div className="world-node-emblem-ring">
+                  <EntityIcon id={iconId} />
+                </div>
+              </div>
+            )}
+            <div className="world-node-title-stack">
+              <strong>{title}</strong>
+              <div className="world-node-kicker">
+                <span>{kicker}</span>
+                {record.kind === 'result' ? <span className="world-node-badge">Derived</span> : null}
+                {pinned ? <span className="world-node-badge">Pinned</span> : null}
+                {isCanonLocked ? <span className="world-node-badge">Canon</span> : null}
+                {isGenerating ? <span className="world-node-badge">Generating...</span> : null}
+              </div>
+            </div>
           </div>
         </div>
-      )}
-      <div className="world-node-body">
-        <strong>{title}</strong>
-        {record.subtitle ? <span className="world-node-subtitle">{record.subtitle}</span> : null}
-        {summaryText ? <p>{summaryText}</p> : null}
-      </div>
-      <div className="world-node-meta">
-        <span>{relationCount} links</span>
-        <span>{usageCount} uses</span>
-      </div>
-      </div>
+      ) : null}
     </div>
   )
 }
@@ -434,6 +621,52 @@ function getFlowNodeElement(nodeId: string) {
   return document.querySelector<HTMLElement>(`.react-flow__node[data-id="${escapedNodeId}"]`)
 }
 
+function worldFlowEdgeStyleEqual(left: Edge['style'], right: Edge['style']) {
+  const leftStyle = left ?? null
+  const rightStyle = right ?? null
+  if (leftStyle === rightStyle) return true
+  if (!leftStyle || !rightStyle) return false
+  const leftKeys = Object.keys(leftStyle)
+  const rightKeys = Object.keys(rightStyle)
+  if (leftKeys.length !== rightKeys.length) return false
+  for (const key of leftKeys) {
+    if (leftStyle[key as keyof typeof leftStyle] !== rightStyle[key as keyof typeof rightStyle]) {
+      return false
+    }
+  }
+  return true
+}
+
+function worldFlowEdgeEqual(left: Edge<WorldFlowEdgeData>, right: Edge<WorldFlowEdgeData>) {
+  return (
+    left.id === right.id
+    && left.type === right.type
+    && left.source === right.source
+    && left.target === right.target
+    && left.sourceHandle === right.sourceHandle
+    && left.targetHandle === right.targetHandle
+    && left.selected === right.selected
+    && left.label === right.label
+    && left.animated === right.animated
+    && left.interactionWidth === right.interactionWidth
+    && left.zIndex === right.zIndex
+    && left.data?.kind === right.data?.kind
+    && worldFlowEdgeStyleEqual(left.style, right.style)
+  )
+}
+
+function worldFlowNodeEqual(left: Node<WorldNodeData>, right: Node<WorldNodeData>) {
+  const samePosition = left.position.x === right.position.x && left.position.y === right.position.y
+  return (
+    left.id === right.id
+    && left.type === right.type
+    && (left.className ?? '') === (right.className ?? '')
+    && left.draggable === right.draggable
+    && samePosition
+    && worldNodeDataEqual(left.data, right.data)
+  )
+}
+
 function describePromptOp(op: PromptToWorldOp) {
   switch (op.op) {
     case 'upsert_entity': {
@@ -513,6 +746,7 @@ function buildWorldPromptTranscriptEntries(input: {
   events: WorldPromptEvent[]
   messages: WorldPromptMessage[]
   entityByKey: Map<string, WorldEntity>
+  turns?: WorldPromptTurn[]
 }) {
   const sources = [
     ...input.messages.map((message) => ({ source: 'message' as const, createdAt: message.createdAt, id: `message:${message.id}`, message })),
@@ -525,7 +759,9 @@ function buildWorldPromptTranscriptEntries(input: {
   })
 
   const entries: WorldPromptTranscriptEntry[] = []
+  const turnLensByTurnId = buildWorldPromptTurnLenses({ events: input.events, turns: input.turns })
   let lastSuggestionSignature: string | null = null
+  const emittedTurnLensIds = new Set<string>()
 
   for (const source of sources) {
     if (source.source === 'message') {
@@ -619,6 +855,18 @@ function buildWorldPromptTranscriptEntries(input: {
         break
       case 'op_applied': {
         const applied = payload.applied
+        const turnLens = turnLensByTurnId.get(source.event.turnId) ?? undefined
+        if (turnLens && !emittedTurnLensIds.has(turnLens.turnId)) {
+          entries.push({
+            id: `${source.id}:turn-lens:${turnLens.turnId}`,
+            createdAt: source.event.createdAt,
+            kind: 'turn_lens',
+            label: 'View turn changes',
+            detail: turnLens.label,
+            turnLens,
+          })
+          emittedTurnLensIds.add(turnLens.turnId)
+        }
         const replaceOp = payload.op?.op === 'replace_entity' ? payload.op : null
         if (replaceOp && applied?.worldEntities && applied.worldEntities.length > 0) {
           const replacementEntity = applied.worldEntities.find((entity) => entity.key !== replaceOp.payload.targetEntityKey && entity.status !== 'archived')
@@ -637,6 +885,7 @@ function buildWorldPromptTranscriptEntries(input: {
               detail: detailParts.join(' · '),
               entityKey: replacementEntity.key,
               entityNodeType: replacementEntity.nodeType,
+              turnLens,
             })
           }
         }
@@ -652,6 +901,7 @@ function buildWorldPromptTranscriptEntries(input: {
             detail: labelForWorldEntity(entity.nodeType),
             entityKey: entity.key,
             entityNodeType: entity.nodeType,
+            turnLens,
           })
         }
         for (const relationship of applied?.worldRelationships ?? []) {
@@ -666,15 +916,18 @@ function buildWorldPromptTranscriptEntries(input: {
             relationshipKey: relationship.key,
             sourceLabel: sourceName,
             targetLabel: targetName,
+            turnLens,
           })
         }
         for (const worldResult of applied?.worldResults ?? []) {
           entries.push({
             id: `${source.id}:result:${worldResult.key}`,
             createdAt: source.event.createdAt,
-            kind: 'system_status',
+            kind: 'derived_result_created',
             label: `Created ${worldResult.title}`,
             detail: 'Derived result',
+            resultKey: worldResult.key,
+            turnLens,
           })
         }
         break
@@ -803,10 +1056,25 @@ export function WorldGraphPage({
   legacyGraphProps,
 }: WorldGraphPageProps) {
   const flowRef = useRef<ReactFlowInstance<Node<WorldNodeData>, Edge<WorldFlowEdgeData>> | null>(null)
+  const graphCanvasRef = useRef<HTMLDivElement | null>(null)
+  const canvasNodesRef = useRef<Node<WorldNodeData>[]>([])
+  const canvasEdgesRef = useRef<Edge<WorldFlowEdgeData>[]>([])
+  const appliedViewResetKeyRef = useRef<string | null>(null)
   const nodePositionPersistTimeoutRef = useRef<number | null>(null)
+  const exitingSceneNodeTimeoutsRef = useRef<Map<string, number>>(new Map())
+  const sceneRevealTimeoutsRef = useRef<Map<string, number>>(new Map())
+  const renderSceneNodesRef = useRef<Record<string, RenderSceneNodeState>>({})
+  const continuousSceneRef = useRef<DerivedWorldScene | null>(null)
+  const lastCameraFocusTriggerKeyRef = useRef<string | null>(null)
+  const pendingTraversalAnchorNodeKeyRef = useRef<string | null>(null)
+  const suppressNextCameraFocusRef = useRef(false)
+  const pendingCameraRelativeOffsetRef = useRef<{ x: number; y: number } | null>(null)
+  const pendingCameraFitNodeKeysRef = useRef<string[] | null>(null)
+  const hoverEdgeFadeTimeoutRef = useRef<number | null>(null)
   const entityOverviewPersistTimeoutRef = useRef<number | null>(null)
   const [legacyMode, setLegacyMode] = useState(false)
   const [viewMode, setViewMode] = useState<WorldView['mode']>('graph')
+  const [presentationMode, setPresentationMode] = useState<WorldPresentationMode>('world')
   const [search, setSearch] = useState('')
   const [growWorkbenchWidth, setGrowWorkbenchWidth] = useState(() => {
     if (typeof window === 'undefined') return GROW_WORKBENCH_WIDTH_DEFAULT
@@ -826,11 +1094,23 @@ export function WorldGraphPage({
   const [showSuggestions, setShowSuggestions] = useState(true)
   const [showLabels, setShowLabels] = useState(true)
   const [showDerivedLayer, setShowDerivedLayer] = useState(true)
+  const [presentationPreset, setPresentationPreset] = useState<WorldGraphPresentationPreset>(() => readStoredWorldGraphPresentationPreset())
+  const [manualGraphDepthMode, setManualGraphDepthMode] = useState<WorldGraphDepthMode | null>(null)
+  const [viewportZoom, setViewportZoom] = useState(1)
+  const [displayFilters, setDisplayFilters] = useState<WorldGraphDisplayFilters>(() => readStoredWorldGraphDisplayFilters())
+  const [growthPlaybackTurnId, setGrowthPlaybackTurnId] = useState<string | null>(null)
+  const [growthPlaybackPlaying, setGrowthPlaybackPlaying] = useState(false)
   const [draftPositions, setDraftPositions] = useState<Record<string, { x: number; y: number }>>({})
   const [canvasNodes, setCanvasNodes] = useState<Node<WorldNodeData>[]>([])
+  const [canvasEdges, setCanvasEdges] = useState<Edge<WorldFlowEdgeData>[]>([])
+  const [hoveredWorldNodeKey, setHoveredWorldNodeKey] = useState<string | null>(null)
+  const [hoverRevealTargetNodeKey, setHoverRevealTargetNodeKey] = useState<string | null>(null)
+  const [hoverRevealVisible, setHoverRevealVisible] = useState(false)
   const [animatedNodeKeys, setAnimatedNodeKeys] = useState<string[]>([])
+  const [sceneRevealNodeKeys, setSceneRevealNodeKeys] = useState<string[]>([])
+  const seenAnimatedNodeKeysRef = useRef<Set<string>>(new Set())
   const [autoLayoutNonce, setAutoLayoutNonce] = useState(0)
-  const [layoutPositions, setLayoutPositions] = useState<Record<string, { x: number; y: number }>>({})
+  const [renderSceneNodes, setRenderSceneNodes] = useState<Record<string, RenderSceneNodeState>>({})
   const [inspectorNodeKey, setInspectorNodeKey] = useState<string | null>(selectedWorldNodeKey)
   const [pendingEntityResolution, setPendingEntityResolution] = useState<PendingEntityResolutionState | null>(null)
   const [entityComposer, setEntityComposer] = useState<EntityComposerState | null>(null)
@@ -845,15 +1125,76 @@ export function WorldGraphPage({
   const [selectedPromptSessionKey, setSelectedPromptSessionKey] = useState<string | null>(worldPromptSessions[0]?.key ?? null)
   const [selectedPromptThreadKey, setSelectedPromptThreadKey] = useState<string | null>(null)
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [showPinnedNodes, setShowPinnedNodes] = useState(true)
+  const [fallbackPinnedNodeKeys, setFallbackPinnedNodeKeys] = useState<string[]>([])
   const [worldPromptText, setWorldPromptText] = useState('')
   const [worldPromptError, setWorldPromptError] = useState<string | null>(null)
   const [isPromptSubmitting, setIsPromptSubmitting] = useState(false)
   const [isPromptCancelling, setIsPromptCancelling] = useState(false)
-
-  const selectedView = useMemo(
-    () => worldViews.find((view) => view.key === selectedWorldViewKey) ?? worldViews[0] ?? createDefaultWorldView(),
-    [selectedWorldViewKey, worldViews],
+  const [activeTurnLens, setActiveTurnLens] = useState<WorldPromptTurnLens | null>(null)
+  const [flashTurnLens, setFlashTurnLens] = useState<WorldPromptTurnLens | null>(null)
+  const handledAutoLensTurnIdRef = useRef<string | null>(null)
+  const graphFilterState = useMemo(
+    () => buildWorldGraphFilterState(displayFilters),
+    [displayFilters],
   )
+  const [transientFocus, setTransientFocus] = useState<{
+    sourceViewKey: string | null
+    rootEntityKey: string | null
+    focusDepth: number
+    layoutMode: 'preserve' | 'reflow'
+  } | null>(null)
+  const [viewHistory, setViewHistory] = useState<Array<{
+    viewKey: string | null
+    transientFocus: { rootEntityKey: string | null; focusDepth: number; layoutMode: 'preserve' | 'reflow' } | null
+  }>>([])
+  const defaultWorldViewRef = useRef<WorldView>(createDefaultWorldView())
+  const previousPresentationModeRef = useRef<WorldPresentationMode>('world')
+  const worldModeReturnViewKeyRef = useRef<string | null>(null)
+
+  const persistedSelectedView = useMemo(
+    () => worldViews.find((view) => view.key === selectedWorldViewKey)
+      ?? choosePreferredWorldView(worldViews, { worldThreads })
+      ?? worldViews[0]
+      ?? defaultWorldViewRef.current,
+    [selectedWorldViewKey, worldThreads, worldViews],
+  )
+  const transientBaseView = useMemo(
+    () => transientFocus?.sourceViewKey
+      ? worldViews.find((view) => view.key === transientFocus.sourceViewKey) ?? persistedSelectedView
+      : persistedSelectedView,
+    [persistedSelectedView, transientFocus?.sourceViewKey, worldViews],
+  )
+  const selectedView = useMemo(
+    () => transientFocus
+      ? {
+          ...transientBaseView,
+          rootEntityKey: transientFocus.rootEntityKey,
+          focusDepth: transientFocus.focusDepth,
+          metadata: {
+            ...(transientBaseView.metadata ?? {}),
+            viewKind: 'entity_neighborhood',
+            sourceEntityKeys: transientFocus.rootEntityKey ? [transientFocus.rootEntityKey] : [],
+            sourceThreadKeys: [],
+            autoManaged: false,
+            refreshPolicy: 'manual_only',
+            transientFocus: true,
+          },
+        }
+      : persistedSelectedView,
+    [persistedSelectedView, transientBaseView, transientFocus],
+  )
+  const selectedViewMetadata = useMemo(
+    () => getWorldViewSemanticMetadata(selectedView),
+    [selectedView],
+  )
+  const canPersistSelectedViewEdits = useMemo(
+    () => selectedViewMetadata.viewKind === 'manual_snapshot'
+      && selectedViewMetadata.autoManaged !== true
+      && selectedViewMetadata.transientFocus !== true,
+    [selectedViewMetadata],
+  )
+  const isSavedManualGraphView = canPersistSelectedViewEdits
   const selectedEntity = useMemo(
     () => worldEntities.find((entity) => entity.key === selectedWorldEntityKey) ?? worldEntities.find((entity) => entity.key === selectedWorldNodeKey) ?? null,
     [selectedWorldEntityKey, selectedWorldNodeKey, worldEntities],
@@ -908,6 +1249,54 @@ export function WorldGraphPage({
     }, {}),
     [worldPromptSuggestions],
   )
+  const turnLensByTurnId = useMemo(
+    () => buildWorldPromptTurnLenses({ events: sessionEvents, turns: sessionTurns }),
+    [sessionEvents, sessionTurns],
+  )
+  const latestCompletedTurnLens = useMemo(() => {
+    for (let index = sessionTurns.length - 1; index >= 0; index -= 1) {
+      const turn = sessionTurns[index]
+      if (!turn || turn.status !== 'completed') continue
+      const lens = turnLensByTurnId.get(turn.id) ?? null
+      if (lens) return lens
+    }
+    return null
+  }, [sessionTurns, turnLensByTurnId])
+  const visibleFlashTurnLens = graphFilterState.showRecent ? flashTurnLens : null
+  const activeLensNodeKeySet = useMemo(
+    () => new Set([...(activeTurnLens?.nodeKeys ?? []), ...(visibleFlashTurnLens?.nodeKeys ?? [])]),
+    [activeTurnLens?.nodeKeys, visibleFlashTurnLens?.nodeKeys],
+  )
+  const activeLensRelationshipKeySet = useMemo(
+    () => new Set([...(activeTurnLens?.relationshipKeys ?? []), ...(visibleFlashTurnLens?.relationshipKeys ?? [])]),
+    [activeTurnLens?.relationshipKeys, visibleFlashTurnLens?.relationshipKeys],
+  )
+  const activeLensEntityKeySet = useMemo(
+    () => new Set([...(activeTurnLens?.entityKeys ?? []), ...(visibleFlashTurnLens?.entityKeys ?? [])]),
+    [activeTurnLens?.entityKeys, visibleFlashTurnLens?.entityKeys],
+  )
+  const activeLensRelevantNodeKeys = useMemo(
+    () => activeTurnLens
+      ? Array.from(new Set([...activeTurnLens.nodeKeys, ...activeTurnLens.entityKeys]))
+      : [],
+    [activeTurnLens],
+  )
+  const activeLensRelationshipEndpointKeySet = useMemo(() => {
+    const result = new Set<string>()
+    for (const relationship of worldRelationships) {
+      if (!activeLensRelationshipKeySet.has(relationship.key)) continue
+      result.add(relationship.sourceEntityKey)
+      result.add(relationship.targetEntityKey)
+    }
+    return result
+  }, [activeLensRelationshipKeySet, worldRelationships])
+  const growthPlaybackModel = useMemo(
+    () => buildWorldGraphGrowthPlaybackModel({
+      turnLenses: turnLensByTurnId.values(),
+      activeTurnId: growthPlaybackTurnId,
+    }),
+    [growthPlaybackTurnId, turnLensByTurnId],
+  )
 
   async function refreshSelectedPromptSuggestions(reason: string, overrides?: {
     selectedRootEntityKey?: string | null
@@ -949,6 +1338,76 @@ export function WorldGraphPage({
       : [],
     [selectedEntity, worldThreads],
   )
+  const globalOverviewView = useMemo(
+    () => worldViews.find((view) => getWorldViewSemanticMetadata(view).viewKind === 'global_overview') ?? null,
+    [worldViews],
+  )
+  const persistedSelectedViewMetadata = useMemo(
+    () => getWorldViewSemanticMetadata(persistedSelectedView),
+    [persistedSelectedView],
+  )
+  const coreWorldViews = useMemo(
+    () => worldViews.filter((view) => getWorldViewRailGroup(view) === 'core'),
+    [worldViews],
+  )
+  const threadWorldViews = useMemo(
+    () => worldViews.filter((view) => getWorldViewRailGroup(view) === 'threads'),
+    [worldViews],
+  )
+  const manualWorldViews = useMemo(
+    () => worldViews.filter((view) => getWorldViewRailGroup(view) === 'manual'),
+    [worldViews],
+  )
+  const persistentPinnedNodeKeys = useMemo(
+    () => {
+      if (!globalOverviewView) return fallbackPinnedNodeKeys
+      return sanitizePinnedNodeKeys(getWorldViewSemanticMetadata(globalOverviewView).pinnedNodeKeys)
+    },
+    [fallbackPinnedNodeKeys, globalOverviewView],
+  )
+  const storyModeSelection = useMemo(
+    () => chooseStoryModeThreadView({
+      worldViews,
+      worldThreads,
+      selectedViewKey: persistedSelectedView.key ?? null,
+      selectedThreadKey: selectedPromptThreadKey,
+      focusRootKey: selectedView.rootEntityKey,
+    }),
+    [persistedSelectedView.key, selectedPromptThreadKey, selectedView.rootEntityKey, worldThreads, worldViews],
+  )
+  const activeStoryThread = storyModeSelection.thread
+  const activeStoryThreadView = storyModeSelection.view
+  const activeStoryThreadEntityKeys = useMemo(
+    () => new Set(activeStoryThread?.linkedEntityKeys ?? []),
+    [activeStoryThread],
+  )
+  const visibleStoryThreadEntityKeys = useMemo(
+    () => presentationMode === 'story' || graphFilterState.showThreads
+      ? activeStoryThreadEntityKeys
+      : new Set<string>(),
+    [activeStoryThreadEntityKeys, graphFilterState.showThreads, presentationMode],
+  )
+  const pinnedEntities = useMemo(
+    () => worldEntities.filter((entity) => persistentPinnedNodeKeys.includes(entity.key) && entity.status !== 'archived'),
+    [persistentPinnedNodeKeys, worldEntities],
+  )
+  const graphPresetConfig = useMemo(
+    () => buildWorldGraphPresentationPresetConfig({
+      preset: presentationPreset,
+      mode: presentationMode,
+      manualDepthMode: manualGraphDepthMode,
+    }),
+    [manualGraphDepthMode, presentationMode, presentationPreset],
+  )
+  const graphDepthMode = graphPresetConfig.depthMode
+  const protectedPinnedNodeKeys = useMemo(
+    () => new Set(pinnedEntities.map((entity) => entity.key)),
+    [pinnedEntities],
+  )
+  const activePinnedNodeKeys = useMemo(
+    () => showPinnedNodes && graphFilterState.showPinned ? protectedPinnedNodeKeys : new Set<string>(),
+    [graphFilterState.showPinned, protectedPinnedNodeKeys, showPinnedNodes],
+  )
   const deferredEntityOverviewName = useDeferredValue(entityOverviewDraft?.name ?? '')
   const deferredEntityOverviewSummary = useDeferredValue(entityOverviewDraft?.summary ?? '')
 
@@ -965,6 +1424,27 @@ export function WorldGraphPage({
   }, [selectedPromptThreadKey, worldThreads])
 
   useEffect(() => {
+    const previousMode = previousPresentationModeRef.current
+    if (previousMode === presentationMode) return
+    previousPresentationModeRef.current = presentationMode
+
+    if (presentationMode === 'story') {
+      if (persistedSelectedViewMetadata.viewKind !== 'thread_focus') {
+        worldModeReturnViewKeyRef.current = persistedSelectedView.key ?? null
+        if (activeStoryThreadView?.key) {
+          navigateToWorldView(activeStoryThreadView.key, { transientFocus: null, preserveHistory: true })
+        }
+      }
+      return
+    }
+
+    const returnViewKey = worldModeReturnViewKeyRef.current
+    if (!transientFocus && persistedSelectedViewMetadata.viewKind === 'thread_focus' && returnViewKey && returnViewKey !== persistedSelectedView.key) {
+      navigateToWorldView(returnViewKey, { transientFocus: null, preserveHistory: true })
+    }
+  }, [activeStoryThreadView?.key, persistedSelectedView.key, persistedSelectedViewMetadata.viewKind, presentationMode, transientFocus])
+
+  useEffect(() => {
     window.localStorage.setItem(GROW_WORKBENCH_WIDTH_STORAGE_KEY, String(growWorkbenchWidth))
   }, [growWorkbenchWidth])
 
@@ -973,7 +1453,15 @@ export function WorldGraphPage({
   }, [inspectorWidth])
 
   useEffect(() => {
-    setViewMode('graph')
+    window.localStorage.setItem(WORLD_GRAPH_PRESENTATION_PRESET_STORAGE_KEY, presentationPreset)
+  }, [presentationPreset])
+
+  useEffect(() => {
+    window.localStorage.setItem(WORLD_GRAPH_DISPLAY_FILTERS_STORAGE_KEY, JSON.stringify(displayFilters))
+  }, [displayFilters])
+
+  useEffect(() => {
+    setViewMode(selectedView.mode)
     setSearch(selectedView.search)
     setShowSuggestions(selectedView.showSuggestions)
     setShowLabels(selectedView.showLabels)
@@ -981,24 +1469,10 @@ export function WorldGraphPage({
   }, [selectedView.mode, selectedView.search, selectedView.showDerivedLayer, selectedView.showLabels, selectedView.showSuggestions])
 
   useEffect(() => {
-    setDraftPositions(selectedView.nodePositions)
-  }, [selectedView.key])
-
-  useEffect(() => {
-    if (!selectedView.key) return
-    if (Object.keys(selectedView.nodePositions).length === 0) return
-    setDraftPositions((current) => {
-      let changed = false
-      const next = { ...current }
-      for (const [key, position] of Object.entries(selectedView.nodePositions)) {
-        if (!next[key]) {
-          next[key] = position
-          changed = true
-        }
-      }
-      return changed ? next : current
-    })
-  }, [selectedView.key, selectedView.nodePositions])
+    if (presentationMode !== 'story') return
+    if (viewMode === 'graph' || viewMode === 'timeline') return
+    setViewMode(activeStoryThreadView?.mode === 'graph' ? 'graph' : 'timeline')
+  }, [activeStoryThreadView?.mode, presentationMode, viewMode])
 
   useEffect(() => {
     if (selectedWorldNodeKey) {
@@ -1012,7 +1486,6 @@ export function WorldGraphPage({
     if (!['op_applied', 'queue_started'].includes(latestEvent.eventType)) return
     window.setTimeout(() => {
       setAutoLayoutNonce((value) => value + 1)
-      flowRef.current?.fitView({ padding: 0.18, duration: 280 })
     }, 40)
   }, [sessionEvents])
 
@@ -1026,10 +1499,15 @@ export function WorldGraphPage({
       ...(parsed.data.applied?.worldOperators ?? []).map((operator) => operator.key),
       ...(parsed.data.applied?.worldResults ?? []).map((result) => result.key),
     ]
-    if (nextKeys.length === 0) return
-    setAnimatedNodeKeys((current) => Array.from(new Set([...current, ...nextKeys])))
+    const unseenKeys = nextKeys.filter((key) => {
+      if (seenAnimatedNodeKeysRef.current.has(key)) return false
+      seenAnimatedNodeKeysRef.current.add(key)
+      return true
+    })
+    if (unseenKeys.length === 0) return
+    setAnimatedNodeKeys((current) => Array.from(new Set([...current, ...unseenKeys])))
     const timeoutId = window.setTimeout(() => {
-      setAnimatedNodeKeys((current) => current.filter((key) => !nextKeys.includes(key)))
+      setAnimatedNodeKeys((current) => current.filter((key) => !unseenKeys.includes(key)))
     }, 1400)
     return () => window.clearTimeout(timeoutId)
   }, [sessionEvents])
@@ -1055,6 +1533,40 @@ export function WorldGraphPage({
   }, [assetByKey, worldResults])
 
   const effectiveFilters = selectedView.filters
+  const viewSeedEntityKeys = useMemo(
+    () => getWorldViewSeedEntityKeys(selectedView, { worldEntities, worldThreads }),
+    [selectedView, worldEntities, worldThreads],
+  )
+  const viewLayoutResetKey = useMemo(
+    () => [
+      selectedView.key,
+      selectedViewMetadata.viewKind,
+      selectedViewMetadata.transientFocus ? 'transient' : 'persisted',
+    ].join('|'),
+    [selectedView.key, selectedViewMetadata.transientFocus, selectedViewMetadata.viewKind],
+  )
+  useEffect(() => {
+    if (appliedViewResetKeyRef.current === viewLayoutResetKey) {
+      return
+    }
+    appliedViewResetKeyRef.current = viewLayoutResetKey
+    if (!isSavedManualGraphView) {
+      return
+    }
+    const nextPositions = selectedView.nodePositions
+    setDraftPositions((current) => {
+      const currentEntries = Object.entries(current)
+      const nextEntries = Object.entries(nextPositions)
+      if (
+        currentEntries.length === nextEntries.length
+        && nextEntries.every(([key, position]) => current[key]?.x === position.x && current[key]?.y === position.y)
+      ) {
+        return current
+      }
+      return nextPositions
+    })
+    setAutoLayoutNonce((value) => value + 1)
+  }, [isSavedManualGraphView, selectedView.nodePositions, viewLayoutResetKey])
   const filteredEntities = useMemo(() => {
     const query = search.trim().toLowerCase()
     return worldEntities.filter((entity) => {
@@ -1075,9 +1587,81 @@ export function WorldGraphPage({
     })
   }, [effectiveFilters, search, usageByEntityKey, worldEntities])
 
-  const filteredEntityKeys = useMemo(() => new Set(filteredEntities.map((entity) => entity.key)), [filteredEntities])
-  const pinnedRootKey = selectedView.rootEntityKey
-  const focusRootKey = pinnedRootKey ?? null
+  const filteredEntityKeyList = useMemo(
+    () => [...new Set([...filteredEntities.map((entity) => entity.key), ...activeLensEntityKeySet])],
+    [activeLensEntityKeySet, filteredEntities],
+  )
+  const protectedGraphNodeKeys = useMemo(
+    () => Array.from(new Set([
+      ...activeLensNodeKeySet,
+      ...activeLensEntityKeySet,
+      ...protectedPinnedNodeKeys,
+      ...visibleStoryThreadEntityKeys,
+      selectedWorldNodeKey,
+      inspectorNodeKey,
+      selectedView.rootEntityKey,
+    ].filter((key): key is string => typeof key === 'string' && key.length > 0))),
+    [
+      activeLensEntityKeySet,
+      activeLensNodeKeySet,
+      inspectorNodeKey,
+      protectedPinnedNodeKeys,
+      selectedView.rootEntityKey,
+      selectedWorldNodeKey,
+      visibleStoryThreadEntityKeys,
+    ],
+  )
+  const effectiveShowDerivedLayer = showDerivedLayer || Boolean(
+    activeTurnLens?.operatorKeys.length
+    || activeTurnLens?.resultKeys.length
+    || visibleFlashTurnLens?.operatorKeys.length
+    || visibleFlashTurnLens?.resultKeys.length,
+  )
+  const effectiveDerivedLayerVisible = graphFilterState.showDerived && effectiveShowDerivedLayer
+  const continuousScene = useMemo<DerivedWorldScene>(
+    () => deriveContinuousWorldScene({
+      entities: worldEntities,
+      operators: worldOperators,
+      results: worldResults,
+      relationships: worldRelationships,
+      connections: worldGraphConnections,
+      filteredEntityKeys: filteredEntityKeyList,
+      seedEntityKeys: viewSeedEntityKeys,
+      pinnedNodeKeys: [...new Set([...activePinnedNodeKeys, ...activeLensEntityKeySet])],
+      storyThreadEntityKeys: [...new Set([...visibleStoryThreadEntityKeys, ...activeLensEntityKeySet])],
+      // Plain selection should not re-root the graph; only explicit neighborhood/view context should.
+      selectedNodeKey: null,
+      focusRootKey: selectedView.rootEntityKey,
+      presentationMode,
+      viewKind: selectedViewMetadata.viewKind,
+      focusDepth: selectedView.focusDepth,
+      showDerivedLayer: effectiveDerivedLayerVisible,
+      graphDepthMode,
+      enabledEntityTypes: graphFilterState.enabledEntityTypes,
+      protectedNodeKeys: protectedGraphNodeKeys,
+    }),
+    [
+      activePinnedNodeKeys,
+      activeLensEntityKeySet,
+      filteredEntityKeyList,
+      graphDepthMode,
+      graphFilterState.enabledEntityTypes,
+      presentationMode,
+      protectedGraphNodeKeys,
+      selectedView.focusDepth,
+      selectedView.rootEntityKey,
+      selectedViewMetadata.viewKind,
+      effectiveDerivedLayerVisible,
+      viewSeedEntityKeys,
+      visibleStoryThreadEntityKeys,
+      worldEntities,
+      worldGraphConnections,
+      worldOperators,
+      worldRelationships,
+      worldResults,
+    ],
+  )
+  const focusRootKey = continuousScene.rootEntityKey
   const focusedEntity = useMemo(
     () => (focusRootKey ? worldEntities.find((entity) => entity.key === focusRootKey) ?? null : null),
     [focusRootKey, worldEntities],
@@ -1090,50 +1674,49 @@ export function WorldGraphPage({
     () => (focusRootKey ? worldResults.find((entry) => entry.key === focusRootKey) ?? null : null),
     [focusRootKey, worldResults],
   )
+  const breadcrumbSegments = useMemo(
+    () => buildWorldBreadcrumbSegments({
+      mode: presentationMode,
+      baseViewName: transientFocus
+        ? transientBaseView.name || 'Living World'
+        : persistedSelectedView.name || 'Living World',
+      activeThreadTitle: presentationMode === 'story' ? activeStoryThread?.title ?? null : null,
+      focusLabels: focusRootKey && focusedEntity ? [focusedEntity.name] : [],
+    }),
+    [activeStoryThread?.title, focusRootKey, focusedEntity, persistedSelectedView.name, presentationMode, transientBaseView.name, transientFocus],
+  )
+  const focusDisplayName = focusedEntity?.name ?? focusedOperator?.label ?? focusedResult?.title ?? null
+  const graphContextChips = useMemo(
+    () => buildWorldGraphContextChips({
+      mode: presentationMode,
+      baseViewName: transientFocus
+        ? transientBaseView.name || 'Living World'
+        : persistedSelectedView.name || 'Living World',
+      focusName: focusDisplayName,
+      focusDepth: transientFocus?.focusDepth ?? selectedView.focusDepth,
+      activeThreadTitle: presentationMode === 'story' ? activeStoryThread?.title ?? null : null,
+      activeTurnLens,
+      canGoBack: viewHistory.length > 0,
+      isManualSnapshot: isSavedManualGraphView,
+    }),
+    [
+      activeStoryThread?.title,
+      activeTurnLens,
+      focusDisplayName,
+      isSavedManualGraphView,
+      persistedSelectedView.name,
+      presentationMode,
+      selectedView.focusDepth,
+      transientBaseView.name,
+      transientFocus,
+      viewHistory.length,
+    ],
+  )
 
-  const visibleNodeKeys = useMemo(() => {
-    const mixedAdjacency = new Map<string, Set<string>>()
-    const addLink = (source: string, target: string) => {
-      const sourceLinks = mixedAdjacency.get(source) ?? new Set<string>()
-      sourceLinks.add(target)
-      mixedAdjacency.set(source, sourceLinks)
-      const targetLinks = mixedAdjacency.get(target) ?? new Set<string>()
-      targetLinks.add(source)
-      mixedAdjacency.set(target, targetLinks)
-    }
-
-    for (const relationship of worldRelationships) {
-      addLink(relationship.sourceEntityKey, relationship.targetEntityKey)
-    }
-    if (showDerivedLayer) {
-      for (const connection of worldGraphConnections) {
-        addLink(connection.sourceNodeKey, connection.targetNodeKey)
-      }
-    }
-
-    const seed = focusRootKey ? [focusRootKey] : [...filteredEntityKeys]
-    const visited = new Set<string>(seed)
-    let frontier = new Set<string>(seed)
-    const depthLimit = focusRootKey ? selectedView.focusDepth + 1 : 3
-    for (let depth = 0; depth < depthLimit; depth += 1) {
-      const next = new Set<string>()
-      for (const key of frontier) {
-        for (const neighbor of mixedAdjacency.get(key) ?? []) {
-          if (!visited.has(neighbor)) {
-            visited.add(neighbor)
-            next.add(neighbor)
-          }
-        }
-      }
-      frontier = next
-    }
-
-    for (const key of filteredEntityKeys) visited.add(key)
-    if (!showDerivedLayer) {
-      return new Set([...visited].filter((key) => filteredEntityKeys.has(key)))
-    }
-    return visited
-  }, [filteredEntityKeys, focusRootKey, selectedView.focusDepth, showDerivedLayer, worldGraphConnections, worldRelationships])
+  const visibleNodeKeys = useMemo(
+    () => new Set(continuousScene.targetNodeKeys),
+    [continuousScene.targetNodeKeys],
+  )
 
   const nodeRecords = useMemo(() => {
     const result = new Map<string, WorldGraphNodeRecord>()
@@ -1233,107 +1816,263 @@ export function WorldGraphPage({
   }, [draftPositions, onCreateWorldRelationship, pendingEntityResolution, worldEntities])
 
   const visibleNodeRecords = useMemo(
-    () => [...nodeRecords.values()].filter((record) => visibleNodeKeys.has(
-      record.kind === 'entity' ? record.entity.key : record.kind === 'operator' ? record.operator.key : record.result.key,
-    )),
-    [nodeRecords, visibleNodeKeys],
+    () => [...nodeRecords.values()].filter((record) => {
+      const key = record.kind === 'entity' ? record.entity.key : record.kind === 'operator' ? record.operator.key : record.result.key
+      return Object.prototype.hasOwnProperty.call(renderSceneNodes, key)
+    }),
+    [nodeRecords, renderSceneNodes],
+  )
+  const visibleEntityRecords = useMemo(
+    () => visibleNodeRecords.filter((record): record is Extract<WorldGraphNodeRecord, { kind: 'entity' }> => record.kind === 'entity'),
+    [visibleNodeRecords],
   )
 
   const visibleRelationships = useMemo(
-    () => worldRelationships.filter((relationship) => visibleNodeKeys.has(relationship.sourceEntityKey) && visibleNodeKeys.has(relationship.targetEntityKey)),
-    [visibleNodeKeys, worldRelationships],
+    () => worldRelationships.filter((relationship) => continuousScene.relationshipKeys.includes(relationship.key)),
+    [continuousScene.relationshipKeys, worldRelationships],
+  )
+  const visibleThreads = useMemo(
+    () => presentationMode === 'story'
+      ? (activeStoryThread ? [activeStoryThread] : [])
+      : worldThreads.filter((thread) => (
+        thread.linkedEntityKeys.some((entityKey) => visibleNodeKeys.has(entityKey))
+        || getWorldViewSemanticMetadata(selectedView).sourceThreadKeys.includes(thread.key)
+      )),
+    [activeStoryThread, presentationMode, selectedView, visibleNodeKeys, worldThreads],
   )
   const visibleConnections = useMemo(
-    () => (showDerivedLayer
-      ? worldGraphConnections.filter((connection) => visibleNodeKeys.has(connection.sourceNodeKey) && visibleNodeKeys.has(connection.targetNodeKey))
+    () => (effectiveDerivedLayerVisible
+      ? worldGraphConnections.filter((connection) => continuousScene.connectionKeys.includes(connection.key))
       : []),
-    [showDerivedLayer, visibleNodeKeys, worldGraphConnections],
+    [continuousScene.connectionKeys, effectiveDerivedLayerVisible, worldGraphConnections],
   )
-  const visibleLayoutNodes = useMemo(() => (
-    visibleNodeRecords.map((record) => {
-      const key = keyForWorldNodeRecord(record)
-      const width = record.kind === 'entity'
-        ? record.entity.nodeType === 'place'
-          ? 250
-          : 220
-        : record.kind === 'operator'
-          ? 160
-          : 250
-      const height = record.kind === 'result' ? 210 : record.kind === 'operator' ? 110 : 170
-      return { id: key, width, height }
-    })
-  ), [visibleNodeRecords])
-  const layoutStructureKey = useMemo(() => (
+  const selectedAdjacentNodeKeys = useMemo(() => {
+    const activeCardNodeKey = inspectorNodeKey ?? selectedWorldNodeKey
+    const result = new Set<string>()
+    if (!activeCardNodeKey) return result
+    for (const relationship of visibleRelationships) {
+      if (relationship.sourceEntityKey === activeCardNodeKey) {
+        result.add(relationship.targetEntityKey)
+      } else if (relationship.targetEntityKey === activeCardNodeKey) {
+        result.add(relationship.sourceEntityKey)
+      }
+    }
+    for (const connection of visibleConnections) {
+      if (connection.sourceNodeKey === activeCardNodeKey) {
+        result.add(connection.targetNodeKey)
+      } else if (connection.targetNodeKey === activeCardNodeKey) {
+        result.add(connection.sourceNodeKey)
+      }
+    }
+    return result
+  }, [inspectorNodeKey, selectedWorldNodeKey, visibleConnections, visibleRelationships])
+  const preserveTransientNodeAnchors = useMemo(
+    () => selectedViewMetadata.transientFocus === true && !isSavedManualGraphView && transientFocus?.layoutMode !== 'reflow',
+    [isSavedManualGraphView, selectedViewMetadata.transientFocus, transientFocus?.layoutMode],
+  )
+  const shouldAutoCenterCamera = useMemo(
+    () => !selectedViewMetadata.transientFocus || transientFocus?.layoutMode === 'reflow',
+    [selectedViewMetadata.transientFocus, transientFocus?.layoutMode],
+  )
+  const cameraFocusTriggerKey = useMemo(
+    () => [
+      viewMode,
+      presentationMode,
+      selectedView.key,
+      selectedView.rootEntityKey ?? '',
+      selectedViewMetadata.viewKind,
+      activeStoryThread?.key ?? '',
+      activeTurnLens?.turnId ?? '',
+      autoLayoutNonce,
+    ].join('|'),
     [
-      visibleLayoutNodes.map((node) => `${node.id}:${node.width}x${node.height}`).join('|'),
-      visibleRelationships.map((relationship) => `${relationship.key}:${relationship.sourceEntityKey}>${relationship.targetEntityKey}`).join('|'),
-      visibleConnections.map((connection) => `${connection.key}:${connection.sourceNodeKey}>${connection.targetNodeKey}`).join('|'),
-    ].join('__')
-  ), [visibleConnections, visibleLayoutNodes, visibleRelationships])
+      activeStoryThread?.key,
+      activeTurnLens?.turnId,
+      autoLayoutNonce,
+      presentationMode,
+      selectedView.key,
+      selectedView.rootEntityKey,
+      selectedViewMetadata.viewKind,
+      viewMode,
+    ],
+  )
+  useEffect(() => {
+    renderSceneNodesRef.current = renderSceneNodes
+  }, [renderSceneNodes])
 
   useEffect(() => {
-    let cancelled = false
+    continuousSceneRef.current = continuousScene
+  }, [continuousScene])
 
-    async function layoutVisibleGraph() {
-      if (viewMode !== 'graph' || visibleLayoutNodes.length === 0) {
-        if (!cancelled) setLayoutPositions({})
-        return
+  useEffect(() => {
+    if (viewMode !== 'graph') return
+
+    const targetNodeKeys = new Set(continuousScene.targetNodeKeys)
+    const currentNodes = renderSceneNodesRef.current
+    const nextNodes: Record<string, RenderSceneNodeState> = {}
+    const revealedNodeKeys: string[] = []
+    const occupiedCenters: Array<{ x: number; y: number; radius: number }> = []
+    const anchoredTraversalNodeKey = pendingTraversalAnchorNodeKeyRef.current
+    const anchoredTraversalPosition = anchoredTraversalNodeKey
+      ? currentNodes[anchoredTraversalNodeKey]?.position ?? null
+      : null
+    const anchoredRootTargetPosition = anchoredTraversalNodeKey
+      ? continuousScene.nodeByKey[anchoredTraversalNodeKey]?.targetPosition ?? null
+      : null
+    const anchoredTraversalOffset = anchoredTraversalPosition && anchoredRootTargetPosition
+      ? {
+          x: anchoredTraversalPosition.x - anchoredRootTargetPosition.x,
+          y: anchoredTraversalPosition.y - anchoredRootTargetPosition.y,
+        }
+      : null
+    const anchoredTargetPositionForKey = (key: string) => {
+      const targetPosition = continuousScene.nodeByKey[key]?.targetPosition ?? null
+      if (!targetPosition) return null
+      if (!anchoredTraversalOffset) return targetPosition
+      return {
+        x: targetPosition.x + anchoredTraversalOffset.x,
+        y: targetPosition.y + anchoredTraversalOffset.y,
       }
+    }
 
-      const elk = await getElkInstance()
-      const graph = await elk.layout({
-        id: 'world-graph',
-        layoutOptions: {
-          'elk.algorithm': 'layered',
-          'elk.direction': 'RIGHT',
-          'elk.layered.spacing.nodeNodeBetweenLayers': '120',
-          'elk.spacing.nodeNode': '70',
-        },
-        children: visibleLayoutNodes,
-        edges: [
-          ...visibleRelationships.map((relationship) => ({
-            id: relationship.key,
-            sources: [relationship.sourceEntityKey],
-            targets: [relationship.targetEntityKey],
-          })),
-          ...visibleConnections.map((connection) => ({
-            id: connection.key,
-            sources: [connection.sourceNodeKey],
-            targets: [connection.targetNodeKey],
-          })),
-        ],
+    for (const key of continuousScene.targetNodeKeys) {
+      const node = continuousScene.nodeByKey[key]
+      const record = nodeRecords.get(key)
+      if (!node) continue
+      if (!record) continue
+      const existing = currentNodes[key]
+      const visualMode = worldNodeVisualModeFor(node.tier, key, selectedWorldNodeKey, inspectorNodeKey, selectedAdjacentNodeKeys)
+      const preservedPosition = isSavedManualGraphView
+        ? draftPositions[key] ?? node.targetPosition
+        : existing?.position ?? node.targetPosition
+      const nextPosition = isSavedManualGraphView
+        ? draftPositions[key] ?? node.targetPosition
+        : anchoredTargetPositionForKey(key) ?? node.targetPosition
+      const preserveExistingScenePosition = !isSavedManualGraphView
+        && Boolean(existing)
+        && (
+          preserveTransientNodeAnchors
+          || (Boolean(anchoredTraversalOffset) && transientFocus?.layoutMode !== 'reflow')
+        )
+      const resolvedPosition = isSavedManualGraphView
+        ? nextPosition
+        : preserveExistingScenePosition
+          ? (existing?.position ?? nextPosition)
+          : existing
+            ? nextPosition
+            : preservedPosition
+      const visualModeChanged = existing?.visualMode !== visualMode
+      const collisionResolved = existing && !visualModeChanged
+        ? {
+            center: resolvedPosition,
+            radius: (() => {
+              const dimensions = worldNodeDimensions(record, node.tier, visualMode)
+              return Math.max(dimensions.width, dimensions.height) / 2 + worldNodeCollisionPadding(visualMode)
+            })(),
+          }
+        : resolveWorldNodeCenterCollision(resolvedPosition, occupiedCenters, record, node.tier, visualMode)
+      nextNodes[key] = {
+        displayTier: node.tier,
+        visualMode,
+        transitionState: existing ? (existing.transitionState === 'exiting' ? 'entering' : 'stable') : 'entering',
+        position: collisionResolved.center,
+        distance: node.distance,
+        firstHopEntityKey: node.firstHopEntityKey ?? null,
+        layoutGroupKey: node.layoutGroupKey ?? null,
+      }
+      if (
+        !existing
+        || existing.transitionState === 'exiting'
+        || existing.visualMode !== visualMode
+        || ((existing.displayTier === 'far' || existing.displayTier === 'peripheral') && existing.displayTier !== node.tier)
+      ) {
+        revealedNodeKeys.push(key)
+      }
+      occupiedCenters.push({
+        x: collisionResolved.center.x,
+        y: collisionResolved.center.y,
+        radius: collisionResolved.radius,
       })
-
-      if (cancelled) return
-      setLayoutPositions(Object.fromEntries(
-        (graph.children ?? []).map((child, index) => [child.id, { x: child.x ?? index * 220, y: child.y ?? 0 }]),
-      ))
-    }
-
-    void layoutVisibleGraph()
-    return () => {
-      cancelled = true
-    }
-  }, [autoLayoutNonce, layoutStructureKey, viewMode])
-
-  useEffect(() => {
-    if (!selectedView.key || viewMode !== 'graph' || visibleNodeRecords.length === 0) return
-
-    const nextPositions = { ...draftPositions }
-    let changed = false
-    for (const record of visibleNodeRecords) {
-      const key = record.kind === 'entity' ? record.entity.key : record.kind === 'operator' ? record.operator.key : record.result.key
-      if (!nextPositions[key] && layoutPositions[key]) {
-        nextPositions[key] = layoutPositions[key]
-        changed = true
+      const timeoutId = exitingSceneNodeTimeoutsRef.current.get(key)
+      if (timeoutId !== undefined) {
+        window.clearTimeout(timeoutId)
+        exitingSceneNodeTimeoutsRef.current.delete(key)
       }
     }
 
-    if (!changed) return
+    for (const [key, existing] of Object.entries(currentNodes)) {
+      if (targetNodeKeys.has(key)) continue
+      nextNodes[key] = {
+        ...existing,
+        transitionState: 'exiting',
+      }
+      if (!exitingSceneNodeTimeoutsRef.current.has(key)) {
+        const timeoutId = window.setTimeout(() => {
+          exitingSceneNodeTimeoutsRef.current.delete(key)
+          setRenderSceneNodes((current) => {
+            if (!current[key] || current[key]?.transitionState !== 'exiting') return current
+            const { [key]: _removed, ...rest } = current
+            renderSceneNodesRef.current = rest
+            return rest
+          })
+        }, 220)
+        exitingSceneNodeTimeoutsRef.current.set(key, timeoutId)
+      }
+    }
 
-    setDraftPositions(nextPositions)
-    queueNodePositionPersist(nextPositions)
-  }, [draftPositions, layoutPositions, selectedView.key, viewMode, visibleNodeRecords])
+    pendingTraversalAnchorNodeKeyRef.current = null
+    renderSceneNodesRef.current = nextNodes
+    setRenderSceneNodes(nextNodes)
+    if (revealedNodeKeys.length > 0) {
+      setSceneRevealNodeKeys((current) => Array.from(new Set([...current, ...revealedNodeKeys])))
+      for (const key of revealedNodeKeys) {
+        const existingTimeout = sceneRevealTimeoutsRef.current.get(key)
+        if (existingTimeout !== undefined) {
+          window.clearTimeout(existingTimeout)
+        }
+        const timeoutId = window.setTimeout(() => {
+          sceneRevealTimeoutsRef.current.delete(key)
+          setSceneRevealNodeKeys((current) => current.filter((candidate) => candidate !== key))
+        }, 260)
+        sceneRevealTimeoutsRef.current.set(key, timeoutId)
+      }
+    }
+  }, [autoLayoutNonce, continuousScene, draftPositions, inspectorNodeKey, isSavedManualGraphView, nodeRecords, preserveTransientNodeAnchors, selectedAdjacentNodeKeys, selectedWorldNodeKey, viewMode])
+
+  useEffect(() => {
+    if (viewMode !== 'graph' || isSavedManualGraphView || !shouldAutoCenterCamera) return
+    if (lastCameraFocusTriggerKeyRef.current === cameraFocusTriggerKey) return
+    lastCameraFocusTriggerKeyRef.current = cameraFocusTriggerKey
+    if (suppressNextCameraFocusRef.current) {
+      suppressNextCameraFocusRef.current = false
+      pendingCameraRelativeOffsetRef.current = null
+      pendingCameraFitNodeKeysRef.current = null
+      return
+    }
+
+    const requestedFitKeys = pendingCameraFitNodeKeysRef.current
+    pendingCameraFitNodeKeysRef.current = null
+    pendingCameraRelativeOffsetRef.current = null
+    const sceneTargetKeys = activeLensRelevantNodeKeys.length > 0
+      ? activeLensRelevantNodeKeys
+      : continuousSceneRef.current?.targetNodeKeys ?? []
+
+    const timeoutId = window.setTimeout(() => {
+      const instance = flowRef.current
+      if (!instance) return
+      const availableNodeIds = new Set(canvasNodesRef.current.map((node) => node.id))
+      const candidateKeys = (requestedFitKeys && requestedFitKeys.length > 0 ? requestedFitKeys : sceneTargetKeys)
+        .filter((key) => availableNodeIds.has(key))
+      const nodes = candidateKeys.length > 0 ? candidateKeys.map((id) => ({ id })) : undefined
+      void instance.fitView({
+        nodes,
+        padding: nodes && nodes.length <= 2 ? 0.42 : 0.24,
+        duration: 320,
+        maxZoom: 0.92,
+      })
+    }, 80)
+    return () => window.clearTimeout(timeoutId)
+  }, [activeLensRelevantNodeKeys, cameraFocusTriggerKey, isSavedManualGraphView, shouldAutoCenterCamera, viewMode])
 
   const relationCountByNodeKey = useMemo(() => {
     const counts = new Map<string, number>()
@@ -1354,11 +2093,56 @@ export function WorldGraphPage({
   const flowNodes = useMemo<Node<WorldNodeData>[]>(() => {
     return visibleNodeRecords.map((record, index) => {
       const key = record.kind === 'entity' ? record.entity.key : record.kind === 'operator' ? record.operator.key : record.result.key
+      const isPinned = activePinnedNodeKeys.has(key)
+      const inStoryPath = visibleStoryThreadEntityKeys.has(key)
+      const sceneNode = renderSceneNodes[key]
+      const displayTier = sceneNode?.displayTier ?? 'near'
+      const visualMode = sceneNode?.visualMode ?? worldNodeVisualModeFor(displayTier, key, selectedWorldNodeKey, inspectorNodeKey, selectedAdjacentNodeKeys)
+      const transitionState = sceneNode?.transitionState ?? 'stable'
+      const highlighted = activeLensNodeKeySet.has(key)
+      const branchLabel = sceneNode?.firstHopEntityKey ? entityByKey.get(sceneNode.firstHopEntityKey)?.name ?? null : null
+      const isTurnLensEndpoint = activeLensRelationshipEndpointKeySet.has(key) && !activeLensNodeKeySet.has(key)
+      const visibilityReason = buildWorldNodeVisibilityReason({
+        nodeKind: record.kind,
+        displayTier,
+        distance: sceneNode?.distance ?? null,
+        branchLabel,
+        isFocusRoot: record.kind === 'entity' && key === focusRootKey,
+        isSelected: selectedWorldNodeKey === key,
+        isInspected: inspectorNodeKey === key,
+        isPinned,
+        isStoryLinked: inStoryPath,
+        isTurnLensChanged: activeLensNodeKeySet.has(key),
+        isTurnLensEndpoint,
+      })
+      const labelPolicy = buildWorldGraphLabelPolicy({
+        zoom: viewportZoom,
+        showLabels,
+        preset: graphPresetConfig.preset,
+        visualMode,
+        displayTier,
+        highlighted,
+        isTurnLensEndpoint,
+        hovered: hoveredWorldNodeKey === key,
+        selected: selectedWorldNodeKey === key,
+        inspected: inspectorNodeKey === key,
+        hasBranchLabel: Boolean(branchLabel),
+      })
+      const showMiniLabel = labelPolicy.showNodeLabel
       return {
         id: key,
         type: 'worldNode',
-        position: draftPositions[key] ?? layoutPositions[key] ?? { x: index * 220, y: 0 },
-        draggable: viewMode === 'graph',
+        className: transitionState === 'entering'
+          ? 'is-scene-entering'
+          : transitionState === 'exiting'
+            ? 'is-scene-exiting'
+            : 'is-scene-stable',
+        position: sceneNode
+          ? (isSavedManualGraphView
+              ? (draftPositions[key] ?? worldNodeCenterToCanvasPosition(sceneNode.position, record, displayTier, visualMode))
+              : worldNodeCenterToCanvasPosition(sceneNode.position, record, displayTier, visualMode))
+          : draftPositions[key] ?? { x: index * 220, y: 0 },
+        draggable: viewMode === 'graph' && isSavedManualGraphView,
         data: {
           record,
           relationCount: relationCountByNodeKey.get(key) ?? 0,
@@ -1367,14 +2151,69 @@ export function WorldGraphPage({
             : record.kind === 'result' && typeof record.result.metadata?.cinematicGraphKey === 'string'
               ? 1
               : 0,
-          dimmed: Boolean(focusRootKey) && !visibleNodeKeys.has(key),
+          dimmed: presentationMode === 'story'
+            ? !inStoryPath && !isPinned
+            : transitionState === 'exiting',
+          pinned: isPinned,
+          storyLinked: inStoryPath,
+          displayTier,
+          visualMode,
+          transitionState,
           animateIn: animatedNodeKeys.includes(key),
+          animateSceneEnter: sceneRevealNodeKeys.includes(key),
+          highlighted,
+          showMiniLabel,
+          branchLabel: labelPolicy.showBranchLabel ? branchLabel : null,
+          visibilityReason,
         },
       }
     })
-  }, [animatedNodeKeys, draftPositions, focusRootKey, layoutPositions, relationCountByNodeKey, usageByEntityKey, viewMode, visibleNodeKeys, visibleNodeRecords])
+  }, [activeLensNodeKeySet, activeLensRelationshipEndpointKeySet, activePinnedNodeKeys, animatedNodeKeys, draftPositions, entityByKey, focusRootKey, graphPresetConfig.preset, hoveredWorldNodeKey, inspectorNodeKey, isSavedManualGraphView, presentationMode, relationCountByNodeKey, renderSceneNodes, sceneRevealNodeKeys, selectedAdjacentNodeKeys, selectedWorldNodeKey, showLabels, usageByEntityKey, viewMode, viewportZoom, visibleNodeRecords, visibleStoryThreadEntityKeys])
+  const flowNodesSignature = useMemo(
+    () => flowNodes.map((node) => {
+      const record = node.data.record
+      const recordKey = record.kind === 'entity' ? record.entity.key : record.kind === 'operator' ? record.operator.key : record.result.key
+      return [
+        node.id,
+        `${node.position.x},${node.position.y}`,
+        node.draggable ? '1' : '0',
+        record.kind,
+        recordKey,
+        record.title,
+        record.summary,
+        node.data.relationCount,
+        node.data.usageCount,
+        node.data.dimmed ? '1' : '0',
+        node.data.pinned ? '1' : '0',
+        node.data.storyLinked ? '1' : '0',
+        node.data.displayTier,
+        node.data.visualMode,
+        node.data.transitionState,
+        node.data.animateIn ? '1' : '0',
+        node.data.animateSceneEnter ? '1' : '0',
+        node.data.highlighted ? '1' : '0',
+        node.data.showMiniLabel ? '1' : '0',
+        node.data.branchLabel ?? '',
+        node.data.visibilityReason.kind,
+        node.data.visibilityReason.label,
+      ].join(':')
+    }).join('|'),
+    [flowNodes],
+  )
+  const visibilityReasonByNodeKey = useMemo(
+    () => new Map(flowNodes.map((node) => [node.id, node.data.visibilityReason] as const)),
+    [flowNodes],
+  )
 
   useEffect(() => {
+    const currentNodes = canvasNodesRef.current
+    if (
+      currentNodes.length === flowNodes.length
+      && currentNodes.every((node, index) => worldFlowNodeEqual(node, flowNodes[index]!))
+    ) {
+      return
+    }
+
     setCanvasNodes((current) => {
       const currentById = new Map(current.map((node) => [node.id, node]))
       let changed = current.length !== flowNodes.length
@@ -1402,80 +2241,248 @@ export function WorldGraphPage({
         }
       })
 
+      if (changed) {
+        canvasNodesRef.current = nextNodes
+      }
       return changed ? nextNodes : current
     })
-  }, [flowNodes])
+  }, [flowNodes, flowNodesSignature])
 
   const flowEdges = useMemo<Edge<WorldFlowEdgeData>[]>(() => {
-    return [
-      ...visibleRelationships.map((relationship) => ({
-        id: relationship.key,
-        type: 'worldEdge',
-        source: relationship.sourceEntityKey,
-        target: relationship.targetEntityKey,
-        selected: selectedWorldEdgeKey === relationship.key,
-        label: showLabels ? (relationship.notes.trim() || undefined) : undefined,
-        animated: relationship.state !== 'confirmed',
-        interactionWidth: 28,
-        zIndex: selectedWorldEdgeKey === relationship.key ? 6 : 4,
-        data: {
-          kind: 'relationship' as const,
-          onSelect: selectWorldEdge,
-          onContextMenu: (edgeKey: string, position: { x: number; y: number }) => {
-            selectWorldEdge(edgeKey)
-            setContextMenu({ kind: 'relationship', x: position.x, y: position.y, relationshipKey: edgeKey })
-          },
-        },
-        style: {
-          stroke: relationship.state === 'confirmed' ? 'rgba(148, 163, 184, 0.54)' : relationship.state === 'suggested' ? 'rgba(94, 234, 212, 0.54)' : 'rgba(244, 114, 182, 0.42)',
-          strokeDasharray: relationship.state === 'confirmed' ? undefined : '7 5',
-          strokeWidth: relationship.strength ? 1 + relationship.strength * 2 : 1.4,
-        },
-      })),
-      ...(edgeEditor?.mode === 'create' && visibleNodeKeys.has(edgeEditor.sourceEntityKey) && visibleNodeKeys.has(edgeEditor.targetEntityKey)
-        ? [{
-            id: 'world.relationship.pending',
-            type: 'worldEdge',
-            source: edgeEditor.sourceEntityKey,
-            target: edgeEditor.targetEntityKey,
-            label: showLabels ? (edgeEditor.notes.trim() || 'New relationship') : undefined,
-            animated: true,
-            interactionWidth: 28,
-            zIndex: 7,
-            data: { kind: 'relationship' as const },
-            style: {
-              stroke: 'rgba(94, 234, 212, 0.72)',
-              strokeDasharray: '7 5',
-              strokeWidth: 1.8,
+    const hoverEdgeAnchorNodeKey = inspectorNodeKey ?? selectedWorldNodeKey ?? focusRootKey
+    const hoveredEdgePair = hoverEdgeAnchorNodeKey && hoverRevealTargetNodeKey
+      ? { sourceKey: hoverEdgeAnchorNodeKey, targetKey: hoverRevealTargetNodeKey }
+      : null
+    const activeEdgeFocusNodeKey = hoveredEdgePair ? hoverEdgeAnchorNodeKey : null
+    const revealForEdge = (sourceKey: string, targetKey: string, edgeKey?: string | null) => resolveWorldEdgeReveal({
+      edgeKey,
+      sourceKey,
+      targetKey,
+      activeLensEdgeKeys: activeLensRelationshipKeySet,
+      activeLensNodeKeys: activeLensNodeKeySet,
+      selectedNodeKey: selectedWorldNodeKey,
+      inspectedNodeKey: inspectorNodeKey,
+      activeEdgeFocusNodeKey,
+      hoveredNodeKey: hoverRevealTargetNodeKey,
+      storyNodeKeys: visibleStoryThreadEntityKeys,
+      mode: presentationMode,
+    })
+    const edgeLabelForReveal = (value: string | undefined, reveal: ReturnType<typeof revealForEdge>) => {
+      if (!reveal.visible) return undefined
+      if (!showLabels) return undefined
+      return value
+    }
+    const edgeOpacityForReveal = (reveal: ReturnType<typeof revealForEdge>) => {
+      if (reveal.reason === 'focus_hover') return hoverRevealVisible ? 0.96 : 0
+      if (reveal.reason === 'lens') return 0.9
+      if (reveal.reason === 'story') return 0.78
+      return 0.72
+    }
+
+    const relationshipEdges = visibleRelationships
+      .filter((relationship) => revealForEdge(relationship.sourceEntityKey, relationship.targetEntityKey, relationship.key).visible)
+      .map((relationship) => {
+        const reveal = revealForEdge(relationship.sourceEntityKey, relationship.targetEntityKey, relationship.key)
+        const isLensEdge = reveal.reason === 'lens'
+        return {
+          id: relationship.key,
+          type: 'worldEdge',
+          source: relationship.sourceEntityKey,
+          target: relationship.targetEntityKey,
+          sourceHandle: WORLD_NODE_SOURCE_HANDLE,
+          targetHandle: WORLD_NODE_TARGET_HANDLE,
+          selected: selectedWorldEdgeKey === relationship.key,
+          label: edgeLabelForReveal(
+            relationship.notes.trim() || undefined,
+            reveal,
+          ),
+          animated: relationship.state !== 'confirmed',
+          interactionWidth: 28,
+          zIndex: selectedWorldEdgeKey === relationship.key ? 8 : isLensEdge ? 7 : 6,
+          data: {
+            kind: 'relationship' as const,
+            onSelect: selectWorldEdge,
+            onContextMenu: (edgeKey: string, position: { x: number; y: number }) => {
+              selectWorldEdge(edgeKey)
+              setContextMenu({ kind: 'relationship', x: position.x, y: position.y, relationshipKey: edgeKey })
             },
-          } satisfies Edge<WorldFlowEdgeData>]
-        : []),
-      ...visibleConnections.map((connection) => ({
-        id: connection.key,
-        type: 'worldEdge',
-        source: connection.sourceNodeKey,
-        target: connection.targetNodeKey,
-        selected: selectedWorldEdgeKey === connection.key,
-        label: showLabels ? connection.role : undefined,
-        animated: false,
-        interactionWidth: 24,
-        zIndex: selectedWorldEdgeKey === connection.key ? 5 : 3,
-        data: {
-          kind: 'connection' as const,
-          onSelect: selectWorldEdge,
-          onContextMenu: (edgeKey: string, position: { x: number; y: number }) => {
-            selectWorldEdge(edgeKey)
-            setContextMenu({ kind: 'connection', x: position.x, y: position.y, connectionKey: edgeKey })
           },
-        },
-        style: {
-          stroke: 'rgba(255, 255, 255, 0.16)',
-          strokeDasharray: '5 4',
-          strokeWidth: 1.2,
-        },
-      })),
-    ]
-  }, [edgeEditor, selectedWorldEdgeKey, showLabels, visibleConnections, visibleNodeKeys, visibleRelationships])
+          style: {
+            stroke: isLensEdge ? 'rgba(94, 234, 212, 0.82)' : relationship.state === 'confirmed' ? 'rgba(148, 163, 184, 0.54)' : relationship.state === 'suggested' ? 'rgba(94, 234, 212, 0.54)' : 'rgba(244, 114, 182, 0.42)',
+            strokeDasharray: relationship.state === 'confirmed' ? undefined : '7 5',
+            strokeWidth: isLensEdge ? 2 : relationship.strength ? 1 + relationship.strength * 2 : 1.4,
+            opacity: edgeOpacityForReveal(reveal),
+            transition: 'opacity 180ms ease, stroke 180ms ease, stroke-width 180ms ease',
+          },
+        } satisfies Edge<WorldFlowEdgeData>
+      })
+
+    const pendingEdges = edgeEditor?.mode === 'create'
+      && visibleNodeKeys.has(edgeEditor.sourceEntityKey)
+      && visibleNodeKeys.has(edgeEditor.targetEntityKey)
+      && revealForEdge(edgeEditor.sourceEntityKey, edgeEditor.targetEntityKey).visible
+      ? [{
+          id: 'world.relationship.pending',
+          type: 'worldEdge',
+          source: edgeEditor.sourceEntityKey,
+          target: edgeEditor.targetEntityKey,
+          sourceHandle: WORLD_NODE_SOURCE_HANDLE,
+          targetHandle: WORLD_NODE_TARGET_HANDLE,
+          label: showLabels ? (edgeEditor.notes.trim() || 'New relationship') : undefined,
+          animated: true,
+          interactionWidth: 28,
+          zIndex: 7,
+          data: { kind: 'relationship' as const },
+          style: {
+            stroke: 'rgba(94, 234, 212, 0.72)',
+            strokeDasharray: '7 5',
+            strokeWidth: 1.8,
+            opacity: edgeOpacityForReveal(revealForEdge(edgeEditor.sourceEntityKey, edgeEditor.targetEntityKey)),
+            transition: 'opacity 180ms ease, stroke 180ms ease, stroke-width 180ms ease',
+          },
+        } satisfies Edge<WorldFlowEdgeData>]
+      : []
+
+    const connectionEdges = visibleConnections
+      .filter((connection) => revealForEdge(connection.sourceNodeKey, connection.targetNodeKey, connection.key).visible)
+      .map((connection) => {
+        const reveal = revealForEdge(connection.sourceNodeKey, connection.targetNodeKey, connection.key)
+        const isLensConnection = reveal.reason === 'lens'
+        return {
+          id: connection.key,
+          type: 'worldEdge',
+          source: connection.sourceNodeKey,
+          target: connection.targetNodeKey,
+          sourceHandle: WORLD_NODE_SOURCE_HANDLE,
+          targetHandle: WORLD_NODE_TARGET_HANDLE,
+          selected: selectedWorldEdgeKey === connection.key,
+          label: edgeLabelForReveal(connection.role, reveal),
+          animated: false,
+          interactionWidth: 24,
+          zIndex: selectedWorldEdgeKey === connection.key ? 6 : 5,
+          data: {
+            kind: 'connection' as const,
+            onSelect: selectWorldEdge,
+            onContextMenu: (edgeKey: string, position: { x: number; y: number }) => {
+              selectWorldEdge(edgeKey)
+              setContextMenu({ kind: 'connection', x: position.x, y: position.y, connectionKey: edgeKey })
+            },
+          },
+          style: {
+            stroke: isLensConnection ? 'rgba(94, 234, 212, 0.42)' : 'rgba(255, 255, 255, 0.16)',
+            strokeDasharray: '5 4',
+            strokeWidth: isLensConnection ? 1.5 : 1.2,
+            opacity: edgeOpacityForReveal(reveal),
+            transition: 'opacity 180ms ease, stroke 180ms ease, stroke-width 180ms ease',
+          },
+        } satisfies Edge<WorldFlowEdgeData>
+      })
+
+    return [...relationshipEdges, ...pendingEdges, ...connectionEdges]
+  }, [activeLensNodeKeySet, activeLensRelationshipKeySet, edgeEditor, focusRootKey, hoverRevealTargetNodeKey, hoverRevealVisible, inspectorNodeKey, presentationMode, selectedWorldEdgeKey, selectedWorldNodeKey, showLabels, visibleConnections, visibleNodeKeys, visibleRelationships, visibleStoryThreadEntityKeys])
+  const flowEdgesSignature = useMemo(
+    () => flowEdges.map((edge) => [
+      edge.id,
+      edge.source,
+      edge.target,
+      edge.sourceHandle ?? '',
+      edge.targetHandle ?? '',
+      edge.selected ? '1' : '0',
+      edge.label ?? '',
+      edge.animated ? '1' : '0',
+      edge.zIndex ?? '',
+      edge.data?.kind ?? '',
+      edge.style?.stroke ?? '',
+      edge.style?.strokeDasharray ?? '',
+      edge.style?.strokeWidth ?? '',
+      edge.style?.opacity ?? '',
+    ].join(':')).join('|'),
+    [flowEdges],
+  )
+
+  useEffect(() => {
+    const currentEdges = canvasEdgesRef.current
+    if (
+      currentEdges.length === flowEdges.length
+      && currentEdges.every((edge, index) => worldFlowEdgeEqual(edge, flowEdges[index]!))
+    ) {
+      return
+    }
+
+    setCanvasEdges((current) => {
+      const currentById = new Map(current.map((edge) => [edge.id, edge]))
+      let changed = current.length !== flowEdges.length
+      const nextEdges = flowEdges.map((edge) => {
+        const previousEdge = currentById.get(edge.id)
+        if (!previousEdge) {
+          changed = true
+          return edge
+        }
+        if (worldFlowEdgeEqual(previousEdge, edge)) {
+          return previousEdge
+        }
+        changed = true
+        return {
+          ...previousEdge,
+          source: edge.source,
+          target: edge.target,
+          sourceHandle: edge.sourceHandle,
+          targetHandle: edge.targetHandle,
+          selected: edge.selected,
+          label: edge.label,
+          animated: edge.animated,
+          interactionWidth: edge.interactionWidth,
+          zIndex: edge.zIndex,
+          data: edge.data,
+          style: edge.style,
+        }
+      })
+      if (changed) {
+        canvasEdgesRef.current = nextEdges
+      }
+      return changed ? nextEdges : current
+    })
+  }, [flowEdges, flowEdgesSignature])
+
+  const hoverEdgeAnchorNodeKey = inspectorNodeKey ?? selectedWorldNodeKey ?? focusRootKey
+  const hoveredConnectedFocusNodeKey = useMemo(() => {
+    if (!hoverEdgeAnchorNodeKey || !hoveredWorldNodeKey || hoveredWorldNodeKey === hoverEdgeAnchorNodeKey) return null
+    const hasRelationship = visibleRelationships.some((relationship) => (
+      (relationship.sourceEntityKey === hoverEdgeAnchorNodeKey && relationship.targetEntityKey === hoveredWorldNodeKey)
+      || (relationship.targetEntityKey === hoverEdgeAnchorNodeKey && relationship.sourceEntityKey === hoveredWorldNodeKey)
+    ))
+    if (hasRelationship) return hoveredWorldNodeKey
+    const hasConnection = visibleConnections.some((connection) => (
+      (connection.sourceNodeKey === hoverEdgeAnchorNodeKey && connection.targetNodeKey === hoveredWorldNodeKey)
+      || (connection.targetNodeKey === hoverEdgeAnchorNodeKey && connection.sourceNodeKey === hoveredWorldNodeKey)
+    ))
+    return hasConnection ? hoveredWorldNodeKey : null
+  }, [hoverEdgeAnchorNodeKey, hoveredWorldNodeKey, visibleConnections, visibleRelationships])
+
+  useEffect(() => {
+    if (hoverEdgeFadeTimeoutRef.current !== null) {
+      window.clearTimeout(hoverEdgeFadeTimeoutRef.current)
+      hoverEdgeFadeTimeoutRef.current = null
+    }
+    if (hoveredConnectedFocusNodeKey) {
+      setHoverRevealTargetNodeKey(hoveredConnectedFocusNodeKey)
+      setHoverRevealVisible(false)
+      hoverEdgeFadeTimeoutRef.current = window.setTimeout(() => {
+        hoverEdgeFadeTimeoutRef.current = null
+        setHoverRevealVisible(true)
+      }, 20)
+      return
+    }
+    if (!hoverRevealTargetNodeKey) {
+      setHoverRevealVisible(false)
+      return
+    }
+    setHoverRevealVisible(false)
+    hoverEdgeFadeTimeoutRef.current = window.setTimeout(() => {
+      hoverEdgeFadeTimeoutRef.current = null
+      setHoverRevealTargetNodeKey((current) => (current === hoverRevealTargetNodeKey ? null : current))
+    }, 180)
+  }, [hoverRevealTargetNodeKey, hoveredConnectedFocusNodeKey])
 
   const inspectorEntity = useMemo(
     () => worldEntities.find((entity) => entity.key === inspectorNodeKey) ?? null,
@@ -1526,6 +2533,44 @@ export function WorldGraphPage({
     inspectorResult,
   ])
   const activePromptPreview = useMemo(() => activePreviewForTurn(activePromptTurn), [activePromptTurn])
+
+  useEffect(() => {
+    if (activeTurnLens && !turnLensByTurnId.has(activeTurnLens.turnId)) {
+      setActiveTurnLens(null)
+      setGrowthPlaybackTurnId(null)
+      setGrowthPlaybackPlaying(false)
+    }
+  }, [activeTurnLens, turnLensByTurnId])
+
+  useEffect(() => {
+    if (!latestCompletedTurnLens) return
+    if (handledAutoLensTurnIdRef.current === latestCompletedTurnLens.turnId) return
+    handledAutoLensTurnIdRef.current = latestCompletedTurnLens.turnId
+    setFlashTurnLens(latestCompletedTurnLens)
+    const timeoutId = window.setTimeout(() => {
+      setFlashTurnLens((current) => (current?.turnId === latestCompletedTurnLens.turnId ? null : current))
+    }, 2400)
+    if (!activeTurnLens && !transientFocus && !isSavedManualGraphView && !edgeEditor && !entityComposer && !relationshipComposer && !compositionComposer) {
+      openTurnLens(latestCompletedTurnLens, { auto: true })
+    }
+    return () => window.clearTimeout(timeoutId)
+  }, [activeTurnLens, compositionComposer, edgeEditor, entityComposer, isSavedManualGraphView, latestCompletedTurnLens, relationshipComposer, transientFocus])
+
+  useEffect(() => {
+    if (!growthPlaybackPlaying) return
+    if (growthPlaybackModel.steps.length === 0) {
+      setGrowthPlaybackPlaying(false)
+      return
+    }
+    const timeoutId = window.setTimeout(() => {
+      if (growthPlaybackModel.canGoNext) {
+        openRelativeGrowthPlaybackStep(1)
+      } else {
+        setGrowthPlaybackPlaying(false)
+      }
+    }, 1800)
+    return () => window.clearTimeout(timeoutId)
+  }, [growthPlaybackModel.canGoNext, growthPlaybackModel.steps.length, growthPlaybackPlaying, growthPlaybackTurnId])
 
   useEffect(() => {
     if (!inspectorEntity) {
@@ -1581,7 +2626,7 @@ export function WorldGraphPage({
       left: Math.max(gutter + popupWidth / 2, Math.min(window.innerWidth - gutter - popupWidth / 2, midpointX)),
       top: Math.max(120, midpointY),
     }
-  }, [draftPositions, edgeEditor, layoutPositions, visibleNodeRecords])
+  }, [draftPositions, edgeEditor, renderSceneNodes, visibleNodeRecords])
 
   useEffect(() => {
     setRelationshipInspectorNotes(inspectorRelationship?.notes ?? '')
@@ -1595,16 +2640,249 @@ export function WorldGraphPage({
       if (entityOverviewPersistTimeoutRef.current !== null) {
         window.clearTimeout(entityOverviewPersistTimeoutRef.current)
       }
+      if (hoverEdgeFadeTimeoutRef.current !== null) {
+        window.clearTimeout(hoverEdgeFadeTimeoutRef.current)
+      }
+      for (const timeoutId of exitingSceneNodeTimeoutsRef.current.values()) {
+        window.clearTimeout(timeoutId)
+      }
+      exitingSceneNodeTimeoutsRef.current.clear()
+      for (const timeoutId of sceneRevealTimeoutsRef.current.values()) {
+        window.clearTimeout(timeoutId)
+      }
+      sceneRevealTimeoutsRef.current.clear()
     }
   }, [])
 
   async function persistViewChanges(changes: Partial<WorldViewCreateInput>) {
-    if (!selectedView.key || worldViews.length === 0) return
+    if (!selectedView.key || worldViews.length === 0 || !canPersistSelectedViewEdits) return
     await onUpdateWorldView(selectedView.key, changes)
   }
 
+  function clearTransientFocus() {
+    const baseViewKey = transientFocus?.sourceViewKey ?? persistedSelectedView.key ?? null
+    setTransientFocus(null)
+    if (baseViewKey && baseViewKey !== selectedWorldViewKey) {
+      _onSelectWorldView(baseViewKey)
+    }
+  }
+
+  function navigateToWorldView(
+    viewKey: string | null,
+    options?: {
+      transientFocus?: { rootEntityKey: string | null; focusDepth: number; layoutMode?: 'preserve' | 'reflow' } | null
+      preserveHistory?: boolean
+    },
+  ) {
+    setActiveTurnLens(null)
+    setFlashTurnLens(null)
+    const nextTransientFocus = options?.transientFocus ?? null
+    const currentViewKey = selectedWorldViewKey ?? persistedSelectedView.key ?? null
+    const currentTransient = transientFocus
+      ? {
+          rootEntityKey: transientFocus.rootEntityKey,
+          focusDepth: transientFocus.focusDepth,
+          layoutMode: transientFocus.layoutMode,
+        }
+      : null
+    if (!options?.preserveHistory && (currentViewKey !== viewKey || JSON.stringify(currentTransient) !== JSON.stringify(nextTransientFocus))) {
+      setViewHistory((current) => [
+        ...current.slice(-23),
+        { viewKey: currentViewKey, transientFocus: currentTransient },
+      ])
+    }
+    setTransientFocus(nextTransientFocus ? {
+      sourceViewKey: viewKey,
+      rootEntityKey: nextTransientFocus.rootEntityKey,
+      focusDepth: nextTransientFocus.focusDepth,
+      layoutMode: nextTransientFocus.layoutMode ?? 'preserve',
+    } : null)
+    _onSelectWorldView(viewKey)
+  }
+
+  function handleBackToPreviousView() {
+    const previous = viewHistory[viewHistory.length - 1] ?? null
+    if (!previous) return
+    setViewHistory((current) => current.slice(0, -1))
+    setTransientFocus(previous.transientFocus ? {
+      sourceViewKey: previous.viewKey,
+      rootEntityKey: previous.transientFocus.rootEntityKey,
+      focusDepth: previous.transientFocus.focusDepth,
+      layoutMode: previous.transientFocus.layoutMode,
+    } : null)
+    _onSelectWorldView(previous.viewKey)
+  }
+
+  function captureViewportOffsetFromNode(entityKey: string) {
+    const instance = flowRef.current
+    const bounds = graphCanvasRef.current?.getBoundingClientRect() ?? null
+    const nodePosition = renderSceneNodesRef.current[entityKey]?.position ?? null
+    if (!instance || !bounds || !nodePosition) return null
+    const viewport = instance.getViewport()
+    const viewportCenter = {
+      x: (bounds.width / 2 - viewport.x) / viewport.zoom,
+      y: (bounds.height / 2 - viewport.y) / viewport.zoom,
+    }
+    return {
+      x: viewportCenter.x - nodePosition.x,
+      y: viewportCenter.y - nodePosition.y,
+    }
+  }
+
+  function openTransientNeighborhood(
+    entityKey: string,
+    focusDepth = 1,
+    layoutMode: 'preserve' | 'reflow' = 'preserve',
+  ) {
+    setPresentationMode('world')
+    pendingTraversalAnchorNodeKeyRef.current = entityKey
+    pendingCameraRelativeOffsetRef.current = layoutMode === 'reflow'
+      ? captureViewportOffsetFromNode(entityKey)
+      : null
+    suppressNextCameraFocusRef.current = layoutMode !== 'reflow'
+    const baseViewKey = transientFocus?.sourceViewKey ?? selectedWorldViewKey ?? persistedSelectedView.key ?? null
+    setTransientFocus({
+      sourceViewKey: baseViewKey,
+      rootEntityKey: entityKey,
+      focusDepth: Math.max(1, Math.min(2, focusDepth)),
+      layoutMode,
+    })
+  }
+
+  function openTurnLens(lens: WorldPromptTurnLens, options?: { auto?: boolean }) {
+    setActiveTurnLens(lens)
+    if (!lens.rootEntityKey) return
+    if (options?.auto && (isSavedManualGraphView || edgeEditor || entityComposer || relationshipComposer || compositionComposer)) {
+      return
+    }
+    setPresentationMode('world')
+    pendingTraversalAnchorNodeKeyRef.current = lens.rootEntityKey
+    pendingCameraFitNodeKeysRef.current = Array.from(new Set([...lens.nodeKeys, ...lens.entityKeys]))
+    pendingCameraRelativeOffsetRef.current = null
+    suppressNextCameraFocusRef.current = false
+    const baseViewKey = transientFocus?.sourceViewKey ?? selectedWorldViewKey ?? persistedSelectedView.key ?? null
+    setTransientFocus({
+      sourceViewKey: baseViewKey,
+      rootEntityKey: lens.rootEntityKey,
+      focusDepth: 2,
+      layoutMode: 'reflow',
+    })
+    setAutoLayoutNonce((value) => value + 1)
+  }
+
+  function clearTurnLens() {
+    setActiveTurnLens(null)
+    setFlashTurnLens(null)
+    setGrowthPlaybackTurnId(null)
+    setGrowthPlaybackPlaying(false)
+  }
+
+  function openGrowthPlaybackStep(step: typeof growthPlaybackModel.steps[number] | null) {
+    if (!step) return
+    setGrowthPlaybackTurnId(step.turnId)
+    setPresentationPreset('recent')
+    setManualGraphDepthMode(null)
+    openTurnLens(step.turnLens)
+  }
+
+  function openRelativeGrowthPlaybackStep(delta: number) {
+    const steps = growthPlaybackModel.steps
+    if (steps.length === 0) return
+    const fallbackIndex = delta >= 0 ? -1 : steps.length
+    const currentIndex = growthPlaybackModel.activeIndex >= 0 ? growthPlaybackModel.activeIndex : fallbackIndex
+    const nextIndex = Math.max(0, Math.min(steps.length - 1, currentIndex + delta))
+    openGrowthPlaybackStep(steps[nextIndex] ?? null)
+  }
+
+  function handleGraphContextChipAction(actionKind: WorldGraphContextChip['actionKind']) {
+    switch (actionKind) {
+      case 'switch_mode':
+        setPresentationMode((mode) => (mode === 'story' ? 'world' : 'story'))
+        break
+      case 'reset_base_view':
+        navigateToWorldView(transientFocus?.sourceViewKey ?? selectedWorldViewKey ?? persistedSelectedView.key, {
+          transientFocus: null,
+          preserveHistory: true,
+        })
+        break
+      case 'exit_focus':
+        clearTransientFocus()
+        break
+      case 'center_lens':
+        if (activeTurnLens) {
+          openTurnLens(activeTurnLens)
+        }
+        break
+      case 'exit_lens':
+        clearTurnLens()
+        break
+      case 'back':
+        handleBackToPreviousView()
+        break
+      case null:
+        break
+    }
+  }
+
+  function focusCurrentViewOnEntity(entityKey: string, options?: { layoutMode?: 'preserve' | 'reflow' }) {
+    openTransientNeighborhood(entityKey, 1, options?.layoutMode ?? 'preserve')
+  }
+
+  function openGlobalOverview() {
+    setPresentationMode('world')
+    const globalOverview = worldViews.find((view) => getWorldViewSemanticMetadata(view).viewKind === 'global_overview') ?? null
+    navigateToWorldView(globalOverview?.key ?? persistedSelectedView.key, { transientFocus: null })
+  }
+
+  async function persistPinnedNodeKeys(nextPinnedNodeKeys: string[]) {
+    const sanitized = sanitizePinnedNodeKeys(nextPinnedNodeKeys)
+    if (globalOverviewView?.key) {
+      await onUpdateWorldView(globalOverviewView.key, {
+        metadata: {
+          ...(globalOverviewView.metadata ?? {}),
+          ...getWorldViewSemanticMetadata(globalOverviewView),
+          pinnedNodeKeys: sanitized,
+        },
+      })
+      return
+    }
+    setFallbackPinnedNodeKeys(sanitized)
+  }
+
+  async function togglePinnedNode(entityKey: string) {
+    const nextPinnedNodeKeys = persistentPinnedNodeKeys.includes(entityKey)
+      ? persistentPinnedNodeKeys.filter((key) => key !== entityKey)
+      : [...persistentPinnedNodeKeys, entityKey]
+    await persistPinnedNodeKeys(nextPinnedNodeKeys)
+  }
+
+  function handleBreadcrumbClick(segmentId: string) {
+    if (segmentId.startsWith('mode:')) {
+      setPresentationMode(segmentId === 'mode:story' ? 'story' : 'world')
+      return
+    }
+    if (segmentId.startsWith('view:')) {
+      if (transientFocus) {
+        clearTransientFocus()
+      } else if (persistedSelectedView.key) {
+        navigateToWorldView(persistedSelectedView.key, { transientFocus: null, preserveHistory: true })
+      }
+      return
+    }
+    if (segmentId.startsWith('thread:')) {
+      if (activeStoryThreadView?.key) {
+        setPresentationMode('story')
+        navigateToWorldView(activeStoryThreadView.key, { transientFocus: null, preserveHistory: true })
+      }
+      return
+    }
+    if (segmentId.startsWith('focus:') && focusRootKey) {
+      openTransientNeighborhood(focusRootKey, 1)
+    }
+  }
+
   function queueNodePositionPersist(nextPositions: Record<string, { x: number; y: number }>, delay = 180) {
-    if (!selectedView.key || worldViews.length === 0) return
+    if (!selectedView.key || worldViews.length === 0 || !canPersistSelectedViewEdits) return
     if (nodePositionPersistTimeoutRef.current !== null) {
       window.clearTimeout(nodePositionPersistTimeoutRef.current)
     }
@@ -1673,7 +2951,11 @@ export function WorldGraphPage({
   }
 
   function handleNodesChange(changes: NodeChange<Node<WorldNodeData>>[]) {
-    setCanvasNodes((current) => applyNodeChanges(changes, current))
+    setCanvasNodes((current) => {
+      const next = applyNodeChanges(changes, current)
+      canvasNodesRef.current = next
+      return next
+    })
   }
 
   function handleNodeDragStop(_event: unknown, node: Node<WorldNodeData>) {
@@ -1682,12 +2964,28 @@ export function WorldGraphPage({
       [node.id]: node.position,
     }
     setDraftPositions(nextPositions)
+    const displayTier = node.data.displayTier ?? 'near'
+    const visualMode = node.data.visualMode ?? 'card'
+    renderSceneNodesRef.current = {
+      ...renderSceneNodesRef.current,
+      [node.id]: {
+        displayTier,
+        visualMode,
+        transitionState: 'stable',
+        position: worldNodeCanvasToCenterPosition(node.position, node.data.record, displayTier, visualMode),
+        distance: renderSceneNodesRef.current[node.id]?.distance ?? null,
+        firstHopEntityKey: renderSceneNodesRef.current[node.id]?.firstHopEntityKey ?? null,
+        layoutGroupKey: renderSceneNodesRef.current[node.id]?.layoutGroupKey ?? null,
+      },
+    }
     queueNodePositionPersist(nextPositions)
   }
 
   async function handleAutoLayout() {
     setAutoLayoutNonce((value) => value + 1)
-    setTimeout(() => flowRef.current?.fitView({ padding: 0.18, duration: 300 }), 20)
+    setTimeout(() => {
+      flowRef.current?.fitView({ padding: 0.24, duration: 300, maxZoom: 0.92 })
+    }, 20)
   }
 
   async function handleSaveCurrentView() {
@@ -1706,7 +3004,16 @@ export function WorldGraphPage({
       nodePositions: draftPositions,
       collapsedState: selectedView.collapsedState,
       sortMode: selectedView.sortMode,
-      metadata: {},
+      metadata: {
+        viewKind: 'manual_snapshot',
+        autoManaged: false,
+        sourceEntityKeys: focusRootKey ? [focusRootKey] : viewSeedEntityKeys,
+        sourceThreadKeys: [],
+        pinnedNodeKeys: persistentPinnedNodeKeys,
+        refreshPolicy: 'manual_only',
+        semanticLabel: selectedViewMetadata.semanticLabel ?? null,
+        transientFocus: false,
+      },
     })
   }
 
@@ -1747,7 +3054,15 @@ export function WorldGraphPage({
     }
   }
 
-  async function handleSubmitWorldPrompt(promptOverride?: string, selectedSuggestionId?: string | null) {
+  async function handleSubmitWorldPrompt(
+    promptOverride?: string,
+    selectedSuggestionId?: string | null,
+    contextOverrides?: {
+      selectedRootEntityKey?: string | null
+      selectedViewKey?: string | null
+      selectedThreadKey?: string | null
+    },
+  ) {
     const prompt = (promptOverride ?? worldPromptText).trim()
     if (!prompt) return
     const sessionKey = selectedPromptSessionKey ?? selectedPromptSession?.key ?? createWorldPromptSessionKey()
@@ -1759,9 +3074,9 @@ export function WorldGraphPage({
         prompt,
         sessionKey,
         selectedSuggestionId: selectedSuggestionId ?? null,
-        selectedRootEntityKey: selectedEntity?.key ?? null,
-        selectedViewKey: selectedView.key,
-        selectedThreadKey: selectedPromptThread?.key ?? null,
+        selectedRootEntityKey: contextOverrides?.selectedRootEntityKey ?? selectedEntity?.key ?? null,
+        selectedViewKey: contextOverrides?.selectedViewKey ?? selectedView.key,
+        selectedThreadKey: contextOverrides?.selectedThreadKey ?? selectedPromptThread?.key ?? null,
       })
       setSelectedPromptSessionKey(sessionKey)
       if (!promptOverride) {
@@ -1807,7 +3122,27 @@ export function WorldGraphPage({
   }
 
   async function handleRunPromptSuggestion(suggestion: WorldPromptSuggestion | WorldPromptSuggestionRecord) {
-    await handleSubmitWorldPrompt(suggestion.prompt, resolveSelectedSuggestionId(suggestion))
+    const selectedRootEntityKey =
+      ('targetRootEntityKey' in suggestion && suggestion.targetRootEntityKey)
+      || ('targetEntityKeys' in suggestion && suggestion.targetEntityKeys?.[0])
+      || null
+    const selectedViewKey =
+      ('suggestedViewKey' in suggestion && suggestion.suggestedViewKey)
+      || null
+    const selectedThreadKey =
+      ('targetThreadKeys' in suggestion && suggestion.targetThreadKeys?.[0])
+      || null
+    if (selectedThreadKey) {
+      setSelectedPromptThreadKey(selectedThreadKey)
+    }
+    if (selectedViewKey) {
+      navigateToWorldView(selectedViewKey, { transientFocus: null })
+    }
+    await handleSubmitWorldPrompt(suggestion.prompt, resolveSelectedSuggestionId(suggestion), {
+      selectedRootEntityKey,
+      selectedViewKey,
+      selectedThreadKey,
+    })
   }
 
   async function handleStartNewPromptSession() {
@@ -2073,6 +3408,8 @@ export function WorldGraphPage({
             sessionSuggestions={activeSessionSuggestions}
             sessionTurns={sessionTurns}
             sessionSuggestionCountBySessionId={activeSuggestionCountBySessionId}
+            turnLensByTurnId={turnLensByTurnId}
+            activeTurnLensId={activeTurnLens?.turnId ?? null}
             worldPromptTurns={worldPromptTurns}
             worldThreads={activeWorldThreads}
             worldPromptSessions={worldPromptSessions}
@@ -2095,6 +3432,8 @@ export function WorldGraphPage({
             onSelectSession={setSelectedPromptSessionKey}
             onStartNewSession={handleStartNewPromptSession}
             onSubmit={handleSubmitWorldPrompt}
+            onOpenTurnLens={openTurnLens}
+            onCloseTurnLens={clearTurnLens}
             historyOpen={historyOpen}
             variant="grow"
           />
@@ -2113,6 +3452,34 @@ export function WorldGraphPage({
         <div className="world-graph-toolbar world-shell-stage-toolbar">
           <div className="world-toolbar-heading">
             <h3>{selectedView.name || 'Living World'}</h3>
+            <div className="world-presentation-meta">
+              <div className="segmented-control world-presentation-mode-toggle">
+                {(['world', 'story'] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    className={presentationMode === mode ? 'segment-button is-active' : 'segment-button'}
+                    onClick={() => setPresentationMode(mode)}
+                    type="button"
+                  >
+                    {mode === 'world' ? 'World' : 'Story'}
+                  </button>
+                ))}
+              </div>
+              <div className="world-breadcrumbs" aria-label="World navigation breadcrumbs">
+                {breadcrumbSegments.map((segment, index) => (
+                  <span key={segment.id} className="world-breadcrumb-item">
+                    {index > 0 ? <span className="world-breadcrumb-separator">/</span> : null}
+                    <button
+                      className={`world-breadcrumb world-breadcrumb-${segment.tone}`}
+                      onClick={() => handleBreadcrumbClick(segment.id)}
+                      type="button"
+                    >
+                      {segment.label}
+                    </button>
+                  </span>
+                ))}
+              </div>
+            </div>
           </div>
           <div className="world-graph-toolbar-actions world-shell-toolbar-main">
             <label className="world-shell-search">
@@ -2127,10 +3494,59 @@ export function WorldGraphPage({
                 {isExpansionPending ? 'Generating...' : 'Generate From Selection'}
               </button>
             ) : null}
-            <button className="ghost-button compact" onClick={() => flowRef.current?.fitView({ padding: 0.18, duration: 300 })} type="button">Fit</button>
+            <button
+              className={showPinnedNodes ? 'ghost-button compact is-active' : 'ghost-button compact'}
+              onClick={() => setShowPinnedNodes((value) => !value)}
+              type="button"
+            >
+              {showPinnedNodes ? `Pins On (${pinnedEntities.length})` : `Show Pins (${pinnedEntities.length})`}
+            </button>
+            <button className="ghost-button compact" onClick={() => flowRef.current?.fitView({ padding: 0.24, duration: 300, maxZoom: 0.92 })} type="button">Fit</button>
             <details className="world-toolbar-more">
               <summary className="ghost-button compact">View</summary>
               <div className="world-toolbar-more-panel">
+                <div className="world-toolbar-mode-row">
+                  {(presentationMode === 'story'
+                    ? ['graph', 'timeline'] as const
+                    : ['graph', 'table', 'timeline', 'board'] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      className={viewMode === mode ? 'ghost-button compact is-active' : 'ghost-button compact'}
+                      onClick={() => {
+                        setViewMode(mode)
+                        void persistViewChanges({ mode })
+                      }}
+                      type="button"
+                    >
+                      {mode}
+                    </button>
+                  ))}
+                </div>
+                <div className="world-toolbar-control-group">
+                  <span className="world-toolbar-control-label">Preset</span>
+                  <div className="segmented-control world-preset-toggle">
+                    {WORLD_GRAPH_PRESENTATION_PRESETS.map((option) => (
+                      <button
+                        key={option.value}
+                        className={presentationPreset === option.value ? 'segment-button is-active' : 'segment-button'}
+                        onClick={() => {
+                          setPresentationPreset(option.value)
+                          setManualGraphDepthMode(null)
+                          if (option.value === 'story') {
+                            setPresentationMode('story')
+                          }
+                          if (option.value === 'recent' && latestCompletedTurnLens) {
+                            setGrowthPlaybackTurnId(latestCompletedTurnLens.turnId)
+                            openTurnLens(latestCompletedTurnLens)
+                          }
+                        }}
+                        type="button"
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
                 <button
                   className={showLabels ? 'ghost-button compact is-active' : 'ghost-button compact'}
                   onClick={() => {
@@ -2142,6 +3558,52 @@ export function WorldGraphPage({
                 >
                   {showLabels ? 'Hide Labels' : 'Show Labels'}
                 </button>
+                  <div className="world-toolbar-control-group">
+                  <span className="world-toolbar-control-label">Depth</span>
+                  <div className="segmented-control world-depth-toggle">
+                    {WORLD_GRAPH_DEPTH_OPTIONS.map((option) => (
+                      <button
+                        key={option.value}
+                        className={graphDepthMode === option.value ? 'segment-button is-active' : 'segment-button'}
+                        onClick={() => setManualGraphDepthMode(option.value)}
+                        type="button"
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                  {manualGraphDepthMode ? (
+                    <button className="ghost-button compact" onClick={() => setManualGraphDepthMode(null)} type="button">Reset Depth</button>
+                  ) : null}
+                </div>
+                <details className="world-display-drawer">
+                  <summary className="ghost-button compact">
+                    Display{graphFilterState.disabledCount > 0 ? ` (${graphFilterState.disabledCount} off)` : ''}
+                  </summary>
+                  <div className="world-display-filter-grid">
+                    {WORLD_GRAPH_DISPLAY_FILTER_OPTIONS.map((option) => (
+                      <button
+                        key={option.key}
+                        className={displayFilters[option.key] ? 'world-display-filter is-active' : 'world-display-filter'}
+                        onClick={() => setDisplayFilters((current) => ({
+                          ...current,
+                          [option.key]: !current[option.key],
+                        }))}
+                        type="button"
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="world-graph-legend" aria-label="Graph semantic groups">
+                    {(['actor', 'place', 'group', 'object', 'concept', 'event'] as const).map((nodeType) => (
+                      <span key={nodeType} className={`world-graph-legend-item is-${nodeType}`}>
+                        <span />
+                        {labelForWorldEntity(nodeType)}
+                      </span>
+                    ))}
+                  </div>
+                </details>
                 <button className="ghost-button compact" onClick={() => void handleAutoLayout()} type="button">Auto Layout</button>
                 <button className="ghost-button compact" onClick={() => void handleSaveCurrentView()} type="button">Save View</button>
               </div>
@@ -2149,96 +3611,391 @@ export function WorldGraphPage({
           </div>
         </div>
 
-        {focusRootKey ? (
-          <div className="world-focus-banner">
-            <span className="section-label">Focus Mode</span>
-            <strong>{focusedEntity?.name ?? focusedOperator?.label ?? focusedResult?.title ?? 'Selection'}</strong>
-            <button className="ghost-button compact" onClick={() => void persistViewChanges({ rootEntityKey: null })} type="button">Exit Focus</button>
-            <button className="ghost-button compact" onClick={() => void persistViewChanges({ focusDepth: Math.min(2, selectedView.focusDepth + 1) })} type="button">Expand 1 Level</button>
-            <button className="ghost-button compact" onClick={() => void persistViewChanges({ rootEntityKey: selectedEntity?.key ?? null })} type="button">Pin Neighborhood</button>
-            <button className="ghost-button compact" onClick={() => void handleSaveCurrentView()} type="button">Save As View</button>
-          </div>
-        ) : null}
+        <div className="world-view-workspace">
+          <aside className="world-view-rail">
+            <div className="world-view-rail-section">
+              <div className="world-view-rail-heading">
+                <span className="eyebrow">{presentationMode === 'story' ? 'Story Mode' : 'Navigation'}</span>
+                <strong>{presentationMode === 'story' ? 'Thread-Driven Story Paths' : 'Neighborhood First'}</strong>
+              </div>
+              <div className="world-view-rail-actions">
+                <button className="ghost-button compact" disabled={viewHistory.length === 0} onClick={handleBackToPreviousView} type="button">Back</button>
+                <button className="ghost-button compact" onClick={() => void handleSaveCurrentView()} type="button">Save View</button>
+              </div>
+            </div>
 
-        {busyMessage ? <div className="inline-note">{busyMessage}</div> : null}
-
-        <div className="canvas-stage graph-canvas world-graph-canvas world-shell-stage-canvas">
-            {worldEntities.length === 0 ? (
-              <div className="world-graph-canvas-empty-hint">
-                <span className="eyebrow">Empty world</span>
-                <strong>Start typing to add characters, places, lore, and relationships.</strong>
+            {pinnedEntities.length > 0 ? (
+              <div className="world-view-rail-section">
+                <span className="eyebrow">Pinned Nodes</span>
+                <div className="world-view-rail-list">
+                  {pinnedEntities.map((entity) => (
+                    <button
+                      key={entity.key}
+                      className={focusRootKey === entity.key ? 'world-view-rail-button is-active' : 'world-view-rail-button'}
+                      onClick={() => openTransientNeighborhood(entity.key, 1)}
+                      type="button"
+                    >
+                      <strong>{entity.name}</strong>
+                      <span>{entity.summary || labelForWorldEntity(entity.nodeType)}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
             ) : null}
-            <ReactFlow
-              fitView
-              nodeTypes={nodeTypes}
-              edgeTypes={edgeTypes}
-              nodes={canvasNodes}
-              edges={flowEdges}
-              onInit={(instance) => {
-                flowRef.current = instance
-              }}
-              onConnect={(connection: Connection) => {
-                if (!connection.source || !connection.target || connection.source === connection.target) return
-                const sourceEntity = worldEntities.find((entity) => entity.key === connection.source) ?? null
-                const targetEntity = worldEntities.find((entity) => entity.key === connection.target) ?? null
-                if (!sourceEntity || !targetEntity) return
-                setEdgeEditor({
-                  mode: 'create',
-                  sourceEntityKey: sourceEntity.key,
-                  targetEntityKey: targetEntity.key,
-                  notes: '',
-                })
-                setContextMenu(null)
-              }}
-              onNodeClick={(_, node) => {
-                selectWorldNode(node.id)
-                setActiveInspectorTab('overview')
-              }}
-              onNodeDoubleClick={(_, node) => {
-                selectWorldNode(node.id)
-                const entity = worldEntities.find((entry) => entry.key === node.id) ?? null
-                void persistViewChanges({ rootEntityKey: entity?.key ?? null })
-              }}
-              onNodeContextMenu={(event, node) => openNodeContextMenu(event, node.id)}
-              onNodesChange={handleNodesChange}
-              onNodeDragStop={handleNodeDragStop}
-              onEdgeClick={(event, edge) => {
-                event.preventDefault()
-                event.stopPropagation()
-                selectWorldEdge(edge.id)
-                setEdgeEditor(null)
-              }}
-              onEdgeContextMenu={(event, edge) => {
-                event.preventDefault()
-                event.stopPropagation()
-                selectWorldEdge(edge.id)
-                const relationship = worldRelationships.find((entry) => entry.key === edge.id) ?? null
-                setContextMenu(relationship
-                  ? { kind: 'relationship', x: event.clientX, y: event.clientY, relationshipKey: relationship.key }
-                  : { kind: 'connection', x: event.clientX, y: event.clientY, connectionKey: edge.id })
-              }}
-              onPaneClick={() => {
-                selectWorldNode(null)
-                selectWorldEdge(null)
-                setInspectorNodeKey(null)
-                closeMenus()
-              }}
-              onPaneContextMenu={(event) => {
-                event.preventDefault()
-                setContextMenu({
-                  kind: 'canvas',
-                  x: event.clientX,
-                  y: event.clientY,
-                  flowPosition: flowRef.current?.screenToFlowPosition({ x: event.clientX, y: event.clientY }) ?? null,
-                })
-              }}
-              nodesDraggable
-              onlyRenderVisibleElements
-            >
-              <Background />
-              <Controls />
-            </ReactFlow>
+
+            {presentationMode === 'world' ? (
+              <div className="world-view-rail-section">
+                <span className="eyebrow">Core Views</span>
+                <div className="world-view-rail-list">
+                  {coreWorldViews.map((view) => (
+                    <button
+                      key={view.key}
+                      className={view.key === persistedSelectedView.key ? 'world-view-rail-button is-active' : 'world-view-rail-button'}
+                      onClick={() => navigateToWorldView(view.key, { transientFocus: null })}
+                      type="button"
+                    >
+                      <strong>{view.name}</strong>
+                      <span>{getWorldViewSemanticMetadata(view).semanticLabel ?? 'Focused map'}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            <div className="world-view-rail-section">
+              <span className="eyebrow">{presentationMode === 'story' ? 'Story Threads' : 'Threads'}</span>
+              <div className="world-view-rail-list">
+                {threadWorldViews.map((view) => (
+                  <button
+                    key={view.key}
+                    className={view.key === persistedSelectedView.key ? 'world-view-rail-button is-active' : 'world-view-rail-button'}
+                    onClick={() => {
+                      const threadKey = getWorldViewSemanticMetadata(view).sourceThreadKeys[0] ?? null
+                      if (threadKey) {
+                        setSelectedPromptThreadKey(threadKey)
+                      }
+                      setPresentationMode('story')
+                      navigateToWorldView(view.key, { transientFocus: null })
+                    }}
+                    type="button"
+                  >
+                    <strong>{view.name}</strong>
+                    <span>{getWorldViewSemanticMetadata(view).semanticLabel ?? 'Story thread'}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="world-view-rail-section">
+              <span className="eyebrow">Manual Views</span>
+              <div className="world-view-rail-list">
+                {manualWorldViews.length === 0 ? <div className="inline-note">Saved snapshots appear here.</div> : null}
+                {manualWorldViews.map((view) => (
+                  <button
+                    key={view.key}
+                    className={view.key === persistedSelectedView.key ? 'world-view-rail-button is-active' : 'world-view-rail-button'}
+                    onClick={() => navigateToWorldView(view.key, { transientFocus: null })}
+                    type="button"
+                  >
+                    <strong>{view.name}</strong>
+                    <span>{getWorldViewSemanticMetadata(view).semanticLabel ?? 'Manual snapshot'}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {presentationMode === 'world' ? (
+              <div className="world-view-rail-section">
+                <span className="eyebrow">Global Overview</span>
+                {globalOverviewView ? (
+                  <button
+                    className={globalOverviewView.key === persistedSelectedView.key ? 'world-view-rail-button is-active' : 'world-view-rail-button'}
+                    onClick={() => openGlobalOverview()}
+                    type="button"
+                  >
+                    <strong>{globalOverviewView.name}</strong>
+                    <span>{getWorldViewSemanticMetadata(globalOverviewView).semanticLabel ?? 'Full atlas'}</span>
+                  </button>
+                ) : (
+                  <div className="inline-note">The full graph remains available as a power tool.</div>
+                )}
+              </div>
+            ) : null}
+          </aside>
+
+          <div className="world-view-stage">
+            <div className="world-context-strip" aria-label="Graph context">
+              {graphContextChips.map((chip) => (
+                <div key={chip.id} className={`world-context-chip is-${chip.tone}`}>
+                  <span className="world-context-chip-label">{chip.label}</span>
+                  <button
+                    className="world-context-chip-main"
+                    disabled={!chip.actionKind}
+                    onClick={() => handleGraphContextChipAction(chip.actionKind)}
+                    title={`${chip.label}: ${chip.detail}`}
+                    type="button"
+                  >
+                    {chip.detail}
+                  </button>
+                  {chip.secondaryActionKind ? (
+                    <button
+                      aria-label={`Exit ${chip.label}`}
+                      className="world-context-chip-close"
+                      onClick={() => handleGraphContextChipAction(chip.secondaryActionKind ?? null)}
+                      type="button"
+                    >
+                      x
+                    </button>
+                  ) : null}
+                </div>
+              ))}
+              {focusRootKey ? (
+                <>
+                  <button
+                    className="world-context-strip-action"
+                    onClick={() => setTransientFocus({
+                      sourceViewKey: transientFocus?.sourceViewKey ?? selectedWorldViewKey ?? persistedSelectedView.key,
+                      rootEntityKey: focusRootKey,
+                      focusDepth: Math.min(2, selectedView.focusDepth + 1),
+                      layoutMode: transientFocus?.layoutMode ?? 'preserve',
+                    })}
+                    type="button"
+                  >
+                    Expand
+                  </button>
+                  <button className="world-context-strip-action" onClick={() => openTransientNeighborhood(focusRootKey, 1)} type="button">Reset</button>
+                  <button className="world-context-strip-action" onClick={() => void handleSaveCurrentView()} type="button">Save View</button>
+                </>
+              ) : null}
+            </div>
+
+            {growthPlaybackModel.steps.length > 0 ? (
+              <div className="world-growth-playback" aria-label="World growth playback">
+                <span className="world-growth-playback-kicker">Growth</span>
+                <button
+                  className="world-context-strip-action"
+                  disabled={!growthPlaybackModel.canGoPrevious && growthPlaybackModel.activeIndex <= 0}
+                  onClick={() => openRelativeGrowthPlaybackStep(-1)}
+                  type="button"
+                >
+                  Previous
+                </button>
+                <button
+                  className={growthPlaybackPlaying ? 'world-context-strip-action is-active' : 'world-context-strip-action'}
+                  onClick={() => {
+                    if (growthPlaybackModel.activeIndex < 0) {
+                      openGrowthPlaybackStep(growthPlaybackModel.steps[0] ?? null)
+                    }
+                    setGrowthPlaybackPlaying((value) => !value)
+                  }}
+                  type="button"
+                >
+                  {growthPlaybackPlaying ? 'Pause' : 'Play'}
+                </button>
+                <button
+                  className="world-context-strip-action"
+                  disabled={growthPlaybackModel.activeIndex >= 0 && !growthPlaybackModel.canGoNext}
+                  onClick={() => openRelativeGrowthPlaybackStep(1)}
+                  type="button"
+                >
+                  Next
+                </button>
+                <div className="world-growth-playback-track">
+                  {growthPlaybackModel.steps.map((step) => (
+                    <button
+                      key={step.turnId}
+                      className={growthPlaybackTurnId === step.turnId ? 'world-growth-step is-active' : 'world-growth-step'}
+                      onClick={() => openGrowthPlaybackStep(step)}
+                      title={step.prompt || step.label}
+                      type="button"
+                    >
+                      {step.index + 1}
+                    </button>
+                  ))}
+                </div>
+                <span className="world-growth-playback-label">
+                  {growthPlaybackModel.activeStep
+                    ? `${growthPlaybackModel.activeStep.index + 1}/${growthPlaybackModel.steps.length} - ${growthPlaybackModel.activeStep.label}`
+                    : `${growthPlaybackModel.steps.length} turns`}
+                </span>
+              </div>
+            ) : null}
+
+            {busyMessage ? <div className="inline-note">{busyMessage}</div> : null}
+
+            {viewMode === 'graph' ? (
+              <div ref={graphCanvasRef} className="canvas-stage graph-canvas world-graph-canvas world-shell-stage-canvas">
+                {worldEntities.length === 0 ? (
+                  <div className="world-graph-canvas-empty-hint">
+                    <span className="eyebrow">Empty world</span>
+                    <strong>Start typing to add characters, places, lore, and relationships.</strong>
+                  </div>
+                ) : null}
+                <ReactFlow
+                  nodeTypes={nodeTypes}
+                  edgeTypes={edgeTypes}
+                  nodes={canvasNodes}
+                  edges={canvasEdges}
+                  onInit={(instance) => {
+                    flowRef.current = instance
+                    setViewportZoom(instance.getZoom())
+                  }}
+                  onMove={(_, viewport) => {
+                    setViewportZoom(viewport.zoom)
+                  }}
+                  onConnect={(connection: Connection) => {
+                    if (!connection.source || !connection.target || connection.source === connection.target) return
+                    const sourceEntity = worldEntities.find((entity) => entity.key === connection.source) ?? null
+                    const targetEntity = worldEntities.find((entity) => entity.key === connection.target) ?? null
+                    if (!sourceEntity || !targetEntity) return
+                    setEdgeEditor({
+                      mode: 'create',
+                      sourceEntityKey: sourceEntity.key,
+                      targetEntityKey: targetEntity.key,
+                      notes: '',
+                    })
+                    setContextMenu(null)
+                  }}
+                  onNodeClick={(_, node) => {
+                    selectWorldNode(node.id)
+                    setActiveInspectorTab('overview')
+                    const entity = worldEntities.find((entry) => entry.key === node.id) ?? null
+                    if (entity) {
+                      const layoutMode = node.data.displayTier === 'far' || node.data.displayTier === 'peripheral'
+                        ? 'reflow'
+                        : 'preserve'
+                      focusCurrentViewOnEntity(entity.key, { layoutMode })
+                    }
+                  }}
+                  onNodeDoubleClick={(_, node) => {
+                    selectWorldNode(node.id)
+                    const entity = worldEntities.find((entry) => entry.key === node.id) ?? null
+                    if (entity) {
+                      focusCurrentViewOnEntity(entity.key, { layoutMode: 'preserve' })
+                    }
+                  }}
+                  onNodeContextMenu={(event, node) => openNodeContextMenu(event, node.id)}
+                  onNodeMouseEnter={(_, node) => {
+                    setHoveredWorldNodeKey(node.id)
+                  }}
+                  onNodeMouseMove={(_, node) => {
+                    setHoveredWorldNodeKey((current) => (current === node.id ? current : node.id))
+                  }}
+                  onNodeMouseLeave={(_, node) => {
+                    setHoveredWorldNodeKey((current) => (current === node.id ? null : current))
+                  }}
+                  onNodesChange={handleNodesChange}
+                  onNodeDragStop={handleNodeDragStop}
+                  onEdgeClick={(event, edge) => {
+                    event.preventDefault()
+                    event.stopPropagation()
+                    selectWorldEdge(edge.id)
+                    setEdgeEditor(null)
+                  }}
+                  onEdgeContextMenu={(event, edge) => {
+                    event.preventDefault()
+                    event.stopPropagation()
+                    selectWorldEdge(edge.id)
+                    const relationship = worldRelationships.find((entry) => entry.key === edge.id) ?? null
+                    setContextMenu(relationship
+                      ? { kind: 'relationship', x: event.clientX, y: event.clientY, relationshipKey: relationship.key }
+                      : { kind: 'connection', x: event.clientX, y: event.clientY, connectionKey: edge.id })
+                  }}
+                  onPaneClick={() => {
+                    selectWorldNode(null)
+                    selectWorldEdge(null)
+                    setInspectorNodeKey(null)
+                    closeMenus()
+                  }}
+                  onPaneContextMenu={(event) => {
+                    event.preventDefault()
+                    setContextMenu({
+                      kind: 'canvas',
+                      x: event.clientX,
+                      y: event.clientY,
+                      flowPosition: flowRef.current?.screenToFlowPosition({ x: event.clientX, y: event.clientY }) ?? null,
+                    })
+                  }}
+                  nodesDraggable
+                  onlyRenderVisibleElements
+                >
+                  <Background />
+                  <Controls />
+                </ReactFlow>
+              </div>
+            ) : viewMode === 'table' ? (
+              <div className="world-alt-surface">
+                <div className="world-alt-surface-head">
+                  <span className="eyebrow">Table</span>
+                  <strong>{selectedView.name}</strong>
+                </div>
+                <div className="world-table-surface">
+                  {visibleEntityRecords.map((record) => (
+                    <button key={record.entity.key} className="world-table-row" onClick={() => selectWorldNode(record.entity.key)} type="button">
+                      <strong>{record.entity.name}</strong>
+                      <span>{labelForWorldEntity(record.entity.nodeType)}</span>
+                      <p>{record.entity.summary || record.entity.context || 'No summary yet.'}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : viewMode === 'timeline' ? (
+              <div className="world-alt-surface">
+                <div className="world-alt-surface-head">
+                  <span className="eyebrow">{presentationMode === 'story' ? 'Story Timeline' : 'Timeline'}</span>
+                  <strong>{selectedView.name}</strong>
+                </div>
+                <div className="world-timeline-surface">
+                  {visibleThreads.length === 0 ? <div className="inline-note">No thread-linked events are visible in this view yet.</div> : null}
+                  {visibleThreads.map((thread) => (
+                    <div key={thread.key} className={activeStoryThread?.key === thread.key ? 'world-timeline-card is-active' : 'world-timeline-card'}>
+                      <span className="eyebrow">{thread.priority}</span>
+                      <strong>{thread.title}</strong>
+                      <p>{thread.summary || 'No summary yet.'}</p>
+                      {presentationMode === 'story' ? (
+                        <button
+                          className="ghost-button compact"
+                          onClick={() => {
+                            const relatedView = threadWorldViews.find((view) => getWorldViewSemanticMetadata(view).sourceThreadKeys.includes(thread.key)) ?? null
+                            if (relatedView) {
+                              setSelectedPromptThreadKey(thread.key)
+                              navigateToWorldView(relatedView.key, { transientFocus: null })
+                            }
+                          }}
+                          type="button"
+                        >
+                          Open Thread Graph
+                        </button>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="world-alt-surface">
+                <div className="world-alt-surface-head">
+                  <span className="eyebrow">Board</span>
+                  <strong>{selectedView.name}</strong>
+                </div>
+                <div className="world-board-surface">
+                  {(['actor', 'group', 'place', 'concept', 'event', 'object'] as const).map((nodeType) => {
+                    const rows = visibleEntityRecords.filter((record) => record.entity.nodeType === nodeType)
+                    return (
+                      <div key={nodeType} className="world-board-column">
+                        <span className="eyebrow">{labelForWorldEntity(nodeType)}</span>
+                        {rows.map((record) => (
+                          <button key={record.entity.key} className="world-board-card" onClick={() => selectWorldNode(record.entity.key)} type="button">
+                            <strong>{record.entity.name}</strong>
+                            <p>{record.entity.summary || record.entity.context || 'No summary yet.'}</p>
+                          </button>
+                        ))}
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         {edgeEditor ? (
@@ -2314,7 +4071,7 @@ export function WorldGraphPage({
                 ))}
                 <button className="world-context-action" onClick={() => {
                   setContextMenu(null)
-                  flowRef.current?.fitView({ padding: 0.18, duration: 300 })
+                  flowRef.current?.fitView({ padding: 0.24, duration: 300, maxZoom: 0.92 })
                 }} type="button">Fit View</button>
                 <button className="world-context-action" onClick={() => {
                   void handleAutoLayout()
@@ -2341,9 +4098,20 @@ export function WorldGraphPage({
                 }} type="button">Open</button>
                 <button className="world-context-action" onClick={() => {
                   selectWorldNode(contextMenu.entityKey)
-                  void persistViewChanges({ rootEntityKey: contextMenu.entityKey })
+                  focusCurrentViewOnEntity(contextMenu.entityKey, { layoutMode: 'reflow' })
                   setContextMenu(null)
-                }} type="button">Focus</button>
+                }} type="button">Focus Here</button>
+                <button className="world-context-action" onClick={() => {
+                  selectWorldNode(contextMenu.entityKey)
+                  openTransientNeighborhood(contextMenu.entityKey, 1)
+                  setContextMenu(null)
+                }} type="button">Open Neighborhood</button>
+                <button className="world-context-action" onClick={() => {
+                  void togglePinnedNode(contextMenu.entityKey)
+                  setContextMenu(null)
+                }} type="button">
+                  {persistentPinnedNodeKeys.includes(contextMenu.entityKey) ? 'Unpin Node' : 'Pin Node'}
+                </button>
                 <button className="world-context-action" onClick={() => {
                   selectWorldNode(contextMenu.entityKey)
                   setEntityComposer({
@@ -2374,6 +4142,22 @@ export function WorldGraphPage({
                   }
                   setContextMenu(null)
                 }} type="button">Open Linked Record</button>
+                <button className="world-context-action" onClick={() => {
+                  const relatedThread = worldThreads.find((thread) => thread.linkedEntityKeys.includes(contextMenu.entityKey)) ?? null
+                  if (relatedThread) {
+                    const relatedView = worldViews.find((view) => getWorldViewSemanticMetadata(view).sourceThreadKeys.includes(relatedThread.key)) ?? null
+                    if (relatedView) {
+                      setPresentationMode('story')
+                      navigateToWorldView(relatedView.key, { transientFocus: null })
+                    }
+                    setSelectedPromptThreadKey(relatedThread.key)
+                  }
+                  setContextMenu(null)
+                }} type="button">Open Related Thread</button>
+                <button className="world-context-action" onClick={() => {
+                  openGlobalOverview()
+                  setContextMenu(null)
+                }} type="button">Open Global Overview</button>
                 <button className="world-context-action" onClick={() => {
                   void handleSaveCurrentView()
                   setContextMenu(null)
@@ -2597,6 +4381,12 @@ export function WorldGraphPage({
                 <div className="chip-row">
                   {inspectorViewModel.stats.map((stat) => <span key={stat} className="chip">{stat}</span>)}
                 </div>
+                {inspectorNodeKey && visibilityReasonByNodeKey.has(inspectorNodeKey) ? (
+                  <div className="world-node-reason" title={visibilityReasonByNodeKey.get(inspectorNodeKey)?.detail}>
+                    <span>Visible because</span>
+                    <strong>{visibilityReasonByNodeKey.get(inspectorNodeKey)?.label}</strong>
+                  </div>
+                ) : null}
               </div>
             </>
           ) : (
@@ -3093,8 +4883,9 @@ function LegacyWorldPromptChatPanel({
       events: sessionEvents,
       messages: sessionMessages,
       entityByKey,
+      turns: sessionTurns,
     }),
-    [entityByKey, sessionEvents, sessionMessages],
+    [entityByKey, sessionEvents, sessionMessages, sessionTurns],
   )
   const canCancelTurn = Boolean(activePromptTurn && ['queued', 'streaming'].includes(activePromptTurn.status))
   const selectedThread = useMemo(
@@ -3603,6 +5394,8 @@ function WorldPromptChatPanel({
   sessionSuggestions,
   sessionTurns,
   sessionSuggestionCountBySessionId,
+  turnLensByTurnId,
+  activeTurnLensId,
   worldPromptTurns,
   worldThreads,
   worldPromptSessions,
@@ -3617,6 +5410,8 @@ function WorldPromptChatPanel({
   onSelectSession,
   onStartNewSession,
   onSubmit,
+  onOpenTurnLens,
+  onCloseTurnLens,
   onOpenHistory,
   onCloseHistory,
   historyOpen,
@@ -3640,6 +5435,8 @@ function WorldPromptChatPanel({
   sessionSuggestions: WorldPromptSuggestionRecord[]
   sessionTurns: WorldPromptTurn[]
   sessionSuggestionCountBySessionId: Record<string, number>
+  turnLensByTurnId: Map<string, WorldPromptTurnLens>
+  activeTurnLensId: string | null
   worldPromptTurns: WorldPromptTurn[]
   worldThreads: WorldThread[]
   worldPromptSessions: WorldPromptSession[]
@@ -3654,6 +5451,8 @@ function WorldPromptChatPanel({
   onSelectSession: (key: string | null) => void
   onStartNewSession: () => void
   onSubmit: (promptOverride?: string) => Promise<void> | void
+  onOpenTurnLens: (lens: WorldPromptTurnLens) => void
+  onCloseTurnLens: () => void
   onOpenHistory: () => void
   onCloseHistory: () => void
   historyOpen: boolean
@@ -3910,6 +5709,7 @@ function WorldPromptChatPanel({
       && entry.kind !== 'relationship_created'
       && entry.kind !== 'relationship_updated'
       && entry.kind !== 'derived_result_created'
+      && entry.kind !== 'turn_lens'
       && entry.kind !== 'queue_started'
       && entry.kind !== 'advisory_answer'
       && entry.kind !== 'diagnostic_finding'
@@ -3921,7 +5721,9 @@ function WorldPromptChatPanel({
       return null
     }
 
-    const iconId = entry.kind === 'entity_created' || entry.kind === 'entity_updated' || entry.kind === 'entity_replaced'
+    const iconId = entry.kind === 'turn_lens'
+      ? 'graph'
+      : entry.kind === 'entity_created' || entry.kind === 'entity_updated' || entry.kind === 'entity_replaced'
       ? iconForWorldEntity(entry.entityNodeType)
       : entry.kind === 'relationship_created' || entry.kind === 'relationship_updated'
         ? 'graph'
@@ -3934,11 +5736,15 @@ function WorldPromptChatPanel({
         : entry.kind === 'queue_started'
           ? 'activity'
           : 'content'
+    const entryTurnLens = entry.kind === 'turn_lens' ? entry.turnLens : undefined
+    const ResultWrapper = entryTurnLens ? 'button' : 'div'
 
     return (
-      <div
+      <ResultWrapper
         key={entry.id}
-        className={`world-prompt-row world-prompt-row-system world-prompt-card world-prompt-row-result${entry.kind === 'system_status' && entry.tone === 'error' ? ' is-error' : ''}`}
+        className={`world-prompt-row world-prompt-row-system world-prompt-card world-prompt-row-result${entry.kind === 'system_status' && entry.tone === 'error' ? ' is-error' : ''}${entryTurnLens ? ' is-clickable' : ''}${entryTurnLens?.turnId === activeTurnLensId ? ' is-active-lens' : ''}`}
+        onClick={entryTurnLens ? () => onOpenTurnLens(entryTurnLens) : undefined}
+        type={entryTurnLens ? 'button' : undefined}
       >
         <div className="world-prompt-entry-icon">
           <EntityIcon id={iconId} />
@@ -3949,8 +5755,16 @@ function WorldPromptChatPanel({
           {entry.kind === 'relationship_created' ? (
             <div className="world-prompt-entry-route">{entry.sourceLabel} -&gt; {entry.targetLabel}</div>
           ) : null}
+          {entryTurnLens ? (
+            <span className="world-prompt-lens-chip">
+              {entryTurnLens.counts.entities} nodes
+              {' / '}
+              {entryTurnLens.counts.relationships} links
+              {entryTurnLens.counts.derived > 0 ? ` / ${entryTurnLens.counts.derived} derived` : ''}
+            </span>
+          ) : null}
         </div>
-      </div>
+      </ResultWrapper>
     )
   }
 
@@ -3976,6 +5790,7 @@ function WorldPromptChatPanel({
           <span className="chip">World {selectedView.name || 'Default'}</span>
           {selectedEntity ? <span className="chip">Focus {selectedEntity.name}</span> : null}
           {selectedThread ? <span className="chip">Thread {selectedThread.title}</span> : null}
+          {activeTurnLensId ? <button className="chip world-prompt-lens-context-chip" onClick={onCloseTurnLens} type="button">Turn lens on</button> : null}
           <span className={`chip world-prompt-status-pill is-${busy ? 'working' : railView.state}`}>{busy ? liveBusyStatusLabel : railView.statusLabel}</span>
         </div>
       ) : null}
@@ -4176,12 +5991,31 @@ function WorldPromptChatPanel({
               </div>
               <div className="world-prompt-history-list">
                 {recentTurns.length === 0 ? <div className="inline-note">No turns in this context window yet.</div> : null}
-                {recentTurns.map((turn) => (
-                  <div key={turn.id} className="world-prompt-history-item is-static">
-                    <strong>{turn.prompt}</strong>
-                    <span>{turn.status}</span>
-                  </div>
-                ))}
+                {recentTurns.map((turn) => {
+                  const lens = turnLensByTurnId.get(turn.id) ?? null
+                  if (!lens) {
+                    return (
+                      <div key={turn.id} className="world-prompt-history-item is-static">
+                        <strong>{turn.prompt}</strong>
+                        <span>{turn.status}</span>
+                      </div>
+                    )
+                  }
+                  return (
+                    <button
+                      key={turn.id}
+                      className={`world-prompt-history-item${activeTurnLensId === turn.id ? ' is-active-lens' : ''}`}
+                      onClick={() => {
+                        onOpenTurnLens(lens)
+                        onCloseHistory()
+                      }}
+                      type="button"
+                    >
+                      <strong>{turn.prompt}</strong>
+                      <span>{turn.status} / {lens.label}</span>
+                    </button>
+                  )
+                })}
               </div>
             </div>
           </div>

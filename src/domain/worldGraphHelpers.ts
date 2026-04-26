@@ -10,6 +10,15 @@ import type {
   WorldResult,
   WorldView,
 } from './worldGraph'
+import {
+  buildEntityNeighborhoodViewInput,
+  choosePreferredWorldView,
+  getWorldViewRailGroup,
+  getWorldViewSeedEntityKeys,
+  getWorldViewSemanticMetadata,
+  isAutoManagedWorldView,
+  reconcileAutoManagedWorldViews,
+} from './worldViewDerivation.ts'
 
 export type WorldSuggestion = {
   id: string
@@ -65,7 +74,7 @@ export function isAutoDerivedWorldEntity(entity: Pick<WorldEntity, 'metadata'>) 
 }
 
 export function isAutoDerivedWorldView(view: Pick<WorldView, 'metadata'>) {
-  return view.metadata?.autoDerived === true
+  return isAutoManagedWorldView(view)
 }
 
 export function deriveMissingWorldEntities(
@@ -130,23 +139,32 @@ export function deriveMissingWorldViews(
   options?: { autoDerived?: boolean },
 ) {
   const autoDerived = options?.autoDerived ?? true
-  if (snapshot.worldViews.length > 0 || snapshot.worldEntities.length === 0) {
+  if (snapshot.worldEntities.length === 0) {
     return []
   }
-
-  return [{
-    ...createDefaultWorldView(),
-    metadata: autoDerived
-      ? {
-          autoDerived: true,
-          definitionBackfill: true,
-          autoSeededDefaultView: true,
-        }
-      : {
-          definitionBackfill: true,
-          autoSeededDefaultView: true,
-        },
-  }]
+  const reconciled = reconcileAutoManagedWorldViews({
+    worldEntities: snapshot.worldEntities,
+    worldRelationships: [],
+    worldViews: snapshot.worldViews,
+    worldThreads: [],
+  })
+  return reconciled.worldViews
+    .filter((view) => !snapshot.worldViews.some((existing) => existing.key === view.key))
+    .map((view) => ({
+      ...view,
+      metadata: autoDerived
+        ? {
+            ...(view.metadata ?? {}),
+            autoDerived: true,
+            definitionBackfill: true,
+            autoSeededDefaultView: true,
+          }
+        : {
+            ...(view.metadata ?? {}),
+            definitionBackfill: true,
+            autoSeededDefaultView: true,
+          },
+    }))
 }
 
 export function hasMissingWorldGraphBackfill(
@@ -260,8 +278,26 @@ export function createDefaultWorldView(seed = 'Core World'): WorldView {
     nodePositions: {},
     collapsedState: {},
     sortMode: 'manual',
-    metadata: {},
+    metadata: {
+      viewKind: 'manual_snapshot',
+      autoManaged: false,
+      sourceEntityKeys: [],
+      sourceThreadKeys: [],
+      refreshPolicy: 'manual_only',
+      semanticLabel: null,
+      transientFocus: false,
+    },
   }
+}
+
+export {
+  buildEntityNeighborhoodViewInput,
+  choosePreferredWorldView,
+  getWorldViewRailGroup,
+  getWorldViewSeedEntityKeys,
+  getWorldViewSemanticMetadata,
+  isAutoManagedWorldView,
+  reconcileAutoManagedWorldViews,
 }
 
 export function labelForWorldOperator(operatorType: WorldOperator['operatorType']) {

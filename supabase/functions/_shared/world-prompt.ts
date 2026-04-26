@@ -71,6 +71,16 @@ import {
   promptAllowsPlaceholderCanon,
   type CreativeDescriptorIssue,
 } from '../../../src/domain/worldPromptCreativeCompletion.ts'
+import { analyzeWorldPromptEntityRequirements } from '../../../src/domain/worldPromptRequirements.ts'
+import {
+  plannerThreadActionSchema,
+  plannerThreadCandidateSchema,
+  preparePlannerThreadMutations,
+} from '../../../src/domain/worldPromptThreads.ts'
+import {
+  reconcileAutoManagedWorldViews,
+  type AutoManagedWorldViewOptions,
+} from '../../../src/domain/worldViewDerivation.ts'
 import {
   appendRefinementHistory,
   mergeCanonicalContext,
@@ -306,16 +316,6 @@ type ReplaceWorldEntityRpcResult = {
   touchedThreadKeys: string[]
 }
 
-const plannerThreadCandidateSchema = z.object({
-  key: z.string(),
-  title: z.string(),
-  summary: z.string().default(''),
-  status: z.enum(['open', 'resolved', 'parked']).default('open'),
-  priority: z.enum(['primary', 'secondary', 'background']).default('secondary'),
-  linkedEntityKeys: z.array(z.string()).default([]),
-  metadata: z.record(z.string(), z.unknown()).default({}),
-})
-
 const plannerIdeaSchema = worldPromptSuggestionSchema.extend({
   source: z.enum(['thread', 'wave2', 'repair', 'analysis', 'advisory']).default('wave2'),
 })
@@ -338,6 +338,7 @@ const worldPromptPlannerSchema = z.object({
   wave1Ops: z.array(promptToWorldOpSchema).default([]),
   wave2Ideas: z.array(plannerIdeaSchema).default([]),
   optionalIdeas: z.array(plannerIdeaSchema).default([]),
+  threadActions: z.array(plannerThreadActionSchema).default([]),
   threadCandidates: z.array(plannerThreadCandidateSchema).default([]),
   suggestionCandidates: z.array(plannerIdeaSchema).default([]),
   optionCandidates: z.array(plannerIdeaSchema).default([]),
@@ -364,6 +365,7 @@ const directBuildPlannerSchema = worldPromptPlannerSchema.pick({
   classification: true,
   assistantSummary: true,
   wave1Ops: true,
+  threadActions: true,
   threadCandidates: true,
   suggestionCandidates: true,
 })
@@ -372,6 +374,7 @@ const refinementPlannerSchema = worldPromptPlannerSchema.pick({
   classification: true,
   assistantSummary: true,
   wave1Ops: true,
+  threadActions: true,
   threadCandidates: true,
   suggestionCandidates: true,
 })
@@ -382,6 +385,7 @@ const advisoryDiagnosisPlannerSchema = worldPromptPlannerSchema.pick({
   answer: true,
   answerMode: true,
   wave1Ops: true,
+  threadActions: true,
   suggestionCandidates: true,
   optionCandidates: true,
   diagnosticFindings: true,
@@ -399,15 +403,23 @@ const replaceWorldEntityRpcResultSchema = z.object({
   touchedThreadKeys: z.array(z.string()).default([]),
 })
 
-const DIRECT_SCOPE_CAPS = {
-  entityOps: 6,
-  relationshipOps: 10,
+type PromptScopeCaps = {
+  entityOps: number
+  relationshipOps: number
+  existingEntityModificationOps: number
+  queueOps: number
+  derivedResultOps: number
+}
+
+const DIRECT_SCOPE_CAPS: PromptScopeCaps = {
+  entityOps: 10,
+  relationshipOps: 16,
   existingEntityModificationOps: 2,
   queueOps: 2,
   derivedResultOps: 1,
 }
 
-const STAGED_SCOPE_CAPS = {
+const STAGED_SCOPE_CAPS: PromptScopeCaps = {
   entityOps: 5,
   relationshipOps: 6,
   existingEntityModificationOps: 2,
@@ -415,7 +427,7 @@ const STAGED_SCOPE_CAPS = {
   derivedResultOps: 1,
 }
 
-const SUGGESTION_DRIVEN_SCOPE_CAPS = {
+const SUGGESTION_DRIVEN_SCOPE_CAPS: PromptScopeCaps = {
   entityOps: 4,
   relationshipOps: 6,
   existingEntityModificationOps: 2,
@@ -2478,12 +2490,37 @@ function finalizeSuggestionSet(input: {
           snapshot: input.snapshot,
           selectedThreadKey: input.selectedThreadKey,
         })
-  return dedupeSuggestions([
+  const finalized = dedupeSuggestions([
     ...seededSuggestions,
     ...fallback,
   ])
     .filter((suggestion) => suggestionIsActionable(suggestion, input.sourcePrompt))
     .slice(0, input.maxCount ?? 6)
+  return finalized.map((suggestion) => {
+    const targetThreadKey = suggestion.targetThreadKeys?.[0] ?? suggestion.threadKey ?? null
+    const targetRootEntityKey = suggestion.targetRootEntityKey ?? suggestion.targetEntityKeys?.[0] ?? null
+    const suggestedView = targetThreadKey
+      ? input.snapshot.worldViews.find((view) => {
+          const metadata = (view.metadata ?? {}) as Record<string, unknown>
+          const sourceThreadKeys = Array.isArray(metadata.sourceThreadKeys) ? metadata.sourceThreadKeys as string[] : []
+          return sourceThreadKeys.includes(targetThreadKey)
+        }) ?? null
+      : targetRootEntityKey
+        ? input.snapshot.worldViews.find((view) => {
+            const metadata = (view.metadata ?? {}) as Record<string, unknown>
+            const sourceEntityKeys = Array.isArray(metadata.sourceEntityKeys) ? metadata.sourceEntityKeys as string[] : []
+            return view.rootEntityKey === targetRootEntityKey || sourceEntityKeys.includes(targetRootEntityKey)
+          }) ?? null
+        : null
+    const suggestedMetadata = (suggestedView?.metadata ?? {}) as Record<string, unknown>
+    return worldPromptSuggestionSchema.parse({
+      ...suggestion,
+      suggestedViewKey: suggestion.suggestedViewKey ?? suggestedView?.key ?? null,
+      targetRootEntityKey,
+      preferredViewKind: suggestion.preferredViewKind
+        ?? (typeof suggestedMetadata.viewKind === 'string' ? suggestedMetadata.viewKind : null),
+    })
+  })
 }
 
 function capAssistantSummary(text: string, mode: PlannerMode) {
@@ -2967,12 +3004,33 @@ function countScopeOps(ops: PromptToWorldOp[], snapshot: WorldPromptSnapshot) {
   return counts
 }
 
-function exceedsScopeCaps(counts: PromptScopeCounts, caps: typeof DIRECT_SCOPE_CAPS | typeof STAGED_SCOPE_CAPS) {
+function exceedsScopeCaps(counts: PromptScopeCounts, caps: PromptScopeCaps) {
   return counts.entityOps > caps.entityOps
     || counts.relationshipOps > caps.relationshipOps
     || counts.existingEntityModificationOps > caps.existingEntityModificationOps
     || counts.queueOps > caps.queueOps
     || counts.derivedResultOps > caps.derivedResultOps
+}
+
+function directScopeCapsForPrompt(prompt: string, isSuggestionDriven?: boolean): PromptScopeCaps {
+  if (isSuggestionDriven) return SUGGESTION_DRIVEN_SCOPE_CAPS
+  const requirements = analyzeWorldPromptEntityRequirements(prompt)
+  if (!requirements.hasExplicitCount && !requirements.hasSeedWorldShape) return DIRECT_SCOPE_CAPS
+  return {
+    ...DIRECT_SCOPE_CAPS,
+    entityOps: Math.max(DIRECT_SCOPE_CAPS.entityOps, requirements.minimumEntityOps + 2),
+    relationshipOps: Math.max(DIRECT_SCOPE_CAPS.relationshipOps, Math.ceil((requirements.minimumEntityOps + 2) * 1.5)),
+  }
+}
+
+function stagedScopeCapsForPrompt(prompt: string): PromptScopeCaps {
+  const requirements = analyzeWorldPromptEntityRequirements(prompt)
+  if (!requirements.hasExplicitCount) return STAGED_SCOPE_CAPS
+  return {
+    ...STAGED_SCOPE_CAPS,
+    entityOps: Math.max(STAGED_SCOPE_CAPS.entityOps, requirements.minimumEntityOps),
+    relationshipOps: Math.max(STAGED_SCOPE_CAPS.relationshipOps, requirements.minimumEntityOps + 4),
+  }
 }
 
 function promptIncludesAny(prompt: string, probes: string[]) {
@@ -2981,6 +3039,7 @@ function promptIncludesAny(prompt: string, probes: string[]) {
 }
 
 function scorePromptOpForStaging(op: PromptToWorldOp, prompt: string) {
+  const requirements = analyzeWorldPromptEntityRequirements(prompt)
   if (op.op === 'assistant_note') return -10
   if (op.op === 'replace_entity') {
     const replacementName = op.payload.replacementMode === 'create' ? op.payload.replacementEntity?.name ?? '' : op.payload.replacementEntityKey ?? ''
@@ -2989,10 +3048,11 @@ function scorePromptOpForStaging(op: PromptToWorldOp, prompt: string) {
   }
   if (op.op === 'upsert_entity') {
     const nameBoost = promptIncludesAny(prompt, [op.payload.entity.name, ...op.payload.entity.aliases]) ? 30 : 0
+    const requiredTypeBoost = (requirements.counts[op.payload.entity.nodeType] ?? 0) > 0 ? 34 : 0
     const anchorBoost = op.payload.entity.nodeType === 'place' || op.payload.entity.nodeType === 'event' ? 20 : 0
     const peopleBoost = op.payload.entity.nodeType === 'actor' || op.payload.entity.nodeType === 'group' ? 16 : 0
     const loreBoost = op.payload.entity.nodeType === 'concept' ? 8 : 0
-    return 120 + nameBoost + anchorBoost + peopleBoost + loreBoost
+    return 120 + nameBoost + requiredTypeBoost + anchorBoost + peopleBoost + loreBoost
   }
   if (op.op === 'upsert_relationship') {
     return 90
@@ -3924,12 +3984,13 @@ function buildStagedFirstWave(input: {
   const selected: PromptToWorldOp[] = []
   const selectedEntityKeys = new Set<string>()
   const runningCounts = emptyScopeCounts()
+  const stagedCaps = stagedScopeCapsForPrompt(input.prompt)
   const ranked = [...input.ops].sort((left, right) => scorePromptOpForStaging(right, input.prompt) - scorePromptOpForStaging(left, input.prompt))
 
   for (const op of ranked) {
     if (op.op === 'assistant_note') continue
     const nextCounts = countScopeOps([...selected, op], input.snapshot)
-    if (exceedsScopeCaps(nextCounts, STAGED_SCOPE_CAPS)) {
+    if (exceedsScopeCaps(nextCounts, stagedCaps)) {
       continue
     }
     if (op.op === 'upsert_relationship') {
@@ -4159,31 +4220,10 @@ async function upsertWorldThreads(input: {
   draftId: string
   turnId: string
   snapshot: WorldPromptSnapshot
-  selectedThreadKey?: string | null
+  threadActions: Array<z.infer<typeof plannerThreadActionSchema>>
   threadCandidates: Array<z.infer<typeof plannerThreadCandidateSchema>>
 }) {
   const knownEntityKeys = new Set(input.snapshot.worldEntities.map((entity) => entity.key))
-  const fallbackCandidates = input.threadCandidates.length > 0
-    ? input.threadCandidates
-    : (() => {
-      const linkedEntityKeys = input.snapshot.worldEntities
-        .filter((entity) => entity.metadata?.projected === true)
-        .slice(-3)
-        .map((entity) => entity.key)
-      if (linkedEntityKeys.length === 0) return []
-      return [{
-        key: `thread.${slugify(linkedEntityKeys.join('-'))}`,
-        title: 'Emerging Story Thread',
-        summary: 'A newly introduced world thread inferred from the latest prompt wave.',
-        status: 'open' as const,
-        priority: 'primary' as const,
-        linkedEntityKeys,
-        metadata: {
-          inferred: true,
-          tags: ['story_gardener'],
-        },
-      }]
-    })()
   const existingResponse = await input.client
     .from('world_threads')
     .select(THREAD_SELECT)
@@ -4192,9 +4232,14 @@ async function upsertWorldThreads(input: {
 
   const existingThreads = ((existingResponse.data ?? []) as WorldThreadRow[]).map(mapThreadRow)
   const existingByKey = new Map(existingThreads.map((thread) => [thread.key, thread]))
-  const upsertPayload = fallbackCandidates.map((candidate) => {
+  const prepared = preparePlannerThreadMutations({
+    existingThreads,
+    knownEntityKeys,
+    threadActions: input.threadActions,
+    threadCandidates: input.threadCandidates,
+  })
+  const upsertPayload = prepared.mutations.map((candidate) => {
     const existing = existingByKey.get(candidate.key) ?? null
-    const linkedEntityKeys = candidate.linkedEntityKeys.filter((key) => knownEntityKeys.has(key))
     return {
       draft_id: input.draftId,
       key: candidate.key,
@@ -4202,7 +4247,7 @@ async function upsertWorldThreads(input: {
       summary: candidate.summary,
       status: candidate.status,
       priority: candidate.priority,
-      linked_entity_keys: Array.from(new Set([...(existing?.linkedEntityKeys ?? []), ...linkedEntityKeys])),
+      linked_entity_keys: candidate.linkedEntityKeys,
       source_turn_id: existing?.sourceTurnId ?? input.turnId,
       last_turn_id: input.turnId,
       metadata: {
@@ -4222,28 +4267,11 @@ async function upsertWorldThreads(input: {
     persisted.push(...((upsertResponse.data ?? []) as WorldThreadRow[]).map(mapThreadRow))
   }
 
-  if (input.selectedThreadKey) {
-    const selectedThread = existingByKey.get(input.selectedThreadKey) ?? persisted.find((thread) => thread.key === input.selectedThreadKey) ?? null
-    if (selectedThread) {
-      const touchResponse = await input.client
-        .from('world_threads')
-        .update({ last_turn_id: input.turnId })
-        .eq('draft_id', input.draftId)
-        .eq('key', selectedThread.key)
-        .select(THREAD_SELECT)
-        .single()
-      if (touchResponse.error) throw new Error(touchResponse.error.message)
-      const touched = mapThreadRow(touchResponse.data as WorldThreadRow)
-      const existingIndex = persisted.findIndex((thread) => thread.key === touched.key)
-      if (existingIndex >= 0) {
-        persisted[existingIndex] = touched
-      } else {
-        persisted.push(touched)
-      }
-    }
+  return {
+    threads: persisted,
+    diagnostics: prepared.diagnostics,
+    rejected: prepared.rejected,
   }
-
-  return persisted
 }
 
 function classifyPromptExecution(input: {
@@ -4373,7 +4401,7 @@ function classifyPromptExecution(input: {
     }
   }
 
-  const directCaps = input.isSuggestionDriven ? SUGGESTION_DRIVEN_SCOPE_CAPS : DIRECT_SCOPE_CAPS
+  const directCaps = directScopeCapsForPrompt(input.prompt, input.isSuggestionDriven)
   if (!exceedsScopeCaps(counts, directCaps)) {
     const scope: WorldPromptScopeDecision = {
       mode: 'direct',
@@ -4984,6 +5012,7 @@ async function generatePromptPlan(input: {
   const promptIntentHint = retrievalIntent.promptIntent
   const plannerMode = retrievalIntent.plannerMode
   const isSuggestionDriven = Boolean(input.payload.selectedSuggestionId)
+  const entityRequirements = analyzeWorldPromptEntityRequirements(input.payload.prompt)
   const graphDiagnostics = buildGraphDiagnosticFindings({
     snapshot: input.payload.snapshot,
     selectedThreadKey: input.payload.selectedThreadKey,
@@ -5035,6 +5064,18 @@ async function generatePromptPlan(input: {
     'Only use replace_entity when the user explicitly says a node is wrong, should be a different type, should be corrected, or should be replaced.',
     'If the prompt introduces a new proper noun plus extra lore, prefer creating the new node and updating context/relationships around existing nodes instead of replacing an existing node.',
     'For a simple direct creation prompt, wave1Ops should contain the named entities and the most obvious relationships before proposing any optional follow-up suggestions.',
+    entityRequirements.summary
+      ? `The current prompt has explicit entity requirements: ${entityRequirements.summary}. Satisfy these in wave1Ops with concrete canon-ready names unless the request is contradictory.`
+      : null,
+    entityRequirements.counts.actor
+      ? `Create at least ${entityRequirements.counts.actor} actor node${entityRequirements.counts.actor === 1 ? '' : 's'} for the requested character count; do not satisfy character requirements with groups, places, relationship notes, or thread text.`
+      : null,
+    entityRequirements.counts.group
+      ? `Create enough group nodes to satisfy requested factions/houses/groups; a named ruling house is separate from requested rival factions unless the user says otherwise.`
+      : null,
+    entityRequirements.counts.object
+      ? `Create object nodes for requested artifacts/relics/items and link them to the people, groups, places, or secrets that make them matter.`
+      : null,
     'Use graphable_broad when the request wants too much for one turn. In that case, keep only the best first wave in wave1Ops and place follow-up ideas in wave2Ideas/optionalIdeas.',
     'Use not_graphable or contradictory_or_low_confidence when the prompt cannot be mapped cleanly. In that case, wave1Ops may be empty and suggestionCandidates should repair the request.',
     'For graph diagnosis, let deterministic findings steer your answer and options. Phrase them clearly, but keep them rooted in the provided graph evidence.',
@@ -5043,7 +5084,14 @@ async function generatePromptPlan(input: {
     `Resolved intent: ${relevantPlannerContext.resolvedIntent}.`,
     `Resolved mode: ${relevantPlannerContext.resolvedMode}.`,
     `Resolved focus: ${relevantPlannerContext.resolvedFocus}.`,
-    'threadCandidates should describe the main unresolved narrative or lore threads implied by the prompt and resulting graph changes.',
+    'Use threadActions to describe thread lifecycle changes caused by the turn: create, update, resolve, park, reprioritize, or relink_entities.',
+    'Prefer reusing an existing matching thread when one clear thread already fits the prompt.',
+    'Create a new thread only when the turn materially starts or branches a distinct unresolved storyline, mystery, conflict, or lore strand.',
+    'Emit no thread actions when the turn is purely local, advisory, or does not materially affect ongoing story strands.',
+    'Thread titles must be concrete and world-specific. Never use generic labels like "Story Thread", "Main Thread", or "Emerging Story Thread".',
+    'For relink_entities, merge linked entities by default unless you are intentionally replacing thread scope.',
+    'If a thread is concluded, use resolve. If it should stay available but inactive, use park. If its urgency changes, use reprioritize.',
+    'threadCandidates is legacy compatibility only. Prefer threadActions.',
     'Suggestion ideas should be concrete and world-specific, not generic categories, and should never just paraphrase or repeat the user prompt.',
     ...plannerModeInstructions({
       mode: plannerMode,
@@ -5066,10 +5114,21 @@ async function generatePromptPlan(input: {
     resolvedMode: retrievalIntent.resolvedMode,
     resolvedIntent: retrievalIntent.resolvedIntent,
     resolvedFocus: retrievalIntent.resolvedFocus,
+    entityRequirements,
     promptIntentHint,
     selectedSuggestionId: input.payload.selectedSuggestionId,
     prompt: input.payload.prompt,
     projectContext: input.payload.snapshot.projectContext,
+    openThreads: input.payload.snapshot.worldThreads
+      .filter((thread) => thread.status === 'open')
+      .slice(0, 8)
+      .map((thread) => ({
+        key: thread.key,
+        title: thread.title,
+        summary: thread.summary,
+        priority: thread.priority,
+        linkedEntityKeys: thread.linkedEntityKeys.slice(0, 8),
+      })),
     graphDiagnostics: plannerMode === 'advisory_diagnosis' ? graphDiagnostics : graphDiagnostics.slice(0, 2),
     retrieval: relevantPlannerContext,
   })
@@ -5290,7 +5349,7 @@ function sanitizePromptOp(input: {
     const entity = op.payload.entity
     entity.source = entity.source ?? 'ai'
     entity.ensureLinkedDefinition = entity.ensureLinkedDefinition ?? true
-    const resolved = resolveEntityReference(input.snapshot, {
+    let resolved = resolveEntityReference(input.snapshot, {
       entityKey: op.payload.targetEntityKey,
       definitionKey: entity.linkedDefinitionKey,
       name: entity.name,
@@ -5309,6 +5368,36 @@ function sanitizePromptOp(input: {
       })
     }
     if (resolved.entity) {
+      const keyMatchedDifferentName = (
+        resolved.matchType === 'exact_key'
+        && Boolean(op.payload.targetEntityKey)
+        && normalizeName(entity.name) !== normalizeName(resolved.entity.name)
+        && !explicitCorrection
+      )
+      if (keyMatchedDifferentName) {
+        const nameResolved = resolveEntityReference(input.snapshot, {
+          definitionKey: entity.linkedDefinitionKey,
+          name: entity.name,
+        })
+        if (!nameResolved.entity && nameResolved.candidates.length === 0) {
+          op.payload.targetEntityKey = null
+          return annotatePromptOpMetadata({ op, touchesExisting: false })
+        }
+        resolved = nameResolved
+      }
+      if (!resolved.entity) {
+        op.applyMode = 'needs_approval'
+        op.metadata = {
+          ...(op.metadata ?? {}),
+          matchCandidateEntityKeys: resolved.candidates.map((candidate) => candidate.key),
+          resolution: resolved.matchType,
+        }
+        return annotatePromptOpMetadata({
+          op,
+          touchesExisting: true,
+          approvalReason: 'Ambiguous entity match',
+        })
+      }
       op.payload.targetEntityKey = resolved.entity.key
       const renaming = normalizeName(entity.name) !== normalizeName(resolved.entity.name)
       const changingKind = entity.nodeType !== resolved.entity.nodeType
@@ -6554,6 +6643,67 @@ async function loadWorldViewsByDraftAndKeys(client: SupabaseClient, draftId: str
   return ((response.data ?? []) as WorldViewRow[]).map(mapWorldViewRow)
 }
 
+function serializeWorldViewRow(draftId: string, view: WorldView) {
+  return {
+    draft_id: draftId,
+    key: view.key,
+    name: view.name,
+    mode: view.mode,
+    filters: view.filters,
+    search: view.search,
+    root_entity_key: view.rootEntityKey,
+    camera: view.camera,
+    focus_depth: view.focusDepth,
+    show_suggestions: view.showSuggestions,
+    show_labels: view.showLabels,
+    show_derived_layer: view.showDerivedLayer,
+    node_positions: view.nodePositions,
+    collapsed_state: view.collapsedState,
+    sort_mode: view.sortMode,
+    metadata: view.metadata,
+  }
+}
+
+async function reconcileAutoManagedViewsForDraft(input: {
+  client: SupabaseClient
+  draftId: string
+  snapshot: WorldPromptSnapshot
+  options?: AutoManagedWorldViewOptions
+}) {
+  const reconciled = reconcileAutoManagedWorldViews({
+    worldEntities: input.snapshot.worldEntities,
+    worldRelationships: input.snapshot.worldRelationships,
+    worldViews: input.snapshot.worldViews,
+    worldThreads: input.snapshot.worldThreads,
+  }, input.options)
+  const desiredAutoViews = reconciled.worldViews.filter((view) => (view.metadata as Record<string, unknown> | undefined)?.autoManaged === true)
+  const currentAutoViews = input.snapshot.worldViews.filter((view) => (view.metadata as Record<string, unknown> | undefined)?.autoManaged === true)
+  const removedKeys = currentAutoViews
+    .map((view) => view.key)
+    .filter((key) => !desiredAutoViews.some((view) => view.key === key))
+
+  if (desiredAutoViews.length > 0) {
+    const upsertResponse = await input.client
+      .from('world_views')
+      .upsert(desiredAutoViews.map((view) => serializeWorldViewRow(input.draftId, view)), {
+        onConflict: 'draft_id,key',
+      })
+    if (upsertResponse.error) throw new Error(upsertResponse.error.message)
+  }
+
+  if (removedKeys.length > 0) {
+    const deleteResponse = await input.client
+      .from('world_views')
+      .delete()
+      .eq('draft_id', input.draftId)
+      .in('key', removedKeys)
+    if (deleteResponse.error) throw new Error(deleteResponse.error.message)
+  }
+
+  input.snapshot.worldViews = reconciled.worldViews
+  return reconciled
+}
+
 async function loadWorldOperatorsByDraftAndKeys(client: SupabaseClient, draftId: string, operatorKeys: string[]) {
   if (operatorKeys.length === 0) return []
   const response = await client
@@ -7023,14 +7173,19 @@ export async function startWorldPromptTurn(input: {
     }
     const sanitizedOps = plannerOps.map((operation) => sanitizedById.get(operation.id) ?? operation)
 
-    const persistedThreads = await upsertWorldThreads({
+    const threadUpsertResult = await upsertWorldThreads({
       client: input.client,
       draftId: payload.snapshot.draft.id,
       turnId: turn.id,
       snapshot: planningSnapshot,
-      selectedThreadKey: payload.selectedThreadKey,
+      threadActions: generated.threadActions,
       threadCandidates: generated.threadCandidates,
     })
+    const persistedThreads = threadUpsertResult.threads
+    const threadDiagnostics = [
+      ...threadUpsertResult.diagnostics,
+      ...threadUpsertResult.rejected.map((entry) => `thread_rejected:${entry.key || 'unknown'}:${entry.reason}`),
+    ]
     planningSnapshot.worldThreads = [
       ...planningSnapshot.worldThreads.filter((thread) => !persistedThreads.some((persisted) => persisted.key === thread.key)),
       ...persistedThreads,
@@ -7102,11 +7257,15 @@ export async function startWorldPromptTurn(input: {
       suggestions: finalizedSuggestions,
       suggestionIds: persistedSuggestions.map((suggestion) => suggestion.id),
       threads: persistedThreads,
+      diagnostics: threadDiagnostics,
       turn: { id: turn.id },
     })
 
     const mutableSnapshot = structuredClone(refreshedPlanningSnapshot) as WorldPromptSnapshot
     const appliedDefinitions: Record<string, unknown>[] = []
+    const touchedEntityKeys = new Set<string>()
+    const touchedRelationshipKeys = new Set<string>()
+    let preferredAutoViewKey: string | null = null
     const opsToRun = execution.selectedOps
     const { autoOps: autoRunnableOps, approvalOps: skippedRiskyOps } = splitPromptOpsByApproval(opsToRun)
     const executionPreview = null
@@ -7124,6 +7283,7 @@ export async function startWorldPromptTurn(input: {
         suggestions: finalizedSuggestions,
         suggestionIds: persistedSuggestions.map((suggestion) => suggestion.id),
         threads: persistedThreads,
+        diagnostics: threadDiagnostics,
         note: stripInternalPlannerDiagnostics(execution.note),
         turn: { id: turn.id },
       })
@@ -7140,6 +7300,7 @@ export async function startWorldPromptTurn(input: {
         suggestions: finalizedSuggestions,
         suggestionIds: persistedSuggestions.map((suggestion) => suggestion.id),
         threads: persistedThreads,
+        diagnostics: threadDiagnostics,
         turn: { id: turn.id },
       })
     } else if (execution.mode === 'advisory') {
@@ -7154,6 +7315,7 @@ export async function startWorldPromptTurn(input: {
         suggestions: finalizedSuggestions,
         suggestionIds: persistedSuggestions.map((suggestion) => suggestion.id),
         threads: persistedThreads,
+        diagnostics: threadDiagnostics,
         turn: { id: turn.id },
       })
     } else {
@@ -7170,6 +7332,7 @@ export async function startWorldPromptTurn(input: {
         suggestions: finalizedSuggestions,
         suggestionIds: persistedSuggestions.map((suggestion) => suggestion.id),
         threads: persistedThreads,
+        diagnostics: threadDiagnostics,
         plannerProgress: executableOpCount > 0 ? {
           phase: 'applying_changes',
           message: `Applying 0/${executableOpCount}.`,
@@ -7223,6 +7386,14 @@ export async function startWorldPromptTurn(input: {
             }
           }
         }
+        for (const entity of result.applied.worldEntities ?? []) {
+          touchedEntityKeys.add(entity.key)
+        }
+        for (const relationship of result.applied.worldRelationships ?? []) {
+          touchedRelationshipKeys.add(relationship.key)
+          touchedEntityKeys.add(relationship.sourceEntityKey)
+          touchedEntityKeys.add(relationship.targetEntityKey)
+        }
 
         if (result.note) {
           await writeEvent('assistant_note', {
@@ -7248,6 +7419,35 @@ export async function startWorldPromptTurn(input: {
             scope: execution.scope,
           }, { opId: op.id })
         }
+      }
+
+      for (const thread of persistedThreads) {
+        if (thread.lastTurnId === turn.id || thread.sourceTurnId === turn.id) {
+          for (const entityKey of thread.linkedEntityKeys) {
+            touchedEntityKeys.add(entityKey)
+          }
+        }
+      }
+      if (touchedEntityKeys.size > 0 || touchedRelationshipKeys.size > 0 || persistedThreads.length > 0) {
+        const reconciledViews = await reconcileAutoManagedViewsForDraft({
+          client: input.client,
+          draftId: payload.snapshot.draft.id,
+          snapshot: mutableSnapshot,
+          options: {
+            recentEntityKeys: [...touchedEntityKeys],
+            recentRelationshipKeys: [...touchedRelationshipKeys],
+            preferredRootEntityKey: [...touchedEntityKeys][0] ?? payload.selectedRootEntityKey ?? null,
+            preferredThreadKey: payload.selectedThreadKey,
+          },
+        })
+        preferredAutoViewKey = reconciledViews.preferredViewKey
+        await writeEvent('op_applied', {
+          applied: {
+            worldViews: mutableSnapshot.worldViews,
+          },
+          classification: execution.classification,
+          scope: execution.scope,
+        })
       }
     }
 
@@ -7309,6 +7509,7 @@ export async function startWorldPromptTurn(input: {
         suggestions: finalizedSuggestions,
         suggestionIds: persistedSuggestions.map((suggestion) => suggestion.id),
         threads: persistedThreads,
+        threadDiagnostics,
       },
     })
     await writeEvent('message_created', {
@@ -7316,6 +7517,9 @@ export async function startWorldPromptTurn(input: {
       turn: { id: turn.id },
     })
 
+    const resolvedSelectedViewKey = retrievalPacket.continuityMode === 'topic_shift'
+      ? (preferredAutoViewKey ?? payload.selectedViewKey ?? workingSession.selectedViewKey)
+      : (payload.selectedViewKey ?? preferredAutoViewKey ?? workingSession.selectedViewKey)
     turn = await updateTurn(input.client, turn.id, {
       status: 'completed',
       approval_state: 'not_required',
@@ -7348,8 +7552,10 @@ export async function startWorldPromptTurn(input: {
         continuityMode: retrievalPacket.continuityMode,
         retrievedEntityKeys: retrievalPacket.sessionMemory.worldMemory.retrievedEntityKeys,
         retrievedThreadKeys: retrievalPacket.sessionMemory.worldMemory.retrievedThreadKeys,
+        selectedViewKey: resolvedSelectedViewKey,
         suggestions: finalizedSuggestions,
         suggestionIds: persistedSuggestions.map((suggestion) => suggestion.id),
+        threadDiagnostics,
       },
     })
     const nextSessionMemoryState = buildSessionMemoryState({
@@ -7364,7 +7570,7 @@ export async function startWorldPromptTurn(input: {
       prompt: payload.prompt,
       assistantSummary,
       selectedRootEntityKey: payload.selectedRootEntityKey,
-      selectedViewKey: payload.selectedViewKey,
+      selectedViewKey: resolvedSelectedViewKey,
       selectedThreadKey: payload.selectedThreadKey,
       summaryMemory: buildRollingSessionMemory({
         session: workingSession,
@@ -7379,6 +7585,7 @@ export async function startWorldPromptTurn(input: {
         continuityMode: retrievalPacket.continuityMode,
         retrievedEntityKeys: retrievalPacket.sessionMemory.worldMemory.retrievedEntityKeys,
         retrievedThreadKeys: retrievalPacket.sessionMemory.worldMemory.retrievedThreadKeys,
+        selectedViewKey: resolvedSelectedViewKey,
       },
     })
 
@@ -7394,6 +7601,7 @@ export async function startWorldPromptTurn(input: {
       suggestions: finalizedSuggestions,
       suggestionIds: persistedSuggestions.map((suggestion) => suggestion.id),
       threads: persistedThreads,
+      diagnostics: threadDiagnostics,
       turn,
       session: workingSession,
     })
@@ -7409,6 +7617,7 @@ export async function startWorldPromptTurn(input: {
       suggestions: finalizedSuggestions,
       suggestionIds: persistedSuggestions.map((suggestion) => suggestion.id),
       threads: persistedThreads,
+      diagnostics: threadDiagnostics,
       note: assistantSummary,
       session: workingSession,
     })

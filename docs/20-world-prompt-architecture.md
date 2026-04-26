@@ -17,6 +17,7 @@ As of April 24, 2026, the system is in a v2 transition:
 - retrieval diagnostics are persisted for debugging relevance decisions
 - suggestion rows now carry machine-readable targeting metadata, not just prompt text
 - entity summaries, contexts, and relationship notes reconcile new detail into compact canon text while preserving prior phrasing in append-only `metadata.refinementHistory`
+- the world surface is now neighborhood-first: auto-managed semantic `world_views` keep protagonist, faction, place, lore, thread, and recent-growth slices updated as the graph grows
 
 The world prompt system is not a generic chatbot. It is a world-authoring pipeline that:
 
@@ -82,6 +83,13 @@ For each prompt turn:
 
 3. Before the LLM call, the backend builds a retrieval packet from the graph.
 
+The selected view is no longer just a saved camera snapshot. It is part of the retrieval contract:
+
+- neighborhood views anchor around one entity
+- thread-focus views anchor around thread-linked entities
+- recent-growth views anchor around recently touched entities
+- global overview is explicit, not the default
+
 4. The LLM receives:
    - planner instructions
    - project context guidance
@@ -140,6 +148,7 @@ Typical outputs:
 - `classification`
 - `assistantSummary`
 - `wave1Ops`
+- `threadActions`
 - `threadCandidates`
 - `suggestionCandidates`
 
@@ -240,10 +249,74 @@ Before anything semantic, the system anchors on:
 - explicitly mentioned entities
 - selected root entity
 - selected view root entity
+- selected view source entity keys / source thread keys when the current view is an auto-managed semantic slice
 - selected thread and linked entities
 - selected suggestion target entity keys / thread keys
 - active structured session focus
 - recent touched entities only when the turn is a real follow-up
+
+## View Layer
+
+`world_views` are now used for more than camera snapshots. The same table stores both manual saved views and auto-managed semantic views.
+
+Current metadata fields used by the system:
+
+- `viewKind`
+  - `global_overview`
+  - `entity_neighborhood`
+  - `faction_map`
+  - `place_map`
+  - `lore_cluster`
+  - `thread_focus`
+  - `recent_growth`
+  - `manual_snapshot`
+- `autoManaged`
+- `sourceEntityKeys`
+- `sourceThreadKeys`
+- `refreshPolicy`
+- `semanticLabel`
+
+### Auto-Managed Views
+
+After mutating prompt turns and manual graph or thread edits, the backend recomputes a small stable set of semantic views:
+
+- `Recent Growth`
+- protagonist or strongest actor neighborhood
+- strongest faction / kingdom map
+- strongest place map
+- strongest lore cluster
+- top open thread views
+- `Global Overview`
+
+Manual snapshot views are preserved and never overwritten by this process.
+
+## Thread Lifecycle
+
+`world_threads` are planner-authored during world-prompt turns.
+
+- the hosted planner now emits explicit `threadActions`
+  - `create`
+  - `update`
+  - `resolve`
+  - `park`
+  - `reprioritize`
+  - `relink_entities`
+- the backend validates and persists those actions but does not invent fallback threads when the planner returns none
+- if a mutating turn has no valid thread actions, graph changes may still apply, but thread mutation stays silent for that turn
+- thread titles must be world-specific and non-placeholder; generic labels like `Story Thread` or `Emerging Story Thread` are rejected instead of being repaired heuristically
+- deterministic logic still ranks and surfaces persisted threads for retrieval, suggestions, and `thread_focus` views, but it does not author thread canon
+
+### Frontend Behavior
+
+The world UI is now neighborhood-first:
+
+- left rail groups views into `Core Views`, `Threads`, `Manual Views`, and `Global Overview`
+- selecting a node can `Focus Here`, `Open Neighborhood`, `Expand One Level`, `Open Related Thread`, or `Open Global Overview`
+- `Focus Here` is transient and rebinds the current view locally instead of forcing a new saved view every time
+- `Open Neighborhood` creates or reuses a persistent entity neighborhood view
+- thread views can default to `timeline` mode, while neighborhood and faction/place views default to `graph`
+
+The full global graph still exists, but it is now treated as a secondary power view rather than the default landing surface for a mature story world.
 
 ### Graph-Local Expansion
 

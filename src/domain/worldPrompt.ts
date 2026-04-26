@@ -8,6 +8,7 @@ import {
   worldOperatorSchema,
   worldRelationshipSchema,
   worldResultSchema,
+  worldViewKindSchema,
   worldViewSchema,
 } from './worldGraph.ts'
 import { worldThreadSchema } from './worldThread.ts'
@@ -213,6 +214,9 @@ export const worldPromptSuggestionSchema = z.object({
   applyPolicy: worldPromptSuggestionApplyPolicySchema.optional(),
   targetEntityKeys: z.array(z.string()).optional(),
   targetThreadKeys: z.array(z.string()).optional(),
+  suggestedViewKey: z.string().nullable().optional(),
+  targetRootEntityKey: z.string().nullable().optional(),
+  preferredViewKind: worldViewKindSchema.nullable().optional(),
   focusLayer: z.enum(['actor', 'group', 'place', 'concept', 'event', 'object', 'general']).optional(),
   retrievalHint: z.string().optional(),
   generatedReason: z.string().optional(),

@@ -6,6 +6,17 @@ export const worldEntitySourceSchema = z.enum(['user', 'ai', 'inferred'])
 export const worldRelationshipStateSchema = z.enum(['confirmed', 'suggested', 'inferred'])
 export const worldRelationshipDirectionSchema = z.enum(['outbound', 'inbound', 'bidirectional'])
 export const worldViewModeSchema = z.enum(['graph', 'table', 'timeline', 'board'])
+export const worldViewKindSchema = z.enum([
+  'global_overview',
+  'entity_neighborhood',
+  'faction_map',
+  'place_map',
+  'lore_cluster',
+  'thread_focus',
+  'recent_growth',
+  'manual_snapshot',
+])
+export const worldViewRefreshPolicySchema = z.enum(['on_graph_change', 'on_thread_change', 'manual_only'])
 export const worldOperatorTypeSchema = z.enum(['wear', 'equip', 'hold', 'place_in', 'paired_with', 'stage_scene'])
 export const worldOperatorStatusSchema = z.enum(['draft', 'active', 'archived'])
 export const worldResultTypeSchema = z.enum(['look_variant', 'equipped_variant', 'staged_character', 'paired_subject', 'scene_setup'])
@@ -381,6 +392,8 @@ export type WorldRelationshipCreateInput = z.infer<typeof worldRelationshipCreat
 export type WorldRelationshipUpdateInput = z.infer<typeof worldRelationshipUpdateInputSchema>
 export type WorldViewCreateInput = z.infer<typeof worldViewCreateInputSchema>
 export type WorldViewUpdateInput = z.infer<typeof worldViewUpdateInputSchema>
+export type WorldViewKind = z.infer<typeof worldViewKindSchema>
+export type WorldViewRefreshPolicy = z.infer<typeof worldViewRefreshPolicySchema>
 export type WorldOperatorCreateInput = z.infer<typeof worldOperatorCreateInputSchema>
 export type WorldOperatorUpdateInput = z.infer<typeof worldOperatorUpdateInputSchema>
 export type WorldResultCreateInput = z.infer<typeof worldResultCreateInputSchema>

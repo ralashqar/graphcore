@@ -90,6 +90,8 @@ import {
   deriveMissingWorldViews,
   isAutoDerivedWorldEntity,
   isAutoDerivedWorldView,
+  isAutoManagedWorldView,
+  reconcileAutoManagedWorldViews,
   resultTypeForOperatorType,
 } from '../domain/worldGraphHelpers'
 import {
@@ -1621,6 +1623,71 @@ function mapWorldViewRow(view: WorldViewRow): WorldView {
     createdAt: view.created_at,
     updatedAt: view.updated_at,
   })
+}
+
+function serializeWorldViewRow(draftId: string, view: WorldView) {
+  return {
+    draft_id: draftId,
+    key: view.key,
+    name: view.name,
+    mode: view.mode,
+    filters: view.filters,
+    search: view.search,
+    root_entity_key: view.rootEntityKey,
+    camera: view.camera,
+    focus_depth: view.focusDepth,
+    show_suggestions: view.showSuggestions,
+    show_labels: view.showLabels,
+    show_derived_layer: view.showDerivedLayer,
+    node_positions: view.nodePositions,
+    collapsed_state: view.collapsedState,
+    sort_mode: view.sortMode,
+    metadata: view.metadata,
+  }
+}
+
+async function reconcilePersistedAutoManagedWorldViews(
+  snapshot: ProjectSnapshot,
+  options?: {
+    recentEntityKeys?: string[]
+    recentRelationshipKeys?: string[]
+    preferredRootEntityKey?: string | null
+    preferredThreadKey?: string | null
+  },
+) {
+  const reconciled = reconcileAutoManagedWorldViews(snapshot, options)
+  const desiredAutoViews = reconciled.worldViews.filter((view) => isAutoManagedWorldView(view))
+  const currentAutoViews = snapshot.worldViews.filter((view) => isAutoManagedWorldView(view))
+  const removedKeys = currentAutoViews
+    .map((view) => view.key)
+    .filter((key) => !desiredAutoViews.some((view) => view.key === key))
+
+  if (desiredAutoViews.length > 0) {
+    const upsertResponse = await supabase
+      .from('world_views')
+      .upsert(desiredAutoViews.map((view) => serializeWorldViewRow(snapshot.draft.id, view)), {
+        onConflict: 'draft_id,key',
+      })
+    if (upsertResponse.error) {
+      throw new Error(upsertResponse.error.message)
+    }
+  }
+
+  if (removedKeys.length > 0) {
+    const deleteResponse = await supabase
+      .from('world_views')
+      .delete()
+      .eq('draft_id', snapshot.draft.id)
+      .in('key', removedKeys)
+    if (deleteResponse.error) {
+      throw new Error(deleteResponse.error.message)
+    }
+  }
+
+  return {
+    ...snapshot,
+    worldViews: reconciled.worldViews,
+  }
 }
 
 function mapWorldOperatorRow(entry: WorldOperatorRow): WorldOperator {
@@ -4298,13 +4365,17 @@ export async function createWorldEntity(snapshot: ProjectSnapshot, input: WorldE
 
   const nextEntity = mapWorldEntityRow(insertResponse.data as WorldEntityRow)
   const syncedDefinition = await syncLinkedDefinitionFromWorldEntity(snapshot, nextEntity)
-  return {
+  const nextSnapshot = {
     ...snapshot,
     definitions: linkedDefinition
       ? upsertEntryByKey(syncedDefinition.definitions, linkedDefinition)
       : syncedDefinition.definitions,
     worldEntities: upsertEntryByKey(snapshot.worldEntities, nextEntity),
   }
+  return reconcilePersistedAutoManagedWorldViews(nextSnapshot, {
+    recentEntityKeys: [nextEntity.key],
+    preferredRootEntityKey: nextEntity.key,
+  })
 }
 
 export async function updateWorldEntity(snapshot: ProjectSnapshot, entityKey: string, changes: WorldEntityUpdateInput) {
@@ -4344,12 +4415,15 @@ export async function updateWorldEntity(snapshot: ProjectSnapshot, entityKey: st
 
   const nextEntity = mapWorldEntityRow(updateResponse.data as WorldEntityRow)
   const syncedDefinition = await syncLinkedDefinitionFromWorldEntity(snapshot, nextEntity)
-
-  return {
+  const nextSnapshot = {
     ...snapshot,
     definitions: syncedDefinition.definitions,
     worldEntities: upsertEntryByKey(snapshot.worldEntities, nextEntity),
   }
+  return reconcilePersistedAutoManagedWorldViews(nextSnapshot, {
+    recentEntityKeys: [nextEntity.key],
+    preferredRootEntityKey: nextEntity.key,
+  })
 }
 
 export async function setWorldEntityCanonLock(snapshot: ProjectSnapshot, entityKey: string, input: {
@@ -4439,7 +4513,8 @@ export async function deleteWorldEntity(snapshot: ProjectSnapshot, entityKey: st
     }
   }
 
-  return reloadLiveSnapshot(snapshot)
+  const reloaded = await reloadLiveSnapshot(snapshot)
+  return reconcilePersistedAutoManagedWorldViews(reloaded)
 }
 
 export async function resetProjectWorld(snapshot: ProjectSnapshot) {
@@ -4537,10 +4612,15 @@ export async function createWorldRelationship(snapshot: ProjectSnapshot, input: 
   }
 
   const nextRelationship = mapWorldRelationshipRow(insertResponse.data as WorldRelationshipRow, snapshot.worldEntities)
-  return {
+  const nextSnapshot = {
     ...snapshot,
     worldRelationships: upsertEntryByKey(snapshot.worldRelationships, nextRelationship),
   }
+  return reconcilePersistedAutoManagedWorldViews(nextSnapshot, {
+    recentEntityKeys: [nextRelationship.sourceEntityKey, nextRelationship.targetEntityKey],
+    recentRelationshipKeys: [nextRelationship.key],
+    preferredRootEntityKey: nextRelationship.sourceEntityKey,
+  })
 }
 
 export async function updateWorldRelationship(snapshot: ProjectSnapshot, relationshipKey: string, changes: WorldRelationshipUpdateInput) {
@@ -4583,13 +4663,19 @@ export async function updateWorldRelationship(snapshot: ProjectSnapshot, relatio
     throw new Error(updateResponse.error.message)
   }
 
-  return {
+  const nextSnapshot = {
     ...snapshot,
     worldRelationships: upsertEntryByKey(
       snapshot.worldRelationships,
       mapWorldRelationshipRow(updateResponse.data as WorldRelationshipRow, snapshot.worldEntities),
     ),
   }
+  const resolvedRelationship = nextSnapshot.worldRelationships.find((entry) => entry.key === relationshipKey) ?? null
+  return reconcilePersistedAutoManagedWorldViews(nextSnapshot, {
+    recentEntityKeys: resolvedRelationship ? [resolvedRelationship.sourceEntityKey, resolvedRelationship.targetEntityKey] : [],
+    recentRelationshipKeys: [relationshipKey],
+    preferredRootEntityKey: resolvedRelationship?.sourceEntityKey ?? null,
+  })
 }
 
 export async function setWorldRelationshipCanonLock(snapshot: ProjectSnapshot, relationshipKey: string, input: {
@@ -4639,10 +4725,11 @@ export async function deleteWorldRelationship(snapshot: ProjectSnapshot, relatio
     throw new Error(deleteResponse.error.message)
   }
 
-  return {
+  const nextSnapshot = {
     ...snapshot,
     worldRelationships: snapshot.worldRelationships.filter((relationship) => relationship.key !== relationshipKey),
   }
+  return reconcilePersistedAutoManagedWorldViews(nextSnapshot)
 }
 
 export async function createWorldView(snapshot: ProjectSnapshot, input: WorldViewCreateInput) {
@@ -5221,10 +5308,14 @@ export async function updateWorldThread(snapshot: ProjectSnapshot, threadKey: st
   }
 
   const nextThread = mapWorldThreadRow(response.data as WorldThreadRow)
-  return {
+  const nextSnapshot = {
     ...snapshot,
     worldThreads: upsertEntryByKey(snapshot.worldThreads, nextThread),
   }
+  return reconcilePersistedAutoManagedWorldViews(nextSnapshot, {
+    recentEntityKeys: nextThread.linkedEntityKeys,
+    preferredThreadKey: nextThread.key,
+  })
 }
 
 export async function resolveWorldThread(snapshot: ProjectSnapshot, threadKey: string) {
