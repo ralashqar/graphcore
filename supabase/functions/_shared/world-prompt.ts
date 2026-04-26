@@ -4240,8 +4240,14 @@ function annotatePromptOpMetadata(input: {
 }
 
 function promptOpNeedsApproval(op: PromptToWorldOp) {
+  const approvalReason = typeof op.metadata?.approvalReason === 'string'
+    ? op.metadata.approvalReason.trim()
+    : ''
+  if (approvalReason === 'Semantic rewrite of existing entity') {
+    return false
+  }
   return op.applyMode === 'needs_approval'
-    || (op.metadata && typeof op.metadata === 'object' && typeof op.metadata.approvalReason === 'string' && op.metadata.approvalReason.length > 0)
+    || approvalReason.length > 0
 }
 
 function splitPromptOpsByApproval(ops: PromptToWorldOp[]) {
