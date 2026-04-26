@@ -2809,6 +2809,8 @@ function resolveEntityReference(
     definitionKey?: string | null
     name?: string | null
     alias?: string | null
+    nodeTypeHint?: WorldEntity['nodeType'] | null
+    strictNodeType?: boolean
   },
 ) {
   const byKey = input.entityKey ? snapshot.worldEntities.find((entity) => entity.key === input.entityKey) ?? null : null
@@ -2832,7 +2834,14 @@ function resolveEntityReference(
     return { entity: null, candidates: [], matchType: 'none' as const }
   }
 
-  const exactCandidates = snapshot.worldEntities.filter((entity) => {
+  const searchableEntities = input.nodeTypeHint
+    ? (() => {
+        const sameType = snapshot.worldEntities.filter((entity) => entity.nodeType === input.nodeTypeHint)
+        return input.strictNodeType ? sameType : sameType.length > 0 ? sameType : snapshot.worldEntities
+      })()
+    : snapshot.worldEntities
+
+  const exactCandidates = searchableEntities.filter((entity) => {
     const names = [entity.name, ...entity.aliases]
     return names.some((value) => {
       const variants = buildNameVariants(value)
@@ -2846,7 +2855,7 @@ function resolveEntityReference(
     return { entity: null, candidates: exactCandidates, matchType: 'ambiguous_exact' as const }
   }
 
-  const containmentCandidates = snapshot.worldEntities.filter((entity) => {
+  const containmentCandidates = searchableEntities.filter((entity) => {
     const names = [entity.name, ...entity.aliases]
     return names.some((value) => {
       const variants = buildNameVariants(value)
@@ -2866,7 +2875,7 @@ function resolveEntityReference(
     return { entity: null, candidates: containmentCandidates, matchType: 'ambiguous_containment' as const }
   }
 
-  const scored = snapshot.worldEntities
+  const scored = searchableEntities
     .map((entity) => ({
       entity,
       score: Math.max(
@@ -2886,6 +2895,42 @@ function resolveEntityReference(
   }
 
   return { entity: null, candidates: [], matchType: 'none' as const }
+}
+
+function entityReferenceNameMatches(entity: WorldEntity, name?: string | null, alias?: string | null) {
+  const probeVariants = Array.from(new Set([
+    ...buildNameVariants(name ?? ''),
+    ...buildNameVariants(alias ?? ''),
+  ]))
+  if (probeVariants.length === 0) return true
+  const entityVariants = [entity.name, ...entity.aliases].flatMap((value) => buildNameVariants(value))
+  return entityVariants.some((variant) => probeVariants.includes(variant))
+}
+
+function resolveRelationshipEndpointReference(
+  snapshot: WorldPromptSnapshot,
+  input: {
+    entityKey?: string | null
+    definitionKey?: string | null
+    name?: string | null
+    alias?: string | null
+  },
+) {
+  const resolved = resolveEntityReference(snapshot, input)
+  if (
+    resolved.entity
+    && resolved.matchType === 'exact_key'
+    && input.entityKey
+    && (input.name || input.alias)
+    && !entityReferenceNameMatches(resolved.entity, input.name, input.alias)
+  ) {
+    return resolveEntityReference(snapshot, {
+      definitionKey: input.definitionKey,
+      name: input.name,
+      alias: input.alias,
+    })
+  }
+  return resolved
 }
 
 function determineDefinitionKind(nodeType: WorldEntity['nodeType']): DefinitionBase['kind'] | null {
@@ -5353,6 +5398,8 @@ function sanitizePromptOp(input: {
       entityKey: op.payload.targetEntityKey,
       definitionKey: entity.linkedDefinitionKey,
       name: entity.name,
+      nodeTypeHint: entity.nodeType,
+      strictNodeType: true,
     })
     if (resolved.candidates.length > 1) {
       op.applyMode = 'needs_approval'
@@ -5378,6 +5425,8 @@ function sanitizePromptOp(input: {
         const nameResolved = resolveEntityReference(input.snapshot, {
           definitionKey: entity.linkedDefinitionKey,
           name: entity.name,
+          nodeTypeHint: entity.nodeType,
+          strictNodeType: true,
         })
         if (!nameResolved.entity && nameResolved.candidates.length === 0) {
           op.payload.targetEntityKey = null
@@ -5513,13 +5562,13 @@ function sanitizePromptOp(input: {
 
   if (op.op === 'upsert_relationship') {
     const relationship = op.payload.relationship
-    const source = resolveEntityReference(input.snapshot, {
+    const source = resolveRelationshipEndpointReference(input.snapshot, {
       entityKey: relationship.sourceEntityKey,
       definitionKey: relationship.sourceRef?.definitionKey,
       name: relationship.sourceRef?.name ?? relationship.sourceEntityKey,
       alias: relationship.sourceRef?.alias,
     })
-    const target = resolveEntityReference(input.snapshot, {
+    const target = resolveRelationshipEndpointReference(input.snapshot, {
       entityKey: relationship.targetEntityKey,
       definitionKey: relationship.targetRef?.definitionKey,
       name: relationship.targetRef?.name ?? relationship.targetEntityKey,
@@ -6664,6 +6713,14 @@ function serializeWorldViewRow(draftId: string, view: WorldView) {
   }
 }
 
+function dedupeWorldViewsByKey(views: WorldView[]) {
+  const byKey = new Map<string, WorldView>()
+  for (const view of views) {
+    byKey.set(view.key, view)
+  }
+  return Array.from(byKey.values())
+}
+
 async function reconcileAutoManagedViewsForDraft(input: {
   client: SupabaseClient
   draftId: string
@@ -6676,7 +6733,7 @@ async function reconcileAutoManagedViewsForDraft(input: {
     worldViews: input.snapshot.worldViews,
     worldThreads: input.snapshot.worldThreads,
   }, input.options)
-  const desiredAutoViews = reconciled.worldViews.filter((view) => (view.metadata as Record<string, unknown> | undefined)?.autoManaged === true)
+  const desiredAutoViews = dedupeWorldViewsByKey(reconciled.worldViews.filter((view) => (view.metadata as Record<string, unknown> | undefined)?.autoManaged === true))
   const currentAutoViews = input.snapshot.worldViews.filter((view) => (view.metadata as Record<string, unknown> | undefined)?.autoManaged === true)
   const removedKeys = currentAutoViews
     .map((view) => view.key)

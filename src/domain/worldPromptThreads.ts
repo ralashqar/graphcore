@@ -98,7 +98,7 @@ export function preparePlannerThreadMutations(input: {
   threadCandidates?: PlannerThreadCandidate[]
 }) {
   const knownEntityKeys = new Set(input.knownEntityKeys)
-  const existingByKey = new Map(input.existingThreads.map((thread) => [thread.key, thread]))
+  const workingByKey = new Map(input.existingThreads.map((thread) => [thread.key, thread]))
   const rawActions: Array<PlannerThreadAction | (PlannerThreadCandidate & { action?: undefined })> = (
     input.threadActions && input.threadActions.length > 0
       ? input.threadActions
@@ -110,7 +110,7 @@ export function preparePlannerThreadMutations(input: {
 
   for (const rawAction of rawActions) {
     const key = rawAction.key.trim()
-    const existing = existingByKey.get(key) ?? null
+    const existing = workingByKey.get(key) ?? null
     const action = 'action' in rawAction && rawAction.action
       ? rawAction.action
       : existing ? 'update' : 'create'
@@ -153,6 +153,7 @@ export function preparePlannerThreadMutations(input: {
         metadata,
         existing: false,
       })
+      workingByKey.set(key, mutations[mutations.length - 1]!)
       continue
     }
 
@@ -206,15 +207,22 @@ export function preparePlannerThreadMutations(input: {
       continue
     }
     mutations.push(mutation)
+    workingByKey.set(key, mutation)
   }
 
+  const mutationsByKey = new Map<string, PreparedPlannerThreadMutation>()
+  for (const mutation of mutations) {
+    mutationsByKey.set(mutation.key, mutation)
+  }
+  const dedupedMutations = Array.from(mutationsByKey.values())
+
   const diagnostics: PlannerThreadMutationPreparationResult['diagnostics'] = []
-  if (mutations.length > 0) diagnostics.push('thread_actions_applied')
+  if (dedupedMutations.length > 0) diagnostics.push('thread_actions_applied')
   if (rejected.length > 0) diagnostics.push('thread_actions_rejected')
-  if (mutations.length === 0 && rejected.length === 0) diagnostics.push('no_thread_change')
+  if (dedupedMutations.length === 0 && rejected.length === 0) diagnostics.push('no_thread_change')
 
   return {
-    mutations,
+    mutations: dedupedMutations,
     rejected,
     diagnostics,
   } satisfies PlannerThreadMutationPreparationResult

@@ -662,6 +662,7 @@ function worldFlowNodeEqual(left: Node<WorldNodeData>, right: Node<WorldNodeData
     && left.type === right.type
     && (left.className ?? '') === (right.className ?? '')
     && left.draggable === right.draggable
+    && left.zIndex === right.zIndex
     && samePosition
     && worldNodeDataEqual(left.data, right.data)
   )
@@ -2129,9 +2130,19 @@ export function WorldGraphPage({
         hasBranchLabel: Boolean(branchLabel),
       })
       const showMiniLabel = labelPolicy.showNodeLabel
+      const nodeLayer = selectedWorldNodeKey === key || inspectorNodeKey === key
+        ? 24
+        : highlighted
+          ? 20
+          : displayTier === 'focus'
+            ? 18
+            : displayTier === 'near'
+              ? 16
+              : 14
       return {
         id: key,
         type: 'worldNode',
+        zIndex: nodeLayer,
         className: transitionState === 'entering'
           ? 'is-scene-entering'
           : transitionState === 'exiting'
@@ -2175,6 +2186,7 @@ export function WorldGraphPage({
       const recordKey = record.kind === 'entity' ? record.entity.key : record.kind === 'operator' ? record.operator.key : record.result.key
       return [
         node.id,
+        node.zIndex ?? '',
         `${node.position.x},${node.position.y}`,
         node.draggable ? '1' : '0',
         record.kind,
@@ -2226,9 +2238,10 @@ export function WorldGraphPage({
 
         const samePosition = previousNode.position.x === node.position.x && previousNode.position.y === node.position.y
         const sameDraggable = previousNode.draggable === node.draggable
+        const sameLayer = previousNode.zIndex === node.zIndex
         const sameData = worldNodeDataEqual(previousNode.data, node.data)
 
-        if (samePosition && sameDraggable && sameData) {
+        if (samePosition && sameDraggable && sameLayer && sameData) {
           return previousNode
         }
 
@@ -2237,6 +2250,7 @@ export function WorldGraphPage({
           ...previousNode,
           position: samePosition ? previousNode.position : node.position,
           draggable: node.draggable,
+          zIndex: node.zIndex,
           data: sameData ? previousNode.data : node.data,
         }
       })
@@ -2298,7 +2312,7 @@ export function WorldGraphPage({
           ),
           animated: relationship.state !== 'confirmed',
           interactionWidth: 28,
-          zIndex: selectedWorldEdgeKey === relationship.key ? 8 : isLensEdge ? 7 : 6,
+          zIndex: selectedWorldEdgeKey === relationship.key || isLensEdge ? 1 : 0,
           data: {
             kind: 'relationship' as const,
             onSelect: selectWorldEdge,
@@ -2331,7 +2345,7 @@ export function WorldGraphPage({
           label: showLabels ? (edgeEditor.notes.trim() || 'New relationship') : undefined,
           animated: true,
           interactionWidth: 28,
-          zIndex: 7,
+          zIndex: 1,
           data: { kind: 'relationship' as const },
           style: {
             stroke: 'rgba(94, 234, 212, 0.72)',
@@ -2359,7 +2373,7 @@ export function WorldGraphPage({
           label: edgeLabelForReveal(connection.role, reveal),
           animated: false,
           interactionWidth: 24,
-          zIndex: selectedWorldEdgeKey === connection.key ? 6 : 5,
+          zIndex: selectedWorldEdgeKey === connection.key || isLensConnection ? 1 : 0,
           data: {
             kind: 'connection' as const,
             onSelect: selectWorldEdge,
@@ -3918,6 +3932,7 @@ export function WorldGraphPage({
                   }}
                   nodesDraggable
                   onlyRenderVisibleElements
+                  elevateEdgesOnSelect={false}
                 >
                   <Background />
                   <Controls />

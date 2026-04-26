@@ -3570,7 +3570,17 @@ button.world-prompt-row-result {
 }
 
 .world-graph-canvas .react-flow__node {
+  z-index: 14;
   transition: transform 280ms cubic-bezier(0.22, 1, 0.36, 1), opacity 220ms ease;
+}
+
+.world-graph-canvas .react-flow__edges,
+.world-graph-canvas .react-flow__edge {
+  z-index: 0 !important;
+}
+
+.world-graph-canvas .react-flow__nodes {
+  z-index: 10;
 }
 
 .world-graph-canvas .react-flow__node.is-scene-entering {
@@ -4813,13 +4823,13 @@ button.world-prompt-row-result {
 }
 
 .world-graph-canvas .react-flow__edgelabel-renderer {
-  z-index: 24;
+  z-index: 9;
   pointer-events: none;
 }
 
 .world-edge-label {
   position: absolute;
-  z-index: 24;
+  z-index: 9;
   min-width: 44px;
   max-width: 220px;
   padding: 5px 9px;

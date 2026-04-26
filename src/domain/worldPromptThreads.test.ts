@@ -102,9 +102,44 @@ test('preparePlannerThreadMutations resolves and reprioritizes an existing threa
   })
 
   assert.deepEqual(result.diagnostics, ['thread_actions_applied'])
-  assert.equal(result.mutations.length, 2)
+  assert.equal(result.mutations.length, 1)
   assert.equal(result.mutations[0]?.priority, 'background')
-  assert.equal(result.mutations[1]?.status, 'resolved')
+  assert.equal(result.mutations[0]?.status, 'resolved')
+})
+
+test('preparePlannerThreadMutations coalesces create and relink actions for the same new thread', () => {
+  const result = preparePlannerThreadMutations({
+    existingThreads: [],
+    knownEntityKeys: ['world.actor.yara', 'world.group.house-veyr'],
+    threadActions: [
+      {
+        action: 'create',
+        key: 'thread.yara-veyr-role',
+        title: 'Yara and the Veyr Succession',
+        summary: 'Yara becomes entangled in House Veyr politics.',
+        priority: 'secondary',
+        linkedEntityKeys: ['world.actor.yara'],
+        linkMode: 'merge',
+        metadata: {},
+      },
+      {
+        action: 'relink_entities',
+        key: 'thread.yara-veyr-role',
+        title: '',
+        summary: '',
+        priority: 'primary',
+        linkedEntityKeys: ['world.group.house-veyr'],
+        linkMode: 'merge',
+        metadata: {},
+      },
+    ] satisfies PlannerThreadAction[],
+  })
+
+  assert.deepEqual(result.diagnostics, ['thread_actions_applied'])
+  assert.equal(result.rejected.length, 0)
+  assert.equal(result.mutations.length, 1)
+  assert.equal(result.mutations[0]?.priority, 'primary')
+  assert.deepEqual(result.mutations[0]?.linkedEntityKeys, ['world.actor.yara', 'world.group.house-veyr'])
 })
 
 test('preparePlannerThreadMutations rejects malformed and placeholder thread actions without fallback creation', () => {
