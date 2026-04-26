@@ -32,6 +32,15 @@ type IconGlyphProps = {
   style?: CSSProperties
 }
 
+const RASTER_ICON_BY_ID: Partial<Record<EntityIconId, string>> = {
+  character: '/world-node-icons/world-node-actor.png',
+  group: '/world-node-icons/world-node-group.png',
+  environment: '/world-node-icons/world-node-place.png',
+  item: '/world-node-icons/world-node-object.png',
+  concept: '/world-node-icons/world-node-concept.png',
+  event: '/world-node-icons/world-node-event.png',
+}
+
 function Stroke(props: IconGlyphProps) {
   return { fill: 'none', stroke: 'currentColor', strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const, strokeWidth: 1.7, ...props }
 }
@@ -198,6 +207,19 @@ function IconPath({ id }: { id: EntityIconId }) {
 }
 
 export function EntityIcon({ className, id, title }: EntityIconProps) {
+  const rasterSrc = RASTER_ICON_BY_ID[id]
+  if (rasterSrc) {
+    return (
+      <img
+        alt={title ?? ''}
+        aria-hidden={title ? undefined : 'true'}
+        aria-label={title}
+        className={['entity-icon-image', className].filter(Boolean).join(' ')}
+        role={title ? 'img' : undefined}
+        src={rasterSrc}
+      />
+    )
+  }
   return (
     <svg aria-hidden={title ? undefined : 'true'} aria-label={title} className={className} viewBox="0 0 24 24" role="img">
       <IconPath id={id} />

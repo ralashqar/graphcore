@@ -93,6 +93,15 @@ body::before {
   mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.9), transparent 96%);
 }
 
+.entity-icon-image {
+  display: block;
+  width: 1em;
+  height: 1em;
+  object-fit: contain;
+  pointer-events: none;
+  user-select: none;
+}
+
 a,
 button,
 input,
@@ -639,7 +648,8 @@ code {
   color: var(--accent);
 }
 
-.quick-create-icon svg {
+.quick-create-icon svg,
+.quick-create-icon .entity-icon-image {
   width: 18px;
   height: 18px;
 }
@@ -2963,7 +2973,8 @@ code {
   background: rgba(167, 139, 250, 0.08);
 }
 
-.world-prompt-type-chip svg {
+.world-prompt-type-chip svg,
+.world-prompt-type-chip .entity-icon-image {
   width: 16px;
   height: 16px;
 }
@@ -3179,7 +3190,8 @@ button.world-prompt-row-result {
   color: rgba(226, 232, 240, 0.92);
 }
 
-.world-prompt-entry-icon svg {
+.world-prompt-entry-icon svg,
+.world-prompt-entry-icon .entity-icon-image {
   width: 16px;
   height: 16px;
 }
@@ -3690,7 +3702,9 @@ button.world-prompt-row-result {
 }
 
 .world-node-crest svg,
-.world-node-emblem-ring svg {
+.world-node-emblem-ring svg,
+.world-node-crest .entity-icon-image,
+.world-node-emblem-ring .entity-icon-image {
   width: 16px;
   height: 16px;
   color: var(--world-node-accent, #f8fafc);
@@ -4075,7 +4089,8 @@ button.world-prompt-row-result {
   height: 34px;
 }
 
-.world-node-emblem-ring svg {
+.world-node-emblem-ring svg,
+.world-node-emblem-ring .entity-icon-image {
   width: 24px;
   height: 24px;
 }
@@ -4134,7 +4149,13 @@ button.world-prompt-row-result {
   object-fit: cover;
 }
 
-.world-node-dot-core svg {
+.world-node-dot-core .entity-icon-image {
+  object-fit: contain;
+  transform: scale(1.22);
+}
+
+.world-node-dot-core svg,
+.world-node-dot-core .entity-icon-image {
   width: 12px;
   height: 12px;
 }
@@ -4150,7 +4171,8 @@ button.world-prompt-row-result {
   color: rgba(9, 13, 20, 0.94);
 }
 
-.world-node-card.is-mode-nearIcon .world-node-dot-core svg {
+.world-node-card.is-mode-nearIcon .world-node-dot-core svg,
+.world-node-card.is-mode-nearIcon .world-node-dot-core .entity-icon-image {
   width: 24px;
   height: 24px;
 }
@@ -4165,7 +4187,8 @@ button.world-prompt-row-result {
   height: 12px;
 }
 
-.world-node-card.is-mode-peripheralDot .world-node-dot-core svg {
+.world-node-card.is-mode-peripheralDot .world-node-dot-core svg,
+.world-node-card.is-mode-peripheralDot .world-node-dot-core .entity-icon-image {
   width: 9px;
   height: 9px;
 }
@@ -6473,6 +6496,12 @@ button:disabled {
   height: 100%;
   object-fit: cover;
   display: block;
+}
+
+.media-thumb .entity-icon-image {
+  width: 56%;
+  height: 56%;
+  object-fit: contain;
 }
 
 .media-thumb.fallback {

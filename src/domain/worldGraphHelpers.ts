@@ -172,12 +172,17 @@ export function hasMissingWorldGraphBackfill(
 ) {
   if (snapshot.worldEntities.some((entity) => isAutoDerivedWorldEntity(entity))) return true
   if (snapshot.worldViews.some((view) => isAutoDerivedWorldView(view))) return true
+  if (snapshot.worldEntities.some((entity) => worldEntityRequiresLinkedDefinition(entity.nodeType) && !entity.linkedDefinitionKey)) return true
   const derivedEntities = deriveMissingWorldEntities(snapshot)
   if (derivedEntities.length > 0) return true
   return deriveMissingWorldViews({
     worldEntities: [...snapshot.worldEntities, ...derivedEntities],
     worldViews: snapshot.worldViews,
   }).length > 0
+}
+
+export function worldEntityRequiresLinkedDefinition(nodeType: WorldEntity['nodeType']) {
+  return nodeType === 'actor' || nodeType === 'place' || nodeType === 'object'
 }
 
 export function definitionKindForWorldEntity(nodeType: WorldEntity['nodeType']): DefinitionBase['kind'] | null {

@@ -481,6 +481,10 @@ function definitionKindForWorldNodeType(nodeType: WorldEntity['nodeType']): Defi
   }
 }
 
+function worldEntityRequiresLinkedDefinition(nodeType: WorldEntity['nodeType']) {
+  return nodeType === 'actor' || nodeType === 'place' || nodeType === 'object'
+}
+
 function buildWorldEntityKey(existingKeys: string[], nodeType: WorldEntity['nodeType'], seed: string) {
   const slug = slugify(seed) || nodeType
   let candidate = `world.${nodeType}.${slug}`
@@ -596,7 +600,7 @@ async function createLinkedDefinitionForWorldEntity(
   const definitionKind = definitionKindForWorldNodeType(input.nodeType)
   if (!definitionKind) return { linkedDefinitionKey: null, linkedDefinition: null }
   if (input.linkedDefinitionKey) return { linkedDefinitionKey: input.linkedDefinitionKey, linkedDefinition: null }
-  if (!input.ensureLinkedDefinition) return { linkedDefinitionKey: null, linkedDefinition: null }
+  if (!input.ensureLinkedDefinition && !worldEntityRequiresLinkedDefinition(input.nodeType)) return { linkedDefinitionKey: null, linkedDefinition: null }
 
   const existingDefinitionKeys = snapshot.definitions
     .filter((definition) => definition.kind === definitionKind)
@@ -4263,8 +4267,13 @@ export async function syncWorldGraphFromDefinitions(snapshot: ProjectSnapshot) {
         worldEntities: [...snapshot.worldEntities, ...derivedEntities],
         worldViews: snapshot.worldViews,
       }, { autoDerived: false })
+  const entitiesMissingLinkedDefinitions = snapshot.worldEntities.filter((entity) => (
+    worldEntityRequiresLinkedDefinition(entity.nodeType)
+    && !entity.linkedDefinitionKey
+    && entity.status !== 'archived'
+  ))
 
-  if (derivedEntities.length === 0 && derivedViews.length === 0) {
+  if (derivedEntities.length === 0 && derivedViews.length === 0 && entitiesMissingLinkedDefinitions.length === 0) {
     return snapshot
   }
 
@@ -4321,6 +4330,50 @@ export async function syncWorldGraphFromDefinitions(snapshot: ProjectSnapshot) {
 
     if (viewInsert.error) {
       throw new Error(viewInsert.error.message)
+    }
+  }
+
+  if (entitiesMissingLinkedDefinitions.length > 0) {
+    let workingSnapshot = snapshot
+    for (const entity of entitiesMissingLinkedDefinitions) {
+      const linkedDefinition = await createLinkedDefinitionForWorldEntity(workingSnapshot, {
+        name: entity.name,
+        summary: entity.summary,
+        context: entity.context,
+        nodeType: entity.nodeType,
+        aliases: entity.aliases,
+        tags: entity.tags,
+        status: entity.status,
+        thumbnailAssetKey: entity.thumbnailAssetKey,
+        linkedDefinitionKey: null,
+        source: entity.source,
+        customProperties: entity.customProperties,
+        metadata: entity.metadata,
+        ensureLinkedDefinition: true,
+      })
+      if (!linkedDefinition.linkedDefinitionKey) continue
+      const linkResponse = await supabase
+        .from('world_entities')
+        .update({ linked_definition_key: linkedDefinition.linkedDefinitionKey })
+        .eq('draft_id', snapshot.draft.id)
+        .eq('key', entity.key)
+      if (linkResponse.error) {
+        throw new Error(linkResponse.error.message)
+      }
+      workingSnapshot = {
+        ...workingSnapshot,
+        definitions: linkedDefinition.linkedDefinition
+          ? upsertEntryByKey(workingSnapshot.definitions, linkedDefinition.linkedDefinition)
+          : workingSnapshot.definitions,
+        worldEntities: upsertEntryByKey(workingSnapshot.worldEntities, {
+          ...entity,
+          linkedDefinitionKey: linkedDefinition.linkedDefinitionKey,
+        }),
+      }
+      await syncLinkedDefinitionFromWorldEntity(workingSnapshot, {
+        ...entity,
+        linkedDefinitionKey: linkedDefinition.linkedDefinitionKey,
+      })
     }
   }
 
@@ -4413,12 +4466,47 @@ export async function updateWorldEntity(snapshot: ProjectSnapshot, entityKey: st
     throw new Error(updateResponse.error.message)
   }
 
-  const nextEntity = mapWorldEntityRow(updateResponse.data as WorldEntityRow)
-  const syncedDefinition = await syncLinkedDefinitionFromWorldEntity(snapshot, nextEntity)
+  let nextEntity = mapWorldEntityRow(updateResponse.data as WorldEntityRow)
+  let workingSnapshot = snapshot
+  if (!nextEntity.linkedDefinitionKey && worldEntityRequiresLinkedDefinition(nextEntity.nodeType)) {
+    const linkedDefinition = await createLinkedDefinitionForWorldEntity(snapshot, {
+      name: nextEntity.name,
+      summary: nextEntity.summary,
+      context: nextEntity.context,
+      nodeType: nextEntity.nodeType,
+      aliases: nextEntity.aliases,
+      tags: nextEntity.tags,
+      status: nextEntity.status,
+      thumbnailAssetKey: nextEntity.thumbnailAssetKey,
+      linkedDefinitionKey: null,
+      source: nextEntity.source,
+      customProperties: nextEntity.customProperties,
+      metadata: nextEntity.metadata,
+      ensureLinkedDefinition: true,
+    })
+    if (linkedDefinition.linkedDefinitionKey) {
+      const linkResponse = await supabase
+        .from('world_entities')
+        .update({ linked_definition_key: linkedDefinition.linkedDefinitionKey })
+        .eq('draft_id', snapshot.draft.id)
+        .eq('key', nextEntity.key)
+        .select(WORLD_ENTITY_SELECT)
+        .single()
+      if (linkResponse.error) throw new Error(linkResponse.error.message)
+      nextEntity = mapWorldEntityRow(linkResponse.data as WorldEntityRow)
+      workingSnapshot = {
+        ...snapshot,
+        definitions: linkedDefinition.linkedDefinition
+          ? upsertEntryByKey(snapshot.definitions, linkedDefinition.linkedDefinition)
+          : snapshot.definitions,
+      }
+    }
+  }
+  const syncedDefinition = await syncLinkedDefinitionFromWorldEntity(workingSnapshot, nextEntity)
   const nextSnapshot = {
-    ...snapshot,
+    ...workingSnapshot,
     definitions: syncedDefinition.definitions,
-    worldEntities: upsertEntryByKey(snapshot.worldEntities, nextEntity),
+    worldEntities: upsertEntryByKey(workingSnapshot.worldEntities, nextEntity),
   }
   return reconcilePersistedAutoManagedWorldViews(nextSnapshot, {
     recentEntityKeys: [nextEntity.key],

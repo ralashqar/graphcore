@@ -2952,6 +2952,10 @@ function determineDefinitionKind(nodeType: WorldEntity['nodeType']): DefinitionB
   }
 }
 
+function worldEntityRequiresLinkedDefinition(nodeType: WorldEntity['nodeType']) {
+  return nodeType === 'actor' || nodeType === 'place' || nodeType === 'object'
+}
+
 function buildWorldEntityKey(snapshot: WorldPromptSnapshot, nodeType: WorldEntity['nodeType'], name: string) {
   const base = `world.${nodeType}.${slugify(name)}`
   let candidate = base
@@ -4617,9 +4621,11 @@ async function ensureLinkedDefinition(input: {
   client: SupabaseClient
   snapshot: WorldPromptSnapshot
   entity: WorldEntityCreateInput
+  force?: boolean
 }) {
   const definitionKind = determineDefinitionKind(input.entity.nodeType)
-  if (!definitionKind || input.entity.ensureLinkedDefinition === false) {
+  const shouldForceLink = input.force === true || worldEntityRequiresLinkedDefinition(input.entity.nodeType)
+  if (!definitionKind || (input.entity.ensureLinkedDefinition === false && !shouldForceLink)) {
     return {
       linkedDefinitionKey: null,
       createdDefinition: null,
@@ -4705,6 +4711,70 @@ async function ensureLinkedDefinition(input: {
       customFields: [],
       components,
     } satisfies Record<string, unknown>,
+  }
+}
+
+async function ensureAppliedEntityLinkedDefinition(input: {
+  client: SupabaseClient
+  snapshot: WorldPromptSnapshot
+  entity: WorldEntity
+}) {
+  if (!worldEntityRequiresLinkedDefinition(input.entity.nodeType)) {
+    return {
+      entity: input.entity,
+      createdDefinition: null,
+    }
+  }
+
+  let entity = input.entity
+  let createdDefinition: Record<string, unknown> | null = null
+  if (!entity.linkedDefinitionKey) {
+    const ensuredDefinition = await ensureLinkedDefinition({
+      client: input.client,
+      snapshot: input.snapshot,
+      force: true,
+      entity: {
+        name: entity.name,
+        summary: entity.summary,
+        context: entity.context,
+        nodeType: entity.nodeType,
+        aliases: entity.aliases,
+        tags: entity.tags,
+        status: entity.status,
+        thumbnailAssetKey: entity.thumbnailAssetKey,
+        linkedDefinitionKey: entity.linkedDefinitionKey,
+        source: entity.source,
+        customProperties: entity.customProperties,
+        metadata: entity.metadata,
+        ensureLinkedDefinition: true,
+      },
+    })
+    createdDefinition = ensuredDefinition.createdDefinition
+    if (ensuredDefinition.linkedDefinitionKey) {
+      const updateResponse = await input.client
+        .from('world_entities')
+        .update({ linked_definition_key: ensuredDefinition.linkedDefinitionKey })
+        .eq('draft_id', input.snapshot.draft.id)
+        .eq('key', entity.key)
+        .select(WORLD_ENTITY_SELECT)
+        .single()
+      if (updateResponse.error) throw new Error(updateResponse.error.message)
+      entity = mapWorldEntityRow(updateResponse.data as WorldEntityRow)
+    }
+  }
+
+  await syncLinkedDefinitionFromWorldEntity({
+    client: input.client,
+    draftId: input.snapshot.draft.id,
+    entity,
+  })
+  input.snapshot.worldEntities = [
+    ...input.snapshot.worldEntities.filter((entry) => entry.key !== entity.key),
+    entity,
+  ]
+  return {
+    entity,
+    createdDefinition,
   }
 }
 
@@ -5714,6 +5784,7 @@ async function createPromptWorldEntity(input: {
     client: input.client,
     snapshot: input.snapshot,
     entity: input.entity,
+    force: worldEntityRequiresLinkedDefinition(input.entity.nodeType),
   })
 
   const key = input.preferredKey || buildWorldEntityKey(input.snapshot, input.entity.nodeType, input.entity.name)
@@ -5883,14 +5954,24 @@ async function applyPromptOp(input: {
         draftId: input.snapshot.draft.id,
         entity: updatedEntity,
       })
-      input.snapshot.worldEntities = input.snapshot.worldEntities.map((entity) => entity.key === updatedEntity.key ? updatedEntity : entity)
-      return { applied: { worldEntities: [updatedEntity] }, queue: null, note: null }
+      const linkedEntity = await ensureAppliedEntityLinkedDefinition({
+        client: input.client,
+        snapshot: input.snapshot,
+        entity: updatedEntity,
+      })
+      return {
+        applied: { worldEntities: [linkedEntity.entity] },
+        definitions: linkedEntity.createdDefinition ? [linkedEntity.createdDefinition] : [],
+        queue: null,
+        note: null,
+      }
     }
 
     const ensuredDefinition = await ensureLinkedDefinition({
       client: input.client,
       snapshot: input.snapshot,
       entity: input.op.payload.entity,
+      force: worldEntityRequiresLinkedDefinition(input.op.payload.entity.nodeType),
     })
     const linkedDefinitionKey = ensuredDefinition.linkedDefinitionKey
     const key = input.op.payload.targetEntityKey || buildWorldEntityKey(input.snapshot, input.op.payload.entity.nodeType, input.op.payload.entity.name)
@@ -5908,13 +5989,17 @@ async function applyPromptOp(input: {
           draftId: input.snapshot.draft.id,
           entity: updatedEntity,
         })
-        input.snapshot.worldEntities = [
-          ...input.snapshot.worldEntities.filter((entity) => entity.key !== updatedEntity.key),
-          updatedEntity,
-        ]
+        const linkedEntity = await ensureAppliedEntityLinkedDefinition({
+          client: input.client,
+          snapshot: input.snapshot,
+          entity: updatedEntity,
+        })
       return {
-        applied: { worldEntities: [updatedEntity] },
-        definitions: ensuredDefinition.createdDefinition ? [ensuredDefinition.createdDefinition] : [],
+        applied: { worldEntities: [linkedEntity.entity] },
+        definitions: [
+          ensuredDefinition.createdDefinition,
+          linkedEntity.createdDefinition,
+        ].filter((definition): definition is Record<string, unknown> => Boolean(definition)),
         queue: null,
         note: null,
       }
@@ -5956,13 +6041,17 @@ async function applyPromptOp(input: {
             draftId: input.snapshot.draft.id,
             entity: updatedEntity,
           })
-          input.snapshot.worldEntities = [
-            ...input.snapshot.worldEntities.filter((entity) => entity.key !== updatedEntity.key),
-            updatedEntity,
-          ]
+          const linkedEntity = await ensureAppliedEntityLinkedDefinition({
+            client: input.client,
+            snapshot: input.snapshot,
+            entity: updatedEntity,
+          })
           return {
-            applied: { worldEntities: [updatedEntity] },
-            definitions: ensuredDefinition.createdDefinition ? [ensuredDefinition.createdDefinition] : [],
+            applied: { worldEntities: [linkedEntity.entity] },
+            definitions: [
+              ensuredDefinition.createdDefinition,
+              linkedEntity.createdDefinition,
+            ].filter((definition): definition is Record<string, unknown> => Boolean(definition)),
             queue: null,
             note: null,
           }
@@ -5976,13 +6065,17 @@ async function applyPromptOp(input: {
       draftId: input.snapshot.draft.id,
       entity: createdEntity,
     })
-    input.snapshot.worldEntities = [
-      ...input.snapshot.worldEntities.filter((entity) => entity.key !== createdEntity.key),
-      createdEntity,
-    ]
+    const linkedEntity = await ensureAppliedEntityLinkedDefinition({
+      client: input.client,
+      snapshot: input.snapshot,
+      entity: createdEntity,
+    })
     return {
-      applied: { worldEntities: [createdEntity] },
-      definitions: ensuredDefinition.createdDefinition ? [ensuredDefinition.createdDefinition] : [],
+      applied: { worldEntities: [linkedEntity.entity] },
+      definitions: [
+        ensuredDefinition.createdDefinition,
+        linkedEntity.createdDefinition,
+      ].filter((definition): definition is Record<string, unknown> => Boolean(definition)),
       queue: null,
       note: null,
     }
@@ -6062,8 +6155,17 @@ async function applyPromptOp(input: {
       draftId: input.snapshot.draft.id,
       entity: updatedEntity,
     })
-    input.snapshot.worldEntities = input.snapshot.worldEntities.map((entity) => entity.key === updatedEntity.key ? updatedEntity : entity)
-    return { applied: { worldEntities: [updatedEntity] }, queue: null, note: null }
+    const linkedEntity = await ensureAppliedEntityLinkedDefinition({
+      client: input.client,
+      snapshot: input.snapshot,
+      entity: updatedEntity,
+    })
+    return {
+      applied: { worldEntities: [linkedEntity.entity] },
+      definitions: linkedEntity.createdDefinition ? [linkedEntity.createdDefinition] : [],
+      queue: null,
+      note: null,
+    }
   }
 
   if (input.op.op === 'replace_entity') {
@@ -6105,6 +6207,14 @@ async function applyPromptOp(input: {
       if (!replacementEntity) {
         throw new Error('Replacement entity could not be resolved.')
       }
+      const linkedReplacement = await ensureAppliedEntityLinkedDefinition({
+        client: input.client,
+        snapshot: input.snapshot,
+        entity: replacementEntity,
+      })
+      replacementEntity = linkedReplacement.entity
+      replacementDefinitionKey = replacementEntity.linkedDefinitionKey
+      createdReplacementDefinition = createdReplacementDefinition ?? linkedReplacement.createdDefinition
 
       const replaced = await replaceWorldEntityGraph({
         client: input.client,
@@ -7489,6 +7599,18 @@ export async function startWorldPromptTurn(input: {
           for (const entityKey of thread.linkedEntityKeys) {
             touchedEntityKeys.add(entityKey)
           }
+        }
+      }
+      for (const entityKey of [...touchedEntityKeys]) {
+        const touchedEntity = mutableSnapshot.worldEntities.find((entity) => entity.key === entityKey) ?? null
+        if (!touchedEntity) continue
+        const linkedEntity = await ensureAppliedEntityLinkedDefinition({
+          client: input.client,
+          snapshot: mutableSnapshot,
+          entity: touchedEntity,
+        })
+        if (linkedEntity.createdDefinition && !appliedDefinitions.some((entry) => entry.key === linkedEntity.createdDefinition?.key)) {
+          appliedDefinitions.push(linkedEntity.createdDefinition)
         }
       }
       if (touchedEntityKeys.size > 0 || touchedRelationshipKeys.size > 0 || persistedThreads.length > 0) {
