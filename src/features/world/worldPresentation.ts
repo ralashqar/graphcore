@@ -351,7 +351,7 @@ export function buildWorldGraphLabelPolicy(input: {
 }): WorldGraphLabelPolicy {
   const zoom = Number.isFinite(input.zoom) ? input.zoom : 1
   const isImportant = Boolean(input.highlighted || input.isTurnLensEndpoint || input.hovered || input.selected || input.inspected)
-  const isOuter = input.visualMode === 'farIcon' || input.visualMode === 'peripheralDot'
+  const isOuter = input.displayTier === 'far' || input.displayTier === 'peripheral'
   const presetLikesContext = input.preset === 'explore' || input.preset === 'recent' || input.preset === 'wide' || input.preset === 'story'
 
   if (isImportant) {
@@ -367,7 +367,9 @@ export function buildWorldGraphLabelPolicy(input: {
 
   const showNodeLabel =
     input.visualMode === 'nearIcon'
-      ? input.showLabels || zoom >= 0.58
+      ? isOuter
+        ? (input.showLabels && zoom >= 0.48) || (presetLikesContext && zoom >= 0.88)
+        : input.showLabels || zoom >= 0.58
       : input.visualMode === 'farIcon'
         ? (input.showLabels && zoom >= 0.48) || (presetLikesContext && zoom >= 0.88)
         : (input.showLabels && zoom >= 0.72) || (input.preset === 'wide' && zoom >= 1.02)

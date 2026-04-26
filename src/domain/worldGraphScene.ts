@@ -432,6 +432,7 @@ export function deriveContinuousWorldScene(input: DeriveWorldSceneInput): Derive
   const focusDepth = clampFocusDepth(input.focusDepth)
   const graphDepthMode = input.graphDepthMode ?? 'nearby'
   const explorationDistance = focusDepth + (graphDepthMode === 'tight' ? 1 : graphDepthMode === 'wide' ? 3 : 2)
+  const includeAllGlobalContext = input.viewKind === 'global_overview' && !input.focusRootKey && graphDepthMode === 'wide'
 
   const relationshipAdjacency = new Map<string, Set<string>>()
   const relationshipDegree = new Map<string, number>()
@@ -462,7 +463,7 @@ export function deriveContinuousWorldScene(input: DeriveWorldSceneInput): Derive
       const protectedNode = protectedNodeKeySet.has(entity.key) || entity.key === rootEntityKey || pinned || story
       const typeFiltered = Boolean(enabledEntityTypeSet && !enabledEntityTypeSet.has(entity.nodeType) && !protectedNode)
       const reachable = distance !== null
-      if (!reachable && !pinned && !(input.presentationMode === 'story' && story) && !protectedNode) {
+      if (!reachable && !includeAllGlobalContext && !pinned && !(input.presentationMode === 'story' && story) && !protectedNode) {
         return null
       }
       return {
@@ -487,13 +488,17 @@ export function deriveContinuousWorldScene(input: DeriveWorldSceneInput): Derive
     .filter((candidate): candidate is EntityVisibilityCandidate => candidate !== null)
 
   const candidateCountExcludingRoot = candidateEntities.filter((candidate) => candidate.entity.key !== rootEntityKey).length
-  const { nearBudget, farBudget, peripheralBudget } = computeVisibilityBudgets({
+  let { nearBudget, farBudget, peripheralBudget } = computeVisibilityBudgets({
     directNeighborCount,
     reachableCount: candidateCountExcludingRoot,
     focusDepth,
     presentationMode: input.presentationMode,
     graphDepthMode,
   })
+  if (includeAllGlobalContext) {
+    farBudget = Math.max(farBudget, Math.min(64, Math.ceil(candidateCountExcludingRoot * 0.34)))
+    peripheralBudget = Math.max(peripheralBudget, candidateCountExcludingRoot)
+  }
 
   const candidateSort = (left: EntityVisibilityCandidate, right: EntityVisibilityCandidate) => {
     const scoreDelta = right.score - left.score

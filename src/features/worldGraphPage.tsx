@@ -59,13 +59,11 @@ import {
   type WorldSceneTransitionState,
 } from '../domain/worldGraphScene'
 import {
-  choosePreferredWorldView,
   buildSuggestionsForEntity,
   createDefaultWorldView,
   definitionKindForWorldEntity,
   getDerivedOperationsForEntityPair,
   getWorldEntityUsage,
-  getWorldViewRailGroup,
   getWorldViewSeedEntityKeys,
   getWorldViewSemanticMetadata,
   iconForWorldEntity,
@@ -319,21 +317,36 @@ function readStoredWorldGraphDisplayFilters(): WorldGraphDisplayFilters {
   }
 }
 
+function createDefaultGlobalWorldView(): WorldView {
+  const view = createDefaultWorldView('Global Overview')
+  return {
+    ...view,
+    key: 'world.view.global-overview',
+    name: 'Global Overview',
+    sortMode: 'relationship_count',
+    metadata: {
+      ...(view.metadata ?? {}),
+      viewKind: 'global_overview',
+      autoManaged: true,
+      sourceEntityKeys: [],
+      sourceThreadKeys: [],
+      pinnedNodeKeys: [],
+      refreshPolicy: 'on_graph_change',
+      semanticLabel: 'Full world atlas',
+      transientFocus: false,
+    },
+  }
+}
+
 function worldNodeVisualModeFor(
-  displayTier: WorldSceneDisplayTier,
+  _displayTier: WorldSceneDisplayTier,
   nodeKey: string,
   selectedNodeKey: string | null,
   inspectedNodeKey: string | null,
-  selectedAdjacentNodeKeys?: ReadonlySet<string>,
+  _selectedAdjacentNodeKeys?: ReadonlySet<string>,
 ): WorldNodeVisualMode {
   const activeCardNodeKey = inspectedNodeKey ?? selectedNodeKey
-  if (activeCardNodeKey) {
-    if (nodeKey === activeCardNodeKey) return 'card'
-    if (selectedAdjacentNodeKeys?.has(nodeKey)) return 'nearIcon'
-    return displayTier === 'peripheral' ? 'peripheralDot' : 'farIcon'
-  }
-  if (displayTier === 'peripheral') return 'peripheralDot'
-  if (displayTier === 'far') return 'farIcon'
+  if (activeCardNodeKey && nodeKey === activeCardNodeKey) return 'card'
   return 'nearIcon'
 }
 
@@ -354,6 +367,21 @@ function worldNodeDimensions(record: WorldGraphNodeRecord, _displayTier: WorldSc
     return { width: 150, height: 108 }
   }
   return { width: 148, height: 118 }
+}
+
+function worldFlowNodeIntersectsViewport(
+  node: Node<WorldNodeData>,
+  viewport: { x: number; y: number; zoom: number },
+  viewportSize: { width: number; height: number },
+) {
+  const dimensions = worldNodeDimensions(node.data.record, node.data.displayTier, node.data.visualMode)
+  const width = typeof node.width === 'number' && node.width > 0 ? node.width : dimensions.width
+  const height = typeof node.height === 'number' && node.height > 0 ? node.height : dimensions.height
+  const left = node.position.x * viewport.zoom + viewport.x
+  const top = node.position.y * viewport.zoom + viewport.y
+  const right = (node.position.x + width) * viewport.zoom + viewport.x
+  const bottom = (node.position.y + height) * viewport.zoom + viewport.y
+  return right >= 0 && bottom >= 0 && left <= viewportSize.width && top <= viewportSize.height
 }
 
 function worldNodeCollisionPadding(visualMode: WorldNodeVisualMode) {
@@ -494,7 +522,7 @@ function WorldNodeCard({ data, selected }: NodeProps<Node<WorldNodeData>>) {
       {showMiniLabel ? (
         <div className="world-node-mini-label">
           <span>{title}</span>
-          {branchLabel && (visualMode === 'farIcon' || visualMode === 'peripheralDot') ? (
+          {branchLabel && (displayTier === 'far' || displayTier === 'peripheral') ? (
             <span className="world-node-mini-branch">via {branchLabel}</span>
           ) : null}
         </div>
@@ -1034,7 +1062,6 @@ export function WorldGraphPage({
   onDeleteWorldDerivedComposition,
   onGenerateWorldResultPreview,
   onCreateCinematicReferenceFromWorldResult,
-  onCreateWorldView,
   onUpdateWorldView,
   onGenerateStarterWorld: _onGenerateStarterWorld,
   onGenerateWorldExpansion,
@@ -1092,7 +1119,6 @@ export function WorldGraphPage({
       : WORLD_INSPECTOR_WIDTH_DEFAULT
   })
   const [activeInspectorTab, setActiveInspectorTab] = useState<'overview' | 'relationships' | 'usage' | 'suggestions' | 'history'>('overview')
-  const [showSuggestions, setShowSuggestions] = useState(true)
   const [showLabels, setShowLabels] = useState(true)
   const [showDerivedLayer, setShowDerivedLayer] = useState(true)
   const [presentationPreset, setPresentationPreset] = useState<WorldGraphPresentationPreset>(() => readStoredWorldGraphPresentationPreset())
@@ -1149,16 +1175,14 @@ export function WorldGraphPage({
     viewKey: string | null
     transientFocus: { rootEntityKey: string | null; focusDepth: number; layoutMode: 'preserve' | 'reflow' } | null
   }>>([])
-  const defaultWorldViewRef = useRef<WorldView>(createDefaultWorldView())
-  const previousPresentationModeRef = useRef<WorldPresentationMode>('world')
-  const worldModeReturnViewKeyRef = useRef<string | null>(null)
-
+  const defaultWorldViewRef = useRef<WorldView>(createDefaultGlobalWorldView())
+  const globalOverviewView = useMemo(
+    () => worldViews.find((view) => getWorldViewSemanticMetadata(view).viewKind === 'global_overview') ?? null,
+    [worldViews],
+  )
   const persistedSelectedView = useMemo(
-    () => worldViews.find((view) => view.key === selectedWorldViewKey)
-      ?? choosePreferredWorldView(worldViews, { worldThreads })
-      ?? worldViews[0]
-      ?? defaultWorldViewRef.current,
-    [selectedWorldViewKey, worldThreads, worldViews],
+    () => globalOverviewView ?? defaultWorldViewRef.current,
+    [globalOverviewView],
   )
   const transientBaseView = useMemo(
     () => transientFocus?.sourceViewKey
@@ -1339,26 +1363,6 @@ export function WorldGraphPage({
       : [],
     [selectedEntity, worldThreads],
   )
-  const globalOverviewView = useMemo(
-    () => worldViews.find((view) => getWorldViewSemanticMetadata(view).viewKind === 'global_overview') ?? null,
-    [worldViews],
-  )
-  const persistedSelectedViewMetadata = useMemo(
-    () => getWorldViewSemanticMetadata(persistedSelectedView),
-    [persistedSelectedView],
-  )
-  const coreWorldViews = useMemo(
-    () => worldViews.filter((view) => getWorldViewRailGroup(view) === 'core'),
-    [worldViews],
-  )
-  const threadWorldViews = useMemo(
-    () => worldViews.filter((view) => getWorldViewRailGroup(view) === 'threads'),
-    [worldViews],
-  )
-  const manualWorldViews = useMemo(
-    () => worldViews.filter((view) => getWorldViewRailGroup(view) === 'manual'),
-    [worldViews],
-  )
   const persistentPinnedNodeKeys = useMemo(
     () => {
       if (!globalOverviewView) return fallbackPinnedNodeKeys
@@ -1377,7 +1381,6 @@ export function WorldGraphPage({
     [persistedSelectedView.key, selectedPromptThreadKey, selectedView.rootEntityKey, worldThreads, worldViews],
   )
   const activeStoryThread = storyModeSelection.thread
-  const activeStoryThreadView = storyModeSelection.view
   const activeStoryThreadEntityKeys = useMemo(
     () => new Set(activeStoryThread?.linkedEntityKeys ?? []),
     [activeStoryThread],
@@ -1400,7 +1403,9 @@ export function WorldGraphPage({
     }),
     [manualGraphDepthMode, presentationMode, presentationPreset],
   )
-  const graphDepthMode = graphPresetConfig.depthMode
+  const graphDepthMode: WorldGraphDepthMode = selectedViewMetadata.viewKind === 'global_overview' && !transientFocus
+    ? 'wide'
+    : graphPresetConfig.depthMode
   const protectedPinnedNodeKeys = useMemo(
     () => new Set(pinnedEntities.map((entity) => entity.key)),
     [pinnedEntities],
@@ -1419,31 +1424,16 @@ export function WorldGraphPage({
   }, [selectedPromptSessionKey, worldPromptSessions])
 
   useEffect(() => {
+    if (!globalOverviewView?.key) return
+    if (selectedWorldViewKey === globalOverviewView.key) return
+    _onSelectWorldView(globalOverviewView.key)
+  }, [_onSelectWorldView, globalOverviewView?.key, selectedWorldViewKey])
+
+  useEffect(() => {
     if (selectedPromptThreadKey && !worldThreads.some((thread) => thread.key === selectedPromptThreadKey)) {
       setSelectedPromptThreadKey(null)
     }
   }, [selectedPromptThreadKey, worldThreads])
-
-  useEffect(() => {
-    const previousMode = previousPresentationModeRef.current
-    if (previousMode === presentationMode) return
-    previousPresentationModeRef.current = presentationMode
-
-    if (presentationMode === 'story') {
-      if (persistedSelectedViewMetadata.viewKind !== 'thread_focus') {
-        worldModeReturnViewKeyRef.current = persistedSelectedView.key ?? null
-        if (activeStoryThreadView?.key) {
-          navigateToWorldView(activeStoryThreadView.key, { transientFocus: null, preserveHistory: true })
-        }
-      }
-      return
-    }
-
-    const returnViewKey = worldModeReturnViewKeyRef.current
-    if (!transientFocus && persistedSelectedViewMetadata.viewKind === 'thread_focus' && returnViewKey && returnViewKey !== persistedSelectedView.key) {
-      navigateToWorldView(returnViewKey, { transientFocus: null, preserveHistory: true })
-    }
-  }, [activeStoryThreadView?.key, persistedSelectedView.key, persistedSelectedViewMetadata.viewKind, presentationMode, transientFocus])
 
   useEffect(() => {
     window.localStorage.setItem(GROW_WORKBENCH_WIDTH_STORAGE_KEY, String(growWorkbenchWidth))
@@ -1464,16 +1454,15 @@ export function WorldGraphPage({
   useEffect(() => {
     setViewMode(selectedView.mode)
     setSearch(selectedView.search)
-    setShowSuggestions(selectedView.showSuggestions)
     setShowLabels(selectedView.showLabels)
     setShowDerivedLayer(selectedView.showDerivedLayer)
-  }, [selectedView.mode, selectedView.search, selectedView.showDerivedLayer, selectedView.showLabels, selectedView.showSuggestions])
+  }, [selectedView.mode, selectedView.search, selectedView.showDerivedLayer, selectedView.showLabels])
 
   useEffect(() => {
     if (presentationMode !== 'story') return
     if (viewMode === 'graph' || viewMode === 'timeline') return
-    setViewMode(activeStoryThreadView?.mode === 'graph' ? 'graph' : 'timeline')
-  }, [activeStoryThreadView?.mode, presentationMode, viewMode])
+    setViewMode('graph')
+  }, [presentationMode, viewMode])
 
   useEffect(() => {
     if (selectedWorldNodeKey) {
@@ -1515,6 +1504,9 @@ export function WorldGraphPage({
 
   const assetByKey = useMemo(() => new Map(assets.map((asset) => [asset.key, asset])), [assets])
   const entityByKey = useMemo(() => new Map(worldEntities.map((entity) => [entity.key, entity])), [worldEntities])
+  const relationshipByKey = useMemo(() => new Map(worldRelationships.map((relationship) => [relationship.key, relationship])), [worldRelationships])
+  const operatorByKey = useMemo(() => new Map(worldOperators.map((operator) => [operator.key, operator])), [worldOperators])
+  const resultByKey = useMemo(() => new Map(worldResults.map((result) => [result.key, result])), [worldResults])
   const definitionByKey = useMemo(() => new Map(definitions.map((definition) => [definition.key, definition])), [definitions])
   const usageByEntityKey = useMemo(() => (
     new Map(worldEntities.map((entity) => [entity.key, getWorldEntityUsage(entity, snapshotGraphs)]))
@@ -1828,9 +1820,15 @@ export function WorldGraphPage({
     [visibleNodeRecords],
   )
 
+  const activeCardNodeKey = inspectorNodeKey ?? selectedWorldNodeKey
   const visibleRelationships = useMemo(
-    () => worldRelationships.filter((relationship) => continuousScene.relationshipKeys.includes(relationship.key)),
-    [continuousScene.relationshipKeys, worldRelationships],
+    () => worldRelationships.filter((relationship) => {
+      if (continuousScene.relationshipKeys.includes(relationship.key)) return true
+      if (!activeCardNodeKey) return false
+      const connectedToActiveNode = relationship.sourceEntityKey === activeCardNodeKey || relationship.targetEntityKey === activeCardNodeKey
+      return connectedToActiveNode && visibleNodeKeys.has(relationship.sourceEntityKey) && visibleNodeKeys.has(relationship.targetEntityKey)
+    }),
+    [activeCardNodeKey, continuousScene.relationshipKeys, visibleNodeKeys, worldRelationships],
   )
   const visibleThreads = useMemo(
     () => presentationMode === 'story'
@@ -1843,12 +1841,16 @@ export function WorldGraphPage({
   )
   const visibleConnections = useMemo(
     () => (effectiveDerivedLayerVisible
-      ? worldGraphConnections.filter((connection) => continuousScene.connectionKeys.includes(connection.key))
+      ? worldGraphConnections.filter((connection) => {
+        if (continuousScene.connectionKeys.includes(connection.key)) return true
+        if (!activeCardNodeKey) return false
+        const connectedToActiveNode = connection.sourceNodeKey === activeCardNodeKey || connection.targetNodeKey === activeCardNodeKey
+        return connectedToActiveNode && visibleNodeKeys.has(connection.sourceNodeKey) && visibleNodeKeys.has(connection.targetNodeKey)
+      })
       : []),
-    [continuousScene.connectionKeys, effectiveDerivedLayerVisible, worldGraphConnections],
+    [activeCardNodeKey, continuousScene.connectionKeys, effectiveDerivedLayerVisible, visibleNodeKeys, worldGraphConnections],
   )
   const selectedAdjacentNodeKeys = useMemo(() => {
-    const activeCardNodeKey = inspectorNodeKey ?? selectedWorldNodeKey
     const result = new Set<string>()
     if (!activeCardNodeKey) return result
     for (const relationship of visibleRelationships) {
@@ -1866,7 +1868,7 @@ export function WorldGraphPage({
       }
     }
     return result
-  }, [inspectorNodeKey, selectedWorldNodeKey, visibleConnections, visibleRelationships])
+  }, [activeCardNodeKey, visibleConnections, visibleRelationships])
   const preserveTransientNodeAnchors = useMemo(
     () => selectedViewMetadata.transientFocus === true && !isSavedManualGraphView && transientFocus?.layoutMode !== 'reflow',
     [isSavedManualGraphView, selectedViewMetadata.transientFocus, transientFocus?.layoutMode],
@@ -2061,9 +2063,19 @@ export function WorldGraphPage({
     const timeoutId = window.setTimeout(() => {
       const instance = flowRef.current
       if (!instance) return
-      const availableNodeIds = new Set(canvasNodesRef.current.map((node) => node.id))
+      const canvasNodesById = new Map(canvasNodesRef.current.map((node) => [node.id, node]))
+      const availableNodeIds = new Set(canvasNodesById.keys())
       const candidateKeys = (requestedFitKeys && requestedFitKeys.length > 0 ? requestedFitKeys : sceneTargetKeys)
         .filter((key) => availableNodeIds.has(key))
+      if (requestedFitKeys && candidateKeys.length > 0) {
+        const graphBounds = graphCanvasRef.current?.getBoundingClientRect()
+        const candidateNodes = candidateKeys
+          .map((key) => canvasNodesById.get(key))
+          .filter((node): node is Node<WorldNodeData> => Boolean(node))
+        if (graphBounds && candidateNodes.some((node) => worldFlowNodeIntersectsViewport(node, instance.getViewport(), graphBounds))) {
+          return
+        }
+      }
       const nodes = candidateKeys.length > 0 ? candidateKeys.map((id) => ({ id })) : undefined
       void instance.fitView({
         nodes,
@@ -2263,7 +2275,8 @@ export function WorldGraphPage({
   }, [flowNodes, flowNodesSignature])
 
   const flowEdges = useMemo<Edge<WorldFlowEdgeData>[]>(() => {
-    const hoverEdgeAnchorNodeKey = inspectorNodeKey ?? selectedWorldNodeKey ?? focusRootKey
+    const selectedEdgeAnchorNodeKey = inspectorNodeKey ?? selectedWorldNodeKey
+    const hoverEdgeAnchorNodeKey = selectedEdgeAnchorNodeKey ? null : focusRootKey
     const hoveredEdgePair = hoverEdgeAnchorNodeKey && hoverRevealTargetNodeKey
       ? { sourceKey: hoverEdgeAnchorNodeKey, targetKey: hoverRevealTargetNodeKey }
       : null
@@ -2290,6 +2303,7 @@ export function WorldGraphPage({
       if (reveal.reason === 'focus_hover') return hoverRevealVisible ? 0.96 : 0
       if (reveal.reason === 'lens') return 0.9
       if (reveal.reason === 'story') return 0.78
+      if (reveal.reason === 'selected') return 0.36
       return 0.72
     }
 
@@ -2298,6 +2312,7 @@ export function WorldGraphPage({
       .map((relationship) => {
         const reveal = revealForEdge(relationship.sourceEntityKey, relationship.targetEntityKey, relationship.key)
         const isLensEdge = reveal.reason === 'lens'
+        const isSelectedEdge = reveal.reason === 'selected'
         return {
           id: relationship.key,
           type: 'worldEdge',
@@ -2322,9 +2337,17 @@ export function WorldGraphPage({
             },
           },
           style: {
-            stroke: isLensEdge ? 'rgba(94, 234, 212, 0.82)' : relationship.state === 'confirmed' ? 'rgba(148, 163, 184, 0.54)' : relationship.state === 'suggested' ? 'rgba(94, 234, 212, 0.54)' : 'rgba(244, 114, 182, 0.42)',
+            stroke: isLensEdge
+              ? 'rgba(94, 234, 212, 0.82)'
+              : isSelectedEdge
+                ? 'rgba(203, 213, 225, 0.72)'
+                : relationship.state === 'confirmed'
+                  ? 'rgba(148, 163, 184, 0.54)'
+                  : relationship.state === 'suggested'
+                    ? 'rgba(94, 234, 212, 0.54)'
+                    : 'rgba(244, 114, 182, 0.42)',
             strokeDasharray: relationship.state === 'confirmed' ? undefined : '7 5',
-            strokeWidth: isLensEdge ? 2 : relationship.strength ? 1 + relationship.strength * 2 : 1.4,
+            strokeWidth: isLensEdge ? 2 : isSelectedEdge ? 1.2 : relationship.strength ? 1 + relationship.strength * 2 : 1.4,
             opacity: edgeOpacityForReveal(reveal),
             transition: 'opacity 180ms ease, stroke 180ms ease, stroke-width 180ms ease',
           },
@@ -2362,6 +2385,7 @@ export function WorldGraphPage({
       .map((connection) => {
         const reveal = revealForEdge(connection.sourceNodeKey, connection.targetNodeKey, connection.key)
         const isLensConnection = reveal.reason === 'lens'
+        const isSelectedConnection = reveal.reason === 'selected'
         return {
           id: connection.key,
           type: 'worldEdge',
@@ -2383,9 +2407,9 @@ export function WorldGraphPage({
             },
           },
           style: {
-            stroke: isLensConnection ? 'rgba(94, 234, 212, 0.42)' : 'rgba(255, 255, 255, 0.16)',
+            stroke: isLensConnection ? 'rgba(94, 234, 212, 0.42)' : isSelectedConnection ? 'rgba(203, 213, 225, 0.42)' : 'rgba(255, 255, 255, 0.16)',
             strokeDasharray: '5 4',
-            strokeWidth: isLensConnection ? 1.5 : 1.2,
+            strokeWidth: isLensConnection ? 1.5 : isSelectedConnection ? 1.1 : 1.2,
             opacity: edgeOpacityForReveal(reveal),
             transition: 'opacity 180ms ease, stroke 180ms ease, stroke-width 180ms ease',
           },
@@ -2458,7 +2482,7 @@ export function WorldGraphPage({
     })
   }, [flowEdges, flowEdgesSignature])
 
-  const hoverEdgeAnchorNodeKey = inspectorNodeKey ?? selectedWorldNodeKey ?? focusRootKey
+  const hoverEdgeAnchorNodeKey = inspectorNodeKey || selectedWorldNodeKey ? null : focusRootKey
   const hoveredConnectedFocusNodeKey = useMemo(() => {
     if (!hoverEdgeAnchorNodeKey || !hoveredWorldNodeKey || hoveredWorldNodeKey === hoverEdgeAnchorNodeKey) return null
     const hasRelationship = visibleRelationships.some((relationship) => (
@@ -2546,6 +2570,42 @@ export function WorldGraphPage({
     inspectorOperator,
     inspectorResult,
   ])
+  const activeTurnLensRelationships = useMemo(
+    () => activeTurnLens
+      ? activeTurnLens.relationshipKeys
+        .map((key) => relationshipByKey.get(key) ?? null)
+        .filter((relationship): relationship is WorldRelationship => Boolean(relationship))
+      : [],
+    [activeTurnLens, relationshipByKey],
+  )
+  const activeTurnLensAffectedEntities = useMemo(() => {
+    if (!activeTurnLens) return []
+    const keys = new Set(activeTurnLens.entityKeys)
+    for (const relationship of activeTurnLensRelationships) {
+      keys.add(relationship.sourceEntityKey)
+      keys.add(relationship.targetEntityKey)
+    }
+    return Array.from(keys)
+      .map((key) => entityByKey.get(key) ?? null)
+      .filter((entity): entity is WorldEntity => Boolean(entity))
+  }, [activeTurnLens, activeTurnLensRelationships, entityByKey])
+  const activeTurnLensOperators = useMemo(
+    () => activeTurnLens
+      ? activeTurnLens.operatorKeys
+        .map((key) => operatorByKey.get(key) ?? null)
+        .filter((operator): operator is WorldOperator => Boolean(operator))
+      : [],
+    [activeTurnLens, operatorByKey],
+  )
+  const activeTurnLensResults = useMemo(
+    () => activeTurnLens
+      ? activeTurnLens.resultKeys
+        .map((key) => resultByKey.get(key) ?? null)
+        .filter((result): result is WorldResult => Boolean(result))
+      : [],
+    [activeTurnLens, resultByKey],
+  )
+  const showTurnLensInspector = Boolean(activeTurnLens && !inspectorViewModel && !inspectorRelationship)
   const activePromptPreview = useMemo(() => activePreviewForTurn(activePromptTurn), [activePromptTurn])
 
   useEffect(() => {
@@ -2674,7 +2734,7 @@ export function WorldGraphPage({
   }
 
   function clearTransientFocus() {
-    const baseViewKey = transientFocus?.sourceViewKey ?? persistedSelectedView.key ?? null
+    const baseViewKey = globalOverviewView?.key ?? transientFocus?.sourceViewKey ?? persistedSelectedView.key ?? null
     setTransientFocus(null)
     if (baseViewKey && baseViewKey !== selectedWorldViewKey) {
       _onSelectWorldView(baseViewKey)
@@ -2690,8 +2750,9 @@ export function WorldGraphPage({
   ) {
     setActiveTurnLens(null)
     setFlashTurnLens(null)
+    const resolvedViewKey = globalOverviewView?.key ?? persistedSelectedView.key ?? viewKey
     const nextTransientFocus = options?.transientFocus ?? null
-    const currentViewKey = selectedWorldViewKey ?? persistedSelectedView.key ?? null
+    const currentViewKey = globalOverviewView?.key ?? persistedSelectedView.key ?? selectedWorldViewKey ?? null
     const currentTransient = transientFocus
       ? {
           rootEntityKey: transientFocus.rootEntityKey,
@@ -2706,25 +2767,26 @@ export function WorldGraphPage({
       ])
     }
     setTransientFocus(nextTransientFocus ? {
-      sourceViewKey: viewKey,
+      sourceViewKey: resolvedViewKey,
       rootEntityKey: nextTransientFocus.rootEntityKey,
       focusDepth: nextTransientFocus.focusDepth,
       layoutMode: nextTransientFocus.layoutMode ?? 'preserve',
     } : null)
-    _onSelectWorldView(viewKey)
+    _onSelectWorldView(resolvedViewKey)
   }
 
   function handleBackToPreviousView() {
     const previous = viewHistory[viewHistory.length - 1] ?? null
     if (!previous) return
+    const resolvedViewKey = globalOverviewView?.key ?? persistedSelectedView.key ?? previous.viewKey
     setViewHistory((current) => current.slice(0, -1))
     setTransientFocus(previous.transientFocus ? {
-      sourceViewKey: previous.viewKey,
+      sourceViewKey: resolvedViewKey,
       rootEntityKey: previous.transientFocus.rootEntityKey,
       focusDepth: previous.transientFocus.focusDepth,
       layoutMode: previous.transientFocus.layoutMode,
     } : null)
-    _onSelectWorldView(previous.viewKey)
+    _onSelectWorldView(resolvedViewKey)
   }
 
   function captureViewportOffsetFromNode(entityKey: string) {
@@ -2754,7 +2816,7 @@ export function WorldGraphPage({
       ? captureViewportOffsetFromNode(entityKey)
       : null
     suppressNextCameraFocusRef.current = layoutMode !== 'reflow'
-    const baseViewKey = transientFocus?.sourceViewKey ?? selectedWorldViewKey ?? persistedSelectedView.key ?? null
+    const baseViewKey = globalOverviewView?.key ?? transientFocus?.sourceViewKey ?? persistedSelectedView.key ?? selectedWorldViewKey ?? null
     setTransientFocus({
       sourceViewKey: baseViewKey,
       rootEntityKey: entityKey,
@@ -2765,22 +2827,22 @@ export function WorldGraphPage({
 
   function openTurnLens(lens: WorldPromptTurnLens, options?: { auto?: boolean }) {
     setActiveTurnLens(lens)
-    if (!lens.rootEntityKey) return
-    if (options?.auto && (isSavedManualGraphView || edgeEditor || entityComposer || relationshipComposer || compositionComposer)) {
+    if (options?.auto && (edgeEditor || entityComposer || relationshipComposer || compositionComposer)) {
       return
     }
+    if (!options?.auto) {
+      selectWorldNode(null)
+      selectWorldEdge(null)
+      setActiveInspectorTab('overview')
+    }
     setPresentationMode('world')
-    pendingTraversalAnchorNodeKeyRef.current = lens.rootEntityKey
-    pendingCameraFitNodeKeysRef.current = Array.from(new Set([...lens.nodeKeys, ...lens.entityKeys]))
+    const relationshipEndpointKeys = lens.relationshipKeys.flatMap((key) => {
+      const relationship = relationshipByKey.get(key)
+      return relationship ? [relationship.sourceEntityKey, relationship.targetEntityKey] : []
+    })
+    pendingCameraFitNodeKeysRef.current = Array.from(new Set([...lens.nodeKeys, ...lens.entityKeys, ...relationshipEndpointKeys]))
     pendingCameraRelativeOffsetRef.current = null
     suppressNextCameraFocusRef.current = false
-    const baseViewKey = transientFocus?.sourceViewKey ?? selectedWorldViewKey ?? persistedSelectedView.key ?? null
-    setTransientFocus({
-      sourceViewKey: baseViewKey,
-      rootEntityKey: lens.rootEntityKey,
-      focusDepth: 2,
-      layoutMode: 'reflow',
-    })
     setAutoLayoutNonce((value) => value + 1)
   }
 
@@ -2884,9 +2946,9 @@ export function WorldGraphPage({
       return
     }
     if (segmentId.startsWith('thread:')) {
-      if (activeStoryThreadView?.key) {
+      if (activeStoryThread?.key) {
         setPresentationMode('story')
-        navigateToWorldView(activeStoryThreadView.key, { transientFocus: null, preserveHistory: true })
+        setSelectedPromptThreadKey(activeStoryThread.key)
       }
       return
     }
@@ -3002,35 +3064,6 @@ export function WorldGraphPage({
     }, 20)
   }
 
-  async function handleSaveCurrentView() {
-    const baseName = selectedEntity ? `${selectedEntity.name} Focus` : 'Saved World View'
-    await onCreateWorldView({
-      name: baseName,
-      mode: 'graph',
-      filters: selectedView.filters,
-      search,
-      rootEntityKey: focusRootKey && worldEntities.some((entity) => entity.key === focusRootKey) ? focusRootKey : null,
-      camera: selectedView.camera,
-      focusDepth: selectedView.focusDepth,
-      showSuggestions,
-      showLabels,
-      showDerivedLayer,
-      nodePositions: draftPositions,
-      collapsedState: selectedView.collapsedState,
-      sortMode: selectedView.sortMode,
-      metadata: {
-        viewKind: 'manual_snapshot',
-        autoManaged: false,
-        sourceEntityKeys: focusRootKey ? [focusRootKey] : viewSeedEntityKeys,
-        sourceThreadKeys: [],
-        pinnedNodeKeys: persistentPinnedNodeKeys,
-        refreshPolicy: 'manual_only',
-        semanticLabel: selectedViewMetadata.semanticLabel ?? null,
-        transientFocus: false,
-      },
-    })
-  }
-
   async function handleCreateEntity(input: WorldEntityCreateInput) {
     const previousEntityKeys = worldEntities.map((entity) => entity.key)
     setPendingEntityResolution({
@@ -3140,21 +3173,15 @@ export function WorldGraphPage({
       ('targetRootEntityKey' in suggestion && suggestion.targetRootEntityKey)
       || ('targetEntityKeys' in suggestion && suggestion.targetEntityKeys?.[0])
       || null
-    const selectedViewKey =
-      ('suggestedViewKey' in suggestion && suggestion.suggestedViewKey)
-      || null
     const selectedThreadKey =
       ('targetThreadKeys' in suggestion && suggestion.targetThreadKeys?.[0])
       || null
     if (selectedThreadKey) {
       setSelectedPromptThreadKey(selectedThreadKey)
     }
-    if (selectedViewKey) {
-      navigateToWorldView(selectedViewKey, { transientFocus: null })
-    }
     await handleSubmitWorldPrompt(suggestion.prompt, resolveSelectedSuggestionId(suggestion), {
       selectedRootEntityKey,
-      selectedViewKey,
+      selectedViewKey: globalOverviewView?.key ?? selectedView.key,
       selectedThreadKey,
     })
   }
@@ -3619,7 +3646,6 @@ export function WorldGraphPage({
                   </div>
                 </details>
                 <button className="ghost-button compact" onClick={() => void handleAutoLayout()} type="button">Auto Layout</button>
-                <button className="ghost-button compact" onClick={() => void handleSaveCurrentView()} type="button">Save View</button>
               </div>
             </details>
           </div>
@@ -3629,13 +3655,31 @@ export function WorldGraphPage({
           <aside className="world-view-rail">
             <div className="world-view-rail-section">
               <div className="world-view-rail-heading">
-                <span className="eyebrow">{presentationMode === 'story' ? 'Story Mode' : 'Navigation'}</span>
-                <strong>{presentationMode === 'story' ? 'Thread-Driven Story Paths' : 'Neighborhood First'}</strong>
+                <span className="eyebrow">Navigation</span>
+                <strong>Global Atlas</strong>
               </div>
               <div className="world-view-rail-actions">
                 <button className="ghost-button compact" disabled={viewHistory.length === 0} onClick={handleBackToPreviousView} type="button">Back</button>
-                <button className="ghost-button compact" onClick={() => void handleSaveCurrentView()} type="button">Save View</button>
               </div>
+            </div>
+
+            <div className="world-view-rail-section">
+              <span className="eyebrow">Global Overview</span>
+              {globalOverviewView ? (
+                <button
+                  className={globalOverviewView.key === persistedSelectedView.key && !transientFocus ? 'world-view-rail-button is-active' : 'world-view-rail-button'}
+                  onClick={() => openGlobalOverview()}
+                  type="button"
+                >
+                  <strong>{globalOverviewView.name}</strong>
+                  <span>{getWorldViewSemanticMetadata(globalOverviewView).semanticLabel ?? 'Full atlas'}</span>
+                </button>
+              ) : (
+                <button className="world-view-rail-button is-active" onClick={() => openGlobalOverview()} type="button">
+                  <strong>{persistedSelectedView.name || 'Global Overview'}</strong>
+                  <span>Full atlas</span>
+                </button>
+              )}
             </div>
 
             {pinnedEntities.length > 0 ? (
@@ -3654,85 +3698,6 @@ export function WorldGraphPage({
                     </button>
                   ))}
                 </div>
-              </div>
-            ) : null}
-
-            {presentationMode === 'world' ? (
-              <div className="world-view-rail-section">
-                <span className="eyebrow">Core Views</span>
-                <div className="world-view-rail-list">
-                  {coreWorldViews.map((view) => (
-                    <button
-                      key={view.key}
-                      className={view.key === persistedSelectedView.key ? 'world-view-rail-button is-active' : 'world-view-rail-button'}
-                      onClick={() => navigateToWorldView(view.key, { transientFocus: null })}
-                      type="button"
-                    >
-                      <strong>{view.name}</strong>
-                      <span>{getWorldViewSemanticMetadata(view).semanticLabel ?? 'Focused map'}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-
-            <div className="world-view-rail-section">
-              <span className="eyebrow">{presentationMode === 'story' ? 'Story Threads' : 'Threads'}</span>
-              <div className="world-view-rail-list">
-                {threadWorldViews.map((view) => (
-                  <button
-                    key={view.key}
-                    className={view.key === persistedSelectedView.key ? 'world-view-rail-button is-active' : 'world-view-rail-button'}
-                    onClick={() => {
-                      const threadKey = getWorldViewSemanticMetadata(view).sourceThreadKeys[0] ?? null
-                      if (threadKey) {
-                        setSelectedPromptThreadKey(threadKey)
-                      }
-                      setPresentationMode('story')
-                      navigateToWorldView(view.key, { transientFocus: null })
-                    }}
-                    type="button"
-                  >
-                    <strong>{view.name}</strong>
-                    <span>{getWorldViewSemanticMetadata(view).semanticLabel ?? 'Story thread'}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="world-view-rail-section">
-              <span className="eyebrow">Manual Views</span>
-              <div className="world-view-rail-list">
-                {manualWorldViews.length === 0 ? <div className="inline-note">Saved snapshots appear here.</div> : null}
-                {manualWorldViews.map((view) => (
-                  <button
-                    key={view.key}
-                    className={view.key === persistedSelectedView.key ? 'world-view-rail-button is-active' : 'world-view-rail-button'}
-                    onClick={() => navigateToWorldView(view.key, { transientFocus: null })}
-                    type="button"
-                  >
-                    <strong>{view.name}</strong>
-                    <span>{getWorldViewSemanticMetadata(view).semanticLabel ?? 'Manual snapshot'}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {presentationMode === 'world' ? (
-              <div className="world-view-rail-section">
-                <span className="eyebrow">Global Overview</span>
-                {globalOverviewView ? (
-                  <button
-                    className={globalOverviewView.key === persistedSelectedView.key ? 'world-view-rail-button is-active' : 'world-view-rail-button'}
-                    onClick={() => openGlobalOverview()}
-                    type="button"
-                  >
-                    <strong>{globalOverviewView.name}</strong>
-                    <span>{getWorldViewSemanticMetadata(globalOverviewView).semanticLabel ?? 'Full atlas'}</span>
-                  </button>
-                ) : (
-                  <div className="inline-note">The full graph remains available as a power tool.</div>
-                )}
               </div>
             ) : null}
           </aside>
@@ -3768,7 +3733,7 @@ export function WorldGraphPage({
                   <button
                     className="world-context-strip-action"
                     onClick={() => setTransientFocus({
-                      sourceViewKey: transientFocus?.sourceViewKey ?? selectedWorldViewKey ?? persistedSelectedView.key,
+                      sourceViewKey: globalOverviewView?.key ?? transientFocus?.sourceViewKey ?? persistedSelectedView.key ?? selectedWorldViewKey,
                       rootEntityKey: focusRootKey,
                       focusDepth: Math.min(2, selectedView.focusDepth + 1),
                       layoutMode: transientFocus?.layoutMode ?? 'preserve',
@@ -3778,7 +3743,6 @@ export function WorldGraphPage({
                     Expand
                   </button>
                   <button className="world-context-strip-action" onClick={() => openTransientNeighborhood(focusRootKey, 1)} type="button">Reset</button>
-                  <button className="world-context-strip-action" onClick={() => void handleSaveCurrentView()} type="button">Save View</button>
                 </>
               ) : null}
             </div>
@@ -3873,13 +3837,6 @@ export function WorldGraphPage({
                   onNodeClick={(_, node) => {
                     selectWorldNode(node.id)
                     setActiveInspectorTab('overview')
-                    const entity = worldEntities.find((entry) => entry.key === node.id) ?? null
-                    if (entity) {
-                      const layoutMode = node.data.displayTier === 'far' || node.data.displayTier === 'peripheral'
-                        ? 'reflow'
-                        : 'preserve'
-                      focusCurrentViewOnEntity(entity.key, { layoutMode })
-                    }
                   }}
                   onNodeDoubleClick={(_, node) => {
                     selectWorldNode(node.id)
@@ -3971,15 +3928,12 @@ export function WorldGraphPage({
                         <button
                           className="ghost-button compact"
                           onClick={() => {
-                            const relatedView = threadWorldViews.find((view) => getWorldViewSemanticMetadata(view).sourceThreadKeys.includes(thread.key)) ?? null
-                            if (relatedView) {
-                              setSelectedPromptThreadKey(thread.key)
-                              navigateToWorldView(relatedView.key, { transientFocus: null })
-                            }
+                            setSelectedPromptThreadKey(thread.key)
+                            setPresentationMode('story')
                           }}
                           type="button"
                         >
-                          Open Thread Graph
+                          Highlight Thread
                         </button>
                       ) : null}
                     </div>
@@ -4093,10 +4047,6 @@ export function WorldGraphPage({
                   setContextMenu(null)
                 }} type="button">Auto Layout</button>
                 <button className="world-context-action" onClick={() => {
-                  void handleSaveCurrentView()
-                  setContextMenu(null)
-                }} type="button">Save View</button>
-                <button className="world-context-action" onClick={() => {
                   const nextValue = !showDerivedLayer
                   setShowDerivedLayer(nextValue)
                   void persistViewChanges({ showDerivedLayer: nextValue })
@@ -4160,23 +4110,15 @@ export function WorldGraphPage({
                 <button className="world-context-action" onClick={() => {
                   const relatedThread = worldThreads.find((thread) => thread.linkedEntityKeys.includes(contextMenu.entityKey)) ?? null
                   if (relatedThread) {
-                    const relatedView = worldViews.find((view) => getWorldViewSemanticMetadata(view).sourceThreadKeys.includes(relatedThread.key)) ?? null
-                    if (relatedView) {
-                      setPresentationMode('story')
-                      navigateToWorldView(relatedView.key, { transientFocus: null })
-                    }
+                    setPresentationMode('story')
                     setSelectedPromptThreadKey(relatedThread.key)
                   }
                   setContextMenu(null)
-                }} type="button">Open Related Thread</button>
+                }} type="button">Highlight Related Thread</button>
                 <button className="world-context-action" onClick={() => {
                   openGlobalOverview()
                   setContextMenu(null)
                 }} type="button">Open Global Overview</button>
-                <button className="world-context-action" onClick={() => {
-                  void handleSaveCurrentView()
-                  setContextMenu(null)
-                }} type="button">Save Neighborhood As View</button>
                 <button className="world-context-action danger" onClick={() => {
                   void updateWorldEntityAndRefresh(contextMenu.entityKey, { status: 'archived' }, 'manual_entity_archive')
                   setContextMenu(null)
@@ -4404,6 +4346,17 @@ export function WorldGraphPage({
                 ) : null}
               </div>
             </>
+          ) : showTurnLensInspector && activeTurnLens ? (
+            <div className="world-shell-dossier-copy">
+              <span className="eyebrow">Prompt Turn</span>
+              <h3>{activeTurnLens.label}</h3>
+              <p>{activeTurnLens.prompt || 'This turn changed the world graph.'}</p>
+              <div className="chip-row">
+                <span className="chip">{activeTurnLensAffectedEntities.length} affected nodes</span>
+                <span className="chip">{activeTurnLens.counts.relationships} links</span>
+                <span className="chip">{activeTurnLens.counts.derived} derived</span>
+              </div>
+            </div>
           ) : (
             <div className="world-shell-dossier-copy">
               <span className="eyebrow">World Dossier</span>
@@ -4513,6 +4466,93 @@ export function WorldGraphPage({
                   ))}
                 </div>
               </details>
+            </div>
+          </div>
+        ) : showTurnLensInspector && activeTurnLens ? (
+          <div className="detail-stack compact">
+            <span className="eyebrow">Turn Lens</span>
+            <h3>{activeTurnLens.label}</h3>
+            <div className="inline-note">{activeTurnLens.prompt || 'No prompt text was recorded for this turn.'}</div>
+            <div className="editor-section compact-section">
+              <div className="section-head">
+                <div>
+                  <span className="eyebrow">Affected</span>
+                  <h3>Nodes in this turn</h3>
+                </div>
+              </div>
+              {activeTurnLensAffectedEntities.length === 0 ? (
+                <div className="inline-note">No affected entity nodes are available for this turn.</div>
+              ) : activeTurnLensAffectedEntities.map((entity) => (
+                <button key={entity.key} className="rail-button item-row" onClick={() => selectWorldNode(entity.key)} type="button">
+                  <div className="media-thumb">
+                    <EntityIcon id={iconForWorldEntity(entity.nodeType)} />
+                  </div>
+                  <div className="item-row-copy">
+                    <strong>{entity.name}</strong>
+                    <span>{labelForWorldEntity(entity.nodeType)}</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+            <div className="editor-section compact-section">
+              <div className="section-head">
+                <div>
+                  <span className="eyebrow">Links</span>
+                  <h3>Relationships touched</h3>
+                </div>
+              </div>
+              {activeTurnLensRelationships.length === 0 ? (
+                <div className="inline-note">No relationships were changed in this turn.</div>
+              ) : activeTurnLensRelationships.map((relationship) => {
+                const sourceName = entityByKey.get(relationship.sourceEntityKey)?.name ?? relationship.sourceEntityKey
+                const targetName = entityByKey.get(relationship.targetEntityKey)?.name ?? relationship.targetEntityKey
+                return (
+                  <button key={relationship.key} className="rail-button item-row" onClick={() => selectWorldEdge(relationship.key)} type="button">
+                    <div className="media-thumb">
+                      <EntityIcon id="graph" />
+                    </div>
+                    <div className="item-row-copy">
+                      <strong>{relationship.verb || 'related to'}</strong>
+                      <span>{sourceName}{' -> '}{targetName}</span>
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+            {(activeTurnLensOperators.length > 0 || activeTurnLensResults.length > 0) ? (
+              <div className="editor-section compact-section">
+                <div className="section-head">
+                  <div>
+                    <span className="eyebrow">Derived</span>
+                    <h3>Outputs from this turn</h3>
+                  </div>
+                </div>
+                {activeTurnLensOperators.map((operator) => (
+                  <button key={operator.key} className="rail-button item-row" onClick={() => selectWorldNode(operator.key)} type="button">
+                    <div className="media-thumb">
+                      <EntityIcon id="operator" />
+                    </div>
+                    <div className="item-row-copy">
+                      <strong>{labelForWorldOperator(operator.operatorType)}</strong>
+                      <span>{operator.label || operator.inputEntityKeys.map((key) => entityByKey.get(key)?.name ?? key).join(' + ')}</span>
+                    </div>
+                  </button>
+                ))}
+                {activeTurnLensResults.map((result) => (
+                  <button key={result.key} className="rail-button item-row" onClick={() => selectWorldNode(result.key)} type="button">
+                    <div className="media-thumb">
+                      <EntityIcon id="result" />
+                    </div>
+                    <div className="item-row-copy">
+                      <strong>{result.title}</strong>
+                      <span>{result.summary || labelForWorldResult(result.resultType)}</span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            <div className="world-inspector-actions">
+              <button className="ghost-button compact" onClick={clearTurnLens} type="button">Exit Lens</button>
             </div>
           </div>
         ) : !inspectorNodeKey ? (
@@ -4852,7 +4892,6 @@ function LegacyWorldPromptChatPanel({
   onSelectThread,
   onSubmit,
   onParkThread,
-  onSaveView,
   onToggleDerivedLayer,
   showDerivedLayer,
 }: {
@@ -4886,7 +4925,6 @@ function LegacyWorldPromptChatPanel({
   onSelectThread: (threadKey: string | null) => void
   onSubmit: (promptOverride?: string) => Promise<void> | void
   onParkThread: (threadKey: string) => Promise<void> | void
-  onSaveView: () => void
   onToggleDerivedLayer: () => void
   showDerivedLayer: boolean
 }) {
@@ -5212,7 +5250,6 @@ function LegacyWorldPromptChatPanel({
           <div className="world-prompt-drawer-body">
             <div className="world-inspector-actions">
               <button className="ghost-button compact" onClick={onOpenLegacy} type="button">Legacy Editor</button>
-              <button className="ghost-button compact" onClick={onSaveView} type="button">Save View</button>
               <button className={showDerivedLayer ? 'ghost-button compact is-active' : 'ghost-button compact'} onClick={onToggleDerivedLayer} type="button">
                 Derived Layer
               </button>
