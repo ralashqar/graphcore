@@ -9,6 +9,9 @@ export type EntityIconId =
   | 'group'
   | 'concept'
   | 'event'
+  | 'operator'
+  | 'result'
+  | 'thread'
   | 'character'
   | 'environment'
   | 'asset'
@@ -39,6 +42,9 @@ const RASTER_ICON_BY_ID: Partial<Record<EntityIconId, string>> = {
   item: '/world-node-icons/world-node-object.png',
   concept: '/world-node-icons/world-node-concept.png',
   event: '/world-node-icons/world-node-event.png',
+  operator: '/world-node-icons/world-node-operator.png',
+  result: '/world-node-icons/world-node-result.png',
+  thread: '/world-node-icons/world-node-thread.png',
 }
 
 function Stroke(props: IconGlyphProps) {

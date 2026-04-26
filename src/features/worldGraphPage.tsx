@@ -457,8 +457,8 @@ function WorldNodeCard({ data, selected }: NodeProps<Node<WorldNodeData>>) {
     record.kind === 'entity'
       ? iconForWorldEntity(record.entity.nodeType)
       : record.kind === 'operator'
-        ? 'graph'
-        : 'cinematic'
+        ? 'operator'
+        : 'result'
   const isGenerating =
     record.kind === 'entity'
       ? record.entity.metadata?.generation && typeof record.entity.metadata.generation === 'object' && (record.entity.metadata.generation as { state?: unknown }).state === 'pending'

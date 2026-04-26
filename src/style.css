@@ -4091,8 +4091,8 @@ button.world-prompt-row-result {
 
 .world-node-emblem-ring svg,
 .world-node-emblem-ring .entity-icon-image {
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
 }
 
 .world-node-dot-shell {
@@ -4151,13 +4151,13 @@ button.world-prompt-row-result {
 
 .world-node-dot-core .entity-icon-image {
   object-fit: contain;
-  transform: scale(1.22);
+  transform: scale(1.18);
 }
 
 .world-node-dot-core svg,
 .world-node-dot-core .entity-icon-image {
-  width: 12px;
-  height: 12px;
+  width: 15px;
+  height: 15px;
 }
 
 .world-node-card.is-mode-nearIcon .world-node-dot-core {
@@ -4173,8 +4173,8 @@ button.world-prompt-row-result {
 
 .world-node-card.is-mode-nearIcon .world-node-dot-core svg,
 .world-node-card.is-mode-nearIcon .world-node-dot-core .entity-icon-image {
-  width: 24px;
-  height: 24px;
+  width: 34px;
+  height: 34px;
 }
 
 .world-node-card.is-mode-farIcon .world-node-dot-core {
@@ -4189,8 +4189,8 @@ button.world-prompt-row-result {
 
 .world-node-card.is-mode-peripheralDot .world-node-dot-core svg,
 .world-node-card.is-mode-peripheralDot .world-node-dot-core .entity-icon-image {
-  width: 9px;
-  height: 9px;
+  width: 11px;
+  height: 11px;
 }
 
 .world-node-card.is-mode-nearIcon .world-node-mini-label {
