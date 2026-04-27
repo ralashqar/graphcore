@@ -775,6 +775,24 @@ export function stripInternalPlannerDiagnostics(text: string) {
     .trim()
 }
 
+function normalizePromptTranscriptText(text: string) {
+  return stripInternalPlannerDiagnostics(text)
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLocaleLowerCase()
+}
+
+function buildSuggestionTranscriptSignature(suggestions: WorldPromptSuggestion[]) {
+  return suggestions
+    .map((suggestion) => [
+      normalizePromptTranscriptText(suggestion.label),
+      normalizePromptTranscriptText(suggestion.prompt),
+      suggestion.kind,
+    ].join(':'))
+    .sort()
+    .join('|')
+}
+
 function refinementFieldLabel(field: 'summary' | 'context' | 'notes') {
   switch (field) {
     case 'summary':
@@ -905,11 +923,24 @@ export function buildWorldPromptTranscriptEntries(input: {
 
   const entries: WorldPromptTranscriptEntry[] = []
   const turnLensByTurnId = buildWorldPromptTurnLenses({ events: input.events, turns: input.turns })
-  let lastSuggestionSignature: string | null = null
+  const emittedSuggestionSignatures = new Set<string>()
   let lastAnswerSignature: string | null = null
   let lastDiagnosticSignature: string | null = null
   let lastPlannerProgressSignature: string | null = null
   const emittedTurnLensIds = new Set<string>()
+  const assistantMessageTextByTurnId = new Map<string, Set<string>>()
+  for (const message of input.messages) {
+    if (message.role !== 'assistant' || !message.turnId) continue
+    const normalized = normalizePromptTranscriptText(message.content)
+    if (!normalized) continue
+    const turnTexts = assistantMessageTextByTurnId.get(message.turnId) ?? new Set<string>()
+    turnTexts.add(normalized)
+    assistantMessageTextByTurnId.set(message.turnId, turnTexts)
+  }
+  const hasAssistantMessageForEventText = (event: WorldPromptEvent, text: string) => {
+    const normalized = normalizePromptTranscriptText(text)
+    return Boolean(normalized && assistantMessageTextByTurnId.get(event.turnId)?.has(normalized))
+  }
 
   for (const source of sources) {
     if (source.source === 'message') {
@@ -956,8 +987,8 @@ export function buildWorldPromptTranscriptEntries(input: {
     }
 
     const payload = parsed.data
-    const answerSignature = payload.answer ? `${source.event.turnId}:${payload.answer}` : null
-    if (payload.answer && answerSignature !== lastAnswerSignature) {
+    const answerSignature = payload.answer ? `${source.event.turnId}:${normalizePromptTranscriptText(payload.answer)}` : null
+    if (payload.answer && answerSignature !== lastAnswerSignature && !hasAssistantMessageForEventText(source.event, payload.answer)) {
       entries.push({
         id: `${source.id}:answer`,
         createdAt: source.event.createdAt,
@@ -998,7 +1029,7 @@ export function buildWorldPromptTranscriptEntries(input: {
               createdAt: source.event.createdAt,
               kind: 'planner_progress',
               label: describePlannerProgressPhase(payload.plannerProgress.phase),
-              detail: payload.plannerProgress.message || payload.note || undefined,
+              detail: payload.plannerProgress.message || undefined,
               phase: payload.plannerProgress.phase,
               outline: payload.plannerOutline ?? [],
               done: payload.plannerProgress.done,
@@ -1012,12 +1043,12 @@ export function buildWorldPromptTranscriptEntries(input: {
             createdAt: source.event.createdAt,
             kind: 'system_status',
             label: describePlannerStatus(payload.plannerStatus),
-            detail: payload.note ?? (payload.scope ? `${payload.scope.mode} scope` : ''),
+            detail: payload.scope ? `${payload.scope.mode} scope` : '',
           })
         }
         break
       case 'assistant_note':
-        if (payload.note) {
+        if (payload.note && !hasAssistantMessageForEventText(source.event, payload.note)) {
           entries.push({
             id: source.id,
             createdAt: source.event.createdAt,
@@ -1217,7 +1248,7 @@ export function buildWorldPromptTranscriptEntries(input: {
         })
         break
       case 'turn_completed':
-        if (payload.note) {
+        if (payload.note && !hasAssistantMessageForEventText(source.event, payload.note)) {
           entries.push({
             id: source.id,
             createdAt: source.event.createdAt,
@@ -1233,10 +1264,10 @@ export function buildWorldPromptTranscriptEntries(input: {
 
     if (payload.suggestions.length > 0) {
       const entry = buildTranscriptSuggestionsEntry(source.event, payload.suggestions)
-      const signature = (entry?.suggestions ?? []).map((suggestion) => `${suggestion.id}:${suggestion.prompt}`).join('|')
-      if (entry && signature && signature !== lastSuggestionSignature) {
+      const signature = entry ? buildSuggestionTranscriptSignature(entry.suggestions) : ''
+      if (entry && signature && !emittedSuggestionSignatures.has(signature)) {
         entries.push(entry)
-        lastSuggestionSignature = signature
+        emittedSuggestionSignatures.add(signature)
       }
     }
   }

@@ -74,7 +74,7 @@ export function isAutoDerivedWorldEntity(entity: Pick<WorldEntity, 'metadata'>) 
 }
 
 export function isAutoDerivedWorldView(view: Pick<WorldView, 'metadata'>) {
-  return isAutoManagedWorldView(view)
+  return view.metadata?.autoDerived === true
 }
 
 export function deriveMissingWorldEntities(

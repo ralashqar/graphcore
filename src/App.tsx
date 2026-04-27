@@ -512,6 +512,13 @@ function mergeWorldPromptEventIntoSnapshot(snapshot: ProjectSnapshot, event: Wor
   return nextSnapshot
 }
 
+function mergeWorldPromptEventsIntoSnapshot(snapshot: ProjectSnapshot, events: WorldPromptEvent[]) {
+  return events.reduce(
+    (nextSnapshot, event) => mergeWorldPromptEventIntoSnapshot(nextSnapshot, event),
+    snapshot,
+  )
+}
+
 function mergeMeshGenerationStatusIntoSnapshot(snapshot: ProjectSnapshot, status: MeshGenerationStatusResponse) {
   let nextDefinitions = mergeWorldBuildResourcesByKey(
     snapshot.definitions as Array<ProjectSnapshot['definitions'][number]>,
@@ -1274,6 +1281,27 @@ export default function App() {
           ? { projectId: snapshotRef.current.project.id, draftId: snapshotRef.current.draft.id }
           : null
       )
+    const shouldHydrateCacheFirst =
+      Boolean(refreshSelection?.projectId && refreshSelection?.draftId)
+      && !loader
+    if (shouldHydrateCacheFirst && refreshSelection?.projectId && refreshSelection.draftId) {
+      try {
+        const cached = await workspaceService.loadCachedProjectSnapshot(refreshSelection.projectId, refreshSelection.draftId)
+        if (cached && requestId === workspaceHydrationRequestIdRef.current) {
+          hydrateLoadedProject({
+            snapshot: cached.snapshot,
+            source: 'supabase',
+          }, {
+            ignoreUnsavedCache: options?.ignoreUnsavedCache,
+            resetSelection: options?.resetSelection,
+            allowProjectChange: options?.allowProjectChange || Boolean(desiredGameSelectionRef.current),
+            requestId,
+          })
+        }
+      } catch (cacheError) {
+        console.warn('[GraphCore] cached workspace hydration failed.', cacheError)
+      }
+    }
     const state = await (loader ? loader() : workspaceService.load(refreshSelection ?? undefined))
     if (requestId !== workspaceHydrationRequestIdRef.current) {
       return state
@@ -1500,9 +1528,8 @@ export default function App() {
         }
         if (!reconciledWorldBuildBatchIdsRef.current.has(batch.id) && loadedState?.source === 'supabase') {
           reconciledWorldBuildBatchIdsRef.current.add(batch.id)
-          void refreshWorkspaceState(undefined, { ignoreUnsavedCache: true }).catch((refreshError) => {
-            console.error('[GraphCore] world build reconciliation refresh failed.', refreshError)
-          })
+          // The poll response already carries the changed batch/job resources.
+          // Avoid a full workspace reload here; it is a large PostgREST payload.
         }
       }
     }
@@ -1514,6 +1541,7 @@ export default function App() {
     let cancelled = false
 
     async function pollActiveWorldBuilds() {
+      if (desiredGameSelectionRef.current) return
       if (worldBuildPollInFlightRef.current || cancelled) return
       const currentSnapshot = snapshotRef.current
       if (!currentSnapshot) return
@@ -1556,9 +1584,6 @@ export default function App() {
         console.error('[GraphCore] world build polling failed.', pollError)
         if (worldBuildPollFailureCountRef.current >= 2) {
           worldBuildPollFailureCountRef.current = 0
-          void refreshWorkspaceState(undefined, { ignoreUnsavedCache: true }).catch((refreshError) => {
-            console.error('[GraphCore] world build polling recovery refresh failed.', refreshError)
-          })
         }
       } finally {
         worldBuildPollInFlightRef.current = false
@@ -1583,48 +1608,60 @@ export default function App() {
     const channel = workspaceService.subscribeWorldPromptEvents({
       draftId: snapshot.draft.id,
       onSession: (session) => {
+        if (desiredGameSelectionRef.current) return
         const current = snapshotRef.current
         if (!current) return
+        if (current.draft.id !== session.draftId) return
         const nextSnapshot = mergeWorldPromptStateIntoSnapshot(current, { sessions: [session] })
         snapshotRef.current = nextSnapshot
         setSnapshot(nextSnapshot)
         setBundle(compileBundle(nextSnapshot))
       },
       onTurn: (turn) => {
+        if (desiredGameSelectionRef.current) return
         const current = snapshotRef.current
         if (!current) return
+        if (current.draft.id !== turn.draftId) return
         const nextSnapshot = mergeWorldPromptStateIntoSnapshot(current, { turns: [turn] })
         snapshotRef.current = nextSnapshot
         setSnapshot(nextSnapshot)
         setBundle(compileBundle(nextSnapshot))
       },
       onMessage: (message) => {
+        if (desiredGameSelectionRef.current) return
         const current = snapshotRef.current
         if (!current) return
+        if (current.draft.id !== message.draftId) return
         const nextSnapshot = mergeWorldPromptStateIntoSnapshot(current, { messages: [message] })
         snapshotRef.current = nextSnapshot
         setSnapshot(nextSnapshot)
         setBundle(compileBundle(nextSnapshot))
       },
       onEvent: (event) => {
+        if (desiredGameSelectionRef.current) return
         const current = snapshotRef.current
         if (!current) return
+        if (current.draft.id !== event.draftId) return
         const nextSnapshot = mergeWorldPromptEventIntoSnapshot(current, event)
         snapshotRef.current = nextSnapshot
         setSnapshot(nextSnapshot)
         setBundle(compileBundle(nextSnapshot))
       },
       onSuggestion: (suggestion) => {
+        if (desiredGameSelectionRef.current) return
         const current = snapshotRef.current
         if (!current) return
+        if (current.draft.id !== suggestion.draftId) return
         const nextSnapshot = mergeWorldPromptStateIntoSnapshot(current, { suggestions: [suggestion] })
         snapshotRef.current = nextSnapshot
         setSnapshot(nextSnapshot)
         setBundle(compileBundle(nextSnapshot))
       },
       onThread: (thread) => {
+        if (desiredGameSelectionRef.current) return
         const current = snapshotRef.current
         if (!current) return
+        if (current.draft.id !== thread.draftId) return
         const nextSnapshot = mergeWorldPromptStateIntoSnapshot(current, { threads: [thread] })
         snapshotRef.current = nextSnapshot
         setSnapshot(nextSnapshot)
@@ -1643,6 +1680,7 @@ export default function App() {
     let cancelled = false
 
     async function pollActiveMeshJobs() {
+      if (desiredGameSelectionRef.current) return
       if (meshGenerationPollInFlightRef.current || cancelled) return
       const currentSnapshot = snapshotRef.current
       if (!currentSnapshot) return
@@ -1784,6 +1822,7 @@ export default function App() {
     let cancelled = false
 
     async function pollCinematicRuns(runIds: string[], source: 'realtime' | 'watchdog') {
+      if (desiredGameSelectionRef.current) return
       if (cinematicRunPollInFlightRef.current || cancelled || runIds.length === 0) return
       const currentSnapshot = snapshotRef.current
       if (!currentSnapshot) return
@@ -2268,7 +2307,10 @@ export default function App() {
           graphKey,
           phase: latestPhase,
         })
-        const refreshedState = await refreshWorkspaceState(undefined, { ignoreUnsavedCache: true })
+        const refreshedState = await refreshWorkspaceState(
+          () => workspaceService.load(undefined, { profile: 'content' }),
+          { ignoreUnsavedCache: true },
+        )
         if (refreshedState.source === 'supabase') {
           return refreshedState.snapshot
         }
@@ -3606,7 +3648,11 @@ export default function App() {
     let nextSnapshot = mergeWorldPromptStateIntoSnapshot(syncedSnapshot, {
       sessions: [result.session],
       turns: [result.turn],
+      messages: result.messages,
+      suggestions: result.suggestions,
+      threads: result.threads,
     })
+    nextSnapshot = mergeWorldPromptEventsIntoSnapshot(nextSnapshot, result.events)
     if (Array.isArray(result.definitions) && result.definitions.length > 0) {
       nextSnapshot = normalizeSnapshot({
         ...nextSnapshot,
@@ -3615,14 +3661,6 @@ export default function App() {
           result.definitions as ProjectSnapshot['definitions'],
         ),
       })
-    }
-    const refreshed = await workspaceService.load({
-      projectId: syncedSnapshot.project.id,
-      draftId: syncedSnapshot.draft.id,
-    })
-    if (refreshed.source === 'supabase') {
-      nextSnapshot = mergePersistedWorldGraphSnapshot(nextSnapshot, refreshed.snapshot)
-      setLoadedState({ source: refreshed.source, reason: refreshed.reason })
     }
     const nextSelectedViewKey =
       result.session.selectedViewKey

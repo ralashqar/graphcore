@@ -751,6 +751,24 @@ function stripInternalPlannerDiagnostics(text: string) {
     .trim()
 }
 
+function normalizePromptTranscriptText(text: string) {
+  return stripInternalPlannerDiagnostics(text)
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLocaleLowerCase()
+}
+
+function buildSuggestionTranscriptSignature(suggestions: WorldPromptSuggestion[]) {
+  return suggestions
+    .map((suggestion) => [
+      normalizePromptTranscriptText(suggestion.label),
+      normalizePromptTranscriptText(suggestion.prompt),
+      suggestion.kind,
+    ].join(':'))
+    .sort()
+    .join('|')
+}
+
 function buildWorldPromptTranscriptEntries(input: {
   events: WorldPromptEvent[]
   messages: WorldPromptMessage[]
@@ -769,8 +787,21 @@ function buildWorldPromptTranscriptEntries(input: {
 
   const entries: WorldPromptTranscriptEntry[] = []
   const turnLensByTurnId = buildWorldPromptTurnLenses({ events: input.events, turns: input.turns })
-  let lastSuggestionSignature: string | null = null
+  const emittedSuggestionSignatures = new Set<string>()
   const emittedTurnLensIds = new Set<string>()
+  const assistantMessageTextByTurnId = new Map<string, Set<string>>()
+  for (const message of input.messages) {
+    if (message.role !== 'assistant' || !message.turnId) continue
+    const normalized = normalizePromptTranscriptText(message.content)
+    if (!normalized) continue
+    const turnTexts = assistantMessageTextByTurnId.get(message.turnId) ?? new Set<string>()
+    turnTexts.add(normalized)
+    assistantMessageTextByTurnId.set(message.turnId, turnTexts)
+  }
+  const hasAssistantMessageForEventText = (event: WorldPromptEvent, text: string) => {
+    const normalized = normalizePromptTranscriptText(text)
+    return Boolean(normalized && assistantMessageTextByTurnId.get(event.turnId)?.has(normalized))
+  }
 
   for (const source of sources) {
     if (source.source === 'message') {
@@ -847,12 +878,12 @@ function buildWorldPromptTranscriptEntries(input: {
             createdAt: source.event.createdAt,
             kind: 'system_status',
             label: describePlannerStatus(payload.plannerStatus),
-            detail: payload.note ?? (payload.scope ? `${payload.scope.mode} scope` : ''),
+            detail: payload.scope ? `${payload.scope.mode} scope` : '',
           })
         }
         break
       case 'assistant_note':
-        if (payload.note) {
+        if (payload.note && !hasAssistantMessageForEventText(source.event, payload.note)) {
           entries.push({
             id: source.id,
             createdAt: source.event.createdAt,
@@ -977,7 +1008,7 @@ function buildWorldPromptTranscriptEntries(input: {
         })
         break
       case 'turn_completed':
-        if (payload.note) {
+        if (payload.note && !hasAssistantMessageForEventText(source.event, payload.note)) {
           entries.push({
             id: source.id,
             createdAt: source.event.createdAt,
@@ -992,10 +1023,10 @@ function buildWorldPromptTranscriptEntries(input: {
     }
 
     if (payload.suggestions.length > 0) {
-      const signature = payload.suggestions.map((suggestion) => `${suggestion.id}:${suggestion.prompt}`).join('|')
-      if (signature && signature !== lastSuggestionSignature) {
+      const signature = buildSuggestionTranscriptSignature(payload.suggestions)
+      if (signature && !emittedSuggestionSignatures.has(signature)) {
         entries.push(buildTranscriptSuggestionsEntry(source.event, payload.suggestions))
-        lastSuggestionSignature = signature
+        emittedSuggestionSignatures.add(signature)
       }
     }
   }

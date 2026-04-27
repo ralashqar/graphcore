@@ -597,6 +597,10 @@ export const worldPromptStartTurnResponseSchema = z.object({
   ok: z.literal(true),
   session: worldPromptSessionSchema,
   turn: worldPromptTurnSchema,
+  messages: z.array(worldPromptMessageSchema).default([]),
+  events: z.array(worldPromptEventSchema).default([]),
+  suggestions: z.array(worldPromptSuggestionRecordSchema).default([]),
+  threads: z.array(worldThreadSchema).default([]),
   definitions: z.array(looseRecordSchema).default([]),
 })
 

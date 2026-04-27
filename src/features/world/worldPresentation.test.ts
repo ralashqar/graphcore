@@ -212,6 +212,43 @@ test('buildWorldPromptTurnLenses derives an entity-only turn lens', () => {
   })
 })
 
+test('buildWorldPromptTurnLenses includes every supported world entity node type', () => {
+  const nodeTypes = ['actor', 'group', 'place', 'object', 'concept', 'event'] satisfies WorldEntity['nodeType'][]
+  const entities = nodeTypes.map((nodeType) => (
+    createWorldPresentationTestEntity(`world.${nodeType}.sample`, `Sample ${nodeType}`, nodeType)
+  ))
+  const turn = makeTurn({ id: 'turn-all-types', prompt: 'Add a mixed world slice.' })
+  const event = makeEvent({
+    id: 'event-all-types',
+    turnId: turn.id,
+    eventType: 'op_applied',
+    payload: {
+      applied: {
+        worldEntities: entities,
+        worldRelationships: [],
+        worldOperators: [],
+        worldResults: [],
+        worldGraphConnections: [],
+        worldViews: [],
+      },
+      suggestions: [],
+      diagnostics: [],
+    },
+  })
+
+  const lens = buildWorldPromptTurnLens({ turnId: turn.id, events: [event], turns: [turn] })
+
+  assert.ok(lens)
+  assert.deepEqual(lens.entityKeys, entities.map((entity) => entity.key))
+  assert.equal(lens.rootEntityKey, entities[0]?.key)
+  assert.deepEqual(lens.counts, {
+    entities: nodeTypes.length,
+    relationships: 0,
+    derived: 0,
+    total: nodeTypes.length,
+  })
+})
+
 test('buildWorldPromptTurnLenses derives relationship and derived-result lens keys', () => {
   const hero = createWorldPresentationTestEntity('world.actor.hero', 'Hero', 'actor')
   const keep = createWorldPresentationTestEntity('world.place.keep', 'Keep', 'place')
@@ -1079,6 +1116,66 @@ test('buildWorldPromptTranscriptEntries renders advisory answers and diagnostic 
   assert.equal(entries.filter((entry) => entry.kind === 'diagnostic_finding').length, 1)
 })
 
+test('buildWorldPromptTranscriptEntries dedupes returned assistant notes and repeated suggestion payloads', () => {
+  const note = 'Suggested compact supernatural threat directions that can brew behind House Veyr political conflict.'
+  const suggestions: WorldPromptSuggestion[] = [{
+    id: 'suggestion-threat-1',
+    label: 'Bind the drowned saints',
+    prompt: 'Add the drowned saints as a compact supernatural threat behind House Veyr succession crisis.',
+    kind: 'continue_scope',
+    style: 'primary',
+    source: 'advisory',
+    threadKey: null,
+    summary: 'A hidden cult threat pressures the succession.',
+    estimatedNodeCount: 2,
+    estimatedEdgeCount: 2,
+    willQueueImages: false,
+    willQueueCinematics: false,
+  }]
+  const messages: WorldPromptMessage[] = [{
+    id: 'm-assistant-threat',
+    sessionId: 's1',
+    turnId: 't-threat',
+    draftId: 'd1',
+    role: 'assistant',
+    content: note,
+    metadata: {},
+    createdAt: '2026-04-24T10:00:01.000Z',
+  }]
+  const events: WorldPromptEvent[] = [
+    makeEvent({
+      id: 'e-threat-note',
+      turnId: 't-threat',
+      sequence: 1,
+      eventType: 'assistant_note',
+      payload: { note, suggestions, diagnostics: [] },
+    }),
+    makeEvent({
+      id: 'e-threat-status',
+      turnId: 't-threat',
+      sequence: 2,
+      eventType: 'planner_status',
+      payload: { plannerStatus: 'completed', note, suggestions: [{ ...suggestions[0], id: 'suggestion-threat-2' }], diagnostics: [] },
+    }),
+    makeEvent({
+      id: 'e-threat-completed',
+      turnId: 't-threat',
+      sequence: 3,
+      eventType: 'turn_completed',
+      payload: { note, suggestions: [{ ...suggestions[0], id: 'suggestion-threat-3' }], diagnostics: [] },
+    }),
+  ]
+
+  const entries = buildWorldPromptTranscriptEntries({
+    events,
+    messages,
+    entityByKey: new Map(),
+  })
+
+  assert.equal(entries.filter((entry) => entry.kind === 'assistant_message' && entry.content === note).length, 1)
+  assert.equal(entries.filter((entry) => entry.kind === 'suggestion_set').length, 1)
+})
+
 test('buildWorldInspectorViewModel formats entity cards', () => {
   const entity = {
     id: '1',
@@ -1188,7 +1285,7 @@ test('buildWorldInspectorViewModel exposes entity refinement history', () => {
   assert.equal(viewModel?.refinementHistory[0]?.resultText, 'Court spymaster. Also commands the queen’s whisper network.')
 })
 
-test('worldPromptStartTurnResponseSchema accepts returned linked definitions', () => {
+test('worldPromptStartTurnResponseSchema accepts returned linked definitions and turn transcript records', () => {
   const parsed = worldPromptStartTurnResponseSchema.parse({
     ok: true,
     session: {
@@ -1204,6 +1301,30 @@ test('worldPromptStartTurnResponseSchema accepts returned linked definitions', (
       updatedAt: '2026-04-24T10:00:00.000Z',
     },
     turn: makeTurn(),
+    messages: [{
+      id: 'message-1',
+      sessionId: 'session-1',
+      turnId: 't1',
+      draftId: 'd1',
+      role: 'user',
+      content: 'Suggest a background supernatural threat.',
+      metadata: {},
+      createdAt: '2026-04-24T10:00:01.000Z',
+    }],
+    events: [{
+      id: 'event-1',
+      sessionId: 'session-1',
+      turnId: 't1',
+      draftId: 'd1',
+      sequence: 1,
+      eventType: 'message_created',
+      opId: null,
+      payload: {},
+      metadata: {},
+      createdAt: '2026-04-24T10:00:01.000Z',
+    }],
+    suggestions: [],
+    threads: [],
     definitions: [{
       id: 'def-1',
       key: 'character.elian_vale',
@@ -1226,6 +1347,8 @@ test('worldPromptStartTurnResponseSchema accepts returned linked definitions', (
   })
 
   assert.equal(parsed.definitions.length, 1)
+  assert.equal(parsed.messages[0]?.content, 'Suggest a background supernatural threat.')
+  assert.equal(parsed.events[0]?.eventType, 'message_created')
 })
 
 function createWorldPresentationTestEntity(key: string, name: string, nodeType: WorldEntity['nodeType']): WorldEntity {

@@ -146,6 +146,7 @@ GraphCore runs AI workloads through protected Supabase Edge Functions that provi
 - World state consistency checking
 - Dynamic content expansion
 - World-prompt chat turns now return touched linked definition records alongside world-graph mutations so prompt-created characters, items, and environments appear immediately in their specialized workspaces without waiting on a later refresh cycle.
+- World-prompt chat turns now also return the completed turn's prompt messages, prompt events, suggestions, and touched threads in the `start-world-prompt-turn` response so the frontend can merge the submitted user prompt and assistant result immediately without depending on realtime timing or a broad snapshot reload.
 
 ### World Prompt Agent (`world-prompt`)
 **Purpose**: Runs GraphCore's live prompt-to-world graph chat for story-gardening style authoring over an ever-growing world graph.
@@ -162,6 +163,7 @@ GraphCore runs AI workloads through protected Supabase Edge Functions that provi
 - Reconciles entity summaries, contexts, and relationship notes additively while preserving prior refinements in append-only metadata history
 - Syncs shared world-entity fields (`name`, `summary`, icon, tags) into linked definition records during prompt-driven world mutations
 - Returns touched linked definition records from `start-world-prompt-turn` so prompt-created or prompt-updated characters, items, groups, concepts, events, and environments appear immediately in their specialized workspaces
+- Returns updated prompt suggestion records from `start-world-prompt-turn`, including used and superseded records, so selected suggestions disappear immediately and do not loop back into the same suggestion set
 - Exposes linked world context and world-graph relationships inside the specialized definition workspaces through the `linkedDefinitionKey` bridge, including deep links back into the graph and across linked records
 - Uses planner-authored thread lifecycle actions so world-prompt turns can create, deepen, reprioritize, resolve, park, or relink story threads without backend-invented fallback thread canon
 
@@ -203,6 +205,7 @@ GraphCore runs AI workloads through protected Supabase Edge Functions that provi
 - Hosted planner output is retried once if it still contains placeholder entities or unresolved descriptor-only relationship endpoints, and mutating turns fail or degrade to non-mutating behavior instead of writing deterministic fallback canon
 - The live chat no longer uses preview/apply-first-wave or manual approval as the default UX; risky unresolved ops are skipped with an immediate assistant note instead of creating a pending review queue
 - Suggestion records can now carry view-targeting metadata (`suggestedViewKey`, `targetRootEntityKey`, `preferredViewKind`) so clicking a suggestion can continue from a more appropriate neighborhood or thread view
+- Selecting a prompt suggestion is treated as an instruction to execute that suggestion as a compact world-building step by default, unless the suggestion is explicitly plan-only
 - Count-explicit seed prompts now produce planner-side entity requirements from the user text, such as requested character, faction, place, and artifact counts. Direct-build scope caps expand only for those count-explicit world-seeding turns so a prompt like “three major characters, two rival factions, one artifact” can land as one coherent first wave instead of silently staging required entities into follow-up work.
 - During direct world-building, malformed `upsert_entity` ops that point at an existing entity key while carrying a different new entity name are treated as new additive entities when there is no clear same-name match. This avoids skipping simple seed-world creations as semantic rewrites while preserving approval pressure for explicit correction/replacement prompts.
 - Temporary direct-apply behavior: ops annotated only as `Semantic rewrite of existing entity` are allowed to run instead of being skipped, so frustrating false positives do not drop entity creation/refinement turns. Other risky cases such as ambiguous matches, missing targets, canon-locked touches, and collapsed relationship endpoints remain skipped.
