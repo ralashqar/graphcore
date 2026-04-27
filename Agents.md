@@ -155,7 +155,9 @@ GraphCore runs AI workloads through protected Supabase Edge Functions that provi
 - Resolves each turn into explicit answer, preview, apply, or blocked modes before planning
 - Applies actionable world-building changes immediately and answers in advisory mode when the prompt is non-mutating
 - Maintains structured session memory for active focus, background focus, recent turns, and retrieved graph context
+- Builds a balanced prompt context packet for every turn with recent raw chat, compact long-term session memory, a lightweight world atlas, typo-tolerant entity matching, rich graph/thread retrieval, and diagnostics for what context was used
 - Persists actionable suggestions with machine-readable target metadata
+- Treats selected prompt suggestions as apply-now continuations when they return safe actionable graph operations, and accepts explicit canon-repair wording as correction intent instead of looping on preview-only answers
 - Maintains a neighborhood-first world view layer with auto-managed semantic views such as protagonist neighborhoods, faction/place maps, lore clusters, thread-focus views, recent-growth views, and a separate global overview
 - Uses the active selected world view as a first-class retrieval anchor, and can switch the session-selected view to a newly relevant neighborhood when a prompt causes a real topic pivot
 - Ranks next-step suggestions using both planner ideas and story-seed signals such as protagonist, villain, ruler, factions, lore, and missing inciting events

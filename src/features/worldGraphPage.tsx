@@ -36,6 +36,7 @@ import type {
 } from '../domain/worldGraph'
 import {
   worldPromptEventPayloadSchema,
+  worldPromptRetrievalDiagnosticsSchema,
   type PromptToWorldOp,
   type WorldPromptEvent,
   type WorldPromptMessage,
@@ -80,6 +81,7 @@ import {
   buildWorldGraphLabelPolicy,
   buildWorldGraphPresentationPresetConfig,
   buildWorldNodeVisibilityReason,
+  buildWorldPromptTranscriptEntries as buildWorldPromptTranscriptEntriesModel,
   buildWorldPromptTurnLenses,
   buildWorldInspectorViewModel,
   buildWorldPromptRailViewModel,
@@ -702,25 +704,6 @@ function describePromptOp(op: PromptToWorldOp) {
   }
 }
 
-function describePlannerStatus(status: NonNullable<ReturnType<typeof worldPromptEventPayloadSchema.safeParse>['data']>['plannerStatus']) {
-  switch (status) {
-    case 'planning':
-      return 'Planning'
-    case 'scoping':
-      return 'Scoping'
-    case 'applying':
-      return 'Applying'
-    case 'awaiting_approval':
-      return 'Awaiting Approval'
-    case 'blocked':
-      return 'Blocked'
-    case 'completed':
-      return 'Completed'
-    default:
-      return 'Working'
-  }
-}
-
 function promptSuggestionImpactLabel(suggestion: WorldPromptSuggestion) {
   const parts = [
     suggestion.estimatedNodeCount > 0 ? `+${suggestion.estimatedNodeCount} nodes` : null,
@@ -729,309 +712,6 @@ function promptSuggestionImpactLabel(suggestion: WorldPromptSuggestion) {
     suggestion.willQueueCinematics ? 'cinematics' : null,
   ].filter(Boolean)
   return parts.join(' · ')
-}
-
-function buildTranscriptSuggestionsEntry(event: WorldPromptEvent, suggestions: WorldPromptSuggestion[]) {
-  const hasClarification = suggestions.some((suggestion) => suggestion.kind === 'repair_prompt')
-  return {
-    id: `suggestions:${event.id}`,
-    createdAt: event.createdAt,
-    kind: hasClarification ? 'clarification_question' : 'suggestion_set',
-    suggestions,
-    label: hasClarification ? 'Clarification required' : 'Next move',
-  } satisfies WorldPromptTranscriptEntry
-}
-
-function stripInternalPlannerDiagnostics(text: string) {
-  if (!text.trim()) return ''
-  return text
-    .replace(/\s*World prompt planner returned JSON that did not match the expected schema\.[\s\S]*$/i, '')
-    .replace(/\s*Planner (?:output|response) validation failed\.[\s\S]*$/i, '')
-    .replace(/\s*Cinematic planner response validation failed\.[\s\S]*$/i, '')
-    .trim()
-}
-
-function normalizePromptTranscriptText(text: string) {
-  return stripInternalPlannerDiagnostics(text)
-    .replace(/\s+/g, ' ')
-    .trim()
-    .toLocaleLowerCase()
-}
-
-function buildSuggestionTranscriptSignature(suggestions: WorldPromptSuggestion[]) {
-  return suggestions
-    .map((suggestion) => [
-      normalizePromptTranscriptText(suggestion.label),
-      normalizePromptTranscriptText(suggestion.prompt),
-      suggestion.kind,
-    ].join(':'))
-    .sort()
-    .join('|')
-}
-
-function buildWorldPromptTranscriptEntries(input: {
-  events: WorldPromptEvent[]
-  messages: WorldPromptMessage[]
-  entityByKey: Map<string, WorldEntity>
-  turns?: WorldPromptTurn[]
-}) {
-  const sources = [
-    ...input.messages.map((message) => ({ source: 'message' as const, createdAt: message.createdAt, id: `message:${message.id}`, message })),
-    ...input.events
-      .filter((event) => !['turn_started', 'message_created', 'op_needs_approval', 'op_approved', 'op_rejected'].includes(event.eventType))
-      .map((event) => ({ source: 'event' as const, createdAt: event.createdAt, id: `event:${event.id}`, event })),
-  ].sort((left, right) => {
-    const timeDelta = new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
-    return timeDelta !== 0 ? timeDelta : left.id.localeCompare(right.id)
-  })
-
-  const entries: WorldPromptTranscriptEntry[] = []
-  const turnLensByTurnId = buildWorldPromptTurnLenses({ events: input.events, turns: input.turns })
-  const emittedSuggestionSignatures = new Set<string>()
-  const emittedTurnLensIds = new Set<string>()
-  const assistantMessageTextByTurnId = new Map<string, Set<string>>()
-  for (const message of input.messages) {
-    if (message.role !== 'assistant' || !message.turnId) continue
-    const normalized = normalizePromptTranscriptText(message.content)
-    if (!normalized) continue
-    const turnTexts = assistantMessageTextByTurnId.get(message.turnId) ?? new Set<string>()
-    turnTexts.add(normalized)
-    assistantMessageTextByTurnId.set(message.turnId, turnTexts)
-  }
-  const hasAssistantMessageForEventText = (event: WorldPromptEvent, text: string) => {
-    const normalized = normalizePromptTranscriptText(text)
-    return Boolean(normalized && assistantMessageTextByTurnId.get(event.turnId)?.has(normalized))
-  }
-
-  for (const source of sources) {
-    if (source.source === 'message') {
-      if (source.message.role === 'user') {
-        const selectedSuggestionLabel = typeof source.message.metadata?.selectedSuggestionLabel === 'string'
-          ? source.message.metadata.selectedSuggestionLabel
-          : null
-        const selectedSuggestionUiKind = source.message.metadata?.selectedSuggestionUiKind === 'clarification'
-          ? 'clarification'
-          : 'next_move'
-        const continuationMode = typeof source.message.metadata?.continuationMode === 'string'
-          ? source.message.metadata.continuationMode
-          : null
-
-        if (selectedSuggestionLabel) {
-          entries.push({
-            id: `${source.id}:selection`,
-            createdAt: source.message.createdAt,
-            kind: selectedSuggestionUiKind === 'clarification' ? 'clarification_answer' : 'system_status',
-            label: selectedSuggestionUiKind === 'clarification' ? 'Answered clarification' : 'Used suggestion',
-            detail: selectedSuggestionLabel,
-          })
-          continue
-        }
-
-        if (continuationMode === 'freeform_after_suggestions') {
-          entries.push({
-            id: `${source.id}:continuation`,
-            createdAt: source.message.createdAt,
-            kind: 'continuation_without_suggestion',
-            label: 'Continued with your own prompt',
-            detail: 'You skipped the suggested next moves and continued freeform.',
-          })
-        } else if (continuationMode === 'freeform_after_clarification') {
-          entries.push({
-            id: `${source.id}:continuation`,
-            createdAt: source.message.createdAt,
-            kind: 'continuation_without_suggestion',
-            label: 'Continued without answering clarification',
-            detail: 'You skipped the clarification options and sent a new prompt instead.',
-          })
-        }
-      }
-
-      entries.push({
-        id: source.id,
-        createdAt: source.message.createdAt,
-        kind: source.message.role === 'user' ? 'user_message' : 'assistant_message',
-        content: source.message.role === 'assistant'
-          ? stripInternalPlannerDiagnostics(source.message.content)
-          : source.message.content,
-        pending: false,
-      })
-      continue
-    }
-
-    const parsed = worldPromptEventPayloadSchema.safeParse(source.event.payload)
-    if (!parsed.success) {
-      entries.push({
-        id: source.id,
-        createdAt: source.event.createdAt,
-        kind: 'system_status',
-        label: source.event.eventType,
-      })
-      continue
-    }
-
-    const payload = parsed.data
-    switch (source.event.eventType) {
-      case 'planner_status':
-        if (payload.plannerStatus) {
-          entries.push({
-            id: source.id,
-            createdAt: source.event.createdAt,
-            kind: 'system_status',
-            label: describePlannerStatus(payload.plannerStatus),
-            detail: payload.scope ? `${payload.scope.mode} scope` : '',
-          })
-        }
-        break
-      case 'assistant_note':
-        if (payload.note && !hasAssistantMessageForEventText(source.event, payload.note)) {
-          entries.push({
-            id: source.id,
-            createdAt: source.event.createdAt,
-            kind: 'assistant_message',
-            content: stripInternalPlannerDiagnostics(payload.note),
-            pending: true,
-          })
-        }
-        break
-      case 'op_applied': {
-        const applied = payload.applied
-        const turnLens = turnLensByTurnId.get(source.event.turnId) ?? undefined
-        if (turnLens && !emittedTurnLensIds.has(turnLens.turnId)) {
-          entries.push({
-            id: `${source.id}:turn-lens:${turnLens.turnId}`,
-            createdAt: source.event.createdAt,
-            kind: 'turn_lens',
-            label: 'View turn changes',
-            detail: turnLens.label,
-            turnLens,
-          })
-          emittedTurnLensIds.add(turnLens.turnId)
-        }
-        const replaceOp = payload.op?.op === 'replace_entity' ? payload.op : null
-        if (replaceOp && applied?.worldEntities && applied.worldEntities.length > 0) {
-          const replacementEntity = applied.worldEntities.find((entity) => entity.key !== replaceOp.payload.targetEntityKey && entity.status !== 'archived')
-            ?? applied.worldEntities.find((entity) => entity.key !== replaceOp.payload.targetEntityKey)
-            ?? applied.worldEntities[0]
-          if (replacementEntity) {
-            const detailParts = [
-              replaceOp.payload.reason.trim() || null,
-              `Now treated as ${labelForWorldEntity(replacementEntity.nodeType)}`,
-            ].filter(Boolean)
-            entries.push({
-              id: `${source.id}:replacement:${replacementEntity.key}`,
-              createdAt: source.event.createdAt,
-              kind: 'entity_replaced',
-              label: `Replaced ${replaceOp.payload.targetEntityKey} with ${replacementEntity.name}`,
-              detail: detailParts.join(' · '),
-              entityKey: replacementEntity.key,
-              entityNodeType: replacementEntity.nodeType,
-              turnLens,
-            })
-          }
-        }
-        for (const entity of applied?.worldEntities ?? []) {
-          if (replaceOp && entity.key === replaceOp.payload.targetEntityKey) {
-            continue
-          }
-          entries.push({
-            id: `${source.id}:entity:${entity.key}`,
-            createdAt: source.event.createdAt,
-            kind: 'entity_created',
-            label: `Added ${entity.name}`,
-            detail: labelForWorldEntity(entity.nodeType),
-            entityKey: entity.key,
-            entityNodeType: entity.nodeType,
-            turnLens,
-          })
-        }
-        for (const relationship of applied?.worldRelationships ?? []) {
-          const sourceName = input.entityByKey.get(relationship.sourceEntityKey)?.name ?? relationship.sourceEntityKey
-          const targetName = input.entityByKey.get(relationship.targetEntityKey)?.name ?? relationship.targetEntityKey
-          entries.push({
-            id: `${source.id}:relationship:${relationship.key}`,
-            createdAt: source.event.createdAt,
-            kind: 'relationship_created',
-            label: `Linked ${sourceName} and ${targetName}`,
-            detail: relationship.notes.trim() || relationship.verb,
-            relationshipKey: relationship.key,
-            sourceLabel: sourceName,
-            targetLabel: targetName,
-            turnLens,
-          })
-        }
-        for (const worldResult of applied?.worldResults ?? []) {
-          entries.push({
-            id: `${source.id}:result:${worldResult.key}`,
-            createdAt: source.event.createdAt,
-            kind: 'derived_result_created',
-            label: `Created ${worldResult.title}`,
-            detail: 'Derived result',
-            resultKey: worldResult.key,
-            turnLens,
-          })
-        }
-        break
-      }
-      case 'queue_started': {
-        const label = payload.queue?.type === 'cinematic_generation'
-          ? 'Started cinematic generation'
-          : 'Started image generation'
-        const detail = payload.queue?.targetEntityKey
-          ? input.entityByKey.get(payload.queue.targetEntityKey)?.name ?? payload.queue.targetEntityKey
-          : payload.queue?.graphKey ?? ''
-        entries.push({
-          id: source.id,
-          createdAt: source.event.createdAt,
-          kind: 'queue_started',
-          label,
-          detail,
-        })
-        break
-      }
-      case 'turn_cancel_requested':
-        entries.push({
-          id: source.id,
-          createdAt: source.event.createdAt,
-          kind: 'system_status',
-          label: 'Cancelling turn',
-          detail: payload.note ?? 'Stopping future ops for this turn.',
-        })
-        break
-      case 'turn_failed':
-        entries.push({
-          id: source.id,
-          createdAt: source.event.createdAt,
-          kind: 'system_status',
-          label: 'Turn failed',
-          detail: payload.diagnostics?.[0] ?? payload.note ?? 'World prompt turn failed.',
-          tone: 'error',
-        })
-        break
-      case 'turn_completed':
-        if (payload.note && !hasAssistantMessageForEventText(source.event, payload.note)) {
-          entries.push({
-            id: source.id,
-            createdAt: source.event.createdAt,
-            kind: 'system_status',
-            label: 'Turn completed',
-            detail: payload.note,
-          })
-        }
-        break
-      default:
-        break
-    }
-
-    if (payload.suggestions.length > 0) {
-      const signature = buildSuggestionTranscriptSignature(payload.suggestions)
-      if (signature && !emittedSuggestionSignatures.has(signature)) {
-        entries.push(buildTranscriptSuggestionsEntry(source.event, payload.suggestions))
-        emittedSuggestionSignatures.add(signature)
-      }
-    }
-  }
-
-  return entries
 }
 
 export function WorldGraphPage({
@@ -1516,6 +1196,7 @@ export function WorldGraphPage({
   const relationshipByKey = useMemo(() => new Map(worldRelationships.map((relationship) => [relationship.key, relationship])), [worldRelationships])
   const operatorByKey = useMemo(() => new Map(worldOperators.map((operator) => [operator.key, operator])), [worldOperators])
   const resultByKey = useMemo(() => new Map(worldResults.map((result) => [result.key, result])), [worldResults])
+  const threadByKey = useMemo(() => new Map(worldThreads.map((thread) => [thread.key, thread])), [worldThreads])
   const definitionByKey = useMemo(() => new Map(definitions.map((definition) => [definition.key, definition])), [definitions])
   const usageByEntityKey = useMemo(() => (
     new Map(worldEntities.map((entity) => [entity.key, getWorldEntityUsage(entity, snapshotGraphs)]))
@@ -2582,6 +2263,55 @@ export function WorldGraphPage({
     inspectorOperator,
     inspectorResult,
   ])
+  const activeTurnLensTurn = useMemo(
+    () => activeTurnLens ? sessionTurns.find((turn) => turn.id === activeTurnLens.turnId) ?? null : null,
+    [activeTurnLens, sessionTurns],
+  )
+  const activeTurnRetrievalDiagnostics = useMemo(() => {
+    const rawDiagnostics = activeTurnLensTurn?.metadata?.retrievalDiagnostics
+      ?? activeTurnLensTurn?.resolvedContext?.retrievalDiagnostics
+      ?? null
+    const parsed = worldPromptRetrievalDiagnosticsSchema.safeParse(rawDiagnostics)
+    return parsed.success ? parsed.data : null
+  }, [activeTurnLensTurn])
+  const activeTurnContextReasonByKey = useMemo(() => {
+    const result = new Map<string, string[]>()
+    for (const hit of activeTurnRetrievalDiagnostics?.hitReasons ?? []) {
+      const key = `${hit.kind}:${hit.key}`
+      const reasons = result.get(key) ?? []
+      const label = hit.reason.replace(/_/g, ' ')
+      if (!reasons.includes(label)) reasons.push(label)
+      result.set(key, reasons)
+    }
+    return result
+  }, [activeTurnRetrievalDiagnostics])
+  const activeTurnUsedEntityRows = useMemo(
+    () => (activeTurnRetrievalDiagnostics?.loadedEntityKeys ?? [])
+      .map((key) => ({
+        key,
+        entity: entityByKey.get(key) ?? null,
+        reasons: activeTurnContextReasonByKey.get(`entity:${key}`) ?? [],
+      })),
+    [activeTurnContextReasonByKey, activeTurnRetrievalDiagnostics, entityByKey],
+  )
+  const activeTurnUsedRelationshipRows = useMemo(
+    () => (activeTurnRetrievalDiagnostics?.loadedRelationshipKeys ?? [])
+      .map((key) => ({
+        key,
+        relationship: relationshipByKey.get(key) ?? null,
+        reasons: activeTurnContextReasonByKey.get(`relationship:${key}`) ?? [],
+      })),
+    [activeTurnContextReasonByKey, activeTurnRetrievalDiagnostics, relationshipByKey],
+  )
+  const activeTurnUsedThreadRows = useMemo(
+    () => (activeTurnRetrievalDiagnostics?.loadedThreadKeys ?? [])
+      .map((key) => ({
+        key,
+        thread: threadByKey.get(key) ?? null,
+        reasons: activeTurnContextReasonByKey.get(`thread:${key}`) ?? [],
+      })),
+    [activeTurnContextReasonByKey, activeTurnRetrievalDiagnostics, threadByKey],
+  )
   const activeTurnLensRelationships = useMemo(
     () => activeTurnLens
       ? activeTurnLens.relationshipKeys
@@ -4480,6 +4210,69 @@ export function WorldGraphPage({
                 )
               })}
             </div>
+            {activeTurnRetrievalDiagnostics ? (
+              <div className="editor-section compact-section">
+                <div className="section-head">
+                  <div>
+                    <span className="eyebrow">Used Context</span>
+                    <h3>Planner context</h3>
+                  </div>
+                </div>
+                <div className="inline-note">
+                  Atlas {activeTurnRetrievalDiagnostics.contextBudget.atlasEntities}
+                  /{activeTurnRetrievalDiagnostics.contextBudget.atlasTotalEntities} entities, rich context for {activeTurnRetrievalDiagnostics.loadedEntityKeys.length} nodes, {activeTurnRetrievalDiagnostics.loadedRelationshipKeys.length} links, and {activeTurnRetrievalDiagnostics.loadedThreadKeys.length} threads.
+                </div>
+                {activeTurnRetrievalDiagnostics.weakContext ? (
+                  <div className="inline-note">Context match was weak, so the planner used fallback core graph context.</div>
+                ) : null}
+                {activeTurnRetrievalDiagnostics.ambiguityCandidates.length > 0 ? (
+                  <div className="world-prompt-change-list">
+                    {activeTurnRetrievalDiagnostics.ambiguityCandidates.slice(0, 4).map((candidate) => (
+                      <span key={`${candidate.kind}:${candidate.key}`} className="chip">
+                        Ambiguous: {candidate.label || candidate.key}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+                {activeTurnUsedEntityRows.slice(0, 8).map((row) => (
+                  <button key={row.key} className="rail-button item-row" disabled={!row.entity} onClick={() => row.entity ? selectWorldNode(row.key) : undefined} type="button">
+                    <div className="media-thumb">
+                      <EntityIcon id={row.entity ? iconForWorldEntity(row.entity.nodeType) : 'graph'} />
+                    </div>
+                    <div className="item-row-copy">
+                      <strong>{row.entity?.name ?? row.key}</strong>
+                      <span>{row.reasons.slice(0, 2).join(', ') || 'loaded node context'}</span>
+                    </div>
+                  </button>
+                ))}
+                {activeTurnUsedThreadRows.slice(0, 4).map((row) => (
+                  <button key={row.key} className="rail-button item-row" disabled={!row.thread} onClick={() => row.thread ? setSelectedPromptThreadKey(row.key) : undefined} type="button">
+                    <div className="media-thumb">
+                      <EntityIcon id="thread" />
+                    </div>
+                    <div className="item-row-copy">
+                      <strong>{row.thread?.title ?? row.key}</strong>
+                      <span>{row.reasons.slice(0, 2).join(', ') || 'loaded thread context'}</span>
+                    </div>
+                  </button>
+                ))}
+                {activeTurnUsedRelationshipRows.slice(0, 6).map((row) => {
+                  const sourceName = row.relationship ? entityByKey.get(row.relationship.sourceEntityKey)?.name ?? row.relationship.sourceEntityKey : row.key
+                  const targetName = row.relationship ? entityByKey.get(row.relationship.targetEntityKey)?.name ?? row.relationship.targetEntityKey : ''
+                  return (
+                    <button key={row.key} className="rail-button item-row" disabled={!row.relationship} onClick={() => row.relationship ? selectWorldEdge(row.key) : undefined} type="button">
+                      <div className="media-thumb">
+                        <EntityIcon id="graph" />
+                      </div>
+                      <div className="item-row-copy">
+                        <strong>{row.relationship ? `${sourceName} ${row.relationship.verb} ${targetName}` : row.key}</strong>
+                        <span>{row.reasons.slice(0, 2).join(', ') || 'loaded relationship context'}</span>
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+            ) : null}
             {(activeTurnLensOperators.length > 0 || activeTurnLensResults.length > 0) ? (
               <div className="editor-section compact-section">
                 <div className="section-head">
@@ -4925,7 +4718,7 @@ function LegacyWorldPromptChatPanel({
   const transcriptEndRef = useRef<HTMLDivElement | null>(null)
   const [stickToBottom, setStickToBottom] = useState(true)
   const transcriptEntries = useMemo(
-    () => buildWorldPromptTranscriptEntries({
+    () => buildWorldPromptTranscriptEntriesModel({
       events: sessionEvents,
       messages: sessionMessages,
       entityByKey,
@@ -5517,12 +5310,13 @@ function WorldPromptChatPanel({
   const [stickToBottom, setStickToBottom] = useState(true)
   const [suppressedSuggestionSignature, setSuppressedSuggestionSignature] = useState<string | null>(null)
   const transcriptEntries = useMemo(
-    () => buildWorldPromptTranscriptEntries({
+    () => buildWorldPromptTranscriptEntriesModel({
       events: sessionEvents,
       messages: sessionMessages,
       entityByKey,
+      turns: sessionTurns,
     }),
-    [entityByKey, sessionEvents, sessionMessages],
+    [entityByKey, sessionEvents, sessionMessages, sessionTurns],
   )
   const canCancelTurn = Boolean(activePromptTurn && ['queued', 'streaming'].includes(activePromptTurn.status))
   const selectedThread = useMemo(

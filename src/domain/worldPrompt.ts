@@ -4,6 +4,7 @@ import { projectContextSchema } from './projectContext.ts'
 import {
   worldEntityCreateInputSchema,
   worldEntitySchema,
+  worldEntityNodeTypeSchema,
   worldGraphConnectionSchema,
   worldOperatorSchema,
   worldRelationshipSchema,
@@ -401,10 +402,77 @@ export const worldPromptRetrievalDiagnosticsSchema = z.object({
   })).default([]),
   droppedEntityKeys: z.array(z.string()).default([]),
   droppedThreadKeys: z.array(z.string()).default([]),
+  loadedEntityKeys: z.array(z.string()).default([]),
+  loadedRelationshipKeys: z.array(z.string()).default([]),
+  loadedThreadKeys: z.array(z.string()).default([]),
+  hitReasons: z.array(z.object({
+    key: z.string(),
+    kind: z.enum(['entity', 'relationship', 'thread']),
+    reason: z.enum(['selected_focus', 'selected_view', 'selected_thread', 'selected_suggestion', 'atlas_match', 'alias_match', 'fuzzy_match', 'fts', 'thread_linked', 'recent_chat', 'session_memory', 'graph_neighbor', 'fallback_core']),
+    score: z.number().default(0),
+    label: z.string().default(''),
+    matchedText: z.string().default(''),
+  })).default([]),
+  ambiguityCandidates: z.array(z.object({
+    key: z.string(),
+    kind: z.enum(['entity', 'relationship', 'thread']),
+    label: z.string().default(''),
+    reason: z.string().default(''),
+    score: z.number().default(0),
+  })).default([]),
+  weakContext: z.boolean().default(false),
+  contextBudget: z.object({
+    atlasEntities: z.number().int().nonnegative().default(0),
+    atlasTotalEntities: z.number().int().nonnegative().default(0),
+    atlasOmittedEntities: z.number().int().nonnegative().default(0),
+    relevantEntities: z.number().int().nonnegative().default(0),
+    relevantRelationships: z.number().int().nonnegative().default(0),
+    relevantThreads: z.number().int().nonnegative().default(0),
+    recentMessages: z.number().int().nonnegative().default(0),
+    fullAtlasIncluded: z.boolean().default(false),
+  }).default({
+    atlasEntities: 0,
+    atlasTotalEntities: 0,
+    atlasOmittedEntities: 0,
+    relevantEntities: 0,
+    relevantRelationships: 0,
+    relevantThreads: 0,
+    recentMessages: 0,
+    fullAtlasIncluded: false,
+  }),
   chosenFocusLayer: z.enum(['actor', 'group', 'place', 'concept', 'event', 'object', 'general']).nullable().default(null),
   continuityMode: z.enum(['follow_up', 'topic_shift', 'fresh_question']).nullable().default(null),
   executionReason: z.string().default(''),
 })
+
+export const worldPromptContextHitReasonSchema = z.enum(['selected_focus', 'selected_view', 'selected_thread', 'selected_suggestion', 'atlas_match', 'alias_match', 'fuzzy_match', 'fts', 'thread_linked', 'recent_chat', 'session_memory', 'graph_neighbor', 'fallback_core'])
+
+export const worldPromptAtlasIndexSchema = z.object({
+  totalEntityCount: z.number().int().nonnegative().default(0),
+  omittedEntityCount: z.number().int().nonnegative().default(0),
+  capped: z.boolean().default(false),
+  entityTypeCounts: z.record(z.string(), z.number().int().nonnegative()).default({}),
+  entities: z.array(z.object({
+    key: z.string(),
+    name: z.string(),
+    nodeType: worldEntityNodeTypeSchema,
+    aliases: z.array(z.string()).default([]),
+    tags: z.array(z.string()).default([]),
+    status: z.string().default('active'),
+    relationCount: z.number().int().nonnegative().default(0),
+  })).default([]),
+})
+
+export const worldPromptContextHitSchema = z.object({
+  key: z.string(),
+  kind: z.enum(['entity', 'relationship', 'thread']),
+  reason: worldPromptContextHitReasonSchema,
+  score: z.number().default(0),
+  label: z.string().default(''),
+  matchedText: z.string().default(''),
+})
+
+export const worldPromptContextBudgetSchema = worldPromptRetrievalDiagnosticsSchema.shape.contextBudget
 
 export const worldPromptResolvedContextSchema = z.object({
   summaryMemory: z.string().default(''),
@@ -701,6 +769,10 @@ export type WorldPromptEventPayload = z.infer<typeof worldPromptEventPayloadSche
 export type WorldPromptPlannerProgress = z.infer<typeof worldPromptPlannerProgressSchema>
 export type WorldPromptSessionMemoryState = z.infer<typeof worldPromptSessionMemoryStateSchema>
 export type WorldPromptRetrievalDiagnostics = z.infer<typeof worldPromptRetrievalDiagnosticsSchema>
+export type WorldPromptAtlasIndex = z.infer<typeof worldPromptAtlasIndexSchema>
+export type WorldPromptContextHit = z.infer<typeof worldPromptContextHitSchema>
+export type WorldPromptContextHitReason = z.infer<typeof worldPromptContextHitReasonSchema>
+export type WorldPromptContextBudget = z.infer<typeof worldPromptContextBudgetSchema>
 export type WorldPromptResolvedContext = z.infer<typeof worldPromptResolvedContextSchema>
 export type WorldPromptSnapshot = z.infer<typeof worldPromptSnapshotSchema>
 export type WorldPromptStartTurnRequest = z.infer<typeof worldPromptStartTurnRequestSchema>

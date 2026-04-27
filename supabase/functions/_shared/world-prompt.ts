@@ -37,6 +37,8 @@ import {
   type WorldPromptPlannerFailure,
   type WorldPromptPlannerProgress,
   type WorldPromptPlanPreviewItem,
+  type WorldPromptAtlasIndex,
+  type WorldPromptContextHit,
   type WorldPromptRetrievalDiagnostics,
   type WorldPromptResolvedContext,
   type WorldPromptScopeDecision,
@@ -48,6 +50,11 @@ import {
   type WorldPromptStartTurnRequest,
   type WorldPromptTurn,
 } from '../../../src/domain/worldPrompt.ts'
+import {
+  ambiguityCandidatesFromHits,
+  buildWorldPromptAtlasIndex,
+  findWorldPromptAtlasEntityHits,
+} from '../../../src/domain/worldPromptContext.ts'
 import {
   worldThreadSchema,
   type WorldThread,
@@ -839,6 +846,7 @@ type WorldPromptRetrievalPacket = {
     priority: WorldThread['priority']
     linkedEntityKeys: string[]
   }>
+  worldAtlas: WorldPromptAtlasIndex
   graphSignals: {
     entityCount: number
     relationshipCount: number
@@ -881,7 +889,7 @@ type WorldPromptRetrievalPacket = {
 }
 
 function promptHasExplicitCorrectionLanguage(prompt: string) {
-  return /\b(actually|should be|wrong type|replace|correct(?:ion)?|mistaken|instead of)\b/i.test(prompt)
+  return /\b(actually|should be|wrong type|replace|correct(?:ion)?|mistaken|instead of|repair|canon-?repair|merge|dedupe|duplicate|overlap(?:ping)?|canonicali[sz]e)\b/i.test(prompt)
 }
 
 function looksLikeGraphDiagnosisPrompt(prompt: string) {
@@ -1477,6 +1485,28 @@ async function buildWorldPromptRetrievalPacket(input: {
   const relationCounts = relationCountForSort(input.snapshot)
   const preferredNodeTypes = preferredNodeTypesForFocusLayer(input.intent.focusLayer)
   const activeEntities = input.snapshot.worldEntities.filter((entity) => entity.status !== 'archived')
+  const entityByKey = new Map(activeEntities.map((entity) => [entity.key, entity]))
+  const threadByKey = new Map(input.snapshot.worldThreads.map((thread) => [thread.key, thread]))
+  const worldAtlas = buildWorldPromptAtlasIndex({
+    entities: input.snapshot.worldEntities,
+    relationships: input.snapshot.worldRelationships,
+    maxEntities: input.mode === 'advisory_diagnosis' ? 320 : 240,
+  })
+  const atlasEntityHits = findWorldPromptAtlasEntityHits({
+    prompt: input.prompt,
+    atlas: worldAtlas,
+    maxHits: input.mode === 'advisory_diagnosis' ? 16 : 12,
+  })
+  const hitReasonsByKey = new Map<string, WorldPromptContextHit>()
+  const addHitReason = (hit: WorldPromptContextHit) => {
+    const reasonKey = `${hit.kind}:${hit.key}:${hit.reason}`
+    const previous = hitReasonsByKey.get(reasonKey)
+    if (!previous || hit.score > previous.score) {
+      hitReasonsByKey.set(reasonKey, hit)
+    }
+  }
+  const labelForEntityKey = (key: string) => entityByKey.get(key)?.name ?? key
+  const labelForThreadKey = (key: string) => threadByKey.get(key)?.title ?? key
   const selectedThread = input.selectedThreadKey
     ? input.snapshot.worldThreads.find((thread) => thread.key === input.selectedThreadKey) ?? null
     : null
@@ -1488,6 +1518,36 @@ async function buildWorldPromptRetrievalPacket(input: {
     : selectedView?.rootEntityKey
       ? activeEntities.find((entity) => entity.key === selectedView.rootEntityKey) ?? null
       : null
+  if (selectedRootEntity) {
+    addHitReason({
+      key: selectedRootEntity.key,
+      kind: 'entity',
+      reason: 'selected_focus',
+      score: 10,
+      label: selectedRootEntity.name,
+      matchedText: selectedRootEntity.name,
+    })
+  }
+  if (selectedView?.rootEntityKey) {
+    addHitReason({
+      key: selectedView.rootEntityKey,
+      kind: 'entity',
+      reason: 'selected_view',
+      score: 8,
+      label: labelForEntityKey(selectedView.rootEntityKey),
+      matchedText: selectedView.name,
+    })
+  }
+  if (selectedThread) {
+    addHitReason({
+      key: selectedThread.key,
+      kind: 'thread',
+      reason: 'selected_thread',
+      score: 10,
+      label: selectedThread.title,
+      matchedText: selectedThread.title,
+    })
+  }
   const anchorEntityKeys = new Set<string>([
     ...input.intent.anchorEntityKeys,
   ])
@@ -1497,9 +1557,25 @@ async function buildWorldPromptRetrievalPacket(input: {
   if (input.intent.continuityMode === 'follow_up') {
     for (const entityKey of (input.sessionMemoryState.frontierEntityKeys ?? []).slice(0, 4)) {
       anchorEntityKeys.add(entityKey)
+      addHitReason({
+        key: entityKey,
+        kind: 'entity',
+        reason: 'session_memory',
+        score: 4,
+        label: labelForEntityKey(entityKey),
+        matchedText: 'recent frontier',
+      })
     }
     if (input.sessionMemoryState.activeFocus.selectedRootEntityKey) {
       anchorEntityKeys.add(input.sessionMemoryState.activeFocus.selectedRootEntityKey)
+      addHitReason({
+        key: input.sessionMemoryState.activeFocus.selectedRootEntityKey,
+        kind: 'entity',
+        reason: 'session_memory',
+        score: 5,
+        label: labelForEntityKey(input.sessionMemoryState.activeFocus.selectedRootEntityKey),
+        matchedText: 'active focus memory',
+      })
     }
   }
 
@@ -1522,7 +1598,60 @@ async function buildWorldPromptRetrievalPacket(input: {
       }
       if (hit.resourceType === 'thread') ftsThreadKeys.add(hit.resourceKey)
       if (hit.resourceType === 'relationship') ftsRelationshipKeys.add(hit.resourceKey)
+      if (hit.entityKey) {
+        addHitReason({
+          key: hit.entityKey,
+          kind: 'entity',
+          reason: 'fts',
+          score: hit.score,
+          label: labelForEntityKey(hit.entityKey),
+          matchedText: hit.title,
+        })
+      }
+      if (hit.sourceEntityKey) {
+        addHitReason({
+          key: hit.sourceEntityKey,
+          kind: 'entity',
+          reason: 'fts',
+          score: hit.score * 0.8,
+          label: labelForEntityKey(hit.sourceEntityKey),
+          matchedText: hit.title,
+        })
+      }
+      if (hit.targetEntityKey) {
+        addHitReason({
+          key: hit.targetEntityKey,
+          kind: 'entity',
+          reason: 'fts',
+          score: hit.score * 0.8,
+          label: labelForEntityKey(hit.targetEntityKey),
+          matchedText: hit.title,
+        })
+      }
+      if (hit.resourceType === 'thread') {
+        addHitReason({
+          key: hit.resourceKey,
+          kind: 'thread',
+          reason: 'fts',
+          score: hit.score,
+          label: labelForThreadKey(hit.resourceKey),
+          matchedText: hit.title,
+        })
+      }
+      if (hit.resourceType === 'relationship') {
+        addHitReason({
+          key: hit.resourceKey,
+          kind: 'relationship',
+          reason: 'fts',
+          score: hit.score,
+          label: hit.title,
+          matchedText: hit.summary || hit.title,
+        })
+      }
     }
+  }
+  for (const atlasHit of atlasEntityHits) {
+    addHitReason(atlasHit)
   }
 
   const entityScoreByKey = new Map<string, number>()
@@ -1535,11 +1664,14 @@ async function buildWorldPromptRetrievalPacket(input: {
   for (const key of input.sessionMemoryState.backgroundFocus?.entityKeys ?? []) bumpEntityScore(key, input.intent.continuityMode === 'topic_shift' ? 3 : 1)
   for (const key of input.sessionMemoryState.frontierEntityKeys ?? []) bumpEntityScore(key, 3)
   for (const key of ftsEntityKeys) bumpEntityScore(key, 6)
+  for (const hit of atlasEntityHits) bumpEntityScore(hit.key, hit.score)
 
   const relevantEntityKeys = new Set<string>([
     ...anchorEntityKeys,
     ...ftsEntityKeys,
+    ...atlasEntityHits.map((hit) => hit.key),
   ])
+  let usedFallbackCore = false
   if (relevantEntityKeys.size === 0) {
     activeEntities
       .slice()
@@ -1550,7 +1682,18 @@ async function buildWorldPromptRetrievalPacket(input: {
         return (relationCounts.get(right.key) ?? 0) - (relationCounts.get(left.key) ?? 0)
       })
       .slice(0, input.mode === 'advisory_diagnosis' ? 6 : 3)
-      .forEach((entity) => relevantEntityKeys.add(entity.key))
+      .forEach((entity) => {
+        usedFallbackCore = true
+        relevantEntityKeys.add(entity.key)
+        addHitReason({
+          key: entity.key,
+          kind: 'entity',
+          reason: 'fallback_core',
+          score: 1 + (relationCounts.get(entity.key) ?? 0) * 0.05,
+          label: entity.name,
+          matchedText: 'fallback core',
+        })
+      })
   }
 
   const neighborhoodRelationships = input.snapshot.worldRelationships.filter((relationship) => (
@@ -1561,10 +1704,26 @@ async function buildWorldPromptRetrievalPacket(input: {
     if (relevantEntityKeys.has(relationship.sourceEntityKey)) {
       relevantEntityKeys.add(relationship.targetEntityKey)
       bumpEntityScore(relationship.targetEntityKey, 2 + (relationship.strength ?? 0) + (relationship.confidence ?? 0))
+      addHitReason({
+        key: relationship.targetEntityKey,
+        kind: 'entity',
+        reason: 'graph_neighbor',
+        score: 2 + (relationship.strength ?? 0) + (relationship.confidence ?? 0),
+        label: labelForEntityKey(relationship.targetEntityKey),
+        matchedText: labelForEntityKey(relationship.sourceEntityKey),
+      })
     }
     if (relevantEntityKeys.has(relationship.targetEntityKey)) {
       relevantEntityKeys.add(relationship.sourceEntityKey)
       bumpEntityScore(relationship.sourceEntityKey, 2 + (relationship.strength ?? 0) + (relationship.confidence ?? 0))
+      addHitReason({
+        key: relationship.sourceEntityKey,
+        kind: 'entity',
+        reason: 'graph_neighbor',
+        score: 2 + (relationship.strength ?? 0) + (relationship.confidence ?? 0),
+        label: labelForEntityKey(relationship.sourceEntityKey),
+        matchedText: labelForEntityKey(relationship.targetEntityKey),
+      })
     }
   }
 
@@ -1588,22 +1747,37 @@ async function buildWorldPromptRetrievalPacket(input: {
 
   const relevantRelationships = input.snapshot.worldRelationships
     .filter((relationship) => (
-      (
-        relevantEntityKeys.has(relationship.sourceEntityKey)
-        && relevantEntityKeys.has(relationship.targetEntityKey)
-      )
+      relevantEntityKeys.has(relationship.sourceEntityKey)
+      || relevantEntityKeys.has(relationship.targetEntityKey)
       || ftsRelationshipKeys.has(relationship.key)
     ))
     .sort((left, right) => {
       const leftFts = ftsRelationshipKeys.has(left.key) ? 1 : 0
       const rightFts = ftsRelationshipKeys.has(right.key) ? 1 : 0
       if (leftFts !== rightFts) return rightFts - leftFts
+      const leftEndpointScore =
+        (relevantEntityKeys.has(left.sourceEntityKey) ? 1 : 0)
+        + (relevantEntityKeys.has(left.targetEntityKey) ? 1 : 0)
+      const rightEndpointScore =
+        (relevantEntityKeys.has(right.sourceEntityKey) ? 1 : 0)
+        + (relevantEntityKeys.has(right.targetEntityKey) ? 1 : 0)
+      if (leftEndpointScore !== rightEndpointScore) return rightEndpointScore - leftEndpointScore
       const leftStrength = (left.strength ?? 0) + (left.confidence ?? 0)
       const rightStrength = (right.strength ?? 0) + (right.confidence ?? 0)
       return rightStrength - leftStrength
     })
     .slice(0, input.mode === 'advisory_diagnosis' ? 18 : 8)
     .map((relationship) => summarizeRelationshipForPlanner(relationship, input.mode !== 'direct_build'))
+  for (const relationship of relevantRelationships) {
+    addHitReason({
+      key: relationship.key,
+      kind: 'relationship',
+      reason: ftsRelationshipKeys.has(relationship.key) ? 'fts' : 'graph_neighbor',
+      score: ftsRelationshipKeys.has(relationship.key) ? 6 : 2,
+      label: `${labelForEntityKey(relationship.sourceEntityKey)} ${relationship.verb} ${labelForEntityKey(relationship.targetEntityKey)}`,
+      matchedText: relationship.notes || relationship.verb,
+    })
+  }
 
   const threadScoreByKey = new Map<string, number>()
   const bumpThreadScore = (key: string | null | undefined, score: number) => {
@@ -1643,9 +1817,24 @@ async function buildWorldPromptRetrievalPacket(input: {
       priority: thread.priority,
       linkedEntityKeys: thread.linkedEntityKeys.filter((key) => relevantEntityKeys.has(key)).slice(0, 6),
     }))
+  for (const thread of relevantThreads) {
+    addHitReason({
+      key: thread.key,
+      kind: 'thread',
+      reason: ftsThreadKeys.has(thread.key) ? 'fts' : threadKeys.has(thread.key) ? 'session_memory' : 'thread_linked',
+      score: threadScoreByKey.get(thread.key) ?? 2,
+      label: thread.title,
+      matchedText: thread.linkedEntityKeys.map(labelForEntityKey).join(', '),
+    })
+  }
 
+  const recentMessageLimit = input.intent.continuityMode === 'topic_shift'
+    ? 6
+    : input.mode === 'advisory_diagnosis'
+      ? 10
+      : 8
   const trimmedRecentMessages = input.recentMessages
-    .slice(-(input.intent.continuityMode === 'topic_shift' ? 2 : input.mode === 'advisory_diagnosis' && input.intent.mentionedEntityKeys.length === 0 ? 3 : input.mode === 'advisory_diagnosis' ? 5 : 3))
+    .slice(-recentMessageLimit)
     .map((message) => ({
       role: message.role,
       content: trimPlannerText(message.content, 240),
@@ -1668,6 +1857,17 @@ async function buildWorldPromptRetrievalPacket(input: {
     .sort((left, right) => right[1] - left[1])
     .slice(0, 8)
     .map(([key, score]) => ({ key, score }))
+  const hitReasons = [...hitReasonsByKey.values()]
+    .sort((left, right) => right.score - left.score || left.label.localeCompare(right.label))
+    .slice(0, 40)
+  const ambiguityCandidates = ambiguityCandidatesFromHits(atlasEntityHits)
+  const weakContext = (
+    atlasEntityHits.length === 0
+    && ftsHits.length === 0
+    && anchorEntityKeys.size === 0
+    && anchorThreadKeys.size === 0
+    && usedFallbackCore
+  )
   const diagnostics = worldPromptRetrievalDiagnosticsSchema.parse({
     anchorEntityKeys: Array.from(anchorEntityKeys),
     anchorThreadKeys: Array.from(anchorThreadKeys),
@@ -1681,6 +1881,22 @@ async function buildWorldPromptRetrievalPacket(input: {
     rankedThreadScores,
     droppedEntityKeys: [...relevantEntityKeys].filter((key) => !relevantEntities.some((entity) => entity.key === key)).slice(0, 8),
     droppedThreadKeys: [...threadKeys].filter((key) => !relevantThreads.some((thread) => thread.key === key)).slice(0, 6),
+    loadedEntityKeys: relevantEntities.map((entity) => entity.key),
+    loadedRelationshipKeys: relevantRelationships.map((relationship) => relationship.key),
+    loadedThreadKeys: relevantThreads.map((thread) => thread.key),
+    hitReasons,
+    ambiguityCandidates,
+    weakContext,
+    contextBudget: {
+      atlasEntities: worldAtlas.entities.length,
+      atlasTotalEntities: worldAtlas.totalEntityCount,
+      atlasOmittedEntities: worldAtlas.omittedEntityCount,
+      relevantEntities: relevantEntities.length,
+      relevantRelationships: relevantRelationships.length,
+      relevantThreads: relevantThreads.length,
+      recentMessages: trimmedRecentMessages.length,
+      fullAtlasIncluded: !worldAtlas.capped,
+    },
     chosenFocusLayer: input.intent.focusLayer,
     continuityMode: input.intent.continuityMode,
     executionReason: `${input.intent.resolvedMode ?? 'apply_compact_wave'} via ${input.intent.resolvedIntent ?? 'graph_build'} with ${input.intent.continuityMode}.`,
@@ -1720,6 +1936,7 @@ async function buildWorldPromptRetrievalPacket(input: {
     relevantEntities,
     relevantRelationships,
     relevantThreads,
+    worldAtlas,
     graphSignals: {
       entityCount: activeEntities.length,
       relationshipCount: input.snapshot.worldRelationships.length,
@@ -2311,15 +2528,16 @@ export async function refreshWorldPromptSuggestions(input: {
 }
 
 function compactMessageHistory(summaryMemory: string, messages: WorldPromptMessage[]) {
-  if (messages.length <= 12) {
+  const recentRawMessageCount = 12
+  if (messages.length <= 16) {
     return {
       summaryMemory,
-      recentMessages: messages.slice(-10),
+      recentMessages: messages.slice(-recentRawMessageCount),
       compacted: false,
     }
   }
 
-  const olderMessages = messages.slice(0, Math.max(0, messages.length - 10))
+  const olderMessages = messages.slice(0, Math.max(0, messages.length - recentRawMessageCount))
   const nextSummary = [
     summaryMemory.trim(),
     olderMessages
@@ -2329,7 +2547,7 @@ function compactMessageHistory(summaryMemory: string, messages: WorldPromptMessa
 
   return {
     summaryMemory: nextSummary,
-    recentMessages: messages.slice(-10),
+    recentMessages: messages.slice(-recentRawMessageCount),
     compacted: true,
   }
 }
@@ -4395,6 +4613,7 @@ function classifyPromptExecution(input: {
         ? 'answer_plus_options'
         : 'answer_plus_options'
     )
+  const suggestionDrivenWithActionableOps = Boolean(input.isSuggestionDriven && actionableOps.length > 0)
   const advisorySuggestions = dedupeSuggestions([
     ...(input.suggestionCandidates ?? []),
     ...(classificationHint === 'graph_diagnosis' || detectedIntent === 'graph_diagnosis'
@@ -4415,9 +4634,12 @@ function classifyPromptExecution(input: {
   ])
 
   if (
-    classificationHint === 'advisory_question'
-    || classificationHint === 'graph_diagnosis'
-    || (actionableOps.length === 0 && (detectedIntent === 'advisory_question' || detectedIntent === 'graph_diagnosis'))
+    !suggestionDrivenWithActionableOps
+    && (
+      classificationHint === 'advisory_question'
+      || classificationHint === 'graph_diagnosis'
+      || (actionableOps.length === 0 && (detectedIntent === 'advisory_question' || detectedIntent === 'graph_diagnosis'))
+    )
   ) {
     const advisoryClassification: PromptClassificationMode =
       classificationHint === 'graph_diagnosis' || detectedIntent === 'graph_diagnosis'
@@ -4443,7 +4665,13 @@ function classifyPromptExecution(input: {
     }
   }
 
-  if (isPlanOnlyPrompt(input.prompt) || classificationHint === 'graphable_plan_only' || actionableOps.length === 0 || classificationHint === 'not_graphable' || classificationHint === 'contradictory_or_low_confidence') {
+  if (
+    isPlanOnlyPrompt(input.prompt)
+    || (!suggestionDrivenWithActionableOps && classificationHint === 'graphable_plan_only')
+    || actionableOps.length === 0
+    || classificationHint === 'not_graphable'
+    || classificationHint === 'contradictory_or_low_confidence'
+  ) {
     const classification: PromptClassificationMode =
       classificationHint === 'contradictory_or_low_confidence'
         ? 'contradictory_or_low_confidence'
@@ -5237,6 +5465,9 @@ async function generatePromptPlan(input: {
     'Do not invent hard deletions. Use replace_entity only for explicit localized correction prompts where an existing node has the wrong identity or type.',
     'If the prompt asks for plan only, preview only, or no mutations, put the proposed applyable ops in wave1Ops, set classification to graphable_plan_only, and do not assume they will be applied immediately.',
     'When referring to existing world items, prefer targetEntityKey when obvious, otherwise use entity names and let the resolver match them.',
+    'A compact worldAtlas is included for orientation. Use it to recognize likely existing nodes even when the user misspells names or uses aliases, but do not treat atlas rows as full lore context.',
+    'Use relevantEntities, relevantRelationships, relevantThreads, recentMessages, and sessionMemory for rich canon decisions. Prefer explicit prompt matches and selected focus over stale older memory.',
+    'If retrieval diagnostics show ambiguity candidates and the prompt requires one specific existing node, choose only when the intended node is obvious; otherwise ask a concise clarification instead of mutating the wrong canon.',
     'Default to applyMode auto. Favor additive graph growth and avoid proposing semantic rewrites that would require human confirmation.',
     'When the user explicitly names entities, places, groups, concepts, or events, preserve those proper nouns verbatim and create graph nodes for newly introduced names instead of inventing replacements.',
     'Treat all world names and graph content as original project canon by default. Do not speculate that they are borrowed from or mapped to external IP unless the user explicitly asks for comparison or inspiration analysis.',
@@ -5246,6 +5477,9 @@ async function generatePromptPlan(input: {
     'For a simple direct creation prompt, wave1Ops should contain the named entities and the most obvious relationships before proposing any optional follow-up suggestions.',
     isSuggestionDriven
       ? 'The user selected one of your prior suggestions. Treat this as a request to execute that selected direction now; do not answer by repeating the same options again unless the selected suggestion is explicitly plan-only.'
+      : null,
+    isSuggestionDriven
+      ? 'For selected suggestions, do not describe the turn as "previewing" unless you are intentionally returning a non-applied plan-only answer. In normal selected-suggestion turns, produce concrete wave1Ops that can be applied now.'
       : null,
     entityRequirements.summary
       ? `The current prompt has explicit entity requirements: ${entityRequirements.summary}. Satisfy these in wave1Ops with concrete canon-ready names unless the request is contradictory.`
@@ -7476,12 +7710,16 @@ export async function startWorldPromptTurn(input: {
       diagnosticFindings: generated.diagnosticFindings,
       isSuggestionDriven: Boolean(payload.selectedSuggestionId),
     })
+    const opsToRun = execution.selectedOps
+    const { autoOps: autoRunnableOps, approvalOps: skippedRiskyOps } = splitPromptOpsByApproval(opsToRun)
+    const selectedSuggestionHadNoRunnableOps = Boolean(payload.selectedSuggestionId)
+      && autoRunnableOps.filter((op) => op.op !== 'assistant_note').length === 0
     const finalizedSuggestions = finalizeSuggestionSet({
       snapshot: planningSnapshot,
       selectedThreadKey: payload.selectedThreadKey,
       sourcePrompt: payload.prompt,
-      suggestions: execution.suggestions,
-      maxCount: payload.selectedSuggestionId ? 2 : 4,
+      suggestions: selectedSuggestionHadNoRunnableOps ? [] : execution.suggestions,
+      maxCount: payload.selectedSuggestionId ? 1 : 4,
     })
     const persistedSuggestions = await persistSessionSuggestions({
       client: input.client,
@@ -7523,8 +7761,6 @@ export async function startWorldPromptTurn(input: {
     const touchedEntityKeys = new Set<string>()
     const touchedRelationshipKeys = new Set<string>()
     let preferredAutoViewKey: string | null = null
-    const opsToRun = execution.selectedOps
-    const { autoOps: autoRunnableOps, approvalOps: skippedRiskyOps } = splitPromptOpsByApproval(opsToRun)
     const executionPreview = null
 
     if (execution.mode === 'blocked') {

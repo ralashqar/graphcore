@@ -939,7 +939,10 @@ export function buildWorldPromptTranscriptEntries(input: {
   }
   const hasAssistantMessageForEventText = (event: WorldPromptEvent, text: string) => {
     const normalized = normalizePromptTranscriptText(text)
-    return Boolean(normalized && assistantMessageTextByTurnId.get(event.turnId)?.has(normalized))
+    const turnTexts = assistantMessageTextByTurnId.get(event.turnId)
+    return Boolean(normalized && turnTexts && [...turnTexts].some((messageText) => (
+      messageText === normalized || messageText.includes(normalized)
+    )))
   }
 
   for (const source of sources) {

@@ -1138,7 +1138,7 @@ test('buildWorldPromptTranscriptEntries dedupes returned assistant notes and rep
     turnId: 't-threat',
     draftId: 'd1',
     role: 'assistant',
-    content: note,
+    content: `${note}\n\nChoose one of these directions when you are ready to apply it.`,
     metadata: {},
     createdAt: '2026-04-24T10:00:01.000Z',
   }]
@@ -1172,7 +1172,7 @@ test('buildWorldPromptTranscriptEntries dedupes returned assistant notes and rep
     entityByKey: new Map(),
   })
 
-  assert.equal(entries.filter((entry) => entry.kind === 'assistant_message' && entry.content === note).length, 1)
+  assert.equal(entries.filter((entry) => entry.kind === 'assistant_message' && entry.content?.includes(note)).length, 1)
   assert.equal(entries.filter((entry) => entry.kind === 'suggestion_set').length, 1)
 })
 
