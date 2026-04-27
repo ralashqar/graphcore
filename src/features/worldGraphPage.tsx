@@ -2334,7 +2334,7 @@ export function WorldGraphPage({
           targetHandle: WORLD_NODE_TARGET_HANDLE,
           selected: selectedWorldEdgeKey === relationship.key,
           label: edgeLabelForReveal(
-            relationship.notes.trim() || undefined,
+            relationship.notes.trim() || relationship.verb || undefined,
             reveal,
           ),
           animated: relationship.state !== 'confirmed',
@@ -3981,7 +3981,6 @@ export function WorldGraphPage({
                     })
                   } else if (edgeEditor.relationshipKey) {
                     await updateWorldRelationshipAndRefresh(edgeEditor.relationshipKey, {
-                      verb: 'related to',
                       notes: edgeEditor.notes.trim(),
                     })
                   }
@@ -4338,7 +4337,7 @@ export function WorldGraphPage({
             <div className="drawer-head">
               <div>
                 <span className="eyebrow">Relationship</span>
-                <h3>{inspectorRelationship.notes.trim() || 'Untitled Link'}</h3>
+                <h3>{inspectorRelationship.notes.trim() || inspectorRelationship.verb || 'Untitled Link'}</h3>
               </div>
             </div>
             <div className="editor-section compact-section">
@@ -4347,6 +4346,7 @@ export function WorldGraphPage({
                 {' -> '}
                 {(worldEntities.find((entity) => entity.key === inspectorRelationship.targetEntityKey)?.name ?? 'Missing target')}
               </div>
+              <div className="inline-note">Type: {inspectorRelationship.verb || 'related to'}</div>
               <label className="field-block">
                 <span>Connection note</span>
                 <textarea
@@ -4360,7 +4360,6 @@ export function WorldGraphPage({
                 <button
                   className="primary-button compact"
                   onClick={() => void updateWorldRelationshipAndRefresh(inspectorRelationship.key, {
-                    verb: 'related to',
                     notes: relationshipInspectorNotes.trim(),
                   })}
                   type="button"
@@ -4718,9 +4717,9 @@ export function WorldGraphPage({
                     relationship.sourceEntityKey === displayedInspectorEntity.key ? entity.key === relationship.targetEntityKey : entity.key === relationship.sourceEntityKey
                   )) ?? null
                   return (
-                    <div key={relationship.key} className="schema-card world-relationship-card">
+                      <div key={relationship.key} className="schema-card world-relationship-card">
                       <div className="schema-card-head">
-                        <strong>{relationship.notes.trim() || 'Relationship'}</strong>
+                        <strong>{relationship.notes.trim() || relationship.verb || 'Relationship'}</strong>
                         <div className="world-inspector-actions">
                           {counterpart ? <button className="ghost-button compact" onClick={() => selectWorldNode(counterpart.key)} type="button">Jump</button> : null}
                           <button className="ghost-button compact" onClick={() => setEdgeEditor({
@@ -4733,7 +4732,7 @@ export function WorldGraphPage({
                           <button className="ghost-button compact danger" onClick={() => void deleteWorldRelationshipAndRefresh(relationship.key)} type="button">Remove</button>
                         </div>
                       </div>
-                      <div className="inline-note">{counterpart?.name ?? 'Missing link'} · {relationship.direction} · {relationship.source}</div>
+                      <div className="inline-note">{counterpart?.name ?? 'Missing link'} · {relationship.verb || 'related to'} · {relationship.direction} · {relationship.source}</div>
                     </div>
                   )
                 })}
