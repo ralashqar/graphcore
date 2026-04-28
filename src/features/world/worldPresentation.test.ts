@@ -213,7 +213,7 @@ test('buildWorldPromptTurnLenses derives an entity-only turn lens', () => {
 })
 
 test('buildWorldPromptTurnLenses includes every supported world entity node type', () => {
-  const nodeTypes = ['actor', 'group', 'place', 'object', 'concept', 'event'] satisfies WorldEntity['nodeType'][]
+  const nodeTypes = ['actor', 'group', 'place', 'object', 'concept', 'event', 'sequence_unit'] satisfies WorldEntity['nodeType'][]
   const entities = nodeTypes.map((nodeType) => (
     createWorldPresentationTestEntity(`world.${nodeType}.sample`, `Sample ${nodeType}`, nodeType)
   ))

@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-export const worldEntityNodeTypeSchema = z.enum(['actor', 'group', 'place', 'object', 'concept', 'event'])
+export const worldEntityNodeTypeSchema = z.enum(['actor', 'group', 'place', 'object', 'concept', 'event', 'sequence_unit'])
 export const worldEntityStatusSchema = z.enum(['draft', 'active', 'locked', 'archived'])
 export const worldEntitySourceSchema = z.enum(['user', 'ai', 'inferred'])
 export const worldRelationshipStateSchema = z.enum(['confirmed', 'suggested', 'inferred'])
@@ -13,6 +13,7 @@ export const worldViewKindSchema = z.enum([
   'place_map',
   'lore_cluster',
   'timeline_overview',
+  'sequence_overview',
   'wiki_overview',
   'wiki_entity_profile',
   'wiki_thread_arc',
@@ -33,6 +34,17 @@ const looseRecordSchema = z.record(z.string(), z.unknown())
 
 export const worldTimelineCertaintySchema = z.enum(['explicit', 'inferred', 'ambiguous', 'floating'])
 export const worldTemporalRelationshipKindSchema = z.enum(['before', 'after', 'during', 'overlaps', 'causes'])
+export const worldSequenceUnitKindSchema = z.enum(['chapter', 'episode', 'mission', 'quest', 'campaign_moment', 'ugc_beat'])
+export const worldSequenceStoryFunctionSchema = z.enum([
+  'setup',
+  'inciting_incident',
+  'rising_action',
+  'turning_point',
+  'crisis',
+  'climax',
+  'resolution',
+])
+export const worldSequenceConsequenceTypeSchema = z.enum(['plot', 'character', 'world_state', 'relationship', 'stakes'])
 
 export const worldEventTimelineMetadataSchema = z.object({
   timelineKey: z.string().default('canon'),
@@ -50,6 +62,38 @@ export const worldRelationshipTemporalMetadataSchema = z.object({
   impliesChronology: z.boolean().default(true),
   originalKind: worldTemporalRelationshipKindSchema.optional(),
 })
+
+export const worldSequenceConsequenceSchema = z.object({
+  cause: z.string().default(''),
+  effect: z.string().default(''),
+  affectedEntityKeys: z.array(z.string()).default([]),
+  threadKeys: z.array(z.string()).default([]),
+  consequenceType: worldSequenceConsequenceTypeSchema.default('plot'),
+})
+
+export const worldSequenceCharacterArcDeltaSchema = z.object({
+  actorKey: z.string().default(''),
+  before: z.string().default(''),
+  pressure: z.string().default(''),
+  choice: z.string().default(''),
+  after: z.string().default(''),
+})
+
+export const worldSequenceMetadataSchema = z.object({
+  unitKind: worldSequenceUnitKindSchema.default('chapter'),
+  sequenceKey: z.string().default('main'),
+  ordinal: z.number().nullable().default(null),
+  actLabel: z.string().default(''),
+  synopsis: z.string().default(''),
+  dramaticQuestion: z.string().default(''),
+  storyFunction: worldSequenceStoryFunctionSchema.default('rising_action'),
+  outcome: z.string().default(''),
+  consequences: z.array(worldSequenceConsequenceSchema).default([]),
+  characterArcDeltas: z.array(worldSequenceCharacterArcDeltaSchema).default([]),
+  openLoops: z.array(z.string()).default([]),
+  resolvedLoops: z.array(z.string()).default([]),
+  scriptExpansionReady: z.boolean().default(false),
+}).partial()
 
 export const worldWikiSectionKindSchema = z.enum([
   'overview',
@@ -447,6 +491,12 @@ export type WorldTimelineCertainty = z.infer<typeof worldTimelineCertaintySchema
 export type WorldTemporalRelationshipKind = z.infer<typeof worldTemporalRelationshipKindSchema>
 export type WorldEventTimelineMetadata = z.infer<typeof worldEventTimelineMetadataSchema>
 export type WorldRelationshipTemporalMetadata = z.infer<typeof worldRelationshipTemporalMetadataSchema>
+export type WorldSequenceUnitKind = z.infer<typeof worldSequenceUnitKindSchema>
+export type WorldSequenceStoryFunction = z.infer<typeof worldSequenceStoryFunctionSchema>
+export type WorldSequenceConsequenceType = z.infer<typeof worldSequenceConsequenceTypeSchema>
+export type WorldSequenceConsequence = z.infer<typeof worldSequenceConsequenceSchema>
+export type WorldSequenceCharacterArcDelta = z.infer<typeof worldSequenceCharacterArcDeltaSchema>
+export type WorldSequenceMetadata = z.infer<typeof worldSequenceMetadataSchema>
 export type WorldWikiSectionKind = z.infer<typeof worldWikiSectionKindSchema>
 export type WorldWikiPresentationMetadata = z.infer<typeof worldWikiPresentationMetadataSchema>
 export type WorldGraphSnapshot = z.infer<typeof worldGraphSnapshotSchema>

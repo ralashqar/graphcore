@@ -148,6 +148,7 @@ GraphCore runs AI workloads through protected Supabase Edge Functions that provi
 - World-prompt chat turns now return touched linked definition records alongside world-graph mutations so prompt-created characters, items, and environments appear immediately in their specialized workspaces without waiting on a later refresh cycle.
 - World-prompt chat turns now also return the completed turn's prompt messages, prompt events, suggestions, and touched threads in the `start-world-prompt-turn` response so the frontend can merge the submitted user prompt and assistant result immediately without depending on realtime timing or a broad snapshot reload.
 - World graph views now include a graph-native Wiki mode for readable world-bible presentation derived from entities, relationships, threads, timeline ordering, linked outputs, and lightweight wiki metadata.
+- World graph views now distinguish authored story sequence from in-world event chronology. `sequence_unit` nodes represent chapters, episodes, missions, campaign moments, or UGC beats, while `event` nodes remain diegetic world happenings.
 
 ### World Prompt Agent (`world-prompt`)
 **Purpose**: Runs GraphCore's live prompt-to-world graph chat for story-gardening style authoring over an ever-growing world graph.
@@ -174,6 +175,7 @@ GraphCore runs AI workloads through protected Supabase Edge Functions that provi
 - Maintains lightweight wiki presentation hints during prompt turns when canon naturally supports them, including loglines, synopsis text, role labels, short summaries, tone tags, and wiki section metadata
 - Maintains project-wide wiki overview metadata with planner-authored `update_world_wiki_metadata` ops in the same prompt turn, storing logline, synopsis, themes, tone tags, genre, core conflict, visual motifs, and freshness fingerprints in `project_drafts.metadata.worldWiki`
 - Includes wiki gap diagnostics in prompt retrieval so empty or weak wiki sections can be filled through targeted prompt turns without extra background LLM passes on every normal authoring turn
+- Uses authored sequence retrieval for Story project plot and chapter prompts. Sequence units carry synopsis, dramatic question, story function, outcome, consequences, character arc deltas, open/resolved loops, and script-expansion readiness metadata.
 
 **Architecture**:
 - Retrieval-first world authoring instead of generic chat memory
@@ -210,6 +212,7 @@ GraphCore runs AI workloads through protected Supabase Edge Functions that provi
 - Thread search now incorporates linked entity names and aliases for better recall
 - World Prompt canon creation is LLM-authored only; deterministic logic is limited to routing, retrieval, and safety checks
 - Event timeline canon is graph-native: `event` nodes carry optional display hints, event-to-event temporal relationships carry ordering metadata, and deterministic timeline derivation/validation can skip invalid or cyclic temporal links without inventing replacement chronology
+- Authored sequence canon is graph-native but separate from event chronology: `sequence_unit` nodes carry chapter/progression metadata, sequence-to-sequence relationships use verbs like `precedes`, `causes`, `complicates`, and `pays_off`, and they must not use event temporal relationship metadata.
 - Wiki presentation is graph-native and derived at render/retrieval time. The graph remains canonical; wiki metadata only improves display, and gap-fill buttons call the existing `start-world-prompt-turn` flow with targeted context.
 - Project-wide wiki presentation is metadata-only and low-cost: the planner may update it when retrieval marks wiki context as targeted or opportunistic, while backend validation caps and merges fields without deterministically writing replacement synopsis canon.
 - Thread canon is also LLM-authored during world-prompt turns; the backend validates and persists planner thread actions but does not synthesize fallback threads like `Emerging Story Thread`

@@ -199,6 +199,8 @@ export function definitionKindForWorldEntity(nodeType: WorldEntity['nodeType']):
       return 'concept'
     case 'event':
       return 'event'
+    case 'sequence_unit':
+      return null
     default:
       return null
   }
@@ -237,6 +239,8 @@ export function iconForWorldEntity(nodeType: WorldEntity['nodeType']): EntityIco
       return 'concept'
     case 'event':
       return 'event'
+    case 'sequence_unit':
+      return 'content'
     default:
       return 'content'
   }
@@ -256,6 +260,8 @@ export function labelForWorldEntity(nodeType: WorldEntity['nodeType']) {
       return 'Concept'
     case 'event':
       return 'Event'
+    case 'sequence_unit':
+      return 'Story Beat'
   }
 }
 
@@ -354,7 +360,7 @@ export function resultTypeForOperatorType(operatorType: WorldOperator['operatorT
 }
 
 export function isCanonicalWorldNodeType(nodeType: string): nodeType is WorldEntity['nodeType'] {
-  return ['actor', 'group', 'place', 'object', 'concept', 'event'].includes(nodeType)
+  return ['actor', 'group', 'place', 'object', 'concept', 'event', 'sequence_unit'].includes(nodeType)
 }
 
 export function getDerivedOperationsForEntityPair(
@@ -716,6 +722,19 @@ export function buildSuggestionsForEntity(
       relationshipDefaults: {
         sourceEntityKey: entity.key,
         verb: 'occurs in',
+      },
+    })
+  }
+
+  if (entity.nodeType === 'sequence_unit' && !hasRelationship(entity.key, relationships, (relationship) => ['precedes', 'causes', 'complicates', 'pays_off'].includes(relationship.verb))) {
+    suggestions.push({
+      id: `${entity.key}-sequence-bridge`,
+      title: 'Bridge the next chapter',
+      why: 'Authored story beats need a clear cause/effect link so the progression feels intentional.',
+      cta: 'link',
+      relationshipDefaults: {
+        sourceEntityKey: entity.key,
+        verb: 'causes',
       },
     })
   }

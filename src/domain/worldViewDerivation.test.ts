@@ -177,6 +177,33 @@ test('reconcileAutoManagedWorldViews creates a timeline overview when events exi
   assert.ok(getWorldViewSemanticMetadata(timelineView).sourceEntityKeys.includes(event.key))
 })
 
+test('reconcileAutoManagedWorldViews creates a sequence overview when authored story beats exist', () => {
+  const chapter = createEntity({
+    key: 'world.sequence.opening',
+    name: 'Opening Chapter',
+    nodeType: 'sequence_unit',
+    customProperties: {
+      sequence: {
+        unitKind: 'chapter',
+        sequenceKey: 'main',
+        ordinal: 1,
+        synopsis: 'The opening pressure begins.',
+        outcome: 'The protagonist commits to the problem.',
+        consequences: [{ cause: 'The call arrives.', effect: 'The protagonist leaves safety.', consequenceType: 'plot' }],
+      },
+    },
+  })
+  const result = reconcileAutoManagedWorldViews(createSnapshot({
+    worldEntities: [chapter],
+  }))
+  const sequenceView = result.worldViews.find((view) => getWorldViewSemanticMetadata(view).viewKind === 'sequence_overview') ?? null
+
+  assert.ok(sequenceView)
+  assert.equal(sequenceView.mode, 'timeline')
+  assert.equal(sequenceView?.name, 'Story Flow')
+  assert.ok(getWorldViewSemanticMetadata(sequenceView).sourceEntityKeys.includes(chapter.key))
+})
+
 test('reconcileAutoManagedWorldViews creates a wiki overview when graph content exists', () => {
   const actor = createEntity({ key: 'world.actor.lira-vey', name: 'Lira Vey', nodeType: 'actor' })
   const result = reconcileAutoManagedWorldViews(createSnapshot({

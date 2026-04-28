@@ -64,6 +64,10 @@ import {
   readWorldEventTimelineMetadata,
 } from '../domain/worldTimeline'
 import {
+  deriveWorldSequence,
+  readWorldSequenceMetadata,
+} from '../domain/worldSequence'
+import {
   deriveWorldWiki,
   type WorldWikiGap,
   type WorldWikiSection,
@@ -631,6 +635,8 @@ function defaultNameForWorldNodeType(nodeType: WorldEntity['nodeType']) {
       return 'New Lore'
     case 'event':
       return 'New Event'
+    case 'sequence_unit':
+      return 'New Story Beat'
   }
 }
 
@@ -1631,6 +1637,15 @@ export function WorldGraphPage({
     }),
     [worldEntities, worldRelationships],
   )
+  const derivedSequence = useMemo(
+    () => deriveWorldSequence({
+      entities: worldEntities,
+      relationships: worldRelationships,
+    }),
+    [worldEntities, worldRelationships],
+  )
+  const timelineShowsSequence = selectedViewMetadata.viewKind === 'sequence_overview'
+    || (presentationMode === 'story' && activeStoryThread?.linkedEntityKeys.some((key) => entityByKey.get(key)?.nodeType === 'sequence_unit'))
   const timelineEventKeys = useMemo(() => {
     if (selectedViewMetadata.viewKind === 'timeline_overview') {
       return new Set(derivedTimeline.events.map((event) => event.key))
@@ -1640,6 +1655,24 @@ export function WorldGraphPage({
     }
     return new Set(visibleEntityRecords.filter((record) => record.entity.nodeType === 'event').map((record) => record.entity.key))
   }, [activeStoryThread, derivedTimeline.events, entityByKey, presentationMode, selectedViewMetadata.viewKind, visibleEntityRecords])
+  const timelineSequenceUnitKeys = useMemo(() => {
+    if (selectedViewMetadata.viewKind === 'sequence_overview') {
+      return new Set(derivedSequence.units.map((unit) => unit.entity.key))
+    }
+    if (presentationMode === 'story' && activeStoryThread) {
+      return new Set(activeStoryThread.linkedEntityKeys.filter((key) => entityByKey.get(key)?.nodeType === 'sequence_unit'))
+    }
+    return new Set(visibleEntityRecords.filter((record) => record.entity.nodeType === 'sequence_unit').map((record) => record.entity.key))
+  }, [activeStoryThread, derivedSequence.units, entityByKey, presentationMode, selectedViewMetadata.viewKind, visibleEntityRecords])
+  const sequenceGroups = useMemo(
+    () => derivedSequence.groups
+      .map((group) => ({
+        ...group,
+        units: group.units.filter((unit) => timelineSequenceUnitKeys.has(unit.entity.key)),
+      }))
+      .filter((group) => group.units.length > 0),
+    [derivedSequence.groups, timelineSequenceUnitKeys],
+  )
   const timelineGroups = useMemo(
     () => derivedTimeline.orderedGroups
       .map((group) => ({
@@ -2366,6 +2399,24 @@ export function WorldGraphPage({
   const inspectorEntityRelationships = inspectorEntity
     ? worldRelationships.filter((relationship) => relationship.sourceEntityKey === inspectorEntity.key || relationship.targetEntityKey === inspectorEntity.key)
     : []
+  const inspectorSequenceNavigation = useMemo(() => {
+    if (!inspectorEntity || inspectorEntity.nodeType !== 'sequence_unit') return null
+    const previousLabels: string[] = []
+    const nextLabels: string[] = []
+    for (const relationship of worldRelationships) {
+      const verb = relationship.verb.trim().toLowerCase().replace(/[\s-]+/g, '_')
+      if (!['precedes', 'causes', 'complicates', 'pays_off'].includes(verb)) continue
+      if (relationship.targetEntityKey === inspectorEntity.key) {
+        const previous = entityByKey.get(relationship.sourceEntityKey)
+        if (previous?.nodeType === 'sequence_unit') previousLabels.push(previous.name)
+      }
+      if (relationship.sourceEntityKey === inspectorEntity.key) {
+        const next = entityByKey.get(relationship.targetEntityKey)
+        if (next?.nodeType === 'sequence_unit') nextLabels.push(next.name)
+      }
+    }
+    return { previousLabels, nextLabels }
+  }, [entityByKey, inspectorEntity, worldRelationships])
   const inspectorViewModel = useMemo<WorldInspectorViewModel | null>(() => buildWorldInspectorViewModel({
     entity: inspectorEntity,
     operator: inspectorOperator,
@@ -2377,12 +2428,14 @@ export function WorldGraphPage({
         : null,
     relationCount: inspectorEntityRelationships.length,
     usageCount: inspectorEntityUsage.length,
+    sequenceNavigation: inspectorSequenceNavigation,
   }), [
     imageUrlByEntityKey,
     imageUrlByResultKey,
     inspectorEntity,
     inspectorEntityRelationships.length,
     inspectorEntityUsage.length,
+    inspectorSequenceNavigation,
     inspectorOperator,
     inspectorResult,
   ])
@@ -3802,39 +3855,75 @@ export function WorldGraphPage({
             ) : viewMode === 'timeline' ? (
               <div className="world-alt-surface">
                 <div className="world-alt-surface-head">
-                  <span className="eyebrow">{presentationMode === 'story' ? 'Story Timeline' : 'Timeline'}</span>
+                  <span className="eyebrow">{timelineShowsSequence ? 'Story Flow' : presentationMode === 'story' ? 'Story Timeline' : 'Timeline'}</span>
                   <strong>{selectedView.name}</strong>
                 </div>
                 <div className="world-timeline-surface">
-                  {timelineGroups.length === 0 ? <div className="inline-note">No event chronology is visible in this view yet.</div> : null}
-                  {timelineGroups.map((group) => (
-                    <div key={group.index} className="world-timeline-group">
-                      <span className="eyebrow">Step {group.index + 1}</span>
-                      {group.events.map((event) => {
-                        const timeline = readWorldEventTimelineMetadata(event)
-                        const active = selectedWorldNodeKey === event.key || inspectorNodeKey === event.key
-                        const strictLinks = derivedTimeline.temporalRelationships.filter((relationship) => (
-                          relationship.beforeEventKey === event.key || relationship.afterEventKey === event.key
-                        )).length
-                        return (
-                          <button
-                            key={event.key}
-                            className={active ? 'world-timeline-card is-active' : 'world-timeline-card'}
-                            onClick={() => selectWorldNode(event.key)}
-                            type="button"
-                          >
-                            <span className="eyebrow">{timeline.era || timeline.timeLabel || labelForWorldEntity(event.nodeType)}</span>
-                            <strong>{event.name}</strong>
-                            <p>{event.summary || event.context || 'No summary yet.'}</p>
-                            <span>{strictLinks > 0 ? `${strictLinks} temporal link${strictLinks === 1 ? '' : 's'}` : 'Floating chronology'}</span>
-                          </button>
-                        )
-                      })}
-                    </div>
-                  ))}
-                  {derivedTimeline.conflicts.length > 0 ? (
-                    <div className="inline-note">{derivedTimeline.conflicts.length} timeline conflict{derivedTimeline.conflicts.length === 1 ? '' : 's'} need review.</div>
-                  ) : null}
+                  {timelineShowsSequence ? (
+                    <>
+                      {sequenceGroups.length === 0 ? <div className="inline-note">No authored story sequence is visible in this view yet.</div> : null}
+                      {sequenceGroups.map((group) => (
+                        <div key={group.sequenceKey} className="world-timeline-group">
+                          <span className="eyebrow">{group.sequenceKey === 'main' ? 'Main Sequence' : group.sequenceKey}</span>
+                          {group.units.map((unit, index) => {
+                            const sequence = readWorldSequenceMetadata(unit.entity)
+                            const active = selectedWorldNodeKey === unit.entity.key || inspectorNodeKey === unit.entity.key
+                            const sequenceLinks = derivedSequence.relationships.filter((relationship) => (
+                              relationship.sourceUnitKey === unit.entity.key || relationship.targetUnitKey === unit.entity.key
+                            )).length
+                            return (
+                              <button
+                                key={unit.entity.key}
+                                className={active ? 'world-timeline-card is-active' : 'world-timeline-card'}
+                                onClick={() => selectWorldNode(unit.entity.key)}
+                                type="button"
+                              >
+                                <span className="eyebrow">{sequence.actLabel || `Step ${unit.ordinal ?? index + 1}`}</span>
+                                <strong>{unit.entity.name}</strong>
+                                <p>{sequence.synopsis || sequence.outcome || unit.entity.summary || unit.entity.context || 'No sequence synopsis yet.'}</p>
+                                <span>{sequenceLinks > 0 ? `${sequenceLinks} story link${sequenceLinks === 1 ? '' : 's'}` : 'Needs cause/effect bridge'}</span>
+                              </button>
+                            )
+                          })}
+                        </div>
+                      ))}
+                      {derivedSequence.gaps.length > 0 ? (
+                        <div className="inline-note">{derivedSequence.gaps.length} sequence gap{derivedSequence.gaps.length === 1 ? '' : 's'} need review.</div>
+                      ) : null}
+                    </>
+                  ) : (
+                    <>
+                      {timelineGroups.length === 0 ? <div className="inline-note">No event chronology is visible in this view yet.</div> : null}
+                      {timelineGroups.map((group) => (
+                        <div key={group.index} className="world-timeline-group">
+                          <span className="eyebrow">Step {group.index + 1}</span>
+                          {group.events.map((event) => {
+                            const timeline = readWorldEventTimelineMetadata(event)
+                            const active = selectedWorldNodeKey === event.key || inspectorNodeKey === event.key
+                            const strictLinks = derivedTimeline.temporalRelationships.filter((relationship) => (
+                              relationship.beforeEventKey === event.key || relationship.afterEventKey === event.key
+                            )).length
+                            return (
+                              <button
+                                key={event.key}
+                                className={active ? 'world-timeline-card is-active' : 'world-timeline-card'}
+                                onClick={() => selectWorldNode(event.key)}
+                                type="button"
+                              >
+                                <span className="eyebrow">{timeline.era || timeline.timeLabel || labelForWorldEntity(event.nodeType)}</span>
+                                <strong>{event.name}</strong>
+                                <p>{event.summary || event.context || 'No summary yet.'}</p>
+                                <span>{strictLinks > 0 ? `${strictLinks} temporal link${strictLinks === 1 ? '' : 's'}` : 'Floating chronology'}</span>
+                              </button>
+                            )
+                          })}
+                        </div>
+                      ))}
+                      {derivedTimeline.conflicts.length > 0 ? (
+                        <div className="inline-note">{derivedTimeline.conflicts.length} timeline conflict{derivedTimeline.conflicts.length === 1 ? '' : 's'} need review.</div>
+                      ) : null}
+                    </>
+                  )}
                 </div>
               </div>
             ) : viewMode === 'wiki' ? (
@@ -3967,7 +4056,7 @@ export function WorldGraphPage({
                   <strong>{selectedView.name}</strong>
                 </div>
                 <div className="world-board-surface">
-                  {(['actor', 'group', 'place', 'concept', 'event', 'object'] as const).map((nodeType) => {
+                  {(['actor', 'group', 'place', 'concept', 'event', 'sequence_unit', 'object'] as const).map((nodeType) => {
                     const rows = visibleEntityRecords.filter((record) => record.entity.nodeType === nodeType)
                     return (
                       <div key={nodeType} className="world-board-column">
@@ -4149,7 +4238,7 @@ export function WorldGraphPage({
           <div className="world-context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} onClick={(event) => event.stopPropagation()}>
             {contextMenu.kind === 'canvas' ? (
               <>
-                {(['actor', 'group', 'place', 'object', 'concept', 'event'] as const).map((nodeType) => (
+                {(['actor', 'group', 'place', 'object', 'concept', 'event', 'sequence_unit'] as const).map((nodeType) => (
                   <button key={nodeType} className="world-context-action" onClick={() => {
                     void handleQuickCreateEntity(nodeType, contextMenu.flowPosition)
                     setContextMenu(null)
@@ -4868,6 +4957,49 @@ export function WorldGraphPage({
                     }}
                   />
                 </label>
+                {inspectorViewModel?.sequence ? (
+                  <div className="schema-card">
+                    <div className="schema-card-head">
+                      <strong>Sequence Structure</strong>
+                    </div>
+                    {inspectorViewModel.sequence.synopsis ? <p>{inspectorViewModel.sequence.synopsis}</p> : null}
+                    {inspectorViewModel.sequence.dramaticQuestion ? <div className="inline-note">Question: {inspectorViewModel.sequence.dramaticQuestion}</div> : null}
+                    {inspectorViewModel.sequence.outcome ? <div className="inline-note">Outcome: {inspectorViewModel.sequence.outcome}</div> : null}
+                    {inspectorViewModel.sequence.previousLabels.length > 0 || inspectorViewModel.sequence.nextLabels.length > 0 ? (
+                      <div className="chip-row">
+                        {inspectorViewModel.sequence.previousLabels.map((label) => <span key={`previous:${label}`} className="chip">Prev: {label}</span>)}
+                        {inspectorViewModel.sequence.nextLabels.map((label) => <span key={`next:${label}`} className="chip">Next: {label}</span>)}
+                      </div>
+                    ) : null}
+                    {inspectorViewModel.sequence.consequences.length > 0 ? (
+                      <div className="world-choice-list">
+                        {inspectorViewModel.sequence.consequences.map((entry, index) => (
+                          <div key={`${entry.cause}:${entry.effect}:${index}`} className="inline-note">
+                            {entry.label}: {entry.cause}{' -> '}{entry.effect}
+                          </div>
+                        ))}
+                      </div>
+                    ) : <div className="inline-note">No cause/effect consequence recorded yet.</div>}
+                    {inspectorViewModel.sequence.characterArcDeltas.length > 0 ? (
+                      <details className="world-inline-disclosure">
+                        <summary>Character Arc Deltas</summary>
+                        <div className="world-choice-list">
+                          {inspectorViewModel.sequence.characterArcDeltas.map((entry, index) => (
+                            <div key={`${entry.actorKey}:${index}`} className="inline-note">
+                              {entityByKey.get(entry.actorKey)?.name ?? entry.actorKey}: {entry.before || 'before unclear'}{' -> '}{entry.after || 'after unclear'}
+                            </div>
+                          ))}
+                        </div>
+                      </details>
+                    ) : null}
+                    {inspectorViewModel.sequence.openLoops.length > 0 || inspectorViewModel.sequence.resolvedLoops.length > 0 ? (
+                      <div className="chip-row">
+                        {inspectorViewModel.sequence.openLoops.map((loop) => <span key={`open:${loop}`} className="chip">Open: {loop}</span>)}
+                        {inspectorViewModel.sequence.resolvedLoops.map((loop) => <span key={`resolved:${loop}`} className="chip">Resolved: {loop}</span>)}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
                 {selectedEntityThreads.length > 0 ? (
                   <div className="chip-row">
                     {selectedEntityThreads.map((thread) => (
@@ -5523,6 +5655,7 @@ function getWorldPromptTypeAccelerators(projectContext: ProjectContext | null) {
         { iconId: 'item' as const, label: 'Object', prompt: 'Create an important object or relic with meaning, history, and who wants it.' },
         { iconId: 'content' as const, label: 'Concept', prompt: 'Create a belief, law, prophecy, or abstract concept that shapes this world.' },
         { iconId: 'activity' as const, label: 'Event', prompt: 'Create a major event with consequences, participants, and lingering fallout.' },
+        { iconId: 'content' as const, label: 'Chapter', prompt: 'Create the next authored chapter with a synopsis, outcome, cause/effect consequence, and character development.' },
         { iconId: 'graph' as const, label: 'Any', prompt: 'Create whatever this world most needs next and connect it meaningfully.' },
       ]
   }
@@ -6465,6 +6598,7 @@ function EntityComposer({
           <option value="object">Item</option>
           <option value="concept">Lore</option>
           <option value="event">Event</option>
+          <option value="sequence_unit">Story Beat</option>
         </select>
       </label>
       <label className="field-block">

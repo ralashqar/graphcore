@@ -227,7 +227,7 @@ export const worldPromptSuggestionSchema = z.object({
   suggestedViewKey: z.string().nullable().optional(),
   targetRootEntityKey: z.string().nullable().optional(),
   preferredViewKind: worldViewKindSchema.nullable().optional(),
-  focusLayer: z.enum(['actor', 'group', 'place', 'concept', 'event', 'object', 'general']).optional(),
+  focusLayer: z.enum(['actor', 'group', 'place', 'concept', 'event', 'object', 'sequence', 'general']).optional(),
   retrievalHint: z.string().optional(),
   generatedReason: z.string().optional(),
   generatedFromTurnId: z.string().nullable().optional(),
@@ -365,7 +365,7 @@ export const worldPromptPlannerProgressSchema = z.object({
 export const worldPromptSessionFocusStateSchema = z.object({
   entityKeys: z.array(z.string()).default([]),
   threadKeys: z.array(z.string()).default([]),
-  focusLayer: z.enum(['actor', 'group', 'place', 'concept', 'event', 'object', 'general']).nullable().default(null),
+  focusLayer: z.enum(['actor', 'group', 'place', 'concept', 'event', 'object', 'sequence', 'general']).nullable().default(null),
   selectedRootEntityKey: z.string().nullable().default(null),
   selectedViewKey: z.string().nullable().default(null),
   selectedThreadKey: z.string().nullable().default(null),
@@ -377,7 +377,7 @@ export const worldPromptRecentTurnSummarySchema = z.object({
   prompt: z.string().default(''),
   assistantSummary: z.string().default(''),
   classification: worldPromptClassificationSchema.nullable().default(null),
-  focusLayer: z.enum(['actor', 'group', 'place', 'concept', 'event', 'object', 'general']).nullable().default(null),
+  focusLayer: z.enum(['actor', 'group', 'place', 'concept', 'event', 'object', 'sequence', 'general']).nullable().default(null),
   continuityMode: z.enum(['follow_up', 'topic_shift', 'fresh_question']).nullable().default(null),
   createdAt: z.string().default(''),
 })
@@ -453,7 +453,7 @@ export const worldPromptRetrievalDiagnosticsSchema = z.object({
     recentMessages: 0,
     fullAtlasIncluded: false,
   }),
-  chosenFocusLayer: z.enum(['actor', 'group', 'place', 'concept', 'event', 'object', 'general']).nullable().default(null),
+  chosenFocusLayer: z.enum(['actor', 'group', 'place', 'concept', 'event', 'object', 'sequence', 'general']).nullable().default(null),
   continuityMode: z.enum(['follow_up', 'topic_shift', 'fresh_question']).nullable().default(null),
   executionReason: z.string().default(''),
 })

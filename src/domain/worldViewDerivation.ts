@@ -7,6 +7,7 @@ import {
   type WorldViewKind,
   type WorldViewRefreshPolicy,
 } from './worldGraph.ts'
+import { deriveWorldSequence } from './worldSequence.ts'
 
 type ViewSnapshot = Pick<ProjectSnapshot, 'worldEntities' | 'worldRelationships' | 'worldViews' | 'worldThreads'>
 
@@ -174,6 +175,7 @@ export function getWorldViewRailGroup(view: Pick<WorldView, 'metadata'>) {
   const metadata = getWorldViewSemanticMetadata(view)
   if (metadata.viewKind === 'global_overview') return 'global'
   if (metadata.viewKind === 'thread_focus') return 'threads'
+  if (metadata.viewKind === 'sequence_overview') return 'core'
   if (metadata.autoManaged) return 'core'
   return 'manual'
 }
@@ -282,6 +284,10 @@ function buildAutoViewSpecs(snapshot: ViewSnapshot, options?: AutoManagedWorldVi
   const topGroup = selectTopEntityByScore(snapshot.worldEntities.filter((entity) => entity.nodeType === 'group'), groupScore)
   const topPlace = selectTopEntityByScore(snapshot.worldEntities.filter((entity) => entity.nodeType === 'place'), placeScore)
   const topLore = selectTopEntityByScore(snapshot.worldEntities.filter((entity) => entity.nodeType === 'concept' || entity.nodeType === 'event'), loreScore)
+  const sequence = deriveWorldSequence({
+    entities: snapshot.worldEntities,
+    relationships: snapshot.worldRelationships,
+  })
 
   specs.push({
     key: 'world.view.global-overview',
@@ -346,6 +352,22 @@ function buildAutoViewSpecs(snapshot: ViewSnapshot, options?: AutoManagedWorldVi
           .map((entity) => entity.key)
           .slice(0, 24),
         semanticLabel: 'Canonical event timeline',
+      }),
+    })
+  }
+
+  if (sequence.units.length > 0) {
+    specs.push({
+      key: 'world.view.sequence-overview',
+      name: 'Story Flow',
+      mode: 'timeline',
+      rootEntityKey: null,
+      focusDepth: 1,
+      sortMode: 'recent',
+      metadata: buildWorldViewMetadata({
+        viewKind: 'sequence_overview',
+        sourceEntityKeys: sequence.units.map((unit) => unit.entity.key).slice(0, 32),
+        semanticLabel: 'Authored story sequence',
       }),
     })
   }
@@ -427,10 +449,14 @@ function buildAutoViewSpecs(snapshot: ViewSnapshot, options?: AutoManagedWorldVi
       .map((entityKey) => entitiesByKey.get(entityKey))
       .filter((entity): entity is WorldEntity => Boolean(entity))
       .filter((entity) => entity.nodeType === 'event')
+    const linkedSequenceUnits = thread.linkedEntityKeys
+      .map((entityKey) => entitiesByKey.get(entityKey))
+      .filter((entity): entity is WorldEntity => Boolean(entity))
+      .filter((entity) => entity.nodeType === 'sequence_unit')
     specs.push({
       key: `world.view.thread-focus.${slugify(thread.key)}`,
       name: thread.title,
-      mode: linkedEvents.length >= 2 ? 'timeline' : 'graph',
+      mode: linkedSequenceUnits.length >= 2 || linkedEvents.length >= 2 ? 'timeline' : 'graph',
       rootEntityKey: null,
       focusDepth: 1,
       sortMode: 'recent',
@@ -521,6 +547,8 @@ export function choosePreferredWorldView(
           return 70 + ((metadata.sourceThreadKeys[0] && snapshot?.worldThreads.find((thread) => thread.key === metadata.sourceThreadKeys[0])?.priority === 'primary') ? 5 : 0)
         case 'recent_growth':
           return 65
+        case 'sequence_overview':
+          return 64
         case 'timeline_overview':
           return 62
         case 'wiki_overview':

@@ -101,6 +101,10 @@ import {
   wouldCreateWorldTimelineCycle,
 } from '../../../src/domain/worldTimeline.ts'
 import {
+  deriveWorldSequence,
+  readWorldSequenceMetadata,
+} from '../../../src/domain/worldSequence.ts'
+import {
   buildWorldWikiFingerprint,
   deriveWorldWiki,
   readProjectWorldWikiPresentation,
@@ -805,7 +809,7 @@ function buildNameVariants(value: string) {
 }
 
 type PromptIntentHint = 'graph_build' | 'advisory_question' | 'graph_diagnosis' | 'refinement_only'
-type PlannerFocusLayer = 'actor' | 'group' | 'place' | 'concept' | 'event' | 'object' | 'general'
+type PlannerFocusLayer = 'actor' | 'group' | 'place' | 'concept' | 'event' | 'object' | 'sequence' | 'general'
 type WorldPromptContinuityMode = 'follow_up' | 'topic_shift' | 'fresh_question'
 type WorldPromptResolvedMode = WorldPromptResolvedContext['resolvedMode']
 type WorldPromptResolvedIntent = WorldPromptResolvedContext['resolvedIntent']
@@ -890,6 +894,35 @@ type WorldPromptRetrievalPacket = {
       kind: string
       relationshipKey: string
       eventKeys: string[]
+      message: string
+    }>
+    diagnostics: string[]
+  }
+  sequenceContext: {
+    unitCount: number
+    groups: Array<{
+      sequenceKey: string
+      units: Array<{
+        key: string
+        label: string
+        ordinal: number | null
+        unitKind: string
+        synopsis: string
+        outcome: string
+        consequenceCount: number
+        characterArcDeltaCount: number
+      }>
+    }>
+    relationships: Array<{
+      key: string
+      sourceUnitKey: string
+      targetUnitKey: string
+      kind: string
+    }>
+    gaps: Array<{
+      kind: string
+      unitKeys: string[]
+      sequenceKey: string
       message: string
     }>
     diagnostics: string[]
@@ -994,6 +1027,9 @@ function looksLikeContextHeavyPrompt(prompt: string) {
 }
 
 function inferPlannerFocusLayer(prompt: string): PlannerFocusLayer {
+  if (/\b(chapter|chapters|episode|episodes|act|acts|plot|outline|story flow|story beat|story beats|sequence|sequential|progression|turning point|climax|resolution)\b/i.test(prompt)) {
+    return 'sequence'
+  }
   if (/\b(location|locations|place|places|city|cities|region|regions|district|districts|site|sites|landmark|landmarks|territory|territories|arena|arenas)\b/i.test(prompt)) {
     return 'place'
   }
@@ -1018,19 +1054,21 @@ function inferPlannerFocusLayer(prompt: string): PlannerFocusLayer {
 function preferredNodeTypesForFocusLayer(layer: PlannerFocusLayer): WorldEntity['nodeType'][] {
   switch (layer) {
     case 'place':
-      return ['place', 'group', 'concept', 'event', 'actor', 'object']
+      return ['place', 'group', 'concept', 'event', 'sequence_unit', 'actor', 'object']
     case 'actor':
-      return ['actor', 'group', 'place', 'concept', 'event', 'object']
+      return ['actor', 'sequence_unit', 'group', 'place', 'concept', 'event', 'object']
     case 'group':
-      return ['group', 'actor', 'place', 'concept', 'event', 'object']
+      return ['group', 'actor', 'place', 'concept', 'sequence_unit', 'event', 'object']
     case 'concept':
-      return ['concept', 'group', 'event', 'place', 'actor', 'object']
+      return ['concept', 'group', 'event', 'sequence_unit', 'place', 'actor', 'object']
     case 'event':
-      return ['event', 'place', 'group', 'actor', 'concept', 'object']
+      return ['event', 'sequence_unit', 'place', 'group', 'actor', 'concept', 'object']
     case 'object':
-      return ['object', 'concept', 'group', 'actor', 'place', 'event']
+      return ['object', 'concept', 'sequence_unit', 'group', 'actor', 'place', 'event']
+    case 'sequence':
+      return ['sequence_unit', 'event', 'actor', 'place', 'object', 'concept', 'group']
     default:
-      return ['actor', 'group', 'place', 'concept', 'event', 'object']
+      return ['actor', 'group', 'place', 'concept', 'event', 'sequence_unit', 'object']
   }
 }
 
@@ -1248,7 +1286,7 @@ function buildGraphDiagnosticFindings(input: {
   }
 
   const isolatedEntity = activeEntities
-    .filter((entity) => ['actor', 'group', 'place', 'concept', 'event'].includes(entity.nodeType))
+    .filter((entity) => ['actor', 'group', 'place', 'concept', 'event', 'sequence_unit'].includes(entity.nodeType))
     .find((entity) => (relationCounts.get(entity.key) ?? 0) === 0)
   if (isolatedEntity) {
     findings.push({
@@ -1282,6 +1320,7 @@ function buildGraphDiagnosticFindings(input: {
     place: activeEntities.filter((entity) => entity.nodeType === 'place').length,
     concept: activeEntities.filter((entity) => entity.nodeType === 'concept').length,
     event: activeEntities.filter((entity) => entity.nodeType === 'event').length,
+    sequence_unit: activeEntities.filter((entity) => entity.nodeType === 'sequence_unit').length,
   }
   if (typeCounts.actor === 0 || typeCounts.place === 0 || typeCounts.group === 0) {
     const missingLabels = [
@@ -1477,6 +1516,7 @@ function summarizeEntityForPlanner(
   },
 ) {
   const wiki = readWorldEntityWikiPresentation(entity)
+  const sequence = entity.nodeType === 'sequence_unit' ? readWorldSequenceMetadata(entity) : null
   return {
     key: entity.key,
     name: entity.name,
@@ -1493,6 +1533,21 @@ function summarizeEntityForPlanner(
       shortSummary: wiki.shortSummary ? trimPlannerText(wiki.shortSummary, 160) : '',
       hasPresentationSummary: Boolean(wiki.shortSummary || entity.summary.trim()),
     },
+    sequence: sequence
+      ? {
+          unitKind: sequence.unitKind ?? 'chapter',
+          sequenceKey: sequence.sequenceKey ?? 'main',
+          ordinal: sequence.ordinal ?? null,
+          actLabel: sequence.actLabel ? trimPlannerText(sequence.actLabel, 80) : '',
+          synopsis: sequence.synopsis ? trimPlannerText(sequence.synopsis, 220) : '',
+          dramaticQuestion: sequence.dramaticQuestion ? trimPlannerText(sequence.dramaticQuestion, 160) : '',
+          storyFunction: sequence.storyFunction ?? 'rising_action',
+          outcome: sequence.outcome ? trimPlannerText(sequence.outcome, 180) : '',
+          consequenceCount: sequence.consequences?.length ?? 0,
+          characterArcDeltaCount: sequence.characterArcDeltas?.length ?? 0,
+          scriptExpansionReady: sequence.scriptExpansionReady === true,
+        }
+      : null,
   }
 }
 
@@ -2050,6 +2105,71 @@ async function buildWorldPromptRetrievalPacket(input: {
       .slice(0, 8),
     diagnostics: timeline.diagnostics,
   }
+  const sequence = deriveWorldSequence({
+    entities: input.snapshot.worldEntities,
+    relationships: input.snapshot.worldRelationships,
+  })
+  const sequenceRelevantUnitKeys = new Set(
+    relevantEntities
+      .filter((entity) => entity.nodeType === 'sequence_unit')
+      .map((entity) => entity.key),
+  )
+  for (const thread of relevantThreads) {
+    for (const entityKey of thread.linkedEntityKeys) {
+      if (entityByKey.get(entityKey)?.nodeType === 'sequence_unit') sequenceRelevantUnitKeys.add(entityKey)
+    }
+  }
+  if (sequenceRelevantUnitKeys.size === 0 && input.intent.focusLayer === 'sequence') {
+    for (const unit of sequence.units.slice(0, 10)) {
+      sequenceRelevantUnitKeys.add(unit.entity.key)
+    }
+  }
+  const sequenceContext: WorldPromptRetrievalPacket['sequenceContext'] = {
+    unitCount: sequence.units.length,
+    groups: sequence.groups
+      .map((group) => ({
+        sequenceKey: group.sequenceKey,
+        units: group.units
+          .filter((unit) => sequenceRelevantUnitKeys.size === 0 || sequenceRelevantUnitKeys.has(unit.entity.key))
+          .slice(0, 12)
+          .map((unit) => ({
+            key: unit.entity.key,
+            label: unit.entity.name,
+            ordinal: unit.ordinal,
+            unitKind: unit.unitKind,
+            synopsis: trimPlannerText(unit.metadata.synopsis ?? unit.entity.summary, 220),
+            outcome: trimPlannerText(unit.metadata.outcome ?? '', 180),
+            consequenceCount: unit.metadata.consequences?.length ?? 0,
+            characterArcDeltaCount: unit.metadata.characterArcDeltas?.length ?? 0,
+          })),
+      }))
+      .filter((group) => group.units.length > 0)
+      .slice(0, 6),
+    relationships: sequence.relationships
+      .filter((relationship) => (
+        sequenceRelevantUnitKeys.size === 0
+        || sequenceRelevantUnitKeys.has(relationship.sourceUnitKey)
+        || sequenceRelevantUnitKeys.has(relationship.targetUnitKey)
+        || ftsRelationshipKeys.has(relationship.key)
+      ))
+      .slice(0, 16)
+      .map((relationship) => ({
+        key: relationship.key,
+        sourceUnitKey: relationship.sourceUnitKey,
+        targetUnitKey: relationship.targetUnitKey,
+        kind: relationship.kind,
+      })),
+    gaps: sequence.gaps
+      .filter((gap) => sequenceRelevantUnitKeys.size === 0 || gap.unitKeys.some((key) => sequenceRelevantUnitKeys.has(key)))
+      .slice(0, 12)
+      .map((gap) => ({
+        kind: gap.kind,
+        unitKeys: gap.unitKeys,
+        sequenceKey: gap.sequenceKey,
+        message: gap.message,
+      })),
+    diagnostics: sequence.diagnostics,
+  }
   const wiki = deriveWorldWiki({
     snapshot: input.snapshot,
     view: selectedView,
@@ -2156,6 +2276,7 @@ async function buildWorldPromptRetrievalPacket(input: {
     relevantRelationships,
     relevantThreads,
     timelineContext,
+    sequenceContext,
     wikiContext,
     worldAtlas,
     graphSignals: {
@@ -2168,6 +2289,7 @@ async function buildWorldPromptRetrievalPacket(input: {
         place: activeEntities.filter((entity) => entity.nodeType === 'place').length,
         concept: activeEntities.filter((entity) => entity.nodeType === 'concept').length,
         event: activeEntities.filter((entity) => entity.nodeType === 'event').length,
+        sequence_unit: activeEntities.filter((entity) => entity.nodeType === 'sequence_unit').length,
         object: activeEntities.filter((entity) => entity.nodeType === 'object').length,
       },
       anchorCount: anchorEntityKeys.size,
@@ -5517,8 +5639,8 @@ function describeProjectContextForPlanner(projectContext: WorldPromptSnapshot['p
       : projectContext.brainProfile === 'brand'
         ? 'Bias generation toward symbolic systems, signature assets, mascots, message pillars, campaign moments, and audience-facing world language.'
         : projectContext.brainProfile === 'ugc'
-          ? 'Bias generation toward hooks, proof beats, scenarios, creator personas, use-case objects, and repeatable social-native episodes.'
-          : 'Bias generation toward cast, factions, places, lore, conflicts, prophecy, secrets, and inciting events.'
+        ? 'Bias generation toward hooks, proof beats, scenarios, creator personas, use-case objects, and repeatable social-native episodes.'
+        : 'Bias generation toward cast, factions, places, lore, conflicts, prophecy, secrets, authored chapters, character development, and cause/effect story progression.'
   return [
     `Project type: ${projectLabel}.`,
     `Project subtype: ${subtypeLabel}.`,
@@ -5532,15 +5654,15 @@ function describeProjectContextForPlanner(projectContext: WorldPromptSnapshot['p
 function buildProjectContextSuggestionSeed(projectContext: WorldPromptSnapshot['projectContext']) {
   if (!projectContext) {
     return {
-      primaryLabel: 'Add Key Characters',
-      primaryPrompt: 'Continue this world by adding 2 or 3 key characters and connect them to the main conflict.',
-      primarySummary: 'Add a compact first cast and tie them into the seeded world conflict.',
-      secondaryLabel: 'Add Lore Layer',
-      secondaryPrompt: 'Continue this world by adding one hidden piece of lore and one event that deepen the central tension.',
-      secondarySummary: 'Deepen the seed with one lore thread and one consequence.',
-      repairLabel: 'Add Characters',
-      repairPrompt: 'Start this world by adding a protagonist and a rival, then connect them with a central conflict.',
-      repairSummary: 'Add one hero, one rival, and a clear conflict anchor.',
+      primaryLabel: 'Add Chapter Progression',
+      primaryPrompt: 'Continue this story by adding the next authored chapter as a sequence beat with a synopsis, outcome, cause/effect consequence, and links to the characters or places it changes.',
+      primarySummary: 'Add a story chapter that moves plot and character development forward.',
+      secondaryLabel: 'Bridge Chapter Consequences',
+      secondaryPrompt: 'Review the current story flow and add the missing cause/effect bridge between adjacent chapters or story beats.',
+      secondarySummary: 'Strengthen the authored sequence by connecting one chapter outcome to the next chapter pressure.',
+      repairLabel: 'Add Story Foundation',
+      repairPrompt: 'Start this story with a protagonist, a central conflict, and the first authored chapter sequence beat with a clear outcome and consequence.',
+      repairSummary: 'Turn the vague request into a usable story foundation and first chapter.',
     }
   }
 
@@ -5583,15 +5705,15 @@ function buildProjectContextSuggestionSeed(projectContext: WorldPromptSnapshot['
       }
     default:
       return {
-        primaryLabel: 'Add Key Characters',
-        primaryPrompt: 'Continue this world by adding 2 or 3 key characters and connect them to the main conflict.',
-        primarySummary: 'Add a compact first cast and tie them into the seeded world conflict.',
-        secondaryLabel: 'Add Lore Layer',
-        secondaryPrompt: 'Continue this world by adding one hidden piece of lore and one event that deepen the central tension.',
-        secondarySummary: 'Deepen the seed with one lore thread and one consequence.',
-        repairLabel: 'Add Characters',
-        repairPrompt: 'Start this world by adding a protagonist and a rival, then connect them with a central conflict.',
-        repairSummary: 'Add one hero, one rival, and a clear conflict anchor.',
+        primaryLabel: 'Add Chapter Progression',
+        primaryPrompt: 'Continue this story by adding the next authored chapter as a sequence beat with a synopsis, outcome, cause/effect consequence, and links to the characters or places it changes.',
+        primarySummary: 'Add a story chapter that moves plot and character development forward.',
+        secondaryLabel: 'Bridge Chapter Consequences',
+        secondaryPrompt: 'Review the current story flow and add the missing cause/effect bridge between adjacent chapters or story beats.',
+        secondarySummary: 'Strengthen the authored sequence by connecting one chapter outcome to the next chapter pressure.',
+        repairLabel: 'Add Story Foundation',
+        repairPrompt: 'Start this story with a protagonist, a central conflict, and the first authored chapter sequence beat with a clear outcome and consequence.',
+        repairSummary: 'Turn the vague request into a usable story foundation and first chapter.',
       }
   }
 }
@@ -5857,6 +5979,15 @@ async function generatePromptPlan(input: {
     'Prefer relative temporal relationships over invented dates. Do not invent exact dates, years, or total ordering unless the user provides them.',
     'Leave event chronology floating, ask a concise clarification, or offer a concrete next suggestion when event order is ambiguous.',
     'Existing temporal relationship metadata appears in retrieval.relevantRelationships and retrieval.timelineContext. Preserve that chronology unless the user explicitly asks for a correction.',
+    'Authored story progression is separate from event chronology. Use sequence_unit nodes for chapters, episodes, acts, plot outlines, story beats, missions, campaign moments, and UGC beats.',
+    'For Story projects, prompts about chapters, episodes, acts, plot progression, outlines, sequential stories, or story flow should create or update sequence_unit nodes first. Use event nodes only for diegetic happenings inside those chapters.',
+    'For sequence_unit customProperties.sequence, include unitKind, sequenceKey, ordinal, actLabel when relevant, synopsis, dramaticQuestion, storyFunction, outcome, consequences, characterArcDeltas, openLoops, resolvedLoops, and scriptExpansionReady.',
+    'A Story sequence_unit should have a compact synopsis, an outcome, and at least one cause/effect consequence or characterArcDelta. Consequences must explain why the chapter exists and how it moves plot, stakes, relationships, world state, or character development forward.',
+    'Use sequence_unit-to-sequence_unit relationships with verbs precedes, causes, complicates, or pays_off to express authored story order and causal progression. Do not put relationship.metadata.temporal on sequence_unit links.',
+    'Link sequence_unit nodes to actors, places, objects, events, concepts, and threads when they matter. Useful verbs include features, changes, pressures, reveals, set_in, uses, depicts, contains, reframes, and reveals_lore.',
+    'For Game, Brand, and UGC projects, sequence_unit is allowed but label it appropriately: mission/quest, campaign_moment, or ugc_beat. Keep validation lighter than Story chapters unless the user asks for story-style structure.',
+    'Do not queue cinematic generation just because a sequence_unit is created. Set sequence.scriptExpansionReady when the chapter has enough synopsis, outcome, linked entities, and consequences to support a later scene/shot expansion.',
+    'Existing authored sequence state appears in retrieval.sequenceContext. Preserve ordinal and cause/effect bridges unless the user explicitly asks for a correction.',
     'For wiki/presentation readiness, use entity customProperties.wiki or metadata.wiki for entity display hints such as roleLabel, shortSummary, and wikiSections.',
     'For project-wide wiki presentation, use update_world_wiki_metadata with target "project" and compact metadata fields: logline, synopsis, genre, themes, toneTags, coreConflict, visualMotifs. Use target "view" with targetViewKey only for custom wiki page metadata.',
     'Do not add a separate planner pass for wiki writing. Include update_world_wiki_metadata only in the same wave1Ops response when retrieval.wikiContext.updatePolicy is "targeted" or "opportunistic".',

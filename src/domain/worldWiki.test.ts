@@ -277,6 +277,44 @@ test('deriveWorldWiki reports gaps for missing presentation summaries and floati
   assert.ok(wiki.gaps.some((gap) => gap.kind === 'timeline_order'))
 })
 
+test('deriveWorldWiki uses sequence units for story flow before falling back to events', () => {
+  const chapter = createEntity({
+    key: 'world.sequence.opening',
+    name: 'Opening Chapter',
+    nodeType: 'sequence_unit',
+    summary: 'The authored opening chapter.',
+    customProperties: {
+      sequence: {
+        unitKind: 'chapter',
+        sequenceKey: 'main',
+        ordinal: 1,
+        synopsis: 'The protagonist accepts the call.',
+        outcome: 'The safe life is no longer possible.',
+        consequences: [{ cause: 'The call exposes a hidden threat.', effect: 'The protagonist leaves home.', consequenceType: 'plot' }],
+      },
+    },
+  })
+  const event = createEntity({ key: 'world.event.call', name: 'The Call', nodeType: 'event' })
+  const thread = createThread({
+    key: 'world.thread.opening',
+    title: 'Opening Arc',
+    linkedEntityKeys: [chapter.key, event.key],
+  })
+  const wiki = deriveWorldWiki({
+    snapshot: createSnapshot({
+      worldEntities: [chapter, event],
+      worldThreads: [thread],
+    }),
+  })
+  const storyFlow = wiki.sections.find((section) => section.kind === 'timeline')
+  const threadPage = wiki.threadPages.find((page) => page.thread.key === thread.key)
+
+  assert.deepEqual(storyFlow?.entityKeys, [chapter.key])
+  assert.ok(storyFlow?.summary.includes('authored story beat'))
+  assert.deepEqual(threadPage?.sequenceUnitKeys, [chapter.key])
+  assert.deepEqual(threadPage?.eventKeys, [event.key])
+})
+
 test('deriveWorldWiki scopes custom wiki views to source entities', () => {
   const included = createEntity({ key: 'world.actor.included', name: 'Included', nodeType: 'actor', summary: 'Included profile.' })
   const hidden = createEntity({ key: 'world.actor.hidden', name: 'Hidden', nodeType: 'actor', summary: 'Hidden profile.' })

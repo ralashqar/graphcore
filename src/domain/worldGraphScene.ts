@@ -158,6 +158,8 @@ function entityTypeVisibilityBonus(nodeType: WorldEntity['nodeType']) {
       return 7
     case 'event':
       return 6
+    case 'sequence_unit':
+      return 8
     case 'object':
       return 4
   }

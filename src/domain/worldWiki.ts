@@ -8,6 +8,7 @@ import {
   type WorldWikiSectionKind,
 } from './worldGraph.ts'
 import { deriveWorldTimeline, type WorldTimelineModel } from './worldTimeline.ts'
+import { deriveWorldSequence, type WorldSequenceModel } from './worldSequence.ts'
 import type { WorldThread } from './worldThread.ts'
 import { getWorldViewSemanticMetadata } from './worldViewDerivation.ts'
 
@@ -40,6 +41,7 @@ export type WorldWikiThreadPage = {
   title: string
   summary: string
   entityKeys: string[]
+  sequenceUnitKeys: string[]
   eventKeys: string[]
   gapKeys: string[]
 }
@@ -72,6 +74,7 @@ export type WorldWikiModel = {
   sections: WorldWikiSection[]
   entityProfiles: WorldWikiEntityProfile[]
   threadPages: WorldWikiThreadPage[]
+  sequence: WorldSequenceModel
   timeline: WorldTimelineModel
   gaps: WorldWikiGap[]
   diagnostics: string[]
@@ -162,6 +165,10 @@ export function buildWorldWikiFingerprint(input: WikiSnapshot) {
     entities: activeEntities,
     relationships: input.worldRelationships,
   })
+  const sequence = deriveWorldSequence({
+    entities: activeEntities,
+    relationships: input.worldRelationships,
+  })
   return [
     'wiki-v1',
     input.project.id,
@@ -169,6 +176,8 @@ export function buildWorldWikiFingerprint(input: WikiSnapshot) {
     Object.keys(countsByType).sort().map((key) => `${key}:${countsByType[key]}`).join(','),
     `relationships:${input.worldRelationships.length}`,
     `events:${timeline.events.length}`,
+    `sequence:${sequence.units.length}`,
+    `sequenceGaps:${sequence.gaps.length}`,
     `floating:${timeline.floatingEventKeys.length}`,
     `conflicts:${timeline.conflicts.length}`,
     `top:${topEntityKeys.join(',')}`,
@@ -313,6 +322,13 @@ export function deriveWorldWiki(input: {
       || (scopedEntityKeys.has(relationship.sourceEntityKey) && scopedEntityKeys.has(relationship.targetEntityKey))
     )),
   })
+  const sequence = deriveWorldSequence({
+    entities: input.snapshot.worldEntities.filter((entity) => scopedEntityKeys.size === 0 || scopedEntityKeys.has(entity.key)),
+    relationships: input.snapshot.worldRelationships.filter((relationship) => (
+      scopedEntityKeys.size === 0
+      || (scopedEntityKeys.has(relationship.sourceEntityKey) && scopedEntityKeys.has(relationship.targetEntityKey))
+    )),
+  })
   const resultEntityKeys = new Set(scopedEntityKeys)
   const relevantResults = input.snapshot.worldResults.filter((result) => {
     const connections = input.snapshot.worldGraphConnections.filter((connection) => connection.targetNodeKey === result.key || connection.sourceNodeKey === result.key)
@@ -341,8 +357,12 @@ export function deriveWorldWiki(input: {
     makeSection({
       kind: 'timeline',
       title: 'Story Flow',
-      summary: timeline.events.length > 0 ? `${timeline.events.length} event${timeline.events.length === 1 ? '' : 's'} in the derived chronology.` : 'No event chronology yet.',
-      entityKeys: events.slice(0, 12).map((entity) => entity.key),
+      summary: sequence.units.length > 0
+        ? `${sequence.units.length} authored story beat${sequence.units.length === 1 ? '' : 's'} in the sequence.`
+        : timeline.events.length > 0 ? `${timeline.events.length} event${timeline.events.length === 1 ? '' : 's'} in the derived chronology.` : 'No story sequence or event chronology yet.',
+      entityKeys: sequence.units.length > 0
+        ? sequence.units.slice(0, 12).map((unit) => unit.entity.key)
+        : events.slice(0, 12).map((entity) => entity.key),
     }),
     makeSection({
       kind: 'places',
@@ -415,6 +435,7 @@ export function deriveWorldWiki(input: {
     title: thread.title,
     summary: thread.summary,
     entityKeys: thread.linkedEntityKeys.filter((key) => scopedEntityKeys.has(key)),
+    sequenceUnitKeys: thread.linkedEntityKeys.filter((key) => entityByKey.get(key)?.nodeType === 'sequence_unit'),
     eventKeys: thread.linkedEntityKeys.filter((key) => entityByKey.get(key)?.nodeType === 'event'),
     gapKeys: thread.summary.trim() ? [] : ['thread_summary'],
   }))
@@ -490,7 +511,7 @@ export function deriveWorldWiki(input: {
       sectionKind: 'threads',
     })
   }
-  if (timeline.floatingEventKeys.length > 1) {
+  if (sequence.units.length === 0 && timeline.floatingEventKeys.length > 1) {
     gaps.push({
       key: 'world-wiki-gap-timeline-order',
       kind: 'timeline_order',
@@ -518,6 +539,7 @@ export function deriveWorldWiki(input: {
     gaps.length > 0 ? `${gaps.length} wiki gap${gaps.length === 1 ? '' : 's'} available for prompt fill.` : 'No major wiki gaps detected.',
     wikiStale ? 'Project wiki overview may be stale relative to the current graph.' : null,
     ...timeline.diagnostics,
+    ...sequence.diagnostics,
   ].filter((value): value is string => Boolean(value))
 
   return {
@@ -538,6 +560,7 @@ export function deriveWorldWiki(input: {
     sections,
     entityProfiles,
     threadPages,
+    sequence,
     timeline,
     gaps,
     diagnostics,

@@ -15,6 +15,7 @@ import { worldPromptEventPayloadSchema, worldPromptPlanPreviewSchema } from '../
 import type { WorldEntity, WorldOperator, WorldResult } from '../../domain/worldGraph.ts'
 import type { WorldGraphDepthMode, WorldSceneDisplayTier, WorldSceneTransitionState } from '../../domain/worldGraphScene.ts'
 import { labelForWorldEntity } from '../../domain/worldGraphHelpers.ts'
+import { readWorldSequenceMetadata } from '../../domain/worldSequence.ts'
 
 const WORLD_INSPECTOR_REFINEMENT_HISTORY_LIMIT = 5
 
@@ -215,6 +216,17 @@ export type WorldInspectorViewModel = {
   context: string
   imageUrl: string | null
   stats: string[]
+  sequence: {
+    synopsis: string
+    dramaticQuestion: string
+    outcome: string
+    consequences: Array<{ cause: string; effect: string; label: string }>
+    characterArcDeltas: Array<{ actorKey: string; before: string; pressure: string; choice: string; after: string }>
+    openLoops: string[]
+    resolvedLoops: string[]
+    previousLabels: string[]
+    nextLabels: string[]
+  } | null
   refinementHistory: WorldInspectorRefinementHistoryItem[]
 }
 
@@ -304,6 +316,7 @@ export function buildWorldGraphFilterState(input?: Partial<WorldGraphDisplayFilt
     filters.objects ? 'object' : null,
     filters.concepts ? 'concept' : null,
     filters.events ? 'event' : null,
+    filters.events ? 'sequence_unit' : null,
   ].filter((value): value is WorldEntity['nodeType'] => value !== null)
 
   return {
@@ -511,7 +524,9 @@ export function nodeShellStyle(
               ? ['rgba(250, 204, 21, 0.32)', 'rgba(161, 98, 7, 0.12)', 'rgba(254, 240, 138, 0.2)', '#fcd34d']
               : record.entity.nodeType === 'concept'
                 ? ['rgba(196, 181, 253, 0.32)', 'rgba(109, 40, 217, 0.12)', 'rgba(221, 214, 254, 0.18)', '#d8b4fe']
-                : ['rgba(251, 146, 60, 0.3)', 'rgba(194, 65, 12, 0.12)', 'rgba(254, 215, 170, 0.18)', '#fdba74']
+                : record.entity.nodeType === 'sequence_unit'
+                  ? ['rgba(244, 114, 182, 0.3)', 'rgba(190, 24, 93, 0.12)', 'rgba(251, 207, 232, 0.18)', '#f9a8d4']
+                  : ['rgba(251, 146, 60, 0.3)', 'rgba(194, 65, 12, 0.12)', 'rgba(254, 215, 170, 0.18)', '#fdba74']
       : record.kind === 'operator'
         ? ['rgba(148, 163, 184, 0.28)', 'rgba(51, 65, 85, 0.12)', 'rgba(226, 232, 240, 0.16)', '#e2e8f0']
         : ['rgba(226, 232, 240, 0.24)', 'rgba(71, 85, 105, 0.12)', 'rgba(226, 232, 240, 0.16)', '#f8fafc']
@@ -1536,19 +1551,46 @@ export function buildWorldInspectorViewModel(input: {
   imageUrl?: string | null
   relationCount?: number
   usageCount?: number
+  sequenceNavigation?: {
+    previousLabels: string[]
+    nextLabels: string[]
+  } | null
 }): WorldInspectorViewModel | null {
   if (input.entity) {
+    const sequence = input.entity.nodeType === 'sequence_unit'
+      ? readWorldSequenceMetadata(input.entity)
+      : null
     return {
       title: input.entity.name,
       kicker: labelForWorldEntity(input.entity.nodeType),
       summary: input.entity.summary,
-      context: input.entity.context,
+      context: sequence?.synopsis || input.entity.context,
       imageUrl: input.imageUrl ?? null,
       stats: [
         `${input.relationCount ?? 0} relationships`,
         `${input.usageCount ?? 0} usages`,
+        sequence?.ordinal !== undefined && sequence?.ordinal !== null ? `Step ${sequence.ordinal}` : null,
+        sequence?.actLabel ? sequence.actLabel : null,
+        sequence?.storyFunction ? sequence.storyFunction.replace(/_/g, ' ') : null,
         input.entity.source === 'ai' ? 'AI-sourced' : 'Manual',
-      ],
+      ].filter((value): value is string => Boolean(value)),
+      sequence: sequence
+        ? {
+            synopsis: sequence.synopsis ?? input.entity.context,
+            dramaticQuestion: sequence.dramaticQuestion ?? '',
+            outcome: sequence.outcome ?? '',
+            consequences: (sequence.consequences ?? []).map((entry) => ({
+              cause: entry.cause,
+              effect: entry.effect,
+              label: entry.consequenceType.replace(/_/g, ' '),
+            })),
+            characterArcDeltas: sequence.characterArcDeltas ?? [],
+            openLoops: sequence.openLoops ?? [],
+            resolvedLoops: sequence.resolvedLoops ?? [],
+            previousLabels: input.sequenceNavigation?.previousLabels ?? [],
+            nextLabels: input.sequenceNavigation?.nextLabels ?? [],
+          }
+        : null,
       refinementHistory: buildWorldRefinementHistoryViewModel(input.entity.metadata),
     }
   }
@@ -1561,6 +1603,7 @@ export function buildWorldInspectorViewModel(input: {
       context: '',
       imageUrl: null,
       stats: [`${input.operator.inputEntityKeys.length} inputs`],
+      sequence: null,
       refinementHistory: [],
     }
   }
@@ -1576,6 +1619,7 @@ export function buildWorldInspectorViewModel(input: {
         input.result.status,
         typeof input.result.metadata?.cinematicGraphKey === 'string' ? 'Linked cinematic' : 'Standalone result',
       ],
+      sequence: null,
       refinementHistory: [],
     }
   }
