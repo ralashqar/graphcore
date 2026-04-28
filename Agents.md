@@ -153,6 +153,7 @@ GraphCore runs AI workloads through protected Supabase Edge Functions that provi
 - World state consistency checking
 - Dynamic content expansion
 - World-prompt chat turns now return touched linked definition records alongside world-graph mutations so prompt-created characters, items, and environments appear immediately in their specialized workspaces without waiting on a later refresh cycle.
+- World-prompt chat turns now also return the completed turn's prompt messages, prompt events, suggestions, and touched threads in the `start-world-prompt-turn` response so the frontend can merge the submitted user prompt and assistant result immediately without depending on realtime timing or a broad snapshot reload.
 
 ### World Prompt Agent (`world-prompt`)
 **Purpose**: Runs GraphCore's live prompt-to-world graph chat for story-gardening style authoring over an ever-growing world graph.
@@ -162,12 +163,16 @@ GraphCore runs AI workloads through protected Supabase Edge Functions that provi
 - Applies actionable world-building changes immediately and answers in advisory mode when the prompt is non-mutating
 - Maintains structured session memory for active focus, background focus, recent turns, and retrieved graph context
 - Persists actionable suggestions with machine-readable target metadata
+- Maintains a neighborhood-first world view layer with auto-managed semantic views such as protagonist neighborhoods, faction/place maps, lore clusters, thread-focus views, recent-growth views, and a separate global overview
+- Uses the active selected world view as a first-class retrieval anchor, and can switch the session-selected view to a newly relevant neighborhood when a prompt causes a real topic pivot
 - Ranks next-step suggestions using both planner ideas and story-seed signals such as protagonist, villain, ruler, factions, lore, and missing inciting events
 - Completes underspecified support entities on direct world-building turns by reusing a strong existing match when available or inventing a concrete named entity instead of emitting placeholder canon
 - Reconciles entity summaries, contexts, and relationship notes additively while preserving prior refinements in append-only metadata history
 - Syncs shared world-entity fields (`name`, `summary`, icon, tags) into linked definition records during prompt-driven world mutations
 - Returns touched linked definition records from `start-world-prompt-turn` so prompt-created or prompt-updated characters, items, groups, concepts, events, and environments appear immediately in their specialized workspaces
+- Returns updated prompt suggestion records from `start-world-prompt-turn`, including used and superseded records, so selected suggestions disappear immediately and do not loop back into the same suggestion set
 - Exposes linked world context and world-graph relationships inside the specialized definition workspaces through the `linkedDefinitionKey` bridge, including deep links back into the graph and across linked records
+- Uses planner-authored thread lifecycle actions so world-prompt turns can create, deepen, reprioritize, resolve, park, or relink story threads without backend-invented fallback thread canon
 
 **Architecture**:
 - Retrieval-first world authoring instead of generic chat memory
@@ -198,12 +203,20 @@ GraphCore runs AI workloads through protected Supabase Edge Functions that provi
 **Operational Notes**:
 - The graph remains the source of truth; chat history is continuity support only
 - Apply paths refresh touched entities and threads from live DB state before mutating
+- After manual graph edits and mutating prompt turns, the system recomputes and persists auto-managed `world_views` so the world surface stays neighborhood-first instead of collapsing into one global graph
 - Linked definition records are a synced projection layer for shared identity fields; world-only narrative state such as `context`, threads, and relationships remains canonical on the world graph
 - Character, content, and environment workspaces render linked world context and relationships directly from the graph instead of duplicating relationship storage into `project_definitions`
 - Thread search now incorporates linked entity names and aliases for better recall
 - World Prompt canon creation is LLM-authored only; deterministic logic is limited to routing, retrieval, and safety checks
+- Thread canon is also LLM-authored during world-prompt turns; the backend validates and persists planner thread actions but does not synthesize fallback threads like `Emerging Story Thread`
 - Hosted planner output is retried once if it still contains placeholder entities or unresolved descriptor-only relationship endpoints, and mutating turns fail or degrade to non-mutating behavior instead of writing deterministic fallback canon
 - The live chat no longer uses preview/apply-first-wave or manual approval as the default UX; risky unresolved ops are skipped with an immediate assistant note instead of creating a pending review queue
+- Suggestion records can now carry view-targeting metadata (`suggestedViewKey`, `targetRootEntityKey`, `preferredViewKind`) so clicking a suggestion can continue from a more appropriate neighborhood or thread view
+- Selecting a prompt suggestion is treated as an instruction to execute that suggestion as a compact world-building step by default, unless the suggestion is explicitly plan-only
+- Count-explicit seed prompts now produce planner-side entity requirements from the user text, such as requested character, faction, place, and artifact counts. Direct-build scope caps expand only for those count-explicit world-seeding turns so a prompt like “three major characters, two rival factions, one artifact” can land as one coherent first wave instead of silently staging required entities into follow-up work.
+- During direct world-building, malformed `upsert_entity` ops that point at an existing entity key while carrying a different new entity name are treated as new additive entities when there is no clear same-name match. This avoids skipping simple seed-world creations as semantic rewrites while preserving approval pressure for explicit correction/replacement prompts.
+- Temporary direct-apply behavior: ops annotated only as `Semantic rewrite of existing entity` are allowed to run instead of being skipped, so frustrating false positives do not drop entity creation/refinement turns. Other risky cases such as ambiguous matches, missing targets, canon-locked touches, and collapsed relationship endpoints remain skipped.
+- World-prompt application now treats linked projections as an invariant for core authoring entity types: `actor` nodes must have `character` records, `place` nodes must have `environment` records, and `object` nodes must have `item` records. Prompt-created and prompt-touched entities are repaired after mutation if a linked definition is missing, and shared identity fields continue syncing through `linkedDefinitionKey`.
 
 ### UGC Psychology Agent
 **Purpose**: Applies research-backed psychological principles to optimize content for viral spread and user engagement.

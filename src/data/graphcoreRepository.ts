@@ -90,10 +90,13 @@ import {
   deriveMissingWorldViews,
   isAutoDerivedWorldEntity,
   isAutoDerivedWorldView,
+  isAutoManagedWorldView,
+  reconcileAutoManagedWorldViews,
   resultTypeForOperatorType,
 } from '../domain/worldGraphHelpers'
 import {
   cinematicRunSchema,
+  cinematicRunJobSchema,
   cinematicRunStatusResponseSchema,
   type CinematicRunCancelRequest,
   type CinematicRunStatusResponse,
@@ -120,6 +123,7 @@ import {
 import {
   getResourceGenerationMetadata,
   worldBuildAuthorCinematicRequestSchema,
+  worldBuildJobSchema,
   worldBuildPlanResponseSchema,
   worldBuildDeletePlaceholderResponseSchema,
   worldBuildRepairCinematicRequestSchema,
@@ -388,6 +392,125 @@ type SnapshotLoadResult = {
   reason?: string
 }
 
+export type SnapshotLoadProfile = 'shell' | 'world' | 'content' | 'jobs' | 'full'
+
+type SnapshotLoadOptions = {
+  profile?: SnapshotLoadProfile
+  promptHistoryLimit?: number
+  skipCache?: boolean
+}
+
+export type DraftRevision = number
+export const GRAPHCORE_CACHE_SCHEMA_VERSION = 'world-cache-v1' as const
+export type GraphCoreCacheSchemaVersion = typeof GRAPHCORE_CACHE_SCHEMA_VERSION
+
+export type DraftDeltaResponse = {
+  currentRevision: DraftRevision
+  requiresSnapshot: boolean
+  changedKeysByTable: Record<string, string[]>
+  deletedKeysByTable: Record<string, string[]>
+  compactRows: Record<string, unknown[]>
+}
+
+export type GraphCoreClientCacheSnapshot = {
+  projectId: string
+  draftId: string
+  cacheSchemaVersion: GraphCoreCacheSchemaVersion
+  lastRevision: DraftRevision
+  cachedAt: string
+  snapshot: ProjectSnapshot
+}
+
+const DEFAULT_SNAPSHOT_LOAD_PROFILE: SnapshotLoadProfile = 'world'
+const DEFAULT_PROMPT_HISTORY_LIMIT = 30
+const POSTGREST_EGRESS_WARNING_BYTES = 250_000
+const WORLD_BUILD_ACTIVE_STATUSES = ['planned', 'running'] as const
+const MESH_GENERATION_ACTIVE_STATUSES = ['queued', 'submitting', 'running'] as const
+const CINEMATIC_RUN_ACTIVE_STATUSES = ['queued', 'running'] as const
+const GRAPHCORE_CACHE_DB_NAME = 'graphcore-client-cache'
+const GRAPHCORE_CACHE_DB_VERSION = 1
+const GRAPHCORE_CACHE_STORE = 'snapshots'
+
+function isEgressDebugEnabled() {
+  return typeof import.meta !== 'undefined'
+    && typeof import.meta.env?.VITE_GRAPHCORE_EGRESS_DEBUG === 'string'
+    && import.meta.env.VITE_GRAPHCORE_EGRESS_DEBUG.toLowerCase() === 'true'
+}
+
+function estimateJsonBytes(value: unknown) {
+  try {
+    return new TextEncoder().encode(JSON.stringify(value ?? null)).length
+  } catch {
+    return 0
+  }
+}
+
+function logPostgrestEgress(input: {
+  table: string
+  profile: SnapshotLoadProfile
+  caller: string
+  data: unknown
+}) {
+  const bytes = estimateJsonBytes(input.data)
+  if (!isEgressDebugEnabled() && bytes < POSTGREST_EGRESS_WARNING_BYTES) return
+  const rows = Array.isArray(input.data) ? input.data.length : input.data ? 1 : 0
+  const level = bytes >= POSTGREST_EGRESS_WARNING_BYTES ? 'warn' : 'info'
+  console[level]('[GraphCore] PostgREST payload', {
+    caller: input.caller,
+    profile: input.profile,
+    table: input.table,
+    rows,
+    bytes,
+  })
+}
+
+function emptyPostgrestResponse() {
+  return { data: [], error: null, status: 200, statusText: 'OK', count: null }
+}
+
+function postgrestStatus(response: { status?: number }) {
+  return response.status ?? 200
+}
+
+function cacheKeyForProjectDraft(projectId: string, draftId: string) {
+  return `graphcore:project:${projectId}:draft:${draftId}:cache:v1`
+}
+
+function openGraphCoreCacheDb(): Promise<IDBDatabase | null> {
+  if (typeof indexedDB === 'undefined') return Promise.resolve(null)
+  return new Promise((resolve) => {
+    const request = indexedDB.open(GRAPHCORE_CACHE_DB_NAME, GRAPHCORE_CACHE_DB_VERSION)
+    request.onupgradeneeded = () => {
+      const db = request.result
+      if (!db.objectStoreNames.contains(GRAPHCORE_CACHE_STORE)) {
+        db.createObjectStore(GRAPHCORE_CACHE_STORE, { keyPath: 'cacheKey' })
+      }
+    }
+    request.onerror = () => resolve(null)
+    request.onsuccess = () => resolve(request.result)
+  })
+}
+
+async function withCacheStore<T>(
+  mode: IDBTransactionMode,
+  action: (store: IDBObjectStore) => IDBRequest<T>,
+): Promise<T | null> {
+  const db = await openGraphCoreCacheDb()
+  if (!db) return null
+  return new Promise((resolve) => {
+    const transaction = db.transaction(GRAPHCORE_CACHE_STORE, mode)
+    const store = transaction.objectStore(GRAPHCORE_CACHE_STORE)
+    const request = action(store)
+    request.onerror = () => resolve(null)
+    request.onsuccess = () => resolve(request.result ?? null)
+    transaction.oncomplete = () => db.close()
+    transaction.onerror = () => {
+      db.close()
+      resolve(null)
+    }
+  })
+}
+
 type WorkspaceMembershipRow = {
   role: ProjectSnapshot['workspace']['role']
   workspace: { id: string; name: string; slug: string } | Array<{ id: string; name: string; slug: string }>
@@ -477,6 +600,10 @@ function definitionKindForWorldNodeType(nodeType: WorldEntity['nodeType']): Defi
     default:
       return null
   }
+}
+
+function worldEntityRequiresLinkedDefinition(nodeType: WorldEntity['nodeType']) {
+  return nodeType === 'actor' || nodeType === 'place' || nodeType === 'object'
 }
 
 function buildWorldEntityKey(existingKeys: string[], nodeType: WorldEntity['nodeType'], seed: string) {
@@ -578,7 +705,7 @@ async function reloadLiveSnapshot(snapshot: ProjectSnapshot) {
   const reloaded = await loadProjectSnapshot({
     projectId: snapshot.project.id,
     draftId: snapshot.draft.id,
-  })
+  }, { profile: 'world' })
 
   if (reloaded.source !== 'supabase') {
     throw new Error(reloaded.reason ?? 'World graph reload fell back to the demo snapshot unexpectedly.')
@@ -594,7 +721,7 @@ async function createLinkedDefinitionForWorldEntity(
   const definitionKind = definitionKindForWorldNodeType(input.nodeType)
   if (!definitionKind) return { linkedDefinitionKey: null, linkedDefinition: null }
   if (input.linkedDefinitionKey) return { linkedDefinitionKey: input.linkedDefinitionKey, linkedDefinition: null }
-  if (!input.ensureLinkedDefinition) return { linkedDefinitionKey: null, linkedDefinition: null }
+  if (!input.ensureLinkedDefinition && !worldEntityRequiresLinkedDefinition(input.nodeType)) return { linkedDefinitionKey: null, linkedDefinition: null }
 
   const existingDefinitionKeys = snapshot.definitions
     .filter((definition) => definition.kind === definitionKind)
@@ -1623,6 +1750,71 @@ function mapWorldViewRow(view: WorldViewRow): WorldView {
   })
 }
 
+function serializeWorldViewRow(draftId: string, view: WorldView) {
+  return {
+    draft_id: draftId,
+    key: view.key,
+    name: view.name,
+    mode: view.mode,
+    filters: view.filters,
+    search: view.search,
+    root_entity_key: view.rootEntityKey,
+    camera: view.camera,
+    focus_depth: view.focusDepth,
+    show_suggestions: view.showSuggestions,
+    show_labels: view.showLabels,
+    show_derived_layer: view.showDerivedLayer,
+    node_positions: view.nodePositions,
+    collapsed_state: view.collapsedState,
+    sort_mode: view.sortMode,
+    metadata: view.metadata,
+  }
+}
+
+async function reconcilePersistedAutoManagedWorldViews(
+  snapshot: ProjectSnapshot,
+  options?: {
+    recentEntityKeys?: string[]
+    recentRelationshipKeys?: string[]
+    preferredRootEntityKey?: string | null
+    preferredThreadKey?: string | null
+  },
+) {
+  const reconciled = reconcileAutoManagedWorldViews(snapshot, options)
+  const desiredAutoViews = reconciled.worldViews.filter((view) => isAutoManagedWorldView(view))
+  const currentAutoViews = snapshot.worldViews.filter((view) => isAutoManagedWorldView(view))
+  const removedKeys = currentAutoViews
+    .map((view) => view.key)
+    .filter((key) => !desiredAutoViews.some((view) => view.key === key))
+
+  if (desiredAutoViews.length > 0) {
+    const upsertResponse = await supabase
+      .from('world_views')
+      .upsert(desiredAutoViews.map((view) => serializeWorldViewRow(snapshot.draft.id, view)), {
+        onConflict: 'draft_id,key',
+      })
+    if (upsertResponse.error) {
+      throw new Error(upsertResponse.error.message)
+    }
+  }
+
+  if (removedKeys.length > 0) {
+    const deleteResponse = await supabase
+      .from('world_views')
+      .delete()
+      .eq('draft_id', snapshot.draft.id)
+      .in('key', removedKeys)
+    if (deleteResponse.error) {
+      throw new Error(deleteResponse.error.message)
+    }
+  }
+
+  return {
+    ...snapshot,
+    worldViews: reconciled.worldViews,
+  }
+}
+
 function mapWorldOperatorRow(entry: WorldOperatorRow): WorldOperator {
   return {
     id: entry.id,
@@ -2054,7 +2246,15 @@ function deriveChoiceBody(
 
 export async function loadProjectSnapshot(
   selection?: { projectId?: string | null; draftId?: string | null },
+  options?: SnapshotLoadOptions,
 ): Promise<SnapshotLoadResult> {
+  const profile = options?.profile ?? DEFAULT_SNAPSHOT_LOAD_PROFILE
+  const promptHistoryLimit = Math.max(1, options?.promptHistoryLimit ?? DEFAULT_PROMPT_HISTORY_LIMIT)
+  const includeFull = profile === 'full'
+  const includeContent = profile === 'full' || profile === 'content' || profile === 'world'
+  const includeJobs = profile === 'full' || profile === 'jobs' || profile === 'world'
+  const includeWorld = profile !== 'shell'
+  const includeGraphDraft = profile === 'full' || profile === 'content'
   const {
     data: { session },
   } = await supabase.auth.getSession()
@@ -2115,8 +2315,64 @@ export async function loadProjectSnapshot(
     await setActiveWorkspaceGameState(workspace.id, project.id, draft.id)
   }
 
-  const definitionIds = await getDefinitionIds(draft.id)
-  const archetypeIds = await getArchetypeIds(draft.id)
+  if (profile === 'world' && !options?.skipCache) {
+    const cached = await loadCachedProjectSnapshot(project.id, draft.id)
+    if (cached) {
+      try {
+        const delta = await loadDraftDelta(draft.id, cached.lastRevision)
+        if (!delta.requiresSnapshot) {
+          const nextSnapshot = applyDraftDeltaToSnapshot(cached.snapshot, delta)
+          if (nextSnapshot.project.id !== project.id || nextSnapshot.draft.id !== draft.id) {
+            await clearProjectCache(project.id, draft.id)
+            console.warn('[GraphCore] discarded cached delta result with mismatched snapshot identity.', {
+              expectedProjectId: project.id,
+              expectedDraftId: draft.id,
+              cachedProjectId: nextSnapshot.project.id,
+              cachedDraftId: nextSnapshot.draft.id,
+            })
+            throw new Error('Cached snapshot identity mismatch.')
+          }
+          await saveCachedProjectSnapshot(nextSnapshot, delta.currentRevision)
+          return {
+            snapshot: nextSnapshot,
+            source: 'supabase',
+          }
+        }
+      } catch (cacheError) {
+        console.warn('[GraphCore] cached snapshot delta failed; falling back to compact snapshot.', cacheError)
+      }
+    }
+  }
+
+  const definitionIds = includeContent ? await getDefinitionIds(draft.id) : []
+  const archetypeIds = includeContent ? await getArchetypeIds(draft.id) : []
+  const definitionSelect = includeFull
+    ? 'id, key, kind, name, summary, status, icon_asset_key, archetype_key, tags, schema_version, metadata, llm_hints, asset_refs, definition_data'
+    : 'id, key, kind, name, summary, status, icon_asset_key, archetype_key, tags, schema_version, metadata, asset_refs'
+  const archetypeSelect = includeFull
+    ? 'id, key, name, summary, definition_kind, icon_asset_key, metadata, llm_hints'
+    : 'id, key, name, summary, definition_kind, icon_asset_key, metadata'
+  const assetSelect = includeFull
+    ? 'id, key, name, kind, mime_type, storage_path, metadata, llm_hints'
+    : 'id, key, name, kind, mime_type, storage_path, metadata'
+  const worldViewSelect = includeFull
+    ? WORLD_VIEW_SELECT
+    : 'id, key, name, mode, filters, search, root_entity_key, camera, focus_depth, show_suggestions, show_labels, show_derived_layer, collapsed_state, sort_mode, metadata, created_at, updated_at'
+  const worldPromptEventSelect = includeFull
+    ? WORLD_PROMPT_EVENT_SELECT
+    : 'id, session_id, turn_id, draft_id, sequence, event_type, op_id, payload, metadata, created_at'
+  const worldBuildBatchSelect = includeFull
+    ? 'id, draft_id, project_id, prompt, request_summary, planner_mode, status, diagnostics, plan_json, cinematic_plan, created_at, updated_at'
+    : 'id, draft_id, project_id, prompt, request_summary, planner_mode, status, diagnostics, created_at, updated_at'
+  const worldBuildJobSelect = includeFull
+    ? 'id, batch_id, plan_item_id, kind, status, depends_on_job_ids, target_keys, prompt, options, provider_request_id, status_url, response_url, cancel_url, result_context, error_message, order_index, created_at, updated_at'
+    : 'id, batch_id, plan_item_id, kind, status, depends_on_job_ids, target_keys, provider_request_id, status_url, response_url, cancel_url, error_message, order_index, created_at, updated_at'
+  const meshGenerationJobSelect = includeFull
+    ? 'id, project_id, draft_id, definition_key, source_image_asset_key, target_mesh_asset_key, provider, model, provider_request_id, status_url, response_url, cancel_url, status, provider_status, provider_logs, error_message, storage_path, created_at, updated_at'
+    : 'id, project_id, draft_id, definition_key, source_image_asset_key, target_mesh_asset_key, provider, model, provider_request_id, status_url, response_url, cancel_url, status, provider_status, error_message, storage_path, created_at, updated_at'
+  const cinematicRunJobSelect = includeFull
+    ? 'id, run_id, graph_key, shot_node_key, kind, status, order_index, depends_on_job_ids, still_asset_key, video_asset_key, provider, model, provider_request_id, error_message, prompt, result_context, created_at, updated_at'
+    : 'id, run_id, graph_key, shot_node_key, kind, status, order_index, depends_on_job_ids, still_asset_key, video_asset_key, provider, model, provider_request_id, error_message, created_at, updated_at'
 
   const [
     definitionsResponse,
@@ -2151,22 +2407,26 @@ export async function loadProjectSnapshot(
     patchSetsResponse,
     releasesResponse,
   ] = await Promise.all([
-    supabase
-      .from('project_definitions')
-      .select('id, key, kind, name, summary, status, icon_asset_key, archetype_key, tags, schema_version, metadata, llm_hints, asset_refs, definition_data')
-      .eq('draft_id', draft.id)
-      .order('created_at', { ascending: true }),
+    includeContent
+      ? supabase
+          .from('project_definitions')
+          .select(definitionSelect)
+          .eq('draft_id', draft.id)
+          .order('created_at', { ascending: true })
+      : Promise.resolve(emptyPostgrestResponse()),
     definitionIds.length > 0
       ? supabase
           .from('project_definition_components')
           .select('definition_id, component_type, config')
           .in('definition_id', definitionIds)
-      : Promise.resolve({ data: [], error: null }),
-    supabase
-      .from('project_archetypes')
-      .select('id, key, name, summary, definition_kind, icon_asset_key, metadata, llm_hints')
-      .eq('draft_id', draft.id)
-      .order('created_at', { ascending: true }),
+      : Promise.resolve(emptyPostgrestResponse()),
+    includeContent
+      ? supabase
+          .from('project_archetypes')
+          .select(archetypeSelect)
+          .eq('draft_id', draft.id)
+          .order('created_at', { ascending: true })
+      : Promise.resolve(emptyPostgrestResponse()),
     archetypeIds.length > 0
       ? supabase
           .from('project_archetype_fields')
@@ -2175,7 +2435,7 @@ export async function loadProjectSnapshot(
           .not('archetype_id', 'is', null)
           .in('archetype_id', archetypeIds)
           .order('sort_order', { ascending: true })
-      : Promise.resolve({ data: [], error: null }),
+      : Promise.resolve(emptyPostgrestResponse()),
     definitionIds.length > 0
       ? supabase
           .from('project_archetype_fields')
@@ -2184,153 +2444,259 @@ export async function loadProjectSnapshot(
           .not('definition_id', 'is', null)
           .in('definition_id', definitionIds)
           .order('sort_order', { ascending: true })
-      : Promise.resolve({ data: [], error: null }),
+      : Promise.resolve(emptyPostgrestResponse()),
     definitionIds.length > 0
       ? supabase
           .from('project_definition_field_values')
           .select('definition_id, field_key, value')
           .in('definition_id', definitionIds)
-      : Promise.resolve({ data: [], error: null }),
-    supabase
-      .from('draft_graphs')
-      .select('id, key, name, graph_type, summary, entry_node_key, metadata, llm_hints')
-      .eq('draft_id', draft.id)
-      .order('created_at', { ascending: true }),
-    supabase
-      .from('draft_graph_nodes')
-      .select('id, graph_id, key, node_type, title, template_key, subtitle, position_x, position_y, body, condition_expr, effect_ops, ports, display, metadata'),
-    supabase
-      .from('draft_graph_edges')
-      .select('id, graph_id, key, source_node_key, source_port, target_node_key, target_port, label, condition_expr, metadata'),
-    supabase
-      .from('draft_assembly_graphs')
-      .select('id, key, name, summary, bound_environment_key, metadata')
-      .eq('draft_id', draft.id)
-      .order('created_at', { ascending: true }),
-    supabase
-      .from('draft_assembly_nodes')
-      .select('id, assembly_graph_id, key, kind, title, subtitle, position_x, position_y, ports, params, metadata'),
-    supabase
-      .from('draft_assembly_edges')
-      .select('id, assembly_graph_id, key, source_node_key, source_port, target_node_key, target_port, metadata'),
-    supabase
-      .from('draft_environment_blueprints')
-      .select('id, key, environment_key, name, document')
-      .eq('draft_id', draft.id)
-      .order('created_at', { ascending: true }),
-    supabase
-      .from('project_assets')
-      .select('id, key, name, kind, mime_type, storage_path, metadata, llm_hints')
-      .eq('project_id', project.id)
-      .order('created_at', { ascending: true }),
-    supabase
-      .from('world_entities')
-      .select('id, key, name, summary, context, node_type, aliases, tags, status, thumbnail_asset_key, linked_definition_key, source, custom_properties, metadata, created_at, updated_at')
-      .eq('draft_id', draft.id)
-      .order('created_at', { ascending: true }),
-    supabase
-      .from('world_relationships')
-      .select('id, key, source_entity_id, target_entity_id, verb, direction, strength, confidence, source, notes, state, metadata, created_at, updated_at')
-      .eq('draft_id', draft.id)
-      .order('created_at', { ascending: true }),
-    supabase
-      .from('world_views')
-      .select('id, key, name, mode, filters, search, root_entity_key, camera, focus_depth, show_suggestions, show_labels, show_derived_layer, node_positions, collapsed_state, sort_mode, metadata, created_at, updated_at')
-      .eq('draft_id', draft.id)
-      .order('created_at', { ascending: true }),
-    supabase
-      .from('world_operators')
-      .select('id, key, operator_type, input_entity_keys, label, status, metadata, created_at, updated_at')
-      .eq('draft_id', draft.id)
-      .order('created_at', { ascending: true }),
-    supabase
-      .from('world_results')
-      .select('id, key, result_type, source_operator_key, title, summary, preview_asset_key, status, metadata, created_at, updated_at')
-      .eq('draft_id', draft.id)
-      .order('created_at', { ascending: true }),
-    supabase
-      .from('world_graph_connections')
-      .select('id, key, source_node_key, source_node_kind, target_node_key, target_node_kind, role, metadata, created_at, updated_at')
-      .eq('draft_id', draft.id)
-      .order('created_at', { ascending: true }),
-    supabase
-      .from('world_prompt_sessions')
-      .select(WORLD_PROMPT_SESSION_SELECT)
-      .eq('draft_id', draft.id)
-      .order('updated_at', { ascending: false }),
-    supabase
-      .from('world_prompt_turns')
-      .select(WORLD_PROMPT_TURN_SELECT)
-      .eq('draft_id', draft.id)
-      .order('created_at', { ascending: false }),
-    supabase
-      .from('world_prompt_messages')
-      .select(WORLD_PROMPT_MESSAGE_SELECT)
-      .eq('draft_id', draft.id)
-      .order('created_at', { ascending: true }),
-    supabase
-      .from('world_prompt_events')
-      .select(WORLD_PROMPT_EVENT_SELECT)
-      .eq('draft_id', draft.id)
-      .order('created_at', { ascending: true }),
-    supabase
-      .from('world_prompt_suggestions')
-      .select(WORLD_PROMPT_SUGGESTION_SELECT)
-      .eq('draft_id', draft.id)
-      .order('rank', { ascending: true })
-      .order('created_at', { ascending: false }),
-    supabase
-      .from('world_threads')
-      .select(WORLD_THREAD_SELECT)
-      .eq('draft_id', draft.id)
-      .order('updated_at', { ascending: false }),
-    supabase
-      .from('world_build_batches')
-      .select('id, draft_id, project_id, prompt, request_summary, planner_mode, status, diagnostics, plan_json, cinematic_plan, created_at, updated_at')
-      .eq('draft_id', draft.id)
-      .order('created_at', { ascending: false }),
-    supabase
-      .from('mesh_generation_jobs')
-      .select('id, project_id, draft_id, definition_key, source_image_asset_key, target_mesh_asset_key, provider, model, provider_request_id, status_url, response_url, cancel_url, status, provider_status, provider_logs, error_message, storage_path, created_at, updated_at')
-      .eq('draft_id', draft.id)
-      .order('created_at', { ascending: false }),
-    supabase
-      .from('cinematic_runs')
-      .select('id, draft_id, project_id, graph_key, graph_name, mode, status, shot_node_key, diagnostics, created_at, updated_at')
-      .eq('draft_id', draft.id)
-      .order('created_at', { ascending: false }),
-    supabase
-      .from('patch_sets')
-      .select('id, summary, prompt, status, operations, diagnostics')
-      .eq('draft_id', draft.id)
-      .order('created_at', { ascending: false }),
-    supabase
-      .from('releases')
-      .select('id, version, label, created_at')
-      .eq('project_id', project.id)
-      .order('created_at', { ascending: false }),
+      : Promise.resolve(emptyPostgrestResponse()),
+    includeGraphDraft
+      ? supabase
+          .from('draft_graphs')
+          .select('id, key, name, graph_type, summary, entry_node_key, metadata, llm_hints')
+          .eq('draft_id', draft.id)
+          .order('created_at', { ascending: true })
+      : Promise.resolve(emptyPostgrestResponse()),
+    includeGraphDraft
+      ? supabase
+          .from('draft_graph_nodes')
+          .select('id, graph_id, key, node_type, title, template_key, subtitle, position_x, position_y, body, condition_expr, effect_ops, ports, display, metadata')
+      : Promise.resolve(emptyPostgrestResponse()),
+    includeGraphDraft
+      ? supabase
+          .from('draft_graph_edges')
+          .select('id, graph_id, key, source_node_key, source_port, target_node_key, target_port, label, condition_expr, metadata')
+      : Promise.resolve(emptyPostgrestResponse()),
+    includeGraphDraft
+      ? supabase
+          .from('draft_assembly_graphs')
+          .select('id, key, name, summary, bound_environment_key, metadata')
+          .eq('draft_id', draft.id)
+          .order('created_at', { ascending: true })
+      : Promise.resolve(emptyPostgrestResponse()),
+    includeGraphDraft
+      ? supabase
+          .from('draft_assembly_nodes')
+          .select('id, assembly_graph_id, key, kind, title, subtitle, position_x, position_y, ports, params, metadata')
+      : Promise.resolve(emptyPostgrestResponse()),
+    includeGraphDraft
+      ? supabase
+          .from('draft_assembly_edges')
+          .select('id, assembly_graph_id, key, source_node_key, source_port, target_node_key, target_port, metadata')
+      : Promise.resolve(emptyPostgrestResponse()),
+    includeFull
+      ? supabase
+          .from('draft_environment_blueprints')
+          .select('id, key, environment_key, name, document')
+          .eq('draft_id', draft.id)
+          .order('created_at', { ascending: true })
+      : Promise.resolve(emptyPostgrestResponse()),
+    includeContent
+      ? supabase
+          .from('project_assets')
+          .select(assetSelect)
+          .eq('project_id', project.id)
+          .order('created_at', { ascending: true })
+      : Promise.resolve(emptyPostgrestResponse()),
+    includeWorld
+      ? supabase
+          .from('world_entities')
+          .select(WORLD_ENTITY_SELECT)
+          .eq('draft_id', draft.id)
+          .order('created_at', { ascending: true })
+      : Promise.resolve(emptyPostgrestResponse()),
+    includeWorld
+      ? supabase
+          .from('world_relationships')
+          .select(WORLD_RELATIONSHIP_SELECT)
+          .eq('draft_id', draft.id)
+          .order('created_at', { ascending: true })
+      : Promise.resolve(emptyPostgrestResponse()),
+    includeWorld
+      ? supabase
+          .from('world_views')
+          .select(worldViewSelect)
+          .eq('draft_id', draft.id)
+          .order('created_at', { ascending: true })
+      : Promise.resolve(emptyPostgrestResponse()),
+    includeWorld
+      ? supabase
+          .from('world_operators')
+          .select(WORLD_OPERATOR_SELECT)
+          .eq('draft_id', draft.id)
+          .order('created_at', { ascending: true })
+      : Promise.resolve(emptyPostgrestResponse()),
+    includeWorld
+      ? supabase
+          .from('world_results')
+          .select(WORLD_RESULT_SELECT)
+          .eq('draft_id', draft.id)
+          .order('created_at', { ascending: true })
+      : Promise.resolve(emptyPostgrestResponse()),
+    includeWorld
+      ? supabase
+          .from('world_graph_connections')
+          .select(WORLD_CONNECTION_SELECT)
+          .eq('draft_id', draft.id)
+          .order('created_at', { ascending: true })
+      : Promise.resolve(emptyPostgrestResponse()),
+    includeWorld
+      ? supabase
+          .from('world_prompt_sessions')
+          .select(WORLD_PROMPT_SESSION_SELECT)
+          .eq('draft_id', draft.id)
+          .order('updated_at', { ascending: false })
+          .limit(promptHistoryLimit)
+      : Promise.resolve(emptyPostgrestResponse()),
+    includeWorld
+      ? supabase
+          .from('world_prompt_turns')
+          .select(WORLD_PROMPT_TURN_SELECT)
+          .eq('draft_id', draft.id)
+          .order('created_at', { ascending: false })
+          .limit(promptHistoryLimit)
+      : Promise.resolve(emptyPostgrestResponse()),
+    includeWorld
+      ? supabase
+          .from('world_prompt_messages')
+          .select(WORLD_PROMPT_MESSAGE_SELECT)
+          .eq('draft_id', draft.id)
+          .order('created_at', { ascending: false })
+          .limit(promptHistoryLimit * 3)
+      : Promise.resolve(emptyPostgrestResponse()),
+    includeWorld
+      ? supabase
+          .from('world_prompt_events')
+          .select(worldPromptEventSelect)
+          .eq('draft_id', draft.id)
+          .in('event_type', includeFull
+            ? ['turn_started', 'message_created', 'planner_status', 'assistant_note', 'op_applied', 'op_needs_approval', 'op_approved', 'op_rejected', 'queue_started', 'turn_cancel_requested', 'turn_completed', 'turn_failed']
+            : ['op_applied'])
+          .order('created_at', { ascending: false })
+          .limit(includeFull ? 1000 : promptHistoryLimit * 8)
+      : Promise.resolve(emptyPostgrestResponse()),
+    includeWorld
+      ? supabase
+          .from('world_prompt_suggestions')
+          .select(WORLD_PROMPT_SUGGESTION_SELECT)
+          .eq('draft_id', draft.id)
+          .order('rank', { ascending: true })
+          .order('created_at', { ascending: false })
+          .limit(promptHistoryLimit * 2)
+      : Promise.resolve(emptyPostgrestResponse()),
+    includeWorld
+      ? supabase
+          .from('world_threads')
+          .select(WORLD_THREAD_SELECT)
+          .eq('draft_id', draft.id)
+          .order('updated_at', { ascending: false })
+      : Promise.resolve(emptyPostgrestResponse()),
+    includeJobs
+      ? supabase
+          .from('world_build_batches')
+          .select(worldBuildBatchSelect)
+          .eq('draft_id', draft.id)
+          .in('status', includeFull ? ['planned', 'running', 'completed', 'completed_with_errors', 'failed', 'cancelled'] : [...WORLD_BUILD_ACTIVE_STATUSES])
+          .order('created_at', { ascending: false })
+          .limit(includeFull ? 100 : 20)
+      : Promise.resolve(emptyPostgrestResponse()),
+    includeJobs
+      ? supabase
+          .from('mesh_generation_jobs')
+          .select(meshGenerationJobSelect)
+          .eq('draft_id', draft.id)
+          .in('status', includeFull ? ['queued', 'submitting', 'running', 'succeeded', 'failed', 'cancelled'] : [...MESH_GENERATION_ACTIVE_STATUSES])
+          .order('created_at', { ascending: false })
+          .limit(includeFull ? 100 : 20)
+      : Promise.resolve(emptyPostgrestResponse()),
+    includeJobs
+      ? supabase
+          .from('cinematic_runs')
+          .select('id, draft_id, project_id, graph_key, graph_name, mode, status, shot_node_key, diagnostics, created_at, updated_at')
+          .eq('draft_id', draft.id)
+          .in('status', includeFull ? ['queued', 'running', 'completed', 'completed_with_errors', 'failed', 'cancelled'] : [...CINEMATIC_RUN_ACTIVE_STATUSES])
+          .order('created_at', { ascending: false })
+          .limit(includeFull ? 100 : 20)
+      : Promise.resolve(emptyPostgrestResponse()),
+    includeFull
+      ? supabase
+          .from('patch_sets')
+          .select('id, summary, prompt, status, operations, diagnostics')
+          .eq('draft_id', draft.id)
+          .order('created_at', { ascending: false })
+      : Promise.resolve(emptyPostgrestResponse()),
+    includeFull
+      ? supabase
+          .from('releases')
+          .select('id, version, label, created_at')
+          .eq('project_id', project.id)
+          .order('created_at', { ascending: false })
+      : Promise.resolve(emptyPostgrestResponse()),
   ])
 
+  const responseLogEntries = [
+    ['project_definitions', definitionsResponse],
+    ['project_definition_components', componentsResponse],
+    ['project_archetypes', archetypesResponse],
+    ['project_archetype_fields', archetypeFieldsResponse],
+    ['project_archetype_fields.custom', customFieldsResponse],
+    ['project_definition_field_values', fieldValuesResponse],
+    ['draft_graphs', graphsResponse],
+    ['draft_graph_nodes', nodesResponse],
+    ['draft_graph_edges', edgesResponse],
+    ['draft_assembly_graphs', assemblyGraphsResponse],
+    ['draft_assembly_nodes', assemblyNodesResponse],
+    ['draft_assembly_edges', assemblyEdgesResponse],
+    ['draft_environment_blueprints', environmentBlueprintsResponse],
+    ['project_assets', assetsResponse],
+    ['world_entities', worldEntitiesResponse],
+    ['world_relationships', worldRelationshipsResponse],
+    ['world_views', worldViewsResponse],
+    ['world_operators', worldOperatorsResponse],
+    ['world_results', worldResultsResponse],
+    ['world_graph_connections', worldGraphConnectionsResponse],
+    ['world_prompt_sessions', worldPromptSessionsResponse],
+    ['world_prompt_turns', worldPromptTurnsResponse],
+    ['world_prompt_messages', worldPromptMessagesResponse],
+    ['world_prompt_events', worldPromptEventsResponse],
+    ['world_prompt_suggestions', worldPromptSuggestionsResponse],
+    ['world_threads', worldThreadsResponse],
+    ['world_build_batches', worldBuildBatchesResponse],
+    ['mesh_generation_jobs', meshGenerationJobsResponse],
+    ['cinematic_runs', cinematicRunsResponse],
+    ['patch_sets', patchSetsResponse],
+    ['releases', releasesResponse],
+  ] as const
+  for (const [table, response] of responseLogEntries) {
+    logPostgrestEgress({
+      table,
+      profile,
+      caller: 'loadProjectSnapshot',
+      data: 'data' in response ? response.data : null,
+    })
+  }
+
   const assemblySchemaMissing =
-    assemblyGraphsResponse.status === 404
-    || assemblyNodesResponse.status === 404
-    || assemblyEdgesResponse.status === 404
+    postgrestStatus(assemblyGraphsResponse) === 404
+    || postgrestStatus(assemblyNodesResponse) === 404
+    || postgrestStatus(assemblyEdgesResponse) === 404
     || isMissingRelationError(assemblyGraphsResponse.error, 'draft_assembly_graphs')
     || isMissingRelationError(assemblyNodesResponse.error, 'draft_assembly_nodes')
     || isMissingRelationError(assemblyEdgesResponse.error, 'draft_assembly_edges')
   const blueprintSchemaMissing =
-    environmentBlueprintsResponse.status === 404
+    postgrestStatus(environmentBlueprintsResponse) === 404
     || isMissingRelationError(environmentBlueprintsResponse.error, 'draft_environment_blueprints')
   const worldBuildSchemaMissing =
-    worldBuildBatchesResponse.status === 404
+    postgrestStatus(worldBuildBatchesResponse) === 404
     || isMissingRelationError(worldBuildBatchesResponse.error, 'world_build_batches')
   const worldGraphSchemaMissing =
-    worldEntitiesResponse.status === 404
-    || worldRelationshipsResponse.status === 404
-    || worldViewsResponse.status === 404
-    || worldOperatorsResponse.status === 404
-    || worldResultsResponse.status === 404
-    || worldGraphConnectionsResponse.status === 404
+    postgrestStatus(worldEntitiesResponse) === 404
+    || postgrestStatus(worldRelationshipsResponse) === 404
+    || postgrestStatus(worldViewsResponse) === 404
+    || postgrestStatus(worldOperatorsResponse) === 404
+    || postgrestStatus(worldResultsResponse) === 404
+    || postgrestStatus(worldGraphConnectionsResponse) === 404
     || isMissingRelationError(worldEntitiesResponse.error, 'world_entities')
     || isMissingRelationError(worldRelationshipsResponse.error, 'world_relationships')
     || isMissingRelationError(worldViewsResponse.error, 'world_views')
@@ -2338,24 +2704,24 @@ export async function loadProjectSnapshot(
     || isMissingRelationError(worldResultsResponse.error, 'world_results')
     || isMissingRelationError(worldGraphConnectionsResponse.error, 'world_graph_connections')
   const worldPromptSchemaMissing =
-    worldPromptSessionsResponse.status === 404
-    || worldPromptTurnsResponse.status === 404
-    || worldPromptMessagesResponse.status === 404
-    || worldPromptEventsResponse.status === 404
-    || worldPromptSuggestionsResponse.status === 404
+    postgrestStatus(worldPromptSessionsResponse) === 404
+    || postgrestStatus(worldPromptTurnsResponse) === 404
+    || postgrestStatus(worldPromptMessagesResponse) === 404
+    || postgrestStatus(worldPromptEventsResponse) === 404
+    || postgrestStatus(worldPromptSuggestionsResponse) === 404
     || isMissingRelationError(worldPromptSessionsResponse.error, 'world_prompt_sessions')
     || isMissingRelationError(worldPromptTurnsResponse.error, 'world_prompt_turns')
     || isMissingRelationError(worldPromptMessagesResponse.error, 'world_prompt_messages')
     || isMissingRelationError(worldPromptEventsResponse.error, 'world_prompt_events')
     || isMissingRelationError(worldPromptSuggestionsResponse.error, 'world_prompt_suggestions')
   const worldThreadSchemaMissing =
-    worldThreadsResponse.status === 404
+    postgrestStatus(worldThreadsResponse) === 404
     || isMissingRelationError(worldThreadsResponse.error, 'world_threads')
   const meshGenerationSchemaMissing =
-    meshGenerationJobsResponse.status === 404
+    postgrestStatus(meshGenerationJobsResponse) === 404
     || isMissingRelationError(meshGenerationJobsResponse.error, 'mesh_generation_jobs')
   const cinematicRunSchemaMissing =
-    cinematicRunsResponse.status === 404
+    postgrestStatus(cinematicRunsResponse) === 404
     || isMissingRelationError(cinematicRunsResponse.error, 'cinematic_runs')
 
   if (definitionsResponse.error || archetypesResponse.error) {
@@ -2387,9 +2753,12 @@ export async function loadProjectSnapshot(
   const worldResults = worldGraphSchemaMissing ? [] : (worldResultsResponse.data as WorldResultRow[] | null) ?? []
   const worldGraphConnections = worldGraphSchemaMissing ? [] : (worldGraphConnectionsResponse.data as WorldGraphConnectionRow[] | null) ?? []
   const worldPromptSessions = worldPromptSchemaMissing ? [] : (worldPromptSessionsResponse.data as WorldPromptSessionRow[] | null) ?? []
-  const worldPromptTurns = worldPromptSchemaMissing ? [] : (worldPromptTurnsResponse.data as WorldPromptTurnRow[] | null) ?? []
-  const worldPromptMessages = worldPromptSchemaMissing ? [] : (worldPromptMessagesResponse.data as WorldPromptMessageRow[] | null) ?? []
-  const worldPromptEvents = worldPromptSchemaMissing ? [] : (worldPromptEventsResponse.data as WorldPromptEventRow[] | null) ?? []
+  const worldPromptTurns = (worldPromptSchemaMissing ? [] : (worldPromptTurnsResponse.data as WorldPromptTurnRow[] | null) ?? [])
+    .sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime())
+  const worldPromptMessages = (worldPromptSchemaMissing ? [] : (worldPromptMessagesResponse.data as WorldPromptMessageRow[] | null) ?? [])
+    .sort((left, right) => new Date(left.created_at).getTime() - new Date(right.created_at).getTime())
+  const worldPromptEvents = (worldPromptSchemaMissing ? [] : (worldPromptEventsResponse.data as WorldPromptEventRow[] | null) ?? [])
+    .sort((left, right) => new Date(left.created_at).getTime() - new Date(right.created_at).getTime() || left.sequence - right.sequence)
   const worldPromptSuggestions = worldPromptSchemaMissing ? [] : (worldPromptSuggestionsResponse.data as WorldPromptSuggestionRow[] | null) ?? []
   const worldThreads = worldThreadSchemaMissing ? [] : (worldThreadsResponse.data as WorldThreadRow[] | null) ?? []
   const worldBuildBatches = worldBuildSchemaMissing ? [] : (worldBuildBatchesResponse.data as WorldBuildBatchRow[] | null) ?? []
@@ -2401,8 +2770,9 @@ export async function loadProjectSnapshot(
       : (
           await supabase
             .from('world_build_jobs')
-            .select('id, batch_id, plan_item_id, kind, status, depends_on_job_ids, target_keys, prompt, options, provider_request_id, status_url, response_url, cancel_url, result_context, error_message, order_index, created_at, updated_at')
+            .select(worldBuildJobSelect)
             .in('batch_id', worldBuildBatches.map((batch) => batch.id))
+            .in('status', includeFull ? ['queued', 'running', 'succeeded', 'failed', 'skipped'] : ['queued', 'running'])
             .order('order_index', { ascending: true })
         ).data as WorldBuildJobRow[] | null ?? []
   const cinematicRunJobs =
@@ -2411,8 +2781,9 @@ export async function loadProjectSnapshot(
       : (
           await supabase
             .from('cinematic_run_jobs')
-            .select('id, run_id, graph_key, shot_node_key, kind, status, order_index, depends_on_job_ids, still_asset_key, video_asset_key, provider, model, provider_request_id, error_message, prompt, result_context, created_at, updated_at')
+            .select(cinematicRunJobSelect)
             .in('run_id', cinematicRuns.map((run) => run.id))
+            .in('status', includeFull ? ['queued', 'running', 'succeeded', 'failed', 'cancelled', 'skipped'] : ['queued', 'running'])
             .order('order_index', { ascending: true })
         ).data as CinematicRunJobRow[] | null ?? []
 
@@ -2855,6 +3226,15 @@ export async function loadProjectSnapshot(
     assets: await hydrateStorageAssetUrls(snapshot.project.id, snapshot.assets),
   }
 
+  if (profile === 'world' && !options?.skipCache) {
+    try {
+      const delta = await loadDraftDelta(snapshot.draft.id, null)
+      await saveCachedProjectSnapshot(snapshot, delta.currentRevision)
+    } catch (cacheError) {
+      console.warn('[GraphCore] failed to refresh local snapshot cache.', cacheError)
+    }
+  }
+
   return {
     snapshot,
     source: 'supabase',
@@ -2866,12 +3246,12 @@ export async function ensureLiveProjectSnapshot(): Promise<SnapshotLoadResult> {
     data: { session },
   } = await supabase.auth.getSession()
 
-  const initial = await loadProjectSnapshot()
+  const initial = await loadProjectSnapshot(undefined, { profile: 'world' })
 
   if (!session || initial.source === 'supabase' || !shouldBootstrapLiveProject(initial.reason)) {
     if (session && initial.source === 'supabase' && hasMissingBaselineArchetypes(initial.snapshot.archetypes)) {
       await seedBaselineArchetypesDirect(initial.snapshot.draft.id, session.user.id)
-      return loadProjectSnapshot()
+      return loadProjectSnapshot(undefined, { profile: 'world' })
     }
 
     return initial
@@ -2888,7 +3268,7 @@ export async function ensureLiveProjectSnapshot(): Promise<SnapshotLoadResult> {
     }
   }
 
-  return loadProjectSnapshot()
+  return loadProjectSnapshot(undefined, { profile: 'world' })
 }
 
 async function ensureWorkspaceShellDirect(session: Session) {
@@ -3019,7 +3399,7 @@ export async function listGames(): Promise<GameSummary[]> {
     .filter((entry): entry is GameSummary => entry !== null)
 }
 
-export async function setActiveGame(projectId: string, draftId: string): Promise<SnapshotLoadResult> {
+export async function setActiveGame(projectId: string, draftId: string, options?: SnapshotLoadOptions): Promise<SnapshotLoadResult> {
   const {
     data: { session },
   } = await supabase.auth.getSession()
@@ -3034,7 +3414,530 @@ export async function setActiveGame(projectId: string, draftId: string): Promise
   }
 
   await setActiveWorkspaceGameState(workspaceMembership.workspace.id, projectId, draftId)
-  return loadProjectSnapshot({ projectId, draftId })
+  return loadProjectSnapshot({ projectId, draftId }, { profile: options?.profile ?? 'world' })
+}
+
+export async function loadCachedProjectSnapshot(projectId: string, draftId: string): Promise<GraphCoreClientCacheSnapshot | null> {
+  const cacheKey = cacheKeyForProjectDraft(projectId, draftId)
+  const cached = await withCacheStore<GraphCoreClientCacheSnapshot & { cacheKey: string }>('readonly', (store) => store.get(cacheKey))
+  if (!cached) return null
+  if (
+    cached.projectId !== projectId
+    || cached.draftId !== draftId
+    || cached.cacheSchemaVersion !== GRAPHCORE_CACHE_SCHEMA_VERSION
+    || !cached.snapshot
+  ) {
+    return null
+  }
+  const parsed = projectSnapshotSchema.safeParse(cached.snapshot)
+  if (!parsed.success) return null
+  if (parsed.data.project.id !== projectId || parsed.data.draft.id !== draftId) {
+    await clearProjectCache(projectId, draftId)
+    console.warn('[GraphCore] discarded project cache with mismatched embedded snapshot identity.', {
+      expectedProjectId: projectId,
+      expectedDraftId: draftId,
+      cachedProjectId: parsed.data.project.id,
+      cachedDraftId: parsed.data.draft.id,
+    })
+    return null
+  }
+  return {
+    projectId,
+    draftId,
+    cacheSchemaVersion: GRAPHCORE_CACHE_SCHEMA_VERSION,
+    lastRevision: Number.isFinite(cached.lastRevision) ? cached.lastRevision : 0,
+    cachedAt: cached.cachedAt,
+    snapshot: parsed.data,
+  }
+}
+
+export async function saveCachedProjectSnapshot(snapshot: ProjectSnapshot, revision: DraftRevision) {
+  const cacheKey = cacheKeyForProjectDraft(snapshot.project.id, snapshot.draft.id)
+  const entry: GraphCoreClientCacheSnapshot & { cacheKey: string } = {
+    cacheKey,
+    projectId: snapshot.project.id,
+    draftId: snapshot.draft.id,
+    cacheSchemaVersion: GRAPHCORE_CACHE_SCHEMA_VERSION,
+    lastRevision: revision,
+    cachedAt: new Date().toISOString(),
+    snapshot,
+  }
+  await withCacheStore<IDBValidKey>('readwrite', (store) => store.put(entry))
+}
+
+export async function clearProjectCache(projectId: string, draftId: string) {
+  const cacheKey = cacheKeyForProjectDraft(projectId, draftId)
+  await withCacheStore<undefined>('readwrite', (store) => store.delete(cacheKey))
+}
+
+function parseStringArrayMap(value: unknown): Record<string, string[]> {
+  if (!value || typeof value !== 'object') return {}
+  const result: Record<string, string[]> = {}
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    result[key] = Array.isArray(entry) ? entry.filter((item): item is string => typeof item === 'string') : []
+  }
+  return result
+}
+
+export async function loadDraftDelta(draftId: string, sinceRevision: DraftRevision | null): Promise<DraftDeltaResponse> {
+  await getValidatedSession('Sign in and load a live GraphCore draft before loading draft changes.')
+  const response = await supabase.rpc('get_draft_delta', {
+    target_draft_id: draftId,
+    since_revision: sinceRevision,
+    cache_schema_version: GRAPHCORE_CACHE_SCHEMA_VERSION,
+  })
+  if (response.error) {
+    throw new Error(response.error.message)
+  }
+  const raw = response.data && typeof response.data === 'object'
+    ? response.data as Record<string, unknown>
+    : {}
+  const compactRows = raw.compactRows && typeof raw.compactRows === 'object'
+    ? raw.compactRows as Record<string, unknown[]>
+    : {}
+  return {
+    currentRevision: typeof raw.currentRevision === 'number' ? raw.currentRevision : Number(raw.currentRevision ?? 0),
+    requiresSnapshot: raw.requiresSnapshot === true,
+    changedKeysByTable: parseStringArrayMap(raw.changedKeysByTable),
+    deletedKeysByTable: parseStringArrayMap(raw.deletedKeysByTable),
+    compactRows,
+  }
+}
+
+function upsertEntriesByKey<T extends { key: string }>(current: T[], incoming: T[]) {
+  let next = current
+  for (const entry of incoming) {
+    next = upsertEntryByKey(next, entry)
+  }
+  return next
+}
+
+function upsertEntriesById<T extends { id: string }>(current: T[], incoming: T[]) {
+  if (incoming.length === 0) return current
+  const incomingMap = new Map(incoming.map((entry) => [entry.id, entry]))
+  const merged = current.map((entry) => incomingMap.get(entry.id) ?? entry)
+  const seen = new Set(current.map((entry) => entry.id))
+  for (const entry of incoming) {
+    if (!seen.has(entry.id)) merged.push(entry)
+  }
+  return merged
+}
+
+function removeByKeys<T extends { key: string }>(entries: T[], keys: string[] | undefined) {
+  if (!keys || keys.length === 0) return entries
+  const keySet = new Set(keys)
+  return entries.filter((entry) => !keySet.has(entry.key))
+}
+
+function removeByIds<T extends { id: string }>(entries: T[], ids: string[] | undefined) {
+  if (!ids || ids.length === 0) return entries
+  const idSet = new Set(ids)
+  return entries.filter((entry) => !idSet.has(entry.id))
+}
+
+function mapDefinitionDeltaRow(row: DefinitionRow, existing: DefinitionBase | null): DefinitionBase {
+  return {
+    id: row.id,
+    key: row.key,
+    kind: row.kind,
+    name: row.name,
+    summary: row.summary ?? '',
+    status: row.status,
+    iconAssetKey: row.icon_asset_key,
+    archetypeKey: row.archetype_key,
+    tags: row.tags ?? [],
+    schemaVersion: row.schema_version ?? 1,
+    metadata: row.metadata ?? {},
+    llmHints: existing?.llmHints ?? row.llm_hints ?? {},
+    assetRefs: existing?.assetRefs ?? (Array.isArray(row.asset_refs) ? row.asset_refs as DefinitionBase['assetRefs'] : []),
+    definitionData: existing?.definitionData ?? row.definition_data ?? {},
+    fieldValues: existing?.fieldValues ?? [],
+    customFields: existing?.customFields ?? [],
+    components: existing?.components ?? [],
+  }
+}
+
+function mapAssetDeltaRow(row: AssetRow): AssetDefinition {
+  return {
+    id: row.id,
+    key: row.key,
+    name: row.name,
+    kind: row.kind,
+    mimeType: row.mime_type,
+    storagePath: row.storage_path,
+    metadata: row.metadata ?? {},
+    llmHints: row.llm_hints ?? {},
+  }
+}
+
+function mapWorldBuildBatchDeltaRow(row: WorldBuildBatchRow, existing: ProjectSnapshot['worldBuildBatches'][number] | null): ProjectSnapshot['worldBuildBatches'][number] {
+  return worldBuildStatusResponseSchema.shape.batch.parse({
+    id: row.id,
+    projectId: row.project_id,
+    draftId: row.draft_id,
+    prompt: row.prompt,
+    requestSummary: row.request_summary,
+    plannerMode: row.planner_mode ?? 'world_build',
+    status: row.status,
+    diagnostics: row.diagnostics ?? [],
+    planItems: existing?.planItems ?? [],
+    cinematicPlan: existing?.cinematicPlan ?? null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    jobs: existing?.jobs ?? [],
+  })
+}
+
+function mapWorldBuildJobDeltaRow(row: WorldBuildJobRow): ProjectSnapshot['worldBuildBatches'][number]['jobs'][number] {
+  const queueMetadata = readGenerationQueueMetadata({
+    ...(row.result_context ?? {}),
+    providerRequestId: row.provider_request_id ?? undefined,
+    statusUrl: row.status_url ?? undefined,
+    responseUrl: row.response_url ?? undefined,
+    cancelUrl: row.cancel_url ?? undefined,
+  })
+  return worldBuildJobSchema.parse({
+    id: row.id,
+    batchId: row.batch_id,
+    planItemId: row.plan_item_id,
+    kind: row.kind,
+    status: row.status,
+    dependsOnJobIds: row.depends_on_job_ids ?? [],
+    targetKeys: row.target_keys ?? {},
+    prompt: row.prompt ?? '',
+    options: row.options ?? {},
+    providerRequestId: queueMetadata.providerRequestId,
+    statusUrl: queueMetadata.statusUrl,
+    responseUrl: queueMetadata.responseUrl,
+    cancelUrl: queueMetadata.cancelUrl,
+    resultContext: row.result_context ?? null,
+    errorMessage: row.error_message ?? null,
+    orderIndex: row.order_index,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  })
+}
+
+function mapMeshGenerationDeltaRow(row: MeshGenerationJobRow) {
+  return meshGenerationJobSchema.parse({
+    id: row.id,
+    projectId: row.project_id,
+    draftId: row.draft_id,
+    definitionKey: row.definition_key,
+    sourceImageAssetKey: row.source_image_asset_key,
+    targetMeshAssetKey: row.target_mesh_asset_key,
+    provider: row.provider,
+    model: row.model,
+    providerRequestId: row.provider_request_id,
+    statusUrl: row.status_url,
+    responseUrl: row.response_url,
+    cancelUrl: row.cancel_url,
+    status: row.status,
+    providerStatus: row.provider_status,
+    providerLogs: Array.isArray(row.provider_logs) ? row.provider_logs.filter((entry): entry is string => typeof entry === 'string') : [],
+    errorMessage: row.error_message,
+    storagePath: row.storage_path,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  })
+}
+
+function mapCinematicRunDeltaRow(row: CinematicRunRow, existing: ProjectSnapshot['cinematicRuns'][number] | null): ProjectSnapshot['cinematicRuns'][number] {
+  return cinematicRunSchema.parse({
+    id: row.id,
+    draftId: row.draft_id,
+    projectId: row.project_id,
+    graphKey: row.graph_key,
+    graphName: row.graph_name,
+    mode: row.mode,
+    status: row.status,
+    shotNodeKey: row.shot_node_key,
+    diagnostics: row.diagnostics ?? [],
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    jobs: existing?.jobs ?? [],
+  })
+}
+
+function mapCinematicRunJobDeltaRow(row: CinematicRunJobRow): ProjectSnapshot['cinematicRuns'][number]['jobs'][number] {
+  return cinematicRunJobSchema.parse({
+    id: row.id,
+    runId: row.run_id,
+    graphKey: row.graph_key,
+    shotNodeKey: row.shot_node_key,
+    shotId: typeof row.result_context?.shotId === 'string' ? row.result_context.shotId : null,
+    kind: row.kind,
+    status: row.status,
+    orderIndex: row.order_index,
+    dependsOnJobIds: row.depends_on_job_ids ?? [],
+    stillAssetKey: row.still_asset_key,
+    videoAssetKey: row.video_asset_key,
+    provider: row.provider,
+    model: row.model,
+    providerRequestId: row.provider_request_id,
+    errorMessage: row.error_message,
+    prompt: row.prompt ?? '',
+    resultContext: row.result_context ?? null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  })
+}
+
+export function applyDraftDeltaToSnapshot(snapshot: ProjectSnapshot, delta: DraftDeltaResponse) {
+  if (delta.requiresSnapshot) return snapshot
+  const rows = delta.compactRows ?? {}
+  const deleted = delta.deletedKeysByTable ?? {}
+
+  let nextDefinitions = removeByKeys(snapshot.definitions, deleted.project_definitions)
+  const definitionRows = (rows.project_definitions ?? []) as DefinitionRow[]
+  nextDefinitions = upsertEntriesByKey(nextDefinitions, definitionRows.map((row) => (
+    mapDefinitionDeltaRow(row, nextDefinitions.find((entry) => entry.key === row.key) ?? null)
+  )))
+
+  let nextAssets = removeByKeys(snapshot.assets, deleted.project_assets)
+  nextAssets = upsertEntriesByKey(nextAssets, ((rows.project_assets ?? []) as AssetRow[]).map((row) => mapAssetDeltaRow(row)))
+
+  let nextWorldEntities = removeByKeys(snapshot.worldEntities, deleted.world_entities)
+  nextWorldEntities = upsertEntriesByKey(nextWorldEntities, ((rows.world_entities ?? []) as WorldEntityRow[]).map((row) => mapWorldEntityRow(row)))
+
+  let nextWorldRelationships = removeByKeys(snapshot.worldRelationships, deleted.world_relationships)
+  nextWorldRelationships = upsertEntriesByKey(nextWorldRelationships, ((rows.world_relationships ?? []) as WorldRelationshipRow[]).map((row) => (
+    mapWorldRelationshipRow(row, nextWorldEntities)
+  )))
+
+  let nextWorldViews = removeByKeys(snapshot.worldViews, deleted.world_views)
+  nextWorldViews = upsertEntriesByKey(nextWorldViews, ((rows.world_views ?? []) as WorldViewRow[]).map((row) => mapWorldViewRow(row)))
+
+  let nextWorldOperators = removeByKeys(snapshot.worldOperators, deleted.world_operators)
+  nextWorldOperators = upsertEntriesByKey(nextWorldOperators, ((rows.world_operators ?? []) as WorldOperatorRow[]).map((row) => ({
+    id: row.id,
+    key: row.key,
+    operatorType: row.operator_type,
+    inputEntityKeys: row.input_entity_keys ?? [],
+    label: row.label ?? '',
+    status: row.status,
+    metadata: row.metadata ?? {},
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  })))
+
+  let nextWorldResults = removeByKeys(snapshot.worldResults, deleted.world_results)
+  nextWorldResults = upsertEntriesByKey(nextWorldResults, ((rows.world_results ?? []) as WorldResultRow[]).map((row) => ({
+    id: row.id,
+    key: row.key,
+    resultType: row.result_type,
+    sourceOperatorKey: row.source_operator_key,
+    title: row.title,
+    summary: row.summary ?? '',
+    previewAssetKey: row.preview_asset_key,
+    status: row.status,
+    metadata: row.metadata ?? {},
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  })))
+
+  let nextWorldGraphConnections = removeByKeys(snapshot.worldGraphConnections, deleted.world_graph_connections)
+  nextWorldGraphConnections = upsertEntriesByKey(nextWorldGraphConnections, ((rows.world_graph_connections ?? []) as WorldGraphConnectionRow[]).map((row) => ({
+    id: row.id,
+    key: row.key,
+    sourceNodeKey: row.source_node_key,
+    sourceNodeKind: row.source_node_kind,
+    targetNodeKey: row.target_node_key,
+    targetNodeKind: row.target_node_kind,
+    role: row.role,
+    metadata: row.metadata ?? {},
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  })))
+
+  let nextWorldThreads = removeByKeys(snapshot.worldThreads, deleted.world_threads)
+  nextWorldThreads = upsertEntriesByKey(nextWorldThreads, ((rows.world_threads ?? []) as WorldThreadRow[]).map((row) => mapWorldThreadRow(row)))
+
+  let nextPromptSessions = removeByKeys(snapshot.worldPromptSessions, deleted.world_prompt_sessions)
+  nextPromptSessions = upsertEntriesByKey(nextPromptSessions, ((rows.world_prompt_sessions ?? []) as WorldPromptSessionRow[]).map((row) => mapWorldPromptSessionRow(row)))
+
+  let nextPromptTurns = removeByIds(snapshot.worldPromptTurns, deleted.world_prompt_turns)
+  nextPromptTurns = upsertEntriesById(nextPromptTurns, ((rows.world_prompt_turns ?? []) as WorldPromptTurnRow[]).map((row) => mapWorldPromptTurnRow(row)))
+
+  let nextPromptMessages = removeByIds(snapshot.worldPromptMessages, deleted.world_prompt_messages)
+  nextPromptMessages = upsertEntriesById(nextPromptMessages, ((rows.world_prompt_messages ?? []) as WorldPromptMessageRow[]).map((row) => mapWorldPromptMessageRow(row)))
+
+  let nextPromptEvents = removeByIds(snapshot.worldPromptEvents, deleted.world_prompt_events)
+  nextPromptEvents = upsertEntriesById(nextPromptEvents, ((rows.world_prompt_events ?? []) as WorldPromptEventRow[]).map((row) => mapWorldPromptEventRow(row)))
+
+  let nextPromptSuggestions = removeByIds(snapshot.worldPromptSuggestions, deleted.world_prompt_suggestions)
+  nextPromptSuggestions = upsertEntriesById(nextPromptSuggestions, ((rows.world_prompt_suggestions ?? []) as WorldPromptSuggestionRow[]).map((row) => mapWorldPromptSuggestionRow(row)).filter((entry): entry is WorldPromptSuggestionRecord => Boolean(entry)))
+
+  let nextWorldBuildBatches = removeByIds(snapshot.worldBuildBatches, deleted.world_build_batches)
+  nextWorldBuildBatches = upsertEntriesById(nextWorldBuildBatches, ((rows.world_build_batches ?? []) as WorldBuildBatchRow[]).map((row) => (
+    mapWorldBuildBatchDeltaRow(row, nextWorldBuildBatches.find((entry) => entry.id === row.id) ?? null)
+  )))
+  const changedWorldBuildJobs = (rows.world_build_jobs ?? []) as WorldBuildJobRow[]
+  if (changedWorldBuildJobs.length > 0 || (deleted.world_build_jobs?.length ?? 0) > 0) {
+    nextWorldBuildBatches = nextWorldBuildBatches.map((batch) => {
+      const incomingJobs = changedWorldBuildJobs
+        .filter((job) => job.batch_id === batch.id)
+        .map((job) => mapWorldBuildJobDeltaRow(job))
+      const jobs = upsertEntriesById(
+        removeByIds(batch.jobs, deleted.world_build_jobs),
+        incomingJobs,
+      ).sort((left, right) => left.orderIndex - right.orderIndex)
+      return { ...batch, jobs }
+    })
+  }
+
+  let nextMeshGenerationJobs = removeByIds(snapshot.meshGenerationJobs, deleted.mesh_generation_jobs)
+  nextMeshGenerationJobs = upsertEntriesById(nextMeshGenerationJobs, ((rows.mesh_generation_jobs ?? []) as MeshGenerationJobRow[]).map((row) => mapMeshGenerationDeltaRow(row)))
+
+  let nextCinematicRuns = removeByIds(snapshot.cinematicRuns, deleted.cinematic_runs)
+  nextCinematicRuns = upsertEntriesById(nextCinematicRuns, ((rows.cinematic_runs ?? []) as CinematicRunRow[]).map((row) => (
+    mapCinematicRunDeltaRow(row, nextCinematicRuns.find((entry) => entry.id === row.id) ?? null)
+  )))
+  const changedCinematicJobs = (rows.cinematic_run_jobs ?? []) as CinematicRunJobRow[]
+  if (changedCinematicJobs.length > 0 || (deleted.cinematic_run_jobs?.length ?? 0) > 0) {
+    nextCinematicRuns = nextCinematicRuns.map((run) => {
+      const incomingJobs = changedCinematicJobs
+        .filter((job) => job.run_id === run.id)
+        .map((job) => mapCinematicRunJobDeltaRow(job))
+      const jobs = upsertEntriesById(
+        removeByIds(run.jobs, deleted.cinematic_run_jobs),
+        incomingJobs,
+      ).sort((left, right) => left.orderIndex - right.orderIndex)
+      return { ...run, jobs }
+    })
+  }
+
+  return projectSnapshotSchema.parse({
+    ...snapshot,
+    definitions: nextDefinitions,
+    assets: nextAssets,
+    worldEntities: nextWorldEntities,
+    worldRelationships: nextWorldRelationships,
+    worldViews: nextWorldViews,
+    worldOperators: nextWorldOperators,
+    worldResults: nextWorldResults,
+    worldGraphConnections: nextWorldGraphConnections,
+    worldThreads: nextWorldThreads.sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()),
+    worldPromptSessions: nextPromptSessions.sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()),
+    worldPromptTurns: nextPromptTurns.sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()),
+    worldPromptMessages: nextPromptMessages.sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()),
+    worldPromptEvents: nextPromptEvents.sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()),
+    worldPromptSuggestions: nextPromptSuggestions,
+    worldBuildBatches: nextWorldBuildBatches,
+    meshGenerationJobs: nextMeshGenerationJobs,
+    cinematicRuns: nextCinematicRuns,
+  })
+}
+
+export async function loadWorldPromptTurnLenses(draftId: string) {
+  await getValidatedSession('Sign in and load a live GraphCore draft before loading world prompt turn lenses.')
+  const [turnsResponse, eventsResponse] = await Promise.all([
+    supabase
+      .from('world_prompt_turns')
+      .select('id, session_id, draft_id, prompt, status, created_at, updated_at')
+      .eq('draft_id', draftId)
+      .order('created_at', { ascending: false })
+      .limit(DEFAULT_PROMPT_HISTORY_LIMIT),
+    supabase
+      .from('world_prompt_events')
+      .select('id, session_id, turn_id, draft_id, sequence, event_type, op_id, payload, metadata, created_at')
+      .eq('draft_id', draftId)
+      .eq('event_type', 'op_applied')
+      .order('created_at', { ascending: false })
+      .limit(DEFAULT_PROMPT_HISTORY_LIMIT * 8),
+  ])
+  if (turnsResponse.error) throw new Error(turnsResponse.error.message)
+  if (eventsResponse.error) throw new Error(eventsResponse.error.message)
+  logPostgrestEgress({ table: 'world_prompt_turns.lenses', profile: 'world', caller: 'loadWorldPromptTurnLenses', data: turnsResponse.data })
+  logPostgrestEgress({ table: 'world_prompt_events.lenses', profile: 'world', caller: 'loadWorldPromptTurnLenses', data: eventsResponse.data })
+  return {
+    turns: ((turnsResponse.data ?? []) as Partial<WorldPromptTurnRow>[]).map((row) => ({
+      id: row.id,
+      prompt: row.prompt,
+      status: row.status,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    })),
+    events: ((eventsResponse.data ?? []) as WorldPromptEventRow[])
+      .sort((left, right) => new Date(left.created_at).getTime() - new Date(right.created_at).getTime() || left.sequence - right.sequence)
+      .map((row) => mapWorldPromptEventRow(row)),
+  }
+}
+
+export async function loadWorldPromptTurnDetails(draftId: string, turnId: string) {
+  await getValidatedSession('Sign in and load a live GraphCore draft before loading world prompt turn details.')
+  const [messagesResponse, eventsResponse] = await Promise.all([
+    supabase
+      .from('world_prompt_messages')
+      .select(WORLD_PROMPT_MESSAGE_SELECT)
+      .eq('draft_id', draftId)
+      .eq('turn_id', turnId)
+      .order('created_at', { ascending: true }),
+    supabase
+      .from('world_prompt_events')
+      .select(WORLD_PROMPT_EVENT_SELECT)
+      .eq('draft_id', draftId)
+      .eq('turn_id', turnId)
+      .order('sequence', { ascending: true }),
+  ])
+  if (messagesResponse.error) throw new Error(messagesResponse.error.message)
+  if (eventsResponse.error) throw new Error(eventsResponse.error.message)
+  return {
+    messages: ((messagesResponse.data ?? []) as WorldPromptMessageRow[]).map((row) => mapWorldPromptMessageRow(row)),
+    events: ((eventsResponse.data ?? []) as WorldPromptEventRow[]).map((row) => mapWorldPromptEventRow(row)),
+  }
+}
+
+export async function loadDefinitionDetails(draftId: string, definitionKey: string) {
+  await getValidatedSession('Sign in and load a live GraphCore draft before loading definition details.')
+  const response = await supabase
+    .from('project_definitions')
+    .select('id, key, kind, name, summary, status, icon_asset_key, archetype_key, tags, schema_version, metadata, llm_hints, asset_refs, definition_data')
+    .eq('draft_id', draftId)
+    .eq('key', definitionKey)
+    .maybeSingle()
+  if (response.error) throw new Error(response.error.message)
+  logPostgrestEgress({ table: 'project_definitions.detail', profile: 'content', caller: 'loadDefinitionDetails', data: response.data })
+  return response.data
+}
+
+export async function loadEnvironmentBlueprintDetails(draftId: string, environmentKey: string) {
+  await getValidatedSession('Sign in and load a live GraphCore draft before loading environment blueprint details.')
+  const response = await supabase
+    .from('draft_environment_blueprints')
+    .select('id, key, environment_key, name, document')
+    .eq('draft_id', draftId)
+    .eq('environment_key', environmentKey)
+    .maybeSingle()
+  if (response.error) throw new Error(response.error.message)
+  logPostgrestEgress({ table: 'draft_environment_blueprints.detail', profile: 'content', caller: 'loadEnvironmentBlueprintDetails', data: response.data })
+  return response.data
+}
+
+export async function loadGenerationJobDetails(draftId: string, jobId: string) {
+  await getValidatedSession('Sign in and load a live GraphCore draft before loading generation job details.')
+  const [worldBuildJob, meshJob, cinematicJob] = await Promise.all([
+    supabase
+      .from('world_build_jobs')
+      .select('id, batch_id, plan_item_id, kind, status, depends_on_job_ids, target_keys, prompt, options, provider_request_id, status_url, response_url, cancel_url, result_context, error_message, order_index, created_at, updated_at')
+      .eq('id', jobId)
+      .maybeSingle(),
+    supabase
+      .from('mesh_generation_jobs')
+      .select('id, project_id, draft_id, definition_key, source_image_asset_key, target_mesh_asset_key, provider, model, provider_request_id, status_url, response_url, cancel_url, status, provider_status, provider_logs, error_message, storage_path, created_at, updated_at')
+      .eq('draft_id', draftId)
+      .eq('id', jobId)
+      .maybeSingle(),
+    supabase
+      .from('cinematic_run_jobs')
+      .select('id, run_id, graph_key, shot_node_key, kind, status, order_index, depends_on_job_ids, still_asset_key, video_asset_key, provider, model, provider_request_id, error_message, prompt, result_context, created_at, updated_at')
+      .eq('id', jobId)
+      .maybeSingle(),
+  ])
+  if (worldBuildJob.error) throw new Error(worldBuildJob.error.message)
+  if (meshJob.error) throw new Error(meshJob.error.message)
+  if (cinematicJob.error) throw new Error(cinematicJob.error.message)
+  return worldBuildJob.data ?? meshJob.data ?? cinematicJob.data ?? null
 }
 
 export async function createGame(existingSession?: Session): Promise<SnapshotLoadResult> {
@@ -3050,7 +3953,7 @@ export async function createGame(existingSession?: Session): Promise<SnapshotLoa
 
   const workspaceId = await ensureWorkspaceShellDirect(session)
   await createGameDirect(session, workspaceId)
-  return loadProjectSnapshot()
+  return loadProjectSnapshot(undefined, { profile: 'world' })
 }
 
 export async function bootstrapLiveWorkspace(existingSession?: Session): Promise<SnapshotLoadResult> {
@@ -3088,7 +3991,7 @@ export async function bootstrapLiveWorkspace(existingSession?: Session): Promise
     }
   }
 
-  return loadProjectSnapshot()
+  return loadProjectSnapshot(undefined, { profile: 'world' })
 }
 
 export async function proposePatch(request: PromptPatchRequest): Promise<PromptPatchResponse> {
@@ -4196,8 +5099,13 @@ export async function syncWorldGraphFromDefinitions(snapshot: ProjectSnapshot) {
         worldEntities: [...snapshot.worldEntities, ...derivedEntities],
         worldViews: snapshot.worldViews,
       }, { autoDerived: false })
+  const entitiesMissingLinkedDefinitions = snapshot.worldEntities.filter((entity) => (
+    worldEntityRequiresLinkedDefinition(entity.nodeType)
+    && !entity.linkedDefinitionKey
+    && entity.status !== 'archived'
+  ))
 
-  if (derivedEntities.length === 0 && derivedViews.length === 0) {
+  if (derivedEntities.length === 0 && derivedViews.length === 0 && entitiesMissingLinkedDefinitions.length === 0) {
     return snapshot
   }
 
@@ -4257,6 +5165,50 @@ export async function syncWorldGraphFromDefinitions(snapshot: ProjectSnapshot) {
     }
   }
 
+  if (entitiesMissingLinkedDefinitions.length > 0) {
+    let workingSnapshot = snapshot
+    for (const entity of entitiesMissingLinkedDefinitions) {
+      const linkedDefinition = await createLinkedDefinitionForWorldEntity(workingSnapshot, {
+        name: entity.name,
+        summary: entity.summary,
+        context: entity.context,
+        nodeType: entity.nodeType,
+        aliases: entity.aliases,
+        tags: entity.tags,
+        status: entity.status,
+        thumbnailAssetKey: entity.thumbnailAssetKey,
+        linkedDefinitionKey: null,
+        source: entity.source,
+        customProperties: entity.customProperties,
+        metadata: entity.metadata,
+        ensureLinkedDefinition: true,
+      })
+      if (!linkedDefinition.linkedDefinitionKey) continue
+      const linkResponse = await supabase
+        .from('world_entities')
+        .update({ linked_definition_key: linkedDefinition.linkedDefinitionKey })
+        .eq('draft_id', snapshot.draft.id)
+        .eq('key', entity.key)
+      if (linkResponse.error) {
+        throw new Error(linkResponse.error.message)
+      }
+      workingSnapshot = {
+        ...workingSnapshot,
+        definitions: linkedDefinition.linkedDefinition
+          ? upsertEntryByKey(workingSnapshot.definitions, linkedDefinition.linkedDefinition)
+          : workingSnapshot.definitions,
+        worldEntities: upsertEntryByKey(workingSnapshot.worldEntities, {
+          ...entity,
+          linkedDefinitionKey: linkedDefinition.linkedDefinitionKey,
+        }),
+      }
+      await syncLinkedDefinitionFromWorldEntity(workingSnapshot, {
+        ...entity,
+        linkedDefinitionKey: linkedDefinition.linkedDefinitionKey,
+      })
+    }
+  }
+
   return reloadLiveSnapshot(snapshot)
 }
 
@@ -4298,13 +5250,17 @@ export async function createWorldEntity(snapshot: ProjectSnapshot, input: WorldE
 
   const nextEntity = mapWorldEntityRow(insertResponse.data as WorldEntityRow)
   const syncedDefinition = await syncLinkedDefinitionFromWorldEntity(snapshot, nextEntity)
-  return {
+  const nextSnapshot = {
     ...snapshot,
     definitions: linkedDefinition
       ? upsertEntryByKey(syncedDefinition.definitions, linkedDefinition)
       : syncedDefinition.definitions,
     worldEntities: upsertEntryByKey(snapshot.worldEntities, nextEntity),
   }
+  return reconcilePersistedAutoManagedWorldViews(nextSnapshot, {
+    recentEntityKeys: [nextEntity.key],
+    preferredRootEntityKey: nextEntity.key,
+  })
 }
 
 export async function updateWorldEntity(snapshot: ProjectSnapshot, entityKey: string, changes: WorldEntityUpdateInput) {
@@ -4342,14 +5298,52 @@ export async function updateWorldEntity(snapshot: ProjectSnapshot, entityKey: st
     throw new Error(updateResponse.error.message)
   }
 
-  const nextEntity = mapWorldEntityRow(updateResponse.data as WorldEntityRow)
-  const syncedDefinition = await syncLinkedDefinitionFromWorldEntity(snapshot, nextEntity)
-
-  return {
-    ...snapshot,
-    definitions: syncedDefinition.definitions,
-    worldEntities: upsertEntryByKey(snapshot.worldEntities, nextEntity),
+  let nextEntity = mapWorldEntityRow(updateResponse.data as WorldEntityRow)
+  let workingSnapshot = snapshot
+  if (!nextEntity.linkedDefinitionKey && worldEntityRequiresLinkedDefinition(nextEntity.nodeType)) {
+    const linkedDefinition = await createLinkedDefinitionForWorldEntity(snapshot, {
+      name: nextEntity.name,
+      summary: nextEntity.summary,
+      context: nextEntity.context,
+      nodeType: nextEntity.nodeType,
+      aliases: nextEntity.aliases,
+      tags: nextEntity.tags,
+      status: nextEntity.status,
+      thumbnailAssetKey: nextEntity.thumbnailAssetKey,
+      linkedDefinitionKey: null,
+      source: nextEntity.source,
+      customProperties: nextEntity.customProperties,
+      metadata: nextEntity.metadata,
+      ensureLinkedDefinition: true,
+    })
+    if (linkedDefinition.linkedDefinitionKey) {
+      const linkResponse = await supabase
+        .from('world_entities')
+        .update({ linked_definition_key: linkedDefinition.linkedDefinitionKey })
+        .eq('draft_id', snapshot.draft.id)
+        .eq('key', nextEntity.key)
+        .select(WORLD_ENTITY_SELECT)
+        .single()
+      if (linkResponse.error) throw new Error(linkResponse.error.message)
+      nextEntity = mapWorldEntityRow(linkResponse.data as WorldEntityRow)
+      workingSnapshot = {
+        ...snapshot,
+        definitions: linkedDefinition.linkedDefinition
+          ? upsertEntryByKey(snapshot.definitions, linkedDefinition.linkedDefinition)
+          : snapshot.definitions,
+      }
+    }
   }
+  const syncedDefinition = await syncLinkedDefinitionFromWorldEntity(workingSnapshot, nextEntity)
+  const nextSnapshot = {
+    ...workingSnapshot,
+    definitions: syncedDefinition.definitions,
+    worldEntities: upsertEntryByKey(workingSnapshot.worldEntities, nextEntity),
+  }
+  return reconcilePersistedAutoManagedWorldViews(nextSnapshot, {
+    recentEntityKeys: [nextEntity.key],
+    preferredRootEntityKey: nextEntity.key,
+  })
 }
 
 export async function setWorldEntityCanonLock(snapshot: ProjectSnapshot, entityKey: string, input: {
@@ -4439,7 +5433,8 @@ export async function deleteWorldEntity(snapshot: ProjectSnapshot, entityKey: st
     }
   }
 
-  return reloadLiveSnapshot(snapshot)
+  const reloaded = await reloadLiveSnapshot(snapshot)
+  return reconcilePersistedAutoManagedWorldViews(reloaded)
 }
 
 export async function resetProjectWorld(snapshot: ProjectSnapshot) {
@@ -4537,10 +5532,15 @@ export async function createWorldRelationship(snapshot: ProjectSnapshot, input: 
   }
 
   const nextRelationship = mapWorldRelationshipRow(insertResponse.data as WorldRelationshipRow, snapshot.worldEntities)
-  return {
+  const nextSnapshot = {
     ...snapshot,
     worldRelationships: upsertEntryByKey(snapshot.worldRelationships, nextRelationship),
   }
+  return reconcilePersistedAutoManagedWorldViews(nextSnapshot, {
+    recentEntityKeys: [nextRelationship.sourceEntityKey, nextRelationship.targetEntityKey],
+    recentRelationshipKeys: [nextRelationship.key],
+    preferredRootEntityKey: nextRelationship.sourceEntityKey,
+  })
 }
 
 export async function updateWorldRelationship(snapshot: ProjectSnapshot, relationshipKey: string, changes: WorldRelationshipUpdateInput) {
@@ -4583,13 +5583,19 @@ export async function updateWorldRelationship(snapshot: ProjectSnapshot, relatio
     throw new Error(updateResponse.error.message)
   }
 
-  return {
+  const nextSnapshot = {
     ...snapshot,
     worldRelationships: upsertEntryByKey(
       snapshot.worldRelationships,
       mapWorldRelationshipRow(updateResponse.data as WorldRelationshipRow, snapshot.worldEntities),
     ),
   }
+  const resolvedRelationship = nextSnapshot.worldRelationships.find((entry) => entry.key === relationshipKey) ?? null
+  return reconcilePersistedAutoManagedWorldViews(nextSnapshot, {
+    recentEntityKeys: resolvedRelationship ? [resolvedRelationship.sourceEntityKey, resolvedRelationship.targetEntityKey] : [],
+    recentRelationshipKeys: [relationshipKey],
+    preferredRootEntityKey: resolvedRelationship?.sourceEntityKey ?? null,
+  })
 }
 
 export async function setWorldRelationshipCanonLock(snapshot: ProjectSnapshot, relationshipKey: string, input: {
@@ -4639,10 +5645,11 @@ export async function deleteWorldRelationship(snapshot: ProjectSnapshot, relatio
     throw new Error(deleteResponse.error.message)
   }
 
-  return {
+  const nextSnapshot = {
     ...snapshot,
     worldRelationships: snapshot.worldRelationships.filter((relationship) => relationship.key !== relationshipKey),
   }
+  return reconcilePersistedAutoManagedWorldViews(nextSnapshot)
 }
 
 export async function createWorldView(snapshot: ProjectSnapshot, input: WorldViewCreateInput) {
@@ -5221,10 +6228,14 @@ export async function updateWorldThread(snapshot: ProjectSnapshot, threadKey: st
   }
 
   const nextThread = mapWorldThreadRow(response.data as WorldThreadRow)
-  return {
+  const nextSnapshot = {
     ...snapshot,
     worldThreads: upsertEntryByKey(snapshot.worldThreads, nextThread),
   }
+  return reconcilePersistedAutoManagedWorldViews(nextSnapshot, {
+    recentEntityKeys: nextThread.linkedEntityKeys,
+    preferredThreadKey: nextThread.key,
+  })
 }
 
 export async function resolveWorldThread(snapshot: ProjectSnapshot, threadKey: string) {

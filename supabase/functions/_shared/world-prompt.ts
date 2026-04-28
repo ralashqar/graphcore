@@ -71,6 +71,16 @@ import {
   promptAllowsPlaceholderCanon,
   type CreativeDescriptorIssue,
 } from '../../../src/domain/worldPromptCreativeCompletion.ts'
+import { analyzeWorldPromptEntityRequirements } from '../../../src/domain/worldPromptRequirements.ts'
+import {
+  plannerThreadActionSchema,
+  plannerThreadCandidateSchema,
+  preparePlannerThreadMutations,
+} from '../../../src/domain/worldPromptThreads.ts'
+import {
+  reconcileAutoManagedWorldViews,
+  type AutoManagedWorldViewOptions,
+} from '../../../src/domain/worldViewDerivation.ts'
 import {
   appendRefinementHistory,
   mergeCanonicalContext,
@@ -306,16 +316,6 @@ type ReplaceWorldEntityRpcResult = {
   touchedThreadKeys: string[]
 }
 
-const plannerThreadCandidateSchema = z.object({
-  key: z.string(),
-  title: z.string(),
-  summary: z.string().default(''),
-  status: z.enum(['open', 'resolved', 'parked']).default('open'),
-  priority: z.enum(['primary', 'secondary', 'background']).default('secondary'),
-  linkedEntityKeys: z.array(z.string()).default([]),
-  metadata: z.record(z.string(), z.unknown()).default({}),
-})
-
 const plannerIdeaSchema = worldPromptSuggestionSchema.extend({
   source: z.enum(['thread', 'wave2', 'repair', 'analysis', 'advisory']).default('wave2'),
 })
@@ -338,6 +338,7 @@ const worldPromptPlannerSchema = z.object({
   wave1Ops: z.array(promptToWorldOpSchema).default([]),
   wave2Ideas: z.array(plannerIdeaSchema).default([]),
   optionalIdeas: z.array(plannerIdeaSchema).default([]),
+  threadActions: z.array(plannerThreadActionSchema).default([]),
   threadCandidates: z.array(plannerThreadCandidateSchema).default([]),
   suggestionCandidates: z.array(plannerIdeaSchema).default([]),
   optionCandidates: z.array(plannerIdeaSchema).default([]),
@@ -364,6 +365,7 @@ const directBuildPlannerSchema = worldPromptPlannerSchema.pick({
   classification: true,
   assistantSummary: true,
   wave1Ops: true,
+  threadActions: true,
   threadCandidates: true,
   suggestionCandidates: true,
 })
@@ -372,6 +374,7 @@ const refinementPlannerSchema = worldPromptPlannerSchema.pick({
   classification: true,
   assistantSummary: true,
   wave1Ops: true,
+  threadActions: true,
   threadCandidates: true,
   suggestionCandidates: true,
 })
@@ -382,6 +385,7 @@ const advisoryDiagnosisPlannerSchema = worldPromptPlannerSchema.pick({
   answer: true,
   answerMode: true,
   wave1Ops: true,
+  threadActions: true,
   suggestionCandidates: true,
   optionCandidates: true,
   diagnosticFindings: true,
@@ -399,15 +403,23 @@ const replaceWorldEntityRpcResultSchema = z.object({
   touchedThreadKeys: z.array(z.string()).default([]),
 })
 
-const DIRECT_SCOPE_CAPS = {
-  entityOps: 6,
-  relationshipOps: 10,
+type PromptScopeCaps = {
+  entityOps: number
+  relationshipOps: number
+  existingEntityModificationOps: number
+  queueOps: number
+  derivedResultOps: number
+}
+
+const DIRECT_SCOPE_CAPS: PromptScopeCaps = {
+  entityOps: 10,
+  relationshipOps: 16,
   existingEntityModificationOps: 2,
   queueOps: 2,
   derivedResultOps: 1,
 }
 
-const STAGED_SCOPE_CAPS = {
+const STAGED_SCOPE_CAPS: PromptScopeCaps = {
   entityOps: 5,
   relationshipOps: 6,
   existingEntityModificationOps: 2,
@@ -415,7 +427,7 @@ const STAGED_SCOPE_CAPS = {
   derivedResultOps: 1,
 }
 
-const SUGGESTION_DRIVEN_SCOPE_CAPS = {
+const SUGGESTION_DRIVEN_SCOPE_CAPS: PromptScopeCaps = {
   entityOps: 4,
   relationshipOps: 6,
   existingEntityModificationOps: 2,
@@ -968,6 +980,12 @@ function resolveWorldPromptTurnMode(input: {
       ? 'apply_compact_wave'
       : input.selectedSuggestion.actionMode
   }
+  if (input.selectedSuggestion) {
+    if (input.selectedSuggestion.executionMode === 'plan_only' || input.selectedSuggestion.kind === 'plan_only') {
+      return 'answer_only' satisfies WorldPromptResolvedMode
+    }
+    return 'apply_compact_wave' satisfies WorldPromptResolvedMode
+  }
   if (input.promptIntent === 'advisory_question' || input.promptIntent === 'graph_diagnosis') {
     return promptExplicitlyRequestsMutation(input.prompt)
       ? 'apply_compact_wave'
@@ -1098,7 +1116,7 @@ function resolvePlannerMode(input: {
   selectedSuggestionId?: string | null
 }) {
   const intent = detectPromptIntent(input.prompt, input.snapshot)
-  if (input.selectedSuggestionId && intent === 'graph_build') {
+  if (input.selectedSuggestionId && !promptExplicitlyRequestsNoMutation(input.prompt)) {
     return 'direct_build' satisfies PlannerMode
   }
   if (intent === 'advisory_question' || intent === 'graph_diagnosis') {
@@ -2136,6 +2154,26 @@ async function loadSessionMessages(client: SupabaseClient, sessionId: string) {
   return ((response.data ?? []) as WorldPromptMessageRow[]).map(mapMessageRow)
 }
 
+async function loadTurnMessages(client: SupabaseClient, turnId: string) {
+  const response = await client
+    .from('world_prompt_messages')
+    .select(MESSAGE_SELECT)
+    .eq('turn_id', turnId)
+    .order('created_at', { ascending: true })
+  if (response.error) throw new Error(response.error.message)
+  return ((response.data ?? []) as WorldPromptMessageRow[]).map(mapMessageRow)
+}
+
+async function loadTurnEvents(client: SupabaseClient, turnId: string) {
+  const response = await client
+    .from('world_prompt_events')
+    .select(EVENT_SELECT)
+    .eq('turn_id', turnId)
+    .order('sequence', { ascending: true })
+  if (response.error) throw new Error(response.error.message)
+  return ((response.data ?? []) as WorldPromptEventRow[]).map(mapEventRow)
+}
+
 export async function createWorldPromptSession(input: {
   client: SupabaseClient
   payload: unknown
@@ -2478,12 +2516,37 @@ function finalizeSuggestionSet(input: {
           snapshot: input.snapshot,
           selectedThreadKey: input.selectedThreadKey,
         })
-  return dedupeSuggestions([
+  const finalized = dedupeSuggestions([
     ...seededSuggestions,
     ...fallback,
   ])
     .filter((suggestion) => suggestionIsActionable(suggestion, input.sourcePrompt))
     .slice(0, input.maxCount ?? 6)
+  return finalized.map((suggestion) => {
+    const targetThreadKey = suggestion.targetThreadKeys?.[0] ?? suggestion.threadKey ?? null
+    const targetRootEntityKey = suggestion.targetRootEntityKey ?? suggestion.targetEntityKeys?.[0] ?? null
+    const suggestedView = targetThreadKey
+      ? input.snapshot.worldViews.find((view) => {
+          const metadata = (view.metadata ?? {}) as Record<string, unknown>
+          const sourceThreadKeys = Array.isArray(metadata.sourceThreadKeys) ? metadata.sourceThreadKeys as string[] : []
+          return sourceThreadKeys.includes(targetThreadKey)
+        }) ?? null
+      : targetRootEntityKey
+        ? input.snapshot.worldViews.find((view) => {
+            const metadata = (view.metadata ?? {}) as Record<string, unknown>
+            const sourceEntityKeys = Array.isArray(metadata.sourceEntityKeys) ? metadata.sourceEntityKeys as string[] : []
+            return view.rootEntityKey === targetRootEntityKey || sourceEntityKeys.includes(targetRootEntityKey)
+          }) ?? null
+        : null
+    const suggestedMetadata = (suggestedView?.metadata ?? {}) as Record<string, unknown>
+    return worldPromptSuggestionSchema.parse({
+      ...suggestion,
+      suggestedViewKey: suggestion.suggestedViewKey ?? suggestedView?.key ?? null,
+      targetRootEntityKey,
+      preferredViewKind: suggestion.preferredViewKind
+        ?? (typeof suggestedMetadata.viewKind === 'string' ? suggestedMetadata.viewKind : null),
+    })
+  })
 }
 
 function capAssistantSummary(text: string, mode: PlannerMode) {
@@ -2587,10 +2650,10 @@ function stripPlannerOpsForCreativeDescriptorIssues(input: {
 async function supersedeActiveSessionSuggestions(client: SupabaseClient, sessionId: string, excludeIds: string[] = []) {
   const activeSuggestions = await loadActiveSessionSuggestions(client, sessionId)
   const targets = activeSuggestions.filter((suggestion) => !excludeIds.includes(suggestion.id))
-  if (targets.length === 0) return
+  if (targets.length === 0) return []
 
   const timestamp = new Date().toISOString()
-  await Promise.all(targets.map(async (suggestion) => {
+  const updated = await Promise.all(targets.map(async (suggestion) => {
     const response = await client
       .from('world_prompt_suggestions')
       .update({
@@ -2601,8 +2664,12 @@ async function supersedeActiveSessionSuggestions(client: SupabaseClient, session
         },
       })
       .eq('id', suggestion.id)
+      .select(SUGGESTION_SELECT)
+      .maybeSingle()
     if (response.error) throw new Error(response.error.message)
+    return response.data ? mapSuggestionRow(response.data as WorldPromptSuggestionRow) : null
   }))
+  return updated.filter((suggestion): suggestion is WorldPromptSuggestionRecord => Boolean(suggestion))
 }
 
 async function markSuggestionUsed(client: SupabaseClient, suggestionId: string, usedTurnId: string) {
@@ -2633,10 +2700,10 @@ async function persistSessionSuggestions(input: {
   sourcePrompt?: string | null
   suggestions: WorldPromptSuggestion[]
 }) {
-  await supersedeActiveSessionSuggestions(input.client, input.sessionId)
+  const supersededSuggestions = await supersedeActiveSessionSuggestions(input.client, input.sessionId)
   const sanitizedSuggestions = dedupeSuggestions(input.suggestions)
     .filter((suggestion) => suggestionIsActionable(suggestion, input.sourcePrompt))
-  if (sanitizedSuggestions.length === 0) return []
+  if (sanitizedSuggestions.length === 0) return supersededSuggestions
   const response = await input.client
     .from('world_prompt_suggestions')
     .insert(sanitizedSuggestions.map((suggestion, index) => ({
@@ -2675,9 +2742,10 @@ async function persistSessionSuggestions(input: {
     })))
     .select(SUGGESTION_SELECT)
   if (response.error) throw new Error(response.error.message)
-  return ((response.data ?? []) as WorldPromptSuggestionRow[])
+  const insertedSuggestions = ((response.data ?? []) as WorldPromptSuggestionRow[])
     .map(mapSuggestionRow)
     .filter((suggestion): suggestion is WorldPromptSuggestionRecord => Boolean(suggestion))
+  return [...supersededSuggestions, ...insertedSuggestions]
 }
 
 async function updateSessionLifecycle(input: {
@@ -2772,6 +2840,8 @@ function resolveEntityReference(
     definitionKey?: string | null
     name?: string | null
     alias?: string | null
+    nodeTypeHint?: WorldEntity['nodeType'] | null
+    strictNodeType?: boolean
   },
 ) {
   const byKey = input.entityKey ? snapshot.worldEntities.find((entity) => entity.key === input.entityKey) ?? null : null
@@ -2795,7 +2865,14 @@ function resolveEntityReference(
     return { entity: null, candidates: [], matchType: 'none' as const }
   }
 
-  const exactCandidates = snapshot.worldEntities.filter((entity) => {
+  const searchableEntities = input.nodeTypeHint
+    ? (() => {
+        const sameType = snapshot.worldEntities.filter((entity) => entity.nodeType === input.nodeTypeHint)
+        return input.strictNodeType ? sameType : sameType.length > 0 ? sameType : snapshot.worldEntities
+      })()
+    : snapshot.worldEntities
+
+  const exactCandidates = searchableEntities.filter((entity) => {
     const names = [entity.name, ...entity.aliases]
     return names.some((value) => {
       const variants = buildNameVariants(value)
@@ -2809,7 +2886,7 @@ function resolveEntityReference(
     return { entity: null, candidates: exactCandidates, matchType: 'ambiguous_exact' as const }
   }
 
-  const containmentCandidates = snapshot.worldEntities.filter((entity) => {
+  const containmentCandidates = searchableEntities.filter((entity) => {
     const names = [entity.name, ...entity.aliases]
     return names.some((value) => {
       const variants = buildNameVariants(value)
@@ -2829,7 +2906,7 @@ function resolveEntityReference(
     return { entity: null, candidates: containmentCandidates, matchType: 'ambiguous_containment' as const }
   }
 
-  const scored = snapshot.worldEntities
+  const scored = searchableEntities
     .map((entity) => ({
       entity,
       score: Math.max(
@@ -2851,6 +2928,42 @@ function resolveEntityReference(
   return { entity: null, candidates: [], matchType: 'none' as const }
 }
 
+function entityReferenceNameMatches(entity: WorldEntity, name?: string | null, alias?: string | null) {
+  const probeVariants = Array.from(new Set([
+    ...buildNameVariants(name ?? ''),
+    ...buildNameVariants(alias ?? ''),
+  ]))
+  if (probeVariants.length === 0) return true
+  const entityVariants = [entity.name, ...entity.aliases].flatMap((value) => buildNameVariants(value))
+  return entityVariants.some((variant) => probeVariants.includes(variant))
+}
+
+function resolveRelationshipEndpointReference(
+  snapshot: WorldPromptSnapshot,
+  input: {
+    entityKey?: string | null
+    definitionKey?: string | null
+    name?: string | null
+    alias?: string | null
+  },
+) {
+  const resolved = resolveEntityReference(snapshot, input)
+  if (
+    resolved.entity
+    && resolved.matchType === 'exact_key'
+    && input.entityKey
+    && (input.name || input.alias)
+    && !entityReferenceNameMatches(resolved.entity, input.name, input.alias)
+  ) {
+    return resolveEntityReference(snapshot, {
+      definitionKey: input.definitionKey,
+      name: input.name,
+      alias: input.alias,
+    })
+  }
+  return resolved
+}
+
 function determineDefinitionKind(nodeType: WorldEntity['nodeType']): DefinitionBase['kind'] | null {
   switch (nodeType) {
     case 'actor':
@@ -2868,6 +2981,10 @@ function determineDefinitionKind(nodeType: WorldEntity['nodeType']): DefinitionB
     default:
       return null
   }
+}
+
+function worldEntityRequiresLinkedDefinition(nodeType: WorldEntity['nodeType']) {
+  return nodeType === 'actor' || nodeType === 'place' || nodeType === 'object'
 }
 
 function buildWorldEntityKey(snapshot: WorldPromptSnapshot, nodeType: WorldEntity['nodeType'], name: string) {
@@ -2967,12 +3084,33 @@ function countScopeOps(ops: PromptToWorldOp[], snapshot: WorldPromptSnapshot) {
   return counts
 }
 
-function exceedsScopeCaps(counts: PromptScopeCounts, caps: typeof DIRECT_SCOPE_CAPS | typeof STAGED_SCOPE_CAPS) {
+function exceedsScopeCaps(counts: PromptScopeCounts, caps: PromptScopeCaps) {
   return counts.entityOps > caps.entityOps
     || counts.relationshipOps > caps.relationshipOps
     || counts.existingEntityModificationOps > caps.existingEntityModificationOps
     || counts.queueOps > caps.queueOps
     || counts.derivedResultOps > caps.derivedResultOps
+}
+
+function directScopeCapsForPrompt(prompt: string, isSuggestionDriven?: boolean): PromptScopeCaps {
+  if (isSuggestionDriven) return SUGGESTION_DRIVEN_SCOPE_CAPS
+  const requirements = analyzeWorldPromptEntityRequirements(prompt)
+  if (!requirements.hasExplicitCount && !requirements.hasSeedWorldShape) return DIRECT_SCOPE_CAPS
+  return {
+    ...DIRECT_SCOPE_CAPS,
+    entityOps: Math.max(DIRECT_SCOPE_CAPS.entityOps, requirements.minimumEntityOps + 2),
+    relationshipOps: Math.max(DIRECT_SCOPE_CAPS.relationshipOps, Math.ceil((requirements.minimumEntityOps + 2) * 1.5)),
+  }
+}
+
+function stagedScopeCapsForPrompt(prompt: string): PromptScopeCaps {
+  const requirements = analyzeWorldPromptEntityRequirements(prompt)
+  if (!requirements.hasExplicitCount) return STAGED_SCOPE_CAPS
+  return {
+    ...STAGED_SCOPE_CAPS,
+    entityOps: Math.max(STAGED_SCOPE_CAPS.entityOps, requirements.minimumEntityOps),
+    relationshipOps: Math.max(STAGED_SCOPE_CAPS.relationshipOps, requirements.minimumEntityOps + 4),
+  }
 }
 
 function promptIncludesAny(prompt: string, probes: string[]) {
@@ -2981,6 +3119,7 @@ function promptIncludesAny(prompt: string, probes: string[]) {
 }
 
 function scorePromptOpForStaging(op: PromptToWorldOp, prompt: string) {
+  const requirements = analyzeWorldPromptEntityRequirements(prompt)
   if (op.op === 'assistant_note') return -10
   if (op.op === 'replace_entity') {
     const replacementName = op.payload.replacementMode === 'create' ? op.payload.replacementEntity?.name ?? '' : op.payload.replacementEntityKey ?? ''
@@ -2989,10 +3128,11 @@ function scorePromptOpForStaging(op: PromptToWorldOp, prompt: string) {
   }
   if (op.op === 'upsert_entity') {
     const nameBoost = promptIncludesAny(prompt, [op.payload.entity.name, ...op.payload.entity.aliases]) ? 30 : 0
+    const requiredTypeBoost = (requirements.counts[op.payload.entity.nodeType] ?? 0) > 0 ? 34 : 0
     const anchorBoost = op.payload.entity.nodeType === 'place' || op.payload.entity.nodeType === 'event' ? 20 : 0
     const peopleBoost = op.payload.entity.nodeType === 'actor' || op.payload.entity.nodeType === 'group' ? 16 : 0
     const loreBoost = op.payload.entity.nodeType === 'concept' ? 8 : 0
-    return 120 + nameBoost + anchorBoost + peopleBoost + loreBoost
+    return 120 + nameBoost + requiredTypeBoost + anchorBoost + peopleBoost + loreBoost
   }
   if (op.op === 'upsert_relationship') {
     return 90
@@ -3924,12 +4064,13 @@ function buildStagedFirstWave(input: {
   const selected: PromptToWorldOp[] = []
   const selectedEntityKeys = new Set<string>()
   const runningCounts = emptyScopeCounts()
+  const stagedCaps = stagedScopeCapsForPrompt(input.prompt)
   const ranked = [...input.ops].sort((left, right) => scorePromptOpForStaging(right, input.prompt) - scorePromptOpForStaging(left, input.prompt))
 
   for (const op of ranked) {
     if (op.op === 'assistant_note') continue
     const nextCounts = countScopeOps([...selected, op], input.snapshot)
-    if (exceedsScopeCaps(nextCounts, STAGED_SCOPE_CAPS)) {
+    if (exceedsScopeCaps(nextCounts, stagedCaps)) {
       continue
     }
     if (op.op === 'upsert_relationship') {
@@ -4134,8 +4275,14 @@ function annotatePromptOpMetadata(input: {
 }
 
 function promptOpNeedsApproval(op: PromptToWorldOp) {
+  const approvalReason = typeof op.metadata?.approvalReason === 'string'
+    ? op.metadata.approvalReason.trim()
+    : ''
+  if (approvalReason === 'Semantic rewrite of existing entity') {
+    return false
+  }
   return op.applyMode === 'needs_approval'
-    || (op.metadata && typeof op.metadata === 'object' && typeof op.metadata.approvalReason === 'string' && op.metadata.approvalReason.length > 0)
+    || approvalReason.length > 0
 }
 
 function splitPromptOpsByApproval(ops: PromptToWorldOp[]) {
@@ -4159,31 +4306,10 @@ async function upsertWorldThreads(input: {
   draftId: string
   turnId: string
   snapshot: WorldPromptSnapshot
-  selectedThreadKey?: string | null
+  threadActions: Array<z.infer<typeof plannerThreadActionSchema>>
   threadCandidates: Array<z.infer<typeof plannerThreadCandidateSchema>>
 }) {
   const knownEntityKeys = new Set(input.snapshot.worldEntities.map((entity) => entity.key))
-  const fallbackCandidates = input.threadCandidates.length > 0
-    ? input.threadCandidates
-    : (() => {
-      const linkedEntityKeys = input.snapshot.worldEntities
-        .filter((entity) => entity.metadata?.projected === true)
-        .slice(-3)
-        .map((entity) => entity.key)
-      if (linkedEntityKeys.length === 0) return []
-      return [{
-        key: `thread.${slugify(linkedEntityKeys.join('-'))}`,
-        title: 'Emerging Story Thread',
-        summary: 'A newly introduced world thread inferred from the latest prompt wave.',
-        status: 'open' as const,
-        priority: 'primary' as const,
-        linkedEntityKeys,
-        metadata: {
-          inferred: true,
-          tags: ['story_gardener'],
-        },
-      }]
-    })()
   const existingResponse = await input.client
     .from('world_threads')
     .select(THREAD_SELECT)
@@ -4192,9 +4318,14 @@ async function upsertWorldThreads(input: {
 
   const existingThreads = ((existingResponse.data ?? []) as WorldThreadRow[]).map(mapThreadRow)
   const existingByKey = new Map(existingThreads.map((thread) => [thread.key, thread]))
-  const upsertPayload = fallbackCandidates.map((candidate) => {
+  const prepared = preparePlannerThreadMutations({
+    existingThreads,
+    knownEntityKeys,
+    threadActions: input.threadActions,
+    threadCandidates: input.threadCandidates,
+  })
+  const upsertPayload = prepared.mutations.map((candidate) => {
     const existing = existingByKey.get(candidate.key) ?? null
-    const linkedEntityKeys = candidate.linkedEntityKeys.filter((key) => knownEntityKeys.has(key))
     return {
       draft_id: input.draftId,
       key: candidate.key,
@@ -4202,7 +4333,7 @@ async function upsertWorldThreads(input: {
       summary: candidate.summary,
       status: candidate.status,
       priority: candidate.priority,
-      linked_entity_keys: Array.from(new Set([...(existing?.linkedEntityKeys ?? []), ...linkedEntityKeys])),
+      linked_entity_keys: candidate.linkedEntityKeys,
       source_turn_id: existing?.sourceTurnId ?? input.turnId,
       last_turn_id: input.turnId,
       metadata: {
@@ -4222,28 +4353,11 @@ async function upsertWorldThreads(input: {
     persisted.push(...((upsertResponse.data ?? []) as WorldThreadRow[]).map(mapThreadRow))
   }
 
-  if (input.selectedThreadKey) {
-    const selectedThread = existingByKey.get(input.selectedThreadKey) ?? persisted.find((thread) => thread.key === input.selectedThreadKey) ?? null
-    if (selectedThread) {
-      const touchResponse = await input.client
-        .from('world_threads')
-        .update({ last_turn_id: input.turnId })
-        .eq('draft_id', input.draftId)
-        .eq('key', selectedThread.key)
-        .select(THREAD_SELECT)
-        .single()
-      if (touchResponse.error) throw new Error(touchResponse.error.message)
-      const touched = mapThreadRow(touchResponse.data as WorldThreadRow)
-      const existingIndex = persisted.findIndex((thread) => thread.key === touched.key)
-      if (existingIndex >= 0) {
-        persisted[existingIndex] = touched
-      } else {
-        persisted.push(touched)
-      }
-    }
+  return {
+    threads: persisted,
+    diagnostics: prepared.diagnostics,
+    rejected: prepared.rejected,
   }
-
-  return persisted
 }
 
 function classifyPromptExecution(input: {
@@ -4373,7 +4487,7 @@ function classifyPromptExecution(input: {
     }
   }
 
-  const directCaps = input.isSuggestionDriven ? SUGGESTION_DRIVEN_SCOPE_CAPS : DIRECT_SCOPE_CAPS
+  const directCaps = directScopeCapsForPrompt(input.prompt, input.isSuggestionDriven)
   if (!exceedsScopeCaps(counts, directCaps)) {
     const scope: WorldPromptScopeDecision = {
       mode: 'direct',
@@ -4534,13 +4648,43 @@ function projectSanitizedOpIntoSnapshot(snapshot: WorldPromptSnapshot, op: Promp
   }
 }
 
+type AppliedWorldGraphRecords = {
+  worldEntities?: WorldEntity[]
+  worldRelationships?: WorldRelationship[]
+  worldViews?: WorldView[]
+  worldOperators?: WorldOperator[]
+  worldResults?: WorldResult[]
+  worldGraphConnections?: WorldGraphConnection[]
+}
+
+function mergeRecordsByKey<T extends { key: string }>(current: T[], incoming: T[] | undefined) {
+  if (!incoming || incoming.length === 0) return current
+  const incomingKeys = new Set(incoming.map((entry) => entry.key))
+  return [
+    ...current.filter((entry) => !incomingKeys.has(entry.key)),
+    ...incoming,
+  ]
+}
+
+function mergeAppliedWorldGraphIntoSnapshot(snapshot: WorldPromptSnapshot, applied: AppliedWorldGraphRecords | undefined) {
+  if (!applied) return
+  snapshot.worldEntities = mergeRecordsByKey(snapshot.worldEntities, applied.worldEntities)
+  snapshot.worldRelationships = mergeRecordsByKey(snapshot.worldRelationships, applied.worldRelationships)
+  snapshot.worldViews = mergeRecordsByKey(snapshot.worldViews, applied.worldViews)
+  snapshot.worldOperators = mergeRecordsByKey(snapshot.worldOperators, applied.worldOperators)
+  snapshot.worldResults = mergeRecordsByKey(snapshot.worldResults, applied.worldResults)
+  snapshot.worldGraphConnections = mergeRecordsByKey(snapshot.worldGraphConnections, applied.worldGraphConnections)
+}
+
 async function ensureLinkedDefinition(input: {
   client: SupabaseClient
   snapshot: WorldPromptSnapshot
   entity: WorldEntityCreateInput
+  force?: boolean
 }) {
   const definitionKind = determineDefinitionKind(input.entity.nodeType)
-  if (!definitionKind || input.entity.ensureLinkedDefinition === false) {
+  const shouldForceLink = input.force === true || worldEntityRequiresLinkedDefinition(input.entity.nodeType)
+  if (!definitionKind || (input.entity.ensureLinkedDefinition === false && !shouldForceLink)) {
     return {
       linkedDefinitionKey: null,
       createdDefinition: null,
@@ -4626,6 +4770,70 @@ async function ensureLinkedDefinition(input: {
       customFields: [],
       components,
     } satisfies Record<string, unknown>,
+  }
+}
+
+async function ensureAppliedEntityLinkedDefinition(input: {
+  client: SupabaseClient
+  snapshot: WorldPromptSnapshot
+  entity: WorldEntity
+}) {
+  if (!worldEntityRequiresLinkedDefinition(input.entity.nodeType)) {
+    return {
+      entity: input.entity,
+      createdDefinition: null,
+    }
+  }
+
+  let entity = input.entity
+  let createdDefinition: Record<string, unknown> | null = null
+  if (!entity.linkedDefinitionKey) {
+    const ensuredDefinition = await ensureLinkedDefinition({
+      client: input.client,
+      snapshot: input.snapshot,
+      force: true,
+      entity: {
+        name: entity.name,
+        summary: entity.summary,
+        context: entity.context,
+        nodeType: entity.nodeType,
+        aliases: entity.aliases,
+        tags: entity.tags,
+        status: entity.status,
+        thumbnailAssetKey: entity.thumbnailAssetKey,
+        linkedDefinitionKey: entity.linkedDefinitionKey,
+        source: entity.source,
+        customProperties: entity.customProperties,
+        metadata: entity.metadata,
+        ensureLinkedDefinition: true,
+      },
+    })
+    createdDefinition = ensuredDefinition.createdDefinition
+    if (ensuredDefinition.linkedDefinitionKey) {
+      const updateResponse = await input.client
+        .from('world_entities')
+        .update({ linked_definition_key: ensuredDefinition.linkedDefinitionKey })
+        .eq('draft_id', input.snapshot.draft.id)
+        .eq('key', entity.key)
+        .select(WORLD_ENTITY_SELECT)
+        .single()
+      if (updateResponse.error) throw new Error(updateResponse.error.message)
+      entity = mapWorldEntityRow(updateResponse.data as WorldEntityRow)
+    }
+  }
+
+  await syncLinkedDefinitionFromWorldEntity({
+    client: input.client,
+    draftId: input.snapshot.draft.id,
+    entity,
+  })
+  input.snapshot.worldEntities = [
+    ...input.snapshot.worldEntities.filter((entry) => entry.key !== entity.key),
+    entity,
+  ]
+  return {
+    entity,
+    createdDefinition,
   }
 }
 
@@ -4984,6 +5192,7 @@ async function generatePromptPlan(input: {
   const promptIntentHint = retrievalIntent.promptIntent
   const plannerMode = retrievalIntent.plannerMode
   const isSuggestionDriven = Boolean(input.payload.selectedSuggestionId)
+  const entityRequirements = analyzeWorldPromptEntityRequirements(input.payload.prompt)
   const graphDiagnostics = buildGraphDiagnosticFindings({
     snapshot: input.payload.snapshot,
     selectedThreadKey: input.payload.selectedThreadKey,
@@ -5035,6 +5244,21 @@ async function generatePromptPlan(input: {
     'Only use replace_entity when the user explicitly says a node is wrong, should be a different type, should be corrected, or should be replaced.',
     'If the prompt introduces a new proper noun plus extra lore, prefer creating the new node and updating context/relationships around existing nodes instead of replacing an existing node.',
     'For a simple direct creation prompt, wave1Ops should contain the named entities and the most obvious relationships before proposing any optional follow-up suggestions.',
+    isSuggestionDriven
+      ? 'The user selected one of your prior suggestions. Treat this as a request to execute that selected direction now; do not answer by repeating the same options again unless the selected suggestion is explicitly plan-only.'
+      : null,
+    entityRequirements.summary
+      ? `The current prompt has explicit entity requirements: ${entityRequirements.summary}. Satisfy these in wave1Ops with concrete canon-ready names unless the request is contradictory.`
+      : null,
+    entityRequirements.counts.actor
+      ? `Create at least ${entityRequirements.counts.actor} actor node${entityRequirements.counts.actor === 1 ? '' : 's'} for the requested character count; do not satisfy character requirements with groups, places, relationship notes, or thread text.`
+      : null,
+    entityRequirements.counts.group
+      ? `Create enough group nodes to satisfy requested factions/houses/groups; a named ruling house is separate from requested rival factions unless the user says otherwise.`
+      : null,
+    entityRequirements.counts.object
+      ? `Create object nodes for requested artifacts/relics/items and link them to the people, groups, places, or secrets that make them matter.`
+      : null,
     'Use graphable_broad when the request wants too much for one turn. In that case, keep only the best first wave in wave1Ops and place follow-up ideas in wave2Ideas/optionalIdeas.',
     'Use not_graphable or contradictory_or_low_confidence when the prompt cannot be mapped cleanly. In that case, wave1Ops may be empty and suggestionCandidates should repair the request.',
     'For graph diagnosis, let deterministic findings steer your answer and options. Phrase them clearly, but keep them rooted in the provided graph evidence.',
@@ -5043,7 +5267,14 @@ async function generatePromptPlan(input: {
     `Resolved intent: ${relevantPlannerContext.resolvedIntent}.`,
     `Resolved mode: ${relevantPlannerContext.resolvedMode}.`,
     `Resolved focus: ${relevantPlannerContext.resolvedFocus}.`,
-    'threadCandidates should describe the main unresolved narrative or lore threads implied by the prompt and resulting graph changes.',
+    'Use threadActions to describe thread lifecycle changes caused by the turn: create, update, resolve, park, reprioritize, or relink_entities.',
+    'Prefer reusing an existing matching thread when one clear thread already fits the prompt.',
+    'Create a new thread only when the turn materially starts or branches a distinct unresolved storyline, mystery, conflict, or lore strand.',
+    'Emit no thread actions when the turn is purely local, advisory, or does not materially affect ongoing story strands.',
+    'Thread titles must be concrete and world-specific. Never use generic labels like "Story Thread", "Main Thread", or "Emerging Story Thread".',
+    'For relink_entities, merge linked entities by default unless you are intentionally replacing thread scope.',
+    'If a thread is concluded, use resolve. If it should stay available but inactive, use park. If its urgency changes, use reprioritize.',
+    'threadCandidates is legacy compatibility only. Prefer threadActions.',
     'Suggestion ideas should be concrete and world-specific, not generic categories, and should never just paraphrase or repeat the user prompt.',
     ...plannerModeInstructions({
       mode: plannerMode,
@@ -5066,10 +5297,36 @@ async function generatePromptPlan(input: {
     resolvedMode: retrievalIntent.resolvedMode,
     resolvedIntent: retrievalIntent.resolvedIntent,
     resolvedFocus: retrievalIntent.resolvedFocus,
+    entityRequirements,
     promptIntentHint,
     selectedSuggestionId: input.payload.selectedSuggestionId,
+    selectedSuggestion: input.selectedSuggestion
+      ? {
+          id: input.selectedSuggestion.id,
+          label: input.selectedSuggestion.label,
+          prompt: input.selectedSuggestion.prompt,
+          kind: input.selectedSuggestion.kind,
+          summary: input.selectedSuggestion.summary,
+          uiKind: input.selectedSuggestion.uiKind,
+          executionMode: input.selectedSuggestion.executionMode,
+          actionMode: input.selectedSuggestion.actionMode,
+          targetEntityKeys: input.selectedSuggestion.targetEntityKeys,
+          targetThreadKeys: input.selectedSuggestion.targetThreadKeys,
+          retrievalHint: input.selectedSuggestion.retrievalHint,
+        }
+      : null,
     prompt: input.payload.prompt,
     projectContext: input.payload.snapshot.projectContext,
+    openThreads: input.payload.snapshot.worldThreads
+      .filter((thread) => thread.status === 'open')
+      .slice(0, 8)
+      .map((thread) => ({
+        key: thread.key,
+        title: thread.title,
+        summary: thread.summary,
+        priority: thread.priority,
+        linkedEntityKeys: thread.linkedEntityKeys.slice(0, 8),
+      })),
     graphDiagnostics: plannerMode === 'advisory_diagnosis' ? graphDiagnostics : graphDiagnostics.slice(0, 2),
     retrieval: relevantPlannerContext,
   })
@@ -5290,10 +5547,12 @@ function sanitizePromptOp(input: {
     const entity = op.payload.entity
     entity.source = entity.source ?? 'ai'
     entity.ensureLinkedDefinition = entity.ensureLinkedDefinition ?? true
-    const resolved = resolveEntityReference(input.snapshot, {
+    let resolved = resolveEntityReference(input.snapshot, {
       entityKey: op.payload.targetEntityKey,
       definitionKey: entity.linkedDefinitionKey,
       name: entity.name,
+      nodeTypeHint: entity.nodeType,
+      strictNodeType: true,
     })
     if (resolved.candidates.length > 1) {
       op.applyMode = 'needs_approval'
@@ -5309,6 +5568,38 @@ function sanitizePromptOp(input: {
       })
     }
     if (resolved.entity) {
+      const keyMatchedDifferentName = (
+        resolved.matchType === 'exact_key'
+        && Boolean(op.payload.targetEntityKey)
+        && normalizeName(entity.name) !== normalizeName(resolved.entity.name)
+        && !explicitCorrection
+      )
+      if (keyMatchedDifferentName) {
+        const nameResolved = resolveEntityReference(input.snapshot, {
+          definitionKey: entity.linkedDefinitionKey,
+          name: entity.name,
+          nodeTypeHint: entity.nodeType,
+          strictNodeType: true,
+        })
+        if (!nameResolved.entity && nameResolved.candidates.length === 0) {
+          op.payload.targetEntityKey = null
+          return annotatePromptOpMetadata({ op, touchesExisting: false })
+        }
+        resolved = nameResolved
+      }
+      if (!resolved.entity) {
+        op.applyMode = 'needs_approval'
+        op.metadata = {
+          ...(op.metadata ?? {}),
+          matchCandidateEntityKeys: resolved.candidates.map((candidate) => candidate.key),
+          resolution: resolved.matchType,
+        }
+        return annotatePromptOpMetadata({
+          op,
+          touchesExisting: true,
+          approvalReason: 'Ambiguous entity match',
+        })
+      }
       op.payload.targetEntityKey = resolved.entity.key
       const renaming = normalizeName(entity.name) !== normalizeName(resolved.entity.name)
       const changingKind = entity.nodeType !== resolved.entity.nodeType
@@ -5424,13 +5715,13 @@ function sanitizePromptOp(input: {
 
   if (op.op === 'upsert_relationship') {
     const relationship = op.payload.relationship
-    const source = resolveEntityReference(input.snapshot, {
+    const source = resolveRelationshipEndpointReference(input.snapshot, {
       entityKey: relationship.sourceEntityKey,
       definitionKey: relationship.sourceRef?.definitionKey,
       name: relationship.sourceRef?.name ?? relationship.sourceEntityKey,
       alias: relationship.sourceRef?.alias,
     })
-    const target = resolveEntityReference(input.snapshot, {
+    const target = resolveRelationshipEndpointReference(input.snapshot, {
       entityKey: relationship.targetEntityKey,
       definitionKey: relationship.targetRef?.definitionKey,
       name: relationship.targetRef?.name ?? relationship.targetEntityKey,
@@ -5570,6 +5861,7 @@ async function createPromptWorldEntity(input: {
     client: input.client,
     snapshot: input.snapshot,
     entity: input.entity,
+    force: worldEntityRequiresLinkedDefinition(input.entity.nodeType),
   })
 
   const key = input.preferredKey || buildWorldEntityKey(input.snapshot, input.entity.nodeType, input.entity.name)
@@ -5739,14 +6031,24 @@ async function applyPromptOp(input: {
         draftId: input.snapshot.draft.id,
         entity: updatedEntity,
       })
-      input.snapshot.worldEntities = input.snapshot.worldEntities.map((entity) => entity.key === updatedEntity.key ? updatedEntity : entity)
-      return { applied: { worldEntities: [updatedEntity] }, queue: null, note: null }
+      const linkedEntity = await ensureAppliedEntityLinkedDefinition({
+        client: input.client,
+        snapshot: input.snapshot,
+        entity: updatedEntity,
+      })
+      return {
+        applied: { worldEntities: [linkedEntity.entity] },
+        definitions: linkedEntity.createdDefinition ? [linkedEntity.createdDefinition] : [],
+        queue: null,
+        note: null,
+      }
     }
 
     const ensuredDefinition = await ensureLinkedDefinition({
       client: input.client,
       snapshot: input.snapshot,
       entity: input.op.payload.entity,
+      force: worldEntityRequiresLinkedDefinition(input.op.payload.entity.nodeType),
     })
     const linkedDefinitionKey = ensuredDefinition.linkedDefinitionKey
     const key = input.op.payload.targetEntityKey || buildWorldEntityKey(input.snapshot, input.op.payload.entity.nodeType, input.op.payload.entity.name)
@@ -5764,13 +6066,17 @@ async function applyPromptOp(input: {
           draftId: input.snapshot.draft.id,
           entity: updatedEntity,
         })
-        input.snapshot.worldEntities = [
-          ...input.snapshot.worldEntities.filter((entity) => entity.key !== updatedEntity.key),
-          updatedEntity,
-        ]
+        const linkedEntity = await ensureAppliedEntityLinkedDefinition({
+          client: input.client,
+          snapshot: input.snapshot,
+          entity: updatedEntity,
+        })
       return {
-        applied: { worldEntities: [updatedEntity] },
-        definitions: ensuredDefinition.createdDefinition ? [ensuredDefinition.createdDefinition] : [],
+        applied: { worldEntities: [linkedEntity.entity] },
+        definitions: [
+          ensuredDefinition.createdDefinition,
+          linkedEntity.createdDefinition,
+        ].filter((definition): definition is Record<string, unknown> => Boolean(definition)),
         queue: null,
         note: null,
       }
@@ -5812,13 +6118,17 @@ async function applyPromptOp(input: {
             draftId: input.snapshot.draft.id,
             entity: updatedEntity,
           })
-          input.snapshot.worldEntities = [
-            ...input.snapshot.worldEntities.filter((entity) => entity.key !== updatedEntity.key),
-            updatedEntity,
-          ]
+          const linkedEntity = await ensureAppliedEntityLinkedDefinition({
+            client: input.client,
+            snapshot: input.snapshot,
+            entity: updatedEntity,
+          })
           return {
-            applied: { worldEntities: [updatedEntity] },
-            definitions: ensuredDefinition.createdDefinition ? [ensuredDefinition.createdDefinition] : [],
+            applied: { worldEntities: [linkedEntity.entity] },
+            definitions: [
+              ensuredDefinition.createdDefinition,
+              linkedEntity.createdDefinition,
+            ].filter((definition): definition is Record<string, unknown> => Boolean(definition)),
             queue: null,
             note: null,
           }
@@ -5832,13 +6142,17 @@ async function applyPromptOp(input: {
       draftId: input.snapshot.draft.id,
       entity: createdEntity,
     })
-    input.snapshot.worldEntities = [
-      ...input.snapshot.worldEntities.filter((entity) => entity.key !== createdEntity.key),
-      createdEntity,
-    ]
+    const linkedEntity = await ensureAppliedEntityLinkedDefinition({
+      client: input.client,
+      snapshot: input.snapshot,
+      entity: createdEntity,
+    })
     return {
-      applied: { worldEntities: [createdEntity] },
-      definitions: ensuredDefinition.createdDefinition ? [ensuredDefinition.createdDefinition] : [],
+      applied: { worldEntities: [linkedEntity.entity] },
+      definitions: [
+        ensuredDefinition.createdDefinition,
+        linkedEntity.createdDefinition,
+      ].filter((definition): definition is Record<string, unknown> => Boolean(definition)),
       queue: null,
       note: null,
     }
@@ -5918,8 +6232,17 @@ async function applyPromptOp(input: {
       draftId: input.snapshot.draft.id,
       entity: updatedEntity,
     })
-    input.snapshot.worldEntities = input.snapshot.worldEntities.map((entity) => entity.key === updatedEntity.key ? updatedEntity : entity)
-    return { applied: { worldEntities: [updatedEntity] }, queue: null, note: null }
+    const linkedEntity = await ensureAppliedEntityLinkedDefinition({
+      client: input.client,
+      snapshot: input.snapshot,
+      entity: updatedEntity,
+    })
+    return {
+      applied: { worldEntities: [linkedEntity.entity] },
+      definitions: linkedEntity.createdDefinition ? [linkedEntity.createdDefinition] : [],
+      queue: null,
+      note: null,
+    }
   }
 
   if (input.op.op === 'replace_entity') {
@@ -5961,6 +6284,14 @@ async function applyPromptOp(input: {
       if (!replacementEntity) {
         throw new Error('Replacement entity could not be resolved.')
       }
+      const linkedReplacement = await ensureAppliedEntityLinkedDefinition({
+        client: input.client,
+        snapshot: input.snapshot,
+        entity: replacementEntity,
+      })
+      replacementEntity = linkedReplacement.entity
+      replacementDefinitionKey = replacementEntity.linkedDefinitionKey
+      createdReplacementDefinition = createdReplacementDefinition ?? linkedReplacement.createdDefinition
 
       const replaced = await replaceWorldEntityGraph({
         client: input.client,
@@ -6554,6 +6885,75 @@ async function loadWorldViewsByDraftAndKeys(client: SupabaseClient, draftId: str
   return ((response.data ?? []) as WorldViewRow[]).map(mapWorldViewRow)
 }
 
+function serializeWorldViewRow(draftId: string, view: WorldView) {
+  return {
+    draft_id: draftId,
+    key: view.key,
+    name: view.name,
+    mode: view.mode,
+    filters: view.filters,
+    search: view.search,
+    root_entity_key: view.rootEntityKey,
+    camera: view.camera,
+    focus_depth: view.focusDepth,
+    show_suggestions: view.showSuggestions,
+    show_labels: view.showLabels,
+    show_derived_layer: view.showDerivedLayer,
+    node_positions: view.nodePositions,
+    collapsed_state: view.collapsedState,
+    sort_mode: view.sortMode,
+    metadata: view.metadata,
+  }
+}
+
+function dedupeWorldViewsByKey(views: WorldView[]) {
+  const byKey = new Map<string, WorldView>()
+  for (const view of views) {
+    byKey.set(view.key, view)
+  }
+  return Array.from(byKey.values())
+}
+
+async function reconcileAutoManagedViewsForDraft(input: {
+  client: SupabaseClient
+  draftId: string
+  snapshot: WorldPromptSnapshot
+  options?: AutoManagedWorldViewOptions
+}) {
+  const reconciled = reconcileAutoManagedWorldViews({
+    worldEntities: input.snapshot.worldEntities,
+    worldRelationships: input.snapshot.worldRelationships,
+    worldViews: input.snapshot.worldViews,
+    worldThreads: input.snapshot.worldThreads,
+  }, input.options)
+  const desiredAutoViews = dedupeWorldViewsByKey(reconciled.worldViews.filter((view) => (view.metadata as Record<string, unknown> | undefined)?.autoManaged === true))
+  const currentAutoViews = input.snapshot.worldViews.filter((view) => (view.metadata as Record<string, unknown> | undefined)?.autoManaged === true)
+  const removedKeys = currentAutoViews
+    .map((view) => view.key)
+    .filter((key) => !desiredAutoViews.some((view) => view.key === key))
+
+  if (desiredAutoViews.length > 0) {
+    const upsertResponse = await input.client
+      .from('world_views')
+      .upsert(desiredAutoViews.map((view) => serializeWorldViewRow(input.draftId, view)), {
+        onConflict: 'draft_id,key',
+      })
+    if (upsertResponse.error) throw new Error(upsertResponse.error.message)
+  }
+
+  if (removedKeys.length > 0) {
+    const deleteResponse = await input.client
+      .from('world_views')
+      .delete()
+      .eq('draft_id', input.draftId)
+      .in('key', removedKeys)
+    if (deleteResponse.error) throw new Error(deleteResponse.error.message)
+  }
+
+  input.snapshot.worldViews = reconciled.worldViews
+  return reconciled
+}
+
 async function loadWorldOperatorsByDraftAndKeys(client: SupabaseClient, draftId: string, operatorKeys: string[]) {
   if (operatorKeys.length === 0) return []
   const response = await client
@@ -6914,6 +7314,7 @@ export async function startWorldPromptTurn(input: {
     turnId: turn.id,
     draftId: payload.snapshot.draft.id,
   })
+  let responseSuggestions: WorldPromptSuggestionRecord[] = []
 
   try {
     await writeEvent('turn_started', {
@@ -7023,14 +7424,19 @@ export async function startWorldPromptTurn(input: {
     }
     const sanitizedOps = plannerOps.map((operation) => sanitizedById.get(operation.id) ?? operation)
 
-    const persistedThreads = await upsertWorldThreads({
+    const threadUpsertResult = await upsertWorldThreads({
       client: input.client,
       draftId: payload.snapshot.draft.id,
       turnId: turn.id,
       snapshot: planningSnapshot,
-      selectedThreadKey: payload.selectedThreadKey,
+      threadActions: generated.threadActions,
       threadCandidates: generated.threadCandidates,
     })
+    const persistedThreads = threadUpsertResult.threads
+    const threadDiagnostics = [
+      ...threadUpsertResult.diagnostics,
+      ...threadUpsertResult.rejected.map((entry) => `thread_rejected:${entry.key || 'unknown'}:${entry.reason}`),
+    ]
     planningSnapshot.worldThreads = [
       ...planningSnapshot.worldThreads.filter((thread) => !persistedThreads.some((persisted) => persisted.key === thread.key)),
       ...persistedThreads,
@@ -7086,9 +7492,15 @@ export async function startWorldPromptTurn(input: {
       sourcePrompt: payload.prompt,
       suggestions: finalizedSuggestions,
     })
+    const activePersistedSuggestions = persistedSuggestions.filter((suggestion) => suggestion.state === 'active')
+    const responseSuggestionsById = new Map(persistedSuggestions.map((suggestion) => [suggestion.id, suggestion]))
     if (payload.selectedSuggestionId) {
-      await markSuggestionUsed(input.client, payload.selectedSuggestionId, turn.id)
+      const usedSuggestion = await markSuggestionUsed(input.client, payload.selectedSuggestionId, turn.id)
+      if (usedSuggestion) {
+        responseSuggestionsById.set(usedSuggestion.id, usedSuggestion)
+      }
     }
+    responseSuggestions = Array.from(responseSuggestionsById.values())
 
     await writeEvent('planner_status', {
       plannerStatus: 'scoping',
@@ -7100,13 +7512,17 @@ export async function startWorldPromptTurn(input: {
       answerMode: execution.answerMode,
       diagnosticFindings: execution.diagnosticFindings,
       suggestions: finalizedSuggestions,
-      suggestionIds: persistedSuggestions.map((suggestion) => suggestion.id),
+      suggestionIds: activePersistedSuggestions.map((suggestion) => suggestion.id),
       threads: persistedThreads,
+      diagnostics: threadDiagnostics,
       turn: { id: turn.id },
     })
 
     const mutableSnapshot = structuredClone(refreshedPlanningSnapshot) as WorldPromptSnapshot
     const appliedDefinitions: Record<string, unknown>[] = []
+    const touchedEntityKeys = new Set<string>()
+    const touchedRelationshipKeys = new Set<string>()
+    let preferredAutoViewKey: string | null = null
     const opsToRun = execution.selectedOps
     const { autoOps: autoRunnableOps, approvalOps: skippedRiskyOps } = splitPromptOpsByApproval(opsToRun)
     const executionPreview = null
@@ -7124,6 +7540,7 @@ export async function startWorldPromptTurn(input: {
         suggestions: finalizedSuggestions,
         suggestionIds: persistedSuggestions.map((suggestion) => suggestion.id),
         threads: persistedThreads,
+        diagnostics: threadDiagnostics,
         note: stripInternalPlannerDiagnostics(execution.note),
         turn: { id: turn.id },
       })
@@ -7140,6 +7557,7 @@ export async function startWorldPromptTurn(input: {
         suggestions: finalizedSuggestions,
         suggestionIds: persistedSuggestions.map((suggestion) => suggestion.id),
         threads: persistedThreads,
+        diagnostics: threadDiagnostics,
         turn: { id: turn.id },
       })
     } else if (execution.mode === 'advisory') {
@@ -7154,6 +7572,7 @@ export async function startWorldPromptTurn(input: {
         suggestions: finalizedSuggestions,
         suggestionIds: persistedSuggestions.map((suggestion) => suggestion.id),
         threads: persistedThreads,
+        diagnostics: threadDiagnostics,
         turn: { id: turn.id },
       })
     } else {
@@ -7170,6 +7589,7 @@ export async function startWorldPromptTurn(input: {
         suggestions: finalizedSuggestions,
         suggestionIds: persistedSuggestions.map((suggestion) => suggestion.id),
         threads: persistedThreads,
+        diagnostics: threadDiagnostics,
         plannerProgress: executableOpCount > 0 ? {
           phase: 'applying_changes',
           message: `Applying 0/${executableOpCount}.`,
@@ -7216,12 +7636,21 @@ export async function startWorldPromptTurn(input: {
           prompt: payload.prompt,
           op,
         })
+        mergeAppliedWorldGraphIntoSnapshot(mutableSnapshot, result.applied)
         if (Array.isArray(result.definitions) && result.definitions.length > 0) {
           for (const definition of result.definitions) {
             if (!appliedDefinitions.some((entry) => entry.key === definition.key)) {
               appliedDefinitions.push(definition)
             }
           }
+        }
+        for (const entity of result.applied.worldEntities ?? []) {
+          touchedEntityKeys.add(entity.key)
+        }
+        for (const relationship of result.applied.worldRelationships ?? []) {
+          touchedRelationshipKeys.add(relationship.key)
+          touchedEntityKeys.add(relationship.sourceEntityKey)
+          touchedEntityKeys.add(relationship.targetEntityKey)
         }
 
         if (result.note) {
@@ -7248,6 +7677,47 @@ export async function startWorldPromptTurn(input: {
             scope: execution.scope,
           }, { opId: op.id })
         }
+      }
+
+      for (const thread of persistedThreads) {
+        if (thread.lastTurnId === turn.id || thread.sourceTurnId === turn.id) {
+          for (const entityKey of thread.linkedEntityKeys) {
+            touchedEntityKeys.add(entityKey)
+          }
+        }
+      }
+      for (const entityKey of [...touchedEntityKeys]) {
+        const touchedEntity = mutableSnapshot.worldEntities.find((entity) => entity.key === entityKey) ?? null
+        if (!touchedEntity) continue
+        const linkedEntity = await ensureAppliedEntityLinkedDefinition({
+          client: input.client,
+          snapshot: mutableSnapshot,
+          entity: touchedEntity,
+        })
+        if (linkedEntity.createdDefinition && !appliedDefinitions.some((entry) => entry.key === linkedEntity.createdDefinition?.key)) {
+          appliedDefinitions.push(linkedEntity.createdDefinition)
+        }
+      }
+      if (touchedEntityKeys.size > 0 || touchedRelationshipKeys.size > 0 || persistedThreads.length > 0) {
+        const reconciledViews = await reconcileAutoManagedViewsForDraft({
+          client: input.client,
+          draftId: payload.snapshot.draft.id,
+          snapshot: mutableSnapshot,
+          options: {
+            recentEntityKeys: [...touchedEntityKeys],
+            recentRelationshipKeys: [...touchedRelationshipKeys],
+            preferredRootEntityKey: [...touchedEntityKeys][0] ?? payload.selectedRootEntityKey ?? null,
+            preferredThreadKey: payload.selectedThreadKey,
+          },
+        })
+        preferredAutoViewKey = reconciledViews.preferredViewKey
+        await writeEvent('op_applied', {
+          applied: {
+            worldViews: mutableSnapshot.worldViews,
+          },
+          classification: execution.classification,
+          scope: execution.scope,
+        })
       }
     }
 
@@ -7309,6 +7779,7 @@ export async function startWorldPromptTurn(input: {
         suggestions: finalizedSuggestions,
         suggestionIds: persistedSuggestions.map((suggestion) => suggestion.id),
         threads: persistedThreads,
+        threadDiagnostics,
       },
     })
     await writeEvent('message_created', {
@@ -7316,6 +7787,9 @@ export async function startWorldPromptTurn(input: {
       turn: { id: turn.id },
     })
 
+    const resolvedSelectedViewKey = retrievalPacket.continuityMode === 'topic_shift'
+      ? (preferredAutoViewKey ?? payload.selectedViewKey ?? workingSession.selectedViewKey)
+      : (payload.selectedViewKey ?? preferredAutoViewKey ?? workingSession.selectedViewKey)
     turn = await updateTurn(input.client, turn.id, {
       status: 'completed',
       approval_state: 'not_required',
@@ -7348,8 +7822,10 @@ export async function startWorldPromptTurn(input: {
         continuityMode: retrievalPacket.continuityMode,
         retrievedEntityKeys: retrievalPacket.sessionMemory.worldMemory.retrievedEntityKeys,
         retrievedThreadKeys: retrievalPacket.sessionMemory.worldMemory.retrievedThreadKeys,
+        selectedViewKey: resolvedSelectedViewKey,
         suggestions: finalizedSuggestions,
         suggestionIds: persistedSuggestions.map((suggestion) => suggestion.id),
+        threadDiagnostics,
       },
     })
     const nextSessionMemoryState = buildSessionMemoryState({
@@ -7364,7 +7840,7 @@ export async function startWorldPromptTurn(input: {
       prompt: payload.prompt,
       assistantSummary,
       selectedRootEntityKey: payload.selectedRootEntityKey,
-      selectedViewKey: payload.selectedViewKey,
+      selectedViewKey: resolvedSelectedViewKey,
       selectedThreadKey: payload.selectedThreadKey,
       summaryMemory: buildRollingSessionMemory({
         session: workingSession,
@@ -7379,6 +7855,7 @@ export async function startWorldPromptTurn(input: {
         continuityMode: retrievalPacket.continuityMode,
         retrievedEntityKeys: retrievalPacket.sessionMemory.worldMemory.retrievedEntityKeys,
         retrievedThreadKeys: retrievalPacket.sessionMemory.worldMemory.retrievedThreadKeys,
+        selectedViewKey: resolvedSelectedViewKey,
       },
     })
 
@@ -7394,6 +7871,7 @@ export async function startWorldPromptTurn(input: {
       suggestions: finalizedSuggestions,
       suggestionIds: persistedSuggestions.map((suggestion) => suggestion.id),
       threads: persistedThreads,
+      diagnostics: threadDiagnostics,
       turn,
       session: workingSession,
     })
@@ -7407,15 +7885,22 @@ export async function startWorldPromptTurn(input: {
       answerMode: execution.answerMode,
       diagnosticFindings: execution.diagnosticFindings,
       suggestions: finalizedSuggestions,
-      suggestionIds: persistedSuggestions.map((suggestion) => suggestion.id),
+      suggestionIds: activePersistedSuggestions.map((suggestion) => suggestion.id),
       threads: persistedThreads,
+      diagnostics: threadDiagnostics,
       note: assistantSummary,
       session: workingSession,
     })
+    const turnMessages = await loadTurnMessages(input.client, turn.id)
+    const turnEvents = await loadTurnEvents(input.client, turn.id)
     return worldPromptStartTurnResponseSchema.parse({
       ok: true,
       session: workingSession,
       turn,
+      messages: turnMessages,
+      events: turnEvents,
+      suggestions: responseSuggestions,
+      threads: persistedThreads,
       definitions: appliedDefinitions,
     })
   } catch (error) {
@@ -7471,10 +7956,16 @@ export async function startWorldPromptTurn(input: {
         sessionMemoryState: cancelledSessionMemoryState,
         retrievalDiagnostics: null,
       })
+      const turnMessages = await loadTurnMessages(input.client, turn.id)
+      const turnEvents = await loadTurnEvents(input.client, turn.id)
       return worldPromptStartTurnResponseSchema.parse({
         ok: true,
         session: workingSession,
         turn,
+        messages: turnMessages,
+        events: turnEvents,
+        suggestions: responseSuggestions,
+        threads: [],
         definitions: [],
       })
     }
@@ -7588,6 +8079,7 @@ export async function approveWorldPromptOp(input: {
     prompt: turn.prompt,
     op: { ...pending.op, status: 'approved' },
   })
+  mergeAppliedWorldGraphIntoSnapshot(mutableSnapshot, result.applied)
   await writeEvent('op_approved', {
     op: { ...pending.op, status: 'approved' },
     applied: result.applied,
@@ -7754,6 +8246,7 @@ export async function applyWorldPromptPreview(input: {
       prompt: turn.prompt,
       op,
     })
+    mergeAppliedWorldGraphIntoSnapshot(mutableSnapshot, result.applied)
     appliedOpIds.push(op.id)
 
     if (result.note) {

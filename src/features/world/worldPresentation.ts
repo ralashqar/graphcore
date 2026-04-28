@@ -13,6 +13,7 @@ import type {
 } from '../../domain/worldPrompt.ts'
 import { worldPromptEventPayloadSchema, worldPromptPlanPreviewSchema } from '../../domain/worldPrompt.ts'
 import type { WorldEntity, WorldOperator, WorldResult } from '../../domain/worldGraph.ts'
+import type { WorldGraphDepthMode, WorldSceneDisplayTier, WorldSceneTransitionState } from '../../domain/worldGraphScene.ts'
 import { labelForWorldEntity } from '../../domain/worldGraphHelpers.ts'
 
 const WORLD_INSPECTOR_REFINEMENT_HISTORY_LIMIT = 5
@@ -27,19 +28,150 @@ export type WorldNodeData = {
   relationCount: number
   usageCount: number
   dimmed: boolean
+  pinned: boolean
+  storyLinked: boolean
+  displayTier: WorldSceneDisplayTier
+  visualMode: WorldNodeVisualMode
+  transitionState: WorldSceneTransitionState
   animateIn: boolean
+  animateSceneEnter: boolean
+  highlighted: boolean
+  showMiniLabel: boolean
+  branchLabel?: string | null
+  visibilityReason: WorldNodeVisibilityReason
+}
+
+export type WorldNodeVisualMode = 'card' | 'nearIcon' | 'farIcon' | 'peripheralDot'
+
+export type WorldNodeVisibilityReasonKind =
+  | 'focus_root'
+  | 'selected'
+  | 'turn_lens_changed'
+  | 'turn_lens_endpoint'
+  | 'pinned'
+  | 'story_linked'
+  | 'direct_neighbor'
+  | 'peripheral_branch'
+  | 'near_context'
+  | 'far_context'
+  | 'derived_output'
+  | 'context'
+
+export type WorldNodeVisibilityReason = {
+  kind: WorldNodeVisibilityReasonKind
+  label: string
+  detail: string
+}
+
+export type WorldPromptTurnLens = {
+  turnId: string
+  createdAt: string
+  label: string
+  prompt: string
+  entityKeys: string[]
+  relationshipKeys: string[]
+  operatorKeys: string[]
+  resultKeys: string[]
+  nodeKeys: string[]
+  rootEntityKey: string | null
+  changeCount: number
+  counts: {
+    entities: number
+    relationships: number
+    derived: number
+    total: number
+  }
+}
+
+export type WorldEdgeRevealReason = 'lens' | 'selected' | 'focus_hover' | 'story' | 'hidden'
+
+export type WorldEdgeReveal = {
+  visible: boolean
+  reason: WorldEdgeRevealReason
+  emphasized: boolean
+}
+
+export type WorldGraphPresentationPreset = 'focus' | 'explore' | 'story' | 'recent' | 'wide'
+
+export type WorldGraphPresentationPresetConfig = {
+  preset: WorldGraphPresentationPreset
+  depthMode: WorldGraphDepthMode
+  showBranchLabels: boolean
+  emphasizeEntityTypes: boolean
+  emphasizeThreads: boolean
+  edgeDensity: 'minimal' | 'context'
+}
+
+export type WorldGraphDisplayFilterKey =
+  | 'characters'
+  | 'places'
+  | 'groups'
+  | 'objects'
+  | 'concepts'
+  | 'events'
+  | 'threads'
+  | 'derived'
+  | 'pinned'
+  | 'recent'
+
+export type WorldGraphDisplayFilters = Record<WorldGraphDisplayFilterKey, boolean>
+
+export const DEFAULT_WORLD_GRAPH_DISPLAY_FILTERS: WorldGraphDisplayFilters = {
+  characters: true,
+  places: true,
+  groups: true,
+  objects: true,
+  concepts: true,
+  events: true,
+  threads: true,
+  derived: true,
+  pinned: true,
+  recent: true,
+}
+
+export type WorldGraphFilterState = {
+  filters: WorldGraphDisplayFilters
+  enabledEntityTypes: WorldEntity['nodeType'][]
+  showDerived: boolean
+  showThreads: boolean
+  showPinned: boolean
+  showRecent: boolean
+  disabledCount: number
+}
+
+export type WorldGraphLabelPolicy = {
+  showNodeLabel: boolean
+  showBranchLabel: boolean
+}
+
+export type WorldGraphGrowthPlaybackStep = {
+  turnId: string
+  index: number
+  label: string
+  prompt: string
+  turnLens: WorldPromptTurnLens
+  fitNodeKeys: string[]
+}
+
+export type WorldGraphGrowthPlaybackModel = {
+  steps: WorldGraphGrowthPlaybackStep[]
+  activeStep: WorldGraphGrowthPlaybackStep | null
+  activeIndex: number
+  canGoPrevious: boolean
+  canGoNext: boolean
 }
 
 export type WorldPromptTranscriptEntry =
   | { id: string; createdAt: string; kind: 'user_message' | 'assistant_message'; content: string; pending?: boolean }
   | { id: string; createdAt: string; kind: 'system_status'; label: string; detail?: string; tone?: 'normal' | 'error' }
   | { id: string; createdAt: string; kind: 'planner_progress'; label: string; detail?: string; phase: WorldPromptPlannerProgress['phase']; outline: string[]; done?: boolean }
-  | { id: string; createdAt: string; kind: 'entity_created'; label: string; detail?: string; entityKey: string; entityNodeType: WorldEntity['nodeType'] }
-  | { id: string; createdAt: string; kind: 'entity_updated'; label: string; detail?: string; entityKey: string; entityNodeType: WorldEntity['nodeType'] }
-  | { id: string; createdAt: string; kind: 'entity_replaced'; label: string; detail?: string; entityKey: string; entityNodeType: WorldEntity['nodeType'] }
-  | { id: string; createdAt: string; kind: 'relationship_created'; label: string; detail?: string; relationshipKey: string; sourceLabel: string; targetLabel: string }
-  | { id: string; createdAt: string; kind: 'relationship_updated'; label: string; detail?: string; relationshipKey: string; sourceLabel: string; targetLabel: string }
-  | { id: string; createdAt: string; kind: 'derived_result_created'; label: string; detail?: string; resultKey: string }
+  | { id: string; createdAt: string; kind: 'turn_lens'; label: string; detail?: string; turnLens: WorldPromptTurnLens }
+  | { id: string; createdAt: string; kind: 'entity_created'; label: string; detail?: string; entityKey: string; entityNodeType: WorldEntity['nodeType']; turnLens?: WorldPromptTurnLens }
+  | { id: string; createdAt: string; kind: 'entity_updated'; label: string; detail?: string; entityKey: string; entityNodeType: WorldEntity['nodeType']; turnLens?: WorldPromptTurnLens }
+  | { id: string; createdAt: string; kind: 'entity_replaced'; label: string; detail?: string; entityKey: string; entityNodeType: WorldEntity['nodeType']; turnLens?: WorldPromptTurnLens }
+  | { id: string; createdAt: string; kind: 'relationship_created'; label: string; detail?: string; relationshipKey: string; sourceLabel: string; targetLabel: string; turnLens?: WorldPromptTurnLens }
+  | { id: string; createdAt: string; kind: 'relationship_updated'; label: string; detail?: string; relationshipKey: string; sourceLabel: string; targetLabel: string; turnLens?: WorldPromptTurnLens }
+  | { id: string; createdAt: string; kind: 'derived_result_created'; label: string; detail?: string; resultKey: string; turnLens?: WorldPromptTurnLens }
   | { id: string; createdAt: string; kind: 'queue_started'; label: string; detail?: string }
   | { id: string; createdAt: string; kind: 'advisory_answer'; label: string; detail?: string }
   | { id: string; createdAt: string; kind: 'diagnostic_finding'; label: string; detail?: string; severity: WorldPromptDiagnosticFinding['severity'] }
@@ -120,12 +252,253 @@ export function worldNodeDataEqual(left: WorldNodeData, right: WorldNodeData) {
     left.relationCount === right.relationCount
     && left.usageCount === right.usageCount
     && left.dimmed === right.dimmed
+    && left.pinned === right.pinned
+    && left.storyLinked === right.storyLinked
+    && left.displayTier === right.displayTier
+    && left.visualMode === right.visualMode
+    && left.transitionState === right.transitionState
     && left.animateIn === right.animateIn
+    && left.animateSceneEnter === right.animateSceneEnter
+    && left.highlighted === right.highlighted
+    && left.showMiniLabel === right.showMiniLabel
+    && left.branchLabel === right.branchLabel
+    && left.visibilityReason.kind === right.visibilityReason.kind
+    && left.visibilityReason.label === right.visibilityReason.label
+    && left.visibilityReason.detail === right.visibilityReason.detail
     && worldNodeRecordEqual(left.record, right.record)
   )
 }
 
-export function nodeShellStyle(record: WorldGraphNodeRecord, selected: boolean, dimmed: boolean): CSSProperties {
+export function buildWorldGraphPresentationPresetConfig(input: {
+  preset: WorldGraphPresentationPreset
+  mode?: 'world' | 'story'
+  manualDepthMode?: WorldGraphDepthMode | null
+}): WorldGraphPresentationPresetConfig {
+  const depthByPreset: Record<WorldGraphPresentationPreset, WorldGraphDepthMode> = {
+    focus: 'tight',
+    explore: 'nearby',
+    story: 'nearby',
+    recent: 'nearby',
+    wide: 'wide',
+  }
+  const preset = input.mode === 'story' && input.preset === 'explore' ? 'story' : input.preset
+  return {
+    preset,
+    depthMode: input.manualDepthMode ?? depthByPreset[preset],
+    showBranchLabels: preset === 'explore' || preset === 'recent' || preset === 'wide',
+    emphasizeEntityTypes: preset !== 'focus',
+    emphasizeThreads: preset === 'story' || input.mode === 'story',
+    edgeDensity: preset === 'wide' || preset === 'story' ? 'context' : 'minimal',
+  }
+}
+
+export function buildWorldGraphFilterState(input?: Partial<WorldGraphDisplayFilters> | null): WorldGraphFilterState {
+  const filters: WorldGraphDisplayFilters = {
+    ...DEFAULT_WORLD_GRAPH_DISPLAY_FILTERS,
+    ...(input ?? {}),
+  }
+  const enabledEntityTypes: WorldEntity['nodeType'][] = [
+    filters.characters ? 'actor' : null,
+    filters.places ? 'place' : null,
+    filters.groups ? 'group' : null,
+    filters.objects ? 'object' : null,
+    filters.concepts ? 'concept' : null,
+    filters.events ? 'event' : null,
+  ].filter((value): value is WorldEntity['nodeType'] => value !== null)
+
+  return {
+    filters,
+    enabledEntityTypes,
+    showDerived: filters.derived,
+    showThreads: filters.threads,
+    showPinned: filters.pinned,
+    showRecent: filters.recent,
+    disabledCount: Object.values(filters).filter((value) => !value).length,
+  }
+}
+
+export function buildWorldGraphLabelPolicy(input: {
+  zoom: number
+  showLabels: boolean
+  preset: WorldGraphPresentationPreset
+  visualMode: WorldNodeVisualMode
+  displayTier: WorldSceneDisplayTier
+  highlighted?: boolean
+  isTurnLensEndpoint?: boolean
+  hovered?: boolean
+  selected?: boolean
+  inspected?: boolean
+  hasBranchLabel?: boolean
+}): WorldGraphLabelPolicy {
+  const zoom = Number.isFinite(input.zoom) ? input.zoom : 1
+  const isImportant = Boolean(input.highlighted || input.isTurnLensEndpoint || input.hovered || input.selected || input.inspected)
+  const isOuter = input.displayTier === 'far' || input.displayTier === 'peripheral'
+  const presetLikesContext = input.preset === 'explore' || input.preset === 'recent' || input.preset === 'wide' || input.preset === 'story'
+
+  if (isImportant) {
+    return {
+      showNodeLabel: true,
+      showBranchLabel: Boolean(input.hasBranchLabel && isOuter),
+    }
+  }
+
+  if (input.visualMode === 'card') {
+    return { showNodeLabel: false, showBranchLabel: false }
+  }
+
+  const showNodeLabel =
+    input.visualMode === 'nearIcon'
+      ? isOuter
+        ? (input.showLabels && zoom >= 0.48) || (presetLikesContext && zoom >= 0.88)
+        : input.showLabels || zoom >= 0.58
+      : input.visualMode === 'farIcon'
+        ? (input.showLabels && zoom >= 0.48) || (presetLikesContext && zoom >= 0.88)
+        : (input.showLabels && zoom >= 0.72) || (input.preset === 'wide' && zoom >= 1.02)
+
+  const showBranchLabel = Boolean(
+    input.hasBranchLabel
+    && isOuter
+    && (
+      (input.showLabels && zoom >= 0.42)
+      || (presetLikesContext && zoom >= 0.62)
+    ),
+  )
+
+  return { showNodeLabel, showBranchLabel }
+}
+
+export function buildWorldGraphGrowthPlaybackModel(input: {
+  turnLenses: Iterable<WorldPromptTurnLens>
+  activeTurnId?: string | null
+}): WorldGraphGrowthPlaybackModel {
+  const steps = [...input.turnLenses]
+    .filter((lens) => lens.changeCount > 0)
+    .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime() || left.turnId.localeCompare(right.turnId))
+    .map((lens, index): WorldGraphGrowthPlaybackStep => ({
+      turnId: lens.turnId,
+      index,
+      label: lens.label,
+      prompt: lens.prompt,
+      turnLens: lens,
+      fitNodeKeys: Array.from(new Set([...lens.nodeKeys, ...lens.entityKeys])),
+    }))
+  const activeIndex = input.activeTurnId
+    ? steps.findIndex((step) => step.turnId === input.activeTurnId)
+    : -1
+  const activeStep = activeIndex >= 0 ? steps[activeIndex] ?? null : null
+  return {
+    steps,
+    activeStep,
+    activeIndex,
+    canGoPrevious: activeIndex > 0,
+    canGoNext: activeIndex >= 0 && activeIndex < steps.length - 1,
+  }
+}
+
+export function buildWorldNodeVisibilityReason(input: {
+  nodeKind: WorldGraphNodeRecord['kind']
+  displayTier: WorldSceneDisplayTier
+  distance?: number | null
+  branchLabel?: string | null
+  isFocusRoot?: boolean
+  isSelected?: boolean
+  isInspected?: boolean
+  isPinned?: boolean
+  isStoryLinked?: boolean
+  isTurnLensChanged?: boolean
+  isTurnLensEndpoint?: boolean
+}): WorldNodeVisibilityReason {
+  if (input.isSelected || input.isInspected) {
+    return { kind: 'selected', label: 'Selected', detail: 'Shown because it is open in the inspector.' }
+  }
+  if (input.isFocusRoot) {
+    return { kind: 'focus_root', label: 'Focus root', detail: 'This is the center of the current neighborhood.' }
+  }
+  if (input.isTurnLensChanged) {
+    return { kind: 'turn_lens_changed', label: 'Changed this turn', detail: 'Included by the active prompt-turn lens.' }
+  }
+  if (input.isTurnLensEndpoint) {
+    return { kind: 'turn_lens_endpoint', label: 'Turn-link endpoint', detail: 'Included because a changed relationship touches it.' }
+  }
+  if (input.isPinned) {
+    return { kind: 'pinned', label: 'Pinned', detail: 'Kept visible by your graph pins.' }
+  }
+  if (input.isStoryLinked) {
+    return { kind: 'story_linked', label: 'Story-linked', detail: 'Included by the active story thread.' }
+  }
+  if (input.nodeKind !== 'entity') {
+    return { kind: 'derived_output', label: 'Derived output', detail: 'Shown because it is linked to the visible world graph.' }
+  }
+  if (input.distance === 1) {
+    return { kind: 'direct_neighbor', label: 'Direct neighbor', detail: 'One link away from the current focus.' }
+  }
+  if ((input.displayTier === 'far' || input.displayTier === 'peripheral') && input.branchLabel) {
+    return {
+      kind: 'peripheral_branch',
+      label: `Branch via ${input.branchLabel}`,
+      detail: 'Outer context grouped by the first-hop branch from the focus.',
+    }
+  }
+  if (input.displayTier === 'near') {
+    return { kind: 'near_context', label: 'Near context', detail: 'Kept close because it is relevant to this neighborhood.' }
+  }
+  if (input.displayTier === 'far' || input.displayTier === 'peripheral') {
+    return { kind: 'far_context', label: 'Outer context', detail: 'Compressed into the outer graph to preserve orientation.' }
+  }
+  return { kind: 'context', label: 'Context', detail: 'Included by the active graph view.' }
+}
+
+export function resolveWorldEdgeReveal(input: {
+  edgeKey?: string | null
+  sourceKey: string
+  targetKey: string
+  activeLensEdgeKeys?: readonly string[] | ReadonlySet<string> | null
+  activeLensNodeKeys?: readonly string[] | ReadonlySet<string> | null
+  selectedNodeKey?: string | null
+  inspectedNodeKey?: string | null
+  activeEdgeFocusNodeKey?: string | null
+  hoveredNodeKey?: string | null
+  storyNodeKeys?: readonly string[] | ReadonlySet<string> | null
+  mode?: 'world' | 'story'
+}): WorldEdgeReveal {
+  const lensEdgeKeys = toReadonlySet(input.activeLensEdgeKeys)
+  const lensNodeKeys = toReadonlySet(input.activeLensNodeKeys)
+  const storyNodeKeys = toReadonlySet(input.storyNodeKeys)
+
+  if (
+    input.activeEdgeFocusNodeKey
+    && input.hoveredNodeKey
+    && ((input.sourceKey === input.activeEdgeFocusNodeKey && input.targetKey === input.hoveredNodeKey)
+      || (input.targetKey === input.activeEdgeFocusNodeKey && input.sourceKey === input.hoveredNodeKey))
+  ) {
+    return { visible: true, reason: 'focus_hover', emphasized: false }
+  }
+
+  if (
+    (input.edgeKey && lensEdgeKeys.has(input.edgeKey))
+    || (lensNodeKeys.has(input.sourceKey) && lensNodeKeys.has(input.targetKey))
+  ) {
+    return { visible: true, reason: 'lens', emphasized: true }
+  }
+
+  const selectedAnchor = input.inspectedNodeKey ?? input.selectedNodeKey ?? null
+  if (selectedAnchor && (input.sourceKey === selectedAnchor || input.targetKey === selectedAnchor)) {
+    return { visible: true, reason: 'selected', emphasized: false }
+  }
+
+  if (input.mode === 'story' && storyNodeKeys.has(input.sourceKey) && storyNodeKeys.has(input.targetKey)) {
+    return { visible: true, reason: 'story', emphasized: true }
+  }
+
+  return { visible: false, reason: 'hidden', emphasized: false }
+}
+
+export function nodeShellStyle(
+  record: WorldGraphNodeRecord,
+  selected: boolean,
+  dimmed: boolean,
+  visualMode: WorldNodeVisualMode = 'card',
+): CSSProperties {
   const palette =
     record.kind === 'entity'
       ? record.entity.nodeType === 'actor'
@@ -143,18 +516,175 @@ export function nodeShellStyle(record: WorldGraphNodeRecord, selected: boolean, 
         ? ['rgba(148, 163, 184, 0.28)', 'rgba(51, 65, 85, 0.12)', 'rgba(226, 232, 240, 0.16)', '#e2e8f0']
         : ['rgba(226, 232, 240, 0.24)', 'rgba(71, 85, 105, 0.12)', 'rgba(226, 232, 240, 0.16)', '#f8fafc']
 
-  return {
+  const sharedStyle = {
     opacity: dimmed ? 0.2 : 1,
-    borderColor: selected ? 'rgba(255,255,255,0.36)' : palette[0],
-    background: `linear-gradient(180deg, rgba(9, 13, 20, 0.985), ${palette[1]})`,
-    boxShadow: selected
-      ? `0 0 0 1px rgba(255,255,255,0.08), 0 24px 54px rgba(5, 8, 14, 0.52), 0 0 24px ${palette[1]}, inset 0 1px 0 ${palette[2]}`
-      : `0 18px 40px rgba(5, 8, 14, 0.34), inset 0 1px 0 ${palette[2]}`,
     ['--world-node-ring' as string]: palette[0],
     ['--world-node-glow' as string]: palette[1],
     ['--world-node-highlight' as string]: palette[2],
     ['--world-node-accent' as string]: palette[3],
   }
+
+  if (visualMode !== 'card') {
+    return {
+      ...sharedStyle,
+      borderColor: 'transparent',
+      background: 'transparent',
+      boxShadow: 'none',
+    }
+  }
+
+  return {
+    ...sharedStyle,
+    borderColor: selected ? 'rgba(255,255,255,0.36)' : palette[0],
+    background: `linear-gradient(180deg, rgba(9, 13, 20, 0.985), ${palette[1]})`,
+    boxShadow: selected
+      ? `0 0 0 1px rgba(255,255,255,0.08), 0 24px 54px rgba(5, 8, 14, 0.52), 0 0 24px ${palette[1]}, inset 0 1px 0 ${palette[2]}`
+      : `0 18px 40px rgba(5, 8, 14, 0.34), inset 0 1px 0 ${palette[2]}`,
+  }
+}
+
+function addUniqueKey(target: Set<string>, value: unknown) {
+  if (typeof value === 'string' && value.trim()) {
+    target.add(value)
+  }
+}
+
+function toReadonlySet(values: readonly string[] | ReadonlySet<string> | null | undefined) {
+  if (!values) return new Set<string>()
+  return values instanceof Set ? values : new Set(values)
+}
+
+function addAppliedNodeKey(
+  nodeKind: unknown,
+  nodeKey: unknown,
+  entityKeys: Set<string>,
+  operatorKeys: Set<string>,
+  resultKeys: Set<string>,
+) {
+  if (nodeKind === 'entity') {
+    addUniqueKey(entityKeys, nodeKey)
+  } else if (nodeKind === 'operator') {
+    addUniqueKey(operatorKeys, nodeKey)
+  } else if (nodeKind === 'result') {
+    addUniqueKey(resultKeys, nodeKey)
+  }
+}
+
+function compactTurnLensLabel(input: {
+  entityCount: number
+  relationshipCount: number
+  derivedCount: number
+}) {
+  const parts = [
+    input.entityCount > 0 ? `${input.entityCount} node${input.entityCount === 1 ? '' : 's'}` : null,
+    input.relationshipCount > 0 ? `${input.relationshipCount} link${input.relationshipCount === 1 ? '' : 's'}` : null,
+    input.derivedCount > 0 ? `${input.derivedCount} derived` : null,
+  ].filter(Boolean)
+  return parts.length > 0 ? parts.join(' / ') : 'No graph changes'
+}
+
+export function buildWorldPromptTurnLenses(input: {
+  events: WorldPromptEvent[]
+  turns?: WorldPromptTurn[]
+}) {
+  const promptByTurnId = new Map((input.turns ?? []).map((turn) => [turn.id, turn.prompt] as const))
+  const lensDrafts = new Map<string, {
+    turnId: string
+    createdAt: string
+    prompt: string
+    entityKeys: Set<string>
+    relationshipKeys: Set<string>
+    operatorKeys: Set<string>
+    resultKeys: Set<string>
+  }>()
+
+  for (const event of input.events) {
+    if (event.eventType !== 'op_applied') continue
+    const parsed = worldPromptEventPayloadSchema.safeParse(event.payload)
+    if (!parsed.success) continue
+    const applied = parsed.data.applied
+    if (!applied) continue
+
+    const draft = lensDrafts.get(event.turnId) ?? {
+      turnId: event.turnId,
+      createdAt: event.createdAt,
+      prompt: promptByTurnId.get(event.turnId) ?? '',
+      entityKeys: new Set<string>(),
+      relationshipKeys: new Set<string>(),
+      operatorKeys: new Set<string>(),
+      resultKeys: new Set<string>(),
+    }
+    if (new Date(event.createdAt).getTime() < new Date(draft.createdAt).getTime()) {
+      draft.createdAt = event.createdAt
+    }
+
+    for (const entity of applied.worldEntities ?? []) {
+      addUniqueKey(draft.entityKeys, entity.key)
+    }
+    for (const relationship of applied.worldRelationships ?? []) {
+      addUniqueKey(draft.relationshipKeys, relationship.key)
+      addUniqueKey(draft.entityKeys, relationship.sourceEntityKey)
+      addUniqueKey(draft.entityKeys, relationship.targetEntityKey)
+    }
+    for (const operator of applied.worldOperators ?? []) {
+      addUniqueKey(draft.operatorKeys, operator.key)
+      for (const inputEntityKey of operator.inputEntityKeys ?? []) {
+        addUniqueKey(draft.entityKeys, inputEntityKey)
+      }
+    }
+    for (const result of applied.worldResults ?? []) {
+      addUniqueKey(draft.resultKeys, result.key)
+      addUniqueKey(draft.operatorKeys, result.sourceOperatorKey)
+    }
+    for (const connection of applied.worldGraphConnections ?? []) {
+      addAppliedNodeKey(connection.sourceNodeKind, connection.sourceNodeKey, draft.entityKeys, draft.operatorKeys, draft.resultKeys)
+      addAppliedNodeKey(connection.targetNodeKind, connection.targetNodeKey, draft.entityKeys, draft.operatorKeys, draft.resultKeys)
+    }
+
+    lensDrafts.set(event.turnId, draft)
+  }
+
+  return new Map([...lensDrafts.entries()].map(([turnId, draft]) => {
+    const entityKeys = [...draft.entityKeys]
+    const relationshipKeys = [...draft.relationshipKeys]
+    const operatorKeys = [...draft.operatorKeys]
+    const resultKeys = [...draft.resultKeys]
+    const nodeKeys = [...new Set([...entityKeys, ...operatorKeys, ...resultKeys])]
+    const derivedCount = operatorKeys.length + resultKeys.length
+    const changeCount = entityKeys.length + relationshipKeys.length + derivedCount
+    const lens: WorldPromptTurnLens = {
+      turnId,
+      createdAt: draft.createdAt,
+      label: compactTurnLensLabel({
+        entityCount: entityKeys.length,
+        relationshipCount: relationshipKeys.length,
+        derivedCount: operatorKeys.length + resultKeys.length,
+      }),
+      prompt: draft.prompt,
+      entityKeys,
+      relationshipKeys,
+      operatorKeys,
+      resultKeys,
+      nodeKeys,
+      rootEntityKey: entityKeys[0] ?? null,
+      changeCount,
+      counts: {
+        entities: entityKeys.length,
+        relationships: relationshipKeys.length,
+        derived: derivedCount,
+        total: changeCount,
+      },
+    }
+    return [turnId, lens] as const
+  }).filter(([, lens]) => lens.changeCount > 0))
+}
+
+export function buildWorldPromptTurnLens(input: {
+  turnId: string
+  events: WorldPromptEvent[]
+  turns?: WorldPromptTurn[]
+}) {
+  return buildWorldPromptTurnLenses(input).get(input.turnId) ?? null
 }
 
 export function describePromptOp(op: PromptToWorldOp) {
@@ -243,6 +773,24 @@ export function stripInternalPlannerDiagnostics(text: string) {
     .replace(/\s*Planner (?:output|response) validation failed\.[\s\S]*$/i, '')
     .replace(/\s*Cinematic planner response validation failed\.[\s\S]*$/i, '')
     .trim()
+}
+
+function normalizePromptTranscriptText(text: string) {
+  return stripInternalPlannerDiagnostics(text)
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLocaleLowerCase()
+}
+
+function buildSuggestionTranscriptSignature(suggestions: WorldPromptSuggestion[]) {
+  return suggestions
+    .map((suggestion) => [
+      normalizePromptTranscriptText(suggestion.label),
+      normalizePromptTranscriptText(suggestion.prompt),
+      suggestion.kind,
+    ].join(':'))
+    .sort()
+    .join('|')
 }
 
 function refinementFieldLabel(field: 'summary' | 'context' | 'notes') {
@@ -361,6 +909,7 @@ export function buildWorldPromptTranscriptEntries(input: {
   events: WorldPromptEvent[]
   messages: WorldPromptMessage[]
   entityByKey: Map<string, WorldEntity>
+  turns?: WorldPromptTurn[]
 }) {
   const sources = [
     ...input.messages.map((message) => ({ source: 'message' as const, createdAt: message.createdAt, id: `message:${message.id}`, message })),
@@ -373,10 +922,25 @@ export function buildWorldPromptTranscriptEntries(input: {
   })
 
   const entries: WorldPromptTranscriptEntry[] = []
-  let lastSuggestionSignature: string | null = null
+  const turnLensByTurnId = buildWorldPromptTurnLenses({ events: input.events, turns: input.turns })
+  const emittedSuggestionSignatures = new Set<string>()
   let lastAnswerSignature: string | null = null
   let lastDiagnosticSignature: string | null = null
   let lastPlannerProgressSignature: string | null = null
+  const emittedTurnLensIds = new Set<string>()
+  const assistantMessageTextByTurnId = new Map<string, Set<string>>()
+  for (const message of input.messages) {
+    if (message.role !== 'assistant' || !message.turnId) continue
+    const normalized = normalizePromptTranscriptText(message.content)
+    if (!normalized) continue
+    const turnTexts = assistantMessageTextByTurnId.get(message.turnId) ?? new Set<string>()
+    turnTexts.add(normalized)
+    assistantMessageTextByTurnId.set(message.turnId, turnTexts)
+  }
+  const hasAssistantMessageForEventText = (event: WorldPromptEvent, text: string) => {
+    const normalized = normalizePromptTranscriptText(text)
+    return Boolean(normalized && assistantMessageTextByTurnId.get(event.turnId)?.has(normalized))
+  }
 
   for (const source of sources) {
     if (source.source === 'message') {
@@ -423,8 +987,8 @@ export function buildWorldPromptTranscriptEntries(input: {
     }
 
     const payload = parsed.data
-    const answerSignature = payload.answer ? `${source.event.turnId}:${payload.answer}` : null
-    if (payload.answer && answerSignature !== lastAnswerSignature) {
+    const answerSignature = payload.answer ? `${source.event.turnId}:${normalizePromptTranscriptText(payload.answer)}` : null
+    if (payload.answer && answerSignature !== lastAnswerSignature && !hasAssistantMessageForEventText(source.event, payload.answer)) {
       entries.push({
         id: `${source.id}:answer`,
         createdAt: source.event.createdAt,
@@ -465,7 +1029,7 @@ export function buildWorldPromptTranscriptEntries(input: {
               createdAt: source.event.createdAt,
               kind: 'planner_progress',
               label: describePlannerProgressPhase(payload.plannerProgress.phase),
-              detail: payload.plannerProgress.message || payload.note || undefined,
+              detail: payload.plannerProgress.message || undefined,
               phase: payload.plannerProgress.phase,
               outline: payload.plannerOutline ?? [],
               done: payload.plannerProgress.done,
@@ -479,12 +1043,12 @@ export function buildWorldPromptTranscriptEntries(input: {
             createdAt: source.event.createdAt,
             kind: 'system_status',
             label: describePlannerStatus(payload.plannerStatus),
-            detail: payload.note ?? (payload.scope ? `${payload.scope.mode} scope` : ''),
+            detail: payload.scope ? `${payload.scope.mode} scope` : '',
           })
         }
         break
       case 'assistant_note':
-        if (payload.note) {
+        if (payload.note && !hasAssistantMessageForEventText(source.event, payload.note)) {
           entries.push({
             id: source.id,
             createdAt: source.event.createdAt,
@@ -496,6 +1060,18 @@ export function buildWorldPromptTranscriptEntries(input: {
         break
       case 'op_applied': {
         const applied = payload.applied
+        const turnLens = turnLensByTurnId.get(source.event.turnId) ?? undefined
+        if (turnLens && !emittedTurnLensIds.has(turnLens.turnId)) {
+          entries.push({
+            id: `${source.id}:turn-lens:${turnLens.turnId}`,
+            createdAt: source.event.createdAt,
+            kind: 'turn_lens',
+            label: 'View turn changes',
+            detail: turnLens.label,
+            turnLens,
+          })
+          emittedTurnLensIds.add(turnLens.turnId)
+        }
         const upsertOp = payload.op?.op === 'upsert_entity' ? payload.op : null
         const updateOp = payload.op?.op === 'update_entity' ? payload.op : null
         const replaceOp = payload.op?.op === 'replace_entity' ? payload.op : null
@@ -518,6 +1094,7 @@ export function buildWorldPromptTranscriptEntries(input: {
               detail: detailParts.join(' · '),
               entityKey: replacementEntity.key,
               entityNodeType: replacementEntity.nodeType,
+              turnLens,
             })
           }
         }
@@ -540,6 +1117,7 @@ export function buildWorldPromptTranscriptEntries(input: {
                 : (upsertOp.payload.entity.summary.trim() ? 'Updated summary' : labelForWorldEntity(entity.nodeType)),
               entityKey: entity.key,
               entityNodeType: entity.nodeType,
+              turnLens,
             })
             continue
           }
@@ -558,6 +1136,7 @@ export function buildWorldPromptTranscriptEntries(input: {
               detail: detailParts.join(' · ') || labelForWorldEntity(entity.nodeType),
               entityKey: entity.key,
               entityNodeType: entity.nodeType,
+              turnLens,
             })
             continue
           }
@@ -569,6 +1148,7 @@ export function buildWorldPromptTranscriptEntries(input: {
             detail: labelForWorldEntity(entity.nodeType),
             entityKey: entity.key,
             entityNodeType: entity.nodeType,
+            turnLens,
           })
         }
         for (const relationship of applied?.worldRelationships ?? []) {
@@ -584,6 +1164,7 @@ export function buildWorldPromptTranscriptEntries(input: {
               relationshipKey: relationship.key,
               sourceLabel: sourceName,
               targetLabel: targetName,
+              turnLens,
             })
             continue
           }
@@ -602,6 +1183,7 @@ export function buildWorldPromptTranscriptEntries(input: {
               relationshipKey: relationship.key,
               sourceLabel: sourceName,
               targetLabel: targetName,
+              turnLens,
             })
             continue
           }
@@ -614,6 +1196,7 @@ export function buildWorldPromptTranscriptEntries(input: {
             relationshipKey: relationship.key,
             sourceLabel: sourceName,
             targetLabel: targetName,
+            turnLens,
           })
         }
         for (const worldResult of applied?.worldResults ?? []) {
@@ -624,6 +1207,7 @@ export function buildWorldPromptTranscriptEntries(input: {
             label: `Created ${worldResult.title}`,
             detail: 'Derived result',
             resultKey: worldResult.key,
+            turnLens,
           })
         }
         break
@@ -664,7 +1248,7 @@ export function buildWorldPromptTranscriptEntries(input: {
         })
         break
       case 'turn_completed':
-        if (payload.note) {
+        if (payload.note && !hasAssistantMessageForEventText(source.event, payload.note)) {
           entries.push({
             id: source.id,
             createdAt: source.event.createdAt,
@@ -680,10 +1264,10 @@ export function buildWorldPromptTranscriptEntries(input: {
 
     if (payload.suggestions.length > 0) {
       const entry = buildTranscriptSuggestionsEntry(source.event, payload.suggestions)
-      const signature = (entry?.suggestions ?? []).map((suggestion) => `${suggestion.id}:${suggestion.prompt}`).join('|')
-      if (entry && signature && signature !== lastSuggestionSignature) {
+      const signature = entry ? buildSuggestionTranscriptSignature(entry.suggestions) : ''
+      if (entry && signature && !emittedSuggestionSignatures.has(signature)) {
         entries.push(entry)
-        lastSuggestionSignature = signature
+        emittedSuggestionSignatures.add(signature)
       }
     }
   }

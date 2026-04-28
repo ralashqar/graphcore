@@ -68,6 +68,7 @@ import {
 } from './domain/worldPrompt'
 import type { WorldThread } from './domain/worldThread'
 import {
+  choosePreferredWorldView,
   buildLocalWorldDerivedComposition,
   buildLocalExpansion,
   buildLocalStarterWorld,
@@ -77,6 +78,7 @@ import {
   deriveMissingWorldEntities,
   deriveMissingWorldViews,
   hasMissingWorldGraphBackfill,
+  reconcileAutoManagedWorldViews,
   resultTypeForOperatorType,
 } from './domain/worldGraphHelpers'
 import { createGraphScaffold } from './domain/graphScaffold'
@@ -510,6 +512,13 @@ function mergeWorldPromptEventIntoSnapshot(snapshot: ProjectSnapshot, event: Wor
   }
 
   return nextSnapshot
+}
+
+function mergeWorldPromptEventsIntoSnapshot(snapshot: ProjectSnapshot, events: WorldPromptEvent[]) {
+  return events.reduce(
+    (nextSnapshot, event) => mergeWorldPromptEventIntoSnapshot(nextSnapshot, event),
+    snapshot,
+  )
 }
 
 function mergeMeshGenerationStatusIntoSnapshot(snapshot: ProjectSnapshot, status: MeshGenerationStatusResponse) {
@@ -1035,6 +1044,7 @@ export default function App() {
   const setSubscription = useEditorStore((state) => state.setSubscription)
   const setBillingError = useEditorStore((state) => state.setBillingError)
   const sessionRef = useRef<Session | null>(null)
+  const loadedStateRef = useRef<LoadedState | null>(null)
   const snapshotRef = useRef<ProjectSnapshot | null>(null)
   const pendingWorldEntityCommitsRef = useRef(new Map<string, Promise<ProjectSnapshot>>())
   const worldGraphSyncPromiseRef = useRef<Promise<ProjectSnapshot> | null>(null)
@@ -1045,6 +1055,8 @@ export default function App() {
   const cinematicRunPollInFlightRef = useRef(false)
   const cinematicRunRealtimeSignalAtRef = useRef(new Map<string, number>())
   const meshGenerationPollFailureCountsRef = useRef(new Map<string, number>())
+  const workspaceHydrationRequestIdRef = useRef(0)
+  const desiredGameSelectionRef = useRef<{ projectId: string; draftId: string } | null>(null)
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -1086,19 +1098,61 @@ export default function App() {
   }, [session])
 
   useEffect(() => {
+    loadedStateRef.current = loadedState
+  }, [loadedState])
+
+  useEffect(() => {
     snapshotRef.current = snapshot
   }, [snapshot])
 
   function hydrateLoadedProject(
     state: { snapshot: ProjectSnapshot; source: 'supabase' | 'demo'; reason?: string },
-    options?: { preserveUnsavedIfSameDraft?: boolean; ignoreUnsavedCache?: boolean },
+    options?: { preserveUnsavedIfSameDraft?: boolean; ignoreUnsavedCache?: boolean; resetSelection?: boolean; allowProjectChange?: boolean; requestId?: number },
   ) {
     const normalizedIncomingSnapshot = normalizeSnapshot(state.snapshot)
+    const desiredSelection = desiredGameSelectionRef.current
+    if (
+      typeof options?.requestId === 'number'
+      && options.requestId !== workspaceHydrationRequestIdRef.current
+    ) {
+      return
+    }
+    if (
+      desiredSelection
+      && state.source === 'supabase'
+      && (
+        normalizedIncomingSnapshot.project.id !== desiredSelection.projectId
+        || normalizedIncomingSnapshot.draft.id !== desiredSelection.draftId
+      )
+    ) {
+      console.warn('[GraphCore] ignored hydration that did not match the requested active game.', {
+        desiredProjectId: desiredSelection.projectId,
+        desiredDraftId: desiredSelection.draftId,
+        incomingProjectId: normalizedIncomingSnapshot.project.id,
+        incomingDraftId: normalizedIncomingSnapshot.draft.id,
+      })
+      return
+    }
+    const currentHydratedSnapshot = snapshotRef.current ?? snapshot
+    const isUnexpectedLiveProjectChange =
+      currentHydratedSnapshot
+      && loadedStateRef.current?.source === 'supabase'
+      && state.source === 'supabase'
+      && currentHydratedSnapshot.project.id !== normalizedIncomingSnapshot.project.id
+      && !options?.allowProjectChange
+    if (isUnexpectedLiveProjectChange) {
+      console.warn('[GraphCore] ignored stale project hydration for a different active game.', {
+        currentProjectId: currentHydratedSnapshot.project.id,
+        incomingProjectId: normalizedIncomingSnapshot.project.id,
+        incomingDraftId: normalizedIncomingSnapshot.draft.id,
+      })
+      return
+    }
     if (
       options?.preserveUnsavedIfSameDraft
       && hasLocalSnapshotChanges
-      && snapshot
-      && snapshot.draft.id === normalizedIncomingSnapshot.draft.id
+      && currentHydratedSnapshot
+      && currentHydratedSnapshot.draft.id === normalizedIncomingSnapshot.draft.id
     ) {
       startTransition(() => {
         setLoadedState({ source: state.source, reason: state.reason })
@@ -1120,33 +1174,78 @@ export default function App() {
           ))
         : normalizedIncomingSnapshot
     const restoredUnsavedSnapshot = snapshotToHydrate !== state.snapshot
+    if (
+      desiredSelection
+      && snapshotToHydrate.project.id === desiredSelection.projectId
+      && snapshotToHydrate.draft.id === desiredSelection.draftId
+    ) {
+      desiredGameSelectionRef.current = null
+    }
+    const hydratedProjectChanged = Boolean(
+      currentHydratedSnapshot
+      && (
+        currentHydratedSnapshot.project.id !== snapshotToHydrate.project.id
+        || currentHydratedSnapshot.draft.id !== snapshotToHydrate.draft.id
+      ),
+    )
+    if (hydratedProjectChanged) {
+      pendingWorldEntityCommitsRef.current.clear()
+      worldGraphSyncPromiseRef.current = null
+      worldBuildPollInFlightRef.current = false
+      meshGenerationPollInFlightRef.current = false
+      cinematicRunPollInFlightRef.current = false
+      worldBuildPollFailureCountRef.current = 0
+      meshGenerationPollFailureCountsRef.current.clear()
+      cinematicRunRealtimeSignalAtRef.current.clear()
+      announcedWorldBuildBatchIdsRef.current = new Set()
+      reconciledWorldBuildBatchIdsRef.current = new Set()
+      announcedCinematicRunIdsRef.current = new Set()
+      reconciledCinematicRunIdsRef.current = new Set()
+      seededWorldBuildBatchHistoryRef.current = false
+      seededWorldBuildBatchDraftIdRef.current = null
+    }
 
-    const nextDefinition = snapshotToHydrate.definitions.find((definition) => definition.key === selectedDefinitionKey) ?? snapshotToHydrate.definitions[0] ?? null
-    const nextArchetype = snapshotToHydrate.archetypes.find((archetype) => archetype.key === selectedArchetypeKey) ?? snapshotToHydrate.archetypes[0] ?? null
-    const nextGraph = snapshotToHydrate.graphs.find((graph) => graph.key === selectedGraphKey) ?? snapshotToHydrate.graphs[0] ?? null
-    const nextAsset = snapshotToHydrate.assets.find((asset) => asset.key === selectedAssetKey) ?? snapshotToHydrate.assets[0] ?? null
+    const selectedDefinitionKeyForHydrate = options?.resetSelection ? null : selectedDefinitionKey
+    const selectedArchetypeKeyForHydrate = options?.resetSelection ? null : selectedArchetypeKey
+    const selectedGraphKeyForHydrate = options?.resetSelection ? null : selectedGraphKey
+    const selectedAssetKeyForHydrate = options?.resetSelection ? null : selectedAssetKey
+    const selectedWorldNodeKeyForHydrate = options?.resetSelection ? null : selectedWorldNodeKey
+    const selectedWorldEntityKeyForHydrate = options?.resetSelection ? null : selectedWorldEntityKey
+    const selectedWorldViewKeyForHydrate = options?.resetSelection ? null : selectedWorldViewKey
+    const selectedWorldEdgeKeyForHydrate = options?.resetSelection ? null : selectedWorldEdgeKey
+    const selectedNodeKeyForHydrate = options?.resetSelection ? null : selectedNodeKey
+    const selectedEdgeKeyForHydrate = options?.resetSelection ? null : selectedEdgeKey
+
+    const nextDefinition = snapshotToHydrate.definitions.find((definition) => definition.key === selectedDefinitionKeyForHydrate) ?? snapshotToHydrate.definitions[0] ?? null
+    const nextArchetype = snapshotToHydrate.archetypes.find((archetype) => archetype.key === selectedArchetypeKeyForHydrate) ?? snapshotToHydrate.archetypes[0] ?? null
+    const nextGraph = snapshotToHydrate.graphs.find((graph) => graph.key === selectedGraphKeyForHydrate) ?? snapshotToHydrate.graphs[0] ?? null
+    const nextAsset = snapshotToHydrate.assets.find((asset) => asset.key === selectedAssetKeyForHydrate) ?? snapshotToHydrate.assets[0] ?? null
     const worldNodeKeys = new Set([
       ...snapshotToHydrate.worldEntities.map((entity) => entity.key),
       ...snapshotToHydrate.worldOperators.map((entry) => entry.key),
       ...snapshotToHydrate.worldResults.map((entry) => entry.key),
     ])
-    const nextWorldNodeKey = selectedWorldNodeKey && worldNodeKeys.has(selectedWorldNodeKey)
-      ? selectedWorldNodeKey
+    const nextWorldNodeKey = selectedWorldNodeKeyForHydrate && worldNodeKeys.has(selectedWorldNodeKeyForHydrate)
+      ? selectedWorldNodeKeyForHydrate
       : snapshotToHydrate.worldEntities[0]?.key ?? snapshotToHydrate.worldResults[0]?.key ?? snapshotToHydrate.worldOperators[0]?.key ?? null
-    const nextWorldEntity = snapshotToHydrate.worldEntities.find((entity) => entity.key === selectedWorldEntityKey) ?? snapshotToHydrate.worldEntities.find((entity) => entity.key === nextWorldNodeKey) ?? snapshotToHydrate.worldEntities[0] ?? null
-    const nextWorldView = snapshotToHydrate.worldViews.find((view) => view.key === selectedWorldViewKey) ?? snapshotToHydrate.worldViews[0] ?? null
+    const nextWorldEntity = snapshotToHydrate.worldEntities.find((entity) => entity.key === selectedWorldEntityKeyForHydrate) ?? snapshotToHydrate.worldEntities.find((entity) => entity.key === nextWorldNodeKey) ?? snapshotToHydrate.worldEntities[0] ?? null
+    const nextWorldView =
+      snapshotToHydrate.worldViews.find((view) => view.key === selectedWorldViewKeyForHydrate)
+      ?? choosePreferredWorldView(snapshotToHydrate.worldViews, { worldThreads: snapshotToHydrate.worldThreads })
+      ?? snapshotToHydrate.worldViews[0]
+      ?? null
     const worldEdgeKeys = new Set([
       ...snapshotToHydrate.worldRelationships.map((relationship) => relationship.key),
       ...snapshotToHydrate.worldGraphConnections.map((connection) => connection.key),
     ])
-    const nextWorldEdgeKey = selectedWorldEdgeKey && worldEdgeKeys.has(selectedWorldEdgeKey)
-      ? selectedWorldEdgeKey
+    const nextWorldEdgeKey = selectedWorldEdgeKeyForHydrate && worldEdgeKeys.has(selectedWorldEdgeKeyForHydrate)
+      ? selectedWorldEdgeKeyForHydrate
       : null
-    const nextSelectedNodeKey = selectedNodeKey && nextGraph?.nodes.some((node) => node.key === selectedNodeKey)
-      ? selectedNodeKey
+    const nextSelectedNodeKey = selectedNodeKeyForHydrate && nextGraph?.nodes.some((node) => node.key === selectedNodeKeyForHydrate)
+      ? selectedNodeKeyForHydrate
       : null
-    const nextSelectedEdgeKey = selectedEdgeKey && nextGraph?.edges.some((edge) => edge.key === selectedEdgeKey)
-      ? selectedEdgeKey
+    const nextSelectedEdgeKey = selectedEdgeKeyForHydrate && nextGraph?.edges.some((edge) => edge.key === selectedEdgeKeyForHydrate)
+      ? selectedEdgeKeyForHydrate
       : null
 
     if (selectedNodeKey && !nextSelectedNodeKey && nextGraph?.graphType === 'cinematic_flow') {
@@ -1184,13 +1283,52 @@ export default function App() {
 
   async function refreshWorkspaceState(
     loader?: () => Promise<{ snapshot: ProjectSnapshot; source: 'supabase' | 'demo'; reason?: string }>,
-    options?: { ignoreUnsavedCache?: boolean },
+    options?: { ignoreUnsavedCache?: boolean; resetSelection?: boolean; allowProjectChange?: boolean },
   ) {
-    const state = await (loader ? loader() : workspaceService.load())
+    const requestId = ++workspaceHydrationRequestIdRef.current
+    const refreshSelection = desiredGameSelectionRef.current
+      ?? (
+        snapshotRef.current
+          ? { projectId: snapshotRef.current.project.id, draftId: snapshotRef.current.draft.id }
+          : null
+      )
+    const shouldHydrateCacheFirst =
+      Boolean(refreshSelection?.projectId && refreshSelection?.draftId)
+      && !loader
+    if (shouldHydrateCacheFirst && refreshSelection?.projectId && refreshSelection.draftId) {
+      try {
+        const cached = await workspaceService.loadCachedProjectSnapshot(refreshSelection.projectId, refreshSelection.draftId)
+        if (cached && requestId === workspaceHydrationRequestIdRef.current) {
+          hydrateLoadedProject({
+            snapshot: cached.snapshot,
+            source: 'supabase',
+          }, {
+            ignoreUnsavedCache: options?.ignoreUnsavedCache,
+            resetSelection: options?.resetSelection,
+            allowProjectChange: options?.allowProjectChange || Boolean(desiredGameSelectionRef.current),
+            requestId,
+          })
+        }
+      } catch (cacheError) {
+        console.warn('[GraphCore] cached workspace hydration failed.', cacheError)
+      }
+    }
+    const state = await (loader ? loader() : workspaceService.load(refreshSelection ?? undefined))
+    if (requestId !== workspaceHydrationRequestIdRef.current) {
+      return state
+    }
     const nextGames = state.source === 'supabase' ? await workspaceService.listGames() : []
+    if (requestId !== workspaceHydrationRequestIdRef.current) {
+      return state
+    }
     setGames(nextGames)
     setWorkspaceBootstrapError(state.source === 'supabase' ? null : state.reason ?? null)
-    hydrateLoadedProject(state, { ignoreUnsavedCache: options?.ignoreUnsavedCache })
+    hydrateLoadedProject(state, {
+      ignoreUnsavedCache: options?.ignoreUnsavedCache,
+      resetSelection: options?.resetSelection,
+      allowProjectChange: options?.allowProjectChange || Boolean(desiredGameSelectionRef.current),
+      requestId,
+    })
     return state
   }
 
@@ -1334,7 +1472,7 @@ export default function App() {
     setPromptRuntimeError(null)
 
     try {
-      await refreshWorkspaceState(() => workspaceService.bootstrapLiveWorkspace())
+      await refreshWorkspaceState(() => workspaceService.bootstrapLiveWorkspace(), { allowProjectChange: true })
     } catch (bootstrapError) {
       console.error('[GraphCore] manual live workspace bootstrap failed.', bootstrapError)
       const message = bootstrapError instanceof Error ? bootstrapError.message : 'Live workspace bootstrap failed.'
@@ -1370,16 +1508,6 @@ export default function App() {
     }
     setPromptRuntimeError(null)
   }, [loading, session])
-
-  useEffect(() => {
-    if (!snapshot) return
-    const normalizedSnapshot = normalizeSnapshot(snapshot)
-    if (normalizedSnapshot === snapshot) return
-
-    setSnapshot(normalizedSnapshot)
-    setHasLocalSnapshotChanges(true)
-    setBundle(compileBundle(normalizedSnapshot))
-  }, [snapshot])
 
   useEffect(() => {
     if (!snapshot || loadedState?.source !== 'supabase') return
@@ -1464,9 +1592,8 @@ export default function App() {
         }
         if (!reconciledWorldBuildBatchIdsRef.current.has(batch.id) && loadedState?.source === 'supabase') {
           reconciledWorldBuildBatchIdsRef.current.add(batch.id)
-          void refreshWorkspaceState(undefined, { ignoreUnsavedCache: true }).catch((refreshError) => {
-            console.error('[GraphCore] world build reconciliation refresh failed.', refreshError)
-          })
+          // The poll response already carries the changed batch/job resources.
+          // Avoid a full workspace reload here; it is a large PostgREST payload.
         }
       }
     }
@@ -1478,6 +1605,7 @@ export default function App() {
     let cancelled = false
 
     async function pollActiveWorldBuilds() {
+      if (desiredGameSelectionRef.current) return
       if (worldBuildPollInFlightRef.current || cancelled) return
       const currentSnapshot = snapshotRef.current
       if (!currentSnapshot) return
@@ -1520,9 +1648,6 @@ export default function App() {
         console.error('[GraphCore] world build polling failed.', pollError)
         if (worldBuildPollFailureCountRef.current >= 2) {
           worldBuildPollFailureCountRef.current = 0
-          void refreshWorkspaceState(undefined, { ignoreUnsavedCache: true }).catch((refreshError) => {
-            console.error('[GraphCore] world build polling recovery refresh failed.', refreshError)
-          })
         }
       } finally {
         worldBuildPollInFlightRef.current = false
@@ -1547,48 +1672,60 @@ export default function App() {
     const channel = workspaceService.subscribeWorldPromptEvents({
       draftId: snapshot.draft.id,
       onSession: (session) => {
+        if (desiredGameSelectionRef.current) return
         const current = snapshotRef.current
         if (!current) return
+        if (current.draft.id !== session.draftId) return
         const nextSnapshot = mergeWorldPromptStateIntoSnapshot(current, { sessions: [session] })
         snapshotRef.current = nextSnapshot
         setSnapshot(nextSnapshot)
         setBundle(compileBundle(nextSnapshot))
       },
       onTurn: (turn) => {
+        if (desiredGameSelectionRef.current) return
         const current = snapshotRef.current
         if (!current) return
+        if (current.draft.id !== turn.draftId) return
         const nextSnapshot = mergeWorldPromptStateIntoSnapshot(current, { turns: [turn] })
         snapshotRef.current = nextSnapshot
         setSnapshot(nextSnapshot)
         setBundle(compileBundle(nextSnapshot))
       },
       onMessage: (message) => {
+        if (desiredGameSelectionRef.current) return
         const current = snapshotRef.current
         if (!current) return
+        if (current.draft.id !== message.draftId) return
         const nextSnapshot = mergeWorldPromptStateIntoSnapshot(current, { messages: [message] })
         snapshotRef.current = nextSnapshot
         setSnapshot(nextSnapshot)
         setBundle(compileBundle(nextSnapshot))
       },
       onEvent: (event) => {
+        if (desiredGameSelectionRef.current) return
         const current = snapshotRef.current
         if (!current) return
+        if (current.draft.id !== event.draftId) return
         const nextSnapshot = mergeWorldPromptEventIntoSnapshot(current, event)
         snapshotRef.current = nextSnapshot
         setSnapshot(nextSnapshot)
         setBundle(compileBundle(nextSnapshot))
       },
       onSuggestion: (suggestion) => {
+        if (desiredGameSelectionRef.current) return
         const current = snapshotRef.current
         if (!current) return
+        if (current.draft.id !== suggestion.draftId) return
         const nextSnapshot = mergeWorldPromptStateIntoSnapshot(current, { suggestions: [suggestion] })
         snapshotRef.current = nextSnapshot
         setSnapshot(nextSnapshot)
         setBundle(compileBundle(nextSnapshot))
       },
       onThread: (thread) => {
+        if (desiredGameSelectionRef.current) return
         const current = snapshotRef.current
         if (!current) return
+        if (current.draft.id !== thread.draftId) return
         const nextSnapshot = mergeWorldPromptStateIntoSnapshot(current, { threads: [thread] })
         snapshotRef.current = nextSnapshot
         setSnapshot(nextSnapshot)
@@ -1607,6 +1744,7 @@ export default function App() {
     let cancelled = false
 
     async function pollActiveMeshJobs() {
+      if (desiredGameSelectionRef.current) return
       if (meshGenerationPollInFlightRef.current || cancelled) return
       const currentSnapshot = snapshotRef.current
       if (!currentSnapshot) return
@@ -1748,6 +1886,7 @@ export default function App() {
     let cancelled = false
 
     async function pollCinematicRuns(runIds: string[], source: 'realtime' | 'watchdog') {
+      if (desiredGameSelectionRef.current) return
       if (cinematicRunPollInFlightRef.current || cancelled || runIds.length === 0) return
       const currentSnapshot = snapshotRef.current
       if (!currentSnapshot) return
@@ -2232,7 +2371,10 @@ export default function App() {
           graphKey,
           phase: latestPhase,
         })
-        const refreshedState = await refreshWorkspaceState(undefined, { ignoreUnsavedCache: true })
+        const refreshedState = await refreshWorkspaceState(
+          () => workspaceService.load(undefined, { profile: 'content' }),
+          { ignoreUnsavedCache: true },
+        )
         if (refreshedState.source === 'supabase') {
           return refreshedState.snapshot
         }
@@ -2630,6 +2772,18 @@ export default function App() {
     ))
   }
 
+  function reconcileLocalAutoManagedViews(
+    current: ProjectSnapshot,
+    options?: {
+      recentEntityKeys?: string[]
+      recentRelationshipKeys?: string[]
+      preferredRootEntityKey?: string | null
+      preferredThreadKey?: string | null
+    },
+  ) {
+    return reconcileAutoManagedWorldViews(current, options)
+  }
+
   function createWorldEntityLocally(input: WorldEntityCreateInput) {
     if (!snapshot) return
     let createdViewKey: string | null = null
@@ -2652,8 +2806,19 @@ export default function App() {
         customProperties: input.customProperties ?? {},
         metadata: input.metadata ?? {},
       }
-      const nextViews = current.worldViews.length > 0 ? current.worldViews : [createDefaultWorldView()]
-      createdViewKey = nextViews[0]?.key ?? null
+      const reconciled = reconcileLocalAutoManagedViews({
+        ...current,
+        definitions: syncDefinitionFromWorldEntityLocally({
+          ...current,
+          definitions: linkResult.definitions,
+        } as ProjectSnapshot, nextEntity),
+        worldEntities: [...current.worldEntities, nextEntity],
+        worldViews: current.worldViews.length > 0 ? current.worldViews : [createDefaultWorldView()],
+      }, {
+        recentEntityKeys: [nextEntity.key],
+        preferredRootEntityKey: nextEntity.key,
+      })
+      createdViewKey = reconciled.preferredViewKey ?? reconciled.worldViews[0]?.key ?? null
       return {
         ...current,
         definitions: syncDefinitionFromWorldEntityLocally({
@@ -2661,7 +2826,7 @@ export default function App() {
           definitions: linkResult.definitions,
         } as ProjectSnapshot, nextEntity),
         worldEntities: [...current.worldEntities, nextEntity],
-        worldViews: nextViews,
+        worldViews: reconciled.worldViews,
       }
     })
     if (createdViewKey) setSelectedWorldViewKey(createdViewKey)
@@ -2689,12 +2854,19 @@ export default function App() {
       }
       let createdViewKey: string | null = null
       applySnapshotUpdate((current) => {
-        const nextViews = current.worldViews.length > 0 ? current.worldViews : [createDefaultWorldView()]
-        createdViewKey = nextViews[0]?.key ?? null
+        const reconciled = reconcileLocalAutoManagedViews({
+          ...current,
+          worldEntities: [...current.worldEntities, optimisticEntity],
+          worldViews: current.worldViews.length > 0 ? current.worldViews : [createDefaultWorldView()],
+        }, {
+          recentEntityKeys: [optimisticEntity.key],
+          preferredRootEntityKey: optimisticEntity.key,
+        })
+        createdViewKey = reconciled.preferredViewKey ?? reconciled.worldViews[0]?.key ?? null
         return {
           ...current,
           worldEntities: [...current.worldEntities, optimisticEntity],
-          worldViews: nextViews,
+          worldViews: reconciled.worldViews,
         }
       })
       if (createdViewKey) setSelectedWorldViewKey(createdViewKey)
@@ -2741,15 +2913,25 @@ export default function App() {
       commitPersistedSnapshot(nextSnapshot)
       return
     }
-    applySnapshotUpdate((current) => ({
-      ...current,
-      worldEntities: current.worldEntities.map((entity) => entity.key === entityKey ? { ...entity, ...changes } : entity),
-      definitions: (() => {
-        const nextEntity = current.worldEntities.find((entity) => entity.key === entityKey)
-        if (!nextEntity) return current.definitions
-        return syncDefinitionFromWorldEntityLocally(current, { ...nextEntity, ...changes })
-      })(),
-    }))
+    applySnapshotUpdate((current) => {
+      const nextEntities = current.worldEntities.map((entity) => entity.key === entityKey ? { ...entity, ...changes } : entity)
+      const nextEntity = nextEntities.find((entity) => entity.key === entityKey) ?? null
+      const nextDefinitions = nextEntity ? syncDefinitionFromWorldEntityLocally(current, nextEntity) : current.definitions
+      const reconciled = reconcileLocalAutoManagedViews({
+        ...current,
+        worldEntities: nextEntities,
+        definitions: nextDefinitions,
+      }, {
+        recentEntityKeys: [entityKey],
+        preferredRootEntityKey: entityKey,
+      })
+      return {
+        ...current,
+        worldEntities: nextEntities,
+        definitions: nextDefinitions,
+        worldViews: reconciled.worldViews,
+      }
+    })
   }
 
   async function deleteWorldEntity(entityKey: string) {
@@ -2776,7 +2958,7 @@ export default function App() {
         const removedResultKeys = current.worldResults
           .filter((entry) => removedOperatorKeys.includes(entry.sourceOperatorKey))
           .map((entry) => entry.key)
-        return {
+        const nextSnapshot = {
           ...current,
           definitions: shouldDeleteLinkedDefinition
             ? current.definitions.filter((definition) => definition.key !== linkedDefinitionKey)
@@ -2800,6 +2982,10 @@ export default function App() {
               Object.entries(view.nodePositions).filter(([key]) => key !== entityKey && !removedOperatorKeys.includes(key) && !removedResultKeys.includes(key)),
             ),
           })),
+        }
+        return {
+          ...nextSnapshot,
+          worldViews: reconcileLocalAutoManagedViews(nextSnapshot).worldViews,
         }
       })
     }
@@ -2858,10 +3044,20 @@ export default function App() {
         state: input.state ?? 'confirmed',
         metadata: input.metadata ?? {},
       }
-      applySnapshotUpdate((current) => ({
-        ...current,
-        worldRelationships: [...current.worldRelationships, optimisticRelationship],
-      }))
+      applySnapshotUpdate((current) => {
+        const nextSnapshot = {
+          ...current,
+          worldRelationships: [...current.worldRelationships, optimisticRelationship],
+        }
+        return {
+          ...nextSnapshot,
+          worldViews: reconcileLocalAutoManagedViews(nextSnapshot, {
+            recentEntityKeys: [optimisticRelationship.sourceEntityKey, optimisticRelationship.targetEntityKey],
+            recentRelationshipKeys: [optimisticRelationship.key],
+            preferredRootEntityKey: optimisticRelationship.sourceEntityKey,
+          }).worldViews,
+        }
+      })
 
       try {
         await waitForPendingWorldEntityCommits([input.sourceEntityKey, input.targetEntityKey])
@@ -2878,26 +3074,37 @@ export default function App() {
       }
       return
     }
-    applySnapshotUpdate((current) => ({
-      ...current,
-      worldRelationships: [
-        ...current.worldRelationships,
-        {
-          id: createLocalEntityId('world-relationship'),
-          key: `world.relationship.${uniqueKey(current.worldRelationships.map((relationship) => relationship.key.replace(/^world\.relationship\./, '')), `${input.sourceEntityKey}-${input.verb}-${input.targetEntityKey}`)}`,
-          sourceEntityKey: input.sourceEntityKey,
-          targetEntityKey: input.targetEntityKey,
-          verb: input.verb,
-          direction: input.direction ?? 'outbound',
-          strength: input.strength ?? null,
-          confidence: input.confidence ?? null,
-          source: input.source ?? 'user',
-          notes: input.notes ?? '',
-          state: input.state ?? 'confirmed',
-          metadata: input.metadata ?? {},
-        },
-      ],
-    }))
+    applySnapshotUpdate((current) => {
+      const nextRelationship = {
+        id: createLocalEntityId('world-relationship'),
+        key: `world.relationship.${uniqueKey(current.worldRelationships.map((relationship) => relationship.key.replace(/^world\.relationship\./, '')), `${input.sourceEntityKey}-${input.verb}-${input.targetEntityKey}`)}`,
+        sourceEntityKey: input.sourceEntityKey,
+        targetEntityKey: input.targetEntityKey,
+        verb: input.verb,
+        direction: input.direction ?? 'outbound',
+        strength: input.strength ?? null,
+        confidence: input.confidence ?? null,
+        source: input.source ?? 'user',
+        notes: input.notes ?? '',
+        state: input.state ?? 'confirmed',
+        metadata: input.metadata ?? {},
+      }
+      const nextSnapshot = {
+        ...current,
+        worldRelationships: [
+          ...current.worldRelationships,
+          nextRelationship,
+        ],
+      }
+      return {
+        ...nextSnapshot,
+        worldViews: reconcileLocalAutoManagedViews(nextSnapshot, {
+          recentEntityKeys: [nextRelationship.sourceEntityKey, nextRelationship.targetEntityKey],
+          recentRelationshipKeys: [nextRelationship.key],
+          preferredRootEntityKey: nextRelationship.sourceEntityKey,
+        }).worldViews,
+      }
+    })
   }
 
   async function createWorldRelationshipFromGraphGesture(input: WorldRelationshipCreateInput) {
@@ -3257,10 +3464,16 @@ export default function App() {
       const nextSnapshot = await workspaceService.deleteWorldRelationship(syncedSnapshot, relationshipKey)
       commitPersistedSnapshot(nextSnapshot)
     } else {
-      applySnapshotUpdate((current) => ({
-        ...current,
-        worldRelationships: current.worldRelationships.filter((relationship) => relationship.key !== relationshipKey),
-      }))
+      applySnapshotUpdate((current) => {
+        const nextSnapshot = {
+          ...current,
+          worldRelationships: current.worldRelationships.filter((relationship) => relationship.key !== relationshipKey),
+        }
+        return {
+          ...nextSnapshot,
+          worldViews: reconcileLocalAutoManagedViews(nextSnapshot).worldViews,
+        }
+      })
     }
     if (selectedWorldEdgeKey === relationshipKey) setSelectedWorldEdgeKey(null)
   }
@@ -3274,17 +3487,29 @@ export default function App() {
       return
     }
 
-    applySnapshotUpdate((current) => ({
-      ...current,
-      worldRelationships: current.worldRelationships.map((relationship) => (
+    applySnapshotUpdate((current) => {
+      const nextRelationships = current.worldRelationships.map((relationship) => (
         relationship.key === relationshipKey
           ? {
               ...relationship,
               ...changes,
             }
           : relationship
-      )),
-    }))
+      ))
+      const nextRelationship = nextRelationships.find((relationship) => relationship.key === relationshipKey) ?? null
+      const nextSnapshot = {
+        ...current,
+        worldRelationships: nextRelationships,
+      }
+      return {
+        ...nextSnapshot,
+        worldViews: reconcileLocalAutoManagedViews(nextSnapshot, {
+          recentEntityKeys: nextRelationship ? [nextRelationship.sourceEntityKey, nextRelationship.targetEntityKey] : [],
+          recentRelationshipKeys: [relationshipKey],
+          preferredRootEntityKey: nextRelationship?.sourceEntityKey ?? null,
+        }).worldViews,
+      }
+    })
   }
 
   async function createWorldView(input: WorldViewCreateInput) {
@@ -3487,7 +3712,11 @@ export default function App() {
     let nextSnapshot = mergeWorldPromptStateIntoSnapshot(syncedSnapshot, {
       sessions: [result.session],
       turns: [result.turn],
+      messages: result.messages,
+      suggestions: result.suggestions,
+      threads: result.threads,
     })
+    nextSnapshot = mergeWorldPromptEventsIntoSnapshot(nextSnapshot, result.events)
     if (Array.isArray(result.definitions) && result.definitions.length > 0) {
       nextSnapshot = normalizeSnapshot({
         ...nextSnapshot,
@@ -3497,13 +3726,12 @@ export default function App() {
         ),
       })
     }
-    const refreshed = await workspaceService.load({
-      projectId: syncedSnapshot.project.id,
-      draftId: syncedSnapshot.draft.id,
-    })
-    if (refreshed.source === 'supabase') {
-      nextSnapshot = mergePersistedWorldGraphSnapshot(nextSnapshot, refreshed.snapshot)
-      setLoadedState({ source: refreshed.source, reason: refreshed.reason })
+    const nextSelectedViewKey =
+      result.session.selectedViewKey
+      ?? choosePreferredWorldView(nextSnapshot.worldViews, { worldThreads: nextSnapshot.worldThreads })?.key
+      ?? null
+    if (nextSelectedViewKey) {
+      setSelectedWorldViewKey(nextSelectedViewKey)
     }
     snapshotRef.current = nextSnapshot
     setSnapshot(nextSnapshot)
@@ -4828,7 +5056,7 @@ export default function App() {
     setPromptRuntimeError(null)
 
     try {
-      await refreshWorkspaceState(() => workspaceService.createGame())
+      await refreshWorkspaceState(() => workspaceService.createGame(), { allowProjectChange: true })
       setActiveTab('graph')
     } catch (createError) {
       console.error('[GraphCore] create game failed.', createError)
@@ -4845,13 +5073,29 @@ export default function App() {
     const nextGame = games.find((game) => game.projectId === projectId)
     if (!nextGame || nextGame.projectId === snapshot.project.id) return
 
+    desiredGameSelectionRef.current = { projectId: nextGame.projectId, draftId: nextGame.draftId }
+    workspaceHydrationRequestIdRef.current += 1
     setLoading(true)
     setPromptRuntimeError(null)
+    setSelectedWorldNodeKey(null)
+    setSelectedWorldEdgeKey(null)
+    setSelectedWorldEntityKey(null)
+    setSelectedWorldViewKey(null)
+    setSelectedNodeKey(null)
+    setSelectedEdgeKey(null)
+    setSelectedGraphKey(null)
+    setSelectedDefinitionKey(null)
+    setSelectedAssetKey(null)
+    setSelectedArchetypeKey(null)
 
     try {
-      await refreshWorkspaceState(() => workspaceService.setActiveGame(nextGame.projectId, nextGame.draftId))
+      await refreshWorkspaceState(
+        () => workspaceService.setActiveGame(nextGame.projectId, nextGame.draftId),
+        { resetSelection: true, allowProjectChange: true },
+      )
       setActiveTab('graph')
     } catch (switchError) {
+      desiredGameSelectionRef.current = null
       console.error('[GraphCore] switch game failed.', switchError)
       const message = switchError instanceof Error ? switchError.message : 'Switching games failed.'
       setPromptRuntimeError(message)
@@ -5376,6 +5620,7 @@ export default function App() {
           <Suspense fallback={<div className="detail-stack compact"><span className="eyebrow">Loading</span><h3>Preparing workspace…</h3></div>}>
             {activeTab === 'graph' ? (
               <WorldGraphPage
+                key={snapshot.project.id}
                 assets={snapshot.assets}
                 definitions={snapshot.definitions}
                 snapshotGraphs={snapshot.graphs}
