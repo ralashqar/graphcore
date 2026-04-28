@@ -5924,14 +5924,14 @@ export default function App() {
             <PromptDock
               activeTab={activeTab}
               currentContextLabel={selectedNode?.key ?? selectedDefinition?.key ?? selectedArchetype?.key ?? selectedGraph?.key ?? snapshot.project.slug}
-              isApplyingPatch={isApplyingPatch || isStartingWorldBuild}
-              isGeneratingPatch={isGeneratingPatch || isPlanningWorldBuild}
+              isApplyingPatch={activeTab === 'library' ? isApplyingPatch : isApplyingPatch || isStartingWorldBuild}
+              isGeneratingPatch={activeTab === 'library' ? isGeneratingPatch : isGeneratingPatch || isPlanningWorldBuild}
               model={promptModel}
               needsInitialization={activeGameIsEmpty}
               promptRuntimeError={promptRuntimeError}
               sessionEmail={session?.user.email ?? null}
               onChangeModel={setPromptModel}
-              onGenerate={handlePlanWorldBuild}
+              onGenerate={activeTab === 'library' ? handleGeneratePatch : handlePlanWorldBuild}
               onOpenOnboarding={handleOpenBootstrapOnboarding}
             />
           </Suspense>

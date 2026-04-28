@@ -6,6 +6,6 @@ export type PromptComposerSlice = {
 export const createPromptComposerSlice = (
   set: (updater: (state: PromptComposerSlice) => PromptComposerSlice | Partial<PromptComposerSlice>) => void,
 ): PromptComposerSlice => ({
-  promptText: 'Add a market branch after the bridge unlock that trades supplies for trust.',
+  promptText: '',
   setPromptText: (promptText) => set((state) => (state.promptText === promptText ? state : { promptText })),
 })

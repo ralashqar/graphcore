@@ -6162,17 +6162,6 @@ function WorldPromptChatPanel({
                   <div className="world-prompt-line">Open the browser console for the full debug error.</div>
                 </div>
               ) : null}
-              {busy ? (
-                <div className="world-prompt-planning-state">
-                  <div className="world-prompt-planning-spinner" aria-hidden="true" />
-                  <div className="world-prompt-planning-copy">
-                    <span className="world-prompt-row-label">{liveBusyStatusLabel}</span>
-                    <div className="world-prompt-line">
-                      {liveBusyDetail}
-                    </div>
-                  </div>
-                </div>
-              ) : null}
               <div ref={transcriptEndRef} />
             </div>
           </div>
