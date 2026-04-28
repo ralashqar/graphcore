@@ -1,8 +1,9 @@
 import '@xyflow/react/dist/style.css'
 
 import type { AuthChangeEvent, Session } from '@supabase/supabase-js'
-import { Suspense, lazy, useEffect, useMemo, useRef, useState, useTransition } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react'
 import { authService } from './application/services/authService'
+import { billingService } from './application/services/billingService'
 import { patchApplyService } from './application/services/patchApplyService'
 import { promptGenerationService } from './application/services/promptGenerationService'
 import { workspaceService } from './application/services/workspaceService'
@@ -91,8 +92,9 @@ import type { WorldBuildBatch, WorldBuildPlanItem, WorldBuildPlanResponse, World
 import { getResourceGenerationMetadata, isTerminalWorldBuildBatchStatus } from './domain/worldBuild'
 import { WorkspaceBanner } from './features/shell/WorkspaceBanner'
 import { WorkspaceTopbar } from './features/shell/WorkspaceTopbar'
+import { BillingPage } from './features/billing/BillingPage'
 import { useEditorStore } from './state/editorStore'
-import { APP_ROUTE_PATH, navigateToPath, routeFromPathname, type AppRoute } from './shared/appRoutes'
+import { APP_ROUTE_PATH, BILLING_ROUTE_PATH, navigateToPath, routeFromPathname, type AppRoute } from './shared/appRoutes'
 import type { AuthMode, GameSummary, LibrarySection, LoadedState, PatchSessionView, WorkspaceTab, WorldWorkspaceMode } from './shared/workspace'
 import { workspaceTabs } from './shared/workspace'
 import { EntityIcon, type EntityIconId } from './shared/entityIcons'
@@ -1057,6 +1059,15 @@ export default function App() {
   const setSelectedWorldEdgeKey = useEditorStore((state) => state.setSelectedWorldEdgeKey)
   const setSelectedWorldEntityKey = useEditorStore((state) => state.setSelectedWorldEntityKey)
   const setSelectedWorldViewKey = useEditorStore((state) => state.setSelectedWorldViewKey)
+  const creditBalance = useEditorStore((state) => state.creditBalance?.balance ?? null)
+  const subscription = useEditorStore((state) => state.subscription)
+  const creditPackages = useEditorStore((state) => state.creditPackages)
+  const creditHistory = useEditorStore((state) => state.creditHistory)
+  const setCreditBalance = useEditorStore((state) => state.setCreditBalance)
+  const setCreditPackages = useEditorStore((state) => state.setCreditPackages)
+  const setCreditHistory = useEditorStore((state) => state.setCreditHistory)
+  const setSubscription = useEditorStore((state) => state.setSubscription)
+  const setBillingError = useEditorStore((state) => state.setBillingError)
   const sessionRef = useRef<Session | null>(null)
   const loadedStateRef = useRef<LoadedState | null>(null)
   const snapshotRef = useRef<ProjectSnapshot | null>(null)
@@ -1349,11 +1360,38 @@ export default function App() {
   useEffect(() => {
     let active = true
     async function bootstrap() {
-      setLoading(appRoute === 'app')
+      setLoading(appRoute === 'app' || appRoute === 'billing')
       try {
         const currentSession = await authService.getCurrentSession()
         if (!active) return
         setSession(currentSession)
+        if (appRoute === 'billing') {
+          if (currentSession) {
+            try {
+              const data = await billingService.fetchBillingData(currentSession)
+              if (!active) return
+              setCreditBalance(data.creditBalance)
+              setCreditPackages(data.creditPackages)
+              setCreditHistory(data.creditHistory)
+              setSubscription(data.subscription)
+              setBillingError(null)
+            } catch (billingLoadError) {
+              if (!active) return
+              setBillingError(
+                billingLoadError instanceof Error ? billingLoadError.message : 'Failed to load billing data',
+              )
+            }
+          } else {
+            setCreditBalance(null)
+            setCreditPackages([])
+            setCreditHistory([])
+            setSubscription(null)
+            setBillingError(null)
+          }
+          setLoading(false)
+          return
+        }
+
         if (appRoute !== 'app') {
           setLoading(false)
           return
@@ -1376,6 +1414,32 @@ export default function App() {
       active = false
     }
   }, [appRoute, setSelectedDefinitionKey, setSelectedGraphKey])
+
+  const refreshBillingState = useCallback(async () => {
+    if (!sessionRef.current) {
+      setCreditBalance(null)
+      setCreditPackages([])
+      setCreditHistory([])
+      setSubscription(null)
+      setBillingError(null)
+      return
+    }
+
+    const data = await billingService.fetchBillingData(sessionRef.current)
+    setCreditBalance(data.creditBalance)
+    setCreditPackages(data.creditPackages)
+    setCreditHistory(data.creditHistory)
+    setSubscription(data.subscription)
+    setBillingError(null)
+  }, [setBillingError, setCreditBalance, setCreditHistory, setCreditPackages, setSubscription])
+
+  const handleRefreshBilling = useCallback(() => {
+    void refreshBillingState().catch((billingLoadError) => {
+      setBillingError(
+        billingLoadError instanceof Error ? billingLoadError.message : 'Failed to load billing data',
+      )
+    })
+  }, [refreshBillingState, setBillingError])
 
   useEffect(() => {
     let cancelled = false
@@ -5537,6 +5601,21 @@ export default function App() {
   }
 
   if (appRoute !== 'app') {
+    if (appRoute === 'billing') {
+      return (
+        <Suspense fallback={<main className="app-shell loading-shell"><p>Preparing GraphCore...</p></main>}>
+        <BillingPage
+          session={session}
+          creditBalance={creditBalance}
+          subscription={subscription}
+          creditPackages={creditPackages}
+          creditHistory={creditHistory}
+          onRefresh={handleRefreshBilling}
+        />
+      </Suspense>
+    )
+  }
+
     return (
       <Suspense fallback={<main className="app-shell loading-shell"><p>Preparing GraphCore...</p></main>}>
         <LandingPage
@@ -5558,12 +5637,14 @@ export default function App() {
           activeTab={activeTab}
           activeGameId={snapshot.project.id}
           canResetProjectWorld={loadedState?.source === 'supabase'}
+          creditBalance={creditBalance}
           currentUserEmail={session?.user.email ?? null}
           draftName={snapshot.draft.name}
           games={games}
           isSignedIn={Boolean(session)}
           onOpenActivity={() => setHistoryOpen(true)}
           onOpenAuth={() => setAuthOpen(true)}
+          onOpenBilling={() => navigateToPath(BILLING_ROUTE_PATH)}
           onOpenNewGame={handleOpenNewGame}
           onResetProjectWorld={handleRequestResetProjectWorld}
           onSelectGame={handleSelectGame}

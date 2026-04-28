@@ -1,8 +1,6 @@
 import type { GameSummary, WorkspaceTab, WorldWorkspaceMode } from '../../shared/workspace'
 import { EntityIcon, type EntityIconId } from '../../shared/entityIcons'
 
-const STUB_USER_AI_CREDITS = 1280
-
 type TopbarNavItem =
   | { kind: 'world'; mode: WorldWorkspaceMode; label: string; icon: EntityIconId }
   | { kind: 'workspace'; tab: Exclude<WorkspaceTab, 'graph'>; label: string; icon: EntityIconId }
@@ -21,10 +19,12 @@ type WorkspaceTopbarProps = {
   activeTab: WorkspaceTab
   activeGameId?: string | null
   canResetProjectWorld?: boolean
+  creditBalance?: number | null
   currentUserEmail?: string | null
   games: GameSummary[]
   onOpenActivity: () => void
   onOpenAuth: () => void
+  onOpenBilling?: () => void
   onOpenNewGame: () => void
   onResetProjectWorld?: () => void
   onSelectGame: (projectId: string) => void
@@ -44,12 +44,14 @@ export function WorkspaceTopbar({
   activeTab,
   activeGameId,
   canResetProjectWorld,
+  creditBalance,
   currentUserEmail,
   draftName,
   games,
   isSignedIn,
   onOpenActivity,
   onOpenAuth,
+  onOpenBilling,
   onOpenNewGame,
   onResetProjectWorld,
   onSelectGame,
@@ -62,6 +64,7 @@ export function WorkspaceTopbar({
   workspaceName,
 }: WorkspaceTopbarProps) {
   const userInitial = (currentUserEmail ?? 'G').trim().charAt(0).toUpperCase() || 'G'
+  const displayCredits = creditBalance ?? 0
   return (
     <header className="topbar">
       <div className="brand-cluster">
@@ -109,10 +112,16 @@ export function WorkspaceTopbar({
         </nav>
       </div>
       <div className="topbar-actions">
-        <div className="topbar-credit-pill" aria-label={`AI credits ${STUB_USER_AI_CREDITS}`}>
+        <button
+          className="topbar-credit-pill"
+          aria-label={`AI credits ${displayCredits}`}
+          onClick={onOpenBilling}
+          type="button"
+          title="Open billing"
+        >
           <EntityIcon id="credits" />
-          <strong>{STUB_USER_AI_CREDITS.toLocaleString()}</strong>
-        </div>
+          <strong>{displayCredits.toLocaleString()}</strong>
+        </button>
         <button className="topbar-user-avatar" onClick={isSignedIn ? undefined : onOpenAuth} type="button" aria-label={currentUserEmail ?? 'Sign in'}>
           {userInitial}
         </button>
