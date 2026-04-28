@@ -2417,6 +2417,35 @@ export function WorldGraphPage({
     }
     return { previousLabels, nextLabels }
   }, [entityByKey, inspectorEntity, worldRelationships])
+  const inspectorSequenceLinkedEntities = useMemo(() => {
+    if (!inspectorEntity || inspectorEntity.nodeType !== 'sequence_unit') return null
+    const linked = {
+      cast: [] as Array<{ key: string; name: string; verb: string }>,
+      places: [] as Array<{ key: string; name: string; verb: string }>,
+      items: [] as Array<{ key: string; name: string; verb: string }>,
+      events: [] as Array<{ key: string; name: string; verb: string }>,
+      groups: [] as Array<{ key: string; name: string; verb: string }>,
+      lore: [] as Array<{ key: string; name: string; verb: string }>,
+    }
+    const seen = new Set<string>()
+    for (const relationship of inspectorEntityRelationships) {
+      const counterpartKey = relationship.sourceEntityKey === inspectorEntity.key
+        ? relationship.targetEntityKey
+        : relationship.sourceEntityKey
+      if (seen.has(counterpartKey)) continue
+      const counterpart = entityByKey.get(counterpartKey)
+      if (!counterpart) continue
+      seen.add(counterpartKey)
+      const entry = { key: counterpart.key, name: counterpart.name, verb: relationship.verb || 'linked' }
+      if (counterpart.nodeType === 'actor') linked.cast.push(entry)
+      if (counterpart.nodeType === 'place') linked.places.push(entry)
+      if (counterpart.nodeType === 'object') linked.items.push(entry)
+      if (counterpart.nodeType === 'event') linked.events.push(entry)
+      if (counterpart.nodeType === 'group') linked.groups.push(entry)
+      if (counterpart.nodeType === 'concept') linked.lore.push(entry)
+    }
+    return linked
+  }, [entityByKey, inspectorEntity, inspectorEntityRelationships])
   const inspectorViewModel = useMemo<WorldInspectorViewModel | null>(() => buildWorldInspectorViewModel({
     entity: inspectorEntity,
     operator: inspectorOperator,
@@ -4901,6 +4930,116 @@ export function WorldGraphPage({
 
             {activeInspectorTab === 'overview' ? (
               <div className="editor-section compact-section">
+                {inspectorViewModel?.sequence ? (() => {
+                  const sequence = inspectorViewModel.sequence
+                  const missingFields = [
+                    sequence.ordinal === null ? 'ordinal' : null,
+                    sequence.synopsis.trim() ? null : 'synopsis',
+                    sequence.outcome.trim() ? null : 'outcome',
+                    sequence.consequences.length > 0 || sequence.characterArcDeltas.length > 0 ? null : 'consequence or character arc delta',
+                  ].filter((value): value is string => Boolean(value))
+                  const linkedGroups = [
+                    ['Cast', inspectorSequenceLinkedEntities?.cast ?? []] as const,
+                    ['Places', inspectorSequenceLinkedEntities?.places ?? []] as const,
+                    ['Items', inspectorSequenceLinkedEntities?.items ?? []] as const,
+                    ['Events', inspectorSequenceLinkedEntities?.events ?? []] as const,
+                    ['Groups', inspectorSequenceLinkedEntities?.groups ?? []] as const,
+                    ['Lore', inspectorSequenceLinkedEntities?.lore ?? []] as const,
+                  ].filter(([, entries]) => entries.length > 0)
+                  return (
+                    <div className="schema-card world-sequence-inspector-card">
+                      <div className="schema-card-head">
+                        <div>
+                          <span className="eyebrow">Authored Chapter</span>
+                          <strong>Sequence Fields</strong>
+                        </div>
+                        <span className={missingFields.length > 0 ? 'chip danger' : 'chip'}>{missingFields.length > 0 ? `${missingFields.length} missing` : 'script-ready shape'}</span>
+                      </div>
+                      <div className="chip-row">
+                        <span className="chip">{sequence.unitKind.replace(/_/g, ' ')}</span>
+                        <span className="chip">{sequence.sequenceKey || 'main'}</span>
+                        <span className="chip">{sequence.ordinal === null ? 'No ordinal' : `Step ${sequence.ordinal}`}</span>
+                        {sequence.actLabel ? <span className="chip">{sequence.actLabel}</span> : null}
+                        {sequence.storyFunction ? <span className="chip">{sequence.storyFunction.replace(/_/g, ' ')}</span> : null}
+                        <span className="chip">{sequence.scriptExpansionReady ? 'Script hook ready' : 'Script hook not set'}</span>
+                      </div>
+                      {missingFields.length > 0 ? (
+                        <div className="inline-note is-warning">Missing: {missingFields.join(', ')}.</div>
+                      ) : null}
+                      <div className="world-sequence-field-list">
+                        <div className="inline-note">
+                          <strong>Synopsis</strong>
+                          <span>{sequence.synopsis.trim() || 'Not recorded.'}</span>
+                        </div>
+                        <div className="inline-note">
+                          <strong>Dramatic Question</strong>
+                          <span>{sequence.dramaticQuestion.trim() || 'Not recorded.'}</span>
+                        </div>
+                        <div className="inline-note">
+                          <strong>Outcome</strong>
+                          <span>{sequence.outcome.trim() || 'Not recorded.'}</span>
+                        </div>
+                      </div>
+                      <div className="schema-card-head compact">
+                        <strong>Cause / Effect Consequences</strong>
+                      </div>
+                      {sequence.consequences.length > 0 ? (
+                        <div className="world-choice-list vertical">
+                          {sequence.consequences.map((entry, index) => (
+                            <div key={`${entry.cause}:${entry.effect}:${index}`} className="inline-note">
+                              <strong>{entry.label}</strong>
+                              <span>{entry.cause || 'Cause not recorded.'}{' -> '}{entry.effect || 'Effect not recorded.'}</span>
+                              {entry.affectedEntityKeys.length > 0 ? (
+                                <span>Affects: {entry.affectedEntityKeys.map((key) => entityByKey.get(key)?.name ?? key).join(', ')}</span>
+                              ) : null}
+                              {entry.threadKeys.length > 0 ? (
+                                <span>Threads: {entry.threadKeys.map((key) => worldThreads.find((thread) => thread.key === key)?.title ?? key).join(', ')}</span>
+                              ) : null}
+                            </div>
+                          ))}
+                        </div>
+                      ) : <div className="inline-note is-warning">No cause/effect consequence recorded yet.</div>}
+                      <div className="schema-card-head compact">
+                        <strong>Character Arc Deltas</strong>
+                      </div>
+                      {sequence.characterArcDeltas.length > 0 ? (
+                        <div className="world-choice-list vertical">
+                          {sequence.characterArcDeltas.map((entry, index) => (
+                            <div key={`${entry.actorKey}:${index}`} className="inline-note">
+                              <strong>{entityByKey.get(entry.actorKey)?.name ?? (entry.actorKey || 'Unassigned character')}</strong>
+                              <span>Before: {entry.before || 'Not recorded.'}</span>
+                              <span>Pressure: {entry.pressure || 'Not recorded.'}</span>
+                              <span>Choice: {entry.choice || 'Not recorded.'}</span>
+                              <span>After: {entry.after || 'Not recorded.'}</span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : <div className="inline-note is-warning">No character arc delta recorded yet.</div>}
+                      {sequence.previousLabels.length > 0 || sequence.nextLabels.length > 0 ? (
+                        <div className="chip-row">
+                          {sequence.previousLabels.map((label) => <span key={`previous:${label}`} className="chip">Prev: {label}</span>)}
+                          {sequence.nextLabels.map((label) => <span key={`next:${label}`} className="chip">Next: {label}</span>)}
+                        </div>
+                      ) : <div className="inline-note is-warning">No previous/next chapter link recorded yet.</div>}
+                      {linkedGroups.length > 0 ? (
+                        <div className="world-sequence-linked-groups">
+                          {linkedGroups.map(([label, entries]) => (
+                            <div key={label} className="inline-note">
+                              <strong>{label}</strong>
+                              <span>{entries.map((entry) => `${entry.name} (${entry.verb})`).join(', ')}</span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : <div className="inline-note">No linked cast, places, items, or events recorded yet.</div>}
+                      {sequence.openLoops.length > 0 || sequence.resolvedLoops.length > 0 ? (
+                        <div className="chip-row">
+                          {sequence.openLoops.map((loop) => <span key={`open:${loop}`} className="chip">Open: {loop}</span>)}
+                          {sequence.resolvedLoops.map((loop) => <span key={`resolved:${loop}`} className="chip">Resolved: {loop}</span>)}
+                        </div>
+                      ) : <div className="inline-note">No open or resolved loops recorded.</div>}
+                    </div>
+                  )
+                })() : null}
                 <label className="field-block">
                   <span>Name</span>
                   <input
@@ -4957,49 +5096,6 @@ export function WorldGraphPage({
                     }}
                   />
                 </label>
-                {inspectorViewModel?.sequence ? (
-                  <div className="schema-card">
-                    <div className="schema-card-head">
-                      <strong>Sequence Structure</strong>
-                    </div>
-                    {inspectorViewModel.sequence.synopsis ? <p>{inspectorViewModel.sequence.synopsis}</p> : null}
-                    {inspectorViewModel.sequence.dramaticQuestion ? <div className="inline-note">Question: {inspectorViewModel.sequence.dramaticQuestion}</div> : null}
-                    {inspectorViewModel.sequence.outcome ? <div className="inline-note">Outcome: {inspectorViewModel.sequence.outcome}</div> : null}
-                    {inspectorViewModel.sequence.previousLabels.length > 0 || inspectorViewModel.sequence.nextLabels.length > 0 ? (
-                      <div className="chip-row">
-                        {inspectorViewModel.sequence.previousLabels.map((label) => <span key={`previous:${label}`} className="chip">Prev: {label}</span>)}
-                        {inspectorViewModel.sequence.nextLabels.map((label) => <span key={`next:${label}`} className="chip">Next: {label}</span>)}
-                      </div>
-                    ) : null}
-                    {inspectorViewModel.sequence.consequences.length > 0 ? (
-                      <div className="world-choice-list">
-                        {inspectorViewModel.sequence.consequences.map((entry, index) => (
-                          <div key={`${entry.cause}:${entry.effect}:${index}`} className="inline-note">
-                            {entry.label}: {entry.cause}{' -> '}{entry.effect}
-                          </div>
-                        ))}
-                      </div>
-                    ) : <div className="inline-note">No cause/effect consequence recorded yet.</div>}
-                    {inspectorViewModel.sequence.characterArcDeltas.length > 0 ? (
-                      <details className="world-inline-disclosure">
-                        <summary>Character Arc Deltas</summary>
-                        <div className="world-choice-list">
-                          {inspectorViewModel.sequence.characterArcDeltas.map((entry, index) => (
-                            <div key={`${entry.actorKey}:${index}`} className="inline-note">
-                              {entityByKey.get(entry.actorKey)?.name ?? entry.actorKey}: {entry.before || 'before unclear'}{' -> '}{entry.after || 'after unclear'}
-                            </div>
-                          ))}
-                        </div>
-                      </details>
-                    ) : null}
-                    {inspectorViewModel.sequence.openLoops.length > 0 || inspectorViewModel.sequence.resolvedLoops.length > 0 ? (
-                      <div className="chip-row">
-                        {inspectorViewModel.sequence.openLoops.map((loop) => <span key={`open:${loop}`} className="chip">Open: {loop}</span>)}
-                        {inspectorViewModel.sequence.resolvedLoops.map((loop) => <span key={`resolved:${loop}`} className="chip">Resolved: {loop}</span>)}
-                      </div>
-                    ) : null}
-                  </div>
-                ) : null}
                 {selectedEntityThreads.length > 0 ? (
                   <div className="chip-row">
                     {selectedEntityThreads.map((thread) => (

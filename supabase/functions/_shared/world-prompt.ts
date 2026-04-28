@@ -103,6 +103,7 @@ import {
 import {
   deriveWorldSequence,
   readWorldSequenceMetadata,
+  validateWorldSequenceUnitCompleteness,
 } from '../../../src/domain/worldSequence.ts'
 import {
   buildWorldWikiFingerprint,
@@ -118,7 +119,7 @@ import {
   type WorldBuildStatusResponse,
 } from '../../../src/domain/worldBuild.ts'
 import { runOpenAiResponses } from './openai.ts'
-import { normalizeStrictJsonSchema } from './structured-output.ts'
+import { normalizeStrictJsonSchema, type JsonSchema } from './structured-output.ts'
 
 type SupabaseClient = any
 
@@ -383,6 +384,198 @@ const worldPromptPlannerSchema = z.object({
     severity: z.enum(['low', 'medium', 'high']).default('medium'),
   })).default([]),
 })
+
+const storySequenceCompletionConsequenceSchema = z.object({
+  cause: z.string(),
+  effect: z.string(),
+  affectedEntityKeys: z.array(z.string()),
+  threadKeys: z.array(z.string()),
+  consequenceType: z.enum(['plot', 'character', 'world_state', 'relationship', 'stakes']),
+})
+
+const storySequenceCompletionArcDeltaSchema = z.object({
+  actorKey: z.string(),
+  before: z.string(),
+  pressure: z.string(),
+  choice: z.string(),
+  after: z.string(),
+})
+
+const storySequenceCompletionItemSchema = z.object({
+  opId: z.string(),
+  summary: z.string(),
+  context: z.string(),
+  sequence: z.object({
+    unitKind: z.enum(['chapter', 'episode', 'mission', 'quest', 'campaign_moment', 'ugc_beat']),
+    sequenceKey: z.string(),
+    ordinal: z.number(),
+    actLabel: z.string(),
+    synopsis: z.string(),
+    dramaticQuestion: z.string(),
+    storyFunction: z.enum([
+      'setup',
+      'inciting_incident',
+      'rising_action',
+      'turning_point',
+      'crisis',
+      'climax',
+      'resolution',
+    ]),
+    outcome: z.string(),
+    consequences: z.array(storySequenceCompletionConsequenceSchema),
+    characterArcDeltas: z.array(storySequenceCompletionArcDeltaSchema),
+    openLoops: z.array(z.string()),
+    resolvedLoops: z.array(z.string()),
+    scriptExpansionReady: z.boolean(),
+  }),
+})
+
+const storySequenceCompletionResponseSchema = z.object({
+  completions: z.array(storySequenceCompletionItemSchema),
+})
+
+const STORY_SEQUENCE_UNIT_KINDS = ['chapter', 'episode', 'mission', 'quest', 'campaign_moment', 'ugc_beat'] as const
+const STORY_SEQUENCE_FUNCTIONS = ['setup', 'inciting_incident', 'rising_action', 'turning_point', 'crisis', 'climax', 'resolution'] as const
+const STORY_SEQUENCE_CONSEQUENCE_TYPES = ['plot', 'character', 'world_state', 'relationship', 'stakes'] as const
+const WORLD_ENTITY_NODE_TYPES = ['actor', 'group', 'place', 'object', 'concept', 'event', 'sequence_unit'] as const
+const NON_SEQUENCE_ENTITY_NODE_TYPES = WORLD_ENTITY_NODE_TYPES.filter((nodeType) => nodeType !== 'sequence_unit')
+
+function isJsonSchemaObject(schema: JsonSchema): schema is Exclude<JsonSchema, boolean> {
+  return typeof schema === 'object' && schema !== null
+}
+
+function stringArraySchema(): JsonSchema {
+  return {
+    type: 'array',
+    items: { type: 'string' },
+  }
+}
+
+function storySequenceMetadataJsonSchema(): JsonSchema {
+  return {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      unitKind: { type: 'string', enum: [...STORY_SEQUENCE_UNIT_KINDS] },
+      sequenceKey: { type: 'string', minLength: 1 },
+      ordinal: { type: 'number' },
+      actLabel: { type: 'string' },
+      synopsis: { type: 'string', minLength: 1 },
+      dramaticQuestion: { type: 'string' },
+      storyFunction: { type: 'string', enum: [...STORY_SEQUENCE_FUNCTIONS] },
+      outcome: { type: 'string', minLength: 1 },
+      consequences: {
+        type: 'array',
+        minItems: 1,
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            cause: { type: 'string', minLength: 1 },
+            effect: { type: 'string', minLength: 1 },
+            affectedEntityKeys: stringArraySchema(),
+            threadKeys: stringArraySchema(),
+            consequenceType: { type: 'string', enum: [...STORY_SEQUENCE_CONSEQUENCE_TYPES] },
+          },
+          required: ['cause', 'effect', 'affectedEntityKeys', 'threadKeys', 'consequenceType'],
+        },
+      },
+      characterArcDeltas: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            actorKey: { type: 'string' },
+            before: { type: 'string' },
+            pressure: { type: 'string' },
+            choice: { type: 'string' },
+            after: { type: 'string' },
+          },
+          required: ['actorKey', 'before', 'pressure', 'choice', 'after'],
+        },
+      },
+      openLoops: stringArraySchema(),
+      resolvedLoops: stringArraySchema(),
+      scriptExpansionReady: { type: 'boolean' },
+    },
+    required: [
+      'unitKind',
+      'sequenceKey',
+      'ordinal',
+      'actLabel',
+      'synopsis',
+      'dramaticQuestion',
+      'storyFunction',
+      'outcome',
+      'consequences',
+      'characterArcDeltas',
+      'openLoops',
+      'resolvedLoops',
+      'scriptExpansionReady',
+    ],
+  }
+}
+
+function storySequenceCustomPropertiesJsonSchema(): JsonSchema {
+  return {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      sequence: storySequenceMetadataJsonSchema(),
+    },
+    required: ['sequence'],
+  }
+}
+
+function isPlannerWorldEntitySchema(schema: Exclude<JsonSchema, boolean>) {
+  const nodeType = schema.properties?.nodeType
+  if (!isJsonSchemaObject(nodeType) || !Array.isArray(nodeType.enum)) return false
+  return WORLD_ENTITY_NODE_TYPES.every((value) => nodeType.enum?.includes(value))
+    && Boolean(schema.properties?.customProperties)
+    && Boolean(schema.properties?.metadata)
+}
+
+function withStorySequenceEntityContract(schema: Exclude<JsonSchema, boolean>): JsonSchema {
+  const genericEntity = structuredClone(schema) as Exclude<JsonSchema, boolean>
+  const genericNodeType = genericEntity.properties?.nodeType
+  if (isJsonSchemaObject(genericNodeType)) {
+    genericNodeType.enum = [...NON_SEQUENCE_ENTITY_NODE_TYPES]
+  }
+
+  const sequenceEntity = structuredClone(schema) as Exclude<JsonSchema, boolean>
+  if (sequenceEntity.properties) {
+    sequenceEntity.properties.nodeType = { type: 'string', const: 'sequence_unit' }
+    sequenceEntity.properties.customProperties = storySequenceCustomPropertiesJsonSchema()
+  }
+
+  return {
+    anyOf: [
+      sequenceEntity,
+      genericEntity,
+    ],
+  }
+}
+
+function withStorySequencePlannerJsonSchema(schema: JsonSchema): JsonSchema {
+  if (!isJsonSchemaObject(schema)) return schema
+  if (isPlannerWorldEntitySchema(schema)) return withStorySequenceEntityContract(schema)
+  const cloned = { ...schema }
+  if (cloned.properties) {
+    cloned.properties = Object.fromEntries(
+      Object.entries(cloned.properties).map(([key, value]) => [key, withStorySequencePlannerJsonSchema(value)]),
+    )
+  }
+  if (cloned.items) cloned.items = withStorySequencePlannerJsonSchema(cloned.items)
+  if (Array.isArray(cloned.anyOf)) cloned.anyOf = cloned.anyOf.map((entry) => withStorySequencePlannerJsonSchema(entry))
+  if (Array.isArray(cloned.oneOf)) cloned.oneOf = cloned.oneOf.map((entry) => withStorySequencePlannerJsonSchema(entry))
+  if (cloned.$defs) {
+    cloned.$defs = Object.fromEntries(
+      Object.entries(cloned.$defs).map(([key, value]) => [key, withStorySequencePlannerJsonSchema(value)]),
+    )
+  }
+  return cloned
+}
 
 type PlannerMode = 'direct_build' | 'refinement' | 'advisory_diagnosis'
 
@@ -4885,6 +5078,408 @@ function promptOpNeedsApproval(op: PromptToWorldOp) {
     || approvalReason.length > 0
 }
 
+type StorySequenceOpIssue = {
+  opId: string
+  entityName: string
+  missingFields: string[]
+}
+
+function projectUsesStrictStorySequence(projectContext: WorldPromptSnapshot['projectContext']) {
+  return !projectContext || projectContext.projectType === 'story' || projectContext.brainProfile === 'story'
+}
+
+function mergeRecordsForSequenceValidation(
+  base: Record<string, unknown> | null | undefined,
+  patch: Record<string, unknown> | null | undefined,
+) {
+  const baseRecord = base && typeof base === 'object' && !Array.isArray(base) ? base : {}
+  const patchRecord = patch && typeof patch === 'object' && !Array.isArray(patch) ? patch : {}
+  const merged = { ...baseRecord, ...patchRecord }
+  if (
+    baseRecord.sequence
+    && typeof baseRecord.sequence === 'object'
+    && !Array.isArray(baseRecord.sequence)
+    && patchRecord.sequence
+    && typeof patchRecord.sequence === 'object'
+    && !Array.isArray(patchRecord.sequence)
+  ) {
+    merged.sequence = {
+      ...(baseRecord.sequence as Record<string, unknown>),
+      ...(patchRecord.sequence as Record<string, unknown>),
+    }
+  }
+  return merged
+}
+
+function buildSequenceValidationCandidate(input: {
+  existing?: Pick<WorldEntity, 'customProperties' | 'metadata'> | null
+  changes: Pick<WorldEntityCreateInput, 'customProperties' | 'metadata'>
+}) {
+  return {
+    customProperties: mergeRecordsForSequenceValidation(input.existing?.customProperties, input.changes.customProperties),
+    metadata: mergeRecordsForSequenceValidation(input.existing?.metadata, input.changes.metadata),
+  }
+}
+
+function storySequenceIssueForCandidate(input: {
+  opId: string
+  entityName: string
+  candidate: Pick<WorldEntity, 'customProperties' | 'metadata'>
+}): StorySequenceOpIssue | null {
+  const completeness = validateWorldSequenceUnitCompleteness(input.candidate)
+  if (completeness.complete) return null
+  return {
+    opId: input.opId,
+    entityName: input.entityName,
+    missingFields: completeness.missingFields.map((field) => field.replace(/_/g, ' ')),
+  }
+}
+
+function findStorySequenceOpIssues(input: {
+  snapshot: WorldPromptSnapshot
+  ops: PromptToWorldOp[]
+}) {
+  if (!projectUsesStrictStorySequence(input.snapshot.projectContext)) return []
+  const issues: StorySequenceOpIssue[] = []
+  for (const op of input.ops) {
+    if (op.op === 'upsert_entity') {
+      const existing = op.payload.targetEntityKey
+        ? input.snapshot.worldEntities.find((entity) => entity.key === op.payload.targetEntityKey) ?? null
+        : null
+      const nodeType = op.payload.entity.nodeType ?? existing?.nodeType
+      if (nodeType !== 'sequence_unit') continue
+      const issue = storySequenceIssueForCandidate({
+        opId: op.id,
+        entityName: op.payload.entity.name || existing?.name || op.id,
+        candidate: buildSequenceValidationCandidate({
+          existing,
+          changes: op.payload.entity,
+        }),
+      })
+      if (issue) issues.push(issue)
+      continue
+    }
+
+    if (op.op === 'update_entity') {
+      const existing = input.snapshot.worldEntities.find((entity) => entity.key === op.payload.targetEntityKey) ?? null
+      if (!existing) continue
+      const nodeType = op.payload.changes.nodeType ?? existing.nodeType
+      if (nodeType !== 'sequence_unit') continue
+      const touchesSequence = op.payload.changes.customProperties !== undefined
+        || op.payload.changes.metadata !== undefined
+        || op.payload.changes.nodeType === 'sequence_unit'
+      if (!touchesSequence) continue
+      const issue = storySequenceIssueForCandidate({
+        opId: op.id,
+        entityName: op.payload.changes.name || existing.name || op.id,
+        candidate: buildSequenceValidationCandidate({
+          existing,
+          changes: {
+            customProperties: op.payload.changes.customProperties ?? {},
+            metadata: op.payload.changes.metadata ?? {},
+          },
+        }),
+      })
+      if (issue) issues.push(issue)
+    }
+  }
+  return issues
+}
+
+function summarizeStorySequenceOpIssues(issues: StorySequenceOpIssue[]) {
+  return issues
+    .map((issue) => `${issue.entityName} missing ${issue.missingFields.join(', ')}`)
+    .join('; ')
+}
+
+function recommendedNextSequenceOrdinal(input: {
+  snapshot: WorldPromptSnapshot
+  sequenceKey: string
+}) {
+  const sequence = deriveWorldSequence({
+    entities: input.snapshot.worldEntities,
+    relationships: input.snapshot.worldRelationships,
+  })
+  const ordinals = sequence.units
+    .filter((unit) => unit.sequenceKey === input.sequenceKey)
+    .map((unit) => unit.ordinal)
+    .filter((ordinal): ordinal is number => typeof ordinal === 'number' && Number.isFinite(ordinal))
+  if (ordinals.length === 0) return 1
+  return Math.max(...ordinals) + 1
+}
+
+function storySequenceCompletionCandidates(input: {
+  snapshot: WorldPromptSnapshot
+  ops: PromptToWorldOp[]
+}) {
+  if (!projectUsesStrictStorySequence(input.snapshot.projectContext)) return []
+  const candidates: Array<{
+    op: PromptToWorldOp
+    issue: StorySequenceOpIssue
+    entityName: string
+    existing: WorldEntity | null
+    candidate: Pick<WorldEntity, 'customProperties' | 'metadata'>
+  }> = []
+
+  for (const op of input.ops) {
+    if (op.op === 'upsert_entity') {
+      const existing = op.payload.targetEntityKey
+        ? input.snapshot.worldEntities.find((entity) => entity.key === op.payload.targetEntityKey) ?? null
+        : null
+      const nodeType = op.payload.entity.nodeType ?? existing?.nodeType
+      if (nodeType !== 'sequence_unit') continue
+      const candidate = buildSequenceValidationCandidate({
+        existing,
+        changes: op.payload.entity,
+      })
+      const entityName = op.payload.entity.name || existing?.name || op.id
+      const issue = storySequenceIssueForCandidate({
+        opId: op.id,
+        entityName,
+        candidate,
+      })
+      if (issue) candidates.push({ op, issue, entityName, existing, candidate })
+      continue
+    }
+
+    if (op.op === 'update_entity') {
+      const existing = input.snapshot.worldEntities.find((entity) => entity.key === op.payload.targetEntityKey) ?? null
+      if (!existing) continue
+      const nodeType = op.payload.changes.nodeType ?? existing.nodeType
+      if (nodeType !== 'sequence_unit') continue
+      const candidate = buildSequenceValidationCandidate({
+        existing,
+        changes: {
+          customProperties: op.payload.changes.customProperties ?? {},
+          metadata: op.payload.changes.metadata ?? {},
+        },
+      })
+      const entityName = op.payload.changes.name || existing.name || op.id
+      const issue = storySequenceIssueForCandidate({
+        opId: op.id,
+        entityName,
+        candidate,
+      })
+      if (issue) candidates.push({ op, issue, entityName, existing, candidate })
+    }
+  }
+
+  return candidates
+}
+
+async function completeStorySequenceOps(input: {
+  model: string
+  prompt: string
+  snapshot: WorldPromptSnapshot
+  retrieval: WorldPromptRetrievalPacket
+  ops: PromptToWorldOp[]
+  debugEnabled: boolean
+}) {
+  const candidates = storySequenceCompletionCandidates({
+    snapshot: input.snapshot,
+    ops: input.ops,
+  })
+  if (candidates.length === 0) {
+    return { ops: input.ops, issues: [] as StorySequenceOpIssue[] }
+  }
+
+  const completionSchema = normalizeStrictJsonSchema(z.toJSONSchema(storySequenceCompletionResponseSchema))
+  const response = await runOpenAiResponses({
+    model: input.model,
+    input: JSON.stringify({
+      prompt: input.prompt,
+      projectContext: input.snapshot.projectContext,
+      sequenceContext: input.retrieval.sequenceContext,
+      relevantEntities: input.retrieval.relevantEntities.slice(0, 24).map((entity) => ({
+        key: entity.key,
+        name: entity.name,
+        nodeType: entity.nodeType,
+        summary: entity.summary,
+      })),
+      relevantRelationships: input.retrieval.relevantRelationships.slice(0, 24).map((relationship) => ({
+        key: relationship.key,
+        sourceEntityKey: relationship.sourceEntityKey,
+        targetEntityKey: relationship.targetEntityKey,
+        verb: relationship.verb,
+        notes: relationship.notes,
+      })),
+      relevantThreads: input.retrieval.relevantThreads.slice(0, 12).map((thread) => ({
+        key: thread.key,
+        title: thread.title,
+        summary: thread.summary,
+        linkedEntityKeys: thread.linkedEntityKeys,
+      })),
+      incompleteSequenceOps: candidates.map((candidate) => {
+        const existingSequence = candidate.existing ? readWorldSequenceMetadata(candidate.existing) : {}
+        const proposedSequence = readWorldSequenceMetadata(candidate.candidate)
+        const sequenceKey = proposedSequence.sequenceKey || existingSequence.sequenceKey || 'main'
+        return {
+          opId: candidate.op.id,
+          entityName: candidate.entityName,
+          missingFields: candidate.issue.missingFields,
+          currentSummary: candidate.op.op === 'upsert_entity'
+            ? candidate.op.payload.entity.summary
+            : candidate.op.op === 'update_entity'
+              ? candidate.op.payload.changes.summary ?? candidate.existing?.summary ?? ''
+              : '',
+          currentContext: candidate.op.op === 'upsert_entity'
+            ? candidate.op.payload.entity.context
+            : candidate.op.op === 'update_entity'
+              ? candidate.op.payload.changes.context ?? candidate.existing?.context ?? ''
+              : '',
+          existingSequence,
+          proposedSequence,
+          recommendedOrdinal: typeof proposedSequence.ordinal === 'number'
+            ? proposedSequence.ordinal
+            : recommendedNextSequenceOrdinal({
+              snapshot: input.snapshot,
+              sequenceKey,
+            }),
+        }
+      }),
+    }),
+    instructions: [
+      'You are GraphCore\'s focused Story sequence completion agent.',
+      'You do not create new graph operations. You only complete the script-facing metadata for the provided incomplete Story sequence_unit ops.',
+      'Return one completion for every incompleteSequenceOps item, matching opId exactly.',
+      'Every completion must include a usable chapter summary, context, and customProperties.sequence metadata.',
+      'Use the recommendedOrdinal unless the prompt or existing sequence context clearly requires a different ordinal.',
+      'For "next chapter" prompts, continue from the latest sequenceContext unit and make the new chapter move plot and character pressure forward.',
+      'Each sequence must include a concrete synopsis, dramaticQuestion, storyFunction, outcome, and at least one consequence with non-empty cause and effect.',
+      'Consequences should express cause/effect in story terms: what happens in this chapter and what it changes next.',
+      'Use known entity keys in affectedEntityKeys, actorKey, and threadKeys when the relevant graph context provides them. Use empty arrays or empty actorKey only when no clear graph key exists.',
+      'Set scriptExpansionReady true when the sequence has synopsis, outcome, and a cause/effect consequence.',
+      'Do not use entity.summary as a substitute for sequence.synopsis; fill both when useful.',
+    ].join('\n'),
+    text: {
+      format: {
+        type: 'json_schema',
+        name: 'story_sequence_completion',
+        schema: completionSchema,
+      },
+    },
+    reasoning: { effort: 'low' },
+    metadata: {
+      feature: 'world-prompt',
+      surface: 'story-sequence-completion',
+    },
+    store: false,
+    timeoutMs: 180_000,
+  })
+
+  if (input.debugEnabled) {
+    console.log('[world-prompt-debug] story-sequence-completion response-meta', previewJson({
+      ok: response.response.ok,
+      status: response.response.status,
+      requestId: response.response.headers.get('x-request-id'),
+      outputText: response.outputText,
+      body: response.body,
+    }))
+  }
+
+  if (!response.response.ok) {
+    return {
+      ops: input.ops,
+      issues: candidates.map((candidate) => candidate.issue),
+    }
+  }
+
+  const parsedJson = extractJsonBlock(response.outputText)
+  if (!parsedJson) {
+    return {
+      ops: input.ops,
+      issues: candidates.map((candidate) => candidate.issue),
+    }
+  }
+
+  const validated = storySequenceCompletionResponseSchema.safeParse(parsedJson)
+  if (!validated.success) {
+    if (input.debugEnabled) {
+      console.log('[world-prompt-debug] story-sequence-completion schema-failed', previewJson(validated.error.issues))
+    }
+    return {
+      ops: input.ops,
+      issues: candidates.map((candidate) => candidate.issue),
+    }
+  }
+
+  const completionByOpId = new Map(validated.data.completions.map((completion) => [completion.opId, completion]))
+  for (const candidate of candidates) {
+    const completion = completionByOpId.get(candidate.op.id)
+    if (!completion) continue
+    const sequencePatch = {
+      sequence: {
+        ...completion.sequence,
+        scriptExpansionReady: true,
+      },
+    }
+    if (candidate.op.op === 'upsert_entity') {
+      candidate.op.payload.entity.summary = completion.summary.trim() || candidate.op.payload.entity.summary
+      candidate.op.payload.entity.context = completion.context.trim() || candidate.op.payload.entity.context
+      candidate.op.payload.entity.customProperties = mergeRecordsForSequenceValidation(
+        candidate.op.payload.entity.customProperties,
+        sequencePatch,
+      )
+    } else if (candidate.op.op === 'update_entity') {
+      if (completion.summary.trim()) candidate.op.payload.changes.summary = completion.summary.trim()
+      if (completion.context.trim()) candidate.op.payload.changes.context = completion.context.trim()
+      candidate.op.payload.changes.customProperties = mergeRecordsForSequenceValidation(
+        candidate.op.payload.changes.customProperties,
+        sequencePatch,
+      )
+    }
+  }
+
+  return {
+    ops: input.ops,
+    issues: findStorySequenceOpIssues({
+      snapshot: input.snapshot,
+      ops: input.ops,
+    }),
+  }
+}
+
+function annotateStorySequenceCompletenessGuard(input: {
+  op: PromptToWorldOp
+  snapshot: WorldPromptSnapshot
+  entityName: string
+  nodeType: WorldEntity['nodeType']
+  existing?: Pick<WorldEntity, 'customProperties' | 'metadata'> | null
+  changes: Pick<WorldEntityCreateInput, 'customProperties' | 'metadata'>
+}) {
+  if (!projectUsesStrictStorySequence(input.snapshot.projectContext) || input.nodeType !== 'sequence_unit') {
+    return null
+  }
+  const issue = storySequenceIssueForCandidate({
+    opId: input.op.id,
+    entityName: input.entityName,
+    candidate: buildSequenceValidationCandidate({
+      existing: input.existing ?? null,
+      changes: input.changes,
+    }),
+  })
+  if (!issue) {
+    if (input.op.op === 'upsert_entity') {
+      input.op.payload.entity.customProperties = mergeRecordsForSequenceValidation(
+        input.op.payload.entity.customProperties,
+        { sequence: { scriptExpansionReady: true } },
+      )
+    } else if (input.op.op === 'update_entity') {
+      input.op.payload.changes.customProperties = mergeRecordsForSequenceValidation(
+        input.op.payload.changes.customProperties,
+        { sequence: { scriptExpansionReady: true } },
+      )
+    }
+    return null
+  }
+  input.op.applyMode = 'needs_approval'
+  input.op.metadata = {
+    ...(input.op.metadata ?? {}),
+    storySequenceMissingFields: issue.missingFields,
+  }
+  return `Incomplete Story sequence_unit (${issue.missingFields.join(', ')})`
+}
+
 const WIKI_STRING_LIMITS: Record<string, number> = {
   logline: 220,
   synopsis: 900,
@@ -5927,7 +6522,10 @@ async function generatePromptPlan(input: {
   })
   const debugEnabled = shouldDebugWorldPromptOpenAi()
   const plannerRequestSchema = plannerSchemaForMode(plannerMode)
-  const plannerResponseSchema = normalizeStrictJsonSchema(z.toJSONSchema(plannerRequestSchema))
+  const basePlannerResponseSchema = normalizeStrictJsonSchema(z.toJSONSchema(plannerRequestSchema))
+  const plannerResponseSchema = projectUsesStrictStorySequence(input.payload.snapshot.projectContext)
+    ? withStorySequencePlannerJsonSchema(basePlannerResponseSchema)
+    : basePlannerResponseSchema
   const relevantPlannerContext = await buildWorldPromptRetrievalPacket({
     client: input.client,
     mode: plannerMode,
@@ -5982,7 +6580,7 @@ async function generatePromptPlan(input: {
     'Authored story progression is separate from event chronology. Use sequence_unit nodes for chapters, episodes, acts, plot outlines, story beats, missions, campaign moments, and UGC beats.',
     'For Story projects, prompts about chapters, episodes, acts, plot progression, outlines, sequential stories, or story flow should create or update sequence_unit nodes first. Use event nodes only for diegetic happenings inside those chapters.',
     'For sequence_unit customProperties.sequence, include unitKind, sequenceKey, ordinal, actLabel when relevant, synopsis, dramaticQuestion, storyFunction, outcome, consequences, characterArcDeltas, openLoops, resolvedLoops, and scriptExpansionReady.',
-    'A Story sequence_unit should have a compact synopsis, an outcome, and at least one cause/effect consequence or characterArcDelta. Consequences must explain why the chapter exists and how it moves plot, stakes, relationships, world state, or character development forward.',
+    'A Story sequence_unit must have a compact synopsis, an outcome, and at least one cause/effect consequence. CharacterArcDeltas are optional additional structure when a character is pressured or changed. Consequences must explain why the chapter exists and how it moves plot, stakes, relationships, world state, or character development forward.',
     'Use sequence_unit-to-sequence_unit relationships with verbs precedes, causes, complicates, or pays_off to express authored story order and causal progression. Do not put relationship.metadata.temporal on sequence_unit links.',
     'Link sequence_unit nodes to actors, places, objects, events, concepts, and threads when they matter. Useful verbs include features, changes, pressures, reveals, set_in, uses, depicts, contains, reframes, and reveals_lore.',
     'For Game, Brand, and UGC projects, sequence_unit is allowed but label it appropriately: mission/quest, campaign_moment, or ugc_beat. Keep validation lighter than Story chapters unless the user asks for story-style structure.',
@@ -6138,6 +6736,7 @@ async function generatePromptPlan(input: {
 
     let normalizedPlan: z.infer<typeof worldPromptPlannerSchema> | null = null
     let creativeIssues: CreativeDescriptorIssue[] = []
+    let storySequenceIssues: StorySequenceOpIssue[] = []
     let repairFeedback: string | null = null
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -6209,14 +6808,28 @@ async function generatePromptPlan(input: {
         existingEntities: input.payload.snapshot.worldEntities,
         ops: candidatePlan.wave1Ops,
       })
+      const sequenceCompletion = creativeCompletionAppliesToPlan(plannerMode, candidatePlan.classification)
+        ? await completeStorySequenceOps({
+          model: input.payload.model,
+          prompt: input.payload.prompt,
+          snapshot: input.payload.snapshot,
+          retrieval: relevantPlannerContext,
+          ops: creativeCompletion.ops,
+          debugEnabled,
+        })
+        : { ops: creativeCompletion.ops, issues: [] as StorySequenceOpIssue[] }
       const completedPlan = worldPromptPlannerSchema.parse({
         ...candidatePlan,
-        wave1Ops: creativeCompletion.ops,
-        operations: creativeCompletion.ops,
+        wave1Ops: sequenceCompletion.ops,
+        operations: sequenceCompletion.ops,
       })
 
       normalizedPlan = completedPlan
       creativeIssues = creativeCompletion.issues
+      storySequenceIssues = sequenceCompletion.issues.length > 0 ? sequenceCompletion.issues : findStorySequenceOpIssues({
+        snapshot: input.payload.snapshot,
+        ops: completedPlan.wave1Ops,
+      })
       if (
         creativeCompletionAppliesToPlan(plannerMode, completedPlan.classification)
         && !promptAllowsPlaceholderCanon(input.payload.prompt)
@@ -6233,6 +6846,26 @@ async function generatePromptPlan(input: {
           console.log('[world-prompt-debug] planner creative-retry', previewJson({
             repairFeedback,
             issues: creativeIssues,
+          }))
+        }
+        continue
+      }
+      if (
+        creativeCompletionAppliesToPlan(plannerMode, completedPlan.classification)
+        && storySequenceIssues.length > 0
+        && attempt === 0
+      ) {
+        repairFeedback = [
+          'Repair incomplete Story sequence_unit ops before returning the plan.',
+          'Every Story sequence_unit you create or structurally update must include customProperties.sequence.ordinal, synopsis, outcome, and at least one consequence with cause/effect. Add characterArcDeltas when a character is pressured or changed.',
+          'Do not rely on entity.summary or entity.context as a substitute for customProperties.sequence.synopsis/outcome.',
+          'Set customProperties.sequence.scriptExpansionReady to true only when those required chapter fields are present.',
+          `Current sequence issues: ${summarizeStorySequenceOpIssues(storySequenceIssues)}.`,
+        ].join(' ')
+        if (debugEnabled) {
+          console.log('[world-prompt-debug] planner sequence-retry', previewJson({
+            repairFeedback,
+            issues: storySequenceIssues,
           }))
         }
         continue
@@ -6339,6 +6972,20 @@ function sanitizePromptOp(input: {
         })
         if (!nameResolved.entity && nameResolved.candidates.length === 0) {
           op.payload.targetEntityKey = null
+          const sequenceApprovalReason = annotateStorySequenceCompletenessGuard({
+            op,
+            snapshot: input.snapshot,
+            entityName: entity.name,
+            nodeType: entity.nodeType,
+            changes: entity,
+          })
+          if (sequenceApprovalReason) {
+            return annotatePromptOpMetadata({
+              op,
+              touchesExisting: false,
+              approvalReason: sequenceApprovalReason,
+            })
+          }
           return annotatePromptOpMetadata({ op, touchesExisting: false })
         }
         resolved = nameResolved
@@ -6362,6 +7009,14 @@ function sanitizePromptOp(input: {
       const relinking = Boolean(entity.linkedDefinitionKey && entity.linkedDefinitionKey !== resolved.entity.linkedDefinitionKey)
       const canonTouch = entityIsCanonLocked(resolved.entity)
       const identityRewrite = renaming || relinking || changingKind
+      const sequenceApprovalReason = annotateStorySequenceCompletenessGuard({
+        op,
+        snapshot: input.snapshot,
+        entityName: entity.name || resolved.entity.name,
+        nodeType: entity.nodeType ?? resolved.entity.nodeType,
+        existing: resolved.entity,
+        changes: entity,
+      })
       if (identityRewrite || canonTouch || (changingKind && explicitCorrection)) {
         op.applyMode = 'needs_approval'
       }
@@ -6371,7 +7026,21 @@ function sanitizePromptOp(input: {
         canonTouch,
         approvalReason: identityRewrite || (changingKind && explicitCorrection)
           ? 'Semantic rewrite of existing entity'
-          : canonTouch ? 'Touches canon-locked entity' : null,
+          : canonTouch ? 'Touches canon-locked entity' : sequenceApprovalReason,
+      })
+    }
+    const sequenceApprovalReason = annotateStorySequenceCompletenessGuard({
+      op,
+      snapshot: input.snapshot,
+      entityName: entity.name,
+      nodeType: entity.nodeType,
+      changes: entity,
+    })
+    if (sequenceApprovalReason) {
+      return annotatePromptOpMetadata({
+        op,
+        touchesExisting: false,
+        approvalReason: sequenceApprovalReason,
       })
     }
     return annotatePromptOpMetadata({ op, touchesExisting: false })
@@ -6393,6 +7062,17 @@ function sanitizePromptOp(input: {
       || op.payload.changes.linkedDefinitionKey !== undefined
     )
     const canonTouch = entityIsCanonLocked(target)
+    const sequenceApprovalReason = annotateStorySequenceCompletenessGuard({
+      op,
+      snapshot: input.snapshot,
+      entityName: op.payload.changes.name || target.name,
+      nodeType: op.payload.changes.nodeType ?? target.nodeType,
+      existing: target,
+      changes: {
+        customProperties: op.payload.changes.customProperties ?? {},
+        metadata: op.payload.changes.metadata ?? {},
+      },
+    })
     if (destructive || canonTouch) {
       op.applyMode = 'needs_approval'
     }
@@ -6400,7 +7080,7 @@ function sanitizePromptOp(input: {
       op,
       touchesExisting: true,
       canonTouch,
-      approvalReason: destructive ? 'Semantic rewrite of existing entity' : canonTouch ? 'Touches canon-locked entity' : null,
+      approvalReason: destructive ? 'Semantic rewrite of existing entity' : canonTouch ? 'Touches canon-locked entity' : sequenceApprovalReason,
     })
   }
 

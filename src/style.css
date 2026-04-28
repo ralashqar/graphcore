@@ -1032,6 +1032,11 @@ code {
   font-size: 0.82rem;
 }
 
+.chip.danger {
+  border-color: rgba(250, 204, 21, 0.24);
+  color: #facc15;
+}
+
 .surface-head,
 .prompt-dock-head {
   justify-content: space-between;
@@ -6257,6 +6262,27 @@ button.world-prompt-row-result {
   gap: 8px;
   flex-wrap: wrap;
   margin-top: 8px;
+}
+
+.world-choice-list.vertical,
+.world-sequence-field-list,
+.world-sequence-linked-groups {
+  display: grid;
+  gap: 8px;
+}
+
+.world-sequence-inspector-card .inline-note {
+  display: grid;
+  gap: 6px;
+}
+
+.world-sequence-inspector-card .inline-note strong {
+  color: var(--text);
+  font-size: 0.84rem;
+}
+
+.world-sequence-inspector-card .schema-card-head.compact {
+  margin-top: 2px;
 }
 
 .world-context-menu {

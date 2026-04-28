@@ -217,10 +217,22 @@ export type WorldInspectorViewModel = {
   imageUrl: string | null
   stats: string[]
   sequence: {
+    unitKind: string
+    sequenceKey: string
+    ordinal: number | null
+    actLabel: string
+    storyFunction: string
     synopsis: string
     dramaticQuestion: string
     outcome: string
-    consequences: Array<{ cause: string; effect: string; label: string }>
+    scriptExpansionReady: boolean
+    consequences: Array<{
+      cause: string
+      effect: string
+      label: string
+      affectedEntityKeys: string[]
+      threadKeys: string[]
+    }>
     characterArcDeltas: Array<{ actorKey: string; before: string; pressure: string; choice: string; after: string }>
     openLoops: string[]
     resolvedLoops: string[]
@@ -1576,13 +1588,21 @@ export function buildWorldInspectorViewModel(input: {
       ].filter((value): value is string => Boolean(value)),
       sequence: sequence
         ? {
+            unitKind: sequence.unitKind ?? 'chapter',
+            sequenceKey: sequence.sequenceKey ?? 'main',
+            ordinal: typeof sequence.ordinal === 'number' ? sequence.ordinal : null,
+            actLabel: sequence.actLabel ?? '',
+            storyFunction: sequence.storyFunction ?? '',
             synopsis: sequence.synopsis ?? input.entity.context,
             dramaticQuestion: sequence.dramaticQuestion ?? '',
             outcome: sequence.outcome ?? '',
+            scriptExpansionReady: sequence.scriptExpansionReady ?? false,
             consequences: (sequence.consequences ?? []).map((entry) => ({
               cause: entry.cause,
               effect: entry.effect,
               label: entry.consequenceType.replace(/_/g, ' '),
+              affectedEntityKeys: entry.affectedEntityKeys,
+              threadKeys: entry.threadKeys,
             })),
             characterArcDeltas: sequence.characterArcDeltas ?? [],
             openLoops: sequence.openLoops ?? [],

@@ -52,6 +52,17 @@ export type WorldSequenceModel = {
   diagnostics: string[]
 }
 
+export type WorldSequenceCompletenessField =
+  | 'ordinal'
+  | 'synopsis'
+  | 'outcome'
+  | 'consequence_or_character_arc_delta'
+
+export type WorldSequenceCompleteness = {
+  missingFields: WorldSequenceCompletenessField[]
+  complete: boolean
+}
+
 const SEQUENCE_RELATIONSHIP_VERBS = new Set<WorldSequenceRelationshipKind>([
   'precedes',
   'causes',
@@ -107,6 +118,26 @@ function hasConsequenceOrArc(unit: WorldSequenceUnit) {
 
 function relationshipKeyBetween(sourceUnitKey: string, targetUnitKey: string) {
   return `${sourceUnitKey}->${targetUnitKey}`
+}
+
+export function validateWorldSequenceUnitCompleteness(entity: Pick<WorldEntity, 'customProperties' | 'metadata'>): WorldSequenceCompleteness {
+  const metadata = readWorldSequenceMetadata(entity)
+  const consequences = metadata.consequences ?? []
+  const arcDeltas = metadata.characterArcDeltas ?? []
+  const hasConsequence = consequences.some((entry) => readString(entry.cause) && readString(entry.effect))
+  const hasArcDelta = arcDeltas.some((entry) => (
+    readString(entry.actorKey)
+    && (readString(entry.before) || readString(entry.pressure) || readString(entry.choice) || readString(entry.after))
+  ))
+  const missingFields: WorldSequenceCompletenessField[] = []
+  if (typeof metadata.ordinal !== 'number' || !Number.isFinite(metadata.ordinal)) missingFields.push('ordinal')
+  if (!readString(metadata.synopsis)) missingFields.push('synopsis')
+  if (!readString(metadata.outcome)) missingFields.push('outcome')
+  if (!hasConsequence && !hasArcDelta) missingFields.push('consequence_or_character_arc_delta')
+  return {
+    missingFields,
+    complete: missingFields.length === 0,
+  }
 }
 
 export function deriveWorldSequence(input: {

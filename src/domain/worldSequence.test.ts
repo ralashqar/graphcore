@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import type { WorldEntity, WorldRelationship } from './worldGraph.ts'
-import { deriveWorldSequence } from './worldSequence.ts'
+import { deriveWorldSequence, validateWorldSequenceUnitCompleteness } from './worldSequence.ts'
 import { deriveWorldTimeline } from './worldTimeline.ts'
 
 function entity(input: {
@@ -111,6 +111,35 @@ test('deriveWorldSequence flags chapters without outcome or consequence', () => 
 
   assert.ok(sequence.gaps.some((gap) => gap.kind === 'missing_outcome'))
   assert.ok(sequence.gaps.some((gap) => gap.kind === 'missing_consequence'))
+})
+
+test('validateWorldSequenceUnitCompleteness requires script-useful chapter fields', () => {
+  const thin = entity({ key: 'chapter.one', name: 'Chapter One', nodeType: 'sequence_unit' })
+  assert.deepEqual(validateWorldSequenceUnitCompleteness(thin).missingFields, [
+    'ordinal',
+    'synopsis',
+    'outcome',
+    'consequence_or_character_arc_delta',
+  ])
+
+  const complete = entity({
+    key: 'chapter.two',
+    name: 'Chapter Two',
+    nodeType: 'sequence_unit',
+    sequence: {
+      ordinal: 2,
+      synopsis: 'The heir rejects the public succession ceremony.',
+      outcome: 'The ruling house loses the court room.',
+      consequences: [{
+        cause: 'The secret writ is read aloud.',
+        effect: 'The rival house gains a legal opening.',
+        consequenceType: 'plot',
+        affectedEntityKeys: [],
+        threadKeys: [],
+      }],
+    },
+  })
+  assert.equal(validateWorldSequenceUnitCompleteness(complete).complete, true)
 })
 
 test('sequence causal links do not affect event timeline ordering', () => {
