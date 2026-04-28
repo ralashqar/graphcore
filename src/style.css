@@ -9122,7 +9122,7 @@ button:disabled {
   position: relative;
   min-height: auto;
   display: grid;
-  grid-template-columns: minmax(320px, 0.83fr) minmax(560px, 1.34fr) minmax(300px, 0.72fr);
+  grid-template-columns: minmax(320px, 0.78fr) minmax(560px, 1.34fr) minmax(300px, 0.78fr);
   gap: clamp(18px, 2.2vw, 38px);
   align-items: start;
   padding: 54px 0 22px;
@@ -9185,7 +9185,7 @@ button:disabled {
 .landing-hero-copy h1 {
   display: grid;
   gap: 0;
-  font-size: clamp(2.8rem, 3.85vw, 4.7rem);
+  font-size: clamp(2.35rem, 3.18vw, 3.95rem);
   line-height: 1.08;
   font-weight: 800;
 }
@@ -9626,16 +9626,16 @@ button:disabled {
 .landing-output-section {
   position: relative;
   z-index: 4;
-  margin-top: -72px;
-  padding-top: 170px;
+  margin-top: -156px;
+  padding-top: 104px;
 }
 
 .landing-output-flow {
   position: absolute;
   left: 0;
   right: 0;
-  top: -100px;
-  height: 260px;
+  top: -34px;
+  height: 140px;
   z-index: 1;
   pointer-events: none;
   overflow: visible;
@@ -9868,7 +9868,7 @@ button:disabled {
 
 @media (max-width: 1260px) {
   .landing-hero-section {
-    grid-template-columns: minmax(310px, 0.82fr) minmax(510px, 1.26fr) minmax(270px, 0.7fr);
+    grid-template-columns: minmax(310px, 0.78fr) minmax(510px, 1.26fr) minmax(270px, 0.78fr);
   }
 
   .landing-orbit-node {
@@ -9972,7 +9972,7 @@ button:disabled {
   }
 
   .landing-hero-copy h1 {
-    font-size: clamp(2.45rem, 11.8vw, 4rem);
+    font-size: clamp(2.05rem, 10vw, 3.25rem);
     line-height: 1.1;
   }
 
