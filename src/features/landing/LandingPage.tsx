@@ -219,7 +219,7 @@ export function LandingPage({
 
           <div className="landing-world-stage">
             <div className="landing-world-aura" aria-hidden="true" />
-            <img className="landing-world-core" alt="Glowing connected world graph core" src="/landing/hero-world-core.png" />
+            <img className="landing-world-core" alt="Glowing connected world graph core" src="/landing/hero-world-core-v2.png" />
             <div className="landing-core-ring" aria-hidden="true" />
             {orbitNodes.map((node) => (
               <article className={`landing-orbit-node ${node.className}`} key={node.title}>
@@ -248,10 +248,36 @@ export function LandingPage({
       </section>
 
       <section className="landing-output-section" id="use-cases">
-        <div className="landing-section-rule">
-          <span />
-          <strong>Everything comes from here</strong>
-          <span />
+        <div className="landing-output-flow" aria-hidden="true">
+          <svg viewBox="0 0 1200 260" preserveAspectRatio="none">
+            <defs>
+              <linearGradient id="landing-flow-gradient" x1="0%" x2="100%" y1="0%" y2="0%">
+                <stop offset="0%" stopColor="#8b3cff" stopOpacity="0.82" />
+                <stop offset="52%" stopColor="#d36cff" stopOpacity="0.72" />
+                <stop offset="100%" stopColor="#39d8ff" stopOpacity="0.82" />
+              </linearGradient>
+              <filter id="landing-flow-glow" x="-20%" y="-80%" width="140%" height="260%">
+                <feGaussianBlur stdDeviation="3.2" result="blur" />
+                <feMerge>
+                  <feMergeNode in="blur" />
+                  <feMergeNode in="SourceGraphic" />
+                </feMerge>
+              </filter>
+            </defs>
+            <path className="landing-flow-line is-one" d="M600 0 C575 58 118 60 90 248" />
+            <path className="landing-flow-line is-two" d="M600 0 C592 72 308 76 294 248" />
+            <path className="landing-flow-line is-three" d="M600 0 C604 92 498 98 498 248" />
+            <path className="landing-flow-line is-four" d="M600 0 C596 92 702 98 702 248" />
+            <path className="landing-flow-line is-five" d="M600 0 C608 72 892 76 906 248" />
+            <path className="landing-flow-line is-six" d="M600 0 C625 58 1082 60 1110 248" />
+            <circle className="landing-flow-dot" cx="600" cy="0" r="4" />
+            <circle className="landing-flow-dot" cx="90" cy="248" r="3" />
+            <circle className="landing-flow-dot" cx="294" cy="248" r="3" />
+            <circle className="landing-flow-dot" cx="498" cy="248" r="3" />
+            <circle className="landing-flow-dot" cx="702" cy="248" r="3" />
+            <circle className="landing-flow-dot" cx="906" cy="248" r="3" />
+            <circle className="landing-flow-dot" cx="1110" cy="248" r="3" />
+          </svg>
         </div>
         <div className="landing-output-grid">
           {outputCards.map((card) => (
