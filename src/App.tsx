@@ -490,6 +490,15 @@ function mergeWorldPromptEventIntoSnapshot(snapshot: ProjectSnapshot, event: Wor
   if (payload.applied) {
     nextSnapshot = normalizeSnapshot({
       ...nextSnapshot,
+      draft: payload.applied.draft?.metadata
+        ? {
+            ...nextSnapshot.draft,
+            metadata: {
+              ...(nextSnapshot.draft.metadata ?? {}),
+              ...payload.applied.draft.metadata,
+            },
+          }
+        : nextSnapshot.draft,
       worldEntities: payload.applied.worldEntities ? mergeResourcesByKey(nextSnapshot.worldEntities, payload.applied.worldEntities) : nextSnapshot.worldEntities,
       worldRelationships: payload.applied.worldRelationships ? mergeResourcesByKey(nextSnapshot.worldRelationships, payload.applied.worldRelationships) : nextSnapshot.worldRelationships,
       worldOperators: payload.applied.worldOperators ? mergeResourcesByKey(nextSnapshot.worldOperators, payload.applied.worldOperators) : nextSnapshot.worldOperators,
@@ -5543,6 +5552,10 @@ export default function App() {
                 assets={snapshot.assets}
                 definitions={snapshot.definitions}
                 snapshotGraphs={snapshot.graphs}
+                projectName={snapshot.project.name}
+                projectSummary={snapshot.project.summary}
+                projectDraftId={snapshot.draft.id}
+                projectDraftMetadata={snapshot.draft.metadata}
                 worldEntities={snapshot.worldEntities}
                 worldRelationships={snapshot.worldRelationships}
                 worldViews={snapshot.worldViews}

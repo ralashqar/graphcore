@@ -18,7 +18,7 @@ import {
   type NodeProps,
   type ReactFlowInstance,
 } from '@xyflow/react'
-import { Suspense, lazy, memo, useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react'
+import { Suspense, lazy, memo, useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react'
 
 import { resolveAssetSourceUrl } from '../domain/assets'
 import type { AssetDefinition, DefinitionBase, GraphDefinition } from '../domain/graphcore'
@@ -59,6 +59,15 @@ import {
   type WorldSceneDisplayTier,
   type WorldSceneTransitionState,
 } from '../domain/worldGraphScene'
+import {
+  deriveWorldTimeline,
+  readWorldEventTimelineMetadata,
+} from '../domain/worldTimeline'
+import {
+  deriveWorldWiki,
+  type WorldWikiGap,
+  type WorldWikiSection,
+} from '../domain/worldWiki'
 import {
   buildSuggestionsForEntity,
   createDefaultWorldView,
@@ -110,6 +119,10 @@ type WorldGraphPageProps = {
   assets: AssetDefinition[]
   definitions: DefinitionBase[]
   snapshotGraphs: GraphDefinition[]
+  projectName: string
+  projectSummary: string
+  projectDraftId: string
+  projectDraftMetadata: Record<string, unknown>
   worldEntities: WorldEntity[]
   worldRelationships: WorldRelationship[]
   worldViews: WorldView[]
@@ -202,6 +215,14 @@ type WorldFlowEdgeData = {
   onSelect?: (edgeKey: string) => void
   onContextMenu?: (edgeKey: string, position: { x: number; y: number }) => void
 }
+
+type WikiDetailModalState = {
+  title: string
+  eyebrow: string
+  body: string
+  imageUrl?: string | null
+  meta?: string[]
+} | null
 
 type EntityComposerState = {
   mode: 'global' | 'related'
@@ -699,6 +720,8 @@ function describePromptOp(op: PromptToWorldOp) {
       return 'Queue image generation'
     case 'queue_cinematic_generation':
       return 'Queue cinematic generation'
+    case 'update_world_wiki_metadata':
+      return op.payload.target === 'view' ? 'Update wiki page metadata' : 'Update world wiki overview'
     case 'assistant_note':
       return op.payload.message
   }
@@ -718,6 +741,10 @@ export function WorldGraphPage({
   assets,
   definitions,
   snapshotGraphs,
+  projectName,
+  projectSummary,
+  projectDraftId,
+  projectDraftMetadata,
   worldEntities,
   worldRelationships,
   worldViews,
@@ -794,6 +821,7 @@ export function WorldGraphPage({
   const [legacyMode, setLegacyMode] = useState(false)
   const [viewMode, setViewMode] = useState<WorldView['mode']>('graph')
   const [presentationMode, setPresentationMode] = useState<WorldPresentationMode>('world')
+  const isWikiMode = viewMode === 'wiki'
   const [search, setSearch] = useState('')
   const [growWorkbenchWidth, setGrowWorkbenchWidth] = useState(() => {
     if (typeof window === 'undefined') return GROW_WORKBENCH_WIDTH_DEFAULT
@@ -851,7 +879,23 @@ export function WorldGraphPage({
   const [isPromptCancelling, setIsPromptCancelling] = useState(false)
   const [activeTurnLens, setActiveTurnLens] = useState<WorldPromptTurnLens | null>(null)
   const [flashTurnLens, setFlashTurnLens] = useState<WorldPromptTurnLens | null>(null)
+  const [wikiDetailModal, setWikiDetailModal] = useState<WikiDetailModalState>(null)
   const handledAutoLensTurnIdRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!wikiDetailModal) return undefined
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') setWikiDetailModal(null)
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [wikiDetailModal])
+  useEffect(() => {
+    if (!isWikiMode) return
+    setContextMenu(null)
+    setEdgeEditor(null)
+    setRelationshipComposer(null)
+    setCompositionComposer(null)
+  }, [isWikiMode])
   const graphFilterState = useMemo(
     () => buildWorldGraphFilterState(displayFilters),
     [displayFilters],
@@ -868,8 +912,13 @@ export function WorldGraphPage({
     [worldViews],
   )
   const persistedSelectedView = useMemo(
-    () => globalOverviewView ?? defaultWorldViewRef.current,
-    [globalOverviewView],
+    () => {
+      const explicitView = selectedWorldViewKey
+        ? worldViews.find((view) => view.key === selectedWorldViewKey) ?? null
+        : null
+      return explicitView ?? globalOverviewView ?? defaultWorldViewRef.current
+    },
+    [globalOverviewView, selectedWorldViewKey, worldViews],
   )
   const transientBaseView = useMemo(
     () => transientFocus?.sourceViewKey
@@ -1114,9 +1163,9 @@ export function WorldGraphPage({
 
   useEffect(() => {
     if (!globalOverviewView?.key) return
-    if (selectedWorldViewKey === globalOverviewView.key) return
+    if (selectedWorldViewKey && worldViews.some((view) => view.key === selectedWorldViewKey)) return
     _onSelectWorldView(globalOverviewView.key)
-  }, [_onSelectWorldView, globalOverviewView?.key, selectedWorldViewKey])
+  }, [_onSelectWorldView, globalOverviewView?.key, selectedWorldViewKey, worldViews])
 
   useEffect(() => {
     if (selectedPromptThreadKey && !worldThreads.some((thread) => thread.key === selectedPromptThreadKey)) {
@@ -1214,6 +1263,27 @@ export function WorldGraphPage({
       resolveAssetSourceUrl(result.previewAssetKey ? assetByKey.get(result.previewAssetKey) ?? null : null),
     ]))
   }, [assetByKey, worldResults])
+  const wikiModel = useMemo(() => deriveWorldWiki({
+    snapshot: {
+      project: {
+        id: 'world-wiki-project',
+        name: projectName || 'Living World',
+        slug: 'world-wiki',
+        summary: projectSummary,
+        visibility: 'private',
+      },
+      draft: {
+        id: projectDraftId,
+        metadata: projectDraftMetadata,
+      },
+      worldEntities,
+      worldRelationships,
+      worldThreads,
+      worldResults,
+      worldGraphConnections,
+    },
+    view: selectedView,
+  }), [projectDraftId, projectDraftMetadata, projectName, projectSummary, selectedView, worldEntities, worldGraphConnections, worldRelationships, worldResults, worldThreads])
 
   const effectiveFilters = selectedView.filters
   const viewSeedEntityKeys = useMemo(
@@ -1520,14 +1590,33 @@ export function WorldGraphPage({
     }),
     [activeCardNodeKey, continuousScene.relationshipKeys, visibleNodeKeys, worldRelationships],
   )
-  const visibleThreads = useMemo(
-    () => presentationMode === 'story'
-      ? (activeStoryThread ? [activeStoryThread] : [])
-      : worldThreads.filter((thread) => (
-        thread.linkedEntityKeys.some((entityKey) => visibleNodeKeys.has(entityKey))
-        || getWorldViewSemanticMetadata(selectedView).sourceThreadKeys.includes(thread.key)
-      )),
-    [activeStoryThread, presentationMode, selectedView, visibleNodeKeys, worldThreads],
+  const derivedTimeline = useMemo(
+    () => deriveWorldTimeline({
+      entities: worldEntities,
+      relationships: worldRelationships,
+    }),
+    [worldEntities, worldRelationships],
+  )
+  const timelineEventKeys = useMemo(() => {
+    if (selectedViewMetadata.viewKind === 'timeline_overview') {
+      return new Set(derivedTimeline.events.map((event) => event.key))
+    }
+    if (presentationMode === 'story' && activeStoryThread) {
+      return new Set(activeStoryThread.linkedEntityKeys.filter((key) => entityByKey.get(key)?.nodeType === 'event'))
+    }
+    return new Set(visibleEntityRecords.filter((record) => record.entity.nodeType === 'event').map((record) => record.entity.key))
+  }, [activeStoryThread, derivedTimeline.events, entityByKey, presentationMode, selectedViewMetadata.viewKind, visibleEntityRecords])
+  const timelineGroups = useMemo(
+    () => derivedTimeline.orderedGroups
+      .map((group) => ({
+        ...group,
+        events: group.eventKeys
+          .filter((key) => timelineEventKeys.has(key))
+          .map((key) => entityByKey.get(key))
+          .filter((event): event is WorldEntity => Boolean(event)),
+      }))
+      .filter((group) => group.events.length > 0),
+    [derivedTimeline.orderedGroups, entityByKey, timelineEventKeys],
   )
   const visibleConnections = useMemo(
     () => (effectiveDerivedLayerVisible
@@ -2962,6 +3051,43 @@ export function WorldGraphPage({
     })
   }
 
+  async function handleRunWikiGap(gap: WorldWikiGap) {
+    await handleSubmitWorldPrompt(gap.prompt, null, {
+      selectedRootEntityKey: gap.entityKey,
+      selectedViewKey: selectedView.key,
+      selectedThreadKey: gap.threadKey,
+    })
+  }
+
+  function handleScrollToWikiSection(sectionKind: WorldWikiSection['kind']) {
+    const section = document.getElementById(`world-wiki-section-${sectionKind}`)
+    section?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'start',
+    })
+  }
+
+  function buildWikiDetailBody(parts: Array<string | null | undefined>) {
+    const seen = new Set<string>()
+    return parts
+      .map((part) => part?.trim() ?? '')
+      .filter(Boolean)
+      .filter((part) => {
+        const key = part.toLowerCase()
+        if (seen.has(key)) return false
+        seen.add(key)
+        return true
+      })
+      .join('\n\n')
+  }
+
+  function openWikiDetailModal(input: Exclude<WikiDetailModalState, null>) {
+    setWikiDetailModal({
+      ...input,
+      body: input.body.trim() || 'No full description has been written yet.',
+    })
+  }
+
   async function handleStartNewPromptSession() {
     const sessionKey = createWorldPromptSessionKey()
     setWorldPromptError(null)
@@ -3157,6 +3283,147 @@ export function WorldGraphPage({
     window.addEventListener('mouseup', handlePointerUp)
   }
 
+  function renderWikiEntityCard(entityKey: string, variant: 'large' | 'compact' = 'compact') {
+    const entity = entityByKey.get(entityKey) ?? null
+    if (!entity) return null
+    const imageUrl = imageUrlByEntityKey.get(entity.key) ?? null
+    const profile = wikiModel.entityProfiles.find((entry) => entry.entity.key === entity.key)
+    const active = selectedWorldNodeKey === entity.key || inspectorNodeKey === entity.key
+    const summary = profile?.shortSummary || entity.summary || entity.context || 'No wiki summary yet.'
+    const detailBody = buildWikiDetailBody([profile?.shortSummary, entity.summary, entity.context])
+    return (
+      <button
+        key={entity.key}
+        className={`world-wiki-entity-card is-${entity.nodeType} is-${variant}${active ? ' is-active' : ''}`}
+        onClick={() => {
+          selectWorldNode(entity.key)
+          setActiveInspectorTab('overview')
+          openWikiDetailModal({
+            title: entity.name,
+            eyebrow: profile?.roleLabel || labelForWorldEntity(entity.nodeType),
+            body: detailBody,
+            imageUrl,
+            meta: [
+              labelForWorldEntity(entity.nodeType),
+              profile?.relationshipKeys.length ? `${profile.relationshipKeys.length} link${profile.relationshipKeys.length === 1 ? '' : 's'}` : null,
+              profile?.threadKeys.length ? `${profile.threadKeys.length} thread${profile.threadKeys.length === 1 ? '' : 's'}` : null,
+            ].filter((value): value is string => Boolean(value)),
+          })
+        }}
+        type="button"
+      >
+        {imageUrl ? <img src={imageUrl} alt="" /> : <span className="world-wiki-entity-icon"><EntityIcon id={iconForWorldEntity(entity.nodeType)} /></span>}
+        <span>
+          <strong>{entity.name}</strong>
+          <em>{profile?.roleLabel || labelForWorldEntity(entity.nodeType)}</em>
+          <small>{summary}</small>
+        </span>
+      </button>
+    )
+  }
+
+  function renderWikiSection(section: WorldWikiSection) {
+    const visibleEntityKeys = section.entityKeys.slice(0, section.kind === 'cast' ? 8 : 6)
+    const visibleThreadKeys = section.threadKeys.slice(0, 6)
+    const visibleResultKeys = section.resultKeys.slice(0, 6)
+    const gap = wikiModel.gaps.find((entry) => entry.sectionKind === section.kind) ?? null
+    return (
+      <section id={`world-wiki-section-${section.kind}`} key={section.kind} className={`world-wiki-section world-wiki-section-${section.kind}`}>
+        <div className="world-wiki-section-head">
+          <div>
+            <span className="eyebrow">{section.kind}</span>
+            <h3>{section.title}</h3>
+          </div>
+          {gap ? (
+            <button className="ghost-button compact" disabled={isPromptSubmitting} onClick={() => void handleRunWikiGap(gap)} type="button">
+              {gap.label}
+            </button>
+          ) : null}
+        </div>
+        <button
+          className="world-wiki-summary-button"
+          onClick={() => openWikiDetailModal({
+            title: section.title,
+            eyebrow: section.kind,
+            body: section.summary,
+          })}
+          type="button"
+        >
+          <span className="world-wiki-summary-clamp">{section.summary}</span>
+        </button>
+        {visibleEntityKeys.length > 0 ? (
+          <div className={section.kind === 'cast' ? 'world-wiki-card-grid is-cast' : 'world-wiki-card-grid'}>
+            {visibleEntityKeys.map((key) => renderWikiEntityCard(key, section.kind === 'cast' ? 'large' : 'compact'))}
+          </div>
+        ) : null}
+        {visibleThreadKeys.length > 0 ? (
+          <div className="world-wiki-thread-list">
+            {visibleThreadKeys.map((key) => {
+              const thread = threadByKey.get(key) ?? null
+              if (!thread) return null
+              const active = selectedPromptThreadKey === thread.key
+              const summary = thread.summary || 'No arc summary yet.'
+              return (
+                <button
+                  key={thread.key}
+                  className={active ? 'world-wiki-thread-card is-active' : 'world-wiki-thread-card'}
+                  onClick={() => {
+                    setSelectedPromptThreadKey(thread.key)
+                    openWikiDetailModal({
+                      title: thread.title,
+                      eyebrow: `${thread.priority} story arc`,
+                      body: summary,
+                      meta: [
+                        thread.status,
+                        thread.linkedEntityKeys.length ? `${thread.linkedEntityKeys.length} linked node${thread.linkedEntityKeys.length === 1 ? '' : 's'}` : null,
+                      ].filter((value): value is string => Boolean(value)),
+                    })
+                  }}
+                  type="button"
+                >
+                  <span className="world-wiki-thread-priority">{thread.priority}</span>
+                  <strong>{thread.title}</strong>
+                  <small>{summary}</small>
+                </button>
+              )
+            })}
+          </div>
+        ) : null}
+        {visibleResultKeys.length > 0 ? (
+          <div className="world-wiki-output-grid">
+            {visibleResultKeys.map((key) => {
+              const result = resultByKey.get(key) ?? null
+              if (!result) return null
+              const imageUrl = imageUrlByResultKey.get(result.key) ?? null
+              const summary = result.summary || result.resultType
+              return (
+                <button
+                  key={result.key}
+                  className="world-wiki-output-card"
+                  onClick={() => {
+                    selectWorldNode(result.key)
+                    openWikiDetailModal({
+                      title: result.title,
+                      eyebrow: labelForWorldResult(result.resultType),
+                      body: summary,
+                      imageUrl,
+                      meta: [result.status],
+                    })
+                  }}
+                  type="button"
+                >
+                  {imageUrl ? <img src={imageUrl} alt="" /> : null}
+                  <strong>{result.title}</strong>
+                  <small>{summary}</small>
+                </button>
+              )
+            })}
+          </div>
+        ) : null}
+      </section>
+    )
+  }
+
   if (legacyMode) {
     return (
       <div className="focus-layout graph-layout world-graph-layout world-graph-layout-legacy">
@@ -3197,7 +3464,7 @@ export function WorldGraphPage({
 
   return (
     <div
-      className="focus-layout graph-layout world-graph-layout"
+      className={`focus-layout graph-layout world-graph-layout${isWikiMode ? ' is-wiki-mode' : ''}`}
       onClick={() => setContextMenu(null)}
       style={{
         '--world-grow-workbench-width': `${growWorkbenchWidth}px`,
@@ -3268,20 +3535,36 @@ export function WorldGraphPage({
       <section className="main-surface graph-surface world-graph-surface world-shell-stage">
         <div className="world-graph-toolbar world-shell-stage-toolbar">
           <div className="world-toolbar-heading">
-            <h3>{selectedView.name || 'Living World'}</h3>
+            <h3>{isWikiMode ? wikiModel.title : selectedView.name || 'Living World'}</h3>
             <div className="world-presentation-meta">
               <div className="segmented-control world-presentation-mode-toggle">
                 {(['world', 'story'] as const).map((mode) => (
                   <button
                     key={mode}
-                    className={presentationMode === mode ? 'segment-button is-active' : 'segment-button'}
-                    onClick={() => setPresentationMode(mode)}
+                    className={!isWikiMode && presentationMode === mode ? 'segment-button is-active' : 'segment-button'}
+                    onClick={() => {
+                      setPresentationMode(mode)
+                      if (isWikiMode) {
+                        setViewMode(mode === 'story' ? 'timeline' : 'graph')
+                      }
+                    }}
                     type="button"
                   >
                     {mode === 'world' ? 'World' : 'Story'}
                   </button>
                 ))}
+                <button
+                  className={isWikiMode ? 'segment-button is-active' : 'segment-button'}
+                  onClick={() => {
+                    setPresentationMode('world')
+                    setViewMode('wiki')
+                  }}
+                  type="button"
+                >
+                  Wiki
+                </button>
               </div>
+              {!isWikiMode ? (
               <div className="world-breadcrumbs" aria-label="World navigation breadcrumbs">
                 {breadcrumbSegments.map((segment, index) => (
                   <span key={segment.id} className="world-breadcrumb-item">
@@ -3314,9 +3597,11 @@ export function WorldGraphPage({
                     ) : null}
                   </span>
                 ))}
-          </div>
+              </div>
+              ) : null}
             </div>
           </div>
+          {!isWikiMode ? (
           <div className="world-graph-toolbar-actions world-shell-toolbar-main">
             <label className="world-shell-search">
               <input
@@ -3444,11 +3729,12 @@ export function WorldGraphPage({
               </div>
             </details>
           </div>
+          ) : null}
         </div>
 
         <div className="world-view-workspace">
           <div className="world-view-stage">
-            {growthPlaybackModel.steps.length > 0 ? (
+            {!isWikiMode && growthPlaybackModel.steps.length > 0 ? (
               <div className="world-growth-playback" aria-label="World growth playback">
                 <span className="world-growth-playback-kicker">Growth</span>
                 <button
@@ -3617,26 +3903,143 @@ export function WorldGraphPage({
                   <strong>{selectedView.name}</strong>
                 </div>
                 <div className="world-timeline-surface">
-                  {visibleThreads.length === 0 ? <div className="inline-note">No thread-linked events are visible in this view yet.</div> : null}
-                  {visibleThreads.map((thread) => (
-                    <div key={thread.key} className={activeStoryThread?.key === thread.key ? 'world-timeline-card is-active' : 'world-timeline-card'}>
-                      <span className="eyebrow">{thread.priority}</span>
-                      <strong>{thread.title}</strong>
-                      <p>{thread.summary || 'No summary yet.'}</p>
-                      {presentationMode === 'story' ? (
-                        <button
-                          className="ghost-button compact"
-                          onClick={() => {
-                            setSelectedPromptThreadKey(thread.key)
-                            setPresentationMode('story')
-                          }}
-                          type="button"
-                        >
-                          Highlight Thread
-                        </button>
-                      ) : null}
+                  {timelineGroups.length === 0 ? <div className="inline-note">No event chronology is visible in this view yet.</div> : null}
+                  {timelineGroups.map((group) => (
+                    <div key={group.index} className="world-timeline-group">
+                      <span className="eyebrow">Step {group.index + 1}</span>
+                      {group.events.map((event) => {
+                        const timeline = readWorldEventTimelineMetadata(event)
+                        const active = selectedWorldNodeKey === event.key || inspectorNodeKey === event.key
+                        const strictLinks = derivedTimeline.temporalRelationships.filter((relationship) => (
+                          relationship.beforeEventKey === event.key || relationship.afterEventKey === event.key
+                        )).length
+                        return (
+                          <button
+                            key={event.key}
+                            className={active ? 'world-timeline-card is-active' : 'world-timeline-card'}
+                            onClick={() => selectWorldNode(event.key)}
+                            type="button"
+                          >
+                            <span className="eyebrow">{timeline.era || timeline.timeLabel || labelForWorldEntity(event.nodeType)}</span>
+                            <strong>{event.name}</strong>
+                            <p>{event.summary || event.context || 'No summary yet.'}</p>
+                            <span>{strictLinks > 0 ? `${strictLinks} temporal link${strictLinks === 1 ? '' : 's'}` : 'Floating chronology'}</span>
+                          </button>
+                        )
+                      })}
                     </div>
                   ))}
+                  {derivedTimeline.conflicts.length > 0 ? (
+                    <div className="inline-note">{derivedTimeline.conflicts.length} timeline conflict{derivedTimeline.conflicts.length === 1 ? '' : 's'} need review.</div>
+                  ) : null}
+                </div>
+              </div>
+            ) : viewMode === 'wiki' ? (
+              <div className="world-alt-surface world-wiki-surface">
+                <aside className="world-wiki-index" aria-label="Wiki sections">
+                  <div className="world-wiki-index-head">
+                    <span className="eyebrow">Wiki</span>
+                    <strong>{wikiModel.title}</strong>
+                  </div>
+                  <div className="world-wiki-index-list">
+                    {wikiModel.sections.map((section) => (
+                      <button
+                        key={section.kind}
+                        className={section.gap ? 'world-wiki-index-row is-gap' : 'world-wiki-index-row'}
+                        onClick={() => handleScrollToWikiSection(section.kind)}
+                        type="button"
+                      >
+                        <span>{section.title}</span>
+                        <em>{section.entityKeys.length + section.threadKeys.length + section.resultKeys.length}</em>
+                      </button>
+                    ))}
+                  </div>
+                  {wikiModel.gaps.length > 0 ? (
+                    <div className="world-wiki-gap-list">
+                      <span className="eyebrow">Gaps</span>
+                      {wikiModel.gaps.slice(0, 5).map((gap) => (
+                        <button key={gap.key} className="world-wiki-gap-button" disabled={isPromptSubmitting} onClick={() => void handleRunWikiGap(gap)} type="button">
+                          {gap.label}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </aside>
+                <div className="world-wiki-document">
+                  <section id="world-wiki-section-overview" className="world-wiki-overview">
+                    <div className="world-wiki-overview-media">
+                      {wikiModel.overview.heroEntityKey && imageUrlByEntityKey.get(wikiModel.overview.heroEntityKey) ? (
+                        <img src={imageUrlByEntityKey.get(wikiModel.overview.heroEntityKey) ?? undefined} alt="" />
+                      ) : (
+                        <div className="world-wiki-overview-placeholder">
+                          <EntityIcon id="graph" />
+                        </div>
+                      )}
+                    </div>
+                    <div className="world-wiki-overview-copy">
+                      <span className="eyebrow">World Overview</span>
+                      <h2>{wikiModel.title}</h2>
+                      <div className="world-wiki-logline">
+                        {wikiModel.overview.logline || 'No logline yet.'}
+                        {!wikiModel.overview.logline ? (
+                          <button
+                            className="world-context-strip-action"
+                            disabled={isPromptSubmitting}
+                            onClick={() => {
+                              const gap = wikiModel.gaps.find((entry) => entry.kind === 'world_logline') ?? null
+                              if (gap) void handleRunWikiGap(gap)
+                            }}
+                            type="button"
+                          >
+                            Generate
+                          </button>
+                        ) : null}
+                      </div>
+                      <button
+                        className="world-wiki-summary-button is-overview"
+                        onClick={() => openWikiDetailModal({
+                          title: wikiModel.title,
+                          eyebrow: 'World synopsis',
+                          body: wikiModel.overview.synopsis || 'Add world canon or generate a synopsis from the existing graph.',
+                          imageUrl: wikiModel.overview.heroEntityKey ? imageUrlByEntityKey.get(wikiModel.overview.heroEntityKey) ?? null : null,
+                          meta: [
+                            `${worldEntities.length} node${worldEntities.length === 1 ? '' : 's'}`,
+                            `${worldRelationships.length} link${worldRelationships.length === 1 ? '' : 's'}`,
+                          ],
+                        })}
+                        type="button"
+                      >
+                        <span className="world-wiki-summary-clamp">
+                          {wikiModel.overview.synopsis || 'Add world canon or generate a synopsis from the existing graph.'}
+                        </span>
+                      </button>
+                      <div className="world-wiki-overview-actions">
+                        {([
+                          ['world_synopsis', 'Generate synopsis'],
+                          ['world_tone', 'Add themes/tone'],
+                          ['wiki_refresh', 'Refresh overview'],
+                        ] as const).map(([kind, label]) => {
+                          const gap = wikiModel.gaps.find((entry) => entry.kind === kind) ?? null
+                          return gap ? (
+                            <button key={kind} className="world-context-strip-action" disabled={isPromptSubmitting} onClick={() => void handleRunWikiGap(gap)} type="button">
+                              {label}
+                            </button>
+                          ) : null
+                        })}
+                      </div>
+                      {wikiModel.overview.toneTags.length > 0 ? (
+                        <div className="world-wiki-chip-row">
+                          {wikiModel.overview.toneTags.map((tag) => <span key={tag} className="chip">{tag}</span>)}
+                        </div>
+                      ) : null}
+                    </div>
+                  </section>
+                  <div className="world-wiki-section-grid">
+                    {wikiModel.sections.filter((section) => section.kind !== 'overview').map(renderWikiSection)}
+                  </div>
+                  <div className="world-wiki-diagnostics">
+                    {wikiModel.diagnostics.map((diagnostic) => <span key={diagnostic}>{diagnostic}</span>)}
+                  </div>
                 </div>
               </div>
             ) : (
@@ -3665,6 +4068,33 @@ export function WorldGraphPage({
             )}
           </div>
         </div>
+
+        {wikiDetailModal ? (
+          <div className="world-wiki-modal-backdrop" onClick={() => setWikiDetailModal(null)} role="presentation">
+            <article
+              className="world-wiki-modal"
+              onClick={(event) => event.stopPropagation()}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="world-wiki-modal-title"
+            >
+              <div className="world-popup-head">
+                <div>
+                  <span className="eyebrow">{wikiDetailModal.eyebrow}</span>
+                  <h3 id="world-wiki-modal-title">{wikiDetailModal.title}</h3>
+                </div>
+                <button className="world-popup-close" onClick={() => setWikiDetailModal(null)} type="button" aria-label="Close wiki detail">x</button>
+              </div>
+              {wikiDetailModal.imageUrl ? <img className="world-wiki-modal-image" src={wikiDetailModal.imageUrl} alt="" /> : null}
+              {wikiDetailModal.meta && wikiDetailModal.meta.length > 0 ? (
+                <div className="world-wiki-modal-meta">
+                  {wikiDetailModal.meta.map((entry) => <span key={entry}>{entry}</span>)}
+                </div>
+              ) : null}
+              <div className="world-wiki-modal-body">{wikiDetailModal.body}</div>
+            </article>
+          </div>
+        ) : null}
 
         {edgeEditor ? (
           <div
@@ -4012,6 +4442,8 @@ export function WorldGraphPage({
         </div>
       ) : null}
 
+      {!isWikiMode ? (
+        <>
       <div
         aria-label="Resize inspector"
         className="world-inspector-resizer"
@@ -4643,6 +5075,8 @@ export function WorldGraphPage({
           </div>
         )}
       </aside>
+        </>
+      ) : null}
     </div>
   )
 }
@@ -5421,6 +5855,12 @@ function WorldPromptChatPanel({
     : railView.primaryActionKind === 'generate'
       ? 'Generate'
       : 'Use prompt'
+  const composerActionDisabled = busy
+    ? !canCancelTurn || cancelBusy || !activePromptTurn
+    : !promptText.trim()
+  const composerActionLabel = busy
+    ? (cancelBusy ? 'Stopping turn' : 'Stop turn')
+    : composerLabel
 
   useEffect(() => {
     if (!stickToBottom || isPromptCenter) return
@@ -5503,6 +5943,32 @@ function WorldPromptChatPanel({
       suppressCurrentSuggestions()
     }
     return onSubmit(promptOverride)
+  }
+
+  function handleComposerAction() {
+    if (busy) {
+      if (canCancelTurn && activePromptTurn) {
+        return onCancelTurn(activePromptTurn.id)
+      }
+      return undefined
+    }
+    return handleSubmitPrompt()
+  }
+
+  function handleComposerKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
+    if (
+      event.key !== 'Enter'
+      || event.shiftKey
+      || event.altKey
+      || event.ctrlKey
+      || event.metaKey
+      || event.nativeEvent.isComposing
+    ) {
+      return
+    }
+    event.preventDefault()
+    if (busy || !promptText.trim()) return
+    void handleSubmitPrompt()
   }
 
   function renderEntry(entry: WorldPromptTranscriptEntry) {
@@ -5641,16 +6107,24 @@ function WorldPromptChatPanel({
           </div>
 
           <div className="world-prompt-composer world-prompt-composer-center">
-            <textarea
-              ref={composerRef}
-              rows={6}
-              placeholder="Create a secret order that manipulates events from the shadows and tie it to two existing factions."
-              value={promptText}
-              onChange={(event) => onChangePromptText(event.target.value)}
-            />
-            <div className="world-prompt-composer-actions">
-              <button className="primary-button compact" disabled={busy || !promptText.trim()} onClick={() => void handleSubmitPrompt()} type="button">
-                {busy ? 'Generating...' : 'Generate'}
+            <div className="world-prompt-input-shell">
+              <textarea
+                ref={composerRef}
+                rows={6}
+                placeholder="Create a secret order that manipulates events from the shadows and tie it to two existing factions."
+                value={promptText}
+                onChange={(event) => onChangePromptText(event.target.value)}
+                onKeyDown={handleComposerKeyDown}
+              />
+              <button
+                aria-label={composerActionLabel}
+                className={`world-prompt-send-button${busy ? ' is-stop' : ''}`}
+                disabled={composerActionDisabled}
+                onClick={() => void handleComposerAction()}
+                title={composerActionLabel}
+                type="button"
+              >
+                <EntityIcon id={busy ? 'stop' : 'send'} />
               </button>
             </div>
           </div>
@@ -5755,26 +6229,24 @@ function WorldPromptChatPanel({
                 </div>
               </div>
             ) : null}
-            <textarea
-              ref={composerRef}
-              rows={variant === 'grow' ? 3 : 2}
-              placeholder="Describe the next character, relationship, place, or turn in the story."
-              value={promptText}
-              onChange={(event) => onChangePromptText(event.target.value)}
-            />
-            <div className="world-prompt-composer-actions">
-              {canCancelTurn ? (
-                <button className="ghost-button compact" disabled={cancelBusy} onClick={() => void onCancelTurn(activePromptTurn!.id)} type="button">
-                  Cancel turn
-                </button>
-              ) : null}
+            <div className="world-prompt-input-shell">
+              <textarea
+                ref={composerRef}
+                rows={variant === 'grow' ? 3 : 2}
+                placeholder="Describe the next character, relationship, place, or turn in the story."
+                value={promptText}
+                onChange={(event) => onChangePromptText(event.target.value)}
+                onKeyDown={handleComposerKeyDown}
+              />
               <button
-                className={railView.primaryActionKind === 'generate' || railView.primaryActionKind === 'continue' ? 'primary-button compact' : 'ghost-button compact'}
-                disabled={busy || !promptText.trim()}
-                onClick={() => void handleSubmitPrompt()}
+                aria-label={composerActionLabel}
+                className={`world-prompt-send-button${busy ? ' is-stop' : ''}`}
+                disabled={composerActionDisabled}
+                onClick={() => void handleComposerAction()}
+                title={composerActionLabel}
                 type="button"
               >
-                {busy ? 'Generating...' : composerLabel}
+                <EntityIcon id={busy ? 'stop' : 'send'} />
               </button>
             </div>
           </div>

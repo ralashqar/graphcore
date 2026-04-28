@@ -165,6 +165,49 @@ test('reconcileAutoManagedWorldViews preserves manual snapshots', () => {
   assert.equal(result.worldViews.find((view) => view.key === manual.key)?.name, 'Court Notes')
 })
 
+test('reconcileAutoManagedWorldViews creates a timeline overview when events exist', () => {
+  const event = createEntity({ key: 'world.event.coronation', name: 'Coronation', nodeType: 'event' })
+  const result = reconcileAutoManagedWorldViews(createSnapshot({
+    worldEntities: [event],
+  }))
+  const timelineView = result.worldViews.find((view) => getWorldViewSemanticMetadata(view).viewKind === 'timeline_overview') ?? null
+
+  assert.ok(timelineView)
+  assert.equal(timelineView.mode, 'timeline')
+  assert.ok(getWorldViewSemanticMetadata(timelineView).sourceEntityKeys.includes(event.key))
+})
+
+test('reconcileAutoManagedWorldViews creates a wiki overview when graph content exists', () => {
+  const actor = createEntity({ key: 'world.actor.lira-vey', name: 'Lira Vey', nodeType: 'actor' })
+  const result = reconcileAutoManagedWorldViews(createSnapshot({
+    worldEntities: [actor],
+  }))
+  const wikiView = result.worldViews.find((view) => getWorldViewSemanticMetadata(view).viewKind === 'wiki_overview') ?? null
+
+  assert.ok(wikiView)
+  assert.equal(wikiView.mode, 'wiki')
+  assert.equal(wikiView?.name, 'World Wiki')
+})
+
+test('reconcileAutoManagedWorldViews creates wiki thread views for active story arcs', () => {
+  const event = createEntity({ key: 'world.event.betrayal', name: 'The Betrayal', nodeType: 'event' })
+  const thread = createThread({
+    key: 'world.thread.betrayal',
+    title: 'Betrayal',
+    priority: 'primary',
+    linkedEntityKeys: [event.key],
+  })
+  const result = reconcileAutoManagedWorldViews(createSnapshot({
+    worldEntities: [event],
+    worldThreads: [thread],
+  }))
+  const wikiThreadView = result.worldViews.find((view) => getWorldViewSemanticMetadata(view).viewKind === 'wiki_thread_arc') ?? null
+
+  assert.ok(wikiThreadView)
+  assert.equal(wikiThreadView.mode, 'wiki')
+  assert.ok(getWorldViewSemanticMetadata(wikiThreadView).sourceThreadKeys.includes(thread.key))
+})
+
 test('buildEntityNeighborhoodViewInput creates an auto-managed persistent neighborhood', () => {
   const entity = createEntity({ key: 'world.actor.yara-thorne', name: 'Yara Thorne', nodeType: 'actor' })
   const input = buildEntityNeighborhoodViewInput(createSnapshot({ worldEntities: [entity] }), entity.key)

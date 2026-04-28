@@ -9,6 +9,7 @@ import {
   worldOperatorSchema,
   worldRelationshipSchema,
   worldResultSchema,
+  worldWikiPresentationMetadataSchema,
   worldViewKindSchema,
   worldViewSchema,
 } from './worldGraph.ts'
@@ -84,6 +85,7 @@ export const worldPromptPreviewItemKindSchema = z.enum([
   'derived_result',
   'image_queue',
   'cinematic_queue',
+  'wiki_metadata',
   'assistant_note',
 ])
 export const worldPromptPreviewItemStatusSchema = z.enum(['preview', 'applied', 'skipped'])
@@ -194,6 +196,13 @@ const promptToWorldQueueCinematicPayloadSchema = z.object({
 
 const promptToWorldAssistantNotePayloadSchema = z.object({
   message: z.string(),
+})
+
+const promptToWorldUpdateWorldWikiMetadataPayloadSchema = z.object({
+  target: z.enum(['project', 'view']).default('project'),
+  targetViewKey: z.string().nullable().default(null),
+  metadata: worldWikiPresentationMetadataSchema,
+  reason: z.string().default(''),
 })
 
 export const worldPromptSuggestionSchema = z.object({
@@ -307,6 +316,10 @@ export const promptToWorldOpSchema = z.discriminatedUnion('op', [
   promptToWorldOpBaseSchema.extend({
     op: z.literal('queue_cinematic_generation'),
     payload: promptToWorldQueueCinematicPayloadSchema,
+  }),
+  promptToWorldOpBaseSchema.extend({
+    op: z.literal('update_world_wiki_metadata'),
+    payload: promptToWorldUpdateWorldWikiMetadataPayloadSchema,
   }),
   promptToWorldOpBaseSchema.extend({
     op: z.literal('assistant_note'),
@@ -589,6 +602,9 @@ export const worldPromptEventPayloadSchema = z.object({
     cinematicRuns: z.array(looseRecordSchema).default([]),
   }).partial().optional(),
   applied: z.object({
+    draft: z.object({
+      metadata: looseRecordSchema.default({}),
+    }).partial().optional(),
     worldEntities: z.array(worldEntitySchema).default([]),
     worldRelationships: z.array(worldRelationshipSchema).default([]),
     worldOperators: z.array(worldOperatorSchema).default([]),

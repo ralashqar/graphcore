@@ -5,13 +5,18 @@ export const worldEntityStatusSchema = z.enum(['draft', 'active', 'locked', 'arc
 export const worldEntitySourceSchema = z.enum(['user', 'ai', 'inferred'])
 export const worldRelationshipStateSchema = z.enum(['confirmed', 'suggested', 'inferred'])
 export const worldRelationshipDirectionSchema = z.enum(['outbound', 'inbound', 'bidirectional'])
-export const worldViewModeSchema = z.enum(['graph', 'table', 'timeline', 'board'])
+export const worldViewModeSchema = z.enum(['graph', 'table', 'timeline', 'board', 'wiki'])
 export const worldViewKindSchema = z.enum([
   'global_overview',
   'entity_neighborhood',
   'faction_map',
   'place_map',
   'lore_cluster',
+  'timeline_overview',
+  'wiki_overview',
+  'wiki_entity_profile',
+  'wiki_thread_arc',
+  'wiki_custom',
   'thread_focus',
   'recent_growth',
   'manual_snapshot',
@@ -25,6 +30,59 @@ export const worldGraphNodeKindSchema = z.enum(['entity', 'operator', 'result'])
 export const worldGraphConnectionRoleSchema = z.enum(['input', 'output'])
 
 const looseRecordSchema = z.record(z.string(), z.unknown())
+
+export const worldTimelineCertaintySchema = z.enum(['explicit', 'inferred', 'ambiguous', 'floating'])
+export const worldTemporalRelationshipKindSchema = z.enum(['before', 'after', 'during', 'overlaps', 'causes'])
+
+export const worldEventTimelineMetadataSchema = z.object({
+  timelineKey: z.string().default('canon'),
+  timeLabel: z.string().default(''),
+  era: z.string().default(''),
+  sequenceHint: z.number().nullable().default(null),
+  durationLabel: z.string().default(''),
+  certainty: worldTimelineCertaintySchema.default('floating'),
+}).partial()
+
+export const worldRelationshipTemporalMetadataSchema = z.object({
+  kind: worldTemporalRelationshipKindSchema,
+  timelineKey: z.string().default('canon'),
+  certainty: worldTimelineCertaintySchema.default('explicit'),
+  impliesChronology: z.boolean().default(true),
+  originalKind: worldTemporalRelationshipKindSchema.optional(),
+})
+
+export const worldWikiSectionKindSchema = z.enum([
+  'overview',
+  'logline',
+  'synopsis',
+  'cast',
+  'places',
+  'factions',
+  'items',
+  'lore',
+  'events',
+  'timeline',
+  'threads',
+  'outputs',
+  'style',
+  'gaps',
+])
+
+export const worldWikiPresentationMetadataSchema = z.object({
+  logline: z.string().default(''),
+  synopsis: z.string().default(''),
+  genre: z.string().default(''),
+  themes: z.array(z.string()).default([]),
+  coreConflict: z.string().default(''),
+  visualMotifs: z.array(z.string()).default([]),
+  roleLabel: z.string().default(''),
+  shortSummary: z.string().default(''),
+  sectionOrder: z.array(worldWikiSectionKindSchema).default([]),
+  toneTags: z.array(z.string()).default([]),
+  wikiSections: z.record(z.string(), z.string()).default({}),
+  generatedFromFingerprint: z.string().default(''),
+  updatedByTurnId: z.string().default(''),
+}).partial()
 
 export const worldViewFilterSchema = z.object({
   nodeTypes: z.array(worldEntityNodeTypeSchema).default([]),
@@ -385,6 +443,12 @@ export type WorldView = z.infer<typeof worldViewSchema>
 export type WorldOperator = z.infer<typeof worldOperatorSchema>
 export type WorldResult = z.infer<typeof worldResultSchema>
 export type WorldGraphConnection = z.infer<typeof worldGraphConnectionSchema>
+export type WorldTimelineCertainty = z.infer<typeof worldTimelineCertaintySchema>
+export type WorldTemporalRelationshipKind = z.infer<typeof worldTemporalRelationshipKindSchema>
+export type WorldEventTimelineMetadata = z.infer<typeof worldEventTimelineMetadataSchema>
+export type WorldRelationshipTemporalMetadata = z.infer<typeof worldRelationshipTemporalMetadataSchema>
+export type WorldWikiSectionKind = z.infer<typeof worldWikiSectionKindSchema>
+export type WorldWikiPresentationMetadata = z.infer<typeof worldWikiPresentationMetadataSchema>
 export type WorldGraphSnapshot = z.infer<typeof worldGraphSnapshotSchema>
 export type WorldEntityCreateInput = z.infer<typeof worldEntityCreateInputSchema>
 export type WorldEntityUpdateInput = z.infer<typeof worldEntityUpdateInputSchema>

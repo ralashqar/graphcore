@@ -710,6 +710,8 @@ export function describePromptOp(op: PromptToWorldOp) {
       return 'Queue image generation'
     case 'queue_cinematic_generation':
       return 'Queue cinematic generation'
+    case 'update_world_wiki_metadata':
+      return op.payload.target === 'view' ? 'Update wiki page metadata' : 'Update world wiki overview'
     case 'assistant_note':
       return op.payload.message
   }

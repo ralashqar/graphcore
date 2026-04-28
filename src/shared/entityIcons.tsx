@@ -23,6 +23,8 @@ export type EntityIconId =
   | 'expand'
   | 'close'
   | 'check'
+  | 'send'
+  | 'stop'
   | 'plus'
 
 type EntityIconProps = {
@@ -199,6 +201,19 @@ function IconPath({ id }: { id: EntityIconId }) {
       return (
         <>
           <path d="M6.8 12.4 10.4 16l6.8-7.2" {...stroke} />
+        </>
+      )
+    case 'send':
+      return (
+        <>
+          <path d="M4.8 12 19 5.2l-4.2 13.6-2.9-5-5.2-1.8Z" {...stroke} />
+          <path d="m11.9 13.8 2.7-4.1" {...stroke} />
+        </>
+      )
+    case 'stop':
+      return (
+        <>
+          <rect x="7.2" y="7.2" width="9.6" height="9.6" rx="1.6" style={{ fill: 'currentColor' }} />
         </>
       )
     case 'plus':

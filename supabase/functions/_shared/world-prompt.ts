@@ -85,6 +85,7 @@ import {
   preparePlannerThreadMutations,
 } from '../../../src/domain/worldPromptThreads.ts'
 import {
+  getWorldViewSemanticMetadata,
   reconcileAutoManagedWorldViews,
   type AutoManagedWorldViewOptions,
 } from '../../../src/domain/worldViewDerivation.ts'
@@ -93,6 +94,19 @@ import {
   mergeCanonicalContext,
   mergeCanonicalText,
 } from '../../../src/domain/worldPromptRefinement.ts'
+import {
+  deriveWorldTimeline,
+  normalizeWorldRelationshipTemporalMetadata,
+  readWorldRelationshipTemporalMetadata,
+  wouldCreateWorldTimelineCycle,
+} from '../../../src/domain/worldTimeline.ts'
+import {
+  buildWorldWikiFingerprint,
+  deriveWorldWiki,
+  readProjectWorldWikiPresentation,
+  readWorldEntityWikiPresentation,
+  readWorldWikiPresentationMetadata,
+} from '../../../src/domain/worldWiki.ts'
 import {
   worldBuildPlanResponseSchema,
   worldBuildStatusResponseSchema,
@@ -685,6 +699,14 @@ function normalizePlannerOperation(rawOp: unknown, index: number) {
         queueType: 'cinematic_generation',
       }
       break
+    case 'update_world_wiki_metadata':
+      record.payload = {
+        target: record.target === 'view' ? 'view' : 'project',
+        targetViewKey: typeof record.targetViewKey === 'string' ? record.targetViewKey : null,
+        metadata: record.metadata && typeof record.metadata === 'object' ? record.metadata : {},
+        reason: typeof record.reason === 'string' ? record.reason : '',
+      }
+      break
     case 'assistant_note':
       if (typeof record.message === 'string' || typeof record.note === 'string' || typeof record.text === 'string') {
         record.payload = {
@@ -829,6 +851,7 @@ type WorldPromptRetrievalPacket = {
     rootEntityKey: string | null
     mode: WorldView['mode']
     search: string
+    viewKind: string | null
   } | null
   selectedThread: {
     key: string
@@ -846,6 +869,57 @@ type WorldPromptRetrievalPacket = {
     priority: WorldThread['priority']
     linkedEntityKeys: string[]
   }>
+  timelineContext: {
+    eventCount: number
+    orderedGroups: Array<{
+      index: number
+      eventKeys: string[]
+      labels: string[]
+    }>
+    temporalRelationships: Array<{
+      key: string
+      sourceEventKey: string
+      targetEventKey: string
+      kind: string
+      beforeEventKey: string | null
+      afterEventKey: string | null
+      certainty: string
+    }>
+    floatingEventKeys: string[]
+    conflicts: Array<{
+      kind: string
+      relationshipKey: string
+      eventKeys: string[]
+      message: string
+    }>
+    diagnostics: string[]
+  }
+  wikiContext: {
+    title: string
+    logline: string
+    synopsis: string
+    fingerprint: string
+    generatedFromFingerprint: string
+    updatePolicy: 'none' | 'targeted' | 'opportunistic'
+    missingFields: string[]
+    stale: boolean
+    populatedSections: Array<{
+      kind: string
+      title: string
+      entityKeys: string[]
+      threadKeys: string[]
+      resultKeys: string[]
+    }>
+    gaps: Array<{
+      key: string
+      kind: string
+      label: string
+      entityKey: string | null
+      threadKey: string | null
+      sectionKind: string | null
+    }>
+    diagnostics: string[]
+  }
   worldAtlas: WorldPromptAtlasIndex
   graphSignals: {
     entityCount: number
@@ -1402,6 +1476,7 @@ function summarizeEntityForPlanner(
     relationCount: number
   },
 ) {
+  const wiki = readWorldEntityWikiPresentation(entity)
   return {
     key: entity.key,
     name: entity.name,
@@ -1413,6 +1488,11 @@ function summarizeEntityForPlanner(
     aliases: entity.aliases.slice(0, 3),
     tags: entity.tags.slice(0, 4),
     relationCount: options.relationCount,
+    wiki: {
+      roleLabel: wiki.roleLabel ? trimPlannerText(wiki.roleLabel, 80) : '',
+      shortSummary: wiki.shortSummary ? trimPlannerText(wiki.shortSummary, 160) : '',
+      hasPresentationSummary: Boolean(wiki.shortSummary || entity.summary.trim()),
+    },
   }
 }
 
@@ -1420,6 +1500,7 @@ function summarizeRelationshipForPlanner(
   relationship: WorldRelationship,
   includeNotes: boolean,
 ) {
+  const temporal = readWorldRelationshipTemporalMetadata(relationship)
   return {
     key: relationship.key,
     sourceEntityKey: relationship.sourceEntityKey,
@@ -1429,6 +1510,14 @@ function summarizeRelationshipForPlanner(
     notes: includeNotes && relationship.notes.trim()
       ? trimPlannerText(relationship.notes, 220)
       : '',
+    temporal: temporal
+      ? {
+          kind: temporal.kind,
+          timelineKey: temporal.timelineKey ?? 'canon',
+          certainty: temporal.certainty ?? 'explicit',
+          impliesChronology: temporal.impliesChronology ?? true,
+        }
+      : null,
   }
 }
 
@@ -1901,6 +1990,135 @@ async function buildWorldPromptRetrievalPacket(input: {
     continuityMode: input.intent.continuityMode,
     executionReason: `${input.intent.resolvedMode ?? 'apply_compact_wave'} via ${input.intent.resolvedIntent ?? 'graph_build'} with ${input.intent.continuityMode}.`,
   })
+  const timeline = deriveWorldTimeline({
+    entities: input.snapshot.worldEntities,
+    relationships: input.snapshot.worldRelationships,
+  })
+  const timelineRelevantEventKeys = new Set(
+    relevantEntities
+      .filter((entity) => entity.nodeType === 'event')
+      .map((entity) => entity.key),
+  )
+  for (const thread of relevantThreads) {
+    for (const entityKey of thread.linkedEntityKeys) {
+      if (entityByKey.get(entityKey)?.nodeType === 'event') timelineRelevantEventKeys.add(entityKey)
+    }
+  }
+  if (timelineRelevantEventKeys.size === 0 && input.intent.focusLayer === 'event') {
+    for (const event of timeline.events.slice(0, 8)) {
+      timelineRelevantEventKeys.add(event.key)
+    }
+  }
+  const timelineEventLabel = (key: string) => entityByKey.get(key)?.name ?? key
+  const compactTimelineGroups = timeline.orderedGroups
+    .map((group) => ({
+      index: group.index,
+      eventKeys: group.eventKeys.filter((key) => timelineRelevantEventKeys.size === 0 || timelineRelevantEventKeys.has(key)),
+    }))
+    .filter((group) => group.eventKeys.length > 0)
+    .slice(0, 8)
+    .map((group) => ({
+      ...group,
+      labels: group.eventKeys.map(timelineEventLabel),
+    }))
+  const compactTimelineRelationships = timeline.temporalRelationships
+    .filter((relationship) => (
+      timelineRelevantEventKeys.size === 0
+      || timelineRelevantEventKeys.has(relationship.sourceEventKey)
+      || timelineRelevantEventKeys.has(relationship.targetEventKey)
+      || ftsRelationshipKeys.has(relationship.key)
+    ))
+    .slice(0, 12)
+    .map((relationship) => ({
+      key: relationship.key,
+      sourceEventKey: relationship.sourceEventKey,
+      targetEventKey: relationship.targetEventKey,
+      kind: relationship.kind,
+      beforeEventKey: relationship.beforeEventKey,
+      afterEventKey: relationship.afterEventKey,
+      certainty: relationship.certainty,
+    }))
+  const timelineContext: WorldPromptRetrievalPacket['timelineContext'] = {
+    eventCount: timeline.events.length,
+    orderedGroups: compactTimelineGroups,
+    temporalRelationships: compactTimelineRelationships,
+    floatingEventKeys: timeline.floatingEventKeys
+      .filter((key) => timelineRelevantEventKeys.size === 0 || timelineRelevantEventKeys.has(key))
+      .slice(0, 12),
+    conflicts: timeline.conflicts
+      .filter((conflict) => timelineRelevantEventKeys.size === 0 || conflict.eventKeys.some((key) => timelineRelevantEventKeys.has(key)))
+      .slice(0, 8),
+    diagnostics: timeline.diagnostics,
+  }
+  const wiki = deriveWorldWiki({
+    snapshot: input.snapshot,
+    view: selectedView,
+  })
+  const wikiUpdatePolicy = determineWikiMetadataUpdatePolicy({
+    prompt: input.prompt,
+    mode: input.mode,
+    wiki,
+  })
+  const wikiMissingFields = [
+    wiki.overview.logline.trim() ? null : 'logline',
+    wiki.overview.synopsis.trim().length >= 80 ? null : 'synopsis',
+    wiki.overview.genre.trim() ? null : 'genre',
+    wiki.overview.themes.length > 0 ? null : 'themes',
+    wiki.overview.toneTags.length > 0 ? null : 'toneTags',
+    wiki.overview.coreConflict.trim() ? null : 'coreConflict',
+    wiki.overview.visualMotifs.length > 0 ? null : 'visualMotifs',
+  ].filter((value): value is string => Boolean(value))
+  const wikiContext: WorldPromptRetrievalPacket['wikiContext'] = {
+    title: wiki.title,
+    logline: trimPlannerText(wiki.overview.logline, 180),
+    synopsis: trimPlannerText(wiki.overview.synopsis, 360),
+    fingerprint: wiki.fingerprint,
+    generatedFromFingerprint: wiki.overview.generatedFromFingerprint,
+    updatePolicy: wikiUpdatePolicy,
+    missingFields: wikiMissingFields,
+    stale: wiki.overview.stale,
+    populatedSections: wiki.sections
+      .filter((section) => !section.gap)
+      .slice(0, 8)
+      .map((section) => ({
+        kind: section.kind,
+        title: section.title,
+        entityKeys: section.entityKeys.slice(0, 8),
+        threadKeys: section.threadKeys.slice(0, 6),
+        resultKeys: section.resultKeys.slice(0, 6),
+      })),
+    gaps: wiki.gaps.slice(0, 12).map((gap) => ({
+      key: gap.key,
+      kind: gap.kind,
+      label: gap.label,
+      entityKey: gap.entityKey,
+      threadKey: gap.threadKey,
+      sectionKind: gap.sectionKind,
+    })),
+    diagnostics: wiki.diagnostics.slice(0, 6),
+  }
+  for (const gap of wikiContext.gaps) {
+    if (gap.entityKey) {
+      addHitReason({
+        key: gap.entityKey,
+        kind: 'entity',
+        reason: 'fallback_core',
+        score: 1.5,
+        label: labelForEntityKey(gap.entityKey),
+        matchedText: gap.label,
+      })
+    }
+    if (gap.threadKey) {
+      addHitReason({
+        key: gap.threadKey,
+        kind: 'thread',
+        reason: 'thread_linked',
+        score: 1.5,
+        label: labelForThreadKey(gap.threadKey),
+        matchedText: gap.label,
+      })
+    }
+  }
 
   return {
     promptIntent: input.intent.promptIntent,
@@ -1922,6 +2140,7 @@ async function buildWorldPromptRetrievalPacket(input: {
           rootEntityKey: selectedView.rootEntityKey,
           mode: selectedView.mode,
           search: selectedView.search,
+          viewKind: getWorldViewSemanticMetadata(selectedView).viewKind,
         }
       : null,
     selectedThread: selectedThread
@@ -1936,6 +2155,8 @@ async function buildWorldPromptRetrievalPacket(input: {
     relevantEntities,
     relevantRelationships,
     relevantThreads,
+    timelineContext,
+    wikiContext,
     worldAtlas,
     graphSignals: {
       entityCount: activeEntities.length,
@@ -2816,7 +3037,7 @@ function optimizePlannerOpsForMode(input: {
   return worldPromptPlannerSchema.parse({
     ...input.plan,
     assistantSummary: capAssistantSummary(input.plan.assistantSummary, input.mode),
-    answer: input.mode === 'advisory_diagnosis' ? trimPlannerText(input.plan.answer ?? '', 320) : '',
+    answer: input.mode === 'advisory_diagnosis' ? (input.plan.answer ?? '').replace(/\s+/g, ' ').trim() : '',
     wave1Ops: normalizedOps,
     operations: normalizedOps,
     suggestionCandidates: input.plan.suggestionCandidates.slice(0, input.mode === 'advisory_diagnosis' ? 4 : 3),
@@ -3336,6 +3557,24 @@ function promptIncludesAny(prompt: string, probes: string[]) {
   return probes.some((probe) => normalized.includes(normalizeName(probe)))
 }
 
+function determineWikiMetadataUpdatePolicy(input: {
+  prompt: string
+  mode: PlannerMode
+  wiki: ReturnType<typeof deriveWorldWiki>
+}) {
+  if (input.mode === 'advisory_diagnosis') return 'none' as const
+  const normalized = input.prompt.toLowerCase()
+  const targeted = /\b(wiki|logline|synopsis|overview|theme|themes|tone|genre|world bible|refresh overview)\b/.test(normalized)
+  if (targeted) return 'targeted' as const
+  const missingLogline = !input.wiki.overview.logline.trim()
+  const weakSynopsis = input.wiki.overview.synopsis.trim().length < 80
+  const hasSubstantialWorld = input.wiki.sections.some((section) => section.entityKeys.length >= 2 || section.threadKeys.length >= 1)
+  if (input.mode === 'direct_build' && hasSubstantialWorld && (missingLogline || weakSynopsis || input.wiki.overview.stale)) {
+    return 'opportunistic' as const
+  }
+  return 'none' as const
+}
+
 function scorePromptOpForStaging(op: PromptToWorldOp, prompt: string) {
   const requirements = analyzeWorldPromptEntityRequirements(prompt)
   if (op.op === 'assistant_note') return -10
@@ -3370,6 +3609,9 @@ function scorePromptOpForStaging(op: PromptToWorldOp, prompt: string) {
   if (op.op === 'queue_cinematic_generation') {
     return promptIncludesAny(prompt, ['cinematic', 'scene', 'shot', 'trailer', 'storyboard', 'cutscene']) ? 35 : 10
   }
+  if (op.op === 'update_world_wiki_metadata') {
+    return promptIncludesAny(prompt, ['wiki', 'logline', 'synopsis', 'overview', 'theme', 'tone']) ? 65 : 25
+  }
   return 0
 }
 
@@ -3399,6 +3641,9 @@ function resolveStagingEntityKeys(op: PromptToWorldOp) {
   }
   if (op.op === 'queue_cinematic_generation') {
     return op.payload.relatedEntityKeys
+  }
+  if (op.op === 'update_world_wiki_metadata') {
+    return []
   }
   return []
 }
@@ -4139,6 +4384,8 @@ function impactForOp(op: PromptToWorldOp) {
     case 'queue_image_generation':
     case 'queue_cinematic_generation':
       return { nodeCount: 0, edgeCount: 0, queueCount: 1 }
+    case 'update_world_wiki_metadata':
+      return { nodeCount: 0, edgeCount: 0, queueCount: 0 }
     default:
       return { nodeCount: 0, edgeCount: 0, queueCount: 0 }
   }
@@ -4433,6 +4680,19 @@ function buildPreviewItem(op: PromptToWorldOp): WorldPromptPlanPreviewItem {
         estimatedImpact: impact,
         status: 'preview',
       }
+    case 'update_world_wiki_metadata':
+      return {
+        id: op.id,
+        kind: 'wiki_metadata',
+        title: op.payload.target === 'view' ? 'Update wiki page metadata' : 'Update world wiki overview',
+        summary: op.payload.reason || 'Refresh compact wiki presentation metadata.',
+        targetKeys: [op.payload.targetViewKey].filter((value): value is string => Boolean(value)),
+        diffMode,
+        touchesCanon: false,
+        approvalRequired,
+        estimatedImpact: impact,
+        status: 'preview',
+      }
     case 'assistant_note':
       return {
         id: op.id,
@@ -4501,6 +4761,51 @@ function promptOpNeedsApproval(op: PromptToWorldOp) {
   }
   return op.applyMode === 'needs_approval'
     || approvalReason.length > 0
+}
+
+const WIKI_STRING_LIMITS: Record<string, number> = {
+  logline: 220,
+  synopsis: 900,
+  genre: 80,
+  coreConflict: 360,
+}
+const WIKI_ARRAY_LIMITS: Record<string, { items: number; chars: number }> = {
+  themes: { items: 8, chars: 60 },
+  toneTags: { items: 8, chars: 40 },
+  visualMotifs: { items: 8, chars: 80 },
+}
+
+function sanitizeWikiMetadataPatch(raw: unknown, existing?: Record<string, unknown>) {
+  const parsed = readWorldWikiPresentationMetadata(raw)
+  const next: Record<string, unknown> = {}
+  for (const [key, limit] of Object.entries(WIKI_STRING_LIMITS)) {
+    const value = typeof parsed[key as keyof typeof parsed] === 'string'
+      ? String(parsed[key as keyof typeof parsed]).trim()
+      : ''
+    if (!value) continue
+    if (key === 'logline' && value.length < 12) continue
+    if (key === 'synopsis' && value.length < 40 && typeof existing?.synopsis === 'string' && existing.synopsis.trim().length >= 40) continue
+    next[key] = trimPlannerText(value, limit)
+  }
+  for (const [key, config] of Object.entries(WIKI_ARRAY_LIMITS)) {
+    const values = Array.isArray(parsed[key as keyof typeof parsed])
+      ? parsed[key as keyof typeof parsed] as unknown[]
+      : []
+    const cleaned = Array.from(new Set(values
+      .filter((value): value is string => typeof value === 'string')
+      .map((value) => trimPlannerText(value.trim(), config.chars))
+      .filter(Boolean))).slice(0, config.items)
+    if (cleaned.length > 0) {
+      next[key] = cleaned
+    }
+  }
+  for (const key of ['generatedFromFingerprint', 'updatedByTurnId']) {
+    const value = typeof parsed[key as keyof typeof parsed] === 'string'
+      ? String(parsed[key as keyof typeof parsed]).trim()
+      : ''
+    if (value) next[key] = trimPlannerText(value, 260)
+  }
+  return next
 }
 
 function splitPromptOpsByApproval(ops: PromptToWorldOp[]) {
@@ -4874,9 +5179,47 @@ function projectSanitizedOpIntoSnapshot(snapshot: WorldPromptSnapshot, op: Promp
       }),
     ]
   }
+
+  if (op.op === 'upsert_relationship') {
+    const relationship = op.payload.relationship
+    if (op.payload.targetRelationshipKey && snapshot.worldRelationships.some((entry) => entry.key === op.payload.targetRelationshipKey)) {
+      return
+    }
+    if (!relationship.sourceEntityKey || !relationship.targetEntityKey || relationship.sourceEntityKey === relationship.targetEntityKey) {
+      return
+    }
+    const sourceEntity = snapshot.worldEntities.find((entity) => entity.key === relationship.sourceEntityKey) ?? null
+    const targetEntity = snapshot.worldEntities.find((entity) => entity.key === relationship.targetEntityKey) ?? null
+    if (!sourceEntity || !targetEntity) return
+    const key = buildWorldRelationshipKey(snapshot, relationship.sourceEntityKey, relationship.verb, relationship.targetEntityKey)
+    op.payload.targetRelationshipKey = key
+    snapshot.worldRelationships = [
+      ...snapshot.worldRelationships,
+      worldRelationshipSchema.parse({
+        id: `projected:${key}`,
+        key,
+        sourceEntityKey: relationship.sourceEntityKey,
+        targetEntityKey: relationship.targetEntityKey,
+        verb: relationship.verb,
+        direction: relationship.direction,
+        strength: relationship.strength,
+        confidence: relationship.confidence,
+        source: relationship.source ?? 'ai',
+        notes: relationship.notes,
+        state: relationship.state,
+        metadata: {
+          ...(relationship.metadata ?? {}),
+          projected: true,
+        },
+        createdAt: now,
+        updatedAt: now,
+      }),
+    ]
+  }
 }
 
 type AppliedWorldGraphRecords = {
+  draft?: { metadata?: Record<string, unknown> }
   worldEntities?: WorldEntity[]
   worldRelationships?: WorldRelationship[]
   worldViews?: WorldView[]
@@ -4896,6 +5239,12 @@ function mergeRecordsByKey<T extends { key: string }>(current: T[], incoming: T[
 
 function mergeAppliedWorldGraphIntoSnapshot(snapshot: WorldPromptSnapshot, applied: AppliedWorldGraphRecords | undefined) {
   if (!applied) return
+  if (applied.draft?.metadata) {
+    snapshot.draft.metadata = {
+      ...(snapshot.draft.metadata ?? {}),
+      ...applied.draft.metadata,
+    }
+  }
   snapshot.worldEntities = mergeRecordsByKey(snapshot.worldEntities, applied.worldEntities)
   snapshot.worldRelationships = mergeRecordsByKey(snapshot.worldRelationships, applied.worldRelationships)
   snapshot.worldViews = mergeRecordsByKey(snapshot.worldViews, applied.worldViews)
@@ -5300,9 +5649,33 @@ function plannerProgressMessageForPhase(
       return input.promptIntentHint === 'graph_diagnosis'
         ? 'Looking for weak links, missing pressure, and relationship gaps.'
         : defaultPlannerProgressMessage(phase)
+    case 'assembling_first_wave':
+      return input.promptIntentHint === 'advisory_question' || input.promptIntentHint === 'graph_diagnosis'
+        ? 'Preparing a clear answer and useful next-step options.'
+        : defaultPlannerProgressMessage(phase)
+    case 'finalizing_plan':
+      return input.promptIntentHint === 'advisory_question' || input.promptIntentHint === 'graph_diagnosis'
+        ? 'Finalizing the answer and suggested next moves.'
+        : defaultPlannerProgressMessage(phase)
     default:
       return defaultPlannerProgressMessage(phase)
   }
+}
+
+function scheduledPlannerProgressPhasesForMode(mode: PlannerMode) {
+  if (mode === 'advisory_diagnosis') {
+    return [
+      { phase: 'analyzing_graph', delayMs: 1200 },
+      { phase: 'planning_entities', delayMs: 3200 },
+      { phase: 'planning_relationships', delayMs: 6200 },
+    ] as const
+  }
+  return [
+    { phase: 'analyzing_graph', delayMs: 1200 },
+    { phase: 'planning_entities', delayMs: 3200 },
+    { phase: 'planning_relationships', delayMs: 6200 },
+    { phase: 'assembling_first_wave', delayMs: 9800 },
+  ] as const
 }
 
 function buildApplyProgressMessage(input: {
@@ -5333,6 +5706,10 @@ function describePromptOp(op: PromptToWorldOp) {
       return 'Queue image generation'
     case 'queue_cinematic_generation':
       return 'Queue cinematic generation'
+    case 'update_world_wiki_metadata':
+      return op.payload.target === 'view'
+        ? `Update wiki page metadata ${op.payload.targetViewKey ?? ''}`.trim()
+        : 'Update world wiki overview'
     case 'assistant_note':
       return op.payload.message
   }
@@ -5452,7 +5829,7 @@ async function generatePromptPlan(input: {
     'You can either plan graph mutations or answer graph-aware advisory questions.',
     `Planner mode: ${plannerMode}.`,
     `Return only the fields present in the schema for this mode. Do not invent omitted top-level keys.`,
-    'Allowed operations for wave1Ops: upsert_entity, update_entity, replace_entity, upsert_relationship, update_relationship, create_derived_result, queue_image_generation, queue_cinematic_generation, assistant_note.',
+    'Allowed operations for wave1Ops: upsert_entity, update_entity, replace_entity, upsert_relationship, update_relationship, create_derived_result, queue_image_generation, queue_cinematic_generation, update_world_wiki_metadata, assistant_note.',
     'Favor additive graph growth.',
     'Use advisory_question for questions that should answer first and offer options without mutating the graph by default.',
     'Use graph_diagnosis for prompts that ask what is weak, missing, thin, underdeveloped, or structurally lacking in the current world.',
@@ -5475,6 +5852,20 @@ async function generatePromptPlan(input: {
     'Only use replace_entity when the user explicitly says a node is wrong, should be a different type, should be corrected, or should be replaced.',
     'If the prompt introduces a new proper noun plus extra lore, prefer creating the new node and updating context/relationships around existing nodes instead of replacing an existing node.',
     'For a simple direct creation prompt, wave1Ops should contain the named entities and the most obvious relationships before proposing any optional follow-up suggestions.',
+    'When creating or updating event nodes, preserve any stated chronology as graph canon. Use event customProperties.timeline for display hints such as timelineKey, timeLabel, era, sequenceHint, durationLabel, and certainty.',
+    'When the prompt states or strongly implies that one event happens before, after, during, overlaps, or causes another event, create an event-to-event upsert_relationship with relationship.metadata.temporal = { kind, timelineKey: "canon", certainty, impliesChronology }.',
+    'Prefer relative temporal relationships over invented dates. Do not invent exact dates, years, or total ordering unless the user provides them.',
+    'Leave event chronology floating, ask a concise clarification, or offer a concrete next suggestion when event order is ambiguous.',
+    'Existing temporal relationship metadata appears in retrieval.relevantRelationships and retrieval.timelineContext. Preserve that chronology unless the user explicitly asks for a correction.',
+    'For wiki/presentation readiness, use entity customProperties.wiki or metadata.wiki for entity display hints such as roleLabel, shortSummary, and wikiSections.',
+    'For project-wide wiki presentation, use update_world_wiki_metadata with target "project" and compact metadata fields: logline, synopsis, genre, themes, toneTags, coreConflict, visualMotifs. Use target "view" with targetViewKey only for custom wiki page metadata.',
+    'Do not add a separate planner pass for wiki writing. Include update_world_wiki_metadata only in the same wave1Ops response when retrieval.wikiContext.updatePolicy is "targeted" or "opportunistic".',
+    'When retrieval.wikiContext.updatePolicy is "none", do not rewrite project logline, synopsis, or tone metadata unless the user explicitly asks in this prompt.',
+    'When updating project-wide wiki metadata, set generatedFromFingerprint to retrieval.wikiContext.fingerprint when provided. Keep text concise: one-sentence logline, compact synopsis, short tags.',
+    'When a direct world-building turn creates or substantially updates canon, include concise wiki-ready summaries where they naturally follow from the canon. Do not add long encyclopedia prose on every turn.',
+    'Prefer one-sentence loglines, compact synopsis text, role labels, story arc summaries, and event scene summaries over invented dates or unrelated lore.',
+    'retrieval.wikiContext lists populated wiki sections and gaps. If the user asks to fill a gap, update only the targeted wiki metadata or add compact graph canon needed for that section.',
+    'If the user asks for a custom wiki page/view, return concrete suggestions with preferredViewKind "wiki_custom" and source entity/thread targets; do not create transient turn-lens views.',
     isSuggestionDriven
       ? 'The user selected one of your prior suggestions. Treat this as a request to execute that selected direction now; do not answer by repeating the same options again unless the selected suggestion is explicitly plan-only.'
       : null,
@@ -5593,12 +5984,7 @@ async function generatePromptPlan(input: {
     }
 
     await emitPlannerProgress('reading_context')
-    ;([
-      { phase: 'analyzing_graph', delayMs: 1200 },
-      { phase: 'planning_entities', delayMs: 3200 },
-      { phase: 'planning_relationships', delayMs: 6200 },
-      { phase: 'assembling_first_wave', delayMs: 9800 },
-    ] as const).forEach(({ phase, delayMs }) => {
+    scheduledPlannerProgressPhasesForMode(plannerMode).forEach(({ phase, delayMs }) => {
       const timeoutId = setTimeout(() => {
         if (plannerProgressClosed) return
         void emitPlannerProgress(phase).catch((streamError) => {
@@ -5738,10 +6124,15 @@ async function generatePromptPlan(input: {
       throw new Error('World prompt planner did not produce a final plan.')
     }
     const plannerOutline = buildPlannerOutline(finalPlan)
-    await emitPlannerProgress('finalizing_plan', {
-      message: plannerOutline.length > 0
+    const finalProgressMessage = plannerMode === 'advisory_diagnosis'
+      ? plannerOutline.length > 0
+        ? `Prepared the answer and ${plannerOutline.length} suggested next move${plannerOutline.length === 1 ? '' : 's'}.`
+        : 'Prepared the answer.'
+      : plannerOutline.length > 0
         ? `Validated the plan and prepared ${plannerOutline.length} first-wave step${plannerOutline.length === 1 ? '' : 's'}.`
-        : 'Validated the plan and prepared the next execution wave.',
+        : 'Validated the plan and prepared the next execution wave.'
+    await emitPlannerProgress('finalizing_plan', {
+      message: finalProgressMessage,
       done: true,
     }, plannerOutline.length > 0 ? { plannerOutline } : undefined)
 
@@ -5984,9 +6375,44 @@ function sanitizePromptOp(input: {
         approvalReason: 'Relationship endpoints collapsed to the same entity',
       })
     }
+    const temporal = readWorldRelationshipTemporalMetadata(relationship)
+    if (temporal) {
+      if (source.entity.nodeType !== 'event' || target.entity.nodeType !== 'event') {
+        op.applyMode = 'needs_approval'
+        return annotatePromptOpMetadata({
+          op,
+          touchesExisting: true,
+          approvalReason: 'Temporal relationship endpoints must be events',
+        })
+      }
+      const normalized = normalizeWorldRelationshipTemporalMetadata(relationship)
+      relationship.sourceEntityKey = normalized.sourceEntityKey
+      relationship.targetEntityKey = normalized.targetEntityKey
+      relationship.metadata = normalized.metadata
+      const normalizedTemporal = readWorldRelationshipTemporalMetadata(relationship)
+      const strictChronology = normalizedTemporal
+        && normalizedTemporal.impliesChronology !== false
+        && (normalizedTemporal.kind === 'before' || normalizedTemporal.kind === 'causes')
+      if (
+        strictChronology
+        && wouldCreateWorldTimelineCycle({
+          entities: input.snapshot.worldEntities,
+          relationships: input.snapshot.worldRelationships,
+          sourceEventKey: relationship.sourceEntityKey,
+          targetEventKey: relationship.targetEntityKey,
+        })
+      ) {
+        op.applyMode = 'needs_approval'
+        return annotatePromptOpMetadata({
+          op,
+          touchesExisting: true,
+          approvalReason: 'Temporal relationship would create a timeline cycle',
+        })
+      }
+    }
     const existing = input.snapshot.worldRelationships.find((entry) => (
-      entry.sourceEntityKey === source.entity?.key
-      && entry.targetEntityKey === target.entity?.key
+      entry.sourceEntityKey === relationship.sourceEntityKey
+      && entry.targetEntityKey === relationship.targetEntityKey
       && normalizeName(entry.verb) === normalizeName(relationship.verb)
     )) ?? null
     if (existing) {
@@ -6056,6 +6482,40 @@ function sanitizePromptOp(input: {
       approvalReason: !target || !['actor', 'place', 'object'].includes(target.nodeType)
         ? 'Image generation target is invalid'
         : entityIsCanonLocked(target) ? 'Touches canon-locked entity' : null,
+    })
+  }
+
+  if (op.op === 'update_world_wiki_metadata') {
+    const targetView = op.payload.target === 'view'
+      ? input.snapshot.worldViews.find((view) => view.key === op.payload.targetViewKey) ?? null
+      : null
+    if (op.payload.target === 'view' && !targetView) {
+      op.applyMode = 'needs_approval'
+      return annotatePromptOpMetadata({
+        op,
+        touchesExisting: true,
+        approvalReason: 'Missing wiki view target',
+      })
+    }
+    const existingWiki = op.payload.target === 'view'
+      ? readWorldWikiPresentationMetadata((targetView?.metadata as Record<string, unknown> | undefined)?.wiki)
+      : readProjectWorldWikiPresentation(input.snapshot)
+    const sanitizedMetadata = sanitizeWikiMetadataPatch(op.payload.metadata, existingWiki as Record<string, unknown>)
+    if (Object.keys(sanitizedMetadata).length === 0) {
+      op.applyMode = 'needs_approval'
+      op.payload.metadata = {}
+      return annotatePromptOpMetadata({
+        op,
+        touchesExisting: true,
+        approvalReason: 'Empty wiki metadata update',
+      })
+    }
+    op.payload.metadata = sanitizedMetadata
+    return annotatePromptOpMetadata({
+      op,
+      touchesExisting: true,
+      canonTouch: false,
+      approvalReason: null,
     })
   }
 
@@ -6238,6 +6698,7 @@ async function applyPromptOp(input: {
   model: string
   snapshot: WorldPromptSnapshot
   prompt: string
+  turnId: string
   op: PromptToWorldOp
 }) {
   if (input.op.op === 'assistant_note') {
@@ -6245,6 +6706,76 @@ async function applyPromptOp(input: {
       applied: {},
       queue: null,
       note: input.op.payload.message,
+    }
+  }
+
+  if (input.op.op === 'update_world_wiki_metadata') {
+    const patch = sanitizeWikiMetadataPatch(input.op.payload.metadata)
+    if (Object.keys(patch).length === 0) {
+      return {
+        applied: {},
+        queue: null,
+        note: 'Skipped empty wiki metadata update.',
+      }
+    }
+    const patchWithProvenance = {
+      ...patch,
+      generatedFromFingerprint: buildWorldWikiFingerprint(input.snapshot),
+      updatedByTurnId: input.turnId,
+    }
+    if (input.op.payload.target === 'view') {
+      const target = input.snapshot.worldViews.find((view) => view.key === input.op.payload.targetViewKey) ?? null
+      if (!target) {
+        return {
+          applied: {},
+          queue: null,
+          note: 'Skipped wiki metadata update because the target view was missing.',
+        }
+      }
+      const nextMetadata = {
+        ...(target.metadata ?? {}),
+        wiki: {
+          ...readWorldWikiPresentationMetadata((target.metadata as Record<string, unknown> | undefined)?.wiki),
+          ...patchWithProvenance,
+        },
+      }
+      const updateResponse = await input.client
+        .from('world_views')
+        .update({ metadata: nextMetadata })
+        .eq('draft_id', input.snapshot.draft.id)
+        .eq('key', target.key)
+        .select(WORLD_VIEW_SELECT)
+        .single()
+      if (updateResponse.error) throw new Error(updateResponse.error.message)
+      const updatedView = mapWorldViewRow(updateResponse.data as WorldViewRow)
+      return {
+        applied: { worldViews: [updatedView] },
+        queue: null,
+        note: null,
+      }
+    }
+
+    const currentDraftMetadata = input.snapshot.draft.metadata ?? {}
+    const nextDraftMetadata = {
+      ...currentDraftMetadata,
+      worldWiki: {
+        ...readWorldWikiPresentationMetadata(currentDraftMetadata.worldWiki),
+        ...patchWithProvenance,
+      },
+    }
+    const updateResponse = await input.client
+      .from('project_drafts')
+      .update({ metadata: nextDraftMetadata })
+      .eq('id', input.snapshot.draft.id)
+      .select('metadata')
+      .single()
+    if (updateResponse.error) throw new Error(updateResponse.error.message)
+    const metadata = updateResponse.data?.metadata ?? nextDraftMetadata
+    input.snapshot.draft.metadata = metadata
+    return {
+      applied: { draft: { metadata } },
+      queue: null,
+      note: null,
     }
   }
 
@@ -6398,6 +6929,12 @@ async function applyPromptOp(input: {
     const changes = input.op.payload.changes
     const nextAliases = changes.aliases ? Array.from(new Set([...target.aliases, ...changes.aliases])) : target.aliases
     const nextTags = changes.tags ? Array.from(new Set([...target.tags, ...changes.tags])) : target.tags
+    const nextCustomProperties = changes.customProperties
+      ? {
+          ...(target.customProperties ?? {}),
+          ...changes.customProperties,
+        }
+      : target.customProperties
     const summaryMerge = mergeCanonicalText({
       existing: target.summary,
       incoming: changes.summary,
@@ -6436,6 +6973,7 @@ async function applyPromptOp(input: {
         tags: nextTags,
         summary: summaryMerge.text,
         context: contextMerge.text,
+        custom_properties: nextCustomProperties,
         metadata: nextMetadata,
       })
       .eq('draft_id', input.snapshot.draft.id)
@@ -6653,6 +7191,41 @@ async function applyPromptOp(input: {
         applied: {},
         queue: null,
         note: 'Skipped one relationship because both endpoints resolved to the same entity.',
+      }
+    }
+    const temporal = readWorldRelationshipTemporalMetadata(relationship)
+    if (temporal) {
+      const source = input.snapshot.worldEntities.find((entity) => entity.key === relationship.sourceEntityKey) ?? null
+      const target = input.snapshot.worldEntities.find((entity) => entity.key === relationship.targetEntityKey) ?? null
+      if (source?.nodeType !== 'event' || target?.nodeType !== 'event') {
+        return {
+          applied: {},
+          queue: null,
+          note: 'Skipped one temporal relationship because temporal links must connect event nodes.',
+        }
+      }
+      const normalized = normalizeWorldRelationshipTemporalMetadata(relationship)
+      relationship.sourceEntityKey = normalized.sourceEntityKey
+      relationship.targetEntityKey = normalized.targetEntityKey
+      relationship.metadata = normalized.metadata
+      const normalizedTemporal = readWorldRelationshipTemporalMetadata(relationship)
+      const strictChronology = normalizedTemporal
+        && normalizedTemporal.impliesChronology !== false
+        && (normalizedTemporal.kind === 'before' || normalizedTemporal.kind === 'causes')
+      if (
+        strictChronology
+        && wouldCreateWorldTimelineCycle({
+          entities: input.snapshot.worldEntities,
+          relationships: input.snapshot.worldRelationships,
+          sourceEventKey: relationship.sourceEntityKey,
+          targetEventKey: relationship.targetEntityKey,
+        })
+      ) {
+        return {
+          applied: {},
+          queue: null,
+          note: 'Skipped one temporal relationship because it would create a timeline cycle.',
+        }
       }
     }
     const key = buildWorldRelationshipKey(input.snapshot, relationship.sourceEntityKey, relationship.verb, relationship.targetEntityKey)
@@ -7449,6 +8022,8 @@ function summarizeAppliedOps(ops: PromptToWorldOp[]) {
           return 'image generation'
         case 'queue_cinematic_generation':
           return 'cinematic generation'
+        case 'update_world_wiki_metadata':
+          return 'wiki overview metadata'
         default:
           return op.op
       }
@@ -7719,7 +8294,7 @@ export async function startWorldPromptTurn(input: {
       selectedThreadKey: payload.selectedThreadKey,
       sourcePrompt: payload.prompt,
       suggestions: selectedSuggestionHadNoRunnableOps ? [] : execution.suggestions,
-      maxCount: payload.selectedSuggestionId ? 1 : 4,
+      maxCount: 4,
     })
     const persistedSuggestions = await persistSessionSuggestions({
       client: input.client,
@@ -7870,6 +8445,7 @@ export async function startWorldPromptTurn(input: {
           model: payload.model,
           snapshot: mutableSnapshot,
           prompt: payload.prompt,
+          turnId: turn.id,
           op,
         })
         mergeAppliedWorldGraphIntoSnapshot(mutableSnapshot, result.applied)

@@ -19,7 +19,7 @@ import {
   resolveWorldEdgeReveal,
   stripInternalPlannerDiagnostics,
 } from './worldPresentation.ts'
-import { worldPromptStartTurnResponseSchema } from '../../domain/worldPrompt.ts'
+import { promptToWorldOpSchema, worldPromptStartTurnResponseSchema } from '../../domain/worldPrompt.ts'
 import type { PromptToWorldOp, WorldPromptEvent, WorldPromptMessage, WorldPromptSuggestion, WorldPromptTurn } from '../../domain/worldPrompt.ts'
 import type { WorldEntity, WorldGraphConnection, WorldOperator, WorldRelationship, WorldResult } from '../../domain/worldGraph.ts'
 
@@ -1349,6 +1349,37 @@ test('worldPromptStartTurnResponseSchema accepts returned linked definitions and
   assert.equal(parsed.definitions.length, 1)
   assert.equal(parsed.messages[0]?.content, 'Suggest a background supernatural threat.')
   assert.equal(parsed.events[0]?.eventType, 'message_created')
+})
+
+test('promptToWorldOpSchema accepts project wiki metadata updates', () => {
+  const parsed = promptToWorldOpSchema.parse({
+    id: 'wiki-meta-1',
+    op: 'update_world_wiki_metadata',
+    confidence: 0.9,
+    applyMode: 'auto',
+    dependencyOpIds: [],
+    rationale: 'Seed-world turn created enough premise material for a compact wiki overview.',
+    status: 'pending',
+    metadata: {},
+    payload: {
+      target: 'project',
+      targetViewKey: null,
+      reason: 'Fill missing overview fields.',
+      metadata: {
+        logline: 'A memory-walking archivist must save a city from forgetting itself.',
+        synopsis: 'A compact overview of the current graph canon.',
+        themes: ['memory', 'inheritance'],
+        toneTags: ['melancholic'],
+        generatedFromFingerprint: 'wiki-v1|project-1',
+      },
+    },
+  })
+
+  assert.equal(describePromptOp(parsed), 'Update world wiki overview')
+  assert.equal(parsed.op, 'update_world_wiki_metadata')
+  if (parsed.op === 'update_world_wiki_metadata') {
+    assert.equal(parsed.payload.metadata.logline, 'A memory-walking archivist must save a city from forgetting itself.')
+  }
 })
 
 function createWorldPresentationTestEntity(key: string, name: string, nodeType: WorldEntity['nodeType']): WorldEntity {

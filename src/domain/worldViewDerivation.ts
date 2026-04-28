@@ -90,15 +90,19 @@ function cueScore(text: string, cues: string[]) {
 function buildDefaultMetadata(viewKind: WorldViewKind): WorldViewSemanticMetadata {
   return {
     viewKind,
-    autoManaged: viewKind !== 'manual_snapshot',
+    autoManaged: viewKind !== 'manual_snapshot' && viewKind !== 'wiki_custom',
     sourceEntityKeys: [],
     sourceThreadKeys: [],
     pinnedNodeKeys: [],
     refreshPolicy:
       viewKind === 'thread_focus'
         ? 'on_thread_change'
+        : viewKind === 'wiki_thread_arc'
+          ? 'on_thread_change'
         : viewKind === 'manual_snapshot'
           ? 'manual_only'
+          : viewKind === 'wiki_custom'
+            ? 'manual_only'
           : 'on_graph_change',
     semanticLabel: null,
     transientFocus: false,
@@ -293,6 +297,22 @@ function buildAutoViewSpecs(snapshot: ViewSnapshot, options?: AutoManagedWorldVi
     }),
   })
 
+  if (snapshot.worldEntities.length > 0) {
+    specs.push({
+      key: 'world.view.wiki-overview',
+      name: 'World Wiki',
+      mode: 'wiki',
+      rootEntityKey: null,
+      focusDepth: 1,
+      sortMode: 'relationship_count',
+      metadata: buildWorldViewMetadata({
+        viewKind: 'wiki_overview',
+        sourceEntityKeys: [],
+        semanticLabel: 'Readable world bible',
+      }),
+    })
+  }
+
   if (recentEntityKeys.length > 0 || recentRelationshipKeys.length > 0) {
     const primaryRecentEntityKey = recentEntityKeys[0] ?? null
     specs.push({
@@ -306,6 +326,26 @@ function buildAutoViewSpecs(snapshot: ViewSnapshot, options?: AutoManagedWorldVi
         viewKind: 'recent_growth',
         sourceEntityKeys: recentEntityKeys,
         semanticLabel: 'Latest story additions',
+      }),
+    })
+  }
+
+  const eventCount = snapshot.worldEntities.filter((entity) => entity.nodeType === 'event').length
+  if (eventCount > 0) {
+    specs.push({
+      key: 'world.view.timeline-overview',
+      name: 'Timeline Overview',
+      mode: 'timeline',
+      rootEntityKey: null,
+      focusDepth: 1,
+      sortMode: 'recent',
+      metadata: buildWorldViewMetadata({
+        viewKind: 'timeline_overview',
+        sourceEntityKeys: snapshot.worldEntities
+          .filter((entity) => entity.nodeType === 'event')
+          .map((entity) => entity.key)
+          .slice(0, 24),
+        semanticLabel: 'Canonical event timeline',
       }),
     })
   }
@@ -402,6 +442,21 @@ function buildAutoViewSpecs(snapshot: ViewSnapshot, options?: AutoManagedWorldVi
         semanticLabel: thread.summary || thread.title,
       }),
     })
+    specs.push({
+      key: `world.view.wiki-thread.${slugify(thread.key)}`,
+      name: `${thread.title} Wiki`,
+      mode: 'wiki',
+      rootEntityKey: null,
+      focusDepth: 1,
+      sortMode: 'recent',
+      metadata: buildWorldViewMetadata({
+        viewKind: 'wiki_thread_arc',
+        sourceEntityKeys: thread.linkedEntityKeys,
+        sourceThreadKeys: [thread.key],
+        refreshPolicy: 'on_thread_change',
+        semanticLabel: thread.summary || thread.title,
+      }),
+    })
   }
 
   return specs
@@ -466,6 +521,16 @@ export function choosePreferredWorldView(
           return 70 + ((metadata.sourceThreadKeys[0] && snapshot?.worldThreads.find((thread) => thread.key === metadata.sourceThreadKeys[0])?.priority === 'primary') ? 5 : 0)
         case 'recent_growth':
           return 65
+        case 'timeline_overview':
+          return 62
+        case 'wiki_overview':
+          return 61
+        case 'wiki_thread_arc':
+          return 59
+        case 'wiki_entity_profile':
+          return 58
+        case 'wiki_custom':
+          return metadata.autoManaged ? 30 : 50
         case 'lore_cluster':
           return 60
         case 'global_overview':
