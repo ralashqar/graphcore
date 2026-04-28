@@ -1,7 +1,21 @@
-import type { GameSummary, WorkspaceTab } from '../../shared/workspace'
+import type { GameSummary, WorkspaceTab, WorldWorkspaceMode } from '../../shared/workspace'
 import { EntityIcon, type EntityIconId } from '../../shared/entityIcons'
 
 const STUB_USER_AI_CREDITS = 1280
+
+type TopbarNavItem =
+  | { kind: 'world'; mode: WorldWorkspaceMode; label: string; icon: EntityIconId }
+  | { kind: 'workspace'; tab: Exclude<WorkspaceTab, 'graph'>; label: string; icon: EntityIconId }
+
+const TOPBAR_NAV_ITEMS: TopbarNavItem[] = [
+  { kind: 'world', mode: 'graph', label: 'Graph', icon: 'graph' },
+  { kind: 'world', mode: 'wiki', label: 'Wiki', icon: 'content' },
+  { kind: 'world', mode: 'timeline', label: 'Timeline', icon: 'event' },
+  { kind: 'world', mode: 'board', label: 'Board', icon: 'thread' },
+  { kind: 'workspace', tab: 'library', label: 'Library', icon: 'content' },
+  { kind: 'workspace', tab: 'outputs', label: 'Outputs', icon: 'cinematic' },
+  { kind: 'workspace', tab: 'global', label: 'Global', icon: 'global' },
+]
 
 type WorkspaceTopbarProps = {
   activeTab: WorkspaceTab
@@ -15,10 +29,12 @@ type WorkspaceTopbarProps = {
   onResetProjectWorld?: () => void
   onSelectGame: (projectId: string) => void
   onSetActiveTab: (tab: WorkspaceTab) => void
+  onSetWorldViewMode: (mode: WorldWorkspaceMode) => void
   onSignOut: () => void
   projectName: string
   sourceLabel: string
-  tabs: Array<{ id: WorkspaceTab; label: string; icon: EntityIconId }>
+  tabs?: Array<{ id: WorkspaceTab; label: string; icon: EntityIconId }>
+  worldViewMode: WorldWorkspaceMode
   workspaceName: string
   draftName: string
   isSignedIn: boolean
@@ -38,57 +54,78 @@ export function WorkspaceTopbar({
   onResetProjectWorld,
   onSelectGame,
   onSetActiveTab,
+  onSetWorldViewMode,
   onSignOut,
   projectName,
   sourceLabel,
-  tabs,
+  worldViewMode,
   workspaceName,
 }: WorkspaceTopbarProps) {
+  const userInitial = (currentUserEmail ?? 'G').trim().charAt(0).toUpperCase() || 'G'
   return (
     <header className="topbar">
       <div className="brand-cluster">
         <div className="brand-mark">G</div>
-        <div>
+        {games.length > 0 ? (
+          <label className="topbar-project-select">
+            <span className="sr-only">Project</span>
+            <select value={activeGameId ?? ''} onChange={(event) => onSelectGame(event.target.value)}>
+              {games.map((game) => (
+                <option key={game.projectId} value={game.projectId}>
+                  {game.projectName}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : (
           <div className="brand-line">GraphCore</div>
-          <p className="subtle-line">{workspaceName} / {projectName} / {draftName}</p>
-        </div>
+        )}
+        <span className="topbar-draft-label">{draftName}</span>
       </div>
       <div className="topbar-center">
         <nav className="tabbar" aria-label="Workspace tabs">
-          {tabs.map((tab) => (
-            <button key={tab.id} className={tab.id === activeTab ? 'tab-button is-active' : 'tab-button'} onClick={() => onSetActiveTab(tab.id)} type="button">
-              <EntityIcon className="tab-button-icon" id={tab.icon} />
-              {tab.label}
+          {TOPBAR_NAV_ITEMS.map((item) => {
+            const active = item.kind === 'world'
+              ? activeTab === 'graph' && worldViewMode === item.mode
+              : activeTab === item.tab
+            return (
+            <button
+              key={item.kind === 'world' ? `world:${item.mode}` : item.tab}
+              className={active ? 'tab-button is-active' : 'tab-button'}
+              onClick={() => {
+                if (item.kind === 'world') {
+                  onSetWorldViewMode(item.mode)
+                  return
+                }
+                onSetActiveTab(item.tab)
+              }}
+              type="button"
+            >
+              <EntityIcon className="tab-button-icon" id={item.icon} />
+              {item.label}
             </button>
-          ))}
+            )
+          })}
         </nav>
       </div>
       <div className="topbar-actions">
-        {games.length > 0 ? (
-          <div className="topbar-context-cluster">
-            <label className="topbar-select-wrap">
-              <span className="topbar-select-label">Project</span>
-              <select className="topbar-select" value={activeGameId ?? ''} onChange={(event) => onSelectGame(event.target.value)}>
-                {games.map((game) => (
-                  <option key={game.projectId} value={game.projectId}>
-                    {game.projectName}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-        ) : null}
         <div className="topbar-credit-pill" aria-label={`AI credits ${STUB_USER_AI_CREDITS}`}>
           <EntityIcon id="credits" />
-          <span>AI Credits</span>
           <strong>{STUB_USER_AI_CREDITS.toLocaleString()}</strong>
         </div>
+        <button className="topbar-user-avatar" onClick={isSignedIn ? undefined : onOpenAuth} type="button" aria-label={currentUserEmail ?? 'Sign in'}>
+          {userInitial}
+        </button>
         <details className="topbar-utility-menu">
-          <summary className="ghost-button topbar-utility-trigger">Workspace</summary>
+          <summary className="topbar-menu-trigger" aria-label="Workspace menu">
+            <EntityIcon id="menu" />
+          </summary>
           <div className="topbar-utility-panel">
             <div className="topbar-utility-meta">
               <span className="section-label">Workspace</span>
-              <strong>{sourceLabel}</strong>
+              <strong>{workspaceName}</strong>
+              <span>{projectName} / {draftName}</span>
+              <span>{sourceLabel}</span>
               <span>{currentUserEmail ?? 'Not signed in'}</span>
             </div>
             <button className="ghost-button compact" onClick={onOpenNewGame} type="button">New Project</button>

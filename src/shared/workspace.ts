@@ -20,7 +20,11 @@ export type GameSummary = {
   hasGameSpec: boolean
 }
 
-export type WorkspaceTab = 'graph' | 'content' | 'characters' | 'environments' | 'assets' | 'cinematics' | 'global'
+export type WorkspaceTab = 'graph' | 'library' | 'outputs' | 'global'
+
+export type WorldWorkspaceMode = 'graph' | 'wiki' | 'timeline' | 'board'
+
+export type LibrarySection = 'characters' | 'items' | 'environments' | 'groups' | 'concepts' | 'assets'
 
 export type PatchSessionView = {
   id: string
@@ -42,10 +46,7 @@ export type AuthMode = 'sign_in' | 'sign_up' | 'magic_link'
 
 export const workspaceTabs: Array<{ id: WorkspaceTab; label: string; icon: EntityIconId }> = [
   { id: 'graph', label: 'World', icon: 'graph' },
-  { id: 'content', label: 'Content', icon: 'content' },
-  { id: 'characters', label: 'Characters', icon: 'character' },
-  { id: 'environments', label: 'Environments', icon: 'environment' },
-  { id: 'assets', label: 'Assets', icon: 'asset' },
-  { id: 'cinematics', label: 'Cinematics', icon: 'cinematic' },
+  { id: 'library', label: 'Library', icon: 'content' },
+  { id: 'outputs', label: 'Outputs', icon: 'cinematic' },
   { id: 'global', label: 'Global', icon: 'global' },
 ]

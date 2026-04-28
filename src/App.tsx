@@ -93,9 +93,14 @@ import { WorkspaceBanner } from './features/shell/WorkspaceBanner'
 import { WorkspaceTopbar } from './features/shell/WorkspaceTopbar'
 import { useEditorStore } from './state/editorStore'
 import { APP_ROUTE_PATH, navigateToPath, routeFromPathname, type AppRoute } from './shared/appRoutes'
-import type { AuthMode, GameSummary, LoadedState, PatchSessionView, WorkspaceTab } from './shared/workspace'
+import type { AuthMode, GameSummary, LibrarySection, LoadedState, PatchSessionView, WorkspaceTab, WorldWorkspaceMode } from './shared/workspace'
 import { workspaceTabs } from './shared/workspace'
-import { resetProjectWorld as persistResetProjectWorld } from './data/graphcoreRepository'
+import { EntityIcon, type EntityIconId } from './shared/entityIcons'
+import {
+  loadDraftDelta,
+  resetProjectWorld as persistResetProjectWorld,
+  saveCachedProjectSnapshot,
+} from './data/graphcoreRepository'
 import { supabase } from './utils/supabase'
 
 const WorldGraphPage = lazy(() =>
@@ -134,6 +139,15 @@ const GlobalWorkspace = lazy(() =>
 const LandingPage = lazy(() =>
   import('./features/landing/LandingPage').then((module) => ({ default: module.LandingPage })),
 )
+
+const librarySections: Array<{ id: LibrarySection; label: string; icon: EntityIconId }> = [
+  { id: 'characters', label: 'Characters', icon: 'character' },
+  { id: 'items', label: 'Items', icon: 'item' },
+  { id: 'environments', label: 'Places', icon: 'environment' },
+  { id: 'groups', label: 'Groups', icon: 'group' },
+  { id: 'concepts', label: 'Lore', icon: 'concept' },
+  { id: 'assets', label: 'Assets', icon: 'asset' },
+]
 
 function uniqueKey(existingKeys: string[], seed: string) {
   const base = seed
@@ -994,6 +1008,8 @@ export default function App() {
   const [bundle, setBundle] = useState<GameSystemBundle | null>(null)
   const [patchPreview, setPatchPreview] = useState<(PromptPatchResponse & { id: string; prompt: string; status: string }) | null>(null)
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('graph')
+  const [worldViewMode, setWorldViewMode] = useState<WorldWorkspaceMode>('graph')
+  const [activeLibrarySection, setActiveLibrarySection] = useState<LibrarySection>('characters')
   const [selectedAssetKey, setSelectedAssetKey] = useState<string | null>(null)
   const [selectedArchetypeKey, setSelectedArchetypeKey] = useState<string | null>(null)
   const [selectedPatchIndex, setSelectedPatchIndex] = useState(0)
@@ -2036,7 +2052,7 @@ export default function App() {
   }, [activeCinematicRunIdSignature, loadedState?.source, snapshot?.draft.id])
 
   useEffect(() => {
-    if (activeTab !== 'cinematics') return
+    if (activeTab !== 'outputs') return
     if (selectedCinematicGraph || cinematicGraphs.length === 0) return
     setSelectedGraphKey(cinematicGraphs[cinematicGraphs.length - 1].key)
     setSelectedNodeKey(null)
@@ -2117,30 +2133,41 @@ export default function App() {
   const promptTarget =
     activeTab === 'graph'
       ? 'graph'
-      : activeTab === 'environments'
+      : activeTab === 'library' && activeLibrarySection === 'environments'
         ? 'environment'
         : 'content'
 
   function openDefinitionWorkspace(definitionKey: string, kind: DefinitionBase['kind']) {
     if (kind === 'character') {
-      setActiveTab('characters')
+      setActiveLibrarySection('characters')
     } else if (kind === 'environment') {
-      setActiveTab('environments')
+      setActiveLibrarySection('environments')
+    } else if (kind === 'group') {
+      setActiveLibrarySection('groups')
+    } else if (kind === 'concept') {
+      setActiveLibrarySection('concepts')
     } else {
-      setActiveTab('content')
+      setActiveLibrarySection('items')
     }
+    setActiveTab('library')
     setSelectedDefinitionKey(definitionKey)
   }
 
   function openCinematicWorkspace(graphKey: string) {
-    setActiveTab('cinematics')
+    setActiveTab('outputs')
     setSelectedGraphKey(graphKey)
   }
 
   function openWorldNodeFromRecord(worldEntityKey: string) {
     setActiveTab('graph')
+    setWorldViewMode('graph')
     setSelectedWorldNodeKey(worldEntityKey)
     setSelectedWorldEntityKey(worldEntityKey)
+  }
+
+  function handleSetWorldViewMode(mode: WorldWorkspaceMode) {
+    setWorldViewMode(mode)
+    setActiveTab('graph')
   }
 
   function applySnapshotUpdate(mutator: (current: ProjectSnapshot) => ProjectSnapshot) {
@@ -2629,17 +2656,20 @@ export default function App() {
   function createItem(archetypeKey: string | null = null) {
     const archetype = snapshot?.archetypes.find((candidate) => candidate.key === archetypeKey) ?? null
     createDefinitionOfKind(archetype?.appliesToKind ?? selectedDefinition?.kind ?? 'item', archetypeKey)
-    setActiveTab('content')
+    setActiveLibrarySection('items')
+    setActiveTab('library')
   }
 
   function createCharacter(archetypeKey: string | null = null) {
     createDefinitionOfKind('character', archetypeKey)
-    setActiveTab('characters')
+    setActiveLibrarySection('characters')
+    setActiveTab('library')
   }
 
   function createEnvironment(archetypeKey: string | null = null) {
     createDefinitionOfKind('environment', archetypeKey)
-    setActiveTab('environments')
+    setActiveLibrarySection('environments')
+    setActiveTab('library')
   }
 
   function buildLocalWorldLinkedDefinition(current: ProjectSnapshot, input: WorldEntityCreateInput) {
@@ -3681,6 +3711,12 @@ export default function App() {
     snapshotRef.current = nextSnapshot
     setSnapshot(nextSnapshot)
     setBundle(compileBundle(nextSnapshot))
+    try {
+      const delta = await loadDraftDelta(nextSnapshot.draft.id, null)
+      await saveCachedProjectSnapshot(nextSnapshot, delta.currentRevision)
+    } catch (cacheError) {
+      console.warn('[GraphCore] failed to refresh local snapshot cache after world prompt turn.', cacheError)
+    }
   }
 
   async function createWorldPromptSession(input: {
@@ -4029,7 +4065,8 @@ export default function App() {
     }
     applySnapshotUpdate((current) => ({ ...current, archetypes: [nextArchetype, ...current.archetypes] }))
     setSelectedArchetypeKey(nextArchetype.key)
-    setActiveTab('content')
+    setActiveLibrarySection('items')
+    setActiveTab('library')
   }
 
   function updateItemIdentity(key: string, changes: Partial<Pick<DefinitionBase, 'name' | 'key' | 'summary' | 'iconAssetKey' | 'archetypeKey'>>) {
@@ -4465,7 +4502,8 @@ export default function App() {
       setSelectedAssetKey(nextAssetKey)
     }
     if (options?.openAssetsTab ?? true) {
-      setActiveTab('assets')
+      setActiveLibrarySection('assets')
+      setActiveTab('library')
     }
     return nextAssetKey
   }
@@ -4506,7 +4544,8 @@ export default function App() {
     }
 
     setSelectedAssetKey(nextAssetKey)
-    setActiveTab('assets')
+    setActiveLibrarySection('assets')
+    setActiveTab('library')
   }
 
   function assignAssetToSelectedItem(assetKey: string | null) {
@@ -4831,7 +4870,7 @@ export default function App() {
     try {
       const plan = await workspaceService.planWorldBuild({
         prompt: promptText,
-        plannerModeHint: activeTab === 'cinematics' ? 'cinematic_build' : 'world_build',
+        plannerModeHint: activeTab === 'outputs' ? 'cinematic_build' : 'world_build',
         snapshot,
         model: promptModel,
       })
@@ -4870,7 +4909,7 @@ export default function App() {
           : null
 
       if (startedCinematicGraph && typeof startedCinematicGraph.key === 'string') {
-        setActiveTab('cinematics')
+        setActiveTab('outputs')
         setSelectedGraphKey(startedCinematicGraph.key)
       }
 
@@ -5529,10 +5568,12 @@ export default function App() {
           onResetProjectWorld={handleRequestResetProjectWorld}
           onSelectGame={handleSelectGame}
           onSetActiveTab={setActiveTab}
+          onSetWorldViewMode={handleSetWorldViewMode}
           onSignOut={handleSignOut}
           projectName={snapshot.project.name}
           sourceLabel={loadedState?.source === 'supabase' ? 'Live workspace' : 'Demo snapshot'}
           tabs={workspaceTabs}
+          worldViewMode={worldViewMode}
           workspaceName={snapshot.workspace.name}
         />
 
@@ -5568,6 +5609,7 @@ export default function App() {
                 worldPromptMessages={snapshot.worldPromptMessages}
                 worldPromptEvents={snapshot.worldPromptEvents}
                 worldPromptSuggestions={snapshot.worldPromptSuggestions}
+                worldViewMode={worldViewMode}
                 projectContext={snapshot.projectContext}
                 showProjectOnboarding={shouldShowWorldOnboarding}
                 projectOnboardingSaving={projectOnboardingSaving}
@@ -5579,6 +5621,7 @@ export default function App() {
                 onSelectWorldEdge={setSelectedWorldEdgeKey}
                 onSelectWorldEntity={setSelectedWorldEntityKey}
                 onSelectWorldView={setSelectedWorldViewKey}
+                onWorldViewModeChange={setWorldViewMode}
                 onCreateWorldEntity={createWorldEntity}
                 onUpdateWorldEntity={updateWorldEntity}
                 onDeleteWorldEntity={deleteWorldEntity}
@@ -5640,7 +5683,7 @@ export default function App() {
                 }}
               />
             ) : null}
-            {activeTab === 'cinematics' ? (
+            {activeTab === 'outputs' ? (
               <CinematicsWorkspace
                 assets={snapshot.assets}
                 canRunCinematics={loadedState?.source === 'supabase'}
@@ -5681,7 +5724,23 @@ export default function App() {
                 onUpdateNode={updateNode}
               />
             ) : null}
-            {activeTab === 'content' ? (
+            {activeTab === 'library' ? (
+              <div className="library-shell">
+                <aside className="library-rail" aria-label="Library sections">
+                  {librarySections.map((section) => (
+                    <button
+                      key={section.id}
+                      className={activeLibrarySection === section.id ? 'library-rail-button is-active' : 'library-rail-button'}
+                      onClick={() => setActiveLibrarySection(section.id)}
+                      type="button"
+                    >
+                      <EntityIcon id={section.icon} />
+                      <span>{section.label}</span>
+                    </button>
+                  ))}
+                </aside>
+                <div className="library-workspace">
+                  {(['items', 'groups', 'concepts'] as LibrarySection[]).includes(activeLibrarySection) ? (
               <ContentWorkspace
                 archetypes={snapshot.archetypes}
                 assets={snapshot.assets}
@@ -5730,7 +5789,7 @@ export default function App() {
                 promptText={readPromptText()}
               />
             ) : null}
-            {activeTab === 'characters' ? (
+                  {activeLibrarySection === 'characters' ? (
               <SpecializedDefinitionWorkspace
                 title="Characters"
                 subtitle="Create and refine cast entries here, with visual concept art, runtime profile, abilities, animation bindings, and logic-state data in one place."
@@ -5778,7 +5837,7 @@ export default function App() {
                 worldRelationships={snapshot.worldRelationships}
               />
             ) : null}
-            {activeTab === 'environments' ? (
+                  {activeLibrarySection === 'environments' ? (
               <SpecializedDefinitionWorkspace
                 title="Environments"
                 subtitle="Environment definitions stay directly accessible here, with world-model links, navigation, spawn rules, and placeholder render bindings."
@@ -5826,7 +5885,10 @@ export default function App() {
                 worldRelationships={snapshot.worldRelationships}
               />
             ) : null}
-            {activeTab === 'assets' ? <AssetsWorkspace assets={snapshot.assets} deletingAssetKey={deletingAssetKey} selectedAsset={selectedAsset} selectedItem={selectedDefinition} onAssignAssetToSelectedItem={assignAssetToSelectedItem} onCreateUrlAsset={createUrlAsset} onDeleteAsset={deleteAsset} onSelectAsset={setSelectedAssetKey} onUploadAsset={handleAssetUpload} onUpdateAsset={updateAssetIdentity} /> : null}
+                  {activeLibrarySection === 'assets' ? <AssetsWorkspace assets={snapshot.assets} deletingAssetKey={deletingAssetKey} selectedAsset={selectedAsset} selectedItem={selectedDefinition} onAssignAssetToSelectedItem={assignAssetToSelectedItem} onCreateUrlAsset={createUrlAsset} onDeleteAsset={deleteAsset} onSelectAsset={setSelectedAssetKey} onUploadAsset={handleAssetUpload} onUpdateAsset={updateAssetIdentity} /> : null}
+                </div>
+              </div>
+            ) : null}
             {activeTab === 'global' ? (
               <GlobalWorkspace
                 autoFocusReleasesNonce={globalWorkspaceAutoFocusReleasesNonce}

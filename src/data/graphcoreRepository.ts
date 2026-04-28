@@ -401,7 +401,7 @@ type SnapshotLoadOptions = {
 }
 
 export type DraftRevision = number
-export const GRAPHCORE_CACHE_SCHEMA_VERSION = 'world-cache-v1' as const
+export const GRAPHCORE_CACHE_SCHEMA_VERSION = 'world-cache-v2' as const
 export type GraphCoreCacheSchemaVersion = typeof GRAPHCORE_CACHE_SCHEMA_VERSION
 
 export type DraftDeltaResponse = {
@@ -2320,7 +2320,11 @@ export async function loadProjectSnapshot(
     if (cached) {
       try {
         const delta = await loadDraftDelta(draft.id, cached.lastRevision)
-        if (!delta.requiresSnapshot) {
+        const draftMetadataChanged = (delta.changedKeysByTable.project_drafts ?? []).length > 0
+        if (draftMetadataChanged) {
+          await clearProjectCache(project.id, draft.id)
+          console.info('[GraphCore] draft metadata changed; refreshing full snapshot instead of replaying compact world delta.')
+        } else if (!delta.requiresSnapshot) {
           const nextSnapshot = applyDraftDeltaToSnapshot(cached.snapshot, delta)
           if (nextSnapshot.project.id !== project.id || nextSnapshot.draft.id !== draft.id) {
             await clearProjectCache(project.id, draft.id)

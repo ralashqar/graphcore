@@ -81,7 +81,8 @@ import {
   labelForWorldOperator,
   labelForWorldResult,
 } from '../domain/worldGraphHelpers'
-import { EntityIcon } from '../shared/entityIcons'
+import { EntityIcon, type EntityIconId } from '../shared/entityIcons'
+import type { WorldWorkspaceMode } from '../shared/workspace'
 import {
   activePreviewForTurn,
   DEFAULT_WORLD_GRAPH_DISPLAY_FILTERS,
@@ -98,7 +99,6 @@ import {
   nodeShellStyle,
   resolveWorldEdgeReveal,
   worldNodeDataEqual,
-  type WorldGraphDisplayFilterKey,
   type WorldGraphDisplayFilters,
   type WorldGraphNodeRecord,
   type WorldGraphPresentationPreset,
@@ -135,6 +135,7 @@ type WorldGraphPageProps = {
   worldPromptMessages: WorldPromptMessage[]
   worldPromptEvents: WorldPromptEvent[]
   worldPromptSuggestions: WorldPromptSuggestionRecord[]
+  worldViewMode: WorldWorkspaceMode
   projectContext: ProjectContext | null
   showProjectOnboarding: boolean
   projectOnboardingSaving: boolean
@@ -146,6 +147,7 @@ type WorldGraphPageProps = {
   onSelectWorldEdge: (key: string | null) => void
   onSelectWorldEntity: (key: string | null) => void
   onSelectWorldView: (key: string | null) => void
+  onWorldViewModeChange: (mode: WorldWorkspaceMode) => void
   onCreateWorldEntity: (input: WorldEntityCreateInput) => Promise<void> | void
   onUpdateWorldEntity: (entityKey: string, changes: Partial<WorldEntityCreateInput>) => Promise<void> | void
   onDeleteWorldEntity: (entityKey: string) => Promise<void> | void
@@ -302,24 +304,11 @@ const WORLD_GRAPH_PRESENTATION_PRESETS: Array<{ value: WorldGraphPresentationPre
   { value: 'recent', label: 'Recent' },
   { value: 'wide', label: 'Wide' },
 ]
-const WORLD_GRAPH_DEPTH_OPTIONS: Array<{ value: WorldGraphDepthMode; label: string }> = [
-  { value: 'tight', label: 'Tight' },
-  { value: 'nearby', label: 'Nearby' },
-  { value: 'wide', label: 'Wide' },
-]
-const WORLD_GRAPH_DISPLAY_FILTER_OPTIONS: Array<{ key: WorldGraphDisplayFilterKey; label: string }> = [
-  { key: 'characters', label: 'Characters' },
-  { key: 'places', label: 'Places' },
-  { key: 'groups', label: 'Groups' },
-  { key: 'objects', label: 'Objects' },
-  { key: 'concepts', label: 'Concepts' },
-  { key: 'events', label: 'Events' },
-  { key: 'threads', label: 'Threads' },
-  { key: 'derived', label: 'Derived' },
-  { key: 'pinned', label: 'Pinned' },
-  { key: 'recent', label: 'Recent' },
-]
 const WORLD_GRAPH_NODE_ORIGIN: [number, number] = [0.5, 0.5]
+
+function isWorldWorkspaceMode(mode: WorldView['mode']): mode is WorldWorkspaceMode {
+  return mode === 'graph' || mode === 'wiki' || mode === 'timeline' || mode === 'board'
+}
 
 function readStoredWorldGraphPresentationPreset(): WorldGraphPresentationPreset {
   if (typeof window === 'undefined') return 'explore'
@@ -737,6 +726,31 @@ function promptSuggestionImpactLabel(suggestion: WorldPromptSuggestion) {
   return parts.join(' · ')
 }
 
+function iconForWikiSection(kind: WorldWikiSection['kind']): EntityIconId {
+  switch (kind) {
+    case 'overview':
+      return 'graph'
+    case 'cast':
+      return 'character'
+    case 'threads':
+      return 'thread'
+    case 'timeline':
+      return 'event'
+    case 'places':
+      return 'environment'
+    case 'factions':
+      return 'group'
+    case 'lore':
+      return 'concept'
+    case 'items':
+      return 'item'
+    case 'outputs':
+      return 'cinematic'
+    default:
+      return 'content'
+  }
+}
+
 export function WorldGraphPage({
   assets,
   definitions,
@@ -757,6 +771,7 @@ export function WorldGraphPage({
   worldPromptMessages,
   worldPromptEvents,
   worldPromptSuggestions,
+  worldViewMode,
   projectContext,
   showProjectOnboarding,
   projectOnboardingSaving,
@@ -768,6 +783,7 @@ export function WorldGraphPage({
   onSelectWorldEdge,
   onSelectWorldEntity,
   onSelectWorldView: _onSelectWorldView,
+  onWorldViewModeChange,
   onCreateWorldEntity,
   onUpdateWorldEntity,
   onDeleteWorldEntity,
@@ -819,13 +835,14 @@ export function WorldGraphPage({
   const hoverEdgeFadeTimeoutRef = useRef<number | null>(null)
   const entityOverviewPersistTimeoutRef = useRef<number | null>(null)
   const [legacyMode, setLegacyMode] = useState(false)
-  const [viewMode, setViewMode] = useState<WorldView['mode']>('graph')
+  const [viewMode, setViewMode] = useState<WorldView['mode']>(worldViewMode)
   const [presentationMode, setPresentationMode] = useState<WorldPresentationMode>('world')
   const isWikiMode = viewMode === 'wiki'
   const [search, setSearch] = useState('')
   const [growWorkbenchWidth, setGrowWorkbenchWidth] = useState(() => {
     if (typeof window === 'undefined') return GROW_WORKBENCH_WIDTH_DEFAULT
-    const raw = Number(window.localStorage.getItem(GROW_WORKBENCH_WIDTH_STORAGE_KEY) ?? '')
+    const stored = window.localStorage.getItem(GROW_WORKBENCH_WIDTH_STORAGE_KEY)
+    const raw = stored ? Number(stored) : Number.NaN
     return Number.isFinite(raw)
       ? Math.min(GROW_WORKBENCH_WIDTH_MAX, Math.max(GROW_WORKBENCH_WIDTH_MIN, raw))
       : GROW_WORKBENCH_WIDTH_DEFAULT
@@ -843,7 +860,7 @@ export function WorldGraphPage({
   const [presentationPreset, setPresentationPreset] = useState<WorldGraphPresentationPreset>(() => readStoredWorldGraphPresentationPreset())
   const [manualGraphDepthMode, setManualGraphDepthMode] = useState<WorldGraphDepthMode | null>(null)
   const [viewportZoom, setViewportZoom] = useState(1)
-  const [displayFilters, setDisplayFilters] = useState<WorldGraphDisplayFilters>(() => readStoredWorldGraphDisplayFilters())
+  const [displayFilters] = useState<WorldGraphDisplayFilters>(() => readStoredWorldGraphDisplayFilters())
   const [growthPlaybackTurnId, setGrowthPlaybackTurnId] = useState<string | null>(null)
   const [growthPlaybackPlaying, setGrowthPlaybackPlaying] = useState(false)
   const [draftPositions, setDraftPositions] = useState<Record<string, { x: number; y: number }>>({})
@@ -871,9 +888,11 @@ export function WorldGraphPage({
   const [selectedPromptSessionKey, setSelectedPromptSessionKey] = useState<string | null>(worldPromptSessions[0]?.key ?? null)
   const [selectedPromptThreadKey, setSelectedPromptThreadKey] = useState<string | null>(null)
   const [historyOpen, setHistoryOpen] = useState(false)
-  const [showPinnedNodes, setShowPinnedNodes] = useState(true)
+  const [showPinnedNodes] = useState(true)
   const [fallbackPinnedNodeKeys, setFallbackPinnedNodeKeys] = useState<string[]>([])
   const [worldPromptText, setWorldPromptText] = useState('')
+  const [worldPromptPanelMode, setWorldPromptPanelMode] = useState<'expanded' | 'compact'>('expanded')
+  const [wikiPromptExpanded, setWikiPromptExpanded] = useState(false)
   const [worldPromptError, setWorldPromptError] = useState<string | null>(null)
   const [isPromptSubmitting, setIsPromptSubmitting] = useState(false)
   const [isPromptCancelling, setIsPromptCancelling] = useState(false)
@@ -1190,11 +1209,25 @@ export function WorldGraphPage({
   }, [displayFilters])
 
   useEffect(() => {
-    setViewMode(selectedView.mode)
     setSearch(selectedView.search)
     setShowLabels(selectedView.showLabels)
     setShowDerivedLayer(selectedView.showDerivedLayer)
-  }, [selectedView.mode, selectedView.search, selectedView.showDerivedLayer, selectedView.showLabels])
+  }, [selectedView.search, selectedView.showDerivedLayer, selectedView.showLabels])
+
+  useEffect(() => {
+    if (viewMode !== worldViewMode) {
+      setPresentationMode('world')
+      setViewMode(worldViewMode)
+    }
+    if (selectedView.mode !== worldViewMode) {
+      void persistViewChanges({ mode: worldViewMode })
+    }
+  }, [selectedView.mode, viewMode, worldViewMode])
+
+  useEffect(() => {
+    if (!isWorldWorkspaceMode(viewMode)) return
+    onWorldViewModeChange(viewMode)
+  }, [onWorldViewModeChange, viewMode])
 
   useEffect(() => {
     if (presentationMode !== 'story') return
@@ -2773,10 +2806,6 @@ export function WorldGraphPage({
       setPresentationMode('story')
       return
     }
-    if (segmentId.startsWith('focus:')) {
-      clearTransientFocus()
-      return
-    }
     if (segmentId.startsWith('view:')) {
       if (transientFocus) {
         clearTransientFocus()
@@ -3127,6 +3156,18 @@ export function WorldGraphPage({
     }
   }
 
+  function handleCompactPromptKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== 'Enter' || event.shiftKey) return
+    event.preventDefault()
+    if (isPromptSubmitting || isPromptCancelling) {
+      if (activePromptTurn) {
+        void handleCancelPromptTurn(activePromptTurn.id)
+      }
+      return
+    }
+    void handleSubmitWorldPrompt()
+  }
+
   async function updateWorldEntityAndRefresh(entityKey: string, changes: Partial<WorldEntityCreateInput>, reason = 'manual_entity_update') {
     await onUpdateWorldEntity(entityKey, changes)
     await refreshSelectedPromptSuggestions(reason, { selectedRootEntityKey: entityKey })
@@ -3462,146 +3503,128 @@ export function WorldGraphPage({
     )
   }
 
+  const showPromptRail = !isWikiMode && worldPromptPanelMode === 'expanded'
+  const isPromptBusy = isPromptSubmitting || isPromptCancelling
+
   return (
     <div
-      className={`focus-layout graph-layout world-graph-layout${isWikiMode ? ' is-wiki-mode' : ''}`}
+      className={`focus-layout graph-layout world-graph-layout${isWikiMode ? ' is-wiki-mode' : ''}${showPromptRail ? '' : ' is-prompt-compact'}`}
       onClick={() => setContextMenu(null)}
       style={{
         '--world-grow-workbench-width': `${growWorkbenchWidth}px`,
         '--world-inspector-width': `${inspectorWidth}px`,
       } as CSSProperties}
     >
-      <aside className="focus-rail graph-rail world-graph-rail world-shell-creation-rail" onClick={(event) => event.stopPropagation()}>
-        <div className="world-shell-creation-body is-single-stream">
-          <WorldPromptChatPanel
-            activePromptPreview={activePromptPreview}
-            activePromptTurn={activePromptTurn}
-            busy={isPromptSubmitting || isPromptCancelling}
-            cancelBusy={isPromptCancelling}
-            promptText={worldPromptText}
-            promptError={worldPromptError}
-            projectContext={projectContext}
-            entityByKey={entityByKey}
-            selectedEntity={selectedEntity}
-            selectedSession={selectedPromptSession}
-            selectedSessionKey={selectedPromptSessionKey}
-            selectedThreadKey={selectedPromptThread?.key ?? null}
-            selectedView={selectedView}
-            sessionEvents={sessionEvents}
-            sessionMessages={sessionMessages}
-            sessionSuggestions={activeSessionSuggestions}
-            sessionTurns={sessionTurns}
-            sessionSuggestionCountBySessionId={activeSuggestionCountBySessionId}
-            turnLensByTurnId={turnLensByTurnId}
-            activeTurnLensId={activeTurnLens?.turnId ?? null}
-            worldPromptTurns={worldPromptTurns}
-            worldThreads={activeWorldThreads}
-            worldPromptSessions={worldPromptSessions}
-            onApplyPreview={(turnId) => void _onApplyWorldPromptPreview({ turnId })}
-            onApproveOp={(turnId, opId) => void _onApproveWorldPromptOp({ turnId, opId })}
-            onCancelTurn={handleCancelPromptTurn}
-            onChangePromptText={setWorldPromptText}
-            onDismissSuggestion={(suggestionId) => void onDismissWorldPromptSuggestion({ suggestionId })}
-            onRejectOp={(turnId, opId) => void _onRejectWorldPromptOp({ turnId, opId })}
-            onRunSuggestion={handleRunPromptSuggestion}
-            onContinueWithoutSuggestion={() => {
-              setWorldPromptError(null)
-              requestAnimationFrame(() => {
-                const activeElement = document.querySelector('.world-prompt-composer textarea') as HTMLTextAreaElement | null
-                activeElement?.focus()
-              })
-            }}
-            onOpenHistory={() => setHistoryOpen(true)}
-            onCloseHistory={() => setHistoryOpen(false)}
-            onSelectSession={setSelectedPromptSessionKey}
-            onStartNewSession={handleStartNewPromptSession}
-            onSubmit={handleSubmitWorldPrompt}
-            onOpenTurnLens={openTurnLens}
-            onCloseTurnLens={clearTurnLens}
-            historyOpen={historyOpen}
-            variant="grow"
-          />
-        </div>
-      </aside>
+      {showPromptRail ? (
+        <>
+          <aside className="focus-rail graph-rail world-graph-rail world-shell-creation-rail" onClick={(event) => event.stopPropagation()}>
+            <div className="world-shell-creation-body is-single-stream">
+              <WorldPromptChatPanel
+                activePromptPreview={activePromptPreview}
+                activePromptTurn={activePromptTurn}
+                busy={isPromptBusy}
+                cancelBusy={isPromptCancelling}
+                promptText={worldPromptText}
+                promptError={worldPromptError}
+                projectContext={projectContext}
+                entityByKey={entityByKey}
+                selectedEntity={selectedEntity}
+                selectedSession={selectedPromptSession}
+                selectedSessionKey={selectedPromptSessionKey}
+                selectedThreadKey={selectedPromptThread?.key ?? null}
+                selectedView={selectedView}
+                sessionEvents={sessionEvents}
+                sessionMessages={sessionMessages}
+                sessionSuggestions={activeSessionSuggestions}
+                sessionTurns={sessionTurns}
+                sessionSuggestionCountBySessionId={activeSuggestionCountBySessionId}
+                turnLensByTurnId={turnLensByTurnId}
+                activeTurnLensId={activeTurnLens?.turnId ?? null}
+                worldPromptTurns={worldPromptTurns}
+                worldThreads={activeWorldThreads}
+                worldPromptSessions={worldPromptSessions}
+                onApplyPreview={(turnId) => void _onApplyWorldPromptPreview({ turnId })}
+                onApproveOp={(turnId, opId) => void _onApproveWorldPromptOp({ turnId, opId })}
+                onCancelTurn={handleCancelPromptTurn}
+                onChangePromptText={setWorldPromptText}
+                onDismissSuggestion={(suggestionId) => void onDismissWorldPromptSuggestion({ suggestionId })}
+                onRejectOp={(turnId, opId) => void _onRejectWorldPromptOp({ turnId, opId })}
+                onRunSuggestion={handleRunPromptSuggestion}
+                onContinueWithoutSuggestion={() => {
+                  setWorldPromptError(null)
+                  requestAnimationFrame(() => {
+                    const activeElement = document.querySelector('.world-prompt-composer textarea') as HTMLTextAreaElement | null
+                    activeElement?.focus()
+                  })
+                }}
+                onOpenHistory={() => setHistoryOpen(true)}
+                onCloseHistory={() => setHistoryOpen(false)}
+                onSelectSession={setSelectedPromptSessionKey}
+                onStartNewSession={handleStartNewPromptSession}
+                onSubmit={handleSubmitWorldPrompt}
+                onOpenTurnLens={openTurnLens}
+                onCloseTurnLens={clearTurnLens}
+                historyOpen={historyOpen}
+                variant="grow"
+              />
+            </div>
+          </aside>
 
-      <div
-        aria-label="Resize creation rail"
-        className="world-grow-resizer"
-        onDoubleClick={() => setGrowWorkbenchWidth(GROW_WORKBENCH_WIDTH_DEFAULT)}
-        onMouseDown={handleGrowWorkbenchResizeStart}
-        role="separator"
-      />
+          <div
+            aria-label="Resize creation rail"
+            className="world-grow-resizer"
+            onDoubleClick={() => setGrowWorkbenchWidth(GROW_WORKBENCH_WIDTH_DEFAULT)}
+            onMouseDown={handleGrowWorkbenchResizeStart}
+            role="separator"
+          />
+        </>
+      ) : !isWikiMode ? (
+        <aside className="world-prompt-collapsed-rail" onClick={(event) => event.stopPropagation()}>
+          <button className="world-prompt-collapsed-button" onClick={() => setWorldPromptPanelMode('expanded')} type="button">
+            <EntityIcon id="content" />
+            <span>Prompt</span>
+          </button>
+        </aside>
+      ) : null}
 
       <section className="main-surface graph-surface world-graph-surface world-shell-stage">
+        {!isWikiMode ? (
         <div className="world-graph-toolbar world-shell-stage-toolbar">
           <div className="world-toolbar-heading">
             <h3>{isWikiMode ? wikiModel.title : selectedView.name || 'Living World'}</h3>
-            <div className="world-presentation-meta">
-              <div className="segmented-control world-presentation-mode-toggle">
-                {(['world', 'story'] as const).map((mode) => (
+            <div className="world-breadcrumbs" aria-label="World navigation scope">
+              {breadcrumbSegments.map((segment, index) => (
+                <span key={segment.id} className="world-breadcrumb-item">
+                  {index > 0 ? <span className="world-breadcrumb-separator">/</span> : null}
                   <button
-                    key={mode}
-                    className={!isWikiMode && presentationMode === mode ? 'segment-button is-active' : 'segment-button'}
-                    onClick={() => {
-                      setPresentationMode(mode)
-                      if (isWikiMode) {
-                        setViewMode(mode === 'story' ? 'timeline' : 'graph')
-                      }
-                    }}
+                    className={`world-breadcrumb world-breadcrumb-${segment.tone}`}
+                    onClick={() => handleBreadcrumbClick(segment.id)}
+                    title={segment.tone === 'turn' && activeTurnLens?.prompt ? activeTurnLens.prompt : undefined}
                     type="button"
                   >
-                    {mode === 'world' ? 'World' : 'Story'}
+                    {segment.label}
                   </button>
-                ))}
-                <button
-                  className={isWikiMode ? 'segment-button is-active' : 'segment-button'}
-                  onClick={() => {
-                    setPresentationMode('world')
-                    setViewMode('wiki')
-                  }}
-                  type="button"
-                >
-                  Wiki
-                </button>
-              </div>
-              {!isWikiMode ? (
-              <div className="world-breadcrumbs" aria-label="World navigation breadcrumbs">
-                {breadcrumbSegments.map((segment, index) => (
-                  <span key={segment.id} className="world-breadcrumb-item">
-                    {index > 0 ? <span className="world-breadcrumb-separator">/</span> : null}
+                  {segment.tone === 'turn' || segment.tone === 'focus' ? (
                     <button
-                      className={`world-breadcrumb world-breadcrumb-${segment.tone}`}
-                      onClick={() => handleBreadcrumbClick(segment.id)}
-                      title={segment.tone === 'turn' && activeTurnLens?.prompt ? activeTurnLens.prompt : undefined}
+                      aria-label={segment.tone === 'turn' ? 'Exit turn overlay' : 'Exit focus overlay'}
+                      className={`world-breadcrumb-clear world-breadcrumb-clear-${segment.tone}`}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        if (segment.tone === 'turn') {
+                          clearTurnLens()
+                        } else {
+                          clearTransientFocus()
+                        }
+                      }}
                       type="button"
                     >
-                      {segment.label}
+                      x
                     </button>
-                    {segment.tone === 'turn' || segment.tone === 'focus' ? (
-                      <button
-                        aria-label={segment.tone === 'turn' ? 'Exit turn overlay' : 'Exit focus overlay'}
-                        className={`world-breadcrumb-clear world-breadcrumb-clear-${segment.tone}`}
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          if (segment.tone === 'turn') {
-                            clearTurnLens()
-                          } else {
-                            clearTransientFocus()
-                          }
-                        }}
-                        title={segment.tone === 'turn' ? 'Exit turn overlay' : 'Exit focus overlay'}
-                        type="button"
-                      >
-                        x
-                      </button>
-                    ) : null}
-                  </span>
-                ))}
-              </div>
-              ) : null}
+                  ) : null}
+                </span>
+              ))}
             </div>
           </div>
-          {!isWikiMode ? (
           <div className="world-graph-toolbar-actions world-shell-toolbar-main">
             <label className="world-shell-search">
               <input
@@ -3610,132 +3633,23 @@ export function WorldGraphPage({
                 onChange={(event) => setSearch(event.target.value)}
               />
             </label>
+            <button className="ghost-button compact" onClick={() => setWorldPromptPanelMode((value) => (value === 'expanded' ? 'compact' : 'expanded'))} type="button">
+              {worldPromptPanelMode === 'expanded' ? 'Chat' : 'Prompt'}
+            </button>
             {selectedEntity ? (
               <button className="ghost-button compact" disabled={isExpansionPending} onClick={() => void handleGenerateExpansion()} type="button">
-                {isExpansionPending ? 'Generating...' : 'Generate From Selection'}
+                {isExpansionPending ? 'Generating...' : 'Generate'}
               </button>
             ) : null}
-            <button
-              className={showPinnedNodes ? 'ghost-button compact is-active' : 'ghost-button compact'}
-              onClick={() => setShowPinnedNodes((value) => !value)}
-              type="button"
-            >
-              {showPinnedNodes ? `Pins On (${pinnedEntities.length})` : `Show Pins (${pinnedEntities.length})`}
-            </button>
             <button className="ghost-button compact" onClick={() => flowRef.current?.fitView({ padding: 0.24, duration: 300, maxZoom: 0.92 })} type="button">Fit</button>
-            <details className="world-toolbar-more">
-              <summary className="ghost-button compact">View</summary>
-              <div className="world-toolbar-more-panel">
-                <div className="world-toolbar-mode-row">
-                  {(presentationMode === 'story'
-                    ? ['graph', 'timeline'] as const
-                    : ['graph', 'table', 'timeline', 'board'] as const).map((mode) => (
-                    <button
-                      key={mode}
-                      className={viewMode === mode ? 'ghost-button compact is-active' : 'ghost-button compact'}
-                      onClick={() => {
-                        setViewMode(mode)
-                        void persistViewChanges({ mode })
-                      }}
-                      type="button"
-                    >
-                      {mode}
-                    </button>
-                  ))}
-                </div>
-                <div className="world-toolbar-control-group">
-                  <span className="world-toolbar-control-label">Preset</span>
-                  <div className="segmented-control world-preset-toggle">
-                    {WORLD_GRAPH_PRESENTATION_PRESETS.map((option) => (
-                      <button
-                        key={option.value}
-                        className={presentationPreset === option.value ? 'segment-button is-active' : 'segment-button'}
-                        onClick={() => {
-                          setPresentationPreset(option.value)
-                          setManualGraphDepthMode(null)
-                          if (option.value === 'story') {
-                            setPresentationMode('story')
-                          }
-                          if (option.value === 'recent' && latestCompletedTurnLens) {
-                            setGrowthPlaybackTurnId(latestCompletedTurnLens.turnId)
-                            openTurnLens(latestCompletedTurnLens)
-                          }
-                        }}
-                        type="button"
-                      >
-                        {option.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <button
-                  className={showLabels ? 'ghost-button compact is-active' : 'ghost-button compact'}
-                  onClick={() => {
-                    const nextValue = !showLabels
-                    setShowLabels(nextValue)
-                    void persistViewChanges({ showLabels: nextValue })
-                  }}
-                  type="button"
-                >
-                  {showLabels ? 'Hide Labels' : 'Show Labels'}
-                </button>
-                  <div className="world-toolbar-control-group">
-                  <span className="world-toolbar-control-label">Depth</span>
-                  <div className="segmented-control world-depth-toggle">
-                    {WORLD_GRAPH_DEPTH_OPTIONS.map((option) => (
-                      <button
-                        key={option.value}
-                        className={graphDepthMode === option.value ? 'segment-button is-active' : 'segment-button'}
-                        onClick={() => setManualGraphDepthMode(option.value)}
-                        type="button"
-                      >
-                        {option.label}
-                      </button>
-                    ))}
-                  </div>
-                  {manualGraphDepthMode ? (
-                    <button className="ghost-button compact" onClick={() => setManualGraphDepthMode(null)} type="button">Reset Depth</button>
-                  ) : null}
-                </div>
-                <details className="world-display-drawer">
-                  <summary className="ghost-button compact">
-                    Display{graphFilterState.disabledCount > 0 ? ` (${graphFilterState.disabledCount} off)` : ''}
-                  </summary>
-                  <div className="world-display-filter-grid">
-                    {WORLD_GRAPH_DISPLAY_FILTER_OPTIONS.map((option) => (
-                      <button
-                        key={option.key}
-                        className={displayFilters[option.key] ? 'world-display-filter is-active' : 'world-display-filter'}
-                        onClick={() => setDisplayFilters((current) => ({
-                          ...current,
-                          [option.key]: !current[option.key],
-                        }))}
-                        type="button"
-                      >
-                        {option.label}
-                      </button>
-                    ))}
-                  </div>
-                  <div className="world-graph-legend" aria-label="Graph semantic groups">
-                    {(['actor', 'place', 'group', 'object', 'concept', 'event'] as const).map((nodeType) => (
-                      <span key={nodeType} className={`world-graph-legend-item is-${nodeType}`}>
-                        <span />
-                        {labelForWorldEntity(nodeType)}
-                      </span>
-                    ))}
-                  </div>
-                </details>
-                <button className="ghost-button compact" onClick={() => void handleAutoLayout()} type="button">Auto Layout</button>
-              </div>
-            </details>
           </div>
-          ) : null}
         </div>
+        ) : null}
 
         <div className="world-view-workspace">
           <div className="world-view-stage">
             {!isWikiMode && growthPlaybackModel.steps.length > 0 ? (
-              <div className="world-growth-playback" aria-label="World growth playback">
+              <div className={viewMode === 'graph' ? 'world-growth-playback is-graph-mode' : 'world-growth-playback'} aria-label="World growth playback">
                 <span className="world-growth-playback-kicker">Growth</span>
                 <button
                   className="world-context-strip-action"
@@ -3942,29 +3856,44 @@ export function WorldGraphPage({
                     <strong>{wikiModel.title}</strong>
                   </div>
                   <div className="world-wiki-index-list">
-                    {wikiModel.sections.map((section) => (
-                      <button
-                        key={section.kind}
-                        className={section.gap ? 'world-wiki-index-row is-gap' : 'world-wiki-index-row'}
-                        onClick={() => handleScrollToWikiSection(section.kind)}
-                        type="button"
-                      >
-                        <span>{section.title}</span>
-                        <em>{section.entityKeys.length + section.threadKeys.length + section.resultKeys.length}</em>
-                      </button>
-                    ))}
+                    {wikiModel.sections.map((section) => {
+                      const count = section.entityKeys.length + section.threadKeys.length + section.resultKeys.length
+                      return (
+                        <button
+                          key={section.kind}
+                          className={section.gap ? 'world-wiki-index-row is-gap' : 'world-wiki-index-row'}
+                          onClick={() => handleScrollToWikiSection(section.kind)}
+                          type="button"
+                        >
+                          <span className="world-wiki-index-icon"><EntityIcon id={iconForWikiSection(section.kind)} /></span>
+                          <span className="world-wiki-index-copy">
+                            <strong>{section.title}</strong>
+                            <small>{section.gap ? 'Needs content' : count > 0 ? `${count} source${count === 1 ? '' : 's'}` : 'Ready'}</small>
+                          </span>
+                          <em>{count}</em>
+                        </button>
+                      )
+                    })}
                   </div>
                   {wikiModel.gaps.length > 0 ? (
                     <div className="world-wiki-gap-list">
                       <span className="eyebrow">Gaps</span>
                       {wikiModel.gaps.slice(0, 5).map((gap) => (
                         <button key={gap.key} className="world-wiki-gap-button" disabled={isPromptSubmitting} onClick={() => void handleRunWikiGap(gap)} type="button">
-                          {gap.label}
+                          <EntityIcon id="plus" />
+                          <span>{gap.label}</span>
                         </button>
                       ))}
                     </div>
                   ) : null}
                 </aside>
+                <div
+                  aria-label="Resize wiki navigation"
+                  className="world-grow-resizer world-wiki-resizer"
+                  onDoubleClick={() => setGrowWorkbenchWidth(GROW_WORKBENCH_WIDTH_DEFAULT)}
+                  onMouseDown={handleGrowWorkbenchResizeStart}
+                  role="separator"
+                />
                 <div className="world-wiki-document">
                   <section id="world-wiki-section-overview" className="world-wiki-overview">
                     <div className="world-wiki-overview-media">
@@ -4068,6 +3997,88 @@ export function WorldGraphPage({
             )}
           </div>
         </div>
+
+        {isWikiMode ? (
+          <div className={wikiPromptExpanded ? 'world-wiki-prompt-dock is-expanded' : 'world-wiki-prompt-dock'} onClick={(event) => event.stopPropagation()}>
+            {wikiPromptExpanded ? (
+              <div className="world-wiki-prompt-panel">
+                <WorldPromptChatPanel
+                  activePromptPreview={activePromptPreview}
+                  activePromptTurn={activePromptTurn}
+                  busy={isPromptBusy}
+                  cancelBusy={isPromptCancelling}
+                  promptText={worldPromptText}
+                  promptError={worldPromptError}
+                  projectContext={projectContext}
+                  entityByKey={entityByKey}
+                  selectedEntity={selectedEntity}
+                  selectedSession={selectedPromptSession}
+                  selectedSessionKey={selectedPromptSessionKey}
+                  selectedThreadKey={selectedPromptThread?.key ?? null}
+                  selectedView={selectedView}
+                  sessionEvents={sessionEvents}
+                  sessionMessages={sessionMessages}
+                  sessionSuggestions={activeSessionSuggestions}
+                  sessionTurns={sessionTurns}
+                  sessionSuggestionCountBySessionId={activeSuggestionCountBySessionId}
+                  turnLensByTurnId={turnLensByTurnId}
+                  activeTurnLensId={activeTurnLens?.turnId ?? null}
+                  worldPromptTurns={worldPromptTurns}
+                  worldThreads={activeWorldThreads}
+                  worldPromptSessions={worldPromptSessions}
+                  onApplyPreview={(turnId) => void _onApplyWorldPromptPreview({ turnId })}
+                  onApproveOp={(turnId, opId) => void _onApproveWorldPromptOp({ turnId, opId })}
+                  onCancelTurn={handleCancelPromptTurn}
+                  onChangePromptText={setWorldPromptText}
+                  onDismissSuggestion={(suggestionId) => void onDismissWorldPromptSuggestion({ suggestionId })}
+                  onRejectOp={(turnId, opId) => void _onRejectWorldPromptOp({ turnId, opId })}
+                  onRunSuggestion={handleRunPromptSuggestion}
+                  onContinueWithoutSuggestion={() => setWorldPromptError(null)}
+                  onOpenHistory={() => setHistoryOpen(true)}
+                  onCloseHistory={() => setHistoryOpen(false)}
+                  onSelectSession={setSelectedPromptSessionKey}
+                  onStartNewSession={handleStartNewPromptSession}
+                  onSubmit={handleSubmitWorldPrompt}
+                  onOpenTurnLens={openTurnLens}
+                  onCloseTurnLens={clearTurnLens}
+                  historyOpen={historyOpen}
+                  variant="grow"
+                />
+                <button className="world-wiki-prompt-close" onClick={() => setWikiPromptExpanded(false)} type="button" aria-label="Collapse prompt">x</button>
+              </div>
+            ) : (
+              <div className="world-wiki-prompt-compact">
+                <button className="world-wiki-prompt-expand" onClick={() => setWikiPromptExpanded(true)} type="button" aria-label="Expand prompt">
+                  <EntityIcon id="content" />
+                </button>
+                <textarea
+                  aria-label="Prompt this world"
+                  disabled={isPromptBusy}
+                  onChange={(event) => setWorldPromptText(event.target.value)}
+                  onKeyDown={handleCompactPromptKeyDown}
+                  placeholder="Ask or add to this world..."
+                  rows={1}
+                  value={worldPromptText}
+                />
+                <button
+                  className={isPromptBusy ? 'world-prompt-send-button is-stop' : 'world-prompt-send-button'}
+                  disabled={isPromptBusy ? !activePromptTurn || isPromptCancelling : !worldPromptText.trim()}
+                  onClick={() => {
+                    if (isPromptBusy) {
+                      if (activePromptTurn) void handleCancelPromptTurn(activePromptTurn.id)
+                      return
+                    }
+                    void handleSubmitWorldPrompt()
+                  }}
+                  type="button"
+                  aria-label={isPromptBusy ? 'Stop world prompt turn' : 'Send world prompt'}
+                >
+                  <EntityIcon id={isPromptBusy ? 'stop' : 'send'} />
+                </button>
+              </div>
+            )}
+          </div>
+        ) : null}
 
         {wikiDetailModal ? (
           <div className="world-wiki-modal-backdrop" onClick={() => setWikiDetailModal(null)} role="presentation">

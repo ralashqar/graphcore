@@ -25,6 +25,7 @@ export type EntityIconId =
   | 'check'
   | 'send'
   | 'stop'
+  | 'menu'
   | 'plus'
 
 type EntityIconProps = {
@@ -214,6 +215,12 @@ function IconPath({ id }: { id: EntityIconId }) {
       return (
         <>
           <rect x="7.2" y="7.2" width="9.6" height="9.6" rx="1.6" style={{ fill: 'currentColor' }} />
+        </>
+      )
+    case 'menu':
+      return (
+        <>
+          <path d="M6.2 8.2h11.6M6.2 12h11.6M6.2 15.8h11.6" {...stroke} />
         </>
       )
     case 'plus':
