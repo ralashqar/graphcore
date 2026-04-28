@@ -379,39 +379,6 @@ export function SpecializedDefinitionWorkspace({
     ? `Focused on ${effectiveSelection.name}`
     : projectSummary || `No ${title.toLowerCase()} selected`
 
-  const promptSecondary = (
-    <div className="world-shell-panel definition-authoring-side-panel">
-      <div className="definition-authoring-side-head">
-        <div>
-          <span className="section-label">Templates</span>
-          <strong>{compatibleArchetypes.length} compatible</strong>
-        </div>
-        <button className="ghost-button compact" onClick={() => onCreateDefinition()} type="button">
-          New {title.slice(0, -1)}
-        </button>
-      </div>
-      <div className="definition-authoring-mini-list">
-        {compatibleArchetypes.slice(0, 5).map((archetype) => (
-          <button
-            key={archetype.key}
-            className="definition-authoring-mini-item"
-            onClick={() => {
-              if (effectiveSelection) {
-                onUpdateItemIdentity(effectiveSelection.key, { archetypeKey: archetype.key })
-                return
-              }
-              onCreateDefinition(archetype.key)
-            }}
-            type="button"
-          >
-            <span>{archetype.name}</span>
-            <small>{archetype.summary || archetype.key}</small>
-          </button>
-        ))}
-      </div>
-    </div>
-  )
-
   const stageHeader = (
     <div className="definition-authoring-stage-head">
       <div className="definition-authoring-stage-copy">
@@ -864,7 +831,6 @@ export function SpecializedDefinitionWorkspace({
         promptSuggestions={promptSuggestionsByKind[kind] ?? []}
         promptFocusLabel={effectiveSelection?.name ?? null}
         promptFocusMeta={effectiveSelection ? `${labelForDefinitionKind(effectiveSelection.kind)} • ${selectedFieldCount} fields` : null}
-        promptSecondary={promptSecondary}
         isPromptBusy={isGeneratingPrompt}
         onPromptChange={onChangePromptText}
         onPromptSubmit={onGeneratePrompt}

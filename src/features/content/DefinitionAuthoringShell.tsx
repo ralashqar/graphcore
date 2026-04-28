@@ -34,11 +34,15 @@ export function DefinitionAuthoringShell({
   focusPane,
   focusMeta = null,
 }: DefinitionAuthoringShellProps) {
+  const hasRail = Boolean(promptSecondary)
+
   return (
-    <div className="definition-authoring-shell">
-      <aside className="definition-authoring-rail">
-        {promptSecondary}
-      </aside>
+    <div className={hasRail ? 'definition-authoring-shell' : 'definition-authoring-shell is-rail-empty'}>
+      {hasRail ? (
+        <aside className="definition-authoring-rail">
+          {promptSecondary}
+        </aside>
+      ) : null}
 
       <section className="definition-authoring-stage">
         {stageHeader}

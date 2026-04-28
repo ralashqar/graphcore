@@ -149,6 +149,7 @@ code {
 }
 
 .workspace-frame {
+  position: relative;
   height: calc(100vh - 24px);
   min-height: calc(100vh - 24px);
   max-height: calc(100vh - 24px);
@@ -156,6 +157,18 @@ code {
   grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 6px;
   overflow: hidden;
+}
+
+.workspace-frame.is-library-workspace {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.workspace-frame.is-library-workspace > .prompt-dock-library-compact {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  z-index: 45;
+  transform: translateX(-50%);
 }
 
 .topbar,
@@ -1756,6 +1769,10 @@ code {
   align-items: stretch;
 }
 
+.definition-authoring-shell.is-rail-empty {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .definition-authoring-rail {
   display: grid;
   align-content: start;
@@ -1774,6 +1791,8 @@ code {
 
 .definition-authoring-stage {
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  align-content: start;
   gap: 14px;
   padding: 18px;
   border-radius: 32px;
@@ -1957,8 +1976,20 @@ code {
   display: grid;
   gap: 16px;
   align-content: start;
+  align-items: start;
   overflow: auto;
   padding-right: 6px;
+}
+
+.definition-authoring-focus-pane > .empty-surface {
+  place-content: start;
+  justify-items: start;
+  min-height: 0;
+  text-align: left;
+}
+
+.definition-authoring-focus-pane > .empty-surface .empty-surface-icon {
+  margin: 0 0 4px;
 }
 
 .definition-collection-card-copy {
@@ -3569,6 +3600,29 @@ button.world-prompt-row-result {
 
 .world-prompt-composer-pinned textarea {
   min-height: 96px;
+}
+
+.world-prompt-composer-thinking {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 66px;
+  padding: 10px 12px;
+  border-radius: 18px;
+  border: 1px solid rgba(94, 234, 212, 0.16);
+  background: linear-gradient(180deg, rgba(16, 24, 37, 0.9), rgba(10, 16, 24, 0.94));
+}
+
+.world-prompt-composer-thinking .world-prompt-planning-spinner {
+  width: 26px;
+  height: 26px;
+}
+
+.world-prompt-composer-stop-button.world-prompt-send-button {
+  position: static;
+  right: auto;
+  bottom: auto;
 }
 
 .world-prompt-composer-suggestions {
@@ -5868,17 +5922,23 @@ button.world-prompt-row-result {
 
 .world-wiki-prompt-dock {
   position: absolute;
-  left: 24px;
+  left: 50%;
   right: auto;
   bottom: 24px;
   z-index: 32;
-  width: min(560px, calc(100% - 48px));
+  width: min(720px, calc(100% - 48px));
+  transform: translateX(-50%);
 }
 
-.world-wiki-prompt-compact {
+.world-wiki-prompt-dock.is-expanded {
+  width: min(720px, calc(100% - 48px));
+}
+
+.world-wiki-prompt-compact,
+.compact-prompt-composer {
   display: grid;
   grid-template-columns: 36px minmax(0, 1fr) 38px;
-  align-items: end;
+  align-items: center;
   gap: 8px;
   padding: 8px;
   border-radius: 18px;
@@ -5890,7 +5950,12 @@ button.world-prompt-row-result {
   box-shadow: 0 18px 54px rgba(0, 0, 0, 0.32);
 }
 
-.world-wiki-prompt-compact textarea {
+.compact-prompt-composer.is-busy {
+  border-color: rgba(94, 234, 212, 0.18);
+}
+
+.world-wiki-prompt-compact textarea,
+.compact-prompt-composer textarea {
   min-height: 38px;
   max-height: 110px;
   padding: 10px 8px;
@@ -5901,11 +5966,13 @@ button.world-prompt-row-result {
   outline: none;
 }
 
-.world-wiki-prompt-compact textarea::placeholder {
+.world-wiki-prompt-compact textarea::placeholder,
+.compact-prompt-composer textarea::placeholder {
   color: rgba(148, 163, 184, 0.74);
 }
 
-.world-wiki-prompt-expand {
+.world-wiki-prompt-expand,
+.compact-prompt-expand {
   width: 36px;
   height: 36px;
   display: grid;
@@ -5917,27 +5984,81 @@ button.world-prompt-row-result {
   cursor: pointer;
 }
 
-.world-wiki-prompt-expand:hover {
+.world-wiki-prompt-expand:hover,
+.compact-prompt-expand:hover:not(:disabled) {
   background: rgba(94, 234, 212, 0.12);
   color: rgba(153, 246, 228, 0.96);
 }
 
-.world-wiki-prompt-compact .world-prompt-send-button {
-  position: static;
-  border-color: rgba(94, 234, 212, 0.32);
-  background: rgba(20, 184, 166, 0.92);
-  box-shadow: 0 10px 24px rgba(20, 184, 166, 0.22);
+.compact-prompt-expand:disabled {
+  cursor: default;
+  opacity: 1;
 }
 
-.world-wiki-prompt-compact .world-prompt-send-button:hover:not(:disabled) {
+.compact-prompt-thinking {
+  min-width: 0;
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 8px;
+  color: rgba(203, 213, 225, 0.9);
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.compact-prompt-thinking span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.world-wiki-prompt-compact .world-prompt-send-button,
+.compact-prompt-send-button {
+  position: static;
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border-color: rgba(94, 234, 212, 0.32);
+  border-radius: 999px;
+  background: rgba(20, 184, 166, 0.92);
+  color: #ffffff;
+  cursor: pointer;
+  box-shadow: 0 10px 24px rgba(20, 184, 166, 0.22);
+  transition: transform 140ms ease, border-color 140ms ease, background 140ms ease, opacity 140ms ease;
+}
+
+.world-wiki-prompt-compact .world-prompt-send-button:hover:not(:disabled),
+.compact-prompt-send-button:hover:not(:disabled) {
+  transform: translateY(-1px);
   border-color: rgba(153, 246, 228, 0.72);
   background: rgba(45, 212, 191, 0.96);
 }
 
-.world-wiki-prompt-compact .world-prompt-send-button.is-stop {
+.compact-prompt-send-button:disabled {
+  cursor: default;
+  opacity: 0.52;
+  box-shadow: none;
+}
+
+.world-wiki-prompt-compact .world-prompt-send-button.is-stop,
+.compact-prompt-send-button.is-stop {
   border-color: rgba(248, 113, 113, 0.4);
   background: rgba(220, 38, 38, 0.9);
   box-shadow: 0 10px 24px rgba(220, 38, 38, 0.24);
+}
+
+.compact-prompt-send-button.is-stop:hover:not(:disabled) {
+  border-color: rgba(252, 165, 165, 0.72);
+  background: rgba(239, 68, 68, 0.96);
+}
+
+.compact-prompt-send-button svg,
+.compact-prompt-send-button .entity-icon-image {
+  width: 17px;
+  height: 17px;
 }
 
 .world-wiki-prompt-panel {
@@ -5967,20 +6088,6 @@ button.world-prompt-row-result {
 .world-wiki-prompt-panel .world-prompt-composer-pinned,
 .world-wiki-prompt-panel .world-prompt-planning-state {
   background-color: rgba(2, 6, 23, 0.34);
-}
-
-.world-wiki-prompt-close {
-  position: absolute;
-  top: 18px;
-  right: 18px;
-  z-index: 2;
-  width: 30px;
-  height: 30px;
-  border-radius: 999px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  background: rgba(15, 23, 42, 0.92);
-  color: rgba(248, 250, 252, 0.92);
-  cursor: pointer;
 }
 
 @media (max-width: 1180px) {
@@ -7111,27 +7218,8 @@ button.world-prompt-row-result {
   backdrop-filter: none;
 }
 
-.prompt-dock-library-composer {
-  grid-template-columns: 36px minmax(0, 1fr) 38px;
-}
-
-.prompt-dock-library-composer .world-wiki-prompt-expand:disabled {
-  cursor: default;
-  opacity: 1;
-}
-
-.prompt-dock-library-composer .prompt-dock-send-button {
-  width: 38px;
-  height: 38px;
-  border-color: rgba(94, 234, 212, 0.32);
-  border-radius: 999px;
-  background: rgba(20, 184, 166, 0.92);
-  box-shadow: 0 10px 24px rgba(20, 184, 166, 0.22);
-}
-
-.prompt-dock-library-composer .prompt-dock-send-button:hover:not(:disabled) {
-  border-color: rgba(153, 246, 228, 0.72);
-  background: rgba(45, 212, 191, 0.96);
+.prompt-dock-library-compact .compact-prompt-composer {
+  width: 100%;
 }
 
 .prompt-dock-context-copy {
@@ -9545,9 +9633,10 @@ button:disabled {
   }
 
   .world-wiki-prompt-dock {
-    left: 12px;
+    left: 50%;
     bottom: 12px;
     width: calc(100% - 24px);
+    transform: translateX(-50%);
   }
 
   .world-onboarding-panel,

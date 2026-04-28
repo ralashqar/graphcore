@@ -18,7 +18,7 @@ import {
   type NodeProps,
   type ReactFlowInstance,
 } from '@xyflow/react'
-import { Suspense, lazy, memo, useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react'
+import { Suspense, lazy, memo, useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 
 import { resolveAssetSourceUrl } from '../domain/assets'
 import type { AssetDefinition, DefinitionBase, GraphDefinition } from '../domain/graphcore'
@@ -110,6 +110,7 @@ import {
 } from './world/worldPresentation'
 import type { GraphWorkspaceProps } from './graph/types'
 import { ProjectWorldOnboarding } from './onboarding/ProjectWorldOnboarding'
+import { CompactPromptComposer } from './prompts/CompactPromptComposer'
 
 const LegacyGraphWorkspace = lazy(() =>
   import('./graphWorkspace').then((module) => ({ default: module.GraphWorkspace })),
@@ -3156,18 +3157,6 @@ export function WorldGraphPage({
     }
   }
 
-  function handleCompactPromptKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
-    if (event.key !== 'Enter' || event.shiftKey) return
-    event.preventDefault()
-    if (isPromptSubmitting || isPromptCancelling) {
-      if (activePromptTurn) {
-        void handleCancelPromptTurn(activePromptTurn.id)
-      }
-      return
-    }
-    void handleSubmitWorldPrompt()
-  }
-
   async function updateWorldEntityAndRefresh(entityKey: string, changes: Partial<WorldEntityCreateInput>, reason = 'manual_entity_update') {
     await onUpdateWorldEntity(entityKey, changes)
     await refreshSelectedPromptSuggestions(reason, { selectedRootEntityKey: entityKey })
@@ -4043,39 +4032,30 @@ export function WorldGraphPage({
                   onCloseTurnLens={clearTurnLens}
                   historyOpen={historyOpen}
                   variant="grow"
+                  headerActionEnd={(
+                    <button className="world-prompt-icon-button is-close" onClick={() => setWikiPromptExpanded(false)} type="button" aria-label="Collapse prompt">
+                      <EntityIcon id="plus" />
+                    </button>
+                  )}
                 />
-                <button className="world-wiki-prompt-close" onClick={() => setWikiPromptExpanded(false)} type="button" aria-label="Collapse prompt">x</button>
               </div>
             ) : (
-              <div className="world-wiki-prompt-compact">
-                <button className="world-wiki-prompt-expand" onClick={() => setWikiPromptExpanded(true)} type="button" aria-label="Expand prompt">
-                  <EntityIcon id="content" />
-                </button>
-                <textarea
-                  aria-label="Prompt this world"
-                  disabled={isPromptBusy}
-                  onChange={(event) => setWorldPromptText(event.target.value)}
-                  onKeyDown={handleCompactPromptKeyDown}
-                  placeholder="Ask or add to this world..."
-                  rows={1}
-                  value={worldPromptText}
-                />
-                <button
-                  className={isPromptBusy ? 'world-prompt-send-button is-stop' : 'world-prompt-send-button'}
-                  disabled={isPromptBusy ? !activePromptTurn || isPromptCancelling : !worldPromptText.trim()}
-                  onClick={() => {
-                    if (isPromptBusy) {
-                      if (activePromptTurn) void handleCancelPromptTurn(activePromptTurn.id)
-                      return
-                    }
-                    void handleSubmitWorldPrompt()
-                  }}
-                  type="button"
-                  aria-label={isPromptBusy ? 'Stop world prompt turn' : 'Send world prompt'}
-                >
-                  <EntityIcon id={isPromptBusy ? 'stop' : 'send'} />
-                </button>
-              </div>
+              <CompactPromptComposer
+                ariaLabel="Prompt this world"
+                busy={isPromptBusy}
+                busyLabel={busyMessage ?? (isPromptCancelling ? 'Cancelling world prompt turn...' : 'Thinking through world changes...')}
+                cancelBusy={isPromptCancelling}
+                disabled={isPromptBusy}
+                expandIcon="content"
+                expandLabel="Expand prompt"
+                placeholder="Ask or add to this world..."
+                submitDisabled={!worldPromptText.trim()}
+                value={worldPromptText}
+                onCancel={activePromptTurn ? () => void handleCancelPromptTurn(activePromptTurn.id) : undefined}
+                onChange={setWorldPromptText}
+                onExpand={() => setWikiPromptExpanded(true)}
+                onSubmit={() => void handleSubmitWorldPrompt()}
+              />
             )}
           </div>
         ) : null}
@@ -5699,6 +5679,7 @@ function WorldPromptChatPanel({
   onCloseHistory,
   historyOpen,
   variant,
+  headerActionEnd = null,
 }: {
   activePromptPreview: ReturnType<typeof activePreviewForTurn>
   activePromptTurn: WorldPromptTurn | null
@@ -5740,6 +5721,7 @@ function WorldPromptChatPanel({
   onCloseHistory: () => void
   historyOpen: boolean
   variant: 'drawer' | 'grow'
+  headerActionEnd?: ReactNode
 }) {
   const hiddenTranscriptKinds = new Set<WorldPromptTranscriptEntry['kind']>([
     'suggestion_set',
@@ -5845,7 +5827,7 @@ function WorldPromptChatPanel({
   const hasClarificationSuggestions = sessionSuggestions.some((suggestion) => suggestion.metadata?.uiKind === 'clarification')
   const hasDiagnosticSuggestions = sessionSuggestions.some((suggestion) => suggestion.metadata?.uiKind === 'diagnostic')
   const hasAdvisorySuggestions = sessionSuggestions.some((suggestion) => suggestion.metadata?.uiKind === 'advisory')
-  const showComposerSuggestions = sessionSuggestions.length > 0 && suppressedSuggestionSignature !== suggestionSignature
+  const showComposerSuggestions = !busy && sessionSuggestions.length > 0 && suppressedSuggestionSignature !== suggestionSignature
   const sessionTitle = selectedSession?.title ?? (selectedSessionKey ? 'New chat' : 'Chat')
   const sessionSubline = selectedSession && sessionTurns.length > 0
     ? `${sessionTurns.length} turn${sessionTurns.length === 1 ? '' : 's'}`
@@ -6098,6 +6080,7 @@ function WorldPromptChatPanel({
           <button className="world-prompt-icon-button" onClick={onStartNewSession} type="button" aria-label="Start new chat">
             <EntityIcon id="plus" />
           </button>
+          {headerActionEnd}
         </div>
       </div>
 
@@ -6240,26 +6223,46 @@ function WorldPromptChatPanel({
                 </div>
               </div>
             ) : null}
-            <div className="world-prompt-input-shell">
-              <textarea
-                ref={composerRef}
-                rows={variant === 'grow' ? 3 : 2}
-                placeholder="Describe the next character, relationship, place, or turn in the story."
-                value={promptText}
-                onChange={(event) => onChangePromptText(event.target.value)}
-                onKeyDown={handleComposerKeyDown}
-              />
-              <button
-                aria-label={composerActionLabel}
-                className={`world-prompt-send-button${busy ? ' is-stop' : ''}`}
-                disabled={composerActionDisabled}
-                onClick={() => void handleComposerAction()}
-                title={composerActionLabel}
-                type="button"
-              >
-                <EntityIcon id={busy ? 'stop' : 'send'} />
-              </button>
-            </div>
+            {busy ? (
+              <div className="world-prompt-composer-thinking" aria-live="polite">
+                <div className="world-prompt-planning-spinner" aria-hidden="true" />
+                <div className="world-prompt-planning-copy">
+                  <span className="world-prompt-row-label">{liveBusyStatusLabel}</span>
+                  <div className="world-prompt-line">{liveBusyDetail}</div>
+                </div>
+                <button
+                  aria-label={composerActionLabel}
+                  className="world-prompt-send-button world-prompt-composer-stop-button is-stop"
+                  disabled={composerActionDisabled}
+                  onClick={() => void handleComposerAction()}
+                  title={composerActionLabel}
+                  type="button"
+                >
+                  <EntityIcon id="stop" />
+                </button>
+              </div>
+            ) : (
+              <div className="world-prompt-input-shell">
+                <textarea
+                  ref={composerRef}
+                  rows={variant === 'grow' ? 3 : 2}
+                  placeholder="Describe the next character, relationship, place, or turn in the story."
+                  value={promptText}
+                  onChange={(event) => onChangePromptText(event.target.value)}
+                  onKeyDown={handleComposerKeyDown}
+                />
+                <button
+                  aria-label={composerActionLabel}
+                  className="world-prompt-send-button"
+                  disabled={composerActionDisabled}
+                  onClick={() => void handleComposerAction()}
+                  title={composerActionLabel}
+                  type="button"
+                >
+                  <EntityIcon id="send" />
+                </button>
+              </div>
+            )}
           </div>
         </>
       )}

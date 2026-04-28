@@ -5553,7 +5553,7 @@ export default function App() {
 
   return (
     <main className="app-shell">
-      <div className="workspace-frame">
+      <div className={activeTab === 'library' ? 'workspace-frame is-library-workspace' : 'workspace-frame'}>
         <WorkspaceTopbar
           activeTab={activeTab}
           activeGameId={snapshot.project.id}

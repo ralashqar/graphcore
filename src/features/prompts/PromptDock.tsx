@@ -2,6 +2,7 @@ import type { KeyboardEvent } from 'react'
 import type { WorkspaceTab } from '../../shared/workspace'
 import { EntityIcon } from '../../shared/entityIcons'
 import { useEditorStore } from '../../state/editorStore'
+import { CompactPromptComposer } from './CompactPromptComposer'
 
 type PromptDockProps = {
   activeTab: WorkspaceTab
@@ -60,7 +61,7 @@ export function PromptDock({
     }
     onGenerate()
   }
-  const handleKeyDown = (event: KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+  const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key !== 'Enter' || event.shiftKey) return
     event.preventDefault()
     handleSubmit()
@@ -69,36 +70,20 @@ export function PromptDock({
   if (activeTab === 'library') {
     return (
       <section className="prompt-dock prompt-dock-library-compact" aria-label="Library prompt">
-        <div className="world-wiki-prompt-compact prompt-dock-library-composer">
-          <button
-            className="world-wiki-prompt-expand"
-            onClick={needsInitialization ? onOpenOnboarding : undefined}
-            type="button"
-            aria-label={needsInitialization ? 'Initialize game' : 'Library prompt'}
-            disabled={!needsInitialization}
-          >
-            <EntityIcon id={needsInitialization ? 'plus' : 'content'} />
-          </button>
-          <textarea
-            aria-label="Prompt library"
-            disabled={isBusy}
-            onChange={(event) => onChangePromptText(event.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder={promptPlaceholder}
-            rows={1}
-            value={promptText}
-          />
-          <button
-            className={isBusy ? 'prompt-dock-send-button is-busy' : 'prompt-dock-send-button'}
-            disabled={buttonDisabled}
-            onClick={handleSubmit}
-            type="button"
-            aria-label={needsInitialization ? 'Initialize game' : 'Send library prompt'}
-            title={needsInitialization ? 'Initialize game' : 'Send prompt'}
-          >
-            {isBusy ? <span className="button-spinner" aria-hidden="true" /> : <EntityIcon id={needsInitialization ? 'plus' : 'send'} />}
-          </button>
-        </div>
+        <CompactPromptComposer
+          ariaLabel="Prompt library"
+          busy={isBusy}
+          busyLabel={isApplyingPatch ? 'Applying generated changes...' : 'Planning library changes...'}
+          disabled={isBusy}
+          expandIcon={needsInitialization ? 'plus' : 'content'}
+          expandLabel={needsInitialization ? 'Initialize game' : 'Library prompt'}
+          placeholder={promptPlaceholder}
+          submitDisabled={buttonDisabled}
+          value={promptText}
+          onChange={onChangePromptText}
+          onExpand={needsInitialization ? onOpenOnboarding : undefined}
+          onSubmit={handleSubmit}
+        />
         {!sessionEmail ? <div className="inline-note">Hosted AI, patch apply, and publishing require Supabase sign-in. You can still explore the demo workspace.</div> : null}
         {promptRuntimeError ? <div className="inline-note is-error">{promptRuntimeError}</div> : null}
         {needsInitialization ? <div className="inline-note">This active game is still empty. Initialize it first, then use normal prompts to expand it.</div> : null}

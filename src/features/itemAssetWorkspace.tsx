@@ -83,7 +83,7 @@ export function ContentWorkspace({
   onDeleteItem,
   onRemoveArchetypeField,
   onSelectAsset: _onSelectAsset,
-  onSelectArchetype,
+  onSelectArchetype: _onSelectArchetype,
   onSelectItem,
   onGenerateConceptImage,
   isGeneratingPrompt = false,
@@ -317,36 +317,6 @@ export function ContentWorkspace({
     if (!selectedContentItem) return
     await onPersistDefinitionPreviewImageBinding(selectedContentItem.key, assetKey)
   }
-
-  const promptSecondary = (
-    <div className="world-shell-panel definition-authoring-side-panel">
-      <div className="definition-authoring-side-head">
-        <div>
-          <span className="section-label">Templates</span>
-          <strong>{contentArchetypes.length} available</strong>
-        </div>
-        <button className="ghost-button compact" onClick={onCreateArchetype} type="button">
-          New template
-        </button>
-      </div>
-      <div className="definition-authoring-mini-list">
-        {contentArchetypes.slice(0, 6).map((archetype) => (
-          <button
-            key={archetype.key}
-            className={archetype.key === selectedContentArchetype?.key && activeSurface === 'template' ? 'definition-authoring-mini-item is-active' : 'definition-authoring-mini-item'}
-            onClick={() => {
-              setActiveSurface('template')
-              onSelectArchetype(archetype.key)
-            }}
-            type="button"
-          >
-            <span>{archetype.name}</span>
-            <small>{labelForDefinitionKind(archetype.appliesToKind)}</small>
-          </button>
-        ))}
-      </div>
-    </div>
-  )
 
   const stageHeader = (
     <div className="definition-authoring-stage-head">
@@ -818,7 +788,6 @@ export function ContentWorkspace({
         promptFocusMeta={activeSurface === 'template'
           ? (selectedContentArchetype ? `${labelForDefinitionKind(selectedContentArchetype.appliesToKind)} template` : null)
           : (selectedContentItem ? `${labelForDefinitionKind(selectedContentItem.kind)} • ${selectedItemFieldCount} fields` : null)}
-        promptSecondary={promptSecondary}
         isPromptBusy={isGeneratingPrompt}
         onPromptChange={onChangePromptText}
         onPromptSubmit={() => onGeneratePrompt?.()}
