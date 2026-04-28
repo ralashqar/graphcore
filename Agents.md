@@ -19,6 +19,13 @@ GraphCore employs multiple specialized AI agents working in concert to transform
 - **Performance Changes**: Update latency expectations, throughput capabilities, and cost implications
 - **Security Updates**: Document security enhancements, authentication changes, or access control modifications
 
+**Verification Requirement**: Before marking any code change as complete, AI agents MUST verify:
+
+1. **TypeScript Compilation**: Run `npx tsc --noEmit` and confirm zero errors
+2. **Project Builds**: Run `npm run build` (or equivalent) and confirm successful build
+3. **Dev Server Starts**: Run `npm run dev` and confirm the application starts without errors
+4. **No Runtime Errors**: Check for console errors in the development server output
+
 **Review Process**: All pull requests that modify AI agent code, Supabase functions, or agent orchestration logic must include corresponding updates to this document.
 
 ## Core AI Infrastructure

@@ -1,16 +1,16 @@
 import type { GameSummary, WorkspaceTab } from '../../shared/workspace'
 import { EntityIcon, type EntityIconId } from '../../shared/entityIcons'
 
-const STUB_USER_AI_CREDITS = 1280
-
 type WorkspaceTopbarProps = {
   activeTab: WorkspaceTab
   activeGameId?: string | null
   canResetProjectWorld?: boolean
+  creditBalance?: number | null
   currentUserEmail?: string | null
   games: GameSummary[]
   onOpenActivity: () => void
   onOpenAuth: () => void
+  onOpenBilling?: () => void
   onOpenNewGame: () => void
   onResetProjectWorld?: () => void
   onSelectGame: (projectId: string) => void
@@ -28,12 +28,14 @@ export function WorkspaceTopbar({
   activeTab,
   activeGameId,
   canResetProjectWorld,
+  creditBalance,
   currentUserEmail,
   draftName,
   games,
   isSignedIn,
   onOpenActivity,
   onOpenAuth,
+  onOpenBilling,
   onOpenNewGame,
   onResetProjectWorld,
   onSelectGame,
@@ -44,6 +46,7 @@ export function WorkspaceTopbar({
   tabs,
   workspaceName,
 }: WorkspaceTopbarProps) {
+  const displayCredits = creditBalance ?? 0
   return (
     <header className="topbar">
       <div className="brand-cluster">
@@ -78,11 +81,17 @@ export function WorkspaceTopbar({
             </label>
           </div>
         ) : null}
-        <div className="topbar-credit-pill" aria-label={`AI credits ${STUB_USER_AI_CREDITS}`}>
+        <button
+          className="topbar-credit-pill"
+          aria-label={`AI credits ${displayCredits}`}
+          onClick={onOpenBilling}
+          type="button"
+          title="Open billing"
+        >
           <EntityIcon id="credits" />
           <span>AI Credits</span>
-          <strong>{STUB_USER_AI_CREDITS.toLocaleString()}</strong>
-        </div>
+          <strong>{displayCredits.toLocaleString()}</strong>
+        </button>
         <details className="topbar-utility-menu">
           <summary className="ghost-button topbar-utility-trigger">Workspace</summary>
           <div className="topbar-utility-panel">
