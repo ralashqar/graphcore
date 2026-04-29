@@ -1,0 +1,47 @@
+[
+  {
+    "id": "story-kingdom",
+    "source": "idea",
+    "label": "Story prompt",
+    "text": "A lone warrior returns to a kingdom in ruins, seeking redemption.",
+    "typingMsPerChar": 28,
+    "holdMs": 2200,
+    "clearMs": 360
+  },
+  {
+    "id": "game-rpg",
+    "source": "game",
+    "label": "Game prompt",
+    "text": "Design a dark fantasy RPG world with factions, quests, artifacts, and a playable campaign arc.",
+    "typingMsPerChar": 24,
+    "holdMs": 2300,
+    "clearMs": 360
+  },
+  {
+    "id": "brand-universe",
+    "source": "brand",
+    "label": "Brand prompt",
+    "text": "Create a connected brand universe for a cinematic skincare launch.",
+    "typingMsPerChar": 27,
+    "holdMs": 2200,
+    "clearMs": 360
+  },
+  {
+    "id": "pdf-trailer",
+    "source": "pdf",
+    "label": "PDF import",
+    "text": "Create a world from the story in this PDF, and create a cinematic trailer for it.",
+    "typingMsPerChar": 25,
+    "holdMs": 2400,
+    "clearMs": 380
+  },
+  {
+    "id": "brand-url",
+    "source": "url",
+    "label": "Brand URL",
+    "text": "Build a world from my brand at this link, then turn it into campaign assets.",
+    "typingMsPerChar": 26,
+    "holdMs": 2300,
+    "clearMs": 360
+  }
+]

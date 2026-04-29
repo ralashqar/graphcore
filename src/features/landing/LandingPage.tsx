@@ -1,7 +1,8 @@
-import { useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import gsap from 'gsap'
 import { useGSAP } from '@gsap/react'
 import { ScrollTrigger } from 'gsap/ScrollTrigger'
+import landingPromptExamplesData from './landingPromptExamples.json'
 
 gsap.registerPlugin(useGSAP, ScrollTrigger)
 
@@ -19,6 +20,20 @@ type LandingIconId =
   | 'game'
   | 'audio'
 
+type LandingPromptSource = 'idea' | 'pdf' | 'url' | 'brand' | 'game'
+
+type LandingPromptPhase = 'typing' | 'holding' | 'clearing'
+
+type LandingPromptExample = {
+  id: string
+  source: LandingPromptSource
+  label: string
+  text: string
+  typingMsPerChar?: number
+  holdMs?: number
+  clearMs?: number
+}
+
 type LandingOrbitNode = {
   className: string
   title: string
@@ -34,6 +49,15 @@ type LandingOutputCard = {
 }
 
 const navLinks = ['Product', 'Use Cases', 'Examples', 'Pricing', 'Resources', 'Company']
+
+const landingPromptExamples = landingPromptExamplesData as LandingPromptExample[]
+
+const fallbackPromptExample: LandingPromptExample = {
+  id: 'fallback-story',
+  source: 'idea',
+  label: 'Story prompt',
+  text: 'A lone warrior returns to a kingdom in ruins, seeking redemption.',
+}
 
 const orbitNodes: LandingOrbitNode[] = [
   {
@@ -210,6 +234,120 @@ function LandingIcon({ id }: { id: LandingIconId }) {
   )
 }
 
+function LandingPromptSourceIcon({ source }: { source: LandingPromptSource }) {
+  return (
+    <svg aria-hidden="true" className="landing-prompt-source-glyph" viewBox="0 0 48 48">
+      {source === 'idea' ? (
+        <>
+          <path d="M24 7v10M24 31v10M7 24h10M31 24h10" />
+          <path d="m13 13 7 7M28 28l7 7M35 13l-7 7M20 28l-7 7" />
+          <circle cx="24" cy="24" r="3.2" />
+        </>
+      ) : null}
+      {source === 'pdf' ? (
+        <>
+          <path d="M14 7h15l8 8v26H14V7Z" />
+          <path d="M29 7v9h8M18 25h12M18 31h9" />
+          <path d="M18 18h7" />
+        </>
+      ) : null}
+      {source === 'url' ? (
+        <>
+          <path d="M19 28c-3 3-7.8 3-10.8 0s-3-7.8 0-10.8l4-4c3-3 7.8-3 10.8 0" />
+          <path d="M29 20c3-3 7.8-3 10.8 0s3 7.8 0 10.8l-4 4c-3 3-7.8 3-10.8 0" />
+          <path d="M18 30 30 18" />
+        </>
+      ) : null}
+      {source === 'brand' ? (
+        <>
+          <path d="M24 8 37 15.5v17L24 40 11 32.5v-17L24 8Z" />
+          <path d="M11 15.5 24 23l13-7.5M24 23v17" />
+          <circle cx="9" cy="9" r="2.5" />
+          <circle cx="39" cy="9" r="2.5" />
+          <circle cx="9" cy="39" r="2.5" />
+          <circle cx="39" cy="39" r="2.5" />
+        </>
+      ) : null}
+      {source === 'game' ? (
+        <>
+          <path d="M15 19h18c5 0 8 4 8 10v3c0 3-2 5-4.7 5-2.2 0-3.8-1.4-5.4-3.6H17.1C15.5 35.6 13.9 37 11.7 37 9 37 7 35 7 32v-3c0-6 3-10 8-10Z" />
+          <path d="M16 27h8M20 23v8" />
+          <circle cx="31.5" cy="26.5" r="1.8" />
+          <circle cx="36" cy="31" r="1.8" />
+        </>
+      ) : null}
+    </svg>
+  )
+}
+
+function usePrefersReducedMotion() {
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(false)
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)')
+    const updatePreference = () => setPrefersReducedMotion(mediaQuery.matches)
+
+    updatePreference()
+    mediaQuery.addEventListener('change', updatePreference)
+    return () => mediaQuery.removeEventListener('change', updatePreference)
+  }, [])
+
+  return prefersReducedMotion
+}
+
+function useAnimatedLandingPrompt(examples: LandingPromptExample[]) {
+  const promptExamples = examples.length > 0 ? examples : [fallbackPromptExample]
+  const prefersReducedMotion = usePrefersReducedMotion()
+  const [activeIndex, setActiveIndex] = useState(0)
+  const [visibleText, setVisibleText] = useState('')
+  const [phase, setPhase] = useState<LandingPromptPhase>('typing')
+  const activeExample = promptExamples[activeIndex] ?? promptExamples[0]
+
+  useEffect(() => {
+    if (prefersReducedMotion) {
+      setActiveIndex(0)
+      setVisibleText(promptExamples[0].text)
+      setPhase('holding')
+    }
+  }, [prefersReducedMotion, promptExamples])
+
+  useEffect(() => {
+    if (prefersReducedMotion) return
+
+    let timeoutId: number
+    const typingMsPerChar = activeExample.typingMsPerChar ?? 28
+    const holdMs = activeExample.holdMs ?? 2200
+    const clearMs = activeExample.clearMs ?? 360
+
+    if (phase === 'typing') {
+      if (visibleText.length < activeExample.text.length) {
+        timeoutId = window.setTimeout(() => {
+          setVisibleText(activeExample.text.slice(0, visibleText.length + 1))
+        }, typingMsPerChar)
+      } else {
+        timeoutId = window.setTimeout(() => setPhase('holding'), 120)
+      }
+    } else if (phase === 'holding') {
+      timeoutId = window.setTimeout(() => setPhase('clearing'), holdMs)
+    } else {
+      timeoutId = window.setTimeout(() => {
+        setActiveIndex((currentIndex) => (currentIndex + 1) % promptExamples.length)
+        setVisibleText('')
+        setPhase('typing')
+      }, clearMs)
+    }
+
+    return () => window.clearTimeout(timeoutId)
+  }, [activeExample, phase, prefersReducedMotion, promptExamples.length, visibleText])
+
+  return {
+    activeExample,
+    visibleText: visibleText || (phase === 'typing' ? '' : activeExample.text),
+    phase,
+    isSwitching: phase === 'clearing',
+  }
+}
+
 type LandingPageProps = {
   isSignedIn: boolean
   onEnterApp: () => void
@@ -222,6 +360,7 @@ export function LandingPage({
   onOpenAuth,
 }: LandingPageProps) {
   const rootRef = useRef<HTMLElement | null>(null)
+  const animatedPrompt = useAnimatedLandingPrompt(landingPromptExamples)
 
   useGSAP(() => {
     if (!rootRef.current) return
@@ -326,9 +465,14 @@ export function LandingPage({
         <div className="landing-hero-system" aria-label="Prompt to connected world diagram">
           <div className="landing-prompt-wrap">
             <span>Start with an idea</span>
-            <div className="landing-prompt-card">
-              <span className="landing-spark" aria-hidden="true">*</span>
-              <p>A lone warrior returns to a kingdom in ruins, seeking redemption.</p>
+            <div className={`landing-prompt-card${animatedPrompt.isSwitching ? ' is-switching' : ''}`}>
+              <span className="landing-prompt-source-icon" key={animatedPrompt.activeExample.id} aria-hidden="true">
+                <LandingPromptSourceIcon source={animatedPrompt.activeExample.source} />
+              </span>
+              <p className="landing-prompt-text" aria-label={animatedPrompt.activeExample.text}>
+                <span>{animatedPrompt.visibleText}</span>
+                <span className="landing-prompt-caret" aria-hidden="true" />
+              </p>
               <span className="landing-send-mark" aria-hidden="true">-&gt;</span>
             </div>
           </div>

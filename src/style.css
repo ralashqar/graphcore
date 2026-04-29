@@ -9271,13 +9271,19 @@ button:disabled {
   display: grid;
   grid-template-columns: auto 1fr auto;
   align-items: center;
-  gap: 16px;
-  min-height: 78px;
+  gap: 14px;
+  min-height: 98px;
   padding: 14px 20px;
   border: 1px solid var(--landing-violet-stroke);
   border-radius: 14px;
   background: rgba(7, 13, 25, 0.88);
   box-shadow: 0 0 34px rgba(139, 60, 255, 0.2);
+  transition: border-color 260ms ease, box-shadow 260ms ease;
+}
+
+.landing-prompt-card.is-switching {
+  border-color: rgba(211, 108, 255, 0.34);
+  box-shadow: 0 0 26px rgba(139, 60, 255, 0.14);
 }
 
 .landing-prompt-card::after {
@@ -9291,18 +9297,93 @@ button:disabled {
   box-shadow: 0 0 16px rgba(57, 216, 255, 0.78);
 }
 
-.landing-prompt-card p {
+.landing-prompt-source-icon {
+  width: 36px;
+  height: 36px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid rgba(211, 108, 255, 0.42);
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(139, 60, 255, 0.2), rgba(7, 13, 25, 0.68) 64%),
+    linear-gradient(135deg, rgba(139, 60, 255, 0.14), rgba(57, 216, 255, 0.08));
+  box-shadow:
+    0 0 18px rgba(211, 108, 255, 0.22),
+    inset 0 0 12px rgba(57, 216, 255, 0.08);
+  transition: opacity 220ms ease, transform 220ms ease;
+  animation: landing-prompt-source-pop 420ms ease both;
+}
+
+.landing-prompt-source-glyph {
+  width: 22px;
+  height: 22px;
+  overflow: visible;
+  fill: none;
+  stroke: #c985ff;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 0 7px rgba(211, 108, 255, 0.58));
+}
+
+.landing-prompt-source-glyph circle {
+  fill: rgba(9, 17, 31, 0.88);
+}
+
+.landing-prompt-text {
   margin: 0;
   color: #ffffff;
   font-size: 1.03rem;
-  line-height: 1.48;
+  line-height: 1.42;
+  opacity: 1;
+  transition: opacity 220ms ease, transform 220ms ease;
 }
 
-.landing-spark,
+.landing-prompt-card.is-switching .landing-prompt-source-icon,
+.landing-prompt-card.is-switching .landing-prompt-text {
+  opacity: 0.22;
+  transform: translateY(2px);
+}
+
+.landing-prompt-caret {
+  width: 1px;
+  height: 1.1em;
+  display: inline-block;
+  margin-left: 2px;
+  vertical-align: -0.14em;
+  background: #bdefff;
+  box-shadow: 0 0 10px rgba(57, 216, 255, 0.68);
+  animation: landing-prompt-caret 840ms steps(1, end) infinite;
+}
+
 .landing-send-mark {
   color: #c077ff;
   font-size: 1.55rem;
   text-shadow: 0 0 18px rgba(211, 108, 255, 0.8);
+}
+
+@keyframes landing-prompt-source-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.78);
+  }
+
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes landing-prompt-caret {
+  0%,
+  52% {
+    opacity: 1;
+  }
+
+  53%,
+  100% {
+    opacity: 0;
+  }
 }
 
 .landing-world-stage {
@@ -9983,6 +10064,8 @@ button:disabled {
 
   .landing-prompt-card {
     grid-template-columns: auto 1fr;
+    min-height: 122px;
+    padding: 16px;
   }
 
   .landing-send-mark {
@@ -10068,6 +10151,17 @@ button:disabled {
   .landing-avatar,
   .landing-proof-card > span:last-child {
     grid-column: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .landing-prompt-source-icon,
+  .landing-prompt-caret {
+    animation: none;
+  }
+
+  .landing-prompt-caret {
+    opacity: 0;
   }
 }
 
