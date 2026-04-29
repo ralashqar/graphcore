@@ -67,6 +67,12 @@ type LandingOrbitEdge = {
   y2: number
 }
 
+type LandingHeroCurve = {
+  d: string
+  width: number
+  height: number
+}
+
 type LandingOutputCard = {
   title: string
   copy: string
@@ -100,18 +106,18 @@ const orbitNodes: LandingOrbitNode[] = [
     icon: 'characters',
     alternates: [
       { title: 'Factions', icon: 'factions' },
-      { title: 'Casting', icon: 'cinematic' },
+      { title: 'Portraits', icon: 'characters' },
       { title: 'Voices', icon: 'audio' },
     ],
   },
   {
     className: 'is-stories',
-    title: 'Stories',
-    icon: 'stories',
+    title: 'Scripts',
+    icon: 'script',
     alternates: [
-      { title: 'Quests', icon: 'quests' },
-      { title: 'Scripts', icon: 'script' },
-      { title: 'Scenes', icon: 'cinematic' },
+      { title: 'Cinematics', icon: 'cinematic' },
+      { title: 'Storyboards', icon: 'stories' },
+      { title: 'Dialogue', icon: 'script' },
     ],
   },
   {
@@ -120,37 +126,37 @@ const orbitNodes: LandingOrbitNode[] = [
     icon: 'locations',
     alternates: [
       { title: 'Maps', icon: 'maps' },
-      { title: 'Realms', icon: 'locations' },
+      { title: 'Regions', icon: 'locations' },
       { title: 'Routes', icon: 'timelines' },
     ],
   },
   {
     className: 'is-items',
-    title: 'Items & Gear',
+    title: 'Items',
     icon: 'items',
     alternates: [
       { title: 'Artifacts', icon: 'items' },
-      { title: 'Magic', icon: 'magic' },
+      { title: 'Spells', icon: 'magic' },
       { title: 'Props', icon: 'game' },
     ],
   },
   {
     className: 'is-lore',
-    title: 'Lore & Rules',
+    title: 'Lore',
     icon: 'lore',
     alternates: [
       { title: 'Mythology', icon: 'magic' },
       { title: 'Canon', icon: 'graph' },
-      { title: 'Brand Lore', icon: 'marketing' },
+      { title: 'Brand', icon: 'marketing' },
     ],
   },
   {
     className: 'is-timelines',
-    title: 'Timelines',
+    title: 'Events',
     icon: 'timelines',
     alternates: [
-      { title: 'Campaigns', icon: 'game' },
       { title: 'Episodes', icon: 'stories' },
+      { title: 'Quests', icon: 'quests' },
       { title: 'Launches', icon: 'marketing' },
     ],
   },
@@ -539,6 +545,7 @@ function useOrbitIconEdges(
   stageRef: RefObject<HTMLDivElement | null>,
   activeNodes: LandingOrbitDisplayNode[],
 ) {
+  const prefersReducedMotion = usePrefersReducedMotion()
   const [edges, setEdges] = useState<LandingOrbitEdge[]>([])
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 })
 
@@ -547,8 +554,12 @@ function useOrbitIconEdges(
     if (!stageElement) return
 
     let animationFrameId = 0
+    let isResizeMeasureQueued = false
+    let cancelled = false
 
     const measureEdges = () => {
+      if (cancelled) return
+
       const stageRect = stageElement.getBoundingClientRect()
       const nextEdges = orbitEdgePairs.flatMap(([fromSlot, toSlot]) => {
         const fromFrame = stageElement.querySelector<HTMLElement>(
@@ -578,24 +589,95 @@ function useOrbitIconEdges(
       setEdges(nextEdges)
     }
 
+    const measureOnAnimationFrame = () => {
+      measureEdges()
+      animationFrameId = window.requestAnimationFrame(measureOnAnimationFrame)
+    }
+
     const scheduleMeasure = () => {
-      window.cancelAnimationFrame(animationFrameId)
-      animationFrameId = window.requestAnimationFrame(measureEdges)
+      if (isResizeMeasureQueued) return
+
+      isResizeMeasureQueued = true
+      window.requestAnimationFrame(() => {
+        if (cancelled) return
+
+        isResizeMeasureQueued = false
+        measureEdges()
+      })
     }
 
     const resizeObserver = new ResizeObserver(scheduleMeasure)
     resizeObserver.observe(stageElement)
     scheduleMeasure()
     window.addEventListener('resize', scheduleMeasure)
+    if (!prefersReducedMotion) {
+      animationFrameId = window.requestAnimationFrame(measureOnAnimationFrame)
+    }
 
     return () => {
+      cancelled = true
       window.cancelAnimationFrame(animationFrameId)
       resizeObserver.disconnect()
       window.removeEventListener('resize', scheduleMeasure)
     }
-  }, [activeNodes, stageRef])
+  }, [activeNodes, prefersReducedMotion, stageRef])
 
   return { edges, stageSize }
+}
+
+function usePromptProofCurve(
+  heroRef: RefObject<HTMLElement | null>,
+  promptRef: RefObject<HTMLDivElement | null>,
+  proofRef: RefObject<HTMLElement | null>,
+) {
+  const [curve, setCurve] = useState<LandingHeroCurve | null>(null)
+
+  useLayoutEffect(() => {
+    const heroElement = heroRef.current
+    const promptElement = promptRef.current
+    const proofElement = proofRef.current
+    if (!heroElement || !promptElement || !proofElement) return
+
+    let animationFrameId = 0
+    let cancelled = false
+
+    const measureCurve = () => {
+      if (cancelled) return
+
+      const heroRect = heroElement.getBoundingClientRect()
+      const promptRect = promptElement.getBoundingClientRect()
+      const proofRect = proofElement.getBoundingClientRect()
+      const startX = promptRect.right - heroRect.left
+      const startY = promptRect.top + promptRect.height / 2 - heroRect.top
+      const endX = proofRect.left - heroRect.left
+      const endY = proofRect.top + Math.min(proofRect.height * 0.34, 130) - heroRect.top
+      const controlOffset = Math.max(80, Math.min(220, (endX - startX) * 0.48))
+      const d = `M ${startX} ${startY} C ${startX + controlOffset} ${startY - 14}, ${endX - controlOffset} ${endY - 22}, ${endX} ${endY}`
+
+      setCurve({ d, width: heroRect.width, height: heroRect.height })
+    }
+
+    const scheduleMeasure = () => {
+      window.cancelAnimationFrame(animationFrameId)
+      animationFrameId = window.requestAnimationFrame(measureCurve)
+    }
+
+    const resizeObserver = new ResizeObserver(scheduleMeasure)
+    resizeObserver.observe(heroElement)
+    resizeObserver.observe(promptElement)
+    resizeObserver.observe(proofElement)
+    scheduleMeasure()
+    window.addEventListener('resize', scheduleMeasure)
+
+    return () => {
+      cancelled = true
+      window.cancelAnimationFrame(animationFrameId)
+      resizeObserver.disconnect()
+      window.removeEventListener('resize', scheduleMeasure)
+    }
+  }, [heroRef, promptRef, proofRef])
+
+  return curve
 }
 
 type LandingPageProps = {
@@ -610,10 +692,14 @@ export function LandingPage({
   onOpenAuth,
 }: LandingPageProps) {
   const rootRef = useRef<HTMLElement | null>(null)
+  const heroRef = useRef<HTMLElement | null>(null)
+  const promptCardRef = useRef<HTMLDivElement | null>(null)
+  const proofPanelRef = useRef<HTMLElement | null>(null)
   const stageRef = useRef<HTMLDivElement | null>(null)
   const animatedPrompt = useAnimatedLandingPrompt(landingPromptExamples)
   const orbitAnimation = useRotatingOrbitNodes()
   const orbitEdges = useOrbitIconEdges(stageRef, orbitAnimation.activeNodes)
+  const promptProofCurve = usePromptProofCurve(heroRef, promptCardRef, proofPanelRef)
 
   useGSAP(() => {
     if (!rootRef.current) return
@@ -684,7 +770,32 @@ export function LandingPage({
         </nav>
       </header>
 
-      <section className="landing-hero-section" id="product">
+      <section className="landing-hero-section" id="product" ref={heroRef}>
+        {promptProofCurve ? (
+          <svg
+            aria-hidden="true"
+            className="landing-prompt-proof-curve-layer"
+            viewBox={`0 0 ${promptProofCurve.width} ${promptProofCurve.height}`}
+          >
+            <defs>
+              <linearGradient id="landing-prompt-proof-gradient" x1="0%" x2="100%" y1="0%" y2="0%">
+                <stop offset="0%" stopColor="#d36cff" stopOpacity="0.08" />
+                <stop offset="34%" stopColor="#8b3cff" stopOpacity="0.54" />
+                <stop offset="72%" stopColor="#39d8ff" stopOpacity="0.46" />
+                <stop offset="100%" stopColor="#2277ff" stopOpacity="0.1" />
+              </linearGradient>
+              <filter id="landing-prompt-proof-glow" x="-18%" y="-160%" width="136%" height="420%">
+                <feGaussianBlur stdDeviation="3.8" result="blur" />
+                <feMerge>
+                  <feMergeNode in="blur" />
+                  <feMergeNode in="SourceGraphic" />
+                </feMerge>
+              </filter>
+            </defs>
+            <path className="landing-prompt-proof-curve" d={promptProofCurve.d} />
+            <path className="landing-prompt-proof-curve-glow" d={promptProofCurve.d} filter="url(#landing-prompt-proof-glow)" />
+          </svg>
+        ) : null}
         <div className="landing-hero-copy">
           <div className="landing-kicker-row">
             <span className="landing-chip">Early access</span>
@@ -718,7 +829,10 @@ export function LandingPage({
         <div className="landing-hero-system" aria-label="Prompt to connected world diagram">
           <div className="landing-prompt-wrap">
             <span>Start with an idea</span>
-            <div className={`landing-prompt-card${animatedPrompt.isSwitching ? ' is-switching' : ''}`}>
+            <div
+              className={`landing-prompt-card${animatedPrompt.isSwitching ? ' is-switching' : ''}`}
+              ref={promptCardRef}
+            >
               <span className="landing-prompt-source-icon" key={animatedPrompt.activeExample.id} aria-hidden="true">
                 <LandingPromptSourceIcon source={animatedPrompt.activeExample.source} />
               </span>
@@ -775,10 +889,12 @@ export function LandingPage({
                   data-orbit-slot={node.className}
                   key={node.className}
                 >
-                  <span className="landing-orbit-node-inner">
-                    <strong>{node.title}</strong>
-                    <span className="landing-icon-frame">
-                      <LandingIcon id={node.icon} />
+                  <span className="landing-orbit-node-drift">
+                    <span className="landing-orbit-node-inner">
+                      <strong>{node.title}</strong>
+                      <span className="landing-icon-frame">
+                        <LandingIcon id={node.icon} />
+                      </span>
                     </span>
                   </span>
                 </article>
@@ -787,7 +903,7 @@ export function LandingPage({
           </div>
         </div>
 
-        <aside className="landing-proof-panel">
+        <aside className="landing-proof-panel" ref={proofPanelRef}>
           <h2>Everything stays connected.</h2>
           <p>Change one thing, and it flows everywhere.</p>
           <img className="landing-mini-network" src="/landing/connected-network-v1.png" alt="" aria-hidden="true" />
