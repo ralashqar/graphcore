@@ -9398,7 +9398,7 @@ button:disabled {
 .landing-world-core {
   position: relative;
   z-index: 3;
-  width: min(500px, 67%);
+  width: min(458px, 61%);
   max-width: 100%;
   transform-origin: 50% 50%;
   will-change: transform, filter;
@@ -9472,33 +9472,33 @@ button:disabled {
 }
 
 .landing-orbit-node.is-characters {
-  left: 8%;
-  top: 20%;
+  left: 12%;
+  top: 22%;
 }
 
 .landing-orbit-node.is-stories {
-  left: 4%;
+  left: 9%;
   top: 43%;
 }
 
 .landing-orbit-node.is-locations {
-  left: 8%;
-  top: 66%;
+  left: 12%;
+  top: 64%;
 }
 
 .landing-orbit-node.is-items {
-  right: 8%;
-  top: 20%;
+  right: 12%;
+  top: 22%;
 }
 
 .landing-orbit-node.is-lore {
-  right: 4%;
+  right: 9%;
   top: 43%;
 }
 
 .landing-orbit-node.is-timelines {
-  right: 8%;
-  top: 66%;
+  right: 12%;
+  top: 64%;
 }
 
 .landing-orbit-node:is(.is-characters, .is-stories, .is-locations)::before {
