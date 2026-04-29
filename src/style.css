@@ -9408,6 +9408,24 @@ button:disabled {
   animation: landing-core-glow 4.8s ease-in-out infinite;
 }
 
+.landing-orbit-edge-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.landing-orbit-edge {
+  stroke: url('#landing-orbit-edge-gradient');
+  stroke-width: 1.1;
+  stroke-linecap: round;
+  opacity: 0.68;
+  vector-effect: non-scaling-stroke;
+}
+
 @keyframes landing-core-glow {
   0%,
   100% {
@@ -9432,6 +9450,32 @@ button:disabled {
   align-items: center;
   gap: 8px;
   text-align: center;
+}
+
+.landing-orbit-node-inner {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  transform-origin: 50% 54%;
+  transition:
+    opacity 280ms ease,
+    transform 280ms ease,
+    filter 280ms ease;
+  will-change: opacity, transform, filter;
+}
+
+.landing-orbit-node.is-orbit-swapping-out .landing-orbit-node-inner {
+  opacity: 0.12;
+  transform: scale(0.72);
+  filter: blur(1px);
+}
+
+.landing-orbit-node.is-orbit-swapping-in .landing-orbit-node-inner {
+  opacity: 1;
+  transform: scale(1.07);
+  filter: drop-shadow(0 0 14px rgba(57, 216, 255, 0.36));
 }
 
 .landing-orbit-node::before {
@@ -10155,6 +10199,10 @@ button:disabled {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .landing-orbit-node-inner {
+    transition: none;
+  }
+
   .landing-prompt-source-icon,
   .landing-prompt-caret {
     animation: none;

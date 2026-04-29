@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react'
 import gsap from 'gsap'
 import { useGSAP } from '@gsap/react'
 import { ScrollTrigger } from 'gsap/ScrollTrigger'
@@ -9,9 +9,13 @@ gsap.registerPlugin(useGSAP, ScrollTrigger)
 type LandingIconId =
   | 'graph'
   | 'characters'
+  | 'factions'
   | 'stories'
+  | 'quests'
   | 'locations'
+  | 'maps'
   | 'items'
+  | 'magic'
   | 'lore'
   | 'timelines'
   | 'cinematic'
@@ -38,6 +42,29 @@ type LandingOrbitNode = {
   className: string
   title: string
   icon: LandingIconId
+  alternates?: LandingOrbitVariant[]
+}
+
+type LandingOrbitVariant = {
+  title: string
+  icon: LandingIconId
+}
+
+type LandingOrbitDisplayNode = LandingOrbitNode & {
+  variantIndex: number
+}
+
+type LandingOrbitSwapState = {
+  slotClassName: string
+  phase: 'out' | 'in'
+}
+
+type LandingOrbitEdge = {
+  id: string
+  x1: number
+  y1: number
+  x2: number
+  y2: number
 }
 
 type LandingOutputCard = {
@@ -49,6 +76,13 @@ type LandingOutputCard = {
 }
 
 const navLinks = ['Product', 'Use Cases', 'Examples', 'Pricing', 'Resources', 'Company']
+
+const orbitEdgePairs: Array<[string, string]> = [
+  ['is-characters', 'is-stories'],
+  ['is-stories', 'is-locations'],
+  ['is-items', 'is-lore'],
+  ['is-lore', 'is-timelines'],
+]
 
 const landingPromptExamples = landingPromptExamplesData as LandingPromptExample[]
 
@@ -64,31 +98,61 @@ const orbitNodes: LandingOrbitNode[] = [
     className: 'is-characters',
     title: 'Characters',
     icon: 'characters',
+    alternates: [
+      { title: 'Factions', icon: 'factions' },
+      { title: 'Casting', icon: 'cinematic' },
+      { title: 'Voices', icon: 'audio' },
+    ],
   },
   {
     className: 'is-stories',
     title: 'Stories',
     icon: 'stories',
+    alternates: [
+      { title: 'Quests', icon: 'quests' },
+      { title: 'Scripts', icon: 'script' },
+      { title: 'Scenes', icon: 'cinematic' },
+    ],
   },
   {
     className: 'is-locations',
     title: 'Locations',
     icon: 'locations',
+    alternates: [
+      { title: 'Maps', icon: 'maps' },
+      { title: 'Realms', icon: 'locations' },
+      { title: 'Routes', icon: 'timelines' },
+    ],
   },
   {
     className: 'is-items',
     title: 'Items & Gear',
     icon: 'items',
+    alternates: [
+      { title: 'Artifacts', icon: 'items' },
+      { title: 'Magic', icon: 'magic' },
+      { title: 'Props', icon: 'game' },
+    ],
   },
   {
     className: 'is-lore',
     title: 'Lore & Rules',
     icon: 'lore',
+    alternates: [
+      { title: 'Mythology', icon: 'magic' },
+      { title: 'Canon', icon: 'graph' },
+      { title: 'Brand Lore', icon: 'marketing' },
+    ],
   },
   {
     className: 'is-timelines',
     title: 'Timelines',
     icon: 'timelines',
+    alternates: [
+      { title: 'Campaigns', icon: 'game' },
+      { title: 'Episodes', icon: 'stories' },
+      { title: 'Launches', icon: 'marketing' },
+    ],
   },
 ]
 
@@ -167,11 +231,29 @@ function LandingIcon({ id }: { id: LandingIconId }) {
           <path d="M42.5 36c-1.1-4.8-3.9-7.4-7.3-7.4" />
         </>
       ) : null}
+      {id === 'factions' ? (
+        <>
+          <path d="M24 7 36 14v14c0 7-4.8 11-12 13-7.2-2-12-6-12-13V14l12-7Z" />
+          <path d="M24 13v24M16 19h16M18 27h12" />
+          <circle cx="14" cy="12" r="2.4" />
+          <circle cx="34" cy="12" r="2.4" />
+          <circle cx="24" cy="40" r="2.4" />
+        </>
+      ) : null}
       {id === 'stories' ? (
         <>
           <path d="M8 12h12c2.2 0 4 1.8 4 4v22c0-2.2-1.8-4-4-4H8V12Z" />
           <path d="M40 12H28c-2.2 0-4 1.8-4 4v22c0-2.2 1.8-4 4-4h12V12Z" />
           <path d="M14 19h5M14 25h5M29 19h5M29 25h5" />
+        </>
+      ) : null}
+      {id === 'quests' ? (
+        <>
+          <path d="M13 10h22v28H13V10Z" />
+          <path d="M18 18h12M18 25h9M18 32h7" />
+          <path d="m32 30 3 3 6-8" />
+          <circle cx="13" cy="10" r="2.4" />
+          <circle cx="35" cy="10" r="2.4" />
         </>
       ) : null}
       {id === 'locations' ? (
@@ -180,10 +262,24 @@ function LandingIcon({ id }: { id: LandingIconId }) {
           <circle cx="24" cy="19" r="5" />
         </>
       ) : null}
+      {id === 'maps' ? (
+        <>
+          <path d="M8 13 18 9l12 4 10-4v26l-10 4-12-4-10 4V13Z" />
+          <path d="M18 9v26M30 13v26" />
+          <path d="M13 22c4-3 8-3 11 0s7 3 11 0" />
+        </>
+      ) : null}
       {id === 'items' ? (
         <>
           <path d="M24 7 38 15v18L24 41 10 33V15l14-8Z" />
           <path d="M10 15l14 8 14-8M24 23v18" />
+        </>
+      ) : null}
+      {id === 'magic' ? (
+        <>
+          <path d="M24 7v10M24 31v10M7 24h10M31 24h10" />
+          <path d="m14 14 7 7M27 27l7 7M34 14l-7 7M21 27l-7 7" />
+          <path d="M24 18c2.5 3.2 4.4 5.1 8 6-3.6.9-5.5 2.8-8 6-2.5-3.2-4.4-5.1-8-6 3.6-.9 5.5-2.8 8-6Z" />
         </>
       ) : null}
       {id === 'lore' ? (
@@ -348,6 +444,160 @@ function useAnimatedLandingPrompt(examples: LandingPromptExample[]) {
   }
 }
 
+function getOrbitVariant(node: LandingOrbitNode, variantIndex: number): LandingOrbitVariant {
+  const variants: LandingOrbitVariant[] = [
+    { title: node.title, icon: node.icon },
+    ...(node.alternates ?? []),
+  ]
+
+  return variants[variantIndex % variants.length] ?? variants[0]
+}
+
+function createInitialOrbitNodes(): LandingOrbitDisplayNode[] {
+  return orbitNodes.map((node) => ({
+    ...node,
+    variantIndex: 0,
+  }))
+}
+
+function useRotatingOrbitNodes() {
+  const prefersReducedMotion = usePrefersReducedMotion()
+  const recentSlotClassNameRef = useRef<string | null>(null)
+  const [activeNodes, setActiveNodes] = useState<LandingOrbitDisplayNode[]>(createInitialOrbitNodes)
+  const [swapState, setSwapState] = useState<LandingOrbitSwapState | null>(null)
+
+  useEffect(() => {
+    if (prefersReducedMotion) {
+      setActiveNodes(createInitialOrbitNodes())
+      setSwapState(null)
+      return
+    }
+
+    let startTimeoutId: number
+    let swapTimeoutId: number
+    let settleTimeoutId: number
+    let cancelled = false
+
+    const scheduleNextSwap = () => {
+      const delayMs = 4300 + Math.random() * 2600
+
+      startTimeoutId = window.setTimeout(() => {
+        if (cancelled) return
+
+        const swappableSlots = orbitNodes.filter(
+          (node) => node.alternates?.length && node.className !== recentSlotClassNameRef.current,
+        )
+        const slot = swappableSlots[Math.floor(Math.random() * swappableSlots.length)] ?? orbitNodes[0]
+        recentSlotClassNameRef.current = slot.className
+        setSwapState({ slotClassName: slot.className, phase: 'out' })
+
+        swapTimeoutId = window.setTimeout(() => {
+          if (cancelled) return
+
+          setActiveNodes((currentNodes) =>
+            currentNodes.map((currentNode) => {
+              if (currentNode.className !== slot.className) return currentNode
+
+              const nextVariantIndex =
+                (currentNode.variantIndex + 1) % (1 + (slot.alternates?.length ?? 0))
+              const nextVariant = getOrbitVariant(slot, nextVariantIndex)
+
+              return {
+                ...currentNode,
+                title: nextVariant.title,
+                icon: nextVariant.icon,
+                variantIndex: nextVariantIndex,
+              }
+            }),
+          )
+          setSwapState({ slotClassName: slot.className, phase: 'in' })
+
+          settleTimeoutId = window.setTimeout(() => {
+            if (cancelled) return
+
+            setSwapState(null)
+            scheduleNextSwap()
+          }, 360)
+        }, 280)
+      }, delayMs)
+    }
+
+    scheduleNextSwap()
+
+    return () => {
+      cancelled = true
+      window.clearTimeout(startTimeoutId)
+      window.clearTimeout(swapTimeoutId)
+      window.clearTimeout(settleTimeoutId)
+    }
+  }, [prefersReducedMotion])
+
+  return { activeNodes, swapState }
+}
+
+function useOrbitIconEdges(
+  stageRef: RefObject<HTMLDivElement | null>,
+  activeNodes: LandingOrbitDisplayNode[],
+) {
+  const [edges, setEdges] = useState<LandingOrbitEdge[]>([])
+  const [stageSize, setStageSize] = useState({ width: 0, height: 0 })
+
+  useLayoutEffect(() => {
+    const stageElement = stageRef.current
+    if (!stageElement) return
+
+    let animationFrameId = 0
+
+    const measureEdges = () => {
+      const stageRect = stageElement.getBoundingClientRect()
+      const nextEdges = orbitEdgePairs.flatMap(([fromSlot, toSlot]) => {
+        const fromFrame = stageElement.querySelector<HTMLElement>(
+          `.landing-orbit-node[data-orbit-slot="${fromSlot}"] .landing-icon-frame`,
+        )
+        const toFrame = stageElement.querySelector<HTMLElement>(
+          `.landing-orbit-node[data-orbit-slot="${toSlot}"] .landing-icon-frame`,
+        )
+
+        if (!fromFrame || !toFrame) return []
+
+        const fromRect = fromFrame.getBoundingClientRect()
+        const toRect = toFrame.getBoundingClientRect()
+
+        return [
+          {
+            id: `${fromSlot}-${toSlot}`,
+            x1: fromRect.left + fromRect.width / 2 - stageRect.left,
+            y1: fromRect.top + fromRect.height / 2 - stageRect.top,
+            x2: toRect.left + toRect.width / 2 - stageRect.left,
+            y2: toRect.top + toRect.height / 2 - stageRect.top,
+          },
+        ]
+      })
+
+      setStageSize({ width: stageRect.width, height: stageRect.height })
+      setEdges(nextEdges)
+    }
+
+    const scheduleMeasure = () => {
+      window.cancelAnimationFrame(animationFrameId)
+      animationFrameId = window.requestAnimationFrame(measureEdges)
+    }
+
+    const resizeObserver = new ResizeObserver(scheduleMeasure)
+    resizeObserver.observe(stageElement)
+    scheduleMeasure()
+    window.addEventListener('resize', scheduleMeasure)
+
+    return () => {
+      window.cancelAnimationFrame(animationFrameId)
+      resizeObserver.disconnect()
+      window.removeEventListener('resize', scheduleMeasure)
+    }
+  }, [activeNodes, stageRef])
+
+  return { edges, stageSize }
+}
+
 type LandingPageProps = {
   isSignedIn: boolean
   onEnterApp: () => void
@@ -360,7 +610,10 @@ export function LandingPage({
   onOpenAuth,
 }: LandingPageProps) {
   const rootRef = useRef<HTMLElement | null>(null)
+  const stageRef = useRef<HTMLDivElement | null>(null)
   const animatedPrompt = useAnimatedLandingPrompt(landingPromptExamples)
+  const orbitAnimation = useRotatingOrbitNodes()
+  const orbitEdges = useOrbitIconEdges(stageRef, orbitAnimation.activeNodes)
 
   useGSAP(() => {
     if (!rootRef.current) return
@@ -477,16 +730,60 @@ export function LandingPage({
             </div>
           </div>
 
-          <div className="landing-world-stage">
+          <div className="landing-world-stage" ref={stageRef}>
+            <svg
+              aria-hidden="true"
+              className="landing-orbit-edge-layer"
+              viewBox={`0 0 ${orbitEdges.stageSize.width || 760} ${orbitEdges.stageSize.height || 623}`}
+            >
+              <defs>
+                <linearGradient id="landing-orbit-edge-gradient" x1="0%" x2="100%" y1="0%" y2="100%">
+                  <stop offset="0%" stopColor="#8b3cff" stopOpacity="0.3" />
+                  <stop offset="48%" stopColor="#39d8ff" stopOpacity="0.44" />
+                  <stop offset="100%" stopColor="#2277ff" stopOpacity="0.24" />
+                </linearGradient>
+                <filter id="landing-orbit-edge-glow" x="-30%" y="-60%" width="160%" height="220%">
+                  <feGaussianBlur stdDeviation="2.6" result="blur" />
+                  <feMerge>
+                    <feMergeNode in="blur" />
+                    <feMergeNode in="SourceGraphic" />
+                  </feMerge>
+                </filter>
+              </defs>
+              {orbitEdges.edges.map((edge) => (
+                <line
+                  className="landing-orbit-edge"
+                  filter="url(#landing-orbit-edge-glow)"
+                  key={edge.id}
+                  x1={edge.x1}
+                  x2={edge.x2}
+                  y1={edge.y1}
+                  y2={edge.y2}
+                />
+              ))}
+            </svg>
             <img className="landing-world-core" alt="Glowing connected world graph core" src="/landing/hero-world-core-v4.png" />
-            {orbitNodes.map((node) => (
-              <article className={`landing-orbit-node ${node.className}`} key={node.title}>
-                <strong>{node.title}</strong>
-                <span className="landing-icon-frame">
-                  <LandingIcon id={node.icon} />
-                </span>
-              </article>
-            ))}
+            {orbitAnimation.activeNodes.map((node) => {
+              const swapClass =
+                orbitAnimation.swapState?.slotClassName === node.className
+                  ? ` is-orbit-swapping-${orbitAnimation.swapState.phase}`
+                  : ''
+
+              return (
+                <article
+                  className={`landing-orbit-node ${node.className}${swapClass}`}
+                  data-orbit-slot={node.className}
+                  key={node.className}
+                >
+                  <span className="landing-orbit-node-inner">
+                    <strong>{node.title}</strong>
+                    <span className="landing-icon-frame">
+                      <LandingIcon id={node.icon} />
+                    </span>
+                  </span>
+                </article>
+              )
+            })}
           </div>
         </div>
 

@@ -1,0 +1,173 @@
+{
+  "motion": {
+    "minSwapMs": 3800,
+    "maxSwapMs": 6500,
+    "fadeMs": 520,
+    "scaleMin": 0.72,
+    "scaleMax": 1,
+    "driftScale": 1
+  },
+  "slots": [
+    {
+      "id": "leftTop",
+      "side": "left",
+      "order": 0,
+      "x": 24,
+      "y": 28,
+      "initialNodeId": "characters",
+      "driftStrength": 0.82
+    },
+    {
+      "id": "leftMiddle",
+      "side": "left",
+      "order": 1,
+      "x": 21,
+      "y": 50,
+      "initialNodeId": "stories",
+      "driftStrength": 1
+    },
+    {
+      "id": "leftBottom",
+      "side": "left",
+      "order": 2,
+      "x": 24,
+      "y": 72,
+      "initialNodeId": "locations",
+      "driftStrength": 0.92
+    },
+    {
+      "id": "rightTop",
+      "side": "right",
+      "order": 0,
+      "x": 76,
+      "y": 28,
+      "initialNodeId": "items",
+      "driftStrength": 0.86
+    },
+    {
+      "id": "rightMiddle",
+      "side": "right",
+      "order": 1,
+      "x": 79,
+      "y": 50,
+      "initialNodeId": "lore",
+      "driftStrength": 1
+    },
+    {
+      "id": "rightBottom",
+      "side": "right",
+      "order": 2,
+      "x": 76,
+      "y": 72,
+      "initialNodeId": "timelines",
+      "driftStrength": 0.94
+    }
+  ],
+  "nodes": [
+    {
+      "id": "characters",
+      "title": "Characters",
+      "icon": "characters",
+      "accent": "#39d8ff",
+      "preferredSide": "left"
+    },
+    {
+      "id": "stories",
+      "title": "Stories",
+      "icon": "stories",
+      "accent": "#39d8ff",
+      "preferredSide": "left"
+    },
+    {
+      "id": "locations",
+      "title": "Locations",
+      "icon": "locations",
+      "accent": "#39d8ff",
+      "preferredSide": "left"
+    },
+    {
+      "id": "factions",
+      "title": "Factions",
+      "icon": "factions",
+      "accent": "#8b3cff",
+      "preferredSide": "left"
+    },
+    {
+      "id": "quests",
+      "title": "Quests",
+      "icon": "quests",
+      "accent": "#d36cff",
+      "preferredSide": "left"
+    },
+    {
+      "id": "maps",
+      "title": "Maps",
+      "icon": "maps",
+      "accent": "#39d8ff",
+      "preferredSide": "left"
+    },
+    {
+      "id": "scripts",
+      "title": "Scripts",
+      "icon": "scripts",
+      "accent": "#d36cff",
+      "preferredSide": "left"
+    },
+    {
+      "id": "items",
+      "title": "Items",
+      "icon": "items",
+      "accent": "#39d8ff",
+      "preferredSide": "right"
+    },
+    {
+      "id": "lore",
+      "title": "Lore",
+      "icon": "lore",
+      "accent": "#8b3cff",
+      "preferredSide": "right"
+    },
+    {
+      "id": "timelines",
+      "title": "Timelines",
+      "icon": "timelines",
+      "accent": "#39d8ff",
+      "preferredSide": "right"
+    },
+    {
+      "id": "cinematic",
+      "title": "Cinematic",
+      "icon": "cinematic",
+      "accent": "#d36cff",
+      "preferredSide": "right"
+    },
+    {
+      "id": "brand",
+      "title": "Brand",
+      "icon": "brand",
+      "accent": "#d36cff",
+      "preferredSide": "right"
+    },
+    {
+      "id": "game",
+      "title": "Game Assets",
+      "icon": "game",
+      "accent": "#39d8ff",
+      "preferredSide": "right"
+    },
+    {
+      "id": "audio",
+      "title": "Audio",
+      "icon": "audio",
+      "accent": "#2277ff",
+      "preferredSide": "right"
+    },
+    {
+      "id": "magic",
+      "title": "Magic",
+      "icon": "magic",
+      "accent": "#8b3cff",
+      "preferredSide": "right"
+    }
+  ]
+}
