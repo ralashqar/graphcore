@@ -5,87 +5,116 @@ import { ScrollTrigger } from 'gsap/ScrollTrigger'
 
 gsap.registerPlugin(useGSAP, ScrollTrigger)
 
+type LandingIconId =
+  | 'graph'
+  | 'characters'
+  | 'stories'
+  | 'locations'
+  | 'items'
+  | 'lore'
+  | 'timelines'
+  | 'cinematic'
+  | 'script'
+  | 'marketing'
+  | 'game'
+  | 'audio'
+
+type LandingOrbitNode = {
+  className: string
+  title: string
+  copy: string
+  icon: LandingIconId
+}
+
+type LandingOutputCard = {
+  title: string
+  copy: string
+  icon: LandingIconId
+  media: string
+  chips: string[]
+}
+
 const navLinks = ['Product', 'Use Cases', 'Examples', 'Pricing', 'Resources', 'Company']
 
-const orbitNodes = [
+const orbitNodes: LandingOrbitNode[] = [
   {
     className: 'is-characters',
     title: 'Characters',
     copy: 'People, creatures, factions & relationships',
-    icon: 'icon-characters',
+    icon: 'characters',
   },
   {
     className: 'is-stories',
     title: 'Stories',
     copy: 'Plots, chapters, arcs & scripts',
-    icon: 'icon-stories',
+    icon: 'stories',
   },
   {
     className: 'is-locations',
     title: 'Locations',
     copy: 'Places, realms, maps & history',
-    icon: 'icon-locations',
+    icon: 'locations',
   },
   {
     className: 'is-items',
     title: 'Items & Gear',
     copy: 'Weapons, artifacts, equipment & magic',
-    icon: 'icon-items',
+    icon: 'items',
   },
   {
     className: 'is-lore',
     title: 'Lore & Rules',
     copy: 'Magic systems, mythology & world rules',
-    icon: 'icon-lore',
+    icon: 'lore',
   },
   {
     className: 'is-timelines',
     title: 'Timelines',
     copy: 'Events, history, relationships & continuity',
-    icon: 'icon-timelines',
+    icon: 'timelines',
   },
 ]
 
-const outputCards = [
+const outputCards: LandingOutputCard[] = [
   {
     title: 'Cinematic Content',
     copy: 'Scenes, trailers, storyboard shots & more.',
-    icon: 'icon-cinematic',
+    icon: 'cinematic',
     media: 'atlas-cinematic',
     chips: ['Teaser', 'Scenes', '+12'],
   },
   {
     title: 'Character Content',
     copy: 'Portraits, expressions, turnarounds & sheets.',
-    icon: 'icon-character-output',
+    icon: 'characters',
     media: 'atlas-character',
     chips: ['Portrait', 'Sheet', '+8'],
   },
   {
     title: 'Stories & Scripts',
     copy: 'Scripts, dialogue, novels & entries.',
-    icon: 'icon-script',
+    icon: 'script',
     media: 'atlas-script',
     chips: ['DOCX', 'PDF', 'TXT'],
   },
   {
     title: 'Brand & Marketing',
     copy: 'Logos, posters, packaging & brand kits.',
-    icon: 'icon-marketing',
+    icon: 'marketing',
     media: 'atlas-brand',
     chips: ['Poster', 'Kit', 'Cover'],
   },
   {
     title: 'Game Assets',
     copy: '3D concepts, props, icons & environments.',
-    icon: 'icon-game',
+    icon: 'game',
     media: 'atlas-game',
     chips: ['Sword', 'Shield', '+25'],
   },
   {
     title: 'Audio & Voice',
     copy: 'Music, SFX, ambience & voice lines.',
-    icon: 'icon-audio',
+    icon: 'audio',
     media: 'atlas-audio',
     chips: ['Theme', 'Ambience', 'VO'],
   },
@@ -96,6 +125,97 @@ const metrics = [
   { label: 'Worlds created', value: '180K+' },
   { label: 'User rating', value: '4.9/5' },
 ]
+
+function LandingIcon({ id }: { id: LandingIconId }) {
+  return (
+    <svg aria-hidden="true" className="landing-icon-glyph" viewBox="0 0 48 48">
+      {id === 'graph' ? (
+        <>
+          <path d="M24 8 38 16v16L24 40 10 32V16l14-8Z" />
+          <path d="M10 16l14 8 14-8M24 24v16" />
+          <circle cx="24" cy="8" r="2.5" />
+          <circle cx="10" cy="16" r="2.5" />
+          <circle cx="38" cy="16" r="2.5" />
+          <circle cx="10" cy="32" r="2.5" />
+          <circle cx="38" cy="32" r="2.5" />
+        </>
+      ) : null}
+      {id === 'characters' ? (
+        <>
+          <circle cx="24" cy="16" r="6" />
+          <path d="M13 38c1.7-7.2 6-11 11-11s9.3 3.8 11 11" />
+          <circle cx="12" cy="22" r="4.5" />
+          <path d="M5.5 36c1.1-4.8 3.9-7.4 7.3-7.4" />
+          <circle cx="36" cy="22" r="4.5" />
+          <path d="M42.5 36c-1.1-4.8-3.9-7.4-7.3-7.4" />
+        </>
+      ) : null}
+      {id === 'stories' ? (
+        <>
+          <path d="M8 12h12c2.2 0 4 1.8 4 4v22c0-2.2-1.8-4-4-4H8V12Z" />
+          <path d="M40 12H28c-2.2 0-4 1.8-4 4v22c0-2.2 1.8-4 4-4h12V12Z" />
+          <path d="M14 19h5M14 25h5M29 19h5M29 25h5" />
+        </>
+      ) : null}
+      {id === 'locations' ? (
+        <>
+          <path d="M24 42s13-12.1 13-23A13 13 0 0 0 11 19c0 10.9 13 23 13 23Z" />
+          <circle cx="24" cy="19" r="5" />
+        </>
+      ) : null}
+      {id === 'items' ? (
+        <>
+          <path d="M24 7 38 15v18L24 41 10 33V15l14-8Z" />
+          <path d="M10 15l14 8 14-8M24 23v18" />
+        </>
+      ) : null}
+      {id === 'lore' ? (
+        <>
+          <path d="M16 9h18v30H14c-3 0-5-2-5-5V14c0-3 2-5 5-5h2Z" />
+          <path d="M16 9v30M21 18h8M21 24h8M21 30h6" />
+        </>
+      ) : null}
+      {id === 'timelines' ? (
+        <>
+          <rect x="9" y="12" width="30" height="28" rx="4" />
+          <path d="M15 8v8M33 8v8M9 21h30M16 28h4M24 28h4M32 28h1M16 34h4M24 34h4" />
+        </>
+      ) : null}
+      {id === 'cinematic' ? (
+        <>
+          <path d="M9 18h30v21H9V18Z" />
+          <path d="M11 18 17 9M20 18l6-9M29 18l6-9M12 9h27v9" />
+          <path d="m21 25 9 5-9 5v-10Z" />
+        </>
+      ) : null}
+      {id === 'script' ? (
+        <>
+          <path d="M14 7h16l7 7v27H14V7Z" />
+          <path d="M30 7v9h7M20 22h12M20 28h12M20 34h8" />
+        </>
+      ) : null}
+      {id === 'marketing' ? (
+        <>
+          <path d="M9 28h7l18 8V12L16 20H9v8Z" />
+          <path d="M16 28v9M37 19l5-3M38 26h5M37 33l5 3" />
+        </>
+      ) : null}
+      {id === 'game' ? (
+        <>
+          <path d="M15 19h18c5 0 8 4 8 10v3c0 3-2 5-4.7 5-2.2 0-3.8-1.4-5.4-3.6H17.1C15.5 35.6 13.9 37 11.7 37 9 37 7 35 7 32v-3c0-6 3-10 8-10Z" />
+          <path d="M16 27h8M20 23v8" />
+          <circle cx="31.5" cy="26.5" r="1.8" />
+          <circle cx="36" cy="31" r="1.8" />
+        </>
+      ) : null}
+      {id === 'audio' ? (
+        <>
+          <path d="M8 28v-8M14 34V14M20 38V10M26 34V14M32 28v-8M38 32V16" />
+        </>
+      ) : null}
+    </svg>
+  )
+}
 
 type LandingPageProps = {
   isSignedIn: boolean
@@ -137,8 +257,11 @@ export function LandingPage({
     )
 
     gsap.to('.landing-world-core', {
-      y: -10,
-      duration: 3.6,
+      y: -16,
+      scale: 1.015,
+      rotate: 0.6,
+      transformOrigin: '50% 50%',
+      duration: 3.2,
       ease: 'sine.inOut',
       repeat: -1,
       yoyo: true,
@@ -218,12 +341,12 @@ export function LandingPage({
           </div>
 
           <div className="landing-world-stage">
-            <div className="landing-world-aura" aria-hidden="true" />
-            <img className="landing-world-core" alt="Glowing connected world graph core" src="/landing/hero-world-core-v2.png" />
-            <div className="landing-core-ring" aria-hidden="true" />
+            <img className="landing-world-core" alt="Glowing connected world graph core" src="/landing/hero-world-core-v4.png" />
             {orbitNodes.map((node) => (
               <article className={`landing-orbit-node ${node.className}`} key={node.title}>
-                <span className={`landing-atlas-icon ${node.icon}`} aria-hidden="true" />
+                <span className="landing-icon-frame">
+                  <LandingIcon id={node.icon} />
+                </span>
                 <div>
                   <strong>{node.title}</strong>
                   <span>{node.copy}</span>
@@ -237,12 +360,7 @@ export function LandingPage({
         <aside className="landing-proof-panel">
           <h2>Everything stays connected.</h2>
           <p>Change one thing, and it flows everywhere.</p>
-          <div className="landing-mini-network" aria-hidden="true">
-            <span className="landing-mini-core" />
-            {Array.from({ length: 8 }, (_, index) => (
-              <span className={`landing-mini-node is-${index + 1}`} key={index} />
-            ))}
-          </div>
+          <img className="landing-mini-network" src="/landing/connected-network-v1.png" alt="" aria-hidden="true" />
           <p>One source of truth. Infinite possibilities.</p>
         </aside>
       </section>
@@ -283,7 +401,9 @@ export function LandingPage({
           {outputCards.map((card) => (
             <article className="landing-output-card" key={card.title}>
               <header>
-                <span className={`landing-atlas-icon ${card.icon}`} aria-hidden="true" />
+                <span className="landing-icon-frame">
+                  <LandingIcon id={card.icon} />
+                </span>
                 <div>
                   <strong>{card.title}</strong>
                   <p>{card.copy}</p>
