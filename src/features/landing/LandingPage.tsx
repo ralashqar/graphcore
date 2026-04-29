@@ -22,7 +22,6 @@ type LandingIconId =
 type LandingOrbitNode = {
   className: string
   title: string
-  copy: string
   icon: LandingIconId
 }
 
@@ -40,37 +39,31 @@ const orbitNodes: LandingOrbitNode[] = [
   {
     className: 'is-characters',
     title: 'Characters',
-    copy: 'People, creatures, factions & relationships',
     icon: 'characters',
   },
   {
     className: 'is-stories',
     title: 'Stories',
-    copy: 'Plots, chapters, arcs & scripts',
     icon: 'stories',
   },
   {
     className: 'is-locations',
     title: 'Locations',
-    copy: 'Places, realms, maps & history',
     icon: 'locations',
   },
   {
     className: 'is-items',
     title: 'Items & Gear',
-    copy: 'Weapons, artifacts, equipment & magic',
     icon: 'items',
   },
   {
     className: 'is-lore',
     title: 'Lore & Rules',
-    copy: 'Magic systems, mythology & world rules',
     icon: 'lore',
   },
   {
     className: 'is-timelines',
     title: 'Timelines',
-    copy: 'Events, history, relationships & continuity',
     icon: 'timelines',
   },
 ]
@@ -344,16 +337,12 @@ export function LandingPage({
             <img className="landing-world-core" alt="Glowing connected world graph core" src="/landing/hero-world-core-v4.png" />
             {orbitNodes.map((node) => (
               <article className={`landing-orbit-node ${node.className}`} key={node.title}>
+                <strong>{node.title}</strong>
                 <span className="landing-icon-frame">
                   <LandingIcon id={node.icon} />
                 </span>
-                <div>
-                  <strong>{node.title}</strong>
-                  <span>{node.copy}</span>
-                </div>
               </article>
             ))}
-            <span className="landing-origin-label">Everything comes from here</span>
           </div>
         </div>
 
@@ -374,10 +363,30 @@ export function LandingPage({
                 <stop offset="52%" stopColor="#d36cff" stopOpacity="0.72" />
                 <stop offset="100%" stopColor="#39d8ff" stopOpacity="0.82" />
               </linearGradient>
+              <linearGradient id="landing-flow-pulse-gradient" x1="0%" x2="100%" y1="0%" y2="0%">
+                <stop offset="0%" stopColor="#8b3cff" stopOpacity="0" />
+                <stop offset="32%" stopColor="#d36cff" stopOpacity="0.54" />
+                <stop offset="52%" stopColor="#f3fdff" stopOpacity="0.86" />
+                <stop offset="72%" stopColor="#39d8ff" stopOpacity="0.54" />
+                <stop offset="100%" stopColor="#2277ff" stopOpacity="0" />
+              </linearGradient>
               <filter id="landing-flow-glow" x="-20%" y="-80%" width="140%" height="260%">
                 <feGaussianBlur stdDeviation="3.2" result="blur" />
                 <feMerge>
                   <feMergeNode in="blur" />
+                  <feMergeNode in="SourceGraphic" />
+                </feMerge>
+              </filter>
+              <filter id="landing-flow-pulse-glow" x="-24%" y="-120%" width="148%" height="340%">
+                <feGaussianBlur stdDeviation="6.5" result="wideBlur" />
+                <feColorMatrix
+                  in="wideBlur"
+                  result="softGlow"
+                  type="matrix"
+                  values="0 0 0 0 0.22 0 0 0 0 0.82 0 0 0 0 1 0 0 0 0.62 0"
+                />
+                <feMerge>
+                  <feMergeNode in="softGlow" />
                   <feMergeNode in="SourceGraphic" />
                 </feMerge>
               </filter>
@@ -388,6 +397,18 @@ export function LandingPage({
             <path className="landing-flow-line is-four" d="M600 0 C596 92 702 98 702 248" />
             <path className="landing-flow-line is-five" d="M600 0 C608 72 892 76 906 248" />
             <path className="landing-flow-line is-six" d="M600 0 C625 58 1082 60 1110 248" />
+            <path className="landing-flow-pulse-glow is-one" d="M600 0 C575 58 118 60 90 248" />
+            <path className="landing-flow-pulse-glow is-two" d="M600 0 C592 72 308 76 294 248" />
+            <path className="landing-flow-pulse-glow is-three" d="M600 0 C604 92 498 98 498 248" />
+            <path className="landing-flow-pulse-glow is-four" d="M600 0 C596 92 702 98 702 248" />
+            <path className="landing-flow-pulse-glow is-five" d="M600 0 C608 72 892 76 906 248" />
+            <path className="landing-flow-pulse-glow is-six" d="M600 0 C625 58 1082 60 1110 248" />
+            <path className="landing-flow-pulse is-one" d="M600 0 C575 58 118 60 90 248" />
+            <path className="landing-flow-pulse is-two" d="M600 0 C592 72 308 76 294 248" />
+            <path className="landing-flow-pulse is-three" d="M600 0 C604 92 498 98 498 248" />
+            <path className="landing-flow-pulse is-four" d="M600 0 C596 92 702 98 702 248" />
+            <path className="landing-flow-pulse is-five" d="M600 0 C608 72 892 76 906 248" />
+            <path className="landing-flow-pulse is-six" d="M600 0 C625 58 1082 60 1110 248" />
             <circle className="landing-flow-dot" cx="600" cy="0" r="4" />
             <circle className="landing-flow-dot" cx="90" cy="248" r="3" />
             <circle className="landing-flow-dot" cx="294" cy="248" r="3" />
