@@ -121,6 +121,7 @@ import {
   type WorldNodeVisualMode,
   type WorldPromptTranscriptEntry,
   type WorldPromptTurnLens,
+  type WorldPromptTurnLensChangeKind,
 } from './world/worldPresentation'
 import type { GraphWorkspaceProps } from './graph/types'
 import { ProjectWorldOnboarding } from './onboarding/ProjectWorldOnboarding'
@@ -340,6 +341,34 @@ type WorldPromptExpandedLogEntry = {
   title: string
   body: string
   meta?: string[]
+}
+
+function timeValue(value: string | null | undefined) {
+  if (!value) return 0
+  const timestamp = new Date(value).getTime()
+  return Number.isFinite(timestamp) ? timestamp : 0
+}
+
+function entityRecentChangeKind(entity: WorldEntity): Extract<WorldPromptTurnLensChangeKind, 'added' | 'modified'> {
+  const createdAt = timeValue(entity.createdAt)
+  const updatedAt = timeValue(entity.updatedAt)
+  return updatedAt > createdAt + 1_000 ? 'modified' : 'added'
+}
+
+function worldChangeBadgeLabel(changeKind: WorldPromptTurnLensChangeKind | 'created') {
+  switch (changeKind) {
+    case 'added':
+    case 'created':
+      return 'Added'
+    case 'modified':
+      return 'Modified'
+    case 'replaced':
+      return 'Replaced'
+    case 'touched':
+      return 'Touched'
+    default:
+      return 'Changed'
+  }
 }
 
 function compactWorldPromptLogText(text: string, limit = WORLD_PROMPT_LOG_DETAIL_LIMIT) {
@@ -2650,6 +2679,19 @@ export function WorldGraphPage({
       : [],
     [activeTurnLens, relationshipByKey],
   )
+  const recentWorldEntityRows = useMemo(
+    () => [...worldEntities]
+      .sort((left, right) => (
+        Math.max(timeValue(right.updatedAt), timeValue(right.createdAt))
+        - Math.max(timeValue(left.updatedAt), timeValue(left.createdAt))
+      ))
+      .slice(0, 4)
+      .map((entity) => ({
+        entity,
+        changeKind: entityRecentChangeKind(entity),
+      })),
+    [worldEntities],
+  )
   const activeTurnLensAffectedEntities = useMemo(() => {
     if (!activeTurnLens) return []
     const keys = new Set(activeTurnLens.entityKeys)
@@ -3827,6 +3869,8 @@ export function WorldGraphPage({
                 onSelectSession={setSelectedPromptSessionKey}
                 onStartNewSession={handleStartNewPromptSession}
                 onSubmit={handleSubmitWorldPrompt}
+                onSelectGraphNode={selectWorldNode}
+                onSelectGraphEdge={selectWorldEdge}
                 onOpenTurnLens={openTurnLens}
                 onCloseTurnLens={clearTurnLens}
                 historyOpen={historyOpen}
@@ -4342,6 +4386,8 @@ export function WorldGraphPage({
                   onSelectSession={setSelectedPromptSessionKey}
                   onStartNewSession={handleStartNewPromptSession}
                   onSubmit={handleSubmitWorldPrompt}
+                  onSelectGraphNode={selectWorldNode}
+                  onSelectGraphEdge={selectWorldEdge}
                   onOpenTurnLens={openTurnLens}
                   onCloseTurnLens={clearTurnLens}
                   historyOpen={historyOpen}
@@ -4897,7 +4943,7 @@ export function WorldGraphPage({
             </div>
           </div>
         ) : showTurnLensInspector && activeTurnLens ? (
-          <div className="detail-stack compact">
+          <div className="detail-stack compact world-turn-inspector">
             <span className="eyebrow">Turn Lens</span>
             <h3>{activeTurnLens.label}</h3>
             <div className="inline-note">{activeTurnLens.prompt || 'No prompt text was recorded for this turn.'}</div>
@@ -4910,17 +4956,21 @@ export function WorldGraphPage({
               </div>
               {activeTurnLensAffectedEntities.length === 0 ? (
                 <div className="inline-note">No affected entity nodes are available for this turn.</div>
-              ) : activeTurnLensAffectedEntities.map((entity) => (
-                <button key={entity.key} className="rail-button item-row" onClick={() => selectWorldNode(entity.key)} type="button">
-                  <div className="media-thumb">
-                    <EntityIcon id={iconForWorldEntity(entity.nodeType)} />
-                  </div>
-                  <div className="item-row-copy">
-                    <strong>{entity.name}</strong>
-                    <span>{labelForWorldEntity(entity.nodeType)}</span>
-                  </div>
-                </button>
-              ))}
+              ) : activeTurnLensAffectedEntities.map((entity) => {
+                const changeKind = activeTurnLens.entityChangeKinds[entity.key] ?? 'touched'
+                return (
+                  <button key={entity.key} className="rail-button item-row world-inspector-change-row" onClick={() => selectWorldNode(entity.key)} type="button">
+                    <div className="media-thumb">
+                      <EntityIcon id={iconForWorldEntity(entity.nodeType)} />
+                    </div>
+                    <div className="item-row-copy">
+                      <strong>{entity.name}</strong>
+                      <span>{labelForWorldEntity(entity.nodeType)}</span>
+                    </div>
+                    <span className={`world-inspector-change-badge is-${changeKind}`}>{worldChangeBadgeLabel(changeKind)}</span>
+                  </button>
+                )
+              })}
             </div>
             <div className="editor-section compact-section">
               <div className="section-head">
@@ -4934,8 +4984,9 @@ export function WorldGraphPage({
               ) : activeTurnLensRelationships.map((relationship) => {
                 const sourceName = entityByKey.get(relationship.sourceEntityKey)?.name ?? relationship.sourceEntityKey
                 const targetName = entityByKey.get(relationship.targetEntityKey)?.name ?? relationship.targetEntityKey
+                const changeKind = activeTurnLens.relationshipChangeKinds[relationship.key] ?? 'modified'
                 return (
-                  <button key={relationship.key} className="rail-button item-row" onClick={() => selectWorldEdge(relationship.key)} type="button">
+                  <button key={relationship.key} className="rail-button item-row world-inspector-change-row" onClick={() => selectWorldEdge(relationship.key)} type="button">
                     <div className="media-thumb">
                       <EntityIcon id="graph" />
                     </div>
@@ -4943,6 +4994,7 @@ export function WorldGraphPage({
                       <strong>{relationship.verb || 'related to'}</strong>
                       <span>{sourceName}{' -> '}{targetName}</span>
                     </div>
+                    <span className={`world-inspector-change-badge is-${changeKind}`}>{worldChangeBadgeLabel(changeKind)}</span>
                   </button>
                 )
               })}
@@ -5079,7 +5131,7 @@ export function WorldGraphPage({
             </div>
           </div>
         ) : !inspectorNodeKey ? (
-          <div className="detail-stack compact">
+          <div className="detail-stack compact world-summary-inspector">
             <span className="eyebrow">World Summary</span>
             <h3>Global Atlas</h3>
             <div className="inline-note">Select a node to inspect it. Focus and turn views are temporary overlays on this single global atlas.</div>
@@ -5087,11 +5139,11 @@ export function WorldGraphPage({
               <div className="section-head">
                 <div>
                   <span className="eyebrow">Recent</span>
-                  <h3>Recent additions</h3>
+                  <h3>Recent changes</h3>
                 </div>
               </div>
-              {worldEntities.slice(-4).reverse().map((entity) => (
-                <button key={entity.key} className="rail-button item-row" onClick={() => selectWorldNode(entity.key)} type="button">
+              {recentWorldEntityRows.map(({ entity, changeKind }) => (
+                <button key={entity.key} className="rail-button item-row world-inspector-change-row" onClick={() => selectWorldNode(entity.key)} type="button">
                   <div className="media-thumb">
                     <EntityIcon id={iconForWorldEntity(entity.nodeType)} />
                   </div>
@@ -5099,6 +5151,7 @@ export function WorldGraphPage({
                     <strong>{entity.name}</strong>
                     <span>{labelForWorldEntity(entity.nodeType)}</span>
                   </div>
+                  <span className={`world-inspector-change-badge is-${changeKind}`}>{worldChangeBadgeLabel(changeKind)}</span>
                 </button>
               ))}
             </div>
@@ -6088,6 +6141,8 @@ function WorldPromptChatPanel({
   onSelectSession,
   onStartNewSession,
   onSubmit,
+  onSelectGraphNode,
+  onSelectGraphEdge,
   onOpenTurnLens,
   onOpenHistory,
   onCloseHistory,
@@ -6131,6 +6186,8 @@ function WorldPromptChatPanel({
   onSelectSession: (key: string | null) => void
   onStartNewSession: () => void
   onSubmit: (promptOverride?: string) => Promise<void> | void
+  onSelectGraphNode: (key: string) => void
+  onSelectGraphEdge: (key: string) => void
   onOpenTurnLens: (lens: WorldPromptTurnLens) => void
   onCloseTurnLens: () => void
   onOpenHistory: () => void
@@ -6504,7 +6561,15 @@ function WorldPromptChatPanel({
           ? 'activity'
           : 'content'
     const entryTurnLens = entry.kind === 'turn_lens' ? entry.turnLens : undefined
-    const ResultWrapper = entryTurnLens ? 'button' : 'div'
+    const entryEntityKey = entry.kind === 'entity_created' || entry.kind === 'entity_updated' || entry.kind === 'entity_replaced'
+      ? entry.entityKey
+      : null
+    const entryRelationshipKey = entry.kind === 'relationship_created' || entry.kind === 'relationship_updated'
+      ? entry.relationshipKey
+      : null
+    const hasGraphTarget = Boolean(entryEntityKey || entryRelationshipKey)
+    const isTitleOnlyResult = !entry.detail && entry.kind !== 'relationship_created' && !entryTurnLens
+    const ResultWrapper = entryTurnLens || hasGraphTarget ? 'button' : 'div'
     const fullBody = [
       entry.detail,
       entry.kind === 'relationship_created' ? `${entry.sourceLabel} -> ${entry.targetLabel}` : null,
@@ -6518,16 +6583,39 @@ function WorldPromptChatPanel({
           body: fullBody,
         }
       : null
+    function handleResultRowClick() {
+      if (entryTurnLens) {
+        onOpenTurnLens(entryTurnLens)
+        return
+      }
+      if (entryEntityKey) {
+        onSelectGraphNode(entryEntityKey)
+        return
+      }
+      if (entryRelationshipKey) {
+        onSelectGraphEdge(entryRelationshipKey)
+        return
+      }
+      if (expandableLogEntry) {
+        setExpandedLogEntry(expandableLogEntry)
+      }
+    }
+    function handleResultRowKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
+      if (entryTurnLens || hasGraphTarget) return
+      if (expandableLogEntry) {
+        handleExpandableLogKeyDown(event, expandableLogEntry)
+      }
+    }
 
     return (
       <ResultWrapper
         key={entry.id}
-        className={`world-prompt-row world-prompt-row-system world-prompt-card world-prompt-row-result${entry.kind === 'system_status' && entry.tone === 'error' ? ' is-error' : ''}${entryTurnLens ? ' is-clickable' : ''}${entryTurnLens?.turnId === activeTurnLensId ? ' is-active-lens' : ''}${expandableLogEntry ? ' is-expandable' : ''}`}
-        onClick={entryTurnLens ? () => onOpenTurnLens(entryTurnLens) : expandableLogEntry ? () => setExpandedLogEntry(expandableLogEntry) : undefined}
-        onKeyDown={!entryTurnLens && expandableLogEntry ? (event) => handleExpandableLogKeyDown(event, expandableLogEntry) : undefined}
-        role={!entryTurnLens && expandableLogEntry ? 'button' : undefined}
-        tabIndex={!entryTurnLens && expandableLogEntry ? 0 : undefined}
-        type={entryTurnLens ? 'button' : undefined}
+        className={`world-prompt-row world-prompt-row-system world-prompt-card world-prompt-row-result${entry.kind === 'system_status' && entry.tone === 'error' ? ' is-error' : ''}${entryTurnLens || hasGraphTarget ? ' is-clickable' : ''}${entryTurnLens?.turnId === activeTurnLensId ? ' is-active-lens' : ''}${expandableLogEntry && !hasGraphTarget ? ' is-expandable' : ''}${isTitleOnlyResult ? ' is-title-only' : ''}`}
+        onClick={entryTurnLens || hasGraphTarget || expandableLogEntry ? handleResultRowClick : undefined}
+        onKeyDown={!entryTurnLens && !hasGraphTarget && expandableLogEntry ? handleResultRowKeyDown : undefined}
+        role={!entryTurnLens && !hasGraphTarget && expandableLogEntry ? 'button' : undefined}
+        tabIndex={!entryTurnLens && !hasGraphTarget && expandableLogEntry ? 0 : undefined}
+        type={entryTurnLens || hasGraphTarget ? 'button' : undefined}
       >
         <div className="world-prompt-entry-icon">
           <EntityIcon id={iconId} />

@@ -15,7 +15,7 @@ import type {
   WorldPromptTurn,
 } from '../../domain/worldPrompt.ts'
 import { worldPromptEventPayloadSchema, worldPromptPlanPreviewSchema } from '../../domain/worldPrompt.ts'
-import type { WorldEntity, WorldOperator, WorldResult } from '../../domain/worldGraph.ts'
+import type { WorldEntity, WorldOperator, WorldRelationship, WorldResult } from '../../domain/worldGraph.ts'
 import type { WorldGraphDepthMode, WorldSceneDisplayTier, WorldSceneTransitionState } from '../../domain/worldGraphScene.ts'
 import { labelForWorldEntity } from '../../domain/worldGraphHelpers.ts'
 import { readWorldSequenceMetadata } from '../../domain/worldSequence.ts'
@@ -79,6 +79,8 @@ export type WorldPromptTurnLens = {
   nodeKeys: string[]
   rootEntityKey: string | null
   changeCount: number
+  entityChangeKinds: Record<string, WorldPromptTurnLensChangeKind>
+  relationshipChangeKinds: Record<string, WorldPromptTurnLensChangeKind>
   counts: {
     entities: number
     relationships: number
@@ -86,6 +88,8 @@ export type WorldPromptTurnLens = {
     total: number
   }
 }
+
+export type WorldPromptTurnLensChangeKind = 'added' | 'modified' | 'replaced' | 'touched'
 
 export type WorldEdgeRevealReason = 'lens' | 'selected' | 'focus_hover' | 'story' | 'hidden'
 
@@ -602,6 +606,68 @@ function addUniqueKey(target: Set<string>, value: unknown) {
   }
 }
 
+function hasMeaningfulKey(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
+function parseTime(value: string | null | undefined) {
+  if (!value) return null
+  const timestamp = new Date(value).getTime()
+  return Number.isFinite(timestamp) ? timestamp : null
+}
+
+function wasCreatedNearEvent(record: { createdAt?: string; updatedAt?: string }, eventCreatedAt: string) {
+  const createdAt = parseTime(record.createdAt)
+  const eventAt = parseTime(eventCreatedAt)
+  if (createdAt === null || eventAt === null) return false
+  return Math.abs(eventAt - createdAt) <= 15_000
+}
+
+function mergeTurnLensChangeKind(
+  target: Map<string, WorldPromptTurnLensChangeKind>,
+  key: unknown,
+  changeKind: WorldPromptTurnLensChangeKind,
+) {
+  if (!hasMeaningfulKey(key)) return
+  const current = target.get(key)
+  const rank: Record<WorldPromptTurnLensChangeKind, number> = {
+    touched: 0,
+    modified: 1,
+    replaced: 2,
+    added: 3,
+  }
+  if (!current || rank[changeKind] > rank[current]) {
+    target.set(key, changeKind)
+  }
+}
+
+function entityChangeKindForAppliedOp(
+  eventCreatedAt: string,
+  op: PromptToWorldOp | undefined,
+  entity: WorldEntity,
+): WorldPromptTurnLensChangeKind {
+  if (!op) return 'added'
+  if (op.op === 'replace_entity') return entity.key === op.payload.targetEntityKey ? 'modified' : 'replaced'
+  if (op.op === 'update_entity') return entity.key === op.payload.targetEntityKey ? 'modified' : 'added'
+  if (op.op === 'upsert_entity' && op.payload.targetEntityKey === entity.key && !op.metadata?.projectedCreate) {
+    return wasCreatedNearEvent(entity, eventCreatedAt) ? 'added' : 'modified'
+  }
+  return 'added'
+}
+
+function relationshipChangeKindForAppliedOp(
+  eventCreatedAt: string,
+  op: PromptToWorldOp | undefined,
+  relationship: WorldRelationship,
+): WorldPromptTurnLensChangeKind {
+  if (!op) return 'added'
+  if (op.op === 'update_relationship') return relationship.key === op.payload.targetRelationshipKey ? 'modified' : 'added'
+  if (op.op === 'upsert_relationship' && op.payload.targetRelationshipKey === relationship.key) {
+    return wasCreatedNearEvent(relationship, eventCreatedAt) ? 'added' : 'modified'
+  }
+  return 'added'
+}
+
 function toReadonlySet(values: readonly string[] | ReadonlySet<string> | null | undefined) {
   if (!values) return new Set<string>()
   return values instanceof Set ? values : new Set(values)
@@ -649,6 +715,8 @@ export function buildWorldPromptTurnLenses(input: {
     relationshipKeys: Set<string>
     operatorKeys: Set<string>
     resultKeys: Set<string>
+    entityChangeKinds: Map<string, WorldPromptTurnLensChangeKind>
+    relationshipChangeKinds: Map<string, WorldPromptTurnLensChangeKind>
   }>()
 
   for (const event of input.events) {
@@ -666,18 +734,25 @@ export function buildWorldPromptTurnLenses(input: {
       relationshipKeys: new Set<string>(),
       operatorKeys: new Set<string>(),
       resultKeys: new Set<string>(),
+      entityChangeKinds: new Map<string, WorldPromptTurnLensChangeKind>(),
+      relationshipChangeKinds: new Map<string, WorldPromptTurnLensChangeKind>(),
     }
     if (new Date(event.createdAt).getTime() < new Date(draft.createdAt).getTime()) {
       draft.createdAt = event.createdAt
     }
 
+    const op = parsed.data.op
     for (const entity of applied.worldEntities ?? []) {
       addUniqueKey(draft.entityKeys, entity.key)
+      mergeTurnLensChangeKind(draft.entityChangeKinds, entity.key, entityChangeKindForAppliedOp(event.createdAt, op, entity))
     }
     for (const relationship of applied.worldRelationships ?? []) {
       addUniqueKey(draft.relationshipKeys, relationship.key)
       addUniqueKey(draft.entityKeys, relationship.sourceEntityKey)
       addUniqueKey(draft.entityKeys, relationship.targetEntityKey)
+      mergeTurnLensChangeKind(draft.relationshipChangeKinds, relationship.key, relationshipChangeKindForAppliedOp(event.createdAt, op, relationship))
+      mergeTurnLensChangeKind(draft.entityChangeKinds, relationship.sourceEntityKey, 'touched')
+      mergeTurnLensChangeKind(draft.entityChangeKinds, relationship.targetEntityKey, 'touched')
     }
     for (const operator of applied.worldOperators ?? []) {
       addUniqueKey(draft.operatorKeys, operator.key)
@@ -721,6 +796,8 @@ export function buildWorldPromptTurnLenses(input: {
       nodeKeys,
       rootEntityKey: entityKeys[0] ?? null,
       changeCount,
+      entityChangeKinds: Object.fromEntries(draft.entityChangeKinds),
+      relationshipChangeKinds: Object.fromEntries(draft.relationshipChangeKinds),
       counts: {
         entities: entityKeys.length,
         relationships: relationshipKeys.length,
@@ -1451,6 +1528,7 @@ export function buildWorldPromptTranscriptEntries(input: {
         const replaceOp = payload.op?.op === 'replace_entity' ? payload.op : null
         const upsertRelationshipOp = payload.op?.op === 'upsert_relationship' ? payload.op : null
         const updateRelationshipOp = payload.op?.op === 'update_relationship' ? payload.op : null
+        const appliedOp = payload.op
         if (replaceOp && applied?.worldEntities && applied.worldEntities.length > 0) {
           const replacementEntity = applied.worldEntities.find((entity) => entity.key !== replaceOp.payload.targetEntityKey && entity.status !== 'archived')
             ?? applied.worldEntities.find((entity) => entity.key !== replaceOp.payload.targetEntityKey)
@@ -1481,14 +1559,13 @@ export function buildWorldPromptTranscriptEntries(input: {
             && !upsertOp.metadata?.projectedCreate
             && upsertOp.payload.targetEntityKey === entity.key
           ) {
+            const changeKind = entityChangeKindForAppliedOp(source.event.createdAt, appliedOp, entity)
             entries.push({
               id: `${source.id}:entity-upsert:${entity.key}`,
               createdAt: source.event.createdAt,
-              kind: 'entity_updated',
-              label: `Updated ${entity.name}`,
-              detail: upsertOp.payload.entity.context.trim()
-                ? 'Expanded context'
-                : (upsertOp.payload.entity.summary.trim() ? 'Updated summary' : labelForWorldEntity(entity.nodeType)),
+              kind: changeKind === 'added' ? 'entity_created' : 'entity_updated',
+              label: changeKind === 'added' ? `Added ${entity.name}` : `Updated ${entity.name}`,
+              detail: changeKind === 'added' ? labelForWorldEntity(entity.nodeType) : undefined,
               entityKey: entity.key,
               entityNodeType: entity.nodeType,
               turnLens,
@@ -1496,18 +1573,11 @@ export function buildWorldPromptTranscriptEntries(input: {
             continue
           }
           if (updateOp && entity.key === updateOp.payload.targetEntityKey) {
-            const detailParts = [
-              typeof updateOp.payload.changes.summary === 'string' ? 'Updated summary' : null,
-              typeof updateOp.payload.changes.context === 'string' ? 'Expanded context' : null,
-              updateOp.payload.changes.tags ? 'Updated tags' : null,
-              updateOp.payload.changes.aliases ? 'Updated aliases' : null,
-            ].filter(Boolean)
             entries.push({
               id: `${source.id}:entity-update:${entity.key}`,
               createdAt: source.event.createdAt,
               kind: 'entity_updated',
               label: `Updated ${entity.name}`,
-              detail: detailParts.join(' · ') || labelForWorldEntity(entity.nodeType),
               entityKey: entity.key,
               entityNodeType: entity.nodeType,
               turnLens,
@@ -1529,12 +1599,13 @@ export function buildWorldPromptTranscriptEntries(input: {
           const sourceName = input.entityByKey.get(relationship.sourceEntityKey)?.name ?? relationship.sourceEntityKey
           const targetName = input.entityByKey.get(relationship.targetEntityKey)?.name ?? relationship.targetEntityKey
           if (upsertRelationshipOp && upsertRelationshipOp.payload.targetRelationshipKey === relationship.key) {
+            const changeKind = relationshipChangeKindForAppliedOp(source.event.createdAt, appliedOp, relationship)
             entries.push({
               id: `${source.id}:relationship-upsert:${relationship.key}`,
               createdAt: source.event.createdAt,
-              kind: 'relationship_updated',
-              label: `Updated link between ${sourceName} and ${targetName}`,
-              detail: relationship.notes.trim() || relationship.verb,
+              kind: changeKind === 'added' ? 'relationship_created' : 'relationship_updated',
+              label: changeKind === 'added' ? `Linked ${sourceName} and ${targetName}` : `Updated link between ${sourceName} and ${targetName}`,
+              detail: changeKind === 'added' ? relationship.notes.trim() || relationship.verb : undefined,
               relationshipKey: relationship.key,
               sourceLabel: sourceName,
               targetLabel: targetName,
@@ -1543,17 +1614,11 @@ export function buildWorldPromptTranscriptEntries(input: {
             continue
           }
           if (updateRelationshipOp && relationship.key === updateRelationshipOp.payload.targetRelationshipKey) {
-            const detailParts = [
-              typeof updateRelationshipOp.payload.changes.notes === 'string' ? 'Updated relationship details' : null,
-              typeof updateRelationshipOp.payload.changes.strength !== 'undefined' ? 'Adjusted strength' : null,
-              typeof updateRelationshipOp.payload.changes.confidence !== 'undefined' ? 'Adjusted confidence' : null,
-            ].filter(Boolean)
             entries.push({
               id: `${source.id}:relationship-update:${relationship.key}`,
               createdAt: source.event.createdAt,
               kind: 'relationship_updated',
               label: `Updated link between ${sourceName} and ${targetName}`,
-              detail: detailParts.join(' · ') || relationship.notes.trim() || relationship.verb,
               relationshipKey: relationship.key,
               sourceLabel: sourceName,
               targetLabel: targetName,

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type RefObject } from 'react'
 
 import { workspaceService } from '../../application/services/workspaceService'
 import {
@@ -18,6 +18,10 @@ import {
 } from '../../domain/worldPrompt'
 import { EntityIcon, type EntityIconId } from '../../shared/entityIcons'
 import { buildWorldPromptSessionTokenMeter } from '../world/worldPresentation'
+import {
+  buildSeedGeneratedPreviewCards,
+  type SeedGeneratedPreviewCard,
+} from './projectWorldOnboardingPreview'
 
 const STORY_ART_STYLE_ATLAS_URL = '/onboarding/styles/story-art-styles-atlas.png'
 const STORY_ART_STYLE_ATLAS_INDEX: Partial<Record<string, readonly [number, number]>> = {
@@ -68,6 +72,141 @@ const EXAMPLES = [
   },
 ]
 
+const ONBOARDING_ORBIT_NODES: Array<{
+  className: string
+  title: string
+  icon: EntityIconId
+  alternates?: Array<{ title: string; icon: EntityIconId }>
+}> = [
+  {
+    className: 'is-characters',
+    title: 'Characters',
+    icon: 'character',
+    alternates: [
+      { title: 'Factions', icon: 'group' },
+      { title: 'Cast', icon: 'character' },
+      { title: 'Voices', icon: 'activity' },
+    ],
+  },
+  {
+    className: 'is-stories',
+    title: 'Stories',
+    icon: 'thread',
+    alternates: [
+      { title: 'Scripts', icon: 'content' },
+      { title: 'Cinematics', icon: 'cinematic' },
+      { title: 'Threads', icon: 'thread' },
+    ],
+  },
+  {
+    className: 'is-locations',
+    title: 'Locations',
+    icon: 'environment',
+    alternates: [
+      { title: 'Regions', icon: 'environment' },
+      { title: 'Worlds', icon: 'global' },
+      { title: 'Routes', icon: 'graph' },
+    ],
+  },
+  {
+    className: 'is-items',
+    title: 'Artifacts',
+    icon: 'item',
+    alternates: [
+      { title: 'Items', icon: 'item' },
+      { title: 'Assets', icon: 'asset' },
+      { title: 'Relics', icon: 'archetype' },
+    ],
+  },
+  {
+    className: 'is-lore',
+    title: 'Lore',
+    icon: 'concept',
+    alternates: [
+      { title: 'Canon', icon: 'graph' },
+      { title: 'Concepts', icon: 'concept' },
+      { title: 'Rules', icon: 'info' },
+    ],
+  },
+  {
+    className: 'is-timelines',
+    title: 'Events',
+    icon: 'event',
+    alternates: [
+      { title: 'Episodes', icon: 'event' },
+      { title: 'Launches', icon: 'release' },
+      { title: 'Beats', icon: 'activity' },
+    ],
+  },
+]
+
+type OnboardingOrbitNode = typeof ONBOARDING_ORBIT_NODES[number]
+
+type OnboardingOrbitDisplayNode = OnboardingOrbitNode & {
+  variantIndex: number
+}
+
+type OnboardingOrbitSwapState = {
+  slotClassName: string
+  phase: 'out' | 'in'
+}
+
+type OnboardingOrbitConnector = {
+  id: string
+  d: string
+}
+
+const ONBOARDING_OUTPUT_CARDS: Array<{
+  title: string
+  copy: string
+  icon: EntityIconId
+  media: string
+  chips: string[]
+}> = [
+  {
+    title: 'Cinematic Content',
+    copy: 'Scenes, trailers, storyboard shots & more.',
+    icon: 'cinematic',
+    media: 'atlas-cinematic',
+    chips: ['Teaser', 'Scenes', '+12'],
+  },
+  {
+    title: 'Character Content',
+    copy: 'Portraits, expressions, turnarounds & sheets.',
+    icon: 'character',
+    media: 'atlas-character',
+    chips: ['Portrait', 'Sheet', '+8'],
+  },
+  {
+    title: 'Stories & Scripts',
+    copy: 'Scripts, dialogue, novels & entries.',
+    icon: 'content',
+    media: 'atlas-script',
+    chips: ['DOCX', 'PDF', 'TXT'],
+  },
+  {
+    title: 'Brand & Marketing',
+    copy: 'Logos, posters, packaging & brand kits.',
+    icon: 'release',
+    media: 'atlas-brand',
+    chips: ['Poster', 'Kit', 'Cover'],
+  },
+  {
+    title: 'Game Assets',
+    copy: '3D concepts, props, icons & environments.',
+    icon: 'asset',
+    media: 'atlas-game',
+    chips: ['Sword', 'Shield', '+25'],
+  },
+  {
+    title: 'Audio & Voice',
+    copy: 'Music, SFX, ambience & voice lines.',
+    icon: 'activity',
+    media: 'atlas-audio',
+    chips: ['Theme', 'Ambience', 'VO'],
+  },
+]
+
 type SeedGenerationLogRowStatus = 'pending' | 'active' | 'done' | 'failed'
 
 type SeedGenerationLogRow = {
@@ -82,7 +221,14 @@ type SeedGenerationLogRow = {
   total: number | null
 }
 
+type ExpandedOnboardingPreview = {
+  title: string
+  label: string
+  text: string
+}
+
 const ACTIVE_GENERATION_PROGRESS_ROW_ID = 'active-generation-progress'
+const ONBOARDING_PREVIEW_TEXT_LIMIT = 240
 
 function buildGenerationPrompt(prompt: string, sourceContext: WorldPromptSourceContext) {
   const sourceText = sourceContext.extractedText.trim()
@@ -98,6 +244,197 @@ function buildGenerationPrompt(prompt: string, sourceContext: WorldPromptSourceC
     sourceLabel,
     sourceText,
   ].filter(Boolean).join('\n\n')
+}
+
+function usePrefersReducedMotion() {
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(false)
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)')
+    const updatePreference = () => setPrefersReducedMotion(mediaQuery.matches)
+
+    updatePreference()
+    mediaQuery.addEventListener('change', updatePreference)
+    return () => mediaQuery.removeEventListener('change', updatePreference)
+  }, [])
+
+  return prefersReducedMotion
+}
+
+function getOnboardingOrbitVariant(node: OnboardingOrbitNode, variantIndex: number) {
+  const variants = [
+    { title: node.title, icon: node.icon },
+    ...(node.alternates ?? []),
+  ]
+
+  return variants[variantIndex % variants.length] ?? variants[0]
+}
+
+function createInitialOnboardingOrbitNodes(): OnboardingOrbitDisplayNode[] {
+  return ONBOARDING_ORBIT_NODES.map((node) => ({
+    ...node,
+    variantIndex: 0,
+  }))
+}
+
+function useRotatingOnboardingOrbitNodes() {
+  const prefersReducedMotion = usePrefersReducedMotion()
+  const recentSlotClassNameRef = useRef<string | null>(null)
+  const [activeNodes, setActiveNodes] = useState<OnboardingOrbitDisplayNode[]>(createInitialOnboardingOrbitNodes)
+  const [swapState, setSwapState] = useState<OnboardingOrbitSwapState | null>(null)
+
+  useEffect(() => {
+    if (prefersReducedMotion) {
+      setActiveNodes(createInitialOnboardingOrbitNodes())
+      setSwapState(null)
+      return
+    }
+
+    let startTimeoutId = 0
+    let swapTimeoutId = 0
+    let settleTimeoutId = 0
+    let cancelled = false
+
+    const scheduleNextSwap = () => {
+      const delayMs = 3900 + Math.random() * 2600
+
+      startTimeoutId = window.setTimeout(() => {
+        if (cancelled) return
+
+        const swappableSlots = ONBOARDING_ORBIT_NODES.filter(
+          (node) => node.alternates?.length && node.className !== recentSlotClassNameRef.current,
+        )
+        const slot = swappableSlots[Math.floor(Math.random() * swappableSlots.length)] ?? ONBOARDING_ORBIT_NODES[0]
+        recentSlotClassNameRef.current = slot.className
+        setSwapState({ slotClassName: slot.className, phase: 'out' })
+
+        swapTimeoutId = window.setTimeout(() => {
+          if (cancelled) return
+
+          setActiveNodes((currentNodes) =>
+            currentNodes.map((currentNode) => {
+              if (currentNode.className !== slot.className) return currentNode
+
+              const nextVariantIndex =
+                (currentNode.variantIndex + 1) % (1 + (slot.alternates?.length ?? 0))
+              const nextVariant = getOnboardingOrbitVariant(slot, nextVariantIndex)
+
+              return {
+                ...currentNode,
+                title: nextVariant.title,
+                icon: nextVariant.icon,
+                variantIndex: nextVariantIndex,
+              }
+            }),
+          )
+          setSwapState({ slotClassName: slot.className, phase: 'in' })
+
+          settleTimeoutId = window.setTimeout(() => {
+            if (cancelled) return
+
+            setSwapState(null)
+            scheduleNextSwap()
+          }, 360)
+        }, 280)
+      }, delayMs)
+    }
+
+    scheduleNextSwap()
+
+    return () => {
+      cancelled = true
+      window.clearTimeout(startTimeoutId)
+      window.clearTimeout(swapTimeoutId)
+      window.clearTimeout(settleTimeoutId)
+    }
+  }, [prefersReducedMotion])
+
+  return { activeNodes, swapState }
+}
+
+function useOnboardingOrbitConnectors(
+  stageRef: RefObject<HTMLElement | null>,
+  composerRef: RefObject<HTMLElement | null>,
+  activeNodes: OnboardingOrbitDisplayNode[],
+) {
+  const prefersReducedMotion = usePrefersReducedMotion()
+  const [connectors, setConnectors] = useState<OnboardingOrbitConnector[]>([])
+  const [stageSize, setStageSize] = useState({ width: 0, height: 0 })
+
+  useLayoutEffect(() => {
+    const stageElement = stageRef.current
+    const composerElement = composerRef.current
+    if (!stageElement || !composerElement) return
+
+    let animationFrameId = 0
+    let resizeFrameId = 0
+    let cancelled = false
+
+    const measureConnectors = () => {
+      if (cancelled) return
+
+      const stageRect = stageElement.getBoundingClientRect()
+      const composerRect = composerElement.getBoundingClientRect()
+      const centerX = composerRect.left + composerRect.width / 2 - stageRect.left
+      const centerY = composerRect.top + composerRect.height / 2 - stageRect.top
+      const nextConnectors = activeNodes.flatMap((node) => {
+        const frame = stageElement.querySelector<HTMLElement>(
+          `.world-onboarding-orbit-node[data-orbit-slot="${node.className}"] .world-onboarding-icon-frame`,
+        )
+        if (!frame) return []
+
+        const frameRect = frame.getBoundingClientRect()
+        const x1 = frameRect.left + frameRect.width / 2 - stageRect.left
+        const y1 = frameRect.top + frameRect.height / 2 - stageRect.top
+        const distanceX = centerX - x1
+        const distanceY = centerY - y1
+        const controlX = Math.max(60, Math.min(180, Math.abs(distanceX) * 0.48))
+        const controlY = Math.max(16, Math.min(58, Math.abs(distanceY) * 0.18))
+        const direction = distanceX >= 0 ? 1 : -1
+        const verticalDirection = distanceY >= 0 ? 1 : -1
+        const d = [
+          `M ${x1.toFixed(1)} ${y1.toFixed(1)}`,
+          `C ${(x1 + direction * controlX).toFixed(1)} ${(y1 + verticalDirection * controlY).toFixed(1)},`,
+          `${(centerX - direction * controlX * 0.72).toFixed(1)} ${(centerY - verticalDirection * controlY).toFixed(1)},`,
+          `${centerX.toFixed(1)} ${centerY.toFixed(1)}`,
+        ].join(' ')
+
+        return [{ id: node.className, d }]
+      })
+
+      setStageSize({ width: stageRect.width, height: stageRect.height })
+      setConnectors(nextConnectors)
+    }
+
+    const measureOnAnimationFrame = () => {
+      measureConnectors()
+      animationFrameId = window.requestAnimationFrame(measureOnAnimationFrame)
+    }
+
+    const scheduleMeasure = () => {
+      window.cancelAnimationFrame(resizeFrameId)
+      resizeFrameId = window.requestAnimationFrame(measureConnectors)
+    }
+
+    const resizeObserver = new ResizeObserver(scheduleMeasure)
+    resizeObserver.observe(stageElement)
+    resizeObserver.observe(composerElement)
+    scheduleMeasure()
+    window.addEventListener('resize', scheduleMeasure)
+    if (!prefersReducedMotion) {
+      animationFrameId = window.requestAnimationFrame(measureOnAnimationFrame)
+    }
+
+    return () => {
+      cancelled = true
+      window.cancelAnimationFrame(animationFrameId)
+      window.cancelAnimationFrame(resizeFrameId)
+      resizeObserver.disconnect()
+      window.removeEventListener('resize', scheduleMeasure)
+    }
+  }, [activeNodes, composerRef, prefersReducedMotion, stageRef])
+
+  return { connectors, stageSize }
 }
 
 function formatInferenceLabel(value: string) {
@@ -121,6 +458,16 @@ function cleanSeedLogText(text: string) {
     .replace(/^Assembling the first wave of safe graph changes\.$/i, 'Preparing the graph change list.')
     .replace(/\s+/g, ' ')
     .trim()
+}
+
+function compactPreviewText(text: string, limit = ONBOARDING_PREVIEW_TEXT_LIMIT) {
+  const normalized = text.replace(/\s+/g, ' ').trim()
+  if (normalized.length <= limit) return text
+  return `${normalized.slice(0, limit).trimEnd()}...`
+}
+
+function isLongPreviewText(text: string) {
+  return text.replace(/\s+/g, ' ').trim().length > ONBOARDING_PREVIEW_TEXT_LIMIT
 }
 
 function workItemIcon(kind: string | null | undefined): EntityIconId {
@@ -216,7 +563,7 @@ function seedEventToLogRow(
         id: `op-${event.id}`,
         icon: nodeTypeIcon(entity.nodeType),
         title: `Created ${entity.name}`,
-        detail: `${formatInferenceLabel(entity.nodeType)} node added to the world graph.`,
+        detail: '',
         status: 'done',
       }
     }
@@ -227,7 +574,7 @@ function seedEventToLogRow(
         id: `op-${event.id}`,
         icon: 'graph',
         title: `Linked ${relationship.sourceRef?.name ?? relationship.sourceEntityKey ?? 'source'} to ${relationship.targetRef?.name ?? relationship.targetEntityKey ?? 'target'}`,
-        detail: relationship.verb ? formatInferenceLabel(relationship.verb) : 'Relationship added.',
+        detail: relationship.verb ? formatInferenceLabel(relationship.verb) : '',
         status: 'done',
       }
     }
@@ -391,8 +738,8 @@ function latestSeedActivityRow(input: {
     return {
       id: ACTIVE_GENERATION_PROGRESS_ROW_ID,
       icon: runningStep.phase === 'relationships' ? 'graph' : runningStep.phase === 'sequence_units' ? 'thread' : runningStep.phase === 'finalize' ? 'global' : 'content',
-      title: `Generating ${title.toLowerCase()}`,
-      detail: `Generating ${title.toLowerCase()}.`,
+      title: 'Generating',
+      detail: title,
       status: 'active',
       createdAt: runningStep.startedAt ?? runningStep.updatedAt,
       sequence: 10_000 + runningStep.orderIndex,
@@ -432,12 +779,6 @@ function latestSeedActivityRow(input: {
     index: null,
     total: null,
   }
-}
-
-function appendActiveGenerationLogRow(rows: SeedGenerationLogRow[], activeRow: SeedGenerationLogRow | null) {
-  const durableRows = rows.filter((row) => row.id !== ACTIVE_GENERATION_PROGRESS_ROW_ID)
-  if (!activeRow) return durableRows
-  return [...durableRows, activeRow]
 }
 
 function mergeStableGenerationLogRows(previousRows: SeedGenerationLogRow[], nextRows: SeedGenerationLogRow[]) {
@@ -601,6 +942,10 @@ export function ProjectWorldOnboarding({
 }: ProjectWorldOnboardingProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const generationLogRef = useRef<HTMLDivElement | null>(null)
+  const generationPreviewRef = useRef<HTMLDivElement | null>(null)
+  const latestPreviewCardRef = useRef<HTMLDivElement | null>(null)
+  const promptSystemRef = useRef<HTMLElement | null>(null)
+  const composerCardRef = useRef<HTMLElement | null>(null)
   const [prompt, setPrompt] = useState('')
   const [sourceContext, setSourceContext] = useState<WorldPromptSourceContext | null>(null)
   const [sourceWarning, setSourceWarning] = useState<string | null>(null)
@@ -609,6 +954,13 @@ export function ProjectWorldOnboarding({
   const [error, setError] = useState<string | null>(null)
   const [isExtracting, setIsExtracting] = useState(false)
   const [selectedArtStyleId, setSelectedArtStyleId] = useState<string | null>(null)
+  const [expandedPreview, setExpandedPreview] = useState<ExpandedOnboardingPreview | null>(null)
+  const orbitAnimation = useRotatingOnboardingOrbitNodes()
+  const orbitConnectors = useOnboardingOrbitConnectors(
+    promptSystemRef,
+    composerCardRef,
+    orbitAnimation.activeNodes,
+  )
 
   const effectiveSourceContext = useMemo(() => {
     if (sourceContext) return sourceContext
@@ -664,7 +1016,9 @@ export function ProjectWorldOnboarding({
       seedInference,
     })
     : null
-  const visibleGenerationLogRows = appendActiveGenerationLogRow(generationLogRows, activeGenerationLogRow)
+  const visibleGenerationLogRows = generationLogRows.filter((row) => row.id !== ACTIVE_GENERATION_PROGRESS_ROW_ID)
+  const generatedPreviewCards = useMemo(() => buildSeedGeneratedPreviewCards(sessionEvents), [sessionEvents])
+  const latestGeneratedPreviewCardId = generatedPreviewCards.at(-1)?.id ?? null
   const tokenMeter = useMemo(() => buildWorldPromptSessionTokenMeter({
     turns: sessionTurns,
     messages: sessionMessages,
@@ -683,6 +1037,23 @@ export function ProjectWorldOnboarding({
     })
     return () => window.cancelAnimationFrame(frameId)
   }, [generationLogScrollKey])
+
+  useEffect(() => {
+    if (!latestGeneratedPreviewCardId || !generationPreviewRef.current) return
+    const frameId = window.requestAnimationFrame(() => {
+      latestPreviewCardRef.current?.scrollIntoView({ block: 'end', behavior: seedGenerationStarted ? 'smooth' : 'auto' })
+    })
+    return () => window.cancelAnimationFrame(frameId)
+  }, [latestGeneratedPreviewCardId, seedGenerationStarted])
+
+  useEffect(() => {
+    if (!expandedPreview) return
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key === 'Escape') setExpandedPreview(null)
+    }
+    window.addEventListener('keydown', handleEscape)
+    return () => window.removeEventListener('keydown', handleEscape)
+  }, [expandedPreview])
 
   async function handleSubmit() {
     if (!canSubmit) return
@@ -761,43 +1132,188 @@ export function ProjectWorldOnboarding({
     setError(null)
   }
 
+  function openExpandedPreview(title: string, label: string, text: string) {
+    setExpandedPreview({ title, label, text })
+  }
+
+  function renderPreviewText(title: string, label: string, text: string, className = 'world-onboarding-preview-text') {
+    if (!text.trim()) return null
+    const long = isLongPreviewText(text)
+    return (
+      <div className={className}>
+        <span>{compactPreviewText(text)}</span>
+        {long ? (
+          <button onClick={() => openExpandedPreview(title, label, text)} type="button">
+            Read full
+          </button>
+        ) : null}
+      </div>
+    )
+  }
+
+  function renderFullPreviewText(text: string, className = 'world-onboarding-preview-text') {
+    if (!text.trim()) return null
+    return (
+      <div className={`${className} is-full`}>
+        <p>{text}</p>
+      </div>
+    )
+  }
+
+  function renderPreviewLists(card: SeedGeneratedPreviewCard) {
+    if (!('lists' in card) || card.lists.length === 0) return null
+    return (
+      <div className="world-onboarding-preview-lists">
+        {card.lists.map((list) => (
+          <div key={list.label} className="world-onboarding-preview-list">
+            <span>{list.label}</span>
+            <div>
+              {list.values.map((value, index) => (
+                <p key={`${list.label}-${index}`}>{value}</p>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    )
+  }
+
+  function renderGeneratedPreviewCard(card: SeedGeneratedPreviewCard, isLatest: boolean) {
+    const fieldGrid = 'fields' in card && card.fields.length > 0 ? (
+      <div className="world-onboarding-preview-fields">
+        {card.fields.map((field, index) => (
+          <div key={`${field.label}-${index}`} className="world-onboarding-preview-field">
+            <span>{field.label}</span>
+            {renderFullPreviewText(field.value, 'world-onboarding-preview-field-value')}
+          </div>
+        ))}
+      </div>
+    ) : null
+    return (
+      <div
+        key={card.id}
+        ref={isLatest ? latestPreviewCardRef : null}
+        className={`world-onboarding-preview-card is-${card.kind}${isLatest ? ' is-latest' : ''}`}
+      >
+        <div className="world-onboarding-preview-card-head">
+          <div className="world-onboarding-preview-icon">
+            <EntityIcon id={card.icon} />
+          </div>
+          <div>
+            <span>{card.subtitle}</span>
+            <h3>{card.title}</h3>
+          </div>
+          {card.kind === 'sequence_unit' && card.ordinal ? (
+            <strong className="world-onboarding-preview-ordinal">{card.ordinal}</strong>
+          ) : null}
+        </div>
+        {card.summary ? renderFullPreviewText(card.summary, 'world-onboarding-preview-summary') : null}
+        {'context' in card && card.context ? renderFullPreviewText(card.context) : null}
+        {fieldGrid}
+        {renderPreviewLists(card)}
+      </div>
+    )
+  }
+
+  const submittedPromptPreview = prompt.trim() || seedInference?.turn.prompt || generatedPrompt
+  const activeGenerationTitle = seedGenerationStarted ? activeGenerationLogRow?.title ?? 'Generating' : 'Ready to build'
+  const activeGenerationDetail = seedGenerationStarted
+    ? activeGenerationLogRow?.detail ?? 'Waiting for the next generated item.'
+    : 'Choose an art style to start.'
+
   const generationSeedInference = seedInference
   if (generationSeedInference) {
     return (
       <div className="world-onboarding-input-first is-generating">
         <div className="world-onboarding-background-graph" aria-hidden="true" />
-        <section className="world-onboarding-generation-shell" aria-live="polite">
-          <div className="world-onboarding-generation-head">
-            <h1>Building your world...</h1>
-            <div className="world-onboarding-generation-subhead">
-              <p>This usually takes 20-60 seconds.</p>
-              <span className="world-onboarding-token-meter" title={tokenMeter.title}>
-                {tokenMeter.label} tokens
-              </span>
-            </div>
-          </div>
-
-          <div ref={generationLogRef} className="world-onboarding-live-log" aria-label="Generation details">
-            {visibleGenerationLogRows.map((row) => (
-              <div key={row.id} className={`world-onboarding-live-row is-${row.status}`}>
-                <div className="world-onboarding-live-icon">
-                  <EntityIcon id={row.icon} />
-                </div>
-                <div className="world-onboarding-live-copy">
-                  <strong>{row.title}</strong>
-                  <p>{row.detail}</p>
-                </div>
-                <span className="world-onboarding-live-state" aria-label={row.status}>
-                  {row.status === 'done' ? <EntityIcon id="check" /> : null}
-                  {row.status === 'failed' ? <EntityIcon id="close" /> : null}
+        <section className="world-onboarding-generation-workspace" aria-live="polite">
+          <aside className="world-onboarding-generation-side">
+            <div className="world-onboarding-generation-head">
+              <h1>Building your world...</h1>
+              <div className="world-onboarding-generation-subhead">
+                <p>This usually takes 20-60 seconds.</p>
+                <span className="world-onboarding-token-meter" title={tokenMeter.title}>
+                  {tokenMeter.label} tokens
                 </span>
-                {row.index !== null && row.total !== null ? (
-                  <span className="world-onboarding-live-count">{row.index}/{row.total}</span>
-                ) : null}
               </div>
-            ))}
-          </div>
+            </div>
+
+            <div className="world-onboarding-generation-prompt-card">
+              <span className="eyebrow">{generationSourceLabel}</span>
+              <strong>{formatInferenceLabel(generationSeedInference.inference.projectType)} / {formatInferenceLabel(generationSeedInference.inference.projectSubtype)}</strong>
+              {renderPreviewText('Submitted prompt', 'Prompt', submittedPromptPreview, 'world-onboarding-generation-prompt-text')}
+            </div>
+
+            <div className="world-onboarding-generation-active">
+              <div className="world-onboarding-live-icon">
+                <EntityIcon id={activeGenerationLogRow?.icon ?? 'global'} />
+              </div>
+              <div>
+                <span className="eyebrow">Now</span>
+                <strong>{activeGenerationTitle}</strong>
+                {activeGenerationDetail ? <p>{activeGenerationDetail}</p> : null}
+              </div>
+              {activeGenerationLogRow ? <span className="world-onboarding-now-spinner" aria-hidden="true" /> : null}
+            </div>
+
+            <div ref={generationLogRef} className="world-onboarding-live-log is-compact" aria-label="Generation details">
+              {visibleGenerationLogRows.slice(-7).map((row) => (
+                <div key={row.id} className={`world-onboarding-live-row is-${row.status}`}>
+                  <div className="world-onboarding-live-icon">
+                    <EntityIcon id={row.icon} />
+                  </div>
+                  <div className="world-onboarding-live-copy">
+                    <strong>{row.title}</strong>
+                    {row.detail ? <p>{row.detail}</p> : null}
+                  </div>
+                  <span className="world-onboarding-live-state" aria-label={row.status}>
+                    {row.status === 'done' ? <EntityIcon id="check" /> : null}
+                    {row.status === 'failed' ? <EntityIcon id="close" /> : null}
+                  </span>
+                  {row.index !== null && row.total !== null ? (
+                    <span className="world-onboarding-live-count">{row.index}/{row.total}</span>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          </aside>
+
+          <main className="world-onboarding-preview-panel">
+            <div className="world-onboarding-preview-head">
+              <div>
+                <span className="eyebrow">Generated wiki</span>
+                <h2>World records as they land</h2>
+              </div>
+              <span>{generatedPreviewCards.length} records</span>
+            </div>
+
+            <div ref={generationPreviewRef} className="world-onboarding-preview-feed" aria-label="Generated world records">
+              {generatedPreviewCards.length === 0 ? (
+                <div className="world-onboarding-preview-empty">
+                  <div className="world-onboarding-live-icon">
+                    <EntityIcon id="content" />
+                  </div>
+                  <strong>Waiting for the first generated record.</strong>
+                  <p>The overview, cast, places, factions, objects, and story beats will appear here as GraphCore writes them.</p>
+                </div>
+              ) : null}
+              {generatedPreviewCards.map((card) => renderGeneratedPreviewCard(card, card.id === latestGeneratedPreviewCardId))}
+            </div>
+          </main>
         </section>
+
+        {expandedPreview ? (
+          <div className="world-onboarding-modal-backdrop" onClick={() => setExpandedPreview(null)} role="presentation">
+            <section className="world-onboarding-preview-modal" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true">
+              <div className="world-onboarding-modal-head">
+                <span className="eyebrow">{expandedPreview.label}</span>
+                <h2>{expandedPreview.title}</h2>
+              </div>
+              <div className="world-onboarding-preview-modal-body">{expandedPreview.text}</div>
+              <button className="ghost-button compact" onClick={() => setExpandedPreview(null)} type="button">Close</button>
+            </section>
+          </div>
+        ) : null}
 
         {!seedGenerationStarted ? (
           <div className="world-onboarding-modal-backdrop" role="presentation">
@@ -861,10 +1377,63 @@ export function ProjectWorldOnboarding({
       <div className="world-onboarding-background-graph" aria-hidden="true" />
       <section className="world-onboarding-hero">
         <h1>Create your <span>world</span></h1>
-        <p>Start with one prompt, link, or file. GraphCore will turn it into a connected world.</p>
+        
       </section>
 
-      <section className="world-onboarding-composer-card">
+      <section ref={promptSystemRef} className="world-onboarding-prompt-system" aria-label="Create a connected world from one prompt">
+        <svg
+          className="world-onboarding-orbit-edge-layer"
+          aria-hidden="true"
+          viewBox={`0 0 ${orbitConnectors.stageSize.width || 1180} ${orbitConnectors.stageSize.height || 360}`}
+        >
+          <defs>
+            <linearGradient id="world-onboarding-orbit-edge-gradient" x1="0%" x2="100%" y1="0%" y2="100%">
+              <stop offset="0%" stopColor="#8b3cff" stopOpacity="0.2" />
+              <stop offset="48%" stopColor="#39d8ff" stopOpacity="0.42" />
+              <stop offset="100%" stopColor="#2277ff" stopOpacity="0.18" />
+            </linearGradient>
+            <filter id="world-onboarding-orbit-edge-glow" x="-30%" y="-80%" width="160%" height="260%">
+              <feGaussianBlur stdDeviation="2.4" result="blur" />
+              <feMerge>
+                <feMergeNode in="blur" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+          </defs>
+          {orbitConnectors.connectors.map((connector) => (
+            <path
+              className="world-onboarding-orbit-edge"
+              d={connector.d}
+              filter="url(#world-onboarding-orbit-edge-glow)"
+              key={connector.id}
+            />
+          ))}
+        </svg>
+        {orbitAnimation.activeNodes.map((node) => {
+          const swapClass =
+            orbitAnimation.swapState?.slotClassName === node.className
+              ? ` is-orbit-swapping-${orbitAnimation.swapState.phase}`
+              : ''
+
+          return (
+            <article
+              className={`world-onboarding-orbit-node ${node.className}${swapClass}`}
+              data-orbit-slot={node.className}
+              key={node.className}
+            >
+              <span className="world-onboarding-orbit-node-drift">
+                <span className="world-onboarding-orbit-node-inner">
+                  <strong>{node.title}</strong>
+                  <span className="world-onboarding-icon-frame">
+                    <EntityIcon id={node.icon} />
+                  </span>
+                </span>
+              </span>
+            </article>
+          )
+        })}
+
+        <section ref={composerCardRef} className="world-onboarding-composer-card">
         <label className="world-onboarding-prompt-label" htmlFor="world-onboarding-prompt">
           Describe your world, story, game, brand, or idea
         </label>
@@ -881,7 +1450,18 @@ export function ProjectWorldOnboarding({
             }}
             rows={7}
           />
-          <span>{prompt.length} / 4000</span>
+          <span className="world-onboarding-prompt-count">{prompt.length} / 4000</span>
+          {!seedInference ? (
+            <button
+              className="world-onboarding-prompt-send-button"
+              disabled={!canSubmit}
+              onClick={() => void handleSubmit()}
+              type="button"
+              aria-label="Create world"
+            >
+              {isSaving || isExtracting ? <span className="button-spinner" aria-hidden="true" /> : <EntityIcon id="send" />}
+            </button>
+          ) : null}
         </div>
 
         {sourceContext && sourceContext.kind !== 'prompt' ? (
@@ -981,25 +1561,92 @@ export function ProjectWorldOnboarding({
             </div>
           </div>
         ) : null}
+        </section>
       </section>
 
-      {!seedInference ? (
-        <>
-          <button className="primary-button world-onboarding-create-button button-with-spinner" disabled={!canSubmit} onClick={() => void handleSubmit()} type="button">
-            {isSaving || isExtracting ? <><span className="button-spinner" aria-hidden="true" />Creating world...</> : 'Create world'}
-          </button>
-          <div className="world-onboarding-create-note">Next: choose an art style, then GraphCore builds your world.</div>
-        </>
-      ) : null}
-
-      <section className={`world-onboarding-example-strip${seedInference ? ' is-disabled' : ''}`}>
-        <div className="world-onboarding-divider"><span>Try an example</span></div>
-        <div className="world-onboarding-example-grid">
-          {EXAMPLES.map((example) => (
-            <button key={example.title} className="world-onboarding-example-card" disabled={Boolean(seedInference) || isSaving} onClick={() => handleExample(example)} type="button">
-              <strong>{example.title}</strong>
-              <span>{example.summary}</span>
-            </button>
+      <section className="world-onboarding-output-section" aria-label="Connected GraphCore outputs">
+        <div className="world-onboarding-output-flow" aria-hidden="true">
+          <svg viewBox="0 0 1200 260" preserveAspectRatio="none">
+            <defs>
+              <linearGradient id="world-onboarding-flow-gradient" x1="0%" x2="100%" y1="0%" y2="0%">
+                <stop offset="0%" stopColor="#8b3cff" stopOpacity="0.82" />
+                <stop offset="52%" stopColor="#d36cff" stopOpacity="0.72" />
+                <stop offset="100%" stopColor="#39d8ff" stopOpacity="0.82" />
+              </linearGradient>
+              <linearGradient id="world-onboarding-flow-pulse-gradient" x1="0%" x2="100%" y1="0%" y2="0%">
+                <stop offset="0%" stopColor="#8b3cff" stopOpacity="0" />
+                <stop offset="32%" stopColor="#d36cff" stopOpacity="0.54" />
+                <stop offset="52%" stopColor="#f3fdff" stopOpacity="0.86" />
+                <stop offset="72%" stopColor="#39d8ff" stopOpacity="0.54" />
+                <stop offset="100%" stopColor="#2277ff" stopOpacity="0" />
+              </linearGradient>
+              <filter id="world-onboarding-flow-glow" x="-20%" y="-80%" width="140%" height="260%">
+                <feGaussianBlur stdDeviation="3.2" result="blur" />
+                <feMerge>
+                  <feMergeNode in="blur" />
+                  <feMergeNode in="SourceGraphic" />
+                </feMerge>
+              </filter>
+              <filter id="world-onboarding-flow-pulse-glow" x="-24%" y="-120%" width="148%" height="340%">
+                <feGaussianBlur stdDeviation="6.5" result="wideBlur" />
+                <feColorMatrix
+                  in="wideBlur"
+                  result="softGlow"
+                  type="matrix"
+                  values="0 0 0 0 0.22 0 0 0 0 0.82 0 0 0 0 1 0 0 0 0.62 0"
+                />
+                <feMerge>
+                  <feMergeNode in="softGlow" />
+                  <feMergeNode in="SourceGraphic" />
+                </feMerge>
+              </filter>
+            </defs>
+            <path className="world-onboarding-flow-line is-one" d="M600 0 C575 58 118 60 90 248" />
+            <path className="world-onboarding-flow-line is-two" d="M600 0 C592 72 308 76 294 248" />
+            <path className="world-onboarding-flow-line is-three" d="M600 0 C604 92 498 98 498 248" />
+            <path className="world-onboarding-flow-line is-four" d="M600 0 C596 92 702 98 702 248" />
+            <path className="world-onboarding-flow-line is-five" d="M600 0 C608 72 892 76 906 248" />
+            <path className="world-onboarding-flow-line is-six" d="M600 0 C625 58 1082 60 1110 248" />
+            <path className="world-onboarding-flow-pulse-glow is-one" d="M600 0 C575 58 118 60 90 248" />
+            <path className="world-onboarding-flow-pulse-glow is-two" d="M600 0 C592 72 308 76 294 248" />
+            <path className="world-onboarding-flow-pulse-glow is-three" d="M600 0 C604 92 498 98 498 248" />
+            <path className="world-onboarding-flow-pulse-glow is-four" d="M600 0 C596 92 702 98 702 248" />
+            <path className="world-onboarding-flow-pulse-glow is-five" d="M600 0 C608 72 892 76 906 248" />
+            <path className="world-onboarding-flow-pulse-glow is-six" d="M600 0 C625 58 1082 60 1110 248" />
+            <path className="world-onboarding-flow-pulse is-one" d="M600 0 C575 58 118 60 90 248" />
+            <path className="world-onboarding-flow-pulse is-two" d="M600 0 C592 72 308 76 294 248" />
+            <path className="world-onboarding-flow-pulse is-three" d="M600 0 C604 92 498 98 498 248" />
+            <path className="world-onboarding-flow-pulse is-four" d="M600 0 C596 92 702 98 702 248" />
+            <path className="world-onboarding-flow-pulse is-five" d="M600 0 C608 72 892 76 906 248" />
+            <path className="world-onboarding-flow-pulse is-six" d="M600 0 C625 58 1082 60 1110 248" />
+            <circle className="world-onboarding-flow-dot" cx="600" cy="0" r="4" />
+            <circle className="world-onboarding-flow-dot" cx="90" cy="248" r="3" />
+            <circle className="world-onboarding-flow-dot" cx="294" cy="248" r="3" />
+            <circle className="world-onboarding-flow-dot" cx="498" cy="248" r="3" />
+            <circle className="world-onboarding-flow-dot" cx="702" cy="248" r="3" />
+            <circle className="world-onboarding-flow-dot" cx="906" cy="248" r="3" />
+            <circle className="world-onboarding-flow-dot" cx="1110" cy="248" r="3" />
+          </svg>
+        </div>
+        <div className="world-onboarding-output-grid">
+          {ONBOARDING_OUTPUT_CARDS.map((card) => (
+            <article className="world-onboarding-output-card" key={card.title}>
+              <header>
+                <span className="world-onboarding-icon-frame">
+                  <EntityIcon id={card.icon} />
+                </span>
+                <div>
+                  <strong>{card.title}</strong>
+                  <p>{card.copy}</p>
+                </div>
+              </header>
+              <div className={`world-onboarding-output-media ${card.media}`} />
+              <div className="world-onboarding-card-chips">
+                {card.chips.map((chip) => (
+                  <span key={chip}>{chip}</span>
+                ))}
+              </div>
+            </article>
           ))}
         </div>
       </section>

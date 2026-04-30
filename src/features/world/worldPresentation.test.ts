@@ -364,6 +364,7 @@ test('buildWorldPromptTurnLenses derives an entity-only turn lens', () => {
   assert.equal(lens.rootEntityKey, entity.key)
   assert.deepEqual(lens.entityKeys, [entity.key])
   assert.deepEqual(lens.relationshipKeys, [])
+  assert.deepEqual(lens.entityChangeKinds, { [entity.key]: 'added' })
   assert.equal(lens.changeCount, 1)
   assert.deepEqual(lens.counts, {
     entities: 1,
@@ -494,6 +495,8 @@ test('buildWorldPromptTurnLenses derives relationship and derived-result lens ke
   assert.ok(lens)
   assert.deepEqual(lens.entityKeys, [hero.key, keep.key])
   assert.deepEqual(lens.relationshipKeys, [relationship.key])
+  assert.deepEqual(lens.entityChangeKinds, { [hero.key]: 'added', [keep.key]: 'added' })
+  assert.deepEqual(lens.relationshipChangeKinds, { [relationship.key]: 'added' })
   assert.deepEqual(lens.operatorKeys, [operator.key])
   assert.deepEqual(lens.resultKeys, [result.key])
   assert.deepEqual(lens.nodeKeys, [hero.key, keep.key, operator.key, result.key])
@@ -578,6 +581,8 @@ test('buildWorldGraphGrowthPlaybackModel orders whole-turn lens steps', () => {
     nodeKeys: ['a', 'b'],
     rootEntityKey: 'a',
     changeCount: 2,
+    entityChangeKinds: { a: 'added', b: 'added' } as const,
+    relationshipChangeKinds: {} as const,
     counts: { entities: 2, relationships: 0, derived: 0, total: 2 },
   }
   const laterLens = {
@@ -590,6 +595,8 @@ test('buildWorldGraphGrowthPlaybackModel orders whole-turn lens steps', () => {
     relationshipKeys: ['r1'],
     nodeKeys: ['a', 'b'],
     changeCount: 3,
+    entityChangeKinds: { a: 'touched', b: 'touched' } as const,
+    relationshipChangeKinds: { r1: 'added' } as const,
     counts: { entities: 2, relationships: 1, derived: 0, total: 3 },
   }
 
@@ -1219,8 +1226,8 @@ test('buildWorldPromptTranscriptEntries renders update rows for refined entities
     }],
   })
 
-  assert.ok(entries.some((entry) => entry.kind === 'entity_updated' && entry.detail?.includes('Expanded context')))
-  assert.ok(entries.some((entry) => entry.kind === 'relationship_updated' && entry.detail?.includes('Updated relationship details')))
+  assert.ok(entries.some((entry) => entry.kind === 'entity_updated' && entry.label === 'Updated Hero' && !entry.detail))
+  assert.ok(entries.some((entry) => entry.kind === 'relationship_updated' && entry.label === 'Updated link between Hero and world.group.order' && !entry.detail))
 })
 
 test('buildWorldPromptTranscriptEntries renders derived results as output rows', () => {
