@@ -14,7 +14,9 @@
     "supabase:db:reset": "npx supabase db reset",
     "supabase:functions:serve": "npx supabase functions serve",
     "supabase:link": "npx supabase link --project-ref znwdatidqdkzidempvkt",
-    "supabase:db:push": "npx supabase db push"
+    "supabase:db:push": "npx supabase db push",
+    "fly:worker:deploy": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"& \\\"$env:USERPROFILE\\.fly\\bin\\fly.exe\\\" deploy --config fly.world-generation.toml --remote-only\"",
+    "fly:worker:logs": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"& \\\"$env:USERPROFILE\\.fly\\bin\\fly.exe\\\" logs --config fly.world-generation.toml\""
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",

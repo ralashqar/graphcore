@@ -112,21 +112,33 @@ export const worldWikiSectionKindSchema = z.enum([
   'gaps',
 ])
 
+const worldWikiStringFieldSchema = z.preprocess((value) => {
+  if (Array.isArray(value)) return value.map((entry) => String(entry).trim()).filter(Boolean).join(', ')
+  return value
+}, z.string().default(''))
+
+const worldWikiStringListFieldSchema = z.preprocess((value) => {
+  if (typeof value === 'string') {
+    return value.split(',').map((entry) => entry.trim()).filter(Boolean)
+  }
+  return value
+}, z.array(z.string()).default([]))
+
 export const worldWikiPresentationMetadataSchema = z.object({
-  title: z.string().default(''),
-  logline: z.string().default(''),
-  synopsis: z.string().default(''),
-  genre: z.string().default(''),
-  themes: z.array(z.string()).default([]),
-  coreConflict: z.string().default(''),
-  visualMotifs: z.array(z.string()).default([]),
-  roleLabel: z.string().default(''),
-  shortSummary: z.string().default(''),
+  title: worldWikiStringFieldSchema,
+  logline: worldWikiStringFieldSchema,
+  synopsis: worldWikiStringFieldSchema,
+  genre: worldWikiStringFieldSchema,
+  themes: worldWikiStringListFieldSchema,
+  coreConflict: worldWikiStringFieldSchema,
+  visualMotifs: worldWikiStringListFieldSchema,
+  roleLabel: worldWikiStringFieldSchema,
+  shortSummary: worldWikiStringFieldSchema,
   sectionOrder: z.array(worldWikiSectionKindSchema).default([]),
-  toneTags: z.array(z.string()).default([]),
+  toneTags: worldWikiStringListFieldSchema,
   wikiSections: z.record(z.string(), z.string()).default({}),
-  generatedFromFingerprint: z.string().default(''),
-  updatedByTurnId: z.string().default(''),
+  generatedFromFingerprint: worldWikiStringFieldSchema,
+  updatedByTurnId: worldWikiStringFieldSchema,
 }).partial()
 
 export const worldViewFilterSchema = z.object({

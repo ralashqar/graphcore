@@ -118,8 +118,10 @@ test('validateWorldSequenceUnitCompleteness requires script-useful chapter field
   assert.deepEqual(validateWorldSequenceUnitCompleteness(thin).missingFields, [
     'ordinal',
     'synopsis',
+    'dramatic_question',
     'outcome',
-    'consequence_or_character_arc_delta',
+    'consequence',
+    'character_arc_delta',
   ])
 
   const complete = entity({
@@ -129,6 +131,7 @@ test('validateWorldSequenceUnitCompleteness requires script-useful chapter field
     sequence: {
       ordinal: 2,
       synopsis: 'The heir rejects the public succession ceremony.',
+      dramaticQuestion: 'Will the heir survive rejecting the crown in public?',
       outcome: 'The ruling house loses the court room.',
       consequences: [{
         cause: 'The secret writ is read aloud.',
@@ -136,6 +139,13 @@ test('validateWorldSequenceUnitCompleteness requires script-useful chapter field
         consequenceType: 'plot',
         affectedEntityKeys: [],
         threadKeys: [],
+      }],
+      characterArcDeltas: [{
+        actorKey: 'world.actor.heir',
+        before: 'The heir expects legitimacy to protect them.',
+        pressure: 'The ceremony turns the court against them.',
+        choice: 'They reject the public succession rite.',
+        after: 'They accept that survival requires rebellion.',
       }],
     },
   })

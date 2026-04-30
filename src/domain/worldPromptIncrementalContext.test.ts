@@ -8,6 +8,7 @@ import {
   worldPromptBuildLedgerEntrySchema,
   worldPromptCancelGenerationJobRequestSchema,
   worldPromptGenerationJobSchema,
+  worldPromptGenerationJobStepSchema,
   worldPromptGenerationStatusResponseSchema,
   worldPromptIncrementalBuildBriefSchema,
   worldPromptStreamGraphOpEnvelopeSchema,
@@ -65,6 +66,22 @@ test('streamed generation schemas accept jobs and graph-op envelopes', () => {
   assert.equal(job.status, 'running')
   assert.equal(envelope.kind, 'op')
   assert.equal(envelope.op.id, 'create_mara')
+
+  const step = worldPromptGenerationJobStepSchema.parse({
+    id: 'step_1',
+    jobId: 'job_1',
+    draftId: 'draft_1',
+    sessionId: 'session_1',
+    turnId: 'turn_1',
+    stepKey: 'full_stream',
+    phase: 'full_stream',
+    status: 'running',
+    orderIndex: 0,
+    attemptCount: 1,
+    createdAt: '2026-04-30T00:00:00.000Z',
+    updatedAt: '2026-04-30T00:00:01.000Z',
+  })
+  assert.equal(step.phase, 'full_stream')
 })
 
 test('streamed generation schemas reject invalid node types and parse status/cancel shapes', () => {

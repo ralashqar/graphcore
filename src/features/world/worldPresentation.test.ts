@@ -1692,8 +1692,9 @@ test('promptToWorldOpSchema accepts project wiki metadata updates', () => {
         title: 'The Archive That Eats Names',
         logline: 'A memory-walking archivist must save a city from forgetting itself.',
         synopsis: 'A compact overview of the current graph canon.',
+        genre: ['dark fantasy', 'mystery'],
         themes: ['memory', 'inheritance'],
-        toneTags: ['melancholic'],
+        toneTags: 'melancholic, eerie',
         generatedFromFingerprint: 'wiki-v1|project-1',
       },
     },
@@ -1704,6 +1705,8 @@ test('promptToWorldOpSchema accepts project wiki metadata updates', () => {
   if (parsed.op === 'update_world_wiki_metadata') {
     assert.equal(parsed.payload.metadata.title, 'The Archive That Eats Names')
     assert.equal(parsed.payload.metadata.logline, 'A memory-walking archivist must save a city from forgetting itself.')
+    assert.equal(parsed.payload.metadata.genre, 'dark fantasy, mystery')
+    assert.deepEqual(parsed.payload.metadata.toneTags, ['melancholic', 'eerie'])
   }
 })
 

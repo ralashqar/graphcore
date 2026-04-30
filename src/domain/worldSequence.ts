@@ -55,8 +55,10 @@ export type WorldSequenceModel = {
 export type WorldSequenceCompletenessField =
   | 'ordinal'
   | 'synopsis'
+  | 'dramatic_question'
   | 'outcome'
-  | 'consequence_or_character_arc_delta'
+  | 'consequence'
+  | 'character_arc_delta'
 
 export type WorldSequenceCompleteness = {
   missingFields: WorldSequenceCompletenessField[]
@@ -132,8 +134,10 @@ export function validateWorldSequenceUnitCompleteness(entity: Pick<WorldEntity, 
   const missingFields: WorldSequenceCompletenessField[] = []
   if (typeof metadata.ordinal !== 'number' || !Number.isFinite(metadata.ordinal)) missingFields.push('ordinal')
   if (!readString(metadata.synopsis)) missingFields.push('synopsis')
+  if (!readString(metadata.dramaticQuestion)) missingFields.push('dramatic_question')
   if (!readString(metadata.outcome)) missingFields.push('outcome')
-  if (!hasConsequence && !hasArcDelta) missingFields.push('consequence_or_character_arc_delta')
+  if (!hasConsequence) missingFields.push('consequence')
+  if (!hasArcDelta) missingFields.push('character_arc_delta')
   return {
     missingFields,
     complete: missingFields.length === 0,

@@ -1,0 +1,14 @@
+.git
+node_modules
+dist
+output
+tmp
+.playwright-cli
+*.log
+*.err.log
+.env
+.env.*
+!.env.example
+!.env.local.example
+supabase/.branches
+supabase/.temp

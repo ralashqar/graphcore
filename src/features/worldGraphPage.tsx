@@ -2507,21 +2507,24 @@ export function WorldGraphPage({
     : []
   const inspectorSequenceNavigation = useMemo(() => {
     if (!inspectorEntity || inspectorEntity.nodeType !== 'sequence_unit') return null
-    const previousLabels: string[] = []
-    const nextLabels: string[] = []
+    const previousByKey = new Map<string, string>()
+    const nextByKey = new Map<string, string>()
     for (const relationship of worldRelationships) {
       const verb = relationship.verb.trim().toLowerCase().replace(/[\s-]+/g, '_')
       if (!['precedes', 'causes', 'complicates', 'pays_off'].includes(verb)) continue
       if (relationship.targetEntityKey === inspectorEntity.key) {
         const previous = entityByKey.get(relationship.sourceEntityKey)
-        if (previous?.nodeType === 'sequence_unit') previousLabels.push(previous.name)
+        if (previous?.nodeType === 'sequence_unit') previousByKey.set(previous.key, previous.name)
       }
       if (relationship.sourceEntityKey === inspectorEntity.key) {
         const next = entityByKey.get(relationship.targetEntityKey)
-        if (next?.nodeType === 'sequence_unit') nextLabels.push(next.name)
+        if (next?.nodeType === 'sequence_unit') nextByKey.set(next.key, next.name)
       }
     }
-    return { previousLabels, nextLabels }
+    return {
+      previousLabels: Array.from(previousByKey.values()),
+      nextLabels: Array.from(nextByKey.values()),
+    }
   }, [entityByKey, inspectorEntity, worldRelationships])
   const inspectorSequenceLinkedEntities = useMemo(() => {
     if (!inspectorEntity || inspectorEntity.nodeType !== 'sequence_unit') return null
@@ -5112,8 +5115,10 @@ export function WorldGraphPage({
                   const missingFields = [
                     sequence.ordinal === null ? 'ordinal' : null,
                     sequence.synopsis.trim() ? null : 'synopsis',
+                    sequence.dramaticQuestion.trim() ? null : 'dramatic question',
                     sequence.outcome.trim() ? null : 'outcome',
-                    sequence.consequences.length > 0 || sequence.characterArcDeltas.length > 0 ? null : 'consequence or character arc delta',
+                    sequence.consequences.some((entry) => entry.cause.trim() && entry.effect.trim()) ? null : 'consequence',
+                    sequence.characterArcDeltas.some((entry) => entry.actorKey.trim() && (entry.before.trim() || entry.pressure.trim() || entry.choice.trim() || entry.after.trim())) ? null : 'character arc delta',
                   ].filter((value): value is string => Boolean(value))
                   const linkedGroups = [
                     ['Cast', inspectorSequenceLinkedEntities?.cast ?? []] as const,
@@ -5194,8 +5199,8 @@ export function WorldGraphPage({
                       ) : <div className="inline-note is-warning">No character arc delta recorded yet.</div>}
                       {sequence.previousLabels.length > 0 || sequence.nextLabels.length > 0 ? (
                         <div className="chip-row">
-                          {sequence.previousLabels.map((label) => <span key={`previous:${label}`} className="chip">Prev: {label}</span>)}
-                          {sequence.nextLabels.map((label) => <span key={`next:${label}`} className="chip">Next: {label}</span>)}
+                          {sequence.previousLabels.map((label, index) => <span key={`previous:${index}:${label}`} className="chip">Prev: {label}</span>)}
+                          {sequence.nextLabels.map((label, index) => <span key={`next:${index}:${label}`} className="chip">Next: {label}</span>)}
                         </div>
                       ) : <div className="inline-note is-warning">No previous/next chapter link recorded yet.</div>}
                       {linkedGroups.length > 0 ? (
@@ -5210,8 +5215,8 @@ export function WorldGraphPage({
                       ) : <div className="inline-note">No linked cast, places, items, or events recorded yet.</div>}
                       {sequence.openLoops.length > 0 || sequence.resolvedLoops.length > 0 ? (
                         <div className="chip-row">
-                          {sequence.openLoops.map((loop) => <span key={`open:${loop}`} className="chip">Open: {loop}</span>)}
-                          {sequence.resolvedLoops.map((loop) => <span key={`resolved:${loop}`} className="chip">Resolved: {loop}</span>)}
+                          {sequence.openLoops.map((loop, index) => <span key={`open:${index}:${loop}`} className="chip">Open: {loop}</span>)}
+                          {sequence.resolvedLoops.map((loop, index) => <span key={`resolved:${index}:${loop}`} className="chip">Resolved: {loop}</span>)}
                         </div>
                       ) : <div className="inline-note">No open or resolved loops recorded.</div>}
                     </div>
@@ -5680,9 +5685,9 @@ function LegacyWorldPromptChatPanel({
           <div className="world-prompt-state-group">
             <span className="world-prompt-group-label">Graph Changes Applied</span>
             <div className="world-prompt-change-list">
-              {railView.appliedEntities.slice(0, 4).map((label) => <span key={`entity:${label}`} className="chip">{label}</span>)}
-              {railView.appliedRelationships.slice(0, 3).map((label) => <span key={`relationship:${label}`} className="chip">{label}</span>)}
-              {railView.queuedLabels.slice(0, 2).map((label) => <span key={`queue:${label}`} className="chip">{label}</span>)}
+              {railView.appliedEntities.slice(0, 4).map((label, index) => <span key={`entity:${index}:${label}`} className="chip">{label}</span>)}
+              {railView.appliedRelationships.slice(0, 3).map((label, index) => <span key={`relationship:${index}:${label}`} className="chip">{label}</span>)}
+              {railView.queuedLabels.slice(0, 2).map((label, index) => <span key={`queue:${index}:${label}`} className="chip">{label}</span>)}
             </div>
           </div>
         ) : null}

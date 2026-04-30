@@ -39,6 +39,7 @@ import {
   worldPromptGenerationJobStepSchema,
   worldPromptGenerationStatusRequestSchema,
   worldPromptGenerationStatusResponseSchema,
+  worldPromptInitialSeedContextSchema,
   worldPromptSeedInferenceRequestSchema,
   worldPromptSeedInferenceResponseSchema,
   worldPromptTurnSchema,
@@ -543,8 +544,8 @@ const storySequenceCompletionItemSchema = z.object({
       'resolution',
     ]),
     outcome: z.string(),
-    consequences: z.array(storySequenceCompletionConsequenceSchema),
-    characterArcDeltas: z.array(storySequenceCompletionArcDeltaSchema),
+    consequences: z.array(storySequenceCompletionConsequenceSchema).min(1),
+    characterArcDeltas: z.array(storySequenceCompletionArcDeltaSchema).min(1),
     openLoops: z.array(z.string()),
     resolvedLoops: z.array(z.string()),
     scriptExpansionReady: z.boolean(),
@@ -582,7 +583,7 @@ function storySequenceMetadataJsonSchema(): JsonSchema {
       ordinal: { type: 'number' },
       actLabel: { type: 'string' },
       synopsis: { type: 'string', minLength: 1 },
-      dramaticQuestion: { type: 'string' },
+      dramaticQuestion: { type: 'string', minLength: 1 },
       storyFunction: { type: 'string', enum: [...STORY_SEQUENCE_FUNCTIONS] },
       outcome: { type: 'string', minLength: 1 },
       consequences: {
@@ -603,15 +604,16 @@ function storySequenceMetadataJsonSchema(): JsonSchema {
       },
       characterArcDeltas: {
         type: 'array',
+        minItems: 1,
         items: {
           type: 'object',
           additionalProperties: false,
           properties: {
-            actorKey: { type: 'string' },
-            before: { type: 'string' },
-            pressure: { type: 'string' },
-            choice: { type: 'string' },
-            after: { type: 'string' },
+            actorKey: { type: 'string', minLength: 1 },
+            before: { type: 'string', minLength: 1 },
+            pressure: { type: 'string', minLength: 1 },
+            choice: { type: 'string', minLength: 1 },
+            after: { type: 'string', minLength: 1 },
           },
           required: ['actorKey', 'before', 'pressure', 'choice', 'after'],
         },
@@ -4031,6 +4033,24 @@ function buildWorldRelationshipKey(snapshot: WorldPromptSnapshot, sourceKey: str
   return candidate
 }
 
+function normalizeWorldRelationshipVerbForIdentity(verb: string) {
+  return normalizeName(verb).replace(/[\s-]+/g, '_')
+}
+
+function findEquivalentWorldRelationship(
+  snapshot: WorldPromptSnapshot,
+  sourceKey: string,
+  verb: string,
+  targetKey: string,
+) {
+  const normalizedVerb = normalizeWorldRelationshipVerbForIdentity(verb)
+  return snapshot.worldRelationships.find((relationship) => (
+    relationship.sourceEntityKey === sourceKey
+    && relationship.targetEntityKey === targetKey
+    && normalizeWorldRelationshipVerbForIdentity(relationship.verb) === normalizedVerb
+  )) ?? null
+}
+
 function buildWorldOperatorKey(snapshot: WorldPromptSnapshot, sourceKey: string, operatorType: string, targetKey: string) {
   const base = `world.operator.${slugify(`${sourceKey}-${operatorType}-${targetKey}`)}`
   let candidate = base
@@ -5583,6 +5603,185 @@ function storySequenceCompletionCandidates(input: {
   return candidates
 }
 
+function compactSequenceContextForRepair(snapshot: WorldPromptSnapshot) {
+  const sequence = deriveWorldSequence({
+    entities: snapshot.worldEntities,
+    relationships: snapshot.worldRelationships,
+  })
+  return {
+    unitCount: sequence.units.length,
+    units: sequence.units.slice(0, 24).map((unit) => ({
+      key: unit.entity.key,
+      name: unit.entity.name,
+      ordinal: unit.ordinal,
+      sequenceKey: unit.sequenceKey,
+      synopsis: unit.metadata.synopsis ?? '',
+      outcome: unit.metadata.outcome ?? '',
+    })),
+    relationships: sequence.relationships.slice(0, 32).map((relationship) => ({
+      sourceUnitKey: relationship.sourceUnitKey,
+      targetUnitKey: relationship.targetUnitKey,
+      kind: relationship.kind,
+    })),
+    gaps: sequence.gaps.slice(0, 16).map((gap) => ({
+      kind: gap.kind,
+      unitKeys: gap.unitKeys,
+      message: gap.message,
+    })),
+  }
+}
+
+async function completeStreamedStorySequenceOp(input: {
+  model: string
+  prompt: string
+  snapshot: WorldPromptSnapshot
+  op: PromptToWorldOp
+  usageRecorder?: WorldPromptTokenUsageRecorder
+}) {
+  const candidates = storySequenceCompletionCandidates({
+    snapshot: input.snapshot,
+    ops: [input.op],
+  })
+  if (candidates.length === 0) {
+    return { op: input.op, issues: [] as StorySequenceOpIssue[] }
+  }
+
+  const completionSchema = normalizeStrictJsonSchema(z.toJSONSchema(storySequenceCompletionResponseSchema))
+  const response = await runOpenAiResponses({
+    model: input.model,
+    input: JSON.stringify({
+      prompt: input.prompt,
+      projectContext: input.snapshot.projectContext,
+      sequenceContext: compactSequenceContextForRepair(input.snapshot),
+      relevantEntities: input.snapshot.worldEntities
+        .filter((entity) => entity.nodeType !== 'sequence_unit')
+        .slice(0, 40)
+        .map((entity) => ({
+          key: entity.key,
+          name: entity.name,
+          nodeType: entity.nodeType,
+          summary: entity.summary,
+        })),
+      relevantThreads: input.snapshot.worldThreads.slice(0, 12).map((thread) => ({
+        key: thread.key,
+        title: thread.title,
+        summary: thread.summary,
+        linkedEntityKeys: thread.linkedEntityKeys,
+      })),
+      incompleteSequenceOps: candidates.map((candidate) => {
+        const existingSequence = candidate.existing ? readWorldSequenceMetadata(candidate.existing) : {}
+        const proposedSequence = readWorldSequenceMetadata(candidate.candidate)
+        const sequenceKey = proposedSequence.sequenceKey || existingSequence.sequenceKey || 'main'
+        return {
+          opId: candidate.op.id,
+          entityName: candidate.entityName,
+          missingFields: candidate.issue.missingFields,
+          currentSummary: candidate.op.op === 'upsert_entity'
+            ? candidate.op.payload.entity.summary
+            : candidate.op.op === 'update_entity'
+              ? candidate.op.payload.changes.summary ?? candidate.existing?.summary ?? ''
+              : '',
+          currentContext: candidate.op.op === 'upsert_entity'
+            ? candidate.op.payload.entity.context
+            : candidate.op.op === 'update_entity'
+              ? candidate.op.payload.changes.context ?? candidate.existing?.context ?? ''
+              : '',
+          proposedSequence,
+          existingSequence,
+          recommendedOrdinal: typeof proposedSequence.ordinal === 'number'
+            ? proposedSequence.ordinal
+            : recommendedNextSequenceOrdinal({
+              snapshot: input.snapshot,
+              sequenceKey,
+            }),
+        }
+      }),
+    }),
+    instructions: [
+      'You are GraphCore\'s streamed Story sequence repair agent.',
+      'Complete only the provided sequence_unit graph operation metadata; do not create additional operations.',
+      'Return one completion for every incompleteSequenceOps item, matching opId exactly.',
+      'Every completion must include summary, context, and customProperties.sequence-equivalent metadata.',
+      'Each sequence must include unitKind, sequenceKey, ordinal, actLabel, synopsis, dramaticQuestion, storyFunction, outcome, at least one consequence, and at least one characterArcDelta.',
+      'Consequences must have concrete non-empty cause and effect text.',
+      'Character arc deltas must have actorKey, before, pressure, choice, and after. Prefer an existing actor key from relevantEntities; use a clear available protagonist or pressured character.',
+      'Do not use entity.summary as a substitute for sequence.synopsis or sequence.outcome.',
+      'Set scriptExpansionReady true only after all required sequence fields are present.',
+    ].join('\n'),
+    text: {
+      format: {
+        type: 'json_schema',
+        name: 'streamed_story_sequence_completion',
+        schema: completionSchema,
+      },
+    },
+    reasoning: { effort: 'low' },
+    metadata: {
+      feature: 'world-prompt',
+      surface: 'streamed-story-sequence-completion',
+    },
+    store: false,
+    timeoutMs: 120_000,
+  })
+  input.usageRecorder?.record({
+    surface: 'streamed-story-sequence-completion',
+    model: input.model,
+    response,
+    metadata: { candidateCount: candidates.length },
+  })
+
+  if (!response.response.ok) {
+    return {
+      op: input.op,
+      issues: candidates.map((candidate) => candidate.issue),
+    }
+  }
+
+  const parsedJson = extractJsonBlock(response.outputText)
+  const validated = parsedJson ? storySequenceCompletionResponseSchema.safeParse(parsedJson) : null
+  if (!validated?.success) {
+    return {
+      op: input.op,
+      issues: candidates.map((candidate) => candidate.issue),
+    }
+  }
+
+  const completionByOpId = new Map(validated.data.completions.map((completion) => [completion.opId, completion]))
+  for (const candidate of candidates) {
+    const completion = completionByOpId.get(candidate.op.id)
+    if (!completion) continue
+    const sequencePatch = {
+      sequence: {
+        ...completion.sequence,
+        scriptExpansionReady: true,
+      },
+    }
+    if (candidate.op.op === 'upsert_entity') {
+      candidate.op.payload.entity.summary = completion.summary.trim() || candidate.op.payload.entity.summary
+      candidate.op.payload.entity.context = completion.context.trim() || candidate.op.payload.entity.context
+      candidate.op.payload.entity.customProperties = mergeRecordsForSequenceValidation(
+        candidate.op.payload.entity.customProperties,
+        sequencePatch,
+      )
+    } else if (candidate.op.op === 'update_entity') {
+      if (completion.summary.trim()) candidate.op.payload.changes.summary = completion.summary.trim()
+      if (completion.context.trim()) candidate.op.payload.changes.context = completion.context.trim()
+      candidate.op.payload.changes.customProperties = mergeRecordsForSequenceValidation(
+        candidate.op.payload.changes.customProperties,
+        sequencePatch,
+      )
+    }
+  }
+
+  return {
+    op: input.op,
+    issues: findStorySequenceOpIssues({
+      snapshot: input.snapshot,
+      ops: [input.op],
+    }),
+  }
+}
+
 async function completeStorySequenceOps(input: {
   model: string
   prompt: string
@@ -5662,10 +5861,11 @@ async function completeStorySequenceOps(input: {
       'Every completion must include a usable chapter summary, context, and customProperties.sequence metadata.',
       'Use the recommendedOrdinal unless the prompt or existing sequence context clearly requires a different ordinal.',
       'For "next chapter" prompts, continue from the latest sequenceContext unit and make the new chapter move plot and character pressure forward.',
-      'Each sequence must include a concrete synopsis, dramaticQuestion, storyFunction, outcome, and at least one consequence with non-empty cause and effect.',
+      'Each sequence must include a concrete synopsis, dramaticQuestion, storyFunction, outcome, at least one consequence with non-empty cause and effect, and at least one characterArcDelta.',
       'Consequences should express cause/effect in story terms: what happens in this chapter and what it changes next.',
-      'Use known entity keys in affectedEntityKeys, actorKey, and threadKeys when the relevant graph context provides them. Use empty arrays or empty actorKey only when no clear graph key exists.',
-      'Set scriptExpansionReady true when the sequence has synopsis, outcome, and a cause/effect consequence.',
+      'Character arc deltas should name the pressured actor and capture before, pressure, choice, and after. Use a known actorKey when possible.',
+      'Use known entity keys in affectedEntityKeys, actorKey, and threadKeys when the relevant graph context provides them. Only use empty arrays when no clear graph key exists.',
+      'Set scriptExpansionReady true when the sequence has synopsis, dramaticQuestion, outcome, a cause/effect consequence, and a character arc delta.',
       'Do not use entity.summary as a substitute for sequence.synopsis; fill both when useful.',
     ].join('\n'),
     text: {
@@ -6260,6 +6460,16 @@ function projectSanitizedOpIntoSnapshot(snapshot: WorldPromptSnapshot, op: Promp
     const sourceEntity = snapshot.worldEntities.find((entity) => entity.key === relationship.sourceEntityKey) ?? null
     const targetEntity = snapshot.worldEntities.find((entity) => entity.key === relationship.targetEntityKey) ?? null
     if (!sourceEntity || !targetEntity) return
+    const equivalent = findEquivalentWorldRelationship(
+      snapshot,
+      relationship.sourceEntityKey,
+      relationship.verb,
+      relationship.targetEntityKey,
+    )
+    if (equivalent) {
+      op.payload.targetRelationshipKey = equivalent.key
+      return
+    }
     const key = buildWorldRelationshipKey(snapshot, relationship.sourceEntityKey, relationship.verb, relationship.targetEntityKey)
     op.payload.targetRelationshipKey = key
     snapshot.worldRelationships = [
@@ -7038,7 +7248,7 @@ async function generatePromptPlan(input: {
     'Authored story progression is separate from event chronology. Use sequence_unit nodes for chapters, episodes, acts, plot outlines, story beats, missions, campaign moments, and UGC beats.',
     'For Story projects, prompts about chapters, episodes, acts, plot progression, outlines, sequential stories, or story flow should create or update sequence_unit nodes first. Use event nodes only for diegetic happenings inside those chapters.',
     'For sequence_unit customProperties.sequence, include unitKind, sequenceKey, ordinal, actLabel when relevant, synopsis, dramaticQuestion, storyFunction, outcome, consequences, characterArcDeltas, openLoops, resolvedLoops, and scriptExpansionReady.',
-    'A Story sequence_unit must have a compact synopsis, an outcome, and at least one cause/effect consequence. CharacterArcDeltas are optional additional structure when a character is pressured or changed. Consequences must explain why the chapter exists and how it moves plot, stakes, relationships, world state, or character development forward.',
+    'A Story sequence_unit must have a compact synopsis, dramaticQuestion, outcome, at least one cause/effect consequence, and at least one characterArcDelta. Consequences must explain why the chapter exists and how it moves plot, stakes, relationships, world state, or character development forward.',
     'Use sequence_unit-to-sequence_unit relationships with verbs precedes, causes, complicates, or pays_off to express authored story order and causal progression. Do not put relationship.metadata.temporal on sequence_unit links.',
     'Link sequence_unit nodes to actors, places, objects, events, concepts, and threads when they matter. Useful verbs include features, changes, pressures, reveals, set_in, uses, depicts, contains, reframes, and reveals_lore.',
     'For Game, Brand, and UGC projects, sequence_unit is allowed but label it appropriately: mission/quest, campaign_moment, or ugc_beat. Keep validation lighter than Story chapters unless the user asks for story-style structure.',
@@ -7342,7 +7552,7 @@ async function generatePromptPlan(input: {
       ) {
         repairFeedback = [
           'Repair incomplete Story sequence_unit ops before returning the plan.',
-          'Every Story sequence_unit you create or structurally update must include customProperties.sequence.ordinal, synopsis, outcome, and at least one consequence with cause/effect. Add characterArcDeltas when a character is pressured or changed.',
+          'Every Story sequence_unit you create or structurally update must include customProperties.sequence.ordinal, synopsis, dramaticQuestion, outcome, at least one consequence with cause/effect, and at least one characterArcDelta.',
           'Do not rely on entity.summary or entity.context as a substitute for customProperties.sequence.synopsis/outcome.',
           'Set customProperties.sequence.scriptExpansionReady to true only when those required chapter fields are present.',
           `Current sequence issues: ${summarizeStorySequenceOpIssues(storySequenceIssues)}.`,
@@ -8534,6 +8744,63 @@ async function applyPromptOp(input: {
         note: 'Skipped one relationship because one or both endpoints were still missing after entity creation.',
       }
     }
+    const equivalent = findEquivalentWorldRelationship(
+      input.snapshot,
+      relationship.sourceEntityKey,
+      relationship.verb,
+      relationship.targetEntityKey,
+    )
+    if (equivalent) {
+      const notesMerge = mergeCanonicalText({
+        existing: equivalent.notes,
+        incoming: relationship.notes,
+        maxUnits: 6,
+      })
+      let nextMetadata: Record<string, unknown> = {
+        ...(equivalent.metadata ?? {}),
+        ...(relationship.metadata ?? {}),
+      }
+      nextMetadata = appendRefinementHistory({
+        metadata: nextMetadata,
+        field: 'notes',
+        previousText: equivalent.notes,
+        incomingText: relationship.notes,
+        resultText: notesMerge.text,
+        strategy: notesMerge.strategy,
+        changed: notesMerge.changed,
+      })
+      const updateResponse = await input.client
+        .from('world_relationships')
+        .update({
+          notes: notesMerge.text,
+          strength: relationship.strength ?? equivalent.strength,
+          confidence: relationship.confidence ?? equivalent.confidence,
+          metadata: nextMetadata,
+        })
+        .eq('draft_id', input.snapshot.draft.id)
+        .eq('key', equivalent.key)
+        .select('id, key, source_entity_id, target_entity_id, verb, direction, strength, confidence, source, notes, state, metadata, created_at, updated_at')
+        .single()
+      if (updateResponse.error) throw new Error(updateResponse.error.message)
+      const updated = worldRelationshipSchema.parse({
+        id: updateResponse.data.id,
+        key: updateResponse.data.key,
+        sourceEntityKey: sourceEntity.key,
+        targetEntityKey: targetEntity.key,
+        verb: updateResponse.data.verb,
+        direction: updateResponse.data.direction,
+        strength: updateResponse.data.strength,
+        confidence: updateResponse.data.confidence,
+        source: updateResponse.data.source,
+        notes: updateResponse.data.notes ?? '',
+        state: updateResponse.data.state,
+        metadata: updateResponse.data.metadata ?? {},
+        createdAt: updateResponse.data.created_at,
+        updatedAt: updateResponse.data.updated_at,
+      })
+      input.snapshot.worldRelationships = input.snapshot.worldRelationships.map((entry) => entry.key === updated.key ? updated : entry)
+      return { applied: { worldRelationships: [updated] }, queue: null, note: null }
+    }
     const insertResponse = await input.client
       .from('world_relationships')
       .insert({
@@ -9575,9 +9842,13 @@ function buildStreamedInitialSeedInstructions() {
     'Each record must be one complete JSON object matching one of:',
     '{"kind":"note","message":"short operational note"}',
     '{"kind":"op","op":{PromptToWorldOp}}',
+    '{"kind":"sequence_unit","id":"episode_01","name":"Episode 1: The Memory Tax","summary":"one sentence","context":"short canon use","unitKind":"episode","sequenceKey":"main","ordinal":1,"actLabel":"Act I","synopsis":"one compact paragraph","dramaticQuestion":"question","storyFunction":"setup","outcome":"one sentence","consequences":[{"cause":"cause","effect":"effect","affectedEntityKeys":["mara_veyr"],"threadKeys":[],"consequenceType":"plot"}],"characterArcDeltas":[{"actorKey":"mara_veyr","before":"before","pressure":"pressure","choice":"choice","after":"after"}],"openLoops":["loop"],"resolvedLoops":[]}',
+    '{"kind":"relationship","id":"link_mara_seeks_artifact","source":"mara_veyr","target":"memory_artifact","verb":"seeks","notes":"short relationship note"}',
     '{"kind":"summary","assistantSummary":"concise summary of what was created"}',
-    'Prefer minified one-line JSON records. Never put literal line breaks inside JSON string values; escape them as \\n or keep text as one compact paragraph.',
+    'Prefer compact record forms for sequence_unit and relationship records instead of nested PromptToWorldOp JSON; the system will convert them to graph ops.',
+    'Emit minified one-line JSON records. Never put literal line breaks inside JSON string values; escape them as \\n or keep text as one compact paragraph.',
     'Example entity line: {"kind":"op","op":{"id":"create_mara_veyr","op":"upsert_entity","payload":{"targetEntityKey":"mara_veyr","entity":{"nodeType":"actor","name":"Mara Veyr","summary":"A memory mage pulled into the empire conflict.","context":"Main cast protagonist with a clear want, flaw, and pressure.","tags":["main cast"]}}}}',
+    'Example Story sequence_unit line: {"kind":"op","op":{"id":"create_episode_01","op":"upsert_entity","payload":{"targetEntityKey":"episode_01","entity":{"nodeType":"sequence_unit","name":"Episode 1: The Memory Tax","summary":"Mara discovers the empire is harvesting memories to keep its shadow throne alive.","context":"Opening episode that establishes the premise, pressure, and first irreversible choice.","customProperties":{"sequence":{"unitKind":"episode","sequenceKey":"main","ordinal":1,"actLabel":"Act I","synopsis":"Mara witnesses a public memory tithe and realizes her brother is next.","dramaticQuestion":"Will Mara expose the tithe before her family is erased?","storyFunction":"setup","outcome":"Mara steals a forbidden ledger and becomes hunted by the throne.","consequences":[{"cause":"Mara steals the tithe ledger.","effect":"The shadow guard marks her family as traitors.","affectedEntityKeys":["mara_veyr"],"threadKeys":[],"consequenceType":"plot"}],"characterArcDeltas":[{"actorKey":"mara_veyr","before":"Mara survives by staying invisible.","pressure":"Her brother is selected for the tithe.","choice":"She steals the ledger in public.","after":"She accepts becoming visible is the price of resistance."}],"openLoops":["Who built the tithe ledger?"],"resolvedLoops":[],"scriptExpansionReady":true}}}}}}',
     'Example relationship line: {"kind":"op","op":{"id":"link_mara_seeks_artifact","op":"upsert_relationship","payload":{"relationship":{"sourceEntityKey":"mara_veyr","targetEntityKey":"memory_artifact","verb":"seeks","notes":"The artifact is tied to Mara’s central objective."}}}}',
     'Use only these operation types: upsert_entity, upsert_relationship, update_world_wiki_metadata, assistant_note.',
     'Valid entity nodeType values are actor, group, place, object, concept, event, sequence_unit.',
@@ -9585,7 +9856,9 @@ function buildStreamedInitialSeedInstructions() {
     'Use stable lowercase snake_case entity keys in targetEntityKey and relationship endpoints.',
     'For Story projects, include generated content title/logline/wiki metadata, full main cast, main locations, major factions when relevant, key objects/concepts when relevant, and ordered sequence_unit nodes for the main story arc.',
     'For Story projects, emit at least 6 ordered sequence_unit nodes before emitting any relationship records.',
-    'Story sequence_unit nodes must include customProperties.sequence.ordinal, synopsis, outcome, and at least one consequence with cause/effect.',
+    'For Story projects, use the compact {"kind":"sequence_unit",...} form for every sequence unit to avoid malformed nested JSON.',
+    'Story sequence_unit nodes must put complete metadata in payload.entity.customProperties.sequence, not only in summary/context.',
+    'Story sequence_unit nodes must include ordinal, synopsis, dramaticQuestion, outcome, at least one consequence with cause/effect, and at least one characterArcDelta with actorKey/before/pressure/choice/after.',
     'Use relationships such as precedes, causes, complicates, pays_off, opposes, belongs_to, located_in, seeks, protects, controls, discovers, and reveals where useful.',
     'Keep node prose compact: summaries should be one or two sentences, context should be short and canon-useful.',
     'Emit a note every few records so progress is visible, but do not reveal private chain-of-thought.',
@@ -9594,10 +9867,20 @@ function buildStreamedInitialSeedInstructions() {
 
 function buildStreamedInitialSeedPhaseInstructions(phase: WorldPromptGenerationStepPhase) {
   const phaseRules: Record<WorldPromptGenerationStepPhase, string[]> = {
+    full_stream: [
+      'This is a single full_stream generation pass.',
+      'Emit the complete initial world skeleton in this order: world wiki metadata, core entity ops, ordered sequence_unit ops, relationship ops, then summary.',
+      'Emit update_world_wiki_metadata before content entities. The metadata must include a generated content title plus logline, synopsis, genre, themes, toneTags, coreConflict, and visualMotifs where supported by the prompt.',
+      'For update_world_wiki_metadata, metadata.genre must be one string; metadata.themes, metadata.toneTags, and metadata.visualMotifs must be arrays of strings.',
+      'For Story projects, emit at least 6 ordered sequence_unit nodes before relationship records and use stable ordinal keys like episode_01, episode_02, episode_03.',
+      'After all entities and sequence units exist, emit relationships only between endpoint keys that have already been emitted in this stream.',
+      'End with a summary record describing the complete skeleton created.',
+    ],
     world_bible: [
       'This step is world_bible only.',
       'Emit update_world_wiki_metadata ops and concise notes only.',
       'The metadata must include a generated content title plus logline, synopsis, genre, themes, toneTags, coreConflict, and visualMotifs where supported by the prompt.',
+      'For update_world_wiki_metadata, metadata.genre must be one string; metadata.themes, metadata.toneTags, and metadata.visualMotifs must be arrays of strings.',
       'Do not emit entity or relationship ops in this step.',
       'End with a summary record describing the foundation created.',
     ],
@@ -9612,7 +9895,8 @@ function buildStreamedInitialSeedPhaseInstructions(phase: WorldPromptGenerationS
       'This step is sequence_units only.',
       'Emit ordered sequence_unit entity ops for the full initial arc.',
       'For Story projects, emit at least 6 ordered sequence_unit nodes.',
-      'Each sequence_unit must include customProperties.sequence.ordinal, synopsis, outcome, and at least one cause/effect consequence.',
+      'Each sequence_unit must include customProperties.sequence.ordinal, synopsis, dramaticQuestion, outcome, at least one cause/effect consequence, and at least one characterArcDelta.',
+      'Do not emit thin sequence_unit records. Missing sequence fields are rejected instead of being persisted.',
       'Do not emit relationship ops in this step.',
       'End with a summary record describing the sequence coverage created.',
     ],
@@ -9662,10 +9946,49 @@ function buildStreamedInitialSeedInput(input: {
     existingCanon: input.existingCanon ?? null,
     outputContract: {
       format: 'newline_delimited_json',
-      records: ['note', 'op', 'summary'],
+      records: ['note', 'op', 'sequence_unit', 'relationship', 'summary'],
       requirement: 'one JSON object per line',
+      compactRecordPreference: 'For sequence units and relationships, prefer compact sequence_unit and relationship records. Do not emit deeply nested PromptToWorldOp JSON unless necessary.',
+      storySequenceUnitRequirement: 'For nodeType sequence_unit, payload.entity.customProperties.sequence must include unitKind, sequenceKey, ordinal, actLabel, synopsis, dramaticQuestion, storyFunction, outcome, consequences[0].cause/effect, characterArcDeltas[0].actorKey/before/pressure/choice/after, openLoops, resolvedLoops, and scriptExpansionReady.',
     },
   })
+}
+
+function isStoryInitialSeed(inference: z.infer<typeof worldPromptProjectContextInferenceSchema>) {
+  return inference.projectType === 'story'
+}
+
+function minimumInitialSeedSequenceUnits(inference: z.infer<typeof worldPromptProjectContextInferenceSchema>) {
+  return isStoryInitialSeed(inference) ? 6 : 0
+}
+
+function buildStreamedInitialSeedContinuationInstructions(input: {
+  target: 'sequence_units' | 'relationships'
+  inference: z.infer<typeof worldPromptProjectContextInferenceSchema>
+  currentCounts: Record<string, unknown>
+}) {
+  const sequenceTarget = minimumInitialSeedSequenceUnits(input.inference)
+  const currentSequenceUnits = typeof input.currentCounts.sequenceUnits === 'number' ? input.currentCounts.sequenceUnits : 0
+  const missingSequenceUnits = Math.max(0, sequenceTarget - currentSequenceUnits)
+  const targetRules = input.target === 'sequence_units'
+    ? [
+        'Continuation target: sequence units only.',
+        `The first stream ended before enough sequence units landed. Emit ${missingSequenceUnits || sequenceTarget} additional ordered sequence_unit records now.`,
+        'Use only compact {"kind":"sequence_unit",...} records plus at most one note and one summary.',
+        'Do not repeat actors, groups, places, objects, or concepts that already exist in existingCanon.',
+        'Do not emit relationship records in this continuation.',
+      ]
+    : [
+        'Continuation target: relationships only.',
+        'Emit relationship records now, using only endpoint keys that already exist in existingCanon.',
+        'Use only compact {"kind":"relationship",...} records plus at most one note and one summary.',
+        'Include sequence relationships such as precedes, causes, complicates, and pays_off when sequence units exist.',
+        'Do not emit new entity or sequence_unit records unless a tiny repair endpoint is absolutely required.',
+      ]
+  return [
+    buildStreamedInitialSeedInstructions(),
+    ...targetRules,
+  ].join('\n')
 }
 
 function normalizeStreamLine(line: string) {
@@ -9674,6 +9997,166 @@ function normalizeStreamLine(line: string) {
     .replace(/^```(?:json|jsonl|ndjson)?/i, '')
     .replace(/```$/i, '')
     .trim()
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function asStringArray(value: unknown) {
+  if (!Array.isArray(value)) return []
+  return value.map((entry) => String(entry).trim()).filter(Boolean)
+}
+
+function normalizeCompactStreamedSequenceEnvelope(value: Record<string, unknown>) {
+  if (value.kind !== 'sequence_unit') return value
+  const id = typeof value.id === 'string' && value.id.trim() ? value.id.trim() : ''
+  const ordinal = typeof value.ordinal === 'number' && Number.isFinite(value.ordinal)
+    ? Math.max(1, Math.floor(value.ordinal))
+    : null
+  const unitKind = typeof value.unitKind === 'string' && value.unitKind.trim()
+    ? value.unitKind.trim()
+    : 'sequence_unit'
+  const stableKey = id
+    ? slugifyStreamKey(id)
+    : ordinal
+      ? `${slugifyStreamKey(unitKind) || 'sequence_unit'}_${String(ordinal).padStart(2, '0')}`
+      : ''
+  if (!stableKey) return value
+  const name = typeof value.name === 'string' && value.name.trim()
+    ? value.name.trim()
+    : `${unitKind.replace(/_/g, ' ')} ${ordinal ?? ''}`.trim()
+  const summary = typeof value.summary === 'string' ? value.summary.trim() : ''
+  const context = typeof value.context === 'string' ? value.context.trim() : ''
+  const sequence = {
+    unitKind,
+    sequenceKey: typeof value.sequenceKey === 'string' && value.sequenceKey.trim() ? value.sequenceKey.trim() : 'main',
+    ordinal: ordinal ?? 1,
+    actLabel: typeof value.actLabel === 'string' ? value.actLabel.trim() : '',
+    synopsis: typeof value.synopsis === 'string' ? value.synopsis.trim() : '',
+    dramaticQuestion: typeof value.dramaticQuestion === 'string' ? value.dramaticQuestion.trim() : '',
+    storyFunction: typeof value.storyFunction === 'string' ? value.storyFunction.trim() : '',
+    outcome: typeof value.outcome === 'string' ? value.outcome.trim() : '',
+    consequences: Array.isArray(value.consequences) ? value.consequences : [],
+    characterArcDeltas: Array.isArray(value.characterArcDeltas) ? value.characterArcDeltas : [],
+    openLoops: asStringArray(value.openLoops),
+    resolvedLoops: asStringArray(value.resolvedLoops),
+    scriptExpansionReady: value.scriptExpansionReady !== false,
+  }
+  return {
+    kind: 'op',
+    op: {
+      id: `create_${stableKey}`,
+      op: 'upsert_entity',
+      payload: {
+        targetEntityKey: stableKey,
+        entity: {
+          nodeType: 'sequence_unit',
+          name,
+          summary,
+          context,
+          tags: asStringArray(value.tags),
+          customProperties: {
+            sequence,
+          },
+        },
+      },
+    },
+  }
+}
+
+function normalizeCompactStreamedRelationshipEnvelope(value: Record<string, unknown>) {
+  if (value.kind !== 'relationship') return value
+  const source = typeof value.source === 'string' ? value.source.trim() : ''
+  const target = typeof value.target === 'string' ? value.target.trim() : ''
+  const verb = typeof value.verb === 'string' ? value.verb.trim() : ''
+  if (!source || !target || !verb) return value
+  const id = typeof value.id === 'string' && value.id.trim()
+    ? value.id.trim()
+    : `link_${source}_${verb}_${target}`
+  return {
+    kind: 'op',
+    op: {
+      id: slugifyStreamKey(id) || `link_${slugifyStreamKey(source)}_${slugifyStreamKey(target)}`,
+      op: 'upsert_relationship',
+      payload: {
+        relationship: {
+          sourceEntityKey: source,
+          targetEntityKey: target,
+          verb,
+          notes: typeof value.notes === 'string' ? value.notes.trim() : '',
+          confidence: typeof value.confidence === 'number' ? value.confidence : 0.82,
+          tags: asStringArray(value.tags),
+          metadata: isRecord(value.metadata) ? value.metadata : {},
+        },
+      },
+    },
+  }
+}
+
+function normalizeStreamedEnvelope(value: unknown) {
+  if (isRecord(value)) {
+    const compactSequence = normalizeCompactStreamedSequenceEnvelope(value)
+    if (compactSequence !== value) return compactSequence
+    const compactRelationship = normalizeCompactStreamedRelationshipEnvelope(value)
+    if (compactRelationship !== value) return compactRelationship
+  }
+  if (!isRecord(value) || value.kind !== 'op' || !isRecord(value.op)) return value
+  if (value.op.op !== 'update_world_wiki_metadata' || !isRecord(value.op.payload)) return value
+  const metadata = isRecord(value.op.payload.metadata) ? value.op.payload.metadata : null
+  if (!metadata) return value
+  const normalizedMetadata = { ...metadata }
+  for (const key of ['title', 'logline', 'synopsis', 'genre', 'coreConflict', 'roleLabel', 'shortSummary', 'generatedFromFingerprint', 'updatedByTurnId']) {
+    const rawValue = normalizedMetadata[key]
+    if (Array.isArray(rawValue)) {
+      normalizedMetadata[key] = rawValue.map((entry) => String(entry).trim()).filter(Boolean).join(', ')
+    }
+  }
+  for (const key of ['themes', 'visualMotifs', 'toneTags']) {
+    const rawValue = normalizedMetadata[key]
+    if (typeof rawValue === 'string') {
+      normalizedMetadata[key] = rawValue.split(',').map((entry) => entry.trim()).filter(Boolean)
+    }
+  }
+  return {
+    ...value,
+    op: {
+      ...value.op,
+      payload: {
+        ...value.op.payload,
+        metadata: normalizedMetadata,
+      },
+    },
+  }
+}
+
+function slugifyStreamKey(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 48)
+}
+
+function normalizeStreamedSequenceOpKeys(op: PromptToWorldOp): PromptToWorldOp {
+  if (op.op !== 'upsert_entity' || op.payload.entity.nodeType !== 'sequence_unit') return op
+  const sequence = op.payload.entity.customProperties?.sequence
+  if (!sequence || typeof sequence !== 'object') return op
+  const ordinal = (sequence as { ordinal?: unknown }).ordinal
+  if (typeof ordinal !== 'number' || !Number.isFinite(ordinal) || ordinal <= 0) return op
+  const unitKind = typeof (sequence as { unitKind?: unknown }).unitKind === 'string'
+    ? (sequence as { unitKind: string }).unitKind
+    : 'sequence_unit'
+  const normalizedUnitKind = slugifyStreamKey(unitKind) || 'sequence_unit'
+  const stableKey = `${normalizedUnitKind}_${String(Math.floor(ordinal)).padStart(2, '0')}`
+  return {
+    ...op,
+    id: `create_${stableKey}`,
+    payload: {
+      ...op.payload,
+      targetEntityKey: stableKey,
+    },
+  }
 }
 
 function extractCompleteStreamJsonRecords(buffer: string) {
@@ -9804,8 +10287,21 @@ const WORLD_PROMPT_GENERATION_STEP_PHASES = [
   { key: 'relationships', phase: 'relationships', label: 'Relationships' },
   { key: 'finalize', phase: 'finalize', label: 'Finalize world' },
 ] as const
+const WORLD_PROMPT_FLY_GENERATION_STEP = { key: 'full_stream', phase: 'full_stream', label: 'Building world' } as const
 
-type WorldPromptGenerationStepPhase = typeof WORLD_PROMPT_GENERATION_STEP_PHASES[number]['phase']
+type WorldPromptGenerationStepPhase =
+  | typeof WORLD_PROMPT_FLY_GENERATION_STEP['phase']
+  | typeof WORLD_PROMPT_GENERATION_STEP_PHASES[number]['phase']
+
+function resolveInitialSeedGenerationRuntime() {
+  return Deno.env.get('WORLD_PROMPT_GENERATION_RUNTIME')?.trim().toLowerCase() === 'supabase'
+    ? 'supabase'
+    : 'fly'
+}
+
+function isFlyGenerationJob(job: WorldPromptGenerationJob | { metadata?: Record<string, unknown> | null }) {
+  return job.metadata?.runtime === 'fly'
+}
 
 function mergeStreamCounts(...entries: Array<Record<string, unknown> | null | undefined>) {
   const merged = createStreamCounts()
@@ -10017,6 +10513,7 @@ async function createInitialSeedGenerationJob(input: {
   selectedArtStyleDescription: string
   projectContext: ProjectContext
   generationPrompt: string
+  runtime: 'fly' | 'supabase'
 }) {
   const response = await input.client
     .from('world_prompt_generation_jobs')
@@ -10028,6 +10525,8 @@ async function createInitialSeedGenerationJob(input: {
       status: 'queued',
       counts: createStreamCounts(),
       metadata: {
+        runtime: input.runtime,
+        streamMode: input.runtime === 'fly' ? 'single_response_ndjson' : 'phased_ndjson',
         model: input.payload.model,
         prompt: input.generationPrompt,
         sourceContext: input.sourceContext ?? null,
@@ -10048,8 +10547,12 @@ async function createInitialSeedGenerationJob(input: {
 async function createInitialSeedGenerationJobSteps(input: {
   client: SupabaseClient
   job: WorldPromptGenerationJob
+  runtime: 'fly' | 'supabase'
 }) {
-  const rows = WORLD_PROMPT_GENERATION_STEP_PHASES.map((entry, index) => ({
+  const phaseEntries = input.runtime === 'fly'
+    ? [WORLD_PROMPT_FLY_GENERATION_STEP]
+    : WORLD_PROMPT_GENERATION_STEP_PHASES
+  const rows = phaseEntries.map((entry, index) => ({
     job_id: input.job.id,
     draft_id: input.job.draftId,
     session_id: input.job.sessionId,
@@ -10061,6 +10564,7 @@ async function createInitialSeedGenerationJobSteps(input: {
     counts: createStreamCounts(),
     metadata: {
       label: entry.label,
+      runtime: input.runtime,
     },
   }))
   const response = await input.client
@@ -10089,7 +10593,7 @@ async function runWorldPromptGenerationJob(input: {
   if (job.status === 'cancelled') return job
   let step = input.stepId ? await loadGenerationJobStepById(input.client, input.stepId) : null
   if (step && step.status === 'cancelled') return job
-  const phase = (step?.phase ?? 'finalize') as WorldPromptGenerationStepPhase
+  const phase = (step?.phase ?? 'full_stream') as WorldPromptGenerationStepPhase
   const turn = await loadTurnById(input.client, job.turnId)
   const session = await loadSessionById(input.client, job.sessionId)
   const metadata = job.metadata ?? {}
@@ -10113,6 +10617,7 @@ async function runWorldPromptGenerationJob(input: {
     draftId: job.draftId,
   })
   const usageRecorder = createWorldPromptTokenUsageRecorder()
+  const startingJobCounts = structuredClone(job.counts ?? createStreamCounts()) as Record<string, unknown>
   const counts = createStreamCounts()
   const mutableSnapshot = structuredClone(snapshot) as WorldPromptSnapshot
   mutableSnapshot.projectContext = projectContext
@@ -10127,7 +10632,7 @@ async function runWorldPromptGenerationJob(input: {
   let lastStreamHeartbeatAt = 0
 
   const updateProgress = async (cursor?: string | null) => {
-    const aggregateCounts = mergeStreamCounts(job.counts, counts)
+    const aggregateCounts = mergeStreamCounts(startingJobCounts, counts)
     job = await updateGenerationJobProgress({
       client: input.client,
       jobId: job.id,
@@ -10196,11 +10701,36 @@ async function runWorldPromptGenerationJob(input: {
       return
     }
 
-    const op = envelope.op
+    let op = normalizeStreamedSequenceOpKeys(envelope.op)
     if (await worldPromptOpAlreadyApplied({ client: input.client, turnId: turn.id, opId: op.id })) {
       counts.skipped += 1
       await updateProgress(op.id)
       return
+    }
+
+    if (op.op === 'upsert_entity' && op.payload.entity.nodeType === 'sequence_unit') {
+      const repaired = await completeStreamedStorySequenceOp({
+        model,
+        prompt,
+        snapshot: mutableSnapshot,
+        op,
+        usageRecorder,
+      })
+      op = repaired.op
+      if (repaired.issues.length > 0) {
+        counts.failed += 1
+        const note = `Skipped incomplete sequence unit "${op.payload.entity.name}" because required Story sequence fields were still missing after repair.`
+        assistantNotes.push(note)
+        await writeEvent('assistant_note', {
+          op,
+          note,
+          diagnostics: repaired.issues.map((issue) => `${issue.entityName} missing ${issue.missingFields.join(', ')}`),
+          turn: { id: turn.id },
+          ...tokenUsageEventPayload(usageRecorder),
+        }, { opId: op.id })
+        await updateProgress(op.id)
+        return
+      }
     }
 
     if (op.op === 'upsert_relationship' && !streamedRelationshipEndpointsExist(mutableSnapshot, op)) {
@@ -10319,25 +10849,29 @@ async function runWorldPromptGenerationJob(input: {
     let parsed: unknown
     try {
       parsed = JSON.parse(normalized)
-    } catch {
+    } catch (error) {
       counts.failed += 1
-      await writeEvent('assistant_note', {
-        note: 'Skipped a malformed streamed generation record.',
-        diagnostics: [normalized.slice(0, 500)],
-        turn: { id: turn.id },
+      console.warn('[GraphCore] skipped malformed streamed generation record', {
+        jobId: job.id,
+        stepId: step?.id ?? null,
+        phase,
+        error: error instanceof Error ? error.message : String(error),
+        sample: normalized.slice(0, 500),
       })
       await updateProgress(null)
       return
     }
-    const envelope = worldPromptStreamGraphOpEnvelopeSchema.safeParse(parsed)
+    const normalizedEnvelopeCandidate = normalizeStreamedEnvelope(parsed)
+    const envelope = worldPromptStreamGraphOpEnvelopeSchema.safeParse(normalizedEnvelopeCandidate)
     if (!envelope.success) {
       counts.failed += 1
-      await writeEvent('assistant_note', {
-        note: 'Skipped a streamed generation record that did not match the graph-op contract.',
+      console.warn('[GraphCore] skipped streamed generation record that did not match the graph-op contract', {
+        jobId: job.id,
+        stepId: step?.id ?? null,
+        phase,
         diagnostics: envelope.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).slice(0, 5),
-        turn: { id: turn.id },
       })
-      await updateProgress(streamEnvelopeToOpId(parsed as WorldPromptStreamGraphOpEnvelope))
+      await updateProgress(streamEnvelopeToOpId(normalizedEnvelopeCandidate as WorldPromptStreamGraphOpEnvelope))
       return
     }
     await handleEnvelope(envelope.data)
@@ -10372,58 +10906,128 @@ async function runWorldPromptGenerationJob(input: {
       turn: { id: turn.id },
     })
 
-    const response = await runOpenAiResponsesStream({
-      model,
-      input: buildStreamedInitialSeedInput({
-        generationPrompt: prompt,
-        sourceContext,
-        inference,
-        selectedArtStylePreset,
-        selectedArtStyleDescription,
-        skeletonProfile,
-        projectContext,
-        phase,
-        existingCanon: buildStreamedGenerationCanonLedger(mutableSnapshot),
-      }),
-      instructions: buildStreamedInitialSeedPhaseInstructions(phase),
-      maxOutputTokens: 32_000,
-      reasoning: { effort: 'medium' },
-      store: false,
-      timeoutMs: 150_000,
-      metadata: {
-        surface: 'world-prompt-initial-seed-stream',
-        turnId: turn.id,
-        jobId: job.id,
-      },
-    }, {
-      onEvent: async (event) => {
-        const now = Date.now()
-        if (now - lastStreamHeartbeatAt < 15_000) return
-        lastStreamHeartbeatAt = now
-        await updateGenerationJob(input.client, job.id, {
-          heartbeat_at: new Date().toISOString(),
-          metadata: {
-            ...(job.metadata ?? {}),
-            lastOpenAiStreamEvent: {
-              type: event.type,
-              sequenceNumber: event.sequenceNumber,
-              receivedAt: new Date().toISOString(),
-            },
-          },
-        })
-      },
-      onTextDelta: async (delta) => {
-        streamRecordBuffer += delta
-        const extracted = extractCompleteStreamJsonRecords(streamRecordBuffer)
-        streamRecordBuffer = extracted.rest
-        for (const record of extracted.records) {
-          await processStreamRecord(record)
-        }
-      },
-    })
-    if (streamRecordBuffer.trim().startsWith('{')) {
-      await processStreamRecord(streamRecordBuffer)
+    const streamResponses: Array<Awaited<ReturnType<typeof runOpenAiResponsesStream>>> = []
+    const runSeedStreamPass = async (pass: {
+      passName: string
+      instructions: string
+      maxOutputTokens: number
+    }) => {
       streamRecordBuffer = ''
+      const response = await runOpenAiResponsesStream({
+        model,
+        input: buildStreamedInitialSeedInput({
+          generationPrompt: prompt,
+          sourceContext,
+          inference,
+          selectedArtStylePreset,
+          selectedArtStyleDescription,
+          skeletonProfile,
+          projectContext,
+          phase,
+          existingCanon: buildStreamedGenerationCanonLedger(mutableSnapshot),
+        }),
+        instructions: pass.instructions,
+        maxOutputTokens: pass.maxOutputTokens,
+        reasoning: { effort: 'medium' },
+        store: false,
+        timeoutMs: isFlyGenerationJob(job)
+          ? Number(Deno.env.get('WORLD_PROMPT_FLY_STREAM_TIMEOUT_MS') ?? 900_000)
+          : 150_000,
+        metadata: {
+          surface: 'world-prompt-initial-seed-stream',
+          turnId: turn.id,
+          jobId: job.id,
+          runtime: isFlyGenerationJob(job) ? 'fly' : 'supabase',
+          passName: pass.passName,
+        },
+      }, {
+        onEvent: async (event) => {
+          const now = Date.now()
+          if (now - lastStreamHeartbeatAt < 15_000) return
+          lastStreamHeartbeatAt = now
+          await updateGenerationJob(input.client, job.id, {
+            heartbeat_at: new Date().toISOString(),
+            metadata: {
+              ...(job.metadata ?? {}),
+              lastOpenAiStreamEvent: {
+                type: event.type,
+                sequenceNumber: event.sequenceNumber,
+                receivedAt: new Date().toISOString(),
+                passName: pass.passName,
+              },
+            },
+          })
+        },
+        onTextDelta: async (delta) => {
+          streamRecordBuffer += delta
+          const extracted = extractCompleteStreamJsonRecords(streamRecordBuffer)
+          streamRecordBuffer = extracted.rest
+          for (const record of extracted.records) {
+            await processStreamRecord(record)
+          }
+        },
+      })
+      if (streamRecordBuffer.trim().startsWith('{')) {
+        await processStreamRecord(streamRecordBuffer)
+        streamRecordBuffer = ''
+      }
+      streamResponses.push(response)
+      usageRecorder.record({
+        surface: 'world-prompt-initial-seed-stream',
+        model,
+        response,
+        metadata: { jobId: job.id, turnId: turn.id, passName: pass.passName },
+      })
+      return response
+    }
+
+    await runSeedStreamPass({
+      passName: 'full_stream',
+      instructions: buildStreamedInitialSeedPhaseInstructions(phase),
+      maxOutputTokens: phase === 'full_stream' ? 64_000 : 32_000,
+    })
+
+    const sequenceTarget = minimumInitialSeedSequenceUnits(inference)
+    if (phase === 'full_stream' && sequenceTarget > 0 && counts.sequenceUnits < sequenceTarget) {
+      await writeEvent('planner_status', {
+        plannerStatus: 'planning',
+        plannerProgress: {
+          phase: 'generating_sequence_unit',
+          message: `Completing missing story sequence units (${counts.sequenceUnits}/${sequenceTarget} created).`,
+          sequence: counts.ops + counts.notes + 1,
+        },
+        turn: { id: turn.id },
+      })
+      await runSeedStreamPass({
+        passName: 'sequence_units_continuation',
+        instructions: buildStreamedInitialSeedContinuationInstructions({
+          target: 'sequence_units',
+          inference,
+          currentCounts: counts,
+        }),
+        maxOutputTokens: 32_000,
+      })
+    }
+
+    if (phase === 'full_stream' && counts.sequenceUnits > 0 && counts.relationships === 0) {
+      await writeEvent('planner_status', {
+        plannerStatus: 'planning',
+        plannerProgress: {
+          phase: 'mapping_relationships',
+          message: 'Completing missing graph relationships from the created canon.',
+          sequence: counts.ops + counts.notes + 1,
+        },
+        turn: { id: turn.id },
+      })
+      await runSeedStreamPass({
+        passName: 'relationships_continuation',
+        instructions: buildStreamedInitialSeedContinuationInstructions({
+          target: 'relationships',
+          inference,
+          currentCounts: counts,
+        }),
+        maxOutputTokens: 24_000,
+      })
     }
     await flushDeferredRelationships()
     if (deferredRelationshipOps.length > 0) {
@@ -10441,13 +11045,6 @@ async function runWorldPromptGenerationJob(input: {
       deferredRelationshipOps.splice(0, deferredRelationshipOps.length)
       await updateProgress(null)
     }
-    usageRecorder.record({
-      surface: 'world-prompt-initial-seed-stream',
-      model,
-      response,
-      metadata: { jobId: job.id, turnId: turn.id },
-    })
-
     for (const entityKey of [...touchedEntityKeys]) {
       const touchedEntity = mutableSnapshot.worldEntities.find((entity) => entity.key === entityKey) ?? null
       if (!touchedEntity) continue
@@ -10479,7 +11076,7 @@ async function runWorldPromptGenerationJob(input: {
     }
 
     const tokenUsage = usageRecorder.summary()
-    const aggregateCounts = mergeStreamCounts(job.counts, counts)
+    const aggregateCounts = mergeStreamCounts(startingJobCounts, counts)
     const updatedJobMetadata = {
       ...(job.metadata ?? {}),
       snapshot: mutableSnapshot,
@@ -10492,9 +11089,10 @@ async function runWorldPromptGenerationJob(input: {
           }
         : null,
       lastStepDefinitions: appliedDefinitions,
+      openAiResponseId: typeof streamResponses.at(-1)?.body?.id === 'string' ? streamResponses.at(-1)?.body?.id : (job.metadata?.openAiResponseId ?? null),
     }
 
-    if (step && phase !== 'finalize') {
+    if (step && phase !== 'finalize' && phase !== 'full_stream') {
       step = await updateGenerationJobStep(input.client, step.id, {
         status: counts.failed > 0 ? 'completed' : 'completed',
         completed_at: new Date().toISOString(),
@@ -10653,7 +11251,7 @@ async function runWorldPromptGenerationJob(input: {
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Initial world generation failed.'
     const cancelled = message.toLowerCase().includes('cancelled')
-    const aggregateCounts = mergeStreamCounts(job.counts, counts)
+    const aggregateCounts = mergeStreamCounts(startingJobCounts, counts)
     if (step && !cancelled && step.attemptCount < 2) {
       step = await updateGenerationJobStep(input.client, step.id, {
         status: 'queued',
@@ -10663,7 +11261,7 @@ async function runWorldPromptGenerationJob(input: {
         heartbeat_at: new Date().toISOString(),
       })
       job = await updateGenerationJob(input.client, job.id, {
-        status: 'running',
+        status: isFlyGenerationJob(job) ? 'queued' : 'running',
         counts: aggregateCounts,
         metadata: {
           ...(job.metadata ?? {}),
@@ -10678,12 +11276,14 @@ async function runWorldPromptGenerationJob(input: {
         },
         heartbeat_at: new Date().toISOString(),
       })
-      await enqueueWorldPromptGenerationStep({
-        client: input.client,
-        jobId: job.id,
-        stepId: step.id,
-      })
-      await kickWorldPromptGenerationWorker()
+      if (!isFlyGenerationJob(job)) {
+        await enqueueWorldPromptGenerationStep({
+          client: input.client,
+          jobId: job.id,
+          stepId: step.id,
+        })
+        await kickWorldPromptGenerationWorker()
+      }
       await writeEvent('planner_status', {
         plannerStatus: 'planning',
         plannerProgress: {
@@ -11609,7 +12209,7 @@ async function generateIncrementalWorkItemPlan(input: {
     'Valid entity node types are actor, group, place, object, concept, event, and sequence_unit. Never use wiki, location, faction, character, beat, lore, or title as nodeType values; map those to place, group, actor, sequence_unit, concept, or wiki metadata as appropriate.',
     'For relationship_batch items, create links only between existing/generated entities that are available in the ledger or relevant entity list.',
     'For sequence_unit items, create the authored progression node(s) requested by this item and include complete customProperties.sequence metadata.',
-    'A Story sequence_unit must include sequence.ordinal, synopsis, outcome, and at least one consequence with cause/effect.',
+    'A Story sequence_unit must include sequence.ordinal, synopsis, dramaticQuestion, outcome, at least one consequence with cause/effect, and at least one characterArcDelta.',
     'Use sequence_unit relationships with precedes, causes, complicates, or pays_off only when relevant endpoints already exist or are created in this work item.',
     'For wiki_metadata/final_summary items, prefer update_world_wiki_metadata, assistant_note, threadActions, and suggestionCandidates over more core entity growth.',
     compactPrompt.context.ledgerOnly ? 'The context is in ledger-only budget mode. Prefer key-based operations and concise text.' : null,
@@ -12446,6 +13046,7 @@ export async function continueWorldSeedGeneration(input: {
     projectContext,
     generationPrompt,
   })
+  const generationRuntime = resolveInitialSeedGenerationRuntime()
   const job = await createInitialSeedGenerationJob({
     client: input.client,
     session,
@@ -12458,6 +13059,7 @@ export async function continueWorldSeedGeneration(input: {
     selectedArtStyleDescription: payload.selectedArtStyleDescription || selectedPreset.description,
     projectContext,
     generationPrompt,
+    runtime: generationRuntime,
   })
   await generationTurnState.writeEvent('planner_status', {
     plannerStatus: 'planning',
@@ -12472,9 +13074,10 @@ export async function continueWorldSeedGeneration(input: {
   const steps = await createInitialSeedGenerationJobSteps({
     client: input.client,
     job,
+    runtime: generationRuntime,
   })
   const firstStep = nextQueuedGenerationStep(steps)
-  if (firstStep) {
+  if (firstStep && generationRuntime !== 'fly') {
     await enqueueWorldPromptGenerationStep({
       client: input.client,
       jobId: job.id,
@@ -13874,7 +14477,7 @@ export async function getWorldGenerationStatus(input: {
   const messages = await loadTurnMessages(input.client, turn.id)
   const events = await loadTurnEvents(input.client, turn.id)
   const terminal = terminalStatuses.includes(job.status)
-  if (!terminal && steps.some((step) => ['queued', 'running'].includes(step.status))) {
+  if (!terminal && !isFlyGenerationJob(job) && steps.some((step) => ['queued', 'running'].includes(step.status))) {
     await kickWorldPromptGenerationWorker()
   }
   return worldPromptGenerationStatusResponseSchema.parse({
@@ -13936,6 +14539,56 @@ export async function processWorldGenerationJobs(input: {
     stepId,
   })
   await deleteWorldPromptGenerationQueueMessage({ client: input.client, msgId: message.msg_id })
+  return {
+    ok: true,
+    processed: true,
+    job: updatedJob,
+    steps: await loadGenerationJobSteps(input.client, updatedJob.id),
+  }
+}
+
+async function claimFlyWorldPromptGenerationJob(input: {
+  client: SupabaseClient
+  workerId: string
+  workerSecret?: string | null
+}) {
+  const response = await input.client.rpc('claim_world_prompt_generation_job', {
+    worker_id: input.workerId,
+    worker_secret: input.workerSecret ?? null,
+  })
+  if (response.error) throw new Error(response.error.message)
+  const rows = Array.isArray(response.data) ? response.data : []
+  const row = rows[0] as { job_id?: unknown; step_id?: unknown } | undefined
+  const jobId = typeof row?.job_id === 'string' ? row.job_id : ''
+  const stepId = typeof row?.step_id === 'string' ? row.step_id : ''
+  return jobId && stepId ? { jobId, stepId } : null
+}
+
+export async function processFlyWorldGenerationJobs(input: {
+  client: SupabaseClient
+  authHeader: string
+  workerId: string
+  workerSecret?: string | null
+}) {
+  const claimed = await claimFlyWorldPromptGenerationJob({
+    client: input.client,
+    workerId: input.workerId,
+    workerSecret: input.workerSecret,
+  })
+  if (!claimed) {
+    return { ok: true, processed: false, job: null, steps: [], ignored: 'no_fly_job' }
+  }
+  console.log('[world-generation-job] Fly worker claimed generation job.', {
+    workerId: input.workerId,
+    jobId: claimed.jobId,
+    stepId: claimed.stepId,
+  })
+  const updatedJob = await runWorldPromptGenerationJob({
+    client: input.client,
+    authHeader: input.authHeader,
+    jobId: claimed.jobId,
+    stepId: claimed.stepId,
+  })
   return {
     ok: true,
     processed: true,

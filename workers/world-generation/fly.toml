@@ -1,0 +1,19 @@
+app = "graphcore-world-generation"
+primary_region = "lhr"
+
+[build]
+  dockerfile = "workers/world-generation/Dockerfile"
+
+[env]
+  GRAPHCORE_WORKER_POLL_INTERVAL_MS = "2500"
+  OPENAI_REQUEST_TIMEOUT_MS = "900000"
+  WORLD_PROMPT_FLY_STREAM_TIMEOUT_MS = "900000"
+  WORLD_PROMPT_GENERATION_RUNTIME = "fly"
+
+[processes]
+  app = "deno run --allow-env --allow-net --allow-read --node-modules-dir=auto workers/world-generation/main.ts"
+
+[[vm]]
+  memory = "1gb"
+  cpu_kind = "shared"
+  cpus = 1

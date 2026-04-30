@@ -82,6 +82,8 @@ type SeedGenerationLogRow = {
   total: number | null
 }
 
+const ACTIVE_GENERATION_PROGRESS_ROW_ID = 'active-generation-progress'
+
 function buildGenerationPrompt(prompt: string, sourceContext: WorldPromptSourceContext) {
   const sourceText = sourceContext.extractedText.trim()
   if (!sourceText || sourceText === prompt.trim()) return prompt.trim()
@@ -162,11 +164,6 @@ function nodeTypeIcon(nodeType: string | null | undefined): EntityIconId {
   }
 }
 
-function plannerPhaseTitle(phase: string | null | undefined) {
-  if (!phase) return 'Planning world graph'
-  return formatInferenceLabel(phase)
-}
-
 function workItemRowId(index: number | null, fallbackId: string | null | undefined) {
   return index !== null && index > 0 ? `work-index-${index}` : `work-${fallbackId ?? 'unknown'}`
 }
@@ -245,16 +242,7 @@ function seedEventToLogRow(
       }
     }
   }
-  if (event.eventType === 'work_item_started' && payload.workItem?.label) {
-    return {
-      ...base,
-      id: workItemRowId(base.index, payload.workItem.id ?? event.id),
-      icon: workItemIcon(payload.workItem.kind),
-      title: payload.workItem.label,
-      detail: cleanSeedLogText(payload.plannerProgress?.message || payload.workItem.objective || 'Building this part of the world graph.'),
-      status: 'active',
-    }
-  }
+  if (event.eventType === 'work_item_started') return null
   if (event.eventType === 'work_item_completed' && payload.workItem?.label) {
     return {
       ...base,
@@ -330,6 +318,21 @@ function isSeedTerminalEvent(event: WorldPromptEvent) {
   return event.eventType === 'turn_completed' || event.eventType === 'turn_failed'
 }
 
+function generationTurnIdsFromSteps(steps: WorldPromptGenerationJobStep[]) {
+  return new Set(steps.map((step) => step.turnId).filter(Boolean))
+}
+
+function isGenerationTerminalEvent(event: WorldPromptEvent, generationTurnIds: Set<string>) {
+  if (!isSeedTerminalEvent(event)) return false
+  if (generationTurnIds.size === 0) return false
+  return generationTurnIds.has(event.turnId)
+}
+
+function hasGenerationTerminalEvent(events: WorldPromptEvent[], steps: WorldPromptGenerationJobStep[]) {
+  const generationTurnIds = generationTurnIdsFromSteps(steps)
+  return events.some((event) => isGenerationTerminalEvent(event, generationTurnIds))
+}
+
 function isDurableSeedEvent(event: WorldPromptEvent) {
   return event.eventType === 'op_applied'
     || event.eventType === 'message_created'
@@ -344,7 +347,7 @@ function latestSeedActivityRow(input: {
   generationSteps: WorldPromptGenerationJobStep[]
   seedInference: WorldPromptSeedInferenceResponse
 }): SeedGenerationLogRow | null {
-  if (input.events.some((event) => isSeedTerminalEvent(event))) return null
+  if (hasGenerationTerminalEvent(input.events, input.generationSteps)) return null
   const latestDurableSequence = input.events
     .filter((event) => isDurableSeedEvent(event))
     .reduce((latest, event) => Math.max(latest, event.sequence), -1)
@@ -366,9 +369,9 @@ function latestSeedActivityRow(input: {
   }).find(Boolean)
   if (latestProgress) {
     return {
-      id: 'active-generation-progress',
+      id: ACTIVE_GENERATION_PROGRESS_ROW_ID,
       icon: workItemIcon(latestProgress.progress.workItemKind),
-      title: plannerPhaseTitle(latestProgress.progress.phase),
+      title: 'Generating',
       detail: cleanSeedLogText(latestProgress.progress.message),
       status: 'active',
       createdAt: latestProgress.event.createdAt,
@@ -386,9 +389,9 @@ function latestSeedActivityRow(input: {
       ? runningStep.metadata.label
       : formatInferenceLabel(runningStep.phase)
     return {
-      id: 'active-generation-progress',
+      id: ACTIVE_GENERATION_PROGRESS_ROW_ID,
       icon: runningStep.phase === 'relationships' ? 'graph' : runningStep.phase === 'sequence_units' ? 'thread' : runningStep.phase === 'finalize' ? 'global' : 'content',
-      title,
+      title: `Generating ${title.toLowerCase()}`,
       detail: `Generating ${title.toLowerCase()}.`,
       status: 'active',
       createdAt: runningStep.startedAt ?? runningStep.updatedAt,
@@ -406,9 +409,9 @@ function latestSeedActivityRow(input: {
       ? nextQueuedStep.metadata.label
       : formatInferenceLabel(nextQueuedStep.phase)
     return {
-      id: 'active-generation-progress',
+      id: ACTIVE_GENERATION_PROGRESS_ROW_ID,
       icon: nextQueuedStep.phase === 'relationships' ? 'graph' : nextQueuedStep.phase === 'sequence_units' ? 'thread' : nextQueuedStep.phase === 'finalize' ? 'global' : 'content',
-      title: 'Preparing next step',
+      title: 'Generating',
       detail: `Waiting to start ${title.toLowerCase()}.`,
       status: 'active',
       createdAt: nextQueuedStep.createdAt,
@@ -419,9 +422,9 @@ function latestSeedActivityRow(input: {
   }
 
   return {
-    id: 'active-generation-progress',
+    id: ACTIVE_GENERATION_PROGRESS_ROW_ID,
     icon: 'global',
-    title: 'Preparing world graph',
+    title: 'Generating',
     detail: 'Waiting for the next generated item.',
     status: 'active',
     createdAt: input.seedInference.turn.updatedAt,
@@ -429,6 +432,27 @@ function latestSeedActivityRow(input: {
     index: null,
     total: null,
   }
+}
+
+function appendActiveGenerationLogRow(rows: SeedGenerationLogRow[], activeRow: SeedGenerationLogRow | null) {
+  const durableRows = rows.filter((row) => row.id !== ACTIVE_GENERATION_PROGRESS_ROW_ID)
+  if (!activeRow) return durableRows
+  return [...durableRows, activeRow]
+}
+
+function mergeStableGenerationLogRows(previousRows: SeedGenerationLogRow[], nextRows: SeedGenerationLogRow[]) {
+  if (previousRows.length === 0) return nextRows
+  const mergedById = new Map<string, SeedGenerationLogRow>()
+  for (const row of previousRows) {
+    if (row.id !== ACTIVE_GENERATION_PROGRESS_ROW_ID) mergedById.set(row.id, row)
+  }
+  for (const row of nextRows) {
+    if (row.id !== ACTIVE_GENERATION_PROGRESS_ROW_ID) mergedById.set(row.id, row)
+  }
+  return [...mergedById.values()].sort((left, right) => {
+    if (left.sequence !== right.sequence) return left.sequence - right.sequence
+    return left.id.localeCompare(right.id)
+  })
 }
 
 function dedupeLogRows<T extends { text: string }>(rows: T[]) {
@@ -449,6 +473,7 @@ function buildSeedGenerationLogRows(input: {
   sourceLabel: string
 }): SeedGenerationLogRow[] {
   if (!input.seedInference) return []
+  const generationTurnIds = generationTurnIdsFromSteps(input.generationSteps)
   const rows: SeedGenerationLogRow[] = [
     {
       id: 'prompt-received',
@@ -514,20 +539,7 @@ function buildSeedGenerationLogRows(input: {
     }
   }
 
-  if (input.events.length === 0) {
-    rows.push({
-      id: 'generation-starting',
-      icon: 'global',
-      title: 'Starting initial skeleton generation',
-      detail: 'Waiting for the first live planner event.',
-      status: 'active',
-      createdAt: input.seedInference.turn.updatedAt,
-      sequence: 2,
-      index: null,
-      total: null,
-    })
-    return rows
-  }
+  if (input.events.length === 0) return rows
 
   const workItemProgressById = new Map<string, { index: number | null; total: number | null }>()
   for (const event of input.events) {
@@ -547,6 +559,9 @@ function buildSeedGenerationLogRows(input: {
     const timeDelta = new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
     return timeDelta !== 0 ? timeDelta : left.sequence - right.sequence
   })) {
+    if (isSeedTerminalEvent(event) && generationTurnIds.size > 0 && !generationTurnIds.has(event.turnId)) {
+      continue
+    }
     const parsed = worldPromptEventPayloadSchema.safeParse(event.payload)
     if (parsed.success && parsed.data.plannerProgress?.phase === 'planning_manifest' && parsed.data.plannerProgress.done) {
       const total = parsed.data.plannerProgress.total ?? parsed.data.plannerOutline?.length ?? null
@@ -569,23 +584,7 @@ function buildSeedGenerationLogRows(input: {
     if (row) pushOrReplaceGenerationLogRow(rows, row)
   }
 
-  const activeRow = latestSeedActivityRow({
-    events: input.events,
-    generationSteps: input.generationSteps,
-    seedInference: input.seedInference,
-  })
-  if (activeRow) pushOrReplaceGenerationLogRow(rows, activeRow)
-
   return rows
-}
-
-function hasLiveSeedGenerationRows(rows: SeedGenerationLogRow[]) {
-  return rows.some((row) => ![
-    'prompt-received',
-    'inference-result',
-    'await-style',
-    'generation-starting',
-  ].includes(row.id))
 }
 
 export function ProjectWorldOnboarding({
@@ -652,23 +651,27 @@ export function ProjectWorldOnboarding({
     stableGenerationKeyRef.current = generationKey
     stableGenerationLogRowsRef.current = []
   }
-  const computedHasLiveRows = hasLiveSeedGenerationRows(computedGenerationLogRows)
-  const computedIsStartingOnly = seedGenerationStarted
-    && computedGenerationLogRows.some((row) => row.id === 'generation-starting')
-    && !computedHasLiveRows
-  const generationLogRows = computedIsStartingOnly && stableGenerationLogRowsRef.current.length > computedGenerationLogRows.length
-    ? stableGenerationLogRowsRef.current
+  const seedGenerationIsTerminal = sessionEvents.some((event) => isSeedTerminalEvent(event))
+  const shouldPreserveGenerationRows = Boolean(seedInference && seedGenerationStarted && !seedGenerationIsTerminal)
+  const generationLogRows = shouldPreserveGenerationRows
+    ? mergeStableGenerationLogRows(stableGenerationLogRowsRef.current, computedGenerationLogRows)
     : computedGenerationLogRows
-  if (!computedIsStartingOnly || stableGenerationLogRowsRef.current.length === 0) {
-    stableGenerationLogRowsRef.current = generationLogRows
-  }
+  stableGenerationLogRowsRef.current = generationLogRows
+  const activeGenerationLogRow = seedInference && seedGenerationStarted
+    ? latestSeedActivityRow({
+      events: sessionEvents,
+      generationSteps,
+      seedInference,
+    })
+    : null
+  const visibleGenerationLogRows = appendActiveGenerationLogRow(generationLogRows, activeGenerationLogRow)
   const tokenMeter = useMemo(() => buildWorldPromptSessionTokenMeter({
     turns: sessionTurns,
     messages: sessionMessages,
     events: sessionEvents,
     generationJobSteps: generationSteps,
   }), [generationSteps, sessionEvents, sessionMessages, sessionTurns])
-  const generationLogScrollKey = generationLogRows
+  const generationLogScrollKey = visibleGenerationLogRows
     .map((row) => `${row.id}:${row.status}:${row.title}:${row.detail}`)
     .join('|')
 
@@ -775,7 +778,7 @@ export function ProjectWorldOnboarding({
           </div>
 
           <div ref={generationLogRef} className="world-onboarding-live-log" aria-label="Generation details">
-            {generationLogRows.map((row) => (
+            {visibleGenerationLogRows.map((row) => (
               <div key={row.id} className={`world-onboarding-live-row is-${row.status}`}>
                 <div className="world-onboarding-live-icon">
                   <EntityIcon id={row.icon} />
