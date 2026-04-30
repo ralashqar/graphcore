@@ -161,6 +161,15 @@ verify_jwt = false
 [functions.start-world-prompt-turn]
 verify_jwt = false
 
+[functions.start-world-seed-inference]
+verify_jwt = false
+
+[functions.continue-world-seed-generation]
+verify_jwt = false
+
+[functions.extract-source-url]
+verify_jwt = false
+
 [functions.approve-world-prompt-op]
 verify_jwt = false
 

@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { projectContextSchema } from './projectContext.ts'
+import { worldSeedSkeletonProfileSchema } from './worldSeedProfiles.ts'
 
 import {
   worldEntityCreateInputSchema,
@@ -17,14 +18,47 @@ import { worldThreadSchema } from './worldThread.ts'
 
 const looseRecordSchema = z.record(z.string(), z.unknown())
 
+export const worldPromptSourceContextKindSchema = z.enum(['prompt', 'file', 'url', 'example'])
+export const worldPromptSourceContextSchema = z.object({
+  kind: worldPromptSourceContextKindSchema,
+  title: z.string().default(''),
+  fileName: z.string().nullable().default(null),
+  mimeType: z.string().nullable().default(null),
+  url: z.string().nullable().default(null),
+  extractedText: z.string().default(''),
+  charCount: z.number().int().nonnegative().default(0),
+  truncated: z.boolean().default(false),
+}).default({
+  kind: 'prompt',
+  title: '',
+  fileName: null,
+  mimeType: null,
+  url: null,
+  extractedText: '',
+  charCount: 0,
+  truncated: false,
+})
+
+export const worldPromptProjectContextInferenceSchema = z.object({
+  projectType: projectContextSchema.shape.projectType,
+  projectSubtype: projectContextSchema.shape.projectSubtype,
+  artStylePreset: z.string().min(1).default('live_action_cinematic'),
+  artStyleDescription: z.string().default(''),
+  confidence: z.number().min(0).max(1).default(0.7),
+  rationale: z.string().default(''),
+})
+
 export const worldPromptSessionStatusSchema = z.enum(['active', 'archived'])
-export const worldPromptTurnStatusSchema = z.enum(['queued', 'streaming', 'awaiting_approval', 'completed', 'failed', 'cancelled'])
+export const worldPromptTurnStatusSchema = z.enum(['queued', 'streaming', 'awaiting_approval', 'awaiting_user_input', 'completed', 'failed', 'cancelled'])
 export const worldPromptApprovalStateSchema = z.enum(['not_required', 'pending', 'resolved'])
 export const worldPromptMessageRoleSchema = z.enum(['system', 'user', 'assistant'])
 export const worldPromptEventTypeSchema = z.enum([
   'turn_started',
   'message_created',
   'planner_status',
+  'work_item_started',
+  'work_item_completed',
+  'work_item_failed',
   'assistant_note',
   'op_applied',
   'op_needs_approval',
@@ -75,6 +109,11 @@ export const worldPromptPlannerProgressPhaseSchema = z.enum([
   'planning_entities',
   'planning_relationships',
   'assembling_first_wave',
+  'planning_manifest',
+  'generating_entity',
+  'generating_sequence_unit',
+  'mapping_relationships',
+  'finalizing_world',
   'finalizing_plan',
   'applying_changes',
 ])
@@ -360,6 +399,38 @@ export const worldPromptPlannerProgressSchema = z.object({
   message: z.string().default(''),
   sequence: z.number().int().nonnegative().default(0),
   done: z.boolean().optional(),
+  workItemId: z.string().optional(),
+  workItemKind: z.string().optional(),
+  index: z.number().int().nonnegative().optional(),
+  total: z.number().int().nonnegative().optional(),
+})
+
+export const worldPromptIncrementalWorkItemSchema = z.object({
+  id: z.string(),
+  kind: z.enum([
+    'wiki_metadata',
+    'entity_batch',
+    'sequence_unit',
+    'relationship_batch',
+    'thread_batch',
+    'suggestion_batch',
+    'final_summary',
+  ]),
+  label: z.string(),
+  objective: z.string().default(''),
+  dependsOn: z.array(z.string()).default([]),
+  expectedOps: z.number().int().nonnegative().default(1),
+  entityTypes: z.array(z.string()).default([]),
+  sequenceOrdinal: z.number().int().positive().nullable().default(null),
+  critical: z.boolean().default(false),
+})
+
+export const worldPromptIncrementalManifestSchema = z.object({
+  summary: z.string().default(''),
+  classification: worldPromptClassificationSchema.default('graphable_broad'),
+  assistantSummary: z.string().default(''),
+  projectContextInference: worldPromptProjectContextInferenceSchema.nullable().default(null),
+  workItems: z.array(worldPromptIncrementalWorkItemSchema).default([]),
 })
 
 export const worldPromptSessionFocusStateSchema = z.object({
@@ -515,7 +586,33 @@ export const worldPromptSessionSchema = z.object({
   updatedAt: z.string(),
 })
 
+export const worldPromptInitialSeedModeSchema = z.enum(['standard', 'infer_context', 'generate_skeleton'])
+
+export const worldPromptArtStyleOptionSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+  description: z.string().default(''),
+  group: z.string().default(''),
+  thumbnailUrl: z.string().nullable().default(null),
+  recommended: z.boolean().default(false),
+})
+
+export const worldPromptInitialSeedContextSchema = z.object({
+  mode: worldPromptInitialSeedModeSchema.default('standard'),
+  sourceContext: worldPromptSourceContextSchema.optional(),
+  inference: worldPromptProjectContextInferenceSchema.optional(),
+  selectedArtStylePreset: z.string().min(1).nullable().default(null),
+  selectedArtStyleDescription: z.string().default(''),
+  skeletonProfileId: z.string().min(1).nullable().default(null),
+}).default({ mode: 'standard', selectedArtStylePreset: null, selectedArtStyleDescription: '', skeletonProfileId: null })
+
 const worldPromptTurnMetadataSchema = z.object({
+  sourceContext: worldPromptSourceContextSchema.optional(),
+  projectContextInference: worldPromptProjectContextInferenceSchema.optional(),
+  initialSeedMode: worldPromptInitialSeedModeSchema.optional(),
+  initialSeedContext: worldPromptInitialSeedContextSchema.optional(),
+  artStyleOptions: z.array(worldPromptArtStyleOptionSchema).optional(),
+  skeletonProfileId: z.string().optional(),
   scopeDecision: worldPromptScopeDecisionSchema.optional(),
   classification: worldPromptClassificationSchema.optional(),
   preview: worldPromptPlanPreviewSchema.nullable().optional(),
@@ -579,6 +676,9 @@ export const worldPromptEventPayloadSchema = z.object({
   plannerStatus: worldPromptPlannerStatusSchema.optional(),
   plannerFailure: worldPromptPlannerFailureSchema.optional(),
   plannerProgress: worldPromptPlannerProgressSchema.optional(),
+  workItem: worldPromptIncrementalWorkItemSchema.partial().optional(),
+  workItemIndex: z.number().int().nonnegative().optional(),
+  workItemTotal: z.number().int().nonnegative().optional(),
   plannerOutline: z.array(z.string()).default([]).optional(),
   classification: worldPromptClassificationSchema.optional(),
   answer: z.string().optional(),
@@ -670,6 +770,9 @@ export const worldPromptStartTurnRequestSchema = z.object({
   prompt: z.string().min(1),
   model: z.string().min(1).default('gpt-5.4'),
   sessionKey: z.string().nullable().default(null),
+  sourceContext: worldPromptSourceContextSchema.optional(),
+  initialSeedMode: worldPromptInitialSeedModeSchema.default('standard'),
+  initialSeedContext: worldPromptInitialSeedContextSchema.optional(),
   selectedSuggestionId: z.string().nullable().default(null),
   selectedRootEntityKey: z.string().nullable().default(null),
   selectedViewKey: z.string().nullable().default(null),
@@ -686,6 +789,45 @@ export const worldPromptStartTurnResponseSchema = z.object({
   suggestions: z.array(worldPromptSuggestionRecordSchema).default([]),
   threads: z.array(worldThreadSchema).default([]),
   definitions: z.array(looseRecordSchema).default([]),
+  projectContext: projectContextSchema.nullable().default(null),
+  worldEntities: z.array(worldEntitySchema).default([]),
+  worldRelationships: z.array(worldRelationshipSchema).default([]),
+  worldViews: z.array(worldViewSchema).default([]),
+  worldOperators: z.array(worldOperatorSchema).default([]),
+  worldResults: z.array(worldResultSchema).default([]),
+  worldGraphConnections: z.array(worldGraphConnectionSchema).default([]),
+})
+
+export const worldPromptSeedInferenceRequestSchema = z.object({
+  prompt: z.string().min(1),
+  model: z.string().min(1).default('gpt-5.4'),
+  sessionKey: z.string().nullable().default(null),
+  sourceContext: worldPromptSourceContextSchema.optional(),
+  snapshot: worldPromptSnapshotSchema,
+})
+
+export const worldPromptSeedInferenceResponseSchema = z.object({
+  ok: z.literal(true),
+  session: worldPromptSessionSchema,
+  turn: worldPromptTurnSchema,
+  messages: z.array(worldPromptMessageSchema).default([]),
+  events: z.array(worldPromptEventSchema).default([]),
+  inference: worldPromptProjectContextInferenceSchema,
+  artStyleOptions: z.array(worldPromptArtStyleOptionSchema).default([]),
+  skeletonProfile: worldSeedSkeletonProfileSchema,
+})
+
+export const worldPromptSeedGenerationRequestSchema = z.object({
+  turnId: z.string().min(1),
+  model: z.string().min(1).default('gpt-5.4'),
+  selectedArtStylePreset: z.string().min(1),
+  selectedArtStyleDescription: z.string().default(''),
+  snapshot: worldPromptSnapshotSchema,
+})
+
+export const worldPromptSeedGenerationResponseSchema = worldPromptStartTurnResponseSchema.extend({
+  inference: worldPromptProjectContextInferenceSchema.optional(),
+  skeletonProfile: worldSeedSkeletonProfileSchema.optional(),
 })
 
 export const worldPromptResolveOpRequestSchema = z.object({
@@ -783,6 +925,8 @@ export type WorldPromptMessage = z.infer<typeof worldPromptMessageSchema>
 export type WorldPromptEvent = z.infer<typeof worldPromptEventSchema>
 export type WorldPromptEventPayload = z.infer<typeof worldPromptEventPayloadSchema>
 export type WorldPromptPlannerProgress = z.infer<typeof worldPromptPlannerProgressSchema>
+export type WorldPromptIncrementalWorkItem = z.infer<typeof worldPromptIncrementalWorkItemSchema>
+export type WorldPromptIncrementalManifest = z.infer<typeof worldPromptIncrementalManifestSchema>
 export type WorldPromptSessionMemoryState = z.infer<typeof worldPromptSessionMemoryStateSchema>
 export type WorldPromptRetrievalDiagnostics = z.infer<typeof worldPromptRetrievalDiagnosticsSchema>
 export type WorldPromptAtlasIndex = z.infer<typeof worldPromptAtlasIndexSchema>
@@ -793,6 +937,15 @@ export type WorldPromptResolvedContext = z.infer<typeof worldPromptResolvedConte
 export type WorldPromptSnapshot = z.infer<typeof worldPromptSnapshotSchema>
 export type WorldPromptStartTurnRequest = z.infer<typeof worldPromptStartTurnRequestSchema>
 export type WorldPromptStartTurnResponse = z.infer<typeof worldPromptStartTurnResponseSchema>
+export type WorldPromptSourceContext = z.infer<typeof worldPromptSourceContextSchema>
+export type WorldPromptProjectContextInference = z.infer<typeof worldPromptProjectContextInferenceSchema>
+export type WorldPromptInitialSeedMode = z.infer<typeof worldPromptInitialSeedModeSchema>
+export type WorldPromptInitialSeedContext = z.infer<typeof worldPromptInitialSeedContextSchema>
+export type WorldPromptArtStyleOption = z.infer<typeof worldPromptArtStyleOptionSchema>
+export type WorldPromptSeedInferenceRequest = z.infer<typeof worldPromptSeedInferenceRequestSchema>
+export type WorldPromptSeedInferenceResponse = z.infer<typeof worldPromptSeedInferenceResponseSchema>
+export type WorldPromptSeedGenerationRequest = z.infer<typeof worldPromptSeedGenerationRequestSchema>
+export type WorldPromptSeedGenerationResponse = z.infer<typeof worldPromptSeedGenerationResponseSchema>
 export type WorldPromptResolveOpRequest = z.infer<typeof worldPromptResolveOpRequestSchema>
 export type WorldPromptResolveOpResponse = z.infer<typeof worldPromptResolveOpResponseSchema>
 export type WorldPromptApplyPreviewRequest = z.infer<typeof worldPromptApplyPreviewRequestSchema>
@@ -805,3 +958,13 @@ export type WorldPromptDismissSuggestionRequest = z.infer<typeof worldPromptDism
 export type WorldPromptDismissSuggestionResponse = z.infer<typeof worldPromptDismissSuggestionResponseSchema>
 export type WorldPromptRefreshSuggestionsRequest = z.infer<typeof worldPromptRefreshSuggestionsRequestSchema>
 export type WorldPromptRefreshSuggestionsResponse = z.infer<typeof worldPromptRefreshSuggestionsResponseSchema>
+
+export function isInitialSeedGenerationTurn(turn: Pick<WorldPromptTurn, 'metadata'>): boolean {
+  if (turn.metadata?.initialSeedMode === 'generate_skeleton') return true
+  const parsed = worldPromptInitialSeedContextSchema.safeParse(turn.metadata?.initialSeedContext)
+  return parsed.success && parsed.data.mode === 'generate_skeleton'
+}
+
+export function isPendingInitialSeedGenerationTurn(turn: Pick<WorldPromptTurn, 'metadata' | 'status'>): boolean {
+  return isInitialSeedGenerationTurn(turn) && turn.status !== 'completed' && turn.status !== 'cancelled'
+}

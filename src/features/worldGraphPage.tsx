@@ -35,12 +35,16 @@ import type {
   WorldViewCreateInput,
 } from '../domain/worldGraph'
 import {
+  isPendingInitialSeedGenerationTurn,
   worldPromptEventPayloadSchema,
   worldPromptRetrievalDiagnosticsSchema,
   type PromptToWorldOp,
   type WorldPromptEvent,
   type WorldPromptMessage,
+  type WorldPromptSeedGenerationResponse,
+  type WorldPromptSeedInferenceResponse,
   type WorldPromptSession,
+  type WorldPromptSourceContext,
   type WorldPromptSuggestion,
   type WorldPromptSuggestionRecord,
   type WorldPromptTurn,
@@ -96,6 +100,7 @@ import {
   buildWorldGraphPresentationPresetConfig,
   buildWorldNodeVisibilityReason,
   buildWorldPromptTranscriptEntries as buildWorldPromptTranscriptEntriesModel,
+  buildWorldPromptBuildSteps,
   buildWorldPromptTurnLenses,
   buildWorldInspectorViewModel,
   buildWorldPromptRailViewModel,
@@ -109,6 +114,7 @@ import {
   type WorldInspectorViewModel,
   type WorldNodeData,
   type WorldNodeVisualMode,
+  type WorldPromptBuildStep,
   type WorldPromptTranscriptEntry,
   type WorldPromptTurnLens,
 } from './world/worldPresentation'
@@ -179,9 +185,20 @@ type WorldGraphPageProps = {
   onGenerateStarterWorld: (prompt: string) => Promise<void> | void
   onGenerateWorldExpansion: (entityKey: string) => Promise<void> | void
   onCompleteProjectOnboarding: (values: { projectContext: ProjectContext; projectName: string }) => Promise<void> | void
+  onStartWorldSeedInference: (input: {
+    prompt: string
+    sessionKey?: string | null
+    sourceContext?: WorldPromptSourceContext
+  }) => Promise<WorldPromptSeedInferenceResponse | null> | WorldPromptSeedInferenceResponse | null
+  onContinueWorldSeedGeneration: (input: {
+    turnId: string
+    selectedArtStylePreset: string
+    selectedArtStyleDescription?: string
+  }) => Promise<WorldPromptSeedGenerationResponse | null> | WorldPromptSeedGenerationResponse | null
   onStartWorldPromptTurn: (input: {
     prompt: string
     sessionKey?: string | null
+    sourceContext?: WorldPromptSourceContext
     selectedSuggestionId?: string | null
     selectedRootEntityKey?: string | null
     selectedViewKey?: string | null
@@ -806,7 +823,9 @@ export function WorldGraphPage({
   onUpdateWorldView,
   onGenerateStarterWorld: _onGenerateStarterWorld,
   onGenerateWorldExpansion,
-  onCompleteProjectOnboarding,
+  onCompleteProjectOnboarding: _onCompleteProjectOnboarding,
+  onStartWorldSeedInference,
+  onContinueWorldSeedGeneration,
   onStartWorldPromptTurn,
   onCreateWorldPromptSession,
   onRefreshWorldPromptSuggestions,
@@ -902,6 +921,8 @@ export function WorldGraphPage({
   const [wikiPromptExpanded, setWikiPromptExpanded] = useState(false)
   const [worldPromptError, setWorldPromptError] = useState<string | null>(null)
   const [isPromptSubmitting, setIsPromptSubmitting] = useState(false)
+  const [seedInferenceResult, setSeedInferenceResult] = useState<WorldPromptSeedInferenceResponse | null>(null)
+  const [seedGenerationStarted, setSeedGenerationStarted] = useState(false)
   const [isPromptCancelling, setIsPromptCancelling] = useState(false)
   const [activeTurnLens, setActiveTurnLens] = useState<WorldPromptTurnLens | null>(null)
   const [flashTurnLens, setFlashTurnLens] = useState<WorldPromptTurnLens | null>(null)
@@ -3085,11 +3106,13 @@ export function WorldGraphPage({
       selectedRootEntityKey?: string | null
       selectedViewKey?: string | null
       selectedThreadKey?: string | null
+      sourceContext?: WorldPromptSourceContext
+      sessionKey?: string | null
     },
   ) {
     const prompt = (promptOverride ?? worldPromptText).trim()
     if (!prompt) return
-    const sessionKey = selectedPromptSessionKey ?? selectedPromptSession?.key ?? createWorldPromptSessionKey()
+    const sessionKey = contextOverrides?.sessionKey ?? selectedPromptSessionKey ?? selectedPromptSession?.key ?? createWorldPromptSessionKey()
     setWorldPromptError(null)
     setIsPromptSubmitting(true)
     setBusyMessage('Generating world updates from prompt...')
@@ -3097,6 +3120,7 @@ export function WorldGraphPage({
       await onStartWorldPromptTurn({
         prompt,
         sessionKey,
+        sourceContext: contextOverrides?.sourceContext,
         selectedSuggestionId: selectedSuggestionId ?? null,
         selectedRootEntityKey: contextOverrides?.selectedRootEntityKey ?? selectedEntity?.key ?? null,
         selectedViewKey: contextOverrides?.selectedViewKey ?? selectedView.key,
@@ -3118,6 +3142,64 @@ export function WorldGraphPage({
         selectedThreadKey: selectedPromptThread?.key ?? null,
       })
       setWorldPromptError('World prompt failed. Open the browser console for details.')
+    } finally {
+      setIsPromptSubmitting(false)
+      setBusyMessage(null)
+    }
+  }
+
+  async function handleSubmitFirstWorld(values: { prompt: string; sourceContext: WorldPromptSourceContext }) {
+    const sessionKey = createWorldPromptSessionKey()
+    setSelectedPromptSessionKey(sessionKey)
+    setWorldPromptError(null)
+    setIsPromptSubmitting(true)
+    setBusyMessage('Inferring project context from first prompt...')
+    try {
+      const result = await onStartWorldSeedInference({
+        prompt: values.prompt,
+        sessionKey,
+        sourceContext: values.sourceContext,
+      })
+      if (result) {
+        setSeedInferenceResult(result)
+        setSeedGenerationStarted(false)
+        setSelectedPromptSessionKey(result.session.key)
+      }
+    } catch (error) {
+      console.error('[GraphCore] world seed inference failed.', {
+        error,
+        message: error instanceof Error ? error.message : 'World seed inference failed.',
+        sessionKey,
+      })
+      setWorldPromptError('World seed inference failed. Open the browser console for details.')
+    } finally {
+      setIsPromptSubmitting(false)
+      setBusyMessage(null)
+    }
+  }
+
+  async function handleContinueFirstWorldSeed(values: {
+    turnId: string
+    selectedArtStylePreset: string
+    selectedArtStyleDescription?: string
+  }) {
+    setWorldPromptError(null)
+    setSeedGenerationStarted(true)
+    setIsPromptSubmitting(true)
+    setBusyMessage('Generating initial world skeleton...')
+    try {
+      const result = await onContinueWorldSeedGeneration(values)
+      if (result) {
+        setSeedGenerationStarted(true)
+        setSelectedPromptSessionKey(result.session.key)
+      }
+    } catch (error) {
+      console.error('[GraphCore] world seed generation failed.', {
+        error,
+        message: error instanceof Error ? error.message : 'World seed generation failed.',
+        turnId: values.turnId,
+      })
+      setWorldPromptError('World seed generation failed. Open the browser console for details.')
     } finally {
       setIsPromptSubmitting(false)
       setBusyMessage(null)
@@ -3556,7 +3638,8 @@ export function WorldGraphPage({
     )
   }
 
-  const isOnboardingMode = showProjectOnboarding && worldEntities.length === 0
+  const initialSeedGenerationPending = worldPromptTurns.some(isPendingInitialSeedGenerationTurn)
+  const isOnboardingMode = showProjectOnboarding && (worldEntities.length === 0 || initialSeedGenerationPending)
 
   if (isOnboardingMode) {
     return (
@@ -3565,9 +3648,13 @@ export function WorldGraphPage({
         onClick={() => setContextMenu(null)}
       >
         <ProjectWorldOnboarding
-          initialProjectContext={projectContext}
-          isSaving={projectOnboardingSaving}
-          onSubmit={onCompleteProjectOnboarding}
+          isSaving={projectOnboardingSaving || isPromptSubmitting}
+          seedInference={seedInferenceResult}
+          seedGenerationStarted={seedGenerationStarted}
+          sessionEvents={sessionEvents}
+          sessionMessages={sessionMessages}
+          onSubmit={handleSubmitFirstWorld}
+          onContinueSeed={handleContinueFirstWorldSeed}
           projectName={selectedView.name || 'New world'}
         />
       </div>
@@ -5952,6 +6039,26 @@ function WorldPromptChatPanel({
   variant: 'drawer' | 'grow'
   headerActionEnd?: ReactNode
 }) {
+  function iconForBuildStep(step: WorldPromptBuildStep): EntityIconId {
+    if (step.kind === 'entity_batch') return 'character'
+    if (step.kind === 'sequence_unit') return 'event'
+    if (step.kind === 'relationship_batch') return 'graph'
+    if (step.kind === 'thread_batch') return 'thread'
+    if (step.kind === 'suggestion_batch') return 'concept'
+    if (step.kind === 'wiki_metadata' || step.kind === 'final_summary') return 'content'
+    if (step.phase === 'analyzing_graph' || step.phase === 'mapping_relationships') return 'graph'
+    if (step.phase === 'generating_sequence_unit') return 'event'
+    if (step.phase === 'generating_entity' || step.phase === 'planning_entities') return 'character'
+    return 'activity'
+  }
+
+  function labelForBuildStepStatus(status: WorldPromptBuildStep['status']) {
+    if (status === 'done') return 'Done'
+    if (status === 'failed') return 'Skipped'
+    if (status === 'pending') return 'Pending'
+    return 'Working'
+  }
+
   const hiddenTranscriptKinds = new Set<WorldPromptTranscriptEntry['kind']>([
     'suggestion_set',
     'clarification_question',
@@ -5989,6 +6096,18 @@ function WorldPromptChatPanel({
     }),
     [activePromptTurn, entityByKey, promptError, sessionEvents, sessionTurns],
   )
+  const buildStepTurn = activePromptTurn ?? sessionTurns.at(-1) ?? null
+  const buildSteps = useMemo(
+    () => buildWorldPromptBuildSteps({
+      events: sessionEvents,
+      turnId: buildStepTurn?.id ?? null,
+    }),
+    [buildStepTurn?.id, sessionEvents],
+  )
+  const activeBuildStep = buildSteps.find((step) => step.status === 'active') ?? null
+  const completedBuildStepCount = buildSteps.filter((step) => step.status === 'done').length
+  const failedBuildStepCount = buildSteps.filter((step) => step.status === 'failed').length
+  const visibleBuildSteps = buildSteps.slice(-18)
   const transcriptStream = useMemo(() => {
     const entries = [...transcriptEntries]
     if (
@@ -6053,6 +6172,12 @@ function WorldPromptChatPanel({
     }))
   }, [sessionSuggestionCountBySessionId, worldPromptSessions, worldPromptTurns])
   const isPromptCenter = !busy && !activePromptTurn && transcriptStream.length === 0 && sessionTurns.length === 0
+  const showBuildStepPanel = !isPromptCenter && buildSteps.length > 0 && (
+    Boolean(activePromptTurn)
+    || railView.state === 'working'
+    || railView.state === 'completed'
+    || railView.state === 'blocked'
+  )
   const hasClarificationSuggestions = sessionSuggestions.some((suggestion) => suggestion.metadata?.uiKind === 'clarification')
   const hasDiagnosticSuggestions = sessionSuggestions.some((suggestion) => suggestion.metadata?.uiKind === 'diagnostic')
   const hasAdvisorySuggestions = sessionSuggestions.some((suggestion) => suggestion.metadata?.uiKind === 'advisory')
@@ -6064,10 +6189,10 @@ function WorldPromptChatPanel({
   const isSubmittingWithoutActiveTurn = busy && !activePromptTurn
   const liveBusyStatusLabel = isSubmittingWithoutActiveTurn
     ? 'Planning'
-    : (railView.latestPlannerStatus ?? railView.statusLabel ?? 'Planning')
+    : (activeBuildStep?.title ?? railView.latestPlannerStatus ?? railView.statusLabel ?? 'Planning')
   const liveBusyDetail = isSubmittingWithoutActiveTurn
     ? 'Preparing the next world-building turn.'
-    : (railView.detail || 'Working through the next graph changes.')
+    : (activeBuildStep?.detail || railView.detail || 'Working through the next graph changes.')
   const promptTypeAccelerators = useMemo(() => getWorldPromptTypeAccelerators(projectContext), [projectContext])
   const promptStarterCards = useMemo(() => getWorldPromptStarterCards(projectContext), [projectContext])
   const promptSmartPrompts = useMemo(() => getWorldPromptSmartPrompts(projectContext), [projectContext])
@@ -6191,6 +6316,26 @@ function WorldPromptChatPanel({
     event.preventDefault()
     if (busy || !promptText.trim()) return
     void handleSubmitPrompt()
+  }
+
+  function renderBuildStep(step: WorldPromptBuildStep) {
+    const statusLabel = labelForBuildStepStatus(step.status)
+    const positionLabel = step.index && step.total ? `${step.index}/${step.total}` : null
+    return (
+      <div key={step.id} className={`world-prompt-build-step is-${step.status}`}>
+        <div className="world-prompt-build-step-icon">
+          <EntityIcon id={iconForBuildStep(step)} />
+        </div>
+        <div className="world-prompt-build-step-copy">
+          <strong>{step.title}</strong>
+          {step.detail ? <span>{step.detail}</span> : null}
+        </div>
+        <div className="world-prompt-build-step-meta">
+          {positionLabel ? <span>{positionLabel}</span> : null}
+          <span>{statusLabel}</span>
+        </div>
+      </div>
+    )
   }
 
   function renderEntry(entry: WorldPromptTranscriptEntry) {
@@ -6382,6 +6527,24 @@ function WorldPromptChatPanel({
         </div>
       ) : (
         <>
+          {showBuildStepPanel ? (
+            <section className="world-prompt-build-panel" aria-live={activePromptTurn ? 'polite' : 'off'}>
+              <div className="world-prompt-build-panel-head">
+                <div>
+                  <span className="eyebrow">{activePromptTurn ? 'Prompt progress' : 'Last prompt'}</span>
+                  <h4>{activePromptTurn ? 'Building graph updates' : 'Build steps'}</h4>
+                </div>
+                <div className="world-prompt-build-counts">
+                  <span>{completedBuildStepCount}/{buildSteps.length} done</span>
+                  {failedBuildStepCount > 0 ? <span>{failedBuildStepCount} skipped</span> : null}
+                </div>
+              </div>
+              <div className="world-prompt-build-step-list">
+                {visibleBuildSteps.map(renderBuildStep)}
+              </div>
+            </section>
+          ) : null}
+
           <div className="world-prompt-transcript-shell">
             <div className="world-prompt-transcript" onScroll={handleTranscriptScroll} ref={transcriptRef}>
               {visibleTranscriptStream.map(renderEntry)}
@@ -6600,7 +6763,15 @@ export function WorldPromptActivityPanel({
         <div className="diagnostic-stack">
           {sessionEvents.slice(-20).reverse().map((event) => {
             const parsedPayload = worldPromptEventPayloadSchema.safeParse(event.payload)
-            const label = parsedPayload.success && parsedPayload.data.op ? describePromptOp(parsedPayload.data.op) : parsedPayload.success && parsedPayload.data.note ? parsedPayload.data.note : event.eventType
+            const label = parsedPayload.success && parsedPayload.data.workItem?.label
+              ? parsedPayload.data.workItem.label
+              : parsedPayload.success && parsedPayload.data.plannerProgress?.message
+                ? parsedPayload.data.plannerProgress.message
+                : parsedPayload.success && parsedPayload.data.op
+                  ? describePromptOp(parsedPayload.data.op)
+                  : parsedPayload.success && parsedPayload.data.note
+                    ? parsedPayload.data.note
+                    : event.eventType
             return (
               <div key={event.id} className="inline-note">
                 <strong>{event.eventType}</strong>

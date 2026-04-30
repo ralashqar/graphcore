@@ -33,6 +33,7 @@ import { compileBundle } from './domain/compiler'
 import { createEnvironmentBlueprint } from './domain/environmentBlueprint'
 import { gameSpecSchema } from './domain/gameSpec'
 import type { ProjectContext } from './domain/projectContext'
+import { buildProjectContext } from './domain/projectContextProfiles'
 import { buildDefaultDefinitionComponents, projectSnapshotSchema, schemaCatalog } from './domain/graphcore'
 import type {
   AssemblyGraphDefinition,
@@ -56,13 +57,18 @@ import type {
   WorldViewCreateInput,
 } from './domain/worldGraph'
 import {
+  isPendingInitialSeedGenerationTurn,
   worldPromptEventPayloadSchema,
+  worldPromptInitialSeedContextSchema,
   worldPromptMessageSchema,
   worldPromptSessionSchema,
   worldPromptTurnSchema,
   type WorldPromptEvent,
   type WorldPromptMessage,
+  type WorldPromptSeedGenerationResponse,
+  type WorldPromptSeedInferenceResponse,
   type WorldPromptSession,
+  type WorldPromptSourceContext,
   type WorldPromptSuggestionRecord,
   type WorldPromptTurn,
 } from './domain/worldPrompt'
@@ -475,6 +481,20 @@ function mergeWorldPromptEventIntoSnapshot(snapshot: ProjectSnapshot, event: Wor
     const candidate = current ? { ...current, ...turnPayload } : worldPromptTurnSchema.safeParse(turnPayload).success ? worldPromptTurnSchema.parse(turnPayload) : null
     if (candidate) {
       nextSnapshot = mergeWorldPromptStateIntoSnapshot(nextSnapshot, { turns: [candidate] })
+      const seedProjectContext = deriveCompletedSeedProjectContext(candidate, nextSnapshot)
+      if (seedProjectContext) {
+        nextSnapshot = normalizeSnapshot({
+          ...nextSnapshot,
+          projectContext: seedProjectContext,
+          draft: {
+            ...nextSnapshot.draft,
+            metadata: {
+              ...(nextSnapshot.draft.metadata ?? {}),
+              projectContext: seedProjectContext,
+            },
+          },
+        })
+      }
     }
   }
 
@@ -535,6 +555,29 @@ function mergeWorldPromptEventIntoSnapshot(snapshot: ProjectSnapshot, event: Wor
   }
 
   return nextSnapshot
+}
+
+function deriveCompletedSeedProjectContext(turn: WorldPromptTurn, snapshot: ProjectSnapshot): ProjectContext | null {
+  if (turn.status !== 'completed') return null
+  if (snapshot.projectContext?.onboardingCompletedAt) return null
+  if (snapshot.worldEntities.length === 0) return null
+  const parsed = worldPromptInitialSeedContextSchema.safeParse(turn.metadata?.initialSeedContext)
+  if (!parsed.success) return null
+  const seedContext = parsed.data
+  if (seedContext.mode !== 'generate_skeleton' || !seedContext.inference || !seedContext.selectedArtStylePreset) return null
+  return buildProjectContext({
+    projectType: seedContext.inference.projectType,
+    projectSubtype: seedContext.inference.projectSubtype,
+    artStylePreset: seedContext.selectedArtStylePreset as Parameters<typeof buildProjectContext>[0]['artStylePreset'],
+    artStyleDescription: seedContext.selectedArtStyleDescription,
+    source: 'onboarding',
+    completed: true,
+  })
+}
+
+function hasPendingInitialSeedGeneration(snapshot: ProjectSnapshot): boolean {
+  if (snapshot.projectContext?.onboardingCompletedAt) return false
+  return snapshot.worldPromptTurns.some(isPendingInitialSeedGenerationTurn)
 }
 
 function mergeWorldPromptEventsIntoSnapshot(snapshot: ProjectSnapshot, events: WorldPromptEvent[]) {
@@ -1523,7 +1566,10 @@ export default function App() {
     && !!snapshot
     && snapshot.worldEntities.length === 0
     && !snapshot.projectContext?.onboardingCompletedAt
-  const shouldShowWorldOnboarding = activeTab === 'graph' && activeGameIsEmpty
+  const initialSeedGenerationPending = loadedState?.source === 'supabase'
+    && !!snapshot
+    && hasPendingInitialSeedGeneration(snapshot)
+  const shouldShowWorldOnboarding = activeTab === 'graph' && (activeGameIsEmpty || initialSeedGenerationPending)
 
   useEffect(() => {
     if (loading) return
@@ -3729,6 +3775,7 @@ export default function App() {
   async function startWorldPromptTurn(input: {
     prompt: string
     sessionKey?: string | null
+    sourceContext?: WorldPromptSourceContext
     selectedSuggestionId?: string | null
     selectedRootEntityKey?: string | null
     selectedViewKey?: string | null
@@ -3743,6 +3790,8 @@ export default function App() {
       prompt: input.prompt,
       model: promptModel,
       sessionKey: input.sessionKey ?? null,
+      sourceContext: input.sourceContext,
+      initialSeedMode: 'standard',
       selectedSuggestionId: input.selectedSuggestionId ?? null,
       selectedRootEntityKey: input.selectedRootEntityKey ?? null,
       selectedViewKey: input.selectedViewKey ?? null,
@@ -3765,6 +3814,16 @@ export default function App() {
         ),
       })
     }
+    nextSnapshot = normalizeSnapshot({
+      ...nextSnapshot,
+      projectContext: result.projectContext ?? nextSnapshot.projectContext,
+      worldEntities: mergeResourcesByKey(nextSnapshot.worldEntities, result.worldEntities),
+      worldRelationships: mergeResourcesByKey(nextSnapshot.worldRelationships, result.worldRelationships),
+      worldViews: mergeResourcesByKey(nextSnapshot.worldViews, result.worldViews),
+      worldOperators: mergeResourcesByKey(nextSnapshot.worldOperators, result.worldOperators),
+      worldResults: mergeResourcesByKey(nextSnapshot.worldResults, result.worldResults),
+      worldGraphConnections: mergeResourcesByKey(nextSnapshot.worldGraphConnections, result.worldGraphConnections),
+    })
     const nextSelectedViewKey =
       result.session.selectedViewKey
       ?? choosePreferredWorldView(nextSnapshot.worldViews, { worldThreads: nextSnapshot.worldThreads })?.key
@@ -3781,6 +3840,98 @@ export default function App() {
     } catch (cacheError) {
       console.warn('[GraphCore] failed to refresh local snapshot cache after world prompt turn.', cacheError)
     }
+  }
+
+  async function startWorldSeedInference(input: {
+    prompt: string
+    sessionKey?: string | null
+    sourceContext?: WorldPromptSourceContext
+  }): Promise<WorldPromptSeedInferenceResponse | null> {
+    if (!snapshot) return null
+    if (loadedState?.source !== 'supabase') {
+      throw new Error('Initial world seed inference requires a live Supabase-backed draft.')
+    }
+    const syncedSnapshot = await syncWorldGraphBackfillIfNeeded(snapshot)
+    const result = await workspaceService.startWorldSeedInference(syncedSnapshot, {
+      prompt: input.prompt,
+      model: promptModel,
+      sessionKey: input.sessionKey ?? null,
+      sourceContext: input.sourceContext,
+    })
+    let nextSnapshot = mergeWorldPromptStateIntoSnapshot(syncedSnapshot, {
+      sessions: [result.session],
+      turns: [result.turn],
+      messages: result.messages,
+      suggestions: [],
+      threads: [],
+    })
+    nextSnapshot = mergeWorldPromptEventsIntoSnapshot(nextSnapshot, result.events)
+    snapshotRef.current = nextSnapshot
+    setSnapshot(nextSnapshot)
+    setBundle(compileBundle(nextSnapshot))
+    return result
+  }
+
+  async function continueWorldSeedGeneration(input: {
+    turnId: string
+    selectedArtStylePreset: string
+    selectedArtStyleDescription?: string
+  }): Promise<WorldPromptSeedGenerationResponse | null> {
+    if (!snapshot) return null
+    if (loadedState?.source !== 'supabase') {
+      throw new Error('Initial world seed generation requires a live Supabase-backed draft.')
+    }
+    const syncedSnapshot = await syncWorldGraphBackfillIfNeeded(snapshot)
+    const result = await workspaceService.continueWorldSeedGeneration(syncedSnapshot, {
+      turnId: input.turnId,
+      model: promptModel,
+      selectedArtStylePreset: input.selectedArtStylePreset,
+      selectedArtStyleDescription: input.selectedArtStyleDescription ?? '',
+    })
+    let nextSnapshot = mergeWorldPromptStateIntoSnapshot(syncedSnapshot, {
+      sessions: [result.session],
+      turns: [result.turn],
+      messages: result.messages,
+      suggestions: result.suggestions,
+      threads: result.threads,
+    })
+    nextSnapshot = mergeWorldPromptEventsIntoSnapshot(nextSnapshot, result.events)
+    if (Array.isArray(result.definitions) && result.definitions.length > 0) {
+      nextSnapshot = normalizeSnapshot({
+        ...nextSnapshot,
+        definitions: mergeResourcesByKey(
+          nextSnapshot.definitions,
+          result.definitions as ProjectSnapshot['definitions'],
+        ),
+      })
+    }
+    nextSnapshot = normalizeSnapshot({
+      ...nextSnapshot,
+      projectContext: result.projectContext ?? nextSnapshot.projectContext,
+      worldEntities: mergeResourcesByKey(nextSnapshot.worldEntities, result.worldEntities),
+      worldRelationships: mergeResourcesByKey(nextSnapshot.worldRelationships, result.worldRelationships),
+      worldViews: mergeResourcesByKey(nextSnapshot.worldViews, result.worldViews),
+      worldOperators: mergeResourcesByKey(nextSnapshot.worldOperators, result.worldOperators),
+      worldResults: mergeResourcesByKey(nextSnapshot.worldResults, result.worldResults),
+      worldGraphConnections: mergeResourcesByKey(nextSnapshot.worldGraphConnections, result.worldGraphConnections),
+    })
+    const nextSelectedViewKey =
+      result.session.selectedViewKey
+      ?? choosePreferredWorldView(nextSnapshot.worldViews, { worldThreads: nextSnapshot.worldThreads })?.key
+      ?? null
+    if (nextSelectedViewKey) {
+      setSelectedWorldViewKey(nextSelectedViewKey)
+    }
+    snapshotRef.current = nextSnapshot
+    setSnapshot(nextSnapshot)
+    setBundle(compileBundle(nextSnapshot))
+    try {
+      const delta = await loadDraftDelta(nextSnapshot.draft.id, null)
+      await saveCachedProjectSnapshot(nextSnapshot, delta.currentRevision)
+    } catch (cacheError) {
+      console.warn('[GraphCore] failed to refresh local snapshot cache after initial world seed generation.', cacheError)
+    }
+    return result
   }
 
   async function createWorldPromptSession(input: {
@@ -5720,6 +5871,8 @@ export default function App() {
                 onGenerateStarterWorld={generateStarterWorld}
                 onGenerateWorldExpansion={generateWorldExpansion}
                 onCompleteProjectOnboarding={handleCompleteProjectOnboarding}
+                onStartWorldSeedInference={startWorldSeedInference}
+                onContinueWorldSeedGeneration={continueWorldSeedGeneration}
                 onStartWorldPromptTurn={startWorldPromptTurn}
                 onCreateWorldPromptSession={createWorldPromptSession}
                 onRefreshWorldPromptSuggestions={refreshWorldPromptSuggestions}

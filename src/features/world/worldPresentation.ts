@@ -4,6 +4,7 @@ import type {
   PromptToWorldOp,
   WorldPromptDiagnosticFinding,
   WorldPromptEvent,
+  WorldPromptIncrementalWorkItem,
   WorldPromptMessage,
   WorldPromptPlannerFailure,
   WorldPromptPlannerProgress,
@@ -207,6 +208,29 @@ export type WorldPromptRailViewModel = {
   queuedLabels: string[]
   latestPlannerStatus: string | null
   plannerFailure: WorldPromptPlannerFailure | null
+}
+
+export type WorldPromptBuildStepStatus = 'pending' | 'active' | 'done' | 'failed'
+
+export type WorldPromptBuildStep = {
+  id: string
+  createdAt: string
+  title: string
+  detail: string
+  status: WorldPromptBuildStepStatus
+  kind: WorldPromptIncrementalWorkItem['kind'] | 'planner_phase'
+  phase: WorldPromptPlannerProgress['phase'] | null
+  index: number | null
+  total: number | null
+}
+
+export type WorldPromptSessionTokenMeter = {
+  usedTokens: number
+  tokenLimit: number
+  percentage: number
+  label: string
+  title: string
+  estimated: boolean
 }
 
 export type WorldInspectorViewModel = {
@@ -769,17 +793,141 @@ export function describePlannerProgressPhase(phase: WorldPromptPlannerProgress['
       return 'Reading context'
     case 'analyzing_graph':
       return 'Analyzing graph'
+    case 'planning_manifest':
+      return 'Planning build'
     case 'planning_entities':
       return 'Planning entities'
+    case 'generating_entity':
+      return 'Creating entities'
+    case 'generating_sequence_unit':
+      return 'Creating sequence'
     case 'planning_relationships':
       return 'Planning relationships'
+    case 'mapping_relationships':
+      return 'Mapping relationships'
     case 'assembling_first_wave':
       return 'Assembling first wave'
+    case 'finalizing_world':
+      return 'Finalizing world'
     case 'finalizing_plan':
       return 'Finalizing plan'
     case 'applying_changes':
       return 'Applying changes'
   }
+}
+
+function describeWorkItemEventLabel(
+  workItem: Partial<WorldPromptIncrementalWorkItem> | undefined,
+  eventType: WorldPromptEvent['eventType'],
+) {
+  const label = typeof workItem?.label === 'string' && workItem.label.trim()
+    ? workItem.label.trim()
+    : 'Build step'
+  if (eventType === 'work_item_failed') return `${label} skipped`
+  if (eventType === 'work_item_completed') return `${label} complete`
+  return label
+}
+
+function promptBuildStepSortKey(step: WorldPromptBuildStep) {
+  const parsed = Date.parse(step.createdAt)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function pushOrReplaceBuildStep(steps: WorldPromptBuildStep[], nextStep: WorldPromptBuildStep) {
+  const existingIndex = steps.findIndex((step) => step.id === nextStep.id)
+  if (existingIndex >= 0) {
+    steps[existingIndex] = {
+      ...steps[existingIndex],
+      ...nextStep,
+      detail: nextStep.detail || steps[existingIndex]?.detail || '',
+    }
+    return
+  }
+
+  const previous = steps.at(-1)
+  if (
+    previous
+    && previous.title === nextStep.title
+    && previous.detail === nextStep.detail
+    && previous.status === nextStep.status
+  ) {
+    return
+  }
+  steps.push(nextStep)
+}
+
+export function buildWorldPromptBuildSteps(input: {
+  events: WorldPromptEvent[]
+  turnId?: string | null
+}) {
+  const scopedEvents = input.turnId
+    ? input.events.filter((event) => event.turnId === input.turnId)
+    : input.events
+  const steps: WorldPromptBuildStep[] = []
+
+  for (const event of [...scopedEvents].sort((left, right) => {
+    const timeDelta = new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
+    return timeDelta !== 0 ? timeDelta : left.sequence - right.sequence
+  })) {
+    const parsed = worldPromptEventPayloadSchema.safeParse(event.payload)
+    if (!parsed.success) continue
+    const payload = parsed.data
+
+    if (event.eventType === 'work_item_started' || event.eventType === 'work_item_completed' || event.eventType === 'work_item_failed') {
+      const workItemId = typeof payload.workItem?.id === 'string' && payload.workItem.id.trim()
+        ? payload.workItem.id.trim()
+        : event.id
+      const detail = stripInternalPlannerDiagnostics(
+        payload.note
+        ?? payload.plannerProgress?.message
+        ?? (typeof payload.workItem?.objective === 'string' ? payload.workItem.objective : ''),
+      )
+      pushOrReplaceBuildStep(steps, {
+        id: `work:${event.turnId}:${workItemId}`,
+        createdAt: event.createdAt,
+        title: describeWorkItemEventLabel(payload.workItem, event.eventType),
+        detail,
+        status: event.eventType === 'work_item_failed'
+          ? 'failed'
+          : event.eventType === 'work_item_completed'
+            ? 'done'
+            : 'active',
+        kind: payload.workItem?.kind ?? 'planner_phase',
+        phase: payload.plannerProgress?.phase ?? null,
+        index: typeof payload.workItemIndex === 'number' ? payload.workItemIndex : payload.plannerProgress?.index ?? null,
+        total: typeof payload.workItemTotal === 'number' ? payload.workItemTotal : payload.plannerProgress?.total ?? null,
+      })
+      continue
+    }
+
+    if (event.eventType !== 'planner_status' || !payload.plannerProgress) continue
+    const progress = payload.plannerProgress
+    const detail = stripInternalPlannerDiagnostics(progress.message)
+    const workItemId = progress.workItemId?.trim()
+    pushOrReplaceBuildStep(steps, {
+      id: workItemId
+        ? `work:${event.turnId}:${workItemId}`
+        : `phase:${event.turnId}:${progress.phase}:${progress.sequence}:${normalizePromptTranscriptText(progress.message)}`,
+      createdAt: event.createdAt,
+      title: describePlannerProgressPhase(progress.phase),
+      detail,
+      status: progress.done ? 'done' : 'active',
+      kind: 'planner_phase',
+      phase: progress.phase,
+      index: progress.index ?? null,
+      total: progress.total ?? null,
+    })
+  }
+
+  return steps
+    .map((step, index) => {
+      const laterSteps = steps.slice(index + 1)
+      if (step.status === 'active' && laterSteps.some((nextStep) => nextStep.status === 'active' || nextStep.status === 'done' || nextStep.status === 'failed')) {
+        return { ...step, status: 'done' as const }
+      }
+      return step
+    })
+    .sort((left, right) => promptBuildStepSortKey(left) - promptBuildStepSortKey(right) || left.id.localeCompare(right.id))
 }
 
 export function promptSuggestionImpactLabel(suggestion: WorldPromptSuggestion) {
@@ -1079,6 +1227,32 @@ export function buildWorldPromptTranscriptEntries(input: {
           })
         }
         break
+      case 'work_item_started':
+      case 'work_item_completed':
+      case 'work_item_failed': {
+        const failed = source.event.eventType === 'work_item_failed'
+        const completed = source.event.eventType === 'work_item_completed'
+        const baseLabel = describeWorkItemEventLabel(payload.workItem, source.event.eventType)
+        const label = failed
+          ? baseLabel
+          : completed
+            ? baseLabel
+            : `Building ${baseLabel}`
+        const detail = payload.note
+          ?? payload.plannerProgress?.message
+          ?? (typeof payload.workItem?.objective === 'string' ? payload.workItem.objective : '')
+        entries.push({
+          id: source.id,
+          createdAt: source.event.createdAt,
+          kind: 'planner_progress',
+          label,
+          detail: stripInternalPlannerDiagnostics(detail),
+          phase: payload.plannerProgress?.phase ?? 'planning_manifest',
+          outline: [],
+          done: completed || failed || payload.plannerProgress?.done,
+        })
+        break
+      }
       case 'assistant_note':
         if (payload.note && !hasAssistantMessageForEventText(source.event, payload.note)) {
           entries.push({

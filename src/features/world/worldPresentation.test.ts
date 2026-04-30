@@ -7,6 +7,7 @@ import {
   buildWorldGraphLabelPolicy,
   buildWorldGraphPresentationPresetConfig,
   buildWorldNodeVisibilityReason,
+  buildWorldPromptBuildSteps,
   buildWorldRefinementHistoryViewModel,
   buildWorldPromptRailViewModel,
   buildWorldInspectorViewModel,
@@ -761,6 +762,168 @@ test('buildWorldPromptTranscriptEntries emits planner progress rows from planner
   assert.equal(plannerEntries[0]?.label, 'Reading context')
   assert.deepEqual(plannerEntries[1]?.outline, ['Add Jax', 'Add arena district'])
   assert.equal(plannerEntries[1]?.done, true)
+})
+
+test('buildWorldPromptTranscriptEntries renders incremental work item rows', () => {
+  const events: WorldPromptEvent[] = [
+    {
+      id: 'e-work-start',
+      sessionId: 's1',
+      turnId: 't-work',
+      draftId: 'd1',
+      sequence: 1,
+      eventType: 'work_item_started',
+      opId: null,
+      payload: {
+        plannerStatus: 'planning',
+        workItem: {
+          id: 'core_cast',
+          kind: 'entity_batch',
+          label: 'Core cast',
+          objective: 'Create the main characters.',
+          expectedOps: 4,
+          critical: true,
+        },
+        plannerProgress: {
+          phase: 'generating_entity',
+          message: 'Core cast: Create the main characters.',
+          sequence: 1,
+          workItemId: 'core_cast',
+          workItemKind: 'entity_batch',
+        },
+      },
+      metadata: {},
+      createdAt: '2026-04-22T10:00:00.000Z',
+    },
+    {
+      id: 'e-work-done',
+      sessionId: 's1',
+      turnId: 't-work',
+      draftId: 'd1',
+      sequence: 2,
+      eventType: 'work_item_completed',
+      opId: null,
+      payload: {
+        plannerStatus: 'planning',
+        workItem: {
+          id: 'core_cast',
+          kind: 'entity_batch',
+          label: 'Core cast',
+          objective: 'Create the main characters.',
+          expectedOps: 4,
+          critical: true,
+        },
+        note: 'Core cast complete.',
+        plannerProgress: {
+          phase: 'generating_entity',
+          message: 'Core cast complete.',
+          sequence: 1,
+          done: true,
+          workItemId: 'core_cast',
+          workItemKind: 'entity_batch',
+        },
+      },
+      metadata: {},
+      createdAt: '2026-04-22T10:00:01.000Z',
+    },
+  ]
+
+  const entries = buildWorldPromptTranscriptEntries({
+    events,
+    messages: [],
+    entityByKey: new Map(),
+  })
+
+  const plannerEntries = entries.filter((entry) => entry.kind === 'planner_progress')
+  assert.equal(plannerEntries.length, 2)
+  assert.equal(plannerEntries[0]?.label, 'Building Core cast')
+  assert.equal(plannerEntries[1]?.label, 'Core cast complete')
+  assert.equal(plannerEntries[1]?.done, true)
+})
+
+test('buildWorldPromptBuildSteps maps incremental work items to step rows', () => {
+  const events: WorldPromptEvent[] = [
+    makeEvent({
+      id: 'e-plan',
+      turnId: 't-build',
+      sequence: 1,
+      eventType: 'planner_status',
+      payload: {
+        plannerStatus: 'planning',
+        plannerProgress: {
+          phase: 'planning_manifest',
+          message: 'Planned 4 build steps.',
+          sequence: 1,
+        },
+        suggestions: [],
+        diagnostics: [],
+      },
+      createdAt: '2026-04-22T10:00:00.000Z',
+    }),
+    makeEvent({
+      id: 'e-start',
+      turnId: 't-build',
+      sequence: 2,
+      eventType: 'work_item_started',
+      payload: {
+        plannerStatus: 'planning',
+        workItem: {
+          id: 'locations',
+          kind: 'entity_batch',
+          label: 'Main locations',
+          objective: 'Create the key places.',
+          expectedOps: 3,
+          critical: true,
+        },
+        workItemIndex: 2,
+        workItemTotal: 4,
+        plannerProgress: {
+          phase: 'generating_entity',
+          message: 'Main locations: Create the key places.',
+          sequence: 2,
+          workItemId: 'locations',
+          workItemKind: 'entity_batch',
+        },
+        suggestions: [],
+        diagnostics: [],
+      },
+      createdAt: '2026-04-22T10:00:01.000Z',
+    }),
+    makeEvent({
+      id: 'e-done',
+      turnId: 't-build',
+      sequence: 3,
+      eventType: 'work_item_completed',
+      payload: {
+        plannerStatus: 'planning',
+        workItem: {
+          id: 'locations',
+          kind: 'entity_batch',
+          label: 'Main locations',
+          objective: 'Create the key places.',
+          expectedOps: 3,
+          critical: true,
+        },
+        workItemIndex: 2,
+        workItemTotal: 4,
+        note: 'Main locations complete.',
+        suggestions: [],
+        diagnostics: [],
+      },
+      createdAt: '2026-04-22T10:00:02.000Z',
+    }),
+  ]
+
+  const steps = buildWorldPromptBuildSteps({ events, turnId: 't-build' })
+
+  assert.equal(steps.length, 2)
+  assert.equal(steps[0]?.title, 'Planning build')
+  assert.equal(steps[0]?.status, 'done')
+  assert.equal(steps[1]?.title, 'Main locations complete')
+  assert.equal(steps[1]?.detail, 'Main locations complete.')
+  assert.equal(steps[1]?.status, 'done')
+  assert.equal(steps[1]?.index, 2)
+  assert.equal(steps[1]?.total, 4)
 })
 
 test('buildWorldPromptTranscriptEntries renders update rows for refined entities and relationships', () => {

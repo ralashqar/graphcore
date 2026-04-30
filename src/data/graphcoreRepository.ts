@@ -58,6 +58,10 @@ import {
   worldPromptDismissSuggestionResponseSchema,
   worldPromptRefreshSuggestionsResponseSchema,
   worldPromptResolveOpResponseSchema,
+  worldPromptSeedGenerationRequestSchema,
+  worldPromptSeedGenerationResponseSchema,
+  worldPromptSeedInferenceRequestSchema,
+  worldPromptSeedInferenceResponseSchema,
   worldPromptSessionSchema,
   worldPromptSuggestionRecordSchema,
   worldPromptStartTurnRequestSchema,
@@ -71,12 +75,16 @@ import {
   type WorldPromptDismissSuggestionRequest,
   type WorldPromptRefreshSuggestionsRequest,
   type WorldPromptResolveOpRequest,
+  type WorldPromptSeedGenerationRequest,
+  type WorldPromptSeedInferenceRequest,
   type WorldPromptSession,
   type WorldPromptSuggestionRecord,
   type WorldPromptRefreshSuggestionsResponse,
   type WorldPromptStartTurnRequest,
+  type WorldPromptSourceContext,
   type WorldPromptTurn,
 } from '../domain/worldPrompt'
+import { buildUrlSourceContextFromExtractionResponse } from '../domain/onboardingSource'
 import {
   worldThreadSchema,
   worldThreadUpdateInputSchema,
@@ -2575,7 +2583,7 @@ export async function loadProjectSnapshot(
           .select(worldPromptEventSelect)
           .eq('draft_id', draft.id)
           .in('event_type', includeFull
-            ? ['turn_started', 'message_created', 'planner_status', 'assistant_note', 'op_applied', 'op_needs_approval', 'op_approved', 'op_rejected', 'queue_started', 'turn_cancel_requested', 'turn_completed', 'turn_failed']
+            ? ['turn_started', 'message_created', 'planner_status', 'work_item_started', 'work_item_completed', 'work_item_failed', 'assistant_note', 'op_applied', 'op_needs_approval', 'op_approved', 'op_rejected', 'queue_started', 'turn_cancel_requested', 'turn_completed', 'turn_failed']
             : ['op_applied'])
           .order('created_at', { ascending: false })
           .limit(includeFull ? 1000 : promptHistoryLimit * 8)
@@ -6375,6 +6383,63 @@ export async function startWorldPromptTurn(snapshot: ProjectSnapshot, request: O
     throw new Error(await readFunctionsErrorMessage(response.error))
   }
   return worldPromptStartTurnResponseSchema.parse(response.data)
+}
+
+export async function startWorldSeedInference(snapshot: ProjectSnapshot, request: Omit<WorldPromptSeedInferenceRequest, 'snapshot'>) {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before starting initial world seed inference.')
+  const payload = worldPromptSeedInferenceRequestSchema.parse({
+    ...request,
+    snapshot: buildWorldPromptSnapshot(snapshot),
+  })
+
+  if (!hasLiveSnapshotIds(payload.snapshot)) {
+    throw new Error('Sign in and load a live GraphCore draft before starting initial world seed inference.')
+  }
+
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'start-world-seed-inference',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  return worldPromptSeedInferenceResponseSchema.parse(response.data)
+}
+
+export async function continueWorldSeedGeneration(snapshot: ProjectSnapshot, request: Omit<WorldPromptSeedGenerationRequest, 'snapshot'>) {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before continuing initial world seed generation.')
+  const payload = worldPromptSeedGenerationRequestSchema.parse({
+    ...request,
+    snapshot: buildWorldPromptSnapshot(snapshot),
+  })
+
+  if (!hasLiveSnapshotIds(payload.snapshot)) {
+    throw new Error('Sign in and load a live GraphCore draft before continuing initial world seed generation.')
+  }
+
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'continue-world-seed-generation',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  return worldPromptSeedGenerationResponseSchema.parse(response.data)
+}
+
+export async function extractSourceUrlForWorldPrompt(url: string): Promise<WorldPromptSourceContext> {
+  const session = await getValidatedSession('Sign in before importing a URL for world generation.')
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'extract-source-url',
+    { url },
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  return buildUrlSourceContextFromExtractionResponse(response.data as Record<string, unknown>, url)
 }
 
 export async function createWorldPromptSession(snapshot: ProjectSnapshot, request: Omit<WorldPromptCreateSessionRequest, 'snapshot'>) {
