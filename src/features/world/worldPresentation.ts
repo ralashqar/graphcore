@@ -964,6 +964,26 @@ function readPositiveNumber(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null
 }
 
+function readUsageTokens(value: unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const candidate = value as Record<string, unknown>
+  const total = readPositiveNumber(candidate.totalTokens)
+    ?? readPositiveNumber(candidate.total_tokens)
+    ?? readPositiveNumber(candidate.tokens)
+  if (total) return total
+  const inputTokens = readPositiveNumber(candidate.inputTokens)
+    ?? readPositiveNumber(candidate.input_tokens)
+    ?? readPositiveNumber(candidate.promptTokens)
+    ?? readPositiveNumber(candidate.prompt_tokens)
+    ?? 0
+  const outputTokens = readPositiveNumber(candidate.outputTokens)
+    ?? readPositiveNumber(candidate.output_tokens)
+    ?? readPositiveNumber(candidate.completionTokens)
+    ?? readPositiveNumber(candidate.completion_tokens)
+    ?? 0
+  return inputTokens + outputTokens > 0 ? inputTokens + outputTokens : null
+}
+
 function readTurnUsageTokens(metadata: Record<string, unknown>) {
   const candidates = [
     metadata.tokenUsage,
@@ -974,24 +994,36 @@ function readTurnUsageTokens(metadata: Record<string, unknown>) {
   ].filter((value): value is Record<string, unknown> => Boolean(value && typeof value === 'object' && !Array.isArray(value)))
 
   for (const candidate of candidates) {
-    const total = readPositiveNumber(candidate.totalTokens)
-      ?? readPositiveNumber(candidate.total_tokens)
-      ?? readPositiveNumber(candidate.tokens)
-    if (total) return total
-    const inputTokens = readPositiveNumber(candidate.inputTokens)
-      ?? readPositiveNumber(candidate.input_tokens)
-      ?? readPositiveNumber(candidate.promptTokens)
-      ?? readPositiveNumber(candidate.prompt_tokens)
-      ?? 0
-    const outputTokens = readPositiveNumber(candidate.outputTokens)
-      ?? readPositiveNumber(candidate.output_tokens)
-      ?? readPositiveNumber(candidate.completionTokens)
-      ?? readPositiveNumber(candidate.completion_tokens)
-      ?? 0
-    if (inputTokens + outputTokens > 0) return inputTokens + outputTokens
+    const tokens = readUsageTokens(candidate)
+    if (tokens) return tokens
   }
 
   return null
+}
+
+function readEventUsageTokens(event: WorldPromptEvent) {
+  const payloadUsage = event.payload && typeof event.payload === 'object'
+    ? readUsageTokens((event.payload as Record<string, unknown>).tokenUsage)
+    : null
+  if (payloadUsage) return payloadUsage
+  return readUsageTokens(event.metadata?.tokenUsage)
+}
+
+function readExactSessionUsageTokens(input: {
+  turns: WorldPromptTurn[]
+  events?: WorldPromptEvent[]
+}) {
+  const usageByTurnId = new Map<string, number>()
+  for (const turn of input.turns) {
+    const tokens = readTurnUsageTokens(turn.metadata)
+    if (tokens) usageByTurnId.set(turn.id, Math.max(usageByTurnId.get(turn.id) ?? 0, tokens))
+  }
+  for (const event of input.events ?? []) {
+    const tokens = readEventUsageTokens(event)
+    if (!tokens) continue
+    usageByTurnId.set(event.turnId, Math.max(usageByTurnId.get(event.turnId) ?? 0, tokens))
+  }
+  return Array.from(usageByTurnId.values()).reduce((total, tokens) => total + tokens, 0)
 }
 
 function readSourceContextText(metadata: Record<string, unknown>) {
@@ -1037,10 +1069,14 @@ function formatCompactTokenCount(tokens: number) {
 export function buildWorldPromptSessionTokenMeter(input: {
   turns: WorldPromptTurn[]
   messages: WorldPromptMessage[]
+  events?: WorldPromptEvent[]
   model?: string | null
 }): WorldPromptSessionTokenMeter {
   const tokenLimit = resolveModelTokenLimit(input.model ?? input.turns.at(-1)?.model)
-  const exactTokens = input.turns.reduce((total, turn) => total + (readTurnUsageTokens(turn.metadata) ?? 0), 0)
+  const exactTokens = readExactSessionUsageTokens({
+    turns: input.turns,
+    events: input.events,
+  })
   const estimated = exactTokens <= 0
   const usedTokens = exactTokens > 0
     ? Math.ceil(exactTokens)

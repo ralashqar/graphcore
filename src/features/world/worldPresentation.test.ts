@@ -64,6 +64,52 @@ test('buildWorldPromptSessionTokenMeter uses exact turn token usage when present
   assert.equal(meter.label, '20k/1m')
 })
 
+test('buildWorldPromptSessionTokenMeter uses latest event token usage while a turn is still updating', () => {
+  const meter = buildWorldPromptSessionTokenMeter({
+    turns: [
+      makeTurn({
+        id: 't-token-events',
+        model: 'gpt-5.4-mini',
+        metadata: {
+          tokenUsage: {
+            totalTokens: 12_000,
+          },
+        },
+      }),
+    ],
+    messages: [],
+    events: [
+      makeEvent({
+        id: 'e-token-1',
+        turnId: 't-token-events',
+        payload: {
+          tokenUsage: {
+            inputTokens: 20_000,
+            outputTokens: 4_000,
+          },
+          suggestions: [],
+          diagnostics: [],
+        },
+      }),
+      makeEvent({
+        id: 'e-token-2',
+        turnId: 't-token-events',
+        payload: {
+          tokenUsage: {
+            totalTokens: 31_000,
+          },
+          suggestions: [],
+          diagnostics: [],
+        },
+      }),
+    ],
+  })
+
+  assert.equal(meter.estimated, false)
+  assert.equal(meter.usedTokens, 31_000)
+  assert.equal(meter.label, '31k/400k')
+})
+
 test('buildWorldPromptSessionTokenMeter resolves GPT-5.4 mini context window separately from flagship', () => {
   const meter = buildWorldPromptSessionTokenMeter({
     turns: [makeTurn({ model: 'gpt-5.4-mini' })],

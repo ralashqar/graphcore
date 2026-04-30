@@ -425,12 +425,116 @@ export const worldPromptIncrementalWorkItemSchema = z.object({
   critical: z.boolean().default(false),
 })
 
+export const worldPromptIncrementalBuildBriefSchema = z.object({
+  summary: z.string().default(''),
+  sourceOutline: z.string().default(''),
+  requirements: z.array(z.string()).default([]),
+  canonConstraints: z.array(z.string()).default([]),
+  tone: z.array(z.string()).default([]),
+  plannedCoverage: z.array(z.string()).default([]),
+  sourceExcerptKeys: z.array(z.string()).default([]),
+}).default({
+  summary: '',
+  sourceOutline: '',
+  requirements: [],
+  canonConstraints: [],
+  tone: [],
+  plannedCoverage: [],
+  sourceExcerptKeys: [],
+})
+
+export const worldPromptBuildLedgerEntrySchema = z.object({
+  key: z.string(),
+  entryType: z.enum(['entity', 'relationship', 'thread', 'sequence_stub']),
+  nodeType: worldEntityNodeTypeSchema.nullable().default(null),
+  name: z.string().default(''),
+  role: z.string().default(''),
+  sourceEntityKey: z.string().nullable().default(null),
+  targetEntityKey: z.string().nullable().default(null),
+  verb: z.string().default(''),
+  ordinal: z.number().nullable().default(null),
+  storyFunction: z.string().default(''),
+  outcome: z.string().default(''),
+  linkedEntityKeys: z.array(z.string()).default([]),
+})
+
+export const worldPromptWorkItemContextSchema = z.object({
+  buildBrief: worldPromptIncrementalBuildBriefSchema,
+  currentWorkItem: worldPromptIncrementalWorkItemSchema,
+  dependencies: z.array(worldPromptIncrementalWorkItemSchema).default([]),
+  adjacentWorkItems: z.array(worldPromptIncrementalWorkItemSchema).default([]),
+  completedWorkItems: z.array(z.object({
+    id: z.string(),
+    label: z.string(),
+    kind: z.string(),
+  })).default([]),
+  failedWorkItems: z.array(z.object({
+    id: z.string(),
+    label: z.string(),
+    reason: z.string(),
+  })).default([]),
+  ledger: z.array(worldPromptBuildLedgerEntrySchema).default([]),
+  relevantEntities: z.array(z.object({
+    key: z.string(),
+    name: z.string(),
+    nodeType: worldEntityNodeTypeSchema,
+    summary: z.string().default(''),
+    sequence: z.object({
+      ordinal: z.number().nullable().default(null),
+      storyFunction: z.string().default(''),
+      outcome: z.string().default(''),
+    }).nullable().default(null),
+  })).default([]),
+  relevantRelationships: z.array(z.object({
+    key: z.string(),
+    sourceEntityKey: z.string(),
+    targetEntityKey: z.string(),
+    verb: z.string(),
+    notes: z.string().default(''),
+  })).default([]),
+  relevantThreads: z.array(z.object({
+    key: z.string(),
+    title: z.string(),
+    summary: z.string().default(''),
+    linkedEntityKeys: z.array(z.string()).default([]),
+  })).default([]),
+  sourceExcerpts: z.array(z.object({
+    key: z.string(),
+    title: z.string().default(''),
+    text: z.string().default(''),
+  })).default([]),
+  ledgerOnly: z.boolean().default(false),
+})
+
+export const worldPromptWorkItemResultSchema = z.object({
+  assistantSummary: z.string().default(''),
+  wave1Ops: z.array(promptToWorldOpSchema).default([]),
+  threadActions: z.array(looseRecordSchema).default([]),
+  suggestionCandidates: z.array(looseRecordSchema).default([]),
+})
+
 export const worldPromptIncrementalManifestSchema = z.object({
   summary: z.string().default(''),
   classification: worldPromptClassificationSchema.default('graphable_broad'),
   assistantSummary: z.string().default(''),
   projectContextInference: worldPromptProjectContextInferenceSchema.nullable().default(null),
+  buildBrief: worldPromptIncrementalBuildBriefSchema,
   workItems: z.array(worldPromptIncrementalWorkItemSchema).default([]),
+})
+
+export const worldPromptTokenBudgetDiagnosticsSchema = z.object({
+  surface: z.string(),
+  promptChars: z.number().int().nonnegative().default(0),
+  sourceChars: z.number().int().nonnegative().default(0),
+  retrievalChars: z.number().int().nonnegative().default(0),
+  manifestChars: z.number().int().nonnegative().default(0),
+  graphStateChars: z.number().int().nonnegative().default(0),
+  ledgerChars: z.number().int().nonnegative().default(0),
+  schemaSurface: z.string().default(''),
+  workItemId: z.string().nullable().default(null),
+  workItemKind: z.string().nullable().default(null),
+  workItemIndex: z.number().int().nonnegative().nullable().default(null),
+  ledgerOnly: z.boolean().default(false),
 })
 
 export const worldPromptSessionFocusStateSchema = z.object({
@@ -927,6 +1031,11 @@ export type WorldPromptEventPayload = z.infer<typeof worldPromptEventPayloadSche
 export type WorldPromptPlannerProgress = z.infer<typeof worldPromptPlannerProgressSchema>
 export type WorldPromptIncrementalWorkItem = z.infer<typeof worldPromptIncrementalWorkItemSchema>
 export type WorldPromptIncrementalManifest = z.infer<typeof worldPromptIncrementalManifestSchema>
+export type WorldPromptIncrementalBuildBrief = z.infer<typeof worldPromptIncrementalBuildBriefSchema>
+export type WorldPromptBuildLedgerEntry = z.infer<typeof worldPromptBuildLedgerEntrySchema>
+export type WorldPromptWorkItemContext = z.infer<typeof worldPromptWorkItemContextSchema>
+export type WorldPromptWorkItemResult = z.infer<typeof worldPromptWorkItemResultSchema>
+export type WorldPromptTokenBudgetDiagnostics = z.infer<typeof worldPromptTokenBudgetDiagnosticsSchema>
 export type WorldPromptSessionMemoryState = z.infer<typeof worldPromptSessionMemoryStateSchema>
 export type WorldPromptRetrievalDiagnostics = z.infer<typeof worldPromptRetrievalDiagnosticsSchema>
 export type WorldPromptAtlasIndex = z.infer<typeof worldPromptAtlasIndexSchema>

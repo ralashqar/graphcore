@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ChangeEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
 
 import { workspaceService } from '../../application/services/workspaceService'
 import {
@@ -13,8 +13,10 @@ import {
   type WorldPromptMessage,
   type WorldPromptSeedInferenceResponse,
   type WorldPromptSourceContext,
+  type WorldPromptTurn,
 } from '../../domain/worldPrompt'
 import { EntityIcon, type EntityIconId } from '../../shared/entityIcons'
+import { buildWorldPromptSessionTokenMeter } from '../world/worldPresentation'
 
 const STORY_ART_STYLE_ATLAS_URL = '/onboarding/styles/story-art-styles-atlas.png'
 const STORY_ART_STYLE_ATLAS_INDEX: Partial<Record<string, readonly [number, number]>> = {
@@ -35,6 +37,7 @@ type ProjectWorldOnboardingProps = {
   seedGenerationStarted: boolean
   sessionEvents: WorldPromptEvent[]
   sessionMessages: WorldPromptMessage[]
+  sessionTurns: WorldPromptTurn[]
   onSubmit: (values: { prompt: string; sourceContext: WorldPromptSourceContext }) => Promise<void> | void
   onContinueSeed: (values: { turnId: string; selectedArtStylePreset: string; selectedArtStyleDescription?: string }) => Promise<void> | void
   projectName: string
@@ -63,43 +66,19 @@ const EXAMPLES = [
   },
 ]
 
-const GENERATION_PHASES: Array<{
+type SeedGenerationLogRowStatus = 'pending' | 'active' | 'done' | 'failed'
+
+type SeedGenerationLogRow = {
   id: string
   icon: EntityIconId
   title: string
-  description: string
-}> = [
-  {
-    id: 'analyzing',
-    icon: 'content',
-    title: 'Analyzing your input',
-    description: 'Understanding the story, themes, and key elements...',
-  },
-  {
-    id: 'extracting',
-    icon: 'group',
-    title: 'Extracting entities',
-    description: 'Finding characters, places, factions, and objects...',
-  },
-  {
-    id: 'mapping',
-    icon: 'graph',
-    title: 'Mapping relationships',
-    description: 'Building connections and relationship pressure...',
-  },
-  {
-    id: 'arcs',
-    icon: 'thread',
-    title: 'Generating story arcs',
-    description: 'Identifying plotlines, conflicts, and timelines...',
-  },
-  {
-    id: 'finalizing',
-    icon: 'global',
-    title: 'Finalizing world',
-    description: 'Organizing everything in your world graph...',
-  },
-]
+  detail: string
+  status: SeedGenerationLogRowStatus
+  createdAt: string
+  sequence: number
+  index: number | null
+  total: number | null
+}
 
 function buildGenerationPrompt(prompt: string, sourceContext: WorldPromptSourceContext) {
   const sourceText = sourceContext.extractedText.trim()
@@ -133,30 +112,217 @@ function getStoryArtStyleAtlasStyle(presetId: string) {
   }
 }
 
-function describeSeedEvent(event: WorldPromptEvent) {
+function cleanSeedLogText(text: string) {
+  return text
+    .replace(/^Assembling the first wave of safe graph changes\.$/i, 'Preparing the graph change list.')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function workItemIcon(kind: string | null | undefined): EntityIconId {
+  switch (kind) {
+    case 'entity_batch':
+      return 'group'
+    case 'relationship_batch':
+      return 'graph'
+    case 'sequence_unit':
+      return 'thread'
+    case 'thread_batch':
+      return 'thread'
+    case 'wiki_metadata':
+      return 'content'
+    case 'suggestion_batch':
+      return 'concept'
+    case 'final_summary':
+      return 'global'
+    default:
+      return 'content'
+  }
+}
+
+function nodeTypeIcon(nodeType: string | null | undefined): EntityIconId {
+  switch (nodeType) {
+    case 'actor':
+      return 'character'
+    case 'place':
+      return 'environment'
+    case 'object':
+      return 'item'
+    case 'group':
+      return 'group'
+    case 'concept':
+      return 'concept'
+    case 'event':
+    case 'sequence_unit':
+      return 'event'
+    default:
+      return 'content'
+  }
+}
+
+function plannerPhaseTitle(phase: string | null | undefined) {
+  if (!phase) return 'Planning world graph'
+  return formatInferenceLabel(phase)
+}
+
+function workItemRowId(index: number | null, fallbackId: string | null | undefined) {
+  return index !== null && index > 0 ? `work-index-${index}` : `work-${fallbackId ?? 'unknown'}`
+}
+
+function pushOrReplaceGenerationLogRow(rows: SeedGenerationLogRow[], nextRow: SeedGenerationLogRow) {
+  const existingIndex = rows.findIndex((row) => row.id === nextRow.id)
+  if (existingIndex >= 0) {
+    rows[existingIndex] = {
+      ...rows[existingIndex],
+      ...nextRow,
+      sequence: Math.max(rows[existingIndex].sequence, nextRow.sequence),
+    }
+    return
+  }
+
+  const previous = rows.at(-1)
+  if (
+    previous
+    && previous.title.trim() === nextRow.title.trim()
+    && previous.detail.trim() === nextRow.detail.trim()
+    && previous.status === nextRow.status
+  ) {
+    return
+  }
+
+  rows.push(nextRow)
+}
+
+function seedEventToLogRow(
+  event: WorldPromptEvent,
+  workItemProgressById: Map<string, { index: number | null; total: number | null }>,
+): SeedGenerationLogRow | null {
   const parsed = worldPromptEventPayloadSchema.safeParse(event.payload)
   if (!parsed.success) return null
   const payload = parsed.data
+  const workItemId = payload.workItem?.id ?? payload.plannerProgress?.workItemId ?? null
+  const knownWorkItemProgress = workItemId ? workItemProgressById.get(workItemId) ?? null : null
+  const base = {
+    createdAt: event.createdAt,
+    sequence: event.sequence,
+    index: payload.workItemIndex ?? payload.plannerProgress?.index ?? knownWorkItemProgress?.index ?? null,
+    total: payload.workItemTotal ?? payload.plannerProgress?.total ?? knownWorkItemProgress?.total ?? null,
+  }
+
+  if (event.eventType === 'op_applied' && payload.op) {
+    if (payload.op.op === 'upsert_entity') {
+      const entity = payload.op.payload.entity
+      return {
+        ...base,
+        id: `op-${event.id}`,
+        icon: nodeTypeIcon(entity.nodeType),
+        title: `Created ${entity.name}`,
+        detail: `${formatInferenceLabel(entity.nodeType)} node added to the world graph.`,
+        status: 'done',
+      }
+    }
+    if (payload.op.op === 'upsert_relationship') {
+      const relationship = payload.op.payload.relationship
+      return {
+        ...base,
+        id: `op-${event.id}`,
+        icon: 'graph',
+        title: `Linked ${relationship.sourceRef?.name ?? relationship.sourceEntityKey ?? 'source'} to ${relationship.targetRef?.name ?? relationship.targetEntityKey ?? 'target'}`,
+        detail: relationship.verb ? formatInferenceLabel(relationship.verb) : 'Relationship added.',
+        status: 'done',
+      }
+    }
+    if (payload.op.op === 'update_world_wiki_metadata') {
+      return {
+        ...base,
+        id: `op-${event.id}`,
+        icon: 'content',
+        title: 'Updated world overview',
+        detail: 'Project wiki metadata refreshed from the generated canon.',
+        status: 'done',
+      }
+    }
+  }
   if (event.eventType === 'work_item_started' && payload.workItem?.label) {
-    return payload.plannerProgress?.message || `Building ${payload.workItem.label}`
+    return {
+      ...base,
+      id: workItemRowId(base.index, payload.workItem.id ?? event.id),
+      icon: workItemIcon(payload.workItem.kind),
+      title: payload.workItem.label,
+      detail: cleanSeedLogText(payload.plannerProgress?.message || payload.workItem.objective || 'Building this part of the world graph.'),
+      status: 'active',
+    }
   }
   if (event.eventType === 'work_item_completed' && payload.workItem?.label) {
-    return `${payload.workItem.label} complete.`
+    return {
+      ...base,
+      id: workItemRowId(base.index, payload.workItem.id ?? event.id),
+      icon: workItemIcon(payload.workItem.kind),
+      title: payload.workItem.label,
+      detail: cleanSeedLogText(payload.note || 'Completed.'),
+      status: 'done',
+    }
   }
   if (event.eventType === 'work_item_failed' && payload.workItem?.label) {
-    return `${payload.workItem.label} was skipped.`
-  }
-  if (payload.plannerProgress?.message) return payload.plannerProgress.message
-  if (payload.note) return payload.note
-  if (event.eventType === 'op_applied' && payload.op) {
-    if (payload.op.op === 'upsert_entity') return `Created ${payload.op.payload.entity.name}`
-    if (payload.op.op === 'upsert_relationship') {
-      return `Linked ${payload.op.payload.relationship.sourceRef?.name ?? payload.op.payload.relationship.sourceEntityKey ?? 'source'} to ${payload.op.payload.relationship.targetRef?.name ?? payload.op.payload.relationship.targetEntityKey ?? 'target'}`
+    return {
+      ...base,
+      id: workItemRowId(base.index, payload.workItem.id ?? event.id),
+      icon: workItemIcon(payload.workItem.kind),
+      title: payload.workItem.label,
+      detail: cleanSeedLogText(payload.note || 'Skipped after validation.'),
+      status: 'failed',
     }
-    if (payload.op.op === 'update_world_wiki_metadata') return 'Updated world overview'
   }
-  if (event.eventType === 'message_created' && payload.message?.role === 'assistant') return payload.message.content
-  if (event.eventType === 'turn_completed') return 'Initial generation complete. Opening graph.'
+  if (payload.plannerProgress?.message) {
+    return {
+      ...base,
+      id: `planner-${payload.plannerProgress.phase}-${payload.plannerProgress.sequence}`,
+      icon: workItemIcon(payload.plannerProgress.workItemKind),
+      title: plannerPhaseTitle(payload.plannerProgress.phase),
+      detail: cleanSeedLogText(payload.plannerProgress.message),
+      status: payload.plannerProgress.done ? 'done' : 'active',
+    }
+  }
+  if (payload.note) {
+    return {
+      ...base,
+      id: `note-${event.id}`,
+      icon: 'content',
+      title: 'Generation note',
+      detail: cleanSeedLogText(payload.note),
+      status: event.eventType === 'turn_failed' ? 'failed' : 'done',
+    }
+  }
+  if (event.eventType === 'message_created' && payload.message?.role === 'assistant' && payload.message.content) {
+    return {
+      ...base,
+      id: `message-${event.id}`,
+      icon: 'content',
+      title: 'Summary',
+      detail: cleanSeedLogText(payload.message.content),
+      status: 'done',
+    }
+  }
+  if (event.eventType === 'turn_completed') {
+    return {
+      ...base,
+      id: `complete-${event.id}`,
+      icon: 'check',
+      title: 'Initial generation complete',
+      detail: 'Opening the graph with the new world highlighted.',
+      status: 'done',
+    }
+  }
+  if (event.eventType === 'turn_failed') {
+    return {
+      ...base,
+      id: `failed-${event.id}`,
+      icon: 'close',
+      title: 'Initial generation stopped',
+      detail: 'The graph could not be opened from this generation.',
+      status: 'failed',
+    }
+  }
   return null
 }
 
@@ -170,53 +336,109 @@ function dedupeLogRows<T extends { text: string }>(rows: T[]) {
   return deduped
 }
 
-function buildGenerationPhaseRows(events: WorldPromptEvent[], seedGenerationStarted: boolean) {
-  let entityCount = 0
-  let relationshipCount = 0
-  let sequenceCount = 0
-  let finalizing = false
-  let completed = false
+function buildSeedGenerationLogRows(input: {
+  events: WorldPromptEvent[]
+  seedGenerationStarted: boolean
+  seedInference: WorldPromptSeedInferenceResponse | null
+  sourceLabel: string
+}): SeedGenerationLogRow[] {
+  if (!input.seedInference) return []
+  const rows: SeedGenerationLogRow[] = [
+    {
+      id: 'prompt-received',
+      icon: 'content',
+      title: `${input.sourceLabel} received`,
+      detail: 'Reading the submitted prompt and source context.',
+      status: 'done',
+      createdAt: input.seedInference.turn.createdAt,
+      sequence: 0,
+      index: null,
+      total: null,
+    },
+    {
+      id: 'inference-result',
+      icon: 'graph',
+      title: `${formatInferenceLabel(input.seedInference.inference.projectType)} / ${formatInferenceLabel(input.seedInference.inference.projectSubtype)}`,
+      detail: cleanSeedLogText(input.seedInference.inference.rationale || 'World direction inferred from the prompt.'),
+      status: 'done',
+      createdAt: input.seedInference.turn.updatedAt,
+      sequence: 1,
+      index: null,
+      total: null,
+    },
+  ]
 
-  for (const event of events) {
+  if (!input.seedGenerationStarted) {
+    rows.push({
+      id: 'await-style',
+      icon: 'concept',
+      title: 'Choose an art style',
+      detail: 'The initial world build will start after this selection.',
+      status: 'active',
+      createdAt: input.seedInference.turn.updatedAt,
+      sequence: 2,
+      index: null,
+      total: null,
+    })
+    return rows
+  }
+
+  if (input.events.length === 0) {
+    rows.push({
+      id: 'generation-starting',
+      icon: 'global',
+      title: 'Starting initial skeleton generation',
+      detail: 'Waiting for the first live planner event.',
+      status: 'active',
+      createdAt: input.seedInference.turn.updatedAt,
+      sequence: 2,
+      index: null,
+      total: null,
+    })
+    return rows
+  }
+
+  const workItemProgressById = new Map<string, { index: number | null; total: number | null }>()
+  for (const event of input.events) {
     const parsed = worldPromptEventPayloadSchema.safeParse(event.payload)
     if (!parsed.success) continue
     const payload = parsed.data
-    if (event.eventType === 'op_applied' && payload.op) {
-      if (payload.op.op === 'upsert_entity') {
-        const nodeType = payload.op.payload.entity.nodeType
-        if (nodeType === 'sequence_unit' || nodeType === 'event') sequenceCount += 1
-        else entityCount += 1
-      }
-      if (payload.op.op === 'upsert_relationship') relationshipCount += 1
-      if (payload.op.op === 'update_world_wiki_metadata') finalizing = true
-    }
-    if (event.eventType === 'work_item_started' && payload.workItem?.kind) {
-      if (payload.workItem.kind === 'entity_batch') entityCount += 1
-      if (payload.workItem.kind === 'sequence_unit') sequenceCount += 1
-      if (payload.workItem.kind === 'relationship_batch') relationshipCount += 1
-      if (payload.workItem.kind === 'wiki_metadata' || payload.workItem.kind === 'final_summary') finalizing = true
-    }
-    if (event.eventType === 'turn_completed' && payload.note?.toLowerCase().includes('initial generation complete')) {
-      completed = true
+    const workItemId = payload.workItem?.id ?? payload.plannerProgress?.workItemId ?? null
+    if (!workItemId) continue
+    const index = payload.workItemIndex ?? payload.plannerProgress?.index ?? null
+    const total = payload.workItemTotal ?? payload.plannerProgress?.total ?? null
+    if (index !== null || total !== null) {
+      workItemProgressById.set(workItemId, { index, total })
     }
   }
 
-  const activeIndex = completed
-    ? GENERATION_PHASES.length
-    : finalizing
-      ? 4
-      : sequenceCount > 0
-        ? 3
-        : relationshipCount > 0
-          ? 2
-          : entityCount > 0 || seedGenerationStarted
-            ? 1
-            : 0
+  for (const event of [...input.events].sort((left, right) => {
+    const timeDelta = new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
+    return timeDelta !== 0 ? timeDelta : left.sequence - right.sequence
+  })) {
+    const parsed = worldPromptEventPayloadSchema.safeParse(event.payload)
+    if (parsed.success && parsed.data.plannerProgress?.phase === 'planning_manifest' && parsed.data.plannerProgress.done) {
+      const total = parsed.data.plannerProgress.total ?? parsed.data.plannerOutline?.length ?? null
+      const outline = parsed.data.plannerOutline ?? []
+      outline.forEach((label, index) => {
+        pushOrReplaceGenerationLogRow(rows, {
+          id: workItemRowId(index + 1, null),
+          icon: 'content',
+          title: label,
+          detail: 'Waiting for this planned build step.',
+          status: 'pending',
+          createdAt: event.createdAt,
+          sequence: event.sequence + index / 100,
+          index: index + 1,
+          total,
+        })
+      })
+    }
+    const row = seedEventToLogRow(event, workItemProgressById)
+    if (row) pushOrReplaceGenerationLogRow(rows, row)
+  }
 
-  return GENERATION_PHASES.map((phase, index) => ({
-    ...phase,
-    status: completed || index < activeIndex ? 'done' : index === activeIndex ? 'active' : 'pending',
-  }))
+  return rows
 }
 
 export function ProjectWorldOnboarding({
@@ -224,12 +446,14 @@ export function ProjectWorldOnboarding({
   seedInference,
   seedGenerationStarted,
   sessionEvents,
-  sessionMessages: _sessionMessages,
+  sessionMessages,
+  sessionTurns,
   onSubmit,
   onContinueSeed,
   projectName: _projectName,
 }: ProjectWorldOnboardingProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const generationLogRef = useRef<HTMLDivElement | null>(null)
   const [prompt, setPrompt] = useState('')
   const [sourceContext, setSourceContext] = useState<WorldPromptSourceContext | null>(null)
   const [sourceWarning, setSourceWarning] = useState<string | null>(null)
@@ -249,13 +473,46 @@ export function ProjectWorldOnboarding({
   )
   const canSubmit = !isSaving && !isExtracting && generatedPrompt.trim().length > 0
   const seedEventRows = sessionEvents
-    .map((event) => ({ id: event.id, text: describeSeedEvent(event) }))
+    .map((event) => {
+      const row = seedEventToLogRow(event, new Map())
+      return row ? { id: row.id, text: row.detail || row.title } : { id: event.id, text: null }
+    })
     .filter((row): row is { id: string; text: string } => Boolean(row.text?.trim()))
   const visibleLogRows = dedupeLogRows(seedEventRows).map((row) => row.text).slice(-8)
   const selectedStyle = seedInference?.artStyleOptions.find((option) => option.id === selectedArtStyleId)
     ?? seedInference?.artStyleOptions.find((option) => option.recommended)
     ?? seedInference?.artStyleOptions[0]
     ?? null
+  const generationSourceLabel = effectiveSourceContext.kind === 'file'
+    ? effectiveSourceContext.fileName || effectiveSourceContext.title || 'Uploaded file'
+    : effectiveSourceContext.kind === 'url'
+      ? effectiveSourceContext.title || effectiveSourceContext.url || 'Imported link'
+      : effectiveSourceContext.kind === 'example'
+        ? effectiveSourceContext.title || 'Example seed'
+        : 'Prompt'
+  const generationLogRows = useMemo(() => buildSeedGenerationLogRows({
+    events: sessionEvents,
+    seedGenerationStarted,
+    seedInference,
+    sourceLabel: generationSourceLabel,
+  }), [generationSourceLabel, seedGenerationStarted, seedInference, sessionEvents])
+  const tokenMeter = useMemo(() => buildWorldPromptSessionTokenMeter({
+    turns: sessionTurns,
+    messages: sessionMessages,
+    events: sessionEvents,
+  }), [sessionEvents, sessionMessages, sessionTurns])
+  const generationLogScrollKey = generationLogRows
+    .map((row) => `${row.id}:${row.status}:${row.title}:${row.detail}`)
+    .join('|')
+
+  useEffect(() => {
+    const element = generationLogRef.current
+    if (!element) return
+    const frameId = window.requestAnimationFrame(() => {
+      element.scrollTop = element.scrollHeight
+    })
+    return () => window.cancelAnimationFrame(frameId)
+  }, [generationLogScrollKey])
 
   async function handleSubmit() {
     if (!canSubmit) return
@@ -336,60 +593,37 @@ export function ProjectWorldOnboarding({
 
   const generationSeedInference = seedInference
   if (generationSeedInference) {
-    const sourceLabel = effectiveSourceContext.kind === 'file'
-      ? effectiveSourceContext.fileName || effectiveSourceContext.title || 'Uploaded file'
-      : effectiveSourceContext.kind === 'url'
-        ? effectiveSourceContext.title || effectiveSourceContext.url || 'Imported link'
-        : effectiveSourceContext.kind === 'example'
-          ? effectiveSourceContext.title || 'Example seed'
-          : 'Prompt'
-    const logRows = dedupeLogRows([
-      {
-        id: 'prompt-received',
-        text: `${sourceLabel} received. Reading the story, themes, and key elements.`,
-      },
-      {
-        id: 'inference-result',
-        text: `World direction set. ${generationSeedInference.inference.rationale}`,
-      },
-      ...(!seedGenerationStarted
-        ? [{ id: 'await-style', text: 'Waiting for art style selection before building your world.' }]
-        : [{ id: 'skeleton-started', text: 'Art style selected. Building the full starting world map.' }]),
-      ...seedEventRows,
-    ])
-    const phaseRows = buildGenerationPhaseRows(sessionEvents, seedGenerationStarted)
-
     return (
       <div className="world-onboarding-input-first is-generating">
         <div className="world-onboarding-background-graph" aria-hidden="true" />
         <section className="world-onboarding-generation-shell" aria-live="polite">
           <div className="world-onboarding-generation-head">
             <h1>Building your world...</h1>
-            <p>This usually takes 20-60 seconds.</p>
+            <div className="world-onboarding-generation-subhead">
+              <p>This usually takes 20-60 seconds.</p>
+              <span className="world-onboarding-token-meter" title={tokenMeter.title}>
+                {tokenMeter.label} tokens
+              </span>
+            </div>
           </div>
 
-          <div className="world-onboarding-phase-grid">
-            {phaseRows.map((phase) => (
-              <div key={phase.id} className={`world-onboarding-phase-row is-${phase.status}`}>
-                <div className="world-onboarding-phase-icon">
-                  <EntityIcon id={phase.icon} />
+          <div ref={generationLogRef} className="world-onboarding-live-log" aria-label="Generation details">
+            {generationLogRows.map((row) => (
+              <div key={row.id} className={`world-onboarding-live-row is-${row.status}`}>
+                <div className="world-onboarding-live-icon">
+                  <EntityIcon id={row.icon} />
                 </div>
-                <div>
-                  <strong>{phase.title}</strong>
-                  <p>{phase.description}</p>
+                <div className="world-onboarding-live-copy">
+                  <strong>{row.title}</strong>
+                  <p>{row.detail}</p>
                 </div>
-                <span className="world-onboarding-phase-state" aria-label={phase.status}>
-                  {phase.status === 'done' ? <EntityIcon id="check" /> : null}
+                <span className="world-onboarding-live-state" aria-label={row.status}>
+                  {row.status === 'done' ? <EntityIcon id="check" /> : null}
+                  {row.status === 'failed' ? <EntityIcon id="close" /> : null}
                 </span>
-              </div>
-            ))}
-          </div>
-
-          <div className="world-onboarding-log world-onboarding-log-expanded" aria-label="Generation details">
-            {logRows.map((row, index) => (
-              <div key={`${row.id}-${index}`} className="world-onboarding-log-row">
-                <span>{String(index + 1).padStart(2, '0')}</span>
-                <p>{row.text}</p>
+                {row.index !== null && row.total !== null ? (
+                  <span className="world-onboarding-live-count">{row.index}/{row.total}</span>
+                ) : null}
               </div>
             ))}
           </div>

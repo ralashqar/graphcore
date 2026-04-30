@@ -575,9 +575,47 @@ function deriveCompletedSeedProjectContext(turn: WorldPromptTurn, snapshot: Proj
   })
 }
 
+function isOpenInitialSeedFlowTurn(turn: WorldPromptTurn) {
+  const directMode = typeof turn.metadata?.initialSeedMode === 'string' ? turn.metadata.initialSeedMode : null
+  const parsed = worldPromptInitialSeedContextSchema.safeParse(turn.metadata?.initialSeedContext)
+  const contextMode = parsed.success ? parsed.data.mode : null
+  const isInitialSeedFlow = directMode === 'infer_context'
+    || directMode === 'generate_skeleton'
+    || contextMode === 'infer_context'
+    || contextMode === 'generate_skeleton'
+  if (!isInitialSeedFlow) return false
+  return ['queued', 'streaming', 'awaiting_user_input'].includes(turn.status)
+}
+
+function isInitialSeedFlowTurn(turn: WorldPromptTurn) {
+  const directMode = typeof turn.metadata?.initialSeedMode === 'string' ? turn.metadata.initialSeedMode : null
+  const parsed = worldPromptInitialSeedContextSchema.safeParse(turn.metadata?.initialSeedContext)
+  const contextMode = parsed.success ? parsed.data.mode : null
+  return directMode === 'infer_context'
+    || directMode === 'generate_skeleton'
+    || contextMode === 'infer_context'
+    || contextMode === 'generate_skeleton'
+}
+
+function isInitialSeedSessionFinished(snapshot: ProjectSnapshot, sessionKey: string) {
+  const session = snapshot.worldPromptSessions.find((entry) => entry.key === sessionKey)
+  if (!session) return false
+  const turns = snapshot.worldPromptTurns.filter((turn) => turn.sessionId === session.id)
+  const generationTurns = turns.filter((turn) => {
+    if (turn.metadata?.initialSeedMode === 'generate_skeleton') return true
+    const parsed = worldPromptInitialSeedContextSchema.safeParse(turn.metadata?.initialSeedContext)
+    return parsed.success && parsed.data.mode === 'generate_skeleton'
+  })
+  if (generationTurns.some((turn) => ['queued', 'streaming', 'awaiting_user_input'].includes(turn.status))) return false
+  if (generationTurns.some((turn) => ['completed', 'cancelled', 'failed'].includes(turn.status))) return true
+  return Boolean(snapshot.projectContext?.onboardingCompletedAt && turns.some(isInitialSeedFlowTurn))
+}
+
 function hasPendingInitialSeedGeneration(snapshot: ProjectSnapshot): boolean {
-  if (snapshot.projectContext?.onboardingCompletedAt) return false
-  return snapshot.worldPromptTurns.some(isPendingInitialSeedGenerationTurn)
+  return snapshot.worldPromptTurns.some((turn) => (
+    (isPendingInitialSeedGenerationTurn(turn) && turn.status !== 'failed')
+    || isOpenInitialSeedFlowTurn(turn)
+  ))
 }
 
 function mergeWorldPromptEventsIntoSnapshot(snapshot: ProjectSnapshot, events: WorldPromptEvent[]) {
@@ -1053,6 +1091,7 @@ export default function App() {
   const [bundle, setBundle] = useState<GameSystemBundle | null>(null)
   const [patchPreview, setPatchPreview] = useState<(PromptPatchResponse & { id: string; prompt: string; status: string }) | null>(null)
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('graph')
+  const [activeInitialSeedSessionKey, setActiveInitialSeedSessionKey] = useState<string | null>(null)
   const [worldViewMode, setWorldViewMode] = useState<WorldWorkspaceMode>('graph')
   const [activeLibrarySection, setActiveLibrarySection] = useState<LibrarySection>('characters')
   const [selectedAssetKey, setSelectedAssetKey] = useState<string | null>(null)
@@ -1569,7 +1608,15 @@ export default function App() {
   const initialSeedGenerationPending = loadedState?.source === 'supabase'
     && !!snapshot
     && hasPendingInitialSeedGeneration(snapshot)
-  const shouldShowWorldOnboarding = activeTab === 'graph' && (activeGameIsEmpty || initialSeedGenerationPending)
+  const activeInitialSeedSessionOpen = loadedState?.source === 'supabase'
+    && !!snapshot
+    && !!activeInitialSeedSessionKey
+    && !isInitialSeedSessionFinished(snapshot, activeInitialSeedSessionKey)
+  const shouldShowWorldOnboarding = activeTab === 'graph' && (
+    activeGameIsEmpty
+    || initialSeedGenerationPending
+    || activeInitialSeedSessionOpen
+  )
 
   useEffect(() => {
     if (loading) return
@@ -1579,6 +1626,12 @@ export default function App() {
     }
     setPromptRuntimeError(null)
   }, [loading, session])
+
+  useEffect(() => {
+    if (!snapshot || !activeInitialSeedSessionKey) return
+    if (!isInitialSeedSessionFinished(snapshot, activeInitialSeedSessionKey)) return
+    setActiveInitialSeedSessionKey(null)
+  }, [activeInitialSeedSessionKey, snapshot])
 
   useEffect(() => {
     if (!snapshot || loadedState?.source !== 'supabase') return
@@ -3851,13 +3904,23 @@ export default function App() {
     if (loadedState?.source !== 'supabase') {
       throw new Error('Initial world seed inference requires a live Supabase-backed draft.')
     }
+    if (input.sessionKey) {
+      setActiveInitialSeedSessionKey(input.sessionKey)
+    }
     const syncedSnapshot = await syncWorldGraphBackfillIfNeeded(snapshot)
-    const result = await workspaceService.startWorldSeedInference(syncedSnapshot, {
-      prompt: input.prompt,
-      model: promptModel,
-      sessionKey: input.sessionKey ?? null,
-      sourceContext: input.sourceContext,
-    })
+    let result: WorldPromptSeedInferenceResponse
+    try {
+      result = await workspaceService.startWorldSeedInference(syncedSnapshot, {
+        prompt: input.prompt,
+        model: promptModel,
+        sessionKey: input.sessionKey ?? null,
+        sourceContext: input.sourceContext,
+      })
+    } catch (error) {
+      setActiveInitialSeedSessionKey(null)
+      throw error
+    }
+    setActiveInitialSeedSessionKey(result.session.key)
     let nextSnapshot = mergeWorldPromptStateIntoSnapshot(syncedSnapshot, {
       sessions: [result.session],
       turns: [result.turn],
@@ -3882,12 +3945,28 @@ export default function App() {
       throw new Error('Initial world seed generation requires a live Supabase-backed draft.')
     }
     const syncedSnapshot = await syncWorldGraphBackfillIfNeeded(snapshot)
-    const result = await workspaceService.continueWorldSeedGeneration(syncedSnapshot, {
-      turnId: input.turnId,
-      model: promptModel,
-      selectedArtStylePreset: input.selectedArtStylePreset,
-      selectedArtStyleDescription: input.selectedArtStyleDescription ?? '',
-    })
+    const inferenceTurn = syncedSnapshot.worldPromptTurns.find((turn) => turn.id === input.turnId) ?? null
+    const inferenceSession = inferenceTurn
+      ? syncedSnapshot.worldPromptSessions.find((entry) => entry.id === inferenceTurn.sessionId) ?? null
+      : null
+    if (inferenceSession) {
+      setActiveInitialSeedSessionKey(inferenceSession.key)
+    }
+    let result: WorldPromptSeedGenerationResponse
+    try {
+      result = await workspaceService.continueWorldSeedGeneration(syncedSnapshot, {
+        turnId: input.turnId,
+        model: promptModel,
+        selectedArtStylePreset: input.selectedArtStylePreset,
+        selectedArtStyleDescription: input.selectedArtStyleDescription ?? '',
+      })
+    } catch (error) {
+      if (!inferenceSession) {
+        setActiveInitialSeedSessionKey(null)
+      }
+      throw error
+    }
+    setActiveInitialSeedSessionKey(result.session.key)
     let nextSnapshot = mergeWorldPromptStateIntoSnapshot(syncedSnapshot, {
       sessions: [result.session],
       turns: [result.turn],

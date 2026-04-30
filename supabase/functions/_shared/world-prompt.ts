@@ -13,6 +13,8 @@ import {
   worldPromptDismissSuggestionRequestSchema,
   worldPromptDismissSuggestionResponseSchema,
   worldPromptEventPayloadSchema,
+  worldPromptBuildLedgerEntrySchema,
+  worldPromptIncrementalBuildBriefSchema,
   worldPromptIncrementalManifestSchema,
   worldPromptIncrementalWorkItemSchema,
   worldPromptPlanPreviewSchema,
@@ -36,10 +38,15 @@ import {
   worldPromptRetrievalDiagnosticsSchema,
   worldPromptResolveOpRequestSchema,
   worldPromptResolveOpResponseSchema,
+  worldPromptTokenBudgetDiagnosticsSchema,
+  worldPromptWorkItemContextSchema,
+  worldPromptWorkItemResultSchema,
   type PromptToWorldOp,
   type WorldPromptClassification,
+  type WorldPromptBuildLedgerEntry,
   type WorldPromptDiagnosticFinding,
   type WorldPromptEvent,
+  type WorldPromptIncrementalBuildBrief,
   type WorldPromptIncrementalManifest,
   type WorldPromptIncrementalWorkItem,
   type WorldPromptMessage,
@@ -58,6 +65,8 @@ import {
   type WorldPromptSuggestionRecord,
   type WorldPromptSnapshot,
   type WorldPromptStartTurnRequest,
+  type WorldPromptTokenBudgetDiagnostics,
+  type WorldPromptWorkItemContext,
   type WorldPromptTurn,
 } from '../../../src/domain/worldPrompt.ts'
 import {
@@ -643,6 +652,11 @@ const directBuildPlannerSchema = worldPromptPlannerSchema.pick({
   threadActions: true,
   threadCandidates: true,
   suggestionCandidates: true,
+})
+
+const incrementalWorkItemPlannerResponseSchema = worldPromptWorkItemResultSchema.extend({
+  threadActions: z.array(plannerThreadActionSchema).default([]),
+  suggestionCandidates: z.array(plannerIdeaSchema).default([]),
 })
 
 const refinementPlannerSchema = worldPromptPlannerSchema.pick({
@@ -3256,6 +3270,26 @@ function createWorldPromptTokenUsageRecorder(): WorldPromptTokenUsageRecorder {
       }
     },
   }
+}
+
+async function persistTurnTokenUsage(input: {
+  client: SupabaseClient
+  turn: WorldPromptTurn
+  usageRecorder: WorldPromptTokenUsageRecorder
+}) {
+  const tokenUsage = input.usageRecorder.summary()
+  if (!tokenUsage) return input.turn
+  return updateTurn(input.client, input.turn.id, {
+    metadata: {
+      ...(input.turn.metadata ?? {}),
+      tokenUsage,
+    },
+  })
+}
+
+function tokenUsageEventPayload(usageRecorder: WorldPromptTokenUsageRecorder) {
+  const tokenUsage = usageRecorder.summary()
+  return tokenUsage ? { tokenUsage } : {}
 }
 
 function buildRollingSessionMemory(input: {
@@ -9297,6 +9331,33 @@ function buildCompletedProjectContext(input: {
   })
 }
 
+function buildTransientSeedProjectContext(input: {
+  inference: z.infer<typeof worldPromptProjectContextInferenceSchema>
+  selectedArtStylePreset: string
+  selectedArtStyleDescription?: string | null
+}) {
+  const completed = buildCompletedProjectContext(input)
+  return projectContextSchema.parse({
+    ...completed,
+    onboardingCompletedAt: null,
+    onboardingVersion: '2026-04-30-initial-seed-v1',
+    source: 'onboarding',
+  })
+}
+
+function buildCompletedProjectContextFromInitialSeedContext(initialSeedContext: unknown) {
+  const parsed = worldPromptInitialSeedContextSchema.safeParse(initialSeedContext)
+  if (!parsed.success) return null
+  const seedContext = parsed.data
+  if (seedContext.mode !== 'generate_skeleton') return null
+  if (!seedContext.inference || !seedContext.selectedArtStylePreset) return null
+  return buildCompletedProjectContext({
+    inference: seedContext.inference,
+    selectedArtStylePreset: seedContext.selectedArtStylePreset,
+    selectedArtStyleDescription: seedContext.selectedArtStyleDescription,
+  })
+}
+
 async function persistProjectContextForSeed(input: {
   client: SupabaseClient
   snapshot: WorldPromptSnapshot
@@ -9500,6 +9561,9 @@ export async function startWorldSeedInference(input: {
   }
 }
 
+const INCREMENTAL_WORK_ITEM_TARGET_CHARS = 24_000
+const INCREMENTAL_WORK_ITEM_LEDGER_ONLY_CUMULATIVE_TOKENS = 90_000
+
 type IncrementalPlannerResult = {
   manifest: WorldPromptIncrementalManifest
   retrievalPacket: Awaited<ReturnType<typeof buildWorldPromptRetrievalPacket>>
@@ -9532,6 +9596,341 @@ function shouldUseIncrementalPromptPlanning(input: {
     || requestedSequence
     || broadSeedLanguage
   )
+}
+
+function firstPlannerSentence(value: string, maxLength: number) {
+  const compact = trimPlannerText(value, maxLength)
+  const sentence = compact.match(/^(.+?[.!?])\s/)?.[1]
+  return trimPlannerText(sentence ?? compact, maxLength)
+}
+
+function compactPlannerArray(values: string[], maxItems: number, maxLength: number) {
+  return values
+    .map((value) => trimPlannerText(value, maxLength))
+    .filter(Boolean)
+    .slice(0, maxItems)
+}
+
+function inferBuildBriefFromManifest(input: {
+  manifest: WorldPromptIncrementalManifest
+  payload: WorldPromptStartTurnRequest
+}): WorldPromptIncrementalBuildBrief {
+  const sourceContext = input.payload.sourceContext ?? null
+  const profile = input.payload.initialSeedMode === 'generate_skeleton'
+    ? getWorldSeedSkeletonProfile(((input.manifest.projectContextInference?.projectSubtype
+      ?? input.payload.initialSeedContext?.inference?.projectSubtype
+      ?? input.payload.snapshot.projectContext?.projectSubtype
+      ?? 'feature_film') as ProjectSubtype))
+    : null
+  const promptSummary = firstPlannerSentence(input.payload.prompt, 420)
+  const sourceOutline = sourceContext?.extractedText
+    ? firstPlannerSentence(sourceContext.extractedText, 700)
+    : ''
+  const workItemCoverage = input.manifest.workItems.map((item) => `${item.label}: ${item.objective || item.kind}`)
+  const profileRequirements = profile?.categories?.map((category) => `${category.label}: ${category.purpose}`) ?? []
+  return worldPromptIncrementalBuildBriefSchema.parse({
+    ...(input.manifest.buildBrief ?? {}),
+    summary: input.manifest.buildBrief?.summary || input.manifest.summary || promptSummary,
+    sourceOutline: input.manifest.buildBrief?.sourceOutline || sourceOutline,
+    requirements: compactPlannerArray([
+      ...(input.manifest.buildBrief?.requirements ?? []),
+      ...profileRequirements,
+    ], 14, 180),
+    canonConstraints: compactPlannerArray([
+      ...(input.manifest.buildBrief?.canonConstraints ?? []),
+      input.payload.initialSeedMode === 'generate_skeleton' ? 'Create a complete initial skeleton before final summary work.' : '',
+      'Use valid world node types only: actor, group, place, object, concept, event, sequence_unit.',
+    ], 10, 180),
+    tone: compactPlannerArray([
+      ...(input.manifest.buildBrief?.tone ?? []),
+      input.payload.snapshot.projectContext?.artStyleDescription ?? '',
+    ], 8, 120),
+    plannedCoverage: compactPlannerArray([
+      ...(input.manifest.buildBrief?.plannedCoverage ?? []),
+      ...workItemCoverage,
+    ], 24, 160),
+    sourceExcerptKeys: compactPlannerArray(input.manifest.buildBrief?.sourceExcerptKeys ?? [], 12, 80),
+  })
+}
+
+function buildIncrementalLedger(input: {
+  snapshot: WorldPromptSnapshot
+  maxEntries?: number
+}): WorldPromptBuildLedgerEntry[] {
+  const entries: WorldPromptBuildLedgerEntry[] = []
+  for (const entity of input.snapshot.worldEntities) {
+    const sequence = entity.nodeType === 'sequence_unit' ? readWorldSequenceMetadata(entity) : null
+    entries.push(worldPromptBuildLedgerEntrySchema.parse({
+      key: entity.key,
+      entryType: entity.nodeType === 'sequence_unit' ? 'sequence_stub' : 'entity',
+      nodeType: entity.nodeType,
+      name: entity.name,
+      role: firstPlannerSentence(entity.summary || entity.context || entity.name, 120),
+      ordinal: sequence?.ordinal ?? null,
+      storyFunction: sequence?.storyFunction ?? '',
+      outcome: sequence?.outcome ? firstPlannerSentence(sequence.outcome, 120) : '',
+    }))
+  }
+  for (const relationship of input.snapshot.worldRelationships) {
+    entries.push(worldPromptBuildLedgerEntrySchema.parse({
+      key: relationship.key,
+      entryType: 'relationship',
+      sourceEntityKey: relationship.sourceEntityKey,
+      targetEntityKey: relationship.targetEntityKey,
+      verb: relationship.verb,
+      role: relationship.verb,
+    }))
+  }
+  for (const thread of input.snapshot.worldThreads.filter((thread) => thread.status === 'open')) {
+    entries.push(worldPromptBuildLedgerEntrySchema.parse({
+      key: thread.key,
+      entryType: 'thread',
+      name: thread.title,
+      role: firstPlannerSentence(thread.summary || thread.title, 120),
+      linkedEntityKeys: thread.linkedEntityKeys.slice(0, 12),
+    }))
+  }
+  const maxEntries = input.maxEntries ?? 160
+  return entries.slice(Math.max(0, entries.length - maxEntries))
+}
+
+function workItemSearchTerms(workItem: WorldPromptIncrementalWorkItem) {
+  return new Set(
+    `${workItem.label} ${workItem.objective} ${workItem.kind} ${workItem.entityTypes.join(' ')} ${workItem.sequenceOrdinal ?? ''}`
+      .toLowerCase()
+      .split(/[^a-z0-9_]+/)
+      .map((part) => part.trim())
+      .filter((part) => part.length >= 3 && !WORLD_PROMPT_SEARCH_STOP_WORDS.has(part)),
+  )
+}
+
+function entityMatchesWorkItem(entity: WorldEntity, workItem: WorldPromptIncrementalWorkItem, terms: Set<string>) {
+  if (workItem.entityTypes.includes(entity.nodeType)) return true
+  if (workItem.kind === 'sequence_unit' && entity.nodeType === 'sequence_unit') return true
+  if (workItem.kind === 'relationship_batch') return true
+  const haystack = `${entity.key} ${entity.name} ${entity.summary} ${entity.tags.join(' ')}`.toLowerCase()
+  for (const term of terms) {
+    if (haystack.includes(term)) return true
+  }
+  return false
+}
+
+function dependencyWorkItems(manifest: WorldPromptIncrementalManifest, workItem: WorldPromptIncrementalWorkItem) {
+  const dependencyIds = new Set(workItem.dependsOn)
+  return manifest.workItems.filter((candidate) => dependencyIds.has(candidate.id))
+}
+
+function adjacentWorkItems(manifest: WorldPromptIncrementalManifest, workItem: WorldPromptIncrementalWorkItem) {
+  const index = manifest.workItems.findIndex((candidate) => candidate.id === workItem.id)
+  if (index < 0) return []
+  return [manifest.workItems[index - 1], manifest.workItems[index + 1]]
+    .filter((candidate): candidate is WorldPromptIncrementalWorkItem => Boolean(candidate))
+    .map((candidate) => worldPromptIncrementalWorkItemSchema.parse({
+      ...candidate,
+      objective: trimPlannerText(candidate.objective, 180),
+    }))
+}
+
+function buildWorkItemSourceExcerpts(input: {
+  payload: WorldPromptStartTurnRequest
+  workItem: WorldPromptIncrementalWorkItem
+  ledgerOnly: boolean
+}) {
+  if (input.ledgerOnly) return []
+  const source = input.payload.sourceContext?.extractedText?.trim() ?? ''
+  if (!source) return []
+  const terms = Array.from(workItemSearchTerms(input.workItem))
+  const lowerSource = source.toLowerCase()
+  const matchedIndex = terms
+    .map((term) => lowerSource.indexOf(term))
+    .filter((index) => index >= 0)
+    .sort((a, b) => a - b)[0]
+  const start = Math.max(0, (matchedIndex ?? 0) - 300)
+  const text = trimPlannerText(source.slice(start, start + 1_200), 1_200)
+  return text
+    ? [{
+        key: `${input.workItem.id}_source_excerpt`,
+        title: input.payload.sourceContext?.title || input.payload.sourceContext?.fileName || 'Source excerpt',
+        text,
+      }]
+    : []
+}
+
+function buildRelevantWorkItemEntities(input: {
+  snapshot: WorldPromptSnapshot
+  workItem: WorldPromptIncrementalWorkItem
+  ledgerOnly: boolean
+}) {
+  if (input.ledgerOnly) return []
+  const terms = workItemSearchTerms(input.workItem)
+  const candidates = input.snapshot.worldEntities.filter((entity) => entityMatchesWorkItem(entity, input.workItem, terms))
+  const fallback = input.snapshot.worldEntities.slice(-28)
+  const selected = (candidates.length > 0 ? candidates : fallback).slice(-42)
+  return selected.map((entity) => {
+    const sequence = entity.nodeType === 'sequence_unit' ? readWorldSequenceMetadata(entity) : null
+    return {
+      key: entity.key,
+      name: entity.name,
+      nodeType: entity.nodeType,
+      summary: firstPlannerSentence(entity.summary, 140),
+      sequence: sequence
+        ? {
+            ordinal: sequence.ordinal ?? null,
+            storyFunction: sequence.storyFunction ?? '',
+            outcome: sequence.outcome ? firstPlannerSentence(sequence.outcome, 120) : '',
+          }
+        : null,
+    }
+  })
+}
+
+function buildRelevantWorkItemRelationships(input: {
+  snapshot: WorldPromptSnapshot
+  relevantEntityKeys: Set<string>
+  workItem: WorldPromptIncrementalWorkItem
+  ledgerOnly: boolean
+}) {
+  if (input.ledgerOnly) return []
+  const includeNotes = input.workItem.kind === 'relationship_batch'
+    && input.relevantEntityKeys.size <= 12
+  return input.snapshot.worldRelationships
+    .filter((relationship) => input.relevantEntityKeys.has(relationship.sourceEntityKey) || input.relevantEntityKeys.has(relationship.targetEntityKey))
+    .slice(-36)
+    .map((relationship) => ({
+      key: relationship.key,
+      sourceEntityKey: relationship.sourceEntityKey,
+      targetEntityKey: relationship.targetEntityKey,
+      verb: relationship.verb,
+      notes: includeNotes ? firstPlannerSentence(relationship.notes, 140) : '',
+    }))
+}
+
+function buildRelevantWorkItemThreads(input: {
+  snapshot: WorldPromptSnapshot
+  relevantEntityKeys: Set<string>
+  ledgerOnly: boolean
+}) {
+  if (input.ledgerOnly) return []
+  return input.snapshot.worldThreads
+    .filter((thread) => thread.linkedEntityKeys.some((key) => input.relevantEntityKeys.has(key)))
+    .slice(-8)
+    .map((thread) => ({
+      key: thread.key,
+      title: thread.title,
+      summary: firstPlannerSentence(thread.summary, 140),
+      linkedEntityKeys: thread.linkedEntityKeys.slice(0, 12),
+    }))
+}
+
+function buildCompactWorkItemPrompt(input: {
+  payload: WorldPromptStartTurnRequest
+  snapshot: WorldPromptSnapshot
+  manifest: WorldPromptIncrementalManifest
+  workItem: WorldPromptIncrementalWorkItem
+  completedWorkItems: WorldPromptIncrementalWorkItem[]
+  failedWorkItems: Array<{ item: WorldPromptIncrementalWorkItem; reason: string }>
+  workItemIndex: number
+  usageRecorder?: WorldPromptTokenUsageRecorder
+}) {
+  const usage = input.usageRecorder?.summary()
+  const ledgerOnlyByBudget = (usage?.totalTokens ?? 0) >= INCREMENTAL_WORK_ITEM_LEDGER_ONLY_CUMULATIVE_TOKENS
+  const buildBrief = inferBuildBriefFromManifest({
+    manifest: input.manifest,
+    payload: input.payload,
+  })
+  const ledger = buildIncrementalLedger({
+    snapshot: input.snapshot,
+    maxEntries: ledgerOnlyByBudget ? 90 : 160,
+  })
+  const relevantEntities = buildRelevantWorkItemEntities({
+    snapshot: input.snapshot,
+    workItem: input.workItem,
+    ledgerOnly: ledgerOnlyByBudget,
+  })
+  const relevantEntityKeys = new Set(relevantEntities.map((entity) => entity.key))
+  const baseContext = worldPromptWorkItemContextSchema.parse({
+    buildBrief,
+    currentWorkItem: input.workItem,
+    dependencies: dependencyWorkItems(input.manifest, input.workItem).map((item) => ({
+      ...item,
+      objective: trimPlannerText(item.objective, 180),
+    })),
+    adjacentWorkItems: adjacentWorkItems(input.manifest, input.workItem),
+    completedWorkItems: input.completedWorkItems.map((item) => ({ id: item.id, label: item.label, kind: item.kind })),
+    failedWorkItems: input.failedWorkItems.map((entry) => ({ id: entry.item.id, label: entry.item.label, reason: trimPlannerText(entry.reason, 180) })),
+    ledger,
+    relevantEntities,
+    relevantRelationships: buildRelevantWorkItemRelationships({
+      snapshot: input.snapshot,
+      relevantEntityKeys,
+      workItem: input.workItem,
+      ledgerOnly: ledgerOnlyByBudget,
+    }),
+    relevantThreads: buildRelevantWorkItemThreads({
+      snapshot: input.snapshot,
+      relevantEntityKeys,
+      ledgerOnly: ledgerOnlyByBudget,
+    }),
+    sourceExcerpts: buildWorkItemSourceExcerpts({
+      payload: input.payload,
+      workItem: input.workItem,
+      ledgerOnly: ledgerOnlyByBudget,
+    }),
+    ledgerOnly: ledgerOnlyByBudget,
+  })
+  const basePromptChars = JSON.stringify(baseContext).length
+  const ledgerOnly = ledgerOnlyByBudget || basePromptChars > INCREMENTAL_WORK_ITEM_TARGET_CHARS
+  const context: WorldPromptWorkItemContext = ledgerOnly && !baseContext.ledgerOnly
+    ? worldPromptWorkItemContextSchema.parse({
+        ...baseContext,
+        ledger: baseContext.ledger.slice(-90),
+        relevantEntities: baseContext.relevantEntities.slice(-16),
+        relevantRelationships: [],
+        relevantThreads: [],
+        sourceExcerpts: [],
+        ledgerOnly: true,
+      })
+    : baseContext
+  const promptObject = {
+    sourcePromptSummary: firstPlannerSentence(input.payload.prompt, 600),
+    projectContext: input.payload.snapshot.projectContext,
+    initialSeed: input.payload.initialSeedMode === 'generate_skeleton'
+      ? {
+          inference: input.payload.initialSeedContext?.inference ?? input.manifest.projectContextInference ?? null,
+          selectedArtStylePreset: input.payload.initialSeedContext?.selectedArtStylePreset ?? input.payload.snapshot.projectContext?.artStylePreset ?? null,
+          selectedArtStyleDescription: input.payload.initialSeedContext?.selectedArtStyleDescription ?? input.payload.snapshot.projectContext?.artStyleDescription ?? '',
+        }
+      : null,
+    manifestSummary: {
+      summary: input.manifest.summary,
+      classification: input.manifest.classification,
+      workItemCount: input.manifest.workItems.length,
+    },
+    workItemContext: context,
+  }
+  const diagnostics: WorldPromptTokenBudgetDiagnostics = worldPromptTokenBudgetDiagnosticsSchema.parse({
+    surface: 'incremental-work-item',
+    promptChars: JSON.stringify(promptObject).length,
+    sourceChars: JSON.stringify(context.sourceExcerpts).length,
+    retrievalChars: 0,
+    manifestChars: JSON.stringify(promptObject.manifestSummary).length + JSON.stringify(context.dependencies).length + JSON.stringify(context.adjacentWorkItems).length,
+    graphStateChars: JSON.stringify({
+      entities: context.relevantEntities,
+      relationships: context.relevantRelationships,
+      threads: context.relevantThreads,
+    }).length,
+    ledgerChars: JSON.stringify(context.ledger).length,
+    schemaSurface: 'incremental-work-item-narrow',
+    workItemId: input.workItem.id,
+    workItemKind: input.workItem.kind,
+    workItemIndex: input.workItemIndex,
+    ledgerOnly: context.ledgerOnly,
+  })
+  return {
+    promptObject,
+    context,
+    diagnostics,
+  }
 }
 
 function incrementalProgressPhaseForWorkItem(kind: WorldPromptIncrementalWorkItem['kind']): WorldPromptPlannerProgress['phase'] {
@@ -9671,6 +10070,8 @@ async function generateIncrementalManifest(input: {
   const instructions = [
     'You are the GraphCore incremental world build planner.',
     'Create a lightweight manifest only. Do not write full graph operation bodies in this response.',
+    'Also create buildBrief: a compact continuity packet that later work items can use instead of rereading the full source, retrieval context, or manifest.',
+    'Keep buildBrief concise: short source outline, explicit requirements, canon constraints, tone, and planned coverage.',
     'Break broad world-building into ordered work items that can be generated and applied independently.',
     'Entity batches should be small, usually 3-5 entities. Sequence units should be one item each, or at most two very small adjacent beats.',
     'Put relationship batches after the entity or sequence items they connect.',
@@ -9700,6 +10101,24 @@ async function generateIncrementalManifest(input: {
       : null,
     retrieval: relevantPlannerContext,
   })
+  const manifestDiagnostics = worldPromptTokenBudgetDiagnosticsSchema.parse({
+    surface: 'incremental-manifest',
+    promptChars: prompt.length,
+    sourceChars: JSON.stringify(sourceContext).length,
+    retrievalChars: JSON.stringify(relevantPlannerContext).length,
+    manifestChars: 0,
+    graphStateChars: JSON.stringify({
+      entities: relevantPlannerContext.relevantEntities,
+      relationships: relevantPlannerContext.relevantRelationships,
+      threads: relevantPlannerContext.relevantThreads,
+    }).length,
+    ledgerChars: 0,
+    schemaSurface: 'incremental-manifest',
+    workItemId: null,
+    workItemKind: null,
+    workItemIndex: null,
+    ledgerOnly: false,
+  })
 
   const debugEnabled = shouldDebugWorldPromptOpenAi()
   const response = await runOpenAiResponses({
@@ -9725,6 +10144,7 @@ async function generateIncrementalManifest(input: {
     surface: 'incremental-manifest',
     model: input.payload.model,
     response,
+    metadata: { tokenBudgetDiagnostics: manifestDiagnostics },
   })
 
   if (debugEnabled) {
@@ -9746,10 +10166,17 @@ async function generateIncrementalManifest(input: {
   const parsedJson = extractJsonBlock(response.outputText)
   if (!parsedJson) throw new Error('World prompt incremental manifest returned invalid JSON.')
   const manifest = worldPromptIncrementalManifestSchema.parse(parsedJson)
-  return {
-    manifest: worldPromptIncrementalManifestSchema.parse({
+  const normalizedManifest = worldPromptIncrementalManifestSchema.parse({
       ...manifest,
       workItems: normalizeIncrementalWorkItems(manifest, input.payload),
+    })
+  return {
+    manifest: worldPromptIncrementalManifestSchema.parse({
+      ...normalizedManifest,
+      buildBrief: inferBuildBriefFromManifest({
+        manifest: normalizedManifest,
+        payload: input.payload,
+      }),
     }),
     retrievalPacket: relevantPlannerContext,
   }
@@ -9764,80 +10191,48 @@ async function generateIncrementalWorkItemPlan(input: {
   completedWorkItems: WorldPromptIncrementalWorkItem[]
   failedWorkItems: Array<{ item: WorldPromptIncrementalWorkItem; reason: string }>
   repairFeedback?: string | null
+  workItemIndex: number
   attempt: number
   usageRecorder?: WorldPromptTokenUsageRecorder
 }) {
-  const plannerRequestSchema = directBuildPlannerSchema
+  const plannerRequestSchema = incrementalWorkItemPlannerResponseSchema
   const basePlannerResponseSchema = normalizeStrictJsonSchema(z.toJSONSchema(plannerRequestSchema))
   const plannerResponseSchema = projectUsesStrictStorySequence(input.payload.snapshot.projectContext)
     ? withStorySequencePlannerJsonSchema(basePlannerResponseSchema)
     : basePlannerResponseSchema
-  const initialSeedInference = input.payload.initialSeedContext?.inference ?? null
-  const initialSeedProfile = input.payload.initialSeedMode === 'generate_skeleton'
-    ? getWorldSeedSkeletonProfile((initialSeedInference?.projectSubtype ?? input.payload.snapshot.projectContext?.projectSubtype ?? 'feature_film') as ProjectSubtype)
-    : null
   const workItem = input.workItem
+  const compactPrompt = buildCompactWorkItemPrompt({
+    payload: input.payload,
+    snapshot: input.snapshot,
+    manifest: input.manifest,
+    workItem,
+    completedWorkItems: input.completedWorkItems,
+    failedWorkItems: input.failedWorkItems,
+    workItemIndex: input.workItemIndex,
+    usageRecorder: input.usageRecorder,
+  })
   const instructions = [
     'You are generating one incremental GraphCore world-prompt work item.',
     'Return compact JSON only matching the schema. Only generate graph operations for the current work item.',
     'Do not repeat operations from completed work items. Prefer stable operation IDs prefixed with the work item ID.',
     'Use wave1Ops for all operations. Keep assistantSummary to one concise user-facing operational note.',
+    'Use the buildBrief and ledger as continuity. Do not ask for hidden prior chat context; it is not available to this call.',
     'Allowed operations: upsert_entity, update_entity, replace_entity, upsert_relationship, update_relationship, create_derived_result, queue_image_generation, queue_cinematic_generation, update_world_wiki_metadata, assistant_note.',
     'For entity_batch items, create only the requested small set of concrete canon-ready entities.',
     'Valid entity node types are actor, group, place, object, concept, event, and sequence_unit. Never use wiki, location, faction, character, beat, lore, or title as nodeType values; map those to place, group, actor, sequence_unit, concept, or wiki metadata as appropriate.',
-    'For relationship_batch items, create links only between existing/generated entities that are available in the provided current graph state.',
+    'For relationship_batch items, create links only between existing/generated entities that are available in the ledger or relevant entity list.',
     'For sequence_unit items, create the authored progression node(s) requested by this item and include complete customProperties.sequence metadata.',
     'A Story sequence_unit must include sequence.ordinal, synopsis, outcome, and at least one consequence with cause/effect.',
     'Use sequence_unit relationships with precedes, causes, complicates, or pays_off only when relevant endpoints already exist or are created in this work item.',
     'For wiki_metadata/final_summary items, prefer update_world_wiki_metadata, assistant_note, threadActions, and suggestionCandidates over more core entity growth.',
+    compactPrompt.context.ledgerOnly ? 'The context is in ledger-only budget mode. Prefer key-based operations and concise text.' : null,
     input.payload.initialSeedMode === 'generate_skeleton'
       ? 'This is initial seed generation; satisfy the seed profile across the whole manifest while keeping this response scoped to the current item.'
       : 'This is an incremental broad turn; keep this item focused and finishable.',
     input.repairFeedback ? `Repair guidance from the previous failed attempt: ${input.repairFeedback}` : null,
   ].filter(Boolean).join('\n')
 
-  const prompt = JSON.stringify({
-    sourcePrompt: input.payload.prompt,
-    sourceContext: input.payload.sourceContext ?? null,
-    projectContext: input.payload.snapshot.projectContext,
-    initialSeed: input.payload.initialSeedMode === 'generate_skeleton'
-      ? {
-          inference: initialSeedInference,
-          selectedArtStylePreset: input.payload.initialSeedContext?.selectedArtStylePreset ?? input.payload.snapshot.projectContext?.artStylePreset ?? null,
-          selectedArtStyleDescription: input.payload.initialSeedContext?.selectedArtStyleDescription ?? input.payload.snapshot.projectContext?.artStyleDescription ?? '',
-          skeletonProfile: initialSeedProfile,
-        }
-      : null,
-    manifest: {
-      summary: input.manifest.summary,
-      workItems: input.manifest.workItems,
-    },
-    currentWorkItem: workItem,
-    completedWorkItems: input.completedWorkItems.map((item) => ({ id: item.id, label: item.label, kind: item.kind })),
-    failedWorkItems: input.failedWorkItems.map((entry) => ({ id: entry.item.id, label: entry.item.label, reason: entry.reason })),
-    currentGraphState: {
-      entities: input.snapshot.worldEntities.slice(-80).map((entity) => ({
-        key: entity.key,
-        name: entity.name,
-        nodeType: entity.nodeType,
-        summary: entity.summary,
-      })),
-      relationships: input.snapshot.worldRelationships.slice(-120).map((relationship) => ({
-        key: relationship.key,
-        sourceEntityKey: relationship.sourceEntityKey,
-        targetEntityKey: relationship.targetEntityKey,
-        verb: relationship.verb,
-        notes: relationship.notes,
-      })),
-      threads: input.snapshot.worldThreads.slice(-20).map((thread) => ({
-        key: thread.key,
-        title: thread.title,
-        summary: thread.summary,
-        linkedEntityKeys: thread.linkedEntityKeys,
-      })),
-    },
-    retrieval: input.retrievalPacket,
-  })
+  const prompt = JSON.stringify(compactPrompt.promptObject)
 
   const debugEnabled = shouldDebugWorldPromptOpenAi()
   const response = await runOpenAiResponses({
@@ -9857,6 +10252,7 @@ async function generateIncrementalWorkItemPlan(input: {
       surface: 'incremental-work-item',
       workItemId: workItem.id,
       workItemKind: workItem.kind,
+      workItemIndex: String(input.workItemIndex),
       attempt: String(input.attempt),
     },
     store: false,
@@ -9869,7 +10265,9 @@ async function generateIncrementalWorkItemPlan(input: {
     metadata: {
       workItemId: workItem.id,
       workItemKind: workItem.kind,
+      workItemIndex: input.workItemIndex,
       attempt: input.attempt,
+      tokenBudgetDiagnostics: compactPrompt.diagnostics,
     },
   })
 
@@ -9898,10 +10296,24 @@ async function generateIncrementalWorkItemPlan(input: {
   if (!validated.success) {
     throw new Error(`Incremental work item ${workItem.id} did not match schema. ${formatIssues(validated.error.issues)}`)
   }
+  const workItemResult = plannerRequestSchema.parse(validated.data)
   const candidatePlan = optimizePlannerOpsForMode({
     mode: 'direct_build',
     prompt: input.payload.prompt,
-    plan: worldPromptPlannerSchema.parse(validated.data),
+    plan: worldPromptPlannerSchema.parse({
+      projectContextInference: null,
+      classification: input.manifest.classification,
+      assistantSummary: workItemResult.assistantSummary,
+      wave1Ops: workItemResult.wave1Ops,
+      operations: workItemResult.wave1Ops,
+      threadActions: workItem.kind === 'final_summary' || workItem.kind === 'thread_batch'
+        ? workItemResult.threadActions
+        : [],
+      threadCandidates: [],
+      suggestionCandidates: workItem.kind === 'final_summary' || workItem.kind === 'suggestion_batch'
+        ? workItemResult.suggestionCandidates
+        : [],
+    }),
   })
   const creativeCompletion = completeCreativeDescriptorOps({
     prompt: input.payload.prompt,
@@ -9910,17 +10322,7 @@ async function generateIncrementalWorkItemPlan(input: {
     existingEntities: input.snapshot.worldEntities,
     ops: candidatePlan.wave1Ops,
   })
-  const sequenceCompletion = creativeCompletionAppliesToPlan('direct_build', candidatePlan.classification)
-    ? await completeStorySequenceOps({
-      model: input.payload.model,
-      prompt: input.payload.prompt,
-      snapshot: input.snapshot,
-      retrieval: input.retrievalPacket,
-    ops: creativeCompletion.ops,
-    debugEnabled,
-    usageRecorder: input.usageRecorder,
-  })
-    : { ops: creativeCompletion.ops, issues: [] as StorySequenceOpIssue[] }
+  const sequenceCompletion = { ops: creativeCompletion.ops, issues: [] as StorySequenceOpIssue[] }
   const completedPlan = worldPromptPlannerSchema.parse({
     ...candidatePlan,
     wave1Ops: sequenceCompletion.ops,
@@ -9999,6 +10401,11 @@ async function executeIncrementalWorldPromptTurn(input: {
     selectedSuggestion: input.selectedSuggestion ?? null,
     usageRecorder: input.usageRecorder,
   })
+  turn = await persistTurnTokenUsage({
+    client: input.client,
+    turn,
+    usageRecorder: input.usageRecorder,
+  })
   const manifest = incremental.manifest
   const retrievalPacket = incremental.retrievalPacket
   responseProjectContext = await persistInferredProjectContext({
@@ -10026,8 +10433,9 @@ async function executeIncrementalWorldPromptTurn(input: {
       done: true,
       total: manifest.workItems.length,
     },
-    plannerOutline: manifest.workItems.slice(0, 5).map((item) => item.label),
+    plannerOutline: manifest.workItems.map((item) => item.label),
     turn: { id: turn.id },
+    ...tokenUsageEventPayload(input.usageRecorder),
   })
 
   for (let workItemIndex = 0; workItemIndex < manifest.workItems.length; workItemIndex += 1) {
@@ -10066,12 +10474,42 @@ async function executeIncrementalWorldPromptTurn(input: {
           completedWorkItems,
           failedWorkItems,
           repairFeedback,
+          workItemIndex: workItemIndex + 1,
           attempt,
           usageRecorder: input.usageRecorder,
+        })
+        turn = await persistTurnTokenUsage({
+          client: input.client,
+          turn,
+          usageRecorder: input.usageRecorder,
+        })
+        const generatedOpCount = generated.wave1Ops.length > 0 ? generated.wave1Ops.length : generated.operations.length
+        await input.writeEvent('planner_status', {
+          plannerStatus: 'planning',
+          classification: manifest.classification,
+          workItem,
+          workItemIndex: workItemIndex + 1,
+          workItemTotal: manifest.workItems.length,
+          plannerProgress: {
+            phase: progressPhase,
+            message: `${workItem.label}: generated ${generatedOpCount} planned graph change${generatedOpCount === 1 ? '' : 's'}.`,
+            sequence: workItemIndex + 1,
+            workItemId: workItem.id,
+            workItemKind: workItem.kind,
+            index: workItemIndex + 1,
+            total: manifest.workItems.length,
+          },
+          turn: { id: turn.id },
+          ...tokenUsageEventPayload(input.usageRecorder),
         })
         finalError = null
         break
       } catch (error) {
+        turn = await persistTurnTokenUsage({
+          client: input.client,
+          turn,
+          usageRecorder: input.usageRecorder,
+        })
         finalError = error instanceof Error ? error : new Error('Incremental work item failed.')
         repairFeedback = finalError.message
       }
@@ -10099,6 +10537,7 @@ async function executeIncrementalWorldPromptTurn(input: {
           total: manifest.workItems.length,
         },
         turn: { id: turn.id },
+        ...tokenUsageEventPayload(input.usageRecorder),
       })
       if (workItem.critical) throw finalError ?? new Error(`Critical work item ${workItem.id} failed.`)
       continue
@@ -10142,6 +10581,7 @@ async function executeIncrementalWorldPromptTurn(input: {
         total: manifest.workItems.length,
       },
       turn: { id: turn.id },
+      ...tokenUsageEventPayload(input.usageRecorder),
     })
 
     let appliedStepIndex = 0
@@ -10176,6 +10616,7 @@ async function executeIncrementalWorldPromptTurn(input: {
           total: manifest.workItems.length,
         },
         turn: { id: turn.id },
+        ...tokenUsageEventPayload(input.usageRecorder),
       }, { opId: op.id, metadata: { workItemId: workItem.id } })
 
       const result = await applyPromptOp({
@@ -10247,6 +10688,7 @@ async function executeIncrementalWorldPromptTurn(input: {
         total: manifest.workItems.length,
       },
       turn: { id: turn.id },
+      ...tokenUsageEventPayload(input.usageRecorder),
     }, { metadata: { workItemId: workItem.id } })
   }
 
@@ -10411,6 +10853,16 @@ async function executeIncrementalWorldPromptTurn(input: {
   const resolvedSelectedViewKey = retrievalPacket.continuityMode === 'topic_shift'
     ? (preferredAutoViewKey ?? input.payload.selectedViewKey ?? workingSession.selectedViewKey)
     : (input.payload.selectedViewKey ?? preferredAutoViewKey ?? workingSession.selectedViewKey)
+  const completedSeedProjectContext = input.payload.initialSeedMode === 'generate_skeleton'
+    ? buildCompletedProjectContextFromInitialSeedContext(input.payload.initialSeedContext)
+    : null
+  if (completedSeedProjectContext) {
+    responseProjectContext = await persistProjectContextForSeed({
+      client: input.client,
+      snapshot: mutableSnapshot,
+      projectContext: completedSeedProjectContext,
+    })
+  }
   turn = await updateTurn(input.client, turn.id, {
     status: 'completed',
     approval_state: 'not_required',
@@ -10543,17 +10995,18 @@ export async function continueWorldSeedGeneration(input: {
   const inference = worldPromptProjectContextInferenceSchema.parse(inferenceTurn.metadata?.projectContextInference)
   const sourceContext = inferenceTurn.metadata?.sourceContext
   const skeletonProfile = getWorldSeedSkeletonProfile(inference.projectSubtype)
-  const projectContext = buildCompletedProjectContext({
+  const projectContext = buildTransientSeedProjectContext({
     inference,
     selectedArtStylePreset: payload.selectedArtStylePreset,
     selectedArtStyleDescription: payload.selectedArtStyleDescription,
   })
   const seedSnapshot = structuredClone(payload.snapshot) as WorldPromptSnapshot
-  await persistProjectContextForSeed({
-    client: input.client,
-    snapshot: seedSnapshot,
-    projectContext,
-  })
+  seedSnapshot.projectContext = projectContext
+  const draftMetadataWithoutProjectContext = { ...(seedSnapshot.draft.metadata ?? {}) }
+  delete draftMetadataWithoutProjectContext.projectContext
+  seedSnapshot.draft.metadata = {
+    ...draftMetadataWithoutProjectContext,
+  }
   const selectedPreset = getArtStylePreset(payload.selectedArtStylePreset)
   const writeInferenceEvent = await createEventWriter({
     client: input.client,
@@ -10598,10 +11051,12 @@ export async function continueWorldSeedGeneration(input: {
   const generationReady = new Promise<void>((resolve) => {
     generationReadyResolve = resolve
   })
+  let generationTurnState: { session: WorldPromptSession; turn: WorldPromptTurn } | null = null
   const generationPromise = startWorldPromptTurn({
     client: input.client,
     authHeader: input.authHeader,
-    onTurnReady: () => {
+    onTurnReady: (state) => {
+      generationTurnState = state
       generationReadyResolve?.()
       generationReadyResolve = null
     },
@@ -10648,12 +11103,16 @@ export async function continueWorldSeedGeneration(input: {
     generationReady,
     new Promise<void>((resolve) => setTimeout(resolve, 5000)),
   ])
+  const responseTurn = generationTurnState?.turn ?? completedInferenceTurn
+  const responseTurnIds = Array.from(new Set([completedInferenceTurn.id, responseTurn.id]))
+  const responseMessages = (await Promise.all(responseTurnIds.map((turnId) => loadTurnMessages(input.client, turnId)))).flat()
+  const responseEvents = (await Promise.all(responseTurnIds.map((turnId) => loadTurnEvents(input.client, turnId)))).flat()
   return worldPromptSeedGenerationResponseSchema.parse({
     ok: true,
     session,
-    turn: completedInferenceTurn,
-    messages: await loadTurnMessages(input.client, completedInferenceTurn.id),
-    events: await loadTurnEvents(input.client, completedInferenceTurn.id),
+    turn: responseTurn,
+    messages: responseMessages,
+    events: responseEvents,
     suggestions: [],
     threads: [],
     definitions: [],
@@ -11288,6 +11747,16 @@ export async function startWorldPromptTurn(input: {
     const resolvedSelectedViewKey = retrievalPacket.continuityMode === 'topic_shift'
       ? (preferredAutoViewKey ?? payload.selectedViewKey ?? workingSession.selectedViewKey)
       : (payload.selectedViewKey ?? preferredAutoViewKey ?? workingSession.selectedViewKey)
+    const completedSeedProjectContext = payload.initialSeedMode === 'generate_skeleton'
+      ? buildCompletedProjectContextFromInitialSeedContext(payload.initialSeedContext)
+      : null
+    if (completedSeedProjectContext) {
+      responseProjectContext = await persistProjectContextForSeed({
+        client: input.client,
+        snapshot: mutableSnapshot,
+        projectContext: completedSeedProjectContext,
+      })
+    }
     turn = await updateTurn(input.client, turn.id, {
       status: 'completed',
       approval_state: 'not_required',

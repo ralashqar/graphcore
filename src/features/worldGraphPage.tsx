@@ -35,7 +35,6 @@ import type {
   WorldViewCreateInput,
 } from '../domain/worldGraph'
 import {
-  isPendingInitialSeedGenerationTurn,
   worldPromptEventPayloadSchema,
   worldPromptRetrievalDiagnosticsSchema,
   type PromptToWorldOp,
@@ -3639,8 +3638,7 @@ export function WorldGraphPage({
     )
   }
 
-  const initialSeedGenerationPending = worldPromptTurns.some(isPendingInitialSeedGenerationTurn)
-  const isOnboardingMode = showProjectOnboarding && (worldEntities.length === 0 || initialSeedGenerationPending)
+  const isOnboardingMode = showProjectOnboarding
 
   if (isOnboardingMode) {
     return (
@@ -3654,6 +3652,7 @@ export function WorldGraphPage({
           seedGenerationStarted={seedGenerationStarted}
           sessionEvents={sessionEvents}
           sessionMessages={sessionMessages}
+          sessionTurns={sessionTurns}
           onSubmit={handleSubmitFirstWorld}
           onContinueSeed={handleContinueFirstWorldSeed}
           projectName={selectedView.name || 'New world'}
@@ -6158,9 +6157,10 @@ function WorldPromptChatPanel({
     () => buildWorldPromptSessionTokenMeter({
       turns: sessionTurns,
       messages: sessionMessages,
+      events: sessionEvents,
       model: selectedSession?.model ?? activePromptTurn?.model ?? sessionTurns.at(-1)?.model ?? null,
     }),
-    [activePromptTurn?.model, selectedSession?.model, sessionMessages, sessionTurns],
+    [activePromptTurn?.model, selectedSession?.model, sessionEvents, sessionMessages, sessionTurns],
   )
   const sessionStatusByKey = useMemo(() => {
     return Object.fromEntries(worldPromptSessions.map((session) => {
