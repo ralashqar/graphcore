@@ -7821,15 +7821,36 @@ button:disabled {
   background: rgba(255, 255, 255, 0.06);
 }
 
-.google-oauth-icon {
+.oauth-provider-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.oauth-button-apple,
+.oauth-button-github {
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.oauth-button-discord {
+  border-color: rgba(88, 101, 242, 0.36);
+  color: #dce1ff;
+}
+
+.oauth-button-google {
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.oauth-icon {
   width: 20px;
   height: 20px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  flex: 0 0 auto;
 }
 
-.google-oauth-icon svg {
+.oauth-icon svg {
   width: 20px;
   height: 20px;
   display: block;
