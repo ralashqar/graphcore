@@ -141,6 +141,43 @@ import { normalizeStrictJsonSchema, type JsonSchema } from './structured-output.
 
 type SupabaseClient = any
 
+type WorldPromptTokenUsageCall = {
+  id: string
+  surface: string
+  model: string
+  responseId: string | null
+  requestId: string | null
+  inputTokens: number
+  outputTokens: number
+  totalTokens: number
+  cachedInputTokens: number
+  reasoningTokens: number
+  status: number
+  ok: boolean
+  metadata: Record<string, unknown>
+  createdAt: string
+}
+
+type WorldPromptTokenUsageSummary = {
+  inputTokens: number
+  outputTokens: number
+  totalTokens: number
+  cachedInputTokens: number
+  reasoningTokens: number
+  callCount: number
+  calls: WorldPromptTokenUsageCall[]
+}
+
+type WorldPromptTokenUsageRecorder = {
+  record: (input: {
+    surface: string
+    model: string
+    response: Awaited<ReturnType<typeof runOpenAiResponses>>
+    metadata?: Record<string, unknown>
+  }) => void
+  summary: () => WorldPromptTokenUsageSummary | null
+}
+
 type WorldPromptSessionRow = {
   id: string
   draft_id: string
@@ -3149,6 +3186,78 @@ function classifyPlannerFailure(error: unknown): WorldPromptPlannerFailure {
   }
 }
 
+function readTokenUsageNumber(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0
+}
+
+function readOpenAiTokenUsage(body: Record<string, unknown>) {
+  const usage = body.usage && typeof body.usage === 'object' && !Array.isArray(body.usage)
+    ? body.usage as Record<string, unknown>
+    : null
+  if (!usage) return null
+
+  const inputTokens = readTokenUsageNumber(usage.input_tokens ?? usage.inputTokens ?? usage.prompt_tokens ?? usage.promptTokens)
+  const outputTokens = readTokenUsageNumber(usage.output_tokens ?? usage.outputTokens ?? usage.completion_tokens ?? usage.completionTokens)
+  const totalTokens = readTokenUsageNumber(usage.total_tokens ?? usage.totalTokens) || inputTokens + outputTokens
+  const inputDetails = usage.input_tokens_details && typeof usage.input_tokens_details === 'object' && !Array.isArray(usage.input_tokens_details)
+    ? usage.input_tokens_details as Record<string, unknown>
+    : usage.inputTokensDetails && typeof usage.inputTokensDetails === 'object' && !Array.isArray(usage.inputTokensDetails)
+      ? usage.inputTokensDetails as Record<string, unknown>
+      : null
+  const outputDetails = usage.output_tokens_details && typeof usage.output_tokens_details === 'object' && !Array.isArray(usage.output_tokens_details)
+    ? usage.output_tokens_details as Record<string, unknown>
+    : usage.outputTokensDetails && typeof usage.outputTokensDetails === 'object' && !Array.isArray(usage.outputTokensDetails)
+      ? usage.outputTokensDetails as Record<string, unknown>
+      : null
+
+  if (totalTokens <= 0) return null
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens,
+    cachedInputTokens: readTokenUsageNumber(inputDetails?.cached_tokens ?? inputDetails?.cachedTokens),
+    reasoningTokens: readTokenUsageNumber(outputDetails?.reasoning_tokens ?? outputDetails?.reasoningTokens),
+  }
+}
+
+function createWorldPromptTokenUsageRecorder(): WorldPromptTokenUsageRecorder {
+  const calls: WorldPromptTokenUsageCall[] = []
+  return {
+    record: (input) => {
+      const usage = readOpenAiTokenUsage(input.response.body)
+      if (!usage) return
+      calls.push({
+        id: `usage_${calls.length + 1}`,
+        surface: input.surface,
+        model: input.model,
+        responseId: typeof input.response.body.id === 'string' ? input.response.body.id : null,
+        requestId: input.response.response.headers.get('x-request-id'),
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        totalTokens: usage.totalTokens,
+        cachedInputTokens: usage.cachedInputTokens,
+        reasoningTokens: usage.reasoningTokens,
+        status: input.response.response.status,
+        ok: input.response.response.ok,
+        metadata: input.metadata ?? {},
+        createdAt: new Date().toISOString(),
+      })
+    },
+    summary: () => {
+      if (calls.length === 0) return null
+      return {
+        inputTokens: calls.reduce((total, call) => total + call.inputTokens, 0),
+        outputTokens: calls.reduce((total, call) => total + call.outputTokens, 0),
+        totalTokens: calls.reduce((total, call) => total + call.totalTokens, 0),
+        cachedInputTokens: calls.reduce((total, call) => total + call.cachedInputTokens, 0),
+        reasoningTokens: calls.reduce((total, call) => total + call.reasoningTokens, 0),
+        callCount: calls.length,
+        calls: calls.slice(),
+      }
+    },
+  }
+}
+
 function buildRollingSessionMemory(input: {
   session: WorldPromptSession
   turn: WorldPromptTurn
@@ -4739,6 +4848,54 @@ function summarizeImpact(ops: PromptToWorldOp[]) {
   }, { nodeCount: 0, edgeCount: 0, queueCount: 0 })
 }
 
+function pluralizeCount(count: number, singular: string, plural = `${singular}s`) {
+  return `${count} ${count === 1 ? singular : plural}`
+}
+
+function summarizePlannedGraphChanges(input: {
+  selectedOps: PromptToWorldOp[]
+  runnableOps: PromptToWorldOp[]
+  skippedRiskyCount: number
+}) {
+  const selectedOps = input.selectedOps.filter((op) => op.op !== 'assistant_note')
+  const graphChangeCount = selectedOps.length
+  if (graphChangeCount === 0) {
+    return 'No graph changes planned; preparing the answer and next-step options.'
+  }
+
+  const newNodes = selectedOps.filter((op) => op.op === 'upsert_entity' && !op.payload.targetEntityKey).length
+  const nodeUpdates = selectedOps.filter((op) => (
+    op.op === 'update_entity'
+    || op.op === 'replace_entity'
+    || (op.op === 'upsert_entity' && Boolean(op.payload.targetEntityKey))
+  )).length
+  const newLinks = selectedOps.filter((op) => op.op === 'upsert_relationship' && !op.payload.targetRelationshipKey).length
+  const linkUpdates = selectedOps.filter((op) => (
+    op.op === 'update_relationship'
+    || (op.op === 'upsert_relationship' && Boolean(op.payload.targetRelationshipKey))
+  )).length
+  const outputs = selectedOps.filter((op) => op.op === 'create_derived_result').length
+  const queuedOutputs = selectedOps.filter((op) => op.op === 'queue_image_generation' || op.op === 'queue_cinematic_generation').length
+  const wikiUpdates = selectedOps.filter((op) => op.op === 'update_world_wiki_metadata').length
+  const runnableCount = input.runnableOps.filter((op) => op.op !== 'assistant_note').length
+
+  const parts = [
+    newNodes > 0 ? pluralizeCount(newNodes, 'new node') : null,
+    nodeUpdates > 0 ? pluralizeCount(nodeUpdates, 'node update') : null,
+    newLinks > 0 ? pluralizeCount(newLinks, 'new link') : null,
+    linkUpdates > 0 ? pluralizeCount(linkUpdates, 'link update') : null,
+    outputs > 0 ? pluralizeCount(outputs, 'linked output') : null,
+    queuedOutputs > 0 ? pluralizeCount(queuedOutputs, 'queued output') : null,
+    wikiUpdates > 0 ? pluralizeCount(wikiUpdates, 'wiki update') : null,
+    input.skippedRiskyCount > 0 ? `${input.skippedRiskyCount} held back for safety` : null,
+  ].filter((part): part is string => Boolean(part))
+
+  const applySuffix = runnableCount !== graphChangeCount
+    ? ` ${pluralizeCount(runnableCount, 'change')} can apply now.`
+    : ''
+  return `Planned ${pluralizeCount(graphChangeCount, 'graph change')}: ${parts.join(', ')}.${applySuffix}`
+}
+
 function looksContradictoryOrLowConfidence(prompt: string) {
   const normalized = prompt.toLowerCase()
   return normalized.includes('but not really')
@@ -5296,6 +5453,7 @@ async function completeStorySequenceOps(input: {
   retrieval: WorldPromptRetrievalPacket
   ops: PromptToWorldOp[]
   debugEnabled: boolean
+  usageRecorder?: WorldPromptTokenUsageRecorder
 }) {
   const candidates = storySequenceCompletionCandidates({
     snapshot: input.snapshot,
@@ -5387,6 +5545,12 @@ async function completeStorySequenceOps(input: {
     },
     store: false,
     timeoutMs: 180_000,
+  })
+  input.usageRecorder?.record({
+    surface: 'story-sequence-completion',
+    model: input.model,
+    response,
+    metadata: { candidateCount: candidates.length },
   })
 
   if (input.debugEnabled) {
@@ -6460,7 +6624,7 @@ function defaultPlannerProgressMessage(phase: WorldPromptPlannerProgress['phase'
     case 'mapping_relationships':
       return 'Creating relationship links between generated records.'
     case 'assembling_first_wave':
-      return 'Assembling the first wave of safe graph changes.'
+      return 'Preparing the graph change list.'
     case 'finalizing_world':
       return 'Finalizing threads, wiki metadata, and suggestions.'
     case 'finalizing_plan':
@@ -6627,6 +6791,7 @@ async function generatePromptPlan(input: {
   recentMessages: WorldPromptMessage[]
   selectedSuggestion?: WorldPromptSuggestionRecord | null
   onPlannerProgress?: (progress: WorldPromptPlannerProgress, extras?: { plannerOutline?: string[] }) => Promise<void> | void
+  usageRecorder?: WorldPromptTokenUsageRecorder
 }) {
   const projectContextGuidance = describeProjectContextForPlanner(input.payload.snapshot.projectContext)
   const shouldInferContext = shouldInferProjectContext(input.payload.snapshot.projectContext)
@@ -6933,6 +7098,15 @@ async function generatePromptPlan(input: {
         store: false,
         timeoutMs: 180_000,
       })
+      input.usageRecorder?.record({
+        surface: 'compact-planner',
+        model: input.payload.model,
+        response,
+        metadata: {
+          attempt: attempt + 1,
+          plannerMode,
+        },
+      })
 
       if (debugEnabled) {
         console.log('[world-prompt-debug] planner response-meta', previewJson({
@@ -6987,6 +7161,7 @@ async function generatePromptPlan(input: {
           retrieval: relevantPlannerContext,
           ops: creativeCompletion.ops,
           debugEnabled,
+          usageRecorder: input.usageRecorder,
         })
         : { ops: creativeCompletion.ops, issues: [] as StorySequenceOpIssue[] }
       const completedPlan = worldPromptPlannerSchema.parse({
@@ -9052,6 +9227,7 @@ async function inferInitialSeedContext(input: {
   model: string
   prompt: string
   sourceContext: unknown
+  usageRecorder?: WorldPromptTokenUsageRecorder
 }) {
   const validPairs = 'story: feature_film, tv_streaming_series, short_film, shortform_series, animated_story; game: action_rpg, narrative_adventure, strategy_builder, survival_craft, shooter_combat, social_sim, open_world_sandbox, platformer_metroidvania, horror_mystery; brand: campaign_world, product_storytelling, mascot_ip, brand_education_explainer; ugc: creator_organic, direct_response_ad, faceless_explainer_demo, serialized_social_drama.'
   const schema = normalizeStrictJsonSchema(z.toJSONSchema(seedInferenceOutputSchema))
@@ -9083,6 +9259,11 @@ async function inferInitialSeedContext(input: {
     },
     store: false,
     timeoutMs: 90_000,
+  })
+  input.usageRecorder?.record({
+    surface: 'seed-inference',
+    model: input.model,
+    response,
   })
   if (!response.response.ok) {
     const upstreamMessage =
@@ -9206,6 +9387,7 @@ export async function startWorldSeedInference(input: {
     turnId: turn.id,
     draftId: payload.snapshot.draft.id,
   })
+  const tokenUsageRecorder = createWorldPromptTokenUsageRecorder()
 
   try {
     await writeEvent('turn_started', { session, turn })
@@ -9236,6 +9418,7 @@ export async function startWorldSeedInference(input: {
       model: payload.model,
       prompt: payload.prompt,
       sourceContext: payload.sourceContext ?? null,
+      usageRecorder: tokenUsageRecorder,
     })
     const inference = worldPromptProjectContextInferenceSchema.parse(rawInference)
     const artStyleOptions = buildSeedInferenceStyleOptions(rawInference)
@@ -9260,6 +9443,7 @@ export async function startWorldSeedInference(input: {
         },
         artStyleOptions,
         skeletonProfileId: skeletonProfile.id,
+        tokenUsage: tokenUsageRecorder.summary() ?? undefined,
       },
     })
     const assistantMessage = await insertPromptMessage({
@@ -9302,6 +9486,10 @@ export async function startWorldSeedInference(input: {
       status: 'failed',
       approval_state: 'not_required',
       error_message: error instanceof Error ? error.message : 'World seed inference failed.',
+      metadata: {
+        ...(turn.metadata ?? {}),
+        tokenUsage: tokenUsageRecorder.summary() ?? undefined,
+      },
     })
     await writeEvent('turn_failed', {
       turn,
@@ -9440,6 +9628,7 @@ async function generateIncrementalManifest(input: {
   sessionMemoryState: WorldPromptSessionMemoryState
   recentMessages: WorldPromptMessage[]
   selectedSuggestion?: WorldPromptSuggestionRecord | null
+  usageRecorder?: WorldPromptTokenUsageRecorder
 }) : Promise<IncrementalPlannerResult> {
   const projectContextGuidance = describeProjectContextForPlanner(input.payload.snapshot.projectContext)
   const shouldInferContext = shouldInferProjectContext(input.payload.snapshot.projectContext)
@@ -9532,6 +9721,11 @@ async function generateIncrementalManifest(input: {
     store: false,
     timeoutMs: 90_000,
   })
+  input.usageRecorder?.record({
+    surface: 'incremental-manifest',
+    model: input.payload.model,
+    response,
+  })
 
   if (debugEnabled) {
     console.log('[world-prompt-debug] incremental manifest response', previewJson({
@@ -9571,6 +9765,7 @@ async function generateIncrementalWorkItemPlan(input: {
   failedWorkItems: Array<{ item: WorldPromptIncrementalWorkItem; reason: string }>
   repairFeedback?: string | null
   attempt: number
+  usageRecorder?: WorldPromptTokenUsageRecorder
 }) {
   const plannerRequestSchema = directBuildPlannerSchema
   const basePlannerResponseSchema = normalizeStrictJsonSchema(z.toJSONSchema(plannerRequestSchema))
@@ -9667,6 +9862,16 @@ async function generateIncrementalWorkItemPlan(input: {
     store: false,
     timeoutMs: workItem.kind === 'sequence_unit' ? 120_000 : 90_000,
   })
+  input.usageRecorder?.record({
+    surface: 'incremental-work-item',
+    model: input.payload.model,
+    response,
+    metadata: {
+      workItemId: workItem.id,
+      workItemKind: workItem.kind,
+      attempt: input.attempt,
+    },
+  })
 
   if (debugEnabled) {
     console.log('[world-prompt-debug] incremental work item response', previewJson({
@@ -9711,9 +9916,10 @@ async function generateIncrementalWorkItemPlan(input: {
       prompt: input.payload.prompt,
       snapshot: input.snapshot,
       retrieval: input.retrievalPacket,
-      ops: creativeCompletion.ops,
-      debugEnabled,
-    })
+    ops: creativeCompletion.ops,
+    debugEnabled,
+    usageRecorder: input.usageRecorder,
+  })
     : { ops: creativeCompletion.ops, issues: [] as StorySequenceOpIssue[] }
   const completedPlan = worldPromptPlannerSchema.parse({
     ...candidatePlan,
@@ -9756,6 +9962,7 @@ async function executeIncrementalWorldPromptTurn(input: {
   selectedSuggestion?: WorldPromptSuggestionRecord | null
   continuationMode: string
   writeEvent: WorldPromptEventWriter
+  usageRecorder: WorldPromptTokenUsageRecorder
 }) {
   let turn = input.turn
   let workingSession = input.session
@@ -9790,6 +9997,7 @@ async function executeIncrementalWorldPromptTurn(input: {
     sessionMemoryState: input.sessionMemoryState,
     recentMessages: input.recentMessages,
     selectedSuggestion: input.selectedSuggestion ?? null,
+    usageRecorder: input.usageRecorder,
   })
   const manifest = incremental.manifest
   const retrievalPacket = incremental.retrievalPacket
@@ -9859,6 +10067,7 @@ async function executeIncrementalWorldPromptTurn(input: {
           failedWorkItems,
           repairFeedback,
           attempt,
+          usageRecorder: input.usageRecorder,
         })
         finalError = null
         break
@@ -10194,6 +10403,7 @@ async function executeIncrementalWorldPromptTurn(input: {
       incrementalPlan: manifest,
       completedWorkItemIds: completedWorkItems.map((item) => item.id),
       failedWorkItems: failedWorkItems.map((entry) => ({ id: entry.item.id, label: entry.item.label, reason: entry.reason })),
+      tokenUsage: input.usageRecorder.summary() ?? undefined,
     },
   })
   await input.writeEvent('message_created', { message: assistantMessage, turn: { id: turn.id } })
@@ -10544,6 +10754,7 @@ export async function startWorldPromptTurn(input: {
     turnId: turn.id,
     draftId: payload.snapshot.draft.id,
   })
+  const tokenUsageRecorder = createWorldPromptTokenUsageRecorder()
   let responseSuggestions: WorldPromptSuggestionRecord[] = []
   let responseProjectContext: ProjectContext | null = payload.snapshot.projectContext ?? null
 
@@ -10625,6 +10836,7 @@ export async function startWorldPromptTurn(input: {
         selectedSuggestion,
         continuationMode,
         writeEvent,
+        usageRecorder: tokenUsageRecorder,
       })
     }
 
@@ -10636,6 +10848,7 @@ export async function startWorldPromptTurn(input: {
       sessionMemoryState,
       recentMessages: compacted.recentMessages,
       selectedSuggestion,
+      usageRecorder: tokenUsageRecorder,
       onPlannerProgress: async (plannerProgress, extras) => {
         await throwIfTurnCancelled(input.client, turn.id)
         await writeEvent('planner_status', {
@@ -10739,6 +10952,26 @@ export async function startWorldPromptTurn(input: {
     })
     const opsToRun = execution.selectedOps
     const { autoOps: autoRunnableOps, approvalOps: skippedRiskyOps } = splitPromptOpsByApproval(opsToRun)
+    await writeEvent('planner_status', {
+      plannerStatus: execution.mode === 'blocked' ? 'blocked' : 'planning',
+      plannerFailure: plannerFailure ?? undefined,
+      classification: execution.classification,
+      scope: execution.scope,
+      answer: execution.answer || undefined,
+      answerMode: execution.answerMode,
+      diagnosticFindings: execution.diagnosticFindings,
+      plannerProgress: {
+        phase: 'finalizing_plan',
+        message: summarizePlannedGraphChanges({
+          selectedOps: opsToRun,
+          runnableOps: autoRunnableOps,
+          skippedRiskyCount: skippedRiskyOps.length,
+        }),
+        sequence: 12,
+        done: true,
+      },
+      turn: { id: turn.id },
+    })
     const selectedSuggestionHadNoRunnableOps = Boolean(payload.selectedSuggestionId)
       && autoRunnableOps.filter((op) => op.op !== 'assistant_note').length === 0
     const finalizedSuggestions = finalizeSuggestionSet({
@@ -11095,6 +11328,7 @@ export async function startWorldPromptTurn(input: {
         suggestions: finalizedSuggestions,
         suggestionIds: persistedSuggestions.map((suggestion) => suggestion.id),
         threadDiagnostics,
+        tokenUsage: tokenUsageRecorder.summary() ?? undefined,
       },
     })
     const nextSessionMemoryState = buildSessionMemoryState({
@@ -11264,6 +11498,7 @@ export async function startWorldPromptTurn(input: {
       metadata: {
         ...(turn.metadata ?? {}),
         plannerFailure: plannerFailure ?? undefined,
+        tokenUsage: tokenUsageRecorder.summary() ?? undefined,
       },
     })
     await writeEvent('turn_failed', {

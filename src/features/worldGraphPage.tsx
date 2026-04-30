@@ -101,6 +101,7 @@ import {
   buildWorldNodeVisibilityReason,
   buildWorldPromptTranscriptEntries as buildWorldPromptTranscriptEntriesModel,
   buildWorldPromptBuildSteps,
+  buildWorldPromptSessionTokenMeter,
   buildWorldPromptTurnLenses,
   buildWorldInspectorViewModel,
   buildWorldPromptRailViewModel,
@@ -6153,6 +6154,14 @@ function WorldPromptChatPanel({
     () => [...sessionTurns].reverse().slice(0, 6),
     [sessionTurns],
   )
+  const tokenMeter = useMemo(
+    () => buildWorldPromptSessionTokenMeter({
+      turns: sessionTurns,
+      messages: sessionMessages,
+      model: selectedSession?.model ?? activePromptTurn?.model ?? sessionTurns.at(-1)?.model ?? null,
+    }),
+    [activePromptTurn?.model, selectedSession?.model, sessionMessages, sessionTurns],
+  )
   const sessionStatusByKey = useMemo(() => {
     return Object.fromEntries(worldPromptSessions.map((session) => {
       const turnsForSession = worldPromptTurns
@@ -6445,7 +6454,16 @@ function WorldPromptChatPanel({
       <div className="world-prompt-chat-head">
         <div className="world-prompt-chat-meta">
           <h3>{sessionTitle}</h3>
-          {sessionSubline ? <div className="world-prompt-chat-subline">{sessionSubline}</div> : null}
+          {sessionSubline || !isPromptCenter ? (
+            <div className="world-prompt-chat-subline">
+              {sessionSubline ? <span>{sessionSubline}</span> : null}
+              {!isPromptCenter ? (
+                <span className="world-prompt-token-meter" title={tokenMeter.title}>
+                  {tokenMeter.label} tokens
+                </span>
+              ) : null}
+            </div>
+          ) : null}
         </div>
         <div className="world-prompt-head-actions">
           <button className="world-prompt-icon-button" onClick={onOpenHistory} type="button" aria-label="Open history">

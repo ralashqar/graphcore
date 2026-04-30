@@ -943,6 +943,7 @@ export function promptSuggestionImpactLabel(suggestion: WorldPromptSuggestion) {
 export function stripInternalPlannerDiagnostics(text: string) {
   if (!text.trim()) return ''
   return text
+    .replace(/^Assembling the first wave of safe graph changes\.$/i, 'Preparing the graph change list.')
     .replace(/^Hosted prompt planning was unavailable\.\s*/i, '')
     .replace(/\s*Immediate JSON[^\n]*?(?:\.\s*|$)/i, '')
     .replace(/\s*oneOf is not permitted in operations\.?\s*/i, '')
@@ -957,6 +958,113 @@ function normalizePromptTranscriptText(text: string) {
     .replace(/\s+/g, ' ')
     .trim()
     .toLocaleLowerCase()
+}
+
+function readPositiveNumber(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null
+}
+
+function readTurnUsageTokens(metadata: Record<string, unknown>) {
+  const candidates = [
+    metadata.tokenUsage,
+    metadata.usage,
+    metadata.openAiUsage,
+    metadata.modelUsage,
+    metadata.llmUsage,
+  ].filter((value): value is Record<string, unknown> => Boolean(value && typeof value === 'object' && !Array.isArray(value)))
+
+  for (const candidate of candidates) {
+    const total = readPositiveNumber(candidate.totalTokens)
+      ?? readPositiveNumber(candidate.total_tokens)
+      ?? readPositiveNumber(candidate.tokens)
+    if (total) return total
+    const inputTokens = readPositiveNumber(candidate.inputTokens)
+      ?? readPositiveNumber(candidate.input_tokens)
+      ?? readPositiveNumber(candidate.promptTokens)
+      ?? readPositiveNumber(candidate.prompt_tokens)
+      ?? 0
+    const outputTokens = readPositiveNumber(candidate.outputTokens)
+      ?? readPositiveNumber(candidate.output_tokens)
+      ?? readPositiveNumber(candidate.completionTokens)
+      ?? readPositiveNumber(candidate.completion_tokens)
+      ?? 0
+    if (inputTokens + outputTokens > 0) return inputTokens + outputTokens
+  }
+
+  return null
+}
+
+function readSourceContextText(metadata: Record<string, unknown>) {
+  const sourceContext = metadata.sourceContext && typeof metadata.sourceContext === 'object'
+    ? metadata.sourceContext as Record<string, unknown>
+    : null
+  const initialSeedContext = metadata.initialSeedContext && typeof metadata.initialSeedContext === 'object'
+    ? metadata.initialSeedContext as Record<string, unknown>
+    : null
+  const initialSourceContext = initialSeedContext?.sourceContext && typeof initialSeedContext.sourceContext === 'object'
+    ? initialSeedContext.sourceContext as Record<string, unknown>
+    : null
+  const sourceText = typeof sourceContext?.extractedText === 'string' ? sourceContext.extractedText : ''
+  const initialSourceText = typeof initialSourceContext?.extractedText === 'string' ? initialSourceContext.extractedText : ''
+  return [sourceText, initialSourceText].filter(Boolean).join('\n')
+}
+
+function resolveModelTokenLimit(model: string | null | undefined) {
+  const normalized = (model ?? '').toLowerCase()
+  if (normalized.includes('gpt-5.4-mini') || normalized.includes('gpt-5.4-nano')) return 400_000
+  if (normalized.includes('gpt-5.4')) return 1_000_000
+  if (normalized.includes('gpt-5.2') || normalized.includes('gpt-5.1')) return 400_000
+  if (normalized.includes('gpt-4.1')) return 1_000_000
+  if (normalized.includes('o1') || normalized.includes('o3')) return 200_000
+  if (normalized.includes('gpt-5')) return 400_000
+  if (normalized.includes('gpt-4o')) return 128_000
+  if (normalized.includes('gpt-4')) return 128_000
+  return 400_000
+}
+
+function formatCompactTokenCount(tokens: number) {
+  if (tokens >= 1_000_000) {
+    const value = tokens / 1_000_000
+    return `${Number.isInteger(value) ? value.toFixed(0) : value.toFixed(1)}m`
+  }
+  if (tokens >= 1_000) {
+    const value = tokens / 1_000
+    return `${Number.isInteger(value) ? value.toFixed(0) : value.toFixed(1)}k`
+  }
+  return String(tokens)
+}
+
+export function buildWorldPromptSessionTokenMeter(input: {
+  turns: WorldPromptTurn[]
+  messages: WorldPromptMessage[]
+  model?: string | null
+}): WorldPromptSessionTokenMeter {
+  const tokenLimit = resolveModelTokenLimit(input.model ?? input.turns.at(-1)?.model)
+  const exactTokens = input.turns.reduce((total, turn) => total + (readTurnUsageTokens(turn.metadata) ?? 0), 0)
+  const estimated = exactTokens <= 0
+  const usedTokens = exactTokens > 0
+    ? Math.ceil(exactTokens)
+    : Math.ceil([
+      ...input.messages.map((message) => message.content),
+      ...input.turns.flatMap((turn) => [
+        turn.prompt,
+        turn.assistantSummary,
+        typeof turn.metadata?.answer === 'string' ? turn.metadata.answer : '',
+        readSourceContextText(turn.metadata),
+      ]),
+    ].join('\n').length / 4)
+  const boundedUsedTokens = Math.max(0, usedTokens)
+  const percentage = tokenLimit > 0 ? Math.min(100, Math.round((boundedUsedTokens / tokenLimit) * 100)) : 0
+  const compactUsed = formatCompactTokenCount(boundedUsedTokens)
+  const compactLimit = formatCompactTokenCount(tokenLimit)
+  return {
+    usedTokens: boundedUsedTokens,
+    tokenLimit,
+    percentage,
+    label: `${estimated ? '~' : ''}${compactUsed}/${compactLimit}`,
+    title: `${estimated ? 'Approximate visible session text' : 'Recorded provider token usage'}: ${boundedUsedTokens.toLocaleString()} / ${tokenLimit.toLocaleString()} tokens`,
+    estimated,
+  }
 }
 
 function buildSuggestionTranscriptSignature(suggestions: WorldPromptSuggestion[]) {
@@ -1209,7 +1317,7 @@ export function buildWorldPromptTranscriptEntries(input: {
               createdAt: source.event.createdAt,
               kind: 'planner_progress',
               label: describePlannerProgressPhase(payload.plannerProgress.phase),
-              detail: payload.plannerProgress.message || undefined,
+              detail: payload.plannerProgress.message ? stripInternalPlannerDiagnostics(payload.plannerProgress.message) : undefined,
               phase: payload.plannerProgress.phase,
               outline: payload.plannerOutline ?? [],
               done: payload.plannerProgress.done,

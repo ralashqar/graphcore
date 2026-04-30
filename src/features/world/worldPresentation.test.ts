@@ -9,6 +9,7 @@ import {
   buildWorldNodeVisibilityReason,
   buildWorldPromptBuildSteps,
   buildWorldRefinementHistoryViewModel,
+  buildWorldPromptSessionTokenMeter,
   buildWorldPromptRailViewModel,
   buildWorldInspectorViewModel,
   buildWorldPromptTranscriptEntries,
@@ -32,6 +33,85 @@ test('stripInternalPlannerDiagnostics removes planner validation tails', () => {
 test('stripInternalPlannerDiagnostics removes fallback and schema-operation prefixes', () => {
   const input = 'Hosted prompt planning was unavailable. oneOf is not permitted in operations. Immediate JSON response invalid. Keep the world compact.'
   assert.equal(stripInternalPlannerDiagnostics(input), 'Keep the world compact.')
+})
+
+test('stripInternalPlannerDiagnostics replaces stale compact progress wording', () => {
+  assert.equal(
+    stripInternalPlannerDiagnostics('Assembling the first wave of safe graph changes.'),
+    'Preparing the graph change list.',
+  )
+})
+
+test('buildWorldPromptSessionTokenMeter uses exact turn token usage when present', () => {
+  const meter = buildWorldPromptSessionTokenMeter({
+    turns: [
+      makeTurn({
+        model: 'gpt-5.4',
+        metadata: {
+          tokenUsage: {
+            inputTokens: 12_000,
+            outputTokens: 8_000,
+          },
+        },
+      }),
+    ],
+    messages: [],
+  })
+
+  assert.equal(meter.estimated, false)
+  assert.equal(meter.usedTokens, 20_000)
+  assert.equal(meter.tokenLimit, 1_000_000)
+  assert.equal(meter.label, '20k/1m')
+})
+
+test('buildWorldPromptSessionTokenMeter resolves GPT-5.4 mini context window separately from flagship', () => {
+  const meter = buildWorldPromptSessionTokenMeter({
+    turns: [makeTurn({ model: 'gpt-5.4-mini' })],
+    messages: [],
+  })
+
+  assert.equal(meter.tokenLimit, 400_000)
+  assert.match(meter.label, /^~\d+\/400k$/)
+})
+
+test('buildWorldPromptSessionTokenMeter estimates session context when usage metadata is absent', () => {
+  const meter = buildWorldPromptSessionTokenMeter({
+    turns: [
+      makeTurn({
+        model: 'gpt-4o',
+        prompt: 'Create a world about a memory empire.',
+        assistantSummary: 'Created the initial factions and locations.',
+        metadata: {
+          answer: 'The memory empire now has a ruler, rebels, and a forbidden archive.',
+          sourceContext: {
+            kind: 'prompt',
+            title: 'Prompt',
+            fileName: null,
+            mimeType: null,
+            url: null,
+            extractedText: 'A short source passage about memory magic and shadow rule.',
+            charCount: 58,
+            truncated: false,
+          },
+        },
+      }),
+    ],
+    messages: [{
+      id: 'm-token-1',
+      sessionId: 's1',
+      turnId: 't1',
+      draftId: 'd1',
+      role: 'user',
+      content: 'Expand the forbidden archive and connect it to the rebel leader.',
+      metadata: {},
+      createdAt: '2026-04-22T10:00:00.000Z',
+    }],
+  })
+
+  assert.equal(meter.estimated, true)
+  assert.equal(meter.tokenLimit, 128_000)
+  assert.ok(meter.usedTokens > 0)
+  assert.match(meter.label, /^~\d+\/128k$/)
 })
 
 test('promptSuggestionImpactLabel joins impact parts', () => {
