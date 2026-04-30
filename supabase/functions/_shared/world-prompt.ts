@@ -50,6 +50,11 @@ import {
   worldPromptWorkItemContextSchema,
   worldPromptWorkItemResultSchema,
   worldPromptStreamGraphOpEnvelopeSchema,
+  streamWikiRecordSchema,
+  streamEntityRecordSchema,
+  streamSequenceUnitRecordSchema,
+  streamRelationshipRecordSchema,
+  streamRepairSkipRecordSchema,
   type PromptToWorldOp,
   type WorldPromptClassification,
   type WorldPromptBuildLedgerEntry,
@@ -9841,15 +9846,17 @@ function buildStreamedInitialSeedInstructions() {
     'Generate a complete initial world skeleton as streamed JSON records. Do not wrap in Markdown. Do not return one giant JSON object.',
     'Each record must be one complete JSON object matching one of:',
     '{"kind":"note","message":"short operational note"}',
-    '{"kind":"op","op":{PromptToWorldOp}}',
+    '{"kind":"wiki","id":"wiki_foundation","title":"generated content title","logline":"one sentence","synopsis":"compact paragraph","genre":"genre label","themes":["theme"],"toneTags":["tone"],"coreConflict":"central conflict","visualMotifs":["motif"]}',
+    '{"kind":"entity","id":"mara_veyr","nodeType":"actor","name":"Mara Veyr","summary":"one sentence","context":"short canon use","tags":["main cast"]}',
     '{"kind":"sequence_unit","id":"episode_01","name":"Episode 1: The Memory Tax","summary":"one sentence","context":"short canon use","unitKind":"episode","sequenceKey":"main","ordinal":1,"actLabel":"Act I","synopsis":"one compact paragraph","dramaticQuestion":"question","storyFunction":"setup","outcome":"one sentence","consequences":[{"cause":"cause","effect":"effect","affectedEntityKeys":["mara_veyr"],"threadKeys":[],"consequenceType":"plot"}],"characterArcDeltas":[{"actorKey":"mara_veyr","before":"before","pressure":"pressure","choice":"choice","after":"after"}],"openLoops":["loop"],"resolvedLoops":[]}',
     '{"kind":"relationship","id":"link_mara_seeks_artifact","source":"mara_veyr","target":"memory_artifact","verb":"seeks","notes":"short relationship note"}',
     '{"kind":"summary","assistantSummary":"concise summary of what was created"}',
-    'Prefer compact record forms for sequence_unit and relationship records instead of nested PromptToWorldOp JSON; the system will convert them to graph ops.',
+    '{"kind":"skip","reason":"only if a requested record cannot be represented safely"}',
+    '{"kind":"op","op":{PromptToWorldOp}} is supported for compatibility, but prefer compact wiki, entity, sequence_unit, and relationship records; the system will convert them to graph ops.',
     'Emit minified one-line JSON records. Never put literal line breaks inside JSON string values; escape them as \\n or keep text as one compact paragraph.',
-    'Example entity line: {"kind":"op","op":{"id":"create_mara_veyr","op":"upsert_entity","payload":{"targetEntityKey":"mara_veyr","entity":{"nodeType":"actor","name":"Mara Veyr","summary":"A memory mage pulled into the empire conflict.","context":"Main cast protagonist with a clear want, flaw, and pressure.","tags":["main cast"]}}}}',
-    'Example Story sequence_unit line: {"kind":"op","op":{"id":"create_episode_01","op":"upsert_entity","payload":{"targetEntityKey":"episode_01","entity":{"nodeType":"sequence_unit","name":"Episode 1: The Memory Tax","summary":"Mara discovers the empire is harvesting memories to keep its shadow throne alive.","context":"Opening episode that establishes the premise, pressure, and first irreversible choice.","customProperties":{"sequence":{"unitKind":"episode","sequenceKey":"main","ordinal":1,"actLabel":"Act I","synopsis":"Mara witnesses a public memory tithe and realizes her brother is next.","dramaticQuestion":"Will Mara expose the tithe before her family is erased?","storyFunction":"setup","outcome":"Mara steals a forbidden ledger and becomes hunted by the throne.","consequences":[{"cause":"Mara steals the tithe ledger.","effect":"The shadow guard marks her family as traitors.","affectedEntityKeys":["mara_veyr"],"threadKeys":[],"consequenceType":"plot"}],"characterArcDeltas":[{"actorKey":"mara_veyr","before":"Mara survives by staying invisible.","pressure":"Her brother is selected for the tithe.","choice":"She steals the ledger in public.","after":"She accepts becoming visible is the price of resistance."}],"openLoops":["Who built the tithe ledger?"],"resolvedLoops":[],"scriptExpansionReady":true}}}}}}',
-    'Example relationship line: {"kind":"op","op":{"id":"link_mara_seeks_artifact","op":"upsert_relationship","payload":{"relationship":{"sourceEntityKey":"mara_veyr","targetEntityKey":"memory_artifact","verb":"seeks","notes":"The artifact is tied to Mara’s central objective."}}}}',
+    'Example entity line: {"kind":"entity","id":"mara_veyr","nodeType":"actor","name":"Mara Veyr","summary":"A memory mage pulled into the empire conflict.","context":"Main cast protagonist with a clear want, flaw, and pressure.","tags":["main cast"]}',
+    'Example Story sequence_unit line: {"kind":"sequence_unit","id":"episode_01","name":"Episode 1: The Memory Tax","summary":"Mara discovers the empire is harvesting memories to keep its shadow throne alive.","context":"Opening episode that establishes the premise, pressure, and first irreversible choice.","unitKind":"episode","sequenceKey":"main","ordinal":1,"actLabel":"Act I","synopsis":"Mara witnesses a public memory tithe and realizes her brother is next.","dramaticQuestion":"Will Mara expose the tithe before her family is erased?","storyFunction":"setup","outcome":"Mara steals a forbidden ledger and becomes hunted by the throne.","consequences":[{"cause":"Mara steals the tithe ledger.","effect":"The shadow guard marks her family as traitors.","affectedEntityKeys":["mara_veyr"],"threadKeys":[],"consequenceType":"plot"}],"characterArcDeltas":[{"actorKey":"mara_veyr","before":"Mara survives by staying invisible.","pressure":"Her brother is selected for the tithe.","choice":"She steals the ledger in public.","after":"She accepts becoming visible is the price of resistance."}],"openLoops":["Who built the tithe ledger?"],"resolvedLoops":[]}',
+    'Example relationship line: {"kind":"relationship","id":"link_mara_seeks_artifact","source":"mara_veyr","target":"memory_artifact","verb":"seeks","notes":"The artifact is tied to Mara central objective."}',
     'Use only these operation types: upsert_entity, upsert_relationship, update_world_wiki_metadata, assistant_note.',
     'Valid entity nodeType values are actor, group, place, object, concept, event, sequence_unit.',
     'Never use character, location, faction, artifact, lore, wiki, title, or beat as nodeType; map them to actor, place, group, object, concept, update_world_wiki_metadata, or sequence_unit.',
@@ -9946,10 +9953,10 @@ function buildStreamedInitialSeedInput(input: {
     existingCanon: input.existingCanon ?? null,
     outputContract: {
       format: 'newline_delimited_json',
-      records: ['note', 'op', 'sequence_unit', 'relationship', 'summary'],
+      records: ['note', 'wiki', 'entity', 'sequence_unit', 'relationship', 'summary', 'skip', 'op'],
       requirement: 'one JSON object per line',
-      compactRecordPreference: 'For sequence units and relationships, prefer compact sequence_unit and relationship records. Do not emit deeply nested PromptToWorldOp JSON unless necessary.',
-      storySequenceUnitRequirement: 'For nodeType sequence_unit, payload.entity.customProperties.sequence must include unitKind, sequenceKey, ordinal, actLabel, synopsis, dramaticQuestion, storyFunction, outcome, consequences[0].cause/effect, characterArcDeltas[0].actorKey/before/pressure/choice/after, openLoops, resolvedLoops, and scriptExpansionReady.',
+      compactRecordPreference: 'Prefer compact wiki, entity, sequence_unit, and relationship records. Do not emit deeply nested PromptToWorldOp JSON unless necessary.',
+      storySequenceUnitRequirement: 'For sequence_unit records, include unitKind, sequenceKey, ordinal, actLabel, synopsis, dramaticQuestion, storyFunction, outcome, consequences[0].cause/effect, characterArcDeltas[0].actorKey/before/pressure/choice/after, openLoops, and resolvedLoops.',
     },
   })
 }
@@ -10004,43 +10011,161 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function asStringArray(value: unknown) {
-  if (!Array.isArray(value)) return []
-  return value.map((entry) => String(entry).trim()).filter(Boolean)
+  if (Array.isArray(value)) return value.map((entry) => String(entry).trim()).filter(Boolean)
+  if (typeof value === 'string') return value.split(',').map((entry) => entry.trim()).filter(Boolean)
+  return []
+}
+
+function asCompactString(value: unknown) {
+  if (typeof value === 'string') return value.trim()
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value).trim()
+  return ''
+}
+
+function asFiniteNumber(value: unknown) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  return null
+}
+
+function coerceStreamNodeType(value: unknown) {
+  const raw = asCompactString(value).toLowerCase()
+  const aliases: Record<string, string> = {
+    character: 'actor',
+    person: 'actor',
+    npc: 'actor',
+    cast: 'actor',
+    location: 'place',
+    environment: 'place',
+    faction: 'group',
+    organization: 'group',
+    artefact: 'object',
+    artifact: 'object',
+    item: 'object',
+    prop: 'object',
+    lore: 'concept',
+    idea: 'concept',
+    beat: 'sequence_unit',
+    episode: 'sequence_unit',
+    chapter: 'sequence_unit',
+    mission: 'sequence_unit',
+  }
+  return aliases[raw] ?? raw
+}
+
+function normalizeStreamWikiMetadata(metadata: Record<string, unknown>) {
+  const normalizedMetadata = { ...metadata }
+  for (const key of ['title', 'logline', 'synopsis', 'genre', 'coreConflict', 'roleLabel', 'shortSummary', 'generatedFromFingerprint', 'updatedByTurnId']) {
+    const rawValue = normalizedMetadata[key]
+    if (Array.isArray(rawValue)) {
+      normalizedMetadata[key] = rawValue.map((entry) => String(entry).trim()).filter(Boolean).join(', ')
+    }
+  }
+  for (const key of ['themes', 'visualMotifs', 'toneTags']) {
+    const rawValue = normalizedMetadata[key]
+    if (typeof rawValue === 'string') {
+      normalizedMetadata[key] = rawValue.split(',').map((entry) => entry.trim()).filter(Boolean)
+    }
+  }
+  return normalizedMetadata
+}
+
+function normalizeCompactStreamedWikiEnvelope(value: Record<string, unknown>) {
+  if (value.kind !== 'wiki') return value
+  const title = asCompactString(value.title)
+  const id = asCompactString(value.id) || 'wiki_foundation'
+  return {
+    kind: 'op',
+    op: {
+      id: slugifyStreamKey(id) || 'wiki_foundation',
+      op: 'update_world_wiki_metadata',
+      payload: {
+        target: 'project',
+        metadata: normalizeStreamWikiMetadata({
+          title,
+          logline: asCompactString(value.logline),
+          synopsis: asCompactString(value.synopsis),
+          genre: Array.isArray(value.genre) ? asStringArray(value.genre).join(', ') : asCompactString(value.genre),
+          themes: asStringArray(value.themes),
+          toneTags: asStringArray(value.toneTags ?? value.tone),
+          coreConflict: asCompactString(value.coreConflict ?? value.conflict),
+          visualMotifs: asStringArray(value.visualMotifs ?? value.motifs),
+          sectionOrder: Array.isArray(value.sectionOrder) ? value.sectionOrder : [],
+          wikiSections: isRecord(value.wikiSections) ? value.wikiSections : {},
+        }),
+        reason: 'Initial seed world wiki metadata.',
+      },
+    },
+  }
+}
+
+function normalizeCompactStreamedEntityEnvelope(value: Record<string, unknown>) {
+  if (value.kind !== 'entity') return value
+  const name = asCompactString(value.name)
+  const nodeType = coerceStreamNodeType(value.nodeType ?? value.type)
+  const id = asCompactString(value.id ?? value.key ?? value.entityKey) || slugifyStreamKey(name)
+  const stableKey = slugifyStreamKey(id)
+  if (!stableKey || !name || nodeType === 'sequence_unit') return value
+  return {
+    kind: 'op',
+    op: {
+      id: `create_${stableKey}`,
+      op: 'upsert_entity',
+      payload: {
+        targetEntityKey: stableKey,
+        entity: {
+          nodeType,
+          name,
+          summary: asCompactString(value.summary),
+          context: asCompactString(value.context),
+          aliases: asStringArray(value.aliases),
+          tags: asStringArray(value.tags),
+          customProperties: isRecord(value.customProperties) ? value.customProperties : {},
+          metadata: isRecord(value.metadata) ? value.metadata : {},
+        },
+      },
+    },
+  }
 }
 
 function normalizeCompactStreamedSequenceEnvelope(value: Record<string, unknown>) {
   if (value.kind !== 'sequence_unit') return value
-  const id = typeof value.id === 'string' && value.id.trim() ? value.id.trim() : ''
-  const ordinal = typeof value.ordinal === 'number' && Number.isFinite(value.ordinal)
-    ? Math.max(1, Math.floor(value.ordinal))
-    : null
-  const unitKind = typeof value.unitKind === 'string' && value.unitKind.trim()
-    ? value.unitKind.trim()
-    : 'sequence_unit'
+  const id = asCompactString(value.id ?? value.key ?? value.entityKey)
+  const ordinalValue = asFiniteNumber(value.ordinal ?? value.index ?? value.sequenceOrdinal)
+  const ordinal = ordinalValue ? Math.max(1, Math.floor(ordinalValue)) : null
+  const unitKind = asCompactString(value.unitKind ?? value.unit_kind ?? value.type) || 'sequence_unit'
   const stableKey = id
     ? slugifyStreamKey(id)
     : ordinal
       ? `${slugifyStreamKey(unitKind) || 'sequence_unit'}_${String(ordinal).padStart(2, '0')}`
       : ''
   if (!stableKey) return value
-  const name = typeof value.name === 'string' && value.name.trim()
-    ? value.name.trim()
-    : `${unitKind.replace(/_/g, ' ')} ${ordinal ?? ''}`.trim()
-  const summary = typeof value.summary === 'string' ? value.summary.trim() : ''
-  const context = typeof value.context === 'string' ? value.context.trim() : ''
+  const name = asCompactString(value.name ?? value.title)
+    || `${unitKind.replace(/_/g, ' ')} ${ordinal ?? ''}`.trim()
+  const summary = asCompactString(value.summary)
+  const context = asCompactString(value.context)
   const sequence = {
     unitKind,
-    sequenceKey: typeof value.sequenceKey === 'string' && value.sequenceKey.trim() ? value.sequenceKey.trim() : 'main',
+    sequenceKey: asCompactString(value.sequenceKey ?? value.sequence_key) || 'main',
     ordinal: ordinal ?? 1,
-    actLabel: typeof value.actLabel === 'string' ? value.actLabel.trim() : '',
-    synopsis: typeof value.synopsis === 'string' ? value.synopsis.trim() : '',
-    dramaticQuestion: typeof value.dramaticQuestion === 'string' ? value.dramaticQuestion.trim() : '',
-    storyFunction: typeof value.storyFunction === 'string' ? value.storyFunction.trim() : '',
-    outcome: typeof value.outcome === 'string' ? value.outcome.trim() : '',
+    actLabel: asCompactString(value.actLabel ?? value.act),
+    synopsis: asCompactString(value.synopsis),
+    dramaticQuestion: asCompactString(value.dramaticQuestion ?? value.dramatic_question),
+    storyFunction: asCompactString(value.storyFunction ?? value.story_function ?? value.function),
+    outcome: asCompactString(value.outcome),
     consequences: Array.isArray(value.consequences) ? value.consequences : [],
-    characterArcDeltas: Array.isArray(value.characterArcDeltas) ? value.characterArcDeltas : [],
-    openLoops: asStringArray(value.openLoops),
-    resolvedLoops: asStringArray(value.resolvedLoops),
+    characterArcDeltas: Array.isArray(value.characterArcDeltas)
+      ? value.characterArcDeltas
+      : Array.isArray(value.character_arc_deltas)
+        ? value.character_arc_deltas
+        : Array.isArray(value.arcDeltas)
+          ? value.arcDeltas
+          : [],
+    openLoops: asStringArray(value.openLoops ?? value.open_loops),
+    resolvedLoops: asStringArray(value.resolvedLoops ?? value.resolved_loops),
     scriptExpansionReady: value.scriptExpansionReady !== false,
   }
   return {
@@ -10067,13 +10192,12 @@ function normalizeCompactStreamedSequenceEnvelope(value: Record<string, unknown>
 
 function normalizeCompactStreamedRelationshipEnvelope(value: Record<string, unknown>) {
   if (value.kind !== 'relationship') return value
-  const source = typeof value.source === 'string' ? value.source.trim() : ''
-  const target = typeof value.target === 'string' ? value.target.trim() : ''
-  const verb = typeof value.verb === 'string' ? value.verb.trim() : ''
+  const source = asCompactString(value.source ?? value.sourceEntityKey ?? value.from)
+  const target = asCompactString(value.target ?? value.targetEntityKey ?? value.to)
+  const verb = asCompactString(value.verb ?? value.relationshipVerb ?? value.type)
   if (!source || !target || !verb) return value
-  const id = typeof value.id === 'string' && value.id.trim()
-    ? value.id.trim()
-    : `link_${source}_${verb}_${target}`
+  const id = asCompactString(value.id)
+    || `link_${source}_${verb}_${target}`
   return {
     kind: 'op',
     op: {
@@ -10084,10 +10208,17 @@ function normalizeCompactStreamedRelationshipEnvelope(value: Record<string, unkn
           sourceEntityKey: source,
           targetEntityKey: target,
           verb,
-          notes: typeof value.notes === 'string' ? value.notes.trim() : '',
-          confidence: typeof value.confidence === 'number' ? value.confidence : 0.82,
-          tags: asStringArray(value.tags),
-          metadata: isRecord(value.metadata) ? value.metadata : {},
+          direction: ['outbound', 'inbound', 'bidirectional'].includes(asCompactString(value.direction))
+            ? asCompactString(value.direction)
+            : 'outbound',
+          notes: asCompactString(value.notes ?? value.note),
+          confidence: asFiniteNumber(value.confidence) ?? 0.82,
+          strength: asFiniteNumber(value.strength),
+          metadata: isRecord(value.metadata)
+            ? value.metadata
+            : {
+                sequence: isRecord(value.sequence) ? value.sequence : undefined,
+              },
         },
       },
     },
@@ -10096,35 +10227,46 @@ function normalizeCompactStreamedRelationshipEnvelope(value: Record<string, unkn
 
 function normalizeStreamedEnvelope(value: unknown) {
   if (isRecord(value)) {
+    const compactWiki = normalizeCompactStreamedWikiEnvelope(value)
+    if (compactWiki !== value) return compactWiki
+    const compactEntity = normalizeCompactStreamedEntityEnvelope(value)
+    if (compactEntity !== value) return compactEntity
     const compactSequence = normalizeCompactStreamedSequenceEnvelope(value)
     if (compactSequence !== value) return compactSequence
     const compactRelationship = normalizeCompactStreamedRelationshipEnvelope(value)
     if (compactRelationship !== value) return compactRelationship
+    if (value.kind === 'skip') return value
   }
   if (!isRecord(value) || value.kind !== 'op' || !isRecord(value.op)) return value
+  if (value.op.op === 'upsert_entity' && isRecord(value.op.payload) && isRecord(value.op.payload.entity)) {
+    const entity = value.op.payload.entity
+    const nodeType = coerceStreamNodeType(entity.nodeType)
+    return {
+      ...value,
+      op: {
+        ...value.op,
+        payload: {
+          ...value.op.payload,
+          entity: {
+            ...entity,
+            nodeType,
+            tags: asStringArray(entity.tags),
+            aliases: asStringArray(entity.aliases),
+          },
+        },
+      },
+    }
+  }
   if (value.op.op !== 'update_world_wiki_metadata' || !isRecord(value.op.payload)) return value
   const metadata = isRecord(value.op.payload.metadata) ? value.op.payload.metadata : null
   if (!metadata) return value
-  const normalizedMetadata = { ...metadata }
-  for (const key of ['title', 'logline', 'synopsis', 'genre', 'coreConflict', 'roleLabel', 'shortSummary', 'generatedFromFingerprint', 'updatedByTurnId']) {
-    const rawValue = normalizedMetadata[key]
-    if (Array.isArray(rawValue)) {
-      normalizedMetadata[key] = rawValue.map((entry) => String(entry).trim()).filter(Boolean).join(', ')
-    }
-  }
-  for (const key of ['themes', 'visualMotifs', 'toneTags']) {
-    const rawValue = normalizedMetadata[key]
-    if (typeof rawValue === 'string') {
-      normalizedMetadata[key] = rawValue.split(',').map((entry) => entry.trim()).filter(Boolean)
-    }
-  }
   return {
     ...value,
     op: {
       ...value.op,
       payload: {
         ...value.op.payload,
-        metadata: normalizedMetadata,
+        metadata: normalizeStreamWikiMetadata(metadata),
       },
     },
   }
@@ -10157,6 +10299,205 @@ function normalizeStreamedSequenceOpKeys(op: PromptToWorldOp): PromptToWorldOp {
       targetEntityKey: stableKey,
     },
   }
+}
+
+const streamRepairRecordSchema = z.discriminatedUnion('kind', [
+  streamWikiRecordSchema,
+  streamEntityRecordSchema,
+  streamSequenceUnitRecordSchema,
+  streamRelationshipRecordSchema,
+  streamRepairSkipRecordSchema,
+  z.object({
+    kind: z.literal('note'),
+    message: z.string().min(1),
+  }),
+  z.object({
+    kind: z.literal('summary'),
+    assistantSummary: z.string().default(''),
+  }),
+])
+
+const streamRepairResponseSchema = z.object({
+  record: streamRepairRecordSchema,
+})
+
+function compactSchemaDiagnostics(error: z.ZodError) {
+  return error.issues
+    .map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`)
+    .slice(0, 6)
+}
+
+function balancedJsonScan(value: string) {
+  let depth = 0
+  let inString = false
+  let escaped = false
+  for (const char of value) {
+    if (inString) {
+      if (escaped) {
+        escaped = false
+      } else if (char === '\\') {
+        escaped = true
+      } else if (char === '"') {
+        inString = false
+      }
+      continue
+    }
+    if (char === '"') {
+      inString = true
+    } else if (char === '{' || char === '[') {
+      depth += 1
+    } else if (char === '}' || char === ']') {
+      depth -= 1
+    }
+  }
+  return { depth, inString, escaped }
+}
+
+function isLikelyTruncatedStreamRecord(value: string) {
+  const normalized = normalizeStreamLine(value)
+  if (!normalized.endsWith('}')) return true
+  const scan = balancedJsonScan(normalized)
+  return scan.depth !== 0 || scan.inString || scan.escaped
+}
+
+function deterministicJsonRepairCandidates(record: string) {
+  const base = normalizeStreamLine(record)
+  const candidates = new Set<string>()
+  const addCandidate = (value: string) => {
+    const trimmed = value.trim()
+    if (trimmed) candidates.add(trimmed)
+  }
+  addCandidate(base)
+  const firstBrace = base.indexOf('{')
+  const lastBrace = base.lastIndexOf('}')
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    addCandidate(base.slice(firstBrace, lastBrace + 1))
+  }
+  for (const candidate of [...candidates]) {
+    addCandidate(candidate
+      .replace(/[“”]/g, '"')
+      .replace(/[‘’]/g, "'")
+      .replace(/,\s*([}\]])/g, '$1'))
+  }
+  for (const candidate of [...candidates]) {
+    addCandidate(candidate.replace(/\r?\n/g, '\\n'))
+  }
+  return [...candidates]
+}
+
+function parseJsonWithDeterministicRepair(record: string) {
+  let firstError: unknown = null
+  for (const candidate of deterministicJsonRepairCandidates(record)) {
+    try {
+      return { value: JSON.parse(candidate) as unknown, repairedText: candidate, error: null as unknown }
+    } catch (error) {
+      firstError ??= error
+    }
+  }
+  return { value: null as unknown, repairedText: null as string | null, error: firstError }
+}
+
+function validateNormalizedStreamRecord(value: unknown) {
+  const candidate = normalizeStreamedEnvelope(value)
+  if (isRecord(candidate) && candidate.kind === 'skip') {
+    const skip = streamRepairSkipRecordSchema.safeParse(candidate)
+    return skip.success
+      ? { envelope: null as WorldPromptStreamGraphOpEnvelope | null, skipReason: skip.data.reason || 'Skipped stream record.' }
+      : { envelope: null, error: skip.error }
+  }
+  const parsed = worldPromptStreamGraphOpEnvelopeSchema.safeParse(candidate)
+  if (!parsed.success) {
+    return { envelope: null as WorldPromptStreamGraphOpEnvelope | null, error: parsed.error }
+  }
+  if (parsed.data.kind === 'op' || parsed.data.kind === 'note' || parsed.data.kind === 'summary') {
+    return { envelope: parsed.data as WorldPromptStreamGraphOpEnvelope, error: null as z.ZodError | null }
+  }
+  return {
+    envelope: null as WorldPromptStreamGraphOpEnvelope | null,
+    error: new z.ZodError([{
+      code: 'custom',
+      path: ['kind'],
+      message: `Compact ${parsed.data.kind} record could not be normalized into a graph op.`,
+      input: candidate,
+    }]),
+  }
+}
+
+function shouldAttemptMalformedRecordRepair(input: {
+  record: string
+  errorMessage: string
+  repairsUsed: number
+  maxRepairs: number
+}) {
+  const normalized = normalizeStreamLine(input.record)
+  if (input.repairsUsed >= input.maxRepairs) return false
+  if (normalized.length < 20 || normalized.length > 12_000) return false
+  if (isLikelyTruncatedStreamRecord(normalized)) return false
+  if (!/"kind"\s*:/.test(normalized)) return false
+  if (!/"(wiki|entity|sequence_unit|relationship|note|summary|skip|op)"/.test(normalized)) return false
+  if (/unterminated string|unexpected end|end of json input/i.test(input.errorMessage)) return false
+  return true
+}
+
+async function repairMalformedStreamRecordWithLlm(input: {
+  model: string
+  record: string
+  errorMessage: string
+  phase: WorldPromptGenerationStepPhase
+  jobId: string
+  turnId: string
+  currentCounts: Record<string, unknown>
+  existingCanon: unknown
+  usageRecorder: WorldPromptTokenUsageRecorder
+}) {
+  const repairModel = Deno.env.get('WORLD_PROMPT_STREAM_REPAIR_MODEL')?.trim() || input.model
+  const schema = normalizeStrictJsonSchema(z.toJSONSchema(streamRepairResponseSchema))
+  const response = await runOpenAiResponses({
+    model: repairModel,
+    input: JSON.stringify({
+      malformedRecord: normalizeStreamLine(input.record).slice(0, 12_000),
+      parseOrValidationError: input.errorMessage,
+      phase: input.phase,
+      currentCounts: input.currentCounts,
+      existingCanon: input.existingCanon,
+      acceptedCompactKinds: ['wiki', 'entity', 'sequence_unit', 'relationship', 'note', 'summary', 'skip'],
+    }),
+    instructions: [
+      'Repair exactly one malformed streamed GraphCore generation record.',
+      'Return a valid compact record in the record field, or {"kind":"skip","reason":"..."} if the block is clearly incomplete or unsafe.',
+      'Only recover syntax and field-shape problems from content already present in malformedRecord.',
+      'Do not invent missing canon. Do not add extra records. Do not return PromptToWorldOp unless the malformed record already used that shape.',
+      'Prefer compact wiki, entity, sequence_unit, and relationship records.',
+      'For sequence_unit, preserve ordinal/title/content and ensure synopsis, outcome, consequences, and characterArcDeltas are present only if recoverable from the malformed block.',
+    ].join('\n'),
+    text: {
+      format: {
+        type: 'json_schema',
+        name: 'world_prompt_stream_record_repair',
+        schema,
+      },
+    },
+    reasoning: { effort: 'low' },
+    metadata: {
+      feature: 'world-prompt',
+      surface: 'stream-record-repair',
+      jobId: input.jobId,
+      turnId: input.turnId,
+    },
+    store: false,
+    timeoutMs: 45_000,
+  })
+  input.usageRecorder.record({
+    surface: 'world-prompt-stream-record-repair',
+    model: repairModel,
+    response,
+    metadata: { jobId: input.jobId, turnId: input.turnId, phase: input.phase },
+  })
+  if (!response.response.ok) return null
+  const parsedJson = extractJsonBlock(response.outputText)
+  const validated = parsedJson ? streamRepairResponseSchema.safeParse(parsedJson) : null
+  if (!validated?.success) return null
+  return validated.data.record
 }
 
 function extractCompleteStreamJsonRecords(buffer: string) {
@@ -10400,6 +10741,7 @@ async function updateGenerationJobProgress(input: {
   status?: WorldPromptGenerationJob['status']
   errorMessage?: string | null
   completed?: boolean
+  metadata?: Record<string, unknown> | null
 }) {
   const now = new Date().toISOString()
   const changes: Record<string, unknown> = {
@@ -10411,6 +10753,7 @@ async function updateGenerationJobProgress(input: {
   if (input.status) changes.status = input.status
   if (input.errorMessage !== undefined) changes.error_message = input.errorMessage
   if (input.completed) changes.completed_at = now
+  if (input.metadata) changes.metadata = input.metadata
   return updateGenerationJob(input.client, input.jobId, changes)
 }
 
@@ -10630,6 +10973,51 @@ async function runWorldPromptGenerationJob(input: {
   let preferredAutoViewKey: string | null = null
   let streamRecordBuffer = ''
   let lastStreamHeartbeatAt = 0
+  const repairDiagnostics: Array<Record<string, unknown>> = []
+  let malformedRecordCount = 0
+  let repairAttemptCount = 0
+  let repairedRecordCount = 0
+  let unrepairedRecordCount = 0
+  let coverageContinuationCount = 0
+
+  const repairMetadata = () => ({
+    malformedRecordCount,
+    repairAttemptCount,
+    repairedRecordCount,
+    unrepairedRecordCount,
+    coverageContinuationCount,
+    repairDiagnostics: repairDiagnostics.slice(-20),
+  })
+
+  const rememberRepairDiagnostic = (diagnostic: Record<string, unknown>) => {
+    repairDiagnostics.push({
+      phase,
+      stepId: step?.id ?? null,
+      recordedAt: new Date().toISOString(),
+      ...diagnostic,
+    })
+    if (repairDiagnostics.length > 60) repairDiagnostics.splice(0, repairDiagnostics.length - 60)
+  }
+
+  const persistRepairDiagnostics = async () => {
+    const metadata = {
+      ...(job.metadata ?? {}),
+      ...repairMetadata(),
+    }
+    job = await updateGenerationJob(input.client, job.id, {
+      metadata,
+      heartbeat_at: new Date().toISOString(),
+    })
+    if (step) {
+      step = await updateGenerationJobStep(input.client, step.id, {
+        metadata: {
+          ...(step.metadata ?? {}),
+          ...repairMetadata(),
+        },
+        heartbeat_at: new Date().toISOString(),
+      })
+    }
+  }
 
   const updateProgress = async (cursor?: string | null) => {
     const aggregateCounts = mergeStreamCounts(startingJobCounts, counts)
@@ -10846,35 +11234,107 @@ async function runWorldPromptGenerationJob(input: {
   const processStreamRecord = async (record: string) => {
     const normalized = normalizeStreamLine(record)
     if (!normalized) return
-    let parsed: unknown
-    try {
-      parsed = JSON.parse(normalized)
-    } catch (error) {
+    const parsed = parseJsonWithDeterministicRepair(normalized)
+    let validation = parsed.error
+      ? { envelope: null as WorldPromptStreamGraphOpEnvelope | null, error: parsed.error as unknown }
+      : validateNormalizedStreamRecord(parsed.value)
+    const firstErrorMessage = validation.error instanceof z.ZodError
+      ? compactSchemaDiagnostics(validation.error).join('; ')
+      : validation.error instanceof Error
+        ? validation.error.message
+        : validation.error
+          ? String(validation.error)
+          : ''
+    if (!validation.envelope && 'skipReason' in validation && validation.skipReason) {
+      counts.skipped += 1
+      rememberRepairDiagnostic({
+        kind: 'skip',
+        reason: validation.skipReason,
+        sample: normalized.slice(0, 500),
+      })
+      await persistRepairDiagnostics()
+      await updateProgress(null)
+      return
+    }
+    let repaired = false
+    if (!validation.envelope && shouldAttemptMalformedRecordRepair({
+      record: normalized,
+      errorMessage: firstErrorMessage,
+      repairsUsed: repairAttemptCount,
+      maxRepairs: 5,
+    })) {
+      malformedRecordCount += 1
+      repairAttemptCount += 1
+      try {
+        const repairedRecord = await repairMalformedStreamRecordWithLlm({
+          model,
+          record: normalized,
+          errorMessage: firstErrorMessage,
+          phase,
+          jobId: job.id,
+          turnId: turn.id,
+          currentCounts: counts,
+          existingCanon: buildStreamedGenerationCanonLedger(mutableSnapshot),
+          usageRecorder,
+        })
+        if (repairedRecord) {
+          const repairedValidation = validateNormalizedStreamRecord(repairedRecord)
+          if (repairedValidation.envelope) {
+            validation = repairedValidation
+            repaired = true
+            repairedRecordCount += 1
+            rememberRepairDiagnostic({
+              kind: 'repaired',
+              recordKind: isRecord(repairedRecord) ? repairedRecord.kind : null,
+              originalError: firstErrorMessage,
+              sample: normalized.slice(0, 500),
+            })
+          } else if ('skipReason' in repairedValidation && repairedValidation.skipReason) {
+            counts.skipped += 1
+            rememberRepairDiagnostic({
+              kind: 'repair_skip',
+              reason: repairedValidation.skipReason,
+              originalError: firstErrorMessage,
+              sample: normalized.slice(0, 500),
+            })
+            await persistRepairDiagnostics()
+            await updateProgress(null)
+            return
+          }
+        }
+      } catch (repairError) {
+        console.warn('[GraphCore] streamed generation repair failed', {
+          jobId: job.id,
+          stepId: step?.id ?? null,
+          phase,
+          error: repairError instanceof Error ? repairError.message : String(repairError),
+        })
+      }
+    } else if (!validation.envelope && firstErrorMessage) {
+      malformedRecordCount += 1
+    }
+    if (!validation.envelope) {
       counts.failed += 1
+      unrepairedRecordCount += 1
+      rememberRepairDiagnostic({
+        kind: parsed.error ? 'malformed_unrepaired' : 'schema_unrepaired',
+        error: firstErrorMessage,
+        truncated: isLikelyTruncatedStreamRecord(normalized),
+        sample: normalized.slice(0, 500),
+      })
       console.warn('[GraphCore] skipped malformed streamed generation record', {
         jobId: job.id,
         stepId: step?.id ?? null,
         phase,
-        error: error instanceof Error ? error.message : String(error),
+        error: firstErrorMessage,
         sample: normalized.slice(0, 500),
       })
+      await persistRepairDiagnostics()
       await updateProgress(null)
       return
     }
-    const normalizedEnvelopeCandidate = normalizeStreamedEnvelope(parsed)
-    const envelope = worldPromptStreamGraphOpEnvelopeSchema.safeParse(normalizedEnvelopeCandidate)
-    if (!envelope.success) {
-      counts.failed += 1
-      console.warn('[GraphCore] skipped streamed generation record that did not match the graph-op contract', {
-        jobId: job.id,
-        stepId: step?.id ?? null,
-        phase,
-        diagnostics: envelope.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).slice(0, 5),
-      })
-      await updateProgress(streamEnvelopeToOpId(normalizedEnvelopeCandidate as WorldPromptStreamGraphOpEnvelope))
-      return
-    }
-    await handleEnvelope(envelope.data)
+    if (repaired) await persistRepairDiagnostics()
+    await handleEnvelope(validation.envelope)
   }
 
   try {
@@ -10989,6 +11449,14 @@ async function runWorldPromptGenerationJob(input: {
 
     const sequenceTarget = minimumInitialSeedSequenceUnits(inference)
     if (phase === 'full_stream' && sequenceTarget > 0 && counts.sequenceUnits < sequenceTarget) {
+      coverageContinuationCount += 1
+      rememberRepairDiagnostic({
+        kind: 'coverage_continuation',
+        target: 'sequence_units',
+        current: counts.sequenceUnits,
+        required: sequenceTarget,
+      })
+      await persistRepairDiagnostics()
       await writeEvent('planner_status', {
         plannerStatus: 'planning',
         plannerProgress: {
@@ -11010,6 +11478,13 @@ async function runWorldPromptGenerationJob(input: {
     }
 
     if (phase === 'full_stream' && counts.sequenceUnits > 0 && counts.relationships === 0) {
+      coverageContinuationCount += 1
+      rememberRepairDiagnostic({
+        kind: 'coverage_continuation',
+        target: 'relationships',
+        current: counts.relationships,
+      })
+      await persistRepairDiagnostics()
       await writeEvent('planner_status', {
         plannerStatus: 'planning',
         plannerProgress: {
@@ -11080,6 +11555,7 @@ async function runWorldPromptGenerationJob(input: {
     const updatedJobMetadata = {
       ...(job.metadata ?? {}),
       snapshot: mutableSnapshot,
+      ...repairMetadata(),
       lastCompletedStep: step
         ? {
             id: step.id,
@@ -11099,6 +11575,10 @@ async function runWorldPromptGenerationJob(input: {
         counts,
         token_usage: tokenUsage ?? {},
         latest_applied_op_cursor: job.latestAppliedOpCursor,
+        metadata: {
+          ...(step.metadata ?? {}),
+          ...repairMetadata(),
+        },
       })
       job = await updateGenerationJob(input.client, job.id, {
         status: 'running',
@@ -11144,6 +11624,8 @@ async function runWorldPromptGenerationJob(input: {
 
     const finalSummary = assistantSummary || [
       `Created ${aggregateCounts.entities} entities, ${aggregateCounts.sequenceUnits} sequence units, and ${aggregateCounts.relationships} relationships.`,
+      repairedRecordCount > 0 ? `${repairedRecordCount} streamed records were repaired.` : null,
+      coverageContinuationCount > 0 ? `${coverageContinuationCount} coverage continuation pass${coverageContinuationCount === 1 ? '' : 'es'} ran.` : null,
       aggregateCounts.failed > 0 ? `${aggregateCounts.failed} streamed records were skipped.` : null,
     ].filter(Boolean).join(' ')
     const assistantMessage = await insertPromptMessage({
@@ -11218,6 +11700,7 @@ async function runWorldPromptGenerationJob(input: {
       status: finalJobStatus,
       completed: true,
       errorMessage: finalJobStatus === 'failed' ? 'Initial world generation did not produce valid graph records.' : null,
+      metadata: updatedJobMetadata,
     })
     if (step) {
       step = await updateGenerationJobStep(input.client, step.id, {
@@ -11226,6 +11709,10 @@ async function runWorldPromptGenerationJob(input: {
         counts,
         token_usage: tokenUsage ?? {},
         error_message: finalJobStatus === 'failed' ? 'Initial world generation did not produce valid graph records.' : null,
+        metadata: {
+          ...(step.metadata ?? {}),
+          ...repairMetadata(),
+        },
       })
     }
     await writeEvent('planner_status', {
@@ -11259,6 +11746,10 @@ async function runWorldPromptGenerationJob(input: {
         counts,
         token_usage: usageRecorder.summary() ?? {},
         heartbeat_at: new Date().toISOString(),
+        metadata: {
+          ...(step.metadata ?? {}),
+          ...repairMetadata(),
+        },
       })
       job = await updateGenerationJob(input.client, job.id, {
         status: isFlyGenerationJob(job) ? 'queued' : 'running',
@@ -11266,6 +11757,7 @@ async function runWorldPromptGenerationJob(input: {
         metadata: {
           ...(job.metadata ?? {}),
           snapshot: mutableSnapshot,
+          ...repairMetadata(),
           lastFailedStep: {
             id: step.id,
             key: step.stepKey,
@@ -11304,6 +11796,10 @@ async function runWorldPromptGenerationJob(input: {
         error_message: message,
         counts,
         token_usage: usageRecorder.summary() ?? {},
+        metadata: {
+          ...(step.metadata ?? {}),
+          ...repairMetadata(),
+        },
       })
       job = await updateGenerationJob(input.client, job.id, {
         status: 'running',
@@ -11311,6 +11807,7 @@ async function runWorldPromptGenerationJob(input: {
         metadata: {
           ...(job.metadata ?? {}),
           snapshot: mutableSnapshot,
+          ...repairMetadata(),
           skippedStep: {
             id: step.id,
             key: step.stepKey,
@@ -11358,6 +11855,10 @@ async function runWorldPromptGenerationJob(input: {
         error_message: cancelled ? null : message,
         counts,
         token_usage: usageRecorder.summary() ?? {},
+        metadata: {
+          ...(step.metadata ?? {}),
+          ...repairMetadata(),
+        },
       })
     }
     await updateGenerationJobProgress({
@@ -11368,6 +11869,11 @@ async function runWorldPromptGenerationJob(input: {
       status: nextStatus,
       completed: true,
       errorMessage: cancelled ? null : message,
+      metadata: {
+        ...(job.metadata ?? {}),
+        snapshot: mutableSnapshot,
+        ...repairMetadata(),
+      },
     })
     await writeEvent(nextTurnStatus === 'failed' ? 'turn_failed' : 'turn_completed', {
       note: finalSummary,

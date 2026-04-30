@@ -84,6 +84,60 @@ test('streamed generation schemas accept jobs and graph-op envelopes', () => {
   assert.equal(step.phase, 'full_stream')
 })
 
+test('streamed generation schemas accept compact stream records', () => {
+  const wiki = worldPromptStreamGraphOpEnvelopeSchema.parse({
+    kind: 'wiki',
+    title: 'The Salt Archive',
+    logline: 'A memory rebel hunts an archive that can unwrite an empire.',
+    synopsis: 'A compact world bible seed.',
+    genre: ['fantasy', 'political thriller'],
+    themes: 'memory, resistance',
+    toneTags: ['cinematic', 'haunted'],
+    coreConflict: 'Memory magic versus imperial control.',
+    visualMotifs: 'salt, black ledgers',
+  })
+  const entity = worldPromptStreamGraphOpEnvelopeSchema.parse({
+    kind: 'entity',
+    key: 'mara_veyr',
+    nodeType: 'actor',
+    name: 'Mara Veyr',
+    summary: 'A memory mage.',
+    tags: 'main cast, protagonist',
+  })
+  const sequence = worldPromptStreamGraphOpEnvelopeSchema.parse({
+    kind: 'sequence_unit',
+    id: 'episode_01',
+    name: 'Episode 1: The Tithe Mark',
+    ordinal: 1,
+    synopsis: 'Mara witnesses the public memory tithe.',
+    outcome: 'Mara steals the ledger and becomes hunted.',
+    consequences: [{ cause: 'Mara steals the ledger.', effect: 'The guard marks her family.' }],
+    characterArcDeltas: [{ actorKey: 'mara_veyr', before: 'Hidden', pressure: 'Family threatened', choice: 'Steals ledger', after: 'Visible rebel' }],
+  })
+  const relationship = worldPromptStreamGraphOpEnvelopeSchema.parse({
+    kind: 'relationship',
+    sourceEntityKey: 'mara_veyr',
+    targetEntityKey: 'salt_archive',
+    relationshipVerb: 'seeks',
+    notes: 'The archive anchors her objective.',
+  })
+  const skip = worldPromptStreamGraphOpEnvelopeSchema.parse({
+    kind: 'skip',
+    reason: 'Malformed source block was too truncated to repair.',
+  })
+
+  assert.equal(wiki.kind, 'wiki')
+  assert.deepEqual(wiki.themes, ['memory', 'resistance'])
+  assert.equal(entity.kind, 'entity')
+  assert.deepEqual(entity.tags, ['main cast', 'protagonist'])
+  assert.equal(sequence.kind, 'sequence_unit')
+  assert.equal(sequence.ordinal, 1)
+  assert.equal(relationship.kind, 'relationship')
+  assert.equal(relationship.verb, undefined)
+  assert.equal(relationship.relationshipVerb, 'seeks')
+  assert.equal(skip.kind, 'skip')
+})
+
 test('streamed generation schemas reject invalid node types and parse status/cancel shapes', () => {
   assert.equal(worldPromptStreamGraphOpEnvelopeSchema.safeParse({
     kind: 'op',

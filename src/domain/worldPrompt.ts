@@ -517,6 +517,88 @@ export const worldPromptWorkItemResultSchema = z.object({
   suggestionCandidates: z.array(looseRecordSchema).default([]),
 })
 
+const streamRecordStringListSchema = z.preprocess((value) => {
+  if (Array.isArray(value)) return value
+  if (typeof value === 'string') {
+    return value.split(',').map((entry) => entry.trim()).filter(Boolean)
+  }
+  return []
+}, z.array(z.string()).default([]))
+
+export const streamWikiRecordSchema = z.object({
+  kind: z.literal('wiki'),
+  id: z.string().optional(),
+  title: z.string().default(''),
+  logline: z.string().default(''),
+  synopsis: z.string().default(''),
+  genre: z.union([z.string(), z.array(z.string())]).default(''),
+  themes: streamRecordStringListSchema,
+  toneTags: streamRecordStringListSchema,
+  coreConflict: z.string().default(''),
+  visualMotifs: streamRecordStringListSchema,
+  sectionOrder: z.array(z.string()).default([]),
+  wikiSections: looseRecordSchema.default({}),
+}).catchall(z.unknown())
+
+export const streamEntityRecordSchema = z.object({
+  kind: z.literal('entity'),
+  id: z.string().optional(),
+  key: z.string().optional(),
+  nodeType: worldEntityNodeTypeSchema,
+  name: z.string().min(1),
+  summary: z.string().default(''),
+  context: z.string().default(''),
+  aliases: streamRecordStringListSchema,
+  tags: streamRecordStringListSchema,
+  customProperties: looseRecordSchema.default({}),
+  metadata: looseRecordSchema.default({}),
+}).catchall(z.unknown())
+
+export const streamSequenceUnitRecordSchema = z.object({
+  kind: z.literal('sequence_unit'),
+  id: z.string().optional(),
+  key: z.string().optional(),
+  name: z.string().default(''),
+  summary: z.string().default(''),
+  context: z.string().default(''),
+  unitKind: z.string().default('sequence_unit'),
+  sequenceKey: z.string().default('main'),
+  ordinal: z.number().int().positive().optional(),
+  actLabel: z.string().default(''),
+  synopsis: z.string().default(''),
+  dramaticQuestion: z.string().default(''),
+  storyFunction: z.string().default(''),
+  outcome: z.string().default(''),
+  consequences: z.array(looseRecordSchema).default([]),
+  characterArcDeltas: z.array(looseRecordSchema).default([]),
+  openLoops: streamRecordStringListSchema,
+  resolvedLoops: streamRecordStringListSchema,
+  tags: streamRecordStringListSchema,
+  scriptExpansionReady: z.boolean().default(true),
+}).catchall(z.unknown())
+
+export const streamRelationshipRecordSchema = z.object({
+  kind: z.literal('relationship'),
+  id: z.string().optional(),
+  source: z.string().optional(),
+  target: z.string().optional(),
+  sourceEntityKey: z.string().optional(),
+  targetEntityKey: z.string().optional(),
+  verb: z.string().optional(),
+  relationshipVerb: z.string().optional(),
+  notes: z.string().default(''),
+  direction: z.enum(['outbound', 'inbound', 'bidirectional']).default('outbound'),
+  confidence: z.number().min(0).max(1).nullable().default(null),
+  strength: z.number().min(0).max(1).nullable().default(null),
+  tags: streamRecordStringListSchema,
+  metadata: looseRecordSchema.default({}),
+}).catchall(z.unknown())
+
+export const streamRepairSkipRecordSchema = z.object({
+  kind: z.literal('skip'),
+  reason: z.string().default(''),
+}).catchall(z.unknown())
+
 export const worldPromptStreamGraphOpEnvelopeSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('op'),
@@ -530,6 +612,11 @@ export const worldPromptStreamGraphOpEnvelopeSchema = z.discriminatedUnion('kind
     kind: z.literal('summary'),
     assistantSummary: z.string().default(''),
   }),
+  streamWikiRecordSchema,
+  streamEntityRecordSchema,
+  streamSequenceUnitRecordSchema,
+  streamRelationshipRecordSchema,
+  streamRepairSkipRecordSchema,
 ])
 
 export const worldPromptIncrementalManifestSchema = z.object({
@@ -1124,6 +1211,11 @@ export type WorldPromptIncrementalBuildBrief = z.infer<typeof worldPromptIncreme
 export type WorldPromptBuildLedgerEntry = z.infer<typeof worldPromptBuildLedgerEntrySchema>
 export type WorldPromptWorkItemContext = z.infer<typeof worldPromptWorkItemContextSchema>
 export type WorldPromptStreamGraphOpEnvelope = z.infer<typeof worldPromptStreamGraphOpEnvelopeSchema>
+export type StreamWikiRecord = z.infer<typeof streamWikiRecordSchema>
+export type StreamEntityRecord = z.infer<typeof streamEntityRecordSchema>
+export type StreamSequenceUnitRecord = z.infer<typeof streamSequenceUnitRecordSchema>
+export type StreamRelationshipRecord = z.infer<typeof streamRelationshipRecordSchema>
+export type StreamRepairSkipRecord = z.infer<typeof streamRepairSkipRecordSchema>
 export type WorldPromptWorkItemResult = z.infer<typeof worldPromptWorkItemResultSchema>
 export type WorldPromptTokenBudgetDiagnostics = z.infer<typeof worldPromptTokenBudgetDiagnosticsSchema>
 export type WorldPromptSessionMemoryState = z.infer<typeof worldPromptSessionMemoryStateSchema>
