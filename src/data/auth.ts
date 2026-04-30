@@ -1,4 +1,4 @@
-import type { AuthChangeEvent, Session } from '@supabase/supabase-js'
+import type { AuthChangeEvent, Provider, Session } from '@supabase/supabase-js'
 
 import { appRedirectUrl } from '../shared/appRoutes'
 import { supabase } from '../utils/supabase'
@@ -82,12 +82,19 @@ export async function resendSignupConfirmation(email: string) {
   }
 }
 
-export async function signInWithGoogle() {
+const oauthScopes: Partial<Record<Provider, string>> = {
+  apple: 'name email',
+  discord: 'identify email',
+  github: 'read:user user:email',
+  google: 'email profile',
+}
+
+export async function signInWithOAuthProvider(provider: Provider) {
   const { data, error } = await supabase.auth.signInWithOAuth({
-    provider: 'google',
+    provider,
     options: {
       redirectTo: appRedirectUrl(),
-      scopes: 'email profile',
+      scopes: oauthScopes[provider],
     },
   })
 
@@ -96,6 +103,10 @@ export async function signInWithGoogle() {
   }
 
   return data
+}
+
+export async function signInWithGoogle() {
+  return signInWithOAuthProvider('google')
 }
 
 export async function signOut() {

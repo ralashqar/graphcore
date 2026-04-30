@@ -1,6 +1,6 @@
 import '@xyflow/react/dist/style.css'
 
-import type { AuthChangeEvent, Session } from '@supabase/supabase-js'
+import type { AuthChangeEvent, Provider, Session } from '@supabase/supabase-js'
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react'
 import { authService } from './application/services/authService'
 import { billingService } from './application/services/billingService'
@@ -5017,19 +5017,19 @@ export default function App() {
     }
   }
 
-  async function handleGoogleAuth() {
+  async function handleOAuthAuth(provider: Extract<Provider, 'apple' | 'discord' | 'github' | 'google'>, label: string) {
     setAuthError(null)
     setAuthInfo(null)
 
     try {
-      await authService.signInWithGoogle()
+      await authService.signInWithOAuthProvider(provider)
       setAuthPendingConfirmation(false)
-      setAuthInfo('Redirecting to Google sign-in...')
-    } catch (googleAuthError) {
-      console.error('[GraphCore] google auth failed.', googleAuthError)
-      const message = googleAuthError instanceof Error ? googleAuthError.message : 'Google sign-in failed.'
+      setAuthInfo(`Redirecting to ${label} sign-in...`)
+    } catch (oauthAuthError) {
+      console.error(`[GraphCore] ${provider} auth failed.`, oauthAuthError)
+      const message = oauthAuthError instanceof Error ? oauthAuthError.message : `${label} sign-in failed.`
       if (message.toLowerCase().includes('provider is not enabled')) {
-        setAuthError('Google auth is not enabled in Supabase yet. Enable the Google provider in the dashboard and add your Google OAuth client credentials.')
+        setAuthError(`${label} auth is not enabled in Supabase yet. Enable the ${label} provider in the dashboard and add your OAuth client credentials.`)
         return
       }
       setAuthError(message)
@@ -6415,7 +6415,7 @@ export default function App() {
       ) : null}
       {authOpen ? (
         <Suspense fallback={null}>
-          <AuthDialog authEmail={authEmail} authError={authError} authInfo={authInfo} authMode={authMode} authPassword={authPassword} authPendingConfirmation={authPendingConfirmation} onClose={() => setAuthOpen(false)} onEmailChange={setAuthEmail} onGoogleAuth={handleGoogleAuth} onModeChange={(mode) => { setAuthMode(mode); setAuthError(null); setAuthInfo(null); if (mode !== 'sign_up') setAuthPendingConfirmation(false) }} onPasswordChange={setAuthPassword} onResendConfirmation={handleResendConfirmation} onSubmit={handleAuthSubmit} />
+          <AuthDialog authEmail={authEmail} authError={authError} authInfo={authInfo} authMode={authMode} authPassword={authPassword} authPendingConfirmation={authPendingConfirmation} onClose={() => setAuthOpen(false)} onEmailChange={setAuthEmail} onModeChange={(mode) => { setAuthMode(mode); setAuthError(null); setAuthInfo(null); if (mode !== 'sign_up') setAuthPendingConfirmation(false) }} onOAuthAuth={handleOAuthAuth} onPasswordChange={setAuthPassword} onResendConfirmation={handleResendConfirmation} onSubmit={handleAuthSubmit} />
         </Suspense>
       ) : null}
     </main>

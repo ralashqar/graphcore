@@ -5,6 +5,7 @@ export const authService = {
   resendSignupConfirmation: supabaseAuthAdapter.resendSignupConfirmation,
   sendMagicLink: supabaseAuthAdapter.sendMagicLink,
   signInWithGoogle: supabaseAuthAdapter.signInWithGoogle,
+  signInWithOAuthProvider: supabaseAuthAdapter.signInWithOAuthProvider,
   signInWithPassword: supabaseAuthAdapter.signInWithPassword,
   signOut: supabaseAuthAdapter.signOut,
   signUpWithPassword: supabaseAuthAdapter.signUpWithPassword,
