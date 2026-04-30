@@ -7,6 +7,8 @@ import {
   worldPromptApplyPreviewResponseSchema,
   worldPromptCancelTurnRequestSchema,
   worldPromptCancelTurnResponseSchema,
+  worldPromptCancelGenerationJobRequestSchema,
+  worldPromptCancelGenerationJobResponseSchema,
   promptToWorldOpSchema,
   worldPromptCreateSessionRequestSchema,
   worldPromptCreateSessionResponseSchema,
@@ -25,6 +27,7 @@ import {
   worldPromptSessionSchema,
   worldPromptSessionFocusStateSchema,
   worldPromptSessionMemoryStateSchema,
+  worldPromptSnapshotSchema,
   worldPromptSuggestionRecordSchema,
   worldPromptSuggestionSchema,
   worldPromptStartTurnRequestSchema,
@@ -32,6 +35,10 @@ import {
   worldPromptProjectContextInferenceSchema,
   worldPromptSeedGenerationRequestSchema,
   worldPromptSeedGenerationResponseSchema,
+  worldPromptGenerationJobSchema,
+  worldPromptGenerationJobStepSchema,
+  worldPromptGenerationStatusRequestSchema,
+  worldPromptGenerationStatusResponseSchema,
   worldPromptSeedInferenceRequestSchema,
   worldPromptSeedInferenceResponseSchema,
   worldPromptTurnSchema,
@@ -41,11 +48,14 @@ import {
   worldPromptTokenBudgetDiagnosticsSchema,
   worldPromptWorkItemContextSchema,
   worldPromptWorkItemResultSchema,
+  worldPromptStreamGraphOpEnvelopeSchema,
   type PromptToWorldOp,
   type WorldPromptClassification,
   type WorldPromptBuildLedgerEntry,
   type WorldPromptDiagnosticFinding,
   type WorldPromptEvent,
+  type WorldPromptGenerationJob,
+  type WorldPromptGenerationJobStep,
   type WorldPromptIncrementalBuildBrief,
   type WorldPromptIncrementalManifest,
   type WorldPromptIncrementalWorkItem,
@@ -65,6 +75,7 @@ import {
   type WorldPromptSuggestionRecord,
   type WorldPromptSnapshot,
   type WorldPromptStartTurnRequest,
+  type WorldPromptStreamGraphOpEnvelope,
   type WorldPromptTokenBudgetDiagnostics,
   type WorldPromptWorkItemContext,
   type WorldPromptTurn,
@@ -145,7 +156,7 @@ import {
   type WorldBuildPlanResponse,
   type WorldBuildStatusResponse,
 } from '../../../src/domain/worldBuild.ts'
-import { runOpenAiResponses } from './openai.ts'
+import { runOpenAiResponses, runOpenAiResponsesStream } from './openai.ts'
 import { normalizeStrictJsonSchema, type JsonSchema } from './structured-output.ts'
 
 type SupabaseClient = any
@@ -243,6 +254,49 @@ type WorldPromptEventRow = {
   payload: Record<string, unknown> | null
   metadata: Record<string, unknown> | null
   created_at: string
+}
+
+type WorldPromptGenerationJobRow = {
+  id: string
+  draft_id: string
+  session_id: string
+  turn_id: string
+  kind: string
+  status: string
+  attempt_count: number
+  heartbeat_at: string | null
+  started_at: string | null
+  completed_at: string | null
+  token_usage: Record<string, unknown> | null
+  counts: Record<string, unknown> | null
+  error_message: string | null
+  metadata: Record<string, unknown> | null
+  latest_applied_op_cursor: string | null
+  created_at: string
+  updated_at: string
+}
+
+type WorldPromptGenerationJobStepRow = {
+  id: string
+  job_id: string
+  draft_id: string
+  session_id: string
+  turn_id: string
+  step_key: string
+  phase: string
+  status: string
+  attempt_count: number
+  order_index: number
+  heartbeat_at: string | null
+  started_at: string | null
+  completed_at: string | null
+  token_usage: Record<string, unknown> | null
+  counts: Record<string, unknown> | null
+  error_message: string | null
+  metadata: Record<string, unknown> | null
+  latest_applied_op_cursor: string | null
+  created_at: string
+  updated_at: string
 }
 
 type WorldPromptSuggestionRow = {
@@ -386,6 +440,8 @@ const SESSION_SELECT = 'id, draft_id, key, title, status, is_active, summary_mem
 const TURN_SELECT = 'id, session_id, draft_id, prompt, status, model, resolved_context, approval_state, assistant_summary, error_message, response_id, metadata, created_at, updated_at'
 const MESSAGE_SELECT = 'id, session_id, turn_id, draft_id, role, content, metadata, created_at'
 const EVENT_SELECT = 'id, session_id, turn_id, draft_id, sequence, event_type, op_id, payload, metadata, created_at'
+const GENERATION_JOB_SELECT = 'id, draft_id, session_id, turn_id, kind, status, attempt_count, heartbeat_at, started_at, completed_at, token_usage, counts, error_message, metadata, latest_applied_op_cursor, created_at, updated_at'
+const GENERATION_JOB_STEP_SELECT = 'id, job_id, draft_id, session_id, turn_id, step_key, phase, status, attempt_count, order_index, heartbeat_at, started_at, completed_at, token_usage, counts, error_message, metadata, latest_applied_op_cursor, created_at, updated_at'
 const SUGGESTION_SELECT = 'id, draft_id, session_id, turn_id, thread_key, label, prompt, kind, style, source, summary, estimated_node_count, estimated_edge_count, will_queue_images, will_queue_cinematics, state, rank, used_turn_id, dismissed_at, metadata, created_at, updated_at'
 const THREAD_SELECT = 'id, draft_id, key, title, summary, status, priority, linked_entity_keys, source_turn_id, last_turn_id, metadata, created_at, updated_at'
 const WORLD_ENTITY_SELECT = 'id, key, name, summary, context, node_type, aliases, tags, status, thumbnail_asset_key, linked_definition_key, source, custom_properties, metadata, created_at, updated_at'
@@ -2680,6 +2736,53 @@ function mapEventRow(row: WorldPromptEventRow): WorldPromptEvent {
     metadata: row.metadata ?? {},
     createdAt: row.created_at,
   }
+}
+
+function mapGenerationJobRow(row: WorldPromptGenerationJobRow): WorldPromptGenerationJob {
+  return worldPromptGenerationJobSchema.parse({
+    id: row.id,
+    draftId: row.draft_id,
+    sessionId: row.session_id,
+    turnId: row.turn_id,
+    kind: row.kind,
+    status: row.status,
+    attemptCount: row.attempt_count,
+    heartbeatAt: row.heartbeat_at,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+    tokenUsage: row.token_usage ?? {},
+    counts: row.counts ?? {},
+    errorMessage: row.error_message,
+    metadata: row.metadata ?? {},
+    latestAppliedOpCursor: row.latest_applied_op_cursor,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  })
+}
+
+function mapGenerationJobStepRow(row: WorldPromptGenerationJobStepRow): WorldPromptGenerationJobStep {
+  return worldPromptGenerationJobStepSchema.parse({
+    id: row.id,
+    jobId: row.job_id,
+    draftId: row.draft_id,
+    sessionId: row.session_id,
+    turnId: row.turn_id,
+    stepKey: row.step_key,
+    phase: row.phase,
+    status: row.status,
+    attemptCount: row.attempt_count,
+    orderIndex: row.order_index,
+    heartbeatAt: row.heartbeat_at,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+    tokenUsage: row.token_usage ?? {},
+    counts: row.counts ?? {},
+    errorMessage: row.error_message,
+    metadata: row.metadata ?? {},
+    latestAppliedOpCursor: row.latest_applied_op_cursor,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  })
 }
 
 function mapSuggestionRow(row: WorldPromptSuggestionRow): WorldPromptSuggestionRecord | null {
@@ -5701,6 +5804,7 @@ function annotateStorySequenceCompletenessGuard(input: {
 }
 
 const WIKI_STRING_LIMITS: Record<string, number> = {
+  title: 120,
   logline: 220,
   synopsis: 900,
   genre: 80,
@@ -5720,6 +5824,7 @@ function sanitizeWikiMetadataPatch(raw: unknown, existing?: Record<string, unkno
       ? String(parsed[key as keyof typeof parsed]).trim()
       : ''
     if (!value) continue
+    if (key === 'title' && value.length < 2) continue
     if (key === 'logline' && value.length < 12) continue
     if (key === 'synopsis' && value.length < 40 && typeof existing?.synopsis === 'string' && existing.synopsis.trim().length >= 40) continue
     next[key] = trimPlannerText(value, limit)
@@ -6892,7 +6997,7 @@ async function generatePromptPlan(input: {
     isInitialSeedGeneration && initialSeedProfile
       ? [
         'The skeleton profile is mandatory. Satisfy every required category with concrete canon-ready graph nodes.',
-        'Create update_world_wiki_metadata for the project title/logline/synopsis/tone/genre before or alongside entity creation.',
+        'Create update_world_wiki_metadata for the generated content title, logline, synopsis, tone, and genre before or alongside entity creation.',
         'Create the requested sequence_unit skeleton as ordered authored progression, using sequence relationships such as precedes, causes, complicates, and pays_off.',
         'Create enough relationships to make the graph feel connected immediately: cast/location/faction/object/concept links plus sequence links.',
         'Assistant notes should be concise operational notes suitable for a visible progress log, not private chain-of-thought.',
@@ -6940,9 +7045,9 @@ async function generatePromptPlan(input: {
     'Do not queue cinematic generation just because a sequence_unit is created. Set sequence.scriptExpansionReady when the chapter has enough synopsis, outcome, linked entities, and consequences to support a later scene/shot expansion.',
     'Existing authored sequence state appears in retrieval.sequenceContext. Preserve ordinal and cause/effect bridges unless the user explicitly asks for a correction.',
     'For wiki/presentation readiness, use entity customProperties.wiki or metadata.wiki for entity display hints such as roleLabel, shortSummary, and wikiSections.',
-    'For project-wide wiki presentation, use update_world_wiki_metadata with target "project" and compact metadata fields: logline, synopsis, genre, themes, toneTags, coreConflict, visualMotifs. Use target "view" with targetViewKey only for custom wiki page metadata.',
+    'For project-wide wiki presentation, use update_world_wiki_metadata with target "project" and compact metadata fields: title, logline, synopsis, genre, themes, toneTags, coreConflict, visualMotifs. The title is the generated in-world/content title, not the GraphCore project name. Use target "view" with targetViewKey only for custom wiki page metadata.',
     'Do not add a separate planner pass for wiki writing. Include update_world_wiki_metadata only in the same wave1Ops response when retrieval.wikiContext.updatePolicy is "targeted" or "opportunistic".',
-    'When retrieval.wikiContext.updatePolicy is "none", do not rewrite project logline, synopsis, or tone metadata unless the user explicitly asks in this prompt.',
+    'When retrieval.wikiContext.updatePolicy is "none", do not rewrite project title, logline, synopsis, or tone metadata unless the user explicitly asks in this prompt.',
     'When updating project-wide wiki metadata, set generatedFromFingerprint to retrieval.wikiContext.fingerprint when provided. Keep text concise: one-sentence logline, compact synopsis, short tags.',
     'When a direct world-building turn creates or substantially updates canon, include concise wiki-ready summaries where they naturally follow from the canon. Do not add long encyclopedia prose on every turn.',
     'Prefer one-sentence loglines, compact synopsis text, role labels, story arc summaries, and event scene summaries over invented dates or unrelated lore.',
@@ -8815,6 +8920,58 @@ async function loadSessionById(client: SupabaseClient, sessionId: string) {
   return mapSessionRow(response.data as WorldPromptSessionRow)
 }
 
+async function loadGenerationJobById(client: SupabaseClient, jobId: string) {
+  const response = await client
+    .from('world_prompt_generation_jobs')
+    .select(GENERATION_JOB_SELECT)
+    .eq('id', jobId)
+    .single()
+  if (response.error) throw new Error(response.error.message)
+  return mapGenerationJobRow(response.data as WorldPromptGenerationJobRow)
+}
+
+async function updateGenerationJob(client: SupabaseClient, jobId: string, changes: Record<string, unknown>) {
+  const response = await client
+    .from('world_prompt_generation_jobs')
+    .update(changes)
+    .eq('id', jobId)
+    .select(GENERATION_JOB_SELECT)
+    .single()
+  if (response.error) throw new Error(response.error.message)
+  return mapGenerationJobRow(response.data as WorldPromptGenerationJobRow)
+}
+
+async function loadGenerationJobStepById(client: SupabaseClient, stepId: string) {
+  const response = await client
+    .from('world_prompt_generation_job_steps')
+    .select(GENERATION_JOB_STEP_SELECT)
+    .eq('id', stepId)
+    .single()
+  if (response.error) throw new Error(response.error.message)
+  return mapGenerationJobStepRow(response.data as WorldPromptGenerationJobStepRow)
+}
+
+async function loadGenerationJobSteps(client: SupabaseClient, jobId: string) {
+  const response = await client
+    .from('world_prompt_generation_job_steps')
+    .select(GENERATION_JOB_STEP_SELECT)
+    .eq('job_id', jobId)
+    .order('order_index', { ascending: true })
+  if (response.error) throw new Error(response.error.message)
+  return ((response.data ?? []) as WorldPromptGenerationJobStepRow[]).map((row) => mapGenerationJobStepRow(row))
+}
+
+async function updateGenerationJobStep(client: SupabaseClient, stepId: string, changes: Record<string, unknown>) {
+  const response = await client
+    .from('world_prompt_generation_job_steps')
+    .update(changes)
+    .eq('id', stepId)
+    .select(GENERATION_JOB_STEP_SELECT)
+    .single()
+  if (response.error) throw new Error(response.error.message)
+  return mapGenerationJobStepRow(response.data as WorldPromptGenerationJobStepRow)
+}
+
 async function loadSuggestionById(client: SupabaseClient, suggestionId: string) {
   const response = await client
     .from('world_prompt_suggestions')
@@ -9393,6 +9550,1236 @@ function buildInitialSeedGenerationPrompt(input: {
     `Selected art style: ${input.selectedArtStylePreset}${input.selectedArtStyleDescription ? ` - ${input.selectedArtStyleDescription}` : ''}.`,
     'Apply this as one initial seed. Use the attached initialSeed skeleton profile in planner context.',
   ].join('\n')
+}
+
+function sourceContextBrief(sourceContext: unknown) {
+  if (!sourceContext || typeof sourceContext !== 'object') return null
+  const source = sourceContext as Record<string, unknown>
+  return {
+    kind: source.kind,
+    title: source.title,
+    fileName: source.fileName,
+    url: source.url,
+    charCount: source.charCount,
+    truncated: source.truncated,
+    extractedText: typeof source.extractedText === 'string'
+      ? source.extractedText.slice(0, 80_000)
+      : '',
+  }
+}
+
+function buildStreamedInitialSeedInstructions() {
+  return [
+    'You are GraphCore initial world generation.',
+    'Generate a complete initial world skeleton as streamed JSON records. Do not wrap in Markdown. Do not return one giant JSON object.',
+    'Each record must be one complete JSON object matching one of:',
+    '{"kind":"note","message":"short operational note"}',
+    '{"kind":"op","op":{PromptToWorldOp}}',
+    '{"kind":"summary","assistantSummary":"concise summary of what was created"}',
+    'Prefer minified one-line JSON records. Never put literal line breaks inside JSON string values; escape them as \\n or keep text as one compact paragraph.',
+    'Example entity line: {"kind":"op","op":{"id":"create_mara_veyr","op":"upsert_entity","payload":{"targetEntityKey":"mara_veyr","entity":{"nodeType":"actor","name":"Mara Veyr","summary":"A memory mage pulled into the empire conflict.","context":"Main cast protagonist with a clear want, flaw, and pressure.","tags":["main cast"]}}}}',
+    'Example relationship line: {"kind":"op","op":{"id":"link_mara_seeks_artifact","op":"upsert_relationship","payload":{"relationship":{"sourceEntityKey":"mara_veyr","targetEntityKey":"memory_artifact","verb":"seeks","notes":"The artifact is tied to Mara’s central objective."}}}}',
+    'Use only these operation types: upsert_entity, upsert_relationship, update_world_wiki_metadata, assistant_note.',
+    'Valid entity nodeType values are actor, group, place, object, concept, event, sequence_unit.',
+    'Never use character, location, faction, artifact, lore, wiki, title, or beat as nodeType; map them to actor, place, group, object, concept, update_world_wiki_metadata, or sequence_unit.',
+    'Use stable lowercase snake_case entity keys in targetEntityKey and relationship endpoints.',
+    'For Story projects, include generated content title/logline/wiki metadata, full main cast, main locations, major factions when relevant, key objects/concepts when relevant, and ordered sequence_unit nodes for the main story arc.',
+    'For Story projects, emit at least 6 ordered sequence_unit nodes before emitting any relationship records.',
+    'Story sequence_unit nodes must include customProperties.sequence.ordinal, synopsis, outcome, and at least one consequence with cause/effect.',
+    'Use relationships such as precedes, causes, complicates, pays_off, opposes, belongs_to, located_in, seeks, protects, controls, discovers, and reveals where useful.',
+    'Keep node prose compact: summaries should be one or two sentences, context should be short and canon-useful.',
+    'Emit a note every few records so progress is visible, but do not reveal private chain-of-thought.',
+  ].join('\n')
+}
+
+function buildStreamedInitialSeedPhaseInstructions(phase: WorldPromptGenerationStepPhase) {
+  const phaseRules: Record<WorldPromptGenerationStepPhase, string[]> = {
+    world_bible: [
+      'This step is world_bible only.',
+      'Emit update_world_wiki_metadata ops and concise notes only.',
+      'The metadata must include a generated content title plus logline, synopsis, genre, themes, toneTags, coreConflict, and visualMotifs where supported by the prompt.',
+      'Do not emit entity or relationship ops in this step.',
+      'End with a summary record describing the foundation created.',
+    ],
+    core_entities: [
+      'This step is core_entities only.',
+      'Emit all actor, group, place, object, and concept entity ops required by the prompt and skeleton profile.',
+      'Do not emit sequence_unit nodes in this step.',
+      'Do not emit relationship ops in this step.',
+      'End with a summary record describing the entity coverage created.',
+    ],
+    sequence_units: [
+      'This step is sequence_units only.',
+      'Emit ordered sequence_unit entity ops for the full initial arc.',
+      'For Story projects, emit at least 6 ordered sequence_unit nodes.',
+      'Each sequence_unit must include customProperties.sequence.ordinal, synopsis, outcome, and at least one cause/effect consequence.',
+      'Do not emit relationship ops in this step.',
+      'End with a summary record describing the sequence coverage created.',
+    ],
+    relationships: [
+      'This step is relationships only.',
+      'Emit upsert_relationship ops after all endpoint entity keys already exist in the supplied canon ledger.',
+      'Prefer relationships among existing actors, groups, places, objects, concepts, and sequence_unit nodes.',
+      'Do not emit new entity ops in this step unless a required endpoint is missing and essential.',
+      'End with a summary record describing the relationship map created.',
+    ],
+    finalize: [
+      'This step is finalize only.',
+      'Emit concise assistant notes and a final summary record.',
+      'Do not emit new entity or relationship ops unless required to repair a small missing skeleton requirement.',
+      'Summarize what was created and what remains useful to build next.',
+    ],
+  }
+  return [
+    buildStreamedInitialSeedInstructions(),
+    ...phaseRules[phase],
+  ].join('\n')
+}
+
+function buildStreamedInitialSeedInput(input: {
+  generationPrompt: string
+  sourceContext: unknown
+  inference: z.infer<typeof worldPromptProjectContextInferenceSchema>
+  selectedArtStylePreset: string
+  selectedArtStyleDescription: string
+  skeletonProfile: unknown
+  projectContext: ProjectContext
+  phase?: WorldPromptGenerationStepPhase
+  existingCanon?: unknown
+}) {
+  return JSON.stringify({
+    task: 'initial_world_seed_stream',
+    phase: input.phase ?? 'all',
+    prompt: input.generationPrompt,
+    sourceContext: sourceContextBrief(input.sourceContext),
+    inferredProject: input.inference,
+    selectedArtStyle: {
+      preset: input.selectedArtStylePreset,
+      description: input.selectedArtStyleDescription,
+    },
+    projectContext: input.projectContext,
+    skeletonProfile: input.skeletonProfile,
+    existingCanon: input.existingCanon ?? null,
+    outputContract: {
+      format: 'newline_delimited_json',
+      records: ['note', 'op', 'summary'],
+      requirement: 'one JSON object per line',
+    },
+  })
+}
+
+function normalizeStreamLine(line: string) {
+  return line
+    .trim()
+    .replace(/^```(?:json|jsonl|ndjson)?/i, '')
+    .replace(/```$/i, '')
+    .trim()
+}
+
+function extractCompleteStreamJsonRecords(buffer: string) {
+  const records: string[] = []
+  let current = ''
+  let started = false
+  let inString = false
+  let escaped = false
+  let depth = 0
+  let lastConsumedIndex = 0
+
+  for (let index = 0; index < buffer.length; index += 1) {
+    const char = buffer[index]
+    if (!started) {
+      if (char === '{') {
+        started = true
+        inString = false
+        escaped = false
+        depth = 1
+        current = '{'
+        lastConsumedIndex = index + 1
+      }
+      continue
+    }
+
+    if (inString) {
+      if (escaped) {
+        current += char
+        escaped = false
+      } else if (char === '\\') {
+        current += char
+        escaped = true
+      } else if (char === '"') {
+        current += char
+        inString = false
+      } else if (char === '\n') {
+        current += '\\n'
+      } else if (char !== '\r') {
+        current += char
+      }
+      continue
+    }
+
+    current += char
+    if (char === '"') {
+      inString = true
+    } else if (char === '{' || char === '[') {
+      depth += 1
+    } else if (char === '}' || char === ']') {
+      depth -= 1
+      if (depth === 0) {
+        records.push(normalizeStreamLine(current))
+        current = ''
+        started = false
+        inString = false
+        escaped = false
+        lastConsumedIndex = index + 1
+      }
+    }
+  }
+
+  return {
+    records,
+    rest: started ? current : buffer.slice(lastConsumedIndex),
+  }
+}
+
+function streamedRelationshipEndpointKeys(op: PromptToWorldOp) {
+  if (op.op !== 'upsert_relationship') return null
+  const relationship = op.payload.relationship
+  const sourceKey = typeof relationship.sourceEntityKey === 'string' ? relationship.sourceEntityKey.trim() : ''
+  const targetKey = typeof relationship.targetEntityKey === 'string' ? relationship.targetEntityKey.trim() : ''
+  if (!sourceKey || !targetKey) return null
+  return { sourceKey, targetKey }
+}
+
+function streamedRelationshipEndpointsExist(snapshot: WorldPromptSnapshot, op: PromptToWorldOp) {
+  const keys = streamedRelationshipEndpointKeys(op)
+  if (!keys) return false
+  return snapshot.worldEntities.some((entity) => entity.key === keys.sourceKey)
+    && snapshot.worldEntities.some((entity) => entity.key === keys.targetKey)
+}
+
+function buildStreamedGenerationCanonLedger(snapshot: WorldPromptSnapshot) {
+  return {
+    entities: snapshot.worldEntities.map((entity) => ({
+      key: entity.key,
+      nodeType: entity.nodeType,
+      name: entity.name,
+      summary: entity.summary?.slice(0, 220) ?? '',
+      ordinal: typeof entity.customProperties?.sequence === 'object'
+        && entity.customProperties.sequence
+        && typeof (entity.customProperties.sequence as { ordinal?: unknown }).ordinal === 'number'
+        ? (entity.customProperties.sequence as { ordinal: number }).ordinal
+        : null,
+    })),
+    relationships: snapshot.worldRelationships.map((relationship) => ({
+      key: relationship.key,
+      sourceEntityKey: relationship.sourceEntityKey,
+      targetEntityKey: relationship.targetEntityKey,
+      verb: relationship.verb,
+    })),
+  }
+}
+
+function streamEnvelopeToOpId(envelope: WorldPromptStreamGraphOpEnvelope) {
+  return envelope.kind === 'op' ? envelope.op.id : null
+}
+
+function createStreamCounts() {
+  return {
+    ops: 0,
+    entities: 0,
+    relationships: 0,
+    sequenceUnits: 0,
+    wikiUpdates: 0,
+    notes: 0,
+    skipped: 0,
+    failed: 0,
+  }
+}
+
+const WORLD_PROMPT_GENERATION_QUEUE = 'world_prompt_generation'
+const WORLD_PROMPT_GENERATION_STEP_PHASES = [
+  { key: 'world_bible', phase: 'world_bible', label: 'World bible' },
+  { key: 'core_entities', phase: 'core_entities', label: 'Core entities' },
+  { key: 'sequence_units', phase: 'sequence_units', label: 'Story sequence' },
+  { key: 'relationships', phase: 'relationships', label: 'Relationships' },
+  { key: 'finalize', phase: 'finalize', label: 'Finalize world' },
+] as const
+
+type WorldPromptGenerationStepPhase = typeof WORLD_PROMPT_GENERATION_STEP_PHASES[number]['phase']
+
+function mergeStreamCounts(...entries: Array<Record<string, unknown> | null | undefined>) {
+  const merged = createStreamCounts()
+  for (const entry of entries) {
+    if (!entry) continue
+    for (const key of Object.keys(merged) as Array<keyof ReturnType<typeof createStreamCounts>>) {
+      const value = entry[key]
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        merged[key] += value
+      }
+    }
+  }
+  return merged
+}
+
+async function enqueueWorldPromptGenerationStep(input: {
+  client: SupabaseClient
+  jobId: string
+  stepId: string
+}) {
+  const response = await input.client
+    .rpc('enqueue_world_prompt_generation', {
+      message: {
+        jobId: input.jobId,
+        stepId: input.stepId,
+      },
+    })
+  if (response.error) throw new Error(response.error.message)
+  return response.data
+}
+
+async function deleteWorldPromptGenerationQueueMessage(input: {
+  client: SupabaseClient
+  msgId: number | string
+}) {
+  const response = await input.client
+    .rpc('delete_world_prompt_generation_message', {
+      message_id: input.msgId,
+    })
+  if (response.error) throw new Error(response.error.message)
+}
+
+async function readWorldPromptGenerationQueueMessage(client: SupabaseClient) {
+  const response = await client
+    .rpc('read_world_prompt_generation')
+  if (response.error) throw new Error(response.error.message)
+  const rows = Array.isArray(response.data) ? response.data : []
+  return rows[0] as { msg_id: number | string; message?: Record<string, unknown> } | undefined
+}
+
+async function kickWorldPromptGenerationWorker() {
+  const supabaseUrl = Deno.env.get('SUPABASE_URL')
+  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+  if (!supabaseUrl || !serviceRoleKey) return
+  const invoke = fetch(`${supabaseUrl.replace(/\/+$/, '')}/functions/v1/process-world-generation-jobs`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${serviceRoleKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ source: 'world_prompt_generation_queue' }),
+  }).catch((error) => {
+    console.error('[world-generation-job] failed to kick worker.', error)
+  })
+  const waitUntil = (globalThis as unknown as { EdgeRuntime?: { waitUntil?: (promise: Promise<unknown>) => void } }).EdgeRuntime?.waitUntil
+  if (typeof waitUntil === 'function') {
+    waitUntil(invoke)
+  } else {
+    void invoke
+  }
+}
+
+async function worldPromptOpAlreadyApplied(input: {
+  client: SupabaseClient
+  turnId: string
+  opId: string
+}) {
+  const response = await input.client
+    .from('world_prompt_events')
+    .select('id')
+    .eq('turn_id', input.turnId)
+    .eq('op_id', input.opId)
+    .in('event_type', ['op_applied', 'assistant_note', 'queue_started'])
+    .limit(1)
+    .maybeSingle()
+  if (response.error) throw new Error(response.error.message)
+  return Boolean(response.data)
+}
+
+async function updateGenerationJobProgress(input: {
+  client: SupabaseClient
+  jobId: string
+  counts: Record<string, unknown>
+  tokenUsage?: Record<string, unknown> | null
+  latestAppliedOpCursor?: string | null
+  status?: WorldPromptGenerationJob['status']
+  errorMessage?: string | null
+  completed?: boolean
+}) {
+  const now = new Date().toISOString()
+  const changes: Record<string, unknown> = {
+    counts: input.counts,
+    heartbeat_at: now,
+  }
+  if (input.tokenUsage) changes.token_usage = input.tokenUsage
+  if (input.latestAppliedOpCursor !== undefined) changes.latest_applied_op_cursor = input.latestAppliedOpCursor
+  if (input.status) changes.status = input.status
+  if (input.errorMessage !== undefined) changes.error_message = input.errorMessage
+  if (input.completed) changes.completed_at = now
+  return updateGenerationJob(input.client, input.jobId, changes)
+}
+
+async function createInitialSeedGenerationTurn(input: {
+  client: SupabaseClient
+  session: WorldPromptSession
+  payload: z.infer<typeof worldPromptSeedGenerationRequestSchema>
+  sourceContext: unknown
+  inference: z.infer<typeof worldPromptProjectContextInferenceSchema>
+  skeletonProfile: unknown
+  selectedPreset: ReturnType<typeof getArtStylePreset>
+  selectedArtStyleDescription: string
+  projectContext: ProjectContext
+  generationPrompt: string
+}) {
+  const insertedTurn = await input.client
+    .from('world_prompt_turns')
+    .insert({
+      draft_id: input.payload.snapshot.draft.id,
+      session_id: input.session.id,
+      prompt: input.generationPrompt,
+      status: 'streaming',
+      model: input.payload.model,
+      resolved_context: {
+        summaryMemory: input.session.summaryMemory,
+        selectedRootEntityKey: null,
+        selectedViewKey: null,
+        selectedThreadKey: null,
+        resolvedMode: 'apply_compact_wave',
+        resolvedIntent: 'graph_build',
+        resolvedFocus: 'current_focus',
+      },
+      approval_state: 'not_required',
+      assistant_summary: '',
+      metadata: {
+        sourceContext: input.sourceContext ?? undefined,
+        initialSeedMode: 'generate_skeleton',
+        initialSeedContext: {
+          mode: 'generate_skeleton',
+          sourceContext: input.sourceContext ?? undefined,
+          inference: input.inference,
+          selectedArtStylePreset: input.selectedPreset.id,
+          selectedArtStyleDescription: input.selectedArtStyleDescription || input.selectedPreset.description,
+          skeletonProfileId: (input.skeletonProfile as { id?: string }).id ?? null,
+        },
+        projectContextInference: input.inference,
+        skeletonProfileId: (input.skeletonProfile as { id?: string }).id ?? null,
+        resolvedMode: 'apply_compact_wave',
+        resolvedIntent: 'graph_build',
+        resolvedFocus: 'current_focus',
+        streamedGeneration: true,
+      },
+    })
+    .select(TURN_SELECT)
+    .single()
+  if (insertedTurn.error) throw new Error(insertedTurn.error.message)
+  const turn = mapTurnRow(insertedTurn.data as WorldPromptTurnRow)
+  const writeEvent = await createEventWriter({
+    client: input.client,
+    sessionId: input.session.id,
+    turnId: turn.id,
+    draftId: input.payload.snapshot.draft.id,
+  })
+  await writeEvent('turn_started', { session: input.session, turn })
+  const userMessage = await insertPromptMessage({
+    client: input.client,
+    sessionId: input.session.id,
+    turnId: turn.id,
+    draftId: input.payload.snapshot.draft.id,
+    role: 'user',
+    content: input.generationPrompt,
+    metadata: {
+      sourceContext: input.sourceContext ?? undefined,
+      initialSeedMode: 'generate_skeleton',
+      streamedGeneration: true,
+    },
+  })
+  await writeEvent('message_created', { message: userMessage, turn: { id: turn.id } })
+  await writeEvent('planner_status', {
+    plannerStatus: 'planning',
+    plannerProgress: {
+      phase: 'reading_context',
+      message: 'Starting streamed initial world generation.',
+      sequence: 0,
+    },
+    turn: { id: turn.id },
+  })
+  return { turn, writeEvent }
+}
+
+async function createInitialSeedGenerationJob(input: {
+  client: SupabaseClient
+  session: WorldPromptSession
+  turn: WorldPromptTurn
+  payload: z.infer<typeof worldPromptSeedGenerationRequestSchema>
+  sourceContext: unknown
+  inference: z.infer<typeof worldPromptProjectContextInferenceSchema>
+  skeletonProfile: unknown
+  selectedPreset: ReturnType<typeof getArtStylePreset>
+  selectedArtStyleDescription: string
+  projectContext: ProjectContext
+  generationPrompt: string
+}) {
+  const response = await input.client
+    .from('world_prompt_generation_jobs')
+    .insert({
+      draft_id: input.payload.snapshot.draft.id,
+      session_id: input.session.id,
+      turn_id: input.turn.id,
+      kind: 'initial_seed_stream',
+      status: 'queued',
+      counts: createStreamCounts(),
+      metadata: {
+        model: input.payload.model,
+        prompt: input.generationPrompt,
+        sourceContext: input.sourceContext ?? null,
+        inference: input.inference,
+        selectedArtStylePreset: input.selectedPreset.id,
+        selectedArtStyleDescription: input.selectedArtStyleDescription || input.selectedPreset.description,
+        skeletonProfile: input.skeletonProfile,
+        projectContext: input.projectContext,
+        snapshot: input.payload.snapshot,
+      },
+    })
+    .select(GENERATION_JOB_SELECT)
+    .single()
+  if (response.error) throw new Error(response.error.message)
+  return mapGenerationJobRow(response.data as WorldPromptGenerationJobRow)
+}
+
+async function createInitialSeedGenerationJobSteps(input: {
+  client: SupabaseClient
+  job: WorldPromptGenerationJob
+}) {
+  const rows = WORLD_PROMPT_GENERATION_STEP_PHASES.map((entry, index) => ({
+    job_id: input.job.id,
+    draft_id: input.job.draftId,
+    session_id: input.job.sessionId,
+    turn_id: input.job.turnId,
+    step_key: entry.key,
+    phase: entry.phase,
+    status: 'queued',
+    order_index: index,
+    counts: createStreamCounts(),
+    metadata: {
+      label: entry.label,
+    },
+  }))
+  const response = await input.client
+    .from('world_prompt_generation_job_steps')
+    .insert(rows)
+    .select(GENERATION_JOB_STEP_SELECT)
+  if (response.error) throw new Error(response.error.message)
+  return ((response.data ?? []) as WorldPromptGenerationJobStepRow[])
+    .map((row) => mapGenerationJobStepRow(row))
+    .sort((left, right) => left.orderIndex - right.orderIndex)
+}
+
+function nextQueuedGenerationStep(steps: WorldPromptGenerationJobStep[]) {
+  return steps
+    .filter((step) => step.status === 'queued')
+    .sort((left, right) => left.orderIndex - right.orderIndex)[0] ?? null
+}
+
+async function runWorldPromptGenerationJob(input: {
+  client: SupabaseClient
+  authHeader: string
+  jobId: string
+  stepId?: string
+}) {
+  let job = await loadGenerationJobById(input.client, input.jobId)
+  if (job.status === 'cancelled') return job
+  let step = input.stepId ? await loadGenerationJobStepById(input.client, input.stepId) : null
+  if (step && step.status === 'cancelled') return job
+  const phase = (step?.phase ?? 'finalize') as WorldPromptGenerationStepPhase
+  const turn = await loadTurnById(input.client, job.turnId)
+  const session = await loadSessionById(input.client, job.sessionId)
+  const metadata = job.metadata ?? {}
+  const snapshot = worldPromptSnapshotSchema.parse(metadata.snapshot)
+  const inference = worldPromptProjectContextInferenceSchema.parse(metadata.inference)
+  const projectContext = projectContextSchema.parse(metadata.projectContext)
+  const skeletonProfile = metadata.skeletonProfile ?? getWorldSeedSkeletonProfile(inference.projectSubtype)
+  const prompt = typeof metadata.prompt === 'string' ? metadata.prompt : turn.prompt
+  const selectedArtStylePreset = typeof metadata.selectedArtStylePreset === 'string'
+    ? metadata.selectedArtStylePreset
+    : projectContext.artStylePreset
+  const selectedArtStyleDescription = typeof metadata.selectedArtStyleDescription === 'string'
+    ? metadata.selectedArtStyleDescription
+    : projectContext.artStyleDescription
+  const sourceContext = metadata.sourceContext
+  const model = typeof metadata.model === 'string' ? metadata.model : turn.model
+  const writeEvent = await createEventWriter({
+    client: input.client,
+    sessionId: job.sessionId,
+    turnId: job.turnId,
+    draftId: job.draftId,
+  })
+  const usageRecorder = createWorldPromptTokenUsageRecorder()
+  const counts = createStreamCounts()
+  const mutableSnapshot = structuredClone(snapshot) as WorldPromptSnapshot
+  mutableSnapshot.projectContext = projectContext
+  const touchedEntityKeys = new Set<string>()
+  const touchedRelationshipKeys = new Set<string>()
+  const appliedDefinitions: Array<Record<string, unknown>> = []
+  const assistantNotes: string[] = []
+  const deferredRelationshipOps: PromptToWorldOp[] = []
+  let assistantSummary = ''
+  let preferredAutoViewKey: string | null = null
+  let streamRecordBuffer = ''
+  let lastStreamHeartbeatAt = 0
+
+  const updateProgress = async (cursor?: string | null) => {
+    const aggregateCounts = mergeStreamCounts(job.counts, counts)
+    job = await updateGenerationJobProgress({
+      client: input.client,
+      jobId: job.id,
+      counts: aggregateCounts,
+      latestAppliedOpCursor: cursor ?? undefined,
+    })
+    if (step) {
+      step = await updateGenerationJobStep(input.client, step.id, {
+        counts,
+        heartbeat_at: new Date().toISOString(),
+        latest_applied_op_cursor: cursor ?? undefined,
+      })
+    }
+  }
+
+  const ensureJobIsActive = async () => {
+    const current = await loadGenerationJobById(input.client, job.id)
+    if (current.status === 'cancelled') {
+      await updateTurn(input.client, turn.id, {
+        status: 'cancelled',
+        assistant_summary: 'Initial world generation was cancelled.',
+      })
+      throw new Error('Initial world generation was cancelled.')
+    }
+    if (step) {
+      const currentStep = await loadGenerationJobStepById(input.client, step.id)
+      if (currentStep.status === 'cancelled') {
+        throw new Error('Initial world generation step was cancelled.')
+      }
+    }
+    await throwIfTurnCancelled(input.client, turn.id)
+  }
+
+  const handleEnvelope = async (envelope: WorldPromptStreamGraphOpEnvelope) => {
+    await ensureJobIsActive()
+    if (envelope.kind === 'note') {
+      counts.notes += 1
+      const note = stripInternalPlannerDiagnostics(envelope.message)
+      assistantNotes.push(note)
+      await writeEvent('assistant_note', {
+        note,
+        turn: { id: turn.id },
+        plannerProgress: {
+          phase: 'generating_entity',
+          message: note,
+          sequence: counts.ops + counts.notes,
+        },
+      })
+      await updateProgress(null)
+      return
+    }
+
+    if (envelope.kind === 'summary') {
+      await flushDeferredRelationships()
+      assistantSummary = stripInternalPlannerDiagnostics(envelope.assistantSummary)
+      await writeEvent('assistant_note', {
+        note: assistantSummary,
+        turn: { id: turn.id },
+        plannerProgress: {
+          phase: 'finalizing_world',
+          message: 'Summarizing the generated world.',
+          sequence: counts.ops + counts.notes,
+        },
+      })
+      await updateProgress(null)
+      return
+    }
+
+    const op = envelope.op
+    if (await worldPromptOpAlreadyApplied({ client: input.client, turnId: turn.id, opId: op.id })) {
+      counts.skipped += 1
+      await updateProgress(op.id)
+      return
+    }
+
+    if (op.op === 'upsert_relationship' && !streamedRelationshipEndpointsExist(mutableSnapshot, op)) {
+      const alreadyDeferred = deferredRelationshipOps.some((entry) => entry.id === op.id)
+      if (!alreadyDeferred) {
+        deferredRelationshipOps.push(op)
+        await writeEvent('planner_status', {
+          plannerStatus: 'planning',
+          plannerProgress: {
+            phase: 'mapping_relationships',
+            message: 'Queued one relationship until both endpoint nodes exist.',
+            sequence: counts.ops + deferredRelationshipOps.length,
+          },
+          turn: { id: turn.id },
+        }, { opId: op.id })
+      }
+      await updateProgress(op.id)
+      return
+    }
+
+    await writeEvent('planner_status', {
+      plannerStatus: 'applying',
+      plannerProgress: {
+        phase: op.op === 'upsert_relationship'
+          ? 'mapping_relationships'
+          : op.op === 'update_world_wiki_metadata'
+            ? 'finalizing_world'
+            : op.op === 'upsert_entity' && op.payload.entity.nodeType === 'sequence_unit'
+              ? 'generating_sequence_unit'
+              : 'generating_entity',
+        message: stripInternalPlannerDiagnostics(describePromptOp(op)) || `Applying streamed graph change ${counts.ops + 1}.`,
+        sequence: counts.ops + 1,
+      },
+      turn: { id: turn.id },
+    }, { opId: op.id })
+
+    const result = await applyPromptOp({
+      client: input.client,
+      authHeader: input.authHeader,
+      model,
+      snapshot: mutableSnapshot,
+      prompt,
+      turnId: turn.id,
+      op,
+    })
+    mergeAppliedWorldGraphIntoSnapshot(mutableSnapshot, result.applied)
+    counts.ops += 1
+    if (op.op === 'upsert_entity') {
+      if (op.payload.entity.nodeType === 'sequence_unit') counts.sequenceUnits += 1
+      else counts.entities += 1
+    } else if (op.op === 'upsert_relationship') {
+      counts.relationships += 1
+    } else if (op.op === 'update_world_wiki_metadata') {
+      counts.wikiUpdates += 1
+    }
+
+    if (Array.isArray(result.definitions)) {
+      for (const definition of result.definitions) {
+        if (!appliedDefinitions.some((entry) => entry.key === definition.key)) {
+          appliedDefinitions.push(definition)
+        }
+      }
+    }
+    for (const entity of result.applied.worldEntities ?? []) {
+      touchedEntityKeys.add(entity.key)
+    }
+    for (const relationship of result.applied.worldRelationships ?? []) {
+      touchedRelationshipKeys.add(relationship.key)
+      touchedEntityKeys.add(relationship.sourceEntityKey)
+      touchedEntityKeys.add(relationship.targetEntityKey)
+    }
+
+    if (result.note) {
+      const note = stripInternalPlannerDiagnostics(result.note)
+      assistantNotes.push(note)
+      await writeEvent('assistant_note', {
+        op,
+        note,
+        turn: { id: turn.id },
+      }, { opId: op.id })
+    } else {
+      await writeEvent('op_applied', {
+        op: { ...op, status: 'applied' },
+        applied: result.applied,
+        turn: { id: turn.id },
+      }, { opId: op.id })
+    }
+    if (result.queue) {
+      await writeEvent('queue_started', {
+        op: { ...op, status: 'applied' },
+        queue: result.queue,
+        turn: { id: turn.id },
+      }, { opId: op.id })
+    }
+    await updateProgress(op.id)
+    if (op.op === 'upsert_entity') {
+      await flushDeferredRelationships()
+    }
+  }
+
+  async function flushDeferredRelationships() {
+    if (deferredRelationshipOps.length === 0) return
+    const pending = deferredRelationshipOps.splice(0, deferredRelationshipOps.length)
+    for (const op of pending) {
+      if (streamedRelationshipEndpointsExist(mutableSnapshot, op)) {
+        await handleEnvelope({ kind: 'op', op })
+      } else {
+        deferredRelationshipOps.push(op)
+      }
+    }
+  }
+
+  const processStreamRecord = async (record: string) => {
+    const normalized = normalizeStreamLine(record)
+    if (!normalized) return
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(normalized)
+    } catch {
+      counts.failed += 1
+      await writeEvent('assistant_note', {
+        note: 'Skipped a malformed streamed generation record.',
+        diagnostics: [normalized.slice(0, 500)],
+        turn: { id: turn.id },
+      })
+      await updateProgress(null)
+      return
+    }
+    const envelope = worldPromptStreamGraphOpEnvelopeSchema.safeParse(parsed)
+    if (!envelope.success) {
+      counts.failed += 1
+      await writeEvent('assistant_note', {
+        note: 'Skipped a streamed generation record that did not match the graph-op contract.',
+        diagnostics: envelope.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).slice(0, 5),
+        turn: { id: turn.id },
+      })
+      await updateProgress(streamEnvelopeToOpId(parsed as WorldPromptStreamGraphOpEnvelope))
+      return
+    }
+    await handleEnvelope(envelope.data)
+  }
+
+  try {
+    if (step) {
+      step = await updateGenerationJobStep(input.client, step.id, {
+        status: 'running',
+        attempt_count: step.attemptCount + 1,
+        started_at: step.startedAt ?? new Date().toISOString(),
+        heartbeat_at: new Date().toISOString(),
+        error_message: null,
+      })
+    }
+    job = await updateGenerationJob(input.client, job.id, {
+      status: 'running',
+      attempt_count: job.attemptCount + 1,
+      started_at: new Date().toISOString(),
+      heartbeat_at: new Date().toISOString(),
+      error_message: null,
+    })
+    await writeEvent('planner_status', {
+      plannerStatus: 'planning',
+      plannerProgress: {
+        phase: 'reading_context',
+        message: step
+          ? `Running ${String(step.metadata?.label ?? step.phase).toLowerCase()} generation step.`
+          : 'Streaming the initial world skeleton in one generation pass.',
+        sequence: 0,
+      },
+      turn: { id: turn.id },
+    })
+
+    const response = await runOpenAiResponsesStream({
+      model,
+      input: buildStreamedInitialSeedInput({
+        generationPrompt: prompt,
+        sourceContext,
+        inference,
+        selectedArtStylePreset,
+        selectedArtStyleDescription,
+        skeletonProfile,
+        projectContext,
+        phase,
+        existingCanon: buildStreamedGenerationCanonLedger(mutableSnapshot),
+      }),
+      instructions: buildStreamedInitialSeedPhaseInstructions(phase),
+      maxOutputTokens: 32_000,
+      reasoning: { effort: 'medium' },
+      store: false,
+      timeoutMs: 150_000,
+      metadata: {
+        surface: 'world-prompt-initial-seed-stream',
+        turnId: turn.id,
+        jobId: job.id,
+      },
+    }, {
+      onEvent: async (event) => {
+        const now = Date.now()
+        if (now - lastStreamHeartbeatAt < 15_000) return
+        lastStreamHeartbeatAt = now
+        await updateGenerationJob(input.client, job.id, {
+          heartbeat_at: new Date().toISOString(),
+          metadata: {
+            ...(job.metadata ?? {}),
+            lastOpenAiStreamEvent: {
+              type: event.type,
+              sequenceNumber: event.sequenceNumber,
+              receivedAt: new Date().toISOString(),
+            },
+          },
+        })
+      },
+      onTextDelta: async (delta) => {
+        streamRecordBuffer += delta
+        const extracted = extractCompleteStreamJsonRecords(streamRecordBuffer)
+        streamRecordBuffer = extracted.rest
+        for (const record of extracted.records) {
+          await processStreamRecord(record)
+        }
+      },
+    })
+    if (streamRecordBuffer.trim().startsWith('{')) {
+      await processStreamRecord(streamRecordBuffer)
+      streamRecordBuffer = ''
+    }
+    await flushDeferredRelationships()
+    if (deferredRelationshipOps.length > 0) {
+      counts.skipped += deferredRelationshipOps.length
+      await writeEvent('assistant_note', {
+        note: `Skipped ${deferredRelationshipOps.length} deferred relationships because their endpoint nodes were not generated.`,
+        turn: { id: turn.id },
+        plannerProgress: {
+          phase: 'mapping_relationships',
+          message: `Skipped ${deferredRelationshipOps.length} deferred relationships with missing endpoints.`,
+          sequence: counts.ops + counts.notes + 1,
+          done: true,
+        },
+      })
+      deferredRelationshipOps.splice(0, deferredRelationshipOps.length)
+      await updateProgress(null)
+    }
+    usageRecorder.record({
+      surface: 'world-prompt-initial-seed-stream',
+      model,
+      response,
+      metadata: { jobId: job.id, turnId: turn.id },
+    })
+
+    for (const entityKey of [...touchedEntityKeys]) {
+      const touchedEntity = mutableSnapshot.worldEntities.find((entity) => entity.key === entityKey) ?? null
+      if (!touchedEntity) continue
+      const linkedEntity = await ensureAppliedEntityLinkedDefinition({
+        client: input.client,
+        snapshot: mutableSnapshot,
+        entity: touchedEntity,
+      })
+      if (linkedEntity.createdDefinition && !appliedDefinitions.some((entry) => entry.key === linkedEntity.createdDefinition?.key)) {
+        appliedDefinitions.push(linkedEntity.createdDefinition)
+      }
+    }
+    if (touchedEntityKeys.size > 0 || touchedRelationshipKeys.size > 0) {
+      const reconciledViews = await reconcileAutoManagedViewsForDraft({
+        client: input.client,
+        draftId: mutableSnapshot.draft.id,
+        snapshot: mutableSnapshot,
+        options: {
+          recentEntityKeys: [...touchedEntityKeys],
+          recentRelationshipKeys: [...touchedRelationshipKeys],
+          preferredRootEntityKey: [...touchedEntityKeys][0] ?? null,
+        },
+      })
+      preferredAutoViewKey = reconciledViews.preferredViewKey
+      await writeEvent('op_applied', {
+        applied: { worldViews: mutableSnapshot.worldViews },
+        turn: { id: turn.id },
+      })
+    }
+
+    const tokenUsage = usageRecorder.summary()
+    const aggregateCounts = mergeStreamCounts(job.counts, counts)
+    const updatedJobMetadata = {
+      ...(job.metadata ?? {}),
+      snapshot: mutableSnapshot,
+      lastCompletedStep: step
+        ? {
+            id: step.id,
+            key: step.stepKey,
+            phase: step.phase,
+            completedAt: new Date().toISOString(),
+          }
+        : null,
+      lastStepDefinitions: appliedDefinitions,
+    }
+
+    if (step && phase !== 'finalize') {
+      step = await updateGenerationJobStep(input.client, step.id, {
+        status: counts.failed > 0 ? 'completed' : 'completed',
+        completed_at: new Date().toISOString(),
+        counts,
+        token_usage: tokenUsage ?? {},
+        latest_applied_op_cursor: job.latestAppliedOpCursor,
+      })
+      job = await updateGenerationJob(input.client, job.id, {
+        status: 'running',
+        counts: aggregateCounts,
+        token_usage: tokenUsage ?? job.tokenUsage,
+        metadata: updatedJobMetadata,
+        heartbeat_at: new Date().toISOString(),
+      })
+      const steps = await loadGenerationJobSteps(input.client, job.id)
+      const nextStep = nextQueuedGenerationStep(steps)
+      if (nextStep) {
+        await enqueueWorldPromptGenerationStep({
+          client: input.client,
+          jobId: job.id,
+          stepId: nextStep.id,
+        })
+        await kickWorldPromptGenerationWorker()
+      }
+      await writeEvent('planner_status', {
+        plannerStatus: 'planning',
+        plannerProgress: {
+          phase: 'generating_entity',
+          message: `${String(step.metadata?.label ?? step.phase)} complete.`,
+          sequence: aggregateCounts.ops + aggregateCounts.notes + 1,
+          done: true,
+        },
+        turn: { id: turn.id },
+        job,
+        step,
+        tokenUsage,
+      })
+      return await loadGenerationJobById(input.client, job.id)
+    }
+
+    const completedProjectContext = buildCompletedProjectContextFromInitialSeedContext(turn.metadata?.initialSeedContext)
+    if (completedProjectContext) {
+      await persistProjectContextForSeed({
+        client: input.client,
+        snapshot: mutableSnapshot,
+        projectContext: completedProjectContext,
+      })
+    }
+
+    const finalSummary = assistantSummary || [
+      `Created ${aggregateCounts.entities} entities, ${aggregateCounts.sequenceUnits} sequence units, and ${aggregateCounts.relationships} relationships.`,
+      aggregateCounts.failed > 0 ? `${aggregateCounts.failed} streamed records were skipped.` : null,
+    ].filter(Boolean).join(' ')
+    const assistantMessage = await insertPromptMessage({
+      client: input.client,
+      sessionId: session.id,
+      turnId: turn.id,
+      draftId: mutableSnapshot.draft.id,
+      role: 'assistant',
+      content: finalSummary,
+      metadata: {
+        streamedGeneration: true,
+        counts: aggregateCounts,
+        tokenUsage: tokenUsage ?? undefined,
+        definitions: appliedDefinitions,
+      },
+    })
+    await writeEvent('message_created', { message: assistantMessage, turn: { id: turn.id } })
+    const finalTurnStatus = aggregateCounts.ops > 0 ? 'completed' : 'failed'
+    const finalJobStatus = aggregateCounts.failed > 0 && aggregateCounts.ops > 0
+      ? 'completed_with_errors'
+      : aggregateCounts.ops > 0
+        ? 'completed'
+        : 'failed'
+    const completedTurn = await updateTurn(input.client, turn.id, {
+      status: finalTurnStatus,
+      approval_state: 'not_required',
+      assistant_summary: finalSummary,
+      error_message: finalTurnStatus === 'failed' ? 'Initial world generation did not produce valid graph records.' : null,
+      metadata: {
+        ...(turn.metadata ?? {}),
+        streamedGeneration: true,
+        tokenUsage: tokenUsage ?? undefined,
+        counts: aggregateCounts,
+        selectedViewKey: preferredAutoViewKey,
+        definitions: appliedDefinitions,
+      },
+    })
+    const updatedSession = await updateSessionLifecycle({
+      client: input.client,
+      session,
+      prompt,
+      assistantSummary: finalSummary,
+      selectedRootEntityKey: [...touchedEntityKeys][0] ?? null,
+      selectedViewKey: preferredAutoViewKey,
+      selectedThreadKey: null,
+      summaryMemory: buildRollingSessionMemory({
+        session,
+        turn: completedTurn,
+        assistantSummary: finalSummary,
+        snapshot: mutableSnapshot,
+        selectedThreadKey: null,
+      }),
+      sessionMemoryState: buildSessionMemoryState({
+        session,
+        turn: completedTurn,
+        assistantSummary: finalSummary,
+        selectedThreadKey: null,
+      }),
+      retrievalDiagnostics: {
+        focusLayer: 'general',
+        continuityMode: 'fresh_question',
+        retrievedEntityKeys: [...touchedEntityKeys],
+        retrievedThreadKeys: [],
+        selectedViewKey: preferredAutoViewKey,
+      },
+    })
+    await updateGenerationJobProgress({
+      client: input.client,
+      jobId: job.id,
+      counts: aggregateCounts,
+      tokenUsage: tokenUsage as unknown as Record<string, unknown> | null,
+      status: finalJobStatus,
+      completed: true,
+      errorMessage: finalJobStatus === 'failed' ? 'Initial world generation did not produce valid graph records.' : null,
+    })
+    if (step) {
+      step = await updateGenerationJobStep(input.client, step.id, {
+        status: finalJobStatus === 'failed' ? 'failed' : 'completed',
+        completed_at: new Date().toISOString(),
+        counts,
+        token_usage: tokenUsage ?? {},
+        error_message: finalJobStatus === 'failed' ? 'Initial world generation did not produce valid graph records.' : null,
+      })
+    }
+    await writeEvent('planner_status', {
+      plannerStatus: finalTurnStatus === 'completed' ? 'completed' : 'blocked',
+      plannerProgress: {
+        phase: 'finalizing_world',
+        message: finalSummary,
+        sequence: aggregateCounts.ops + aggregateCounts.notes + 1,
+        done: true,
+      },
+      turn: completedTurn,
+      session: updatedSession,
+      tokenUsage,
+    })
+    await writeEvent(finalTurnStatus === 'completed' ? 'turn_completed' : 'turn_failed', {
+      note: finalSummary,
+      turn: completedTurn,
+      session: updatedSession,
+      diagnostics: aggregateCounts.failed > 0 ? [`${aggregateCounts.failed} streamed records were skipped.`] : [],
+      tokenUsage,
+    })
+    return await loadGenerationJobById(input.client, job.id)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Initial world generation failed.'
+    const cancelled = message.toLowerCase().includes('cancelled')
+    const aggregateCounts = mergeStreamCounts(job.counts, counts)
+    if (step && !cancelled && step.attemptCount < 2) {
+      step = await updateGenerationJobStep(input.client, step.id, {
+        status: 'queued',
+        error_message: message,
+        counts,
+        token_usage: usageRecorder.summary() ?? {},
+        heartbeat_at: new Date().toISOString(),
+      })
+      job = await updateGenerationJob(input.client, job.id, {
+        status: 'running',
+        counts: aggregateCounts,
+        metadata: {
+          ...(job.metadata ?? {}),
+          snapshot: mutableSnapshot,
+          lastFailedStep: {
+            id: step.id,
+            key: step.stepKey,
+            phase: step.phase,
+            message,
+            failedAt: new Date().toISOString(),
+          },
+        },
+        heartbeat_at: new Date().toISOString(),
+      })
+      await enqueueWorldPromptGenerationStep({
+        client: input.client,
+        jobId: job.id,
+        stepId: step.id,
+      })
+      await kickWorldPromptGenerationWorker()
+      await writeEvent('planner_status', {
+        plannerStatus: 'planning',
+        plannerProgress: {
+          phase: 'reading_context',
+          message: `Retrying ${String(step.metadata?.label ?? step.phase).toLowerCase()} generation step.`,
+          sequence: aggregateCounts.ops + aggregateCounts.notes + 1,
+        },
+        turn: { id: turn.id },
+        job,
+        step,
+      })
+      return await loadGenerationJobById(input.client, job.id)
+    }
+    if (step && !cancelled && (phase === 'relationships' || phase === 'finalize') && phase !== 'finalize') {
+      step = await updateGenerationJobStep(input.client, step.id, {
+        status: 'failed',
+        completed_at: new Date().toISOString(),
+        error_message: message,
+        counts,
+        token_usage: usageRecorder.summary() ?? {},
+      })
+      job = await updateGenerationJob(input.client, job.id, {
+        status: 'running',
+        counts: aggregateCounts,
+        metadata: {
+          ...(job.metadata ?? {}),
+          snapshot: mutableSnapshot,
+          skippedStep: {
+            id: step.id,
+            key: step.stepKey,
+            phase: step.phase,
+            message,
+            skippedAt: new Date().toISOString(),
+          },
+        },
+        heartbeat_at: new Date().toISOString(),
+      })
+      const steps = await loadGenerationJobSteps(input.client, job.id)
+      const nextStep = nextQueuedGenerationStep(steps)
+      if (nextStep) {
+        await enqueueWorldPromptGenerationStep({ client: input.client, jobId: job.id, stepId: nextStep.id })
+        await kickWorldPromptGenerationWorker()
+      }
+      await writeEvent('assistant_note', {
+        note: `${String(step.metadata?.label ?? step.phase)} failed after retry; continuing with the partial world.`,
+        diagnostics: [message],
+        turn: { id: turn.id },
+      })
+      return await loadGenerationJobById(input.client, job.id)
+    }
+    const nextStatus = cancelled ? 'cancelled' : aggregateCounts.ops > 0 ? 'completed_with_errors' : 'failed'
+    const nextTurnStatus = cancelled ? 'cancelled' : aggregateCounts.ops > 0 ? 'completed' : 'failed'
+    const finalSummary = aggregateCounts.ops > 0
+      ? `Initial world generation stopped after creating ${aggregateCounts.ops} graph records. ${message}`
+      : `Initial world generation failed before graph records could be created. ${message}`
+    const updatedTurn = await updateTurn(input.client, turn.id, {
+      status: nextTurnStatus,
+      approval_state: 'not_required',
+      assistant_summary: finalSummary,
+      error_message: nextTurnStatus === 'failed' ? message : null,
+      metadata: {
+        ...(turn.metadata ?? {}),
+        streamedGeneration: true,
+        counts: aggregateCounts,
+        tokenUsage: usageRecorder.summary() ?? undefined,
+      },
+    })
+    if (step) {
+      step = await updateGenerationJobStep(input.client, step.id, {
+        status: cancelled ? 'cancelled' : 'failed',
+        completed_at: new Date().toISOString(),
+        error_message: cancelled ? null : message,
+        counts,
+        token_usage: usageRecorder.summary() ?? {},
+      })
+    }
+    await updateGenerationJobProgress({
+      client: input.client,
+      jobId: job.id,
+      counts: aggregateCounts,
+      tokenUsage: usageRecorder.summary() as unknown as Record<string, unknown> | null,
+      status: nextStatus,
+      completed: true,
+      errorMessage: cancelled ? null : message,
+    })
+    await writeEvent(nextTurnStatus === 'failed' ? 'turn_failed' : 'turn_completed', {
+      note: finalSummary,
+      diagnostics: [message],
+      turn: updatedTurn,
+      session,
+      tokenUsage: usageRecorder.summary() ?? undefined,
+    }).catch((eventError) => {
+      console.error('[world-generation-job] failed to write terminal event.', eventError)
+    })
+    return await loadGenerationJobById(input.client, job.id)
+  }
 }
 
 export async function startWorldSeedInference(input: {
@@ -11047,63 +12434,55 @@ export async function continueWorldSeedGeneration(input: {
     selectedArtStylePreset: selectedPreset.id,
     selectedArtStyleDescription: payload.selectedArtStyleDescription || selectedPreset.description,
   })
-  let generationReadyResolve: (() => void) | null = null
-  const generationReady = new Promise<void>((resolve) => {
-    generationReadyResolve = resolve
-  })
-  let generationTurnState: { session: WorldPromptSession; turn: WorldPromptTurn } | null = null
-  const generationPromise = startWorldPromptTurn({
+  const generationTurnState = await createInitialSeedGenerationTurn({
     client: input.client,
-    authHeader: input.authHeader,
-    onTurnReady: (state) => {
-      generationTurnState = state
-      generationReadyResolve?.()
-      generationReadyResolve = null
-    },
-    payload: {
-      prompt: generationPrompt,
-      model: payload.model,
-      sessionKey: session.key,
-      sourceContext,
-      initialSeedMode: 'generate_skeleton',
-      initialSeedContext: {
-        mode: 'generate_skeleton',
-        sourceContext,
-        inference,
-        selectedArtStylePreset: selectedPreset.id,
-        selectedArtStyleDescription: payload.selectedArtStyleDescription || selectedPreset.description,
-        skeletonProfileId: skeletonProfile.id,
-      },
-      selectedSuggestionId: null,
-      selectedRootEntityKey: null,
-      selectedViewKey: null,
-      selectedThreadKey: null,
-      snapshot: seedSnapshot,
-    },
-  }).catch(async (error) => {
-    console.error('[world-seed-generation] background generation failed.', error)
-    generationReadyResolve?.()
-    generationReadyResolve = null
-    await writeInferenceEvent('turn_failed', {
-      note: 'Initial world generation stopped before the graph could be opened.',
-      diagnostics: [error instanceof Error ? error.message : 'Initial world generation failed.'],
-      session,
-      turn: completedInferenceTurn,
-    }).catch((eventError) => {
-      console.error('[world-seed-generation] failed to persist background failure event.', eventError)
-    })
+    session,
+    payload,
+    sourceContext,
+    inference,
+    skeletonProfile,
+    selectedPreset,
+    selectedArtStyleDescription: payload.selectedArtStyleDescription || selectedPreset.description,
+    projectContext,
+    generationPrompt,
   })
-  const waitUntil = (globalThis as unknown as { EdgeRuntime?: { waitUntil?: (promise: Promise<unknown>) => void } }).EdgeRuntime?.waitUntil
-  if (typeof waitUntil === 'function') {
-    waitUntil(generationPromise)
-  } else {
-    void generationPromise
+  const job = await createInitialSeedGenerationJob({
+    client: input.client,
+    session,
+    turn: generationTurnState.turn,
+    payload,
+    sourceContext,
+    inference,
+    skeletonProfile,
+    selectedPreset,
+    selectedArtStyleDescription: payload.selectedArtStyleDescription || selectedPreset.description,
+    projectContext,
+    generationPrompt,
+  })
+  await generationTurnState.writeEvent('planner_status', {
+    plannerStatus: 'planning',
+    plannerProgress: {
+      phase: 'reading_context',
+      message: 'Initial world generation job accepted.',
+      sequence: 1,
+    },
+    turn: { id: generationTurnState.turn.id },
+    job,
+  })
+  const steps = await createInitialSeedGenerationJobSteps({
+    client: input.client,
+    job,
+  })
+  const firstStep = nextQueuedGenerationStep(steps)
+  if (firstStep) {
+    await enqueueWorldPromptGenerationStep({
+      client: input.client,
+      jobId: job.id,
+      stepId: firstStep.id,
+    })
+    await kickWorldPromptGenerationWorker()
   }
-  await Promise.race([
-    generationReady,
-    new Promise<void>((resolve) => setTimeout(resolve, 5000)),
-  ])
-  const responseTurn = generationTurnState?.turn ?? completedInferenceTurn
+  const responseTurn = generationTurnState.turn
   const responseTurnIds = Array.from(new Set([completedInferenceTurn.id, responseTurn.id]))
   const responseMessages = (await Promise.all(responseTurnIds.map((turnId) => loadTurnMessages(input.client, turnId)))).flat()
   const responseEvents = (await Promise.all(responseTurnIds.map((turnId) => loadTurnEvents(input.client, turnId)))).flat()
@@ -11125,6 +12504,8 @@ export async function continueWorldSeedGeneration(input: {
     worldGraphConnections: seedSnapshot.worldGraphConnections,
     inference,
     skeletonProfile,
+    job,
+    steps,
   })
 }
 
@@ -11135,6 +12516,9 @@ export async function startWorldPromptTurn(input: {
   onTurnReady?: (state: { session: WorldPromptSession; turn: WorldPromptTurn }) => Promise<void> | void
 }) {
   const payload = worldPromptStartTurnRequestSchema.parse(input.payload)
+  if (payload.initialSeedMode === 'generate_skeleton') {
+    throw new Error('Initial world seed generation must use continue-world-seed-generation so it runs as a streamed durable job.')
+  }
   const session = await ensurePromptSession({ client: input.client, payload })
   const existingMessages = await loadSessionMessages(input.client, session.id)
   const compacted = compactMessageHistory(session.summaryMemory, existingMessages)
@@ -12429,6 +13813,188 @@ export async function cancelWorldPromptTurn(input: {
 
   return worldPromptCancelTurnResponseSchema.parse({
     ok: true,
+    turn,
+  })
+}
+
+export async function getWorldGenerationStatus(input: {
+  client: SupabaseClient
+  payload: unknown
+}) {
+  const payload = worldPromptGenerationStatusRequestSchema.parse(input.payload)
+  let job = await loadGenerationJobById(input.client, payload.jobId)
+  let turn = await loadTurnById(input.client, job.turnId)
+  const session = await loadSessionById(input.client, job.sessionId)
+  const steps = await loadGenerationJobSteps(input.client, job.id)
+  const terminalStatuses = ['completed', 'completed_with_errors', 'failed', 'cancelled']
+  const heartbeatMs = job.heartbeatAt ? new Date(job.heartbeatAt).getTime() : 0
+  const staleRunningJob = ['queued', 'running'].includes(job.status)
+    && heartbeatMs > 0
+    && Date.now() - heartbeatMs > 4 * 60_000
+  if (staleRunningJob) {
+    const counts = job.counts as Record<string, unknown>
+    const opCount = typeof counts.ops === 'number' ? counts.ops : 0
+    const finalJobStatus = opCount > 0 ? 'completed_with_errors' : 'failed'
+    const note = opCount > 0
+      ? `Initial world generation stopped after ${opCount} graph records. The partial world remains available.`
+      : 'Initial world generation stopped before graph records could be created.'
+    job = await updateGenerationJob(input.client, job.id, {
+      status: finalJobStatus,
+      completed_at: new Date().toISOString(),
+      error_message: opCount > 0 ? 'Generation worker heartbeat expired before normal completion.' : 'Generation worker heartbeat expired.',
+    })
+    if (!terminalStatuses.includes(turn.status)) {
+      turn = await updateTurn(input.client, turn.id, {
+        status: opCount > 0 ? 'completed' : 'failed',
+        approval_state: 'not_required',
+        assistant_summary: note,
+        error_message: opCount > 0 ? null : 'Generation worker heartbeat expired.',
+        metadata: {
+          ...(turn.metadata ?? {}),
+          streamedGeneration: true,
+          counts,
+          staleHeartbeatRecoveredAt: new Date().toISOString(),
+        },
+      })
+      const writeEvent = await createEventWriter({
+        client: input.client,
+        sessionId: turn.sessionId,
+        turnId: turn.id,
+        draftId: turn.draftId,
+      })
+      await writeEvent(opCount > 0 ? 'turn_completed' : 'turn_failed', {
+        note,
+        diagnostics: ['Generation worker heartbeat expired before normal completion.'],
+        turn,
+        session,
+        job,
+      })
+    }
+  }
+  const messages = await loadTurnMessages(input.client, turn.id)
+  const events = await loadTurnEvents(input.client, turn.id)
+  const terminal = terminalStatuses.includes(job.status)
+  if (!terminal && steps.some((step) => ['queued', 'running'].includes(step.status))) {
+    await kickWorldPromptGenerationWorker()
+  }
+  return worldPromptGenerationStatusResponseSchema.parse({
+    ok: true,
+    session,
+    turn,
+    messages,
+    events,
+    suggestions: [],
+    threads: [],
+    definitions: [],
+    projectContext: payload.snapshot.projectContext,
+    worldEntities: [],
+    worldRelationships: [],
+    worldViews: [],
+    worldOperators: [],
+    worldResults: [],
+    worldGraphConnections: [],
+    job,
+    steps,
+    terminal,
+  })
+}
+
+export async function processWorldGenerationJobs(input: {
+  client: SupabaseClient
+  authHeader: string
+}) {
+  const message = await readWorldPromptGenerationQueueMessage(input.client)
+  if (!message) {
+    return { ok: true, processed: false, job: null, steps: [] }
+  }
+  const payload = message.message ?? {}
+  const jobId = typeof payload.jobId === 'string' ? payload.jobId : ''
+  const stepId = typeof payload.stepId === 'string' ? payload.stepId : ''
+  if (!jobId || !stepId) {
+    await deleteWorldPromptGenerationQueueMessage({ client: input.client, msgId: message.msg_id })
+    return { ok: true, processed: false, job: null, steps: [], ignored: 'malformed_message' }
+  }
+
+  const job = await loadGenerationJobById(input.client, jobId)
+  const step = await loadGenerationJobStepById(input.client, stepId)
+  if (['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(job.status)
+    || ['completed', 'failed', 'skipped', 'cancelled'].includes(step.status)) {
+    await deleteWorldPromptGenerationQueueMessage({ client: input.client, msgId: message.msg_id })
+    return {
+      ok: true,
+      processed: false,
+      job,
+      steps: await loadGenerationJobSteps(input.client, job.id),
+      ignored: 'terminal_state',
+    }
+  }
+
+  const updatedJob = await runWorldPromptGenerationJob({
+    client: input.client,
+    authHeader: input.authHeader,
+    jobId,
+    stepId,
+  })
+  await deleteWorldPromptGenerationQueueMessage({ client: input.client, msgId: message.msg_id })
+  return {
+    ok: true,
+    processed: true,
+    job: updatedJob,
+    steps: await loadGenerationJobSteps(input.client, updatedJob.id),
+  }
+}
+
+export async function cancelWorldGenerationJob(input: {
+  client: SupabaseClient
+  payload: unknown
+}) {
+  const payload = worldPromptCancelGenerationJobRequestSchema.parse(input.payload)
+  let job = await loadGenerationJobById(input.client, payload.jobId)
+  let turn = await loadTurnById(input.client, job.turnId)
+  let steps = await loadGenerationJobSteps(input.client, job.id)
+  if (!['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(job.status)) {
+    job = await updateGenerationJob(input.client, job.id, {
+      status: 'cancelled',
+      completed_at: new Date().toISOString(),
+      error_message: null,
+    })
+  }
+  await Promise.all(steps
+    .filter((step) => ['queued', 'running'].includes(step.status))
+    .map((step) => updateGenerationJobStep(input.client, step.id, {
+      status: 'cancelled',
+      completed_at: new Date().toISOString(),
+      error_message: null,
+    })))
+  steps = await loadGenerationJobSteps(input.client, job.id)
+  if (['queued', 'streaming', 'awaiting_approval', 'awaiting_user_input'].includes(turn.status)) {
+    turn = await updateTurn(input.client, turn.id, {
+      status: 'cancelled',
+      approval_state: 'not_required',
+      assistant_summary: turn.assistantSummary || 'Initial world generation cancelled.',
+      error_message: null,
+    })
+    const writeEvent = await createEventWriter({
+      client: input.client,
+      sessionId: turn.sessionId,
+      turnId: turn.id,
+      draftId: turn.draftId,
+    })
+    await writeEvent('turn_cancel_requested', {
+      note: 'Initial world generation cancellation requested.',
+      turn,
+      job,
+    })
+    await writeEvent('turn_completed', {
+      note: 'Initial world generation cancelled.',
+      turn,
+      job,
+    })
+  }
+  return worldPromptCancelGenerationJobResponseSchema.parse({
+    ok: true,
+    job,
+    steps,
     turn,
   })
 }

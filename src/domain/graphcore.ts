@@ -35,6 +35,8 @@ import {
 } from './worldGraph.ts'
 import {
   worldPromptEventSchema,
+  worldPromptGenerationJobSchema,
+  worldPromptGenerationJobStepSchema,
   worldPromptMessageSchema,
   worldPromptSessionSchema,
   worldPromptSuggestionRecordSchema,
@@ -738,6 +740,8 @@ export const projectSnapshotSchema = z.object({
   worldPromptTurns: z.array(worldPromptTurnSchema).default([]),
   worldPromptMessages: z.array(worldPromptMessageSchema).default([]),
   worldPromptEvents: z.array(worldPromptEventSchema).default([]),
+  worldPromptGenerationJobs: z.array(worldPromptGenerationJobSchema).default([]),
+  worldPromptGenerationJobSteps: z.array(worldPromptGenerationJobStepSchema).default([]),
   worldPromptSuggestions: z.array(worldPromptSuggestionRecordSchema).default([]),
   worldThreads: z.array(worldThreadSchema).default([]),
   worldBuildBatches: z.array(worldBuildBatchSchema).default([]),
@@ -1421,6 +1425,8 @@ export const schemaCatalog = {
   worldGraphConnectionSchema,
   worldOperatorSchema,
   worldPromptEventSchema,
+  worldPromptGenerationJobSchema,
+  worldPromptGenerationJobStepSchema,
   worldPromptMessageSchema,
   worldPromptSessionSchema,
   worldPromptTurnSchema,

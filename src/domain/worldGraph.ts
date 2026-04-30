@@ -113,6 +113,7 @@ export const worldWikiSectionKindSchema = z.enum([
 ])
 
 export const worldWikiPresentationMetadataSchema = z.object({
+  title: z.string().default(''),
   logline: z.string().default(''),
   synopsis: z.string().default(''),
   genre: z.string().default(''),

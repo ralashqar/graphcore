@@ -332,6 +332,10 @@ export async function runOpenAiResponsesStream(
       throw new Error(state.streamErrorMessage)
     }
 
+    if (!state.finalBody) {
+      throw new Error('OpenAI streaming response ended before a terminal response event was received.')
+    }
+
     body = state.finalBody ?? {}
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)

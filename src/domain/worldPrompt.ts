@@ -98,6 +98,10 @@ export const worldPromptClassificationSchema = z.enum([
 ])
 export const worldPromptSuggestionUiKindSchema = z.enum(['next_move', 'clarification', 'advisory', 'diagnostic'])
 export const worldPromptSuggestionExecutionModeSchema = z.enum(['answer_only', 'plan_only', 'apply_if_selected'])
+export const worldPromptGenerationJobStatusSchema = z.enum(['queued', 'running', 'completed', 'completed_with_errors', 'failed', 'cancelled'])
+export const worldPromptGenerationJobKindSchema = z.enum(['initial_seed_stream'])
+export const worldPromptGenerationStepStatusSchema = z.enum(['queued', 'running', 'completed', 'failed', 'skipped', 'cancelled'])
+export const worldPromptGenerationStepPhaseSchema = z.enum(['world_bible', 'core_entities', 'sequence_units', 'relationships', 'finalize'])
 export const worldPromptAnswerModeSchema = z.enum(['answer_only', 'answer_plus_options', 'answer_plus_preview'])
 export const worldPromptResolvedModeSchema = z.enum(['answer_only', 'preview_first_wave', 'apply_compact_wave', 'blocked'])
 export const worldPromptResolvedIntentSchema = z.enum(['graph_build', 'refinement', 'advisory', 'diagnosis'])
@@ -513,6 +517,21 @@ export const worldPromptWorkItemResultSchema = z.object({
   suggestionCandidates: z.array(looseRecordSchema).default([]),
 })
 
+export const worldPromptStreamGraphOpEnvelopeSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('op'),
+    op: promptToWorldOpSchema,
+  }),
+  z.object({
+    kind: z.literal('note'),
+    message: z.string().min(1),
+  }),
+  z.object({
+    kind: z.literal('summary'),
+    assistantSummary: z.string().default(''),
+  }),
+])
+
 export const worldPromptIncrementalManifestSchema = z.object({
   summary: z.string().default(''),
   classification: worldPromptClassificationSchema.default('graphable_broad'),
@@ -771,6 +790,49 @@ export const worldPromptEventSchema = z.object({
   createdAt: z.string(),
 })
 
+export const worldPromptGenerationJobSchema = z.object({
+  id: z.string(),
+  draftId: z.string(),
+  sessionId: z.string(),
+  turnId: z.string(),
+  kind: worldPromptGenerationJobKindSchema.default('initial_seed_stream'),
+  status: worldPromptGenerationJobStatusSchema.default('queued'),
+  attemptCount: z.number().int().nonnegative().default(0),
+  heartbeatAt: z.string().nullable().default(null),
+  startedAt: z.string().nullable().default(null),
+  completedAt: z.string().nullable().default(null),
+  tokenUsage: looseRecordSchema.default({}),
+  counts: looseRecordSchema.default({}),
+  errorMessage: z.string().nullable().default(null),
+  metadata: looseRecordSchema.default({}),
+  latestAppliedOpCursor: z.string().nullable().default(null),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+})
+
+export const worldPromptGenerationJobStepSchema = z.object({
+  id: z.string(),
+  jobId: z.string(),
+  draftId: z.string(),
+  sessionId: z.string(),
+  turnId: z.string(),
+  stepKey: z.string(),
+  phase: worldPromptGenerationStepPhaseSchema,
+  status: worldPromptGenerationStepStatusSchema.default('queued'),
+  attemptCount: z.number().int().nonnegative().default(0),
+  orderIndex: z.number().int().nonnegative().default(0),
+  heartbeatAt: z.string().nullable().default(null),
+  startedAt: z.string().nullable().default(null),
+  completedAt: z.string().nullable().default(null),
+  tokenUsage: looseRecordSchema.default({}),
+  counts: looseRecordSchema.default({}),
+  errorMessage: z.string().nullable().default(null),
+  metadata: looseRecordSchema.default({}),
+  latestAppliedOpCursor: z.string().nullable().default(null),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+})
+
 export const worldPromptEventPayloadSchema = z.object({
   session: worldPromptSessionSchema.partial().optional(),
   turn: worldPromptTurnSchema.partial().optional(),
@@ -932,6 +994,31 @@ export const worldPromptSeedGenerationRequestSchema = z.object({
 export const worldPromptSeedGenerationResponseSchema = worldPromptStartTurnResponseSchema.extend({
   inference: worldPromptProjectContextInferenceSchema.optional(),
   skeletonProfile: worldSeedSkeletonProfileSchema.optional(),
+  job: worldPromptGenerationJobSchema.optional(),
+  steps: z.array(worldPromptGenerationJobStepSchema).default([]),
+})
+
+export const worldPromptGenerationStatusRequestSchema = z.object({
+  jobId: z.string().min(1),
+  snapshot: worldPromptSnapshotSchema,
+})
+
+export const worldPromptGenerationStatusResponseSchema = worldPromptStartTurnResponseSchema.extend({
+  job: worldPromptGenerationJobSchema,
+  steps: z.array(worldPromptGenerationJobStepSchema).default([]),
+  terminal: z.boolean().default(false),
+})
+
+export const worldPromptCancelGenerationJobRequestSchema = z.object({
+  jobId: z.string().min(1),
+  snapshot: worldPromptSnapshotSchema,
+})
+
+export const worldPromptCancelGenerationJobResponseSchema = z.object({
+  ok: z.literal(true),
+  job: worldPromptGenerationJobSchema,
+  steps: z.array(worldPromptGenerationJobStepSchema).default([]),
+  turn: worldPromptTurnSchema,
 })
 
 export const worldPromptResolveOpRequestSchema = z.object({
@@ -1027,6 +1114,8 @@ export type WorldPromptSession = z.infer<typeof worldPromptSessionSchema>
 export type WorldPromptTurn = z.infer<typeof worldPromptTurnSchema>
 export type WorldPromptMessage = z.infer<typeof worldPromptMessageSchema>
 export type WorldPromptEvent = z.infer<typeof worldPromptEventSchema>
+export type WorldPromptGenerationJob = z.infer<typeof worldPromptGenerationJobSchema>
+export type WorldPromptGenerationJobStep = z.infer<typeof worldPromptGenerationJobStepSchema>
 export type WorldPromptEventPayload = z.infer<typeof worldPromptEventPayloadSchema>
 export type WorldPromptPlannerProgress = z.infer<typeof worldPromptPlannerProgressSchema>
 export type WorldPromptIncrementalWorkItem = z.infer<typeof worldPromptIncrementalWorkItemSchema>
@@ -1034,6 +1123,7 @@ export type WorldPromptIncrementalManifest = z.infer<typeof worldPromptIncrement
 export type WorldPromptIncrementalBuildBrief = z.infer<typeof worldPromptIncrementalBuildBriefSchema>
 export type WorldPromptBuildLedgerEntry = z.infer<typeof worldPromptBuildLedgerEntrySchema>
 export type WorldPromptWorkItemContext = z.infer<typeof worldPromptWorkItemContextSchema>
+export type WorldPromptStreamGraphOpEnvelope = z.infer<typeof worldPromptStreamGraphOpEnvelopeSchema>
 export type WorldPromptWorkItemResult = z.infer<typeof worldPromptWorkItemResultSchema>
 export type WorldPromptTokenBudgetDiagnostics = z.infer<typeof worldPromptTokenBudgetDiagnosticsSchema>
 export type WorldPromptSessionMemoryState = z.infer<typeof worldPromptSessionMemoryStateSchema>
@@ -1055,6 +1145,10 @@ export type WorldPromptSeedInferenceRequest = z.infer<typeof worldPromptSeedInfe
 export type WorldPromptSeedInferenceResponse = z.infer<typeof worldPromptSeedInferenceResponseSchema>
 export type WorldPromptSeedGenerationRequest = z.infer<typeof worldPromptSeedGenerationRequestSchema>
 export type WorldPromptSeedGenerationResponse = z.infer<typeof worldPromptSeedGenerationResponseSchema>
+export type WorldPromptGenerationStatusRequest = z.infer<typeof worldPromptGenerationStatusRequestSchema>
+export type WorldPromptGenerationStatusResponse = z.infer<typeof worldPromptGenerationStatusResponseSchema>
+export type WorldPromptCancelGenerationJobRequest = z.infer<typeof worldPromptCancelGenerationJobRequestSchema>
+export type WorldPromptCancelGenerationJobResponse = z.infer<typeof worldPromptCancelGenerationJobResponseSchema>
 export type WorldPromptResolveOpRequest = z.infer<typeof worldPromptResolveOpRequestSchema>
 export type WorldPromptResolveOpResponse = z.infer<typeof worldPromptResolveOpResponseSchema>
 export type WorldPromptApplyPreviewRequest = z.infer<typeof worldPromptApplyPreviewRequestSchema>

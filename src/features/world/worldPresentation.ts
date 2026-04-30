@@ -4,6 +4,8 @@ import type {
   PromptToWorldOp,
   WorldPromptDiagnosticFinding,
   WorldPromptEvent,
+  WorldPromptGenerationJob,
+  WorldPromptGenerationJobStep,
   WorldPromptIncrementalWorkItem,
   WorldPromptMessage,
   WorldPromptPlannerFailure,
@@ -1012,6 +1014,8 @@ function readEventUsageTokens(event: WorldPromptEvent) {
 function readExactSessionUsageTokens(input: {
   turns: WorldPromptTurn[]
   events?: WorldPromptEvent[]
+  generationJobs?: WorldPromptGenerationJob[]
+  generationJobSteps?: WorldPromptGenerationJobStep[]
 }) {
   const usageByTurnId = new Map<string, number>()
   for (const turn of input.turns) {
@@ -1022,6 +1026,22 @@ function readExactSessionUsageTokens(input: {
     const tokens = readEventUsageTokens(event)
     if (!tokens) continue
     usageByTurnId.set(event.turnId, Math.max(usageByTurnId.get(event.turnId) ?? 0, tokens))
+  }
+  const stepUsageByTurnId = new Map<string, number>()
+  for (const step of input.generationJobSteps ?? []) {
+    const tokens = readUsageTokens(step.tokenUsage)
+    if (!tokens) continue
+    stepUsageByTurnId.set(step.turnId, (stepUsageByTurnId.get(step.turnId) ?? 0) + tokens)
+  }
+  for (const [turnId, tokens] of stepUsageByTurnId) {
+    usageByTurnId.set(turnId, Math.max(usageByTurnId.get(turnId) ?? 0, tokens))
+  }
+  const turnIdsWithStepUsage = new Set(stepUsageByTurnId.keys())
+  for (const job of input.generationJobs ?? []) {
+    if (turnIdsWithStepUsage.has(job.turnId)) continue
+    const tokens = readUsageTokens(job.tokenUsage)
+    if (!tokens) continue
+    usageByTurnId.set(job.turnId, Math.max(usageByTurnId.get(job.turnId) ?? 0, tokens))
   }
   return Array.from(usageByTurnId.values()).reduce((total, tokens) => total + tokens, 0)
 }
@@ -1070,12 +1090,16 @@ export function buildWorldPromptSessionTokenMeter(input: {
   turns: WorldPromptTurn[]
   messages: WorldPromptMessage[]
   events?: WorldPromptEvent[]
+  generationJobs?: WorldPromptGenerationJob[]
+  generationJobSteps?: WorldPromptGenerationJobStep[]
   model?: string | null
 }): WorldPromptSessionTokenMeter {
   const tokenLimit = resolveModelTokenLimit(input.model ?? input.turns.at(-1)?.model)
   const exactTokens = readExactSessionUsageTokens({
     turns: input.turns,
     events: input.events,
+    generationJobs: input.generationJobs,
+    generationJobSteps: input.generationJobSteps,
   })
   const estimated = exactTokens <= 0
   const usedTokens = exactTokens > 0

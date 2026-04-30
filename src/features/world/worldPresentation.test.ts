@@ -22,7 +22,7 @@ import {
   stripInternalPlannerDiagnostics,
 } from './worldPresentation.ts'
 import { promptToWorldOpSchema, worldPromptStartTurnResponseSchema } from '../../domain/worldPrompt.ts'
-import type { PromptToWorldOp, WorldPromptEvent, WorldPromptMessage, WorldPromptSuggestion, WorldPromptTurn } from '../../domain/worldPrompt.ts'
+import type { PromptToWorldOp, WorldPromptEvent, WorldPromptGenerationJob, WorldPromptGenerationJobStep, WorldPromptMessage, WorldPromptSuggestion, WorldPromptTurn } from '../../domain/worldPrompt.ts'
 import type { WorldEntity, WorldGraphConnection, WorldOperator, WorldRelationship, WorldResult } from '../../domain/worldGraph.ts'
 
 test('stripInternalPlannerDiagnostics removes planner validation tails', () => {
@@ -108,6 +108,40 @@ test('buildWorldPromptSessionTokenMeter uses latest event token usage while a tu
   assert.equal(meter.estimated, false)
   assert.equal(meter.usedTokens, 31_000)
   assert.equal(meter.label, '31k/400k')
+})
+
+test('buildWorldPromptSessionTokenMeter uses durable generation step token usage after initial seed jobs', () => {
+  const turn = makeTurn({
+    id: 't-seed-token-job',
+    model: 'gpt-5.4-mini',
+    metadata: {},
+  })
+  const meter = buildWorldPromptSessionTokenMeter({
+    turns: [turn],
+    messages: [],
+    generationJobs: [
+      makeGenerationJob({
+        turnId: turn.id,
+        tokenUsage: { totalTokens: 1_000 },
+      }),
+    ],
+    generationJobSteps: [
+      makeGenerationJobStep({
+        id: 'step-core',
+        turnId: turn.id,
+        tokenUsage: { inputTokens: 44_000, outputTokens: 6_000 },
+      }),
+      makeGenerationJobStep({
+        id: 'step-sequence',
+        turnId: turn.id,
+        tokenUsage: { totalTokens: 45_000 },
+      }),
+    ],
+  })
+
+  assert.equal(meter.estimated, false)
+  assert.equal(meter.usedTokens, 95_000)
+  assert.equal(meter.label, '95k/400k')
 })
 
 test('buildWorldPromptSessionTokenMeter resolves GPT-5.4 mini context window separately from flagship', () => {
@@ -1655,6 +1689,7 @@ test('promptToWorldOpSchema accepts project wiki metadata updates', () => {
       targetViewKey: null,
       reason: 'Fill missing overview fields.',
       metadata: {
+        title: 'The Archive That Eats Names',
         logline: 'A memory-walking archivist must save a city from forgetting itself.',
         synopsis: 'A compact overview of the current graph canon.',
         themes: ['memory', 'inheritance'],
@@ -1667,6 +1702,7 @@ test('promptToWorldOpSchema accepts project wiki metadata updates', () => {
   assert.equal(describePromptOp(parsed), 'Update world wiki overview')
   assert.equal(parsed.op, 'update_world_wiki_metadata')
   if (parsed.op === 'update_world_wiki_metadata') {
+    assert.equal(parsed.payload.metadata.title, 'The Archive That Eats Names')
     assert.equal(parsed.payload.metadata.logline, 'A memory-walking archivist must save a city from forgetting itself.')
   }
 })
@@ -1735,6 +1771,55 @@ function makeEvent(overrides: Partial<WorldPromptEvent> = {}): WorldPromptEvent 
     },
     metadata: {},
     createdAt: '2026-04-22T10:01:00.000Z',
+    ...overrides,
+  }
+}
+
+function makeGenerationJob(overrides: Partial<WorldPromptGenerationJob> = {}): WorldPromptGenerationJob {
+  return {
+    id: 'job-1',
+    draftId: 'd1',
+    sessionId: 's1',
+    turnId: 't1',
+    kind: 'initial_seed_stream',
+    status: 'completed',
+    attemptCount: 1,
+    heartbeatAt: null,
+    startedAt: null,
+    completedAt: null,
+    tokenUsage: {},
+    counts: {},
+    errorMessage: null,
+    metadata: {},
+    latestAppliedOpCursor: null,
+    createdAt: '2026-04-22T10:00:00.000Z',
+    updatedAt: '2026-04-22T10:00:00.000Z',
+    ...overrides,
+  }
+}
+
+function makeGenerationJobStep(overrides: Partial<WorldPromptGenerationJobStep> = {}): WorldPromptGenerationJobStep {
+  return {
+    id: 'step-1',
+    jobId: 'job-1',
+    draftId: 'd1',
+    sessionId: 's1',
+    turnId: 't1',
+    stepKey: 'core_entities',
+    phase: 'core_entities',
+    status: 'completed',
+    attemptCount: 1,
+    orderIndex: 1,
+    heartbeatAt: null,
+    startedAt: null,
+    completedAt: null,
+    tokenUsage: {},
+    counts: {},
+    errorMessage: null,
+    metadata: {},
+    latestAppliedOpCursor: null,
+    createdAt: '2026-04-22T10:00:00.000Z',
+    updatedAt: '2026-04-22T10:00:00.000Z',
     ...overrides,
   }
 }

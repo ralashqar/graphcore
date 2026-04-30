@@ -36,9 +36,14 @@ import type {
 } from '../domain/worldGraph'
 import {
   worldPromptEventPayloadSchema,
+  worldPromptArtStyleOptionSchema,
+  worldPromptProjectContextInferenceSchema,
   worldPromptRetrievalDiagnosticsSchema,
   type PromptToWorldOp,
+  type WorldPromptArtStyleOption,
   type WorldPromptEvent,
+  type WorldPromptGenerationJob,
+  type WorldPromptGenerationJobStep,
   type WorldPromptMessage,
   type WorldPromptSeedGenerationResponse,
   type WorldPromptSeedInferenceResponse,
@@ -48,6 +53,7 @@ import {
   type WorldPromptSuggestionRecord,
   type WorldPromptTurn,
 } from '../domain/worldPrompt'
+import { getWorldSeedSkeletonProfile } from '../domain/worldSeedProfiles'
 import type { WorldThread } from '../domain/worldThread'
 import {
   buildWorldBreadcrumbSegments,
@@ -145,6 +151,8 @@ type WorldGraphPageProps = {
   worldPromptTurns: WorldPromptTurn[]
   worldPromptMessages: WorldPromptMessage[]
   worldPromptEvents: WorldPromptEvent[]
+  worldPromptGenerationJobs: WorldPromptGenerationJob[]
+  worldPromptGenerationJobSteps: WorldPromptGenerationJobStep[]
   worldPromptSuggestions: WorldPromptSuggestionRecord[]
   worldViewMode: WorldWorkspaceMode
   projectContext: ProjectContext | null
@@ -794,6 +802,8 @@ export function WorldGraphPage({
   worldPromptTurns,
   worldPromptMessages,
   worldPromptEvents,
+  worldPromptGenerationJobs,
+  worldPromptGenerationJobSteps,
   worldPromptSuggestions,
   worldViewMode,
   projectContext,
@@ -1037,6 +1047,81 @@ export function WorldGraphPage({
       : [],
     [selectedPromptSession, worldPromptEvents],
   )
+  const sessionGenerationJobs = useMemo(
+    () => selectedPromptSession
+      ? worldPromptGenerationJobs
+          .filter((job) => job.sessionId === selectedPromptSession.id)
+          .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
+      : [],
+    [selectedPromptSession, worldPromptGenerationJobs],
+  )
+  const sessionGenerationJobSteps = useMemo(
+    () => selectedPromptSession
+      ? worldPromptGenerationJobSteps
+          .filter((step) => step.sessionId === selectedPromptSession.id)
+          .sort((left, right) => left.orderIndex - right.orderIndex || new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime())
+      : [],
+    [selectedPromptSession, worldPromptGenerationJobSteps],
+  )
+  const activeInitialSeedGenerationJob = useMemo(() => {
+    const jobs = sessionGenerationJobs.filter((job) => job.kind === 'initial_seed_stream')
+    return jobs.find((job) => ['queued', 'running'].includes(job.status)) ?? jobs[0] ?? null
+  }, [sessionGenerationJobs])
+  const initialSeedGenerationTurn = useMemo(() => [...sessionTurns].reverse().find((turn) => {
+    const metadata = turn.metadata as { initialSeedMode?: unknown; initialSeedContext?: { mode?: unknown } } | null | undefined
+    return metadata?.initialSeedMode === 'generate_skeleton'
+      || metadata?.initialSeedContext?.mode === 'generate_skeleton'
+  }) ?? null, [sessionTurns])
+  const recoveredSeedInferenceResult = useMemo<WorldPromptSeedInferenceResponse | null>(() => {
+    if (seedInferenceResult || !selectedPromptSession) return null
+    const inferenceTurn = [...sessionTurns].reverse().find((turn) => {
+      const metadata = turn.metadata as { initialSeedMode?: unknown; initialSeedContext?: { mode?: unknown } } | null | undefined
+      return metadata?.initialSeedMode === 'infer_context'
+        || metadata?.initialSeedContext?.mode === 'infer_context'
+    }) ?? null
+    if (!inferenceTurn) return null
+    const metadata = inferenceTurn.metadata as Record<string, unknown>
+    const initialSeedContext = metadata.initialSeedContext && typeof metadata.initialSeedContext === 'object'
+      ? metadata.initialSeedContext as Record<string, unknown>
+      : {}
+    const inference = worldPromptProjectContextInferenceSchema.safeParse(
+      metadata.projectContextInference ?? initialSeedContext.inference,
+    )
+    if (!inference.success) return null
+    const artStyleOptions: WorldPromptArtStyleOption[] = []
+    if (Array.isArray(metadata.artStyleOptions)) {
+      for (const option of metadata.artStyleOptions) {
+        const parsedOption = worldPromptArtStyleOptionSchema.safeParse(option)
+        if (parsedOption.success) artStyleOptions.push(parsedOption.data)
+      }
+    }
+    return {
+      ok: true,
+      session: selectedPromptSession,
+      turn: inferenceTurn,
+      messages: sessionMessages.filter((message) => message.turnId === inferenceTurn.id),
+      events: sessionEvents.filter((event) => event.turnId === inferenceTurn.id),
+      inference: inference.data,
+      artStyleOptions,
+      skeletonProfile: getWorldSeedSkeletonProfile(inference.data.projectSubtype),
+    }
+  }, [seedInferenceResult, selectedPromptSession, sessionEvents, sessionMessages, sessionTurns])
+  const effectiveSeedInferenceResult = seedInferenceResult ?? recoveredSeedInferenceResult
+  const effectiveSeedGenerationStarted = seedGenerationStarted
+    || Boolean(activeInitialSeedGenerationJob)
+    || Boolean(initialSeedGenerationTurn)
+  const onboardingSessionEvents = useMemo(() => {
+    if (!showProjectOnboarding) return sessionEvents
+    const visibleTurnIds = new Set<string>()
+    if (effectiveSeedInferenceResult?.turn.id) visibleTurnIds.add(effectiveSeedInferenceResult.turn.id)
+    if (activeInitialSeedGenerationJob?.turnId) {
+      visibleTurnIds.add(activeInitialSeedGenerationJob.turnId)
+    } else if (initialSeedGenerationTurn) {
+      visibleTurnIds.add(initialSeedGenerationTurn.id)
+    }
+    if (visibleTurnIds.size === 0) return []
+    return sessionEvents.filter((event) => visibleTurnIds.has(event.turnId))
+  }, [activeInitialSeedGenerationJob?.turnId, effectiveSeedInferenceResult?.turn.id, initialSeedGenerationTurn, sessionEvents, showProjectOnboarding])
   const sessionSuggestions = useMemo(
     () => selectedPromptSession
       ? worldPromptSuggestions
@@ -3648,9 +3733,10 @@ export function WorldGraphPage({
       >
         <ProjectWorldOnboarding
           isSaving={projectOnboardingSaving || isPromptSubmitting}
-          seedInference={seedInferenceResult}
-          seedGenerationStarted={seedGenerationStarted}
-          sessionEvents={sessionEvents}
+          seedInference={effectiveSeedInferenceResult}
+          seedGenerationStarted={effectiveSeedGenerationStarted}
+          sessionEvents={onboardingSessionEvents}
+          generationSteps={sessionGenerationJobSteps}
           sessionMessages={sessionMessages}
           sessionTurns={sessionTurns}
           onSubmit={handleSubmitFirstWorld}
@@ -3695,6 +3781,8 @@ export function WorldGraphPage({
                 sessionMessages={sessionMessages}
                 sessionSuggestions={activeSessionSuggestions}
                 sessionTurns={sessionTurns}
+                sessionGenerationJobs={sessionGenerationJobs}
+                sessionGenerationJobSteps={sessionGenerationJobSteps}
                 sessionSuggestionCountBySessionId={activeSuggestionCountBySessionId}
                 turnLensByTurnId={turnLensByTurnId}
                 activeTurnLensId={activeTurnLens?.turnId ?? null}
@@ -4214,6 +4302,8 @@ export function WorldGraphPage({
                   sessionMessages={sessionMessages}
                   sessionSuggestions={activeSessionSuggestions}
                   sessionTurns={sessionTurns}
+                  sessionGenerationJobs={sessionGenerationJobs}
+                  sessionGenerationJobSteps={sessionGenerationJobSteps}
                   sessionSuggestionCountBySessionId={activeSuggestionCountBySessionId}
                   turnLensByTurnId={turnLensByTurnId}
                   activeTurnLensId={activeTurnLens?.turnId ?? null}
@@ -5972,6 +6062,8 @@ function WorldPromptChatPanel({
   sessionMessages,
   sessionSuggestions,
   sessionTurns,
+  sessionGenerationJobs,
+  sessionGenerationJobSteps,
   sessionSuggestionCountBySessionId,
   turnLensByTurnId,
   activeTurnLensId,
@@ -6014,6 +6106,8 @@ function WorldPromptChatPanel({
   sessionMessages: WorldPromptMessage[]
   sessionSuggestions: WorldPromptSuggestionRecord[]
   sessionTurns: WorldPromptTurn[]
+  sessionGenerationJobs: WorldPromptGenerationJob[]
+  sessionGenerationJobSteps: WorldPromptGenerationJobStep[]
   sessionSuggestionCountBySessionId: Record<string, number>
   turnLensByTurnId: Map<string, WorldPromptTurnLens>
   activeTurnLensId: string | null
@@ -6158,9 +6252,11 @@ function WorldPromptChatPanel({
       turns: sessionTurns,
       messages: sessionMessages,
       events: sessionEvents,
+      generationJobs: sessionGenerationJobs,
+      generationJobSteps: sessionGenerationJobSteps,
       model: selectedSession?.model ?? activePromptTurn?.model ?? sessionTurns.at(-1)?.model ?? null,
     }),
-    [activePromptTurn?.model, selectedSession?.model, sessionEvents, sessionMessages, sessionTurns],
+    [activePromptTurn?.model, selectedSession?.model, sessionEvents, sessionGenerationJobSteps, sessionGenerationJobs, sessionMessages, sessionTurns],
   )
   const sessionStatusByKey = useMemo(() => {
     return Object.fromEntries(worldPromptSessions.map((session) => {

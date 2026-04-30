@@ -64,6 +64,8 @@ import {
   worldPromptSessionSchema,
   worldPromptTurnSchema,
   type WorldPromptEvent,
+  type WorldPromptGenerationJob,
+  type WorldPromptGenerationJobStep,
   type WorldPromptMessage,
   type WorldPromptSeedGenerationResponse,
   type WorldPromptSeedInferenceResponse,
@@ -394,6 +396,12 @@ function mergePersistedWorldGraphSnapshot(current: ProjectSnapshot, incoming: Pr
     worldPromptEvents: mergeResourcesById(current.worldPromptEvents, incoming.worldPromptEvents).sort((left, right) => (
       new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime() || left.sequence - right.sequence
     )),
+    worldPromptGenerationJobs: mergeResourcesById(current.worldPromptGenerationJobs, incoming.worldPromptGenerationJobs).sort((left, right) => (
+      new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+    )),
+    worldPromptGenerationJobSteps: mergeResourcesById(current.worldPromptGenerationJobSteps, incoming.worldPromptGenerationJobSteps).sort((left, right) => (
+      left.orderIndex - right.orderIndex || new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
+    )),
     worldPromptSuggestions: mergeResourcesById(current.worldPromptSuggestions, incoming.worldPromptSuggestions).sort((left, right) => (
       left.rank - right.rank || new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
     )),
@@ -420,6 +428,8 @@ function mergeWorldPromptStateIntoSnapshot(snapshot: ProjectSnapshot, input: {
   turns?: WorldPromptTurn[]
   messages?: WorldPromptMessage[]
   events?: WorldPromptEvent[]
+  generationJobs?: WorldPromptGenerationJob[]
+  generationJobSteps?: WorldPromptGenerationJobStep[]
   suggestions?: WorldPromptSuggestionRecord[]
   threads?: WorldThread[]
 }) {
@@ -445,6 +455,16 @@ function mergeWorldPromptStateIntoSnapshot(snapshot: ProjectSnapshot, input: {
         new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime() || left.sequence - right.sequence
       ))
       : snapshot.worldPromptEvents,
+    worldPromptGenerationJobs: input.generationJobs
+      ? mergeResourcesById(snapshot.worldPromptGenerationJobs, input.generationJobs).sort((left, right) => (
+        new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+      ))
+      : snapshot.worldPromptGenerationJobs,
+    worldPromptGenerationJobSteps: input.generationJobSteps
+      ? mergeResourcesById(snapshot.worldPromptGenerationJobSteps, input.generationJobSteps).sort((left, right) => (
+        left.orderIndex - right.orderIndex || new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
+      ))
+      : snapshot.worldPromptGenerationJobSteps,
     worldPromptSuggestions: input.suggestions
       ? mergeResourcesById(snapshot.worldPromptSuggestions, input.suggestions).sort((left, right) => (
         left.rank - right.rank || new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
@@ -600,6 +620,9 @@ function isInitialSeedFlowTurn(turn: WorldPromptTurn) {
 function isInitialSeedSessionFinished(snapshot: ProjectSnapshot, sessionKey: string) {
   const session = snapshot.worldPromptSessions.find((entry) => entry.key === sessionKey)
   if (!session) return false
+  const sessionJobs = snapshot.worldPromptGenerationJobs.filter((job) => job.sessionId === session.id)
+  if (sessionJobs.some((job) => ['queued', 'running'].includes(job.status))) return false
+  if (sessionJobs.some((job) => ['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(job.status))) return true
   const turns = snapshot.worldPromptTurns.filter((turn) => turn.sessionId === session.id)
   const generationTurns = turns.filter((turn) => {
     if (turn.metadata?.initialSeedMode === 'generate_skeleton') return true
@@ -612,7 +635,8 @@ function isInitialSeedSessionFinished(snapshot: ProjectSnapshot, sessionKey: str
 }
 
 function hasPendingInitialSeedGeneration(snapshot: ProjectSnapshot): boolean {
-  return snapshot.worldPromptTurns.some((turn) => (
+  return snapshot.worldPromptGenerationJobs.some((job) => ['queued', 'running'].includes(job.status))
+    || snapshot.worldPromptTurns.some((turn) => (
     (isPendingInitialSeedGenerationTurn(turn) && turn.status !== 'failed')
     || isOpenInitialSeedFlowTurn(turn)
   ))
@@ -1835,6 +1859,26 @@ export default function App() {
         setSnapshot(nextSnapshot)
         setBundle(compileBundle(nextSnapshot))
       },
+      onGenerationJob: (job) => {
+        if (desiredGameSelectionRef.current) return
+        const current = snapshotRef.current
+        if (!current) return
+        if (current.draft.id !== job.draftId) return
+        const nextSnapshot = mergeWorldPromptStateIntoSnapshot(current, { generationJobs: [job] })
+        snapshotRef.current = nextSnapshot
+        setSnapshot(nextSnapshot)
+        setBundle(compileBundle(nextSnapshot))
+      },
+      onGenerationJobStep: (step) => {
+        if (desiredGameSelectionRef.current) return
+        const current = snapshotRef.current
+        if (!current) return
+        if (current.draft.id !== step.draftId) return
+        const nextSnapshot = mergeWorldPromptStateIntoSnapshot(current, { generationJobSteps: [step] })
+        snapshotRef.current = nextSnapshot
+        setSnapshot(nextSnapshot)
+        setBundle(compileBundle(nextSnapshot))
+      },
       onSuggestion: (suggestion) => {
         if (desiredGameSelectionRef.current) return
         const current = snapshotRef.current
@@ -1861,6 +1905,51 @@ export default function App() {
       void supabase.removeChannel(channel)
     }
   }, [loadedState?.source, snapshot?.draft.id])
+
+  useEffect(() => {
+    if (loadedState?.source !== 'supabase' || !snapshot) return
+    const activeJobIds = snapshot.worldPromptGenerationJobs
+      .filter((job) => ['queued', 'running'].includes(job.status))
+      .map((job) => job.id)
+    if (activeJobIds.length === 0) return
+
+    let disposed = false
+    const poll = async () => {
+      const current = snapshotRef.current
+      if (!current || current.draft.id !== snapshot.draft.id) return
+      for (const jobId of activeJobIds) {
+        try {
+          const status = await workspaceService.getWorldGenerationStatus(current, { jobId })
+          if (disposed) return
+          let nextSnapshot = mergeWorldPromptStateIntoSnapshot(snapshotRef.current ?? current, {
+            sessions: [status.session],
+            turns: [status.turn],
+            messages: status.messages,
+            events: status.events,
+            generationJobs: [status.job],
+            generationJobSteps: status.steps,
+            suggestions: status.suggestions,
+            threads: status.threads,
+          })
+          nextSnapshot = mergeWorldPromptEventsIntoSnapshot(nextSnapshot, status.events)
+          snapshotRef.current = nextSnapshot
+          setSnapshot(nextSnapshot)
+          setBundle(compileBundle(nextSnapshot))
+        } catch (error) {
+          console.warn('[GraphCore] failed to poll world generation status.', error)
+        }
+      }
+    }
+
+    void poll()
+    const intervalId = window.setInterval(() => {
+      void poll()
+    }, 3000)
+    return () => {
+      disposed = true
+      window.clearInterval(intervalId)
+    }
+  }, [loadedState?.source, snapshot?.draft.id, snapshot?.worldPromptGenerationJobs])
 
   useEffect(() => {
     if (loadedState?.source !== 'supabase') return
@@ -3154,6 +3243,8 @@ export default function App() {
         worldPromptTurns: [],
         worldPromptMessages: [],
         worldPromptEvents: [],
+        worldPromptGenerationJobs: [],
+        worldPromptGenerationJobSteps: [],
         worldPromptSuggestions: [],
         worldBuildBatches: [],
       }))
@@ -3971,6 +4062,8 @@ export default function App() {
       sessions: [result.session],
       turns: [result.turn],
       messages: result.messages,
+      generationJobs: result.job ? [result.job] : [],
+      generationJobSteps: result.steps,
       suggestions: result.suggestions,
       threads: result.threads,
     })
@@ -5919,6 +6012,8 @@ export default function App() {
                 worldPromptTurns={snapshot.worldPromptTurns}
                 worldPromptMessages={snapshot.worldPromptMessages}
                 worldPromptEvents={snapshot.worldPromptEvents}
+                worldPromptGenerationJobs={snapshot.worldPromptGenerationJobs}
+                worldPromptGenerationJobSteps={snapshot.worldPromptGenerationJobSteps}
                 worldPromptSuggestions={snapshot.worldPromptSuggestions}
                 worldViewMode={worldViewMode}
                 projectContext={snapshot.projectContext}

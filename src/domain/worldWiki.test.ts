@@ -155,6 +155,18 @@ test('deriveWorldWiki builds overview, sections, profiles, and thread pages from
   })
   const wiki = deriveWorldWiki({
     snapshot: createSnapshot({
+      draft: {
+        id: 'draft-1',
+        name: 'Draft 1',
+        version: 1,
+        isPrimary: true,
+        updatedAt: '2026-04-28T08:00:00.000Z',
+        metadata: {
+          worldWiki: {
+            title: 'The Memory Archive',
+          },
+        },
+      },
       worldEntities: [hero, place, event],
       worldRelationships: [
         createRelationship({ key: 'r1', sourceEntityKey: hero.key, targetEntityKey: place.key, verb: 'discovers' }),
@@ -174,7 +186,8 @@ test('deriveWorldWiki builds overview, sections, profiles, and thread pages from
     }),
   })
 
-  assert.equal(wiki.title, 'Echoes of Aetheria')
+  assert.equal(wiki.title, 'The Memory Archive')
+  assert.equal(wiki.overview.title, 'The Memory Archive')
   assert.equal(wiki.overview.logline, 'An archivist enters memories to save a city from forgetting itself.')
   assert.equal(wiki.overview.heroEntityKey, place.key)
   assert.ok(wiki.sections.some((section) => section.kind === 'cast' && section.entityKeys.includes(hero.key)))
@@ -201,6 +214,7 @@ test('deriveWorldWiki reads project-wide draft wiki metadata before project summ
         updatedAt: '2026-04-28T08:00:00.000Z',
         metadata: {
           worldWiki: {
+            title: 'The Archive That Eats Names',
             logline: 'A memory-walking archivist must save a city from forgetting itself.',
             synopsis: 'The draft-level wiki synopsis wins over the project summary.',
             genre: 'fantasy mystery',
@@ -224,11 +238,30 @@ test('deriveWorldWiki reads project-wide draft wiki metadata before project summ
     }),
   })
 
+  assert.equal(wiki.title, 'The Archive That Eats Names')
+  assert.equal(wiki.overview.title, 'The Archive That Eats Names')
   assert.equal(wiki.overview.logline, 'A memory-walking archivist must save a city from forgetting itself.')
   assert.equal(wiki.overview.synopsis, 'The draft-level wiki synopsis wins over the project summary.')
   assert.equal(wiki.overview.genre, 'fantasy mystery')
   assert.deepEqual(wiki.overview.themes, ['memory', 'inheritance'])
   assert.deepEqual(wiki.overview.visualMotifs, ['crystal stacks'])
+})
+
+test('deriveWorldWiki does not use project name as the content title fallback', () => {
+  const wiki = deriveWorldWiki({
+    snapshot: createSnapshot({
+      project: {
+        id: 'project-1',
+        name: 'My private workspace name',
+        slug: 'workspace-name',
+        summary: '',
+        visibility: 'private',
+      },
+    }),
+  })
+
+  assert.equal(wiki.title, 'Untitled World')
+  assert.equal(wiki.overview.title, 'Untitled World')
 })
 
 test('deriveWorldWiki reports stale project wiki fingerprints', () => {

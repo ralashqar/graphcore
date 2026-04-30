@@ -59,6 +59,7 @@ export type WorldWikiGap = {
 export type WorldWikiModel = {
   title: string
   overview: {
+    title: string
     logline: string
     synopsis: string
     genre: string
@@ -262,12 +263,12 @@ export function deriveWorldWiki(input: {
   view?: WorldView | null
 }): WorldWikiModel {
   const viewMetadata = input.view ? getWorldViewSemanticMetadata(input.view) : null
+  const projectWiki = readProjectWorldWikiPresentation(input.snapshot)
   const title = viewMetadata?.viewKind === 'wiki_custom'
     || viewMetadata?.viewKind === 'wiki_entity_profile'
     || viewMetadata?.viewKind === 'wiki_thread_arc'
-    ? input.view?.name || input.snapshot.project.name
-    : input.snapshot.project.name
-  const projectWiki = readProjectWorldWikiPresentation(input.snapshot)
+    ? input.view?.name || projectWiki.title || 'Untitled Wiki Page'
+    : projectWiki.title || 'Untitled World'
   const scopedEntities = resolveScopedEntities({
     entities: input.snapshot.worldEntities,
     threads: input.snapshot.worldThreads,
@@ -479,7 +480,7 @@ export function deriveWorldWiki(input: {
       key: 'world-wiki-gap-refresh',
       kind: 'wiki_refresh',
       label: 'Refresh overview',
-      prompt: 'Refresh only the project-wide wiki overview metadata from the current graph canon: logline, synopsis, themes, tone tags, genre, core conflict, and visual motifs. Do not add new canon.',
+      prompt: 'Refresh only the project-wide wiki overview metadata from the current graph canon: generated content title, logline, synopsis, themes, tone tags, genre, core conflict, and visual motifs. Do not add new canon.',
       entityKey: null,
       threadKey: null,
       sectionKind: 'overview',
@@ -545,6 +546,7 @@ export function deriveWorldWiki(input: {
   return {
     title,
     overview: {
+      title,
       logline: wiki.logline || '',
       synopsis,
       genre: wiki.genre || '',

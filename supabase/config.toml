@@ -167,6 +167,9 @@ verify_jwt = false
 [functions.continue-world-seed-generation]
 verify_jwt = false
 
+[functions.process-world-generation-jobs]
+verify_jwt = false
+
 [functions.extract-source-url]
 verify_jwt = false
 

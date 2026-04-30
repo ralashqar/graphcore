@@ -10,6 +10,7 @@ import {
   worldPromptEventPayloadSchema,
   type WorldPromptArtStyleOption,
   type WorldPromptEvent,
+  type WorldPromptGenerationJobStep,
   type WorldPromptMessage,
   type WorldPromptSeedInferenceResponse,
   type WorldPromptSourceContext,
@@ -36,6 +37,7 @@ type ProjectWorldOnboardingProps = {
   seedInference: WorldPromptSeedInferenceResponse | null
   seedGenerationStarted: boolean
   sessionEvents: WorldPromptEvent[]
+  generationSteps: WorldPromptGenerationJobStep[]
   sessionMessages: WorldPromptMessage[]
   sessionTurns: WorldPromptTurn[]
   onSubmit: (values: { prompt: string; sourceContext: WorldPromptSourceContext }) => Promise<void> | void
@@ -273,23 +275,21 @@ function seedEventToLogRow(
       status: 'failed',
     }
   }
-  if (payload.plannerProgress?.message) {
-    return {
-      ...base,
-      id: `planner-${payload.plannerProgress.phase}-${payload.plannerProgress.sequence}`,
-      icon: workItemIcon(payload.plannerProgress.workItemKind),
-      title: plannerPhaseTitle(payload.plannerProgress.phase),
-      detail: cleanSeedLogText(payload.plannerProgress.message),
-      status: payload.plannerProgress.done ? 'done' : 'active',
-    }
-  }
   if (payload.note) {
+    const note = cleanSeedLogText(payload.note)
+    const lowerNote = note.toLowerCase()
+    const isWarningNote = event.eventType === 'turn_failed'
+      || lowerNote.includes('failed')
+      || lowerNote.includes('malformed')
+      || lowerNote.includes('could not')
+      || lowerNote.includes('cancelled')
+    if (!isWarningNote) return null
     return {
       ...base,
       id: `note-${event.id}`,
       icon: 'content',
-      title: 'Generation note',
-      detail: cleanSeedLogText(payload.note),
+      title: event.eventType === 'turn_failed' ? 'Generation stopped' : 'Generation warning',
+      detail: note,
       status: event.eventType === 'turn_failed' ? 'failed' : 'done',
     }
   }
@@ -326,6 +326,111 @@ function seedEventToLogRow(
   return null
 }
 
+function isSeedTerminalEvent(event: WorldPromptEvent) {
+  return event.eventType === 'turn_completed' || event.eventType === 'turn_failed'
+}
+
+function isDurableSeedEvent(event: WorldPromptEvent) {
+  return event.eventType === 'op_applied'
+    || event.eventType === 'message_created'
+    || event.eventType === 'turn_completed'
+    || event.eventType === 'turn_failed'
+    || event.eventType === 'work_item_completed'
+    || event.eventType === 'work_item_failed'
+}
+
+function latestSeedActivityRow(input: {
+  events: WorldPromptEvent[]
+  generationSteps: WorldPromptGenerationJobStep[]
+  seedInference: WorldPromptSeedInferenceResponse
+}): SeedGenerationLogRow | null {
+  if (input.events.some((event) => isSeedTerminalEvent(event))) return null
+  const latestDurableSequence = input.events
+    .filter((event) => isDurableSeedEvent(event))
+    .reduce((latest, event) => Math.max(latest, event.sequence), -1)
+  const liveEvents = [...input.events]
+    .sort((left, right) => {
+      const timeDelta = new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
+      return timeDelta !== 0 ? timeDelta : left.sequence - right.sequence
+    })
+    .filter((event) => event.sequence >= latestDurableSequence)
+  const latestProgress = [...liveEvents].reverse().map((event) => {
+    const parsed = worldPromptEventPayloadSchema.safeParse(event.payload)
+    if (!parsed.success) return null
+    const progress = parsed.data.plannerProgress
+    if (!progress?.message || progress.done) return null
+    return {
+      event,
+      progress,
+    }
+  }).find(Boolean)
+  if (latestProgress) {
+    return {
+      id: 'active-generation-progress',
+      icon: workItemIcon(latestProgress.progress.workItemKind),
+      title: plannerPhaseTitle(latestProgress.progress.phase),
+      detail: cleanSeedLogText(latestProgress.progress.message),
+      status: 'active',
+      createdAt: latestProgress.event.createdAt,
+      sequence: latestProgress.event.sequence + 0.001,
+      index: latestProgress.progress.index ?? null,
+      total: latestProgress.progress.total ?? null,
+    }
+  }
+
+  const runningStep = [...input.generationSteps]
+    .sort((left, right) => left.orderIndex - right.orderIndex)
+    .find((step) => step.status === 'running')
+  if (runningStep) {
+    const title = typeof runningStep.metadata?.label === 'string'
+      ? runningStep.metadata.label
+      : formatInferenceLabel(runningStep.phase)
+    return {
+      id: 'active-generation-progress',
+      icon: runningStep.phase === 'relationships' ? 'graph' : runningStep.phase === 'sequence_units' ? 'thread' : runningStep.phase === 'finalize' ? 'global' : 'content',
+      title,
+      detail: `Generating ${title.toLowerCase()}.`,
+      status: 'active',
+      createdAt: runningStep.startedAt ?? runningStep.updatedAt,
+      sequence: 10_000 + runningStep.orderIndex,
+      index: runningStep.orderIndex + 1,
+      total: input.generationSteps.length || null,
+    }
+  }
+
+  const nextQueuedStep = [...input.generationSteps]
+    .sort((left, right) => left.orderIndex - right.orderIndex)
+    .find((step) => step.status === 'queued')
+  if (nextQueuedStep) {
+    const title = typeof nextQueuedStep.metadata?.label === 'string'
+      ? nextQueuedStep.metadata.label
+      : formatInferenceLabel(nextQueuedStep.phase)
+    return {
+      id: 'active-generation-progress',
+      icon: nextQueuedStep.phase === 'relationships' ? 'graph' : nextQueuedStep.phase === 'sequence_units' ? 'thread' : nextQueuedStep.phase === 'finalize' ? 'global' : 'content',
+      title: 'Preparing next step',
+      detail: `Waiting to start ${title.toLowerCase()}.`,
+      status: 'active',
+      createdAt: nextQueuedStep.createdAt,
+      sequence: 10_000 + nextQueuedStep.orderIndex,
+      index: nextQueuedStep.orderIndex + 1,
+      total: input.generationSteps.length || null,
+    }
+  }
+
+  return {
+    id: 'active-generation-progress',
+    icon: 'global',
+    title: 'Preparing world graph',
+    detail: 'Waiting for the next generated item.',
+    status: 'active',
+    createdAt: input.seedInference.turn.updatedAt,
+    sequence: 10_000,
+    index: null,
+    total: null,
+  }
+}
+
 function dedupeLogRows<T extends { text: string }>(rows: T[]) {
   const deduped: T[] = []
   for (const row of rows) {
@@ -338,6 +443,7 @@ function dedupeLogRows<T extends { text: string }>(rows: T[]) {
 
 function buildSeedGenerationLogRows(input: {
   events: WorldPromptEvent[]
+  generationSteps: WorldPromptGenerationJobStep[]
   seedGenerationStarted: boolean
   seedInference: WorldPromptSeedInferenceResponse | null
   sourceLabel: string
@@ -381,6 +487,31 @@ function buildSeedGenerationLogRows(input: {
       total: null,
     })
     return rows
+  }
+
+  if (input.generationSteps.some((step) => step.status === 'failed' || step.status === 'cancelled')) {
+    for (const step of [...input.generationSteps].sort((left, right) => left.orderIndex - right.orderIndex)) {
+      if (step.status !== 'failed' && step.status !== 'cancelled') continue
+      const title = typeof step.metadata?.label === 'string'
+        ? step.metadata.label
+        : formatInferenceLabel(step.phase)
+      const detail = step.errorMessage
+        ? step.errorMessage
+        : step.status === 'cancelled'
+          ? `${title} was cancelled.`
+          : `${title} could not be completed.`
+      pushOrReplaceGenerationLogRow(rows, {
+        id: `generation-step-${step.id}`,
+        icon: step.phase === 'relationships' ? 'graph' : step.phase === 'sequence_units' ? 'thread' : step.phase === 'finalize' ? 'global' : 'content',
+        title,
+        detail: cleanSeedLogText(detail),
+        status: 'failed',
+        createdAt: step.createdAt,
+        sequence: 2 + step.orderIndex,
+        index: step.orderIndex + 1,
+        total: input.generationSteps.length,
+      })
+    }
   }
 
   if (input.events.length === 0) {
@@ -438,7 +569,23 @@ function buildSeedGenerationLogRows(input: {
     if (row) pushOrReplaceGenerationLogRow(rows, row)
   }
 
+  const activeRow = latestSeedActivityRow({
+    events: input.events,
+    generationSteps: input.generationSteps,
+    seedInference: input.seedInference,
+  })
+  if (activeRow) pushOrReplaceGenerationLogRow(rows, activeRow)
+
   return rows
+}
+
+function hasLiveSeedGenerationRows(rows: SeedGenerationLogRow[]) {
+  return rows.some((row) => ![
+    'prompt-received',
+    'inference-result',
+    'await-style',
+    'generation-starting',
+  ].includes(row.id))
 }
 
 export function ProjectWorldOnboarding({
@@ -446,6 +593,7 @@ export function ProjectWorldOnboarding({
   seedInference,
   seedGenerationStarted,
   sessionEvents,
+  generationSteps,
   sessionMessages,
   sessionTurns,
   onSubmit,
@@ -490,17 +638,36 @@ export function ProjectWorldOnboarding({
       : effectiveSourceContext.kind === 'example'
         ? effectiveSourceContext.title || 'Example seed'
         : 'Prompt'
-  const generationLogRows = useMemo(() => buildSeedGenerationLogRows({
+  const computedGenerationLogRows = useMemo(() => buildSeedGenerationLogRows({
     events: sessionEvents,
+    generationSteps,
     seedGenerationStarted,
     seedInference,
     sourceLabel: generationSourceLabel,
-  }), [generationSourceLabel, seedGenerationStarted, seedInference, sessionEvents])
+  }), [generationSourceLabel, generationSteps, seedGenerationStarted, seedInference, sessionEvents])
+  const stableGenerationLogRowsRef = useRef<SeedGenerationLogRow[]>([])
+  const stableGenerationKeyRef = useRef<string | null>(null)
+  const generationKey = seedInference?.turn.id ?? null
+  if (stableGenerationKeyRef.current !== generationKey) {
+    stableGenerationKeyRef.current = generationKey
+    stableGenerationLogRowsRef.current = []
+  }
+  const computedHasLiveRows = hasLiveSeedGenerationRows(computedGenerationLogRows)
+  const computedIsStartingOnly = seedGenerationStarted
+    && computedGenerationLogRows.some((row) => row.id === 'generation-starting')
+    && !computedHasLiveRows
+  const generationLogRows = computedIsStartingOnly && stableGenerationLogRowsRef.current.length > computedGenerationLogRows.length
+    ? stableGenerationLogRowsRef.current
+    : computedGenerationLogRows
+  if (!computedIsStartingOnly || stableGenerationLogRowsRef.current.length === 0) {
+    stableGenerationLogRowsRef.current = generationLogRows
+  }
   const tokenMeter = useMemo(() => buildWorldPromptSessionTokenMeter({
     turns: sessionTurns,
     messages: sessionMessages,
     events: sessionEvents,
-  }), [sessionEvents, sessionMessages, sessionTurns])
+    generationJobSteps: generationSteps,
+  }), [generationSteps, sessionEvents, sessionMessages, sessionTurns])
   const generationLogScrollKey = generationLogRows
     .map((row) => `${row.id}:${row.status}:${row.title}:${row.detail}`)
     .join('|')

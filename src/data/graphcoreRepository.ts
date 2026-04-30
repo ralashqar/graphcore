@@ -54,8 +54,14 @@ import {
 import {
   worldPromptApplyPreviewResponseSchema,
   worldPromptCancelTurnResponseSchema,
+  worldPromptCancelGenerationJobRequestSchema,
+  worldPromptCancelGenerationJobResponseSchema,
   worldPromptCreateSessionResponseSchema,
   worldPromptDismissSuggestionResponseSchema,
+  worldPromptGenerationJobSchema,
+  worldPromptGenerationJobStepSchema,
+  worldPromptGenerationStatusRequestSchema,
+  worldPromptGenerationStatusResponseSchema,
   worldPromptRefreshSuggestionsResponseSchema,
   worldPromptResolveOpResponseSchema,
   worldPromptSeedGenerationRequestSchema,
@@ -68,9 +74,14 @@ import {
   worldPromptStartTurnResponseSchema,
   worldPromptTurnSchema,
   type WorldPromptEvent,
+  type WorldPromptGenerationJob,
+  type WorldPromptGenerationJobStep,
+  type WorldPromptGenerationStatusRequest,
+  type WorldPromptGenerationStatusResponse,
   type WorldPromptMessage,
   type WorldPromptApplyPreviewRequest,
   type WorldPromptCancelTurnRequest,
+  type WorldPromptCancelGenerationJobRequest,
   type WorldPromptCreateSessionRequest,
   type WorldPromptDismissSuggestionRequest,
   type WorldPromptRefreshSuggestionsRequest,
@@ -1615,6 +1626,49 @@ type WorldPromptEventRow = {
   created_at: string
 }
 
+type WorldPromptGenerationJobRow = {
+  id: string
+  draft_id: string
+  session_id: string
+  turn_id: string
+  kind: WorldPromptGenerationJob['kind']
+  status: WorldPromptGenerationJob['status']
+  attempt_count: number | null
+  heartbeat_at: string | null
+  started_at: string | null
+  completed_at: string | null
+  token_usage: Record<string, unknown> | null
+  counts: Record<string, unknown> | null
+  error_message: string | null
+  metadata: Record<string, unknown> | null
+  latest_applied_op_cursor: string | null
+  created_at: string
+  updated_at: string
+}
+
+type WorldPromptGenerationJobStepRow = {
+  id: string
+  job_id: string
+  draft_id: string
+  session_id: string
+  turn_id: string
+  step_key: string
+  phase: WorldPromptGenerationJobStep['phase']
+  status: WorldPromptGenerationJobStep['status']
+  attempt_count: number | null
+  order_index: number | null
+  heartbeat_at: string | null
+  started_at: string | null
+  completed_at: string | null
+  token_usage: Record<string, unknown> | null
+  counts: Record<string, unknown> | null
+  error_message: string | null
+  metadata: Record<string, unknown> | null
+  latest_applied_op_cursor: string | null
+  created_at: string
+  updated_at: string
+}
+
 type WorldPromptSuggestionRow = {
   id: string
   draft_id: string
@@ -1676,6 +1730,10 @@ const WORLD_PROMPT_MESSAGE_SELECT =
   'id, session_id, turn_id, draft_id, role, content, metadata, created_at'
 const WORLD_PROMPT_EVENT_SELECT =
   'id, session_id, turn_id, draft_id, sequence, event_type, op_id, payload, metadata, created_at'
+const WORLD_PROMPT_GENERATION_JOB_SELECT =
+  'id, draft_id, session_id, turn_id, kind, status, attempt_count, heartbeat_at, started_at, completed_at, token_usage, counts, error_message, metadata, latest_applied_op_cursor, created_at, updated_at'
+const WORLD_PROMPT_GENERATION_JOB_STEP_SELECT =
+  'id, job_id, draft_id, session_id, turn_id, step_key, phase, status, attempt_count, order_index, heartbeat_at, started_at, completed_at, token_usage, counts, error_message, metadata, latest_applied_op_cursor, created_at, updated_at'
 const WORLD_PROMPT_SUGGESTION_SELECT =
   'id, draft_id, session_id, turn_id, thread_key, label, prompt, kind, style, source, summary, estimated_node_count, estimated_edge_count, will_queue_images, will_queue_cinematics, state, rank, used_turn_id, dismissed_at, metadata, created_at, updated_at'
 const WORLD_THREAD_SELECT =
@@ -1932,6 +1990,53 @@ function mapWorldPromptEventRow(entry: WorldPromptEventRow): WorldPromptEvent {
     metadata: entry.metadata ?? {},
     createdAt: entry.created_at,
   }
+}
+
+function mapWorldPromptGenerationJobRow(entry: WorldPromptGenerationJobRow): WorldPromptGenerationJob {
+  return worldPromptGenerationJobSchema.parse({
+    id: entry.id,
+    draftId: entry.draft_id,
+    sessionId: entry.session_id,
+    turnId: entry.turn_id,
+    kind: entry.kind,
+    status: entry.status,
+    attemptCount: entry.attempt_count ?? 0,
+    heartbeatAt: entry.heartbeat_at,
+    startedAt: entry.started_at,
+    completedAt: entry.completed_at,
+    tokenUsage: entry.token_usage ?? {},
+    counts: entry.counts ?? {},
+    errorMessage: entry.error_message,
+    metadata: entry.metadata ?? {},
+    latestAppliedOpCursor: entry.latest_applied_op_cursor,
+    createdAt: entry.created_at,
+    updatedAt: entry.updated_at,
+  })
+}
+
+function mapWorldPromptGenerationJobStepRow(entry: WorldPromptGenerationJobStepRow): WorldPromptGenerationJobStep {
+  return worldPromptGenerationJobStepSchema.parse({
+    id: entry.id,
+    jobId: entry.job_id,
+    draftId: entry.draft_id,
+    sessionId: entry.session_id,
+    turnId: entry.turn_id,
+    stepKey: entry.step_key,
+    phase: entry.phase,
+    status: entry.status,
+    attemptCount: entry.attempt_count ?? 0,
+    orderIndex: entry.order_index ?? 0,
+    heartbeatAt: entry.heartbeat_at,
+    startedAt: entry.started_at,
+    completedAt: entry.completed_at,
+    tokenUsage: entry.token_usage ?? {},
+    counts: entry.counts ?? {},
+    errorMessage: entry.error_message,
+    metadata: entry.metadata ?? {},
+    latestAppliedOpCursor: entry.latest_applied_op_cursor,
+    createdAt: entry.created_at,
+    updatedAt: entry.updated_at,
+  })
 }
 
 function sanitizeWorldPromptSuggestionText(value: unknown) {
@@ -2411,6 +2516,8 @@ export async function loadProjectSnapshot(
     worldPromptTurnsResponse,
     worldPromptMessagesResponse,
     worldPromptEventsResponse,
+    worldPromptGenerationJobsResponse,
+    worldPromptGenerationJobStepsResponse,
     worldPromptSuggestionsResponse,
     worldThreadsResponse,
     worldBuildBatchesResponse,
@@ -2590,6 +2697,22 @@ export async function loadProjectSnapshot(
       : Promise.resolve(emptyPostgrestResponse()),
     includeWorld
       ? supabase
+          .from('world_prompt_generation_jobs')
+          .select(WORLD_PROMPT_GENERATION_JOB_SELECT)
+          .eq('draft_id', draft.id)
+          .order('created_at', { ascending: false })
+          .limit(includeFull ? 100 : 20)
+      : Promise.resolve(emptyPostgrestResponse()),
+    includeWorld
+      ? supabase
+          .from('world_prompt_generation_job_steps')
+          .select(WORLD_PROMPT_GENERATION_JOB_STEP_SELECT)
+          .eq('draft_id', draft.id)
+          .order('created_at', { ascending: false })
+          .limit(includeFull ? 500 : 100)
+      : Promise.resolve(emptyPostgrestResponse()),
+    includeWorld
+      ? supabase
           .from('world_prompt_suggestions')
           .select(WORLD_PROMPT_SUGGESTION_SELECT)
           .eq('draft_id', draft.id)
@@ -2672,6 +2795,8 @@ export async function loadProjectSnapshot(
     ['world_prompt_turns', worldPromptTurnsResponse],
     ['world_prompt_messages', worldPromptMessagesResponse],
     ['world_prompt_events', worldPromptEventsResponse],
+    ['world_prompt_generation_jobs', worldPromptGenerationJobsResponse],
+    ['world_prompt_generation_job_steps', worldPromptGenerationJobStepsResponse],
     ['world_prompt_suggestions', worldPromptSuggestionsResponse],
     ['world_threads', worldThreadsResponse],
     ['world_build_batches', worldBuildBatchesResponse],
@@ -2720,11 +2845,15 @@ export async function loadProjectSnapshot(
     || postgrestStatus(worldPromptTurnsResponse) === 404
     || postgrestStatus(worldPromptMessagesResponse) === 404
     || postgrestStatus(worldPromptEventsResponse) === 404
+    || postgrestStatus(worldPromptGenerationJobsResponse) === 404
+    || postgrestStatus(worldPromptGenerationJobStepsResponse) === 404
     || postgrestStatus(worldPromptSuggestionsResponse) === 404
     || isMissingRelationError(worldPromptSessionsResponse.error, 'world_prompt_sessions')
     || isMissingRelationError(worldPromptTurnsResponse.error, 'world_prompt_turns')
     || isMissingRelationError(worldPromptMessagesResponse.error, 'world_prompt_messages')
     || isMissingRelationError(worldPromptEventsResponse.error, 'world_prompt_events')
+    || isMissingRelationError(worldPromptGenerationJobsResponse.error, 'world_prompt_generation_jobs')
+    || isMissingRelationError(worldPromptGenerationJobStepsResponse.error, 'world_prompt_generation_job_steps')
     || isMissingRelationError(worldPromptSuggestionsResponse.error, 'world_prompt_suggestions')
   const worldThreadSchemaMissing =
     postgrestStatus(worldThreadsResponse) === 404
@@ -2771,6 +2900,8 @@ export async function loadProjectSnapshot(
     .sort((left, right) => new Date(left.created_at).getTime() - new Date(right.created_at).getTime())
   const worldPromptEvents = (worldPromptSchemaMissing ? [] : (worldPromptEventsResponse.data as WorldPromptEventRow[] | null) ?? [])
     .sort((left, right) => new Date(left.created_at).getTime() - new Date(right.created_at).getTime() || left.sequence - right.sequence)
+  const worldPromptGenerationJobs = worldPromptSchemaMissing ? [] : (worldPromptGenerationJobsResponse.data as WorldPromptGenerationJobRow[] | null) ?? []
+  const worldPromptGenerationJobSteps = worldPromptSchemaMissing ? [] : (worldPromptGenerationJobStepsResponse.data as WorldPromptGenerationJobStepRow[] | null) ?? []
   const worldPromptSuggestions = worldPromptSchemaMissing ? [] : (worldPromptSuggestionsResponse.data as WorldPromptSuggestionRow[] | null) ?? []
   const worldThreads = worldThreadSchemaMissing ? [] : (worldThreadsResponse.data as WorldThreadRow[] | null) ?? []
   const worldBuildBatches = worldBuildSchemaMissing ? [] : (worldBuildBatchesResponse.data as WorldBuildBatchRow[] | null) ?? []
@@ -3108,6 +3239,8 @@ export async function loadProjectSnapshot(
     worldPromptTurns: worldPromptTurns.map((entry) => mapWorldPromptTurnRow(entry)),
     worldPromptMessages: worldPromptMessages.map((entry) => mapWorldPromptMessageRow(entry)),
     worldPromptEvents: worldPromptEvents.map((entry) => mapWorldPromptEventRow(entry)),
+    worldPromptGenerationJobs: worldPromptGenerationJobs.map((entry) => mapWorldPromptGenerationJobRow(entry)),
+    worldPromptGenerationJobSteps: worldPromptGenerationJobSteps.map((entry) => mapWorldPromptGenerationJobStepRow(entry)),
     worldPromptSuggestions: worldPromptSuggestions
       .map((entry) => mapWorldPromptSuggestionRow(entry))
       .filter((entry): entry is WorldPromptSuggestionRecord => Boolean(entry)),
@@ -6429,6 +6562,40 @@ export async function continueWorldSeedGeneration(snapshot: ProjectSnapshot, req
   return worldPromptSeedGenerationResponseSchema.parse(response.data)
 }
 
+export async function getWorldGenerationStatus(snapshot: ProjectSnapshot, request: Omit<WorldPromptGenerationStatusRequest, 'snapshot'>): Promise<WorldPromptGenerationStatusResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before loading world generation status.')
+  const payload = worldPromptGenerationStatusRequestSchema.parse({
+    ...request,
+    snapshot: buildWorldPromptSnapshot(snapshot),
+  })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'get-world-generation-status',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  return worldPromptGenerationStatusResponseSchema.parse(response.data)
+}
+
+export async function cancelWorldGenerationJob(snapshot: ProjectSnapshot, request: Omit<WorldPromptCancelGenerationJobRequest, 'snapshot'>) {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before cancelling world generation.')
+  const payload = worldPromptCancelGenerationJobRequestSchema.parse({
+    ...request,
+    snapshot: buildWorldPromptSnapshot(snapshot),
+  })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'cancel-world-generation-job',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  return worldPromptCancelGenerationJobResponseSchema.parse(response.data)
+}
+
 export async function extractSourceUrlForWorldPrompt(url: string): Promise<WorldPromptSourceContext> {
   const session = await getValidatedSession('Sign in before importing a URL for world generation.')
   const response = await invokeAuthedFunctionWithSessionRecovery(
@@ -6563,6 +6730,8 @@ export function subscribeWorldPromptEvents(input: {
   onTurn?: (turn: WorldPromptTurn) => void
   onMessage?: (message: WorldPromptMessage) => void
   onEvent?: (event: WorldPromptEvent) => void
+  onGenerationJob?: (job: WorldPromptGenerationJob) => void
+  onGenerationJobStep?: (step: WorldPromptGenerationJobStep) => void
   onSuggestion?: (suggestion: WorldPromptSuggestionRecord) => void
   onThread?: (thread: WorldThread) => void
 }) {
@@ -6603,6 +6772,24 @@ export function subscribeWorldPromptEvents(input: {
     }, (payload) => {
       if (!payload.new || typeof payload.new !== 'object') return
       input.onEvent?.(mapWorldPromptEventRow(payload.new as WorldPromptEventRow))
+    })
+    .on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'world_prompt_generation_jobs',
+      filter: `draft_id=eq.${input.draftId}`,
+    }, (payload) => {
+      if (!payload.new || typeof payload.new !== 'object') return
+      input.onGenerationJob?.(mapWorldPromptGenerationJobRow(payload.new as WorldPromptGenerationJobRow))
+    })
+    .on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'world_prompt_generation_job_steps',
+      filter: `draft_id=eq.${input.draftId}`,
+    }, (payload) => {
+      if (!payload.new || typeof payload.new !== 'object') return
+      input.onGenerationJobStep?.(mapWorldPromptGenerationJobStepRow(payload.new as WorldPromptGenerationJobStepRow))
     })
     .on('postgres_changes', {
       event: '*',

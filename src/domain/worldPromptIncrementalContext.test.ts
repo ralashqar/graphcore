@@ -6,7 +6,11 @@ import { resolve } from 'node:path'
 import {
   promptToWorldOpSchema,
   worldPromptBuildLedgerEntrySchema,
+  worldPromptCancelGenerationJobRequestSchema,
+  worldPromptGenerationJobSchema,
+  worldPromptGenerationStatusResponseSchema,
   worldPromptIncrementalBuildBriefSchema,
+  worldPromptStreamGraphOpEnvelopeSchema,
   worldPromptTokenBudgetDiagnosticsSchema,
   worldPromptWorkItemContextSchema,
   worldPromptWorkItemResultSchema,
@@ -26,6 +30,100 @@ test('incremental build brief stores compact continuity instead of raw source', 
   assert.equal(brief.summary.includes('fallen empire'), true)
   assert.deepEqual(brief.sourceExcerptKeys, ['opening_pages'])
   assert.equal('extractedText' in brief, false)
+})
+
+test('streamed generation schemas accept jobs and graph-op envelopes', () => {
+  const job = worldPromptGenerationJobSchema.parse({
+    id: 'job_1',
+    draftId: 'draft_1',
+    sessionId: 'session_1',
+    turnId: 'turn_1',
+    kind: 'initial_seed_stream',
+    status: 'running',
+    attemptCount: 1,
+    tokenUsage: { totalTokens: 1200 },
+    counts: { entities: 2 },
+    createdAt: '2026-04-30T00:00:00.000Z',
+    updatedAt: '2026-04-30T00:00:01.000Z',
+  })
+  const envelope = worldPromptStreamGraphOpEnvelopeSchema.parse({
+    kind: 'op',
+    op: {
+      id: 'create_mara',
+      op: 'upsert_entity',
+      payload: {
+        targetEntityKey: 'mara_veyr',
+        entity: {
+          nodeType: 'actor',
+          name: 'Mara Veyr',
+          summary: 'A memory mage.',
+        },
+      },
+    },
+  })
+
+  assert.equal(job.status, 'running')
+  assert.equal(envelope.kind, 'op')
+  assert.equal(envelope.op.id, 'create_mara')
+})
+
+test('streamed generation schemas reject invalid node types and parse status/cancel shapes', () => {
+  assert.equal(worldPromptStreamGraphOpEnvelopeSchema.safeParse({
+    kind: 'op',
+    op: {
+      id: 'bad_location',
+      op: 'upsert_entity',
+      payload: {
+        entity: {
+          nodeType: 'location',
+          name: 'The Wrong Type',
+          summary: 'Invalid node type.',
+        },
+      },
+    },
+  }).success, false)
+
+  const status = worldPromptGenerationStatusResponseSchema.parse({
+    ok: true,
+    session: {
+      id: 'session_1',
+      key: 'world',
+      draftId: 'draft_1',
+      title: 'World',
+      createdAt: '2026-04-30T00:00:00.000Z',
+      updatedAt: '2026-04-30T00:00:00.000Z',
+    },
+    turn: {
+      id: 'turn_1',
+      sessionId: 'session_1',
+      draftId: 'draft_1',
+      prompt: 'Seed world',
+      status: 'streaming',
+      createdAt: '2026-04-30T00:00:00.000Z',
+      updatedAt: '2026-04-30T00:00:00.000Z',
+    },
+    job: {
+      id: 'job_1',
+      draftId: 'draft_1',
+      sessionId: 'session_1',
+      turnId: 'turn_1',
+      status: 'queued',
+      createdAt: '2026-04-30T00:00:00.000Z',
+      updatedAt: '2026-04-30T00:00:00.000Z',
+    },
+    terminal: false,
+  })
+  const cancel = worldPromptCancelGenerationJobRequestSchema.parse({
+    jobId: 'job_1',
+    snapshot: {
+      workspace: { id: 'workspace_1', name: 'Workspace', slug: 'workspace', role: 'owner' },
+      project: { id: 'project_1', name: 'Project', slug: 'project', summary: '', visibility: 'private' },
+      draft: { id: 'draft_1', name: 'Draft', version: 1, isPrimary: true },
+    },
+  })
+
+  assert.equal(status.terminal, false)
+  assert.equal(cancel.jobId, 'job_1')
 })
 
 test('incremental ledger entries are compact graph references', () => {
