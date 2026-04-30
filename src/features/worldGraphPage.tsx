@@ -5488,10 +5488,8 @@ function LegacyWorldPromptChatPanel({
   promptText,
   promptError,
   entityByKey,
-  selectedEntity,
   selectedSession,
   selectedThreadKey,
-  selectedView,
   sessionEvents,
   sessionMessages,
   sessionTurns,
@@ -5560,10 +5558,6 @@ function LegacyWorldPromptChatPanel({
     [entityByKey, sessionEvents, sessionMessages, sessionTurns],
   )
   const canCancelTurn = Boolean(activePromptTurn && ['queued', 'streaming'].includes(activePromptTurn.status))
-  const selectedThread = useMemo(
-    () => worldThreads.find((thread) => thread.key === selectedThreadKey) ?? null,
-    [selectedThreadKey, worldThreads],
-  )
   const railView = useMemo(
     () => buildWorldPromptRailViewModel({
       activeTurn: activePromptTurn,
@@ -5623,25 +5617,18 @@ function LegacyWorldPromptChatPanel({
     : railView.primaryActionKind === 'generate'
       ? 'Generate'
       : 'Use prompt'
+  const flowTurnCountLabel = `${sessionTurns.length} turn${sessionTurns.length === 1 ? '' : 's'}`
   return (
     <div className={`world-prompt-chat-shell${variant === 'grow' ? ' is-grow' : ''}`}>
       <div className="world-prompt-chat-head world-prompt-flow-head">
-        <div className="world-prompt-flow-copy">
-          <span className="eyebrow">Prompt-first creation</span>
-          <h3>{selectedView.name || selectedSession?.title || 'Living World'}</h3>
-          <p>One stream for prompts, clarifications, applied graph changes, and next moves.</p>
+        <div className="world-prompt-chat-meta">
+          <div className="world-prompt-chat-subline is-compact">
+            <span>{flowTurnCountLabel}</span>
+          </div>
         </div>
         <div className="world-prompt-head-actions">
           <button className="ghost-button compact" onClick={onOpenEntityComposer} type="button">Manual Add</button>
         </div>
-      </div>
-
-      <div className="world-prompt-context-pills">
-        <span className="chip">World {selectedView.name || 'Default'}</span>
-        <span className="chip">Session {selectedSession?.title ?? 'Current'}</span>
-        {selectedEntity ? <span className="chip">Focus {selectedEntity.name}</span> : null}
-        {selectedThread ? <span className="chip">Thread {selectedThread.title}</span> : null}
-        <span className={`chip world-prompt-status-pill is-${railView.state}`}>{railView.statusLabel}</span>
       </div>
 
       <div className="world-prompt-composer">
@@ -6071,7 +6058,6 @@ function WorldPromptChatPanel({
   turnLensByTurnId,
   activeTurnLensId,
   worldPromptTurns,
-  worldThreads,
   worldPromptSessions,
   onApplyPreview: _onApplyPreview,
   onApproveOp: _onApproveOp,
@@ -6085,7 +6071,6 @@ function WorldPromptChatPanel({
   onStartNewSession,
   onSubmit,
   onOpenTurnLens,
-  onCloseTurnLens,
   onOpenHistory,
   onCloseHistory,
   historyOpen,
@@ -6159,10 +6144,6 @@ function WorldPromptChatPanel({
     [entityByKey, sessionEvents, sessionMessages, sessionTurns],
   )
   const canCancelTurn = Boolean(activePromptTurn && ['queued', 'streaming'].includes(activePromptTurn.status))
-  const selectedThread = useMemo(
-    () => worldThreads.find((thread) => thread.key === selectedThreadKey) ?? null,
-    [selectedThreadKey, worldThreads],
-  )
   const railView = useMemo(
     () => buildWorldPromptRailViewModel({
       activeTurn: activePromptTurn,
@@ -6252,10 +6233,7 @@ function WorldPromptChatPanel({
   const hasDiagnosticSuggestions = sessionSuggestions.some((suggestion) => suggestion.metadata?.uiKind === 'diagnostic')
   const hasAdvisorySuggestions = sessionSuggestions.some((suggestion) => suggestion.metadata?.uiKind === 'advisory')
   const showComposerSuggestions = !busy && sessionSuggestions.length > 0 && suppressedSuggestionSignature !== suggestionSignature
-  const sessionTitle = selectedSession?.title ?? (selectedSessionKey ? 'New chat' : 'Chat')
-  const sessionSubline = selectedSession && sessionTurns.length > 0
-    ? `${sessionTurns.length} turn${sessionTurns.length === 1 ? '' : 's'}`
-    : ''
+  const sessionTurnCountLabel = `${sessionTurns.length} turn${sessionTurns.length === 1 ? '' : 's'}`
   const isSubmittingWithoutActiveTurn = busy && !activePromptTurn
   const liveBusyStatusLabel = isSubmittingWithoutActiveTurn
     ? 'Planning'
@@ -6494,17 +6472,12 @@ function WorldPromptChatPanel({
     <div className={`world-prompt-chat-shell${variant === 'grow' ? ' is-grow' : ''}${isPromptCenter ? ' is-prompt-center' : ''}`}>
       <div className="world-prompt-chat-head">
         <div className="world-prompt-chat-meta">
-          <h3>{sessionTitle}</h3>
-          {sessionSubline || !isPromptCenter ? (
-            <div className="world-prompt-chat-subline">
-              {sessionSubline ? <span>{sessionSubline}</span> : null}
-              {!isPromptCenter ? (
-                <span className="world-prompt-token-meter" title={tokenMeter.title}>
-                  {tokenMeter.label} tokens
-                </span>
-              ) : null}
-            </div>
-          ) : null}
+          <div className="world-prompt-chat-subline is-compact">
+            <span>{sessionTurnCountLabel}</span>
+            <span className="world-prompt-token-meter" title={tokenMeter.title}>
+              {tokenMeter.label} tokens
+            </span>
+          </div>
         </div>
         <div className="world-prompt-head-actions">
           <button className="world-prompt-icon-button" onClick={onOpenHistory} type="button" aria-label="Open history">
@@ -6516,16 +6489,6 @@ function WorldPromptChatPanel({
           {headerActionEnd}
         </div>
       </div>
-
-      {!isPromptCenter ? (
-        <div className="world-prompt-context-pills">
-          <span className="chip">World {selectedView.name || 'Default'}</span>
-          {selectedEntity ? <span className="chip">Focus {selectedEntity.name}</span> : null}
-          {selectedThread ? <span className="chip">Thread {selectedThread.title}</span> : null}
-          {activeTurnLensId ? <button className="chip world-prompt-lens-context-chip" onClick={onCloseTurnLens} type="button">Turn lens on</button> : null}
-          <span className={`chip world-prompt-status-pill is-${busy ? 'working' : railView.state}`}>{busy ? liveBusyStatusLabel : railView.statusLabel}</span>
-        </div>
-      ) : null}
 
       {isPromptCenter ? (
         <div className="world-prompt-center">

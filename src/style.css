@@ -2211,7 +2211,7 @@ code {
 
 .world-prompt-chat-shell {
   display: grid;
-  grid-template-rows: auto auto auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   min-height: 0;
   height: 100%;
   gap: 14px;
@@ -2844,7 +2844,7 @@ code {
 
 .world-prompt-chat-shell {
   position: relative;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 12px;
 }
 
@@ -2872,6 +2872,22 @@ code {
   flex-wrap: wrap;
   color: rgba(226, 232, 240, 0.68);
   font-size: 0.88rem;
+}
+
+.world-prompt-chat-subline.is-compact {
+  gap: 8px;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.world-prompt-chat-subline.is-compact > span:not(.world-prompt-token-meter) {
+  width: fit-content;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(15, 23, 42, 0.42);
+  color: rgba(203, 213, 225, 0.8);
+  white-space: nowrap;
 }
 
 .world-prompt-token-meter {
@@ -5039,6 +5055,276 @@ button.world-prompt-row-result {
 .world-prompt-composer-suggestion-info svg {
   width: 16px;
   height: 16px;
+}
+
+.world-prompt-chat-shell {
+  isolation: isolate;
+  gap: 14px;
+  padding: 14px;
+  border-radius: 22px;
+  border: 1px solid rgba(139, 92, 246, 0.2);
+  background:
+    radial-gradient(circle at 12% 8%, rgba(139, 92, 246, 0.16), transparent 34%),
+    radial-gradient(circle at 92% 22%, rgba(57, 216, 255, 0.08), transparent 30%),
+    linear-gradient(180deg, rgba(8, 12, 22, 0.96), rgba(3, 7, 18, 0.94));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 22px 64px rgba(2, 6, 23, 0.34),
+    0 0 0 1px rgba(255, 255, 255, 0.02);
+}
+
+.world-prompt-chat-shell::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  background:
+    linear-gradient(118deg, transparent 0 34%, rgba(139, 92, 246, 0.14) 34.2%, transparent 34.6% 68%, rgba(57, 216, 255, 0.08) 68.2%, transparent 68.6%),
+    radial-gradient(circle at 18% 38%, rgba(139, 92, 246, 0.6) 0 2px, transparent 3px),
+    radial-gradient(circle at 84% 18%, rgba(139, 92, 246, 0.55) 0 2px, transparent 3px),
+    radial-gradient(circle at 78% 72%, rgba(57, 216, 255, 0.42) 0 2px, transparent 3px);
+  opacity: 0.24;
+}
+
+.world-prompt-chat-shell.is-prompt-center {
+  align-content: start;
+  padding: 18px;
+}
+
+.world-prompt-chat-head {
+  padding-bottom: 2px;
+}
+
+.world-prompt-chat-meta h3 {
+  color: rgba(248, 250, 252, 0.98);
+  letter-spacing: 0;
+}
+
+.world-prompt-chat-subline,
+.world-prompt-context-pills {
+  color: rgba(203, 213, 225, 0.72);
+}
+
+.world-prompt-token-meter,
+.world-onboarding-token-meter {
+  border-color: rgba(167, 139, 250, 0.24);
+  background: rgba(124, 58, 237, 0.12);
+  color: rgba(221, 214, 254, 0.9);
+}
+
+.world-prompt-context-pills .chip,
+.world-prompt-outline-list .chip {
+  border-color: rgba(139, 92, 246, 0.18);
+  background: rgba(15, 23, 42, 0.54);
+  color: rgba(226, 232, 240, 0.78);
+}
+
+.world-prompt-status-pill.is-working,
+.world-prompt-status-pill.is-streaming,
+.world-prompt-status-pill.is-active {
+  border-color: rgba(139, 92, 246, 0.34);
+  background: rgba(76, 29, 149, 0.24);
+  color: rgba(237, 233, 254, 0.94);
+}
+
+.world-prompt-transcript-shell {
+  min-height: 0;
+  padding: 10px;
+  border-radius: 18px;
+  border: 1px solid rgba(148, 163, 184, 0.1);
+  background:
+    linear-gradient(180deg, rgba(3, 7, 18, 0.56), rgba(3, 7, 18, 0.34)),
+    rgba(15, 23, 42, 0.24);
+  overflow: hidden;
+}
+
+.world-prompt-transcript {
+  gap: 8px;
+  padding: 2px 4px 2px 0;
+  scrollbar-color: rgba(139, 92, 246, 0.56) rgba(15, 23, 42, 0.64);
+}
+
+.world-prompt-transcript::-webkit-scrollbar {
+  width: 8px;
+}
+
+.world-prompt-transcript::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.62);
+  border-radius: 999px;
+}
+
+.world-prompt-transcript::-webkit-scrollbar-thumb {
+  background: rgba(139, 92, 246, 0.56);
+  border-radius: 999px;
+}
+
+.world-prompt-row {
+  gap: 7px;
+}
+
+.world-prompt-row-label {
+  color: rgba(167, 123, 255, 0.9);
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.world-prompt-bubble {
+  border-radius: 14px;
+  border-color: rgba(148, 163, 184, 0.12);
+  background: rgba(15, 23, 42, 0.64);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+}
+
+.world-prompt-row-user .world-prompt-bubble {
+  border-color: rgba(139, 92, 246, 0.34);
+  background:
+    linear-gradient(180deg, rgba(76, 29, 149, 0.34), rgba(15, 23, 42, 0.78)),
+    rgba(15, 23, 42, 0.72);
+}
+
+.world-prompt-card,
+.world-prompt-row-system {
+  border-radius: 14px;
+  border-color: rgba(148, 163, 184, 0.12);
+  background:
+    linear-gradient(180deg, rgba(15, 23, 42, 0.72), rgba(8, 12, 22, 0.74)),
+    rgba(15, 23, 42, 0.5);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+}
+
+.world-prompt-row-result,
+.world-prompt-row-progress {
+  min-height: 58px;
+  padding: 10px 12px;
+}
+
+.world-prompt-row-result.is-clickable:hover,
+.world-prompt-row-result.is-active-lens,
+.world-prompt-row-progress.is-complete,
+.world-prompt-history-item.is-active-lens {
+  border-color: rgba(139, 92, 246, 0.38);
+  background:
+    linear-gradient(180deg, rgba(30, 27, 75, 0.58), rgba(8, 12, 22, 0.78)),
+    rgba(30, 27, 75, 0.36);
+}
+
+.world-prompt-entry-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  border-color: rgba(139, 92, 246, 0.22);
+  background: rgba(139, 92, 246, 0.12);
+  color: #a77bff;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.world-prompt-entry-icon svg,
+.world-prompt-entry-icon .entity-icon-image {
+  width: 18px;
+  height: 18px;
+}
+
+.world-prompt-line {
+  color: rgba(203, 213, 225, 0.76);
+  line-height: 1.38;
+}
+
+.world-prompt-entry-route,
+.world-prompt-lens-chip {
+  border-color: rgba(139, 92, 246, 0.2);
+  background: rgba(139, 92, 246, 0.09);
+  color: rgba(221, 214, 254, 0.86);
+}
+
+.world-prompt-composer {
+  border-radius: 18px;
+  border-color: rgba(139, 92, 246, 0.34);
+  background:
+    radial-gradient(circle at top left, rgba(139, 92, 246, 0.17), transparent 36%),
+    linear-gradient(180deg, rgba(15, 23, 42, 0.78), rgba(3, 7, 18, 0.82));
+  box-shadow:
+    0 0 0 1px rgba(96, 165, 250, 0.12),
+    0 18px 42px rgba(2, 6, 23, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.world-prompt-composer-pinned {
+  padding: 12px;
+  background:
+    radial-gradient(circle at top left, rgba(139, 92, 246, 0.16), transparent 36%),
+    linear-gradient(180deg, rgba(15, 23, 42, 0.9), rgba(3, 7, 18, 0.9));
+}
+
+.world-prompt-input-shell textarea,
+.world-prompt-composer textarea {
+  resize: none;
+  border-radius: 12px;
+  border-color: rgba(148, 163, 184, 0.18);
+  background: rgba(3, 7, 18, 0.74);
+  color: rgba(248, 250, 252, 0.96);
+}
+
+.world-prompt-input-shell textarea:focus,
+.world-prompt-composer textarea:focus {
+  outline: none;
+  border-color: rgba(139, 92, 246, 0.78);
+  box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.14);
+}
+
+.world-prompt-send-button {
+  border-color: rgba(139, 92, 246, 0.46);
+  background: linear-gradient(180deg, #8b5cf6, #6d5dfc);
+  color: white;
+  box-shadow: 0 12px 28px rgba(124, 58, 237, 0.28);
+}
+
+.world-prompt-send-button:hover:not(:disabled) {
+  border-color: rgba(196, 181, 253, 0.86);
+  background: linear-gradient(180deg, #9b72ff, #7659ff);
+}
+
+.world-prompt-composer-thinking {
+  border-radius: 14px;
+  border-color: rgba(139, 92, 246, 0.3);
+  background: rgba(30, 27, 75, 0.3);
+}
+
+.world-prompt-composer-thinking .world-prompt-planning-spinner,
+.world-prompt-inline-spinner {
+  border-color: rgba(139, 92, 246, 0.92);
+  border-top-color: rgba(139, 92, 246, 0.18);
+}
+
+.world-prompt-inline-spinner.is-done {
+  border-color: rgba(139, 92, 246, 0.96);
+  background: #8b5cf6;
+}
+
+.world-prompt-composer-suggestions {
+  padding: 10px;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.1);
+  background: rgba(3, 7, 18, 0.42);
+}
+
+.world-prompt-composer-suggestion-button,
+.world-prompt-composer-suggestion-info {
+  border-radius: 12px;
+  border-color: rgba(148, 163, 184, 0.12);
+  background: rgba(15, 23, 42, 0.58);
+}
+
+.world-prompt-composer-suggestion-button:hover,
+.world-prompt-composer-suggestion-info:hover {
+  border-color: rgba(139, 92, 246, 0.42);
+  background: rgba(30, 27, 75, 0.54);
+}
+
+.world-prompt-empty {
+  border-color: rgba(139, 92, 246, 0.18);
+  background: rgba(30, 27, 75, 0.22);
 }
 
 .world-prompt-planning-state {
