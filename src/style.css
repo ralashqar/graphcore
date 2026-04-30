@@ -5162,6 +5162,8 @@ button.world-prompt-row-result {
 
 .world-prompt-row {
   gap: 7px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .world-prompt-row-label {
@@ -5175,6 +5177,9 @@ button.world-prompt-row-result {
   border-color: rgba(148, 163, 184, 0.12);
   background: rgba(15, 23, 42, 0.64);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .world-prompt-row-user .world-prompt-bubble {
@@ -5198,6 +5203,18 @@ button.world-prompt-row-result {
 .world-prompt-row-progress {
   min-height: 58px;
   padding: 10px 12px;
+  min-width: 0;
+}
+
+.world-prompt-row.is-expandable,
+.world-prompt-log-text.is-expandable {
+  cursor: pointer;
+}
+
+.world-prompt-row.is-expandable:focus-visible,
+.world-prompt-log-text.is-expandable:focus-visible {
+  outline: 2px solid rgba(167, 139, 250, 0.72);
+  outline-offset: 2px;
 }
 
 .world-prompt-row-result.is-clickable:hover,
@@ -5229,6 +5246,35 @@ button.world-prompt-row-result {
 .world-prompt-line {
   color: rgba(203, 213, 225, 0.76);
   line-height: 1.38;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.world-prompt-log-text {
+  display: -webkit-box;
+  max-width: 100%;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: normal;
+}
+
+.world-prompt-message-preview {
+  -webkit-line-clamp: 4;
+}
+
+.world-prompt-entry-copy {
+  min-width: 0;
+}
+
+.world-prompt-expand-hint {
+  width: fit-content;
+  margin-top: 3px;
+  color: rgba(167, 139, 250, 0.72);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .world-prompt-entry-route,
@@ -5236,6 +5282,10 @@ button.world-prompt-row-result {
   border-color: rgba(139, 92, 246, 0.2);
   background: rgba(139, 92, 246, 0.09);
   color: rgba(221, 214, 254, 0.86);
+  max-width: 100%;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
 }
 
 .world-prompt-composer {
@@ -7776,6 +7826,64 @@ button.world-prompt-row-result {
   width: min(560px, calc(100% - 40px));
   max-height: calc(100vh - 64px);
   overflow: auto;
+}
+
+.world-prompt-log-modal-backdrop {
+  z-index: 46;
+}
+
+.world-prompt-log-modal {
+  width: min(620px, calc(100% - 32px));
+  padding: 18px;
+  border-radius: 18px;
+  border-color: rgba(139, 92, 246, 0.28);
+  background:
+    radial-gradient(circle at top left, rgba(139, 92, 246, 0.18), transparent 38%),
+    linear-gradient(180deg, rgba(15, 23, 42, 0.98), rgba(3, 7, 18, 0.98));
+}
+
+.world-prompt-log-modal .world-popup-head {
+  margin-bottom: 14px;
+}
+
+.world-prompt-log-modal h3 {
+  margin: 3px 0 0;
+  color: rgba(248, 250, 252, 0.98);
+  font-size: 1rem;
+}
+
+.world-prompt-log-modal .world-popup-close svg {
+  transform: rotate(45deg);
+}
+
+.world-prompt-log-modal-meta {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.world-prompt-log-modal-meta span {
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(139, 92, 246, 0.2);
+  background: rgba(139, 92, 246, 0.1);
+  color: rgba(221, 214, 254, 0.86);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.world-prompt-log-modal-body {
+  max-height: min(58vh, 520px);
+  overflow: auto;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(3, 7, 18, 0.6);
+  color: rgba(226, 232, 240, 0.86);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .world-edge-popup {

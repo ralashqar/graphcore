@@ -325,6 +325,8 @@ const WORLD_GRAPH_PRESENTATION_PRESET_STORAGE_KEY = 'graphcore.world.graph-prese
 const WORLD_GRAPH_DISPLAY_FILTERS_STORAGE_KEY = 'graphcore.world.graph-display-filters.v1'
 const WORLD_NODE_SOURCE_HANDLE = 'world-node-source'
 const WORLD_NODE_TARGET_HANDLE = 'world-node-target'
+const WORLD_PROMPT_LOG_DETAIL_LIMIT = 180
+const WORLD_PROMPT_LOG_MESSAGE_LIMIT = 360
 const WORLD_GRAPH_PRESENTATION_PRESETS: Array<{ value: WorldGraphPresentationPreset; label: string }> = [
   { value: 'focus', label: 'Focus' },
   { value: 'explore', label: 'Explore' },
@@ -333,6 +335,22 @@ const WORLD_GRAPH_PRESENTATION_PRESETS: Array<{ value: WorldGraphPresentationPre
   { value: 'wide', label: 'Wide' },
 ]
 const WORLD_GRAPH_NODE_ORIGIN: [number, number] = [0.5, 0.5]
+
+type WorldPromptExpandedLogEntry = {
+  title: string
+  body: string
+  meta?: string[]
+}
+
+function compactWorldPromptLogText(text: string, limit = WORLD_PROMPT_LOG_DETAIL_LIMIT) {
+  const normalized = text.replace(/\s+/g, ' ').trim()
+  if (normalized.length <= limit) return text
+  return `${normalized.slice(0, limit).trimEnd()}...`
+}
+
+function isLongWorldPromptLogText(text: string | null | undefined, limit = WORLD_PROMPT_LOG_DETAIL_LIMIT) {
+  return Boolean(text && text.replace(/\s+/g, ' ').trim().length > limit)
+}
 
 function isWorldWorkspaceMode(mode: WorldView['mode']): mode is WorldWorkspaceMode {
   return mode === 'graph' || mode === 'wiki' || mode === 'timeline' || mode === 'board'
@@ -6134,6 +6152,7 @@ function WorldPromptChatPanel({
   const plannerFailureLogKeyRef = useRef<string | null>(null)
   const [stickToBottom, setStickToBottom] = useState(true)
   const [suppressedSuggestionSignature, setSuppressedSuggestionSignature] = useState<string | null>(null)
+  const [expandedLogEntry, setExpandedLogEntry] = useState<WorldPromptExpandedLogEntry | null>(null)
   const transcriptEntries = useMemo(
     () => buildWorldPromptTranscriptEntriesModel({
       events: sessionEvents,
@@ -6274,6 +6293,17 @@ function WorldPromptChatPanel({
   }, [selectedSessionKey])
 
   useEffect(() => {
+    if (!expandedLogEntry) return
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        setExpandedLogEntry(null)
+      }
+    }
+    window.addEventListener('keydown', handleEscape)
+    return () => window.removeEventListener('keydown', handleEscape)
+  }, [expandedLogEntry])
+
+  useEffect(() => {
     if (!railView.plannerFailure) return
     const logKey = [
       railView.plannerFailure.occurredAt,
@@ -6366,36 +6396,73 @@ function WorldPromptChatPanel({
     void handleSubmitPrompt()
   }
 
+  function handleExpandableLogKeyDown(event: ReactKeyboardEvent<HTMLElement>, logEntry: WorldPromptExpandedLogEntry) {
+    if (event.key !== 'Enter' && event.key !== ' ') return
+    event.preventDefault()
+    setExpandedLogEntry(logEntry)
+  }
+
   function renderEntry(entry: WorldPromptTranscriptEntry) {
     if (hiddenTranscriptKinds.has(entry.kind)) return null
 
     if (entry.kind === 'user_message' || entry.kind === 'assistant_message') {
+      const expandableLogEntry = isLongWorldPromptLogText(entry.content, WORLD_PROMPT_LOG_MESSAGE_LIMIT)
+        ? {
+            title: entry.kind === 'user_message' ? 'You' : 'GraphCore',
+            body: entry.content,
+          }
+        : null
       return (
         <div key={entry.id} className={`world-prompt-row ${entry.kind === 'user_message' ? 'world-prompt-row-user' : 'world-prompt-row-assistant'}`}>
           <span className="world-prompt-row-label">{entry.kind === 'user_message' ? 'You' : 'GraphCore'}</span>
-          <div className={`world-prompt-bubble${entry.pending ? ' is-pending' : ''}`}>
-            {entry.content}
+          <div
+            className={`world-prompt-bubble${entry.pending ? ' is-pending' : ''}${expandableLogEntry ? ' is-expandable' : ''}`}
+            onClick={expandableLogEntry ? () => setExpandedLogEntry(expandableLogEntry) : undefined}
+            onKeyDown={expandableLogEntry ? (event) => handleExpandableLogKeyDown(event, expandableLogEntry) : undefined}
+            role={expandableLogEntry ? 'button' : undefined}
+            tabIndex={expandableLogEntry ? 0 : undefined}
+          >
+            <span className="world-prompt-log-text world-prompt-message-preview">
+              {compactWorldPromptLogText(entry.content, WORLD_PROMPT_LOG_MESSAGE_LIMIT)}
+            </span>
+            {expandableLogEntry ? <span className="world-prompt-expand-hint">Read full</span> : null}
           </div>
         </div>
       )
     }
 
     if (entry.kind === 'planner_progress') {
+      const fullBody = [entry.detail, ...entry.outline].filter(Boolean).join('\n')
+      const expandableLogEntry = isLongWorldPromptLogText(fullBody)
+        ? {
+            title: entry.label,
+            body: fullBody,
+            meta: entry.done ? ['Completed'] : ['In progress'],
+          }
+        : null
       return (
-        <div key={entry.id} className={`world-prompt-row world-prompt-row-system world-prompt-card world-prompt-row-progress${entry.done ? ' is-complete' : ''}`}>
+        <div
+          key={entry.id}
+          className={`world-prompt-row world-prompt-row-system world-prompt-card world-prompt-row-progress${entry.done ? ' is-complete' : ''}${expandableLogEntry ? ' is-expandable' : ''}`}
+          onClick={expandableLogEntry ? () => setExpandedLogEntry(expandableLogEntry) : undefined}
+          onKeyDown={expandableLogEntry ? (event) => handleExpandableLogKeyDown(event, expandableLogEntry) : undefined}
+          role={expandableLogEntry ? 'button' : undefined}
+          tabIndex={expandableLogEntry ? 0 : undefined}
+        >
           <div className="world-prompt-entry-icon">
             <div className={`world-prompt-inline-spinner${entry.done ? ' is-done' : ''}`} aria-hidden="true" />
           </div>
           <div className="world-prompt-entry-copy">
             <span className="world-prompt-row-label">{entry.label}</span>
-            {entry.detail ? <div className="world-prompt-line">{entry.detail}</div> : null}
+            {entry.detail ? <div className="world-prompt-line world-prompt-log-text">{compactWorldPromptLogText(entry.detail)}</div> : null}
             {entry.outline.length > 0 ? (
               <div className="world-prompt-outline-list">
                 {entry.outline.map((item) => (
-                  <span key={`${entry.id}:${item}`} className="chip">{item}</span>
+                  <span key={`${entry.id}:${item}`} className="chip">{compactWorldPromptLogText(item, 70)}</span>
                 ))}
               </div>
             ) : null}
+            {expandableLogEntry ? <span className="world-prompt-expand-hint">Read full</span> : null}
           </div>
         </div>
       )
@@ -6438,12 +6505,28 @@ function WorldPromptChatPanel({
           : 'content'
     const entryTurnLens = entry.kind === 'turn_lens' ? entry.turnLens : undefined
     const ResultWrapper = entryTurnLens ? 'button' : 'div'
+    const fullBody = [
+      entry.detail,
+      entry.kind === 'relationship_created' ? `${entry.sourceLabel} -> ${entry.targetLabel}` : null,
+      entryTurnLens
+        ? `${entryTurnLens.counts.entities} nodes / ${entryTurnLens.counts.relationships} links${entryTurnLens.counts.derived > 0 ? ` / ${entryTurnLens.counts.derived} derived` : ''}`
+        : null,
+    ].filter(Boolean).join('\n')
+    const expandableLogEntry = !entryTurnLens && isLongWorldPromptLogText(fullBody)
+      ? {
+          title: entry.label,
+          body: fullBody,
+        }
+      : null
 
     return (
       <ResultWrapper
         key={entry.id}
-        className={`world-prompt-row world-prompt-row-system world-prompt-card world-prompt-row-result${entry.kind === 'system_status' && entry.tone === 'error' ? ' is-error' : ''}${entryTurnLens ? ' is-clickable' : ''}${entryTurnLens?.turnId === activeTurnLensId ? ' is-active-lens' : ''}`}
-        onClick={entryTurnLens ? () => onOpenTurnLens(entryTurnLens) : undefined}
+        className={`world-prompt-row world-prompt-row-system world-prompt-card world-prompt-row-result${entry.kind === 'system_status' && entry.tone === 'error' ? ' is-error' : ''}${entryTurnLens ? ' is-clickable' : ''}${entryTurnLens?.turnId === activeTurnLensId ? ' is-active-lens' : ''}${expandableLogEntry ? ' is-expandable' : ''}`}
+        onClick={entryTurnLens ? () => onOpenTurnLens(entryTurnLens) : expandableLogEntry ? () => setExpandedLogEntry(expandableLogEntry) : undefined}
+        onKeyDown={!entryTurnLens && expandableLogEntry ? (event) => handleExpandableLogKeyDown(event, expandableLogEntry) : undefined}
+        role={!entryTurnLens && expandableLogEntry ? 'button' : undefined}
+        tabIndex={!entryTurnLens && expandableLogEntry ? 0 : undefined}
         type={entryTurnLens ? 'button' : undefined}
       >
         <div className="world-prompt-entry-icon">
@@ -6451,9 +6534,11 @@ function WorldPromptChatPanel({
         </div>
         <div className="world-prompt-entry-copy">
           <span className="world-prompt-row-label">{entry.label}</span>
-          {entry.detail ? <div className="world-prompt-line">{entry.detail}</div> : null}
+          {entry.detail ? <div className="world-prompt-line world-prompt-log-text">{compactWorldPromptLogText(entry.detail)}</div> : null}
           {entry.kind === 'relationship_created' ? (
-            <div className="world-prompt-entry-route">{entry.sourceLabel} -&gt; {entry.targetLabel}</div>
+            <div className="world-prompt-entry-route">
+              {compactWorldPromptLogText(`${entry.sourceLabel} -> ${entry.targetLabel}`, 120)}
+            </div>
           ) : null}
           {entryTurnLens ? (
             <span className="world-prompt-lens-chip">
@@ -6463,6 +6548,7 @@ function WorldPromptChatPanel({
               {entryTurnLens.counts.derived > 0 ? ` / ${entryTurnLens.counts.derived} derived` : ''}
             </span>
           ) : null}
+          {expandableLogEntry ? <span className="world-prompt-expand-hint">Read full</span> : null}
         </div>
       </ResultWrapper>
     )
@@ -6728,6 +6814,42 @@ function WorldPromptChatPanel({
                 })}
               </div>
             </div>
+          </div>
+        </div>
+      ) : null}
+
+      {expandedLogEntry ? (
+        <div
+          className="world-prompt-modal-backdrop world-prompt-log-modal-backdrop"
+          onClick={() => setExpandedLogEntry(null)}
+          role="presentation"
+        >
+          <div
+            aria-modal="true"
+            className="world-prompt-modal world-prompt-log-modal"
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+          >
+            <div className="world-popup-head">
+              <div>
+                <span className="eyebrow">Log entry</span>
+                <h3>{expandedLogEntry.title}</h3>
+              </div>
+              <button
+                aria-label="Close log entry"
+                className="world-popup-close"
+                onClick={() => setExpandedLogEntry(null)}
+                type="button"
+              >
+                <EntityIcon id="plus" />
+              </button>
+            </div>
+            {expandedLogEntry.meta && expandedLogEntry.meta.length > 0 ? (
+              <div className="world-prompt-log-modal-meta">
+                {expandedLogEntry.meta.map((item) => <span key={item}>{item}</span>)}
+              </div>
+            ) : null}
+            <div className="world-prompt-log-modal-body">{expandedLogEntry.body}</div>
           </div>
         </div>
       ) : null}
