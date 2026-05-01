@@ -17,6 +17,11 @@ import {
   type WorldPromptTurn,
 } from '../../domain/worldPrompt'
 import { EntityIcon, type EntityIconId } from '../../shared/entityIcons'
+import {
+  LandingIcon,
+  orbitEdgePairs as ONBOARDING_ORBIT_EDGE_PAIRS,
+  orbitNodes as ONBOARDING_ORBIT_NODES,
+} from '../landing/LandingPage'
 import { buildWorldPromptSessionTokenMeter } from '../world/worldPresentation'
 import {
   buildSeedGeneratedPreviewCards,
@@ -70,81 +75,6 @@ const EXAMPLES = [
     summary: 'Bring a script, bible, outline, or notes file.',
     prompt: 'Use my uploaded source as the canon seed. Build the first connected world graph from the characters, places, factions, objects, events, and story beats it contains.',
   },
-]
-
-const ONBOARDING_ORBIT_NODES: Array<{
-  className: string
-  title: string
-  icon: EntityIconId
-  alternates?: Array<{ title: string; icon: EntityIconId }>
-}> = [
-  {
-    className: 'is-characters',
-    title: 'Characters',
-    icon: 'character',
-    alternates: [
-      { title: 'Factions', icon: 'group' },
-      { title: 'Cast', icon: 'character' },
-      { title: 'Voices', icon: 'activity' },
-    ],
-  },
-  {
-    className: 'is-stories',
-    title: 'Stories',
-    icon: 'thread',
-    alternates: [
-      { title: 'Scripts', icon: 'content' },
-      { title: 'Cinematics', icon: 'cinematic' },
-      { title: 'Threads', icon: 'thread' },
-    ],
-  },
-  {
-    className: 'is-locations',
-    title: 'Locations',
-    icon: 'environment',
-    alternates: [
-      { title: 'Regions', icon: 'environment' },
-      { title: 'Worlds', icon: 'global' },
-      { title: 'Routes', icon: 'graph' },
-    ],
-  },
-  {
-    className: 'is-items',
-    title: 'Artifacts',
-    icon: 'item',
-    alternates: [
-      { title: 'Items', icon: 'item' },
-      { title: 'Assets', icon: 'asset' },
-      { title: 'Relics', icon: 'archetype' },
-    ],
-  },
-  {
-    className: 'is-lore',
-    title: 'Lore',
-    icon: 'concept',
-    alternates: [
-      { title: 'Canon', icon: 'graph' },
-      { title: 'Concepts', icon: 'concept' },
-      { title: 'Rules', icon: 'info' },
-    ],
-  },
-  {
-    className: 'is-timelines',
-    title: 'Events',
-    icon: 'event',
-    alternates: [
-      { title: 'Episodes', icon: 'event' },
-      { title: 'Launches', icon: 'release' },
-      { title: 'Beats', icon: 'activity' },
-    ],
-  },
-]
-
-const ONBOARDING_ORBIT_EDGE_PAIRS: Array<[string, string]> = [
-  ['is-characters', 'is-stories'],
-  ['is-stories', 'is-locations'],
-  ['is-items', 'is-lore'],
-  ['is-lore', 'is-timelines'],
 ]
 
 type OnboardingOrbitNode = typeof ONBOARDING_ORBIT_NODES[number]
@@ -1452,7 +1382,7 @@ export function ProjectWorldOnboarding({
                 <span className="world-onboarding-orbit-node-inner">
                   <strong>{node.title}</strong>
                   <span className="world-onboarding-icon-frame">
-                    <EntityIcon id={node.icon} />
+                    <LandingIcon id={node.icon} />
                   </span>
                 </span>
               </span>

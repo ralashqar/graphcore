@@ -6,7 +6,7 @@ import landingPromptExamplesData from './landingPromptExamples.json'
 
 gsap.registerPlugin(useGSAP, ScrollTrigger)
 
-type LandingIconId =
+export type LandingIconId =
   | 'graph'
   | 'characters'
   | 'factions'
@@ -38,14 +38,14 @@ type LandingPromptExample = {
   clearMs?: number
 }
 
-type LandingOrbitNode = {
+export type LandingOrbitNode = {
   className: string
   title: string
   icon: LandingIconId
   alternates?: LandingOrbitVariant[]
 }
 
-type LandingOrbitVariant = {
+export type LandingOrbitVariant = {
   title: string
   icon: LandingIconId
 }
@@ -83,7 +83,7 @@ type LandingOutputCard = {
 
 const navLinks = ['Product', 'Use Cases', 'Examples', 'Pricing', 'Resources', 'Company']
 
-const orbitEdgePairs: Array<[string, string]> = [
+export const orbitEdgePairs: Array<[string, string]> = [
   ['is-characters', 'is-stories'],
   ['is-stories', 'is-locations'],
   ['is-items', 'is-lore'],
@@ -99,7 +99,7 @@ const fallbackPromptExample: LandingPromptExample = {
   text: 'A lone warrior returns to a kingdom in ruins, seeking redemption.',
 }
 
-const orbitNodes: LandingOrbitNode[] = [
+export const orbitNodes: LandingOrbitNode[] = [
   {
     className: 'is-characters',
     title: 'Characters',
@@ -213,7 +213,7 @@ const metrics = [
   { label: 'User rating', value: '4.9/5' },
 ]
 
-function LandingIcon({ id }: { id: LandingIconId }) {
+export function LandingIcon({ id }: { id: LandingIconId }) {
   return (
     <svg aria-hidden="true" className="landing-icon-glyph" viewBox="0 0 48 48">
       {id === 'graph' ? (
