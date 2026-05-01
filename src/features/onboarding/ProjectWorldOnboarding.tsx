@@ -1521,6 +1521,13 @@ export function ProjectWorldOnboarding({
         </section>
       </section>
 
+      <aside className="landing-proof-panel world-onboarding-proof-panel">
+        <h2>Everything stays connected.</h2>
+        <p>Change one thing, and it flows everywhere.</p>
+        <img className="landing-mini-network" src="/landing/connected-network-v1.png" alt="" aria-hidden="true" />
+        <p>One source of truth. Infinite possibilities.</p>
+      </aside>
+
       <section className="world-onboarding-output-section" aria-label="Connected GraphCore outputs">
         <div className="world-onboarding-output-flow" aria-hidden="true">
           <svg viewBox="0 0 1200 260" preserveAspectRatio="none">

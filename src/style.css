@@ -3052,6 +3052,26 @@ code {
   animation: worldOnboardingSideHeroFloat 7.4s ease-in-out infinite;
 }
 
+.world-onboarding-proof-panel {
+  --landing-panel: rgba(8, 14, 24, 0.84);
+  --landing-stroke: rgba(75, 123, 255, 0.22);
+  position: absolute;
+  right: clamp(18px, 3vw, 56px);
+  top: clamp(22px, 3.2dvh, 42px);
+  z-index: 2;
+  width: min(100%, 320px);
+  opacity: 0;
+  transform: translate3d(0, 0, 0);
+  animation: worldOnboardingProofPanelIn 720ms cubic-bezier(0.16, 1, 0.3, 1) 780ms forwards;
+}
+
+.world-onboarding-input-first .world-onboarding-proof-panel {
+  position: absolute;
+  top: clamp(22px, 3.2dvh, 42px);
+  right: clamp(18px, 3vw, 56px);
+  justify-self: auto;
+}
+
 .world-onboarding-input-first:not(.is-generating) .world-onboarding-background-graph {
   animation: worldOnboardingBackdropIn 900ms ease-out both;
 }
@@ -4647,6 +4667,20 @@ code {
   50% {
     transform: translate3d(8px, calc(-50% - 10px), 0) rotate(-2deg) scale(1.02);
     opacity: 0.48;
+  }
+}
+
+@keyframes worldOnboardingProofPanelIn {
+  0% {
+    opacity: 0;
+    transform: translate3d(18px, 14px, 0) scale(0.975);
+    filter: blur(6px);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+    filter: blur(0);
   }
 }
 
@@ -6400,6 +6434,7 @@ button.world-prompt-row-result {
   .world-onboarding-orbit-edge-layer,
   .world-onboarding-orbit-node,
   .world-onboarding-side-hero-graphic,
+  .world-onboarding-proof-panel,
   .world-onboarding-composer-card::after,
   .world-onboarding-output-flow {
     display: none;
@@ -13398,6 +13433,7 @@ button:disabled {
   .world-onboarding-input-first:not(.is-generating) .world-onboarding-orbit-edge,
   .world-onboarding-input-first:not(.is-generating) .world-onboarding-background-graph,
   .world-onboarding-side-hero-graphic,
+  .world-onboarding-proof-panel,
   .world-onboarding-link-row,
   .world-onboarding-seed-panel,
   .world-onboarding-style-option,
@@ -13410,6 +13446,7 @@ button:disabled {
 
   .world-onboarding-orbit-node-drift,
   .world-onboarding-side-hero-graphic,
+  .world-onboarding-proof-panel,
   .world-onboarding-flow-line,
   .world-onboarding-flow-pulse,
   .world-onboarding-flow-pulse-glow {

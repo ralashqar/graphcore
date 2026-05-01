@@ -37,6 +37,7 @@ type WorkspaceTopbarProps = {
   worldViewMode: WorldWorkspaceMode
   workspaceName: string
   draftName: string
+  hideNavigation?: boolean
   isSignedIn: boolean
 }
 
@@ -48,6 +49,7 @@ export function WorkspaceTopbar({
   currentUserEmail,
   draftName,
   games,
+  hideNavigation = false,
   isSignedIn,
   onOpenActivity,
   onOpenAuth,
@@ -85,32 +87,34 @@ export function WorkspaceTopbar({
         )}
         <span className="topbar-draft-label">{draftName}</span>
       </div>
-      <div className="topbar-center">
-        <nav className="tabbar" aria-label="Workspace tabs">
-          {TOPBAR_NAV_ITEMS.map((item) => {
-            const active = item.kind === 'world'
-              ? activeTab === 'graph' && worldViewMode === item.mode
-              : activeTab === item.tab
-            return (
-            <button
-              key={item.kind === 'world' ? `world:${item.mode}` : item.tab}
-              className={active ? 'tab-button is-active' : 'tab-button'}
-              onClick={() => {
-                if (item.kind === 'world') {
-                  onSetWorldViewMode(item.mode)
-                  return
-                }
-                onSetActiveTab(item.tab)
-              }}
-              type="button"
-            >
-              <EntityIcon className="tab-button-icon" id={item.icon} />
-              {item.label}
-            </button>
-            )
-          })}
-        </nav>
-      </div>
+      {hideNavigation ? <div className="topbar-center" aria-hidden="true" /> : (
+        <div className="topbar-center">
+          <nav className="tabbar" aria-label="Workspace tabs">
+            {TOPBAR_NAV_ITEMS.map((item) => {
+              const active = item.kind === 'world'
+                ? activeTab === 'graph' && worldViewMode === item.mode
+                : activeTab === item.tab
+              return (
+              <button
+                key={item.kind === 'world' ? `world:${item.mode}` : item.tab}
+                className={active ? 'tab-button is-active' : 'tab-button'}
+                onClick={() => {
+                  if (item.kind === 'world') {
+                    onSetWorldViewMode(item.mode)
+                    return
+                  }
+                  onSetActiveTab(item.tab)
+                }}
+                type="button"
+              >
+                <EntityIcon className="tab-button-icon" id={item.icon} />
+                {item.label}
+              </button>
+              )
+            })}
+          </nav>
+        </div>
+      )}
       <div className="topbar-actions">
         <button
           className="topbar-credit-pill"

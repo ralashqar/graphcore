@@ -5964,6 +5964,7 @@ export default function App() {
           currentUserEmail={session?.user.email ?? null}
           draftName={snapshot.draft.name}
           games={games}
+          hideNavigation={shouldShowWorldOnboarding}
           isSignedIn={Boolean(session)}
           onOpenActivity={() => setHistoryOpen(true)}
           onOpenAuth={() => setAuthOpen(true)}
