@@ -102,14 +102,14 @@ export function buildIconGenerationPrompt(input: {
   const cells = input.candidates.map((candidate, index) => {
     const row = Math.floor(index / input.gridCols) + 1
     const col = (index % input.gridCols) + 1
-    const description = candidate.visualPrompt || candidate.summary || `${candidate.name}, ${candidate.nodeType}`
-    return `${index + 1}. Row ${row}, column ${col}: ${candidate.name} (${candidate.nodeType}) - ${description}`
+    const description = candidate.visualPrompt || candidate.summary || candidate.name
+    return `${index + 1}. Row ${row}, column ${col}: ${description}`
   })
   return [
-    `Create one square ${input.gridRows}x${input.gridCols} icon grid for GraphCore world entities.`,
-    `Global art style: ${input.artStyleName}. ${input.artStyleDescription}`,
-    'Each grid cell must contain exactly one isolated icon-style subject for the matching numbered entity. Keep each cell visually separated and centered.',
-    'Do not add labels, captions, UI, borders with text, watermarks, speech bubbles, or merged cells. Keep framing consistent across all cells.',
+    `Create one square ${input.gridRows}x${input.gridCols} grid of isolated icon images.`,
+    `Style: ${input.artStyleName}. ${input.artStyleDescription}`,
+    'Each grid cell must contain exactly one isolated square icon subject. Keep every cell visually separated, centered, and consistently framed.',
+    'No text, labels, UI, watermarks, speech bubbles, captions, or merged cells.',
     'Use the exact row-major order below, from top-left to bottom-right:',
     ...cells,
     `If there are fewer than ${input.gridRows * input.gridCols} entities, leave the remaining cells as subtle empty dark placeholders without text.`,

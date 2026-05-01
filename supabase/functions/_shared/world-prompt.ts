@@ -7130,6 +7130,7 @@ function plannerModeInstructions(input: {
       return [
         'This is a direct build turn. Prioritize the smallest complete first wave that makes the prompt land cleanly in the graph.',
         'For new entities, default to concise summaries and only include long-form context when the prompt explicitly asks for backstory, motives, secrets, or nuanced social/political pressure.',
+        'For every new or substantially updated entity, include entity.metadata.visualDescription: a concise visual image prompt under 280 characters. It should describe visible design only, with no lore exposition, project names, internal IDs, GraphCore wording, or node-type labels.',
         'Keep assistantSummary to 1 short sentence.',
         compactScopeInstruction,
       ]
@@ -7224,6 +7225,7 @@ async function generatePromptPlan(input: {
     `Return only the fields present in the schema for this mode. Do not invent omitted top-level keys.`,
     'Allowed operations for wave1Ops: upsert_entity, update_entity, replace_entity, upsert_relationship, update_relationship, create_derived_result, queue_image_generation, queue_cinematic_generation, update_world_wiki_metadata, assistant_note.',
     'Favor additive graph growth.',
+    'Every upsert_entity for actor, place, group, object, concept, event, or sequence_unit must include entity.metadata.visualDescription: a compact visual image prompt for the subject or visible scene. Do not include lore exposition, product/project names, schema labels, node-type labels, IDs, or GraphCore wording in visualDescription.',
     'Use advisory_question for questions that should answer first and offer options without mutating the graph by default.',
     'Use graph_diagnosis for prompts that ask what is weak, missing, thin, underdeveloped, or structurally lacking in the current world.',
     'Use refinement_only when the prompt mainly enriches existing nodes or relationships rather than expanding the world broadly.',
@@ -8062,31 +8064,32 @@ async function createPromptWorldEntity(input: {
   entity: WorldEntityCreateInput
   preferredKey?: string | null
 }) {
+  const entity = normalizeWorldEntityCreateInputVisual(input.entity)
   const { linkedDefinitionKey, createdDefinition } = await ensureLinkedDefinition({
     client: input.client,
     snapshot: input.snapshot,
-    entity: input.entity,
-    force: worldEntityRequiresLinkedDefinition(input.entity.nodeType),
+    entity,
+    force: worldEntityRequiresLinkedDefinition(entity.nodeType),
   })
 
-  const key = input.preferredKey || buildWorldEntityKey(input.snapshot, input.entity.nodeType, input.entity.name)
+  const key = input.preferredKey || buildWorldEntityKey(input.snapshot, entity.nodeType, entity.name)
   const insertResponse = await input.client
     .from('world_entities')
     .insert({
       draft_id: input.snapshot.draft.id,
       key,
-      name: input.entity.name,
-      summary: input.entity.summary,
-      context: input.entity.context,
-      node_type: input.entity.nodeType,
-      aliases: input.entity.aliases,
-      tags: input.entity.tags,
-      status: input.entity.status,
-      thumbnail_asset_key: input.entity.thumbnailAssetKey,
+      name: entity.name,
+      summary: entity.summary,
+      context: entity.context,
+      node_type: entity.nodeType,
+      aliases: entity.aliases,
+      tags: entity.tags,
+      status: entity.status,
+      thumbnail_asset_key: entity.thumbnailAssetKey,
       linked_definition_key: linkedDefinitionKey,
-      source: input.entity.source ?? 'ai',
-      custom_properties: input.entity.customProperties,
-      metadata: input.entity.metadata,
+      source: entity.source ?? 'ai',
+      custom_properties: entity.customProperties,
+      metadata: entity.metadata,
     })
     .select(WORLD_ENTITY_SELECT)
     .single()
@@ -8291,6 +8294,7 @@ async function applyPromptOp(input: {
   }
 
   if (input.op.op === 'upsert_entity') {
+    const promptEntity = normalizeWorldEntityCreateInputVisual(input.op.payload.entity)
     const target = !isProjectedCreate(input.op) && input.op.payload.targetEntityKey
       ? input.snapshot.worldEntities.find((entity) => entity.key === input.op.payload.targetEntityKey) ?? null
       : null
@@ -8299,7 +8303,7 @@ async function applyPromptOp(input: {
         client: input.client,
         draftId: input.snapshot.draft.id,
         target,
-        incoming: input.op.payload.entity,
+        incoming: promptEntity,
         linkedDefinitionKey: target.linkedDefinitionKey,
       })
       await syncLinkedDefinitionFromWorldEntity({
@@ -8323,18 +8327,18 @@ async function applyPromptOp(input: {
     const ensuredDefinition = await ensureLinkedDefinition({
       client: input.client,
       snapshot: input.snapshot,
-      entity: input.op.payload.entity,
-      force: worldEntityRequiresLinkedDefinition(input.op.payload.entity.nodeType),
+      entity: promptEntity,
+      force: worldEntityRequiresLinkedDefinition(promptEntity.nodeType),
     })
     const linkedDefinitionKey = ensuredDefinition.linkedDefinitionKey
-    const key = input.op.payload.targetEntityKey || buildWorldEntityKey(input.snapshot, input.op.payload.entity.nodeType, input.op.payload.entity.name)
+    const key = input.op.payload.targetEntityKey || buildWorldEntityKey(input.snapshot, promptEntity.nodeType, promptEntity.name)
     const dbTarget = await loadWorldEntityByDraftAndKey(input.client, input.snapshot.draft.id, key)
       if (dbTarget) {
         const updatedEntity = await mergePromptEntityIntoExisting({
           client: input.client,
           draftId: input.snapshot.draft.id,
           target: dbTarget,
-          incoming: input.op.payload.entity,
+          incoming: promptEntity,
           linkedDefinitionKey,
         })
         await syncLinkedDefinitionFromWorldEntity({
@@ -8362,18 +8366,18 @@ async function applyPromptOp(input: {
       .insert({
         draft_id: input.snapshot.draft.id,
         key,
-        name: input.op.payload.entity.name,
-        summary: input.op.payload.entity.summary,
-        context: input.op.payload.entity.context,
-        node_type: input.op.payload.entity.nodeType,
-        aliases: input.op.payload.entity.aliases,
-        tags: input.op.payload.entity.tags,
-        status: input.op.payload.entity.status,
-        thumbnail_asset_key: input.op.payload.entity.thumbnailAssetKey,
+        name: promptEntity.name,
+        summary: promptEntity.summary,
+        context: promptEntity.context,
+        node_type: promptEntity.nodeType,
+        aliases: promptEntity.aliases,
+        tags: promptEntity.tags,
+        status: promptEntity.status,
+        thumbnail_asset_key: promptEntity.thumbnailAssetKey,
         linked_definition_key: linkedDefinitionKey,
-        source: input.op.payload.entity.source ?? 'ai',
-        custom_properties: input.op.payload.entity.customProperties,
-        metadata: input.op.payload.entity.metadata,
+        source: promptEntity.source ?? 'ai',
+        custom_properties: promptEntity.customProperties,
+        metadata: promptEntity.metadata,
       })
       .select(WORLD_ENTITY_SELECT)
       .single()
@@ -8386,7 +8390,7 @@ async function applyPromptOp(input: {
             client: input.client,
             draftId: input.snapshot.draft.id,
             target: collidedEntity,
-            incoming: input.op.payload.entity,
+            incoming: promptEntity,
             linkedDefinitionKey,
           })
           await syncLinkedDefinitionFromWorldEntity({
@@ -8459,6 +8463,7 @@ async function applyPromptOp(input: {
       ...(target.metadata ?? {}),
       ...(changes.metadata ?? {}),
     }
+    nextMetadata = mergeVisualDescriptionMetadata(nextMetadata, nextMetadata.visualDescription)
     nextMetadata = appendRefinementHistory({
       metadata: nextMetadata,
       field: 'summary',
@@ -9505,26 +9510,28 @@ async function mergePromptEntityIntoExisting(input: {
   incoming: WorldEntityCreateInput
   linkedDefinitionKey: string | null
 }) {
-  const nextAliases = Array.from(new Set([...input.target.aliases, ...(input.incoming.aliases ?? [])]))
-  const nextTags = Array.from(new Set([...input.target.tags, ...(input.incoming.tags ?? [])]))
+  const incoming = normalizeWorldEntityCreateInputVisual(input.incoming)
+  const nextAliases = Array.from(new Set([...input.target.aliases, ...(incoming.aliases ?? [])]))
+  const nextTags = Array.from(new Set([...input.target.tags, ...(incoming.tags ?? [])]))
   const summaryMerge = mergeCanonicalText({
     existing: input.target.summary,
-    incoming: input.incoming.summary,
+    incoming: incoming.summary,
     maxUnits: 4,
   })
   const contextMerge = mergeCanonicalContext({
     existing: input.target.context,
-    incoming: input.incoming.context,
+    incoming: incoming.context,
   })
   let nextMetadata: Record<string, unknown> = {
     ...(input.target.metadata ?? {}),
-    ...(input.incoming.metadata ?? {}),
+    ...(incoming.metadata ?? {}),
   }
+  nextMetadata = mergeVisualDescriptionMetadata(nextMetadata, nextMetadata.visualDescription)
   nextMetadata = appendRefinementHistory({
     metadata: nextMetadata,
     field: 'summary',
     previousText: input.target.summary,
-    incomingText: input.incoming.summary,
+    incomingText: incoming.summary,
     resultText: summaryMerge.text,
     strategy: summaryMerge.strategy,
     changed: summaryMerge.changed,
@@ -9533,7 +9540,7 @@ async function mergePromptEntityIntoExisting(input: {
     metadata: nextMetadata,
     field: 'context',
     previousText: input.target.context,
-    incomingText: input.incoming.context,
+    incomingText: incoming.context,
     resultText: contextMerge.text,
     strategy: contextMerge.strategy,
     changed: contextMerge.changed,
@@ -9545,11 +9552,11 @@ async function mergePromptEntityIntoExisting(input: {
       tags: nextTags,
       summary: summaryMerge.text,
       context: contextMerge.text,
-      thumbnail_asset_key: input.target.thumbnailAssetKey ?? input.incoming.thumbnailAssetKey,
+      thumbnail_asset_key: input.target.thumbnailAssetKey ?? incoming.thumbnailAssetKey,
       linked_definition_key: input.target.linkedDefinitionKey ?? input.linkedDefinitionKey,
       custom_properties: {
         ...(input.target.customProperties ?? {}),
-        ...(input.incoming.customProperties ?? {}),
+        ...(incoming.customProperties ?? {}),
       },
       metadata: nextMetadata,
     })
@@ -9842,20 +9849,22 @@ function sourceContextBrief(sourceContext: unknown) {
 
 function buildStreamedInitialSeedInstructions() {
   return [
-    'You are GraphCore initial world generation.',
+    'You generate initial world graph records from the user prompt.',
     'Generate a complete initial world skeleton as streamed JSON records. Do not wrap in Markdown. Do not return one giant JSON object.',
+    'Every entity and sequence_unit must include visualDescription: a concise visual image prompt under 280 characters. Describe visible design only. Do not include lore exposition, project names, internal IDs, GraphCore wording, schema labels, or node-type labels.',
+    'For sequence_unit records, visualDescription must describe the visible scene or moment for that beat.',
     'Each record must be one complete JSON object matching one of:',
     '{"kind":"note","message":"short operational note"}',
     '{"kind":"wiki","id":"wiki_foundation","title":"generated content title","logline":"one sentence","synopsis":"compact paragraph","genre":"genre label","themes":["theme"],"toneTags":["tone"],"coreConflict":"central conflict","visualMotifs":["motif"]}',
-    '{"kind":"entity","id":"mara_veyr","nodeType":"actor","name":"Mara Veyr","summary":"one sentence","context":"short canon use","tags":["main cast"]}',
-    '{"kind":"sequence_unit","id":"episode_01","name":"Episode 1: The Memory Tax","summary":"one sentence","context":"short canon use","unitKind":"episode","sequenceKey":"main","ordinal":1,"actLabel":"Act I","synopsis":"one compact paragraph","dramaticQuestion":"question","storyFunction":"setup","outcome":"one sentence","consequences":[{"cause":"cause","effect":"effect","affectedEntityKeys":["mara_veyr"],"threadKeys":[],"consequenceType":"plot"}],"characterArcDeltas":[{"actorKey":"mara_veyr","before":"before","pressure":"pressure","choice":"choice","after":"after"}],"openLoops":["loop"],"resolvedLoops":[]}',
+    '{"kind":"entity","id":"mara_veyr","nodeType":"actor","name":"Mara Veyr","summary":"one sentence","context":"short canon use","visualDescription":"silver-haired archivist with a violet lantern, ash-black coat, rainlit stone alley","tags":["main cast"]}',
+    '{"kind":"sequence_unit","id":"episode_01","name":"Episode 1: The Memory Tax","summary":"one sentence","context":"short canon use","visualDescription":"public memory tithe in a rain-slick plaza, shadow guards, glowing ledger pages, frightened crowd","unitKind":"episode","sequenceKey":"main","ordinal":1,"actLabel":"Act I","synopsis":"one compact paragraph","dramaticQuestion":"question","storyFunction":"setup","outcome":"one sentence","consequences":[{"cause":"cause","effect":"effect","affectedEntityKeys":["mara_veyr"],"threadKeys":[],"consequenceType":"plot"}],"characterArcDeltas":[{"actorKey":"mara_veyr","before":"before","pressure":"pressure","choice":"choice","after":"after"}],"openLoops":["loop"],"resolvedLoops":[]}',
     '{"kind":"relationship","id":"link_mara_seeks_artifact","source":"mara_veyr","target":"memory_artifact","verb":"seeks","notes":"short relationship note"}',
     '{"kind":"summary","assistantSummary":"concise summary of what was created"}',
     '{"kind":"skip","reason":"only if a requested record cannot be represented safely"}',
     '{"kind":"op","op":{PromptToWorldOp}} is supported for compatibility, but prefer compact wiki, entity, sequence_unit, and relationship records; the system will convert them to graph ops.',
     'Emit minified one-line JSON records. Never put literal line breaks inside JSON string values; escape them as \\n or keep text as one compact paragraph.',
-    'Example entity line: {"kind":"entity","id":"mara_veyr","nodeType":"actor","name":"Mara Veyr","summary":"A memory mage pulled into the empire conflict.","context":"Main cast protagonist with a clear want, flaw, and pressure.","tags":["main cast"]}',
-    'Example Story sequence_unit line: {"kind":"sequence_unit","id":"episode_01","name":"Episode 1: The Memory Tax","summary":"Mara discovers the empire is harvesting memories to keep its shadow throne alive.","context":"Opening episode that establishes the premise, pressure, and first irreversible choice.","unitKind":"episode","sequenceKey":"main","ordinal":1,"actLabel":"Act I","synopsis":"Mara witnesses a public memory tithe and realizes her brother is next.","dramaticQuestion":"Will Mara expose the tithe before her family is erased?","storyFunction":"setup","outcome":"Mara steals a forbidden ledger and becomes hunted by the throne.","consequences":[{"cause":"Mara steals the tithe ledger.","effect":"The shadow guard marks her family as traitors.","affectedEntityKeys":["mara_veyr"],"threadKeys":[],"consequenceType":"plot"}],"characterArcDeltas":[{"actorKey":"mara_veyr","before":"Mara survives by staying invisible.","pressure":"Her brother is selected for the tithe.","choice":"She steals the ledger in public.","after":"She accepts becoming visible is the price of resistance."}],"openLoops":["Who built the tithe ledger?"],"resolvedLoops":[]}',
+    'Example entity line: {"kind":"entity","id":"mara_veyr","nodeType":"actor","name":"Mara Veyr","summary":"A memory mage pulled into the empire conflict.","context":"Main cast protagonist with a clear want, flaw, and pressure.","visualDescription":"silver-haired memory mage in an ash-black archivist coat, violet lantern glow, rain-dark alley","tags":["main cast"]}',
+    'Example Story sequence_unit line: {"kind":"sequence_unit","id":"episode_01","name":"Episode 1: The Memory Tax","summary":"Mara discovers the empire is harvesting memories to keep its shadow throne alive.","context":"Opening episode that establishes the premise, pressure, and first irreversible choice.","visualDescription":"public memory tithe in a rain-slick plaza, shadow guards, glowing ledger pages, frightened crowd","unitKind":"episode","sequenceKey":"main","ordinal":1,"actLabel":"Act I","synopsis":"Mara witnesses a public memory tithe and realizes her brother is next.","dramaticQuestion":"Will Mara expose the tithe before her family is erased?","storyFunction":"setup","outcome":"Mara steals a forbidden ledger and becomes hunted by the throne.","consequences":[{"cause":"Mara steals the tithe ledger.","effect":"The shadow guard marks her family as traitors.","affectedEntityKeys":["mara_veyr"],"threadKeys":[],"consequenceType":"plot"}],"characterArcDeltas":[{"actorKey":"mara_veyr","before":"Mara survives by staying invisible.","pressure":"Her brother is selected for the tithe.","choice":"She steals the ledger in public.","after":"She accepts becoming visible is the price of resistance."}],"openLoops":["Who built the tithe ledger?"],"resolvedLoops":[]}',
     'Example relationship line: {"kind":"relationship","id":"link_mara_seeks_artifact","source":"mara_veyr","target":"memory_artifact","verb":"seeks","notes":"The artifact is tied to Mara central objective."}',
     'Use only these operation types: upsert_entity, upsert_relationship, update_world_wiki_metadata, assistant_note.',
     'Valid entity nodeType values are actor, group, place, object, concept, event, sequence_unit.',
@@ -10022,6 +10031,80 @@ function asCompactString(value: unknown) {
   return ''
 }
 
+const WORLD_ENTITY_VISUAL_DESCRIPTION_MAX_LENGTH = 280
+
+function normalizeWorldEntityVisualDescription(value: unknown) {
+  const normalized = asCompactString(value).replace(/\s+/g, ' ')
+  if (!normalized) return ''
+  return normalized.slice(0, WORLD_ENTITY_VISUAL_DESCRIPTION_MAX_LENGTH).trim()
+}
+
+function readVisualDescriptionCandidate(value: Record<string, unknown>) {
+  const metadata = isRecord(value.metadata) ? value.metadata : {}
+  const customProperties = isRecord(value.customProperties) ? value.customProperties : {}
+  const metadataVisual = isRecord(metadata.visual) ? metadata.visual : {}
+  const customVisual = isRecord(customProperties.visual) ? customProperties.visual : {}
+  return normalizeWorldEntityVisualDescription(
+    value.visualDescription
+    ?? value.visual_description
+    ?? value.visualPrompt
+    ?? value.imagePrompt
+    ?? metadata.visualDescription
+    ?? metadataVisual.description
+    ?? metadataVisual.visualDescription
+    ?? customProperties.visualDescription
+    ?? customVisual.description
+    ?? customVisual.visualDescription
+    ?? customProperties.appearance,
+  )
+}
+
+function mergeVisualDescriptionMetadata(metadata: Record<string, unknown>, visualDescription: unknown) {
+  const nextMetadata = { ...metadata }
+  const normalized = normalizeWorldEntityVisualDescription(visualDescription)
+  if (normalized) {
+    nextMetadata.visualDescription = normalized
+  } else if (typeof nextMetadata.visualDescription === 'string') {
+    const existing = normalizeWorldEntityVisualDescription(nextMetadata.visualDescription)
+    if (existing) nextMetadata.visualDescription = existing
+  }
+  return nextMetadata
+}
+
+function markFallbackVisualDescription(metadata: Record<string, unknown>, visualDescription: string, explicitVisualDescription: string) {
+  if (!visualDescription || explicitVisualDescription) return metadata
+  return {
+    ...metadata,
+    visualDescriptionSource: metadata.visualDescriptionSource ?? 'fallback',
+  }
+}
+
+function fallbackVisualDescriptionFromEntity(entity: Record<string, unknown>) {
+  return normalizeWorldEntityVisualDescription(
+    readVisualDescriptionCandidate(entity)
+    || entity.summary
+    || entity.context
+    || entity.name,
+  )
+}
+
+function normalizeWorldEntityCreateInputVisual<T extends WorldEntityCreateInput>(entity: T): T {
+  const explicitVisualDescription = readVisualDescriptionCandidate({
+    metadata: entity.metadata ?? {},
+    customProperties: entity.customProperties ?? {},
+  })
+  const visualDescription = explicitVisualDescription || fallbackVisualDescriptionFromEntity(entity as Record<string, unknown>)
+  const metadata = markFallbackVisualDescription(
+    mergeVisualDescriptionMetadata(entity.metadata ?? {}, visualDescription),
+    visualDescription,
+    explicitVisualDescription,
+  )
+  return {
+    ...entity,
+    metadata,
+  }
+}
+
 function asFiniteNumber(value: unknown) {
   if (typeof value === 'number' && Number.isFinite(value)) return value
   if (typeof value === 'string' && value.trim()) {
@@ -10109,6 +10192,17 @@ function normalizeCompactStreamedEntityEnvelope(value: Record<string, unknown>) 
   const id = asCompactString(value.id ?? value.key ?? value.entityKey) || slugifyStreamKey(name)
   const stableKey = slugifyStreamKey(id)
   if (!stableKey || !name || nodeType === 'sequence_unit') return value
+  const explicitVisualDescription = readVisualDescriptionCandidate(value)
+  const visualDescription = explicitVisualDescription || normalizeWorldEntityVisualDescription(
+    value.summary
+    || value.context
+    || name,
+  )
+  const metadata = markFallbackVisualDescription(
+    mergeVisualDescriptionMetadata(isRecord(value.metadata) ? value.metadata : {}, visualDescription),
+    visualDescription,
+    explicitVisualDescription,
+  )
   return {
     kind: 'op',
     op: {
@@ -10124,7 +10218,7 @@ function normalizeCompactStreamedEntityEnvelope(value: Record<string, unknown>) 
           aliases: asStringArray(value.aliases),
           tags: asStringArray(value.tags),
           customProperties: isRecord(value.customProperties) ? value.customProperties : {},
-          metadata: isRecord(value.metadata) ? value.metadata : {},
+          metadata,
         },
       },
     },
@@ -10147,6 +10241,18 @@ function normalizeCompactStreamedSequenceEnvelope(value: Record<string, unknown>
     || `${unitKind.replace(/_/g, ' ')} ${ordinal ?? ''}`.trim()
   const summary = asCompactString(value.summary)
   const context = asCompactString(value.context)
+  const explicitVisualDescription = readVisualDescriptionCandidate(value)
+  const visualDescription = explicitVisualDescription || normalizeWorldEntityVisualDescription(
+    value.synopsis
+    || summary
+    || context
+    || name,
+  )
+  const metadata = markFallbackVisualDescription(
+    mergeVisualDescriptionMetadata(isRecord(value.metadata) ? value.metadata : {}, visualDescription),
+    visualDescription,
+    explicitVisualDescription,
+  )
   const sequence = {
     unitKind,
     sequenceKey: asCompactString(value.sequenceKey ?? value.sequence_key) || 'main',
@@ -10184,6 +10290,7 @@ function normalizeCompactStreamedSequenceEnvelope(value: Record<string, unknown>
           customProperties: {
             sequence,
           },
+          metadata,
         },
       },
     },
@@ -10241,6 +10348,24 @@ function normalizeStreamedEnvelope(value: unknown) {
   if (value.op.op === 'upsert_entity' && isRecord(value.op.payload) && isRecord(value.op.payload.entity)) {
     const entity = value.op.payload.entity
     const nodeType = coerceStreamNodeType(entity.nodeType)
+    const explicitVisualDescription = readVisualDescriptionCandidate(entity)
+    const sequence = isRecord(entity.customProperties) && isRecord(entity.customProperties.sequence)
+      ? entity.customProperties.sequence
+      : {}
+    const visualDescription = explicitVisualDescription || normalizeWorldEntityVisualDescription(
+      sequence.synopsis
+      || entity.summary
+      || entity.context
+      || entity.name,
+    )
+    const metadata = markFallbackVisualDescription(
+      mergeVisualDescriptionMetadata(
+        isRecord(entity.metadata) ? entity.metadata : {},
+        visualDescription,
+      ),
+      visualDescription,
+      explicitVisualDescription,
+    )
     return {
       ...value,
       op: {
@@ -10252,6 +10377,7 @@ function normalizeStreamedEnvelope(value: unknown) {
             nodeType,
             tags: asStringArray(entity.tags),
             aliases: asStringArray(entity.aliases),
+            metadata,
           },
         },
       },

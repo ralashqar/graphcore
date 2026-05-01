@@ -4,7 +4,6 @@ import { workspaceService } from '../../application/services/workspaceService'
 import {
   buildPromptSourceContext,
   extractOnboardingSourceFromFile,
-  normalizeOnboardingSourceText,
 } from '../../domain/onboardingSource'
 import {
   worldPromptEventPayloadSchema,
@@ -59,22 +58,47 @@ const EXAMPLES = [
   {
     title: 'Fantasy World',
     summary: 'A fallen empire where memory is the last magic.',
-    prompt: 'Create a connected fantasy world about a fallen empire ruled by shadows, where memory is the last magic. Include three major characters, two rival factions, one forbidden artifact, and the first sequence beat that starts the central conflict.',
+    prompt: 'Create a connected fantasy series world about a fallen empire ruled by shadows, where memory is the last magic. Generate the title, logline, full main cast, main locations, two rival factions, one forbidden artifact, key lore concepts, and an ordered main story sequence with major beats from inciting incident through finale.',
   },
   {
     title: 'Cyberpunk City',
     summary: 'A megacity controlled by contracts and synthetic ghosts.',
-    prompt: 'Create a cyberpunk city world where corporate saints, street archivists, and synthetic ghosts fight over an algorithm that predicts betrayal. Build the core cast, factions, places, objects, and relationship pressure.',
+    prompt: 'Create a cyberpunk thriller world where corporate saints, street archivists, and synthetic ghosts fight over an algorithm that predicts betrayal. Generate the title, logline, main cast, districts, factions, signature tech objects, and the ordered main story sequence of escalating betrayals and reversals.',
   },
   {
     title: 'Sci-Fi Universe',
     summary: 'An exploration myth about a moon that remembers every civilization.',
-    prompt: 'Create a sci-fi universe about explorers who find a moon-sized archive that remembers every extinct civilization. Add the mission crew, rival institutions, key locations, artifacts, and the event that makes the discovery dangerous.',
+    prompt: 'Create a sci-fi adventure universe about explorers who find a moon-sized archive that remembers every extinct civilization. Generate the title, logline, mission crew, rival institutions, key locations, artifacts, alien concepts, and an ordered main story sequence from discovery to irreversible cosmic consequence.',
+  },
+  {
+    title: 'Mystery Series',
+    summary: 'A coastal town where every alibi changes at midnight.',
+    prompt: 'Create a serialized mystery story world set in a coastal town where every alibi changes at midnight. Generate the title, logline, detective cast, suspects, locations, secret groups, clue objects, supernatural rules, and an ordered main story sequence of reveals, red herrings, reversals, and final truth.',
+  },
+  {
+    title: 'Game World',
+    summary: 'A survival RPG about living islands and storm relics.',
+    prompt: 'Create an open-world survival RPG setting about living islands, storm relics, and communities built on migrating ruins. Generate the title, player fantasy, key regions, factions, NPCs, resources, artifacts, gameplay systems, and an ordered main quest sequence from first landing to endgame confrontation.',
+  },
+  {
+    title: 'Animated Adventure',
+    summary: 'A sky-rail kingdom powered by bottled weather.',
+    prompt: 'Create an animated adventure world about a sky-rail kingdom powered by bottled weather. Generate the title, logline, main cast, sky cities, factions, magical machines, important objects, visual motifs, and an ordered main story sequence with comic set pieces, emotional turns, and finale.',
+  },
+  {
+    title: 'Brand Story World',
+    summary: 'A mascot-led campaign for a privacy-first AI notebook.',
+    prompt: 'Create a brand storytelling world for a privacy-first AI notebook with a memorable mascot and campaign premise. Generate the title, logline, mascot cast, audience concepts, product objects, message pillars, signature campaign moments, and an ordered story sequence from hook to proof to payoff.',
+  },
+  {
+    title: 'Social Drama',
+    summary: 'A shortform series about a group chat that predicts breakups.',
+    prompt: 'Create a serialized shortform social drama about a group chat that predicts breakups before they happen. Generate the title, logline, creator-friendly main cast, recurring locations, key objects, social rules, relationship threads, and an ordered main story sequence of hook, proof, escalation, twist, and payoff beats.',
   },
   {
     title: 'Upload Your Script',
     summary: 'Bring a script, bible, outline, or notes file.',
-    prompt: 'Use my uploaded source as the canon seed. Build the first connected world graph from the characters, places, factions, objects, events, and story beats it contains.',
+    prompt: 'Use my uploaded source as the canon seed. Build the first connected world graph from the characters, places, factions, objects, events, lore, and story beats it contains, then generate an ordered main story sequence that captures the full arc.',
   },
 ]
 
@@ -898,6 +922,7 @@ export function ProjectWorldOnboarding({
   const latestPreviewCardRef = useRef<HTMLDivElement | null>(null)
   const promptSystemRef = useRef<HTMLElement | null>(null)
   const composerCardRef = useRef<HTMLElement | null>(null)
+  const lastExampleIndexRef = useRef<number | null>(null)
   const [prompt, setPrompt] = useState('')
   const [sourceContext, setSourceContext] = useState<WorldPromptSourceContext | null>(null)
   const [sourceWarning, setSourceWarning] = useState<string | null>(null)
@@ -1079,20 +1104,20 @@ export function ProjectWorldOnboarding({
   }
 
   function handleExample(example: typeof EXAMPLES[number]) {
-    const normalized = normalizeOnboardingSourceText(example.prompt)
     setPrompt(example.prompt)
-    setSourceContext({
-      kind: 'example',
-      title: example.title,
-      fileName: null,
-      mimeType: null,
-      url: null,
-      extractedText: normalized.text,
-      charCount: normalized.charCount,
-      truncated: normalized.truncated,
-    })
+    setSourceContext(null)
     setSourceWarning(null)
     setError(null)
+    setLinkOpen(false)
+  }
+
+  function handleRandomExample() {
+    const availableIndexes = EXAMPLES
+      .map((_, index) => index)
+      .filter((index) => EXAMPLES.length <= 1 || index !== lastExampleIndexRef.current)
+    const nextIndex = availableIndexes[Math.floor(Math.random() * availableIndexes.length)] ?? 0
+    lastExampleIndexRef.current = nextIndex
+    handleExample(EXAMPLES[nextIndex])
   }
 
   function openExpandedPreview(title: string, label: string, text: string) {
@@ -1515,7 +1540,7 @@ export function ProjectWorldOnboarding({
             <EntityIcon id="content" />
             <span><strong>Paste link</strong><small>Docs, sites, references</small></span>
           </button>
-          <button className="world-onboarding-source-button" disabled={Boolean(seedInference) || isExtracting || isSaving || isPromptAnalyzing} onClick={() => handleExample(EXAMPLES[0])} type="button">
+          <button className="world-onboarding-source-button" disabled={Boolean(seedInference) || isExtracting || isSaving || isPromptAnalyzing} onClick={handleRandomExample} type="button">
             <EntityIcon id="graph" />
             <span><strong>Try example</strong><small>See what is possible</small></span>
           </button>

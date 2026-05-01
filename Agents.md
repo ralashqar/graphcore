@@ -80,6 +80,7 @@ GraphCore runs AI workloads through protected Supabase Edge Functions that provi
 - Item and asset previews
 - Cinematic storyboard creation
 - UGC thumbnail and banner creation
+- Batch world-entity icon generation through `openai/gpt-image-2`, using compact row-major grid prompts built from each entity's `metadata.visualDescription` and the project art style. Prompts must stay visual-only and avoid GraphCore, project, schema, node-type, or internal ID wording.
 
 ## Specialized Content Agents
 
@@ -188,6 +189,7 @@ GraphCore runs AI workloads through protected Supabase Edge Functions that provi
 - Uses authored sequence retrieval for Story project plot and chapter prompts. Sequence units carry synopsis, dramatic question, story function, outcome, consequences, character arc deltas, open/resolved loops, and script-expansion readiness metadata.
 - Enforces Story sequence-unit completeness before writing chapter canon. Story planner JSON schema requires `sequence_unit` ops to carry strict `customProperties.sequence` metadata, including ordinal, synopsis, dramatic question, outcome, at least one cause/effect consequence, and at least one character arc delta; still-incomplete sequence ops are repaired or skipped with an explicit note instead of persisting thin chapter nodes.
 - Runs a focused Story sequence completion pass when the main planner or durable streamed seed worker emits thin chapter ops, using current sequence context, relevant graph entities, relationships, and threads to fill required `customProperties.sequence` metadata before validation and apply.
+- Stores canonical visual image prompts on world entities at `world_entities.metadata.visualDescription`. World-prompt entity and sequence-unit generation should provide concise visual-only descriptions for image-capable nodes; apply paths normalize and cap the value, preserve existing visual descriptions on unrelated updates, and write a compact summary/context/name fallback when the streamed model output omits the field so image generation still has durable visual guidance.
 - First-run project onboarding is now input-first: the user starts with a single prompt, optional uploaded source file, or imported URL instead of preselecting project type, subtype, and art style. The first `start-world-prompt-turn` creates the persistent chat thread, passes `sourceContext` into the planner, and the planner returns `projectContextInference` so project type, subtype, brain profile, and art direction are inferred by the LLM before graph mutations are applied.
 - First-run source ingestion supports text extraction for prompt, example, TXT/Markdown/JSON/DOCX/PDF files, and authenticated URL import via the `extract-source-url` Edge Function. Extracted source text is capped and passed as turn metadata/context rather than requiring a separate upload storage workflow.
 - `start-world-prompt-turn` now returns touched world graph records directly alongside messages, events, suggestions, threads, and linked definitions, so the frontend can render the first generated graph immediately without waiting for realtime replication.

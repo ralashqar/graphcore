@@ -44,6 +44,7 @@ const ENTITY_ICON_PRIORITY: Record<string, number> = {
 }
 
 const DEFAULT_ICON_NODE_TYPES = new Set(Object.keys(ENTITY_ICON_PRIORITY))
+const VISUAL_DESCRIPTION_MAX_LENGTH = 280
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
@@ -53,12 +54,16 @@ function readString(value: unknown) {
   return typeof value === 'string' ? value.trim() : ''
 }
 
+function normalizeVisualPrompt(value: unknown) {
+  return readString(value).replace(/\s+/g, ' ').slice(0, VISUAL_DESCRIPTION_MAX_LENGTH).trim()
+}
+
 function resolveVisualPrompt(entity: WorldEntityRow) {
   const metadata = asRecord(entity.metadata)
   const custom = asRecord(entity.custom_properties)
   const metadataVisual = asRecord(metadata.visual)
   const customVisual = asRecord(custom.visual)
-  return (
+  return normalizeVisualPrompt(
     readString(metadata.visualDescription)
     || readString(metadataVisual.description)
     || readString(metadataVisual.visualDescription)
@@ -69,13 +74,13 @@ function resolveVisualPrompt(entity: WorldEntityRow) {
     || readString(entity.summary)
     || readString(entity.context)
     || `${entity.name}, ${entity.node_type}`
-  ).slice(0, 520)
+  )
 }
 
 function readProjectContext(metadata: Record<string, unknown> | null) {
   const projectContext = asRecord(metadata?.projectContext)
   return {
-    artStyleName: readString(projectContext.artStylePreset) || 'GraphCore project art style',
+    artStyleName: readString(projectContext.artStylePreset) || 'cohesive project art style',
     artStyleDescription: readString(projectContext.artStyleDescription) || 'cohesive, polished, high-quality worldbuilding icon art',
   }
 }

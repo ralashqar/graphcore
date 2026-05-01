@@ -80,7 +80,9 @@ test('buildSeedGeneratedPreviewCards maps normal entities into entity cards', ()
           linkedDefinitionKey: null,
           source: 'ai',
           customProperties: {},
-          metadata: {},
+          metadata: {
+            visualDescription: 'A sharp-eyed woman in a rain-dark cloak, silver memory ink glowing at her wrist.',
+          },
           ensureLinkedDefinition: true,
         },
       },
@@ -91,6 +93,7 @@ test('buildSeedGeneratedPreviewCards maps normal entities into entity cards', ()
   assert.equal(cards[0].kind, 'entity')
   assert.equal(cards[0].icon, 'character')
   assert.equal(cards[0].title, 'Mara Veyr')
+  assert.equal(cards[0].fields.some((field) => field.label === 'Visual description'), true)
   assert.equal(cards[0].lists.some((list) => list.label === 'Tags' && list.values.includes('protagonist')), true)
 })
 
@@ -128,7 +131,9 @@ test('buildSeedGeneratedPreviewCards maps sequence units with story schema field
               scriptExpansionReady: true,
             },
           },
-          metadata: {},
+          metadata: {
+            visualDescription: 'A moonlit archive chamber as a stolen tithe mark burns through Mara\'s palm.',
+          },
           ensureLinkedDefinition: true,
         },
       },
@@ -139,6 +144,7 @@ test('buildSeedGeneratedPreviewCards maps sequence units with story schema field
   assert.equal(cards[0].kind, 'sequence_unit')
   assert.equal(cards[0].ordinal, 1)
   assert.equal(cards[0].summary, 'Mara steals a tithe mark and exposes a forbidden archive.')
+  assert.equal(cards[0].fields.some((field) => field.label === 'Visual description'), true)
   assert.equal(cards[0].fields.some((field) => field.label === 'Outcome'), true)
   assert.equal(cards[0].lists.some((list) => list.label === 'Consequences'), true)
 })

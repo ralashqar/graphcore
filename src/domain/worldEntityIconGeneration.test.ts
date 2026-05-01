@@ -6,6 +6,14 @@ import {
   buildWorldEntityIconPrompt,
   resolveWorldEntityIconGridSize,
 } from './worldEntityIconGeneration.ts'
+import {
+  streamEntityRecordSchema,
+  streamSequenceUnitRecordSchema,
+} from './worldPrompt.ts'
+import {
+  readWorldEntityVisualDescription,
+  WORLD_ENTITY_VISUAL_DESCRIPTION_MAX_LENGTH,
+} from './worldEntityVisuals.ts'
 import type { DefinitionBase } from './graphcore.ts'
 import type { WorldEntity } from './worldGraph.ts'
 
@@ -84,7 +92,7 @@ test('selects missing icon candidates in wiki priority order', () => {
   assert.equal(candidates[0].visualPrompt, 'silver hair and archive robes')
 })
 
-test('builds row-major prompt with global art style', () => {
+test('builds compact visual-only row-major prompt', () => {
   const prompt = buildWorldEntityIconPrompt({
     candidates: [
       { entityKey: 'actor.mara', linkedDefinitionKey: null, name: 'Mara', nodeType: 'actor', summary: '', visualPrompt: 'archivist with a violet lantern', orderIndex: 0 },
@@ -98,8 +106,46 @@ test('builds row-major prompt with global art style', () => {
     } as never,
   })
 
-  assert.match(prompt, /Global art style: Live-Action Cinematic/)
-  assert.match(prompt, /Row 1, column 1: Mara/)
-  assert.match(prompt, /Row 1, column 2: Citadel/)
-  assert.match(prompt, /Do not add labels/)
+  assert.match(prompt, /Style: Live-Action Cinematic/)
+  assert.match(prompt, /Row 1, column 1: archivist with a violet lantern/)
+  assert.match(prompt, /Row 1, column 2: black stone fortress/)
+  assert.match(prompt, /No text, labels/)
+  assert.doesNotMatch(prompt, /GraphCore/)
+  assert.doesNotMatch(prompt, /world entit/i)
+  assert.doesNotMatch(prompt, /\(actor\)|\(place\)/)
+})
+
+test('normalizes visual descriptions from canonical metadata and fallbacks', () => {
+  const canonical = entity({
+    key: 'actor.mara',
+    name: 'Mara',
+    nodeType: 'actor',
+    summary: 'fallback summary',
+    metadata: { visualDescription: `  ${'violet lantern '.repeat(40)}  ` },
+  })
+  const visualDescription = readWorldEntityVisualDescription(canonical)
+  assert.equal(visualDescription.length <= WORLD_ENTITY_VISUAL_DESCRIPTION_MAX_LENGTH, true)
+  assert.match(visualDescription, /^violet lantern/)
+
+  assert.equal(readWorldEntityVisualDescription(entity({
+    key: 'place.citadel',
+    name: 'Citadel',
+    nodeType: 'place',
+    customProperties: { visual: { description: 'black stone citadel under pale moons' } },
+  })), 'black stone citadel under pale moons')
+})
+
+test('compact stream records accept visualDescription for entities and sequence units', () => {
+  assert.equal(streamEntityRecordSchema.parse({
+    kind: 'entity',
+    nodeType: 'actor',
+    name: 'Mara',
+    visualDescription: 'silver-haired archivist with a violet lantern',
+  }).visualDescription, 'silver-haired archivist with a violet lantern')
+
+  assert.equal(streamSequenceUnitRecordSchema.parse({
+    kind: 'sequence_unit',
+    ordinal: 1,
+    visualDescription: 'rain-slick plaza with shadow guards and glowing ledger pages',
+  }).visualDescription, 'rain-slick plaza with shadow guards and glowing ledger pages')
 })

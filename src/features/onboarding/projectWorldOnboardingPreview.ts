@@ -218,6 +218,23 @@ function readRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 }
 
+function readPreviewVisualDescription(
+  metadata: Record<string, unknown>,
+  customProperties: Record<string, unknown>,
+) {
+  const metadataVisual = readRecord(metadata.visual)
+  const customVisual = readRecord(customProperties.visual)
+  return firstMeaningfulText(
+    metadata.visualDescription,
+    metadataVisual.description,
+    metadataVisual.visualDescription,
+    customProperties.visualDescription,
+    customVisual.description,
+    customVisual.visualDescription,
+    customProperties.appearance,
+  )
+}
+
 function nodeTypeIcon(nodeType: string | null | undefined): EntityIconId {
   switch (nodeType) {
     case 'actor':
@@ -387,14 +404,17 @@ function buildEntityCard(event: WorldPromptEvent, entity: Record<string, unknown
 
   const fields: SeedPreviewField[] = []
   const lists: SeedPreviewList[] = []
+  const metadata = readRecord(entity.metadata)
+  const visualDescription = readPreviewVisualDescription(metadata, customProperties)
   pushField(fields, 'Node type', nodeType)
-  pushField(fields, 'Role', customProperties.roleLabel ?? readRecord(entity.metadata).roleLabel)
+  pushField(fields, 'Role', customProperties.roleLabel ?? metadata.roleLabel)
+  pushField(fields, 'Visual description', visualDescription)
   pushField(fields, 'Status', entity.status)
   pushField(fields, 'Source', entity.source)
   pushField(fields, 'Linked definition', entity.linkedDefinitionKey)
   pushField(fields, 'Thumbnail asset', entity.thumbnailAssetKey)
   pushRecordFields(fields, customProperties, { exclude: ['roleLabel'] })
-  pushRecordFields(fields, readRecord(entity.metadata), { exclude: ['roleLabel'], prefix: 'Metadata' })
+  pushRecordFields(fields, metadata, { exclude: ['roleLabel', 'visualDescription'], prefix: 'Metadata' })
   pushRecordFields(fields, entity, {
     prefix: 'Node',
     exclude: [
@@ -438,11 +458,13 @@ function buildSequenceUnitCard(
   const lists: SeedPreviewList[] = []
   const customProperties = readRecord(entity.customProperties)
   const metadata = readRecord(entity.metadata)
+  const visualDescription = readPreviewVisualDescription(metadata, customProperties)
   const ordinal = typeof sequence.ordinal === 'number' ? sequence.ordinal : null
   pushField(fields, 'Unit kind', sequence.unitKind)
   pushField(fields, 'Sequence key', sequence.sequenceKey)
   pushField(fields, 'Ordinal', sequence.ordinal)
   pushField(fields, 'Act', sequence.actLabel)
+  pushField(fields, 'Visual description', visualDescription)
   pushField(fields, 'Dramatic question', sequence.dramaticQuestion)
   pushField(fields, 'Story function', sequence.storyFunction ? formatPreviewLabel(compactWhitespace(sequence.storyFunction)) : '')
   pushField(fields, 'Outcome', sequence.outcome)
@@ -478,7 +500,7 @@ function buildSequenceUnitCard(
   pushList(lists, 'Tags', entity.tags)
   if (sequence.scriptExpansionReady === true) lists.push({ label: 'Readiness', values: ['Script expansion ready'] })
   pushRecordFields(fields, customProperties, { exclude: ['sequence'] })
-  pushRecordFields(fields, metadata, { prefix: 'Metadata' })
+  pushRecordFields(fields, metadata, { prefix: 'Metadata', exclude: ['visualDescription'] })
   pushRecordFields(fields, entity, {
     prefix: 'Node',
     exclude: [
@@ -597,6 +619,7 @@ function buildAssemblyEntityItem(event: WorldPromptEvent, entity: Record<string,
 
   const section = nodeTypeAssemblySection(nodeType)
   const roleLabel = firstMeaningfulText(customProperties.roleLabel, metadata.roleLabel)
+  const visualDescription = readPreviewVisualDescription(metadata, customProperties)
   const tags = formatMeaningfulList(entity.tags)
   return {
     id: `assembly-entity-${event.id}`,
@@ -609,6 +632,7 @@ function buildAssemblyEntityItem(event: WorldPromptEvent, entity: Record<string,
     roleLabel: tags,
     detailText: joinMeaningfulLines([
       ['Summary', entity.summary],
+      ['Visual', visualDescription],
       ['Context', entity.context],
       ['Role', roleLabel],
       ['Aliases', formatMeaningfulList(entity.aliases)],
@@ -624,6 +648,9 @@ function buildAssemblySequenceItem(
   entity: Record<string, unknown>,
   sequence: Record<string, unknown>,
 ): SeedAssemblyItem {
+  const customProperties = readRecord(entity.customProperties)
+  const metadata = readRecord(entity.metadata)
+  const visualDescription = readPreviewVisualDescription(metadata, customProperties)
   const ordinal = typeof sequence.ordinal === 'number' ? sequence.ordinal : null
   const unitKind = compactWhitespace(sequence.unitKind)
   const actLabel = compactWhitespace(sequence.actLabel)
@@ -650,6 +677,7 @@ function buildAssemblySequenceItem(
     roleLabel: sequence.storyFunction ? formatPreviewLabel(compactWhitespace(sequence.storyFunction)) : '',
     detailText: joinMeaningfulLines([
       ['Synopsis', sequence.synopsis],
+      ['Visual', visualDescription],
       ['Dramatic question', sequence.dramaticQuestion],
       ['Story function', sequence.storyFunction ? formatPreviewLabel(compactWhitespace(sequence.storyFunction)) : ''],
       ['Outcome', sequence.outcome],

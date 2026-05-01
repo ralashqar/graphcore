@@ -3,6 +3,7 @@ import { z } from 'zod'
 import type { DefinitionBase } from './graphcore'
 import type { ProjectContext } from './projectContext'
 import type { WorldEntity } from './worldGraph'
+import { readWorldEntityVisualDescription } from './worldEntityVisuals.ts'
 
 const looseRecordSchema = z.record(z.string(), z.unknown())
 
@@ -72,30 +73,8 @@ const ENTITY_ICON_PRIORITY: Record<string, number> = {
 
 const DEFAULT_ICON_NODE_TYPES = new Set(Object.keys(ENTITY_ICON_PRIORITY))
 
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
-}
-
-function readString(value: unknown) {
-  return typeof value === 'string' ? value.trim() : ''
-}
-
 export function resolveWorldEntityVisualPrompt(entity: Pick<WorldEntity, 'summary' | 'context' | 'metadata' | 'customProperties'>) {
-  const metadata = asRecord(entity.metadata)
-  const customProperties = asRecord(entity.customProperties)
-  const metadataVisual = asRecord(metadata.visual)
-  const customVisual = asRecord(customProperties.visual)
-  const prompt =
-    readString(metadata.visualDescription)
-    || readString(metadataVisual.description)
-    || readString(metadataVisual.visualDescription)
-    || readString(customProperties.visualDescription)
-    || readString(customVisual.description)
-    || readString(customVisual.visualDescription)
-    || readString(customProperties.appearance)
-    || readString(entity.summary)
-    || readString(entity.context)
-  return prompt.slice(0, 520)
+  return readWorldEntityVisualDescription(entity)
 }
 
 export function resolveWorldEntityIconGridSize(count: number) {
@@ -149,14 +128,14 @@ export function buildWorldEntityIconPrompt(input: {
   const cells = input.candidates.map((candidate, index) => {
     const row = Math.floor(index / input.gridCols) + 1
     const col = (index % input.gridCols) + 1
-    const description = candidate.visualPrompt || candidate.summary || `${candidate.name}, ${candidate.nodeType}`
-    return `${index + 1}. Row ${row}, column ${col}: ${candidate.name} (${candidate.nodeType}) - ${description}`
+    const description = candidate.visualPrompt || candidate.summary || candidate.name
+    return `${index + 1}. Row ${row}, column ${col}: ${description}`
   })
   return [
-    `Create one square ${input.gridRows}x${input.gridCols} icon grid for GraphCore world entities.`,
-    `Global art style: ${artStyleName}. ${artStyleDescription}`,
-    'Each grid cell must contain exactly one isolated icon-style subject for the matching numbered entity. Keep each cell visually separated and centered.',
-    'Do not add labels, captions, UI, borders with text, watermarks, speech bubbles, or merged cells. Keep framing consistent across all cells.',
+    `Create one square ${input.gridRows}x${input.gridCols} grid of isolated icon images.`,
+    `Style: ${artStyleName}. ${artStyleDescription}`,
+    'Each grid cell must contain exactly one isolated square icon subject. Keep every cell visually separated, centered, and consistently framed.',
+    'No text, labels, UI, watermarks, speech bubbles, captions, or merged cells.',
     'Use the exact row-major order below, from top-left to bottom-right:',
     ...cells,
     `If there are fewer than ${input.gridRows * input.gridCols} entities, leave the remaining cells as subtle empty dark placeholders without text.`,

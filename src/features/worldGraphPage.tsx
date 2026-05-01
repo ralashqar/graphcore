@@ -89,6 +89,10 @@ import {
   type WorldEntityIconGenerationStatusResponse,
 } from '../domain/worldEntityIconGeneration'
 import {
+  mergeWorldEntityVisualDescriptionMetadata,
+  readWorldEntityVisualDescription,
+} from '../domain/worldEntityVisuals'
+import {
   buildSuggestionsForEntity,
   createDefaultWorldView,
   definitionKindForWorldEntity,
@@ -368,6 +372,7 @@ type EntityOverviewDraftState = {
   name: string
   summary: string
   context: string
+  visualDescription: string
   dirty: boolean
 }
 
@@ -3062,6 +3067,7 @@ export function WorldGraphPage({
       setEntityOverviewDraft(null)
       return
     }
+    const visualDescription = readWorldEntityVisualDescription(inspectorEntity)
     setEntityOverviewDraft((current) => {
       if (current?.entityKey === inspectorEntity.key && current.dirty) {
         return current
@@ -3071,6 +3077,7 @@ export function WorldGraphPage({
         && current.name === inspectorEntity.name
         && current.summary === inspectorEntity.summary
         && current.context === inspectorEntity.context
+        && current.visualDescription === visualDescription
       ) {
         return current
       }
@@ -3079,6 +3086,7 @@ export function WorldGraphPage({
         name: inspectorEntity.name,
         summary: inspectorEntity.summary,
         context: inspectorEntity.context,
+        visualDescription,
         dirty: false,
       }
     })
@@ -3092,6 +3100,10 @@ export function WorldGraphPage({
       name: entityOverviewDraft.name,
       summary: entityOverviewDraft.summary,
       context: entityOverviewDraft.context,
+      metadata: mergeWorldEntityVisualDescriptionMetadata(
+        inspectorEntity.metadata ?? {},
+        entityOverviewDraft.visualDescription,
+      ),
     }
   }, [entityOverviewDraft, inspectorEntity])
   const edgeEditorPosition = useMemo(() => {
@@ -3331,17 +3343,21 @@ export function WorldGraphPage({
     }, delay)
   }
 
-  async function persistEntityOverviewDraft(entityKey: string, name: string, summary: string, context: string) {
+  async function persistEntityOverviewDraft(entityKey: string, name: string, summary: string, context: string, visualDescription: string) {
     const entity = worldEntities.find((entry) => entry.key === entityKey) ?? null
     if (!entity) return
+    const currentVisualDescription = readWorldEntityVisualDescription(entity)
 
     const changes: Partial<WorldEntityCreateInput> = {}
     if (name !== entity.name) changes.name = name
     if (summary !== entity.summary) changes.summary = summary
     if (context !== entity.context) changes.context = context
+    if (visualDescription !== currentVisualDescription) {
+      changes.metadata = mergeWorldEntityVisualDescriptionMetadata(entity.metadata ?? {}, visualDescription)
+    }
     if (Object.keys(changes).length === 0) {
       setEntityOverviewDraft((current) => (
-        current?.entityKey === entityKey && current.name === name && current.summary === summary && current.context === context
+        current?.entityKey === entityKey && current.name === name && current.summary === summary && current.context === context && current.visualDescription === visualDescription
           ? { ...current, dirty: false }
           : current
       ))
@@ -3350,7 +3366,7 @@ export function WorldGraphPage({
 
     await updateWorldEntityAndRefresh(entityKey, changes, 'manual_entity_overview_update')
     setEntityOverviewDraft((current) => (
-      current?.entityKey === entityKey && current.name === name && current.summary === summary && current.context === context
+      current?.entityKey === entityKey && current.name === name && current.summary === summary && current.context === context && current.visualDescription === visualDescription
         ? { ...current, dirty: false }
         : current
     ))
@@ -3362,7 +3378,7 @@ export function WorldGraphPage({
     }
     entityOverviewPersistTimeoutRef.current = window.setTimeout(() => {
       entityOverviewPersistTimeoutRef.current = null
-      void persistEntityOverviewDraft(nextDraft.entityKey, nextDraft.name, nextDraft.summary, nextDraft.context)
+      void persistEntityOverviewDraft(nextDraft.entityKey, nextDraft.name, nextDraft.summary, nextDraft.context, nextDraft.visualDescription)
     }, delay)
   }
 
@@ -3372,7 +3388,7 @@ export function WorldGraphPage({
       window.clearTimeout(entityOverviewPersistTimeoutRef.current)
       entityOverviewPersistTimeoutRef.current = null
     }
-    void persistEntityOverviewDraft(entityOverviewDraft.entityKey, entityOverviewDraft.name, entityOverviewDraft.summary, entityOverviewDraft.context)
+    void persistEntityOverviewDraft(entityOverviewDraft.entityKey, entityOverviewDraft.name, entityOverviewDraft.summary, entityOverviewDraft.context, entityOverviewDraft.visualDescription)
   }
 
   function selectWorldNode(key: string | null) {
@@ -5644,6 +5660,7 @@ export function WorldGraphPage({
                         name: event.target.value,
                         summary: entityOverviewDraft?.entityKey === displayedInspectorEntity.key ? entityOverviewDraft.summary : displayedInspectorEntity.summary,
                         context: entityOverviewDraft?.entityKey === displayedInspectorEntity.key ? entityOverviewDraft.context : displayedInspectorEntity.context,
+                        visualDescription: entityOverviewDraft?.entityKey === displayedInspectorEntity.key ? entityOverviewDraft.visualDescription : readWorldEntityVisualDescription(displayedInspectorEntity),
                         dirty: true,
                       }
                       setEntityOverviewDraft(nextDraft)
@@ -5663,6 +5680,7 @@ export function WorldGraphPage({
                         name: entityOverviewDraft?.entityKey === displayedInspectorEntity.key ? entityOverviewDraft.name : displayedInspectorEntity.name,
                         summary: event.target.value,
                         context: entityOverviewDraft?.entityKey === displayedInspectorEntity.key ? entityOverviewDraft.context : displayedInspectorEntity.context,
+                        visualDescription: entityOverviewDraft?.entityKey === displayedInspectorEntity.key ? entityOverviewDraft.visualDescription : readWorldEntityVisualDescription(displayedInspectorEntity),
                         dirty: true,
                       }
                       setEntityOverviewDraft(nextDraft)
@@ -5670,6 +5688,28 @@ export function WorldGraphPage({
                     }}
                   />
                 </label>
+                {(['actor', 'place', 'group', 'object', 'concept', 'event', 'sequence_unit'] as const).includes(displayedInspectorEntity.nodeType) ? (
+                  <label className="field-block">
+                    <span>Visual Description</span>
+                    <textarea
+                      rows={3}
+                      value={entityOverviewDraft?.entityKey === displayedInspectorEntity.key ? entityOverviewDraft.visualDescription : readWorldEntityVisualDescription(displayedInspectorEntity)}
+                      onBlur={flushEntityOverviewPersist}
+                      onChange={(event) => {
+                        const nextDraft: EntityOverviewDraftState = {
+                          entityKey: displayedInspectorEntity.key,
+                          name: entityOverviewDraft?.entityKey === displayedInspectorEntity.key ? entityOverviewDraft.name : displayedInspectorEntity.name,
+                          summary: entityOverviewDraft?.entityKey === displayedInspectorEntity.key ? entityOverviewDraft.summary : displayedInspectorEntity.summary,
+                          context: entityOverviewDraft?.entityKey === displayedInspectorEntity.key ? entityOverviewDraft.context : displayedInspectorEntity.context,
+                          visualDescription: event.target.value,
+                          dirty: true,
+                        }
+                        setEntityOverviewDraft(nextDraft)
+                        queueEntityOverviewPersist(nextDraft)
+                      }}
+                    />
+                  </label>
+                ) : null}
                 <label className="field-block">
                   <span>Context</span>
                   <textarea
@@ -5682,6 +5722,7 @@ export function WorldGraphPage({
                         name: entityOverviewDraft?.entityKey === displayedInspectorEntity.key ? entityOverviewDraft.name : displayedInspectorEntity.name,
                         summary: entityOverviewDraft?.entityKey === displayedInspectorEntity.key ? entityOverviewDraft.summary : displayedInspectorEntity.summary,
                         context: event.target.value,
+                        visualDescription: entityOverviewDraft?.entityKey === displayedInspectorEntity.key ? entityOverviewDraft.visualDescription : readWorldEntityVisualDescription(displayedInspectorEntity),
                         dirty: true,
                       }
                       setEntityOverviewDraft(nextDraft)
