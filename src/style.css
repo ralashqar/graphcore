@@ -3034,6 +3034,24 @@ code {
     radial-gradient(circle at 26% 69%, rgba(139, 92, 246, 0.62) 0 2px, transparent 3px);
 }
 
+.world-onboarding-side-hero-graphic {
+  position: absolute;
+  left: max(-96px, -5.8vw);
+  top: 42%;
+  z-index: 0;
+  width: clamp(230px, 26vw, 440px);
+  max-width: none;
+  opacity: 0.42;
+  pointer-events: none;
+  user-select: none;
+  transform: translate3d(0, -50%, 0) rotate(-4deg);
+  filter:
+    drop-shadow(0 0 34px rgba(34, 119, 255, 0.22))
+    drop-shadow(0 0 52px rgba(139, 60, 255, 0.18));
+  mix-blend-mode: screen;
+  animation: worldOnboardingSideHeroFloat 7.4s ease-in-out infinite;
+}
+
 .world-onboarding-input-first:not(.is-generating) .world-onboarding-background-graph {
   animation: worldOnboardingBackdropIn 900ms ease-out both;
 }
@@ -4616,6 +4634,19 @@ code {
   100% {
     opacity: 0.56;
     transform: scale(1);
+  }
+}
+
+@keyframes worldOnboardingSideHeroFloat {
+  0%,
+  100% {
+    transform: translate3d(0, -50%, 0) rotate(-4deg) scale(1);
+    opacity: 0.38;
+  }
+
+  50% {
+    transform: translate3d(8px, calc(-50% - 10px), 0) rotate(-2deg) scale(1.02);
+    opacity: 0.48;
   }
 }
 
@@ -6368,6 +6399,7 @@ button.world-prompt-row-result {
 
   .world-onboarding-orbit-edge-layer,
   .world-onboarding-orbit-node,
+  .world-onboarding-side-hero-graphic,
   .world-onboarding-composer-card::after,
   .world-onboarding-output-flow {
     display: none;
@@ -13365,6 +13397,7 @@ button:disabled {
   .world-onboarding-input-first:not(.is-generating) .world-onboarding-orbit-node,
   .world-onboarding-input-first:not(.is-generating) .world-onboarding-orbit-edge,
   .world-onboarding-input-first:not(.is-generating) .world-onboarding-background-graph,
+  .world-onboarding-side-hero-graphic,
   .world-onboarding-link-row,
   .world-onboarding-seed-panel,
   .world-onboarding-style-option,
@@ -13376,6 +13409,7 @@ button:disabled {
   }
 
   .world-onboarding-orbit-node-drift,
+  .world-onboarding-side-hero-graphic,
   .world-onboarding-flow-line,
   .world-onboarding-flow-pulse,
   .world-onboarding-flow-pulse-glow {

@@ -1375,6 +1375,12 @@ export function ProjectWorldOnboarding({
   return (
     <div className="world-onboarding-input-first">
       <div className="world-onboarding-background-graph" aria-hidden="true" />
+      <img
+        className="world-onboarding-side-hero-graphic"
+        src="/landing/hero-world-core-v4.png"
+        alt=""
+        aria-hidden="true"
+      />
       <section className="world-onboarding-hero">
         <h1>Create your <span>world</span></h1>
         
