@@ -5,6 +5,7 @@ import type { ArchetypeDefinition, AssetDefinition, AssemblyGraphDefinition, Def
 import type { MeshGenerationJob } from '../../domain/meshGeneration'
 import type { WorldEntity, WorldEntityCreateInput, WorldRelationship } from '../../domain/worldGraph'
 import { definitionKindForWorldEntity, getLinkedWorldEntityForDefinition, getWorldRelationshipsForDefinition } from '../../domain/worldGraphHelpers'
+import { mergeWorldEntityVisualDescriptionMetadata, readWorldEntityVisualDescription } from '../../domain/worldEntityVisuals'
 import { getEnvironmentProfile, getResolvedDefinition3dBinding, getResolvedRender3dBinding } from '../../domain/render3d'
 import { getResourceGenerationMetadata, isPendingGenerationResource } from '../../domain/worldBuild'
 import { useEditorStore } from '../../state/editorStore'
@@ -250,6 +251,10 @@ export function SpecializedDefinitionWorkspace({
     () => effectiveSelection ? getLinkedWorldEntityForDefinition(effectiveSelection.key, worldEntities) : null,
     [effectiveSelection, worldEntities],
   )
+  const linkedWorldVisualDescription = useMemo(
+    () => linkedWorldEntity ? readWorldEntityVisualDescription(linkedWorldEntity) : '',
+    [linkedWorldEntity],
+  )
   const linkedWorldRelationships = useMemo(
     () => effectiveSelection ? getWorldRelationshipsForDefinition(effectiveSelection.key, worldEntities, worldRelationships) : [],
     [effectiveSelection, worldEntities, worldRelationships],
@@ -355,12 +360,32 @@ export function SpecializedDefinitionWorkspace({
     onUpdateComponents(effectiveSelection.key, nextComponents as DefinitionBase['components'])
   }
 
+  const selectedVisualDescription = effectiveSelection?.kind === 'character'
+    ? (selectedCharacterRenderBinding?.conceptPrompt?.trim() || linkedWorldVisualDescription)
+    : effectiveSelection?.kind === 'environment'
+      ? (selectedEnvironmentRenderBinding?.generationPrompt?.trim() || linkedWorldVisualDescription)
+      : ''
+
+  function persistLinkedWorldVisualDescription(value: string) {
+    if (!linkedWorldEntity) return
+    const nextValue = value.trim()
+    if (!nextValue || nextValue === readWorldEntityVisualDescription(linkedWorldEntity)) return
+    void onUpdateWorldEntity(linkedWorldEntity.key, {
+      metadata: mergeWorldEntityVisualDescriptionMetadata(linkedWorldEntity.metadata ?? {}, nextValue),
+    })
+  }
+
   async function handleGenerateConcept() {
     if (!effectiveSelection) return
-    const prompt = effectiveSelection.kind === 'character'
-      ? selectedCharacterRenderBinding?.conceptPrompt?.trim() ?? ''
-      : selectedEnvironmentRenderBinding?.generationPrompt?.trim() ?? ''
+    const prompt = selectedVisualDescription.trim()
     if (!prompt) return
+    if (effectiveSelection.kind === 'character' && !selectedCharacterRenderBinding?.conceptPrompt?.trim()) {
+      updateCharacterRenderBinding({ conceptPrompt: prompt, generationPrompt: selectedCharacterRenderBinding?.generationPrompt || prompt })
+    }
+    if (effectiveSelection.kind === 'environment' && !selectedEnvironmentRenderBinding?.generationPrompt?.trim()) {
+      updateEnvironmentRenderBinding({ generationPrompt: prompt })
+    }
+    persistLinkedWorldVisualDescription(prompt)
 
     setConceptPending(true)
     setConceptMessage(null)
@@ -620,10 +645,14 @@ export function SpecializedDefinitionWorkspace({
               <span>Visual Description</span>
               <textarea
                 rows={4}
-                value={effectiveSelection.kind === 'character' ? (selectedCharacterRenderBinding?.conceptPrompt ?? '') : (selectedEnvironmentRenderBinding?.generationPrompt ?? '')}
+                value={selectedVisualDescription}
+                onBlur={(event) => persistLinkedWorldVisualDescription(event.currentTarget.value)}
                 onChange={(event) => {
                   if (effectiveSelection.kind === 'character') {
-                    updateCharacterRenderBinding({ conceptPrompt: event.target.value || null })
+                    updateCharacterRenderBinding({
+                      conceptPrompt: event.target.value || null,
+                      generationPrompt: selectedCharacterRenderBinding?.generationPrompt || event.target.value || null,
+                    })
                   } else {
                     updateEnvironmentRenderBinding({ generationPrompt: event.target.value || null })
                   }

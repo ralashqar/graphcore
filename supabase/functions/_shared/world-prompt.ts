@@ -134,6 +134,10 @@ import {
   type AutoManagedWorldViewOptions,
 } from '../../../src/domain/worldViewDerivation.ts'
 import {
+  resolveIconGridSize,
+  type IconGenerationCandidate,
+} from './entity-icon-generation.ts'
+import {
   appendRefinementHistory,
   mergeCanonicalContext,
   mergeCanonicalText,
@@ -6589,7 +6593,11 @@ async function ensureLinkedDefinition(input: {
     .single()
   if (inserted.error) throw new Error(inserted.error.message)
 
-  const components = buildDefaultDefinitionComponents(definitionKind)
+  const components = applyVisualDescriptionToDefinitionComponents(
+    buildDefaultDefinitionComponents(definitionKind),
+    definitionKind,
+    fallbackVisualDescriptionFromEntity(input.entity as unknown as Record<string, unknown>),
+  )
   if (components.length > 0) {
     const componentInsert = await input.client
       .from('project_definition_components')
@@ -6701,7 +6709,7 @@ async function ensureAppliedEntityLinkedDefinition(input: {
 async function syncLinkedDefinitionFromWorldEntity(input: {
   client: SupabaseClient
   draftId: string
-  entity: Pick<WorldEntity, 'nodeType' | 'name' | 'summary' | 'thumbnailAssetKey' | 'linkedDefinitionKey' | 'tags'>
+  entity: Pick<WorldEntity, 'nodeType' | 'name' | 'summary' | 'context' | 'thumbnailAssetKey' | 'linkedDefinitionKey' | 'tags' | 'customProperties' | 'metadata'>
 }) {
   const linkedDefinitionKey = input.entity.linkedDefinitionKey ?? null
   if (!linkedDefinitionKey) return
@@ -6718,7 +6726,254 @@ async function syncLinkedDefinitionFromWorldEntity(input: {
     .eq('draft_id', input.draftId)
     .eq('key', linkedDefinitionKey)
     .eq('kind', expectedKind)
+    .select('id, key, kind')
+    .maybeSingle()
   if (response.error) throw new Error(response.error.message)
+  if (!response.data?.id) return
+  await syncLinkedDefinitionVisualPrompt({
+    client: input.client,
+    definitionId: response.data.id,
+    definitionKind: expectedKind,
+    visualDescription: fallbackVisualDescriptionFromEntity(input.entity as unknown as Record<string, unknown>),
+  })
+}
+
+function visualPromptComponentTypeForDefinitionKind(definitionKind: DefinitionBase['kind']) {
+  if (definitionKind === 'environment') return 'environment_render_binding'
+  if (definitionKind === 'character' || definitionKind === 'item' || definitionKind === 'group' || definitionKind === 'concept' || definitionKind === 'event') {
+    return 'render_3d_binding'
+  }
+  return null
+}
+
+function mergeVisualDescriptionIntoDefinitionComponentConfig(componentType: string, config: Record<string, unknown>, visualDescription: string) {
+  const nextConfig = { ...config }
+  if (componentType === 'environment_render_binding') {
+    if (!normalizeWorldEntityVisualDescription(nextConfig.generationPrompt)) {
+      nextConfig.generationPrompt = visualDescription
+    }
+    return nextConfig
+  }
+  if (componentType === 'render_3d_binding') {
+    if (!normalizeWorldEntityVisualDescription(nextConfig.conceptPrompt)) {
+      nextConfig.conceptPrompt = visualDescription
+    }
+    if (!normalizeWorldEntityVisualDescription(nextConfig.generationPrompt)) {
+      nextConfig.generationPrompt = visualDescription
+    }
+  }
+  return nextConfig
+}
+
+function applyVisualDescriptionToDefinitionComponents(
+  components: DefinitionBase['components'],
+  definitionKind: DefinitionBase['kind'],
+  visualDescription: string,
+) {
+  const componentType = visualPromptComponentTypeForDefinitionKind(definitionKind)
+  if (!componentType || !visualDescription) return components
+  let found = false
+  const nextComponents = components.map((component) => {
+    if (component.type !== componentType) return component
+    found = true
+    return {
+      ...component,
+      config: mergeVisualDescriptionIntoDefinitionComponentConfig(
+        componentType,
+        isRecord(component.config) ? component.config : {},
+        visualDescription,
+      ),
+    } as DefinitionBase['components'][number]
+  })
+  if (found) return nextComponents as DefinitionBase['components']
+  const fallbackComponent = componentType === 'environment_render_binding'
+    ? {
+      type: 'environment_render_binding',
+      config: {
+        primaryMeshAssetKey: null,
+        previewImageAssetKey: null,
+        lightingProfile: '',
+        generationPrompt: visualDescription,
+        generationStyle: null,
+      },
+    }
+    : {
+      type: 'render_3d_binding',
+      config: {
+        primaryMeshAssetKey: null,
+        previewImageAssetKey: null,
+        conceptPrompt: visualDescription,
+        generationPrompt: visualDescription,
+        generationStyle: null,
+      },
+    }
+  return [...nextComponents, fallbackComponent as DefinitionBase['components'][number]] as DefinitionBase['components']
+}
+
+async function syncLinkedDefinitionVisualPrompt(input: {
+  client: SupabaseClient
+  definitionId: string
+  definitionKind: DefinitionBase['kind']
+  visualDescription: string
+}) {
+  const componentType = visualPromptComponentTypeForDefinitionKind(input.definitionKind)
+  const visualDescription = normalizeWorldEntityVisualDescription(input.visualDescription)
+  if (!componentType || !visualDescription) return
+  const response = await input.client
+    .from('project_definition_components')
+    .select('id, config')
+    .eq('definition_id', input.definitionId)
+    .eq('component_type', componentType)
+    .maybeSingle()
+  if (response.error) throw new Error(response.error.message)
+  const currentConfig = isRecord(response.data?.config) ? response.data.config : {}
+  const nextConfig = mergeVisualDescriptionIntoDefinitionComponentConfig(componentType, currentConfig, visualDescription)
+  if (JSON.stringify(nextConfig) === JSON.stringify(currentConfig)) return
+  if (response.data?.id) {
+    const updateResponse = await input.client
+      .from('project_definition_components')
+      .update({ config: nextConfig })
+      .eq('id', response.data.id)
+    if (updateResponse.error) throw new Error(updateResponse.error.message)
+    return
+  }
+  const insertResponse = await input.client
+    .from('project_definition_components')
+    .insert({
+      definition_id: input.definitionId,
+      component_type: componentType,
+      config: nextConfig,
+    })
+  if (insertResponse.error) throw new Error(insertResponse.error.message)
+}
+
+const INITIAL_SEED_AUTO_ICON_PRIORITY: Partial<Record<WorldEntity['nodeType'], number>> = {
+  actor: 0,
+  place: 1,
+  group: 2,
+  object: 3,
+  concept: 4,
+  sequence_unit: 5,
+}
+
+function canAutoGenerateIconForNodeType(nodeType: WorldEntity['nodeType']) {
+  return Object.prototype.hasOwnProperty.call(INITIAL_SEED_AUTO_ICON_PRIORITY, nodeType)
+}
+
+async function loadDefinitionIconAssetKeys(input: {
+  client: SupabaseClient
+  draftId: string
+}) {
+  const response = await input.client
+    .from('project_definitions')
+    .select('key, icon_asset_key')
+    .eq('draft_id', input.draftId)
+  if (response.error) throw new Error(response.error.message)
+  return new Map((response.data ?? []).map((definition: { key: string; icon_asset_key: string | null }) => [
+    definition.key,
+    definition.icon_asset_key,
+  ]))
+}
+
+async function enqueueInitialSeedEntityIconBatch(input: {
+  client: SupabaseClient
+  snapshot: WorldPromptSnapshot
+  job: WorldPromptGenerationJob
+  projectContext: ProjectContext
+  trigger: string
+}) {
+  const activeJobResponse = await input.client
+    .from('world_entity_icon_generation_jobs')
+    .select('id, status, metadata')
+    .eq('draft_id', input.snapshot.draft.id)
+    .in('status', ['queued', 'running'])
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (activeJobResponse.error) throw new Error(activeJobResponse.error.message)
+  if (activeJobResponse.data?.id) {
+    return {
+      jobId: String(activeJobResponse.data.id),
+      candidates: [] as IconGenerationCandidate[],
+      skippedCount: 0,
+      reused: true,
+    }
+  }
+
+  const definitionIconByKey = await loadDefinitionIconAssetKeys({
+    client: input.client,
+    draftId: input.snapshot.draft.id,
+  })
+  const allCandidates = input.snapshot.worldEntities
+    .filter((entity) => entity.status !== 'archived')
+    .filter((entity) => canAutoGenerateIconForNodeType(entity.nodeType))
+    .filter((entity) => {
+      const linkedDefinitionIcon = entity.linkedDefinitionKey
+        ? definitionIconByKey.get(entity.linkedDefinitionKey) ?? null
+        : null
+      return !entity.thumbnailAssetKey && !linkedDefinitionIcon
+    })
+    .sort((left, right) => {
+      const leftPriority = INITIAL_SEED_AUTO_ICON_PRIORITY[left.nodeType] ?? 99
+      const rightPriority = INITIAL_SEED_AUTO_ICON_PRIORITY[right.nodeType] ?? 99
+      return leftPriority - rightPriority || left.name.localeCompare(right.name)
+    })
+
+  const candidates: IconGenerationCandidate[] = allCandidates.slice(0, 16).map((entity, index) => ({
+    entityKey: entity.key,
+    linkedDefinitionKey: entity.linkedDefinitionKey,
+    name: entity.name,
+    nodeType: entity.nodeType,
+    summary: entity.summary || entity.context || '',
+    visualPrompt: fallbackVisualDescriptionFromEntity(entity as unknown as Record<string, unknown>),
+    orderIndex: index,
+  }))
+  if (candidates.length === 0) {
+    return {
+      jobId: null,
+      candidates,
+      skippedCount: 0,
+      reused: false,
+    }
+  }
+
+  const grid = resolveIconGridSize(candidates.length)
+  const insertResponse = await input.client
+    .from('world_entity_icon_generation_jobs')
+    .insert({
+      project_id: input.snapshot.project.id,
+      draft_id: input.snapshot.draft.id,
+      status: 'queued',
+      provider: 'fal',
+      model: 'openai/gpt-image-2',
+      grid_rows: grid.rows,
+      grid_cols: grid.cols,
+      entity_keys: candidates.map((candidate) => candidate.entityKey),
+      requested_by: null,
+      metadata: {
+        candidates,
+        skippedCount: Math.max(0, allCandidates.length - candidates.length),
+        artStyle: {
+          artStyleName: input.projectContext.artStylePreset || 'cohesive project art style',
+          artStyleDescription: input.projectContext.artStyleDescription || 'cohesive, polished, high-quality worldbuilding icon art',
+        },
+        runtime: 'fly',
+        trigger: input.trigger,
+        generationJobId: input.job.id,
+        generationTurnId: input.job.turnId,
+        queuedBy: 'initial_seed_sequence_boundary',
+        queuedAt: new Date().toISOString(),
+      },
+    })
+    .select('id')
+    .single()
+  if (insertResponse.error) throw new Error(insertResponse.error.message)
+  return {
+    jobId: String(insertResponse.data.id),
+    candidates,
+    skippedCount: Math.max(0, allCandidates.length - candidates.length),
+    reused: false,
+  }
 }
 
 async function insertPromptMessage(input: {
@@ -11105,6 +11360,9 @@ async function runWorldPromptGenerationJob(input: {
   let repairedRecordCount = 0
   let unrepairedRecordCount = 0
   let coverageContinuationCount = 0
+  let autoIconBatchQueued = isRecord(job.metadata?.autoIconGeneration)
+    && typeof job.metadata.autoIconGeneration.jobId === 'string'
+    && job.metadata.autoIconGeneration.jobId.trim().length > 0
 
   const repairMetadata = () => ({
     malformedRecordCount,
@@ -11180,6 +11438,65 @@ async function runWorldPromptGenerationJob(input: {
     await throwIfTurnCancelled(input.client, turn.id)
   }
 
+  const maybeQueueInitialSeedIconBatch = async (trigger: string) => {
+    if (autoIconBatchQueued) return
+    autoIconBatchQueued = true
+    try {
+      const iconBatch = await enqueueInitialSeedEntityIconBatch({
+        client: input.client,
+        snapshot: mutableSnapshot,
+        job,
+        projectContext,
+        trigger,
+      })
+      job = await updateGenerationJob(input.client, job.id, {
+        metadata: {
+          ...(job.metadata ?? {}),
+          autoIconGeneration: {
+            jobId: iconBatch.jobId,
+            candidateCount: iconBatch.candidates.length,
+            skippedCount: iconBatch.skippedCount,
+            reusedActiveJob: iconBatch.reused,
+            trigger,
+            queuedAt: new Date().toISOString(),
+          },
+        },
+        heartbeat_at: new Date().toISOString(),
+      })
+      if (iconBatch.jobId) {
+        await writeEvent('planner_status', {
+          plannerStatus: 'planning',
+          plannerProgress: {
+            phase: 'generating_entity',
+            message: `Queued icon generation for ${iconBatch.candidates.length || 'existing'} world entities.`,
+            sequence: counts.ops + counts.notes + 1,
+          },
+          turn: { id: turn.id },
+          job,
+        })
+      }
+    } catch (error) {
+      console.warn('[GraphCore] initial seed icon batch enqueue failed', {
+        jobId: job.id,
+        turnId: turn.id,
+        trigger,
+        message: error instanceof Error ? error.message : String(error),
+      })
+      job = await updateGenerationJob(input.client, job.id, {
+        metadata: {
+          ...(job.metadata ?? {}),
+          autoIconGeneration: {
+            failed: true,
+            trigger,
+            errorMessage: error instanceof Error ? error.message : String(error),
+            failedAt: new Date().toISOString(),
+          },
+        },
+        heartbeat_at: new Date().toISOString(),
+      })
+    }
+  }
+
   const handleEnvelope = async (envelope: WorldPromptStreamGraphOpEnvelope) => {
     await ensureJobIsActive()
     if (envelope.kind === 'note') {
@@ -11223,6 +11540,7 @@ async function runWorldPromptGenerationJob(input: {
     }
 
     if (op.op === 'upsert_entity' && op.payload.entity.nodeType === 'sequence_unit') {
+      await maybeQueueInitialSeedIconBatch('first_sequence_unit')
       const repaired = await completeStreamedStorySequenceOp({
         model,
         prompt,

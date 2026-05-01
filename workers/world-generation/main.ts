@@ -37,52 +37,69 @@ console.log('[world-generation-worker] started', {
   runtime: 'fly',
 })
 
-while (!shuttingDown) {
-  try {
-    const iconResult = await processFlyWorldEntityIconJobs({
-      client,
-      workerId,
-    })
-    if (iconResult.processed) {
-      console.log('[world-generation-worker] processed entity icon job', {
+async function runIconWorkerLoop() {
+  while (!shuttingDown) {
+    try {
+      const iconResult = await processFlyWorldEntityIconJobs({
+        client,
         workerId,
-        jobId: iconResult.job?.id ?? null,
-        status: iconResult.job?.status ?? null,
       })
-      continue
+      if (iconResult.processed) {
+        console.log('[world-generation-worker] processed entity icon job', {
+          workerId,
+          jobId: iconResult.job?.id ?? null,
+          status: iconResult.job?.status ?? null,
+        })
+        continue
+      }
+      await sleep(pollIntervalMs)
+    } catch (error) {
+      console.error('[world-generation-worker] icon loop error', error)
+      await sleep(Math.max(5_000, pollIntervalMs))
     }
-
-    const result = await processFlyWorldGenerationJobs({
-      client,
-      authHeader,
-      workerId,
-      workerSecret,
-    })
-    if (result.processed) {
-      console.log('[world-generation-worker] processed generation job', {
-        workerId,
-        jobId: result.job?.id ?? null,
-        status: result.job?.status ?? null,
-      })
-      continue
-    }
-    if (result.job?.id) {
-      console.log('[world-generation-worker] claimed generation job', {
-        workerId,
-        jobId: result.job.id,
-        status: result.job.status,
-      })
-    }
-    const now = Date.now()
-    if (now - lastIdleLogAt >= idleLogIntervalMs) {
-      lastIdleLogAt = now
-      console.log('[world-generation-worker] idle; waiting for queued Fly generation jobs.', { workerId })
-    }
-    await sleep(pollIntervalMs)
-  } catch (error) {
-    console.error('[world-generation-worker] loop error', error)
-    await sleep(Math.max(5_000, pollIntervalMs))
   }
 }
+
+async function runGenerationWorkerLoop() {
+  while (!shuttingDown) {
+    try {
+      const result = await processFlyWorldGenerationJobs({
+        client,
+        authHeader,
+        workerId,
+        workerSecret,
+      })
+      if (result.processed) {
+        console.log('[world-generation-worker] processed generation job', {
+          workerId,
+          jobId: result.job?.id ?? null,
+          status: result.job?.status ?? null,
+        })
+        continue
+      }
+      if (result.job?.id) {
+        console.log('[world-generation-worker] claimed generation job', {
+          workerId,
+          jobId: result.job.id,
+          status: result.job.status,
+        })
+      }
+      const now = Date.now()
+      if (now - lastIdleLogAt >= idleLogIntervalMs) {
+        lastIdleLogAt = now
+        console.log('[world-generation-worker] idle; waiting for queued Fly generation jobs.', { workerId })
+      }
+      await sleep(pollIntervalMs)
+    } catch (error) {
+      console.error('[world-generation-worker] generation loop error', error)
+      await sleep(Math.max(5_000, pollIntervalMs))
+    }
+  }
+}
+
+await Promise.all([
+  runIconWorkerLoop(),
+  runGenerationWorkerLoop(),
+])
 
 console.log('[world-generation-worker] stopped', { workerId })
