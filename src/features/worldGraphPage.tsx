@@ -3662,6 +3662,60 @@ export function WorldGraphPage({
     )
   }
 
+  function renderWikiTimelineCard(entityKey: string, fallbackOrdinal: number) {
+    const entity = entityByKey.get(entityKey) ?? null
+    if (!entity) return null
+    const profile = wikiModel.entityProfiles.find((entry) => entry.entity.key === entity.key)
+    const sequence = entity.nodeType === 'sequence_unit' ? readWorldSequenceMetadata(entity) : null
+    const active = selectedWorldNodeKey === entity.key || inspectorNodeKey === entity.key
+    const ordinal = sequence?.ordinal ?? null
+    const summary = sequence?.synopsis || profile?.shortSummary || entity.summary || entity.context || 'No story beat summary yet.'
+    const outcome = sequence?.outcome || ''
+    const detailBody = buildWikiDetailBody([
+      sequence?.synopsis,
+      sequence?.dramaticQuestion ? `Dramatic question: ${sequence.dramaticQuestion}` : null,
+      outcome ? `Outcome: ${outcome}` : null,
+      entity.context,
+    ])
+    return (
+      <button
+        key={entity.key}
+        className={`world-wiki-timeline-card is-${entity.nodeType}${active ? ' is-active' : ''}`}
+        onClick={() => {
+          selectWorldNode(entity.key)
+          setActiveInspectorTab('overview')
+          openWikiDetailModal({
+            title: entity.name,
+            eyebrow: sequence?.unitKind || labelForWorldEntity(entity.nodeType),
+            body: detailBody,
+            meta: [
+              ordinal !== null ? `Step ${ordinal}` : null,
+              sequence?.actLabel || null,
+              sequence?.storyFunction ? sequence.storyFunction.replace(/_/g, ' ') : null,
+              sequence?.scriptExpansionReady ? 'Script ready' : null,
+            ].filter((value): value is string => Boolean(value)),
+          })
+        }}
+        type="button"
+      >
+        <span className="world-wiki-timeline-ordinal">{ordinal ?? fallbackOrdinal}</span>
+        <span className="world-wiki-timeline-body">
+          <span className="world-wiki-timeline-kicker">
+            {[sequence?.actLabel, sequence?.unitKind || labelForWorldEntity(entity.nodeType)].filter(Boolean).join(' / ')}
+          </span>
+          <strong>{entity.name}</strong>
+          <small>{summary}</small>
+          {outcome ? (
+            <span className="world-wiki-timeline-outcome">
+              <em>Outcome</em>
+              <span>{outcome}</span>
+            </span>
+          ) : null}
+        </span>
+      </button>
+    )
+  }
+
   function renderWikiSection(section: WorldWikiSection) {
     const visibleEntityKeys = section.entityKeys.slice(0, section.kind === 'cast' ? 8 : 6)
     const visibleThreadKeys = section.threadKeys.slice(0, 6)
@@ -3692,8 +3746,12 @@ export function WorldGraphPage({
           <span className="world-wiki-summary-clamp">{section.summary}</span>
         </button>
         {visibleEntityKeys.length > 0 ? (
-          <div className={section.kind === 'cast' ? 'world-wiki-card-grid is-cast' : 'world-wiki-card-grid'}>
-            {visibleEntityKeys.map((key) => renderWikiEntityCard(key, section.kind === 'cast' ? 'large' : 'compact'))}
+          <div className={section.kind === 'timeline' ? 'world-wiki-timeline-list' : section.kind === 'cast' ? 'world-wiki-card-grid is-cast' : 'world-wiki-card-grid'}>
+            {visibleEntityKeys.map((key, index) => (
+              section.kind === 'timeline'
+                ? renderWikiTimelineCard(key, index + 1)
+                : renderWikiEntityCard(key, section.kind === 'cast' ? 'large' : 'compact')
+            ))}
           </div>
         ) : null}
         {visibleThreadKeys.length > 0 ? (

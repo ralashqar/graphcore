@@ -92,6 +92,9 @@ export type SeedAssemblyItem = {
   ordinal?: number | null
   outcome?: string
   relationshipText?: string
+  relationshipSource?: string
+  relationshipTarget?: string
+  relationshipVerb?: string
   detailText?: string
 }
 
@@ -676,6 +679,9 @@ function buildAssemblyRelationshipItem(event: WorldPromptEvent, relationship: Re
     subtitle: formatPreviewLabel(verb),
     summary: compactWhitespace(relationship.notes),
     relationshipText,
+    relationshipSource: source,
+    relationshipTarget: target,
+    relationshipVerb: verb,
     detailText: joinMeaningfulLines([
       ['Connection', relationshipText],
       ['Notes', relationship.notes],

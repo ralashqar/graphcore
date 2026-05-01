@@ -905,6 +905,7 @@ export function ProjectWorldOnboarding({
   const [linkOpen, setLinkOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [isExtracting, setIsExtracting] = useState(false)
+  const [isPromptAnalyzing, setIsPromptAnalyzing] = useState(false)
   const [selectedArtStyleId, setSelectedArtStyleId] = useState<string | null>(null)
   const [expandedPreview, setExpandedPreview] = useState<ExpandedOnboardingPreview | null>(null)
   const orbitAnimation = useRotatingOnboardingOrbitNodes()
@@ -922,7 +923,8 @@ export function ProjectWorldOnboarding({
     () => buildGenerationPrompt(prompt, effectiveSourceContext),
     [effectiveSourceContext, prompt],
   )
-  const canSubmit = !isSaving && !isExtracting && generatedPrompt.trim().length > 0
+  const isPromptSubmitAnimating = !seedInference && isPromptAnalyzing
+  const canSubmit = !isSaving && !isExtracting && !isPromptAnalyzing && generatedPrompt.trim().length > 0
   const seedEventRows = sessionEvents
     .map((event) => {
       const row = seedEventToLogRow(event, new Map())
@@ -1008,9 +1010,16 @@ export function ProjectWorldOnboarding({
     return () => window.removeEventListener('keydown', handleEscape)
   }, [expandedPreview])
 
+  useEffect(() => {
+    if (seedInference && isPromptAnalyzing) {
+      setIsPromptAnalyzing(false)
+    }
+  }, [isPromptAnalyzing, seedInference])
+
   async function handleSubmit() {
     if (!canSubmit) return
     setError(null)
+    setIsPromptAnalyzing(true)
     try {
       await onSubmit({
         prompt: generatedPrompt,
@@ -1020,6 +1029,7 @@ export function ProjectWorldOnboarding({
         },
       })
     } catch (submitError) {
+      setIsPromptAnalyzing(false)
       setError(submitError instanceof Error ? submitError.message : 'World generation failed.')
       throw submitError
     }
@@ -1125,12 +1135,24 @@ export function ProjectWorldOnboarding({
           ref={isLatest ? latestPreviewCardRef : null}
           className={`world-onboarding-assembly-relationship${isLatest ? ' is-latest' : ''}`}
         >
-          <div className="world-onboarding-assembly-icon is-small">
-            <EntityIcon id={item.icon} />
+          <div className="world-onboarding-assembly-relationship-node">
+            <span className="world-onboarding-assembly-icon is-small">
+              <EntityIcon id="content" />
+            </span>
+            <strong>{item.relationshipSource || 'Source'}</strong>
           </div>
-          <div>
-            <strong>{item.relationshipText || item.title}</strong>
-            {item.summary ? <p>{compactPreviewText(item.summary, 150)}</p> : null}
+          <div className="world-onboarding-assembly-relationship-connector">
+            <div className="world-onboarding-assembly-relationship-line" aria-hidden="true">
+              <span />
+            </div>
+            <strong>{item.relationshipVerb || item.subtitle}</strong>
+            {item.summary ? <p>{compactPreviewText(item.summary, 120)}</p> : null}
+          </div>
+          <div className="world-onboarding-assembly-relationship-node">
+            <span className="world-onboarding-assembly-icon is-small">
+              <EntityIcon id="content" />
+            </span>
+            <strong>{item.relationshipTarget || 'Target'}</strong>
           </div>
           {renderAssemblyDetailsButton(item)}
         </div>
@@ -1285,11 +1307,18 @@ export function ProjectWorldOnboarding({
             <div ref={generationPreviewRef} className="world-onboarding-preview-feed" aria-label="World assembly">
               {seedAssemblySections.length === 0 ? (
                 <div className="world-onboarding-preview-empty">
-                  <div className="world-onboarding-live-icon">
-                    <EntityIcon id="content" />
+                  <div className="world-onboarding-preview-brain-stage" aria-hidden="true">
+                    <img
+                      className="world-onboarding-preview-brain"
+                      src="/landing/hero-world-core-v4.png"
+                      alt=""
+                    />
                   </div>
-                  <strong>Waiting for the first world piece...</strong>
-                  <p>The overview, cast, places, artifacts, lore, story beats, and connections will assemble here as they land.</p>
+                  <div className="world-onboarding-preview-empty-copy">
+                    <strong>Waiting for the first world piece...</strong>
+                    <p>The overview, cast, places, artifacts, lore, story beats, and connections will assemble here as they land.</p>
+                  </div>
+                  <span className="world-onboarding-preview-thinking-spinner" aria-hidden="true" />
                 </div>
               ) : null}
               {seedAssemblySections.map(renderAssemblySection)}
@@ -1368,7 +1397,7 @@ export function ProjectWorldOnboarding({
   const legacySeedInference = seedInference as unknown as WorldPromptSeedInferenceResponse | null
 
   return (
-    <div className="world-onboarding-input-first">
+    <div className={`world-onboarding-input-first${isPromptSubmitAnimating ? ' is-prompt-analyzing' : ''}`}>
       <div className="world-onboarding-background-graph" aria-hidden="true" />
       <img
         className="world-onboarding-side-hero-graphic"
@@ -1434,7 +1463,10 @@ export function ProjectWorldOnboarding({
           )
         })}
 
-        <section ref={composerCardRef} className="world-onboarding-composer-card">
+        <section
+          ref={composerCardRef}
+          className={`world-onboarding-composer-card${isPromptSubmitAnimating ? ' is-analyzing' : ''}`}
+        >
         <label className="world-onboarding-prompt-label" htmlFor="world-onboarding-prompt">
           Describe your world, story, game, brand, or idea
         </label>
@@ -1444,7 +1476,7 @@ export function ProjectWorldOnboarding({
             placeholder="e.g. A fallen empire ruled by shadows, where memory is the last magic..."
             value={prompt}
             maxLength={4000}
-            disabled={Boolean(seedInference) || isSaving}
+            disabled={Boolean(seedInference) || isSaving || isPromptAnalyzing}
             onChange={(event) => {
               setPrompt(event.target.value)
               if (sourceContext?.kind === 'prompt') setSourceContext(null)
@@ -1460,7 +1492,7 @@ export function ProjectWorldOnboarding({
               type="button"
               aria-label="Create world"
             >
-              {isSaving || isExtracting ? <span className="button-spinner" aria-hidden="true" /> : <EntityIcon id="send" />}
+              {isPromptSubmitAnimating || isExtracting ? <span className="button-spinner" aria-hidden="true" /> : <EntityIcon id="send" />}
             </button>
           ) : null}
         </div>
@@ -1475,15 +1507,15 @@ export function ProjectWorldOnboarding({
         ) : null}
 
         <div className="world-onboarding-source-actions">
-          <button className="world-onboarding-source-button" disabled={Boolean(seedInference) || isExtracting || isSaving} onClick={() => fileInputRef.current?.click()} type="button">
+          <button className="world-onboarding-source-button" disabled={Boolean(seedInference) || isExtracting || isSaving || isPromptAnalyzing} onClick={() => fileInputRef.current?.click()} type="button">
             <EntityIcon id="content" />
             <span><strong>Upload file</strong><small>PDF, DOCX, TXT, JSON</small></span>
           </button>
-          <button className="world-onboarding-source-button" disabled={Boolean(seedInference) || isExtracting || isSaving} onClick={() => setLinkOpen((value) => !value)} type="button">
+          <button className="world-onboarding-source-button" disabled={Boolean(seedInference) || isExtracting || isSaving || isPromptAnalyzing} onClick={() => setLinkOpen((value) => !value)} type="button">
             <EntityIcon id="content" />
             <span><strong>Paste link</strong><small>Docs, sites, references</small></span>
           </button>
-          <button className="world-onboarding-source-button" disabled={Boolean(seedInference) || isExtracting || isSaving} onClick={() => handleExample(EXAMPLES[0])} type="button">
+          <button className="world-onboarding-source-button" disabled={Boolean(seedInference) || isExtracting || isSaving || isPromptAnalyzing} onClick={() => handleExample(EXAMPLES[0])} type="button">
             <EntityIcon id="graph" />
             <span><strong>Try example</strong><small>See what is possible</small></span>
           </button>
