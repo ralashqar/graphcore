@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState, type ChangeEvent } from 'react'
 
-import { resolveAssetPreviewUrl } from '../../domain/assets'
+import { resolveAssetPreviewUrl, resolveAssetSourceUrl } from '../../domain/assets'
 import { supportedMeshAccept } from '../../domain/assets'
 import { getResourceGenerationMetadata, isPendingGenerationResource } from '../../domain/worldBuild'
-import { MediaThumb, QuickUrlAssetForm } from './shared'
+import { MediaThumb, QuickUrlAssetForm, useResolvedAssetUrl } from './shared'
 import type { AssetsWorkspaceProps } from './types'
 
 export function AssetsWorkspace({
@@ -57,7 +57,17 @@ export function AssetsWorkspace({
   }, [assets, search, sort])
 
   const isDeletingSelectedAsset = selectedAsset?.key === deletingAssetKey
-  const selectedAssetPreviewUrl = selectedAsset?.kind === 'image' ? resolveAssetPreviewUrl(selectedAsset) : null
+  const selectedResolvedAssetUrl = useResolvedAssetUrl(selectedAsset)
+  const selectedAssetPreviewUrl = selectedAsset?.kind === 'image' ? selectedResolvedAssetUrl : null
+  const selectedAssetSourceUrl = selectedResolvedAssetUrl ?? (selectedAsset ? resolveAssetSourceUrl(selectedAsset) ?? resolveAssetPreviewUrl(selectedAsset) : null)
+  const selectedAssetStorageBucket = typeof selectedAsset?.metadata.storageBucket === 'string' ? selectedAsset.metadata.storageBucket.trim() : ''
+  const selectedAssetIsPrivateStorageBacked = Boolean(
+    selectedAsset
+    && selectedAsset.storagePath
+    && !selectedAsset.storagePath.startsWith('external/')
+    && !selectedAsset.storagePath.startsWith('local-upload/')
+    && (selectedAssetStorageBucket || selectedAsset.storagePath.startsWith('generated/')),
+  )
 
   useEffect(() => {
     setIsExpandedPreviewOpen(false)
@@ -155,19 +165,24 @@ export function AssetsWorkspace({
                     <input value={selectedAsset.storagePath} onChange={(event) => onUpdateAsset(selectedAsset.key, { storagePath: event.target.value })} />
                   </label>
                   <label className="field-block full-width">
-                    <span>Source URL</span>
+                    <span>{selectedAssetIsPrivateStorageBacked ? 'Resolved URL' : 'Source URL'}</span>
                     <input
-                      value={String(selectedAsset.metadata.sourceUrl ?? selectedAsset.metadata.previewUrl ?? '')}
+                      readOnly={selectedAssetIsPrivateStorageBacked}
+                      value={String(selectedAssetIsPrivateStorageBacked ? selectedAssetSourceUrl ?? '' : selectedAsset.metadata.sourceUrl ?? selectedAsset.metadata.previewUrl ?? '')}
                       onChange={(event) =>
-                        onUpdateAsset(selectedAsset.key, {
-                          metadata: {
-                            ...selectedAsset.metadata,
-                            sourceUrl: event.target.value,
-                            ...(selectedAsset.kind === 'image' ? { previewUrl: event.target.value } : {}),
-                          },
-                        })
+                        !selectedAssetIsPrivateStorageBacked
+                          && onUpdateAsset(selectedAsset.key, {
+                            metadata: {
+                              ...selectedAsset.metadata,
+                              sourceUrl: event.target.value,
+                              ...(selectedAsset.kind === 'image' ? { previewUrl: event.target.value } : {}),
+                            },
+                          })
                       }
                     />
+                    {selectedAssetIsPrivateStorageBacked ? (
+                      <small>Signed from Storage Path when the project loads. This temporary URL is not saved to the database.</small>
+                    ) : null}
                   </label>
                 </div>
                 <div className="asset-toolbar">
@@ -202,7 +217,7 @@ export function AssetsWorkspace({
       {isExpandedPreviewOpen && selectedAssetPreviewUrl ? (
         <button
           aria-label={`Close preview for ${selectedAsset?.name ?? 'asset'}`}
-          className="asset-preview-overlay"
+          className="asset-preview-overlay is-asset-library"
           onClick={() => setIsExpandedPreviewOpen(false)}
           type="button"
         >

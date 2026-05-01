@@ -1,4 +1,5 @@
 import { createAdminClient } from '../../supabase/functions/_shared/auth.ts'
+import { processFlyWorldEntityIconJobs } from '../../supabase/functions/_shared/entity-icon-worker.ts'
 import { processFlyWorldGenerationJobs } from '../../supabase/functions/_shared/world-prompt.ts'
 
 const workerId = Deno.env.get('FLY_MACHINE_ID')
@@ -38,6 +39,19 @@ console.log('[world-generation-worker] started', {
 
 while (!shuttingDown) {
   try {
+    const iconResult = await processFlyWorldEntityIconJobs({
+      client,
+      workerId,
+    })
+    if (iconResult.processed) {
+      console.log('[world-generation-worker] processed entity icon job', {
+        workerId,
+        jobId: iconResult.job?.id ?? null,
+        status: iconResult.job?.status ?? null,
+      })
+      continue
+    }
+
     const result = await processFlyWorldGenerationJobs({
       client,
       authHeader,

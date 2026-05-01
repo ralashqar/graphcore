@@ -12,6 +12,13 @@ type DraftRow = {
   project_id: string
 }
 
+type ProjectAssetRow = {
+  id: string
+  key: string
+  storage_path: string
+  metadata: Record<string, unknown> | null
+}
+
 async function verifyDraftAccess(client: Awaited<ReturnType<typeof requireUserClient>>['client'], projectId: string, draftId: string) {
   const response = await client
     .from('project_drafts')
@@ -30,6 +37,86 @@ async function verifyDraftAccess(client: Awaited<ReturnType<typeof requireUserCl
 
   return response.data as DraftRow
 }
+
+function chunk<T>(values: T[], size: number) {
+  const chunks: T[][] = []
+  for (let index = 0; index < values.length; index += size) {
+    chunks.push(values.slice(index, index + size))
+  }
+  return chunks
+}
+
+function readStorageBucket(asset: ProjectAssetRow) {
+  const metadata = asset.metadata && typeof asset.metadata === 'object' ? asset.metadata : {}
+  const bucket = typeof metadata.storageBucket === 'string' && metadata.storageBucket.trim()
+    ? metadata.storageBucket.trim()
+    : 'project-assets'
+  return bucket
+}
+
+async function deleteGeneratedWorldAssets(
+  admin: ReturnType<typeof createAdminClient>,
+  projectId: string,
+  draftId: string,
+) {
+  const worldIconPrefix = `generated/world-icons/${draftId}/`
+  const legacyWorldIconPrefix = `generate/world-icons/${draftId}/`
+  const assetResponse = await admin
+    .from('project_assets')
+    .select('id, key, storage_path, metadata')
+    .eq('project_id', projectId)
+    .or(`storage_path.like.${worldIconPrefix}%,storage_path.like.${legacyWorldIconPrefix}%`)
+
+  if (assetResponse.error) {
+    throw new Error(assetResponse.error.message)
+  }
+
+  const assets = (assetResponse.data ?? []) as ProjectAssetRow[]
+  if (assets.length === 0) {
+    return { projectAssets: 0, storageObjects: 0 }
+  }
+
+  let removedStorageObjects = 0
+  const pathsByBucket = new Map<string, string[]>()
+  for (const asset of assets) {
+    const storagePath = typeof asset.storage_path === 'string' ? asset.storage_path.trim() : ''
+    if (!storagePath || storagePath.startsWith('external/') || storagePath.startsWith('local-upload/')) continue
+    const bucket = readStorageBucket(asset)
+    pathsByBucket.set(bucket, [...(pathsByBucket.get(bucket) ?? []), storagePath])
+  }
+
+  for (const [bucket, paths] of pathsByBucket.entries()) {
+    for (const pathBatch of chunk([...new Set(paths)], 100)) {
+      const removeResponse = await admin.storage.from(bucket).remove(pathBatch)
+      if (!removeResponse.error) {
+        removedStorageObjects += pathBatch.length
+      } else {
+        console.warn('[reset-project-world] failed to remove generated world asset storage objects.', {
+          bucket,
+          count: pathBatch.length,
+          message: removeResponse.error.message,
+        })
+      }
+    }
+  }
+
+  let deletedAssetRows = 0
+  for (const idBatch of chunk(assets.map((asset) => asset.id), 100)) {
+    const deleteResponse = await admin
+      .from('project_assets')
+      .delete()
+      .eq('project_id', projectId)
+      .in('id', idBatch)
+      .select('id')
+    if (deleteResponse.error) {
+      throw new Error(deleteResponse.error.message)
+    }
+    deletedAssetRows += deleteResponse.data?.length ?? 0
+  }
+
+  return { projectAssets: deletedAssetRows, storageObjects: removedStorageObjects }
+}
+
 Deno.serve(async (request) => {
   const preflight = maybeHandleOptions(request)
   if (preflight) return preflight
@@ -44,6 +131,7 @@ Deno.serve(async (request) => {
     await verifyDraftAccess(client, payload.projectId, payload.draftId)
 
     const admin = createAdminClient('reset-project-world')
+    const deletedGeneratedAssets = await deleteGeneratedWorldAssets(admin, payload.projectId, payload.draftId)
     const rpcResponse = await admin.rpc('reset_project_world', {
       target_project_id: payload.projectId,
       target_draft_id: payload.draftId,
@@ -57,7 +145,10 @@ Deno.serve(async (request) => {
       ok: true,
       projectId: payload.projectId,
       draftId: payload.draftId,
-      deleted: rpcResponse.data ?? {},
+      deleted: {
+        ...(rpcResponse.data ?? {}),
+        ...deletedGeneratedAssets,
+      },
     }))
   } catch (error) {
     return errorResponse(error, 'Resetting the project world failed.')

@@ -689,6 +689,7 @@ export const graphDefinitionSchema = z.object({
 
 export const assetDefinitionSchema = z.object({
   id: z.string(),
+  projectId: z.string().optional(),
   key: z.string(),
   name: z.string(),
   kind: assetKindSchema,

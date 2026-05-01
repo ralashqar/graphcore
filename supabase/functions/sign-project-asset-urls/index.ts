@@ -7,7 +7,7 @@ import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/h
 import { trellisGlbResultSchema } from '../_shared/mesh-generation.ts'
 
 const requestSchema = z.object({
-  projectId: z.string().min(1),
+  projectId: z.string().min(1).optional(),
   assetKeys: z.array(z.string().min(1)).max(100),
 })
 
@@ -61,7 +61,7 @@ Deno.serve(async (request) => {
     const admin = createAdminClient('sign-project-asset-urls')
     const payload = requestSchema.parse(await request.json())
 
-    if (!isUuidLike(payload.projectId)) {
+    if (payload.projectId !== undefined && !isUuidLike(payload.projectId)) {
       throw new HttpError(400, 'A live GraphCore project is required before signing asset URLs.')
     }
 
@@ -69,11 +69,16 @@ Deno.serve(async (request) => {
       return json(responseSchema.parse({ urls: [] }))
     }
 
-    const assetResponse = await client
+    let assetQuery = client
       .from('project_assets')
       .select('key, kind, storage_path, metadata')
-      .eq('project_id', payload.projectId)
       .in('key', payload.assetKeys)
+
+    if (payload.projectId) {
+      assetQuery = assetQuery.eq('project_id', payload.projectId)
+    }
+
+    const assetResponse = await assetQuery
 
     if (assetResponse.error) throw new Error(assetResponse.error.message)
 
@@ -88,7 +93,7 @@ Deno.serve(async (request) => {
         ? metadata.storageBucket.trim()
         : 'project-assets'
 
-      if (!storagePath || (asset.kind !== 'mesh' && asset.kind !== 'video')) continue
+      if (!storagePath || (asset.kind !== 'mesh' && asset.kind !== 'video' && asset.kind !== 'image')) continue
 
       const signed = await admin.storage.from(bucket).createSignedUrl(storagePath, 60 * 60)
       if (signed.error || !signed.data?.signedUrl) {

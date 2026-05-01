@@ -198,9 +198,8 @@ export function SpecializedDefinitionWorkspace({
   const selectedPreviewAsset = useMemo(() => {
     if (!effectiveSelection) return null
     if (effectiveSelection.kind === 'character') {
-      return selectedCharacterRenderBinding?.previewImageAssetKey
-        ? findAssetByKey(assets, selectedCharacterRenderBinding.previewImageAssetKey)
-        : null
+      const previewAssetKey = selectedCharacterRenderBinding?.previewImageAssetKey ?? effectiveSelection.iconAssetKey ?? null
+      return previewAssetKey ? findAssetByKey(assets, previewAssetKey) : null
     }
     if (effectiveSelection.kind === 'environment') {
       const previewAssetKey = selectedEnvironmentRenderBinding?.previewImageAssetKey ?? effectiveSelection.iconAssetKey ?? null

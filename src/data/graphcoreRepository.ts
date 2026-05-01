@@ -1,4 +1,5 @@
 import { compileBundle } from '../domain/compiler'
+import { cacheSignedAssetResponse, getCachedAssetObjectUrl, getCachedSignedAssetUrl, setCachedSignedAssetUrl } from '../domain/assetUrlCache'
 import { BASELINE_ARCHETYPES, hasMissingBaselineArchetypes } from '../domain/bootstrapSeeds'
 import { demoProjectSnapshot } from '../domain/demo-data'
 import { environmentBlueprintV1Schema } from '../domain/environmentBlueprint'
@@ -95,6 +96,12 @@ import {
   type WorldPromptSourceContext,
   type WorldPromptTurn,
 } from '../domain/worldPrompt'
+import {
+  worldEntityIconGenerationStartResponseSchema,
+  worldEntityIconGenerationStatusResponseSchema,
+  type WorldEntityIconGenerationStartResponse,
+  type WorldEntityIconGenerationStatusResponse,
+} from '../domain/worldEntityIconGeneration'
 import { buildUrlSourceContextFromExtractionResponse } from '../domain/onboardingSource'
 import {
   worldThreadSchema,
@@ -1463,6 +1470,7 @@ type EnvironmentBlueprintRow = {
 
 type AssetRow = {
   id: string
+  project_id: string
   key: string
   name: string
   kind: AssetDefinition['kind']
@@ -2215,7 +2223,7 @@ type CinematicRunJobRow = {
 }
 
 type SignProjectAssetUrlsRequest = {
-  projectId: string
+  projectId?: string
   assetKeys: string[]
 }
 
@@ -2226,82 +2234,151 @@ type SignProjectAssetUrlsResponse = {
   }>
 }
 
-const storageAssetUrlCache = new Map<string, { storagePath: string; url: string }>()
+const storageAssetUrlCache = new Map<string, { storagePath: string; url: string; expiresAt: number | null }>()
+
+function isPrivateStorageBackedAsset(asset: AssetDefinition) {
+  const storagePath = asset.storagePath?.trim() ?? ''
+  if (!storagePath || storagePath.startsWith('external/') || storagePath.startsWith('local-upload/')) return false
+  const storageBucket = typeof asset.metadata.storageBucket === 'string' ? asset.metadata.storageBucket.trim() : ''
+  return Boolean(storageBucket) || storagePath.startsWith('generated/')
+}
+
+function stripTransientAssetUrlsForCache(snapshot: ProjectSnapshot): ProjectSnapshot {
+  return {
+    ...snapshot,
+    assets: snapshot.assets.map((asset) => {
+      if (!isPrivateStorageBackedAsset(asset)) return asset
+      const metadata = { ...asset.metadata }
+      delete metadata.sourceUrl
+      delete metadata.previewUrl
+      return {
+        ...asset,
+        metadata,
+      }
+    }),
+  }
+}
+
+function findMissingAssetReferences(snapshot: ProjectSnapshot) {
+  const assetKeys = new Set(snapshot.assets.map((asset) => asset.key))
+  const missing = new Set<string>()
+
+  for (const definition of snapshot.definitions) {
+    if (definition.iconAssetKey && !assetKeys.has(definition.iconAssetKey)) {
+      missing.add(definition.iconAssetKey)
+    }
+    for (const assetRef of definition.assetRefs ?? []) {
+      if (assetRef.assetKey && !assetKeys.has(assetRef.assetKey)) {
+        missing.add(assetRef.assetKey)
+      }
+    }
+  }
+
+  for (const archetype of snapshot.archetypes) {
+    if (archetype.iconAssetKey && !assetKeys.has(archetype.iconAssetKey)) {
+      missing.add(archetype.iconAssetKey)
+    }
+  }
+
+  for (const entity of snapshot.worldEntities) {
+    if (entity.thumbnailAssetKey && !assetKeys.has(entity.thumbnailAssetKey)) {
+      missing.add(entity.thumbnailAssetKey)
+    }
+  }
+
+  for (const result of snapshot.worldResults) {
+    if (result.previewAssetKey && !assetKeys.has(result.previewAssetKey)) {
+      missing.add(result.previewAssetKey)
+    }
+  }
+
+  return Array.from(missing)
+}
 
 async function hydrateStorageAssetUrls<TAsset extends AssetDefinition>(projectId: string, assets: TAsset[]) {
   const signedUrls = new Map<string, string>()
-  const candidates = assets.filter((asset) => {
-    if (asset.kind !== 'mesh' && asset.kind !== 'video') return false
-    if (typeof asset.metadata.sourceUrl === 'string' && asset.metadata.sourceUrl.trim()) return false
-    if (typeof asset.metadata.previewUrl === 'string' && asset.metadata.previewUrl.trim()) return false
-    if (typeof asset.metadata.storageBucket !== 'string' || !asset.metadata.storageBucket.trim()) return false
-    if (!asset.storagePath || asset.storagePath.startsWith('external/') || asset.storagePath.startsWith('local-upload/')) return false
+  const normalizedAssets = assets.map((asset) => (
+    asset.projectId ? asset : { ...asset, projectId }
+  ))
+  const candidates = normalizedAssets.filter((asset) => {
+    if (asset.kind !== 'mesh' && asset.kind !== 'video' && asset.kind !== 'image') return false
+    if (!isPrivateStorageBackedAsset(asset)) return false
     const generation = getResourceGenerationMetadata(asset)
     if (generation?.state === 'pending' || generation?.state === 'running') return false
     return true
   })
 
-  if (candidates.length === 0) return assets
+  if (candidates.length === 0) return normalizedAssets
 
-  try {
-    const session = await getValidatedSession('Sign in and load a live GraphCore draft before loading generated meshes.')
-    const response = await invokeAuthedFunctionWithSessionRecovery<SignProjectAssetUrlsResponse>(
-      'sign-project-asset-urls',
-      {
-        projectId,
-        assetKeys: candidates.map((asset) => asset.key),
-      } satisfies SignProjectAssetUrlsRequest,
-      session,
-    )
-    if (!response.error && response.data?.urls) {
-      for (const entry of response.data.urls) {
-        if (typeof entry.assetKey === 'string' && typeof entry.signedUrl === 'string' && entry.signedUrl.trim()) {
-          signedUrls.set(entry.assetKey, entry.signedUrl)
+  const uncachedCandidates: typeof candidates = []
+  for (const asset of candidates) {
+    const cachedObjectUrl = await getCachedAssetObjectUrl(asset)
+    if (cachedObjectUrl) {
+      signedUrls.set(asset.key, cachedObjectUrl)
+      storageAssetUrlCache.set(asset.key, { storagePath: asset.storagePath, url: cachedObjectUrl, expiresAt: null })
+      continue
+    }
+
+    const cachedSignedUrl = getCachedSignedAssetUrl(asset)
+    if (cachedSignedUrl) {
+      const resolvedUrl = await cacheSignedAssetResponse(asset, cachedSignedUrl)
+      signedUrls.set(asset.key, resolvedUrl)
+      storageAssetUrlCache.set(asset.key, { storagePath: asset.storagePath, url: resolvedUrl, expiresAt: null })
+      continue
+    }
+
+    uncachedCandidates.push(asset)
+  }
+
+  if (uncachedCandidates.length > 0) {
+    try {
+      const session = await getValidatedSession('Sign in and load a live GraphCore draft before loading generated meshes.')
+      const response = await invokeAuthedFunctionWithSessionRecovery<SignProjectAssetUrlsResponse>(
+        'sign-project-asset-urls',
+        {
+          projectId,
+          assetKeys: uncachedCandidates.map((asset) => asset.key),
+        } satisfies SignProjectAssetUrlsRequest,
+        session,
+      )
+      if (!response.error && response.data?.urls) {
+        for (const entry of response.data.urls) {
+          if (typeof entry.assetKey === 'string' && typeof entry.signedUrl === 'string' && entry.signedUrl.trim()) {
+            const asset = uncachedCandidates.find((candidate) => candidate.key === entry.assetKey) ?? null
+            if (asset) setCachedSignedAssetUrl(asset, entry.signedUrl)
+            signedUrls.set(entry.assetKey, asset ? await cacheSignedAssetResponse(asset, entry.signedUrl) : entry.signedUrl)
+          }
         }
       }
+    } catch (error) {
+      console.error('[GraphCore] mesh asset signing failed during hydration.', error)
     }
-  } catch (error) {
-    console.error('[GraphCore] mesh asset signing failed during hydration.', error)
   }
 
   const unresolvedCandidates = candidates.filter((asset) => !signedUrls.has(asset.key))
-  await Promise.all(unresolvedCandidates.map(async (asset) => {
+  for (const asset of unresolvedCandidates) {
     const cached = storageAssetUrlCache.get(asset.key)
-    if (cached && cached.storagePath === asset.storagePath) {
+    if (cached && cached.storagePath === asset.storagePath && (cached.expiresAt === null || cached.expiresAt > Date.now())) {
       signedUrls.set(asset.key, cached.url)
-      return
+      continue
     }
 
-    const bucket = typeof asset.metadata.storageBucket === 'string' && asset.metadata.storageBucket.trim()
-      ? asset.metadata.storageBucket.trim()
-      : 'project-assets'
-    const downloadResponse = await supabase.storage.from(bucket).download(asset.storagePath)
-    if (downloadResponse.error || !downloadResponse.data) {
-      console.error('[GraphCore] mesh asset download fallback failed.', {
-        assetKey: asset.key,
-        bucket,
-        storagePath: asset.storagePath,
-        message: downloadResponse.error?.message ?? 'unknown download error',
-      })
-      return
-    }
+    console.warn('[GraphCore] storage-backed asset was not signed during hydration.', {
+      assetKey: asset.key,
+      projectId,
+      storagePath: asset.storagePath,
+    })
+  }
 
-    const nextUrl = URL.createObjectURL(downloadResponse.data)
-    if (cached?.url) {
-      URL.revokeObjectURL(cached.url)
-    }
-    storageAssetUrlCache.set(asset.key, { storagePath: asset.storagePath, url: nextUrl })
-    signedUrls.set(asset.key, nextUrl)
-  }))
+  if (signedUrls.size === 0) return normalizedAssets
 
-  if (signedUrls.size === 0) return assets
-
-  return assets.map((asset) => (
+  return normalizedAssets.map((asset) => (
     signedUrls.has(asset.key)
       ? {
           ...asset,
           metadata: {
             ...asset.metadata,
+            previewUrl: signedUrls.get(asset.key),
             sourceUrl: signedUrls.get(asset.key),
           },
         }
@@ -2449,9 +2526,22 @@ export async function loadProjectSnapshot(
             })
             throw new Error('Cached snapshot identity mismatch.')
           }
-          await saveCachedProjectSnapshot(nextSnapshot, delta.currentRevision)
+          const hydratedSnapshot = {
+            ...nextSnapshot,
+            assets: await hydrateStorageAssetUrls(nextSnapshot.project.id, nextSnapshot.assets),
+          }
+          const missingAssetRefs = findMissingAssetReferences(hydratedSnapshot)
+          if (missingAssetRefs.length > 0) {
+            await clearProjectCache(project.id, draft.id)
+            console.info('[GraphCore] cached world snapshot was missing referenced assets; refreshing full snapshot.', {
+              missingAssetRefs: missingAssetRefs.slice(0, 12),
+              missingCount: missingAssetRefs.length,
+            })
+            throw new Error('Cached snapshot missing referenced assets.')
+          }
+          await saveCachedProjectSnapshot(hydratedSnapshot, delta.currentRevision)
           return {
-            snapshot: nextSnapshot,
+            snapshot: hydratedSnapshot,
             source: 'supabase',
           }
         }
@@ -2470,8 +2560,8 @@ export async function loadProjectSnapshot(
     ? 'id, key, name, summary, definition_kind, icon_asset_key, metadata, llm_hints'
     : 'id, key, name, summary, definition_kind, icon_asset_key, metadata'
   const assetSelect = includeFull
-    ? 'id, key, name, kind, mime_type, storage_path, metadata, llm_hints'
-    : 'id, key, name, kind, mime_type, storage_path, metadata'
+    ? 'id, project_id, key, name, kind, mime_type, storage_path, metadata, llm_hints'
+    : 'id, project_id, key, name, kind, mime_type, storage_path, metadata'
   const worldViewSelect = includeFull
     ? WORLD_VIEW_SELECT
     : 'id, key, name, mode, filters, search, root_entity_key, camera, focus_depth, show_suggestions, show_labels, show_derived_layer, collapsed_state, sort_mode, metadata, created_at, updated_at'
@@ -3133,6 +3223,7 @@ export async function loadProjectSnapshot(
       .filter((blueprint): blueprint is EnvironmentBlueprintV1 => blueprint !== null),
     assets: assets.map((asset) => ({
       id: asset.id,
+      projectId: asset.project_id,
       key: asset.key,
       name: asset.name,
       kind: asset.kind,
@@ -3597,6 +3688,7 @@ export async function loadCachedProjectSnapshot(projectId: string, draftId: stri
 }
 
 export async function saveCachedProjectSnapshot(snapshot: ProjectSnapshot, revision: DraftRevision) {
+  const cacheSnapshot = stripTransientAssetUrlsForCache(snapshot)
   const cacheKey = cacheKeyForProjectDraft(snapshot.project.id, snapshot.draft.id)
   const entry: GraphCoreClientCacheSnapshot & { cacheKey: string } = {
     cacheKey,
@@ -3605,7 +3697,7 @@ export async function saveCachedProjectSnapshot(snapshot: ProjectSnapshot, revis
     cacheSchemaVersion: GRAPHCORE_CACHE_SCHEMA_VERSION,
     lastRevision: revision,
     cachedAt: new Date().toISOString(),
-    snapshot,
+    snapshot: cacheSnapshot,
   }
   await withCacheStore<IDBValidKey>('readwrite', (store) => store.put(entry))
 }
@@ -3705,6 +3797,7 @@ function mapDefinitionDeltaRow(row: DefinitionRow, existing: DefinitionBase | nu
 function mapAssetDeltaRow(row: AssetRow): AssetDefinition {
   return {
     id: row.id,
+    projectId: row.project_id,
     key: row.key,
     name: row.name,
     kind: row.kind,
@@ -6594,6 +6687,38 @@ export async function cancelWorldGenerationJob(snapshot: ProjectSnapshot, reques
     throw new Error(await readFunctionsErrorMessage(response.error))
   }
   return worldPromptCancelGenerationJobResponseSchema.parse(response.data)
+}
+
+export async function startWorldEntityIconBatch(snapshot: ProjectSnapshot): Promise<WorldEntityIconGenerationStartResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before generating world entity icons.')
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Sign in and load a live GraphCore draft before generating world entity icons.')
+  }
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'start-world-entity-icon-batch',
+    {
+      projectId: snapshot.project.id,
+      draftId: snapshot.draft.id,
+    },
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  return worldEntityIconGenerationStartResponseSchema.parse(response.data)
+}
+
+export async function getWorldEntityIconBatchStatus(jobId: string): Promise<WorldEntityIconGenerationStatusResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before loading world entity icon generation status.')
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'get-world-entity-icon-batch-status',
+    { jobId },
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  return worldEntityIconGenerationStatusResponseSchema.parse(response.data)
 }
 
 export async function extractSourceUrlForWorldPrompt(url: string): Promise<WorldPromptSourceContext> {

@@ -4106,6 +4106,39 @@ export default function App() {
     return result
   }
 
+  async function startWorldEntityIconBatch() {
+    if (!snapshot) {
+      throw new Error('Load a live GraphCore draft before generating world entity icons.')
+    }
+    if (loadedState?.source !== 'supabase') {
+      throw new Error('World entity icon generation requires a live Supabase-backed draft.')
+    }
+    return workspaceService.startWorldEntityIconBatch(snapshot)
+  }
+
+  async function getWorldEntityIconBatchStatus(jobId: string) {
+    return workspaceService.getWorldEntityIconBatchStatus(jobId)
+  }
+
+  async function refreshLiveSnapshot() {
+    const current = snapshotRef.current
+    if (!current || loadedState?.source !== 'supabase') return
+    const reloaded = await workspaceService.load({
+      projectId: current.project.id,
+      draftId: current.draft.id,
+    }, { profile: 'world', skipCache: true })
+    if (reloaded.source !== 'supabase') {
+      throw new Error(reloaded.reason ?? 'Could not reload the live GraphCore draft.')
+    }
+    commitPersistedSnapshot(reloaded.snapshot)
+    try {
+      const delta = await loadDraftDelta(reloaded.snapshot.draft.id, null)
+      await saveCachedProjectSnapshot(reloaded.snapshot, delta.currentRevision)
+    } catch (cacheError) {
+      console.warn('[GraphCore] failed to refresh snapshot cache after icon generation.', cacheError)
+    }
+  }
+
   async function createWorldPromptSession(input: {
     sessionKey?: string | null
     title?: string
@@ -6045,6 +6078,9 @@ export default function App() {
                 onUpdateWorldView={updateWorldView}
                 onGenerateStarterWorld={generateStarterWorld}
                 onGenerateWorldExpansion={generateWorldExpansion}
+                onStartWorldEntityIconBatch={startWorldEntityIconBatch}
+                onGetWorldEntityIconBatchStatus={getWorldEntityIconBatchStatus}
+                onRefreshLiveSnapshot={refreshLiveSnapshot}
                 onCompleteProjectOnboarding={handleCompleteProjectOnboarding}
                 onStartWorldSeedInference={startWorldSeedInference}
                 onContinueWorldSeedGeneration={continueWorldSeedGeneration}

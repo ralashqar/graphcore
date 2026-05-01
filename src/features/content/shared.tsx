@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { isSupportedMeshPath, resolveAssetPreviewUrl, type AssetUrlCreateOptions, type AssetUrlCreationKind } from '../../domain/assets.ts'
+import { isSupportedMeshPath, resolveAssetPreviewUrl, resolveAssetSourceUrl, type AssetUrlCreateOptions, type AssetUrlCreationKind } from '../../domain/assets.ts'
+import { cacheSignedAssetResponse, getCachedAssetObjectUrl, getCachedSignedAssetUrl, setCachedSignedAssetUrl } from '../../domain/assetUrlCache.ts'
 import { getResolvedDefinition3dBinding } from '../../domain/render3d.ts'
 import { EntityIcon, type EntityIconId } from '../../shared/entityIcons.tsx'
+import { supabase } from '../../utils/supabase.ts'
 
 import type {
   ArchetypeDefinition,
@@ -11,6 +13,97 @@ import type {
   FieldDefinition,
   FieldValue,
 } from '../../domain/graphcore.ts'
+
+const sessionStorageAssetUrlCache = new Map<string, { storagePath: string; url: string }>()
+
+type SignProjectAssetUrlsResponse = {
+  urls?: Array<{
+    assetKey?: string
+    signedUrl?: string
+  }>
+}
+
+function isSessionResolvableStorageAsset(asset: AssetDefinition | null | undefined) {
+  if (!asset) return false
+  if (asset.kind !== 'image' && asset.kind !== 'video' && asset.kind !== 'mesh') return false
+  const storagePath = asset.storagePath?.trim() ?? ''
+  if (!storagePath || storagePath.startsWith('external/') || storagePath.startsWith('local-upload/')) return false
+  const storageBucket = typeof asset.metadata.storageBucket === 'string' ? asset.metadata.storageBucket.trim() : ''
+  return Boolean(storageBucket) || storagePath.startsWith('generated/')
+}
+
+export function useResolvedAssetUrl(asset: AssetDefinition | null | undefined) {
+  const persistedUrl = resolveAssetPreviewUrl(asset) ?? resolveAssetSourceUrl(asset)
+  const [sessionUrl, setSessionUrl] = useState<string | null>(null)
+  const cacheKey = asset ? `${asset.key}:${asset.storagePath}` : ''
+
+  useEffect(() => {
+    let cancelled = false
+    setSessionUrl(null)
+
+    if (persistedUrl || !asset || !isSessionResolvableStorageAsset(asset)) return undefined
+
+    const cached = sessionStorageAssetUrlCache.get(asset.key)
+    if (cached?.storagePath === asset.storagePath) {
+      setSessionUrl(cached.url)
+      return undefined
+    }
+
+    const resolveFromStorage = async () => {
+      const cachedObjectUrl = await getCachedAssetObjectUrl(asset)
+      if (cancelled) return
+      if (cachedObjectUrl) {
+        sessionStorageAssetUrlCache.set(asset.key, { storagePath: asset.storagePath, url: cachedObjectUrl })
+        setSessionUrl(cachedObjectUrl)
+        return
+      }
+
+      const persistentCachedUrl = getCachedSignedAssetUrl(asset)
+      if (persistentCachedUrl) {
+        const resolvedUrl = await cacheSignedAssetResponse(asset, persistentCachedUrl)
+        if (cancelled) return
+        sessionStorageAssetUrlCache.set(asset.key, { storagePath: asset.storagePath, url: resolvedUrl })
+        setSessionUrl(resolvedUrl)
+        return
+      }
+
+      const signedResponse = await supabase.functions.invoke<SignProjectAssetUrlsResponse>('sign-project-asset-urls', {
+        body: {
+          ...(asset.projectId ? { projectId: asset.projectId } : {}),
+          assetKeys: [asset.key],
+        },
+      })
+      if (!cancelled && !signedResponse.error) {
+        const signedUrl = signedResponse.data?.urls?.find((entry) => entry.assetKey === asset.key)?.signedUrl?.trim()
+        if (signedUrl) {
+          setCachedSignedAssetUrl(asset, signedUrl)
+          const resolvedUrl = await cacheSignedAssetResponse(asset, signedUrl)
+          if (cancelled) return
+          sessionStorageAssetUrlCache.set(asset.key, { storagePath: asset.storagePath, url: resolvedUrl })
+          setSessionUrl(resolvedUrl)
+          return
+        }
+      }
+
+      if (!cancelled) {
+        console.warn('[GraphCore] session asset signing returned no URL.', {
+          assetKey: asset.key,
+          projectId: asset.projectId ?? null,
+          storagePath: asset.storagePath,
+          message: signedResponse.error?.message ?? 'no signed URL returned',
+        })
+      }
+    }
+
+    void resolveFromStorage()
+
+    return () => {
+      cancelled = true
+    }
+  }, [asset, cacheKey, persistedUrl])
+
+  return persistedUrl ?? sessionUrl
+}
 
 export function EditableField({
   assets,
@@ -377,7 +470,7 @@ export function AssetPickerDialog({
         </div>
         <div className="asset-picker-grid">
           {assets.map((asset) => {
-            const previewUrl = resolveAssetPreviewUrl(asset)
+            const previewUrl = resolveAssetPreviewUrl(asset) ?? resolveAssetSourceUrl(asset)
             const isActive = asset.key === selectedAssetKey
 
             return (
@@ -418,7 +511,7 @@ export function DefinitionImagePreviewOverlay({
   label: string
   onClose: () => void
 }) {
-  const previewUrl = resolveAssetPreviewUrl(asset)
+  const previewUrl = resolveAssetPreviewUrl(asset) ?? resolveAssetSourceUrl(asset)
   if (!previewUrl) return null
 
   const overlay = (
@@ -447,7 +540,7 @@ export function MediaThumb({
   label: string
   large?: boolean
 }) {
-  const previewUrl = resolveAssetPreviewUrl(asset)
+  const previewUrl = useResolvedAssetUrl(asset)
   const [imageFailed, setImageFailed] = useState(false)
 
   useEffect(() => {

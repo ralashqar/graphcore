@@ -93,20 +93,33 @@ export function getAssetKeyPrefix(kind: AssetUrlCreationKind | AssetDefinition['
   return 'asset'
 }
 
+export function isResolvableAssetUrl(value: unknown): value is string {
+  if (typeof value !== 'string') return false
+  const trimmed = value.trim()
+  if (!trimmed) return false
+  if (trimmed.startsWith('blob:') || trimmed.startsWith('data:')) return true
+  try {
+    const parsed = new URL(trimmed)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
 export function resolveAssetPreviewUrl(asset: AssetDefinition | null | undefined) {
   if (!asset) return null
-  return typeof asset.metadata.previewUrl === 'string'
+  return isResolvableAssetUrl(asset.metadata.previewUrl)
     ? asset.metadata.previewUrl
-    : typeof asset.metadata.sourceUrl === 'string' && (asset.kind === 'image' || asset.kind === 'video')
+    : isResolvableAssetUrl(asset.metadata.sourceUrl) && (asset.kind === 'image' || asset.kind === 'video')
       ? asset.metadata.sourceUrl
       : null
 }
 
 export function resolveAssetSourceUrl(asset: AssetDefinition | null | undefined) {
   if (!asset) return null
-  return typeof asset.metadata.sourceUrl === 'string'
+  return isResolvableAssetUrl(asset.metadata.sourceUrl)
     ? asset.metadata.sourceUrl
-    : typeof asset.metadata.previewUrl === 'string'
+    : isResolvableAssetUrl(asset.metadata.previewUrl)
       ? asset.metadata.previewUrl
       : null
 }

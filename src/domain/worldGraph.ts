@@ -462,6 +462,8 @@ export const resetProjectWorldResponseSchema = z.object({
     worldViews: z.number().int().nonnegative().default(0),
     worldEntities: z.number().int().nonnegative().default(0),
     projectDefinitions: z.number().int().nonnegative().default(0),
+    projectAssets: z.number().int().nonnegative().default(0),
+    storageObjects: z.number().int().nonnegative().default(0),
   }),
 })
 

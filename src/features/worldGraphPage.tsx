@@ -21,6 +21,7 @@ import {
 import { Suspense, lazy, memo, useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 
 import { resolveAssetSourceUrl } from '../domain/assets'
+import { cacheSignedAssetResponse, getCachedAssetObjectUrl, getCachedSignedAssetUrl, setCachedSignedAssetUrl } from '../domain/assetUrlCache'
 import type { AssetDefinition, DefinitionBase, GraphDefinition } from '../domain/graphcore'
 import type { ProjectContext } from '../domain/projectContext'
 import type {
@@ -82,6 +83,12 @@ import {
   type WorldWikiSection,
 } from '../domain/worldWiki'
 import {
+  buildWorldEntityIconCandidates,
+  type WorldEntityIconGenerationJob,
+  type WorldEntityIconGenerationStartResponse,
+  type WorldEntityIconGenerationStatusResponse,
+} from '../domain/worldEntityIconGeneration'
+import {
   buildSuggestionsForEntity,
   createDefaultWorldView,
   definitionKindForWorldEntity,
@@ -126,10 +133,30 @@ import {
 import type { GraphWorkspaceProps } from './graph/types'
 import { ProjectWorldOnboarding } from './onboarding/ProjectWorldOnboarding'
 import { CompactPromptComposer } from './prompts/CompactPromptComposer'
+import { supabase } from '../utils/supabase'
 
 const LegacyGraphWorkspace = lazy(() =>
   import('./graphWorkspace').then((module) => ({ default: module.GraphWorkspace })),
 )
+
+type SignedAssetUrlResponse = {
+  urls?: Array<{
+    assetKey?: string
+    signedUrl?: string
+  }>
+}
+
+const worldGraphSignedAssetUrlCache = new Map<string, { storagePath: string; url: string }>()
+
+function isWorldGraphSignableAsset(asset: AssetDefinition | null | undefined) {
+  if (!asset) return false
+  if (asset.kind !== 'image' && asset.kind !== 'video' && asset.kind !== 'mesh') return false
+  if (resolveAssetSourceUrl(asset)) return false
+  const storagePath = asset.storagePath?.trim() ?? ''
+  if (!storagePath || storagePath.startsWith('external/') || storagePath.startsWith('local-upload/')) return false
+  const storageBucket = typeof asset.metadata.storageBucket === 'string' ? asset.metadata.storageBucket.trim() : ''
+  return Boolean(storageBucket) || storagePath.startsWith('generated/')
+}
 
 type WorldGraphPageProps = {
   assets: AssetDefinition[]
@@ -191,6 +218,9 @@ type WorldGraphPageProps = {
   onUpdateWorldView: (viewKey: string, changes: Partial<WorldViewCreateInput>) => Promise<void> | void
   onGenerateStarterWorld: (prompt: string) => Promise<void> | void
   onGenerateWorldExpansion: (entityKey: string) => Promise<void> | void
+  onStartWorldEntityIconBatch: () => Promise<WorldEntityIconGenerationStartResponse> | WorldEntityIconGenerationStartResponse
+  onGetWorldEntityIconBatchStatus: (jobId: string) => Promise<WorldEntityIconGenerationStatusResponse> | WorldEntityIconGenerationStatusResponse
+  onRefreshLiveSnapshot: () => Promise<void> | void
   onCompleteProjectOnboarding: (values: { projectContext: ProjectContext; projectName: string }) => Promise<void> | void
   onStartWorldSeedInference: (input: {
     prompt: string
@@ -245,6 +275,33 @@ type WorldFlowEdgeData = {
   kind: 'relationship' | 'connection'
   onSelect?: (edgeKey: string) => void
   onContextMenu?: (edgeKey: string, position: { x: number; y: number }) => void
+}
+
+function readIconBatchMetadata(job: WorldEntityIconGenerationJob | null) {
+  return job?.metadata && typeof job.metadata === 'object' && !Array.isArray(job.metadata)
+    ? job.metadata as Record<string, unknown>
+    : {}
+}
+
+function describeIconBatchProgress(job: WorldEntityIconGenerationJob | null) {
+  if (!job) return 'Preparing icon generation'
+  const metadata = readIconBatchMetadata(job)
+  const phase = typeof metadata.phase === 'string' ? metadata.phase : ''
+  const falStatus = typeof metadata.falStatus === 'string' ? metadata.falStatus : ''
+  const requestId = typeof metadata.falRequestId === 'string' ? metadata.falRequestId : ''
+  const suffix = requestId ? ` - ${requestId.slice(0, 8)}` : ''
+  if (job.status === 'queued') return 'Queued for icon generation'
+  if (phase === 'submitting_fal_image') return 'Submitting icon grid to Fal'
+  if (phase === 'fal_image_queued') return `Fal request queued${suffix}`
+  if (phase === 'waiting_for_fal_image') return `Waiting for Fal image${falStatus ? ` (${falStatus})` : ''}${suffix}`
+  if (phase === 'cropping_image') return 'Cropping generated icon grid'
+  if (phase === 'retrying_after_worker_dependency_fix') return 'Retrying image processing'
+  if (job.status === 'running') return 'Generating entity icons'
+  if (job.status === 'completed') {
+    const count = Object.keys(job.createdAssetKeys).length
+    return `${count} icon${count === 1 ? '' : 's'} added.`
+  }
+  return job.errorMessage || `Icon generation ${job.status}.`
 }
 
 type WikiDetailModalState = {
@@ -878,6 +935,9 @@ export function WorldGraphPage({
   onUpdateWorldView,
   onGenerateStarterWorld: _onGenerateStarterWorld,
   onGenerateWorldExpansion,
+  onStartWorldEntityIconBatch,
+  onGetWorldEntityIconBatchStatus,
+  onRefreshLiveSnapshot,
   onCompleteProjectOnboarding: _onCompleteProjectOnboarding,
   onStartWorldSeedInference,
   onContinueWorldSeedGeneration,
@@ -947,6 +1007,10 @@ export function WorldGraphPage({
   const [draftPositions, setDraftPositions] = useState<Record<string, { x: number; y: number }>>({})
   const [canvasNodes, setCanvasNodes] = useState<Node<WorldNodeData>[]>([])
   const [canvasEdges, setCanvasEdges] = useState<Edge<WorldFlowEdgeData>[]>([])
+  const [iconBatchJob, setIconBatchJob] = useState<WorldEntityIconGenerationJob | null>(null)
+  const [iconBatchError, setIconBatchError] = useState<string | null>(null)
+  const [iconBatchRefreshNonce, setIconBatchRefreshNonce] = useState(0)
+  const [signedAssetUrlsByKey, setSignedAssetUrlsByKey] = useState<Map<string, string>>(() => new Map())
   const [hoveredWorldNodeKey, setHoveredWorldNodeKey] = useState<string | null>(null)
   const [hoverRevealTargetNodeKey, setHoverRevealTargetNodeKey] = useState<string | null>(null)
   const [hoverRevealVisible, setHoverRevealVisible] = useState(false)
@@ -1394,6 +1458,35 @@ export function WorldGraphPage({
   }, [presentationMode, viewMode])
 
   useEffect(() => {
+    if (!iconBatchJob || !['queued', 'running'].includes(iconBatchJob.status)) return
+    let disposed = false
+    let refreshed = false
+    const poll = async () => {
+      try {
+        const status = await onGetWorldEntityIconBatchStatus(iconBatchJob.id)
+        if (disposed) return
+        setIconBatchJob(status.job)
+        if (status.terminal && !refreshed) {
+          refreshed = true
+          await onRefreshLiveSnapshot()
+        }
+      } catch (error) {
+        if (disposed) return
+        const message = error instanceof Error ? error.message : 'Could not refresh icon generation status.'
+        setIconBatchError(message)
+      }
+    }
+    void poll()
+    const intervalId = window.setInterval(() => {
+      void poll()
+    }, 2500)
+    return () => {
+      disposed = true
+      window.clearInterval(intervalId)
+    }
+  }, [iconBatchJob?.id, iconBatchJob?.status, iconBatchRefreshNonce, onGetWorldEntityIconBatchStatus, onRefreshLiveSnapshot])
+
+  useEffect(() => {
     if (selectedWorldNodeKey) {
       setInspectorNodeKey(selectedWorldNodeKey)
     }
@@ -1441,19 +1534,155 @@ export function WorldGraphPage({
   const usageByEntityKey = useMemo(() => (
     new Map(worldEntities.map((entity) => [entity.key, getWorldEntityUsage(entity, snapshotGraphs)]))
   ), [snapshotGraphs, worldEntities])
+  useEffect(() => {
+    let cancelled = false
+    const desiredAssetKeys = new Set<string>()
+
+    for (const entity of worldEntities) {
+      const linkedDefinition = entity.linkedDefinitionKey ? definitionByKey.get(entity.linkedDefinitionKey) ?? null : null
+      const previewAssetKey = entity.thumbnailAssetKey ?? linkedDefinition?.iconAssetKey ?? null
+      if (previewAssetKey) desiredAssetKeys.add(previewAssetKey)
+    }
+
+    for (const result of worldResults) {
+      if (result.previewAssetKey) desiredAssetKeys.add(result.previewAssetKey)
+    }
+
+    const candidateAssets = Array.from(desiredAssetKeys)
+      .map((assetKey) => assetByKey.get(assetKey) ?? null)
+      .filter((asset): asset is AssetDefinition => isWorldGraphSignableAsset(asset))
+
+    const cachedUrls = new Map<string, string>()
+    const candidates = candidateAssets.filter((asset) => {
+      if (signedAssetUrlsByKey.has(asset.key)) return false
+      const cached = worldGraphSignedAssetUrlCache.get(asset.key)
+      if (cached?.storagePath === asset.storagePath) {
+        cachedUrls.set(asset.key, cached.url)
+        return false
+      }
+      return true
+    })
+
+    if (cachedUrls.size > 0) {
+      setSignedAssetUrlsByKey((current) => {
+        const next = new Map(current)
+        for (const [assetKey, signedUrl] of cachedUrls) {
+          next.set(assetKey, signedUrl)
+        }
+        return next
+      })
+    }
+
+    if (candidates.length === 0) return undefined
+
+    const signAssets = async () => {
+      const objectCacheUrls = new Map<string, string>()
+      const assetsNeedingSignedUrls: AssetDefinition[] = []
+      for (const asset of candidates) {
+        const cachedObjectUrl = await getCachedAssetObjectUrl(asset)
+        if (cancelled) return
+        if (cachedObjectUrl) {
+          worldGraphSignedAssetUrlCache.set(asset.key, { storagePath: asset.storagePath, url: cachedObjectUrl })
+          objectCacheUrls.set(asset.key, cachedObjectUrl)
+        } else {
+          const persistentCachedUrl = getCachedSignedAssetUrl(asset)
+          if (persistentCachedUrl) {
+            const resolvedUrl = await cacheSignedAssetResponse(asset, persistentCachedUrl)
+            if (cancelled) return
+            worldGraphSignedAssetUrlCache.set(asset.key, { storagePath: asset.storagePath, url: resolvedUrl })
+            objectCacheUrls.set(asset.key, resolvedUrl)
+          } else {
+            assetsNeedingSignedUrls.push(asset)
+          }
+        }
+      }
+
+      if (objectCacheUrls.size > 0) {
+        setSignedAssetUrlsByKey((current) => {
+          const next = new Map(current)
+          for (const [assetKey, signedUrl] of objectCacheUrls) {
+            next.set(assetKey, signedUrl)
+          }
+          return next
+        })
+      }
+
+      if (assetsNeedingSignedUrls.length === 0) return
+
+      const byProjectId = new Map<string, AssetDefinition[]>()
+      for (const asset of assetsNeedingSignedUrls) {
+        const groupKey = asset.projectId?.trim() || '__unscoped__'
+        byProjectId.set(groupKey, [...(byProjectId.get(groupKey) ?? []), asset])
+      }
+
+      const nextUrls = new Map<string, string>()
+
+      for (const [projectId, group] of byProjectId) {
+        const response = await supabase.functions.invoke<SignedAssetUrlResponse>('sign-project-asset-urls', {
+          body: {
+            ...(projectId !== '__unscoped__' ? { projectId } : {}),
+            assetKeys: group.map((asset) => asset.key),
+          },
+        })
+
+        if (cancelled) return
+
+        if (response.error) {
+          console.warn('[GraphCore] world graph asset signing failed.', {
+            projectId: projectId === '__unscoped__' ? null : projectId,
+            assetKeys: group.map((asset) => asset.key),
+            message: response.error.message,
+          })
+          continue
+        }
+
+        for (const entry of response.data?.urls ?? []) {
+          const assetKey = entry.assetKey?.trim()
+          const signedUrl = entry.signedUrl?.trim()
+          const asset = assetKey ? assetByKey.get(assetKey) ?? null : null
+          if (!assetKey || !signedUrl || !asset) continue
+          setCachedSignedAssetUrl(asset, signedUrl)
+          const resolvedUrl = await cacheSignedAssetResponse(asset, signedUrl)
+          if (cancelled) return
+          worldGraphSignedAssetUrlCache.set(assetKey, { storagePath: asset.storagePath, url: resolvedUrl })
+          nextUrls.set(assetKey, resolvedUrl)
+        }
+      }
+
+      if (cancelled || nextUrls.size === 0) return
+
+      setSignedAssetUrlsByKey((current) => {
+        const next = new Map(current)
+        for (const [assetKey, signedUrl] of nextUrls) {
+          next.set(assetKey, signedUrl)
+        }
+        return next
+      })
+    }
+
+    void signAssets()
+
+    return () => {
+      cancelled = true
+    }
+  }, [assetByKey, definitionByKey, signedAssetUrlsByKey, worldEntities, worldResults])
   const imageUrlByEntityKey = useMemo(() => {
     return new Map(worldEntities.map((entity) => {
       const linkedDefinition = entity.linkedDefinitionKey ? definitionByKey.get(entity.linkedDefinitionKey) ?? null : null
       const previewAssetKey = entity.thumbnailAssetKey ?? linkedDefinition?.iconAssetKey ?? null
-      return [entity.key, resolveAssetSourceUrl(previewAssetKey ? assetByKey.get(previewAssetKey) ?? null : null)]
+      const asset = previewAssetKey ? assetByKey.get(previewAssetKey) ?? null : null
+      return [entity.key, resolveAssetSourceUrl(asset) ?? (previewAssetKey ? signedAssetUrlsByKey.get(previewAssetKey) ?? null : null)]
     }))
-  }, [assetByKey, definitionByKey, worldEntities])
+  }, [assetByKey, definitionByKey, signedAssetUrlsByKey, worldEntities])
   const imageUrlByResultKey = useMemo(() => {
-    return new Map(worldResults.map((result) => [
-      result.key,
-      resolveAssetSourceUrl(result.previewAssetKey ? assetByKey.get(result.previewAssetKey) ?? null : null),
-    ]))
-  }, [assetByKey, worldResults])
+    return new Map(worldResults.map((result) => {
+      const asset = result.previewAssetKey ? assetByKey.get(result.previewAssetKey) ?? null : null
+      return [
+        result.key,
+        resolveAssetSourceUrl(asset) ?? (result.previewAssetKey ? signedAssetUrlsByKey.get(result.previewAssetKey) ?? null : null),
+      ]
+    }))
+  }, [assetByKey, signedAssetUrlsByKey, worldResults])
   const wikiModel = useMemo(() => deriveWorldWiki({
     snapshot: {
       project: {
@@ -1475,6 +1704,14 @@ export function WorldGraphPage({
     },
     view: selectedView,
   }), [projectDraftId, projectDraftMetadata, projectName, projectSummary, selectedView, worldEntities, worldGraphConnections, worldRelationships, worldResults, worldThreads])
+  const iconGenerationCandidates = useMemo(() => (
+    buildWorldEntityIconCandidates({
+      entities: worldEntities,
+      definitions,
+      limit: 16,
+    })
+  ), [definitions, worldEntities])
+  const iconBatchRunning = Boolean(iconBatchJob && (iconBatchJob.status === 'queued' || iconBatchJob.status === 'running'))
 
   const effectiveFilters = selectedView.filters
   const viewSeedEntityKeys = useMemo(
@@ -3399,6 +3636,19 @@ export function WorldGraphPage({
     })
   }
 
+  async function handleGenerateMissingEntityIcons() {
+    setIconBatchError(null)
+    try {
+      const result = await onStartWorldEntityIconBatch()
+      setIconBatchJob(result.job)
+      setIconBatchRefreshNonce((value) => value + 1)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not start icon generation.'
+      setIconBatchError(message)
+      console.error('[GraphCore] world entity icon batch failed to start.', error)
+    }
+  }
+
   function handleScrollToWikiSection(sectionKind: WorldWikiSection['kind']) {
     const section = document.getElementById(`world-wiki-section-${sectionKind}`)
     section?.scrollIntoView({
@@ -3669,6 +3919,7 @@ export function WorldGraphPage({
     const sequence = entity.nodeType === 'sequence_unit' ? readWorldSequenceMetadata(entity) : null
     const active = selectedWorldNodeKey === entity.key || inspectorNodeKey === entity.key
     const ordinal = sequence?.ordinal ?? null
+    const imageUrl = imageUrlByEntityKey.get(entity.key) ?? null
     const summary = sequence?.synopsis || profile?.shortSummary || entity.summary || entity.context || 'No story beat summary yet.'
     const outcome = sequence?.outcome || ''
     const detailBody = buildWikiDetailBody([
@@ -3688,6 +3939,7 @@ export function WorldGraphPage({
             title: entity.name,
             eyebrow: sequence?.unitKind || labelForWorldEntity(entity.nodeType),
             body: detailBody,
+            imageUrl,
             meta: [
               ordinal !== null ? `Step ${ordinal}` : null,
               sequence?.actLabel || null,
@@ -3699,18 +3951,21 @@ export function WorldGraphPage({
         type="button"
       >
         <span className="world-wiki-timeline-ordinal">{ordinal ?? fallbackOrdinal}</span>
-        <span className="world-wiki-timeline-body">
-          <span className="world-wiki-timeline-kicker">
-            {[sequence?.actLabel, sequence?.unitKind || labelForWorldEntity(entity.nodeType)].filter(Boolean).join(' / ')}
-          </span>
-          <strong>{entity.name}</strong>
-          <small>{summary}</small>
-          {outcome ? (
-            <span className="world-wiki-timeline-outcome">
-              <em>Outcome</em>
-              <span>{outcome}</span>
+        <span className={imageUrl ? 'world-wiki-timeline-body has-image' : 'world-wiki-timeline-body'}>
+          {imageUrl ? <img className="world-wiki-timeline-image" src={imageUrl} alt="" /> : null}
+          <span className="world-wiki-timeline-copy">
+            <span className="world-wiki-timeline-kicker">
+              {[sequence?.actLabel, sequence?.unitKind || labelForWorldEntity(entity.nodeType)].filter(Boolean).join(' / ')}
             </span>
-          ) : null}
+            <strong>{entity.name}</strong>
+            <small>{summary}</small>
+            {outcome ? (
+              <span className="world-wiki-timeline-outcome">
+                <em>Outcome</em>
+                <span>{outcome}</span>
+              </span>
+            ) : null}
+          </span>
         </span>
       </button>
     )
@@ -4278,9 +4533,30 @@ export function WorldGraphPage({
                       )
                     })}
                   </div>
-                  {wikiModel.gaps.length > 0 ? (
+                  {wikiModel.gaps.length > 0 || iconGenerationCandidates.length > 0 || iconBatchJob || iconBatchError ? (
                     <div className="world-wiki-gap-list">
                       <span className="eyebrow">Gaps</span>
+                      {iconGenerationCandidates.length > 0 || iconBatchRunning ? (
+                        <button
+                          className={`world-wiki-gap-button world-wiki-icon-batch-button${iconBatchRunning ? ' is-running' : ''}`}
+                          disabled={iconBatchRunning || iconGenerationCandidates.length === 0}
+                          onClick={() => void handleGenerateMissingEntityIcons()}
+                          type="button"
+                        >
+                          <EntityIcon id="asset" />
+                          <span>
+                            {iconBatchRunning
+                              ? describeIconBatchProgress(iconBatchJob)
+                              : `Generate missing icons (${iconGenerationCandidates.length})`}
+                          </span>
+                        </button>
+                      ) : null}
+                      {iconBatchJob && !iconBatchRunning ? (
+                        <div className={`world-wiki-icon-batch-status is-${iconBatchJob.status}`}>
+                          {describeIconBatchProgress(iconBatchJob)}
+                        </div>
+                      ) : null}
+                      {iconBatchError ? <div className="world-wiki-icon-batch-status is-failed">{iconBatchError}</div> : null}
                       {wikiModel.gaps.slice(0, 5).map((gap) => (
                         <button key={gap.key} className="world-wiki-gap-button" disabled={isPromptSubmitting} onClick={() => void handleRunWikiGap(gap)} type="button">
                           <EntityIcon id="plus" />
@@ -5019,7 +5295,9 @@ export function WorldGraphPage({
                 return (
                   <button key={entity.key} className="rail-button item-row world-inspector-change-row" onClick={() => selectWorldNode(entity.key)} type="button">
                     <div className="media-thumb">
-                      <EntityIcon id={iconForWorldEntity(entity.nodeType)} />
+                      {imageUrlByEntityKey.get(entity.key)
+                        ? <img alt="" src={imageUrlByEntityKey.get(entity.key) ?? undefined} />
+                        : <EntityIcon id={iconForWorldEntity(entity.nodeType)} />}
                     </div>
                     <div className="item-row-copy">
                       <strong>{entity.name}</strong>
@@ -5084,7 +5362,9 @@ export function WorldGraphPage({
                 {activeTurnUsedEntityRows.slice(0, 8).map((row) => (
                   <button key={row.key} className="rail-button item-row" disabled={!row.entity} onClick={() => row.entity ? selectWorldNode(row.key) : undefined} type="button">
                     <div className="media-thumb">
-                      <EntityIcon id={row.entity ? iconForWorldEntity(row.entity.nodeType) : 'graph'} />
+                      {row.entity && imageUrlByEntityKey.get(row.entity.key)
+                        ? <img alt="" src={imageUrlByEntityKey.get(row.entity.key) ?? undefined} />
+                        : <EntityIcon id={row.entity ? iconForWorldEntity(row.entity.nodeType) : 'graph'} />}
                     </div>
                     <div className="item-row-copy">
                       <strong>{row.entity?.name ?? row.key}</strong>
@@ -5174,7 +5454,9 @@ export function WorldGraphPage({
               ) : focusedDirectEntities.map((entity) => (
                 <button key={entity.key} className="rail-button item-row" onClick={() => selectWorldNode(entity.key)} type="button">
                   <div className="media-thumb">
-                    <EntityIcon id={iconForWorldEntity(entity.nodeType)} />
+                    {imageUrlByEntityKey.get(entity.key)
+                      ? <img alt="" src={imageUrlByEntityKey.get(entity.key) ?? undefined} />
+                      : <EntityIcon id={iconForWorldEntity(entity.nodeType)} />}
                   </div>
                   <div className="item-row-copy">
                     <strong>{entity.name}</strong>
@@ -5203,7 +5485,9 @@ export function WorldGraphPage({
               {recentWorldEntityRows.map(({ entity, changeKind }) => (
                 <button key={entity.key} className="rail-button item-row world-inspector-change-row" onClick={() => selectWorldNode(entity.key)} type="button">
                   <div className="media-thumb">
-                    <EntityIcon id={iconForWorldEntity(entity.nodeType)} />
+                    {imageUrlByEntityKey.get(entity.key)
+                      ? <img alt="" src={imageUrlByEntityKey.get(entity.key) ?? undefined} />
+                      : <EntityIcon id={iconForWorldEntity(entity.nodeType)} />}
                   </div>
                   <div className="item-row-copy">
                     <strong>{entity.name}</strong>
