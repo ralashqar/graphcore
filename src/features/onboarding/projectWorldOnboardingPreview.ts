@@ -66,6 +66,105 @@ export type SeedGeneratedPreviewCard =
     createdAt: string
   }
 
+export type SeedAssemblySectionKind =
+  | 'overview'
+  | 'characters'
+  | 'locations'
+  | 'factions'
+  | 'artifacts'
+  | 'lore'
+  | 'storyBeats'
+  | 'relationships'
+
+export type SeedAssemblyItemKind = 'overview' | 'entity' | 'sequence_unit' | 'relationship'
+
+export type SeedAssemblyItem = {
+  id: string
+  kind: SeedAssemblyItemKind
+  section: SeedAssemblySectionKind
+  icon: EntityIconId
+  title: string
+  subtitle: string
+  summary: string
+  sequence: number
+  createdAt: string
+  roleLabel?: string
+  ordinal?: number | null
+  outcome?: string
+  relationshipText?: string
+  detailText?: string
+}
+
+export type SeedAssemblySection = {
+  kind: SeedAssemblySectionKind
+  icon: EntityIconId
+  title: string
+  subtitle: string
+  items: SeedAssemblyItem[]
+}
+
+const ASSEMBLY_SECTION_META: Record<SeedAssemblySectionKind, Omit<SeedAssemblySection, 'items'>> = {
+  overview: {
+    kind: 'overview',
+    icon: 'content',
+    title: 'Overview',
+    subtitle: 'World bible initialized',
+  },
+  characters: {
+    kind: 'characters',
+    icon: 'character',
+    title: 'Cast',
+    subtitle: 'Characters joining the world',
+  },
+  locations: {
+    kind: 'locations',
+    icon: 'environment',
+    title: 'Places',
+    subtitle: 'Locations taking shape',
+  },
+  factions: {
+    kind: 'factions',
+    icon: 'group',
+    title: 'Factions',
+    subtitle: 'Groups and power structures',
+  },
+  artifacts: {
+    kind: 'artifacts',
+    icon: 'item',
+    title: 'Artifacts',
+    subtitle: 'Objects, resources, and relics',
+  },
+  lore: {
+    kind: 'lore',
+    icon: 'concept',
+    title: 'Lore',
+    subtitle: 'Concepts, rules, and history',
+  },
+  storyBeats: {
+    kind: 'storyBeats',
+    icon: 'event',
+    title: 'Story Beats',
+    subtitle: 'The main arc forming in order',
+  },
+  relationships: {
+    kind: 'relationships',
+    icon: 'graph',
+    title: 'Connections',
+    subtitle: 'Relationships between world pieces',
+  },
+}
+
+const ASSEMBLY_SECTION_ORDER: SeedAssemblySectionKind[] = [
+  'overview',
+  'characters',
+  'locations',
+  'factions',
+  'artifacts',
+  'lore',
+  'storyBeats',
+  'relationships',
+]
+
 function formatPreviewLabel(value: string) {
   return value.replace(/_/g, ' ').replace(/\b\w/g, (match) => match.toUpperCase())
 }
@@ -133,6 +232,65 @@ function nodeTypeIcon(nodeType: string | null | undefined): EntityIconId {
       return 'event'
     default:
       return 'content'
+  }
+}
+
+function nodeTypeAssemblySection(nodeType: string | null | undefined): SeedAssemblySectionKind {
+  switch (nodeType) {
+    case 'actor':
+      return 'characters'
+    case 'place':
+      return 'locations'
+    case 'group':
+      return 'factions'
+    case 'object':
+      return 'artifacts'
+    case 'sequence_unit':
+      return 'storyBeats'
+    case 'concept':
+    case 'event':
+    default:
+      return 'lore'
+  }
+}
+
+function joinMeaningfulLines(lines: Array<[string, unknown]>) {
+  return lines
+    .map(([label, value]) => {
+      const text = formatPreviewValue(value)
+      return text ? `${label}: ${text}` : ''
+    })
+    .filter(Boolean)
+    .join('\n\n')
+}
+
+function formatMeaningfulList(value: unknown) {
+  const values = readStringList(value)
+  return values.length > 0 ? values.join(', ') : ''
+}
+
+function firstMeaningfulText(...values: unknown[]) {
+  for (const value of values) {
+    const text = compactWhitespace(value)
+    if (text) return text
+  }
+  return ''
+}
+
+function assemblyEntitySubtitle(section: SeedAssemblySectionKind, nodeType: string) {
+  switch (section) {
+    case 'characters':
+      return 'Character'
+    case 'locations':
+      return 'Location'
+    case 'factions':
+      return 'Faction'
+    case 'artifacts':
+      return 'Artifact'
+    case 'lore':
+      return nodeType === 'event' ? 'Lore event' : 'Lore'
+    default:
+      return formatPreviewLabel(nodeType || 'Entity')
   }
 }
 
@@ -398,6 +556,135 @@ function buildRelationshipCard(event: WorldPromptEvent, relationship: Record<str
   }
 }
 
+function buildAssemblyOverviewItem(event: WorldPromptEvent, metadata: Record<string, unknown>): SeedAssemblyItem {
+  const genre = Array.isArray(metadata.genre) ? metadata.genre.join(', ') : compactWhitespace(metadata.genre)
+  const tone = formatMeaningfulList(metadata.toneTags)
+  return {
+    id: `assembly-overview-${event.id}`,
+    kind: 'overview',
+    section: 'overview',
+    icon: 'content',
+    title: compactWhitespace(metadata.title) || 'World bible initialized',
+    subtitle: genre || 'World overview',
+    summary: firstMeaningfulText(metadata.logline, metadata.synopsis, metadata.coreConflict),
+    roleLabel: tone,
+    detailText: joinMeaningfulLines([
+      ['Title', metadata.title],
+      ['Logline', metadata.logline],
+      ['Synopsis', metadata.synopsis],
+      ['Genre', genre],
+      ['Themes', formatMeaningfulList(metadata.themes)],
+      ['Tone', tone],
+      ['Core conflict', metadata.coreConflict],
+      ['Visual motifs', formatMeaningfulList(metadata.visualMotifs)],
+    ]),
+    sequence: event.sequence,
+    createdAt: event.createdAt,
+  }
+}
+
+function buildAssemblyEntityItem(event: WorldPromptEvent, entity: Record<string, unknown>): SeedAssemblyItem {
+  const nodeType = compactWhitespace(entity.nodeType)
+  const customProperties = readRecord(entity.customProperties)
+  const metadata = readRecord(entity.metadata)
+  const sequence = readRecord(customProperties.sequence)
+  if (nodeType === 'sequence_unit' || Object.keys(sequence).length > 0) {
+    return buildAssemblySequenceItem(event, entity, sequence)
+  }
+
+  const section = nodeTypeAssemblySection(nodeType)
+  const roleLabel = firstMeaningfulText(customProperties.roleLabel, metadata.roleLabel)
+  const tags = formatMeaningfulList(entity.tags)
+  return {
+    id: `assembly-entity-${event.id}`,
+    kind: 'entity',
+    section,
+    icon: nodeTypeIcon(nodeType),
+    title: compactWhitespace(entity.name) || 'Generated world piece',
+    subtitle: roleLabel || assemblyEntitySubtitle(section, nodeType),
+    summary: firstMeaningfulText(entity.summary, entity.context),
+    roleLabel: tags,
+    detailText: joinMeaningfulLines([
+      ['Summary', entity.summary],
+      ['Context', entity.context],
+      ['Role', roleLabel],
+      ['Aliases', formatMeaningfulList(entity.aliases)],
+      ['Tags', tags],
+    ]),
+    sequence: event.sequence,
+    createdAt: event.createdAt,
+  }
+}
+
+function buildAssemblySequenceItem(
+  event: WorldPromptEvent,
+  entity: Record<string, unknown>,
+  sequence: Record<string, unknown>,
+): SeedAssemblyItem {
+  const ordinal = typeof sequence.ordinal === 'number' ? sequence.ordinal : null
+  const unitKind = compactWhitespace(sequence.unitKind)
+  const actLabel = compactWhitespace(sequence.actLabel)
+  const subtitle = [
+    actLabel,
+    ordinal ? `${formatPreviewLabel(unitKind || 'Beat')} ${ordinal}` : formatPreviewLabel(unitKind || 'Story beat'),
+  ].filter(Boolean).join(' / ')
+  const consequences = Array.isArray(sequence.consequences)
+    ? sequence.consequences.map(sequenceFieldValue).filter(Boolean).join('\n')
+    : ''
+  const characterArcDeltas = Array.isArray(sequence.characterArcDeltas)
+    ? sequence.characterArcDeltas.map(sequenceFieldValue).filter(Boolean).join('\n')
+    : ''
+  return {
+    id: `assembly-sequence-${event.id}`,
+    kind: 'sequence_unit',
+    section: 'storyBeats',
+    icon: 'event',
+    title: compactWhitespace(entity.name) || (ordinal ? `Story beat ${ordinal}` : 'Story beat'),
+    subtitle,
+    summary: firstMeaningfulText(sequence.synopsis, entity.summary, entity.context),
+    ordinal,
+    outcome: compactWhitespace(sequence.outcome),
+    roleLabel: sequence.storyFunction ? formatPreviewLabel(compactWhitespace(sequence.storyFunction)) : '',
+    detailText: joinMeaningfulLines([
+      ['Synopsis', sequence.synopsis],
+      ['Dramatic question', sequence.dramaticQuestion],
+      ['Story function', sequence.storyFunction ? formatPreviewLabel(compactWhitespace(sequence.storyFunction)) : ''],
+      ['Outcome', sequence.outcome],
+      ['Consequences', consequences],
+      ['Character changes', characterArcDeltas],
+      ['Open loops', formatMeaningfulList(sequence.openLoops)],
+      ['Resolved loops', formatMeaningfulList(sequence.resolvedLoops)],
+    ]),
+    sequence: event.sequence,
+    createdAt: event.createdAt,
+  }
+}
+
+function buildAssemblyRelationshipItem(event: WorldPromptEvent, relationship: Record<string, unknown>): SeedAssemblyItem {
+  const sourceRef = readRecord(relationship.sourceRef)
+  const targetRef = readRecord(relationship.targetRef)
+  const source = compactWhitespace(sourceRef.name) || 'Source'
+  const target = compactWhitespace(targetRef.name) || 'Target'
+  const verb = compactWhitespace(relationship.verb) || 'connected to'
+  const relationshipText = `${source} ${verb} ${target}`
+  return {
+    id: `assembly-relationship-${event.id}`,
+    kind: 'relationship',
+    section: 'relationships',
+    icon: 'graph',
+    title: relationshipText,
+    subtitle: formatPreviewLabel(verb),
+    summary: compactWhitespace(relationship.notes),
+    relationshipText,
+    detailText: joinMeaningfulLines([
+      ['Connection', relationshipText],
+      ['Notes', relationship.notes],
+    ]),
+    sequence: event.sequence,
+    createdAt: event.createdAt,
+  }
+}
+
 export function buildSeedGeneratedPreviewCards(events: WorldPromptEvent[]): SeedGeneratedPreviewCard[] {
   const cards: SeedGeneratedPreviewCard[] = []
   for (const event of [...events].sort((left, right) => {
@@ -429,4 +716,40 @@ export function buildSeedGeneratedPreviewCards(events: WorldPromptEvent[]): Seed
     ...Array.from(latestOverviewByTitle.values()).sort((left, right) => left.sequence - right.sequence),
     ...nonOverviewCards,
   ]
+}
+
+export function buildSeedAssemblySections(events: WorldPromptEvent[]): SeedAssemblySection[] {
+  const sectionItems = new Map<SeedAssemblySectionKind, SeedAssemblyItem[]>()
+  for (const event of [...events].sort((left, right) => {
+    const timeDelta = new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
+    return timeDelta !== 0 ? timeDelta : left.sequence - right.sequence
+  })) {
+    if (event.eventType !== 'op_applied') continue
+    const parsed = worldPromptEventPayloadSchema.safeParse(event.payload)
+    if (!parsed.success || !parsed.data.op) continue
+    const { op } = parsed.data
+    let item: SeedAssemblyItem | null = null
+    if (op.op === 'update_world_wiki_metadata') {
+      item = buildAssemblyOverviewItem(event, op.payload.metadata)
+    } else if (op.op === 'upsert_entity') {
+      item = buildAssemblyEntityItem(event, op.payload.entity)
+    } else if (op.op === 'upsert_relationship') {
+      item = buildAssemblyRelationshipItem(event, op.payload.relationship)
+    }
+    if (!item) continue
+    const items = sectionItems.get(item.section) ?? []
+    if (item.section === 'overview') {
+      items.splice(0, items.length, item)
+    } else {
+      items.push(item)
+    }
+    sectionItems.set(item.section, items)
+  }
+
+  return ASSEMBLY_SECTION_ORDER
+    .map((kind) => {
+      const items = sectionItems.get(kind) ?? []
+      return items.length > 0 ? { ...ASSEMBLY_SECTION_META[kind], items } : null
+    })
+    .filter((section): section is SeedAssemblySection => section !== null)
 }

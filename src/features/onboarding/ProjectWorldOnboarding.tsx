@@ -24,8 +24,9 @@ import {
 } from '../landing/LandingPage'
 import { buildWorldPromptSessionTokenMeter } from '../world/worldPresentation'
 import {
-  buildSeedGeneratedPreviewCards,
-  type SeedGeneratedPreviewCard,
+  buildSeedAssemblySections,
+  type SeedAssemblyItem,
+  type SeedAssemblySection,
 } from './projectWorldOnboardingPreview'
 
 const STORY_ART_STYLE_ATLAS_URL = '/onboarding/styles/story-art-styles-atlas.png'
@@ -968,8 +969,9 @@ export function ProjectWorldOnboarding({
     })
     : null
   const visibleGenerationLogRows = generationLogRows.filter((row) => row.id !== ACTIVE_GENERATION_PROGRESS_ROW_ID)
-  const generatedPreviewCards = useMemo(() => buildSeedGeneratedPreviewCards(sessionEvents), [sessionEvents])
-  const latestGeneratedPreviewCardId = generatedPreviewCards.at(-1)?.id ?? null
+  const seedAssemblySections = useMemo(() => buildSeedAssemblySections(sessionEvents), [sessionEvents])
+  const seedAssemblyItems = useMemo(() => seedAssemblySections.flatMap((section) => section.items), [seedAssemblySections])
+  const latestSeedAssemblyItemId = seedAssemblyItems.at(-1)?.id ?? null
   const tokenMeter = useMemo(() => buildWorldPromptSessionTokenMeter({
     turns: sessionTurns,
     messages: sessionMessages,
@@ -990,12 +992,12 @@ export function ProjectWorldOnboarding({
   }, [generationLogScrollKey])
 
   useEffect(() => {
-    if (!latestGeneratedPreviewCardId || !generationPreviewRef.current) return
+    if (!latestSeedAssemblyItemId || !generationPreviewRef.current) return
     const frameId = window.requestAnimationFrame(() => {
       latestPreviewCardRef.current?.scrollIntoView({ block: 'end', behavior: seedGenerationStarted ? 'smooth' : 'auto' })
     })
     return () => window.cancelAnimationFrame(frameId)
-  }, [latestGeneratedPreviewCardId, seedGenerationStarted])
+  }, [latestSeedAssemblyItemId, seedGenerationStarted])
 
   useEffect(() => {
     if (!expandedPreview) return
@@ -1102,67 +1104,109 @@ export function ProjectWorldOnboarding({
     )
   }
 
-  function renderFullPreviewText(text: string, className = 'world-onboarding-preview-text') {
-    if (!text.trim()) return null
+  function renderAssemblyDetailsButton(item: SeedAssemblyItem) {
+    if (!item.detailText?.trim()) return null
     return (
-      <div className={`${className} is-full`}>
-        <p>{text}</p>
-      </div>
-    )
-  }
-
-  function renderPreviewLists(card: SeedGeneratedPreviewCard) {
-    if (!('lists' in card) || card.lists.length === 0) return null
-    return (
-      <div className="world-onboarding-preview-lists">
-        {card.lists.map((list) => (
-          <div key={list.label} className="world-onboarding-preview-list">
-            <span>{list.label}</span>
-            <div>
-              {list.values.map((value, index) => (
-                <p key={`${list.label}-${index}`}>{value}</p>
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
-    )
-  }
-
-  function renderGeneratedPreviewCard(card: SeedGeneratedPreviewCard, isLatest: boolean) {
-    const fieldGrid = 'fields' in card && card.fields.length > 0 ? (
-      <div className="world-onboarding-preview-fields">
-        {card.fields.map((field, index) => (
-          <div key={`${field.label}-${index}`} className="world-onboarding-preview-field">
-            <span>{field.label}</span>
-            {renderFullPreviewText(field.value, 'world-onboarding-preview-field-value')}
-          </div>
-        ))}
-      </div>
-    ) : null
-    return (
-      <div
-        key={card.id}
-        ref={isLatest ? latestPreviewCardRef : null}
-        className={`world-onboarding-preview-card is-${card.kind}${isLatest ? ' is-latest' : ''}`}
+      <button
+        className="world-onboarding-assembly-detail-button"
+        onClick={() => openExpandedPreview(item.title, item.subtitle || 'Details', item.detailText ?? '')}
+        type="button"
       >
-        <div className="world-onboarding-preview-card-head">
-          <div className="world-onboarding-preview-icon">
-            <EntityIcon id={card.icon} />
+        Details
+      </button>
+    )
+  }
+
+  function renderAssemblyItem(item: SeedAssemblyItem, section: SeedAssemblySection, isLatest: boolean) {
+    if (section.kind === 'relationships') {
+      return (
+        <div
+          key={item.id}
+          ref={isLatest ? latestPreviewCardRef : null}
+          className={`world-onboarding-assembly-relationship${isLatest ? ' is-latest' : ''}`}
+        >
+          <div className="world-onboarding-assembly-icon is-small">
+            <EntityIcon id={item.icon} />
           </div>
           <div>
-            <span>{card.subtitle}</span>
-            <h3>{card.title}</h3>
+            <strong>{item.relationshipText || item.title}</strong>
+            {item.summary ? <p>{compactPreviewText(item.summary, 150)}</p> : null}
           </div>
-          {card.kind === 'sequence_unit' && card.ordinal ? (
-            <strong className="world-onboarding-preview-ordinal">{card.ordinal}</strong>
-          ) : null}
+          {renderAssemblyDetailsButton(item)}
         </div>
-        {card.summary ? renderFullPreviewText(card.summary, 'world-onboarding-preview-summary') : null}
-        {'context' in card && card.context ? renderFullPreviewText(card.context) : null}
-        {fieldGrid}
-        {renderPreviewLists(card)}
-      </div>
+      )
+    }
+
+    if (section.kind === 'storyBeats') {
+      return (
+        <article
+          key={item.id}
+          ref={isLatest ? latestPreviewCardRef : null}
+          className={`world-onboarding-assembly-beat${isLatest ? ' is-latest' : ''}`}
+        >
+          <div className="world-onboarding-assembly-ordinal">{item.ordinal ?? item.sequence}</div>
+          <div className="world-onboarding-assembly-beat-body">
+            <div className="world-onboarding-assembly-card-head">
+              <span>{item.subtitle}</span>
+              <h3>{item.title}</h3>
+            </div>
+            {item.summary ? <p className="world-onboarding-assembly-summary">{compactPreviewText(item.summary, 220)}</p> : null}
+            {item.outcome ? (
+              <div className="world-onboarding-assembly-outcome">
+                <span>Outcome</span>
+                <p>{compactPreviewText(item.outcome, 180)}</p>
+              </div>
+            ) : null}
+            {renderAssemblyDetailsButton(item)}
+          </div>
+        </article>
+      )
+    }
+
+    return (
+      <article
+        key={item.id}
+        ref={isLatest ? latestPreviewCardRef : null}
+        className={`world-onboarding-assembly-card is-${section.kind}${isLatest ? ' is-latest' : ''}`}
+      >
+        <div className="world-onboarding-assembly-icon">
+          <EntityIcon id={item.icon} />
+        </div>
+        <div className="world-onboarding-assembly-card-head">
+          <span>{item.subtitle}</span>
+          <h3>{item.title}</h3>
+        </div>
+        {item.summary ? <p className="world-onboarding-assembly-summary">{compactPreviewText(item.summary, 190)}</p> : null}
+        {item.roleLabel ? <small>{item.roleLabel}</small> : null}
+        {renderAssemblyDetailsButton(item)}
+      </article>
+    )
+  }
+
+  function renderAssemblySection(section: SeedAssemblySection) {
+    const isTimeline = section.kind === 'storyBeats'
+    const isRelationships = section.kind === 'relationships'
+    const bodyClassName = isTimeline
+      ? 'world-onboarding-assembly-timeline'
+      : isRelationships
+        ? 'world-onboarding-assembly-relationship-list'
+        : 'world-onboarding-assembly-grid'
+    return (
+      <section key={section.kind} className={`world-onboarding-assembly-section is-${section.kind}`}>
+        <div className="world-onboarding-assembly-section-head">
+          <div className="world-onboarding-assembly-icon is-small">
+            <EntityIcon id={section.icon} />
+          </div>
+          <div>
+            <span>{section.subtitle}</span>
+            <h3>{section.title}</h3>
+          </div>
+          <strong>{section.items.length}</strong>
+        </div>
+        <div className={bodyClassName}>
+          {section.items.map((item) => renderAssemblyItem(item, section, item.id === latestSeedAssemblyItemId))}
+        </div>
+      </section>
     )
   }
 
@@ -1232,23 +1276,23 @@ export function ProjectWorldOnboarding({
           <main className="world-onboarding-preview-panel">
             <div className="world-onboarding-preview-head">
               <div>
-                <span className="eyebrow">Generated wiki</span>
-                <h2>World records as they land</h2>
+                <span className="eyebrow">World assembly</span>
+                <h2>Your world forming live</h2>
               </div>
-              <span>{generatedPreviewCards.length} records</span>
+              <span>{seedAssemblyItems.length} pieces</span>
             </div>
 
-            <div ref={generationPreviewRef} className="world-onboarding-preview-feed" aria-label="Generated world records">
-              {generatedPreviewCards.length === 0 ? (
+            <div ref={generationPreviewRef} className="world-onboarding-preview-feed" aria-label="World assembly">
+              {seedAssemblySections.length === 0 ? (
                 <div className="world-onboarding-preview-empty">
                   <div className="world-onboarding-live-icon">
                     <EntityIcon id="content" />
                   </div>
-                  <strong>Waiting for the first generated record.</strong>
-                  <p>The overview, cast, places, factions, objects, and story beats will appear here as GraphCore writes them.</p>
+                  <strong>Waiting for the first world piece...</strong>
+                  <p>The overview, cast, places, artifacts, lore, story beats, and connections will assemble here as they land.</p>
                 </div>
               ) : null}
-              {generatedPreviewCards.map((card) => renderGeneratedPreviewCard(card, card.id === latestGeneratedPreviewCardId))}
+              {seedAssemblySections.map(renderAssemblySection)}
             </div>
           </main>
         </section>
