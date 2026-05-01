@@ -140,6 +140,13 @@ const ONBOARDING_ORBIT_NODES: Array<{
   },
 ]
 
+const ONBOARDING_ORBIT_EDGE_PAIRS: Array<[string, string]> = [
+  ['is-characters', 'is-stories'],
+  ['is-stories', 'is-locations'],
+  ['is-items', 'is-lore'],
+  ['is-lore', 'is-timelines'],
+]
+
 type OnboardingOrbitNode = typeof ONBOARDING_ORBIT_NODES[number]
 
 type OnboardingOrbitDisplayNode = OnboardingOrbitNode & {
@@ -377,6 +384,7 @@ function useOnboardingOrbitConnectors(
       const composerRect = composerElement.getBoundingClientRect()
       const centerX = composerRect.left + composerRect.width / 2 - stageRect.left
       const centerY = composerRect.top + composerRect.height / 2 - stageRect.top
+      const frameCenterBySlot = new Map<string, { x: number; y: number }>()
       const nextConnectors = activeNodes.flatMap((node) => {
         const frame = stageElement.querySelector<HTMLElement>(
           `.world-onboarding-orbit-node[data-orbit-slot="${node.className}"] .world-onboarding-icon-frame`,
@@ -386,6 +394,7 @@ function useOnboardingOrbitConnectors(
         const frameRect = frame.getBoundingClientRect()
         const x1 = frameRect.left + frameRect.width / 2 - stageRect.left
         const y1 = frameRect.top + frameRect.height / 2 - stageRect.top
+        frameCenterBySlot.set(node.className, { x: x1, y: y1 })
         const distanceX = centerX - x1
         const distanceY = centerY - y1
         const controlX = Math.max(60, Math.min(180, Math.abs(distanceX) * 0.48))
@@ -401,9 +410,21 @@ function useOnboardingOrbitConnectors(
 
         return [{ id: node.className, d }]
       })
+      const adjacentConnectors = ONBOARDING_ORBIT_EDGE_PAIRS.flatMap(([fromSlot, toSlot]) => {
+        const from = frameCenterBySlot.get(fromSlot)
+        const to = frameCenterBySlot.get(toSlot)
+        if (!from || !to) return []
+
+        return [
+          {
+            id: `${fromSlot}-${toSlot}`,
+            d: `M ${from.x.toFixed(1)} ${from.y.toFixed(1)} L ${to.x.toFixed(1)} ${to.y.toFixed(1)}`,
+          },
+        ]
+      })
 
       setStageSize({ width: stageRect.width, height: stageRect.height })
-      setConnectors(nextConnectors)
+      setConnectors([...adjacentConnectors, ...nextConnectors])
     }
 
     const measureOnAnimationFrame = () => {
