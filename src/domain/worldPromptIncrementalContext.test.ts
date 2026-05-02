@@ -344,3 +344,21 @@ test('incremental work item prompts do not resend full manifest, retrieval, or r
   assert.equal(body.includes('sourceContext: input.payload.sourceContext'), false)
   assert.equal(body.includes('buildCompactWorkItemPrompt'), true)
 })
+
+test('app projects use app-specific prompt suggestions instead of story threat fallbacks', () => {
+  const source = readFileSync(resolve('supabase/functions/_shared/world-prompt.ts'), 'utf8')
+  const directSuggestionStart = source.indexOf('function buildDirectFollowUpSuggestions')
+  const directSuggestionEnd = source.indexOf('const analysis = analyzeDirectFollowUpWorld', directSuggestionStart)
+  const directSuggestionPreamble = source.slice(directSuggestionStart, directSuggestionEnd)
+  const projectSeedStart = source.indexOf('function buildProjectContextSuggestionSeed')
+  const projectSeedEnd = source.indexOf('const PLANNER_PROGRESS_PHASES', projectSeedStart)
+  const projectSeedBody = source.slice(projectSeedStart, projectSeedEnd)
+
+  assert.equal(directSuggestionPreamble.includes('projectContextIsApp(input.snapshot.projectContext)'), true)
+  assert.equal(source.includes('function buildAppFollowUpSuggestions'), true)
+  assert.equal(source.includes('Deepen The Main Threat'), true)
+  assert.equal(source.includes('Do not suggest story moves such as threats, villains, protagonists'), true)
+  assert.equal(projectSeedBody.includes("case 'app':"), true)
+  assert.equal(projectSeedBody.includes('Map Core UX Flow'), true)
+  assert.equal(projectSeedBody.includes('Add App Contracts'), true)
+})

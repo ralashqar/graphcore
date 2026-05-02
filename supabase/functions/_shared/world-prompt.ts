@@ -1264,6 +1264,9 @@ type WorldPromptRetrievalPacket = {
     title: string
     logline: string
     synopsis: string
+    artStyleDescription: string
+    brandAtlasPrompt: string
+    colorScheme: Record<string, string>
     fingerprint: string
     generatedFromFingerprint: string
     updatePolicy: 'none' | 'targeted' | 'opportunistic'
@@ -2520,11 +2523,17 @@ async function buildWorldPromptRetrievalPacket(input: {
     wiki.overview.toneTags.length > 0 ? null : 'toneTags',
     wiki.overview.coreConflict.trim() ? null : 'coreConflict',
     wiki.overview.visualMotifs.length > 0 ? null : 'visualMotifs',
+    wiki.overview.artStyleDescription.trim() ? null : 'artStyleDescription',
+    wiki.overview.brandAtlasPrompt.trim() ? null : 'brandAtlasPrompt',
+    Object.keys(wiki.overview.colorScheme).length > 0 ? null : 'colorScheme',
   ].filter((value): value is string => Boolean(value))
   const wikiContext: WorldPromptRetrievalPacket['wikiContext'] = {
     title: wiki.title,
     logline: trimPlannerText(wiki.overview.logline, 180),
     synopsis: trimPlannerText(wiki.overview.synopsis, 360),
+    artStyleDescription: trimPlannerText(wiki.overview.artStyleDescription, 520),
+    brandAtlasPrompt: trimPlannerText(wiki.overview.brandAtlasPrompt, 900),
+    colorScheme: wiki.overview.colorScheme,
     fingerprint: wiki.fingerprint,
     generatedFromFingerprint: wiki.overview.generatedFromFingerprint,
     updatePolicy: wikiUpdatePolicy,
@@ -3530,12 +3539,21 @@ function finalizeSuggestionSet(input: {
   suggestions: WorldPromptSuggestion[]
   maxCount?: number
 }) {
-  const seededSuggestions = dedupeSuggestions(input.suggestions)
+  const seededSuggestions = filterSuggestionsForProjectContext(
+    dedupeSuggestions(input.suggestions),
+    input.snapshot.projectContext,
+  )
     .filter((suggestion) => suggestionIsActionable(suggestion, input.sourcePrompt))
   const hasFocusedNonThreadSuggestion = seededSuggestions.some((suggestion) => (
     suggestion.source !== 'thread' && suggestion.kind !== 'plan_only'
   ))
-  const fallback = input.selectedThreadKey
+  const fallback = projectContextIsApp(input.snapshot.projectContext)
+    ? buildAppFollowUpSuggestions({
+      prompt: input.sourcePrompt ?? '',
+      snapshot: input.snapshot,
+      ops: [],
+    })
+    : input.selectedThreadKey
     ? buildThreadAwareSuggestions({
         snapshot: input.snapshot,
         selectedThreadKey: input.selectedThreadKey,
@@ -3553,6 +3571,7 @@ function finalizeSuggestionSet(input: {
     ...seededSuggestions,
     ...fallback,
   ])
+    .filter((suggestion) => filterSuggestionsForProjectContext([suggestion], input.snapshot.projectContext).length > 0)
     .filter((suggestion) => suggestionIsActionable(suggestion, input.sourcePrompt))
     .slice(0, input.maxCount ?? 6)
   return finalized.map((suggestion) => {
@@ -4176,7 +4195,7 @@ function determineWikiMetadataUpdatePolicy(input: {
 }) {
   if (input.mode === 'advisory_diagnosis') return 'none' as const
   const normalized = input.prompt.toLowerCase()
-  const targeted = /\b(wiki|logline|synopsis|overview|theme|themes|tone|genre|world bible|refresh overview)\b/.test(normalized)
+  const targeted = /\b(wiki|logline|synopsis|overview|theme|themes|tone|genre|world bible|refresh overview|art style|brand atlas|color scheme|palette|visual style|look and feel)\b/.test(normalized)
   if (targeted) return 'targeted' as const
   const missingLogline = !input.wiki.overview.logline.trim()
   const weakSynopsis = input.wiki.overview.synopsis.trim().length < 80
@@ -4222,7 +4241,7 @@ function scorePromptOpForStaging(op: PromptToWorldOp, prompt: string) {
     return promptIncludesAny(prompt, ['cinematic', 'scene', 'shot', 'trailer', 'storyboard', 'cutscene']) ? 35 : 10
   }
   if (op.op === 'update_world_wiki_metadata') {
-    return promptIncludesAny(prompt, ['wiki', 'logline', 'synopsis', 'overview', 'theme', 'tone']) ? 65 : 25
+    return promptIncludesAny(prompt, ['wiki', 'logline', 'synopsis', 'overview', 'theme', 'tone', 'art style', 'brand atlas', 'color scheme', 'palette', 'visual style', 'look and feel']) ? 65 : 25
   }
   return 0
 }
@@ -4457,6 +4476,35 @@ function uniqueEntityKeys(values: Array<string | null | undefined>, limit = 4) {
   return Array.from(new Set(values.filter((value): value is string => Boolean(value)))).slice(0, limit)
 }
 
+function projectContextIsApp(projectContext: WorldPromptSnapshot['projectContext']) {
+  return projectContext?.projectType === 'app' || projectContext?.brainProfile === 'app'
+}
+
+function suggestionMatchesAny(text: string, patterns: RegExp[]) {
+  return patterns.some((pattern) => pattern.test(text))
+}
+
+function filterSuggestionsForProjectContext(
+  suggestions: WorldPromptSuggestion[],
+  projectContext: WorldPromptSnapshot['projectContext'],
+) {
+  if (!projectContextIsApp(projectContext)) return suggestions
+  const storySuggestionPatterns = [
+    /\b(threat|villain|antagonist|protagonist|hero|chapter|inciting event|lore|kingdom|realm|ruler|court|faction|factions)\b/i,
+    /\b(story beat|plot|main conflict|world conflict|cast|character circle|power structure)\b/i,
+  ]
+  return suggestions.filter((suggestion) => {
+    const text = lowerCaseTextParts(
+      suggestion.label,
+      suggestion.prompt,
+      suggestion.summary,
+      suggestion.retrievalHint,
+      suggestion.generatedReason,
+    )
+    return !suggestionMatchesAny(text, storySuggestionPatterns)
+  })
+}
+
 function findPromptRoleCue(promptLower: string, name: string, roleTerms: string[]) {
   const normalizedName = name.trim().toLowerCase()
   if (!normalizedName) return false
@@ -4603,12 +4651,195 @@ function analyzeDirectFollowUpWorld(input: {
   } satisfies DirectFollowUpAnalysis
 }
 
+function appEntityKeysByType(input: {
+  snapshot: WorldPromptSnapshot
+  ops: PromptToWorldOp[]
+}) {
+  const keyByType = new Map<string, string[]>()
+  const add = (nodeType: string, key: string | null | undefined) => {
+    if (!key) return
+    const existing = keyByType.get(nodeType) ?? []
+    if (!existing.includes(key)) existing.push(key)
+    keyByType.set(nodeType, existing)
+  }
+  for (const entity of input.snapshot.worldEntities) {
+    if (entity.status !== 'archived') add(entity.nodeType, entity.key)
+  }
+  for (const op of input.ops) {
+    if (op.op === 'upsert_entity') {
+      add(op.payload.entity.nodeType, op.payload.targetEntityKey)
+    }
+  }
+  return keyByType
+}
+
+function buildAppFollowUpSuggestions(input: {
+  prompt: string
+  snapshot: WorldPromptSnapshot
+  ops: PromptToWorldOp[]
+}) {
+  const keysByType = appEntityKeysByType(input)
+  const keys = (...types: string[]) => uniqueEntityKeys(types.flatMap((type) => keysByType.get(type) ?? []), 6)
+  const has = (...types: string[]) => types.some((type) => (keysByType.get(type) ?? []).length > 0)
+  const suggestions: Array<{
+    score: number
+    suggestion: Omit<Parameters<typeof buildPromptSuggestion>[0], 'style'>
+  }> = []
+
+  if (!has('user_flow') || !has('screen')) {
+    suggestions.push({
+      score: 96,
+      suggestion: {
+        id: 'app-followup-core-flow',
+        label: 'Map Core UX Flow',
+        prompt: 'Continue this app graph by defining the core user_flow nodes and the required screen route sequence from first open through the main success moment, paywall/export, and return loop.',
+        kind: 'continue_scope',
+        source: 'wave2',
+        summary: 'Turn the app idea into concrete UX flow and screen progression.',
+        estimatedNodeCount: 4,
+        estimatedEdgeCount: 5,
+        actionMode: 'apply_compact_wave',
+        applyPolicy: 'auto_if_safe',
+        targetEntityKeys: keys('app', 'persona', 'feature'),
+        focusLayer: 'general',
+        retrievalHint: 'app core user flow screens onboarding main loop paywall return',
+        generatedReason: 'App projects need product and UX flow suggestions, not story-threat suggestions.',
+      },
+    })
+  }
+
+  if (has('screen') && !has('component', 'section')) {
+    suggestions.push({
+      score: 88,
+      suggestion: {
+        id: 'app-followup-screen-components',
+        label: 'Break Screens Into Components',
+        prompt: 'Continue this app graph by decomposing the key screens into sections and reusable components, including props, states, interactions, and styled_by links to the primary design system.',
+        kind: 'continue_scope',
+        source: 'wave2',
+        summary: 'Convert screens into reusable UI sections and component contracts.',
+        estimatedNodeCount: 5,
+        estimatedEdgeCount: 6,
+        actionMode: 'apply_compact_wave',
+        applyPolicy: 'auto_if_safe',
+        targetEntityKeys: keys('screen', 'design_system'),
+        focusLayer: 'general',
+        retrievalHint: 'app screens sections components props states interactions',
+        generatedReason: 'The app graph has screens; the next useful move is component structure.',
+      },
+    })
+  }
+
+  if (!has('data_model') || !has('action') || !has('api_endpoint')) {
+    suggestions.push({
+      score: 84,
+      suggestion: {
+        id: 'app-followup-data-api',
+        label: 'Define Data And API Contracts',
+        prompt: 'Continue this app graph by adding the essential data_model, action, api_endpoint, and backend_function nodes for the main user flow, with reads, writes, calls, and emits relationships.',
+        kind: 'continue_scope',
+        source: 'wave2',
+        summary: 'Add the product data and backend contract layer that implementation will need.',
+        estimatedNodeCount: 5,
+        estimatedEdgeCount: 7,
+        actionMode: 'apply_compact_wave',
+        applyPolicy: 'auto_if_safe',
+        targetEntityKeys: keys('feature', 'screen', 'user_flow'),
+        focusLayer: 'general',
+        retrievalHint: 'app data models actions api endpoints backend functions',
+        generatedReason: 'The graph should define contracts before downstream code generation.',
+      },
+    })
+  }
+
+  if (!has('design_system')) {
+    suggestions.push({
+      score: 80,
+      suggestion: {
+        id: 'app-followup-design-system',
+        label: 'Create App Design System',
+        prompt: 'Continue this app graph by adding a primary design_system node with color tokens, typography, spacing, radii, shadows, button styles, card styles, input styles, icon rules, and motion direction derived from the project visual system.',
+        kind: 'continue_scope',
+        source: 'wave2',
+        summary: 'Translate the project brand direction into an implementation-ready mobile UI system.',
+        estimatedNodeCount: 1,
+        estimatedEdgeCount: 4,
+        actionMode: 'apply_compact_wave',
+        applyPolicy: 'auto_if_safe',
+        targetEntityKeys: keys('app', 'screen', 'component'),
+        focusLayer: 'general',
+        retrievalHint: 'app design system tokens color typography spacing motion',
+        generatedReason: 'App styling should be captured as a design_system contract.',
+      },
+    })
+  }
+
+  if (!has('capability')) {
+    suggestions.push({
+      score: 74,
+      suggestion: {
+        id: 'app-followup-capabilities',
+        label: 'Add Capability Constraints',
+        prompt: 'Continue this app graph by identifying required capability nodes such as camera, photo library, push notifications, health data, haptics, or in-app purchases, and mark web preview, Expo Go, dev build, and production entitlement constraints.',
+        kind: 'continue_scope',
+        source: 'wave2',
+        summary: 'Make native/platform requirements explicit before preview or codegen.',
+        estimatedNodeCount: 3,
+        estimatedEdgeCount: 4,
+        actionMode: 'apply_compact_wave',
+        applyPolicy: 'auto_if_safe',
+        targetEntityKeys: keys('feature', 'screen', 'action'),
+        focusLayer: 'general',
+        retrievalHint: 'app native capabilities expo go web preview constraints',
+        generatedReason: 'Native requirements should be graph nodes with preview/build constraints.',
+      },
+    })
+  }
+
+  if (!has('tower') || !has('code_file')) {
+    suggestions.push({
+      score: 68,
+      suggestion: {
+        id: 'app-followup-code-towers',
+        label: 'Plan Code Towers',
+        prompt: 'Continue this app graph by adding tower and code_file nodes for Expo Router, shared components, feature slices, mock backend adapter, app config, README, and EAS config, with owned_by_tower and implemented_as links.',
+        kind: 'continue_scope',
+        source: 'wave2',
+        summary: 'Prepare the graph for constrained parallel Expo code generation.',
+        estimatedNodeCount: 6,
+        estimatedEdgeCount: 8,
+        actionMode: 'apply_compact_wave',
+        applyPolicy: 'auto_if_safe',
+        targetEntityKeys: keys('app', 'feature', 'screen', 'api_endpoint'),
+        focusLayer: 'general',
+        retrievalHint: 'app code towers code files expo router mock backend eas',
+        generatedReason: 'Code generation needs explicit tower ownership and file contracts.',
+      },
+    })
+  }
+
+  const ranked = suggestions
+    .sort((left, right) => right.score - left.score)
+    .slice(0, 4)
+    .map((entry, index) => buildPromptSuggestion({
+      ...entry.suggestion,
+      style: index === 0 ? 'primary' : 'secondary',
+    }))
+    .filter((entry): entry is WorldPromptSuggestion => Boolean(entry))
+
+  return dedupeSuggestions(ranked).slice(0, 4)
+}
+
 function buildDirectFollowUpSuggestions(input: {
   prompt: string
   snapshot: WorldPromptSnapshot
   ops: PromptToWorldOp[]
   selectedThreadKey?: string | null
 }) {
+  if (projectContextIsApp(input.snapshot.projectContext)) {
+    return buildAppFollowUpSuggestions(input)
+  }
+
   const analysis = analyzeDirectFollowUpWorld({
     prompt: input.prompt,
     ops: input.ops,
@@ -4945,6 +5176,24 @@ function buildRankedDirectTurnSuggestions(input: {
   selectedThreadKey?: string | null
   suggestionCandidates?: WorldPromptSuggestion[]
 }) {
+  if (projectContextIsApp(input.snapshot.projectContext)) {
+    const combined = [
+      ...filterSuggestionsForProjectContext(input.suggestionCandidates ?? [], input.snapshot.projectContext),
+      ...buildAppFollowUpSuggestions({
+        prompt: input.prompt,
+        snapshot: input.snapshot,
+        ops: input.ops,
+      }),
+    ]
+    return dedupeSuggestions(combined)
+      .map((suggestion, index) => buildPromptSuggestion({
+        ...suggestion,
+        style: index === 0 ? 'primary' : 'secondary',
+      }))
+      .filter((entry): entry is WorldPromptSuggestion => Boolean(entry))
+      .slice(0, 4)
+  }
+
   const analysis = analyzeDirectFollowUpWorld({
     prompt: input.prompt,
     ops: input.ops,
@@ -5074,6 +5323,46 @@ function looksContradictoryOrLowConfidence(prompt: string) {
 function buildBlockedSuggestions(prompt: string, snapshot: WorldPromptSnapshot) {
   const hasWorld = snapshot.worldEntities.length > 0
   const suggestionSeed = buildProjectContextSuggestionSeed(snapshot.projectContext)
+  if (projectContextIsApp(snapshot.projectContext)) {
+    return dedupeSuggestions([
+      buildPromptSuggestion({
+        id: 'repair-app-brief',
+        label: suggestionSeed.repairLabel,
+        prompt: hasWorld
+          ? `${suggestionSeed.primaryPrompt} Use the existing app graph instead of starting over.`
+          : suggestionSeed.repairPrompt,
+        kind: 'repair_prompt',
+        style: 'primary',
+        source: 'repair',
+        summary: suggestionSeed.repairSummary,
+        estimatedNodeCount: 4,
+        estimatedEdgeCount: 4,
+      }),
+      buildPromptSuggestion({
+        id: 'repair-app-flow',
+        label: 'Map App Flow',
+        prompt: hasWorld
+          ? 'Continue this app graph by adding the missing user_flow and screen route sequence for onboarding, the core success moment, paywall/export, and return loop.'
+          : 'Start this app graph with an app node, persona, core feature, user_flow, and screen route sequence for the main mobile app loop.',
+        kind: 'repair_prompt',
+        source: 'repair',
+        summary: 'Create the product and UX structure needed for an app graph.',
+        estimatedNodeCount: 5,
+        estimatedEdgeCount: 5,
+      }),
+      buildPromptSuggestion({
+        id: 'repair-app-contracts',
+        label: 'Add App Contracts',
+        prompt: `Use this as context: "${prompt}". Define the app data models, user actions, API endpoints, capabilities, and design system needed to make the product graph implementable.`,
+        kind: 'repair_prompt',
+        source: 'repair',
+        summary: 'Focus on implementation-ready app graph contracts instead of story canon.',
+        estimatedNodeCount: 6,
+        estimatedEdgeCount: 6,
+      }),
+    ].filter((suggestion): suggestion is WorldPromptSuggestion => Boolean(suggestion)))
+  }
+
   return dedupeSuggestions([
     buildPromptSuggestion({
       id: 'repair-characters',
@@ -5118,6 +5407,29 @@ function buildStagedSuggestions(input: {
   deferredOps: PromptToWorldOp[]
   snapshot: WorldPromptSnapshot
 }) {
+  if (projectContextIsApp(input.snapshot.projectContext)) {
+    const appSuggestions = buildAppFollowUpSuggestions({
+      prompt: input.prompt,
+      snapshot: input.snapshot,
+      ops: input.deferredOps,
+    })
+    return appSuggestions.length > 0
+      ? appSuggestions
+      : dedupeSuggestions([
+        buildPromptSuggestion({
+          id: 'continue-app-system',
+          label: 'Continue App System',
+          prompt: 'Continue this app graph by adding only the next product, UX, data, API, capability, or design-system nodes needed for the generated app to become implementable.',
+          kind: 'continue_scope',
+          style: 'primary',
+          source: 'wave2',
+          summary: 'Expand the app graph with implementation-ready product structure.',
+          estimatedNodeCount: 4,
+          estimatedEdgeCount: 5,
+        }),
+      ].filter((suggestion): suggestion is WorldPromptSuggestion => Boolean(suggestion)))
+  }
+
   const hasCharacters = input.deferredOps.some((op) => (
     op.op === 'upsert_entity' && ['actor', 'group'].includes(op.payload.entity.nodeType)
   ))
@@ -6018,6 +6330,9 @@ const WIKI_STRING_LIMITS: Record<string, number> = {
   synopsis: 900,
   genre: 80,
   coreConflict: 360,
+  artStyleDescription: 700,
+  brandAtlasPrompt: 1400,
+  brandAtlasAssetKey: 260,
 }
 const WIKI_ARRAY_LIMITS: Record<string, { items: number; chars: number }> = {
   themes: { items: 8, chars: 60 },
@@ -6049,6 +6364,18 @@ function sanitizeWikiMetadataPatch(raw: unknown, existing?: Record<string, unkno
     if (cleaned.length > 0) {
       next[key] = cleaned
     }
+  }
+  const colorScheme = parsed.colorScheme && typeof parsed.colorScheme === 'object' && !Array.isArray(parsed.colorScheme)
+    ? parsed.colorScheme as Record<string, unknown>
+    : {}
+  const cleanedColorScheme = Object.entries(colorScheme).reduce<Record<string, string>>((acc, [key, rawValue]) => {
+    const colorKey = trimPlannerText(key.trim(), 40)
+    const color = typeof rawValue === 'string' ? trimPlannerText(rawValue.trim(), 80) : ''
+    if (colorKey && color) acc[colorKey] = color
+    return acc
+  }, {})
+  if (Object.keys(cleanedColorScheme).length > 0) {
+    next.colorScheme = cleanedColorScheme
   }
   for (const key of ['generatedFromFingerprint', 'updatedByTurnId']) {
     const value = typeof parsed[key as keyof typeof parsed] === 'string'
@@ -7158,6 +7485,18 @@ function buildProjectContextSuggestionSeed(projectContext: WorldPromptSnapshot['
   }
 
   switch (projectContext.brainProfile) {
+    case 'app':
+      return {
+        primaryLabel: 'Map Core UX Flow',
+        primaryPrompt: 'Continue this app graph by adding the next user_flow, screen, component, data_model, action, and api_endpoint nodes needed for the core app loop.',
+        primarySummary: 'Expand the app as a product/UX system instead of story canon.',
+        secondaryLabel: 'Add App Contracts',
+        secondaryPrompt: 'Continue this app graph by adding implementation-ready data models, actions, API endpoints, capabilities, design-system tokens, towers, and code-file plan nodes.',
+        secondarySummary: 'Prepare the app graph for preview and later Expo code generation.',
+        repairLabel: 'Add App Foundation',
+        repairPrompt: 'Start this app graph with an app identity, target persona, business goal, core feature, onboarding/user flow, key screens, data model, action, API endpoint, capability, design system, tower, and code-file plan.',
+        repairSummary: 'Turn the vague request into a structured app product graph.',
+      }
     case 'game':
       return {
         primaryLabel: 'Add Factions And Regions',
@@ -7477,7 +7816,7 @@ async function generatePromptPlan(input: {
     isInitialSeedGeneration && initialSeedProfile
       ? [
         'The skeleton profile is mandatory. Satisfy every required category with concrete canon-ready graph nodes.',
-        'Create update_world_wiki_metadata for the generated content title, logline, synopsis, tone, and genre before or alongside entity creation.',
+        'Create update_world_wiki_metadata for the generated content title, logline, synopsis, tone, genre, specific art style description, brand atlas prompt, and app color scheme when relevant before or alongside entity creation.',
         'Create the requested sequence_unit skeleton as ordered authored progression, using sequence relationships such as precedes, causes, complicates, and pays_off.',
         'Create enough relationships to make the graph feel connected immediately: cast/location/faction/object/concept links plus sequence links.',
         'Assistant notes should be concise operational notes suitable for a visible progress log, not private chain-of-thought.',
@@ -7529,10 +7868,11 @@ async function generatePromptPlan(input: {
     'Do not queue cinematic generation just because a sequence_unit is created. Set sequence.scriptExpansionReady when the chapter has enough synopsis, outcome, linked entities, and consequences to support a later scene/shot expansion.',
     'Existing authored sequence state appears in retrieval.sequenceContext. Preserve ordinal and cause/effect bridges unless the user explicitly asks for a correction.',
     'For wiki/presentation readiness, use entity customProperties.wiki or metadata.wiki for entity display hints such as roleLabel, shortSummary, and wikiSections.',
-    'For project-wide wiki presentation, use update_world_wiki_metadata with target "project" and compact metadata fields: title, logline, synopsis, genre, themes, toneTags, coreConflict, visualMotifs. The title is the generated in-world/content title, not the GraphCore project name. Use target "view" with targetViewKey only for custom wiki page metadata.',
+    'For project-wide wiki presentation, use update_world_wiki_metadata with target "project" and compact metadata fields: title, logline, synopsis, genre, themes, toneTags, coreConflict, visualMotifs, artStyleDescription, brandAtlasPrompt, and colorScheme. The title is the generated in-world/content title, not the GraphCore project name. Use target "view" with targetViewKey only for custom wiki page metadata.',
+    'artStyleDescription is the project-specific visual direction beyond the broad preset. brandAtlasPrompt is a visual-only prompt for one cohesive brand/world atlas image. For app projects, colorScheme should include at least primary, secondary, and tertiary colors.',
     'Do not add a separate planner pass for wiki writing. Include update_world_wiki_metadata only in the same wave1Ops response when retrieval.wikiContext.updatePolicy is "targeted" or "opportunistic".',
     'When retrieval.wikiContext.updatePolicy is "none", do not rewrite project title, logline, synopsis, or tone metadata unless the user explicitly asks in this prompt.',
-    'When updating project-wide wiki metadata, set generatedFromFingerprint to retrieval.wikiContext.fingerprint when provided. Keep text concise: one-sentence logline, compact synopsis, short tags.',
+    'When updating project-wide wiki metadata, set generatedFromFingerprint to retrieval.wikiContext.fingerprint when provided. Keep text concise: one-sentence logline, compact synopsis, short tags, concise visual direction, and a reusable visual-only atlas prompt.',
     'When a direct world-building turn creates or substantially updates canon, include concise wiki-ready summaries where they naturally follow from the canon. Do not add long encyclopedia prose on every turn.',
     'Prefer one-sentence loglines, compact synopsis text, role labels, story arc summaries, and event scene summaries over invented dates or unrelated lore.',
     'retrieval.wikiContext lists populated wiki sections and gaps. If the user asks to fill a gap, update only the targeted wiki metadata or add compact graph canon needed for that section.',
@@ -7571,7 +7911,10 @@ async function generatePromptPlan(input: {
     'For relink_entities, merge linked entities by default unless you are intentionally replacing thread scope.',
     'If a thread is concluded, use resolve. If it should stay available but inactive, use park. If its urgency changes, use reprioritize.',
     'threadCandidates is legacy compatibility only. Prefer threadActions.',
-    'Suggestion ideas should be concrete and world-specific, not generic categories, and should never just paraphrase or repeat the user prompt.',
+    'Suggestion ideas should be concrete and project-specific, not generic categories, and should never just paraphrase or repeat the user prompt.',
+    projectContextIsApp(input.payload.snapshot.projectContext)
+      ? 'For App projects, suggestionCandidates must be app/product moves only: deepen UX flows, screens, components, data/API contracts, capabilities, design system, paywall, towers, or code-file plans. Do not suggest story moves such as threats, villains, protagonists, chapters, lore layers, factions, kingdoms, inciting events, or main conflict beats.'
+      : 'For non-App projects, keep suggestionCandidates aligned to the project type: Story may use chapters/cast/conflict, Game may use playable regions/progression, Brand may use symbols/campaign moments, and UGC may use hooks/proof/payoff beats.',
     ...plannerModeInstructions({
       mode: plannerMode,
       isSuggestionDriven,
@@ -10122,7 +10465,7 @@ function buildStreamedInitialSeedInstructions() {
     'For sequence_unit records, visualDescription must describe the visible scene or moment for that beat.',
     'Each record must be one complete JSON object matching one of:',
     '{"kind":"note","message":"short operational note"}',
-    '{"kind":"wiki","id":"wiki_foundation","title":"generated content title","logline":"one sentence","synopsis":"compact paragraph","genre":"genre label","themes":["theme"],"toneTags":["tone"],"coreConflict":"central conflict","visualMotifs":["motif"]}',
+    '{"kind":"wiki","id":"wiki_foundation","title":"generated content title","logline":"one sentence","synopsis":"compact paragraph","genre":"genre label","themes":["theme"],"toneTags":["tone"],"coreConflict":"central conflict","visualMotifs":["motif"],"artStyleDescription":"specific visual direction beyond the broad preset","brandAtlasPrompt":"visual-only prompt for one cohesive brand/world atlas image","colorScheme":{"primary":"#hex role","secondary":"#hex role","tertiary":"#hex role"}}',
     '{"kind":"entity","id":"mara_veyr","nodeType":"actor","name":"Mara Veyr","summary":"one sentence","context":"short canon use","visualDescription":"silver-haired archivist with a violet lantern, ash-black coat, rainlit stone alley","tags":["main cast"]}',
     '{"kind":"sequence_unit","id":"episode_01","name":"Episode 1: The Memory Tax","summary":"one sentence","context":"short canon use","visualDescription":"public memory tithe in a rain-slick plaza, shadow guards, glowing ledger pages, frightened crowd","unitKind":"episode","sequenceKey":"main","ordinal":1,"actLabel":"Act I","synopsis":"one compact paragraph","dramaticQuestion":"question","storyFunction":"setup","outcome":"one sentence","consequences":[{"cause":"cause","effect":"effect","affectedEntityKeys":["mara_veyr"],"threadKeys":[],"consequenceType":"plot"}],"characterArcDeltas":[{"actorKey":"mara_veyr","before":"before","pressure":"pressure","choice":"choice","after":"after"}],"openLoops":["loop"],"resolvedLoops":[]}',
     '{"kind":"relationship","id":"link_mara_seeks_artifact","source":"mara_veyr","target":"memory_artifact","verb":"seeks","notes":"short relationship note"}',
@@ -10159,8 +10502,8 @@ function buildStreamedInitialSeedPhaseInstructions(phase: WorldPromptGenerationS
     full_stream: [
       'This is a single full_stream generation pass.',
       'Emit the complete initial world skeleton in this order: world wiki metadata, core entity ops, ordered sequence_unit ops, relationship ops, then summary.',
-      'Emit update_world_wiki_metadata before content entities. The metadata must include a generated content title plus logline, synopsis, genre, themes, toneTags, coreConflict, and visualMotifs where supported by the prompt.',
-      'For update_world_wiki_metadata, metadata.genre must be one string; metadata.themes, metadata.toneTags, and metadata.visualMotifs must be arrays of strings.',
+      'Emit update_world_wiki_metadata before content entities. The metadata must include a generated content title plus logline, synopsis, genre, themes, toneTags, coreConflict, visualMotifs, artStyleDescription, brandAtlasPrompt, and app colorScheme where supported by the prompt.',
+      'For update_world_wiki_metadata, metadata.genre, metadata.artStyleDescription, and metadata.brandAtlasPrompt must be strings; metadata.themes, metadata.toneTags, and metadata.visualMotifs must be arrays of strings; metadata.colorScheme must be an object such as {"primary":"#hex role","secondary":"#hex role","tertiary":"#hex role"}.',
       'For Story projects, emit at least 6 ordered sequence_unit nodes before relationship records and use stable ordinal keys like episode_01, episode_02, episode_03.',
       'After all entities and sequence units exist, emit relationships only between endpoint keys that have already been emitted in this stream.',
       'End with a summary record describing the complete skeleton created.',
@@ -10168,8 +10511,8 @@ function buildStreamedInitialSeedPhaseInstructions(phase: WorldPromptGenerationS
     world_bible: [
       'This step is world_bible only.',
       'Emit update_world_wiki_metadata ops and concise notes only.',
-      'The metadata must include a generated content title plus logline, synopsis, genre, themes, toneTags, coreConflict, and visualMotifs where supported by the prompt.',
-      'For update_world_wiki_metadata, metadata.genre must be one string; metadata.themes, metadata.toneTags, and metadata.visualMotifs must be arrays of strings.',
+      'The metadata must include a generated content title plus logline, synopsis, genre, themes, toneTags, coreConflict, visualMotifs, artStyleDescription, brandAtlasPrompt, and app colorScheme where supported by the prompt.',
+      'For update_world_wiki_metadata, metadata.genre, metadata.artStyleDescription, and metadata.brandAtlasPrompt must be strings; metadata.themes, metadata.toneTags, and metadata.visualMotifs must be arrays of strings; metadata.colorScheme must be an object.',
       'Do not emit entity or relationship ops in this step.',
       'End with a summary record describing the foundation created.',
     ],
@@ -10412,9 +10755,29 @@ function coerceStreamNodeType(value: unknown) {
   return aliases[raw] ?? raw
 }
 
+function normalizeStreamColorScheme(value: unknown) {
+  if (isRecord(value)) return value
+  if (typeof value === 'string') {
+    return value
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+      .reduce<Record<string, string>>((acc, entry, index) => {
+        const [rawKey, ...rawValueParts] = entry.split(':')
+        const key = rawValueParts.length > 0
+          ? asCompactString(rawKey).toLowerCase().replace(/[^a-z0-9]+/g, '_')
+          : ['primary', 'secondary', 'tertiary'][index] ?? `color_${index + 1}`
+        const color = rawValueParts.length > 0 ? asCompactString(rawValueParts.join(':')) : asCompactString(rawKey)
+        if (key && color) acc[key] = color
+        return acc
+      }, {})
+  }
+  return {}
+}
+
 function normalizeStreamWikiMetadata(metadata: Record<string, unknown>) {
   const normalizedMetadata = { ...metadata }
-  for (const key of ['title', 'logline', 'synopsis', 'genre', 'coreConflict', 'roleLabel', 'shortSummary', 'generatedFromFingerprint', 'updatedByTurnId']) {
+  for (const key of ['title', 'logline', 'synopsis', 'genre', 'coreConflict', 'artStyleDescription', 'brandAtlasPrompt', 'brandAtlasAssetKey', 'roleLabel', 'shortSummary', 'generatedFromFingerprint', 'updatedByTurnId']) {
     const rawValue = normalizedMetadata[key]
     if (Array.isArray(rawValue)) {
       normalizedMetadata[key] = rawValue.map((entry) => String(entry).trim()).filter(Boolean).join(', ')
@@ -10426,6 +10789,7 @@ function normalizeStreamWikiMetadata(metadata: Record<string, unknown>) {
       normalizedMetadata[key] = rawValue.split(',').map((entry) => entry.trim()).filter(Boolean)
     }
   }
+  normalizedMetadata.colorScheme = normalizeStreamColorScheme(normalizedMetadata.colorScheme)
   return normalizedMetadata
 }
 
@@ -10449,6 +10813,10 @@ function normalizeCompactStreamedWikiEnvelope(value: Record<string, unknown>) {
           toneTags: asStringArray(value.toneTags ?? value.tone),
           coreConflict: asCompactString(value.coreConflict ?? value.conflict),
           visualMotifs: asStringArray(value.visualMotifs ?? value.motifs),
+          artStyleDescription: asCompactString(value.artStyleDescription ?? value.artStyle ?? value.visualStyle),
+          brandAtlasPrompt: asCompactString(value.brandAtlasPrompt ?? value.atlasPrompt),
+          brandAtlasAssetKey: asCompactString(value.brandAtlasAssetKey),
+          colorScheme: normalizeStreamColorScheme(value.colorScheme ?? value.colors ?? value.palette),
           sectionOrder: Array.isArray(value.sectionOrder) ? value.sectionOrder : [],
           wikiSections: isRecord(value.wikiSections) ? value.wikiSections : {},
         }),

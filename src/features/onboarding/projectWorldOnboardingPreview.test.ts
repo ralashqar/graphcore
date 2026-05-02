@@ -332,6 +332,79 @@ test('buildSeedAssemblySections groups generated records into presentation secti
   )
 })
 
+test('buildSeedAssemblySections labels relationship endpoints with entity titles and app icons', () => {
+  const sections = buildSeedAssemblySections([
+    event(1, {
+      op: 'upsert_entity',
+      payload: {
+        targetEntityKey: null,
+        entity: {
+          name: 'Creature Reveal Screen',
+          nodeType: 'screen',
+          customProperties: {},
+          metadata: {},
+        },
+      },
+    }),
+    event(2, {
+      op: 'upsert_entity',
+      payload: {
+        targetEntityKey: 'generate_creature_endpoint',
+        entity: {
+          name: 'POST /api/generate-creature',
+          nodeType: 'api_endpoint',
+          customProperties: {},
+          metadata: {},
+        },
+      },
+    }),
+    event(3, {
+      op: 'upsert_relationship',
+      payload: {
+        targetRelationshipId: null,
+        relationship: {
+          sourceEntityKey: 'creature_reveal_screen',
+          targetEntityKey: 'generate_creature_endpoint',
+          sourceRef: {},
+          targetRef: {},
+          verb: 'calls',
+          notes: 'The reveal screen can request a generated result.',
+        },
+      },
+    }),
+  ])
+
+  const item = sections.find((section) => section.kind === 'relationships')?.items[0]
+  assert.equal(item?.relationshipSource, 'Creature Reveal Screen')
+  assert.equal(item?.relationshipSourceIcon, 'screen')
+  assert.equal(item?.relationshipTarget, 'POST /api/generate-creature')
+  assert.equal(item?.relationshipTargetIcon, 'api')
+  assert.equal(item?.relationshipText, 'Creature Reveal Screen calls POST /api/generate-creature')
+})
+
+test('buildSeedAssemblySections falls back to relationship endpoint keys instead of generic labels', () => {
+  const sections = buildSeedAssemblySections([
+    event(1, {
+      op: 'upsert_relationship',
+      payload: {
+        targetRelationshipId: null,
+        relationship: {
+          sourceEntityKey: 'home_screen',
+          targetEntityKey: 'daily_entry_model',
+          sourceRef: {},
+          targetRef: {},
+          verb: 'reads',
+        },
+      },
+    }),
+  ])
+
+  const item = sections.find((section) => section.kind === 'relationships')?.items[0]
+  assert.equal(item?.relationshipSource, 'home_screen')
+  assert.equal(item?.relationshipTarget, 'daily_entry_model')
+  assert.equal(item?.relationshipText, 'home_screen reads daily_entry_model')
+})
+
 test('buildSeedAssemblySections groups app graph records into app presentation sections', () => {
   const sections = buildSeedAssemblySections([
     event(1, {

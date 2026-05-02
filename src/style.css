@@ -9452,6 +9452,7 @@ button.world-prompt-row-result.is-clickable {
 
 .world-wiki-section-cast,
 .world-wiki-section-timeline,
+.world-wiki-section-style,
 .world-wiki-section-outputs {
   grid-column: 1 / -1;
 }
@@ -9471,6 +9472,113 @@ button.world-prompt-row-result.is-clickable {
 
 .world-wiki-card-grid.is-cast {
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.world-wiki-section-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.world-wiki-style-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.world-wiki-style-card {
+  min-width: 0;
+  margin: 0;
+  padding: 12px;
+  display: grid;
+  gap: 9px;
+  text-align: left;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(3, 7, 18, 0.34);
+  color: rgba(226, 232, 240, 0.92);
+}
+
+button.world-wiki-style-card {
+  cursor: pointer;
+}
+
+button.world-wiki-style-card:hover {
+  border-color: rgba(57, 216, 255, 0.28);
+  color: rgba(240, 253, 250, 0.96);
+}
+
+.world-wiki-style-card.is-wide {
+  grid-column: 1 / -1;
+}
+
+.world-wiki-style-card > strong {
+  color: rgba(248, 250, 252, 0.94);
+  line-height: 1.45;
+}
+
+.world-wiki-style-card.is-atlas {
+  grid-template-columns: 84px minmax(0, 1fr);
+  align-items: center;
+}
+
+.world-wiki-style-card.is-atlas img,
+.world-wiki-style-card-icon {
+  width: 84px;
+  height: 64px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(15, 23, 42, 0.72);
+  color: rgba(153, 246, 228, 0.88);
+  object-fit: cover;
+}
+
+.world-wiki-style-card.is-atlas em,
+.world-wiki-color-row em {
+  color: rgba(148, 163, 184, 0.86);
+  font-style: normal;
+  font-size: 0.72rem;
+}
+
+.world-wiki-style-card.is-atlas span {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.world-wiki-color-list {
+  display: grid;
+  gap: 8px;
+}
+
+.world-wiki-color-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.world-wiki-color-row i {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(2, 6, 23, 0.22);
+}
+
+.world-wiki-color-row span {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.world-wiki-color-row strong {
+  color: rgba(248, 250, 252, 0.9);
+  text-transform: capitalize;
 }
 
 .world-wiki-entity-card,
@@ -9802,6 +9910,21 @@ button.world-prompt-row-result.is-clickable {
   min-height: 62px;
 }
 
+.world-wiki-entity-icon {
+  line-height: 0;
+}
+
+.world-wiki-entity-icon svg {
+  width: 34px;
+  height: 34px;
+  display: block;
+}
+
+.world-wiki-entity-card.is-large .world-wiki-entity-icon svg {
+  width: 38px;
+  height: 38px;
+}
+
 .world-wiki-entity-card > span {
   justify-items: center;
   text-align: center;
@@ -9995,6 +10118,52 @@ button.world-prompt-row-result.is-clickable {
   max-height: 256px;
 }
 
+.world-wiki-overview {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 14px;
+}
+
+.world-wiki-overview-media {
+  justify-self: start;
+  align-self: start;
+}
+
+.world-wiki-overview-media.has-icon {
+  width: 66px;
+  max-width: 66px;
+  height: 66px;
+  min-height: 66px;
+}
+
+.world-wiki-overview-media.has-image {
+  width: 96px;
+  max-width: 96px;
+  height: 96px;
+  min-height: 96px;
+}
+
+.world-wiki-overview-media.has-icon .world-wiki-overview-placeholder,
+.world-wiki-overview-media.has-icon img {
+  width: 66px;
+  max-width: 66px;
+  height: 66px;
+  min-height: 66px;
+  max-height: 66px;
+}
+
+.world-wiki-overview-media.has-image img {
+  width: 96px;
+  max-width: 96px;
+  height: 96px;
+  max-height: 96px;
+}
+
+.world-wiki-overview-placeholder svg {
+  width: 38px;
+  height: 38px;
+}
+
 .world-wiki-timeline-body.has-image {
   grid-template-columns: minmax(88px, 128px) minmax(0, 1fr);
   align-items: start;
@@ -10072,6 +10241,30 @@ button.world-prompt-row-result.is-clickable {
 
 .world-wiki-modal .world-popup-head {
   margin-bottom: 0;
+}
+
+.world-wiki-modal-title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.world-wiki-modal-icon {
+  width: 42px;
+  height: 42px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  border: 1px solid rgba(57, 216, 255, 0.16);
+  background: rgba(57, 216, 255, 0.09);
+  color: rgba(153, 246, 228, 0.94);
+}
+
+.world-wiki-modal-icon svg {
+  width: 21px;
+  height: 21px;
 }
 
 .world-wiki-modal .world-popup-head h3 {

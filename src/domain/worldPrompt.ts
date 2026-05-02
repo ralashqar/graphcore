@@ -536,6 +536,10 @@ export const streamWikiRecordSchema = z.object({
   toneTags: streamRecordStringListSchema,
   coreConflict: z.string().default(''),
   visualMotifs: streamRecordStringListSchema,
+  artStyleDescription: z.string().default(''),
+  brandAtlasPrompt: z.string().default(''),
+  brandAtlasAssetKey: z.string().default(''),
+  colorScheme: z.union([z.record(z.string(), z.string()), z.string()]).default({}),
   sectionOrder: z.array(z.string()).default([]),
   wikiSections: looseRecordSchema.default({}),
 }).catchall(z.unknown())

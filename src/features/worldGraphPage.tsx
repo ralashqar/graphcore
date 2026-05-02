@@ -312,6 +312,7 @@ type WikiDetailModalState = {
   title: string
   eyebrow: string
   body: string
+  icon?: EntityIconId
   imageUrl?: string | null
   meta?: string[]
 } | null
@@ -909,6 +910,8 @@ function iconForWikiSection(kind: WorldWikiSection['kind']): EntityIconId {
   switch (kind) {
     case 'overview':
       return 'graph'
+    case 'style':
+      return 'design'
     case 'app':
     case 'app_product':
       return 'app'
@@ -931,7 +934,10 @@ function iconForWikiSection(kind: WorldWikiSection['kind']): EntityIconId {
     case 'app_design':
       return 'design'
     case 'app_code':
+    case 'app_towers':
       return 'tower'
+    case 'app_code_files':
+      return 'code'
     case 'cast':
       return 'character'
     case 'threads':
@@ -955,6 +961,8 @@ function iconForWikiSection(kind: WorldWikiSection['kind']): EntityIconId {
 
 function labelForWikiSection(kind: WorldWikiSection['kind']) {
   switch (kind) {
+    case 'style':
+      return 'Visual System'
     case 'app_product':
       return 'App Product'
     case 'app_people':
@@ -976,7 +984,10 @@ function labelForWikiSection(kind: WorldWikiSection['kind']) {
     case 'app_design':
       return 'Design System'
     case 'app_code':
+    case 'app_towers':
       return 'Code Towers'
+    case 'app_code_files':
+      return 'Code Files'
     default:
       return kind.replace(/_/g, ' ')
   }
@@ -1801,6 +1812,29 @@ export function WorldGraphPage({
     },
     view: selectedView,
   }), [projectDraftId, projectDraftMetadata, projectName, projectSummary, selectedView, worldEntities, worldGraphConnections, worldRelationships, worldResults, worldThreads])
+  const wikiHasAppSections = useMemo(
+    () => wikiModel.sections.some((section) => section.kind === 'app' || section.kind.startsWith('app_')),
+    [wikiModel.sections],
+  )
+  const wikiOverviewIcon = useMemo<EntityIconId>(() => {
+    const heroEntity = wikiModel.overview.heroEntityKey ? entityByKey.get(wikiModel.overview.heroEntityKey) ?? null : null
+    if (heroEntity) return iconForWorldEntity(heroEntity.nodeType)
+    return projectContext?.projectType === 'app' || wikiHasAppSections ? 'app' : 'graph'
+  }, [entityByKey, projectContext?.projectType, wikiHasAppSections, wikiModel.overview.heroEntityKey])
+  const wikiOverviewImageUrl = wikiModel.overview.heroEntityKey
+    ? imageUrlByEntityKey.get(wikiModel.overview.heroEntityKey) ?? null
+    : null
+  const wikiOverviewLabel = projectContext?.projectType === 'app' || wikiHasAppSections ? 'App Overview' : 'World Overview'
+  const wikiSynopsisLabel = projectContext?.projectType === 'app' || wikiHasAppSections ? 'App synopsis' : 'World synopsis'
+  const wikiEmptySynopsisText = projectContext?.projectType === 'app' || wikiHasAppSections
+    ? 'Add app graph canon or generate a synopsis from the existing product graph.'
+    : 'Add world canon or generate a synopsis from the existing graph.'
+  const wikiBrandAtlasImageUrl = useMemo(() => {
+    const assetKey = wikiModel.overview.brandAtlasAssetKey.trim()
+    if (!assetKey) return null
+    const asset = assetByKey.get(assetKey) ?? null
+    return resolveAssetSourceUrl(asset) ?? signedAssetUrlsByKey.get(assetKey) ?? null
+  }, [assetByKey, signedAssetUrlsByKey, wikiModel.overview.brandAtlasAssetKey])
   const iconGenerationCandidates = useMemo(() => (
     buildWorldEntityIconCandidates({
       entities: worldEntities,
@@ -4000,6 +4034,7 @@ export function WorldGraphPage({
             title: entity.name,
             eyebrow: profile?.roleLabel || labelForWorldEntity(entity.nodeType),
             body: detailBody,
+            icon: iconForWorldEntity(entity.nodeType),
             imageUrl,
             meta: [
               labelForWorldEntity(entity.nodeType),
@@ -4047,6 +4082,7 @@ export function WorldGraphPage({
             title: entity.name,
             eyebrow: sequence?.unitKind || labelForWorldEntity(entity.nodeType),
             body: detailBody,
+            icon: iconForWorldEntity(entity.nodeType),
             imageUrl,
             meta: [
               ordinal !== null ? `Step ${ordinal}` : null,
@@ -4079,7 +4115,92 @@ export function WorldGraphPage({
     )
   }
 
+  function renderWikiStyleSection(section: WorldWikiSection) {
+    const styleGaps = wikiModel.gaps.filter((entry) => entry.sectionKind === 'style')
+    const colorEntries = Object.entries(wikiModel.overview.colorScheme)
+    const hasAtlas = Boolean(wikiModel.overview.brandAtlasPrompt.trim() || wikiBrandAtlasImageUrl)
+    const atlasBody = wikiModel.overview.brandAtlasPrompt.trim() || 'No brand atlas prompt has been established yet.'
+    return (
+      <section id={`world-wiki-section-${section.kind}`} key={section.kind} className={`world-wiki-section world-wiki-section-${section.kind}`}>
+        <div className="world-wiki-section-head">
+          <div>
+            <span className="eyebrow">{labelForWikiSection(section.kind)}</span>
+            <h3>{section.title}</h3>
+          </div>
+          {styleGaps.length > 0 ? (
+            <div className="world-wiki-section-actions">
+              {styleGaps.slice(0, 3).map((gap) => (
+                <button key={gap.key} className="ghost-button compact" disabled={isPromptSubmitting} onClick={() => void handleRunWikiGap(gap)} type="button">
+                  {gap.label}
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
+        <div className="world-wiki-style-grid">
+          <button
+            className="world-wiki-style-card is-wide"
+            onClick={() => openWikiDetailModal({
+              title: section.title,
+              eyebrow: projectContext?.projectType === 'app' || wikiHasAppSections ? 'App art direction' : 'Art style',
+              body: wikiModel.overview.artStyleDescription || section.summary,
+              icon: 'design',
+              meta: [
+                wikiModel.overview.genre || null,
+                wikiModel.overview.toneTags.length ? wikiModel.overview.toneTags.slice(0, 3).join(', ') : null,
+              ].filter((value): value is string => Boolean(value)),
+            })}
+            type="button"
+          >
+            <span className="eyebrow">Art Style</span>
+            <strong>{wikiModel.overview.artStyleDescription || 'Not established yet'}</strong>
+          </button>
+          <button
+            className={hasAtlas ? 'world-wiki-style-card is-atlas' : 'world-wiki-style-card is-atlas is-empty'}
+            onClick={() => openWikiDetailModal({
+              title: projectContext?.projectType === 'app' || wikiHasAppSections ? 'App Brand Atlas' : 'Brand Atlas',
+              eyebrow: 'Visual image prompt',
+              body: atlasBody,
+              icon: 'asset',
+              imageUrl: wikiBrandAtlasImageUrl,
+              meta: wikiModel.overview.brandAtlasPrompt ? ['Prompt ready'] : ['Needs prompt'],
+            })}
+            type="button"
+          >
+            {wikiBrandAtlasImageUrl ? <img src={wikiBrandAtlasImageUrl} alt="" /> : <span className="world-wiki-style-card-icon"><EntityIcon id="asset" /></span>}
+            <span>
+              <em>Brand Atlas</em>
+              <strong>{wikiModel.overview.brandAtlasPrompt ? 'Prompt ready' : 'No atlas prompt yet'}</strong>
+            </span>
+          </button>
+          <div className="world-wiki-style-card">
+            <span className="eyebrow">Visual Motifs</span>
+            {wikiModel.overview.visualMotifs.length > 0 ? (
+              <div className="world-wiki-chip-row">
+                {wikiModel.overview.visualMotifs.map((motif) => <span key={motif} className="chip">{motif}</span>)}
+              </div>
+            ) : <strong>Not established yet</strong>}
+          </div>
+          <div className="world-wiki-style-card">
+            <span className="eyebrow">{projectContext?.projectType === 'app' || wikiHasAppSections ? 'App Colors' : 'Palette Notes'}</span>
+            {colorEntries.length > 0 ? (
+              <div className="world-wiki-color-list">
+                {colorEntries.slice(0, 8).map(([name, value]) => (
+                  <span key={name} className="world-wiki-color-row">
+                    <i style={{ background: value.split(/\s+/)[0] }} />
+                    <span><strong>{name}</strong><em>{value}</em></span>
+                  </span>
+                ))}
+              </div>
+            ) : <strong>Not established yet</strong>}
+          </div>
+        </div>
+      </section>
+    )
+  }
+
   function renderWikiSection(section: WorldWikiSection) {
+    if (section.kind === 'style') return renderWikiStyleSection(section)
     const visibleEntityKeys = section.entityKeys.slice(0, section.kind === 'cast' ? 8 : 6)
     const visibleThreadKeys = section.threadKeys.slice(0, 6)
     const visibleResultKeys = section.resultKeys.slice(0, 6)
@@ -4103,6 +4224,7 @@ export function WorldGraphPage({
             title: section.title,
             eyebrow: labelForWikiSection(section.kind),
             body: section.summary,
+            icon: iconForWikiSection(section.kind),
           })}
           type="button"
         >
@@ -4134,6 +4256,7 @@ export function WorldGraphPage({
                       title: thread.title,
                       eyebrow: `${thread.priority} story arc`,
                       body: summary,
+                      icon: 'thread',
                       meta: [
                         thread.status,
                         thread.linkedEntityKeys.length ? `${thread.linkedEntityKeys.length} linked node${thread.linkedEntityKeys.length === 1 ? '' : 's'}` : null,
@@ -4167,6 +4290,7 @@ export function WorldGraphPage({
                       title: result.title,
                       eyebrow: labelForWorldResult(result.resultType),
                       body: summary,
+                      icon: 'result',
                       imageUrl,
                       meta: [result.status],
                     })
@@ -4683,17 +4807,17 @@ export function WorldGraphPage({
                 />
                 <div className="world-wiki-document">
                   <section id="world-wiki-section-overview" className="world-wiki-overview">
-                    <div className="world-wiki-overview-media">
-                      {wikiModel.overview.heroEntityKey && imageUrlByEntityKey.get(wikiModel.overview.heroEntityKey) ? (
-                        <img src={imageUrlByEntityKey.get(wikiModel.overview.heroEntityKey) ?? undefined} alt="" />
+                    <div className={`world-wiki-overview-media ${wikiOverviewImageUrl ? 'has-image' : 'has-icon'}`}>
+                      {wikiOverviewImageUrl ? (
+                        <img src={wikiOverviewImageUrl} alt="" />
                       ) : (
                         <div className="world-wiki-overview-placeholder">
-                          <EntityIcon id="graph" />
+                          <EntityIcon id={wikiOverviewIcon} />
                         </div>
                       )}
                     </div>
                     <div className="world-wiki-overview-copy">
-                      <span className="eyebrow">World Overview</span>
+                      <span className="eyebrow">{wikiOverviewLabel}</span>
                       <h2>{wikiModel.title}</h2>
                       <div className="world-wiki-logline">
                         {wikiModel.overview.logline || 'No logline yet.'}
@@ -4715,9 +4839,10 @@ export function WorldGraphPage({
                         className="world-wiki-summary-button is-overview"
                         onClick={() => openWikiDetailModal({
                           title: wikiModel.title,
-                          eyebrow: 'World synopsis',
-                          body: wikiModel.overview.synopsis || 'Add world canon or generate a synopsis from the existing graph.',
-                          imageUrl: wikiModel.overview.heroEntityKey ? imageUrlByEntityKey.get(wikiModel.overview.heroEntityKey) ?? null : null,
+                          eyebrow: wikiSynopsisLabel,
+                          body: wikiModel.overview.synopsis || wikiEmptySynopsisText,
+                          icon: wikiOverviewIcon,
+                          imageUrl: wikiOverviewImageUrl,
                           meta: [
                             `${worldEntities.length} node${worldEntities.length === 1 ? '' : 's'}`,
                             `${worldRelationships.length} link${worldRelationships.length === 1 ? '' : 's'}`,
@@ -4726,7 +4851,7 @@ export function WorldGraphPage({
                         type="button"
                       >
                         <span className="world-wiki-summary-clamp">
-                          {wikiModel.overview.synopsis || 'Add world canon or generate a synopsis from the existing graph.'}
+                          {wikiModel.overview.synopsis || wikiEmptySynopsisText}
                         </span>
                       </button>
                       <div className="world-wiki-overview-actions">
@@ -4872,9 +4997,14 @@ export function WorldGraphPage({
               aria-labelledby="world-wiki-modal-title"
             >
               <div className="world-popup-head">
-                <div>
-                  <span className="eyebrow">{wikiDetailModal.eyebrow}</span>
-                  <h3 id="world-wiki-modal-title">{wikiDetailModal.title}</h3>
+                <div className="world-wiki-modal-title-row">
+                  <span className="world-wiki-modal-icon" aria-hidden="true">
+                    <EntityIcon id={wikiDetailModal.icon ?? 'content'} />
+                  </span>
+                  <div>
+                    <span className="eyebrow">{wikiDetailModal.eyebrow}</span>
+                    <h3 id="world-wiki-modal-title">{wikiDetailModal.title}</h3>
+                  </div>
                 </div>
                 <button className="world-popup-close" onClick={() => setWikiDetailModal(null)} type="button" aria-label="Close wiki detail">x</button>
               </div>

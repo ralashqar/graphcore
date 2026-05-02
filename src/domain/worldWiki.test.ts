@@ -222,6 +222,13 @@ test('deriveWorldWiki reads project-wide draft wiki metadata before project summ
             toneTags: ['melancholic'],
             coreConflict: 'The archive preserves memory by consuming the people who use it.',
             visualMotifs: ['crystal stacks'],
+            artStyleDescription: 'Candlelit gothic fantasy with luminous memory crystals and rain-dark archive halls.',
+            brandAtlasPrompt: 'A cinematic fantasy brand atlas board of crystal stacks, ink-black archive halls, rain, vellum maps, and violet lantern light.',
+            colorScheme: {
+              primary: '#7c3aed violet memory light',
+              secondary: '#0f172a archive midnight',
+              tertiary: '#d6b46a aged parchment gold',
+            },
           },
         },
       },
@@ -245,6 +252,10 @@ test('deriveWorldWiki reads project-wide draft wiki metadata before project summ
   assert.equal(wiki.overview.genre, 'fantasy mystery')
   assert.deepEqual(wiki.overview.themes, ['memory', 'inheritance'])
   assert.deepEqual(wiki.overview.visualMotifs, ['crystal stacks'])
+  assert.equal(wiki.overview.artStyleDescription, 'Candlelit gothic fantasy with luminous memory crystals and rain-dark archive halls.')
+  assert.equal(wiki.overview.brandAtlasPrompt.includes('fantasy brand atlas board'), true)
+  assert.equal(wiki.overview.colorScheme.primary, '#7c3aed violet memory light')
+  assert.equal(wiki.sections.some((section) => section.kind === 'style' && section.title === 'Art Direction'), true)
 })
 
 test('deriveWorldWiki does not use project name as the content title fallback', () => {
@@ -306,6 +317,8 @@ test('deriveWorldWiki reports gaps for missing presentation summaries and floati
   })
 
   assert.ok(wiki.gaps.some((gap) => gap.kind === 'world_logline'))
+  assert.ok(wiki.gaps.some((gap) => gap.kind === 'world_art_style'))
+  assert.ok(wiki.gaps.some((gap) => gap.kind === 'brand_atlas_prompt'))
   assert.ok(wiki.gaps.some((gap) => gap.kind === 'entity_summary' && gap.entityKey === actor.key))
   assert.ok(wiki.gaps.some((gap) => gap.kind === 'timeline_order'))
 })
@@ -379,10 +392,22 @@ test('deriveWorldWiki splits app graph nodes into app-specific wiki sections', (
     nodeType: 'capability',
     summary: 'Shares creature cards from iOS with a web fallback.',
   })
+  const tower = createEntity({
+    key: 'world.tower.generation',
+    name: 'Generation Tower',
+    nodeType: 'tower',
+    summary: 'Owns the app generation flow implementation slice.',
+  })
+  const codeFile = createEntity({
+    key: 'world.code_file.app-generate',
+    name: 'app/(tabs)/generate.tsx',
+    nodeType: 'code_file',
+    summary: 'Expo Router screen for the generation flow.',
+  })
 
   const wiki = deriveWorldWiki({
     snapshot: createSnapshot({
-      worldEntities: [app, flow, screen, api, capability],
+      worldEntities: [app, flow, screen, api, capability, tower, codeFile],
     }),
   })
 
@@ -391,10 +416,14 @@ test('deriveWorldWiki splits app graph nodes into app-specific wiki sections', (
     wiki.sections
       .filter((section) => section.entityKeys.length > 0)
       .map((section) => section.kind),
-    ['overview', 'app_product', 'app_flows', 'app_screens', 'app_backend', 'app_capabilities'],
+    ['overview', 'app_product', 'app_flows', 'app_screens', 'app_backend', 'app_capabilities', 'app_towers', 'app_code_files'],
   )
   assert.deepEqual(wiki.sections.find((section) => section.kind === 'app_screens')?.entityKeys, [screen.key])
   assert.deepEqual(wiki.sections.find((section) => section.kind === 'app_backend')?.entityKeys, [api.key])
+  assert.deepEqual(wiki.sections.find((section) => section.kind === 'app_towers')?.entityKeys, [tower.key])
+  assert.deepEqual(wiki.sections.find((section) => section.kind === 'app_code_files')?.entityKeys, [codeFile.key])
+  assert.equal(wiki.sections.some((section) => section.kind === 'style' && section.title === 'Brand & Visual System'), true)
+  assert.ok(wiki.gaps.some((gap) => gap.kind === 'color_scheme'))
   assert.equal(wiki.sections.some((section) => section.kind === 'cast'), false)
 })
 

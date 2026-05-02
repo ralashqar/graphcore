@@ -150,6 +150,8 @@ export const worldWikiSectionKindSchema = z.enum([
   'app_capabilities',
   'app_design',
   'app_code',
+  'app_towers',
+  'app_code_files',
   'gaps',
 ])
 
@@ -165,6 +167,25 @@ const worldWikiStringListFieldSchema = z.preprocess((value) => {
   return value
 }, z.array(z.string()).default([]))
 
+const worldWikiColorSchemeSchema = z.preprocess((value) => {
+  if (typeof value === 'string') {
+    return value
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+      .reduce<Record<string, string>>((acc, entry, index) => {
+        const [rawKey, ...rawValueParts] = entry.split(':')
+        const key = rawValueParts.length > 0
+          ? rawKey.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_')
+          : ['primary', 'secondary', 'tertiary'][index] ?? `color_${index + 1}`
+        const value = rawValueParts.length > 0 ? rawValueParts.join(':').trim() : rawKey.trim()
+        if (key && value) acc[key] = value
+        return acc
+      }, {})
+  }
+  return value
+}, z.record(z.string(), z.string()).default({}))
+
 export const worldWikiPresentationMetadataSchema = z.object({
   title: worldWikiStringFieldSchema,
   logline: worldWikiStringFieldSchema,
@@ -173,6 +194,10 @@ export const worldWikiPresentationMetadataSchema = z.object({
   themes: worldWikiStringListFieldSchema,
   coreConflict: worldWikiStringFieldSchema,
   visualMotifs: worldWikiStringListFieldSchema,
+  artStyleDescription: worldWikiStringFieldSchema,
+  brandAtlasPrompt: worldWikiStringFieldSchema,
+  brandAtlasAssetKey: worldWikiStringFieldSchema,
+  colorScheme: worldWikiColorSchemeSchema,
   roleLabel: worldWikiStringFieldSchema,
   shortSummary: worldWikiStringFieldSchema,
   sectionOrder: z.array(worldWikiSectionKindSchema).default([]),

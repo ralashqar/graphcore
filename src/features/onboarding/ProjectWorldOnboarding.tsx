@@ -1199,9 +1199,9 @@ export function ProjectWorldOnboarding({
         >
           <div className="world-onboarding-assembly-relationship-node">
             <span className="world-onboarding-assembly-icon is-small">
-              <EntityIcon id="content" />
+              <EntityIcon id={item.relationshipSourceIcon ?? item.icon} />
             </span>
-            <strong>{item.relationshipSource || 'Source'}</strong>
+            <strong>{item.relationshipSource || item.title}</strong>
           </div>
           <div className="world-onboarding-assembly-relationship-connector">
             <div className="world-onboarding-assembly-relationship-line" aria-hidden="true">
@@ -1212,9 +1212,9 @@ export function ProjectWorldOnboarding({
           </div>
           <div className="world-onboarding-assembly-relationship-node">
             <span className="world-onboarding-assembly-icon is-small">
-              <EntityIcon id="content" />
+              <EntityIcon id={item.relationshipTargetIcon ?? item.icon} />
             </span>
-            <strong>{item.relationshipTarget || 'Target'}</strong>
+            <strong>{item.relationshipTarget || item.title}</strong>
           </div>
           {renderAssemblyDetailsButton(item)}
         </div>

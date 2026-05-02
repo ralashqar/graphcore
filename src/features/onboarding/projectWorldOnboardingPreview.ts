@@ -14,6 +14,11 @@ type SeedPreviewList = {
   values: string[]
 }
 
+type AssemblyEntityEndpoint = {
+  icon: EntityIconId
+  label: string
+}
+
 export type SeedGeneratedPreviewCard =
   | {
     id: string
@@ -104,7 +109,9 @@ export type SeedAssemblyItem = {
   outcome?: string
   relationshipText?: string
   relationshipSource?: string
+  relationshipSourceIcon?: EntityIconId
   relationshipTarget?: string
+  relationshipTargetIcon?: EntityIconId
   relationshipVerb?: string
   detailText?: string
 }
@@ -327,29 +334,41 @@ function nodeTypeIcon(nodeType: string | null | undefined): EntityIconId {
   switch (nodeType) {
     case 'app':
       return 'app'
-    case 'screen':
-    case 'screen_mockup':
-    case 'image_region':
-      return 'screen'
-    case 'component':
-      return 'component'
-    case 'data_model':
-      return 'database'
-    case 'api_endpoint':
-    case 'backend_function':
-      return 'api'
-    case 'design_system':
-      return 'design'
-    case 'capability':
-      return 'capability'
-    case 'tower':
-      return 'tower'
-    case 'code_file':
-      return 'code'
+    case 'persona':
+      return 'character'
+    case 'business_goal':
+      return 'credits'
     case 'feature':
       return 'archetype'
     case 'user_flow':
       return 'thread'
+    case 'screen':
+    case 'screen_mockup':
+    case 'image_region':
+      return 'screen'
+    case 'section':
+      return 'content'
+    case 'component':
+      return 'component'
+    case 'data_model':
+      return 'database'
+    case 'action':
+      return 'activity'
+    case 'api_endpoint':
+    case 'backend_function':
+      return 'api'
+    case 'external_service':
+      return 'global'
+    case 'design_system':
+      return 'design'
+    case 'capability':
+      return 'capability'
+    case 'animation_spec':
+      return 'cinematic'
+    case 'tower':
+      return 'tower'
+    case 'code_file':
+      return 'code'
     case 'actor':
       return 'character'
     case 'place':
@@ -366,6 +385,39 @@ function nodeTypeIcon(nodeType: string | null | undefined): EntityIconId {
     default:
       return 'content'
   }
+}
+
+function relationshipEndpointLabel(
+  ref: Record<string, unknown>,
+  fallbackKey: unknown,
+  fallbackLabel: string,
+) {
+  return firstMeaningfulText(ref.name, ref.title, ref.label, fallbackKey, fallbackLabel)
+}
+
+function relationshipEndpointFromLookup(
+  lookup: Map<string, AssemblyEntityEndpoint>,
+  entityKey: unknown,
+) {
+  const key = compactWhitespace(entityKey)
+  return key ? lookup.get(key) ?? null : null
+}
+
+function entityLookupKeys(entity: Record<string, unknown>, targetEntityKey: unknown) {
+  const keys = new Set<string>()
+  const push = (value: unknown) => {
+    const key = compactWhitespace(value)
+    if (key) keys.add(key)
+  }
+  push(targetEntityKey)
+  push(entity.key)
+  push(entity.entityKey)
+  push(entity.worldEntityKey)
+  const name = compactWhitespace(entity.name)
+  if (name) {
+    keys.add(name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, ''))
+  }
+  return [...keys]
 }
 
 function nodeTypeAssemblySection(nodeType: string | null | undefined): SeedAssemblySectionKind {
@@ -534,6 +586,9 @@ function buildOverviewCard(event: WorldPromptEvent, metadata: Record<string, unk
   pushField(fields, 'Synopsis', metadata.synopsis)
   pushField(fields, 'Genre', Array.isArray(metadata.genre) ? metadata.genre.join(', ') : metadata.genre)
   pushField(fields, 'Core conflict', metadata.coreConflict)
+  pushField(fields, 'Art style description', metadata.artStyleDescription)
+  pushField(fields, 'Brand atlas prompt', metadata.brandAtlasPrompt)
+  pushField(fields, 'Color scheme', metadata.colorScheme)
   pushList(lists, 'Themes', metadata.themes)
   pushList(lists, 'Tone', metadata.toneTags)
   pushList(lists, 'Visual motifs', metadata.visualMotifs)
@@ -549,6 +604,10 @@ function buildOverviewCard(event: WorldPromptEvent, metadata: Record<string, unk
       'synopsis',
       'genre',
       'coreConflict',
+      'artStyleDescription',
+      'brandAtlasPrompt',
+      'brandAtlasAssetKey',
+      'colorScheme',
       'themes',
       'toneTags',
       'visualMotifs',
@@ -713,8 +772,8 @@ function buildSequenceUnitCard(
 function buildRelationshipCard(event: WorldPromptEvent, relationship: Record<string, unknown>): SeedGeneratedPreviewCard {
   const sourceRef = readRecord(relationship.sourceRef)
   const targetRef = readRecord(relationship.targetRef)
-  const source = compactWhitespace(sourceRef.name) || compactWhitespace(relationship.sourceEntityKey) || 'Source'
-  const target = compactWhitespace(targetRef.name) || compactWhitespace(relationship.targetEntityKey) || 'Target'
+  const source = relationshipEndpointLabel(sourceRef, relationship.sourceEntityKey, 'Source')
+  const target = relationshipEndpointLabel(targetRef, relationship.targetEntityKey, 'Target')
   const verb = compactWhitespace(relationship.verb) || 'linked to'
   const fields: SeedPreviewField[] = []
   pushField(fields, 'Source', source)
@@ -760,6 +819,8 @@ function buildRelationshipCard(event: WorldPromptEvent, relationship: Record<str
 function buildAssemblyOverviewItem(event: WorldPromptEvent, metadata: Record<string, unknown>): SeedAssemblyItem {
   const genre = Array.isArray(metadata.genre) ? metadata.genre.join(', ') : compactWhitespace(metadata.genre)
   const tone = formatMeaningfulList(metadata.toneTags)
+  const artStyleDescription = compactWhitespace(metadata.artStyleDescription)
+  const brandAtlasPrompt = compactWhitespace(metadata.brandAtlasPrompt)
   return {
     id: `assembly-overview-${event.id}`,
     kind: 'overview',
@@ -778,6 +839,9 @@ function buildAssemblyOverviewItem(event: WorldPromptEvent, metadata: Record<str
       ['Tone', tone],
       ['Core conflict', metadata.coreConflict],
       ['Visual motifs', formatMeaningfulList(metadata.visualMotifs)],
+      ['Art style', artStyleDescription],
+      ['Brand atlas prompt', brandAtlasPrompt],
+      ['Color scheme', metadata.colorScheme],
     ]),
     sequence: event.sequence,
     createdAt: event.createdAt,
@@ -867,11 +931,17 @@ function buildAssemblySequenceItem(
   }
 }
 
-function buildAssemblyRelationshipItem(event: WorldPromptEvent, relationship: Record<string, unknown>): SeedAssemblyItem {
+function buildAssemblyRelationshipItem(
+  event: WorldPromptEvent,
+  relationship: Record<string, unknown>,
+  entityLookup: Map<string, AssemblyEntityEndpoint>,
+): SeedAssemblyItem {
   const sourceRef = readRecord(relationship.sourceRef)
   const targetRef = readRecord(relationship.targetRef)
-  const source = compactWhitespace(sourceRef.name) || 'Source'
-  const target = compactWhitespace(targetRef.name) || 'Target'
+  const sourceEndpoint = relationshipEndpointFromLookup(entityLookup, relationship.sourceEntityKey)
+  const targetEndpoint = relationshipEndpointFromLookup(entityLookup, relationship.targetEntityKey)
+  const source = relationshipEndpointLabel(sourceRef, sourceEndpoint?.label ?? relationship.sourceEntityKey, 'Source')
+  const target = relationshipEndpointLabel(targetRef, targetEndpoint?.label ?? relationship.targetEntityKey, 'Target')
   const verb = compactWhitespace(relationship.verb) || 'connected to'
   const relationshipText = `${source} ${verb} ${target}`
   return {
@@ -884,7 +954,9 @@ function buildAssemblyRelationshipItem(event: WorldPromptEvent, relationship: Re
     summary: compactWhitespace(relationship.notes),
     relationshipText,
     relationshipSource: source,
+    relationshipSourceIcon: sourceEndpoint?.icon ?? nodeTypeIcon(compactWhitespace(sourceRef.nodeType) || compactWhitespace(sourceRef.type)),
     relationshipTarget: target,
+    relationshipTargetIcon: targetEndpoint?.icon ?? nodeTypeIcon(compactWhitespace(targetRef.nodeType) || compactWhitespace(targetRef.type)),
     relationshipVerb: verb,
     detailText: joinMeaningfulLines([
       ['Connection', relationshipText],
@@ -930,6 +1002,7 @@ export function buildSeedGeneratedPreviewCards(events: WorldPromptEvent[]): Seed
 
 export function buildSeedAssemblySections(events: WorldPromptEvent[]): SeedAssemblySection[] {
   const sectionItems = new Map<SeedAssemblySectionKind, SeedAssemblyItem[]>()
+  const entityLookup = new Map<string, AssemblyEntityEndpoint>()
   for (const event of [...events].sort((left, right) => {
     const timeDelta = new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
     return timeDelta !== 0 ? timeDelta : left.sequence - right.sequence
@@ -943,8 +1016,16 @@ export function buildSeedAssemblySections(events: WorldPromptEvent[]): SeedAssem
       item = buildAssemblyOverviewItem(event, op.payload.metadata)
     } else if (op.op === 'upsert_entity') {
       item = buildAssemblyEntityItem(event, op.payload.entity)
+      const entity = op.payload.entity
+      const endpoint = {
+        icon: nodeTypeIcon(compactWhitespace(entity.nodeType)),
+        label: compactWhitespace(entity.name) || item.title,
+      }
+      for (const key of entityLookupKeys(entity, op.payload.targetEntityKey)) {
+        entityLookup.set(key, endpoint)
+      }
     } else if (op.op === 'upsert_relationship') {
-      item = buildAssemblyRelationshipItem(event, op.payload.relationship)
+      item = buildAssemblyRelationshipItem(event, op.payload.relationship, entityLookup)
     }
     if (!item) continue
     const items = sectionItems.get(item.section) ?? []

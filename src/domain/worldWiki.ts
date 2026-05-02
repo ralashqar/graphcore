@@ -49,7 +49,19 @@ export type WorldWikiThreadPage = {
 
 export type WorldWikiGap = {
   key: string
-  kind: 'world_logline' | 'world_synopsis' | 'world_tone' | 'wiki_refresh' | 'entity_summary' | 'entity_role' | 'thread_summary' | 'timeline_order' | 'empty_section'
+  kind:
+    | 'world_logline'
+    | 'world_synopsis'
+    | 'world_tone'
+    | 'world_art_style'
+    | 'brand_atlas_prompt'
+    | 'color_scheme'
+    | 'wiki_refresh'
+    | 'entity_summary'
+    | 'entity_role'
+    | 'thread_summary'
+    | 'timeline_order'
+    | 'empty_section'
   label: string
   prompt: string
   entityKey: string | null
@@ -68,6 +80,10 @@ export type WorldWikiModel = {
     toneTags: string[]
     coreConflict: string
     visualMotifs: string[]
+    artStyleDescription: string
+    brandAtlasPrompt: string
+    brandAtlasAssetKey: string
+    colorScheme: Record<string, string>
     heroEntityKey: string | null
     generatedFromFingerprint: string
     stale: boolean
@@ -244,6 +260,7 @@ function makeSection(input: {
   entityKeys?: string[]
   threadKeys?: string[]
   resultKeys?: string[]
+  forceReady?: boolean
 }): WorldWikiSection {
   const entityKeys = input.entityKeys ?? []
   const threadKeys = input.threadKeys ?? []
@@ -255,8 +272,28 @@ function makeSection(input: {
     entityKeys,
     threadKeys,
     resultKeys,
-    gap: entityKeys.length === 0 && threadKeys.length === 0 && resultKeys.length === 0,
+    gap: input.forceReady ? false : entityKeys.length === 0 && threadKeys.length === 0 && resultKeys.length === 0,
   }
+}
+
+function cleanColorScheme(value: unknown) {
+  const record = looseRecord(value)
+  return Object.entries(record).reduce<Record<string, string>>((acc, [key, rawValue]) => {
+    const color = readString(rawValue)
+    if (key.trim() && color) acc[key.trim()] = color
+    return acc
+  }, {})
+}
+
+function colorSchemeHasCoreColors(colorScheme: Record<string, string>) {
+  return Boolean(colorScheme.primary?.trim() && colorScheme.secondary?.trim() && colorScheme.tertiary?.trim())
+}
+
+function colorSchemeSummary(colorScheme: Record<string, string>) {
+  return Object.entries(colorScheme)
+    .slice(0, 6)
+    .map(([key, value]) => `${key}: ${value}`)
+    .join(', ')
 }
 
 function appSectionSummary(entities: WorldEntity[], fallback: string) {
@@ -315,7 +352,8 @@ export function deriveWorldWiki(input: {
     entity.nodeType === 'design_system'
     || entity.nodeType === 'animation_spec'
   )))
-  const appCodeNodes = sortEntities(scopedEntities.filter((entity) => entity.nodeType === 'tower' || entity.nodeType === 'code_file'))
+  const appTowerNodes = sortEntities(scopedEntities.filter((entity) => entity.nodeType === 'tower'))
+  const appCodeFileNodes = sortEntities(scopedEntities.filter((entity) => entity.nodeType === 'code_file'))
   const appNodes = [
     ...appProductNodes,
     ...appPeopleNodes,
@@ -327,7 +365,8 @@ export function deriveWorldWiki(input: {
     ...appBackendNodes,
     ...appCapabilityNodes,
     ...appDesignNodes,
-    ...appCodeNodes,
+    ...appTowerNodes,
+    ...appCodeFileNodes,
   ]
   const hasAppNodes = appNodes.length > 0
   const relevantThreads = input.snapshot.worldThreads
@@ -358,6 +397,25 @@ export function deriveWorldWiki(input: {
   ]).slice(0, 8)
   const themes = uniq(wiki.themes ?? []).slice(0, 8)
   const visualMotifs = uniq(wiki.visualMotifs ?? []).slice(0, 8)
+  const artStyleDescription = wiki.artStyleDescription || ''
+  const brandAtlasPrompt = wiki.brandAtlasPrompt || ''
+  const brandAtlasAssetKey = wiki.brandAtlasAssetKey || ''
+  const colorScheme = cleanColorScheme(wiki.colorScheme)
+  const hasStyleMetadata = Boolean(
+    artStyleDescription
+    || brandAtlasPrompt
+    || brandAtlasAssetKey
+    || visualMotifs.length > 0
+    || toneTags.length > 0
+    || Object.keys(colorScheme).length > 0,
+  )
+  const styleSectionTitle = hasAppNodes ? 'Brand & Visual System' : 'Art Direction'
+  const styleSectionSummary = artStyleDescription
+    || brandAtlasPrompt
+    || colorSchemeSummary(colorScheme)
+    || (visualMotifs.length > 0 ? `Visual motifs: ${visualMotifs.join(', ')}` : '')
+    || (toneTags.length > 0 ? `Tone: ${toneTags.join(', ')}` : '')
+    || (hasAppNodes ? 'No app brand system metadata yet.' : 'No visual style metadata yet.')
 
   const timeline = deriveWorldTimeline({
     entities: input.snapshot.worldEntities.filter((entity) => scopedEntityKeys.size === 0 || scopedEntityKeys.has(entity.key)),
@@ -442,10 +500,16 @@ export function deriveWorldWiki(input: {
           entityKeys: appDesignNodes.slice(0, 12).map((entity) => entity.key),
         }),
         makeSection({
-          kind: 'app_code',
+          kind: 'app_towers',
           title: 'Code Towers',
-          summary: appSectionSummary(appCodeNodes, 'No towers or code file plans yet.'),
-          entityKeys: appCodeNodes.slice(0, 16).map((entity) => entity.key),
+          summary: appSectionSummary(appTowerNodes, 'No implementation towers yet.'),
+          entityKeys: appTowerNodes.slice(0, 16).map((entity) => entity.key),
+        }),
+        makeSection({
+          kind: 'app_code_files',
+          title: 'Code Files',
+          summary: appSectionSummary(appCodeFileNodes, 'No generated file plan nodes yet.'),
+          entityKeys: appCodeFileNodes.slice(0, 24).map((entity) => entity.key),
         }),
       ]
     : []
@@ -507,6 +571,12 @@ export function deriveWorldWiki(input: {
       title: hasAppNodes ? 'Product Overview' : 'Overview',
       summary: synopsis || (hasAppNodes ? 'The app overview will grow from graph canon.' : 'The world overview will grow from graph canon.'),
       entityKeys: heroEntity ? [heroEntity.key] : [],
+    }),
+    makeSection({
+      kind: 'style',
+      title: styleSectionTitle,
+      summary: styleSectionSummary,
+      forceReady: hasStyleMetadata,
     }),
     ...appSections,
     ...storyWorldSections,
@@ -596,6 +666,43 @@ export function deriveWorldWiki(input: {
       sectionKind: 'style',
     })
   }
+  if (!artStyleDescription) {
+    gaps.push({
+      key: 'world-wiki-gap-art-style',
+      kind: 'world_art_style',
+      label: hasAppNodes ? 'Define app art direction' : 'Define art style',
+      prompt: hasAppNodes
+        ? 'Define a concise app-specific art style description for this product graph and store it as project wiki metadata.artStyleDescription. Make it more specific than the broad preset: UI surface treatment, imagery, icon language, motion mood, density, and finish. Do not add new graph nodes unless necessary.'
+        : 'Define a concise art style description for this story/world graph and store it as project wiki metadata.artStyleDescription. Make it more specific than the broad preset: medium, lighting, palette mood, texture, camera/illustration language, and recurring visual rules. Do not add new graph nodes unless necessary.',
+      entityKey: null,
+      threadKey: null,
+      sectionKind: 'style',
+    })
+  }
+  if (!brandAtlasPrompt) {
+    gaps.push({
+      key: 'world-wiki-gap-brand-atlas-prompt',
+      kind: 'brand_atlas_prompt',
+      label: hasAppNodes ? 'Draft app brand atlas prompt' : 'Draft brand atlas prompt',
+      prompt: hasAppNodes
+        ? 'Create a visual-only brand atlas image prompt for this app and store it as project wiki metadata.brandAtlasPrompt. Use the title, product promise, logline/synopsis, app archetype, art style description, visual motifs, and color scheme if present. The prompt should describe a single premium brand-board image with mobile screen language, UI components, palette swatches, icon style, and mood references; avoid GraphCore, schema, node IDs, and implementation wording.'
+        : 'Create a visual-only brand atlas image prompt for this story/world and store it as project wiki metadata.brandAtlasPrompt. Use the generated title, logline, synopsis, genre, art style description, visual motifs, and tone. The prompt should describe a single cohesive visual world/brand-board image with key motifs, materials, palette, lighting, typography mood, and representative subjects; avoid GraphCore, schema, node IDs, and implementation wording.',
+      entityKey: null,
+      threadKey: null,
+      sectionKind: 'style',
+    })
+  }
+  if (hasAppNodes && !colorSchemeHasCoreColors(colorScheme)) {
+    gaps.push({
+      key: 'world-wiki-gap-color-scheme',
+      kind: 'color_scheme',
+      label: 'Set app colors',
+      prompt: 'Create a compact app color scheme and store it as project wiki metadata.colorScheme with at least primary, secondary, and tertiary values. Include usable hex colors plus brief semantic color names if helpful, based on the app promise, target user, art style description, and existing design-system nodes. Do not add new graph nodes unless needed.',
+      entityKey: null,
+      threadKey: null,
+      sectionKind: 'style',
+    })
+  }
   if (wikiStale) {
     gaps.push({
       key: 'world-wiki-gap-refresh',
@@ -644,7 +751,7 @@ export function deriveWorldWiki(input: {
       sectionKind: 'timeline',
     })
   }
-  for (const section of sections.filter((section) => section.gap).slice(0, 6)) {
+  for (const section of sections.filter((section) => section.gap && section.kind !== 'style').slice(0, 6)) {
     gaps.push({
       key: `world-wiki-gap-section-${section.kind}`,
       kind: 'empty_section',
@@ -675,6 +782,10 @@ export function deriveWorldWiki(input: {
       toneTags,
       coreConflict: wiki.coreConflict || '',
       visualMotifs,
+      artStyleDescription,
+      brandAtlasPrompt,
+      brandAtlasAssetKey,
+      colorScheme,
       heroEntityKey: heroEntity?.key ?? null,
       generatedFromFingerprint,
       stale: wikiStale,
