@@ -174,6 +174,7 @@ export function getWorldViewSeedEntityKeys(
 export function getWorldViewRailGroup(view: Pick<WorldView, 'metadata'>) {
   const metadata = getWorldViewSemanticMetadata(view)
   if (metadata.viewKind === 'global_overview') return 'global'
+  if (metadata.viewKind === 'app_overview') return 'core'
   if (metadata.viewKind === 'thread_focus') return 'threads'
   if (metadata.viewKind === 'sequence_overview') return 'core'
   if (metadata.autoManaged) return 'core'
@@ -284,6 +285,29 @@ function buildAutoViewSpecs(snapshot: ViewSnapshot, options?: AutoManagedWorldVi
   const topGroup = selectTopEntityByScore(snapshot.worldEntities.filter((entity) => entity.nodeType === 'group'), groupScore)
   const topPlace = selectTopEntityByScore(snapshot.worldEntities.filter((entity) => entity.nodeType === 'place'), placeScore)
   const topLore = selectTopEntityByScore(snapshot.worldEntities.filter((entity) => entity.nodeType === 'concept' || entity.nodeType === 'event'), loreScore)
+  const appEntities = snapshot.worldEntities.filter((entity) => [
+    'app',
+    'persona',
+    'business_goal',
+    'feature',
+    'user_flow',
+    'screen',
+    'section',
+    'component',
+    'data_model',
+    'action',
+    'api_endpoint',
+    'backend_function',
+    'external_service',
+    'design_system',
+    'capability',
+    'screen_mockup',
+    'image_region',
+    'animation_spec',
+    'tower',
+    'code_file',
+  ].includes(entity.nodeType))
+  const topApp = selectTopEntityByScore(appEntities.filter((entity) => entity.nodeType === 'app'), (entity) => 20 + (relationshipCount.get(entity.key) ?? 0) * 3)
   const sequence = deriveWorldSequence({
     entities: snapshot.worldEntities,
     relationships: snapshot.worldRelationships,
@@ -302,6 +326,22 @@ function buildAutoViewSpecs(snapshot: ViewSnapshot, options?: AutoManagedWorldVi
       semanticLabel: 'Full world atlas',
     }),
   })
+
+  if (appEntities.length > 0) {
+    specs.push({
+      key: 'world.view.app-overview',
+      name: 'App System',
+      mode: 'graph',
+      rootEntityKey: topApp?.key ?? appEntities[0]?.key ?? null,
+      focusDepth: 1,
+      sortMode: 'relationship_count',
+      metadata: buildWorldViewMetadata({
+        viewKind: 'app_overview',
+        sourceEntityKeys: appEntities.map((entity) => entity.key).slice(0, 48),
+        semanticLabel: 'App product system',
+      }),
+    })
+  }
 
   if (snapshot.worldEntities.length > 0) {
     specs.push({
@@ -546,6 +586,8 @@ export function choosePreferredWorldView(
         case 'thread_focus':
           return 70 + ((metadata.sourceThreadKeys[0] && snapshot?.worldThreads.find((thread) => thread.key === metadata.sourceThreadKeys[0])?.priority === 'primary') ? 5 : 0)
         case 'recent_growth':
+          return 65
+        case 'app_overview':
           return 65
         case 'sequence_overview':
           return 64

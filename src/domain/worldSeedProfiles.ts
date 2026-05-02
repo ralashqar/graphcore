@@ -4,6 +4,7 @@ import {
   PROJECT_TYPE_OPTIONS,
   getProjectSubtypeOption,
   isBrandProjectSubtype,
+  isAppProjectSubtype,
   isGameProjectSubtype,
   isStoryProjectSubtype,
   isUgcProjectSubtype,
@@ -22,7 +23,7 @@ export const worldSeedSkeletonCategorySchema = z.object({
 })
 
 export const worldSeedSkeletonSequenceSchema = z.object({
-  unitKind: z.enum(['chapter', 'episode', 'short_beat', 'mission', 'quest', 'campaign_moment', 'ugc_beat']),
+  unitKind: z.enum(['chapter', 'episode', 'short_beat', 'mission', 'quest', 'campaign_moment', 'ugc_beat', 'user_flow']),
   min: z.number().int().positive(),
   max: z.number().int().positive(),
   requiredRelationships: z.array(z.enum(['precedes', 'causes', 'complicates', 'pays_off'])).default(['precedes']),
@@ -32,7 +33,7 @@ export const worldSeedSkeletonSequenceSchema = z.object({
 
 export const worldSeedSkeletonProfileSchema = z.object({
   id: z.string().min(1),
-  projectType: z.enum(['story', 'game', 'brand', 'ugc']),
+  projectType: z.enum(['story', 'game', 'brand', 'ugc', 'app']),
   projectSubtype: z.string().min(1),
   label: z.string().min(1),
   wikiMetadataRequired: z.array(z.string()).default(['title', 'logline', 'synopsis', 'toneTags', 'genre']),
@@ -76,11 +77,21 @@ const ugcCategories: WorldSeedSkeletonCategory[] = [
   { id: 'threads_formats', label: 'Repeatable content threads', nodeType: 'concept', min: 2, max: 4, purpose: 'Create repeatable social-native thread ideas and content engines.', required: true },
 ]
 
+const appCategories: WorldSeedSkeletonCategory[] = [
+  { id: 'app_identity', label: 'App identity and promise', nodeType: 'app', min: 1, max: 1, purpose: 'Create the top-level app product node with promise, category, platform targets, core loop, monetization, and visual direction.', required: true },
+  { id: 'personas_goals', label: 'Personas and business goals', nodeType: 'persona', min: 2, max: 4, purpose: 'Create target personas, their pains, motivations, objections, and likely conversion triggers.', required: true },
+  { id: 'features', label: 'Commercial feature set', nodeType: 'feature', min: 5, max: 9, purpose: 'Create the app features that support activation, retention, generation, sharing, and monetization.', required: true },
+  { id: 'screens_components', label: 'Screens and components', nodeType: 'screen', min: 7, max: 12, purpose: 'Create route-ready screens with contained sections/components, states, actions, and data dependencies.', required: true },
+  { id: 'data_actions_apis', label: 'Data, actions, and APIs', nodeType: 'data_model', min: 4, max: 8, purpose: 'Create app data models, user/system actions, API endpoint contracts, backend functions, and external services.', required: true },
+  { id: 'capabilities_design_towers', label: 'Capabilities, design system, and towers', nodeType: 'capability', min: 4, max: 8, purpose: 'Create native capability constraints, design system direction, implementation towers, and initial code-file nodes.', required: true },
+]
+
 function profileTypeForSubtype(projectSubtype: ProjectSubtype): ProjectType {
   if (isStoryProjectSubtype(projectSubtype)) return 'story'
   if (isGameProjectSubtype(projectSubtype)) return 'game'
   if (isBrandProjectSubtype(projectSubtype)) return 'brand'
   if (isUgcProjectSubtype(projectSubtype)) return 'ugc'
+  if (isAppProjectSubtype(projectSubtype)) return 'app'
   return 'story'
 }
 
@@ -166,6 +177,40 @@ function buildProfile(projectSubtype: ProjectSubtype): WorldSeedSkeletonProfile 
         'State the campaign, product, education, or mascot premise in wiki metadata.',
         'Create message pillars, audience concepts, signature assets, and campaign moments.',
         'Keep canon useful for later visual and content production.',
+      ],
+    }) as WorldSeedSkeletonProfile
+  }
+  if (projectType === 'app') {
+    const flowPurposeBySubtype: Record<string, string> = {
+      ai_utility_wrapper: 'Create user_flow nodes for hook/problem, input or upload, AI processing, result, refinement, paywall/export, and history.',
+      mascot_daily_ritual: 'Create user_flow nodes for onboarding, personalization, daily home, daily input, magic processing, reveal, share, paywall, and timeline.',
+      content_generator: 'Create user_flow nodes for output choice, prompt/upload references, style selection, generation, result preview, editing, export/share, paywall, and project history.',
+    }
+    return worldSeedSkeletonProfileSchema.parse({
+      id: `app.${projectSubtype}.initial_skeleton`,
+      projectType,
+      projectSubtype,
+      label: `${subtypeLabel} initial app graph`,
+      wikiMetadataRequired: ['title', 'logline', 'synopsis', 'genre', 'themes', 'toneTags', 'visualMotifs'],
+      categories: appCategories,
+      sequence: {
+        unitKind: 'user_flow',
+        min: projectSubtype === 'mascot_daily_ritual' ? 5 : 4,
+        max: projectSubtype === 'mascot_daily_ritual' ? 8 : 6,
+        requiredRelationships: ['precedes', 'causes', 'pays_off'],
+        requiredFields: ['ordinal', 'synopsis', 'outcome', 'consequences'],
+        purpose: flowPurposeBySubtype[projectSubtype] ?? 'Create ordered user_flow nodes that describe the main product journeys.',
+      },
+      relationshipGuidance: [
+        'Link the app node to personas, business goals, features, flows, screens, data, APIs, capabilities, design system, towers, and code files.',
+        'Link screens to sections/components, actions, data models, API endpoints, capabilities, and transitions.',
+        'Use user_flow nodes for UX sequence and product journeys. Do not use story sequence_unit nodes for app flows.',
+        'Use tower nodes to group implementation slices and code_file nodes to describe generated Expo file ownership.',
+      ],
+      plannerDirectives: [
+        'State the product name, promise, target users, core loop, monetization, retention loop, viral loop, and platform targets in app graph metadata.',
+        'Create route-ready screens, reusable components, data/action/API contracts, native capability constraints, design-system direction, and implementation towers.',
+        'Store app-specific fields under customProperties.app and keep visualDescription focused on visible mobile UI or product imagery.',
       ],
     }) as WorldSeedSkeletonProfile
   }

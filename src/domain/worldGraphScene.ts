@@ -148,6 +148,33 @@ function clamp(value: number, min: number, max: number) {
 
 function entityTypeVisibilityBonus(nodeType: WorldEntity['nodeType']) {
   switch (nodeType) {
+    case 'app':
+      return 18
+    case 'user_flow':
+      return 14
+    case 'screen':
+      return 13
+    case 'feature':
+      return 12
+    case 'component':
+    case 'data_model':
+    case 'action':
+    case 'api_endpoint':
+      return 9
+    case 'persona':
+    case 'business_goal':
+    case 'design_system':
+    case 'capability':
+    case 'tower':
+      return 8
+    case 'section':
+    case 'backend_function':
+    case 'external_service':
+    case 'screen_mockup':
+    case 'image_region':
+    case 'animation_spec':
+    case 'code_file':
+      return 5
     case 'actor':
       return 14
     case 'group':

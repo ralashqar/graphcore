@@ -197,6 +197,63 @@ GraphCore runs AI workloads through protected Supabase Edge Functions that provi
 - Initial seed generation uses subtype-specific skeleton profiles from `src/domain/worldSeedProfiles.ts`. Story profiles require project wiki metadata, full main cast, main locations, relevant groups/objects/concepts, and ordered `sequence_unit` story arcs with sequence relationships; Game, Brand, and UGC profiles require their own locations/factions/systems/campaign/UGC beat structures.
 - Normal follow-up `world-prompt` turns remain compact modification turns. Initial skeleton generation is no longer allowed through `start-world-prompt-turn`; it must enter through `continue-world-seed-generation`, which creates the durable streamed generation job.
 
+### App Prompt Agent (`app-prompt`)
+**Purpose**: Extends the Prompt-to-World graph system into prompt-to-app product graph generation. App projects use the same persistent world graph tables, prompt sessions, streamed generation jobs, and view/retrieval infrastructure, but generate app/product canon instead of story, game, brand, or UGC world canon.
+
+**Supported Project Type**:
+- `projectType: "app"`
+- `brainProfile: "app"`
+- Initial subtypes:
+  - `ai_utility_wrapper`
+  - `mascot_daily_ritual`
+  - `content_generator`
+
+**App Art Styles**:
+- `premium_mobile_utility`
+- `playful_ritual_companion`
+- `creator_tool_editorial`
+- `soft_consumer_wellness`
+
+**App Graph Ontology**:
+- Product and strategy nodes: `app`, `persona`, `business_goal`, `feature`
+- UX nodes: `user_flow`, `screen`, `section`, `component`, `animation_spec`
+- Data and backend nodes: `data_model`, `action`, `api_endpoint`, `backend_function`, `external_service`
+- Delivery nodes: `design_system`, `capability`, `screen_mockup`, `image_region`, `tower`, `code_file`
+- App graph nodes store app-specific structured fields under `world_entities.custom_properties.app`; durable visual guidance remains `world_entities.metadata.visualDescription`
+
+**Relationship Verbs**:
+- `contains`
+- `uses`
+- `reads`
+- `writes`
+- `creates`
+- `updates`
+- `deletes`
+- `calls`
+- `invokes`
+- `emits`
+- `transitions_to`
+- `requires_auth`
+- `gated_by`
+- `styled_by`
+- `represented_by`
+- `implemented_as`
+- `tested_by`
+- `depends_on`
+- `owned_by_tower`
+- `requires_capability`
+
+**Generation Behavior**:
+- First-run app onboarding uses `start-world-seed-inference` and `continue-world-seed-generation`, preserving the existing durable Fly worker stream path.
+- App seed profiles require app identity, personas, business goals, features, user flows, screens, components, data models, actions, API endpoints, capabilities, design system, implementation towers, and code-file plan nodes.
+- App UX flows must be represented as `user_flow` nodes, not story `sequence_unit` nodes.
+- App entities are not linked into character, item, or environment projection records. Linked definition repair remains limited to narrative/media node types such as `actor`, `place`, and `object`.
+
+**Codegen Direction**:
+- Dedicated app modules define the Expo React Native target contract, base file plan, tower ownership, preview targets, and native capability constraints.
+- Generated apps should target Expo, React Native primitives, Expo Router, TypeScript, a mock backend adapter for preview, and later managed/Supabase backend adapters.
+- Web preview, GitHub export, EAS, and App Store publishing remain separate downstream app-generation stages after the App Graph is stable.
+
 **Architecture**:
 - Retrieval-first world authoring instead of generic chat memory
 - Explicit turn contract before planning:

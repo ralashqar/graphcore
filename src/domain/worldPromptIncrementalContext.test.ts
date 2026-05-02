@@ -138,6 +138,56 @@ test('streamed generation schemas accept compact stream records', () => {
   assert.equal(skip.kind, 'skip')
 })
 
+test('streamed generation schemas accept app graph records without story sequence requirements', () => {
+  const app = worldPromptStreamGraphOpEnvelopeSchema.parse({
+    kind: 'entity',
+    key: 'daily_creature_app',
+    nodeType: 'app',
+    name: 'Daily Creature',
+    summary: 'A daily ritual app that turns family moments into collectible creature cards.',
+    visualDescription: 'polished mobile home screen with warm creature card preview, daily check-in CTA, soft collection timeline',
+    customProperties: {
+      app: {
+        platforms: ['ios', 'web'],
+        promise: 'Turn your day into a magical creature card.',
+        monetization: 'freemium subscription',
+        coreLoop: 'daily input -> generation -> reveal -> share/history',
+      },
+    },
+  })
+  const flow = worldPromptStreamGraphOpEnvelopeSchema.parse({
+    kind: 'entity',
+    key: 'first_generation_flow',
+    nodeType: 'user_flow',
+    name: 'First Generation Flow',
+    summary: 'The first successful daily moment-to-creature journey.',
+    customProperties: {
+      app: {
+        orderedSteps: ['DailyHomeScreen', 'DailyInputScreen', 'MagicProcessingScreen', 'ResultRevealScreen'],
+        conversionRole: 'prove value before paywall',
+      },
+    },
+  })
+  const screen = worldPromptStreamGraphOpEnvelopeSchema.parse({
+    kind: 'entity',
+    key: 'result_reveal_screen',
+    nodeType: 'screen',
+    name: 'ResultRevealScreen',
+    summary: 'Reveals the generated creature card and share action.',
+    customProperties: {
+      app: {
+        route: '/reveal',
+        states: ['loading', 'ready', 'share_open'],
+      },
+    },
+  })
+
+  assert.equal(app.kind, 'entity')
+  assert.equal(app.kind === 'entity' ? app.nodeType : null, 'app')
+  assert.equal(flow.kind === 'entity' ? flow.nodeType : null, 'user_flow')
+  assert.equal(screen.kind === 'entity' ? screen.nodeType : null, 'screen')
+})
+
 test('streamed generation schemas reject invalid node types and parse status/cancel shapes', () => {
   assert.equal(worldPromptStreamGraphOpEnvelopeSchema.safeParse({
     kind: 'op',

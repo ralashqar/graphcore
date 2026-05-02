@@ -7046,7 +7046,9 @@ function describeProjectContextForPlanner(projectContext: WorldPromptSnapshot['p
       ? 'video game'
       : projectContext.projectType === 'ugc'
         ? 'UGC / social-native project'
-        : projectContext.projectType
+        : projectContext.projectType === 'app'
+          ? 'mobile app / product graph'
+          : projectContext.projectType
   const subtypeLabel = projectContext.projectSubtype.replace(/_/g, ' ')
   const styleLabel = projectContext.artStylePreset.replace(/_/g, ' ')
   const styleNotes = projectContext.artStyleDescription.trim()
@@ -7057,6 +7059,8 @@ function describeProjectContextForPlanner(projectContext: WorldPromptSnapshot['p
         ? 'Bias generation toward symbolic systems, signature assets, mascots, message pillars, campaign moments, and audience-facing world language.'
         : projectContext.brainProfile === 'ugc'
         ? 'Bias generation toward hooks, proof beats, scenarios, creator personas, use-case objects, and repeatable social-native episodes.'
+        : projectContext.brainProfile === 'app'
+        ? 'Bias generation toward product promise, personas, UX flows, screens, components, data models, actions, APIs, capabilities, design systems, and implementation towers.'
         : 'Bias generation toward cast, factions, places, lore, conflicts, prophecy, secrets, authored chapters, character development, and cause/effect story progression.'
   return [
     `Project type: ${projectLabel}.`,
@@ -7092,6 +7096,11 @@ function brainProfileForSubtype(projectSubtype: ProjectSubtype): ProjectContext[
     'faceless_explainer_demo',
     'serialized_social_drama',
   ].includes(projectSubtype)) return 'ugc'
+  if ([
+    'ai_utility_wrapper',
+    'mascot_daily_ritual',
+    'content_generator',
+  ].includes(projectSubtype)) return 'app'
   return 'story'
 }
 
@@ -7480,7 +7489,7 @@ async function generatePromptPlan(input: {
     `Return only the fields present in the schema for this mode. Do not invent omitted top-level keys.`,
     'Allowed operations for wave1Ops: upsert_entity, update_entity, replace_entity, upsert_relationship, update_relationship, create_derived_result, queue_image_generation, queue_cinematic_generation, update_world_wiki_metadata, assistant_note.',
     'Favor additive graph growth.',
-    'Every upsert_entity for actor, place, group, object, concept, event, or sequence_unit must include entity.metadata.visualDescription: a compact visual image prompt for the subject or visible scene. Do not include lore exposition, product/project names, schema labels, node-type labels, IDs, or GraphCore wording in visualDescription.',
+    'Every upsert_entity must include entity.metadata.visualDescription: a compact visual prompt for the subject, visible scene, or mobile UI state. Do not include lore exposition, product/project names, schema labels, node-type labels, IDs, or GraphCore wording in visualDescription.',
     'Use advisory_question for questions that should answer first and offer options without mutating the graph by default.',
     'Use graph_diagnosis for prompts that ask what is weak, missing, thin, underdeveloped, or structurally lacking in the current world.',
     'Use refinement_only when the prompt mainly enriches existing nodes or relationships rather than expanding the world broadly.',
@@ -7514,6 +7523,9 @@ async function generatePromptPlan(input: {
     'Use sequence_unit-to-sequence_unit relationships with verbs precedes, causes, complicates, or pays_off to express authored story order and causal progression. Do not put relationship.metadata.temporal on sequence_unit links.',
     'Link sequence_unit nodes to actors, places, objects, events, concepts, and threads when they matter. Useful verbs include features, changes, pressures, reveals, set_in, uses, depicts, contains, reframes, and reveals_lore.',
     'For Game, Brand, and UGC projects, sequence_unit is allowed but label it appropriately: mission/quest, campaign_moment, or ugc_beat. Keep validation lighter than Story chapters unless the user asks for story-style structure.',
+    'For App projects, do not use sequence_unit for UX flows. Use user_flow nodes for onboarding, first generation, daily return, paywall, sharing, and export flows.',
+    'For App projects, use app graph node types for product structure: app, persona, business_goal, feature, user_flow, screen, section, component, data_model, action, api_endpoint, backend_function, external_service, design_system, capability, screen_mockup, image_region, animation_spec, tower, and code_file.',
+    'For App projects, put app-specific structured fields under customProperties.app and connect screens, components, data, actions, APIs, capabilities, towers, and code files with app verbs such as contains, reads, writes, emits, calls, transitions_to, gated_by, styled_by, requires_capability, owned_by_tower, and implemented_as.',
     'Do not queue cinematic generation just because a sequence_unit is created. Set sequence.scriptExpansionReady when the chapter has enough synopsis, outcome, linked entities, and consequences to support a later scene/shot expansion.',
     'Existing authored sequence state appears in retrieval.sequenceContext. Preserve ordinal and cause/effect bridges unless the user explicitly asks for a correction.',
     'For wiki/presentation readiness, use entity customProperties.wiki or metadata.wiki for entity display hints such as roleLabel, shortSummary, and wikiSections.',
@@ -7566,7 +7578,7 @@ async function generatePromptPlan(input: {
     }),
     projectContextGuidance ? `Project guidance: ${projectContextGuidance}` : null,
     shouldInferContext
-      ? 'Valid project type/subtype pairs: story = feature_film, tv_streaming_series, short_film, shortform_series, animated_story; game = action_rpg, narrative_adventure, strategy_builder, survival_craft, shooter_combat, social_sim, open_world_sandbox, platformer_metroidvania, horror_mystery; brand = campaign_world, product_storytelling, mascot_ip, brand_education_explainer; ugc = creator_organic, direct_response_ad, faceless_explainer_demo, serialized_social_drama.'
+      ? 'Valid project type/subtype pairs: story = feature_film, tv_streaming_series, short_film, shortform_series, animated_story; game = action_rpg, narrative_adventure, strategy_builder, survival_craft, shooter_combat, social_sim, open_world_sandbox, platformer_metroidvania, horror_mystery; brand = campaign_world, product_storytelling, mascot_ip, brand_education_explainer; ugc = creator_organic, direct_response_ad, faceless_explainer_demo, serialized_social_drama; app = ai_utility_wrapper, mascot_daily_ritual, content_generator.'
       : null,
     'Keep operations compact and high-signal.',
     isInitialSeedGeneration
@@ -9954,7 +9966,7 @@ async function inferInitialSeedContext(input: {
   sourceContext: unknown
   usageRecorder?: WorldPromptTokenUsageRecorder
 }) {
-  const validPairs = 'story: feature_film, tv_streaming_series, short_film, shortform_series, animated_story; game: action_rpg, narrative_adventure, strategy_builder, survival_craft, shooter_combat, social_sim, open_world_sandbox, platformer_metroidvania, horror_mystery; brand: campaign_world, product_storytelling, mascot_ip, brand_education_explainer; ugc: creator_organic, direct_response_ad, faceless_explainer_demo, serialized_social_drama.'
+  const validPairs = 'story: feature_film, tv_streaming_series, short_film, shortform_series, animated_story; game: action_rpg, narrative_adventure, strategy_builder, survival_craft, shooter_combat, social_sim, open_world_sandbox, platformer_metroidvania, horror_mystery; brand: campaign_world, product_storytelling, mascot_ip, brand_education_explainer; ugc: creator_organic, direct_response_ad, faceless_explainer_demo, serialized_social_drama; app: ai_utility_wrapper, mascot_daily_ritual, content_generator.'
   const schema = normalizeStrictJsonSchema(z.toJSONSchema(seedInferenceOutputSchema))
   const response = await runOpenAiResponses({
     model: input.model,
@@ -10122,7 +10134,7 @@ function buildStreamedInitialSeedInstructions() {
     'Example Story sequence_unit line: {"kind":"sequence_unit","id":"episode_01","name":"Episode 1: The Memory Tax","summary":"Mara discovers the empire is harvesting memories to keep its shadow throne alive.","context":"Opening episode that establishes the premise, pressure, and first irreversible choice.","visualDescription":"public memory tithe in a rain-slick plaza, shadow guards, glowing ledger pages, frightened crowd","unitKind":"episode","sequenceKey":"main","ordinal":1,"actLabel":"Act I","synopsis":"Mara witnesses a public memory tithe and realizes her brother is next.","dramaticQuestion":"Will Mara expose the tithe before her family is erased?","storyFunction":"setup","outcome":"Mara steals a forbidden ledger and becomes hunted by the throne.","consequences":[{"cause":"Mara steals the tithe ledger.","effect":"The shadow guard marks her family as traitors.","affectedEntityKeys":["mara_veyr"],"threadKeys":[],"consequenceType":"plot"}],"characterArcDeltas":[{"actorKey":"mara_veyr","before":"Mara survives by staying invisible.","pressure":"Her brother is selected for the tithe.","choice":"She steals the ledger in public.","after":"She accepts becoming visible is the price of resistance."}],"openLoops":["Who built the tithe ledger?"],"resolvedLoops":[]}',
     'Example relationship line: {"kind":"relationship","id":"link_mara_seeks_artifact","source":"mara_veyr","target":"memory_artifact","verb":"seeks","notes":"The artifact is tied to Mara central objective."}',
     'Use only these operation types: upsert_entity, upsert_relationship, update_world_wiki_metadata, assistant_note.',
-    'Valid entity nodeType values are actor, group, place, object, concept, event, sequence_unit.',
+    'Valid entity nodeType values are actor, group, place, object, concept, event, sequence_unit, app, persona, business_goal, feature, user_flow, screen, section, component, data_model, action, api_endpoint, backend_function, external_service, design_system, capability, screen_mockup, image_region, animation_spec, tower, code_file.',
     'Never use character, location, faction, artifact, lore, wiki, title, or beat as nodeType; map them to actor, place, group, object, concept, update_world_wiki_metadata, or sequence_unit.',
     'Use stable lowercase snake_case entity keys in targetEntityKey and relationship endpoints.',
     'For Story projects, include generated content title/logline/wiki metadata, full main cast, main locations, major factions when relevant, key objects/concepts when relevant, and ordered sequence_unit nodes for the main story arc.',
@@ -10130,6 +10142,12 @@ function buildStreamedInitialSeedInstructions() {
     'For Story projects, use the compact {"kind":"sequence_unit",...} form for every sequence unit to avoid malformed nested JSON.',
     'Story sequence_unit nodes must put complete metadata in payload.entity.customProperties.sequence, not only in summary/context.',
     'Story sequence_unit nodes must include ordinal, synopsis, dramaticQuestion, outcome, at least one consequence with cause/effect, and at least one characterArcDelta with actorKey/before/pressure/choice/after.',
+    'For App projects, generate a structured App Graph, not story canon. Use entity records with app nodeType values: app, persona, business_goal, feature, user_flow, screen, section, component, data_model, action, api_endpoint, backend_function, external_service, design_system, capability, screen_mockup, image_region, animation_spec, tower, and code_file.',
+    'For App projects, do not create sequence_unit records for UX flows. Use user_flow entity records instead, with ordered steps and flow metadata under customProperties.app.',
+    'For App projects, store app-specific fields under customProperties.app. Examples: platformTargets, promise, monetization, coreLoop, route, purpose, emotionalBeat, states, props, fields, validationRules, method, path, authRequirement, webPreview, expoGo, requiresDevBuild, requiresAppleDeveloper, allowedFiles, forbiddenFiles, and ownerTower.',
+    'For App projects, include product identity, personas, business goals, commercial features, user flows, screens, sections/components, data models, actions, API endpoints, backend functions, external services, capability constraints, design system, towers, and code_file plans.',
+    'For App projects, useful relationship verbs include contains, uses, reads, writes, creates, updates, deletes, calls, invokes, emits, transitions_to, requires_auth, gated_by, styled_by, represented_by, implemented_as, tested_by, depends_on, owned_by_tower, and requires_capability.',
+    'For App projects, visualDescription should describe visible mobile UI, screen state, product imagery, or interface mood only. Avoid schema labels, code jargon, internal IDs, and GraphCore wording.',
     'Use relationships such as precedes, causes, complicates, pays_off, opposes, belongs_to, located_in, seeks, protects, controls, discovers, and reveals where useful.',
     'Keep node prose compact: summaries should be one or two sentences, context should be short and canon-useful.',
     'Emit a note every few records so progress is visible, but do not reveal private chain-of-thought.',

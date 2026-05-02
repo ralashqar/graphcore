@@ -47,6 +47,7 @@ test('non-story seed profiles require subtype-appropriate support structure', ()
   const gameProfile = getWorldSeedSkeletonProfile('action_rpg')
   const brandProfile = getWorldSeedSkeletonProfile('campaign_world')
   const ugcProfile = getWorldSeedSkeletonProfile('direct_response_ad')
+  const appProfile = getWorldSeedSkeletonProfile('mascot_daily_ritual')
 
   assert.ok(gameProfile.categories.some((category) => category.id === 'systems_concepts'))
   assert.equal(gameProfile.sequence.unitKind, 'mission')
@@ -56,4 +57,8 @@ test('non-story seed profiles require subtype-appropriate support structure', ()
 
   assert.ok(ugcProfile.categories.some((category) => category.id === 'proof_concepts'))
   assert.equal(ugcProfile.sequence.unitKind, 'ugc_beat')
+
+  assert.ok(appProfile.categories.some((category) => category.id === 'screens_components'))
+  assert.ok(appProfile.categories.some((category) => category.nodeType === 'capability'))
+  assert.equal(appProfile.sequence.unitKind, 'user_flow')
 })

@@ -56,6 +56,11 @@ type ProjectWorldOnboardingProps = {
 
 const EXAMPLES = [
   {
+    title: 'Daily Creature App',
+    summary: 'A parent ritual app that turns daily moments into shareable creature cards.',
+    prompt: 'Create an iPhone app where parents add one moment from their day and it turns into a cute magical creature card they can save and share. Generate the app name, product promise, target personas, business goals, key features, onboarding and daily return flows, screens, components, data models, actions, API endpoints, native capabilities, design system, monetization moments, and code towers for an Expo React Native app.',
+  },
+  {
     title: 'Fantasy World',
     summary: 'A fallen empire where memory is the last magic.',
     prompt: 'Create a connected fantasy series world about a fallen empire ruled by shadows, where memory is the last magic. Generate the title, logline, full main cast, main locations, two rival factions, one forbidden artifact, key lore concepts, and an ordered main story sequence with major beats from inciting incident through finale.',
@@ -101,6 +106,8 @@ const EXAMPLES = [
     prompt: 'Use my uploaded source as the canon seed. Build the first connected world graph from the characters, places, factions, objects, events, lore, and story beats it contains, then generate an ordered main story sequence that captures the full arc.',
   },
 ]
+
+const DEFAULT_EXAMPLE_INDEX = EXAMPLES.findIndex((example) => example.title === 'Daily Creature App')
 
 type OnboardingOrbitNode = typeof ONBOARDING_ORBIT_NODES[number]
 
@@ -469,6 +476,31 @@ function workItemIcon(kind: string | null | undefined): EntityIconId {
 
 function nodeTypeIcon(nodeType: string | null | undefined): EntityIconId {
   switch (nodeType) {
+    case 'app':
+      return 'app'
+    case 'screen':
+    case 'screen_mockup':
+    case 'image_region':
+      return 'screen'
+    case 'component':
+      return 'component'
+    case 'data_model':
+      return 'database'
+    case 'api_endpoint':
+    case 'backend_function':
+      return 'api'
+    case 'design_system':
+      return 'design'
+    case 'capability':
+      return 'capability'
+    case 'tower':
+      return 'tower'
+    case 'code_file':
+      return 'code'
+    case 'feature':
+      return 'archetype'
+    case 'user_flow':
+      return 'thread'
     case 'actor':
       return 'character'
     case 'place':
@@ -1112,6 +1144,11 @@ export function ProjectWorldOnboarding({
   }
 
   function handleRandomExample() {
+    if (lastExampleIndexRef.current === null && DEFAULT_EXAMPLE_INDEX >= 0) {
+      lastExampleIndexRef.current = DEFAULT_EXAMPLE_INDEX
+      handleExample(EXAMPLES[DEFAULT_EXAMPLE_INDEX])
+      return
+    }
     const availableIndexes = EXAMPLES
       .map((_, index) => index)
       .filter((index) => EXAMPLES.length <= 1 || index !== lastExampleIndexRef.current)
@@ -1542,7 +1579,7 @@ export function ProjectWorldOnboarding({
           </button>
           <button className="world-onboarding-source-button" disabled={Boolean(seedInference) || isExtracting || isSaving || isPromptAnalyzing} onClick={handleRandomExample} type="button">
             <EntityIcon id="graph" />
-            <span><strong>Try example</strong><small>See what is possible</small></span>
+            <span><strong>Try app example</strong><small>Start with an iPhone app graph</small></span>
           </button>
           <input
             ref={fileInputRef}

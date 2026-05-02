@@ -755,6 +755,46 @@ const edgeTypes = {
 
 function defaultNameForWorldNodeType(nodeType: WorldEntity['nodeType']) {
   switch (nodeType) {
+    case 'app':
+      return 'New App'
+    case 'persona':
+      return 'New Persona'
+    case 'business_goal':
+      return 'New Business Goal'
+    case 'feature':
+      return 'New Feature'
+    case 'user_flow':
+      return 'New User Flow'
+    case 'screen':
+      return 'New Screen'
+    case 'section':
+      return 'New Section'
+    case 'component':
+      return 'New Component'
+    case 'data_model':
+      return 'New Data Model'
+    case 'action':
+      return 'New Action'
+    case 'api_endpoint':
+      return 'New API Endpoint'
+    case 'backend_function':
+      return 'New Backend Function'
+    case 'external_service':
+      return 'New External Service'
+    case 'design_system':
+      return 'New Design System'
+    case 'capability':
+      return 'New Capability'
+    case 'screen_mockup':
+      return 'New Screen Mockup'
+    case 'image_region':
+      return 'New Image Region'
+    case 'animation_spec':
+      return 'New Animation Spec'
+    case 'tower':
+      return 'New Tower'
+    case 'code_file':
+      return 'New Code File'
     case 'actor':
       return 'New Character'
     case 'group':
@@ -869,6 +909,8 @@ function iconForWikiSection(kind: WorldWikiSection['kind']): EntityIconId {
   switch (kind) {
     case 'overview':
       return 'graph'
+    case 'app':
+      return 'app'
     case 'cast':
       return 'character'
     case 'threads':
@@ -4673,7 +4715,7 @@ export function WorldGraphPage({
                   <strong>{selectedView.name}</strong>
                 </div>
                 <div className="world-board-surface">
-                  {(['actor', 'group', 'place', 'concept', 'event', 'sequence_unit', 'object'] as const).map((nodeType) => {
+                  {(['app', 'persona', 'business_goal', 'feature', 'user_flow', 'screen', 'component', 'data_model', 'action', 'api_endpoint', 'capability', 'design_system', 'tower', 'code_file', 'actor', 'group', 'place', 'concept', 'event', 'sequence_unit', 'object'] as const).map((nodeType) => {
                     const rows = visibleEntityRecords.filter((record) => record.entity.nodeType === nodeType)
                     return (
                       <div key={nodeType} className="world-board-column">
@@ -4859,7 +4901,7 @@ export function WorldGraphPage({
           <div className="world-context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} onClick={(event) => event.stopPropagation()}>
             {contextMenu.kind === 'canvas' ? (
               <>
-                {(['actor', 'group', 'place', 'object', 'concept', 'event', 'sequence_unit'] as const).map((nodeType) => (
+                {(['app', 'persona', 'feature', 'user_flow', 'screen', 'component', 'data_model', 'action', 'api_endpoint', 'capability', 'tower', 'code_file', 'actor', 'group', 'place', 'object', 'concept', 'event', 'sequence_unit'] as const).map((nodeType) => (
                   <button key={nodeType} className="world-context-action" onClick={() => {
                     void handleQuickCreateEntity(nodeType, contextMenu.flowPosition)
                     setContextMenu(null)
@@ -5688,7 +5730,7 @@ export function WorldGraphPage({
                     }}
                   />
                 </label>
-                {(['actor', 'place', 'group', 'object', 'concept', 'event', 'sequence_unit'] as const).includes(displayedInspectorEntity.nodeType) ? (
+                {(['actor', 'place', 'group', 'object', 'concept', 'event', 'sequence_unit', 'app', 'persona', 'business_goal', 'feature', 'user_flow', 'screen', 'section', 'component', 'data_model', 'action', 'api_endpoint', 'backend_function', 'external_service', 'design_system', 'capability', 'screen_mockup', 'image_region', 'animation_spec', 'tower', 'code_file'] as const).includes(displayedInspectorEntity.nodeType) ? (
                   <label className="field-block">
                     <span>Visual Description</span>
                     <textarea
@@ -6364,6 +6406,19 @@ function getWorldPromptTypeAccelerators(projectContext: ProjectContext | null) {
         { iconId: 'environment' as const, label: 'Place', prompt: 'Create a location or setup where this social-native story naturally unfolds.' },
         { iconId: 'graph' as const, label: 'Any', prompt: 'Create whatever would strengthen the next hook, proof, or social beat.' },
       ]
+    case 'app':
+      return [
+        { iconId: 'app' as const, label: 'App', prompt: 'Refine the app identity with platform targets, product promise, core loop, monetization model, and visual direction.' },
+        { iconId: 'character' as const, label: 'Persona', prompt: 'Create a target persona with needs, pains, motivations, objections, and paywall triggers.' },
+        { iconId: 'archetype' as const, label: 'Feature', prompt: 'Create a product feature with user value, activation or retention role, states, and dependencies.' },
+        { iconId: 'thread' as const, label: 'Flow', prompt: 'Create a user flow with ordered steps, entry and exit screens, emotional goal, and conversion role.' },
+        { iconId: 'screen' as const, label: 'Screen', prompt: 'Create a route-ready screen with purpose, layout intent, states, contained components, actions, and data dependencies.' },
+        { iconId: 'component' as const, label: 'Component', prompt: 'Create a reusable app component with props, visual role, states, interactions, and file mapping.' },
+        { iconId: 'database' as const, label: 'Data', prompt: 'Create a data model with fields, relations, validation rules, and storage target.' },
+        { iconId: 'api' as const, label: 'API', prompt: 'Create an API endpoint and backend function contract for an app action.' },
+        { iconId: 'capability' as const, label: 'Capability', prompt: 'Create a native capability node with web preview, Expo Go, dev build, and production constraints.' },
+        { iconId: 'tower' as const, label: 'Tower', prompt: 'Create an implementation tower with owned nodes, shared contracts, allowed files, and forbidden files.' },
+      ]
     default:
       return [
         { iconId: 'character' as const, label: 'Character', prompt: 'Create a new character with a strong flaw, secret motive, and clear place in the world.' },
@@ -6434,6 +6489,24 @@ function getWorldPromptStarterCards(projectContext: ProjectContext | null) {
           prompt: 'Create the core creator or audience persona for this UGC world and connect them to the main hook.',
         },
       ]
+    case 'app':
+      return [
+        {
+          title: 'Map the first-run flow',
+          summary: 'Turn the app promise into onboarding, first value, and conversion steps.',
+          prompt: 'Create the first-run app flow with screens, components, data dependencies, transitions, and the first monetization moment.',
+        },
+        {
+          title: 'Define the home loop',
+          summary: 'Add the daily or repeat workflow users return to.',
+          prompt: 'Create the app home loop with a home screen, primary action, result state, retention trigger, and linked data model.',
+        },
+        {
+          title: 'Create implementation towers',
+          summary: 'Split the app graph into safe code generation slices.',
+          prompt: 'Create implementation towers for onboarding, home loop, generation, paywall, history, design system, and backend.',
+        },
+      ]
     default:
       return [
         {
@@ -6477,6 +6550,13 @@ function getWorldPromptSmartPrompts(projectContext: ProjectContext | null) {
         'Create the proof moment that makes the claim believable',
         'Design the creator persona who naturally tells this story',
         'Create the scenario that turns into an episodic thread',
+      ]
+    case 'app':
+      return [
+        'Add the onboarding flow that proves the app promise fast',
+        'Create the home screen and primary daily loop',
+        'Map the result reveal screen to components, data, and actions',
+        'Add native capability constraints for preview and production',
       ]
     default:
       return [
@@ -7463,6 +7543,26 @@ function EntityComposer({
           <option value="concept">Lore</option>
           <option value="event">Event</option>
           <option value="sequence_unit">Story Beat</option>
+          <option value="app">App</option>
+          <option value="persona">Persona</option>
+          <option value="business_goal">Business Goal</option>
+          <option value="feature">Feature</option>
+          <option value="user_flow">User Flow</option>
+          <option value="screen">Screen</option>
+          <option value="section">Section</option>
+          <option value="component">Component</option>
+          <option value="data_model">Data Model</option>
+          <option value="action">Action</option>
+          <option value="api_endpoint">API Endpoint</option>
+          <option value="backend_function">Backend Function</option>
+          <option value="external_service">External Service</option>
+          <option value="design_system">Design System</option>
+          <option value="capability">Capability</option>
+          <option value="screen_mockup">Screen Mockup</option>
+          <option value="image_region">Image Region</option>
+          <option value="animation_spec">Animation Spec</option>
+          <option value="tower">Tower</option>
+          <option value="code_file">Code File</option>
         </select>
       </label>
       <label className="field-block">

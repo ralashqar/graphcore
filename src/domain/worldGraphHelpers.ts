@@ -227,6 +227,43 @@ export function getWorldRelationshipsForDefinition(
 
 export function iconForWorldEntity(nodeType: WorldEntity['nodeType']): EntityIconId {
   switch (nodeType) {
+    case 'app':
+      return 'app'
+    case 'persona':
+      return 'character'
+    case 'business_goal':
+      return 'credits'
+    case 'feature':
+      return 'archetype'
+    case 'user_flow':
+      return 'thread'
+    case 'screen':
+    case 'screen_mockup':
+    case 'image_region':
+      return 'screen'
+    case 'section':
+      return 'content'
+    case 'component':
+      return 'component'
+    case 'data_model':
+      return 'database'
+    case 'action':
+      return 'activity'
+    case 'api_endpoint':
+    case 'backend_function':
+      return 'api'
+    case 'external_service':
+      return 'global'
+    case 'design_system':
+      return 'design'
+    case 'capability':
+      return 'capability'
+    case 'animation_spec':
+      return 'cinematic'
+    case 'tower':
+      return 'tower'
+    case 'code_file':
+      return 'code'
     case 'actor':
       return 'character'
     case 'group':
@@ -248,6 +285,46 @@ export function iconForWorldEntity(nodeType: WorldEntity['nodeType']): EntityIco
 
 export function labelForWorldEntity(nodeType: WorldEntity['nodeType']) {
   switch (nodeType) {
+    case 'app':
+      return 'App'
+    case 'persona':
+      return 'Persona'
+    case 'business_goal':
+      return 'Business Goal'
+    case 'feature':
+      return 'Feature'
+    case 'user_flow':
+      return 'User Flow'
+    case 'screen':
+      return 'Screen'
+    case 'section':
+      return 'Section'
+    case 'component':
+      return 'Component'
+    case 'data_model':
+      return 'Data Model'
+    case 'action':
+      return 'Action'
+    case 'api_endpoint':
+      return 'API Endpoint'
+    case 'backend_function':
+      return 'Backend Function'
+    case 'external_service':
+      return 'External Service'
+    case 'design_system':
+      return 'Design System'
+    case 'capability':
+      return 'Capability'
+    case 'screen_mockup':
+      return 'Screen Mockup'
+    case 'image_region':
+      return 'Image Region'
+    case 'animation_spec':
+      return 'Animation Spec'
+    case 'tower':
+      return 'Tower'
+    case 'code_file':
+      return 'Code File'
     case 'actor':
       return 'Character'
     case 'group':
@@ -360,7 +437,35 @@ export function resultTypeForOperatorType(operatorType: WorldOperator['operatorT
 }
 
 export function isCanonicalWorldNodeType(nodeType: string): nodeType is WorldEntity['nodeType'] {
-  return ['actor', 'group', 'place', 'object', 'concept', 'event', 'sequence_unit'].includes(nodeType)
+  return [
+    'actor',
+    'group',
+    'place',
+    'object',
+    'concept',
+    'event',
+    'sequence_unit',
+    'app',
+    'persona',
+    'business_goal',
+    'feature',
+    'user_flow',
+    'screen',
+    'section',
+    'component',
+    'data_model',
+    'action',
+    'api_endpoint',
+    'backend_function',
+    'external_service',
+    'design_system',
+    'capability',
+    'screen_mockup',
+    'image_region',
+    'animation_spec',
+    'tower',
+    'code_file',
+  ].includes(nodeType)
 }
 
 export function getDerivedOperationsForEntityPair(

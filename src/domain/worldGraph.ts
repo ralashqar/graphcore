@@ -1,6 +1,34 @@
 import { z } from 'zod'
 
-export const worldEntityNodeTypeSchema = z.enum(['actor', 'group', 'place', 'object', 'concept', 'event', 'sequence_unit'])
+export const worldEntityNodeTypeSchema = z.enum([
+  'actor',
+  'group',
+  'place',
+  'object',
+  'concept',
+  'event',
+  'sequence_unit',
+  'app',
+  'persona',
+  'business_goal',
+  'feature',
+  'user_flow',
+  'screen',
+  'section',
+  'component',
+  'data_model',
+  'action',
+  'api_endpoint',
+  'backend_function',
+  'external_service',
+  'design_system',
+  'capability',
+  'screen_mockup',
+  'image_region',
+  'animation_spec',
+  'tower',
+  'code_file',
+])
 export const worldEntityStatusSchema = z.enum(['draft', 'active', 'locked', 'archived'])
 export const worldEntitySourceSchema = z.enum(['user', 'ai', 'inferred'])
 export const worldRelationshipStateSchema = z.enum(['confirmed', 'suggested', 'inferred'])
@@ -8,6 +36,7 @@ export const worldRelationshipDirectionSchema = z.enum(['outbound', 'inbound', '
 export const worldViewModeSchema = z.enum(['graph', 'table', 'timeline', 'board', 'wiki'])
 export const worldViewKindSchema = z.enum([
   'global_overview',
+  'app_overview',
   'entity_neighborhood',
   'faction_map',
   'place_map',
@@ -109,6 +138,7 @@ export const worldWikiSectionKindSchema = z.enum([
   'threads',
   'outputs',
   'style',
+  'app',
   'gaps',
 ])
 

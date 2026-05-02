@@ -20,6 +20,15 @@ export type EntityIconId =
   | 'global'
   | 'release'
   | 'archetype'
+  | 'app'
+  | 'screen'
+  | 'component'
+  | 'database'
+  | 'api'
+  | 'design'
+  | 'capability'
+  | 'tower'
+  | 'code'
   | 'expand'
   | 'close'
   | 'check'
@@ -80,6 +89,70 @@ function IconPath({ id }: { id: EntityIconId }) {
           <ellipse cx="12" cy="12" rx="7.2" ry="7.2" {...stroke} />
           <path d="M9.2 9.8h5.6M9.2 14.2h5.6" {...stroke} />
           <path d="M10.2 7.8v8.4M13.8 7.8v8.4" {...stroke} />
+        </>
+      )
+    case 'app':
+      return (
+        <>
+          <rect x="7" y="3.8" width="10" height="16.4" rx="2.4" {...stroke} />
+          <path d="M10 6.8h4M10 16.8h4M11.2 18.4h1.6" {...stroke} />
+        </>
+      )
+    case 'screen':
+      return (
+        <>
+          <rect x="4" y="5" width="16" height="12" rx="2" {...stroke} />
+          <path d="M8 20h8M12 17v3M7.5 8.5h9M7.5 12h5.5" {...stroke} />
+        </>
+      )
+    case 'component':
+      return (
+        <>
+          <rect x="4.5" y="4.5" width="6.5" height="6.5" rx="1.4" {...stroke} />
+          <rect x="13" y="4.5" width="6.5" height="6.5" rx="1.4" {...stroke} />
+          <rect x="4.5" y="13" width="6.5" height="6.5" rx="1.4" {...stroke} />
+          <rect x="13" y="13" width="6.5" height="6.5" rx="1.4" {...stroke} />
+        </>
+      )
+    case 'database':
+      return (
+        <>
+          <ellipse cx="12" cy="6.5" rx="6.5" ry="2.8" {...stroke} />
+          <path d="M5.5 6.5v8.8c0 1.5 2.9 2.8 6.5 2.8s6.5-1.3 6.5-2.8V6.5M5.5 10.9c0 1.5 2.9 2.8 6.5 2.8s6.5-1.3 6.5-2.8" {...stroke} />
+        </>
+      )
+    case 'api':
+      return (
+        <>
+          <path d="M8.5 8 4.5 12l4 4M15.5 8l4 4-4 4M13.2 5.8 10.8 18.2" {...stroke} />
+        </>
+      )
+    case 'design':
+      return (
+        <>
+          <circle cx="7" cy="7" r="2.2" {...stroke} />
+          <circle cx="17" cy="7" r="2.2" {...stroke} />
+          <circle cx="7" cy="17" r="2.2" {...stroke} />
+          <path d="M12.8 14.2 17 18.4l2.4-2.4-4.2-4.2-2.4 2.4Z" {...stroke} />
+        </>
+      )
+    case 'capability':
+      return (
+        <>
+          <path d="M12 3.8 18.5 7v5.2c0 4.2-2.8 6.8-6.5 8-3.7-1.2-6.5-3.8-6.5-8V7L12 3.8Z" {...stroke} />
+          <path d="M9 12.2 11.1 14.3 15.2 9.8" {...stroke} />
+        </>
+      )
+    case 'tower':
+      return (
+        <>
+          <path d="M7 20h10M8 20l1.2-14h5.6L16 20M8.6 11h6.8M8 16h8M9.3 6 12 3.8 14.7 6" {...stroke} />
+        </>
+      )
+    case 'code':
+      return (
+        <>
+          <path d="M8.4 8.2 4.8 12l3.6 3.8M15.6 8.2l3.6 3.8-3.6 3.8M13.4 5.8 10.6 18.2" {...stroke} />
         </>
       )
     case 'info':

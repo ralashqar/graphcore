@@ -57,6 +57,24 @@ test('custom onboarding style stays last after story style ranking', () => {
   assert.equal(presets.at(-1)?.id, 'custom')
 })
 
+test('app onboarding exposes app-specific mobile UI art styles', () => {
+  const presets = getOnboardingArtStylePresets({
+    projectType: 'app',
+    projectSubtype: 'mascot_daily_ritual',
+  })
+
+  assert.ok(presets.some((preset) => preset.id === 'playful_ritual_companion'))
+  assert.ok(presets.some((preset) => preset.id === 'premium_mobile_utility'))
+  assert.equal(presets[0]?.id, 'playful_ritual_companion')
+  assert.equal(presets.at(-1)?.id, 'custom')
+})
+
+test('app project context falls back to premium mobile utility style', async () => {
+  const { getFallbackArtStyleForProjectType } = await import('./projectContextProfiles.ts')
+
+  assert.equal(getFallbackArtStyleForProjectType('app'), 'premium_mobile_utility')
+})
+
 test('cinematic subtype recommendations map creator and faceless UGC to appropriate capture presets', () => {
   assert.equal(
     getRecommendedArtStylePresetForCinematic({ presetFamily: 'ugc_creator', formatSubtype: 'creator_validation' }),

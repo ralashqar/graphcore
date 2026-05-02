@@ -1,7 +1,7 @@
 import { z } from 'zod'
 
-export const projectTypeSchema = z.enum(['story', 'game', 'brand', 'ugc'])
-export const projectBrainProfileSchema = z.enum(['story', 'game', 'brand', 'ugc'])
+export const projectTypeSchema = z.enum(['story', 'game', 'brand', 'ugc', 'app'])
+export const projectBrainProfileSchema = z.enum(['story', 'game', 'brand', 'ugc', 'app'])
 export const projectContextSourceSchema = z.enum(['onboarding', 'manual'])
 
 export const PROJECT_ONBOARDING_VERSION = '2026-04-22-world-onboarding-v1'
@@ -40,11 +40,18 @@ export const ugcProjectSubtypeSchema = z.enum([
   'serialized_social_drama',
 ])
 
+export const appProjectSubtypeSchema = z.enum([
+  'ai_utility_wrapper',
+  'mascot_daily_ritual',
+  'content_generator',
+])
+
 export const projectSubtypeSchema = z.union([
   storyProjectSubtypeSchema,
   gameProjectSubtypeSchema,
   brandProjectSubtypeSchema,
   ugcProjectSubtypeSchema,
+  appProjectSubtypeSchema,
 ])
 
 export const projectContextSchema = z.object({
@@ -65,9 +72,11 @@ export type StoryProjectSubtype = z.infer<typeof storyProjectSubtypeSchema>
 export type GameProjectSubtype = z.infer<typeof gameProjectSubtypeSchema>
 export type BrandProjectSubtype = z.infer<typeof brandProjectSubtypeSchema>
 export type UgcProjectSubtype = z.infer<typeof ugcProjectSubtypeSchema>
+export type AppProjectSubtype = z.infer<typeof appProjectSubtypeSchema>
 export type ProjectSubtype =
   | StoryProjectSubtype
   | GameProjectSubtype
   | BrandProjectSubtype
   | UgcProjectSubtype
+  | AppProjectSubtype
 export type ProjectContext = z.infer<typeof projectContextSchema>

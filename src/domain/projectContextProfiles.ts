@@ -1,7 +1,7 @@
 import type { ArtStylePresetId } from './artStylePresets.ts'
 import type { CinematicPresetFamily, CinematicFormatSubtype } from './cinematics.ts'
 import type { ProjectBrainProfile, ProjectContext, ProjectSubtype, ProjectType } from './projectContext.ts'
-import { PROJECT_ONBOARDING_VERSION, type BrandProjectSubtype, type GameProjectSubtype, type StoryProjectSubtype, type UgcProjectSubtype } from './projectContext.ts'
+import { PROJECT_ONBOARDING_VERSION, type AppProjectSubtype, type BrandProjectSubtype, type GameProjectSubtype, type StoryProjectSubtype, type UgcProjectSubtype } from './projectContext.ts'
 
 export type ProjectSubtypeOption = {
   id: ProjectSubtype
@@ -72,6 +72,17 @@ export const PROJECT_TYPE_OPTIONS: readonly ProjectTypeOption[] = [
       { id: 'serialized_social_drama', label: 'Serialized Social Drama', description: 'Episodic conflict, open loops, and repeatable scenario beats.' },
     ],
   },
+  {
+    id: 'app',
+    label: 'App',
+    description: 'Product and UX graphs for mobile apps, AI utilities, rituals, and creator tools.',
+    helper: 'Best for personas, features, flows, screens, components, data, APIs, capabilities, and code towers.',
+    subtypes: [
+      { id: 'ai_utility_wrapper', label: 'AI Utility Wrapper', description: 'A focused AI-powered tool with input, processing, result, refinement, and monetization flow.' },
+      { id: 'mascot_daily_ritual', label: 'Mascot / Daily Ritual', description: 'A companion, egg, avatar, or daily check-in app with repeatable reveal and collection loops.' },
+      { id: 'content_generator', label: 'Content Generator', description: 'A creator tool that turns prompts, uploads, or references into editable and exportable outputs.' },
+    ],
+  },
 ]
 
 const subtypeOptionMap = new Map(
@@ -129,6 +140,9 @@ const subtypeToBrainProfile: Record<ProjectSubtype, ProjectBrainProfile> = {
   direct_response_ad: 'ugc',
   faceless_explainer_demo: 'ugc',
   serialized_social_drama: 'ugc',
+  ai_utility_wrapper: 'app',
+  mascot_daily_ritual: 'app',
+  content_generator: 'app',
 }
 
 const brainProfileSummary: Record<ProjectBrainProfile, string> = {
@@ -136,6 +150,7 @@ const brainProfileSummary: Record<ProjectBrainProfile, string> = {
   game: 'Generation will bias toward regions, factions, quest hooks, progression landmarks, world objects, and gameplay-supportive structure.',
   brand: 'Generation will bias toward symbolic systems, signature assets, brand values, campaign moments, and mascot-ready world language.',
   ugc: 'Generation will bias toward hooks, scenarios, proof beats, creator personas, use-case objects, and social-native episodic ideas.',
+  app: 'Generation will bias toward product promise, personas, UX flows, screens, components, data contracts, capabilities, and implementation towers.',
 }
 
 const fallbackArtStylesByType: Record<ProjectType, ArtStylePresetId> = {
@@ -143,6 +158,7 @@ const fallbackArtStylesByType: Record<ProjectType, ArtStylePresetId> = {
   game: 'premium_stylized_3d',
   brand: 'product_advertising',
   ugc: 'ugc_phone_rear_28_home_demo',
+  app: 'premium_mobile_utility',
 }
 
 export function getProjectTypeOption(projectType: ProjectType) {
@@ -241,6 +257,8 @@ export function getProjectBrainPromptGuidance(projectContext: ProjectContext | n
       return 'Prioritize symbolic groups, concepts, objects, and campaign events. Lean toward message pillars, signature assets, mascots, symbolic systems, and brand-facing moments.'
     case 'ugc':
       return 'Prioritize hooks, scenarios, proof beats, creator personas, objects, and repeatable events. Lean toward social-native framing, proof, payoff, and episodic continuation.'
+    case 'app':
+      return 'Prioritize product promise, target personas, commercial UX flows, screens, reusable components, data models, actions, APIs, native capabilities, design system, and code towers.'
   }
 }
 
@@ -276,4 +294,8 @@ export function isGameProjectSubtype(value: ProjectSubtype): value is GameProjec
 
 export function isUgcProjectSubtype(value: ProjectSubtype): value is UgcProjectSubtype {
   return value in ugcSubtypeToPresetFamily
+}
+
+export function isAppProjectSubtype(value: ProjectSubtype): value is AppProjectSubtype {
+  return ['ai_utility_wrapper', 'mascot_daily_ritual', 'content_generator'].includes(value)
 }

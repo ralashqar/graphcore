@@ -287,6 +287,28 @@ export function deriveWorldWiki(input: {
   const objects = sortEntities(scopedEntities.filter((entity) => entity.nodeType === 'object'))
   const lore = sortEntities(scopedEntities.filter((entity) => entity.nodeType === 'concept'))
   const events = sortEntities(scopedEntities.filter((entity) => entity.nodeType === 'event'))
+  const appNodes = sortEntities(scopedEntities.filter((entity) => [
+    'app',
+    'persona',
+    'business_goal',
+    'feature',
+    'user_flow',
+    'screen',
+    'section',
+    'component',
+    'data_model',
+    'action',
+    'api_endpoint',
+    'backend_function',
+    'external_service',
+    'design_system',
+    'capability',
+    'screen_mockup',
+    'image_region',
+    'animation_spec',
+    'tower',
+    'code_file',
+  ].includes(entity.nodeType)))
   const relevantThreads = input.snapshot.worldThreads
     .filter((thread) => thread.status === 'open' || thread.status === 'resolved')
     .filter((thread) => thread.linkedEntityKeys.some((key) => scopedEntityKeys.has(key)) || scopedEntityKeys.size === 0)
@@ -306,8 +328,8 @@ export function deriveWorldWiki(input: {
   const generatedFromFingerprint = wiki.generatedFromFingerprint || ''
   const wikiStale = Boolean(generatedFromFingerprint && generatedFromFingerprint !== wikiFingerprint)
   const projectSummary = input.snapshot.project.summary.trim()
-  const synopsis = wiki.synopsis || projectSummary || sectionSummary([...actors, ...events, ...lore], '')
-  const heroEntity = [...places, ...actors, ...events, ...lore].find((entity) => entity.thumbnailAssetKey) ?? places[0] ?? actors[0] ?? events[0] ?? null
+  const synopsis = wiki.synopsis || projectSummary || sectionSummary([...appNodes, ...actors, ...events, ...lore], '')
+  const heroEntity = [...appNodes, ...places, ...actors, ...events, ...lore].find((entity) => entity.thumbnailAssetKey) ?? appNodes[0] ?? places[0] ?? actors[0] ?? events[0] ?? null
   const toneTags = uniq([
     ...(wiki.toneTags ?? []),
     ...scopedEntities.flatMap((entity) => readWikiPresentation(entity).toneTags ?? []),
@@ -339,10 +361,18 @@ export function deriveWorldWiki(input: {
   const sections = [
     makeSection({
       kind: 'overview',
-      title: 'Overview',
-      summary: synopsis || 'The world overview will grow from graph canon.',
+      title: appNodes.length > 0 ? 'Product Overview' : 'Overview',
+      summary: synopsis || (appNodes.length > 0 ? 'The app overview will grow from graph canon.' : 'The world overview will grow from graph canon.'),
       entityKeys: heroEntity ? [heroEntity.key] : [],
     }),
+    ...(appNodes.length > 0
+      ? [makeSection({
+          kind: 'app',
+          title: 'App System',
+          summary: sectionSummary(appNodes, 'No app system nodes yet.'),
+          entityKeys: appNodes.slice(0, 12).map((entity) => entity.key),
+        })]
+      : []),
     makeSection({
       kind: 'cast',
       title: 'Main Characters',

@@ -237,6 +237,31 @@ function readPreviewVisualDescription(
 
 function nodeTypeIcon(nodeType: string | null | undefined): EntityIconId {
   switch (nodeType) {
+    case 'app':
+      return 'app'
+    case 'screen':
+    case 'screen_mockup':
+    case 'image_region':
+      return 'screen'
+    case 'component':
+      return 'component'
+    case 'data_model':
+      return 'database'
+    case 'api_endpoint':
+    case 'backend_function':
+      return 'api'
+    case 'design_system':
+      return 'design'
+    case 'capability':
+      return 'capability'
+    case 'tower':
+      return 'tower'
+    case 'code_file':
+      return 'code'
+    case 'feature':
+      return 'archetype'
+    case 'user_flow':
+      return 'thread'
     case 'actor':
       return 'character'
     case 'place':
