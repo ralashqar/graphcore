@@ -161,6 +161,14 @@ import {
   readWorldWikiPresentationMetadata,
 } from '../../../src/domain/worldWiki.ts'
 import {
+  buildAppGraphReadinessFindings,
+  buildDefaultAppIncrementalWorkItems,
+  filterSuggestionsForPromptStrategy,
+  getWorldPromptStrategy,
+  normalizeWorkItemForPromptStrategy,
+  projectContextUsesAppStrategy,
+} from '../../../src/domain/worldPromptStrategies.ts'
+import {
   worldBuildPlanResponseSchema,
   worldBuildStatusResponseSchema,
   type WorldBuildPlanResponse,
@@ -1599,8 +1607,17 @@ function buildGraphDiagnosticFindings(input: {
   selectedRootEntityKey?: string | null
 }) {
   const findings: WorldPromptDiagnosticFinding[] = []
+  const isAppProject = projectContextIsApp(input.snapshot.projectContext)
   const relationCounts = relationCountByEntity(input.snapshot)
   const activeEntities = input.snapshot.worldEntities.filter((entity) => entity.status !== 'archived')
+  if (isAppProject) {
+    findings.push(...buildAppGraphReadinessFindings({
+      entities: activeEntities,
+      relationships: input.snapshot.worldRelationships,
+      wikiMetadata: readProjectWorldWikiPresentation(input.snapshot),
+      selectedRootEntityKey: input.selectedRootEntityKey ?? null,
+    }))
+  }
   const focusEntity = input.selectedRootEntityKey
     ? activeEntities.find((entity) => entity.key === input.selectedRootEntityKey) ?? null
     : null
@@ -1615,30 +1632,40 @@ function buildGraphDiagnosticFindings(input: {
       id: `finding-context-${entity.key}`,
       findingType: 'weak_context',
       title: `${entity.name} needs richer context`,
-      summary: `${entity.name} is present in the world, but its long-form context is still thin enough that motives, pressure, or hidden truth are unclear.`,
+      summary: isAppProject
+        ? `${entity.name} is present in the app graph, but its product role, UX purpose, data needs, or implementation constraints are still thin.`
+        : `${entity.name} is present in the world, but its long-form context is still thin enough that motives, pressure, or hidden truth are unclear.`,
       targetKeys: [entity.key],
       severity: (relationCounts.get(entity.key) ?? 0) >= 2 ? 'high' : 'medium',
     })
   }
 
   const isolatedEntity = activeEntities
-    .filter((entity) => ['actor', 'group', 'place', 'concept', 'event', 'sequence_unit'].includes(entity.nodeType))
+    .filter((entity) => (
+      isAppProject
+        ? ['app', 'persona', 'business_goal', 'feature', 'user_flow', 'screen', 'component', 'data_model', 'action', 'api_endpoint', 'design_system', 'capability', 'tower', 'code_file'].includes(entity.nodeType)
+        : ['actor', 'group', 'place', 'concept', 'event', 'sequence_unit'].includes(entity.nodeType)
+    ))
     .find((entity) => (relationCounts.get(entity.key) ?? 0) === 0)
   if (isolatedEntity) {
     findings.push({
       id: `finding-isolated-${isolatedEntity.key}`,
-      findingType: isolatedEntity.nodeType === 'group' || isolatedEntity.nodeType === 'place' ? 'isolated_world_area' : 'underconnected_entity',
+      findingType: !isAppProject && (isolatedEntity.nodeType === 'group' || isolatedEntity.nodeType === 'place') ? 'isolated_world_area' : 'underconnected_entity',
       title: `${isolatedEntity.name} is disconnected`,
-      summary: `${isolatedEntity.name} does not currently anchor any visible relationships, which makes it harder for the world graph to express why it matters.`,
+      summary: isAppProject
+        ? `${isolatedEntity.name} does not currently anchor any visible app relationships, which makes it harder to see how it fits into the product, UX, data, or implementation graph.`
+        : `${isolatedEntity.name} does not currently anchor any visible relationships, which makes it harder for the world graph to express why it matters.`,
       targetKeys: [isolatedEntity.key],
       severity: 'high',
     })
   }
 
-  const openPrimaryThread = input.snapshot.worldThreads.find((thread) => (
-    thread.status === 'open'
-    && (input.selectedThreadKey ? thread.key === input.selectedThreadKey : thread.priority === 'primary')
-  )) ?? input.snapshot.worldThreads.find((thread) => thread.status === 'open' && thread.priority === 'primary')
+  const openPrimaryThread = isAppProject ? null : (
+    input.snapshot.worldThreads.find((thread) => (
+      thread.status === 'open'
+      && (input.selectedThreadKey ? thread.key === input.selectedThreadKey : thread.priority === 'primary')
+    )) ?? input.snapshot.worldThreads.find((thread) => thread.status === 'open' && thread.priority === 'primary')
+  )
   if (openPrimaryThread) {
     findings.push({
       id: `finding-thread-${openPrimaryThread.key}`,
@@ -1650,6 +1677,15 @@ function buildGraphDiagnosticFindings(input: {
     })
   }
 
+  const appTypeCounts = {
+    app: activeEntities.filter((entity) => entity.nodeType === 'app').length,
+    user_flow: activeEntities.filter((entity) => entity.nodeType === 'user_flow').length,
+    screen: activeEntities.filter((entity) => entity.nodeType === 'screen').length,
+    data_model: activeEntities.filter((entity) => entity.nodeType === 'data_model').length,
+    action: activeEntities.filter((entity) => entity.nodeType === 'action').length,
+    api_endpoint: activeEntities.filter((entity) => entity.nodeType === 'api_endpoint').length,
+    design_system: activeEntities.filter((entity) => entity.nodeType === 'design_system').length,
+  }
   const typeCounts = {
     actor: activeEntities.filter((entity) => entity.nodeType === 'actor').length,
     group: activeEntities.filter((entity) => entity.nodeType === 'group').length,
@@ -1658,7 +1694,25 @@ function buildGraphDiagnosticFindings(input: {
     event: activeEntities.filter((entity) => entity.nodeType === 'event').length,
     sequence_unit: activeEntities.filter((entity) => entity.nodeType === 'sequence_unit').length,
   }
-  if (typeCounts.actor === 0 || typeCounts.place === 0 || typeCounts.group === 0) {
+  if (isAppProject && (appTypeCounts.app === 0 || appTypeCounts.user_flow === 0 || appTypeCounts.screen === 0 || appTypeCounts.data_model === 0 || appTypeCounts.action === 0 || appTypeCounts.api_endpoint === 0 || appTypeCounts.design_system === 0)) {
+    const missingLabels = [
+      appTypeCounts.app === 0 ? 'app identity' : null,
+      appTypeCounts.user_flow === 0 ? 'user flows' : null,
+      appTypeCounts.screen === 0 ? 'screens' : null,
+      appTypeCounts.data_model === 0 ? 'data models' : null,
+      appTypeCounts.action === 0 ? 'actions' : null,
+      appTypeCounts.api_endpoint === 0 ? 'API endpoints' : null,
+      appTypeCounts.design_system === 0 ? 'design system' : null,
+    ].filter(Boolean)
+    findings.push({
+      id: 'finding-app-balance-foundation',
+      findingType: 'world_imbalance',
+      title: 'The app graph lacks a core layer',
+      summary: `The current app graph is still missing ${missingLabels.join(', ')}, so it has limited structure for UX, data, backend contracts, and implementation planning.`,
+      targetKeys: focusEntity ? [focusEntity.key] : [],
+      severity: 'high',
+    })
+  } else if (!isAppProject && (typeCounts.actor === 0 || typeCounts.place === 0 || typeCounts.group === 0)) {
     const missingLabels = [
       typeCounts.actor === 0 ? 'characters' : null,
       typeCounts.group === 0 ? 'groups' : null,
@@ -1681,22 +1735,35 @@ function buildGraphDiagnosticFindings(input: {
         id: `finding-focus-gap-${focusEntity.key}`,
         findingType: 'relationship_gap',
         title: `${focusEntity.name} needs stronger ties`,
-        summary: `${focusEntity.name} is the current focus, but it still needs clearer alliances, tensions, or dependencies to feel embedded in the wider world.`,
+        summary: isAppProject
+          ? `${focusEntity.name} is the current focus, but it still needs clearer product, UX, data, API, capability, or implementation dependencies to feel embedded in the app graph.`
+          : `${focusEntity.name} is the current focus, but it still needs clearer alliances, tensions, or dependencies to feel embedded in the wider world.`,
         targetKeys: [focusEntity.key],
         severity: 'medium',
       })
     }
   }
 
-  return findings.slice(0, 4)
+  const dedupedFindings: WorldPromptDiagnosticFinding[] = []
+  const seenFindingIds = new Set<string>()
+  for (const finding of findings) {
+    if (seenFindingIds.has(finding.id)) continue
+    dedupedFindings.push(finding)
+    seenFindingIds.add(finding.id)
+  }
+  return dedupedFindings.slice(0, 4)
 }
 
-function buildDiagnosticSuggestionSet(findings: WorldPromptDiagnosticFinding[]) {
+function buildDiagnosticSuggestionSet(
+  findings: WorldPromptDiagnosticFinding[],
+  projectContext?: WorldPromptSnapshot['projectContext'],
+) {
+  const isAppProject = projectContextIsApp(projectContext ?? null)
   return findings.flatMap((finding, index) => {
     const targetKey = finding.targetKeys[0] ?? null
     const prompt = targetKey
       ? `Improve ${targetKey} by addressing this gap: ${finding.summary}`
-      : `Address this world gap: ${finding.summary}`
+      : `Address this ${isAppProject ? 'app graph' : 'world'} gap: ${finding.summary}`
     const suggestion = buildPromptSuggestion({
       id: `diagnostic-${finding.id}`,
       label: finding.title,
@@ -1712,7 +1779,9 @@ function buildDiagnosticSuggestionSet(findings: WorldPromptDiagnosticFinding[]) 
       targetEntityKeys: finding.targetKeys,
       focusLayer: 'general',
       retrievalHint: finding.summary,
-      generatedReason: 'Highlights a concrete graph weakness that can be improved next.',
+      generatedReason: isAppProject
+        ? 'Highlights a concrete app graph weakness that can be improved next.'
+        : 'Highlights a concrete graph weakness that can be improved next.',
       estimatedNodeCount: 1,
       estimatedEdgeCount: 1,
     })
@@ -4477,7 +4546,7 @@ function uniqueEntityKeys(values: Array<string | null | undefined>, limit = 4) {
 }
 
 function projectContextIsApp(projectContext: WorldPromptSnapshot['projectContext']) {
-  return projectContext?.projectType === 'app' || projectContext?.brainProfile === 'app'
+  return projectContextUsesAppStrategy(projectContext ?? null)
 }
 
 function suggestionMatchesAny(text: string, patterns: RegExp[]) {
@@ -4488,21 +4557,7 @@ function filterSuggestionsForProjectContext(
   suggestions: WorldPromptSuggestion[],
   projectContext: WorldPromptSnapshot['projectContext'],
 ) {
-  if (!projectContextIsApp(projectContext)) return suggestions
-  const storySuggestionPatterns = [
-    /\b(threat|villain|antagonist|protagonist|hero|chapter|inciting event|lore|kingdom|realm|ruler|court|faction|factions)\b/i,
-    /\b(story beat|plot|main conflict|world conflict|cast|character circle|power structure)\b/i,
-  ]
-  return suggestions.filter((suggestion) => {
-    const text = lowerCaseTextParts(
-      suggestion.label,
-      suggestion.prompt,
-      suggestion.summary,
-      suggestion.retrievalHint,
-      suggestion.generatedReason,
-    )
-    return !suggestionMatchesAny(text, storySuggestionPatterns)
-  })
+  return filterSuggestionsForPromptStrategy(suggestions, projectContext ?? null)
 }
 
 function findPromptRoleCue(promptLower: string, name: string, roleTerms: string[]) {
@@ -6482,13 +6537,16 @@ function classifyPromptExecution(input: {
   const contradictoryOrLowConfidence = looksContradictoryOrLowConfidence(input.prompt)
   const classificationHint = input.classificationHint ?? null
   const detectedIntent = detectPromptIntent(input.prompt, input.snapshot)
-  const diagnosticFindings = (input.diagnosticFindings && input.diagnosticFindings.length > 0)
-    ? input.diagnosticFindings
-    : buildGraphDiagnosticFindings({
-        snapshot: input.snapshot,
-        selectedThreadKey: input.selectedThreadKey,
-        selectedRootEntityKey: input.selectedRootEntityKey,
-      })
+  const shouldAttachDiagnosticFindings = classificationHint === 'graph_diagnosis' || detectedIntent === 'graph_diagnosis'
+  const diagnosticFindings = shouldAttachDiagnosticFindings
+    ? (input.diagnosticFindings && input.diagnosticFindings.length > 0)
+      ? input.diagnosticFindings
+      : buildGraphDiagnosticFindings({
+          snapshot: input.snapshot,
+          selectedThreadKey: input.selectedThreadKey,
+          selectedRootEntityKey: input.selectedRootEntityKey,
+        })
+    : []
   const answer = stripInternalPlannerDiagnostics(input.answer || input.assistantSummary || '')
   const answerMode = input.answerMode
     ?? (
@@ -6498,24 +6556,24 @@ function classifyPromptExecution(input: {
         : 'answer_plus_options'
     )
   const suggestionDrivenWithActionableOps = Boolean(input.isSuggestionDriven && actionableOps.length > 0)
-  const advisorySuggestions = dedupeSuggestions([
+  const advisorySuggestions = filterSuggestionsForProjectContext(dedupeSuggestions([
     ...(input.suggestionCandidates ?? []),
     ...(classificationHint === 'graph_diagnosis' || detectedIntent === 'graph_diagnosis'
-      ? buildDiagnosticSuggestionSet(diagnosticFindings)
+      ? buildDiagnosticSuggestionSet(diagnosticFindings, input.snapshot.projectContext)
       : []),
     ...buildThreadAwareSuggestions({
       snapshot: input.snapshot,
       selectedThreadKey: input.selectedThreadKey,
     }),
-  ])
-  const blockedSuggestions = dedupeSuggestions([
+  ]), input.snapshot.projectContext)
+  const blockedSuggestions = filterSuggestionsForProjectContext(dedupeSuggestions([
     ...(input.suggestionCandidates ?? []),
     ...buildThreadAwareSuggestions({
       snapshot: input.snapshot,
       selectedThreadKey: input.selectedThreadKey,
     }),
     ...buildBlockedSuggestions(input.prompt, input.snapshot),
-  ])
+  ]), input.snapshot.projectContext)
 
   if (
     input.isInitialSeedGeneration
@@ -6598,13 +6656,13 @@ function classifyPromptExecution(input: {
       starterPackApplied: false,
     }
     const suggestions = classification === 'graphable_plan_only'
-      ? dedupeSuggestions([
+      ? filterSuggestionsForProjectContext(dedupeSuggestions([
         ...(input.suggestionCandidates ?? []),
         ...buildThreadAwareSuggestions({
           snapshot: input.snapshot,
           selectedThreadKey: input.selectedThreadKey,
         }),
-      ])
+      ]), input.snapshot.projectContext)
       : blockedSuggestions
     return {
       classification,
@@ -6681,7 +6739,7 @@ function classifyPromptExecution(input: {
     }
   }
 
-  const stagedSuggestions = dedupeSuggestions([
+  const stagedSuggestions = filterSuggestionsForProjectContext(dedupeSuggestions([
     ...(input.suggestionCandidates ?? []),
     ...buildThreadAwareSuggestions({
       snapshot: input.snapshot,
@@ -6692,7 +6750,7 @@ function classifyPromptExecution(input: {
       deferredOps: staged.deferredOps,
       snapshot: input.snapshot,
     }),
-  ])
+  ]), input.snapshot.projectContext)
   const scope: WorldPromptScopeDecision = {
     mode: 'staged',
     counts,
@@ -7752,6 +7810,7 @@ async function generatePromptPlan(input: {
   usageRecorder?: WorldPromptTokenUsageRecorder
 }) {
   const projectContextGuidance = describeProjectContextForPlanner(input.payload.snapshot.projectContext)
+  const promptStrategy = getWorldPromptStrategy(input.payload.snapshot.projectContext)
   const shouldInferContext = shouldInferProjectContext(input.payload.snapshot.projectContext)
   const sourceContext = input.payload.sourceContext ?? null
   const isInitialSeedGeneration = input.payload.initialSeedMode === 'generate_skeleton'
@@ -7828,6 +7887,7 @@ async function generatePromptPlan(input: {
     `Return only the fields present in the schema for this mode. Do not invent omitted top-level keys.`,
     'Allowed operations for wave1Ops: upsert_entity, update_entity, replace_entity, upsert_relationship, update_relationship, create_derived_result, queue_image_generation, queue_cinematic_generation, update_world_wiki_metadata, assistant_note.',
     'Favor additive graph growth.',
+    ...promptStrategy.plannerGuidance,
     'Every upsert_entity must include entity.metadata.visualDescription: a compact visual prompt for the subject, visible scene, or mobile UI state. Do not include lore exposition, product/project names, schema labels, node-type labels, IDs, or GraphCore wording in visualDescription.',
     'Use advisory_question for questions that should answer first and offer options without mutating the graph by default.',
     'Use graph_diagnosis for prompts that ask what is weak, missing, thin, underdeveloped, or structurally lacking in the current world.',
@@ -7870,6 +7930,8 @@ async function generatePromptPlan(input: {
     'For wiki/presentation readiness, use entity customProperties.wiki or metadata.wiki for entity display hints such as roleLabel, shortSummary, and wikiSections.',
     'For project-wide wiki presentation, use update_world_wiki_metadata with target "project" and compact metadata fields: title, logline, synopsis, genre, themes, toneTags, coreConflict, visualMotifs, artStyleDescription, brandAtlasPrompt, and colorScheme. The title is the generated in-world/content title, not the GraphCore project name. Use target "view" with targetViewKey only for custom wiki page metadata.',
     'artStyleDescription is the project-specific visual direction beyond the broad preset. brandAtlasPrompt is a visual-only prompt for one cohesive brand/world atlas image. For app projects, colorScheme should include at least primary, secondary, and tertiary colors.',
+    'If the user asks to set, define, create, or store a specific project wiki metadata field such as artStyleDescription, brandAtlasPrompt, or colorScheme, treat it as graphable_direct and emit update_world_wiki_metadata as the primary wave1Op. Do not answer with graph diagnostics, weak-context findings, thread actions, or unrelated entity expansions for that metadata-only task.',
+    'For App color-scheme metadata tasks, write metadata.colorScheme with at least primary, secondary, and tertiary string values, preferably hex plus a short semantic label. Derive colors from the app promise, app entities, design_system nodes, existing artStyleDescription, and visual motifs; do not create graph nodes unless the user explicitly asks.',
     'Do not add a separate planner pass for wiki writing. Include update_world_wiki_metadata only in the same wave1Ops response when retrieval.wikiContext.updatePolicy is "targeted" or "opportunistic".',
     'When retrieval.wikiContext.updatePolicy is "none", do not rewrite project title, logline, synopsis, or tone metadata unless the user explicitly asks in this prompt.',
     'When updating project-wide wiki metadata, set generatedFromFingerprint to retrieval.wikiContext.fingerprint when provided. Keep text concise: one-sentence logline, compact synopsis, short tags, concise visual direction, and a reusable visual-only atlas prompt.',
@@ -12938,6 +13000,7 @@ function inferBuildBriefFromManifest(input: {
   manifest: WorldPromptIncrementalManifest
   payload: WorldPromptStartTurnRequest
 }): WorldPromptIncrementalBuildBrief {
+  const promptStrategy = getWorldPromptStrategy(input.payload.snapshot.projectContext)
   const sourceContext = input.payload.sourceContext ?? null
   const profile = input.payload.initialSeedMode === 'generate_skeleton'
     ? getWorldSeedSkeletonProfile(((input.manifest.projectContextInference?.projectSubtype
@@ -12962,7 +13025,10 @@ function inferBuildBriefFromManifest(input: {
     canonConstraints: compactPlannerArray([
       ...(input.manifest.buildBrief?.canonConstraints ?? []),
       input.payload.initialSeedMode === 'generate_skeleton' ? 'Create a complete initial skeleton before final summary work.' : '',
-      'Use valid world node types only: actor, group, place, object, concept, event, sequence_unit.',
+      projectContextIsApp(input.payload.snapshot.projectContext)
+        ? 'Use valid app node types only: app, persona, business_goal, feature, user_flow, screen, section, component, data_model, action, api_endpoint, backend_function, external_service, design_system, capability, screen_mockup, image_region, animation_spec, tower, code_file. Never use sequence_unit for app UX.'
+        : 'Use valid world node types only: actor, group, place, object, concept, event, sequence_unit.',
+      ...promptStrategy.incrementalManifestGuidance.slice(0, 3),
     ], 10, 180),
     tone: compactPlannerArray([
       ...(input.manifest.buildBrief?.tone ?? []),
@@ -13299,18 +13365,26 @@ function orderPromptOpsForIncrementalApply(ops: PromptToWorldOp[]) {
 }
 
 function normalizeIncrementalWorkItems(manifest: WorldPromptIncrementalManifest, payload: WorldPromptStartTurnRequest) {
+  const isAppProject = projectContextIsApp(payload.snapshot.projectContext)
   const workItems = manifest.workItems
     .filter((item) => item.id.trim() && item.label.trim())
-    .map((item, index) => worldPromptIncrementalWorkItemSchema.parse({
-      ...item,
-      id: item.id.trim().replace(/[^a-zA-Z0-9_-]+/g, '_').toLowerCase() || `work_${index + 1}`,
-      label: item.label.trim(),
-      objective: item.objective.trim() || item.label.trim(),
-      expectedOps: Math.max(0, item.expectedOps),
-      critical: item.kind === 'entity_batch' || item.kind === 'sequence_unit',
-    }))
+    .map((item, index) => {
+      const parsed = worldPromptIncrementalWorkItemSchema.parse({
+        ...item,
+        id: item.id.trim().replace(/[^a-zA-Z0-9_-]+/g, '_').toLowerCase() || `work_${index + 1}`,
+        label: item.label.trim(),
+        objective: item.objective.trim() || item.label.trim(),
+        expectedOps: Math.max(0, item.expectedOps),
+        critical: isAppProject
+          ? item.kind === 'entity_batch' && item.appSlice !== 'relationships'
+          : item.kind === 'entity_batch' || item.kind === 'sequence_unit',
+      })
+      return normalizeWorkItemForPromptStrategy(parsed, payload.snapshot.projectContext)
+    })
 
   if (workItems.length > 0) return workItems.slice(0, payload.initialSeedMode === 'generate_skeleton' ? 18 : 10)
+
+  if (isAppProject) return buildDefaultAppIncrementalWorkItems().slice(0, payload.initialSeedMode === 'generate_skeleton' ? 18 : 10)
 
   return [
     worldPromptIncrementalWorkItemSchema.parse({
@@ -13353,6 +13427,7 @@ async function generateIncrementalManifest(input: {
   usageRecorder?: WorldPromptTokenUsageRecorder
 }) : Promise<IncrementalPlannerResult> {
   const projectContextGuidance = describeProjectContextForPlanner(input.payload.snapshot.projectContext)
+  const promptStrategy = getWorldPromptStrategy(input.payload.snapshot.projectContext)
   const shouldInferContext = shouldInferProjectContext(input.payload.snapshot.projectContext)
   const sourceContext = input.payload.sourceContext ?? null
   const isInitialSeedGeneration = input.payload.initialSeedMode === 'generate_skeleton'
@@ -13400,6 +13475,7 @@ async function generateIncrementalManifest(input: {
     'Put relationship batches after the entity or sequence items they connect.',
     'Put threads, wiki metadata, suggestions, and final notes near the end.',
     'Use stable snake_case work item IDs. Make labels short and user-facing.',
+    ...promptStrategy.incrementalManifestGuidance,
     isInitialSeedGeneration
       ? 'This is initial world seed generation. The manifest must cover the complete starting skeleton, not a tiny first wave.'
       : 'This is a broad regular world-prompt turn. Keep the manifest focused enough to finish in this turn.',
@@ -13407,7 +13483,11 @@ async function generateIncrementalManifest(input: {
       ? 'Infer project type/subtype in projectContextInference from the prompt and source context.'
       : 'Only include projectContextInference if the prompt explicitly reframes the project context.',
     projectContextGuidance ? `Project guidance: ${projectContextGuidance}` : null,
-    sourceContext ? 'Source context is available; use it to size the manifest around source-derived characters, places, objects, events, and relationships.' : null,
+    sourceContext
+      ? projectContextIsApp(input.payload.snapshot.projectContext)
+        ? 'Source context is available; use it to size the manifest around source-derived app features, flows, screens, data/API contracts, capabilities, design-system needs, towers, code files, and relationships.'
+        : 'Source context is available; use it to size the manifest around source-derived characters, places, objects, events, and relationships.'
+      : null,
   ].filter(Boolean).join('\n')
 
   const prompt = JSON.stringify({
@@ -13518,6 +13598,7 @@ async function generateIncrementalWorkItemPlan(input: {
   attempt: number
   usageRecorder?: WorldPromptTokenUsageRecorder
 }) {
+  const promptStrategy = getWorldPromptStrategy(input.payload.snapshot.projectContext)
   const plannerRequestSchema = incrementalWorkItemPlannerResponseSchema
   const basePlannerResponseSchema = normalizeStrictJsonSchema(z.toJSONSchema(plannerRequestSchema))
   const plannerResponseSchema = projectUsesStrictStorySequence(input.payload.snapshot.projectContext)
@@ -13542,11 +13623,20 @@ async function generateIncrementalWorkItemPlan(input: {
     'Use the buildBrief and ledger as continuity. Do not ask for hidden prior chat context; it is not available to this call.',
     'Allowed operations: upsert_entity, update_entity, replace_entity, upsert_relationship, update_relationship, create_derived_result, queue_image_generation, queue_cinematic_generation, update_world_wiki_metadata, assistant_note.',
     'For entity_batch items, create only the requested small set of concrete canon-ready entities.',
-    'Valid entity node types are actor, group, place, object, concept, event, and sequence_unit. Never use wiki, location, faction, character, beat, lore, or title as nodeType values; map those to place, group, actor, sequence_unit, concept, or wiki metadata as appropriate.',
+    ...promptStrategy.incrementalWorkItemGuidance,
+    projectContextIsApp(input.payload.snapshot.projectContext)
+      ? 'For app relationship_batch items, create app links only between existing/generated app graph nodes available in the ledger or relevant entity list.'
+      : 'Valid entity node types are actor, group, place, object, concept, event, and sequence_unit. Never use wiki, location, faction, character, beat, lore, or title as nodeType values; map those to place, group, actor, sequence_unit, concept, or wiki metadata as appropriate.',
     'For relationship_batch items, create links only between existing/generated entities that are available in the ledger or relevant entity list.',
-    'For sequence_unit items, create the authored progression node(s) requested by this item and include complete customProperties.sequence metadata.',
-    'A Story sequence_unit must include sequence.ordinal, synopsis, dramaticQuestion, outcome, at least one consequence with cause/effect, and at least one characterArcDelta.',
-    'Use sequence_unit relationships with precedes, causes, complicates, or pays_off only when relevant endpoints already exist or are created in this work item.',
+    projectContextIsApp(input.payload.snapshot.projectContext)
+      ? 'For app user_flow items, create or update user_flow nodes and transitions_to links between screens. Do not create sequence_unit nodes.'
+      : 'For sequence_unit items, create the authored progression node(s) requested by this item and include complete customProperties.sequence metadata.',
+    projectContextIsApp(input.payload.snapshot.projectContext)
+      ? null
+      : 'A Story sequence_unit must include sequence.ordinal, synopsis, dramaticQuestion, outcome, at least one consequence with cause/effect, and at least one characterArcDelta.',
+    projectContextIsApp(input.payload.snapshot.projectContext)
+      ? null
+      : 'Use sequence_unit relationships with precedes, causes, complicates, or pays_off only when relevant endpoints already exist or are created in this work item.',
     'For wiki_metadata/final_summary items, prefer update_world_wiki_metadata, assistant_note, threadActions, and suggestionCandidates over more core entity growth.',
     compactPrompt.context.ledgerOnly ? 'The context is in ledger-only budget mode. Prefer key-based operations and concise text.' : null,
     input.payload.initialSeedMode === 'generate_skeleton'
@@ -14714,7 +14804,7 @@ export async function startWorldPromptTurn(input: {
         ideas: generated.optionalIdeas,
         fallbackKind: 'continue_scope',
       }),
-      ...(generated.classification === 'graph_diagnosis' ? buildDiagnosticSuggestionSet(generated.diagnosticFindings) : []),
+      ...(generated.classification === 'graph_diagnosis' ? buildDiagnosticSuggestionSet(generated.diagnosticFindings, payload.snapshot.projectContext) : []),
     ])
 
     const execution = classifyPromptExecution({

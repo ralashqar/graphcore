@@ -358,7 +358,38 @@ test('app projects use app-specific prompt suggestions instead of story threat f
   assert.equal(source.includes('function buildAppFollowUpSuggestions'), true)
   assert.equal(source.includes('Deepen The Main Threat'), true)
   assert.equal(source.includes('Do not suggest story moves such as threats, villains, protagonists'), true)
+  assert.equal(source.includes('filterSuggestionsForPromptStrategy'), true)
   assert.equal(projectSeedBody.includes("case 'app':"), true)
   assert.equal(projectSeedBody.includes('Map Core UX Flow'), true)
   assert.equal(projectSeedBody.includes('Add App Contracts'), true)
+})
+
+test('incremental app planning uses app slices and app ontology guidance', () => {
+  const source = readFileSync(resolve('supabase/functions/_shared/world-prompt.ts'), 'utf8')
+  const strategySource = readFileSync(resolve('src/domain/worldPromptStrategies.ts'), 'utf8')
+  const manifestStart = source.indexOf('async function generateIncrementalManifest')
+  const manifestEnd = source.indexOf('async function generateIncrementalWorkItemPlan', manifestStart)
+  const manifestBody = source.slice(manifestStart, manifestEnd)
+  const workItemStart = source.indexOf('async function generateIncrementalWorkItemPlan')
+  const workItemEnd = source.indexOf('async function executeIncrementalWorldPromptTurn', workItemStart)
+  const workItemBody = source.slice(workItemStart, workItemEnd)
+
+  assert.equal(source.includes('buildDefaultAppIncrementalWorkItems'), true)
+  assert.equal(source.includes('normalizeWorkItemForPromptStrategy'), true)
+  assert.equal(manifestBody.includes('promptStrategy.incrementalManifestGuidance'), true)
+  assert.equal(workItemBody.includes('promptStrategy.incrementalWorkItemGuidance'), true)
+  assert.equal(strategySource.includes('Valid app entity node types are app, persona, business_goal'), true)
+  assert.equal(workItemBody.includes('Do not create sequence_unit nodes'), true)
+})
+
+test('wiki metadata gap tasks stay direct and do not emit generic diagnostics', () => {
+  const source = readFileSync(resolve('supabase/functions/_shared/world-prompt.ts'), 'utf8')
+  const classifyStart = source.indexOf('function classifyPromptExecution')
+  const classifyEnd = source.indexOf('function directScopeCapsForPrompt', classifyStart)
+  const classifyBody = source.slice(classifyStart, classifyEnd)
+
+  assert.equal(classifyBody.includes("const shouldAttachDiagnosticFindings = classificationHint === 'graph_diagnosis' || detectedIntent === 'graph_diagnosis'"), true)
+  assert.equal(classifyBody.includes(': []'), true)
+  assert.equal(source.includes('specific project wiki metadata field such as artStyleDescription, brandAtlasPrompt, or colorScheme'), true)
+  assert.equal(source.includes('For App color-scheme metadata tasks'), true)
 })

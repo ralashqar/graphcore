@@ -672,8 +672,8 @@ export function deriveWorldWiki(input: {
       kind: 'world_art_style',
       label: hasAppNodes ? 'Define app art direction' : 'Define art style',
       prompt: hasAppNodes
-        ? 'Define a concise app-specific art style description for this product graph and store it as project wiki metadata.artStyleDescription. Make it more specific than the broad preset: UI surface treatment, imagery, icon language, motion mood, density, and finish. Do not add new graph nodes unless necessary.'
-        : 'Define a concise art style description for this story/world graph and store it as project wiki metadata.artStyleDescription. Make it more specific than the broad preset: medium, lighting, palette mood, texture, camera/illustration language, and recurring visual rules. Do not add new graph nodes unless necessary.',
+        ? 'Targeted app wiki metadata task: define a concise app-specific art style description for this product graph and store it as project wiki metadata.artStyleDescription using one update_world_wiki_metadata operation. Make it more specific than the broad preset: UI surface treatment, imagery, icon language, motion mood, density, and finish. Do not diagnose graph gaps and do not add new graph nodes unless necessary.'
+        : 'Targeted wiki metadata task: define a concise art style description for this story/world graph and store it as project wiki metadata.artStyleDescription using one update_world_wiki_metadata operation. Make it more specific than the broad preset: medium, lighting, palette mood, texture, camera/illustration language, and recurring visual rules. Do not diagnose graph gaps and do not add new graph nodes unless necessary.',
       entityKey: null,
       threadKey: null,
       sectionKind: 'style',
@@ -685,8 +685,8 @@ export function deriveWorldWiki(input: {
       kind: 'brand_atlas_prompt',
       label: hasAppNodes ? 'Draft app brand atlas prompt' : 'Draft brand atlas prompt',
       prompt: hasAppNodes
-        ? 'Create a visual-only brand atlas image prompt for this app and store it as project wiki metadata.brandAtlasPrompt. Use the title, product promise, logline/synopsis, app archetype, art style description, visual motifs, and color scheme if present. The prompt should describe a single premium brand-board image with mobile screen language, UI components, palette swatches, icon style, and mood references; avoid GraphCore, schema, node IDs, and implementation wording.'
-        : 'Create a visual-only brand atlas image prompt for this story/world and store it as project wiki metadata.brandAtlasPrompt. Use the generated title, logline, synopsis, genre, art style description, visual motifs, and tone. The prompt should describe a single cohesive visual world/brand-board image with key motifs, materials, palette, lighting, typography mood, and representative subjects; avoid GraphCore, schema, node IDs, and implementation wording.',
+        ? 'Targeted app wiki metadata task: create a visual-only brand atlas image prompt for this app and store it as project wiki metadata.brandAtlasPrompt using one update_world_wiki_metadata operation. Use the title, product promise, logline/synopsis, app archetype, art style description, visual motifs, and color scheme if present. The prompt should describe a single premium brand-board image with mobile screen language, UI components, palette swatches, icon style, and mood references; avoid GraphCore, schema, node IDs, and implementation wording. Do not diagnose graph gaps or add new graph nodes.'
+        : 'Targeted wiki metadata task: create a visual-only brand atlas image prompt for this story/world and store it as project wiki metadata.brandAtlasPrompt using one update_world_wiki_metadata operation. Use the generated title, logline, synopsis, genre, art style description, visual motifs, and tone. The prompt should describe a single cohesive visual world/brand-board image with key motifs, materials, palette, lighting, typography mood, and representative subjects; avoid GraphCore, schema, node IDs, and implementation wording. Do not diagnose graph gaps or add new graph nodes.',
       entityKey: null,
       threadKey: null,
       sectionKind: 'style',
@@ -697,7 +697,7 @@ export function deriveWorldWiki(input: {
       key: 'world-wiki-gap-color-scheme',
       kind: 'color_scheme',
       label: 'Set app colors',
-      prompt: 'Create a compact app color scheme and store it as project wiki metadata.colorScheme with at least primary, secondary, and tertiary values. Include usable hex colors plus brief semantic color names if helpful, based on the app promise, target user, art style description, and existing design-system nodes. Do not add new graph nodes unless needed.',
+      prompt: 'Targeted app wiki metadata task: create a compact app color scheme and store it as project wiki metadata.colorScheme using one update_world_wiki_metadata operation. Include at least primary, secondary, and tertiary string values, each with a usable hex color plus a brief semantic label, based on the app promise, target user, art style description, visual motifs, and existing design-system nodes. Do not diagnose graph gaps, do not add story/world suggestions, and do not add new graph nodes unless needed.',
       entityKey: null,
       threadKey: null,
       sectionKind: 'style',

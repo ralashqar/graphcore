@@ -423,7 +423,10 @@ test('deriveWorldWiki splits app graph nodes into app-specific wiki sections', (
   assert.deepEqual(wiki.sections.find((section) => section.kind === 'app_towers')?.entityKeys, [tower.key])
   assert.deepEqual(wiki.sections.find((section) => section.kind === 'app_code_files')?.entityKeys, [codeFile.key])
   assert.equal(wiki.sections.some((section) => section.kind === 'style' && section.title === 'Brand & Visual System'), true)
-  assert.ok(wiki.gaps.some((gap) => gap.kind === 'color_scheme'))
+  const colorGap = wiki.gaps.find((gap) => gap.kind === 'color_scheme')
+  assert.ok(colorGap)
+  assert.equal(colorGap.prompt.includes('Targeted app wiki metadata task'), true)
+  assert.equal(colorGap.prompt.includes('update_world_wiki_metadata'), true)
   assert.equal(wiki.sections.some((section) => section.kind === 'cast'), false)
 })
 

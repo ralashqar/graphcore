@@ -426,6 +426,18 @@ export const worldPromptIncrementalWorkItemSchema = z.object({
   expectedOps: z.number().int().nonnegative().default(1),
   entityTypes: z.array(z.string()).default([]),
   sequenceOrdinal: z.number().int().positive().nullable().default(null),
+  projectType: z.enum(['story', 'game', 'brand', 'ugc', 'app']).optional(),
+  appSlice: z.enum([
+    'product',
+    'flows',
+    'screens',
+    'components',
+    'data_api',
+    'capabilities',
+    'design_system',
+    'towers_code_files',
+    'relationships',
+  ]).optional(),
   critical: z.boolean().default(false),
 })
 
