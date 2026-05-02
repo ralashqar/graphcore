@@ -16,6 +16,7 @@ import {
   worldPromptWorkItemContextSchema,
   worldPromptWorkItemResultSchema,
 } from './worldPrompt.ts'
+import { worldBrandAtlasImageResponseSchema } from './worldBrandAtlasImage.ts'
 
 test('incremental build brief stores compact continuity instead of raw source', () => {
   const brief = worldPromptIncrementalBuildBriefSchema.parse({
@@ -392,4 +393,47 @@ test('wiki metadata gap tasks stay direct and do not emit generic diagnostics', 
   assert.equal(classifyBody.includes(': []'), true)
   assert.equal(source.includes('specific project wiki metadata field such as artStyleDescription, brandAtlasPrompt, or colorScheme'), true)
   assert.equal(source.includes('For App color-scheme metadata tasks'), true)
+})
+
+test('targeted wiki metadata turns use a limited context fast path before broad retrieval', () => {
+  const source = readFileSync(resolve('supabase/functions/_shared/world-prompt.ts'), 'utf8')
+  const plannerStart = source.indexOf('async function generatePromptPlan')
+  const retrievalIndex = source.indexOf('const relevantPlannerContext = await buildWorldPromptRetrievalPacket', plannerStart)
+  const targetedIndex = source.indexOf('const targetedWikiMetadataPlan = buildTargetedWikiMetadataPlan', plannerStart)
+  const fastPathBody = source.slice(targetedIndex, retrievalIndex)
+
+  assert.ok(targetedIndex > plannerStart)
+  assert.ok(targetedIndex < retrievalIndex)
+  assert.equal(fastPathBody.includes('buildTargetedWikiMetadataRetrievalPacket'), true)
+  assert.equal(source.includes('targeted_wiki_metadata_limited_context'), true)
+  assert.equal(source.includes('function buildAppColorScheme'), true)
+})
+
+test('brand atlas image response returns a linkable asset and draft metadata', () => {
+  const response = worldBrandAtlasImageResponseSchema.parse({
+    ok: true,
+    asset: {
+      id: 'asset_1',
+      projectId: 'project_1',
+      key: 'brand_atlas_demo',
+      name: 'Brand Atlas',
+      kind: 'image',
+      mimeType: 'image/png',
+      storagePath: 'generated/wiki-brand-atlas/draft_1/brand_atlas_demo.png',
+      metadata: {
+        storageBucket: 'project-assets',
+      },
+    },
+    draftMetadata: {
+      worldWiki: {
+        brandAtlasAssetKey: 'brand_atlas_demo',
+      },
+    },
+    brandAtlasAssetKey: 'brand_atlas_demo',
+    signedUrl: 'https://example.test/signed.png',
+  })
+
+  assert.equal(response.asset.key, 'brand_atlas_demo')
+  assert.equal(response.brandAtlasAssetKey, 'brand_atlas_demo')
+  assert.equal(response.signedUrl, 'https://example.test/signed.png')
 })

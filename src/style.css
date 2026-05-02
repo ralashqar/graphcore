@@ -9554,6 +9554,19 @@ button.world-wiki-style-card:hover {
   gap: 8px;
 }
 
+.world-wiki-style-actions {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.world-wiki-style-error {
+  color: rgba(252, 165, 165, 0.92);
+  font-size: 0.78rem;
+}
+
 .world-wiki-color-row {
   min-width: 0;
   display: grid;

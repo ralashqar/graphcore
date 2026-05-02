@@ -4116,6 +4116,43 @@ export default function App() {
     return workspaceService.startWorldEntityIconBatch(snapshot)
   }
 
+  async function generateWorldBrandAtlasImage(prompt?: string) {
+    if (!snapshot) {
+      throw new Error('Load a live GraphCore draft before generating a brand atlas image.')
+    }
+    if (loadedState?.source !== 'supabase') {
+      throw new Error('Brand atlas image generation requires a live Supabase-backed draft.')
+    }
+    const result = await workspaceService.generateWorldBrandAtlasImage(snapshot, prompt)
+    const asset = result.signedUrl
+      ? {
+          ...result.asset,
+          metadata: {
+            ...(result.asset.metadata ?? {}),
+            sourceUrl: result.signedUrl,
+          },
+        }
+      : result.asset
+    const nextSnapshot = normalizeSnapshot({
+      ...snapshot,
+      draft: {
+        ...snapshot.draft,
+        metadata: result.draftMetadata,
+      },
+      assets: mergeResourcesByKey(snapshot.assets, [asset]),
+    })
+    snapshotRef.current = nextSnapshot
+    setSnapshot(nextSnapshot)
+    setBundle(compileBundle(nextSnapshot))
+    try {
+      const delta = await loadDraftDelta(nextSnapshot.draft.id, null)
+      await saveCachedProjectSnapshot(nextSnapshot, delta.currentRevision)
+    } catch (cacheError) {
+      console.warn('[GraphCore] failed to refresh snapshot cache after brand atlas generation.', cacheError)
+    }
+    return result
+  }
+
   async function getWorldEntityIconBatchStatus(jobId: string) {
     return workspaceService.getWorldEntityIconBatchStatus(jobId)
   }
@@ -6080,6 +6117,7 @@ export default function App() {
                 onGenerateWorldExpansion={generateWorldExpansion}
                 onStartWorldEntityIconBatch={startWorldEntityIconBatch}
                 onGetWorldEntityIconBatchStatus={getWorldEntityIconBatchStatus}
+                onGenerateWorldBrandAtlasImage={generateWorldBrandAtlasImage}
                 onRefreshLiveSnapshot={refreshLiveSnapshot}
                 onCompleteProjectOnboarding={handleCompleteProjectOnboarding}
                 onStartWorldSeedInference={startWorldSeedInference}

@@ -88,6 +88,7 @@ import {
   type WorldEntityIconGenerationStartResponse,
   type WorldEntityIconGenerationStatusResponse,
 } from '../domain/worldEntityIconGeneration'
+import type { WorldBrandAtlasImageResponse } from '../domain/worldBrandAtlasImage'
 import {
   mergeWorldEntityVisualDescriptionMetadata,
   readWorldEntityVisualDescription,
@@ -224,6 +225,7 @@ type WorldGraphPageProps = {
   onGenerateWorldExpansion: (entityKey: string) => Promise<void> | void
   onStartWorldEntityIconBatch: () => Promise<WorldEntityIconGenerationStartResponse> | WorldEntityIconGenerationStartResponse
   onGetWorldEntityIconBatchStatus: (jobId: string) => Promise<WorldEntityIconGenerationStatusResponse> | WorldEntityIconGenerationStatusResponse
+  onGenerateWorldBrandAtlasImage: (prompt?: string) => Promise<WorldBrandAtlasImageResponse> | WorldBrandAtlasImageResponse
   onRefreshLiveSnapshot: () => Promise<void> | void
   onCompleteProjectOnboarding: (values: { projectContext: ProjectContext; projectName: string }) => Promise<void> | void
   onStartWorldSeedInference: (input: {
@@ -1045,6 +1047,7 @@ export function WorldGraphPage({
   onGenerateWorldExpansion,
   onStartWorldEntityIconBatch,
   onGetWorldEntityIconBatchStatus,
+  onGenerateWorldBrandAtlasImage,
   onRefreshLiveSnapshot,
   onCompleteProjectOnboarding: _onCompleteProjectOnboarding,
   onStartWorldSeedInference,
@@ -1118,6 +1121,8 @@ export function WorldGraphPage({
   const [iconBatchJob, setIconBatchJob] = useState<WorldEntityIconGenerationJob | null>(null)
   const [iconBatchError, setIconBatchError] = useState<string | null>(null)
   const [iconBatchRefreshNonce, setIconBatchRefreshNonce] = useState(0)
+  const [brandAtlasGenerating, setBrandAtlasGenerating] = useState(false)
+  const [brandAtlasError, setBrandAtlasError] = useState<string | null>(null)
   const [signedAssetUrlsByKey, setSignedAssetUrlsByKey] = useState<Map<string, string>>(() => new Map())
   const [hoveredWorldNodeKey, setHoveredWorldNodeKey] = useState<string | null>(null)
   const [hoverRevealTargetNodeKey, setHoverRevealTargetNodeKey] = useState<string | null>(null)
@@ -3791,6 +3796,43 @@ export function WorldGraphPage({
     }
   }
 
+  async function handleGenerateBrandAtlasImage() {
+    const prompt = wikiModel.overview.brandAtlasPrompt.trim()
+    if (!prompt) {
+      const atlasGap = wikiModel.gaps.find((gap) => gap.kind === 'brand_atlas_prompt') ?? null
+      if (atlasGap) {
+        await handleRunWikiGap(atlasGap)
+      }
+      return
+    }
+    setBrandAtlasError(null)
+    setBrandAtlasGenerating(true)
+    try {
+      const result = await onGenerateWorldBrandAtlasImage(prompt)
+      if (result.signedUrl) {
+        setSignedAssetUrlsByKey((current) => {
+          const next = new Map(current)
+          next.set(result.brandAtlasAssetKey, result.signedUrl ?? '')
+          return next
+        })
+      }
+      openWikiDetailModal({
+        title: projectContext?.projectType === 'app' || wikiHasAppSections ? 'App Brand Atlas' : 'Brand Atlas',
+        eyebrow: 'Generated image',
+        body: prompt,
+        icon: 'asset',
+        imageUrl: result.signedUrl ?? wikiBrandAtlasImageUrl,
+        meta: ['Image generated'],
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not generate the brand atlas image.'
+      setBrandAtlasError(message)
+      console.error('[GraphCore] brand atlas image generation failed.', error)
+    } finally {
+      setBrandAtlasGenerating(false)
+    }
+  }
+
   function handleScrollToWikiSection(sectionKind: WorldWikiSection['kind']) {
     const section = document.getElementById(`world-wiki-section-${sectionKind}`)
     section?.scrollIntoView({
@@ -4194,6 +4236,23 @@ export function WorldGraphPage({
               </div>
             ) : <strong>Not established yet</strong>}
           </div>
+        </div>
+        <div className="world-wiki-style-actions">
+          <button
+            className="ghost-button compact"
+            disabled={brandAtlasGenerating || isPromptSubmitting}
+            onClick={() => void handleGenerateBrandAtlasImage()}
+            type="button"
+          >
+            {brandAtlasGenerating
+              ? 'Generating atlas...'
+              : wikiModel.overview.brandAtlasPrompt
+                ? wikiBrandAtlasImageUrl
+                  ? 'Regenerate atlas image'
+                  : 'Generate atlas image'
+                : 'Draft atlas prompt'}
+          </button>
+          {brandAtlasError ? <span className="world-wiki-style-error">{brandAtlasError}</span> : null}
         </div>
       </section>
     )

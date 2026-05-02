@@ -102,6 +102,10 @@ import {
   type WorldEntityIconGenerationStartResponse,
   type WorldEntityIconGenerationStatusResponse,
 } from '../domain/worldEntityIconGeneration'
+import {
+  worldBrandAtlasImageResponseSchema,
+  type WorldBrandAtlasImageResponse,
+} from '../domain/worldBrandAtlasImage'
 import { buildUrlSourceContextFromExtractionResponse } from '../domain/onboardingSource'
 import {
   worldThreadSchema,
@@ -6706,6 +6710,26 @@ export async function startWorldEntityIconBatch(snapshot: ProjectSnapshot): Prom
     throw new Error(await readFunctionsErrorMessage(response.error))
   }
   return worldEntityIconGenerationStartResponseSchema.parse(response.data)
+}
+
+export async function generateWorldBrandAtlasImage(snapshot: ProjectSnapshot, prompt?: string): Promise<WorldBrandAtlasImageResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before generating a brand atlas image.')
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Sign in and load a live GraphCore draft before generating a brand atlas image.')
+  }
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'start-world-brand-atlas-image',
+    {
+      projectId: snapshot.project.id,
+      draftId: snapshot.draft.id,
+      prompt,
+    },
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  return worldBrandAtlasImageResponseSchema.parse(response.data)
 }
 
 export async function getWorldEntityIconBatchStatus(jobId: string): Promise<WorldEntityIconGenerationStatusResponse> {

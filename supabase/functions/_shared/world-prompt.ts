@@ -1339,6 +1339,396 @@ type WorldPromptRetrievalPacket = {
   }
 }
 
+type TargetedWikiMetadataAction = 'art_style_description' | 'brand_atlas_prompt' | 'app_color_scheme'
+
+function detectTargetedWikiMetadataAction(input: {
+  prompt: string
+  snapshot: WorldPromptSnapshot
+}): TargetedWikiMetadataAction | null {
+  const prompt = input.prompt.toLowerCase()
+  const targeted = prompt.includes('targeted') && prompt.includes('wiki metadata')
+  if (!targeted && !prompt.includes('metadata.')) return null
+
+  if (
+    projectContextIsApp(input.snapshot.projectContext)
+    && (
+      prompt.includes('metadata.colorscheme')
+      || prompt.includes('color scheme')
+      || prompt.includes('app colors')
+    )
+  ) {
+    return 'app_color_scheme'
+  }
+  if (prompt.includes('metadata.brandatlasprompt') || prompt.includes('brand atlas')) {
+    return 'brand_atlas_prompt'
+  }
+  if (prompt.includes('metadata.artstyledescription') || prompt.includes('art style description') || prompt.includes('art direction')) {
+    return 'art_style_description'
+  }
+  return null
+}
+
+function collectTargetedWikiContext(snapshot: WorldPromptSnapshot) {
+  const wiki = readProjectWorldWikiPresentation(snapshot)
+  const appNodes = snapshot.worldEntities
+    .filter((entity) => entity.status !== 'archived')
+    .filter((entity) => [
+      'app',
+      'design_system',
+      'feature',
+      'persona',
+      'user_flow',
+      'screen',
+      'component',
+    ].includes(entity.nodeType))
+    .slice(0, 14)
+    .map((entity) => ({
+      name: entity.name,
+      nodeType: entity.nodeType,
+      summary: trimPlannerText(entity.summary || entity.context || '', 180),
+      app: entity.customProperties?.app ?? null,
+    }))
+  return {
+    project: {
+      name: snapshot.project.name,
+      summary: snapshot.project.summary,
+      projectContext: snapshot.projectContext ?? null,
+    },
+    wiki: {
+      title: wiki.title,
+      logline: wiki.logline,
+      synopsis: trimPlannerText(wiki.synopsis, 360),
+      genre: wiki.genre,
+      themes: wiki.themes,
+      toneTags: wiki.toneTags,
+      coreConflict: wiki.coreConflict,
+      visualMotifs: wiki.visualMotifs,
+      artStyleDescription: wiki.artStyleDescription,
+      brandAtlasPrompt: wiki.brandAtlasPrompt,
+      colorScheme: wiki.colorScheme,
+    },
+    appNodes,
+  }
+}
+
+function buildTargetedWikiMetadataRetrievalPacket(input: {
+  prompt: string
+  snapshot: WorldPromptSnapshot
+  summaryMemory: string
+  sessionMemoryState: WorldPromptSessionMemoryState
+  recentMessages: WorldPromptMessage[]
+  retrievalIntent: ReturnType<typeof buildWorldPromptRetrievalIntent>
+  selectedRootEntityKey?: string | null
+  selectedThreadKey?: string | null
+  selectedViewKey?: string | null
+  selectedSuggestionId?: string | null
+}): WorldPromptRetrievalPacket {
+  const wiki = readProjectWorldWikiPresentation(input.snapshot)
+  const selectedRootEntity = input.selectedRootEntityKey
+    ? input.snapshot.worldEntities.find((entity) => entity.key === input.selectedRootEntityKey) ?? null
+    : null
+  const selectedView = input.selectedViewKey
+    ? input.snapshot.worldViews.find((view) => view.key === input.selectedViewKey) ?? null
+    : null
+  const selectedThread = input.selectedThreadKey
+    ? input.snapshot.worldThreads.find((thread) => thread.key === input.selectedThreadKey) ?? null
+    : null
+  const atlas = buildWorldPromptAtlasIndex({
+    entities: input.snapshot.worldEntities,
+    relationships: input.snapshot.worldRelationships,
+    maxEntities: 80,
+  })
+  const diagnostics = worldPromptRetrievalDiagnosticsSchema.parse({
+    selectedSuggestionId: input.selectedSuggestionId ?? null,
+    loadedEntityKeys: selectedRootEntity ? [selectedRootEntity.key] : [],
+    loadedThreadKeys: selectedThread ? [selectedThread.key] : [],
+    contextBudget: {
+      atlasEntities: atlas.entities.length,
+      atlasTotalEntities: atlas.totalEntityCount,
+      atlasOmittedEntities: atlas.omittedEntityCount,
+      relevantEntities: selectedRootEntity ? 1 : 0,
+      relevantRelationships: 0,
+      relevantThreads: selectedThread ? 1 : 0,
+      recentMessages: Math.min(input.recentMessages.length, 3),
+      fullAtlasIncluded: false,
+    },
+    chosenFocusLayer: input.retrievalIntent.focusLayer,
+    continuityMode: input.retrievalIntent.continuityMode,
+    executionReason: 'targeted_wiki_metadata_limited_context',
+  })
+
+  return {
+    promptIntent: input.retrievalIntent.promptIntent,
+    plannerMode: 'direct_build',
+    focusLayer: input.retrievalIntent.focusLayer,
+    continuityMode: input.retrievalIntent.continuityMode,
+    resolvedIntent: input.retrievalIntent.resolvedIntent,
+    resolvedFocus: input.retrievalIntent.resolvedFocus,
+    resolvedMode: 'apply_compact_wave',
+    selectedRootEntity: selectedRootEntity ? summarizeEntityForPlanner(selectedRootEntity) : null,
+    selectedView: selectedView
+      ? {
+          key: selectedView.key,
+          rootEntityKey: selectedView.rootEntityKey,
+          mode: selectedView.mode,
+          search: selectedView.search,
+          viewKind: getWorldViewSemanticMetadata(selectedView).viewKind ?? null,
+        }
+      : null,
+    selectedThread: selectedThread
+      ? {
+          key: selectedThread.key,
+          title: selectedThread.title,
+          summary: selectedThread.summary,
+          linkedEntityKeys: selectedThread.linkedEntityKeys,
+          priority: selectedThread.priority,
+        }
+      : null,
+    relevantEntities: selectedRootEntity ? [summarizeEntityForPlanner(selectedRootEntity)] : [],
+    relevantRelationships: [],
+    relevantThreads: selectedThread
+      ? [{
+          key: selectedThread.key,
+          title: selectedThread.title,
+          summary: selectedThread.summary,
+          priority: selectedThread.priority,
+          linkedEntityKeys: selectedThread.linkedEntityKeys,
+        }]
+      : [],
+    timelineContext: {
+      eventCount: 0,
+      orderedGroups: [],
+      temporalRelationships: [],
+      floatingEventKeys: [],
+      conflicts: [],
+      diagnostics: [],
+    },
+    sequenceContext: {
+      unitCount: 0,
+      groups: [],
+      relationships: [],
+      gaps: [],
+      diagnostics: [],
+    },
+    wikiContext: {
+      title: wiki.title,
+      logline: wiki.logline,
+      synopsis: wiki.synopsis,
+      artStyleDescription: wiki.artStyleDescription,
+      brandAtlasPrompt: wiki.brandAtlasPrompt,
+      colorScheme: wiki.colorScheme,
+      fingerprint: buildWorldWikiFingerprint(input.snapshot),
+      generatedFromFingerprint: wiki.generatedFromFingerprint,
+      updatePolicy: 'targeted',
+      missingFields: [],
+      stale: false,
+      populatedSections: [],
+      gaps: [],
+      diagnostics: ['Using limited targeted wiki metadata context.'],
+    },
+    worldAtlas: atlas,
+    graphSignals: {
+      entityCount: input.snapshot.worldEntities.filter((entity) => entity.status !== 'archived').length,
+      relationshipCount: input.snapshot.worldRelationships.filter((relationship) => relationship.state !== 'rejected').length,
+      threadCount: input.snapshot.worldThreads.length,
+      entityTypeCounts: atlas.entityTypeCounts,
+      anchorCount: selectedRootEntity ? 1 : 0,
+      ftsHitCount: 0,
+    },
+    recentMessages: input.recentMessages.slice(-3).map((message) => ({
+      role: message.role,
+      content: trimPlannerText(message.content, 240),
+    })),
+    sessionMemory: {
+      conversationMemory: trimPlannerText(input.summaryMemory, 400),
+      state: input.sessionMemoryState,
+      focusMemory: {
+        selectedRootEntityKey: input.selectedRootEntityKey ?? selectedView?.rootEntityKey ?? null,
+        selectedViewKey: input.selectedViewKey ?? null,
+        selectedThreadKey: input.selectedThreadKey ?? null,
+        recentEntityKeys: (input.sessionMemoryState.frontierEntityKeys ?? []).slice(0, 4),
+        recentThreadKeys: (input.sessionMemoryState.recentThreadKeys ?? []).slice(0, 2),
+        continuityMode: input.sessionMemoryState.lastContinuityMode ?? null,
+        focusLayer: input.sessionMemoryState.activeFocus.focusLayer ?? null,
+      },
+      worldMemory: {
+        retrievedEntityKeys: selectedRootEntity ? [selectedRootEntity.key] : [],
+        retrievedThreadKeys: selectedThread ? [selectedThread.key] : [],
+      },
+    },
+    diagnostics,
+    answerContext: {
+      entityKeys: selectedRootEntity ? [selectedRootEntity.key] : [],
+      threadKeys: selectedThread ? [selectedThread.key] : [],
+    },
+    mutationContext: {
+      entityKeys: selectedRootEntity ? [selectedRootEntity.key] : [],
+      threadKeys: selectedThread ? [selectedThread.key] : [],
+    },
+    backgroundContext: {
+      entityKeys: [],
+      threadKeys: [],
+    },
+  }
+}
+
+function targetedContextText(context: ReturnType<typeof collectTargetedWikiContext>) {
+  return [
+    context.project.name,
+    context.project.summary,
+    context.wiki.title,
+    context.wiki.logline,
+    context.wiki.synopsis,
+    context.wiki.artStyleDescription,
+    context.wiki.visualMotifs.join(' '),
+    context.appNodes.map((node) => `${node.nodeType} ${node.name}: ${node.summary}`).join(' '),
+  ].join(' ').toLowerCase()
+}
+
+function buildAppColorScheme(context: ReturnType<typeof collectTargetedWikiContext>) {
+  const text = targetedContextText(context)
+  if (/\b(wellness|mindful|health|habit|calm|soft|parent|family|gentle)\b/.test(text)) {
+    return {
+      primary: '#2f8f83 calm teal primary',
+      secondary: '#f4a261 warm ritual coral',
+      tertiary: '#7c3aed premium violet accent',
+      background: '#f7fbf8 quiet wellness canvas',
+      surface: '#ffffff clean card surface',
+      text: '#172033 soft charcoal text',
+    }
+  }
+  if (/\b(mascot|ritual|daily|creature|egg|companion|magic|reveal|timeline)\b/.test(text)) {
+    return {
+      primary: '#7c3aed magical companion violet',
+      secondary: '#14b8a6 fresh daily teal',
+      tertiary: '#f59e0b reveal gold',
+      background: '#fff7ed warm morning canvas',
+      surface: '#ffffff soft card surface',
+      text: '#1f2937 storybook charcoal text',
+    }
+  }
+  if (/\b(content|creator|comic|story|ad generator|editor|export|template|publish)\b/.test(text)) {
+    return {
+      primary: '#e11d48 creative rose primary',
+      secondary: '#2563eb production blue',
+      tertiary: '#f59e0b export gold',
+      background: '#fafafa editorial workspace',
+      surface: '#ffffff tool panel surface',
+      text: '#18181b crisp ink text',
+    }
+  }
+  return {
+    primary: '#2563eb trusted utility blue',
+    secondary: '#10b981 completion green',
+    tertiary: '#f59e0b premium amber',
+    background: '#f8fafc quiet app canvas',
+    surface: '#ffffff focused panel surface',
+    text: '#0f172a high-contrast slate text',
+  }
+}
+
+function buildTargetedArtStyleDescription(context: ReturnType<typeof collectTargetedWikiContext>) {
+  const app = projectContextIsApp(context.project.projectContext)
+  const existingMotifs = context.wiki.visualMotifs.length > 0
+    ? ` Motifs should repeat ${context.wiki.visualMotifs.slice(0, 4).join(', ')}.`
+    : ''
+  if (app) {
+    return trimPlannerText([
+      'Premium mobile UI direction with crisp native surfaces, restrained depth, readable compact cards, clear iOS-style hierarchy, polished iconography, and motion reserved for product moments.',
+      context.wiki.logline ? `The look should support: ${context.wiki.logline}` : '',
+      existingMotifs,
+    ].filter(Boolean).join(' '), 700)
+  }
+  return trimPlannerText([
+    'Cohesive visual-world direction with cinematic composition, controlled palette, strong recurring symbols, tactile materials, and consistent lighting across characters, places, objects, and key events.',
+    context.wiki.logline ? `The look should support: ${context.wiki.logline}` : '',
+    existingMotifs,
+  ].filter(Boolean).join(' '), 700)
+}
+
+function buildTargetedBrandAtlasPrompt(context: ReturnType<typeof collectTargetedWikiContext>) {
+  const app = projectContextIsApp(context.project.projectContext)
+  const colorText = Object.entries(context.wiki.colorScheme).map(([key, value]) => `${key} ${value}`).join(', ')
+  const base = app
+    ? 'One premium mobile app brand atlas board, clean editorial grid, iPhone screen fragments, reusable component states, palette swatches, icon style samples, typography mood, motion cues, and tactile UI materials'
+    : 'One cohesive visual world brand atlas board, cinematic editorial grid, key motif studies, palette swatches, material samples, typography mood, lighting references, representative subjects, and composition rules'
+  return trimPlannerText([
+    base,
+    context.wiki.title ? `for "${context.wiki.title}"` : '',
+    context.wiki.logline || context.wiki.synopsis ? `capturing ${context.wiki.logline || context.wiki.synopsis}` : '',
+    context.wiki.artStyleDescription ? `visual direction: ${context.wiki.artStyleDescription}` : '',
+    context.wiki.visualMotifs.length > 0 ? `motifs: ${context.wiki.visualMotifs.slice(0, 6).join(', ')}` : '',
+    colorText ? `colors: ${colorText}` : '',
+    'high-end, implementation-friendly, no schema diagrams, no internal IDs, no GraphCore branding',
+  ].filter(Boolean).join(', '), 1400)
+}
+
+function buildTargetedWikiMetadataPlan(input: {
+  prompt: string
+  snapshot: WorldPromptSnapshot
+}): z.infer<typeof worldPromptPlannerSchema> | null {
+  const action = detectTargetedWikiMetadataAction(input)
+  if (!action) return null
+  const context = collectTargetedWikiContext(input.snapshot)
+  const metadata: Record<string, unknown> = {}
+  let assistantSummary = ''
+  let reason = ''
+
+  if (action === 'app_color_scheme') {
+    metadata.colorScheme = buildAppColorScheme(context)
+    assistantSummary = 'Set the app color scheme in wiki metadata.'
+    reason = 'Targeted app color metadata update.'
+  } else if (action === 'brand_atlas_prompt') {
+    metadata.brandAtlasPrompt = buildTargetedBrandAtlasPrompt(context)
+    assistantSummary = projectContextIsApp(input.snapshot.projectContext)
+      ? 'Drafted the app brand atlas image prompt in wiki metadata.'
+      : 'Drafted the brand atlas image prompt in wiki metadata.'
+    reason = 'Targeted brand atlas prompt metadata update.'
+  } else {
+    metadata.artStyleDescription = buildTargetedArtStyleDescription(context)
+    assistantSummary = projectContextIsApp(input.snapshot.projectContext)
+      ? 'Defined the app art direction in wiki metadata.'
+      : 'Defined the art style in wiki metadata.'
+    reason = 'Targeted art style metadata update.'
+  }
+
+  const op = promptToWorldOpSchema.parse({
+    id: `wiki-metadata-${action}-${crypto.randomUUID()}`,
+    op: 'update_world_wiki_metadata',
+    confidence: 1,
+    applyMode: 'auto',
+    dependencyOpIds: [],
+    rationale: reason,
+    status: 'pending',
+    metadata: {
+      targetedWikiMetadataAction: action,
+      limitedContext: true,
+    },
+    payload: {
+      target: 'project',
+      targetViewKey: null,
+      metadata,
+      reason,
+    },
+  })
+
+  return worldPromptPlannerSchema.parse({
+    projectContextInference: null,
+    classification: 'graphable_direct',
+    assistantSummary,
+    answer: '',
+    operations: [op],
+    wave1Ops: [op],
+    wave2Ideas: [],
+    optionalIdeas: [],
+    threadActions: [],
+    threadCandidates: [],
+    suggestionCandidates: [],
+    optionCandidates: [],
+    diagnosticFindings: [],
+  })
+}
+
 function promptHasExplicitCorrectionLanguage(prompt: string) {
   return /\b(actually|should be|wrong type|replace|correct(?:ion)?|mistaken|instead of|repair|canon-?repair|merge|dedupe|duplicate|overlap(?:ping)?|canonicali[sz]e)\b/i.test(prompt)
 }
@@ -7829,6 +8219,40 @@ async function generatePromptPlan(input: {
     selectedThreadKey: input.payload.selectedThreadKey,
     selectedViewKey: input.payload.selectedViewKey,
   })
+  const targetedWikiMetadataPlan = buildTargetedWikiMetadataPlan({
+    prompt: input.payload.prompt,
+    snapshot: input.payload.snapshot,
+  })
+  if (targetedWikiMetadataPlan) {
+    await input.onPlannerProgress?.({
+      phase: 'reading_context',
+      message: 'Reading targeted wiki metadata context.',
+      sequence: 1,
+    })
+    const plannerOutline = buildPlannerOutline(targetedWikiMetadataPlan)
+    await input.onPlannerProgress?.({
+      phase: 'finalizing_plan',
+      message: 'Prepared the targeted wiki metadata update.',
+      sequence: 12,
+      done: true,
+    }, plannerOutline.length > 0 ? { plannerOutline } : undefined)
+    return {
+      plan: targetedWikiMetadataPlan,
+      plannerFailure: null,
+      retrievalPacket: buildTargetedWikiMetadataRetrievalPacket({
+        prompt: input.payload.prompt,
+        snapshot: input.payload.snapshot,
+        summaryMemory: input.summaryMemory,
+        sessionMemoryState: input.sessionMemoryState,
+        recentMessages: input.recentMessages,
+        retrievalIntent,
+        selectedRootEntityKey: input.payload.selectedRootEntityKey,
+        selectedThreadKey: input.payload.selectedThreadKey,
+        selectedViewKey: input.payload.selectedViewKey,
+        selectedSuggestionId: input.payload.selectedSuggestionId,
+      }),
+    }
+  }
   const promptIntentHint = retrievalIntent.promptIntent
   const plannerMode = retrievalIntent.plannerMode
   const isSuggestionDriven = Boolean(input.payload.selectedSuggestionId)

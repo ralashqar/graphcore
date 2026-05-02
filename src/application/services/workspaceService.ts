@@ -27,6 +27,7 @@ export const workspaceService = {
   extractWorldThreadToCinematicPreview: graphcoreWorkspaceAdapter.extractWorldThreadToCinematicPreview,
   extractSourceUrlForWorldPrompt: graphcoreWorkspaceAdapter.extractSourceUrlForWorldPrompt,
   generateWorldResultPreview: graphcoreWorkspaceAdapter.generateWorldResultPreview,
+  generateWorldBrandAtlasImage: graphcoreWorkspaceAdapter.generateWorldBrandAtlasImage,
   getWorldEntityIconBatchStatus: graphcoreWorkspaceAdapter.getWorldEntityIconBatchStatus,
   getWorldGenerationStatus: graphcoreWorkspaceAdapter.getWorldGenerationStatus,
   generateStarterWorld: graphcoreWorkspaceAdapter.generateStarterWorld,
