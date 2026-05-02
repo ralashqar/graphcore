@@ -348,6 +348,56 @@ test('deriveWorldWiki uses sequence units for story flow before falling back to 
   assert.deepEqual(threadPage?.eventKeys, [event.key])
 })
 
+test('deriveWorldWiki splits app graph nodes into app-specific wiki sections', () => {
+  const app = createEntity({
+    key: 'world.app.daily-creature',
+    name: 'Daily Creature',
+    nodeType: 'app',
+    summary: 'Turns a parent moment into a magical creature card.',
+  })
+  const flow = createEntity({
+    key: 'world.user_flow.first-generation',
+    name: 'First Generation Flow',
+    nodeType: 'user_flow',
+    summary: 'Onboarding through first creature reveal.',
+  })
+  const screen = createEntity({
+    key: 'world.screen.creature-reveal',
+    name: 'Creature Reveal Screen',
+    nodeType: 'screen',
+    summary: 'Shows the generated creature card and share CTA.',
+  })
+  const api = createEntity({
+    key: 'world.api_endpoint.generate-creature',
+    name: 'POST /api/generate-creature',
+    nodeType: 'api_endpoint',
+    summary: 'Generates the creature card from a daily moment.',
+  })
+  const capability = createEntity({
+    key: 'world.capability.share-sheet',
+    name: 'Share Sheet',
+    nodeType: 'capability',
+    summary: 'Shares creature cards from iOS with a web fallback.',
+  })
+
+  const wiki = deriveWorldWiki({
+    snapshot: createSnapshot({
+      worldEntities: [app, flow, screen, api, capability],
+    }),
+  })
+
+  assert.equal(wiki.sections.some((section) => section.kind === 'app' && section.title === 'App System'), false)
+  assert.deepEqual(
+    wiki.sections
+      .filter((section) => section.entityKeys.length > 0)
+      .map((section) => section.kind),
+    ['overview', 'app_product', 'app_flows', 'app_screens', 'app_backend', 'app_capabilities'],
+  )
+  assert.deepEqual(wiki.sections.find((section) => section.kind === 'app_screens')?.entityKeys, [screen.key])
+  assert.deepEqual(wiki.sections.find((section) => section.kind === 'app_backend')?.entityKeys, [api.key])
+  assert.equal(wiki.sections.some((section) => section.kind === 'cast'), false)
+})
+
 test('deriveWorldWiki scopes custom wiki views to source entities', () => {
   const included = createEntity({ key: 'world.actor.included', name: 'Included', nodeType: 'actor', summary: 'Included profile.' })
   const hidden = createEntity({ key: 'world.actor.hidden', name: 'Hidden', nodeType: 'actor', summary: 'Hidden profile.' })

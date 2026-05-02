@@ -554,9 +554,45 @@ export function nodeShellStyle(
   dimmed: boolean,
   visualMode: WorldNodeVisualMode = 'card',
 ): CSSProperties {
+  const appPalette = (nodeType: WorldEntity['nodeType']) => {
+    switch (nodeType) {
+      case 'app':
+        return ['rgba(56, 189, 248, 0.34)', 'rgba(14, 116, 144, 0.12)', 'rgba(125, 211, 252, 0.18)', '#7dd3fc']
+      case 'persona':
+      case 'business_goal':
+        return ['rgba(52, 211, 153, 0.32)', 'rgba(5, 150, 105, 0.12)', 'rgba(167, 243, 208, 0.18)', '#86efac']
+      case 'feature':
+      case 'user_flow':
+        return ['rgba(129, 140, 248, 0.34)', 'rgba(67, 56, 202, 0.12)', 'rgba(199, 210, 254, 0.18)', '#c4b5fd']
+      case 'screen':
+      case 'section':
+      case 'screen_mockup':
+      case 'image_region':
+        return ['rgba(45, 212, 191, 0.34)', 'rgba(15, 118, 110, 0.12)', 'rgba(153, 246, 228, 0.18)', '#5eead4']
+      case 'component':
+        return ['rgba(251, 191, 36, 0.34)', 'rgba(180, 83, 9, 0.12)', 'rgba(253, 230, 138, 0.18)', '#fbbf24']
+      case 'data_model':
+      case 'action':
+        return ['rgba(34, 197, 94, 0.3)', 'rgba(21, 128, 61, 0.12)', 'rgba(187, 247, 208, 0.18)', '#4ade80']
+      case 'api_endpoint':
+      case 'backend_function':
+      case 'external_service':
+        return ['rgba(96, 165, 250, 0.34)', 'rgba(29, 78, 216, 0.12)', 'rgba(191, 219, 254, 0.18)', '#93c5fd']
+      case 'capability':
+        return ['rgba(248, 113, 113, 0.32)', 'rgba(185, 28, 28, 0.12)', 'rgba(254, 202, 202, 0.18)', '#fca5a5']
+      case 'design_system':
+      case 'animation_spec':
+        return ['rgba(244, 114, 182, 0.32)', 'rgba(190, 24, 93, 0.12)', 'rgba(251, 207, 232, 0.18)', '#f9a8d4']
+      case 'tower':
+      case 'code_file':
+        return ['rgba(148, 163, 184, 0.34)', 'rgba(51, 65, 85, 0.14)', 'rgba(226, 232, 240, 0.18)', '#cbd5e1']
+      default:
+        return null
+    }
+  }
   const palette =
     record.kind === 'entity'
-      ? record.entity.nodeType === 'actor'
+      ? appPalette(record.entity.nodeType) ?? (record.entity.nodeType === 'actor'
         ? ['rgba(125, 211, 252, 0.34)', 'rgba(56, 189, 248, 0.12)', 'rgba(186, 230, 253, 0.18)', '#c8e2ff']
         : record.entity.nodeType === 'group'
           ? ['rgba(248, 113, 113, 0.34)', 'rgba(185, 28, 28, 0.12)', 'rgba(254, 202, 202, 0.18)', '#ffbe9d']
@@ -568,7 +604,7 @@ export function nodeShellStyle(
                 ? ['rgba(196, 181, 253, 0.32)', 'rgba(109, 40, 217, 0.12)', 'rgba(221, 214, 254, 0.18)', '#d8b4fe']
                 : record.entity.nodeType === 'sequence_unit'
                   ? ['rgba(244, 114, 182, 0.3)', 'rgba(190, 24, 93, 0.12)', 'rgba(251, 207, 232, 0.18)', '#f9a8d4']
-                  : ['rgba(251, 146, 60, 0.3)', 'rgba(194, 65, 12, 0.12)', 'rgba(254, 215, 170, 0.18)', '#fdba74']
+                  : ['rgba(251, 146, 60, 0.3)', 'rgba(194, 65, 12, 0.12)', 'rgba(254, 215, 170, 0.18)', '#fdba74'])
       : record.kind === 'operator'
         ? ['rgba(148, 163, 184, 0.28)', 'rgba(51, 65, 85, 0.12)', 'rgba(226, 232, 240, 0.16)', '#e2e8f0']
         : ['rgba(226, 232, 240, 0.24)', 'rgba(71, 85, 105, 0.12)', 'rgba(226, 232, 240, 0.16)', '#f8fafc']

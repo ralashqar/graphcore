@@ -910,7 +910,28 @@ function iconForWikiSection(kind: WorldWikiSection['kind']): EntityIconId {
     case 'overview':
       return 'graph'
     case 'app':
+    case 'app_product':
       return 'app'
+    case 'app_people':
+      return 'character'
+    case 'app_features':
+      return 'archetype'
+    case 'app_flows':
+      return 'thread'
+    case 'app_screens':
+      return 'screen'
+    case 'app_components':
+      return 'component'
+    case 'app_data':
+      return 'database'
+    case 'app_backend':
+      return 'api'
+    case 'app_capabilities':
+      return 'capability'
+    case 'app_design':
+      return 'design'
+    case 'app_code':
+      return 'tower'
     case 'cast':
       return 'character'
     case 'threads':
@@ -929,6 +950,35 @@ function iconForWikiSection(kind: WorldWikiSection['kind']): EntityIconId {
       return 'cinematic'
     default:
       return 'content'
+  }
+}
+
+function labelForWikiSection(kind: WorldWikiSection['kind']) {
+  switch (kind) {
+    case 'app_product':
+      return 'App Product'
+    case 'app_people':
+      return 'Personas & Goals'
+    case 'app_features':
+      return 'Features'
+    case 'app_flows':
+      return 'User Flows'
+    case 'app_screens':
+      return 'Screens'
+    case 'app_components':
+      return 'Components'
+    case 'app_data':
+      return 'Data & Actions'
+    case 'app_backend':
+      return 'Backend & APIs'
+    case 'app_capabilities':
+      return 'Capabilities'
+    case 'app_design':
+      return 'Design System'
+    case 'app_code':
+      return 'Code Towers'
+    default:
+      return kind.replace(/_/g, ' ')
   }
 }
 
@@ -4038,7 +4088,7 @@ export function WorldGraphPage({
       <section id={`world-wiki-section-${section.kind}`} key={section.kind} className={`world-wiki-section world-wiki-section-${section.kind}`}>
         <div className="world-wiki-section-head">
           <div>
-            <span className="eyebrow">{section.kind}</span>
+            <span className="eyebrow">{labelForWikiSection(section.kind)}</span>
             <h3>{section.title}</h3>
           </div>
           {gap ? (
@@ -4051,7 +4101,7 @@ export function WorldGraphPage({
           className="world-wiki-summary-button"
           onClick={() => openWikiDetailModal({
             title: section.title,
-            eyebrow: section.kind,
+            eyebrow: labelForWikiSection(section.kind),
             body: section.summary,
           })}
           type="button"

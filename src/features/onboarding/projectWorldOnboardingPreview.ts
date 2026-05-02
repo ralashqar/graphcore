@@ -68,6 +68,17 @@ export type SeedGeneratedPreviewCard =
 
 export type SeedAssemblySectionKind =
   | 'overview'
+  | 'appProduct'
+  | 'appPeople'
+  | 'appFeatures'
+  | 'appFlows'
+  | 'appScreens'
+  | 'appComponents'
+  | 'appData'
+  | 'appBackend'
+  | 'appCapabilities'
+  | 'appDesign'
+  | 'appCode'
   | 'characters'
   | 'locations'
   | 'factions'
@@ -112,6 +123,72 @@ const ASSEMBLY_SECTION_META: Record<SeedAssemblySectionKind, Omit<SeedAssemblySe
     icon: 'content',
     title: 'Overview',
     subtitle: 'World bible initialized',
+  },
+  appProduct: {
+    kind: 'appProduct',
+    icon: 'app',
+    title: 'App Product',
+    subtitle: 'App identity and commercial promise',
+  },
+  appPeople: {
+    kind: 'appPeople',
+    icon: 'character',
+    title: 'Personas & Goals',
+    subtitle: 'Users, pains, motivations, and business goals',
+  },
+  appFeatures: {
+    kind: 'appFeatures',
+    icon: 'archetype',
+    title: 'Features',
+    subtitle: 'Product capabilities taking shape',
+  },
+  appFlows: {
+    kind: 'appFlows',
+    icon: 'thread',
+    title: 'User Flows',
+    subtitle: 'Onboarding, activation, retention, and conversion paths',
+  },
+  appScreens: {
+    kind: 'appScreens',
+    icon: 'screen',
+    title: 'Screens',
+    subtitle: 'Route-ready app surfaces',
+  },
+  appComponents: {
+    kind: 'appComponents',
+    icon: 'component',
+    title: 'Components',
+    subtitle: 'Reusable interface building blocks',
+  },
+  appData: {
+    kind: 'appData',
+    icon: 'database',
+    title: 'Data & Actions',
+    subtitle: 'Models and user/system actions',
+  },
+  appBackend: {
+    kind: 'appBackend',
+    icon: 'api',
+    title: 'Backend & APIs',
+    subtitle: 'Endpoint contracts and service integrations',
+  },
+  appCapabilities: {
+    kind: 'appCapabilities',
+    icon: 'capability',
+    title: 'Capabilities',
+    subtitle: 'Native features and preview constraints',
+  },
+  appDesign: {
+    kind: 'appDesign',
+    icon: 'design',
+    title: 'Design System',
+    subtitle: 'Brand style, screen mockups, and motion specs',
+  },
+  appCode: {
+    kind: 'appCode',
+    icon: 'tower',
+    title: 'Code Towers',
+    subtitle: 'Implementation slices and generated file plans',
   },
   characters: {
     kind: 'characters',
@@ -159,6 +236,17 @@ const ASSEMBLY_SECTION_META: Record<SeedAssemblySectionKind, Omit<SeedAssemblySe
 
 const ASSEMBLY_SECTION_ORDER: SeedAssemblySectionKind[] = [
   'overview',
+  'appProduct',
+  'appPeople',
+  'appFeatures',
+  'appFlows',
+  'appScreens',
+  'appComponents',
+  'appData',
+  'appBackend',
+  'appCapabilities',
+  'appDesign',
+  'appCode',
   'characters',
   'locations',
   'factions',
@@ -282,6 +370,37 @@ function nodeTypeIcon(nodeType: string | null | undefined): EntityIconId {
 
 function nodeTypeAssemblySection(nodeType: string | null | undefined): SeedAssemblySectionKind {
   switch (nodeType) {
+    case 'app':
+      return 'appProduct'
+    case 'persona':
+    case 'business_goal':
+      return 'appPeople'
+    case 'feature':
+      return 'appFeatures'
+    case 'user_flow':
+      return 'appFlows'
+    case 'screen':
+    case 'section':
+    case 'screen_mockup':
+    case 'image_region':
+      return 'appScreens'
+    case 'component':
+      return 'appComponents'
+    case 'data_model':
+    case 'action':
+      return 'appData'
+    case 'api_endpoint':
+    case 'backend_function':
+    case 'external_service':
+      return 'appBackend'
+    case 'capability':
+      return 'appCapabilities'
+    case 'design_system':
+    case 'animation_spec':
+      return 'appDesign'
+    case 'tower':
+    case 'code_file':
+      return 'appCode'
     case 'actor':
       return 'characters'
     case 'place':
@@ -332,6 +451,38 @@ function assemblyEntitySubtitle(section: SeedAssemblySectionKind, nodeType: stri
       return 'Faction'
     case 'artifacts':
       return 'Artifact'
+    case 'appProduct':
+      return 'App'
+    case 'appPeople':
+      return nodeType === 'business_goal' ? 'Business Goal' : 'Persona'
+    case 'appFeatures':
+      return 'Feature'
+    case 'appFlows':
+      return 'User Flow'
+    case 'appScreens':
+      return nodeType === 'section'
+        ? 'Section'
+        : nodeType === 'screen_mockup'
+          ? 'Screen Mockup'
+          : nodeType === 'image_region'
+            ? 'Image Region'
+            : 'Screen'
+    case 'appComponents':
+      return 'Component'
+    case 'appData':
+      return nodeType === 'action' ? 'Action' : 'Data Model'
+    case 'appBackend':
+      return nodeType === 'backend_function'
+        ? 'Backend Function'
+        : nodeType === 'external_service'
+          ? 'External Service'
+          : 'API Endpoint'
+    case 'appCapabilities':
+      return 'Capability'
+    case 'appDesign':
+      return nodeType === 'animation_spec' ? 'Animation Spec' : 'Design System'
+    case 'appCode':
+      return nodeType === 'code_file' ? 'Code File' : 'Tower'
     case 'lore':
       return nodeType === 'event' ? 'Lore event' : 'Lore'
     default:

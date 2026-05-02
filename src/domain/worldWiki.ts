@@ -11,6 +11,7 @@ import { deriveWorldTimeline, type WorldTimelineModel } from './worldTimeline.ts
 import { deriveWorldSequence, type WorldSequenceModel } from './worldSequence.ts'
 import type { WorldThread } from './worldThread.ts'
 import { getWorldViewSemanticMetadata } from './worldViewDerivation.ts'
+import { labelForWorldEntity } from './worldGraphHelpers.ts'
 
 type WikiSnapshot = Pick<ProjectSnapshot, 'project' | 'worldEntities' | 'worldRelationships' | 'worldThreads' | 'worldResults' | 'worldGraphConnections'> & {
   draft?: Pick<ProjectSnapshot['draft'], 'id' | 'metadata'> | null
@@ -258,6 +259,11 @@ function makeSection(input: {
   }
 }
 
+function appSectionSummary(entities: WorldEntity[], fallback: string) {
+  if (entities.length === 0) return fallback
+  return sectionSummary(entities, fallback)
+}
+
 export function deriveWorldWiki(input: {
   snapshot: WikiSnapshot
   view?: WorldView | null
@@ -287,28 +293,43 @@ export function deriveWorldWiki(input: {
   const objects = sortEntities(scopedEntities.filter((entity) => entity.nodeType === 'object'))
   const lore = sortEntities(scopedEntities.filter((entity) => entity.nodeType === 'concept'))
   const events = sortEntities(scopedEntities.filter((entity) => entity.nodeType === 'event'))
-  const appNodes = sortEntities(scopedEntities.filter((entity) => [
-    'app',
-    'persona',
-    'business_goal',
-    'feature',
-    'user_flow',
-    'screen',
-    'section',
-    'component',
-    'data_model',
-    'action',
-    'api_endpoint',
-    'backend_function',
-    'external_service',
-    'design_system',
-    'capability',
-    'screen_mockup',
-    'image_region',
-    'animation_spec',
-    'tower',
-    'code_file',
-  ].includes(entity.nodeType)))
+  const appProductNodes = sortEntities(scopedEntities.filter((entity) => entity.nodeType === 'app'))
+  const appPeopleNodes = sortEntities(scopedEntities.filter((entity) => entity.nodeType === 'persona' || entity.nodeType === 'business_goal'))
+  const appFeatureNodes = sortEntities(scopedEntities.filter((entity) => entity.nodeType === 'feature'))
+  const appFlowNodes = sortEntities(scopedEntities.filter((entity) => entity.nodeType === 'user_flow'))
+  const appScreenNodes = sortEntities(scopedEntities.filter((entity) => (
+    entity.nodeType === 'screen'
+    || entity.nodeType === 'section'
+    || entity.nodeType === 'screen_mockup'
+    || entity.nodeType === 'image_region'
+  )))
+  const appComponentNodes = sortEntities(scopedEntities.filter((entity) => entity.nodeType === 'component'))
+  const appDataNodes = sortEntities(scopedEntities.filter((entity) => entity.nodeType === 'data_model' || entity.nodeType === 'action'))
+  const appBackendNodes = sortEntities(scopedEntities.filter((entity) => (
+    entity.nodeType === 'api_endpoint'
+    || entity.nodeType === 'backend_function'
+    || entity.nodeType === 'external_service'
+  )))
+  const appCapabilityNodes = sortEntities(scopedEntities.filter((entity) => entity.nodeType === 'capability'))
+  const appDesignNodes = sortEntities(scopedEntities.filter((entity) => (
+    entity.nodeType === 'design_system'
+    || entity.nodeType === 'animation_spec'
+  )))
+  const appCodeNodes = sortEntities(scopedEntities.filter((entity) => entity.nodeType === 'tower' || entity.nodeType === 'code_file'))
+  const appNodes = [
+    ...appProductNodes,
+    ...appPeopleNodes,
+    ...appFeatureNodes,
+    ...appFlowNodes,
+    ...appScreenNodes,
+    ...appComponentNodes,
+    ...appDataNodes,
+    ...appBackendNodes,
+    ...appCapabilityNodes,
+    ...appDesignNodes,
+    ...appCodeNodes,
+  ]
+  const hasAppNodes = appNodes.length > 0
   const relevantThreads = input.snapshot.worldThreads
     .filter((thread) => thread.status === 'open' || thread.status === 'resolved')
     .filter((thread) => thread.linkedEntityKeys.some((key) => scopedEntityKeys.has(key)) || scopedEntityKeys.size === 0)
@@ -358,67 +379,137 @@ export function deriveWorldWiki(input: {
     return connections.some((connection) => resultEntityKeys.has(connection.sourceNodeKey) || resultEntityKeys.has(connection.targetNodeKey))
   })
 
+  const appSections = hasAppNodes
+    ? [
+        makeSection({
+          kind: 'app_product',
+          title: 'App Product',
+          summary: appSectionSummary(appProductNodes, 'No app identity node yet.'),
+          entityKeys: appProductNodes.slice(0, 8).map((entity) => entity.key),
+        }),
+        makeSection({
+          kind: 'app_people',
+          title: 'Personas & Goals',
+          summary: appSectionSummary(appPeopleNodes, 'No personas or business goals yet.'),
+          entityKeys: appPeopleNodes.slice(0, 10).map((entity) => entity.key),
+        }),
+        makeSection({
+          kind: 'app_features',
+          title: 'Features',
+          summary: appSectionSummary(appFeatureNodes, 'No product features yet.'),
+          entityKeys: appFeatureNodes.slice(0, 12).map((entity) => entity.key),
+        }),
+        makeSection({
+          kind: 'app_flows',
+          title: 'User Flows',
+          summary: appSectionSummary(appFlowNodes, 'No user flows yet.'),
+          entityKeys: appFlowNodes.slice(0, 12).map((entity) => entity.key),
+        }),
+        makeSection({
+          kind: 'app_screens',
+          title: 'Screens',
+          summary: appSectionSummary(appScreenNodes, 'No screens, sections, or mockups yet.'),
+          entityKeys: appScreenNodes.slice(0, 16).map((entity) => entity.key),
+        }),
+        makeSection({
+          kind: 'app_components',
+          title: 'Components',
+          summary: appSectionSummary(appComponentNodes, 'No reusable components yet.'),
+          entityKeys: appComponentNodes.slice(0, 16).map((entity) => entity.key),
+        }),
+        makeSection({
+          kind: 'app_data',
+          title: 'Data & Actions',
+          summary: appSectionSummary(appDataNodes, 'No data models or action contracts yet.'),
+          entityKeys: appDataNodes.slice(0, 16).map((entity) => entity.key),
+        }),
+        makeSection({
+          kind: 'app_backend',
+          title: 'Backend & APIs',
+          summary: appSectionSummary(appBackendNodes, 'No API endpoints, backend functions, or external services yet.'),
+          entityKeys: appBackendNodes.slice(0, 16).map((entity) => entity.key),
+        }),
+        makeSection({
+          kind: 'app_capabilities',
+          title: 'Capabilities',
+          summary: appSectionSummary(appCapabilityNodes, 'No native capability constraints yet.'),
+          entityKeys: appCapabilityNodes.slice(0, 12).map((entity) => entity.key),
+        }),
+        makeSection({
+          kind: 'app_design',
+          title: 'Design System',
+          summary: appSectionSummary(appDesignNodes, 'No design system or animation specs yet.'),
+          entityKeys: appDesignNodes.slice(0, 12).map((entity) => entity.key),
+        }),
+        makeSection({
+          kind: 'app_code',
+          title: 'Code Towers',
+          summary: appSectionSummary(appCodeNodes, 'No towers or code file plans yet.'),
+          entityKeys: appCodeNodes.slice(0, 16).map((entity) => entity.key),
+        }),
+      ]
+    : []
+
+  const storyWorldSections = hasAppNodes
+    ? []
+    : [
+        makeSection({
+          kind: 'cast',
+          title: 'Main Characters',
+          summary: sectionSummary(actors, 'No character profiles yet.'),
+          entityKeys: actors.slice(0, 8).map((entity) => entity.key),
+        }),
+        makeSection({
+          kind: 'threads',
+          title: 'Story Arcs',
+          summary: relevantThreads[0]?.summary || 'No active story arcs yet.',
+          threadKeys: relevantThreads.slice(0, 8).map((thread) => thread.key),
+        }),
+        makeSection({
+          kind: 'timeline',
+          title: 'Story Flow',
+          summary: sequence.units.length > 0
+            ? `${sequence.units.length} authored story beat${sequence.units.length === 1 ? '' : 's'} in the sequence.`
+            : timeline.events.length > 0 ? `${timeline.events.length} event${timeline.events.length === 1 ? '' : 's'} in the derived chronology.` : 'No story sequence or event chronology yet.',
+          entityKeys: sequence.units.length > 0
+            ? sequence.units.slice(0, 12).map((unit) => unit.entity.key)
+            : events.slice(0, 12).map((entity) => entity.key),
+        }),
+        makeSection({
+          kind: 'places',
+          title: 'World Atlas',
+          summary: sectionSummary(places, 'No places yet.'),
+          entityKeys: places.slice(0, 8).map((entity) => entity.key),
+        }),
+        makeSection({
+          kind: 'factions',
+          title: 'Factions',
+          summary: sectionSummary(groups, 'No factions or groups yet.'),
+          entityKeys: groups.slice(0, 8).map((entity) => entity.key),
+        }),
+        makeSection({
+          kind: 'lore',
+          title: 'Lore & Concepts',
+          summary: sectionSummary(lore, 'No lore concepts yet.'),
+          entityKeys: lore.slice(0, 8).map((entity) => entity.key),
+        }),
+        makeSection({
+          kind: 'items',
+          title: 'Objects & Relics',
+          summary: sectionSummary(objects, 'No objects yet.'),
+          entityKeys: objects.slice(0, 8).map((entity) => entity.key),
+        }),
+      ]
+
   const sections = [
     makeSection({
       kind: 'overview',
-      title: appNodes.length > 0 ? 'Product Overview' : 'Overview',
-      summary: synopsis || (appNodes.length > 0 ? 'The app overview will grow from graph canon.' : 'The world overview will grow from graph canon.'),
+      title: hasAppNodes ? 'Product Overview' : 'Overview',
+      summary: synopsis || (hasAppNodes ? 'The app overview will grow from graph canon.' : 'The world overview will grow from graph canon.'),
       entityKeys: heroEntity ? [heroEntity.key] : [],
     }),
-    ...(appNodes.length > 0
-      ? [makeSection({
-          kind: 'app',
-          title: 'App System',
-          summary: sectionSummary(appNodes, 'No app system nodes yet.'),
-          entityKeys: appNodes.slice(0, 12).map((entity) => entity.key),
-        })]
-      : []),
-    makeSection({
-      kind: 'cast',
-      title: 'Main Characters',
-      summary: sectionSummary(actors, 'No character profiles yet.'),
-      entityKeys: actors.slice(0, 8).map((entity) => entity.key),
-    }),
-    makeSection({
-      kind: 'threads',
-      title: 'Story Arcs',
-      summary: relevantThreads[0]?.summary || 'No active story arcs yet.',
-      threadKeys: relevantThreads.slice(0, 8).map((thread) => thread.key),
-    }),
-    makeSection({
-      kind: 'timeline',
-      title: 'Story Flow',
-      summary: sequence.units.length > 0
-        ? `${sequence.units.length} authored story beat${sequence.units.length === 1 ? '' : 's'} in the sequence.`
-        : timeline.events.length > 0 ? `${timeline.events.length} event${timeline.events.length === 1 ? '' : 's'} in the derived chronology.` : 'No story sequence or event chronology yet.',
-      entityKeys: sequence.units.length > 0
-        ? sequence.units.slice(0, 12).map((unit) => unit.entity.key)
-        : events.slice(0, 12).map((entity) => entity.key),
-    }),
-    makeSection({
-      kind: 'places',
-      title: 'World Atlas',
-      summary: sectionSummary(places, 'No places yet.'),
-      entityKeys: places.slice(0, 8).map((entity) => entity.key),
-    }),
-    makeSection({
-      kind: 'factions',
-      title: 'Factions',
-      summary: sectionSummary(groups, 'No factions or groups yet.'),
-      entityKeys: groups.slice(0, 8).map((entity) => entity.key),
-    }),
-    makeSection({
-      kind: 'lore',
-      title: 'Lore & Concepts',
-      summary: sectionSummary(lore, 'No lore concepts yet.'),
-      entityKeys: lore.slice(0, 8).map((entity) => entity.key),
-    }),
-    makeSection({
-      kind: 'items',
-      title: 'Objects & Relics',
-      summary: sectionSummary(objects, 'No objects yet.'),
-      entityKeys: objects.slice(0, 8).map((entity) => entity.key),
-    }),
+    ...appSections,
+    ...storyWorldSections,
     makeSection({
       kind: 'outputs',
       title: 'Output Previews',
@@ -447,7 +538,7 @@ export function deriveWorldWiki(input: {
     ].filter((value): value is string => Boolean(value))
     return {
       entity,
-      roleLabel: presentation.roleLabel || entity.tags.find((tag) => /protagonist|antagonist|ally|mentor|ruler|heir/i.test(tag)) || entity.nodeType,
+      roleLabel: presentation.roleLabel || entity.tags.find((tag) => /protagonist|antagonist|ally|mentor|ruler|heir/i.test(tag)) || labelForWorldEntity(entity.nodeType),
       shortSummary: presentation.shortSummary || entity.summary || entity.context,
       relationshipKeys: relationshipKeysByEntity.get(entity.key) ?? [],
       threadKeys: threadKeysByEntity.get(entity.key) ?? [],

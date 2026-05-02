@@ -332,6 +332,93 @@ test('buildSeedAssemblySections groups generated records into presentation secti
   )
 })
 
+test('buildSeedAssemblySections groups app graph records into app presentation sections', () => {
+  const sections = buildSeedAssemblySections([
+    event(1, {
+      op: 'upsert_entity',
+      payload: {
+        targetEntityKey: null,
+        entity: {
+          name: 'Daily Creature',
+          summary: 'Turns a parent moment into a magical creature card.',
+          context: '',
+          nodeType: 'app',
+          aliases: [],
+          tags: [],
+          status: 'active',
+          source: 'ai',
+          customProperties: { app: { platforms: ['ios', 'web'] } },
+          metadata: {},
+        },
+      },
+    }),
+    event(2, {
+      op: 'upsert_entity',
+      payload: {
+        targetEntityKey: null,
+        entity: {
+          name: 'Creature Reveal Screen',
+          summary: 'Shows the generated creature card and share CTA.',
+          context: '',
+          nodeType: 'screen',
+          aliases: [],
+          tags: [],
+          status: 'active',
+          source: 'ai',
+          customProperties: {},
+          metadata: {},
+        },
+      },
+    }),
+    event(3, {
+      op: 'upsert_entity',
+      payload: {
+        targetEntityKey: null,
+        entity: {
+          name: 'POST /api/generate-creature',
+          summary: 'Generates the creature card from a daily moment.',
+          context: '',
+          nodeType: 'api_endpoint',
+          aliases: [],
+          tags: [],
+          status: 'active',
+          source: 'ai',
+          customProperties: {},
+          metadata: {},
+        },
+      },
+    }),
+    event(4, {
+      op: 'upsert_entity',
+      payload: {
+        targetEntityKey: null,
+        entity: {
+          name: 'Camera',
+          summary: 'Allows photo input with a web upload fallback.',
+          context: '',
+          nodeType: 'capability',
+          aliases: [],
+          tags: [],
+          status: 'active',
+          source: 'ai',
+          customProperties: {},
+          metadata: {},
+        },
+      },
+    }),
+  ])
+
+  assert.deepEqual(sections.map((section) => section.kind), [
+    'appProduct',
+    'appScreens',
+    'appBackend',
+    'appCapabilities',
+  ])
+  assert.equal(sections.find((section) => section.kind === 'appScreens')?.items[0].subtitle, 'Screen')
+  assert.equal(sections.find((section) => section.kind === 'appBackend')?.items[0].subtitle, 'API Endpoint')
+  assert.equal(sections.some((section) => section.kind === 'lore'), false)
+})
+
 test('buildSeedAssemblySections omits internal node fields from visible presentation items', () => {
   const sections = buildSeedAssemblySections([
     event(1, {

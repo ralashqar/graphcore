@@ -139,6 +139,17 @@ export const worldWikiSectionKindSchema = z.enum([
   'outputs',
   'style',
   'app',
+  'app_product',
+  'app_people',
+  'app_features',
+  'app_flows',
+  'app_screens',
+  'app_components',
+  'app_data',
+  'app_backend',
+  'app_capabilities',
+  'app_design',
+  'app_code',
   'gaps',
 ])
 
