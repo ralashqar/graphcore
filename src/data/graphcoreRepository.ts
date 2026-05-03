@@ -106,6 +106,17 @@ import {
   worldBrandAtlasImageResponseSchema,
   type WorldBrandAtlasImageResponse,
 } from '../domain/worldBrandAtlasImage'
+import {
+  visualGenerationCancelResponseSchema,
+  visualGenerationStartRequestSchema,
+  visualGenerationStartResponseSchema,
+  visualGenerationStatusRequestSchema,
+  visualGenerationStatusResponseSchema,
+  type VisualGenerationCancelResponse,
+  type VisualGenerationStartRequest,
+  type VisualGenerationStartResponse,
+  type VisualGenerationStatusResponse,
+} from '../domain/visualGeneration'
 import { buildUrlSourceContextFromExtractionResponse } from '../domain/onboardingSource'
 import {
   worldThreadSchema,
@@ -6743,6 +6754,55 @@ export async function getWorldEntityIconBatchStatus(jobId: string): Promise<Worl
     throw new Error(await readFunctionsErrorMessage(response.error))
   }
   return worldEntityIconGenerationStatusResponseSchema.parse(response.data)
+}
+
+export async function startVisualGenerationJob(snapshot: ProjectSnapshot, request: Omit<Partial<VisualGenerationStartRequest>, 'projectId' | 'draftId'> & Pick<VisualGenerationStartRequest, 'kind'>): Promise<VisualGenerationStartResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before starting visual generation.')
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Sign in and load a live GraphCore draft before starting visual generation.')
+  }
+  const payload = visualGenerationStartRequestSchema.parse({
+    ...request,
+    projectId: snapshot.project.id,
+    draftId: snapshot.draft.id,
+  })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'start-visual-generation-job',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  return visualGenerationStartResponseSchema.parse(response.data)
+}
+
+export async function getVisualGenerationStatus(jobId: string): Promise<VisualGenerationStatusResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before loading visual generation status.')
+  const payload = visualGenerationStatusRequestSchema.parse({ jobId })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'get-visual-generation-status',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  return visualGenerationStatusResponseSchema.parse(response.data)
+}
+
+export async function cancelVisualGenerationJob(jobId: string): Promise<VisualGenerationCancelResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before cancelling visual generation.')
+  const payload = visualGenerationStatusRequestSchema.parse({ jobId })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'cancel-visual-generation-job',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  return visualGenerationCancelResponseSchema.parse(response.data)
 }
 
 export async function extractSourceUrlForWorldPrompt(url: string): Promise<WorldPromptSourceContext> {

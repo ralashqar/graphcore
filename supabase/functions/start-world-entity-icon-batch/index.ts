@@ -4,11 +4,14 @@ import { requireUserClient } from '../_shared/auth.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
 import {
   iconGenerationStartResponseSchema,
-  iconGenerationCandidateSchema,
-  mapIconGenerationJobRow,
   resolveIconGridSize,
   type IconGenerationCandidate,
 } from '../_shared/entity-icon-generation.ts'
+import {
+  mapVisualJobRowToIconGenerationJob,
+  readVisualIconCandidates,
+  visualIconJobSelect,
+} from '../_shared/visual-icon-compat.ts'
 
 const requestSchema = z.object({
   projectId: z.string().min(1),
@@ -155,9 +158,10 @@ Deno.serve(async (request) => {
     const artStyle = readProjectContext(draftResponse.data.metadata as Record<string, unknown> | null)
 
     const activeJobResponse = await client
-      .from('world_entity_icon_generation_jobs')
-      .select('id, project_id, draft_id, status, provider, model, grid_rows, grid_cols, entity_keys, source_grid_asset_key, created_asset_keys, error_message, metadata, created_at, updated_at')
+      .from('visual_generation_jobs')
+      .select(visualIconJobSelect)
       .eq('draft_id', payload.draftId)
+      .eq('kind', 'world_entity_icon_grid')
       .in('status', ['queued', 'running'])
       .order('created_at', { ascending: false })
       .limit(1)
@@ -165,45 +169,51 @@ Deno.serve(async (request) => {
 
     if (activeJobResponse.error) throw new Error(activeJobResponse.error.message)
     if (activeJobResponse.data) {
-      const activeJob = mapIconGenerationJobRow(activeJobResponse.data)
-      const activeCandidates = Array.isArray(activeJob.metadata.candidates)
-        ? activeJob.metadata.candidates.map((candidate) => iconGenerationCandidateSchema.safeParse(candidate)).filter((parsed) => parsed.success).map((parsed) => parsed.data)
-        : candidates
+      const activeJob = mapVisualJobRowToIconGenerationJob(activeJobResponse.data)
+      const activeCandidates = readVisualIconCandidates(asRecord(activeJobResponse.data.input))
       return json(iconGenerationStartResponseSchema.parse({
         ok: true,
         job: activeJob,
-        candidates: activeCandidates,
+        candidates: activeCandidates.length > 0 ? activeCandidates : candidates,
         skippedCount: typeof activeJob.metadata.skippedCount === 'number' ? activeJob.metadata.skippedCount : Math.max(0, allCandidates.length - candidates.length),
       }))
     }
 
     const insertResponse = await client
-      .from('world_entity_icon_generation_jobs')
+      .from('visual_generation_jobs')
       .insert({
         project_id: payload.projectId,
         draft_id: payload.draftId,
         status: 'queued',
+        kind: 'world_entity_icon_grid',
         provider: 'fal',
         model: 'openai/gpt-image-2',
-        grid_rows: grid.rows,
-        grid_cols: grid.cols,
-        entity_keys: candidates.map((candidate) => candidate.entityKey),
+        target_keys: {
+          entityKeys: candidates.map((candidate) => candidate.entityKey),
+        },
+        input: {
+          candidates,
+          gridRows: grid.rows,
+          gridCols: grid.cols,
+          artStyle,
+        },
         requested_by: user.id,
         metadata: {
-          candidates,
           skippedCount: Math.max(0, allCandidates.length - candidates.length),
-          artStyle,
+          gridRows: grid.rows,
+          gridCols: grid.cols,
           runtime: 'fly',
+          queuedBy: 'start-world-entity-icon-batch',
         },
       })
-      .select('id, project_id, draft_id, status, provider, model, grid_rows, grid_cols, entity_keys, source_grid_asset_key, created_asset_keys, error_message, metadata, created_at, updated_at')
+      .select(visualIconJobSelect)
       .single()
 
     if (insertResponse.error) throw new Error(insertResponse.error.message)
 
     return json(iconGenerationStartResponseSchema.parse({
       ok: true,
-      job: mapIconGenerationJobRow(insertResponse.data),
+      job: mapVisualJobRowToIconGenerationJob(insertResponse.data),
       candidates,
       skippedCount: Math.max(0, allCandidates.length - candidates.length),
     }))

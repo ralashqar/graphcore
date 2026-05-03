@@ -61,7 +61,7 @@ export const WORLD_BUILD_ENVIRONMENT_VIEWS = ['hero', 'wide_alt', 'detail_area']
 export const worldBuildPlanItemKindSchema = z.enum(['character', 'environment', 'item', 'narrative_graph', 'cinematic_graph'])
 export const worldBuildBatchStatusSchema = z.enum(['planned', 'running', 'completed', 'completed_with_errors', 'failed', 'cancelled'])
 export const worldBuildJobStatusSchema = z.enum(['queued', 'running', 'succeeded', 'failed', 'skipped'])
-export const resourceGenerationStateSchema = z.enum(['pending', 'running', 'completed', 'failed'])
+export const resourceGenerationStateSchema = z.enum(['pending', 'running', 'completed', 'failed', 'cancelled'])
 export const worldBuildPlannerModeSchema = z.enum(['world_build', 'cinematic_build', 'direct_asset_generation'])
 export const conceptArtModeSchema = z.enum(['showcase', 'design_sheet', 'continuity', 'proof_surface'])
 
@@ -302,10 +302,10 @@ export const worldBuildStartRequestSchema = z.object({
 
 export const resourceGenerationMetadataSchema = z.object({
   batchId: z.string().nullable().optional(),
-  jobId: z.string(),
+  jobId: z.string().default(''),
   state: resourceGenerationStateSchema,
   placeholder: z.boolean().default(false),
-  source: z.enum(['global_prompt', 'mesh_generation', 'cinematic_storyboard_preview']).default('global_prompt'),
+  source: z.enum(['global_prompt', 'mesh_generation', 'cinematic_storyboard_preview', 'visual_generation']).default('global_prompt'),
 })
 
 export const worldBuildJobSchema = z.object({

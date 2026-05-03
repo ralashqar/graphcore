@@ -4157,6 +4157,10 @@ export default function App() {
     return workspaceService.getWorldEntityIconBatchStatus(jobId)
   }
 
+  async function getVisualGenerationStatus(jobId: string) {
+    return workspaceService.getVisualGenerationStatus(jobId)
+  }
+
   async function refreshLiveSnapshot() {
     const current = snapshotRef.current
     if (!current || loadedState?.source !== 'supabase') return
@@ -6118,6 +6122,7 @@ export default function App() {
                 onStartWorldEntityIconBatch={startWorldEntityIconBatch}
                 onGetWorldEntityIconBatchStatus={getWorldEntityIconBatchStatus}
                 onGenerateWorldBrandAtlasImage={generateWorldBrandAtlasImage}
+                onGetVisualGenerationStatus={getVisualGenerationStatus}
                 onRefreshLiveSnapshot={refreshLiveSnapshot}
                 onCompleteProjectOnboarding={handleCompleteProjectOnboarding}
                 onStartWorldSeedInference={startWorldSeedInference}

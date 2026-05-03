@@ -89,6 +89,7 @@ import {
   type WorldEntityIconGenerationStatusResponse,
 } from '../domain/worldEntityIconGeneration'
 import type { WorldBrandAtlasImageResponse } from '../domain/worldBrandAtlasImage'
+import type { VisualGenerationStatusResponse } from '../domain/visualGeneration'
 import {
   mergeWorldEntityVisualDescriptionMetadata,
   readWorldEntityVisualDescription,
@@ -157,10 +158,32 @@ function isWorldGraphSignableAsset(asset: AssetDefinition | null | undefined) {
   if (!asset) return false
   if (asset.kind !== 'image' && asset.kind !== 'video' && asset.kind !== 'mesh') return false
   if (resolveAssetSourceUrl(asset)) return false
+  if (isPendingWorldBrandAtlasAsset(asset)) return false
   const storagePath = asset.storagePath?.trim() ?? ''
   if (!storagePath || storagePath.startsWith('external/') || storagePath.startsWith('local-upload/')) return false
   const storageBucket = typeof asset.metadata.storageBucket === 'string' ? asset.metadata.storageBucket.trim() : ''
   return Boolean(storageBucket) || storagePath.startsWith('generated/')
+}
+
+function isPendingWorldBrandAtlasAsset(asset: AssetDefinition | null | undefined) {
+  if (!asset) return false
+  if (asset.metadata.generatedBy !== 'world_brand_atlas') return false
+  const generation = asset.metadata.generation && typeof asset.metadata.generation === 'object' && !Array.isArray(asset.metadata.generation)
+    ? asset.metadata.generation as Record<string, unknown>
+    : {}
+  const state = typeof generation.state === 'string' ? generation.state : ''
+  return state === 'pending' || state === 'running'
+}
+
+function readWorldBrandAtlasVisualJobId(asset: AssetDefinition | null | undefined) {
+  if (!asset) return null
+  const directJobId = typeof asset.metadata.visualJobId === 'string' ? asset.metadata.visualJobId.trim() : ''
+  if (directJobId) return directJobId
+  const generation = asset.metadata.generation && typeof asset.metadata.generation === 'object' && !Array.isArray(asset.metadata.generation)
+    ? asset.metadata.generation as Record<string, unknown>
+    : {}
+  const generationJobId = typeof generation.jobId === 'string' ? generation.jobId.trim() : ''
+  return generationJobId || null
 }
 
 type WorldGraphPageProps = {
@@ -226,6 +249,7 @@ type WorldGraphPageProps = {
   onStartWorldEntityIconBatch: () => Promise<WorldEntityIconGenerationStartResponse> | WorldEntityIconGenerationStartResponse
   onGetWorldEntityIconBatchStatus: (jobId: string) => Promise<WorldEntityIconGenerationStatusResponse> | WorldEntityIconGenerationStatusResponse
   onGenerateWorldBrandAtlasImage: (prompt?: string) => Promise<WorldBrandAtlasImageResponse> | WorldBrandAtlasImageResponse
+  onGetVisualGenerationStatus?: (jobId: string) => Promise<VisualGenerationStatusResponse> | VisualGenerationStatusResponse
   onRefreshLiveSnapshot: () => Promise<void> | void
   onCompleteProjectOnboarding: (values: { projectContext: ProjectContext; projectName: string }) => Promise<void> | void
   onStartWorldSeedInference: (input: {
@@ -317,6 +341,7 @@ type WikiDetailModalState = {
   icon?: EntityIconId
   imageUrl?: string | null
   meta?: string[]
+  variant?: 'detail' | 'image'
 } | null
 
 type EntityComposerState = {
@@ -1048,6 +1073,7 @@ export function WorldGraphPage({
   onStartWorldEntityIconBatch,
   onGetWorldEntityIconBatchStatus,
   onGenerateWorldBrandAtlasImage,
+  onGetVisualGenerationStatus,
   onRefreshLiveSnapshot,
   onCompleteProjectOnboarding: _onCompleteProjectOnboarding,
   onStartWorldSeedInference,
@@ -1123,6 +1149,7 @@ export function WorldGraphPage({
   const [iconBatchRefreshNonce, setIconBatchRefreshNonce] = useState(0)
   const [brandAtlasGenerating, setBrandAtlasGenerating] = useState(false)
   const [brandAtlasError, setBrandAtlasError] = useState<string | null>(null)
+  const [brandAtlasJobId, setBrandAtlasJobId] = useState<string | null>(null)
   const [signedAssetUrlsByKey, setSignedAssetUrlsByKey] = useState<Map<string, string>>(() => new Map())
   const [hoveredWorldNodeKey, setHoveredWorldNodeKey] = useState<string | null>(null)
   const [hoverRevealTargetNodeKey, setHoverRevealTargetNodeKey] = useState<string | null>(null)
@@ -1834,12 +1861,64 @@ export function WorldGraphPage({
   const wikiEmptySynopsisText = projectContext?.projectType === 'app' || wikiHasAppSections
     ? 'Add app graph canon or generate a synopsis from the existing product graph.'
     : 'Add world canon or generate a synopsis from the existing graph.'
-  const wikiBrandAtlasImageUrl = useMemo(() => {
+  const wikiBrandAtlasAsset = useMemo(() => {
     const assetKey = wikiModel.overview.brandAtlasAssetKey.trim()
     if (!assetKey) return null
-    const asset = assetByKey.get(assetKey) ?? null
-    return resolveAssetSourceUrl(asset) ?? signedAssetUrlsByKey.get(assetKey) ?? null
-  }, [assetByKey, signedAssetUrlsByKey, wikiModel.overview.brandAtlasAssetKey])
+    return assetByKey.get(assetKey) ?? null
+  }, [assetByKey, wikiModel.overview.brandAtlasAssetKey])
+  const wikiBrandAtlasPending = isPendingWorldBrandAtlasAsset(wikiBrandAtlasAsset)
+  const wikiBrandAtlasVisualJobId = useMemo(() => readWorldBrandAtlasVisualJobId(wikiBrandAtlasAsset), [wikiBrandAtlasAsset])
+  const activeBrandAtlasJobId = brandAtlasJobId ?? wikiBrandAtlasVisualJobId
+  const wikiBrandAtlasImageUrl = useMemo(() => {
+    if (!wikiBrandAtlasAsset || isPendingWorldBrandAtlasAsset(wikiBrandAtlasAsset)) return null
+    const assetKey = wikiBrandAtlasAsset.key
+    return resolveAssetSourceUrl(wikiBrandAtlasAsset) ?? signedAssetUrlsByKey.get(assetKey) ?? null
+  }, [signedAssetUrlsByKey, wikiBrandAtlasAsset])
+  useEffect(() => {
+    if (!wikiBrandAtlasPending) return
+    let disposed = false
+    let refreshed = false
+    let warnedMissingStatusPolling = false
+    const poll = async () => {
+      try {
+        if (activeBrandAtlasJobId && typeof onGetVisualGenerationStatus === 'function') {
+          const status = await onGetVisualGenerationStatus(activeBrandAtlasJobId)
+          if (disposed) return
+          if (status.terminal && !refreshed) {
+            refreshed = true
+            setBrandAtlasJobId(null)
+            if (status.job.status === 'failed') {
+              setBrandAtlasError(status.job.errorMessage || 'Brand atlas image generation failed.')
+            }
+            await onRefreshLiveSnapshot()
+          }
+          return
+        }
+        if (activeBrandAtlasJobId && typeof onGetVisualGenerationStatus !== 'function') {
+          if (!warnedMissingStatusPolling) {
+            warnedMissingStatusPolling = true
+            console.warn('[GraphCore] visual generation status polling is unavailable; falling back to snapshot refresh.')
+          }
+        }
+        if (!refreshed) {
+          refreshed = true
+          await onRefreshLiveSnapshot()
+        }
+      } catch (error) {
+        if (!disposed) {
+          console.warn('[GraphCore] failed to refresh brand atlas generation status.', error)
+        }
+      }
+    }
+    void poll()
+    const intervalId = window.setInterval(() => {
+      void poll()
+    }, activeBrandAtlasJobId ? 3000 : 15000)
+    return () => {
+      disposed = true
+      window.clearInterval(intervalId)
+    }
+  }, [activeBrandAtlasJobId, onGetVisualGenerationStatus, onRefreshLiveSnapshot, wikiBrandAtlasPending])
   const iconGenerationCandidates = useMemo(() => (
     buildWorldEntityIconCandidates({
       entities: worldEntities,
@@ -3815,15 +3894,12 @@ export function WorldGraphPage({
           next.set(result.brandAtlasAssetKey, result.signedUrl ?? '')
           return next
         })
+      } else if (result.status === 'queued') {
+        setBrandAtlasJobId(result.visualJobId ?? null)
+        setBrandAtlasGenerating(false)
+        return
       }
-      openWikiDetailModal({
-        title: projectContext?.projectType === 'app' || wikiHasAppSections ? 'App Brand Atlas' : 'Brand Atlas',
-        eyebrow: 'Generated image',
-        body: prompt,
-        icon: 'asset',
-        imageUrl: result.signedUrl ?? wikiBrandAtlasImageUrl,
-        meta: ['Image generated'],
-      })
+      openBrandAtlasImageSplash(result.signedUrl ?? wikiBrandAtlasImageUrl)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Could not generate the brand atlas image.'
       setBrandAtlasError(message)
@@ -3859,6 +3935,18 @@ export function WorldGraphPage({
     setWikiDetailModal({
       ...input,
       body: input.body.trim() || 'No full description has been written yet.',
+    })
+  }
+
+  function openBrandAtlasImageSplash(imageUrl: string | null | undefined) {
+    if (!imageUrl) return
+    openWikiDetailModal({
+      title: projectContext?.projectType === 'app' || wikiHasAppSections ? 'App Brand Atlas' : 'Brand Atlas',
+      eyebrow: 'Brand atlas image',
+      body: '',
+      icon: 'asset',
+      imageUrl,
+      variant: 'image',
     })
   }
 
@@ -4179,7 +4267,7 @@ export function WorldGraphPage({
             </div>
           ) : null}
         </div>
-        <div className="world-wiki-style-grid">
+        <div className={wikiBrandAtlasImageUrl ? 'world-wiki-style-grid has-atlas-image' : 'world-wiki-style-grid'}>
           <button
             className="world-wiki-style-card is-wide"
             onClick={() => openWikiDetailModal({
@@ -4198,53 +4286,66 @@ export function WorldGraphPage({
             <strong>{wikiModel.overview.artStyleDescription || 'Not established yet'}</strong>
           </button>
           <button
-            className={hasAtlas ? 'world-wiki-style-card is-atlas' : 'world-wiki-style-card is-atlas is-empty'}
-            onClick={() => openWikiDetailModal({
-              title: projectContext?.projectType === 'app' || wikiHasAppSections ? 'App Brand Atlas' : 'Brand Atlas',
-              eyebrow: 'Visual image prompt',
-              body: atlasBody,
-              icon: 'asset',
-              imageUrl: wikiBrandAtlasImageUrl,
-              meta: wikiModel.overview.brandAtlasPrompt ? ['Prompt ready'] : ['Needs prompt'],
-            })}
+            className={[
+              hasAtlas ? 'world-wiki-style-card is-atlas' : 'world-wiki-style-card is-atlas is-empty',
+              wikiBrandAtlasImageUrl ? 'has-image' : '',
+            ].filter(Boolean).join(' ')}
+            onClick={() => {
+              if (wikiBrandAtlasImageUrl) {
+                openBrandAtlasImageSplash(wikiBrandAtlasImageUrl)
+                return
+              }
+              openWikiDetailModal({
+                title: projectContext?.projectType === 'app' || wikiHasAppSections ? 'App Brand Atlas' : 'Brand Atlas',
+                eyebrow: 'Visual image prompt',
+                body: atlasBody,
+                icon: 'asset',
+                meta: wikiModel.overview.brandAtlasPrompt ? ['Prompt ready'] : ['Needs prompt'],
+              })
+            }}
             type="button"
+            aria-label={wikiBrandAtlasImageUrl ? 'Open brand atlas image' : 'Open brand atlas prompt'}
           >
             {wikiBrandAtlasImageUrl ? <img src={wikiBrandAtlasImageUrl} alt="" /> : <span className="world-wiki-style-card-icon"><EntityIcon id="asset" /></span>}
-            <span>
-              <em>Brand Atlas</em>
-              <strong>{wikiModel.overview.brandAtlasPrompt ? 'Prompt ready' : 'No atlas prompt yet'}</strong>
-            </span>
+            {wikiBrandAtlasImageUrl ? null : (
+              <span>
+                <em>Brand Atlas</em>
+                <strong>{wikiBrandAtlasPending ? 'Image generating' : wikiModel.overview.brandAtlasPrompt ? 'Prompt ready' : 'No atlas prompt yet'}</strong>
+              </span>
+            )}
           </button>
-          <div className="world-wiki-style-card">
-            <span className="eyebrow">Visual Motifs</span>
-            {wikiModel.overview.visualMotifs.length > 0 ? (
-              <div className="world-wiki-chip-row">
-                {wikiModel.overview.visualMotifs.map((motif) => <span key={motif} className="chip">{motif}</span>)}
-              </div>
-            ) : <strong>Not established yet</strong>}
-          </div>
-          <div className="world-wiki-style-card">
-            <span className="eyebrow">{projectContext?.projectType === 'app' || wikiHasAppSections ? 'App Colors' : 'Palette Notes'}</span>
-            {colorEntries.length > 0 ? (
-              <div className="world-wiki-color-list">
-                {colorEntries.slice(0, 8).map(([name, value]) => (
-                  <span key={name} className="world-wiki-color-row">
-                    <i style={{ background: value.split(/\s+/)[0] }} />
-                    <span><strong>{name}</strong><em>{value}</em></span>
-                  </span>
-                ))}
-              </div>
-            ) : <strong>Not established yet</strong>}
+          <div className="world-wiki-style-side-column">
+            <div className="world-wiki-style-card">
+              <span className="eyebrow">Visual Motifs</span>
+              {wikiModel.overview.visualMotifs.length > 0 ? (
+                <div className="world-wiki-chip-row">
+                  {wikiModel.overview.visualMotifs.map((motif) => <span key={motif} className="chip">{motif}</span>)}
+                </div>
+              ) : <strong>Not established yet</strong>}
+            </div>
+            <div className="world-wiki-style-card">
+              <span className="eyebrow">{projectContext?.projectType === 'app' || wikiHasAppSections ? 'App Colors' : 'Palette Notes'}</span>
+              {colorEntries.length > 0 ? (
+                <div className="world-wiki-color-list">
+                  {colorEntries.slice(0, 8).map(([name, value]) => (
+                    <span key={name} className="world-wiki-color-row">
+                      <i style={{ background: value.split(/\s+/)[0] }} />
+                      <span><strong>{name}</strong><em>{value}</em></span>
+                    </span>
+                  ))}
+                </div>
+              ) : <strong>Not established yet</strong>}
+            </div>
           </div>
         </div>
         <div className="world-wiki-style-actions">
           <button
             className="ghost-button compact"
-            disabled={brandAtlasGenerating || isPromptSubmitting}
+            disabled={brandAtlasGenerating || wikiBrandAtlasPending || isPromptSubmitting}
             onClick={() => void handleGenerateBrandAtlasImage()}
             type="button"
           >
-            {brandAtlasGenerating
+            {brandAtlasGenerating || wikiBrandAtlasPending
               ? 'Generating atlas...'
               : wikiModel.overview.brandAtlasPrompt
                 ? wikiBrandAtlasImageUrl
@@ -5049,31 +5150,41 @@ export function WorldGraphPage({
         {wikiDetailModal ? (
           <div className="world-wiki-modal-backdrop" onClick={() => setWikiDetailModal(null)} role="presentation">
             <article
-              className="world-wiki-modal"
+              className={wikiDetailModal.variant === 'image' ? 'world-wiki-modal world-wiki-image-splash' : 'world-wiki-modal'}
               onClick={(event) => event.stopPropagation()}
               role="dialog"
               aria-modal="true"
               aria-labelledby="world-wiki-modal-title"
             >
-              <div className="world-popup-head">
-                <div className="world-wiki-modal-title-row">
-                  <span className="world-wiki-modal-icon" aria-hidden="true">
-                    <EntityIcon id={wikiDetailModal.icon ?? 'content'} />
-                  </span>
-                  <div>
-                    <span className="eyebrow">{wikiDetailModal.eyebrow}</span>
-                    <h3 id="world-wiki-modal-title">{wikiDetailModal.title}</h3>
+              {wikiDetailModal.variant === 'image' ? (
+                <>
+                  <button className="world-popup-close world-wiki-image-splash-close" onClick={() => setWikiDetailModal(null)} type="button" aria-label="Close brand atlas">x</button>
+                  <h3 id="world-wiki-modal-title" className="sr-only">{wikiDetailModal.title}</h3>
+                  {wikiDetailModal.imageUrl ? <img className="world-wiki-image-splash-image" src={wikiDetailModal.imageUrl} alt={wikiDetailModal.title} /> : null}
+                </>
+              ) : (
+                <>
+                  <div className="world-popup-head">
+                    <div className="world-wiki-modal-title-row">
+                      <span className="world-wiki-modal-icon" aria-hidden="true">
+                        <EntityIcon id={wikiDetailModal.icon ?? 'content'} />
+                      </span>
+                      <div>
+                        <span className="eyebrow">{wikiDetailModal.eyebrow}</span>
+                        <h3 id="world-wiki-modal-title">{wikiDetailModal.title}</h3>
+                      </div>
+                    </div>
+                    <button className="world-popup-close" onClick={() => setWikiDetailModal(null)} type="button" aria-label="Close wiki detail">x</button>
                   </div>
-                </div>
-                <button className="world-popup-close" onClick={() => setWikiDetailModal(null)} type="button" aria-label="Close wiki detail">x</button>
-              </div>
-              {wikiDetailModal.imageUrl ? <img className="world-wiki-modal-image" src={wikiDetailModal.imageUrl} alt="" /> : null}
-              {wikiDetailModal.meta && wikiDetailModal.meta.length > 0 ? (
-                <div className="world-wiki-modal-meta">
-                  {wikiDetailModal.meta.map((entry) => <span key={entry}>{entry}</span>)}
-                </div>
-              ) : null}
-              <div className="world-wiki-modal-body">{wikiDetailModal.body}</div>
+                  {wikiDetailModal.imageUrl ? <img className="world-wiki-modal-image" src={wikiDetailModal.imageUrl} alt="" /> : null}
+                  {wikiDetailModal.meta && wikiDetailModal.meta.length > 0 ? (
+                    <div className="world-wiki-modal-meta">
+                      {wikiDetailModal.meta.map((entry) => <span key={entry}>{entry}</span>)}
+                    </div>
+                  ) : null}
+                  <div className="world-wiki-modal-body">{wikiDetailModal.body}</div>
+                </>
+              )}
             </article>
           </div>
         ) : null}

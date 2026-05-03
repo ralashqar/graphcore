@@ -3,9 +3,8 @@ import { z } from 'npm:zod@4'
 import { assetDefinitionSchema } from '../../../src/domain/graphcore.ts'
 import { readWorldWikiPresentationMetadata } from '../../../src/domain/worldWiki.ts'
 import { worldBrandAtlasImageRequestSchema, worldBrandAtlasImageResponseSchema } from '../../../src/domain/worldBrandAtlasImage.ts'
-import { createAdminClient, requireUserClient } from '../_shared/auth.ts'
+import { requireUserClient } from '../_shared/auth.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
-import { runOpenAiImages } from '../_shared/openai.ts'
 
 const assetRowSchema = z.object({
   id: z.string(),
@@ -35,12 +34,6 @@ function slugify(value: string) {
     .slice(0, 48)
 }
 
-function decodeBase64ToBytes(base64: string) {
-  const normalized = base64.includes(',') ? base64.slice(base64.indexOf(',') + 1) : base64
-  const binary = atob(normalized)
-  return Uint8Array.from(binary, (character) => character.charCodeAt(0))
-}
-
 function buildImagePrompt(input: {
   suppliedPrompt: string
   wiki: ReturnType<typeof readWorldWikiPresentationMetadata>
@@ -60,23 +53,17 @@ function buildImagePrompt(input: {
   ].filter(Boolean).join('\n')
 }
 
-async function loadImageBytesFromOpenAiResponse(body: Record<string, unknown>) {
-  const data = Array.isArray(body.data) ? body.data : []
-  const first = data[0] && typeof data[0] === 'object' ? data[0] as Record<string, unknown> : null
-  const b64Json = readString(first?.b64_json)
-  if (b64Json) {
-    return {
-      bytes: decodeBase64ToBytes(b64Json),
-      sourceUrl: null as string | null,
-    }
-  }
-  const url = readString(first?.url)
-  if (!url) throw new Error('OpenAI image response did not include image data.')
-  const download = await fetch(url)
-  if (!download.ok) throw new Error(`Generated brand atlas image could not be downloaded (${download.status}).`)
+function markGenerationSuperseded(metadata: Record<string, unknown>, now: string, replacementAssetKey: string | null) {
+  const generation = asRecord(metadata.generation)
   return {
-    bytes: new Uint8Array(await download.arrayBuffer()),
-    sourceUrl: url,
+    ...metadata,
+    generation: {
+      ...generation,
+      state: 'failed',
+      cancelledAt: now,
+      failureReason: 'superseded',
+      supersededByAssetKey: replacementAssetKey,
+    },
   }
 }
 
@@ -88,7 +75,6 @@ Deno.serve(async (request) => {
     if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed.')
 
     const { client, user } = await requireUserClient(request, 'start-world-brand-atlas-image')
-    const admin = createAdminClient('start-world-brand-atlas-image')
     const payload = worldBrandAtlasImageRequestSchema.parse(await request.json())
 
     const draftResponse = await client
@@ -109,35 +95,87 @@ Deno.serve(async (request) => {
     }
 
     const imagePrompt = buildImagePrompt({ suppliedPrompt, wiki })
-    const imageResponse = await runOpenAiImages({
-      action: 'generate',
-      model: 'gpt-image-2',
-      prompt: imagePrompt,
-      size: '1536x1024',
-      quality: 'high',
-      outputFormat: 'png',
-      n: 1,
-      user: user.id,
-      timeoutMs: 180_000,
-    })
-
-    if (!imageResponse.response.ok) {
-      const upstreamMessage =
-        typeof imageResponse.body.error === 'object' && imageResponse.body.error !== null
-          ? ((imageResponse.body.error as { message?: string }).message ?? 'OpenAI image request failed.')
-          : 'OpenAI image request failed.'
-      throw new Error(upstreamMessage)
-    }
-
-    const image = await loadImageBytesFromOpenAiResponse(imageResponse.body)
     const assetKey = `brand_atlas_${slugify(wiki.title || 'project')}_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`
     const storagePath = `generated/wiki-brand-atlas/${payload.draftId}/${assetKey}.png`
-    const uploadResponse = await admin.storage.from('project-assets').upload(storagePath, new Blob([image.bytes], { type: 'image/png' }), {
-      cacheControl: '31536000',
-      contentType: 'image/png',
-      upsert: true,
-    })
-    if (uploadResponse.error) throw new Error(uploadResponse.error.message)
+    const now = new Date().toISOString()
+
+    const activeJobsResponse = await client
+      .from('visual_generation_jobs')
+      .select('id')
+      .eq('project_id', payload.projectId)
+      .eq('draft_id', payload.draftId)
+      .eq('kind', 'brand_atlas')
+      .in('status', ['queued', 'running'])
+    if (activeJobsResponse.error) throw new Error(activeJobsResponse.error.message)
+    const activeJobIds = (activeJobsResponse.data ?? [])
+      .map((row) => typeof row.id === 'string' ? row.id : '')
+      .filter(Boolean)
+
+    if (activeJobIds.length > 0) {
+      const cancelResponse = await client
+        .from('visual_generation_jobs')
+        .update({
+          status: 'cancelled',
+          completed_at: now,
+          heartbeat_at: now,
+          error_message: 'Superseded by a newer brand atlas generation request.',
+        })
+        .in('id', activeJobIds)
+      if (cancelResponse.error) throw new Error(cancelResponse.error.message)
+
+      const pendingAssetsResponse = await client
+        .from('project_assets')
+        .select('id, metadata')
+        .eq('project_id', payload.projectId)
+        .eq('metadata->>generatedBy', 'world_brand_atlas')
+        .in('metadata->>visualJobId', activeJobIds)
+      if (pendingAssetsResponse.error) throw new Error(pendingAssetsResponse.error.message)
+
+      await Promise.all((pendingAssetsResponse.data ?? []).map(async (row) => {
+        const metadata = markGenerationSuperseded(asRecord(row.metadata), now, assetKey)
+        const updateResponse = await client
+          .from('project_assets')
+          .update({ metadata })
+          .eq('id', row.id)
+        if (updateResponse.error) throw new Error(updateResponse.error.message)
+      }))
+    }
+
+    const jobResponse = await client
+      .from('visual_generation_jobs')
+      .insert({
+        project_id: payload.projectId,
+        draft_id: payload.draftId,
+        requested_by: user.id,
+        status: 'queued',
+        kind: 'brand_atlas',
+        provider: 'fal',
+        model: 'openai/gpt-image-2',
+        target_keys: {
+          assetKey,
+          wikiField: 'brandAtlasAssetKey',
+        },
+        input: {
+          imagePrompt,
+          sourcePrompt: suppliedPrompt,
+          assetKey,
+          storagePath,
+          wiki: {
+            title: wiki.title,
+            logline: wiki.logline,
+            artStyleDescription: wiki.artStyleDescription,
+            visualMotifs: wiki.visualMotifs,
+            colorScheme: wiki.colorScheme,
+          },
+        },
+        metadata: {
+          runtime: 'fly',
+          queuedBy: 'start-world-brand-atlas-image',
+        },
+      })
+      .select('id')
+      .single()
+    if (jobResponse.error || !jobResponse.data) throw new Error(jobResponse.error?.message ?? 'Failed to create visual generation job.')
 
     const insertResponse = await client
       .from('project_assets')
@@ -150,15 +188,20 @@ Deno.serve(async (request) => {
         storage_path: storagePath,
         metadata: {
           generatedBy: 'world_brand_atlas',
-          provider: 'openai',
-          model: imageResponse.model,
-          requestId: imageResponse.response.headers.get('x-request-id'),
-          sourceImageUrl: image.sourceUrl,
+          visualJobId: jobResponse.data.id,
+          jobKind: 'brand_atlas',
+          provider: 'fal',
+          model: 'openai/gpt-image-2',
           storageBucket: 'project-assets',
           storagePath,
           prompt: imagePrompt,
           sourcePrompt: suppliedPrompt,
-          generatedAt: new Date().toISOString(),
+          generation: {
+            jobId: jobResponse.data.id,
+            state: 'pending',
+            queuedAt: new Date().toISOString(),
+            source: 'visual_generation',
+          },
         },
       })
       .select('id, project_id, key, name, kind, mime_type, storage_path, metadata, llm_hints')
@@ -180,7 +223,6 @@ Deno.serve(async (request) => {
       .single()
     if (updateDraftResponse.error) throw new Error(updateDraftResponse.error.message)
 
-    const signedResponse = await admin.storage.from('project-assets').createSignedUrl(storagePath, 60 * 60)
     const assetRow = assetRowSchema.parse(insertResponse.data)
     const asset = assetDefinitionSchema.parse({
       id: assetRow.id,
@@ -196,10 +238,12 @@ Deno.serve(async (request) => {
 
     return json(worldBrandAtlasImageResponseSchema.parse({
       ok: true,
+      status: 'queued',
       asset,
       draftMetadata: updateDraftResponse.data?.metadata ?? nextMetadata,
       brandAtlasAssetKey: assetKey,
-      signedUrl: signedResponse.data?.signedUrl ?? null,
+      visualJobId: jobResponse.data.id,
+      signedUrl: null,
     }))
   } catch (error) {
     return errorResponse(error, 'Failed to generate brand atlas image.')

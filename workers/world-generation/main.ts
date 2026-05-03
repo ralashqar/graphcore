@@ -1,5 +1,6 @@
 import { createAdminClient } from '../../supabase/functions/_shared/auth.ts'
 import { processFlyWorldEntityIconJobs } from '../../supabase/functions/_shared/entity-icon-worker.ts'
+import { processFlyVisualGenerationJobs } from '../../supabase/functions/_shared/visual-generation-worker.ts'
 import { processFlyWorldGenerationJobs } from '../../supabase/functions/_shared/world-prompt.ts'
 
 const workerId = Deno.env.get('FLY_MACHINE_ID')
@@ -60,6 +61,30 @@ async function runIconWorkerLoop() {
   }
 }
 
+async function runVisualWorkerLoop() {
+  while (!shuttingDown) {
+    try {
+      const visualResult = await processFlyVisualGenerationJobs({
+        client,
+        workerId,
+      })
+      if (visualResult.processed) {
+        console.log('[world-generation-worker] processed visual generation job', {
+          workerId,
+          jobId: visualResult.job?.id ?? null,
+          status: visualResult.job?.status ?? null,
+          kind: visualResult.job?.kind ?? null,
+        })
+        continue
+      }
+      await sleep(pollIntervalMs)
+    } catch (error) {
+      console.error('[world-generation-worker] visual loop error', error)
+      await sleep(Math.max(5_000, pollIntervalMs))
+    }
+  }
+}
+
 async function runGenerationWorkerLoop() {
   while (!shuttingDown) {
     try {
@@ -99,6 +124,7 @@ async function runGenerationWorkerLoop() {
 
 await Promise.all([
   runIconWorkerLoop(),
+  runVisualWorkerLoop(),
   runGenerationWorkerLoop(),
 ])
 

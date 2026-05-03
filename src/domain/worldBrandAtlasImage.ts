@@ -12,9 +12,11 @@ export const worldBrandAtlasImageRequestSchema = z.object({
 
 export const worldBrandAtlasImageResponseSchema = z.object({
   ok: z.literal(true),
+  status: z.enum(['queued', 'completed']).default('completed'),
   asset: assetDefinitionSchema,
   draftMetadata: looseRecordSchema,
   brandAtlasAssetKey: z.string().min(1),
+  visualJobId: z.string().nullable().default(null),
   signedUrl: z.string().nullable().default(null),
 })
 
