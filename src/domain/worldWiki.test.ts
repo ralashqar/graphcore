@@ -430,6 +430,60 @@ test('deriveWorldWiki splits app graph nodes into app-specific wiki sections', (
   assert.equal(wiki.sections.some((section) => section.kind === 'cast'), false)
 })
 
+test('deriveWorldWiki splits narrative RPG game nodes into game-specific wiki sections', () => {
+  const spot = createEntity({
+    key: 'world.location_spot.market',
+    name: 'Moon Market',
+    nodeType: 'location_spot',
+    summary: 'A playable marketplace spot.',
+  })
+  const item = createEntity({
+    key: 'world.inventory_item.charm',
+    name: 'Glass Charm',
+    nodeType: 'inventory_item',
+    summary: 'A barter item.',
+  })
+  const market = createEntity({
+    key: 'world.marketplace.stall',
+    name: 'Lantern Stall',
+    nodeType: 'marketplace',
+    summary: 'Trades charms for passage.',
+  })
+  const scene = createEntity({
+    key: 'world.narrative_scene.vendor',
+    name: 'Vendor Scene',
+    nodeType: 'narrative_scene',
+    summary: 'A branching vendor encounter.',
+  })
+  const choice = createEntity({
+    key: 'world.choice.buy-key',
+    name: 'Buy the Key',
+    nodeType: 'choice',
+    summary: 'A dialogue choice with a cost.',
+  })
+  const token = createEntity({
+    key: 'world.shadow_token.vendor-trust',
+    name: 'Vendor Trust',
+    nodeType: 'shadow_token',
+    summary: 'Hidden progression flag.',
+  })
+
+  const wiki = deriveWorldWiki({
+    snapshot: createSnapshot({
+      worldEntities: [spot, item, market, scene, choice, token],
+    }),
+  })
+
+  assert.deepEqual(
+    wiki.sections
+      .filter((section) => section.entityKeys.length > 0)
+      .map((section) => section.kind),
+    ['overview', 'game_inventory', 'game_economy', 'game_travel', 'game_narrative', 'game_dialogue', 'game_progression'],
+  )
+  assert.equal(wiki.sections.some((section) => section.kind === 'cast'), false)
+  assert.ok(wiki.gaps.some((gap) => gap.sectionKind === 'game_quests'))
+})
+
 test('deriveWorldWiki scopes custom wiki views to source entities', () => {
   const included = createEntity({ key: 'world.actor.included', name: 'Included', nodeType: 'actor', summary: 'Included profile.' })
   const hidden = createEntity({ key: 'world.actor.hidden', name: 'Hidden', nodeType: 'actor', summary: 'Hidden profile.' })

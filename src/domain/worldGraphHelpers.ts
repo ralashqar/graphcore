@@ -227,6 +227,40 @@ export function getWorldRelationshipsForDefinition(
 
 export function iconForWorldEntity(nodeType: WorldEntity['nodeType']): EntityIconId {
   switch (nodeType) {
+    case 'player_profile':
+      return 'character'
+    case 'player_initial_config':
+      return 'database'
+    case 'player_stat':
+      return 'activity'
+    case 'inventory':
+      return 'database'
+    case 'inventory_item':
+    case 'shadow_token':
+      return 'item'
+    case 'currency':
+      return 'credits'
+    case 'location_spot':
+    case 'travel_link':
+      return 'environment'
+    case 'marketplace':
+    case 'trade_offer':
+      return 'credits'
+    case 'quest':
+    case 'quest_step':
+    case 'narrative_arc':
+    case 'narrative_scene':
+    case 'dialogue_node':
+    case 'choice':
+      return 'thread'
+    case 'choice_condition':
+    case 'choice_outcome':
+    case 'state_variable':
+    case 'game_rule':
+    case 'save_state':
+      return 'activity'
+    case 'encounter':
+      return 'event'
     case 'app':
       return 'app'
     case 'persona':
@@ -285,6 +319,52 @@ export function iconForWorldEntity(nodeType: WorldEntity['nodeType']): EntityIco
 
 export function labelForWorldEntity(nodeType: WorldEntity['nodeType']) {
   switch (nodeType) {
+    case 'player_profile':
+      return 'Player Profile'
+    case 'player_initial_config':
+      return 'Player Initial Config'
+    case 'player_stat':
+      return 'Player Stat'
+    case 'inventory':
+      return 'Inventory'
+    case 'inventory_item':
+      return 'Inventory Item'
+    case 'currency':
+      return 'Currency'
+    case 'shadow_token':
+      return 'Shadow Token'
+    case 'location_spot':
+      return 'Location Spot'
+    case 'travel_link':
+      return 'Travel Link'
+    case 'marketplace':
+      return 'Marketplace'
+    case 'trade_offer':
+      return 'Trade Offer'
+    case 'quest':
+      return 'Quest'
+    case 'quest_step':
+      return 'Quest Step'
+    case 'narrative_arc':
+      return 'Narrative Arc'
+    case 'narrative_scene':
+      return 'Narrative Scene'
+    case 'dialogue_node':
+      return 'Dialogue Node'
+    case 'choice':
+      return 'Choice'
+    case 'choice_condition':
+      return 'Choice Condition'
+    case 'choice_outcome':
+      return 'Choice Outcome'
+    case 'state_variable':
+      return 'State Variable'
+    case 'game_rule':
+      return 'Game Rule'
+    case 'encounter':
+      return 'Encounter'
+    case 'save_state':
+      return 'Save State'
     case 'app':
       return 'App'
     case 'persona':
@@ -445,6 +525,29 @@ export function isCanonicalWorldNodeType(nodeType: string): nodeType is WorldEnt
     'concept',
     'event',
     'sequence_unit',
+    'player_profile',
+    'player_initial_config',
+    'player_stat',
+    'inventory',
+    'inventory_item',
+    'currency',
+    'shadow_token',
+    'location_spot',
+    'travel_link',
+    'marketplace',
+    'trade_offer',
+    'quest',
+    'quest_step',
+    'narrative_arc',
+    'narrative_scene',
+    'dialogue_node',
+    'choice',
+    'choice_condition',
+    'choice_outcome',
+    'state_variable',
+    'game_rule',
+    'encounter',
+    'save_state',
     'app',
     'persona',
     'business_goal',

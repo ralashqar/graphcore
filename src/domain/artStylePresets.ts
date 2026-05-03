@@ -609,7 +609,7 @@ export const DEFAULT_ART_STYLE_PRESET: ArtStylePresetId = 'premium_stylized_3d'
 const ART_STYLE_PRESET_ONBOARDING_METADATA: Partial<Record<ArtStylePresetId, ArtStylePresetOnboardingMetadata>> = {
   premium_stylized_3d: {
     allowedProjectTypes: ['story', 'game'],
-    recommendedProjectSubtypes: ['animated_story', 'action_rpg', 'open_world_sandbox'],
+    recommendedProjectSubtypes: ['animated_story', 'action_rpg', 'open_world_sandbox', 'narrative_rpg_mobile'],
     thumbnailUrl: buildArtStyleThumbnailUrl('premium 3d', ['#252d4a', '#9b5b3b', '#f4cf8a']),
   },
   stylized_hero_3d: {
@@ -624,7 +624,7 @@ const ART_STYLE_PRESET_ONBOARDING_METADATA: Partial<Record<ArtStylePresetId, Art
   },
   anime_cg: {
     allowedProjectTypes: ['story', 'game'],
-    recommendedProjectSubtypes: ['animated_story', 'action_rpg', 'narrative_adventure', 'platformer_metroidvania'],
+    recommendedProjectSubtypes: ['animated_story', 'action_rpg', 'narrative_adventure', 'narrative_rpg_mobile', 'platformer_metroidvania'],
     thumbnailUrl: buildArtStyleThumbnailUrl('anime cg', ['#141e3a', '#7340c6', '#ff8fa0']),
   },
   toon_illustration: {

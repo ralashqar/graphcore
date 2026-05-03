@@ -1,4 +1,5 @@
 import { createAdminClient } from '../../supabase/functions/_shared/auth.ts'
+import { processFlyAppGenerationJobs } from '../../supabase/functions/_shared/app-generation-worker.ts'
 import { processFlyWorldEntityIconJobs } from '../../supabase/functions/_shared/entity-icon-worker.ts'
 import { processFlyVisualGenerationJobs } from '../../supabase/functions/_shared/visual-generation-worker.ts'
 import { processFlyWorldGenerationJobs } from '../../supabase/functions/_shared/world-prompt.ts'
@@ -122,10 +123,35 @@ async function runGenerationWorkerLoop() {
   }
 }
 
+async function runAppGenerationWorkerLoop() {
+  while (!shuttingDown) {
+    try {
+      const result = await processFlyAppGenerationJobs({
+        client,
+        workerId,
+      })
+      if (result.processed) {
+        console.log('[world-generation-worker] processed app generation job', {
+          workerId,
+          jobId: result.job?.id ?? null,
+          status: result.job?.status ?? null,
+          kind: result.job?.kind ?? null,
+        })
+        continue
+      }
+      await sleep(pollIntervalMs)
+    } catch (error) {
+      console.error('[world-generation-worker] app generation loop error', error)
+      await sleep(Math.max(5_000, pollIntervalMs))
+    }
+  }
+}
+
 await Promise.all([
   runIconWorkerLoop(),
   runVisualWorkerLoop(),
   runGenerationWorkerLoop(),
+  runAppGenerationWorkerLoop(),
 ])
 
 console.log('[world-generation-worker] stopped', { workerId })

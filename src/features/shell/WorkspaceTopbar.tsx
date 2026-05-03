@@ -10,6 +10,7 @@ const TOPBAR_NAV_ITEMS: TopbarNavItem[] = [
   { kind: 'world', mode: 'wiki', label: 'Wiki', icon: 'content' },
   { kind: 'world', mode: 'timeline', label: 'Timeline', icon: 'event' },
   { kind: 'world', mode: 'board', label: 'Board', icon: 'thread' },
+  { kind: 'world', mode: 'code', label: 'Code', icon: 'code' },
   { kind: 'workspace', tab: 'library', label: 'Library', icon: 'content' },
   { kind: 'workspace', tab: 'outputs', label: 'Outputs', icon: 'cinematic' },
   { kind: 'workspace', tab: 'global', label: 'Global', icon: 'global' },
@@ -31,6 +32,7 @@ type WorkspaceTopbarProps = {
   onSetActiveTab: (tab: WorkspaceTab) => void
   onSetWorldViewMode: (mode: WorldWorkspaceMode) => void
   onSignOut: () => void
+  projectType?: string | null
   projectName: string
   sourceLabel: string
   tabs?: Array<{ id: WorkspaceTab; label: string; icon: EntityIconId }>
@@ -60,6 +62,7 @@ export function WorkspaceTopbar({
   onSetActiveTab,
   onSetWorldViewMode,
   onSignOut,
+  projectType,
   projectName,
   sourceLabel,
   worldViewMode,
@@ -67,6 +70,9 @@ export function WorkspaceTopbar({
 }: WorkspaceTopbarProps) {
   const userInitial = (currentUserEmail ?? 'G').trim().charAt(0).toUpperCase() || 'G'
   const displayCredits = creditBalance ?? 0
+  const navItems = TOPBAR_NAV_ITEMS.filter((item) => (
+    item.kind !== 'world' || item.mode !== 'code' || projectType === 'app'
+  ))
   return (
     <header className="topbar">
       <div className="brand-cluster">
@@ -90,7 +96,7 @@ export function WorkspaceTopbar({
       {hideNavigation ? <div className="topbar-center" aria-hidden="true" /> : (
         <div className="topbar-center">
           <nav className="tabbar" aria-label="Workspace tabs">
-            {TOPBAR_NAV_ITEMS.map((item) => {
+            {navItems.map((item) => {
               const active = item.kind === 'world'
                 ? activeTab === 'graph' && worldViewMode === item.mode
                 : activeTab === item.tab

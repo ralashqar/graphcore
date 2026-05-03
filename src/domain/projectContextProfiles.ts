@@ -39,6 +39,7 @@ export const PROJECT_TYPE_OPTIONS: readonly ProjectTypeOption[] = [
     subtypes: [
       { id: 'action_rpg', label: 'Action / RPG', description: 'Combat, factions, progression paths, items, and strong character/world scaffolding.' },
       { id: 'narrative_adventure', label: 'Narrative / Adventure', description: 'Places, mysteries, cast, scenes, and authored progression.' },
+      { id: 'narrative_rpg_mobile', label: 'Narrative RPG Mobile', description: 'Branching dialogue, travel, inventory, barter economy, and progression-token gates for a mobile narrative game.' },
       { id: 'strategy_builder', label: 'Strategy / Builder', description: 'Regions, settlements, factions, systems, and macro stakes.' },
       { id: 'survival_craft', label: 'Survival / Craft', description: 'Scarcity, landmarks, hazards, resource loops, and emergent place identity.' },
       { id: 'shooter_combat', label: 'Shooter / Combat', description: 'Combat spaces, factions, threat escalation, and mission-ready hooks.' },
@@ -94,6 +95,7 @@ const projectTypeMap = new Map(PROJECT_TYPE_OPTIONS.map((entry) => [entry.id, en
 const gameSubtypeToArchetypeId: Record<GameProjectSubtype, string> = {
   action_rpg: 'action_rpg',
   narrative_adventure: 'narrative_adventure',
+  narrative_rpg_mobile: 'narrative_adventure',
   strategy_builder: 'city_builder',
   survival_craft: 'survival_craft',
   shooter_combat: 'shooter',
@@ -125,6 +127,7 @@ const subtypeToBrainProfile: Record<ProjectSubtype, ProjectBrainProfile> = {
   animated_story: 'story',
   action_rpg: 'game',
   narrative_adventure: 'game',
+  narrative_rpg_mobile: 'game',
   strategy_builder: 'game',
   survival_craft: 'game',
   shooter_combat: 'game',

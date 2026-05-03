@@ -189,6 +189,8 @@ function entityTypeVisibilityBonus(nodeType: WorldEntity['nodeType']) {
       return 8
     case 'object':
       return 4
+    default:
+      return 5
   }
 }
 

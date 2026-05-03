@@ -22,7 +22,7 @@ export type GameSummary = {
 
 export type WorkspaceTab = 'graph' | 'library' | 'outputs' | 'global'
 
-export type WorldWorkspaceMode = 'graph' | 'wiki' | 'timeline' | 'board'
+export type WorldWorkspaceMode = 'graph' | 'wiki' | 'timeline' | 'board' | 'code'
 
 export type LibrarySection = 'characters' | 'items' | 'environments' | 'groups' | 'concepts' | 'assets'
 

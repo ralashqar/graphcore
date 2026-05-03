@@ -369,6 +369,37 @@ export function deriveWorldWiki(input: {
     ...appCodeFileNodes,
   ]
   const hasAppNodes = appNodes.length > 0
+  const gameInventoryNodes = sortEntities(scopedEntities.filter((entity) => (
+    entity.nodeType === 'player_profile'
+    || entity.nodeType === 'player_initial_config'
+    || entity.nodeType === 'player_stat'
+    || entity.nodeType === 'inventory'
+    || entity.nodeType === 'inventory_item'
+    || entity.nodeType === 'currency'
+    || entity.nodeType === 'save_state'
+  )))
+  const gameProgressionNodes = sortEntities(scopedEntities.filter((entity) => (
+    entity.nodeType === 'shadow_token'
+    || entity.nodeType === 'state_variable'
+    || entity.nodeType === 'game_rule'
+    || entity.nodeType === 'choice_condition'
+    || entity.nodeType === 'choice_outcome'
+  )))
+  const gameEconomyNodes = sortEntities(scopedEntities.filter((entity) => entity.nodeType === 'marketplace' || entity.nodeType === 'trade_offer'))
+  const gameTravelNodes = sortEntities(scopedEntities.filter((entity) => entity.nodeType === 'location_spot' || entity.nodeType === 'travel_link'))
+  const gameQuestNodes = sortEntities(scopedEntities.filter((entity) => entity.nodeType === 'quest' || entity.nodeType === 'quest_step'))
+  const gameNarrativeNodes = sortEntities(scopedEntities.filter((entity) => entity.nodeType === 'narrative_arc' || entity.nodeType === 'narrative_scene' || entity.nodeType === 'encounter'))
+  const gameDialogueNodes = sortEntities(scopedEntities.filter((entity) => entity.nodeType === 'dialogue_node' || entity.nodeType === 'choice'))
+  const gameNodes = [
+    ...gameInventoryNodes,
+    ...gameProgressionNodes,
+    ...gameEconomyNodes,
+    ...gameTravelNodes,
+    ...gameQuestNodes,
+    ...gameNarrativeNodes,
+    ...gameDialogueNodes,
+  ]
+  const hasGameSystemNodes = gameNodes.length > 0
   const relevantThreads = input.snapshot.worldThreads
     .filter((thread) => thread.status === 'open' || thread.status === 'resolved')
     .filter((thread) => thread.linkedEntityKeys.some((key) => scopedEntityKeys.has(key)) || scopedEntityKeys.size === 0)
@@ -388,8 +419,8 @@ export function deriveWorldWiki(input: {
   const generatedFromFingerprint = wiki.generatedFromFingerprint || ''
   const wikiStale = Boolean(generatedFromFingerprint && generatedFromFingerprint !== wikiFingerprint)
   const projectSummary = input.snapshot.project.summary.trim()
-  const synopsis = wiki.synopsis || projectSummary || sectionSummary([...appNodes, ...actors, ...events, ...lore], '')
-  const heroEntity = [...appNodes, ...places, ...actors, ...events, ...lore].find((entity) => entity.thumbnailAssetKey) ?? appNodes[0] ?? places[0] ?? actors[0] ?? events[0] ?? null
+  const synopsis = wiki.synopsis || projectSummary || sectionSummary([...appNodes, ...gameNodes, ...actors, ...events, ...lore], '')
+  const heroEntity = [...appNodes, ...gameNodes, ...places, ...actors, ...events, ...lore].find((entity) => entity.thumbnailAssetKey) ?? appNodes[0] ?? gameNodes[0] ?? places[0] ?? actors[0] ?? events[0] ?? null
   const toneTags = uniq([
     ...(wiki.toneTags ?? []),
     ...scopedEntities.flatMap((entity) => readWikiPresentation(entity).toneTags ?? []),
@@ -514,7 +545,60 @@ export function deriveWorldWiki(input: {
       ]
     : []
 
-  const storyWorldSections = hasAppNodes
+  const gameSections = !hasAppNodes && hasGameSystemNodes
+    ? [
+        makeSection({
+          kind: 'game_world',
+          title: 'Game World',
+          summary: sectionSummary([...actors, ...places, ...groups], 'No game-world content yet.'),
+          entityKeys: [...actors, ...places, ...groups].slice(0, 16).map((entity) => entity.key),
+        }),
+        makeSection({
+          kind: 'game_inventory',
+          title: 'Inventory & Items',
+          summary: sectionSummary(gameInventoryNodes, 'No player inventory, items, currency, or save state yet.'),
+          entityKeys: gameInventoryNodes.slice(0, 16).map((entity) => entity.key),
+        }),
+        makeSection({
+          kind: 'game_economy',
+          title: 'Economy & Markets',
+          summary: sectionSummary(gameEconomyNodes, 'No markets or trade offers yet.'),
+          entityKeys: gameEconomyNodes.slice(0, 16).map((entity) => entity.key),
+        }),
+        makeSection({
+          kind: 'game_travel',
+          title: 'Travel',
+          summary: sectionSummary(gameTravelNodes, 'No location spots or travel links yet.'),
+          entityKeys: gameTravelNodes.slice(0, 16).map((entity) => entity.key),
+        }),
+        makeSection({
+          kind: 'game_quests',
+          title: 'Quests',
+          summary: sectionSummary(gameQuestNodes, 'No quests or quest steps yet.'),
+          entityKeys: gameQuestNodes.slice(0, 16).map((entity) => entity.key),
+        }),
+        makeSection({
+          kind: 'game_narrative',
+          title: 'Narrative Arcs',
+          summary: sectionSummary(gameNarrativeNodes, 'No narrative scenes or encounters yet.'),
+          entityKeys: gameNarrativeNodes.slice(0, 16).map((entity) => entity.key),
+        }),
+        makeSection({
+          kind: 'game_dialogue',
+          title: 'Dialogue Choices',
+          summary: sectionSummary(gameDialogueNodes, 'No dialogue nodes or choices yet.'),
+          entityKeys: gameDialogueNodes.slice(0, 16).map((entity) => entity.key),
+        }),
+        makeSection({
+          kind: 'game_progression',
+          title: 'Progression Tokens & Rules',
+          summary: sectionSummary(gameProgressionNodes, 'No progression tokens, state variables, conditions, outcomes, or rules yet.'),
+          entityKeys: gameProgressionNodes.slice(0, 18).map((entity) => entity.key),
+        }),
+      ]
+    : []
+
+  const storyWorldSections = hasAppNodes || hasGameSystemNodes
     ? []
     : [
         makeSection({
@@ -579,6 +663,7 @@ export function deriveWorldWiki(input: {
       forceReady: hasStyleMetadata,
     }),
     ...appSections,
+    ...gameSections,
     ...storyWorldSections,
     makeSection({
       kind: 'outputs',
@@ -752,11 +837,14 @@ export function deriveWorldWiki(input: {
     })
   }
   for (const section of sections.filter((section) => section.gap && section.kind !== 'style').slice(0, 6)) {
+    const isGameSection = section.kind.startsWith('game_')
     gaps.push({
       key: `world-wiki-gap-section-${section.kind}`,
       kind: 'empty_section',
       label: `Fill ${section.title}`,
-      prompt: `Add graph canon that makes the ${section.title} wiki section useful. Keep the changes compact and connect them to existing world nodes.`,
+      prompt: isGameSection
+        ? `Add playable game graph canon that makes the ${section.title} wiki section useful. Use game-system node types and customProperties.game where relevant, connect endpoints, and keep the changes compact.`
+        : `Add graph canon that makes the ${section.title} wiki section useful. Keep the changes compact and connect them to existing world nodes.`,
       entityKey: null,
       threadKey: null,
       sectionKind: section.kind,

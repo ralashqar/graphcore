@@ -163,6 +163,7 @@ import {
 import {
   buildAppGraphReadinessFindings,
   buildDefaultAppIncrementalWorkItems,
+  buildGameGraphReadinessFindings,
   filterSuggestionsForPromptStrategy,
   getWorldPromptStrategy,
   normalizeWorkItemForPromptStrategy,
@@ -576,7 +577,38 @@ const storySequenceCompletionResponseSchema = z.object({
 const STORY_SEQUENCE_UNIT_KINDS = ['chapter', 'episode', 'mission', 'quest', 'campaign_moment', 'ugc_beat'] as const
 const STORY_SEQUENCE_FUNCTIONS = ['setup', 'inciting_incident', 'rising_action', 'turning_point', 'crisis', 'climax', 'resolution'] as const
 const STORY_SEQUENCE_CONSEQUENCE_TYPES = ['plot', 'character', 'world_state', 'relationship', 'stakes'] as const
-const WORLD_ENTITY_NODE_TYPES = ['actor', 'group', 'place', 'object', 'concept', 'event', 'sequence_unit'] as const
+const WORLD_ENTITY_NODE_TYPES = [
+  'actor',
+  'group',
+  'place',
+  'object',
+  'concept',
+  'event',
+  'sequence_unit',
+  'player_profile',
+  'player_initial_config',
+  'player_stat',
+  'inventory',
+  'inventory_item',
+  'currency',
+  'shadow_token',
+  'location_spot',
+  'travel_link',
+  'marketplace',
+  'trade_offer',
+  'quest',
+  'quest_step',
+  'narrative_arc',
+  'narrative_scene',
+  'dialogue_node',
+  'choice',
+  'choice_condition',
+  'choice_outcome',
+  'state_variable',
+  'game_rule',
+  'encounter',
+  'save_state',
+] as const
 const NON_SEQUENCE_ENTITY_NODE_TYPES = WORLD_ENTITY_NODE_TYPES.filter((nodeType) => nodeType !== 'sequence_unit')
 
 function isJsonSchemaObject(schema: JsonSchema): schema is Exclude<JsonSchema, boolean> {
@@ -1998,10 +2030,20 @@ function buildGraphDiagnosticFindings(input: {
 }) {
   const findings: WorldPromptDiagnosticFinding[] = []
   const isAppProject = projectContextIsApp(input.snapshot.projectContext)
+  const isGameProject = input.snapshot.projectContext?.projectType === 'game' || input.snapshot.projectContext?.brainProfile === 'game'
+  const usesNarrativeRpgReadiness = input.snapshot.projectContext?.projectSubtype === 'narrative_rpg_mobile'
   const relationCounts = relationCountByEntity(input.snapshot)
   const activeEntities = input.snapshot.worldEntities.filter((entity) => entity.status !== 'archived')
   if (isAppProject) {
     findings.push(...buildAppGraphReadinessFindings({
+      entities: activeEntities,
+      relationships: input.snapshot.worldRelationships,
+      wikiMetadata: readProjectWorldWikiPresentation(input.snapshot),
+      selectedRootEntityKey: input.selectedRootEntityKey ?? null,
+    }))
+  }
+  if (usesNarrativeRpgReadiness) {
+    findings.push(...buildGameGraphReadinessFindings({
       entities: activeEntities,
       relationships: input.snapshot.worldRelationships,
       wikiMetadata: readProjectWorldWikiPresentation(input.snapshot),
@@ -2024,6 +2066,8 @@ function buildGraphDiagnosticFindings(input: {
       title: `${entity.name} needs richer context`,
       summary: isAppProject
         ? `${entity.name} is present in the app graph, but its product role, UX purpose, data needs, or implementation constraints are still thin.`
+        : isGameProject
+          ? `${entity.name} is present in the game graph, but its playable role, state impact, rewards, gates, or traversal purpose are still thin.`
         : `${entity.name} is present in the world, but its long-form context is still thin enough that motives, pressure, or hidden truth are unclear.`,
       targetKeys: [entity.key],
       severity: (relationCounts.get(entity.key) ?? 0) >= 2 ? 'high' : 'medium',
@@ -5206,7 +5250,7 @@ function buildAppFollowUpSuggestions(input: {
         prompt: 'Continue this app graph by adding a primary design_system node with color tokens, typography, spacing, radii, shadows, button styles, card styles, input styles, icon rules, and motion direction derived from the project visual system.',
         kind: 'continue_scope',
         source: 'wave2',
-        summary: 'Translate the project brand direction into an implementation-ready mobile UI system.',
+        summary: 'Translate the project brand direction into a visual-prototype-ready mobile UI system.',
         estimatedNodeCount: 1,
         estimatedEdgeCount: 4,
         actionMode: 'apply_compact_wave',
@@ -5228,7 +5272,7 @@ function buildAppFollowUpSuggestions(input: {
         prompt: 'Continue this app graph by identifying required capability nodes such as camera, photo library, push notifications, health data, haptics, or in-app purchases, and mark web preview, Expo Go, dev build, and production entitlement constraints.',
         kind: 'continue_scope',
         source: 'wave2',
-        summary: 'Make native/platform requirements explicit before preview or codegen.',
+        summary: 'Make native/platform requirements explicit before visual prototyping and later implementation.',
         estimatedNodeCount: 3,
         estimatedEdgeCount: 4,
         actionMode: 'apply_compact_wave',
@@ -5237,28 +5281,6 @@ function buildAppFollowUpSuggestions(input: {
         focusLayer: 'general',
         retrievalHint: 'app native capabilities expo go web preview constraints',
         generatedReason: 'Native requirements should be graph nodes with preview/build constraints.',
-      },
-    })
-  }
-
-  if (!has('tower') || !has('code_file')) {
-    suggestions.push({
-      score: 68,
-      suggestion: {
-        id: 'app-followup-code-towers',
-        label: 'Plan Code Towers',
-        prompt: 'Continue this app graph by adding tower and code_file nodes for Expo Router, shared components, feature slices, mock backend adapter, app config, README, and EAS config, with owned_by_tower and implemented_as links.',
-        kind: 'continue_scope',
-        source: 'wave2',
-        summary: 'Prepare the graph for constrained parallel Expo code generation.',
-        estimatedNodeCount: 6,
-        estimatedEdgeCount: 8,
-        actionMode: 'apply_compact_wave',
-        applyPolicy: 'auto_if_safe',
-        targetEntityKeys: keys('app', 'feature', 'screen', 'api_endpoint'),
-        focusLayer: 'general',
-        retrievalHint: 'app code towers code files expo router mock backend eas',
-        generatedReason: 'Code generation needs explicit tower ownership and file contracts.',
       },
     })
   }
@@ -7851,6 +7873,7 @@ function brainProfileForSubtype(projectSubtype: ProjectSubtype): ProjectContext[
   if ([
     'action_rpg',
     'narrative_adventure',
+    'narrative_rpg_mobile',
     'strategy_builder',
     'survival_craft',
     'shooter_combat',
@@ -8407,7 +8430,7 @@ async function generatePromptPlan(input: {
     }),
     projectContextGuidance ? `Project guidance: ${projectContextGuidance}` : null,
     shouldInferContext
-      ? 'Valid project type/subtype pairs: story = feature_film, tv_streaming_series, short_film, shortform_series, animated_story; game = action_rpg, narrative_adventure, strategy_builder, survival_craft, shooter_combat, social_sim, open_world_sandbox, platformer_metroidvania, horror_mystery; brand = campaign_world, product_storytelling, mascot_ip, brand_education_explainer; ugc = creator_organic, direct_response_ad, faceless_explainer_demo, serialized_social_drama; app = ai_utility_wrapper, mascot_daily_ritual, content_generator.'
+      ? 'Valid project type/subtype pairs: story = feature_film, tv_streaming_series, short_film, shortform_series, animated_story; game = action_rpg, narrative_adventure, narrative_rpg_mobile, strategy_builder, survival_craft, shooter_combat, social_sim, open_world_sandbox, platformer_metroidvania, horror_mystery; brand = campaign_world, product_storytelling, mascot_ip, brand_education_explainer; ugc = creator_organic, direct_response_ad, faceless_explainer_demo, serialized_social_drama; app = ai_utility_wrapper, mascot_daily_ritual, content_generator.'
       : null,
     'Keep operations compact and high-signal.',
     isInitialSeedGeneration
@@ -10795,7 +10818,7 @@ async function inferInitialSeedContext(input: {
   sourceContext: unknown
   usageRecorder?: WorldPromptTokenUsageRecorder
 }) {
-  const validPairs = 'story: feature_film, tv_streaming_series, short_film, shortform_series, animated_story; game: action_rpg, narrative_adventure, strategy_builder, survival_craft, shooter_combat, social_sim, open_world_sandbox, platformer_metroidvania, horror_mystery; brand: campaign_world, product_storytelling, mascot_ip, brand_education_explainer; ugc: creator_organic, direct_response_ad, faceless_explainer_demo, serialized_social_drama; app: ai_utility_wrapper, mascot_daily_ritual, content_generator.'
+  const validPairs = 'story: feature_film, tv_streaming_series, short_film, shortform_series, animated_story; game: action_rpg, narrative_adventure, narrative_rpg_mobile, strategy_builder, survival_craft, shooter_combat, social_sim, open_world_sandbox, platformer_metroidvania, horror_mystery; brand: campaign_world, product_storytelling, mascot_ip, brand_education_explainer; ugc: creator_organic, direct_response_ad, faceless_explainer_demo, serialized_social_drama; app: ai_utility_wrapper, mascot_daily_ritual, content_generator.'
   const schema = normalizeStrictJsonSchema(z.toJSONSchema(seedInferenceOutputSchema))
   const response = await runOpenAiResponses({
     model: input.model,

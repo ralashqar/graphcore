@@ -25,6 +25,17 @@ const appContext: ProjectContext = {
   source: 'onboarding',
 }
 
+const gameContext: ProjectContext = {
+  projectType: 'game',
+  projectSubtype: 'narrative_rpg_mobile',
+  brainProfile: 'game',
+  artStylePreset: 'premium_stylized_3d',
+  artStyleDescription: '',
+  onboardingCompletedAt: null,
+  onboardingVersion: 'test',
+  source: 'onboarding',
+}
+
 function createEntity(input: Partial<WorldEntity> & Pick<WorldEntity, 'key' | 'name' | 'nodeType'>): WorldEntity {
   return {
     id: input.id ?? input.key,
@@ -97,6 +108,7 @@ function suggestion(input: Partial<WorldPromptSuggestion> & Pick<WorldPromptSugg
 
 test('app project context selects app prompt strategy', () => {
   assert.equal(getWorldPromptStrategy(appContext).id, 'app')
+  assert.equal(getWorldPromptStrategy(gameContext).id, 'game')
   assert.equal(getWorldPromptStrategy({ ...appContext, projectType: 'story', brainProfile: 'story', projectSubtype: 'feature_film' }).id, 'story')
 })
 
@@ -119,6 +131,24 @@ test('app strategy filters story-shaped suggestions', () => {
   assert.equal(suggestionContainsForbiddenAppStoryLanguage(suggestions[0]), true)
 })
 
+test('game strategy keeps playable graph suggestions and filters app implementation suggestions', () => {
+  const suggestions = [
+    suggestion({
+      id: 'app-paywall',
+      label: 'Define Subscription Paywall',
+      prompt: 'Add conversion and paywall screens.',
+    }),
+    suggestion({
+      id: 'game-rules',
+      label: 'Validate Playable Rules',
+      prompt: 'Add choice_condition and choice_outcome nodes for inventory, travel, and shadow-token gates.',
+    }),
+  ]
+
+  const filtered = filterSuggestionsForPromptStrategy(suggestions, gameContext)
+  assert.deepEqual(filtered.map((entry) => entry.id), ['game-rules'])
+})
+
 test('incremental app work items carry project type and app slice without sequence units', () => {
   const item = worldPromptIncrementalWorkItemSchema.parse({
     id: 'core_flow',
@@ -138,7 +168,7 @@ test('incremental app work items carry project type and app slice without sequen
   const defaults = buildDefaultAppIncrementalWorkItems()
   assert.equal(defaults.every((entry) => entry.projectType === 'app'), true)
   assert.equal(defaults.some((entry) => entry.appSlice === 'data_api'), true)
-  assert.equal(defaults.some((entry) => entry.entityTypes.includes('code_file')), true)
+  assert.equal(defaults.some((entry) => entry.entityTypes.includes('code_file')), false)
 })
 
 test('app graph readiness reports app-specific gaps without story wording', () => {
@@ -178,6 +208,6 @@ test('app graph readiness reports app-specific gaps without story wording', () =
   const text = findings.map((finding) => `${finding.title} ${finding.summary}`).join(' ')
 
   assert.equal(findings.length > 0, true)
-  assert.match(text, /screen contract|API contract|implementation layers|design system/i)
+  assert.match(text, /screen contract|API contract|product layers|design system/i)
   assert.doesNotMatch(text, /threat|lore|hidden truth|motives|protagonist|sequence unit/i)
 })

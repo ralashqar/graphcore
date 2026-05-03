@@ -63,6 +63,16 @@ const gameCategories: WorldSeedSkeletonCategory[] = [
   { id: 'systems_concepts', label: 'Gameplay-supportive concepts', nodeType: 'concept', min: 2, max: 4, purpose: 'Create systems, rules, mysteries, hazards, or resource loops that make the world playable.', required: true },
 ]
 
+const narrativeRpgMobileCategories: WorldSeedSkeletonCategory[] = [
+  { id: 'characters_npcs', label: 'Characters and NPCs', nodeType: 'actor', min: 4, max: 8, purpose: 'Create speaking characters, vendors, quest givers, rivals, and recurring narrative pressure figures.', required: true },
+  { id: 'locations_spots', label: 'Locations and spots', nodeType: 'location_spot', min: 6, max: 12, purpose: 'Create actionable places inside major locations, such as inn, market, shrine, route gate, hidden room, or faction spot.', required: true },
+  { id: 'inventory_progression', label: 'Inventory, currencies, and shadow tokens', nodeType: 'inventory_item', min: 6, max: 12, purpose: 'Create player inventory items, currencies, and hidden progression tokens used by gates and outcomes.', required: true },
+  { id: 'economy_markets', label: 'Marketplaces and trade offers', nodeType: 'marketplace', min: 2, max: 5, purpose: 'Create marketplaces plus barter or currency trade offers that exchange concrete items, currency, or access.', required: true },
+  { id: 'travel_links', label: 'Travel links', nodeType: 'travel_link', min: 4, max: 10, purpose: 'Create directed travel routes between locations and spots, including any item, token, or currency requirements.', required: true },
+  { id: 'narrative_dialogue', label: 'Narrative scenes and dialogue choices', nodeType: 'narrative_scene', min: 6, max: 12, purpose: 'Create branching narrative scenes, dialogue nodes, choices, conditions, and outcomes that can be compiled into a playable flow.', required: true },
+  { id: 'rules_state', label: 'Rules, stats, and save state', nodeType: 'game_rule', min: 3, max: 7, purpose: 'Create initial player profile, player_initial_config, player_stat nodes, starter inventory, save-state contract, state variables, and validation rules for playability.', required: true },
+]
+
 const brandCategories: WorldSeedSkeletonCategory[] = [
   { id: 'message_pillars', label: 'Message pillars', nodeType: 'concept', min: 3, max: 5, purpose: 'Create the campaign, product, education, or mascot message pillars as graph concepts.', required: true },
   { id: 'audience_use_cases', label: 'Audience and use-case concepts', nodeType: 'concept', min: 2, max: 4, purpose: 'Create the audience tensions, jobs-to-be-done, use cases, and proof contexts.', required: true },
@@ -83,7 +93,7 @@ const appCategories: WorldSeedSkeletonCategory[] = [
   { id: 'features', label: 'Commercial feature set', nodeType: 'feature', min: 5, max: 9, purpose: 'Create the app features that support activation, retention, generation, sharing, and monetization.', required: true },
   { id: 'screens_components', label: 'Screens and components', nodeType: 'screen', min: 7, max: 12, purpose: 'Create route-ready screens with contained sections/components, states, actions, and data dependencies.', required: true },
   { id: 'data_actions_apis', label: 'Data, actions, and APIs', nodeType: 'data_model', min: 4, max: 8, purpose: 'Create app data models, user/system actions, API endpoint contracts, backend functions, and external services.', required: true },
-  { id: 'capabilities_design_towers', label: 'Capabilities, design system, and towers', nodeType: 'capability', min: 4, max: 8, purpose: 'Create native capability constraints, design system direction, implementation towers, and initial code-file nodes.', required: true },
+  { id: 'capabilities_design', label: 'Capabilities and design system', nodeType: 'capability', min: 4, max: 8, purpose: 'Create native capability constraints and design-system direction for the design prototype. Do not create implementation towers or code files in the initial design graph.', required: true },
 ]
 
 function profileTypeForSubtype(projectSubtype: ProjectSubtype): ProjectType {
@@ -127,6 +137,36 @@ function buildProfile(projectSubtype: ProjectSubtype): WorldSeedSkeletonProfile 
     }) as WorldSeedSkeletonProfile
   }
   if (projectType === 'game') {
+    if (projectSubtype === 'narrative_rpg_mobile') {
+      return worldSeedSkeletonProfileSchema.parse({
+        id: 'game.narrative_rpg_mobile.initial_skeleton',
+        projectType,
+        projectSubtype,
+        label: `${subtypeLabel} initial playable game graph`,
+        wikiMetadataRequired: ['title', 'logline', 'synopsis', 'genre', 'themes', 'toneTags', 'coreConflict', 'visualMotifs'],
+        categories: narrativeRpgMobileCategories,
+        sequence: {
+          unitKind: 'quest',
+          min: 4,
+          max: 7,
+          requiredRelationships: ['precedes', 'causes', 'complicates', 'pays_off'],
+          requiredFields: ['ordinal', 'synopsis', 'outcome', 'consequences'],
+          purpose: 'Create high-level quest progression only; executable branching must use quest, quest_step, narrative_scene, dialogue_node, choice, choice_condition, and choice_outcome nodes.',
+        },
+        relationshipGuidance: [
+          'Link major places to location_spot nodes, then link travel_link nodes with starts_at and travels_to relationships.',
+          'Link marketplaces to trade_offer nodes, and link trade offers to inventory_item or currency nodes with costs, trades_for, and grants_item relationships.',
+          'Link narrative_scene nodes to dialogue_node nodes, dialogue_node nodes to choice nodes, and choices to conditions, outcomes, and branch targets.',
+          'Use shadow_token nodes for hidden progression. Every required token should be granted somewhere else or included in initial state.',
+          'Store executable game fields under customProperties.interactive or customProperties.game, including initialItemKeys, currency, stats, condition, outcome, offer, state, route, start scene/dialogue, and validation notes.',
+        ],
+        plannerDirectives: [
+          'State the player fantasy, mobile interaction loop, and playable premise in wiki metadata.',
+          'Create a graph that can compile into a static playable prototype: player_initial_config, player_stat nodes, map/travel, inventory, market, dialogue choices, conditions, outcomes, and save state.',
+          'Do not treat branching dialogue as story-only lore. Every choice should have a condition or outcome when relevant, and every outcome should mutate inventory, currency, tokens, state, quest progress, travel access, or branch target.',
+        ],
+      }) as WorldSeedSkeletonProfile
+    }
     return worldSeedSkeletonProfileSchema.parse({
       id: `game.${projectSubtype}.initial_skeleton`,
       projectType,
@@ -202,14 +242,14 @@ function buildProfile(projectSubtype: ProjectSubtype): WorldSeedSkeletonProfile 
         purpose: flowPurposeBySubtype[projectSubtype] ?? 'Create ordered user_flow nodes that describe the main product journeys.',
       },
       relationshipGuidance: [
-        'Link the app node to personas, business goals, features, flows, screens, data, APIs, capabilities, design system, towers, and code files.',
+        'Link the app node to personas, business goals, features, flows, screens, data, APIs, capabilities, and the design system.',
         'Link screens to sections/components, actions, data models, API endpoints, capabilities, and transitions.',
         'Use user_flow nodes for UX sequence and product journeys. Do not use story sequence_unit nodes for app flows.',
-        'Use tower nodes to group implementation slices and code_file nodes to describe generated Expo file ownership.',
+        'Do not create tower or code_file nodes during initial app generation; implementation planning happens after the visual prototype is approved.',
       ],
       plannerDirectives: [
         'State the product name, promise, target users, core loop, monetization, retention loop, viral loop, and platform targets in app graph metadata.',
-        'Create route-ready screens, reusable components, data/action/API contracts, native capability constraints, design-system direction, and implementation towers.',
+        'Create route-ready screens, reusable components, data/action/API contracts, native capability constraints, and design-system direction for a static visual prototype.',
         'Store app-specific fields under customProperties.app and keep visualDescription focused on visible mobile UI or product imagery.',
       ],
     }) as WorldSeedSkeletonProfile

@@ -2422,6 +2422,12 @@ export default function App() {
     setActiveTab('graph')
   }
 
+  useEffect(() => {
+    if (snapshot?.projectContext?.projectType !== 'app' && worldViewMode === 'code') {
+      setWorldViewMode('graph')
+    }
+  }, [snapshot?.projectContext?.projectType, worldViewMode])
+
   function applySnapshotUpdate(mutator: (current: ProjectSnapshot) => ProjectSnapshot) {
     setSnapshot((current) => {
       if (!current) return current
@@ -4159,6 +4165,38 @@ export default function App() {
 
   async function getVisualGenerationStatus(jobId: string) {
     return workspaceService.getVisualGenerationStatus(jobId)
+  }
+
+  async function startVisualGenerationJob(request: Parameters<typeof workspaceService.startVisualGenerationJob>[1]) {
+    if (!snapshot) {
+      throw new Error('Load a live GraphCore draft before starting visual generation.')
+    }
+    if (loadedState?.source !== 'supabase') {
+      throw new Error('Visual generation requires a live Supabase-backed draft.')
+    }
+    return workspaceService.startVisualGenerationJob(snapshot, request)
+  }
+
+  async function startAppCodeGeneration() {
+    if (!snapshot) {
+      throw new Error('Load a live GraphCore draft before building an app preview.')
+    }
+    if (loadedState?.source !== 'supabase') {
+      throw new Error('App preview generation requires a live Supabase-backed draft.')
+    }
+    return workspaceService.startAppCodeGeneration(snapshot)
+  }
+
+  async function getAppGenerationStatus(jobId: string) {
+    return workspaceService.getAppGenerationStatus(jobId)
+  }
+
+  async function cancelAppGenerationJob(jobId: string) {
+    return workspaceService.cancelAppGenerationJob(jobId)
+  }
+
+  async function getAppPreviewSession(jobId: string) {
+    return workspaceService.getAppPreviewSession(jobId)
   }
 
   async function refreshLiveSnapshot() {
@@ -6049,6 +6087,7 @@ export default function App() {
           onSetActiveTab={setActiveTab}
           onSetWorldViewMode={handleSetWorldViewMode}
           onSignOut={handleSignOut}
+          projectType={snapshot.projectContext?.projectType ?? null}
           projectName={snapshot.project.name}
           sourceLabel={loadedState?.source === 'supabase' ? 'Live workspace' : 'Demo snapshot'}
           tabs={workspaceTabs}
@@ -6122,7 +6161,12 @@ export default function App() {
                 onStartWorldEntityIconBatch={startWorldEntityIconBatch}
                 onGetWorldEntityIconBatchStatus={getWorldEntityIconBatchStatus}
                 onGenerateWorldBrandAtlasImage={generateWorldBrandAtlasImage}
+                onStartVisualGenerationJob={startVisualGenerationJob}
                 onGetVisualGenerationStatus={getVisualGenerationStatus}
+                onStartAppCodeGeneration={startAppCodeGeneration}
+                onGetAppGenerationStatus={getAppGenerationStatus}
+                onCancelAppGenerationJob={cancelAppGenerationJob}
+                onGetAppPreviewSession={getAppPreviewSession}
                 onRefreshLiveSnapshot={refreshLiveSnapshot}
                 onCompleteProjectOnboarding={handleCompleteProjectOnboarding}
                 onStartWorldSeedInference={startWorldSeedInference}

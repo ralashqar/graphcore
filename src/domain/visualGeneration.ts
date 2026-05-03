@@ -18,6 +18,7 @@ export const visualGenerationKindSchema = z.enum([
   'character_sheet',
   'wiki_visual',
   'app_screen_mockup',
+  'app_screen_analysis',
 ])
 
 export const visualGenerationAssetOutputSchema = z.object({

@@ -17,6 +17,7 @@ export const storyProjectSubtypeSchema = z.enum([
 export const gameProjectSubtypeSchema = z.enum([
   'action_rpg',
   'narrative_adventure',
+  'narrative_rpg_mobile',
   'strategy_builder',
   'survival_craft',
   'shooter_combat',

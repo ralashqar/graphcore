@@ -57,7 +57,7 @@ test('visual generation schemas accept generic icon and brand atlas jobs', () =>
   assert.equal(atlasJob.job.outputs.assets[0].role, 'brand_atlas')
 })
 
-test('visual generation start request supports future app mockup kinds', () => {
+test('visual generation start request supports app mockup and analysis kinds', () => {
   const request = visualGenerationStartRequestSchema.parse({
     projectId: 'project-1',
     draftId: 'draft-1',
@@ -69,6 +69,17 @@ test('visual generation start request supports future app mockup kinds', () => {
   assert.equal(request.provider, 'fal')
   assert.equal(request.model, 'openai/gpt-image-2')
   assert.equal(request.kind, 'app_screen_mockup')
+
+  const analysisRequest = visualGenerationStartRequestSchema.parse({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    kind: 'app_screen_analysis',
+    provider: 'graphcore',
+    model: 'app-screen-analysis-v1',
+    targetKeys: { screenKey: 'screen.home', screenMockupKey: 'screen_mockup_home' },
+    input: { screenKey: 'screen.home', sourceAssetKey: 'screen-home-art' },
+  })
+  assert.equal(analysisRequest.kind, 'app_screen_analysis')
 })
 
 test('brand atlas endpoint enqueues generic visual jobs instead of calling image provider directly', () => {

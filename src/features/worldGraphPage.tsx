@@ -89,7 +89,19 @@ import {
   type WorldEntityIconGenerationStatusResponse,
 } from '../domain/worldEntityIconGeneration'
 import type { WorldBrandAtlasImageResponse } from '../domain/worldBrandAtlasImage'
-import type { VisualGenerationStatusResponse } from '../domain/visualGeneration'
+import type { VisualGenerationStartRequest, VisualGenerationStartResponse, VisualGenerationStatusResponse } from '../domain/visualGeneration'
+import {
+  computeAppDesignFingerprint,
+  evaluateAppPreviewReadiness,
+  type AppGenerationCancelResponse,
+  type AppGenerationStartResponse,
+  type AppGenerationStatusResponse,
+  type AppPreviewSessionResponse,
+} from '../domain/appPreviewPipeline'
+import {
+  compileNarrativeRpgManifest,
+  evaluateNarrativeRpgReadiness,
+} from '../domain/gameGraph'
 import {
   mergeWorldEntityVisualDescriptionMetadata,
   readWorldEntityVisualDescription,
@@ -249,7 +261,12 @@ type WorldGraphPageProps = {
   onStartWorldEntityIconBatch: () => Promise<WorldEntityIconGenerationStartResponse> | WorldEntityIconGenerationStartResponse
   onGetWorldEntityIconBatchStatus: (jobId: string) => Promise<WorldEntityIconGenerationStatusResponse> | WorldEntityIconGenerationStatusResponse
   onGenerateWorldBrandAtlasImage: (prompt?: string) => Promise<WorldBrandAtlasImageResponse> | WorldBrandAtlasImageResponse
+  onStartVisualGenerationJob?: (request: Omit<Partial<VisualGenerationStartRequest>, 'projectId' | 'draftId'> & Pick<VisualGenerationStartRequest, 'kind'>) => Promise<VisualGenerationStartResponse> | VisualGenerationStartResponse
   onGetVisualGenerationStatus?: (jobId: string) => Promise<VisualGenerationStatusResponse> | VisualGenerationStatusResponse
+  onStartAppCodeGeneration?: () => Promise<AppGenerationStartResponse> | AppGenerationStartResponse
+  onGetAppGenerationStatus?: (jobId: string) => Promise<AppGenerationStatusResponse> | AppGenerationStatusResponse
+  onCancelAppGenerationJob?: (jobId: string) => Promise<AppGenerationCancelResponse> | AppGenerationCancelResponse
+  onGetAppPreviewSession?: (jobId: string) => Promise<AppPreviewSessionResponse> | AppPreviewSessionResponse
   onRefreshLiveSnapshot: () => Promise<void> | void
   onCompleteProjectOnboarding: (values: { projectContext: ProjectContext; projectName: string }) => Promise<void> | void
   onStartWorldSeedInference: (input: {
@@ -404,6 +421,17 @@ type EntityOverviewDraftState = {
   dirty: boolean
 }
 
+type WorldLocalViewMode = WorldWorkspaceMode | WorldView['mode']
+type AppGeneratedFile = AppPreviewSessionResponse['files'][number]
+
+type AppCodeHierarchyNode = {
+  name: string
+  path: string
+  children: Map<string, AppCodeHierarchyNode>
+  file?: AppGeneratedFile
+  plannedEntity?: WorldEntity
+}
+
 const GROW_WORKBENCH_WIDTH_STORAGE_KEY = 'graphcore.world.grow-workbench-width.v1'
 const GROW_WORKBENCH_WIDTH_DEFAULT = 420
 const GROW_WORKBENCH_WIDTH_MIN = 340
@@ -471,7 +499,11 @@ function isLongWorldPromptLogText(text: string | null | undefined, limit = WORLD
   return Boolean(text && text.replace(/\s+/g, ' ').trim().length > limit)
 }
 
-function isWorldWorkspaceMode(mode: WorldView['mode']): mode is WorldWorkspaceMode {
+function isWorldWorkspaceMode(mode: WorldLocalViewMode): mode is WorldWorkspaceMode {
+  return mode === 'graph' || mode === 'wiki' || mode === 'timeline' || mode === 'board' || mode === 'code'
+}
+
+function isPersistableWorldViewMode(mode: WorldLocalViewMode): mode is WorldView['mode'] {
   return mode === 'graph' || mode === 'wiki' || mode === 'timeline' || mode === 'board'
 }
 
@@ -783,6 +815,52 @@ const edgeTypes = {
 
 function defaultNameForWorldNodeType(nodeType: WorldEntity['nodeType']) {
   switch (nodeType) {
+    case 'player_profile':
+      return 'New Player Profile'
+    case 'player_initial_config':
+      return 'New Player Initial Config'
+    case 'player_stat':
+      return 'New Player Stat'
+    case 'inventory':
+      return 'New Inventory'
+    case 'inventory_item':
+      return 'New Inventory Item'
+    case 'currency':
+      return 'New Currency'
+    case 'shadow_token':
+      return 'New Shadow Token'
+    case 'location_spot':
+      return 'New Location Spot'
+    case 'travel_link':
+      return 'New Travel Link'
+    case 'marketplace':
+      return 'New Marketplace'
+    case 'trade_offer':
+      return 'New Trade Offer'
+    case 'quest':
+      return 'New Quest'
+    case 'quest_step':
+      return 'New Quest Step'
+    case 'narrative_arc':
+      return 'New Narrative Arc'
+    case 'narrative_scene':
+      return 'New Narrative Scene'
+    case 'dialogue_node':
+      return 'New Dialogue Node'
+    case 'choice':
+      return 'New Choice'
+    case 'choice_condition':
+      return 'New Choice Condition'
+    case 'choice_outcome':
+      return 'New Choice Outcome'
+    case 'state_variable':
+      return 'New State Variable'
+    case 'game_rule':
+      return 'New Game Rule'
+    case 'encounter':
+      return 'New Encounter'
+    case 'save_state':
+      return 'New Save State'
     case 'app':
       return 'New App'
     case 'persona':
@@ -838,6 +916,113 @@ function defaultNameForWorldNodeType(nodeType: WorldEntity['nodeType']) {
     case 'sequence_unit':
       return 'New Story Beat'
   }
+}
+
+function readLooseRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+
+function readAppCustomProperties(entity: WorldEntity): Record<string, unknown> {
+  return readLooseRecord(readLooseRecord(entity.customProperties).app)
+}
+
+function readAppCodeFilePath(entity: WorldEntity): string {
+  const app = readAppCustomProperties(entity)
+  const filePath = app.filePath ?? entity.customProperties.filePath
+  return typeof filePath === 'string' ? filePath.trim() : ''
+}
+
+function readAppCodeFileKind(entity: WorldEntity): string {
+  const app = readAppCustomProperties(entity)
+  const fileKind = app.fileKind ?? entity.customProperties.fileKind
+  return typeof fileKind === 'string' ? fileKind.trim() : entity.nodeType
+}
+
+function readAppCodeOwnerTower(entity: WorldEntity): string {
+  const app = readAppCustomProperties(entity)
+  const ownerTower = app.ownerTower ?? entity.customProperties.ownerTower
+  return typeof ownerTower === 'string' ? ownerTower.trim() : ''
+}
+
+function readAppString(entity: WorldEntity, key: string): string {
+  const app = readAppCustomProperties(entity)
+  const value = app[key] ?? entity.customProperties[key]
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function readAppStringArray(entity: WorldEntity, key: string): string[] {
+  const app = readAppCustomProperties(entity)
+  const value = app[key] ?? entity.customProperties[key]
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0) : []
+}
+
+function appScreenMockupTargetKey(entity: WorldEntity): string {
+  const app = readAppCustomProperties(entity)
+  const value = app.screenKey ?? app.targetScreenKey ?? readLooseRecord(entity.metadata).screenKey
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function appScreenMockupAssetKey(entity: WorldEntity): string {
+  const app = readAppCustomProperties(entity)
+  const value = app.sourceAssetKey ?? app.assetKey ?? readLooseRecord(entity.metadata).sourceAssetKey ?? entity.thumbnailAssetKey
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function appEntityHasVisualSpec(entity: WorldEntity): boolean {
+  const app = readAppCustomProperties(entity)
+  const metadata = readLooseRecord(entity.metadata)
+  return Object.keys(readLooseRecord(app.visualSpec)).length > 0 || Object.keys(readLooseRecord(metadata.visualSpec)).length > 0
+}
+
+function insertAppCodeHierarchyNode(
+  root: AppCodeHierarchyNode,
+  path: string,
+  payload: Pick<AppCodeHierarchyNode, 'file' | 'plannedEntity'>,
+) {
+  const parts = path.split('/').map((part) => part.trim()).filter(Boolean)
+  let cursor = root
+  let cursorPath = ''
+  for (const part of parts) {
+    cursorPath = cursorPath ? `${cursorPath}/${part}` : part
+    if (!cursor.children.has(part)) {
+      cursor.children.set(part, {
+        name: part,
+        path: cursorPath,
+        children: new Map(),
+      })
+    }
+    cursor = cursor.children.get(part)!
+  }
+  cursor.file = payload.file ?? cursor.file
+  cursor.plannedEntity = payload.plannedEntity ?? cursor.plannedEntity
+}
+
+function buildAppCodeHierarchy(input: {
+  generatedFiles: AppGeneratedFile[]
+  plannedCodeFiles: WorldEntity[]
+}): AppCodeHierarchyNode {
+  const root: AppCodeHierarchyNode = {
+    name: 'root',
+    path: '',
+    children: new Map(),
+  }
+  for (const file of input.generatedFiles) {
+    insertAppCodeHierarchyNode(root, file.path, { file })
+  }
+  for (const entity of input.plannedCodeFiles) {
+    const path = readAppCodeFilePath(entity)
+    if (path) insertAppCodeHierarchyNode(root, path, { plannedEntity: entity })
+  }
+  return root
+}
+
+function sortAppCodeHierarchyNodes(nodes: Iterable<AppCodeHierarchyNode>) {
+  return [...nodes].sort((left, right) => {
+    const leftIsFolder = left.children.size > 0 && !left.file && !left.plannedEntity
+    const rightIsFolder = right.children.size > 0 && !right.file && !right.plannedEntity
+    if (leftIsFolder !== rightIsFolder) return leftIsFolder ? -1 : 1
+    return left.name.localeCompare(right.name)
+  })
 }
 
 function getFlowNodeElement(nodeId: string) {
@@ -965,6 +1150,21 @@ function iconForWikiSection(kind: WorldWikiSection['kind']): EntityIconId {
       return 'tower'
     case 'app_code_files':
       return 'code'
+    case 'game_world':
+      return 'environment'
+    case 'game_inventory':
+      return 'item'
+    case 'game_economy':
+      return 'credits'
+    case 'game_travel':
+      return 'environment'
+    case 'game_quests':
+    case 'game_narrative':
+    case 'game_dialogue':
+      return 'thread'
+    case 'game_progression':
+    case 'game_rules':
+      return 'activity'
     case 'cast':
       return 'character'
     case 'threads':
@@ -1015,6 +1215,24 @@ function labelForWikiSection(kind: WorldWikiSection['kind']) {
       return 'Code Towers'
     case 'app_code_files':
       return 'Code Files'
+    case 'game_world':
+      return 'Game World'
+    case 'game_inventory':
+      return 'Inventory & Items'
+    case 'game_economy':
+      return 'Economy & Markets'
+    case 'game_travel':
+      return 'Travel'
+    case 'game_quests':
+      return 'Quests'
+    case 'game_narrative':
+      return 'Narrative Arcs'
+    case 'game_dialogue':
+      return 'Dialogue Choices'
+    case 'game_progression':
+      return 'Progression Tokens & Rules'
+    case 'game_rules':
+      return 'Rules / Validation'
     default:
       return kind.replace(/_/g, ' ')
   }
@@ -1073,7 +1291,12 @@ export function WorldGraphPage({
   onStartWorldEntityIconBatch,
   onGetWorldEntityIconBatchStatus,
   onGenerateWorldBrandAtlasImage,
+  onStartVisualGenerationJob,
   onGetVisualGenerationStatus,
+  onStartAppCodeGeneration,
+  onGetAppGenerationStatus,
+  onCancelAppGenerationJob,
+  onGetAppPreviewSession,
   onRefreshLiveSnapshot,
   onCompleteProjectOnboarding: _onCompleteProjectOnboarding,
   onStartWorldSeedInference,
@@ -1113,9 +1336,10 @@ export function WorldGraphPage({
   const hoverEdgeFadeTimeoutRef = useRef<number | null>(null)
   const entityOverviewPersistTimeoutRef = useRef<number | null>(null)
   const [legacyMode, setLegacyMode] = useState(false)
-  const [viewMode, setViewMode] = useState<WorldView['mode']>(worldViewMode)
+  const [viewMode, setViewMode] = useState<WorldLocalViewMode>(worldViewMode)
   const [presentationMode, setPresentationMode] = useState<WorldPresentationMode>('world')
   const isWikiMode = viewMode === 'wiki'
+  const isCodeMode = viewMode === 'code'
   const [search, setSearch] = useState('')
   const [growWorkbenchWidth, setGrowWorkbenchWidth] = useState(() => {
     if (typeof window === 'undefined') return GROW_WORKBENCH_WIDTH_DEFAULT
@@ -1150,6 +1374,17 @@ export function WorldGraphPage({
   const [brandAtlasGenerating, setBrandAtlasGenerating] = useState(false)
   const [brandAtlasError, setBrandAtlasError] = useState<string | null>(null)
   const [brandAtlasJobId, setBrandAtlasJobId] = useState<string | null>(null)
+  const [appGenerationJob, setAppGenerationJob] = useState<AppGenerationStatusResponse['job'] | null>(null)
+  const [appPreviewSession, setAppPreviewSession] = useState<AppPreviewSessionResponse | null>(null)
+  const [appGenerationBusy, setAppGenerationBusy] = useState(false)
+  const [appGenerationError, setAppGenerationError] = useState<string | null>(null)
+  const [selectedAppCodePath, setSelectedAppCodePath] = useState<string | null>(null)
+  const [appScreenArtJobs, setAppScreenArtJobs] = useState<VisualGenerationStatusResponse['job'][]>([])
+  const [appScreenAnalysisJobs, setAppScreenAnalysisJobs] = useState<VisualGenerationStatusResponse['job'][]>([])
+  const [appScreenArtBusy, setAppScreenArtBusy] = useState(false)
+  const [appScreenArtError, setAppScreenArtError] = useState<string | null>(null)
+  const [showAppStaticPrototype, setShowAppStaticPrototype] = useState(false)
+  const [selectedAppPrototypeScreenKey, setSelectedAppPrototypeScreenKey] = useState<string | null>(null)
   const [signedAssetUrlsByKey, setSignedAssetUrlsByKey] = useState<Map<string, string>>(() => new Map())
   const [hoveredWorldNodeKey, setHoveredWorldNodeKey] = useState<string | null>(null)
   const [hoverRevealTargetNodeKey, setHoverRevealTargetNodeKey] = useState<string | null>(null)
@@ -1577,14 +1812,19 @@ export function WorldGraphPage({
   }, [selectedView.search, selectedView.showDerivedLayer, selectedView.showLabels])
 
   useEffect(() => {
+    if (projectContext?.projectType !== 'app' && worldViewMode === 'code') {
+      setViewMode('graph')
+      onWorldViewModeChange('graph')
+      return
+    }
     if (viewMode !== worldViewMode) {
       setPresentationMode('world')
       setViewMode(worldViewMode)
     }
-    if (selectedView.mode !== worldViewMode) {
+    if (isPersistableWorldViewMode(worldViewMode) && selectedView.mode !== worldViewMode) {
       void persistViewChanges({ mode: worldViewMode })
     }
-  }, [selectedView.mode, viewMode, worldViewMode])
+  }, [onWorldViewModeChange, projectContext?.projectType, selectedView.mode, viewMode, worldViewMode])
 
   useEffect(() => {
     if (!isWorldWorkspaceMode(viewMode)) return
@@ -1848,18 +2088,133 @@ export function WorldGraphPage({
     () => wikiModel.sections.some((section) => section.kind === 'app' || section.kind.startsWith('app_')),
     [wikiModel.sections],
   )
+  const wikiHasGameSections = useMemo(
+    () => wikiModel.sections.some((section) => section.kind === 'game' || section.kind.startsWith('game_')),
+    [wikiModel.sections],
+  )
+  const narrativeRpgReadiness = useMemo(() => evaluateNarrativeRpgReadiness({
+    entities: worldEntities,
+    relationships: worldRelationships,
+  }), [worldEntities, worldRelationships])
+  const narrativeRpgManifest = useMemo(() => {
+    if (!(projectContext?.projectSubtype === 'narrative_rpg_mobile' || wikiHasGameSections)) return null
+    try {
+      return compileNarrativeRpgManifest({ entities: worldEntities, relationships: worldRelationships })
+    } catch {
+      return null
+    }
+  }, [projectContext?.projectSubtype, wikiHasGameSections, worldEntities, worldRelationships])
+  const appPreviewReadiness = useMemo(() => evaluateAppPreviewReadiness({
+    draft: { metadata: projectDraftMetadata },
+    worldEntities,
+    worldRelationships,
+    assets,
+  }), [assets, projectDraftMetadata, worldEntities, worldRelationships])
+  const routeBearingAppScreens = useMemo(
+    () => worldEntities.filter((entity) => entity.nodeType === 'screen' && readAppString(entity, 'route')),
+    [worldEntities],
+  )
+  const appScreenMockupsByScreenKey = useMemo(() => {
+    const byScreenKey = new Map<string, WorldEntity[]>()
+    for (const entity of worldEntities) {
+      if (entity.nodeType !== 'screen_mockup') continue
+      const screenKey = appScreenMockupTargetKey(entity)
+      if (!screenKey) continue
+      byScreenKey.set(screenKey, [...(byScreenKey.get(screenKey) ?? []), entity])
+    }
+    return byScreenKey
+  }, [worldEntities])
+  const appScreensMissingArt = useMemo(
+    () => routeBearingAppScreens.filter((screen) => !(appScreenMockupsByScreenKey.get(screen.key) ?? []).some((mockup) => appScreenMockupAssetKey(mockup))),
+    [appScreenMockupsByScreenKey, routeBearingAppScreens],
+  )
+  const appScreensMissingVisualSpecs = useMemo(
+    () => routeBearingAppScreens.filter((screen) => {
+      if (appEntityHasVisualSpec(screen)) return false
+      return !(appScreenMockupsByScreenKey.get(screen.key) ?? []).some(appEntityHasVisualSpec)
+    }),
+    [appScreenMockupsByScreenKey, routeBearingAppScreens],
+  )
+  const appPrototypeTransitionsByScreenKey = useMemo(() => {
+    const routeScreenKeys = new Set(routeBearingAppScreens.map((screen) => screen.key))
+    const byScreenKey = new Map<string, WorldEntity[]>()
+    for (const relationship of worldRelationships) {
+      if (relationship.verb !== 'transitions_to') continue
+      if (!routeScreenKeys.has(relationship.sourceEntityKey) || !routeScreenKeys.has(relationship.targetEntityKey)) continue
+      const target = entityByKey.get(relationship.targetEntityKey)
+      if (!target || target.nodeType !== 'screen') continue
+      byScreenKey.set(relationship.sourceEntityKey, [...(byScreenKey.get(relationship.sourceEntityKey) ?? []), target])
+    }
+    return byScreenKey
+  }, [entityByKey, routeBearingAppScreens, worldRelationships])
+  const appPrototypeScreenImageByKey = useMemo(() => {
+    const byScreenKey = new Map<string, string>()
+    for (const screen of routeBearingAppScreens) {
+      const mockup = (appScreenMockupsByScreenKey.get(screen.key) ?? []).find((candidate) => appScreenMockupAssetKey(candidate))
+      if (!mockup) continue
+      const imageUrl = imageUrlByEntityKey.get(mockup.key)
+      if (imageUrl) byScreenKey.set(screen.key, imageUrl)
+    }
+    return byScreenKey
+  }, [appScreenMockupsByScreenKey, imageUrlByEntityKey, routeBearingAppScreens])
+  const selectedAppPrototypeScreen = useMemo(() => {
+    if (selectedAppPrototypeScreenKey) {
+      const selected = routeBearingAppScreens.find((screen) => screen.key === selectedAppPrototypeScreenKey)
+      if (selected) return selected
+    }
+    return routeBearingAppScreens[0] ?? null
+  }, [routeBearingAppScreens, selectedAppPrototypeScreenKey])
+  const appScreenArtGenerationBusy = appScreenArtBusy || appScreenArtJobs.some((job) => ['queued', 'running'].includes(job.status))
+  const appScreenAnalysisBusy = appScreenAnalysisJobs.some((job) => ['queued', 'running'].includes(job.status))
+  const plannedCodeFileEntities = useMemo(
+    () => worldEntities.filter((entity) => entity.nodeType === 'code_file'),
+    [worldEntities],
+  )
+  const generatedAppFiles = useMemo<AppGeneratedFile[]>(() => {
+    const sessionFiles = appPreviewSession?.files ?? []
+    if (sessionFiles.length > 0) return sessionFiles
+    return appGenerationJob?.files ?? []
+  }, [appGenerationJob?.files, appPreviewSession?.files])
+  const appCodeHierarchy = useMemo(
+    () => buildAppCodeHierarchy({
+      generatedFiles: generatedAppFiles,
+      plannedCodeFiles: plannedCodeFileEntities,
+    }),
+    [generatedAppFiles, plannedCodeFileEntities],
+  )
+  const appCodeFileCount = generatedAppFiles.length || plannedCodeFileEntities.length
+  const selectedGeneratedAppFile = useMemo(() => {
+    if (selectedAppCodePath) {
+      return generatedAppFiles.find((file) => file.path === selectedAppCodePath) ?? null
+    }
+    if (!selectedWorldNodeKey) return null
+    const selectedEntity = entityByKey.get(selectedWorldNodeKey) ?? null
+    const selectedPath = selectedEntity?.nodeType === 'code_file' ? readAppCodeFilePath(selectedEntity) : ''
+    return generatedAppFiles.find((file) => file.path === selectedPath) ?? null
+  }, [entityByKey, generatedAppFiles, selectedAppCodePath, selectedWorldNodeKey])
+  const selectedPlannedCodeFile = useMemo(() => {
+    if (selectedAppCodePath) {
+      return plannedCodeFileEntities.find((entity) => readAppCodeFilePath(entity) === selectedAppCodePath) ?? null
+    }
+    const selectedEntity = selectedWorldNodeKey ? entityByKey.get(selectedWorldNodeKey) ?? null : null
+    return selectedEntity?.nodeType === 'code_file' ? selectedEntity : null
+  }, [entityByKey, plannedCodeFileEntities, selectedAppCodePath, selectedWorldNodeKey])
   const wikiOverviewIcon = useMemo<EntityIconId>(() => {
     const heroEntity = wikiModel.overview.heroEntityKey ? entityByKey.get(wikiModel.overview.heroEntityKey) ?? null : null
     if (heroEntity) return iconForWorldEntity(heroEntity.nodeType)
-    return projectContext?.projectType === 'app' || wikiHasAppSections ? 'app' : 'graph'
-  }, [entityByKey, projectContext?.projectType, wikiHasAppSections, wikiModel.overview.heroEntityKey])
+    if (projectContext?.projectType === 'app' || wikiHasAppSections) return 'app'
+    if (projectContext?.projectType === 'game' || wikiHasGameSections) return 'thread'
+    return 'graph'
+  }, [entityByKey, projectContext?.projectType, wikiHasAppSections, wikiHasGameSections, wikiModel.overview.heroEntityKey])
   const wikiOverviewImageUrl = wikiModel.overview.heroEntityKey
     ? imageUrlByEntityKey.get(wikiModel.overview.heroEntityKey) ?? null
     : null
-  const wikiOverviewLabel = projectContext?.projectType === 'app' || wikiHasAppSections ? 'App Overview' : 'World Overview'
-  const wikiSynopsisLabel = projectContext?.projectType === 'app' || wikiHasAppSections ? 'App synopsis' : 'World synopsis'
+  const wikiOverviewLabel = projectContext?.projectType === 'app' || wikiHasAppSections ? 'App Overview' : projectContext?.projectType === 'game' || wikiHasGameSections ? 'Game Overview' : 'World Overview'
+  const wikiSynopsisLabel = projectContext?.projectType === 'app' || wikiHasAppSections ? 'App synopsis' : projectContext?.projectType === 'game' || wikiHasGameSections ? 'Game synopsis' : 'World synopsis'
   const wikiEmptySynopsisText = projectContext?.projectType === 'app' || wikiHasAppSections
     ? 'Add app graph canon or generate a synopsis from the existing product graph.'
+    : projectContext?.projectType === 'game' || wikiHasGameSections
+      ? 'Add playable game graph canon or generate a synopsis from the existing game graph.'
     : 'Add world canon or generate a synopsis from the existing graph.'
   const wikiBrandAtlasAsset = useMemo(() => {
     const assetKey = wikiModel.overview.brandAtlasAssetKey.trim()
@@ -1919,6 +2274,68 @@ export function WorldGraphPage({
       window.clearInterval(intervalId)
     }
   }, [activeBrandAtlasJobId, onGetVisualGenerationStatus, onRefreshLiveSnapshot, wikiBrandAtlasPending])
+  useEffect(() => {
+    const runningJobs = appScreenArtJobs.filter((job) => ['queued', 'running'].includes(job.status))
+    if (runningJobs.length === 0 || typeof onGetVisualGenerationStatus !== 'function') return
+    let disposed = false
+    let refreshedTerminal = false
+    const poll = async () => {
+      const nextJobs = await Promise.all(runningJobs.map(async (job) => {
+        try {
+          const status = await onGetVisualGenerationStatus(job.id)
+          return status.job
+        } catch (error) {
+          console.warn('[GraphCore] failed to refresh app screen art job status.', { jobId: job.id, error })
+          return job
+        }
+      }))
+      if (disposed) return
+      setAppScreenArtJobs((current) => current.map((job) => nextJobs.find((nextJob) => nextJob.id === job.id) ?? job))
+      if (!refreshedTerminal && nextJobs.some((job) => ['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(job.status))) {
+        refreshedTerminal = true
+        await onRefreshLiveSnapshot()
+      }
+    }
+    void poll()
+    const intervalId = window.setInterval(() => {
+      void poll()
+    }, 3500)
+    return () => {
+      disposed = true
+      window.clearInterval(intervalId)
+    }
+  }, [appScreenArtJobs, onGetVisualGenerationStatus, onRefreshLiveSnapshot])
+  useEffect(() => {
+    const runningJobs = appScreenAnalysisJobs.filter((job) => ['queued', 'running'].includes(job.status))
+    if (runningJobs.length === 0 || typeof onGetVisualGenerationStatus !== 'function') return
+    let disposed = false
+    let refreshedTerminal = false
+    const poll = async () => {
+      const nextJobs = await Promise.all(runningJobs.map(async (job) => {
+        try {
+          const status = await onGetVisualGenerationStatus(job.id)
+          return status.job
+        } catch (error) {
+          console.warn('[GraphCore] failed to refresh app screen analysis status.', error)
+          return job
+        }
+      }))
+      if (disposed) return
+      setAppScreenAnalysisJobs((current) => current.map((job) => nextJobs.find((nextJob) => nextJob.id === job.id) ?? job))
+      if (!refreshedTerminal && nextJobs.some((job) => ['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(job.status))) {
+        refreshedTerminal = true
+        await onRefreshLiveSnapshot()
+      }
+    }
+    void poll()
+    const intervalId = window.setInterval(() => {
+      void poll()
+    }, 3500)
+    return () => {
+      disposed = true
+      window.clearInterval(intervalId)
+    }
+  }, [appScreenAnalysisJobs, onGetVisualGenerationStatus, onRefreshLiveSnapshot])
   const iconGenerationCandidates = useMemo(() => (
     buildWorldEntityIconCandidates({
       entities: worldEntities,
@@ -3909,6 +4326,352 @@ export function WorldGraphPage({
     }
   }
 
+  async function handleRefineAppGraph() {
+    const findings = [...appPreviewReadiness.blockers, ...appPreviewReadiness.warnings]
+    const topFindings = findings.slice(0, 12).map((finding) => ({
+      category: finding.category,
+      severity: finding.severity,
+      message: finding.message,
+      entityKey: finding.entityKey ?? null,
+    }))
+    const readinessLedger = {
+      task: 'refine_app_graph',
+      readinessPercent: appPreviewReadiness.readinessPercent,
+      currentGate: appPreviewReadiness.currentGate,
+      nextGate: appPreviewReadiness.nextGate,
+      nextAction: appPreviewReadiness.nextAction,
+      gates: appPreviewReadiness.gates,
+      counts: appPreviewReadiness.counts,
+      categoryStatus: appPreviewReadiness.categoryStatus,
+      findings: topFindings,
+    }
+    const extractedText = JSON.stringify(readinessLedger, null, 2)
+    const selectedRootEntityKey = topFindings.find((finding) => finding.entityKey)?.entityKey ?? null
+    await handleSubmitWorldPrompt([
+      'Refine this app design graph toward static visual prototype readiness using the attached App Readiness Ledger as the primary task brief.',
+      'Fix the highest-priority missing design/product slices only: product, UX flows, screens, components, data/API, capabilities, design system, and relationships.',
+      'When possible, repair existing nodes before creating replacements. Add only the nodes and relationships needed to move the readiness gates forward.',
+      'Return a concise readiness summary that states what changed and whether the app design graph is ready for brand atlas, screen art, or static flow preview.',
+      'Use only app ontology, customProperties.app fields, metadata.visualDescription for durable visual prompts, and app relationship verbs. Never create story sequence_unit nodes, tower nodes, code_file nodes, or story/lore language in this design refinement pass.',
+    ].join(' '), null, {
+      selectedRootEntityKey,
+      selectedViewKey: selectedView.key,
+      sourceContext: {
+        kind: 'prompt',
+        title: 'App Readiness Ledger',
+        fileName: null,
+        mimeType: 'application/json',
+        url: null,
+        extractedText,
+        charCount: extractedText.length,
+        truncated: false,
+      },
+    })
+  }
+
+  async function handleGenerateAppCodePlan() {
+    if (!appPreviewReadiness.designApproved || appPreviewReadiness.designApprovalStale) return
+    const appNode = worldEntities.find((entity) => entity.nodeType === 'app')
+    const approval = appNode ? readLooseRecord(readAppCustomProperties(appNode).designApproval) : {}
+    const approvedScreenKeys = new Set(Array.isArray(approval.routeScreenKeys) ? approval.routeScreenKeys.filter((key): key is string => typeof key === 'string') : routeBearingAppScreens.map((screen) => screen.key))
+    const approvedMockupKeys = new Set(Array.isArray(approval.screenMockupKeys) ? approval.screenMockupKeys.filter((key): key is string => typeof key === 'string') : [])
+    const approvedScreens = routeBearingAppScreens
+      .filter((screen) => approvedScreenKeys.has(screen.key))
+      .map((screen) => ({
+        key: screen.key,
+        name: screen.name,
+        route: readAppString(screen, 'route'),
+        purpose: readAppString(screen, 'purpose') || screen.summary,
+        states: readAppStringArray(screen, 'states'),
+        actions: readAppStringArray(screen, 'actions'),
+        dataDependencies: readAppStringArray(screen, 'dataDependencies'),
+        mockups: (appScreenMockupsByScreenKey.get(screen.key) ?? [])
+          .filter((mockup) => approvedMockupKeys.size === 0 || approvedMockupKeys.has(mockup.key))
+          .map((mockup) => ({
+            key: mockup.key,
+            sourceAssetKey: appScreenMockupAssetKey(mockup),
+            visualSpec: readAppCustomProperties(mockup).visualSpec ?? null,
+          })),
+      }))
+    const approvedDesignBundle = JSON.stringify({
+      task: 'generate_implementation_plan_from_approved_design',
+      approval,
+      designFingerprint: appPreviewReadiness.designFingerprint,
+      worldWiki: {
+        artStyleDescription: wikiModel.overview.artStyleDescription,
+        brandAtlasAssetKey: wikiModel.overview.brandAtlasAssetKey,
+        colorScheme: wikiModel.overview.colorScheme,
+      },
+      screens: approvedScreens,
+      transitions: worldRelationships
+        .filter((relationship) => relationship.verb === 'transitions_to' && approvedScreenKeys.has(relationship.sourceEntityKey) && approvedScreenKeys.has(relationship.targetEntityKey))
+        .map((relationship) => ({ key: relationship.key, source: relationship.sourceEntityKey, target: relationship.targetEntityKey, notes: relationship.notes })),
+      dataApiNodes: worldEntities
+        .filter((entity) => ['data_model', 'action', 'api_endpoint', 'backend_function', 'external_service', 'capability'].includes(entity.nodeType))
+        .map((entity) => ({ key: entity.key, type: entity.nodeType, name: entity.name, summary: entity.summary, app: readAppCustomProperties(entity) })),
+    }, null, 2)
+    await handleSubmitWorldPrompt([
+      'Generate the app implementation code plan from the approved visual prototype and completed app design graph.',
+      'Use only the attached Approved Design Bundle for implementation planning. Treat live graph drift outside this bundle as unapproved.',
+      'Create or repair tower and code_file nodes only. Each code_file must include customProperties.app.filePath, ownerTower, fileKind, exports, imports, dependsOn, implementationSummary, publicInterface, visualSpecRefs, and testExpectations.',
+      'Do not modify product, UX, screen, component, visual, or design-system nodes except to add implementation relationships from tower/code_file nodes.',
+      'Use Expo Router, React Native primitives, TypeScript, mock backend/capability adapters, and relationships implemented_as, owned_by_tower, depends_on, reads, writes, calls, requires_capability, and styled_by.',
+    ].join(' '), null, {
+      selectedViewKey: selectedView.key,
+      sourceContext: {
+        kind: 'prompt',
+        title: 'Approved App Design Bundle',
+        fileName: null,
+        mimeType: 'application/json',
+        url: null,
+        extractedText: approvedDesignBundle,
+        charCount: approvedDesignBundle.length,
+        truncated: false,
+      },
+    })
+  }
+
+  async function handleApproveAppDesignForBuild() {
+    if (!appPreviewReadiness.gates.visual_prototype_ready || (appPreviewReadiness.designApproved && !appPreviewReadiness.designApprovalStale)) return
+    const appNode = worldEntities.find((entity) => entity.nodeType === 'app')
+    if (!appNode) return
+    const appCustom = readAppCustomProperties(appNode)
+    const mockupKeys = routeBearingAppScreens.flatMap((screen) => (
+      (appScreenMockupsByScreenKey.get(screen.key) ?? []).map((mockup) => mockup.key)
+    ))
+    const visualSpecScreenKeys = routeBearingAppScreens.filter((screen) => {
+      const mockups = appScreenMockupsByScreenKey.get(screen.key) ?? []
+      return mockups.some((mockup) => readLooseRecord(readAppCustomProperties(mockup).visualSpec).layoutTree !== undefined)
+    }).map((screen) => screen.key)
+    const designFingerprint = computeAppDesignFingerprint({
+      draft: { metadata: { worldWiki: wikiModel.overview } },
+      worldEntities,
+      worldRelationships,
+      assets,
+    })
+    await updateWorldEntityAndRefresh(appNode.key, {
+      customProperties: {
+        ...appNode.customProperties,
+        app: {
+          ...appCustom,
+          phase: 'implementation',
+          designApproval: {
+            status: 'approved',
+            approvedAt: new Date().toISOString(),
+            sourceGate: 'visual_prototype_ready',
+            designFingerprint,
+            brandAtlasAssetKey: wikiModel.overview.brandAtlasAssetKey,
+            designSystemKeys: worldEntities.filter((entity) => entity.nodeType === 'design_system').map((entity) => entity.key),
+            routeScreenKeys: routeBearingAppScreens.map((screen) => screen.key),
+            screenMockupKeys: mockupKeys,
+            visualSpecScreenKeys,
+            transitionKeys: worldRelationships.filter((relationship) => relationship.verb === 'transitions_to').map((relationship) => relationship.key),
+          },
+        },
+      },
+    }, 'app_design_approved_for_build')
+  }
+
+  async function handleGenerateAppScreenArt(explicitScreens?: WorldEntity[]) {
+    if (!onStartVisualGenerationJob) {
+      setAppScreenArtError('Visual generation is unavailable for this workspace.')
+      return
+    }
+    const brandAtlasAssetKey = wikiModel.overview.brandAtlasAssetKey.trim()
+    if (!brandAtlasAssetKey) {
+      setAppScreenArtError('Generate the brand atlas before generating screen art.')
+      return
+    }
+    const targetScreens = explicitScreens && explicitScreens.length > 0
+      ? explicitScreens
+      : appScreensMissingArt.length > 0 ? appScreensMissingArt : routeBearingAppScreens
+    if (targetScreens.length === 0) {
+      setAppScreenArtError('No route-bearing app screens are ready for screen art.')
+      return
+    }
+    setAppScreenArtBusy(true)
+    setAppScreenArtError(null)
+    try {
+      const screenJobs: VisualGenerationStatusResponse['job'][] = []
+      for (const screen of targetScreens) {
+        const route = readAppString(screen, 'route')
+        const states = readAppStringArray(screen, 'states')
+        const actions = readAppStringArray(screen, 'actions')
+        const dataDependencies = readAppStringArray(screen, 'dataDependencies')
+        const componentNames = worldRelationships
+          .filter((relationship) => relationship.sourceEntityKey === screen.key && relationship.verb === 'contains')
+          .map((relationship) => entityByKey.get(relationship.targetEntityKey) ?? null)
+          .filter((entity): entity is WorldEntity => Boolean(entity))
+          .filter((entity) => entity.nodeType === 'component' || entity.nodeType === 'section')
+          .map((entity) => entity.name)
+        const prompt = [
+          `Create a premium iPhone app screen mockup for "${screen.name}" at route ${route}.`,
+          `Screen purpose: ${readAppString(screen, 'purpose') || screen.summary || screen.context || 'Define a polished mobile app screen for this route.'}`,
+          `App visual direction: ${wikiModel.overview.artStyleDescription || 'commercial mobile app UI with coherent brand direction'}`,
+          wikiModel.overview.brandAtlasPrompt ? `Brand atlas direction: ${wikiModel.overview.brandAtlasPrompt}` : '',
+          `Color scheme: ${Object.entries(wikiModel.overview.colorScheme).map(([key, value]) => `${key} ${value}`).join(', ') || 'use the established brand atlas palette'}.`,
+          `Use the brand atlas asset as the visual anchor. Maintain consistent typography, icon style, spacing, radius, and component language.`,
+          states.length ? `Represent these app states in the design language: ${states.join(', ')}.` : '',
+          componentNames.length ? `Include these screen regions/components: ${componentNames.join(', ')}.` : '',
+          actions.length ? `Primary actions: ${actions.join(', ')}.` : '',
+          dataDependencies.length ? `Data shown or implied: ${dataDependencies.join(', ')}.` : '',
+          'Design only the app screen content in a clean iPhone portrait viewport. Avoid browser chrome, desktop UI, explanatory annotations, wireframe labels, and storybook/lore styling.',
+        ].filter(Boolean).join(' ')
+        const result = await onStartVisualGenerationJob({
+          kind: 'app_screen_mockup',
+          targetKeys: {
+            screenKey: screen.key,
+            screenName: screen.name,
+            route,
+          },
+          input: {
+            prompt,
+            screenKey: screen.key,
+            screenName: screen.name,
+            route,
+            brandAtlasAssetKey,
+            viewport: { width: 390, height: 844, device: 'iphone' },
+          },
+          metadata: {
+            source: 'app_preview_pipeline',
+            requestedFrom: 'app_wiki_generate_screen_art',
+          },
+        })
+        screenJobs.push(result.job)
+      }
+      setAppScreenArtJobs((current) => {
+        const next = new Map(current.map((job) => [job.id, job]))
+        for (const job of screenJobs) next.set(job.id, job)
+        return [...next.values()]
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not start app screen art generation.'
+      setAppScreenArtError(message)
+      console.error('[GraphCore] app screen art generation failed to start.', error)
+    } finally {
+      setAppScreenArtBusy(false)
+    }
+  }
+
+  async function handleGenerateAppScreenDesigns() {
+    if (!onStartVisualGenerationJob) {
+      setAppScreenArtError('Visual analysis is unavailable for this workspace.')
+      return
+    }
+    const targetScreens = appScreensMissingVisualSpecs.filter((screen) => {
+      const mockups = appScreenMockupsByScreenKey.get(screen.key) ?? []
+      return mockups.some((mockup) => appScreenMockupAssetKey(mockup))
+    })
+    if (targetScreens.length === 0) {
+      setAppScreenArtError('No generated app screen art is ready for analysis.')
+      return
+    }
+    setAppScreenArtError(null)
+    try {
+      const jobs: VisualGenerationStatusResponse['job'][] = []
+      for (const screen of targetScreens) {
+        const mockup = (appScreenMockupsByScreenKey.get(screen.key) ?? []).find((candidate) => appScreenMockupAssetKey(candidate))
+        if (!mockup) continue
+        const components = worldRelationships
+          .filter((relationship) => relationship.sourceEntityKey === screen.key && relationship.verb === 'contains')
+          .map((relationship) => entityByKey.get(relationship.targetEntityKey) ?? null)
+          .filter((entity): entity is WorldEntity => Boolean(entity))
+          .filter((entity) => entity.nodeType === 'component' || entity.nodeType === 'section')
+          .map((entity) => ({
+            key: entity.key,
+            name: entity.name,
+            type: entity.nodeType,
+            summary: entity.summary,
+            visualRole: readAppString(entity, 'visualRole'),
+            visualDescription: readWorldEntityVisualDescription(entity),
+          }))
+        const result = await onStartVisualGenerationJob({
+          kind: 'app_screen_analysis',
+          targetKeys: {
+            screenKey: screen.key,
+            screenMockupKey: mockup.key,
+          },
+          input: {
+            screenKey: screen.key,
+            screenName: screen.name,
+            route: readAppString(screen, 'route'),
+            screenMockupKey: mockup.key,
+            sourceAssetKey: appScreenMockupAssetKey(mockup),
+            components,
+            actions: readAppStringArray(screen, 'actions'),
+            dataDependencies: readAppStringArray(screen, 'dataDependencies'),
+            states: readAppStringArray(screen, 'states'),
+            colorScheme: wikiModel.overview.colorScheme,
+            brandAtlasAssetKey: wikiModel.overview.brandAtlasAssetKey,
+            designSystemKeys: worldEntities.filter((entity) => entity.nodeType === 'design_system').map((entity) => entity.key),
+            viewport: { width: 390, height: 844, device: 'iphone' },
+          },
+          metadata: {
+            source: 'app_preview_pipeline',
+            requestedFrom: 'app_wiki_analyze_screen_art',
+          },
+        })
+        jobs.push(result.job)
+      }
+      setAppScreenAnalysisJobs((current) => {
+        const next = new Map(current.map((job) => [job.id, job]))
+        for (const job of jobs) next.set(job.id, job)
+        return [...next.values()]
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not start app screen analysis.'
+      setAppScreenArtError(message)
+      console.error('[GraphCore] app screen analysis failed to start.', error)
+    }
+  }
+
+  async function handleBuildAppPreview() {
+    if (!onStartAppCodeGeneration) return
+    setAppGenerationError(null)
+    setAppGenerationBusy(true)
+    try {
+      const result = await onStartAppCodeGeneration()
+      setAppGenerationJob(result.job)
+      if (result.terminal && onGetAppPreviewSession) {
+        const preview = await onGetAppPreviewSession(result.job.id)
+        setAppPreviewSession(preview)
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not build the app preview.'
+      setAppGenerationError(message)
+      console.error('[GraphCore] app preview generation failed.', error)
+    } finally {
+      setAppGenerationBusy(false)
+    }
+  }
+
+  async function handleRefreshAppPreview() {
+    if (!appGenerationJob || !onGetAppGenerationStatus) return
+    setAppGenerationError(null)
+    try {
+      const status = await onGetAppGenerationStatus(appGenerationJob.id)
+      setAppGenerationJob(status.job)
+      if (status.terminal && onGetAppPreviewSession) {
+        setAppPreviewSession(await onGetAppPreviewSession(status.job.id))
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not refresh app preview status.'
+      setAppGenerationError(message)
+    }
+  }
+
+  async function handleCancelAppPreviewBuild() {
+    if (!appGenerationJob || !onCancelAppGenerationJob) return
+    setAppGenerationError(null)
+    try {
+      const result = await onCancelAppGenerationJob(appGenerationJob.id)
+      setAppGenerationJob(result.job)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not cancel app preview generation.'
+      setAppGenerationError(message)
+    }
+  }
+
   function handleScrollToWikiSection(sectionKind: WorldWikiSection['kind']) {
     const section = document.getElementById(`world-wiki-section-${sectionKind}`)
     section?.scrollIntoView({
@@ -4359,6 +5122,456 @@ export function WorldGraphPage({
     )
   }
 
+  function renderNarrativeRpgPlayablePanel() {
+    if (!(projectContext?.projectSubtype === 'narrative_rpg_mobile' || wikiHasGameSections)) return null
+    const visibleBlockers = narrativeRpgReadiness.blockers.slice(0, 5)
+    const visibleWarnings = narrativeRpgReadiness.warnings.slice(0, 4)
+    const promptPayload = JSON.stringify({
+      readinessPercent: narrativeRpgReadiness.readinessPercent,
+      nextAction: narrativeRpgReadiness.nextAction,
+      blockers: narrativeRpgReadiness.blockers,
+      warnings: narrativeRpgReadiness.warnings,
+      counts: narrativeRpgReadiness.counts,
+    }, null, 2)
+    const runPrompt = (body: string) => {
+      setWorldPromptText([
+        body,
+        '',
+        'Game Readiness Ledger:',
+        promptPayload,
+      ].join('\n'))
+      setWikiPromptExpanded(true)
+    }
+
+    return (
+      <section className="world-wiki-section app-preview-pipeline-panel">
+        <div className="world-wiki-section-head">
+          <div>
+            <span className="eyebrow">Narrative RPG Prototype</span>
+            <h3>Playable Game Graph</h3>
+          </div>
+          <span className="app-preview-gate-pill">{narrativeRpgReadiness.readinessPercent}% ready</span>
+        </div>
+        <div className="app-preview-readiness-meter" aria-label={`Game graph readiness ${narrativeRpgReadiness.readinessPercent}%`}>
+          <span style={{ width: `${narrativeRpgReadiness.readinessPercent}%` }} />
+        </div>
+        <div className="app-preview-readiness-summary">
+          <strong>{narrativeRpgReadiness.nextAction}</strong>
+          <span>{Object.keys(narrativeRpgReadiness.counts).length} node types represented. Static play preview is ready when all blockers clear.</span>
+        </div>
+        <div className="app-preview-actions">
+          <button
+            className="world-context-strip-action"
+            disabled={isPromptSubmitting}
+            onClick={() => runPrompt('Refine this Narrative RPG Mobile game graph toward static playable prototype readiness. Repair only the blockers and warnings in the attached Game Readiness Ledger. Use executable game node types, customProperties.game, and relationships for inventory, economy, travel, dialogue choices, conditions, outcomes, progression tokens, and save state.')}
+            type="button"
+          >
+            Refine Game Graph
+          </button>
+          <button
+            className="world-context-strip-action"
+            disabled={isPromptSubmitting}
+            onClick={() => runPrompt('Generate or repair the game rules, choice conditions, choice outcomes, state variables, starter inventory, currencies, shadow tokens, and save-state contract needed for this Narrative RPG Mobile graph to compile into a static playable prototype.')}
+            type="button"
+          >
+            Generate Game Rules
+          </button>
+          <button
+            className="world-context-strip-action"
+            disabled={isPromptSubmitting}
+            onClick={() => runPrompt('Validate this Narrative RPG Mobile graph for playability. Add only the missing graph nodes and relationships needed so every required item, currency, token, travel link, market offer, dialogue choice, condition, and outcome is reachable and executable.')}
+            type="button"
+          >
+            Validate Playability
+          </button>
+          <button
+            className="world-context-strip-action"
+            disabled={!narrativeRpgReadiness.ready || !narrativeRpgManifest}
+            onClick={() => openWikiDetailModal({
+              title: 'Playable Flow Manifest',
+              eyebrow: 'Static runtime JSON',
+              body: narrativeRpgManifest ? JSON.stringify(narrativeRpgManifest, null, 2) : 'The game graph needs to pass readiness checks before a playable manifest can be compiled.',
+              icon: 'thread',
+              meta: narrativeRpgManifest ? [
+                `${narrativeRpgManifest.locations.length} locations`,
+                `${narrativeRpgManifest.dialogueNodes.length} dialogue nodes`,
+                `${narrativeRpgManifest.choices.length} choices`,
+              ] : ['Not ready'],
+            })}
+            type="button"
+          >
+            Preview Playable Flow
+          </button>
+          <button
+            className="world-context-strip-action"
+            disabled
+            title="Mobile shell generation starts after static playability is solid."
+            type="button"
+          >
+            Generate Mobile Shell
+          </button>
+        </div>
+        {visibleBlockers.length > 0 || visibleWarnings.length > 0 ? (
+          <div className="app-preview-readiness-list">
+            {[...visibleBlockers, ...visibleWarnings].map((finding) => (
+              <span key={`${finding.category}-${finding.entityKey ?? finding.message}`} className={`app-preview-readiness-item is-${finding.severity}`}>
+                <strong>{finding.category}</strong>
+                {finding.message}
+              </span>
+            ))}
+          </div>
+        ) : (
+          <div className="inline-note">Game graph is ready for a static playable flow preview. Mobile shell generation can be planned after prototype review.</div>
+        )}
+      </section>
+    )
+  }
+
+  function renderAppPreviewPipelinePanel() {
+    if (!(projectContext?.projectType === 'app' || wikiHasAppSections)) return null
+    const visibleBlockers = appPreviewReadiness.blockers.slice(0, 4)
+    const visibleWarnings = appPreviewReadiness.warnings.slice(0, 3)
+    const buildDisabled = appGenerationBusy || !onStartAppCodeGeneration || !appPreviewReadiness.gates.implementation_plan_ready
+    const readyCategoryCount = Object.values(appPreviewReadiness.categoryStatus).filter((status) => status.ready).length
+    const totalCategoryCount = Object.keys(appPreviewReadiness.categoryStatus).length
+    const brandAtlasReady = Boolean(wikiModel.overview.brandAtlasAssetKey.trim())
+    const screenArtDisabled = appScreenArtGenerationBusy || !onStartVisualGenerationJob || !appPreviewReadiness.gates.design_graph_refined || !brandAtlasReady || routeBearingAppScreens.length === 0
+    const analyzeArtDisabled = appScreenAnalysisBusy || !onStartVisualGenerationJob || appScreensMissingArt.length > 0 || appScreensMissingVisualSpecs.length === 0
+    const staticPrototypeDisabled = !appPreviewReadiness.gates.visual_prototype_ready
+    const approveDesignDisabled = isPromptSubmitting || !appPreviewReadiness.gates.visual_prototype_ready || (appPreviewReadiness.designApproved && !appPreviewReadiness.designApprovalStale)
+    const implementationPlanDisabled = isPromptSubmitting || !appPreviewReadiness.designApproved || appPreviewReadiness.designApprovalStale
+    const selectedPrototypeImageUrl = selectedAppPrototypeScreen ? appPrototypeScreenImageByKey.get(selectedAppPrototypeScreen.key) ?? null : null
+    const prototypeTargets = selectedAppPrototypeScreen ? appPrototypeTransitionsByScreenKey.get(selectedAppPrototypeScreen.key) ?? [] : []
+    const selectedPrototypeMockups = selectedAppPrototypeScreen ? appScreenMockupsByScreenKey.get(selectedAppPrototypeScreen.key) ?? [] : []
+    const selectedPrototypeMockupKeys = new Set(selectedPrototypeMockups.map((mockup) => mockup.key))
+    const selectedPrototypeHasVisualSpec = selectedPrototypeMockups.some((mockup) => readLooseRecord(readAppCustomProperties(mockup).visualSpec).layoutTree !== undefined)
+    const selectedPrototypeRegions = selectedAppPrototypeScreen ? worldEntities.filter((entity) => {
+      if (entity.nodeType !== 'image_region') return false
+      const app = readAppCustomProperties(entity)
+      const metadata = readLooseRecord(entity.metadata)
+      const screenKey = typeof app.screenKey === 'string' ? app.screenKey : typeof metadata.screenKey === 'string' ? metadata.screenKey : ''
+      const mockupKey = typeof app.mockupKey === 'string' ? app.mockupKey : typeof metadata.mockupKey === 'string' ? metadata.mockupKey : ''
+      return screenKey === selectedAppPrototypeScreen.key || (mockupKey && selectedPrototypeMockupKeys.has(mockupKey))
+    }).slice(0, 8) : []
+    const prototypeWarnings = selectedAppPrototypeScreen ? [
+      ...(!selectedPrototypeImageUrl ? ['Missing screen mockup image.'] : []),
+      ...(!selectedPrototypeHasVisualSpec ? ['Missing analyzed visual spec.'] : []),
+      ...(selectedPrototypeRegions.length === 0 ? ['No image-region hotspots; fallback route buttons are shown.'] : []),
+      ...(prototypeTargets.length === 0 && routeBearingAppScreens.length > 1 ? ['No outgoing transition relationships from this screen.'] : []),
+    ] : []
+    return (
+      <section className="world-wiki-section app-preview-pipeline-panel">
+        <div className="world-wiki-section-head">
+          <div>
+            <span className="eyebrow">App Preview Pipeline</span>
+            <h3>Prompt-to-App Sandbox</h3>
+          </div>
+          <span className="app-preview-gate-pill">{appPreviewReadiness.readinessPercent}% ready</span>
+        </div>
+        <div className="app-preview-readiness-meter" aria-label={`App graph readiness ${appPreviewReadiness.readinessPercent}%`}>
+          <span style={{ width: `${appPreviewReadiness.readinessPercent}%` }} />
+        </div>
+        <div className="app-preview-readiness-summary">
+          <strong>{appPreviewReadiness.nextAction}</strong>
+          <span>{readyCategoryCount} of {totalCategoryCount} readiness slices clear. Current gate: {appPreviewReadiness.currentGate.replace(/_/g, ' ')}.</span>
+        </div>
+        <div className="app-preview-gate-grid">
+          {Object.entries(appPreviewReadiness.gates).map(([gate, ready]) => (
+            <span key={gate} className={`app-preview-gate ${ready ? 'is-ready' : 'is-pending'}`}>
+              <EntityIcon id={ready ? 'check' : 'info'} />
+              {gate.replace(/_/g, ' ')}
+            </span>
+          ))}
+        </div>
+        <div className="app-preview-actions">
+          <button className="world-context-strip-action" disabled={isPromptSubmitting || appPreviewReadiness.gates.visual_prototype_ready} onClick={() => void handleRefineAppGraph()} type="button">
+            {isPromptSubmitting ? 'Refining...' : 'Refine Design Graph'}
+          </button>
+          <button className="world-context-strip-action" disabled={screenArtDisabled} onClick={() => void handleGenerateAppScreenArt()} type="button">
+            {appScreenArtGenerationBusy ? 'Generating Screen Art...' : appScreensMissingArt.length > 0 ? `Generate Screen Art (${appScreensMissingArt.length})` : 'Regenerate Screen Art'}
+          </button>
+          <button className="world-context-strip-action" disabled={analyzeArtDisabled} onClick={() => void handleGenerateAppScreenDesigns()} type="button">
+            {appScreenAnalysisBusy ? 'Analyzing Screen Art...' : 'Analyze Screen Art'}
+          </button>
+          <button className="world-context-strip-action" disabled={staticPrototypeDisabled} onClick={() => setShowAppStaticPrototype(true)} type="button">
+            Preview Static Flow
+          </button>
+          <button className="world-context-strip-action" disabled={approveDesignDisabled} onClick={() => void handleApproveAppDesignForBuild()} type="button">
+            {appPreviewReadiness.designApprovalStale ? 'Reapprove Design' : appPreviewReadiness.designApproved ? 'Design Approved' : 'Approve Design For Build'}
+          </button>
+          <button className="world-context-strip-action" disabled={implementationPlanDisabled} onClick={() => void handleGenerateAppCodePlan()} type="button">
+            {appPreviewReadiness.gates.implementation_plan_ready ? 'Repair Implementation Plan' : 'Generate Implementation Plan'}
+          </button>
+          <button className="world-context-strip-action is-primary" disabled={buildDisabled} onClick={() => void handleBuildAppPreview()} type="button">
+            {appGenerationBusy ? 'Building Preview...' : 'Build Preview App'}
+          </button>
+          {appGenerationJob && onGetAppGenerationStatus ? (
+            <button className="world-context-strip-action" onClick={() => void handleRefreshAppPreview()} type="button">
+              Refresh Build
+            </button>
+          ) : null}
+          {appGenerationJob && ['queued', 'running'].includes(appGenerationJob.status) && onCancelAppGenerationJob ? (
+            <button className="world-context-strip-action" onClick={() => void handleCancelAppPreviewBuild()} type="button">
+              Cancel
+            </button>
+          ) : null}
+        </div>
+        {!appPreviewReadiness.gates.design_graph_refined ? (
+          <div className="inline-note">Run Refine Design Graph until product, UX, screen, component, data/API, capability, and design-system readiness is clear.</div>
+        ) : null}
+        {appPreviewReadiness.gates.design_graph_refined && !brandAtlasReady ? (
+          <div className="inline-note">Screen art is gated until the brand atlas image exists.</div>
+        ) : null}
+        {appPreviewReadiness.gates.visual_prototype_ready && !appPreviewReadiness.designApproved ? (
+          <div className="inline-note">Review the static flow, then approve the design before generating implementation towers and code files.</div>
+        ) : null}
+        {appScreenArtJobs.length > 0 ? (
+          <div className="app-preview-build-summary">
+            <span>{appScreenArtJobs.length} screen art job{appScreenArtJobs.length === 1 ? '' : 's'}</span>
+            <span>{appScreenArtJobs.filter((job) => job.status === 'completed').length} completed</span>
+            <span>{appScreensMissingVisualSpecs.length} awaiting analysis</span>
+          </div>
+        ) : null}
+        {appScreenAnalysisJobs.length > 0 ? (
+          <div className="app-preview-build-summary">
+            <span>{appScreenAnalysisJobs.length} screen analysis job{appScreenAnalysisJobs.length === 1 ? '' : 's'}</span>
+            <span>{appScreenAnalysisJobs.filter((job) => job.status === 'completed').length} completed</span>
+            <span>{appScreenAnalysisJobs.filter((job) => job.status === 'failed').length} failed</span>
+          </div>
+        ) : null}
+        {appScreenArtError ? <div className="inline-note is-error">{appScreenArtError}</div> : null}
+        {visibleBlockers.length > 0 || visibleWarnings.length > 0 ? (
+          <div className="app-preview-readiness-list">
+            {[...visibleBlockers, ...visibleWarnings].map((finding) => (
+              <span key={`${finding.category}-${finding.entityKey ?? finding.message}`} className={`app-preview-readiness-item is-${finding.severity}`}>
+                <strong>{finding.category}</strong>
+                {finding.message}
+              </span>
+            ))}
+          </div>
+        ) : null}
+        {appGenerationJob ? (
+          <div className="app-preview-build-summary">
+            <span className={`app-preview-status is-${appGenerationJob.status}`}>{appGenerationJob.status.replace(/_/g, ' ')}</span>
+            <span>{appGenerationJob.files.length} generated file{appGenerationJob.files.length === 1 ? '' : 's'}</span>
+          </div>
+        ) : null}
+        {appGenerationError ? <div className="inline-note is-error">{appGenerationError}</div> : null}
+        {showAppStaticPrototype && selectedAppPrototypeScreen ? (
+          <div className="app-static-prototype-modal" role="dialog" aria-modal="true" aria-label="Static app flow prototype">
+            <div className="app-static-prototype">
+              <div className="app-static-prototype-head">
+              <div>
+                <span className="eyebrow">Static Flow Prototype</span>
+                <strong>{selectedAppPrototypeScreen.name}</strong>
+              </div>
+              <span>{readAppString(selectedAppPrototypeScreen, 'route')}</span>
+              <button className="icon-button" onClick={() => setShowAppStaticPrototype(false)} type="button" aria-label="Close static flow prototype">
+                <EntityIcon id="close" />
+              </button>
+            </div>
+              <div className="app-static-prototype-body">
+                <div className="app-static-prototype-rail">
+                  {routeBearingAppScreens.map((screen) => {
+                    const screenImage = appPrototypeScreenImageByKey.get(screen.key)
+                    const screenMockups = appScreenMockupsByScreenKey.get(screen.key) ?? []
+                    const hasSpec = screenMockups.some((mockup) => readLooseRecord(readAppCustomProperties(mockup).visualSpec).layoutTree !== undefined)
+                    return (
+                      <button
+                        key={screen.key}
+                        className={selectedAppPrototypeScreen.key === screen.key ? 'is-active' : ''}
+                        onClick={() => setSelectedAppPrototypeScreenKey(screen.key)}
+                        type="button"
+                      >
+                        <strong>{screen.name}</strong>
+                        <span>{readAppString(screen, 'route') || '/'}</span>
+                        <em>{screenImage ? 'art' : 'no art'} / {hasSpec ? 'spec' : 'no spec'}</em>
+                      </button>
+                    )
+                  })}
+                </div>
+                <div className="app-static-phone">
+                  {selectedPrototypeImageUrl ? (
+                    <>
+                      <img src={selectedPrototypeImageUrl} alt="" />
+                      {selectedPrototypeRegions.map((region, index) => {
+                        const app = readAppCustomProperties(region)
+                        const frame = readLooseRecord(app.frame ?? app.boundingBox ?? app.bounds)
+                        const target = prototypeTargets[index % Math.max(prototypeTargets.length, 1)]
+                        const x = typeof frame.x === 'number' ? frame.x : null
+                        const y = typeof frame.y === 'number' ? frame.y : null
+                        const width = typeof frame.width === 'number' ? frame.width : null
+                        const height = typeof frame.height === 'number' ? frame.height : null
+                        if (!target || x === null || y === null || width === null || height === null) return null
+                        return (
+                          <button
+                            key={region.key}
+                            className="app-static-hotspot"
+                            style={{
+                              left: `${(x / 390) * 100}%`,
+                              top: `${(y / 844) * 100}%`,
+                              width: `${(width / 390) * 100}%`,
+                              height: `${(height / 844) * 100}%`,
+                            }}
+                            onClick={() => setSelectedAppPrototypeScreenKey(target.key)}
+                            type="button"
+                            aria-label={`Open ${target.name}`}
+                          />
+                        )
+                      })}
+                    </>
+                  ) : (
+                    <div className="app-static-phone-empty">
+                      <EntityIcon id="screen" />
+                      <strong>No screen art found</strong>
+                      <span>Generate screen art for this route before previewing the flow.</span>
+                    </div>
+                  )}
+                </div>
+                <div className="app-static-prototype-side">
+                  <span className="eyebrow">Flow Map</span>
+                  <strong>{selectedAppPrototypeScreen.name}</strong>
+                  <p>{readAppString(selectedAppPrototypeScreen, 'purpose') || selectedAppPrototypeScreen.summary || 'Route-bearing app screen.'}</p>
+                  {prototypeWarnings.length > 0 ? (
+                    <div className="app-static-prototype-warnings">
+                      {prototypeWarnings.map((warning) => <span key={warning}>{warning}</span>)}
+                    </div>
+                  ) : null}
+                  <div className="app-static-prototype-actions">
+                    {(prototypeTargets.length > 0 ? prototypeTargets : routeBearingAppScreens.filter((screen) => screen.key !== selectedAppPrototypeScreen.key).slice(0, 3)).map((screen) => (
+                      <button key={screen.key} className="world-context-strip-action" onClick={() => setSelectedAppPrototypeScreenKey(screen.key)} type="button">
+                        {prototypeTargets.length > 0 ? 'Continue to ' : 'Open '}{screen.name}
+                      </button>
+                    ))}
+                    <button className="world-context-strip-action" disabled={appScreenArtGenerationBusy} onClick={() => void handleGenerateAppScreenArt([selectedAppPrototypeScreen])} type="button">
+                      Regenerate This Screen
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
+        {appPreviewSession?.previewHtml ? (
+          <div className="app-preview-frame-wrap">
+            <iframe
+              title="Generated app sandbox preview"
+              sandbox="allow-scripts"
+              srcDoc={appPreviewSession.previewHtml}
+            />
+          </div>
+        ) : null}
+      </section>
+    )
+  }
+
+  function renderAppCodeTreeNode(node: AppCodeHierarchyNode, depth = 0): ReactNode {
+    const children = sortAppCodeHierarchyNodes(node.children.values())
+    const isFile = Boolean(node.file || node.plannedEntity)
+    const selectedPath = selectedAppCodePath
+      ?? (selectedPlannedCodeFile ? readAppCodeFilePath(selectedPlannedCodeFile) : selectedGeneratedAppFile?.path ?? null)
+    if (isFile) {
+      const path = node.file?.path ?? (node.plannedEntity ? readAppCodeFilePath(node.plannedEntity) : node.path)
+      const ownerTower = node.file?.ownerTower || (node.plannedEntity ? readAppCodeOwnerTower(node.plannedEntity) : '')
+      return (
+        <button
+          key={node.path}
+          className={selectedPath === path ? 'app-code-tree-row is-file is-active' : 'app-code-tree-row is-file'}
+          onClick={() => {
+            setSelectedAppCodePath(path)
+            if (node.plannedEntity) {
+              selectWorldNode(node.plannedEntity.key)
+            }
+          }}
+          style={{ '--app-code-depth': depth } as CSSProperties}
+          type="button"
+        >
+          <EntityIcon id="code" />
+          <span>
+            <strong>{node.name}</strong>
+            <small>{ownerTower || node.file?.kind || (node.plannedEntity ? readAppCodeFileKind(node.plannedEntity) : 'code file')}</small>
+          </span>
+        </button>
+      )
+    }
+    return (
+      <div key={node.path || 'root'} className="app-code-tree-folder">
+        {node.path ? (
+          <div className="app-code-tree-row is-folder" style={{ '--app-code-depth': depth } as CSSProperties}>
+            <EntityIcon id="graph" />
+            <span><strong>{node.name}</strong><small>{children.length} item{children.length === 1 ? '' : 's'}</small></span>
+          </div>
+        ) : null}
+        {children.map((child) => renderAppCodeTreeNode(child, node.path ? depth + 1 : 0))}
+      </div>
+    )
+  }
+
+  function renderAppCodeWorkspace() {
+    const selectedPath = selectedAppCodePath
+      ?? (selectedPlannedCodeFile ? readAppCodeFilePath(selectedPlannedCodeFile) : selectedGeneratedAppFile?.path ?? null)
+    const selectedFile = selectedGeneratedAppFile
+      ?? (selectedPath ? generatedAppFiles.find((file) => file.path === selectedPath) ?? null : null)
+    const selectedPlan = selectedPlannedCodeFile
+      ?? (selectedPath ? plannedCodeFileEntities.find((entity) => readAppCodeFilePath(entity) === selectedPath) ?? null : null)
+    const selectedAppProps = selectedPlan ? readAppCustomProperties(selectedPlan) : {}
+    const codeContent = selectedFile?.content ?? ''
+    const planSummary = selectedPlan?.summary || selectedPlan?.context || ''
+    const activeJob = appGenerationJob
+    return (
+      <div className="world-alt-surface app-code-workspace">
+        <aside className="app-code-sidebar" aria-label="App code hierarchy">
+          <div className="app-code-sidebar-head">
+            <span className="eyebrow">App Code</span>
+            <strong>{appCodeFileCount} file{appCodeFileCount === 1 ? '' : 's'}</strong>
+            <small>{generatedAppFiles.length > 0 ? 'Generated files' : 'Code plan nodes'}</small>
+          </div>
+          <div className="app-code-tree">
+            {appCodeFileCount > 0 ? renderAppCodeTreeNode(appCodeHierarchy) : (
+              <div className="inline-note">No code files exist yet. Generate the app code plan or build the preview app from the Wiki pipeline.</div>
+            )}
+          </div>
+        </aside>
+        <section className="app-code-detail">
+          <div className="app-code-detail-head">
+            <div>
+              <span className="eyebrow">{selectedFile ? selectedFile.kind : selectedPlan ? readAppCodeFileKind(selectedPlan) : 'Code Plan'}</span>
+              <h3>{selectedPath ?? 'No file selected'}</h3>
+            </div>
+            <div className="app-code-detail-actions">
+              {activeJob ? <span className={`app-preview-status is-${activeJob.status}`}>{activeJob.status.replace(/_/g, ' ')}</span> : null}
+              <button className="ghost-button compact" disabled={!onStartAppCodeGeneration || appGenerationBusy || !appPreviewReadiness.gates.implementation_plan_ready} onClick={() => void handleBuildAppPreview()} type="button">
+                {appGenerationBusy ? 'Building...' : generatedAppFiles.length > 0 ? 'Rebuild' : 'Build'}
+              </button>
+              {activeJob && onGetAppGenerationStatus ? (
+                <button className="ghost-button compact" onClick={() => void handleRefreshAppPreview()} type="button">Refresh</button>
+              ) : null}
+            </div>
+          </div>
+          {appGenerationError ? <div className="inline-note is-error">{appGenerationError}</div> : null}
+          {selectedPlan ? (
+            <div className="app-code-contract-grid">
+              <div><span>Owner</span><strong>{readAppCodeOwnerTower(selectedPlan) || 'Unassigned'}</strong></div>
+              <div><span>Exports</span><strong>{Array.isArray(selectedAppProps.exports) ? selectedAppProps.exports.length : 0}</strong></div>
+              <div><span>Imports</span><strong>{Array.isArray(selectedAppProps.imports) ? selectedAppProps.imports.length : 0}</strong></div>
+              <div><span>Depends On</span><strong>{Array.isArray(selectedAppProps.dependsOn) ? selectedAppProps.dependsOn.length : 0}</strong></div>
+            </div>
+          ) : null}
+          {planSummary ? <p className="app-code-plan-summary">{planSummary}</p> : null}
+          {codeContent ? (
+            <pre className="app-code-preview"><code>{codeContent}</code></pre>
+          ) : (
+            <div className="app-code-empty">
+              <EntityIcon id="code" />
+              <strong>{selectedPlan ? 'Planned file, not generated yet' : 'Select a file'}</strong>
+              <span>{selectedPlan ? 'Build the preview app to write generated source contents.' : 'Choose a planned or generated file from the hierarchy.'}</span>
+            </div>
+          )}
+        </section>
+      </div>
+    )
+  }
+
   function renderWikiSection(section: WorldWikiSection) {
     if (section.kind === 'style') return renderWikiStyleSection(section)
     const visibleEntityKeys = section.entityKeys.slice(0, section.kind === 'cast' ? 8 : 6)
@@ -4518,7 +5731,7 @@ export function WorldGraphPage({
 
   return (
     <div
-      className={`focus-layout graph-layout world-graph-layout${isWikiMode ? ' is-wiki-mode' : ''}${showPromptRail ? '' : ' is-prompt-compact'}`}
+      className={`focus-layout graph-layout world-graph-layout${isWikiMode ? ' is-wiki-mode' : ''}${isCodeMode ? ' is-code-mode' : ''}${showPromptRail ? '' : ' is-prompt-compact'}`}
       onClick={() => setContextMenu(null)}
       style={{
         '--world-grow-workbench-width': `${growWorkbenchWidth}px`,
@@ -5035,6 +6248,8 @@ export function WorldGraphPage({
                       ) : null}
                     </div>
                   </section>
+                  {renderNarrativeRpgPlayablePanel()}
+                  {renderAppPreviewPipelinePanel()}
                   <div className="world-wiki-section-grid">
                     {wikiModel.sections.filter((section) => section.kind !== 'overview').map(renderWikiSection)}
                   </div>
@@ -5043,6 +6258,8 @@ export function WorldGraphPage({
                   </div>
                 </div>
               </div>
+            ) : viewMode === 'code' ? (
+              renderAppCodeWorkspace()
             ) : (
               <div className="world-alt-surface">
                 <div className="world-alt-surface-head">
@@ -5050,7 +6267,7 @@ export function WorldGraphPage({
                   <strong>{selectedView.name}</strong>
                 </div>
                 <div className="world-board-surface">
-                  {(['app', 'persona', 'business_goal', 'feature', 'user_flow', 'screen', 'component', 'data_model', 'action', 'api_endpoint', 'capability', 'design_system', 'tower', 'code_file', 'actor', 'group', 'place', 'concept', 'event', 'sequence_unit', 'object'] as const).map((nodeType) => {
+                  {(['app', 'persona', 'business_goal', 'feature', 'user_flow', 'screen', 'component', 'data_model', 'action', 'api_endpoint', 'capability', 'design_system', 'tower', 'code_file', 'player_profile', 'player_initial_config', 'player_stat', 'inventory', 'inventory_item', 'currency', 'shadow_token', 'location_spot', 'travel_link', 'marketplace', 'trade_offer', 'quest', 'quest_step', 'narrative_arc', 'narrative_scene', 'dialogue_node', 'choice', 'choice_condition', 'choice_outcome', 'state_variable', 'game_rule', 'encounter', 'save_state', 'actor', 'group', 'place', 'concept', 'event', 'sequence_unit', 'object'] as const).map((nodeType) => {
                     const rows = visibleEntityRecords.filter((record) => record.entity.nodeType === nodeType)
                     return (
                       <div key={nodeType} className="world-board-column">
@@ -6080,7 +7297,7 @@ export function WorldGraphPage({
                     }}
                   />
                 </label>
-                {(['actor', 'place', 'group', 'object', 'concept', 'event', 'sequence_unit', 'app', 'persona', 'business_goal', 'feature', 'user_flow', 'screen', 'section', 'component', 'data_model', 'action', 'api_endpoint', 'backend_function', 'external_service', 'design_system', 'capability', 'screen_mockup', 'image_region', 'animation_spec', 'tower', 'code_file'] as const).includes(displayedInspectorEntity.nodeType) ? (
+                {(['actor', 'place', 'group', 'object', 'concept', 'event', 'sequence_unit', 'player_profile', 'player_initial_config', 'player_stat', 'inventory', 'inventory_item', 'currency', 'shadow_token', 'location_spot', 'travel_link', 'marketplace', 'trade_offer', 'quest', 'quest_step', 'narrative_arc', 'narrative_scene', 'dialogue_node', 'choice', 'choice_condition', 'choice_outcome', 'state_variable', 'game_rule', 'encounter', 'save_state', 'app', 'persona', 'business_goal', 'feature', 'user_flow', 'screen', 'section', 'component', 'data_model', 'action', 'api_endpoint', 'backend_function', 'external_service', 'design_system', 'capability', 'screen_mockup', 'image_region', 'animation_spec', 'tower', 'code_file'] as const).includes(displayedInspectorEntity.nodeType) ? (
                   <label className="field-block">
                     <span>Visual Description</span>
                     <textarea
@@ -6727,6 +7944,17 @@ void LegacyWorldPromptChatPanel
 function getWorldPromptTypeAccelerators(projectContext: ProjectContext | null) {
   switch (projectContext?.brainProfile) {
     case 'game':
+      if (projectContext.projectSubtype === 'narrative_rpg_mobile') {
+        return [
+          { iconId: 'character' as const, label: 'NPC', prompt: 'Create a speaking NPC with dialogue role, location spot, inventory/economy relevance, and at least one choice connection.' },
+          { iconId: 'environment' as const, label: 'Spot', prompt: 'Create a location spot inside an existing place with available actions, travel links, and narrative scene hooks.' },
+          { iconId: 'item' as const, label: 'Item', prompt: 'Create an inventory_item or shadow_token with how it is obtained, spent, traded, or used as a progression condition.' },
+          { iconId: 'credits' as const, label: 'Market', prompt: 'Create a marketplace with trade_offer nodes, barter or currency costs, and relationships to the items it gives and receives.' },
+          { iconId: 'thread' as const, label: 'Scene', prompt: 'Create a narrative_scene with dialogue_node choices, conditions, outcomes, and branch targets.' },
+          { iconId: 'activity' as const, label: 'Rule', prompt: 'Create or repair choice_condition and choice_outcome nodes so a branch can mutate inventory, currency, tokens, state, or quest progress.' },
+          { iconId: 'graph' as const, label: 'Validate', prompt: 'Analyze the Narrative RPG Mobile graph and add the minimum missing nodes or relationships needed for static playable prototype readiness.' },
+        ]
+      }
       return [
         { iconId: 'character' as const, label: 'Character', prompt: 'Create a playable or story-critical character with a gameplay role, pressure point, and ties to the world.' },
         { iconId: 'content' as const, label: 'Group', prompt: 'Create a faction with territory, methods, allies, and a reason the player will encounter them.' },
@@ -6786,6 +8014,25 @@ function getWorldPromptTypeAccelerators(projectContext: ProjectContext | null) {
 function getWorldPromptStarterCards(projectContext: ProjectContext | null) {
   switch (projectContext?.brainProfile) {
     case 'game':
+      if (projectContext.projectSubtype === 'narrative_rpg_mobile') {
+        return [
+          {
+            title: 'Refine playable graph',
+            summary: 'Fill inventory, economy, travel, dialogue, and progression gaps.',
+            prompt: 'Refine this Narrative RPG Mobile game graph toward static playable prototype readiness. Add only missing game-system nodes and relationships for inventory, economy, travel, dialogue choices, conditions, outcomes, progression tokens, and save state.',
+          },
+          {
+            title: 'Create a branching scene',
+            summary: 'Add a dialogue flow with conditions and outcomes.',
+            prompt: 'Create a branching narrative scene with a speaker, dialogue node, at least three choices, condition gates where useful, outcomes that mutate game state, and branch targets.',
+          },
+          {
+            title: 'Create market and travel loop',
+            summary: 'Add barter/currency trades and location movement.',
+            prompt: 'Create a marketplace, trade offers, inventory items, currency costs, location spots, and travel links that form a small playable loop.',
+          },
+        ]
+      }
       return [
         {
           title: 'Create a faction',

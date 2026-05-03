@@ -117,6 +117,18 @@ import {
   type VisualGenerationStartResponse,
   type VisualGenerationStatusResponse,
 } from '../domain/visualGeneration'
+import {
+  appGenerationCancelResponseSchema,
+  appGenerationStartRequestSchema,
+  appGenerationStartResponseSchema,
+  appGenerationStatusRequestSchema,
+  appGenerationStatusResponseSchema,
+  appPreviewSessionResponseSchema,
+  type AppGenerationCancelResponse,
+  type AppGenerationStartResponse,
+  type AppGenerationStatusResponse,
+  type AppPreviewSessionResponse,
+} from '../domain/appPreviewPipeline'
 import { buildUrlSourceContextFromExtractionResponse } from '../domain/onboardingSource'
 import {
   worldThreadSchema,
@@ -6803,6 +6815,74 @@ export async function cancelVisualGenerationJob(jobId: string): Promise<VisualGe
     throw new Error(await readFunctionsErrorMessage(response.error))
   }
   return visualGenerationCancelResponseSchema.parse(response.data)
+}
+
+export async function startAppCodeGeneration(snapshot: ProjectSnapshot): Promise<AppGenerationStartResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before building an app preview.')
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Sign in and load a live GraphCore draft before building an app preview.')
+  }
+  const payload = appGenerationStartRequestSchema.parse({
+    projectId: snapshot.project.id,
+    draftId: snapshot.draft.id,
+    kind: 'code_generation',
+    targetGate: 'code_generated',
+    input: {
+      projectContext: snapshot.projectContext ?? null,
+      requestedFrom: 'app_wiki',
+    },
+  })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'start-app-code-generation',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  return appGenerationStartResponseSchema.parse(response.data)
+}
+
+export async function getAppGenerationStatus(jobId: string): Promise<AppGenerationStatusResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before loading app generation status.')
+  const payload = appGenerationStatusRequestSchema.parse({ jobId })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'get-app-generation-status',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  return appGenerationStatusResponseSchema.parse(response.data)
+}
+
+export async function cancelAppGenerationJob(jobId: string): Promise<AppGenerationCancelResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before cancelling app generation.')
+  const payload = appGenerationStatusRequestSchema.parse({ jobId })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'cancel-app-generation-job',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  return appGenerationCancelResponseSchema.parse(response.data)
+}
+
+export async function getAppPreviewSession(jobId: string): Promise<AppPreviewSessionResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before loading an app preview.')
+  const payload = appGenerationStatusRequestSchema.parse({ jobId })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'get-app-preview-session',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  return appPreviewSessionResponseSchema.parse(response.data)
 }
 
 export async function extractSourceUrlForWorldPrompt(url: string): Promise<WorldPromptSourceContext> {

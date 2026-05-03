@@ -438,6 +438,16 @@ export const worldPromptIncrementalWorkItemSchema = z.object({
     'towers_code_files',
     'relationships',
   ]).optional(),
+  gameSlice: z.enum([
+    'world_content',
+    'inventory',
+    'economy',
+    'travel',
+    'narrative',
+    'dialogue',
+    'rules_validation',
+    'prototype',
+  ]).optional(),
   critical: z.boolean().default(false),
 })
 

@@ -35,6 +35,13 @@ export const APP_EXPO_BASE_FILE_PLAN: AppCodeFilePlan[] = [
   { path: 'lib/backend/AppBackend.ts', ownerTower: 'backend', exports: ['AppBackend'], imports: [], status: 'planned', validationErrors: [] },
   { path: 'lib/backend/LocalMockBackendAdapter.ts', ownerTower: 'backend', exports: ['LocalMockBackendAdapter'], imports: ['AppBackend'], status: 'planned', validationErrors: [] },
   { path: 'lib/backend/ManagedBackendAdapter.ts', ownerTower: 'backend', exports: ['ManagedBackendAdapter'], imports: ['AppBackend'], status: 'planned', validationErrors: [] },
+  { path: 'lib/contracts/routes.ts', ownerTower: 'shared_contracts', exports: ['routeManifest'], imports: [], status: 'planned', validationErrors: [] },
+  { path: 'lib/contracts/actions.ts', ownerTower: 'shared_contracts', exports: ['actionContracts'], imports: [], status: 'planned', validationErrors: [] },
+  { path: 'lib/capabilities/CapabilityAdapters.ts', ownerTower: 'capabilities', exports: ['CapabilityAdapters'], imports: [], status: 'planned', validationErrors: [] },
+  { path: 'lib/capabilities/MockCapabilityAdapters.ts', ownerTower: 'capabilities', exports: ['mockCapabilityAdapters'], imports: ['CapabilityAdapters'], status: 'planned', validationErrors: [] },
+  { path: 'lib/payments/PaymentAdapter.ts', ownerTower: 'capabilities', exports: ['PaymentAdapter', 'mockPaymentAdapter'], imports: [], status: 'planned', validationErrors: [] },
+  { path: 'lib/ai/AiGenerationAdapter.ts', ownerTower: 'backend', exports: ['AiGenerationAdapter', 'mockAiGenerationAdapter'], imports: [], status: 'planned', validationErrors: [] },
+  { path: 'lib/auth/AuthAdapter.ts', ownerTower: 'backend', exports: ['AuthAdapter', 'mockAuthAdapter'], imports: [], status: 'planned', validationErrors: [] },
   { path: 'types/appGraph.ts', ownerTower: 'shared_contracts', exports: ['AppEntity', 'AppActionResult'], imports: [], status: 'planned', validationErrors: [] },
 ]
 

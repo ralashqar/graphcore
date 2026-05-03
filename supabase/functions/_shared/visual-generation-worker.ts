@@ -15,7 +15,7 @@ type DatabaseClient = {
 }
 
 type VisualJobStatus = 'queued' | 'running' | 'completed' | 'completed_with_errors' | 'failed' | 'cancelled'
-type VisualJobKind = 'world_entity_icon_grid' | 'brand_atlas' | 'screen_mockup' | 'character_sheet' | 'wiki_visual' | 'app_screen_mockup'
+type VisualJobKind = 'world_entity_icon_grid' | 'brand_atlas' | 'screen_mockup' | 'character_sheet' | 'wiki_visual' | 'app_screen_mockup' | 'app_screen_analysis'
 
 type VisualJob = {
   id: string
@@ -731,6 +731,372 @@ async function processBrandAtlasJob(client: DatabaseClient, job: VisualJob, work
   return { assetKey }
 }
 
+async function processAppScreenMockupJob(client: DatabaseClient, job: VisualJob, workerId: string) {
+  const prompt = readString(job.input.prompt) || readString(job.input.imagePrompt)
+  if (!prompt) throw new Error('App screen mockup visual job is missing an image prompt.')
+
+  const screenKey = readString(job.input.screenKey) || readString(job.targetKeys.screenKey)
+  const screenName = readString(job.input.screenName) || readString(job.targetKeys.screenName) || 'App Screen'
+  const route = readString(job.input.route) || readString(job.targetKeys.route)
+  if (!screenKey) throw new Error('App screen mockup visual job is missing screenKey.')
+
+  const assetKey = readString(job.input.assetKey)
+    || `app_screen_mockup_${slugify(screenName)}_${screenKey.replace(/[^a-z0-9]+/gi, '_').slice(0, 24)}`
+  const storagePath = readString(job.input.storagePath)
+    || `generated/app-screen-mockups/${job.draftId}/${job.id}/${slugify(screenName)}.png`
+
+  const falApiKey = Deno.env.get('FAL_KEY')
+  if (!falApiKey) throw new Error('FAL_KEY is not configured for the Fly visual generation worker.')
+  const model = normalizeFalImageModel(Deno.env.get('VISUAL_GENERATION_FAL_MODEL') ?? job.model)
+  const falResult = await waitForFalImage({
+    client,
+    job,
+    workerId,
+    apiKey: falApiKey,
+    model,
+    prompt,
+    phasePrefix: 'app_screen_mockup',
+  })
+
+  const imageBytes = await downloadImageBytes(falResult.imageUrl)
+  await heartbeat(client, job.id, workerId, { phase: 'app_screen_mockup_uploading_asset', imageBytes: imageBytes.byteLength, screenKey })
+  await uploadBytes(client, storagePath, imageBytes, 'image/png')
+
+  await upsertAssetRows(client, [{
+    project_id: job.projectId,
+    key: assetKey,
+    name: `${screenName} Screen Art`,
+    kind: 'image',
+    mime_type: 'image/png',
+    storage_path: storagePath,
+    metadata: buildGeneratedAssetMetadata({
+      job,
+      generatedBy: 'app_screen_mockup',
+      model,
+      prompt,
+      storagePath,
+      falResult,
+      extra: {
+        targetKind: 'app_screen_mockup',
+        targetKey: screenKey,
+        screenKey,
+        screenName,
+        route,
+        viewport: asRecord(job.input.viewport),
+        brandAtlasAssetKey: readString(job.input.brandAtlasAssetKey),
+      },
+    }),
+  }])
+
+  const mockupKey = readString(job.input.screenMockupKey) || `screen_mockup_${screenKey.replace(/[^a-z0-9]+/gi, '_').slice(0, 48)}`
+  const now = new Date().toISOString()
+  const mockupResponse = await client
+    .from('world_entities')
+    .upsert({
+      draft_id: job.draftId,
+      key: mockupKey,
+      name: `${screenName} Mockup`,
+      summary: `Generated screen art for ${screenName}${route ? ` (${route})` : ''}.`,
+      context: 'Generated app screen art used as the visual reference for layout, styling, and implementation decomposition.',
+      node_type: 'screen_mockup',
+      aliases: [],
+      tags: ['app', 'screen-art', 'mockup'],
+      status: 'active',
+      thumbnail_asset_key: assetKey,
+      linked_definition_key: null,
+      source: 'ai',
+      custom_properties: {
+        app: {
+          screenKey,
+          targetScreenKey: screenKey,
+          route,
+          sourceAssetKey: assetKey,
+          visualJobId: job.id,
+          viewport: asRecord(job.input.viewport),
+          status: 'generated',
+          generatedAt: now,
+        },
+      },
+      metadata: {
+        visualDescription: prompt,
+        source: 'app_screen_mockup',
+        visualJobId: job.id,
+        sourceAssetKey: assetKey,
+      },
+    }, { onConflict: 'draft_id,key' })
+  if (mockupResponse.error) throw new Error(mockupResponse.error.message)
+
+  const outputs = {
+    assets: [{
+      assetKey,
+      storagePath,
+      targetKind: 'screen',
+      targetKey: screenKey,
+      role: 'app_screen_mockup',
+    }],
+    screenMockupKey: mockupKey,
+    screenKey,
+  }
+  await completeJob(client, job.id, workerId, outputs, {
+    phase: 'completed',
+    provider: 'fal',
+    model,
+    falRequestId: falResult.requestId,
+    falStatusUrl: falResult.statusUrl,
+    falResponseUrl: falResult.responseUrl,
+    falImageUrl: falResult.imageUrl,
+    assetKey,
+    screenKey,
+    screenMockupKey: mockupKey,
+  })
+
+  return { assetKey, screenMockupKey: mockupKey }
+}
+
+function readStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0).map((entry) => entry.trim())
+    : []
+}
+
+function readFrame(value: unknown) {
+  const record = asRecord(value)
+  return {
+    x: typeof record.x === 'number' ? record.x : 0,
+    y: typeof record.y === 'number' ? record.y : 0,
+    width: typeof record.width === 'number' ? record.width : 0,
+    height: typeof record.height === 'number' ? record.height : 0,
+  }
+}
+
+async function loadWorldEntity(client: DatabaseClient, draftId: string, key: string) {
+  if (!key) return null
+  const response = await client
+    .from('world_entities')
+    .select('*')
+    .eq('draft_id', draftId)
+    .eq('key', key)
+    .maybeSingle()
+  if (response.error) throw new Error(response.error.message)
+  return response.data ? asRecord(response.data) : null
+}
+
+function buildAppScreenAnalysisSpec(input: {
+  screenKey: string
+  route: string
+  sourceAssetKey: string
+  components: Array<Record<string, unknown>>
+  actions: string[]
+  colorScheme: Record<string, unknown>
+}) {
+  const primary = readString(input.colorScheme.primary) || '#2563eb'
+  const secondary = readString(input.colorScheme.secondary) || '#14b8a6'
+  const tertiary = readString(input.colorScheme.tertiary) || '#f8fafc'
+  const contentComponent = input.components[0]
+  const ctaComponent = input.components.find((component) => /button|cta|action|footer/i.test(readString(component.name) || readString(component.key)))
+  const layoutTree = [
+    {
+      id: `${input.screenKey}_background`,
+      role: 'background',
+      frame: { x: 0, y: 0, width: 390, height: 844 },
+      style: { backgroundColor: tertiary },
+    },
+    {
+      id: `${input.screenKey}_header`,
+      role: 'header',
+      frame: { x: 24, y: 54, width: 342, height: 132 },
+      style: { alignItems: 'flex-start', gap: 10 },
+      textStyle: { color: '#0f172a', fontSize: 32, fontWeight: '800', lineHeight: 36 },
+    },
+    {
+      id: `${input.screenKey}_content`,
+      componentKey: readString(contentComponent?.key) || undefined,
+      role: 'content',
+      frame: { x: 20, y: 204, width: 350, height: 448 },
+      style: { backgroundColor: '#ffffff', borderRadius: 28, padding: 20, borderColor: 'rgba(15,23,42,0.08)' },
+      textStyle: { color: '#334155', fontSize: 16, lineHeight: 23 },
+    },
+    {
+      id: `${input.screenKey}_primary_cta`,
+      componentKey: readString(ctaComponent?.key) || undefined,
+      role: 'cta',
+      frame: { x: 24, y: 698, width: 342, height: 58 },
+      style: { backgroundColor: primary, borderRadius: 999, alignItems: 'center', justifyContent: 'center' },
+      textStyle: { color: '#ffffff', fontSize: 16, fontWeight: '800' },
+    },
+  ]
+  const requiredAssets = input.components
+    .filter((component) => /mascot|avatar|hero|image|illustration/i.test(`${readString(component.name)} ${readString(component.visualRole)} ${readString(component.key)}`))
+    .slice(0, 3)
+    .map((component, index) => ({
+      key: `${input.screenKey}_asset_${index + 1}`,
+      role: /mascot|avatar/i.test(readString(component.name)) ? 'mascot' : 'illustration',
+      transparentBackground: true,
+      prompt: readString(component.visualDescription) || `Reusable transparent app visual asset for ${readString(component.name) || input.screenKey}.`,
+      targetSize: '1024x1024',
+    }))
+  return {
+    screenKey: input.screenKey,
+    route: input.route || '/',
+    sourceAssetKey: input.sourceAssetKey,
+    viewport: { width: 390, height: 844, device: 'iphone' },
+    designTokensUsed: ['color.primary', 'color.secondary', 'color.tertiary', 'spacing.screen', 'radius.card', 'radius.control'],
+    layoutTree,
+    sharedTokenCandidates: {
+      color: { primary, secondary, tertiary, text: '#0f172a', muted: '#64748b', surface: '#ffffff' },
+      radius: { card: 28, control: 999 },
+      spacing: { screenX: 24, sectionGap: 18 },
+    },
+    requiredAssets,
+  }
+}
+
+async function processAppScreenAnalysisJob(client: DatabaseClient, job: VisualJob, workerId: string) {
+  const screenKey = readString(job.input.screenKey) || readString(job.targetKeys.screenKey)
+  if (!screenKey) throw new Error('App screen analysis job is missing screenKey.')
+  const explicitMockupKey = readString(job.input.screenMockupKey) || readString(job.targetKeys.screenMockupKey)
+  await heartbeat(client, job.id, workerId, { phase: 'app_screen_analysis_loading_context', screenKey, screenMockupKey: explicitMockupKey })
+
+  const screen = await loadWorldEntity(client, job.draftId, screenKey)
+  const mockup = explicitMockupKey
+    ? await loadWorldEntity(client, job.draftId, explicitMockupKey)
+    : null
+  const screenApp = asRecord(asRecord(screen?.custom_properties).app)
+  const mockupApp = asRecord(asRecord(mockup?.custom_properties).app)
+  const screenName = readString(job.input.screenName) || readString(screen?.name) || 'App Screen'
+  const route = readString(job.input.route) || readString(screenApp.route) || readString(mockupApp.route) || '/'
+  const sourceAssetKey = readString(job.input.sourceAssetKey)
+    || readString(mockupApp.sourceAssetKey)
+    || readString(mockup?.thumbnail_asset_key)
+  if (!sourceAssetKey) throw new Error(`App screen analysis for ${screenName} is missing sourceAssetKey.`)
+
+  const components = Array.isArray(job.input.components)
+    ? job.input.components.map((component) => asRecord(component))
+    : []
+  const actions = readStringArray(job.input.actions).length > 0
+    ? readStringArray(job.input.actions)
+    : readStringArray(screenApp.actions)
+  const colorScheme = asRecord(job.input.colorScheme)
+  const visualSpec = buildAppScreenAnalysisSpec({
+    screenKey,
+    route,
+    sourceAssetKey,
+    components,
+    actions,
+    colorScheme,
+  })
+  const parsedLayoutTree = Array.isArray(visualSpec.layoutTree) ? visualSpec.layoutTree : []
+  const mockupKey = explicitMockupKey || readString(job.input.screenMockupKey) || `screen_mockup_${screenKey.replace(/[^a-z0-9]+/gi, '_').slice(0, 48)}`
+  const now = new Date().toISOString()
+  const regionKeys: string[] = []
+
+  await heartbeat(client, job.id, workerId, { phase: 'app_screen_analysis_writing_regions', screenKey, regionCount: parsedLayoutTree.length })
+  for (const region of parsedLayoutTree) {
+    const role = readString(region.role) || 'content'
+    const regionKey = `image_region_${screenKey}_${slugify(readString(region.id) || role)}`
+    regionKeys.push(regionKey)
+    const frame = readFrame(region.frame)
+    const upsertRegion = await client
+      .from('world_entities')
+      .upsert({
+        draft_id: job.draftId,
+        key: regionKey,
+        name: `${screenName} ${role.replace(/_/g, ' ')}`,
+        summary: `Detected ${role} region for ${screenName}.`,
+        context: 'App screen visual analysis region used for static prototype hotspots and implementation layout guidance.',
+        node_type: 'image_region',
+        aliases: [],
+        tags: ['app', 'visual-analysis', role],
+        status: 'active',
+        thumbnail_asset_key: null,
+        linked_definition_key: null,
+        source: 'ai',
+        custom_properties: {
+          app: {
+            phase: 'visual',
+            screenKey,
+            screenMockupKey: mockupKey,
+            mockupKey,
+            sourceAssetKey,
+            role,
+            frame,
+            boundingBox: frame,
+            mappedComponentKey: readString(region.componentKey),
+            visualDescription: `${role} region in ${screenName}.`,
+            style: asRecord(region.style),
+            textStyle: asRecord(region.textStyle),
+            assetRequirementKey: readString(region.assetRequirementKey),
+            analysisJobId: job.id,
+          },
+        },
+        metadata: {
+          source: 'app_screen_analysis',
+          screenKey,
+          mockupKey,
+          screenMockupKey: mockupKey,
+          sourceAssetKey,
+          visualJobId: job.id,
+          frame,
+        },
+      }, { onConflict: 'draft_id,key' })
+    if (upsertRegion.error) throw new Error(upsertRegion.error.message)
+  }
+
+  await heartbeat(client, job.id, workerId, { phase: 'app_screen_analysis_updating_mockup', screenKey, screenMockupKey: mockupKey })
+  const existingMockupCustom = asRecord(mockup?.custom_properties)
+  const updateMockup = await client
+    .from('world_entities')
+    .update({
+      custom_properties: {
+        ...existingMockupCustom,
+        app: {
+          ...mockupApp,
+          phase: 'visual',
+          screenKey,
+          targetScreenKey: screenKey,
+          route,
+          sourceAssetKey,
+          visualSpec,
+          analysisStatus: 'completed',
+          analysisJobId: job.id,
+          analyzedAt: now,
+          imageRegionKeys: regionKeys,
+        },
+      },
+      metadata: {
+        ...asRecord(mockup?.metadata),
+        source: 'app_screen_mockup',
+        screenKey,
+        sourceAssetKey,
+        visualSpec,
+        visualAnalysisJobId: job.id,
+      },
+    })
+    .eq('draft_id', job.draftId)
+    .eq('key', mockupKey)
+  if (updateMockup.error) throw new Error(updateMockup.error.message)
+
+  const warnings = [
+    ...(components.length === 0 ? ['No component list was supplied, so layout regions use generic screen roles.'] : []),
+    ...(actions.length === 0 ? ['No screen actions were supplied, so hotspot intent falls back to route transitions.'] : []),
+  ]
+  await completeJob(client, job.id, workerId, {
+    assets: [],
+    visualSpec,
+    imageRegionKeys: regionKeys,
+    requiredAssets: visualSpec.requiredAssets,
+    warnings,
+  }, {
+    phase: 'completed',
+    provider: 'graphcore',
+    model: 'app-screen-analysis-v1',
+    screenKey,
+    screenMockupKey: mockupKey,
+    imageRegionCount: regionKeys.length,
+    warningCount: warnings.length,
+  })
+}
+
 export async function processFlyVisualGenerationJobs(input: {
   client: DatabaseClient
   workerId: string
@@ -751,6 +1117,10 @@ export async function processFlyVisualGenerationJobs(input: {
       await processEntityIconGridJob(input.client, job, input.workerId)
     } else if (job.kind === 'brand_atlas') {
       await processBrandAtlasJob(input.client, job, input.workerId)
+    } else if (job.kind === 'app_screen_mockup') {
+      await processAppScreenMockupJob(input.client, job, input.workerId)
+    } else if (job.kind === 'app_screen_analysis') {
+      await processAppScreenAnalysisJob(input.client, job, input.workerId)
     } else {
       throw new Error(`Visual generation job kind "${job.kind}" is not implemented yet.`)
     }
