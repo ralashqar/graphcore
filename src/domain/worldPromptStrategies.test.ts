@@ -7,6 +7,7 @@ import type { WorldPromptSuggestion } from './worldPrompt.ts'
 import { worldPromptIncrementalWorkItemSchema } from './worldPrompt.ts'
 import {
   buildAppGraphReadinessFindings,
+  buildAppImplementationPlanIncrementalWorkItems,
   buildDefaultAppIncrementalWorkItems,
   filterSuggestionsForPromptStrategy,
   getWorldPromptStrategy,
@@ -169,6 +170,24 @@ test('incremental app work items carry project type and app slice without sequen
   assert.equal(defaults.every((entry) => entry.projectType === 'app'), true)
   assert.equal(defaults.some((entry) => entry.appSlice === 'data_api'), true)
   assert.equal(defaults.some((entry) => entry.entityTypes.includes('code_file')), false)
+})
+
+test('app implementation plan work items are limited to code planning and relationships', () => {
+  const items = buildAppImplementationPlanIncrementalWorkItems()
+  assert.deepEqual(items.map((item) => item.appSlice), ['towers_code_files', 'relationships'])
+  assert.equal(items[0].entityTypes.every((nodeType) => nodeType === 'tower' || nodeType === 'code_file'), true)
+  assert.equal(items.some((item) => item.entityTypes.includes('sequence_unit')), false)
+
+  const normalized = normalizeWorkItemForPromptStrategy(worldPromptIncrementalWorkItemSchema.parse({
+    id: 'implementation',
+    kind: 'entity_batch',
+    label: 'Implementation',
+    objective: 'Create screens, towers, code files, and chapters.',
+    entityTypes: ['screen', 'tower', 'code_file', 'sequence_unit'],
+    appSlice: 'towers_code_files',
+  }), appContext)
+
+  assert.deepEqual(normalized.entityTypes, ['tower', 'code_file'])
 })
 
 test('app graph readiness reports app-specific gaps without story wording', () => {

@@ -4,9 +4,11 @@ import {
   buildAppGeneratedFileDrafts,
   evaluateAppPreviewReadiness,
   mapWorldEntityRow,
+  mapWorldRelationshipRow,
   toGeneratedFileInsertRows,
   type AppGenerationJobRow,
   type WorldEntityRow,
+  type WorldRelationshipRow,
 } from './app-generation.ts'
 
 const APP_NODE_TYPES = [
@@ -153,6 +155,12 @@ export async function processFlyAppGenerationJobs(input: {
     if (entityResponse.error) throw new Error(entityResponse.error.message)
 
     const entities = ((entityResponse.data ?? []) as WorldEntityRow[]).map(mapWorldEntityRow)
+    const relationshipResponse = await input.client
+      .from('world_relationships')
+      .select('id, key, source_entity_id, target_entity_id, verb, direction, strength, confidence, source, notes, state, metadata, created_at, updated_at')
+      .eq('draft_id', job.draft_id)
+    if (relationshipResponse.error) throw new Error(relationshipResponse.error.message)
+    const relationships = ((relationshipResponse.data ?? []) as WorldRelationshipRow[]).map((row) => mapWorldRelationshipRow(row, entities))
     if (entities.filter((entity) => entity.nodeType === 'app' || entity.nodeType === 'screen').length === 0) {
       throw new Error('Build Preview App requires an app graph with at least one app node or screen node.')
     }
@@ -160,6 +168,7 @@ export async function processFlyAppGenerationJobs(input: {
     const readiness = evaluateAppPreviewReadiness({
       draftMetadata: draftResponse.data.metadata ?? {},
       entities,
+      relationships,
     })
     await setStepStatus(input.client, jobId, 'graph_readiness', 'completed', { readiness })
 
@@ -169,6 +178,7 @@ export async function processFlyAppGenerationJobs(input: {
       projectName: 'Generated App',
       draftMetadata: draftResponse.data.metadata ?? {},
       entities,
+      relationships,
     })
     await setStepStatus(input.client, jobId, 'shared_contracts', 'completed', {
       contractFiles: files.filter((file) => ['config', 'adapter', 'model', 'style'].includes(file.kind)).length,

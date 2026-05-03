@@ -196,6 +196,40 @@ export type AppEntity = {
   metadata: Record<string, unknown>
 }
 
+export type AppRelationship = {
+  id: string
+  key: string
+  sourceEntityKey: string
+  targetEntityKey: string
+  verb: string
+  direction: string
+  strength: number | null
+  confidence: number | null
+  source: string
+  notes: string
+  state: string
+  metadata: Record<string, unknown>
+  createdAt: string
+  updatedAt: string
+}
+
+export type WorldRelationshipRow = {
+  id: string
+  key: string
+  source_entity_id: string
+  target_entity_id: string
+  verb: string
+  direction: string
+  strength: number | null
+  confidence: number | null
+  source: string
+  notes: string | null
+  state: string
+  metadata: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 }
@@ -266,8 +300,15 @@ function generatedInteractiveAdapterSource() {
   return "import { applyOutcome, evaluateCondition, type InteractiveCondition, type InteractiveOutcome, type InteractiveRuntimeState } from './InteractiveRuntime'\n\nexport type InteractiveRuntimeAdapter = { getState(): Promise<InteractiveRuntimeState>; setState(state: InteractiveRuntimeState): Promise<void>; evaluate(condition: InteractiveCondition): Promise<boolean>; apply(outcome: InteractiveOutcome): Promise<InteractiveRuntimeState> }\nexport function createMockInteractiveAdapter(initialState?: Partial<InteractiveRuntimeState>): InteractiveRuntimeAdapter { let state: InteractiveRuntimeState = { inventoryKeys: [], currency: {}, tokenKeys: [], stats: {}, state: {}, currentLocationKey: null, currentSpotKey: null, currentSceneKey: null, currentDialogueKey: null, visitedLocationKeys: [], ...initialState }; return { async getState() { return state }, async setState(nextState) { state = nextState }, async evaluate(condition) { return evaluateCondition(condition, state) }, async apply(outcome) { state = applyOutcome(outcome, state); return state } } }\n"
 }
 
-function generatedInteractiveManifestSource(entities: AppEntity[]) {
+function relationTargets(relationships: AppRelationship[], sourceKey: string, verbs: string[]) {
+  return relationships
+    .filter((relationship) => relationship.sourceEntityKey === sourceKey && verbs.includes(relationship.verb))
+    .map((relationship) => relationship.targetEntityKey)
+}
+
+function generatedInteractiveManifestSource(entities: AppEntity[], relationships: AppRelationship[]) {
   const interactiveNodes = entities.filter((entity) => INTERACTIVE_NODE_TYPES.has(entity.nodeType))
+  const byType = (nodeType: string) => interactiveNodes.filter((entity) => entity.nodeType === nodeType)
   const initialConfig = interactiveNodes.find((entity) => entity.nodeType === 'player_initial_config')
   const initialProps = initialConfig ? interactiveProps(initialConfig) : {}
   const stats = interactiveNodes
@@ -285,7 +326,10 @@ function generatedInteractiveManifestSource(entities: AppEntity[]) {
       }
     })
   const initialStats = asRecord(initialProps.stats)
+  const firstKey = (nodeType: string) => interactiveNodes.find((entity) => entity.nodeType === nodeType)?.key ?? null
+  const initialLocationKey = firstKey('location_spot') ?? entities.find((entity) => entity.nodeType === 'screen')?.key ?? null
   const manifest = {
+    requiredSystems: [],
     initialState: {
       inventoryKeys: [...stringArray(initialProps.inventoryKeys), ...stringArray(initialProps.initialItemKeys)],
       currency: asRecord(initialProps.currency),
@@ -295,13 +339,32 @@ function generatedInteractiveManifestSource(entities: AppEntity[]) {
         ...Object.entries(initialStats).filter((entry): entry is [string, number] => typeof entry[1] === 'number'),
       ]),
       state: asRecord(initialProps.state),
-      currentLocationKey: typeof (initialProps.currentLocationKey ?? initialProps.startLocationKey) === 'string' ? initialProps.currentLocationKey ?? initialProps.startLocationKey : null,
+      currentLocationKey: typeof (initialProps.currentLocationKey ?? initialProps.startLocationKey) === 'string' ? initialProps.currentLocationKey ?? initialProps.startLocationKey : initialLocationKey,
       currentSpotKey: typeof (initialProps.currentSpotKey ?? initialProps.startSpotKey) === 'string' ? initialProps.currentSpotKey ?? initialProps.startSpotKey : null,
-      currentSceneKey: typeof (initialProps.currentSceneKey ?? initialProps.startSceneKey) === 'string' ? initialProps.currentSceneKey ?? initialProps.startSceneKey : null,
-      currentDialogueKey: typeof (initialProps.currentDialogueKey ?? initialProps.startDialogueKey) === 'string' ? initialProps.currentDialogueKey ?? initialProps.startDialogueKey : null,
-      visitedLocationKeys: stringArray(initialProps.visitedLocationKeys),
+      currentSceneKey: typeof (initialProps.currentSceneKey ?? initialProps.startSceneKey) === 'string' ? initialProps.currentSceneKey ?? initialProps.startSceneKey : firstKey('narrative_scene'),
+      currentDialogueKey: typeof (initialProps.currentDialogueKey ?? initialProps.startDialogueKey) === 'string' ? initialProps.currentDialogueKey ?? initialProps.startDialogueKey : firstKey('dialogue_node'),
+      visitedLocationKeys: stringArray(initialProps.visitedLocationKeys).length > 0 ? stringArray(initialProps.visitedLocationKeys) : initialLocationKey ? [initialLocationKey] : [],
     },
     stats,
+    locations: entities.filter((entity) => entity.nodeType === 'place' || entity.nodeType === 'screen').map((entity) => ({ key: entity.key, name: entity.name, summary: entity.summary })),
+    spots: byType('location_spot').map((entity) => ({ key: entity.key, name: entity.name, locationKey: relationTargets(relationships, entity.key, ['located_in'])[0] ?? null, summary: entity.summary })),
+    travelLinks: byType('travel_link').map((entity) => ({ key: entity.key, name: entity.name, startsAtKeys: relationTargets(relationships, entity.key, ['starts_at', 'located_in']), travelsToKeys: relationTargets(relationships, entity.key, ['travels_to']) })),
+    inventoryItems: [...byType('inventory_item'), ...byType('shadow_token'), ...byType('currency')].map((entity) => ({ key: entity.key, name: entity.name, summary: entity.summary, kind: entity.nodeType })),
+    markets: byType('marketplace').map((entity) => ({ key: entity.key, name: entity.name, offerKeys: relationTargets(relationships, entity.key, ['offers']) })),
+    quests: byType('quest').map((entity) => ({ key: entity.key, name: entity.name, stepKeys: relationTargets(relationships, entity.key, ['contains']) })),
+    narrativeScenes: byType('narrative_scene').map((entity) => ({ key: entity.key, name: entity.name, dialogueNodeKeys: relationTargets(relationships, entity.key, ['contains']) })),
+    dialogueNodes: byType('dialogue_node').map((entity) => ({ key: entity.key, name: entity.name, choiceKeys: relationTargets(relationships, entity.key, ['contains']) })),
+    choices: byType('choice').map((entity) => ({
+      key: entity.key,
+      name: entity.name,
+      conditionKeys: relationTargets(relationships, entity.key, ['requires_item', 'requires_token', 'requires_currency', 'requires_state', 'requires_stat']),
+      outcomeKeys: relationTargets(relationships, entity.key, ['grants_item', 'grants_token', 'sets_state', 'unlocks', 'removes_item', 'modifies_stat']),
+      branchesTo: relationTargets(relationships, entity.key, ['branches_to']),
+    })),
+    conditions: byType('choice_condition').map((entity) => ({ key: entity.key, name: entity.name, condition: asRecord(interactiveProps(entity).condition) })),
+    outcomes: byType('choice_outcome').map((entity) => ({ key: entity.key, name: entity.name, outcome: asRecord(interactiveProps(entity).outcome) })),
+    tradeOffers: byType('trade_offer').map((entity) => ({ key: entity.key, name: entity.name, offer: asRecord(interactiveProps(entity).offer ?? interactiveProps(entity).tradeOffer) })),
+    validation: { warnings: [], blockers: [] },
     graphNodes: interactiveNodes.map((entity) => ({
       key: entity.key,
       name: entity.name,
@@ -408,6 +471,27 @@ export function mapWorldEntityRow(row: WorldEntityRow): AppEntity {
   }
 }
 
+export function mapWorldRelationshipRow(row: WorldRelationshipRow, entities: AppEntity[]): AppRelationship {
+  const sourceEntity = entities.find((entity) => entity.id === row.source_entity_id) ?? null
+  const targetEntity = entities.find((entity) => entity.id === row.target_entity_id) ?? null
+  return {
+    id: row.id,
+    key: row.key,
+    sourceEntityKey: sourceEntity?.key ?? row.source_entity_id,
+    targetEntityKey: targetEntity?.key ?? row.target_entity_id,
+    verb: row.verb,
+    direction: row.direction,
+    strength: row.strength,
+    confidence: row.confidence,
+    source: row.source,
+    notes: row.notes ?? '',
+    state: row.state,
+    metadata: row.metadata ?? {},
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
+}
+
 function mapStepRow(row: AppGenerationStepRow) {
   return {
     id: row.id,
@@ -476,7 +560,7 @@ export function appGenerationJobIsDone(job: Pick<AppGenerationJob, 'status'>) {
   return ['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(job.status)
 }
 
-export function evaluateAppPreviewReadiness(input: { draftMetadata: Record<string, unknown>; entities: AppEntity[] }) {
+export function evaluateAppPreviewReadiness(input: { draftMetadata: Record<string, unknown>; entities: AppEntity[]; relationships?: AppRelationship[] }) {
   const counts = input.entities.reduce<Record<string, number>>((acc, entity) => {
     acc[entity.nodeType] = (acc[entity.nodeType] ?? 0) + 1
     return acc
@@ -529,7 +613,7 @@ body{margin:0;min-height:100vh;display:grid;place-items:center;background:#08111
 </style></head><body><div class="phone"><div class="app"><header><span class="eyebrow">Sandbox preview</span><h1>${escapeHtml(title)}</h1><p>${escapeHtml(summary)}</p></header><main>${activeScreens.map((screen, index) => `<section class="screen${index === 0 ? ' active' : ''}" data-screen="${escapeHtml(screen.key)}"><span class="route">${escapeHtml(textFrom(screen, 'route') || `/${routeSafe(screen)}`)}</span><h2>${escapeHtml(screen.name)}</h2><p>${escapeHtml(screen.summary || screen.context || 'Generated app screen.')}</p><div class="card"><strong>Purpose</strong><p>${escapeHtml(textFrom(screen, 'purpose') || 'Ready for refinement.')}</p></div><button class="cta">Continue</button></section>`).join('')}</main><nav class="tabs">${activeScreens.map((screen, index) => `<button class="tab${index === 0 ? ' active' : ''}" data-screen="${escapeHtml(screen.key)}">${escapeHtml(screen.name)}</button>`).join('')}</nav></div></div><script>const tabs=[...document.querySelectorAll('.tab')],screens=[...document.querySelectorAll('.screen')];tabs.forEach(t=>t.onclick=()=>{const k=t.dataset.screen;tabs.forEach(x=>x.classList.toggle('active',x===t));screens.forEach(x=>x.classList.toggle('active',x.dataset.screen===k));});</script></body></html>`
 }
 
-export function buildAppGeneratedFileDrafts(input: { projectName: string; draftMetadata: Record<string, unknown>; entities: AppEntity[] }): AppGeneratedFileDraft[] {
+export function buildAppGeneratedFileDrafts(input: { projectName: string; draftMetadata: Record<string, unknown>; entities: AppEntity[]; relationships?: AppRelationship[] }): AppGeneratedFileDraft[] {
   const colors = colorSchemeFromMetadata(input.draftMetadata)
   const app = input.entities.find((entity) => entity.nodeType === 'app')
   const screens = input.entities.filter((entity) => entity.nodeType === 'screen')
@@ -574,7 +658,7 @@ export function buildAppGeneratedFileDrafts(input: { projectName: string; draftM
       path: 'lib/interactive/interactiveManifest.ts',
       kind: 'adapter',
       ownerTower: 'interactive_systems',
-      content: generatedInteractiveManifestSource(input.entities),
+      content: generatedInteractiveManifestSource(input.entities, input.relationships ?? []),
       exports: ['interactiveManifest'],
       imports: [],
       metadata: {},

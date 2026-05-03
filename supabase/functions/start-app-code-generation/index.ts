@@ -8,9 +8,11 @@ import {
   evaluateAppPreviewReadiness,
   mapAppGenerationJobRow,
   mapWorldEntityRow,
+  mapWorldRelationshipRow,
   type AppGenerationJobRow,
   type AppGenerationStepRow,
   type WorldEntityRow,
+  type WorldRelationshipRow,
 } from '../_shared/app-generation.ts'
 
 const APP_NODE_TYPES = [
@@ -92,6 +94,12 @@ Deno.serve(async (request) => {
     if (entityResponse.error) throw new Error(entityResponse.error.message)
 
     const entities = ((entityResponse.data ?? []) as WorldEntityRow[]).map(mapWorldEntityRow)
+    const relationshipResponse = await client
+      .from('world_relationships')
+      .select('id, key, source_entity_id, target_entity_id, verb, direction, strength, confidence, source, notes, state, metadata, created_at, updated_at')
+      .eq('draft_id', payload.draftId)
+    if (relationshipResponse.error) throw new Error(relationshipResponse.error.message)
+    const relationships = ((relationshipResponse.data ?? []) as WorldRelationshipRow[]).map((row) => mapWorldRelationshipRow(row, entities))
     if (entities.filter((entity) => entity.nodeType === 'app' || entity.nodeType === 'screen').length === 0) {
       throw new HttpError(400, 'Build Preview App requires an app graph with at least one app node or screen node.')
     }
@@ -99,6 +107,7 @@ Deno.serve(async (request) => {
     const readiness = evaluateAppPreviewReadiness({
       draftMetadata: draftResponse.data.metadata ?? {},
       entities,
+      relationships,
     })
     if (!readiness.gates.implementation_plan_ready) {
       throw new HttpError(400, 'Build Preview App requires an approved visual prototype plus tower and code_file implementation plan nodes.')
@@ -118,6 +127,7 @@ Deno.serve(async (request) => {
           ...payload.input,
           readiness,
           graphNodeCount: entities.length,
+          graphRelationshipCount: relationships.length,
         },
         metadata: {
           ...payload.metadata,

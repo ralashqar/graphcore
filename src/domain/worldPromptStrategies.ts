@@ -17,6 +17,7 @@ export type AppIncrementalSlice =
   | 'data_api'
   | 'capabilities'
   | 'design_system'
+  | 'towers_code_files'
   | 'relationships'
 
 export type GameIncrementalSlice =
@@ -129,13 +130,16 @@ export function normalizeWorkItemForPromptStrategy(
     }
   }
   if (!projectContextUsesAppStrategy(projectContext)) return item
+  const appSlice = item.appSlice ?? inferAppSliceForWorkItem(item)
   return {
     ...item,
     kind: item.kind === 'sequence_unit' ? 'entity_batch' : item.kind,
     projectType: 'app',
-    appSlice: item.appSlice ?? inferAppSliceForWorkItem(item),
+    appSlice,
     sequenceOrdinal: null,
-    entityTypes: item.entityTypes.filter((nodeType) => nodeType !== 'sequence_unit'),
+    entityTypes: appSlice === 'towers_code_files'
+      ? item.entityTypes.filter((nodeType) => nodeType === 'tower' || nodeType === 'code_file')
+      : item.entityTypes.filter((nodeType) => nodeType !== 'sequence_unit' && nodeType !== 'tower' && nodeType !== 'code_file'),
   }
 }
 
@@ -261,6 +265,38 @@ export function buildDefaultAppIncrementalWorkItems(): WorldPromptIncrementalWor
       critical: false,
     },
   ]
+}
+
+export function buildAppImplementationPlanIncrementalWorkItems(): WorldPromptIncrementalWorkItem[] {
+  const items: WorldPromptIncrementalWorkItem[] = [
+    {
+      id: 'app_implementation_towers_code_files',
+      kind: 'entity_batch',
+      label: 'Implementation towers and code files',
+      objective: 'Create or repair only tower and code_file nodes from the approved app design bundle. Each code_file needs filePath, ownerTower, fileKind, exports, imports, dependsOn, implementationSummary, publicInterface, visualSpecRefs, and testExpectations.',
+      dependsOn: [],
+      expectedOps: 10,
+      entityTypes: ['tower', 'code_file'],
+      sequenceOrdinal: null,
+      projectType: 'app',
+      appSlice: 'towers_code_files',
+      critical: true,
+    },
+    {
+      id: 'app_implementation_relationships',
+      kind: 'relationship_batch',
+      label: 'Implementation relationships',
+      objective: 'Connect tower and code_file nodes to approved design/data/capability nodes with implemented_as, owned_by_tower, depends_on, reads, writes, calls, styled_by, and requires_capability relationships only.',
+      dependsOn: ['app_implementation_towers_code_files'],
+      expectedOps: 12,
+      entityTypes: [],
+      sequenceOrdinal: null,
+      projectType: 'app',
+      appSlice: 'relationships',
+      critical: true,
+    },
+  ]
+  return items
 }
 
 export function buildAppGraphReadinessFindings(input: AppReadinessInput): WorldPromptDiagnosticFinding[] {
@@ -414,6 +450,7 @@ function inferAppSliceForWorkItem(item: WorldPromptIncrementalWorkItem): AppIncr
   if (/\b(component|section|props|interaction)\b/.test(text)) return 'components'
   if (/\b(data|api|endpoint|backend|action|model|schema|service)\b/.test(text)) return 'data_api'
   if (/\b(capability|camera|push|health|iap|expo|native)\b/.test(text)) return 'capabilities'
+  if (/\b(tower|code_file|code file|file plan|implementation|owner tower|expo router|react native)\b/.test(text)) return 'towers_code_files'
   if (/\b(design|style|color|typography|brand|token|motion)\b/.test(text)) return 'design_system'
   return 'relationships'
 }

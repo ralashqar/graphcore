@@ -5,6 +5,7 @@ import {
   applyChoice,
   applyInteractiveOutcome,
   applyInteractiveTrade,
+  buildInteractivePrototypeModel,
   collectInteractiveSystemRequirements,
   compileInteractiveManifest,
   createInitialRuntimeState,
@@ -258,4 +259,36 @@ test('moves through travel links using compiled state-machine manifest', () => {
 
   assert.equal(next.currentLocationKey, 'place.docks')
   assert.ok(next.visitedLocationKeys.includes('place.docks'))
+})
+
+test('builds interactive prototype model blockers and playable start state', () => {
+  const incomplete = buildInteractivePrototypeModel({
+    entities: [entity({ key: 'dialogue.intro', name: 'Intro', nodeType: 'dialogue_node' })],
+    relationships: [],
+    requiredSystems: ['initial_config', 'dialogue'],
+  })
+  assert.equal(incomplete.ready, false)
+  assert.ok(incomplete.blockers.some((message) => /player_initial_config/i.test(message)))
+
+  const playable = buildInteractivePrototypeModel({
+    entities: [
+      entity({ key: 'config', name: 'Initial Config', nodeType: 'player_initial_config', customProperties: { interactive: { startDialogueKey: 'dialogue.intro', stats: { wit: 2 } } } }),
+      entity({ key: 'dialogue.intro', name: 'Intro', nodeType: 'dialogue_node' }),
+      entity({ key: 'choice.ask', name: 'Ask Cleverly', nodeType: 'choice' }),
+      entity({ key: 'condition.wit', name: 'Wit Gate', nodeType: 'choice_condition', customProperties: { interactive: { condition: { kind: 'stat_gte', targetKey: 'wit', value: 2 } } } }),
+      entity({ key: 'outcome.scene', name: 'Set Scene', nodeType: 'choice_outcome', customProperties: { interactive: { outcome: { kind: 'set_current_scene', targetKey: 'scene.win' } } } }),
+      entity({ key: 'scene.win', name: 'Won Scene', nodeType: 'narrative_scene' }),
+    ],
+    relationships: [
+      relationship({ key: 'dialogue-choice', sourceEntityKey: 'dialogue.intro', targetEntityKey: 'choice.ask', verb: 'contains' }),
+      relationship({ key: 'choice-condition', sourceEntityKey: 'choice.ask', targetEntityKey: 'condition.wit', verb: 'requires_stat' }),
+      relationship({ key: 'choice-outcome', sourceEntityKey: 'choice.ask', targetEntityKey: 'outcome.scene', verb: 'sets_state' }),
+    ],
+    requiredSystems: ['initial_config', 'dialogue', 'conditions', 'outcomes', 'stats'],
+  })
+
+  assert.equal(playable.ready, true)
+  assert.equal(playable.startState?.currentDialogueKey, 'dialogue.intro')
+  assert.equal(playable.startState?.stats.wit, 2)
+  assert.equal(playable.manifest?.choices.length, 1)
 })

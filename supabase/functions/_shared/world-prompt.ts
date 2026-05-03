@@ -162,6 +162,7 @@ import {
 } from '../../../src/domain/worldWiki.ts'
 import {
   buildAppGraphReadinessFindings,
+  buildAppImplementationPlanIncrementalWorkItems,
   buildDefaultAppIncrementalWorkItems,
   buildGameGraphReadinessFindings,
   filterSuggestionsForPromptStrategy,
@@ -13813,6 +13814,9 @@ function orderPromptOpsForIncrementalApply(ops: PromptToWorldOp[]) {
 
 function normalizeIncrementalWorkItems(manifest: WorldPromptIncrementalManifest, payload: WorldPromptStartTurnRequest) {
   const isAppProject = projectContextIsApp(payload.snapshot.projectContext)
+  if (isAppProject && sourceContextIsApprovedAppImplementationPlan(payload.sourceContext)) {
+    return buildAppImplementationPlanIncrementalWorkItems()
+  }
   const workItems = manifest.workItems
     .filter((item) => item.id.trim() && item.label.trim())
     .map((item, index) => {
@@ -13861,6 +13865,14 @@ function normalizeIncrementalWorkItems(manifest: WorldPromptIncrementalManifest,
       critical: false,
     }),
   ]
+}
+
+function sourceContextIsApprovedAppImplementationPlan(sourceContext: unknown) {
+  if (!sourceContext || typeof sourceContext !== 'object') return false
+  const source = sourceContext as Record<string, unknown>
+  if (source.title === 'Approved App Design Bundle') return true
+  const extractedText = typeof source.extractedText === 'string' ? source.extractedText : ''
+  return extractedText.includes('"task": "generate_implementation_plan_from_approved_design"')
 }
 
 async function generateIncrementalManifest(input: {
@@ -13934,6 +13946,9 @@ async function generateIncrementalManifest(input: {
       ? projectContextIsApp(input.payload.snapshot.projectContext)
         ? 'Source context is available; use it to size the manifest around source-derived app features, flows, screens, data/API contracts, capabilities, design-system needs, towers, code files, and relationships.'
         : 'Source context is available; use it to size the manifest around source-derived characters, places, objects, events, and relationships.'
+      : null,
+    sourceContextIsApprovedAppImplementationPlan(sourceContext)
+      ? 'The source context is an Approved App Design Bundle for implementation planning. Return exactly two work items: one entity_batch appSlice=towers_code_files for tower/code_file nodes, then one relationship_batch appSlice=relationships for implementation relationships. Do not plan product, UX, screen, component, visual, design-system, story, or sequence work.'
       : null,
   ].filter(Boolean).join('\n')
 
@@ -14074,6 +14089,15 @@ async function generateIncrementalWorkItemPlan(input: {
     projectContextIsApp(input.payload.snapshot.projectContext)
       ? 'For app relationship_batch items, create app links only between existing/generated app graph nodes available in the ledger or relevant entity list.'
       : 'Valid entity node types are actor, group, place, object, concept, event, and sequence_unit. Never use wiki, location, faction, character, beat, lore, or title as nodeType values; map those to place, group, actor, sequence_unit, concept, or wiki metadata as appropriate.',
+    projectContextIsApp(input.payload.snapshot.projectContext) && workItem.appSlice === 'towers_code_files'
+      ? 'This is an approved-design implementation planning item. Create or repair only tower and code_file entities. Do not create or update app, persona, business_goal, feature, user_flow, screen, section, component, data_model, action, api_endpoint, backend_function, external_service, design_system, capability, screen_mockup, image_region, animation_spec, sequence_unit, actor, place, object, group, concept, or event nodes.'
+      : null,
+    projectContextIsApp(input.payload.snapshot.projectContext) && workItem.appSlice === 'towers_code_files'
+      ? 'Every code_file entity must put filePath, ownerTower, fileKind, exports, imports, dependsOn, implementationSummary, publicInterface, visualSpecRefs, and testExpectations under customProperties.app.'
+      : null,
+    projectContextIsApp(input.payload.snapshot.projectContext) && sourceContextIsApprovedAppImplementationPlan(input.payload.sourceContext) && workItem.kind === 'relationship_batch'
+      ? 'Create implementation relationships only: implemented_as, owned_by_tower, depends_on, reads, writes, calls, styled_by, and requires_capability. Do not add product/UX/design relationships except those needed to connect code_file or tower nodes to the approved design bundle.'
+      : null,
     'For relationship_batch items, create links only between existing/generated entities that are available in the ledger or relevant entity list.',
     projectContextIsApp(input.payload.snapshot.projectContext)
       ? 'For app user_flow items, create or update user_flow nodes and transitions_to links between screens. Do not create sequence_unit nodes.'

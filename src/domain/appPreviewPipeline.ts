@@ -101,6 +101,41 @@ export const appPreviewReadinessSchema = z.object({
   }),
 })
 
+export const appApprovedDesignScreenSchema = z.object({
+  key: z.string().min(1),
+  name: z.string().min(1),
+  route: z.string().default(''),
+  purpose: z.string().default(''),
+  states: z.array(z.string()).default([]),
+  actions: z.array(z.string()).default([]),
+  dataDependencies: z.array(z.string()).default([]),
+  mockups: z.array(z.object({
+    key: z.string().min(1),
+    sourceAssetKey: z.string().default(''),
+    visualSpecHash: z.string().default(''),
+  })).default([]),
+})
+
+export const appApprovedDesignBundleSchema = z.object({
+  status: z.literal('approved'),
+  approvalId: z.string().min(1),
+  approvedAt: z.string().min(1),
+  sourceGate: z.literal('visual_prototype_ready'),
+  designFingerprint: z.string().min(1),
+  brandAtlasAssetKey: z.string().default(''),
+  designSystemKeys: z.array(z.string()).default([]),
+  routeScreenKeys: z.array(z.string()).default([]),
+  screenMockupKeys: z.array(z.string()).default([]),
+  mockupAssetKeys: z.array(z.string()).default([]),
+  visualSpecScreenKeys: z.array(z.string()).default([]),
+  visualSpecHashes: z.record(z.string(), z.string()).default({}),
+  transitionKeys: z.array(z.string()).default([]),
+  screens: z.array(appApprovedDesignScreenSchema).default([]),
+  dataApiNodeKeys: z.array(z.string()).default([]),
+  capabilityKeys: z.array(z.string()).default([]),
+  interactiveSummary: looseRecordSchema.default({}),
+})
+
 export const appScreenVisualSpecSchema = z.object({
   screenKey: z.string().min(1),
   route: z.string().min(1),
@@ -255,6 +290,8 @@ export type AppGenerationJobKind = z.infer<typeof appGenerationJobKindSchema>
 export type AppGeneratedFileKind = z.infer<typeof appGeneratedFileKindSchema>
 export type AppReadinessFinding = z.infer<typeof appReadinessFindingSchema>
 export type AppPreviewReadiness = z.infer<typeof appPreviewReadinessSchema>
+export type AppApprovedDesignScreen = z.infer<typeof appApprovedDesignScreenSchema>
+export type AppApprovedDesignBundle = z.infer<typeof appApprovedDesignBundleSchema>
 export type AppScreenVisualSpec = z.infer<typeof appScreenVisualSpecSchema>
 export type AppCodeFileNodeProperties = z.infer<typeof appCodeFileNodePropertiesSchema>
 export type AppGenerationJob = z.infer<typeof appGenerationJobSchema>
@@ -440,9 +477,32 @@ function shortHash(value: string): string {
   return (hash >>> 0).toString(16).padStart(8, '0')
 }
 
+function visualSpecHash(value: unknown): string {
+  if (!value || (typeof value === 'object' && Object.keys(asRecord(value)).length === 0)) return ''
+  return shortHash(stableStringify(value))
+}
+
+function readScreenVisualSpec(screen: WorldEntity, mockupsByScreenKey: Map<string, WorldEntity[]>): unknown {
+  const screenApp = readAppNodeProperties(screen)
+  if (appScreenVisualSpecSchema.safeParse(screenApp.visualSpec).success) return screenApp.visualSpec
+  if (appScreenVisualSpecSchema.safeParse(asRecord(screen.metadata).visualSpec).success) return asRecord(screen.metadata).visualSpec
+  const mockups = mockupsByScreenKey.get(screen.key) ?? []
+  const mockupWithSpec = mockups.find(hasVisualSpec)
+  if (!mockupWithSpec) return null
+  const mockupApp = readAppNodeProperties(mockupWithSpec)
+  return mockupApp.visualSpec ?? asRecord(mockupWithSpec.metadata).visualSpec ?? null
+}
+
 export function computeAppDesignFingerprint(snapshot: AppPreviewSnapshot): string {
   const appEntities = snapshot.worldEntities.filter((entity) => isAppGraphNodeType(entity.nodeType))
+  const interactiveEntities = snapshot.worldEntities.filter((entity) => isInteractiveSystemNodeType(entity.nodeType))
   const worldWiki = readWorldWikiMetadata(snapshot.draft?.metadata)
+  const mockupsByScreenKey = new Map<string, WorldEntity[]>()
+  for (const mockup of appEntities.filter((entity) => entity.nodeType === 'screen_mockup')) {
+    const screenKey = screenMockupTargetKey(mockup)
+    if (!screenKey) continue
+    mockupsByScreenKey.set(screenKey, [...(mockupsByScreenKey.get(screenKey) ?? []), mockup])
+  }
   const screenNodes = appEntities
     .filter((entity) => entity.nodeType === 'screen')
     .map((screen) => ({
@@ -453,6 +513,7 @@ export function computeAppDesignFingerprint(snapshot: AppPreviewSnapshot): strin
       states: arrayValue(screen, 'states'),
       actions: arrayValue(screen, 'actions'),
       dataDependencies: arrayValue(screen, 'dataDependencies'),
+      visualSpecHash: visualSpecHash(readScreenVisualSpec(screen, mockupsByScreenKey)),
     }))
     .sort((left, right) => left.key.localeCompare(right.key))
   const mockups = appEntities
@@ -477,6 +538,29 @@ export function computeAppDesignFingerprint(snapshot: AppPreviewSnapshot): strin
       metadata: relationship.metadata,
     }))
     .sort((left, right) => `${left.source}:${left.target}`.localeCompare(`${right.source}:${right.target}`))
+  const interactive = interactiveEntities
+    .map((entity) => ({
+      key: entity.key,
+      nodeType: entity.nodeType,
+      name: entity.name,
+      interactive: asRecord(asRecord(entity.customProperties).interactive),
+      game: asRecord(asRecord(entity.customProperties).game),
+    }))
+    .sort((left, right) => left.key.localeCompare(right.key))
+  const interactiveRelationships = snapshot.worldRelationships
+    .filter((relationship) => {
+      const sourceInteractive = interactiveEntities.some((entity) => entity.key === relationship.sourceEntityKey)
+      const targetInteractive = interactiveEntities.some((entity) => entity.key === relationship.targetEntityKey)
+      return sourceInteractive || targetInteractive
+    })
+    .map((relationship) => ({
+      source: relationship.sourceEntityKey,
+      target: relationship.targetEntityKey,
+      verb: relationship.verb,
+      notes: relationship.notes,
+      metadata: relationship.metadata,
+    }))
+    .sort((left, right) => `${left.source}:${left.verb}:${left.target}`.localeCompare(`${right.source}:${right.verb}:${right.target}`))
   return shortHash(stableStringify({
     brandAtlasAssetKey: typeof worldWiki.brandAtlasAssetKey === 'string' ? worldWiki.brandAtlasAssetKey : '',
     colorScheme: asRecord(worldWiki.colorScheme),
@@ -485,7 +569,96 @@ export function computeAppDesignFingerprint(snapshot: AppPreviewSnapshot): strin
     mockups,
     designSystems,
     transitions,
+    interactive,
+    interactiveRelationships,
   }))
+}
+
+export function buildApprovedAppDesignBundle(input: AppPreviewSnapshot & { approvedAt?: string; approvalId?: string }): AppApprovedDesignBundle {
+  const activeAppEntities = input.worldEntities.filter((entity) => entity.status !== 'archived' && isAppGraphNodeType(entity.nodeType))
+  const activeInteractiveEntities = input.worldEntities.filter((entity) => entity.status !== 'archived' && isInteractiveSystemNodeType(entity.nodeType))
+  const worldWiki = readWorldWikiMetadata(input.draft?.metadata)
+  const mockups = activeAppEntities.filter((entity) => entity.nodeType === 'screen_mockup')
+  const mockupsByScreenKey = new Map<string, WorldEntity[]>()
+  for (const mockup of mockups) {
+    const screenKey = screenMockupTargetKey(mockup)
+    if (!screenKey) continue
+    mockupsByScreenKey.set(screenKey, [...(mockupsByScreenKey.get(screenKey) ?? []), mockup])
+  }
+  const routeScreens = activeAppEntities
+    .filter((entity) => entity.nodeType === 'screen' && textValue(entity, 'route'))
+    .sort((left, right) => textValue(left, 'route').localeCompare(textValue(right, 'route')) || left.key.localeCompare(right.key))
+  const visualSpecHashes: Record<string, string> = {}
+  const screens: AppApprovedDesignScreen[] = routeScreens.map((screen) => {
+    const screenMockups = mockupsByScreenKey.get(screen.key) ?? []
+    const screenVisualSpecHash = visualSpecHash(readScreenVisualSpec(screen, mockupsByScreenKey))
+    if (screenVisualSpecHash) visualSpecHashes[screen.key] = screenVisualSpecHash
+    return appApprovedDesignScreenSchema.parse({
+      key: screen.key,
+      name: screen.name,
+      route: textValue(screen, 'route'),
+      purpose: textValue(screen, 'purpose') || screen.summary,
+      states: arrayValue(screen, 'states'),
+      actions: arrayValue(screen, 'actions'),
+      dataDependencies: arrayValue(screen, 'dataDependencies'),
+      mockups: screenMockups.map((mockup) => {
+        const spec = readAppNodeProperties(mockup).visualSpec ?? asRecord(mockup.metadata).visualSpec ?? null
+        const hash = visualSpecHash(spec)
+        if (hash) visualSpecHashes[mockup.key] = hash
+        return {
+          key: mockup.key,
+          sourceAssetKey: screenMockupAssetKey(mockup),
+          visualSpecHash: hash,
+        }
+      }),
+    })
+  })
+  const screenMockupKeys = screens.flatMap((screen) => screen.mockups.map((mockup) => mockup.key))
+  const mockupAssetKeys = screens.flatMap((screen) => screen.mockups.map((mockup) => mockup.sourceAssetKey).filter(Boolean))
+  const interactiveSystems = collectInteractiveSystemRequirements({
+    entities: [...activeAppEntities, ...activeInteractiveEntities],
+  })
+  let interactiveSummary: Record<string, unknown> = {}
+  if (interactiveSystems.length > 0 || activeInteractiveEntities.length > 0) {
+    const manifest = compileInteractiveManifest({
+      entities: [...activeAppEntities, ...activeInteractiveEntities],
+      relationships: input.worldRelationships,
+      requiredSystems: interactiveSystems,
+    })
+    interactiveSummary = {
+      requiredSystems: interactiveSystems,
+      entityKeys: activeInteractiveEntities.map((entity) => entity.key),
+      initialState: manifest.initialState,
+      choiceCount: manifest.choices.length,
+      conditionCount: manifest.conditions.length,
+      outcomeCount: manifest.outcomes.length,
+      dialogueCount: manifest.dialogueNodes.length,
+      sceneCount: manifest.narrativeScenes.length,
+      marketCount: manifest.markets.length,
+      travelLinkCount: manifest.travelLinks.length,
+    }
+  }
+  const approvedAt = input.approvedAt ?? new Date().toISOString()
+  const designFingerprint = computeAppDesignFingerprint(input)
+  return appApprovedDesignBundleSchema.parse({
+    status: 'approved',
+    approvalId: input.approvalId ?? `approval-${approvedAt.replace(/[^0-9a-z]+/gi, '-').replace(/-+$/g, '').toLowerCase()}-${designFingerprint}`,
+    approvedAt,
+    sourceGate: 'visual_prototype_ready',
+    designFingerprint,
+    brandAtlasAssetKey: typeof worldWiki.brandAtlasAssetKey === 'string' ? worldWiki.brandAtlasAssetKey : '',
+    designSystemKeys: activeAppEntities.filter((entity) => entity.nodeType === 'design_system').map((entity) => entity.key),
+    routeScreenKeys: screens.map((screen) => screen.key),
+    screenMockupKeys,
+    mockupAssetKeys,
+    visualSpecScreenKeys: screens.filter((screen) => screen.mockups.some((mockup) => mockup.visualSpecHash) || Boolean(visualSpecHashes[screen.key])).map((screen) => screen.key),
+    visualSpecHashes,
+    transitionKeys: input.worldRelationships.filter((relationship) => relationship.verb === 'transitions_to').map((relationship) => relationship.key),
+    screens,
+    dataApiNodeKeys: activeAppEntities.filter((entity) => ['data_model', 'action', 'api_endpoint', 'backend_function', 'external_service'].includes(entity.nodeType)).map((entity) => entity.key),
+    capabilityKeys: activeAppEntities.filter((entity) => entity.nodeType === 'capability').map((entity) => entity.key),
+    interactiveSummary,
+  })
 }
 
 export function evaluateAppPreviewReadiness(snapshot: AppPreviewSnapshot): AppPreviewReadiness {
@@ -670,12 +843,51 @@ export function evaluateAppPreviewReadiness(snapshot: AppPreviewSnapshot): AppPr
   if (designApproved && towerNodes.length === 0) addFinding(blockers, 'Towers', 'Generate implementation tower nodes from the approved design graph.')
   if (designApproved && codeFiles.length === 0) addFinding(blockers, 'Code Files', 'Generate code_file nodes from the approved design graph and shared contracts.')
 
+  const hasRelationship = (sourceKey: string, verb: string, targetKey?: string) => snapshot.worldRelationships.some((relationship) => (
+    relationship.sourceEntityKey === sourceKey
+    && relationship.verb === verb
+    && (!targetKey || relationship.targetEntityKey === targetKey)
+  ))
+  const towerKeys = new Set(towerNodes.map((tower) => tower.key))
+  const codeFilePaths = new Set<string>()
   for (const codeFile of codeFiles) {
     const app = readAppNodeProperties(codeFile)
     const filePath = typeof app.filePath === 'string' ? app.filePath : textValue(codeFile, 'filePath')
     const ownerTower = typeof app.ownerTower === 'string' ? app.ownerTower : textValue(codeFile, 'ownerTower')
+    const fileKind = typeof app.fileKind === 'string' ? app.fileKind : textValue(codeFile, 'fileKind')
     if (!filePath.trim()) addFinding(blockers, 'Code Files', `${codeFile.name} needs filePath.`, 'blocker', codeFile.key)
     if (!ownerTower.trim()) addFinding(blockers, 'Code Files', `${codeFile.name} needs ownerTower.`, 'blocker', codeFile.key)
+    if (!fileKind.trim()) addFinding(blockers, 'Code Files', `${codeFile.name} needs fileKind.`, 'blocker', codeFile.key)
+    if (!Array.isArray(app.exports)) addFinding(warnings, 'Code Files', `${codeFile.name} should list exports.`, 'warning', codeFile.key)
+    if (!Array.isArray(app.imports)) addFinding(warnings, 'Code Files', `${codeFile.name} should list imports.`, 'warning', codeFile.key)
+    if (!Array.isArray(app.dependsOn)) addFinding(warnings, 'Code Files', `${codeFile.name} should list dependsOn.`, 'warning', codeFile.key)
+    if (!textValue(codeFile, 'implementationSummary') && typeof app.implementationSummary !== 'string') addFinding(warnings, 'Code Files', `${codeFile.name} should include an implementationSummary.`, 'warning', codeFile.key)
+    if (!textValue(codeFile, 'publicInterface') && typeof app.publicInterface !== 'string') addFinding(warnings, 'Code Files', `${codeFile.name} should include publicInterface.`, 'warning', codeFile.key)
+    if (!Array.isArray(app.testExpectations)) addFinding(warnings, 'Code Files', `${codeFile.name} should list testExpectations.`, 'warning', codeFile.key)
+    if (filePath.trim()) codeFilePaths.add(filePath.trim())
+    if (designApproved && towerNodes.length > 0) {
+      const ownedByKnownTower = hasRelationship(codeFile.key, 'owned_by_tower') || (ownerTower.trim() && (towerKeys.has(ownerTower.trim()) || towerNodes.some((tower) => tower.name === ownerTower.trim())))
+      if (!ownedByKnownTower) addFinding(blockers, 'Code Files', `${codeFile.name} should be owned by a tower through ownerTower or owned_by_tower.`, 'blocker', codeFile.key)
+    }
+  }
+  if (designApproved && towerNodes.length > 0 && codeFiles.length > 0) {
+    for (const tower of towerNodes) {
+      const ownsFile = codeFiles.some((codeFile) => {
+        const app = readAppNodeProperties(codeFile)
+        const ownerTower = typeof app.ownerTower === 'string' ? app.ownerTower : textValue(codeFile, 'ownerTower')
+        return ownerTower === tower.key || ownerTower === tower.name || hasRelationship(codeFile.key, 'owned_by_tower', tower.key)
+      })
+      if (!ownsFile) addFinding(warnings, 'Towers', `${tower.name} should own at least one code_file.`, 'warning', tower.key)
+    }
+    const implementationVerbs = new Set(snapshot.worldRelationships.map((relationship) => relationship.verb))
+    for (const verb of ['implemented_as', 'owned_by_tower', 'depends_on']) {
+      if (!implementationVerbs.has(verb)) addFinding(warnings, 'Code Files', `Implementation plan should include ${verb} relationships.`, 'warning')
+    }
+    if (requiredInteractiveSystems.length > 0) {
+      for (const requiredPath of ['lib/interactive/InteractiveRuntime.ts', 'lib/interactive/MockInteractiveAdapters.ts', 'lib/interactive/interactiveManifest.ts']) {
+        if (!codeFilePaths.has(requiredPath)) addFinding(blockers, 'Code Files', `Interactive apps need ${requiredPath} in the implementation plan.`, 'blocker')
+      }
+    }
   }
 
   const implementationPlanReady = visualPrototypeReady
@@ -1344,6 +1556,7 @@ export function buildAppGeneratedFileDrafts(input: {
   projectName?: string
   draftMetadata?: Record<string, unknown>
   entities: WorldEntity[]
+  relationships?: WorldRelationship[]
 }): AppGeneratedFileDraft[] {
   const worldWiki = readWorldWikiMetadata(input.draftMetadata)
   const colorScheme = asRecord(worldWiki.colorScheme)
@@ -1455,7 +1668,7 @@ export function buildAppGeneratedFileDrafts(input: {
     } else if (file.path === 'lib/interactive/interactiveManifest.ts') {
       content = `export const interactiveManifest = ${JSON.stringify(compileInteractiveManifest({
         entities: input.entities,
-        relationships: [],
+        relationships: input.relationships ?? [],
       }), null, 2)} as const\n`
     }
 

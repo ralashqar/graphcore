@@ -3,6 +3,8 @@ import test from 'node:test'
 
 import {
   appScreenVisualSpecSchema,
+  buildApprovedAppDesignBundle,
+  buildAppGeneratedFileDrafts,
   buildRecommendedAppCodeFilePlan,
   computeAppDesignFingerprint,
   evaluateAppPreviewReadiness,
@@ -87,7 +89,20 @@ const completeEntities = [
     key: 'file',
     name: 'Home Route File',
     nodeType: 'code_file',
-    customProperties: { app: { filePath: 'app/index.tsx', ownerTower: 'Home Tower' } },
+    customProperties: {
+      app: {
+        filePath: 'app/index.tsx',
+        ownerTower: 'Home Tower',
+        fileKind: 'route',
+        exports: ['default'],
+        imports: ['react-native'],
+        dependsOn: ['components/DailyPromptCard.tsx'],
+        implementationSummary: 'Render the approved home screen route.',
+        publicInterface: 'Default Expo Router route component.',
+        visualSpecRefs: ['mockup'],
+        testExpectations: ['renders daily prompt card'],
+      },
+    },
   }),
   entity({
     key: 'mockup',
@@ -158,6 +173,52 @@ test('recognizes design prototype readiness without requiring code plan approval
   assert.equal(readiness.designApproved, false)
   assert.equal(readiness.categoryStatus.Screens.ready, true)
   assert.equal(readiness.nextAction, 'Approve Design For Build')
+})
+
+test('builds approved app design bundle with visual and interactive lock data', () => {
+  const entities = [
+    ...completeEntities,
+    entity({
+      key: 'config',
+      name: 'Initial Config',
+      nodeType: 'player_initial_config',
+      customProperties: { interactive: { startDialogueKey: 'dialogue.intro', stats: { wit: 2 } } },
+    }),
+    entity({ key: 'dialogue.intro', name: 'Intro Dialogue', nodeType: 'dialogue_node' }),
+    entity({ key: 'choice.trick', name: 'Outsmart The Clerk', nodeType: 'choice' }),
+  ]
+  const bundle = buildApprovedAppDesignBundle({
+    draft: {
+      metadata: {
+        worldWiki: {
+          artStyleDescription: 'Soft premium mobile UI.',
+          brandAtlasPrompt: 'A polished app brand atlas.',
+          brandAtlasAssetKey: 'brand-atlas',
+          colorScheme: { primary: '#123456', secondary: '#abcdef', tertiary: '#f5f5f5' },
+        },
+      },
+    },
+    worldEntities: entities,
+    worldRelationships: [
+      relationship({ key: 'home-card', sourceEntityKey: 'home', targetEntityKey: 'card', verb: 'contains' }),
+      relationship({ key: 'home-create', sourceEntityKey: 'home', targetEntityKey: 'create', verb: 'emits' }),
+      relationship({ key: 'home-profile', sourceEntityKey: 'home', targetEntityKey: 'profile', verb: 'reads' }),
+      relationship({ key: 'dialogue-choice', sourceEntityKey: 'dialogue.intro', targetEntityKey: 'choice.trick', verb: 'contains' }),
+    ],
+    assets: [],
+    approvedAt: '2026-05-03T00:00:00.000Z',
+    approvalId: 'approval-test',
+  })
+
+  assert.equal(bundle.status, 'approved')
+  assert.equal(bundle.approvalId, 'approval-test')
+  assert.equal(bundle.brandAtlasAssetKey, 'brand-atlas')
+  assert.deepEqual(bundle.routeScreenKeys, ['home'])
+  assert.deepEqual(bundle.screenMockupKeys, ['mockup'])
+  assert.deepEqual(bundle.mockupAssetKeys, ['home-screen-art'])
+  assert.equal(bundle.screens[0].mockups[0].visualSpecHash.length > 0, true)
+  assert.equal(Object.keys(bundle.visualSpecHashes).includes('mockup'), true)
+  assert.equal(bundle.interactiveSummary.choiceCount, 1)
 })
 
 test('requires design approval before implementation plan readiness', () => {
@@ -262,6 +323,97 @@ test('detects stale approved app design when visual artifacts change', () => {
   assert.ok(readiness.blockers.some((finding) => finding.category === 'Design Approval'))
 })
 
+test('does not stale approved app design when only code plan nodes change', () => {
+  const snapshot = {
+    draft: {
+      metadata: {
+        worldWiki: {
+          artStyleDescription: 'Soft premium mobile UI.',
+          brandAtlasPrompt: 'A polished app brand atlas.',
+          brandAtlasAssetKey: 'brand-atlas',
+          colorScheme: { primary: '#123456', secondary: '#abcdef', tertiary: '#f5f5f5' },
+        },
+      },
+    },
+    worldEntities: completeEntities,
+    worldRelationships: [
+      relationship({ key: 'home-card', sourceEntityKey: 'home', targetEntityKey: 'card', verb: 'contains' }),
+      relationship({ key: 'home-create', sourceEntityKey: 'home', targetEntityKey: 'create', verb: 'emits' }),
+      relationship({ key: 'home-profile', sourceEntityKey: 'home', targetEntityKey: 'profile', verb: 'reads' }),
+    ],
+    assets: [],
+  }
+  const designFingerprint = computeAppDesignFingerprint(snapshot)
+  const approvedEntities = [
+    ...completeEntities.map((entry) => (
+      entry.key === 'app'
+        ? entity({
+          ...entry,
+          customProperties: {
+            ...entry.customProperties,
+            app: {
+              ...readAppNodeProperties(entry),
+              designApproval: { status: 'approved', approvedAt: '2026-05-03T00:00:00.000Z', designFingerprint },
+            },
+          },
+        })
+        : entry
+    )),
+    entity({
+      key: 'file.extra',
+      name: 'Extra Code File',
+      nodeType: 'code_file',
+      customProperties: { app: { filePath: 'lib/extra.ts', ownerTower: 'Home Tower', fileKind: 'hook' } },
+    }),
+  ]
+
+  const readiness = evaluateAppPreviewReadiness({
+    ...snapshot,
+    worldEntities: approvedEntities,
+  })
+
+  assert.equal(readiness.designApproved, true)
+  assert.equal(readiness.designApprovalStale, false)
+})
+
+test('implementation readiness blocks incomplete code file contracts', () => {
+  const snapshot = {
+    draft: {
+      metadata: {
+        worldWiki: {
+          artStyleDescription: 'Soft premium mobile UI.',
+          brandAtlasPrompt: 'A polished app brand atlas.',
+          brandAtlasAssetKey: 'brand-atlas',
+          colorScheme: { primary: '#123456', secondary: '#abcdef', tertiary: '#f5f5f5' },
+        },
+      },
+    },
+    worldEntities: completeEntities,
+    worldRelationships: [
+      relationship({ key: 'home-card', sourceEntityKey: 'home', targetEntityKey: 'card', verb: 'contains' }),
+      relationship({ key: 'home-create', sourceEntityKey: 'home', targetEntityKey: 'create', verb: 'emits' }),
+      relationship({ key: 'home-profile', sourceEntityKey: 'home', targetEntityKey: 'profile', verb: 'reads' }),
+    ],
+    assets: [],
+  }
+  const designFingerprint = computeAppDesignFingerprint(snapshot)
+  const approvedEntities = completeEntities.map((entry) => (
+    entry.key === 'app'
+      ? entity({ ...entry, customProperties: { app: { ...readAppNodeProperties(entry), designApproval: { status: 'approved', approvedAt: '2026-05-03T00:00:00.000Z', designFingerprint } } } })
+      : entry.key === 'file'
+        ? entity({ ...entry, customProperties: { app: { filePath: 'app/index.tsx', ownerTower: 'Home Tower' } } })
+        : entry
+  ))
+
+  const readiness = evaluateAppPreviewReadiness({
+    ...snapshot,
+    worldEntities: approvedEntities,
+  })
+
+  assert.equal(readiness.gates.implementation_plan_ready, false)
+  assert.ok(readiness.blockers.some((finding) => finding.category === 'Code Files' && /fileKind/.test(finding.message)))
+})
+
 test('builds recommended code files from screens, components, data, APIs, and capabilities', () => {
   const plan = buildRecommendedAppCodeFilePlan(completeEntities)
   const paths = new Set(plan.files.map((file) => file.path))
@@ -346,6 +498,49 @@ test('adds shared interactive runtime files when an app opts into interactive sy
   assert.ok(paths.has('lib/interactive/InteractiveRuntime.ts'))
   assert.ok(paths.has('lib/interactive/MockInteractiveAdapters.ts'))
   assert.ok(paths.has('lib/interactive/interactiveManifest.ts'))
+})
+
+test('generated interactive manifest includes relationship-derived executable graph', () => {
+  const entities = [
+    ...completeEntities,
+    entity({
+      key: 'config',
+      name: 'Initial Config',
+      nodeType: 'player_initial_config',
+      customProperties: { interactive: { startDialogueKey: 'dialogue.intro', stats: { wit: 2 }, currency: { credits: 1 } } },
+    }),
+    entity({ key: 'dialogue.intro', name: 'Intro Dialogue', nodeType: 'dialogue_node' }),
+    entity({ key: 'choice.trick', name: 'Outsmart The Clerk', nodeType: 'choice' }),
+    entity({ key: 'condition.wit', name: 'Wit Check', nodeType: 'choice_condition', customProperties: { interactive: { condition: { kind: 'stat_gte', targetKey: 'wit', value: 2 } } } }),
+    entity({ key: 'outcome.token', name: 'Gain Shadow Token', nodeType: 'choice_outcome', customProperties: { interactive: { outcome: { kind: 'grant_token', targetKey: 'token.clue' } } } }),
+    entity({ key: 'scene.done', name: 'Secret Learned', nodeType: 'narrative_scene' }),
+    entity({ key: 'travel.market', name: 'Walk To Market', nodeType: 'travel_link' }),
+    entity({ key: 'market', name: 'Market', nodeType: 'screen' }),
+    entity({ key: 'shop', name: 'Shop', nodeType: 'marketplace' }),
+    entity({ key: 'offer.map', name: 'Buy Map', nodeType: 'trade_offer', customProperties: { interactive: { offer: { currencyCost: { currencyKey: 'credits', amount: 1 }, gives: [{ key: 'map', quantity: 1 }] } } } }),
+  ]
+  const files = buildAppGeneratedFileDrafts({
+    projectName: 'Interactive App',
+    draftMetadata: {},
+    entities,
+    relationships: [
+      relationship({ key: 'dialogue-choice', sourceEntityKey: 'dialogue.intro', targetEntityKey: 'choice.trick', verb: 'contains' }),
+      relationship({ key: 'choice-condition', sourceEntityKey: 'choice.trick', targetEntityKey: 'condition.wit', verb: 'requires_stat' }),
+      relationship({ key: 'choice-outcome', sourceEntityKey: 'choice.trick', targetEntityKey: 'outcome.token', verb: 'grants_token' }),
+      relationship({ key: 'choice-branch', sourceEntityKey: 'choice.trick', targetEntityKey: 'scene.done', verb: 'branches_to' }),
+      relationship({ key: 'travel-target', sourceEntityKey: 'travel.market', targetEntityKey: 'market', verb: 'travels_to' }),
+      relationship({ key: 'shop-offer', sourceEntityKey: 'shop', targetEntityKey: 'offer.map', verb: 'offers' }),
+    ],
+  })
+  const manifestFile = files.find((file) => file.path === 'lib/interactive/interactiveManifest.ts')
+
+  assert.ok(manifestFile)
+  assert.match(manifestFile.content, /dialogue\.intro/)
+  assert.match(manifestFile.content, /choice\.trick/)
+  assert.match(manifestFile.content, /condition\.wit/)
+  assert.match(manifestFile.content, /scene\.done/)
+  assert.match(manifestFile.content, /travel\.market/)
+  assert.match(manifestFile.content, /offer\.map/)
 })
 
 test('parses app screen visual specs and app node properties', () => {

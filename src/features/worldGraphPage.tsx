@@ -91,17 +91,26 @@ import {
 import type { WorldBrandAtlasImageResponse } from '../domain/worldBrandAtlasImage'
 import type { VisualGenerationStartRequest, VisualGenerationStartResponse, VisualGenerationStatusResponse } from '../domain/visualGeneration'
 import {
-  computeAppDesignFingerprint,
+  buildApprovedAppDesignBundle,
   evaluateAppPreviewReadiness,
+  readAppDesignApproval,
   type AppGenerationCancelResponse,
   type AppGenerationStartResponse,
   type AppGenerationStatusResponse,
+  type AppApprovedDesignBundle,
   type AppPreviewSessionResponse,
 } from '../domain/appPreviewPipeline'
+import { evaluateNarrativeRpgReadiness } from '../domain/gameGraph'
 import {
-  compileNarrativeRpgManifest,
-  evaluateNarrativeRpgReadiness,
-} from '../domain/gameGraph'
+  applyChoice,
+  buildInteractivePrototypeModel,
+  createInitialRuntimeState,
+  executeTrade,
+  getAvailableChoices,
+  isInteractiveSystemNodeType,
+  moveToLocation,
+  type InteractiveRuntimeState,
+} from '../domain/interactiveSystems'
 import {
   mergeWorldEntityVisualDescriptionMetadata,
   readWorldEntityVisualDescription,
@@ -1385,6 +1394,9 @@ export function WorldGraphPage({
   const [appScreenArtError, setAppScreenArtError] = useState<string | null>(null)
   const [showAppStaticPrototype, setShowAppStaticPrototype] = useState(false)
   const [selectedAppPrototypeScreenKey, setSelectedAppPrototypeScreenKey] = useState<string | null>(null)
+  const [showInteractivePrototype, setShowInteractivePrototype] = useState(false)
+  const [interactivePrototypeState, setInteractivePrototypeState] = useState<InteractiveRuntimeState | null>(null)
+  const [interactivePrototypeLog, setInteractivePrototypeLog] = useState<string[]>([])
   const [signedAssetUrlsByKey, setSignedAssetUrlsByKey] = useState<Map<string, string>>(() => new Map())
   const [hoveredWorldNodeKey, setHoveredWorldNodeKey] = useState<string | null>(null)
   const [hoverRevealTargetNodeKey, setHoverRevealTargetNodeKey] = useState<string | null>(null)
@@ -2096,14 +2108,20 @@ export function WorldGraphPage({
     entities: worldEntities,
     relationships: worldRelationships,
   }), [worldEntities, worldRelationships])
-  const narrativeRpgManifest = useMemo(() => {
-    if (!(projectContext?.projectSubtype === 'narrative_rpg_mobile' || wikiHasGameSections)) return null
-    try {
-      return compileNarrativeRpgManifest({ entities: worldEntities, relationships: worldRelationships })
-    } catch {
-      return null
+  const hasInteractiveSystems = useMemo(() => worldEntities.some((entity) => {
+    if (isInteractiveSystemNodeType(entity.nodeType)) return true
+    const app = readAppCustomProperties(entity)
+    return Array.isArray(app.interactiveSystems) || Array.isArray(app.requiredInteractiveSystems)
+  }), [worldEntities])
+  const interactivePrototypeModel = useMemo(() => {
+    if (!hasInteractiveSystems) {
+      return { ready: false, manifest: null, blockers: ['No interactive systems are declared for this graph.'], warnings: [], startState: null }
     }
-  }, [projectContext?.projectSubtype, wikiHasGameSections, worldEntities, worldRelationships])
+    return buildInteractivePrototypeModel({
+      entities: worldEntities,
+      relationships: worldRelationships,
+    })
+  }, [hasInteractiveSystems, worldEntities, worldRelationships])
   const appPreviewReadiness = useMemo(() => evaluateAppPreviewReadiness({
     draft: { metadata: projectDraftMetadata },
     worldEntities,
@@ -4372,48 +4390,37 @@ export function WorldGraphPage({
   async function handleGenerateAppCodePlan() {
     if (!appPreviewReadiness.designApproved || appPreviewReadiness.designApprovalStale) return
     const appNode = worldEntities.find((entity) => entity.nodeType === 'app')
-    const approval = appNode ? readLooseRecord(readAppCustomProperties(appNode).designApproval) : {}
-    const approvedScreenKeys = new Set(Array.isArray(approval.routeScreenKeys) ? approval.routeScreenKeys.filter((key): key is string => typeof key === 'string') : routeBearingAppScreens.map((screen) => screen.key))
-    const approvedMockupKeys = new Set(Array.isArray(approval.screenMockupKeys) ? approval.screenMockupKeys.filter((key): key is string => typeof key === 'string') : [])
-    const approvedScreens = routeBearingAppScreens
-      .filter((screen) => approvedScreenKeys.has(screen.key))
-      .map((screen) => ({
-        key: screen.key,
-        name: screen.name,
-        route: readAppString(screen, 'route'),
-        purpose: readAppString(screen, 'purpose') || screen.summary,
-        states: readAppStringArray(screen, 'states'),
-        actions: readAppStringArray(screen, 'actions'),
-        dataDependencies: readAppStringArray(screen, 'dataDependencies'),
-        mockups: (appScreenMockupsByScreenKey.get(screen.key) ?? [])
-          .filter((mockup) => approvedMockupKeys.size === 0 || approvedMockupKeys.has(mockup.key))
-          .map((mockup) => ({
-            key: mockup.key,
-            sourceAssetKey: appScreenMockupAssetKey(mockup),
-            visualSpec: readAppCustomProperties(mockup).visualSpec ?? null,
-          })),
+    const approval = appNode ? readAppDesignApproval(appNode) as Partial<AppApprovedDesignBundle> : {}
+    if (approval.status !== 'approved' || !approval.designFingerprint) return
+    const existingImplementationNodes = worldEntities
+      .filter((entity) => entity.nodeType === 'tower' || entity.nodeType === 'code_file')
+      .map((entity) => ({
+        key: entity.key,
+        type: entity.nodeType,
+        name: entity.name,
+        summary: entity.summary,
+        app: readAppCustomProperties(entity),
+      }))
+    const existingImplementationRelationships = worldRelationships
+      .filter((relationship) => ['implemented_as', 'owned_by_tower', 'depends_on', 'reads', 'writes', 'calls', 'styled_by', 'requires_capability'].includes(relationship.verb))
+      .map((relationship) => ({
+        key: relationship.key,
+        source: relationship.sourceEntityKey,
+        target: relationship.targetEntityKey,
+        verb: relationship.verb,
+        notes: relationship.notes,
       }))
     const approvedDesignBundle = JSON.stringify({
       task: 'generate_implementation_plan_from_approved_design',
-      approval,
-      designFingerprint: appPreviewReadiness.designFingerprint,
-      worldWiki: {
-        artStyleDescription: wikiModel.overview.artStyleDescription,
-        brandAtlasAssetKey: wikiModel.overview.brandAtlasAssetKey,
-        colorScheme: wikiModel.overview.colorScheme,
-      },
-      screens: approvedScreens,
-      transitions: worldRelationships
-        .filter((relationship) => relationship.verb === 'transitions_to' && approvedScreenKeys.has(relationship.sourceEntityKey) && approvedScreenKeys.has(relationship.targetEntityKey))
-        .map((relationship) => ({ key: relationship.key, source: relationship.sourceEntityKey, target: relationship.targetEntityKey, notes: relationship.notes })),
-      dataApiNodes: worldEntities
-        .filter((entity) => ['data_model', 'action', 'api_endpoint', 'backend_function', 'external_service', 'capability'].includes(entity.nodeType))
-        .map((entity) => ({ key: entity.key, type: entity.nodeType, name: entity.name, summary: entity.summary, app: readAppCustomProperties(entity) })),
+      approvedDesign: approval,
+      existingImplementationNodes,
+      existingImplementationRelationships,
     }, null, 2)
     await handleSubmitWorldPrompt([
       'Generate the app implementation code plan from the approved visual prototype and completed app design graph.',
       'Use only the attached Approved Design Bundle for implementation planning. Treat live graph drift outside this bundle as unapproved.',
-      'Create or repair tower and code_file nodes only. Each code_file must include customProperties.app.filePath, ownerTower, fileKind, exports, imports, dependsOn, implementationSummary, publicInterface, visualSpecRefs, and testExpectations.',
+      'Create or repair tower and code_file nodes only. Do not create screen, component, data_model, action, api_endpoint, design_system, screen_mockup, image_region, sequence_unit, actor, place, object, group, concept, or event nodes.',
+      'Each code_file must include customProperties.app.filePath, ownerTower, fileKind, exports, imports, dependsOn, implementationSummary, publicInterface, visualSpecRefs, and testExpectations.',
       'Do not modify product, UX, screen, component, visual, or design-system nodes except to add implementation relationships from tower/code_file nodes.',
       'Use Expo Router, React Native primitives, TypeScript, mock backend/capability adapters, and relationships implemented_as, owned_by_tower, depends_on, reads, writes, calls, requires_capability, and styled_by.',
     ].join(' '), null, {
@@ -4436,37 +4443,27 @@ export function WorldGraphPage({
     const appNode = worldEntities.find((entity) => entity.nodeType === 'app')
     if (!appNode) return
     const appCustom = readAppCustomProperties(appNode)
-    const mockupKeys = routeBearingAppScreens.flatMap((screen) => (
-      (appScreenMockupsByScreenKey.get(screen.key) ?? []).map((mockup) => mockup.key)
-    ))
-    const visualSpecScreenKeys = routeBearingAppScreens.filter((screen) => {
-      const mockups = appScreenMockupsByScreenKey.get(screen.key) ?? []
-      return mockups.some((mockup) => readLooseRecord(readAppCustomProperties(mockup).visualSpec).layoutTree !== undefined)
-    }).map((screen) => screen.key)
-    const designFingerprint = computeAppDesignFingerprint({
+    const approval = buildApprovedAppDesignBundle({
       draft: { metadata: { worldWiki: wikiModel.overview } },
       worldEntities,
       worldRelationships,
       assets,
     })
+    const existingApproval = readLooseRecord(appCustom.designApproval)
+    const existingHistory = Array.isArray(appCustom.designApprovalHistory)
+      ? appCustom.designApprovalHistory.filter((entry): entry is Record<string, unknown> => Boolean(entry && typeof entry === 'object' && !Array.isArray(entry)))
+      : []
+    const designApprovalHistory = existingApproval.status === 'approved'
+      ? [...existingHistory, existingApproval].slice(-10)
+      : existingHistory
     await updateWorldEntityAndRefresh(appNode.key, {
       customProperties: {
         ...appNode.customProperties,
         app: {
           ...appCustom,
           phase: 'implementation',
-          designApproval: {
-            status: 'approved',
-            approvedAt: new Date().toISOString(),
-            sourceGate: 'visual_prototype_ready',
-            designFingerprint,
-            brandAtlasAssetKey: wikiModel.overview.brandAtlasAssetKey,
-            designSystemKeys: worldEntities.filter((entity) => entity.nodeType === 'design_system').map((entity) => entity.key),
-            routeScreenKeys: routeBearingAppScreens.map((screen) => screen.key),
-            screenMockupKeys: mockupKeys,
-            visualSpecScreenKeys,
-            transitionKeys: worldRelationships.filter((relationship) => relationship.verb === 'transitions_to').map((relationship) => relationship.key),
-          },
+          designApproval: approval,
+          designApprovalHistory,
         },
       },
     }, 'app_design_approved_for_build')
@@ -4623,6 +4620,34 @@ export function WorldGraphPage({
       setAppScreenArtError(message)
       console.error('[GraphCore] app screen analysis failed to start.', error)
     }
+  }
+
+  function openInteractivePrototype() {
+    if (!interactivePrototypeModel.manifest || !interactivePrototypeModel.startState) return
+    setInteractivePrototypeState(createInitialRuntimeState(interactivePrototypeModel.manifest))
+    setInteractivePrototypeLog(['Prototype session started.'])
+    setShowInteractivePrototype(true)
+  }
+
+  function resetInteractivePrototype() {
+    if (!interactivePrototypeModel.manifest) return
+    setInteractivePrototypeState(createInitialRuntimeState(interactivePrototypeModel.manifest))
+    setInteractivePrototypeLog((log) => ['State reset to player_initial_config.', ...log].slice(0, 12))
+  }
+
+  function applyInteractivePrototypeAction(label: string, nextState: InteractiveRuntimeState) {
+    setInteractivePrototypeState(nextState)
+    const target = nextState.currentDialogueKey
+      || nextState.currentSceneKey
+      || nextState.currentSpotKey
+      || nextState.currentLocationKey
+      || 'state updated'
+    setInteractivePrototypeLog((log) => [`${label} -> ${interactiveName(target)}`, ...log].slice(0, 12))
+  }
+
+  function interactiveName(key: string | null | undefined) {
+    if (!key) return 'None'
+    return entityByKey.get(key)?.name ?? key
   }
 
   async function handleBuildAppPreview() {
@@ -5122,6 +5147,110 @@ export function WorldGraphPage({
     )
   }
 
+  function renderInteractivePrototypeModal() {
+    const manifest = interactivePrototypeModel.manifest
+    const state = interactivePrototypeState
+    if (!showInteractivePrototype || !manifest || !state) return null
+    const dialogueKey = state.currentDialogueKey ?? manifest.dialogueNodes[0]?.key ?? ''
+    const currentChoices = dialogueKey ? getAvailableChoices(manifest, state, dialogueKey) : []
+    const currentScene = state.currentSceneKey ? manifest.narrativeScenes.find((scene) => scene.key === state.currentSceneKey) : null
+    const currentDialogue = dialogueKey ? manifest.dialogueNodes.find((dialogue) => dialogue.key === dialogueKey) : null
+    const availableTravelLinks = manifest.travelLinks.filter((link) => link.travelsToKeys.length > 0)
+    const marketOfferKeys = new Set(manifest.markets.flatMap((market) => market.offerKeys))
+    const marketOffers = manifest.tradeOffers.filter((offer) => marketOfferKeys.size === 0 || marketOfferKeys.has(offer.key))
+    return (
+      <div className="app-static-prototype-modal" role="dialog" aria-modal="true" aria-label="Interactive prototype">
+        <div className="app-static-prototype interactive-prototype">
+          <div className="app-static-prototype-head">
+            <div>
+              <span className="eyebrow">Interactive Prototype</span>
+              <strong>{currentDialogue?.name ?? currentScene?.name ?? interactiveName(state.currentLocationKey)}</strong>
+            </div>
+            <span>{interactivePrototypeModel.ready ? 'Playable manifest' : 'Needs graph repair'}</span>
+            <button className="icon-button" onClick={() => setShowInteractivePrototype(false)} type="button" aria-label="Close interactive prototype">
+              <EntityIcon id="close" />
+            </button>
+          </div>
+          <div className="app-static-prototype-body interactive-prototype-body">
+            <div className="app-static-prototype-side interactive-prototype-state">
+              <span className="eyebrow">State</span>
+              <div className="interactive-state-grid">
+                <span><strong>Location</strong>{interactiveName(state.currentLocationKey)}</span>
+                <span><strong>Spot</strong>{interactiveName(state.currentSpotKey)}</span>
+                <span><strong>Scene</strong>{interactiveName(state.currentSceneKey)}</span>
+                <span><strong>Dialogue</strong>{interactiveName(dialogueKey)}</span>
+              </div>
+              <span className="eyebrow">Inventory</span>
+              <div className="interactive-chip-list">
+                {state.inventoryKeys.length > 0 ? state.inventoryKeys.map((key, index) => <span key={`${key}-${index}`}>{interactiveName(key)}</span>) : <em>Empty</em>}
+              </div>
+              <span className="eyebrow">Tokens</span>
+              <div className="interactive-chip-list">
+                {state.tokenKeys.length > 0 ? state.tokenKeys.map((key) => <span key={key}>{interactiveName(key)}</span>) : <em>None</em>}
+              </div>
+              <span className="eyebrow">Currency</span>
+              <div className="interactive-chip-list">
+                {Object.keys(state.currency).length > 0 ? Object.entries(state.currency).map(([key, value]) => <span key={key}>{interactiveName(key)} {value}</span>) : <em>None</em>}
+              </div>
+              <span className="eyebrow">Stats</span>
+              <div className="interactive-chip-list">
+                {Object.keys(state.stats).length > 0 ? Object.entries(state.stats).map(([key, value]) => <span key={key}>{interactiveName(key)} {value}</span>) : <em>None</em>}
+              </div>
+            </div>
+            <div className="app-static-phone interactive-phone">
+              <div className="interactive-phone-screen">
+                <span className="eyebrow">{currentScene?.name ?? 'Runtime Scene'}</span>
+                <h3>{currentDialogue?.name ?? interactiveName(dialogueKey)}</h3>
+                <p>{entityByKey.get(dialogueKey)?.summary || currentScene?.name || 'Choose an available action to advance the graph state.'}</p>
+                <div className="interactive-choice-stack">
+                  {currentChoices.length > 0 ? currentChoices.map(({ choice, available, lockedReasons }) => (
+                    <button
+                      key={choice.key}
+                      className={available ? 'interactive-choice' : 'interactive-choice is-locked'}
+                      disabled={!available}
+                      onClick={() => applyInteractivePrototypeAction(choice.name, applyChoice(manifest, state, choice.key))}
+                      type="button"
+                    >
+                      <strong>{choice.name}</strong>
+                      <span>{available ? 'Apply choice' : `Locked: ${lockedReasons.join(', ') || 'condition unmet'}`}</span>
+                    </button>
+                  )) : <div className="inline-note">No dialogue choices are available from this state.</div>}
+                </div>
+              </div>
+            </div>
+            <div className="app-static-prototype-side">
+              <span className="eyebrow">Travel</span>
+              <div className="app-static-prototype-actions">
+                {availableTravelLinks.length > 0 ? availableTravelLinks.map((link) => (
+                  <button key={link.key} className="world-context-strip-action" onClick={() => applyInteractivePrototypeAction(link.name, moveToLocation(manifest, state, link.key))} type="button">
+                    {link.name} {'->'} {interactiveName(link.travelsToKeys[0])}
+                  </button>
+                )) : <span className="inline-note">No travel links.</span>}
+              </div>
+              <span className="eyebrow">Market</span>
+              <div className="app-static-prototype-actions">
+                {marketOffers.length > 0 ? marketOffers.map((offer) => (
+                  <button key={offer.key} className="world-context-strip-action" onClick={() => applyInteractivePrototypeAction(offer.name, executeTrade(manifest, state, offer.key))} type="button">
+                    {offer.name}
+                  </button>
+                )) : <span className="inline-note">No market offers.</span>}
+              </div>
+              <span className="eyebrow">State Flags</span>
+              <div className="interactive-chip-list">
+                {Object.keys(state.state).length > 0 ? Object.entries(state.state).map(([key, value]) => <span key={key}>{key}: {String(value)}</span>) : <em>None</em>}
+              </div>
+              <span className="eyebrow">Event Log</span>
+              <div className="interactive-event-log">
+                {interactivePrototypeLog.map((entry, index) => <span key={`${entry}-${index}`}>{entry}</span>)}
+              </div>
+              <button className="world-context-strip-action" onClick={resetInteractivePrototype} type="button">Reset State</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   function renderNarrativeRpgPlayablePanel() {
     if (!(projectContext?.projectSubtype === 'narrative_rpg_mobile' || wikiHasGameSections)) return null
     const visibleBlockers = narrativeRpgReadiness.blockers.slice(0, 5)
@@ -5186,18 +5315,9 @@ export function WorldGraphPage({
           </button>
           <button
             className="world-context-strip-action"
-            disabled={!narrativeRpgReadiness.ready || !narrativeRpgManifest}
-            onClick={() => openWikiDetailModal({
-              title: 'Playable Flow Manifest',
-              eyebrow: 'Static runtime JSON',
-              body: narrativeRpgManifest ? JSON.stringify(narrativeRpgManifest, null, 2) : 'The game graph needs to pass readiness checks before a playable manifest can be compiled.',
-              icon: 'thread',
-              meta: narrativeRpgManifest ? [
-                `${narrativeRpgManifest.locations.length} locations`,
-                `${narrativeRpgManifest.dialogueNodes.length} dialogue nodes`,
-                `${narrativeRpgManifest.choices.length} choices`,
-              ] : ['Not ready'],
-            })}
+            disabled={!interactivePrototypeModel.ready}
+            title={interactivePrototypeModel.ready ? 'Open the playable graph prototype.' : interactivePrototypeModel.blockers[0] ?? 'Interactive graph is not ready.'}
+            onClick={openInteractivePrototype}
             type="button"
           >
             Preview Playable Flow
@@ -5240,6 +5360,10 @@ export function WorldGraphPage({
     const staticPrototypeDisabled = !appPreviewReadiness.gates.visual_prototype_ready
     const approveDesignDisabled = isPromptSubmitting || !appPreviewReadiness.gates.visual_prototype_ready || (appPreviewReadiness.designApproved && !appPreviewReadiness.designApprovalStale)
     const implementationPlanDisabled = isPromptSubmitting || !appPreviewReadiness.designApproved || appPreviewReadiness.designApprovalStale
+    const appNode = worldEntities.find((entity) => entity.nodeType === 'app') ?? null
+    const designApproval = appNode ? readAppDesignApproval(appNode) as Partial<AppApprovedDesignBundle> : {}
+    const approvedScreenCount = Array.isArray(designApproval.routeScreenKeys) ? designApproval.routeScreenKeys.length : Array.isArray(designApproval.screens) ? designApproval.screens.length : 0
+    const approvedMockupCount = Array.isArray(designApproval.screenMockupKeys) ? designApproval.screenMockupKeys.length : 0
     const selectedPrototypeImageUrl = selectedAppPrototypeScreen ? appPrototypeScreenImageByKey.get(selectedAppPrototypeScreen.key) ?? null : null
     const prototypeTargets = selectedAppPrototypeScreen ? appPrototypeTransitionsByScreenKey.get(selectedAppPrototypeScreen.key) ?? [] : []
     const selectedPrototypeMockups = selectedAppPrototypeScreen ? appScreenMockupsByScreenKey.get(selectedAppPrototypeScreen.key) ?? [] : []
@@ -5275,6 +5399,15 @@ export function WorldGraphPage({
           <strong>{appPreviewReadiness.nextAction}</strong>
           <span>{readyCategoryCount} of {totalCategoryCount} readiness slices clear. Current gate: {appPreviewReadiness.currentGate.replace(/_/g, ' ')}.</span>
         </div>
+        {appPreviewReadiness.designApproved ? (
+          <div className={`app-design-approval-summary ${appPreviewReadiness.designApprovalStale ? 'is-stale' : 'is-current'}`}>
+            <strong>{appPreviewReadiness.designApprovalStale ? 'Design approval is stale' : 'Design approved for build'}</strong>
+            <span>
+              {approvedScreenCount} screen{approvedScreenCount === 1 ? '' : 's'} and {approvedMockupCount} mockup{approvedMockupCount === 1 ? '' : 's'} locked
+              {typeof designApproval.approvedAt === 'string' ? ` at ${new Date(designApproval.approvedAt).toLocaleString()}` : ''}.
+            </span>
+          </div>
+        ) : null}
         <div className="app-preview-gate-grid">
           {Object.entries(appPreviewReadiness.gates).map(([gate, ready]) => (
             <span key={gate} className={`app-preview-gate ${ready ? 'is-ready' : 'is-pending'}`}>
@@ -5296,6 +5429,17 @@ export function WorldGraphPage({
           <button className="world-context-strip-action" disabled={staticPrototypeDisabled} onClick={() => setShowAppStaticPrototype(true)} type="button">
             Preview Static Flow
           </button>
+          {hasInteractiveSystems ? (
+            <button
+              className="world-context-strip-action"
+              disabled={!interactivePrototypeModel.ready}
+              title={interactivePrototypeModel.ready ? 'Open the interactive graph prototype.' : interactivePrototypeModel.blockers[0] ?? 'Interactive graph is not ready.'}
+              onClick={openInteractivePrototype}
+              type="button"
+            >
+              Preview Interactive Flow
+            </button>
+          ) : null}
           <button className="world-context-strip-action" disabled={approveDesignDisabled} onClick={() => void handleApproveAppDesignForBuild()} type="button">
             {appPreviewReadiness.designApprovalStale ? 'Reapprove Design' : appPreviewReadiness.designApproved ? 'Design Approved' : 'Approve Design For Build'}
           </button>
@@ -5324,6 +5468,9 @@ export function WorldGraphPage({
         ) : null}
         {appPreviewReadiness.gates.visual_prototype_ready && !appPreviewReadiness.designApproved ? (
           <div className="inline-note">Review the static flow, then approve the design before generating implementation towers and code files.</div>
+        ) : null}
+        {hasInteractiveSystems && !interactivePrototypeModel.ready ? (
+          <div className="inline-note is-error">Interactive prototype blocked: {interactivePrototypeModel.blockers[0] ?? 'repair interactive graph readiness.'}</div>
         ) : null}
         {appScreenArtJobs.length > 0 ? (
           <div className="app-preview-build-summary">
@@ -6250,6 +6397,7 @@ export function WorldGraphPage({
                   </section>
                   {renderNarrativeRpgPlayablePanel()}
                   {renderAppPreviewPipelinePanel()}
+                  {renderInteractivePrototypeModal()}
                   <div className="world-wiki-section-grid">
                     {wikiModel.sections.filter((section) => section.kind !== 'overview').map(renderWikiSection)}
                   </div>

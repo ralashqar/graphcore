@@ -9728,6 +9728,26 @@ button.world-prompt-row-result.is-clickable {
   font-size: 0.88rem;
 }
 
+.app-design-approval-summary {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid rgba(34, 197, 94, 0.28);
+  border-radius: 8px;
+  background: rgba(34, 197, 94, 0.08);
+  color: rgba(203, 213, 225, 0.82);
+  font-size: 0.82rem;
+}
+
+.app-design-approval-summary strong {
+  color: rgba(248, 250, 252, 0.95);
+}
+
+.app-design-approval-summary.is-stale {
+  border-color: rgba(245, 158, 11, 0.34);
+  background: rgba(245, 158, 11, 0.09);
+}
+
 .app-preview-gate {
   min-width: 0;
   display: flex;
@@ -10031,6 +10051,103 @@ button.world-prompt-row-result.is-clickable {
   border-color: rgba(45, 212, 191, 0.34);
   background: rgba(20, 184, 166, 0.14);
   color: rgba(240, 253, 250, 0.98);
+}
+
+.interactive-prototype-body {
+  grid-template-columns: minmax(210px, 270px) minmax(280px, 390px) minmax(250px, 320px);
+}
+
+.interactive-state-grid,
+.interactive-chip-list,
+.interactive-event-log,
+.interactive-choice-stack {
+  display: grid;
+  gap: 8px;
+}
+
+.interactive-state-grid span,
+.interactive-chip-list span,
+.interactive-chip-list em,
+.interactive-event-log span {
+  padding: 8px 10px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.42);
+  color: rgba(226, 232, 240, 0.9);
+  font-size: 0.76rem;
+  font-style: normal;
+}
+
+.interactive-state-grid strong {
+  display: block;
+  margin-bottom: 3px;
+  color: rgba(148, 163, 184, 0.92);
+  font-size: 0.66rem;
+  text-transform: uppercase;
+}
+
+.interactive-chip-list {
+  grid-template-columns: repeat(auto-fit, minmax(82px, 1fr));
+}
+
+.interactive-phone {
+  padding: 14px;
+  background: #050914;
+}
+
+.interactive-phone-screen {
+  height: 100%;
+  display: grid;
+  align-content: start;
+  gap: 16px;
+  padding: 42px 18px 22px;
+  border-radius: 30px;
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.96), rgba(2, 6, 23, 0.98));
+}
+
+.interactive-phone-screen h3,
+.interactive-phone-screen p {
+  margin: 0;
+}
+
+.interactive-phone-screen h3 {
+  color: rgba(248, 250, 252, 0.98);
+  font-size: 1.45rem;
+  line-height: 1.1;
+}
+
+.interactive-phone-screen p {
+  color: rgba(203, 213, 225, 0.82);
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+
+.interactive-choice {
+  width: 100%;
+  display: grid;
+  gap: 4px;
+  padding: 13px 14px;
+  border: 1px solid rgba(45, 212, 191, 0.24);
+  border-radius: 16px;
+  background: rgba(20, 184, 166, 0.14);
+  color: rgba(240, 253, 250, 0.98);
+  text-align: left;
+}
+
+.interactive-choice span {
+  color: rgba(153, 246, 228, 0.8);
+  font-size: 0.72rem;
+}
+
+.interactive-choice.is-locked {
+  border-color: rgba(148, 163, 184, 0.12);
+  background: rgba(30, 41, 59, 0.42);
+  color: rgba(148, 163, 184, 0.78);
+}
+
+.interactive-event-log {
+  max-height: 170px;
+  overflow: auto;
 }
 
 @media (max-width: 980px) {

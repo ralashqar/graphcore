@@ -189,6 +189,14 @@ export type InteractiveReadiness = {
   nextAction: string
 }
 
+export type InteractivePrototypeModel = {
+  ready: boolean
+  manifest: InteractiveManifest | null
+  blockers: string[]
+  warnings: string[]
+  startState: InteractiveRuntimeState | null
+}
+
 export const INTERACTIVE_SYSTEM_NODE_TYPES = interactiveSystemNodeTypeSchema.options
 export const INTERACTIVE_SYSTEM_RELATIONSHIP_VERBS = interactiveRelationshipVerbSchema.options
 
@@ -420,7 +428,13 @@ export function evaluateInteractiveSystemReadiness(input: {
       }
     }
     for (const relationship of input.relationships.filter((entry) => entry.verb === 'requires_stat')) {
-      if (!statKeys.has(relationship.targetEntityKey)) {
+      const target = entityByKey.get(relationship.targetEntityKey)
+      if (target?.nodeType === 'choice_condition') {
+        const parsed = interactiveConditionSchema.safeParse(readInteractiveProperties(target).condition ?? {})
+        if (parsed.success && parsed.data.kind.startsWith('stat_') && !statKeys.has(parsed.data.targetKey)) {
+          addFinding(blockers, { category: 'stats', severity: 'blocker', message: `${target.name} references missing stat ${parsed.data.targetKey}.`, entityKey: target.key })
+        }
+      } else if (!statKeys.has(relationship.targetEntityKey)) {
         addFinding(blockers, { category: 'stats', severity: 'blocker', message: `${relationship.targetEntityKey} is required as a stat but is not defined.`, entityKey: relationship.sourceEntityKey })
       }
     }
@@ -745,4 +759,55 @@ export function moveToLocation(manifest: InteractiveManifest, state: Interactive
   const travelLink = manifest.travelLinks.find((entry) => entry.key === travelLinkKey)
   const destination = travelLink?.travelsToKeys[0]
   return destination ? applyInteractiveOutcome({ kind: 'travel_to', targetKey: destination }, state) : state
+}
+
+export function buildInteractivePrototypeModel(input: {
+  entities: WorldEntity[]
+  relationships: WorldRelationship[]
+  requiredSystems?: InteractiveSystemKind[]
+}): InteractivePrototypeModel {
+  const activeEntities = input.entities.filter((entity) => entity.status !== 'archived')
+  const readiness = evaluateInteractiveSystemReadiness({
+    entities: activeEntities,
+    relationships: input.relationships,
+    requiredSystems: input.requiredSystems,
+  })
+  const blockers = readiness.blockers.map((finding) => finding.message)
+  const warnings = readiness.warnings.map((finding) => finding.message)
+  const hasInitialConfig = activeEntities.some((entity) => entity.nodeType === 'player_initial_config')
+  if (!hasInitialConfig) blockers.push('Add a player_initial_config node to define the session start state.')
+
+  let manifest: InteractiveManifest | null = null
+  let startState: InteractiveRuntimeState | null = null
+  try {
+    manifest = compileInteractiveManifest({
+      entities: activeEntities,
+      relationships: input.relationships,
+      requiredSystems: input.requiredSystems,
+    })
+    startState = createInitialRuntimeState(manifest)
+    const hasStartTarget = Boolean(
+      startState.currentDialogueKey
+      || startState.currentSceneKey
+      || startState.currentSpotKey
+      || startState.currentLocationKey,
+    )
+    if (!hasStartTarget) blockers.push('Set a start dialogue, scene, spot, location, or screen in player_initial_config.')
+    const hasChoiceActions = manifest.choices.length > 0 && manifest.dialogueNodes.some((node) => node.choiceKeys.length > 0)
+    const hasTravelActions = manifest.travelLinks.some((link) => link.travelsToKeys.length > 0)
+    const hasMarketActions = manifest.markets.some((market) => market.offerKeys.length > 0) && manifest.tradeOffers.length > 0
+    if (!hasChoiceActions && !hasTravelActions && !hasMarketActions) {
+      blockers.push('Add at least one executable choice, travel link, or market offer.')
+    }
+  } catch (error) {
+    blockers.push(error instanceof Error ? error.message : String(error))
+  }
+
+  return {
+    ready: blockers.length === 0 && Boolean(manifest && startState),
+    manifest,
+    blockers: [...new Set(blockers)],
+    warnings: [...new Set(warnings)],
+    startState,
+  }
 }
