@@ -114,7 +114,10 @@ export const outputWorkflowNodeRegistry = {
     type: 'document_render',
     label: 'Document Render',
     description: 'Render Markdown or HTML into a document artifact.',
-    inputPorts: [{ id: 'source', label: 'Source', direction: 'input', valueType: 'text', multiple: false, required: true }],
+    inputPorts: [
+      { id: 'source', label: 'Source', direction: 'input', valueType: 'text', multiple: false, required: true },
+      { id: 'cover', label: 'Cover', direction: 'input', valueType: 'image', multiple: false, required: false },
+    ],
     outputPorts: [{ id: 'document', label: 'Document', direction: 'output', valueType: 'document', multiple: false, required: true }],
     providerBacked: false,
   },
@@ -385,6 +388,24 @@ export const outputWorkflowNodeUpdateResponseSchema = z.object({
   nodes: z.array(outputWorkflowNodeSchema).default([]),
 })
 
+export const outputWorkflowUpgradeRequestSchema = z.object({
+  projectId: z.string().min(1),
+  draftId: z.string().min(1),
+  workflowId: z.string().min(1),
+  preset: outputWorkflowPresetSchema.default('ebook_from_world'),
+}).strict()
+
+export const outputWorkflowUpgradeResponseSchema = z.object({
+  ok: z.literal(true),
+  workflow: outputWorkflowSchema,
+  nodes: z.array(outputWorkflowNodeSchema),
+  edges: z.array(outputWorkflowEdgeSchema),
+  addedNodeKeys: z.array(z.string()).default([]),
+  addedEdgeKeys: z.array(z.string()).default([]),
+  dirtiedNodeKeys: z.array(z.string()).default([]),
+  alreadyCurrent: z.boolean().default(false),
+})
+
 export const outputArtifactResponseSchema = z.object({
   ok: z.literal(true),
   artifact: outputArtifactSchema.nullable().default(null),
@@ -446,8 +467,8 @@ export function validateOutputWorkflowGraph(input: {
 export type OutputWorkflowExecutionPlan = {
   orderedNodeKeys: string[]
   levels: string[][]
-  incomingByNodeKey: Record<string, Array<Pick<OutputWorkflowEdge, 'sourceNodeKey' | 'targetNodeKey'> & Partial<Pick<OutputWorkflowEdge, 'sourcePort' | 'targetPort'>>>>
-  outgoingByNodeKey: Record<string, Array<Pick<OutputWorkflowEdge, 'sourceNodeKey' | 'targetNodeKey'> & Partial<Pick<OutputWorkflowEdge, 'sourcePort' | 'targetPort'>>>>
+  incomingByNodeKey: Record<string, Array<Pick<OutputWorkflowEdge, 'sourceNodeKey' | 'targetNodeKey'> & Partial<Pick<OutputWorkflowEdge, 'sourcePort' | 'targetPort' | 'metadata'>>>>
+  outgoingByNodeKey: Record<string, Array<Pick<OutputWorkflowEdge, 'sourceNodeKey' | 'targetNodeKey'> & Partial<Pick<OutputWorkflowEdge, 'sourcePort' | 'targetPort' | 'metadata'>>>>
   dependencyKeysByNodeKey: Record<string, string[]>
   diagnostics: string[]
 }
@@ -503,7 +524,7 @@ export function selectOutputWorkflowRunSubgraph<
 
 export function buildOutputWorkflowExecutionPlan(
   nodes: Array<Pick<z.infer<typeof outputWorkflowNodeSchema>, 'key'>>,
-  edges: Array<Pick<z.infer<typeof outputWorkflowEdgeSchema>, 'sourceNodeKey' | 'targetNodeKey'> & Partial<Pick<z.infer<typeof outputWorkflowEdgeSchema>, 'sourcePort' | 'targetPort'>>>,
+  edges: Array<Pick<z.infer<typeof outputWorkflowEdgeSchema>, 'sourceNodeKey' | 'targetNodeKey'> & Partial<Pick<z.infer<typeof outputWorkflowEdgeSchema>, 'sourcePort' | 'targetPort' | 'metadata'>>>,
 ): OutputWorkflowExecutionPlan {
   const diagnostics: string[] = []
   const nodeKeys = nodes.map((node) => node.key)
@@ -662,7 +683,7 @@ export type OutputWorkflowReadyQueueStatus = 'completed' | 'completed_with_error
 
 export async function runOutputWorkflowReadyQueue<TNode extends Pick<OutputWorkflowNode, 'key' | 'nodeType' | 'config' | 'metadata'>>(input: {
   nodes: TNode[]
-  edges: Array<Pick<OutputWorkflowEdge, 'sourceNodeKey' | 'sourcePort' | 'targetNodeKey' | 'targetPort'>>
+  edges: Array<Pick<OutputWorkflowEdge, 'sourceNodeKey' | 'sourcePort' | 'targetNodeKey' | 'targetPort'> & Partial<Pick<OutputWorkflowEdge, 'metadata'>>>
   globalMaxConcurrency?: number
   resourceClassMaxConcurrency?: Partial<Record<z.infer<typeof outputWorkflowResourceClassSchema>, number>>
   shouldCancel?: () => boolean | Promise<boolean>
@@ -739,6 +760,24 @@ export async function runOutputWorkflowReadyQueue<TNode extends Pick<OutputWorkf
     return [...descendants]
   }
 
+  const edgeIsOptional = (edge: Partial<Pick<OutputWorkflowEdge, 'metadata'>>) => (
+    readExecutionRecord(edge.metadata).optional === true
+    || readExecutionRecord(edge.metadata).optionalDependency === true
+  )
+
+  const collectRequiredDescendants = (sourceKey: string) => {
+    const descendants = new Set<string>()
+    const queue = [...(executionPlan.outgoingByNodeKey[sourceKey] ?? []).filter((edge) => !edgeIsOptional(edge))]
+    while (queue.length > 0) {
+      const edge = queue.shift()!
+      const key = edge.targetNodeKey
+      if (descendants.has(key)) continue
+      descendants.add(key)
+      queue.push(...(executionPlan.outgoingByNodeKey[key] ?? []).filter((nextEdge) => !edgeIsOptional(nextEdge)))
+    }
+    return [...descendants]
+  }
+
   const canLaunch = (node: TNode) => {
     const execution = getOutputWorkflowNodeExecutionMetadata(node)
     if (running.size >= globalMaxConcurrency) return false
@@ -781,13 +820,18 @@ export async function runOutputWorkflowReadyQueue<TNode extends Pick<OutputWorkf
 
     let launched = false
     for (const key of [...pending]) {
+      const incoming = executionPlan.incomingByNodeKey[key] ?? []
       const dependencies = executionPlan.dependencyKeysByNodeKey[key] ?? []
-      const failedDependency = dependencies.find((dependencyKey) => failed.has(dependencyKey) || cancelled.has(dependencyKey))
+      const failedDependency = incoming.find((edge) => !edgeIsOptional(edge) && (failed.has(edge.sourceNodeKey) || cancelled.has(edge.sourceNodeKey)))?.sourceNodeKey
       if (failedDependency) {
         await markCancelled(key, 'blocked_by_failed_dependency', failedDependency)
         continue
       }
-      if (!dependencies.every((dependencyKey) => completed.has(dependencyKey))) continue
+      if (!incoming.every((edge) => (
+        completed.has(edge.sourceNodeKey)
+        || (edgeIsOptional(edge) && (failed.has(edge.sourceNodeKey) || cancelled.has(edge.sourceNodeKey)))
+      ))) continue
+      if (incoming.length === 0 && !dependencies.every((dependencyKey) => completed.has(dependencyKey))) continue
       const node = nodeByKey.get(key)
       if (!node || !canLaunch(node)) continue
       await launch(node)
@@ -817,7 +861,8 @@ export async function runOutputWorkflowReadyQueue<TNode extends Pick<OutputWorkf
       await input.onNodeFailed?.({ node: settledNode, orderIndex, error: settled.error, blockedDependents })
       if (execution.continueOnError) {
         hadContinuableFailure = true
-        for (const key of blockedDependents) await markCancelled(key, 'blocked_by_failed_dependency', settled.key)
+        const requiredBlockedDependents = collectRequiredDescendants(settled.key).filter((key) => pending.has(key))
+        for (const key of requiredBlockedDependents) await markCancelled(key, 'blocked_by_failed_dependency', settled.key)
         continue
       }
       for (const key of [...pending]) await markCancelled(key, key === settled.key ? 'failed' : 'blocked_by_failed_dependency', settled.key)
@@ -902,14 +947,14 @@ function nodeBase(input: {
   }
 }
 
-function edgeBase(sourceNodeKey: string, sourcePort: string, targetNodeKey: string, targetPort: string) {
+function edgeBase(sourceNodeKey: string, sourcePort: string, targetNodeKey: string, targetPort: string, metadata: Record<string, unknown> = {}) {
   return {
     key: `${sourceNodeKey}.${sourcePort}->${targetNodeKey}.${targetPort}`,
     sourceNodeKey,
     sourcePort,
     targetNodeKey,
     targetPort,
-    metadata: {},
+    metadata,
   }
 }
 
@@ -1037,6 +1082,45 @@ export function buildEbookFromWorldPlan(request: z.infer<typeof outputWorkflowPl
       inputs: { prompt: 'Create per-chapter writing briefs from the outline and selected sequence units.' },
       config: { purpose: 'chapter_plan', skillKeys: ['chapter_scene_structure', 'provider_prompt_hygiene'], guidanceMode: 'append', execution: { resourceClass: 'llm' } },
     }),
+    nodeBase({
+      key: 'cover_prompt',
+      nodeType: 'text_llm',
+      label: 'Cover Prompt',
+      x: 640,
+      y: 360,
+      inputs: { prompt: 'Design a finished front cover image prompt for this ebook, including exact title typography.' },
+      config: {
+        purpose: 'ebook_cover_prompt',
+        skillKeys: ['image_prompt_visual_only', 'provider_prompt_hygiene'],
+        autoSkillTags: ['image_prompt', 'visual_only', 'provider_hygiene'],
+        guidanceMode: 'strict',
+        execution: { resourceClass: 'llm', continueOnError: true },
+      },
+    }),
+    nodeBase({
+      key: 'cover_image',
+      nodeType: 'image_generation',
+      label: 'Cover Image',
+      x: 920,
+      y: 360,
+      config: {
+        purpose: 'ebook_cover_image',
+        role: 'ebook_cover',
+        model: 'openai/gpt-image-2',
+        quality: 'high',
+        outputFormat: 'png',
+        imageSize: { width: 1792, height: 2688 },
+        skillKeys: ['image_prompt_visual_only', 'entity_reference_fidelity', 'environment_staging', 'provider_prompt_hygiene'],
+        autoSkillTags: ['image_prompt', 'visual_only', 'entity_reference', 'environment', 'provider_hygiene'],
+        guidanceMode: 'strict',
+        execution: {
+          resourceClass: 'image',
+          groupKey: 'ebook_cover',
+          maxConcurrency: 1,
+          continueOnError: true,
+        },
+      },
+    }),
     ...chapterNodes,
     nodeBase({
       key: 'chapter_assembly',
@@ -1094,6 +1178,10 @@ export function buildEbookFromWorldPlan(request: z.infer<typeof outputWorkflowPl
     edgeBase('world_context', 'context', 'chapter_plan', 'context'),
     edgeBase('skill_context', 'guidance', 'chapter_plan', 'guidance'),
     edgeBase('outline', 'text', 'chapter_plan', 'outline'),
+    edgeBase('world_context', 'context', 'cover_prompt', 'context'),
+    edgeBase('skill_context', 'guidance', 'cover_prompt', 'guidance'),
+    edgeBase('cover_prompt', 'text', 'cover_image', 'prompt'),
+    edgeBase('skill_context', 'guidance', 'cover_image', 'guidance'),
     ...chapterNodes.flatMap((node) => [
       edgeBase('world_context', 'context', node.key, 'context'),
       edgeBase('skill_context', 'guidance', node.key, 'guidance'),
@@ -1105,6 +1193,7 @@ export function buildEbookFromWorldPlan(request: z.infer<typeof outputWorkflowPl
     edgeBase('consistency_editor', 'text', 'front_back_matter', 'source'),
     edgeBase('skill_context', 'guidance', 'front_back_matter', 'guidance'),
     edgeBase('front_back_matter', 'text', 'document_render', 'source'),
+    edgeBase('cover_image', 'image', 'document_render', 'cover', { optional: true }),
     edgeBase('document_render', 'document', 'artifact', 'input'),
   ]
   const graphValidation = validateOutputWorkflowGraph({ nodes, edges, worldWiki })
@@ -1159,3 +1248,4 @@ export type OutputWorkflowRunStatusResponse = z.infer<typeof outputWorkflowRunSt
 export type OutputWorkflowCancelResponse = z.infer<typeof outputWorkflowCancelResponseSchema>
 export type OutputWorkflowNodeUpdateRequest = z.infer<typeof outputWorkflowNodeUpdateRequestSchema>
 export type OutputWorkflowNodeUpdateResponse = z.infer<typeof outputWorkflowNodeUpdateResponseSchema>
+export type OutputWorkflowUpgradeResponse = z.infer<typeof outputWorkflowUpgradeResponseSchema>

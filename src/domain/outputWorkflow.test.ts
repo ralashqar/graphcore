@@ -363,6 +363,10 @@ test('ebook preset binds sequence units and creates PDF artifact chain', () => {
   assert.ok(plan.nodes.some((node) => node.nodeType === 'output_artifact'))
   assert.ok(plan.nodes.some((node) => node.key === 'chapter_001_prose'))
   assert.ok(plan.nodes.some((node) => node.key === 'chapter_002_prose'))
+  assert.ok(plan.nodes.some((node) => node.key === 'cover_prompt' && node.nodeType === 'text_llm'))
+  assert.ok(plan.nodes.some((node) => node.key === 'cover_image' && node.nodeType === 'image_generation'))
+  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cover_prompt' && edge.targetNodeKey === 'cover_image'))
+  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cover_image' && edge.targetNodeKey === 'document_render' && edge.targetPort === 'cover'))
   assert.equal(plan.nodes.some((node) => node.key.includes('_section_')), false)
   assert.equal(validateOutputWorkflowGraph({
     nodes: plan.nodes,
@@ -387,6 +391,8 @@ test('ebook preset fans full chapter prose nodes out before chapter assembly', (
 
   assert.ok(chapterProseLevel?.includes('chapter_001_prose'))
   assert.ok(chapterProseLevel?.includes('chapter_002_prose'))
+  assert.deepEqual(executionPlan.dependencyKeysByNodeKey.cover_image.sort(), ['cover_prompt', 'skill_context'])
+  assert.ok(executionPlan.dependencyKeysByNodeKey.document_render.includes('cover_image'))
   assert.equal(defaultOutputWorkflowConcurrency.global, 8)
   assert.equal(defaultOutputWorkflowConcurrency.resourceClasses.llm, 8)
   assert.equal(chapterNode ? getOutputWorkflowNodeExecutionMetadata(chapterNode).maxConcurrency : undefined, 8)
@@ -396,6 +402,39 @@ test('ebook preset fans full chapter prose nodes out before chapter assembly', (
     'skill_context',
     'world_context',
   ])
+})
+
+test('optional cover branch failure still allows document render to run with errors', async () => {
+  const nodes = [
+    { key: 'manuscript', nodeType: 'text_llm' as const, config: {}, metadata: {} },
+    { key: 'cover', nodeType: 'image_generation' as const, config: { execution: { continueOnError: true } }, metadata: {} },
+    { key: 'document', nodeType: 'document_render' as const, config: {}, metadata: {} },
+  ]
+  const edges = [
+    { sourceNodeKey: 'manuscript', sourcePort: 'text', targetNodeKey: 'document', targetPort: 'source', metadata: {} },
+    { sourceNodeKey: 'cover', sourcePort: 'image', targetNodeKey: 'document', targetPort: 'cover', metadata: { optional: true } },
+  ]
+  const completed: string[] = []
+  const failed: string[] = []
+
+  const result = await runOutputWorkflowReadyQueue({
+    nodes,
+    edges,
+    executeNode: async ({ node }) => {
+      if (node.key === 'cover') throw new Error('cover failed')
+      return { outputs: { text: node.key } }
+    },
+    onNodeComplete: ({ node }) => {
+      completed.push(node.key)
+    },
+    onNodeFailed: ({ node }) => {
+      failed.push(node.key)
+    },
+  })
+
+  assert.equal(result.status, 'completed_with_errors')
+  assert.deepEqual(failed, ['cover'])
+  assert.ok(completed.includes('document'))
 })
 
 test('ebook nodes carry guidance config and invalid skill keys produce diagnostics', () => {

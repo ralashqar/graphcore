@@ -147,6 +147,8 @@ import {
   outputWorkflowSchema,
   outputWorkflowStartRequestSchema,
   outputWorkflowStartResponseSchema,
+  outputWorkflowUpgradeRequestSchema,
+  outputWorkflowUpgradeResponseSchema,
   type OutputArtifact,
   type OutputWorkflow,
   type OutputWorkflowCancelResponse,
@@ -159,6 +161,7 @@ import {
   type OutputWorkflowRunStep,
   type OutputWorkflowRunStatusResponse,
   type OutputWorkflowStartResponse,
+  type OutputWorkflowUpgradeResponse,
 } from '../domain/outputWorkflow'
 import { buildUrlSourceContextFromExtractionResponse } from '../domain/onboardingSource'
 import {
@@ -7482,6 +7485,36 @@ export async function updateOutputWorkflowNode(
     throw new Error(await readFunctionsErrorMessage(response.error))
   }
   const parsed = outputWorkflowNodeUpdateResponseSchema.parse(response.data)
+  await clearProjectCache(snapshot.project.id, snapshot.draft.id)
+  return parsed
+}
+
+export async function upgradeOutputWorkflowPreset(
+  snapshot: ProjectSnapshot,
+  request: {
+    workflowId: string
+    preset?: 'ebook_from_world'
+  },
+): Promise<OutputWorkflowUpgradeResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before upgrading an output workflow.')
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Output workflow upgrades require a live Supabase-backed draft.')
+  }
+  const payload = outputWorkflowUpgradeRequestSchema.parse({
+    projectId: snapshot.project.id,
+    draftId: snapshot.draft.id,
+    workflowId: request.workflowId,
+    preset: request.preset ?? 'ebook_from_world',
+  })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'upgrade-output-workflow-preset',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  const parsed = outputWorkflowUpgradeResponseSchema.parse(response.data)
   await clearProjectCache(snapshot.project.id, snapshot.draft.id)
   return parsed
 }

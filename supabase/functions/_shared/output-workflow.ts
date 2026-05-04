@@ -42,6 +42,7 @@ import {
 const OUTPUT_WORKFLOW_EXECUTOR_VERSION = 'ebook-full-chapter-background-v4'
 const DEFAULT_CHAPTER_PROSE_TIMEOUT_MS = 3_600_000
 const DEFAULT_CHAPTER_PROSE_ATTEMPTS = 2
+const FAL_QUEUE_BASE_URL = 'https://queue.fal.run'
 
 export type OutputDocumentRenderer = (input: {
   markdown: string
@@ -50,6 +51,15 @@ export type OutputDocumentRenderer = (input: {
   provenance: string
   generatedAt: string
   fileName: string
+  coverImage?: {
+    bytes: Uint8Array
+    mimeType: string
+    assetKey?: string
+    storagePath?: string
+    width?: number | null
+    height?: number | null
+    prompt?: string
+  } | null
   run: OutputWorkflowRun
   workflow: OutputWorkflow
   node: OutputWorkflowNode
@@ -64,6 +74,7 @@ type DatabaseClient = {
   storage: {
     from: (bucket: string) => {
       upload: (path: string, body: Blob | Uint8Array | ArrayBuffer, options?: Record<string, unknown>) => Promise<{ data: unknown; error: { message: string } | null }>
+      download: (path: string) => Promise<{ data: Blob | null; error: { message: string } | null }>
     }
   }
 }
@@ -542,6 +553,17 @@ function readFirstUpstreamArray(upstream: Record<string, Record<string, unknown>
   return []
 }
 
+function readFirstUpstreamImage(upstream: Record<string, Record<string, unknown>>, fields = ['coverImage', 'image']) {
+  for (const outputs of Object.values(upstream)) {
+    for (const field of fields) {
+      const value = outputs[field]
+      const record = asRecord(value)
+      if (readText(record.assetKey) || readText(record.storagePath) || readText(record.url)) return record
+    }
+  }
+  return null
+}
+
 function readUpstreamGuidanceBundle(upstream: Record<string, Record<string, unknown>>) {
   for (const outputs of Object.values(upstream)) {
     const candidate = outputs.guidance ?? outputs.guidanceBundle
@@ -658,6 +680,153 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+function outputWorkflowImageModel(configModel?: unknown) {
+  const configured = readText(configModel) || Deno.env.get('OUTPUT_WORKFLOW_IMAGE_MODEL')?.trim() || 'openai/gpt-image-2'
+  return configured === 'gpt-image-2' ? 'openai/gpt-image-2' : configured
+}
+
+function outputWorkflowFalTimeoutMs() {
+  const raw = Deno.env.get('OUTPUT_WORKFLOW_FAL_TIMEOUT_MS') ?? Deno.env.get('VISUAL_GENERATION_FAL_TIMEOUT_MS')
+  const parsed = raw ? Number(raw) : NaN
+  return Number.isFinite(parsed) && parsed > 0 ? Math.max(60_000, Math.floor(parsed)) : 1_200_000
+}
+
+function outputWorkflowFalPollIntervalMs() {
+  const raw = Deno.env.get('OUTPUT_WORKFLOW_FAL_POLL_INTERVAL_MS') ?? Deno.env.get('VISUAL_GENERATION_FAL_POLL_INTERVAL_MS')
+  const parsed = raw ? Number(raw) : NaN
+  return Number.isFinite(parsed) && parsed > 0 ? Math.max(1_000, Math.floor(parsed)) : 3_000
+}
+
+function buildFalHeaders(apiKey: string) {
+  return new Headers({
+    Authorization: `Key ${apiKey}`,
+    'Content-Type': 'application/json',
+  })
+}
+
+async function fetchFalJson(url: string, init: RequestInit) {
+  const response = await fetch(url, init)
+  const rawText = await response.text().catch(() => '')
+  let body: Record<string, unknown> = {}
+  if (rawText.trim()) {
+    try {
+      body = JSON.parse(rawText) as Record<string, unknown>
+    } catch {
+      body = {}
+    }
+  }
+  return { response, body, rawText }
+}
+
+function falErrorMessage(body: Record<string, unknown>, fallback: string) {
+  if (typeof body.detail === 'string' && body.detail.trim()) return body.detail.trim()
+  if (typeof body.error === 'string' && body.error.trim()) return body.error.trim()
+  if (typeof body.message === 'string' && body.message.trim()) return body.message.trim()
+  return fallback
+}
+
+function normalizeFalResultBody(body: Record<string, unknown>) {
+  return body && typeof body.response === 'object' && body.response !== null
+    ? body.response as Record<string, unknown>
+    : body
+}
+
+function extractFalImageRecord(value: unknown): Record<string, unknown> | null {
+  const record = asRecord(value)
+  const images = Array.isArray(record.images) ? record.images : []
+  for (const image of images) {
+    if (typeof image === 'string' && /^https?:\/\//i.test(image)) return { url: image }
+    const imageRecord = asRecord(image)
+    const url = readText(imageRecord.url)
+    if (url) return imageRecord
+  }
+  for (const key of ['image', 'output', 'response', 'data', 'result']) {
+    const nested = extractFalImageRecord(record[key])
+    if (nested) return nested
+  }
+  const directUrl = readText(record.url) || readText(record.output_url)
+  return directUrl ? { url: directUrl } : null
+}
+
+function normalizeImageSize(value: unknown) {
+  const record = asRecord(value)
+  const width = Number(record.width)
+  const height = Number(record.height)
+  if (Number.isInteger(width) && Number.isInteger(height) && width > 0 && height > 0) {
+    return { width, height }
+  }
+  const text = readText(value)
+  return text || { width: 1792, height: 2688 }
+}
+
+async function submitFalImageRequest(input: {
+  apiKey: string
+  model: string
+  prompt: string
+  imageSize: unknown
+  quality: string
+  outputFormat: string
+}) {
+  return fetchFalJson(`${FAL_QUEUE_BASE_URL}/${input.model}`, {
+    method: 'POST',
+    headers: buildFalHeaders(input.apiKey),
+    body: JSON.stringify({
+      prompt: input.prompt,
+      image_size: normalizeImageSize(input.imageSize),
+      quality: input.quality,
+      num_images: 1,
+      output_format: input.outputFormat,
+      sync_mode: false,
+    }),
+  })
+}
+
+async function getFalStatus(input: {
+  apiKey: string
+  model: string
+  requestId: string
+  statusUrl?: string | null
+}) {
+  const url = input.statusUrl
+    ? new URL(input.statusUrl)
+    : new URL(`${FAL_QUEUE_BASE_URL}/${input.model}/requests/${input.requestId}/status`)
+  url.searchParams.set('logs', '1')
+  return fetchFalJson(url.toString(), {
+    method: 'GET',
+    headers: buildFalHeaders(input.apiKey),
+  })
+}
+
+async function getFalResult(input: {
+  apiKey: string
+  model: string
+  requestId: string
+  responseUrl?: string | null
+}) {
+  const candidates = [
+    input.responseUrl,
+    `${FAL_QUEUE_BASE_URL}/${input.model}/requests/${input.requestId}/response`,
+    `${FAL_QUEUE_BASE_URL}/${input.model}/requests/${input.requestId}`,
+  ].filter((url, index, urls): url is string => (
+    typeof url === 'string' && url.trim().length > 0 && urls.indexOf(url) === index
+  ))
+
+  let lastResult: Awaited<ReturnType<typeof fetchFalJson>> | null = null
+  for (const url of candidates) {
+    const result = await fetchFalJson(url, {
+      method: 'GET',
+      headers: buildFalHeaders(input.apiKey),
+    })
+    lastResult = result
+    if (result.response.ok) return result
+    if (result.response.status !== 404 && result.response.status !== 405) return result
+  }
+  return lastResult ?? fetchFalJson(`${FAL_QUEUE_BASE_URL}/${input.model}/requests/${input.requestId}/response`, {
+    method: 'GET',
+    headers: buildFalHeaders(input.apiKey),
+  })
+}
+
 class WorkflowCancelledError extends Error {
   workflowCancelled = true
 
@@ -736,6 +905,63 @@ function buildChapterSectionPlan(input: {
     sequenceUnitKey: input.sequenceUnitKey,
     sequenceUnitName: input.sequenceUnitName,
   }))
+}
+
+function buildEbookCoverPromptInstruction(input: {
+  context: Record<string, unknown>
+  prompt: string
+  guidance: OutputGuidanceBundle
+}) {
+  const wiki = asRecord(input.context.wiki)
+  const title = titleFromContext(input.context)
+  const logline = readText(wiki.logline)
+  const synopsis = readText(wiki.synopsis)
+  const genre = readText(wiki.genre)
+  const coreConflict = readText(wiki.coreConflict)
+  const artStyleDescription = readText(wiki.artStyleDescription)
+  const toneTags = Array.isArray(wiki.toneTags) ? wiki.toneTags.filter((entry): entry is string => typeof entry === 'string') : []
+  const visualMotifs = Array.isArray(wiki.visualMotifs) ? wiki.visualMotifs.filter((entry): entry is string => typeof entry === 'string') : []
+  const entities = Array.isArray(input.context.entities) ? input.context.entities.map(asRecord).slice(0, 14) : []
+  const sequenceUnits = Array.isArray(input.context.sequenceUnits) ? input.context.sequenceUnits.map(asRecord).slice(0, 8) : []
+  const entityVisuals = entities.map((entity) => ({
+    name: readText(entity.name),
+    type: readText(entity.nodeType ?? entity.node_type),
+    summary: readText(entity.summary),
+    visualDescription: readText(asRecord(entity.metadata).visualDescription),
+  })).filter((entry) => entry.name || entry.summary || entry.visualDescription)
+
+  return [
+    'Create one production-ready GPT Image 2 prompt for a finished ebook front cover.',
+    `Exact title text to render on the cover: "${title}"`,
+    'The generated image should be a complete front cover design with title typography included in the image.',
+    'Use a 2:3 vertical book-cover composition suitable for a 6x9 ebook PDF.',
+    logline ? `Logline: ${logline}` : '',
+    genre ? `Genre: ${genre}` : '',
+    toneTags.length > 0 ? `Tone tags: ${toneTags.join(', ')}` : '',
+    coreConflict ? `Core conflict: ${coreConflict}` : '',
+    artStyleDescription ? `Art direction: ${artStyleDescription}` : '',
+    visualMotifs.length > 0 ? `Visual motifs: ${visualMotifs.join(', ')}` : '',
+    synopsis ? `Synopsis context, for cover direction only: ${synopsis}` : '',
+    input.prompt ? `User brief: ${input.prompt}` : '',
+    guidanceMarkdown(input.guidance),
+    '',
+    'World context to translate into visible cover design. Do not mention internal keys in the final image prompt:',
+    compactForPrompt({
+      entities: entityVisuals,
+      sequenceUnits: sequenceUnits.map((unit) => ({
+        name: readText(unit.name),
+        summary: readText(unit.summary),
+        sequence: readEntitySequence(unit),
+      })),
+    }, 8000),
+    '',
+    'Output requirements:',
+    '- Return only the final image-generation prompt, no notes or markdown.',
+    '- Include the exact title text and ask for clean, legible typography.',
+    '- Describe cover composition, subject, setting, typography placement, color palette, lighting, material finish, and genre cues.',
+    '- Avoid GraphCore wording, workflow/node terminology, schema labels, hidden lore, IDs, or non-visual explanation.',
+    '- Avoid overstuffing the cover. Prefer one strong readable cover idea over a collage of every story element.',
+  ].filter(Boolean).join('\n')
 }
 
 function openingStrategyForSection(section: Record<string, unknown>, sectionNumber: number) {
@@ -1169,6 +1395,182 @@ async function uploadBytes(client: DatabaseClient, path: string, bytes: Uint8Arr
   if (response.error) throw new Error(response.error.message)
 }
 
+async function downloadRemoteBytes(url: string) {
+  const response = await fetch(url)
+  if (!response.ok) throw new Error(`Generated Fal image could not be downloaded (${response.status}).`)
+  return new Uint8Array(await response.arrayBuffer())
+}
+
+async function downloadProjectAssetBytes(client: DatabaseClient, storagePath: string) {
+  const response = await client.storage.from('project-assets').download(storagePath)
+  if (response.error || !response.data) throw new Error(response.error?.message ?? `Project asset ${storagePath} could not be downloaded.`)
+  return new Uint8Array(await response.data.arrayBuffer())
+}
+
+async function waitForOutputFalImage(input: {
+  priorStep?: OutputWorkflowRunStep | null
+  apiKey: string
+  model: string
+  prompt: string
+  imageSize: unknown
+  quality: string
+  outputFormat: string
+  shouldCancel?: () => Promise<boolean>
+  onProgress?: (progress: {
+    providerRequestId: string
+    providerStatus: string
+    providerMode: string
+    lastProviderPollAt: string
+    statusUrl?: string | null
+    responseUrl?: string | null
+  }) => Promise<void>
+}) {
+  const priorMetadata = asRecord(input.priorStep?.metadata)
+  let requestId = readText(input.priorStep?.providerRequestId) || readText(priorMetadata.falRequestId)
+  let statusUrl: string | null = readText(priorMetadata.falStatusUrl) || null
+  let responseUrl: string | null = readText(priorMetadata.falResponseUrl) || null
+
+  if (!requestId) {
+    const submit = await submitFalImageRequest({
+      apiKey: input.apiKey,
+      model: input.model,
+      prompt: input.prompt,
+      imageSize: input.imageSize,
+      quality: input.quality,
+      outputFormat: input.outputFormat,
+    })
+    if (!submit.response.ok) {
+      throw new Error(falErrorMessage(submit.body, `Fal image submission failed with HTTP ${submit.response.status}.`))
+    }
+    requestId = readText(submit.body.request_id)
+    statusUrl = readText(submit.body.status_url) || null
+    responseUrl = readText(submit.body.response_url) || null
+    if (!requestId) throw new Error('Fal did not return a request id for the output image generation node.')
+  }
+
+  await input.onProgress?.({
+    providerRequestId: requestId,
+    providerStatus: 'IN_QUEUE',
+    providerMode: 'fal_queue',
+    lastProviderPollAt: new Date().toISOString(),
+    statusUrl,
+    responseUrl,
+  })
+
+  const timeoutMs = outputWorkflowFalTimeoutMs()
+  const pollIntervalMs = outputWorkflowFalPollIntervalMs()
+  const startedAt = Date.now()
+
+  while (Date.now() - startedAt < timeoutMs) {
+    if (await input.shouldCancel?.()) {
+      throw new WorkflowCancelledError()
+    }
+    const status = await getFalStatus({
+      apiKey: input.apiKey,
+      model: input.model,
+      requestId,
+      statusUrl,
+    })
+    const providerStatus = readText(status.body.status) || 'UNKNOWN'
+    await input.onProgress?.({
+      providerRequestId: requestId,
+      providerStatus,
+      providerMode: 'fal_queue',
+      lastProviderPollAt: new Date().toISOString(),
+      statusUrl,
+      responseUrl,
+    })
+
+    if (providerStatus === 'COMPLETED') {
+      const result = await getFalResult({
+        apiKey: input.apiKey,
+        model: input.model,
+        requestId,
+        responseUrl,
+      })
+      if (!result.response.ok) {
+        throw new Error(falErrorMessage(result.body, `Fal image result failed with HTTP ${result.response.status}.`))
+      }
+      const resultBody = normalizeFalResultBody(result.body)
+      const image = extractFalImageRecord(resultBody) ?? extractFalImageRecord(result.body)
+      const imageUrl = readText(image?.url)
+      if (!imageUrl) throw new Error('Fal completed the output image request but did not return an image URL.')
+      return {
+        requestId,
+        statusUrl,
+        responseUrl,
+        imageUrl,
+        width: Number(image?.width ?? 0) || null,
+        height: Number(image?.height ?? 0) || null,
+        mimeType: readText(image?.content_type) || `image/${input.outputFormat}`,
+        fileName: readText(image?.file_name),
+        fileSize: Number(image?.file_size ?? 0) || null,
+        resultBody,
+      }
+    }
+
+    const errorMessage = falErrorMessage(status.body, '')
+    if (errorMessage && providerStatus !== 'IN_PROGRESS' && providerStatus !== 'IN_QUEUE') {
+      throw new Error(errorMessage)
+    }
+
+    await sleep(pollIntervalMs)
+  }
+
+  throw new Error(`Fal image request timed out before completion after ${timeoutMs}ms.`)
+}
+
+async function registerImageArtifact(input: {
+  client: DatabaseClient
+  run: OutputWorkflowRun
+  workflow: OutputWorkflow
+  node: OutputWorkflowNode
+  assetKey: string
+  storagePath: string
+  name: string
+  summary: string
+  mimeType: string
+  metadata: Record<string, unknown>
+}) {
+  const assetResponse = await input.client
+    .from('project_assets')
+    .upsert({
+      project_id: input.run.projectId,
+      key: input.assetKey,
+      name: input.name,
+      kind: 'image',
+      mime_type: input.mimeType,
+      storage_path: input.storagePath,
+      metadata: input.metadata,
+      llm_hints: {},
+    }, { onConflict: 'project_id,key' })
+    .select('id, key')
+    .single()
+  if (assetResponse.error || !assetResponse.data) throw new Error(assetResponse.error?.message ?? 'Failed to register output image asset.')
+
+  const artifactKey = `${input.assetKey}.artifact`
+  const artifactResponse = await input.client
+    .from('output_artifacts')
+    .upsert({
+      project_id: input.run.projectId,
+      draft_id: input.run.draftId,
+      workflow_id: input.workflow.id,
+      run_id: input.run.id,
+      node_id: input.node.id,
+      key: artifactKey,
+      name: input.name,
+      kind: 'image',
+      asset_key: input.assetKey,
+      mime_type: input.mimeType,
+      summary: input.summary,
+      metadata: input.metadata,
+    }, { onConflict: 'draft_id,key' })
+    .select(outputArtifactSelect)
+    .single()
+  if (artifactResponse.error || !artifactResponse.data) throw new Error(artifactResponse.error?.message ?? 'Failed to register output image artifact.')
+  return mapOutputArtifactRow(artifactResponse.data as OutputArtifactRow)
+}
+
 async function registerDocumentArtifact(input: {
   client: DatabaseClient
   run: OutputWorkflowRun
@@ -1176,6 +1578,7 @@ async function registerDocumentArtifact(input: {
   node: OutputWorkflowNode
   markdown: string
   guidance?: OutputGuidanceBundle | null
+  coverImage?: Record<string, unknown> | null
   documentRenderer?: OutputDocumentRenderer | null
 }) {
   const slug = slugify(input.workflow.name)
@@ -1207,6 +1610,17 @@ async function registerDocumentArtifact(input: {
     provenance,
     generatedAt,
     fileName: `${slug}.pdf`,
+    coverImage: input.coverImage && readText(input.coverImage.storagePath)
+      ? {
+        bytes: await downloadProjectAssetBytes(input.client, readText(input.coverImage.storagePath)),
+        mimeType: readText(input.coverImage.mimeType) || 'image/png',
+        assetKey: readText(input.coverImage.assetKey),
+        storagePath: readText(input.coverImage.storagePath),
+        width: Number(input.coverImage.width ?? 0) || null,
+        height: Number(input.coverImage.height ?? 0) || null,
+        prompt: readText(input.coverImage.prompt),
+      }
+      : null,
     run: input.run,
     workflow: input.workflow,
     node: input.node,
@@ -1237,6 +1651,14 @@ async function registerDocumentArtifact(input: {
     skillVersions: input.guidance?.skillVersions ?? {},
     guidanceHash: input.guidance?.guidanceHash ?? '',
     resolvedGuidancePreview: input.guidance?.resolvedGuidancePreview ?? '',
+    cover: input.coverImage ? {
+      assetKey: readText(input.coverImage.assetKey),
+      storagePath: readText(input.coverImage.storagePath),
+      mimeType: readText(input.coverImage.mimeType),
+      width: Number(input.coverImage.width ?? 0) || null,
+      height: Number(input.coverImage.height ?? 0) || null,
+      prompt: readText(input.coverImage.prompt),
+    } : null,
     render: renderMetadata,
   }
   const assetResponse = await input.client
@@ -1411,6 +1833,47 @@ async function executeNode(input: {
         const outputs = { chapterPlan, plan: chapterPlan, text, guidance }
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-chapter-plan-v1' }
       }
+      if (purpose === 'ebook_cover_prompt') {
+        const model = outputWorkflowTextModel()
+        const response = await runOpenAiResponses({
+          model,
+          instructions: [
+            'You are a senior publishing art director writing prompts for GPT Image 2.',
+            'Return one concise, visual, production-ready image prompt for a finished ebook front cover.',
+            'The prompt may request title typography in the image, but must not mention workflow internals.',
+          ].join(' '),
+          input: buildEbookCoverPromptInstruction({
+            context,
+            prompt: readText(input.node.inputs.prompt) || input.run.prompt,
+            guidance,
+          }),
+          maxOutputTokens: 1100,
+          metadata: {
+            graphcore_task: 'output_workflow_ebook_cover_prompt',
+            graphcore_node_key: input.node.key,
+          },
+          timeoutMs: 120_000,
+        })
+        if (!response.response.ok) {
+          throw new Error(openAiErrorMessage(response, `OpenAI ebook cover prompt failed with status ${response.response.status}.`))
+        }
+        const coverPrompt = response.outputText.trim()
+        if (!coverPrompt) throw new Error('OpenAI returned an empty ebook cover prompt.')
+        const outputs = {
+          prompt: coverPrompt,
+          text: coverPrompt,
+          guidance,
+          usage: asRecord(response.body.usage),
+        }
+        return {
+          inputHash: input.inputHash,
+          outputHash: hashOutputWorkflowValue(outputs),
+          outputs,
+          provider: 'openai',
+          model,
+          providerRequestId: readText(response.body.id) || response.response.headers.get('x-request-id') || null,
+        }
+      }
       if (purpose === 'chapter_section_plan') {
         const config = asRecord(input.node.config)
         const chapterNumber = Number(config.chapterNumber ?? 1)
@@ -1582,6 +2045,149 @@ async function executeNode(input: {
       const outputs = { markdown, text: markdown, guidance }
       return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-editor-v1' }
     }
+    case 'image_generation': {
+      const config = asRecord(input.node.config)
+      const purpose = readText(config.purpose) || 'image_prompt'
+      const role = readText(config.role) || purpose
+      const guidance = resolveGuidanceForExecution({ run: input.run, node: input.node, upstream: input.upstream })
+      const prompt = readFirstUpstreamText(input.upstream, ['prompt', 'text'])
+        || readText(input.node.inputs.prompt)
+        || input.run.prompt
+      if (!prompt) throw new Error('Image generation node is missing a prompt.')
+      const falApiKey = Deno.env.get('FAL_KEY')
+      if (!falApiKey) throw new Error('FAL_KEY is not configured for the Fly output workflow worker.')
+      const model = outputWorkflowImageModel(config.model)
+      const quality = readText(config.quality) || Deno.env.get('OUTPUT_WORKFLOW_IMAGE_QUALITY')?.trim() || 'high'
+      const outputFormat = readText(config.outputFormat) || 'png'
+      const imageSize = config.imageSize ?? { width: 1792, height: 2688 }
+      const providerPrompt = [
+        prompt,
+        '',
+        guidanceMarkdown(guidance),
+        '',
+        'Provider requirements:',
+        '- Generate one finished image only.',
+        '- Keep the result visual and artifact-focused.',
+        '- Do not include GraphCore, workflow, node, schema, or internal ID wording in visible text.',
+      ].filter(Boolean).join('\n')
+
+      const falResult = await waitForOutputFalImage({
+        priorStep: input.priorStep,
+        apiKey: falApiKey,
+        model,
+        prompt: providerPrompt,
+        imageSize,
+        quality,
+        outputFormat,
+        shouldCancel: input.shouldCancel,
+        onProgress: async (progress) => {
+          await input.onProgress?.({
+            provider: 'fal',
+            model,
+            providerRequestId: progress.providerRequestId,
+            metadata: {
+              providerMode: progress.providerMode,
+              providerStatus: progress.providerStatus,
+              lastProviderPollAt: progress.lastProviderPollAt,
+              falRequestId: progress.providerRequestId,
+              falStatusUrl: progress.statusUrl ?? null,
+              falResponseUrl: progress.responseUrl ?? null,
+              imageSize: normalizeImageSize(imageSize),
+              quality,
+              outputFormat,
+            },
+          })
+        },
+      })
+      const imageBytes = await downloadRemoteBytes(falResult.imageUrl)
+      const assetKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.${slugify(input.node.key)}`
+      const storagePath = `generated/output-workflows/${input.run.projectId}/${input.run.id}/${slugify(input.node.key)}.${outputFormat}`
+      const mimeType = falResult.mimeType || `image/${outputFormat}`
+      await uploadBytes(input.client, storagePath, imageBytes, mimeType)
+      const imageOutput = {
+        assetKey,
+        storagePath,
+        mimeType,
+        width: falResult.width,
+        height: falResult.height,
+        prompt,
+        providerPrompt,
+        role,
+        provider: 'fal',
+        model,
+        providerRequestId: falResult.requestId,
+        sourceEntityKeys: input.run.input.sourceEntityKeys ?? [],
+        sourceSequenceUnitKeys: input.run.input.sourceSequenceUnitKeys ?? [],
+      }
+      const metadata = {
+        generatedBy: 'output_workflow',
+        workflowId: input.workflow.id,
+        workflowKey: input.workflow.key,
+        runId: input.run.id,
+        nodeId: input.node.id,
+        nodeKey: input.node.key,
+        preset: input.run.preset,
+        provider: 'fal',
+        model,
+        providerRequestId: falResult.requestId,
+        providerMode: 'fal_queue',
+        providerStatus: 'COMPLETED',
+        falRequestId: falResult.requestId,
+        falStatusUrl: falResult.statusUrl,
+        falResponseUrl: falResult.responseUrl,
+        falImageUrl: falResult.imageUrl,
+        prompt,
+        providerPrompt,
+        role,
+        purpose,
+        imageSize: normalizeImageSize(imageSize),
+        quality,
+        outputFormat,
+        byteSize: imageBytes.byteLength,
+        width: falResult.width,
+        height: falResult.height,
+        storageBucket: 'project-assets',
+        storagePath,
+        sourceEntityKeys: input.run.input.sourceEntityKeys ?? [],
+        sourceSequenceUnitKeys: input.run.input.sourceSequenceUnitKeys ?? [],
+        skillKeys: guidance.skillKeys,
+        skillVersions: guidance.skillVersions,
+        guidanceHash: guidance.guidanceHash,
+        resolvedGuidancePreview: guidance.resolvedGuidancePreview,
+      }
+      const artifact = await registerImageArtifact({
+        client: input.client,
+        run: input.run,
+        workflow: input.workflow,
+        node: input.node,
+        assetKey,
+        storagePath,
+        name: role === 'ebook_cover' ? `${titleFromContext(worldContextFromRunInput(input.run))} Cover` : input.node.label,
+        summary: role === 'ebook_cover' ? 'Ebook cover image generated with GPT Image 2 from the world graph.' : 'Generated image output from the workflow.',
+        mimeType,
+        metadata,
+      })
+      const outputs = {
+        image: imageOutput,
+        assetKey,
+        storagePath,
+        mimeType,
+        width: falResult.width,
+        height: falResult.height,
+        prompt,
+        providerPrompt,
+        artifact,
+        guidance,
+      }
+      return {
+        inputHash: input.inputHash,
+        outputHash: hashOutputWorkflowValue(outputs),
+        outputs,
+        provider: 'fal',
+        model,
+        providerRequestId: falResult.requestId,
+      }
+    }
     case 'utility_transform': {
       const purpose = readText(asRecord(input.node.config).purpose)
       if (purpose === 'single_chapter_assembly') {
@@ -1604,6 +2210,7 @@ async function executeNode(input: {
     case 'document_render': {
       const markdown = readFirstUpstreamText(input.upstream)
       const guidance = readUpstreamGuidanceBundle(input.upstream)
+      const coverImage = readFirstUpstreamImage(input.upstream, ['image', 'coverImage'])
       const context = worldContextFromRunInput(input.run)
       const wiki = asRecord(context.wiki)
       const title = titleFromContext(context)
@@ -1619,6 +2226,7 @@ async function executeNode(input: {
         mimeType: 'application/pdf',
         fileName: `${slugify(input.workflow.name)}.pdf`,
         renderMetadata,
+        coverImage,
         guidance,
       }
       return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-document-render-v1' }
@@ -1626,6 +2234,7 @@ async function executeNode(input: {
     case 'output_artifact': {
       const markdown = readFirstUpstreamText(input.upstream)
       const guidance = readUpstreamGuidanceBundle(input.upstream)
+      const coverImage = readFirstUpstreamImage(input.upstream, ['coverImage', 'image'])
       const artifact = await registerDocumentArtifact({
         client: input.client,
         run: input.run,
@@ -1633,6 +2242,7 @@ async function executeNode(input: {
         node: input.node,
         markdown,
         guidance,
+        coverImage,
         documentRenderer: input.documentRenderer,
       })
       const outputs = {
@@ -1682,6 +2292,7 @@ export async function processFlyOutputWorkflowRuns(input: {
     const runMetadata = asRecord(bundle.run.metadata)
     const targetNodeKeys = readStringArray(runMetadata.targetNodeKeys)
     const forceNodeKeys = new Set(readStringArray(runMetadata.forceNodeKeys))
+    const reuseExistingUpstreamOutputs = runMetadata.reuseExistingUpstreamOutputs === true
     const selectedSubgraph = selectOutputWorkflowRunSubgraph({
       nodes: bundle.nodes,
       edges: bundle.edges,
@@ -1702,6 +2313,7 @@ export async function processFlyOutputWorkflowRuns(input: {
       model?: string | null
       providerRequestId?: string | null
       skipped?: boolean
+      skippedReason?: string
     }>()
     const shouldCancelRun = async () => {
       const cancellationResponse = await input.client
@@ -1722,14 +2334,18 @@ export async function processFlyOutputWorkflowRuns(input: {
       executeNode: async ({ node, upstream }) => {
         const inputHash = computeNodeInputHash({ run: bundle.run, node, upstream })
         const forceNode = forceNodeKeys.has(node.key)
-        if (!forceNode && !node.dirty && node.inputHash === inputHash && Object.keys(node.outputs).length > 0) {
+        const hasExistingOutputs = Object.keys(node.outputs).length > 0
+        const canHashSkip = !forceNode && !node.dirty && node.inputHash === inputHash && hasExistingOutputs
+        const canReuseExistingOutput = !forceNode && reuseExistingUpstreamOutputs && hasExistingOutputs
+        if (canHashSkip || canReuseExistingOutput) {
           nodeResults.set(node.key, {
-            inputHash,
+            inputHash: canHashSkip ? inputHash : node.inputHash || inputHash,
             outputHash: node.outputHash,
             outputs: node.outputs,
             provider: 'graphcore',
             model: 'cached-node-output',
             skipped: true,
+            skippedReason: canHashSkip ? 'input_hash_unchanged' : 'existing_output_reused_for_targeted_rebake',
           })
           return { status: 'skipped', outputs: node.outputs }
         }
@@ -1854,7 +2470,7 @@ export async function processFlyOutputWorkflowRuns(input: {
             groupKey: getOutputWorkflowNodeExecutionMetadata(node).groupKey ?? null,
             ...guidanceMetadata,
             skipped,
-            reason: skipped ? 'input_hash_unchanged' : undefined,
+            reason: skipped ? result?.skippedReason ?? 'input_hash_unchanged' : undefined,
           },
         })
       },
@@ -1910,6 +2526,7 @@ export async function processFlyOutputWorkflowRuns(input: {
           runMode: targetNodeKeys.length > 0 ? 'targeted_node_run' : 'full_workflow_run',
           targetNodeKeys,
           forceNodeKeys: [...forceNodeKeys],
+          reuseExistingUpstreamOutputs,
           pendingNodeKeys: pending,
           runningNodeKeys: running,
           completedNodeKeys: completed,
@@ -1943,6 +2560,7 @@ export async function processFlyOutputWorkflowRuns(input: {
         runMode: targetNodeKeys.length > 0 ? 'targeted_node_run' : 'full_workflow_run',
         targetNodeKeys,
         forceNodeKeys: [...forceNodeKeys],
+        reuseExistingUpstreamOutputs,
         status: schedulerResult.status === 'completed_with_errors' ? 'completed_with_errors' : undefined,
         completedNodeKeys: schedulerResult.completed,
         failedNodeKeys: schedulerResult.failed,

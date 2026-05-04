@@ -18,6 +18,8 @@ import {
 } from '@xyflow/react'
 import { useEffect, useMemo, useState } from 'react'
 
+import { resolveAssetSourceUrl } from '../../domain/assets'
+import type { AssetDefinition } from '../../domain/graphcore'
 import {
   buildOutputGuidanceBundleForNode,
   buildOutputWorkflowExecutionPlan,
@@ -35,14 +37,19 @@ import {
   outputWorkflowStepStatusKey,
 } from '../../domain/outputWorkflowGraphView'
 
-const NODE_WIDTH = 286
-const NODE_HEIGHT = 168
+const NODE_WIDTH = 306
+const NODE_HEIGHT = 184
+const IMAGE_NODE_MAX_HEIGHT = 280
+const IMAGE_NODE_MIN_WIDTH = 160
+const IMAGE_NODE_MAX_WIDTH = 360
 
 type GraphNodeData = {
   node: OutputWorkflowNode
   step: OutputWorkflowRunStep | null
   statusKey: string
   outputPreview: string
+  imageUrl: string | null
+  imageSize: { width: number; height: number } | null
   skillKeys: string[]
   inputPorts: Array<{ id: string; valueType: string }>
   outputPorts: Array<{ id: string; valueType: string }>
@@ -65,6 +72,9 @@ type OutputWorkflowGraphOverlayProps = {
   workflow: OutputWorkflow
   nodes: OutputWorkflowNode[]
   edges: OutputWorkflowEdge[]
+  worldEntities: Array<Record<string, unknown>>
+  worldRelationships: Array<Record<string, unknown>>
+  assets: AssetDefinition[]
   activeRun: OutputWorkflowRun | null
   selectedNodeKey: string | null
   canRunOutputs: boolean
@@ -92,8 +102,19 @@ function readTrimmedString(value: unknown) {
   return typeof value === 'string' ? value.trim() : ''
 }
 
+function readStringArray(value: unknown) {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0) : []
+}
+
 function formatStatus(value: string) {
   return value.replace(/_/g, ' ')
+}
+
+function formatConfigValue(value: unknown) {
+  if (Array.isArray(value)) return value.join(', ')
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value)
+  if (value === null || value === undefined) return ''
+  return JSON.stringify(value)
 }
 
 function resolveEdgeValueType(edge: OutputWorkflowEdge, sourceNode: OutputWorkflowNode | undefined) {
@@ -110,6 +131,78 @@ function providerStatus(step: OutputWorkflowRunStep | null | undefined) {
   return readTrimmedString(metadata.providerStatus) || readTrimmedString(step?.status)
 }
 
+function imageOutputAssetKey(step: OutputWorkflowRunStep | null | undefined) {
+  const outputs = readRecord(step?.outputs)
+  const image = readRecord(outputs.image)
+  return readTrimmedString(image.assetKey) || readTrimmedString(outputs.assetKey)
+}
+
+function readImageOutputSize(step: OutputWorkflowRunStep | null | undefined) {
+  const outputs = readRecord(step?.outputs)
+  const image = readRecord(outputs.image)
+  const width = Number(image.width ?? outputs.width)
+  const height = Number(image.height ?? outputs.height)
+  return Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0
+    ? { width, height }
+    : null
+}
+
+function graphNodeDimensions(node: OutputWorkflowNode, step: OutputWorkflowRunStep | null | undefined) {
+  const imageSize = readImageOutputSize(step)
+  if (node.nodeType !== 'image_generation' || !imageSize) return { width: NODE_WIDTH, height: NODE_HEIGHT }
+  const aspect = imageSize.width / imageSize.height
+  const height = IMAGE_NODE_MAX_HEIGHT
+  const width = Math.max(IMAGE_NODE_MIN_WIDTH, Math.min(IMAGE_NODE_MAX_WIDTH, Math.round(height * aspect)))
+  return { width, height }
+}
+
+function hasOverlappingNodePositions(nodes: OutputWorkflowNode[]) {
+  for (let index = 0; index < nodes.length; index += 1) {
+    const node = nodes[index]
+    const key = `${Math.round(node.position.x / 24)}:${Math.round(node.position.y / 24)}`
+    const seen = new Set(nodes.slice(0, index).map((entry) => `${Math.round(entry.position.x / 24)}:${Math.round(entry.position.y / 24)}`))
+    if (seen.has(key)) return true
+    for (let otherIndex = 0; otherIndex < index; otherIndex += 1) {
+      const other = nodes[otherIndex]
+      const overlapsX = Math.abs(node.position.x - other.position.x) < NODE_WIDTH + 24
+      const overlapsY = Math.abs(node.position.y - other.position.y) < NODE_HEIGHT + 24
+      if (overlapsX && overlapsY) return true
+    }
+  }
+  return false
+}
+
+function sequenceRecordFromEntity(entity: Record<string, unknown> | null | undefined) {
+  return readRecord(readRecord(entity?.customProperties).sequence)
+}
+
+function nodeDisplaySnippet(input: {
+  node: OutputWorkflowNode
+  step: OutputWorkflowRunStep | null
+  outputPreview: string
+}) {
+  const config = readRecord(input.node.config)
+  const purpose = readTrimmedString(config.purpose)
+  const chapterNumber = formatConfigValue(config.chapterNumber)
+  const sequenceName = readTrimmedString(config.sequenceUnitName)
+  if (purpose === 'chapter_prose') {
+    return [chapterNumber ? `Chapter ${chapterNumber}` : '', sequenceName].filter(Boolean).join(': ')
+  }
+  const prompt = readTrimmedString(input.node.inputs.prompt)
+  return prompt || input.outputPreview || outputWorkflowNodeRegistry[input.node.nodeType].description
+}
+
+function selectedNodeRunLabel(node: OutputWorkflowNode) {
+  const purpose = readTrimmedString(readRecord(node.config).purpose)
+  if (node.nodeType === 'output_artifact') return 'Rebuild PDF only'
+  if (node.nodeType === 'document_render') return 'Refresh document only'
+  if (purpose === 'ebook_cover_prompt') return 'Regenerate cover + PDF'
+  if (purpose === 'ebook_cover_image') return 'Regenerate cover + PDF'
+  if (purpose === 'chapter_prose') return 'Regenerate chapter'
+  if (purpose === 'chapter_section_prose') return 'Regenerate section'
+  return 'Run node'
+}
+
 function mergeGraphPorts(
   registryPorts: Array<{ id: string; valueType: string }>,
   edgePorts: Array<{ id: string; valueType: string }>,
@@ -123,17 +216,19 @@ function mergeGraphPorts(
 }
 
 function OutputWorkflowNodeCard({ data }: NodeProps<GraphNode>) {
-  const { node, step, statusKey, outputPreview, skillKeys, inputPorts, outputPorts, selected, running, onSelect, onRun } = data
+  const { node, step, statusKey, outputPreview, imageUrl, imageSize, skillKeys, inputPorts, outputPorts, selected, running, onSelect, onRun } = data
   const definition = outputWorkflowNodeRegistry[node.nodeType]
   const execution = getOutputWorkflowNodeExecutionMetadata(node)
   const purpose = readTrimmedString(node.config.purpose)
-  const prompt = readTrimmedString(node.inputs.prompt)
+  const snippet = nodeDisplaySnippet({ node, step, outputPreview })
+  const hasImagePreview = node.nodeType === 'image_generation' && Boolean(imageUrl)
 
   return (
     <button
-      className={`outputs-graph-node is-${node.nodeType} is-${statusKey} ${selected ? 'is-selected' : ''}`}
+      className={`outputs-graph-node is-${node.nodeType} is-${statusKey} ${selected ? 'is-selected' : ''} ${hasImagePreview ? 'has-image-output' : ''}`}
       onClick={() => onSelect(node.key)}
       onDoubleClick={() => onSelect(node.key)}
+      style={hasImagePreview && imageSize ? { aspectRatio: `${imageSize.width} / ${imageSize.height}` } : undefined}
       type="button"
     >
       {inputPorts.map((port, index) => (
@@ -146,21 +241,34 @@ function OutputWorkflowNodeCard({ data }: NodeProps<GraphNode>) {
           type="target"
         />
       ))}
-      <div className="outputs-graph-node-top">
-        <span className={`outputs-status-icon is-${statusKey}`} aria-hidden="true" />
-        <span className="outputs-graph-node-kind">{definition.label}</span>
-        <span className="outputs-graph-node-resource">{execution.resourceClass}</span>
-      </div>
-      <strong>{node.label}</strong>
-      <span>{purpose || node.nodeType.replace(/_/g, ' ')}</span>
-      {providerStatus(step) ? <small>{providerStatus(step)}</small> : null}
-      {prompt ? <p>{prompt}</p> : outputPreview ? <p>{outputPreview}</p> : <p>{definition.description}</p>}
-      {skillKeys.length > 0 ? (
-        <div className="outputs-graph-skill-row">
-          {skillKeys.slice(0, 2).map((skillKey) => <small key={skillKey}>{skillKey.replace(/_/g, ' ')}</small>)}
-          {skillKeys.length > 2 ? <small>+{skillKeys.length - 2}</small> : null}
-        </div>
-      ) : null}
+      {hasImagePreview ? (
+        <>
+          <img className="outputs-graph-node-image" src={imageUrl ?? ''} alt="" loading="lazy" />
+          <div className="outputs-graph-node-image-overlay">
+            <span className={`outputs-status-icon is-${statusKey}`} aria-hidden="true" />
+            <strong>{node.label}</strong>
+            {providerStatus(step) ? <small>{providerStatus(step)}</small> : null}
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="outputs-graph-node-top">
+            <span className={`outputs-status-icon is-${statusKey}`} aria-hidden="true" />
+            <span className="outputs-graph-node-kind">{definition.label}</span>
+            <span className="outputs-graph-node-resource">{execution.resourceClass}</span>
+          </div>
+          <strong>{node.label}</strong>
+          <span>{purpose || node.nodeType.replace(/_/g, ' ')}</span>
+          {providerStatus(step) ? <small>{providerStatus(step)}</small> : null}
+          <p>{snippet}</p>
+          {skillKeys.length > 0 ? (
+            <div className="outputs-graph-skill-row">
+              {skillKeys.slice(0, 2).map((skillKey) => <small key={skillKey}>{skillKey.replace(/_/g, ' ')}</small>)}
+              {skillKeys.length > 2 ? <small>+{skillKeys.length - 2}</small> : null}
+            </div>
+          ) : null}
+        </>
+      )}
       <span className="outputs-graph-node-play" aria-label="Rerun node">
         <span
           aria-hidden="true"
@@ -214,6 +322,9 @@ export function OutputWorkflowGraphOverlay({
   workflow,
   nodes,
   edges,
+  worldEntities,
+  worldRelationships,
+  assets,
   activeRun,
   selectedNodeKey,
   canRunOutputs,
@@ -227,6 +338,11 @@ export function OutputWorkflowGraphOverlay({
   readOutputPreview,
   readNodeSkillKeys,
 }: OutputWorkflowGraphOverlayProps) {
+  const safeNodes = Array.isArray(nodes) ? nodes : []
+  const safeEdges = Array.isArray(edges) ? edges : []
+  const safeWorldEntities = Array.isArray(worldEntities) ? worldEntities : []
+  const safeWorldRelationships = Array.isArray(worldRelationships) ? worldRelationships : []
+  const safeAssets = Array.isArray(assets) ? assets : []
   const [flowInstance, setFlowInstance] = useState<ReactFlowInstance<GraphNode, GraphEdge> | null>(null)
   const [flowNodes, setFlowNodes] = useState<GraphNode[]>([])
   const [flowEdges, setFlowEdges] = useState<GraphEdge[]>([])
@@ -239,23 +355,66 @@ export function OutputWorkflowGraphOverlay({
     () => new Map((activeRun?.steps ?? []).map((step) => [step.nodeKey, step])),
     [activeRun?.steps],
   )
-  const nodeByKey = useMemo(() => new Map(nodes.map((node) => [node.key, node])), [nodes])
-  const selectedNode = selectedNodeKey ? nodeByKey.get(selectedNodeKey) ?? nodes[0] ?? null : nodes[0] ?? null
+  const assetByKey = useMemo(() => new Map(safeAssets.map((asset) => [asset.key, asset])), [safeAssets])
+  const nodeByKey = useMemo(() => new Map(safeNodes.map((node) => [node.key, node])), [safeNodes])
+  const selectedNode = selectedNodeKey ? nodeByKey.get(selectedNodeKey) ?? safeNodes[0] ?? null : safeNodes[0] ?? null
   const selectedStep = selectedNode ? stepsByNodeKey.get(selectedNode.key) ?? null : null
+  const selectedImageAssetKey = imageOutputAssetKey(selectedStep)
+  const selectedImageAsset = selectedImageAssetKey
+    ? safeAssets.find((asset) => asset.key === selectedImageAssetKey) ?? null
+    : null
+  const selectedImageUrl = resolveAssetSourceUrl(selectedImageAsset)
   const selectedGuidance = selectedNode ? buildOutputGuidanceBundleForNode({ node: selectedNode, worldWiki }) : null
   const selectedProviderBacked = selectedNode ? isOutputWorkflowProviderBackedNodeType(selectedNode.nodeType) : false
   const [promptDraft, setPromptDraft] = useState('')
-  const executionPlan = useMemo(() => buildOutputWorkflowExecutionPlan(nodes, edges), [nodes, edges])
+  const executionPlan = useMemo(() => buildOutputWorkflowExecutionPlan(safeNodes, safeEdges), [safeNodes, safeEdges])
+  const worldContextNode = useMemo(
+    () => safeNodes.find((node) => node.nodeType === 'world_context_query') ?? null,
+    [safeNodes],
+  )
+  const selectedNodeConfig = selectedNode ? readRecord(selectedNode.config) : {}
+  const selectedSequenceUnitKey = readTrimmedString(selectedNodeConfig.sequenceUnitKey)
+    || readStringArray(readRecord(selectedStep?.outputs).sourceSequenceUnitKeys)[0]
+  const selectedSequenceUnit = selectedSequenceUnitKey
+    ? safeWorldEntities.find((entity) => readTrimmedString(entity.key) === selectedSequenceUnitKey) ?? null
+    : null
+  const selectedSequence = sequenceRecordFromEntity(selectedSequenceUnit)
+  const worldContextConfig = readRecord(worldContextNode?.config)
+  const sourceEntityKeys = readStringArray(worldContextConfig.sourceEntityKeys)
+  const sourceSequenceUnitKeys = readStringArray(worldContextConfig.sourceSequenceUnitKeys)
+  const selectedIncomingEdges = selectedNode
+    ? safeEdges.filter((edge) => edge.targetNodeKey === selectedNode.key)
+    : []
+  const selectedOutgoingEdges = selectedNode
+    ? safeEdges.filter((edge) => edge.sourceNodeKey === selectedNode.key)
+    : []
+  const selectedSourceEntities = sourceEntityKeys
+    .map((key) => safeWorldEntities.find((entity) => readTrimmedString(entity.key) === key))
+    .filter((entity): entity is Record<string, unknown> => Boolean(entity))
+  const selectedSourceSequenceUnits = sourceSequenceUnitKeys
+    .map((key) => safeWorldEntities.find((entity) => readTrimmedString(entity.key) === key))
+    .filter((entity): entity is Record<string, unknown> => Boolean(entity))
 
   useEffect(() => {
     setPromptDraft(selectedNode ? readTrimmedString(selectedNode.inputs.prompt) : '')
   }, [selectedNode?.id, selectedNode?.inputs.prompt])
 
   useEffect(() => {
-    const sourceByKey = new Map(nodes.map((node) => [node.key, node]))
+    const sourceByKey = new Map(safeNodes.map((node) => [node.key, node]))
+    const shouldUseDerivedLayout = !layoutDirty && hasOverlappingNodePositions(safeNodes)
+    const derivedPositions = shouldUseDerivedLayout
+      ? buildOutputWorkflowLevelLayout({
+          nodes: safeNodes,
+          edges: safeEdges,
+          nodeWidth: NODE_WIDTH,
+          nodeHeight: NODE_HEIGHT,
+          columnGap: 260,
+          rowGap: 96,
+        })
+      : null
     const inputPortsByNodeKey = new Map<string, Array<{ id: string; valueType: string }>>()
     const outputPortsByNodeKey = new Map<string, Array<{ id: string; valueType: string }>>()
-    for (const edge of edges) {
+    for (const edge of safeEdges) {
       const sourceNode = sourceByKey.get(edge.sourceNodeKey)
       const valueType = resolveEdgeValueType(edge, sourceNode)
       outputPortsByNodeKey.set(edge.sourceNodeKey, [
@@ -269,21 +428,29 @@ export function OutputWorkflowGraphOverlay({
     }
     setFlowNodes((current) => {
       const localPositionByKey = new Map(current.map((node) => [node.id, node.position]))
-      return nodes.map((node) => {
+      return safeNodes.map((node) => {
         const step = stepsByNodeKey.get(node.key) ?? null
         const statusKey = outputWorkflowStepStatusKey(step)
         const definition = outputWorkflowNodeRegistry[node.nodeType]
+        const imageAssetKey = imageOutputAssetKey(step)
+        const imageUrl = imageAssetKey ? resolveAssetSourceUrl(assetByKey.get(imageAssetKey)) : null
+        const imageSize = readImageOutputSize(step)
+        const dimensions = graphNodeDimensions(node, step)
         return {
           id: node.key,
           type: 'outputWorkflow',
-          position: layoutDirty ? localPositionByKey.get(node.key) ?? node.position : node.position,
-          width: NODE_WIDTH,
-          height: NODE_HEIGHT,
+          position: layoutDirty
+            ? localPositionByKey.get(node.key) ?? node.position
+            : derivedPositions?.get(node.key) ?? node.position,
+          width: dimensions.width,
+          height: dimensions.height,
           data: {
             node,
             step,
             statusKey,
             outputPreview: readOutputPreview(step).slice(0, 220),
+            imageUrl,
+            imageSize,
             skillKeys: readNodeSkillKeys(node),
             inputPorts: mergeGraphPorts(definition.inputPorts, inputPortsByNodeKey.get(node.key) ?? []),
             outputPorts: mergeGraphPorts(definition.outputPorts, outputPortsByNodeKey.get(node.key) ?? []),
@@ -295,7 +462,7 @@ export function OutputWorkflowGraphOverlay({
         }
       })
     })
-    setFlowEdges(edges.map((edge) => {
+    setFlowEdges(safeEdges.map((edge) => {
       const sourceNode = sourceByKey.get(edge.sourceNodeKey)
       const targetStep = stepsByNodeKey.get(edge.targetNodeKey) ?? null
       const valueType = resolveEdgeValueType(edge, sourceNode)
@@ -313,12 +480,19 @@ export function OutputWorkflowGraphOverlay({
         },
       }
     }))
-  }, [nodes, edges, stepsByNodeKey, selectedNodeKey, targetedNodeKey, layoutDirty, onRunNode, onSelectNode, readNodeSkillKeys, readOutputPreview])
+  }, [safeNodes, safeEdges, stepsByNodeKey, selectedNodeKey, targetedNodeKey, layoutDirty, onRunNode, onSelectNode, readNodeSkillKeys, readOutputPreview, assetByKey])
 
   async function applyAutoLayout(persist = false) {
     setGraphError(null)
     try {
-      const fallbackPositions = buildOutputWorkflowLevelLayout({ nodes, edges, nodeWidth: NODE_WIDTH, nodeHeight: NODE_HEIGHT })
+      const fallbackPositions = buildOutputWorkflowLevelLayout({
+        nodes: safeNodes,
+        edges: safeEdges,
+        nodeWidth: NODE_WIDTH,
+        nodeHeight: NODE_HEIGHT,
+        columnGap: 280,
+        rowGap: 104,
+      })
       let nextPositions = fallbackPositions
       try {
         const elkModule = await import('elkjs/lib/elk.bundled.js')
@@ -328,15 +502,20 @@ export function OutputWorkflowGraphOverlay({
           layoutOptions: {
             'elk.algorithm': 'layered',
             'elk.direction': 'RIGHT',
-            'elk.layered.spacing.nodeNodeBetweenLayers': '118',
-            'elk.spacing.nodeNode': '44',
+            'elk.layered.spacing.nodeNodeBetweenLayers': '240',
+            'elk.spacing.nodeNode': '96',
+            'elk.layered.spacing.edgeNodeBetweenLayers': '72',
+            'elk.layered.spacing.edgeEdgeBetweenLayers': '36',
           },
-          children: nodes.map((node) => ({
-            id: node.key,
-            width: NODE_WIDTH,
-            height: NODE_HEIGHT,
-          })),
-          edges: edges.map((edge) => ({
+          children: safeNodes.map((node) => {
+            const dimensions = graphNodeDimensions(node, stepsByNodeKey.get(node.key) ?? null)
+            return {
+              id: node.key,
+              width: dimensions.width,
+              height: dimensions.height,
+            }
+          }),
+          edges: safeEdges.map((edge) => ({
             id: edge.key,
             sources: [edge.sourceNodeKey],
             targets: [edge.targetNodeKey],
@@ -363,7 +542,7 @@ export function OutputWorkflowGraphOverlay({
     setSavingLayout(true)
     setGraphError(null)
     try {
-      const currentByKey = new Map(nodes.map((node) => [node.key, node.position]))
+      const currentByKey = new Map(safeNodes.map((node) => [node.key, node.position]))
       const changed = sourceNodes.filter((node) => {
         const current = currentByKey.get(node.id)
         return !current || Math.round(current.x) !== Math.round(node.position.x) || Math.round(current.y) !== Math.round(node.position.y)
@@ -484,17 +663,90 @@ export function OutputWorkflowGraphOverlay({
                   onClick={() => onRunNode(selectedNode)}
                   type="button"
                 >
-                  {targetedNodeKey === selectedNode.key ? 'Starting...' : 'Run'}
+                  {targetedNodeKey === selectedNode.key ? 'Starting...' : selectedNodeRunLabel(selectedNode)}
                 </button>
               </div>
+              <section className="outputs-graph-inspector-section">
+                <strong>Node binding</strong>
+                <dl className="outputs-graph-binding-list">
+                  <div>
+                    <dt>Purpose</dt>
+                    <dd>{readTrimmedString(selectedNodeConfig.purpose) || selectedNode.nodeType.replace(/_/g, ' ')}</dd>
+                  </div>
+                  {selectedNodeConfig.chapterNumber ? (
+                    <div>
+                      <dt>Chapter</dt>
+                      <dd>{formatConfigValue(selectedNodeConfig.chapterNumber)}</dd>
+                    </div>
+                  ) : null}
+                  {selectedSequenceUnitKey ? (
+                    <div>
+                      <dt>Sequence unit</dt>
+                      <dd>{readTrimmedString(selectedNodeConfig.sequenceUnitName) || readTrimmedString(selectedSequenceUnit?.name) || selectedSequenceUnitKey} <small>{selectedSequenceUnitKey}</small></dd>
+                    </div>
+                  ) : null}
+                  {readTrimmedString(selectedSequence.povCharacterName) || readTrimmedString(selectedSequence.povCharacterKey) ? (
+                    <div>
+                      <dt>POV character</dt>
+                      <dd>{readTrimmedString(selectedSequence.povCharacterName) || readTrimmedString(selectedSequence.povCharacterKey)}</dd>
+                    </div>
+                  ) : null}
+                  {readTrimmedString(selectedSequence.povNotes) ? (
+                    <div>
+                      <dt>POV notes</dt>
+                      <dd>{readTrimmedString(selectedSequence.povNotes)}</dd>
+                    </div>
+                  ) : null}
+                  {selectedIncomingEdges.length > 0 ? (
+                    <div>
+                      <dt>Inputs</dt>
+                      <dd>{selectedIncomingEdges.map((edge) => `${edge.sourceNodeKey}.${edge.sourcePort} -> ${edge.targetPort}`).join(', ')}</dd>
+                    </div>
+                  ) : null}
+                  {selectedOutgoingEdges.length > 0 ? (
+                    <div>
+                      <dt>Outputs</dt>
+                      <dd>{selectedOutgoingEdges.map((edge) => `${edge.sourcePort} -> ${edge.targetNodeKey}.${edge.targetPort}`).join(', ')}</dd>
+                    </div>
+                  ) : null}
+                </dl>
+              </section>
+              {selectedSequenceUnit ? (
+                <section className="outputs-graph-inspector-section">
+                  <strong>Sequence context</strong>
+                  <div className="outputs-graph-context-preview">
+                    <h4>{readTrimmedString(selectedSequenceUnit.name) || selectedSequenceUnitKey}</h4>
+                    {readTrimmedString(selectedSequenceUnit.summary) ? <p>{readTrimmedString(selectedSequenceUnit.summary)}</p> : null}
+                    {readTrimmedString(selectedSequenceUnit.context) ? <p>{readTrimmedString(selectedSequenceUnit.context)}</p> : null}
+                    {readTrimmedString(selectedSequence.synopsis) ? <p><b>Synopsis:</b> {readTrimmedString(selectedSequence.synopsis)}</p> : null}
+                    {readTrimmedString(selectedSequence.dramaticQuestion) ? <p><b>Dramatic question:</b> {readTrimmedString(selectedSequence.dramaticQuestion)}</p> : null}
+                    {readTrimmedString(selectedSequence.outcome) ? <p><b>Outcome:</b> {readTrimmedString(selectedSequence.outcome)}</p> : null}
+                    {readStringArray(selectedSequence.consequences).length > 0 ? <p><b>Consequences:</b> {readStringArray(selectedSequence.consequences).join('; ')}</p> : null}
+                    {readStringArray(selectedSequence.characterArcDeltas).length > 0 ? <p><b>Character arc:</b> {readStringArray(selectedSequence.characterArcDeltas).join('; ')}</p> : null}
+                  </div>
+                </section>
+              ) : null}
+              <section className="outputs-graph-inspector-section">
+                <strong>World context available</strong>
+                <div className="outputs-graph-context-preview">
+                  <p>{selectedSourceSequenceUnits.length} sequence units, {selectedSourceEntities.length} entities, {safeWorldRelationships.length} relationships available through the world context node.</p>
+                  {selectedSourceEntities.length > 0 ? (
+                    <p><b>Entity anchors:</b> {selectedSourceEntities.slice(0, 12).map((entity) => readTrimmedString(entity.name) || readTrimmedString(entity.key)).join('; ')}{selectedSourceEntities.length > 12 ? `; +${selectedSourceEntities.length - 12} more` : ''}</p>
+                  ) : null}
+                  {selectedSourceSequenceUnits.length > 0 ? (
+                    <p><b>Sequence spine:</b> {selectedSourceSequenceUnits.slice(0, 12).map((entity) => readTrimmedString(entity.name) || readTrimmedString(entity.key)).join('; ')}{selectedSourceSequenceUnits.length > 12 ? `; +${selectedSourceSequenceUnits.length - 12} more` : ''}</p>
+                  ) : null}
+                </div>
+              </section>
               {selectedProviderBacked ? (
                 <section className="outputs-graph-inspector-section">
                   <div className="outputs-graph-section-head">
-                    <strong>Prompt</strong>
+                    <strong>User brief override</strong>
                     <button disabled={savingPrompt || promptDraft === readTrimmedString(selectedNode.inputs.prompt)} onClick={() => void savePrompt()} type="button">
                       {savingPrompt ? 'Saving...' : 'Save'}
                     </button>
                   </div>
+                  <p>This is only the editable user brief. The worker also injects the node binding above, upstream chapter plan, world context, POV contract, and Output Skills into the effective provider prompt.</p>
                   <textarea
                     aria-label="Selected output node prompt"
                     value={promptDraft}
@@ -511,6 +763,7 @@ export function OutputWorkflowGraphOverlay({
               <section className="outputs-graph-inspector-section">
                 <strong>Output</strong>
                 {selectedStep?.errorMessage ? <p className="outputs-error">{selectedStep.errorMessage}</p> : null}
+                {selectedImageUrl ? <img className="outputs-graph-image-preview" src={selectedImageUrl} alt={`${selectedNode.label} output`} loading="lazy" /> : null}
                 {readOutputPreview(selectedStep) ? <pre>{readOutputPreview(selectedStep)}</pre> : <p>No persisted output for this node yet.</p>}
               </section>
               <section className="outputs-graph-inspector-section">

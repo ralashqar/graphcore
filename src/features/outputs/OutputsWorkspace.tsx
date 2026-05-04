@@ -14,6 +14,7 @@ import {
   type OutputWorkflowRunStep,
   type OutputWorkflowRunStatusResponse,
   type OutputWorkflowStartResponse,
+  type OutputWorkflowUpgradeResponse,
 } from '../../domain/outputWorkflow'
 import { OutputWorkflowGraphOverlay } from './OutputWorkflowGraphOverlay'
 
@@ -45,6 +46,10 @@ type OutputsWorkspaceProps = {
     position?: { x: number; y: number }
     inputs?: { prompt?: string }
   }) => Promise<OutputWorkflowNodeUpdateResponse>
+  onUpgradeOutputWorkflowPreset: (request: {
+    workflowId: string
+    preset?: 'ebook_from_world'
+  }) => Promise<OutputWorkflowUpgradeResponse>
   onRefreshLiveSnapshot: () => Promise<void>
 }
 
@@ -80,10 +85,42 @@ function artifactActionLabels(mimeType: string, kind: string) {
   if (mimeType === 'application/pdf' || kind === 'pdf') {
     return { open: 'Open PDF', download: 'Download PDF', extension: 'pdf' }
   }
+  if (mimeType.startsWith('image/') || kind === 'image') {
+    const extension = mimeType.includes('webp') ? 'webp' : mimeType.includes('jpeg') || mimeType.includes('jpg') ? 'jpg' : 'png'
+    return { open: 'Open Image', download: 'Download Image', extension }
+  }
   if (mimeType.includes('markdown') || kind === 'manuscript') {
     return { open: 'Open Markdown', download: 'Download Markdown', extension: 'md' }
   }
   return { open: 'Open File', download: 'Download File', extension: 'download' }
+}
+
+function artifactDownloadFileName(name: string, extension: string) {
+  const baseName = name
+    .trim()
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '-')
+    .replace(/\s+/g, ' ')
+    .replace(/\.+$/g, '')
+    || 'graphcore-output'
+  return baseName.toLowerCase().endsWith(`.${extension}`) ? baseName : `${baseName}.${extension}`
+}
+
+async function downloadArtifactUrl(url: string, fileName: string, mimeType: string) {
+  const response = await fetch(url)
+  if (!response.ok) throw new Error(`Could not download artifact (${response.status}).`)
+  const sourceBlob = await response.blob()
+  const blob = sourceBlob.type || !mimeType
+    ? sourceBlob
+    : new Blob([sourceBlob], { type: mimeType })
+  const objectUrl = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = objectUrl
+  link.download = fileName
+  link.rel = 'noreferrer'
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
 }
 
 function statusKeyForStep(step: { status: string; metadata?: Record<string, unknown> } | null | undefined) {
@@ -101,6 +138,12 @@ function readOutputPreview(step: Pick<OutputWorkflowRunStep, 'outputs' | 'errorM
   if (!step) return ''
   if (step.errorMessage) return step.errorMessage
   const outputs = readRecord(step.outputs)
+  const image = readRecord(outputs.image)
+  const imageAssetKey = readTrimmedString(image.assetKey) || readTrimmedString(outputs.assetKey)
+  const imagePrompt = readTrimmedString(image.prompt) || readTrimmedString(outputs.prompt)
+  if (imageAssetKey && (readTrimmedString(image.mimeType).startsWith('image/') || step.provider === 'fal')) {
+    return [`Generated image asset: ${imageAssetKey}`, imagePrompt ? `Prompt: ${imagePrompt}` : ''].filter(Boolean).join('\n\n')
+  }
   const directText = readTrimmedString(outputs.markdown)
     || readTrimmedString(outputs.text)
     || readTrimmedString(outputs.output)
@@ -149,6 +192,7 @@ export function OutputsWorkspace({
   onGetOutputWorkflowStatus,
   onCancelOutputWorkflowRun,
   onUpdateOutputWorkflowNode,
+  onUpgradeOutputWorkflowPreset,
   onRefreshLiveSnapshot,
 }: OutputsWorkspaceProps) {
   const [mode, setMode] = useState<'workflows' | 'cinematics'>('workflows')
@@ -161,6 +205,8 @@ export function OutputsWorkspace({
   const [inspectorMode, setInspectorMode] = useState<'output' | 'guidance' | 'metadata'>('output')
   const [targetedNodeKey, setTargetedNodeKey] = useState<string | null>(null)
   const [graphOpen, setGraphOpen] = useState(false)
+  const [downloadingArtifactKey, setDownloadingArtifactKey] = useState<string | null>(null)
+  const [upgradeMode, setUpgradeMode] = useState<'graph' | 'cover' | 'pdf' | null>(null)
 
   const sequenceUnits = useMemo(
     () => snapshot.worldEntities.filter((entity) => entity.nodeType === 'sequence_unit'),
@@ -218,6 +264,12 @@ export function OutputsWorkspace({
     : false
   const artifacts = snapshot.outputArtifacts
   const title = readWorldWikiTitle(snapshot)
+  const activeWorkflowNeedsCoverUpgrade = Boolean(
+    activeWorkflow
+    && activeWorkflow.preset === 'ebook_from_world'
+    && activeNodes.length > 0
+    && (!nodeByKey.has('cover_prompt') || !nodeByKey.has('cover_image')),
+  )
 
   useEffect(() => {
     if (!liveRun) return
@@ -316,6 +368,21 @@ export function OutputsWorkspace({
 
   async function runSelectedNodeOnly(node: OutputWorkflowNode) {
     if (!activeRun) return
+    const purpose = readTrimmedString(readRecord(node.config).purpose)
+    const pdfRebake = node.nodeType === 'output_artifact'
+    const documentRefresh = node.nodeType === 'document_render'
+    const targetNodeKeys = purpose === 'ebook_cover_image' || purpose === 'ebook_cover_prompt' || pdfRebake
+      ? ['artifact']
+      : documentRefresh
+        ? ['document_render']
+        : [node.key]
+    const forceNodeKeys = pdfRebake
+      ? ['document_render', 'artifact']
+      : documentRefresh
+        ? ['document_render']
+        : purpose === 'ebook_cover_image' || purpose === 'ebook_cover_prompt'
+          ? ['cover_prompt', 'cover_image', 'document_render', 'artifact']
+          : [node.key]
     setTargetedNodeKey(node.key)
     setError(null)
     try {
@@ -329,9 +396,10 @@ export function OutputsWorkspace({
         input: previousInput,
         metadata: {
           sourceRunId: activeRun.id,
-          runMode: 'targeted_node_preview',
-          targetNodeKeys: [node.key],
-          forceNodeKeys: [node.key],
+          runMode: pdfRebake ? 'pdf_rebake_from_existing_outputs' : 'targeted_node_preview',
+          targetNodeKeys,
+          forceNodeKeys,
+          reuseExistingUpstreamOutputs: pdfRebake || documentRefresh,
         },
       })
       setActiveRunId(runResponse.run.id)
@@ -347,10 +415,78 @@ export function OutputsWorkspace({
     }
   }
 
+  async function downloadArtifact(assetUrl: string, artifactName: string, extension: string, mimeType: string, artifactKey: string) {
+    setDownloadingArtifactKey(artifactKey)
+    setError(null)
+    try {
+      await downloadArtifactUrl(assetUrl, artifactDownloadFileName(artifactName, extension), mimeType)
+    } catch (downloadError) {
+      setError(downloadError instanceof Error ? downloadError.message : 'Could not download the artifact file.')
+    } finally {
+      setDownloadingArtifactKey(null)
+    }
+  }
+
+  async function upgradeActiveWorkflow(mode: 'graph' | 'cover' | 'pdf') {
+    if (!activeWorkflow) return
+    setUpgradeMode(mode)
+    setError(null)
+    try {
+      await onUpgradeOutputWorkflowPreset({
+        workflowId: activeWorkflow.id,
+        preset: 'ebook_from_world',
+      })
+      if (mode === 'graph') {
+        await onRefreshLiveSnapshot()
+        return
+      }
+
+      const workflowMetadata = readRecord(activeWorkflow.metadata)
+      const previousInput = activeRun ? readRecord(activeRun.input) : {
+        sourceEntityKeys: readStringArray(workflowMetadata.sourceEntityKeys),
+        sourceSequenceUnitKeys: readStringArray(workflowMetadata.sourceSequenceUnitKeys),
+      }
+      const runResponse = await onStartOutputWorkflowRun({
+        workflowId: activeWorkflow.id,
+        prompt: activeRun?.prompt || readTrimmedString(workflowMetadata.prompt) || prompt,
+        targetFormat: (activeRun?.targetFormat || readTrimmedString(workflowMetadata.targetFormat) || 'pdf') as 'pdf' | 'epub' | 'docx' | 'markdown',
+        selectedEntityKeys: readStringArray(previousInput.sourceEntityKeys),
+        selectedSequenceUnitKeys: readStringArray(previousInput.sourceSequenceUnitKeys),
+        input: previousInput,
+            metadata: mode === 'cover'
+              ? {
+                  sourceRunId: activeRun?.id ?? null,
+                  runMode: 'upgrade_cover_only',
+                  targetNodeKeys: ['cover_image'],
+                  forceNodeKeys: ['cover_prompt', 'cover_image'],
+                }
+              : {
+                  sourceRunId: activeRun?.id ?? null,
+                  runMode: 'upgrade_cover_and_rebuild_pdf',
+                  targetNodeKeys: ['artifact'],
+                  forceNodeKeys: ['cover_prompt', 'cover_image', 'document_render', 'artifact'],
+                  reuseExistingUpstreamOutputs: true,
+                },
+      })
+      setActiveRunId(runResponse.run.id)
+      setLiveRun(runResponse.run)
+      setSelectedNodeKey(mode === 'cover' ? 'cover_image' : 'artifact')
+      setInspectorMode('output')
+      await pollRun(runResponse.run.id)
+      await onRefreshLiveSnapshot()
+    } catch (upgradeError) {
+      setError(upgradeError instanceof Error ? upgradeError.message : 'Could not upgrade the output workflow.')
+    } finally {
+      setUpgradeMode(null)
+    }
+  }
+
   function selectedNodeRunLabel(node: OutputWorkflowNode) {
     const purpose = readTrimmedString(readRecord(node.config).purpose)
     if (node.nodeType === 'output_artifact') return 'Render/register PDF only'
     if (node.nodeType === 'document_render') return 'Refresh document only'
+    if (purpose === 'ebook_cover_prompt') return 'Regenerate cover prompt and PDF'
+    if (purpose === 'ebook_cover_image') return 'Regenerate cover and PDF'
     if (purpose === 'chapter_prose') return 'Regenerate chapter only'
     if (purpose === 'chapter_section_prose') return 'Regenerate section only'
     return 'Rerun node only'
@@ -361,9 +497,12 @@ export function OutputsWorkspace({
       {graphOpen && activeWorkflow ? (
         <OutputWorkflowGraphOverlay
           activeRun={activeRun}
+          assets={snapshot.assets}
           canRunOutputs={canRunOutputs}
           edges={activeEdges}
           nodes={activeNodes}
+          worldEntities={snapshot.worldEntities as unknown as Array<Record<string, unknown>>}
+          worldRelationships={snapshot.worldRelationships as unknown as Array<Record<string, unknown>>}
           onCancelRun={cancelActiveRun}
           onClose={() => setGraphOpen(false)}
           onRunNode={(node) => void runSelectedNodeOnly(node)}
@@ -425,6 +564,40 @@ export function OutputsWorkspace({
               <h3>Workflow</h3>
               <span>{activeWorkflow?.preset.replace(/_/g, ' ') ?? 'No workflow yet'}</span>
             </div>
+            {activeWorkflowNeedsCoverUpgrade ? (
+              <div className="outputs-upgrade-callout">
+                <div>
+                  <strong>Cover branch available</strong>
+                  <p>This workflow was created before ebook cover generation. Upgrade the graph to add cover prompt and GPT Image 2 cover nodes without rerunning chapter prose.</p>
+                </div>
+                <div className="outputs-upgrade-actions">
+                  <button
+                    className="outputs-secondary-action"
+                    disabled={!canRunOutputs || Boolean(upgradeMode)}
+                    onClick={() => void upgradeActiveWorkflow('graph')}
+                    type="button"
+                  >
+                    {upgradeMode === 'graph' ? 'Upgrading...' : 'Upgrade graph'}
+                  </button>
+                  <button
+                    className="outputs-secondary-action"
+                    disabled={!canRunOutputs || Boolean(upgradeMode)}
+                    onClick={() => void upgradeActiveWorkflow('cover')}
+                    type="button"
+                  >
+                    {upgradeMode === 'cover' ? 'Generating...' : 'Upgrade + cover only'}
+                  </button>
+                  <button
+                    className="outputs-secondary-action"
+                    disabled={!canRunOutputs || Boolean(upgradeMode)}
+                    onClick={() => void upgradeActiveWorkflow('pdf')}
+                    type="button"
+                  >
+                    {upgradeMode === 'pdf' ? 'Rebuilding...' : 'Upgrade + rebuild PDF'}
+                  </button>
+                </div>
+              </div>
+            ) : null}
             <div className="outputs-workflow-actions">
               <button
                 className="outputs-secondary-action"
@@ -655,6 +828,7 @@ export function OutputsWorkspace({
               const markdownPreview = readTrimmedString(metadata.markdownPreview)
               const mimeType = artifact.mimeType || asset?.mimeType || ''
               const actionLabels = artifactActionLabels(mimeType, artifact.kind)
+              const isImageArtifact = mimeType.startsWith('image/') || artifact.kind === 'image'
               const byteSize = formatByteSize(renderMetadata.byteSize)
               const pageCount = readNumber(renderMetadata.pageCount)
               const manuscriptLength = readNumber(renderMetadata.manuscriptCharacterCount)
@@ -662,6 +836,9 @@ export function OutputsWorkspace({
               return (
                 <article className="outputs-artifact-card" key={artifact.id}>
                   <div>
+                    {isImageArtifact && url ? (
+                      <img className="outputs-artifact-image" src={url} alt={artifact.name} loading="lazy" />
+                    ) : null}
                     <strong>{artifact.name}</strong>
                     <span>{artifact.kind.toUpperCase()} - {mimeType || 'artifact'}</span>
                     <div className="outputs-artifact-meta">
@@ -680,7 +857,16 @@ export function OutputsWorkspace({
                   </div>
                   <div className="outputs-artifact-actions">
                     {url ? <a href={url} target="_blank" rel="noreferrer">{actionLabels.open}</a> : <span>{actionLabels.open}</span>}
-                    {url ? <a href={url} download={`${artifact.name}.${actionLabels.extension}`}>{actionLabels.download}</a> : <span>{actionLabels.download}</span>}
+                    {url ? (
+                      <button
+                        className="outputs-artifact-action-button"
+                        disabled={downloadingArtifactKey === artifact.key}
+                        type="button"
+                        onClick={() => downloadArtifact(url, artifact.name, actionLabels.extension, mimeType, artifact.key)}
+                      >
+                        {downloadingArtifactKey === artifact.key ? 'Downloading...' : actionLabels.download}
+                      </button>
+                    ) : <span>{actionLabels.download}</span>}
                     {!url ? <small>Preparing signed file URL</small> : null}
                   </div>
                 </article>
