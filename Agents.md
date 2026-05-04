@@ -176,9 +176,10 @@ GraphCore runs AI workloads through protected Supabase Edge Functions that provi
 - Story subtypes now include `fiction_novel` and `nonfiction_ebook`; seed profiles should create usable chapter-oriented `sequence_unit` nodes and wiki metadata for downstream ebook generation
 
 **Integration**:
-- Public Edge Functions: `plan-output-workflow`, `start-output-workflow`, `start-output-workflow-run`, `get-output-workflow-status`, `cancel-output-workflow-run`, and `get-output-artifact`
+- Public Edge Functions: `plan-output-workflow`, `start-output-workflow`, `start-output-workflow-run`, `get-output-workflow-status`, `cancel-output-workflow-run`, `get-output-artifact`, and `update-output-workflow-node`
 - The Fly worker claims one output workflow run at a time, then runs independent ready nodes in parallel subject to global and resource-class concurrency caps. Worker images must include Chromium, usable serif fonts, and Deno `--allow-run` permission so Playwright can launch the system Chromium binary for ebook PDF rendering.
-- The Outputs workspace owns preset selection, prompt composition, dependency-level workflow preview, node guidance inspection, run timeline, skipped/blocked status display, retry-from-failed controls, and artifact gallery
+- The Outputs workspace owns preset selection, prompt composition, dependency-level workflow preview, fullscreen React Flow/ELK workflow graph visualization, node guidance inspection, prompt editing for provider-backed nodes, targeted per-node reruns, run timeline, skipped/blocked status display, retry-from-failed controls, and artifact gallery
+- `update-output-workflow-node` is the only client-facing workflow graph edit endpoint in V1. It validates draft/workflow access, persists node `position`, allows `inputs.prompt` only on provider-backed nodes, and dirty-propagates prompt changes to descendants while layout-only changes do not mark execution dirty.
 - `CinematicsWorkspace` remains available as an Outputs sub-mode while cinematic graphs are migrated into workflow presets
 - Future presets should wrap existing visual/app/cinematic systems rather than replacing their durable job pipelines
 

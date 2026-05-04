@@ -25,6 +25,11 @@ import {
   resolveOutputSkillsForNode,
   validateOutputSkillRegistry,
 } from './outputSkills.ts'
+import {
+  buildOutputWorkflowGraphViewModel,
+  buildOutputWorkflowLevelLayout,
+  buildOutputWorkflowTargetedRunMetadata,
+} from './outputWorkflowGraphView.ts'
 
 const now = '2026-05-03T00:00:00.000Z'
 
@@ -171,6 +176,105 @@ test('builds execution levels for independent parallel branches and joins', () =
   assert.deepEqual(plan.levels, [['context'], ['chapter_a', 'chapter_b'], ['assembly']])
   assert.deepEqual(plan.dependencyKeysByNodeKey.assembly.sort(), ['chapter_a', 'chapter_b'])
   assert.deepEqual(plan.diagnostics, [])
+})
+
+test('workflow graph view-model exposes statuses, provider backing, and edge port labels', () => {
+  const plan = planOutputWorkflow({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    prompt: 'write the ebook',
+    targetFormat: 'pdf',
+    selectedEntityKeys: ['hero'],
+    selectedSequenceUnitKeys: ['chapter-1', 'chapter-2'],
+    snapshot,
+  })
+  const nodes = plan.nodes.map((node, index) => ({
+    ...node,
+    id: `node-${index}`,
+    workflowId: 'workflow-1',
+    createdAt: now,
+    updatedAt: now,
+  }))
+  const edges = plan.edges.map((edge, index) => ({
+    ...edge,
+    id: `edge-${index}`,
+    workflowId: 'workflow-1',
+    createdAt: now,
+    updatedAt: now,
+  }))
+  const steps = [{
+    id: 'step-1',
+    runId: 'run-1',
+    workflowId: 'workflow-1',
+    nodeId: 'node-0',
+    nodeKey: 'outline',
+    nodeType: 'text_llm' as const,
+    status: 'running' as const,
+    orderIndex: 1,
+    label: 'Outline / TOC',
+    inputHash: '',
+    outputHash: '',
+    outputs: {},
+    provider: 'openai',
+    model: 'gpt-5.2',
+    providerRequestId: 'resp_123',
+    errorMessage: null,
+    metadata: { providerStatus: 'in_progress' },
+    startedAt: now,
+    completedAt: null,
+    createdAt: now,
+    updatedAt: now,
+  }]
+
+  const viewModel = buildOutputWorkflowGraphViewModel({ nodes, edges, steps })
+  const outline = viewModel.nodes.find((node) => node.key === 'outline')
+  const contextEdge = viewModel.edges.find((edge) => edge.sourceNodeKey === 'world_context' && edge.targetNodeKey === 'outline')
+
+  assert.equal(viewModel.diagnostics.length, 0)
+  assert.equal(outline?.status, 'running')
+  assert.equal(outline?.providerBacked, true)
+  assert.equal(contextEdge?.sourcePort, 'context')
+  assert.equal(contextEdge?.targetPort, 'context')
+})
+
+test('workflow graph level layout keeps parallel chapter nodes in one column', () => {
+  const plan = planOutputWorkflow({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    prompt: 'write the ebook',
+    targetFormat: 'pdf',
+    selectedEntityKeys: ['hero'],
+    selectedSequenceUnitKeys: ['chapter-1', 'chapter-2'],
+    snapshot,
+  })
+  const nodes = plan.nodes.map((node, index) => ({
+    ...node,
+    id: `node-${index}`,
+    workflowId: 'workflow-1',
+    createdAt: now,
+    updatedAt: now,
+  }))
+  const edges = plan.edges.map((edge, index) => ({
+    ...edge,
+    id: `edge-${index}`,
+    workflowId: 'workflow-1',
+    createdAt: now,
+    updatedAt: now,
+  }))
+  const positions = buildOutputWorkflowLevelLayout({ nodes, edges })
+  const firstChapter = positions.get('chapter_001_prose')
+  const secondChapter = positions.get('chapter_002_prose')
+
+  assert.ok(firstChapter)
+  assert.ok(secondChapter)
+  assert.equal(firstChapter?.x, secondChapter?.x)
+  assert.notEqual(firstChapter?.y, secondChapter?.y)
+  assert.deepEqual(buildOutputWorkflowTargetedRunMetadata('chapter_001_prose', 'run-1'), {
+    sourceRunId: 'run-1',
+    runMode: 'targeted_node_preview',
+    targetNodeKeys: ['chapter_001_prose'],
+    forceNodeKeys: ['chapter_001_prose'],
+  })
 })
 
 test('selects targeted run subgraph with ancestors only', () => {

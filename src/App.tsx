@@ -4294,6 +4294,25 @@ export default function App() {
     return result
   }
 
+  async function updateOutputWorkflowNode(request: Parameters<typeof workspaceService.updateOutputWorkflowNode>[1]) {
+    if (!snapshot) {
+      throw new Error('Load a live GraphCore draft before editing an output workflow.')
+    }
+    if (loadedState?.source !== 'supabase') {
+      throw new Error('Output workflows require a live Supabase-backed draft.')
+    }
+    const result = await workspaceService.updateOutputWorkflowNode(snapshot, request)
+    const current = snapshotRef.current ?? snapshot
+    commitPersistedSnapshot({
+      ...current,
+      outputWorkflowNodes: [
+        ...current.outputWorkflowNodes.filter((node) => node.workflowId !== request.workflowId),
+        ...result.nodes,
+      ],
+    })
+    return result
+  }
+
   async function refreshLiveSnapshot() {
     const current = snapshotRef.current
     if (!current || loadedState?.source !== 'supabase') return
@@ -6320,6 +6339,7 @@ export default function App() {
                 onRefreshLiveSnapshot={refreshLiveSnapshot}
                 onStartOutputWorkflow={startOutputWorkflow}
                 onStartOutputWorkflowRun={startOutputWorkflowRun}
+                onUpdateOutputWorkflowNode={updateOutputWorkflowNode}
                 cinematicsPanel={(
                   <CinematicsWorkspace
                     assets={snapshot.assets}

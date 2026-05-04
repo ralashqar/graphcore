@@ -8,12 +8,14 @@ import {
   buildOutputWorkflowExecutionPlan,
   isTerminalOutputWorkflowRunStatus,
   type OutputWorkflowNode,
+  type OutputWorkflowNodeUpdateResponse,
   type OutputWorkflowPlanResponse,
   type OutputWorkflowRun,
   type OutputWorkflowRunStep,
   type OutputWorkflowRunStatusResponse,
   type OutputWorkflowStartResponse,
 } from '../../domain/outputWorkflow'
+import { OutputWorkflowGraphOverlay } from './OutputWorkflowGraphOverlay'
 
 type OutputsWorkspaceProps = {
   snapshot: ProjectSnapshot
@@ -37,6 +39,12 @@ type OutputsWorkspaceProps = {
   }) => Promise<OutputWorkflowRunStatusResponse>
   onGetOutputWorkflowStatus: (runId: string) => Promise<OutputWorkflowRunStatusResponse>
   onCancelOutputWorkflowRun: (runId: string) => Promise<unknown>
+  onUpdateOutputWorkflowNode: (request: {
+    workflowId: string
+    nodeKey: string
+    position?: { x: number; y: number }
+    inputs?: { prompt?: string }
+  }) => Promise<OutputWorkflowNodeUpdateResponse>
   onRefreshLiveSnapshot: () => Promise<void>
 }
 
@@ -140,6 +148,7 @@ export function OutputsWorkspace({
   onStartOutputWorkflowRun,
   onGetOutputWorkflowStatus,
   onCancelOutputWorkflowRun,
+  onUpdateOutputWorkflowNode,
   onRefreshLiveSnapshot,
 }: OutputsWorkspaceProps) {
   const [mode, setMode] = useState<'workflows' | 'cinematics'>('workflows')
@@ -151,6 +160,7 @@ export function OutputsWorkspace({
   const [selectedNodeKey, setSelectedNodeKey] = useState<string | null>(null)
   const [inspectorMode, setInspectorMode] = useState<'output' | 'guidance' | 'metadata'>('output')
   const [targetedNodeKey, setTargetedNodeKey] = useState<string | null>(null)
+  const [graphOpen, setGraphOpen] = useState(false)
 
   const sequenceUnits = useMemo(
     () => snapshot.worldEntities.filter((entity) => entity.nodeType === 'sequence_unit'),
@@ -348,6 +358,28 @@ export function OutputsWorkspace({
 
   return (
     <div className="outputs-workspace">
+      {graphOpen && activeWorkflow ? (
+        <OutputWorkflowGraphOverlay
+          activeRun={activeRun}
+          canRunOutputs={canRunOutputs}
+          edges={activeEdges}
+          nodes={activeNodes}
+          onCancelRun={cancelActiveRun}
+          onClose={() => setGraphOpen(false)}
+          onRunNode={(node) => void runSelectedNodeOnly(node)}
+          onSaveNode={onUpdateOutputWorkflowNode}
+          onSelectNode={(nodeKey) => {
+            setSelectedNodeKey(nodeKey)
+            setInspectorMode('output')
+          }}
+          readNodeSkillKeys={readNodeSkillKeys}
+          readOutputPreview={(step) => truncatePreview(readOutputPreview(step), 14000)}
+          selectedNodeKey={selectedNode?.key ?? selectedNodeKey}
+          targetedNodeKey={targetedNodeKey}
+          workflow={activeWorkflow}
+          worldWiki={readRecord(snapshot.draft.metadata).worldWiki}
+        />
+      ) : null}
       <header className="outputs-header">
         <div>
           <p className="outputs-eyebrow">Outputs</p>
@@ -392,6 +424,16 @@ export function OutputsWorkspace({
             <div className="outputs-panel-heading">
               <h3>Workflow</h3>
               <span>{activeWorkflow?.preset.replace(/_/g, ' ') ?? 'No workflow yet'}</span>
+            </div>
+            <div className="outputs-workflow-actions">
+              <button
+                className="outputs-secondary-action"
+                disabled={!activeWorkflow || activeNodes.length === 0}
+                onClick={() => setGraphOpen(true)}
+                type="button"
+              >
+                Expand graph
+              </button>
             </div>
             <div className="outputs-node-list">
               {workflowExecutionPlan?.levels.length ? workflowExecutionPlan.levels.map((level, levelIndex) => (

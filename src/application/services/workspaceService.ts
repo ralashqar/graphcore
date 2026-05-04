@@ -90,6 +90,7 @@ export const workspaceService = {
   parkWorldThread: graphcoreWorkspaceAdapter.parkWorldThread,
   updateWorldThread: graphcoreWorkspaceAdapter.updateWorldThread,
   updateWorldDerivedComposition: graphcoreWorkspaceAdapter.updateWorldDerivedComposition,
+  updateOutputWorkflowNode: graphcoreWorkspaceAdapter.updateOutputWorkflowNode,
   updateWorldEntity: graphcoreWorkspaceAdapter.updateWorldEntity,
   updateWorldRelationship: graphcoreWorkspaceAdapter.updateWorldRelationship,
   updateWorldView: graphcoreWorkspaceAdapter.updateWorldView,

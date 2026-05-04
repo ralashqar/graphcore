@@ -135,6 +135,8 @@ import {
   outputWorkflowCancelResponseSchema,
   outputWorkflowEdgeSchema,
   outputWorkflowNodeSchema,
+  outputWorkflowNodeUpdateRequestSchema,
+  outputWorkflowNodeUpdateResponseSchema,
   outputWorkflowPlanRequestSchema,
   outputWorkflowPlanResponseSchema,
   outputWorkflowRunStepSchema,
@@ -150,6 +152,7 @@ import {
   type OutputWorkflowCancelResponse,
   type OutputWorkflowEdge,
   type OutputWorkflowNode,
+  type OutputWorkflowNodeUpdateResponse,
   type OutputWorkflowPlanRequest,
   type OutputWorkflowPlanResponse,
   type OutputWorkflowRun,
@@ -7448,6 +7451,38 @@ export async function cancelOutputWorkflowRun(runId: string): Promise<OutputWork
   if (parsed.run) {
     await clearProjectCache(parsed.run.projectId, parsed.run.draftId)
   }
+  return parsed
+}
+
+export async function updateOutputWorkflowNode(
+  snapshot: ProjectSnapshot,
+  request: {
+    workflowId: string
+    nodeKey: string
+    position?: { x: number; y: number }
+    inputs?: { prompt?: string }
+    metadata?: { displayLabel?: string; note?: string }
+  },
+): Promise<OutputWorkflowNodeUpdateResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before editing an output workflow.')
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Output workflow editing requires a live Supabase-backed draft.')
+  }
+  const payload = outputWorkflowNodeUpdateRequestSchema.parse({
+    projectId: snapshot.project.id,
+    draftId: snapshot.draft.id,
+    ...request,
+  })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'update-output-workflow-node',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  const parsed = outputWorkflowNodeUpdateResponseSchema.parse(response.data)
+  await clearProjectCache(snapshot.project.id, snapshot.draft.id)
   return parsed
 }
 

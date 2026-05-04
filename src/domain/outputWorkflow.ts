@@ -361,6 +361,30 @@ export const outputWorkflowCancelResponseSchema = z.object({
   cancelled: z.boolean().default(false),
 })
 
+export const outputWorkflowNodeUpdateRequestSchema = z.object({
+  projectId: z.string().min(1),
+  draftId: z.string().min(1),
+  workflowId: z.string().min(1),
+  nodeKey: z.string().min(1),
+  position: z.object({
+    x: z.number().finite(),
+    y: z.number().finite(),
+  }).optional(),
+  inputs: z.object({
+    prompt: z.string().max(32000).optional(),
+  }).strict().optional(),
+  metadata: z.object({
+    displayLabel: z.string().max(120).optional(),
+    note: z.string().max(2000).optional(),
+  }).strict().optional(),
+}).strict()
+
+export const outputWorkflowNodeUpdateResponseSchema = z.object({
+  ok: z.literal(true),
+  node: outputWorkflowNodeSchema,
+  nodes: z.array(outputWorkflowNodeSchema).default([]),
+})
+
 export const outputArtifactResponseSchema = z.object({
   ok: z.literal(true),
   artifact: outputArtifactSchema.nullable().default(null),
@@ -368,6 +392,10 @@ export const outputArtifactResponseSchema = z.object({
 
 export function isTerminalOutputWorkflowRunStatus(status: z.infer<typeof outputWorkflowRunStatusSchema>) {
   return ['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(status)
+}
+
+export function isOutputWorkflowProviderBackedNodeType(nodeType: z.infer<typeof outputWorkflowNodeTypeSchema>) {
+  return outputWorkflowNodeRegistry[nodeType].providerBacked
 }
 
 function stableStringify(value: unknown): string {
@@ -1129,3 +1157,5 @@ export type OutputWorkflowPlanResponse = z.infer<typeof outputWorkflowPlanRespon
 export type OutputWorkflowStartResponse = z.infer<typeof outputWorkflowStartResponseSchema>
 export type OutputWorkflowRunStatusResponse = z.infer<typeof outputWorkflowRunStatusResponseSchema>
 export type OutputWorkflowCancelResponse = z.infer<typeof outputWorkflowCancelResponseSchema>
+export type OutputWorkflowNodeUpdateRequest = z.infer<typeof outputWorkflowNodeUpdateRequestSchema>
+export type OutputWorkflowNodeUpdateResponse = z.infer<typeof outputWorkflowNodeUpdateResponseSchema>
