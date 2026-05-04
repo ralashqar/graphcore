@@ -29,6 +29,8 @@ export const PROJECT_TYPE_OPTIONS: readonly ProjectTypeOption[] = [
       { id: 'short_film', label: 'Short Film', description: 'A tighter world centered on one emotional turn or reveal.' },
       { id: 'shortform_series', label: 'Shortform Series', description: 'A repeatable world built for compact serialized beats.' },
       { id: 'animated_story', label: 'Animated Story', description: 'A stylized story world with strong visual language and cast silhouettes.' },
+      { id: 'fiction_novel', label: 'Fiction Novel', description: 'A chapter-ready story world with a full cast, plot spine, and manuscript-oriented sequence units.' },
+      { id: 'nonfiction_ebook', label: 'Nonfiction Ebook', description: 'A structured knowledge world with chapters, proof points, examples, and an ebook-ready table of contents.' },
     ],
   },
   {
@@ -125,6 +127,8 @@ const subtypeToBrainProfile: Record<ProjectSubtype, ProjectBrainProfile> = {
   short_film: 'story',
   shortform_series: 'story',
   animated_story: 'story',
+  fiction_novel: 'story',
+  nonfiction_ebook: 'story',
   action_rpg: 'game',
   narrative_adventure: 'game',
   narrative_rpg_mobile: 'game',
@@ -284,7 +288,7 @@ export function getDefaultProjectContext(projectType: ProjectType = 'story') {
 }
 
 export function isStoryProjectSubtype(value: ProjectSubtype): value is StoryProjectSubtype {
-  return ['feature_film', 'tv_streaming_series', 'short_film', 'shortform_series', 'animated_story'].includes(value)
+  return ['feature_film', 'tv_streaming_series', 'short_film', 'shortform_series', 'animated_story', 'fiction_novel', 'nonfiction_ebook'].includes(value)
 }
 
 export function isBrandProjectSubtype(value: ProjectSubtype): value is BrandProjectSubtype {

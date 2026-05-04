@@ -142,6 +142,38 @@ GraphCore runs AI workloads through protected Supabase Edge Functions that provi
 - Scroll-stopper implementation
 - Platform-specific formatting
 
+### Output Workflow Agent (`output-workflow`)
+**Purpose**: Generates durable artifacts from the canonical world graph without mixing output execution state into `world_entities`.
+
+**Architecture**:
+- Dedicated workflow tables: `output_workflows`, `output_workflow_nodes`, `output_workflow_edges`, `output_workflow_runs`, `output_workflow_run_steps`, and `output_artifacts`
+- Binary/media files remain in `project_assets`; workflow provenance is stored in asset/artifact metadata with `workflowId`, `runId`, `nodeId`, source world keys, provider/model details, and `metadata.generatedBy`
+- Shared TypeScript node registry in `src/domain/outputWorkflow.ts` validates approved node types for frontend previews, Edge Functions, and workers
+- Durable worker execution claims runs through service-role RPCs, heartbeats progress, executes the DAG with dependency-aware ready-node scheduling, records per-node step output hashes, and completes/fails/cancels the run
+- Workflow execution metadata supports dependency levels, `resourceClass`, `groupKey`, `maxConcurrency`, and `continueOnError`; unchanged nodes complete with `metadata.skipped = true`
+
+**Supported Node Types**:
+- `world_context_query`: resolves entities, relationships, sequence units, threads, wiki metadata, and visual references from the world graph
+- `text_llm`: generates text or structured intermediate outputs from prompt plus world context
+- `image_generation`: wraps image generation nodes for future comic and reference workflows
+- `video_generation`: wraps future Seedance/Fal/cinematic video generation nodes
+- `document_render`: renders manuscript Markdown/HTML into document artifacts
+- `utility_transform`: splits or transforms sequence units into chapters, shots, panels, prompts, or asset packs
+- `output_artifact`: registers final artifacts and links them to `project_assets`
+
+**V1 Preset**:
+- `ebook_from_world`: world context query -> outline/TOC -> chapter plan -> per-sequence-unit chapter prose fan-out -> chapter assembly -> consistency editor -> front/back matter -> document render -> output artifact
+- Inputs are project wiki metadata, selected sequence units, cast/places/items/concepts, style/tone, target format, and prompt
+- Output is a manuscript/PDF artifact stored as `project_assets.kind = "document"` and indexed in `output_artifacts`
+- Story subtypes now include `fiction_novel` and `nonfiction_ebook`; seed profiles should create usable chapter-oriented `sequence_unit` nodes and wiki metadata for downstream ebook generation
+
+**Integration**:
+- Public Edge Functions: `plan-output-workflow`, `start-output-workflow`, `start-output-workflow-run`, `get-output-workflow-status`, `cancel-output-workflow-run`, and `get-output-artifact`
+- The Fly worker claims one output workflow run at a time, then runs independent ready nodes in parallel subject to global and resource-class concurrency caps
+- The Outputs workspace owns preset selection, prompt composition, dependency-level workflow preview, run timeline, skipped/blocked status display, and artifact gallery
+- `CinematicsWorkspace` remains available as an Outputs sub-mode while cinematic graphs are migrated into workflow presets
+- Future presets should wrap existing visual/app/cinematic systems rather than replacing their durable job pipelines
+
 ### World Building Agent
 **Purpose**: Procedurally generates game worlds, environments, and interconnected content systems.
 

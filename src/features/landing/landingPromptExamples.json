@@ -9,6 +9,15 @@
     "clearMs": 360
   },
   {
+    "id": "ebook-world",
+    "source": "idea",
+    "label": "Ebook prompt",
+    "text": "Create a nonfiction ebook world about AI-assisted creators, with chapters, frameworks, examples, and a PDF output plan.",
+    "typingMsPerChar": 24,
+    "holdMs": 2300,
+    "clearMs": 360
+  },
+  {
     "id": "game-rpg",
     "source": "game",
     "label": "Game prompt",

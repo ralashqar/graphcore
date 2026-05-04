@@ -33,8 +33,13 @@ test('story seed profiles require wiki metadata, cast, locations, and ordered se
 
     assert.ok(profile.wikiMetadataRequired.includes('title'))
     assert.ok(profile.wikiMetadataRequired.includes('logline'))
-    assert.ok(categoryIds.has('main_cast'))
-    assert.ok(categoryIds.has('main_locations'))
+    if (profile.projectSubtype === 'nonfiction_ebook') {
+      assert.ok(categoryIds.has('core_framework'))
+      assert.ok(categoryIds.has('proof_examples'))
+    } else {
+      assert.ok(categoryIds.has('main_cast'))
+      assert.ok(categoryIds.has('main_locations'))
+    }
     assert.equal(profile.sequence.requiredFields.includes('ordinal'), true)
     assert.equal(profile.sequence.requiredFields.includes('synopsis'), true)
     assert.equal(profile.sequence.requiredFields.includes('outcome'), true)

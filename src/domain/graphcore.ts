@@ -20,6 +20,13 @@ import {
   cinematicRunSchema,
 } from './cinematics.ts'
 import {
+  outputArtifactSchema,
+  outputWorkflowEdgeSchema,
+  outputWorkflowNodeSchema,
+  outputWorkflowRunSchema,
+  outputWorkflowSchema,
+} from './outputWorkflow.ts'
+import {
   worldEntitySchema,
   worldGraphConnectionSchema,
   worldOperatorSchema,
@@ -748,6 +755,11 @@ export const projectSnapshotSchema = z.object({
   worldBuildBatches: z.array(worldBuildBatchSchema).default([]),
   meshGenerationJobs: z.array(meshGenerationJobSchema).default([]),
   cinematicRuns: z.array(cinematicRunSchema).default([]),
+  outputWorkflows: z.array(outputWorkflowSchema).default([]),
+  outputWorkflowNodes: z.array(outputWorkflowNodeSchema).default([]),
+  outputWorkflowEdges: z.array(outputWorkflowEdgeSchema).default([]),
+  outputWorkflowRuns: z.array(outputWorkflowRunSchema).default([]),
+  outputArtifacts: z.array(outputArtifactSchema).default([]),
   patchSets: z.array(
     z.object({
       id: z.string(),

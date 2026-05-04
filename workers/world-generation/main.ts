@@ -1,6 +1,7 @@
 import { createAdminClient } from '../../supabase/functions/_shared/auth.ts'
 import { processFlyAppGenerationJobs } from '../../supabase/functions/_shared/app-generation-worker.ts'
 import { processFlyWorldEntityIconJobs } from '../../supabase/functions/_shared/entity-icon-worker.ts'
+import { processFlyOutputWorkflowRuns } from '../../supabase/functions/_shared/output-workflow.ts'
 import { processFlyVisualGenerationJobs } from '../../supabase/functions/_shared/visual-generation-worker.ts'
 import { processFlyWorldGenerationJobs } from '../../supabase/functions/_shared/world-prompt.ts'
 
@@ -147,11 +148,36 @@ async function runAppGenerationWorkerLoop() {
   }
 }
 
+async function runOutputWorkflowWorkerLoop() {
+  while (!shuttingDown) {
+    try {
+      const result = await processFlyOutputWorkflowRuns({
+        client,
+        workerId,
+      })
+      if (result.processed) {
+        console.log('[world-generation-worker] processed output workflow run', {
+          workerId,
+          runId: result.run?.id ?? null,
+          status: result.run?.status ?? null,
+          preset: result.run?.preset ?? null,
+        })
+        continue
+      }
+      await sleep(pollIntervalMs)
+    } catch (error) {
+      console.error('[world-generation-worker] output workflow loop error', error)
+      await sleep(Math.max(5_000, pollIntervalMs))
+    }
+  }
+}
+
 await Promise.all([
   runIconWorkerLoop(),
   runVisualWorkerLoop(),
   runGenerationWorkerLoop(),
   runAppGenerationWorkerLoop(),
+  runOutputWorkflowWorkerLoop(),
 ])
 
 console.log('[world-generation-worker] stopped', { workerId })

@@ -12,6 +12,8 @@ export const storyProjectSubtypeSchema = z.enum([
   'short_film',
   'shortform_series',
   'animated_story',
+  'fiction_novel',
+  'nonfiction_ebook',
 ])
 
 export const gameProjectSubtypeSchema = z.enum([

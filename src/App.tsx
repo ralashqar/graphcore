@@ -143,6 +143,9 @@ const AuthDialog = lazy(() =>
 const CinematicsWorkspace = lazy(() =>
   import('./features/cinematics/CinematicsWorkspace').then((module) => ({ default: module.CinematicsWorkspace })),
 )
+const OutputsWorkspace = lazy(() =>
+  import('./features/outputs/OutputsWorkspace').then((module) => ({ default: module.OutputsWorkspace })),
+)
 const GlobalWorkspace = lazy(() =>
   import('./features/global/GlobalWorkspace').then((module) => ({ default: module.GlobalWorkspace })),
 )
@@ -4199,6 +4202,98 @@ export default function App() {
     return workspaceService.getAppPreviewSession(jobId)
   }
 
+  async function planOutputWorkflow(request: Parameters<typeof workspaceService.planOutputWorkflow>[1]) {
+    if (!snapshot) {
+      throw new Error('Load a live GraphCore draft before planning an output workflow.')
+    }
+    if (loadedState?.source !== 'supabase') {
+      throw new Error('Output workflows require a live Supabase-backed draft.')
+    }
+    return workspaceService.planOutputWorkflow(snapshot, request)
+  }
+
+  async function startOutputWorkflow(plan: Parameters<typeof workspaceService.startOutputWorkflow>[1]) {
+    if (!snapshot) {
+      throw new Error('Load a live GraphCore draft before creating an output workflow.')
+    }
+    if (loadedState?.source !== 'supabase') {
+      throw new Error('Output workflows require a live Supabase-backed draft.')
+    }
+    const result = await workspaceService.startOutputWorkflow(snapshot, plan)
+    const current = snapshotRef.current ?? snapshot
+    commitPersistedSnapshot({
+      ...current,
+      outputWorkflows: [
+        result.workflow,
+        ...current.outputWorkflows.filter((workflow) => workflow.id !== result.workflow.id),
+      ],
+      outputWorkflowNodes: [
+        ...current.outputWorkflowNodes.filter((node) => node.workflowId !== result.workflow.id),
+        ...result.nodes,
+      ],
+      outputWorkflowEdges: [
+        ...current.outputWorkflowEdges.filter((edge) => edge.workflowId !== result.workflow.id),
+        ...result.edges,
+      ],
+    })
+    return result
+  }
+
+  async function startOutputWorkflowRun(request: Parameters<typeof workspaceService.startOutputWorkflowRun>[1]) {
+    if (!snapshot) {
+      throw new Error('Load a live GraphCore draft before running an output workflow.')
+    }
+    if (loadedState?.source !== 'supabase') {
+      throw new Error('Output workflows require a live Supabase-backed draft.')
+    }
+    const result = await workspaceService.startOutputWorkflowRun(snapshot, request)
+    const current = snapshotRef.current ?? snapshot
+    commitPersistedSnapshot({
+      ...current,
+      outputWorkflowRuns: [
+        result.run,
+        ...current.outputWorkflowRuns.filter((run) => run.id !== result.run.id),
+      ],
+    })
+    return result
+  }
+
+  async function getOutputWorkflowStatus(runId: string) {
+    const result = await workspaceService.getOutputWorkflowStatus(runId)
+    const current = snapshotRef.current
+    if (current) {
+      commitPersistedSnapshot({
+        ...current,
+        outputWorkflowRuns: [
+          result.run,
+          ...current.outputWorkflowRuns.filter((run) => run.id !== result.run.id),
+        ],
+        outputArtifacts: [
+          ...result.run.artifacts,
+          ...current.outputArtifacts.filter((artifact) => !result.run.artifacts.some((entry) => entry.id === artifact.id)),
+        ],
+      })
+    }
+    return result
+  }
+
+  async function cancelOutputWorkflowRun(runId: string) {
+    const result = await workspaceService.cancelOutputWorkflowRun(runId)
+    if (result.run) {
+      const current = snapshotRef.current
+      if (current) {
+        commitPersistedSnapshot({
+          ...current,
+          outputWorkflowRuns: [
+            result.run,
+            ...current.outputWorkflowRuns.filter((run) => run.id !== result.run?.id),
+          ],
+        })
+      }
+    }
+    return result
+  }
+
   async function refreshLiveSnapshot() {
     const current = snapshotRef.current
     if (!current || loadedState?.source !== 'supabase') return
@@ -6216,44 +6311,56 @@ export default function App() {
               />
             ) : null}
             {activeTab === 'outputs' ? (
-              <CinematicsWorkspace
-                assets={snapshot.assets}
-                canRunCinematics={loadedState?.source === 'supabase'}
-                cinematicRuns={snapshot.cinematicRuns}
-                definitions={snapshot.definitions}
-                deletingGraphKey={deletingGraphKey}
-                diagnostics={bundle.diagnostics}
-                gameSpec={snapshot.gameSpec}
-                pendingStoryboardNodeKeys={pendingStoryboardNodeKeys}
-                preflightStatus={cinematicPreflightStatus}
-                worldBuildBatches={snapshot.worldBuildBatches}
-                selectedEdge={selectedCinematicGraph ? selectedEdge : null}
-                selectedGraph={selectedCinematicGraph}
-                selectedNode={selectedCinematicGraph ? selectedNode : null}
-                snapshotGraphs={snapshot.graphs}
-                onClearSelection={clearGraphSelection}
-                onConnectEdge={connectEdge}
-                onCreateGraph={createGraph}
-                onCreateNode={createNode}
-                onDeleteEdge={deleteEdge}
-                onDeleteGraph={deleteGraph}
-                onDeleteNode={deleteNode}
-                onDuplicateGraph={duplicateGraph}
-                onDuplicateNode={duplicateNode}
-                onCancelCinematicRun={handleCancelCinematicRun}
-                onGenerateTakeStill={handleStartTakeStillGeneration}
-                onGenerateTakeStoryboard={handleStartTakeStoryboardGeneration}
-                onMoveNode={moveNode}
-                onOpenDefinitionLink={openDefinitionWorkspace}
-                onRunCinematicPreflight={handleRunCinematicPreflight}
-                onSelectEdge={setSelectedEdgeKey}
-                onSelectGraph={setSelectedGraphKey}
-                onSelectNode={setSelectedNodeKey}
-                onStartCinematicRun={handleStartCinematicRun}
-                onUpdateEdge={updateEdge}
-                onUpdateGameSpecCinematics={updateGameSpecCinematics}
-                onUpdateGraph={updateGraph}
-                onUpdateNode={updateNode}
+              <OutputsWorkspace
+                canRunOutputs={loadedState?.source === 'supabase'}
+                snapshot={snapshot}
+                onCancelOutputWorkflowRun={cancelOutputWorkflowRun}
+                onGetOutputWorkflowStatus={getOutputWorkflowStatus}
+                onPlanOutputWorkflow={planOutputWorkflow}
+                onRefreshLiveSnapshot={refreshLiveSnapshot}
+                onStartOutputWorkflow={startOutputWorkflow}
+                onStartOutputWorkflowRun={startOutputWorkflowRun}
+                cinematicsPanel={(
+                  <CinematicsWorkspace
+                    assets={snapshot.assets}
+                    canRunCinematics={loadedState?.source === 'supabase'}
+                    cinematicRuns={snapshot.cinematicRuns}
+                    definitions={snapshot.definitions}
+                    deletingGraphKey={deletingGraphKey}
+                    diagnostics={bundle.diagnostics}
+                    gameSpec={snapshot.gameSpec}
+                    pendingStoryboardNodeKeys={pendingStoryboardNodeKeys}
+                    preflightStatus={cinematicPreflightStatus}
+                    worldBuildBatches={snapshot.worldBuildBatches}
+                    selectedEdge={selectedCinematicGraph ? selectedEdge : null}
+                    selectedGraph={selectedCinematicGraph}
+                    selectedNode={selectedCinematicGraph ? selectedNode : null}
+                    snapshotGraphs={snapshot.graphs}
+                    onClearSelection={clearGraphSelection}
+                    onConnectEdge={connectEdge}
+                    onCreateGraph={createGraph}
+                    onCreateNode={createNode}
+                    onDeleteEdge={deleteEdge}
+                    onDeleteGraph={deleteGraph}
+                    onDeleteNode={deleteNode}
+                    onDuplicateGraph={duplicateGraph}
+                    onDuplicateNode={duplicateNode}
+                    onCancelCinematicRun={handleCancelCinematicRun}
+                    onGenerateTakeStill={handleStartTakeStillGeneration}
+                    onGenerateTakeStoryboard={handleStartTakeStoryboardGeneration}
+                    onMoveNode={moveNode}
+                    onOpenDefinitionLink={openDefinitionWorkspace}
+                    onRunCinematicPreflight={handleRunCinematicPreflight}
+                    onSelectEdge={setSelectedEdgeKey}
+                    onSelectGraph={setSelectedGraphKey}
+                    onSelectNode={setSelectedNodeKey}
+                    onStartCinematicRun={handleStartCinematicRun}
+                    onUpdateEdge={updateEdge}
+                    onUpdateGameSpecCinematics={updateGameSpecCinematics}
+                    onUpdateGraph={updateGraph}
+                    onUpdateNode={updateNode}
+                  />
+                )}
               />
             ) : null}
             {activeTab === 'library' ? (

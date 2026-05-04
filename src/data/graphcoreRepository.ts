@@ -129,6 +129,34 @@ import {
   type AppGenerationStatusResponse,
   type AppPreviewSessionResponse,
 } from '../domain/appPreviewPipeline'
+import {
+  outputArtifactResponseSchema,
+  outputArtifactSchema,
+  outputWorkflowCancelResponseSchema,
+  outputWorkflowEdgeSchema,
+  outputWorkflowNodeSchema,
+  outputWorkflowPlanRequestSchema,
+  outputWorkflowPlanResponseSchema,
+  outputWorkflowRunStepSchema,
+  outputWorkflowRunStartRequestSchema,
+  outputWorkflowRunStatusRequestSchema,
+  outputWorkflowRunStatusResponseSchema,
+  outputWorkflowRunSchema,
+  outputWorkflowSchema,
+  outputWorkflowStartRequestSchema,
+  outputWorkflowStartResponseSchema,
+  type OutputArtifact,
+  type OutputWorkflow,
+  type OutputWorkflowCancelResponse,
+  type OutputWorkflowEdge,
+  type OutputWorkflowNode,
+  type OutputWorkflowPlanRequest,
+  type OutputWorkflowPlanResponse,
+  type OutputWorkflowRun,
+  type OutputWorkflowRunStep,
+  type OutputWorkflowRunStatusResponse,
+  type OutputWorkflowStartResponse,
+} from '../domain/outputWorkflow'
 import { buildUrlSourceContextFromExtractionResponse } from '../domain/onboardingSource'
 import {
   worldThreadSchema,
@@ -1603,6 +1631,118 @@ type WorldGraphConnectionRow = {
   updated_at: string
 }
 
+type OutputWorkflowRow = {
+  id: string
+  project_id: string
+  draft_id: string
+  key: string
+  name: string
+  description: string | null
+  preset: OutputWorkflow['preset']
+  status: OutputWorkflow['status']
+  created_by: string | null
+  metadata: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+
+type OutputWorkflowNodeRow = {
+  id: string
+  workflow_id: string
+  key: string
+  node_type: OutputWorkflowNode['nodeType']
+  label: string
+  position: Record<string, unknown> | null
+  config: Record<string, unknown> | null
+  inputs: Record<string, unknown> | null
+  outputs: Record<string, unknown> | null
+  dirty: boolean | null
+  input_hash: string | null
+  output_hash: string | null
+  metadata: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+
+type OutputWorkflowEdgeRow = {
+  id: string
+  workflow_id: string
+  key: string
+  source_node_key: string
+  source_port: string
+  target_node_key: string
+  target_port: string
+  metadata: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+
+type OutputWorkflowRunRow = {
+  id: string
+  project_id: string
+  draft_id: string
+  workflow_id: string
+  requested_by: string | null
+  status: OutputWorkflowRun['status']
+  preset: OutputWorkflowRun['preset']
+  prompt: string | null
+  target_format: string | null
+  world_snapshot_fingerprint: string | null
+  input: Record<string, unknown> | null
+  outputs: Record<string, unknown> | null
+  error_message: string | null
+  worker_id: string | null
+  heartbeat_at: string | null
+  attempt_count: number | null
+  metadata: Record<string, unknown> | null
+  started_at: string | null
+  completed_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+type OutputWorkflowRunStepRow = {
+  id: string
+  run_id: string
+  workflow_id: string
+  node_id: string | null
+  node_key: string
+  node_type: OutputWorkflowNode['nodeType']
+  status: OutputWorkflowRun['status']
+  order_index: number | null
+  label: string
+  input_hash: string | null
+  output_hash: string | null
+  outputs: Record<string, unknown> | null
+  provider: string | null
+  model: string | null
+  provider_request_id: string | null
+  error_message: string | null
+  metadata: Record<string, unknown> | null
+  started_at: string | null
+  completed_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+type OutputArtifactRow = {
+  id: string
+  project_id: string
+  draft_id: string
+  workflow_id: string | null
+  run_id: string | null
+  node_id: string | null
+  key: string
+  name: string
+  kind: OutputArtifact['kind']
+  asset_key: string | null
+  mime_type: string | null
+  summary: string | null
+  metadata: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+
 type WorldPromptSessionRow = {
   id: string
   draft_id: string
@@ -1757,6 +1897,18 @@ const WORLD_RESULT_SELECT =
   'id, key, result_type, source_operator_key, title, summary, preview_asset_key, status, metadata, created_at, updated_at'
 const WORLD_CONNECTION_SELECT =
   'id, key, source_node_key, source_node_kind, target_node_key, target_node_kind, role, metadata, created_at, updated_at'
+const OUTPUT_WORKFLOW_SELECT =
+  'id, project_id, draft_id, key, name, description, preset, status, created_by, metadata, created_at, updated_at'
+const OUTPUT_WORKFLOW_NODE_SELECT =
+  'id, workflow_id, key, node_type, label, position, config, inputs, outputs, dirty, input_hash, output_hash, metadata, created_at, updated_at'
+const OUTPUT_WORKFLOW_EDGE_SELECT =
+  'id, workflow_id, key, source_node_key, source_port, target_node_key, target_port, metadata, created_at, updated_at'
+const OUTPUT_WORKFLOW_RUN_SELECT =
+  'id, project_id, draft_id, workflow_id, requested_by, status, preset, prompt, target_format, world_snapshot_fingerprint, input, outputs, error_message, worker_id, heartbeat_at, attempt_count, metadata, started_at, completed_at, created_at, updated_at'
+const OUTPUT_WORKFLOW_RUN_STEP_SELECT =
+  'id, run_id, workflow_id, node_id, node_key, node_type, status, order_index, label, input_hash, output_hash, outputs, provider, model, provider_request_id, error_message, metadata, started_at, completed_at, created_at, updated_at'
+const OUTPUT_ARTIFACT_SELECT =
+  'id, project_id, draft_id, workflow_id, run_id, node_id, key, name, kind, asset_key, mime_type, summary, metadata, created_at, updated_at'
 const WORLD_PROMPT_SESSION_SELECT =
   'id, draft_id, key, title, status, is_active, summary_memory, last_context, selected_root_entity_key, selected_view_key, model, metadata, created_at, updated_at'
 const WORLD_PROMPT_TURN_SELECT =
@@ -1959,6 +2111,143 @@ function mapWorldGraphConnectionRow(entry: WorldGraphConnectionRow): WorldGraphC
     createdAt: entry.created_at,
     updatedAt: entry.updated_at,
   }
+}
+
+function mapOutputWorkflowRow(entry: OutputWorkflowRow): OutputWorkflow {
+  return outputWorkflowSchema.parse({
+    id: entry.id,
+    projectId: entry.project_id,
+    draftId: entry.draft_id,
+    key: entry.key,
+    name: entry.name,
+    description: entry.description ?? '',
+    preset: entry.preset,
+    status: entry.status,
+    createdBy: entry.created_by,
+    metadata: entry.metadata ?? {},
+    createdAt: entry.created_at,
+    updatedAt: entry.updated_at,
+  })
+}
+
+function mapOutputWorkflowNodeRow(entry: OutputWorkflowNodeRow): OutputWorkflowNode {
+  const position = entry.position && typeof entry.position === 'object'
+    ? {
+        x: typeof entry.position.x === 'number' ? entry.position.x : 0,
+        y: typeof entry.position.y === 'number' ? entry.position.y : 0,
+      }
+    : { x: 0, y: 0 }
+
+  return outputWorkflowNodeSchema.parse({
+    id: entry.id,
+    workflowId: entry.workflow_id,
+    key: entry.key,
+    nodeType: entry.node_type,
+    label: entry.label,
+    position,
+    config: entry.config ?? {},
+    inputs: entry.inputs ?? {},
+    outputs: entry.outputs ?? {},
+    dirty: entry.dirty ?? true,
+    inputHash: entry.input_hash ?? '',
+    outputHash: entry.output_hash ?? '',
+    metadata: entry.metadata ?? {},
+    createdAt: entry.created_at,
+    updatedAt: entry.updated_at,
+  })
+}
+
+function mapOutputWorkflowEdgeRow(entry: OutputWorkflowEdgeRow): OutputWorkflowEdge {
+  return outputWorkflowEdgeSchema.parse({
+    id: entry.id,
+    workflowId: entry.workflow_id,
+    key: entry.key,
+    sourceNodeKey: entry.source_node_key,
+    sourcePort: entry.source_port,
+    targetNodeKey: entry.target_node_key,
+    targetPort: entry.target_port,
+    metadata: entry.metadata ?? {},
+    createdAt: entry.created_at,
+    updatedAt: entry.updated_at,
+  })
+}
+
+function mapOutputWorkflowRunStepRow(entry: OutputWorkflowRunStepRow): OutputWorkflowRunStep {
+  return outputWorkflowRunStepSchema.parse({
+    id: entry.id,
+    runId: entry.run_id,
+    workflowId: entry.workflow_id,
+    nodeId: entry.node_id,
+    nodeKey: entry.node_key,
+    nodeType: entry.node_type,
+    status: entry.status,
+    orderIndex: entry.order_index ?? 0,
+    label: entry.label,
+    inputHash: entry.input_hash ?? '',
+    outputHash: entry.output_hash ?? '',
+    outputs: entry.outputs ?? {},
+    provider: entry.provider,
+    model: entry.model,
+    providerRequestId: entry.provider_request_id,
+    errorMessage: entry.error_message,
+    metadata: entry.metadata ?? {},
+    startedAt: entry.started_at,
+    completedAt: entry.completed_at,
+    createdAt: entry.created_at,
+    updatedAt: entry.updated_at,
+  })
+}
+
+function mapOutputArtifactRow(entry: OutputArtifactRow): OutputArtifact {
+  return outputArtifactSchema.parse({
+    id: entry.id,
+    projectId: entry.project_id,
+    draftId: entry.draft_id,
+    workflowId: entry.workflow_id,
+    runId: entry.run_id,
+    nodeId: entry.node_id,
+    key: entry.key,
+    name: entry.name,
+    kind: entry.kind,
+    assetKey: entry.asset_key,
+    mimeType: entry.mime_type ?? '',
+    summary: entry.summary ?? '',
+    metadata: entry.metadata ?? {},
+    createdAt: entry.created_at,
+    updatedAt: entry.updated_at,
+  })
+}
+
+function mapOutputWorkflowRunRow(
+  entry: OutputWorkflowRunRow,
+  steps: OutputWorkflowRunStep[],
+  artifacts: OutputArtifact[],
+): OutputWorkflowRun {
+  return outputWorkflowRunSchema.parse({
+    id: entry.id,
+    projectId: entry.project_id,
+    draftId: entry.draft_id,
+    workflowId: entry.workflow_id,
+    requestedBy: entry.requested_by,
+    status: entry.status,
+    preset: entry.preset,
+    prompt: entry.prompt ?? '',
+    targetFormat: entry.target_format ?? 'pdf',
+    worldSnapshotFingerprint: entry.world_snapshot_fingerprint ?? '',
+    input: entry.input ?? {},
+    outputs: entry.outputs ?? {},
+    errorMessage: entry.error_message,
+    workerId: entry.worker_id,
+    heartbeatAt: entry.heartbeat_at,
+    attemptCount: entry.attempt_count ?? 0,
+    metadata: entry.metadata ?? {},
+    steps: steps.filter((step) => step.runId === entry.id),
+    artifacts: artifacts.filter((artifact) => artifact.runId === entry.id),
+    startedAt: entry.started_at,
+    completedAt: entry.completed_at,
+    createdAt: entry.created_at,
+    updatedAt: entry.updated_at,
+  })
 }
 
 function mapWorldPromptSessionRow(entry: WorldPromptSessionRow): WorldPromptSession {
@@ -2640,6 +2929,11 @@ export async function loadProjectSnapshot(
     worldBuildBatchesResponse,
     meshGenerationJobsResponse,
     cinematicRunsResponse,
+    outputWorkflowsResponse,
+    outputWorkflowNodesResponse,
+    outputWorkflowEdgesResponse,
+    outputWorkflowRunsResponse,
+    outputArtifactsResponse,
     patchSetsResponse,
     releasesResponse,
   ] = await Promise.all([
@@ -2871,6 +3165,45 @@ export async function loadProjectSnapshot(
           .order('created_at', { ascending: false })
           .limit(includeFull ? 100 : 20)
       : Promise.resolve(emptyPostgrestResponse()),
+    includeWorld
+      ? supabase
+          .from('output_workflows')
+          .select(OUTPUT_WORKFLOW_SELECT)
+          .eq('draft_id', draft.id)
+          .order('updated_at', { ascending: false })
+          .limit(includeFull ? 100 : 20)
+      : Promise.resolve(emptyPostgrestResponse()),
+    includeWorld
+      ? supabase
+          .from('output_workflow_nodes')
+          .select(OUTPUT_WORKFLOW_NODE_SELECT)
+          .eq('draft_id', draft.id)
+          .order('created_at', { ascending: true })
+      : Promise.resolve(emptyPostgrestResponse()),
+    includeWorld
+      ? supabase
+          .from('output_workflow_edges')
+          .select(OUTPUT_WORKFLOW_EDGE_SELECT)
+          .eq('draft_id', draft.id)
+          .order('created_at', { ascending: true })
+      : Promise.resolve(emptyPostgrestResponse()),
+    includeJobs || includeWorld
+      ? supabase
+          .from('output_workflow_runs')
+          .select(OUTPUT_WORKFLOW_RUN_SELECT)
+          .eq('draft_id', draft.id)
+          .in('status', includeFull ? ['queued', 'running', 'completed', 'completed_with_errors', 'failed', 'cancelled'] : ['queued', 'running'])
+          .order('created_at', { ascending: false })
+          .limit(includeFull ? 100 : 20)
+      : Promise.resolve(emptyPostgrestResponse()),
+    includeWorld
+      ? supabase
+          .from('output_artifacts')
+          .select(OUTPUT_ARTIFACT_SELECT)
+          .eq('draft_id', draft.id)
+          .order('created_at', { ascending: false })
+          .limit(includeFull ? 200 : 50)
+      : Promise.resolve(emptyPostgrestResponse()),
     includeFull
       ? supabase
           .from('patch_sets')
@@ -2919,6 +3252,11 @@ export async function loadProjectSnapshot(
     ['world_build_batches', worldBuildBatchesResponse],
     ['mesh_generation_jobs', meshGenerationJobsResponse],
     ['cinematic_runs', cinematicRunsResponse],
+    ['output_workflows', outputWorkflowsResponse],
+    ['output_workflow_nodes', outputWorkflowNodesResponse],
+    ['output_workflow_edges', outputWorkflowEdgesResponse],
+    ['output_workflow_runs', outputWorkflowRunsResponse],
+    ['output_artifacts', outputArtifactsResponse],
     ['patch_sets', patchSetsResponse],
     ['releases', releasesResponse],
   ] as const
@@ -2981,6 +3319,17 @@ export async function loadProjectSnapshot(
   const cinematicRunSchemaMissing =
     postgrestStatus(cinematicRunsResponse) === 404
     || isMissingRelationError(cinematicRunsResponse.error, 'cinematic_runs')
+  const outputWorkflowSchemaMissing =
+    postgrestStatus(outputWorkflowsResponse) === 404
+    || postgrestStatus(outputWorkflowNodesResponse) === 404
+    || postgrestStatus(outputWorkflowEdgesResponse) === 404
+    || postgrestStatus(outputWorkflowRunsResponse) === 404
+    || postgrestStatus(outputArtifactsResponse) === 404
+    || isMissingRelationError(outputWorkflowsResponse.error, 'output_workflows')
+    || isMissingRelationError(outputWorkflowNodesResponse.error, 'output_workflow_nodes')
+    || isMissingRelationError(outputWorkflowEdgesResponse.error, 'output_workflow_edges')
+    || isMissingRelationError(outputWorkflowRunsResponse.error, 'output_workflow_runs')
+    || isMissingRelationError(outputArtifactsResponse.error, 'output_artifacts')
 
   if (definitionsResponse.error || archetypesResponse.error) {
     return {
@@ -3024,6 +3373,11 @@ export async function loadProjectSnapshot(
   const worldBuildBatches = worldBuildSchemaMissing ? [] : (worldBuildBatchesResponse.data as WorldBuildBatchRow[] | null) ?? []
   const meshGenerationJobs = meshGenerationSchemaMissing ? [] : (meshGenerationJobsResponse.data as MeshGenerationJobRow[] | null) ?? []
   const cinematicRuns = cinematicRunSchemaMissing ? [] : (cinematicRunsResponse.data as CinematicRunRow[] | null) ?? []
+  const outputWorkflows = outputWorkflowSchemaMissing ? [] : (outputWorkflowsResponse.data as OutputWorkflowRow[] | null) ?? []
+  const outputWorkflowNodes = outputWorkflowSchemaMissing ? [] : (outputWorkflowNodesResponse.data as OutputWorkflowNodeRow[] | null) ?? []
+  const outputWorkflowEdges = outputWorkflowSchemaMissing ? [] : (outputWorkflowEdgesResponse.data as OutputWorkflowEdgeRow[] | null) ?? []
+  const outputWorkflowRuns = outputWorkflowSchemaMissing ? [] : (outputWorkflowRunsResponse.data as OutputWorkflowRunRow[] | null) ?? []
+  const outputArtifacts = outputWorkflowSchemaMissing ? [] : (outputArtifactsResponse.data as OutputArtifactRow[] | null) ?? []
   const worldBuildJobs =
     worldBuildSchemaMissing || worldBuildBatches.length === 0
       ? []
@@ -3046,6 +3400,16 @@ export async function loadProjectSnapshot(
             .in('status', includeFull ? ['queued', 'running', 'succeeded', 'failed', 'cancelled', 'skipped'] : ['queued', 'running'])
             .order('order_index', { ascending: true })
         ).data as CinematicRunJobRow[] | null ?? []
+  const outputWorkflowRunSteps =
+    outputWorkflowSchemaMissing || outputWorkflowRuns.length === 0
+      ? []
+      : (
+          await supabase
+            .from('output_workflow_run_steps')
+            .select(OUTPUT_WORKFLOW_RUN_STEP_SELECT)
+            .in('run_id', outputWorkflowRuns.map((run) => run.id))
+            .order('order_index', { ascending: true })
+        ).data as OutputWorkflowRunStepRow[] | null ?? []
 
   let snapshot = projectSnapshotSchema.parse({
     workspace: {
@@ -3475,6 +3839,15 @@ export async function loadProjectSnapshot(
           updatedAt: job.updated_at,
         })),
     })),
+    outputWorkflows: outputWorkflows.map((workflow) => mapOutputWorkflowRow(workflow)),
+    outputWorkflowNodes: outputWorkflowNodes.map((node) => mapOutputWorkflowNodeRow(node)),
+    outputWorkflowEdges: outputWorkflowEdges.map((edge) => mapOutputWorkflowEdgeRow(edge)),
+    outputWorkflowRuns: (() => {
+      const mappedSteps = outputWorkflowRunSteps.map((step) => mapOutputWorkflowRunStepRow(step))
+      const mappedArtifacts = outputArtifacts.map((artifact) => mapOutputArtifactRow(artifact))
+      return outputWorkflowRuns.map((run) => mapOutputWorkflowRunRow(run, mappedSteps, mappedArtifacts))
+    })(),
+    outputArtifacts: outputArtifacts.map((artifact) => mapOutputArtifactRow(artifact)),
     patchSets: patchSetsResponse.data ?? [],
     releases: (releasesResponse.data ?? []).map((release) => ({
       id: release.id,
@@ -6883,6 +7256,206 @@ export async function getAppPreviewSession(jobId: string): Promise<AppPreviewSes
     throw new Error(await readFunctionsErrorMessage(response.error))
   }
   return appPreviewSessionResponseSchema.parse(response.data)
+}
+
+function readOutputWorkflowWorldWiki(snapshot: ProjectSnapshot) {
+  const metadata = snapshot.draft.metadata && typeof snapshot.draft.metadata === 'object'
+    ? snapshot.draft.metadata as Record<string, unknown>
+    : {}
+  const worldWiki = metadata.worldWiki && typeof metadata.worldWiki === 'object'
+    ? metadata.worldWiki as Record<string, unknown>
+    : {}
+  return worldWiki
+}
+
+function buildOutputWorkflowSnapshot(snapshot: ProjectSnapshot): OutputWorkflowPlanRequest['snapshot'] {
+  return outputWorkflowPlanRequestSchema.shape.snapshot.parse({
+    project: {
+      id: snapshot.project.id,
+      name: snapshot.project.name,
+      summary: snapshot.project.summary,
+    },
+    draft: {
+      id: snapshot.draft.id,
+      name: snapshot.draft.name,
+      metadata: snapshot.draft.metadata ?? {},
+    },
+    projectContext: snapshot.projectContext ?? null,
+    worldEntities: snapshot.worldEntities,
+    worldRelationships: snapshot.worldRelationships,
+    worldThreads: snapshot.worldThreads,
+    worldWiki: readOutputWorkflowWorldWiki(snapshot),
+  })
+}
+
+function buildOutputWorkflowRunInput(snapshot: ProjectSnapshot, request?: {
+  selectedEntityKeys?: string[]
+  selectedSequenceUnitKeys?: string[]
+}) {
+  const selectedEntityKeys = request?.selectedEntityKeys ?? []
+  const selectedSequenceUnitKeys = request?.selectedSequenceUnitKeys ?? []
+  return {
+    projectContext: snapshot.projectContext ?? null,
+    worldEntities: snapshot.worldEntities,
+    worldRelationships: snapshot.worldRelationships,
+    worldThreads: snapshot.worldThreads,
+    worldWiki: readOutputWorkflowWorldWiki(snapshot),
+    assets: snapshot.assets.map((asset) => ({
+      key: asset.key,
+      name: asset.name,
+      kind: asset.kind,
+      mimeType: asset.mimeType,
+      storagePath: asset.storagePath,
+      metadata: asset.metadata,
+    })),
+    sourceEntityKeys: selectedEntityKeys,
+    sourceSequenceUnitKeys: selectedSequenceUnitKeys,
+  }
+}
+
+export async function planOutputWorkflow(
+  snapshot: ProjectSnapshot,
+  request?: Omit<Partial<OutputWorkflowPlanRequest>, 'projectId' | 'draftId' | 'snapshot'>,
+): Promise<OutputWorkflowPlanResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before planning an output workflow.')
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Output workflow planning requires a live Supabase-backed draft.')
+  }
+  const payload = outputWorkflowPlanRequestSchema.parse({
+    projectId: snapshot.project.id,
+    draftId: snapshot.draft.id,
+    prompt: request?.prompt ?? '',
+    selectedEntityKeys: request?.selectedEntityKeys ?? [],
+    selectedSequenceUnitKeys: request?.selectedSequenceUnitKeys ?? [],
+    targetFormat: request?.targetFormat ?? 'pdf',
+    snapshot: buildOutputWorkflowSnapshot(snapshot),
+  })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'plan-output-workflow',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  return outputWorkflowPlanResponseSchema.parse(response.data)
+}
+
+export async function startOutputWorkflow(
+  snapshot: ProjectSnapshot,
+  plan: OutputWorkflowPlanResponse['plan'],
+): Promise<OutputWorkflowStartResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before creating an output workflow.')
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Output workflow creation requires a live Supabase-backed draft.')
+  }
+  const payload = outputWorkflowStartRequestSchema.parse({
+    projectId: snapshot.project.id,
+    draftId: snapshot.draft.id,
+    plan,
+  })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'start-output-workflow',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  const parsed = outputWorkflowStartResponseSchema.parse(response.data)
+  await clearProjectCache(snapshot.project.id, snapshot.draft.id)
+  return parsed
+}
+
+export async function startOutputWorkflowRun(
+  snapshot: ProjectSnapshot,
+  request: {
+    workflowId: string
+    prompt?: string
+    targetFormat?: 'pdf' | 'epub' | 'docx' | 'markdown'
+    selectedEntityKeys?: string[]
+    selectedSequenceUnitKeys?: string[]
+    input?: Record<string, unknown>
+    metadata?: Record<string, unknown>
+  },
+): Promise<OutputWorkflowRunStatusResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before running an output workflow.')
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Output workflow runs require a live Supabase-backed draft.')
+  }
+  const input = {
+    ...buildOutputWorkflowRunInput(snapshot, request),
+    ...(request.input ?? {}),
+  }
+  const payload = outputWorkflowRunStartRequestSchema.parse({
+    projectId: snapshot.project.id,
+    draftId: snapshot.draft.id,
+    workflowId: request.workflowId,
+    prompt: request.prompt ?? '',
+    targetFormat: request.targetFormat ?? 'pdf',
+    input,
+    metadata: request.metadata ?? {},
+  })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'start-output-workflow-run',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  const parsed = outputWorkflowRunStatusResponseSchema.parse(response.data)
+  await clearProjectCache(snapshot.project.id, snapshot.draft.id)
+  return parsed
+}
+
+export async function getOutputWorkflowStatus(runId: string): Promise<OutputWorkflowRunStatusResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before loading an output workflow.')
+  const payload = outputWorkflowRunStatusRequestSchema.parse({ runId })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'get-output-workflow-status',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  const parsed = outputWorkflowRunStatusResponseSchema.parse(response.data)
+  if (parsed.terminal) {
+    await clearProjectCache(parsed.run.projectId, parsed.run.draftId)
+  }
+  return parsed
+}
+
+export async function cancelOutputWorkflowRun(runId: string): Promise<OutputWorkflowCancelResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before cancelling an output workflow.')
+  const payload = outputWorkflowRunStatusRequestSchema.parse({ runId })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'cancel-output-workflow-run',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  const parsed = outputWorkflowCancelResponseSchema.parse(response.data)
+  if (parsed.run) {
+    await clearProjectCache(parsed.run.projectId, parsed.run.draftId)
+  }
+  return parsed
+}
+
+export async function getOutputArtifact(request: { artifactId?: string; artifactKey?: string }) {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before loading an output artifact.')
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'get-output-artifact',
+    request,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  return outputArtifactResponseSchema.parse(response.data)
 }
 
 export async function extractSourceUrlForWorldPrompt(url: string): Promise<WorldPromptSourceContext> {

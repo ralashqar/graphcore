@@ -161,6 +161,24 @@ verify_jwt = false
 [functions.start-world-prompt-turn]
 verify_jwt = false
 
+[functions.plan-output-workflow]
+verify_jwt = false
+
+[functions.start-output-workflow]
+verify_jwt = false
+
+[functions.start-output-workflow-run]
+verify_jwt = false
+
+[functions.get-output-workflow-status]
+verify_jwt = false
+
+[functions.cancel-output-workflow-run]
+verify_jwt = false
+
+[functions.get-output-artifact]
+verify_jwt = false
+
 [functions.start-world-seed-inference]
 verify_jwt = false
 

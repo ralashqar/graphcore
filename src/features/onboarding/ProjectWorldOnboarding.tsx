@@ -66,6 +66,11 @@ const EXAMPLES = [
     prompt: 'Create a connected fantasy series world about a fallen empire ruled by shadows, where memory is the last magic. Generate the title, logline, full main cast, main locations, two rival factions, one forbidden artifact, key lore concepts, and an ordered main story sequence with major beats from inciting incident through finale.',
   },
   {
+    title: 'Nonfiction Ebook',
+    summary: 'A practical guide with a chapter-ready world graph.',
+    prompt: 'Create a nonfiction ebook project about AI-assisted solo creators building reusable content systems. Generate the title, reader promise, thesis, target audience, core framework concepts, reader problems, proof examples, exercises, visual motifs, and an ordered chapter sequence from introduction through conclusion that can be turned into a PDF ebook output.',
+  },
+  {
     title: 'Cyberpunk City',
     summary: 'A megacity controlled by contracts and synthetic ghosts.',
     prompt: 'Create a cyberpunk thriller world where corporate saints, street archivists, and synthetic ghosts fight over an algorithm that predicts betrayal. Generate the title, logline, main cast, districts, factions, signature tech objects, and the ordered main story sequence of escalating betrayals and reversals.',

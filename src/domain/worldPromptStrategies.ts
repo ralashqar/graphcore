@@ -539,12 +539,15 @@ const STORY_PROMPT_STRATEGY: WorldPromptStrategy = {
   id: 'story',
   plannerGuidance: [
     'For Story projects, use story/world ontology and sequence_unit nodes for authored chapters, episodes, acts, or story beats.',
+    'For fiction_novel and nonfiction_ebook subtypes, make sequence_unit nodes manuscript-facing: chapter order, reader/story promise, outcome, consequence, and enough wiki metadata for the Outputs ebook preset.',
   ],
   incrementalManifestGuidance: [
     'For Story projects, sequence-heavy requests should create sequence_unit work items with complete sequence metadata.',
+    'For book or ebook requests, plan chapter/table-of-contents work items before prose or asset work so downstream output workflows can bind sequence units automatically.',
   ],
   incrementalWorkItemGuidance: [
     'For Story projects, keep sequence_unit metadata complete when creating authored progression.',
+    'For manuscript-facing chapters, include synopsis, dramaticQuestion or reader question, storyFunction, outcome, consequences, openLoops, and resolvedLoops.',
   ],
 }
 

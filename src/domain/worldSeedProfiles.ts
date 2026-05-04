@@ -55,6 +55,13 @@ const storyCategories: WorldSeedSkeletonCategory[] = [
   { id: 'objects_concepts', label: 'Key objects or concepts', nodeType: 'object', min: 1, max: 4, purpose: 'Create artifacts, symbols, MacGuffins, technologies, or lore concepts that make the story world distinct.', required: false },
 ]
 
+const nonfictionEbookCategories: WorldSeedSkeletonCategory[] = [
+  { id: 'core_framework', label: 'Core framework', nodeType: 'concept', min: 4, max: 8, purpose: 'Create the book thesis, method, principles, mental models, and named framework concepts.', required: true },
+  { id: 'audience_problems', label: 'Audience problems', nodeType: 'concept', min: 3, max: 6, purpose: 'Create reader pains, desired outcomes, objections, and transformation milestones.', required: true },
+  { id: 'proof_examples', label: 'Proof and examples', nodeType: 'object', min: 3, max: 7, purpose: 'Create case studies, exercises, checklists, diagrams, examples, or proof assets that support the chapters.', required: true },
+  { id: 'voices_sources', label: 'Voices or source actors', nodeType: 'actor', min: 1, max: 4, purpose: 'Create author, reader archetypes, expert voices, or scenario characters when the ebook benefits from examples.', required: false },
+]
+
 const gameCategories: WorldSeedSkeletonCategory[] = [
   { id: 'regions_locations', label: 'Regions and playable locations', nodeType: 'place', min: 4, max: 7, purpose: 'Create hubs, landmarks, regions, arenas, biomes, or traversal spaces that support play.', required: true },
   { id: 'factions_communities', label: 'Factions and communities', nodeType: 'group', min: 2, max: 5, purpose: 'Create groups that produce conflict, quests, economy, social pressure, or territorial identity.', required: true },
@@ -109,20 +116,50 @@ function buildProfile(projectSubtype: ProjectSubtype): WorldSeedSkeletonProfile 
   const projectType = profileTypeForSubtype(projectSubtype)
   const subtypeLabel = getProjectSubtypeOption(projectSubtype)?.label ?? projectSubtype
   if (projectType === 'story') {
+    if (projectSubtype === 'nonfiction_ebook') {
+      return worldSeedSkeletonProfileSchema.parse({
+        id: 'story.nonfiction_ebook.initial_skeleton',
+        projectType,
+        projectSubtype,
+        label: `${subtypeLabel} initial ebook skeleton`,
+        wikiMetadataRequired: ['title', 'logline', 'synopsis', 'genre', 'themes', 'toneTags', 'coreConflict', 'visualMotifs'],
+        categories: nonfictionEbookCategories,
+        sequence: {
+          unitKind: 'chapter',
+          min: 6,
+          max: 10,
+          requiredRelationships: ['precedes', 'causes', 'pays_off'],
+          requiredFields: ['ordinal', 'synopsis', 'dramaticQuestion', 'storyFunction', 'outcome', 'consequences', 'openLoops', 'resolvedLoops'],
+          purpose: 'Create an ebook table of contents as ordered sequence_unit chapter nodes, each with a reader promise, proof, example, and takeaway.',
+        },
+        relationshipGuidance: [
+          'Link each chapter sequence_unit to the concepts, proof assets, examples, exercises, and reader objections it uses.',
+          'Use relationships to show prerequisite ideas, build order, and payoff across the table of contents.',
+          'Keep canon structured for later ebook generation, not only wiki browsing.',
+        ],
+        plannerDirectives: [
+          'Create project wiki metadata first, including the working title, reader promise, thesis, and target audience.',
+          'Create the framework concepts, reader problems, proof assets, examples, and exercises needed for a useful ebook.',
+          'Create ordered sequence_unit chapter nodes for the full ebook from introduction through conclusion.',
+        ],
+      }) as WorldSeedSkeletonProfile
+    }
     return worldSeedSkeletonProfileSchema.parse({
       id: `story.${projectSubtype}.initial_skeleton`,
       projectType,
       projectSubtype,
-      label: `${subtypeLabel} initial story skeleton`,
+      label: `${subtypeLabel} initial ${projectSubtype === 'fiction_novel' ? 'novel' : 'story'} skeleton`,
       wikiMetadataRequired: ['title', 'logline', 'synopsis', 'genre', 'themes', 'toneTags', 'coreConflict', 'visualMotifs'],
       categories: storyCategories,
       sequence: {
         unitKind: projectSubtype === 'tv_streaming_series' ? 'episode' : projectSubtype === 'shortform_series' ? 'short_beat' : 'chapter',
-        min: projectSubtype === 'short_film' ? 5 : 7,
-        max: projectSubtype === 'short_film' ? 7 : 10,
+        min: projectSubtype === 'short_film' ? 5 : projectSubtype === 'fiction_novel' ? 10 : 7,
+        max: projectSubtype === 'short_film' ? 7 : projectSubtype === 'fiction_novel' ? 16 : 10,
         requiredRelationships: ['precedes', 'causes', 'complicates', 'pays_off'],
         requiredFields: ['ordinal', 'synopsis', 'dramaticQuestion', 'storyFunction', 'outcome', 'consequences', 'openLoops', 'resolvedLoops'],
-        purpose: 'Create the complete main story arc as ordered sequence_unit nodes, not just a first event.',
+        purpose: projectSubtype === 'fiction_novel'
+          ? 'Create a manuscript-facing chapter spine as ordered sequence_unit nodes, not just plot events.'
+          : 'Create the complete main story arc as ordered sequence_unit nodes, not just a first event.',
       },
       relationshipGuidance: [
         'Link cast to their goals, factions, secrets, and pressure relationships.',
@@ -132,7 +169,9 @@ function buildProfile(projectSubtype: ProjectSubtype): WorldSeedSkeletonProfile 
       plannerDirectives: [
         'Create project wiki metadata first, including title and logline.',
         'Create a full main cast and enough locations to support the complete arc.',
-        'Create ordered sequence_unit nodes for the whole main arc in one pass.',
+        projectSubtype === 'fiction_novel'
+          ? 'Create ordered sequence_unit chapter nodes suitable for downstream prose generation in one pass.'
+          : 'Create ordered sequence_unit nodes for the whole main arc in one pass.',
       ],
     }) as WorldSeedSkeletonProfile
   }
