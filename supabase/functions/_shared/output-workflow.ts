@@ -39,7 +39,7 @@ import {
   type OpenAiResponseResult,
 } from './openai.ts'
 
-const OUTPUT_WORKFLOW_EXECUTOR_VERSION = 'ebook-full-chapter-background-v4'
+const OUTPUT_WORKFLOW_EXECUTOR_VERSION = 'comic-script-continuity-soft-v8'
 const DEFAULT_CHAPTER_PROSE_TIMEOUT_MS = 3_600_000
 const DEFAULT_CHAPTER_PROSE_ATTEMPTS = 2
 const FAL_QUEUE_BASE_URL = 'https://queue.fal.run'
@@ -51,6 +51,7 @@ export type OutputDocumentRenderer = (input: {
   provenance: string
   generatedAt: string
   fileName: string
+  renderMode?: 'ebook' | 'comic'
   coverImage?: {
     bytes: Uint8Array
     mimeType: string
@@ -60,6 +61,17 @@ export type OutputDocumentRenderer = (input: {
     height?: number | null
     prompt?: string
   } | null
+  comicPages?: Array<{
+    bytes: Uint8Array
+    mimeType: string
+    assetKey?: string
+    storagePath?: string
+    width?: number | null
+    height?: number | null
+    prompt?: string
+    pageNumber: number
+  }>
+  comicScript?: Record<string, unknown> | null
   run: OutputWorkflowRun
   workflow: OutputWorkflow
   node: OutputWorkflowNode
@@ -75,6 +87,7 @@ type DatabaseClient = {
     from: (bucket: string) => {
       upload: (path: string, body: Blob | Uint8Array | ArrayBuffer, options?: Record<string, unknown>) => Promise<{ data: unknown; error: { message: string } | null }>
       download: (path: string) => Promise<{ data: Blob | null; error: { message: string } | null }>
+      createSignedUrl?: (path: string, expiresIn: number) => Promise<{ data: unknown; error: { message: string } | null }>
     }
   }
 }
@@ -307,6 +320,35 @@ export function mapOutputArtifactRow(row: OutputArtifactRow): OutputArtifact {
   })
 }
 
+export async function hydrateOutputArtifactSignedUrls(client: DatabaseClient, artifacts: OutputArtifact[]) {
+  return Promise.all(artifacts.map(async (artifact) => {
+    const metadata = asRecord(artifact.metadata)
+    const existingUrl = readText(metadata.sourceUrl) || readText(metadata.previewUrl)
+    if (existingUrl) return artifact
+
+    const storagePath = readText(metadata.storagePath)
+      || readText(asRecord(metadata.render).storagePath)
+    if (!storagePath) return artifact
+
+    const bucket = client.storage.from('project-assets')
+    if (typeof bucket.createSignedUrl !== 'function') return artifact
+
+    const signed = await bucket.createSignedUrl(storagePath, 60 * 60)
+    const data = asRecord(signed.data)
+    const signedUrl = readText(data.signedUrl) || readText(data.signedURL)
+    if (signed.error || !signedUrl) return artifact
+
+    return {
+      ...artifact,
+      metadata: {
+        ...metadata,
+        previewUrl: signedUrl,
+        sourceUrl: signedUrl,
+      },
+    }
+  }))
+}
+
 export function mapOutputWorkflowRunRow(
   row: OutputWorkflowRunRow,
   steps: OutputWorkflowRunStep[] = [],
@@ -466,6 +508,10 @@ function readText(value: unknown) {
   return typeof value === 'string' ? value.trim() : ''
 }
 
+function hasStoredOutputs(value: unknown) {
+  return Object.keys(asRecord(value)).length > 0
+}
+
 function readStringArray(value: unknown) {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0) : []
 }
@@ -475,14 +521,103 @@ function readEntitySequence(entity: Record<string, unknown>) {
   return asRecord(customProperties.sequence)
 }
 
+function normalizeComicReferenceText(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+}
+
+function collectSequenceReferenceStrings(value: unknown, output = new Set<string>()) {
+  if (typeof value === 'string') {
+    const normalized = normalizeComicReferenceText(value)
+    if (normalized) output.add(normalized)
+    return output
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) collectSequenceReferenceStrings(entry, output)
+    return output
+  }
+  if (value && typeof value === 'object') {
+    for (const entry of Object.values(value as Record<string, unknown>)) {
+      collectSequenceReferenceStrings(entry, output)
+    }
+  }
+  return output
+}
+
+function sequenceSearchTextForReferences(sequenceUnit: Record<string, unknown>) {
+  const sequence = readEntitySequence(sequenceUnit)
+  return normalizeComicReferenceText([
+    readText(sequenceUnit.name),
+    readText(sequenceUnit.summary),
+    readText(sequenceUnit.context),
+    readText(asRecord(sequenceUnit.metadata).visualDescription),
+    readText(sequence.synopsis),
+    readText(sequence.dramaticQuestion),
+    readText(sequence.outcome),
+    JSON.stringify(sequence),
+  ].filter(Boolean).join(' '))
+}
+
+function entityMentionedBySequence(entity: Record<string, unknown>, sequenceText: string, referenceStrings: Set<string>) {
+  const key = normalizeComicReferenceText(readText(entity.key))
+  if (key && referenceStrings.has(key)) return true
+  const name = normalizeComicReferenceText(readText(entity.name))
+  if (name && sequenceText.includes(name)) return true
+  for (const alias of readStringArray(entity.aliases)) {
+    const normalizedAlias = normalizeComicReferenceText(alias)
+    if (normalizedAlias && (sequenceText.includes(normalizedAlias) || referenceStrings.has(normalizedAlias))) return true
+  }
+  const nodeType = readText(entity.nodeType ?? entity.node_type)
+  const nameParts = name.split('_').filter((part) => part.length > 2)
+  return nodeType === 'actor' && nameParts.some((part) => sequenceText.includes(part))
+}
+
+function chooseComicContextEntityKeys(input: {
+  existingSourceEntityKeys: string[]
+  sourceSequenceUnitKeys: string[]
+  entities: Record<string, unknown>[]
+  relationships: Record<string, unknown>[]
+}) {
+  const keys = new Set(input.existingSourceEntityKeys.filter(Boolean))
+  const entityByKey = new Map(input.entities.map((entity) => [readText(entity.key), entity]).filter(([key]) => key))
+  for (const sequenceKey of input.sourceSequenceUnitKeys) {
+    const sequenceUnit = entityByKey.get(sequenceKey)
+    if (!sequenceUnit) continue
+    const sequenceText = sequenceSearchTextForReferences(sequenceUnit)
+    const referenceStrings = collectSequenceReferenceStrings(sequenceUnit.customProperties ?? sequenceUnit.custom_properties)
+    for (const entity of input.entities) {
+      const nodeType = readText(entity.nodeType ?? entity.node_type)
+      if (nodeType === 'sequence_unit') continue
+      if (entityMentionedBySequence(entity, sequenceText, referenceStrings)) keys.add(readText(entity.key))
+    }
+    for (const relationship of input.relationships) {
+      const sourceKey = readText(relationship.sourceEntityKey ?? relationship.source_entity_key)
+      const targetKey = readText(relationship.targetEntityKey ?? relationship.target_entity_key)
+      const relatedKey = sourceKey === sequenceKey ? targetKey : targetKey === sequenceKey ? sourceKey : ''
+      if (!relatedKey) continue
+      const related = entityByKey.get(relatedKey)
+      if (related && readText(related.nodeType ?? related.node_type) !== 'sequence_unit') keys.add(relatedKey)
+    }
+  }
+  return [...keys].slice(0, 24)
+}
+
 function extractWorldContext(run: OutputWorkflowRun, node: OutputWorkflowNode) {
   const input = asRecord(run.input)
   const entities = Array.isArray(input.worldEntities) ? input.worldEntities.map(asRecord) : []
   const relationships = Array.isArray(input.worldRelationships) ? input.worldRelationships.map(asRecord) : []
+  const assets = Array.isArray(input.assets) ? input.assets.map(asRecord) : []
   const wiki = asRecord(input.worldWiki)
   const config = asRecord(node.config)
-  const sourceEntityKeys = Array.isArray(config.sourceEntityKeys) ? config.sourceEntityKeys.filter((entry): entry is string => typeof entry === 'string') : []
+  const configuredSourceEntityKeys = Array.isArray(config.sourceEntityKeys) ? config.sourceEntityKeys.filter((entry): entry is string => typeof entry === 'string') : []
   const sourceSequenceUnitKeys = Array.isArray(config.sourceSequenceUnitKeys) ? config.sourceSequenceUnitKeys.filter((entry): entry is string => typeof entry === 'string') : []
+  const sourceEntityKeys = run.preset === 'comic_issue_from_sequence'
+    ? chooseComicContextEntityKeys({
+      existingSourceEntityKeys: configuredSourceEntityKeys,
+      sourceSequenceUnitKeys,
+      entities,
+      relationships,
+    })
+    : configuredSourceEntityKeys
   const sequenceUnits = entities
     .filter((entity) => entity.nodeType === 'sequence_unit' || entity.node_type === 'sequence_unit')
     .filter((entity) => sourceSequenceUnitKeys.length === 0 || sourceSequenceUnitKeys.includes(String(entity.key)))
@@ -495,6 +630,7 @@ function extractWorldContext(run: OutputWorkflowRun, node: OutputWorkflowNode) {
     entities: worldEntities,
     sequenceUnits,
     relationships,
+    assets,
     sourceEntityKeys,
     sourceSequenceUnitKeys,
   }
@@ -508,6 +644,7 @@ function worldContextFromRunInput(run: OutputWorkflowRun) {
     entities: entities.filter((entity) => entity.nodeType !== 'sequence_unit' && entity.node_type !== 'sequence_unit'),
     sequenceUnits: entities.filter((entity) => entity.nodeType === 'sequence_unit' || entity.node_type === 'sequence_unit'),
     relationships: Array.isArray(input.worldRelationships) ? input.worldRelationships.map(asRecord) : [],
+    assets: Array.isArray(input.assets) ? input.assets.map(asRecord) : [],
     sourceEntityKeys: Array.isArray(input.sourceEntityKeys) ? input.sourceEntityKeys : [],
     sourceSequenceUnitKeys: Array.isArray(input.sourceSequenceUnitKeys) ? input.sourceSequenceUnitKeys : [],
   }
@@ -562,6 +699,36 @@ function readFirstUpstreamImage(upstream: Record<string, Record<string, unknown>
     }
   }
   return null
+}
+
+function readUpstreamImages(upstream: Record<string, Record<string, unknown>>, fields = ['image', 'coverImage']) {
+  const images: Record<string, unknown>[] = []
+  for (const outputs of Object.values(upstream)) {
+    for (const field of fields) {
+      const value = outputs[field]
+      if (Array.isArray(value)) {
+        for (const entry of value) {
+          const record = asRecord(entry)
+          if (readText(record.assetKey) || readText(record.storagePath) || readText(record.url)) images.push(record)
+        }
+        continue
+      }
+      const record = asRecord(value)
+      if (readText(record.assetKey) || readText(record.storagePath) || readText(record.url)) images.push(record)
+    }
+  }
+  return images
+}
+
+function readFirstUpstreamRecord(upstream: Record<string, Record<string, unknown>>, fields: string[]) {
+  for (const outputs of Object.values(upstream)) {
+    for (const field of fields) {
+      const value = outputs[field]
+      const record = asRecord(value)
+      if (Object.keys(record).length > 0) return record
+    }
+  }
+  return {}
 }
 
 function readUpstreamGuidanceBundle(upstream: Record<string, Record<string, unknown>>) {
@@ -722,6 +889,20 @@ function falErrorMessage(body: Record<string, unknown>, fallback: string) {
   if (typeof body.detail === 'string' && body.detail.trim()) return body.detail.trim()
   if (typeof body.error === 'string' && body.error.trim()) return body.error.trim()
   if (typeof body.message === 'string' && body.message.trim()) return body.message.trim()
+  if (body.detail !== undefined) {
+    try {
+      return JSON.stringify(body.detail)
+    } catch {
+      // Fall through to the generic fallback below.
+    }
+  }
+  if (body.error !== undefined) {
+    try {
+      return JSON.stringify(body.error)
+    } catch {
+      // Fall through to the generic fallback below.
+    }
+  }
   return fallback
 }
 
@@ -753,7 +934,11 @@ function normalizeImageSize(value: unknown) {
   const width = Number(record.width)
   const height = Number(record.height)
   if (Number.isInteger(width) && Number.isInteger(height) && width > 0 && height > 0) {
-    return { width, height }
+    const normalizeDimension = (dimension: number) => Math.max(16, Math.min(3840, Math.round(dimension / 16) * 16))
+    return {
+      width: normalizeDimension(width),
+      height: normalizeDimension(height),
+    }
   }
   const text = readText(value)
   return text || { width: 1792, height: 2688 }
@@ -766,18 +951,23 @@ async function submitFalImageRequest(input: {
   imageSize: unknown
   quality: string
   outputFormat: string
+  referenceImageUrls?: string[]
 }) {
+  const body: Record<string, unknown> = {
+    prompt: input.prompt,
+    image_size: normalizeImageSize(input.imageSize),
+    quality: input.quality,
+    num_images: 1,
+    output_format: input.outputFormat,
+    sync_mode: false,
+  }
+  if (input.referenceImageUrls && input.referenceImageUrls.length > 0) {
+    body.image_urls = input.referenceImageUrls
+  }
   return fetchFalJson(`${FAL_QUEUE_BASE_URL}/${input.model}`, {
     method: 'POST',
     headers: buildFalHeaders(input.apiKey),
-    body: JSON.stringify({
-      prompt: input.prompt,
-      image_size: normalizeImageSize(input.imageSize),
-      quality: input.quality,
-      num_images: 1,
-      output_format: input.outputFormat,
-      sync_mode: false,
-    }),
+    body: JSON.stringify(body),
   })
 }
 
@@ -787,11 +977,28 @@ async function getFalStatus(input: {
   requestId: string
   statusUrl?: string | null
 }) {
-  const url = input.statusUrl
-    ? new URL(input.statusUrl)
-    : new URL(`${FAL_QUEUE_BASE_URL}/${input.model}/requests/${input.requestId}/status`)
+  const candidates = [
+    `${FAL_QUEUE_BASE_URL}/${input.model}/requests/${input.requestId}/status`,
+    input.statusUrl,
+  ].filter((url, index, urls): url is string => (
+    typeof url === 'string' && url.trim().length > 0 && urls.indexOf(url) === index
+  ))
+
+  let lastResult: Awaited<ReturnType<typeof fetchFalJson>> | null = null
+  for (const candidate of candidates) {
+    const url = new URL(candidate)
+    url.searchParams.set('logs', '1')
+    const result = await fetchFalJson(url.toString(), {
+      method: 'GET',
+      headers: buildFalHeaders(input.apiKey),
+    })
+    lastResult = result
+    if (result.response.ok) return result
+    if (result.response.status !== 404 && result.response.status !== 405) return result
+  }
+  const url = new URL(`${FAL_QUEUE_BASE_URL}/${input.model}/requests/${input.requestId}/status`)
   url.searchParams.set('logs', '1')
-  return fetchFalJson(url.toString(), {
+  return lastResult ?? fetchFalJson(url.toString(), {
     method: 'GET',
     headers: buildFalHeaders(input.apiKey),
   })
@@ -804,22 +1011,32 @@ async function getFalResult(input: {
   responseUrl?: string | null
 }) {
   const candidates = [
-    input.responseUrl,
     `${FAL_QUEUE_BASE_URL}/${input.model}/requests/${input.requestId}/response`,
     `${FAL_QUEUE_BASE_URL}/${input.model}/requests/${input.requestId}`,
+    input.responseUrl,
   ].filter((url, index, urls): url is string => (
     typeof url === 'string' && url.trim().length > 0 && urls.indexOf(url) === index
   ))
 
   let lastResult: Awaited<ReturnType<typeof fetchFalJson>> | null = null
   for (const url of candidates) {
-    const result = await fetchFalJson(url, {
-      method: 'GET',
-      headers: buildFalHeaders(input.apiKey),
-    })
-    lastResult = result
-    if (result.response.ok) return result
-    if (result.response.status !== 404 && result.response.status !== 405) return result
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const result = await fetchFalJson(url, {
+        method: 'GET',
+        headers: buildFalHeaders(input.apiKey),
+      })
+      lastResult = result
+      if (result.response.ok) return result
+      const transient = [500, 502, 503, 504].includes(result.response.status)
+      if (!transient) break
+      await sleep(1000 * (attempt + 1))
+    }
+    if (
+      lastResult
+      && lastResult.response.status !== 404
+      && lastResult.response.status !== 405
+      && ![500, 502, 503, 504].includes(lastResult.response.status)
+    ) return lastResult
   }
   return lastResult ?? fetchFalJson(`${FAL_QUEUE_BASE_URL}/${input.model}/requests/${input.requestId}/response`, {
     method: 'GET',
@@ -962,6 +1179,373 @@ function buildEbookCoverPromptInstruction(input: {
     '- Avoid GraphCore wording, workflow/node terminology, schema labels, hidden lore, IDs, or non-visual explanation.',
     '- Avoid overstuffing the cover. Prefer one strong readable cover idea over a collage of every story element.',
   ].filter(Boolean).join('\n')
+}
+
+function parseJsonObject(text: string) {
+  const trimmed = text.trim()
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim()
+  const candidate = fenced || trimmed
+  try {
+    return asRecord(JSON.parse(candidate))
+  } catch {
+    const start = candidate.indexOf('{')
+    const end = candidate.lastIndexOf('}')
+    if (start >= 0 && end > start) {
+      try {
+        return asRecord(JSON.parse(candidate.slice(start, end + 1)))
+      } catch {
+        return {}
+      }
+    }
+  }
+  return {}
+}
+
+const comicScriptJsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['title', 'logline', 'pageCount', 'pages'],
+  properties: {
+    title: { type: 'string' },
+    logline: { type: 'string' },
+    pageCount: { type: 'integer', minimum: 1, maximum: 12 },
+    pages: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 12,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['pageNumber', 'panelLayout', 'setting', 'mood', 'requiredEntityKeys', 'continuityNotes', 'panels'],
+        properties: {
+          pageNumber: { type: 'integer', minimum: 1, maximum: 12 },
+          panelLayout: { type: 'string' },
+          setting: { type: 'string' },
+          mood: { type: 'string' },
+          requiredEntityKeys: { type: 'array', items: { type: 'string' } },
+          continuityNotes: { type: 'string' },
+          panels: {
+            type: 'array',
+            minItems: 3,
+            maxItems: 6,
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['panelNumber', 'shot', 'action', 'dialogue', 'caption', 'characters'],
+              properties: {
+                panelNumber: { type: 'integer', minimum: 1, maximum: 6 },
+                shot: { type: 'string' },
+                action: { type: 'string' },
+                dialogue: { type: 'string' },
+                caption: { type: 'string' },
+                characters: { type: 'array', items: { type: 'string' } },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+
+function entityAssetKeys(entity: Record<string, unknown>, assets: Record<string, unknown>[]) {
+  const keys = [
+    readText(entity.thumbnailAssetKey),
+    readText(entity.thumbnail_asset_key),
+    readText(asRecord(entity.metadata).brandAtlasAssetKey),
+    readText(asRecord(entity.metadata).assetKey),
+  ].filter(Boolean)
+  const matching = assets
+    .filter((asset) => keys.includes(readText(asset.key)))
+    .map((asset) => readText(asset.key))
+  return [...new Set([...keys, ...matching])].filter(Boolean)
+}
+
+function buildDeterministicComicAssetPack(context: Record<string, unknown>) {
+  const entities = Array.isArray(context.entities) ? context.entities.map(asRecord) : []
+  const assets = Array.isArray(context.assets) ? context.assets.map(asRecord) : []
+  const packedEntities = entities.slice(0, 16).map((entity) => ({
+    key: readText(entity.key),
+    name: readText(entity.name),
+    type: readText(entity.nodeType ?? entity.node_type),
+    role: readText(entity.nodeType ?? entity.node_type),
+    summary: readText(entity.summary),
+    visualDescription: readText(asRecord(entity.metadata).visualDescription) || readText(entity.context),
+    assetKeys: entityAssetKeys(entity, assets),
+  })).filter((entity) => entity.key || entity.name)
+  return {
+    entities: packedEntities,
+    missingReferenceEntityKeys: packedEntities.filter((entity) => entity.assetKeys.length === 0).map((entity) => entity.key),
+  }
+}
+
+function mergeComicSelectedEntitiesWithFallback(selectedEntities: Array<Record<string, unknown>>, fallbackPack: Record<string, unknown>) {
+  const fallbackEntities = Array.isArray(fallbackPack.entities) ? fallbackPack.entities.map(asRecord) : []
+  const fallbackByKey = new Map(fallbackEntities.map((entity) => [readText(entity.key), entity]).filter(([key]) => key))
+  const merged = selectedEntities.length > 0 ? selectedEntities : fallbackEntities
+  return merged.map((entity) => {
+    const key = readText(entity.key)
+    const fallback = fallbackByKey.get(key) ?? {}
+    const assetKeys = [
+      ...readStringArray(fallback.assetKeys),
+      ...readStringArray(entity.assetKeys),
+    ]
+    const fallbackVisualDescription = readText(fallback.visualDescription)
+    return {
+      key,
+      name: readText(entity.name) || readText(fallback.name),
+      type: readText(entity.type) || readText(fallback.type),
+      role: readText(entity.role) || readText(fallback.role) || readText(entity.type) || readText(fallback.type),
+      summary: readText(entity.summary) || readText(fallback.summary),
+      visualDescription: fallbackVisualDescription || readText(entity.visualDescription),
+      assetKeys: [...new Set(assetKeys)].filter(Boolean),
+    }
+  }).filter((entity) => entity.key || entity.name).slice(0, 16)
+}
+
+function buildComicEntitySelectorInstruction(input: {
+  context: Record<string, unknown>
+  prompt: string
+  guidance: OutputGuidanceBundle
+}) {
+  const sequenceUnit = Array.isArray(input.context.sequenceUnits) ? asRecord(input.context.sequenceUnits[0]) : {}
+  return [
+    'Select the entities that must visually appear in this comic issue.',
+    'Return only JSON with shape: {"entities":[{"key":"","name":"","type":"","role":"","visualDescription":"","assetKeys":[]}],"missingReferenceEntityKeys":[]}.',
+    'Use the supplied entity keys exactly. Do not invent new keys.',
+    input.prompt ? `User brief: ${input.prompt}` : '',
+    guidanceMarkdown(input.guidance),
+    compactForPrompt({
+      sequenceUnit,
+      entities: Array.isArray(input.context.entities) ? input.context.entities.map(asRecord).slice(0, 24) : [],
+      relationships: Array.isArray(input.context.relationships) ? input.context.relationships.map(asRecord).slice(0, 40) : [],
+      assets: Array.isArray(input.context.assets) ? input.context.assets.map(asRecord).slice(0, 40) : [],
+      wiki: asRecord(input.context.wiki),
+    }),
+  ].filter(Boolean).join('\n\n')
+}
+
+function normalizeComicScript(raw: Record<string, unknown>, input: {
+  context: Record<string, unknown>
+  pageCount: number
+  prompt: string
+}) {
+  const sequenceUnit = Array.isArray(input.context.sequenceUnits) ? asRecord(input.context.sequenceUnits[0]) : {}
+  const sequence = asRecord(sequenceUnit.customProperties).sequence && typeof asRecord(sequenceUnit.customProperties).sequence === 'object'
+    ? asRecord(asRecord(sequenceUnit.customProperties).sequence)
+    : {}
+  const sequenceOutcome = readText(sequence.outcome) || readText(sequenceUnit.summary)
+  const rawPages = Array.isArray(raw.pages) ? raw.pages.map(asRecord) : []
+  const pages = Array.from({ length: input.pageCount }, (_, index) => {
+    const pageNumber = index + 1
+    const rawPage = rawPages.find((page) => Number(page.pageNumber ?? page.page ?? 0) === pageNumber) ?? rawPages[index] ?? {}
+    const panels = Array.isArray(rawPage.panels) ? rawPage.panels.map(asRecord) : []
+    const continuityNotes = readText(rawPage.continuityNotes)
+      || (sequenceOutcome ? `Maintain continuity with selected sequence outcome: ${sequenceOutcome}` : '')
+    return {
+      pageNumber,
+      panelLayout: readText(rawPage.panelLayout) || (pageNumber === 1 ? '4 cinematic panels with a strong establishing panel' : '5 balanced comic panels'),
+      setting: readText(rawPage.setting),
+      mood: readText(rawPage.mood),
+      continuityNotes,
+      requiredEntityKeys: readStringArray(rawPage.requiredEntityKeys),
+      panels: panels.length > 0 ? panels.map((panel, panelIndex) => ({
+        panelNumber: Number(panel.panelNumber ?? panelIndex + 1),
+        shot: readText(panel.shot),
+        action: readText(panel.action),
+        dialogue: readText(panel.dialogue),
+        caption: readText(panel.caption),
+        characters: readStringArray(panel.characters),
+      })) : [],
+    }
+  })
+  return {
+    title: readText(raw.title) || readText(sequenceUnit.name) || 'Generated Comic',
+    pageCount: input.pageCount,
+    logline: readText(raw.logline),
+    pages,
+  }
+}
+
+function normalizeComicScriptText(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+}
+
+function validateComicScript(script: Record<string, unknown>, input: { pageCount: number }) {
+  const diagnostics: string[] = []
+  const pages = Array.isArray(script.pages) ? script.pages.map(asRecord) : []
+  if (pages.length !== input.pageCount) {
+    diagnostics.push(`Expected ${input.pageCount} comic pages, got ${pages.length}.`)
+  }
+
+  const panelSignatures = new Map<string, number>()
+  let totalPanels = 0
+  let textBearingPanels = 0
+
+  for (let index = 0; index < input.pageCount; index += 1) {
+    const pageNumber = index + 1
+    const page = pages.find((entry) => Number(entry.pageNumber ?? 0) === pageNumber) ?? pages[index] ?? {}
+    const panels = Array.isArray(page.panels) ? page.panels.map(asRecord) : []
+    totalPanels += panels.length
+    if (panels.length < 3) diagnostics.push(`Page ${pageNumber} has ${panels.length} panels; expected at least 3 complete panels.`)
+    if (panels.length > 6) diagnostics.push(`Page ${pageNumber} has ${panels.length} panels; expected at most 6 panels.`)
+    if (!readText(page.setting)) diagnostics.push(`Page ${pageNumber} is missing a setting.`)
+
+    for (let panelIndex = 0; panelIndex < panels.length; panelIndex += 1) {
+      const panelNumber = panelIndex + 1
+      const panel = panels[panelIndex]
+      const shot = readText(panel.shot)
+      const action = readText(panel.action)
+      const dialogue = readText(panel.dialogue)
+      const caption = readText(panel.caption)
+      if (shot.length < 8) diagnostics.push(`Page ${pageNumber}, panel ${panelNumber} has no usable shot description.`)
+      if (action.length < 24) diagnostics.push(`Page ${pageNumber}, panel ${panelNumber} has no usable action description.`)
+      if (dialogue || caption) textBearingPanels += 1
+      const signature = normalizeComicScriptText([shot, action, dialogue, caption].join(' '))
+      if (signature) panelSignatures.set(signature, (panelSignatures.get(signature) ?? 0) + 1)
+    }
+  }
+
+  const repeatedPanels = [...panelSignatures.entries()].filter(([, count]) => count > 1)
+  if (repeatedPanels.length > 0) {
+    diagnostics.push(`Comic script repeats ${repeatedPanels.length} panel(s) verbatim across pages.`)
+  }
+  if (totalPanels < input.pageCount * 3) {
+    diagnostics.push(`Comic script has ${totalPanels} total panels; expected at least ${input.pageCount * 3}.`)
+  }
+  if (textBearingPanels < Math.max(1, Math.ceil(input.pageCount / 2))) {
+    diagnostics.push('Comic script has too little dialogue/caption text for a readable issue.')
+  }
+
+  return diagnostics
+}
+
+function buildComicScriptInstruction(input: {
+  context: Record<string, unknown>
+  assetPack: Record<string, unknown>
+  prompt: string
+  guidance: OutputGuidanceBundle
+  pageCount: number
+}) {
+  const sequenceUnit = Array.isArray(input.context.sequenceUnits) ? asRecord(input.context.sequenceUnits[0]) : {}
+  return [
+    `Write a ${input.pageCount}-page comic script from the selected sequence unit.`,
+    'Return only JSON with shape: {"title":"","logline":"","pageCount":8,"pages":[{"pageNumber":1,"panelLayout":"","setting":"","mood":"","requiredEntityKeys":[],"continuityNotes":"","panels":[{"panelNumber":1,"shot":"","action":"","dialogue":"","caption":"","characters":[]}]}]}.',
+    `The pages array must contain exactly ${input.pageCount} pages, numbered 1 through ${input.pageCount}.`,
+    'Every page must be a real comic-script page, not an outline placeholder: 3-6 concrete panels with distinct shot, action, dialogue/caption, and continuity details.',
+    'Do not repeat the same page beat, action sentence, or panel description across pages. Each page must advance the sequence unit through a new story moment.',
+    'Panel action should describe what is visible in the panel. Include blocking, character expression, setting detail, and the story change in that panel.',
+    'Dialogue and captions must be brief enough for generated comic lettering, but at least half the pages should include some balloon or caption text.',
+    'Use a clear page progression: establish the location and problem, escalate pressure, force a choice, show consequences, and land the sequence outcome.',
+    'Preserve canon facts and the selected sequence unit outcome.',
+    input.prompt ? `User brief: ${input.prompt}` : '',
+    guidanceMarkdown(input.guidance),
+    compactForPrompt({
+      wiki: asRecord(input.context.wiki),
+      sequenceUnit,
+      assetPack: input.assetPack,
+      relationships: Array.isArray(input.context.relationships) ? input.context.relationships.map(asRecord).slice(0, 40) : [],
+    }),
+  ].filter(Boolean).join('\n\n')
+}
+
+function comicScriptMarkdown(script: Record<string, unknown>) {
+  const pages = Array.isArray(script.pages) ? script.pages.map(asRecord) : []
+  return [
+    `# ${readText(script.title) || 'Generated Comic'}`,
+    readText(script.logline) ? `> ${readText(script.logline)}` : '',
+    ...pages.flatMap((page) => [
+      `## Page ${Number(page.pageNumber ?? 0) || ''}`,
+      readText(page.panelLayout) ? `Layout: ${readText(page.panelLayout)}` : '',
+      readText(page.setting) ? `Setting: ${readText(page.setting)}` : '',
+      ...(Array.isArray(page.panels) ? page.panels.map((panel, index) => {
+        const record = asRecord(panel)
+        return [
+          `Panel ${Number(record.panelNumber ?? index + 1)}: ${readText(record.shot)}`,
+          readText(record.action),
+          readText(record.dialogue) ? `Dialogue: ${readText(record.dialogue)}` : '',
+          readText(record.caption) ? `Caption: ${readText(record.caption)}` : '',
+        ].filter(Boolean).join(' ')
+      }) : []),
+    ]),
+  ].filter(Boolean).join('\n\n')
+}
+
+function buildComicAtlasPromptInstruction(input: {
+  context: Record<string, unknown>
+  assetPack: Record<string, unknown>
+  prompt: string
+  guidance: OutputGuidanceBundle
+}) {
+  const wiki = asRecord(input.context.wiki)
+  return [
+    'Create one GPT Image 2 prompt for a square comic-style reference atlas.',
+    'The atlas should show the selected characters, places, objects, symbols, palette swatches, and style notes as labeled visual reference panels.',
+    'Use a cohesive comic art direction suitable for later full-page comic generation.',
+    'Ask for readable labels only for entity names; avoid internal keys in visible text.',
+    readText(wiki.artStyleDescription) ? `Project art direction: ${readText(wiki.artStyleDescription)}` : '',
+    Array.isArray(wiki.toneTags) ? `Tone tags: ${wiki.toneTags.join(', ')}` : '',
+    input.prompt ? `User brief: ${input.prompt}` : '',
+    guidanceMarkdown(input.guidance),
+    compactForPrompt({ assetPack: input.assetPack, wiki }),
+  ].filter(Boolean).join('\n\n')
+}
+
+function comicScriptPage(script: Record<string, unknown>, pageNumber: number) {
+  const pages = Array.isArray(script.pages) ? script.pages.map(asRecord) : []
+  return pages.find((entry) => Number(entry.pageNumber ?? 0) === pageNumber) ?? pages[pageNumber - 1] ?? {}
+}
+
+function compactComicPanelForPrompt(panel: Record<string, unknown>, fallbackPanelNumber: number) {
+  const panelNumber = Number(panel.panelNumber ?? fallbackPanelNumber)
+  return [
+    `Panel ${Number.isFinite(panelNumber) ? panelNumber : fallbackPanelNumber}`,
+    readText(panel.shot) ? `Shot: ${readText(panel.shot)}` : '',
+    readText(panel.action) ? `Action: ${readText(panel.action)}` : '',
+    readText(panel.dialogue) ? `Dialogue: ${readText(panel.dialogue)}` : '',
+    readText(panel.caption) ? `Caption: ${readText(panel.caption)}` : '',
+    readStringArray(panel.characters).length > 0 ? `Characters: ${readStringArray(panel.characters).join(', ')}` : '',
+  ].filter(Boolean).join('\n')
+}
+
+function buildDeterministicComicPageImagePrompt(input: {
+  script: Record<string, unknown>
+  assetPack: Record<string, unknown>
+  pageNumber: number
+  pageCount: number
+  prompt: string
+  guidance: OutputGuidanceBundle
+}) {
+  const page = comicScriptPage(input.script, input.pageNumber)
+  const panels = Array.isArray(page.panels) ? page.panels.map(asRecord) : []
+  if (panels.length < 3) {
+    throw new Error(`Comic page ${input.pageNumber} prompt cannot be built because the script page has ${panels.length} panel(s). Rerun the Comic Script node first.`)
+  }
+  const pageEntityKeys = readStringArray(page.requiredEntityKeys)
+  const packedEntities = Array.isArray(input.assetPack.entities) ? input.assetPack.entities.map(asRecord) : []
+  const relevantEntities = pageEntityKeys.length > 0
+    ? packedEntities.filter((entity) => pageEntityKeys.includes(readText(entity.key)))
+    : packedEntities
+  return [
+    `Create a finished full-page portrait comic image for page ${input.pageNumber} of ${input.pageCount}.`,
+    'Use the attached comic atlas image as the primary identity, costume, environment, palette, and line-art reference.',
+    'The image must contain the complete page: panel borders, gutters, speech balloons, captions, sound effects where scripted, and readable lettering.',
+    'Follow this script exactly. Do not invent a different beat, skip panels, merge pages, or repeat another page.',
+    readText(input.script.title) ? `Issue title: ${readText(input.script.title)}` : '',
+    readText(input.script.logline) ? `Issue logline: ${readText(input.script.logline)}` : '',
+    `Page layout: ${readText(page.panelLayout) || `${panels.length} panels`}`,
+    readText(page.setting) ? `Page setting: ${readText(page.setting)}` : '',
+    readText(page.mood) ? `Page mood: ${readText(page.mood)}` : '',
+    readText(page.continuityNotes) ? `Continuity notes: ${readText(page.continuityNotes)}` : '',
+    'Panel script:',
+    panels.map((panel, index) => compactComicPanelForPrompt(panel, index + 1)).join('\n\n'),
+    relevantEntities.length > 0 ? 'Required visual continuity references:' : '',
+    relevantEntities.length > 0 ? compactForPrompt({ entities: relevantEntities.slice(0, 10) }) : '',
+    input.prompt ? `User style brief: ${input.prompt}` : '',
+    guidanceMarkdown(input.guidance),
+    'Visible text rules: include only the scripted dialogue/caption/SFX text; keep text short, legible, and placed inside clear balloons or caption boxes.',
+    'Do not include workflow terms, JSON keys, entity IDs, prompt labels, watermarks, signatures, or production notes in the image.',
+  ].filter(Boolean).join('\n\n')
 }
 
 function openingStrategyForSection(section: Record<string, unknown>, sectionNumber: number) {
@@ -1395,10 +1979,59 @@ async function uploadBytes(client: DatabaseClient, path: string, bytes: Uint8Arr
   if (response.error) throw new Error(response.error.message)
 }
 
+function bytesToDataUrl(bytes: Uint8Array, mimeType: string) {
+  let binary = ''
+  const chunkSize = 0x8000
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.slice(index, index + chunkSize))
+  }
+  return `data:${mimeType || 'image/png'};base64,${btoa(binary)}`
+}
+
 async function downloadRemoteBytes(url: string) {
   const response = await fetch(url)
   if (!response.ok) throw new Error(`Generated Fal image could not be downloaded (${response.status}).`)
   return new Uint8Array(await response.arrayBuffer())
+}
+
+async function imageReferenceToFalUrl(client: DatabaseClient, image: Record<string, unknown>) {
+  const url = readText(image.url)
+  if (url) return url
+  const storagePath = readText(image.storagePath)
+  if (!storagePath) return ''
+  return projectAssetReferenceUrl(client, storagePath, readText(image.mimeType) || 'image/png')
+}
+
+function resolveAssetByKey(run: OutputWorkflowRun, assetKey: string) {
+  const assets = Array.isArray(asRecord(run.input).assets) ? asRecord(run.input).assets as unknown[] : []
+  return assets.map(asRecord).find((asset) => readText(asset.key) === assetKey) ?? null
+}
+
+async function collectAssetPackReferenceUrls(client: DatabaseClient, run: OutputWorkflowRun, assetPack: Record<string, unknown>, limit = 3) {
+  const references: string[] = []
+  const entities = Array.isArray(assetPack.entities) ? assetPack.entities.map(asRecord) : []
+  for (const entity of entities) {
+    for (const assetKey of readStringArray(entity.assetKeys)) {
+      const asset = resolveAssetByKey(run, assetKey)
+      const storagePath = readText(asset?.storagePath)
+      if (!storagePath) continue
+      references.push(await projectAssetReferenceUrl(client, storagePath, readText(asset?.mimeType) || 'image/png'))
+      if (references.length >= limit) return references
+    }
+  }
+  return references
+}
+
+async function projectAssetReferenceUrl(client: DatabaseClient, storagePath: string, mimeType: string) {
+  const bucket = client.storage.from('project-assets')
+  if (typeof bucket.createSignedUrl === 'function') {
+    const signed = await bucket.createSignedUrl(storagePath, 60 * 60)
+    const data = asRecord(signed.data)
+    const signedUrl = readText(data.signedUrl) || readText(data.signedURL)
+    if (!signed.error && signedUrl) return signedUrl
+  }
+  const bytes = await downloadProjectAssetBytes(client, storagePath)
+  return bytesToDataUrl(bytes, mimeType)
 }
 
 async function downloadProjectAssetBytes(client: DatabaseClient, storagePath: string) {
@@ -1415,6 +2048,7 @@ async function waitForOutputFalImage(input: {
   imageSize: unknown
   quality: string
   outputFormat: string
+  referenceImageUrls?: string[]
   shouldCancel?: () => Promise<boolean>
   onProgress?: (progress: {
     providerRequestId: string
@@ -1438,6 +2072,7 @@ async function waitForOutputFalImage(input: {
       imageSize: input.imageSize,
       quality: input.quality,
       outputFormat: input.outputFormat,
+      referenceImageUrls: input.referenceImageUrls,
     })
     if (!submit.response.ok) {
       throw new Error(falErrorMessage(submit.body, `Fal image submission failed with HTTP ${submit.response.status}.`))
@@ -1481,7 +2116,7 @@ async function waitForOutputFalImage(input: {
       responseUrl,
     })
 
-    if (providerStatus === 'COMPLETED') {
+    if (providerStatus === 'COMPLETED' || providerStatus === 'UNKNOWN') {
       const result = await getFalResult({
         apiKey: input.apiKey,
         model: input.model,
@@ -1489,6 +2124,13 @@ async function waitForOutputFalImage(input: {
         responseUrl,
       })
       if (!result.response.ok) {
+        if (
+          providerStatus === 'UNKNOWN'
+          && [404, 405, 409, 425].includes(result.response.status)
+        ) {
+          await sleep(pollIntervalMs)
+          continue
+        }
         throw new Error(falErrorMessage(result.body, `Fal image result failed with HTTP ${result.response.status}.`))
       }
       const resultBody = normalizeFalResultBody(result.body)
@@ -1569,6 +2211,196 @@ async function registerImageArtifact(input: {
     .single()
   if (artifactResponse.error || !artifactResponse.data) throw new Error(artifactResponse.error?.message ?? 'Failed to register output image artifact.')
   return mapOutputArtifactRow(artifactResponse.data as OutputArtifactRow)
+}
+
+function collectComicPageImages(upstream: Record<string, Record<string, unknown>>) {
+  return readUpstreamImages(upstream, ['comicPages', 'pageImages', 'pages', 'image'])
+    .filter((image) => readText(image.role) === 'comic_page' || Number(image.pageNumber ?? 0) > 0)
+    .map((image, index) => ({
+      ...image,
+      pageNumber: Number(image.pageNumber ?? index + 1) || index + 1,
+    }))
+    .sort((left, right) => Number(left.pageNumber) - Number(right.pageNumber))
+}
+
+async function registerComicArtifact(input: {
+  client: DatabaseClient
+  run: OutputWorkflowRun
+  workflow: OutputWorkflow
+  node: OutputWorkflowNode
+  comicPages: Record<string, unknown>[]
+  scriptMarkdown: string
+  script: Record<string, unknown> | null
+  atlasImage?: Record<string, unknown> | null
+  documentRenderer?: OutputDocumentRenderer | null
+}) {
+  if (!input.documentRenderer) throw new Error('Comic PDF rendering requires a worker document renderer.')
+  const slug = slugify(input.workflow.name)
+  const artifactKey = `output.${slug}.${input.run.id.slice(0, 8)}`
+  const assetKey = `${artifactKey}.comic_pdf`
+  const scriptArtifactKey = `${artifactKey}.comic_script`
+  const scriptAssetKey = `${artifactKey}.comic_script.md`
+  const storagePath = `generated/output-workflows/${input.run.projectId}/${input.run.id}/${slug}.pdf`
+  const scriptStoragePath = `generated/output-workflows/${input.run.projectId}/${input.run.id}/${slug}.comic-script.md`
+  const context = worldContextFromRunInput(input.run)
+  const wiki = asRecord(context.wiki)
+  const title = readText(input.script?.title) || titleFromContext(context)
+  const generatedAt = new Date().toISOString()
+  const comicPageInputs = await Promise.all(input.comicPages.map(async (page, index) => ({
+    bytes: await downloadProjectAssetBytes(input.client, readText(page.storagePath)),
+    mimeType: readText(page.mimeType) || 'image/png',
+    assetKey: readText(page.assetKey),
+    storagePath: readText(page.storagePath),
+    width: Number(page.width ?? 0) || null,
+    height: Number(page.height ?? 0) || null,
+    prompt: readText(page.prompt),
+    pageNumber: Number(page.pageNumber ?? index + 1) || index + 1,
+  })))
+  const renderResult = await input.documentRenderer({
+    markdown: input.scriptMarkdown,
+    title,
+    subtitle: readText(wiki.logline) || readText(wiki.subtitle),
+    provenance: 'Generated from the GraphCore world graph',
+    generatedAt,
+    fileName: `${slug}.pdf`,
+    renderMode: 'comic',
+    comicPages: comicPageInputs,
+    comicScript: input.script ?? null,
+    coverImage: null,
+    run: input.run,
+    workflow: input.workflow,
+    node: input.node,
+  })
+  await uploadBytes(input.client, storagePath, renderResult.bytes, 'application/pdf')
+  const scriptBytes = new TextEncoder().encode(input.scriptMarkdown)
+  await uploadBytes(input.client, scriptStoragePath, scriptBytes, 'text/markdown; charset=utf-8')
+  const renderMetadata = {
+    ...renderResult.metadata,
+    sequenceUnitKey: readStringArray(input.run.input.sourceSequenceUnitKeys)[0] ?? '',
+    atlasAssetKey: readText(input.atlasImage?.assetKey),
+    atlasStoragePath: readText(input.atlasImage?.storagePath),
+  }
+  const assetMetadata = {
+    generatedBy: 'output_workflow',
+    workflowId: input.workflow.id,
+    workflowKey: input.workflow.key,
+    runId: input.run.id,
+    nodeId: input.node.id,
+    nodeKey: input.node.key,
+    preset: input.run.preset,
+    provider: 'graphcore',
+    model: 'deterministic-comic-pdf-v1',
+    storageBucket: 'project-assets',
+    storagePath,
+    sourceEntityKeys: input.run.input.sourceEntityKeys ?? [],
+    sourceSequenceUnitKeys: input.run.input.sourceSequenceUnitKeys ?? [],
+    pageAssetKeys: comicPageInputs.map((page) => page.assetKey),
+    pageStoragePaths: comicPageInputs.map((page) => page.storagePath),
+    atlas: input.atlasImage ? {
+      assetKey: readText(input.atlasImage.assetKey),
+      storagePath: readText(input.atlasImage.storagePath),
+      mimeType: readText(input.atlasImage.mimeType),
+    } : null,
+    render: renderMetadata,
+  }
+  const assetResponse = await input.client
+    .from('project_assets')
+    .upsert({
+      project_id: input.run.projectId,
+      key: assetKey,
+      name: `${input.workflow.name}.pdf`,
+      kind: 'document',
+      mime_type: 'application/pdf',
+      storage_path: storagePath,
+      metadata: assetMetadata,
+      llm_hints: {},
+    }, { onConflict: 'project_id,key' })
+    .select('id, key')
+    .single()
+  if (assetResponse.error || !assetResponse.data) throw new Error(assetResponse.error?.message ?? 'Failed to register comic PDF asset.')
+
+  const scriptAssetMetadata = {
+    ...assetMetadata,
+    storagePath: scriptStoragePath,
+    companionForAssetKey: assetKey,
+    render: {
+      ...renderMetadata,
+      byteSize: scriptBytes.byteLength,
+      mimeType: 'text/markdown',
+    },
+  }
+  const scriptAssetResponse = await input.client
+    .from('project_assets')
+    .upsert({
+      project_id: input.run.projectId,
+      key: scriptAssetKey,
+      name: `${input.workflow.name} Script.md`,
+      kind: 'document',
+      mime_type: 'text/markdown',
+      storage_path: scriptStoragePath,
+      metadata: scriptAssetMetadata,
+      llm_hints: {},
+    }, { onConflict: 'project_id,key' })
+    .select('id, key')
+    .single()
+  if (scriptAssetResponse.error || !scriptAssetResponse.data) throw new Error(scriptAssetResponse.error?.message ?? 'Failed to register comic script asset.')
+
+  const artifactResponse = await input.client
+    .from('output_artifacts')
+    .upsert({
+      project_id: input.run.projectId,
+      draft_id: input.run.draftId,
+      workflow_id: input.workflow.id,
+      run_id: input.run.id,
+      node_id: input.node.id,
+      key: artifactKey,
+      name: input.workflow.name,
+      kind: 'comic_pdf',
+      asset_key: assetKey,
+      mime_type: 'application/pdf',
+      summary: 'Comic issue PDF generated from the selected sequence unit.',
+      metadata: {
+        ...assetMetadata,
+        companionScriptAssetKey: scriptAssetKey,
+        companionScriptArtifactKey: scriptArtifactKey,
+        scriptPreview: input.scriptMarkdown.slice(0, 4000),
+        scriptPreviewOnly: true,
+      },
+    }, { onConflict: 'draft_id,key' })
+    .select(outputArtifactSelect)
+    .single()
+  if (artifactResponse.error || !artifactResponse.data) throw new Error(artifactResponse.error?.message ?? 'Failed to register comic PDF artifact.')
+
+  const scriptArtifactResponse = await input.client
+    .from('output_artifacts')
+    .upsert({
+      project_id: input.run.projectId,
+      draft_id: input.run.draftId,
+      workflow_id: input.workflow.id,
+      run_id: input.run.id,
+      node_id: input.node.id,
+      key: scriptArtifactKey,
+      name: `${input.workflow.name} Script`,
+      kind: 'manuscript',
+      asset_key: scriptAssetKey,
+      mime_type: 'text/markdown',
+      summary: 'Comic script used to generate the page images.',
+      metadata: {
+        ...scriptAssetMetadata,
+        primaryComicPdfAssetKey: assetKey,
+        scriptPreview: input.scriptMarkdown.slice(0, 4000),
+        scriptPreviewOnly: true,
+      },
+    }, { onConflict: 'draft_id,key' })
+    .select(outputArtifactSelect)
+    .single()
+  if (scriptArtifactResponse.error || !scriptArtifactResponse.data) throw new Error(scriptArtifactResponse.error?.message ?? 'Failed to register comic script artifact.')
+
+  return {
+    pdfArtifact: mapOutputArtifactRow(artifactResponse.data as OutputArtifactRow),
+    scriptArtifact: mapOutputArtifactRow(scriptArtifactResponse.data as OutputArtifactRow),
+    renderMetadata,
+  }
 }
 
 async function registerDocumentArtifact(input: {
@@ -1833,6 +2665,160 @@ async function executeNode(input: {
         const outputs = { chapterPlan, plan: chapterPlan, text, guidance }
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-chapter-plan-v1' }
       }
+      if (purpose === 'comic_entity_selector') {
+        const fallbackPack = buildDeterministicComicAssetPack(context)
+        const model = outputWorkflowTextModel()
+        const response = await runOpenAiResponses({
+          model,
+          instructions: 'You select visual comic references from canonical world context and return compact JSON only.',
+          input: buildComicEntitySelectorInstruction({ context, prompt, guidance }),
+          maxOutputTokens: 1800,
+          metadata: {
+            graphcore_task: 'output_workflow_comic_entity_selector',
+            graphcore_node_key: input.node.key,
+          },
+          timeoutMs: 120_000,
+        })
+        const parsed = response.response.ok ? parseJsonObject(response.outputText) : {}
+        const parsedEntities = Array.isArray(parsed.entities) && parsed.entities.length > 0
+          ? parsed.entities.map(asRecord).map((entity) => ({
+            key: readText(entity.key),
+            name: readText(entity.name),
+            type: readText(entity.type),
+            role: readText(entity.role),
+            summary: readText(entity.summary),
+            visualDescription: readText(entity.visualDescription),
+            assetKeys: readStringArray(entity.assetKeys),
+          })).filter((entity) => entity.key || entity.name)
+          : []
+        const selectedEntities = mergeComicSelectedEntitiesWithFallback(parsedEntities, fallbackPack)
+        const assetPack = {
+          entities: selectedEntities,
+          missingReferenceEntityKeys: selectedEntities.filter((entity) => entity.assetKeys.length === 0).map((entity) => entity.key),
+        }
+        const outputs = {
+          assetPack,
+          asset_pack: assetPack,
+          text: JSON.stringify(assetPack, null, 2),
+          guidance,
+          usage: asRecord(response.body?.usage),
+        }
+        return {
+          inputHash: input.inputHash,
+          outputHash: hashOutputWorkflowValue(outputs),
+          outputs,
+          provider: response.response.ok ? 'openai' : 'graphcore',
+          model: response.response.ok ? model : 'deterministic-comic-asset-pack-v1',
+          providerRequestId: readText(response.body?.id) || response.response.headers.get('x-request-id') || null,
+        }
+      }
+      if (purpose === 'comic_script') {
+        const config = asRecord(input.node.config)
+        const pageCount = Math.max(1, Math.min(12, Number(config.pageCount ?? 8)))
+        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+        const model = outputWorkflowTextModel()
+        const response = await runOpenAiResponses({
+          model,
+          instructions: 'You are a professional comic writer and comics editor. Return a complete production comic script as JSON only. Never return outline placeholders.',
+          input: buildComicScriptInstruction({ context, assetPack, prompt, guidance, pageCount }),
+          text: {
+            format: {
+              type: 'json_schema',
+              name: 'output_workflow_comic_script',
+              schema: comicScriptJsonSchema,
+            },
+          },
+          maxOutputTokens: 9000,
+          metadata: {
+            graphcore_task: 'output_workflow_comic_script',
+            graphcore_node_key: input.node.key,
+          },
+          timeoutMs: 240_000,
+        })
+        if (!response.response.ok) {
+          throw new Error(openAiErrorMessage(response, `OpenAI comic script failed with status ${response.response.status}.`))
+        }
+        if (response.status === 'incomplete') {
+          throw new Error('OpenAI comic script response was incomplete; rerun the Comic Script node.')
+        }
+        const script = normalizeComicScript(parseJsonObject(response.outputText), { context, pageCount, prompt })
+        const diagnostics = validateComicScript(script, { pageCount })
+        if (diagnostics.length > 0) {
+          throw new Error(`Comic script validation failed: ${diagnostics.slice(0, 8).join(' ')}`)
+        }
+        const markdown = comicScriptMarkdown(script)
+        const outputs = {
+          script,
+          pages: script.pages,
+          markdown,
+          text: markdown,
+          guidance,
+          usage: asRecord(response.body.usage),
+        }
+        return {
+          inputHash: input.inputHash,
+          outputHash: hashOutputWorkflowValue(outputs),
+          outputs,
+          provider: 'openai',
+          model,
+          providerRequestId: readText(response.body.id) || response.response.headers.get('x-request-id') || null,
+        }
+      }
+      if (purpose === 'comic_atlas_prompt') {
+        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+        const model = outputWorkflowTextModel()
+        const response = await runOpenAiResponses({
+          model,
+          instructions: 'You are a comic art director writing GPT Image 2 prompts. Return one prompt only.',
+          input: buildComicAtlasPromptInstruction({ context, assetPack, prompt, guidance }),
+          maxOutputTokens: 1200,
+          metadata: {
+            graphcore_task: 'output_workflow_comic_atlas_prompt',
+            graphcore_node_key: input.node.key,
+          },
+          timeoutMs: 120_000,
+        })
+        if (!response.response.ok) {
+          throw new Error(openAiErrorMessage(response, `OpenAI comic atlas prompt failed with status ${response.response.status}.`))
+        }
+        const atlasPrompt = response.outputText.trim()
+        const outputs = { prompt: atlasPrompt, text: atlasPrompt, assetPack, guidance, usage: asRecord(response.body.usage) }
+        return {
+          inputHash: input.inputHash,
+          outputHash: hashOutputWorkflowValue(outputs),
+          outputs,
+          provider: 'openai',
+          model,
+          providerRequestId: readText(response.body.id) || response.response.headers.get('x-request-id') || null,
+        }
+      }
+      if (purpose === 'comic_page_prompt') {
+        const config = asRecord(input.node.config)
+        const pageNumber = Math.max(1, Number(config.pageNumber ?? 1))
+        const pageCount = Math.max(1, Number(config.pageCount ?? 8))
+        const script = readFirstUpstreamRecord(input.upstream, ['script'])
+        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+        const scriptPage = comicScriptPage(script, pageNumber)
+        const pagePrompt = buildDeterministicComicPageImagePrompt({ script, assetPack, pageNumber, pageCount, prompt: input.run.prompt, guidance })
+        const outputs = {
+          prompt: pagePrompt,
+          text: pagePrompt,
+          pageNumber,
+          pageCount,
+          scriptPage,
+          assetPack,
+          guidance,
+          deterministic: true,
+        }
+        return {
+          inputHash: input.inputHash,
+          outputHash: hashOutputWorkflowValue(outputs),
+          outputs,
+          provider: 'graphcore',
+          model: 'deterministic-comic-page-prompt-v1',
+          providerRequestId: null,
+        }
+      }
       if (purpose === 'ebook_cover_prompt') {
         const model = outputWorkflowTextModel()
         const response = await runOpenAiResponses({
@@ -2054,9 +3040,31 @@ async function executeNode(input: {
         || readText(input.node.inputs.prompt)
         || input.run.prompt
       if (!prompt) throw new Error('Image generation node is missing a prompt.')
+      const priorStepOutputs = asRecord(input.priorStep?.outputs)
+      if (hasStoredOutputs(priorStepOutputs) && input.priorStep?.outputHash && hasStoredOutputs(asRecord(priorStepOutputs.image))) {
+        return {
+          inputHash: input.priorStep.inputHash || input.inputHash,
+          outputHash: input.priorStep.outputHash,
+          outputs: priorStepOutputs,
+          provider: input.priorStep.provider,
+          model: input.priorStep.model,
+          providerRequestId: input.priorStep.providerRequestId,
+        }
+      }
       const falApiKey = Deno.env.get('FAL_KEY')
       if (!falApiKey) throw new Error('FAL_KEY is not configured for the Fly output workflow worker.')
-      const model = outputWorkflowImageModel(config.model)
+      const upstreamImages = readUpstreamImages(input.upstream)
+      const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+      const referenceLimit = role === 'comic_page' ? 1 : role === 'comic_atlas' ? 8 : 3
+      const referenceImageUrls = [
+        ...(await Promise.all(upstreamImages.map((image) => imageReferenceToFalUrl(input.client, image)))),
+        ...(await collectAssetPackReferenceUrls(input.client, input.run, assetPack, referenceLimit)),
+      ].filter(Boolean).slice(0, referenceLimit)
+      const baseModel = outputWorkflowImageModel(config.model)
+      const referenceModel = readText(config.referenceModel) || (baseModel.endsWith('/edit') ? baseModel : `${baseModel}/edit`)
+      const model = referenceImageUrls.length > 0
+        ? referenceModel
+        : baseModel
       const quality = readText(config.quality) || Deno.env.get('OUTPUT_WORKFLOW_IMAGE_QUALITY')?.trim() || 'high'
       const outputFormat = readText(config.outputFormat) || 'png'
       const imageSize = config.imageSize ?? { width: 1792, height: 2688 }
@@ -2079,6 +3087,7 @@ async function executeNode(input: {
         imageSize,
         quality,
         outputFormat,
+        referenceImageUrls,
         shouldCancel: input.shouldCancel,
         onProgress: async (progress) => {
           await input.onProgress?.({
@@ -2095,6 +3104,7 @@ async function executeNode(input: {
               imageSize: normalizeImageSize(imageSize),
               quality,
               outputFormat,
+              referenceImageCount: referenceImageUrls.length,
             },
           })
         },
@@ -2116,6 +3126,7 @@ async function executeNode(input: {
         provider: 'fal',
         model,
         providerRequestId: falResult.requestId,
+        referenceImageCount: referenceImageUrls.length,
         sourceEntityKeys: input.run.input.sourceEntityKeys ?? [],
         sourceSequenceUnitKeys: input.run.input.sourceSequenceUnitKeys ?? [],
       }
@@ -2129,6 +3140,8 @@ async function executeNode(input: {
         preset: input.run.preset,
         provider: 'fal',
         model,
+        baseModel,
+        referenceModel,
         providerRequestId: falResult.requestId,
         providerMode: 'fal_queue',
         providerStatus: 'COMPLETED',
@@ -2140,6 +3153,8 @@ async function executeNode(input: {
         providerPrompt,
         role,
         purpose,
+        pageNumber: Number(config.pageNumber ?? 0) || null,
+        referenceImageCount: referenceImageUrls.length,
         imageSize: normalizeImageSize(imageSize),
         quality,
         outputFormat,
@@ -2163,7 +3178,13 @@ async function executeNode(input: {
         assetKey,
         storagePath,
         name: role === 'ebook_cover' ? `${titleFromContext(worldContextFromRunInput(input.run))} Cover` : input.node.label,
-        summary: role === 'ebook_cover' ? 'Ebook cover image generated with GPT Image 2 from the world graph.' : 'Generated image output from the workflow.',
+        summary: role === 'ebook_cover'
+          ? 'Ebook cover image generated with GPT Image 2 from the world graph.'
+          : role === 'comic_atlas'
+            ? 'Comic style atlas generated from selected world entities.'
+            : role === 'comic_page'
+              ? 'Comic page image generated from comic script and atlas reference.'
+              : 'Generated image output from the workflow.',
         mimeType,
         metadata,
       })
@@ -2176,6 +3197,8 @@ async function executeNode(input: {
         height: falResult.height,
         prompt,
         providerPrompt,
+        pageNumber: Number(config.pageNumber ?? 0) || null,
+        role,
         artifact,
         guidance,
       }
@@ -2190,6 +3213,34 @@ async function executeNode(input: {
     }
     case 'utility_transform': {
       const purpose = readText(asRecord(input.node.config).purpose)
+      if (purpose === 'comic_page_prompt') {
+        const config = asRecord(input.node.config)
+        const pageNumber = Math.max(1, Number(config.pageNumber ?? 1))
+        const pageCount = Math.max(1, Number(config.pageCount ?? 8))
+        const script = readFirstUpstreamRecord(input.upstream, ['script'])
+        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+        const guidance = readUpstreamGuidanceBundle(input.upstream)
+        const prompt = input.run.prompt
+        const scriptPage = comicScriptPage(script, pageNumber)
+        const pagePrompt = buildDeterministicComicPageImagePrompt({ script, assetPack, pageNumber, pageCount, prompt, guidance })
+        const outputs = {
+          prompt: pagePrompt,
+          text: pagePrompt,
+          pageNumber,
+          pageCount,
+          scriptPage,
+          assetPack,
+          guidance,
+          deterministic: true,
+        }
+        return {
+          inputHash: input.inputHash,
+          outputHash: hashOutputWorkflowValue(outputs),
+          outputs,
+          provider: 'graphcore',
+          model: 'deterministic-comic-page-prompt-v1',
+        }
+      }
       if (purpose === 'single_chapter_assembly') {
         const config = asRecord(input.node.config)
         const chapterNumber = Number(config.chapterNumber ?? 9999)
@@ -2208,6 +3259,37 @@ async function executeNode(input: {
       return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-utility-v1' }
     }
     case 'document_render': {
+      const purpose = readText(asRecord(input.node.config).purpose)
+      if (purpose === 'comic_pdf_render') {
+        const script = readFirstUpstreamRecord(input.upstream, ['script'])
+        const markdown = readFirstUpstreamText(input.upstream, ['markdown', 'text'])
+        const guidance = readUpstreamGuidanceBundle(input.upstream)
+        const comicPages = collectComicPageImages(input.upstream)
+        const atlasImage = readUpstreamImages(input.upstream, ['image']).find((image) => readText(image.role) === 'comic_atlas') ?? null
+        const context = worldContextFromRunInput(input.run)
+        const renderMetadata = {
+          renderer: 'graphcore-comic-pdf-v1',
+          pageSize: '6.625in x 10.25in',
+          pageCount: comicPages.length,
+          scriptCharacterCount: markdown.length,
+          sequenceUnitKey: readStringArray(input.run.input.sourceSequenceUnitKeys)[0] ?? '',
+          atlasAssetKey: readText(atlasImage?.assetKey),
+          title: readText(script.title) || titleFromContext(context),
+        }
+        const outputs = {
+          markdown,
+          text: markdown,
+          script,
+          comicPages,
+          pageImages: comicPages,
+          atlasImage,
+          mimeType: 'application/pdf',
+          fileName: `${slugify(input.workflow.name)}.pdf`,
+          renderMetadata,
+          guidance,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-comic-document-render-v1' }
+      }
       const markdown = readFirstUpstreamText(input.upstream)
       const guidance = readUpstreamGuidanceBundle(input.upstream)
       const coverImage = readFirstUpstreamImage(input.upstream, ['image', 'coverImage'])
@@ -2232,6 +3314,37 @@ async function executeNode(input: {
       return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-document-render-v1' }
     }
     case 'output_artifact': {
+      const purpose = readText(asRecord(input.node.config).purpose)
+      if (input.run.preset === 'comic_issue_from_sequence' || purpose === 'comic_artifact') {
+        const script = readFirstUpstreamRecord(input.upstream, ['script'])
+        const markdown = readFirstUpstreamText(input.upstream, ['markdown', 'text'])
+        const comicPages = collectComicPageImages(input.upstream)
+        const atlasImage = readFirstUpstreamImage(input.upstream, ['atlasImage'])
+        if (comicPages.length === 0) throw new Error('Comic PDF artifact requires generated comic page images.')
+        const artifact = await registerComicArtifact({
+          client: input.client,
+          run: input.run,
+          workflow: input.workflow,
+          node: input.node,
+          comicPages,
+          scriptMarkdown: markdown,
+          script,
+          atlasImage,
+          documentRenderer: input.documentRenderer,
+        })
+        const outputs = {
+          artifactKey: artifact.pdfArtifact.key,
+          assetKey: artifact.pdfArtifact.assetKey,
+          scriptArtifactKey: artifact.scriptArtifact.key,
+          scriptAssetKey: artifact.scriptArtifact.assetKey,
+          artifact: artifact.pdfArtifact,
+          artifacts: [artifact.pdfArtifact, artifact.scriptArtifact],
+          renderMetadata: artifact.renderMetadata,
+          pageAssetKeys: comicPages.map((page) => readText(page.assetKey)).filter(Boolean),
+          atlasAssetKey: readText(atlasImage?.assetKey),
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-comic-artifact-v1' }
+      }
       const markdown = readFirstUpstreamText(input.upstream)
       const guidance = readUpstreamGuidanceBundle(input.upstream)
       const coverImage = readFirstUpstreamImage(input.upstream, ['coverImage', 'image'])
@@ -2334,9 +3447,50 @@ export async function processFlyOutputWorkflowRuns(input: {
       executeNode: async ({ node, upstream }) => {
         const inputHash = computeNodeInputHash({ run: bundle.run, node, upstream })
         const forceNode = forceNodeKeys.has(node.key)
-        const hasExistingOutputs = Object.keys(node.outputs).length > 0
+        const priorStep = stepByNodeKey.get(node.key) ?? null
+        const hasExistingOutputs = hasStoredOutputs(node.outputs)
+        const hasRecoverableStepOutputs = !forceNode
+          && !hasExistingOutputs
+          && hasStoredOutputs(priorStep?.outputs)
+          && Boolean(priorStep?.outputHash)
+          && ['running', 'completed'].includes(priorStep?.status ?? '')
         const canHashSkip = !forceNode && !node.dirty && node.inputHash === inputHash && hasExistingOutputs
         const canReuseExistingOutput = !forceNode && reuseExistingUpstreamOutputs && hasExistingOutputs
+        if (hasRecoverableStepOutputs && priorStep) {
+          const recoveredInputHash = priorStep.inputHash || inputHash
+          const recoveredOutputs = asRecord(priorStep.outputs)
+          const updateNodeResponse = await input.client
+            .from('output_workflow_nodes')
+            .update({
+              outputs: recoveredOutputs,
+              dirty: false,
+              input_hash: recoveredInputHash,
+              output_hash: priorStep.outputHash,
+              metadata: {
+                ...node.metadata,
+                execution: {
+                  ...asRecord(asRecord(node.metadata).execution),
+                  level: executionLevelByNodeKey.get(node.key) ?? 0,
+                  resourceClass: getOutputWorkflowNodeExecutionMetadata(node).resourceClass,
+                  lastRunId: runId,
+                  recoveredFromRunStep: true,
+                },
+              },
+            })
+            .eq('id', node.id)
+          if (updateNodeResponse.error) throw new Error(updateNodeResponse.error.message)
+          nodeResults.set(node.key, {
+            inputHash: recoveredInputHash,
+            outputHash: priorStep.outputHash,
+            outputs: recoveredOutputs,
+            provider: priorStep.provider,
+            model: priorStep.model,
+            providerRequestId: priorStep.providerRequestId,
+            skipped: true,
+            skippedReason: 'existing_run_step_output_recovered',
+          })
+          return { status: 'skipped', outputs: recoveredOutputs }
+        }
         if (canHashSkip || canReuseExistingOutput) {
           nodeResults.set(node.key, {
             inputHash: canHashSkip ? inputHash : node.inputHash || inputHash,
@@ -2353,7 +3507,7 @@ export async function processFlyOutputWorkflowRuns(input: {
           run: bundle.run,
           workflow: bundle.workflow,
           node,
-          priorStep: stepByNodeKey.get(node.key) ?? null,
+          priorStep,
           upstream,
           inputHash,
           client: input.client,

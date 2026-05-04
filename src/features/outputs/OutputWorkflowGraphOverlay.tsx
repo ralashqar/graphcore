@@ -18,7 +18,7 @@ import {
 } from '@xyflow/react'
 import { useEffect, useMemo, useState } from 'react'
 
-import { resolveAssetSourceUrl } from '../../domain/assets'
+import { isResolvableAssetUrl, resolveAssetSourceUrl } from '../../domain/assets'
 import type { AssetDefinition } from '../../domain/graphcore'
 import {
   buildOutputGuidanceBundleForNode,
@@ -137,6 +137,24 @@ function imageOutputAssetKey(step: OutputWorkflowRunStep | null | undefined) {
   return readTrimmedString(image.assetKey) || readTrimmedString(outputs.assetKey)
 }
 
+function artifactUrlByAssetKey(run: OutputWorkflowRun | null | undefined) {
+  const urls = new Map<string, string>()
+  for (const artifact of run?.artifacts ?? []) {
+    const assetKey = readTrimmedString(artifact.assetKey)
+    if (!assetKey) continue
+    const metadata = readRecord(artifact.metadata)
+    const sourceUrl = readTrimmedString(metadata.sourceUrl)
+    const previewUrl = readTrimmedString(metadata.previewUrl)
+    const url = isResolvableAssetUrl(sourceUrl)
+      ? sourceUrl
+      : isResolvableAssetUrl(previewUrl)
+        ? previewUrl
+        : ''
+    if (url) urls.set(assetKey, url)
+  }
+  return urls
+}
+
 function readImageOutputSize(step: OutputWorkflowRunStep | null | undefined) {
   const outputs = readRecord(step?.outputs)
   const image = readRecord(outputs.image)
@@ -188,6 +206,14 @@ function nodeDisplaySnippet(input: {
   if (purpose === 'chapter_prose') {
     return [chapterNumber ? `Chapter ${chapterNumber}` : '', sequenceName].filter(Boolean).join(': ')
   }
+  if (purpose === 'comic_script') return 'Script from selected sequence unit'
+  if (purpose === 'comic_entity_selector') return 'Relevant cast, places, props, and visual refs'
+  if (purpose === 'comic_atlas_prompt') return 'Prompt for the comic style atlas'
+  if (purpose === 'comic_style_atlas') return 'Generated visual atlas reference'
+  if (purpose === 'comic_page_prompt' || purpose === 'comic_page') {
+    const pageNumber = formatConfigValue(config.pageNumber)
+    return pageNumber ? `Comic page ${pageNumber}` : 'Comic page'
+  }
   const prompt = readTrimmedString(input.node.inputs.prompt)
   return prompt || input.outputPreview || outputWorkflowNodeRegistry[input.node.nodeType].description
 }
@@ -198,6 +224,10 @@ function selectedNodeRunLabel(node: OutputWorkflowNode) {
   if (node.nodeType === 'document_render') return 'Refresh document only'
   if (purpose === 'ebook_cover_prompt') return 'Regenerate cover + PDF'
   if (purpose === 'ebook_cover_image') return 'Regenerate cover + PDF'
+  if (purpose === 'comic_atlas_prompt') return 'Regenerate atlas + pages'
+  if (purpose === 'comic_style_atlas') return 'Regenerate atlas + pages'
+  if (purpose === 'comic_page_prompt') return 'Regenerate page + PDF'
+  if (purpose === 'comic_page') return 'Regenerate page + PDF'
   if (purpose === 'chapter_prose') return 'Regenerate chapter'
   if (purpose === 'chapter_section_prose') return 'Regenerate section'
   return 'Run node'
@@ -356,6 +386,7 @@ export function OutputWorkflowGraphOverlay({
     [activeRun?.steps],
   )
   const assetByKey = useMemo(() => new Map(safeAssets.map((asset) => [asset.key, asset])), [safeAssets])
+  const artifactImageUrlByAssetKey = useMemo(() => artifactUrlByAssetKey(activeRun), [activeRun?.artifacts])
   const nodeByKey = useMemo(() => new Map(safeNodes.map((node) => [node.key, node])), [safeNodes])
   const selectedNode = selectedNodeKey ? nodeByKey.get(selectedNodeKey) ?? safeNodes[0] ?? null : safeNodes[0] ?? null
   const selectedStep = selectedNode ? stepsByNodeKey.get(selectedNode.key) ?? null : null
@@ -364,6 +395,7 @@ export function OutputWorkflowGraphOverlay({
     ? safeAssets.find((asset) => asset.key === selectedImageAssetKey) ?? null
     : null
   const selectedImageUrl = resolveAssetSourceUrl(selectedImageAsset)
+    || (selectedImageAssetKey ? artifactImageUrlByAssetKey.get(selectedImageAssetKey) ?? null : null)
   const selectedGuidance = selectedNode ? buildOutputGuidanceBundleForNode({ node: selectedNode, worldWiki }) : null
   const selectedProviderBacked = selectedNode ? isOutputWorkflowProviderBackedNodeType(selectedNode.nodeType) : false
   const [promptDraft, setPromptDraft] = useState('')
@@ -433,7 +465,9 @@ export function OutputWorkflowGraphOverlay({
         const statusKey = outputWorkflowStepStatusKey(step)
         const definition = outputWorkflowNodeRegistry[node.nodeType]
         const imageAssetKey = imageOutputAssetKey(step)
-        const imageUrl = imageAssetKey ? resolveAssetSourceUrl(assetByKey.get(imageAssetKey)) : null
+        const imageUrl = imageAssetKey
+          ? resolveAssetSourceUrl(assetByKey.get(imageAssetKey)) || artifactImageUrlByAssetKey.get(imageAssetKey) || null
+          : null
         const imageSize = readImageOutputSize(step)
         const dimensions = graphNodeDimensions(node, step)
         return {

@@ -1,6 +1,7 @@
 import { requireUserClient } from '../_shared/auth.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
 import {
+  hydrateOutputArtifactSignedUrls,
   mapOutputArtifactRow,
   outputArtifactResponseSchema,
   outputArtifactSelect,
@@ -21,9 +22,11 @@ Deno.serve(async (request) => {
     query = artifactId ? query.eq('id', artifactId) : query.eq('key', artifactKey)
     const response = await query.maybeSingle()
     if (response.error) throw new Error(response.error.message)
+    const artifact = response.data ? mapOutputArtifactRow(response.data) : null
+    const [hydratedArtifact] = artifact ? await hydrateOutputArtifactSignedUrls(client, [artifact]) : [null]
     return json(outputArtifactResponseSchema.parse({
       ok: true,
-      artifact: response.data ? mapOutputArtifactRow(response.data) : null,
+      artifact: hydratedArtifact ?? null,
     }))
   } catch (error) {
     return errorResponse(error, 'Failed to load output artifact.')

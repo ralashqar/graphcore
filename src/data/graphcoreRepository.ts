@@ -7303,6 +7303,7 @@ function buildOutputWorkflowSnapshot(snapshot: ProjectSnapshot): OutputWorkflowP
 function buildOutputWorkflowRunInput(snapshot: ProjectSnapshot, request?: {
   selectedEntityKeys?: string[]
   selectedSequenceUnitKeys?: string[]
+  pageCount?: number
 }) {
   const selectedEntityKeys = request?.selectedEntityKeys ?? []
   const selectedSequenceUnitKeys = request?.selectedSequenceUnitKeys ?? []
@@ -7322,6 +7323,7 @@ function buildOutputWorkflowRunInput(snapshot: ProjectSnapshot, request?: {
     })),
     sourceEntityKeys: selectedEntityKeys,
     sourceSequenceUnitKeys: selectedSequenceUnitKeys,
+    pageCount: request?.pageCount,
   }
 }
 
@@ -7337,8 +7339,10 @@ export async function planOutputWorkflow(
     projectId: snapshot.project.id,
     draftId: snapshot.draft.id,
     prompt: request?.prompt ?? '',
+    preset: request?.preset,
     selectedEntityKeys: request?.selectedEntityKeys ?? [],
     selectedSequenceUnitKeys: request?.selectedSequenceUnitKeys ?? [],
+    pageCount: request?.pageCount,
     targetFormat: request?.targetFormat ?? 'pdf',
     snapshot: buildOutputWorkflowSnapshot(snapshot),
   })
@@ -7387,6 +7391,7 @@ export async function startOutputWorkflowRun(
     targetFormat?: 'pdf' | 'epub' | 'docx' | 'markdown'
     selectedEntityKeys?: string[]
     selectedSequenceUnitKeys?: string[]
+    pageCount?: number
     input?: Record<string, unknown>
     metadata?: Record<string, unknown>
   },

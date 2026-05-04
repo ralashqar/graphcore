@@ -129,7 +129,7 @@ export const OUTPUT_SKILL_REGISTRY: readonly OutputSkill[] = [
     category: 'quality',
     modality: 'text',
     appliesToNodeTypes: ['text_llm'],
-    appliesToPurposes: ['chapter_prose', 'chapter_section_plan', 'chapter_section_prose', 'editor_pass', 'front_back_matter', 'ugc_script', 'cinematic_script'],
+    appliesToPurposes: ['chapter_prose', 'chapter_section_plan', 'chapter_section_prose', 'editor_pass', 'front_back_matter', 'ugc_script', 'cinematic_script', 'comic_script', 'comic_entity_selector'],
     guidance: [
       'Use varied sentence shapes and scene-specific language instead of reusable templates.',
       'Prefer exact nouns and actions over abstract adjectives.',
@@ -236,7 +236,7 @@ export const OUTPUT_SKILL_REGISTRY: readonly OutputSkill[] = [
     category: 'cinematic',
     modality: 'text',
     appliesToNodeTypes: ['text_llm'],
-    appliesToPurposes: ['cinematic_script', 'shot_plan'],
+    appliesToPurposes: ['cinematic_script', 'shot_plan', 'comic_script'],
     guidance: [
       'Write in visual, shootable beats with clear subject, action, camera intent, and transition logic.',
       'Keep dialogue and narration tied to visible behavior or audio purpose.',
@@ -258,7 +258,7 @@ export const OUTPUT_SKILL_REGISTRY: readonly OutputSkill[] = [
     category: 'cinematic',
     modality: 'image',
     appliesToNodeTypes: ['text_llm', 'image_generation'],
-    appliesToPurposes: ['storyboard_prompt', 'panel_prompt'],
+    appliesToPurposes: ['storyboard_prompt', 'panel_prompt', 'comic_script', 'comic_page_prompt', 'comic_page'],
     guidance: [
       'Describe one readable moment per panel with subject, action, environment, composition, lens feel, and lighting.',
       'Keep prompts visual-only and tied to the preceding script beat.',
@@ -280,7 +280,7 @@ export const OUTPUT_SKILL_REGISTRY: readonly OutputSkill[] = [
     category: 'visual',
     modality: 'image',
     appliesToNodeTypes: ['image_generation', 'video_generation', 'text_llm'],
-    appliesToPurposes: ['image_prompt', 'video_prompt', 'storyboard_prompt'],
+    appliesToPurposes: ['image_prompt', 'video_prompt', 'storyboard_prompt', 'comic_entity_selector', 'comic_atlas_prompt', 'comic_style_atlas', 'comic_page_prompt', 'comic_page'],
     guidance: [
       'Treat character reference images and entity visual descriptions as identity constraints.',
       'Preserve face, silhouette, wardrobe anchors, color cues, and role-specific props unless the node explicitly changes them.',
@@ -301,7 +301,7 @@ export const OUTPUT_SKILL_REGISTRY: readonly OutputSkill[] = [
     category: 'visual',
     modality: 'image',
     appliesToNodeTypes: ['image_generation', 'text_llm'],
-    appliesToPurposes: ['image_prompt', 'ebook_cover_prompt', 'ebook_cover_image', 'storyboard_prompt', 'panel_prompt'],
+    appliesToPurposes: ['image_prompt', 'ebook_cover_prompt', 'ebook_cover_image', 'storyboard_prompt', 'panel_prompt', 'comic_atlas_prompt', 'comic_style_atlas', 'comic_page_prompt', 'comic_page'],
     guidance: [
       'Write prompts as visible subject, action, environment, composition, lighting, material, and camera qualities.',
       'Convert lore and abstract themes into visible production design choices.',
@@ -405,8 +405,8 @@ export const OUTPUT_SKILL_REGISTRY: readonly OutputSkill[] = [
     description: 'Uses world-entity visual references as durable output constraints.',
     category: 'visual',
     modality: 'image',
-    appliesToNodeTypes: ['image_generation', 'video_generation'],
-    appliesToPurposes: ['image_prompt', 'ebook_cover_image', 'video_prompt', 'composite_reference'],
+    appliesToNodeTypes: ['text_llm', 'image_generation', 'video_generation'],
+    appliesToPurposes: ['image_prompt', 'ebook_cover_image', 'video_prompt', 'composite_reference', 'comic_entity_selector', 'comic_atlas_prompt', 'comic_style_atlas', 'comic_page'],
     guidance: [
       'Preserve entity identity, material, silhouette, and visible role cues from source references.',
       'Use source entity keys and visual descriptions as provenance anchors for generated assets.',
@@ -427,7 +427,7 @@ export const OUTPUT_SKILL_REGISTRY: readonly OutputSkill[] = [
     category: 'visual',
     modality: 'image',
     appliesToNodeTypes: ['image_generation', 'video_generation'],
-    appliesToPurposes: ['image_prompt', 'ebook_cover_image', 'video_prompt', 'composite_reference'],
+    appliesToPurposes: ['image_prompt', 'ebook_cover_image', 'video_prompt', 'composite_reference', 'comic_atlas_prompt', 'comic_style_atlas', 'comic_page'],
     guidance: [
       'Stage subject scale, light direction, surface contact, and spatial depth so references feel physically present in the same place.',
       'Use environment references for architecture, palette, weather, and atmosphere.',
@@ -469,7 +469,7 @@ export const OUTPUT_SKILL_REGISTRY: readonly OutputSkill[] = [
     category: 'quality',
     modality: 'workflow',
     appliesToNodeTypes: ['text_llm', 'image_generation', 'video_generation'],
-    appliesToPurposes: ['outline', 'chapter_plan', 'chapter_section_plan', 'chapter_prose', 'chapter_section_prose', 'editor_pass', 'front_back_matter', 'image_prompt', 'ebook_cover_prompt', 'ebook_cover_image', 'video_prompt', 'storyboard_prompt', 'ugc_script', 'cinematic_script'],
+    appliesToPurposes: ['outline', 'chapter_plan', 'chapter_section_plan', 'chapter_prose', 'chapter_section_prose', 'editor_pass', 'front_back_matter', 'image_prompt', 'ebook_cover_prompt', 'ebook_cover_image', 'video_prompt', 'storyboard_prompt', 'ugc_script', 'cinematic_script', 'comic_entity_selector', 'comic_script', 'comic_atlas_prompt', 'comic_style_atlas', 'comic_page_prompt', 'comic_page'],
     guidance: [
       'Keep provider-facing prompts compact, declarative, and focused on the artifact the node must produce.',
       'Separate canon facts, style guidance, and output requirements so they do not blur together.',

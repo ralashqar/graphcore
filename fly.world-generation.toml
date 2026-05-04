@@ -14,6 +14,6 @@ primary_region = "lhr"
   app = "deno run --allow-env --allow-net --allow-read --allow-write --allow-ffi --allow-sys --allow-run --node-modules-dir=auto workers/world-generation/main.ts"
 
 [[vm]]
-  memory = "1gb"
+  memory = "2gb"
   cpu_kind = "shared"
   cpus = 1

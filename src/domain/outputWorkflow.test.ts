@@ -54,6 +54,13 @@ function worldEntity(key: string, nodeType: string, name: string, customProperti
   }
 }
 
+function readConfigPurpose(node: { config?: unknown }) {
+  const config = node.config && typeof node.config === 'object' && !Array.isArray(node.config)
+    ? node.config as Record<string, unknown>
+    : {}
+  return typeof config.purpose === 'string' ? config.purpose : ''
+}
+
 const snapshot = outputWorkflowPlanRequestSchema.shape.snapshot.parse({
   project: { id: 'project-1', name: 'Ash Archive', summary: 'A manuscript world.' },
   draft: { id: 'draft-1', name: 'Draft', metadata: {} },
@@ -76,6 +83,13 @@ const snapshot = outputWorkflowPlanRequestSchema.shape.snapshot.parse({
         povNotes: 'Close third limited to Mara under pressure.',
         synopsis: 'The archive wakes.',
         outcome: 'The protagonist accepts the call.',
+        consequences: [
+          {
+            affectedEntityKeys: ['hero', 'archive'],
+            cause: 'Mara enters the archive.',
+            effect: 'The route opens.',
+          },
+        ],
       },
     }),
     worldEntity('chapter-2', 'sequence_unit', 'Broken Index', {
@@ -401,6 +415,69 @@ test('ebook preset fans full chapter prose nodes out before chapter assembly', (
     'chapter_plan',
     'skill_context',
     'world_context',
+  ])
+})
+
+test('comic issue preset requires one sequence unit and creates fixed page fan-out', () => {
+  const plan = planOutputWorkflow({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    prompt: 'Create a comic issue from this sequence unit.',
+    preset: 'comic_issue_from_sequence',
+    selectedSequenceUnitKeys: ['chapter-1'],
+    pageCount: 4,
+    targetFormat: 'pdf',
+    snapshot,
+  })
+
+  assert.equal(plan.preset, 'comic_issue_from_sequence')
+  assert.deepEqual(plan.sourceSequenceUnitKeys, ['chapter-1'])
+  assert.ok(plan.sourceEntityKeys.includes('hero'))
+  assert.ok(plan.sourceEntityKeys.includes('archive'))
+  assert.ok(!plan.sourceEntityKeys.includes('chapter-2'))
+  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'comic_page_prompt').length, 4)
+  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'comic_page').length, 4)
+  assert.equal(plan.nodes.find((node) => node.key === 'page_001_prompt')?.nodeType, 'utility_transform')
+  assert.ok(plan.nodes.some((node) => node.key === 'relevant_entities' && readConfigPurpose(node) === 'comic_entity_selector'))
+  assert.ok(plan.nodes.some((node) => node.key === 'comic_atlas_image' && node.nodeType === 'image_generation'))
+  assert.ok(plan.nodes.some((node) => node.key === 'comic_pdf_render' && node.nodeType === 'document_render'))
+  const pageImage = plan.nodes.find((node) => node.key === 'page_001_image')
+  const pageImageSize = pageImage?.config.imageSize as { width?: number; height?: number } | undefined
+  assert.equal((pageImageSize?.width ?? 0) % 16, 0)
+  assert.equal((pageImageSize?.height ?? 0) % 16, 0)
+  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'comic_atlas_image' && edge.targetNodeKey === 'page_001_image' && edge.targetPort === 'references'))
+  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'page_004_image' && edge.targetNodeKey === 'comic_pdf_render' && edge.targetPort === 'pages'))
+  assert.equal(validateOutputWorkflowGraph({ nodes: plan.nodes, edges: plan.edges }).ok, true)
+})
+
+test('comic issue page images run in parallel and PDF waits for all pages', () => {
+  const plan = planOutputWorkflow({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    prompt: 'comic from chapter one',
+    selectedSequenceUnitKeys: ['chapter-1'],
+    pageCount: 3,
+    targetFormat: 'pdf',
+    snapshot,
+  })
+  const executionPlan = buildOutputWorkflowExecutionPlan(plan.nodes, plan.edges)
+  const pageImageLevel = executionPlan.levels.find((level) => level.includes('page_001_image'))
+
+  assert.equal(plan.preset, 'comic_issue_from_sequence')
+  assert.ok(pageImageLevel?.includes('page_001_image'))
+  assert.ok(pageImageLevel?.includes('page_002_image'))
+  assert.ok(pageImageLevel?.includes('page_003_image'))
+  assert.deepEqual(executionPlan.dependencyKeysByNodeKey.comic_pdf_render.sort(), [
+    'comic_atlas_image',
+    'comic_script',
+    'page_001_image',
+    'page_002_image',
+    'page_003_image',
+  ])
+  assert.deepEqual(executionPlan.dependencyKeysByNodeKey.page_001_image.sort(), [
+    'comic_atlas_image',
+    'page_001_prompt',
+    'skill_context',
   ])
 })
 

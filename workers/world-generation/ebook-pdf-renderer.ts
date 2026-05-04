@@ -1,10 +1,12 @@
 import { chromium } from 'npm:playwright-core@1.59.1'
 import { PDFDocument } from 'npm:pdf-lib@1.17.1'
+import sharp from 'npm:sharp@0.33.5'
 import { buildEbookHtmlDocument, type EbookHtmlOptions } from '../../src/domain/ebookDocument.ts'
 
 export type EbookPdfRenderInput = EbookHtmlOptions & {
   markdown: string
   fileName?: string
+  renderMode?: 'ebook' | 'comic'
   coverImage?: {
     bytes: Uint8Array
     mimeType: string
@@ -14,6 +16,17 @@ export type EbookPdfRenderInput = EbookHtmlOptions & {
     height?: number | null
     prompt?: string
   } | null
+  comicPages?: Array<{
+    bytes: Uint8Array
+    mimeType: string
+    assetKey?: string
+    storagePath?: string
+    width?: number | null
+    height?: number | null
+    prompt?: string
+    pageNumber: number
+  }>
+  comicScript?: Record<string, unknown> | null
 }
 
 function findChromiumExecutable() {
@@ -111,6 +124,88 @@ async function mergePdfDocuments(parts: Uint8Array[]) {
     for (const page of pages) merged.addPage(page)
   }
   return await merged.save()
+}
+
+async function embedImage(document: PDFDocument, image: { bytes: Uint8Array; mimeType: string }) {
+  const mimeType = image.mimeType.toLowerCase()
+  if (mimeType.includes('jpeg') || mimeType.includes('jpg')) return document.embedJpg(image.bytes)
+  return document.embedPng(image.bytes)
+}
+
+async function prepareComicPageImageForPdf(image: { bytes: Uint8Array; mimeType: string }) {
+  try {
+    const result = await sharp(image.bytes)
+      .rotate()
+      .resize({
+        width: 1325,
+        height: 2050,
+        fit: 'inside',
+        withoutEnlargement: true,
+      })
+      .jpeg({
+        quality: 88,
+        mozjpeg: true,
+      })
+      .toBuffer({ resolveWithObject: true })
+
+    return {
+      bytes: new Uint8Array(result.data),
+      mimeType: 'image/jpeg',
+      width: result.info.width,
+      height: result.info.height,
+    }
+  } catch {
+    return image
+  }
+}
+
+export async function renderComicPdf(input: EbookPdfRenderInput) {
+  const pages = [...(input.comicPages ?? [])].sort((left, right) => left.pageNumber - right.pageNumber)
+  if (pages.length === 0) throw new Error('Comic PDF rendering requires at least one generated page image.')
+  const document = await PDFDocument.create()
+  const pageWidth = 6.625 * 72
+  const pageHeight = 10.25 * 72
+
+  for (const comicPage of pages) {
+    const page = document.addPage([pageWidth, pageHeight])
+    const preparedImage = await prepareComicPageImageForPdf(comicPage)
+    const image = await embedImage(document, preparedImage)
+    const imageWidth = image.width
+    const imageHeight = image.height
+    const scale = Math.max(pageWidth / imageWidth, pageHeight / imageHeight)
+    const drawWidth = imageWidth * scale
+    const drawHeight = imageHeight * scale
+    page.drawImage(image, {
+      x: (pageWidth - drawWidth) / 2,
+      y: (pageHeight - drawHeight) / 2,
+      width: drawWidth,
+      height: drawHeight,
+    })
+  }
+
+  const bytes = await document.save()
+  return {
+    bytes,
+    metadata: {
+      renderer: 'pdf-lib-full-bleed-comic',
+      rendererEngine: 'pdf-lib',
+      pageSize: '6.625in x 10.25in',
+      byteSize: bytes.byteLength,
+      pageCount: await countPdfPages(bytes),
+      comicPageCount: pages.length,
+      pageAssetKeys: pages.map((page) => page.assetKey ?? ''),
+      pageStoragePaths: pages.map((page) => page.storagePath ?? ''),
+      title: input.title?.trim() || 'Generated Comic',
+      scriptTitle: typeof input.comicScript?.title === 'string' ? input.comicScript.title : '',
+    },
+  }
+}
+
+export async function renderOutputPdf(input: EbookPdfRenderInput) {
+  if (input.renderMode === 'comic' || (input.comicPages?.length ?? 0) > 0) {
+    return renderComicPdf(input)
+  }
+  return renderEbookPdf(input)
 }
 
 export async function renderEbookPdf(input: EbookPdfRenderInput) {

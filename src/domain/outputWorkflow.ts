@@ -115,8 +115,9 @@ export const outputWorkflowNodeRegistry = {
     label: 'Document Render',
     description: 'Render Markdown or HTML into a document artifact.',
     inputPorts: [
-      { id: 'source', label: 'Source', direction: 'input', valueType: 'text', multiple: false, required: true },
+      { id: 'source', label: 'Source', direction: 'input', valueType: 'text', multiple: false, required: false },
       { id: 'cover', label: 'Cover', direction: 'input', valueType: 'image', multiple: false, required: false },
+      { id: 'pages', label: 'Pages', direction: 'input', valueType: 'image', multiple: true, required: false },
     ],
     outputPorts: [{ id: 'document', label: 'Document', direction: 'output', valueType: 'document', multiple: false, required: true }],
     providerBacked: false,
@@ -280,6 +281,8 @@ export const outputWorkflowPlanRequestSchema = z.object({
   selectedEntityKeys: z.array(z.string()).default([]),
   selectedSequenceUnitKeys: z.array(z.string()).default([]),
   targetFormat: z.enum(['pdf', 'epub', 'docx', 'markdown']).default('pdf'),
+  preset: outputWorkflowPresetSchema.optional(),
+  pageCount: z.number().int().min(1).max(12).default(8),
   snapshot: z.object({
     project: z.object({
       id: z.string(),
@@ -959,20 +962,123 @@ function edgeBase(sourceNodeKey: string, sourcePort: string, targetNodeKey: stri
 }
 
 const EBOOK_CHAPTER_FANOUT_LIMIT = 24
+const COMIC_PAGE_FANOUT_LIMIT = 12
+const DEFAULT_COMIC_PAGE_COUNT = 8
+
+function sequenceOrdinal(entity: { customProperties?: Record<string, unknown>; name: string }) {
+  const sequence = typeof entity.customProperties?.sequence === 'object' && entity.customProperties.sequence
+    ? entity.customProperties.sequence as Record<string, unknown>
+    : {}
+  const ordinal = Number(sequence.ordinal ?? 0)
+  return Number.isFinite(ordinal) ? ordinal : 0
+}
+
+function sortedSequenceUnits(entities: z.infer<typeof worldEntitySchema>[]) {
+  return entities
+    .filter((entity) => entity.nodeType === 'sequence_unit')
+    .sort((left, right) => sequenceOrdinal(left) - sequenceOrdinal(right) || left.name.localeCompare(right.name))
+}
+
+function sequenceSearchText(entity: z.infer<typeof worldEntitySchema>) {
+  const sequence = typeof entity.customProperties?.sequence === 'object' && entity.customProperties.sequence
+    ? entity.customProperties.sequence as Record<string, unknown>
+    : {}
+  return [
+    entity.name,
+    entity.summary,
+    entity.context,
+    sequence.synopsis,
+    sequence.dramaticQuestion,
+    sequence.outcome,
+    ...(Array.isArray(sequence.openLoops) ? sequence.openLoops : []),
+    ...(Array.isArray(sequence.resolvedLoops) ? sequence.resolvedLoops : []),
+    ...(Array.isArray(sequence.consequences) ? sequence.consequences.map((entry) => JSON.stringify(entry)) : []),
+    ...(Array.isArray(sequence.characterArcDeltas) ? sequence.characterArcDeltas.map((entry) => JSON.stringify(entry)) : []),
+  ].filter(Boolean).join(' ').toLowerCase()
+}
+
+function normalizeComicReferenceText(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+}
+
+function collectSequenceReferenceStrings(value: unknown, output = new Set<string>()) {
+  if (typeof value === 'string') {
+    const normalized = normalizeComicReferenceText(value)
+    if (normalized) output.add(normalized)
+    return output
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) collectSequenceReferenceStrings(entry, output)
+    return output
+  }
+  if (value && typeof value === 'object') {
+    for (const entry of Object.values(value as Record<string, unknown>)) {
+      collectSequenceReferenceStrings(entry, output)
+    }
+  }
+  return output
+}
+
+function entityMentionedBySequence(entity: z.infer<typeof worldEntitySchema>, sequenceText: string, referenceStrings: Set<string>) {
+  const key = normalizeComicReferenceText(entity.key)
+  if (key && referenceStrings.has(key)) return true
+  const name = normalizeComicReferenceText(entity.name)
+  if (name && sequenceText.includes(name)) return true
+  for (const alias of entity.aliases) {
+    const normalizedAlias = normalizeComicReferenceText(alias)
+    if (normalizedAlias && (sequenceText.includes(normalizedAlias) || referenceStrings.has(normalizedAlias))) return true
+  }
+  const nameParts = name.split('_').filter((part) => part.length > 2)
+  return entity.nodeType === 'actor' && nameParts.some((part) => sequenceText.includes(part))
+}
+
+function chooseComicEntityKeys(input: {
+  selectedEntityKeys: string[]
+  selectedSequenceUnitKey: string
+  sequenceUnit: z.infer<typeof worldEntitySchema> | null
+  worldEntities: z.infer<typeof worldEntitySchema>[]
+  worldRelationships: z.infer<typeof worldRelationshipSchema>[]
+}) {
+  if (input.selectedEntityKeys.length > 0) return input.selectedEntityKeys.slice(0, 24)
+  const keys = new Set<string>()
+  const entityByKey = new Map(input.worldEntities.map((entity) => [entity.key, entity]))
+  const sequenceText = input.sequenceUnit ? normalizeComicReferenceText(sequenceSearchText(input.sequenceUnit)) : ''
+  const referenceStrings = input.sequenceUnit
+    ? collectSequenceReferenceStrings(input.sequenceUnit.customProperties)
+    : new Set<string>()
+  for (const entity of input.worldEntities) {
+    if (entity.nodeType === 'sequence_unit') continue
+    if (entityMentionedBySequence(entity, sequenceText, referenceStrings)) keys.add(entity.key)
+  }
+  for (const relationship of input.worldRelationships) {
+    if (relationship.sourceEntityKey === input.selectedSequenceUnitKey) {
+      const target = entityByKey.get(relationship.targetEntityKey)
+      if (target && target.nodeType !== 'sequence_unit') keys.add(target.key)
+    }
+    if (relationship.targetEntityKey === input.selectedSequenceUnitKey) {
+      const source = entityByKey.get(relationship.sourceEntityKey)
+      if (source && source.nodeType !== 'sequence_unit') keys.add(source.key)
+    }
+  }
+  for (const entity of input.worldEntities) {
+    if (entity.nodeType === 'sequence_unit') continue
+    if (keys.has(entity.key)) continue
+    if (entityMentionedBySequence(entity, sequenceText, referenceStrings)) {
+      keys.add(entity.key)
+    }
+  }
+  if (keys.size === 0) {
+    for (const entity of input.worldEntities) {
+      if (entity.nodeType !== 'sequence_unit') keys.add(entity.key)
+      if (keys.size >= 12) break
+    }
+  }
+  return [...keys].slice(0, 24)
+}
 
 export function buildEbookFromWorldPlan(request: z.infer<typeof outputWorkflowPlanRequestSchema>) {
   const worldWiki = request.snapshot.worldWiki
-  const sequenceUnits = request.snapshot.worldEntities
-    .filter((entity) => entity.nodeType === 'sequence_unit')
-    .sort((left, right) => {
-      const leftOrdinal = typeof left.customProperties?.sequence === 'object' && left.customProperties.sequence && 'ordinal' in left.customProperties.sequence
-        ? Number((left.customProperties.sequence as Record<string, unknown>).ordinal)
-        : 0
-      const rightOrdinal = typeof right.customProperties?.sequence === 'object' && right.customProperties.sequence && 'ordinal' in right.customProperties.sequence
-        ? Number((right.customProperties.sequence as Record<string, unknown>).ordinal)
-        : 0
-      return leftOrdinal - rightOrdinal || left.name.localeCompare(right.name)
-    })
+  const sequenceUnits = sortedSequenceUnits(request.snapshot.worldEntities)
   const selectedSequenceUnitKeys = request.selectedSequenceUnitKeys.length > 0
     ? request.selectedSequenceUnitKeys.slice(0, EBOOK_CHAPTER_FANOUT_LIMIT)
     : sequenceUnits.map((entity) => entity.key).slice(0, EBOOK_CHAPTER_FANOUT_LIMIT)
@@ -1217,21 +1323,252 @@ export function buildEbookFromWorldPlan(request: z.infer<typeof outputWorkflowPl
   })
 }
 
-export function planOutputWorkflow(request: z.infer<typeof outputWorkflowPlanRequestSchema>) {
-  const lowerPrompt = request.prompt.toLowerCase()
+export function buildComicIssueFromSequencePlan(request: z.infer<typeof outputWorkflowPlanRequestSchema>) {
+  const worldWiki = request.snapshot.worldWiki
+  const sequenceUnits = sortedSequenceUnits(request.snapshot.worldEntities)
+  const requestedSequenceKeys = request.selectedSequenceUnitKeys.filter(Boolean)
+  const selectedSequenceUnitKey = requestedSequenceKeys[0] ?? sequenceUnits[0]?.key ?? 'comic-sequence'
+  const selectedSequenceUnit = sequenceUnits.find((entity) => entity.key === selectedSequenceUnitKey) ?? sequenceUnits[0] ?? null
+  const selectedEntityKeys = chooseComicEntityKeys({
+    selectedEntityKeys: request.selectedEntityKeys,
+    selectedSequenceUnitKey,
+    sequenceUnit: selectedSequenceUnit,
+    worldEntities: request.snapshot.worldEntities,
+    worldRelationships: request.snapshot.worldRelationships,
+  })
+  const pageCount = Math.min(COMIC_PAGE_FANOUT_LIMIT, Math.max(1, request.pageCount ?? DEFAULT_COMIC_PAGE_COUNT))
+  const prompt = request.prompt.trim() || 'Create a comic issue from this sequence unit, preserving world canon and generating full comic pages.'
+  const title = worldWiki.title || request.snapshot.project.name
+  const sequenceTitle = selectedSequenceUnit?.name || 'Selected Sequence'
+  const name = `${title} - ${sequenceTitle} Comic`
+  const pageNumbers = Array.from({ length: pageCount }, (_, index) => index + 1)
+  const pagePromptNodes = pageNumbers.map((pageNumber, index) => nodeBase({
+    key: `page_${String(pageNumber).padStart(3, '0')}_prompt`,
+    nodeType: 'utility_transform',
+    label: `Page ${pageNumber} Prompt`,
+    x: 1220,
+    y: 40 + (index % 6) * 170,
+    inputs: { prompt: `Build a deterministic image prompt from comic script page ${pageNumber}.` },
+    config: {
+      purpose: 'comic_page_prompt',
+      pageNumber,
+      pageCount,
+      sequenceUnitKey: selectedSequenceUnitKey,
+      sequenceUnitName: sequenceTitle,
+      deterministic: true,
+      execution: { resourceClass: 'utility', groupKey: 'comic_page_prompts', maxConcurrency: 8 },
+    },
+  }))
+  const pageImageNodes = pageNumbers.map((pageNumber, index) => nodeBase({
+    key: `page_${String(pageNumber).padStart(3, '0')}_image`,
+    nodeType: 'image_generation',
+    label: `Page ${pageNumber} Art`,
+    x: 1500,
+    y: 40 + (index % 6) * 170,
+    config: {
+      purpose: 'comic_page',
+      role: 'comic_page',
+      pageNumber,
+      pageCount,
+      sequenceUnitKey: selectedSequenceUnitKey,
+      sequenceUnitName: sequenceTitle,
+      model: 'openai/gpt-image-2',
+      referenceModel: 'openai/gpt-image-2/edit',
+      quality: 'high',
+      outputFormat: 'png',
+      imageSize: { width: 1600, height: 2480 },
+      skillKeys: ['storyboard_panel_prompting', 'image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'provider_prompt_hygiene'],
+      autoSkillTags: ['comic_page', 'image_prompt', 'visual_only', 'entity_reference', 'reference_continuity'],
+      guidanceMode: 'strict',
+      execution: { resourceClass: 'image', groupKey: 'comic_pages', maxConcurrency: 2 },
+    },
+  }))
+  const nodes = [
+    nodeBase({
+      key: 'world_context',
+      nodeType: 'world_context_query',
+      label: 'World Context',
+      x: 80,
+      y: 120,
+      config: {
+        sourceEntityKeys: selectedEntityKeys,
+        sourceSequenceUnitKeys: [selectedSequenceUnitKey],
+        includeWiki: true,
+        includeVisualReferences: true,
+        execution: { resourceClass: 'utility' },
+      },
+    }),
+    nodeBase({
+      key: 'skill_context',
+      nodeType: 'skill_context_query',
+      label: 'Comic Skills',
+      x: 80,
+      y: 280,
+      config: {
+        skillKeys: ['storyboard_panel_prompting', 'character_reference_continuity', 'image_prompt_visual_only', 'entity_reference_fidelity', 'environment_staging', 'provider_prompt_hygiene'],
+        autoSkillTags: ['comic', 'storyboard', 'image_prompt', 'visual_only', 'entity_reference'],
+        guidanceMode: 'append',
+        execution: { resourceClass: 'utility' },
+      },
+    }),
+    nodeBase({
+      key: 'relevant_entities',
+      nodeType: 'text_llm',
+      label: 'Relevant Entities',
+      x: 360,
+      y: 100,
+      inputs: { prompt: 'Select the entities that must appear in this comic issue and package their visual references.' },
+      config: {
+        purpose: 'comic_entity_selector',
+        sequenceUnitKey: selectedSequenceUnitKey,
+        sequenceUnitName: sequenceTitle,
+        skillKeys: ['entity_reference_fidelity', 'provider_prompt_hygiene'],
+        guidanceMode: 'append',
+        execution: { resourceClass: 'llm' },
+      },
+    }),
+    nodeBase({
+      key: 'comic_script',
+      nodeType: 'text_llm',
+      label: 'Comic Script',
+      x: 640,
+      y: 100,
+      inputs: { prompt },
+      config: {
+        purpose: 'comic_script',
+        pageCount,
+        sequenceUnitKey: selectedSequenceUnitKey,
+        sequenceUnitName: sequenceTitle,
+        skillKeys: ['cinematic_shot_script', 'storyboard_panel_prompting', 'provider_prompt_hygiene'],
+        autoSkillTags: ['comic', 'script', 'storyboard'],
+        guidanceMode: 'strict',
+        execution: { resourceClass: 'llm' },
+      },
+    }),
+    nodeBase({
+      key: 'comic_atlas_prompt',
+      nodeType: 'text_llm',
+      label: 'Atlas Prompt',
+      x: 640,
+      y: 310,
+      inputs: { prompt: 'Create a GPT Image 2 prompt for a comic-style reference atlas of the selected entities.' },
+      config: {
+        purpose: 'comic_atlas_prompt',
+        sequenceUnitKey: selectedSequenceUnitKey,
+        sequenceUnitName: sequenceTitle,
+        skillKeys: ['image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'provider_prompt_hygiene'],
+        guidanceMode: 'strict',
+        execution: { resourceClass: 'llm' },
+      },
+    }),
+    nodeBase({
+      key: 'comic_atlas_image',
+      nodeType: 'image_generation',
+      label: 'Comic Atlas',
+      x: 920,
+      y: 310,
+      config: {
+        purpose: 'comic_style_atlas',
+        role: 'comic_atlas',
+        model: 'openai/gpt-image-2',
+        referenceModel: 'openai/gpt-image-2/edit',
+        quality: 'high',
+        outputFormat: 'png',
+        imageSize: { width: 2048, height: 2048 },
+        skillKeys: ['image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'environment_staging', 'provider_prompt_hygiene'],
+        guidanceMode: 'strict',
+        execution: { resourceClass: 'image', groupKey: 'comic_atlas', maxConcurrency: 1 },
+      },
+    }),
+    ...pagePromptNodes,
+    ...pageImageNodes,
+    nodeBase({
+      key: 'comic_pdf_render',
+      nodeType: 'document_render',
+      label: 'Render Comic PDF',
+      x: 1780,
+      y: 120,
+      config: {
+        purpose: 'comic_pdf_render',
+        artifactKind: 'comic_pdf',
+        pageCount,
+        pageSize: '6.625in x 10.25in',
+        execution: { resourceClass: 'document' },
+      },
+    }),
+    nodeBase({
+      key: 'artifact',
+      nodeType: 'output_artifact',
+      label: 'Register Comic PDF',
+      x: 2060,
+      y: 120,
+      config: { purpose: 'comic_artifact', artifactKind: 'comic_pdf', execution: { resourceClass: 'utility' } },
+    }),
+  ]
+  const edges = [
+    edgeBase('world_context', 'context', 'relevant_entities', 'context'),
+    edgeBase('skill_context', 'guidance', 'relevant_entities', 'guidance'),
+    edgeBase('world_context', 'context', 'comic_script', 'context'),
+    edgeBase('skill_context', 'guidance', 'comic_script', 'guidance'),
+    edgeBase('relevant_entities', 'asset_pack', 'comic_script', 'asset_pack'),
+    edgeBase('world_context', 'context', 'comic_atlas_prompt', 'context'),
+    edgeBase('skill_context', 'guidance', 'comic_atlas_prompt', 'guidance'),
+    edgeBase('relevant_entities', 'asset_pack', 'comic_atlas_prompt', 'asset_pack'),
+    edgeBase('comic_atlas_prompt', 'text', 'comic_atlas_image', 'prompt'),
+    edgeBase('relevant_entities', 'asset_pack', 'comic_atlas_image', 'references'),
+    edgeBase('skill_context', 'guidance', 'comic_atlas_image', 'guidance'),
+    ...pagePromptNodes.flatMap((node, index) => [
+      edgeBase('comic_script', 'script', node.key, 'script'),
+      edgeBase('relevant_entities', 'asset_pack', node.key, 'asset_pack'),
+      edgeBase('skill_context', 'guidance', node.key, 'guidance'),
+      edgeBase(node.key, 'text', pageImageNodes[index].key, 'prompt'),
+    ]),
+    ...pageImageNodes.flatMap((node) => [
+      edgeBase('comic_atlas_image', 'image', node.key, 'references'),
+      edgeBase('skill_context', 'guidance', node.key, 'guidance'),
+      edgeBase(node.key, 'image', 'comic_pdf_render', 'pages', { pageNumber: node.config.pageNumber }),
+    ]),
+    edgeBase('comic_script', 'text', 'comic_pdf_render', 'source'),
+    edgeBase('comic_atlas_image', 'image', 'comic_pdf_render', 'cover', { role: 'atlas', optional: true }),
+    edgeBase('comic_pdf_render', 'document', 'artifact', 'input'),
+  ]
+  const graphValidation = validateOutputWorkflowGraph({ nodes, edges, worldWiki })
+  return outputWorkflowPlanResponseSchema.shape.plan.parse({
+    preset: 'comic_issue_from_sequence',
+    name,
+    description: 'Generate a comic issue PDF from one selected sequence unit, a comic-style atlas, and parallel page art.',
+    prompt,
+    targetFormat: 'pdf',
+    sourceEntityKeys: selectedEntityKeys,
+    sourceSequenceUnitKeys: [selectedSequenceUnitKey],
+    nodes,
+    edges,
+    diagnostics: [
+      ...graphValidation.diagnostics,
+      ...(requestedSequenceKeys.length !== 1 ? ['Comic V1 expects one selected sequence_unit; the first available sequence unit was used.'] : []),
+      ...(request.pageCount > COMIC_PAGE_FANOUT_LIMIT ? [`Comic page fan-out is capped at ${COMIC_PAGE_FANOUT_LIMIT} pages in V1.`] : []),
+    ],
+  })
+}
+
+export function planOutputWorkflow(request: z.input<typeof outputWorkflowPlanRequestSchema>) {
+  const parsedRequest = outputWorkflowPlanRequestSchema.parse(request)
+  const lowerPrompt = parsedRequest.prompt.toLowerCase()
+  if (parsedRequest.preset === 'comic_issue_from_sequence' || lowerPrompt.includes('comic')) {
+    return buildComicIssueFromSequencePlan(parsedRequest)
+  }
   if (
-    lowerPrompt.includes('comic')
-    || lowerPrompt.includes('cinematic')
+    lowerPrompt.includes('cinematic')
     || lowerPrompt.includes('trailer')
     || lowerPrompt.includes('video')
     || lowerPrompt.includes('ugc')
   ) {
     return buildEbookFromWorldPlan({
-      ...request,
-      prompt: `${request.prompt}\n\nV1 note: this workspace currently supports the ebook preset first. Preserve the user's intent as future workflow notes, but generate the written/PDF workflow now.`,
+      ...parsedRequest,
+      prompt: `${parsedRequest.prompt}\n\nV1 note: this workspace currently supports the ebook preset first. Preserve the user's intent as future workflow notes, but generate the written/PDF workflow now.`,
     })
   }
-  return buildEbookFromWorldPlan(request)
+  return buildEbookFromWorldPlan(parsedRequest)
 }
 
 export type OutputWorkflow = z.infer<typeof outputWorkflowSchema>

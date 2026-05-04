@@ -4,7 +4,7 @@ import { processFlyWorldEntityIconJobs } from '../../supabase/functions/_shared/
 import { processFlyOutputWorkflowRuns } from '../../supabase/functions/_shared/output-workflow.ts'
 import { processFlyVisualGenerationJobs } from '../../supabase/functions/_shared/visual-generation-worker.ts'
 import { processFlyWorldGenerationJobs } from '../../supabase/functions/_shared/world-prompt.ts'
-import { renderEbookPdf } from './ebook-pdf-renderer.ts'
+import { renderOutputPdf } from './ebook-pdf-renderer.ts'
 
 const workerId = Deno.env.get('FLY_MACHINE_ID')
   ?? Deno.env.get('GRAPHCORE_WORKER_ID')
@@ -155,7 +155,7 @@ async function runOutputWorkflowWorkerLoop() {
       const result = await processFlyOutputWorkflowRuns({
         client,
         workerId,
-        documentRenderer: renderEbookPdf,
+        documentRenderer: renderOutputPdf,
       })
       if (result.processed) {
         console.log('[world-generation-worker] processed output workflow run', {

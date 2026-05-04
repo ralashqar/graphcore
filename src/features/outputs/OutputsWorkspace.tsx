@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { useEffect, useMemo, useState } from 'react'
 
-import { resolveAssetSourceUrl } from '../../domain/assets'
+import { isResolvableAssetUrl, resolveAssetSourceUrl } from '../../domain/assets'
 import type { ProjectSnapshot } from '../../domain/graphcore'
 import {
   buildOutputGuidanceBundleForNode,
@@ -24,8 +24,10 @@ type OutputsWorkspaceProps = {
   cinematicsPanel: ReactNode
   onPlanOutputWorkflow: (request: {
     prompt: string
+    preset?: 'ebook_from_world' | 'comic_issue_from_sequence'
     selectedEntityKeys?: string[]
     selectedSequenceUnitKeys?: string[]
+    pageCount?: number
     targetFormat?: 'pdf' | 'epub' | 'docx' | 'markdown'
   }) => Promise<OutputWorkflowPlanResponse>
   onStartOutputWorkflow: (plan: OutputWorkflowPlanResponse['plan']) => Promise<OutputWorkflowStartResponse>
@@ -35,6 +37,7 @@ type OutputsWorkspaceProps = {
     targetFormat?: 'pdf' | 'epub' | 'docx' | 'markdown'
     selectedEntityKeys?: string[]
     selectedSequenceUnitKeys?: string[]
+    pageCount?: number
     input?: Record<string, unknown>
     metadata?: Record<string, unknown>
   }) => Promise<OutputWorkflowRunStatusResponse>
@@ -71,6 +74,13 @@ function readTrimmedString(value: unknown) {
 
 function readNumber(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function resolveArtifactUrlFromMetadata(metadata: Record<string, unknown>) {
+  const sourceUrl = readTrimmedString(metadata.sourceUrl)
+  if (isResolvableAssetUrl(sourceUrl)) return sourceUrl
+  const previewUrl = readTrimmedString(metadata.previewUrl)
+  return isResolvableAssetUrl(previewUrl) ? previewUrl : null
 }
 
 function formatByteSize(value: unknown) {
@@ -196,7 +206,11 @@ export function OutputsWorkspace({
   onRefreshLiveSnapshot,
 }: OutputsWorkspaceProps) {
   const [mode, setMode] = useState<'workflows' | 'cinematics'>('workflows')
+  const [outputPreset, setOutputPreset] = useState<'ebook' | 'comic'>('ebook')
   const [prompt, setPrompt] = useState('Turn this world into a polished ebook PDF with chapters from the sequence units.')
+  const [comicPrompt, setComicPrompt] = useState('Create a polished comic issue from the selected sequence unit, with clear page storytelling, readable lettering, and consistent character art.')
+  const [selectedComicSequenceKey, setSelectedComicSequenceKey] = useState('')
+  const [comicPageCount, setComicPageCount] = useState(8)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [activeRunId, setActiveRunId] = useState<string | null>(snapshot.outputWorkflowRuns[0]?.id ?? null)
@@ -262,7 +276,15 @@ export function OutputsWorkspace({
     ? isTerminalOutputWorkflowRunStatus(activeRun.status)
       && ['failed', 'blocked', 'cancelled'].some((status) => (runStepCounts.get(status) ?? 0) > 0)
     : false
-  const artifacts = snapshot.outputArtifacts
+  const artifacts = useMemo(() => {
+    const byId = new Map(snapshot.outputArtifacts.map((artifact) => [artifact.id, artifact]))
+    for (const artifact of activeRun?.artifacts ?? []) {
+      byId.set(artifact.id, artifact)
+    }
+    return [...byId.values()].sort((left, right) => (
+      new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+    ))
+  }, [activeRun?.artifacts, snapshot.outputArtifacts])
   const title = readWorldWikiTitle(snapshot)
   const activeWorkflowNeedsCoverUpgrade = Boolean(
     activeWorkflow
@@ -270,6 +292,11 @@ export function OutputsWorkspace({
     && activeNodes.length > 0
     && (!nodeByKey.has('cover_prompt') || !nodeByKey.has('cover_image')),
   )
+
+  useEffect(() => {
+    if (selectedComicSequenceKey && sequenceUnits.some((entity) => entity.key === selectedComicSequenceKey)) return
+    setSelectedComicSequenceKey(sequenceUnits[0]?.key ?? '')
+  }, [selectedComicSequenceKey, sequenceUnits])
 
   useEffect(() => {
     if (!liveRun) return
@@ -287,6 +314,7 @@ export function OutputsWorkspace({
       const entityKeys = castAndContext.slice(0, 24).map((entity) => entity.key)
       const planResponse = await onPlanOutputWorkflow({
         prompt,
+        preset: 'ebook_from_world',
         selectedEntityKeys: entityKeys,
         selectedSequenceUnitKeys: sequenceKeys,
         targetFormat: 'pdf',
@@ -306,6 +334,45 @@ export function OutputsWorkspace({
       await onRefreshLiveSnapshot()
     } catch (runError) {
       setError(runError instanceof Error ? runError.message : 'Output workflow failed.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function createAndRunComicWorkflow() {
+    if (!selectedComicSequenceKey) {
+      setError('Select one sequence unit before generating a comic issue.')
+      return
+    }
+    setBusy(true)
+    setError(null)
+    try {
+      const pageCount = Math.max(1, Math.min(12, comicPageCount))
+      const planResponse = await onPlanOutputWorkflow({
+        prompt: comicPrompt,
+        preset: 'comic_issue_from_sequence',
+        selectedEntityKeys: [],
+        selectedSequenceUnitKeys: [selectedComicSequenceKey],
+        pageCount,
+        targetFormat: 'pdf',
+      })
+      const startResponse = await onStartOutputWorkflow(planResponse.plan)
+      const runResponse = await onStartOutputWorkflowRun({
+        workflowId: startResponse.workflow.id,
+        prompt: planResponse.plan.prompt,
+        targetFormat: 'pdf',
+        selectedEntityKeys: planResponse.plan.sourceEntityKeys,
+        selectedSequenceUnitKeys: planResponse.plan.sourceSequenceUnitKeys,
+        pageCount,
+        input: { pageCount },
+      })
+      setActiveRunId(runResponse.run.id)
+      setLiveRun(runResponse.run)
+      setBusy(false)
+      await pollRun(runResponse.run.id)
+      await onRefreshLiveSnapshot()
+    } catch (runError) {
+      setError(runError instanceof Error ? runError.message : 'Comic workflow failed.')
     } finally {
       setBusy(false)
     }
@@ -368,21 +435,39 @@ export function OutputsWorkspace({
 
   async function runSelectedNodeOnly(node: OutputWorkflowNode) {
     if (!activeRun) return
-    const purpose = readTrimmedString(readRecord(node.config).purpose)
+    const config = readRecord(node.config)
+    const purpose = readTrimmedString(config.purpose)
+    const isComicWorkflow = activeWorkflow?.preset === 'comic_issue_from_sequence' || nodeByKey.has('comic_pdf_render')
+    const renderNodeKey = isComicWorkflow ? 'comic_pdf_render' : 'document_render'
+    const pageNumber = readNumber(config.pageNumber) ?? 0
+    const pageImageKey = pageNumber > 0 ? `page_${String(pageNumber).padStart(3, '0')}_image` : ''
     const pdfRebake = node.nodeType === 'output_artifact'
     const documentRefresh = node.nodeType === 'document_render'
-    const targetNodeKeys = purpose === 'ebook_cover_image' || purpose === 'ebook_cover_prompt' || pdfRebake
+    const comicAtlasRerun = purpose === 'comic_atlas_prompt' || purpose === 'comic_style_atlas'
+    const comicPageRerun = purpose === 'comic_page_prompt' || purpose === 'comic_page'
+    const targetNodeKeys = comicAtlasRerun
+      ? ['comic_atlas_image']
+      : purpose === 'ebook_cover_image' || purpose === 'ebook_cover_prompt' || pdfRebake || comicPageRerun
       ? ['artifact']
       : documentRefresh
-        ? ['document_render']
+        ? [renderNodeKey]
         : [node.key]
     const forceNodeKeys = pdfRebake
-      ? ['document_render', 'artifact']
+      ? [renderNodeKey, 'artifact']
       : documentRefresh
-        ? ['document_render']
+        ? [renderNodeKey]
         : purpose === 'ebook_cover_image' || purpose === 'ebook_cover_prompt'
           ? ['cover_prompt', 'cover_image', 'document_render', 'artifact']
-          : [node.key]
+          : comicAtlasRerun
+            ? ['world_context', 'relevant_entities', 'comic_atlas_prompt', 'comic_atlas_image']
+            : comicPageRerun
+              ? Array.from(new Set([
+                  node.key,
+                  purpose === 'comic_page_prompt' && pageImageKey ? pageImageKey : '',
+                  renderNodeKey,
+                  'artifact',
+                ].filter(Boolean)))
+              : [node.key]
     setTargetedNodeKey(node.key)
     setError(null)
     try {
@@ -399,7 +484,7 @@ export function OutputsWorkspace({
           runMode: pdfRebake ? 'pdf_rebake_from_existing_outputs' : 'targeted_node_preview',
           targetNodeKeys,
           forceNodeKeys,
-          reuseExistingUpstreamOutputs: pdfRebake || documentRefresh,
+          reuseExistingUpstreamOutputs: pdfRebake || documentRefresh || comicPageRerun,
         },
       })
       setActiveRunId(runResponse.run.id)
@@ -487,6 +572,10 @@ export function OutputsWorkspace({
     if (node.nodeType === 'document_render') return 'Refresh document only'
     if (purpose === 'ebook_cover_prompt') return 'Regenerate cover prompt and PDF'
     if (purpose === 'ebook_cover_image') return 'Regenerate cover and PDF'
+    if (purpose === 'comic_atlas_prompt') return 'Regenerate atlas prompt, pages, and PDF'
+    if (purpose === 'comic_style_atlas') return 'Regenerate atlas, pages, and PDF'
+    if (purpose === 'comic_page_prompt') return 'Regenerate page and PDF'
+    if (purpose === 'comic_page') return 'Regenerate page image and PDF'
     if (purpose === 'chapter_prose') return 'Regenerate chapter only'
     if (purpose === 'chapter_section_prose') return 'Regenerate section only'
     return 'Rerun node only'
@@ -538,22 +627,63 @@ export function OutputsWorkspace({
         <div className="outputs-grid">
           <section className="outputs-panel outputs-composer">
             <div className="outputs-panel-heading">
-              <h3>Ebook From World</h3>
-              <span>{sequenceUnits.length} sequence units</span>
+              <h3>{outputPreset === 'ebook' ? 'Ebook From World' : 'Comic Issue'}</h3>
+              <span>{outputPreset === 'ebook' ? `${sequenceUnits.length} sequence units` : '1 sequence unit'}</span>
             </div>
-            <textarea
-              value={prompt}
-              onChange={(event) => setPrompt(event.target.value)}
-              rows={5}
-              aria-label="Output workflow prompt"
-            />
+            <div className="outputs-preset-switch" role="tablist" aria-label="Output workflow preset">
+              <button className={outputPreset === 'ebook' ? 'is-active' : ''} onClick={() => setOutputPreset('ebook')} type="button">
+                Ebook PDF
+              </button>
+              <button className={outputPreset === 'comic' ? 'is-active' : ''} onClick={() => setOutputPreset('comic')} type="button">
+                Comic Issue
+              </button>
+            </div>
+            {outputPreset === 'ebook' ? (
+              <textarea
+                value={prompt}
+                onChange={(event) => setPrompt(event.target.value)}
+                rows={5}
+                aria-label="Output workflow prompt"
+              />
+            ) : (
+              <div className="outputs-comic-controls">
+                <label>
+                  <span>Sequence unit</span>
+                  <select
+                    value={selectedComicSequenceKey}
+                    onChange={(event) => setSelectedComicSequenceKey(event.target.value)}
+                    disabled={sequenceUnits.length === 0}
+                  >
+                    {sequenceUnits.map((entity) => (
+                      <option key={entity.key} value={entity.key}>{entity.name}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>Pages</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={12}
+                    value={comicPageCount}
+                    onChange={(event) => setComicPageCount(Math.max(1, Math.min(12, Number(event.target.value) || 8)))}
+                  />
+                </label>
+                <textarea
+                  value={comicPrompt}
+                  onChange={(event) => setComicPrompt(event.target.value)}
+                  rows={5}
+                  aria-label="Comic workflow prompt"
+                />
+              </div>
+            )}
             <button
               className="outputs-primary-action"
-              disabled={!canRunOutputs || busy}
-              onClick={createAndRunEbookWorkflow}
+              disabled={!canRunOutputs || busy || (outputPreset === 'comic' && !selectedComicSequenceKey)}
+              onClick={outputPreset === 'ebook' ? createAndRunEbookWorkflow : createAndRunComicWorkflow}
               type="button"
             >
-              {busy ? 'Running workflow...' : 'Generate PDF'}
+              {busy ? 'Running workflow...' : outputPreset === 'ebook' ? 'Generate PDF' : 'Generate Comic PDF'}
             </button>
             {!canRunOutputs ? <p className="outputs-error">Output workflows require a live Supabase-backed draft.</p> : null}
             {error ? <p className="outputs-error">{error}</p> : null}
@@ -822,7 +952,7 @@ export function OutputsWorkspace({
               const asset = artifact.assetKey
                 ? snapshot.assets.find((entry) => entry.key === artifact.assetKey) ?? null
                 : null
-              const url = resolveAssetSourceUrl(asset)
+              const url = resolveAssetSourceUrl(asset) || resolveArtifactUrlFromMetadata(readRecord(artifact.metadata))
               const metadata = readRecord(artifact.metadata)
               const renderMetadata = readRecord(metadata.render)
               const markdownPreview = readTrimmedString(metadata.markdownPreview)
