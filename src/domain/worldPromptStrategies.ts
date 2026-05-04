@@ -540,6 +540,7 @@ const STORY_PROMPT_STRATEGY: WorldPromptStrategy = {
   plannerGuidance: [
     'For Story projects, use story/world ontology and sequence_unit nodes for authored chapters, episodes, acts, or story beats.',
     'For fiction_novel and nonfiction_ebook subtypes, make sequence_unit nodes manuscript-facing: chapter order, reader/story promise, outcome, consequence, and enough wiki metadata for the Outputs ebook preset.',
+    'For fiction_novel subtypes, store the project narration point of view in worldWiki.narrationPov and store each chapter focal character on customProperties.sequence.povCharacterKey when a chapter has a defined POV character.',
   ],
   incrementalManifestGuidance: [
     'For Story projects, sequence-heavy requests should create sequence_unit work items with complete sequence metadata.',
@@ -547,7 +548,7 @@ const STORY_PROMPT_STRATEGY: WorldPromptStrategy = {
   ],
   incrementalWorkItemGuidance: [
     'For Story projects, keep sequence_unit metadata complete when creating authored progression.',
-    'For manuscript-facing chapters, include synopsis, dramaticQuestion or reader question, storyFunction, outcome, consequences, openLoops, and resolvedLoops.',
+    'For manuscript-facing fiction chapters, include povCharacterKey or povCharacterName when a focal character exists, plus synopsis, dramaticQuestion or reader question, storyFunction, outcome, consequences, openLoops, and resolvedLoops.',
   ],
 }
 

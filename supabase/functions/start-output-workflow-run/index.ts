@@ -3,6 +3,7 @@ import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/h
 import {
   buildOutputWorkflowInputFingerprint,
   buildOutputWorkflowExecutionPlan,
+  getOutputWorkflowNodeGuidanceConfig,
   getOutputWorkflowNodeExecutionMetadata,
   isTerminalOutputWorkflowRunStatus,
   mapOutputArtifactRow,
@@ -16,9 +17,14 @@ import {
   outputWorkflowRunSelect,
   outputWorkflowRunStatusResponseSchema,
   outputWorkflowRunStepSelect,
+  selectOutputWorkflowRunSubgraph,
   validateOutputWorkflowGraph,
 } from '../_shared/output-workflow.ts'
 import { outputWorkflowRunStartRequestSchema } from '../../../src/domain/outputWorkflow.ts'
+
+function readStringArray(value: unknown) {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0) : []
+}
 
 Deno.serve(async (request) => {
   const preflight = maybeHandleOptions(request)
@@ -88,12 +94,16 @@ Deno.serve(async (request) => {
     if (runResponse.error || !runResponse.data) throw new Error(runResponse.error?.message ?? 'Failed to create output workflow run.')
 
     const runRow = runResponse.data
-    const executionPlan = buildOutputWorkflowExecutionPlan(nodes, edges)
+    const targetNodeKeys = readStringArray(payload.metadata.targetNodeKeys)
+    const selectedSubgraph = selectOutputWorkflowRunSubgraph({ nodes, edges, targetNodeKeys })
+    if (selectedSubgraph.diagnostics.length > 0) throw new HttpError(400, selectedSubgraph.diagnostics.join(' '))
+    const executionNodes = selectedSubgraph.nodes
+    const executionPlan = buildOutputWorkflowExecutionPlan(executionNodes, selectedSubgraph.edges)
     const nodeOrder = new Map(executionPlan.orderedNodeKeys.map((key, index) => [key, index]))
     const executionLevelByNodeKey = new Map(executionPlan.levels.flatMap((level, index) => level.map((key) => [key, index] as const)))
     const stepResponse = await client
       .from('output_workflow_run_steps')
-      .insert(nodes
+      .insert(executionNodes
         .slice()
         .sort((left, right) => (nodeOrder.get(left.key) ?? 999) - (nodeOrder.get(right.key) ?? 999))
         .map((node, index) => ({
@@ -110,6 +120,8 @@ Deno.serve(async (request) => {
             executionLevel: executionLevelByNodeKey.get(node.key) ?? 0,
             resourceClass: getOutputWorkflowNodeExecutionMetadata(node).resourceClass,
             groupKey: getOutputWorkflowNodeExecutionMetadata(node).groupKey ?? null,
+            skillKeys: getOutputWorkflowNodeGuidanceConfig(node).skillKeys,
+            guidanceMode: getOutputWorkflowNodeGuidanceConfig(node).guidanceMode,
           },
         })))
       .select(outputWorkflowRunStepSelect)

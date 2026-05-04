@@ -551,6 +551,9 @@ const storySequenceCompletionItemSchema = z.object({
     sequenceKey: z.string(),
     ordinal: z.number(),
     actLabel: z.string(),
+    povCharacterKey: z.string().default(''),
+    povCharacterName: z.string().default(''),
+    povNotes: z.string().default(''),
     synopsis: z.string(),
     dramaticQuestion: z.string(),
     storyFunction: z.enum([
@@ -8323,7 +8326,7 @@ async function generatePromptPlan(input: {
     isInitialSeedGeneration && initialSeedProfile
       ? [
         'The skeleton profile is mandatory. Satisfy every required category with concrete canon-ready graph nodes.',
-        'Create update_world_wiki_metadata for the generated content title, logline, synopsis, tone, genre, specific art style description, brand atlas prompt, and app color scheme when relevant before or alongside entity creation.',
+        'Create update_world_wiki_metadata for the generated content title, logline, synopsis, tone, genre, narrationPov for fiction/story projects, specific art style description, brand atlas prompt, and app color scheme when relevant before or alongside entity creation.',
         'Create the requested sequence_unit skeleton as ordered authored progression, using sequence relationships such as precedes, causes, complicates, and pays_off.',
         'Create enough relationships to make the graph feel connected immediately: cast/location/faction/object/concept links plus sequence links.',
         'Assistant notes should be concise operational notes suitable for a visible progress log, not private chain-of-thought.',
@@ -8376,7 +8379,7 @@ async function generatePromptPlan(input: {
     'Do not queue cinematic generation just because a sequence_unit is created. Set sequence.scriptExpansionReady when the chapter has enough synopsis, outcome, linked entities, and consequences to support a later scene/shot expansion.',
     'Existing authored sequence state appears in retrieval.sequenceContext. Preserve ordinal and cause/effect bridges unless the user explicitly asks for a correction.',
     'For wiki/presentation readiness, use entity customProperties.wiki or metadata.wiki for entity display hints such as roleLabel, shortSummary, and wikiSections.',
-    'For project-wide wiki presentation, use update_world_wiki_metadata with target "project" and compact metadata fields: title, logline, synopsis, genre, themes, toneTags, coreConflict, visualMotifs, artStyleDescription, brandAtlasPrompt, and colorScheme. The title is the generated in-world/content title, not the GraphCore project name. Use target "view" with targetViewKey only for custom wiki page metadata.',
+    'For project-wide wiki presentation, use update_world_wiki_metadata with target "project" and compact metadata fields: title, logline, synopsis, genre, narrationPov for fiction/story projects, themes, toneTags, coreConflict, visualMotifs, artStyleDescription, brandAtlasPrompt, and colorScheme. The title is the generated in-world/content title, not the GraphCore project name. Use target "view" with targetViewKey only for custom wiki page metadata.',
     'artStyleDescription is the project-specific visual direction beyond the broad preset. brandAtlasPrompt is a visual-only prompt for one cohesive brand/world atlas image. For app projects, colorScheme should include at least primary, secondary, and tertiary colors.',
     'If the user asks to set, define, create, or store a specific project wiki metadata field such as artStyleDescription, brandAtlasPrompt, or colorScheme, treat it as graphable_direct and emit update_world_wiki_metadata as the primary wave1Op. Do not answer with graph diagnostics, weak-context findings, thread actions, or unrelated entity expansions for that metadata-only task.',
     'For App color-scheme metadata tasks, write metadata.colorScheme with at least primary, secondary, and tertiary string values, preferably hex plus a short semantic label. Derive colors from the app promise, app entities, design_system nodes, existing artStyleDescription, and visual motifs; do not create graph nodes unless the user explicitly asks.',
@@ -8679,7 +8682,7 @@ async function generatePromptPlan(input: {
       ) {
         repairFeedback = [
           'Repair incomplete Story sequence_unit ops before returning the plan.',
-          'Every Story sequence_unit you create or structurally update must include customProperties.sequence.ordinal, synopsis, dramaticQuestion, outcome, at least one consequence with cause/effect, and at least one characterArcDelta.',
+          'Every Story sequence_unit you create or structurally update must include customProperties.sequence.ordinal, povCharacterKey for fiction/manuscript chapters when an actor focal character exists, synopsis, dramaticQuestion, outcome, at least one consequence with cause/effect, and at least one characterArcDelta.',
           'Do not rely on entity.summary or entity.context as a substitute for customProperties.sequence.synopsis/outcome.',
           'Set customProperties.sequence.scriptExpansionReady to true only when those required chapter fields are present.',
           `Current sequence issues: ${summarizeStorySequenceOpIssues(storySequenceIssues)}.`,
@@ -10975,16 +10978,16 @@ function buildStreamedInitialSeedInstructions() {
     'For sequence_unit records, visualDescription must describe the visible scene or moment for that beat.',
     'Each record must be one complete JSON object matching one of:',
     '{"kind":"note","message":"short operational note"}',
-    '{"kind":"wiki","id":"wiki_foundation","title":"generated content title","logline":"one sentence","synopsis":"compact paragraph","genre":"genre label","themes":["theme"],"toneTags":["tone"],"coreConflict":"central conflict","visualMotifs":["motif"],"artStyleDescription":"specific visual direction beyond the broad preset","brandAtlasPrompt":"visual-only prompt for one cohesive brand/world atlas image","colorScheme":{"primary":"#hex role","secondary":"#hex role","tertiary":"#hex role"}}',
+    '{"kind":"wiki","id":"wiki_foundation","title":"generated content title","logline":"one sentence","synopsis":"compact paragraph","genre":"genre label","narrationPov":"third person limited, rotating by chapter","themes":["theme"],"toneTags":["tone"],"coreConflict":"central conflict","visualMotifs":["motif"],"artStyleDescription":"specific visual direction beyond the broad preset","brandAtlasPrompt":"visual-only prompt for one cohesive brand/world atlas image","colorScheme":{"primary":"#hex role","secondary":"#hex role","tertiary":"#hex role"}}',
     '{"kind":"entity","id":"mara_veyr","nodeType":"actor","name":"Mara Veyr","summary":"one sentence","context":"short canon use","visualDescription":"silver-haired archivist with a violet lantern, ash-black coat, rainlit stone alley","tags":["main cast"]}',
-    '{"kind":"sequence_unit","id":"episode_01","name":"Episode 1: The Memory Tax","summary":"one sentence","context":"short canon use","visualDescription":"public memory tithe in a rain-slick plaza, shadow guards, glowing ledger pages, frightened crowd","unitKind":"episode","sequenceKey":"main","ordinal":1,"actLabel":"Act I","synopsis":"one compact paragraph","dramaticQuestion":"question","storyFunction":"setup","outcome":"one sentence","consequences":[{"cause":"cause","effect":"effect","affectedEntityKeys":["mara_veyr"],"threadKeys":[],"consequenceType":"plot"}],"characterArcDeltas":[{"actorKey":"mara_veyr","before":"before","pressure":"pressure","choice":"choice","after":"after"}],"openLoops":["loop"],"resolvedLoops":[]}',
+    '{"kind":"sequence_unit","id":"episode_01","name":"Episode 1: The Memory Tax","summary":"one sentence","context":"short canon use","visualDescription":"public memory tithe in a rain-slick plaza, shadow guards, glowing ledger pages, frightened crowd","unitKind":"episode","sequenceKey":"main","ordinal":1,"actLabel":"Act I","povCharacterKey":"mara_veyr","povCharacterName":"Mara Veyr","povNotes":"Close limited to Mara in this beat.","synopsis":"one compact paragraph","dramaticQuestion":"question","storyFunction":"setup","outcome":"one sentence","consequences":[{"cause":"cause","effect":"effect","affectedEntityKeys":["mara_veyr"],"threadKeys":[],"consequenceType":"plot"}],"characterArcDeltas":[{"actorKey":"mara_veyr","before":"before","pressure":"pressure","choice":"choice","after":"after"}],"openLoops":["loop"],"resolvedLoops":[]}',
     '{"kind":"relationship","id":"link_mara_seeks_artifact","source":"mara_veyr","target":"memory_artifact","verb":"seeks","notes":"short relationship note"}',
     '{"kind":"summary","assistantSummary":"concise summary of what was created"}',
     '{"kind":"skip","reason":"only if a requested record cannot be represented safely"}',
     '{"kind":"op","op":{PromptToWorldOp}} is supported for compatibility, but prefer compact wiki, entity, sequence_unit, and relationship records; the system will convert them to graph ops.',
     'Emit minified one-line JSON records. Never put literal line breaks inside JSON string values; escape them as \\n or keep text as one compact paragraph.',
     'Example entity line: {"kind":"entity","id":"mara_veyr","nodeType":"actor","name":"Mara Veyr","summary":"A memory mage pulled into the empire conflict.","context":"Main cast protagonist with a clear want, flaw, and pressure.","visualDescription":"silver-haired memory mage in an ash-black archivist coat, violet lantern glow, rain-dark alley","tags":["main cast"]}',
-    'Example Story sequence_unit line: {"kind":"sequence_unit","id":"episode_01","name":"Episode 1: The Memory Tax","summary":"Mara discovers the empire is harvesting memories to keep its shadow throne alive.","context":"Opening episode that establishes the premise, pressure, and first irreversible choice.","visualDescription":"public memory tithe in a rain-slick plaza, shadow guards, glowing ledger pages, frightened crowd","unitKind":"episode","sequenceKey":"main","ordinal":1,"actLabel":"Act I","synopsis":"Mara witnesses a public memory tithe and realizes her brother is next.","dramaticQuestion":"Will Mara expose the tithe before her family is erased?","storyFunction":"setup","outcome":"Mara steals a forbidden ledger and becomes hunted by the throne.","consequences":[{"cause":"Mara steals the tithe ledger.","effect":"The shadow guard marks her family as traitors.","affectedEntityKeys":["mara_veyr"],"threadKeys":[],"consequenceType":"plot"}],"characterArcDeltas":[{"actorKey":"mara_veyr","before":"Mara survives by staying invisible.","pressure":"Her brother is selected for the tithe.","choice":"She steals the ledger in public.","after":"She accepts becoming visible is the price of resistance."}],"openLoops":["Who built the tithe ledger?"],"resolvedLoops":[]}',
+    'Example Story sequence_unit line: {"kind":"sequence_unit","id":"episode_01","name":"Episode 1: The Memory Tax","summary":"Mara discovers the empire is harvesting memories to keep its shadow throne alive.","context":"Opening episode that establishes the premise, pressure, and first irreversible choice.","visualDescription":"public memory tithe in a rain-slick plaza, shadow guards, glowing ledger pages, frightened crowd","unitKind":"episode","sequenceKey":"main","ordinal":1,"actLabel":"Act I","povCharacterKey":"mara_veyr","povCharacterName":"Mara Veyr","povNotes":"Close limited to Mara; use her fear for her brother and tactical distrust of officials.","synopsis":"Mara witnesses a public memory tithe and realizes her brother is next.","dramaticQuestion":"Will Mara expose the tithe before her family is erased?","storyFunction":"setup","outcome":"Mara steals a forbidden ledger and becomes hunted by the throne.","consequences":[{"cause":"Mara steals the tithe ledger.","effect":"The shadow guard marks her family as traitors.","affectedEntityKeys":["mara_veyr"],"threadKeys":[],"consequenceType":"plot"}],"characterArcDeltas":[{"actorKey":"mara_veyr","before":"Mara survives by staying invisible.","pressure":"Her brother is selected for the tithe.","choice":"She steals the ledger in public.","after":"She accepts becoming visible is the price of resistance."}],"openLoops":["Who built the tithe ledger?"],"resolvedLoops":[]}',
     'Example relationship line: {"kind":"relationship","id":"link_mara_seeks_artifact","source":"mara_veyr","target":"memory_artifact","verb":"seeks","notes":"The artifact is tied to Mara central objective."}',
     'Use only these operation types: upsert_entity, upsert_relationship, update_world_wiki_metadata, assistant_note.',
     'Valid entity nodeType values are actor, group, place, object, concept, event, sequence_unit, app, persona, business_goal, feature, user_flow, screen, section, component, data_model, action, api_endpoint, backend_function, external_service, design_system, capability, screen_mockup, image_region, animation_spec, tower, code_file.',
@@ -11012,8 +11015,8 @@ function buildStreamedInitialSeedPhaseInstructions(phase: WorldPromptGenerationS
     full_stream: [
       'This is a single full_stream generation pass.',
       'Emit the complete initial world skeleton in this order: world wiki metadata, core entity ops, ordered sequence_unit ops, relationship ops, then summary.',
-      'Emit update_world_wiki_metadata before content entities. The metadata must include a generated content title plus logline, synopsis, genre, themes, toneTags, coreConflict, visualMotifs, artStyleDescription, brandAtlasPrompt, and app colorScheme where supported by the prompt.',
-      'For update_world_wiki_metadata, metadata.genre, metadata.artStyleDescription, and metadata.brandAtlasPrompt must be strings; metadata.themes, metadata.toneTags, and metadata.visualMotifs must be arrays of strings; metadata.colorScheme must be an object such as {"primary":"#hex role","secondary":"#hex role","tertiary":"#hex role"}.',
+      'Emit update_world_wiki_metadata before content entities. The metadata must include a generated content title plus logline, synopsis, genre, narrationPov for fiction/story projects, themes, toneTags, coreConflict, visualMotifs, artStyleDescription, brandAtlasPrompt, and app colorScheme where supported by the prompt.',
+      'For update_world_wiki_metadata, metadata.genre, metadata.narrationPov, metadata.artStyleDescription, and metadata.brandAtlasPrompt must be strings; metadata.themes, metadata.toneTags, and metadata.visualMotifs must be arrays of strings; metadata.colorScheme must be an object such as {"primary":"#hex role","secondary":"#hex role","tertiary":"#hex role"}.',
       'For Story projects, emit at least 6 ordered sequence_unit nodes before relationship records and use stable ordinal keys like episode_01, episode_02, episode_03.',
       'After all entities and sequence units exist, emit relationships only between endpoint keys that have already been emitted in this stream.',
       'End with a summary record describing the complete skeleton created.',
@@ -11021,8 +11024,8 @@ function buildStreamedInitialSeedPhaseInstructions(phase: WorldPromptGenerationS
     world_bible: [
       'This step is world_bible only.',
       'Emit update_world_wiki_metadata ops and concise notes only.',
-      'The metadata must include a generated content title plus logline, synopsis, genre, themes, toneTags, coreConflict, visualMotifs, artStyleDescription, brandAtlasPrompt, and app colorScheme where supported by the prompt.',
-      'For update_world_wiki_metadata, metadata.genre, metadata.artStyleDescription, and metadata.brandAtlasPrompt must be strings; metadata.themes, metadata.toneTags, and metadata.visualMotifs must be arrays of strings; metadata.colorScheme must be an object.',
+      'The metadata must include a generated content title plus logline, synopsis, genre, narrationPov for fiction/story projects, themes, toneTags, coreConflict, visualMotifs, artStyleDescription, brandAtlasPrompt, and app colorScheme where supported by the prompt.',
+      'For update_world_wiki_metadata, metadata.genre, metadata.narrationPov, metadata.artStyleDescription, and metadata.brandAtlasPrompt must be strings; metadata.themes, metadata.toneTags, and metadata.visualMotifs must be arrays of strings; metadata.colorScheme must be an object.',
       'Do not emit entity or relationship ops in this step.',
       'End with a summary record describing the foundation created.',
     ],
@@ -11037,7 +11040,7 @@ function buildStreamedInitialSeedPhaseInstructions(phase: WorldPromptGenerationS
       'This step is sequence_units only.',
       'Emit ordered sequence_unit entity ops for the full initial arc.',
       'For Story projects, emit at least 6 ordered sequence_unit nodes.',
-      'Each sequence_unit must include customProperties.sequence.ordinal, synopsis, dramaticQuestion, outcome, at least one cause/effect consequence, and at least one characterArcDelta.',
+      'Each sequence_unit must include customProperties.sequence.ordinal, povCharacterKey for fiction/manuscript chapters when an actor focal character exists, synopsis, dramaticQuestion, outcome, at least one cause/effect consequence, and at least one characterArcDelta.',
       'Do not emit thin sequence_unit records. Missing sequence fields are rejected instead of being persisted.',
       'Do not emit relationship ops in this step.',
       'End with a summary record describing the sequence coverage created.',
@@ -11091,7 +11094,7 @@ function buildStreamedInitialSeedInput(input: {
       records: ['note', 'wiki', 'entity', 'sequence_unit', 'relationship', 'summary', 'skip', 'op'],
       requirement: 'one JSON object per line',
       compactRecordPreference: 'Prefer compact wiki, entity, sequence_unit, and relationship records. Do not emit deeply nested PromptToWorldOp JSON unless necessary.',
-      storySequenceUnitRequirement: 'For sequence_unit records, include unitKind, sequenceKey, ordinal, actLabel, synopsis, dramaticQuestion, storyFunction, outcome, consequences[0].cause/effect, characterArcDeltas[0].actorKey/before/pressure/choice/after, openLoops, and resolvedLoops.',
+      storySequenceUnitRequirement: 'For sequence_unit records, include unitKind, sequenceKey, ordinal, actLabel, povCharacterKey/povCharacterName for fiction chapters when available, synopsis, dramaticQuestion, storyFunction, outcome, consequences[0].cause/effect, characterArcDeltas[0].actorKey/before/pressure/choice/after, openLoops, and resolvedLoops.',
     },
   })
 }
@@ -11287,7 +11290,7 @@ function normalizeStreamColorScheme(value: unknown) {
 
 function normalizeStreamWikiMetadata(metadata: Record<string, unknown>) {
   const normalizedMetadata = { ...metadata }
-  for (const key of ['title', 'logline', 'synopsis', 'genre', 'coreConflict', 'artStyleDescription', 'brandAtlasPrompt', 'brandAtlasAssetKey', 'roleLabel', 'shortSummary', 'generatedFromFingerprint', 'updatedByTurnId']) {
+  for (const key of ['title', 'logline', 'synopsis', 'genre', 'narrationPov', 'coreConflict', 'artStyleDescription', 'brandAtlasPrompt', 'brandAtlasAssetKey', 'roleLabel', 'shortSummary', 'generatedFromFingerprint', 'updatedByTurnId']) {
     const rawValue = normalizedMetadata[key]
     if (Array.isArray(rawValue)) {
       normalizedMetadata[key] = rawValue.map((entry) => String(entry).trim()).filter(Boolean).join(', ')
@@ -11319,6 +11322,7 @@ function normalizeCompactStreamedWikiEnvelope(value: Record<string, unknown>) {
           logline: asCompactString(value.logline),
           synopsis: asCompactString(value.synopsis),
           genre: Array.isArray(value.genre) ? asStringArray(value.genre).join(', ') : asCompactString(value.genre),
+          narrationPov: asCompactString(value.narrationPov ?? value.povStyle ?? value.pointOfView),
           themes: asStringArray(value.themes),
           toneTags: asStringArray(value.toneTags ?? value.tone),
           coreConflict: asCompactString(value.coreConflict ?? value.conflict),
@@ -11409,6 +11413,9 @@ function normalizeCompactStreamedSequenceEnvelope(value: Record<string, unknown>
     sequenceKey: asCompactString(value.sequenceKey ?? value.sequence_key) || 'main',
     ordinal: ordinal ?? 1,
     actLabel: asCompactString(value.actLabel ?? value.act),
+    povCharacterKey: asCompactString(value.povCharacterKey ?? value.povActorKey ?? value.focalCharacterKey ?? value.pov_character_key),
+    povCharacterName: asCompactString(value.povCharacterName ?? value.focalCharacterName ?? value.pov_character_name),
+    povNotes: asCompactString(value.povNotes ?? value.povGuidance ?? value.pov_notes),
     synopsis: asCompactString(value.synopsis),
     dramaticQuestion: asCompactString(value.dramaticQuestion ?? value.dramatic_question),
     storyFunction: asCompactString(value.storyFunction ?? value.story_function ?? value.function),

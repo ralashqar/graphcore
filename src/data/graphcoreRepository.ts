@@ -2608,6 +2608,12 @@ function findMissingAssetReferences(snapshot: ProjectSnapshot) {
     }
   }
 
+  for (const artifact of snapshot.outputArtifacts) {
+    if (artifact.assetKey && !assetKeys.has(artifact.assetKey)) {
+      missing.add(artifact.assetKey)
+    }
+  }
+
   return Array.from(missing)
 }
 
@@ -2617,7 +2623,7 @@ async function hydrateStorageAssetUrls<TAsset extends AssetDefinition>(projectId
     asset.projectId ? asset : { ...asset, projectId }
   ))
   const candidates = normalizedAssets.filter((asset) => {
-    if (asset.kind !== 'mesh' && asset.kind !== 'video' && asset.kind !== 'image') return false
+    if (asset.kind !== 'mesh' && asset.kind !== 'video' && asset.kind !== 'image' && asset.kind !== 'document') return false
     if (!isPrivateStorageBackedAsset(asset)) return false
     const generation = getResourceGenerationMetadata(asset)
     if (generation?.state === 'pending' || generation?.state === 'running') return false

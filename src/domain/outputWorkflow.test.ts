@@ -2,16 +2,29 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  buildOutputGuidanceBundleForNode,
   buildOutputWorkflowExecutionPlan,
   buildOutputWorkflowFingerprint,
+  defaultOutputWorkflowConcurrency,
+  getOutputWorkflowNodeExecutionMetadata,
   markDirtyOutputWorkflowNodes,
   outputWorkflowNodeRegistry,
   outputWorkflowPlanRequestSchema,
   planOutputWorkflow,
   runOutputWorkflowReadyQueue,
+  selectOutputWorkflowRunSubgraph,
   topologicallySortOutputWorkflow,
   validateOutputWorkflowGraph,
+  hashOutputWorkflowValue,
 } from './outputWorkflow.ts'
+import {
+  OUTPUT_SKILL_REGISTRY,
+  buildOutputGuidanceBundle,
+  hashOutputGuidanceBundle,
+  outputSkillSchema,
+  resolveOutputSkillsForNode,
+  validateOutputSkillRegistry,
+} from './outputSkills.ts'
 
 const now = '2026-05-03T00:00:00.000Z'
 
@@ -51,7 +64,14 @@ const snapshot = outputWorkflowPlanRequestSchema.shape.snapshot.parse({
   },
   worldEntities: [
     worldEntity('chapter-1', 'sequence_unit', 'Opening Ash', {
-      sequence: { ordinal: 1, synopsis: 'The archive wakes.', outcome: 'The protagonist accepts the call.' },
+      sequence: {
+        ordinal: 1,
+        povCharacterKey: 'hero',
+        povCharacterName: 'Mara',
+        povNotes: 'Close third limited to Mara under pressure.',
+        synopsis: 'The archive wakes.',
+        outcome: 'The protagonist accepts the call.',
+      },
     }),
     worldEntity('chapter-2', 'sequence_unit', 'Broken Index', {
       sequence: { ordinal: 2, synopsis: 'The first truth breaks.', outcome: 'The route narrows.' },
@@ -65,6 +85,7 @@ const snapshot = outputWorkflowPlanRequestSchema.shape.snapshot.parse({
     title: 'Ash Archive',
     logline: 'A lost archivist follows a living index through a city that edits memory.',
     synopsis: 'A fiction manuscript with a clean chapter spine.',
+    narrationPov: 'close third person limited',
     toneTags: ['literary', 'mysterious'],
     genre: 'fantasy mystery',
   },
@@ -73,6 +94,7 @@ const snapshot = outputWorkflowPlanRequestSchema.shape.snapshot.parse({
 test('node registry exposes approved workflow node types only', () => {
   assert.deepEqual(Object.keys(outputWorkflowNodeRegistry), [
     'world_context_query',
+    'skill_context_query',
     'text_llm',
     'image_generation',
     'video_generation',
@@ -80,6 +102,35 @@ test('node registry exposes approved workflow node types only', () => {
     'utility_transform',
     'output_artifact',
   ])
+})
+
+test('output skill registry is valid, versioned, and rejects duplicate keys', () => {
+  assert.equal(validateOutputSkillRegistry().ok, true)
+  assert.ok(OUTPUT_SKILL_REGISTRY.length >= 16)
+  assert.match(outputSkillSchema.parse(OUTPUT_SKILL_REGISTRY[0]).version, /^\d+\.\d+\.\d+$/)
+  assert.equal(validateOutputSkillRegistry([OUTPUT_SKILL_REGISTRY[0], OUTPUT_SKILL_REGISTRY[0]]).ok, false)
+})
+
+test('output skill resolution supports explicit keys, auto tags, world metadata, and stable hashes', () => {
+  const resolved = resolveOutputSkillsForNode({
+    nodeType: 'text_llm',
+    purpose: 'chapter_prose',
+    explicitSkillKeys: ['fiction_prose_voice'],
+    autoSkillTags: ['anti_ai_tells'],
+    worldWiki: snapshot.worldWiki,
+  })
+  const bundle = buildOutputGuidanceBundle({
+    skills: resolved.skills,
+    contextualGuidance: resolved.contextualGuidance,
+  })
+  const repeatHash = hashOutputGuidanceBundle({ ...bundle, guidanceHash: 'changed' })
+
+  assert.deepEqual(resolved.diagnostics, [])
+  assert.ok(bundle.skillKeys.includes('fiction_prose_voice'))
+  assert.ok(bundle.skillKeys.includes('anti_ai_telltales'))
+  assert.ok(bundle.guidance.some((entry) => entry.includes('Tone tags')))
+  assert.ok(bundle.guidance.some((entry) => entry.includes('Project narration POV')))
+  assert.equal(bundle.guidanceHash, repeatHash)
 })
 
 test('validates DAG ordering and rejects cycles', () => {
@@ -120,6 +171,39 @@ test('builds execution levels for independent parallel branches and joins', () =
   assert.deepEqual(plan.levels, [['context'], ['chapter_a', 'chapter_b'], ['assembly']])
   assert.deepEqual(plan.dependencyKeysByNodeKey.assembly.sort(), ['chapter_a', 'chapter_b'])
   assert.deepEqual(plan.diagnostics, [])
+})
+
+test('selects targeted run subgraph with ancestors only', () => {
+  const nodes = [
+    { key: 'context' },
+    { key: 'outline' },
+    { key: 'chapter_a' },
+    { key: 'chapter_b' },
+    { key: 'assembly' },
+    { key: 'artifact' },
+  ]
+  const edges = [
+    { sourceNodeKey: 'context', targetNodeKey: 'outline' },
+    { sourceNodeKey: 'outline', targetNodeKey: 'chapter_a' },
+    { sourceNodeKey: 'outline', targetNodeKey: 'chapter_b' },
+    { sourceNodeKey: 'chapter_a', targetNodeKey: 'assembly' },
+    { sourceNodeKey: 'chapter_b', targetNodeKey: 'assembly' },
+    { sourceNodeKey: 'assembly', targetNodeKey: 'artifact' },
+  ]
+
+  const chapterOnly = selectOutputWorkflowRunSubgraph({ nodes, edges, targetNodeKeys: ['chapter_a'] })
+  assert.deepEqual(chapterOnly.nodes.map((node) => node.key), ['context', 'outline', 'chapter_a'])
+  assert.deepEqual(chapterOnly.edges.map((edge) => `${edge.sourceNodeKey}->${edge.targetNodeKey}`), [
+    'context->outline',
+    'outline->chapter_a',
+  ])
+
+  const artifactOnly = selectOutputWorkflowRunSubgraph({ nodes, edges, targetNodeKeys: ['artifact'] })
+  assert.deepEqual(artifactOnly.nodes.map((node) => node.key), ['context', 'outline', 'chapter_a', 'chapter_b', 'assembly', 'artifact'])
+  assert.deepEqual(artifactOnly.diagnostics, [])
+
+  const missing = selectOutputWorkflowRunSubgraph({ nodes, edges, targetNodeKeys: ['missing'] })
+  assert.equal(missing.diagnostics.length, 1)
 })
 
 test('dirty propagation marks downstream nodes only', () => {
@@ -170,17 +254,19 @@ test('ebook preset binds sequence units and creates PDF artifact chain', () => {
 
   assert.equal(plan.preset, 'ebook_from_world')
   assert.deepEqual(plan.sourceSequenceUnitKeys, ['chapter-1', 'chapter-2'])
+  assert.ok(plan.nodes.some((node) => node.key === 'skill_context' && node.nodeType === 'skill_context_query'))
   assert.ok(plan.nodes.some((node) => node.nodeType === 'document_render'))
   assert.ok(plan.nodes.some((node) => node.nodeType === 'output_artifact'))
   assert.ok(plan.nodes.some((node) => node.key === 'chapter_001_prose'))
   assert.ok(plan.nodes.some((node) => node.key === 'chapter_002_prose'))
+  assert.equal(plan.nodes.some((node) => node.key.includes('_section_')), false)
   assert.equal(validateOutputWorkflowGraph({
     nodes: plan.nodes,
     edges: plan.edges,
   }).ok, true)
 })
 
-test('ebook preset fans chapter prose nodes out before assembly', () => {
+test('ebook preset fans full chapter prose nodes out before chapter assembly', () => {
   const plan = planOutputWorkflow({
     projectId: 'project-1',
     draftId: 'draft-1',
@@ -192,11 +278,60 @@ test('ebook preset fans chapter prose nodes out before assembly', () => {
   })
 
   const executionPlan = buildOutputWorkflowExecutionPlan(plan.nodes, plan.edges)
-  const chapterLevel = executionPlan.levels.find((level) => level.includes('chapter_001_prose'))
+  const chapterProseLevel = executionPlan.levels.find((level) => level.includes('chapter_001_prose'))
+  const chapterNode = plan.nodes.find((node) => node.key === 'chapter_001_prose')
 
-  assert.deepEqual(chapterLevel, ['chapter_001_prose', 'chapter_002_prose'])
+  assert.ok(chapterProseLevel?.includes('chapter_001_prose'))
+  assert.ok(chapterProseLevel?.includes('chapter_002_prose'))
+  assert.equal(defaultOutputWorkflowConcurrency.global, 8)
+  assert.equal(defaultOutputWorkflowConcurrency.resourceClasses.llm, 8)
+  assert.equal(chapterNode ? getOutputWorkflowNodeExecutionMetadata(chapterNode).maxConcurrency : undefined, 8)
   assert.deepEqual(executionPlan.dependencyKeysByNodeKey.chapter_assembly.sort(), ['chapter_001_prose', 'chapter_002_prose'])
-  assert.deepEqual(executionPlan.dependencyKeysByNodeKey.chapter_001_prose.sort(), ['chapter_plan', 'world_context'])
+  assert.deepEqual(executionPlan.dependencyKeysByNodeKey.chapter_001_prose.sort(), [
+    'chapter_plan',
+    'skill_context',
+    'world_context',
+  ])
+})
+
+test('ebook nodes carry guidance config and invalid skill keys produce diagnostics', () => {
+  const plan = planOutputWorkflow({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    prompt: 'Generate an ebook PDF from the world.',
+    selectedEntityKeys: ['hero'],
+    selectedSequenceUnitKeys: ['chapter-1', 'chapter-2'],
+    targetFormat: 'pdf',
+    snapshot,
+  })
+  const chapterNode = plan.nodes.find((node) => node.key === 'chapter_001_prose')
+  assert.ok(chapterNode)
+  const guidance = buildOutputGuidanceBundleForNode({ node: chapterNode!, worldWiki: snapshot.worldWiki })
+
+  assert.ok(guidance.skillKeys.includes('fiction_prose_voice'))
+  assert.ok(guidance.skillKeys.includes('anti_ai_telltales'))
+  assert.ok(guidance.skillKeys.includes('fiction_pov_balance'))
+
+  const invalidPlan = validateOutputWorkflowGraph({
+    nodes: [{ ...chapterNode!, config: { ...chapterNode!.config, skillKeys: ['missing_skill'] } }],
+    edges: [],
+    worldWiki: snapshot.worldWiki,
+  })
+  assert.equal(invalidPlan.ok, false)
+  assert.ok(invalidPlan.diagnostics.some((diagnostic) => diagnostic.includes('missing_skill')))
+})
+
+test('changing node skill keys changes workflow input hash material', () => {
+  const baseHash = hashOutputWorkflowValue({
+    nodeConfig: { purpose: 'chapter_prose', skillKeys: ['fiction_prose_voice'] },
+    upstream: {},
+  })
+  const changedHash = hashOutputWorkflowValue({
+    nodeConfig: { purpose: 'chapter_prose', skillKeys: ['fiction_prose_voice', 'anti_ai_telltales'] },
+    upstream: {},
+  })
+
+  assert.notEqual(baseHash, changedHash)
 })
 
 test('ready queue runs independent nodes concurrently within global cap', async () => {
@@ -302,4 +437,28 @@ test('ready queue blocks failed optional branch and completes independent branch
   assert.deepEqual(result.failed, ['optional'])
   assert.deepEqual(cancelled, ['dependent'])
   assert.deepEqual(result.completed, ['independent'])
+})
+
+test('ready queue treats running node cancellation as cancelled and cancels pending descendants', async () => {
+  const nodes = [
+    { key: 'running', nodeType: 'text_llm' as const, config: {}, metadata: {} },
+    { key: 'dependent', nodeType: 'utility_transform' as const, config: {}, metadata: {} },
+  ]
+  const cancelled: string[] = []
+  const error = new Error('Cancelled by user.') as Error & { workflowCancelled: boolean }
+  error.workflowCancelled = true
+
+  const result = await runOutputWorkflowReadyQueue({
+    nodes,
+    edges: [{ sourceNodeKey: 'running', sourcePort: 'text', targetNodeKey: 'dependent', targetPort: 'input' }],
+    executeNode: async () => {
+      throw error
+    },
+    onNodeCancelled: ({ node }) => {
+      cancelled.push(node.key)
+    },
+  })
+
+  assert.equal(result.status, 'cancelled')
+  assert.deepEqual(cancelled, ['running', 'dependent'])
 })

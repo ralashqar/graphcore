@@ -2,6 +2,7 @@ export type OpenAiResponsesRequest = {
   model: string
   input: string | Array<Record<string, unknown>>
   instructions?: string
+  background?: boolean
   temperature?: number
   maxOutputTokens?: number
   metadata?: Record<string, string>
@@ -13,6 +14,16 @@ export type OpenAiResponsesRequest = {
   store?: boolean
   extraBody?: Record<string, unknown>
   timeoutMs?: number
+}
+
+export type OpenAiResponseStatus = 'queued' | 'in_progress' | 'completed' | 'failed' | 'cancelled' | 'incomplete' | string
+
+export type OpenAiResponseResult = {
+  response: Response
+  body: Record<string, unknown>
+  id: string | null
+  status: OpenAiResponseStatus
+  outputText: string
 }
 
 export type OpenAiResponsesStreamingEvent = {
@@ -65,26 +76,28 @@ function resolveOpenAiTimeoutMs(override: number | undefined) {
   return Math.max(1_000, Math.floor(parsed))
 }
 
+function openAiApiKey() {
+  const apiKey = Deno.env.get('OPENAI_API_KEY')
+  if (!apiKey) throw new Error('OPENAI_API_KEY is not configured.')
+  return apiKey
+}
+
+function openAiBaseUrl() {
+  return (Deno.env.get('OPENAI_BASE_URL') ?? 'https://api.openai.com/v1').replace(/\/+$/, '')
+}
+
 export function extractOutputText(payload: Record<string, unknown>) {
   const output = Array.isArray(payload.output) ? payload.output : []
   const textFragments: string[] = []
 
   for (const item of output) {
-    if (!item || typeof item !== 'object') {
-      continue
-    }
-
+    if (!item || typeof item !== 'object') continue
     const content = Array.isArray((item as { content?: unknown[] }).content)
       ? (item as { content: unknown[] }).content
       : []
-
     for (const part of content) {
-      if (!part || typeof part !== 'object') {
-        continue
-      }
-
+      if (!part || typeof part !== 'object') continue
       const typedPart = part as { type?: unknown; text?: unknown }
-
       if (typeof typedPart.text === 'string' && typeof typedPart.type === 'string' && typedPart.type.includes('text')) {
         textFragments.push(typedPart.text)
       }
@@ -94,21 +107,16 @@ export function extractOutputText(payload: Record<string, unknown>) {
   return textFragments.join('\n').trim()
 }
 
-export async function runOpenAiResponses(payload: OpenAiResponsesRequest) {
-  const apiKey = Deno.env.get('OPENAI_API_KEY')
-  const baseUrl = Deno.env.get('OPENAI_BASE_URL') ?? 'https://api.openai.com/v1'
-
-  if (!apiKey) {
-    throw new Error('OPENAI_API_KEY is not configured.')
-  }
-
+function buildOpenAiResponsesBody(payload: OpenAiResponsesRequest, overrides: Record<string, unknown> = {}) {
   const upstreamBody: Record<string, unknown> = {
     model: payload.model,
     input: payload.input,
     ...payload.extraBody,
+    ...overrides,
   }
 
   if (payload.instructions) upstreamBody.instructions = payload.instructions
+  if (payload.background !== undefined) upstreamBody.background = payload.background
   if (payload.temperature !== undefined) upstreamBody.temperature = payload.temperature
   if (payload.maxOutputTokens !== undefined) upstreamBody.max_output_tokens = payload.maxOutputTokens
   if (payload.metadata) upstreamBody.metadata = payload.metadata
@@ -118,46 +126,120 @@ export async function runOpenAiResponses(payload: OpenAiResponsesRequest) {
   if (payload.toolChoice !== undefined) upstreamBody.tool_choice = payload.toolChoice
   if (payload.previousResponseId) upstreamBody.previous_response_id = payload.previousResponseId
   if (payload.store !== undefined) upstreamBody.store = payload.store
+  return upstreamBody
+}
 
+function parseOpenAiResponseResult(response: Response, body: Record<string, unknown>): OpenAiResponseResult {
+  return {
+    response,
+    body,
+    id: typeof body.id === 'string' ? body.id : null,
+    status: typeof body.status === 'string' ? body.status : response.ok ? 'completed' : 'failed',
+    outputText: extractOutputText(body),
+  }
+}
+
+export function parseOpenAiResponseStatus(body: Record<string, unknown>) {
+  return {
+    id: typeof body.id === 'string' ? body.id : null,
+    status: typeof body.status === 'string' ? body.status : 'unknown',
+    outputText: extractOutputText(body),
+  }
+}
+
+export async function runOpenAiResponses(payload: OpenAiResponsesRequest) {
+  const apiKey = openAiApiKey()
+  const baseUrl = openAiBaseUrl()
   const timeoutMs = resolveOpenAiTimeoutMs(payload.timeoutMs)
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(`OpenAI responses request timed out after ${timeoutMs}ms.`), timeoutMs)
 
-  let response: Response
-  let body: Record<string, unknown>
-
   try {
-    response = await fetch(`${baseUrl.replace(/\/+$/, '')}/responses`, {
+    const response = await fetch(`${baseUrl}/responses`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(upstreamBody),
+      body: JSON.stringify(buildOpenAiResponsesBody(payload)),
       signal: controller.signal,
     })
-    body = (await response.json().catch(() => ({}))) as Record<string, unknown>
+    const body = (await response.json().catch(() => ({}))) as Record<string, unknown>
+    return parseOpenAiResponseResult(response, body)
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    if (message.includes('timed out after')) {
-      throw new Error(message)
-    }
+    if (message.includes('timed out after')) throw new Error(message)
     throw error
   } finally {
     clearTimeout(timeoutId)
   }
+}
 
-  return {
-    response,
-    body,
-    outputText: extractOutputText(body),
+export async function createOpenAiBackgroundResponse(payload: OpenAiResponsesRequest) {
+  const apiKey = openAiApiKey()
+  const baseUrl = openAiBaseUrl()
+  const timeoutMs = resolveOpenAiTimeoutMs(payload.timeoutMs)
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(`OpenAI background response create timed out after ${timeoutMs}ms.`), timeoutMs)
+
+  try {
+    const response = await fetch(`${baseUrl}/responses`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(buildOpenAiResponsesBody(payload, { background: true, store: true })),
+      signal: controller.signal,
+    })
+    const body = (await response.json().catch(() => ({}))) as Record<string, unknown>
+    return parseOpenAiResponseResult(response, body)
+  } finally {
+    clearTimeout(timeoutId)
   }
 }
 
-function normalizeStreamingEvent(
-  rawEvent: string | null,
-  data: Record<string, unknown>,
-): OpenAiResponsesStreamingEvent {
+export async function retrieveOpenAiResponse(responseId: string, timeoutMs?: number) {
+  const apiKey = openAiApiKey()
+  const baseUrl = openAiBaseUrl()
+  const resolvedTimeoutMs = resolveOpenAiTimeoutMs(timeoutMs)
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(`OpenAI response retrieve timed out after ${resolvedTimeoutMs}ms.`), resolvedTimeoutMs)
+
+  try {
+    const response = await fetch(`${baseUrl}/responses/${encodeURIComponent(responseId)}`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: controller.signal,
+    })
+    const body = (await response.json().catch(() => ({}))) as Record<string, unknown>
+    return parseOpenAiResponseResult(response, body)
+  } finally {
+    clearTimeout(timeoutId)
+  }
+}
+
+export async function cancelOpenAiResponse(responseId: string, timeoutMs?: number) {
+  const apiKey = openAiApiKey()
+  const baseUrl = openAiBaseUrl()
+  const resolvedTimeoutMs = resolveOpenAiTimeoutMs(timeoutMs)
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(`OpenAI response cancel timed out after ${resolvedTimeoutMs}ms.`), resolvedTimeoutMs)
+
+  try {
+    const response = await fetch(`${baseUrl}/responses/${encodeURIComponent(responseId)}/cancel`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: controller.signal,
+    })
+    const body = (await response.json().catch(() => ({}))) as Record<string, unknown>
+    return parseOpenAiResponseResult(response, body)
+  } finally {
+    clearTimeout(timeoutId)
+  }
+}
+
+function normalizeStreamingEvent(rawEvent: string | null, data: Record<string, unknown>): OpenAiResponsesStreamingEvent {
   return {
     type: typeof data.type === 'string' ? data.type : (rawEvent ?? 'unknown'),
     sequenceNumber: typeof data.sequence_number === 'number' ? data.sequence_number : null,
@@ -180,25 +262,16 @@ async function processOpenAiSseChunk(
   const dataLines: string[] = []
 
   for (const line of lines) {
-    if (!line) continue
-    if (line.startsWith(':')) continue
+    if (!line || line.startsWith(':')) continue
     if (line.startsWith('event:')) {
       eventName = line.slice(6).trim()
       continue
     }
-    if (line.startsWith('data:')) {
-      dataLines.push(line.slice(5).trimStart())
-    }
-  }
-
-  if (dataLines.length === 0) {
-    return
+    if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart())
   }
 
   const rawData = dataLines.join('\n').trim()
-  if (!rawData || rawData === '[DONE]') {
-    return
-  }
+  if (!rawData || rawData === '[DONE]') return
 
   let parsedData: Record<string, unknown>
   try {
@@ -239,40 +312,11 @@ export async function runOpenAiResponsesStream(
   payload: OpenAiResponsesRequest,
   hooks: OpenAiResponsesStreamHooks = {},
 ) {
-  const apiKey = Deno.env.get('OPENAI_API_KEY')
-  const baseUrl = Deno.env.get('OPENAI_BASE_URL') ?? 'https://api.openai.com/v1'
-
-  if (!apiKey) {
-    throw new Error('OPENAI_API_KEY is not configured.')
-  }
-
-  const upstreamBody: Record<string, unknown> = {
-    model: payload.model,
-    input: payload.input,
-    stream: true,
-    stream_options: {
-      include_obfuscation: false,
-    },
-    ...payload.extraBody,
-  }
-
-  if (payload.instructions) upstreamBody.instructions = payload.instructions
-  if (payload.temperature !== undefined) upstreamBody.temperature = payload.temperature
-  if (payload.maxOutputTokens !== undefined) upstreamBody.max_output_tokens = payload.maxOutputTokens
-  if (payload.metadata) upstreamBody.metadata = payload.metadata
-  if (payload.reasoning) upstreamBody.reasoning = payload.reasoning
-  if (payload.text) upstreamBody.text = payload.text
-  if (payload.tools) upstreamBody.tools = payload.tools
-  if (payload.toolChoice !== undefined) upstreamBody.tool_choice = payload.toolChoice
-  if (payload.previousResponseId) upstreamBody.previous_response_id = payload.previousResponseId
-  if (payload.store !== undefined) upstreamBody.store = payload.store
-
+  const apiKey = openAiApiKey()
+  const baseUrl = openAiBaseUrl()
   const timeoutMs = resolveOpenAiTimeoutMs(payload.timeoutMs)
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(`OpenAI responses request timed out after ${timeoutMs}ms.`), timeoutMs)
-
-  let response: Response
-  let body: Record<string, unknown> = {}
   const state = {
     outputText: '',
     finalBody: null as Record<string, unknown> | null,
@@ -280,77 +324,52 @@ export async function runOpenAiResponsesStream(
   }
 
   try {
-    response = await fetch(`${baseUrl.replace(/\/+$/, '')}/responses`, {
+    const response = await fetch(`${baseUrl}/responses`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(upstreamBody),
+      body: JSON.stringify(buildOpenAiResponsesBody(payload, {
+        stream: true,
+        stream_options: { include_obfuscation: false },
+      })),
       signal: controller.signal,
     })
 
     if (!response.ok) {
-      body = (await response.json().catch(() => ({}))) as Record<string, unknown>
-      return {
-        response,
-        body,
-        outputText: extractOutputText(body),
-      }
+      const body = (await response.json().catch(() => ({}))) as Record<string, unknown>
+      return parseOpenAiResponseResult(response, body)
     }
-
-    if (!response.body) {
-      throw new Error('OpenAI streaming response did not include a response body.')
-    }
+    if (!response.body) throw new Error('OpenAI streaming response did not include a response body.')
 
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
-
     while (true) {
       const { done, value } = await reader.read()
       if (done) break
       buffer += decoder.decode(value, { stream: true })
       const chunks = buffer.split(/\r?\n\r?\n/)
       buffer = chunks.pop() ?? ''
-      for (const chunk of chunks) {
-        await processOpenAiSseChunk(chunk, hooks, state)
-      }
+      for (const chunk of chunks) await processOpenAiSseChunk(chunk, hooks, state)
     }
 
     buffer += decoder.decode()
     if (buffer.trim()) {
-      const chunks = buffer.split(/\r?\n\r?\n/)
-      for (const chunk of chunks) {
-        if (chunk.trim()) {
-          await processOpenAiSseChunk(chunk, hooks, state)
-        }
+      for (const chunk of buffer.split(/\r?\n\r?\n/)) {
+        if (chunk.trim()) await processOpenAiSseChunk(chunk, hooks, state)
       }
     }
+    if (state.streamErrorMessage) throw new Error(state.streamErrorMessage)
+    if (!state.finalBody) throw new Error('OpenAI streaming response ended before a terminal response event was received.')
 
-    if (state.streamErrorMessage) {
-      throw new Error(state.streamErrorMessage)
-    }
-
-    if (!state.finalBody) {
-      throw new Error('OpenAI streaming response ended before a terminal response event was received.')
-    }
-
-    body = state.finalBody ?? {}
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    if (message.includes('timed out after')) {
-      throw new Error(message)
-    }
-    throw error
+    return parseOpenAiResponseResult(response, {
+      ...state.finalBody,
+      output: state.finalBody.output ?? [{ content: [{ type: 'output_text', text: state.outputText.trim() }] }],
+    })
   } finally {
     clearTimeout(timeoutId)
-  }
-
-  return {
-    response,
-    body,
-    outputText: extractOutputText(body) || state.outputText.trim(),
   }
 }
 
@@ -365,23 +384,16 @@ function toOpenAiFile(input: OpenAiImageBinaryInput, fallbackName: string) {
 }
 
 export async function runOpenAiImages(payload: OpenAiImagesRequest) {
-  const apiKey = Deno.env.get('OPENAI_API_KEY')
-  const baseUrl = Deno.env.get('OPENAI_BASE_URL') ?? 'https://api.openai.com/v1'
-
-  if (!apiKey) {
-    throw new Error('OPENAI_API_KEY is not configured.')
-  }
-
+  const apiKey = openAiApiKey()
+  const baseUrl = openAiBaseUrl()
   const action = payload.action === 'edit' ? 'edit' : 'generate'
   const model = payload.model?.trim() || 'gpt-image-2'
   const timeoutMs = resolveOpenAiTimeoutMs(payload.timeoutMs)
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(`OpenAI images request timed out after ${timeoutMs}ms.`), timeoutMs)
 
-  let response: Response
-  let body: Record<string, unknown>
-
   try {
+    let response: Response
     if (action === 'edit') {
       const formData = new FormData()
       formData.set('model', model)
@@ -389,9 +401,7 @@ export async function runOpenAiImages(payload: OpenAiImagesRequest) {
       for (const [index, image] of (payload.images ?? []).entries()) {
         formData.append('image[]', toOpenAiFile(image, `image-${index}.png`))
       }
-      if (payload.mask) {
-        formData.set('mask', toOpenAiFile(payload.mask, 'mask.png'))
-      }
+      if (payload.mask) formData.set('mask', toOpenAiFile(payload.mask, 'mask.png'))
       if (payload.size) formData.set('size', payload.size)
       if (payload.quality) formData.set('quality', payload.quality)
       if (payload.background) formData.set('background', payload.background)
@@ -401,16 +411,11 @@ export async function runOpenAiImages(payload: OpenAiImagesRequest) {
       if (payload.n !== undefined) formData.set('n', String(payload.n))
       if (payload.user) formData.set('user', payload.user)
       for (const [key, value] of Object.entries(payload.extraBody ?? {})) {
-        if (value !== undefined && value !== null) {
-          formData.set(key, typeof value === 'string' ? value : JSON.stringify(value))
-        }
+        if (value !== undefined && value !== null) formData.set(key, typeof value === 'string' ? value : JSON.stringify(value))
       }
-
-      response = await fetch(`${baseUrl.replace(/\/+$/, '')}/images/edits`, {
+      response = await fetch(`${baseUrl}/images/edits`, {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-        },
+        headers: { Authorization: `Bearer ${apiKey}` },
         body: formData,
         signal: controller.signal,
       })
@@ -431,8 +436,7 @@ export async function runOpenAiImages(payload: OpenAiImagesRequest) {
       if (payload.images && payload.images.length > 0) {
         upstreamBody.image = payload.images.map((image) => `data:${image.mimeType};base64,${image.data}`)
       }
-
-      response = await fetch(`${baseUrl.replace(/\/+$/, '')}/images/generations`, {
+      response = await fetch(`${baseUrl}/images/generations`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${apiKey}`,
@@ -443,21 +447,13 @@ export async function runOpenAiImages(payload: OpenAiImagesRequest) {
       })
     }
 
-    body = (await response.json().catch(() => ({}))) as Record<string, unknown>
+    const body = (await response.json().catch(() => ({}))) as Record<string, unknown>
+    return { action, model, response, body }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    if (message.includes('timed out after')) {
-      throw new Error(message)
-    }
+    if (message.includes('timed out after')) throw new Error(message)
     throw error
   } finally {
     clearTimeout(timeoutId)
-  }
-
-  return {
-    action,
-    model,
-    response,
-    body,
   }
 }

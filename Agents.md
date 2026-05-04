@@ -149,11 +149,16 @@ GraphCore runs AI workloads through protected Supabase Edge Functions that provi
 - Dedicated workflow tables: `output_workflows`, `output_workflow_nodes`, `output_workflow_edges`, `output_workflow_runs`, `output_workflow_run_steps`, and `output_artifacts`
 - Binary/media files remain in `project_assets`; workflow provenance is stored in asset/artifact metadata with `workflowId`, `runId`, `nodeId`, source world keys, provider/model details, and `metadata.generatedBy`
 - Shared TypeScript node registry in `src/domain/outputWorkflow.ts` validates approved node types for frontend previews, Edge Functions, and workers
-- Durable worker execution claims runs through service-role RPCs, heartbeats progress, executes the DAG with dependency-aware ready-node scheduling, records per-node step output hashes, and completes/fails/cancels the run
-- Workflow execution metadata supports dependency levels, `resourceClass`, `groupKey`, `maxConcurrency`, and `continueOnError`; unchanged nodes complete with `metadata.skipped = true`
+  - Shared Output Skill registry in `src/domain/outputSkills.ts` provides curated, versioned guidance bundles for writing, cinematic, UGC, visual, provider hygiene, and anti-AI-telltale output behavior. Fiction prose skills explicitly favor restrained, human-scaled prose with sparse figurative language, minimal exact adjectives, and no purple-prose or stock AI noir/dystopian phrasing.
+  - Durable worker execution claims runs through service-role RPCs, heartbeats progress, executes the DAG with dependency-aware ready-node scheduling, records per-node step output hashes, and completes/fails/cancels the run
+  - Workflow execution metadata supports dependency levels, `resourceClass`, `groupKey`, `maxConcurrency`, `continueOnError`, `skillKeys`, `guidanceHash`, and `guidanceMode`; unchanged nodes complete with `metadata.skipped = true`
+  - Retry behavior is hash-based: rerunning a failed workflow against the same persisted workflow/input skips completed nodes whose `inputHash` still matches, retries failed nodes, and unblocks downstream nodes. Longform prose nodes persist provider request IDs so a stale worker can resume provider polling instead of creating duplicate OpenAI requests.
+  - Targeted node reruns are supported through run metadata `targetNodeKeys` plus `forceNodeKeys`: the worker executes only the selected node and its ancestors, skips cached upstream nodes, and forces the selected node to rerun. The Outputs UI uses this for "render/register PDF only" after artifact failures and for manually regenerating a single chapter/section node for preview without rerunning the whole workflow.
+  - Long-running text nodes use OpenAI Responses background mode from the Fly worker. Steps store `provider_request_id`, `metadata.providerMode = "background"`, `metadata.providerStatus`, and `metadata.lastProviderPollAt`; cancellation attempts to cancel the OpenAI response when a provider handle exists.
 
 **Supported Node Types**:
 - `world_context_query`: resolves entities, relationships, sequence units, threads, wiki metadata, and visual references from the world graph
+- `skill_context_query`: resolves selected or auto-tagged Output Skills into a deterministic `guidance_bundle`
 - `text_llm`: generates text or structured intermediate outputs from prompt plus world context
 - `image_generation`: wraps image generation nodes for future comic and reference workflows
 - `video_generation`: wraps future Seedance/Fal/cinematic video generation nodes
@@ -162,15 +167,18 @@ GraphCore runs AI workloads through protected Supabase Edge Functions that provi
 - `output_artifact`: registers final artifacts and links them to `project_assets`
 
 **V1 Preset**:
-- `ebook_from_world`: world context query -> outline/TOC -> chapter plan -> per-sequence-unit chapter prose fan-out -> chapter assembly -> consistency editor -> front/back matter -> document render -> output artifact
-- Inputs are project wiki metadata, selected sequence units, cast/places/items/concepts, style/tone, target format, and prompt
-- Output is a manuscript/PDF artifact stored as `project_assets.kind = "document"` and indexed in `output_artifacts`
+  - `ebook_from_world`: world context query -> outline/TOC -> chapter plan -> one full prose node per selected sequence unit/chapter -> global chapter assembly -> consistency editor -> front/back matter -> document render -> output artifact
+  - Inputs are project wiki metadata, selected sequence units, cast/places/items/concepts, style/tone, target format, prompt, and resolved Output Skills for prose voice, scene structure, continuity, and provider hygiene
+  - Fiction ebook generation uses `worldWiki.narrationPov` as the project-level narration contract and `sequence.povCharacterKey` / `povCharacterName` / `povNotes` as the chapter focal-character contract. Chapter prose prompts must preserve POV, avoid head-hopping, and balance concrete action, dialogue/subtext, and selective internal reflection.
+  - Each selected sequence unit maps to one full chapter prose node. Chapter nodes can still run in parallel across chapters under the default output workflow global cap of 8, LLM cap of 8, and ebook chapter group cap of 8, but a chapter is not split into independently generated sections because prose continuity inside a chapter is more important than intra-chapter parallelism.
+  - Full chapter prose nodes use OpenAI Responses background mode with long polling from the Fly worker, persisted provider request IDs, and hash-based retry/skip behavior so long chapters do not depend on a short request timeout. New executor versions must be bumped when prompt or node shape changes enough that old prose hashes should not be reused.
+  - Output is a complete trade-ebook PDF plus companion Markdown manuscript stored as `project_assets.kind = "document"` and indexed in `output_artifacts`. PDF rendering is worker-only: the Fly worker passes a `documentRenderer` callback into the shared workflow executor, converts manuscript Markdown into sanitized semantic HTML/CSS, and renders with system Chromium/Playwright at 6in x 9in with title page, chapter page breaks, serif book typography, margins, and footer page numbers. Supabase Edge Functions must not import browser rendering dependencies.
 - Story subtypes now include `fiction_novel` and `nonfiction_ebook`; seed profiles should create usable chapter-oriented `sequence_unit` nodes and wiki metadata for downstream ebook generation
 
 **Integration**:
 - Public Edge Functions: `plan-output-workflow`, `start-output-workflow`, `start-output-workflow-run`, `get-output-workflow-status`, `cancel-output-workflow-run`, and `get-output-artifact`
-- The Fly worker claims one output workflow run at a time, then runs independent ready nodes in parallel subject to global and resource-class concurrency caps
-- The Outputs workspace owns preset selection, prompt composition, dependency-level workflow preview, run timeline, skipped/blocked status display, and artifact gallery
+- The Fly worker claims one output workflow run at a time, then runs independent ready nodes in parallel subject to global and resource-class concurrency caps. Worker images must include Chromium, usable serif fonts, and Deno `--allow-run` permission so Playwright can launch the system Chromium binary for ebook PDF rendering.
+- The Outputs workspace owns preset selection, prompt composition, dependency-level workflow preview, node guidance inspection, run timeline, skipped/blocked status display, retry-from-failed controls, and artifact gallery
 - `CinematicsWorkspace` remains available as an Outputs sub-mode while cinematic graphs are migrated into workflow presets
 - Future presets should wrap existing visual/app/cinematic systems rather than replacing their durable job pipelines
 
@@ -370,6 +378,7 @@ GraphCore runs AI workloads through protected Supabase Edge Functions that provi
 - Event timeline canon is graph-native: `event` nodes carry optional display hints, event-to-event temporal relationships carry ordering metadata, and deterministic timeline derivation/validation can skip invalid or cyclic temporal links without inventing replacement chronology
 - Authored sequence canon is graph-native but separate from event chronology: `sequence_unit` nodes carry chapter/progression metadata, sequence-to-sequence relationships use verbs like `precedes`, `causes`, `complicates`, and `pays_off`, and they must not use event temporal relationship metadata.
 - Story `sequence_unit` records are script-facing canon and must include `customProperties.sequence.ordinal`, `synopsis`, `dramaticQuestion`, `outcome`, at least one cause/effect consequence, and at least one character arc delta. Complete sequence units are marked `scriptExpansionReady`; incomplete ones should be repaired by the planner or streamed-seed repair pass rather than accepted as authored progression.
+- Fiction story projects should also set project-level `worldWiki.narrationPov` and chapter-level `customProperties.sequence.povCharacterKey` when a focal character exists, with optional `povCharacterName` and `povNotes`, so downstream ebook generation can preserve narration style and focal perspective.
 - Story sequence completion remains LLM-authored: deterministic logic may detect missing fields, provide recommended next ordinal, route context, and validate the result, but it does not invent synopsis, outcome, consequence, or character-arc canon itself.
 - Wiki presentation is graph-native and derived at render/retrieval time. The graph remains canonical; wiki metadata only improves display, and gap-fill buttons call the existing `start-world-prompt-turn` flow with targeted context.
 - Project-wide wiki presentation is metadata-only and low-cost: the planner may update it when retrieval marks wiki context as targeted or opportunistic, while backend validation caps and merges fields without deterministically writing replacement title/synopsis canon. Wiki display uses the generated metadata title as the content title; the GraphCore project name remains workspace/user-facing metadata and is not used as the world title fallback.

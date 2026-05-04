@@ -149,16 +149,16 @@ function buildProfile(projectSubtype: ProjectSubtype): WorldSeedSkeletonProfile 
       projectType,
       projectSubtype,
       label: `${subtypeLabel} initial ${projectSubtype === 'fiction_novel' ? 'novel' : 'story'} skeleton`,
-      wikiMetadataRequired: ['title', 'logline', 'synopsis', 'genre', 'themes', 'toneTags', 'coreConflict', 'visualMotifs'],
+      wikiMetadataRequired: ['title', 'logline', 'synopsis', 'genre', 'narrationPov', 'themes', 'toneTags', 'coreConflict', 'visualMotifs'],
       categories: storyCategories,
       sequence: {
         unitKind: projectSubtype === 'tv_streaming_series' ? 'episode' : projectSubtype === 'shortform_series' ? 'short_beat' : 'chapter',
         min: projectSubtype === 'short_film' ? 5 : projectSubtype === 'fiction_novel' ? 10 : 7,
         max: projectSubtype === 'short_film' ? 7 : projectSubtype === 'fiction_novel' ? 16 : 10,
         requiredRelationships: ['precedes', 'causes', 'complicates', 'pays_off'],
-        requiredFields: ['ordinal', 'synopsis', 'dramaticQuestion', 'storyFunction', 'outcome', 'consequences', 'openLoops', 'resolvedLoops'],
+        requiredFields: ['ordinal', 'povCharacterKey', 'synopsis', 'dramaticQuestion', 'storyFunction', 'outcome', 'consequences', 'openLoops', 'resolvedLoops'],
         purpose: projectSubtype === 'fiction_novel'
-          ? 'Create a manuscript-facing chapter spine as ordered sequence_unit nodes, not just plot events.'
+          ? 'Create a manuscript-facing chapter spine as ordered sequence_unit nodes, including the focal POV character for each chapter, not just plot events.'
           : 'Create the complete main story arc as ordered sequence_unit nodes, not just a first event.',
       },
       relationshipGuidance: [
@@ -167,7 +167,9 @@ function buildProfile(projectSubtype: ProjectSubtype): WorldSeedSkeletonProfile 
         'Use sequence_unit relationships for authored story order and causality.',
       ],
       plannerDirectives: [
-        'Create project wiki metadata first, including title and logline.',
+        projectSubtype === 'fiction_novel'
+          ? 'Create project wiki metadata first, including title, logline, and the default narrationPov such as first person, third limited, close third, or rotating limited.'
+          : 'Create project wiki metadata first, including title and logline.',
         'Create a full main cast and enough locations to support the complete arc.',
         projectSubtype === 'fiction_novel'
           ? 'Create ordered sequence_unit chapter nodes suitable for downstream prose generation in one pass.'

@@ -1,5 +1,10 @@
 import { z } from 'zod'
 
+import {
+  buildOutputGuidanceBundle,
+  outputGuidanceModeSchema,
+  resolveOutputSkillsForNode,
+} from './outputSkills.ts'
 import { projectContextSchema } from './projectContext.ts'
 import {
   worldEntitySchema,
@@ -13,6 +18,7 @@ const looseRecordSchema = z.record(z.string(), z.unknown())
 export const outputWorkflowStatusSchema = z.enum(['draft', 'active', 'archived'])
 export const outputWorkflowNodeTypeSchema = z.enum([
   'world_context_query',
+  'skill_context_query',
   'text_llm',
   'image_generation',
   'video_generation',
@@ -30,7 +36,7 @@ export const outputWorkflowPresetSchema = z.enum([
   'ugc_episode',
   'composite_reference',
 ])
-export const outputWorkflowPortValueTypeSchema = z.enum(['world_context', 'text', 'structured_json', 'image', 'video', 'document', 'artifact', 'asset_pack'])
+export const outputWorkflowPortValueTypeSchema = z.enum(['world_context', 'guidance_bundle', 'text', 'structured_json', 'image', 'video', 'document', 'artifact', 'asset_pack'])
 export const outputWorkflowResourceClassSchema = z.enum(['llm', 'image', 'video', 'document', 'utility'])
 
 export const outputWorkflowPortSchema = z.object({
@@ -60,12 +66,21 @@ export const outputWorkflowNodeRegistry = {
     outputPorts: [{ id: 'context', label: 'Context', direction: 'output', valueType: 'world_context', multiple: false, required: true }],
     providerBacked: false,
   },
+  skill_context_query: {
+    type: 'skill_context_query',
+    label: 'Output Skills',
+    description: 'Resolve reusable guidance skills into a compact guidance bundle for downstream nodes.',
+    inputPorts: [],
+    outputPorts: [{ id: 'guidance', label: 'Guidance', direction: 'output', valueType: 'guidance_bundle', multiple: false, required: true }],
+    providerBacked: false,
+  },
   text_llm: {
     type: 'text_llm',
     label: 'Text LLM',
     description: 'Generate structured text from a prompt and world context.',
     inputPorts: [
       { id: 'context', label: 'Context', direction: 'input', valueType: 'world_context', multiple: false, required: true },
+      { id: 'guidance', label: 'Guidance', direction: 'input', valueType: 'guidance_bundle', multiple: false, required: false },
       { id: 'prompt', label: 'Prompt', direction: 'input', valueType: 'text', multiple: false, required: true },
     ],
     outputPorts: [{ id: 'text', label: 'Text', direction: 'output', valueType: 'text', multiple: false, required: true }],
@@ -77,6 +92,7 @@ export const outputWorkflowNodeRegistry = {
     description: 'Generate an image from prompts and optional reference images.',
     inputPorts: [
       { id: 'prompt', label: 'Prompt', direction: 'input', valueType: 'text', multiple: false, required: true },
+      { id: 'guidance', label: 'Guidance', direction: 'input', valueType: 'guidance_bundle', multiple: false, required: false },
       { id: 'references', label: 'References', direction: 'input', valueType: 'image', multiple: true, required: false },
     ],
     outputPorts: [{ id: 'image', label: 'Image', direction: 'output', valueType: 'image', multiple: false, required: true }],
@@ -88,6 +104,7 @@ export const outputWorkflowNodeRegistry = {
     description: 'Generate video clips from a prompt and image/video references.',
     inputPorts: [
       { id: 'prompt', label: 'Prompt', direction: 'input', valueType: 'text', multiple: false, required: true },
+      { id: 'guidance', label: 'Guidance', direction: 'input', valueType: 'guidance_bundle', multiple: false, required: false },
       { id: 'references', label: 'References', direction: 'input', valueType: 'image', multiple: true, required: false },
     ],
     outputPorts: [{ id: 'video', label: 'Video', direction: 'output', valueType: 'video', multiple: false, required: true }],
@@ -158,6 +175,13 @@ export const outputWorkflowExecutionMetadataSchema = z.object({
   maxConcurrency: z.number().int().positive().optional(),
   continueOnError: z.boolean().optional(),
 }).default({})
+
+export const outputWorkflowNodeGuidanceConfigSchema = z.object({
+  skillKeys: z.array(z.string().min(1)).default([]),
+  autoSkillTags: z.array(z.string().min(1)).default([]),
+  presetSkillKeys: z.array(z.string().min(1)).default([]),
+  guidanceMode: outputGuidanceModeSchema.default('append'),
+}).default({ skillKeys: [], autoSkillTags: [], presetSkillKeys: [], guidanceMode: 'append' })
 
 export const outputWorkflowEdgeSchema = z.object({
   id: z.string(),
@@ -366,13 +390,27 @@ export function hashOutputWorkflowValue(value: unknown) {
 }
 
 export function validateOutputWorkflowGraph(input: {
-  nodes: Array<Pick<z.infer<typeof outputWorkflowNodeSchema>, 'key' | 'nodeType'>>
+  nodes: Array<Pick<z.infer<typeof outputWorkflowNodeSchema>, 'key' | 'nodeType'> & Partial<Pick<z.infer<typeof outputWorkflowNodeSchema>, 'config' | 'inputs'>>>
   edges: Array<Pick<z.infer<typeof outputWorkflowEdgeSchema>, 'sourceNodeKey' | 'targetNodeKey'>>
+  worldWiki?: unknown
 }) {
   const executionPlan = buildOutputWorkflowExecutionPlan(input.nodes, input.edges)
+  const skillDiagnostics = input.nodes.flatMap((node) => {
+    if (!node.config) return []
+    const bundle = buildOutputGuidanceBundleForNode({
+      node: {
+        nodeType: node.nodeType,
+        config: node.config ?? {},
+        inputs: node.inputs ?? {},
+      },
+      worldWiki: input.worldWiki,
+    })
+    return bundle.diagnostics.map((diagnostic) => `${node.key}: ${diagnostic}`)
+  })
+  const diagnostics = [...executionPlan.diagnostics, ...skillDiagnostics]
   return {
-    ok: executionPlan.diagnostics.length === 0,
-    diagnostics: executionPlan.diagnostics,
+    ok: diagnostics.length === 0,
+    diagnostics,
     orderedNodeKeys: executionPlan.orderedNodeKeys,
   }
 }
@@ -384,6 +422,55 @@ export type OutputWorkflowExecutionPlan = {
   outgoingByNodeKey: Record<string, Array<Pick<OutputWorkflowEdge, 'sourceNodeKey' | 'targetNodeKey'> & Partial<Pick<OutputWorkflowEdge, 'sourcePort' | 'targetPort'>>>>
   dependencyKeysByNodeKey: Record<string, string[]>
   diagnostics: string[]
+}
+
+export function selectOutputWorkflowRunSubgraph<
+  TNode extends Pick<z.infer<typeof outputWorkflowNodeSchema>, 'key'>,
+  TEdge extends Pick<z.infer<typeof outputWorkflowEdgeSchema>, 'sourceNodeKey' | 'targetNodeKey'>,
+>(input: {
+  nodes: TNode[]
+  edges: TEdge[]
+  targetNodeKeys?: string[]
+}) {
+  const targetNodeKeys = [...new Set((input.targetNodeKeys ?? []).map((key) => key.trim()).filter(Boolean))]
+  if (targetNodeKeys.length === 0) {
+    return {
+      nodes: input.nodes,
+      edges: input.edges,
+      targetNodeKeys: [],
+      includedNodeKeys: input.nodes.map((node) => node.key),
+      diagnostics: [],
+    }
+  }
+
+  const diagnostics: string[] = []
+  const nodeKeys = new Set(input.nodes.map((node) => node.key))
+  const incomingByNodeKey = new Map<string, string[]>()
+  for (const node of input.nodes) incomingByNodeKey.set(node.key, [])
+  for (const edge of input.edges) {
+    if (!nodeKeys.has(edge.sourceNodeKey) || !nodeKeys.has(edge.targetNodeKey)) continue
+    incomingByNodeKey.get(edge.targetNodeKey)?.push(edge.sourceNodeKey)
+  }
+
+  const included = new Set<string>()
+  const visit = (key: string) => {
+    if (!nodeKeys.has(key)) {
+      diagnostics.push(`Target output workflow node "${key}" does not exist.`)
+      return
+    }
+    if (included.has(key)) return
+    included.add(key)
+    for (const parentKey of incomingByNodeKey.get(key) ?? []) visit(parentKey)
+  }
+  for (const key of targetNodeKeys) visit(key)
+
+  return {
+    nodes: input.nodes.filter((node) => included.has(node.key)),
+    edges: input.edges.filter((edge) => included.has(edge.sourceNodeKey) && included.has(edge.targetNodeKey)),
+    targetNodeKeys,
+    includedNodeKeys: [...included],
+    diagnostics,
+  }
 }
 
 export function buildOutputWorkflowExecutionPlan(
@@ -466,6 +553,12 @@ function readExecutionRecord(value: unknown) {
     : {}
 }
 
+function readNodeConfigRecord(value: unknown) {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+}
+
 export function getOutputWorkflowNodeExecutionMetadata(
   node: Pick<OutputWorkflowNode, 'nodeType' | 'config' | 'metadata'>,
 ) {
@@ -489,10 +582,47 @@ export function getOutputWorkflowNodeExecutionMetadata(
   return { ...parsed, resourceClass }
 }
 
+export function getOutputWorkflowNodeGuidanceConfig(
+  node: Pick<OutputWorkflowNode, 'config' | 'inputs'>,
+) {
+  const config = readNodeConfigRecord(node.config)
+  const explicitGuidance = readNodeConfigRecord(config.guidance)
+  return outputWorkflowNodeGuidanceConfigSchema.parse({
+    ...explicitGuidance,
+    skillKeys: Array.isArray(config.skillKeys) ? config.skillKeys : explicitGuidance.skillKeys,
+    autoSkillTags: Array.isArray(config.autoSkillTags) ? config.autoSkillTags : explicitGuidance.autoSkillTags,
+    presetSkillKeys: Array.isArray(config.presetSkillKeys) ? config.presetSkillKeys : explicitGuidance.presetSkillKeys,
+    guidanceMode: config.guidanceMode ?? explicitGuidance.guidanceMode,
+  })
+}
+
+export function buildOutputGuidanceBundleForNode(input: {
+  node: Pick<OutputWorkflowNode, 'nodeType' | 'config' | 'inputs'>
+  worldWiki?: unknown
+}) {
+  const config = readNodeConfigRecord(input.node.config)
+  const purpose = typeof config.purpose === 'string' ? config.purpose : ''
+  const guidance = getOutputWorkflowNodeGuidanceConfig(input.node)
+  const resolved = resolveOutputSkillsForNode({
+    nodeType: input.node.nodeType,
+    purpose,
+    explicitSkillKeys: guidance.skillKeys,
+    autoSkillTags: guidance.autoSkillTags,
+    presetSkillKeys: guidance.presetSkillKeys,
+    worldWiki: input.worldWiki,
+  })
+  return buildOutputGuidanceBundle({
+    skills: resolved.skills,
+    guidanceMode: guidance.guidanceMode,
+    contextualGuidance: resolved.contextualGuidance,
+    diagnostics: resolved.diagnostics,
+  })
+}
+
 export const defaultOutputWorkflowConcurrency = {
-  global: 4,
+  global: 8,
   resourceClasses: {
-    llm: 3,
+    llm: 8,
     image: 2,
     video: 1,
     document: 4,
@@ -646,6 +776,13 @@ export async function runOutputWorkflowReadyQueue<TNode extends Pick<OutputWorkf
     if (!settledNode) continue
     const orderIndex = orderIndexByKey.get(settled.key) ?? 0
     if (settled.error) {
+      if (typeof settled.error === 'object' && settled.error && (settled.error as { workflowCancelled?: unknown }).workflowCancelled === true) {
+        cancelled.add(settled.key)
+        await input.onNodeCancelled?.({ node: settledNode, orderIndex, reason: 'cancelled' })
+        for (const key of [...pending]) await markCancelled(key, 'cancelled', settled.key)
+        await heartbeat()
+        return { status: 'cancelled' as const, outputsByNodeKey, completed: [...completed], failed: [...failed], cancelled: [...cancelled], skipped: [...skipped] }
+      }
       failed.add(settled.key)
       const execution = getOutputWorkflowNodeExecutionMetadata(settledNode)
       const blockedDependents = collectDescendants(settled.key).filter((key) => pending.has(key))
@@ -777,6 +914,16 @@ export function buildEbookFromWorldPlan(request: z.infer<typeof outputWorkflowPl
     ? `${worldWiki.title} Ebook`
     : `${request.snapshot.project.name} Ebook`
   const prompt = request.prompt.trim() || 'Create a polished written ebook from this world, preserving canon and using the sequence units as the chapter spine.'
+  const nonfictionProject = request.snapshot.projectContext?.projectSubtype === 'nonfiction_ebook'
+  const chapterVoiceSkill = nonfictionProject ? 'nonfiction_clear_ebook_voice' : 'fiction_prose_voice'
+  const ebookSkillKeys = [
+    chapterVoiceSkill,
+    'anti_ai_telltales',
+    'chapter_scene_structure',
+    ...(nonfictionProject ? [] : ['fiction_pov_balance']),
+    'continuity_editor',
+    'provider_prompt_hygiene',
+  ]
   const chapterUnits = selectedSequenceUnits.length > 0
     ? selectedSequenceUnits
     : [{
@@ -785,28 +932,37 @@ export function buildEbookFromWorldPlan(request: z.infer<typeof outputWorkflowPl
       summary: 'A chapter generated from the available world context.',
       customProperties: { sequence: { ordinal: 1, synopsis: 'Develop the strongest available world material into a coherent chapter.' } },
     }]
-  const chapterNodes = chapterUnits.map((sequenceUnit, index) => nodeBase({
-    key: `chapter_${String(index + 1).padStart(3, '0')}_prose`,
-    nodeType: 'text_llm',
-    label: `Chapter ${index + 1} Prose`,
-    x: 900,
-    y: 40 + (index % 8) * 92,
-    inputs: {
-      prompt,
-    },
-    config: {
-      purpose: 'chapter_prose',
-      targetFormat: request.targetFormat,
-      chapterNumber: index + 1,
-      sequenceUnitKey: sequenceUnit.key,
-      sequenceUnitName: sequenceUnit.name,
-      execution: {
-        resourceClass: 'llm',
-        groupKey: 'ebook_chapters',
-        maxConcurrency: 3,
+  const chapterNodes = chapterUnits.map((sequenceUnit, chapterIndex) => {
+    const chapterNumber = chapterIndex + 1
+    const chapterKey = `chapter_${String(chapterNumber).padStart(3, '0')}`
+    return nodeBase({
+      key: `${chapterKey}_prose`,
+      nodeType: 'text_llm',
+      label: `Chapter ${chapterNumber} Prose`,
+      x: 920,
+      y: 40 + (chapterIndex % 8) * 160,
+      inputs: {
+        prompt,
       },
-    },
-  }))
+      config: {
+        purpose: 'chapter_prose',
+        targetFormat: request.targetFormat,
+        chapterNumber,
+        sequenceUnitKey: sequenceUnit.key,
+        sequenceUnitName: sequenceUnit.name,
+        skillKeys: nonfictionProject
+          ? [chapterVoiceSkill, 'anti_ai_telltales', 'chapter_scene_structure', 'provider_prompt_hygiene']
+          : [chapterVoiceSkill, 'anti_ai_telltales', 'chapter_scene_structure', 'fiction_pov_balance', 'provider_prompt_hygiene'],
+        autoSkillTags: nonfictionProject ? ['nonfiction', 'ebook', 'quality'] : ['fiction_prose', 'chapter', 'quality'],
+        guidanceMode: 'strict',
+        execution: {
+          resourceClass: 'llm',
+          groupKey: 'ebook_chapters',
+          maxConcurrency: 8,
+        },
+      },
+    })
+  })
   const nodes = [
     nodeBase({
       key: 'world_context',
@@ -823,13 +979,26 @@ export function buildEbookFromWorldPlan(request: z.infer<typeof outputWorkflowPl
       },
     }),
     nodeBase({
+      key: 'skill_context',
+      nodeType: 'skill_context_query',
+      label: 'Output Skills',
+      x: 80,
+      y: 260,
+      config: {
+        skillKeys: ebookSkillKeys,
+        autoSkillTags: nonfictionProject ? ['nonfiction', 'ebook', 'quality'] : ['fiction_prose', 'chapter', 'anti_ai_tells', 'quality'],
+        guidanceMode: 'append',
+        execution: { resourceClass: 'utility' },
+      },
+    }),
+    nodeBase({
       key: 'outline',
       nodeType: 'text_llm',
       label: 'Outline / TOC',
       x: 360,
       y: 60,
       inputs: { prompt: 'Create a table of contents, book promise, and chapter intent from the world context.' },
-      config: { purpose: 'outline', execution: { resourceClass: 'llm' } },
+      config: { purpose: 'outline', skillKeys: ['chapter_scene_structure', 'provider_prompt_hygiene'], guidanceMode: 'append', execution: { resourceClass: 'llm' } },
     }),
     nodeBase({
       key: 'chapter_plan',
@@ -838,14 +1007,14 @@ export function buildEbookFromWorldPlan(request: z.infer<typeof outputWorkflowPl
       x: 640,
       y: 140,
       inputs: { prompt: 'Create per-chapter writing briefs from the outline and selected sequence units.' },
-      config: { purpose: 'chapter_plan', execution: { resourceClass: 'llm' } },
+      config: { purpose: 'chapter_plan', skillKeys: ['chapter_scene_structure', 'provider_prompt_hygiene'], guidanceMode: 'append', execution: { resourceClass: 'llm' } },
     }),
     ...chapterNodes,
     nodeBase({
       key: 'chapter_assembly',
       nodeType: 'utility_transform',
       label: 'Chapter Assembly',
-      x: 1180,
+      x: 1220,
       y: 140,
       config: { purpose: 'chapter_assembly', execution: { resourceClass: 'utility' } },
     }),
@@ -853,25 +1022,32 @@ export function buildEbookFromWorldPlan(request: z.infer<typeof outputWorkflowPl
       key: 'consistency_editor',
       nodeType: 'text_llm',
       label: 'Consistency Editor',
-      x: 1460,
+      x: 1500,
       y: 100,
       inputs: { prompt: 'Tighten continuity, chapter transitions, front matter, and back matter without changing canon.' },
-      config: { purpose: 'editor_pass', execution: { resourceClass: 'llm' } },
+      config: {
+        purpose: 'editor_pass',
+        skillKeys: nonfictionProject
+          ? ['continuity_editor', 'anti_ai_telltales', 'provider_prompt_hygiene']
+          : ['continuity_editor', 'fiction_pov_balance', 'anti_ai_telltales', 'provider_prompt_hygiene'],
+        guidanceMode: 'strict',
+        execution: { resourceClass: 'llm' },
+      },
     }),
     nodeBase({
       key: 'front_back_matter',
       nodeType: 'text_llm',
       label: 'Front / Back Matter',
-      x: 1740,
+      x: 1780,
       y: 100,
       inputs: { prompt: 'Add concise front matter and back matter while preserving the edited manuscript body.' },
-      config: { purpose: 'front_back_matter', execution: { resourceClass: 'llm' } },
+      config: { purpose: 'front_back_matter', skillKeys: [chapterVoiceSkill, 'continuity_editor', 'anti_ai_telltales'], guidanceMode: 'append', execution: { resourceClass: 'llm' } },
     }),
     nodeBase({
       key: 'document_render',
       nodeType: 'document_render',
       label: 'Render Document',
-      x: 2020,
+      x: 2060,
       y: 140,
       config: { targetFormat: request.targetFormat, execution: { resourceClass: 'document' } },
     }),
@@ -879,26 +1055,31 @@ export function buildEbookFromWorldPlan(request: z.infer<typeof outputWorkflowPl
       key: 'artifact',
       nodeType: 'output_artifact',
       label: 'Register Artifact',
-      x: 2300,
+      x: 2340,
       y: 140,
       config: { artifactKind: request.targetFormat === 'pdf' ? 'pdf' : 'manuscript', execution: { resourceClass: 'utility' } },
     }),
   ]
   const edges = [
     edgeBase('world_context', 'context', 'outline', 'context'),
+    edgeBase('skill_context', 'guidance', 'outline', 'guidance'),
     edgeBase('world_context', 'context', 'chapter_plan', 'context'),
+    edgeBase('skill_context', 'guidance', 'chapter_plan', 'guidance'),
     edgeBase('outline', 'text', 'chapter_plan', 'outline'),
     ...chapterNodes.flatMap((node) => [
       edgeBase('world_context', 'context', node.key, 'context'),
+      edgeBase('skill_context', 'guidance', node.key, 'guidance'),
       edgeBase('chapter_plan', 'plan', node.key, 'chapterPlan'),
       edgeBase(node.key, 'text', 'chapter_assembly', 'chapters'),
     ]),
     edgeBase('chapter_assembly', 'text', 'consistency_editor', 'source'),
+    edgeBase('skill_context', 'guidance', 'consistency_editor', 'guidance'),
     edgeBase('consistency_editor', 'text', 'front_back_matter', 'source'),
+    edgeBase('skill_context', 'guidance', 'front_back_matter', 'guidance'),
     edgeBase('front_back_matter', 'text', 'document_render', 'source'),
     edgeBase('document_render', 'document', 'artifact', 'input'),
   ]
-  const graphValidation = validateOutputWorkflowGraph({ nodes, edges })
+  const graphValidation = validateOutputWorkflowGraph({ nodes, edges, worldWiki })
   return outputWorkflowPlanResponseSchema.shape.plan.parse({
     preset: 'ebook_from_world',
     name,
