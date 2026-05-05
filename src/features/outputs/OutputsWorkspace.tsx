@@ -11,6 +11,7 @@ import {
   type OutputWorkflowNodeUpdateResponse,
   type OutputWorkflowPlanResponse,
   type OutputWorkflowRun,
+  type OutputWorkflowRunScope,
   type OutputWorkflowRunStep,
   type OutputWorkflowRunStatusResponse,
   type OutputWorkflowStartResponse,
@@ -214,11 +215,13 @@ export function OutputsWorkspace({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [activeRunId, setActiveRunId] = useState<string | null>(snapshot.outputWorkflowRuns[0]?.id ?? null)
-  const [liveRun, setLiveRun] = useState<OutputWorkflowRun | null>(null)
   const [selectedNodeKey, setSelectedNodeKey] = useState<string | null>(null)
   const [inspectorMode, setInspectorMode] = useState<'output' | 'guidance' | 'metadata'>('output')
   const [targetedNodeKey, setTargetedNodeKey] = useState<string | null>(null)
+  const [targetedNodeKeys, setTargetedNodeKeys] = useState<string[]>([])
+  const [targetedRunScope, setTargetedRunScope] = useState<OutputWorkflowRunScope | null>(null)
   const [graphOpen, setGraphOpen] = useState(false)
+  const [refreshingGraph, setRefreshingGraph] = useState(false)
   const [downloadingArtifactKey, setDownloadingArtifactKey] = useState<string | null>(null)
   const [upgradeMode, setUpgradeMode] = useState<'graph' | 'cover' | 'pdf' | null>(null)
 
@@ -231,7 +234,16 @@ export function OutputsWorkspace({
     [snapshot.worldEntities],
   )
   const workflows = snapshot.outputWorkflows
-  const snapshotActiveRun = snapshot.outputWorkflowRuns.find((run) => run.id === activeRunId) ?? snapshot.outputWorkflowRuns[0] ?? null
+  const [liveRunsById, setLiveRunsById] = useState<Record<string, OutputWorkflowRun>>({})
+  const recentOutputRuns = useMemo(() => {
+    const byId = new Map(snapshot.outputWorkflowRuns.map((run) => [run.id, run]))
+    for (const run of Object.values(liveRunsById)) byId.set(run.id, run)
+    return [...byId.values()].sort((left, right) => (
+      new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+    ))
+  }, [liveRunsById, snapshot.outputWorkflowRuns])
+  const snapshotActiveRun = recentOutputRuns.find((run) => run.id === activeRunId) ?? recentOutputRuns[0] ?? null
+  const liveRun = activeRunId ? liveRunsById[activeRunId] ?? null : null
   const activeRun = liveRun && liveRun.id === (activeRunId ?? liveRun.id) ? liveRun : snapshotActiveRun
   const activeWorkflow = activeRun
     ? workflows.find((workflow) => workflow.id === activeRun.workflowId) ?? null
@@ -242,6 +254,30 @@ export function OutputsWorkspace({
   const activeEdges = activeWorkflow
     ? snapshot.outputWorkflowEdges.filter((edge) => edge.workflowId === activeWorkflow.id)
     : []
+  const activeWorkflowRuns = activeWorkflow
+    ? recentOutputRuns.filter((run) => run.workflowId === activeWorkflow.id)
+    : []
+  const displayRun = useMemo(() => {
+    if (!activeRun) return null
+    const stepByNodeKey = new Map<string, OutputWorkflowRunStep>()
+    const orderedRuns = activeWorkflowRuns.slice().sort((left, right) => (
+      new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
+    ))
+    for (const run of orderedRuns) {
+      for (const step of run.steps) stepByNodeKey.set(step.nodeKey, step)
+    }
+    const artifactById = new Map<string, OutputWorkflowRun['artifacts'][number]>()
+    for (const run of orderedRuns) {
+      for (const artifact of run.artifacts) artifactById.set(artifact.id, artifact)
+    }
+    const hasRunningRun = activeWorkflowRuns.some((run) => !isTerminalOutputWorkflowRunStatus(run.status))
+    return {
+      ...activeRun,
+      status: hasRunningRun ? 'running' : activeRun.status,
+      steps: [...stepByNodeKey.values()].sort((left, right) => left.orderIndex - right.orderIndex),
+      artifacts: [...artifactById.values()],
+    } satisfies OutputWorkflowRun
+  }, [activeRun, activeWorkflowRuns])
   const workflowExecutionPlan = useMemo(
     () => activeNodes.length > 0
       ? buildOutputWorkflowExecutionPlan(activeNodes, activeEdges)
@@ -259,8 +295,8 @@ export function OutputsWorkspace({
     })
     : null
   const stepsByNodeKey = useMemo(
-    () => new Map((activeRun?.steps ?? []).map((step) => [step.nodeKey, step])),
-    [activeRun?.steps],
+    () => new Map((displayRun?.steps ?? []).map((step) => [step.nodeKey, step])),
+    [displayRun?.steps],
   )
   const selectedStep = selectedNode ? stepsByNodeKey.get(selectedNode.key) ?? null : null
   const selectedOutputPreview = truncatePreview(readOutputPreview(selectedStep))
@@ -278,13 +314,13 @@ export function OutputsWorkspace({
     : false
   const artifacts = useMemo(() => {
     const byId = new Map(snapshot.outputArtifacts.map((artifact) => [artifact.id, artifact]))
-    for (const artifact of activeRun?.artifacts ?? []) {
+    for (const artifact of displayRun?.artifacts ?? []) {
       byId.set(artifact.id, artifact)
     }
     return [...byId.values()].sort((left, right) => (
       new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
     ))
-  }, [activeRun?.artifacts, snapshot.outputArtifacts])
+  }, [displayRun?.artifacts, snapshot.outputArtifacts])
   const title = readWorldWikiTitle(snapshot)
   const activeWorkflowNeedsCoverUpgrade = Boolean(
     activeWorkflow
@@ -299,12 +335,28 @@ export function OutputsWorkspace({
   }, [selectedComicSequenceKey, sequenceUnits])
 
   useEffect(() => {
-    if (!liveRun) return
-    const refreshedRun = snapshot.outputWorkflowRuns.find((run) => run.id === liveRun.id) ?? null
-    if (refreshedRun && refreshedRun.updatedAt !== liveRun.updatedAt) {
-      setLiveRun(refreshedRun)
-    }
-  }, [liveRun, snapshot.outputWorkflowRuns])
+    setLiveRunsById((current) => {
+      let changed = false
+      const next = { ...current }
+      for (const run of snapshot.outputWorkflowRuns) {
+        const existing = next[run.id]
+        if (existing && existing.updatedAt !== run.updatedAt) {
+          next[run.id] = run
+          changed = true
+        }
+      }
+      return changed ? next : current
+    })
+  }, [snapshot.outputWorkflowRuns])
+
+  useEffect(() => {
+    setTargetedNodeKey((current) => current && targetedNodeKeys.includes(current) ? current : targetedNodeKeys[0] ?? null)
+    if (targetedNodeKeys.length === 0) setTargetedRunScope(null)
+  }, [targetedNodeKeys])
+
+  function rememberLiveRun(run: OutputWorkflowRun) {
+    setLiveRunsById((current) => ({ ...current, [run.id]: run }))
+  }
 
   async function createAndRunEbookWorkflow() {
     setBusy(true)
@@ -328,7 +380,7 @@ export function OutputsWorkspace({
         selectedSequenceUnitKeys: planResponse.plan.sourceSequenceUnitKeys,
       })
       setActiveRunId(runResponse.run.id)
-      setLiveRun(runResponse.run)
+      rememberLiveRun(runResponse.run)
       setBusy(false)
       await pollRun(runResponse.run.id)
       await onRefreshLiveSnapshot()
@@ -367,7 +419,7 @@ export function OutputsWorkspace({
         input: { pageCount },
       })
       setActiveRunId(runResponse.run.id)
-      setLiveRun(runResponse.run)
+      rememberLiveRun(runResponse.run)
       setBusy(false)
       await pollRun(runResponse.run.id)
       await onRefreshLiveSnapshot()
@@ -380,12 +432,47 @@ export function OutputsWorkspace({
 
   async function pollRun(runId: string) {
     let status = await onGetOutputWorkflowStatus(runId)
-    setLiveRun(status.run)
+    rememberLiveRun(status.run)
     while (!isTerminalOutputWorkflowRunStatus(status.run.status)) {
       await new Promise((resolve) => window.setTimeout(resolve, 1800))
       status = await onGetOutputWorkflowStatus(runId)
-      setLiveRun(status.run)
+      rememberLiveRun(status.run)
     }
+  }
+
+  async function refreshOutputGraph() {
+    if (refreshingGraph) return
+    setRefreshingGraph(true)
+    setError(null)
+    try {
+      if (activeRun) {
+        const status = await onGetOutputWorkflowStatus(activeRun.id)
+        setActiveRunId(status.run.id)
+        rememberLiveRun(status.run)
+      }
+      await onRefreshLiveSnapshot()
+    } catch (refreshError) {
+      setError(refreshError instanceof Error ? refreshError.message : 'Could not refresh output workflow graph.')
+    } finally {
+      setRefreshingGraph(false)
+    }
+  }
+
+  function openOutputGraph() {
+    setGraphOpen(true)
+    void refreshOutputGraph()
+  }
+
+  function markTargetedNodes(nodeKeys: string[], runScope: OutputWorkflowRunScope) {
+    const cleanKeys = nodeKeys.map((key) => key.trim()).filter(Boolean)
+    if (cleanKeys.length === 0) return
+    setTargetedRunScope(runScope)
+    setTargetedNodeKeys((current) => Array.from(new Set([...current, ...cleanKeys])))
+  }
+
+  function unmarkTargetedNodes(nodeKeys: string[]) {
+    const removeKeys = new Set(nodeKeys)
+    setTargetedNodeKeys((current) => current.filter((key) => !removeKeys.has(key)))
   }
 
   async function cancelActiveRun() {
@@ -394,7 +481,6 @@ export function OutputsWorkspace({
     setError(null)
     try {
       await onCancelOutputWorkflowRun(activeRun.id)
-      setLiveRun(null)
       await onRefreshLiveSnapshot()
     } catch (cancelError) {
       setError(cancelError instanceof Error ? cancelError.message : 'Could not cancel output workflow.')
@@ -422,7 +508,7 @@ export function OutputsWorkspace({
         },
       })
       setActiveRunId(runResponse.run.id)
-      setLiveRun(runResponse.run)
+      rememberLiveRun(runResponse.run)
       setBusy(false)
       await pollRun(runResponse.run.id)
       await onRefreshLiveSnapshot()
@@ -433,8 +519,14 @@ export function OutputsWorkspace({
     }
   }
 
-  async function runSelectedNodeOnly(node: OutputWorkflowNode) {
-    if (!activeRun) return
+  async function runSelectedNodeOnly(
+    node: OutputWorkflowNode,
+    runScope: OutputWorkflowRunScope = 'node_only',
+  ) {
+    if (!activeWorkflow) {
+      setError('Select or create an output workflow before running a node.')
+      return
+    }
     const config = readRecord(node.config)
     const purpose = readTrimmedString(config.purpose)
     const isComicWorkflow = activeWorkflow?.preset === 'comic_issue_from_sequence' || nodeByKey.has('comic_pdf_render')
@@ -445,50 +537,61 @@ export function OutputsWorkspace({
     const documentRefresh = node.nodeType === 'document_render'
     const comicAtlasRerun = purpose === 'comic_atlas_prompt' || purpose === 'comic_style_atlas'
     const comicPageRerun = purpose === 'comic_page_prompt' || purpose === 'comic_page'
-    const targetNodeKeys = comicAtlasRerun
-      ? ['comic_atlas_image']
-      : purpose === 'ebook_cover_image' || purpose === 'ebook_cover_prompt' || pdfRebake || comicPageRerun
-      ? ['artifact']
-      : documentRefresh
-        ? [renderNodeKey]
+    const effectiveRunScope: OutputWorkflowRunScope = pdfRebake ? 'artifact_rebake' : documentRefresh && runScope === 'node_only' ? 'artifact_rebake' : runScope
+    const defaultDownstreamTarget = comicAtlasRerun
+      ? 'comic_atlas_image'
+      : purpose === 'ebook_cover_image' || purpose === 'ebook_cover_prompt' || comicPageRerun
+        ? 'artifact'
+        : documentRefresh
+          ? renderNodeKey
+          : node.key
+    const targetNodeKeys = effectiveRunScope === 'node_and_downstream'
+      ? [node.key]
+      : effectiveRunScope === 'artifact_rebake'
+        ? ['artifact']
+        : effectiveRunScope === 'upstream_to_node'
+          ? [node.key]
+          : [node.key]
+    const forceNodeKeys = effectiveRunScope === 'artifact_rebake'
+      ? Array.from(new Set([renderNodeKey, 'artifact'].filter(Boolean)))
+      : effectiveRunScope === 'node_and_downstream'
+        ? Array.from(new Set([
+            node.key,
+            purpose === 'comic_page_prompt' && pageImageKey ? pageImageKey : '',
+            purpose === 'ebook_cover_prompt' || purpose === 'ebook_cover_image' ? 'document_render' : '',
+            comicPageRerun ? renderNodeKey : '',
+            defaultDownstreamTarget,
+          ].filter(Boolean)))
         : [node.key]
-    const forceNodeKeys = pdfRebake
-      ? [renderNodeKey, 'artifact']
-      : documentRefresh
-        ? [renderNodeKey]
-        : purpose === 'ebook_cover_image' || purpose === 'ebook_cover_prompt'
-          ? ['cover_prompt', 'cover_image', 'document_render', 'artifact']
-          : comicAtlasRerun
-            ? ['world_context', 'relevant_entities', 'comic_atlas_prompt', 'comic_atlas_image']
-            : comicPageRerun
-              ? Array.from(new Set([
-                  node.key,
-                  purpose === 'comic_page_prompt' && pageImageKey ? pageImageKey : '',
-                  renderNodeKey,
-                  'artifact',
-                ].filter(Boolean)))
-              : [node.key]
-    setTargetedNodeKey(node.key)
+    markTargetedNodes([node.key], effectiveRunScope)
     setError(null)
     try {
-      const previousInput = readRecord(activeRun.input)
+      const workflowMetadata = readRecord(activeWorkflow.metadata)
+      const previousInput = activeRun ? readRecord(activeRun.input) : {
+        sourceEntityKeys: readStringArray(workflowMetadata.sourceEntityKeys),
+        sourceSequenceUnitKeys: readStringArray(workflowMetadata.sourceSequenceUnitKeys),
+        pageCount: readNumber(workflowMetadata.pageCount) ?? undefined,
+      }
       const runResponse = await onStartOutputWorkflowRun({
-        workflowId: activeRun.workflowId,
-        prompt: activeRun.prompt || prompt,
-        targetFormat: activeRun.targetFormat as 'pdf' | 'epub' | 'docx' | 'markdown',
+        workflowId: activeWorkflow.id,
+        prompt: activeRun?.prompt || readTrimmedString(workflowMetadata.prompt) || prompt,
+        targetFormat: (activeRun?.targetFormat || readTrimmedString(workflowMetadata.targetFormat) || 'pdf') as 'pdf' | 'epub' | 'docx' | 'markdown',
         selectedEntityKeys: readStringArray(previousInput.sourceEntityKeys),
         selectedSequenceUnitKeys: readStringArray(previousInput.sourceSequenceUnitKeys),
+        pageCount: readNumber(previousInput.pageCount) ?? undefined,
         input: previousInput,
         metadata: {
-          sourceRunId: activeRun.id,
-          runMode: pdfRebake ? 'pdf_rebake_from_existing_outputs' : 'targeted_node_preview',
+          sourceRunId: activeRun?.id ?? null,
+          runMode: effectiveRunScope === 'artifact_rebake' ? 'pdf_rebake_from_existing_outputs' : 'targeted_node_preview',
+          runScope: effectiveRunScope,
           targetNodeKeys,
           forceNodeKeys,
-          reuseExistingUpstreamOutputs: pdfRebake || documentRefresh || comicPageRerun,
+          reuseExistingUpstreamOutputs: true,
+          allowStaleUpstreamOutputs: effectiveRunScope === 'node_only',
         },
       })
       setActiveRunId(runResponse.run.id)
-      setLiveRun(runResponse.run)
+      rememberLiveRun(runResponse.run)
       setSelectedNodeKey(node.key)
       setInspectorMode('output')
       await pollRun(runResponse.run.id)
@@ -496,7 +599,62 @@ export function OutputsWorkspace({
     } catch (targetError) {
       setError(targetError instanceof Error ? targetError.message : 'Could not rerun the selected output node.')
     } finally {
-      setTargetedNodeKey(null)
+      unmarkTargetedNodes([node.key])
+    }
+  }
+
+  async function runSelectedNodesOnly(
+    nodes: OutputWorkflowNode[],
+    runScope: OutputWorkflowRunScope = 'node_only',
+  ) {
+    const uniqueNodes = Array.from(new Map(nodes.map((node) => [node.key, node])).values())
+    if (uniqueNodes.length === 0) return
+    if (uniqueNodes.length === 1) {
+      await runSelectedNodeOnly(uniqueNodes[0], runScope)
+      return
+    }
+    if (!activeWorkflow) {
+      setError('Select or create an output workflow before running nodes.')
+      return
+    }
+    const nodeKeys = uniqueNodes.map((node) => node.key)
+    markTargetedNodes(nodeKeys, runScope)
+    setError(null)
+    try {
+      const workflowMetadata = readRecord(activeWorkflow.metadata)
+      const previousInput = activeRun ? readRecord(activeRun.input) : {
+        sourceEntityKeys: readStringArray(workflowMetadata.sourceEntityKeys),
+        sourceSequenceUnitKeys: readStringArray(workflowMetadata.sourceSequenceUnitKeys),
+        pageCount: readNumber(workflowMetadata.pageCount) ?? undefined,
+      }
+      const runResponse = await onStartOutputWorkflowRun({
+        workflowId: activeWorkflow.id,
+        prompt: activeRun?.prompt || readTrimmedString(workflowMetadata.prompt) || prompt,
+        targetFormat: (activeRun?.targetFormat || readTrimmedString(workflowMetadata.targetFormat) || 'pdf') as 'pdf' | 'epub' | 'docx' | 'markdown',
+        selectedEntityKeys: readStringArray(previousInput.sourceEntityKeys),
+        selectedSequenceUnitKeys: readStringArray(previousInput.sourceSequenceUnitKeys),
+        pageCount: readNumber(previousInput.pageCount) ?? undefined,
+        input: previousInput,
+        metadata: {
+          sourceRunId: activeRun?.id ?? null,
+          runMode: 'targeted_node_batch_preview',
+          runScope,
+          targetNodeKeys: nodeKeys,
+          forceNodeKeys: nodeKeys,
+          reuseExistingUpstreamOutputs: true,
+          allowStaleUpstreamOutputs: runScope === 'node_only',
+        },
+      })
+      setActiveRunId(runResponse.run.id)
+      rememberLiveRun(runResponse.run)
+      setSelectedNodeKey(uniqueNodes[0].key)
+      setInspectorMode('output')
+      await pollRun(runResponse.run.id)
+      await onRefreshLiveSnapshot()
+    } catch (targetError) {
+      setError(targetError instanceof Error ? targetError.message : 'Could not rerun the selected output nodes.')
+    } finally {
+      unmarkTargetedNodes(nodeKeys)
     }
   }
 
@@ -554,7 +712,7 @@ export function OutputsWorkspace({
                 },
       })
       setActiveRunId(runResponse.run.id)
-      setLiveRun(runResponse.run)
+      rememberLiveRun(runResponse.run)
       setSelectedNodeKey(mode === 'cover' ? 'cover_image' : 'artifact')
       setInspectorMode('output')
       await pollRun(runResponse.run.id)
@@ -585,7 +743,7 @@ export function OutputsWorkspace({
     <div className="outputs-workspace">
       {graphOpen && activeWorkflow ? (
         <OutputWorkflowGraphOverlay
-          activeRun={activeRun}
+          activeRun={displayRun}
           assets={snapshot.assets}
           canRunOutputs={canRunOutputs}
           edges={activeEdges}
@@ -594,7 +752,9 @@ export function OutputsWorkspace({
           worldRelationships={snapshot.worldRelationships as unknown as Array<Record<string, unknown>>}
           onCancelRun={cancelActiveRun}
           onClose={() => setGraphOpen(false)}
-          onRunNode={(node) => void runSelectedNodeOnly(node)}
+          onRefreshGraph={() => void refreshOutputGraph()}
+          onRunNode={(node, runScope) => void runSelectedNodeOnly(node, runScope)}
+          onRunNodes={(nodes, runScope) => void runSelectedNodesOnly(nodes, runScope)}
           onSaveNode={onUpdateOutputWorkflowNode}
           onSelectNode={(nodeKey) => {
             setSelectedNodeKey(nodeKey)
@@ -602,8 +762,12 @@ export function OutputsWorkspace({
           }}
           readNodeSkillKeys={readNodeSkillKeys}
           readOutputPreview={(step) => truncatePreview(readOutputPreview(step), 14000)}
+          runErrorMessage={error}
+          refreshingGraph={refreshingGraph}
           selectedNodeKey={selectedNode?.key ?? selectedNodeKey}
           targetedNodeKey={targetedNodeKey}
+          targetedNodeKeys={targetedNodeKeys}
+          targetedRunScope={targetedRunScope}
           workflow={activeWorkflow}
           worldWiki={readRecord(snapshot.draft.metadata).worldWiki}
         />
@@ -732,10 +896,10 @@ export function OutputsWorkspace({
               <button
                 className="outputs-secondary-action"
                 disabled={!activeWorkflow || activeNodes.length === 0}
-                onClick={() => setGraphOpen(true)}
+                onClick={openOutputGraph}
                 type="button"
               >
-                Expand graph
+                {refreshingGraph ? 'Refreshing graph...' : 'Expand graph'}
               </button>
             </div>
             <div className="outputs-node-list">

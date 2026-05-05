@@ -59,6 +59,16 @@ function latestNodePosition(nodes: Array<{ position: { x: number; y: number } }>
   }), { x: 0, y: 0 })
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+
+function readPageCount(nodes: Array<{ key: string; config: Record<string, unknown> }>) {
+  const comicScript = nodes.find((node) => node.key === 'comic_script')
+  const pageCount = Number(asRecord(comicScript?.config).pageCount ?? 8)
+  return Number.isFinite(pageCount) ? Math.max(1, Math.min(12, pageCount)) : 8
+}
+
 Deno.serve(async (request) => {
   const preflight = maybeHandleOptions(request)
   if (preflight) return preflight
@@ -67,8 +77,8 @@ Deno.serve(async (request) => {
     if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed.')
     const { client } = await requireUserClient(request, 'upgrade-output-workflow-preset')
     const payload = outputWorkflowUpgradeRequestSchema.parse(await request.json())
-    if (payload.preset !== 'ebook_from_world') {
-      throw new HttpError(400, 'Only ebook workflow upgrades are supported in V1.')
+    if (!['ebook_from_world', 'comic_issue_from_sequence'].includes(payload.preset)) {
+      throw new HttpError(400, 'Only ebook and comic workflow upgrades are supported in V1.')
     }
 
     const workflowResponse = await client
@@ -82,8 +92,8 @@ Deno.serve(async (request) => {
       throw new HttpError(404, 'Output workflow not found.')
     }
     const workflow = mapOutputWorkflowRow(workflowResponse.data)
-    if (workflow.preset !== 'ebook_from_world') {
-      throw new HttpError(400, 'Only ebook workflows can be upgraded with the cover branch.')
+    if (workflow.preset !== payload.preset) {
+      throw new HttpError(400, `Workflow preset "${workflow.preset}" does not match requested upgrade preset "${payload.preset}".`)
     }
 
     const [nodeResponse, edgeResponse] = await Promise.all([
@@ -106,6 +116,213 @@ Deno.serve(async (request) => {
     const nodeKeys = new Set(existingNodes.map((node) => node.key))
     const edgeKeys = new Set(existingEdges.map((edge) => edge.key))
     const maxPosition = latestNodePosition(existingNodes)
+
+    if (workflow.preset === 'comic_issue_from_sequence') {
+      const pageCount = readPageCount(existingNodes)
+      const sceneScriptNode = nodeBase({
+        key: 'comic_scene_script',
+        nodeType: 'text_llm',
+        label: 'Scene Script',
+        x: 640,
+        y: 100,
+        inputs: { prompt: 'Adapt the selected sequence unit into a rich dramatic scene script for comics.' },
+        config: {
+          purpose: 'comic_scene_script',
+          pageCount,
+          skillKeys: ['comic_scene_dramatization', 'comic_dialogue_lettering', 'comic_adaptation_compression', 'provider_prompt_hygiene'],
+          autoSkillTags: ['comic', 'scene_script', 'adaptation'],
+          guidanceMode: 'strict',
+          execution: { resourceClass: 'llm' },
+        },
+      })
+      const pagePlanNode = nodeBase({
+        key: 'comic_page_plan',
+        nodeType: 'text_llm',
+        label: 'Page Plan',
+        x: 920,
+        y: 100,
+        inputs: { prompt: `Compress the scene script into exactly ${pageCount} comic pages.` },
+        config: {
+          purpose: 'comic_page_plan',
+          pageCount,
+          skillKeys: ['comic_page_pacing', 'comic_panel_storytelling', 'comic_adaptation_compression', 'provider_prompt_hygiene'],
+          autoSkillTags: ['comic', 'page_plan', 'pacing'],
+          guidanceMode: 'strict',
+          execution: { resourceClass: 'llm' },
+        },
+      })
+      const desiredNodes = [sceneScriptNode, pagePlanNode].filter((node) => !nodeKeys.has(node.key))
+      const availableNodeKeys = new Set([...nodeKeys, ...desiredNodes.map((node) => node.key)])
+      const desiredEdges = [
+        edgeBase('world_context', 'context', 'comic_scene_script', 'context'),
+        edgeBase('skill_context', 'guidance', 'comic_scene_script', 'guidance'),
+        edgeBase('relevant_entities', 'asset_pack', 'comic_scene_script', 'asset_pack'),
+        edgeBase('comic_scene_script', 'sceneScript', 'comic_page_plan', 'sceneScript'),
+        edgeBase('world_context', 'context', 'comic_page_plan', 'context'),
+        edgeBase('skill_context', 'guidance', 'comic_page_plan', 'guidance'),
+        edgeBase('relevant_entities', 'asset_pack', 'comic_page_plan', 'asset_pack'),
+        edgeBase('comic_scene_script', 'sceneScript', 'comic_script', 'sceneScript'),
+        edgeBase('comic_page_plan', 'pagePlan', 'comic_script', 'pagePlan'),
+      ].filter((edge) => (
+        !edgeKeys.has(edge.key)
+        && availableNodeKeys.has(edge.sourceNodeKey)
+        && availableNodeKeys.has(edge.targetNodeKey)
+      ))
+
+      const combinedNodes = [
+        ...existingNodes.map((node) => ({ key: node.key })),
+        ...desiredNodes.map((node) => ({ key: node.key })),
+      ]
+      const combinedEdges = [
+        ...existingEdges.map((edge) => ({
+          sourceNodeKey: edge.sourceNodeKey,
+          sourcePort: edge.sourcePort,
+          targetNodeKey: edge.targetNodeKey,
+          targetPort: edge.targetPort,
+          metadata: edge.metadata,
+        })),
+        ...desiredEdges,
+      ]
+      const plan = buildOutputWorkflowExecutionPlan(combinedNodes, combinedEdges)
+      if (plan.diagnostics.length > 0) {
+        throw new HttpError(400, plan.diagnostics.join(' '))
+      }
+
+      if (desiredNodes.length > 0) {
+        const insertResponse = await client
+          .from('output_workflow_nodes')
+          .insert(desiredNodes.map((node) => ({
+            workflow_id: payload.workflowId,
+            draft_id: payload.draftId,
+            key: node.key,
+            node_type: node.nodeType,
+            label: node.label,
+            position: node.position,
+            config: node.config,
+            inputs: node.inputs,
+            outputs: node.outputs,
+            dirty: node.dirty,
+            input_hash: node.inputHash,
+            output_hash: node.outputHash,
+            metadata: node.metadata,
+          })))
+        if (insertResponse.error) throw new Error(insertResponse.error.message)
+      }
+
+      if (desiredEdges.length > 0) {
+        const insertResponse = await client
+          .from('output_workflow_edges')
+          .insert(desiredEdges.map((edge) => ({
+            workflow_id: payload.workflowId,
+            draft_id: payload.draftId,
+            key: edge.key,
+            source_node_key: edge.sourceNodeKey,
+            source_port: edge.sourcePort,
+            target_node_key: edge.targetNodeKey,
+            target_port: edge.targetPort,
+            metadata: edge.metadata,
+          })))
+        if (insertResponse.error) throw new Error(insertResponse.error.message)
+      }
+
+      const concurrencyNodeUpdates = existingNodes
+        .filter((node) => /^page_\d{3}_image$/.test(node.key))
+        .map((node) => {
+          const config = asRecord(node.config)
+          const execution = asRecord(config.execution)
+          const currentMaxConcurrency = Number(execution.maxConcurrency ?? 0)
+          if (execution.groupKey !== 'comic_pages' || currentMaxConcurrency >= 8) return null
+          return {
+            key: node.key,
+            config: {
+              ...config,
+              execution: {
+                ...execution,
+                resourceClass: execution.resourceClass ?? 'image',
+                groupKey: 'comic_pages',
+                maxConcurrency: 8,
+              },
+            },
+          }
+        })
+        .filter((entry): entry is { key: string; config: Record<string, unknown> } => Boolean(entry))
+
+      if (concurrencyNodeUpdates.length > 0) {
+        await Promise.all(concurrencyNodeUpdates.map(async (update) => {
+          const response = await client
+            .from('output_workflow_nodes')
+            .update({ config: update.config, updated_at: new Date().toISOString() })
+            .eq('workflow_id', payload.workflowId)
+            .eq('key', update.key)
+          if (response.error) throw new Error(response.error.message)
+        }))
+      }
+
+      const dirtiedNodeKeys = [
+        ...desiredNodes.map((node) => node.key),
+        ...(nodeKeys.has('comic_script') ? ['comic_script'] : []),
+        ...existingNodes.filter((node) => /^page_\d{3}_(prompt|image)$/.test(node.key)).map((node) => node.key),
+        ...(nodeKeys.has('comic_pdf_render') ? ['comic_pdf_render'] : []),
+        ...(nodeKeys.has('artifact') ? ['artifact'] : []),
+      ]
+      if (dirtiedNodeKeys.length > 0) {
+        const dirtyResponse = await client
+          .from('output_workflow_nodes')
+          .update({ dirty: true, updated_at: new Date().toISOString() })
+          .eq('workflow_id', payload.workflowId)
+          .in('key', [...new Set(dirtiedNodeKeys)])
+        if (dirtyResponse.error) throw new Error(dirtyResponse.error.message)
+      }
+
+      const workflowPatchResponse = await client
+        .from('output_workflows')
+        .update({
+          metadata: {
+            ...workflow.metadata,
+            upgradedPresetFeatures: {
+              ...((workflow.metadata.upgradedPresetFeatures && typeof workflow.metadata.upgradedPresetFeatures === 'object' && !Array.isArray(workflow.metadata.upgradedPresetFeatures))
+                ? workflow.metadata.upgradedPresetFeatures as Record<string, unknown>
+                : {}),
+              richComicAdaptationPipeline: true,
+              comicPageImageConcurrency: 8,
+            },
+            lastPresetUpgradeAt: new Date().toISOString(),
+          },
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', payload.workflowId)
+        .select(outputWorkflowSelect)
+        .single()
+      if (workflowPatchResponse.error || !workflowPatchResponse.data) {
+        throw new Error(workflowPatchResponse.error?.message ?? 'Failed to update workflow upgrade metadata.')
+      }
+
+      const [refreshedNodeResponse, refreshedEdgeResponse] = await Promise.all([
+        client
+          .from('output_workflow_nodes')
+          .select(outputWorkflowNodeSelect)
+          .eq('workflow_id', payload.workflowId)
+          .order('created_at', { ascending: true }),
+        client
+          .from('output_workflow_edges')
+          .select(outputWorkflowEdgeSelect)
+          .eq('workflow_id', payload.workflowId)
+          .order('created_at', { ascending: true }),
+      ])
+      if (refreshedNodeResponse.error) throw new Error(refreshedNodeResponse.error.message)
+      if (refreshedEdgeResponse.error) throw new Error(refreshedEdgeResponse.error.message)
+
+      return json(outputWorkflowUpgradeResponseSchema.parse({
+        ok: true,
+        workflow: mapOutputWorkflowRow(workflowPatchResponse.data),
+        nodes: (refreshedNodeResponse.data ?? []).map(mapOutputWorkflowNodeRow),
+        edges: (refreshedEdgeResponse.data ?? []).map(mapOutputWorkflowEdgeRow),
+        addedNodeKeys: desiredNodes.map((node) => node.key),
+        addedEdgeKeys: desiredEdges.map((edge) => edge.key),
+        dirtiedNodeKeys: [...new Set(dirtiedNodeKeys)],
+        alreadyCurrent: desiredNodes.length === 0 && desiredEdges.length === 0 && concurrencyNodeUpdates.length === 0,
+      }))
+    }
 
     const coverPromptNode = nodeBase({
       key: 'cover_prompt',

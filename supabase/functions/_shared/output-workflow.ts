@@ -39,7 +39,7 @@ import {
   type OpenAiResponseResult,
 } from './openai.ts'
 
-const OUTPUT_WORKFLOW_EXECUTOR_VERSION = 'comic-script-continuity-soft-v8'
+const OUTPUT_WORKFLOW_EXECUTOR_VERSION = 'rich-comic-adaptation-v10'
 const DEFAULT_CHAPTER_PROSE_TIMEOUT_MS = 3_600_000
 const DEFAULT_CHAPTER_PROSE_ATTEMPTS = 2
 const FAL_QUEUE_BASE_URL = 'https://queue.fal.run'
@@ -512,6 +512,48 @@ function hasStoredOutputs(value: unknown) {
   return Object.keys(asRecord(value)).length > 0
 }
 
+function isOptionalOutputWorkflowEdge(edge: Pick<OutputWorkflowEdge, 'metadata'> | Partial<Pick<OutputWorkflowEdge, 'metadata'>>) {
+  const metadata = asRecord(edge.metadata)
+  return metadata.optional === true || metadata.optionalDependency === true
+}
+
+function cachedOutputRunId(node: OutputWorkflowNode) {
+  return readText(asRecord(asRecord(node.metadata).execution).lastRunId)
+}
+
+function collectCachedExternalUpstream(input: {
+  node: OutputWorkflowNode
+  nodesByKey: Map<string, OutputWorkflowNode>
+  executionNodeKeys: Set<string>
+  edges: OutputWorkflowEdge[]
+}) {
+  const outputs: Record<string, Record<string, unknown>> = {}
+  const reusedNodeKeys: string[] = []
+  const staleReusedNodeKeys: string[] = []
+  const missingNodeKeys: string[] = []
+  const sourceRunIds: string[] = []
+  for (const edge of input.edges) {
+    if (edge.targetNodeKey !== input.node.key || input.executionNodeKeys.has(edge.sourceNodeKey)) continue
+    const sourceNode = input.nodesByKey.get(edge.sourceNodeKey)
+    if (!sourceNode || !hasStoredOutputs(sourceNode.outputs)) {
+      if (!isOptionalOutputWorkflowEdge(edge)) missingNodeKeys.push(edge.sourceNodeKey)
+      continue
+    }
+    outputs[edge.sourceNodeKey] = asRecord(sourceNode.outputs)
+    reusedNodeKeys.push(edge.sourceNodeKey)
+    if (sourceNode.dirty) staleReusedNodeKeys.push(edge.sourceNodeKey)
+    const sourceRunId = cachedOutputRunId(sourceNode)
+    if (sourceRunId) sourceRunIds.push(sourceRunId)
+  }
+  return {
+    outputs,
+    reusedNodeKeys: [...new Set(reusedNodeKeys)],
+    staleReusedNodeKeys: [...new Set(staleReusedNodeKeys)],
+    missingNodeKeys: [...new Set(missingNodeKeys)],
+    sourceRunIds: [...new Set(sourceRunIds)],
+  }
+}
+
 function readStringArray(value: unknown) {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0) : []
 }
@@ -804,6 +846,10 @@ function guidanceStepMetadata(value: unknown) {
 
 function outputWorkflowTextModel() {
   return Deno.env.get('OUTPUT_WORKFLOW_TEXT_MODEL')?.trim() || 'gpt-4o-mini'
+}
+
+function outputWorkflowComicTextModel() {
+  return Deno.env.get('OUTPUT_WORKFLOW_COMIC_TEXT_MODEL')?.trim() || outputWorkflowTextModel()
 }
 
 function outputWorkflowChapterTimeoutMs() {
@@ -1201,6 +1247,98 @@ function parseJsonObject(text: string) {
   return {}
 }
 
+const comicSceneScriptJsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['title', 'premise', 'sequenceOutcome', 'canonConstraints', 'characters', 'dramaticBeats', 'visualMoments', 'dialogueBeats', 'emotionalTurns'],
+  properties: {
+    title: { type: 'string' },
+    premise: { type: 'string' },
+    sequenceOutcome: { type: 'string' },
+    canonConstraints: { type: 'array', items: { type: 'string' } },
+    characters: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['key', 'name', 'want', 'pressure', 'visualContinuity'],
+        properties: {
+          key: { type: 'string' },
+          name: { type: 'string' },
+          want: { type: 'string' },
+          pressure: { type: 'string' },
+          visualContinuity: { type: 'string' },
+        },
+      },
+    },
+    dramaticBeats: {
+      type: 'array',
+      minItems: 5,
+      maxItems: 16,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['beatNumber', 'function', 'action', 'conflict', 'turn', 'consequence', 'requiredEntityKeys'],
+        properties: {
+          beatNumber: { type: 'integer', minimum: 1, maximum: 24 },
+          function: { type: 'string' },
+          action: { type: 'string' },
+          conflict: { type: 'string' },
+          turn: { type: 'string' },
+          consequence: { type: 'string' },
+          requiredEntityKeys: { type: 'array', items: { type: 'string' } },
+        },
+      },
+    },
+    visualMoments: { type: 'array', items: { type: 'string' } },
+    dialogueBeats: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['speaker', 'intent', 'sampleLine'],
+        properties: {
+          speaker: { type: 'string' },
+          intent: { type: 'string' },
+          sampleLine: { type: 'string' },
+        },
+      },
+    },
+    emotionalTurns: { type: 'array', items: { type: 'string' } },
+  },
+}
+
+const comicPagePlanJsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['title', 'pageCount', 'pages'],
+  properties: {
+    title: { type: 'string' },
+    pageCount: { type: 'integer', minimum: 1, maximum: 12 },
+    pages: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 12,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['pageNumber', 'storyFunction', 'includedBeats', 'omittedOrMergedBeats', 'pageTurn', 'setting', 'requiredEntityKeys', 'panelBudget', 'dialogueCaptionIntent'],
+        properties: {
+          pageNumber: { type: 'integer', minimum: 1, maximum: 12 },
+          storyFunction: { type: 'string' },
+          includedBeats: { type: 'array', items: { type: 'string' } },
+          omittedOrMergedBeats: { type: 'array', items: { type: 'string' } },
+          pageTurn: { type: 'string' },
+          setting: { type: 'string' },
+          requiredEntityKeys: { type: 'array', items: { type: 'string' } },
+          panelBudget: { type: 'integer', minimum: 3, maximum: 6 },
+          dialogueCaptionIntent: { type: 'string' },
+        },
+      },
+    },
+  },
+}
+
 const comicScriptJsonSchema = {
   type: 'object',
   additionalProperties: false,
@@ -1325,6 +1463,120 @@ function buildComicEntitySelectorInstruction(input: {
   ].filter(Boolean).join('\n\n')
 }
 
+function buildComicSceneScriptInstruction(input: {
+  context: Record<string, unknown>
+  assetPack: Record<string, unknown>
+  prompt: string
+  guidance: OutputGuidanceBundle
+  pageCount: number
+}) {
+  const sequenceUnit = Array.isArray(input.context.sequenceUnits) ? asRecord(input.context.sequenceUnits[0]) : {}
+  return [
+    `Adapt the selected sequence unit into a rich dramatic scene script for a ${input.pageCount}-page comic issue.`,
+    'Return only JSON matching the requested schema. Do not write final comic panels yet.',
+    'The scene script must give the later page planner enough dramatic material: goal, obstacle, escalation, reversal, consequence, visual moments, dialogue beats, and emotional turns.',
+    'Write visually and specifically. Every dramatic beat should be stageable as comic action, not prose summary.',
+    'Preserve the sequence unit outcome and canon facts. Do not invent new world canon to improve pacing.',
+    input.prompt ? `User brief: ${input.prompt}` : '',
+    guidanceMarkdown(input.guidance),
+    compactForPrompt({
+      wiki: asRecord(input.context.wiki),
+      sequenceUnit,
+      assetPack: input.assetPack,
+      relationships: Array.isArray(input.context.relationships) ? input.context.relationships.map(asRecord).slice(0, 40) : [],
+    }),
+  ].filter(Boolean).join('\n\n')
+}
+
+function comicSceneScriptMarkdown(sceneScript: Record<string, unknown>) {
+  const characters = Array.isArray(sceneScript.characters) ? sceneScript.characters.map(asRecord) : []
+  const dramaticBeats = Array.isArray(sceneScript.dramaticBeats) ? sceneScript.dramaticBeats.map(asRecord) : []
+  const dialogueBeats = Array.isArray(sceneScript.dialogueBeats) ? sceneScript.dialogueBeats.map(asRecord) : []
+  return [
+    `# ${readText(sceneScript.title) || 'Comic Scene Script'}`,
+    readText(sceneScript.premise) ? `Premise: ${readText(sceneScript.premise)}` : '',
+    readText(sceneScript.sequenceOutcome) ? `Outcome: ${readText(sceneScript.sequenceOutcome)}` : '',
+    readStringArray(sceneScript.canonConstraints).length > 0 ? `Canon constraints:\n${readStringArray(sceneScript.canonConstraints).map((entry) => `- ${entry}`).join('\n')}` : '',
+    characters.length > 0 ? `## Characters\n${characters.map((character) => [
+      `- ${readText(character.name) || readText(character.key)}`,
+      readText(character.want) ? `want: ${readText(character.want)}` : '',
+      readText(character.pressure) ? `pressure: ${readText(character.pressure)}` : '',
+      readText(character.visualContinuity) ? `visual: ${readText(character.visualContinuity)}` : '',
+    ].filter(Boolean).join('; ')).join('\n')}` : '',
+    dramaticBeats.length > 0 ? `## Dramatic Beats\n${dramaticBeats.map((beat, index) => [
+      `${Number(beat.beatNumber ?? index + 1)}. ${readText(beat.function)}`,
+      readText(beat.action),
+      readText(beat.conflict) ? `Conflict: ${readText(beat.conflict)}` : '',
+      readText(beat.turn) ? `Turn: ${readText(beat.turn)}` : '',
+      readText(beat.consequence) ? `Consequence: ${readText(beat.consequence)}` : '',
+    ].filter(Boolean).join(' ')).join('\n\n')}` : '',
+    readStringArray(sceneScript.visualMoments).length > 0 ? `## Visual Moments\n${readStringArray(sceneScript.visualMoments).map((entry) => `- ${entry}`).join('\n')}` : '',
+    dialogueBeats.length > 0 ? `## Dialogue Beats\n${dialogueBeats.map((beat) => `- ${readText(beat.speaker)}: ${readText(beat.intent)}${readText(beat.sampleLine) ? ` | "${readText(beat.sampleLine)}"` : ''}`).join('\n')}` : '',
+    readStringArray(sceneScript.emotionalTurns).length > 0 ? `## Emotional Turns\n${readStringArray(sceneScript.emotionalTurns).map((entry) => `- ${entry}`).join('\n')}` : '',
+  ].filter(Boolean).join('\n\n')
+}
+
+function buildComicPagePlanInstruction(input: {
+  context: Record<string, unknown>
+  sceneScript: Record<string, unknown>
+  assetPack: Record<string, unknown>
+  prompt: string
+  guidance: OutputGuidanceBundle
+  pageCount: number
+}) {
+  const sequenceUnit = Array.isArray(input.context.sequenceUnits) ? asRecord(input.context.sequenceUnits[0]) : {}
+  return [
+    `Compress the scene script into exactly ${input.pageCount} comic pages.`,
+    'Return only JSON matching the requested schema.',
+    'Each page must have a unique story function, concrete included beats, explicit omitted/merged beats when compression is needed, a page turn, setting, entity keys, panel budget from 3 to 6, and dialogue/caption intent.',
+    'Use page turns to escalate the sequence instead of repeating the same premise. Preserve the final sequence outcome.',
+    'Do not write final panel script yet; this node only plans page rhythm and compression.',
+    input.prompt ? `User brief: ${input.prompt}` : '',
+    guidanceMarkdown(input.guidance),
+    compactForPrompt({
+      sceneScript: input.sceneScript,
+      sequenceUnit,
+      assetPack: input.assetPack,
+      wiki: asRecord(input.context.wiki),
+    }),
+  ].filter(Boolean).join('\n\n')
+}
+
+function comicPagePlanMarkdown(pagePlan: Record<string, unknown>) {
+  const pages = Array.isArray(pagePlan.pages) ? pagePlan.pages.map(asRecord) : []
+  return [
+    `# ${readText(pagePlan.title) || 'Comic Page Plan'}`,
+    `Page count: ${Number(pagePlan.pageCount ?? pages.length) || pages.length}`,
+    ...pages.map((page, index) => [
+      `## Page ${Number(page.pageNumber ?? index + 1)}`,
+      readText(page.storyFunction) ? `Function: ${readText(page.storyFunction)}` : '',
+      readStringArray(page.includedBeats).length > 0 ? `Included: ${readStringArray(page.includedBeats).join('; ')}` : '',
+      readStringArray(page.omittedOrMergedBeats).length > 0 ? `Omitted/Merged: ${readStringArray(page.omittedOrMergedBeats).join('; ')}` : '',
+      readText(page.pageTurn) ? `Page turn: ${readText(page.pageTurn)}` : '',
+      readText(page.setting) ? `Setting: ${readText(page.setting)}` : '',
+      `Panel budget: ${Number(page.panelBudget ?? 0) || 4}`,
+      readText(page.dialogueCaptionIntent) ? `Text intent: ${readText(page.dialogueCaptionIntent)}` : '',
+    ].filter(Boolean).join('\n')),
+  ].filter(Boolean).join('\n\n')
+}
+
+function validateComicPagePlan(pagePlan: Record<string, unknown>, input: { pageCount: number }) {
+  const diagnostics: string[] = []
+  const pages = Array.isArray(pagePlan.pages) ? pagePlan.pages.map(asRecord) : []
+  if (pages.length !== input.pageCount) diagnostics.push(`Expected ${input.pageCount} planned comic pages, got ${pages.length}.`)
+  for (let index = 0; index < input.pageCount; index += 1) {
+    const pageNumber = index + 1
+    const page = pages.find((entry) => Number(entry.pageNumber ?? 0) === pageNumber) ?? pages[index] ?? {}
+    const panelBudget = Number(page.panelBudget ?? 0)
+    if (!readText(page.storyFunction)) diagnostics.push(`Page plan ${pageNumber} is missing a story function.`)
+    if (!readText(page.pageTurn)) diagnostics.push(`Page plan ${pageNumber} is missing a page turn.`)
+    if (!readText(page.setting)) diagnostics.push(`Page plan ${pageNumber} is missing a setting.`)
+    if (!Number.isFinite(panelBudget) || panelBudget < 3 || panelBudget > 6) diagnostics.push(`Page plan ${pageNumber} has invalid panel budget.`)
+    if (readStringArray(page.includedBeats).length === 0) diagnostics.push(`Page plan ${pageNumber} has no included beats.`)
+  }
+  return diagnostics
+}
+
 function normalizeComicScript(raw: Record<string, unknown>, input: {
   context: Record<string, unknown>
   pageCount: number
@@ -1339,14 +1591,15 @@ function normalizeComicScript(raw: Record<string, unknown>, input: {
   const pages = Array.from({ length: input.pageCount }, (_, index) => {
     const pageNumber = index + 1
     const rawPage = rawPages.find((page) => Number(page.pageNumber ?? page.page ?? 0) === pageNumber) ?? rawPages[index] ?? {}
-    const panels = Array.isArray(rawPage.panels) ? rawPage.panels.map(asRecord) : []
+    const rawPanels = rawPage.panels ?? rawPage.Panels ?? rawPage.panelScript ?? rawPage.panelDescriptions
+    const panels = Array.isArray(rawPanels) ? rawPanels.map(asRecord) : []
     const continuityNotes = readText(rawPage.continuityNotes)
       || (sequenceOutcome ? `Maintain continuity with selected sequence outcome: ${sequenceOutcome}` : '')
     return {
       pageNumber,
       panelLayout: readText(rawPage.panelLayout) || (pageNumber === 1 ? '4 cinematic panels with a strong establishing panel' : '5 balanced comic panels'),
-      setting: readText(rawPage.setting),
-      mood: readText(rawPage.mood),
+      setting: readText(rawPage.setting) || readText(rawPage.location),
+      mood: readText(rawPage.mood) || readText(rawPage.tone),
       continuityNotes,
       requiredEntityKeys: readStringArray(rawPage.requiredEntityKeys),
       panels: panels.length > 0 ? panels.map((panel, panelIndex) => ({
@@ -1423,15 +1676,19 @@ function validateComicScript(script: Record<string, unknown>, input: { pageCount
 function buildComicScriptInstruction(input: {
   context: Record<string, unknown>
   assetPack: Record<string, unknown>
+  sceneScript: Record<string, unknown>
+  pagePlan: Record<string, unknown>
   prompt: string
   guidance: OutputGuidanceBundle
   pageCount: number
 }) {
   const sequenceUnit = Array.isArray(input.context.sequenceUnits) ? asRecord(input.context.sequenceUnits[0]) : {}
   return [
-    `Write a ${input.pageCount}-page comic script from the selected sequence unit.`,
+    `Convert the upstream scene script and page plan into a final ${input.pageCount}-page comic production script.`,
     'Return only JSON with shape: {"title":"","logline":"","pageCount":8,"pages":[{"pageNumber":1,"panelLayout":"","setting":"","mood":"","requiredEntityKeys":[],"continuityNotes":"","panels":[{"panelNumber":1,"shot":"","action":"","dialogue":"","caption":"","characters":[]}]}]}.',
     `The pages array must contain exactly ${input.pageCount} pages, numbered 1 through ${input.pageCount}.`,
+    'Treat the scene script and page plan as source of truth. Do not re-outline from scratch.',
+    'For each page, follow that page plan story function, included beats, page turn, setting, entity keys, panel budget, and dialogue/caption intent.',
     'Every page must be a real comic-script page, not an outline placeholder: 3-6 concrete panels with distinct shot, action, dialogue/caption, and continuity details.',
     'Do not repeat the same page beat, action sentence, or panel description across pages. Each page must advance the sequence unit through a new story moment.',
     'Panel action should describe what is visible in the panel. Include blocking, character expression, setting detail, and the story change in that panel.',
@@ -1443,8 +1700,44 @@ function buildComicScriptInstruction(input: {
     compactForPrompt({
       wiki: asRecord(input.context.wiki),
       sequenceUnit,
+      sceneScript: input.sceneScript,
+      pagePlan: input.pagePlan,
       assetPack: input.assetPack,
       relationships: Array.isArray(input.context.relationships) ? input.context.relationships.map(asRecord).slice(0, 40) : [],
+    }),
+  ].filter(Boolean).join('\n\n')
+}
+
+function buildComicScriptRepairInstruction(input: {
+  context: Record<string, unknown>
+  assetPack: Record<string, unknown>
+  sceneScript: Record<string, unknown>
+  pagePlan: Record<string, unknown>
+  invalidScript: Record<string, unknown>
+  diagnostics: string[]
+  prompt: string
+  guidance: OutputGuidanceBundle
+  pageCount: number
+}) {
+  const sequenceUnit = Array.isArray(input.context.sequenceUnits) ? asRecord(input.context.sequenceUnits[0]) : {}
+  return [
+    `Repair the invalid comic production script into a complete ${input.pageCount}-page page/panel JSON script.`,
+    'Return the full replacement JSON object only. Do not return a patch, explanation, markdown, or omitted pages.',
+    'The pages array must contain every page from 1 through the requested page count.',
+    'Every page must include setting, mood, continuityNotes, requiredEntityKeys, and 3-6 complete panels.',
+    'Every panel must include panelNumber, shot, action, dialogue, caption, and characters. Empty dialogue/caption is allowed only when the panel should be silent.',
+    'Use the approved page plan for page function, setting, page turn, panel budget, and included beats. Use the scene script for dramatization and dialogue/subtext.',
+    'Do not preserve empty panel arrays from the invalid script. Rewrite any page with missing panels from scratch.',
+    `Validation errors to fix: ${input.diagnostics.join(' ')}`,
+    input.prompt ? `User brief: ${input.prompt}` : '',
+    guidanceMarkdown(input.guidance),
+    compactForPrompt({
+      wiki: asRecord(input.context.wiki),
+      sequenceUnit,
+      sceneScript: input.sceneScript,
+      pagePlan: input.pagePlan,
+      assetPack: input.assetPack,
+      invalidScript: input.invalidScript,
     }),
   ].filter(Boolean).join('\n\n')
 }
@@ -2214,12 +2507,26 @@ async function registerImageArtifact(input: {
 }
 
 function collectComicPageImages(upstream: Record<string, Record<string, unknown>>) {
+  const seen = new Set<string>()
   return readUpstreamImages(upstream, ['comicPages', 'pageImages', 'pages', 'image'])
     .filter((image) => readText(image.role) === 'comic_page' || Number(image.pageNumber ?? 0) > 0)
-    .map((image, index) => ({
-      ...image,
-      pageNumber: Number(image.pageNumber ?? index + 1) || index + 1,
-    }))
+    .map((image, index) => {
+      const pageNumber = Number(image.pageNumber ?? index + 1) || index + 1
+      return { ...image, pageNumber }
+    })
+    .filter((image) => {
+      const pageNumber = Number(image.pageNumber ?? 0) || 0
+      const identity = [
+        readText(image.assetKey),
+        readText(image.storagePath),
+        readText(image.url),
+        pageNumber > 0 ? `page:${pageNumber}` : '',
+      ].filter(Boolean).join('|')
+      if (!identity) return true
+      if (seen.has(identity)) return false
+      seen.add(identity)
+      return true
+    })
     .sort((left, right) => Number(left.pageNumber) - Number(right.pageNumber))
 }
 
@@ -2716,16 +3023,19 @@ async function executeNode(input: {
         const config = asRecord(input.node.config)
         const pageCount = Math.max(1, Math.min(12, Number(config.pageCount ?? 8)))
         const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        const model = outputWorkflowTextModel()
+        const sceneScript = readFirstUpstreamRecord(input.upstream, ['sceneScript', 'scene_script'])
+        const pagePlan = readFirstUpstreamRecord(input.upstream, ['pagePlan', 'page_plan'])
+        const model = outputWorkflowComicTextModel()
         const response = await runOpenAiResponses({
           model,
-          instructions: 'You are a professional comic writer and comics editor. Return a complete production comic script as JSON only. Never return outline placeholders.',
-          input: buildComicScriptInstruction({ context, assetPack, prompt, guidance, pageCount }),
+          instructions: 'You are a professional comic writer and comics editor converting an approved scene treatment and page plan into final page/panel script JSON only. Never return outline placeholders.',
+          input: buildComicScriptInstruction({ context, assetPack, sceneScript, pagePlan, prompt, guidance, pageCount }),
           text: {
             format: {
               type: 'json_schema',
               name: 'output_workflow_comic_script',
               schema: comicScriptJsonSchema,
+              strict: true,
             },
           },
           maxOutputTokens: 9000,
@@ -2741,10 +3051,51 @@ async function executeNode(input: {
         if (response.status === 'incomplete') {
           throw new Error('OpenAI comic script response was incomplete; rerun the Comic Script node.')
         }
-        const script = normalizeComicScript(parseJsonObject(response.outputText), { context, pageCount, prompt })
-        const diagnostics = validateComicScript(script, { pageCount })
+        let script = normalizeComicScript(parseJsonObject(response.outputText), { context, pageCount, prompt })
+        let diagnostics = validateComicScript(script, { pageCount })
+        let repairResponse: OpenAiResponseResult | null = null
+        const firstPassDiagnostics = diagnostics
         if (diagnostics.length > 0) {
-          throw new Error(`Comic script validation failed: ${diagnostics.slice(0, 8).join(' ')}`)
+          repairResponse = await runOpenAiResponses({
+            model,
+            instructions: 'You are a senior comic script doctor. Repair invalid comic JSON into a complete production script JSON object only.',
+            input: buildComicScriptRepairInstruction({
+              context,
+              assetPack,
+              sceneScript,
+              pagePlan,
+              invalidScript: script,
+              diagnostics,
+              prompt,
+              guidance,
+              pageCount,
+            }),
+            text: {
+              format: {
+                type: 'json_schema',
+                name: 'output_workflow_comic_script_repair',
+                schema: comicScriptJsonSchema,
+                strict: true,
+              },
+            },
+            maxOutputTokens: 10_000,
+            metadata: {
+              graphcore_task: 'output_workflow_comic_script_repair',
+              graphcore_node_key: input.node.key,
+            },
+            timeoutMs: 240_000,
+          })
+          if (!repairResponse.response.ok) {
+            throw new Error(openAiErrorMessage(repairResponse, `OpenAI comic script repair failed with status ${repairResponse.response.status}.`))
+          }
+          if (repairResponse.status === 'incomplete') {
+            throw new Error('OpenAI comic script repair response was incomplete; rerun the Comic Script node.')
+          }
+          script = normalizeComicScript(parseJsonObject(repairResponse.outputText), { context, pageCount, prompt })
+          diagnostics = validateComicScript(script, { pageCount })
+        }
+        if (diagnostics.length > 0) {
+          throw new Error(`Comic script validation failed after repair: ${diagnostics.slice(0, 8).join(' ')}`)
         }
         const markdown = comicScriptMarkdown(script)
         const outputs = {
@@ -2752,6 +3103,115 @@ async function executeNode(input: {
           pages: script.pages,
           markdown,
           text: markdown,
+          guidance,
+          repaired: repairResponse !== null,
+          firstPassDiagnostics,
+          usage: asRecord(repairResponse?.body.usage ?? response.body.usage),
+          firstPassUsage: repairResponse ? asRecord(response.body.usage) : undefined,
+        }
+        return {
+          inputHash: input.inputHash,
+          outputHash: hashOutputWorkflowValue(outputs),
+          outputs,
+          provider: 'openai',
+          model,
+          providerRequestId: readText(response.body.id) || response.response.headers.get('x-request-id') || null,
+        }
+      }
+      if (purpose === 'comic_scene_script') {
+        const config = asRecord(input.node.config)
+        const pageCount = Math.max(1, Math.min(12, Number(config.pageCount ?? 8)))
+        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+        const model = outputWorkflowComicTextModel()
+        const response = await runOpenAiResponses({
+          model,
+          instructions: 'You are a senior comic adaptation writer. Return a rich structured dramatic scene script as JSON only, not final panel JSON.',
+          input: buildComicSceneScriptInstruction({ context, assetPack, prompt, guidance, pageCount }),
+          text: {
+            format: {
+              type: 'json_schema',
+              name: 'output_workflow_comic_scene_script',
+              schema: comicSceneScriptJsonSchema,
+              strict: true,
+            },
+          },
+          maxOutputTokens: 7000,
+          metadata: {
+            graphcore_task: 'output_workflow_comic_scene_script',
+            graphcore_node_key: input.node.key,
+          },
+          timeoutMs: 240_000,
+        })
+        if (!response.response.ok) {
+          throw new Error(openAiErrorMessage(response, `OpenAI comic scene script failed with status ${response.response.status}.`))
+        }
+        if (response.status === 'incomplete') {
+          throw new Error('OpenAI comic scene script response was incomplete; rerun the Scene Script node.')
+        }
+        const sceneScript = parseJsonObject(response.outputText)
+        const markdown = comicSceneScriptMarkdown(sceneScript)
+        const outputs = {
+          sceneScript,
+          scene_script: sceneScript,
+          markdown,
+          text: markdown,
+          assetPack,
+          guidance,
+          usage: asRecord(response.body.usage),
+        }
+        return {
+          inputHash: input.inputHash,
+          outputHash: hashOutputWorkflowValue(outputs),
+          outputs,
+          provider: 'openai',
+          model,
+          providerRequestId: readText(repairResponse?.body.id) || readText(response.body.id) || response.response.headers.get('x-request-id') || null,
+        }
+      }
+      if (purpose === 'comic_page_plan') {
+        const config = asRecord(input.node.config)
+        const pageCount = Math.max(1, Math.min(12, Number(config.pageCount ?? 8)))
+        const sceneScript = readFirstUpstreamRecord(input.upstream, ['sceneScript', 'scene_script'])
+        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+        const model = outputWorkflowComicTextModel()
+        const response = await runOpenAiResponses({
+          model,
+          instructions: 'You are a senior comic editor planning page rhythm and compression. Return page-plan JSON only, not final panels.',
+          input: buildComicPagePlanInstruction({ context, sceneScript, assetPack, prompt, guidance, pageCount }),
+          text: {
+            format: {
+              type: 'json_schema',
+              name: 'output_workflow_comic_page_plan',
+              schema: comicPagePlanJsonSchema,
+              strict: true,
+            },
+          },
+          maxOutputTokens: 5200,
+          metadata: {
+            graphcore_task: 'output_workflow_comic_page_plan',
+            graphcore_node_key: input.node.key,
+          },
+          timeoutMs: 180_000,
+        })
+        if (!response.response.ok) {
+          throw new Error(openAiErrorMessage(response, `OpenAI comic page plan failed with status ${response.response.status}.`))
+        }
+        if (response.status === 'incomplete') {
+          throw new Error('OpenAI comic page plan response was incomplete; rerun the Page Plan node.')
+        }
+        const pagePlan = parseJsonObject(response.outputText)
+        const diagnostics = validateComicPagePlan(pagePlan, { pageCount })
+        if (diagnostics.length > 0) {
+          throw new Error(`Comic page plan validation failed: ${diagnostics.slice(0, 8).join(' ')}`)
+        }
+        const markdown = comicPagePlanMarkdown(pagePlan)
+        const outputs = {
+          pagePlan,
+          page_plan: pagePlan,
+          markdown,
+          text: markdown,
+          sceneScript,
+          assetPack,
           guidance,
           usage: asRecord(response.body.usage),
         }
@@ -3406,16 +3866,34 @@ export async function processFlyOutputWorkflowRuns(input: {
     const targetNodeKeys = readStringArray(runMetadata.targetNodeKeys)
     const forceNodeKeys = new Set(readStringArray(runMetadata.forceNodeKeys))
     const reuseExistingUpstreamOutputs = runMetadata.reuseExistingUpstreamOutputs === true
+    const allowStaleUpstreamOutputs = runMetadata.allowStaleUpstreamOutputs === true
+    const runScope = readText(runMetadata.runScope) || (targetNodeKeys.length > 0 ? 'upstream_to_node' : 'full_workflow')
     const selectedSubgraph = selectOutputWorkflowRunSubgraph({
       nodes: bundle.nodes,
       edges: bundle.edges,
       targetNodeKeys,
+      runScope: runScope === 'node_only' || runScope === 'node_and_downstream' || runScope === 'artifact_rebake'
+        ? runScope
+        : 'upstream_to_node',
     })
     if (selectedSubgraph.diagnostics.length > 0) throw new Error(selectedSubgraph.diagnostics.join(' '))
     const executionNodes = selectedSubgraph.nodes
     const executionEdges = selectedSubgraph.edges
     const executionPlan = buildOutputWorkflowExecutionPlan(executionNodes, executionEdges)
     const nodeByKey = new Map(executionNodes.map((node) => [node.key, node]))
+    const workflowNodeByKey = new Map(bundle.nodes.map((node) => [node.key, node]))
+    const executionNodeKeys = new Set(executionNodes.map((node) => node.key))
+    const cachedExternalUpstreamByNodeKey = new Map(executionNodes.map((node) => [node.key, collectCachedExternalUpstream({
+      node,
+      nodesByKey: workflowNodeByKey,
+      executionNodeKeys,
+      edges: bundle.edges,
+    })] as const))
+    const missingCachedInputs = [...cachedExternalUpstreamByNodeKey.entries()]
+      .flatMap(([nodeKey, cached]) => cached.missingNodeKeys.map((sourceKey) => `${nodeKey} <- ${sourceKey}`))
+    if (missingCachedInputs.length > 0) {
+      throw new Error(`Cannot run this node only because required upstream cached output is missing: ${missingCachedInputs.join(', ')}. Run up to this node first.`)
+    }
     const stepByNodeKey = new Map(bundle.run.steps.map((step) => [step.nodeKey, step]))
     const executionLevelByNodeKey = new Map(executionPlan.levels.flatMap((level, index) => level.map((key) => [key, index] as const)))
     const nodeResults = new Map<string, {
@@ -3427,6 +3905,9 @@ export async function processFlyOutputWorkflowRuns(input: {
       providerRequestId?: string | null
       skipped?: boolean
       skippedReason?: string
+      reusedNodeKeys?: string[]
+      staleReusedNodeKeys?: string[]
+      sourceRunIds?: string[]
     }>()
     const shouldCancelRun = async () => {
       const cancellationResponse = await input.client
@@ -3445,7 +3926,18 @@ export async function processFlyOutputWorkflowRuns(input: {
       resourceClassMaxConcurrency: defaultOutputWorkflowConcurrency.resourceClasses,
       shouldCancel: shouldCancelRun,
       executeNode: async ({ node, upstream }) => {
-        const inputHash = computeNodeInputHash({ run: bundle.run, node, upstream })
+        const cachedExternalUpstream = cachedExternalUpstreamByNodeKey.get(node.key) ?? {
+          outputs: {},
+          reusedNodeKeys: [],
+          staleReusedNodeKeys: [],
+          sourceRunIds: [],
+          missingNodeKeys: [],
+        }
+        const effectiveUpstream = {
+          ...cachedExternalUpstream.outputs,
+          ...upstream,
+        }
+        const inputHash = computeNodeInputHash({ run: bundle.run, node, upstream: effectiveUpstream })
         const forceNode = forceNodeKeys.has(node.key)
         const priorStep = stepByNodeKey.get(node.key) ?? null
         const hasExistingOutputs = hasStoredOutputs(node.outputs)
@@ -3455,7 +3947,10 @@ export async function processFlyOutputWorkflowRuns(input: {
           && Boolean(priorStep?.outputHash)
           && ['running', 'completed'].includes(priorStep?.status ?? '')
         const canHashSkip = !forceNode && !node.dirty && node.inputHash === inputHash && hasExistingOutputs
-        const canReuseExistingOutput = !forceNode && reuseExistingUpstreamOutputs && hasExistingOutputs
+        const canReuseExistingOutput = !forceNode
+          && reuseExistingUpstreamOutputs
+          && runScope !== 'upstream_to_node'
+          && hasExistingOutputs
         if (hasRecoverableStepOutputs && priorStep) {
           const recoveredInputHash = priorStep.inputHash || inputHash
           const recoveredOutputs = asRecord(priorStep.outputs)
@@ -3488,6 +3983,9 @@ export async function processFlyOutputWorkflowRuns(input: {
             providerRequestId: priorStep.providerRequestId,
             skipped: true,
             skippedReason: 'existing_run_step_output_recovered',
+            reusedNodeKeys: cachedExternalUpstream.reusedNodeKeys,
+            staleReusedNodeKeys: cachedExternalUpstream.staleReusedNodeKeys,
+            sourceRunIds: cachedExternalUpstream.sourceRunIds,
           })
           return { status: 'skipped', outputs: recoveredOutputs }
         }
@@ -3500,6 +3998,9 @@ export async function processFlyOutputWorkflowRuns(input: {
             model: 'cached-node-output',
             skipped: true,
             skippedReason: canHashSkip ? 'input_hash_unchanged' : 'existing_output_reused_for_targeted_rebake',
+            reusedNodeKeys: cachedExternalUpstream.reusedNodeKeys,
+            staleReusedNodeKeys: cachedExternalUpstream.staleReusedNodeKeys,
+            sourceRunIds: cachedExternalUpstream.sourceRunIds,
           })
           return { status: 'skipped', outputs: node.outputs }
         }
@@ -3508,7 +4009,7 @@ export async function processFlyOutputWorkflowRuns(input: {
           workflow: bundle.workflow,
           node,
           priorStep,
-          upstream,
+          upstream: effectiveUpstream,
           inputHash,
           client: input.client,
           documentRenderer: input.documentRenderer,
@@ -3530,10 +4031,15 @@ export async function processFlyOutputWorkflowRuns(input: {
               metadata: {
                 ...asRecord(priorStep?.metadata),
                 stage: node.nodeType,
+                runScope,
                 executionLevel: executionLevelByNodeKey.get(node.key) ?? 0,
                 resourceClass: getOutputWorkflowNodeExecutionMetadata(node).resourceClass,
                 groupKey: getOutputWorkflowNodeExecutionMetadata(node).groupKey ?? null,
                 ...progress.metadata,
+                reusedNodeKeys: cachedExternalUpstream.reusedNodeKeys,
+                staleReusedNodeKeys: cachedExternalUpstream.staleReusedNodeKeys,
+                sourceRunIds: cachedExternalUpstream.sourceRunIds,
+                staleInputAllowed: allowStaleUpstreamOutputs,
               },
             })
             if (priorStep) {
@@ -3555,6 +4061,9 @@ export async function processFlyOutputWorkflowRuns(input: {
           model: result.model,
           providerRequestId: result.providerRequestId,
           skipped: false,
+          reusedNodeKeys: cachedExternalUpstream.reusedNodeKeys,
+          staleReusedNodeKeys: cachedExternalUpstream.staleReusedNodeKeys,
+          sourceRunIds: cachedExternalUpstream.sourceRunIds,
         })
         const guidanceMetadata = guidanceStepMetadata(result.outputs.guidance)
         const updateNodeResponse = await input.client
@@ -3596,6 +4105,7 @@ export async function processFlyOutputWorkflowRuns(input: {
           metadata: {
             ...asRecord(priorStep?.metadata),
             stage: node.nodeType,
+            runScope,
             executionLevel: executionLevelByNodeKey.get(node.key) ?? 0,
             resourceClass,
             groupKey: getOutputWorkflowNodeExecutionMetadata(node).groupKey ?? null,
@@ -3619,12 +4129,17 @@ export async function processFlyOutputWorkflowRuns(input: {
           providerRequestId: result?.providerRequestId ?? null,
           metadata: {
             stage: node.nodeType,
+            runScope,
             executionLevel: executionLevelByNodeKey.get(node.key) ?? 0,
             resourceClass: getOutputWorkflowNodeExecutionMetadata(node).resourceClass,
             groupKey: getOutputWorkflowNodeExecutionMetadata(node).groupKey ?? null,
             ...guidanceMetadata,
             skipped,
             reason: skipped ? result?.skippedReason ?? 'input_hash_unchanged' : undefined,
+            reusedNodeKeys: result?.reusedNodeKeys ?? [],
+            staleReusedNodeKeys: result?.staleReusedNodeKeys ?? [],
+            sourceRunIds: result?.sourceRunIds ?? [],
+            staleInputAllowed: allowStaleUpstreamOutputs,
           },
         })
       },
@@ -3644,6 +4159,7 @@ export async function processFlyOutputWorkflowRuns(input: {
           metadata: {
             ...asRecord(priorStep?.metadata),
             stage: node.nodeType,
+            runScope,
             executionLevel: executionLevelByNodeKey.get(node.key) ?? 0,
             resourceClass: getOutputWorkflowNodeExecutionMetadata(node).resourceClass,
             blockedDependents,
@@ -3665,6 +4181,7 @@ export async function processFlyOutputWorkflowRuns(input: {
           metadata: {
             ...asRecord(priorStep?.metadata),
             stage: node.nodeType,
+            runScope,
             executionLevel: executionLevelByNodeKey.get(node.key) ?? 0,
             resourceClass: getOutputWorkflowNodeExecutionMetadata(node).resourceClass,
             blocked: reason === 'blocked_by_failed_dependency',
@@ -3678,9 +4195,11 @@ export async function processFlyOutputWorkflowRuns(input: {
           runtime: 'fly_output_workflow_worker',
           stage: running.length > 0 ? 'running_parallel_nodes' : 'scheduling',
           runMode: targetNodeKeys.length > 0 ? 'targeted_node_run' : 'full_workflow_run',
+          runScope,
           targetNodeKeys,
           forceNodeKeys: [...forceNodeKeys],
           reuseExistingUpstreamOutputs,
+          allowStaleUpstreamOutputs,
           pendingNodeKeys: pending,
           runningNodeKeys: running,
           completedNodeKeys: completed,
@@ -3711,11 +4230,13 @@ export async function processFlyOutputWorkflowRuns(input: {
       metadata_patch: {
         runtime: 'fly_output_workflow_worker',
         stage: schedulerResult.status,
-        runMode: targetNodeKeys.length > 0 ? 'targeted_node_run' : 'full_workflow_run',
-        targetNodeKeys,
-        forceNodeKeys: [...forceNodeKeys],
-        reuseExistingUpstreamOutputs,
-        status: schedulerResult.status === 'completed_with_errors' ? 'completed_with_errors' : undefined,
+          runMode: targetNodeKeys.length > 0 ? 'targeted_node_run' : 'full_workflow_run',
+          runScope,
+          targetNodeKeys,
+          forceNodeKeys: [...forceNodeKeys],
+          reuseExistingUpstreamOutputs,
+          allowStaleUpstreamOutputs,
+          status: schedulerResult.status === 'completed_with_errors' ? 'completed_with_errors' : undefined,
         completedNodeKeys: schedulerResult.completed,
         failedNodeKeys: schedulerResult.failed,
         cancelledNodeKeys: schedulerResult.cancelled,

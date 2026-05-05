@@ -5,6 +5,7 @@ import {
   outputWorkflowNodeRegistry,
   type OutputWorkflowEdge,
   type OutputWorkflowNode,
+  type OutputWorkflowRunScope,
   type OutputWorkflowRunStep,
 } from './outputWorkflow.ts'
 
@@ -22,12 +23,19 @@ export function outputWorkflowStepStatusKey(step: Pick<OutputWorkflowRunStep, 's
   return step.status
 }
 
-export function buildOutputWorkflowTargetedRunMetadata(nodeKey: string, sourceRunId?: string | null) {
+export function buildOutputWorkflowTargetedRunMetadata(
+  nodeKey: string,
+  sourceRunId?: string | null,
+  runScope: OutputWorkflowRunScope = 'node_only',
+) {
   return {
     ...(sourceRunId ? { sourceRunId } : {}),
-    runMode: 'targeted_node_preview',
+    runMode: runScope === 'node_only' ? 'targeted_node_only_preview' : 'targeted_node_preview',
+    runScope,
     targetNodeKeys: [nodeKey],
     forceNodeKeys: [nodeKey],
+    reuseExistingUpstreamOutputs: true,
+    allowStaleUpstreamOutputs: runScope === 'node_only',
   }
 }
 

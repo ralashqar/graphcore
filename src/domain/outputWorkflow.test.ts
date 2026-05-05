@@ -285,9 +285,12 @@ test('workflow graph level layout keeps parallel chapter nodes in one column', (
   assert.notEqual(firstChapter?.y, secondChapter?.y)
   assert.deepEqual(buildOutputWorkflowTargetedRunMetadata('chapter_001_prose', 'run-1'), {
     sourceRunId: 'run-1',
-    runMode: 'targeted_node_preview',
+    runMode: 'targeted_node_only_preview',
+    runScope: 'node_only',
     targetNodeKeys: ['chapter_001_prose'],
     forceNodeKeys: ['chapter_001_prose'],
+    reuseExistingUpstreamOutputs: true,
+    allowStaleUpstreamOutputs: true,
   })
 })
 
@@ -322,6 +325,36 @@ test('selects targeted run subgraph with ancestors only', () => {
 
   const missing = selectOutputWorkflowRunSubgraph({ nodes, edges, targetNodeKeys: ['missing'] })
   assert.equal(missing.diagnostics.length, 1)
+})
+
+test('selects targeted run subgraphs by run scope', () => {
+  const nodes = [
+    { key: 'context' },
+    { key: 'script' },
+    { key: 'page_a' },
+    { key: 'page_b' },
+    { key: 'pdf' },
+    { key: 'artifact' },
+  ]
+  const edges = [
+    { sourceNodeKey: 'context', targetNodeKey: 'script' },
+    { sourceNodeKey: 'script', targetNodeKey: 'page_a' },
+    { sourceNodeKey: 'script', targetNodeKey: 'page_b' },
+    { sourceNodeKey: 'page_a', targetNodeKey: 'pdf' },
+    { sourceNodeKey: 'page_b', targetNodeKey: 'pdf' },
+    { sourceNodeKey: 'pdf', targetNodeKey: 'artifact' },
+  ]
+
+  const nodeOnly = selectOutputWorkflowRunSubgraph({ nodes, edges, targetNodeKeys: ['page_a'], runScope: 'node_only' })
+  assert.deepEqual(nodeOnly.nodes.map((node) => node.key), ['page_a'])
+  assert.deepEqual(nodeOnly.edges, [])
+
+  const downstream = selectOutputWorkflowRunSubgraph({ nodes, edges, targetNodeKeys: ['page_a'], runScope: 'node_and_downstream' })
+  assert.deepEqual(downstream.nodes.map((node) => node.key), ['page_a', 'pdf', 'artifact'])
+  assert.deepEqual(downstream.edges.map((edge) => `${edge.sourceNodeKey}->${edge.targetNodeKey}`), [
+    'page_a->pdf',
+    'pdf->artifact',
+  ])
 })
 
 test('dirty propagation marks downstream nodes only', () => {
@@ -409,6 +442,7 @@ test('ebook preset fans full chapter prose nodes out before chapter assembly', (
   assert.ok(executionPlan.dependencyKeysByNodeKey.document_render.includes('cover_image'))
   assert.equal(defaultOutputWorkflowConcurrency.global, 8)
   assert.equal(defaultOutputWorkflowConcurrency.resourceClasses.llm, 8)
+  assert.equal(defaultOutputWorkflowConcurrency.resourceClasses.image, 8)
   assert.equal(chapterNode ? getOutputWorkflowNodeExecutionMetadata(chapterNode).maxConcurrency : undefined, 8)
   assert.deepEqual(executionPlan.dependencyKeysByNodeKey.chapter_assembly.sort(), ['chapter_001_prose', 'chapter_002_prose'])
   assert.deepEqual(executionPlan.dependencyKeysByNodeKey.chapter_001_prose.sort(), [
@@ -435,6 +469,10 @@ test('comic issue preset requires one sequence unit and creates fixed page fan-o
   assert.ok(plan.sourceEntityKeys.includes('hero'))
   assert.ok(plan.sourceEntityKeys.includes('archive'))
   assert.ok(!plan.sourceEntityKeys.includes('chapter-2'))
+  assert.ok(plan.nodes.some((node) => node.key === 'comic_scene_script' && readConfigPurpose(node) === 'comic_scene_script'))
+  assert.ok(plan.nodes.some((node) => node.key === 'comic_page_plan' && readConfigPurpose(node) === 'comic_page_plan'))
+  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'comic_scene_script' && edge.targetNodeKey === 'comic_page_plan'))
+  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'comic_page_plan' && edge.targetNodeKey === 'comic_script'))
   assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'comic_page_prompt').length, 4)
   assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'comic_page').length, 4)
   assert.equal(plan.nodes.find((node) => node.key === 'page_001_prompt')?.nodeType, 'utility_transform')
@@ -445,6 +483,7 @@ test('comic issue preset requires one sequence unit and creates fixed page fan-o
   const pageImageSize = pageImage?.config.imageSize as { width?: number; height?: number } | undefined
   assert.equal((pageImageSize?.width ?? 0) % 16, 0)
   assert.equal((pageImageSize?.height ?? 0) % 16, 0)
+  assert.equal(pageImage ? getOutputWorkflowNodeExecutionMetadata(pageImage).maxConcurrency : undefined, 8)
   assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'comic_atlas_image' && edge.targetNodeKey === 'page_001_image' && edge.targetPort === 'references'))
   assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'page_004_image' && edge.targetNodeKey === 'comic_pdf_render' && edge.targetPort === 'pages'))
   assert.equal(validateOutputWorkflowGraph({ nodes: plan.nodes, edges: plan.edges }).ok, true)

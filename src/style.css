@@ -17914,7 +17914,8 @@ button:disabled {
 }
 
 .outputs-graph-inspector-head button,
-.outputs-graph-section-head button {
+.outputs-graph-section-head button,
+.outputs-graph-run-actions button {
   min-height: 30px;
   padding: 0 10px;
 }
@@ -17951,6 +17952,51 @@ button:disabled {
   font-size: 0.76rem;
   line-height: 1.45;
   white-space: pre-wrap;
+}
+
+.outputs-graph-cache-note {
+  margin: 0;
+  font-size: 0.78rem;
+}
+
+.outputs-graph-cache-note.is-ready {
+  color: rgba(110, 231, 183, 0.9);
+}
+
+.outputs-graph-cache-note.is-stale {
+  color: rgba(251, 191, 36, 0.9);
+}
+
+.outputs-graph-cache-note.is-missing {
+  color: rgba(248, 113, 113, 0.92);
+}
+
+.outputs-graph-run-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.outputs-graph-run-actions button {
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 7px;
+  background: rgba(15, 23, 42, 0.9);
+  color: rgba(226, 232, 240, 0.9);
+}
+
+.outputs-graph-run-progress {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 10px;
+  border: 1px solid rgba(96, 165, 250, 0.22);
+  border-radius: 8px;
+  background: rgba(30, 64, 175, 0.16);
+}
+
+.outputs-graph-run-progress p {
+  margin: 0;
+  color: rgba(219, 234, 254, 0.92);
 }
 
 .outputs-graph-image-preview {

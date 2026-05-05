@@ -30,6 +30,7 @@ import {
   type OutputWorkflowEdge,
   type OutputWorkflowNode,
   type OutputWorkflowRun,
+  type OutputWorkflowRunScope,
   type OutputWorkflowRunStep,
 } from '../../domain/outputWorkflow'
 import {
@@ -56,7 +57,7 @@ type GraphNodeData = {
   selected: boolean
   running: boolean
   onSelect: (nodeKey: string) => void
-  onRun: (node: OutputWorkflowNode) => void
+  onRun: (node: OutputWorkflowNode, runScope?: OutputWorkflowRunScope) => void
 }
 
 type GraphEdgeData = {
@@ -79,10 +80,16 @@ type OutputWorkflowGraphOverlayProps = {
   selectedNodeKey: string | null
   canRunOutputs: boolean
   targetedNodeKey: string | null
+  targetedNodeKeys?: string[]
+  targetedRunScope: OutputWorkflowRunScope | null
+  runErrorMessage?: string | null
+  refreshingGraph?: boolean
   worldWiki: unknown
   onClose: () => void
   onSelectNode: (nodeKey: string) => void
-  onRunNode: (node: OutputWorkflowNode) => void
+  onRunNode: (node: OutputWorkflowNode, runScope?: OutputWorkflowRunScope) => void
+  onRunNodes: (nodes: OutputWorkflowNode[], runScope?: OutputWorkflowRunScope) => void
+  onRefreshGraph: () => void
   onCancelRun: () => void
   onSaveNode: (request: {
     workflowId: string
@@ -90,7 +97,7 @@ type OutputWorkflowGraphOverlayProps = {
     position?: { x: number; y: number }
     inputs?: { prompt?: string }
   }) => Promise<unknown>
-  readOutputPreview: (step: OutputWorkflowRunStep | null | undefined) => string
+  readOutputPreview: (step: Pick<OutputWorkflowRunStep, 'outputs' | 'errorMessage' | 'provider' | 'model'> | null | undefined) => string
   readNodeSkillKeys: (node: OutputWorkflowNode) => string[]
 }
 
@@ -131,8 +138,10 @@ function providerStatus(step: OutputWorkflowRunStep | null | undefined) {
   return readTrimmedString(metadata.providerStatus) || readTrimmedString(step?.status)
 }
 
-function imageOutputAssetKey(step: OutputWorkflowRunStep | null | undefined) {
-  const outputs = readRecord(step?.outputs)
+type OutputWorkflowOutputSource = Pick<OutputWorkflowRunStep, 'outputs'> | null | undefined
+
+function imageOutputAssetKey(source: OutputWorkflowOutputSource) {
+  const outputs = readRecord(source?.outputs)
   const image = readRecord(outputs.image)
   return readTrimmedString(image.assetKey) || readTrimmedString(outputs.assetKey)
 }
@@ -155,8 +164,8 @@ function artifactUrlByAssetKey(run: OutputWorkflowRun | null | undefined) {
   return urls
 }
 
-function readImageOutputSize(step: OutputWorkflowRunStep | null | undefined) {
-  const outputs = readRecord(step?.outputs)
+function readImageOutputSize(source: OutputWorkflowOutputSource) {
+  const outputs = readRecord(source?.outputs)
   const image = readRecord(outputs.image)
   const width = Number(image.width ?? outputs.width)
   const height = Number(image.height ?? outputs.height)
@@ -165,8 +174,7 @@ function readImageOutputSize(step: OutputWorkflowRunStep | null | undefined) {
     : null
 }
 
-function graphNodeDimensions(node: OutputWorkflowNode, step: OutputWorkflowRunStep | null | undefined) {
-  const imageSize = readImageOutputSize(step)
+function graphNodeDimensions(node: OutputWorkflowNode, imageSize: { width: number; height: number } | null) {
   if (node.nodeType !== 'image_generation' || !imageSize) return { width: NODE_WIDTH, height: NODE_HEIGHT }
   const aspect = imageSize.width / imageSize.height
   const height = IMAGE_NODE_MAX_HEIGHT
@@ -224,13 +232,35 @@ function selectedNodeRunLabel(node: OutputWorkflowNode) {
   if (node.nodeType === 'document_render') return 'Refresh document only'
   if (purpose === 'ebook_cover_prompt') return 'Regenerate cover + PDF'
   if (purpose === 'ebook_cover_image') return 'Regenerate cover + PDF'
-  if (purpose === 'comic_atlas_prompt') return 'Regenerate atlas + pages'
-  if (purpose === 'comic_style_atlas') return 'Regenerate atlas + pages'
-  if (purpose === 'comic_page_prompt') return 'Regenerate page + PDF'
-  if (purpose === 'comic_page') return 'Regenerate page + PDF'
+  if (purpose === 'comic_atlas_prompt') return 'Run atlas prompt'
+  if (purpose === 'comic_style_atlas') return 'Run atlas image'
+  if (purpose === 'comic_page_prompt') return 'Run prompt only'
+  if (purpose === 'comic_page') return 'Run image only'
   if (purpose === 'chapter_prose') return 'Regenerate chapter'
   if (purpose === 'chapter_section_prose') return 'Regenerate section'
   return 'Run node'
+}
+
+function defaultRunScopeForNode(node: OutputWorkflowNode): OutputWorkflowRunScope {
+  const purpose = readTrimmedString(readRecord(node.config).purpose)
+  if (node.nodeType === 'output_artifact' || node.nodeType === 'document_render') return 'artifact_rebake'
+  if (purpose === 'comic_page_prompt' || purpose === 'comic_page') return 'node_only'
+  return 'node_only'
+}
+
+function hasCachedNodeOutput(node: OutputWorkflowNode | undefined) {
+  return Object.keys(readRecord(node?.outputs)).length > 0
+}
+
+function localRunButtonLabel(input: {
+  label: string
+  scope: OutputWorkflowRunScope
+  targetedNode: boolean
+  targetedScope: OutputWorkflowRunScope | null
+  activeRunStatus?: string
+}) {
+  if (!input.targetedNode || input.targetedScope !== input.scope) return input.label
+  return input.activeRunStatus === 'queued' ? 'Queued...' : 'Running...'
 }
 
 function mergeGraphPorts(
@@ -359,10 +389,16 @@ export function OutputWorkflowGraphOverlay({
   selectedNodeKey,
   canRunOutputs,
   targetedNodeKey,
+  targetedNodeKeys = [],
+  targetedRunScope,
+  runErrorMessage,
+  refreshingGraph = false,
   worldWiki,
   onClose,
   onSelectNode,
   onRunNode,
+  onRunNodes,
+  onRefreshGraph,
   onCancelRun,
   onSaveNode,
   readOutputPreview,
@@ -388,9 +424,21 @@ export function OutputWorkflowGraphOverlay({
   const assetByKey = useMemo(() => new Map(safeAssets.map((asset) => [asset.key, asset])), [safeAssets])
   const artifactImageUrlByAssetKey = useMemo(() => artifactUrlByAssetKey(activeRun), [activeRun?.artifacts])
   const nodeByKey = useMemo(() => new Map(safeNodes.map((node) => [node.key, node])), [safeNodes])
+  const targetedNodeKeySet = useMemo(() => new Set(targetedNodeKeys.length > 0
+    ? targetedNodeKeys
+    : targetedNodeKey
+      ? [targetedNodeKey]
+      : []), [targetedNodeKey, targetedNodeKeys])
   const selectedNode = selectedNodeKey ? nodeByKey.get(selectedNodeKey) ?? safeNodes[0] ?? null : safeNodes[0] ?? null
   const selectedStep = selectedNode ? stepsByNodeKey.get(selectedNode.key) ?? null : null
-  const selectedImageAssetKey = imageOutputAssetKey(selectedStep)
+  const selectedCachedOutputSource = selectedNode ? { outputs: selectedNode.outputs } : null
+  const selectedCachedOutputPreview = selectedCachedOutputSource
+    ? readOutputPreview({ ...selectedCachedOutputSource, errorMessage: null, provider: null, model: null })
+    : ''
+  const selectedOutputPreview = selectedStep
+    ? readOutputPreview(selectedStep) || selectedCachedOutputPreview
+    : selectedCachedOutputPreview
+  const selectedImageAssetKey = imageOutputAssetKey(selectedStep) || imageOutputAssetKey(selectedCachedOutputSource)
   const selectedImageAsset = selectedImageAssetKey
     ? safeAssets.find((asset) => asset.key === selectedImageAssetKey) ?? null
     : null
@@ -419,6 +467,36 @@ export function OutputWorkflowGraphOverlay({
     : []
   const selectedOutgoingEdges = selectedNode
     ? safeEdges.filter((edge) => edge.sourceNodeKey === selectedNode.key)
+    : []
+  const missingCachedInputKeysForNode = (node: OutputWorkflowNode) => safeEdges
+    .filter((edge) => edge.targetNodeKey === node.key)
+    .filter((edge) => readRecord(edge.metadata).optional !== true && !hasCachedNodeOutput(nodeByKey.get(edge.sourceNodeKey)))
+    .map((edge) => edge.sourceNodeKey)
+  const selectedMissingCachedInputs = selectedNode ? missingCachedInputKeysForNode(selectedNode) : []
+  const selectedDirtyCachedInputs = selectedIncomingEdges
+    .map((edge) => nodeByKey.get(edge.sourceNodeKey))
+    .filter((node): node is OutputWorkflowNode => Boolean(node?.dirty && hasCachedNodeOutput(node)))
+    .map((node) => node.key)
+  const selectedCacheLabel = selectedIncomingEdges.length === 0
+    ? 'No upstream cache required'
+    : selectedMissingCachedInputs.length > 0
+      ? `Missing upstream: ${selectedMissingCachedInputs.join(', ')}`
+      : selectedDirtyCachedInputs.length > 0
+        ? `Upstream dirty but reusable: ${selectedDirtyCachedInputs.join(', ')}`
+        : 'Ready from cache'
+  const selectedPreviewRunId = readTrimmedString(readRecord(readRecord(selectedNode?.metadata).execution).lastRunId)
+  const selectedStepRunMode = readTrimmedString(readRecord(selectedStep?.metadata).runScope) || readTrimmedString(readRecord(activeRun?.metadata).runScope)
+  const selectedNodeIsTargeted = selectedNode ? targetedNodeKeySet.has(selectedNode.key) : false
+  const selectedRunScopeLabel = targetedRunScope ? formatStatus(targetedRunScope) : ''
+  const selectedExecution = selectedNode ? getOutputWorkflowNodeExecutionMetadata(selectedNode) : null
+  const readyImageBatchNodes = selectedNode?.nodeType === 'image_generation'
+    ? safeNodes.filter((node) => {
+        if (node.nodeType !== 'image_generation') return false
+        const execution = getOutputWorkflowNodeExecutionMetadata(node)
+        if (selectedExecution?.groupKey && execution.groupKey !== selectedExecution.groupKey) return false
+        if (!selectedExecution?.groupKey && node.key !== selectedNode.key) return false
+        return missingCachedInputKeysForNode(node).length === 0
+      })
     : []
   const selectedSourceEntities = sourceEntityKeys
     .map((key) => safeWorldEntities.find((entity) => readTrimmedString(entity.key) === key))
@@ -462,14 +540,21 @@ export function OutputWorkflowGraphOverlay({
       const localPositionByKey = new Map(current.map((node) => [node.id, node.position]))
       return safeNodes.map((node) => {
         const step = stepsByNodeKey.get(node.key) ?? null
-        const statusKey = outputWorkflowStepStatusKey(step)
+        const cachedOutputSource = { outputs: node.outputs }
+        const statusKey = step
+          ? outputWorkflowStepStatusKey(step)
+          : hasCachedNodeOutput(node) && !node.dirty
+            ? 'completed'
+            : outputWorkflowStepStatusKey(step)
         const definition = outputWorkflowNodeRegistry[node.nodeType]
-        const imageAssetKey = imageOutputAssetKey(step)
+        const imageAssetKey = imageOutputAssetKey(step) || imageOutputAssetKey(cachedOutputSource)
         const imageUrl = imageAssetKey
           ? resolveAssetSourceUrl(assetByKey.get(imageAssetKey)) || artifactImageUrlByAssetKey.get(imageAssetKey) || null
           : null
-        const imageSize = readImageOutputSize(step)
-        const dimensions = graphNodeDimensions(node, step)
+        const imageSize = readImageOutputSize(step) ?? readImageOutputSize(cachedOutputSource)
+        const dimensions = graphNodeDimensions(node, imageSize)
+        const outputPreview = readOutputPreview(step)
+          || readOutputPreview({ ...cachedOutputSource, errorMessage: null, provider: null, model: null })
         return {
           id: node.key,
           type: 'outputWorkflow',
@@ -482,14 +567,14 @@ export function OutputWorkflowGraphOverlay({
             node,
             step,
             statusKey,
-            outputPreview: readOutputPreview(step).slice(0, 220),
+            outputPreview: outputPreview.slice(0, 220),
             imageUrl,
             imageSize,
             skillKeys: readNodeSkillKeys(node),
             inputPorts: mergeGraphPorts(definition.inputPorts, inputPortsByNodeKey.get(node.key) ?? []),
             outputPorts: mergeGraphPorts(definition.outputPorts, outputPortsByNodeKey.get(node.key) ?? []),
             selected: selectedNodeKey === node.key,
-            running: targetedNodeKey === node.key || statusKey === 'running',
+            running: targetedNodeKeySet.has(node.key) || statusKey === 'running',
             onSelect: onSelectNode,
             onRun: onRunNode,
           },
@@ -514,7 +599,7 @@ export function OutputWorkflowGraphOverlay({
         },
       }
     }))
-  }, [safeNodes, safeEdges, stepsByNodeKey, selectedNodeKey, targetedNodeKey, layoutDirty, onRunNode, onSelectNode, readNodeSkillKeys, readOutputPreview, assetByKey])
+  }, [safeNodes, safeEdges, stepsByNodeKey, selectedNodeKey, targetedNodeKeySet, layoutDirty, onRunNode, onSelectNode, readNodeSkillKeys, readOutputPreview, assetByKey, artifactImageUrlByAssetKey])
 
   async function applyAutoLayout(persist = false) {
     setGraphError(null)
@@ -542,7 +627,9 @@ export function OutputWorkflowGraphOverlay({
             'elk.layered.spacing.edgeEdgeBetweenLayers': '36',
           },
           children: safeNodes.map((node) => {
-            const dimensions = graphNodeDimensions(node, stepsByNodeKey.get(node.key) ?? null)
+            const step = stepsByNodeKey.get(node.key) ?? null
+            const imageSize = readImageOutputSize(step) ?? readImageOutputSize({ outputs: node.outputs })
+            const dimensions = graphNodeDimensions(node, imageSize)
             return {
               id: node.key,
               width: dimensions.width,
@@ -645,6 +732,9 @@ export function OutputWorkflowGraphOverlay({
           {executionPlan.diagnostics.length > 0 ? <small>{executionPlan.diagnostics.length} diagnostics</small> : null}
         </div>
         <div className="outputs-graph-toolbar-actions">
+          <button disabled={refreshingGraph} onClick={onRefreshGraph} type="button">
+            {refreshingGraph ? 'Refreshing...' : 'Refresh'}
+          </button>
           <button onClick={() => flowInstance?.fitView({ padding: 0.18, duration: 240 })} type="button">Fit</button>
           <button onClick={() => void applyAutoLayout(false)} type="button">Auto layout</button>
           <button disabled={!layoutDirty || savingLayout} onClick={() => void saveLayout()} type="button">
@@ -656,7 +746,7 @@ export function OutputWorkflowGraphOverlay({
           <button className="outputs-graph-exit" onClick={onClose} type="button">Exit</button>
         </div>
       </header>
-      {graphError ? <p className="outputs-graph-error">{graphError}</p> : null}
+      {graphError || runErrorMessage ? <p className="outputs-graph-error">{graphError || runErrorMessage}</p> : null}
       <div className="outputs-graph-shell">
         <div className="outputs-graph-canvas">
           <ReactFlow
@@ -693,13 +783,92 @@ export function OutputWorkflowGraphOverlay({
                   <span>{outputWorkflowNodeRegistry[selectedNode.nodeType].label}</span>
                 </div>
                 <button
-                  disabled={!canRunOutputs || targetedNodeKey === selectedNode.key}
-                  onClick={() => onRunNode(selectedNode)}
+                  disabled={!canRunOutputs || selectedNodeIsTargeted}
+                  onClick={() => onRunNode(selectedNode, defaultRunScopeForNode(selectedNode))}
                   type="button"
                 >
-                  {targetedNodeKey === selectedNode.key ? 'Starting...' : selectedNodeRunLabel(selectedNode)}
+                  {selectedNodeIsTargeted ? 'Starting...' : selectedNodeRunLabel(selectedNode)}
                 </button>
               </div>
+              <section className="outputs-graph-inspector-section">
+                <strong>Local run</strong>
+                {selectedNodeIsTargeted ? (
+                  <div className="outputs-graph-run-progress">
+                    <span className="outputs-graph-mini-spinner" aria-hidden="true" />
+                    <p>{selectedRunScopeLabel || 'Targeted run'} is {activeRun?.status === 'queued' ? 'queued' : 'running'} for this node.</p>
+                  </div>
+                ) : null}
+                <p className={`outputs-graph-cache-note ${selectedMissingCachedInputs.length > 0 ? 'is-missing' : selectedDirtyCachedInputs.length > 0 ? 'is-stale' : 'is-ready'}`}>
+                  {selectedCacheLabel}
+                </p>
+                <div className="outputs-graph-run-actions">
+                  <button
+                    disabled={!canRunOutputs || selectedNodeIsTargeted || selectedMissingCachedInputs.length > 0}
+                    onClick={() => onRunNode(selectedNode, 'node_only')}
+                    type="button"
+                  >
+                    {localRunButtonLabel({
+                      label: 'Run Node Only',
+                      scope: 'node_only',
+                      targetedNode: selectedNodeIsTargeted,
+                      targetedScope: targetedRunScope,
+                      activeRunStatus: activeRun?.status,
+                    })}
+                  </button>
+                  {readyImageBatchNodes.length > 1 ? (
+                    <button
+                      disabled={!canRunOutputs || readyImageBatchNodes.some((node) => targetedNodeKeySet.has(node.key))}
+                      onClick={() => onRunNodes(readyImageBatchNodes, 'node_only')}
+                      type="button"
+                    >
+                      {readyImageBatchNodes.some((node) => targetedNodeKeySet.has(node.key))
+                        ? 'Running image batch...'
+                        : `Run ${readyImageBatchNodes.length} Image Nodes`}
+                    </button>
+                  ) : null}
+                  <button
+                    disabled={!canRunOutputs || selectedNodeIsTargeted}
+                    onClick={() => onRunNode(selectedNode, 'upstream_to_node')}
+                    type="button"
+                  >
+                    {localRunButtonLabel({
+                      label: 'Run Up To Node',
+                      scope: 'upstream_to_node',
+                      targetedNode: selectedNodeIsTargeted,
+                      targetedScope: targetedRunScope,
+                      activeRunStatus: activeRun?.status,
+                    })}
+                  </button>
+                  <button
+                    disabled={!canRunOutputs || selectedNodeIsTargeted}
+                    onClick={() => onRunNode(selectedNode, 'node_and_downstream')}
+                    type="button"
+                  >
+                    {localRunButtonLabel({
+                      label: 'Run Node + Dependents',
+                      scope: 'node_and_downstream',
+                      targetedNode: selectedNodeIsTargeted,
+                      targetedScope: targetedRunScope,
+                      activeRunStatus: activeRun?.status,
+                    })}
+                  </button>
+                  {selectedNode.nodeType === 'document_render' || selectedNode.nodeType === 'output_artifact' ? (
+                    <button
+                      disabled={!canRunOutputs || selectedNodeIsTargeted}
+                      onClick={() => onRunNode(selectedNode, 'artifact_rebake')}
+                      type="button"
+                    >
+                      {localRunButtonLabel({
+                        label: 'Rebake Artifact',
+                        scope: 'artifact_rebake',
+                        targetedNode: selectedNodeIsTargeted,
+                        targetedScope: targetedRunScope,
+                        activeRunStatus: activeRun?.status,
+                      })}
+                    </button>
+                  ) : null}
+                </div>
+              </section>
               <section className="outputs-graph-inspector-section">
                 <strong>Node binding</strong>
                 <dl className="outputs-graph-binding-list">
@@ -795,10 +964,17 @@ export function OutputWorkflowGraphOverlay({
                 </section>
               )}
               <section className="outputs-graph-inspector-section">
-                <strong>Output</strong>
+                <strong>Latest node output</strong>
+                <p>
+                  {selectedStep
+                    ? `From current run${selectedStepRunMode ? ` (${formatStatus(selectedStepRunMode)})` : ''}.`
+                    : selectedPreviewRunId
+                      ? `Cached from run ${selectedPreviewRunId}.`
+                      : 'No output has been generated for this node yet.'}
+                </p>
                 {selectedStep?.errorMessage ? <p className="outputs-error">{selectedStep.errorMessage}</p> : null}
                 {selectedImageUrl ? <img className="outputs-graph-image-preview" src={selectedImageUrl} alt={`${selectedNode.label} output`} loading="lazy" /> : null}
-                {readOutputPreview(selectedStep) ? <pre>{readOutputPreview(selectedStep)}</pre> : <p>No persisted output for this node yet.</p>}
+                {selectedOutputPreview ? <pre>{selectedOutputPreview}</pre> : <p>No persisted output for this node yet.</p>}
               </section>
               <section className="outputs-graph-inspector-section">
                 <strong>Guidance</strong>

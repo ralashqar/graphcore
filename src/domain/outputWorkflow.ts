@@ -38,6 +38,8 @@ export const outputWorkflowPresetSchema = z.enum([
 ])
 export const outputWorkflowPortValueTypeSchema = z.enum(['world_context', 'guidance_bundle', 'text', 'structured_json', 'image', 'video', 'document', 'artifact', 'asset_pack'])
 export const outputWorkflowResourceClassSchema = z.enum(['llm', 'image', 'video', 'document', 'utility'])
+export const outputWorkflowRunScopeSchema = z.enum(['node_only', 'upstream_to_node', 'node_and_downstream', 'artifact_rebake'])
+export type OutputWorkflowRunScope = z.infer<typeof outputWorkflowRunScopeSchema>
 
 export const outputWorkflowPortSchema = z.object({
   id: z.string().min(1),
@@ -348,7 +350,9 @@ export const outputWorkflowRunStartRequestSchema = z.object({
   prompt: z.string().default(''),
   targetFormat: z.enum(['pdf', 'epub', 'docx', 'markdown']).default('pdf'),
   input: looseRecordSchema.default({}),
-  metadata: looseRecordSchema.default({}),
+  metadata: z.object({
+    runScope: outputWorkflowRunScopeSchema.optional(),
+  }).catchall(z.unknown()).default({}),
 })
 
 export const outputWorkflowRunStatusRequestSchema = z.object({
@@ -483,6 +487,7 @@ export function selectOutputWorkflowRunSubgraph<
   nodes: TNode[]
   edges: TEdge[]
   targetNodeKeys?: string[]
+  runScope?: z.infer<typeof outputWorkflowRunScopeSchema>
 }) {
   const targetNodeKeys = [...new Set((input.targetNodeKeys ?? []).map((key) => key.trim()).filter(Boolean))]
   if (targetNodeKeys.length === 0) {
@@ -505,16 +510,41 @@ export function selectOutputWorkflowRunSubgraph<
   }
 
   const included = new Set<string>()
-  const visit = (key: string) => {
+  const visitAncestors = (key: string) => {
     if (!nodeKeys.has(key)) {
       diagnostics.push(`Target output workflow node "${key}" does not exist.`)
       return
     }
     if (included.has(key)) return
     included.add(key)
-    for (const parentKey of incomingByNodeKey.get(key) ?? []) visit(parentKey)
+    for (const parentKey of incomingByNodeKey.get(key) ?? []) visitAncestors(parentKey)
   }
-  for (const key of targetNodeKeys) visit(key)
+  const outgoingByNodeKey = new Map<string, string[]>()
+  for (const node of input.nodes) outgoingByNodeKey.set(node.key, [])
+  for (const edge of input.edges) {
+    if (!nodeKeys.has(edge.sourceNodeKey) || !nodeKeys.has(edge.targetNodeKey)) continue
+    outgoingByNodeKey.get(edge.sourceNodeKey)?.push(edge.targetNodeKey)
+  }
+  const visitDescendants = (key: string) => {
+    if (!nodeKeys.has(key)) {
+      diagnostics.push(`Target output workflow node "${key}" does not exist.`)
+      return
+    }
+    if (included.has(key)) return
+    included.add(key)
+    for (const childKey of outgoingByNodeKey.get(key) ?? []) visitDescendants(childKey)
+  }
+  const runScope = input.runScope ?? 'upstream_to_node'
+  for (const key of targetNodeKeys) {
+    if (runScope === 'node_only') {
+      if (!nodeKeys.has(key)) diagnostics.push(`Target output workflow node "${key}" does not exist.`)
+      else included.add(key)
+    } else if (runScope === 'node_and_downstream') {
+      visitDescendants(key)
+    } else {
+      visitAncestors(key)
+    }
+  }
 
   return {
     nodes: input.nodes.filter((node) => included.has(node.key)),
@@ -631,7 +661,10 @@ export function getOutputWorkflowNodeExecutionMetadata(
             ? 'document'
             : 'utility'
   )
-  return { ...parsed, resourceClass }
+  const maxConcurrency = resourceClass === 'image' && parsed.groupKey === 'comic_pages'
+    ? Math.max(parsed.maxConcurrency ?? defaultOutputWorkflowConcurrency.resourceClasses.image, defaultOutputWorkflowConcurrency.resourceClasses.image)
+    : parsed.maxConcurrency
+  return { ...parsed, resourceClass, maxConcurrency }
 }
 
 export function getOutputWorkflowNodeGuidanceConfig(
@@ -675,7 +708,7 @@ export const defaultOutputWorkflowConcurrency = {
   global: 8,
   resourceClasses: {
     llm: 8,
-    image: 2,
+    image: 8,
     video: 1,
     document: 4,
     utility: 4,
@@ -1346,7 +1379,7 @@ export function buildComicIssueFromSequencePlan(request: z.infer<typeof outputWo
     key: `page_${String(pageNumber).padStart(3, '0')}_prompt`,
     nodeType: 'utility_transform',
     label: `Page ${pageNumber} Prompt`,
-    x: 1220,
+    x: 1480,
     y: 40 + (index % 6) * 170,
     inputs: { prompt: `Build a deterministic image prompt from comic script page ${pageNumber}.` },
     config: {
@@ -1363,7 +1396,7 @@ export function buildComicIssueFromSequencePlan(request: z.infer<typeof outputWo
     key: `page_${String(pageNumber).padStart(3, '0')}_image`,
     nodeType: 'image_generation',
     label: `Page ${pageNumber} Art`,
-    x: 1500,
+    x: 1760,
     y: 40 + (index % 6) * 170,
     config: {
       purpose: 'comic_page',
@@ -1380,7 +1413,7 @@ export function buildComicIssueFromSequencePlan(request: z.infer<typeof outputWo
       skillKeys: ['storyboard_panel_prompting', 'image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'provider_prompt_hygiene'],
       autoSkillTags: ['comic_page', 'image_prompt', 'visual_only', 'entity_reference', 'reference_continuity'],
       guidanceMode: 'strict',
-      execution: { resourceClass: 'image', groupKey: 'comic_pages', maxConcurrency: 2 },
+      execution: { resourceClass: 'image', groupKey: 'comic_pages', maxConcurrency: 8 },
     },
   }))
   const nodes = [
@@ -1405,8 +1438,8 @@ export function buildComicIssueFromSequencePlan(request: z.infer<typeof outputWo
       x: 80,
       y: 280,
       config: {
-        skillKeys: ['storyboard_panel_prompting', 'character_reference_continuity', 'image_prompt_visual_only', 'entity_reference_fidelity', 'environment_staging', 'provider_prompt_hygiene'],
-        autoSkillTags: ['comic', 'storyboard', 'image_prompt', 'visual_only', 'entity_reference'],
+        skillKeys: ['comic_scene_dramatization', 'comic_page_pacing', 'comic_panel_storytelling', 'comic_dialogue_lettering', 'comic_adaptation_compression', 'storyboard_panel_prompting', 'character_reference_continuity', 'image_prompt_visual_only', 'entity_reference_fidelity', 'environment_staging', 'provider_prompt_hygiene'],
+        autoSkillTags: ['comic', 'storyboard', 'image_prompt', 'visual_only', 'entity_reference', 'comic_adaptation'],
         guidanceMode: 'append',
         execution: { resourceClass: 'utility' },
       },
@@ -1428,19 +1461,55 @@ export function buildComicIssueFromSequencePlan(request: z.infer<typeof outputWo
       },
     }),
     nodeBase({
+      key: 'comic_scene_script',
+      nodeType: 'text_llm',
+      label: 'Scene Script',
+      x: 640,
+      y: 100,
+      inputs: { prompt: 'Adapt the selected sequence unit into a rich dramatic scene script for comics.' },
+      config: {
+        purpose: 'comic_scene_script',
+        pageCount,
+        sequenceUnitKey: selectedSequenceUnitKey,
+        sequenceUnitName: sequenceTitle,
+        skillKeys: ['comic_scene_dramatization', 'comic_dialogue_lettering', 'comic_adaptation_compression', 'provider_prompt_hygiene'],
+        autoSkillTags: ['comic', 'scene_script', 'adaptation'],
+        guidanceMode: 'strict',
+        execution: { resourceClass: 'llm' },
+      },
+    }),
+    nodeBase({
+      key: 'comic_page_plan',
+      nodeType: 'text_llm',
+      label: 'Page Plan',
+      x: 920,
+      y: 100,
+      inputs: { prompt: `Compress the scene script into exactly ${pageCount} comic pages.` },
+      config: {
+        purpose: 'comic_page_plan',
+        pageCount,
+        sequenceUnitKey: selectedSequenceUnitKey,
+        sequenceUnitName: sequenceTitle,
+        skillKeys: ['comic_page_pacing', 'comic_panel_storytelling', 'comic_adaptation_compression', 'provider_prompt_hygiene'],
+        autoSkillTags: ['comic', 'page_plan', 'pacing'],
+        guidanceMode: 'strict',
+        execution: { resourceClass: 'llm' },
+      },
+    }),
+    nodeBase({
       key: 'comic_script',
       nodeType: 'text_llm',
       label: 'Comic Script',
-      x: 640,
+      x: 1200,
       y: 100,
-      inputs: { prompt },
+      inputs: { prompt: 'Convert the approved scene script and page plan into strict comic page/panel JSON.' },
       config: {
         purpose: 'comic_script',
         pageCount,
         sequenceUnitKey: selectedSequenceUnitKey,
         sequenceUnitName: sequenceTitle,
-        skillKeys: ['cinematic_shot_script', 'storyboard_panel_prompting', 'provider_prompt_hygiene'],
-        autoSkillTags: ['comic', 'script', 'storyboard'],
+        skillKeys: ['comic_panel_storytelling', 'comic_dialogue_lettering', 'storyboard_panel_prompting', 'provider_prompt_hygiene'],
+        autoSkillTags: ['comic', 'script', 'storyboard', 'panel_storytelling'],
         guidanceMode: 'strict',
         execution: { resourceClass: 'llm' },
       },
@@ -1486,7 +1555,7 @@ export function buildComicIssueFromSequencePlan(request: z.infer<typeof outputWo
       key: 'comic_pdf_render',
       nodeType: 'document_render',
       label: 'Render Comic PDF',
-      x: 1780,
+      x: 2040,
       y: 120,
       config: {
         purpose: 'comic_pdf_render',
@@ -1500,7 +1569,7 @@ export function buildComicIssueFromSequencePlan(request: z.infer<typeof outputWo
       key: 'artifact',
       nodeType: 'output_artifact',
       label: 'Register Comic PDF',
-      x: 2060,
+      x: 2320,
       y: 120,
       config: { purpose: 'comic_artifact', artifactKind: 'comic_pdf', execution: { resourceClass: 'utility' } },
     }),
@@ -1508,6 +1577,15 @@ export function buildComicIssueFromSequencePlan(request: z.infer<typeof outputWo
   const edges = [
     edgeBase('world_context', 'context', 'relevant_entities', 'context'),
     edgeBase('skill_context', 'guidance', 'relevant_entities', 'guidance'),
+    edgeBase('world_context', 'context', 'comic_scene_script', 'context'),
+    edgeBase('skill_context', 'guidance', 'comic_scene_script', 'guidance'),
+    edgeBase('relevant_entities', 'asset_pack', 'comic_scene_script', 'asset_pack'),
+    edgeBase('comic_scene_script', 'sceneScript', 'comic_page_plan', 'sceneScript'),
+    edgeBase('world_context', 'context', 'comic_page_plan', 'context'),
+    edgeBase('skill_context', 'guidance', 'comic_page_plan', 'guidance'),
+    edgeBase('relevant_entities', 'asset_pack', 'comic_page_plan', 'asset_pack'),
+    edgeBase('comic_scene_script', 'sceneScript', 'comic_script', 'sceneScript'),
+    edgeBase('comic_page_plan', 'pagePlan', 'comic_script', 'pagePlan'),
     edgeBase('world_context', 'context', 'comic_script', 'context'),
     edgeBase('skill_context', 'guidance', 'comic_script', 'guidance'),
     edgeBase('relevant_entities', 'asset_pack', 'comic_script', 'asset_pack'),

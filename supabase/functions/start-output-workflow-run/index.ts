@@ -95,7 +95,13 @@ Deno.serve(async (request) => {
 
     const runRow = runResponse.data
     const targetNodeKeys = readStringArray(payload.metadata.targetNodeKeys)
-    const selectedSubgraph = selectOutputWorkflowRunSubgraph({ nodes, edges, targetNodeKeys })
+    const runScope = payload.metadata.runScope
+    const selectedSubgraph = selectOutputWorkflowRunSubgraph({
+      nodes,
+      edges,
+      targetNodeKeys,
+      runScope,
+    })
     if (selectedSubgraph.diagnostics.length > 0) throw new HttpError(400, selectedSubgraph.diagnostics.join(' '))
     const executionNodes = selectedSubgraph.nodes
     const executionPlan = buildOutputWorkflowExecutionPlan(executionNodes, selectedSubgraph.edges)
@@ -122,6 +128,7 @@ Deno.serve(async (request) => {
             groupKey: getOutputWorkflowNodeExecutionMetadata(node).groupKey ?? null,
             skillKeys: getOutputWorkflowNodeGuidanceConfig(node).skillKeys,
             guidanceMode: getOutputWorkflowNodeGuidanceConfig(node).guidanceMode,
+            runScope: runScope ?? (targetNodeKeys.length > 0 ? 'upstream_to_node' : 'full_workflow'),
           },
         })))
       .select(outputWorkflowRunStepSelect)
