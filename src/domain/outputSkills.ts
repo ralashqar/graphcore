@@ -411,7 +411,7 @@ export const OUTPUT_SKILL_REGISTRY: readonly OutputSkill[] = [
     category: 'visual',
     modality: 'image',
     appliesToNodeTypes: ['image_generation', 'text_llm'],
-    appliesToPurposes: ['image_prompt', 'ebook_cover_prompt', 'ebook_cover_image', 'storyboard_prompt', 'panel_prompt', 'comic_atlas_prompt', 'comic_style_atlas', 'comic_page_prompt', 'comic_page'],
+    appliesToPurposes: ['image_prompt', 'concept_art_prompt', 'concept_art_image', 'poster_prompt', 'poster_image', 'ebook_cover_prompt', 'ebook_cover_image', 'storyboard_prompt', 'panel_prompt', 'comic_atlas_prompt', 'comic_style_atlas', 'comic_page_prompt', 'comic_page'],
     guidance: [
       'Write prompts as visible subject, action, environment, composition, lighting, material, and camera qualities.',
       'Convert lore and abstract themes into visible production design choices.',
@@ -516,7 +516,7 @@ export const OUTPUT_SKILL_REGISTRY: readonly OutputSkill[] = [
     category: 'visual',
     modality: 'image',
     appliesToNodeTypes: ['text_llm', 'image_generation', 'video_generation'],
-    appliesToPurposes: ['image_prompt', 'ebook_cover_image', 'video_prompt', 'composite_reference', 'comic_entity_selector', 'comic_atlas_prompt', 'comic_style_atlas', 'comic_page'],
+    appliesToPurposes: ['image_prompt', 'image_reference_selector', 'concept_art_prompt', 'concept_art_image', 'poster_prompt', 'poster_image', 'ebook_cover_image', 'video_prompt', 'composite_reference', 'comic_entity_selector', 'comic_atlas_prompt', 'comic_style_atlas', 'comic_page'],
     guidance: [
       'Preserve entity identity, material, silhouette, and visible role cues from source references.',
       'Use source entity keys and visual descriptions as provenance anchors for generated assets.',
@@ -536,8 +536,8 @@ export const OUTPUT_SKILL_REGISTRY: readonly OutputSkill[] = [
     description: 'Places characters and objects into coherent environments.',
     category: 'visual',
     modality: 'image',
-    appliesToNodeTypes: ['image_generation', 'video_generation'],
-    appliesToPurposes: ['image_prompt', 'ebook_cover_image', 'video_prompt', 'composite_reference', 'comic_atlas_prompt', 'comic_style_atlas', 'comic_page'],
+    appliesToNodeTypes: ['text_llm', 'image_generation', 'video_generation'],
+    appliesToPurposes: ['image_prompt', 'concept_art_prompt', 'concept_art_image', 'poster_prompt', 'poster_image', 'ebook_cover_image', 'video_prompt', 'composite_reference', 'comic_atlas_prompt', 'comic_style_atlas', 'comic_page'],
     guidance: [
       'Stage subject scale, light direction, surface contact, and spatial depth so references feel physically present in the same place.',
       'Use environment references for architecture, palette, weather, and atmosphere.',
@@ -579,7 +579,7 @@ export const OUTPUT_SKILL_REGISTRY: readonly OutputSkill[] = [
     category: 'quality',
     modality: 'workflow',
     appliesToNodeTypes: ['text_llm', 'image_generation', 'video_generation'],
-    appliesToPurposes: ['outline', 'chapter_plan', 'chapter_section_plan', 'chapter_prose', 'chapter_section_prose', 'editor_pass', 'front_back_matter', 'image_prompt', 'ebook_cover_prompt', 'ebook_cover_image', 'video_prompt', 'storyboard_prompt', 'ugc_script', 'cinematic_script', 'comic_entity_selector', 'comic_scene_script', 'comic_page_plan', 'comic_script', 'comic_atlas_prompt', 'comic_style_atlas', 'comic_page_prompt', 'comic_page'],
+    appliesToPurposes: ['outline', 'chapter_plan', 'chapter_section_plan', 'chapter_prose', 'chapter_section_prose', 'editor_pass', 'front_back_matter', 'image_prompt', 'image_reference_selector', 'concept_art_prompt', 'concept_art_image', 'poster_prompt', 'poster_image', 'ebook_cover_prompt', 'ebook_cover_image', 'video_prompt', 'storyboard_prompt', 'ugc_script', 'cinematic_script', 'comic_entity_selector', 'comic_scene_script', 'comic_page_plan', 'comic_script', 'comic_atlas_prompt', 'comic_style_atlas', 'comic_page_prompt', 'comic_page'],
     guidance: [
       'Keep provider-facing prompts compact, declarative, and focused on the artifact the node must produce.',
       'Separate canon facts, style guidance, and output requirements so they do not blur together.',

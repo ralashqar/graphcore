@@ -16,6 +16,7 @@ import {
   type OutputWorkflowRunStatusResponse,
   type OutputWorkflowStartResponse,
   type OutputWorkflowUpgradeResponse,
+  type OutputRequestStatusResponse,
   type OutputArtifact,
 } from '../../domain/outputWorkflow'
 import { OutputWorkflowGraphOverlay } from './OutputWorkflowGraphOverlay'
@@ -24,6 +25,16 @@ type OutputsWorkspaceProps = {
   snapshot: ProjectSnapshot
   canRunOutputs: boolean
   cinematicsPanel: ReactNode
+  onStartOutputRequest: (request: {
+    prompt: string
+    sourceSurface?: string
+    selectedEntityKeys?: string[]
+    selectedSequenceUnitKeys?: string[]
+    pageCount?: number
+    targetFormat?: 'pdf' | 'epub' | 'docx' | 'markdown' | 'image'
+  }) => Promise<OutputRequestStatusResponse>
+  onGetOutputRequestStatus: (requestId: string) => Promise<OutputRequestStatusResponse>
+  onCancelOutputRequest: (requestId: string) => Promise<OutputRequestStatusResponse>
   onPlanOutputWorkflow: (request: {
     prompt: string
     preset?: 'ebook_from_world' | 'comic_issue_from_sequence'
@@ -91,6 +102,18 @@ function formatByteSize(value: unknown) {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 102.4) / 10} KB`
   return `${Math.round(bytes / 1024 / 102.4) / 10} MB`
+}
+
+function readImageAspectRatio(...records: Array<unknown>) {
+  for (const value of records) {
+    const record = readRecord(value)
+    const image = readRecord(record.image)
+    const imageSize = readRecord(record.imageSize)
+    const width = readNumber(record.width) ?? readNumber(image.width) ?? readNumber(imageSize.width)
+    const height = readNumber(record.height) ?? readNumber(image.height) ?? readNumber(imageSize.height)
+    if (width && height && width > 0 && height > 0) return `${width} / ${height}`
+  }
+  return ''
 }
 
 function artifactActionLabels(mimeType: string, kind: string) {
@@ -182,16 +205,6 @@ function readNodeSkillKeys(node: Pick<OutputWorkflowNode, 'config' | 'metadata'>
     ...readStringArray(readRecord(metadataGuidance).skillKeys),
   ]
   return [...new Set(skillKeys)]
-}
-
-function readWorldWikiTitle(snapshot: ProjectSnapshot) {
-  const metadata = snapshot.draft.metadata ?? {}
-  const worldWiki = metadata.worldWiki && typeof metadata.worldWiki === 'object'
-    ? metadata.worldWiki as Record<string, unknown>
-    : {}
-  return typeof worldWiki.title === 'string' && worldWiki.title.trim()
-    ? worldWiki.title.trim()
-    : snapshot.project.name
 }
 
 function statusClass(value: string) {
@@ -298,6 +311,18 @@ function workflowPresetLabel(value: string | null | undefined) {
   return value ? value.replace(/_/g, ' ') : 'No workflow yet'
 }
 
+function outputKindLabel(value: string | null | undefined) {
+  if (value === 'concept_art_image') return 'Concept Art'
+  if (value === 'poster_image') return 'Poster Image'
+  if (value === 'short_story') return 'Short Story'
+  if (value === 'ebook_from_world') return 'Ebook PDF'
+  if (value === 'comic_issue_from_sequence') return 'Comic Issue'
+  if (value === 'cinematic_trailer') return 'Cinematic Trailer'
+  if (value === 'cinematic_episode') return 'Cinematic Episode'
+  if (value === 'ugc_episode') return 'UGC Episode'
+  return 'Output'
+}
+
 function purposeLabel(node: OutputWorkflowNode) {
   const purpose = readTrimmedString(readRecord(node.config).purpose)
   return purpose ? purpose.replace(/_/g, ' ') : node.nodeType.replace(/_/g, ' ')
@@ -307,11 +332,28 @@ function isImageArtifact(artifact: OutputArtifact, mimeType: string) {
   return mimeType.startsWith('image/') || artifact.kind === 'image'
 }
 
+function compactStatusForSteps(steps: OutputWorkflowRunStep[]) {
+  if (steps.some((step) => step.status === 'running')) return 'running'
+  if (steps.some((step) => {
+    const status = String(step.status)
+    return status === 'failed' || status === 'blocked'
+  })) return 'failed'
+  if (steps.length > 0 && steps.every((step) => {
+    const status = String(step.status)
+    return status === 'completed' || status === 'skipped'
+  })) return 'completed'
+  if (steps.some((step) => step.status === 'cancelled')) return 'cancelled'
+  return steps.length > 0 ? 'queued' : 'empty'
+}
+
 export function OutputsWorkspace({
   snapshot,
   canRunOutputs,
   cinematicsPanel,
   onPlanOutputWorkflow,
+  onStartOutputRequest,
+  onGetOutputRequestStatus,
+  onCancelOutputRequest,
   onStartOutputWorkflow,
   onStartOutputWorkflowRun,
   onGetOutputWorkflowStatus,
@@ -326,6 +368,9 @@ export function OutputsWorkspace({
   const [comicPrompt, setComicPrompt] = useState('Create a polished comic issue from the selected sequence unit, with clear page storytelling, readable lettering, and consistent character art.')
   const [selectedComicSequenceKey, setSelectedComicSequenceKey] = useState('')
   const [comicPageCount, setComicPageCount] = useState(8)
+  const [requestPrompt, setRequestPrompt] = useState('Make a poster image from this world using the main characters and strongest location.')
+  const [selectedRequestId, setSelectedRequestId] = useState<string | null>(snapshot.outputRequests[0]?.id ?? null)
+  const [busyRequestId, setBusyRequestId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [activeRunId, setActiveRunId] = useState<string | null>(snapshot.outputWorkflowRuns[0]?.id ?? null)
@@ -347,6 +392,12 @@ export function OutputsWorkspace({
     () => snapshot.worldEntities.filter((entity) => entity.nodeType !== 'sequence_unit'),
     [snapshot.worldEntities],
   )
+  const outputRequests = useMemo(() => snapshot.outputRequests.slice().sort((left, right) => (
+    new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+  )), [snapshot.outputRequests])
+  const selectedOutputRequest = selectedRequestId
+    ? outputRequests.find((request) => request.id === selectedRequestId) ?? null
+    : outputRequests[0] ?? null
   const workflows = snapshot.outputWorkflows
   const [liveRunsById, setLiveRunsById] = useState<Record<string, OutputWorkflowRun>>({})
   const recentOutputRuns = useMemo(() => {
@@ -443,7 +494,6 @@ export function OutputsWorkspace({
       new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
     ))
   }, [displayRun?.artifacts, snapshot.outputArtifacts])
-  const title = readWorldWikiTitle(snapshot)
   const activeRunStatusLabel = activeRun ? formatStatus(displayRun?.status ?? activeRun.status) : 'Idle'
   const runningNodeCount = runStepCounts.get('running') ?? 0
   const failedNodeCount = (runStepCounts.get('failed') ?? 0) + (runStepCounts.get('blocked') ?? 0)
@@ -492,6 +542,49 @@ export function OutputsWorkspace({
 
   function rememberLiveRun(run: OutputWorkflowRun) {
     setLiveRunsById((current) => ({ ...current, [run.id]: run }))
+  }
+
+  async function createPromptOutputRequest() {
+    const cleanPrompt = requestPrompt.trim()
+    if (!cleanPrompt) {
+      setError('Describe the output you want to make from this world.')
+      return
+    }
+    setBusy(true)
+    setError(null)
+    try {
+      const response = await onStartOutputRequest({
+        prompt: cleanPrompt,
+        sourceSurface: 'outputs',
+        pageCount: comicPageCount,
+        selectedSequenceUnitKeys: selectedComicSequenceKey ? [selectedComicSequenceKey] : [],
+      })
+      setSelectedRequestId(response.request.id)
+      if (response.run) {
+        setActiveRunId(response.run.id)
+        rememberLiveRun(response.run)
+      }
+      setBusy(false)
+      if (response.request.latestRunId) await pollRequest(response.request.id)
+      await onRefreshLiveSnapshot()
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Output request failed.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function pollRequest(requestId: string) {
+    let status = await onGetOutputRequestStatus(requestId)
+    if (status.run) {
+      setActiveRunId(status.run.id)
+      rememberLiveRun(status.run)
+    }
+    while (!status.terminal && status.run && !isTerminalOutputWorkflowRunStatus(status.run.status)) {
+      await new Promise((resolve) => window.setTimeout(resolve, 1800))
+      status = await onGetOutputRequestStatus(requestId)
+      if (status.run) rememberLiveRun(status.run)
+    }
   }
 
   async function createAndRunEbookWorkflow() {
@@ -896,8 +989,7 @@ export function OutputsWorkspace({
       <header className="outputs-hero">
         <div className="outputs-hero-copy">
           <p className="outputs-eyebrow">Output Studio</p>
-          <h2>{title}</h2>
-          <p>Generate books, comics, images, and video packages from the world graph without rebuilding canon.</p>
+          <p>Prompt books, comics, images, and video packages from this world without rebuilding canon.</p>
         </div>
         <div className="outputs-hero-actions">
           <div className="outputs-mode-switch" role="tablist" aria-label="Output modes">
@@ -908,23 +1000,124 @@ export function OutputsWorkspace({
               Cinematics
             </button>
           </div>
-          <div className={`outputs-live-pill is-${activeRun ? statusClass(activeRun.status) : 'idle'}`}>
-            <span className={`outputs-status-icon is-${activeRun ? statusClass(displayRun?.status ?? activeRun.status) : 'queued'}`} aria-hidden="true" />
-            <strong>{activeRunStatusLabel}</strong>
-            <small>{activeWorkflow ? workflowPresetLabel(activeWorkflow.preset) : 'No active workflow'}</small>
-          </div>
         </div>
       </header>
 
       {mode === 'cinematics' ? (
         <div className="outputs-cinematics-shell">{cinematicsPanel}</div>
       ) : (
-        <div className="outputs-studio-grid">
-          <aside className="outputs-setup-rail">
-            <section className="outputs-panel outputs-composer">
+        <>
+          <section className="outputs-command-center is-prompt-only">
+            <section className="outputs-panel outputs-request-composer">
               <div className="outputs-panel-heading">
                 <div>
-                  <p className="outputs-eyebrow">Create</p>
+                  <p className="outputs-eyebrow">Prompt-first output</p>
+                  <h3>What do you want to make from this world?</h3>
+                </div>
+                <span>{outputRequests.length} requests</span>
+              </div>
+              <label className="outputs-input-block">
+                <span>Output request</span>
+                <textarea
+                  value={requestPrompt}
+                  onChange={(event) => setRequestPrompt(event.target.value)}
+                  rows={5}
+                  aria-label="Prompt an output from this world"
+                  placeholder="Make a poster of Ilya and Anya at the checkpoint..."
+                />
+                <small>Routes to approved output workflows, binds world entities, then runs the generated workflow.</small>
+              </label>
+              <div className="outputs-example-strip" aria-label="Example output prompts">
+                {[
+                  'Poster image of two characters at the checkpoint',
+                  'Short story about a missing artifact',
+                  'Comic issue from Chapter 1',
+                ].map((example) => (
+                  <button key={example} type="button" onClick={() => setRequestPrompt(example)}>
+                    {example}
+                  </button>
+                ))}
+              </div>
+              <div className="outputs-composer-submit-row">
+                <button
+                  className="outputs-primary-action"
+                  disabled={!canRunOutputs || busy}
+                  onClick={createPromptOutputRequest}
+                  type="button"
+                >
+                  {busy ? 'Creating output...' : 'Generate output'}
+                </button>
+                {!canRunOutputs ? <p className="outputs-error">Output workflows require a live Supabase-backed draft.</p> : null}
+                {error ? <p className="outputs-error">{error}</p> : null}
+              </div>
+            </section>
+            <aside className="outputs-top-results">
+              <section className="outputs-panel outputs-artifacts">
+                <div className="outputs-panel-heading">
+                  <div>
+                    <p className="outputs-eyebrow">Results</p>
+                    <h3>Artifacts</h3>
+                  </div>
+                  <span>{artifacts.length}</span>
+                </div>
+                {primaryArtifact ? (
+                  <div className="outputs-primary-artifact">
+                    <span>Latest deliverable</span>
+                    <strong>{primaryArtifact.name}</strong>
+                    <small>{primaryArtifact.kind.replace(/_/g, ' ')}</small>
+                  </div>
+                ) : (
+                  <div className="outputs-primary-artifact is-empty">
+                    <span>Nothing exported yet</span>
+                    <strong>Run a workflow to create PDFs, images, and packages.</strong>
+                  </div>
+                )}
+                <div className="outputs-artifact-list">
+                  {artifacts.length > 0 ? artifacts.slice(0, 3).map((artifact) => {
+                    const asset = artifact.assetKey ? assetByKey.get(artifact.assetKey) ?? null : null
+                    const url = resolveAssetSourceUrl(asset) || resolveArtifactUrlFromMetadata(readRecord(artifact.metadata))
+                    const mimeType = artifact.mimeType || asset?.mimeType || ''
+                    const actionLabels = artifactActionLabels(mimeType, artifact.kind)
+                    const imageArtifact = isImageArtifact(artifact, mimeType)
+                    return (
+                      <article className={`outputs-artifact-card ${imageArtifact ? 'is-image' : ''}`} key={`top-${artifact.id}`}>
+                        {imageArtifact && url ? (
+                          <img className="outputs-artifact-image" src={url} alt={artifact.name} loading="lazy" />
+                        ) : (
+                          <div className="outputs-artifact-fileplate">
+                            <span>{mimeType === 'application/pdf' || artifact.kind === 'comic_pdf' ? 'PDF' : artifact.kind.replace(/_/g, ' ')}</span>
+                          </div>
+                        )}
+                        <div className="outputs-artifact-body">
+                          <strong>{artifact.name}</strong>
+                          <span>{artifact.kind.toUpperCase()} - {mimeType || 'artifact'}</span>
+                          <div className="outputs-artifact-actions">
+                            {url ? <a href={url} target="_blank" rel="noreferrer">{actionLabels.open}</a> : <span>{actionLabels.open}</span>}
+                            {url ? (
+                              <button
+                                className="outputs-artifact-action-button"
+                                disabled={downloadingArtifactKey === artifact.key}
+                                type="button"
+                                onClick={() => downloadArtifact(url, artifact.name, actionLabels.extension, mimeType, artifact.key)}
+                              >
+                                {downloadingArtifactKey === artifact.key ? 'Downloading...' : actionLabels.download}
+                              </button>
+                            ) : <span>{actionLabels.download}</span>}
+                          </div>
+                        </div>
+                      </article>
+                    )
+                  }) : (
+                    <p className="outputs-muted">Openable files appear here as soon as render or image nodes finish.</p>
+                  )}
+                </div>
+              </section>
+            </aside>
+
+            <section className="outputs-panel outputs-composer outputs-advanced-presets">
+              <div className="outputs-panel-heading">
+                <div>
+                  <p className="outputs-eyebrow">Advanced presets</p>
                   <h3>{outputPreset === 'ebook' ? 'Ebook PDF' : 'Comic Issue'}</h3>
                 </div>
                 <span>{outputPreset === 'ebook' ? `${sequenceUnits.length} sequence units` : `${comicPageCount} pages`}</span>
@@ -999,11 +1192,218 @@ export function OutputsWorkspace({
               >
                 {busy ? 'Starting workflow...' : outputPreset === 'ebook' ? 'Generate PDF' : 'Generate Comic PDF'}
               </button>
-              {!canRunOutputs ? <p className="outputs-error">Output workflows require a live Supabase-backed draft.</p> : null}
-              {error ? <p className="outputs-error">{error}</p> : null}
             </section>
+          </section>
 
-            <section className="outputs-panel outputs-run-card">
+          <div className="outputs-studio-grid">
+            <main className="outputs-production-main">
+              <section className="outputs-panel outputs-request-feed">
+                <div className="outputs-panel-heading">
+                  <div>
+                    <p className="outputs-eyebrow">Production Feed</p>
+                    <h3>Prompted Outputs</h3>
+                  </div>
+                  <span>{outputRequests.length} total</span>
+                </div>
+                {outputRequests.length === 0 ? (
+                  <div className="outputs-empty-feed">
+                    <strong>No prompted outputs yet</strong>
+                    <p>Use the composer above to create a poster, story, comic, ebook, or future video from this world.</p>
+                  </div>
+                ) : (
+                  <div className="outputs-request-list">
+                    {outputRequests.map((request) => {
+                      const requestRun = request.latestRunId
+                        ? recentOutputRuns.find((run) => run.id === request.latestRunId) ?? null
+                        : null
+                      const requestWorkflow = request.workflowId
+                        ? workflows.find((workflow) => workflow.id === request.workflowId) ?? null
+                        : null
+                      const requestArtifacts = snapshot.outputArtifacts.filter((artifact) => (
+                        artifact.runId === request.latestRunId || artifact.workflowId === request.workflowId
+                      ))
+                      const requestPrimaryArtifact = requestArtifacts.find((artifact) => artifact.mimeType === 'application/pdf' || artifact.kind === 'comic_pdf' || artifact.kind === 'pdf')
+                        ?? requestArtifacts.find((artifact) => artifact.kind === 'image')
+                        ?? requestArtifacts[0]
+                        ?? null
+                      const imageArtifact = requestArtifacts.find((artifact) => artifact.kind === 'image') ?? requestPrimaryArtifact
+                      const imageAsset = imageArtifact?.assetKey ? assetByKey.get(imageArtifact.assetKey) ?? null : null
+                      const imageUrl = resolveAssetSourceUrl(imageAsset) || (imageArtifact ? resolveArtifactUrlFromMetadata(readRecord(imageArtifact.metadata)) : '')
+                      const imageAspectRatio = imageArtifact
+                        ? readImageAspectRatio(imageArtifact.metadata, imageAsset?.metadata)
+                        : ''
+                      const primaryAsset = requestPrimaryArtifact?.assetKey ? assetByKey.get(requestPrimaryArtifact.assetKey) ?? null : null
+                      const primaryUrl = requestPrimaryArtifact ? resolveAssetSourceUrl(primaryAsset) || resolveArtifactUrlFromMetadata(readRecord(requestPrimaryArtifact.metadata)) : ''
+                      const primaryMimeType = requestPrimaryArtifact?.mimeType || primaryAsset?.mimeType || ''
+                      const primaryActionLabels = requestPrimaryArtifact ? artifactActionLabels(primaryMimeType, requestPrimaryArtifact.kind) : null
+                      const rowStatus = requestRun?.status ?? request.status
+                      const progressSteps = requestRun?.steps ?? []
+                      const completedCount = progressSteps.filter((step) => {
+                        const stepStatus = String(step.status)
+                        return stepStatus === 'completed' || stepStatus === 'skipped'
+                      }).length
+                      const failedCount = progressSteps.filter((step) => {
+                        const stepStatus = String(step.status)
+                        return stepStatus === 'failed' || stepStatus === 'blocked'
+                      }).length
+                      const activeStep = progressSteps.find((step) => step.status === 'running')
+                        ?? progressSteps.find((step) => {
+                          const stepStatus = String(step.status)
+                          return stepStatus === 'failed' || stepStatus === 'blocked'
+                        })
+                        ?? progressSteps.find((step) => step.status === 'queued')
+                        ?? null
+                      const rowStageSummary = [
+                        {
+                          label: 'Context',
+                          steps: progressSteps.filter((step) => step.nodeType === 'world_context_query' || step.nodeType === 'skill_context_query'),
+                        },
+                        {
+                          label: 'Writing',
+                          steps: progressSteps.filter((step) => step.nodeType === 'text_llm' || step.nodeType === 'utility_transform'),
+                        },
+                        {
+                          label: 'Images',
+                          steps: progressSteps.filter((step) => step.nodeType === 'image_generation'),
+                        },
+                        {
+                          label: 'Render',
+                          steps: progressSteps.filter((step) => step.nodeType === 'document_render' || step.nodeType === 'output_artifact'),
+                        },
+                      ].filter((stage) => stage.steps.length > 0)
+                      const isSelected = selectedOutputRequest?.id === request.id
+                      const progressPercent = progressSteps.length > 0 ? Math.round((completedCount / progressSteps.length) * 100) : 0
+                      return (
+                        <article className={`outputs-request-row ${isSelected ? 'is-selected' : ''} is-${statusClass(rowStatus)}`} key={request.id}>
+                          <button
+                            className="outputs-request-main"
+                            type="button"
+                            onClick={() => {
+                              setSelectedRequestId(request.id)
+                              if (request.latestRunId) setActiveRunId(request.latestRunId)
+                              if (request.workflowId) setSelectedNodeKey(null)
+                            }}
+                          >
+                            <span
+                              className={`outputs-request-preview ${imageUrl ? 'has-image' : ''}`}
+                              style={imageAspectRatio ? { aspectRatio: imageAspectRatio } : undefined}
+                            >
+                              {imageUrl ? <img src={imageUrl} alt="" loading="lazy" /> : <span className={`outputs-status-icon is-${statusClass(rowStatus)}`} aria-hidden="true" />}
+                            </span>
+                            <span className="outputs-request-content">
+                              <span className="outputs-request-kicker">
+                                <small>{outputKindLabel(request.outputKind)}</small>
+                                <small>{requestWorkflow ? workflowPresetLabel(requestWorkflow.preset) : formatStatus(request.status)}</small>
+                                <small>{formatStatus(rowStatus)}</small>
+                              </span>
+                              <strong>{request.title}</strong>
+                              <em>{request.prompt}</em>
+                              <span className="outputs-request-context">
+                                {request.selectedEntityKeys.slice(0, 3).map((key) => <small key={key}>{key}</small>)}
+                                {request.selectedSequenceUnitKeys.slice(0, 2).map((key) => <small key={key}>{key}</small>)}
+                                {request.pageCount ? <small>{request.pageCount} pages</small> : null}
+                              </span>
+                              <span className="outputs-row-workflow" aria-label="Workflow stage summary">
+                                {rowStageSummary.length > 0 ? rowStageSummary.map((stage) => (
+                                  <small className={`is-${compactStatusForSteps(stage.steps)}`} key={stage.label}>
+                                    <i aria-hidden="true" />
+                                    {stage.label}
+                                    <b>{stage.steps.filter((step) => {
+                                      const status = String(step.status)
+                                      return status === 'completed' || status === 'skipped'
+                                    }).length}/{stage.steps.length}</b>
+                                  </small>
+                                )) : (
+                                  <small className="is-empty"><i aria-hidden="true" />Planning<b>0/0</b></small>
+                                )}
+                              </span>
+                            </span>
+                          </button>
+                          <div className="outputs-request-side">
+                            <div className="outputs-request-progress">
+                              <span>{progressSteps.length > 0 ? `${completedCount}/${progressSteps.length} nodes` : formatStatus(request.status)}</span>
+                              <i style={{ ['--progress' as string]: `${progressPercent}%` }} />
+                            </div>
+                            {activeStep ? <small>{activeStep.label}</small> : failedCount > 0 ? <small>{failedCount} nodes need attention</small> : <small>{requestPrimaryArtifact ? requestPrimaryArtifact.name : 'Waiting for artifact'}</small>}
+                            <div className="outputs-request-actions">
+                              {requestPrimaryArtifact && primaryUrl && primaryActionLabels ? <a className="outputs-secondary-action outputs-compact-action" href={primaryUrl} target="_blank" rel="noreferrer">{primaryActionLabels.open}</a> : null}
+                              {requestPrimaryArtifact && primaryUrl && primaryActionLabels ? (
+                                <button
+                                  className="outputs-secondary-action outputs-compact-action"
+                                  disabled={downloadingArtifactKey === requestPrimaryArtifact.key}
+                                  type="button"
+                                  onClick={() => downloadArtifact(primaryUrl, requestPrimaryArtifact.name, primaryActionLabels.extension, primaryMimeType, requestPrimaryArtifact.key)}
+                                >
+                                  {downloadingArtifactKey === requestPrimaryArtifact.key ? 'Downloading...' : 'Download'}
+                                </button>
+                              ) : null}
+                              <button
+                                className="outputs-secondary-action outputs-compact-action"
+                                disabled={busyRequestId === request.id}
+                                onClick={async () => {
+                                  setSelectedRequestId(request.id)
+                                  if (request.latestRunId) setActiveRunId(request.latestRunId)
+                                  setBusyRequestId(request.id)
+                                  setError(null)
+                                  try {
+                                    await pollRequest(request.id)
+                                    await onRefreshLiveSnapshot()
+                                  } catch (requestError) {
+                                    setError(requestError instanceof Error ? requestError.message : 'Could not refresh output request.')
+                                  } finally {
+                                    setBusyRequestId(null)
+                                  }
+                                }}
+                                type="button"
+                              >
+                                {busyRequestId === request.id ? 'Refreshing...' : 'Details'}
+                              </button>
+                              {requestWorkflow ? (
+                                <button
+                                  className="outputs-secondary-action outputs-compact-action"
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedRequestId(request.id)
+                                    if (request.latestRunId) setActiveRunId(request.latestRunId)
+                                    openOutputGraph()
+                                  }}
+                                >
+                                  Graph
+                                </button>
+                              ) : null}
+                              {!requestRun || isTerminalOutputWorkflowRunStatus(requestRun.status) ? null : (
+                                <button
+                                  className="outputs-secondary-action outputs-compact-action"
+                                  disabled={busyRequestId === request.id}
+                                  onClick={async () => {
+                                    setBusyRequestId(request.id)
+                                    setError(null)
+                                    try {
+                                      await onCancelOutputRequest(request.id)
+                                      await onRefreshLiveSnapshot()
+                                    } catch (requestError) {
+                                      setError(requestError instanceof Error ? requestError.message : 'Could not cancel output request.')
+                                    } finally {
+                                      setBusyRequestId(null)
+                                    }
+                                  }}
+                                  type="button"
+                                >
+                                  Cancel
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </article>
+                      )
+                    })}
+                  </div>
+                )}
+              </section>
+            </main>
+
+            <aside className="outputs-results-rail">
+              <section className="outputs-panel outputs-run-card">
               <div className="outputs-panel-heading">
                 <div>
                   <p className="outputs-eyebrow">Run</p>
@@ -1047,9 +1447,6 @@ export function OutputsWorkspace({
                 ) : null}
               </div>
             </section>
-          </aside>
-
-          <main className="outputs-production-main">
             <section className="outputs-panel outputs-workflow-board">
               <div className="outputs-panel-heading">
                 <div>
@@ -1167,10 +1564,7 @@ export function OutputsWorkspace({
                 ))}
               </div>
             </section>
-          </main>
-
-          <aside className="outputs-results-rail">
-            <section className="outputs-panel outputs-artifacts">
+            <section className="outputs-panel outputs-artifacts outputs-detail-artifacts">
               <div className="outputs-panel-heading">
                 <div>
                   <p className="outputs-eyebrow">Results</p>
@@ -1344,8 +1738,9 @@ export function OutputsWorkspace({
                 <p className="outputs-muted">Select a workflow node to inspect output, guidance, cache state, provider metadata, and local run actions.</p>
               )}
             </section>
-          </aside>
-        </div>
+            </aside>
+          </div>
+        </>
       )}
     </div>
   )

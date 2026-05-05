@@ -94,6 +94,7 @@ import { applyPatchOperations } from './domain/patchUtils'
 import { getResolvedDefinition3dBinding, getResolvedRender3dBinding } from './domain/render3d'
 import type { PromptPatchResponse } from './domain/prompting'
 import { normalizeNode } from './domain/nodeLibrary'
+import { classifyOutputPrompt } from './domain/outputWorkflow'
 import type { MeshGenerationStatusResponse } from './domain/meshGeneration'
 import { isTerminalMeshGenerationJobStatus } from './domain/meshGeneration'
 import type { WorldBuildBatch, WorldBuildPlanItem, WorldBuildPlanResponse, WorldBuildStatusResponse } from './domain/worldBuild'
@@ -3939,6 +3940,40 @@ export default function App() {
       throw new Error('World prompt sessions require a live Supabase-backed draft.')
     }
     const syncedSnapshot = await syncWorldGraphBackfillIfNeeded(snapshot)
+    const outputIntent = classifyOutputPrompt(input.prompt)
+    if (!input.selectedSuggestionId && outputIntent.intent === 'output_generation' && outputIntent.confidence >= 0.7) {
+      const outputResult = await workspaceService.startOutputRequest(syncedSnapshot, {
+        prompt: input.prompt,
+        sourceSurface: 'world_prompt',
+      })
+      const nextSnapshot = normalizeSnapshot({
+        ...syncedSnapshot,
+        outputRequests: [
+          outputResult.request,
+          ...syncedSnapshot.outputRequests.filter((request) => request.id !== outputResult.request.id),
+        ],
+        outputWorkflows: outputResult.workflow
+          ? [outputResult.workflow, ...syncedSnapshot.outputWorkflows.filter((workflow) => workflow.id !== outputResult.workflow?.id)]
+          : syncedSnapshot.outputWorkflows,
+        outputWorkflowNodes: outputResult.workflow
+          ? [...syncedSnapshot.outputWorkflowNodes.filter((node) => node.workflowId !== outputResult.workflow?.id), ...outputResult.nodes]
+          : syncedSnapshot.outputWorkflowNodes,
+        outputWorkflowEdges: outputResult.workflow
+          ? [...syncedSnapshot.outputWorkflowEdges.filter((edge) => edge.workflowId !== outputResult.workflow?.id), ...outputResult.edges]
+          : syncedSnapshot.outputWorkflowEdges,
+        outputWorkflowRuns: outputResult.run
+          ? [outputResult.run, ...syncedSnapshot.outputWorkflowRuns.filter((run) => run.id !== outputResult.run?.id)]
+          : syncedSnapshot.outputWorkflowRuns,
+        outputArtifacts: outputResult.artifacts.length > 0
+          ? [...outputResult.artifacts, ...syncedSnapshot.outputArtifacts.filter((artifact) => !outputResult.artifacts.some((entry) => entry.id === artifact.id))]
+          : syncedSnapshot.outputArtifacts,
+      })
+      snapshotRef.current = nextSnapshot
+      setSnapshot(nextSnapshot)
+      setBundle(compileBundle(nextSnapshot))
+      setActiveTab('outputs')
+      return
+    }
     const result = await workspaceService.startWorldPromptTurn(syncedSnapshot, {
       prompt: input.prompt,
       model: promptModel,
@@ -4290,6 +4325,88 @@ export default function App() {
           ],
         })
       }
+    }
+    return result
+  }
+
+  async function startOutputRequest(request: Parameters<typeof workspaceService.startOutputRequest>[1]) {
+    if (!snapshot) {
+      throw new Error('Load a live GraphCore draft before creating an output request.')
+    }
+    if (loadedState?.source !== 'supabase') {
+      throw new Error('Output requests require a live Supabase-backed draft.')
+    }
+    const result = await workspaceService.startOutputRequest(snapshot, request)
+    const current = snapshotRef.current ?? snapshot
+    commitPersistedSnapshot({
+      ...current,
+      outputRequests: [
+        result.request,
+        ...current.outputRequests.filter((entry) => entry.id !== result.request.id),
+      ],
+      outputWorkflows: result.workflow
+        ? [result.workflow, ...current.outputWorkflows.filter((workflow) => workflow.id !== result.workflow?.id)]
+        : current.outputWorkflows,
+      outputWorkflowNodes: result.workflow
+        ? [...current.outputWorkflowNodes.filter((node) => node.workflowId !== result.workflow?.id), ...result.nodes]
+        : current.outputWorkflowNodes,
+      outputWorkflowEdges: result.workflow
+        ? [...current.outputWorkflowEdges.filter((edge) => edge.workflowId !== result.workflow?.id), ...result.edges]
+        : current.outputWorkflowEdges,
+      outputWorkflowRuns: result.run
+        ? [result.run, ...current.outputWorkflowRuns.filter((run) => run.id !== result.run?.id)]
+        : current.outputWorkflowRuns,
+      outputArtifacts: result.artifacts.length > 0
+        ? [...result.artifacts, ...current.outputArtifacts.filter((artifact) => !result.artifacts.some((entry) => entry.id === artifact.id))]
+        : current.outputArtifacts,
+    })
+    return result
+  }
+
+  async function getOutputRequestStatus(requestId: string) {
+    const result = await workspaceService.getOutputRequestStatus(requestId)
+    const current = snapshotRef.current
+    if (current) {
+      commitPersistedSnapshot({
+        ...current,
+        outputRequests: [
+          result.request,
+          ...current.outputRequests.filter((entry) => entry.id !== result.request.id),
+        ],
+        outputWorkflows: result.workflow
+          ? [result.workflow, ...current.outputWorkflows.filter((workflow) => workflow.id !== result.workflow?.id)]
+          : current.outputWorkflows,
+        outputWorkflowNodes: result.workflow
+          ? [...current.outputWorkflowNodes.filter((node) => node.workflowId !== result.workflow?.id), ...result.nodes]
+          : current.outputWorkflowNodes,
+        outputWorkflowEdges: result.workflow
+          ? [...current.outputWorkflowEdges.filter((edge) => edge.workflowId !== result.workflow?.id), ...result.edges]
+          : current.outputWorkflowEdges,
+        outputWorkflowRuns: result.run
+          ? [result.run, ...current.outputWorkflowRuns.filter((run) => run.id !== result.run?.id)]
+          : current.outputWorkflowRuns,
+        outputArtifacts: result.artifacts.length > 0
+          ? [...result.artifacts, ...current.outputArtifacts.filter((artifact) => !result.artifacts.some((entry) => entry.id === artifact.id))]
+          : current.outputArtifacts,
+      })
+    }
+    return result
+  }
+
+  async function cancelOutputRequest(requestId: string) {
+    const result = await workspaceService.cancelOutputRequest(requestId)
+    const current = snapshotRef.current
+    if (current) {
+      commitPersistedSnapshot({
+        ...current,
+        outputRequests: [
+          result.request,
+          ...current.outputRequests.filter((entry) => entry.id !== result.request.id),
+        ],
+        outputWorkflowRuns: result.run
+          ? [result.run, ...current.outputWorkflowRuns.filter((run) => run.id !== result.run?.id)]
+          : current.outputWorkflowRuns,
+      })
     }
     return result
   }
@@ -6360,10 +6477,13 @@ export default function App() {
               <OutputsWorkspace
                 canRunOutputs={loadedState?.source === 'supabase'}
                 snapshot={snapshot}
+                onCancelOutputRequest={cancelOutputRequest}
                 onCancelOutputWorkflowRun={cancelOutputWorkflowRun}
+                onGetOutputRequestStatus={getOutputRequestStatus}
                 onGetOutputWorkflowStatus={getOutputWorkflowStatus}
                 onPlanOutputWorkflow={planOutputWorkflow}
                 onRefreshLiveSnapshot={refreshLiveSnapshot}
+                onStartOutputRequest={startOutputRequest}
                 onStartOutputWorkflow={startOutputWorkflow}
                 onStartOutputWorkflowRun={startOutputWorkflowRun}
                 onUpdateOutputWorkflowNode={updateOutputWorkflowNode}
@@ -6606,7 +6726,7 @@ export default function App() {
           </Suspense>
         </section>
 
-        {activeTab !== 'graph' ? (
+        {activeTab !== 'graph' && activeTab !== 'outputs' ? (
           <Suspense fallback={null}>
             <PromptDock
               activeTab={activeTab}

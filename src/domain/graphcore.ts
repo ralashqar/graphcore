@@ -21,6 +21,7 @@ import {
 } from './cinematics.ts'
 import {
   outputArtifactSchema,
+  outputRequestSchema,
   outputWorkflowEdgeSchema,
   outputWorkflowNodeSchema,
   outputWorkflowRunSchema,
@@ -760,6 +761,7 @@ export const projectSnapshotSchema = z.object({
   outputWorkflowEdges: z.array(outputWorkflowEdgeSchema).default([]),
   outputWorkflowRuns: z.array(outputWorkflowRunSchema).default([]),
   outputArtifacts: z.array(outputArtifactSchema).default([]),
+  outputRequests: z.array(outputRequestSchema).default([]),
   patchSets: z.array(
     z.object({
       id: z.string(),

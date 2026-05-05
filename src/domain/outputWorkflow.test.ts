@@ -5,11 +5,14 @@ import {
   buildOutputGuidanceBundleForNode,
   buildOutputWorkflowExecutionPlan,
   buildOutputWorkflowFingerprint,
+  bindOutputPromptWorldScope,
+  classifyOutputPrompt,
   defaultOutputWorkflowConcurrency,
   getOutputWorkflowNodeExecutionMetadata,
   markDirtyOutputWorkflowNodes,
   outputWorkflowNodeRegistry,
   outputWorkflowPlanRequestSchema,
+  planOutputRequestWorkflow,
   planOutputWorkflow,
   runOutputWorkflowReadyQueue,
   selectOutputWorkflowRunSubgraph,
@@ -150,6 +153,37 @@ test('output skill resolution supports explicit keys, auto tags, world metadata,
   assert.ok(bundle.guidance.some((entry) => entry.includes('Tone tags')))
   assert.ok(bundle.guidance.some((entry) => entry.includes('Project narration POV')))
   assert.equal(bundle.guidanceHash, repeatHash)
+})
+
+test('prompt-first output router classifies output prompts and binds mentioned entities', () => {
+  const classification = classifyOutputPrompt('Make a poster image of Mara in The Archive')
+  assert.equal(classification.intent, 'output_generation')
+  assert.equal(classification.outputKind, 'poster_image')
+
+  const scope = bindOutputPromptWorldScope({
+    prompt: 'Make a poster image of Mara in The Archive',
+    worldEntities: snapshot.worldEntities,
+  })
+  assert.deepEqual(scope.selectedEntityKeys.sort(), ['archive', 'hero'])
+})
+
+test('prompt-first image requests use approved workflow nodes only', () => {
+  const plan = planOutputRequestWorkflow({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    prompt: 'Make a poster image of Mara in The Archive',
+    targetFormat: 'image',
+    snapshot,
+  }, 'poster_image')
+
+  assert.equal(plan.preset, 'composite_reference')
+  assert.deepEqual(plan.nodes.map((node) => node.key), ['world_context', 'skill_context', 'visual_prompt', 'image_references', 'generated_image'])
+  assert.equal(readConfigPurpose(plan.nodes.find((node) => node.key === 'visual_prompt') ?? {}), 'poster_prompt')
+  assert.equal(readConfigPurpose(plan.nodes.find((node) => node.key === 'image_references') ?? {}), 'image_reference_selector')
+  assert.equal(readConfigPurpose(plan.nodes.find((node) => node.key === 'generated_image') ?? {}), 'poster_image')
+  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'image_references' && edge.sourcePort === 'asset_pack' && edge.targetNodeKey === 'generated_image' && edge.targetPort === 'references'))
+  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'image_references' && edge.sourcePort === 'asset_pack' && edge.targetNodeKey === 'visual_prompt' && edge.targetPort === 'asset_pack'))
+  assert.equal(validateOutputWorkflowGraph({ nodes: plan.nodes, edges: plan.edges }).ok, true)
 })
 
 test('validates DAG ordering and rejects cycles', () => {

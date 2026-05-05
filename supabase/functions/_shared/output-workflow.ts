@@ -9,6 +9,7 @@ import {
   isTerminalOutputWorkflowRunStatus,
   outputArtifactSchema,
   outputArtifactResponseSchema,
+  outputRequestSchema,
   outputWorkflowCancelResponseSchema,
   outputWorkflowEdgeSchema,
   outputWorkflowPlanRequestSchema,
@@ -23,6 +24,7 @@ import {
   topologicallySortOutputWorkflow,
   validateOutputWorkflowGraph,
   type OutputArtifact,
+  type OutputRequest,
   type OutputWorkflow,
   type OutputWorkflowEdge,
   type OutputWorkflowNode,
@@ -98,6 +100,7 @@ export const outputWorkflowEdgeSelect = 'id, workflow_id, key, source_node_key, 
 export const outputWorkflowRunSelect = 'id, project_id, draft_id, workflow_id, requested_by, status, preset, prompt, target_format, world_snapshot_fingerprint, input, outputs, error_message, worker_id, heartbeat_at, attempt_count, metadata, started_at, completed_at, created_at, updated_at'
 export const outputWorkflowRunStepSelect = 'id, run_id, workflow_id, node_id, node_key, node_type, status, order_index, label, input_hash, output_hash, outputs, provider, model, provider_request_id, error_message, metadata, started_at, completed_at, created_at, updated_at'
 export const outputArtifactSelect = 'id, project_id, draft_id, workflow_id, run_id, node_id, key, name, kind, asset_key, mime_type, summary, metadata, created_at, updated_at'
+export const outputRequestSelect = 'id, project_id, draft_id, workflow_id, latest_run_id, requested_by, source_surface, prompt, title, intent, output_kind, status, selected_entity_keys, selected_sequence_unit_keys, page_count, target_format, planner_notes, error_message, metadata, created_at, updated_at'
 
 type OutputWorkflowRow = {
   id: string
@@ -211,6 +214,30 @@ type OutputArtifactRow = {
   updated_at: string
 }
 
+type OutputRequestRow = {
+  id: string
+  project_id: string
+  draft_id: string
+  workflow_id: string | null
+  latest_run_id: string | null
+  requested_by: string | null
+  source_surface: string | null
+  prompt: string | null
+  title: string | null
+  intent: string | null
+  output_kind: string | null
+  status: string | null
+  selected_entity_keys: string[] | null
+  selected_sequence_unit_keys: string[] | null
+  page_count: number | null
+  target_format: string | null
+  planner_notes: string | null
+  error_message: string | null
+  metadata: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 }
@@ -257,6 +284,32 @@ export function mapOutputWorkflowNodeRow(row: OutputWorkflowNodeRow): OutputWork
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
+}
+
+export function mapOutputRequestRow(row: OutputRequestRow): OutputRequest {
+  return outputRequestSchema.parse({
+    id: row.id,
+    projectId: row.project_id,
+    draftId: row.draft_id,
+    workflowId: row.workflow_id,
+    latestRunId: row.latest_run_id,
+    requestedBy: row.requested_by,
+    sourceSurface: row.source_surface ?? 'outputs',
+    prompt: row.prompt ?? '',
+    title: row.title ?? 'Untitled output',
+    intent: row.intent ?? 'output_generation',
+    outputKind: row.output_kind ?? 'unknown',
+    status: row.status ?? 'queued',
+    selectedEntityKeys: row.selected_entity_keys ?? [],
+    selectedSequenceUnitKeys: row.selected_sequence_unit_keys ?? [],
+    pageCount: row.page_count,
+    targetFormat: row.target_format ?? 'pdf',
+    plannerNotes: row.planner_notes ?? '',
+    errorMessage: row.error_message,
+    metadata: row.metadata ?? {},
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  })
 }
 
 export function mapOutputWorkflowEdgeRow(row: OutputWorkflowEdgeRow): OutputWorkflowEdge {
@@ -1411,6 +1464,28 @@ function buildDeterministicComicAssetPack(context: Record<string, unknown>) {
     visualDescription: readText(asRecord(entity.metadata).visualDescription) || readText(entity.context),
     assetKeys: entityAssetKeys(entity, assets),
   })).filter((entity) => entity.key || entity.name)
+  return {
+    entities: packedEntities,
+    missingReferenceEntityKeys: packedEntities.filter((entity) => entity.assetKeys.length === 0).map((entity) => entity.key),
+  }
+}
+
+function buildDeterministicImageAssetPack(context: Record<string, unknown>, limit = 8) {
+  const entities = Array.isArray(context.entities) ? context.entities.map(asRecord) : []
+  const assets = Array.isArray(context.assets) ? context.assets.map(asRecord) : []
+  const packedEntities = entities.slice(0, limit).map((entity) => {
+    const metadata = asRecord(entity.metadata)
+    const visualDescription = readText(metadata.visualDescription) || readText(entity.visualDescription) || readText(entity.summary) || readText(entity.context)
+    return {
+      key: readText(entity.key),
+      name: readText(entity.name),
+      type: readText(entity.nodeType ?? entity.node_type),
+      role: readText(entity.nodeType ?? entity.node_type),
+      summary: readText(entity.summary),
+      visualDescription,
+      assetKeys: entityAssetKeys(entity, assets),
+    }
+  }).filter((entity) => entity.key || entity.name)
   return {
     entities: packedEntities,
     missingReferenceEntityKeys: packedEntities.filter((entity) => entity.assetKeys.length === 0).map((entity) => entity.key),
@@ -2971,6 +3046,55 @@ async function executeNode(input: {
         const text = chapterPlan.map((chapter) => `${chapter.number}. ${chapter.title}: ${chapter.synopsis}`).join('\n')
         const outputs = { chapterPlan, plan: chapterPlan, text, guidance }
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-chapter-plan-v1' }
+      }
+      if (purpose === 'concept_art_prompt' || purpose === 'poster_prompt') {
+        const worldWiki = asRecord(context.worldWiki ?? context.wiki)
+        const title = readText(worldWiki.title) || titleFromContext(context)
+        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+        const packedEntities = Array.isArray(assetPack.entities) ? assetPack.entities.map(asRecord) : []
+        const entities = packedEntities.length > 0
+          ? packedEntities.slice(0, 10)
+          : Array.isArray(context.entities) ? context.entities.map(asRecord).slice(0, 10) : []
+        const entityLines = entities
+          .map((entity) => {
+            const name = readText(entity.name)
+            const visualDescription = readText(entity.visualDescription) || readText(entity.summary) || readText(entity.context)
+            const assetKeys = readStringArray(entity.assetKeys)
+            const assetNote = assetKeys.length > 0 ? ` Reference image asset: ${assetKeys.join(', ')}.` : ''
+            return name ? `- ${name}: ${visualDescription}${assetNote}` : ''
+          })
+          .filter(Boolean)
+          .join('\n')
+        const visualStyle = readText(worldWiki.artStyleDescription) || readText(worldWiki.visualStyle) || ''
+        const kind = purpose === 'poster_prompt' ? 'finished vertical poster/key art' : 'production concept art image'
+        const text = [
+          `Create a ${kind} for "${title}".`,
+          `User request: ${prompt}`,
+          visualStyle ? `World visual style: ${visualStyle}` : '',
+          entityLines ? `Canonical subjects:\n${entityLines}` : '',
+          'Use exact canonical visual details. Keep the prompt visual-only. Do not mention GraphCore, schemas, nodes, world graph, internal keys, or implementation details.',
+          purpose === 'poster_prompt'
+            ? `If visible typography is needed, use the exact title text "${title}" and keep all other text minimal.`
+            : 'No captions or UI text unless the user explicitly requested visible typography.',
+        ].filter(Boolean).join('\n\n')
+        const outputs = { text, prompt: text, assetPack, asset_pack: assetPack, guidance }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-visual-prompt-v1' }
+      }
+      if (purpose === 'image_reference_selector') {
+        const assetPack = buildDeterministicImageAssetPack(context)
+        const outputs = {
+          assetPack,
+          asset_pack: assetPack,
+          text: JSON.stringify(assetPack, null, 2),
+          guidance,
+        }
+        return {
+          inputHash: input.inputHash,
+          outputHash: hashOutputWorkflowValue(outputs),
+          outputs,
+          provider: 'graphcore',
+          model: 'deterministic-image-asset-pack-v1',
+        }
       }
       if (purpose === 'comic_entity_selector') {
         const fallbackPack = buildDeterministicComicAssetPack(context)

@@ -28,6 +28,19 @@ export const outputWorkflowNodeTypeSchema = z.enum([
 ])
 export const outputWorkflowRunStatusSchema = z.enum(['queued', 'running', 'completed', 'completed_with_errors', 'failed', 'cancelled'])
 export const outputWorkflowArtifactKindSchema = z.enum(['manuscript', 'pdf', 'epub', 'docx', 'comic_pdf', 'video', 'image', 'package', 'other'])
+export const outputRequestStatusSchema = z.enum(['queued', 'planning', 'awaiting_confirmation', 'running', 'completed', 'completed_with_errors', 'failed', 'cancelled'])
+export const outputRequestIntentSchema = z.enum(['world_mutation', 'output_generation', 'answer_only', 'ambiguous'])
+export const outputRequestKindSchema = z.enum([
+  'concept_art_image',
+  'poster_image',
+  'short_story',
+  'ebook_from_world',
+  'comic_issue_from_sequence',
+  'cinematic_episode',
+  'cinematic_trailer',
+  'ugc_episode',
+  'unknown',
+])
 export const outputWorkflowPresetSchema = z.enum([
   'ebook_from_world',
   'comic_issue_from_sequence',
@@ -84,8 +97,12 @@ export const outputWorkflowNodeRegistry = {
       { id: 'context', label: 'Context', direction: 'input', valueType: 'world_context', multiple: false, required: true },
       { id: 'guidance', label: 'Guidance', direction: 'input', valueType: 'guidance_bundle', multiple: false, required: false },
       { id: 'prompt', label: 'Prompt', direction: 'input', valueType: 'text', multiple: false, required: true },
+      { id: 'asset_pack', label: 'Asset Pack', direction: 'input', valueType: 'asset_pack', multiple: false, required: false },
     ],
-    outputPorts: [{ id: 'text', label: 'Text', direction: 'output', valueType: 'text', multiple: false, required: true }],
+    outputPorts: [
+      { id: 'text', label: 'Text', direction: 'output', valueType: 'text', multiple: false, required: true },
+      { id: 'asset_pack', label: 'Asset Pack', direction: 'output', valueType: 'asset_pack', multiple: false, required: false },
+    ],
     providerBacked: true,
   },
   image_generation: {
@@ -244,6 +261,30 @@ export const outputArtifactSchema = z.object({
   updatedAt: z.string(),
 })
 
+export const outputRequestSchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  draftId: z.string(),
+  workflowId: z.string().nullable().default(null),
+  latestRunId: z.string().nullable().default(null),
+  requestedBy: z.string().nullable().default(null),
+  sourceSurface: z.string().default('outputs'),
+  prompt: z.string().default(''),
+  title: z.string().default('Untitled output'),
+  intent: outputRequestIntentSchema.default('output_generation'),
+  outputKind: outputRequestKindSchema.default('unknown'),
+  status: outputRequestStatusSchema.default('queued'),
+  selectedEntityKeys: z.array(z.string()).default([]),
+  selectedSequenceUnitKeys: z.array(z.string()).default([]),
+  pageCount: z.number().int().positive().nullable().default(null),
+  targetFormat: z.string().default('pdf'),
+  plannerNotes: z.string().default(''),
+  errorMessage: z.string().nullable().default(null),
+  metadata: looseRecordSchema.default({}),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+})
+
 export const outputWorkflowRunSchema = z.object({
   id: z.string(),
   projectId: z.string(),
@@ -282,7 +323,7 @@ export const outputWorkflowPlanRequestSchema = z.object({
   prompt: z.string().default(''),
   selectedEntityKeys: z.array(z.string()).default([]),
   selectedSequenceUnitKeys: z.array(z.string()).default([]),
-  targetFormat: z.enum(['pdf', 'epub', 'docx', 'markdown']).default('pdf'),
+  targetFormat: z.enum(['pdf', 'epub', 'docx', 'markdown', 'image']).default('pdf'),
   preset: outputWorkflowPresetSchema.optional(),
   pageCount: z.number().int().min(1).max(12).default(8),
   snapshot: z.object({
@@ -302,6 +343,23 @@ export const outputWorkflowPlanRequestSchema = z.object({
     worldThreads: z.array(worldThreadSchema).default([]),
     worldWiki: worldWikiPresentationMetadataSchema.default({}),
   }),
+})
+
+export const outputRequestStartRequestSchema = z.object({
+  projectId: z.string().min(1),
+  draftId: z.string().min(1),
+  prompt: z.string().trim().min(1).max(12000),
+  sourceSurface: z.string().trim().min(1).max(64).default('outputs'),
+  selectedEntityKeys: z.array(z.string()).default([]),
+  selectedSequenceUnitKeys: z.array(z.string()).default([]),
+  targetFormat: z.enum(['pdf', 'epub', 'docx', 'markdown', 'image']).default('pdf'),
+  pageCount: z.number().int().min(1).max(12).default(8),
+  snapshot: outputWorkflowPlanRequestSchema.shape.snapshot,
+  runInput: looseRecordSchema.default({}),
+})
+
+export const outputRequestStatusRequestSchema = z.object({
+  requestId: z.string().min(1),
 })
 
 export const outputWorkflowPlanResponseSchema = z.object({
@@ -343,12 +401,23 @@ export const outputWorkflowStartResponseSchema = z.object({
   edges: z.array(outputWorkflowEdgeSchema),
 })
 
+export const outputRequestStatusResponseSchema = z.object({
+  ok: z.literal(true),
+  request: outputRequestSchema,
+  workflow: outputWorkflowSchema.nullable().default(null),
+  nodes: z.array(outputWorkflowNodeSchema).default([]),
+  edges: z.array(outputWorkflowEdgeSchema).default([]),
+  run: outputWorkflowRunSchema.nullable().default(null),
+  artifacts: z.array(outputArtifactSchema).default([]),
+  terminal: z.boolean().default(false),
+})
+
 export const outputWorkflowRunStartRequestSchema = z.object({
   projectId: z.string().min(1),
   draftId: z.string().min(1),
   workflowId: z.string().min(1),
   prompt: z.string().default(''),
-  targetFormat: z.enum(['pdf', 'epub', 'docx', 'markdown']).default('pdf'),
+  targetFormat: z.enum(['pdf', 'epub', 'docx', 'markdown', 'image']).default('pdf'),
   input: looseRecordSchema.default({}),
   metadata: z.object({
     runScope: outputWorkflowRunScopeSchema.optional(),
@@ -998,6 +1067,84 @@ const EBOOK_CHAPTER_FANOUT_LIMIT = 24
 const COMIC_PAGE_FANOUT_LIMIT = 12
 const DEFAULT_COMIC_PAGE_COUNT = 8
 
+const IMAGE_OUTPUT_ENTITY_LIMIT = 12
+
+function promptIncludesAny(prompt: string, terms: string[]) {
+  return terms.some((term) => prompt.includes(term))
+}
+
+export function classifyOutputPrompt(prompt: string): {
+  intent: z.infer<typeof outputRequestIntentSchema>
+  outputKind: z.infer<typeof outputRequestKindSchema>
+  confidence: number
+  notes: string
+} {
+  const lowerPrompt = prompt.toLowerCase()
+  if (!lowerPrompt.trim()) {
+    return { intent: 'ambiguous', outputKind: 'unknown', confidence: 0, notes: 'Empty prompt.' }
+  }
+  if (promptIncludesAny(lowerPrompt, ['create', 'make', 'generate', 'render', 'write', 'draft', 'produce', 'export'])) {
+    if (promptIncludesAny(lowerPrompt, ['comic', 'manga', 'graphic novel', 'issue'])) {
+      return { intent: 'output_generation', outputKind: 'comic_issue_from_sequence', confidence: 0.86, notes: 'Prompt asks for a comic-style output.' }
+    }
+    if (promptIncludesAny(lowerPrompt, ['ebook', 'book', 'novel', 'pdf', 'manuscript'])) {
+      return { intent: 'output_generation', outputKind: 'ebook_from_world', confidence: 0.84, notes: 'Prompt asks for a book/document output.' }
+    }
+    if (promptIncludesAny(lowerPrompt, ['short story', 'story excerpt', 'scene prose'])) {
+      return { intent: 'output_generation', outputKind: 'short_story', confidence: 0.8, notes: 'Prompt asks for a prose output.' }
+    }
+    if (promptIncludesAny(lowerPrompt, ['poster', 'cover image', 'key art', 'one sheet'])) {
+      return { intent: 'output_generation', outputKind: 'poster_image', confidence: 0.82, notes: 'Prompt asks for poster/key art.' }
+    }
+    if (promptIncludesAny(lowerPrompt, ['concept art', 'image', 'illustration', 'portrait', 'character art', 'environment art'])) {
+      return { intent: 'output_generation', outputKind: 'concept_art_image', confidence: 0.78, notes: 'Prompt asks for a generated image.' }
+    }
+    if (promptIncludesAny(lowerPrompt, ['cinematic', 'trailer', 'video', 'shot', 'episode'])) {
+      return { intent: 'output_generation', outputKind: lowerPrompt.includes('trailer') ? 'cinematic_trailer' : 'cinematic_episode', confidence: 0.7, notes: 'Prompt asks for a video/cinematic output; V1 will route to approved output templates.' }
+    }
+  }
+  if (promptIncludesAny(lowerPrompt, ['add to world', 'change canon', 'create character', 'add character', 'update entity', 'expand world'])) {
+    return { intent: 'world_mutation', outputKind: 'unknown', confidence: 0.72, notes: 'Prompt appears to ask for canon/world graph mutation.' }
+  }
+  if (promptIncludesAny(lowerPrompt, ['what is', 'explain', 'summarize', 'why', 'how does'])) {
+    return { intent: 'answer_only', outputKind: 'unknown', confidence: 0.65, notes: 'Prompt appears to ask for an answer, not an output artifact.' }
+  }
+  return { intent: 'ambiguous', outputKind: 'unknown', confidence: 0.35, notes: 'The prompt could be an output request or a world-authoring request.' }
+}
+
+function normalizePromptToken(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+}
+
+export function bindOutputPromptWorldScope(input: {
+  prompt: string
+  worldEntities: z.infer<typeof worldEntitySchema>[]
+  selectedEntityKeys?: string[]
+  selectedSequenceUnitKeys?: string[]
+}) {
+  const promptText = ` ${normalizePromptToken(input.prompt)} `
+  const selectedEntityKeys = new Set(input.selectedEntityKeys ?? [])
+  const selectedSequenceUnitKeys = new Set(input.selectedSequenceUnitKeys ?? [])
+  for (const entity of input.worldEntities) {
+    const name = normalizePromptToken(entity.name)
+    if (name && promptText.includes(` ${name} `)) {
+      if (entity.nodeType === 'sequence_unit') selectedSequenceUnitKeys.add(entity.key)
+      else selectedEntityKeys.add(entity.key)
+    }
+    for (const alias of entity.aliases) {
+      const normalizedAlias = normalizePromptToken(alias)
+      if (normalizedAlias && promptText.includes(` ${normalizedAlias} `)) {
+        if (entity.nodeType === 'sequence_unit') selectedSequenceUnitKeys.add(entity.key)
+        else selectedEntityKeys.add(entity.key)
+      }
+    }
+  }
+  return {
+    selectedEntityKeys: [...selectedEntityKeys].slice(0, IMAGE_OUTPUT_ENTITY_LIMIT),
+    selectedSequenceUnitKeys: [...selectedSequenceUnitKeys],
+  }
+}
+
 function sequenceOrdinal(entity: { customProperties?: Record<string, unknown>; name: string }) {
   const sequence = typeof entity.customProperties?.sequence === 'object' && entity.customProperties.sequence
     ? entity.customProperties.sequence as Record<string, unknown>
@@ -1629,11 +1776,164 @@ export function buildComicIssueFromSequencePlan(request: z.infer<typeof outputWo
   })
 }
 
+export function buildImageOutputPlan(
+  request: z.infer<typeof outputWorkflowPlanRequestSchema>,
+  outputKind: 'concept_art_image' | 'poster_image' = 'concept_art_image',
+) {
+  const worldWiki = request.snapshot.worldWiki
+  const boundScope = bindOutputPromptWorldScope({
+    prompt: request.prompt,
+    worldEntities: request.snapshot.worldEntities,
+    selectedEntityKeys: request.selectedEntityKeys,
+    selectedSequenceUnitKeys: request.selectedSequenceUnitKeys,
+  })
+  const selectedEntityKeys = boundScope.selectedEntityKeys.length > 0
+    ? boundScope.selectedEntityKeys
+    : request.snapshot.worldEntities.filter((entity) => entity.nodeType !== 'sequence_unit').slice(0, IMAGE_OUTPUT_ENTITY_LIMIT).map((entity) => entity.key)
+  const selectedSequenceUnitKeys = boundScope.selectedSequenceUnitKeys.slice(0, 3)
+  const title = worldWiki.title || request.snapshot.project.name
+  const poster = outputKind === 'poster_image'
+  const prompt = request.prompt.trim() || (poster
+    ? `Create a finished poster image from ${title}.`
+    : `Create concept art from ${title}.`)
+  const name = poster ? `${title} Poster Image` : `${title} Concept Art`
+  const nodes = [
+    nodeBase({
+      key: 'world_context',
+      nodeType: 'world_context_query',
+      label: 'World Context',
+      x: 80,
+      y: 140,
+      config: {
+        sourceEntityKeys: selectedEntityKeys,
+        sourceSequenceUnitKeys: selectedSequenceUnitKeys,
+        includeWiki: true,
+        includeVisualReferences: true,
+        execution: { resourceClass: 'utility' },
+      },
+    }),
+    nodeBase({
+      key: 'skill_context',
+      nodeType: 'skill_context_query',
+      label: 'Image Skills',
+      x: 80,
+      y: 300,
+      config: {
+        skillKeys: ['image_prompt_visual_only', 'entity_reference_fidelity', 'environment_staging', 'provider_prompt_hygiene'],
+        autoSkillTags: ['image_prompt', 'visual_only', 'entity_reference', 'environment', 'provider_hygiene'],
+        guidanceMode: 'strict',
+        execution: { resourceClass: 'utility' },
+      },
+    }),
+    nodeBase({
+      key: 'visual_prompt',
+      nodeType: 'text_llm',
+      label: poster ? 'Poster Prompt' : 'Image Prompt',
+      x: 360,
+      y: 120,
+      inputs: { prompt },
+      config: {
+        purpose: poster ? 'poster_prompt' : 'concept_art_prompt',
+        outputKind,
+        skillKeys: ['image_prompt_visual_only', 'entity_reference_fidelity', 'environment_staging', 'provider_prompt_hygiene'],
+        guidanceMode: 'strict',
+        execution: { resourceClass: 'llm' },
+      },
+    }),
+    nodeBase({
+      key: 'image_references',
+      nodeType: 'text_llm',
+      label: 'Image References',
+      x: 360,
+      y: 320,
+      inputs: { prompt: 'Select canonical entity image references for this image output.' },
+      config: {
+        purpose: 'image_reference_selector',
+        outputKind,
+        skillKeys: ['entity_reference_fidelity', 'provider_prompt_hygiene'],
+        guidanceMode: 'strict',
+        execution: { resourceClass: 'utility' },
+      },
+    }),
+    nodeBase({
+      key: 'generated_image',
+      nodeType: 'image_generation',
+      label: poster ? 'Poster Image' : 'Concept Image',
+      x: 660,
+      y: 180,
+      inputs: { prompt },
+      config: {
+        purpose: outputKind,
+        role: outputKind,
+        model: 'openai/gpt-image-2',
+        referenceModel: 'openai/gpt-image-2/edit',
+        quality: 'high',
+        outputFormat: 'png',
+        imageSize: poster ? { width: 1792, height: 2688 } : { width: 1536, height: 1536 },
+        skillKeys: ['image_prompt_visual_only', 'entity_reference_fidelity', 'environment_staging', 'provider_prompt_hygiene'],
+        guidanceMode: 'strict',
+        execution: { resourceClass: 'image', groupKey: outputKind, maxConcurrency: 2 },
+      },
+    }),
+  ]
+  const edges = [
+    edgeBase('world_context', 'context', 'visual_prompt', 'context'),
+    edgeBase('skill_context', 'guidance', 'visual_prompt', 'guidance'),
+    edgeBase('world_context', 'context', 'image_references', 'context'),
+    edgeBase('skill_context', 'guidance', 'image_references', 'guidance'),
+    edgeBase('image_references', 'asset_pack', 'visual_prompt', 'asset_pack'),
+    edgeBase('visual_prompt', 'text', 'generated_image', 'prompt'),
+    edgeBase('image_references', 'asset_pack', 'generated_image', 'references'),
+    edgeBase('skill_context', 'guidance', 'generated_image', 'guidance'),
+  ]
+  const graphValidation = validateOutputWorkflowGraph({ nodes, edges, worldWiki })
+  return outputWorkflowPlanResponseSchema.shape.plan.parse({
+    preset: 'composite_reference',
+    name,
+    description: poster
+      ? 'Generate poster/key art from world graph context and selected entities.'
+      : 'Generate concept art from world graph context and selected entities.',
+    prompt,
+    targetFormat: 'image',
+    sourceEntityKeys: selectedEntityKeys,
+    sourceSequenceUnitKeys: selectedSequenceUnitKeys,
+    nodes,
+    edges,
+    diagnostics: graphValidation.diagnostics,
+  })
+}
+
+export function planOutputRequestWorkflow(request: z.input<typeof outputWorkflowPlanRequestSchema>, outputKind: z.infer<typeof outputRequestKindSchema>) {
+  const parsedRequest = outputWorkflowPlanRequestSchema.parse(request)
+  if (outputKind === 'concept_art_image' || outputKind === 'poster_image') {
+    return buildImageOutputPlan(parsedRequest, outputKind)
+  }
+  if (outputKind === 'comic_issue_from_sequence') {
+    return buildComicIssueFromSequencePlan(parsedRequest)
+  }
+  if (outputKind === 'short_story') {
+    return buildEbookFromWorldPlan({
+      ...parsedRequest,
+      prompt: `${parsedRequest.prompt}\n\nOutput request: create a shorter story-style document rather than a full-length book. Keep the workflow document/PDF-oriented and preserve canon.`,
+    })
+  }
+  return planOutputWorkflow(parsedRequest)
+}
+
 export function planOutputWorkflow(request: z.input<typeof outputWorkflowPlanRequestSchema>) {
   const parsedRequest = outputWorkflowPlanRequestSchema.parse(request)
   const lowerPrompt = parsedRequest.prompt.toLowerCase()
   if (parsedRequest.preset === 'comic_issue_from_sequence' || lowerPrompt.includes('comic')) {
     return buildComicIssueFromSequencePlan(parsedRequest)
+  }
+  if (
+    parsedRequest.preset === 'composite_reference'
+    || lowerPrompt.includes('poster')
+    || lowerPrompt.includes('concept art')
+    || lowerPrompt.includes('character art')
+    || lowerPrompt.includes('environment art')
+  ) {
+    return buildImageOutputPlan(parsedRequest, lowerPrompt.includes('poster') ? 'poster_image' : 'concept_art_image')
   }
   if (
     lowerPrompt.includes('cinematic')
@@ -1655,12 +1955,16 @@ export type OutputWorkflowEdge = z.infer<typeof outputWorkflowEdgeSchema>
 export type OutputWorkflowRun = z.infer<typeof outputWorkflowRunSchema>
 export type OutputWorkflowRunStep = z.infer<typeof outputWorkflowRunStepSchema>
 export type OutputArtifact = z.infer<typeof outputArtifactSchema>
+export type OutputRequest = z.infer<typeof outputRequestSchema>
+export type OutputRequestKind = z.infer<typeof outputRequestKindSchema>
+export type OutputRequestStatus = z.infer<typeof outputRequestStatusSchema>
 export type OutputWorkflowPreset = z.infer<typeof outputWorkflowPresetSchema>
 export type OutputWorkflowPlanRequest = z.infer<typeof outputWorkflowPlanRequestSchema>
 export type OutputWorkflowPlanResponse = z.infer<typeof outputWorkflowPlanResponseSchema>
 export type OutputWorkflowStartResponse = z.infer<typeof outputWorkflowStartResponseSchema>
 export type OutputWorkflowRunStatusResponse = z.infer<typeof outputWorkflowRunStatusResponseSchema>
 export type OutputWorkflowCancelResponse = z.infer<typeof outputWorkflowCancelResponseSchema>
+export type OutputRequestStatusResponse = z.infer<typeof outputRequestStatusResponseSchema>
 export type OutputWorkflowNodeUpdateRequest = z.infer<typeof outputWorkflowNodeUpdateRequestSchema>
 export type OutputWorkflowNodeUpdateResponse = z.infer<typeof outputWorkflowNodeUpdateResponseSchema>
 export type OutputWorkflowUpgradeResponse = z.infer<typeof outputWorkflowUpgradeResponseSchema>

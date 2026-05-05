@@ -132,6 +132,10 @@ import {
 import {
   outputArtifactResponseSchema,
   outputArtifactSchema,
+  outputRequestSchema,
+  outputRequestStartRequestSchema,
+  outputRequestStatusRequestSchema,
+  outputRequestStatusResponseSchema,
   outputWorkflowCancelResponseSchema,
   outputWorkflowEdgeSchema,
   outputWorkflowNodeSchema,
@@ -150,6 +154,8 @@ import {
   outputWorkflowUpgradeRequestSchema,
   outputWorkflowUpgradeResponseSchema,
   type OutputArtifact,
+  type OutputRequest,
+  type OutputRequestStatusResponse,
   type OutputWorkflow,
   type OutputWorkflowCancelResponse,
   type OutputWorkflowEdge,
@@ -1749,6 +1755,30 @@ type OutputArtifactRow = {
   updated_at: string
 }
 
+type OutputRequestRow = {
+  id: string
+  project_id: string
+  draft_id: string
+  workflow_id: string | null
+  latest_run_id: string | null
+  requested_by: string | null
+  source_surface: string | null
+  prompt: string | null
+  title: string | null
+  intent: OutputRequest['intent']
+  output_kind: OutputRequest['outputKind']
+  status: OutputRequest['status']
+  selected_entity_keys: string[] | null
+  selected_sequence_unit_keys: string[] | null
+  page_count: number | null
+  target_format: string | null
+  planner_notes: string | null
+  error_message: string | null
+  metadata: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+
 type WorldPromptSessionRow = {
   id: string
   draft_id: string
@@ -1915,6 +1945,8 @@ const OUTPUT_WORKFLOW_RUN_STEP_SELECT =
   'id, run_id, workflow_id, node_id, node_key, node_type, status, order_index, label, input_hash, output_hash, outputs, provider, model, provider_request_id, error_message, metadata, started_at, completed_at, created_at, updated_at'
 const OUTPUT_ARTIFACT_SELECT =
   'id, project_id, draft_id, workflow_id, run_id, node_id, key, name, kind, asset_key, mime_type, summary, metadata, created_at, updated_at'
+const OUTPUT_REQUEST_SELECT =
+  'id, project_id, draft_id, workflow_id, latest_run_id, requested_by, source_surface, prompt, title, intent, output_kind, status, selected_entity_keys, selected_sequence_unit_keys, page_count, target_format, planner_notes, error_message, metadata, created_at, updated_at'
 const WORLD_PROMPT_SESSION_SELECT =
   'id, draft_id, key, title, status, is_active, summary_memory, last_context, selected_root_entity_key, selected_view_key, model, metadata, created_at, updated_at'
 const WORLD_PROMPT_TURN_SELECT =
@@ -2218,6 +2250,32 @@ function mapOutputArtifactRow(entry: OutputArtifactRow): OutputArtifact {
     assetKey: entry.asset_key,
     mimeType: entry.mime_type ?? '',
     summary: entry.summary ?? '',
+    metadata: entry.metadata ?? {},
+    createdAt: entry.created_at,
+    updatedAt: entry.updated_at,
+  })
+}
+
+function mapOutputRequestRow(entry: OutputRequestRow): OutputRequest {
+  return outputRequestSchema.parse({
+    id: entry.id,
+    projectId: entry.project_id,
+    draftId: entry.draft_id,
+    workflowId: entry.workflow_id,
+    latestRunId: entry.latest_run_id,
+    requestedBy: entry.requested_by,
+    sourceSurface: entry.source_surface ?? 'outputs',
+    prompt: entry.prompt ?? '',
+    title: entry.title ?? 'Untitled output',
+    intent: entry.intent,
+    outputKind: entry.output_kind,
+    status: entry.status,
+    selectedEntityKeys: entry.selected_entity_keys ?? [],
+    selectedSequenceUnitKeys: entry.selected_sequence_unit_keys ?? [],
+    pageCount: entry.page_count,
+    targetFormat: entry.target_format ?? 'pdf',
+    plannerNotes: entry.planner_notes ?? '',
+    errorMessage: entry.error_message,
     metadata: entry.metadata ?? {},
     createdAt: entry.created_at,
     updatedAt: entry.updated_at,
@@ -2946,6 +3004,7 @@ export async function loadProjectSnapshot(
     outputWorkflowEdgesResponse,
     outputWorkflowRunsResponse,
     outputArtifactsResponse,
+    outputRequestsResponse,
     patchSetsResponse,
     releasesResponse,
   ] = await Promise.all([
@@ -3216,6 +3275,14 @@ export async function loadProjectSnapshot(
           .order('created_at', { ascending: false })
           .limit(includeFull ? 200 : 50)
       : Promise.resolve(emptyPostgrestResponse()),
+    includeWorld
+      ? supabase
+          .from('output_requests')
+          .select(OUTPUT_REQUEST_SELECT)
+          .eq('draft_id', draft.id)
+          .order('created_at', { ascending: false })
+          .limit(includeFull ? 100 : 30)
+      : Promise.resolve(emptyPostgrestResponse()),
     includeFull
       ? supabase
           .from('patch_sets')
@@ -3269,6 +3336,7 @@ export async function loadProjectSnapshot(
     ['output_workflow_edges', outputWorkflowEdgesResponse],
     ['output_workflow_runs', outputWorkflowRunsResponse],
     ['output_artifacts', outputArtifactsResponse],
+    ['output_requests', outputRequestsResponse],
     ['patch_sets', patchSetsResponse],
     ['releases', releasesResponse],
   ] as const
@@ -3342,6 +3410,9 @@ export async function loadProjectSnapshot(
     || isMissingRelationError(outputWorkflowEdgesResponse.error, 'output_workflow_edges')
     || isMissingRelationError(outputWorkflowRunsResponse.error, 'output_workflow_runs')
     || isMissingRelationError(outputArtifactsResponse.error, 'output_artifacts')
+  const outputRequestSchemaMissing =
+    postgrestStatus(outputRequestsResponse) === 404
+    || isMissingRelationError(outputRequestsResponse.error, 'output_requests')
 
   if (definitionsResponse.error || archetypesResponse.error) {
     return {
@@ -3390,6 +3461,7 @@ export async function loadProjectSnapshot(
   const outputWorkflowEdges = outputWorkflowSchemaMissing ? [] : (outputWorkflowEdgesResponse.data as OutputWorkflowEdgeRow[] | null) ?? []
   const outputWorkflowRuns = outputWorkflowSchemaMissing ? [] : (outputWorkflowRunsResponse.data as OutputWorkflowRunRow[] | null) ?? []
   const outputArtifacts = outputWorkflowSchemaMissing ? [] : (outputArtifactsResponse.data as OutputArtifactRow[] | null) ?? []
+  const outputRequests = outputRequestSchemaMissing ? [] : (outputRequestsResponse.data as OutputRequestRow[] | null) ?? []
   const worldBuildJobs =
     worldBuildSchemaMissing || worldBuildBatches.length === 0
       ? []
@@ -3860,6 +3932,7 @@ export async function loadProjectSnapshot(
       return outputWorkflowRuns.map((run) => mapOutputWorkflowRunRow(run, mappedSteps, mappedArtifacts))
     })(),
     outputArtifacts: outputArtifacts.map((artifact) => mapOutputArtifactRow(artifact)),
+    outputRequests: outputRequests.map((request) => mapOutputRequestRow(request)),
     patchSets: patchSetsResponse.data ?? [],
     releases: (releasesResponse.data ?? []).map((release) => ({
       id: release.id,
@@ -7388,7 +7461,7 @@ export async function startOutputWorkflowRun(
   request: {
     workflowId: string
     prompt?: string
-    targetFormat?: 'pdf' | 'epub' | 'docx' | 'markdown'
+    targetFormat?: 'pdf' | 'epub' | 'docx' | 'markdown' | 'image'
     selectedEntityKeys?: string[]
     selectedSequenceUnitKeys?: string[]
     pageCount?: number
@@ -7459,6 +7532,80 @@ export async function cancelOutputWorkflowRun(runId: string): Promise<OutputWork
   if (parsed.run) {
     await clearProjectCache(parsed.run.projectId, parsed.run.draftId)
   }
+  return parsed
+}
+
+export async function startOutputRequest(
+  snapshot: ProjectSnapshot,
+  request: {
+    prompt: string
+    sourceSurface?: string
+    selectedEntityKeys?: string[]
+    selectedSequenceUnitKeys?: string[]
+    targetFormat?: 'pdf' | 'epub' | 'docx' | 'markdown' | 'image'
+    pageCount?: number
+  },
+): Promise<OutputRequestStatusResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before creating an output request.')
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Output requests require a live Supabase-backed draft.')
+  }
+  const payload = outputRequestStartRequestSchema.parse({
+    projectId: snapshot.project.id,
+    draftId: snapshot.draft.id,
+    prompt: request.prompt,
+    sourceSurface: request.sourceSurface ?? 'outputs',
+    selectedEntityKeys: request.selectedEntityKeys ?? [],
+    selectedSequenceUnitKeys: request.selectedSequenceUnitKeys ?? [],
+    targetFormat: request.targetFormat ?? 'pdf',
+    pageCount: request.pageCount ?? 8,
+    snapshot: buildOutputWorkflowSnapshot(snapshot),
+    runInput: buildOutputWorkflowRunInput(snapshot, request),
+  })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'start-output-request',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  const parsed = outputRequestStatusResponseSchema.parse(response.data)
+  await clearProjectCache(snapshot.project.id, snapshot.draft.id)
+  return parsed
+}
+
+export async function getOutputRequestStatus(requestId: string): Promise<OutputRequestStatusResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before loading an output request.')
+  const payload = outputRequestStatusRequestSchema.parse({ requestId })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'get-output-request-status',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  const parsed = outputRequestStatusResponseSchema.parse(response.data)
+  if (parsed.terminal) {
+    await clearProjectCache(parsed.request.projectId, parsed.request.draftId)
+  }
+  return parsed
+}
+
+export async function cancelOutputRequest(requestId: string): Promise<OutputRequestStatusResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before cancelling an output request.')
+  const payload = outputRequestStatusRequestSchema.parse({ requestId })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'cancel-output-request',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  const parsed = outputRequestStatusResponseSchema.parse(response.data)
+  await clearProjectCache(parsed.request.projectId, parsed.request.draftId)
   return parsed
 }
 

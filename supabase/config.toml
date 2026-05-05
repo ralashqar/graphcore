@@ -179,6 +179,15 @@ verify_jwt = false
 [functions.get-output-artifact]
 verify_jwt = false
 
+[functions.start-output-request]
+verify_jwt = false
+
+[functions.get-output-request-status]
+verify_jwt = false
+
+[functions.cancel-output-request]
+verify_jwt = false
+
 [functions.start-world-seed-inference]
 verify_jwt = false
 
