@@ -132,6 +132,7 @@ import {
 import {
   outputArtifactResponseSchema,
   outputArtifactSchema,
+  outputRequestDeleteResponseSchema,
   outputRequestSchema,
   outputRequestStartRequestSchema,
   outputRequestStatusRequestSchema,
@@ -155,6 +156,7 @@ import {
   outputWorkflowUpgradeResponseSchema,
   type OutputArtifact,
   type OutputRequest,
+  type OutputRequestDeleteResponse,
   type OutputRequestStatusResponse,
   type OutputWorkflow,
   type OutputWorkflowCancelResponse,
@@ -7558,7 +7560,7 @@ export async function startOutputRequest(
     selectedEntityKeys: request.selectedEntityKeys ?? [],
     selectedSequenceUnitKeys: request.selectedSequenceUnitKeys ?? [],
     targetFormat: request.targetFormat ?? 'pdf',
-    pageCount: request.pageCount ?? 8,
+    pageCount: request.pageCount,
     snapshot: buildOutputWorkflowSnapshot(snapshot),
     runInput: buildOutputWorkflowRunInput(snapshot, request),
   })
@@ -7606,6 +7608,22 @@ export async function cancelOutputRequest(requestId: string): Promise<OutputRequ
   }
   const parsed = outputRequestStatusResponseSchema.parse(response.data)
   await clearProjectCache(parsed.request.projectId, parsed.request.draftId)
+  return parsed
+}
+
+export async function deleteOutputRequest(requestId: string): Promise<OutputRequestDeleteResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before deleting an output request.')
+  const payload = outputRequestStatusRequestSchema.parse({ requestId })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'delete-output-request',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  const parsed = outputRequestDeleteResponseSchema.parse(response.data)
+  await clearProjectCache(parsed.projectId, parsed.draftId)
   return parsed
 }
 

@@ -4411,6 +4411,18 @@ export default function App() {
     return result
   }
 
+  async function deleteOutputRequest(requestId: string) {
+    const result = await workspaceService.deleteOutputRequest(requestId)
+    const current = snapshotRef.current
+    if (current) {
+      commitPersistedSnapshot({
+        ...current,
+        outputRequests: current.outputRequests.filter((entry) => entry.id !== result.requestId),
+      })
+    }
+    return result
+  }
+
   async function updateOutputWorkflowNode(request: Parameters<typeof workspaceService.updateOutputWorkflowNode>[1]) {
     if (!snapshot) {
       throw new Error('Load a live GraphCore draft before editing an output workflow.')
@@ -6479,6 +6491,7 @@ export default function App() {
                 snapshot={snapshot}
                 onCancelOutputRequest={cancelOutputRequest}
                 onCancelOutputWorkflowRun={cancelOutputWorkflowRun}
+                onDeleteOutputRequest={deleteOutputRequest}
                 onGetOutputRequestStatus={getOutputRequestStatus}
                 onGetOutputWorkflowStatus={getOutputWorkflowStatus}
                 onPlanOutputWorkflow={planOutputWorkflow}

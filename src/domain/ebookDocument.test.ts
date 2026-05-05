@@ -58,7 +58,19 @@ test('buildEbookDocumentMetadata records renderer and manuscript size', () => {
   const metadata = buildEbookDocumentMetadata(sampleMarkdown, { title: 'Override' })
 
   assert.equal(metadata.renderer, 'chromium-html-css')
+  assert.equal(metadata.documentMode, 'ebook')
   assert.equal(metadata.pageSize, '6in x 9in')
   assert.equal(metadata.manuscriptCharacterCount, sampleMarkdown.length)
   assert.equal(metadata.chapterCount, 2)
+})
+
+test('reference document mode uses handbook metadata and layout hints', () => {
+  const metadata = buildEbookDocumentMetadata(sampleMarkdown, { title: 'Override Bible', documentMode: 'reference' })
+  const { html } = buildEbookHtmlDocument(sampleMarkdown, { title: 'Override Bible', documentMode: 'reference' })
+
+  assert.equal(metadata.documentMode, 'reference')
+  assert.equal(metadata.pageSize, '8.5in x 11in')
+  assert.match(html, /size: 8\.5in 11in/)
+  assert.match(html, /text-align: left/)
+  assert.doesNotMatch(html, /page-break-before: always;\n      padding-top: 0\.7in/)
 })

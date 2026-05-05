@@ -10,6 +10,7 @@ export const workspaceService = {
   cancelAppGenerationJob: graphcoreWorkspaceAdapter.cancelAppGenerationJob,
   cancelOutputRequest: graphcoreWorkspaceAdapter.cancelOutputRequest,
   cancelOutputWorkflowRun: graphcoreWorkspaceAdapter.cancelOutputWorkflowRun,
+  deleteOutputRequest: graphcoreWorkspaceAdapter.deleteOutputRequest,
   cancelVisualGenerationJob: graphcoreWorkspaceAdapter.cancelVisualGenerationJob,
   cancelWorldPromptTurn: graphcoreWorkspaceAdapter.cancelWorldPromptTurn,
   cancelWorldGenerationJob: graphcoreWorkspaceAdapter.cancelWorldGenerationJob,

@@ -6,7 +6,7 @@ import { buildEbookHtmlDocument, type EbookHtmlOptions } from '../../src/domain/
 export type EbookPdfRenderInput = EbookHtmlOptions & {
   markdown: string
   fileName?: string
-  renderMode?: 'ebook' | 'comic'
+  renderMode?: 'ebook' | 'comic' | 'reference'
   coverImage?: {
     bytes: Uint8Array
     mimeType: string
@@ -209,7 +209,11 @@ export async function renderOutputPdf(input: EbookPdfRenderInput) {
 }
 
 export async function renderEbookPdf(input: EbookPdfRenderInput) {
-  const { html, document } = buildEbookHtmlDocument(input.markdown, input)
+  const documentMode = input.renderMode === 'reference' ? 'reference' : input.documentMode
+  const { html, document } = buildEbookHtmlDocument(input.markdown, { ...input, documentMode })
+  const referenceMode = documentMode === 'reference'
+  const pageWidth = referenceMode ? '8.5in' : '6in'
+  const pageHeight = referenceMode ? '11in' : '9in'
   const browser = await chromium.launch({
     executablePath: findChromiumExecutable(),
     headless: true,
@@ -222,7 +226,7 @@ export async function renderEbookPdf(input: EbookPdfRenderInput) {
   })
 
   try {
-    const page = await browser.newPage({ viewport: { width: 864, height: 1296 } })
+    const page = await browser.newPage({ viewport: referenceMode ? { width: 1224, height: 1584 } : { width: 864, height: 1296 } })
     let coverPdfBytes: Uint8Array | null = null
     if (input.coverImage) {
       await page.setContent(buildCoverHtml(input), { waitUntil: 'load' })
@@ -243,8 +247,8 @@ export async function renderEbookPdf(input: EbookPdfRenderInput) {
 
     await page.setContent(html, { waitUntil: 'load' })
     const interiorPdfBytes = await page.pdf({
-      width: '6in',
-      height: '9in',
+      width: pageWidth,
+      height: pageHeight,
       printBackground: true,
       preferCSSPageSize: true,
       displayHeaderFooter: true,
@@ -258,8 +262,8 @@ export async function renderEbookPdf(input: EbookPdfRenderInput) {
       margin: {
         top: '0.72in',
         bottom: '0.72in',
-        left: '0.76in',
-        right: '0.64in',
+        left: referenceMode ? '0.82in' : '0.76in',
+        right: referenceMode ? '0.82in' : '0.64in',
       },
     })
     const pdfBytes = coverPdfBytes
@@ -271,7 +275,8 @@ export async function renderEbookPdf(input: EbookPdfRenderInput) {
       metadata: {
         renderer: 'chromium-html-css',
         rendererEngine: 'playwright-core',
-        pageSize: '6in x 9in',
+        documentMode: referenceMode ? 'reference' : 'ebook',
+        pageSize: referenceMode ? '8.5in x 11in' : '6in x 9in',
         byteSize: pdfBytes.byteLength,
         pageCount: await countPdfPages(pdfBytes),
         manuscriptCharacterCount: input.markdown.length,

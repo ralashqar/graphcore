@@ -10,8 +10,10 @@ import {
   defaultOutputWorkflowConcurrency,
   getOutputWorkflowNodeExecutionMetadata,
   markDirtyOutputWorkflowNodes,
+  outputRequestStartRequestSchema,
   outputWorkflowNodeRegistry,
   outputWorkflowPlanRequestSchema,
+  planOutputPrompt,
   planOutputRequestWorkflow,
   planOutputWorkflow,
   runOutputWorkflowReadyQueue,
@@ -160,11 +162,78 @@ test('prompt-first output router classifies output prompts and binds mentioned e
   assert.equal(classification.intent, 'output_generation')
   assert.equal(classification.outputKind, 'poster_image')
 
+  const drawClassification = classifyOutputPrompt('Draw an image of Mara in The Archive')
+  assert.equal(drawClassification.intent, 'output_generation')
+  assert.equal(drawClassification.outputKind, 'concept_art_image')
+
   const scope = bindOutputPromptWorldScope({
     prompt: 'Make a poster image of Mara in The Archive',
     worldEntities: snapshot.worldEntities,
   })
   assert.deepEqual(scope.selectedEntityKeys.sort(), ['archive', 'hero'])
+})
+
+test('prompt-first entity binding is typo-tolerant and does not fall back to unrelated image references', () => {
+  const worldEntities = [
+    worldEntity('ilya', 'actor', 'Ilya Sorin'),
+    worldEntity('anya', 'actor', 'Anya Sorin'),
+    worldEntity('nara', 'actor', 'Nara Quill'),
+    worldEntity('checkpoint', 'place', 'Compliance Checkpoint'),
+  ] as typeof snapshot.worldEntities
+  const scope = bindOutputPromptWorldScope({
+    prompt: 'Draw Ilay saluting to Anya',
+    worldEntities,
+  })
+
+  assert.deepEqual(scope.selectedEntityKeys.sort(), ['anya', 'ilya'])
+
+  const localSnapshot = outputWorkflowPlanRequestSchema.shape.snapshot.parse({
+    ...snapshot,
+    worldEntities,
+  })
+  const plan = planOutputRequestWorkflow({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    prompt: 'Draw Ilay saluting to Anya',
+    targetFormat: 'image',
+    snapshot: localSnapshot,
+  }, 'concept_art_image')
+
+  assert.deepEqual(plan.sourceEntityKeys.sort(), ['anya', 'ilya'])
+  assert.ok(!plan.sourceEntityKeys.includes('nara'))
+  const contextNode = plan.nodes.find((node) => node.key === 'world_context')
+  assert.equal((contextNode?.config as Record<string, unknown> | undefined)?.strictSourceEntityFilter, true)
+})
+
+test('prompt-first image request payloads do not inherit comic page count', () => {
+  const payload = outputRequestStartRequestSchema.parse({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    prompt: 'Draw an image of Mara in The Archive',
+    snapshot,
+    runInput: {},
+  })
+
+  assert.equal(payload.pageCount, undefined)
+  assert.deepEqual(payload.selectedSequenceUnitKeys, [])
+})
+
+test('prompt-first planner distinguishes reference documents from narrative prose', () => {
+  const biblePlan = planOutputPrompt({
+    prompt: 'create a story bible',
+    snapshot,
+  })
+  assert.equal(biblePlan.intent, 'output_generation')
+  assert.equal(biblePlan.outputKind, 'story_bible_from_world')
+  assert.equal(biblePlan.documentMode, 'reference')
+  assert.ok(biblePlan.sections.some((section) => section.key === 'main_characters'))
+
+  const chapterPlan = planOutputPrompt({
+    prompt: 'write the first chapter as prose',
+    snapshot,
+  })
+  assert.equal(chapterPlan.outputKind, 'narrative_chapter_or_ebook')
+  assert.equal(chapterPlan.documentMode, 'narrative')
 })
 
 test('prompt-first image requests use approved workflow nodes only', () => {
@@ -183,6 +252,29 @@ test('prompt-first image requests use approved workflow nodes only', () => {
   assert.equal(readConfigPurpose(plan.nodes.find((node) => node.key === 'generated_image') ?? {}), 'poster_image')
   assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'image_references' && edge.sourcePort === 'asset_pack' && edge.targetNodeKey === 'generated_image' && edge.targetPort === 'references'))
   assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'image_references' && edge.sourcePort === 'asset_pack' && edge.targetNodeKey === 'visual_prompt' && edge.targetPort === 'asset_pack'))
+  assert.equal(validateOutputWorkflowGraph({ nodes: plan.nodes, edges: plan.edges }).ok, true)
+})
+
+test('story bible workflow creates parallel reference sections instead of chapter prose', () => {
+  const plan = planOutputRequestWorkflow({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    prompt: 'create a story bible',
+    targetFormat: 'pdf',
+    snapshot,
+  }, 'story_bible_from_world')
+
+  assert.equal(plan.preset, 'story_bible_from_world')
+  assert.ok(plan.nodes.some((node) => node.key === 'bible_section_plan'))
+  assert.equal(plan.nodes.some((node) => readConfigPurpose(node) === 'chapter_prose'), false)
+  const sectionNodes = plan.nodes.filter((node) => readConfigPurpose(node) === 'bible_section')
+  assert.ok(sectionNodes.length >= 8)
+  assert.ok(sectionNodes.every((node) => node.key.startsWith('bible_')))
+  assert.ok(sectionNodes.every((node) => plan.edges.some((edge) => edge.sourceNodeKey === node.key && edge.targetNodeKey === 'bible_assembly')))
+  const executionPlan = buildOutputWorkflowExecutionPlan(plan.nodes, plan.edges)
+  const levelWithSections = executionPlan.levels.find((level) => sectionNodes.every((node) => level.includes(node.key)))
+  assert.ok(levelWithSections)
+  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'bible_assembly' && edge.targetNodeKey === 'document_render'))
   assert.equal(validateOutputWorkflowGraph({ nodes: plan.nodes, edges: plan.edges }).ok, true)
 })
 

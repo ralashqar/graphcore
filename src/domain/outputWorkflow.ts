@@ -33,7 +33,12 @@ export const outputRequestIntentSchema = z.enum(['world_mutation', 'output_gener
 export const outputRequestKindSchema = z.enum([
   'concept_art_image',
   'poster_image',
+  'story_bible_from_world',
+  'world_reference_document',
+  'lore_guide',
+  'character_dossier_pack',
   'short_story',
+  'narrative_chapter_or_ebook',
   'ebook_from_world',
   'comic_issue_from_sequence',
   'cinematic_episode',
@@ -43,6 +48,7 @@ export const outputRequestKindSchema = z.enum([
 ])
 export const outputWorkflowPresetSchema = z.enum([
   'ebook_from_world',
+  'story_bible_from_world',
   'comic_issue_from_sequence',
   'cinematic_episode_from_sequence',
   'cinematic_trailer',
@@ -353,9 +359,28 @@ export const outputRequestStartRequestSchema = z.object({
   selectedEntityKeys: z.array(z.string()).default([]),
   selectedSequenceUnitKeys: z.array(z.string()).default([]),
   targetFormat: z.enum(['pdf', 'epub', 'docx', 'markdown', 'image']).default('pdf'),
-  pageCount: z.number().int().min(1).max(12).default(8),
+  pageCount: z.number().int().min(1).max(12).optional(),
   snapshot: outputWorkflowPlanRequestSchema.shape.snapshot,
   runInput: looseRecordSchema.default({}),
+})
+
+export const outputPromptPlannerResultSchema = z.object({
+  intent: outputRequestIntentSchema,
+  outputKind: outputRequestKindSchema,
+  confidence: z.number().min(0).max(1),
+  targetFormat: z.enum(['pdf', 'epub', 'docx', 'markdown', 'image']).default('pdf'),
+  worldScope: z.enum(['full_world', 'selected_entities', 'selected_sequence_units', 'prompt_bound_scope']).default('prompt_bound_scope'),
+  selectedEntityKeys: z.array(z.string()).default([]),
+  selectedSequenceUnitKeys: z.array(z.string()).default([]),
+  documentMode: z.enum(['narrative', 'reference', 'visual', 'comic']).default('narrative'),
+  sections: z.array(z.object({
+    key: z.string(),
+    title: z.string(),
+    description: z.string().default(''),
+  })).default([]),
+  visualReferencePolicy: z.enum(['none', 'use_prompt_bound_entity_refs', 'use_selected_entity_refs', 'use_world_style_only']).default('none'),
+  requiresConfirmation: z.boolean().default(false),
+  plannerNotes: z.string().default(''),
 })
 
 export const outputRequestStatusRequestSchema = z.object({
@@ -410,6 +435,16 @@ export const outputRequestStatusResponseSchema = z.object({
   run: outputWorkflowRunSchema.nullable().default(null),
   artifacts: z.array(outputArtifactSchema).default([]),
   terminal: z.boolean().default(false),
+})
+
+export const outputRequestDeleteResponseSchema = z.object({
+  ok: z.literal(true),
+  requestId: z.string(),
+  projectId: z.string(),
+  draftId: z.string(),
+  workflowId: z.string().nullable().default(null),
+  latestRunId: z.string().nullable().default(null),
+  deleted: z.boolean().default(true),
 })
 
 export const outputWorkflowRunStartRequestSchema = z.object({
@@ -1068,6 +1103,24 @@ const COMIC_PAGE_FANOUT_LIMIT = 12
 const DEFAULT_COMIC_PAGE_COUNT = 8
 
 const IMAGE_OUTPUT_ENTITY_LIMIT = 12
+const STORY_BIBLE_ENTITY_LIMIT = 80
+const STORY_BIBLE_SEQUENCE_LIMIT = 36
+
+const STORY_BIBLE_SECTIONS = [
+  { key: 'core_premise', title: 'Core Premise', description: 'Project premise, promise, genre, themes, and core conflict.' },
+  { key: 'world_overview', title: 'World Overview', description: 'The world, status quo, history pressure, and major systems already defined in canon.' },
+  { key: 'main_characters', title: 'Main Characters', description: 'Character dossiers, motivations, conflicts, arcs, relationships, and visual anchors.' },
+  { key: 'locations', title: 'Locations', description: 'Key places, spatial logic, atmosphere, and plot function.' },
+  { key: 'factions_groups', title: 'Factions / Groups', description: 'Groups, institutions, alliances, power structures, and conflicts.' },
+  { key: 'objects_concepts', title: 'Objects / Concepts', description: 'Important objects, technology, lore concepts, symbols, and rules.' },
+  { key: 'timeline_chronology', title: 'Timeline / Chronology', description: 'Known events, cause/effect order, and chronology gaps.' },
+  { key: 'sequence_overview', title: 'Sequence / Story Arcs', description: 'Chapter, episode, mission, or beat sequence with outcomes and open loops.' },
+  { key: 'lore_rules', title: 'Rules / Lore Constraints', description: 'Canon constraints, system rules, continuity restrictions, and things not yet defined.' },
+  { key: 'visual_style_tone', title: 'Visual Style / Tone', description: 'Tone tags, art direction, recurring motifs, palette, and media style.' },
+  { key: 'open_questions', title: 'Open Questions / Continuity Notes', description: 'Unresolved questions, weak areas, contradictions, and useful next-development notes.' },
+] as const
+
+type StoryBibleSection = (typeof STORY_BIBLE_SECTIONS)[number]
 
 function promptIncludesAny(prompt: string, terms: string[]) {
   return terms.some((term) => prompt.includes(term))
@@ -1083,12 +1136,27 @@ export function classifyOutputPrompt(prompt: string): {
   if (!lowerPrompt.trim()) {
     return { intent: 'ambiguous', outputKind: 'unknown', confidence: 0, notes: 'Empty prompt.' }
   }
-  if (promptIncludesAny(lowerPrompt, ['create', 'make', 'generate', 'render', 'write', 'draft', 'produce', 'export'])) {
+  if (promptIncludesAny(lowerPrompt, ['create', 'make', 'generate', 'render', 'write', 'draft', 'produce', 'export', 'draw', 'paint', 'illustrate', 'design'])) {
+    if (promptIncludesAny(lowerPrompt, ['story bible', 'world bible', 'series bible', 'project bible', 'show bible'])) {
+      return { intent: 'output_generation', outputKind: 'story_bible_from_world', confidence: 0.92, notes: 'Prompt asks for a canon/reference story bible, not fiction prose.' }
+    }
+    if (promptIncludesAny(lowerPrompt, ['world reference', 'reference document', 'reference guide', 'world guide', 'canon guide'])) {
+      return { intent: 'output_generation', outputKind: 'world_reference_document', confidence: 0.86, notes: 'Prompt asks for a world reference document.' }
+    }
+    if (promptIncludesAny(lowerPrompt, ['lore guide', 'lore document', 'lorebook', 'lore book'])) {
+      return { intent: 'output_generation', outputKind: 'lore_guide', confidence: 0.86, notes: 'Prompt asks for a lore guide/reference output.' }
+    }
+    if (promptIncludesAny(lowerPrompt, ['character dossier', 'character dossiers', 'character bible', 'cast bible', 'cast dossier'])) {
+      return { intent: 'output_generation', outputKind: 'character_dossier_pack', confidence: 0.86, notes: 'Prompt asks for character dossiers from canon.' }
+    }
     if (promptIncludesAny(lowerPrompt, ['comic', 'manga', 'graphic novel', 'issue'])) {
       return { intent: 'output_generation', outputKind: 'comic_issue_from_sequence', confidence: 0.86, notes: 'Prompt asks for a comic-style output.' }
     }
+    if (promptIncludesAny(lowerPrompt, ['write chapter', 'first chapter', 'chapter 1', 'chapter one', 'chapter prose', 'novel chapter'])) {
+      return { intent: 'output_generation', outputKind: 'narrative_chapter_or_ebook', confidence: 0.88, notes: 'Prompt asks for narrative chapter prose.' }
+    }
     if (promptIncludesAny(lowerPrompt, ['ebook', 'book', 'novel', 'pdf', 'manuscript'])) {
-      return { intent: 'output_generation', outputKind: 'ebook_from_world', confidence: 0.84, notes: 'Prompt asks for a book/document output.' }
+      return { intent: 'output_generation', outputKind: 'narrative_chapter_or_ebook', confidence: 0.84, notes: 'Prompt asks for a narrative book/document output.' }
     }
     if (promptIncludesAny(lowerPrompt, ['short story', 'story excerpt', 'scene prose'])) {
       return { intent: 'output_generation', outputKind: 'short_story', confidence: 0.8, notes: 'Prompt asks for a prose output.' }
@@ -1112,8 +1180,136 @@ export function classifyOutputPrompt(prompt: string): {
   return { intent: 'ambiguous', outputKind: 'unknown', confidence: 0.35, notes: 'The prompt could be an output request or a world-authoring request.' }
 }
 
+function storyBibleSectionsForKind(kind: z.infer<typeof outputRequestKindSchema>): StoryBibleSection[] {
+  if (kind === 'character_dossier_pack') {
+    return STORY_BIBLE_SECTIONS.filter((section) => [
+      'core_premise',
+      'main_characters',
+      'factions_groups',
+      'sequence_overview',
+      'visual_style_tone',
+      'open_questions',
+    ].includes(section.key))
+  }
+  if (kind === 'lore_guide') {
+    return STORY_BIBLE_SECTIONS.filter((section) => [
+      'core_premise',
+      'world_overview',
+      'locations',
+      'factions_groups',
+      'objects_concepts',
+      'timeline_chronology',
+      'lore_rules',
+      'visual_style_tone',
+      'open_questions',
+    ].includes(section.key))
+  }
+  if (kind === 'world_reference_document') {
+    return [...STORY_BIBLE_SECTIONS]
+  }
+  return [...STORY_BIBLE_SECTIONS]
+}
+
+export function planOutputPrompt(input: {
+  prompt: string
+  snapshot: z.infer<typeof outputWorkflowPlanRequestSchema>['snapshot']
+  selectedEntityKeys?: string[]
+  selectedSequenceUnitKeys?: string[]
+  targetFormat?: 'pdf' | 'epub' | 'docx' | 'markdown' | 'image'
+}) {
+  const classification = classifyOutputPrompt(input.prompt)
+  const boundScope = bindOutputPromptWorldScope({
+    prompt: input.prompt,
+    worldEntities: input.snapshot.worldEntities,
+    selectedEntityKeys: input.selectedEntityKeys,
+    selectedSequenceUnitKeys: input.selectedSequenceUnitKeys,
+  })
+  const referenceKinds: z.infer<typeof outputRequestKindSchema>[] = [
+    'story_bible_from_world',
+    'world_reference_document',
+    'lore_guide',
+    'character_dossier_pack',
+  ]
+  const imageKind = classification.outputKind === 'concept_art_image' || classification.outputKind === 'poster_image'
+  const documentReference = referenceKinds.includes(classification.outputKind)
+  const selectedEntityKeys = imageKind
+    ? boundScope.selectedEntityKeys
+    : documentReference
+      ? (input.selectedEntityKeys?.length ? input.selectedEntityKeys : input.snapshot.worldEntities.filter((entity) => entity.nodeType !== 'sequence_unit').slice(0, STORY_BIBLE_ENTITY_LIMIT).map((entity) => entity.key))
+      : boundScope.selectedEntityKeys
+  const selectedSequenceUnitKeys = documentReference
+    ? (input.selectedSequenceUnitKeys?.length ? input.selectedSequenceUnitKeys : sortedSequenceUnits(input.snapshot.worldEntities).map((entity) => entity.key).slice(0, STORY_BIBLE_SEQUENCE_LIMIT))
+    : boundScope.selectedSequenceUnitKeys
+  const sections = documentReference ? storyBibleSectionsForKind(classification.outputKind) : []
+  return outputPromptPlannerResultSchema.parse({
+    intent: classification.intent,
+    outputKind: classification.outputKind,
+    confidence: classification.confidence,
+    targetFormat: imageKind ? 'image' : input.targetFormat ?? 'pdf',
+    worldScope: documentReference ? 'full_world' : selectedEntityKeys.length || selectedSequenceUnitKeys.length ? 'prompt_bound_scope' : 'full_world',
+    selectedEntityKeys,
+    selectedSequenceUnitKeys,
+    documentMode: documentReference ? 'reference' : imageKind ? 'visual' : classification.outputKind === 'comic_issue_from_sequence' ? 'comic' : 'narrative',
+    sections,
+    visualReferencePolicy: imageKind ? 'use_prompt_bound_entity_refs' : 'none',
+    requiresConfirmation: classification.intent === 'ambiguous' || classification.confidence < 0.55,
+    plannerNotes: classification.notes,
+  })
+}
+
 function normalizePromptToken(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+}
+
+function promptTokenSet(value: string) {
+  return new Set(normalizePromptToken(value).split(/\s+/).filter((part) => part.length > 0))
+}
+
+function tokenEditDistanceAtMostOne(left: string, right: string) {
+  if (left === right) return true
+  if (Math.abs(left.length - right.length) > 1) return false
+  if (left.length === right.length) {
+    let mismatches = 0
+    for (let index = 0; index < left.length; index += 1) {
+      if (left[index] === right[index]) continue
+      if (
+        index + 1 < left.length
+        && left[index] === right[index + 1]
+        && left[index + 1] === right[index]
+      ) {
+        return left.slice(0, index) === right.slice(0, index)
+          && left.slice(index + 2) === right.slice(index + 2)
+      }
+      mismatches += 1
+      if (mismatches > 1) return false
+    }
+    return mismatches <= 1
+  }
+  const shorter = left.length < right.length ? left : right
+  const longer = left.length < right.length ? right : left
+  let edits = 0
+  for (let shortIndex = 0, longIndex = 0; shortIndex < shorter.length || longIndex < longer.length;) {
+    if (shorter[shortIndex] === longer[longIndex]) {
+      shortIndex += 1
+      longIndex += 1
+      continue
+    }
+    edits += 1
+    if (edits > 1) return false
+    longIndex += 1
+  }
+  return true
+}
+
+function promptMentionsName(promptText: string, promptTokens: Set<string>, nameOrAlias: string) {
+  const normalizedName = normalizePromptToken(nameOrAlias)
+  if (!normalizedName) return false
+  if (promptText.includes(` ${normalizedName} `)) return true
+  const nameTokens = normalizedName.split(/\s+/).filter((part) => part.length >= 4)
+  return nameTokens.some((nameToken) => (
+    promptTokens.has(nameToken)
+    || [...promptTokens].some((promptToken) => promptToken.length >= 4 && tokenEditDistanceAtMostOne(promptToken, nameToken))
+  ))
 }
 
 export function bindOutputPromptWorldScope(input: {
@@ -1123,17 +1319,16 @@ export function bindOutputPromptWorldScope(input: {
   selectedSequenceUnitKeys?: string[]
 }) {
   const promptText = ` ${normalizePromptToken(input.prompt)} `
+  const promptTokens = promptTokenSet(input.prompt)
   const selectedEntityKeys = new Set(input.selectedEntityKeys ?? [])
   const selectedSequenceUnitKeys = new Set(input.selectedSequenceUnitKeys ?? [])
   for (const entity of input.worldEntities) {
-    const name = normalizePromptToken(entity.name)
-    if (name && promptText.includes(` ${name} `)) {
+    if (promptMentionsName(promptText, promptTokens, entity.name)) {
       if (entity.nodeType === 'sequence_unit') selectedSequenceUnitKeys.add(entity.key)
       else selectedEntityKeys.add(entity.key)
     }
     for (const alias of entity.aliases) {
-      const normalizedAlias = normalizePromptToken(alias)
-      if (normalizedAlias && promptText.includes(` ${normalizedAlias} `)) {
+      if (promptMentionsName(promptText, promptTokens, alias)) {
         if (entity.nodeType === 'sequence_unit') selectedSequenceUnitKeys.add(entity.key)
         else selectedEntityKeys.add(entity.key)
       }
@@ -1503,6 +1698,177 @@ export function buildEbookFromWorldPlan(request: z.infer<typeof outputWorkflowPl
   })
 }
 
+export function buildStoryBibleFromWorldPlan(
+  request: z.infer<typeof outputWorkflowPlanRequestSchema>,
+  outputKind: 'story_bible_from_world' | 'world_reference_document' | 'lore_guide' | 'character_dossier_pack' = 'story_bible_from_world',
+) {
+  const worldWiki = request.snapshot.worldWiki
+  const title = worldWiki.title || request.snapshot.project.name
+  const sections = storyBibleSectionsForKind(outputKind)
+  const selectedEntityKeys = request.selectedEntityKeys.length > 0
+    ? request.selectedEntityKeys.slice(0, STORY_BIBLE_ENTITY_LIMIT)
+    : request.snapshot.worldEntities
+      .filter((entity) => entity.nodeType !== 'sequence_unit')
+      .slice(0, STORY_BIBLE_ENTITY_LIMIT)
+      .map((entity) => entity.key)
+  const selectedSequenceUnitKeys = request.selectedSequenceUnitKeys.length > 0
+    ? request.selectedSequenceUnitKeys.slice(0, STORY_BIBLE_SEQUENCE_LIMIT)
+    : sortedSequenceUnits(request.snapshot.worldEntities).map((entity) => entity.key).slice(0, STORY_BIBLE_SEQUENCE_LIMIT)
+  const prompt = request.prompt.trim() || 'Create a complete story bible from this world graph, summarizing canon as reference material.'
+  const kindLabel = outputKind === 'lore_guide'
+    ? 'Lore Guide'
+    : outputKind === 'character_dossier_pack'
+      ? 'Character Dossier Pack'
+      : outputKind === 'world_reference_document'
+        ? 'World Reference Document'
+        : 'Story Bible'
+  const name = `${title} ${kindLabel}`
+  const sectionNodes = sections.map((section, index) => nodeBase({
+    key: `bible_${section.key}`,
+    nodeType: 'text_llm',
+    label: section.title,
+    x: 900,
+    y: 40 + (index % 8) * 165,
+    inputs: {
+      prompt,
+    },
+    config: {
+      purpose: 'bible_section',
+      documentMode: 'reference',
+      outputKind,
+      sectionKey: section.key,
+      sectionTitle: section.title,
+      sectionDescription: section.description,
+      sectionOrder: index + 1,
+      sectionCount: sections.length,
+      skillKeys: ['story_bible_structure', 'canon_reference_voice', 'continuity_documentation', 'world_lore_clarity', 'provider_prompt_hygiene'],
+      autoSkillTags: ['reference_document', 'canon', 'story_bible'],
+      guidanceMode: 'strict',
+      execution: {
+        resourceClass: 'llm',
+        groupKey: 'story_bible_sections',
+        maxConcurrency: 8,
+      },
+    },
+  }))
+  const nodes = [
+    nodeBase({
+      key: 'world_context',
+      nodeType: 'world_context_query',
+      label: 'World Context',
+      x: 80,
+      y: 120,
+      config: {
+        sourceEntityKeys: selectedEntityKeys,
+        sourceSequenceUnitKeys: selectedSequenceUnitKeys,
+        includeWiki: true,
+        includeVisualReferences: true,
+        execution: { resourceClass: 'utility' },
+      },
+    }),
+    nodeBase({
+      key: 'skill_context',
+      nodeType: 'skill_context_query',
+      label: 'Reference Skills',
+      x: 80,
+      y: 280,
+      config: {
+        skillKeys: ['story_bible_structure', 'canon_reference_voice', 'continuity_documentation', 'world_lore_clarity', 'provider_prompt_hygiene'],
+        autoSkillTags: ['reference_document', 'canon', 'story_bible'],
+        guidanceMode: 'append',
+        execution: { resourceClass: 'utility' },
+      },
+    }),
+    nodeBase({
+      key: 'bible_section_plan',
+      nodeType: 'text_llm',
+      label: 'Reference Section Plan',
+      x: 420,
+      y: 140,
+      inputs: { prompt: 'Plan reference-document sections from the current world graph. Do not create fiction prose.' },
+      config: {
+        purpose: 'bible_section_plan',
+        documentMode: 'reference',
+        outputKind,
+        sections,
+        skillKeys: ['story_bible_structure', 'canon_reference_voice', 'continuity_documentation', 'world_lore_clarity', 'provider_prompt_hygiene'],
+        guidanceMode: 'strict',
+        execution: { resourceClass: 'llm' },
+      },
+    }),
+    ...sectionNodes,
+    nodeBase({
+      key: 'bible_assembly',
+      nodeType: 'utility_transform',
+      label: 'Assemble Reference',
+      x: 1220,
+      y: 160,
+      config: {
+        purpose: 'bible_assembly',
+        documentMode: 'reference',
+        outputKind,
+        sections,
+        execution: { resourceClass: 'utility' },
+      },
+    }),
+    nodeBase({
+      key: 'document_render',
+      nodeType: 'document_render',
+      label: 'Render Reference PDF',
+      x: 1500,
+      y: 160,
+      config: {
+        purpose: 'story_bible_document_render',
+        documentMode: 'reference',
+        targetFormat: request.targetFormat,
+        execution: { resourceClass: 'document' },
+      },
+    }),
+    nodeBase({
+      key: 'artifact',
+      nodeType: 'output_artifact',
+      label: 'Register Story Bible',
+      x: 1780,
+      y: 160,
+      config: {
+        purpose: 'story_bible_artifact',
+        documentMode: 'reference',
+        artifactKind: request.targetFormat === 'pdf' ? 'pdf' : 'manuscript',
+        execution: { resourceClass: 'utility' },
+      },
+    }),
+  ]
+  const edges = [
+    edgeBase('world_context', 'context', 'bible_section_plan', 'context'),
+    edgeBase('skill_context', 'guidance', 'bible_section_plan', 'guidance'),
+    ...sectionNodes.flatMap((node) => [
+      edgeBase('world_context', 'context', node.key, 'context'),
+      edgeBase('skill_context', 'guidance', node.key, 'guidance'),
+      edgeBase('bible_section_plan', 'plan', node.key, 'sectionPlan'),
+      edgeBase(node.key, 'text', 'bible_assembly', 'sections', { sectionOrder: node.config.sectionOrder, sectionKey: node.config.sectionKey }),
+    ]),
+    edgeBase('bible_assembly', 'text', 'document_render', 'source'),
+    edgeBase('document_render', 'document', 'artifact', 'input'),
+  ]
+  const graphValidation = validateOutputWorkflowGraph({ nodes, edges, worldWiki })
+  return outputWorkflowPlanResponseSchema.shape.plan.parse({
+    preset: 'story_bible_from_world',
+    name,
+    description: `Generate a canon-safe ${kindLabel.toLowerCase()} reference PDF/Markdown from the current world graph.`,
+    prompt,
+    targetFormat: request.targetFormat,
+    sourceEntityKeys: selectedEntityKeys,
+    sourceSequenceUnitKeys: selectedSequenceUnitKeys,
+    nodes,
+    edges,
+    diagnostics: [
+      ...graphValidation.diagnostics,
+      ...(selectedEntityKeys.length === 0 ? ['No non-sequence entities were found; reference sections will note missing canon areas.'] : []),
+      ...(sections.length === 0 ? ['No approved reference sections were selected.'] : []),
+    ],
+  })
+}
+
 export function buildComicIssueFromSequencePlan(request: z.infer<typeof outputWorkflowPlanRequestSchema>) {
   const worldWiki = request.snapshot.worldWiki
   const sequenceUnits = sortedSequenceUnits(request.snapshot.worldEntities)
@@ -1787,9 +2153,7 @@ export function buildImageOutputPlan(
     selectedEntityKeys: request.selectedEntityKeys,
     selectedSequenceUnitKeys: request.selectedSequenceUnitKeys,
   })
-  const selectedEntityKeys = boundScope.selectedEntityKeys.length > 0
-    ? boundScope.selectedEntityKeys
-    : request.snapshot.worldEntities.filter((entity) => entity.nodeType !== 'sequence_unit').slice(0, IMAGE_OUTPUT_ENTITY_LIMIT).map((entity) => entity.key)
+  const selectedEntityKeys = boundScope.selectedEntityKeys
   const selectedSequenceUnitKeys = boundScope.selectedSequenceUnitKeys.slice(0, 3)
   const title = worldWiki.title || request.snapshot.project.name
   const poster = outputKind === 'poster_image'
@@ -1809,6 +2173,7 @@ export function buildImageOutputPlan(
         sourceSequenceUnitKeys: selectedSequenceUnitKeys,
         includeWiki: true,
         includeVisualReferences: true,
+        strictSourceEntityFilter: true,
         execution: { resourceClass: 'utility' },
       },
     }),
@@ -1899,7 +2264,10 @@ export function buildImageOutputPlan(
     sourceSequenceUnitKeys: selectedSequenceUnitKeys,
     nodes,
     edges,
-    diagnostics: graphValidation.diagnostics,
+    diagnostics: [
+      ...graphValidation.diagnostics,
+      ...(selectedEntityKeys.length === 0 ? ['No prompt-bound entities were matched for this image request; the workflow will use project style and prompt text without unrelated entity references.'] : []),
+    ],
   })
 }
 
@@ -1908,13 +2276,23 @@ export function planOutputRequestWorkflow(request: z.input<typeof outputWorkflow
   if (outputKind === 'concept_art_image' || outputKind === 'poster_image') {
     return buildImageOutputPlan(parsedRequest, outputKind)
   }
+  if (
+    outputKind === 'story_bible_from_world'
+    || outputKind === 'world_reference_document'
+    || outputKind === 'lore_guide'
+    || outputKind === 'character_dossier_pack'
+  ) {
+    return buildStoryBibleFromWorldPlan(parsedRequest, outputKind)
+  }
   if (outputKind === 'comic_issue_from_sequence') {
     return buildComicIssueFromSequencePlan(parsedRequest)
   }
-  if (outputKind === 'short_story') {
+  if (outputKind === 'short_story' || outputKind === 'narrative_chapter_or_ebook') {
     return buildEbookFromWorldPlan({
       ...parsedRequest,
-      prompt: `${parsedRequest.prompt}\n\nOutput request: create a shorter story-style document rather than a full-length book. Keep the workflow document/PDF-oriented and preserve canon.`,
+      prompt: outputKind === 'short_story'
+        ? `${parsedRequest.prompt}\n\nOutput request: create a shorter story-style document rather than a full-length book. Keep the workflow document/PDF-oriented and preserve canon.`
+        : parsedRequest.prompt,
     })
   }
   return planOutputWorkflow(parsedRequest)
@@ -1925,6 +2303,15 @@ export function planOutputWorkflow(request: z.input<typeof outputWorkflowPlanReq
   const lowerPrompt = parsedRequest.prompt.toLowerCase()
   if (parsedRequest.preset === 'comic_issue_from_sequence' || lowerPrompt.includes('comic')) {
     return buildComicIssueFromSequencePlan(parsedRequest)
+  }
+  if (parsedRequest.preset === 'story_bible_from_world' || promptIncludesAny(lowerPrompt, ['story bible', 'world bible', 'series bible', 'reference document', 'lore guide', 'character dossier'])) {
+    const classification = classifyOutputPrompt(parsedRequest.prompt)
+    const outputKind = classification.outputKind === 'world_reference_document'
+      || classification.outputKind === 'lore_guide'
+      || classification.outputKind === 'character_dossier_pack'
+      ? classification.outputKind
+      : 'story_bible_from_world'
+    return buildStoryBibleFromWorldPlan(parsedRequest, outputKind)
   }
   if (
     parsedRequest.preset === 'composite_reference'
@@ -1959,12 +2346,14 @@ export type OutputRequest = z.infer<typeof outputRequestSchema>
 export type OutputRequestKind = z.infer<typeof outputRequestKindSchema>
 export type OutputRequestStatus = z.infer<typeof outputRequestStatusSchema>
 export type OutputWorkflowPreset = z.infer<typeof outputWorkflowPresetSchema>
+export type OutputPromptPlannerResult = z.infer<typeof outputPromptPlannerResultSchema>
 export type OutputWorkflowPlanRequest = z.infer<typeof outputWorkflowPlanRequestSchema>
 export type OutputWorkflowPlanResponse = z.infer<typeof outputWorkflowPlanResponseSchema>
 export type OutputWorkflowStartResponse = z.infer<typeof outputWorkflowStartResponseSchema>
 export type OutputWorkflowRunStatusResponse = z.infer<typeof outputWorkflowRunStatusResponseSchema>
 export type OutputWorkflowCancelResponse = z.infer<typeof outputWorkflowCancelResponseSchema>
 export type OutputRequestStatusResponse = z.infer<typeof outputRequestStatusResponseSchema>
+export type OutputRequestDeleteResponse = z.infer<typeof outputRequestDeleteResponseSchema>
 export type OutputWorkflowNodeUpdateRequest = z.infer<typeof outputWorkflowNodeUpdateRequestSchema>
 export type OutputWorkflowNodeUpdateResponse = z.infer<typeof outputWorkflowNodeUpdateResponseSchema>
 export type OutputWorkflowUpgradeResponse = z.infer<typeof outputWorkflowUpgradeResponseSchema>

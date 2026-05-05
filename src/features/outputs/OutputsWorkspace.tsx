@@ -16,6 +16,7 @@ import {
   type OutputWorkflowRunStatusResponse,
   type OutputWorkflowStartResponse,
   type OutputWorkflowUpgradeResponse,
+  type OutputRequest,
   type OutputRequestStatusResponse,
   type OutputArtifact,
 } from '../../domain/outputWorkflow'
@@ -35,9 +36,10 @@ type OutputsWorkspaceProps = {
   }) => Promise<OutputRequestStatusResponse>
   onGetOutputRequestStatus: (requestId: string) => Promise<OutputRequestStatusResponse>
   onCancelOutputRequest: (requestId: string) => Promise<OutputRequestStatusResponse>
+  onDeleteOutputRequest: (requestId: string) => Promise<unknown>
   onPlanOutputWorkflow: (request: {
     prompt: string
-    preset?: 'ebook_from_world' | 'comic_issue_from_sequence'
+    preset?: 'ebook_from_world' | 'story_bible_from_world' | 'comic_issue_from_sequence'
     selectedEntityKeys?: string[]
     selectedSequenceUnitKeys?: string[]
     pageCount?: number
@@ -308,19 +310,33 @@ function buildWorkflowStages(input: {
 function workflowPresetLabel(value: string | null | undefined) {
   if (value === 'comic_issue_from_sequence') return 'Comic Issue'
   if (value === 'ebook_from_world') return 'Ebook PDF'
+  if (value === 'story_bible_from_world') return 'Story Bible'
   return value ? value.replace(/_/g, ' ') : 'No workflow yet'
 }
 
 function outputKindLabel(value: string | null | undefined) {
   if (value === 'concept_art_image') return 'Concept Art'
   if (value === 'poster_image') return 'Poster Image'
+  if (value === 'story_bible_from_world') return 'Story Bible'
+  if (value === 'world_reference_document') return 'World Reference'
+  if (value === 'lore_guide') return 'Lore Guide'
+  if (value === 'character_dossier_pack') return 'Character Dossiers'
   if (value === 'short_story') return 'Short Story'
+  if (value === 'narrative_chapter_or_ebook') return 'Narrative Ebook'
   if (value === 'ebook_from_world') return 'Ebook PDF'
   if (value === 'comic_issue_from_sequence') return 'Comic Issue'
   if (value === 'cinematic_trailer') return 'Cinematic Trailer'
   if (value === 'cinematic_episode') return 'Cinematic Episode'
   if (value === 'ugc_episode') return 'UGC Episode'
   return 'Output'
+}
+
+function plannedSectionTitles(request: OutputRequest | null | undefined) {
+  const metadata = readRecord(request?.metadata)
+  const rawSections = Array.isArray(metadata.plannedSections) ? metadata.plannedSections : []
+  return rawSections
+    .map((entry) => readTrimmedString(readRecord(entry).title))
+    .filter(Boolean)
 }
 
 function purposeLabel(node: OutputWorkflowNode) {
@@ -354,6 +370,7 @@ export function OutputsWorkspace({
   onStartOutputRequest,
   onGetOutputRequestStatus,
   onCancelOutputRequest,
+  onDeleteOutputRequest,
   onStartOutputWorkflow,
   onStartOutputWorkflowRun,
   onGetOutputWorkflowStatus,
@@ -390,6 +407,10 @@ export function OutputsWorkspace({
   )
   const castAndContext = useMemo(
     () => snapshot.worldEntities.filter((entity) => entity.nodeType !== 'sequence_unit'),
+    [snapshot.worldEntities],
+  )
+  const worldEntityNameByKey = useMemo(
+    () => new Map(snapshot.worldEntities.map((entity) => [entity.key, entity.name || entity.key])),
     [snapshot.worldEntities],
   )
   const outputRequests = useMemo(() => snapshot.outputRequests.slice().sort((left, right) => (
@@ -556,8 +577,6 @@ export function OutputsWorkspace({
       const response = await onStartOutputRequest({
         prompt: cleanPrompt,
         sourceSurface: 'outputs',
-        pageCount: comicPageCount,
-        selectedSequenceUnitKeys: selectedComicSequenceKey ? [selectedComicSequenceKey] : [],
       })
       setSelectedRequestId(response.request.id)
       if (response.run) {
@@ -1273,6 +1292,7 @@ export function OutputsWorkspace({
                       ].filter((stage) => stage.steps.length > 0)
                       const isSelected = selectedOutputRequest?.id === request.id
                       const progressPercent = progressSteps.length > 0 ? Math.round((completedCount / progressSteps.length) * 100) : 0
+                      const plannedSections = plannedSectionTitles(request)
                       return (
                         <article className={`outputs-request-row ${isSelected ? 'is-selected' : ''} is-${statusClass(rowStatus)}`} key={request.id}>
                           <button
@@ -1299,9 +1319,11 @@ export function OutputsWorkspace({
                               <strong>{request.title}</strong>
                               <em>{request.prompt}</em>
                               <span className="outputs-request-context">
-                                {request.selectedEntityKeys.slice(0, 3).map((key) => <small key={key}>{key}</small>)}
-                                {request.selectedSequenceUnitKeys.slice(0, 2).map((key) => <small key={key}>{key}</small>)}
-                                {request.pageCount ? <small>{request.pageCount} pages</small> : null}
+                                {request.selectedEntityKeys.slice(0, 3).map((key) => <small key={key}>{worldEntityNameByKey.get(key) ?? key}</small>)}
+                                {request.selectedSequenceUnitKeys.slice(0, 2).map((key) => <small key={key}>{worldEntityNameByKey.get(key) ?? key}</small>)}
+                                {plannedSections.slice(0, 3).map((title) => <small key={title}>{title}</small>)}
+                                {plannedSections.length > 3 ? <small>{plannedSections.length} sections</small> : null}
+                                {request.outputKind === 'comic_issue_from_sequence' && request.pageCount ? <small>{request.pageCount} pages</small> : null}
                               </span>
                               <span className="outputs-row-workflow" aria-label="Workflow stage summary">
                                 {rowStageSummary.length > 0 ? rowStageSummary.map((stage) => (
@@ -1392,6 +1414,34 @@ export function OutputsWorkspace({
                                   Cancel
                                 </button>
                               )}
+                              {!requestRun || isTerminalOutputWorkflowRunStatus(requestRun.status) ? (
+                                <button
+                                  className="outputs-secondary-action outputs-compact-action"
+                                  disabled={busyRequestId === request.id}
+                                  onClick={async () => {
+                                    const confirmed = window.confirm('Remove this output request from the list? Generated assets and workflow records are left intact.')
+                                    if (!confirmed) return
+                                    setBusyRequestId(request.id)
+                                    setError(null)
+                                    try {
+                                      await onDeleteOutputRequest(request.id)
+                                      if (selectedRequestId === request.id) {
+                                        const nextRequest = outputRequests.find((entry) => entry.id !== request.id) ?? null
+                                        setSelectedRequestId(nextRequest?.id ?? null)
+                                        if (nextRequest?.latestRunId) setActiveRunId(nextRequest.latestRunId)
+                                      }
+                                      await onRefreshLiveSnapshot()
+                                    } catch (requestError) {
+                                      setError(requestError instanceof Error ? requestError.message : 'Could not delete output request.')
+                                    } finally {
+                                      setBusyRequestId(null)
+                                    }
+                                  }}
+                                  type="button"
+                                >
+                                  Remove
+                                </button>
+                              ) : null}
                             </div>
                           </div>
                         </article>

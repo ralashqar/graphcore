@@ -1,16 +1,19 @@
 import { requireUserClient } from '../_shared/auth.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
+import { runOpenAiResponses } from '../_shared/openai.ts'
 import {
   buildOutputWorkflowExecutionPlan,
   buildOutputWorkflowFingerprint,
-  classifyOutputPrompt,
   getOutputWorkflowNodeExecutionMetadata,
   getOutputWorkflowNodeGuidanceConfig,
   isTerminalOutputWorkflowRunStatus,
+  outputPromptPlannerResultSchema,
   outputRequestStartRequestSchema,
   outputRequestStatusResponseSchema,
+  planOutputPrompt,
   planOutputRequestWorkflow,
 } from '../../../src/domain/outputWorkflow.ts'
+import { z } from 'zod'
 import {
   mapOutputArtifactRow,
   mapOutputRequestRow,
@@ -38,6 +41,208 @@ function titleFromPrompt(prompt: string) {
   return cleaned.length > 72 ? `${cleaned.slice(0, 69)}...` : cleaned || 'Output request'
 }
 
+const outputScopeResolverSchema = z.object({
+  selectedEntityKeys: z.array(z.string()).default([]),
+  selectedSequenceUnitKeys: z.array(z.string()).default([]),
+  confidence: z.number().min(0).max(1).default(0),
+  rationale: z.string().default(''),
+})
+
+function textFromUnknown(value: unknown) {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function recordFromUnknown(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+
+function stringArrayFromUnknown(value: unknown) {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0) : []
+}
+
+function outputRequestPlannerModel() {
+  return Deno.env.get('OUTPUT_REQUEST_PLANNER_MODEL')?.trim()
+    || Deno.env.get('OUTPUT_WORKFLOW_TEXT_MODEL')?.trim()
+    || 'gpt-4.1-mini'
+}
+
+function isImageOutputKind(outputKind: string) {
+  return outputKind === 'concept_art_image' || outputKind === 'poster_image'
+}
+
+function buildEntityScopeCatalog(snapshot: z.infer<typeof outputRequestStartRequestSchema>['snapshot']) {
+  return snapshot.worldEntities
+    .filter((entity) => entity.nodeType !== 'sequence_unit')
+    .slice(0, 160)
+    .map((entity) => {
+      const metadata = recordFromUnknown(entity.metadata)
+      return {
+        key: entity.key,
+        name: entity.name,
+        type: entity.nodeType,
+        aliases: entity.aliases,
+        summary: entity.summary,
+        context: entity.context,
+        visualDescription: textFromUnknown(metadata.visualDescription),
+        hasImageAsset: Boolean(entity.thumbnailAssetKey || entity.thumbnail_asset_key || textFromUnknown(metadata.assetKey) || textFromUnknown(metadata.brandAtlasAssetKey)),
+      }
+    })
+}
+
+function buildSequenceScopeCatalog(snapshot: z.infer<typeof outputRequestStartRequestSchema>['snapshot']) {
+  return snapshot.worldEntities
+    .filter((entity) => entity.nodeType === 'sequence_unit')
+    .slice(0, 80)
+    .map((entity) => ({
+      key: entity.key,
+      name: entity.name,
+      summary: entity.summary,
+      context: entity.context,
+    }))
+}
+
+async function resolveOutputRequestWorldScope(input: {
+  prompt: string
+  planner: z.infer<typeof outputPromptPlannerResultSchema>
+  snapshot: z.infer<typeof outputRequestStartRequestSchema>['snapshot']
+}) {
+  if (!isImageOutputKind(input.planner.outputKind) || input.planner.intent !== 'output_generation') {
+    return {
+      planner: input.planner,
+      scopeResolver: null as Record<string, unknown> | null,
+    }
+  }
+
+  const entities = buildEntityScopeCatalog(input.snapshot)
+  const sequences = buildSequenceScopeCatalog(input.snapshot)
+  if (entities.length === 0 && sequences.length === 0) {
+    return {
+      planner: input.planner,
+      scopeResolver: {
+        mode: 'skipped',
+        reason: 'no_world_entities_available',
+      },
+    }
+  }
+
+  const validEntityKeys = new Set(entities.map((entity) => entity.key))
+  const validSequenceKeys = new Set(sequences.map((sequence) => sequence.key))
+  const model = outputRequestPlannerModel()
+
+  try {
+    const response = await runOpenAiResponses({
+      model,
+      instructions: [
+        'You are GraphCore\'s output world-scope resolver.',
+        'Select only the world graph entities and sequence units directly needed by the user prompt for this output.',
+        'For image prompts, choose the characters, places, objects, or concepts explicitly named or clearly required as visual references.',
+        'Do not broaden to the surrounding cast, chapter cast, factions, or related characters unless the prompt asks for them.',
+        'If a prompt says "Ilya saluting to Anya", select Ilya and Anya only, plus a location only if it is named or visually required.',
+        'Use only keys from the supplied catalog. Return JSON only.',
+      ].join('\n'),
+      input: JSON.stringify({
+        prompt: input.prompt,
+        outputKind: input.planner.outputKind,
+        targetFormat: input.planner.targetFormat,
+        project: input.snapshot.project,
+        worldWiki: input.snapshot.worldWiki,
+        currentPlannerSelection: {
+          selectedEntityKeys: input.planner.selectedEntityKeys,
+          selectedSequenceUnitKeys: input.planner.selectedSequenceUnitKeys,
+        },
+        entityCatalog: entities,
+        sequenceCatalog: sequences,
+      }),
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'graphcore_output_scope_resolution',
+          strict: true,
+          schema: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['selectedEntityKeys', 'selectedSequenceUnitKeys', 'confidence', 'rationale'],
+            properties: {
+              selectedEntityKeys: {
+                type: 'array',
+                items: { type: 'string' },
+              },
+              selectedSequenceUnitKeys: {
+                type: 'array',
+                items: { type: 'string' },
+              },
+              confidence: {
+                type: 'number',
+                minimum: 0,
+                maximum: 1,
+              },
+              rationale: {
+                type: 'string',
+              },
+            },
+          },
+        },
+      },
+      maxOutputTokens: 900,
+      metadata: {
+        graphcore_task: 'output_request_scope_resolver',
+        graphcore_output_kind: input.planner.outputKind,
+      },
+      timeoutMs: 45_000,
+    })
+
+    if (!response.response.ok) throw new Error(`OpenAI scope resolver failed with HTTP ${response.response.status}.`)
+    const parsed = outputScopeResolverSchema.parse(JSON.parse(response.outputText))
+    const selectedEntityKeys = parsed.selectedEntityKeys
+      .filter((key) => validEntityKeys.has(key))
+      .slice(0, 12)
+    const selectedSequenceUnitKeys = parsed.selectedSequenceUnitKeys
+      .filter((key) => validSequenceKeys.has(key))
+      .slice(0, 3)
+    const keepExistingEntityKeys = input.planner.selectedEntityKeys.filter((key) => validEntityKeys.has(key))
+    const keepExistingSequenceKeys = input.planner.selectedSequenceUnitKeys.filter((key) => validSequenceKeys.has(key))
+    const resolvedEntityKeys = selectedEntityKeys.length > 0
+      ? selectedEntityKeys
+      : keepExistingEntityKeys
+    const resolvedSequenceKeys = selectedSequenceUnitKeys.length > 0
+      ? selectedSequenceUnitKeys
+      : keepExistingSequenceKeys
+    const planner = outputPromptPlannerResultSchema.parse({
+      ...input.planner,
+      selectedEntityKeys: [...new Set(resolvedEntityKeys)],
+      selectedSequenceUnitKeys: [...new Set(resolvedSequenceKeys)],
+      worldScope: resolvedEntityKeys.length > 0 || resolvedSequenceKeys.length > 0 ? 'prompt_bound_scope' : 'full_world',
+      plannerNotes: [
+        input.planner.plannerNotes,
+        parsed.rationale ? `Scope resolver: ${parsed.rationale}` : '',
+      ].filter(Boolean).join('\n'),
+    })
+    return {
+      planner,
+      scopeResolver: {
+        mode: 'llm',
+        model,
+        confidence: parsed.confidence,
+        rationale: parsed.rationale,
+        selectedEntityKeys: planner.selectedEntityKeys,
+        selectedSequenceUnitKeys: planner.selectedSequenceUnitKeys,
+      },
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    return {
+      planner: input.planner,
+      scopeResolver: {
+        mode: 'fallback',
+        model,
+        error: message,
+        selectedEntityKeys: input.planner.selectedEntityKeys,
+        selectedSequenceUnitKeys: input.planner.selectedSequenceUnitKeys,
+      },
+    }
+  }
+}
+
 Deno.serve(async (request) => {
   const preflight = maybeHandleOptions(request)
   if (preflight) return preflight
@@ -55,7 +260,21 @@ Deno.serve(async (request) => {
       .single()
     if (draftResponse.error || !draftResponse.data) throw new HttpError(404, 'Draft not found or not editable.')
 
-    const classification = classifyOutputPrompt(payload.prompt)
+    const initialPlanner = planOutputPrompt({
+      prompt: payload.prompt,
+      snapshot: payload.snapshot,
+      selectedEntityKeys: payload.selectedEntityKeys,
+      selectedSequenceUnitKeys: payload.selectedSequenceUnitKeys,
+      targetFormat: payload.targetFormat,
+    })
+    const scopeResolution = await resolveOutputRequestWorldScope({
+      prompt: payload.prompt,
+      planner: initialPlanner,
+      snapshot: payload.snapshot,
+    })
+    const planner = scopeResolution.planner
+    const comicOutput = planner.outputKind === 'comic_issue_from_sequence'
+    const effectivePageCount = comicOutput ? payload.pageCount ?? 8 : null
     const requestInsertResponse = await client
       .from('output_requests')
       .insert({
@@ -65,17 +284,20 @@ Deno.serve(async (request) => {
         source_surface: payload.sourceSurface,
         prompt: payload.prompt,
         title: titleFromPrompt(payload.prompt),
-        intent: classification.intent,
-        output_kind: classification.outputKind,
-        status: classification.intent === 'output_generation' ? 'planning' : 'awaiting_confirmation',
-        selected_entity_keys: payload.selectedEntityKeys,
-        selected_sequence_unit_keys: payload.selectedSequenceUnitKeys,
-        page_count: payload.pageCount,
-        target_format: payload.targetFormat,
-        planner_notes: classification.notes,
+        intent: planner.intent,
+        output_kind: planner.outputKind,
+        status: planner.intent === 'output_generation' && !planner.requiresConfirmation ? 'planning' : 'awaiting_confirmation',
+        selected_entity_keys: planner.selectedEntityKeys.length > 0 ? planner.selectedEntityKeys : payload.selectedEntityKeys,
+        selected_sequence_unit_keys: planner.selectedSequenceUnitKeys.length > 0 ? planner.selectedSequenceUnitKeys : payload.selectedSequenceUnitKeys,
+        page_count: effectivePageCount,
+        target_format: planner.targetFormat,
+        planner_notes: planner.plannerNotes,
         metadata: {
-          classification,
-          confidence: classification.confidence,
+          planner,
+          classification: planner,
+          scopeResolver: scopeResolution.scopeResolver,
+          confidence: planner.confidence,
+          plannedSections: planner.sections,
         },
       })
       .select(outputRequestSelect)
@@ -83,7 +305,7 @@ Deno.serve(async (request) => {
     if (requestInsertResponse.error || !requestInsertResponse.data) throw new Error(requestInsertResponse.error?.message ?? 'Failed to create output request.')
     let outputRequest = mapOutputRequestRow(requestInsertResponse.data)
 
-    if (classification.intent !== 'output_generation') {
+    if (planner.intent !== 'output_generation' || planner.requiresConfirmation) {
       return json(outputRequestStatusResponseSchema.parse({
         ok: true,
         request: outputRequest,
@@ -96,19 +318,16 @@ Deno.serve(async (request) => {
       }))
     }
 
-    const targetFormat = classification.outputKind === 'concept_art_image' || classification.outputKind === 'poster_image'
-      ? 'image'
-      : payload.targetFormat
     const plan = planOutputRequestWorkflow({
       projectId: payload.projectId,
       draftId: payload.draftId,
       prompt: payload.prompt,
-      selectedEntityKeys: payload.selectedEntityKeys,
-      selectedSequenceUnitKeys: payload.selectedSequenceUnitKeys,
-      pageCount: payload.pageCount,
-      targetFormat,
+      selectedEntityKeys: planner.selectedEntityKeys,
+      selectedSequenceUnitKeys: planner.selectedSequenceUnitKeys,
+      pageCount: effectivePageCount ?? undefined,
+      targetFormat: planner.targetFormat,
       snapshot: payload.snapshot,
-    }, classification.outputKind)
+    }, planner.outputKind)
     const validation = validateOutputWorkflowGraph({ nodes: plan.nodes, edges: plan.edges })
     if (!validation.ok) throw new HttpError(400, validation.diagnostics.join(' '))
 
@@ -131,7 +350,10 @@ Deno.serve(async (request) => {
           sourceSequenceUnitKeys: plan.sourceSequenceUnitKeys,
           diagnostics: plan.diagnostics,
           outputRequestId: outputRequest.id,
-          outputKind: classification.outputKind,
+          outputKind: planner.outputKind,
+          planner,
+          scopeResolver: scopeResolution.scopeResolver,
+          plannedSections: planner.sections,
         },
       })
       .select(outputWorkflowSelect)
@@ -186,7 +408,7 @@ Deno.serve(async (request) => {
       assets: Array.isArray(payload.runInput.assets) ? payload.runInput.assets : [],
       sourceEntityKeys: plan.sourceEntityKeys,
       sourceSequenceUnitKeys: plan.sourceSequenceUnitKeys,
-      pageCount: payload.pageCount,
+      ...(effectivePageCount ? { pageCount: effectivePageCount } : {}),
     }
     const runResponse = await client
       .from('output_workflow_runs')
@@ -205,7 +427,10 @@ Deno.serve(async (request) => {
           queuedAt: now,
           startedBy: 'start-output-request',
           outputRequestId: outputRequest.id,
-          outputKind: classification.outputKind,
+          outputKind: planner.outputKind,
+          planner,
+          scopeResolver: scopeResolution.scopeResolver,
+          plannedSections: planner.sections,
         },
         heartbeat_at: now,
       })
@@ -252,12 +477,15 @@ Deno.serve(async (request) => {
         selected_entity_keys: plan.sourceEntityKeys,
         selected_sequence_unit_keys: plan.sourceSequenceUnitKeys,
         target_format: plan.targetFormat,
-        planner_notes: [classification.notes, ...plan.diagnostics].filter(Boolean).join('\n'),
+        planner_notes: [planner.plannerNotes, ...plan.diagnostics].filter(Boolean).join('\n'),
         metadata: {
           ...outputRequest.metadata,
-          classification,
+          planner,
+          classification: planner,
+          scopeResolver: scopeResolution.scopeResolver,
           planDiagnostics: plan.diagnostics,
           preset: plan.preset,
+          plannedSections: planner.sections,
         },
       })
       .eq('id', outputRequest.id)

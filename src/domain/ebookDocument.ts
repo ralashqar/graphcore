@@ -21,6 +21,7 @@ export type EbookHtmlOptions = {
   subtitle?: string
   provenance?: string
   generatedAt?: string
+  documentMode?: 'ebook' | 'reference'
 }
 
 const SCENE_BREAK_PATTERN = /^(\*\s*){3,}$|^-{3,}$|^_{3,}$/
@@ -133,6 +134,7 @@ export function buildEbookHtmlBody(document: EbookDocument) {
 
 export function buildEbookHtmlDocument(markdown: string, options: EbookHtmlOptions = {}) {
   const document = parseEbookMarkdown(markdown, options)
+  const referenceMode = options.documentMode === 'reference'
   const generatedAt = options.generatedAt ?? new Date().toISOString()
   const provenance = options.provenance?.trim() || 'Generated from GraphCore world context'
   const body = buildEbookHtmlBody(document)
@@ -146,15 +148,15 @@ export function buildEbookHtmlDocument(markdown: string, options: EbookHtmlOptio
   <title>${escapeHtml(document.title)}</title>
   <style>
     @page {
-      size: 6in 9in;
-      margin: 0.72in 0.64in 0.72in 0.76in;
+      size: ${referenceMode ? '8.5in 11in' : '6in 9in'};
+      margin: ${referenceMode ? '0.72in 0.82in 0.72in 0.82in' : '0.72in 0.64in 0.72in 0.76in'};
     }
 
     html {
       color: #161514;
-      font-family: Georgia, "Times New Roman", Times, serif;
-      font-size: 11pt;
-      line-height: 1.45;
+      font-family: ${referenceMode ? 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' : 'Georgia, "Times New Roman", Times, serif'};
+      font-size: ${referenceMode ? '10.5pt' : '11pt'};
+      line-height: ${referenceMode ? '1.42' : '1.45'};
       hyphens: auto;
       -webkit-hyphens: auto;
     }
@@ -167,7 +169,7 @@ export function buildEbookHtmlDocument(markdown: string, options: EbookHtmlOptio
     .title-page {
       break-after: page;
       page-break-after: always;
-      min-height: 7.45in;
+      min-height: ${referenceMode ? '9.45in' : '7.45in'};
       display: flex;
       flex-direction: column;
       justify-content: center;
@@ -176,9 +178,9 @@ export function buildEbookHtmlDocument(markdown: string, options: EbookHtmlOptio
 
     .title-page h1 {
       margin: 0;
-      font-size: 28pt;
+      font-size: ${referenceMode ? '34pt' : '28pt'};
       line-height: 1.08;
-      font-weight: 600;
+      font-weight: ${referenceMode ? '700' : '600'};
       letter-spacing: 0;
     }
 
@@ -201,9 +203,9 @@ export function buildEbookHtmlDocument(markdown: string, options: EbookHtmlOptio
     }
 
     .chapter {
-      break-before: page;
-      page-break-before: always;
-      padding-top: 0.7in;
+      break-before: ${referenceMode ? 'auto' : 'page'};
+      page-break-before: ${referenceMode ? 'auto' : 'always'};
+      padding-top: ${referenceMode ? '0.24in' : '0.7in'};
     }
 
     .chapter:first-of-type {
@@ -212,33 +214,35 @@ export function buildEbookHtmlDocument(markdown: string, options: EbookHtmlOptio
     }
 
     .chapter h1 {
-      margin: 0 0 0.42in;
-      text-align: center;
-      font-size: 16pt;
+      margin: ${referenceMode ? '0.18in 0 0.16in' : '0 0 0.42in'};
+      text-align: ${referenceMode ? 'left' : 'center'};
+      font-size: ${referenceMode ? '17pt' : '16pt'};
       line-height: 1.25;
-      font-weight: 600;
+      font-weight: ${referenceMode ? '700' : '600'};
       letter-spacing: 0;
+      border-bottom: ${referenceMode ? '1px solid #d5d1c8' : '0'};
+      padding-bottom: ${referenceMode ? '0.08in' : '0'};
     }
 
     .section-heading {
-      margin: 0.26in 0 0.16in;
-      text-align: center;
+      margin: ${referenceMode ? '0.18in 0 0.08in' : '0.26in 0 0.16in'};
+      text-align: ${referenceMode ? 'left' : 'center'};
       font-size: 10pt;
       line-height: 1.25;
-      font-weight: 600;
+      font-weight: 700;
       letter-spacing: 0.03em;
       text-transform: uppercase;
     }
 
     p {
-      margin: 0;
-      text-align: justify;
+      margin: ${referenceMode ? '0 0 0.08in' : '0'};
+      text-align: ${referenceMode ? 'left' : 'justify'};
       orphans: 2;
       widows: 2;
     }
 
     p + p {
-      text-indent: 0.22in;
+      text-indent: ${referenceMode ? '0' : '0.22in'};
     }
 
     h1 + p,
@@ -250,11 +254,12 @@ export function buildEbookHtmlDocument(markdown: string, options: EbookHtmlOptio
 
     blockquote {
       margin: 0 0 0.28in;
-      padding: 0 0.22in;
+      padding: ${referenceMode ? '0.08in 0.14in' : '0 0.22in'};
       color: #34302c;
       font-size: 10.5pt;
       line-height: 1.45;
-      text-align: center;
+      text-align: ${referenceMode ? 'left' : 'center'};
+      border-left: ${referenceMode ? '3px solid #7b69ff' : '0'};
     }
 
     .scene-break {
@@ -281,9 +286,11 @@ export function buildEbookHtmlDocument(markdown: string, options: EbookHtmlOptio
 
 export function buildEbookDocumentMetadata(markdown: string, options: EbookHtmlOptions = {}) {
   const document = parseEbookMarkdown(markdown, options)
+  const referenceMode = options.documentMode === 'reference'
   return {
     renderer: 'chromium-html-css',
-    pageSize: '6in x 9in',
+    documentMode: referenceMode ? 'reference' : 'ebook',
+    pageSize: referenceMode ? '8.5in x 11in' : '6in x 9in',
     manuscriptCharacterCount: document.metadata.manuscriptCharacterCount,
     chapterCount: document.metadata.chapterCount,
     paragraphCount: document.metadata.paragraphCount,

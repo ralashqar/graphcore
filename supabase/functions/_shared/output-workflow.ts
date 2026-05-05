@@ -41,7 +41,7 @@ import {
   type OpenAiResponseResult,
 } from './openai.ts'
 
-const OUTPUT_WORKFLOW_EXECUTOR_VERSION = 'rich-comic-adaptation-v10'
+const OUTPUT_WORKFLOW_EXECUTOR_VERSION = 'prompt-adherent-output-planner-v1'
 const DEFAULT_CHAPTER_PROSE_TIMEOUT_MS = 3_600_000
 const DEFAULT_CHAPTER_PROSE_ATTEMPTS = 2
 const FAL_QUEUE_BASE_URL = 'https://queue.fal.run'
@@ -53,7 +53,7 @@ export type OutputDocumentRenderer = (input: {
   provenance: string
   generatedAt: string
   fileName: string
-  renderMode?: 'ebook' | 'comic'
+  renderMode?: 'ebook' | 'comic' | 'reference'
   coverImage?: {
     bytes: Uint8Array
     mimeType: string
@@ -705,6 +705,7 @@ function extractWorldContext(run: OutputWorkflowRun, node: OutputWorkflowNode) {
   const config = asRecord(node.config)
   const configuredSourceEntityKeys = Array.isArray(config.sourceEntityKeys) ? config.sourceEntityKeys.filter((entry): entry is string => typeof entry === 'string') : []
   const sourceSequenceUnitKeys = Array.isArray(config.sourceSequenceUnitKeys) ? config.sourceSequenceUnitKeys.filter((entry): entry is string => typeof entry === 'string') : []
+  const strictSourceEntityFilter = config.strictSourceEntityFilter === true
   const sourceEntityKeys = run.preset === 'comic_issue_from_sequence'
     ? chooseComicContextEntityKeys({
       existingSourceEntityKeys: configuredSourceEntityKeys,
@@ -719,7 +720,9 @@ function extractWorldContext(run: OutputWorkflowRun, node: OutputWorkflowNode) {
     .sort((left, right) => Number(readEntitySequence(left).ordinal ?? 0) - Number(readEntitySequence(right).ordinal ?? 0))
   const worldEntities = entities
     .filter((entity) => entity.nodeType !== 'sequence_unit' && entity.node_type !== 'sequence_unit')
-    .filter((entity) => sourceEntityKeys.length === 0 || sourceEntityKeys.includes(String(entity.key)))
+    .filter((entity) => strictSourceEntityFilter
+      ? sourceEntityKeys.includes(String(entity.key))
+      : sourceEntityKeys.length === 0 || sourceEntityKeys.includes(String(entity.key)))
   return {
     wiki,
     entities: worldEntities,
@@ -1298,6 +1301,127 @@ function parseJsonObject(text: string) {
     }
   }
   return {}
+}
+
+function configuredBibleSections(nodeConfig: Record<string, unknown>) {
+  const sections = Array.isArray(nodeConfig.sections)
+    ? nodeConfig.sections.map(asRecord)
+    : []
+  return sections
+    .map((section, index) => ({
+      key: readText(section.key) || `section_${index + 1}`,
+      title: readText(section.title) || `Section ${index + 1}`,
+      description: readText(section.description),
+      order: Number(section.order ?? index + 1) || index + 1,
+    }))
+    .filter((section) => section.key && section.title)
+}
+
+function buildBibleSectionPlan(config: Record<string, unknown>, context: Record<string, unknown>) {
+  const sections = configuredBibleSections(config)
+  const fallbackSections = sections.length > 0 ? sections : [
+    { key: 'core_premise', title: 'Core Premise', description: 'Project premise and core conflict.', order: 1 },
+    { key: 'world_overview', title: 'World Overview', description: 'Main world context and status quo.', order: 2 },
+    { key: 'main_characters', title: 'Main Characters', description: 'Primary character dossiers.', order: 3 },
+  ]
+  const entities = Array.isArray(context.entities) ? context.entities.map(asRecord) : []
+  const sequenceUnits = Array.isArray(context.sequenceUnits) ? context.sequenceUnits.map(asRecord) : []
+  return fallbackSections.map((section) => ({
+    ...section,
+    entityCount: entities.length,
+    sequenceUnitCount: sequenceUnits.length,
+    canonPolicy: 'Use only current world graph canon. If information is missing, state "Not yet defined in canon."',
+  }))
+}
+
+function buildBibleSectionInstruction(input: {
+  context: Record<string, unknown>
+  sectionPlan: Array<Record<string, unknown>>
+  sectionKey: string
+  sectionTitle: string
+  sectionDescription: string
+  prompt: string
+  guidance: OutputGuidanceBundle
+}) {
+  const wiki = asRecord(input.context.wiki ?? input.context.worldWiki)
+  const sectionBrief = input.sectionPlan.find((section) => readText(section.key) === input.sectionKey) ?? {}
+  const entities = Array.isArray(input.context.entities) ? input.context.entities.map(asRecord) : []
+  const sequenceUnits = Array.isArray(input.context.sequenceUnits) ? input.context.sequenceUnits.map(asRecord) : []
+  const relationships = Array.isArray(input.context.relationships) ? input.context.relationships.map(asRecord) : []
+  const threads = Array.isArray(input.context.threads) ? input.context.threads.map(asRecord) : []
+  return [
+    `Write the "${input.sectionTitle}" section for a canon reference document / story bible.`,
+    input.sectionDescription ? `Section purpose: ${input.sectionDescription}` : '',
+    Object.keys(sectionBrief).length > 0 ? `Planner section brief: ${compactForPrompt(sectionBrief, 1800)}` : '',
+    input.prompt ? `User request: ${input.prompt}` : '',
+    guidanceMarkdown(input.guidance),
+    '',
+    'Output requirements:',
+    '- Return Markdown for this section only.',
+    `- Start with exactly this heading: ## ${input.sectionTitle}`,
+    '- Write reference material, not fiction prose, not chapters, and not a synopsis pretending to be a scene.',
+    '- Use concise paragraphs and bullets where they improve scanability.',
+    '- Use only current world graph canon. Do not invent missing names, backstory, rules, or chronology.',
+    '- If a subsection lacks canon, write "Not yet defined in canon" and identify what would be useful to define next.',
+    '- Include continuity notes, constraints, and unresolved questions when relevant.',
+    '',
+    'Current world context:',
+    compactForPrompt({
+      wiki,
+      entities: entities.map((entity) => ({
+        key: readText(entity.key),
+        name: readText(entity.name),
+        type: readText(entity.nodeType ?? entity.node_type),
+        summary: readText(entity.summary),
+        context: readText(entity.context),
+        visualDescription: readText(asRecord(entity.metadata).visualDescription),
+        customProperties: entity.customProperties,
+      })).slice(0, 90),
+      sequenceUnits: sequenceUnits.map((unit) => ({
+        key: readText(unit.key),
+        name: readText(unit.name),
+        summary: readText(unit.summary),
+        sequence: readEntitySequence(unit),
+      })).slice(0, 48),
+      relationships: relationships.slice(0, 120),
+      threads: threads.slice(0, 40),
+    }, 22000),
+  ].filter(Boolean).join('\n\n')
+}
+
+function assembleBibleMarkdown(input: {
+  context: Record<string, unknown>
+  upstream: Record<string, unknown>
+  configuredSections: Array<{ key: string; title: string; description: string; order: number }>
+}) {
+  const wiki = asRecord(input.context.wiki ?? input.context.worldWiki)
+  const title = titleFromContext(input.context)
+  const subtitle = readText(wiki.logline) || readText(wiki.synopsis)
+  const sectionRecords = Object.values(input.upstream)
+    .map(asRecord)
+    .filter((output) => readText(output.sectionKey) || readText(output.markdown) || readText(output.text))
+    .map((output) => ({
+      sectionKey: readText(output.sectionKey),
+      sectionTitle: readText(output.sectionTitle),
+      sectionOrder: Number(output.sectionOrder ?? 9999) || 9999,
+      markdown: readText(output.markdown) || readText(output.text),
+    }))
+    .filter((section) => section.markdown)
+  const configuredOrder = new Map(input.configuredSections.map((section) => [section.key, section.order]))
+  sectionRecords.sort((left, right) => {
+    const leftOrder = configuredOrder.get(left.sectionKey) ?? left.sectionOrder
+    const rightOrder = configuredOrder.get(right.sectionKey) ?? right.sectionOrder
+    return leftOrder - rightOrder || left.sectionTitle.localeCompare(right.sectionTitle)
+  })
+  return [
+    `# ${title} Story Bible`,
+    subtitle ? `> ${subtitle}` : '',
+    '',
+    '## About This Reference',
+    'This document summarizes the current GraphCore world canon for writing, art direction, comics, video, and continuity work. Sections marked "Not yet defined in canon" are gaps in the source graph rather than new canon.',
+    '',
+    ...sectionRecords.map((section) => section.markdown),
+  ].filter(Boolean).join('\n\n')
 }
 
 const comicSceneScriptJsonSchema = {
@@ -2793,6 +2917,7 @@ async function registerDocumentArtifact(input: {
   markdown: string
   guidance?: OutputGuidanceBundle | null
   coverImage?: Record<string, unknown> | null
+  documentMode?: 'ebook' | 'reference'
   documentRenderer?: OutputDocumentRenderer | null
 }) {
   const slug = slugify(input.workflow.name)
@@ -2808,11 +2933,13 @@ async function registerDocumentArtifact(input: {
   const subtitle = readText(wiki.logline) || readText(wiki.subtitle)
   const generatedAt = new Date().toISOString()
   const provenance = 'Generated from the GraphCore world graph'
+  const documentMode = input.documentMode ?? (input.run.preset === 'story_bible_from_world' ? 'reference' : 'ebook')
   const baseRenderMetadata = buildEbookDocumentMetadata(input.markdown, {
     title,
     subtitle,
     provenance,
     generatedAt,
+    documentMode,
   })
   if (!input.documentRenderer) {
     throw new Error('PDF rendering requires a worker document renderer. The truncated fallback renderer has been removed.')
@@ -2824,6 +2951,7 @@ async function registerDocumentArtifact(input: {
     provenance,
     generatedAt,
     fileName: `${slug}.pdf`,
+    renderMode: documentMode,
     coverImage: input.coverImage && readText(input.coverImage.storagePath)
       ? {
         bytes: await downloadProjectAssetBytes(input.client, readText(input.coverImage.storagePath)),
@@ -2856,7 +2984,8 @@ async function registerDocumentArtifact(input: {
     nodeKey: input.node.key,
     preset: input.run.preset,
     provider: 'graphcore',
-    model: 'deterministic-ebook-v1',
+    model: documentMode === 'reference' ? 'deterministic-reference-document-v1' : 'deterministic-ebook-v1',
+    documentMode,
     storageBucket: 'project-assets',
     storagePath,
     sourceEntityKeys: input.run.input.sourceEntityKeys ?? [],
@@ -2930,7 +3059,9 @@ async function registerDocumentArtifact(input: {
       kind: 'pdf',
       asset_key: assetKey,
       mime_type: 'application/pdf',
-      summary: 'Written ebook PDF generated from the world graph.',
+      summary: documentMode === 'reference'
+        ? 'Story bible reference PDF generated from the world graph.'
+        : 'Written ebook PDF generated from the world graph.',
       metadata: {
         ...assetMetadata,
         companionMarkdownAssetKey: markdownAssetKey,
@@ -2951,11 +3082,13 @@ async function registerDocumentArtifact(input: {
       run_id: input.run.id,
       node_id: input.node.id,
       key: markdownArtifactKey,
-      name: `${input.workflow.name} Manuscript`,
+      name: documentMode === 'reference' ? `${input.workflow.name} Markdown` : `${input.workflow.name} Manuscript`,
       kind: 'manuscript',
       asset_key: markdownAssetKey,
       mime_type: 'text/markdown',
-      summary: 'Full manuscript Markdown generated from the world graph.',
+      summary: documentMode === 'reference'
+        ? 'Full story bible reference Markdown generated from the world graph.'
+        : 'Full manuscript Markdown generated from the world graph.',
       metadata: {
         ...markdownAssetMetadata,
         primaryPdfAssetKey: assetKey,
@@ -3046,6 +3179,77 @@ async function executeNode(input: {
         const text = chapterPlan.map((chapter) => `${chapter.number}. ${chapter.title}: ${chapter.synopsis}`).join('\n')
         const outputs = { chapterPlan, plan: chapterPlan, text, guidance }
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-chapter-plan-v1' }
+      }
+      if (purpose === 'bible_section_plan') {
+        const config = asRecord(input.node.config)
+        const sectionPlan = buildBibleSectionPlan(config, context)
+        const text = sectionPlan.map((section) => `${section.order}. ${section.title}: ${section.description}`).join('\n')
+        const outputs = { sectionPlan, plan: sectionPlan, sections: sectionPlan, text, guidance }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-bible-section-plan-v1' }
+      }
+      if (purpose === 'bible_section') {
+        const config = asRecord(input.node.config)
+        const sectionKey = readText(config.sectionKey)
+        const sectionTitle = readText(config.sectionTitle) || input.node.label
+        const sectionDescription = readText(config.sectionDescription)
+        const sectionOrder = Number(config.sectionOrder ?? 9999) || 9999
+        const sectionPlan = readFirstUpstreamArray(input.upstream, ['sectionPlan', 'plan', 'sections'])
+        const prose = await generateBackgroundMarkdown({
+          instructions: [
+            'You are a senior story bible editor and canon documentation writer.',
+            'Write concise reference-document Markdown from the supplied world graph only.',
+            'Do not write fiction prose, screenplay, chapter prose, or marketing copy.',
+            'If source material is missing, say so plainly instead of inventing canon.',
+          ].join(' '),
+          prompt: buildBibleSectionInstruction({
+            context,
+            sectionPlan,
+            sectionKey,
+            sectionTitle,
+            sectionDescription,
+            prompt,
+            guidance,
+          }),
+          maxOutputTokens: 4200,
+          metadata: {
+            graphcore_task: 'output_workflow_bible_section',
+            graphcore_node_key: input.node.key,
+            graphcore_section_key: sectionKey,
+          },
+          priorProviderRequestId: input.priorStep?.providerRequestId,
+          shouldCancel: input.shouldCancel,
+          onProgress: async (progress) => {
+            await input.onProgress?.({
+              provider: 'openai',
+              model: outputWorkflowTextModel(),
+              providerRequestId: progress.providerRequestId,
+              metadata: {
+                providerMode: progress.providerMode,
+                providerStatus: progress.providerStatus,
+                lastProviderPollAt: progress.lastProviderPollAt,
+              },
+            })
+          },
+        })
+        const outputs = {
+          markdown: prose.markdown,
+          text: prose.markdown,
+          sectionKey,
+          sectionTitle,
+          sectionOrder,
+          documentMode: 'reference',
+          guidance,
+          usage: prose.usage,
+          providerStatus: prose.providerStatus,
+        }
+        return {
+          inputHash: input.inputHash,
+          outputHash: hashOutputWorkflowValue(outputs),
+          outputs,
+          provider: 'openai',
+          model: prose.model,
+          providerRequestId: prose.providerRequestId,
+        }
       }
       if (purpose === 'concept_art_prompt' || purpose === 'poster_prompt') {
         const worldWiki = asRecord(context.worldWiki ?? context.wiki)
@@ -3839,6 +4043,24 @@ async function executeNode(input: {
         const outputs = { markdown, text: markdown, guidance }
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-chapter-assembly-v1' }
       }
+      if (purpose === 'bible_assembly') {
+        const config = asRecord(input.node.config)
+        const context = worldContextFromRunInput(input.run)
+        const guidance = readUpstreamGuidanceBundle(input.upstream)
+        const markdown = assembleBibleMarkdown({
+          context,
+          upstream: input.upstream,
+          configuredSections: configuredBibleSections(config),
+        })
+        const outputs = {
+          markdown,
+          text: markdown,
+          documentMode: 'reference',
+          guidance,
+          sectionCount: configuredBibleSections(config).length,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-bible-assembly-v1' }
+      }
       const outputs = { output: input.upstream }
       return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-utility-v1' }
     }
@@ -3875,17 +4097,20 @@ async function executeNode(input: {
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-comic-document-render-v1' }
       }
       const markdown = readFirstUpstreamText(input.upstream)
+      const config = asRecord(input.node.config)
       const guidance = readUpstreamGuidanceBundle(input.upstream)
       const coverImage = readFirstUpstreamImage(input.upstream, ['image', 'coverImage'])
       const context = worldContextFromRunInput(input.run)
       const wiki = asRecord(context.wiki)
       const title = titleFromContext(context)
       const subtitle = readText(wiki.logline) || readText(wiki.subtitle)
+      const documentMode = readText(config.documentMode) === 'reference' || input.run.preset === 'story_bible_from_world' ? 'reference' : 'ebook'
       const renderMetadata = buildEbookDocumentMetadata(markdown, {
         title,
         subtitle,
         provenance: 'Generated from the GraphCore world graph',
         generatedAt: new Date().toISOString(),
+        documentMode,
       })
       const outputs = {
         markdown,
@@ -3893,6 +4118,7 @@ async function executeNode(input: {
         fileName: `${slugify(input.workflow.name)}.pdf`,
         renderMetadata,
         coverImage,
+        documentMode,
         guidance,
       }
       return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-document-render-v1' }
@@ -3940,6 +4166,7 @@ async function executeNode(input: {
         markdown,
         guidance,
         coverImage,
+        documentMode: input.run.preset === 'story_bible_from_world' || purpose === 'story_bible_artifact' ? 'reference' : 'ebook',
         documentRenderer: input.documentRenderer,
       })
       const outputs = {
