@@ -1,6 +1,6 @@
 import { z } from 'npm:zod@4'
 
-import { runOpenAiResponses } from './openai.ts'
+import { TextGateway } from './ai-core/gateways.ts'
 
 function isTruthyEnv(value: string | undefined | null) {
   if (!value) return false
@@ -91,77 +91,31 @@ export async function runStructuredWorldBuildModel<TPayload>({
     console.log(`[world-build-debug] ${passLabel} request-promptContext`, stringifyJson(promptContext))
   }
 
-  const aiResponse = await runOpenAiResponses({
-    model,
-    input: [
-      { role: 'system', content: [{ type: 'input_text', text: systemText }] },
-      { role: 'user', content: [{ type: 'input_text', text: JSON.stringify(promptContext, null, 2) }] },
-    ],
-    text: {
-      format: {
-        type: 'json_object',
-      },
-    },
-    reasoning: { effort: 'low' },
-    metadata: {
-      feature: 'world-build',
-      pass: passLabel,
-    },
-    store: false,
-    maxOutputTokens,
-  })
-
-  if (debugEnabled) {
-    console.log(`[world-build-debug] ${passLabel} response-meta`, previewJson({
-      ok: aiResponse.response.ok,
-      status: aiResponse.response.status,
-      requestId: aiResponse.response.headers.get('x-request-id'),
-      outputText: aiResponse.outputText,
-      body: aiResponse.body,
-    }))
-  }
-
-  if (!aiResponse.response.ok) {
-    const upstreamMessage =
-      typeof aiResponse.body.error === 'object' && aiResponse.body.error !== null
-        ? ((aiResponse.body.error as { message?: string }).message ?? 'OpenAI request failed.')
-        : 'OpenAI request failed.'
-
+  try {
+    const response = await TextGateway.generateObject({
+      modelPreference: model,
+      system: systemText,
+      messages: [{ role: 'user', content: JSON.stringify(promptContext, null, 2) }],
+      schema,
+      schemaName: `world_build_${passLabel}`,
+      maxTokens: maxOutputTokens,
+    })
+    
+    if (debugEnabled) {
+      console.log(`[world-build-debug] ${passLabel} response-meta`, previewJson({
+        ok: true,
+        status: 200,
+        object: response.object,
+      }))
+    }
+    
+    return response.object
+  } catch (err) {
+    const upstreamMessage = err instanceof Error ? err.message : 'OpenAI request failed.'
     throw new Error(`[world-build-json-object-v2] ${passLabel} failed: ${upstreamMessage}`)
   }
 
-  const parsedJson = extractJsonBlock(aiResponse.outputText)
-  if (!parsedJson) {
-    if (debugEnabled) {
-      console.log(`[world-build-debug] ${passLabel} parse-failed`, previewJson({
-        outputText: aiResponse.outputText,
-        body: aiResponse.body,
-      }))
-    }
-    throw new Error(`${passLabel} returned invalid JSON.`)
-  }
-
-  if (debugEnabled) {
-    console.log(`[world-build-debug] ${passLabel} parsed-json`, previewJson(parsedJson))
-  }
-
-  if (!schema || typeof (schema as { safeParse?: unknown }).safeParse !== 'function') {
-    const schemaKeys =
-      schema && typeof schema === 'object'
-        ? Object.keys(schema as Record<string, unknown>)
-        : []
-    throw new Error(`${passLabel} was invoked with an invalid schema object. keys=${schemaKeys.join(',') || '<none>'}`)
-  }
-
-  const validated = schema.safeParse(parsedJson)
-  if (!validated.success) {
-    if (debugEnabled) {
-      console.log(`[world-build-debug] ${passLabel} schema-failed`, previewJson(validated.error.issues))
-    }
-    throw new Error(`${passLabel} returned JSON that did not match the expected schema. ${formatIssues(validated.error.issues)}`)
-  }
-
-  return validated.data
+  // Validation is natively handled by the Vercel AI SDK when a Zod schema is provided.
 }
 
 export function isTerminalWorldBuildStatus(status: string) {

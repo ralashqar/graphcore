@@ -4,7 +4,7 @@ import { z } from 'npm:zod@4'
 
 import { requireUserClient } from '../_shared/auth.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
-import { runOpenAiResponses } from '../_shared/openai.ts'
+import { TextGateway } from '../_shared/ai-core/gateways.ts'
 import {
   augmentSnapshotForPrompting,
   buildPromptContext,
@@ -96,22 +96,6 @@ function inferGraphIntentFromPrompt(payload: PromptRequest) {
   }
 }
 
-function extractJsonBlock(text: string) {
-  const trimmed = text.trim()
-  if (!trimmed) return null
-  try {
-    return JSON.parse(trimmed) as Record<string, unknown>
-  } catch {
-    const fencedMatch = trimmed.match(/```json\s*([\s\S]*?)```/i) ?? trimmed.match(/```([\s\S]*?)```/i)
-    if (!fencedMatch?.[1]) return null
-    try {
-      return JSON.parse(fencedMatch[1].trim()) as Record<string, unknown>
-    } catch {
-      return null
-    }
-  }
-}
-
 function previewText(text: string, maxLength = 1200) {
   const normalized = text.trim()
   if (normalized.length <= maxLength) {
@@ -180,71 +164,32 @@ async function runPromptPass({
   maxOperations: number
   maxOutputTokens: number
 }): Promise<PromptPassSuccess | PromptPassFailure> {
-    const aiResponse = await runOpenAiResponses({
-      model: payload.model,
-      input: [
-        { role: 'system', content: [{ type: 'input_text', text: systemText }] },
-        { role: 'user', content: [{ type: 'input_text', text: JSON.stringify(promptContext, null, 2) }] },
+  let parsedResponse;
+  try {
+    parsedResponse = await TextGateway.generateObject({
+      modelPreference: payload.model,
+      system: systemText,
+      messages: [
+        { role: 'user', content: JSON.stringify(promptContext, null, 2) }
       ],
-      text: {
-        format: {
-          type: 'json_object',
-        },
-      },
-      reasoning: { effort: 'low' },
-    metadata: { feature: 'prompt-patch', pass: passLabel, target_mode: payload.targetMode ?? 'auto' },
-    store: false,
-    maxOutputTokens,
-  })
-
-  if (!aiResponse.response.ok) {
-    console.error(`[prompt-patch] ${passLabel} upstream OpenAI request failed`, {
-      model: payload.model,
-      status: aiResponse.response.status,
-      requestId: aiResponse.response.headers.get('x-request-id'),
-      body: aiResponse.body,
+      maxTokens: maxOutputTokens,
+      schema: modelResponseSchema
     })
-
-    const upstreamMessage =
-      typeof aiResponse.body.error === 'object' && aiResponse.body.error !== null
-        ? ((aiResponse.body.error as { message?: string }).message ?? 'OpenAI request failed.')
-        : 'OpenAI request failed.'
-
+  } catch (error) {
+    console.error(`[prompt-patch] ${passLabel} generation failed`, {
+      model: payload.model,
+      error
+    })
     return {
       ok: false,
       response: {
         summary: 'Rejected prompt proposal',
         operations: [],
-        diagnostics: [`${passLabel}: ${upstreamMessage}`],
+        diagnostics: [`${passLabel}: Generation failed - ${error instanceof Error ? error.message : String(error)}`],
         assistantNotes: `GraphCore could not complete the ${passLabel.toLowerCase()} generation pass.`,
       },
     }
   }
-
-  const parsedJson = extractJsonBlock(aiResponse.outputText)
-  if (!parsedJson) {
-    const rawOutput = aiResponse.outputText || JSON.stringify(aiResponse.body ?? {}, null, 2)
-    const rawPreview = previewText(rawOutput)
-    console.error(`[prompt-patch] ${passLabel} returned invalid JSON payload`, {
-      model: payload.model,
-      outputText: rawOutput,
-      outputPreview: rawPreview,
-      body: aiResponse.body,
-    })
-
-    return {
-      ok: false,
-      response: {
-        summary: 'Rejected prompt proposal',
-        operations: [],
-        diagnostics: [`${passLabel}: The model did not return a valid JSON patch object. Check the browser console or Supabase function logs for the raw model output.`],
-        assistantNotes: `GraphCore could not parse the ${passLabel.toLowerCase()} output as a patch proposal.`,
-        debugRawOutput: rawOutput || 'The model returned no textual output.',
-      },
-    }
-  }
-
-  const parsedResponse = modelResponseSchema.parse(parsedJson)
   const repairedOperations = repairOperations(parsedResponse.operations)
   const validation = validatePassOperations(validationSnapshot, repairedOperations, allowedOps, maxOperations, payload.graphType)
 

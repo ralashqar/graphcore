@@ -11,8 +11,7 @@ import {
   type WorldGraphGeneratorResult,
   type WorldGraphSeedRequest,
 } from '../../../src/domain/worldGraph.ts'
-import { normalizeStrictJsonSchema } from './structured-output.ts'
-import { extractOutputText, runOpenAiResponses } from './openai.ts'
+import { TextGateway } from './ai-core/gateways.ts'
 
 type ExistingDefinitionRow = {
   id: string
@@ -70,22 +69,18 @@ async function generateWithOpenAi(input: {
   prompt: string
   model: string
 }) {
-  const response = await runOpenAiResponses({
-    model: input.model,
-    input: input.prompt,
-    instructions: input.instructions,
-    text: {
-      format: {
-        type: 'json_schema',
-        name: 'world_graph_result',
-        schema: normalizeStrictJsonSchema(z.toJSONSchema(worldGraphGeneratorResultSchema)),
-      },
-    },
-    timeoutMs: 30_000,
-  })
-
-  const payload = safeJsonParse(extractOutputText(response.body) || response.outputText)
-  return payload ? worldGraphGeneratorResultSchema.parse(payload) : null
+  try {
+    const response = await TextGateway.generateObject({
+      modelPreference: input.model,
+      system: input.instructions,
+      messages: [{ role: 'user', content: input.prompt }],
+      schema: worldGraphGeneratorResultSchema,
+      schemaName: 'world_graph_result',
+    })
+    return response.object
+  } catch (err) {
+    return null
+  }
 }
 
 export async function generateSeedPlan(request: WorldGraphSeedRequest) {

@@ -31,11 +31,12 @@ import {
 } from '../../../src/domain/outputWorkflow.ts'
 import { buildEbookDocumentMetadata } from '../../../src/domain/ebookDocument.ts'
 import { hashOutputGuidanceBundle, outputGuidanceBundleSchema, type OutputGuidanceBundle } from '../../../src/domain/outputSkills.ts'
+import { TextGateway } from './ai-core/gateways.ts'
+import { z } from 'npm:zod@4'
 import {
   cancelOpenAiResponse,
   createOpenAiBackgroundResponse,
   retrieveOpenAiResponse,
-  runOpenAiResponses,
   type OpenAiResponseResult,
 } from './openai.ts'
 
@@ -2065,38 +2066,26 @@ async function generateChapterMarkdown(input: {
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      const response = await runOpenAiResponses({
-        model,
-        instructions: [
+      const response = await TextGateway.generateText({
+        modelPreference: model,
+        system: [
           'You are a professional longform book writer.',
           'Write restrained, specific, publishable prose from the supplied canon.',
           'Open scenes through character action, choice, dialogue, or immediate pressure rather than weather, skyline, mood, or decorative metaphor.',
           'Follow the requested style guidance, but never reveal the guidance or workflow.',
           'Return only the requested Markdown manuscript content.',
         ].join(' '),
-        input: prompt,
-        maxOutputTokens: 4200,
-        metadata: {
-          graphcore_task: 'output_workflow_chapter_prose',
-          graphcore_attempt: String(attempt),
-        },
-        timeoutMs,
+        messages: [{ role: 'user', content: prompt }],
+        maxTokens: 4200,
       })
 
-      if (!response.response.ok) {
-        const errorMessage = typeof response.body.error === 'object' && response.body.error !== null
-          ? readText((response.body.error as Record<string, unknown>).message)
-          : readText(response.body.error)
-        throw new Error(errorMessage || `OpenAI chapter generation failed with status ${response.response.status}.`)
-      }
-
-      const markdown = response.outputText.trim()
-      if (!markdown) throw new Error('OpenAI returned an empty chapter draft.')
+      const markdown = response.text.trim()
+      if (!markdown) throw new Error('AI provider returned an empty chapter draft.')
       return {
         markdown,
         model,
-        providerRequestId: readText(response.body.id) || response.response.headers.get('x-request-id') || null,
-        usage: asRecord(response.body.usage),
+        providerRequestId: null,
+        usage: response.usage,
         attempts: attempt,
         timeoutMs,
       }
@@ -2975,20 +2964,26 @@ async function executeNode(input: {
       if (purpose === 'comic_entity_selector') {
         const fallbackPack = buildDeterministicComicAssetPack(context)
         const model = outputWorkflowTextModel()
-        const response = await runOpenAiResponses({
-          model,
-          instructions: 'You select visual comic references from canonical world context and return compact JSON only.',
-          input: buildComicEntitySelectorInstruction({ context, prompt, guidance }),
-          maxOutputTokens: 1800,
-          metadata: {
-            graphcore_task: 'output_workflow_comic_entity_selector',
-            graphcore_node_key: input.node.key,
-          },
-          timeoutMs: 120_000,
+        const response = await TextGateway.generateObject({
+          modelPreference: model,
+          system: 'You select visual comic references from canonical world context and return compact JSON only.',
+          messages: [{ role: 'user', content: buildComicEntitySelectorInstruction({ context, prompt, guidance }) }],
+          schema: z.object({
+            entities: z.array(z.object({
+              key: z.string().optional(),
+              name: z.string().optional(),
+              type: z.string().optional(),
+              role: z.string().optional(),
+              summary: z.string().optional(),
+              visualDescription: z.string().optional(),
+              assetKeys: z.array(z.string()).optional(),
+            })).optional()
+          }),
+          schemaName: 'output_workflow_comic_entity_selector',
+          maxTokens: 1800,
         })
-        const parsed = response.response.ok ? parseJsonObject(response.outputText) : {}
-        const parsedEntities = Array.isArray(parsed.entities) && parsed.entities.length > 0
-          ? parsed.entities.map(asRecord).map((entity) => ({
+        const parsedEntities = Array.isArray(response.object?.entities) && response.object.entities.length > 0
+          ? response.object.entities.map(asRecord).map((entity) => ({
             key: readText(entity.key),
             name: readText(entity.name),
             type: readText(entity.type),
@@ -3008,15 +3003,15 @@ async function executeNode(input: {
           asset_pack: assetPack,
           text: JSON.stringify(assetPack, null, 2),
           guidance,
-          usage: asRecord(response.body?.usage),
+          usage: asRecord(response.usage),
         }
         return {
           inputHash: input.inputHash,
           outputHash: hashOutputWorkflowValue(outputs),
           outputs,
-          provider: response.response.ok ? 'openai' : 'graphcore',
-          model: response.response.ok ? model : 'deterministic-comic-asset-pack-v1',
-          providerRequestId: readText(response.body?.id) || response.response.headers.get('x-request-id') || null,
+          provider: 'openai',
+          model: model,
+          providerRequestId: null,
         }
       }
       if (purpose === 'comic_script') {
@@ -3026,40 +3021,24 @@ async function executeNode(input: {
         const sceneScript = readFirstUpstreamRecord(input.upstream, ['sceneScript', 'scene_script'])
         const pagePlan = readFirstUpstreamRecord(input.upstream, ['pagePlan', 'page_plan'])
         const model = outputWorkflowComicTextModel()
-        const response = await runOpenAiResponses({
-          model,
-          instructions: 'You are a professional comic writer and comics editor converting an approved scene treatment and page plan into final page/panel script JSON only. Never return outline placeholders.',
-          input: buildComicScriptInstruction({ context, assetPack, sceneScript, pagePlan, prompt, guidance, pageCount }),
-          text: {
-            format: {
-              type: 'json_schema',
-              name: 'output_workflow_comic_script',
-              schema: comicScriptJsonSchema,
-              strict: true,
-            },
-          },
-          maxOutputTokens: 9000,
-          metadata: {
-            graphcore_task: 'output_workflow_comic_script',
-            graphcore_node_key: input.node.key,
-          },
-          timeoutMs: 240_000,
+        const response = await TextGateway.generateObject({
+          modelPreference: model,
+          system: 'You are a professional comic writer and comics editor converting an approved scene treatment and page plan into final page/panel script JSON only. Never return outline placeholders.',
+          messages: [{ role: 'user', content: buildComicScriptInstruction({ context, assetPack, sceneScript, pagePlan, prompt, guidance, pageCount }) }],
+          schema: comicScriptJsonSchema,
+          schemaName: 'output_workflow_comic_script',
+          maxTokens: 9000,
         })
-        if (!response.response.ok) {
-          throw new Error(openAiErrorMessage(response, `OpenAI comic script failed with status ${response.response.status}.`))
-        }
-        if (response.status === 'incomplete') {
-          throw new Error('OpenAI comic script response was incomplete; rerun the Comic Script node.')
-        }
-        let script = normalizeComicScript(parseJsonObject(response.outputText), { context, pageCount, prompt })
+        
+        let script = normalizeComicScript(response.object as Record<string, unknown>, { context, pageCount, prompt })
         let diagnostics = validateComicScript(script, { pageCount })
-        let repairResponse: OpenAiResponseResult | null = null
+        let repairResponse: any = null
         const firstPassDiagnostics = diagnostics
         if (diagnostics.length > 0) {
-          repairResponse = await runOpenAiResponses({
-            model,
-            instructions: 'You are a senior comic script doctor. Repair invalid comic JSON into a complete production script JSON object only.',
-            input: buildComicScriptRepairInstruction({
+          repairResponse = await TextGateway.generateObject({
+            modelPreference: model,
+            system: 'You are a senior comic script doctor. Repair invalid comic JSON into a complete production script JSON object only.',
+            messages: [{ role: 'user', content: buildComicScriptRepairInstruction({
               context,
               assetPack,
               sceneScript,
@@ -3069,29 +3048,13 @@ async function executeNode(input: {
               prompt,
               guidance,
               pageCount,
-            }),
-            text: {
-              format: {
-                type: 'json_schema',
-                name: 'output_workflow_comic_script_repair',
-                schema: comicScriptJsonSchema,
-                strict: true,
-              },
-            },
-            maxOutputTokens: 10_000,
-            metadata: {
-              graphcore_task: 'output_workflow_comic_script_repair',
-              graphcore_node_key: input.node.key,
-            },
-            timeoutMs: 240_000,
+            }) }],
+            schema: comicScriptJsonSchema,
+            schemaName: 'output_workflow_comic_script_repair',
+            maxTokens: 10_000,
           })
-          if (!repairResponse.response.ok) {
-            throw new Error(openAiErrorMessage(repairResponse, `OpenAI comic script repair failed with status ${repairResponse.response.status}.`))
-          }
-          if (repairResponse.status === 'incomplete') {
-            throw new Error('OpenAI comic script repair response was incomplete; rerun the Comic Script node.')
-          }
-          script = normalizeComicScript(parseJsonObject(repairResponse.outputText), { context, pageCount, prompt })
+          
+          script = normalizeComicScript(repairResponse.object as Record<string, unknown>, { context, pageCount, prompt })
           diagnostics = validateComicScript(script, { pageCount })
         }
         if (diagnostics.length > 0) {
@@ -3106,8 +3069,8 @@ async function executeNode(input: {
           guidance,
           repaired: repairResponse !== null,
           firstPassDiagnostics,
-          usage: asRecord(repairResponse?.body.usage ?? response.body.usage),
-          firstPassUsage: repairResponse ? asRecord(response.body.usage) : undefined,
+          usage: asRecord(repairResponse?.usage ?? response.usage),
+          firstPassUsage: repairResponse ? asRecord(response.usage) : undefined,
         }
         return {
           inputHash: input.inputHash,
@@ -3115,7 +3078,7 @@ async function executeNode(input: {
           outputs,
           provider: 'openai',
           model,
-          providerRequestId: readText(response.body.id) || response.response.headers.get('x-request-id') || null,
+          providerRequestId: null,
         }
       }
       if (purpose === 'comic_scene_script') {
@@ -3123,32 +3086,16 @@ async function executeNode(input: {
         const pageCount = Math.max(1, Math.min(12, Number(config.pageCount ?? 8)))
         const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
         const model = outputWorkflowComicTextModel()
-        const response = await runOpenAiResponses({
-          model,
-          instructions: 'You are a senior comic adaptation writer. Return a rich structured dramatic scene script as JSON only, not final panel JSON.',
-          input: buildComicSceneScriptInstruction({ context, assetPack, prompt, guidance, pageCount }),
-          text: {
-            format: {
-              type: 'json_schema',
-              name: 'output_workflow_comic_scene_script',
-              schema: comicSceneScriptJsonSchema,
-              strict: true,
-            },
-          },
-          maxOutputTokens: 7000,
-          metadata: {
-            graphcore_task: 'output_workflow_comic_scene_script',
-            graphcore_node_key: input.node.key,
-          },
-          timeoutMs: 240_000,
+        const response = await TextGateway.generateObject({
+          modelPreference: model,
+          system: 'You are a senior comic adaptation writer. Return a rich structured dramatic scene script as JSON only, not final panel JSON.',
+          messages: [{ role: 'user', content: buildComicSceneScriptInstruction({ context, assetPack, prompt, guidance, pageCount }) }],
+          schema: comicSceneScriptJsonSchema,
+          schemaName: 'output_workflow_comic_scene_script',
+          maxTokens: 7000,
         })
-        if (!response.response.ok) {
-          throw new Error(openAiErrorMessage(response, `OpenAI comic scene script failed with status ${response.response.status}.`))
-        }
-        if (response.status === 'incomplete') {
-          throw new Error('OpenAI comic scene script response was incomplete; rerun the Scene Script node.')
-        }
-        const sceneScript = parseJsonObject(response.outputText)
+        
+        const sceneScript = response.object as Record<string, unknown>
         const markdown = comicSceneScriptMarkdown(sceneScript)
         const outputs = {
           sceneScript,
@@ -3157,7 +3104,7 @@ async function executeNode(input: {
           text: markdown,
           assetPack,
           guidance,
-          usage: asRecord(response.body.usage),
+          usage: asRecord(response.usage),
         }
         return {
           inputHash: input.inputHash,
@@ -3165,7 +3112,7 @@ async function executeNode(input: {
           outputs,
           provider: 'openai',
           model,
-          providerRequestId: readText(repairResponse?.body.id) || readText(response.body.id) || response.response.headers.get('x-request-id') || null,
+          providerRequestId: null,
         }
       }
       if (purpose === 'comic_page_plan') {
@@ -3174,32 +3121,16 @@ async function executeNode(input: {
         const sceneScript = readFirstUpstreamRecord(input.upstream, ['sceneScript', 'scene_script'])
         const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
         const model = outputWorkflowComicTextModel()
-        const response = await runOpenAiResponses({
-          model,
-          instructions: 'You are a senior comic editor planning page rhythm and compression. Return page-plan JSON only, not final panels.',
-          input: buildComicPagePlanInstruction({ context, sceneScript, assetPack, prompt, guidance, pageCount }),
-          text: {
-            format: {
-              type: 'json_schema',
-              name: 'output_workflow_comic_page_plan',
-              schema: comicPagePlanJsonSchema,
-              strict: true,
-            },
-          },
-          maxOutputTokens: 5200,
-          metadata: {
-            graphcore_task: 'output_workflow_comic_page_plan',
-            graphcore_node_key: input.node.key,
-          },
-          timeoutMs: 180_000,
+        const response = await TextGateway.generateObject({
+          modelPreference: model,
+          system: 'You are a senior comic editor planning page rhythm and compression. Return page-plan JSON only, not final panels.',
+          messages: [{ role: 'user', content: buildComicPagePlanInstruction({ context, sceneScript, assetPack, prompt, guidance, pageCount }) }],
+          schema: comicPagePlanJsonSchema,
+          schemaName: 'output_workflow_comic_page_plan',
+          maxTokens: 5200,
         })
-        if (!response.response.ok) {
-          throw new Error(openAiErrorMessage(response, `OpenAI comic page plan failed with status ${response.response.status}.`))
-        }
-        if (response.status === 'incomplete') {
-          throw new Error('OpenAI comic page plan response was incomplete; rerun the Page Plan node.')
-        }
-        const pagePlan = parseJsonObject(response.outputText)
+        
+        const pagePlan = response.object as Record<string, unknown>
         const diagnostics = validateComicPagePlan(pagePlan, { pageCount })
         if (diagnostics.length > 0) {
           throw new Error(`Comic page plan validation failed: ${diagnostics.slice(0, 8).join(' ')}`)
@@ -3213,7 +3144,7 @@ async function executeNode(input: {
           sceneScript,
           assetPack,
           guidance,
-          usage: asRecord(response.body.usage),
+          usage: asRecord(response.usage),
         }
         return {
           inputHash: input.inputHash,
@@ -3221,35 +3152,28 @@ async function executeNode(input: {
           outputs,
           provider: 'openai',
           model,
-          providerRequestId: readText(response.body.id) || response.response.headers.get('x-request-id') || null,
+          providerRequestId: null,
         }
       }
       if (purpose === 'comic_atlas_prompt') {
         const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
         const model = outputWorkflowTextModel()
-        const response = await runOpenAiResponses({
-          model,
-          instructions: 'You are a comic art director writing GPT Image 2 prompts. Return one prompt only.',
-          input: buildComicAtlasPromptInstruction({ context, assetPack, prompt, guidance }),
-          maxOutputTokens: 1200,
-          metadata: {
-            graphcore_task: 'output_workflow_comic_atlas_prompt',
-            graphcore_node_key: input.node.key,
-          },
-          timeoutMs: 120_000,
+        const response = await TextGateway.generateText({
+          modelPreference: model,
+          system: 'You are a comic art director writing GPT Image 2 prompts. Return one prompt only.',
+          messages: [{ role: 'user', content: buildComicAtlasPromptInstruction({ context, assetPack, prompt, guidance }) }],
+          maxTokens: 1200,
         })
-        if (!response.response.ok) {
-          throw new Error(openAiErrorMessage(response, `OpenAI comic atlas prompt failed with status ${response.response.status}.`))
-        }
-        const atlasPrompt = response.outputText.trim()
-        const outputs = { prompt: atlasPrompt, text: atlasPrompt, assetPack, guidance, usage: asRecord(response.body.usage) }
+        
+        const atlasPrompt = response.text.trim()
+        const outputs = { prompt: atlasPrompt, text: atlasPrompt, assetPack, guidance, usage: asRecord(response.usage) }
         return {
           inputHash: input.inputHash,
           outputHash: hashOutputWorkflowValue(outputs),
           outputs,
           provider: 'openai',
           model,
-          providerRequestId: readText(response.body.id) || response.response.headers.get('x-request-id') || null,
+          providerRequestId: null,
         }
       }
       if (purpose === 'comic_page_prompt') {
@@ -3281,35 +3205,28 @@ async function executeNode(input: {
       }
       if (purpose === 'ebook_cover_prompt') {
         const model = outputWorkflowTextModel()
-        const response = await runOpenAiResponses({
-          model,
-          instructions: [
+        const response = await TextGateway.generateText({
+          modelPreference: model,
+          system: [
             'You are a senior publishing art director writing prompts for GPT Image 2.',
             'Return one concise, visual, production-ready image prompt for a finished ebook front cover.',
             'The prompt may request title typography in the image, but must not mention workflow internals.',
           ].join(' '),
-          input: buildEbookCoverPromptInstruction({
+          messages: [{ role: 'user', content: buildEbookCoverPromptInstruction({
             context,
             prompt: readText(input.node.inputs.prompt) || input.run.prompt,
             guidance,
-          }),
-          maxOutputTokens: 1100,
-          metadata: {
-            graphcore_task: 'output_workflow_ebook_cover_prompt',
-            graphcore_node_key: input.node.key,
-          },
-          timeoutMs: 120_000,
+          }) }],
+          maxTokens: 1100,
         })
-        if (!response.response.ok) {
-          throw new Error(openAiErrorMessage(response, `OpenAI ebook cover prompt failed with status ${response.response.status}.`))
-        }
-        const coverPrompt = response.outputText.trim()
-        if (!coverPrompt) throw new Error('OpenAI returned an empty ebook cover prompt.')
+        
+        const coverPrompt = response.text.trim()
+        if (!coverPrompt) throw new Error('AI provider returned an empty ebook cover prompt.')
         const outputs = {
           prompt: coverPrompt,
           text: coverPrompt,
           guidance,
-          usage: asRecord(response.body.usage),
+          usage: asRecord(response.usage),
         }
         return {
           inputHash: input.inputHash,
@@ -3317,7 +3234,7 @@ async function executeNode(input: {
           outputs,
           provider: 'openai',
           model,
-          providerRequestId: readText(response.body.id) || response.response.headers.get('x-request-id') || null,
+          providerRequestId: null,
         }
       }
       if (purpose === 'chapter_section_plan') {

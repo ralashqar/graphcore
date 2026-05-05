@@ -176,7 +176,7 @@ import {
   type WorldBuildPlanResponse,
   type WorldBuildStatusResponse,
 } from '../../../src/domain/worldBuild.ts'
-import { runOpenAiResponses, runOpenAiResponsesStream } from './openai.ts'
+import { TextGateway } from './ai-core/gateways.ts'
 import { normalizeStrictJsonSchema, type JsonSchema } from './structured-output.ts'
 
 type SupabaseClient = any
@@ -212,7 +212,7 @@ type WorldPromptTokenUsageRecorder = {
   record: (input: {
     surface: string
     model: string
-    response: Awaited<ReturnType<typeof runOpenAiResponses>>
+    usage?: { promptTokens: number; completionTokens: number; totalTokens: number }
     metadata?: Record<string, unknown>
   }) => void
   summary: () => WorldPromptTokenUsageSummary | null
@@ -3868,21 +3868,20 @@ function createWorldPromptTokenUsageRecorder(): WorldPromptTokenUsageRecorder {
   const calls: WorldPromptTokenUsageCall[] = []
   return {
     record: (input) => {
-      const usage = readOpenAiTokenUsage(input.response.body)
-      if (!usage) return
+      if (!input.usage) return
       calls.push({
         id: `usage_${calls.length + 1}`,
         surface: input.surface,
         model: input.model,
-        responseId: typeof input.response.body.id === 'string' ? input.response.body.id : null,
-        requestId: input.response.response.headers.get('x-request-id'),
-        inputTokens: usage.inputTokens,
-        outputTokens: usage.outputTokens,
-        totalTokens: usage.totalTokens,
-        cachedInputTokens: usage.cachedInputTokens,
-        reasoningTokens: usage.reasoningTokens,
-        status: input.response.response.status,
-        ok: input.response.response.ok,
+        responseId: null,
+        requestId: null,
+        inputTokens: input.usage.promptTokens,
+        outputTokens: input.usage.completionTokens,
+        totalTokens: input.usage.totalTokens,
+        cachedInputTokens: 0,
+        reasoningTokens: 0,
+        status: 200,
+        ok: true,
         metadata: input.metadata ?? {},
         createdAt: new Date().toISOString(),
       })
@@ -6439,99 +6438,88 @@ async function completeStreamedStorySequenceOp(input: {
   }
 
   const completionSchema = normalizeStrictJsonSchema(z.toJSONSchema(storySequenceCompletionResponseSchema))
-  const response = await runOpenAiResponses({
-    model: input.model,
-    input: JSON.stringify({
-      prompt: input.prompt,
-      projectContext: input.snapshot.projectContext,
-      sequenceContext: compactSequenceContextForRepair(input.snapshot),
-      relevantEntities: input.snapshot.worldEntities
-        .filter((entity) => entity.nodeType !== 'sequence_unit')
-        .slice(0, 40)
-        .map((entity) => ({
-          key: entity.key,
-          name: entity.name,
-          nodeType: entity.nodeType,
-          summary: entity.summary,
-        })),
-      relevantThreads: input.snapshot.worldThreads.slice(0, 12).map((thread) => ({
-        key: thread.key,
-        title: thread.title,
-        summary: thread.summary,
-        linkedEntityKeys: thread.linkedEntityKeys,
-      })),
-      incompleteSequenceOps: candidates.map((candidate) => {
-        const existingSequence = candidate.existing ? readWorldSequenceMetadata(candidate.existing) : {}
-        const proposedSequence = readWorldSequenceMetadata(candidate.candidate)
-        const sequenceKey = proposedSequence.sequenceKey || existingSequence.sequenceKey || 'main'
-        return {
-          opId: candidate.op.id,
-          entityName: candidate.entityName,
-          missingFields: candidate.issue.missingFields,
-          currentSummary: candidate.op.op === 'upsert_entity'
-            ? candidate.op.payload.entity.summary
-            : candidate.op.op === 'update_entity'
-              ? candidate.op.payload.changes.summary ?? candidate.existing?.summary ?? ''
-              : '',
-          currentContext: candidate.op.op === 'upsert_entity'
-            ? candidate.op.payload.entity.context
-            : candidate.op.op === 'update_entity'
-              ? candidate.op.payload.changes.context ?? candidate.existing?.context ?? ''
-              : '',
-          proposedSequence,
-          existingSequence,
-          recommendedOrdinal: typeof proposedSequence.ordinal === 'number'
-            ? proposedSequence.ordinal
-            : recommendedNextSequenceOrdinal({
-              snapshot: input.snapshot,
-              sequenceKey,
+  let completionData
+  try {
+    const response = await TextGateway.generateObject({
+      modelPreference: input.model,
+      system: [
+        'You are GraphCore\'s streamed Story sequence repair agent.',
+        'Complete only the provided sequence_unit graph operation metadata; do not create additional operations.',
+        'Return one completion for every incompleteSequenceOps item, matching opId exactly.',
+        'Every completion must include summary, context, and customProperties.sequence-equivalent metadata.',
+        'Each sequence must include unitKind, sequenceKey, ordinal, actLabel, synopsis, dramaticQuestion, storyFunction, outcome, at least one consequence, and at least one characterArcDelta.',
+        'Consequences must have concrete non-empty cause and effect text.',
+        'Character arc deltas must have actorKey, before, pressure, choice, and after. Prefer an existing actor key from relevantEntities; use a clear available protagonist or pressured character.',
+        'Do not use entity.summary as a substitute for sequence.synopsis or sequence.outcome.',
+        'Set scriptExpansionReady true only after all required sequence fields are present.',
+      ].join('\n'),
+      messages: [
+        {
+          role: 'user',
+          content: JSON.stringify({
+            prompt: input.prompt,
+            projectContext: input.snapshot.projectContext,
+            sequenceContext: compactSequenceContextForRepair(input.snapshot),
+            relevantEntities: input.snapshot.worldEntities
+              .filter((entity) => entity.nodeType !== 'sequence_unit')
+              .slice(0, 40)
+              .map((entity) => ({
+                key: entity.key,
+                name: entity.name,
+                nodeType: entity.nodeType,
+                summary: entity.summary,
+              })),
+            relevantThreads: input.snapshot.worldThreads.slice(0, 12).map((thread) => ({
+              key: thread.key,
+              title: thread.title,
+              summary: thread.summary,
+              linkedEntityKeys: thread.linkedEntityKeys,
+            })),
+            incompleteSequenceOps: candidates.map((candidate) => {
+              const existingSequence = candidate.existing ? readWorldSequenceMetadata(candidate.existing) : {}
+              const proposedSequence = readWorldSequenceMetadata(candidate.candidate)
+              const sequenceKey = proposedSequence.sequenceKey || existingSequence.sequenceKey || 'main'
+              return {
+                opId: candidate.op.id,
+                entityName: candidate.entityName,
+                missingFields: candidate.issue.missingFields,
+                currentSummary: candidate.op.op === 'upsert_entity'
+                  ? candidate.op.payload.entity.summary
+                  : candidate.op.op === 'update_entity'
+                    ? candidate.op.payload.changes.summary ?? candidate.existing?.summary ?? ''
+                    : '',
+                currentContext: candidate.op.op === 'upsert_entity'
+                  ? candidate.op.payload.entity.context
+                  : candidate.op.op === 'update_entity'
+                    ? candidate.op.payload.changes.context ?? candidate.existing?.context ?? ''
+                    : '',
+                proposedSequence,
+                existingSequence,
+                recommendedOrdinal: typeof proposedSequence.ordinal === 'number'
+                  ? proposedSequence.ordinal
+                  : recommendedNextSequenceOrdinal({
+                    snapshot: input.snapshot,
+                    sequenceKey,
+                  }),
+              }
             }),
-        }
-      }),
-    }),
-    instructions: [
-      'You are GraphCore\'s streamed Story sequence repair agent.',
-      'Complete only the provided sequence_unit graph operation metadata; do not create additional operations.',
-      'Return one completion for every incompleteSequenceOps item, matching opId exactly.',
-      'Every completion must include summary, context, and customProperties.sequence-equivalent metadata.',
-      'Each sequence must include unitKind, sequenceKey, ordinal, actLabel, synopsis, dramaticQuestion, storyFunction, outcome, at least one consequence, and at least one characterArcDelta.',
-      'Consequences must have concrete non-empty cause and effect text.',
-      'Character arc deltas must have actorKey, before, pressure, choice, and after. Prefer an existing actor key from relevantEntities; use a clear available protagonist or pressured character.',
-      'Do not use entity.summary as a substitute for sequence.synopsis or sequence.outcome.',
-      'Set scriptExpansionReady true only after all required sequence fields are present.',
-    ].join('\n'),
-    text: {
-      format: {
-        type: 'json_schema',
-        name: 'streamed_story_sequence_completion',
-        schema: completionSchema,
-      },
-    },
-    reasoning: { effort: 'low' },
-    metadata: {
-      feature: 'world-prompt',
+          }),
+        },
+      ],
+      schema: storySequenceCompletionResponseSchema,
+      maxTokens: 2000,
+    })
+
+    input.usageRecorder?.record({
       surface: 'streamed-story-sequence-completion',
-    },
-    store: false,
-    timeoutMs: 120_000,
-  })
-  input.usageRecorder?.record({
-    surface: 'streamed-story-sequence-completion',
-    model: input.model,
-    response,
-    metadata: { candidateCount: candidates.length },
-  })
+      model: input.model,
+      usage: response.usage,
+      metadata: { candidateCount: candidates.length },
+    })
 
-  if (!response.response.ok) {
-    return {
-      op: input.op,
-      issues: candidates.map((candidate) => candidate.issue),
-    }
-  }
-
-  const parsedJson = extractJsonBlock(response.outputText)
-  const validated = parsedJson ? storySequenceCompletionResponseSchema.safeParse(parsedJson) : null
-  if (!validated?.success) {
+    completionData = response.object
+  } catch (err) {
+    console.error('Failed to generate story sequence completion:', err)
     return {
       op: input.op,
       issues: candidates.map((candidate) => candidate.issue),
@@ -6592,133 +6580,106 @@ async function completeStorySequenceOps(input: {
   }
 
   const completionSchema = normalizeStrictJsonSchema(z.toJSONSchema(storySequenceCompletionResponseSchema))
-  const response = await runOpenAiResponses({
-    model: input.model,
-    input: JSON.stringify({
-      prompt: input.prompt,
-      projectContext: input.snapshot.projectContext,
-      sequenceContext: input.retrieval.sequenceContext,
-      relevantEntities: input.retrieval.relevantEntities.slice(0, 24).map((entity) => ({
-        key: entity.key,
-        name: entity.name,
-        nodeType: entity.nodeType,
-        summary: entity.summary,
-      })),
-      relevantRelationships: input.retrieval.relevantRelationships.slice(0, 24).map((relationship) => ({
-        key: relationship.key,
-        sourceEntityKey: relationship.sourceEntityKey,
-        targetEntityKey: relationship.targetEntityKey,
-        verb: relationship.verb,
-        notes: relationship.notes,
-      })),
-      relevantThreads: input.retrieval.relevantThreads.slice(0, 12).map((thread) => ({
-        key: thread.key,
-        title: thread.title,
-        summary: thread.summary,
-        linkedEntityKeys: thread.linkedEntityKeys,
-      })),
-      incompleteSequenceOps: candidates.map((candidate) => {
-        const existingSequence = candidate.existing ? readWorldSequenceMetadata(candidate.existing) : {}
-        const proposedSequence = readWorldSequenceMetadata(candidate.candidate)
-        const sequenceKey = proposedSequence.sequenceKey || existingSequence.sequenceKey || 'main'
-        return {
-          opId: candidate.op.id,
-          entityName: candidate.entityName,
-          missingFields: candidate.issue.missingFields,
-          currentSummary: candidate.op.op === 'upsert_entity'
-            ? candidate.op.payload.entity.summary
-            : candidate.op.op === 'update_entity'
-              ? candidate.op.payload.changes.summary ?? candidate.existing?.summary ?? ''
-              : '',
-          currentContext: candidate.op.op === 'upsert_entity'
-            ? candidate.op.payload.entity.context
-            : candidate.op.op === 'update_entity'
-              ? candidate.op.payload.changes.context ?? candidate.existing?.context ?? ''
-              : '',
-          existingSequence,
-          proposedSequence,
-          recommendedOrdinal: typeof proposedSequence.ordinal === 'number'
-            ? proposedSequence.ordinal
-            : recommendedNextSequenceOrdinal({
-              snapshot: input.snapshot,
-              sequenceKey,
+  let completionData
+  try {
+    const response = await TextGateway.generateObject({
+      modelPreference: input.model,
+      system: [
+        'You are GraphCore\'s focused Story sequence completion agent.',
+        'You do not create new graph operations. You only complete the script-facing metadata for the provided incomplete Story sequence_unit ops.',
+        'Return one completion for every incompleteSequenceOps item, matching opId exactly.',
+        'Every completion must include a usable chapter summary, context, and customProperties.sequence metadata.',
+        'Use the recommendedOrdinal unless the prompt or existing sequence context clearly requires a different ordinal.',
+        'For "next chapter" prompts, continue from the latest sequenceContext unit and make the new chapter move plot and character pressure forward.',
+        'Each sequence must include a concrete synopsis, dramaticQuestion, storyFunction, outcome, at least one consequence with non-empty cause and effect, and at least one characterArcDelta.',
+        'Consequences should express cause/effect in story terms: what happens in this chapter and what it changes next.',
+        'Character arc deltas should name the pressured actor and capture before, pressure, choice, and after. Use a known actorKey when possible.',
+        'Use known entity keys in affectedEntityKeys, actorKey, and threadKeys when the relevant graph context provides them. Only use empty arrays when no clear graph key exists.',
+        'Set scriptExpansionReady true when the sequence has synopsis, dramaticQuestion, outcome, a cause/effect consequence, and a character arc delta.',
+        'Do not use entity.summary as a substitute for sequence.synopsis; fill both when useful.',
+      ].join('\n'),
+      messages: [
+        {
+          role: 'user',
+          content: JSON.stringify({
+            prompt: input.prompt,
+            projectContext: input.snapshot.projectContext,
+            sequenceContext: input.retrieval.sequenceContext,
+            relevantEntities: input.retrieval.relevantEntities.slice(0, 24).map((entity) => ({
+              key: entity.key,
+              name: entity.name,
+              nodeType: entity.nodeType,
+              summary: entity.summary,
+            })),
+            relevantRelationships: input.retrieval.relevantRelationships.slice(0, 24).map((relationship) => ({
+              key: relationship.key,
+              sourceEntityKey: relationship.sourceEntityKey,
+              targetEntityKey: relationship.targetEntityKey,
+              verb: relationship.verb,
+              notes: relationship.notes,
+            })),
+            relevantThreads: input.retrieval.relevantThreads.slice(0, 12).map((thread) => ({
+              key: thread.key,
+              title: thread.title,
+              summary: thread.summary,
+              linkedEntityKeys: thread.linkedEntityKeys,
+            })),
+            incompleteSequenceOps: candidates.map((candidate) => {
+              const existingSequence = candidate.existing ? readWorldSequenceMetadata(candidate.existing) : {}
+              const proposedSequence = readWorldSequenceMetadata(candidate.candidate)
+              const sequenceKey = proposedSequence.sequenceKey || existingSequence.sequenceKey || 'main'
+              return {
+                opId: candidate.op.id,
+                entityName: candidate.entityName,
+                missingFields: candidate.issue.missingFields,
+                currentSummary: candidate.op.op === 'upsert_entity'
+                  ? candidate.op.payload.entity.summary
+                  : candidate.op.op === 'update_entity'
+                    ? candidate.op.payload.changes.summary ?? candidate.existing?.summary ?? ''
+                    : '',
+                currentContext: candidate.op.op === 'upsert_entity'
+                  ? candidate.op.payload.entity.context
+                  : candidate.op.op === 'update_entity'
+                    ? candidate.op.payload.changes.context ?? candidate.existing?.context ?? ''
+                    : '',
+                existingSequence,
+                proposedSequence,
+                recommendedOrdinal: typeof proposedSequence.ordinal === 'number'
+                  ? proposedSequence.ordinal
+                  : recommendedNextSequenceOrdinal({
+                    snapshot: input.snapshot,
+                    sequenceKey,
+                  }),
+              }
             }),
-        }
-      }),
-    }),
-    instructions: [
-      'You are GraphCore\'s focused Story sequence completion agent.',
-      'You do not create new graph operations. You only complete the script-facing metadata for the provided incomplete Story sequence_unit ops.',
-      'Return one completion for every incompleteSequenceOps item, matching opId exactly.',
-      'Every completion must include a usable chapter summary, context, and customProperties.sequence metadata.',
-      'Use the recommendedOrdinal unless the prompt or existing sequence context clearly requires a different ordinal.',
-      'For "next chapter" prompts, continue from the latest sequenceContext unit and make the new chapter move plot and character pressure forward.',
-      'Each sequence must include a concrete synopsis, dramaticQuestion, storyFunction, outcome, at least one consequence with non-empty cause and effect, and at least one characterArcDelta.',
-      'Consequences should express cause/effect in story terms: what happens in this chapter and what it changes next.',
-      'Character arc deltas should name the pressured actor and capture before, pressure, choice, and after. Use a known actorKey when possible.',
-      'Use known entity keys in affectedEntityKeys, actorKey, and threadKeys when the relevant graph context provides them. Only use empty arrays when no clear graph key exists.',
-      'Set scriptExpansionReady true when the sequence has synopsis, dramaticQuestion, outcome, a cause/effect consequence, and a character arc delta.',
-      'Do not use entity.summary as a substitute for sequence.synopsis; fill both when useful.',
-    ].join('\n'),
-    text: {
-      format: {
-        type: 'json_schema',
-        name: 'story_sequence_completion',
-        schema: completionSchema,
-      },
-    },
-    reasoning: { effort: 'low' },
-    metadata: {
-      feature: 'world-prompt',
+          }),
+        },
+      ],
+      schema: storySequenceCompletionResponseSchema,
+      maxTokens: 2000,
+    })
+
+    input.usageRecorder?.record({
       surface: 'story-sequence-completion',
-    },
-    store: false,
-    timeoutMs: 180_000,
-  })
-  input.usageRecorder?.record({
-    surface: 'story-sequence-completion',
-    model: input.model,
-    response,
-    metadata: { candidateCount: candidates.length },
-  })
+      model: input.model,
+      usage: response.usage,
+      metadata: { candidateCount: candidates.length },
+    })
 
-  if (input.debugEnabled) {
-    console.log('[world-prompt-debug] story-sequence-completion response-meta', previewJson({
-      ok: response.response.ok,
-      status: response.response.status,
-      requestId: response.response.headers.get('x-request-id'),
-      outputText: response.outputText,
-      body: response.body,
-    }))
-  }
-
-  if (!response.response.ok) {
-    return {
-      ops: input.ops,
-      issues: candidates.map((candidate) => candidate.issue),
-    }
-  }
-
-  const parsedJson = extractJsonBlock(response.outputText)
-  if (!parsedJson) {
-    return {
-      ops: input.ops,
-      issues: candidates.map((candidate) => candidate.issue),
-    }
-  }
-
-  const validated = storySequenceCompletionResponseSchema.safeParse(parsedJson)
-  if (!validated.success) {
     if (input.debugEnabled) {
-      console.log('[world-prompt-debug] story-sequence-completion schema-failed', previewJson(validated.error.issues))
+      console.log('[world-prompt-debug] story-sequence-completion response', response.object)
     }
+
+    completionData = response.object
+  } catch (err) {
+    console.error('Failed to generate story sequence completion:', err)
     return {
       ops: input.ops,
       issues: candidates.map((candidate) => candidate.issue),
     }
   }
 
-  const completionByOpId = new Map(validated.data.completions.map((completion) => [completion.opId, completion]))
+  const completionByOpId = new Map(completionData.completions.map((completion) => [completion.opId, completion]))
   for (const candidate of candidates) {
     const completion = completionByOpId.get(candidate.op.id)
     if (!completion) continue
@@ -8557,58 +8518,39 @@ async function generatePromptPlan(input: {
       const attemptInstructions = repairFeedback
         ? `${instructions}\nRepair guidance: ${repairFeedback}`
         : instructions
-      const response = await runOpenAiResponses({
-        model: input.payload.model,
-        input: prompt,
-        instructions: attemptInstructions,
-        text: {
-          format: {
-            type: 'json_schema',
-            name: 'world_prompt_plan',
-            schema: plannerResponseSchema,
+      let parsedJson: Record<string, unknown>
+      try {
+        const response = await TextGateway.generateObject({
+          modelPreference: input.payload.model,
+          system: attemptInstructions,
+          messages: [{ role: 'user', content: prompt }],
+          schema: plannerResponseSchema,
+          maxTokens: 4000,
+        })
+        
+        input.usageRecorder?.record({
+          surface: 'compact-planner',
+          model: input.payload.model,
+          usage: response.usage,
+          metadata: {
+            attempt: attempt + 1,
+            plannerMode,
           },
-        },
-        reasoning: { effort: 'low' },
-        metadata: {
-          feature: 'world-prompt',
-          surface: 'grow-mode',
-          attempt: String(attempt + 1),
-        },
-        store: false,
-        timeoutMs: 180_000,
-      })
-      input.usageRecorder?.record({
-        surface: 'compact-planner',
-        model: input.payload.model,
-        response,
-        metadata: {
-          attempt: attempt + 1,
-          plannerMode,
-        },
-      })
+        })
 
-      if (debugEnabled) {
-        console.log('[world-prompt-debug] planner response-meta', previewJson({
-          attempt: attempt + 1,
-          ok: response.response.ok,
-          status: response.response.status,
-          requestId: response.response.headers.get('x-request-id'),
-          outputText: response.outputText,
-          body: response.body,
-        }))
-      }
+        if (debugEnabled) {
+          console.log('[world-prompt-debug] planner response-meta', previewJson({
+            attempt: attempt + 1,
+            ok: true,
+            status: 200,
+            object: response.object,
+          }))
+        }
 
-      if (!response.response.ok) {
-        const upstreamMessage =
-          typeof response.body.error === 'object' && response.body.error !== null
-            ? ((response.body.error as { message?: string }).message ?? 'OpenAI request failed.')
-            : 'OpenAI request failed.'
+        parsedJson = response.object as Record<string, unknown>
+      } catch (err) {
+        const upstreamMessage = err instanceof Error ? err.message : 'OpenAI request failed.'
         throw new Error(`[world-prompt-planner] ${upstreamMessage}`)
-      }
-
-      const parsedJson = extractJsonBlock(response.outputText)
-      if (!parsedJson) {
-        throw new Error('World prompt planner returned invalid JSON.')
       }
 
       const normalizedJson = normalizePlannerJson(parsedJson)
@@ -10823,51 +10765,36 @@ async function inferInitialSeedContext(input: {
   usageRecorder?: WorldPromptTokenUsageRecorder
 }) {
   const validPairs = 'story: feature_film, tv_streaming_series, short_film, shortform_series, animated_story; game: action_rpg, narrative_adventure, narrative_rpg_mobile, strategy_builder, survival_craft, shooter_combat, social_sim, open_world_sandbox, platformer_metroidvania, horror_mystery; brand: campaign_world, product_storytelling, mascot_ip, brand_education_explainer; ugc: creator_organic, direct_response_ad, faceless_explainer_demo, serialized_social_drama; app: ai_utility_wrapper, mascot_daily_ritual, content_generator.'
-  const schema = normalizeStrictJsonSchema(z.toJSONSchema(seedInferenceOutputSchema))
-  const response = await runOpenAiResponses({
-    model: input.model,
-    input: JSON.stringify({
-      prompt: input.prompt,
-      sourceContext: input.sourceContext ?? null,
-      validPairs,
-    }),
-    instructions: [
-      'Infer the GraphCore project type and subtype from the user prompt and optional source context.',
-      'Return JSON only. Do not ask the user to classify the project.',
-      `Valid project type/subtype pairs: ${validPairs}`,
-      'Set confidence from 0 to 1. Use a short visible rationale suitable for the user interface, not private reasoning.',
-      'Recommend an artStylePreset and up to three recommendedArtStylePresetIds that match the inferred project.',
-    ].join('\n'),
-    text: {
-      format: {
-        type: 'json_schema',
-        name: 'world_seed_inference',
-        schema,
-      },
-    },
-    reasoning: { effort: 'low' },
-    metadata: {
-      feature: 'world-seed-inference',
-      surface: 'onboarding',
-    },
-    store: false,
-    timeoutMs: 90_000,
-  })
-  input.usageRecorder?.record({
-    surface: 'seed-inference',
-    model: input.model,
-    response,
-  })
-  if (!response.response.ok) {
-    const upstreamMessage =
-      typeof response.body.error === 'object' && response.body.error !== null
-        ? ((response.body.error as { message?: string }).message ?? 'OpenAI request failed.')
-        : 'OpenAI request failed.'
+  let parsedJson: Record<string, unknown>
+  try {
+    const response = await TextGateway.generateObject({
+      modelPreference: input.model,
+      system: [
+        'Infer the GraphCore project type and subtype from the user prompt and optional source context.',
+        'Return JSON only. Do not ask the user to classify the project.',
+        `Valid project type/subtype pairs: ${validPairs}`,
+        'Set confidence from 0 to 1. Use a short visible rationale suitable for the user interface, not private reasoning.',
+        'Recommend an artStylePreset and up to three recommendedArtStylePresetIds that match the inferred project.',
+      ].join('\n'),
+      messages: [{ role: 'user', content: JSON.stringify({
+        prompt: input.prompt,
+        sourceContext: input.sourceContext ?? null,
+        validPairs,
+      }) }],
+      schema: seedInferenceOutputSchema,
+      maxTokens: 4000,
+    })
+
+    input.usageRecorder?.record({
+      surface: 'seed-inference',
+      model: input.model,
+      usage: response.usage,
+    })
+
+    parsedJson = response.object as Record<string, unknown>
+  } catch (err) {
+    const upstreamMessage = err instanceof Error ? err.message : 'OpenAI request failed.'
     throw new Error(`[world-seed-inference] ${upstreamMessage}`)
-  }
-  const parsedJson = extractJsonBlock(response.outputText)
-  if (!parsedJson) {
-    throw new Error('World seed inference returned invalid JSON.')
   }
   return seedInferenceOutputSchema.parse(parsedJson)
 }
@@ -11735,52 +11662,44 @@ async function repairMalformedStreamRecordWithLlm(input: {
   usageRecorder: WorldPromptTokenUsageRecorder
 }) {
   const repairModel = Deno.env.get('WORLD_PROMPT_STREAM_REPAIR_MODEL')?.trim() || input.model
-  const schema = normalizeStrictJsonSchema(z.toJSONSchema(streamRepairResponseSchema))
-  const response = await runOpenAiResponses({
-    model: repairModel,
-    input: JSON.stringify({
-      malformedRecord: normalizeStreamLine(input.record).slice(0, 12_000),
-      parseOrValidationError: input.errorMessage,
-      phase: input.phase,
-      currentCounts: input.currentCounts,
-      existingCanon: input.existingCanon,
-      acceptedCompactKinds: ['wiki', 'entity', 'sequence_unit', 'relationship', 'note', 'summary', 'skip'],
-    }),
-    instructions: [
-      'Repair exactly one malformed streamed GraphCore generation record.',
-      'Return a valid compact record in the record field, or {"kind":"skip","reason":"..."} if the block is clearly incomplete or unsafe.',
-      'Only recover syntax and field-shape problems from content already present in malformedRecord.',
-      'Do not invent missing canon. Do not add extra records. Do not return PromptToWorldOp unless the malformed record already used that shape.',
-      'Prefer compact wiki, entity, sequence_unit, and relationship records.',
-      'For sequence_unit, preserve ordinal/title/content and ensure synopsis, outcome, consequences, and characterArcDeltas are present only if recoverable from the malformed block.',
-    ].join('\n'),
-    text: {
-      format: {
-        type: 'json_schema',
-        name: 'world_prompt_stream_record_repair',
-        schema,
-      },
-    },
-    reasoning: { effort: 'low' },
-    metadata: {
-      feature: 'world-prompt',
-      surface: 'stream-record-repair',
-      jobId: input.jobId,
-      turnId: input.turnId,
-    },
-    store: false,
-    timeoutMs: 45_000,
-  })
-  input.usageRecorder.record({
-    surface: 'world-prompt-stream-record-repair',
-    model: repairModel,
-    response,
-    metadata: { jobId: input.jobId, turnId: input.turnId, phase: input.phase },
-  })
-  if (!response.response.ok) return null
-  const parsedJson = extractJsonBlock(response.outputText)
-  const validated = parsedJson ? streamRepairResponseSchema.safeParse(parsedJson) : null
-  if (!validated?.success) return null
+  let parsedJson: Record<string, unknown>
+  try {
+    const response = await TextGateway.generateObject({
+      modelPreference: repairModel,
+      system: [
+        'Repair exactly one malformed streamed GraphCore generation record.',
+        'Return a valid compact record in the record field, or {"kind":"skip","reason":"..."} if the block is clearly incomplete or unsafe.',
+        'Only recover syntax and field-shape problems from content already present in malformedRecord.',
+        'Do not invent missing canon. Do not add extra records. Do not return PromptToWorldOp unless the malformed record already used that shape.',
+        'Prefer compact wiki, entity, sequence_unit, and relationship records.',
+        'For sequence_unit, preserve ordinal/title/content and ensure synopsis, outcome, consequences, and characterArcDeltas are present only if recoverable from the malformed block.',
+      ].join('\n'),
+      messages: [{ role: 'user', content: JSON.stringify({
+        malformedRecord: normalizeStreamLine(input.record).slice(0, 12_000),
+        parseOrValidationError: input.errorMessage,
+        phase: input.phase,
+        currentCounts: input.currentCounts,
+        existingCanon: input.existingCanon,
+        acceptedCompactKinds: ['wiki', 'entity', 'sequence_unit', 'relationship', 'note', 'summary', 'skip'],
+      }) }],
+      schema: streamRepairResponseSchema,
+      maxTokens: 4000,
+    })
+
+    input.usageRecorder.record({
+      surface: 'world-prompt-stream-record-repair',
+      model: repairModel,
+      usage: response.usage,
+      metadata: { jobId: input.jobId, turnId: input.turnId, phase: input.phase },
+    })
+
+    parsedJson = response.object as Record<string, unknown>
+  } catch (err) {
+    return null
+  }
+
+  const validated = streamRepairResponseSchema.safeParse(parsedJson)
+  if (!validated.success) return null
   return validated.data.record
 }
 
@@ -12713,42 +12632,45 @@ async function runWorldPromptGenerationJob(input: {
       turn: { id: turn.id },
     })
 
-    const streamResponses: Array<Awaited<ReturnType<typeof runOpenAiResponsesStream>>> = []
+
+    const streamResponses: Array<{ text: string; usage?: unknown }> = []
     const runSeedStreamPass = async (pass: {
       passName: string
       instructions: string
       maxOutputTokens: number
     }) => {
       streamRecordBuffer = ''
-      const response = await runOpenAiResponsesStream({
-        model,
-        input: buildStreamedInitialSeedInput({
-          generationPrompt: prompt,
-          sourceContext,
-          inference,
-          selectedArtStylePreset,
-          selectedArtStyleDescription,
-          skeletonProfile,
-          projectContext,
-          phase,
-          existingCanon: buildStreamedGenerationCanonLedger(mutableSnapshot),
-        }),
-        instructions: pass.instructions,
-        maxOutputTokens: pass.maxOutputTokens,
-        reasoning: { effort: 'medium' },
-        store: false,
-        timeoutMs: isFlyGenerationJob(job)
-          ? Number(Deno.env.get('WORLD_PROMPT_FLY_STREAM_TIMEOUT_MS') ?? 900_000)
-          : 150_000,
-        metadata: {
-          surface: 'world-prompt-initial-seed-stream',
-          turnId: turn.id,
-          jobId: job.id,
-          runtime: isFlyGenerationJob(job) ? 'fly' : 'supabase',
-          passName: pass.passName,
-        },
+      let streamEventCount = 0
+      const response = await TextGateway.streamText({
+        modelPreference: model,
+        system: pass.instructions,
+        messages: [{
+          role: 'user',
+          content: JSON.stringify(buildStreamedInitialSeedInput({
+            generationPrompt: prompt,
+            sourceContext,
+            inference,
+            selectedArtStylePreset,
+            selectedArtStyleDescription,
+            skeletonProfile,
+            projectContext,
+            phase,
+            existingCanon: buildStreamedGenerationCanonLedger(mutableSnapshot),
+          })),
+        }],
+        maxTokens: pass.maxOutputTokens,
       }, {
-        onEvent: async (event) => {
+        onChunk: async (chunk) => {
+          streamEventCount++
+          streamRecordBuffer += chunk
+          const extracted = extractCompleteStreamJsonRecords(streamRecordBuffer)
+          streamRecordBuffer = extracted.rest
+          if (extracted.records.length > 0) {
+            for (const rec of extracted.records) {
+              await processStreamRecord(rec)
+            }
+          }
+
           const now = Date.now()
           if (now - lastStreamHeartbeatAt < 15_000) return
           lastStreamHeartbeatAt = now
@@ -12756,22 +12678,14 @@ async function runWorldPromptGenerationJob(input: {
             heartbeat_at: new Date().toISOString(),
             metadata: {
               ...(job.metadata ?? {}),
-              lastOpenAiStreamEvent: {
-                type: event.type,
-                sequenceNumber: event.sequenceNumber,
+              lastStreamEvent: {
+                type: 'chunk',
+                sequenceNumber: streamEventCount,
                 receivedAt: new Date().toISOString(),
                 passName: pass.passName,
               },
             },
           })
-        },
-        onTextDelta: async (delta) => {
-          streamRecordBuffer += delta
-          const extracted = extractCompleteStreamJsonRecords(streamRecordBuffer)
-          streamRecordBuffer = extracted.rest
-          for (const record of extracted.records) {
-            await processStreamRecord(record)
-          }
         },
       })
       if (streamRecordBuffer.trim().startsWith('{')) {
@@ -12782,7 +12696,7 @@ async function runWorldPromptGenerationJob(input: {
       usageRecorder.record({
         surface: 'world-prompt-initial-seed-stream',
         model,
-        response,
+        usage: response.usage,
         metadata: { jobId: job.id, turnId: turn.id, passName: pass.passName },
       })
       return response
@@ -12912,7 +12826,7 @@ async function runWorldPromptGenerationJob(input: {
           }
         : null,
       lastStepDefinitions: appliedDefinitions,
-      openAiResponseId: typeof streamResponses.at(-1)?.body?.id === 'string' ? streamResponses.at(-1)?.body?.id : (job.metadata?.openAiResponseId ?? null),
+      openAiResponseId: job.metadata?.openAiResponseId ?? null,
     }
 
     if (step && phase !== 'finalize' && phase !== 'full_stream') {
@@ -13993,50 +13907,37 @@ async function generateIncrementalManifest(input: {
   })
 
   const debugEnabled = shouldDebugWorldPromptOpenAi()
-  const response = await runOpenAiResponses({
-    model: input.payload.model,
-    input: prompt,
-    instructions,
-    text: {
-      format: {
-        type: 'json_schema',
-        name: 'world_prompt_incremental_manifest',
-        schema: manifestJsonSchema,
-      },
-    },
-    reasoning: { effort: 'low' },
-    metadata: {
-      feature: 'world-prompt',
+  let parsedJson: Record<string, unknown>
+  try {
+    const response = await TextGateway.generateObject({
+      modelPreference: input.payload.model,
+      system: instructions,
+      messages: [{ role: 'user', content: prompt }],
+      schema: manifestJsonSchema as any,
+      schemaName: 'world_prompt_incremental_manifest',
+      maxTokens: 4000,
+    })
+
+    input.usageRecorder?.record({
       surface: 'incremental-manifest',
-    },
-    store: false,
-    timeoutMs: 90_000,
-  })
-  input.usageRecorder?.record({
-    surface: 'incremental-manifest',
-    model: input.payload.model,
-    response,
-    metadata: { tokenBudgetDiagnostics: manifestDiagnostics },
-  })
+      model: input.payload.model,
+      usage: response.usage,
+      metadata: { tokenBudgetDiagnostics: manifestDiagnostics },
+    })
 
-  if (debugEnabled) {
-    console.log('[world-prompt-debug] incremental manifest response', previewJson({
-      ok: response.response.ok,
-      status: response.response.status,
-      outputText: response.outputText,
-      body: response.body,
-    }))
-  }
+    if (debugEnabled) {
+      console.log('[world-prompt-debug] incremental manifest response', previewJson({
+        ok: true,
+        status: 200,
+        object: response.object,
+      }))
+    }
 
-  if (!response.response.ok) {
-    const upstreamMessage =
-      typeof response.body.error === 'object' && response.body.error !== null
-        ? ((response.body.error as { message?: string }).message ?? 'OpenAI request failed.')
-        : 'OpenAI request failed.'
+    parsedJson = response.object as Record<string, unknown>
+  } catch (err) {
+    const upstreamMessage = err instanceof Error ? err.message : 'OpenAI request failed.'
     throw new Error(`[world-prompt-incremental-manifest] ${upstreamMessage}`)
   }
-  const parsedJson = extractJsonBlock(response.outputText)
-  if (!parsedJson) throw new Error('World prompt incremental manifest returned invalid JSON.')
   const manifest = worldPromptIncrementalManifestSchema.parse(parsedJson)
   const normalizedManifest = worldPromptIncrementalManifestSchema.parse({
       ...manifest,
@@ -14126,62 +14027,46 @@ async function generateIncrementalWorkItemPlan(input: {
   const prompt = JSON.stringify(compactPrompt.promptObject)
 
   const debugEnabled = shouldDebugWorldPromptOpenAi()
-  const response = await runOpenAiResponses({
-    model: input.payload.model,
-    input: prompt,
-    instructions,
-    text: {
-      format: {
-        type: 'json_schema',
-        name: 'world_prompt_incremental_work_item',
-        schema: plannerResponseSchema,
-      },
-    },
-    reasoning: { effort: 'low' },
-    metadata: {
-      feature: 'world-prompt',
+  let parsedJson: Record<string, unknown>
+  try {
+    const response = await TextGateway.generateObject({
+      modelPreference: input.payload.model,
+      system: instructions,
+      messages: [{ role: 'user', content: prompt }],
+      schema: plannerResponseSchema as any,
+      schemaName: 'world_prompt_incremental_work_item',
+      maxTokens: 4000,
+    })
+
+    input.usageRecorder?.record({
       surface: 'incremental-work-item',
-      workItemId: workItem.id,
-      workItemKind: workItem.kind,
-      workItemIndex: String(input.workItemIndex),
-      attempt: String(input.attempt),
-    },
-    store: false,
-    timeoutMs: workItem.kind === 'sequence_unit' ? 120_000 : 90_000,
-  })
-  input.usageRecorder?.record({
-    surface: 'incremental-work-item',
-    model: input.payload.model,
-    response,
-    metadata: {
-      workItemId: workItem.id,
-      workItemKind: workItem.kind,
-      workItemIndex: input.workItemIndex,
-      attempt: input.attempt,
-      tokenBudgetDiagnostics: compactPrompt.diagnostics,
-    },
-  })
+      model: input.payload.model,
+      usage: response.usage,
+      metadata: {
+        workItemId: workItem.id,
+        workItemKind: workItem.kind,
+        workItemIndex: input.workItemIndex,
+        attempt: input.attempt,
+        tokenBudgetDiagnostics: compactPrompt.diagnostics,
+      },
+    })
 
-  if (debugEnabled) {
-    console.log('[world-prompt-debug] incremental work item response', previewJson({
-      workItemId: workItem.id,
-      attempt: input.attempt,
-      ok: response.response.ok,
-      status: response.response.status,
-      outputText: response.outputText,
-      body: response.body,
-    }))
-  }
+    if (debugEnabled) {
+      console.log('[world-prompt-debug] incremental work item response', previewJson({
+        workItemId: workItem.id,
+        attempt: input.attempt,
+        ok: true,
+        status: 200,
+        object: response.object,
+      }))
+    }
 
-  if (!response.response.ok) {
-    const upstreamMessage =
-      typeof response.body.error === 'object' && response.body.error !== null
-        ? ((response.body.error as { message?: string }).message ?? 'OpenAI request failed.')
-        : 'OpenAI request failed.'
+    parsedJson = response.object as Record<string, unknown>
+  } catch (err) {
+    const upstreamMessage = err instanceof Error ? err.message : 'OpenAI request failed.'
     throw new Error(`[world-prompt-incremental-work-item:${workItem.id}] ${upstreamMessage}`)
   }
-  const parsedJson = extractJsonBlock(response.outputText)
-  if (!parsedJson) throw new Error(`Incremental work item ${workItem.id} returned invalid JSON.`)
+
   const normalizedJson = normalizePlannerJson(parsedJson)
   const validated = plannerRequestSchema.safeParse(normalizedJson)
   if (!validated.success) {

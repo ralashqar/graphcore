@@ -19,6 +19,11 @@
     "fly:worker:logs": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"& \\\"$env:USERPROFILE\\.fly\\bin\\fly.exe\\\" logs --config fly.world-generation.toml\""
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^1.1.9",
+    "@ai-sdk/google": "^1.1.13",
+    "@ai-sdk/groq": "^1.1.11",
+    "@ai-sdk/openai": "^1.1.13",
+    "ai": "^4.1.41",
     "@gsap/react": "^2.1.2",
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.5.0",
