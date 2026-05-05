@@ -1,0 +1,44 @@
+name: Auto Merge Main to Feature Branches
+
+on:
+  push:
+    branches:
+      - main # Triggers when code is pushed or merged into the main branch
+
+jobs:
+  merge-main-to-features:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Important: Fetches all history for all branches so we can merge
+
+      - name: Configure Git
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+
+      - name: Merge main into feature branches
+        run: |
+          # 1. Fetch all remote branches, remove the 'origin/' prefix, and exclude the 'main' branch
+          branches=$(git branch -r | grep -v '\->' | sed 's/origin\///' | grep -v 'main' | tr -d ' ')
+          
+          for branch in $branches; do
+            echo "========================================="
+            echo "Attempting to merge main into $branch..."
+            
+            # Checkout the target branch
+            git checkout $branch
+            
+            # Try to merge main into the feature branch without opening an editor
+            if git merge origin/main --no-edit; then
+              # If successful, push the updated branch back to GitHub
+              git push origin $branch
+              echo "✅ Successfully merged main into $branch"
+            else
+              echo "⚠️ Merge conflict detected in $branch. Skipping auto-merge."
+              # Abort the merge so the workspace is clean for the next branch in the loop
+              git merge --abort
+            fi
+          done
