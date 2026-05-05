@@ -16,6 +16,7 @@ import {
   type OutputWorkflowRunStatusResponse,
   type OutputWorkflowStartResponse,
   type OutputWorkflowUpgradeResponse,
+  type OutputArtifact,
 } from '../../domain/outputWorkflow'
 import { OutputWorkflowGraphOverlay } from './OutputWorkflowGraphOverlay'
 
@@ -193,6 +194,119 @@ function readWorldWikiTitle(snapshot: ProjectSnapshot) {
     : snapshot.project.name
 }
 
+function statusClass(value: string) {
+  return value.replace(/\s+/g, '-')
+}
+
+type OutputStudioStageKey = 'context' | 'writing' | 'images' | 'render' | 'artifacts'
+
+function outputStageForNode(node: OutputWorkflowNode): OutputStudioStageKey {
+  const purpose = readTrimmedString(readRecord(node.config).purpose)
+  if (node.nodeType === 'world_context_query' || node.nodeType === 'skill_context_query' || purpose === 'comic_entity_selector') {
+    return 'context'
+  }
+  if (node.nodeType === 'image_generation') return 'images'
+  if (node.nodeType === 'document_render') return 'render'
+  if (node.nodeType === 'output_artifact') return 'artifacts'
+  return 'writing'
+}
+
+const OUTPUT_STAGE_COPY: Record<OutputStudioStageKey, { title: string; eyebrow: string; empty: string }> = {
+  context: {
+    title: 'Context',
+    eyebrow: 'World graph inputs',
+    empty: 'World, sequence, and guidance inputs appear here once a workflow exists.',
+  },
+  writing: {
+    title: 'Writing',
+    eyebrow: 'Scripts, prose, prompts',
+    empty: 'Script, chapter, prompt, and planning nodes will collect here.',
+  },
+  images: {
+    title: 'Images',
+    eyebrow: 'Cover, atlas, pages',
+    empty: 'Image generation nodes will show previews and provider status here.',
+  },
+  render: {
+    title: 'Render',
+    eyebrow: 'PDF assembly',
+    empty: 'Document and comic PDF render nodes appear here.',
+  },
+  artifacts: {
+    title: 'Artifacts',
+    eyebrow: 'Open and download',
+    empty: 'Final registration nodes appear here before files land in the gallery.',
+  },
+}
+
+const OUTPUT_STAGE_ORDER = ['context', 'writing', 'images', 'render', 'artifacts'] as const
+
+function buildWorkflowStages(input: {
+  nodes: OutputWorkflowNode[]
+  levels: string[][]
+  nodeByKey: Map<string, OutputWorkflowNode>
+  stepsByNodeKey: Map<string, OutputWorkflowRunStep>
+}) {
+  const stages = OUTPUT_STAGE_ORDER.map((key) => ({
+    key,
+    ...OUTPUT_STAGE_COPY[key],
+    levels: [] as Array<{ levelIndex: number; nodes: OutputWorkflowNode[] }>,
+    counts: new Map<string, number>(),
+    total: 0,
+  }))
+  const stageByKey = new Map(stages.map((stage) => [stage.key, stage]))
+  const placed = new Set<string>()
+
+  input.levels.forEach((level, levelIndex) => {
+    const grouped = new Map<OutputStudioStageKey, OutputWorkflowNode[]>()
+    for (const nodeKey of level) {
+      const node = input.nodeByKey.get(nodeKey)
+      if (!node) continue
+      const stageKey = outputStageForNode(node)
+      const group = grouped.get(stageKey) ?? []
+      group.push(node)
+      grouped.set(stageKey, group)
+      placed.add(node.key)
+    }
+    for (const [stageKey, nodes] of grouped) {
+      stageByKey.get(stageKey)?.levels.push({ levelIndex, nodes })
+    }
+  })
+
+  for (const node of input.nodes) {
+    if (placed.has(node.key)) continue
+    const stage = stageByKey.get(outputStageForNode(node))
+    if (stage) stage.levels.push({ levelIndex: stage.levels.length, nodes: [node] })
+  }
+
+  for (const stage of stages) {
+    for (const level of stage.levels) {
+      for (const node of level.nodes) {
+        stage.total += 1
+        const status = statusKeyForStep(input.stepsByNodeKey.get(node.key))
+        stage.counts.set(status, (stage.counts.get(status) ?? 0) + 1)
+      }
+    }
+  }
+
+  return stages
+}
+
+function workflowPresetLabel(value: string | null | undefined) {
+  if (value === 'comic_issue_from_sequence') return 'Comic Issue'
+  if (value === 'ebook_from_world') return 'Ebook PDF'
+  return value ? value.replace(/_/g, ' ') : 'No workflow yet'
+}
+
+function purposeLabel(node: OutputWorkflowNode) {
+  const purpose = readTrimmedString(readRecord(node.config).purpose)
+  return purpose ? purpose.replace(/_/g, ' ') : node.nodeType.replace(/_/g, ' ')
+}
+
+function isImageArtifact(artifact: OutputArtifact, mimeType: string) {
+  return mimeType.startsWith('image/') || artifact.kind === 'image'
+}
+
 export function OutputsWorkspace({
   snapshot,
   canRunOutputs,
@@ -298,16 +412,24 @@ export function OutputsWorkspace({
     () => new Map((displayRun?.steps ?? []).map((step) => [step.nodeKey, step])),
     [displayRun?.steps],
   )
+  const assetByKey = useMemo(() => new Map(snapshot.assets.map((asset) => [asset.key, asset])), [snapshot.assets])
   const selectedStep = selectedNode ? stepsByNodeKey.get(selectedNode.key) ?? null : null
   const selectedOutputPreview = truncatePreview(readOutputPreview(selectedStep))
+  const selectedOutputImageUrl = useMemo(() => {
+    const outputs = readRecord(selectedStep?.outputs)
+    const image = readRecord(outputs.image)
+    const assetKey = readTrimmedString(image.assetKey) || readTrimmedString(outputs.assetKey)
+    const asset = assetKey ? assetByKey.get(assetKey) ?? null : null
+    return resolveAssetSourceUrl(asset) || null
+  }, [assetByKey, selectedStep?.outputs])
   const runStepCounts = useMemo(() => {
     const counts = new Map<string, number>()
-    for (const step of activeRun?.steps ?? []) {
+    for (const step of displayRun?.steps ?? []) {
       const key = statusKeyForStep(step)
       counts.set(key, (counts.get(key) ?? 0) + 1)
     }
     return counts
-  }, [activeRun?.steps])
+  }, [displayRun?.steps])
   const canRetryActiveRun = activeRun
     ? isTerminalOutputWorkflowRunStatus(activeRun.status)
       && ['failed', 'blocked', 'cancelled'].some((status) => (runStepCounts.get(status) ?? 0) > 0)
@@ -322,6 +444,20 @@ export function OutputsWorkspace({
     ))
   }, [displayRun?.artifacts, snapshot.outputArtifacts])
   const title = readWorldWikiTitle(snapshot)
+  const activeRunStatusLabel = activeRun ? formatStatus(displayRun?.status ?? activeRun.status) : 'Idle'
+  const runningNodeCount = runStepCounts.get('running') ?? 0
+  const failedNodeCount = (runStepCounts.get('failed') ?? 0) + (runStepCounts.get('blocked') ?? 0)
+  const completedNodeCount = (runStepCounts.get('completed') ?? 0) + (runStepCounts.get('skipped') ?? 0)
+  const workflowStages = useMemo(() => buildWorkflowStages({
+    nodes: activeNodes,
+    levels: workflowExecutionPlan?.levels ?? [],
+    nodeByKey,
+    stepsByNodeKey,
+  }), [activeNodes, nodeByKey, stepsByNodeKey, workflowExecutionPlan?.levels])
+  const primaryArtifact = artifacts.find((artifact) => artifact.mimeType === 'application/pdf' || artifact.kind === 'comic_pdf' || artifact.kind === 'pdf')
+    ?? artifacts.find((artifact) => artifact.kind === 'image')
+    ?? artifacts[0]
+    ?? null
   const activeWorkflowNeedsCoverUpgrade = Boolean(
     activeWorkflow
     && activeWorkflow.preset === 'ebook_from_world'
@@ -724,21 +860,6 @@ export function OutputsWorkspace({
     }
   }
 
-  function selectedNodeRunLabel(node: OutputWorkflowNode) {
-    const purpose = readTrimmedString(readRecord(node.config).purpose)
-    if (node.nodeType === 'output_artifact') return 'Render/register PDF only'
-    if (node.nodeType === 'document_render') return 'Refresh document only'
-    if (purpose === 'ebook_cover_prompt') return 'Regenerate cover prompt and PDF'
-    if (purpose === 'ebook_cover_image') return 'Regenerate cover and PDF'
-    if (purpose === 'comic_atlas_prompt') return 'Regenerate atlas prompt, pages, and PDF'
-    if (purpose === 'comic_style_atlas') return 'Regenerate atlas, pages, and PDF'
-    if (purpose === 'comic_page_prompt') return 'Regenerate page and PDF'
-    if (purpose === 'comic_page') return 'Regenerate page image and PDF'
-    if (purpose === 'chapter_prose') return 'Regenerate chapter only'
-    if (purpose === 'chapter_section_prose') return 'Regenerate section only'
-    return 'Rerun node only'
-  }
-
   return (
     <div className="outputs-workspace">
       {graphOpen && activeWorkflow ? (
@@ -772,403 +893,458 @@ export function OutputsWorkspace({
           worldWiki={readRecord(snapshot.draft.metadata).worldWiki}
         />
       ) : null}
-      <header className="outputs-header">
-        <div>
-          <p className="outputs-eyebrow">Outputs</p>
+      <header className="outputs-hero">
+        <div className="outputs-hero-copy">
+          <p className="outputs-eyebrow">Output Studio</p>
           <h2>{title}</h2>
+          <p>Generate books, comics, images, and video packages from the world graph without rebuilding canon.</p>
         </div>
-        <div className="outputs-mode-switch" role="tablist" aria-label="Output modes">
-          <button className={mode === 'workflows' ? 'is-active' : ''} onClick={() => setMode('workflows')} type="button">
-            Workflows
-          </button>
-          <button className={mode === 'cinematics' ? 'is-active' : ''} onClick={() => setMode('cinematics')} type="button">
-            Cinematics
-          </button>
+        <div className="outputs-hero-actions">
+          <div className="outputs-mode-switch" role="tablist" aria-label="Output modes">
+            <button className={mode === 'workflows' ? 'is-active' : ''} onClick={() => setMode('workflows')} type="button">
+              Workflows
+            </button>
+            <button className={mode === 'cinematics' ? 'is-active' : ''} onClick={() => setMode('cinematics')} type="button">
+              Cinematics
+            </button>
+          </div>
+          <div className={`outputs-live-pill is-${activeRun ? statusClass(activeRun.status) : 'idle'}`}>
+            <span className={`outputs-status-icon is-${activeRun ? statusClass(displayRun?.status ?? activeRun.status) : 'queued'}`} aria-hidden="true" />
+            <strong>{activeRunStatusLabel}</strong>
+            <small>{activeWorkflow ? workflowPresetLabel(activeWorkflow.preset) : 'No active workflow'}</small>
+          </div>
         </div>
       </header>
 
-      {mode === 'cinematics' ? cinematicsPanel : (
-        <div className="outputs-grid">
-          <section className="outputs-panel outputs-composer">
-            <div className="outputs-panel-heading">
-              <h3>{outputPreset === 'ebook' ? 'Ebook From World' : 'Comic Issue'}</h3>
-              <span>{outputPreset === 'ebook' ? `${sequenceUnits.length} sequence units` : '1 sequence unit'}</span>
-            </div>
-            <div className="outputs-preset-switch" role="tablist" aria-label="Output workflow preset">
-              <button className={outputPreset === 'ebook' ? 'is-active' : ''} onClick={() => setOutputPreset('ebook')} type="button">
-                Ebook PDF
-              </button>
-              <button className={outputPreset === 'comic' ? 'is-active' : ''} onClick={() => setOutputPreset('comic')} type="button">
-                Comic Issue
-              </button>
-            </div>
-            {outputPreset === 'ebook' ? (
-              <textarea
-                value={prompt}
-                onChange={(event) => setPrompt(event.target.value)}
-                rows={5}
-                aria-label="Output workflow prompt"
-              />
-            ) : (
-              <div className="outputs-comic-controls">
-                <label>
-                  <span>Sequence unit</span>
-                  <select
-                    value={selectedComicSequenceKey}
-                    onChange={(event) => setSelectedComicSequenceKey(event.target.value)}
-                    disabled={sequenceUnits.length === 0}
-                  >
-                    {sequenceUnits.map((entity) => (
-                      <option key={entity.key} value={entity.key}>{entity.name}</option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  <span>Pages</span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={12}
-                    value={comicPageCount}
-                    onChange={(event) => setComicPageCount(Math.max(1, Math.min(12, Number(event.target.value) || 8)))}
-                  />
-                </label>
-                <textarea
-                  value={comicPrompt}
-                  onChange={(event) => setComicPrompt(event.target.value)}
-                  rows={5}
-                  aria-label="Comic workflow prompt"
-                />
-              </div>
-            )}
-            <button
-              className="outputs-primary-action"
-              disabled={!canRunOutputs || busy || (outputPreset === 'comic' && !selectedComicSequenceKey)}
-              onClick={outputPreset === 'ebook' ? createAndRunEbookWorkflow : createAndRunComicWorkflow}
-              type="button"
-            >
-              {busy ? 'Running workflow...' : outputPreset === 'ebook' ? 'Generate PDF' : 'Generate Comic PDF'}
-            </button>
-            {!canRunOutputs ? <p className="outputs-error">Output workflows require a live Supabase-backed draft.</p> : null}
-            {error ? <p className="outputs-error">{error}</p> : null}
-          </section>
-
-          <section className="outputs-panel">
-            <div className="outputs-panel-heading">
-              <h3>Workflow</h3>
-              <span>{activeWorkflow?.preset.replace(/_/g, ' ') ?? 'No workflow yet'}</span>
-            </div>
-            {activeWorkflowNeedsCoverUpgrade ? (
-              <div className="outputs-upgrade-callout">
+      {mode === 'cinematics' ? (
+        <div className="outputs-cinematics-shell">{cinematicsPanel}</div>
+      ) : (
+        <div className="outputs-studio-grid">
+          <aside className="outputs-setup-rail">
+            <section className="outputs-panel outputs-composer">
+              <div className="outputs-panel-heading">
                 <div>
-                  <strong>Cover branch available</strong>
-                  <p>This workflow was created before ebook cover generation. Upgrade the graph to add cover prompt and GPT Image 2 cover nodes without rerunning chapter prose.</p>
+                  <p className="outputs-eyebrow">Create</p>
+                  <h3>{outputPreset === 'ebook' ? 'Ebook PDF' : 'Comic Issue'}</h3>
                 </div>
-                <div className="outputs-upgrade-actions">
-                  <button
-                    className="outputs-secondary-action"
-                    disabled={!canRunOutputs || Boolean(upgradeMode)}
-                    onClick={() => void upgradeActiveWorkflow('graph')}
-                    type="button"
-                  >
-                    {upgradeMode === 'graph' ? 'Upgrading...' : 'Upgrade graph'}
-                  </button>
-                  <button
-                    className="outputs-secondary-action"
-                    disabled={!canRunOutputs || Boolean(upgradeMode)}
-                    onClick={() => void upgradeActiveWorkflow('cover')}
-                    type="button"
-                  >
-                    {upgradeMode === 'cover' ? 'Generating...' : 'Upgrade + cover only'}
-                  </button>
-                  <button
-                    className="outputs-secondary-action"
-                    disabled={!canRunOutputs || Boolean(upgradeMode)}
-                    onClick={() => void upgradeActiveWorkflow('pdf')}
-                    type="button"
-                  >
-                    {upgradeMode === 'pdf' ? 'Rebuilding...' : 'Upgrade + rebuild PDF'}
-                  </button>
-                </div>
+                <span>{outputPreset === 'ebook' ? `${sequenceUnits.length} sequence units` : `${comicPageCount} pages`}</span>
               </div>
-            ) : null}
-            <div className="outputs-workflow-actions">
+              <div className="outputs-preset-switch" role="tablist" aria-label="Output workflow preset">
+                <button className={outputPreset === 'ebook' ? 'is-active' : ''} onClick={() => setOutputPreset('ebook')} type="button">
+                  <strong>Ebook PDF</strong>
+                  <span>Manuscript and cover-ready PDF</span>
+                </button>
+                <button className={outputPreset === 'comic' ? 'is-active' : ''} onClick={() => setOutputPreset('comic')} type="button">
+                  <strong>Comic Issue</strong>
+                  <span>Script, atlas, pages, PDF</span>
+                </button>
+              </div>
+              <div className="outputs-composer-meta">
+                <span>{castAndContext.length} world entities</span>
+                <span>{sequenceUnits.length} sequence units</span>
+                <span>{artifacts.length} artifacts</span>
+              </div>
+              {outputPreset === 'ebook' ? (
+                <label className="outputs-input-block">
+                  <span>Output prompt</span>
+                  <textarea
+                    value={prompt}
+                    onChange={(event) => setPrompt(event.target.value)}
+                    rows={6}
+                    aria-label="Output workflow prompt"
+                  />
+                  <small>Uses the project wiki, sequence units, entity context, output skills, and cached workflow outputs.</small>
+                </label>
+              ) : (
+                <div className="outputs-comic-controls">
+                  <label>
+                    <span>Sequence unit</span>
+                    <select
+                      value={selectedComicSequenceKey}
+                      onChange={(event) => setSelectedComicSequenceKey(event.target.value)}
+                      disabled={sequenceUnits.length === 0}
+                    >
+                      {sequenceUnits.map((entity) => (
+                        <option key={entity.key} value={entity.key}>{entity.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>Pages</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={12}
+                      value={comicPageCount}
+                      onChange={(event) => setComicPageCount(Math.max(1, Math.min(12, Number(event.target.value) || 8)))}
+                    />
+                  </label>
+                  <label className="outputs-input-block">
+                    <span>Comic direction</span>
+                    <textarea
+                      value={comicPrompt}
+                      onChange={(event) => setComicPrompt(event.target.value)}
+                      rows={6}
+                      aria-label="Comic workflow prompt"
+                    />
+                    <small>Creates one selected-sequence comic with script, atlas references, page images, and a PDF package.</small>
+                  </label>
+                </div>
+              )}
               <button
-                className="outputs-secondary-action"
-                disabled={!activeWorkflow || activeNodes.length === 0}
-                onClick={openOutputGraph}
+                className="outputs-primary-action"
+                disabled={!canRunOutputs || busy || (outputPreset === 'comic' && !selectedComicSequenceKey)}
+                onClick={outputPreset === 'ebook' ? createAndRunEbookWorkflow : createAndRunComicWorkflow}
                 type="button"
               >
-                {refreshingGraph ? 'Refreshing graph...' : 'Expand graph'}
+                {busy ? 'Starting workflow...' : outputPreset === 'ebook' ? 'Generate PDF' : 'Generate Comic PDF'}
               </button>
-            </div>
-            <div className="outputs-node-list">
-              {workflowExecutionPlan?.levels.length ? workflowExecutionPlan.levels.map((level, levelIndex) => (
-                <div className="outputs-execution-level" key={`level-${levelIndex}`}>
-                  <div className="outputs-level-heading">
-                    <strong>Level {levelIndex + 1}</strong>
-                    <span>{level.length > 1 ? `${level.length} parallel nodes` : '1 node'}</span>
-                  </div>
-                  <div className="outputs-level-nodes">
-                    {level.map((nodeKey) => {
-                      const node = nodeByKey.get(nodeKey)
-                      const step = stepsByNodeKey.get(nodeKey)
-                      if (!node) return null
-                      const skillKeys = readNodeSkillKeys(node)
-                      const statusKey = statusKeyForStep(step)
-                      const outputPreview = readOutputPreview(step)
-                      return (
-                        <article
-                          className={`outputs-node-card ${selectedNode?.key === node.key ? 'is-selected' : ''} is-${statusKey.replace(/\s+/g, '-')}`}
-                          key={node.id}
-                        >
-                          <button
-                            className="outputs-node-main"
-                            onClick={() => {
-                              setSelectedNodeKey(node.key)
-                              setInspectorMode('output')
-                            }}
-                            type="button"
-                          >
-                            <span className={`outputs-status-icon is-${statusKey.replace(/\s+/g, '-')}`} aria-hidden="true" />
-                            <span>
-                              <strong>{node.label}</strong>
-                              <small>{node.nodeType.replace(/_/g, ' ')}</small>
-                            </span>
-                          </button>
-                          {skillKeys.length > 0 ? (
-                            <div className="outputs-skill-chips">
-                              {skillKeys.slice(0, 3).map((skillKey) => <small key={skillKey}>{skillKey.replace(/_/g, ' ')}</small>)}
-                              {skillKeys.length > 3 ? <small>+{skillKeys.length - 3}</small> : null}
-                            </div>
-                          ) : null}
-                          <div className="outputs-node-footer">
-                            <em>{statusLabelForStep(step)}</em>
-                            <button
-                              className="outputs-node-action"
-                              disabled={!outputPreview && !step?.errorMessage}
-                              onClick={() => {
-                                setSelectedNodeKey(node.key)
-                                setInspectorMode('output')
-                              }}
-                              type="button"
-                            >
-                              View output
-                            </button>
-                          </div>
-                        </article>
-                      )
-                    })}
-                  </div>
+              {!canRunOutputs ? <p className="outputs-error">Output workflows require a live Supabase-backed draft.</p> : null}
+              {error ? <p className="outputs-error">{error}</p> : null}
+            </section>
+
+            <section className="outputs-panel outputs-run-card">
+              <div className="outputs-panel-heading">
+                <div>
+                  <p className="outputs-eyebrow">Run</p>
+                  <h3>Production Status</h3>
                 </div>
-              )) : (
-                <p className="outputs-muted">Create the ebook preset to materialize the node chain.</p>
+                <span>{activeRunStatusLabel}</span>
+              </div>
+              <div className="outputs-run-metrics">
+                <div>
+                  <strong>{runningNodeCount}</strong>
+                  <span>Running</span>
+                </div>
+                <div>
+                  <strong>{completedNodeCount}</strong>
+                  <span>Done</span>
+                </div>
+                <div>
+                  <strong>{failedNodeCount}</strong>
+                  <span>Needs attention</span>
+                </div>
+              </div>
+              {activeRun ? (
+                <div className="outputs-run-summary" aria-label="Run step summary">
+                  {['running', 'completed', 'failed', 'blocked', 'cancelled', 'skipped', 'queued'].map((status) => (
+                    <span className={`is-${status}`} key={status}>{formatStatus(status)} {runStepCounts.get(status) ?? 0}</span>
+                  ))}
+                </div>
+              ) : (
+                <p className="outputs-muted">Start a preset to see queued, running, completed, failed, and skipped nodes.</p>
               )}
-            </div>
-          </section>
-
-          <section className="outputs-panel">
-            <div className="outputs-panel-heading">
-              <h3>Node Details</h3>
-              <span>{selectedStep ? statusLabelForStep(selectedStep) : 'Not run'}</span>
-            </div>
-            {selectedNode ? (
-              <div className="outputs-inspector">
-                <div className="outputs-inspector-header">
-                  <span className={`outputs-status-icon is-${statusKeyForStep(selectedStep).replace(/\s+/g, '-')}`} aria-hidden="true" />
-                  <div>
-                    <strong>{selectedNode.label}</strong>
-                    <span>{selectedNode.nodeType.replace(/_/g, ' ')}</span>
-                  </div>
-                  <button
-                    className="outputs-node-action"
-                    disabled={!canRunOutputs || !activeRun || targetedNodeKey === selectedNode.key}
-                    onClick={() => void runSelectedNodeOnly(selectedNode)}
-                    type="button"
-                  >
-                    {targetedNodeKey === selectedNode.key ? 'Starting...' : selectedNodeRunLabel(selectedNode)}
+              <div className="outputs-run-actions">
+                {activeRun && !isTerminalOutputWorkflowRunStatus(activeRun.status) ? (
+                  <button className="outputs-secondary-action" disabled={busy} onClick={cancelActiveRun} type="button">
+                    Cancel run
                   </button>
-                </div>
-                <div className="outputs-inspector-tabs" role="tablist" aria-label="Node detail views">
-                  <button className={inspectorMode === 'output' ? 'is-active' : ''} onClick={() => setInspectorMode('output')} type="button">
-                    Output
-                  </button>
-                  <button className={inspectorMode === 'guidance' ? 'is-active' : ''} onClick={() => setInspectorMode('guidance')} type="button">
-                    Guidance
-                  </button>
-                  <button className={inspectorMode === 'metadata' ? 'is-active' : ''} onClick={() => setInspectorMode('metadata')} type="button">
-                    Metadata
-                  </button>
-                </div>
-                {inspectorMode === 'output' ? (
-                  <div className="outputs-output-preview">
-                    {selectedStep?.errorMessage ? <p className="outputs-error">{selectedStep.errorMessage}</p> : null}
-                    {selectedOutputPreview ? <pre>{selectedOutputPreview}</pre> : (
-                      <p className="outputs-muted">No node output has been persisted yet. Queued and running nodes will fill this when they complete.</p>
-                    )}
-                  </div>
                 ) : null}
-                {inspectorMode === 'guidance' && selectedGuidance ? (
-                  <div className="outputs-guidance-panel">
-                    <div className="outputs-skill-chips">
-                      {selectedGuidance.skillKeys.map((skillKey) => <small key={skillKey}>{skillKey.replace(/_/g, ' ')}</small>)}
-                    </div>
-                    {selectedGuidance.resolvedGuidancePreview ? (
-                      <div className="outputs-guidance-section">
-                        <strong>Preview</strong>
-                        <p>{selectedGuidance.resolvedGuidancePreview}</p>
-                      </div>
-                    ) : (
-                      <p className="outputs-muted">This node does not have explicit output skills yet.</p>
-                    )}
-                    {selectedGuidance.guidance.length > 0 ? (
-                      <div className="outputs-guidance-section">
-                        <strong>Full guidance sent to node</strong>
-                        <ul>
-                          {selectedGuidance.guidance.map((entry, index) => <li key={`guidance-${index}`}>{entry}</li>)}
-                        </ul>
-                      </div>
-                    ) : null}
-                    {selectedGuidance.avoid.length > 0 ? (
-                      <div className="outputs-guidance-section">
-                        <strong>Full avoid list sent to node</strong>
-                        <ul>
-                          {selectedGuidance.avoid.map((entry, index) => <li key={`avoid-${index}`}>{entry}</li>)}
-                        </ul>
-                      </div>
-                    ) : null}
-                    {selectedGuidance.guidanceHash ? <span className="outputs-guidance-hash">Guidance hash {selectedGuidance.guidanceHash}</span> : null}
-                  </div>
-                ) : null}
-                {inspectorMode === 'metadata' ? (
-                  <div className="outputs-output-preview">
-                    <pre>{JSON.stringify({
-                      inputHash: selectedStep?.inputHash || selectedNode.inputHash,
-                      outputHash: selectedStep?.outputHash || selectedNode.outputHash,
-                      provider: selectedStep?.provider ?? null,
-                      model: selectedStep?.model ?? null,
-                      providerRequestId: selectedStep?.providerRequestId ?? null,
-                      providerMode: readRecord(selectedStep?.metadata).providerMode ?? null,
-                      providerStatus: readRecord(selectedStep?.metadata).providerStatus ?? null,
-                      retryAttempts: readRecord(selectedStep?.outputs).retryAttempts ?? null,
-                      startedAt: selectedStep?.startedAt ?? null,
-                      completedAt: selectedStep?.completedAt ?? null,
-                      metadata: selectedStep?.metadata ?? selectedNode.metadata,
-                    }, null, 2)}</pre>
-                  </div>
+                {activeRun && canRetryActiveRun ? (
+                  <button className="outputs-secondary-action" disabled={busy} onClick={retryActiveRunFromFailedNodes} type="button">
+                    {busy ? 'Retrying...' : 'Retry failed nodes'}
+                  </button>
                 ) : null}
               </div>
-            ) : (
-              <p className="outputs-muted">Select a node to inspect its output, error state, provider metadata, and guidance.</p>
-            )}
-          </section>
+            </section>
+          </aside>
 
-          <section className="outputs-panel">
-            <div className="outputs-panel-heading">
-              <h3>Run Timeline</h3>
-              {activeRun ? <span>{formatStatus(activeRun.status)}</span> : <span>Idle</span>}
-            </div>
-            {activeRun ? (
-              <div className="outputs-run-summary" aria-label="Run step summary">
-                {['running', 'completed', 'failed', 'blocked', 'cancelled', 'skipped', 'queued'].map((status) => (
-                  <span className={`is-${status}`} key={status}>{formatStatus(status)} {runStepCounts.get(status) ?? 0}</span>
-                ))}
-              </div>
-            ) : null}
-            {activeRun && !isTerminalOutputWorkflowRunStatus(activeRun.status) ? (
-              <button className="outputs-secondary-action" disabled={busy} onClick={cancelActiveRun} type="button">
-                Cancel run
-              </button>
-            ) : null}
-            {activeRun && canRetryActiveRun ? (
-              <button className="outputs-secondary-action" disabled={busy} onClick={retryActiveRunFromFailedNodes} type="button">
-                {busy ? 'Retrying...' : 'Retry failed/blocked nodes'}
-              </button>
-            ) : null}
-            <div className="outputs-step-list">
-              {activeRun?.steps.length ? activeRun.steps.map((step) => (
+          <main className="outputs-production-main">
+            <section className="outputs-panel outputs-workflow-board">
+              <div className="outputs-panel-heading">
+                <div>
+                  <p className="outputs-eyebrow">Workflow</p>
+                  <h3>{workflowPresetLabel(activeWorkflow?.preset)}</h3>
+                </div>
                 <button
-                  className={`outputs-step-row is-${statusKeyForStep(step).replace(/\s+/g, '-')}`}
-                  key={step.id}
-                  onClick={() => {
-                    setActiveRunId(activeRun.id)
-                    setSelectedNodeKey(step.nodeKey)
-                    setInspectorMode('output')
-                  }}
+                  className="outputs-secondary-action outputs-compact-action"
+                  disabled={!activeWorkflow || activeNodes.length === 0}
+                  onClick={openOutputGraph}
                   type="button"
                 >
-                  <span className={`outputs-status-icon is-${statusKeyForStep(step).replace(/\s+/g, '-')}`} aria-hidden="true" />
-                  <span>{step.label}</span>
-                  <strong>{statusLabelForStep(step)}</strong>
+                  {refreshingGraph ? 'Refreshing...' : 'Expand graph'}
                 </button>
-              )) : (
-                <p className="outputs-muted">Runs will show per-node status, retries, hashes, and provider metadata here.</p>
-              )}
-            </div>
-          </section>
-
-          <section className="outputs-panel outputs-artifacts">
-            <div className="outputs-panel-heading">
-              <h3>Artifacts</h3>
-              <span>{artifacts.length}</span>
-            </div>
-            {artifacts.length > 0 ? artifacts.map((artifact) => {
-              const asset = artifact.assetKey
-                ? snapshot.assets.find((entry) => entry.key === artifact.assetKey) ?? null
-                : null
-              const url = resolveAssetSourceUrl(asset) || resolveArtifactUrlFromMetadata(readRecord(artifact.metadata))
-              const metadata = readRecord(artifact.metadata)
-              const renderMetadata = readRecord(metadata.render)
-              const markdownPreview = readTrimmedString(metadata.markdownPreview)
-              const mimeType = artifact.mimeType || asset?.mimeType || ''
-              const actionLabels = artifactActionLabels(mimeType, artifact.kind)
-              const isImageArtifact = mimeType.startsWith('image/') || artifact.kind === 'image'
-              const byteSize = formatByteSize(renderMetadata.byteSize)
-              const pageCount = readNumber(renderMetadata.pageCount)
-              const manuscriptLength = readNumber(renderMetadata.manuscriptCharacterCount)
-              const pageSize = readTrimmedString(renderMetadata.pageSize)
-              return (
-                <article className="outputs-artifact-card" key={artifact.id}>
+              </div>
+              {activeWorkflowNeedsCoverUpgrade ? (
+                <div className="outputs-upgrade-callout">
                   <div>
-                    {isImageArtifact && url ? (
-                      <img className="outputs-artifact-image" src={url} alt={artifact.name} loading="lazy" />
-                    ) : null}
-                    <strong>{artifact.name}</strong>
-                    <span>{artifact.kind.toUpperCase()} - {mimeType || 'artifact'}</span>
-                    <div className="outputs-artifact-meta">
-                      {pageCount ? <small>{pageCount} pages</small> : null}
-                      {byteSize ? <small>{byteSize}</small> : null}
-                      {manuscriptLength ? <small>{manuscriptLength.toLocaleString()} manuscript chars</small> : null}
-                      {pageSize ? <small>{pageSize}</small> : null}
+                    <strong>Cover branch available</strong>
+                    <p>Add cover prompt and GPT Image 2 cover nodes without rerunning chapter prose.</p>
+                  </div>
+                  <div className="outputs-upgrade-actions">
+                    <button className="outputs-secondary-action" disabled={!canRunOutputs || Boolean(upgradeMode)} onClick={() => void upgradeActiveWorkflow('graph')} type="button">
+                      {upgradeMode === 'graph' ? 'Upgrading...' : 'Upgrade graph'}
+                    </button>
+                    <button className="outputs-secondary-action" disabled={!canRunOutputs || Boolean(upgradeMode)} onClick={() => void upgradeActiveWorkflow('cover')} type="button">
+                      {upgradeMode === 'cover' ? 'Generating...' : 'Cover only'}
+                    </button>
+                    <button className="outputs-secondary-action" disabled={!canRunOutputs || Boolean(upgradeMode)} onClick={() => void upgradeActiveWorkflow('pdf')} type="button">
+                      {upgradeMode === 'pdf' ? 'Rebuilding...' : 'Rebuild PDF'}
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+              <div className="outputs-stage-board">
+                {workflowStages.map((stage) => (
+                  <section className="outputs-stage" key={stage.key}>
+                    <div className="outputs-stage-head">
+                      <div>
+                        <span>{stage.eyebrow}</span>
+                        <strong>{stage.title}</strong>
+                      </div>
+                      <small>{stage.total} nodes</small>
                     </div>
-                    {artifact.summary ? <p>{artifact.summary}</p> : null}
-                    {markdownPreview ? (
-                      <details className="outputs-artifact-preview">
-                        <summary>Preview manuscript text (first excerpt only)</summary>
-                        <pre>{markdownPreview}</pre>
-                      </details>
-                    ) : null}
+                    <div className="outputs-stage-progress" aria-label={`${stage.title} status`}>
+                      <span className="is-running">{stage.counts.get('running') ?? 0}</span>
+                      <span className="is-completed">{(stage.counts.get('completed') ?? 0) + (stage.counts.get('skipped') ?? 0)}</span>
+                      <span className="is-failed">{(stage.counts.get('failed') ?? 0) + (stage.counts.get('blocked') ?? 0)}</span>
+                    </div>
+                    {stage.levels.length > 0 ? (
+                      <div className="outputs-node-list">
+                        {stage.levels.map((level) => (
+                          <div className="outputs-execution-level" key={`${stage.key}-${level.levelIndex}`}>
+                            <div className="outputs-level-heading">
+                              <strong>{level.nodes.length > 1 ? `Parallel group ${level.levelIndex + 1}` : `Step ${level.levelIndex + 1}`}</strong>
+                              <span>{level.nodes.length > 1 ? `${level.nodes.length} nodes` : '1 node'}</span>
+                            </div>
+                            <div className="outputs-level-nodes">
+                              {level.nodes.map((node) => {
+                                const step = stepsByNodeKey.get(node.key)
+                                const skillKeys = readNodeSkillKeys(node)
+                                const statusKey = statusKeyForStep(step)
+                                const outputPreview = readOutputPreview(step)
+                                const isTargeted = targetedNodeKeys.includes(node.key)
+                                return (
+                                  <article
+                                    className={`outputs-node-card ${selectedNode?.key === node.key ? 'is-selected' : ''} is-${statusClass(statusKey)} ${isTargeted ? 'is-targeted' : ''}`}
+                                    key={node.id}
+                                  >
+                                    <button
+                                      className="outputs-node-main"
+                                      onClick={() => {
+                                        setSelectedNodeKey(node.key)
+                                        setInspectorMode('output')
+                                      }}
+                                      type="button"
+                                    >
+                                      <span className={`outputs-status-icon is-${statusClass(isTargeted ? 'running' : statusKey)}`} aria-hidden="true" />
+                                      <span>
+                                        <strong>{node.label}</strong>
+                                        <small>{purposeLabel(node)}</small>
+                                      </span>
+                                    </button>
+                                    {skillKeys.length > 0 ? (
+                                      <div className="outputs-skill-chips">
+                                        {skillKeys.slice(0, 3).map((skillKey) => <small key={skillKey}>{skillKey.replace(/_/g, ' ')}</small>)}
+                                        {skillKeys.length > 3 ? <small>+{skillKeys.length - 3}</small> : null}
+                                      </div>
+                                    ) : null}
+                                    <div className="outputs-node-footer">
+                                      <em>{isTargeted ? 'starting' : statusLabelForStep(step)}</em>
+                                      <button
+                                        className="outputs-node-action"
+                                        disabled={!outputPreview && !step?.errorMessage}
+                                        onClick={() => {
+                                          setSelectedNodeKey(node.key)
+                                          setInspectorMode('output')
+                                        }}
+                                        type="button"
+                                      >
+                                        View
+                                      </button>
+                                    </div>
+                                  </article>
+                                )
+                              })}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="outputs-muted">{stage.empty}</p>
+                    )}
+                  </section>
+                ))}
+              </div>
+            </section>
+          </main>
+
+          <aside className="outputs-results-rail">
+            <section className="outputs-panel outputs-artifacts">
+              <div className="outputs-panel-heading">
+                <div>
+                  <p className="outputs-eyebrow">Results</p>
+                  <h3>Artifacts</h3>
+                </div>
+                <span>{artifacts.length}</span>
+              </div>
+              {primaryArtifact ? (
+                <div className="outputs-primary-artifact">
+                  <span>Latest deliverable</span>
+                  <strong>{primaryArtifact.name}</strong>
+                  <small>{primaryArtifact.kind.replace(/_/g, ' ')}</small>
+                </div>
+              ) : (
+                <div className="outputs-primary-artifact is-empty">
+                  <span>Nothing exported yet</span>
+                  <strong>Run a workflow to create PDFs, images, and packages.</strong>
+                </div>
+              )}
+              <div className="outputs-artifact-list">
+                {artifacts.length > 0 ? artifacts.map((artifact) => {
+                  const asset = artifact.assetKey ? assetByKey.get(artifact.assetKey) ?? null : null
+                  const url = resolveAssetSourceUrl(asset) || resolveArtifactUrlFromMetadata(readRecord(artifact.metadata))
+                  const metadata = readRecord(artifact.metadata)
+                  const renderMetadata = readRecord(metadata.render)
+                  const markdownPreview = readTrimmedString(metadata.markdownPreview)
+                  const mimeType = artifact.mimeType || asset?.mimeType || ''
+                  const actionLabels = artifactActionLabels(mimeType, artifact.kind)
+                  const imageArtifact = isImageArtifact(artifact, mimeType)
+                  const byteSize = formatByteSize(renderMetadata.byteSize)
+                  const pageCount = readNumber(renderMetadata.pageCount)
+                  const manuscriptLength = readNumber(renderMetadata.manuscriptCharacterCount)
+                  const pageSize = readTrimmedString(renderMetadata.pageSize)
+                  return (
+                    <article className={`outputs-artifact-card ${imageArtifact ? 'is-image' : ''}`} key={artifact.id}>
+                      {imageArtifact && url ? (
+                        <img className="outputs-artifact-image" src={url} alt={artifact.name} loading="lazy" />
+                      ) : (
+                        <div className="outputs-artifact-fileplate">
+                          <span>{mimeType === 'application/pdf' || artifact.kind === 'comic_pdf' ? 'PDF' : artifact.kind.replace(/_/g, ' ')}</span>
+                        </div>
+                      )}
+                      <div className="outputs-artifact-body">
+                        <strong>{artifact.name}</strong>
+                        <span>{artifact.kind.toUpperCase()} - {mimeType || 'artifact'}</span>
+                        <div className="outputs-artifact-meta">
+                          {pageCount ? <small>{pageCount} pages</small> : null}
+                          {byteSize ? <small>{byteSize}</small> : null}
+                          {manuscriptLength ? <small>{manuscriptLength.toLocaleString()} chars</small> : null}
+                          {pageSize ? <small>{pageSize}</small> : null}
+                        </div>
+                        {artifact.summary ? <p>{artifact.summary}</p> : null}
+                        {markdownPreview ? (
+                          <details className="outputs-artifact-preview">
+                            <summary>Preview manuscript excerpt</summary>
+                            <pre>{markdownPreview}</pre>
+                          </details>
+                        ) : null}
+                        <div className="outputs-artifact-actions">
+                          {url ? <a href={url} target="_blank" rel="noreferrer">{actionLabels.open}</a> : <span>{actionLabels.open}</span>}
+                          {url ? (
+                            <button
+                              className="outputs-artifact-action-button"
+                              disabled={downloadingArtifactKey === artifact.key}
+                              type="button"
+                              onClick={() => downloadArtifact(url, artifact.name, actionLabels.extension, mimeType, artifact.key)}
+                            >
+                              {downloadingArtifactKey === artifact.key ? 'Downloading...' : actionLabels.download}
+                            </button>
+                          ) : <span>{actionLabels.download}</span>}
+                          {!url ? <small>Preparing signed file URL</small> : null}
+                        </div>
+                      </div>
+                    </article>
+                  )
+                }) : (
+                  <p className="outputs-muted">Openable files will appear here as soon as render or image nodes finish and storage URLs are signed.</p>
+                )}
+              </div>
+            </section>
+
+            <section className="outputs-panel outputs-inspector-panel">
+              <div className="outputs-panel-heading">
+                <div>
+                  <p className="outputs-eyebrow">Inspector</p>
+                  <h3>{selectedNode ? selectedNode.label : 'Node Details'}</h3>
+                </div>
+                <span>{selectedStep ? statusLabelForStep(selectedStep) : 'Not run'}</span>
+              </div>
+              {selectedNode ? (
+                <div className="outputs-inspector">
+                  <div className="outputs-inspector-header">
+                    <span className={`outputs-status-icon is-${statusClass(targetedNodeKey === selectedNode.key ? 'running' : statusKeyForStep(selectedStep))}`} aria-hidden="true" />
+                    <div>
+                      <strong>{selectedNode.label}</strong>
+                      <span>{purposeLabel(selectedNode)}</span>
+                    </div>
                   </div>
-                  <div className="outputs-artifact-actions">
-                    {url ? <a href={url} target="_blank" rel="noreferrer">{actionLabels.open}</a> : <span>{actionLabels.open}</span>}
-                    {url ? (
-                      <button
-                        className="outputs-artifact-action-button"
-                        disabled={downloadingArtifactKey === artifact.key}
-                        type="button"
-                        onClick={() => downloadArtifact(url, artifact.name, actionLabels.extension, mimeType, artifact.key)}
-                      >
-                        {downloadingArtifactKey === artifact.key ? 'Downloading...' : actionLabels.download}
-                      </button>
-                    ) : <span>{actionLabels.download}</span>}
-                    {!url ? <small>Preparing signed file URL</small> : null}
+                  <div className="outputs-inspector-actions">
+                    <button className="outputs-node-action" disabled={!canRunOutputs || !activeRun || targetedNodeKey === selectedNode.key} onClick={() => void runSelectedNodeOnly(selectedNode, 'node_only')} type="button">
+                      {targetedNodeKey === selectedNode.key && targetedRunScope === 'node_only' ? 'Starting...' : 'Run node only'}
+                    </button>
+                    <button className="outputs-node-action" disabled={!canRunOutputs || !activeRun || targetedNodeKey === selectedNode.key} onClick={() => void runSelectedNodeOnly(selectedNode, 'upstream_to_node')} type="button">
+                      Run up to node
+                    </button>
+                    <button className="outputs-node-action" disabled={!canRunOutputs || !activeRun || targetedNodeKey === selectedNode.key} onClick={() => void runSelectedNodeOnly(selectedNode, 'node_and_downstream')} type="button">
+                      Node + dependents
+                    </button>
                   </div>
-                </article>
-              )
-            }) : (
-              <p className="outputs-muted">Finished PDFs and future comic/video packages will collect here.</p>
-            )}
-          </section>
+                  <div className="outputs-inspector-tabs" role="tablist" aria-label="Node detail views">
+                    <button className={inspectorMode === 'output' ? 'is-active' : ''} onClick={() => setInspectorMode('output')} type="button">Latest Output</button>
+                    <button className={inspectorMode === 'guidance' ? 'is-active' : ''} onClick={() => setInspectorMode('guidance')} type="button">Prompt / Guidance</button>
+                    <button className={inspectorMode === 'metadata' ? 'is-active' : ''} onClick={() => setInspectorMode('metadata')} type="button">Metadata</button>
+                  </div>
+                  {inspectorMode === 'output' ? (
+                    <div className="outputs-output-preview">
+                      {selectedOutputImageUrl ? <img className="outputs-selected-image" src={selectedOutputImageUrl} alt={selectedNode.label} loading="lazy" /> : null}
+                      {selectedStep?.errorMessage ? <p className="outputs-error">{selectedStep.errorMessage}</p> : null}
+                      {selectedOutputPreview ? <pre>{selectedOutputPreview}</pre> : (
+                        <p className="outputs-muted">No node output has been persisted yet. Queued and running nodes will fill this when they complete.</p>
+                      )}
+                    </div>
+                  ) : null}
+                  {inspectorMode === 'guidance' && selectedGuidance ? (
+                    <div className="outputs-guidance-panel">
+                      <div className="outputs-skill-chips">
+                        {selectedGuidance.skillKeys.map((skillKey) => <small key={skillKey}>{skillKey.replace(/_/g, ' ')}</small>)}
+                      </div>
+                      {selectedGuidance.resolvedGuidancePreview ? (
+                        <div className="outputs-guidance-section">
+                          <strong>Preview</strong>
+                          <p>{selectedGuidance.resolvedGuidancePreview}</p>
+                        </div>
+                      ) : (
+                        <p className="outputs-muted">This node does not have explicit output skills yet.</p>
+                      )}
+                      {selectedGuidance.guidance.length > 0 ? (
+                        <div className="outputs-guidance-section">
+                          <strong>Full guidance sent to node</strong>
+                          <ul>{selectedGuidance.guidance.map((entry, index) => <li key={`guidance-${index}`}>{entry}</li>)}</ul>
+                        </div>
+                      ) : null}
+                      {selectedGuidance.avoid.length > 0 ? (
+                        <div className="outputs-guidance-section">
+                          <strong>Full avoid list sent to node</strong>
+                          <ul>{selectedGuidance.avoid.map((entry, index) => <li key={`avoid-${index}`}>{entry}</li>)}</ul>
+                        </div>
+                      ) : null}
+                      {selectedGuidance.guidanceHash ? <span className="outputs-guidance-hash">Guidance hash {selectedGuidance.guidanceHash}</span> : null}
+                    </div>
+                  ) : null}
+                  {inspectorMode === 'metadata' ? (
+                    <div className="outputs-output-preview">
+                      <pre>{JSON.stringify({
+                        inputHash: selectedStep?.inputHash || selectedNode.inputHash,
+                        outputHash: selectedStep?.outputHash || selectedNode.outputHash,
+                        provider: selectedStep?.provider ?? null,
+                        model: selectedStep?.model ?? null,
+                        providerRequestId: selectedStep?.providerRequestId ?? null,
+                        providerMode: readRecord(selectedStep?.metadata).providerMode ?? null,
+                        providerStatus: readRecord(selectedStep?.metadata).providerStatus ?? null,
+                        retryAttempts: readRecord(selectedStep?.outputs).retryAttempts ?? null,
+                        startedAt: selectedStep?.startedAt ?? null,
+                        completedAt: selectedStep?.completedAt ?? null,
+                        metadata: selectedStep?.metadata ?? selectedNode.metadata,
+                      }, null, 2)}</pre>
+                    </div>
+                  ) : null}
+                </div>
+              ) : (
+                <p className="outputs-muted">Select a workflow node to inspect output, guidance, cache state, provider metadata, and local run actions.</p>
+              )}
+            </section>
+          </aside>
         </div>
       )}
     </div>
