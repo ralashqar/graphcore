@@ -7379,6 +7379,12 @@ function buildOutputWorkflowRunInput(snapshot: ProjectSnapshot, request?: {
   selectedEntityKeys?: string[]
   selectedSequenceUnitKeys?: string[]
   pageCount?: number
+  videoBlockCount?: number
+  durationPerBlockSeconds?: number
+  aspectRatio?: string
+  videoResolution?: string
+  generateAudio?: boolean
+  cinematicPresetFamily?: string
 }) {
   const selectedEntityKeys = request?.selectedEntityKeys ?? []
   const selectedSequenceUnitKeys = request?.selectedSequenceUnitKeys ?? []
@@ -7399,6 +7405,12 @@ function buildOutputWorkflowRunInput(snapshot: ProjectSnapshot, request?: {
     sourceEntityKeys: selectedEntityKeys,
     sourceSequenceUnitKeys: selectedSequenceUnitKeys,
     pageCount: request?.pageCount,
+    videoBlockCount: request?.videoBlockCount,
+    durationPerBlockSeconds: request?.durationPerBlockSeconds,
+    aspectRatio: request?.aspectRatio,
+    videoResolution: request?.videoResolution,
+    generateAudio: request?.generateAudio,
+    cinematicPresetFamily: request?.cinematicPresetFamily,
   }
 }
 
@@ -7419,6 +7431,14 @@ export async function planOutputWorkflow(
     selectedSequenceUnitKeys: request?.selectedSequenceUnitKeys ?? [],
     pageCount: request?.pageCount,
     targetFormat: request?.targetFormat ?? 'pdf',
+    imageQuality: request?.imageQuality,
+    imageOutputFormat: request?.imageOutputFormat,
+    videoBlockCount: request?.videoBlockCount,
+    durationPerBlockSeconds: request?.durationPerBlockSeconds,
+    aspectRatio: request?.aspectRatio,
+    videoResolution: request?.videoResolution,
+    generateAudio: request?.generateAudio,
+    cinematicPresetFamily: request?.cinematicPresetFamily,
     snapshot: buildOutputWorkflowSnapshot(snapshot),
   })
   const response = await invokeAuthedFunctionWithSessionRecovery(
@@ -7544,8 +7564,16 @@ export async function startOutputRequest(
     sourceSurface?: string
     selectedEntityKeys?: string[]
     selectedSequenceUnitKeys?: string[]
-    targetFormat?: 'pdf' | 'epub' | 'docx' | 'markdown' | 'image'
+    targetFormat?: 'pdf' | 'epub' | 'docx' | 'markdown' | 'image' | 'video'
+    imageQuality?: 'low' | 'medium' | 'high'
+    imageOutputFormat?: 'png' | 'jpeg' | 'webp'
     pageCount?: number
+    videoBlockCount?: number
+    durationPerBlockSeconds?: number
+    aspectRatio?: '16:9' | '9:16' | '1:1' | '4:3' | '3:4' | '21:9'
+    videoResolution?: '480p' | '720p' | '1080p'
+    generateAudio?: boolean
+    cinematicPresetFamily?: 'story_movie_tv' | 'ugc_creator' | 'ugc_direct_response_ad' | 'ugc_faceless_format'
   },
 ): Promise<OutputRequestStatusResponse> {
   const session = await getValidatedSession('Sign in and load a live GraphCore draft before creating an output request.')
@@ -7560,7 +7588,15 @@ export async function startOutputRequest(
     selectedEntityKeys: request.selectedEntityKeys ?? [],
     selectedSequenceUnitKeys: request.selectedSequenceUnitKeys ?? [],
     targetFormat: request.targetFormat ?? 'pdf',
+    imageQuality: request.imageQuality,
+    imageOutputFormat: request.imageOutputFormat,
     pageCount: request.pageCount,
+    videoBlockCount: request.videoBlockCount,
+    durationPerBlockSeconds: request.durationPerBlockSeconds,
+    aspectRatio: request.aspectRatio,
+    videoResolution: request.videoResolution,
+    generateAudio: request.generateAudio,
+    cinematicPresetFamily: request.cinematicPresetFamily,
     snapshot: buildOutputWorkflowSnapshot(snapshot),
     runInput: buildOutputWorkflowRunInput(snapshot, request),
   })

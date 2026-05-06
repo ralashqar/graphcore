@@ -101,3 +101,14 @@ test('entity icon endpoint and Fly worker use the generic visual job pipeline', 
   assert.match(visualWorker, /world_entity_icon_grid/)
   assert.match(visualWorker, /brand_atlas/)
 })
+
+test('entity icon grid generation uses low quality and larger custom size for 3x3 plus grids', () => {
+  const visualWorker = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/visual-generation-worker.ts'), 'utf8')
+  const legacyWorker = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/entity-icon-worker.ts'), 'utf8')
+
+  for (const source of [visualWorker, legacyWorker]) {
+    assert.match(source, /cellCount\s*>=\s*9\s*\?\s*\{\s*width:\s*2048,\s*height:\s*2048\s*\}\s*:\s*'square_hd'/)
+    assert.match(source, /quality:[\s\S]*\?\?\s*'low'/)
+    assert.match(source, /image_size:\s*input\.imageSize\s*\?\?\s*'square_hd'/)
+  }
+})

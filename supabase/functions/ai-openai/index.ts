@@ -1,16 +1,9 @@
 import '@supabase/functions-js/edge-runtime.d.ts'
 
 import { createAdminClient, requireUserClient } from '../_shared/auth.ts'
+import { runTrackedOpenAiResponses } from '../_shared/ai-provider-gateway.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
-import { runOpenAiResponses, type OpenAiResponsesRequest } from '../_shared/openai.ts'
-
-const MODEL_COSTS: Record<string, number> = {
-  'gpt-4o': 1,
-  'gpt-4o-mini': 0.05,
-  'gpt-4-turbo': 1,
-  'gpt-4': 1.5,
-  'gpt-3.5-turbo': 0.05,
-}
+import type { OpenAiResponsesRequest } from '../_shared/openai.ts'
 
 type CreditBalanceRow = {
   balance: number | null
@@ -18,16 +11,12 @@ type CreditBalanceRow = {
   updated_at?: string | null
 }
 
-type DeductCreditsRow = {
-  success: boolean | null
-  new_balance: number | null
-  error_message: string | null
-}
-
 type OpenAiUsage = {
   prompt_tokens?: number
   completion_tokens?: number
   total_tokens?: number
+  input_tokens?: number
+  output_tokens?: number
 }
 
 type OpenAiErrorPayload = {
@@ -69,12 +58,6 @@ function parseOpenAiResponsesRequest(value: unknown): OpenAiResponsesRequest {
   return value as OpenAiResponsesRequest
 }
 
-function calculateCreditCost(usage: OpenAiUsage | null | undefined, model: string): number {
-  const totalTokens = (usage?.prompt_tokens || 0) + (usage?.completion_tokens || 0)
-  const costPer1K = MODEL_COSTS[model] || 0.1
-  return Math.ceil((totalTokens / 1000) * costPer1K)
-}
-
 Deno.serve(async (request: Request) => {
   const preflight = maybeHandleOptions(request)
 
@@ -114,7 +97,22 @@ Deno.serve(async (request: Request) => {
       )
     }
 
-    const { response: upstreamResponse, body, outputText } = await runOpenAiResponses(payload)
+    const {
+      response: upstreamResponse,
+      body,
+      outputText,
+      usageLine,
+      creditsCharged,
+    } = await runTrackedOpenAiResponses({
+      client: supabase,
+      payload,
+      chargeCredits: true,
+      context: {
+        userId: user.id,
+        surface: 'ai-openai',
+        idempotencyKey: request.headers.get('Idempotency-Key') ?? undefined,
+      },
+    })
     const upstreamJson = body as OpenAiResponsesBody
 
     if (!upstreamResponse.ok) {
@@ -141,35 +139,6 @@ Deno.serve(async (request: Request) => {
       )
     }
 
-    const creditCost = calculateCreditCost(upstreamJson.usage, payload.model)
-
-    if (creditCost > 0) {
-      const { data: deductionData, error: deductionError } = await supabase.rpc('deduct_credits', {
-        p_user_id: user.id,
-        p_amount: creditCost,
-        p_reason: `AI generation: ${payload.model}`,
-        p_reference_type: 'ai_generation',
-        p_reference_id: upstreamJson.id ?? null,
-        p_metadata: {
-          model: payload.model,
-          prompt_tokens: upstreamJson.usage?.prompt_tokens ?? null,
-          completion_tokens: upstreamJson.usage?.completion_tokens ?? null,
-          total_tokens: upstreamJson.usage?.total_tokens ?? null,
-        },
-      })
-
-      if (deductionError) {
-        throw new HttpError(500, 'Failed to deduct credits for the OpenAI request.')
-      }
-
-      const deduction = (deductionData as DeductCreditsRow[] | null)?.[0]
-      if (deduction?.success === false) {
-        throw new HttpError(402, deduction.error_message ?? 'Insufficient credits.')
-      }
-
-      console.log(`[ai-openai] Deducted ${creditCost} credits for user ${user.id}`)
-    }
-
     const { data: updatedCreditData, error: updatedCreditError } = await supabase.rpc('get_credit_balance', {
       user_id: user.id,
     })
@@ -187,9 +156,10 @@ Deno.serve(async (request: Request) => {
       output: Array.isArray(upstreamJson.output) ? upstreamJson.output : [],
       usage: upstreamJson.usage ?? null,
       credits: {
-        cost: creditCost,
+        cost: creditsCharged,
         balance: ((updatedCreditData as CreditBalanceRow[] | null)?.[0]?.balance) ?? 0,
       },
+      aiUsage: usageLine ?? null,
       raw: upstreamJson,
     })
   } catch (error) {

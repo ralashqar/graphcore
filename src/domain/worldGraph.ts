@@ -563,12 +563,21 @@ export const resetProjectWorldResponseSchema = z.object({
     worldOperators: z.number().int().nonnegative().default(0),
     worldRelationships: z.number().int().nonnegative().default(0),
     worldViews: z.number().int().nonnegative().default(0),
-    worldEntities: z.number().int().nonnegative().default(0),
-    projectDefinitions: z.number().int().nonnegative().default(0),
-    projectAssets: z.number().int().nonnegative().default(0),
-    storageObjects: z.number().int().nonnegative().default(0),
-  }),
-})
+      worldEntities: z.number().int().nonnegative().default(0),
+      projectDefinitions: z.number().int().nonnegative().default(0),
+      projectAssets: z.number().int().nonnegative().default(0),
+      storageObjects: z.number().int().nonnegative().default(0),
+      outputRequests: z.number().int().nonnegative().default(0),
+      outputWorkflows: z.number().int().nonnegative().default(0),
+      outputWorkflowRuns: z.number().int().nonnegative().default(0),
+      outputWorkflowRunSteps: z.number().int().nonnegative().default(0),
+      outputWorkflowNodes: z.number().int().nonnegative().default(0),
+      outputWorkflowEdges: z.number().int().nonnegative().default(0),
+      outputArtifacts: z.number().int().nonnegative().default(0),
+      outputProjectAssets: z.number().int().nonnegative().default(0),
+      outputStorageObjects: z.number().int().nonnegative().default(0),
+    }),
+  })
 
 export const worldGraphGeneratorEntitySchema = z.object({
   name: z.string(),

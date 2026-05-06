@@ -6,6 +6,7 @@ import {
 } from '../../../src/domain/worldGraph.ts'
 import { createAdminClient, requireUserClient } from '../_shared/auth.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
+import { cleanupOutputRequests } from '../_shared/output-cleanup.ts'
 
 type DraftRow = {
   id: string
@@ -131,6 +132,15 @@ Deno.serve(async (request) => {
     await verifyDraftAccess(client, payload.projectId, payload.draftId)
 
     const admin = createAdminClient('reset-project-world')
+    const deletedOutputs = await cleanupOutputRequests({
+      admin,
+      projectId: payload.projectId,
+      draftId: payload.draftId,
+      includeAllDraftWorkflows: true,
+      includeAllDraftArtifacts: true,
+      allowActiveRuns: true,
+      cancelActiveRuns: true,
+    })
     const deletedGeneratedAssets = await deleteGeneratedWorldAssets(admin, payload.projectId, payload.draftId)
     const rpcResponse = await admin.rpc('reset_project_world', {
       target_project_id: payload.projectId,
@@ -148,6 +158,15 @@ Deno.serve(async (request) => {
       deleted: {
         ...(rpcResponse.data ?? {}),
         ...deletedGeneratedAssets,
+        outputRequests: deletedOutputs.counts.outputRequests,
+        outputWorkflows: deletedOutputs.counts.outputWorkflows,
+        outputWorkflowRuns: deletedOutputs.counts.outputWorkflowRuns,
+        outputWorkflowRunSteps: deletedOutputs.counts.outputWorkflowRunSteps,
+        outputWorkflowNodes: deletedOutputs.counts.outputWorkflowNodes,
+        outputWorkflowEdges: deletedOutputs.counts.outputWorkflowEdges,
+        outputArtifacts: deletedOutputs.counts.outputArtifacts,
+        outputProjectAssets: deletedOutputs.counts.projectAssets,
+        outputStorageObjects: deletedOutputs.counts.storageObjects,
       },
     }))
   } catch (error) {

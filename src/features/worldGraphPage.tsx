@@ -112,8 +112,10 @@ import {
   type InteractiveRuntimeState,
 } from '../domain/interactiveSystems'
 import {
+  composeWorldEntityVisualDescription,
   mergeWorldEntityVisualDescriptionMetadata,
   readWorldEntityVisualDescription,
+  readWorldEntityVisualIdentity,
 } from '../domain/worldEntityVisuals'
 import {
   buildSuggestionsForEntity,
@@ -7445,28 +7447,50 @@ export function WorldGraphPage({
                     }}
                   />
                 </label>
-                {(['actor', 'place', 'group', 'object', 'concept', 'event', 'sequence_unit', 'player_profile', 'player_initial_config', 'player_stat', 'inventory', 'inventory_item', 'currency', 'shadow_token', 'location_spot', 'travel_link', 'marketplace', 'trade_offer', 'quest', 'quest_step', 'narrative_arc', 'narrative_scene', 'dialogue_node', 'choice', 'choice_condition', 'choice_outcome', 'state_variable', 'game_rule', 'encounter', 'save_state', 'app', 'persona', 'business_goal', 'feature', 'user_flow', 'screen', 'section', 'component', 'data_model', 'action', 'api_endpoint', 'backend_function', 'external_service', 'design_system', 'capability', 'screen_mockup', 'image_region', 'animation_spec', 'tower', 'code_file'] as const).includes(displayedInspectorEntity.nodeType) ? (
-                  <label className="field-block">
-                    <span>Visual Description</span>
-                    <textarea
-                      rows={3}
-                      value={entityOverviewDraft?.entityKey === displayedInspectorEntity.key ? entityOverviewDraft.visualDescription : readWorldEntityVisualDescription(displayedInspectorEntity)}
-                      onBlur={flushEntityOverviewPersist}
-                      onChange={(event) => {
-                        const nextDraft: EntityOverviewDraftState = {
-                          entityKey: displayedInspectorEntity.key,
-                          name: entityOverviewDraft?.entityKey === displayedInspectorEntity.key ? entityOverviewDraft.name : displayedInspectorEntity.name,
-                          summary: entityOverviewDraft?.entityKey === displayedInspectorEntity.key ? entityOverviewDraft.summary : displayedInspectorEntity.summary,
-                          context: entityOverviewDraft?.entityKey === displayedInspectorEntity.key ? entityOverviewDraft.context : displayedInspectorEntity.context,
-                          visualDescription: event.target.value,
-                          dirty: true,
-                        }
-                        setEntityOverviewDraft(nextDraft)
-                        queueEntityOverviewPersist(nextDraft)
-                      }}
-                    />
-                  </label>
-                ) : null}
+                {(['actor', 'place', 'group', 'object', 'concept', 'event', 'sequence_unit', 'player_profile', 'player_initial_config', 'player_stat', 'inventory', 'inventory_item', 'currency', 'shadow_token', 'location_spot', 'travel_link', 'marketplace', 'trade_offer', 'quest', 'quest_step', 'narrative_arc', 'narrative_scene', 'dialogue_node', 'choice', 'choice_condition', 'choice_outcome', 'state_variable', 'game_rule', 'encounter', 'save_state', 'app', 'persona', 'business_goal', 'feature', 'user_flow', 'screen', 'section', 'component', 'data_model', 'action', 'api_endpoint', 'backend_function', 'external_service', 'design_system', 'capability', 'screen_mockup', 'image_region', 'animation_spec', 'tower', 'code_file'] as const).includes(displayedInspectorEntity.nodeType) ? (() => {
+                  const currentVisualDescription = entityOverviewDraft?.entityKey === displayedInspectorEntity.key ? entityOverviewDraft.visualDescription : readWorldEntityVisualDescription(displayedInspectorEntity)
+                  const currentVisualIdentity = readWorldEntityVisualIdentity({
+                    summary: '',
+                    context: '',
+                    metadata: { visualDescription: currentVisualDescription },
+                    customProperties: {},
+                  })
+                  const updateVisualDescriptionDraft = (visualDescription: string) => {
+                    const nextDraft: EntityOverviewDraftState = {
+                      entityKey: displayedInspectorEntity.key,
+                      name: entityOverviewDraft?.entityKey === displayedInspectorEntity.key ? entityOverviewDraft.name : displayedInspectorEntity.name,
+                      summary: entityOverviewDraft?.entityKey === displayedInspectorEntity.key ? entityOverviewDraft.summary : displayedInspectorEntity.summary,
+                      context: entityOverviewDraft?.entityKey === displayedInspectorEntity.key ? entityOverviewDraft.context : displayedInspectorEntity.context,
+                      visualDescription,
+                      dirty: true,
+                    }
+                    setEntityOverviewDraft(nextDraft)
+                    queueEntityOverviewPersist(nextDraft)
+                  }
+                  return (
+                    <>
+                      <label className="field-block">
+                        <span>Visual Description</span>
+                        <textarea
+                          rows={3}
+                          value={currentVisualDescription}
+                          onBlur={flushEntityOverviewPersist}
+                          onChange={(event) => updateVisualDescriptionDraft(event.target.value)}
+                        />
+                      </label>
+                      <label className="field-block">
+                        <span>Traits</span>
+                        <input
+                          type="text"
+                          value={currentVisualIdentity.traits.join(', ')}
+                          placeholder="age, height, build, hair, palette"
+                          onBlur={flushEntityOverviewPersist}
+                          onChange={(event) => updateVisualDescriptionDraft(composeWorldEntityVisualDescription(currentVisualIdentity.description, event.target.value))}
+                        />
+                      </label>
+                    </>
+                  )
+                })() : null}
                 <label className="field-block">
                   <span>Context</span>
                   <textarea
@@ -8483,6 +8507,7 @@ function WorldPromptChatPanel({
     () => [...sessionTurns].reverse().slice(0, 6),
     [sessionTurns],
   )
+  const [tokenDetailsOpen, setTokenDetailsOpen] = useState(false)
   const tokenMeter = useMemo(
     () => buildWorldPromptSessionTokenMeter({
       turns: sessionTurns,
@@ -8856,8 +8881,26 @@ function WorldPromptChatPanel({
         <div className="world-prompt-chat-meta">
           <div className="world-prompt-chat-subline is-compact">
             <span>{sessionTurnCountLabel}</span>
-            <span className="world-prompt-token-meter" title={tokenMeter.title}>
-              {tokenMeter.label} tokens
+            <span className="world-prompt-token-shell">
+              <button
+                className="world-prompt-token-meter"
+                onClick={() => setTokenDetailsOpen((open) => !open)}
+                title={tokenMeter.title}
+                type="button"
+              >
+                {tokenMeter.label} tokens
+              </button>
+              {tokenDetailsOpen ? (
+                <span className="world-prompt-token-popover">
+                  <strong>{tokenMeter.estimated ? 'Estimated usage' : 'Provider usage'}</strong>
+                  <span>Session {tokenMeter.usedTokens.toLocaleString()} / {tokenMeter.tokenLimit.toLocaleString()}</span>
+                  <span>Current turn {tokenMeter.currentTurnTokens.toLocaleString()}</span>
+                  <span>Last step {tokenMeter.lastStepTokens.toLocaleString()}</span>
+                  {tokenMeter.rows.slice(0, 6).map((row, index) => (
+                    <span key={`${row.label}-${index}`}>{row.label}: {row.inputTokens.toLocaleString()} in / {row.outputTokens.toLocaleString()} out</span>
+                  ))}
+                </span>
+              ) : null}
             </span>
           </div>
         </div>

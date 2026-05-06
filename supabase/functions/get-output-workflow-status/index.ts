@@ -1,6 +1,7 @@
 import { requireUserClient } from '../_shared/auth.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
 import {
+  compactOutputWorkflowRunForStatus,
   hydrateOutputArtifactSignedUrls,
   isTerminalOutputWorkflowRunStatus,
   loadOutputWorkflowRunBundle,
@@ -19,7 +20,7 @@ Deno.serve(async (request) => {
     const bundle = await loadOutputWorkflowRunBundle(client, payload.runId)
     const artifacts = await hydrateOutputArtifactSignedUrls(client, bundle.run.artifacts)
     const run = {
-      ...bundle.run,
+      ...compactOutputWorkflowRunForStatus(bundle.run),
       artifacts,
     }
     return json(outputWorkflowRunStatusResponseSchema.parse({

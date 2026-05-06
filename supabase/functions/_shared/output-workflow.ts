@@ -19,6 +19,8 @@ import {
   outputWorkflowSchema,
   outputWorkflowStartResponseSchema,
   planOutputWorkflow,
+  resolveOutputImageGenerationOutputFormat,
+  resolveOutputImageGenerationQuality,
   runOutputWorkflowReadyQueue,
   selectOutputWorkflowRunSubgraph,
   topologicallySortOutputWorkflow,
@@ -31,8 +33,15 @@ import {
   type OutputWorkflowRun,
   type OutputWorkflowRunStep,
 } from '../../../src/domain/outputWorkflow.ts'
-import { buildEbookDocumentMetadata } from '../../../src/domain/ebookDocument.ts'
+import { buildEbookDocumentMetadata, buildEbookHtmlDocument } from '../../../src/domain/ebookDocument.ts'
+import { buildFalMediaUsageLine, buildOpenAiUsageLine, summarizeAiUsageLines, type AiUsageLine } from '../../../src/domain/aiUsage.ts'
 import { hashOutputGuidanceBundle, outputGuidanceBundleSchema, type OutputGuidanceBundle } from '../../../src/domain/outputSkills.ts'
+import {
+  readWorldEntityVisualDescription,
+  readWorldEntityVisualTraitMap,
+  readWorldEntityVisualTraits,
+} from '../../../src/domain/worldEntityVisuals.ts'
+import { recordAiUsageEvent } from './ai-provider-gateway.ts'
 import {
   cancelOpenAiResponse,
   createOpenAiBackgroundResponse,
@@ -41,7 +50,7 @@ import {
   type OpenAiResponseResult,
 } from './openai.ts'
 
-const OUTPUT_WORKFLOW_EXECUTOR_VERSION = 'prompt-adherent-output-planner-v1'
+const OUTPUT_WORKFLOW_EXECUTOR_VERSION = 'cinematic-prompt-compact-v2'
 const DEFAULT_CHAPTER_PROSE_TIMEOUT_MS = 3_600_000
 const DEFAULT_CHAPTER_PROSE_ATTEMPTS = 2
 const FAL_QUEUE_BASE_URL = 'https://queue.fal.run'
@@ -53,7 +62,8 @@ export type OutputDocumentRenderer = (input: {
   provenance: string
   generatedAt: string
   fileName: string
-  renderMode?: 'ebook' | 'comic' | 'reference'
+  renderMode?: 'ebook' | 'comic' | 'reference' | 'designed_reference'
+  pageSize?: 'trade_6x9' | 'letter' | 'a4'
   coverImage?: {
     bytes: Uint8Array
     mimeType: string
@@ -74,6 +84,17 @@ export type OutputDocumentRenderer = (input: {
     pageNumber: number
   }>
   comicScript?: Record<string, unknown> | null
+  referenceImages?: Array<{
+    bytes: Uint8Array
+    mimeType: string
+    key?: string
+    entityKey?: string
+    title: string
+    caption?: string
+    type?: string
+    assetKey?: string
+    storagePath?: string
+  }>
   run: OutputWorkflowRun
   workflow: OutputWorkflow
   node: OutputWorkflowNode
@@ -434,6 +455,68 @@ export function mapOutputWorkflowRunRow(
   })
 }
 
+function jsonByteLength(value: unknown) {
+  try {
+    return new TextEncoder().encode(JSON.stringify(value)).length
+  } catch {
+    return 0
+  }
+}
+
+function truncateStatusText(value: string, maxLength = 4000) {
+  return value.length > maxLength ? `${value.slice(0, maxLength)}\n[truncated ${value.length - maxLength} chars]` : value
+}
+
+function compactStatusPreview(value: unknown, depth = 0): unknown {
+  if (value === null || value === undefined) return value
+  if (typeof value === 'string') return truncateStatusText(value, depth === 0 ? 2400 : 1200)
+  if (typeof value !== 'object') return value
+  if (depth >= 3) return `[${Array.isArray(value) ? 'array' : 'object'} truncated]`
+  if (Array.isArray(value)) {
+    const items = value.slice(0, 12).map((entry) => compactStatusPreview(entry, depth + 1))
+    return value.length > 12 ? { items, truncatedCount: value.length - 12 } : items
+  }
+  const record = asRecord(value)
+  const entries = Object.entries(record)
+  const compacted: Record<string, unknown> = {}
+  for (const [key, entry] of entries.slice(0, 40)) {
+    compacted[key] = compactStatusPreview(entry, depth + 1)
+  }
+  if (entries.length > 40) compacted.truncatedKeyCount = entries.length - 40
+  return compacted
+}
+
+function compactRecordForStatus(value: Record<string, unknown>, maxBytes = 180_000): Record<string, unknown> {
+  const bytes = jsonByteLength(value)
+  if (bytes <= maxBytes) return value
+  return {
+    _truncatedForStatus: true,
+    _originalBytes: bytes,
+    preview: compactStatusPreview(value),
+  }
+}
+
+export function compactOutputWorkflowNodesForStatus(nodes: OutputWorkflowNode[]): OutputWorkflowNode[] {
+  return nodes.map((node) => ({
+    ...node,
+    outputs: compactRecordForStatus(node.outputs),
+  }))
+}
+
+export function compactOutputWorkflowRunForStatus(run: OutputWorkflowRun): OutputWorkflowRun {
+  return {
+    ...run,
+    input: compactRecordForStatus(run.input),
+    outputs: compactRecordForStatus(run.outputs),
+    errorMessage: run.errorMessage ? truncateStatusText(run.errorMessage) : run.errorMessage,
+    steps: run.steps.map((step) => ({
+      ...step,
+      outputs: compactRecordForStatus(step.outputs),
+      errorMessage: step.errorMessage ? truncateStatusText(step.errorMessage) : step.errorMessage,
+    })),
+  }
+}
+
 export function planOutputWorkflowFromRequest(raw: unknown) {
   const request = outputWorkflowPlanRequestSchema.parse(raw)
   return outputWorkflowPlanResponseSchema.parse({
@@ -561,6 +644,83 @@ function readText(value: unknown) {
   return typeof value === 'string' ? value.trim() : ''
 }
 
+function buildOutputStepAiUsage(input: {
+  node: OutputWorkflowNode
+  result?: {
+    outputs: Record<string, unknown>
+    provider?: string | null
+    model?: string | null
+    providerRequestId?: string | null
+  } | null
+  skipped?: boolean
+}): { line: AiUsageLine | null; summary: Record<string, unknown> | null } {
+  if (!input.result || input.skipped) {
+    return { line: null, summary: null }
+  }
+  const provider = readText(input.result.provider)
+  const model = readText(input.result.model)
+  const outputs = asRecord(input.result.outputs)
+  if (provider === 'openai' && model && outputs.usage) {
+    const line = buildOpenAiUsageLine({
+      model,
+      usage: outputs.usage,
+      nodeKey: input.node.key,
+      nodeLabel: input.node.label,
+      nodeType: input.node.nodeType,
+      requestId: input.result.providerRequestId ?? null,
+      responseId: readText(outputs.providerResponseId) || readText(outputs.responseId) || null,
+    })
+    return { line, summary: summarizeAiUsageLines([line]) }
+  }
+  if (provider === 'fal' && model && input.node.nodeType === 'image_generation') {
+    const image = asRecord(outputs.image)
+    const width = Number(outputs.width ?? image.width ?? 0) || undefined
+    const height = Number(outputs.height ?? image.height ?? 0) || undefined
+    const line = buildFalMediaUsageLine({
+      model,
+      modality: 'image',
+      operation: 'image_generation',
+      nodeKey: input.node.key,
+      nodeLabel: input.node.label,
+      nodeType: input.node.nodeType,
+      requestId: input.result.providerRequestId ?? readText(image.providerRequestId) ?? null,
+      responseId: input.result.providerRequestId ?? readText(image.providerRequestId) ?? null,
+      width,
+      height,
+      quality: readText(asRecord(input.node.config).quality) || undefined,
+      size: readText(asRecord(input.node.config).imageSize) || undefined,
+      metadata: {
+        role: readText(outputs.role) || null,
+        referenceImageCount: Number(image.referenceImageCount ?? 0) || 0,
+      },
+    })
+    return { line, summary: summarizeAiUsageLines([line]) }
+  }
+  if (provider === 'fal' && model && input.node.nodeType === 'video_generation') {
+    const line = buildFalMediaUsageLine({
+      model,
+      modality: 'video',
+      operation: 'video_generation',
+      nodeKey: input.node.key,
+      nodeLabel: input.node.label,
+      nodeType: input.node.nodeType,
+      requestId: input.result.providerRequestId ?? null,
+      responseId: input.result.providerRequestId ?? null,
+      units: Number(outputs.durationSeconds ?? 0) || undefined,
+      durationSeconds: Number(outputs.durationSeconds ?? 0) || undefined,
+      metadata: {
+        role: readText(asRecord(outputs.video).role) || null,
+        blockNumber: Number(asRecord(outputs.video).blockNumber ?? 0) || null,
+        referenceImageCount: Number(asRecord(outputs.video).referenceImageCount ?? 0) || 0,
+        referenceVideoCount: Number(asRecord(outputs.video).referenceVideoCount ?? 0) || 0,
+        referenceAudioCount: Number(asRecord(outputs.video).referenceAudioCount ?? 0) || 0,
+      },
+    })
+    return { line, summary: summarizeAiUsageLines([line]) }
+  }
+  return { line: null, summary: null }
+}
+
 function hasStoredOutputs(value: unknown) {
   return Object.keys(asRecord(value)).length > 0
 }
@@ -608,7 +768,29 @@ function collectCachedExternalUpstream(input: {
 }
 
 function readStringArray(value: unknown) {
-  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0) : []
+  return Array.isArray(value) ? value.map((entry) => typeof entry === 'string' ? entry.trim() : '').filter(Boolean) : []
+}
+
+function worldEntityVisualSource(entity: Record<string, unknown>) {
+  return {
+    summary: readText(entity.summary),
+    context: readText(entity.context),
+    metadata: asRecord(entity.metadata),
+    customProperties: asRecord(entity.customProperties ?? entity.custom_properties),
+  }
+}
+
+function readOutputEntityVisualDescription(entity: Record<string, unknown>) {
+  const composed = readWorldEntityVisualDescription(worldEntityVisualSource(entity))
+  return composed || readText(entity.visualDescription)
+}
+
+function readOutputEntityVisualTraits(entity: Record<string, unknown>) {
+  return readWorldEntityVisualTraits(worldEntityVisualSource(entity))
+}
+
+function readOutputEntityVisualTraitMap(entity: Record<string, unknown>) {
+  return readWorldEntityVisualTraitMap(worldEntityVisualSource(entity))
 }
 
 function readEntitySequence(entity: Record<string, unknown>) {
@@ -818,6 +1000,25 @@ function readUpstreamImages(upstream: Record<string, Record<string, unknown>>, f
   return images
 }
 
+function readUpstreamVideos(upstream: Record<string, Record<string, unknown>>, fields = ['video', 'videos']) {
+  const videos: Record<string, unknown>[] = []
+  for (const outputs of Object.values(upstream)) {
+    for (const field of fields) {
+      const value = outputs[field]
+      if (Array.isArray(value)) {
+        for (const entry of value) {
+          const record = asRecord(entry)
+          if (readText(record.assetKey) || readText(record.storagePath) || readText(record.url)) videos.push(record)
+        }
+        continue
+      }
+      const record = asRecord(value)
+      if (readText(record.assetKey) || readText(record.storagePath) || readText(record.url)) videos.push(record)
+    }
+  }
+  return videos
+}
+
 function readFirstUpstreamRecord(upstream: Record<string, Record<string, unknown>>, fields: string[]) {
   for (const outputs of Object.values(upstream)) {
     for (const field of fields) {
@@ -988,6 +1189,26 @@ async function fetchFalJson(url: string, init: RequestInit) {
 }
 
 function falErrorMessage(body: Record<string, unknown>, fallback: string) {
+  if (Array.isArray(body.detail)) {
+    const details = body.detail
+      .map((entry) => {
+        const record = asRecord(entry)
+        const loc = Array.isArray(record.loc) ? record.loc.map(String).join('.') : readText(record.loc)
+        const msg = readText(record.msg) || readText(record.message)
+        const type = readText(record.type)
+        const ctx = asRecord(record.ctx)
+        const extra = asRecord(ctx.extra_info)
+        const reason = readText(extra.reason) || readText(ctx.reason)
+        return [
+          loc ? `loc=${loc}` : '',
+          type ? `type=${type}` : '',
+          reason ? `reason=${reason}` : '',
+          msg,
+        ].filter(Boolean).join(' ')
+      })
+      .filter(Boolean)
+    if (details.length > 0) return details.join('; ').slice(0, 2000)
+  }
   if (typeof body.detail === 'string' && body.detail.trim()) return body.detail.trim()
   if (typeof body.error === 'string' && body.error.trim()) return body.error.trim()
   if (typeof body.message === 'string' && body.message.trim()) return body.message.trim()
@@ -1008,6 +1229,11 @@ function falErrorMessage(body: Record<string, unknown>, fallback: string) {
   return fallback
 }
 
+function isFalReferencePolicyError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error ?? '')
+  return /content_policy_violation|partner_validation_failed|likenesses of real people|private information|loc=body\.image_urls|image_urls/i.test(message)
+}
+
 function normalizeFalResultBody(body: Record<string, unknown>) {
   return body && typeof body.response === 'object' && body.response !== null
     ? body.response as Record<string, unknown>
@@ -1026,6 +1252,28 @@ function extractFalImageRecord(value: unknown): Record<string, unknown> | null {
   for (const key of ['image', 'output', 'response', 'data', 'result']) {
     const nested = extractFalImageRecord(record[key])
     if (nested) return nested
+  }
+  const directUrl = readText(record.url) || readText(record.output_url)
+  return directUrl ? { url: directUrl } : null
+}
+
+function extractFalVideoRecord(value: unknown): Record<string, unknown> | null {
+  const record = asRecord(value)
+  for (const key of ['video', 'output', 'response', 'data', 'result']) {
+    const nested = record[key]
+    if (typeof nested === 'string' && /^https?:\/\//i.test(nested)) return { url: nested }
+    const nestedRecord = asRecord(nested)
+    const url = readText(nestedRecord.url) || readText(nestedRecord.output_url)
+    if (url) return nestedRecord
+    const recursive = extractFalVideoRecord(nested)
+    if (recursive) return recursive
+  }
+  const videos = Array.isArray(record.videos) ? record.videos : []
+  for (const video of videos) {
+    if (typeof video === 'string' && /^https?:\/\//i.test(video)) return { url: video }
+    const videoRecord = asRecord(video)
+    const url = readText(videoRecord.url) || readText(videoRecord.output_url)
+    if (url) return videoRecord
   }
   const directUrl = readText(record.url) || readText(record.output_url)
   return directUrl ? { url: directUrl } : null
@@ -1065,6 +1313,43 @@ async function submitFalImageRequest(input: {
   }
   if (input.referenceImageUrls && input.referenceImageUrls.length > 0) {
     body.image_urls = input.referenceImageUrls
+  }
+  return fetchFalJson(`${FAL_QUEUE_BASE_URL}/${input.model}`, {
+    method: 'POST',
+    headers: buildFalHeaders(input.apiKey),
+    body: JSON.stringify(body),
+  })
+}
+
+async function submitFalVideoRequest(input: {
+  apiKey: string
+  model: string
+  prompt: string
+  durationSeconds: number
+  aspectRatio?: string
+  resolution?: string
+  generateAudio?: boolean
+  syncMode?: boolean
+  referenceImageUrls?: string[]
+  referenceVideoUrls?: string[]
+  referenceAudioUrls?: string[]
+}) {
+  const body: Record<string, unknown> = {
+    prompt: input.prompt,
+    duration: input.durationSeconds,
+    aspect_ratio: input.aspectRatio ?? '16:9',
+    resolution: input.resolution ?? '720p',
+    generate_audio: input.generateAudio ?? true,
+    sync_mode: input.syncMode ?? false,
+  }
+  if (input.referenceImageUrls && input.referenceImageUrls.length > 0) {
+    body.image_urls = input.referenceImageUrls
+  }
+  if (input.referenceVideoUrls && input.referenceVideoUrls.length > 0) {
+    body.video_urls = input.referenceVideoUrls
+  }
+  if (input.referenceAudioUrls && input.referenceAudioUrls.length > 0) {
+    body.audio_urls = input.referenceAudioUrls
   }
   return fetchFalJson(`${FAL_QUEUE_BASE_URL}/${input.model}`, {
     method: 'POST',
@@ -1246,7 +1531,9 @@ function buildEbookCoverPromptInstruction(input: {
     name: readText(entity.name),
     type: readText(entity.nodeType ?? entity.node_type),
     summary: readText(entity.summary),
-    visualDescription: readText(asRecord(entity.metadata).visualDescription),
+    visualDescription: readOutputEntityVisualDescription(entity),
+    visualTraits: readOutputEntityVisualTraits(entity),
+    visualTraitMap: readOutputEntityVisualTraitMap(entity),
   })).filter((entry) => entry.name || entry.summary || entry.visualDescription)
 
   return [
@@ -1349,8 +1636,34 @@ function buildBibleSectionInstruction(input: {
   const sequenceUnits = Array.isArray(input.context.sequenceUnits) ? input.context.sequenceUnits.map(asRecord) : []
   const relationships = Array.isArray(input.context.relationships) ? input.context.relationships.map(asRecord) : []
   const threads = Array.isArray(input.context.threads) ? input.context.threads.map(asRecord) : []
+  const assets = Array.isArray(input.context.assets) ? input.context.assets.map(asRecord) : []
+  const normalizedSection = `${input.sectionKey} ${input.sectionTitle}`.toLowerCase()
+  const entityMatchesSection = (entity: Record<string, unknown>) => {
+    const type = readText(entity.nodeType ?? entity.node_type).toLowerCase()
+    if (normalizedSection.includes('character') || normalizedSection.includes('cast')) return ['actor', 'character', 'persona'].includes(type)
+    if (normalizedSection.includes('location') || normalizedSection.includes('place') || normalizedSection.includes('environment')) return ['place', 'location', 'environment'].includes(type)
+    if (normalizedSection.includes('faction') || normalizedSection.includes('group') || normalizedSection.includes('organization') || normalizedSection.includes('brand')) return ['group', 'faction', 'organization', 'brand'].includes(type)
+    if (normalizedSection.includes('object') || normalizedSection.includes('item') || normalizedSection.includes('technology') || normalizedSection.includes('concept') || normalizedSection.includes('rule') || normalizedSection.includes('lore')) return ['object', 'item', 'prop', 'concept', 'technology', 'system'].includes(type)
+    if (normalizedSection.includes('visual') || normalizedSection.includes('tone') || normalizedSection.includes('style')) return true
+    return false
+  }
+  const sectionEntities = entities.filter(entityMatchesSection)
+  const entityContext = (sectionEntities.length > 0 ? sectionEntities : entities)
+    .slice(0, sectionEntities.length > 0 ? 32 : 18)
+  const includeSequenceContext = normalizedSection.includes('sequence')
+    || normalizedSection.includes('chapter')
+    || normalizedSection.includes('timeline')
+    || normalizedSection.includes('arc')
+    || normalizedSection.includes('chronology')
+    || normalizedSection.includes('overview')
+  const includeRelationshipContext = normalizedSection.includes('relationship')
+    || normalizedSection.includes('faction')
+    || normalizedSection.includes('group')
+    || normalizedSection.includes('timeline')
+    || normalizedSection.includes('continuity')
+    || normalizedSection.includes('rule')
   return [
-    `Write the "${input.sectionTitle}" section for a canon reference document / story bible.`,
+    `Write the "${input.sectionTitle}" section for a designed canon reference document.`,
     input.sectionDescription ? `Section purpose: ${input.sectionDescription}` : '',
     Object.keys(sectionBrief).length > 0 ? `Planner section brief: ${compactForPrompt(sectionBrief, 1800)}` : '',
     input.prompt ? `User request: ${input.prompt}` : '',
@@ -1359,8 +1672,12 @@ function buildBibleSectionInstruction(input: {
     'Output requirements:',
     '- Return Markdown for this section only.',
     `- Start with exactly this heading: ## ${input.sectionTitle}`,
-    '- Write reference material, not fiction prose, not chapters, and not a synopsis pretending to be a scene.',
-    '- Use concise paragraphs and bullets where they improve scanability.',
+    '- Write a curated production-bible section, not a raw world-context dump.',
+    '- Select the highest-signal canon for this section and arrange it into a readable editorial layout.',
+    '- Prefer compact paragraphs, short labeled bullets, and useful subheadings over exhaustive lists.',
+    '- Do not repeat the same synopsis, premise, or entity descriptions across sections unless needed for clarity.',
+    '- Write reference material, not fiction prose, chapter prose, screenplay, marketing copy, or a schema explanation.',
+    '- When entities have imageAssetKeys, write copy that can sit beside visual reference cards, but do not paste URLs or internal asset keys into prose.',
     '- Use only current world graph canon. Do not invent missing names, backstory, rules, or chronology.',
     '- If a subsection lacks canon, write "Not yet defined in canon" and identify what would be useful to define next.',
     '- Include continuity notes, constraints, and unresolved questions when relevant.',
@@ -1368,24 +1685,27 @@ function buildBibleSectionInstruction(input: {
     'Current world context:',
     compactForPrompt({
       wiki,
-      entities: entities.map((entity) => ({
+      entities: entityContext.map((entity) => ({
         key: readText(entity.key),
         name: readText(entity.name),
         type: readText(entity.nodeType ?? entity.node_type),
         summary: readText(entity.summary),
         context: readText(entity.context),
-        visualDescription: readText(asRecord(entity.metadata).visualDescription),
+        visualDescription: readOutputEntityVisualDescription(entity),
+        visualTraits: readOutputEntityVisualTraits(entity),
+        visualTraitMap: readOutputEntityVisualTraitMap(entity),
+        imageAssetKeys: entityAssetKeys(entity, assets),
         customProperties: entity.customProperties,
-      })).slice(0, 90),
-      sequenceUnits: sequenceUnits.map((unit) => ({
+      })),
+      sequenceUnits: includeSequenceContext ? sequenceUnits.map((unit) => ({
         key: readText(unit.key),
         name: readText(unit.name),
         summary: readText(unit.summary),
         sequence: readEntitySequence(unit),
-      })).slice(0, 48),
-      relationships: relationships.slice(0, 120),
-      threads: threads.slice(0, 40),
-    }, 22000),
+      })).slice(0, 36) : [],
+      relationships: includeRelationshipContext ? relationships.slice(0, 70) : relationships.slice(0, 18),
+      threads: threads.slice(0, 18),
+    }, 12000),
   ].filter(Boolean).join('\n\n')
 }
 
@@ -1393,10 +1713,18 @@ function assembleBibleMarkdown(input: {
   context: Record<string, unknown>
   upstream: Record<string, unknown>
   configuredSections: Array<{ key: string; title: string; description: string; order: number }>
+  outputKind?: string
 }) {
   const wiki = asRecord(input.context.wiki ?? input.context.worldWiki)
   const title = titleFromContext(input.context)
   const subtitle = readText(wiki.logline) || readText(wiki.synopsis)
+  const documentLabel = input.outputKind === 'lore_guide'
+    ? 'Lore Guide'
+    : input.outputKind === 'character_dossier_pack'
+      ? 'Character Dossier Pack'
+      : input.outputKind === 'world_reference_document'
+        ? 'Reference Guide'
+        : 'Story Bible'
   const sectionRecords = Object.values(input.upstream)
     .map(asRecord)
     .filter((output) => readText(output.sectionKey) || readText(output.markdown) || readText(output.text))
@@ -1414,7 +1742,7 @@ function assembleBibleMarkdown(input: {
     return leftOrder - rightOrder || left.sectionTitle.localeCompare(right.sectionTitle)
   })
   return [
-    `# ${title} Story Bible`,
+    `# ${title} ${documentLabel}`,
     subtitle ? `> ${subtitle}` : '',
     '',
     '## About This Reference',
@@ -1585,7 +1913,9 @@ function buildDeterministicComicAssetPack(context: Record<string, unknown>) {
     type: readText(entity.nodeType ?? entity.node_type),
     role: readText(entity.nodeType ?? entity.node_type),
     summary: readText(entity.summary),
-    visualDescription: readText(asRecord(entity.metadata).visualDescription) || readText(entity.context),
+    visualDescription: readOutputEntityVisualDescription(entity),
+    visualTraits: readOutputEntityVisualTraits(entity),
+    visualTraitMap: readOutputEntityVisualTraitMap(entity),
     assetKeys: entityAssetKeys(entity, assets),
   })).filter((entity) => entity.key || entity.name)
   return {
@@ -1598,8 +1928,7 @@ function buildDeterministicImageAssetPack(context: Record<string, unknown>, limi
   const entities = Array.isArray(context.entities) ? context.entities.map(asRecord) : []
   const assets = Array.isArray(context.assets) ? context.assets.map(asRecord) : []
   const packedEntities = entities.slice(0, limit).map((entity) => {
-    const metadata = asRecord(entity.metadata)
-    const visualDescription = readText(metadata.visualDescription) || readText(entity.visualDescription) || readText(entity.summary) || readText(entity.context)
+    const visualDescription = readOutputEntityVisualDescription(entity)
     return {
       key: readText(entity.key),
       name: readText(entity.name),
@@ -1607,6 +1936,8 @@ function buildDeterministicImageAssetPack(context: Record<string, unknown>, limi
       role: readText(entity.nodeType ?? entity.node_type),
       summary: readText(entity.summary),
       visualDescription,
+      visualTraits: readOutputEntityVisualTraits(entity),
+      visualTraitMap: readOutputEntityVisualTraitMap(entity),
       assetKeys: entityAssetKeys(entity, assets),
     }
   }).filter((entity) => entity.key || entity.name)
@@ -1628,6 +1959,12 @@ function mergeComicSelectedEntitiesWithFallback(selectedEntities: Array<Record<s
       ...readStringArray(entity.assetKeys),
     ]
     const fallbackVisualDescription = readText(fallback.visualDescription)
+    const visualTraits = [
+      ...readStringArray(fallback.visualTraits),
+      ...readStringArray(entity.visualTraits),
+    ]
+    const fallbackTraitMap = asRecord(fallback.visualTraitMap)
+    const entityTraitMap = asRecord(entity.visualTraitMap)
     return {
       key,
       name: readText(entity.name) || readText(fallback.name),
@@ -1635,9 +1972,470 @@ function mergeComicSelectedEntitiesWithFallback(selectedEntities: Array<Record<s
       role: readText(entity.role) || readText(fallback.role) || readText(entity.type) || readText(fallback.type),
       summary: readText(entity.summary) || readText(fallback.summary),
       visualDescription: fallbackVisualDescription || readText(entity.visualDescription),
+      visualTraits: [...new Set(visualTraits)].filter(Boolean),
+      visualTraitMap: { ...fallbackTraitMap, ...entityTraitMap },
       assetKeys: [...new Set(assetKeys)].filter(Boolean),
     }
   }).filter((entity) => entity.key || entity.name).slice(0, 16)
+}
+
+function buildDeterministicCinematicAssetPack(context: Record<string, unknown>) {
+  return buildDeterministicComicAssetPack(context)
+}
+
+function cinematicContextBrief(context: Record<string, unknown>) {
+  const wiki = asRecord(context.wiki ?? context.worldWiki)
+  const sequenceUnits = Array.isArray(context.sequenceUnits) ? context.sequenceUnits.map(asRecord) : []
+  const entities = Array.isArray(context.entities) ? context.entities.map(asRecord) : []
+  const relationships = Array.isArray(context.relationships) ? context.relationships.map(asRecord) : []
+  return {
+    wiki: {
+      title: readText(wiki.title),
+      logline: readText(wiki.logline),
+      synopsis: readText(wiki.synopsis),
+      genre: readText(wiki.genre),
+      toneTags: readStringArray(wiki.toneTags),
+      visualStyle: readText(wiki.artStyleDescription) || readText(wiki.visualStyle),
+    },
+    sequenceUnits: sequenceUnits.slice(0, 4).map((unit) => ({
+      key: readText(unit.key),
+      name: readText(unit.name),
+      summary: readText(unit.summary),
+      sequence: readEntitySequence(unit),
+    })),
+    entities: entities.slice(0, 18).map((entity) => ({
+      key: readText(entity.key),
+      name: readText(entity.name),
+      type: readText(entity.nodeType ?? entity.node_type),
+      summary: readText(entity.summary),
+      visualDescription: readOutputEntityVisualDescription(entity),
+      visualTraits: readOutputEntityVisualTraits(entity),
+      visualTraitMap: readOutputEntityVisualTraitMap(entity),
+    })),
+    relationships: relationships.slice(0, 32),
+  }
+}
+
+function buildDeterministicCinematicSequencePlan(input: {
+  context: Record<string, unknown>
+  assetPack: Record<string, unknown>
+  prompt: string
+  guidance: OutputGuidanceBundle
+  blockCount: number
+  durationPerBlockSeconds: number
+  aspectRatio: string
+  resolution: string
+  presetFamily: string
+}) {
+  const wiki = asRecord(input.context.wiki ?? input.context.worldWiki)
+  const sequenceUnits = Array.isArray(input.context.sequenceUnits) ? input.context.sequenceUnits.map(asRecord) : []
+  const sequence = sequenceUnits[0] ?? {}
+  const title = readText(wiki.title) || readText(sequence.name) || 'Cinematic Sequence'
+  const summary = readText(sequence.summary) || readText(readEntitySequence(sequence).synopsis) || readText(wiki.logline) || input.prompt
+  const entities = Array.isArray(input.assetPack.entities) ? input.assetPack.entities.map(asRecord) : []
+  const blockFunctions = input.presetFamily.startsWith('ugc')
+    ? ['hook and problem', 'proof and demonstration', 'payoff and call to action', 'variant proof', 'objection answer', 'final payoff']
+    : ['visual hook and premise', 'escalation and reveal', 'payoff and consequence', 'reversal', 'climax', 'aftermath']
+  return {
+    title,
+    presetFamily: input.presetFamily,
+    aspectRatio: input.aspectRatio,
+    resolution: input.resolution,
+    totalDurationSeconds: input.blockCount * input.durationPerBlockSeconds,
+    blocks: Array.from({ length: input.blockCount }, (_, index) => {
+      const blockNumber = index + 1
+      return {
+        blockNumber,
+        durationSeconds: input.durationPerBlockSeconds,
+        storyFunction: blockFunctions[index] ?? `story movement ${blockNumber}`,
+        hook: blockNumber === 1 ? 'Open with the clearest visual pressure or proof in the first two seconds.' : 'Continue with a visible escalation from the previous block.',
+        summary,
+        shotCount: input.durationPerBlockSeconds > 9 ? 12 : 8,
+        requiredEntityKeys: entities.slice(0, 8).map((entity) => readText(entity.key)).filter(Boolean),
+      }
+    }),
+    continuityNotes: [
+      'Use neutral visual identity traits and available reference images as continuity anchors.',
+      'Do not overwrite character/object/place identity with temporary action states.',
+      'Each block must be renderable as a separate 4-15 second video clip.',
+    ],
+  }
+}
+
+const cinematicSequencePlanJsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['title', 'presetFamily', 'aspectRatio', 'resolution', 'totalDurationSeconds', 'blocks', 'continuityNotes'],
+  properties: {
+    title: { type: 'string' },
+    presetFamily: { type: 'string' },
+    aspectRatio: { type: 'string' },
+    resolution: { type: 'string' },
+    totalDurationSeconds: { type: 'number' },
+    blocks: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['blockNumber', 'durationSeconds', 'storyFunction', 'hook', 'summary', 'shotCount', 'requiredEntityKeys'],
+        properties: {
+          blockNumber: { type: 'number' },
+          durationSeconds: { type: 'number' },
+          storyFunction: { type: 'string' },
+          hook: { type: 'string' },
+          summary: { type: 'string' },
+          shotCount: { type: 'number' },
+          requiredEntityKeys: { type: 'array', items: { type: 'string' } },
+        },
+      },
+    },
+    continuityNotes: { type: 'array', items: { type: 'string' } },
+  },
+}
+
+const cinematicBlockScriptJsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['blockNumber', 'blockCount', 'durationSeconds', 'title', 'storyFunction', 'hook', 'summary', 'continuityNotes', 'shots'],
+  properties: {
+    blockNumber: { type: 'number' },
+    blockCount: { type: 'number' },
+    durationSeconds: { type: 'number' },
+    title: { type: 'string' },
+    storyFunction: { type: 'string' },
+    hook: { type: 'string' },
+    summary: { type: 'string' },
+    continuityNotes: { type: 'array', items: { type: 'string' } },
+    shots: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['shotNumber', 'startTimeSeconds', 'endTimeSeconds', 'subject', 'action', 'camera', 'composition', 'audio', 'referenceNotes'],
+        properties: {
+          shotNumber: { type: 'number' },
+          startTimeSeconds: { type: 'number' },
+          endTimeSeconds: { type: 'number' },
+          subject: { type: 'string' },
+          action: { type: 'string' },
+          camera: { type: 'string' },
+          composition: { type: 'string' },
+          audio: { type: 'string' },
+          referenceNotes: { type: 'string' },
+        },
+      },
+    },
+  },
+}
+
+function normalizeCinematicSequencePlan(value: Record<string, unknown>, fallback: Record<string, unknown>) {
+  const blocks = Array.isArray(value.blocks) ? value.blocks.map(asRecord) : []
+  if (blocks.length === 0) return fallback
+  return {
+    title: readText(value.title) || readText(fallback.title),
+    presetFamily: readText(value.presetFamily) || readText(fallback.presetFamily),
+    aspectRatio: readText(value.aspectRatio) || readText(fallback.aspectRatio),
+    resolution: readText(value.resolution) || readText(fallback.resolution),
+    totalDurationSeconds: Number(value.totalDurationSeconds ?? fallback.totalDurationSeconds ?? 0) || 0,
+    blocks: blocks.map((block, index) => ({
+      blockNumber: Number(block.blockNumber ?? index + 1) || index + 1,
+      durationSeconds: Math.max(4, Math.min(15, Number(block.durationSeconds ?? 8) || 8)),
+      storyFunction: readText(block.storyFunction),
+      hook: readText(block.hook),
+      summary: readText(block.summary),
+      shotCount: Math.max(4, Math.min(15, Number(block.shotCount ?? 8) || 8)),
+      requiredEntityKeys: readStringArray(block.requiredEntityKeys).slice(0, 12),
+    })),
+    continuityNotes: readStringArray(value.continuityNotes).length > 0
+      ? readStringArray(value.continuityNotes)
+      : readStringArray(fallback.continuityNotes),
+  }
+}
+
+function normalizeCinematicBlockScript(value: Record<string, unknown>, fallback: Record<string, unknown>, durationSeconds: number) {
+  const shots = Array.isArray(value.shots) ? value.shots.map(asRecord) : []
+  if (shots.length === 0) return fallback
+  return {
+    blockNumber: Number(value.blockNumber ?? fallback.blockNumber ?? 1) || 1,
+    blockCount: Number(value.blockCount ?? fallback.blockCount ?? 1) || 1,
+    durationSeconds: Math.max(4, Math.min(15, Number(value.durationSeconds ?? durationSeconds) || durationSeconds)),
+    title: readText(value.title) || readText(fallback.title),
+    storyFunction: readText(value.storyFunction) || readText(fallback.storyFunction),
+    hook: readText(value.hook) || readText(fallback.hook),
+    summary: readText(value.summary) || readText(fallback.summary),
+    continuityNotes: readStringArray(value.continuityNotes).length > 0
+      ? readStringArray(value.continuityNotes)
+      : readStringArray(fallback.continuityNotes),
+    shots: shots.map((shot, index) => ({
+      shotNumber: Number(shot.shotNumber ?? index + 1) || index + 1,
+      startTimeSeconds: Math.max(0, readShotStartSeconds(shot)),
+      endTimeSeconds: Math.min(durationSeconds, Math.max(0, readShotEndSeconds(shot) || durationSeconds)),
+      subject: readText(shot.subject),
+      action: readText(shot.action),
+      camera: readText(shot.camera),
+      composition: readText(shot.composition),
+      audio: readText(shot.audio),
+      referenceNotes: readText(shot.referenceNotes),
+    })),
+  }
+}
+
+function buildCinematicSequencePlanInstruction(input: {
+  context: Record<string, unknown>
+  assetPack: Record<string, unknown>
+  prompt: string
+  guidance: OutputGuidanceBundle
+  blockCount: number
+  durationPerBlockSeconds: number
+  aspectRatio: string
+  resolution: string
+  presetFamily: string
+}) {
+  return [
+    `Plan exactly ${input.blockCount} cinematic video block(s), each ${input.durationPerBlockSeconds} seconds.`,
+    `Preset family: ${input.presetFamily}. Aspect ratio: ${input.aspectRatio}. Resolution: ${input.resolution}.`,
+    input.prompt ? `User request: ${input.prompt}` : '',
+    guidanceMarkdown(input.guidance),
+    '',
+    'Requirements:',
+    '- Return JSON only.',
+    '- Every block must be independently renderable as a 4-15 second video clip.',
+    '- Make the first block hook visible within the first 1.5-2 seconds.',
+    '- Preserve world canon and neutral visual identity traits; do not invent new canon.',
+    '- Use concise shotCount values appropriate for a storyboard grid: 6-9 for 3x3, 10-15 for 4x4.',
+    '',
+    'World context:',
+    compactForPrompt({
+      ...cinematicContextBrief(input.context),
+      assetPack: input.assetPack,
+    }, 12000),
+  ].filter(Boolean).join('\n\n')
+}
+
+function buildCinematicBlockScriptInstruction(input: {
+  context: Record<string, unknown>
+  assetPack: Record<string, unknown>
+  sequencePlan: Record<string, unknown>
+  prompt: string
+  guidance: OutputGuidanceBundle
+  blockNumber: number
+  blockCount: number
+  durationSeconds: number
+  presetFamily: string
+}) {
+  const planBlock = cinematicSequencePlanBlock(input.sequencePlan, input.blockNumber)
+  return [
+    `Write the timestamped shot script for cinematic video block ${input.blockNumber} of ${input.blockCount}.`,
+    `Duration: exactly ${input.durationSeconds} seconds. Preset family: ${input.presetFamily}.`,
+    input.prompt ? `User request: ${input.prompt}` : '',
+    guidanceMarkdown(input.guidance),
+    '',
+    'Requirements:',
+    '- Return JSON only.',
+    '- Shots must be ordered, timestamped, and fit inside the block duration.',
+    '- Each shot needs one dominant subject, one visible action, one camera direction, composition, audio note, and reference note.',
+    '- Do not write prose, screenplay pages, marketing copy, hidden motivation, or workflow/internal terms.',
+    '- Use @Image1 as storyboard continuity in referenceNotes and mention entity references only as continuity anchors.',
+    '',
+    'Planned block:',
+    compactForPrompt(planBlock, 3000),
+    '',
+    'World context:',
+    compactForPrompt({
+      ...cinematicContextBrief(input.context),
+      assetPack: input.assetPack,
+    }, 10000),
+  ].filter(Boolean).join('\n\n')
+}
+
+function cinematicSequencePlanBlock(sequencePlan: Record<string, unknown>, blockNumber: number) {
+  const blocks = Array.isArray(sequencePlan.blocks) ? sequencePlan.blocks.map(asRecord) : []
+  return blocks.find((block) => Number(block.blockNumber ?? 0) === blockNumber) ?? blocks[blockNumber - 1] ?? {}
+}
+
+function buildDeterministicCinematicBlockScript(input: {
+  context: Record<string, unknown>
+  assetPack: Record<string, unknown>
+  sequencePlan: Record<string, unknown>
+  prompt: string
+  guidance: OutputGuidanceBundle
+  blockNumber: number
+  blockCount: number
+  durationSeconds: number
+  presetFamily: string
+}) {
+  const planBlock = cinematicSequencePlanBlock(input.sequencePlan, input.blockNumber)
+  const entities = Array.isArray(input.assetPack.entities) ? input.assetPack.entities.map(asRecord) : []
+  const shotCount = Math.min(input.durationSeconds > 9 ? 12 : 8, Math.max(4, Number(planBlock.shotCount ?? 8) || 8))
+  const slice = input.durationSeconds / shotCount
+  const primaryEntities = entities.slice(0, 4)
+  const subjectFallback = primaryEntities.map((entity) => readText(entity.name)).filter(Boolean).join(', ') || 'the primary subject'
+  const shots = Array.from({ length: shotCount }, (_, index) => {
+    const start = Number((index * slice).toFixed(2))
+    const end = Number(Math.min(input.durationSeconds, (index + 1) * slice).toFixed(2))
+    const subject = readText(primaryEntities[index % Math.max(1, primaryEntities.length)]?.name) || subjectFallback
+    const hookPrefix = input.blockNumber === 1 && index === 0 ? 'Immediate hook: ' : ''
+    return {
+      shotNumber: index + 1,
+      startTimeSeconds: start,
+      endTimeSeconds: end,
+      subject,
+      action: `${hookPrefix}${readText(planBlock.storyFunction) || 'cinematic story beat'} made visible through ${subject}.`,
+      camera: index % 3 === 0 ? 'slow push-in with stable framing' : index % 3 === 1 ? 'controlled tracking move following the action' : 'clean reaction or insert shot',
+      composition: index === 0 ? 'readable establishing frame with strong subject silhouette' : 'clear single-beat cinematic composition',
+      audio: input.presetFamily.startsWith('ugc') ? 'natural creator-style voice or proof-focused sound if audio is generated' : 'cinematic ambient sound and restrained music if audio is generated',
+      referenceNotes: '@Image1 storyboard continuity; use entity references for identity, wardrobe, environment, and hero props.',
+    }
+  })
+  return {
+    blockNumber: input.blockNumber,
+    blockCount: input.blockCount,
+    durationSeconds: input.durationSeconds,
+    title: `Block ${input.blockNumber}: ${readText(planBlock.storyFunction) || 'Cinematic beat'}`,
+    storyFunction: readText(planBlock.storyFunction),
+    hook: readText(planBlock.hook),
+    summary: readText(planBlock.summary) || input.prompt,
+    continuityNotes: readStringArray(input.sequencePlan.continuityNotes),
+    shots,
+  }
+}
+
+function validateCinematicBlockScript(script: Record<string, unknown>, durationSeconds: number) {
+  const diagnostics: string[] = []
+  const scriptDuration = Number(script.durationSeconds ?? 0) || durationSeconds
+  if (scriptDuration > 15) diagnostics.push('Block duration exceeds 15 seconds.')
+  if (scriptDuration < 4) diagnostics.push('Block duration is below 4 seconds.')
+  const shots = Array.isArray(script.shots) ? script.shots.map(asRecord) : []
+  if (shots.length < 3) diagnostics.push('Block script needs at least 3 timestamped shots.')
+  let previousEnd = 0
+  shots.forEach((shot, index) => {
+    const start = Number(shot.startTimeSeconds ?? -1)
+    const end = Number(shot.endTimeSeconds ?? -1)
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start) {
+      diagnostics.push(`Shot ${index + 1} has invalid timestamps.`)
+    }
+    if (start < previousEnd - 0.05) diagnostics.push(`Shot ${index + 1} overlaps the previous shot.`)
+    if (end > durationSeconds + 0.05) diagnostics.push(`Shot ${index + 1} exceeds the block duration.`)
+    if (!readText(shot.subject) || !readText(shot.action) || !readText(shot.camera)) {
+      diagnostics.push(`Shot ${index + 1} is missing subject, action, or camera direction.`)
+    }
+    previousEnd = Math.max(previousEnd, end)
+  })
+  return diagnostics
+}
+
+function cinematicBlockScriptMarkdown(script: Record<string, unknown>) {
+  const shots = Array.isArray(script.shots) ? script.shots.map(asRecord) : []
+  return [
+    `# ${readText(script.title) || `Cinematic Block ${Number(script.blockNumber ?? 1)}`}`,
+    readText(script.summary),
+    '',
+    shots.map((shot, index) => [
+      `## Shot ${Number(shot.shotNumber ?? index + 1) || index + 1} (${formatShotSeconds(readShotStartSeconds(shot), 0)}s-${formatShotSeconds(readShotEndSeconds(shot), 0)}s)`,
+      `Subject: ${readText(shot.subject)}`,
+      `Action: ${readText(shot.action)}`,
+      `Camera: ${readText(shot.camera)}`,
+      readText(shot.composition) ? `Composition: ${readText(shot.composition)}` : '',
+      readText(shot.audio) ? `Audio: ${readText(shot.audio)}` : '',
+      readText(shot.referenceNotes) ? `References: ${readText(shot.referenceNotes)}` : '',
+    ].filter(Boolean).join('\n')).join('\n\n'),
+  ].filter(Boolean).join('\n\n')
+}
+
+function readNumericAlias(record: Record<string, unknown>, keys: string[], fallback = 0) {
+  for (const key of keys) {
+    const value = record[key]
+    const parsed = typeof value === 'number' ? value : Number(readText(value))
+    if (Number.isFinite(parsed)) return parsed
+  }
+  return fallback
+}
+
+function readShotStartSeconds(shot: Record<string, unknown>) {
+  return readNumericAlias(shot, ['startTimeSeconds', 'startSeconds', 'startSecond', 'start', 'from'], 0)
+}
+
+function readShotEndSeconds(shot: Record<string, unknown>) {
+  return readNumericAlias(shot, ['endTimeSeconds', 'endSeconds', 'endSecond', 'end', 'to'], readShotStartSeconds(shot))
+}
+
+function formatShotSeconds(value: unknown, fallback: number) {
+  const numeric = typeof value === 'number' ? value : Number(readText(value))
+  const seconds = Number.isFinite(numeric) ? numeric : fallback
+  return Number.isInteger(seconds) ? String(seconds) : seconds.toFixed(2).replace(/0+$/, '').replace(/\.$/, '')
+}
+
+function compactCinematicEntityAnchors(assetPack: Record<string, unknown>, limit = 8) {
+  const entities = Array.isArray(assetPack.entities) ? assetPack.entities.map(asRecord) : []
+  return entities.slice(0, limit).map((entity) => ({
+    name: readText(entity.name),
+    summary: readText(entity.summary),
+    visualDescription: readText(entity.visualDescription),
+    visualTraits: readStringArray(entity.visualTraits),
+  })).filter((entity) => entity.name || entity.summary || entity.visualDescription || entity.visualTraits.length > 0)
+}
+
+function buildCinematicStoryboardPrompt(input: {
+  blockScript: Record<string, unknown>
+  assetPack: Record<string, unknown>
+  gridDimension: number
+  prompt: string
+  guidance: OutputGuidanceBundle | null
+}) {
+  const shots = Array.isArray(input.blockScript.shots) ? input.blockScript.shots.map(asRecord) : []
+  const entities = compactCinematicEntityAnchors(input.assetPack, 10)
+  const panelCount = input.gridDimension * input.gridDimension
+  const shotLines = shots.slice(0, panelCount).map((shot, index) => [
+    `Panel ${index + 1}: ${formatShotSeconds(readShotStartSeconds(shot), index)}s-${formatShotSeconds(readShotEndSeconds(shot), index + 1)}s.`,
+    `Subject: ${readText(shot.subject)}.`,
+    `Action: ${readText(shot.action)}.`,
+    `Camera: ${readText(shot.camera)}.`,
+  ].filter(Boolean).join(' '))
+  return [
+    `Create a clean ${input.gridDimension}x${input.gridDimension} storyboard grid contact sheet for a ${readText(input.blockScript.durationSeconds)} second cinematic video block.`,
+    'Each panel is one shot thumbnail. Use consistent identity, wardrobe, environment, props, palette, and camera continuity across panels.',
+    'No captions, labels, speech bubbles, watermarks, signatures, UI, or visible text unless the user explicitly requested on-screen text.',
+    `Block title: ${readText(input.blockScript.title)}`,
+    `Block summary: ${readText(input.blockScript.summary)}`,
+    'Shot panels:',
+    shotLines.join('\n'),
+    entities.length > 0 ? 'Canonical visual identity anchors:' : '',
+    entities.length > 0 ? compactForPrompt({ entities }, 3200) : '',
+    input.prompt ? `User style brief: ${input.prompt}` : '',
+    'Render as low-detail but readable cinematic storyboard art, not a poster and not a finished comic page.',
+  ].filter(Boolean).join('\n\n')
+}
+
+function buildCinematicVideoPrompt(input: {
+  blockScript: Record<string, unknown>
+  assetPack: Record<string, unknown>
+  prompt: string
+  guidance: OutputGuidanceBundle | null
+  durationSeconds: number
+  aspectRatio: string
+  resolution: string
+  generateAudio: boolean
+  referenceImageCount: number
+}) {
+  const shots = Array.isArray(input.blockScript.shots) ? input.blockScript.shots.map(asRecord) : []
+  const entities = compactCinematicEntityAnchors(input.assetPack, 8)
+  const imageRefs = Array.from({ length: Math.max(0, input.referenceImageCount) }, (_, index) => `@Image${index + 1}`)
+  const referenceLine = imageRefs.length > 1
+    ? `Use ${imageRefs[0]} as the storyboard/block motion reference. Additional references ${imageRefs.slice(1).join(', ')} are continuity anchors only.`
+    : imageRefs.length === 1
+      ? `Use ${imageRefs[0]} as the storyboard/block motion reference.`
+      : ''
+  return [
+    `Generate one ${input.durationSeconds}-second cinematic video clip at ${input.aspectRatio}, ${input.resolution}.`,
+    referenceLine,
+    'Follow this shot timing. Keep action continuous, physically plausible, and visually readable.',
+    shots.map((shot, index) => `${index + 1}. ${formatShotSeconds(readShotStartSeconds(shot), index)}s-${formatShotSeconds(readShotEndSeconds(shot), index + 1)}s: ${readText(shot.subject)} ${readText(shot.action)} Camera: ${readText(shot.camera)}. ${readText(shot.composition)}`).join('\n'),
+    entities.length > 0 ? 'Entity continuity anchors:' : '',
+    entities.length > 0 ? compactForPrompt({ entities }, 2600) : '',
+    input.generateAudio ? 'Generate native audio if supported: natural sound, restrained music, and any implied voice/speech should serve the shot script.' : 'Do not add prominent generated dialogue; keep audio minimal if generated.',
+    input.prompt ? `User brief: ${input.prompt}` : '',
+    'Provider constraints: no watermarks, no captions, no workflow/schema/internal wording, no redesigning referenced characters or environments.',
+  ].filter(Boolean).join('\n\n')
 }
 
 function buildComicEntitySelectorInstruction(input: {
@@ -1648,8 +2446,9 @@ function buildComicEntitySelectorInstruction(input: {
   const sequenceUnit = Array.isArray(input.context.sequenceUnits) ? asRecord(input.context.sequenceUnits[0]) : {}
   return [
     'Select the entities that must visually appear in this comic issue.',
-    'Return only JSON with shape: {"entities":[{"key":"","name":"","type":"","role":"","visualDescription":"","assetKeys":[]}],"missingReferenceEntityKeys":[]}.',
+    'Return only JSON with shape: {"entities":[{"key":"","name":"","type":"","role":"","visualDescription":"","visualTraits":[],"visualTraitMap":{},"assetKeys":[]}],"missingReferenceEntityKeys":[]}.',
     'Use the supplied entity keys exactly. Do not invent new keys.',
+    'Preserve neutral visual identity traits as continuity anchors. Do not replace identity with momentary action, injuries, lighting, camera angle, or scene state.',
     input.prompt ? `User brief: ${input.prompt}` : '',
     guidanceMarkdown(input.guidance),
     compactForPrompt({
@@ -2489,9 +3288,9 @@ async function downloadRemoteBytes(url: string) {
 async function imageReferenceToFalUrl(client: DatabaseClient, image: Record<string, unknown>) {
   const url = readText(image.url)
   if (url) return url
-  const storagePath = readText(image.storagePath)
+  const storagePath = readText(image.storagePath) || readText(image.storage_path)
   if (!storagePath) return ''
-  return projectAssetReferenceUrl(client, storagePath, readText(image.mimeType) || 'image/png')
+  return projectAssetReferenceUrl(client, storagePath, readText(image.mimeType) || readText(image.mime_type) || 'image/png')
 }
 
 function resolveAssetByKey(run: OutputWorkflowRun, assetKey: string) {
@@ -2505,9 +3304,9 @@ async function collectAssetPackReferenceUrls(client: DatabaseClient, run: Output
   for (const entity of entities) {
     for (const assetKey of readStringArray(entity.assetKeys)) {
       const asset = resolveAssetByKey(run, assetKey)
-      const storagePath = readText(asset?.storagePath)
+      const storagePath = readText(asset?.storagePath) || readText(asset?.storage_path)
       if (!storagePath) continue
-      references.push(await projectAssetReferenceUrl(client, storagePath, readText(asset?.mimeType) || 'image/png'))
+      references.push(await projectAssetReferenceUrl(client, storagePath, readText(asset?.mimeType) || readText(asset?.mime_type) || 'image/png'))
       if (references.length >= limit) return references
     }
   }
@@ -2530,6 +3329,62 @@ async function downloadProjectAssetBytes(client: DatabaseClient, storagePath: st
   const response = await client.storage.from('project-assets').download(storagePath)
   if (response.error || !response.data) throw new Error(response.error?.message ?? `Project asset ${storagePath} could not be downloaded.`)
   return new Uint8Array(await response.data.arrayBuffer())
+}
+
+async function buildDocumentReferenceImages(input: {
+  client: DatabaseClient
+  run: OutputWorkflowRun
+  limit?: number
+}) {
+  const context = worldContextFromRunInput(input.run)
+  const entities = Array.isArray(context.entities) ? context.entities.map(asRecord) : []
+  const assets = Array.isArray(context.assets) ? context.assets.map(asRecord) : []
+  const sourceEntityKeys = readStringArray(context.sourceEntityKeys)
+  const sourceKeySet = new Set(sourceEntityKeys)
+  const scopedEntities = sourceKeySet.size > 0
+    ? entities.filter((entity) => sourceKeySet.has(readText(entity.key)))
+    : entities
+  const images: Array<{
+    bytes: Uint8Array
+    mimeType: string
+    key?: string
+    entityKey?: string
+    title: string
+    caption?: string
+    type?: string
+    assetKey?: string
+    storagePath?: string
+  }> = []
+  const limit = Math.max(0, input.limit ?? 24)
+
+  for (const entity of scopedEntities) {
+    if (images.length >= limit) break
+    const assetKeys = entityAssetKeys(entity, assets)
+    for (const assetKey of assetKeys) {
+      if (images.length >= limit) break
+      const asset = resolveAssetByKey(input.run, assetKey)
+      const storagePath = readText(asset?.storagePath) || readText(asset?.storage_path)
+      if (!storagePath) continue
+      const mimeType = readText(asset?.mimeType) || readText(asset?.mime_type) || 'image/png'
+      if (mimeType && !mimeType.toLowerCase().startsWith('image/')) continue
+      try {
+        images.push({
+          bytes: await downloadProjectAssetBytes(input.client, storagePath),
+          mimeType,
+          key: assetKey,
+          assetKey,
+          storagePath,
+          entityKey: readText(entity.key),
+          title: readText(entity.name) || readText(entity.key) || assetKey,
+          caption: readOutputEntityVisualDescription(entity),
+          type: readText(entity.nodeType ?? entity.node_type),
+        })
+      } catch {
+        // Missing or stale asset rows should not block rendering the reference document.
+      }
+    }
+  }
+  return images
 }
 
 async function waitForOutputFalImage(input: {
@@ -2654,6 +3509,121 @@ async function waitForOutputFalImage(input: {
   throw new Error(`Fal image request timed out before completion after ${timeoutMs}ms.`)
 }
 
+async function waitForOutputFalVideo(input: {
+  priorStep?: OutputWorkflowRunStep | null
+  apiKey: string
+  model: string
+  prompt: string
+  durationSeconds: number
+  aspectRatio?: string
+  resolution?: string
+  generateAudio?: boolean
+  syncMode?: boolean
+  referenceImageUrls?: string[]
+  referenceVideoUrls?: string[]
+  referenceAudioUrls?: string[]
+  shouldCancel?: () => Promise<boolean>
+  onProgress?: (progress: {
+    providerRequestId: string
+    providerStatus: string
+    providerMode: string
+    lastProviderPollAt: string
+    statusUrl?: string | null
+    responseUrl?: string | null
+  }) => Promise<void>
+}) {
+  const priorMetadata = asRecord(input.priorStep?.metadata)
+  let requestId = readText(input.priorStep?.providerRequestId) || readText(priorMetadata.falRequestId)
+  let statusUrl: string | null = readText(priorMetadata.falStatusUrl) || null
+  let responseUrl: string | null = readText(priorMetadata.falResponseUrl) || null
+
+  if (!requestId) {
+    const submit = await submitFalVideoRequest({
+      apiKey: input.apiKey,
+      model: input.model,
+      prompt: input.prompt,
+      durationSeconds: input.durationSeconds,
+      aspectRatio: input.aspectRatio,
+      resolution: input.resolution,
+      generateAudio: input.generateAudio,
+      syncMode: input.syncMode,
+      referenceImageUrls: input.referenceImageUrls,
+      referenceVideoUrls: input.referenceVideoUrls,
+      referenceAudioUrls: input.referenceAudioUrls,
+    })
+    if (!submit.response.ok) {
+      throw new Error(falErrorMessage(submit.body, `Fal video submission failed with HTTP ${submit.response.status}.`))
+    }
+    requestId = readText(submit.body.request_id)
+    statusUrl = readText(submit.body.status_url) || null
+    responseUrl = readText(submit.body.response_url) || null
+    if (!requestId) throw new Error('Fal did not return a request id for the output video generation node.')
+  }
+
+  await input.onProgress?.({
+    providerRequestId: requestId,
+    providerStatus: 'IN_QUEUE',
+    providerMode: 'fal_queue',
+    lastProviderPollAt: new Date().toISOString(),
+    statusUrl,
+    responseUrl,
+  })
+
+  const timeoutMs = outputWorkflowFalTimeoutMs()
+  const pollIntervalMs = outputWorkflowFalPollIntervalMs()
+  const startedAt = Date.now()
+
+  while (Date.now() - startedAt < timeoutMs) {
+    if (await input.shouldCancel?.()) {
+      throw new WorkflowCancelledError()
+    }
+    const status = await getFalStatus({ apiKey: input.apiKey, model: input.model, requestId, statusUrl })
+    const providerStatus = readText(status.body.status) || 'UNKNOWN'
+    await input.onProgress?.({
+      providerRequestId: requestId,
+      providerStatus,
+      providerMode: 'fal_queue',
+      lastProviderPollAt: new Date().toISOString(),
+      statusUrl,
+      responseUrl,
+    })
+
+    if (providerStatus === 'COMPLETED' || providerStatus === 'UNKNOWN') {
+      const result = await getFalResult({ apiKey: input.apiKey, model: input.model, requestId, responseUrl })
+      if (!result.response.ok) {
+        if (providerStatus === 'UNKNOWN' && [404, 405, 409, 425].includes(result.response.status)) {
+          await sleep(pollIntervalMs)
+          continue
+        }
+        throw new Error(falErrorMessage(result.body, `Fal video result failed with HTTP ${result.response.status}.`))
+      }
+      const resultBody = normalizeFalResultBody(result.body)
+      const video = extractFalVideoRecord(resultBody) ?? extractFalVideoRecord(result.body)
+      const videoUrl = readText(video?.url)
+      if (!videoUrl) throw new Error('Fal completed the output video request but did not return a video URL.')
+      return {
+        requestId,
+        statusUrl,
+        responseUrl,
+        videoUrl,
+        mimeType: readText(video?.content_type) || 'video/mp4',
+        fileName: readText(video?.file_name),
+        fileSize: Number(video?.file_size ?? 0) || null,
+        resultBody,
+      }
+    }
+
+    const errorMessage = falErrorMessage(status.body, '')
+    if (errorMessage && providerStatus !== 'IN_PROGRESS' && providerStatus !== 'IN_QUEUE') {
+      throw new Error(errorMessage)
+    }
+
+    await sleep(pollIntervalMs)
+  }
+
+  throw new Error(`Fal video request timed out before completion after ${timeoutMs}ms.`)
+}
+
 async function registerImageArtifact(input: {
   client: DatabaseClient
   run: OutputWorkflowRun
@@ -2703,6 +3673,154 @@ async function registerImageArtifact(input: {
     .single()
   if (artifactResponse.error || !artifactResponse.data) throw new Error(artifactResponse.error?.message ?? 'Failed to register output image artifact.')
   return mapOutputArtifactRow(artifactResponse.data as OutputArtifactRow)
+}
+
+async function registerVideoArtifact(input: {
+  client: DatabaseClient
+  run: OutputWorkflowRun
+  workflow: OutputWorkflow
+  node: OutputWorkflowNode
+  assetKey: string
+  storagePath: string
+  name: string
+  summary: string
+  mimeType: string
+  metadata: Record<string, unknown>
+}) {
+  const assetResponse = await input.client
+    .from('project_assets')
+    .upsert({
+      project_id: input.run.projectId,
+      key: input.assetKey,
+      name: input.name,
+      kind: 'video',
+      mime_type: input.mimeType,
+      storage_path: input.storagePath,
+      metadata: input.metadata,
+      llm_hints: {},
+    }, { onConflict: 'project_id,key' })
+    .select('id, key')
+    .single()
+  if (assetResponse.error || !assetResponse.data) throw new Error(assetResponse.error?.message ?? 'Failed to register output video asset.')
+
+  const artifactKey = `${input.assetKey}.artifact`
+  const artifactResponse = await input.client
+    .from('output_artifacts')
+    .upsert({
+      project_id: input.run.projectId,
+      draft_id: input.run.draftId,
+      workflow_id: input.workflow.id,
+      run_id: input.run.id,
+      node_id: input.node.id,
+      key: artifactKey,
+      name: input.name,
+      kind: 'video',
+      asset_key: input.assetKey,
+      mime_type: input.mimeType,
+      summary: input.summary,
+      metadata: input.metadata,
+    }, { onConflict: 'draft_id,key' })
+    .select(outputArtifactSelect)
+    .single()
+  if (artifactResponse.error || !artifactResponse.data) throw new Error(artifactResponse.error?.message ?? 'Failed to register output video artifact.')
+  return mapOutputArtifactRow(artifactResponse.data as OutputArtifactRow)
+}
+
+function collectCinematicBlockVideos(upstream: Record<string, Record<string, unknown>>) {
+  const seen = new Set<string>()
+  return readUpstreamVideos(upstream, ['video', 'videos'])
+    .map((video, index) => ({
+      ...video,
+      blockNumber: Number(video.blockNumber ?? index + 1) || index + 1,
+    }))
+    .filter((video) => {
+      const identity = [
+        readText(video.assetKey),
+        readText(video.storagePath),
+        readText(video.url),
+        `block:${Number(video.blockNumber ?? 0) || 0}`,
+      ].filter(Boolean).join('|')
+      if (!identity) return true
+      if (seen.has(identity)) return false
+      seen.add(identity)
+      return true
+    })
+    .sort((left, right) => Number(left.blockNumber) - Number(right.blockNumber))
+}
+
+function ffmpegConcatLine(path: string) {
+  return `file '${path.replace(/\\/g, '/').replace(/'/g, "'\\''")}'`
+}
+
+async function runFfmpeg(args: string[]) {
+  const command = new Deno.Command('ffmpeg', {
+    args,
+    stdout: 'piped',
+    stderr: 'piped',
+  })
+  const output = await command.output()
+  const stderr = new TextDecoder().decode(output.stderr)
+  return { ok: output.success, code: output.code, stderr }
+}
+
+async function stitchVideoBytes(input: {
+  client: DatabaseClient
+  videos: Record<string, unknown>[]
+}) {
+  if (input.videos.length === 0) throw new Error('Video stitch requires at least one generated video clip.')
+  const tempDir = await Deno.makeTempDir({ prefix: 'graphcore-video-stitch-' })
+  try {
+    const clipPaths: string[] = []
+    for (const [index, video] of input.videos.entries()) {
+      const mimeType = readText(video.mimeType) || readText(video.mime_type) || 'video/mp4'
+      const extension = mimeType.includes('webm') ? 'webm' : 'mp4'
+      const clipPath = `${tempDir}/clip-${String(index + 1).padStart(3, '0')}.${extension}`
+      const url = readText(video.url)
+      const storagePath = readText(video.storagePath) || readText(video.storage_path)
+      const bytes = url
+        ? await downloadRemoteBytes(url)
+        : storagePath
+          ? await downloadProjectAssetBytes(input.client, storagePath)
+          : null
+      if (!bytes) throw new Error(`Video clip ${index + 1} has no downloadable URL or storage path.`)
+      await Deno.writeFile(clipPath, bytes)
+      clipPaths.push(clipPath)
+    }
+    const concatPath = `${tempDir}/concat.txt`
+    await Deno.writeTextFile(concatPath, clipPaths.map(ffmpegConcatLine).join('\n'))
+    const copyOutputPath = `${tempDir}/stitched-copy.mp4`
+    const copy = await runFfmpeg(['-y', '-f', 'concat', '-safe', '0', '-i', concatPath, '-c', 'copy', copyOutputPath])
+    if (copy.ok) {
+      return { bytes: await Deno.readFile(copyOutputPath), mimeType: 'video/mp4', mode: 'concat_copy', diagnostics: copy.stderr }
+    }
+    const reencodeOutputPath = `${tempDir}/stitched-reencode.mp4`
+    const reencode = await runFfmpeg([
+      '-y',
+      '-f',
+      'concat',
+      '-safe',
+      '0',
+      '-i',
+      concatPath,
+      '-c:v',
+      'libx264',
+      '-preset',
+      'veryfast',
+      '-crf',
+      '20',
+      '-c:a',
+      'aac',
+      '-movflags',
+      '+faststart',
+      reencodeOutputPath,
+    ])
+    if (!reencode.ok) {
+      throw new Error(`ffmpeg video stitch failed. Copy: ${copy.stderr.slice(0, 1000)} Re-encode: ${reencode.stderr.slice(0, 1000)}`)
+    }
+    return { bytes: await Deno.readFile(reencodeOutputPath), mimeType: 'video/mp4', mode: 'reencode', diagnostics: reencode.stderr }
+  } finally {
+    await Deno.remove(tempDir, { recursive: true }).catch(() => {})
+  }
 }
 
 function collectComicPageImages(upstream: Record<string, Record<string, unknown>>) {
@@ -2917,15 +4035,18 @@ async function registerDocumentArtifact(input: {
   markdown: string
   guidance?: OutputGuidanceBundle | null
   coverImage?: Record<string, unknown> | null
-  documentMode?: 'ebook' | 'reference'
+  documentMode?: 'ebook' | 'reference' | 'designed_reference'
   documentRenderer?: OutputDocumentRenderer | null
 }) {
   const slug = slugify(input.workflow.name)
   const artifactKey = `output.${slug}.${input.run.id.slice(0, 8)}`
   const assetKey = `${artifactKey}.pdf`
+  const htmlArtifactKey = `${artifactKey}.html`
+  const htmlAssetKey = `${artifactKey}.html`
   const markdownArtifactKey = `${artifactKey}.manuscript`
   const markdownAssetKey = `${artifactKey}.md`
   const storagePath = `generated/output-workflows/${input.run.projectId}/${input.run.id}/${slug}.pdf`
+  const htmlStoragePath = `generated/output-workflows/${input.run.projectId}/${input.run.id}/${slug}.html`
   const markdownStoragePath = `generated/output-workflows/${input.run.projectId}/${input.run.id}/${slug}.md`
   const context = worldContextFromRunInput(input.run)
   const wiki = asRecord(context.wiki)
@@ -2934,12 +4055,22 @@ async function registerDocumentArtifact(input: {
   const generatedAt = new Date().toISOString()
   const provenance = 'Generated from the GraphCore world graph'
   const documentMode = input.documentMode ?? (input.run.preset === 'story_bible_from_world' ? 'reference' : 'ebook')
+  const runPageSize = readText(asRecord(input.run.input).pageSize)
+  const pageSize = documentMode === 'designed_reference'
+    ? (runPageSize === 'letter' || runPageSize === 'trade_6x9' || runPageSize === 'a4' ? runPageSize : 'a4')
+    : documentMode === 'reference'
+      ? (runPageSize === 'a4' ? 'a4' : 'letter')
+      : 'trade_6x9'
+  const referenceImages = documentMode === 'designed_reference'
+    ? await buildDocumentReferenceImages({ client: input.client, run: input.run, limit: 30 })
+    : []
   const baseRenderMetadata = buildEbookDocumentMetadata(input.markdown, {
     title,
     subtitle,
     provenance,
     generatedAt,
     documentMode,
+    pageSize,
   })
   if (!input.documentRenderer) {
     throw new Error('PDF rendering requires a worker document renderer. The truncated fallback renderer has been removed.')
@@ -2952,6 +4083,8 @@ async function registerDocumentArtifact(input: {
     generatedAt,
     fileName: `${slug}.pdf`,
     renderMode: documentMode,
+    pageSize,
+    referenceImages,
     coverImage: input.coverImage && readText(input.coverImage.storagePath)
       ? {
         bytes: await downloadProjectAssetBytes(input.client, readText(input.coverImage.storagePath)),
@@ -2973,6 +4106,30 @@ async function registerDocumentArtifact(input: {
     manuscriptCharacterCount: input.markdown.length,
   }
   await uploadBytes(input.client, storagePath, renderResult.bytes, 'application/pdf')
+  const coverImageBytes = input.coverImage && readText(input.coverImage.storagePath)
+    ? await downloadProjectAssetBytes(input.client, readText(input.coverImage.storagePath))
+    : null
+  const { html } = buildEbookHtmlDocument(input.markdown, {
+    title,
+    subtitle,
+    provenance,
+    generatedAt,
+    documentMode,
+    pageSize,
+    coverImageSrc: coverImageBytes
+      ? bytesToDataUrl(coverImageBytes, readText(input.coverImage?.mimeType) || 'image/png')
+      : undefined,
+    referenceImages: referenceImages.map((image) => ({
+      key: image.key ?? image.assetKey ?? '',
+      entityKey: image.entityKey ?? '',
+      title: image.title,
+      caption: image.caption ?? '',
+      type: image.type ?? '',
+      src: bytesToDataUrl(image.bytes, image.mimeType || 'image/png'),
+    })),
+  })
+  const htmlBytes = new TextEncoder().encode(html)
+  await uploadBytes(input.client, htmlStoragePath, htmlBytes, 'text/html; charset=utf-8')
   const markdownBytes = new TextEncoder().encode(input.markdown)
   await uploadBytes(input.client, markdownStoragePath, markdownBytes, 'text/markdown; charset=utf-8')
   const assetMetadata = {
@@ -2984,8 +4141,15 @@ async function registerDocumentArtifact(input: {
     nodeKey: input.node.key,
     preset: input.run.preset,
     provider: 'graphcore',
-    model: documentMode === 'reference' ? 'deterministic-reference-document-v1' : 'deterministic-ebook-v1',
+    model: documentMode === 'designed_reference'
+      ? 'deterministic-designed-reference-document-v1'
+      : documentMode === 'reference'
+        ? 'deterministic-reference-document-v1'
+        : 'deterministic-ebook-v1',
     documentMode,
+    pageSize,
+    companionHtmlAssetKey: htmlAssetKey,
+    companionHtmlArtifactKey: htmlArtifactKey,
     storageBucket: 'project-assets',
     storagePath,
     sourceEntityKeys: input.run.input.sourceEntityKeys ?? [],
@@ -3002,6 +4166,15 @@ async function registerDocumentArtifact(input: {
       height: Number(input.coverImage.height ?? 0) || null,
       prompt: readText(input.coverImage.prompt),
     } : null,
+    referenceImages: referenceImages.map((image) => ({
+      key: image.key ?? '',
+      assetKey: image.assetKey ?? '',
+      entityKey: image.entityKey ?? '',
+      title: image.title,
+      type: image.type ?? '',
+      storagePath: image.storagePath ?? '',
+      mimeType: image.mimeType,
+    })),
     render: renderMetadata,
   }
   const assetResponse = await input.client
@@ -3019,6 +4192,33 @@ async function registerDocumentArtifact(input: {
     .select('id, key')
     .single()
   if (assetResponse.error || !assetResponse.data) throw new Error(assetResponse.error?.message ?? 'Failed to register output asset.')
+
+  const htmlAssetMetadata = {
+    ...assetMetadata,
+    storagePath: htmlStoragePath,
+    companionForAssetKey: assetKey,
+    render: {
+      ...renderMetadata,
+      byteSize: htmlBytes.byteLength,
+      mimeType: 'text/html',
+      renderer: 'graphcore-safe-html-document-v1',
+    },
+  }
+  const htmlAssetResponse = await input.client
+    .from('project_assets')
+    .upsert({
+      project_id: input.run.projectId,
+      key: htmlAssetKey,
+      name: `${input.workflow.name}.html`,
+      kind: 'document',
+      mime_type: 'text/html',
+      storage_path: htmlStoragePath,
+      metadata: htmlAssetMetadata,
+      llm_hints: {},
+    }, { onConflict: 'project_id,key' })
+    .select('id, key')
+    .single()
+  if (htmlAssetResponse.error || !htmlAssetResponse.data) throw new Error(htmlAssetResponse.error?.message ?? 'Failed to register HTML page asset.')
 
   const markdownAssetMetadata = {
     ...assetMetadata,
@@ -3064,6 +4264,8 @@ async function registerDocumentArtifact(input: {
         : 'Written ebook PDF generated from the world graph.',
       metadata: {
         ...assetMetadata,
+        companionHtmlAssetKey: htmlAssetKey,
+        companionHtmlArtifactKey: htmlArtifactKey,
         companionMarkdownAssetKey: markdownAssetKey,
         companionMarkdownArtifactKey: markdownArtifactKey,
         markdownPreview: input.markdown.slice(0, 4000),
@@ -3073,6 +4275,34 @@ async function registerDocumentArtifact(input: {
     .select(outputArtifactSelect)
     .single()
   if (artifactResponse.error || !artifactResponse.data) throw new Error(artifactResponse.error?.message ?? 'Failed to register output artifact.')
+
+  const htmlArtifactResponse = await input.client
+    .from('output_artifacts')
+    .upsert({
+      project_id: input.run.projectId,
+      draft_id: input.run.draftId,
+      workflow_id: input.workflow.id,
+      run_id: input.run.id,
+      node_id: input.node.id,
+      key: htmlArtifactKey,
+      name: `${input.workflow.name} HTML`,
+      kind: 'html',
+      asset_key: htmlAssetKey,
+      mime_type: 'text/html',
+      summary: documentMode === 'reference' || documentMode === 'designed_reference'
+        ? 'Openable designed HTML reference page generated from the world graph.'
+        : 'Openable HTML ebook page generated from the world graph.',
+      metadata: {
+        ...htmlAssetMetadata,
+        primaryPdfAssetKey: assetKey,
+        htmlPreview: html.slice(0, 4000),
+        htmlPreviewOnly: true,
+      },
+    }, { onConflict: 'draft_id,key' })
+    .select(outputArtifactSelect)
+    .single()
+  if (htmlArtifactResponse.error || !htmlArtifactResponse.data) throw new Error(htmlArtifactResponse.error?.message ?? 'Failed to register HTML page artifact.')
+
   const markdownArtifactResponse = await input.client
     .from('output_artifacts')
     .upsert({
@@ -3092,6 +4322,8 @@ async function registerDocumentArtifact(input: {
       metadata: {
         ...markdownAssetMetadata,
         primaryPdfAssetKey: assetKey,
+        companionHtmlAssetKey: htmlAssetKey,
+        companionHtmlArtifactKey: htmlArtifactKey,
         markdownPreview: input.markdown.slice(0, 4000),
         markdownPreviewOnly: true,
       },
@@ -3101,6 +4333,7 @@ async function registerDocumentArtifact(input: {
   if (markdownArtifactResponse.error || !markdownArtifactResponse.data) throw new Error(markdownArtifactResponse.error?.message ?? 'Failed to register manuscript artifact.')
   return {
     pdfArtifact: mapOutputArtifactRow(artifactResponse.data as OutputArtifactRow),
+    htmlArtifact: mapOutputArtifactRow(htmlArtifactResponse.data as OutputArtifactRow),
     markdownArtifact: mapOutputArtifactRow(markdownArtifactResponse.data as OutputArtifactRow),
     renderMetadata,
   }
@@ -3237,7 +4470,9 @@ async function executeNode(input: {
           sectionKey,
           sectionTitle,
           sectionOrder,
-          documentMode: 'reference',
+          documentMode: readText(config.documentMode) || 'reference',
+          pageSize: readText(config.pageSize) || '',
+          imagePolicy: readText(config.imagePolicy) || '',
           guidance,
           usage: prose.usage,
           providerStatus: prose.providerStatus,
@@ -3263,9 +4498,11 @@ async function executeNode(input: {
           .map((entity) => {
             const name = readText(entity.name)
             const visualDescription = readText(entity.visualDescription) || readText(entity.summary) || readText(entity.context)
+            const visualTraits = readStringArray(entity.visualTraits)
             const assetKeys = readStringArray(entity.assetKeys)
+            const traitNote = visualTraits.length > 0 ? ` Traits: ${visualTraits.join(', ')}.` : ''
             const assetNote = assetKeys.length > 0 ? ` Reference image asset: ${assetKeys.join(', ')}.` : ''
-            return name ? `- ${name}: ${visualDescription}${assetNote}` : ''
+            return name ? `- ${name}: ${visualDescription}${traitNote}${assetNote}` : ''
           })
           .filter(Boolean)
           .join('\n')
@@ -3300,6 +4537,153 @@ async function executeNode(input: {
           model: 'deterministic-image-asset-pack-v1',
         }
       }
+      if (purpose === 'cinematic_entity_selector') {
+        const assetPack = buildDeterministicCinematicAssetPack(context)
+        const outputs = {
+          assetPack,
+          asset_pack: assetPack,
+          text: JSON.stringify(assetPack, null, 2),
+          guidance,
+        }
+        return {
+          inputHash: input.inputHash,
+          outputHash: hashOutputWorkflowValue(outputs),
+          outputs,
+          provider: 'graphcore',
+          model: 'deterministic-cinematic-asset-pack-v1',
+        }
+      }
+      if (purpose === 'cinematic_sequence_plan') {
+        const config = asRecord(input.node.config)
+        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+        const blockCount = Math.max(1, Math.min(6, Number(config.blockCount ?? 3) || 3))
+        const durationPerBlockSeconds = Math.max(4, Math.min(15, Number(config.durationPerBlockSeconds ?? 8) || 8))
+        const planInput = {
+          context,
+          assetPack,
+          prompt: input.run.prompt,
+          guidance,
+          blockCount,
+          durationPerBlockSeconds,
+          aspectRatio: readText(config.aspectRatio) || '16:9',
+          resolution: readText(config.resolution) || '720p',
+          presetFamily: readText(config.presetFamily) || 'story_movie_tv',
+        }
+        const fallbackPlan = buildDeterministicCinematicSequencePlan(planInput)
+        const model = outputWorkflowTextModel()
+        const response = await runOpenAiResponses({
+          model,
+          instructions: 'You are a cinematic sequence planner. Return strict JSON for timed video block planning only.',
+          input: buildCinematicSequencePlanInstruction(planInput),
+          text: {
+            format: {
+              type: 'json_schema',
+              name: 'output_workflow_cinematic_sequence_plan',
+              schema: cinematicSequencePlanJsonSchema,
+              strict: true,
+            },
+          },
+          maxOutputTokens: 2800,
+          metadata: {
+            graphcore_task: 'output_workflow_cinematic_sequence_plan',
+            graphcore_node_key: input.node.key,
+          },
+          timeoutMs: 120_000,
+        })
+        const sequencePlan = response.response.ok
+          ? normalizeCinematicSequencePlan(parseJsonObject(response.outputText), fallbackPlan)
+          : fallbackPlan
+        const text = JSON.stringify(sequencePlan, null, 2)
+        const outputs = {
+          sequencePlan,
+          sequence_plan: sequencePlan,
+          blocks: sequencePlan.blocks,
+          text,
+          guidance,
+          usage: response.response.ok ? asRecord(response.body?.usage) : {},
+          providerStatus: response.response.ok ? response.status : 'fallback',
+        }
+        return {
+          inputHash: input.inputHash,
+          outputHash: hashOutputWorkflowValue(outputs),
+          outputs,
+          provider: response.response.ok ? 'openai' : 'graphcore',
+          model: response.response.ok ? model : 'deterministic-cinematic-sequence-plan-v1',
+          providerRequestId: response.response.ok ? readText(response.body?.id) || response.response.headers.get('x-request-id') || null : null,
+        }
+      }
+      if (purpose === 'cinematic_block_script') {
+        const config = asRecord(input.node.config)
+        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+        const sequencePlan = readFirstUpstreamRecord(input.upstream, ['sequencePlan', 'sequence_plan'])
+        const blockNumber = Math.max(1, Number(config.blockNumber ?? 1) || 1)
+        const blockCount = Math.max(1, Number(config.blockCount ?? 1) || 1)
+        const durationSeconds = Math.max(4, Math.min(15, Number(config.durationSeconds ?? 8) || 8))
+        const scriptInput = {
+          context,
+          assetPack,
+          sequencePlan,
+          prompt: input.run.prompt,
+          guidance,
+          blockNumber,
+          blockCount,
+          durationSeconds,
+          presetFamily: readText(config.presetFamily) || 'story_movie_tv',
+        }
+        const fallbackScript = buildDeterministicCinematicBlockScript(scriptInput)
+        const model = outputWorkflowTextModel()
+        const response = await runOpenAiResponses({
+          model,
+          instructions: 'You are a cinematic shot director. Return strict JSON for one timestamped video block script only.',
+          input: buildCinematicBlockScriptInstruction(scriptInput),
+          text: {
+            format: {
+              type: 'json_schema',
+              name: 'output_workflow_cinematic_block_script',
+              schema: cinematicBlockScriptJsonSchema,
+              strict: true,
+            },
+          },
+          maxOutputTokens: 4200,
+          metadata: {
+            graphcore_task: 'output_workflow_cinematic_block_script',
+            graphcore_node_key: input.node.key,
+          },
+          timeoutMs: 120_000,
+        })
+        let blockScript = response.response.ok
+          ? normalizeCinematicBlockScript(parseJsonObject(response.outputText), fallbackScript, durationSeconds)
+          : fallbackScript
+        let diagnostics = validateCinematicBlockScript(blockScript, durationSeconds)
+        if (diagnostics.length > 0 && response.response.ok) {
+          blockScript = fallbackScript
+          diagnostics = validateCinematicBlockScript(blockScript, durationSeconds)
+        }
+        if (diagnostics.length > 0) {
+          throw new Error(`Cinematic block script validation failed: ${diagnostics.slice(0, 8).join(' ')}`)
+        }
+        const markdown = cinematicBlockScriptMarkdown(blockScript)
+        const outputs = {
+          blockScript,
+          block_script: blockScript,
+          script: blockScript,
+          markdown,
+          text: markdown,
+          blockNumber,
+          durationSeconds,
+          guidance,
+          usage: response.response.ok ? asRecord(response.body?.usage) : {},
+          providerStatus: response.response.ok ? response.status : 'fallback',
+        }
+        return {
+          inputHash: input.inputHash,
+          outputHash: hashOutputWorkflowValue(outputs),
+          outputs,
+          provider: response.response.ok ? 'openai' : 'graphcore',
+          model: response.response.ok ? model : 'deterministic-cinematic-block-script-v1',
+          providerRequestId: response.response.ok ? readText(response.body?.id) || response.response.headers.get('x-request-id') || null : null,
+        }
+      }
       if (purpose === 'comic_entity_selector') {
         const fallbackPack = buildDeterministicComicAssetPack(context)
         const model = outputWorkflowTextModel()
@@ -3323,6 +4707,8 @@ async function executeNode(input: {
             role: readText(entity.role),
             summary: readText(entity.summary),
             visualDescription: readText(entity.visualDescription),
+            visualTraits: readStringArray(entity.visualTraits),
+            visualTraitMap: asRecord(entity.visualTraitMap),
             assetKeys: readStringArray(entity.assetKeys),
           })).filter((entity) => entity.key || entity.name)
           : []
@@ -3853,13 +5239,18 @@ async function executeNode(input: {
       const model = referenceImageUrls.length > 0
         ? referenceModel
         : baseModel
-      const quality = readText(config.quality) || Deno.env.get('OUTPUT_WORKFLOW_IMAGE_QUALITY')?.trim() || 'high'
-      const outputFormat = readText(config.outputFormat) || 'png'
+      const quality = readText(config.quality)
+        || Deno.env.get('OUTPUT_WORKFLOW_IMAGE_QUALITY')?.trim()
+        || resolveOutputImageGenerationQuality({ role, purpose, prompt })
+      const outputFormat = readText(config.outputFormat)
+        || Deno.env.get('OUTPUT_WORKFLOW_IMAGE_OUTPUT_FORMAT')?.trim()
+        || resolveOutputImageGenerationOutputFormat()
       const imageSize = config.imageSize ?? { width: 1792, height: 2688 }
+      const includeProviderGuidance = purpose !== 'cinematic_storyboard' && role !== 'cinematic_storyboard'
       const providerPrompt = [
         prompt,
-        '',
-        guidanceMarkdown(guidance),
+        includeProviderGuidance ? '' : '',
+        includeProviderGuidance ? guidanceMarkdown(guidance) : '',
         '',
         'Provider requirements:',
         '- Generate one finished image only.',
@@ -3999,8 +5390,344 @@ async function executeNode(input: {
         providerRequestId: falResult.requestId,
       }
     }
+    case 'video_generation': {
+      const config = asRecord(input.node.config)
+      const guidance = resolveGuidanceForExecution({ run: input.run, node: input.node, upstream: input.upstream })
+      const prompt = readFirstUpstreamText(input.upstream, ['prompt', 'text'])
+        || readText(input.node.inputs.prompt)
+        || input.run.prompt
+      if (!prompt) throw new Error('Video generation node is missing a prompt.')
+      const priorStepOutputs = asRecord(input.priorStep?.outputs)
+      if (hasStoredOutputs(priorStepOutputs) && input.priorStep?.outputHash && hasStoredOutputs(asRecord(priorStepOutputs.video))) {
+        return {
+          inputHash: input.priorStep.inputHash || input.inputHash,
+          outputHash: input.priorStep.outputHash,
+          outputs: priorStepOutputs,
+          provider: input.priorStep.provider,
+          model: input.priorStep.model,
+          providerRequestId: input.priorStep.providerRequestId,
+        }
+      }
+      const falApiKey = Deno.env.get('FAL_KEY')
+      if (!falApiKey) throw new Error('FAL_KEY is not configured for the Fly output workflow worker.')
+      const resolution = readText(config.resolution) || '720p'
+      const model = readText(config.model)
+        || Deno.env.get('OUTPUT_WORKFLOW_VIDEO_MODEL')?.trim()
+        || (resolution === '1080p' ? 'bytedance/seedance-2.0/reference-to-video' : 'bytedance/seedance-2.0/fast/reference-to-video')
+      const durationSeconds = Math.max(4, Math.min(15, Number(config.durationSeconds ?? 8) || 8))
+      const aspectRatio = readText(config.aspectRatio) || '16:9'
+      const generateAudio = config.generateAudio !== false
+      const syncMode = config.syncMode === true
+      const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+      const upstreamImages = readUpstreamImages(input.upstream)
+      const directImageUrls = (await Promise.all(upstreamImages.map((image) => imageReferenceToFalUrl(input.client, image)))).filter(Boolean)
+      const assetPackImageUrls = await collectAssetPackReferenceUrls(input.client, input.run, assetPack, 9)
+      const referenceImageUrls = [...new Set([...directImageUrls, ...assetPackImageUrls])].slice(0, 9)
+      const upstreamVideos = readUpstreamVideos(input.upstream, ['videoReferences', 'referenceVideos'])
+      const referenceVideoUrls = (await Promise.all(upstreamVideos.map((video) => imageReferenceToFalUrl(input.client, video))))
+        .filter(Boolean)
+        .slice(0, 3)
+      const referenceAudioUrls: string[] = []
+      const totalReferences = referenceImageUrls.length + referenceVideoUrls.length + referenceAudioUrls.length
+      if (totalReferences > 12) {
+        throw new Error('Seedance 2 reference-to-video supports at most 12 total reference files.')
+      }
+      const buildProviderPrompt = (imageUrls: string[], referencePolicy: string) => [
+        prompt,
+        'Provider requirements:',
+        '- Generate one finished Seedance 2 reference-to-video clip only.',
+        `- Duration must be ${durationSeconds} seconds. Aspect ratio: ${aspectRatio}. Resolution: ${resolution}.`,
+        imageUrls.length > 0 ? `- Reference images are ordered as @Image1 through @Image${imageUrls.length}; @Image1 is usually the storyboard grid.` : '- No image references are attached; use the written continuity anchors in the prompt.',
+        referenceVideoUrls.length > 0 ? `- Reference videos are ordered as @Video1 through @Video${referenceVideoUrls.length}.` : '',
+        referencePolicy !== 'storyboard_and_asset_refs' ? `- Reference fallback mode: ${referencePolicy}. Preserve character continuity from written entity descriptions instead of rejected identity images.` : '',
+        '- Keep one dominant action path and one coherent camera direction for the clip.',
+        imageUrls.length > 0 ? '- Preserve identity, wardrobe, environment, product, and prop continuity from references.' : '- Preserve identity, wardrobe, environment, product, and prop continuity from written descriptions.',
+        '- Do not include GraphCore, workflow, node, schema, or internal ID wording in visible text.',
+      ].filter(Boolean).join('\n')
+      const storyboardOnlyUrls = directImageUrls.slice(0, 1)
+      const referenceAttempts = [
+        { policy: 'storyboard_and_asset_refs', imageUrls: referenceImageUrls },
+        { policy: 'storyboard_only', imageUrls: storyboardOnlyUrls },
+        { policy: 'text_only_no_image_refs', imageUrls: [] },
+      ].filter((attempt, index, attempts) => (
+        index === attempts.findIndex((candidate) => candidate.policy === attempt.policy
+          && candidate.imageUrls.join('\n') === attempt.imageUrls.join('\n'))
+      ))
+      const priorFailedReferencePolicy = isFalReferencePolicyError(input.priorStep?.errorMessage)
+      const startAttemptIndex = priorFailedReferencePolicy && referenceAttempts.length > 1 ? 1 : 0
+      let falResult: Awaited<ReturnType<typeof waitForOutputFalVideo>> | null = null
+      let providerPrompt = ''
+      let usedReferenceImageUrls = referenceImageUrls
+      let referencePolicy = 'storyboard_and_asset_refs'
+      for (let attemptIndex = startAttemptIndex; attemptIndex < referenceAttempts.length; attemptIndex += 1) {
+        const attempt = referenceAttempts[attemptIndex]
+        providerPrompt = buildProviderPrompt(attempt.imageUrls, attempt.policy)
+        usedReferenceImageUrls = attempt.imageUrls
+        referencePolicy = attempt.policy
+        try {
+          falResult = await waitForOutputFalVideo({
+            priorStep: attemptIndex === 0 && !priorFailedReferencePolicy ? input.priorStep : null,
+            apiKey: falApiKey,
+            model,
+            prompt: providerPrompt,
+            durationSeconds,
+            aspectRatio,
+            resolution,
+            generateAudio,
+            syncMode,
+            referenceImageUrls: attempt.imageUrls,
+            referenceVideoUrls,
+            referenceAudioUrls,
+            shouldCancel: input.shouldCancel,
+            onProgress: async (progress) => {
+              await input.onProgress?.({
+                provider: 'fal',
+                model,
+                providerRequestId: progress.providerRequestId,
+                metadata: {
+                  providerMode: progress.providerMode,
+                  providerStatus: progress.providerStatus,
+                  lastProviderPollAt: progress.lastProviderPollAt,
+                  falRequestId: progress.providerRequestId,
+                  falStatusUrl: progress.statusUrl ?? null,
+                  falResponseUrl: progress.responseUrl ?? null,
+                  durationSeconds,
+                  aspectRatio,
+                  resolution,
+                  generateAudio,
+                  referenceImageCount: attempt.imageUrls.length,
+                  referenceVideoCount: referenceVideoUrls.length,
+                  referenceAudioCount: referenceAudioUrls.length,
+                  referencePolicy: attempt.policy,
+                },
+              })
+            },
+          })
+          break
+        } catch (error) {
+          if (isFalReferencePolicyError(error) && attemptIndex < referenceAttempts.length - 1) {
+            continue
+          }
+          throw error
+        }
+      }
+      if (!falResult) throw new Error('Fal video generation did not return a result.')
+      const videoBytes = await downloadRemoteBytes(falResult.videoUrl)
+      const extension = falResult.mimeType.includes('webm') ? 'webm' : 'mp4'
+      const assetKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.${slugify(input.node.key)}`
+      const storagePath = `generated/output-workflows/${input.run.projectId}/${input.run.id}/${slugify(input.node.key)}.${extension}`
+      await uploadBytes(input.client, storagePath, videoBytes, falResult.mimeType)
+      const metadata = {
+        generatedBy: 'output_workflow',
+        workflowId: input.workflow.id,
+        workflowKey: input.workflow.key,
+        runId: input.run.id,
+        nodeId: input.node.id,
+        nodeKey: input.node.key,
+        preset: input.run.preset,
+        provider: 'fal',
+        model,
+        providerRequestId: falResult.requestId,
+        providerMode: 'fal_queue',
+        providerStatus: 'COMPLETED',
+        falRequestId: falResult.requestId,
+        falStatusUrl: falResult.statusUrl,
+        falResponseUrl: falResult.responseUrl,
+        falVideoUrl: falResult.videoUrl,
+        prompt,
+        providerPrompt,
+        durationSeconds,
+        aspectRatio,
+        resolution,
+        generateAudio,
+        referenceImageCount: usedReferenceImageUrls.length,
+        referenceVideoCount: referenceVideoUrls.length,
+        referenceAudioCount: referenceAudioUrls.length,
+        referencePolicy,
+        byteSize: videoBytes.byteLength,
+        storageBucket: 'project-assets',
+        storagePath,
+        skillKeys: guidance.skillKeys,
+        skillVersions: guidance.skillVersions,
+        guidanceHash: guidance.guidanceHash,
+      }
+      const artifact = await registerVideoArtifact({
+        client: input.client,
+        run: input.run,
+        workflow: input.workflow,
+        node: input.node,
+        assetKey,
+        storagePath,
+        name: input.node.label,
+        summary: 'Generated video output from the workflow.',
+        mimeType: falResult.mimeType,
+        metadata,
+      })
+      const outputs = {
+        video: {
+          assetKey,
+          storagePath,
+          mimeType: falResult.mimeType,
+          prompt,
+          providerPrompt,
+          provider: 'fal',
+          model,
+          providerRequestId: falResult.requestId,
+          durationSeconds,
+          aspectRatio,
+          resolution,
+          generateAudio,
+          referenceImageCount: usedReferenceImageUrls.length,
+          referenceVideoCount: referenceVideoUrls.length,
+          referenceAudioCount: referenceAudioUrls.length,
+          referencePolicy,
+          role: readText(config.role) || readText(config.purpose) || 'video',
+          blockNumber: Number(config.blockNumber ?? 0) || null,
+        },
+        assetKey,
+        storagePath,
+        mimeType: falResult.mimeType,
+        prompt,
+        providerPrompt,
+        durationSeconds,
+        artifact,
+        guidance,
+      }
+      return {
+        inputHash: input.inputHash,
+        outputHash: hashOutputWorkflowValue(outputs),
+        outputs,
+        provider: 'fal',
+        model,
+        providerRequestId: falResult.requestId,
+      }
+    }
     case 'utility_transform': {
       const purpose = readText(asRecord(input.node.config).purpose)
+      if (purpose === 'cinematic_storyboard_prompt') {
+        const config = asRecord(input.node.config)
+        const blockScript = readFirstUpstreamRecord(input.upstream, ['blockScript', 'block_script', 'script'])
+        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+        const guidance = readUpstreamGuidanceBundle(input.upstream)
+        const gridDimension = Math.max(3, Math.min(4, Number(config.gridDimension ?? 3) || 3))
+        const storyboardPrompt = buildCinematicStoryboardPrompt({
+          blockScript,
+          assetPack,
+          gridDimension,
+          prompt: input.run.prompt,
+          guidance,
+        })
+        const outputs = {
+          prompt: storyboardPrompt,
+          text: storyboardPrompt,
+          blockScript,
+          assetPack,
+          gridDimension,
+          panelCount: gridDimension * gridDimension,
+          guidance,
+          deterministic: true,
+        }
+        return {
+          inputHash: input.inputHash,
+          outputHash: hashOutputWorkflowValue(outputs),
+          outputs,
+          provider: 'graphcore',
+          model: 'deterministic-cinematic-storyboard-prompt-v1',
+        }
+      }
+      if (purpose === 'cinematic_video_prompt') {
+        const config = asRecord(input.node.config)
+        const blockScript = readFirstUpstreamRecord(input.upstream, ['blockScript', 'block_script', 'script'])
+        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+        const guidance = readUpstreamGuidanceBundle(input.upstream)
+        const upstreamImages = readUpstreamImages(input.upstream)
+        const packedEntities = Array.isArray(assetPack.entities) ? assetPack.entities.map(asRecord) : []
+        const assetReferenceCount = new Set(packedEntities.flatMap((entity) => readStringArray(entity.assetKeys))).size
+        const referenceImageCount = Math.min(9, Math.max(1, upstreamImages.length + assetReferenceCount))
+        const durationSeconds = Math.max(4, Math.min(15, Number(config.durationSeconds ?? 8) || 8))
+        const videoPrompt = buildCinematicVideoPrompt({
+          blockScript,
+          assetPack,
+          prompt: input.run.prompt,
+          guidance,
+          durationSeconds,
+          aspectRatio: readText(config.aspectRatio) || '16:9',
+          resolution: readText(config.resolution) || '720p',
+          generateAudio: config.generateAudio !== false,
+          referenceImageCount,
+        })
+        const outputs = {
+          prompt: videoPrompt,
+          text: videoPrompt,
+          blockScript,
+          assetPack,
+          durationSeconds,
+          referenceImageCount,
+          guidance,
+          deterministic: true,
+        }
+        return {
+          inputHash: input.inputHash,
+          outputHash: hashOutputWorkflowValue(outputs),
+          outputs,
+          provider: 'graphcore',
+          model: 'deterministic-cinematic-video-prompt-v1',
+        }
+      }
+      if (purpose === 'video_stitch') {
+        const videos = collectCinematicBlockVideos(input.upstream)
+        const stitchResult = await stitchVideoBytes({ client: input.client, videos })
+        const assetKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.${slugify(input.node.key)}`
+        const storagePath = `generated/output-workflows/${input.run.projectId}/${input.run.id}/${slugify(input.node.key)}.mp4`
+        await uploadBytes(input.client, storagePath, stitchResult.bytes, stitchResult.mimeType)
+        const metadata = {
+          generatedBy: 'output_workflow',
+          workflowId: input.workflow.id,
+          workflowKey: input.workflow.key,
+          runId: input.run.id,
+          nodeId: input.node.id,
+          nodeKey: input.node.key,
+          preset: input.run.preset,
+          provider: 'graphcore',
+          model: 'ffmpeg-video-stitch-v1',
+          stitchMode: stitchResult.mode,
+          sourceVideoAssetKeys: videos.map((video) => readText(video.assetKey)).filter(Boolean),
+          sourceVideoStoragePaths: videos.map((video) => readText(video.storagePath) || readText(video.storage_path)).filter(Boolean),
+          byteSize: stitchResult.bytes.byteLength,
+          storageBucket: 'project-assets',
+          storagePath,
+        }
+        const artifact = await registerVideoArtifact({
+          client: input.client,
+          run: input.run,
+          workflow: input.workflow,
+          node: input.node,
+          assetKey,
+          storagePath,
+          name: input.node.label,
+          summary: 'Final stitched cinematic sequence video.',
+          mimeType: stitchResult.mimeType,
+          metadata,
+        })
+        const video = {
+          assetKey,
+          storagePath,
+          mimeType: stitchResult.mimeType,
+          provider: 'graphcore',
+          model: 'ffmpeg-video-stitch-v1',
+          role: 'cinematic_sequence_final',
+          sourceVideoCount: videos.length,
+          stitchMode: stitchResult.mode,
+        }
+        const outputs = { video, videos, artifact, assetKey, storagePath, mimeType: stitchResult.mimeType }
+        return {
+          inputHash: input.inputHash,
+          outputHash: hashOutputWorkflowValue(outputs),
+          outputs,
+          provider: 'graphcore',
+          model: 'ffmpeg-video-stitch-v1',
+        }
+      }
       if (purpose === 'comic_page_prompt') {
         const config = asRecord(input.node.config)
         const pageNumber = Math.max(1, Number(config.pageNumber ?? 1))
@@ -4051,11 +5778,14 @@ async function executeNode(input: {
           context,
           upstream: input.upstream,
           configuredSections: configuredBibleSections(config),
+          outputKind: readText(config.outputKind),
         })
         const outputs = {
           markdown,
           text: markdown,
-          documentMode: 'reference',
+          documentMode: readText(config.documentMode) || 'reference',
+          pageSize: readText(config.pageSize) || '',
+          imagePolicy: readText(config.imagePolicy) || '',
           guidance,
           sectionCount: configuredBibleSections(config).length,
         }
@@ -4104,13 +5834,20 @@ async function executeNode(input: {
       const wiki = asRecord(context.wiki)
       const title = titleFromContext(context)
       const subtitle = readText(wiki.logline) || readText(wiki.subtitle)
-      const documentMode = readText(config.documentMode) === 'reference' || input.run.preset === 'story_bible_from_world' ? 'reference' : 'ebook'
+      const configuredDocumentMode = readText(config.documentMode)
+      const documentMode = configuredDocumentMode === 'designed_reference'
+        ? 'designed_reference'
+        : configuredDocumentMode === 'reference' || input.run.preset === 'story_bible_from_world'
+          ? 'reference'
+          : 'ebook'
+      const pageSize = readText(config.pageSize) || readText(asRecord(input.run.input).pageSize)
       const renderMetadata = buildEbookDocumentMetadata(markdown, {
         title,
         subtitle,
         provenance: 'Generated from the GraphCore world graph',
         generatedAt: new Date().toISOString(),
         documentMode,
+        pageSize: pageSize === 'a4' || pageSize === 'letter' || pageSize === 'trade_6x9' ? pageSize : undefined,
       })
       const outputs = {
         markdown,
@@ -4119,12 +5856,33 @@ async function executeNode(input: {
         renderMetadata,
         coverImage,
         documentMode,
+        pageSize,
         guidance,
       }
       return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-document-render-v1' }
     }
     case 'output_artifact': {
       const purpose = readText(asRecord(input.node.config).purpose)
+      if (purpose === 'cinematic_video_artifact') {
+        const video = readFirstUpstreamRecord(input.upstream, ['video'])
+        const artifact = readFirstUpstreamRecord(input.upstream, ['artifact'])
+        const assetKey = readText(video.assetKey) || readText(artifact.assetKey)
+        if (!assetKey) throw new Error('Cinematic video artifact requires a stitched video input.')
+        const outputs = {
+          artifactKey: readText(artifact.key),
+          assetKey,
+          artifact,
+          artifacts: Object.keys(artifact).length > 0 ? [artifact] : [],
+          video,
+        }
+        return {
+          inputHash: input.inputHash,
+          outputHash: hashOutputWorkflowValue(outputs),
+          outputs,
+          provider: 'graphcore',
+          model: 'deterministic-cinematic-video-artifact-v1',
+        }
+      }
       if (input.run.preset === 'comic_issue_from_sequence' || purpose === 'comic_artifact') {
         const script = readFirstUpstreamRecord(input.upstream, ['script'])
         const markdown = readFirstUpstreamText(input.upstream, ['markdown', 'text'])
@@ -4166,16 +5924,22 @@ async function executeNode(input: {
         markdown,
         guidance,
         coverImage,
-        documentMode: input.run.preset === 'story_bible_from_world' || purpose === 'story_bible_artifact' ? 'reference' : 'ebook',
+        documentMode: readText(asRecord(input.node.config).documentMode) === 'designed_reference'
+          ? 'designed_reference'
+          : input.run.preset === 'story_bible_from_world' || purpose === 'story_bible_artifact'
+            ? 'reference'
+            : 'ebook',
         documentRenderer: input.documentRenderer,
       })
       const outputs = {
         artifactKey: artifact.pdfArtifact.key,
         assetKey: artifact.pdfArtifact.assetKey,
+        htmlArtifactKey: artifact.htmlArtifact.key,
+        htmlAssetKey: artifact.htmlArtifact.assetKey,
         markdownArtifactKey: artifact.markdownArtifact.key,
         markdownAssetKey: artifact.markdownArtifact.assetKey,
         artifact: artifact.pdfArtifact,
-        artifacts: [artifact.pdfArtifact, artifact.markdownArtifact],
+        artifacts: [artifact.pdfArtifact, artifact.htmlArtifact, artifact.markdownArtifact],
         renderMetadata: artifact.renderMetadata,
         guidance,
       }
@@ -4466,6 +6230,7 @@ export async function processFlyOutputWorkflowRuns(input: {
       onNodeComplete: async ({ node, orderIndex, skipped }) => {
         const result = nodeResults.get(node.key)
         const guidanceMetadata = guidanceStepMetadata(result?.outputs.guidance)
+        const aiUsage = buildOutputStepAiUsage({ node, result, skipped })
         await setStepStatus(input.client, {
           runId,
           node,
@@ -4491,8 +6256,24 @@ export async function processFlyOutputWorkflowRuns(input: {
             staleReusedNodeKeys: result?.staleReusedNodeKeys ?? [],
             sourceRunIds: result?.sourceRunIds ?? [],
             staleInputAllowed: allowStaleUpstreamOutputs,
+            aiUsage: aiUsage.summary,
+            aiUsageLine: aiUsage.line,
           },
         })
+        if (aiUsage.line) {
+          await recordAiUsageEvent(input.client, {
+            line: aiUsage.line,
+            context: {
+              userId: bundle.run.requestedBy,
+              projectId: bundle.run.projectId,
+              draftId: bundle.run.draftId,
+              surface: 'output_workflow',
+              outputWorkflowId: bundle.workflow.id,
+              outputWorkflowRunId: bundle.run.id,
+              idempotencyKey: `${bundle.run.id}:${node.key}:${result?.providerRequestId ?? result?.outputHash ?? result?.inputHash}`,
+            },
+          })
+        }
       },
       onNodeFailed: async ({ node, orderIndex, error, blockedDependents }) => {
         const message = error instanceof Error ? error.message : String(error)

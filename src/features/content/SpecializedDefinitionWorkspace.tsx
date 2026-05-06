@@ -5,7 +5,12 @@ import type { ArchetypeDefinition, AssetDefinition, AssemblyGraphDefinition, Def
 import type { MeshGenerationJob } from '../../domain/meshGeneration'
 import type { WorldEntity, WorldEntityCreateInput, WorldRelationship } from '../../domain/worldGraph'
 import { definitionKindForWorldEntity, getLinkedWorldEntityForDefinition, getWorldRelationshipsForDefinition } from '../../domain/worldGraphHelpers'
-import { mergeWorldEntityVisualDescriptionMetadata, readWorldEntityVisualDescription } from '../../domain/worldEntityVisuals'
+import {
+  composeWorldEntityVisualDescription,
+  mergeWorldEntityVisualDescriptionMetadata,
+  readWorldEntityVisualDescription,
+  readWorldEntityVisualIdentity,
+} from '../../domain/worldEntityVisuals'
 import { getEnvironmentProfile, getResolvedDefinition3dBinding, getResolvedRender3dBinding } from '../../domain/render3d'
 import { getResourceGenerationMetadata, isPendingGenerationResource } from '../../domain/worldBuild'
 import { useEditorStore } from '../../state/editorStore'
@@ -365,6 +370,24 @@ export function SpecializedDefinitionWorkspace({
     : effectiveSelection?.kind === 'environment'
       ? (selectedEnvironmentRenderBinding?.generationPrompt?.trim() || linkedWorldVisualDescription)
       : ''
+  const selectedVisualIdentity = useMemo(() => readWorldEntityVisualIdentity({
+    summary: '',
+    context: '',
+    metadata: { visualDescription: selectedVisualDescription },
+    customProperties: {},
+  }), [selectedVisualDescription])
+
+  function updateSelectedVisualDescription(value: string) {
+    if (!effectiveSelection) return
+    if (effectiveSelection.kind === 'character') {
+      updateCharacterRenderBinding({
+        conceptPrompt: value || null,
+        generationPrompt: selectedCharacterRenderBinding?.generationPrompt || value || null,
+      })
+    } else if (effectiveSelection.kind === 'environment') {
+      updateEnvironmentRenderBinding({ generationPrompt: value || null })
+    }
+  }
 
   function persistLinkedWorldVisualDescription(value: string) {
     if (!linkedWorldEntity) return
@@ -647,19 +670,17 @@ export function SpecializedDefinitionWorkspace({
                 rows={4}
                 value={selectedVisualDescription}
                 onBlur={(event) => persistLinkedWorldVisualDescription(event.currentTarget.value)}
-                onChange={(event) => {
-                  if (effectiveSelection.kind === 'character') {
-                    updateCharacterRenderBinding({
-                      conceptPrompt: event.target.value || null,
-                      generationPrompt: selectedCharacterRenderBinding?.generationPrompt || event.target.value || null,
-                    })
-                  } else {
-                    updateEnvironmentRenderBinding({ generationPrompt: event.target.value || null })
-                  }
-                }}
+                onChange={(event) => updateSelectedVisualDescription(event.target.value)}
                 placeholder={effectiveSelection.kind === 'character'
                   ? 'Describe face, silhouette, outfit, props, palette, mood, and must-have visual cues.'
                   : 'Describe layout, architecture, materials, lighting, mood, and signature landmarks.'}
+              />
+              <input
+                type="text"
+                value={selectedVisualIdentity.traits.join(', ')}
+                placeholder="traits: age, build, hair, palette"
+                onBlur={() => persistLinkedWorldVisualDescription(selectedVisualDescription)}
+                onChange={(event) => updateSelectedVisualDescription(composeWorldEntityVisualDescription(selectedVisualIdentity.description, event.target.value))}
               />
             </label>
             <div className="character-concept-actions">

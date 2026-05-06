@@ -3,6 +3,7 @@ import {
   worldPromptEventPayloadSchema,
   type WorldPromptEvent,
 } from '../../domain/worldPrompt.ts'
+import { readWorldEntityVisualDescription } from '../../domain/worldEntityVisuals.ts'
 
 type SeedPreviewField = {
   label: string
@@ -317,17 +318,12 @@ function readPreviewVisualDescription(
   metadata: Record<string, unknown>,
   customProperties: Record<string, unknown>,
 ) {
-  const metadataVisual = readRecord(metadata.visual)
-  const customVisual = readRecord(customProperties.visual)
-  return firstMeaningfulText(
-    metadata.visualDescription,
-    metadataVisual.description,
-    metadataVisual.visualDescription,
-    customProperties.visualDescription,
-    customVisual.description,
-    customVisual.visualDescription,
-    customProperties.appearance,
-  )
+  return readWorldEntityVisualDescription({
+    summary: '',
+    context: '',
+    metadata,
+    customProperties,
+  })
 }
 
 function nodeTypeIcon(nodeType: string | null | undefined): EntityIconId {

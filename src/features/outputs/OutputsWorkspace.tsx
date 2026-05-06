@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { useEffect, useMemo, useState } from 'react'
 
 import { isResolvableAssetUrl, resolveAssetSourceUrl } from '../../domain/assets'
+import { aiUsageLineSchema, aiUsageSummarySchema, formatAiUsd, summarizeAiUsageLines } from '../../domain/aiUsage'
 import type { ProjectSnapshot } from '../../domain/graphcore'
 import {
   buildOutputGuidanceBundleForNode,
@@ -33,10 +34,12 @@ type OutputsWorkspaceProps = {
     selectedSequenceUnitKeys?: string[]
     pageCount?: number
     targetFormat?: 'pdf' | 'epub' | 'docx' | 'markdown' | 'image'
+    imageQuality?: 'low' | 'medium' | 'high'
+    imageOutputFormat?: 'png' | 'jpeg' | 'webp'
   }) => Promise<OutputRequestStatusResponse>
   onGetOutputRequestStatus: (requestId: string) => Promise<OutputRequestStatusResponse>
   onCancelOutputRequest: (requestId: string) => Promise<OutputRequestStatusResponse>
-  onDeleteOutputRequest: (requestId: string) => Promise<unknown>
+  onRequestDeleteOutputRequest: (requestId: string) => void
   onPlanOutputWorkflow: (request: {
     prompt: string
     preset?: 'ebook_from_world' | 'story_bible_from_world' | 'comic_issue_from_sequence'
@@ -44,6 +47,8 @@ type OutputsWorkspaceProps = {
     selectedSequenceUnitKeys?: string[]
     pageCount?: number
     targetFormat?: 'pdf' | 'epub' | 'docx' | 'markdown'
+    imageQuality?: 'low' | 'medium' | 'high'
+    imageOutputFormat?: 'png' | 'jpeg' | 'webp'
   }) => Promise<OutputWorkflowPlanResponse>
   onStartOutputWorkflow: (plan: OutputWorkflowPlanResponse['plan']) => Promise<OutputWorkflowStartResponse>
   onStartOutputWorkflowRun: (request: {
@@ -91,6 +96,37 @@ function readNumber(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
+function readAiUsageSummary(value: unknown) {
+  const parsed = aiUsageSummarySchema.safeParse(value)
+  return parsed.success ? parsed.data : null
+}
+
+function readStepAiUsage(step: OutputWorkflowRunStep | null | undefined) {
+  const metadata = readRecord(step?.metadata)
+  return readAiUsageSummary(metadata.aiUsage)
+}
+
+function readStepAiUsageEstimate(step: OutputWorkflowRunStep | null | undefined) {
+  const metadata = readRecord(step?.metadata)
+  const parsedLine = aiUsageLineSchema.safeParse(metadata.aiUsageEstimate)
+  if (!parsedLine.success) return null
+  return aiUsageSummarySchema.parse({
+    status: 'estimated',
+    lines: [parsedLine.data],
+  })
+}
+
+function buildRunUsageSummary(run: OutputWorkflowRun | null | undefined, workflow: { metadata?: Record<string, unknown> } | null) {
+  const actualLines = (run?.steps ?? [])
+    .flatMap((step) => readStepAiUsage(step)?.lines ?? [])
+  if (actualLines.length > 0) {
+    return summarizeAiUsageLines(actualLines)
+  }
+  const runMetadata = readRecord(run?.metadata)
+  const workflowMetadata = readRecord(workflow && 'metadata' in workflow ? workflow.metadata : {})
+  return readAiUsageSummary(runMetadata.usageEstimate) ?? readAiUsageSummary(workflowMetadata.usageEstimate)
+}
+
 function resolveArtifactUrlFromMetadata(metadata: Record<string, unknown>) {
   const sourceUrl = readTrimmedString(metadata.sourceUrl)
   if (isResolvableAssetUrl(sourceUrl)) return sourceUrl
@@ -125,6 +161,9 @@ function artifactActionLabels(mimeType: string, kind: string) {
   if (mimeType.startsWith('image/') || kind === 'image') {
     const extension = mimeType.includes('webp') ? 'webp' : mimeType.includes('jpeg') || mimeType.includes('jpg') ? 'jpg' : 'png'
     return { open: 'Open Image', download: 'Download Image', extension }
+  }
+  if (mimeType.includes('html') || kind === 'html') {
+    return { open: 'Open HTML', download: 'Download HTML', extension: 'html' }
   }
   if (mimeType.includes('markdown') || kind === 'manuscript') {
     return { open: 'Open Markdown', download: 'Download Markdown', extension: 'md' }
@@ -370,7 +409,7 @@ export function OutputsWorkspace({
   onStartOutputRequest,
   onGetOutputRequestStatus,
   onCancelOutputRequest,
-  onDeleteOutputRequest,
+  onRequestDeleteOutputRequest,
   onStartOutputWorkflow,
   onStartOutputWorkflowRun,
   onGetOutputWorkflowStatus,
@@ -385,6 +424,8 @@ export function OutputsWorkspace({
   const [comicPrompt, setComicPrompt] = useState('Create a polished comic issue from the selected sequence unit, with clear page storytelling, readable lettering, and consistent character art.')
   const [selectedComicSequenceKey, setSelectedComicSequenceKey] = useState('')
   const [comicPageCount, setComicPageCount] = useState(8)
+  const [requestImageQuality, setRequestImageQuality] = useState<'preset' | 'low' | 'medium' | 'high'>('preset')
+  const [requestImageOutputFormat, setRequestImageOutputFormat] = useState<'preset' | 'png' | 'jpeg' | 'webp'>('preset')
   const [requestPrompt, setRequestPrompt] = useState('Make a poster image from this world using the main characters and strongest location.')
   const [selectedRequestId, setSelectedRequestId] = useState<string | null>(snapshot.outputRequests[0]?.id ?? null)
   const [busyRequestId, setBusyRequestId] = useState<string | null>(null)
@@ -392,7 +433,8 @@ export function OutputsWorkspace({
   const [error, setError] = useState<string | null>(null)
   const [activeRunId, setActiveRunId] = useState<string | null>(snapshot.outputWorkflowRuns[0]?.id ?? null)
   const [selectedNodeKey, setSelectedNodeKey] = useState<string | null>(null)
-  const [inspectorMode, setInspectorMode] = useState<'output' | 'guidance' | 'metadata'>('output')
+  const [inspectorMode, setInspectorMode] = useState<'output' | 'guidance' | 'usage' | 'metadata'>('output')
+  const [usageBreakdownOpen, setUsageBreakdownOpen] = useState(false)
   const [targetedNodeKey, setTargetedNodeKey] = useState<string | null>(null)
   const [targetedNodeKeys, setTargetedNodeKeys] = useState<string[]>([])
   const [targetedRunScope, setTargetedRunScope] = useState<OutputWorkflowRunScope | null>(null)
@@ -519,6 +561,11 @@ export function OutputsWorkspace({
   const runningNodeCount = runStepCounts.get('running') ?? 0
   const failedNodeCount = (runStepCounts.get('failed') ?? 0) + (runStepCounts.get('blocked') ?? 0)
   const completedNodeCount = (runStepCounts.get('completed') ?? 0) + (runStepCounts.get('skipped') ?? 0)
+  const runUsageSummary = useMemo(
+    () => buildRunUsageSummary(displayRun, activeWorkflow),
+    [activeWorkflow, displayRun],
+  )
+  const selectedUsageSummary = readStepAiUsage(selectedStep) ?? readStepAiUsageEstimate(selectedStep)
   const workflowStages = useMemo(() => buildWorkflowStages({
     nodes: activeNodes,
     levels: workflowExecutionPlan?.levels ?? [],
@@ -577,6 +624,8 @@ export function OutputsWorkspace({
       const response = await onStartOutputRequest({
         prompt: cleanPrompt,
         sourceSurface: 'outputs',
+        imageQuality: requestImageQuality === 'preset' ? undefined : requestImageQuality,
+        imageOutputFormat: requestImageOutputFormat === 'preset' ? undefined : requestImageOutputFormat,
       })
       setSelectedRequestId(response.request.id)
       if (response.run) {
@@ -655,6 +704,8 @@ export function OutputsWorkspace({
         selectedSequenceUnitKeys: [selectedComicSequenceKey],
         pageCount,
         targetFormat: 'pdf',
+        imageQuality: requestImageQuality === 'preset' ? undefined : requestImageQuality,
+        imageOutputFormat: requestImageOutputFormat === 'preset' ? undefined : requestImageOutputFormat,
       })
       const startResponse = await onStartOutputWorkflow(planResponse.plan)
       const runResponse = await onStartOutputWorkflowRun({
@@ -1057,6 +1108,35 @@ export function OutputsWorkspace({
                   </button>
                 ))}
               </div>
+              <div className="outputs-composer-options">
+                <label>
+                  <span>Image quality</span>
+                  <select
+                    aria-label="Image generation quality"
+                    value={requestImageQuality}
+                    onChange={(event) => setRequestImageQuality(event.target.value as typeof requestImageQuality)}
+                  >
+                    <option value="preset">Preset default</option>
+                    <option value="low">Low</option>
+                    <option value="medium">Medium</option>
+                    <option value="high">High</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Image format</span>
+                  <select
+                    aria-label="Image generation output format"
+                    value={requestImageOutputFormat}
+                    onChange={(event) => setRequestImageOutputFormat(event.target.value as typeof requestImageOutputFormat)}
+                  >
+                    <option value="preset">Preset default</option>
+                    <option value="webp">WebP</option>
+                    <option value="png">PNG</option>
+                    <option value="jpeg">JPEG</option>
+                  </select>
+                </label>
+                <small>Preset default uses low for character concept art, medium for posters/comics/covers, and WebP output.</small>
+              </div>
               <div className="outputs-composer-submit-row">
                 <button
                   className="outputs-primary-action"
@@ -1414,31 +1494,21 @@ export function OutputsWorkspace({
                                   Cancel
                                 </button>
                               )}
-                              {!requestRun || isTerminalOutputWorkflowRunStatus(requestRun.status) ? (
-                                <button
-                                  className="outputs-secondary-action outputs-compact-action"
-                                  disabled={busyRequestId === request.id}
-                                  onClick={async () => {
-                                    const confirmed = window.confirm('Remove this output request from the list? Generated assets and workflow records are left intact.')
-                                    if (!confirmed) return
-                                    setBusyRequestId(request.id)
-                                    setError(null)
-                                    try {
-                                      await onDeleteOutputRequest(request.id)
+                                {!requestRun || isTerminalOutputWorkflowRunStatus(requestRun.status) ? (
+                                  <button
+                                    className="outputs-secondary-action outputs-compact-action"
+                                    disabled={busyRequestId === request.id}
+                                    onClick={() => {
+                                      setError(null)
                                       if (selectedRequestId === request.id) {
                                         const nextRequest = outputRequests.find((entry) => entry.id !== request.id) ?? null
                                         setSelectedRequestId(nextRequest?.id ?? null)
-                                        if (nextRequest?.latestRunId) setActiveRunId(nextRequest.latestRunId)
+                                        setActiveRunId(nextRequest?.latestRunId ?? null)
                                       }
-                                      await onRefreshLiveSnapshot()
-                                    } catch (requestError) {
-                                      setError(requestError instanceof Error ? requestError.message : 'Could not delete output request.')
-                                    } finally {
-                                      setBusyRequestId(null)
-                                    }
-                                  }}
-                                  type="button"
-                                >
+                                      onRequestDeleteOutputRequest(request.id)
+                                    }}
+                                    type="button"
+                                  >
                                   Remove
                                 </button>
                               ) : null}
@@ -1484,6 +1554,31 @@ export function OutputsWorkspace({
               ) : (
                 <p className="outputs-muted">Start a preset to see queued, running, completed, failed, and skipped nodes.</p>
               )}
+              {runUsageSummary ? (
+                <div className="outputs-usage-summary">
+                  <button className="outputs-usage-pill" onClick={() => setUsageBreakdownOpen((open) => !open)} type="button">
+                    <span>{runUsageSummary.actualCostUsd > 0 ? 'Cost' : 'Estimate'}</span>
+                    <strong>{formatAiUsd(runUsageSummary.actualCostUsd || runUsageSummary.estimatedCostUsd)}</strong>
+                    <small>{runUsageSummary.totalTokens.toLocaleString()} tokens</small>
+                  </button>
+                  {usageBreakdownOpen ? (
+                    <div className="outputs-usage-breakdown">
+                      {runUsageSummary.lines.map((line, index) => (
+                        <div className="outputs-usage-row" key={`${line.nodeKey || line.model}-${index}`}>
+                          <div>
+                            <strong>{line.nodeLabel || line.nodeKey || line.operation}</strong>
+                            <span>{line.provider} · {line.model}</span>
+                          </div>
+                          <div>
+                            <span>{line.tokens ? `${line.tokens.inputTokens.toLocaleString()} in / ${line.tokens.outputTokens.toLocaleString()} out` : `${line.media?.units ?? 1} media`}</span>
+                            <strong>{formatAiUsd(line.cost.actualCostUsd || line.cost.estimatedCostUsd)}</strong>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
               <div className="outputs-run-actions">
                 {activeRun && !isTerminalOutputWorkflowRunStatus(activeRun.status) ? (
                   <button className="outputs-secondary-action" disabled={busy} onClick={cancelActiveRun} type="button">
@@ -1727,6 +1822,7 @@ export function OutputsWorkspace({
                   <div className="outputs-inspector-tabs" role="tablist" aria-label="Node detail views">
                     <button className={inspectorMode === 'output' ? 'is-active' : ''} onClick={() => setInspectorMode('output')} type="button">Latest Output</button>
                     <button className={inspectorMode === 'guidance' ? 'is-active' : ''} onClick={() => setInspectorMode('guidance')} type="button">Prompt / Guidance</button>
+                    <button className={inspectorMode === 'usage' ? 'is-active' : ''} onClick={() => setInspectorMode('usage')} type="button">Usage</button>
                     <button className={inspectorMode === 'metadata' ? 'is-active' : ''} onClick={() => setInspectorMode('metadata')} type="button">Metadata</button>
                   </div>
                   {inspectorMode === 'output' ? (
@@ -1764,6 +1860,32 @@ export function OutputsWorkspace({
                         </div>
                       ) : null}
                       {selectedGuidance.guidanceHash ? <span className="outputs-guidance-hash">Guidance hash {selectedGuidance.guidanceHash}</span> : null}
+                    </div>
+                  ) : null}
+                  {inspectorMode === 'usage' ? (
+                    <div className="outputs-output-preview outputs-usage-panel">
+                      {selectedUsageSummary ? (
+                        <>
+                          <div className="outputs-usage-node-total">
+                            <strong>{formatAiUsd(selectedUsageSummary.actualCostUsd || selectedUsageSummary.estimatedCostUsd)}</strong>
+                            <span>{selectedUsageSummary.totalTokens.toLocaleString()} tokens · {selectedUsageSummary.actualCredits || selectedUsageSummary.estimatedCredits} credits</span>
+                          </div>
+                          {selectedUsageSummary.lines.map((line, index) => (
+                            <div className="outputs-usage-row" key={`${line.nodeKey || line.model}-${index}`}>
+                              <div>
+                                <strong>{line.provider} · {line.model}</strong>
+                                <span>{line.requestId || line.responseId || 'No provider request id yet'}</span>
+                              </div>
+                              <div>
+                                <span>{line.tokens ? `${line.tokens.inputTokens.toLocaleString()} input / ${line.tokens.outputTokens.toLocaleString()} output` : `${line.media?.size ?? line.media?.units ?? 1} media`}</span>
+                                <strong>{formatAiUsd(line.cost.actualCostUsd || line.cost.estimatedCostUsd)}</strong>
+                              </div>
+                            </div>
+                          ))}
+                        </>
+                      ) : (
+                        <p className="outputs-muted">No usage has been recorded for this node yet.</p>
+                      )}
                     </div>
                   ) : null}
                   {inspectorMode === 'metadata' ? (

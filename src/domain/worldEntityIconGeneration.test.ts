@@ -11,7 +11,10 @@ import {
   streamSequenceUnitRecordSchema,
 } from './worldPrompt.ts'
 import {
+  mergeWorldEntityVisualDescriptionMetadata,
   readWorldEntityVisualDescription,
+  readWorldEntityVisualIdentity,
+  readWorldEntityVisualTraits,
   WORLD_ENTITY_VISUAL_DESCRIPTION_MAX_LENGTH,
 } from './worldEntityVisuals.ts'
 import type { DefinitionBase } from './graphcore.ts'
@@ -135,13 +138,55 @@ test('normalizes visual descriptions from canonical metadata and fallbacks', () 
   })), 'black stone citadel under pale moons')
 })
 
-test('compact stream records accept visualDescription for entities and sequence units', () => {
-  assert.equal(streamEntityRecordSchema.parse({
+test('composes structured neutral visual identity with traits', () => {
+  const metadata = mergeWorldEntityVisualDescriptionMetadata({}, 'silver-haired archivist in an ash-black coat', {
+    traits: ['late 20s', 'lean build', 'silver bob', 'grey eyes'],
+    traitMap: {
+      age: 'late 20s',
+      build: 'lean build',
+      hair: 'silver bob',
+      eyes: 'grey eyes',
+    },
+  })
+  const mara = entity({
+    key: 'actor.mara',
+    name: 'Mara',
+    nodeType: 'actor',
+    metadata,
+  })
+
+  assert.equal(
+    readWorldEntityVisualDescription(mara),
+    'silver-haired archivist in an ash-black coat Traits: late 20s, lean build, silver bob, grey eyes',
+  )
+  assert.deepEqual(readWorldEntityVisualTraits(mara), ['late 20s', 'lean build', 'silver bob', 'grey eyes'])
+  assert.equal(readWorldEntityVisualIdentity(mara).description, 'silver-haired archivist in an ash-black coat')
+})
+
+test('visual identity normalization does not duplicate traits on repeat saves', () => {
+  const once = mergeWorldEntityVisualDescriptionMetadata({}, 'silver-haired archivist Traits: late 20s, silver bob')
+  const twice = mergeWorldEntityVisualDescriptionMetadata(once, once.visualDescription)
+  const mara = entity({
+    key: 'actor.mara',
+    name: 'Mara',
+    nodeType: 'actor',
+    metadata: twice,
+  })
+
+  assert.deepEqual(readWorldEntityVisualTraits(mara), ['late 20s', 'silver bob'])
+  assert.equal(readWorldEntityVisualDescription(mara), 'silver-haired archivist Traits: late 20s, silver bob')
+})
+
+test('compact stream records accept visualDescription and visualTraits for entities and sequence units', () => {
+  const parsedEntity = streamEntityRecordSchema.parse({
     kind: 'entity',
     nodeType: 'actor',
     name: 'Mara',
     visualDescription: 'silver-haired archivist with a violet lantern',
-  }).visualDescription, 'silver-haired archivist with a violet lantern')
+    visualTraits: ['late 20s', 'silver bob'],
+  }) as Record<string, unknown>
+  assert.equal(parsedEntity.visualDescription, 'silver-haired archivist with a violet lantern')
+  assert.deepEqual(parsedEntity.visualTraits, ['late 20s', 'silver bob'])
 
   assert.equal(streamSequenceUnitRecordSchema.parse({
     kind: 'sequence_unit',

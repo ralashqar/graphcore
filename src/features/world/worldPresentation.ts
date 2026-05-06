@@ -237,6 +237,16 @@ export type WorldPromptSessionTokenMeter = {
   label: string
   title: string
   estimated: boolean
+  currentTurnTokens: number
+  lastStepTokens: number
+  rows: Array<{
+    label: string
+    inputTokens: number
+    outputTokens: number
+    totalTokens: number
+    cachedInputTokens: number
+    reasoningTokens: number
+  }>
 }
 
 export type WorldInspectorViewModel = {
@@ -1099,6 +1109,43 @@ function readUsageTokens(value: unknown) {
   return inputTokens + outputTokens > 0 ? inputTokens + outputTokens : null
 }
 
+function readUsageBreakdownRow(value: unknown, label: string) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const candidate = value as Record<string, unknown>
+  const inputTokens = readPositiveNumber(candidate.inputTokens)
+    ?? readPositiveNumber(candidate.input_tokens)
+    ?? readPositiveNumber(candidate.promptTokens)
+    ?? readPositiveNumber(candidate.prompt_tokens)
+    ?? 0
+  const outputTokens = readPositiveNumber(candidate.outputTokens)
+    ?? readPositiveNumber(candidate.output_tokens)
+    ?? readPositiveNumber(candidate.completionTokens)
+    ?? readPositiveNumber(candidate.completion_tokens)
+    ?? 0
+  const totalTokens = readPositiveNumber(candidate.totalTokens)
+    ?? readPositiveNumber(candidate.total_tokens)
+    ?? inputTokens + outputTokens
+  if (!totalTokens) return null
+  return {
+    label,
+    inputTokens,
+    outputTokens,
+    totalTokens,
+    cachedInputTokens: readPositiveNumber(candidate.cachedInputTokens) ?? readPositiveNumber(candidate.cached_input_tokens) ?? 0,
+    reasoningTokens: readPositiveNumber(candidate.reasoningTokens) ?? readPositiveNumber(candidate.reasoning_tokens) ?? 0,
+  }
+}
+
+function readTurnUsageRows(turn: WorldPromptTurn) {
+  const usage = turn.metadata.tokenUsage && typeof turn.metadata.tokenUsage === 'object' && !Array.isArray(turn.metadata.tokenUsage)
+    ? turn.metadata.tokenUsage as Record<string, unknown>
+    : null
+  const calls = Array.isArray(usage?.calls) ? usage.calls : []
+  return calls
+    .map((call, index) => readUsageBreakdownRow(call, `Call ${index + 1}`))
+    .filter((row): row is NonNullable<ReturnType<typeof readUsageBreakdownRow>> => Boolean(row))
+}
+
 function readTurnUsageTokens(metadata: Record<string, unknown>) {
   const candidates = [
     metadata.tokenUsage,
@@ -1230,6 +1277,13 @@ export function buildWorldPromptSessionTokenMeter(input: {
   const percentage = tokenLimit > 0 ? Math.min(100, Math.round((boundedUsedTokens / tokenLimit) * 100)) : 0
   const compactUsed = formatCompactTokenCount(boundedUsedTokens)
   const compactLimit = formatCompactTokenCount(tokenLimit)
+  const latestTurn = input.turns.at(-1) ?? null
+  const currentTurnTokens = latestTurn ? readTurnUsageTokens(latestTurn.metadata) ?? 0 : 0
+  const lastStep = [...(input.generationJobSteps ?? [])]
+    .sort((left, right) => new Date(left.updatedAt).getTime() - new Date(right.updatedAt).getTime())
+    .at(-1)
+  const lastStepTokens = readUsageTokens(lastStep?.tokenUsage) ?? 0
+  const rows = latestTurn ? readTurnUsageRows(latestTurn) : []
   return {
     usedTokens: boundedUsedTokens,
     tokenLimit,
@@ -1237,6 +1291,9 @@ export function buildWorldPromptSessionTokenMeter(input: {
     label: `${estimated ? '~' : ''}${compactUsed}/${compactLimit}`,
     title: `${estimated ? 'Approximate visible session text' : 'Recorded provider token usage'}: ${boundedUsedTokens.toLocaleString()} / ${tokenLimit.toLocaleString()} tokens`,
     estimated,
+    currentTurnTokens,
+    lastStepTokens,
+    rows,
   }
 }
 

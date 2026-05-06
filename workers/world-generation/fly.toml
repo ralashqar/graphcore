@@ -2,7 +2,7 @@ app = "graphcore-world-generation"
 primary_region = "lhr"
 
 [build]
-  dockerfile = "workers/world-generation/Dockerfile"
+  dockerfile = "Dockerfile"
 
 [env]
   GRAPHCORE_WORKER_POLL_INTERVAL_MS = "2500"
@@ -11,7 +11,7 @@ primary_region = "lhr"
   WORLD_PROMPT_GENERATION_RUNTIME = "fly"
 
 [processes]
-  app = "deno run --allow-env --allow-net --allow-read --node-modules-dir=auto workers/world-generation/main.ts"
+  app = "deno run --allow-env --allow-net --allow-read --allow-write --allow-run --allow-ffi --allow-sys --node-modules-dir=auto workers/world-generation/main.ts"
 
 [[vm]]
   memory = "1gb"

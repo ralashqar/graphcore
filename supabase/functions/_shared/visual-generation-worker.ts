@@ -133,19 +133,29 @@ async function submitFalImageRequest(input: {
   apiKey: string
   model: string
   prompt: string
+  imageSize?: unknown
+  quality?: string
 }) {
   return fetchFalJson(`${falQueueBaseUrl}/${input.model}`, {
     method: 'POST',
     headers: buildFalHeaders(input.apiKey),
     body: JSON.stringify({
       prompt: input.prompt,
-      image_size: 'square_hd',
-      quality: Deno.env.get('VISUAL_GENERATION_FAL_QUALITY') ?? 'high',
+      image_size: input.imageSize ?? 'square_hd',
+      quality: input.quality ?? Deno.env.get('VISUAL_GENERATION_FAL_QUALITY') ?? 'high',
       num_images: 1,
       output_format: 'png',
       sync_mode: false,
     }),
   })
+}
+
+function resolveEntityIconGridImageSettings(input: { gridRows: number; gridCols: number }) {
+  const cellCount = Math.max(1, input.gridRows * input.gridCols)
+  return {
+    imageSize: cellCount >= 9 ? { width: 2048, height: 2048 } : 'square_hd',
+    quality: Deno.env.get('VISUAL_GENERATION_ENTITY_ICON_QUALITY') ?? 'low',
+  }
 }
 
 async function getFalStatus(input: {
@@ -268,6 +278,8 @@ async function waitForFalImage(input: {
   model: string
   prompt: string
   phasePrefix: string
+  imageSize?: unknown
+  quality?: string
 }): Promise<FalImageResult> {
   const existingRequestId = readString(input.job.metadata.falRequestId)
   const existingStatusUrl = readString(input.job.metadata.falStatusUrl)
@@ -283,6 +295,8 @@ async function waitForFalImage(input: {
       workerId: input.workerId,
       kind: input.job.kind,
       model: input.model,
+      imageSize: input.imageSize ?? 'square_hd',
+      quality: input.quality ?? null,
       promptChars: input.prompt.length,
     })
     await heartbeat(input.client, input.job.id, input.workerId, {
@@ -290,12 +304,16 @@ async function waitForFalImage(input: {
       promptChars: input.prompt.length,
       provider: 'fal',
       model: input.model,
+      imageSize: input.imageSize ?? 'square_hd',
+      quality: input.quality ?? null,
     })
 
     const submit = await submitFalImageRequest({
       apiKey: input.apiKey,
       model: input.model,
       prompt: input.prompt,
+      imageSize: input.imageSize,
+      quality: input.quality,
     })
     requestId = readString(submit.body.request_id)
     statusUrl = readString(submit.body.status_url) || null
@@ -324,6 +342,8 @@ async function waitForFalImage(input: {
       falRequestId: requestId,
       falStatusUrl: statusUrl,
       falResponseUrl: responseUrl,
+      falImageSize: input.imageSize ?? 'square_hd',
+      falQuality: input.quality ?? null,
       falSubmittedAt: new Date().toISOString(),
     })
   }
@@ -489,6 +509,7 @@ async function processEntityIconGridJob(client: DatabaseClient, job: VisualJob, 
   const falApiKey = Deno.env.get('FAL_KEY')
   if (!falApiKey) throw new Error('FAL_KEY is not configured for the Fly visual generation worker.')
   const model = normalizeFalImageModel(Deno.env.get('VISUAL_GENERATION_FAL_MODEL') ?? job.model)
+  const imageSettings = resolveEntityIconGridImageSettings({ gridRows, gridCols })
   const falResult = await waitForFalImage({
     client,
     job,
@@ -497,6 +518,8 @@ async function processEntityIconGridJob(client: DatabaseClient, job: VisualJob, 
     model,
     prompt,
     phasePrefix: 'entity_icon_grid',
+    imageSize: imageSettings.imageSize,
+    quality: imageSettings.quality,
   })
 
   const gridBytes = await downloadImageBytes(falResult.imageUrl)
@@ -543,6 +566,8 @@ async function processEntityIconGridJob(client: DatabaseClient, job: VisualJob, 
       extra: {
         gridRows,
         gridCols,
+        requestedImageSize: imageSettings.imageSize,
+        requestedQuality: imageSettings.quality,
         entityKeys: candidates.map((candidate) => candidate.entityKey),
       },
     }),
@@ -594,6 +619,8 @@ async function processEntityIconGridJob(client: DatabaseClient, job: VisualJob, 
           col,
           gridRows,
           gridCols,
+          requestedImageSize: imageSettings.imageSize,
+          requestedQuality: imageSettings.quality,
           promptFragment: candidate.visualPrompt || candidate.summary,
         },
       }),
@@ -633,6 +660,8 @@ async function processEntityIconGridJob(client: DatabaseClient, job: VisualJob, 
     falImageUrl: falResult.imageUrl,
     completedCount: Object.keys(createdAssetKeys).length,
     imageSize: { width, height },
+    requestedImageSize: imageSettings.imageSize,
+    requestedQuality: imageSettings.quality,
   })
 
   return { completedCount: Object.keys(createdAssetKeys).length }

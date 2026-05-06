@@ -1,5 +1,7 @@
 import { z } from 'zod'
 
+import { aiGenerationSettings } from '../config/aiGenerationSettings.ts'
+import { aiUsageSummarySchema, estimateOutputWorkflowUsage } from './aiUsage.ts'
 import {
   buildOutputGuidanceBundle,
   outputGuidanceModeSchema,
@@ -27,7 +29,9 @@ export const outputWorkflowNodeTypeSchema = z.enum([
   'output_artifact',
 ])
 export const outputWorkflowRunStatusSchema = z.enum(['queued', 'running', 'completed', 'completed_with_errors', 'failed', 'cancelled'])
-export const outputWorkflowArtifactKindSchema = z.enum(['manuscript', 'pdf', 'epub', 'docx', 'comic_pdf', 'video', 'image', 'package', 'other'])
+export const outputImageGenerationQualitySchema = z.enum(['low', 'medium', 'high'])
+export const outputImageGenerationOutputFormatSchema = z.enum(['png', 'jpeg', 'webp'])
+export const outputWorkflowArtifactKindSchema = z.enum(['manuscript', 'html', 'pdf', 'epub', 'docx', 'comic_pdf', 'video', 'image', 'package', 'other'])
 export const outputRequestStatusSchema = z.enum(['queued', 'planning', 'awaiting_confirmation', 'running', 'completed', 'completed_with_errors', 'failed', 'cancelled'])
 export const outputRequestIntentSchema = z.enum(['world_mutation', 'output_generation', 'answer_only', 'ambiguous'])
 export const outputRequestKindSchema = z.enum([
@@ -329,9 +333,20 @@ export const outputWorkflowPlanRequestSchema = z.object({
   prompt: z.string().default(''),
   selectedEntityKeys: z.array(z.string()).default([]),
   selectedSequenceUnitKeys: z.array(z.string()).default([]),
-  targetFormat: z.enum(['pdf', 'epub', 'docx', 'markdown', 'image']).default('pdf'),
+  targetFormat: z.enum(['pdf', 'epub', 'docx', 'markdown', 'image', 'video']).default('pdf'),
+  documentMode: z.enum(['ebook', 'reference', 'designed_reference']).optional(),
+  pageSize: z.enum(['trade_6x9', 'letter', 'a4']).optional(),
+  imagePolicy: z.enum(['none', 'inline_entity_images', 'section_hero_images', 'generated_spot_art']).optional(),
+  imageQuality: outputImageGenerationQualitySchema.optional(),
+  imageOutputFormat: outputImageGenerationOutputFormatSchema.optional(),
   preset: outputWorkflowPresetSchema.optional(),
   pageCount: z.number().int().min(1).max(12).default(8),
+  videoBlockCount: z.number().int().min(1).max(6).optional(),
+  durationPerBlockSeconds: z.number().int().min(4).max(15).optional(),
+  aspectRatio: z.enum(['16:9', '9:16', '1:1', '4:3', '3:4', '21:9']).optional(),
+  videoResolution: z.enum(['480p', '720p', '1080p']).optional(),
+  generateAudio: z.boolean().optional(),
+  cinematicPresetFamily: z.enum(['story_movie_tv', 'ugc_creator', 'ugc_direct_response_ad', 'ugc_faceless_format']).optional(),
   snapshot: z.object({
     project: z.object({
       id: z.string(),
@@ -358,8 +373,16 @@ export const outputRequestStartRequestSchema = z.object({
   sourceSurface: z.string().trim().min(1).max(64).default('outputs'),
   selectedEntityKeys: z.array(z.string()).default([]),
   selectedSequenceUnitKeys: z.array(z.string()).default([]),
-  targetFormat: z.enum(['pdf', 'epub', 'docx', 'markdown', 'image']).default('pdf'),
+  targetFormat: z.enum(['pdf', 'epub', 'docx', 'markdown', 'image', 'video']).default('pdf'),
+  imageQuality: outputImageGenerationQualitySchema.optional(),
+  imageOutputFormat: outputImageGenerationOutputFormatSchema.optional(),
   pageCount: z.number().int().min(1).max(12).optional(),
+  videoBlockCount: z.number().int().min(1).max(6).optional(),
+  durationPerBlockSeconds: z.number().int().min(4).max(15).optional(),
+  aspectRatio: z.enum(['16:9', '9:16', '1:1', '4:3', '3:4', '21:9']).optional(),
+  videoResolution: z.enum(['480p', '720p', '1080p']).optional(),
+  generateAudio: z.boolean().optional(),
+  cinematicPresetFamily: z.enum(['story_movie_tv', 'ugc_creator', 'ugc_direct_response_ad', 'ugc_faceless_format']).optional(),
   snapshot: outputWorkflowPlanRequestSchema.shape.snapshot,
   runInput: looseRecordSchema.default({}),
 })
@@ -368,11 +391,11 @@ export const outputPromptPlannerResultSchema = z.object({
   intent: outputRequestIntentSchema,
   outputKind: outputRequestKindSchema,
   confidence: z.number().min(0).max(1),
-  targetFormat: z.enum(['pdf', 'epub', 'docx', 'markdown', 'image']).default('pdf'),
+  targetFormat: z.enum(['pdf', 'epub', 'docx', 'markdown', 'image', 'video']).default('pdf'),
   worldScope: z.enum(['full_world', 'selected_entities', 'selected_sequence_units', 'prompt_bound_scope']).default('prompt_bound_scope'),
   selectedEntityKeys: z.array(z.string()).default([]),
   selectedSequenceUnitKeys: z.array(z.string()).default([]),
-  documentMode: z.enum(['narrative', 'reference', 'visual', 'comic']).default('narrative'),
+  documentMode: z.enum(['narrative', 'reference', 'designed_reference', 'visual', 'comic', 'cinematic']).default('narrative'),
   sections: z.array(z.object({
     key: z.string(),
     title: z.string(),
@@ -409,6 +432,7 @@ export const outputWorkflowPlanResponseSchema = z.object({
       createdAt: true,
       updatedAt: true,
     })).default([]),
+    usageEstimate: aiUsageSummarySchema.optional(),
     diagnostics: z.array(z.string()).default([]),
   }),
 })
@@ -445,6 +469,27 @@ export const outputRequestDeleteResponseSchema = z.object({
   workflowId: z.string().nullable().default(null),
   latestRunId: z.string().nullable().default(null),
   deleted: z.boolean().default(true),
+  deletedCounts: z.object({
+    outputRequests: z.number().int().nonnegative().default(0),
+    outputWorkflows: z.number().int().nonnegative().default(0),
+    outputWorkflowRuns: z.number().int().nonnegative().default(0),
+    outputWorkflowRunSteps: z.number().int().nonnegative().default(0),
+    outputWorkflowNodes: z.number().int().nonnegative().default(0),
+    outputWorkflowEdges: z.number().int().nonnegative().default(0),
+    outputArtifacts: z.number().int().nonnegative().default(0),
+    projectAssets: z.number().int().nonnegative().default(0),
+    storageObjects: z.number().int().nonnegative().default(0),
+  }).default({
+    outputRequests: 0,
+    outputWorkflows: 0,
+    outputWorkflowRuns: 0,
+    outputWorkflowRunSteps: 0,
+    outputWorkflowNodes: 0,
+    outputWorkflowEdges: 0,
+    outputArtifacts: 0,
+    projectAssets: 0,
+    storageObjects: 0,
+  }),
 })
 
 export const outputWorkflowRunStartRequestSchema = z.object({
@@ -452,7 +497,7 @@ export const outputWorkflowRunStartRequestSchema = z.object({
   draftId: z.string().min(1),
   workflowId: z.string().min(1),
   prompt: z.string().default(''),
-  targetFormat: z.enum(['pdf', 'epub', 'docx', 'markdown', 'image']).default('pdf'),
+  targetFormat: z.enum(['pdf', 'epub', 'docx', 'markdown', 'image', 'video']).default('pdf'),
   input: looseRecordSchema.default({}),
   metadata: z.object({
     runScope: outputWorkflowRunScopeSchema.optional(),
@@ -1101,10 +1146,63 @@ function edgeBase(sourceNodeKey: string, sourcePort: string, targetNodeKey: stri
 const EBOOK_CHAPTER_FANOUT_LIMIT = 24
 const COMIC_PAGE_FANOUT_LIMIT = 12
 const DEFAULT_COMIC_PAGE_COUNT = 8
+const CINEMATIC_BLOCK_FANOUT_LIMIT = 6
+const DEFAULT_CINEMATIC_BLOCK_COUNT = 3
+const DEFAULT_CINEMATIC_BLOCK_DURATION_SECONDS = 8
 
 const IMAGE_OUTPUT_ENTITY_LIMIT = 12
 const STORY_BIBLE_ENTITY_LIMIT = 80
 const STORY_BIBLE_SEQUENCE_LIMIT = 36
+
+type CinematicAspectRatio = NonNullable<z.infer<typeof outputWorkflowPlanRequestSchema>['aspectRatio']>
+type CinematicResolution = NonNullable<z.infer<typeof outputWorkflowPlanRequestSchema>['videoResolution']>
+type CinematicPresetFamily = NonNullable<z.infer<typeof outputWorkflowPlanRequestSchema>['cinematicPresetFamily']>
+
+type OutputImageGenerationQuality = z.infer<typeof outputImageGenerationQualitySchema>
+type OutputImageGenerationOutputFormat = z.infer<typeof outputImageGenerationOutputFormatSchema>
+
+function promptLooksLikeCharacterArt(prompt: string) {
+  return promptIncludesAny(prompt.toLowerCase(), [
+    'character',
+    'portrait',
+    'person',
+    'people',
+    'actor',
+    'cast',
+    'face',
+    'headshot',
+  ])
+}
+
+export function resolveOutputImageGenerationQuality(input: {
+  requestedQuality?: OutputImageGenerationQuality | null
+  outputKind?: z.infer<typeof outputRequestKindSchema> | null
+  role?: string | null
+  purpose?: string | null
+  prompt?: string
+  selectedEntityTypes?: string[]
+}): OutputImageGenerationQuality {
+  if (input.requestedQuality) return input.requestedQuality
+  const defaults = aiGenerationSettings.outputWorkflow.imageQualityDefaults
+  const role = (input.role ?? '').toLowerCase()
+  const purpose = (input.purpose ?? '').toLowerCase()
+  if (role.includes('comic') || purpose.includes('comic')) return defaults.comic
+  if (role === 'ebook_cover' || purpose === 'ebook_cover_image') return defaults.ebookCover
+  if (input.outputKind === 'poster_image' || role === 'poster_image' || purpose === 'poster_image') return defaults.poster
+  if (input.outputKind === 'concept_art_image' || role === 'concept_art_image' || purpose === 'concept_art_image') {
+    const characterEntity = (input.selectedEntityTypes ?? []).some((type) => type === 'actor')
+    return characterEntity || promptLooksLikeCharacterArt(input.prompt ?? '')
+      ? defaults.characterConceptArt
+      : defaults.conceptArt
+  }
+  return defaults.default
+}
+
+export function resolveOutputImageGenerationOutputFormat(input: {
+  requestedFormat?: OutputImageGenerationOutputFormat | null
+} = {}): OutputImageGenerationOutputFormat {
+  return input.requestedFormat ?? aiGenerationSettings.outputWorkflow.imageOutputFormatDefault
+}
 
 const STORY_BIBLE_SECTIONS = [
   { key: 'core_premise', title: 'Core Premise', description: 'Project premise, promise, genre, themes, and core conflict.' },
@@ -1124,6 +1222,42 @@ type StoryBibleSection = (typeof STORY_BIBLE_SECTIONS)[number]
 
 function promptIncludesAny(prompt: string, terms: string[]) {
   return terms.some((term) => prompt.includes(term))
+}
+
+function promptLooksCinematic(prompt: string) {
+  return promptIncludesAny(prompt, [
+    'cinematic sequence',
+    'cinematic',
+    'trailer',
+    'video',
+    'shot-by-shot',
+    'shot by shot',
+    'storyboard',
+    'reference-to-video',
+    'reference to video',
+    'ugc video',
+    'brand video',
+    'ad creative',
+    'shortform',
+    'short-form',
+    'scene',
+  ])
+}
+
+function promptLooksLikeUgcVideo(prompt: string) {
+  return promptIncludesAny(prompt, [
+    'ugc',
+    'creator video',
+    'brand video',
+    'ad creative',
+    'direct response',
+    'hook',
+    'cta',
+    'tiktok',
+    'reel',
+    'shortform',
+    'short-form',
+  ])
 }
 
 export function classifyOutputPrompt(prompt: string): {
@@ -1152,6 +1286,14 @@ export function classifyOutputPrompt(prompt: string): {
     if (promptIncludesAny(lowerPrompt, ['comic', 'manga', 'graphic novel', 'issue'])) {
       return { intent: 'output_generation', outputKind: 'comic_issue_from_sequence', confidence: 0.86, notes: 'Prompt asks for a comic-style output.' }
     }
+    if (promptLooksCinematic(lowerPrompt)) {
+      const outputKind = promptLooksLikeUgcVideo(lowerPrompt)
+        ? 'ugc_episode'
+        : lowerPrompt.includes('trailer') || lowerPrompt.includes('teaser')
+          ? 'cinematic_trailer'
+          : 'cinematic_episode'
+      return { intent: 'output_generation', outputKind, confidence: 0.84, notes: 'Prompt asks for a cinematic/video output.' }
+    }
     if (promptIncludesAny(lowerPrompt, ['write chapter', 'first chapter', 'chapter 1', 'chapter one', 'chapter prose', 'novel chapter'])) {
       return { intent: 'output_generation', outputKind: 'narrative_chapter_or_ebook', confidence: 0.88, notes: 'Prompt asks for narrative chapter prose.' }
     }
@@ -1166,9 +1308,6 @@ export function classifyOutputPrompt(prompt: string): {
     }
     if (promptIncludesAny(lowerPrompt, ['concept art', 'image', 'illustration', 'portrait', 'character art', 'environment art'])) {
       return { intent: 'output_generation', outputKind: 'concept_art_image', confidence: 0.78, notes: 'Prompt asks for a generated image.' }
-    }
-    if (promptIncludesAny(lowerPrompt, ['cinematic', 'trailer', 'video', 'shot', 'episode'])) {
-      return { intent: 'output_generation', outputKind: lowerPrompt.includes('trailer') ? 'cinematic_trailer' : 'cinematic_episode', confidence: 0.7, notes: 'Prompt asks for a video/cinematic output; V1 will route to approved output templates.' }
     }
   }
   if (promptIncludesAny(lowerPrompt, ['add to world', 'change canon', 'create character', 'add character', 'update entity', 'expand world'])) {
@@ -1215,7 +1354,7 @@ export function planOutputPrompt(input: {
   snapshot: z.infer<typeof outputWorkflowPlanRequestSchema>['snapshot']
   selectedEntityKeys?: string[]
   selectedSequenceUnitKeys?: string[]
-  targetFormat?: 'pdf' | 'epub' | 'docx' | 'markdown' | 'image'
+  targetFormat?: 'pdf' | 'epub' | 'docx' | 'markdown' | 'image' | 'video'
 }) {
   const classification = classifyOutputPrompt(input.prompt)
   const boundScope = bindOutputPromptWorldScope({
@@ -1231,7 +1370,12 @@ export function planOutputPrompt(input: {
     'character_dossier_pack',
   ]
   const imageKind = classification.outputKind === 'concept_art_image' || classification.outputKind === 'poster_image'
+  const cinematicKind = classification.outputKind === 'cinematic_episode'
+    || classification.outputKind === 'cinematic_trailer'
+    || classification.outputKind === 'ugc_episode'
   const documentReference = referenceKinds.includes(classification.outputKind)
+  const textOnlyReference = promptIncludesAny(input.prompt.toLowerCase(), ['text only', 'no images', 'without images', 'plain reference', 'simple reference'])
+  const designedReference = documentReference && !textOnlyReference
   const selectedEntityKeys = imageKind
     ? boundScope.selectedEntityKeys
     : documentReference
@@ -1245,13 +1389,13 @@ export function planOutputPrompt(input: {
     intent: classification.intent,
     outputKind: classification.outputKind,
     confidence: classification.confidence,
-    targetFormat: imageKind ? 'image' : input.targetFormat ?? 'pdf',
+    targetFormat: imageKind ? 'image' : cinematicKind ? 'video' : input.targetFormat ?? 'pdf',
     worldScope: documentReference ? 'full_world' : selectedEntityKeys.length || selectedSequenceUnitKeys.length ? 'prompt_bound_scope' : 'full_world',
     selectedEntityKeys,
     selectedSequenceUnitKeys,
-    documentMode: documentReference ? 'reference' : imageKind ? 'visual' : classification.outputKind === 'comic_issue_from_sequence' ? 'comic' : 'narrative',
+    documentMode: designedReference ? 'designed_reference' : documentReference ? 'reference' : imageKind ? 'visual' : cinematicKind ? 'cinematic' : classification.outputKind === 'comic_issue_from_sequence' ? 'comic' : 'narrative',
     sections,
-    visualReferencePolicy: imageKind ? 'use_prompt_bound_entity_refs' : 'none',
+    visualReferencePolicy: imageKind || cinematicKind ? 'use_prompt_bound_entity_refs' : 'none',
     requiresConfirmation: classification.intent === 'ambiguous' || classification.confidence < 0.55,
     plannerNotes: classification.notes,
   })
@@ -1588,8 +1732,13 @@ export function buildEbookFromWorldPlan(request: z.infer<typeof outputWorkflowPl
         purpose: 'ebook_cover_image',
         role: 'ebook_cover',
         model: 'openai/gpt-image-2',
-        quality: 'high',
-        outputFormat: 'png',
+        quality: resolveOutputImageGenerationQuality({
+          requestedQuality: request.imageQuality,
+          role: 'ebook_cover',
+          purpose: 'ebook_cover_image',
+          prompt,
+        }),
+        outputFormat: resolveOutputImageGenerationOutputFormat({ requestedFormat: request.imageOutputFormat }),
         imageSize: { width: 1792, height: 2688 },
         skillKeys: ['image_prompt_visual_only', 'entity_reference_fidelity', 'environment_staging', 'provider_prompt_hygiene'],
         autoSkillTags: ['image_prompt', 'visual_only', 'entity_reference', 'environment', 'provider_hygiene'],
@@ -1715,6 +1864,9 @@ export function buildStoryBibleFromWorldPlan(
     ? request.selectedSequenceUnitKeys.slice(0, STORY_BIBLE_SEQUENCE_LIMIT)
     : sortedSequenceUnits(request.snapshot.worldEntities).map((entity) => entity.key).slice(0, STORY_BIBLE_SEQUENCE_LIMIT)
   const prompt = request.prompt.trim() || 'Create a complete story bible from this world graph, summarizing canon as reference material.'
+  const documentMode = request.documentMode ?? 'designed_reference'
+  const pageSize = request.pageSize ?? (documentMode === 'designed_reference' ? 'a4' : 'letter')
+  const imagePolicy = request.imagePolicy ?? (documentMode === 'designed_reference' ? 'inline_entity_images' : 'none')
   const kindLabel = outputKind === 'lore_guide'
     ? 'Lore Guide'
     : outputKind === 'character_dossier_pack'
@@ -1734,7 +1886,9 @@ export function buildStoryBibleFromWorldPlan(
     },
     config: {
       purpose: 'bible_section',
-      documentMode: 'reference',
+      documentMode,
+      pageSize,
+      imagePolicy,
       outputKind,
       sectionKey: section.key,
       sectionTitle: section.title,
@@ -1788,7 +1942,9 @@ export function buildStoryBibleFromWorldPlan(
       inputs: { prompt: 'Plan reference-document sections from the current world graph. Do not create fiction prose.' },
       config: {
         purpose: 'bible_section_plan',
-        documentMode: 'reference',
+        documentMode,
+        pageSize,
+        imagePolicy,
         outputKind,
         sections,
         skillKeys: ['story_bible_structure', 'canon_reference_voice', 'continuity_documentation', 'world_lore_clarity', 'provider_prompt_hygiene'],
@@ -1805,7 +1961,9 @@ export function buildStoryBibleFromWorldPlan(
       y: 160,
       config: {
         purpose: 'bible_assembly',
-        documentMode: 'reference',
+        documentMode,
+        pageSize,
+        imagePolicy,
         outputKind,
         sections,
         execution: { resourceClass: 'utility' },
@@ -1819,7 +1977,9 @@ export function buildStoryBibleFromWorldPlan(
       y: 160,
       config: {
         purpose: 'story_bible_document_render',
-        documentMode: 'reference',
+        documentMode,
+        pageSize,
+        imagePolicy,
         targetFormat: request.targetFormat,
         execution: { resourceClass: 'document' },
       },
@@ -1832,7 +1992,9 @@ export function buildStoryBibleFromWorldPlan(
       y: 160,
       config: {
         purpose: 'story_bible_artifact',
-        documentMode: 'reference',
+        documentMode,
+        pageSize,
+        imagePolicy,
         artifactKind: request.targetFormat === 'pdf' ? 'pdf' : 'manuscript',
         execution: { resourceClass: 'utility' },
       },
@@ -1920,8 +2082,13 @@ export function buildComicIssueFromSequencePlan(request: z.infer<typeof outputWo
       sequenceUnitName: sequenceTitle,
       model: 'openai/gpt-image-2',
       referenceModel: 'openai/gpt-image-2/edit',
-      quality: 'high',
-      outputFormat: 'png',
+      quality: resolveOutputImageGenerationQuality({
+        requestedQuality: request.imageQuality,
+        role: 'comic_page',
+        purpose: 'comic_page',
+        prompt,
+      }),
+      outputFormat: resolveOutputImageGenerationOutputFormat({ requestedFormat: request.imageOutputFormat }),
       imageSize: { width: 1600, height: 2480 },
       skillKeys: ['storyboard_panel_prompting', 'image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'provider_prompt_hygiene'],
       autoSkillTags: ['comic_page', 'image_prompt', 'visual_only', 'entity_reference', 'reference_continuity'],
@@ -2054,8 +2221,13 @@ export function buildComicIssueFromSequencePlan(request: z.infer<typeof outputWo
         role: 'comic_atlas',
         model: 'openai/gpt-image-2',
         referenceModel: 'openai/gpt-image-2/edit',
-        quality: 'high',
-        outputFormat: 'png',
+        quality: resolveOutputImageGenerationQuality({
+          requestedQuality: request.imageQuality,
+          role: 'comic_atlas',
+          purpose: 'comic_style_atlas',
+          prompt,
+        }),
+        outputFormat: resolveOutputImageGenerationOutputFormat({ requestedFormat: request.imageOutputFormat }),
         imageSize: { width: 2048, height: 2048 },
         skillKeys: ['image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'environment_staging', 'provider_prompt_hygiene'],
         guidanceMode: 'strict',
@@ -2142,6 +2314,355 @@ export function buildComicIssueFromSequencePlan(request: z.infer<typeof outputWo
   })
 }
 
+function clampInteger(value: number | undefined, min: number, max: number, fallback: number) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback
+  return Math.min(max, Math.max(min, Math.round(value)))
+}
+
+function inferCinematicPresetFamily(prompt: string, outputKind?: z.infer<typeof outputRequestKindSchema> | null): CinematicPresetFamily {
+  const lowerPrompt = prompt.toLowerCase()
+  if (outputKind === 'ugc_episode') {
+    if (promptIncludesAny(lowerPrompt, ['direct response', 'cta', 'conversion', 'ad creative', 'advert'])) return 'ugc_direct_response_ad'
+    if (promptIncludesAny(lowerPrompt, ['faceless', 'screen recording', 'app demo', 'product demo'])) return 'ugc_faceless_format'
+    return 'ugc_creator'
+  }
+  if (promptLooksLikeUgcVideo(lowerPrompt)) {
+    if (promptIncludesAny(lowerPrompt, ['faceless', 'screen recording', 'app demo', 'product demo'])) return 'ugc_faceless_format'
+    if (promptIncludesAny(lowerPrompt, ['direct response', 'cta', 'conversion', 'ad creative', 'advert'])) return 'ugc_direct_response_ad'
+    return 'ugc_creator'
+  }
+  return 'story_movie_tv'
+}
+
+function inferCinematicPresetFromKind(outputKind: z.infer<typeof outputRequestKindSchema> | undefined, prompt: string): z.infer<typeof outputWorkflowPresetSchema> {
+  if (outputKind === 'ugc_episode' || inferCinematicPresetFamily(prompt, outputKind).startsWith('ugc')) return 'ugc_episode'
+  if (outputKind === 'cinematic_trailer' || prompt.toLowerCase().includes('trailer')) return 'cinematic_trailer'
+  return 'cinematic_episode_from_sequence'
+}
+
+function resolveSeedance2Model(resolution: CinematicResolution) {
+  return resolution === '1080p'
+    ? 'bytedance/seedance-2.0/reference-to-video'
+    : 'bytedance/seedance-2.0/fast/reference-to-video'
+}
+
+function chooseCinematicEntityKeys(input: {
+  selectedEntityKeys: string[]
+  selectedSequenceUnitKey: string
+  sequenceUnit: z.infer<typeof worldEntitySchema> | null
+  worldEntities: z.infer<typeof worldEntitySchema>[]
+  worldRelationships: z.infer<typeof worldRelationshipSchema>[]
+}) {
+  return chooseComicEntityKeys(input).slice(0, 16)
+}
+
+export function buildCinematicSequencePlan(
+  request: z.infer<typeof outputWorkflowPlanRequestSchema>,
+  outputKind?: z.infer<typeof outputRequestKindSchema>,
+) {
+  const worldWiki = request.snapshot.worldWiki
+  const sequenceUnits = sortedSequenceUnits(request.snapshot.worldEntities)
+  const requestedSequenceKeys = request.selectedSequenceUnitKeys.filter(Boolean)
+  const selectedSequenceUnitKey = requestedSequenceKeys[0] ?? sequenceUnits[0]?.key ?? 'cinematic-sequence'
+  const selectedSequenceUnit = sequenceUnits.find((entity) => entity.key === selectedSequenceUnitKey) ?? sequenceUnits[0] ?? null
+  const selectedEntityKeys = chooseCinematicEntityKeys({
+    selectedEntityKeys: request.selectedEntityKeys,
+    selectedSequenceUnitKey,
+    sequenceUnit: selectedSequenceUnit,
+    worldEntities: request.snapshot.worldEntities,
+    worldRelationships: request.snapshot.worldRelationships,
+  })
+  const prompt = request.prompt.trim() || 'Create a cinematic sequence from this world context with shot-by-shot scripts, storyboards, and final video clips.'
+  const presetFamily = request.cinematicPresetFamily ?? inferCinematicPresetFamily(prompt, outputKind)
+  const preset = inferCinematicPresetFromKind(outputKind, prompt)
+  const videoBlockCount = clampInteger(request.videoBlockCount, 1, CINEMATIC_BLOCK_FANOUT_LIMIT, DEFAULT_CINEMATIC_BLOCK_COUNT)
+  const durationPerBlockSeconds = clampInteger(
+    request.durationPerBlockSeconds,
+    4,
+    15,
+    DEFAULT_CINEMATIC_BLOCK_DURATION_SECONDS,
+  )
+  const aspectRatio: CinematicAspectRatio = request.aspectRatio ?? (presetFamily.startsWith('ugc') ? '9:16' : '16:9')
+  const resolution: CinematicResolution = request.videoResolution ?? '720p'
+  const generateAudio = request.generateAudio ?? true
+  const videoModel = resolveSeedance2Model(resolution)
+  const title = worldWiki.title || request.snapshot.project.name
+  const sequenceTitle = selectedSequenceUnit?.name || 'Selected Sequence'
+  const name = preset === 'cinematic_trailer'
+    ? `${title} Cinematic Trailer`
+    : preset === 'ugc_episode'
+      ? `${title} UGC Video`
+      : `${title} - ${sequenceTitle} Cinematic`
+  const blockNumbers = Array.from({ length: videoBlockCount }, (_, index) => index + 1)
+  const blockScriptNodes = blockNumbers.map((blockNumber, index) => nodeBase({
+    key: `block_${String(blockNumber).padStart(3, '0')}_script`,
+    nodeType: 'text_llm',
+    label: `Block ${blockNumber} Script`,
+    x: 920,
+    y: 40 + (index % 6) * 180,
+    inputs: { prompt: `Write timestamped cinematic shots for video block ${blockNumber}.` },
+    config: {
+      purpose: 'cinematic_block_script',
+      blockNumber,
+      blockCount: videoBlockCount,
+      durationSeconds: durationPerBlockSeconds,
+      maxDurationSeconds: 15,
+      aspectRatio,
+      resolution,
+      presetFamily,
+      sequenceUnitKey: selectedSequenceUnitKey,
+      sequenceUnitName: sequenceTitle,
+      skillKeys: ['cinematic_sequence_structure', 'cinematic_shot_direction', 'shortform_hook_retention', 'brand_ugc_proof_structure', 'provider_prompt_hygiene'],
+      autoSkillTags: ['cinematic', 'shot_script', 'ugc', 'provider_hygiene'],
+      guidanceMode: 'strict',
+      execution: { resourceClass: 'llm', groupKey: 'cinematic_block_scripts', maxConcurrency: Math.min(videoBlockCount, 6) },
+    },
+  }))
+  const storyboardPromptNodes = blockNumbers.map((blockNumber, index) => {
+    const gridDimension = durationPerBlockSeconds > 9 ? 4 : 3
+    return nodeBase({
+      key: `block_${String(blockNumber).padStart(3, '0')}_storyboard_prompt`,
+      nodeType: 'utility_transform',
+      label: `Block ${blockNumber} Storyboard Prompt`,
+      x: 1200,
+      y: 40 + (index % 6) * 180,
+      config: {
+        purpose: 'cinematic_storyboard_prompt',
+        blockNumber,
+        blockCount: videoBlockCount,
+        gridDimension,
+        panelCount: gridDimension * gridDimension,
+        aspectRatio,
+        presetFamily,
+        execution: { resourceClass: 'utility', groupKey: 'cinematic_storyboard_prompts', maxConcurrency: 6 },
+      },
+    })
+  })
+  const storyboardImageNodes = blockNumbers.map((blockNumber, index) => nodeBase({
+    key: `block_${String(blockNumber).padStart(3, '0')}_storyboard`,
+    nodeType: 'image_generation',
+    label: `Block ${blockNumber} Storyboard`,
+    x: 1480,
+    y: 40 + (index % 6) * 180,
+    config: {
+      purpose: 'cinematic_storyboard',
+      role: 'cinematic_storyboard',
+      blockNumber,
+      blockCount: videoBlockCount,
+      model: 'openai/gpt-image-2',
+      referenceModel: 'openai/gpt-image-2/edit',
+      quality: 'low',
+      outputFormat: 'webp',
+      imageSize: { width: 2048, height: 2048 },
+      skillKeys: ['storyboard_grid_direction', 'image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'provider_prompt_hygiene'],
+      autoSkillTags: ['storyboard', 'image_prompt', 'visual_only', 'entity_reference', 'reference_continuity'],
+      guidanceMode: 'strict',
+      execution: { resourceClass: 'image', groupKey: 'cinematic_storyboards', maxConcurrency: 3 },
+    },
+  }))
+  const videoPromptNodes = blockNumbers.map((blockNumber, index) => nodeBase({
+    key: `block_${String(blockNumber).padStart(3, '0')}_video_prompt`,
+    nodeType: 'utility_transform',
+    label: `Block ${blockNumber} Video Prompt`,
+    x: 1760,
+    y: 40 + (index % 6) * 180,
+    config: {
+      purpose: 'cinematic_video_prompt',
+      blockNumber,
+      blockCount: videoBlockCount,
+      durationSeconds: durationPerBlockSeconds,
+      aspectRatio,
+      resolution,
+      generateAudio,
+      presetFamily,
+      execution: { resourceClass: 'utility', groupKey: 'cinematic_video_prompts', maxConcurrency: 6 },
+    },
+  }))
+  const videoNodes = blockNumbers.map((blockNumber, index) => nodeBase({
+    key: `block_${String(blockNumber).padStart(3, '0')}_video`,
+    nodeType: 'video_generation',
+    label: `Block ${blockNumber} Video`,
+    x: 2040,
+    y: 40 + (index % 6) * 180,
+    config: {
+      purpose: 'cinematic_block_video',
+      role: 'cinematic_block',
+      blockNumber,
+      blockCount: videoBlockCount,
+      model: videoModel,
+      durationSeconds: durationPerBlockSeconds,
+      aspectRatio,
+      resolution,
+      generateAudio,
+      syncMode: false,
+      skillKeys: ['seedance_reference_video_prompting', 'cinematic_shot_direction', 'shortform_hook_retention', 'brand_ugc_proof_structure', 'provider_prompt_hygiene'],
+      autoSkillTags: ['video_prompt', 'seedance', 'cinematic', 'ugc', 'provider_hygiene'],
+      guidanceMode: 'strict',
+      execution: { resourceClass: 'video', groupKey: 'cinematic_videos', maxConcurrency: Math.min(videoBlockCount, 3) },
+    },
+  }))
+  const nodes = [
+    nodeBase({
+      key: 'world_context',
+      nodeType: 'world_context_query',
+      label: 'World Context',
+      x: 80,
+      y: 120,
+      config: {
+        sourceEntityKeys: selectedEntityKeys,
+        sourceSequenceUnitKeys: [selectedSequenceUnitKey],
+        includeWiki: true,
+        includeVisualReferences: true,
+        execution: { resourceClass: 'utility' },
+      },
+    }),
+    nodeBase({
+      key: 'skill_context',
+      nodeType: 'skill_context_query',
+      label: 'Cinematic Skills',
+      x: 80,
+      y: 300,
+      config: {
+        skillKeys: [
+          'cinematic_sequence_structure',
+          'cinematic_shot_direction',
+          'storyboard_grid_direction',
+          'seedance_reference_video_prompting',
+          'shortform_hook_retention',
+          'brand_ugc_proof_structure',
+          'character_reference_continuity',
+          'entity_reference_fidelity',
+          'environment_staging',
+          'provider_prompt_hygiene',
+        ],
+        autoSkillTags: ['cinematic', 'storyboard', 'seedance', 'ugc', 'video_prompt', 'entity_reference', 'provider_hygiene'],
+        guidanceMode: 'strict',
+        execution: { resourceClass: 'utility' },
+      },
+    }),
+    nodeBase({
+      key: 'cinematic_entities',
+      nodeType: 'text_llm',
+      label: 'Cinematic Entities',
+      x: 360,
+      y: 120,
+      inputs: { prompt: 'Select cinematic entity references and continuity anchors for this sequence.' },
+      config: {
+        purpose: 'cinematic_entity_selector',
+        sequenceUnitKey: selectedSequenceUnitKey,
+        sequenceUnitName: sequenceTitle,
+        skillKeys: ['entity_reference_fidelity', 'character_reference_continuity', 'provider_prompt_hygiene'],
+        guidanceMode: 'append',
+        execution: { resourceClass: 'llm' },
+      },
+    }),
+    nodeBase({
+      key: 'cinematic_sequence_plan',
+      nodeType: 'text_llm',
+      label: 'Sequence Plan',
+      x: 640,
+      y: 120,
+      inputs: { prompt: `Plan ${videoBlockCount} video block(s), each ${durationPerBlockSeconds}s or less, with shot timing and escalation.` },
+      config: {
+        purpose: 'cinematic_sequence_plan',
+        blockCount: videoBlockCount,
+        durationPerBlockSeconds,
+        maxDurationSeconds: 15,
+        aspectRatio,
+        resolution,
+        generateAudio,
+        presetFamily,
+        sequenceUnitKey: selectedSequenceUnitKey,
+        sequenceUnitName: sequenceTitle,
+        skillKeys: ['cinematic_sequence_structure', 'shortform_hook_retention', 'brand_ugc_proof_structure', 'provider_prompt_hygiene'],
+        autoSkillTags: ['cinematic', 'sequence_plan', 'ugc'],
+        guidanceMode: 'strict',
+        execution: { resourceClass: 'llm' },
+      },
+    }),
+    ...blockScriptNodes,
+    ...storyboardPromptNodes,
+    ...storyboardImageNodes,
+    ...videoPromptNodes,
+    ...videoNodes,
+    nodeBase({
+      key: 'video_stitch',
+      nodeType: 'utility_transform',
+      label: 'Stitch Video',
+      x: 2320,
+      y: 120,
+      config: {
+        purpose: 'video_stitch',
+        role: 'cinematic_sequence_final',
+        blockCount: videoBlockCount,
+        aspectRatio,
+        resolution,
+        execution: { resourceClass: 'video', groupKey: 'video_stitch', maxConcurrency: 1 },
+      },
+    }),
+    nodeBase({
+      key: 'artifact',
+      nodeType: 'output_artifact',
+      label: 'Register Video',
+      x: 2600,
+      y: 120,
+      config: { purpose: 'cinematic_video_artifact', artifactKind: 'video', execution: { resourceClass: 'utility' } },
+    }),
+  ]
+  const edges = [
+    edgeBase('world_context', 'context', 'cinematic_entities', 'context'),
+    edgeBase('skill_context', 'guidance', 'cinematic_entities', 'guidance'),
+    edgeBase('world_context', 'context', 'cinematic_sequence_plan', 'context'),
+    edgeBase('skill_context', 'guidance', 'cinematic_sequence_plan', 'guidance'),
+    edgeBase('cinematic_entities', 'asset_pack', 'cinematic_sequence_plan', 'asset_pack'),
+    ...blockScriptNodes.flatMap((node, index) => {
+      const storyboardPromptNode = storyboardPromptNodes[index]
+      const storyboardImageNode = storyboardImageNodes[index]
+      const videoPromptNode = videoPromptNodes[index]
+      const videoNode = videoNodes[index]
+      return [
+        edgeBase('cinematic_sequence_plan', 'sequencePlan', node.key, 'sequencePlan'),
+        edgeBase('world_context', 'context', node.key, 'context'),
+        edgeBase('skill_context', 'guidance', node.key, 'guidance'),
+        edgeBase('cinematic_entities', 'asset_pack', node.key, 'asset_pack'),
+        edgeBase(node.key, 'blockScript', storyboardPromptNode.key, 'script'),
+        edgeBase('cinematic_entities', 'asset_pack', storyboardPromptNode.key, 'asset_pack'),
+        edgeBase('skill_context', 'guidance', storyboardPromptNode.key, 'guidance'),
+        edgeBase(storyboardPromptNode.key, 'text', storyboardImageNode.key, 'prompt'),
+        edgeBase('cinematic_entities', 'asset_pack', storyboardImageNode.key, 'references'),
+        edgeBase('skill_context', 'guidance', storyboardImageNode.key, 'guidance'),
+        edgeBase(node.key, 'blockScript', videoPromptNode.key, 'script'),
+        edgeBase(storyboardImageNode.key, 'image', videoPromptNode.key, 'storyboard'),
+        edgeBase('cinematic_entities', 'asset_pack', videoPromptNode.key, 'asset_pack'),
+        edgeBase('skill_context', 'guidance', videoPromptNode.key, 'guidance'),
+        edgeBase(videoPromptNode.key, 'text', videoNode.key, 'prompt'),
+        edgeBase(storyboardImageNode.key, 'image', videoNode.key, 'references'),
+        edgeBase('cinematic_entities', 'asset_pack', videoNode.key, 'references'),
+        edgeBase('skill_context', 'guidance', videoNode.key, 'guidance'),
+        edgeBase(videoNode.key, 'video', 'video_stitch', 'videos', { blockNumber: videoNode.config.blockNumber }),
+      ]
+    }),
+    edgeBase('video_stitch', 'video', 'artifact', 'input'),
+  ]
+  const graphValidation = validateOutputWorkflowGraph({ nodes, edges, worldWiki })
+  return outputWorkflowPlanResponseSchema.shape.plan.parse({
+    preset,
+    name,
+    description: 'Generate a cinematic sequence with shot scripts, storyboard grids, Seedance 2 reference-to-video blocks, and a final stitched MP4.',
+    prompt,
+    targetFormat: 'video',
+    sourceEntityKeys: selectedEntityKeys,
+    sourceSequenceUnitKeys: [selectedSequenceUnitKey],
+    nodes,
+    edges,
+    diagnostics: [
+      ...graphValidation.diagnostics,
+      ...(requestedSequenceKeys.length !== 1 ? ['Cinematic V1 uses one sequence_unit as the story spine; the first available sequence unit was used when none was selected.'] : []),
+      ...(request.videoBlockCount && request.videoBlockCount > CINEMATIC_BLOCK_FANOUT_LIMIT ? [`Cinematic block fan-out is capped at ${CINEMATIC_BLOCK_FANOUT_LIMIT} blocks in V1.`] : []),
+    ],
+  })
+}
+
 export function buildImageOutputPlan(
   request: z.infer<typeof outputWorkflowPlanRequestSchema>,
   outputKind: 'concept_art_image' | 'poster_image' = 'concept_art_image',
@@ -2155,6 +2676,9 @@ export function buildImageOutputPlan(
   })
   const selectedEntityKeys = boundScope.selectedEntityKeys
   const selectedSequenceUnitKeys = boundScope.selectedSequenceUnitKeys.slice(0, 3)
+  const selectedEntityTypes = request.snapshot.worldEntities
+    .filter((entity) => selectedEntityKeys.includes(entity.key))
+    .map((entity) => entity.nodeType)
   const title = worldWiki.title || request.snapshot.project.name
   const poster = outputKind === 'poster_image'
   const prompt = request.prompt.trim() || (poster
@@ -2232,8 +2756,15 @@ export function buildImageOutputPlan(
         role: outputKind,
         model: 'openai/gpt-image-2',
         referenceModel: 'openai/gpt-image-2/edit',
-        quality: 'high',
-        outputFormat: 'png',
+        quality: resolveOutputImageGenerationQuality({
+          requestedQuality: request.imageQuality,
+          outputKind,
+          role: outputKind,
+          purpose: outputKind,
+          prompt,
+          selectedEntityTypes,
+        }),
+        outputFormat: resolveOutputImageGenerationOutputFormat({ requestedFormat: request.imageOutputFormat }),
         imageSize: poster ? { width: 1792, height: 2688 } : { width: 1536, height: 1536 },
         skillKeys: ['image_prompt_visual_only', 'entity_reference_fidelity', 'environment_staging', 'provider_prompt_hygiene'],
         guidanceMode: 'strict',
@@ -2271,10 +2802,17 @@ export function buildImageOutputPlan(
   })
 }
 
+function withOutputWorkflowUsageEstimate(plan: z.infer<typeof outputWorkflowPlanResponseSchema>['plan']) {
+  return outputWorkflowPlanResponseSchema.shape.plan.parse({
+    ...plan,
+    usageEstimate: estimateOutputWorkflowUsage(plan),
+  })
+}
+
 export function planOutputRequestWorkflow(request: z.input<typeof outputWorkflowPlanRequestSchema>, outputKind: z.infer<typeof outputRequestKindSchema>) {
   const parsedRequest = outputWorkflowPlanRequestSchema.parse(request)
   if (outputKind === 'concept_art_image' || outputKind === 'poster_image') {
-    return buildImageOutputPlan(parsedRequest, outputKind)
+    return withOutputWorkflowUsageEstimate(buildImageOutputPlan(parsedRequest, outputKind))
   }
   if (
     outputKind === 'story_bible_from_world'
@@ -2282,18 +2820,21 @@ export function planOutputRequestWorkflow(request: z.input<typeof outputWorkflow
     || outputKind === 'lore_guide'
     || outputKind === 'character_dossier_pack'
   ) {
-    return buildStoryBibleFromWorldPlan(parsedRequest, outputKind)
+    return withOutputWorkflowUsageEstimate(buildStoryBibleFromWorldPlan(parsedRequest, outputKind))
   }
   if (outputKind === 'comic_issue_from_sequence') {
-    return buildComicIssueFromSequencePlan(parsedRequest)
+    return withOutputWorkflowUsageEstimate(buildComicIssueFromSequencePlan(parsedRequest))
+  }
+  if (outputKind === 'cinematic_episode' || outputKind === 'cinematic_trailer' || outputKind === 'ugc_episode') {
+    return withOutputWorkflowUsageEstimate(buildCinematicSequencePlan(parsedRequest, outputKind))
   }
   if (outputKind === 'short_story' || outputKind === 'narrative_chapter_or_ebook') {
-    return buildEbookFromWorldPlan({
+    return withOutputWorkflowUsageEstimate(buildEbookFromWorldPlan({
       ...parsedRequest,
       prompt: outputKind === 'short_story'
         ? `${parsedRequest.prompt}\n\nOutput request: create a shorter story-style document rather than a full-length book. Keep the workflow document/PDF-oriented and preserve canon.`
         : parsedRequest.prompt,
-    })
+    }))
   }
   return planOutputWorkflow(parsedRequest)
 }
@@ -2302,7 +2843,25 @@ export function planOutputWorkflow(request: z.input<typeof outputWorkflowPlanReq
   const parsedRequest = outputWorkflowPlanRequestSchema.parse(request)
   const lowerPrompt = parsedRequest.prompt.toLowerCase()
   if (parsedRequest.preset === 'comic_issue_from_sequence' || lowerPrompt.includes('comic')) {
-    return buildComicIssueFromSequencePlan(parsedRequest)
+    return withOutputWorkflowUsageEstimate(buildComicIssueFromSequencePlan(parsedRequest))
+  }
+  if (
+    parsedRequest.preset === 'cinematic_episode_from_sequence'
+    || parsedRequest.preset === 'cinematic_trailer'
+    || parsedRequest.preset === 'ugc_episode'
+    || promptLooksCinematic(lowerPrompt)
+  ) {
+    const classification = classifyOutputPrompt(parsedRequest.prompt)
+    const outputKind = classification.outputKind === 'cinematic_episode'
+      || classification.outputKind === 'cinematic_trailer'
+      || classification.outputKind === 'ugc_episode'
+      ? classification.outputKind
+      : parsedRequest.preset === 'ugc_episode'
+        ? 'ugc_episode'
+        : parsedRequest.preset === 'cinematic_trailer'
+          ? 'cinematic_trailer'
+          : 'cinematic_episode'
+    return withOutputWorkflowUsageEstimate(buildCinematicSequencePlan(parsedRequest, outputKind))
   }
   if (parsedRequest.preset === 'story_bible_from_world' || promptIncludesAny(lowerPrompt, ['story bible', 'world bible', 'series bible', 'reference document', 'lore guide', 'character dossier'])) {
     const classification = classifyOutputPrompt(parsedRequest.prompt)
@@ -2311,7 +2870,7 @@ export function planOutputWorkflow(request: z.input<typeof outputWorkflowPlanReq
       || classification.outputKind === 'character_dossier_pack'
       ? classification.outputKind
       : 'story_bible_from_world'
-    return buildStoryBibleFromWorldPlan(parsedRequest, outputKind)
+    return withOutputWorkflowUsageEstimate(buildStoryBibleFromWorldPlan(parsedRequest, outputKind))
   }
   if (
     parsedRequest.preset === 'composite_reference'
@@ -2320,20 +2879,9 @@ export function planOutputWorkflow(request: z.input<typeof outputWorkflowPlanReq
     || lowerPrompt.includes('character art')
     || lowerPrompt.includes('environment art')
   ) {
-    return buildImageOutputPlan(parsedRequest, lowerPrompt.includes('poster') ? 'poster_image' : 'concept_art_image')
+    return withOutputWorkflowUsageEstimate(buildImageOutputPlan(parsedRequest, lowerPrompt.includes('poster') ? 'poster_image' : 'concept_art_image'))
   }
-  if (
-    lowerPrompt.includes('cinematic')
-    || lowerPrompt.includes('trailer')
-    || lowerPrompt.includes('video')
-    || lowerPrompt.includes('ugc')
-  ) {
-    return buildEbookFromWorldPlan({
-      ...parsedRequest,
-      prompt: `${parsedRequest.prompt}\n\nV1 note: this workspace currently supports the ebook preset first. Preserve the user's intent as future workflow notes, but generate the written/PDF workflow now.`,
-    })
-  }
-  return buildEbookFromWorldPlan(parsedRequest)
+  return withOutputWorkflowUsageEstimate(buildEbookFromWorldPlan(parsedRequest))
 }
 
 export type OutputWorkflow = z.infer<typeof outputWorkflowSchema>

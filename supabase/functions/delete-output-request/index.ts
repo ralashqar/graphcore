@@ -1,9 +1,10 @@
-import { requireUserClient } from '../_shared/auth.ts'
+import { createAdminClient, requireUserClient } from '../_shared/auth.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
 import {
   outputRequestDeleteResponseSchema,
   outputRequestStatusRequestSchema,
 } from '../../../src/domain/outputWorkflow.ts'
+import { cleanupOutputRequests } from '../_shared/output-cleanup.ts'
 import {
   mapOutputRequestRow,
   outputRequestSelect,
@@ -39,11 +40,14 @@ Deno.serve(async (request) => {
       }
     }
 
-    const deleteResponse = await client
-      .from('output_requests')
-      .delete()
-      .eq('id', outputRequest.id)
-    if (deleteResponse.error) throw new Error(deleteResponse.error.message)
+    const admin = createAdminClient('delete-output-request')
+    const cleanup = await cleanupOutputRequests({
+      admin,
+      projectId: outputRequest.projectId,
+      draftId: outputRequest.draftId,
+      requestIds: [outputRequest.id],
+      allowActiveRuns: false,
+    })
 
     return json(outputRequestDeleteResponseSchema.parse({
       ok: true,
@@ -53,8 +57,12 @@ Deno.serve(async (request) => {
       workflowId: outputRequest.workflowId,
       latestRunId: outputRequest.latestRunId,
       deleted: true,
+      deletedCounts: cleanup.counts,
     }))
   } catch (error) {
+    if (error instanceof Error && error.message === 'Cancel the active output run before deleting this request.') {
+      return errorResponse(new HttpError(409, error.message), 'Failed to delete output request.')
+    }
     return errorResponse(error, 'Failed to delete output request.')
   }
 })

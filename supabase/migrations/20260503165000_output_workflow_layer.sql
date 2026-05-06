@@ -41,6 +41,7 @@ do $$
 begin
   create type public.output_artifact_kind as enum (
     'manuscript',
+    'html',
     'pdf',
     'epub',
     'docx',

@@ -274,6 +274,9 @@ Deno.serve(async (request) => {
     })
     const planner = scopeResolution.planner
     const comicOutput = planner.outputKind === 'comic_issue_from_sequence'
+    const cinematicOutput = planner.outputKind === 'cinematic_episode'
+      || planner.outputKind === 'cinematic_trailer'
+      || planner.outputKind === 'ugc_episode'
     const effectivePageCount = comicOutput ? payload.pageCount ?? 8 : null
     const requestInsertResponse = await client
       .from('output_requests')
@@ -298,6 +301,16 @@ Deno.serve(async (request) => {
           scopeResolver: scopeResolution.scopeResolver,
           confidence: planner.confidence,
           plannedSections: planner.sections,
+          cinematicOptions: cinematicOutput
+            ? {
+              videoBlockCount: payload.videoBlockCount ?? null,
+              durationPerBlockSeconds: payload.durationPerBlockSeconds ?? null,
+              aspectRatio: payload.aspectRatio ?? null,
+              videoResolution: payload.videoResolution ?? null,
+              generateAudio: payload.generateAudio ?? null,
+              cinematicPresetFamily: payload.cinematicPresetFamily ?? null,
+            }
+            : null,
         },
       })
       .select(outputRequestSelect)
@@ -326,6 +339,21 @@ Deno.serve(async (request) => {
       selectedSequenceUnitKeys: planner.selectedSequenceUnitKeys,
       pageCount: effectivePageCount ?? undefined,
       targetFormat: planner.targetFormat,
+      documentMode: planner.documentMode === 'designed_reference'
+        ? 'designed_reference'
+        : planner.documentMode === 'reference'
+          ? 'reference'
+          : undefined,
+      pageSize: planner.documentMode === 'designed_reference' ? 'a4' : undefined,
+      imagePolicy: planner.documentMode === 'designed_reference' ? 'inline_entity_images' : undefined,
+      imageQuality: payload.imageQuality,
+      imageOutputFormat: payload.imageOutputFormat,
+      videoBlockCount: payload.videoBlockCount,
+      durationPerBlockSeconds: payload.durationPerBlockSeconds,
+      aspectRatio: payload.aspectRatio,
+      videoResolution: payload.videoResolution,
+      generateAudio: payload.generateAudio,
+      cinematicPresetFamily: payload.cinematicPresetFamily,
       snapshot: payload.snapshot,
     }, planner.outputKind)
     const validation = validateOutputWorkflowGraph({ nodes: plan.nodes, edges: plan.edges })
@@ -354,6 +382,21 @@ Deno.serve(async (request) => {
           planner,
           scopeResolver: scopeResolution.scopeResolver,
           plannedSections: planner.sections,
+          documentMode: planner.documentMode,
+          pageSize: planner.documentMode === 'designed_reference' ? 'a4' : null,
+          imageQuality: payload.imageQuality ?? null,
+          imageOutputFormat: payload.imageOutputFormat ?? null,
+          cinematicOptions: cinematicOutput
+            ? {
+              videoBlockCount: payload.videoBlockCount ?? null,
+              durationPerBlockSeconds: payload.durationPerBlockSeconds ?? null,
+              aspectRatio: payload.aspectRatio ?? null,
+              videoResolution: payload.videoResolution ?? null,
+              generateAudio: payload.generateAudio ?? null,
+              cinematicPresetFamily: payload.cinematicPresetFamily ?? null,
+            }
+            : null,
+          usageEstimate: plan.usageEstimate ?? null,
         },
       })
       .select(outputWorkflowSelect)
@@ -409,6 +452,19 @@ Deno.serve(async (request) => {
       sourceEntityKeys: plan.sourceEntityKeys,
       sourceSequenceUnitKeys: plan.sourceSequenceUnitKeys,
       ...(effectivePageCount ? { pageCount: effectivePageCount } : {}),
+      documentMode: planner.documentMode,
+      pageSize: planner.documentMode === 'designed_reference' ? 'a4' : null,
+      imagePolicy: planner.documentMode === 'designed_reference' ? 'inline_entity_images' : 'none',
+      ...(cinematicOutput
+        ? {
+          videoBlockCount: payload.videoBlockCount ?? null,
+          durationPerBlockSeconds: payload.durationPerBlockSeconds ?? null,
+          aspectRatio: payload.aspectRatio ?? null,
+          videoResolution: payload.videoResolution ?? null,
+          generateAudio: payload.generateAudio ?? true,
+          cinematicPresetFamily: payload.cinematicPresetFamily ?? null,
+        }
+        : {}),
     }
     const runResponse = await client
       .from('output_workflow_runs')
@@ -431,6 +487,21 @@ Deno.serve(async (request) => {
           planner,
           scopeResolver: scopeResolution.scopeResolver,
           plannedSections: planner.sections,
+          documentMode: planner.documentMode,
+          pageSize: planner.documentMode === 'designed_reference' ? 'a4' : null,
+          imageQuality: payload.imageQuality ?? null,
+          imageOutputFormat: payload.imageOutputFormat ?? null,
+          cinematicOptions: cinematicOutput
+            ? {
+              videoBlockCount: payload.videoBlockCount ?? null,
+              durationPerBlockSeconds: payload.durationPerBlockSeconds ?? null,
+              aspectRatio: payload.aspectRatio ?? null,
+              videoResolution: payload.videoResolution ?? null,
+              generateAudio: payload.generateAudio ?? null,
+              cinematicPresetFamily: payload.cinematicPresetFamily ?? null,
+            }
+            : null,
+          usageEstimate: plan.usageEstimate ?? null,
         },
         heartbeat_at: now,
       })
@@ -463,6 +534,7 @@ Deno.serve(async (request) => {
             skillKeys: getOutputWorkflowNodeGuidanceConfig(node).skillKeys,
             guidanceMode: getOutputWorkflowNodeGuidanceConfig(node).guidanceMode,
             outputRequestId: outputRequest.id,
+            aiUsageEstimate: plan.usageEstimate?.lines.find((line) => line.nodeKey === node.key) ?? null,
           },
         })))
       .select(outputWorkflowRunStepSelect)
@@ -486,6 +558,19 @@ Deno.serve(async (request) => {
           planDiagnostics: plan.diagnostics,
           preset: plan.preset,
           plannedSections: planner.sections,
+          imageQuality: payload.imageQuality ?? null,
+          imageOutputFormat: payload.imageOutputFormat ?? null,
+          cinematicOptions: cinematicOutput
+            ? {
+              videoBlockCount: payload.videoBlockCount ?? null,
+              durationPerBlockSeconds: payload.durationPerBlockSeconds ?? null,
+              aspectRatio: payload.aspectRatio ?? null,
+              videoResolution: payload.videoResolution ?? null,
+              generateAudio: payload.generateAudio ?? null,
+              cinematicPresetFamily: payload.cinematicPresetFamily ?? null,
+            }
+            : null,
+          usageEstimate: plan.usageEstimate ?? null,
         },
       })
       .eq('id', outputRequest.id)

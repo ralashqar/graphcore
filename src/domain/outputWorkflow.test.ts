@@ -10,6 +10,8 @@ import {
   defaultOutputWorkflowConcurrency,
   getOutputWorkflowNodeExecutionMetadata,
   markDirtyOutputWorkflowNodes,
+  outputWorkflowArtifactKindSchema,
+  outputRequestDeleteResponseSchema,
   outputRequestStartRequestSchema,
   outputWorkflowNodeRegistry,
   outputWorkflowPlanRequestSchema,
@@ -65,6 +67,61 @@ function readConfigPurpose(node: { config?: unknown }) {
     : {}
   return typeof config.purpose === 'string' ? config.purpose : ''
 }
+
+function readConfigQuality(node: { config?: unknown }) {
+  const config = node.config && typeof node.config === 'object' && !Array.isArray(node.config)
+    ? node.config as Record<string, unknown>
+    : {}
+  return typeof config.quality === 'string' ? config.quality : ''
+}
+
+function readConfigOutputFormat(node: { config?: unknown }) {
+  const config = node.config && typeof node.config === 'object' && !Array.isArray(node.config)
+    ? node.config as Record<string, unknown>
+    : {}
+  return typeof config.outputFormat === 'string' ? config.outputFormat : ''
+}
+
+test('output request delete response preserves compatibility while exposing cleanup counts', () => {
+  const parsed = outputRequestDeleteResponseSchema.parse({
+    ok: true,
+    requestId: 'request-1',
+    projectId: 'project-1',
+    draftId: 'draft-1',
+  })
+
+  assert.equal(parsed.deleted, true)
+  assert.equal(parsed.workflowId, null)
+  assert.equal(parsed.latestRunId, null)
+  assert.equal(parsed.deletedCounts.outputRequests, 0)
+  assert.equal(parsed.deletedCounts.outputArtifacts, 0)
+  assert.equal(parsed.deletedCounts.storageObjects, 0)
+
+  const withCounts = outputRequestDeleteResponseSchema.parse({
+    ok: true,
+    requestId: 'request-1',
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    workflowId: 'workflow-1',
+    latestRunId: 'run-1',
+    deleted: true,
+    deletedCounts: {
+      outputRequests: 1,
+      outputWorkflows: 1,
+      outputWorkflowRuns: 2,
+      outputWorkflowRunSteps: 4,
+      outputWorkflowNodes: 3,
+      outputWorkflowEdges: 2,
+      outputArtifacts: 2,
+      projectAssets: 2,
+      storageObjects: 2,
+    },
+  })
+
+  assert.equal(withCounts.deletedCounts.outputRequests, 1)
+  assert.equal(withCounts.deletedCounts.outputWorkflowRuns, 2)
+  assert.equal(withCounts.deletedCounts.projectAssets, 2)
+})
 
 const snapshot = outputWorkflowPlanRequestSchema.shape.snapshot.parse({
   project: { id: 'project-1', name: 'Ash Archive', summary: 'A manuscript world.' },
@@ -128,6 +185,10 @@ test('node registry exposes approved workflow node types only', () => {
   ])
 })
 
+test('output artifacts support HTML companion pages', () => {
+  assert.equal(outputWorkflowArtifactKindSchema.parse('html'), 'html')
+})
+
 test('output skill registry is valid, versioned, and rejects duplicate keys', () => {
   assert.equal(validateOutputSkillRegistry().ok, true)
   assert.ok(OUTPUT_SKILL_REGISTRY.length >= 16)
@@ -173,6 +234,24 @@ test('prompt-first output router classifies output prompts and binds mentioned e
   assert.deepEqual(scope.selectedEntityKeys.sort(), ['archive', 'hero'])
 })
 
+test('prompt-first output router classifies cinematic and UGC video prompts', () => {
+  const trailer = classifyOutputPrompt('Create a cinematic trailer storyboard for Chapter 1')
+  assert.equal(trailer.intent, 'output_generation')
+  assert.equal(trailer.outputKind, 'cinematic_trailer')
+
+  const ugc = classifyOutputPrompt('Make a UGC video ad creative with a hook and CTA')
+  assert.equal(ugc.intent, 'output_generation')
+  assert.equal(ugc.outputKind, 'ugc_episode')
+
+  const plan = planOutputPrompt({
+    prompt: 'Make a cinematic sequence from Chapter 1',
+    snapshot,
+  })
+  assert.equal(plan.outputKind, 'cinematic_episode')
+  assert.equal(plan.targetFormat, 'video')
+  assert.equal(plan.documentMode, 'cinematic')
+})
+
 test('prompt-first entity binding is typo-tolerant and does not fall back to unrelated image references', () => {
   const worldEntities = [
     worldEntity('ilya', 'actor', 'Ilya Sorin'),
@@ -205,6 +284,44 @@ test('prompt-first entity binding is typo-tolerant and does not fall back to unr
   assert.equal((contextNode?.config as Record<string, unknown> | undefined)?.strictSourceEntityFilter, true)
 })
 
+test('cinematic output preset creates storyboard, Seedance block videos, and stitch artifact', () => {
+  const plan = planOutputRequestWorkflow({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    prompt: 'Create a cinematic sequence from Chapter 1 with a shot-by-shot storyboard.',
+    targetFormat: 'video',
+    selectedSequenceUnitKeys: ['chapter-1'],
+    videoBlockCount: 3,
+    durationPerBlockSeconds: 8,
+    snapshot,
+  }, 'cinematic_episode')
+
+  assert.equal(plan.preset, 'cinematic_episode_from_sequence')
+  assert.equal(plan.targetFormat, 'video')
+  assert.deepEqual(plan.sourceSequenceUnitKeys, ['chapter-1'])
+  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_block_script').length, 3)
+  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_storyboard').length, 3)
+  assert.equal(plan.nodes.filter((node) => node.nodeType === 'video_generation').length, 3)
+  assert.ok(plan.nodes.some((node) => readConfigPurpose(node) === 'video_stitch'))
+  assert.ok(plan.nodes.some((node) => readConfigPurpose(node) === 'cinematic_video_artifact'))
+
+  const storyboard = plan.nodes.find((node) => node.key === 'block_001_storyboard')
+  assert.equal(readConfigQuality(storyboard ?? {}), 'low')
+  assert.equal(readConfigOutputFormat(storyboard ?? {}), 'webp')
+  assert.deepEqual(storyboard?.config.imageSize, { width: 2048, height: 2048 })
+
+  const video = plan.nodes.find((node) => node.key === 'block_001_video')
+  assert.equal(video?.config.model, 'bytedance/seedance-2.0/fast/reference-to-video')
+  assert.equal(video?.config.durationSeconds, 8)
+  assert.equal(video?.config.resolution, '720p')
+  assert.equal(video?.config.generateAudio, true)
+  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'block_001_storyboard' && edge.targetNodeKey === 'block_001_video' && edge.targetPort === 'references'))
+  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'block_001_video' && edge.targetNodeKey === 'video_stitch' && edge.targetPort === 'videos'))
+  assert.ok(plan.usageEstimate?.lines.some((line) => line.nodeKey === 'block_001_storyboard' && line.modality === 'image'))
+  assert.ok(plan.usageEstimate?.lines.some((line) => line.nodeKey === 'block_001_video' && line.modality === 'video' && line.media?.durationSeconds === 8))
+  assert.equal(validateOutputWorkflowGraph({ nodes: plan.nodes, edges: plan.edges }).ok, true)
+})
+
 test('prompt-first image request payloads do not inherit comic page count', () => {
   const payload = outputRequestStartRequestSchema.parse({
     projectId: 'project-1',
@@ -225,8 +342,14 @@ test('prompt-first planner distinguishes reference documents from narrative pros
   })
   assert.equal(biblePlan.intent, 'output_generation')
   assert.equal(biblePlan.outputKind, 'story_bible_from_world')
-  assert.equal(biblePlan.documentMode, 'reference')
+  assert.equal(biblePlan.documentMode, 'designed_reference')
   assert.ok(biblePlan.sections.some((section) => section.key === 'main_characters'))
+
+  const textOnlyBiblePlan = planOutputPrompt({
+    prompt: 'create a story bible text only, no images',
+    snapshot,
+  })
+  assert.equal(textOnlyBiblePlan.documentMode, 'reference')
 
   const chapterPlan = planOutputPrompt({
     prompt: 'write the first chapter as prose',
@@ -250,9 +373,73 @@ test('prompt-first image requests use approved workflow nodes only', () => {
   assert.equal(readConfigPurpose(plan.nodes.find((node) => node.key === 'visual_prompt') ?? {}), 'poster_prompt')
   assert.equal(readConfigPurpose(plan.nodes.find((node) => node.key === 'image_references') ?? {}), 'image_reference_selector')
   assert.equal(readConfigPurpose(plan.nodes.find((node) => node.key === 'generated_image') ?? {}), 'poster_image')
+  assert.equal(readConfigQuality(plan.nodes.find((node) => node.key === 'generated_image') ?? {}), 'medium')
+  assert.equal(readConfigOutputFormat(plan.nodes.find((node) => node.key === 'generated_image') ?? {}), 'webp')
   assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'image_references' && edge.sourcePort === 'asset_pack' && edge.targetNodeKey === 'generated_image' && edge.targetPort === 'references'))
   assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'image_references' && edge.sourcePort === 'asset_pack' && edge.targetNodeKey === 'visual_prompt' && edge.targetPort === 'asset_pack'))
   assert.equal(validateOutputWorkflowGraph({ nodes: plan.nodes, edges: plan.edges }).ok, true)
+})
+
+test('image workflow quality defaults are configurable and client-overridable', () => {
+  const characterPlan = planOutputRequestWorkflow({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    prompt: 'Character art portrait of Mara',
+    targetFormat: 'image',
+    snapshot,
+  }, 'concept_art_image')
+  assert.equal(readConfigQuality(characterPlan.nodes.find((node) => node.key === 'generated_image') ?? {}), 'low')
+
+  const overridePlan = planOutputRequestWorkflow({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    prompt: 'Character art portrait of Mara',
+    targetFormat: 'image',
+    imageQuality: 'high',
+    snapshot,
+  }, 'concept_art_image')
+  assert.equal(readConfigQuality(overridePlan.nodes.find((node) => node.key === 'generated_image') ?? {}), 'high')
+
+  const comicPlan = planOutputRequestWorkflow({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    prompt: 'Comic issue from Chapter 1',
+    targetFormat: 'pdf',
+    snapshot,
+  }, 'comic_issue_from_sequence')
+  assert.equal(readConfigQuality(comicPlan.nodes.find((node) => node.key === 'comic_atlas_image') ?? {}), 'medium')
+  assert.equal(readConfigQuality(comicPlan.nodes.find((node) => node.key === 'page_001_image') ?? {}), 'medium')
+})
+
+test('image workflow output format defaults to webp and is client-overridable', () => {
+  const defaultPlan = planOutputRequestWorkflow({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    prompt: 'Make a poster image of Mara in The Archive',
+    targetFormat: 'image',
+    snapshot,
+  }, 'poster_image')
+  assert.equal(readConfigOutputFormat(defaultPlan.nodes.find((node) => node.key === 'generated_image') ?? {}), 'webp')
+
+  const overridePlan = planOutputRequestWorkflow({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    prompt: 'Make a poster image of Mara in The Archive',
+    targetFormat: 'image',
+    imageOutputFormat: 'png',
+    snapshot,
+  }, 'poster_image')
+  assert.equal(readConfigOutputFormat(overridePlan.nodes.find((node) => node.key === 'generated_image') ?? {}), 'png')
+
+  const comicPlan = planOutputRequestWorkflow({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    prompt: 'Comic issue from Chapter 1',
+    targetFormat: 'pdf',
+    snapshot,
+  }, 'comic_issue_from_sequence')
+  assert.equal(readConfigOutputFormat(comicPlan.nodes.find((node) => node.key === 'comic_atlas_image') ?? {}), 'webp')
+  assert.equal(readConfigOutputFormat(comicPlan.nodes.find((node) => node.key === 'page_001_image') ?? {}), 'webp')
 })
 
 test('story bible workflow creates parallel reference sections instead of chapter prose', () => {
@@ -266,6 +453,9 @@ test('story bible workflow creates parallel reference sections instead of chapte
 
   assert.equal(plan.preset, 'story_bible_from_world')
   assert.ok(plan.nodes.some((node) => node.key === 'bible_section_plan'))
+  const documentRender = plan.nodes.find((node) => node.key === 'document_render')
+  assert.equal(documentRender?.config.documentMode, 'designed_reference')
+  assert.equal(documentRender?.config.pageSize, 'a4')
   assert.equal(plan.nodes.some((node) => readConfigPurpose(node) === 'chapter_prose'), false)
   const sectionNodes = plan.nodes.filter((node) => readConfigPurpose(node) === 'bible_section')
   assert.ok(sectionNodes.length >= 8)

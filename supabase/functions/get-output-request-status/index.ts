@@ -6,6 +6,8 @@ import {
   outputRequestStatusResponseSchema,
 } from '../../../src/domain/outputWorkflow.ts'
 import {
+  compactOutputWorkflowNodesForStatus,
+  compactOutputWorkflowRunForStatus,
   hydrateOutputArtifactSignedUrls,
   mapOutputArtifactRow,
   mapOutputRequestRow,
@@ -53,13 +55,13 @@ Deno.serve(async (request) => {
       if (nodeResponse.error) throw new Error(nodeResponse.error.message)
       if (edgeResponse.error) throw new Error(edgeResponse.error.message)
       if (artifactResponse.error) throw new Error(artifactResponse.error.message)
-      nodes = (nodeResponse.data ?? []).map(mapOutputWorkflowNodeRow)
+      nodes = compactOutputWorkflowNodesForStatus((nodeResponse.data ?? []).map(mapOutputWorkflowNodeRow))
       edges = (edgeResponse.data ?? []).map(mapOutputWorkflowEdgeRow)
       artifacts = await hydrateOutputArtifactSignedUrls(client, (artifactResponse.data ?? []).map(mapOutputArtifactRow))
     }
     if (outputRequest.latestRunId) {
       const bundle = await loadOutputWorkflowRunBundle(client, outputRequest.latestRunId)
-      run = bundle.run
+      run = compactOutputWorkflowRunForStatus(bundle.run)
       artifacts = bundle.run.artifacts.length > 0 ? bundle.run.artifacts : artifacts
       if (isTerminalOutputWorkflowRunStatus(bundle.run.status) && outputRequest.status !== bundle.run.status) {
         const updateResponse = await client

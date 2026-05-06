@@ -154,6 +154,11 @@ import {
   validateWorldSequenceUnitCompleteness,
 } from '../../../src/domain/worldSequence.ts'
 import {
+  mergeWorldEntityVisualDescriptionMetadata as mergeSharedWorldEntityVisualDescriptionMetadata,
+  normalizeWorldEntityVisualDescription as normalizeSharedWorldEntityVisualDescription,
+  readWorldEntityVisualTraits,
+} from '../../../src/domain/worldEntityVisuals.ts'
+import {
   buildWorldWikiFingerprint,
   deriveWorldWiki,
   readProjectWorldWikiPresentation,
@@ -8208,7 +8213,9 @@ function plannerModeInstructions(input: {
       return [
         'This is a direct build turn. Prioritize the smallest complete first wave that makes the prompt land cleanly in the graph.',
         'For new entities, default to concise summaries and only include long-form context when the prompt explicitly asks for backstory, motives, secrets, or nuanced social/political pressure.',
-        'For every new or substantially updated entity, include entity.metadata.visualDescription: a concise visual image prompt under 280 characters. It should describe visible design only, with no lore exposition, project names, internal IDs, GraphCore wording, or node-type labels.',
+        'For every new or substantially updated entity, include entity.metadata.visual.description, entity.metadata.visual.traits, and entity.metadata.visualDescription. Visual description must be a neutral default identity, not a dynamic scene state.',
+        'Neutral visual identity should describe stable silhouette, face/hair/clothing/materials/palette/recognizable marks. Traits should be compact labels such as age, height, build, gender presentation, hair, eyes, complexion, outfit silhouette, palette, species/type, and permanent distinguishing marks.',
+        'Do not put temporary states in entity visual identity: fighting pose, bloodied, injured, crying, screaming, mid-action, scene lighting, camera angle, current weather, or event-specific damage. Permanent scars, prosthetics, ritual tattoos, habitual uniform, signature items, and species features are allowed.',
         'Keep assistantSummary to 1 short sentence.',
         compactScopeInstruction,
       ]
@@ -8339,7 +8346,10 @@ async function generatePromptPlan(input: {
     'Allowed operations for wave1Ops: upsert_entity, update_entity, replace_entity, upsert_relationship, update_relationship, create_derived_result, queue_image_generation, queue_cinematic_generation, update_world_wiki_metadata, assistant_note.',
     'Favor additive graph growth.',
     ...promptStrategy.plannerGuidance,
-    'Every upsert_entity must include entity.metadata.visualDescription: a compact visual prompt for the subject, visible scene, or mobile UI state. Do not include lore exposition, product/project names, schema labels, node-type labels, IDs, or GraphCore wording in visualDescription.',
+    'Every upsert_entity must include entity.metadata.visual.description, entity.metadata.visual.traits, and legacy entity.metadata.visualDescription composed as "<neutral description> Traits: X, Y, Z".',
+    'For actors/personas, visual traits should cover age, height, build, gender presentation, hair, eyes, complexion, clothing silhouette, palette, species/type, and permanent distinguishing marks when known. For places/objects/screens/concepts, use relevant traits such as scale, materials, palette, interface style, silhouette, landmark features, or product visual language.',
+    'Use neutral default visual identity for actor/place/object/persona/app/product entities. Do not put temporary states such as bloodied, fighting, injured, crying, screaming, mid-action, scene lighting, camera angle, weather, or event-specific damage into identity descriptions. Use event or sequence_unit visuals for dynamic scene imagery instead.',
+    'Do not include lore exposition, product/project names, schema labels, node-type labels, IDs, or GraphCore wording in visualDescription.',
     'Use advisory_question for questions that should answer first and offer options without mutating the graph by default.',
     'Use graph_diagnosis for prompts that ask what is weak, missing, thin, underdeveloped, or structurally lacking in the current world.',
     'Use refinement_only when the prompt mainly enriches existing nodes or relationships rather than expanding the world broadly.',
@@ -9582,11 +9592,27 @@ async function applyPromptOp(input: {
       existing: target.context,
       incoming: changes.context,
     })
-    let nextMetadata: Record<string, unknown> = {
-      ...(target.metadata ?? {}),
-      ...(changes.metadata ?? {}),
-    }
-    nextMetadata = mergeVisualDescriptionMetadata(nextMetadata, nextMetadata.visualDescription)
+      let nextMetadata: Record<string, unknown> = {
+        ...(target.metadata ?? {}),
+        ...(changes.metadata ?? {}),
+      }
+      const incomingVisualDescription = readVisualDescriptionCandidate({
+        metadata: changes.metadata ?? {},
+        customProperties: changes.customProperties ?? {},
+      })
+      const incomingVisualTraits = readVisualTraitsCandidate({
+        metadata: changes.metadata ?? {},
+        customProperties: changes.customProperties ?? {},
+      })
+      const incomingVisualTraitMap = readVisualTraitMapCandidate({
+        metadata: changes.metadata ?? {},
+        customProperties: changes.customProperties ?? {},
+      })
+      nextMetadata = mergeVisualDescriptionMetadata(nextMetadata, incomingVisualDescription || nextMetadata.visualDescription, {
+        traits: [...readWorldEntityVisualTraits(target), ...incomingVisualTraits],
+        traitMap: incomingVisualTraitMap,
+        source: incomingVisualDescription ? 'planner' : undefined,
+      })
     nextMetadata = appendRefinementHistory({
       metadata: nextMetadata,
       field: 'summary',
@@ -10974,19 +11000,21 @@ function buildStreamedInitialSeedInstructions() {
   return [
     'You generate initial world graph records from the user prompt.',
     'Generate a complete initial world skeleton as streamed JSON records. Do not wrap in Markdown. Do not return one giant JSON object.',
-    'Every entity and sequence_unit must include visualDescription: a concise visual image prompt under 280 characters. Describe visible design only. Do not include lore exposition, project names, internal IDs, GraphCore wording, schema labels, or node-type labels.',
-    'For sequence_unit records, visualDescription must describe the visible scene or moment for that beat.',
+    'Every entity must include visualDescription plus visualTraits or visual.traits. For non-event identity entities, visualDescription must be neutral default identity: silhouette, face/hair/clothing/materials/palette/recognizable marks, not a temporary scene state.',
+    'Use the compatibility format for entity visualDescription when possible: "<neutral visual description> Traits: X, Y, Z". Also include visualTraits as an array. The backend stores this as metadata.visual.description and metadata.visual.traits.',
+    'Do not put temporary states in actor/place/object/persona/app identity visuals: fighting pose, bloodied, injured, crying, screaming, mid-action, scene lighting, camera angle, current weather, or event-specific damage. Permanent scars, prosthetics, ritual tattoos, habitual uniform, signature items, and species features are allowed.',
+    'For sequence_unit and event records, visualDescription may describe the visible scene or moment for that beat, but it must not rewrite stable actor/object/place appearance.',
     'Each record must be one complete JSON object matching one of:',
     '{"kind":"note","message":"short operational note"}',
     '{"kind":"wiki","id":"wiki_foundation","title":"generated content title","logline":"one sentence","synopsis":"compact paragraph","genre":"genre label","narrationPov":"third person limited, rotating by chapter","themes":["theme"],"toneTags":["tone"],"coreConflict":"central conflict","visualMotifs":["motif"],"artStyleDescription":"specific visual direction beyond the broad preset","brandAtlasPrompt":"visual-only prompt for one cohesive brand/world atlas image","colorScheme":{"primary":"#hex role","secondary":"#hex role","tertiary":"#hex role"}}',
-    '{"kind":"entity","id":"mara_veyr","nodeType":"actor","name":"Mara Veyr","summary":"one sentence","context":"short canon use","visualDescription":"silver-haired archivist with a violet lantern, ash-black coat, rainlit stone alley","tags":["main cast"]}',
+    '{"kind":"entity","id":"mara_veyr","nodeType":"actor","name":"Mara Veyr","summary":"one sentence","context":"short canon use","visualDescription":"silver-haired archivist in an ash-black coat with a violet lantern. Traits: late 20s, average height, lean build, silver bob, grey eyes, ash-black archivist coat, violet lantern","visualTraits":["late 20s","average height","lean build","silver bob","grey eyes","ash-black archivist coat","violet lantern"],"tags":["main cast"]}',
     '{"kind":"sequence_unit","id":"episode_01","name":"Episode 1: The Memory Tax","summary":"one sentence","context":"short canon use","visualDescription":"public memory tithe in a rain-slick plaza, shadow guards, glowing ledger pages, frightened crowd","unitKind":"episode","sequenceKey":"main","ordinal":1,"actLabel":"Act I","povCharacterKey":"mara_veyr","povCharacterName":"Mara Veyr","povNotes":"Close limited to Mara in this beat.","synopsis":"one compact paragraph","dramaticQuestion":"question","storyFunction":"setup","outcome":"one sentence","consequences":[{"cause":"cause","effect":"effect","affectedEntityKeys":["mara_veyr"],"threadKeys":[],"consequenceType":"plot"}],"characterArcDeltas":[{"actorKey":"mara_veyr","before":"before","pressure":"pressure","choice":"choice","after":"after"}],"openLoops":["loop"],"resolvedLoops":[]}',
     '{"kind":"relationship","id":"link_mara_seeks_artifact","source":"mara_veyr","target":"memory_artifact","verb":"seeks","notes":"short relationship note"}',
     '{"kind":"summary","assistantSummary":"concise summary of what was created"}',
     '{"kind":"skip","reason":"only if a requested record cannot be represented safely"}',
     '{"kind":"op","op":{PromptToWorldOp}} is supported for compatibility, but prefer compact wiki, entity, sequence_unit, and relationship records; the system will convert them to graph ops.',
     'Emit minified one-line JSON records. Never put literal line breaks inside JSON string values; escape them as \\n or keep text as one compact paragraph.',
-    'Example entity line: {"kind":"entity","id":"mara_veyr","nodeType":"actor","name":"Mara Veyr","summary":"A memory mage pulled into the empire conflict.","context":"Main cast protagonist with a clear want, flaw, and pressure.","visualDescription":"silver-haired memory mage in an ash-black archivist coat, violet lantern glow, rain-dark alley","tags":["main cast"]}',
+    'Example entity line: {"kind":"entity","id":"mara_veyr","nodeType":"actor","name":"Mara Veyr","summary":"A memory mage pulled into the empire conflict.","context":"Main cast protagonist with a clear want, flaw, and pressure.","visualDescription":"silver-haired memory mage in an ash-black archivist coat with a violet lantern. Traits: late 20s, average height, lean build, silver bob, grey eyes, ash-black coat, violet lantern","visualTraits":["late 20s","average height","lean build","silver bob","grey eyes","ash-black coat","violet lantern"],"tags":["main cast"]}',
     'Example Story sequence_unit line: {"kind":"sequence_unit","id":"episode_01","name":"Episode 1: The Memory Tax","summary":"Mara discovers the empire is harvesting memories to keep its shadow throne alive.","context":"Opening episode that establishes the premise, pressure, and first irreversible choice.","visualDescription":"public memory tithe in a rain-slick plaza, shadow guards, glowing ledger pages, frightened crowd","unitKind":"episode","sequenceKey":"main","ordinal":1,"actLabel":"Act I","povCharacterKey":"mara_veyr","povCharacterName":"Mara Veyr","povNotes":"Close limited to Mara; use her fear for her brother and tactical distrust of officials.","synopsis":"Mara witnesses a public memory tithe and realizes her brother is next.","dramaticQuestion":"Will Mara expose the tithe before her family is erased?","storyFunction":"setup","outcome":"Mara steals a forbidden ledger and becomes hunted by the throne.","consequences":[{"cause":"Mara steals the tithe ledger.","effect":"The shadow guard marks her family as traitors.","affectedEntityKeys":["mara_veyr"],"threadKeys":[],"consequenceType":"plot"}],"characterArcDeltas":[{"actorKey":"mara_veyr","before":"Mara survives by staying invisible.","pressure":"Her brother is selected for the tithe.","choice":"She steals the ledger in public.","after":"She accepts becoming visible is the price of resistance."}],"openLoops":["Who built the tithe ledger?"],"resolvedLoops":[]}',
     'Example relationship line: {"kind":"relationship","id":"link_mara_seeks_artifact","source":"mara_veyr","target":"memory_artifact","verb":"seeks","notes":"The artifact is tied to Mara central objective."}',
     'Use only these operation types: upsert_entity, upsert_relationship, update_world_wiki_metadata, assistant_note.',
@@ -11003,7 +11031,7 @@ function buildStreamedInitialSeedInstructions() {
     'For App projects, store app-specific fields under customProperties.app. Examples: platformTargets, promise, monetization, coreLoop, route, purpose, emotionalBeat, states, props, fields, validationRules, method, path, authRequirement, webPreview, expoGo, requiresDevBuild, requiresAppleDeveloper, allowedFiles, forbiddenFiles, and ownerTower.',
     'For App projects, include product identity, personas, business goals, commercial features, user flows, screens, sections/components, data models, actions, API endpoints, backend functions, external services, capability constraints, design system, towers, and code_file plans.',
     'For App projects, useful relationship verbs include contains, uses, reads, writes, creates, updates, deletes, calls, invokes, emits, transitions_to, requires_auth, gated_by, styled_by, represented_by, implemented_as, tested_by, depends_on, owned_by_tower, and requires_capability.',
-    'For App projects, visualDescription should describe visible mobile UI, screen state, product imagery, or interface mood only. Avoid schema labels, code jargon, internal IDs, and GraphCore wording.',
+    'For App projects, visualDescription should describe visible mobile UI, screen state, product imagery, or interface mood only. Include visualTraits such as platform, density, palette, surface style, icon language, layout rhythm, and signature product imagery. Avoid schema labels, code jargon, internal IDs, and GraphCore wording.',
     'Use relationships such as precedes, causes, complicates, pays_off, opposes, belongs_to, located_in, seeks, protects, controls, discovers, and reveals where useful.',
     'Keep node prose compact: summaries should be one or two sentences, context should be short and canon-useful.',
     'Emit a note every few records so progress is visible, but do not reveal private chain-of-thought.',
@@ -11160,27 +11188,26 @@ function asCompactString(value: unknown) {
   return ''
 }
 
-const WORLD_ENTITY_VISUAL_DESCRIPTION_MAX_LENGTH = 280
-
 function normalizeWorldEntityVisualDescription(value: unknown) {
-  const normalized = asCompactString(value).replace(/\s+/g, ' ')
-  if (!normalized) return ''
-  return normalized.slice(0, WORLD_ENTITY_VISUAL_DESCRIPTION_MAX_LENGTH).trim()
+  return normalizeSharedWorldEntityVisualDescription(value)
 }
 
 function readVisualDescriptionCandidate(value: Record<string, unknown>) {
   const metadata = isRecord(value.metadata) ? value.metadata : {}
   const customProperties = isRecord(value.customProperties) ? value.customProperties : {}
+  const directVisual = isRecord(value.visual) ? value.visual : {}
   const metadataVisual = isRecord(metadata.visual) ? metadata.visual : {}
   const customVisual = isRecord(customProperties.visual) ? customProperties.visual : {}
   return normalizeWorldEntityVisualDescription(
-    value.visualDescription
+    directVisual.description
+    ?? directVisual.visualDescription
+    ?? value.visualDescription
     ?? value.visual_description
     ?? value.visualPrompt
     ?? value.imagePrompt
-    ?? metadata.visualDescription
     ?? metadataVisual.description
     ?? metadataVisual.visualDescription
+    ?? metadata.visualDescription
     ?? customProperties.visualDescription
     ?? customVisual.description
     ?? customVisual.visualDescription
@@ -11188,16 +11215,54 @@ function readVisualDescriptionCandidate(value: Record<string, unknown>) {
   )
 }
 
-function mergeVisualDescriptionMetadata(metadata: Record<string, unknown>, visualDescription: unknown) {
-  const nextMetadata = { ...metadata }
-  const normalized = normalizeWorldEntityVisualDescription(visualDescription)
-  if (normalized) {
-    nextMetadata.visualDescription = normalized
-  } else if (typeof nextMetadata.visualDescription === 'string') {
-    const existing = normalizeWorldEntityVisualDescription(nextMetadata.visualDescription)
-    if (existing) nextMetadata.visualDescription = existing
+function readVisualTraitsCandidate(value: Record<string, unknown>) {
+  const metadata = isRecord(value.metadata) ? value.metadata : {}
+  const customProperties = isRecord(value.customProperties) ? value.customProperties : {}
+  const directVisual = isRecord(value.visual) ? value.visual : {}
+  const metadataVisual = isRecord(metadata.visual) ? metadata.visual : {}
+  const customVisual = isRecord(customProperties.visual) ? customProperties.visual : {}
+  return [
+    ...asStringArray(value.visualTraits),
+    ...asStringArray(value.traits),
+    ...asStringArray(value.appearanceTraits),
+    ...asStringArray(directVisual.traits),
+    ...asStringArray(metadata.visualTraits),
+    ...asStringArray(metadata.traits),
+    ...asStringArray(metadata.appearanceTraits),
+    ...asStringArray(metadataVisual.traits),
+    ...asStringArray(customProperties.visualTraits),
+    ...asStringArray(customProperties.traits),
+    ...asStringArray(customProperties.appearanceTraits),
+    ...asStringArray(customVisual.traits),
+  ]
+}
+
+function readVisualTraitMapCandidate(value: Record<string, unknown>) {
+  const metadata = isRecord(value.metadata) ? value.metadata : {}
+  const customProperties = isRecord(value.customProperties) ? value.customProperties : {}
+  const directVisual = isRecord(value.visual) ? value.visual : {}
+  const metadataVisual = isRecord(metadata.visual) ? metadata.visual : {}
+  const customVisual = isRecord(customProperties.visual) ? customProperties.visual : {}
+  return {
+    ...(isRecord(customProperties.visualTraitMap) ? customProperties.visualTraitMap : {}),
+    ...(isRecord(customVisual.traitMap) ? customVisual.traitMap : {}),
+    ...(isRecord(metadata.visualTraitMap) ? metadata.visualTraitMap : {}),
+    ...(isRecord(metadataVisual.traitMap) ? metadataVisual.traitMap : {}),
+    ...(isRecord(directVisual.traitMap) ? directVisual.traitMap : {}),
   }
-  return nextMetadata
+}
+
+function mergeVisualDescriptionMetadata(
+  metadata: Record<string, unknown>,
+  visualDescription: unknown,
+  options: {
+    traits?: unknown
+    traitMap?: unknown
+    source?: string
+    replaceTraits?: boolean
+  } = {},
+) {
+  return mergeSharedWorldEntityVisualDescriptionMetadata(metadata, visualDescription, options)
 }
 
 function markFallbackVisualDescription(metadata: Record<string, unknown>, visualDescription: string, explicitVisualDescription: string) {
@@ -11223,8 +11288,20 @@ function normalizeWorldEntityCreateInputVisual<T extends WorldEntityCreateInput>
     customProperties: entity.customProperties ?? {},
   })
   const visualDescription = explicitVisualDescription || fallbackVisualDescriptionFromEntity(entity as Record<string, unknown>)
+  const traits = readVisualTraitsCandidate({
+    metadata: entity.metadata ?? {},
+    customProperties: entity.customProperties ?? {},
+  })
+  const traitMap = readVisualTraitMapCandidate({
+    metadata: entity.metadata ?? {},
+    customProperties: entity.customProperties ?? {},
+  })
   const metadata = markFallbackVisualDescription(
-    mergeVisualDescriptionMetadata(entity.metadata ?? {}, visualDescription),
+    mergeVisualDescriptionMetadata(entity.metadata ?? {}, visualDescription, {
+      traits,
+      traitMap,
+      source: explicitVisualDescription ? 'planner' : 'fallback',
+    }),
     visualDescription,
     explicitVisualDescription,
   )
@@ -11353,8 +11430,14 @@ function normalizeCompactStreamedEntityEnvelope(value: Record<string, unknown>) 
     || value.context
     || name,
   )
+  const visualTraits = readVisualTraitsCandidate(value)
+  const visualTraitMap = readVisualTraitMapCandidate(value)
   const metadata = markFallbackVisualDescription(
-    mergeVisualDescriptionMetadata(isRecord(value.metadata) ? value.metadata : {}, visualDescription),
+    mergeVisualDescriptionMetadata(isRecord(value.metadata) ? value.metadata : {}, visualDescription, {
+      traits: visualTraits,
+      traitMap: visualTraitMap,
+      source: explicitVisualDescription ? 'planner' : 'fallback',
+    }),
     visualDescription,
     explicitVisualDescription,
   )
@@ -11403,8 +11486,14 @@ function normalizeCompactStreamedSequenceEnvelope(value: Record<string, unknown>
     || context
     || name,
   )
+  const visualTraits = readVisualTraitsCandidate(value)
+  const visualTraitMap = readVisualTraitMapCandidate(value)
   const metadata = markFallbackVisualDescription(
-    mergeVisualDescriptionMetadata(isRecord(value.metadata) ? value.metadata : {}, visualDescription),
+    mergeVisualDescriptionMetadata(isRecord(value.metadata) ? value.metadata : {}, visualDescription, {
+      traits: visualTraits,
+      traitMap: visualTraitMap,
+      source: explicitVisualDescription ? 'planner' : 'fallback',
+    }),
     visualDescription,
     explicitVisualDescription,
   )
@@ -11507,6 +11596,8 @@ function normalizeStreamedEnvelope(value: unknown) {
     const entity = value.op.payload.entity
     const nodeType = coerceStreamNodeType(entity.nodeType)
     const explicitVisualDescription = readVisualDescriptionCandidate(entity)
+    const visualTraits = readVisualTraitsCandidate(entity)
+    const visualTraitMap = readVisualTraitMapCandidate(entity)
     const sequence = isRecord(entity.customProperties) && isRecord(entity.customProperties.sequence)
       ? entity.customProperties.sequence
       : {}
@@ -11520,6 +11611,11 @@ function normalizeStreamedEnvelope(value: unknown) {
       mergeVisualDescriptionMetadata(
         isRecord(entity.metadata) ? entity.metadata : {},
         visualDescription,
+        {
+          traits: visualTraits,
+          traitMap: visualTraitMap,
+          source: explicitVisualDescription ? 'planner' : 'fallback',
+        },
       ),
       visualDescription,
       explicitVisualDescription,
@@ -14092,6 +14188,7 @@ async function generateIncrementalWorkItemPlan(input: {
     'Use the buildBrief and ledger as continuity. Do not ask for hidden prior chat context; it is not available to this call.',
     'Allowed operations: upsert_entity, update_entity, replace_entity, upsert_relationship, update_relationship, create_derived_result, queue_image_generation, queue_cinematic_generation, update_world_wiki_metadata, assistant_note.',
     'For entity_batch items, create only the requested small set of concrete canon-ready entities.',
+    'For every new or substantially updated entity, include metadata.visual.description, metadata.visual.traits, and legacy metadata.visualDescription. Identity visuals must be neutral defaults; reserve dynamic action/damage/lighting/weather for event or sequence_unit scene visuals.',
     ...promptStrategy.incrementalWorkItemGuidance,
     projectContextIsApp(input.payload.snapshot.projectContext)
       ? 'For app relationship_batch items, create app links only between existing/generated app graph nodes available in the ledger or relevant entity list.'

@@ -6,7 +6,7 @@ import { buildEbookHtmlDocument, type EbookHtmlOptions } from '../../src/domain/
 export type EbookPdfRenderInput = EbookHtmlOptions & {
   markdown: string
   fileName?: string
-  renderMode?: 'ebook' | 'comic' | 'reference'
+  renderMode?: 'ebook' | 'comic' | 'reference' | 'designed_reference'
   coverImage?: {
     bytes: Uint8Array
     mimeType: string
@@ -27,6 +27,17 @@ export type EbookPdfRenderInput = EbookHtmlOptions & {
     pageNumber: number
   }>
   comicScript?: Record<string, unknown> | null
+  referenceImages?: Array<{
+    bytes: Uint8Array
+    mimeType: string
+    key?: string
+    entityKey?: string
+    title: string
+    caption?: string
+    type?: string
+    assetKey?: string
+    storagePath?: string
+  }>
 }
 
 function findChromiumExecutable() {
@@ -69,12 +80,16 @@ function escapeHtml(value: string) {
 }
 
 function coverImageDataUrl(coverImage: NonNullable<EbookPdfRenderInput['coverImage']>) {
+  return imageBytesDataUrl(coverImage.bytes, coverImage.mimeType || 'image/png')
+}
+
+function imageBytesDataUrl(bytes: Uint8Array, mimeType: string) {
   let binary = ''
   const chunkSize = 0x8000
-  for (let index = 0; index < coverImage.bytes.length; index += chunkSize) {
-    binary += String.fromCharCode(...coverImage.bytes.slice(index, index + chunkSize))
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.slice(index, index + chunkSize))
   }
-  return `data:${coverImage.mimeType || 'image/png'};base64,${btoa(binary)}`
+  return `data:${mimeType || 'image/png'};base64,${btoa(binary)}`
 }
 
 function buildCoverHtml(input: EbookPdfRenderInput) {
@@ -209,11 +224,28 @@ export async function renderOutputPdf(input: EbookPdfRenderInput) {
 }
 
 export async function renderEbookPdf(input: EbookPdfRenderInput) {
-  const documentMode = input.renderMode === 'reference' ? 'reference' : input.documentMode
-  const { html, document } = buildEbookHtmlDocument(input.markdown, { ...input, documentMode })
-  const referenceMode = documentMode === 'reference'
-  const pageWidth = referenceMode ? '8.5in' : '6in'
-  const pageHeight = referenceMode ? '11in' : '9in'
+  const documentMode = input.renderMode === 'reference' || input.renderMode === 'designed_reference'
+    ? input.renderMode
+    : input.documentMode
+  const designedReferenceMode = documentMode === 'designed_reference'
+  const referenceMode = documentMode === 'reference' || designedReferenceMode
+  const pageSize = input.pageSize ?? (designedReferenceMode ? 'a4' : referenceMode ? 'letter' : 'trade_6x9')
+  const pageWidth = pageSize === 'a4' ? '8.27in' : referenceMode ? '8.5in' : '6in'
+  const pageHeight = pageSize === 'a4' ? '11.69in' : referenceMode ? '11in' : '9in'
+  const referenceImages = (input.referenceImages ?? []).map((image) => ({
+    key: image.key ?? image.assetKey ?? '',
+    entityKey: image.entityKey ?? '',
+    title: image.title,
+    caption: image.caption ?? '',
+    type: image.type ?? '',
+    src: imageBytesDataUrl(image.bytes, image.mimeType || 'image/png'),
+  }))
+  const { html, document } = buildEbookHtmlDocument(input.markdown, {
+    ...input,
+    documentMode,
+    pageSize,
+    referenceImages,
+  })
   const browser = await chromium.launch({
     executablePath: findChromiumExecutable(),
     headless: true,
@@ -226,7 +258,13 @@ export async function renderEbookPdf(input: EbookPdfRenderInput) {
   })
 
   try {
-    const page = await browser.newPage({ viewport: referenceMode ? { width: 1224, height: 1584 } : { width: 864, height: 1296 } })
+    const page = await browser.newPage({
+      viewport: referenceMode
+        ? pageSize === 'a4'
+          ? { width: 1191, height: 1684 }
+          : { width: 1224, height: 1584 }
+        : { width: 864, height: 1296 },
+    })
     let coverPdfBytes: Uint8Array | null = null
     if (input.coverImage) {
       await page.setContent(buildCoverHtml(input), { waitUntil: 'load' })
@@ -262,8 +300,8 @@ export async function renderEbookPdf(input: EbookPdfRenderInput) {
       margin: {
         top: '0.72in',
         bottom: '0.72in',
-        left: referenceMode ? '0.82in' : '0.76in',
-        right: referenceMode ? '0.82in' : '0.64in',
+        left: designedReferenceMode ? '0.64in' : referenceMode ? '0.82in' : '0.76in',
+        right: designedReferenceMode ? '0.64in' : referenceMode ? '0.82in' : '0.64in',
       },
     })
     const pdfBytes = coverPdfBytes
@@ -275,13 +313,15 @@ export async function renderEbookPdf(input: EbookPdfRenderInput) {
       metadata: {
         renderer: 'chromium-html-css',
         rendererEngine: 'playwright-core',
-        documentMode: referenceMode ? 'reference' : 'ebook',
-        pageSize: referenceMode ? '8.5in x 11in' : '6in x 9in',
+        documentMode: designedReferenceMode ? 'designed_reference' : referenceMode ? 'reference' : 'ebook',
+        pageSize: pageSize === 'a4' ? 'A4' : referenceMode ? '8.5in x 11in' : '6in x 9in',
         byteSize: pdfBytes.byteLength,
         pageCount: await countPdfPages(pdfBytes),
         manuscriptCharacterCount: input.markdown.length,
         chapterCount: document.metadata.chapterCount,
         paragraphCount: document.metadata.paragraphCount,
+        referenceImageCount: referenceImages.length,
+        referenceImageAssetKeys: (input.referenceImages ?? []).map((image) => image.assetKey ?? image.key ?? '').filter(Boolean),
         title: document.title,
         cover: input.coverImage ? {
           assetKey: input.coverImage.assetKey ?? '',

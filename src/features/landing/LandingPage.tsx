@@ -806,9 +806,7 @@ export function LandingPage({
             <span>Everything</span>
             comes from it.
           </h1>
-          <p>
-            Start with an idea. Watch it transform into a connected world and every asset, script, scene, and rule needed to bring it to life.
-          </p>
+          <p> Build your universe once. Generate stories, comics, videos, and games from it. </p>
           <div className="landing-hero-actions">
             <button className="landing-cta-button" onClick={onOpenAuth} type="button">
               {isSignedIn ? 'Continue Building' : 'Get Early Access'}

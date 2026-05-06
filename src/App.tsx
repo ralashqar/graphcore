@@ -1080,7 +1080,7 @@ function sleep(ms: number) {
 }
 
 type DeleteConfirmationTarget = {
-  resourceType: 'definition' | 'graph' | 'asset' | 'generated_mesh' | 'world_reset'
+  resourceType: 'definition' | 'graph' | 'asset' | 'generated_mesh' | 'world_reset' | 'output_request'
   key: string
   label: string
 }
@@ -3254,11 +3254,18 @@ export default function App() {
         worldPromptMessages: [],
         worldPromptEvents: [],
         worldPromptGenerationJobs: [],
-        worldPromptGenerationJobSteps: [],
-        worldPromptSuggestions: [],
-        worldBuildBatches: [],
-      }))
-    }
+          worldPromptGenerationJobSteps: [],
+          worldPromptSuggestions: [],
+          worldBuildBatches: [],
+          outputRequests: [],
+          outputWorkflows: [],
+          outputWorkflowNodes: [],
+          outputWorkflowEdges: [],
+          outputWorkflowRuns: [],
+          outputArtifacts: [],
+          assets: current.assets.filter((asset) => asset.metadata.generatedBy !== 'output_workflow'),
+        }))
+      }
     setSelectedWorldNodeKey(null)
     setSelectedWorldEdgeKey(null)
     setSelectedWorldEntityKey(null)
@@ -4411,17 +4418,44 @@ export default function App() {
     return result
   }
 
-  async function deleteOutputRequest(requestId: string) {
-    const result = await workspaceService.deleteOutputRequest(requestId)
-    const current = snapshotRef.current
-    if (current) {
-      commitPersistedSnapshot({
-        ...current,
-        outputRequests: current.outputRequests.filter((entry) => entry.id !== result.requestId),
+    async function deleteOutputRequest(requestId: string) {
+      const result = await workspaceService.deleteOutputRequest(requestId)
+      const current = snapshotRef.current
+      if (current) {
+        commitPersistedSnapshot({
+          ...current,
+          outputRequests: current.outputRequests.filter((entry) => entry.id !== result.requestId),
+          outputWorkflows: result.workflowId
+            ? current.outputWorkflows.filter((workflow) => workflow.id !== result.workflowId)
+            : current.outputWorkflows,
+          outputWorkflowNodes: result.workflowId
+            ? current.outputWorkflowNodes.filter((node) => node.workflowId !== result.workflowId)
+            : current.outputWorkflowNodes,
+          outputWorkflowEdges: result.workflowId
+            ? current.outputWorkflowEdges.filter((edge) => edge.workflowId !== result.workflowId)
+            : current.outputWorkflowEdges,
+          outputWorkflowRuns: result.workflowId
+            ? current.outputWorkflowRuns.filter((run) => run.workflowId !== result.workflowId)
+            : current.outputWorkflowRuns,
+          outputArtifacts: result.workflowId || result.latestRunId
+            ? current.outputArtifacts.filter((artifact) => (
+              !(result.workflowId && artifact.workflowId === result.workflowId)
+              && !(result.latestRunId && artifact.runId === result.latestRunId)
+            ))
+            : current.outputArtifacts,
+        })
+      }
+      return result
+    }
+
+    function requestDeleteOutputRequest(requestId: string) {
+      const target = snapshotRef.current?.outputRequests.find((request) => request.id === requestId)
+      setPendingDeleteTarget({
+        resourceType: 'output_request',
+        key: requestId,
+        label: target?.title || target?.prompt.slice(0, 80) || requestId,
       })
     }
-    return result
-  }
 
   async function updateOutputWorkflowNode(request: Parameters<typeof workspaceService.updateOutputWorkflowNode>[1]) {
     if (!snapshot) {
@@ -5181,6 +5215,9 @@ export default function App() {
         await deleteGeneratedMeshForDefinition(pendingDeleteTarget.key)
       } else if (pendingDeleteTarget.resourceType === 'world_reset') {
         await resetProjectWorld()
+      } else if (pendingDeleteTarget.resourceType === 'output_request') {
+        await deleteOutputRequest(pendingDeleteTarget.key)
+        await refreshLiveSnapshot()
       } else {
         await performDeleteAsset(pendingDeleteTarget.key)
       }
@@ -6488,15 +6525,15 @@ export default function App() {
             {activeTab === 'outputs' ? (
               <OutputsWorkspace
                 canRunOutputs={loadedState?.source === 'supabase'}
-                snapshot={snapshot}
-                onCancelOutputRequest={cancelOutputRequest}
-                onCancelOutputWorkflowRun={cancelOutputWorkflowRun}
-                onDeleteOutputRequest={deleteOutputRequest}
-                onGetOutputRequestStatus={getOutputRequestStatus}
-                onGetOutputWorkflowStatus={getOutputWorkflowStatus}
-                onPlanOutputWorkflow={planOutputWorkflow}
-                onRefreshLiveSnapshot={refreshLiveSnapshot}
-                onStartOutputRequest={startOutputRequest}
+                  snapshot={snapshot}
+                  onCancelOutputRequest={cancelOutputRequest}
+                  onCancelOutputWorkflowRun={cancelOutputWorkflowRun}
+                  onGetOutputRequestStatus={getOutputRequestStatus}
+                  onGetOutputWorkflowStatus={getOutputWorkflowStatus}
+                  onPlanOutputWorkflow={planOutputWorkflow}
+                  onRefreshLiveSnapshot={refreshLiveSnapshot}
+                  onRequestDeleteOutputRequest={requestDeleteOutputRequest}
+                  onStartOutputRequest={startOutputRequest}
                 onStartOutputWorkflow={startOutputWorkflow}
                 onStartOutputWorkflowRun={startOutputWorkflowRun}
                 onUpdateOutputWorkflowNode={updateOutputWorkflowNode}

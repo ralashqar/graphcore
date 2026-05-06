@@ -74,3 +74,57 @@ test('reference document mode uses handbook metadata and layout hints', () => {
   assert.match(html, /text-align: left/)
   assert.doesNotMatch(html, /page-break-before: always;\n      padding-top: 0\.7in/)
 })
+
+test('designed reference document mode uses A4 and embeds reference image cards', () => {
+  const metadata = buildEbookDocumentMetadata(sampleMarkdown, {
+    title: 'Override Bible',
+    documentMode: 'designed_reference',
+    pageSize: 'a4',
+    referenceImages: [{
+      title: 'Ilya Sorin',
+      caption: 'Maintenance worker reference portrait.',
+      type: 'actor',
+      entityKey: 'ilya_sorin',
+      src: 'data:image/png;base64,abc',
+    }],
+  })
+  const referenceMarkdown = [
+    '# Override Bible',
+    '',
+    '## Main Characters',
+    '',
+    'Confirmed cast references for the current production bible.',
+  ].join('\n')
+  const { html } = buildEbookHtmlDocument(referenceMarkdown, {
+    title: 'Override Bible',
+    documentMode: 'designed_reference',
+    pageSize: 'a4',
+    referenceImages: [{
+      title: 'Ilya Sorin',
+      caption: 'Maintenance worker reference portrait.',
+      type: 'actor',
+      entityKey: 'ilya_sorin',
+      src: 'data:image/png;base64,abc',
+    }],
+  })
+
+  assert.equal(metadata.documentMode, 'designed_reference')
+  assert.equal(metadata.pageSize, 'A4')
+  assert.equal(metadata.referenceImageCount, 1)
+  assert.match(html, /size: 8\.27in 11\.69in/)
+  assert.doesNotMatch(html, /Visual Reference Index/)
+  assert.match(html, /<figure class="reference-image-card">/)
+  assert.match(html, /Ilya Sorin/)
+})
+
+test('HTML document builder can include a cover page before the title page', () => {
+  const { html } = buildEbookHtmlDocument(sampleMarkdown, {
+    title: 'Override',
+    documentMode: 'ebook',
+    coverImageSrc: 'data:image/png;base64,cover',
+  })
+
+  assert.match(html, /<section class="html-cover-page">/)
+  assert.match(html, /<img src="data:image\/png;base64,cover" alt="Override cover">/)
+  assert.ok(html.indexOf('<section class="html-cover-page">') < html.indexOf('<section class="title-page">'))
+})

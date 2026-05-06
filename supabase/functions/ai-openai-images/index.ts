@@ -1,8 +1,9 @@
 import '@supabase/functions-js/edge-runtime.d.ts'
 
-import { requireUserClient } from '../_shared/auth.ts'
+import { createAdminClient, requireUserClient } from '../_shared/auth.ts'
+import { runTrackedOpenAiImages } from '../_shared/ai-provider-gateway.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
-import { runOpenAiImages, type OpenAiImagesRequest } from '../_shared/openai.ts'
+import type { OpenAiImagesRequest } from '../_shared/openai.ts'
 
 Deno.serve(async (request) => {
   const preflight = maybeHandleOptions(request)
@@ -16,7 +17,8 @@ Deno.serve(async (request) => {
       throw new HttpError(405, 'Method not allowed.')
     }
 
-    await requireUserClient(request, 'ai-openai-images')
+    const { user } = await requireUserClient(request, 'ai-openai-images')
+    const supabase = createAdminClient('ai-openai-images')
 
     const payload = (await request.json()) as OpenAiImagesRequest
     const action = payload.action === 'edit' ? 'edit' : 'generate'
@@ -30,10 +32,23 @@ Deno.serve(async (request) => {
       throw new HttpError(400, 'At least one source image is required for image edits.')
     }
 
-    const { action: resolvedAction, response: upstreamResponse, body: upstreamJson } = await runOpenAiImages({
-      ...payload,
-      action,
-      model,
+    const {
+      action: resolvedAction,
+      response: upstreamResponse,
+      body: upstreamJson,
+      usageLine,
+    } = await runTrackedOpenAiImages({
+      client: supabase,
+      payload: {
+        ...payload,
+        action,
+        model,
+      },
+      context: {
+        userId: user.id,
+        surface: 'ai-openai-images',
+        idempotencyKey: request.headers.get('Idempotency-Key') ?? undefined,
+      },
     })
 
     if (!upstreamResponse.ok) {
@@ -68,6 +83,7 @@ Deno.serve(async (request) => {
       model,
       created: typeof upstreamJson.created === 'number' ? upstreamJson.created : null,
       requestId: upstreamResponse.headers.get('x-request-id'),
+      aiUsage: usageLine,
       images: data.map((item) => {
         const typed = item && typeof item === 'object' ? item as Record<string, unknown> : {}
         return {

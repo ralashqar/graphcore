@@ -7,6 +7,7 @@ RUN apk add --no-cache \
   font-noto \
   fontconfig \
   ttf-dejavu \
+  ffmpeg \
   libstdc++
 
 ENV CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium-browser
