@@ -51,6 +51,7 @@ type GraphNodeData = {
   outputPreview: string
   imageUrl: string | null
   imageSize: { width: number; height: number } | null
+  hasOutput: boolean
   skillKeys: string[]
   inputPorts: Array<{ id: string; valueType: string }>
   outputPorts: Array<{ id: string; valueType: string }>
@@ -58,6 +59,7 @@ type GraphNodeData = {
   running: boolean
   onSelect: (nodeKey: string) => void
   onRun: (node: OutputWorkflowNode, runScope?: OutputWorkflowRunScope) => void
+  onOpenOutput: (nodeKey: string) => void
 }
 
 type GraphEdgeData = {
@@ -276,7 +278,7 @@ function mergeGraphPorts(
 }
 
 function OutputWorkflowNodeCard({ data }: NodeProps<GraphNode>) {
-  const { node, step, statusKey, outputPreview, imageUrl, imageSize, skillKeys, inputPorts, outputPorts, selected, running, onSelect, onRun } = data
+  const { node, step, statusKey, outputPreview, imageUrl, imageSize, hasOutput, skillKeys, inputPorts, outputPorts, selected, running, onSelect, onRun, onOpenOutput } = data
   const definition = outputWorkflowNodeRegistry[node.nodeType]
   const execution = getOutputWorkflowNodeExecutionMetadata(node)
   const purpose = readTrimmedString(node.config.purpose)
@@ -284,12 +286,19 @@ function OutputWorkflowNodeCard({ data }: NodeProps<GraphNode>) {
   const hasImagePreview = node.nodeType === 'image_generation' && Boolean(imageUrl)
 
   return (
-    <button
+    <div
       className={`outputs-graph-node is-${node.nodeType} is-${statusKey} ${selected ? 'is-selected' : ''} ${hasImagePreview ? 'has-image-output' : ''}`}
       onClick={() => onSelect(node.key)}
       onDoubleClick={() => onSelect(node.key)}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          onSelect(node.key)
+        }
+      }}
+      role="button"
       style={hasImagePreview && imageSize ? { aspectRatio: `${imageSize.width} / ${imageSize.height}` } : undefined}
-      type="button"
+      tabIndex={0}
     >
       {inputPorts.map((port, index) => (
         <Handle
@@ -329,18 +338,34 @@ function OutputWorkflowNodeCard({ data }: NodeProps<GraphNode>) {
           ) : null}
         </>
       )}
-      <span className="outputs-graph-node-play" aria-label="Rerun node">
-        <span
-          aria-hidden="true"
-          className={running ? 'outputs-graph-mini-spinner' : ''}
+      {hasOutput ? (
+        <button
+          aria-label={`Open ${node.label} output`}
+          className="outputs-graph-node-expand"
           onClick={(event) => {
             event.stopPropagation()
-            if (!running) onRun(node)
+            onOpenOutput(node.key)
           }}
+          title="Open output"
+          type="button"
         >
+          Open
+        </button>
+      ) : null}
+      <button
+        aria-label={`Rerun ${node.label}`}
+        className="outputs-graph-node-play"
+        disabled={running}
+        onClick={(event) => {
+          event.stopPropagation()
+          if (!running) onRun(node)
+        }}
+        type="button"
+      >
+        <span aria-hidden="true" className={running ? 'outputs-graph-mini-spinner' : ''}>
           {running ? '' : 'Run'}
         </span>
-      </span>
+      </button>
       {outputPorts.map((port, index) => (
         <Handle
           className={`outputs-graph-handle is-${port.valueType}`}
@@ -351,7 +376,7 @@ function OutputWorkflowNodeCard({ data }: NodeProps<GraphNode>) {
           type="source"
         />
       ))}
-    </button>
+    </div>
   )
 }
 
@@ -416,6 +441,7 @@ export function OutputWorkflowGraphOverlay({
   const [savingLayout, setSavingLayout] = useState(false)
   const [savingPrompt, setSavingPrompt] = useState(false)
   const [graphError, setGraphError] = useState<string | null>(null)
+  const [expandedOutputNodeKey, setExpandedOutputNodeKey] = useState<string | null>(null)
 
   const stepsByNodeKey = useMemo(
     () => new Map((activeRun?.steps ?? []).map((step) => [step.nodeKey, step])),
@@ -504,10 +530,32 @@ export function OutputWorkflowGraphOverlay({
   const selectedSourceSequenceUnits = sourceSequenceUnitKeys
     .map((key) => safeWorldEntities.find((entity) => readTrimmedString(entity.key) === key))
     .filter((entity): entity is Record<string, unknown> => Boolean(entity))
+  const expandedOutputNode = expandedOutputNodeKey ? nodeByKey.get(expandedOutputNodeKey) ?? null : null
+  const expandedOutputStep = expandedOutputNode ? stepsByNodeKey.get(expandedOutputNode.key) ?? null : null
+  const expandedCachedOutputSource = expandedOutputNode ? { outputs: expandedOutputNode.outputs } : null
+  const expandedCachedOutputPreview = expandedCachedOutputSource
+    ? readOutputPreview({ ...expandedCachedOutputSource, errorMessage: null, provider: null, model: null })
+    : ''
+  const expandedOutputPreview = expandedOutputStep
+    ? readOutputPreview(expandedOutputStep) || expandedCachedOutputPreview
+    : expandedCachedOutputPreview
+  const expandedImageAssetKey = imageOutputAssetKey(expandedOutputStep) || imageOutputAssetKey(expandedCachedOutputSource)
+  const expandedImageAsset = expandedImageAssetKey ? assetByKey.get(expandedImageAssetKey) ?? null : null
+  const expandedImageUrl = resolveAssetSourceUrl(expandedImageAsset)
+    || (expandedImageAssetKey ? artifactImageUrlByAssetKey.get(expandedImageAssetKey) ?? null : null)
 
   useEffect(() => {
     setPromptDraft(selectedNode ? readTrimmedString(selectedNode.inputs.prompt) : '')
   }, [selectedNode?.id, selectedNode?.inputs.prompt])
+
+  useEffect(() => {
+    if (!expandedOutputNodeKey) return undefined
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') setExpandedOutputNodeKey(null)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [expandedOutputNodeKey])
 
   useEffect(() => {
     const sourceByKey = new Map(safeNodes.map((node) => [node.key, node]))
@@ -555,6 +603,7 @@ export function OutputWorkflowGraphOverlay({
         const dimensions = graphNodeDimensions(node, imageSize)
         const outputPreview = readOutputPreview(step)
           || readOutputPreview({ ...cachedOutputSource, errorMessage: null, provider: null, model: null })
+        const hasOutput = Boolean(imageUrl || outputPreview || step?.errorMessage)
         return {
           id: node.key,
           type: 'outputWorkflow',
@@ -570,6 +619,7 @@ export function OutputWorkflowGraphOverlay({
             outputPreview: outputPreview.slice(0, 220),
             imageUrl,
             imageSize,
+            hasOutput,
             skillKeys: readNodeSkillKeys(node),
             inputPorts: mergeGraphPorts(definition.inputPorts, inputPortsByNodeKey.get(node.key) ?? []),
             outputPorts: mergeGraphPorts(definition.outputPorts, outputPortsByNodeKey.get(node.key) ?? []),
@@ -577,6 +627,7 @@ export function OutputWorkflowGraphOverlay({
             running: targetedNodeKeySet.has(node.key) || statusKey === 'running',
             onSelect: onSelectNode,
             onRun: onRunNode,
+            onOpenOutput: setExpandedOutputNodeKey,
           },
         }
       })
@@ -1017,6 +1068,40 @@ export function OutputWorkflowGraphOverlay({
           </button>
         ))}
       </footer>
+      {expandedOutputNode ? (
+        <div
+          className="outputs-node-output-modal-backdrop"
+          onClick={() => setExpandedOutputNodeKey(null)}
+          role="presentation"
+        >
+          <section
+            aria-label={`${expandedOutputNode.label} output`}
+            aria-modal="true"
+            className={expandedImageUrl ? 'outputs-node-output-modal has-image' : 'outputs-node-output-modal'}
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+          >
+            <header>
+              <div>
+                <span>{outputWorkflowNodeRegistry[expandedOutputNode.nodeType].label}</span>
+                <strong>{expandedOutputNode.label}</strong>
+              </div>
+              <button onClick={() => setExpandedOutputNodeKey(null)} type="button" aria-label="Close output preview">Close</button>
+            </header>
+            {expandedOutputStep?.errorMessage ? <p className="outputs-error">{expandedOutputStep.errorMessage}</p> : null}
+            {expandedImageUrl ? (
+              <div className="outputs-node-output-image-shell">
+                <img src={expandedImageUrl} alt={`${expandedOutputNode.label} output`} />
+              </div>
+            ) : null}
+            {expandedOutputPreview ? (
+              <pre>{expandedOutputPreview}</pre>
+            ) : !expandedImageUrl ? (
+              <p className="outputs-muted">No persisted output is available for this node yet.</p>
+            ) : null}
+          </section>
+        </div>
+      ) : null}
     </div>
   )
 }

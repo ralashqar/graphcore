@@ -99,6 +99,187 @@ function readNumber(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
+function readNonEmptyRecord(value: unknown) {
+  const record = readRecord(value)
+  return Object.keys(record).length > 0 ? record : null
+}
+
+function readFirstStepRecord(run: OutputWorkflowRun | null | undefined, keys: string[]) {
+  for (const step of run?.steps ?? []) {
+    const outputs = readRecord(step.outputs)
+    for (const key of keys) {
+      const record = readNonEmptyRecord(outputs[key])
+      if (record) return record
+    }
+  }
+  return null
+}
+
+function formatScriptSeconds(value: unknown) {
+  const seconds = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(seconds)) return '0s'
+  return `${Number(seconds.toFixed(2))}s`
+}
+
+function cinematicArray(value: unknown) {
+  return Array.isArray(value) ? value.map(readRecord).filter((entry) => Object.keys(entry).length > 0) : []
+}
+
+function buildCinematicScriptViewData(
+  workflow: { preset?: string; metadata?: Record<string, unknown> } | null,
+  run: OutputWorkflowRun | null | undefined,
+) {
+  const workflowMetadata = readRecord(workflow?.metadata)
+  const directorScriptDoc = readNonEmptyRecord(workflowMetadata.directorScriptDoc)
+    ?? readFirstStepRecord(run, ['directorScriptDoc', 'script'])
+  const executionScriptDoc = readNonEmptyRecord(workflowMetadata.cinematicScriptDoc)
+    ?? readFirstStepRecord(run, ['cinematicScriptDoc', 'executionScriptDoc', 'scriptDoc'])
+  const compiledCinematicSequence = readNonEmptyRecord(workflowMetadata.compiledCinematicSequence)
+    ?? readFirstStepRecord(run, ['compiledCinematicSequence'])
+  const preset = readTrimmedString(workflow?.preset)
+  const isCinematic = preset.includes('cinematic') || preset.includes('ugc') || Boolean(directorScriptDoc || executionScriptDoc || compiledCinematicSequence)
+  return {
+    isCinematic,
+    directorScriptDoc,
+    executionScriptDoc,
+    compiledCinematicSequence,
+    title: readTrimmedString(directorScriptDoc?.title) || readTrimmedString(executionScriptDoc?.title) || 'Cinematic Script',
+    logline: readTrimmedString(directorScriptDoc?.logline) || readTrimmedString(executionScriptDoc?.logline),
+    tone: readTrimmedString(directorScriptDoc?.tone) || readTrimmedString(executionScriptDoc?.tone),
+    continuityLock: readTrimmedString(directorScriptDoc?.continuityLock) || readTrimmedString(executionScriptDoc?.continuityNotes),
+    entityRefs: cinematicArray(directorScriptDoc?.entityRefs).length > 0
+      ? cinematicArray(directorScriptDoc?.entityRefs)
+      : cinematicArray(executionScriptDoc?.entityBindings),
+    scenes: cinematicArray(directorScriptDoc?.scenes).length > 0
+      ? cinematicArray(directorScriptDoc?.scenes)
+      : cinematicArray(executionScriptDoc?.scenes),
+    shots: cinematicArray(directorScriptDoc?.shots).length > 0
+      ? cinematicArray(directorScriptDoc?.shots)
+      : cinematicArray(compiledCinematicSequence?.shots),
+    takes: cinematicArray(compiledCinematicSequence?.takes),
+  }
+}
+
+function CinematicScriptPanel({ data }: { data: ReturnType<typeof buildCinematicScriptViewData> }) {
+  if (!data.isCinematic) {
+    return <p className="outputs-muted">This workflow is not a cinematic output.</p>
+  }
+  if (!data.directorScriptDoc && !data.executionScriptDoc && !data.compiledCinematicSequence) {
+    return <p className="outputs-muted">The cinematic script has not been authored yet. Run the script node or refresh after compile.</p>
+  }
+  return (
+    <div className="outputs-script-panel">
+      <div className="outputs-script-header">
+        <strong>{data.title}</strong>
+        {data.logline ? <p>{data.logline}</p> : null}
+        <div className="outputs-script-meta">
+          {data.tone ? <span>Tone: {data.tone}</span> : null}
+          {data.shots.length > 0 ? <span>{data.shots.length} shots</span> : null}
+          {data.takes.length > 0 ? <span>{data.takes.length} compiled takes</span> : null}
+        </div>
+      </div>
+
+      {data.continuityLock ? (
+        <div className="outputs-script-section">
+          <strong>Continuity Lock</strong>
+          <p>{data.continuityLock}</p>
+        </div>
+      ) : null}
+
+      {data.entityRefs.length > 0 ? (
+        <div className="outputs-script-section">
+          <strong>Entity Bindings</strong>
+          <div className="outputs-script-chips">
+            {data.entityRefs.map((entity, index) => (
+              <span key={`${readTrimmedString(entity.id) || readTrimmedString(entity.label) || index}`}>
+                {readTrimmedString(entity.label) || readTrimmedString(entity.id) || readTrimmedString(entity.sourceName) || `Entity ${index + 1}`}
+                {readTrimmedString(entity.role) ? ` · ${readTrimmedString(entity.role)}` : ''}
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {data.scenes.length > 0 ? (
+        <div className="outputs-script-section">
+          <strong>Scenes</strong>
+          {data.scenes.map((scene, index) => (
+            <div className="outputs-script-card" key={`${readTrimmedString(scene.id) || index}`}>
+              <b>{readTrimmedString(scene.title) || `Scene ${index + 1}`}</b>
+              {readTrimmedString(scene.location) || readTrimmedString(scene.locationRefId) ? <span>{readTrimmedString(scene.location) || readTrimmedString(scene.locationRefId)}</span> : null}
+              {readTrimmedString(scene.summary) ? <p>{readTrimmedString(scene.summary)}</p> : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {data.shots.length > 0 ? (
+        <div className="outputs-script-section">
+          <strong>Shot Script</strong>
+          {data.shots.map((shot, index) => {
+            const actions = cinematicArray(shot.actions)
+            const dialogue = cinematicArray(shot.dialogue)
+            const audioCues: Record<string, unknown>[] = readStringArray(shot.audioCues).length > 0
+              ? readStringArray(shot.audioCues).map((cue) => ({ cue }))
+              : cinematicArray(shot.audio)
+            return (
+              <div className="outputs-script-shot" key={`${readTrimmedString(shot.id) || index}`}>
+                <div className="outputs-script-shot-head">
+                  <b>{readTrimmedString(shot.title) || `Shot ${index + 1}`}</b>
+                  <span>{formatScriptSeconds(shot.startSeconds)}-{formatScriptSeconds(shot.endSeconds)} · {formatScriptSeconds(shot.durationSeconds)}</span>
+                </div>
+                {readTrimmedString(shot.beat) ? <p>{readTrimmedString(shot.beat)}</p> : null}
+                {readTrimmedString(shot.visualAction) || readTrimmedString(shot.visualPrompt) ? (
+                  <p><b>Action:</b> {readTrimmedString(shot.visualAction) || readTrimmedString(shot.visualPrompt)}</p>
+                ) : null}
+                {readTrimmedString(shot.composition) || readTrimmedString(shot.compositionGuide) ? (
+                  <p><b>Composition:</b> {readTrimmedString(shot.composition) || readTrimmedString(shot.compositionGuide)}</p>
+                ) : null}
+                {(readTrimmedString(shot.framing) || readTrimmedString(shot.cameraMovement)) ? (
+                  <p><b>Camera:</b> {[readTrimmedString(shot.framing), readTrimmedString(shot.cameraMovement)].filter(Boolean).join(' · ')}</p>
+                ) : null}
+                {actions.length > 0 ? (
+                  <ul>{actions.map((action, actionIndex) => (
+                    <li key={actionIndex}>{[readTrimmedString(action.actor) || readTrimmedString(action.actorRefId), readTrimmedString(action.verb), readTrimmedString(action.target) || readTrimmedString(action.targetRefId), readTrimmedString(action.stagingNotes)].filter(Boolean).join(' ')}</li>
+                  ))}</ul>
+                ) : null}
+                {dialogue.length > 0 ? (
+                  <ul>{dialogue.map((line, lineIndex) => (
+                    <li key={lineIndex}>{readTrimmedString(line.speaker) || readTrimmedString(line.speakerRefId) || 'Dialogue'}: "{readTrimmedString(line.line)}"{readTrimmedString(line.delivery) ? ` · ${readTrimmedString(line.delivery)}` : ''}</li>
+                  ))}</ul>
+                ) : null}
+                {audioCues.length > 0 ? (
+                  <p><b>Audio:</b> {audioCues.map((cue) => readTrimmedString(cue.cue) || readTrimmedString(cue.kind)).filter(Boolean).join(' · ')}</p>
+                ) : null}
+              </div>
+            )
+          })}
+        </div>
+      ) : null}
+
+      {data.takes.length > 0 ? (
+        <div className="outputs-script-section">
+          <strong>Compiled Takes</strong>
+          <div className="outputs-script-chips">
+            {data.takes.map((take, index) => (
+              <span key={`${readTrimmedString(take.id) || index}`}>
+                {readTrimmedString(take.title) || `Take ${index + 1}`} · {formatScriptSeconds(take.durationSeconds)}
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {data.executionScriptDoc ? (
+        <details className="outputs-script-json">
+          <summary>Execution JSON</summary>
+          <pre>{JSON.stringify(data.executionScriptDoc, null, 2)}</pre>
+        </details>
+      ) : null}
+    </div>
+  )
+}
+
 function readAiUsageSummary(value: unknown) {
   const parsed = aiUsageSummarySchema.safeParse(value)
   return parsed.success ? parsed.data : null
@@ -445,7 +626,7 @@ export function OutputsWorkspace({
   const [error, setError] = useState<string | null>(null)
   const [activeRunId, setActiveRunId] = useState<string | null>(snapshot.outputWorkflowRuns[0]?.id ?? null)
   const [selectedNodeKey, setSelectedNodeKey] = useState<string | null>(null)
-  const [inspectorMode, setInspectorMode] = useState<'output' | 'guidance' | 'usage' | 'metadata'>('output')
+  const [inspectorMode, setInspectorMode] = useState<'output' | 'script' | 'guidance' | 'usage' | 'metadata'>('output')
   const [usageBreakdownOpen, setUsageBreakdownOpen] = useState(false)
   const [targetedNodeKey, setTargetedNodeKey] = useState<string | null>(null)
   const [targetedNodeKeys, setTargetedNodeKeys] = useState<string[]>([])
@@ -580,6 +761,10 @@ export function OutputsWorkspace({
     [activeWorkflow, displayRun],
   )
   const selectedUsageSummary = readStepAiUsage(selectedStep) ?? readStepAiUsageEstimate(selectedStep)
+  const cinematicScriptViewData = useMemo(
+    () => buildCinematicScriptViewData(activeWorkflow, displayRun),
+    [activeWorkflow, displayRun],
+  )
   const workflowStages = useMemo(() => buildWorkflowStages({
     nodes: activeNodes,
     levels: workflowExecutionPlan?.levels ?? [],
@@ -1061,7 +1246,7 @@ export function OutputsWorkspace({
             setInspectorMode('output')
           }}
           readNodeSkillKeys={readNodeSkillKeys}
-          readOutputPreview={(step) => truncatePreview(readOutputPreview(step), 14000)}
+          readOutputPreview={readOutputPreview}
           runErrorMessage={error}
           refreshingGraph={refreshingGraph}
           selectedNodeKey={selectedNode?.key ?? selectedNodeKey}
@@ -1843,6 +2028,9 @@ export function OutputsWorkspace({
                   </div>
                   <div className="outputs-inspector-tabs" role="tablist" aria-label="Node detail views">
                     <button className={inspectorMode === 'output' ? 'is-active' : ''} onClick={() => setInspectorMode('output')} type="button">Latest Output</button>
+                    {cinematicScriptViewData.isCinematic ? (
+                      <button className={inspectorMode === 'script' ? 'is-active' : ''} onClick={() => setInspectorMode('script')} type="button">Script</button>
+                    ) : null}
                     <button className={inspectorMode === 'guidance' ? 'is-active' : ''} onClick={() => setInspectorMode('guidance')} type="button">Prompt / Guidance</button>
                     <button className={inspectorMode === 'usage' ? 'is-active' : ''} onClick={() => setInspectorMode('usage')} type="button">Usage</button>
                     <button className={inspectorMode === 'metadata' ? 'is-active' : ''} onClick={() => setInspectorMode('metadata')} type="button">Metadata</button>
@@ -1854,6 +2042,11 @@ export function OutputsWorkspace({
                       {selectedOutputPreview ? <pre>{selectedOutputPreview}</pre> : (
                         <p className="outputs-muted">No node output has been persisted yet. Queued and running nodes will fill this when they complete.</p>
                       )}
+                    </div>
+                  ) : null}
+                  {inspectorMode === 'script' ? (
+                    <div className="outputs-output-preview">
+                      <CinematicScriptPanel data={cinematicScriptViewData} />
                     </div>
                   ) : null}
                   {inspectorMode === 'guidance' && selectedGuidance ? (

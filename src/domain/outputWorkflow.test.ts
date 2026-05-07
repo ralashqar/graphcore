@@ -255,6 +255,109 @@ test('prompt-first output router classifies cinematic and UGC video prompts', ()
   assert.equal(plan.documentMode, 'cinematic')
 })
 
+test('cinematic prompt binding does not infer sequence units from shared names', () => {
+  const localSnapshot = outputWorkflowPlanRequestSchema.shape.snapshot.parse({
+    ...snapshot,
+    worldEntities: [
+      worldEntity('skybridge-garden', 'place', 'Skybridge Garden'),
+      worldEntity('chapter-skybridge-garden', 'sequence_unit', 'Skybridge Garden', {
+        sequence: { ordinal: 1, synopsis: 'A confrontation in the garden.', outcome: 'The chase begins.' },
+      }),
+      worldEntity('eva-9', 'actor', 'Eva-9'),
+    ],
+  })
+
+  const promptPlan = planOutputPrompt({
+    prompt: 'Create a cinematic where Eva-9 sings in Skybridge Garden',
+    snapshot: localSnapshot,
+  })
+  assert.equal(promptPlan.outputKind, 'cinematic_episode')
+  assert.deepEqual(promptPlan.selectedSequenceUnitKeys, [])
+  assert.deepEqual(promptPlan.selectedEntityKeys.sort(), ['eva-9', 'skybridge-garden'])
+
+  const workflowPlan = planOutputRequestWorkflow({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    prompt: 'Create a cinematic where Eva-9 sings in Skybridge Garden',
+    targetFormat: 'video',
+    selectedEntityKeys: promptPlan.selectedEntityKeys,
+    selectedSequenceUnitKeys: promptPlan.selectedSequenceUnitKeys,
+    snapshot: localSnapshot,
+  }, 'cinematic_episode')
+
+  assert.deepEqual(workflowPlan.sourceSequenceUnitKeys, [])
+  assert.deepEqual(workflowPlan.sourceEntityKeys.sort(), ['eva-9', 'skybridge-garden'])
+  const contextNode = workflowPlan.nodes.find((node) => node.key === 'world_context')
+  assert.deepEqual((contextNode?.config as Record<string, unknown>).sourceSequenceUnitKeys, [])
+  assert.ok(workflowPlan.diagnostics.some((line) => line.includes('No sequence_unit story spine was selected')))
+
+  const explicitEntityPlan = planOutputRequestWorkflow({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    prompt: 'Create a cinematic where Eva-9 sings in Skybridge Garden',
+    targetFormat: 'video',
+    selectedEntityKeys: ['eva-9', 'chapter-skybridge-garden', 'skybridge-garden'],
+    snapshot: localSnapshot,
+  }, 'cinematic_episode')
+  assert.deepEqual(explicitEntityPlan.sourceEntityKeys.sort(), ['eva-9', 'skybridge-garden'])
+
+  const explicitSequencePlan = planOutputPrompt({
+    prompt: 'Create a cinematic where Eva-9 sings in Skybridge Garden',
+    snapshot: localSnapshot,
+    selectedSequenceUnitKeys: ['chapter-skybridge-garden'],
+  })
+  assert.deepEqual(explicitSequencePlan.selectedSequenceUnitKeys, ['chapter-skybridge-garden'])
+})
+
+test('cinematic asset packs prefer entity reference sheets over stale world icons', async () => {
+  const sharedModulePath = ['..', '..', 'supabase', 'functions', '_shared', 'output-workflow.ts'].join('/')
+  const { buildDeterministicCinematicAssetPack } = await import(sharedModulePath) as {
+    buildDeterministicCinematicAssetPack: (context: Record<string, unknown>) => {
+      entities: Array<{ key: string; assetKeys: string[] }>
+      missingReferenceEntityKeys: string[]
+    }
+  }
+
+  const referenceSheetKey = 'entity_reference_sheet_anya_sorin_anya_sorin'
+  const worldIconKey = 'world_icon_anya_sorin_anya_sorin'
+  const referenceSheetPath = 'generated/entity-reference-sheets/451ff5a5-86cb-4310-92ce-463e82e67763/14a009e6-07f8-4025-a77b-34d6a7afa084/anya_sorin.webp'
+  const directReferenceSheetUrl = 'https://cdn.example.com/generated/entity-reference-sheets/anya_sorin.webp'
+  const pack = buildDeterministicCinematicAssetPack({
+    entities: [
+      {
+        key: 'anya_sorin',
+        name: 'Anya Sorin',
+        nodeType: 'actor',
+        summary: 'Anya summary',
+        thumbnailAssetKey: worldIconKey,
+        metadata: {
+          referenceSheetAssetKey: referenceSheetKey,
+          referenceSheetStoragePath: referenceSheetPath,
+          referenceSheetUrl: directReferenceSheetUrl,
+          referenceSheetAssetKeys: [worldIconKey],
+        },
+      },
+    ],
+    assets: [
+      { key: worldIconKey, storagePath: 'generated/world-icons/draft/job/01_anya_sorin.webp', mimeType: 'image/webp' },
+      { key: referenceSheetKey, storagePath: referenceSheetPath, mimeType: 'image/webp' },
+    ],
+  })
+  const assetKeys = pack.entities[0]?.assetKeys ?? []
+  assert.ok(assetKeys.includes(referenceSheetKey))
+  assert.ok(assetKeys.includes(referenceSheetPath))
+  assert.ok(assetKeys.includes(directReferenceSheetUrl))
+  assert.ok(assetKeys.includes(worldIconKey))
+  assert.ok(assetKeys.indexOf(referenceSheetKey) < assetKeys.indexOf(worldIconKey))
+  assert.ok(assetKeys.indexOf(referenceSheetPath) < assetKeys.indexOf(worldIconKey))
+  assert.ok(assetKeys.indexOf(directReferenceSheetUrl) < assetKeys.indexOf(worldIconKey))
+
+  const workerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
+  assert.match(workerSource, /refreshWorldContextVisualReferences/)
+  assert.match(workerSource, /resolveProjectAssetByKey/)
+  assert.match(workerSource, /isProjectAssetStoragePath/)
+})
+
 test('prompt-first entity binding is typo-tolerant and does not fall back to unrelated image references', () => {
   const worldEntities = [
     worldEntity('ilya', 'actor', 'Ilya Sorin'),
@@ -346,6 +449,7 @@ test('cinematic output preset creates script-first dynamic take fanout placehold
   assert.match(workerSource, /cinematic_entities__\$\{beatSheetKey\}/)
   assert.match(workerSource, /cinematic_entities__\$\{videoKey\}/)
   assert.match(workerSource, /metadata\.referenceSheetAssetKey/)
+  assert.match(workerSource, /quality: CINEMATIC_STORYBOARD_IMAGE_QUALITY/)
 
   const requestPayload = outputRequestStartRequestSchema.parse({
     projectId: 'project-1',
@@ -405,6 +509,251 @@ test('cinematic output preset creates script-first dynamic take fanout placehold
   const keyframeModeFanout = keyframeModePlan.nodes.find((node) => node.key === 'cinematic_dynamic_take_fanout')
   assert.equal(keyframeModeFanout?.config.cinematicReferenceMode, 'keyframes')
   assert.ok(keyframeModePlan.diagnostics.some((line) => line.includes('Keyframe reference mode')))
+})
+
+test('cinematic authoring uses lean director script and internal execution script', () => {
+  const workerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
+  assert.match(workerSource, /cinematicScriptAuthoringJsonSchemaForPreset/)
+  assert.match(workerSource, /directorScriptDoc/)
+  assert.match(workerSource, /executionScriptDoc: cinematicScriptDoc/)
+  assert.match(workerSource, /cumulativeStart/)
+  assert.match(workerSource, /canonicalCinematicEntityKey/)
+  assert.match(workerSource, /sanitizeCinematicScriptText/)
+  assert.match(workerSource, /Do not include provider refs or execution details/)
+  assert.match(workerSource, /no @Image\/@Video\/@Audio labels/)
+
+  const schemaStart = workerSource.indexOf('function cinematicScriptAuthoringJsonSchemaForPreset')
+  const schemaEnd = workerSource.indexOf('function normalizeMaybeNullString')
+  const schemaSource = workerSource.slice(schemaStart, schemaEnd)
+  assert.match(schemaSource, /continuityLock/)
+  assert.match(schemaSource, /visualAction/)
+  assert.match(schemaSource, /composition/)
+  assert.match(schemaSource, /actions/)
+  assert.doesNotMatch(schemaSource, /participantRefIds/)
+  assert.doesNotMatch(schemaSource, /visualPrompt/)
+  assert.doesNotMatch(schemaSource, /compositionGuide/)
+  assert.doesNotMatch(schemaSource, /providerRequestId/)
+  assert.match(schemaSource, /ugcDirectives/)
+})
+
+test('cinematic beat-sheet prompts use distinct clean micro-beat captions', async () => {
+  const sharedModulePath = ['..', '..', 'supabase', 'functions', '_shared', 'output-workflow.ts'].join('/')
+  const { buildCinematicBeatSheetPrompt } = await import(sharedModulePath) as {
+    buildCinematicBeatSheetPrompt: (input: {
+      blockScript: Record<string, unknown>
+      assetPack: Record<string, unknown>
+      aspectRatio: string
+      prompt: string
+      guidance: null
+    }) => { prompt: string }
+  }
+  const beatSheet = buildCinematicBeatSheetPrompt({
+    aspectRatio: '16:9',
+    prompt: 'create a cinematic of Ilya running from the civic harmony unit in the underrail warrens',
+    guidance: null,
+    assetPack: {
+      entities: [
+        {
+          key: 'ilya_sorin',
+          name: 'Ilya Sorin',
+          summary: 'A gifted maintenance worker forced into rebellion.',
+          visualDescription: 'lean young man in worn utility jacket with grease-stained hands',
+          visualTraits: ['shaved dark hair', 'tired eyes'],
+        },
+        {
+          key: 'underrail_warrens',
+          name: 'Underrail Warrens',
+          summary: 'An abandoned transit maze below the city.',
+          visualDescription: 'flooded subway tunnels, rusted platforms, hanging work lamps',
+          visualTraits: [],
+        },
+        {
+          key: 'underrail_warrens',
+          name: 'Underrail Warrens',
+          summary: 'Duplicate place anchor that should collapse.',
+          visualDescription: 'duplicate visual text',
+          visualTraits: [],
+        },
+      ],
+    },
+    blockScript: {
+      title: 'Take 1',
+      durationSeconds: 13,
+      shots: [
+        {
+          id: 'shot_01',
+          title: 'Boot splash hook',
+          startSeconds: 0,
+          endSeconds: 4,
+          subject: 'Ilya Sorin, Civic Harmony Bureau, Underrail Warrens',
+          beat: 'Ilya slams into frame already running through shin-deep water as red pursuit light sweeps the tunnel behind him.',
+          visualAction: 'Ilya charges through a narrow concrete service tunnel, boots exploding water across rusted rails while a rotating red warning glow pulses over wet walls behind him.',
+          composition: 'Ilya centered and advancing hard toward camera, tunnel lines compressing behind him, distant pursuit silhouettes briefly visible through spray.',
+          actions: [
+            { actor: 'Ilya Sorin', verb: 'sprints through', target: 'service tunnel', stagingNotes: 'High-kneed sprint through ankle-deep water.', startSeconds: 0, endSeconds: 4 },
+          ],
+          audioCues: ['boots slamming through water'],
+        },
+        {
+          id: 'shot_02',
+          title: 'The turn through steam',
+          startSeconds: 4,
+          endSeconds: 9,
+          beat: 'He cuts through a side corridor as the unit gains visual contact.',
+          visualAction: 'Ilya grabs a pipe brace, whips around a blind corner into a steam-blown maintenance passage, and nearly slips before catching himself on the wall.',
+          composition: 'Ilya off-center left entering the turn, steam cloud swallowing mid-frame, red visor lights and a search beam flare into the background corner.',
+          actions: [
+            { actor: 'Ilya Sorin', verb: 'whips around', target: 'blind corner', stagingNotes: 'He catches himself on the wet concrete wall.', startSeconds: 0, endSeconds: 5 },
+          ],
+          dialogue: [
+            { speaker: 'Civic Harmony Bureau', line: 'Stop and submit.', delivery: 'amplified and cold' },
+          ],
+          audioCues: ['steam hiss blast'],
+        },
+        {
+          id: 'shot_03',
+          title: 'Drone sweep overhead',
+          startSeconds: 9,
+          endSeconds: 13,
+          beat: 'A surveillance drone finds him in an open junction and paints him for capture.',
+          visualAction: 'Ilya bursts into a larger underrail junction beneath a hanging maintenance gantry as a patrol drone slides overhead.',
+          composition: 'Ilya small in the lower frame against massive brutalist geometry, drone crossing top frame, reflective water channels creating sharp light streaks.',
+        },
+      ],
+    },
+  })
+
+  const prompt = beatSheet.prompt
+  const beatMatches = [...prompt.matchAll(/BEAT \d+ \[(.*?)\]\nPanel visual: (.*?)\nCaption line 1: (.*?)\nCaption line 2: (.*?)(?:\n\n|$)/g)]
+  assert.equal(beatMatches.length, 12)
+  assert.equal(beatMatches[0]?.[1], '00:00-00:01')
+  assert.equal(beatMatches[11]?.[1], '00:11-00:13')
+  const panelVisuals = beatMatches.map((match) => match[2])
+  assert.ok(panelVisuals.some((visual) => visual.includes('boots exploding water')))
+  assert.ok(panelVisuals.some((visual) => visual.includes('patrol drone slides overhead')))
+  assert.ok(panelVisuals.every((visual) => !/Opening state|Action escalation|Obstacle or contact|Consequence and transition|Visible action and blocking|Dialogue cue|Audio cue|Camera feel|Framing:/i.test(visual)))
+  assert.ok(panelVisuals.every((visual) => !/\b[A-Za-z]+_[A-Za-z]+\b/.test(visual)))
+  const captionPairs = beatMatches.map((match) => `${match[3]} ${match[4]}`)
+  assert.ok(new Set(captionPairs).size >= 9)
+  assert.ok(captionPairs.every((caption) => !caption.includes('...') && !caption.includes('…')))
+  assert.ok(captionPairs.every((caption) => !caption.includes('Ilya Sorin, Civic Harmony Bureau, Underrail Warrens')))
+  assert.doesNotMatch(prompt, /Stop and submit|steam hiss blast/)
+  assert.doesNotMatch(prompt, /"entities"|\{\s*"name"/)
+  assert.doesNotMatch(prompt, /forced into rebellion|abandoned transit maze below the city|Duplicate place anchor/)
+  assert.equal((prompt.match(/^Underrail Warrens:/gm) ?? []).length, 1)
+  assert.match(prompt, /^Ilya Sorin: Visual: /m)
+  assert.match(prompt, /Caption rules: describe only what the viewer sees/)
+  assert.match(prompt, /Storyboard rules: every Panel visual must be action-based/)
+})
+
+test('cinematic Nara EVA-9 fixture separates visual storyboard from Seedance dialogue', async () => {
+  const sharedModulePath = ['..', '..', 'supabase', 'functions', '_shared', 'output-workflow.ts'].join('/')
+  const { buildCinematicBeatSheetPrompt, buildCinematicVideoPrompt } = await import(sharedModulePath) as {
+    buildCinematicBeatSheetPrompt: (input: {
+      blockScript: Record<string, unknown>
+      assetPack: Record<string, unknown>
+      aspectRatio: string
+      prompt: string
+      guidance: null
+    }) => { prompt: string }
+    buildCinematicVideoPrompt: (input: {
+      blockScript: Record<string, unknown>
+      assetPack: Record<string, unknown>
+      prompt: string
+      guidance: null
+      durationSeconds: number
+      aspectRatio: string
+      resolution: string
+      generateAudio: boolean
+      referenceImageCount: number
+      cinematicReferenceMode?: string
+    }) => string
+  }
+  const assetPack = {
+    entities: [
+      {
+        key: 'nara_quill',
+        name: 'Nara Quill',
+        visualDescription: 'sharp-eyed woman with braided hair, patchwork tech coat, portable projector rig, blue monitor glow across her face',
+        visualTraits: ['braided hair', 'patchwork tech coat', 'focused expression'],
+      },
+      {
+        key: 'eva_9',
+        name: 'EVA-9',
+        visualDescription: 'sleek humanoid android with pale synthetic skin panels, subtle neck ports, white maintenance uniform, calm unreadable gaze',
+        visualTraits: ['pale synthetic skin panels', 'subtle neck ports', 'white maintenance uniform'],
+      },
+    ],
+  }
+  const blockScript = {
+    title: 'First Examination',
+    durationSeconds: 12,
+    shots: [
+      {
+        id: 'shot_01',
+        title: 'The found android',
+        startSeconds: 0,
+        endSeconds: 6,
+        beat: 'Nara finds EVA-9 on the worktable and realizes the machine is not ordinary.',
+        visualAction: 'Nara steps into the blue-lit bay and stops at a steel worktable where EVA-9 lies half-upright under hanging task lamps.',
+        composition: 'Nara stands at arm length from EVA-9, shoulders tight, with rainwater beading on the android casing and cold blue reflections on the table.',
+        actions: [
+          { actor: 'Nara Quill', verb: 'stares_at', target: 'EVA-9', stagingNotes: 'Her gaze tracks exposed seams, damage, and the android faceplate with visible disbelief.', startSeconds: 1, endSeconds: 5 },
+          { actor: 'EVA-9', verb: 'lies_still', target: 'worktable', stagingNotes: 'The android remains motionless except for a faint status flicker under damaged plating.', startSeconds: 0, endSeconds: 6 },
+        ],
+        dialogue: [
+          { speaker: 'Nara Quill', line: "You're what came out of the Foundry.", delivery: 'stunned and quiet', startSeconds: 4, endSeconds: 6 },
+        ],
+        audioCues: ['rain ticking against the bay window', 'low electrical hum under the table'],
+      },
+      {
+        id: 'shot_02',
+        title: 'Too refined',
+        startSeconds: 6,
+        endSeconds: 12,
+        beat: 'Nara inspects the internal architecture and becomes more bewildered.',
+        visualAction: 'Nara leans over EVA-9, lifts a torn panel edge with gloved fingers, and studies the intricate internal architecture.',
+        composition: 'Tight worktable view with Nara braced in the task light, EVA-9 face and upper torso visible, tiny status reflections moving across polished synthetic seams.',
+        actions: [
+          { actor: 'Nara Quill', verb: 'leans_over', target: 'EVA-9', stagingNotes: 'She braces one hand on the table and lowers into the task light.', startSeconds: 0, endSeconds: 3 },
+          { actor: 'Nara Quill', verb: 'examines', target: 'EVA-9', stagingNotes: 'Bewilderment overtakes suspicion as she studies the component lattice.', startSeconds: 3, endSeconds: 6 },
+        ],
+        dialogue: [
+          { speaker: 'Nara Quill', line: 'No. This is too refined.', delivery: 'whispered, disbelieving', startSeconds: 3, endSeconds: 5 },
+        ],
+        audioCues: ['soft servo flicker beneath damaged plating', 'distant thunder through metal walls'],
+      },
+    ],
+  }
+
+  const storyboardPrompt = buildCinematicBeatSheetPrompt({
+    blockScript,
+    assetPack,
+    aspectRatio: '16:9',
+    prompt: 'create a cinematic where Nara Quill is examining Eva-9 for the first time',
+    guidance: null,
+  }).prompt
+  assert.doesNotMatch(storyboardPrompt, /You're what came out of the Foundry|No\. This is too refined|rain ticking|electrical hum|servo flicker/)
+  assert.doesNotMatch(storyboardPrompt, /\b(stares_at|leans_over|lies_still)\b/)
+  assert.match(storyboardPrompt, /Nara steps into the blue-lit bay/)
+  assert.match(storyboardPrompt, /Nara Quill's mouth is slightly open/)
+
+  const videoPrompt = buildCinematicVideoPrompt({
+    blockScript,
+    assetPack,
+    prompt: 'create a cinematic where Nara Quill is examining Eva-9 for the first time',
+    guidance: null,
+    durationSeconds: 12,
+    aspectRatio: '16:9',
+    resolution: '720p',
+    generateAudio: true,
+    referenceImageCount: 3,
+    cinematicReferenceMode: 'storyboard_sheet',
+  })
+  assert.match(videoPrompt, /Nara Quill: "You're what came out of the Foundry\."/)
+  assert.match(videoPrompt, /Nara Quill: "No\. This is too refined\."/)
+  assert.match(videoPrompt, /rain ticking against the bay window/)
+  assert.match(videoPrompt, /@Image1: storyboard beat-sheet grid/)
 })
 
 test('prompt-first image request payloads do not inherit comic page count', () => {

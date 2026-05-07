@@ -1389,6 +1389,8 @@ export function planOutputPrompt(input: {
       : boundScope.selectedEntityKeys
   const selectedSequenceUnitKeys = documentReference
     ? (input.selectedSequenceUnitKeys?.length ? input.selectedSequenceUnitKeys : sortedSequenceUnits(input.snapshot.worldEntities).map((entity) => entity.key).slice(0, STORY_BIBLE_SEQUENCE_LIMIT))
+    : cinematicKind
+      ? [...new Set(input.selectedSequenceUnitKeys ?? [])]
     : boundScope.selectedSequenceUnitKeys
   const sections = documentReference ? storyBibleSectionsForKind(classification.outputKind) : []
   return outputPromptPlannerResultSchema.parse({
@@ -2352,6 +2354,22 @@ function resolveSeedance2Model(resolution: CinematicResolution) {
     : 'bytedance/seedance-2.0/fast/reference-to-video'
 }
 
+function isCinematicVisualEntity(entity: z.infer<typeof worldEntitySchema> | null | undefined) {
+  if (!entity) return false
+  if (entity.nodeType === 'sequence_unit' || entity.nodeType === 'event') return false
+  return [
+    'actor',
+    'group',
+    'place',
+    'object',
+    'concept',
+    'location_spot',
+    'inventory_item',
+    'screen_mockup',
+    'image_region',
+  ].includes(entity.nodeType)
+}
+
 function chooseCinematicEntityKeys(input: {
   selectedEntityKeys: string[]
   selectedSequenceUnitKey: string
@@ -2359,7 +2377,15 @@ function chooseCinematicEntityKeys(input: {
   worldEntities: z.infer<typeof worldEntitySchema>[]
   worldRelationships: z.infer<typeof worldRelationshipSchema>[]
 }) {
-  return chooseComicEntityKeys(input).slice(0, 16)
+  const entityByKey = new Map(input.worldEntities.map((entity) => [entity.key, entity]))
+  const keys = chooseComicEntityKeys(input)
+    .filter((key) => isCinematicVisualEntity(entityByKey.get(key)))
+    .slice(0, 16)
+  if (keys.length > 0) return keys
+  return input.worldEntities
+    .filter(isCinematicVisualEntity)
+    .map((entity) => entity.key)
+    .slice(0, 12)
 }
 
 export function buildCinematicSequencePlan(
@@ -2369,8 +2395,11 @@ export function buildCinematicSequencePlan(
   const worldWiki = request.snapshot.worldWiki
   const sequenceUnits = sortedSequenceUnits(request.snapshot.worldEntities)
   const requestedSequenceKeys = request.selectedSequenceUnitKeys.filter(Boolean)
-  const selectedSequenceUnitKey = requestedSequenceKeys[0] ?? sequenceUnits[0]?.key ?? 'cinematic-sequence'
-  const selectedSequenceUnit = sequenceUnits.find((entity) => entity.key === selectedSequenceUnitKey) ?? sequenceUnits[0] ?? null
+  const selectedSequenceUnitKey = requestedSequenceKeys[0] ?? ''
+  const selectedSequenceUnit = selectedSequenceUnitKey
+    ? sequenceUnits.find((entity) => entity.key === selectedSequenceUnitKey) ?? null
+    : null
+  const sourceSequenceUnitKeys = selectedSequenceUnitKey ? [selectedSequenceUnitKey] : []
   const selectedEntityKeys = chooseCinematicEntityKeys({
     selectedEntityKeys: request.selectedEntityKeys,
     selectedSequenceUnitKey,
@@ -2395,12 +2424,14 @@ export function buildCinematicSequencePlan(
   const debugSkipVideoGeneration = request.debugSkipVideoGeneration ?? aiGenerationSettings.outputWorkflow.debugSkipVideoGenerationDefault
   const videoModel = resolveSeedance2Model(resolution)
   const title = worldWiki.title || request.snapshot.project.name
-  const sequenceTitle = selectedSequenceUnit?.name || 'Selected Sequence'
+  const sequenceTitle = selectedSequenceUnit?.name || ''
   const name = preset === 'cinematic_trailer'
     ? `${title} Cinematic Trailer`
     : preset === 'ugc_episode'
       ? `${title} UGC Video`
-      : `${title} - ${sequenceTitle} Cinematic`
+      : sequenceTitle
+        ? `${title} - ${sequenceTitle} Cinematic`
+        : `${title} Cinematic`
   const scriptAuthoringNode = nodeBase({
     key: 'cinematic_script_authoring',
     nodeType: 'text_llm',
@@ -2481,7 +2512,7 @@ export function buildCinematicSequencePlan(
       y: 120,
       config: {
         sourceEntityKeys: selectedEntityKeys,
-        sourceSequenceUnitKeys: [selectedSequenceUnitKey],
+        sourceSequenceUnitKeys,
         includeWiki: true,
         includeVisualReferences: true,
         execution: { resourceClass: 'utility' },
@@ -2552,12 +2583,12 @@ export function buildCinematicSequencePlan(
     prompt,
     targetFormat: 'video',
     sourceEntityKeys: selectedEntityKeys,
-    sourceSequenceUnitKeys: [selectedSequenceUnitKey],
+    sourceSequenceUnitKeys,
     nodes,
     edges,
     diagnostics: [
       ...graphValidation.diagnostics,
-      ...(requestedSequenceKeys.length !== 1 ? ['Cinematic V1 uses one sequence_unit as the story spine; the first available sequence unit was used when none was selected.'] : []),
+      ...(sourceSequenceUnitKeys.length === 0 ? ['No sequence_unit story spine was selected; cinematic entity references are bound from the prompt, world wiki, and explicitly selected entities only.'] : []),
       'Cinematic outputs now author a full script first, then dynamically materialize compiled takes after the script is compiled. Total generated video duration is capped at 60 seconds.',
       cinematicReferenceMode === 'keyframes'
         ? 'Keyframe reference mode is enabled: Seedance uses clean opening/midpoint/ending keyframes before individual entity reference assets.'

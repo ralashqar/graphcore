@@ -17,6 +17,7 @@ export const aiGenerationSettings = {
       group: { width: 2048, height: 2048 },
       item: { width: 2048, height: 2048 },
     },
+    cinematicStoryboardImageQuality: 'medium',
     cinematicReferenceModeDefault: 'storyboard_sheet',
     debugSkipVideoGenerationDefault: true,
   },

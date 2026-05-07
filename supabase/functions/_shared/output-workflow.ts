@@ -53,10 +53,12 @@ import {
   runOpenAiResponses,
   type OpenAiResponseResult,
 } from './openai.ts'
+import { aiGenerationSettings } from '../../../src/config/aiGenerationSettings.ts'
 
 const OUTPUT_WORKFLOW_EXECUTOR_VERSION = 'output-text-gpt54-v6'
 const DEFAULT_OUTPUT_WORKFLOW_TEXT_MODEL = 'gpt-5.4'
 const CINEMATIC_MAX_TOTAL_DURATION_SECONDS = 60
+const CINEMATIC_STORYBOARD_IMAGE_QUALITY = aiGenerationSettings.outputWorkflow.cinematicStoryboardImageQuality
 const DEFAULT_CHAPTER_PROSE_TIMEOUT_MS = 3_600_000
 const DEFAULT_CHAPTER_PROSE_ATTEMPTS = 2
 const FAL_QUEUE_BASE_URL = 'https://queue.fal.run'
@@ -1962,20 +1964,67 @@ const comicScriptJsonSchema = {
   },
 }
 
+function isDirectReferenceUrl(value: string) {
+  return /^https?:\/\//i.test(value) || /^data:image\//i.test(value)
+}
+
+function isProjectAssetStoragePath(value: string) {
+  return /^generated\//i.test(value) || /^uploads\//i.test(value) || /^project-assets\//i.test(value)
+}
+
+function mimeTypeForStoragePath(storagePath: string) {
+  const lower = storagePath.toLowerCase()
+  if (lower.endsWith('.webp')) return 'image/webp'
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg'
+  if (lower.endsWith('.gif')) return 'image/gif'
+  if (lower.endsWith('.mp4')) return 'video/mp4'
+  return 'image/png'
+}
+
+function referenceValuePriority(value: string) {
+  const lower = value.toLowerCase()
+  if (lower.includes('entity-reference-sheet') || lower.includes('entity_reference_sheet')) return 0
+  if (lower.includes('reference-sheet') || lower.includes('reference_sheet')) return 1
+  if (lower.includes('world_icon') || lower.includes('world-icons')) return 8
+  if (lower.includes('icon')) return 7
+  return 3
+}
+
+function sortReferenceValues(values: string[]) {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))]
+    .sort((left, right) => {
+      const priorityDelta = referenceValuePriority(left) - referenceValuePriority(right)
+      if (priorityDelta !== 0) return priorityDelta
+      return left.localeCompare(right)
+    })
+}
+
 function entityAssetKeys(entity: Record<string, unknown>, assets: Record<string, unknown>[]) {
   const metadata = asRecord(entity.metadata)
   const keys = [
     readText(metadata.referenceSheetAssetKey),
     ...readStringArray(metadata.referenceSheetAssetKeys),
+    readText(metadata.referenceSheetUrl),
+    readText(metadata.referenceSheetImageUrl),
+    readText(metadata.referenceSheetStoragePath),
+    readText(metadata.imageUrl),
+    readText(metadata.image_url),
+    readText(metadata.sourceUrl),
+    readText(metadata.sourceAssetUrl),
+    readText(entity.imageUrl),
+    readText(entity.image_url),
+    readText(entity.sourceUrl),
+    readText(entity.source_url),
     readText(entity.thumbnailAssetKey),
     readText(entity.thumbnail_asset_key),
     readText(metadata.brandAtlasAssetKey),
     readText(metadata.assetKey),
+    readText(metadata.storagePath),
   ].filter(Boolean)
   const matching = assets
     .filter((asset) => keys.includes(readText(asset.key)))
     .map((asset) => readText(asset.key))
-  return [...new Set([...keys, ...matching])].filter(Boolean)
+  return sortReferenceValues([...keys, ...matching])
 }
 
 function buildDeterministicComicAssetPack(context: Record<string, unknown>) {
@@ -1995,6 +2044,74 @@ function buildDeterministicComicAssetPack(context: Record<string, unknown>) {
   return {
     entities: packedEntities,
     missingReferenceEntityKeys: packedEntities.filter((entity) => entity.assetKeys.length === 0).map((entity) => entity.key),
+  }
+}
+
+async function refreshWorldContextVisualReferences(client: DatabaseClient, run: OutputWorkflowRun, context: Record<string, unknown>) {
+  const entities = Array.isArray(context.entities) ? context.entities.map(asRecord) : []
+  if (entities.length === 0) return context
+  const entityKeys = [...new Set(entities.map((entity) => readText(entity.key)).filter(Boolean))]
+  if (entityKeys.length === 0) return context
+
+  const latestResponse = await client
+    .from('world_entities')
+    .select('key, thumbnail_asset_key, metadata, updated_at')
+    .eq('draft_id', run.draftId)
+    .in('key', entityKeys)
+  const latestRows = latestResponse.error ? [] : (latestResponse.data ?? []).map(asRecord)
+  const latestByKey = new Map(latestRows.map((row) => [readText(row.key), row]).filter(([key]) => key))
+  const refreshedEntities = entities.map((entity) => {
+    const latest = latestByKey.get(readText(entity.key))
+    if (!latest) return entity
+    const entityMetadata = asRecord(entity.metadata)
+    const latestMetadata = asRecord(latest.metadata)
+    const latestThumbnail = readText(latest.thumbnail_asset_key)
+    return {
+      ...entity,
+      thumbnailAssetKey: latestThumbnail || readText(entity.thumbnailAssetKey),
+      thumbnail_asset_key: latestThumbnail || readText(entity.thumbnail_asset_key),
+      metadata: {
+        ...entityMetadata,
+        ...latestMetadata,
+      },
+      updatedAt: readText(latest.updated_at) || readText(entity.updatedAt),
+      updated_at: readText(latest.updated_at) || readText(entity.updated_at),
+    }
+  })
+
+  const existingAssets = Array.isArray(context.assets) ? context.assets.map(asRecord) : []
+  const existingAssetKeys = new Set(existingAssets.map((asset) => readText(asset.key)).filter(Boolean))
+  const referencedAssetKeys = refreshedEntities
+    .flatMap((entity) => entityAssetKeys(entity, existingAssets))
+    .filter((value) => value && !isDirectReferenceUrl(value) && !isProjectAssetStoragePath(value) && !existingAssetKeys.has(value))
+  const missingAssetKeys = [...new Set(referencedAssetKeys)]
+  let hydratedAssets: Record<string, unknown>[] = []
+  if (missingAssetKeys.length > 0) {
+    const assetResponse = await client
+      .from('project_assets')
+      .select('key, name, kind, mime_type, storage_path, metadata')
+      .eq('project_id', run.projectId)
+      .in('key', missingAssetKeys)
+    hydratedAssets = assetResponse.error
+      ? []
+      : (assetResponse.data ?? []).map((asset) => ({
+        key: readText(asRecord(asset).key),
+        name: readText(asRecord(asset).name),
+        kind: readText(asRecord(asset).kind),
+        mimeType: readText(asRecord(asset).mime_type),
+        mime_type: readText(asRecord(asset).mime_type),
+        storagePath: readText(asRecord(asset).storage_path),
+        storage_path: readText(asRecord(asset).storage_path),
+        metadata: asRecord(asRecord(asset).metadata),
+      }))
+  }
+
+  return {
+    ...context,
+    entities: refreshedEntities,
+    assets: [...existingAssets, ...hydratedAssets],
+    refreshedVisualReferences: true,
+    refreshedVisualReferenceAssetKeys: hydratedAssets.map((asset) => readText(asset.key)).filter(Boolean),
   }
 }
 
@@ -2053,7 +2170,7 @@ function mergeComicSelectedEntitiesWithFallback(selectedEntities: Array<Record<s
   }).filter((entity) => entity.key || entity.name).slice(0, 16)
 }
 
-function buildDeterministicCinematicAssetPack(context: Record<string, unknown>) {
+export function buildDeterministicCinematicAssetPack(context: Record<string, unknown>) {
   return buildDeterministicComicAssetPack(context)
 }
 
@@ -2090,121 +2207,151 @@ function cinematicContextBrief(context: Record<string, unknown>) {
   }
 }
 
-const cinematicScriptAuthoringJsonSchema = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['title', 'logline', 'tone', 'continuityNotes', 'shots'],
-  properties: {
-    title: { type: 'string' },
-    logline: { type: 'string' },
-    tone: { type: 'string' },
-    continuityNotes: { type: 'string' },
-    shots: {
-      type: 'array',
-      minItems: 1,
-      maxItems: 36,
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: [
-          'id',
-          'sceneId',
-          'title',
-          'beat',
-          'emotionalBeat',
-          'durationSeconds',
-          'shotType',
-          'framing',
-          'cameraAngle',
-          'cameraMovement',
-          'lensPreference',
-          'visualPrompt',
-          'compositionGuide',
-          'continuityNotes',
-          'participantRefIds',
-          'locationRefId',
-          'propRefIds',
-          'backdropRefIds',
-          'forceTakeBreak',
-          'actions',
-          'dialogue',
-          'audio',
-        ],
-        properties: {
-          id: { type: 'string' },
-          sceneId: { type: 'string' },
-          title: { type: 'string' },
-          beat: { type: 'string' },
-          emotionalBeat: { type: 'string' },
-          durationSeconds: { type: 'number' },
-          shotType: { type: 'string' },
-          framing: { type: 'string' },
-          cameraAngle: { type: 'string' },
-          cameraMovement: { type: 'string' },
-          lensPreference: { type: 'string' },
-          visualPrompt: { type: 'string' },
-          compositionGuide: { type: 'string' },
-          continuityNotes: { type: 'string' },
-          participantRefIds: { type: 'array', items: { type: 'string' } },
-          locationRefId: { type: 'string' },
-          propRefIds: { type: 'array', items: { type: 'string' } },
-          backdropRefIds: { type: 'array', items: { type: 'string' } },
-          forceTakeBreak: { type: 'boolean' },
-          actions: {
-            type: 'array',
-            items: {
-              type: 'object',
-              additionalProperties: false,
-              required: ['id', 'actorRefId', 'targetRefId', 'verb', 'propRefId', 'stagingNotes', 'startSeconds', 'endSeconds'],
-              properties: {
-                id: { type: 'string' },
-                actorRefId: { type: 'string' },
-                targetRefId: { type: 'string' },
-                verb: { type: 'string' },
-                propRefId: { type: 'string' },
-                stagingNotes: { type: 'string' },
-                startSeconds: { type: 'number' },
-                endSeconds: { type: 'number' },
-              },
-            },
+function isUgcCinematicPresetFamily(presetFamily: string) {
+  const normalized = presetFamily.toLowerCase()
+  return normalized.startsWith('ugc') || normalized.includes('brand') || normalized.includes('ad')
+}
+
+function cinematicScriptAuthoringJsonSchemaForPreset(presetFamily: string) {
+  const includeUgcDirectives = isUgcCinematicPresetFamily(presetFamily)
+  const schema: Record<string, unknown> = {
+    type: 'object',
+    additionalProperties: false,
+    required: [
+      'title',
+      'logline',
+      'tone',
+      'continuityLock',
+      'scenes',
+      'entityRefs',
+      'shots',
+      ...(includeUgcDirectives ? ['ugcDirectives'] : []),
+    ],
+    properties: {
+      title: { type: 'string' },
+      logline: { type: 'string' },
+      tone: { type: 'string' },
+      continuityLock: { type: 'string' },
+      scenes: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['id', 'title', 'summary', 'location'],
+          properties: {
+            id: { type: 'string' },
+            title: { type: 'string' },
+            summary: { type: 'string' },
+            location: { type: 'string' },
           },
-          dialogue: {
-            type: 'array',
-            items: {
-              type: 'object',
-              additionalProperties: false,
-              required: ['id', 'speakerRefId', 'line', 'delivery', 'startSeconds', 'endSeconds', 'lipSync'],
-              properties: {
-                id: { type: 'string' },
-                speakerRefId: { type: 'string' },
-                line: { type: 'string' },
-                delivery: { type: 'string' },
-                startSeconds: { type: 'number' },
-                endSeconds: { type: 'number' },
-                lipSync: { type: 'boolean' },
-              },
-            },
+        },
+      },
+      entityRefs: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['id', 'role'],
+          properties: {
+            id: { type: 'string' },
+            role: { type: 'string' },
           },
-          audio: {
-            type: 'array',
-            items: {
-              type: 'object',
-              additionalProperties: false,
-              required: ['id', 'kind', 'cue', 'sourceRefId', 'startSeconds', 'endSeconds'],
-              properties: {
-                id: { type: 'string' },
-                kind: { type: 'string' },
-                cue: { type: 'string' },
-                sourceRefId: { type: 'string' },
-                startSeconds: { type: 'number' },
-                endSeconds: { type: 'number' },
+        },
+      },
+      shots: {
+        type: 'array',
+        minItems: 1,
+        maxItems: 36,
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: [
+            'id',
+            'sceneId',
+            'title',
+            'beat',
+            'emotionalBeat',
+            'durationSeconds',
+            'framing',
+            'cameraMovement',
+            'visualAction',
+            'composition',
+            'participants',
+            'location',
+            'props',
+            'actions',
+            'audioCues',
+            'dialogue',
+            'forceTakeBreak',
+          ],
+          properties: {
+            id: { type: 'string' },
+            sceneId: { type: 'string' },
+            title: { type: 'string' },
+            beat: { type: 'string' },
+            emotionalBeat: { type: 'string' },
+            durationSeconds: { type: 'number' },
+            framing: { type: 'string' },
+            cameraMovement: { type: 'string' },
+            visualAction: { type: 'string' },
+            composition: { type: 'string' },
+            participants: { type: 'array', items: { type: 'string' } },
+            location: { type: 'string' },
+            props: { type: 'array', items: { type: 'string' } },
+            actions: {
+              type: 'array',
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['actor', 'verb', 'target', 'prop', 'stagingNotes', 'startSeconds', 'endSeconds'],
+                properties: {
+                  actor: { type: 'string' },
+                  verb: { type: 'string' },
+                  target: { type: 'string' },
+                  prop: { type: 'string' },
+                  stagingNotes: { type: 'string' },
+                  startSeconds: { type: 'number' },
+                  endSeconds: { type: 'number' },
+                },
               },
             },
+            audioCues: { type: 'array', items: { type: 'string' } },
+            dialogue: {
+              type: 'array',
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['speaker', 'line', 'delivery', 'startSeconds', 'endSeconds'],
+                properties: {
+                  speaker: { type: 'string' },
+                  line: { type: 'string' },
+                  delivery: { type: 'string' },
+                  startSeconds: { type: 'number' },
+                  endSeconds: { type: 'number' },
+                },
+              },
+            },
+            forceTakeBreak: { type: 'boolean' },
           },
         },
       },
     },
-  },
+  }
+  if (includeUgcDirectives) {
+    const properties = asRecord(schema.properties)
+    properties.ugcDirectives = {
+      type: 'object',
+      additionalProperties: false,
+      required: ['formulaFamily', 'hookType', 'proofMoment', 'ctaType'],
+      properties: {
+        formulaFamily: { type: 'string' },
+        hookType: { type: 'string' },
+        proofMoment: { type: 'string' },
+        ctaType: { type: 'string' },
+      },
+    }
+  }
+  return schema
 }
 
 function normalizeMaybeNullString(value: unknown) {
@@ -2227,66 +2374,227 @@ function coerceCinematicAudioKind(value: unknown) {
   return ['dialogue', 'ambience', 'sfx', 'music', 'silence', 'offscreen'].includes(text) ? text : 'ambience'
 }
 
-function buildCinematicEntityBindings(assetPack: Record<string, unknown>) {
-  const entities = Array.isArray(assetPack.entities) ? assetPack.entities.map(asRecord) : []
-  return entities.slice(0, 16).map((entity, index) => ({
-    id: readText(entity.key) || `entity_${index + 1}`,
-    kind: readText(entity.type) === 'place' ? 'environment' : readText(entity.type) === 'item' ? 'item' : 'character',
-    role: readText(entity.role) || readText(entity.type) || 'reference',
-    label: readText(entity.name) || readText(entity.key) || `Entity ${index + 1}`,
-    sourceName: readText(entity.name),
-    summary: readText(entity.summary),
-    assetKey: readStringArray(entity.assetKeys)[0] ?? null,
-    stagingNotes: [
-      readText(entity.visualDescription),
-      readStringArray(entity.visualTraits).length > 0 ? `Traits: ${readStringArray(entity.visualTraits).join(', ')}` : '',
-    ].filter(Boolean).join(' '),
-    priority: Math.max(10, 90 - index * 4),
-    required: true,
-  }))
+function canonicalCinematicEntityKey(entity: Record<string, unknown>, fallbackId: string) {
+  const assetKey = readStringArray(entity.assetKeys)[0] ?? readText(entity.assetKey)
+  const name = readText(entity.name)
+  const key = readText(entity.key) || readText(entity.id) || fallbackId
+  return [
+    name ? `name:${name.toLowerCase().replace(/[^a-z0-9]+/g, '')}` : '',
+    assetKey ? `asset:${assetKey}` : '',
+    key ? `key:${key.toLowerCase().replace(/^world\.[^.]+\./, '').replace(/[^a-z0-9]+/g, '')}` : '',
+  ].filter(Boolean)[0] ?? `fallback:${fallbackId}`
 }
 
-function normalizeCinematicScriptDoc(value: Record<string, unknown>, fallback: Record<string, unknown>, assetPack: Record<string, unknown>) {
-  const rawShots = Array.isArray(value.shots) ? value.shots.map(asRecord) : []
-  if (rawShots.length === 0) return cinematicScriptDocSchema.parse(fallback)
-  const entityKeys = new Set(buildCinematicEntityBindings(assetPack).map((entry) => entry.id))
-  const normalizeRefArray = (refs: unknown) => readStringArray(refs).filter((key) => entityKeys.size === 0 || entityKeys.has(key)).slice(0, 8)
-  const shots = rawShots.slice(0, 36).map((shot, index) => {
-    const durationSeconds = clampShotDuration(shot.durationSeconds, index === 0 ? 3 : 4)
-    const participantRefIds = normalizeRefArray(shot.participantRefIds)
-    const actions = Array.isArray(shot.actions) ? shot.actions.map(asRecord).slice(0, 5) : []
-    const dialogue = Array.isArray(shot.dialogue) ? shot.dialogue.map(asRecord).slice(0, 4) : []
-    const audio = Array.isArray(shot.audio) ? shot.audio.map(asRecord).slice(0, 3) : []
-    const shotId = readText(shot.id) || `shot_${String(index + 1).padStart(3, '0')}`
-    const beat = readText(shot.beat) || readText(shot.visualPrompt) || readText(shot.title) || `Cinematic beat ${index + 1}`
+function buildCinematicEntityBindings(assetPack: Record<string, unknown>) {
+  const entities = Array.isArray(assetPack.entities) ? assetPack.entities.map(asRecord) : []
+  const byKey = new Map<string, Record<string, unknown>>()
+  for (const [index, entity] of entities.entries()) {
+    const canonicalKey = canonicalCinematicEntityKey(entity, `entity_${index + 1}`)
+    const existing = byKey.get(canonicalKey)
+    if (!existing) {
+      byKey.set(canonicalKey, { ...entity, _originalIndex: index })
+      continue
+    }
+    const existingAsset = readStringArray(existing.assetKeys)[0] ?? readText(existing.assetKey)
+    const nextAsset = readStringArray(entity.assetKeys)[0] ?? readText(entity.assetKey)
+    if (!existingAsset && nextAsset) {
+      byKey.set(canonicalKey, { ...entity, _originalIndex: readText(existing._originalIndex) || index })
+    }
+  }
+  return Array.from(byKey.values()).slice(0, 16).map((entity, index) => {
+    const type = readText(entity.type)
+    const role = readText(entity.role) || type || 'reference'
+    const kind = type === 'place' || role === 'place' || role === 'environment'
+      ? 'environment'
+      : type === 'item' || role === 'item' || role === 'prop'
+        ? 'item'
+        : role === 'group'
+          ? 'character'
+          : 'character'
     return {
-      id: shotId,
-      sceneId: normalizeMaybeNullString(shot.sceneId) ?? 'scene_1',
-      orderIndex: index,
-      title: readText(shot.title) || `Shot ${index + 1}`,
+      id: readText(entity.key) || readText(entity.id) || `entity_${index + 1}`,
+      kind,
+      role,
+      label: readText(entity.name) || readText(entity.key) || `Entity ${index + 1}`,
+      sourceName: readText(entity.name),
+      summary: readText(entity.summary),
+      assetKey: (readStringArray(entity.assetKeys)[0] ?? readText(entity.assetKey)) || null,
+      stagingNotes: [
+        readText(entity.visualDescription),
+        readStringArray(entity.visualTraits).length > 0 ? `Traits: ${readStringArray(entity.visualTraits).join(', ')}` : '',
+      ].filter(Boolean).join(' '),
+      priority: Math.max(10, 90 - index * 4),
+      required: true,
+    }
+  })
+}
+
+function sanitizeCinematicScriptText(value: unknown) {
+  return readText(value)
+    .replace(/@[\s_-]*(?:image|video|audio)\s*\d+/gi, '')
+    .replace(/\b(?:GPT\s*Image\s*2|Seedance\s*2(?:\.0)?|gpt-image-2|reference-to-video)\b/gi, '')
+    .replace(/\b(?:480p|720p|1080p)\b/gi, '')
+    .replace(/\b(?:16:9|9:16|1:1|4:3|3:4)\b/g, '')
+    .replace(/\bkeyframes?\b/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+}
+
+function normalizeDirectorDialogue(value: unknown, durationSeconds = 1) {
+  const entries = Array.isArray(value) ? value.map(asRecord) : []
+  return entries.map((entry) => ({
+    speaker: sanitizeCinematicScriptText(entry.speaker ?? entry.speakerRefId),
+    line: sanitizeCinematicScriptText(entry.line),
+    delivery: sanitizeCinematicScriptText(entry.delivery),
+    startSeconds: Math.max(0, Math.min(durationSeconds, Number(entry.startSeconds ?? 0) || 0)),
+    endSeconds: Math.max(0, Math.min(durationSeconds, Number(entry.endSeconds ?? Math.min(durationSeconds, 2)) || Math.min(durationSeconds, 2))),
+  })).filter((entry) => entry.line)
+}
+
+function normalizeDirectorActions(value: unknown, input: {
+  shotId: string
+  participantRefIds: string[]
+  propRefIds: string[]
+  beat: string
+  visualAction: string
+  durationSeconds: number
+}) {
+  const entries = Array.isArray(value) ? value.map(asRecord) : []
+  const normalized = entries.map((entry, index) => {
+    const startSeconds = Math.max(0, Math.min(input.durationSeconds, Number(entry.startSeconds ?? 0) || 0))
+    const endSeconds = Math.max(startSeconds, Math.min(input.durationSeconds, Number(entry.endSeconds ?? input.durationSeconds) || input.durationSeconds))
+    return {
+      actor: sanitizeCinematicScriptText(entry.actor ?? entry.actorRefId) || input.participantRefIds[0] || '',
+      verb: sanitizeCinematicScriptText(entry.verb ?? entry.action) || input.beat || `visible action ${index + 1}`,
+      target: sanitizeCinematicScriptText(entry.target ?? entry.targetRefId),
+      prop: sanitizeCinematicScriptText(entry.prop ?? entry.propRefId) || input.propRefIds[0] || '',
+      stagingNotes: sanitizeCinematicScriptText(entry.stagingNotes ?? entry.description) || input.visualAction || input.beat,
+      startSeconds,
+      endSeconds,
+    }
+  }).filter((entry) => entry.verb || entry.stagingNotes)
+  if (normalized.length > 0) return normalized.slice(0, 5)
+  return [{
+    actor: input.participantRefIds[0] || '',
+    verb: input.beat || 'moves through the shot',
+    target: '',
+    prop: input.propRefIds[0] || '',
+    stagingNotes: input.visualAction || input.beat || 'Stage the shot as one clear visible action.',
+    startSeconds: 0,
+    endSeconds: input.durationSeconds,
+  }]
+}
+
+function normalizeCinematicScriptAuthoring(input: {
+  value: Record<string, unknown>
+  fallback: Record<string, unknown>
+  assetPack: Record<string, unknown>
+  presetFamily: string
+  maxTotalDurationSeconds: number
+}) {
+  const { value, fallback, assetPack } = input
+  const rawShots = Array.isArray(value.shots) ? value.shots.map(asRecord) : []
+  const source = rawShots.length > 0 ? value : fallback
+  const sourceShots = Array.isArray(source.shots) ? source.shots.map(asRecord) : []
+  const entityBindings = buildCinematicEntityBindings(assetPack)
+  const entityKeys = new Set(entityBindings.map((entry) => entry.id))
+  const normalizeRefArray = (refs: unknown) => readStringArray(refs).filter((key) => entityKeys.size === 0 || entityKeys.has(key)).slice(0, 8)
+  const sceneValues = Array.isArray(source.scenes) ? source.scenes.map(asRecord) : []
+  const directorScenes = sceneValues.length > 0
+    ? sceneValues.map((scene, index) => ({
+      id: sanitizeCinematicScriptText(scene.id) || `scene_${index + 1}`,
+      title: sanitizeCinematicScriptText(scene.title) || `Scene ${index + 1}`,
+      summary: sanitizeCinematicScriptText(scene.summary),
+      location: sanitizeCinematicScriptText(scene.location ?? scene.locationId),
+    }))
+    : [{
+      id: 'scene_1',
+      title: 'Scene 1',
+      summary: sanitizeCinematicScriptText(source.logline ?? fallback.logline),
+      location: entityBindings.find((entry) => entry.kind === 'environment')?.id ?? '',
+    }]
+  let cumulativeStart = 0
+  const maxTotalDurationSeconds = Math.max(4, Math.min(CINEMATIC_MAX_TOTAL_DURATION_SECONDS, input.maxTotalDurationSeconds || CINEMATIC_MAX_TOTAL_DURATION_SECONDS))
+  const directorShots: Record<string, unknown>[] = []
+  const legacyShots: Record<string, unknown>[] = []
+  for (const [index, shot] of sourceShots.slice(0, 36).entries()) {
+    if (cumulativeStart >= maxTotalDurationSeconds) break
+    const remaining = maxTotalDurationSeconds - cumulativeStart
+    const durationSeconds = Math.min(remaining, clampShotDuration(shot.durationSeconds, index === 0 ? 3 : 4))
+    if (durationSeconds <= 0) break
+    const shotId = sanitizeCinematicScriptText(shot.id) || `shot_${String(index + 1).padStart(3, '0')}`
+    const sceneId = sanitizeCinematicScriptText(shot.sceneId) || directorScenes[0]?.id || 'scene_1'
+    const participantRefIds = normalizeRefArray(shot.participants ?? shot.participantRefIds)
+    const locationRefId = normalizeMaybeNullString(shot.location ?? shot.locationRefId)
+    const propRefIds = normalizeRefArray(shot.props ?? shot.propRefIds)
+    const visualAction = sanitizeCinematicScriptText(shot.visualAction ?? shot.visualPrompt ?? shot.beat ?? shot.title)
+    const composition = sanitizeCinematicScriptText(shot.composition ?? shot.compositionGuide)
+    const beat = sanitizeCinematicScriptText(shot.beat) || visualAction || `Cinematic beat ${index + 1}`
+    const startSeconds = cumulativeStart
+    const endSeconds = cumulativeStart + durationSeconds
+    const actions = Array.isArray(shot.actions) ? shot.actions.map(asRecord).slice(0, 5) : []
+    const audio = Array.isArray(shot.audio) ? shot.audio.map(asRecord).slice(0, 3) : []
+    const audioCues = readStringArray(shot.audioCues).map(sanitizeCinematicScriptText).filter(Boolean)
+    const directorDialogue = normalizeDirectorDialogue(shot.dialogue, durationSeconds).slice(0, 4)
+    const directorActions = normalizeDirectorActions(shot.actions, {
+      shotId,
+      participantRefIds,
+      propRefIds,
       beat,
-      emotionalBeat: readText(shot.emotionalBeat),
+      visualAction,
+      durationSeconds,
+    })
+    directorShots.push({
+      id: shotId,
+      sceneId,
+      title: sanitizeCinematicScriptText(shot.title) || `Shot ${index + 1}`,
+      beat,
+      emotionalBeat: sanitizeCinematicScriptText(shot.emotionalBeat),
+      durationSeconds,
+      startSeconds,
+      endSeconds,
+      framing: sanitizeCinematicScriptText(shot.framing),
+      cameraMovement: sanitizeCinematicScriptText(shot.cameraMovement),
+      visualAction,
+      composition,
+      participants: participantRefIds,
+      location: locationRefId ?? '',
+      props: propRefIds,
+      actions: directorActions,
+      audioCues,
+      dialogue: directorDialogue,
+      forceTakeBreak: shot.forceTakeBreak === true,
+    })
+    legacyShots.push({
+      id: shotId,
+      sceneId,
+      orderIndex: index,
+      title: sanitizeCinematicScriptText(shot.title) || `Shot ${index + 1}`,
+      beat,
+      emotionalBeat: sanitizeCinematicScriptText(shot.emotionalBeat),
       durationSeconds,
       shotType: coerceCinematicShotType(shot.shotType),
-      framing: readText(shot.framing),
-      cameraAngle: readText(shot.cameraAngle),
-      cameraMovement: readText(shot.cameraMovement),
-      lensPreference: readText(shot.lensPreference),
-      visualPrompt: readText(shot.visualPrompt) || beat,
-      compositionGuide: readText(shot.compositionGuide),
-      continuityNotes: readText(shot.continuityNotes),
+      framing: sanitizeCinematicScriptText(shot.framing),
+      cameraAngle: sanitizeCinematicScriptText(shot.cameraAngle),
+      cameraMovement: sanitizeCinematicScriptText(shot.cameraMovement),
+      lensPreference: sanitizeCinematicScriptText(shot.lensPreference),
+      visualPrompt: visualAction || beat,
+      compositionGuide: composition,
+      continuityNotes: sanitizeCinematicScriptText(shot.continuityNotes),
       participantRefIds,
-      locationRefId: normalizeMaybeNullString(shot.locationRefId),
-      propRefIds: normalizeRefArray(shot.propRefIds),
+      locationRefId,
+      propRefIds,
       backdropRefIds: normalizeRefArray(shot.backdropRefIds),
+      startSeconds,
+      endSeconds,
       forceTakeBreak: shot.forceTakeBreak === true,
       actions: actions.length > 0 ? actions.map((action, actionIndex) => ({
-        id: readText(action.id) || `${shotId}_action_${actionIndex + 1}`,
-        actorRefId: normalizeMaybeNullString(action.actorRefId),
-        targetRefId: normalizeMaybeNullString(action.targetRefId),
-        verb: readText(action.verb) || beat,
-        propRefId: normalizeMaybeNullString(action.propRefId),
-        stagingNotes: readText(action.stagingNotes),
+        id: sanitizeCinematicScriptText(action.id) || `${shotId}_action_${actionIndex + 1}`,
+        actorRefId: normalizeMaybeNullString(action.actorRefId ?? action.actor),
+        targetRefId: normalizeMaybeNullString(action.targetRefId ?? action.target),
+        verb: sanitizeCinematicScriptText(action.verb ?? action.action) || beat,
+        propRefId: normalizeMaybeNullString(action.propRefId ?? action.prop),
+        stagingNotes: sanitizeCinematicScriptText(action.stagingNotes ?? action.description),
         startSeconds: Math.max(0, Number(action.startSeconds ?? 0) || 0),
         endSeconds: Math.max(0, Math.min(durationSeconds, Number(action.endSeconds ?? durationSeconds) || durationSeconds)),
       })) : [{
@@ -2295,37 +2603,70 @@ function normalizeCinematicScriptDoc(value: Record<string, unknown>, fallback: R
         targetRefId: null,
         verb: beat,
         propRefId: null,
-        stagingNotes: readText(shot.visualPrompt) || readText(shot.compositionGuide),
+        stagingNotes: visualAction || composition,
         startSeconds: 0,
         endSeconds: durationSeconds,
       }],
-      dialogue: dialogue.map((entry, dialogueIndex) => ({
-        id: readText(entry.id) || `${shotId}_dialogue_${dialogueIndex + 1}`,
-        speakerRefId: normalizeMaybeNullString(entry.speakerRefId),
+      dialogue: directorDialogue.map((entry, dialogueIndex) => ({
+        id: `${shotId}_dialogue_${dialogueIndex + 1}`,
+        speakerRefId: normalizeMaybeNullString(entry.speaker),
         line: readText(entry.line),
         delivery: readText(entry.delivery),
-        startSeconds: Math.max(0, Number(entry.startSeconds ?? 0) || 0),
-        endSeconds: Math.max(0, Math.min(durationSeconds, Number(entry.endSeconds ?? durationSeconds) || durationSeconds)),
-        lipSync: entry.lipSync !== false,
-      })).filter((entry) => entry.line),
+        startSeconds: Math.max(0, Math.min(durationSeconds, Number(entry.startSeconds ?? dialogueIndex) || dialogueIndex)),
+        endSeconds: Math.max(0.5, Math.min(durationSeconds, Number(entry.endSeconds ?? dialogueIndex + 2) || dialogueIndex + 2)),
+        lipSync: true,
+      })),
       audio: audio.map((entry, audioIndex) => ({
-        id: readText(entry.id) || `${shotId}_audio_${audioIndex + 1}`,
+        id: sanitizeCinematicScriptText(entry.id) || `${shotId}_audio_${audioIndex + 1}`,
         kind: coerceCinematicAudioKind(entry.kind),
-        cue: readText(entry.cue),
+        cue: sanitizeCinematicScriptText(entry.cue),
         sourceRefId: normalizeMaybeNullString(entry.sourceRefId),
         startSeconds: Math.max(0, Number(entry.startSeconds ?? 0) || 0),
         endSeconds: Math.max(0, Math.min(durationSeconds, Number(entry.endSeconds ?? durationSeconds) || durationSeconds)),
-      })).filter((entry) => entry.cue),
+      })).filter((entry) => entry.cue).concat(audioCues.map((cue, audioIndex) => ({
+        id: `${shotId}_audio_cue_${audioIndex + 1}`,
+        kind: 'ambience',
+        cue,
+        sourceRefId: null,
+        startSeconds: 0,
+        endSeconds: durationSeconds,
+      }))),
+    })
+    cumulativeStart = endSeconds
+  }
+  const directorScriptDoc: Record<string, unknown> = {
+    title: sanitizeCinematicScriptText(source.title) || sanitizeCinematicScriptText(fallback.title) || 'Prompt Cinematic',
+    logline: sanitizeCinematicScriptText(source.logline) || sanitizeCinematicScriptText(fallback.logline),
+    tone: sanitizeCinematicScriptText(source.tone) || sanitizeCinematicScriptText(fallback.tone),
+    continuityLock: sanitizeCinematicScriptText(source.continuityLock ?? source.continuityNotes ?? fallback.continuityNotes),
+    scenes: directorScenes,
+    entityRefs: entityBindings.map((entry) => ({ id: entry.id, role: entry.role })),
+    shots: directorShots,
+  }
+  if (isUgcCinematicPresetFamily(input.presetFamily)) {
+    const ugc = asRecord(source.ugcDirectives)
+    directorScriptDoc.ugcDirectives = {
+      formulaFamily: sanitizeCinematicScriptText(ugc.formulaFamily),
+      hookType: sanitizeCinematicScriptText(ugc.hookType),
+      proofMoment: sanitizeCinematicScriptText(ugc.proofMoment),
+      ctaType: sanitizeCinematicScriptText(ugc.ctaType),
     }
+  }
+  const cinematicScriptDoc = cinematicScriptDocSchema.parse({
+    title: directorScriptDoc.title,
+    logline: directorScriptDoc.logline,
+    tone: directorScriptDoc.tone,
+    continuityNotes: directorScriptDoc.continuityLock,
+    scenes: directorScenes.map((scene) => ({
+      id: scene.id,
+      title: scene.title,
+      summary: scene.summary,
+      locationRefId: scene.location || null,
+    })),
+    entityBindings,
+    shots: legacyShots,
   })
-  return cinematicScriptDocSchema.parse({
-    title: readText(value.title) || readText(fallback.title) || 'Prompt Cinematic',
-    logline: readText(value.logline) || readText(fallback.logline),
-    tone: readText(value.tone) || readText(fallback.tone),
-    continuityNotes: readText(value.continuityNotes) || readText(fallback.continuityNotes),
-    entityBindings: buildCinematicEntityBindings(assetPack),
-    shots,
-  })
+  return { directorScriptDoc, cinematicScriptDoc }
 }
 
 function buildDeterministicCinematicScriptDoc(input: {
@@ -2341,7 +2682,7 @@ function buildDeterministicCinematicScriptDoc(input: {
   const summary = readText(readEntitySequence(sequence).synopsis) || readText(sequence.summary) || readText(wiki.logline) || input.prompt
   const bindings = buildCinematicEntityBindings(input.assetPack)
   const primary = bindings[0]?.id ?? null
-  const location = bindings.find((entry) => entry.kind === 'location')?.id ?? null
+  const location = bindings.find((entry) => entry.kind === 'environment' || entry.role === 'place')?.id ?? null
   const baseDurations = input.presetFamily.startsWith('ugc') ? [3, 4, 4, 4, 4] : [4, 5, 5, 5, 4, 4]
   return cinematicScriptDocSchema.parse({
     title,
@@ -2414,8 +2755,8 @@ function buildCinematicScriptAuthoringInstruction(input: {
     input.legacyDurationPerBlockSeconds ? `Legacy requested block duration hint: ${input.legacyDurationPerBlockSeconds}s. Treat as a soft hint only.` : '',
   ].filter(Boolean).join('\n')
   return [
-    'Author the full directed cinematic script the prompt deserves. Do not force a fixed total length, fixed block count, or padded runtime.',
-    `Preset family: ${input.presetFamily}. Aspect ratio: ${input.aspectRatio}. Resolution: ${input.resolution}.`,
+    'Author the full directed cinematic script the prompt deserves as a lean director script, not a provider execution object.',
+    `Preset family: ${input.presetFamily}.`,
     input.prompt ? `User request: ${input.prompt}` : '',
     legacyHints,
     guidanceMarkdown(input.guidance),
@@ -2426,9 +2767,19 @@ function buildCinematicScriptAuthoringInstruction(input: {
     `- Hard limit: the complete cinematic script must not exceed ${maxTotalDurationSeconds} seconds total runtime.`,
     '- Every shot duration must be 1-15 seconds; the compiler will group shots into Seedance takes of 4-15 seconds.',
     '- Prefer continuous directed shots with blocking and camera intent; do not split every tiny motion into a separate shot.',
-    '- Include visible subject/action/blocking, camera/framing/movement, composition, audio or vocal intent, and continuity refs.',
+    '- Each shot gets one main visible action and one primary camera move. Avoid micro-choreography.',
+    '- Include visible subject/action/blocking, camera/framing/movement, composition, actions, dialogue when spoken, audio cues, and entity ids.',
+    '- Shot actions must be stage directions, not prose summary: actor, verb, target if any, prop if any, staging notes, and local shot timing.',
+    '- Write action verbs as natural prose words, not snake_case machine labels.',
+    '- Dialogue entries must include local shot timing and stay in the script only; storyboard images will convert speech into visible expression/body language.',
+    '- Do not include provider refs or execution details: no @Image/@Video/@Audio labels, no keyframe wording, no model names, no resolution, no aspect-ratio strings.',
+    '- Do not output empty legacy fields, workflow metadata, execution metadata, provider request fields, or storyboard/image-node instructions.',
     '- Preserve selected world canon and neutral visual identity traits. Do not invent new canon.',
-    '- Use supplied entity keys in participantRefIds, locationRefId, propRefIds, and action actor/target refs when relevant.',
+    '- Use supplied entity keys in participants, location, props, entityRefs, and scene locations when relevant.',
+    '- Add more than one scene only when location, time, or story mode actually changes.',
+    isUgcCinematicPresetFamily(input.presetFamily)
+      ? '- Because this is a UGC/brand preset, include concise ugcDirectives for hook/proof/CTA structure.'
+      : '- Because this is story/movie cinematic output, do not include UGC formula, proof, CTA, platform, or ad fields.',
     '',
     'World context:',
     compactForPrompt({
@@ -2768,6 +3119,8 @@ function cinematicBlockScriptMarkdown(script: Record<string, unknown>) {
 function readNumericAlias(record: Record<string, unknown>, keys: string[], fallback = 0) {
   for (const key of keys) {
     const value = record[key]
+    if (value === undefined || value === null) continue
+    if (typeof value === 'string' && value.trim().length === 0) continue
     const parsed = typeof value === 'number' ? value : Number(readText(value))
     if (Number.isFinite(parsed)) return parsed
   }
@@ -2834,12 +3187,36 @@ function storyboardImageSizeForLayout(input: {
 
 function compactCinematicEntityAnchors(assetPack: Record<string, unknown>, limit = 8) {
   const entities = Array.isArray(assetPack.entities) ? assetPack.entities.map(asRecord) : []
-  return entities.slice(0, limit).map((entity) => ({
-    name: readText(entity.name),
-    summary: readText(entity.summary),
-    visualDescription: readText(entity.visualDescription),
-    visualTraits: readStringArray(entity.visualTraits),
-  })).filter((entity) => entity.name || entity.summary || entity.visualDescription || entity.visualTraits.length > 0)
+  const byKey = new Map<string, {
+    name: string
+    visualDescription: string
+    visualTraits: string[]
+  }>()
+  const seenNames = new Set<string>()
+  for (const entity of entities) {
+    const name = readText(entity.name)
+    const visualDescription = readText(entity.visualDescription)
+    const visualTraits = readStringArray(entity.visualTraits)
+    if (!name && !visualDescription && visualTraits.length === 0) continue
+    if (!visualDescription && visualTraits.length === 0) continue
+    const key = slugify(readText(entity.key) || readText(entity.id) || readText(entity.assetKey) || name)
+    const nameKey = slugify(name)
+    if (!key || byKey.has(key) || (nameKey && seenNames.has(nameKey))) continue
+    if (nameKey) seenNames.add(nameKey)
+    byKey.set(key, { name, visualDescription, visualTraits })
+    if (byKey.size >= limit) break
+  }
+  return [...byKey.values()]
+}
+
+function formatCinematicEntityAnchorLines(entities: ReturnType<typeof compactCinematicEntityAnchors>) {
+  return entities.map((entity) => {
+    const parts = [
+      entity.visualDescription ? `Visual: ${compactBeatCaptionSentence(entity.visualDescription, '', 24).replace(/\.$/, '')}` : '',
+      entity.visualTraits.length > 0 ? `Traits: ${entity.visualTraits.slice(0, 10).join(', ')}` : '',
+    ].filter(Boolean)
+    return `${entity.name || 'Visual anchor'}: ${parts.join('. ')}.`
+  }).join('\n')
 }
 
 function formatTimecode(seconds: number) {
@@ -2873,12 +3250,219 @@ function findShotForBeatMidpoint(shots: Record<string, unknown>[], midpointSecon
     ?? {}
 }
 
-function makeBeatCaptionSentences(shot: Record<string, unknown>, fallbackIndex: number) {
-  const subject = readText(shot.subject) || readText(shot.title) || `The scene beat ${fallbackIndex + 1}`
-  const action = readText(shot.action) || readText(shot.composition) || readText(shot.visualPrompt) || readText(shot.beat)
-  const lineOne = `${subject} ${action || 'holds a clear visual moment.'}`.replace(/\s+/g, ' ').trim()
-  const lineTwo = (readText(shot.composition) || readText(shot.camera) || 'The environment, palette, and identity remain continuous.').replace(/\s+/g, ' ').trim()
-  return [lineOne, lineTwo].map((line) => line.length > 140 ? `${line.slice(0, 137).trim()}...` : line)
+function cleanBeatCaptionText(value: unknown) {
+  return readText(value)
+    .replace(/@\s*(Image|Video|Audio)\s*\d+/gi, '')
+    .replace(/[{}[\]"]/g, ' ')
+    .replace(/\b(Caption line|Subject|Action|Camera|Composition|Audio|References)\s*\d*\s*:/gi, ' ')
+    .replace(/\b([A-Z][a-z]+(?:\s+[A-Z][a-z0-9-]+){0,3})\s+\1\b/g, '$1')
+    .replace(/([A-Za-z0-9])_([A-Za-z0-9])/g, '$1 $2')
+    .replace(/\.{3}|\u2026/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function sentenceCaseBeatCaption(value: string) {
+  const clean = value.trim()
+  if (!clean) return clean
+  return `${clean.charAt(0).toUpperCase()}${clean.slice(1)}${/[.!?]$/.test(clean) ? '' : '.'}`
+}
+
+function compactBeatCaptionSentence(value: unknown, fallback: string, maxWords = 13) {
+  const clean = cleanBeatCaptionText(value) || cleanBeatCaptionText(fallback)
+  if (!clean) return 'The visual continuity stays clear.'
+  const firstSentence = clean.split(/(?<=[.!?])\s+/)[0] ?? clean
+  const firstClause = firstSentence.split(/\s+(?:while|as|before|after|then)\s+/i)[0]
+  const weakTailWords = new Set(['a', 'an', 'the', 'and', 'or', 'but', 'with', 'into', 'onto', 'through', 'from', 'to', 'of', 'in', 'on', 'as', 'while', 'before', 'after', 'then', 'just'])
+  const words = firstClause.replace(/[.!?]+$/g, '').split(/\s+/).filter(Boolean)
+  while (words.length > 1 && weakTailWords.has(words[words.length - 1].toLowerCase())) words.pop()
+  const compactWords = words.length > maxWords ? words.slice(0, maxWords) : words
+  while (compactWords.length > 1 && weakTailWords.has(compactWords[compactWords.length - 1].toLowerCase())) compactWords.pop()
+  const compact = compactWords.join(' ').replace(/[,;:]+$/g, '')
+  return sentenceCaseBeatCaption(compact)
+}
+
+function compactStoryboardSentence(value: unknown, fallback = '', maxWords = 22) {
+  const clean = cleanBeatCaptionText(value)
+    .replace(/\b(?:Dialogue cue|Audio cue|Opening state|Action escalation|Obstacle or contact|Consequence and transition|Visible action and blocking|Camera feel|Framing)\s*:/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  const source = clean || cleanBeatCaptionText(fallback)
+  if (!source) return ''
+  const firstSentence = source.split(/(?<=[.!?])\s+/)[0] ?? source
+  const words = firstSentence.replace(/[.!?]+$/g, '').split(/\s+/).filter(Boolean)
+  const weakTailWords = new Set(['a', 'an', 'the', 'and', 'or', 'but', 'with', 'into', 'onto', 'through', 'from', 'to', 'of', 'in', 'on', 'as', 'while', 'before', 'after', 'then', 'just', 'where'])
+  while (words.length > 1 && weakTailWords.has(words[words.length - 1].toLowerCase())) words.pop()
+  const compactWords = words.length > maxWords ? words.slice(0, maxWords) : words
+  while (compactWords.length > 1 && weakTailWords.has(compactWords[compactWords.length - 1].toLowerCase())) compactWords.pop()
+  const compact = compactWords.join(' ').replace(/[,;:]+$/g, '')
+  return sentenceCaseBeatCaption(compact)
+}
+
+function splitStoryboardVisualClauses(value: unknown) {
+  const clean = cleanBeatCaptionText(value)
+  if (!clean) return []
+  return clean
+    .split(/(?:[.;]|\s+\bthen\b\s+|\s+\bwhile\b\s+|\s+\bas\b\s+)/i)
+    .map((entry) => compactStoryboardSentence(entry, '', 18))
+    .filter((entry) => {
+      const words = entry.replace(/[.!?]+$/g, '').split(/\s+/).filter(Boolean)
+      if (words.length < 3) return false
+      return entry !== 'The visual continuity stays clear.'
+    })
+}
+
+function readShotStoryboardActionClauses(shot: Record<string, unknown>) {
+  const actionRecords = Array.isArray(shot.actions) ? shot.actions.map(asRecord) : []
+  return actionRecords.flatMap((action) => {
+    const actor = readText(action.actor) || readText(action.actorRefId) || readText(action.subject)
+    const verb = cleanBeatCaptionText(action.verb ?? action.action).toLowerCase()
+    const target = readText(action.target) || readText(action.targetRefId)
+    const prop = readText(action.prop) || readText(action.propRefId)
+    const staging = readText(action.stagingNotes) || readText(action.description)
+    const targetPhrase = target
+      ? /\b(?:lies still|rests|sits|stands|waits)\b/i.test(verb)
+        ? `on ${target}`
+        : target
+      : ''
+    return [
+      staging,
+      [actor, verb, targetPhrase, prop ? `with ${prop}` : ''].filter(Boolean).join(' '),
+    ]
+  })
+}
+
+function readShotDialogueRecords(shot: Record<string, unknown>) {
+  return Array.isArray(shot.dialogue) ? shot.dialogue.map(asRecord) : []
+}
+
+function readShotDialogueClauses(shot: Record<string, unknown>) {
+  const dialogueRecords = Array.isArray(shot.dialogue) ? shot.dialogue.map(asRecord) : []
+  return dialogueRecords.flatMap((entry) => {
+    const speaker = readText(entry.speaker) || readText(entry.speakerRefId)
+    const line = readText(entry.line)
+    const delivery = readText(entry.delivery)
+    return [
+      line ? `${speaker ? `${speaker} says` : 'A voice says'} "${line}"` : '',
+      delivery ? `${speaker || 'The speaker'} delivers the line ${delivery}` : '',
+    ]
+  })
+}
+
+function readShotAudioCueClauses(shot: Record<string, unknown>) {
+  const cueRecords = Array.isArray(shot.audioCues) ? shot.audioCues.map((cue) => ({ cue })) : []
+  const audioRecords = Array.isArray(shot.audio) ? shot.audio.map(asRecord) : []
+  return [
+    ...cueRecords.map((entry) => readText(entry.cue)),
+    ...audioRecords.map((entry) => [readText(entry.kind), readText(entry.cue)].filter(Boolean).join(': ')),
+  ].filter(Boolean)
+}
+
+function visibleStoryboardClausesForShot(shot: Record<string, unknown>) {
+  const rawClauses = [
+    ...splitStoryboardVisualClauses(shot.visualAction),
+    ...splitStoryboardVisualClauses(shot.action),
+    ...readShotStoryboardActionClauses(shot).flatMap(splitStoryboardVisualClauses),
+    ...splitStoryboardVisualClauses(shot.composition),
+    ...splitStoryboardVisualClauses(shot.beat),
+  ]
+  const seen = new Set<string>()
+  const unique: string[] = []
+  for (const clause of rawClauses) {
+    const key = slugify(clause)
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    unique.push(clause)
+  }
+  return unique
+}
+
+function stripCaptionLeadingNames(value: string) {
+  return value
+    .replace(/^(?:[A-Z][A-Za-z0-9-]*(?:\s+[A-Z][A-Za-z0-9-]*){0,3},\s*){2,}[A-Z][A-Za-z0-9-]*(?:\s+[A-Z][A-Za-z0-9-]*){0,3}\s+/, '')
+    .trim()
+}
+
+function phaseFallbackBeatCaption(shot: Record<string, unknown>, phaseIndex: number) {
+  const title = cleanBeatCaptionText(shot.title)
+  const fallbacks = [
+    title ? `${title} begins as a clear visual moment.` : 'The take opens on urgent movement.',
+    'The action intensifies across the frame.',
+    'The obstacle becomes visible in the environment.',
+    'The beat transitions toward the next shot.',
+  ]
+  return compactBeatCaptionSentence(fallbacks[phaseIndex % fallbacks.length], '', 13)
+}
+
+function makeBeatCaptionSentences(shot: Record<string, unknown>, occurrenceIndex: number, occurrenceCount: number) {
+  const clauses = visibleStoryboardClausesForShot(shot)
+  const phaseCount = Math.max(1, occurrenceCount)
+  const phaseIndex = Math.min(3, Math.floor((occurrenceIndex / phaseCount) * 4))
+  const lineOne = clauses[(occurrenceIndex * 2) % Math.max(1, clauses.length)] ?? phaseFallbackBeatCaption(shot, phaseIndex)
+  const lineTwo = clauses[(occurrenceIndex * 2 + 1) % Math.max(1, clauses.length)]
+    ?? phaseFallbackBeatCaption(shot, phaseIndex + 1)
+  const first = stripCaptionLeadingNames(compactBeatCaptionSentence(lineOne, phaseFallbackBeatCaption(shot, phaseIndex), 13))
+  const second = stripCaptionLeadingNames(compactBeatCaptionSentence(lineTwo, phaseFallbackBeatCaption(shot, phaseIndex + 1), 13))
+  return [
+    storyboardCaptionLooksComplete(first) ? first : phaseFallbackBeatCaption(shot, phaseIndex),
+    storyboardCaptionLooksComplete(second) ? second : phaseFallbackBeatCaption(shot, phaseIndex + 1),
+  ]
+}
+
+function storyboardCaptionLooksComplete(value: string) {
+  const words = value.replace(/[.!?]+$/g, '').split(/\s+/).filter(Boolean)
+  if (words.length < 3) return false
+  const weakTailWords = new Set(['a', 'an', 'the', 'and', 'or', 'but', 'with', 'into', 'onto', 'through', 'from', 'to', 'of', 'in', 'on', 'as', 'while', 'before', 'after', 'then', 'just', 'where'])
+  return !weakTailWords.has(words[words.length - 1].toLowerCase())
+}
+
+function readShotStoryboardDirectionClauses(shot: Record<string, unknown>) {
+  const clauses = [
+    compactStoryboardSentence(shot.visualAction, '', 28),
+    compactStoryboardSentence(shot.action, '', 28),
+    ...readShotStoryboardActionClauses(shot).map((entry) => compactStoryboardSentence(entry, '', 22)),
+    compactStoryboardSentence(shot.composition, '', 24),
+    compactStoryboardSentence(shot.beat, '', 22),
+  ].filter((entry) => storyboardCaptionLooksComplete(entry))
+  const seen = new Set<string>()
+  return clauses.filter((clause) => {
+    const key = slugify(clause)
+    if (!key || seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+function storyboardSpeechVisualCue(shot: Record<string, unknown>, occurrenceIndex: number, occurrenceCount: number) {
+  const dialogue = readShotDialogueRecords(shot).filter((entry) => readText(entry.line))
+  if (dialogue.length === 0) return ''
+  const targetIndex = Math.max(0, Math.min(occurrenceCount - 1, Math.floor(occurrenceCount / 2)))
+  if (occurrenceIndex !== targetIndex) return ''
+  const entry = dialogue[0]
+  const speaker = readText(entry.speaker) || readText(entry.speakerRefId) || 'The speaker'
+  const delivery = cleanBeatCaptionText(entry.delivery)
+  if (delivery) return `${speaker}'s mouth is slightly open, with ${delivery} body language.`
+  return `${speaker}'s mouth is slightly open while their expression carries the beat.`
+}
+
+function makeBeatPanelVisualDirection(shot: Record<string, unknown>, occurrenceIndex: number, occurrenceCount: number) {
+  const clauses = readShotStoryboardDirectionClauses(shot)
+  const primary = clauses[occurrenceIndex % Math.max(1, clauses.length)]
+    || compactStoryboardSentence(shot.visualAction, readText(shot.beat), 28)
+    || phaseFallbackBeatCaption(shot, occurrenceIndex)
+  const secondary = clauses[(occurrenceIndex + 1) % Math.max(1, clauses.length)]
+    || compactStoryboardSentence(shot.composition, 'Preserve the same character identity, wardrobe, lighting direction, and location logic.', 24)
+  const speechCue = storyboardSpeechVisualCue(shot, occurrenceIndex, Math.max(1, occurrenceCount))
+  const framing = cleanBeatCaptionText(shot.framing)
+  const cameraMovement = cleanBeatCaptionText(shot.cameraMovement)
+  const cameraPhrase = [framing, cameraMovement].filter(Boolean).join(', ')
+  const firstSentence = compactStoryboardSentence(primary, '', 30)
+  const secondSource = [
+    speechCue || secondary,
+    !speechCue && cameraPhrase ? `Compose the frame with ${cameraPhrase}.` : '',
+  ].filter(Boolean).join(' ')
+  const secondSentence = compactStoryboardSentence(secondSource, '', 30)
+  return [firstSentence, secondSentence].filter(Boolean).join(' ')
 }
 
 function buildCinematicBeatSheetPlan(blockScript: Record<string, unknown>) {
@@ -2887,24 +3471,45 @@ function buildCinematicBeatSheetPlan(blockScript: Record<string, unknown>) {
   const panelCount = beatSheetPanelCountForDuration(durationSeconds, shots.length)
   const durations = distributeBeatDurations(durationSeconds, panelCount)
   let cursor = 0
-  const beats = durations.map((duration, index) => {
+  const pendingBeats = durations.map((duration, index) => {
     const startSeconds = cursor
     const endSeconds = Math.min(durationSeconds, cursor + duration)
     cursor = endSeconds
     const shot = findShotForBeatMidpoint(shots, startSeconds + Math.max(0.1, (endSeconds - startSeconds) / 2))
-    const captions = makeBeatCaptionSentences(shot, index)
     return {
       beatNumber: index + 1,
       startSeconds,
       endSeconds,
       timecode: `${formatTimecode(startSeconds)}-${formatTimecode(endSeconds)}`,
       shotId: readText(shot.shotId) || readText(shot.id),
-      title: readText(shot.title) || `Beat ${index + 1}`,
+      shot,
+    }
+  })
+  const shotPanelCounts = new Map<string, number>()
+  for (const beat of pendingBeats) {
+    const key = beat.shotId || `beat_${beat.beatNumber}`
+    shotPanelCounts.set(key, (shotPanelCounts.get(key) ?? 0) + 1)
+  }
+  const shotPanelIndexes = new Map<string, number>()
+  const beats = pendingBeats.map((beat, index) => {
+    const key = beat.shotId || `beat_${beat.beatNumber}`
+    const occurrenceIndex = shotPanelIndexes.get(key) ?? 0
+    shotPanelIndexes.set(key, occurrenceIndex + 1)
+    const captions = makeBeatCaptionSentences(beat.shot, occurrenceIndex, shotPanelCounts.get(key) ?? 1)
+    const panelVisual = makeBeatPanelVisualDirection(beat.shot, occurrenceIndex, shotPanelCounts.get(key) ?? 1)
+    return {
+      beatNumber: beat.beatNumber,
+      startSeconds: beat.startSeconds,
+      endSeconds: beat.endSeconds,
+      timecode: beat.timecode,
+      shotId: beat.shotId,
+      title: readText(beat.shot.title) || `Beat ${index + 1}`,
+      panelVisual,
       captionLines: captions,
       visual: [
-        readText(shot.subject),
-        readText(shot.action),
-        readText(shot.composition),
+        readText(beat.shot.visualAction),
+        readText(beat.shot.action),
+        readText(beat.shot.composition),
       ].filter(Boolean).join(' '),
     }
   })
@@ -2933,7 +3538,7 @@ function keyframeImageSizeForAspectRatio(aspectRatio: string) {
   return { width: 1536, height: 1536 }
 }
 
-function buildCinematicBeatSheetPrompt(input: {
+export function buildCinematicBeatSheetPrompt(input: {
   blockScript: Record<string, unknown>
   assetPack: Record<string, unknown>
   aspectRatio: string
@@ -2942,6 +3547,7 @@ function buildCinematicBeatSheetPrompt(input: {
 }) {
   const beatSheetPlan = buildCinematicBeatSheetPlan(input.blockScript)
   const entities = compactCinematicEntityAnchors(input.assetPack, 10)
+  const entityAnchorLines = formatCinematicEntityAnchorLines(entities)
   const imageSize = beatSheetPlan.panelCount > 9
     ? { width: 1536, height: 2304 }
     : beatSheetPlan.panelCount > 6
@@ -2949,6 +3555,7 @@ function buildCinematicBeatSheetPrompt(input: {
       : { width: 1536, height: 1024 }
   const beatLines = beatSheetPlan.beats.map((beat) => [
     `BEAT ${String(beat.beatNumber).padStart(2, '0')} [${beat.timecode}]`,
+    `Panel visual: ${beat.panelVisual}`,
     `Caption line 1: ${beat.captionLines[0]}`,
     `Caption line 2: ${beat.captionLines[1]}`,
   ].join('\n')).join('\n\n')
@@ -2959,15 +3566,18 @@ function buildCinematicBeatSheetPrompt(input: {
       'Create a CINEMATIC BEAT SHEET planning image for video pre-production.',
       `Canvas: pure black (#000000), ${beatSheetPlan.layout.rows} rows x ${beatSheetPlan.layout.columns} columns, ${beatSheetPlan.panelCount} timed panels, approximately ${imageSize.width}x${imageSize.height}.`,
       `Every panel is a complete cinematic composition with an internal ${input.aspectRatio} video crop. Use thin black gutters only.`,
+      'For each beat, draw the Panel visual as the actual storyboard frame. Caption lines are only the small readable text below that panel.',
       'Below each panel, include a narrow black caption band with panel number, timecode, and exactly two short caption sentences in clean white sans-serif.',
       'No title banner. No footer. No colored gridlines. No table columns. No director notes. No SFX/BGM columns. No UI-like layout. No watermark.',
-      'Caption lines describe what the viewer sees, not camera direction.',
+      'Caption rules: describe only what the viewer sees. Do not place entity lists, JSON, truncated words, ellipses, camera notes, spoken dialogue, or repeated captions in caption bands.',
+      'Storyboard rules: every Panel visual must be action-based and visually directed, with clear subject blocking, obstacle/contact, environment geometry, and continuity from the previous panel.',
+      'Image prompt boundary: this board is visual-only. Do not render or describe spoken dialogue, foley, music, or audio cues; those belong to the video prompt, not the storyboard image.',
       `Take title: ${readText(input.blockScript.title) || 'Compiled cinematic take'}`,
       `Take duration: ${beatSheetPlan.durationSeconds} seconds exactly.`,
       'Story beats:',
       beatLines,
-      entities.length > 0 ? 'Canonical visual identity anchors:' : '',
-      entities.length > 0 ? compactForPrompt({ entities }, 3200) : '',
+      entities.length > 0 ? 'Canonical visual identity anchors from appearance only:' : '',
+      entityAnchorLines,
       input.prompt ? `User brief: ${input.prompt}` : '',
       'Visual style: live-action cinematic quality unless the user brief says otherwise; maintain palette, wardrobe, environment logic, lighting direction, and character identity across all panels.',
       'This image is both a planning artifact and the primary Seedance visual reference. It must look like a clean production beat sheet, not a finished poster.',
@@ -3074,7 +3684,38 @@ function buildCinematicStoryboardPrompt(input: {
   ].filter(Boolean).join('\n\n')
 }
 
-function buildCinematicVideoPrompt(input: {
+function formatSeedanceDialogueForShot(shot: Record<string, unknown>) {
+  const dialogueRecords = readShotDialogueRecords(shot).filter((entry) => readText(entry.line))
+  if (dialogueRecords.length === 0) return ''
+  return dialogueRecords.map((entry) => {
+    const speaker = readText(entry.speaker) || readText(entry.speakerRefId) || 'Voice'
+    const line = readText(entry.line).replace(/^["']|["']$/g, '')
+    const delivery = readText(entry.delivery)
+    return `${speaker}: "${line}"${delivery ? ` (${delivery})` : ''}`
+  }).join(' ')
+}
+
+function formatSeedanceAudioForShot(shot: Record<string, unknown>, generateAudio: boolean) {
+  if (!generateAudio) return 'minimal or none'
+  const cueRecords = Array.isArray(shot.audioCues) ? shot.audioCues.map((cue) => ({ cue })) : []
+  const audioRecords = Array.isArray(shot.audio) ? shot.audio.map(asRecord) : []
+  const cues = [
+    ...cueRecords.map((entry) => readText(entry.cue)),
+    ...audioRecords.map((entry) => [readText(entry.kind), readText(entry.cue)].filter(Boolean).join(': ')),
+  ].filter(Boolean)
+  if (cues.length > 0) return cues.join('; ')
+  return readText(shot.audio) || 'natural scene sound'
+}
+
+function formatSeedanceActionForShot(shot: Record<string, unknown>) {
+  return cleanBeatCaptionText(shot.action)
+    || cleanBeatCaptionText(shot.visualAction)
+    || cleanBeatCaptionText(shot.composition)
+    || cleanBeatCaptionText(shot.beat)
+    || 'one coherent visible action'
+}
+
+export function buildCinematicVideoPrompt(input: {
   blockScript: Record<string, unknown>
   assetPack: Record<string, unknown>
   prompt: string
@@ -3116,7 +3757,15 @@ function buildCinematicVideoPrompt(input: {
     ? shots.map((shot) => {
       const start = formatTimecode(readShotStartSeconds(shot))
       const end = formatTimecode(readShotEndSeconds(shot))
-      return `[${start}-${end}] Shot: ${readText(shot.subject) || readText(shot.title)} | Camera: ${readText(shot.camera) || 'clear cinematic framing'} | Action: ${readText(shot.action) || readText(shot.composition)} | Physics: natural body/object motion and coherent spatial layout | Audio: ${input.generateAudio ? (readText(shot.audio) || 'natural scene sound') : 'minimal or none'}`
+      const dialogue = formatSeedanceDialogueForShot(shot)
+      return [
+        `[${start}-${end}] Shot: ${readText(shot.subject) || readText(shot.title)}`,
+        `Camera: ${readText(shot.camera) || 'clear cinematic framing'}`,
+        `Action: ${formatSeedanceActionForShot(shot)}`,
+        'Physics: natural body/object motion and coherent spatial layout',
+        dialogue ? `Dialogue: ${dialogue}` : '',
+        `Audio: ${formatSeedanceAudioForShot(shot, input.generateAudio)}`,
+      ].filter(Boolean).join(' | ')
     }).join('\n')
     : `[00:00-${formatTimecode(input.durationSeconds)}] Shot: ${readText(input.blockScript.summary) || input.prompt} | Camera: clear cinematic framing | Action: one coherent visible action | Physics: natural motion | Audio: ${input.generateAudio ? 'natural scene sound' : 'minimal or none'}`
   const continuityLock = [
@@ -3134,7 +3783,7 @@ function buildCinematicVideoPrompt(input: {
       : 'No image references are attached; use the written continuity locks only.',
     cinematicReferenceMode === 'keyframes'
       ? 'Beat sheets are planning-only and should not appear in the video. Use keyframes as the main visual references.'
-      : 'Storyboard-grid reference mode is enabled. Follow @Image1 as the continuity and timing board, but do not reproduce caption bands, panel borders, grid gutters, UI, or text as on-screen elements.',
+      : 'Storyboard-grid reference mode is enabled. Follow @Image1 as the visual continuity and timing board, but do not reproduce caption bands, panel borders, grid gutters, UI, or text as on-screen elements. Use the written timeline below for dialogue, foley, music, and audio timing.',
     '',
     '[TIMELINE SECOND BY SECOND]',
     timeline,
@@ -3155,6 +3804,7 @@ function buildCinematicVideoPrompt(input: {
 
 function compileCinematicScriptDocForOutput(input: {
   scriptDoc: Record<string, unknown>
+  directorScriptDoc?: Record<string, unknown> | null
   maxDynamicTakes: number
   maxTotalDurationSeconds?: number | null
 }) {
@@ -3202,6 +3852,7 @@ function compileCinematicScriptDocForOutput(input: {
   const totalDurationSeconds = takePlan.reduce((total, take) => total + take.durationSeconds, 0)
   const compileHash = hashOutputWorkflowValue({ scriptDoc: cinematicScriptDoc, takePlan })
   return {
+    directorScriptDoc: input.directorScriptDoc && Object.keys(input.directorScriptDoc).length > 0 ? input.directorScriptDoc : null,
     cinematicScriptDoc,
     compiledCinematicSequence,
     takePlan,
@@ -3239,6 +3890,44 @@ function actionTextForCompiledShot(shot: Record<string, unknown>, assetPack: Rec
     nameForCinematicRef(assetPack, action.targetRefId),
     readText(action.stagingNotes),
   ].filter(Boolean).join(' ')).filter(Boolean).join(' Then ')
+}
+
+function directorActionsForCompiledShot(shot: Record<string, unknown>, assetPack: Record<string, unknown>, durationSeconds: number) {
+  const actions = Array.isArray(shot.actions) ? shot.actions.map(asRecord) : []
+  return actions.map((action, index) => ({
+    actor: nameForCinematicRef(assetPack, action.actorRefId) || readText(action.actorRefId),
+    verb: readText(action.verb),
+    target: nameForCinematicRef(assetPack, action.targetRefId) || readText(action.targetRefId),
+    prop: nameForCinematicRef(assetPack, action.propRefId) || readText(action.propRefId),
+    stagingNotes: readText(action.stagingNotes),
+    startSeconds: Math.max(0, Number(action.startSeconds ?? 0) || 0),
+    endSeconds: Math.max(0, Math.min(durationSeconds, Number(action.endSeconds ?? durationSeconds) || durationSeconds)),
+    orderIndex: index,
+  })).filter((entry) => entry.verb || entry.stagingNotes)
+}
+
+function directorDialogueForCompiledShot(shot: Record<string, unknown>, assetPack: Record<string, unknown>) {
+  const dialogue = Array.isArray(shot.dialogue) ? shot.dialogue.map(asRecord) : []
+  return dialogue.map((entry, index) => ({
+    speaker: nameForCinematicRef(assetPack, entry.speakerRefId) || readText(entry.speakerRefId),
+    line: readText(entry.line),
+    delivery: readText(entry.delivery),
+    startSeconds: Number(entry.startSeconds ?? 0) || 0,
+    endSeconds: Number(entry.endSeconds ?? 0) || 0,
+    orderIndex: index,
+  })).filter((entry) => entry.line)
+}
+
+function directorAudioCuesForCompiledShot(shot: Record<string, unknown>, assetPack: Record<string, unknown>) {
+  const audio = Array.isArray(shot.audio) ? shot.audio.map(asRecord) : []
+  return audio.map((entry, index) => ({
+    kind: readText(entry.kind),
+    cue: readText(entry.cue),
+    source: nameForCinematicRef(assetPack, entry.sourceRefId) || readText(entry.sourceRefId),
+    startSeconds: Number(entry.startSeconds ?? 0) || 0,
+    endSeconds: Number(entry.endSeconds ?? 0) || 0,
+    orderIndex: index,
+  })).filter((entry) => entry.cue)
 }
 
 function audioTextForCompiledShot(shot: Record<string, unknown>) {
@@ -3282,17 +3971,35 @@ function buildTakeBlockScriptFromCompiledSequence(input: {
         ...readStringArray(shot.participantRefIds).map((refId) => nameForCinematicRef(input.assetPack, refId)),
         nameForCinematicRef(input.assetPack, readText(shot.locationRefId)),
       ].filter(Boolean).join(', ') || readText(shot.title) || `Shot ${index + 1}`
+      const relativeDuration = Math.max(0.25, end - start)
+      const actions = directorActionsForCompiledShot(shot, input.assetPack, relativeDuration)
+      const dialogue = directorDialogueForCompiledShot(shot, input.assetPack)
+      const audioCues = directorAudioCuesForCompiledShot(shot, input.assetPack)
       return {
         shotNumber: index + 1,
         shotId: readText(shot.id),
         startTimeSeconds: Number(start.toFixed(2)),
         endTimeSeconds: Number(end.toFixed(2)),
+        absoluteStartSeconds: Number(Number(shot.startSeconds ?? 0).toFixed(2)),
+        absoluteEndSeconds: Number(Number(shot.endSeconds ?? 0).toFixed(2)),
         subject,
+        title: readText(shot.title),
+        beat: readText(shot.beat),
+        emotionalBeat: readText(shot.emotionalBeat),
+        visualAction: readText(shot.visualPrompt) || readText(shot.beat),
+        framing: readText(shot.framing),
+        cameraMovement: readText(shot.cameraMovement),
+        participants: readStringArray(shot.participantRefIds).map((refId) => nameForCinematicRef(input.assetPack, refId) || refId),
+        location: nameForCinematicRef(input.assetPack, readText(shot.locationRefId)) || readText(shot.locationRefId),
+        props: readStringArray(shot.propRefIds).map((refId) => nameForCinematicRef(input.assetPack, refId) || refId),
+        actions,
+        dialogue,
+        audioCues,
         action: actionTextForCompiledShot(shot, input.assetPack),
         camera: [readText(shot.cameraMovement), readText(shot.cameraAngle), readText(shot.framing), readText(shot.lensPreference)].filter(Boolean).join(', '),
         composition: readText(shot.compositionGuide) || readText(shot.visualPrompt),
         audio: audioTextForCompiledShot(shot),
-        referenceNotes: 'Use @Image1 opening keyframe, @Image2 midpoint keyframe, @Image3 ending keyframe, then individual entity/environment/prop anchors.',
+        referenceNotes: 'Storyboard-grid reference mode uses the beat sheet first, followed by individual entity/environment/prop reference sheets.',
       }
     })
   const storyboardPanelPlan = asRecord(take.storyboardPanelPlan)
@@ -3454,7 +4161,7 @@ async function materializeDynamicCinematicTakeFanout(input: {
     const videoKey = `take_${suffix}_video`
     nodeRows.push(
       dynamicNodeRow({ workflow: input.workflow, key: beatSheetPromptKey, nodeType: 'utility_transform', label: `Take ${takeNumber} Beat Sheet Prompt`, x: 1760, y, compileHash, config: { purpose: 'cinematic_beat_sheet_prompt', takeId, takeIndex: index, aspectRatio, presetFamily, planningOnly: true, execution: { resourceClass: 'utility', groupKey: 'cinematic_beat_sheet_prompts', maxConcurrency: 6 } } }),
-      dynamicNodeRow({ workflow: input.workflow, key: beatSheetKey, nodeType: 'image_generation', label: `Take ${takeNumber} Beat Sheet`, x: 2040, y, compileHash, config: { purpose: 'cinematic_beat_sheet', role: 'cinematic_beat_sheet', takeId, takeIndex: index, planningOnly: true, planning_only: true, usedAsVideoReference: useStoryboardReference, model: 'openai/gpt-image-2', referenceModel: 'openai/gpt-image-2/edit', quality: 'low', outputFormat: 'webp', maxReferenceImages: 16, imageSizePolicy: 'from_beat_sheet_prompt_layout', panelAspectRatio: aspectRatio, skillKeys: ['cinematic_beat_sheet_planning', 'image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'provider_prompt_hygiene'], autoSkillTags: ['beat_sheet', 'storyboard', 'planning_only', 'video_reference', 'image_prompt', 'entity_reference', 'reference_continuity'], guidanceMode: 'strict', execution: { resourceClass: 'image', groupKey: 'cinematic_beat_sheets', maxConcurrency: 3 } } }),
+      dynamicNodeRow({ workflow: input.workflow, key: beatSheetKey, nodeType: 'image_generation', label: `Take ${takeNumber} Beat Sheet`, x: 2040, y, compileHash, config: { purpose: 'cinematic_beat_sheet', role: 'cinematic_beat_sheet', takeId, takeIndex: index, planningOnly: true, planning_only: true, usedAsVideoReference: useStoryboardReference, model: 'openai/gpt-image-2', referenceModel: 'openai/gpt-image-2/edit', quality: CINEMATIC_STORYBOARD_IMAGE_QUALITY, outputFormat: 'webp', maxReferenceImages: 16, imageSizePolicy: 'from_beat_sheet_prompt_layout', panelAspectRatio: aspectRatio, skillKeys: ['cinematic_beat_sheet_planning', 'image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'provider_prompt_hygiene'], autoSkillTags: ['beat_sheet', 'storyboard', 'planning_only', 'video_reference', 'image_prompt', 'entity_reference', 'reference_continuity'], guidanceMode: 'strict', execution: { resourceClass: 'image', groupKey: 'cinematic_beat_sheets', maxConcurrency: 3 } } }),
       ...(useKeyframes ? [
         dynamicNodeRow({ workflow: input.workflow, key: keyframePromptPackKey, nodeType: 'utility_transform', label: `Take ${takeNumber} Keyframe Prompts`, x: 2320, y, compileHash, config: { purpose: 'cinematic_keyframe_prompt_pack', takeId, takeIndex: index, aspectRatio, presetFamily, execution: { resourceClass: 'utility', groupKey: 'cinematic_keyframe_prompt_packs', maxConcurrency: 6 } } }),
         ...keyframeKeys.map((keyframeKey, keyframeIndex) => dynamicNodeRow({ workflow: input.workflow, key: keyframeKey, nodeType: 'image_generation', label: `Take ${takeNumber} Keyframe ${keyframeIndex + 1}`, x: 2600 + keyframeIndex * 40, y: y + keyframeIndex * 44, compileHash, config: { purpose: 'cinematic_keyframe', role: 'cinematic_keyframe', takeId, takeIndex: index, keyframeIndex, model: 'openai/gpt-image-2', referenceModel: 'openai/gpt-image-2/edit', quality: 'low', outputFormat: 'webp', maxReferenceImages: 16, imageSize: keyframeImageSize, aspectRatio, skillKeys: ['cinematic_keyframe_prompting', 'image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'provider_prompt_hygiene'], autoSkillTags: ['keyframe', 'image_prompt', 'visual_only', 'entity_reference', 'reference_continuity'], guidanceMode: 'strict', execution: { resourceClass: 'image', groupKey: 'cinematic_keyframes', maxConcurrency: 3 } } })),
@@ -3512,6 +4219,7 @@ async function materializeDynamicCinematicTakeFanout(input: {
   const updateWorkflow = await input.client.from('output_workflows').update({
     metadata: {
       ...input.workflow.metadata,
+      directorScriptDoc: input.compileOutputs.directorScriptDoc ?? null,
       cinematicScriptDoc: input.compileOutputs.cinematicScriptDoc ?? null,
       compiledCinematicSequence: input.compileOutputs.compiledCinematicSequence ?? null,
       dynamicTakeCount: takePlan.length,
@@ -4408,12 +5116,46 @@ function resolveAssetByKey(run: OutputWorkflowRun, assetKey: string) {
   return assets.map(asRecord).find((asset) => readText(asset.key) === assetKey) ?? null
 }
 
+async function resolveProjectAssetByKey(client: DatabaseClient, run: OutputWorkflowRun, assetKey: string) {
+  const localAsset = resolveAssetByKey(run, assetKey)
+  if (localAsset) return localAsset
+  if (!assetKey || isDirectReferenceUrl(assetKey) || isProjectAssetStoragePath(assetKey)) return null
+  const response = await client
+    .from('project_assets')
+    .select('key, name, kind, mime_type, storage_path, metadata')
+    .eq('project_id', run.projectId)
+    .eq('key', assetKey)
+    .maybeSingle()
+  if (response.error || !response.data) return null
+  const row = asRecord(response.data)
+  return {
+    key: readText(row.key),
+    name: readText(row.name),
+    kind: readText(row.kind),
+    mimeType: readText(row.mime_type),
+    mime_type: readText(row.mime_type),
+    storagePath: readText(row.storage_path),
+    storage_path: readText(row.storage_path),
+    metadata: asRecord(row.metadata),
+  }
+}
+
 async function collectAssetPackReferenceUrls(client: DatabaseClient, run: OutputWorkflowRun, assetPack: Record<string, unknown>, limit = 3) {
   const references: string[] = []
   const entities = Array.isArray(assetPack.entities) ? assetPack.entities.map(asRecord) : []
   for (const entity of entities) {
-    for (const assetKey of readStringArray(entity.assetKeys)) {
-      const asset = resolveAssetByKey(run, assetKey)
+    for (const assetKey of sortReferenceValues(readStringArray(entity.assetKeys))) {
+      if (isDirectReferenceUrl(assetKey)) {
+        references.push(assetKey)
+        if (references.length >= limit) return references
+        continue
+      }
+      if (isProjectAssetStoragePath(assetKey)) {
+        references.push(await projectAssetReferenceUrl(client, assetKey.replace(/^project-assets\//i, ''), mimeTypeForStoragePath(assetKey)))
+        if (references.length >= limit) return references
+        continue
+      }
+      const asset = await resolveProjectAssetByKey(client, run, assetKey)
       const storagePath = readText(asset?.storagePath) || readText(asset?.storage_path)
       if (!storagePath) continue
       references.push(await projectAssetReferenceUrl(client, storagePath, readText(asset?.mimeType) || readText(asset?.mime_type) || 'image/png'))
@@ -5495,7 +6237,7 @@ async function executeNode(input: {
 }) {
   switch (input.node.nodeType) {
     case 'world_context_query': {
-      const context = extractWorldContext(input.run, input.node)
+      const context = await refreshWorldContextVisualReferences(input.client, input.run, extractWorldContext(input.run, input.node))
       return {
         inputHash: input.inputHash,
         outputHash: hashOutputWorkflowValue(context),
@@ -5698,7 +6440,7 @@ async function executeNode(input: {
             format: {
               type: 'json_schema',
               name: 'output_workflow_cinematic_script_authoring',
-              schema: cinematicScriptAuthoringJsonSchema,
+              schema: cinematicScriptAuthoringJsonSchemaForPreset(scriptInput.presetFamily),
               strict: true,
             },
           },
@@ -5709,18 +6451,25 @@ async function executeNode(input: {
           },
           timeoutMs: 180_000,
         })
-        const cinematicScriptDoc = response.response.ok
-          ? normalizeCinematicScriptDoc(parseJsonObject(response.outputText), fallbackScriptDoc, assetPack)
-          : fallbackScriptDoc
+        const normalizedScript = normalizeCinematicScriptAuthoring({
+          value: response.response.ok ? parseJsonObject(response.outputText) : fallbackScriptDoc,
+          fallback: fallbackScriptDoc,
+          assetPack,
+          presetFamily: scriptInput.presetFamily,
+          maxTotalDurationSeconds: scriptInput.maxTotalDurationSeconds,
+        })
+        const { directorScriptDoc, cinematicScriptDoc } = normalizedScript
         if (cinematicScriptDoc.shots.length === 0) {
           throw new Error('Cinematic script authoring produced zero shots.')
         }
         const totalDurationSeconds = cinematicScriptDoc.shots.reduce((total, shot) => total + (Number(shot.durationSeconds ?? 0) || 0), 0)
-        const text = JSON.stringify(cinematicScriptDoc, null, 2)
+        const text = JSON.stringify(directorScriptDoc, null, 2)
         const outputs = {
+          directorScriptDoc,
           cinematicScriptDoc,
           scriptDoc: cinematicScriptDoc,
-          script: cinematicScriptDoc,
+          script: directorScriptDoc,
+          executionScriptDoc: cinematicScriptDoc,
           text,
           shotCount: cinematicScriptDoc.shots.length,
           totalDurationSeconds,
@@ -6911,11 +7660,13 @@ async function executeNode(input: {
       if (purpose === 'cinematic_sequence_compile') {
         const config = asRecord(input.node.config)
         const scriptDoc = readFirstUpstreamRecord(input.upstream, ['cinematicScriptDoc', 'scriptDoc'])
+        const directorScriptDoc = readFirstUpstreamRecord(input.upstream, ['directorScriptDoc', 'script'])
         if (Object.keys(scriptDoc).length === 0) {
           throw new Error('Cinematic sequence compile requires an authored cinematic script document.')
         }
         const compiled = compileCinematicScriptDocForOutput({
           scriptDoc,
+          directorScriptDoc,
           maxDynamicTakes: Number(config.maxDynamicTakes ?? 6) || 6,
           maxTotalDurationSeconds: Number(config.maxTotalDurationSeconds ?? CINEMATIC_MAX_TOTAL_DURATION_SECONDS) || CINEMATIC_MAX_TOTAL_DURATION_SECONDS,
         })

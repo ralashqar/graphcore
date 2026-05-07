@@ -17980,6 +17980,83 @@ button:disabled {
   line-height: 1.45;
 }
 
+.outputs-script-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.outputs-script-header,
+.outputs-script-section,
+.outputs-script-card,
+.outputs-script-shot,
+.outputs-script-json {
+  display: grid;
+  gap: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 12px;
+  background: rgba(2, 6, 23, 0.32);
+  padding: 12px;
+}
+
+.outputs-script-header strong,
+.outputs-script-section > strong,
+.outputs-script-card b,
+.outputs-script-shot b {
+  color: var(--text);
+}
+
+.outputs-script-header p,
+.outputs-script-section p,
+.outputs-script-card p,
+.outputs-script-shot p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.outputs-script-meta,
+.outputs-script-chips,
+.outputs-script-shot-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.outputs-script-shot-head {
+  justify-content: space-between;
+}
+
+.outputs-script-meta span,
+.outputs-script-chips span,
+.outputs-script-shot-head span {
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.58);
+  color: var(--muted);
+  padding: 4px 8px;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.outputs-script-shot ul {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.outputs-script-json summary {
+  cursor: pointer;
+  color: var(--text);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
 .outputs-cinematics-shell {
   position: relative;
   z-index: 1;
@@ -18914,6 +18991,10 @@ button:disabled {
   cursor: pointer;
 }
 
+.outputs-graph-node button {
+  font: inherit;
+}
+
 .outputs-graph-node.is-world_context_query {
   border-color: rgba(96, 165, 250, 0.34);
   background: rgba(15, 23, 42, 0.98);
@@ -19048,6 +19129,35 @@ button:disabled {
   background: rgba(6, 78, 59, 0.62);
   color: var(--accent);
   font-size: 0.7rem;
+  cursor: pointer;
+}
+
+.outputs-graph-node-play:disabled {
+  cursor: default;
+}
+
+.outputs-graph-node-expand {
+  position: absolute;
+  top: 9px;
+  right: 9px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  min-width: 42px;
+  height: 26px;
+  border: 1px solid rgba(226, 232, 240, 0.18);
+  border-radius: 999px;
+  background: rgba(2, 6, 23, 0.76);
+  color: rgba(248, 250, 252, 0.92);
+  font-size: 0.68rem;
+  font-weight: 800;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+}
+
+.outputs-graph-node-expand:hover {
+  border-color: rgba(110, 231, 183, 0.42);
+  color: var(--accent);
 }
 
 .outputs-graph-mini-spinner {
@@ -19231,6 +19341,108 @@ button:disabled {
   border-radius: 8px;
   object-fit: cover;
   background: rgba(15, 23, 42, 0.88);
+}
+
+.outputs-node-output-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 140;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  background: rgba(2, 6, 23, 0.78);
+  backdrop-filter: blur(8px);
+}
+
+.outputs-node-output-modal {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 14px;
+  width: min(980px, calc(100vw - 48px));
+  max-height: min(860px, calc(100vh - 48px));
+  overflow: hidden;
+  padding: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 10px;
+  background: rgba(8, 13, 22, 0.98);
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.48);
+}
+
+.outputs-node-output-modal.has-image {
+  width: min(1180px, calc(100vw - 48px));
+}
+
+.outputs-node-output-modal header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.outputs-node-output-modal header > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.outputs-node-output-modal header span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+.outputs-node-output-modal header strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 1rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.outputs-node-output-modal header button {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.9);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.outputs-node-output-modal pre {
+  min-height: 0;
+  max-height: calc(100vh - 170px);
+  overflow: auto;
+  margin: 0;
+  padding: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 8px;
+  background: rgba(2, 6, 23, 0.62);
+  color: rgba(226, 232, 240, 0.9);
+  font-size: 0.82rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.outputs-node-output-image-shell {
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 8px;
+  background: rgba(2, 6, 23, 0.72);
+}
+
+.outputs-node-output-image-shell img {
+  display: block;
+  max-width: 100%;
+  max-height: calc(100vh - 170px);
+  margin: 0 auto;
+  object-fit: contain;
 }
 
 .outputs-graph-binding-list {
