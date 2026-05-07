@@ -109,8 +109,10 @@ type ImagePrice = {
 }
 
 const DEFAULT_CREDITS_PER_USD = 100
+const DEFAULT_OPENAI_TEXT_MODEL = 'gpt-5.4'
 
 export const OPENAI_TEXT_PRICE_SNAPSHOT: Record<string, TextPrice> = {
+  'gpt-5.4': { inputPer1M: 1.25, outputPer1M: 10, cachedInputPer1M: 0.125, source: 'openai_pricing_snapshot_gpt5_family_fallback' },
   'gpt-5.1': { inputPer1M: 1.25, outputPer1M: 10, cachedInputPer1M: 0.125, source: 'openai_pricing_snapshot' },
   'gpt-5.1-mini': { inputPer1M: 0.25, outputPer1M: 2, cachedInputPer1M: 0.025, source: 'openai_pricing_snapshot' },
   'gpt-5.1-nano': { inputPer1M: 0.05, outputPer1M: 0.4, cachedInputPer1M: 0.005, source: 'openai_pricing_snapshot' },
@@ -179,7 +181,7 @@ export function estimateOpenAiTextCost(input: {
   cachedInputTokens?: number
   creditsPerUsd?: number
 }): AiUsageCost {
-  const price = OPENAI_TEXT_PRICE_SNAPSHOT[input.model] ?? OPENAI_TEXT_PRICE_SNAPSHOT['gpt-4o-mini']
+  const price = OPENAI_TEXT_PRICE_SNAPSHOT[input.model] ?? OPENAI_TEXT_PRICE_SNAPSHOT[DEFAULT_OPENAI_TEXT_MODEL]
   const cachedInputTokens = Math.min(Math.max(0, input.cachedInputTokens ?? 0), Math.max(0, input.inputTokens))
   const uncachedInputTokens = Math.max(0, input.inputTokens - cachedInputTokens)
   const inputCost = (uncachedInputTokens / 1_000_000) * price.inputPer1M
@@ -356,7 +358,7 @@ export function estimateOutputWorkflowUsage(plan: {
   const lines = (plan.nodes ?? []).flatMap((node): AiUsageLine[] => {
     const config = readRecord(node.config)
     if (node.nodeType === 'text_llm') {
-      const model = typeof config.model === 'string' ? config.model : 'gpt-4o-mini'
+      const model = typeof config.model === 'string' ? config.model : DEFAULT_OPENAI_TEXT_MODEL
       const purpose = typeof config.purpose === 'string' ? config.purpose : ''
       const outputTokens = purpose.includes('chapter')
         ? 9000
@@ -389,6 +391,9 @@ export function estimateOutputWorkflowUsage(plan: {
     if (node.nodeType === 'image_generation') {
       const model = typeof config.model === 'string' ? config.model : 'openai/gpt-image-2'
       const size = typeof config.size === 'string' ? config.size : typeof config.imageSize === 'string' ? config.imageSize : undefined
+      const imageSize = readRecord(config.imageSize)
+      const width = readNumber(imageSize.width) || undefined
+      const height = readNumber(imageSize.height) || undefined
       return [buildFalMediaUsageLine({
         model,
         modality: 'image',
@@ -398,6 +403,8 @@ export function estimateOutputWorkflowUsage(plan: {
         nodeType: node.nodeType,
         status: 'estimated',
         size,
+        width,
+        height,
       })]
     }
     if (node.nodeType === 'video_generation') {

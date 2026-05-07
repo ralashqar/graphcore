@@ -122,6 +122,46 @@ test('UGC take shaping breaks on editorial beat boundaries', () => {
   assert.ok(sequence.takes.length >= 2)
 })
 
+test('cinematic script compiler groups dynamic runtimes into natural max-15s takes', () => {
+  const makeShot = (index, durationSeconds) => ({
+    id: `shot_${index}`,
+    orderIndex: index - 1,
+    title: `Shot ${index}`,
+    beat: `The scene advances through visual beat ${index}.`,
+    shotType: 'custom',
+    framing: 'medium cinematic frame',
+    cameraMovement: 'steady slow push',
+    visualPrompt: `visual beat ${index}`,
+    compositionGuide: 'keep blocking continuous and readable',
+    participantRefIds: ['eva'],
+    locationRefId: 'garden',
+    durationSeconds,
+    actions: [{ id: `a${index}`, actorRefId: 'eva', verb: `performs beat ${index}` }],
+  })
+  const script = cinematicScriptDocSchema.parse({
+    title: 'Dynamic Runtime Test',
+    entityBindings: [
+      { id: 'eva', kind: 'character', role: 'singer', label: 'Eva-9', sourceName: 'Eva-9' },
+      { id: 'garden', kind: 'environment', role: 'location', label: 'Skybridge Garden', sourceName: 'Skybridge Garden' },
+    ],
+    shots: [5, 5, 5, 5, 5, 5, 4, 4].map((duration, index) => makeShot(index + 1, duration)),
+  })
+
+  const sequence = buildCinematicSequenceFromScriptDoc(script)
+
+  assert.deepEqual(sequence.takes.map((take) => take.durationSeconds), [15, 15, 8])
+  assert.ok(sequence.takes.every((take) => take.durationSeconds <= 15))
+
+  const shortScript = cinematicScriptDocSchema.parse({
+    title: 'Short Runtime Test',
+    entityBindings: script.entityBindings,
+    shots: [4, 4, 3].map((duration, index) => makeShot(index + 1, duration)),
+  })
+  const shortSequence = buildCinematicSequenceFromScriptDoc(shortScript)
+
+  assert.deepEqual(shortSequence.takes.map((take) => take.durationSeconds), [11])
+})
+
 test('UGC shot duration inference stays inside preset pacing bands', () => {
   const script = cinematicScriptDocSchema.parse({
     title: 'Pacing Test',

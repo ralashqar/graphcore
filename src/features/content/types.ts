@@ -9,6 +9,7 @@ import type {
 } from '../../domain/graphcore'
 import type { AssetUrlCreateOptions, AssetUrlCreationKind } from '../../domain/assets'
 import type { MeshGenerationJob } from '../../domain/meshGeneration'
+import type { VisualGenerationStartResponse, VisualGenerationStatusResponse } from '../../domain/visualGeneration'
 import type { WorldEntity, WorldRelationship, WorldEntityCreateInput } from '../../domain/worldGraph'
 
 export type ItemIdentityChanges = Partial<
@@ -59,6 +60,9 @@ export type ContentWorkspaceProps = {
   onUpdateItemIdentity: (key: string, changes: ItemIdentityChanges) => void
   onUpdateComponents: (itemKey: string, components: DefinitionBase['components']) => void
   onGenerateConceptImage: (definitionKey: string) => Promise<void>
+  onGenerateReferenceSheet?: (definitionKey: string) => Promise<VisualGenerationStartResponse | void>
+  onGetVisualGenerationStatus?: (jobId: string) => Promise<VisualGenerationStatusResponse>
+  onReferenceSheetJobFinished?: () => Promise<void> | void
   isGeneratingPrompt?: boolean
   onChangePromptText?: (value: string) => void
   onGeneratePrompt?: () => void

@@ -284,7 +284,7 @@ test('prompt-first entity binding is typo-tolerant and does not fall back to unr
   assert.equal((contextNode?.config as Record<string, unknown> | undefined)?.strictSourceEntityFilter, true)
 })
 
-test('cinematic output preset creates storyboard, Seedance block videos, and stitch artifact', () => {
+test('cinematic output preset creates script-first dynamic take fanout placeholder', () => {
   const plan = planOutputRequestWorkflow({
     projectId: 'project-1',
     draftId: 'draft-1',
@@ -299,27 +299,106 @@ test('cinematic output preset creates storyboard, Seedance block videos, and sti
   assert.equal(plan.preset, 'cinematic_episode_from_sequence')
   assert.equal(plan.targetFormat, 'video')
   assert.deepEqual(plan.sourceSequenceUnitKeys, ['chapter-1'])
-  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_block_script').length, 3)
-  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_storyboard').length, 3)
-  assert.equal(plan.nodes.filter((node) => node.nodeType === 'video_generation').length, 3)
-  assert.ok(plan.nodes.some((node) => readConfigPurpose(node) === 'video_stitch'))
-  assert.ok(plan.nodes.some((node) => readConfigPurpose(node) === 'cinematic_video_artifact'))
+  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_script_authoring').length, 1)
+  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_sequence_compile').length, 1)
+  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_dynamic_take_fanout').length, 1)
+  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_block_script').length, 0)
+  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_reference_atlas').length, 1)
+  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_storyboard').length, 0)
+  assert.equal(plan.nodes.filter((node) => node.nodeType === 'video_generation').length, 0)
+  assert.ok(!plan.nodes.some((node) => readConfigPurpose(node) === 'video_stitch'))
+  assert.ok(!plan.nodes.some((node) => readConfigPurpose(node) === 'cinematic_video_artifact'))
 
-  const storyboard = plan.nodes.find((node) => node.key === 'block_001_storyboard')
-  assert.equal(readConfigQuality(storyboard ?? {}), 'low')
-  assert.equal(readConfigOutputFormat(storyboard ?? {}), 'webp')
-  assert.deepEqual(storyboard?.config.imageSize, { width: 2048, height: 2048 })
+  const scriptAuthoring = plan.nodes.find((node) => node.key === 'cinematic_script_authoring')
+  assert.equal(scriptAuthoring?.config.legacyVideoBlockCount, 3)
+  assert.equal(scriptAuthoring?.config.legacyDurationPerBlockSeconds, 8)
 
-  const video = plan.nodes.find((node) => node.key === 'block_001_video')
-  assert.equal(video?.config.model, 'bytedance/seedance-2.0/fast/reference-to-video')
-  assert.equal(video?.config.durationSeconds, 8)
-  assert.equal(video?.config.resolution, '720p')
-  assert.equal(video?.config.generateAudio, true)
-  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'block_001_storyboard' && edge.targetNodeKey === 'block_001_video' && edge.targetPort === 'references'))
-  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'block_001_video' && edge.targetNodeKey === 'video_stitch' && edge.targetPort === 'videos'))
-  assert.ok(plan.usageEstimate?.lines.some((line) => line.nodeKey === 'block_001_storyboard' && line.modality === 'image'))
-  assert.ok(plan.usageEstimate?.lines.some((line) => line.nodeKey === 'block_001_video' && line.modality === 'video' && line.media?.durationSeconds === 8))
+  const fanout = plan.nodes.find((node) => node.key === 'cinematic_dynamic_take_fanout')
+  assert.equal(fanout?.config.aspectRatio, '16:9')
+  assert.equal(fanout?.config.resolution, '720p')
+  assert.equal(fanout?.config.generateAudio, true)
+  assert.equal(fanout?.config.maxTotalDurationSeconds, 60)
+  assert.equal(fanout?.config.videoModel, 'bytedance/seedance-2.0/fast/reference-to-video')
+  assert.equal(fanout?.config.cinematicReferenceMode, 'storyboard_sheet')
+  assert.equal(fanout?.config.debugSkipVideoGeneration, true)
+  assert.ok(plan.diagnostics.some((line) => line.includes('Storyboard-grid reference mode')))
+  const skillContext = plan.nodes.find((node) => node.key === 'skill_context')
+  assert.ok(Array.isArray(skillContext?.config.skillKeys))
+  assert.ok((skillContext?.config.skillKeys as string[]).includes('cinematic_beat_sheet_planning'))
+  assert.ok((skillContext?.config.skillKeys as string[]).includes('cinematic_keyframe_prompting'))
+  assert.ok((skillContext?.config.skillKeys as string[]).includes('seedance_timeline_call_sheet'))
+
+  const atlas = plan.nodes.find((node) => node.key === 'cinematic_atlas_image')
+  assert.equal(readConfigQuality(atlas ?? {}), 'low')
+  assert.equal(readConfigOutputFormat(atlas ?? {}), 'webp')
+  assert.deepEqual(atlas?.config.imageSize, { width: 2048, height: 2048 })
+  assert.equal(atlas?.config.maxReferenceImages, 16)
+  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_entities' && edge.targetNodeKey === 'cinematic_atlas_image' && edge.targetPort === 'references'))
+  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_sequence_compile' && edge.targetNodeKey === 'cinematic_dynamic_take_fanout' && edge.targetPort === 'input'))
+  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_atlas_image' && edge.targetNodeKey === 'cinematic_dynamic_take_fanout' && edge.targetPort === 'references'))
+  assert.ok(plan.usageEstimate?.lines.some((line) => line.nodeKey === 'cinematic_atlas_image' && line.modality === 'image'))
+  assert.ok(!plan.usageEstimate?.lines.some((line) => line.nodeKey === 'block_001_storyboard'))
+  assert.ok(!plan.usageEstimate?.lines.some((line) => line.nodeKey === 'block_001_video'))
   assert.equal(validateOutputWorkflowGraph({ nodes: plan.nodes, edges: plan.edges }).ok, true)
+
+  const requestPayload = outputRequestStartRequestSchema.parse({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    prompt: 'Create a cinematic sequence from Chapter 1.',
+    targetFormat: 'video',
+    cinematicReferenceMode: 'storyboard_sheet',
+    debugSkipVideoGeneration: false,
+    snapshot,
+  })
+  assert.equal(requestPayload.cinematicReferenceMode, 'storyboard_sheet')
+  assert.equal(requestPayload.debugSkipVideoGeneration, false)
+
+  const combinedReferencePayload = outputRequestStartRequestSchema.parse({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    prompt: 'Create a cinematic sequence from Chapter 1.',
+    targetFormat: 'video',
+    cinematicReferenceMode: 'keyframes_and_storyboard',
+    snapshot,
+  })
+  assert.equal(combinedReferencePayload.cinematicReferenceMode, 'keyframes_and_storyboard')
+
+  const portraitPlan = planOutputRequestWorkflow({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    prompt: 'Create a vertical UGC cinematic from Chapter 1.',
+    targetFormat: 'video',
+    selectedSequenceUnitKeys: ['chapter-1'],
+    aspectRatio: '9:16',
+    snapshot,
+  }, 'ugc_episode')
+  const portraitFanout = portraitPlan.nodes.find((node) => node.key === 'cinematic_dynamic_take_fanout')
+  assert.equal(portraitFanout?.config.aspectRatio, '9:16')
+
+  const costEnabledPlan = planOutputRequestWorkflow({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    prompt: 'Create a cinematic sequence from Chapter 1.',
+    targetFormat: 'video',
+    selectedSequenceUnitKeys: ['chapter-1'],
+    debugSkipVideoGeneration: false,
+    snapshot,
+  }, 'cinematic_episode')
+  const costEnabledFanout = costEnabledPlan.nodes.find((node) => node.key === 'cinematic_dynamic_take_fanout')
+  assert.equal(costEnabledFanout?.config.debugSkipVideoGeneration, false)
+
+  const keyframeModePlan = planOutputRequestWorkflow({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    prompt: 'Create a cinematic sequence from Chapter 1.',
+    targetFormat: 'video',
+    selectedSequenceUnitKeys: ['chapter-1'],
+    cinematicReferenceMode: 'keyframes',
+    snapshot,
+  }, 'cinematic_episode')
+  const keyframeModeFanout = keyframeModePlan.nodes.find((node) => node.key === 'cinematic_dynamic_take_fanout')
+  assert.equal(keyframeModeFanout?.config.cinematicReferenceMode, 'keyframes')
+  assert.ok(keyframeModePlan.diagnostics.some((line) => line.includes('Keyframe reference mode')))
 })
 
 test('prompt-first image request payloads do not inherit comic page count', () => {

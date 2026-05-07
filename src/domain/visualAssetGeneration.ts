@@ -71,6 +71,107 @@ export type EnvironmentConceptPromptInput = {
   visualDescription: string
 }
 
+export type EntityReferenceSheetBaseInput = {
+  entityName: string
+  entitySummary?: string | null
+  entityContext?: string | null
+  projectArtStyle?: string | null
+  projectTone?: string | null
+  projectContextDescription?: string | null
+  visualDescription?: string | null
+  visualTraits?: string[] | null
+  visualTraitMap?: Record<string, string | null | undefined> | null
+  referenceAssetNotes?: string[] | null
+}
+
+function cleanPromptText(value: unknown) {
+  return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : ''
+}
+
+function buildReferenceSheetContext(input: EntityReferenceSheetBaseInput) {
+  const traits = Array.isArray(input.visualTraits)
+    ? input.visualTraits.map((trait) => cleanPromptText(trait)).filter(Boolean)
+    : []
+  const traitMapEntries = input.visualTraitMap && typeof input.visualTraitMap === 'object'
+    ? Object.entries(input.visualTraitMap)
+      .map(([key, value]) => [key, cleanPromptText(value)] as const)
+      .filter(([, value]) => value)
+    : []
+  const references = Array.isArray(input.referenceAssetNotes)
+    ? input.referenceAssetNotes.map((note) => cleanPromptText(note)).filter(Boolean)
+    : []
+  return [
+    `Subject name: ${input.entityName}.`,
+    input.entitySummary ? `Summary: ${cleanPromptText(input.entitySummary)}.` : null,
+    input.entityContext ? `Canon context: ${cleanPromptText(input.entityContext)}.` : null,
+    input.projectContextDescription ? `Project context: ${cleanPromptText(input.projectContextDescription)}.` : null,
+    input.projectArtStyle ? `Project art style: ${cleanPromptText(input.projectArtStyle)}.` : null,
+    input.projectTone ? `Project tone: ${cleanPromptText(input.projectTone)}.` : null,
+    input.visualDescription ? `Neutral visual identity: ${cleanPromptText(input.visualDescription)}.` : null,
+    traits.length ? `Visual traits: ${traits.join(', ')}.` : null,
+    traitMapEntries.length ? `Trait map: ${traitMapEntries.map(([key, value]) => `${key}: ${value}`).join('; ')}.` : null,
+    references.length ? `Use supplied reference images as visual anchors: ${references.join('; ')}.` : null,
+    'The board layout, background, section titles, labels, and spacing must stay clean, neutral, minimal, and technical; apply the project art style only to the subject visuals and rendered design panels.',
+    'Use readable English labels only. Avoid tiny dense text, watermarks, logos, UI chrome, decorative poster composition, and clutter.',
+  ].filter(Boolean).join(' ')
+}
+
+export function buildCharacterReferenceSheetPrompt(input: EntityReferenceSheetBaseInput) {
+  return [
+    'Create a single unified CHARACTER TURNAROUND REFERENCE SHEET in a 4:3 horizontal layout, optimized for low-quality GPT Image 2 generation with fewer, larger, stable panels.',
+    buildReferenceSheetContext(input),
+    'Use a pure white or clean off-white production-board background with balanced spacing and clear section titles.',
+    'The largest dominant section is MAIN CHARACTER TURNAROUND: show the same character in four large neutral standing views: front, 3/4 front, side profile, and back. Keep arms relaxed and simple; do not emphasize fingers or complex hand poses.',
+    'Include a small silhouette strip with two simple silhouettes: front neutral stance and side profile silhouette.',
+    'Include COLOR PALETTE with 5 to 7 clean swatches that match wardrobe, world, mood, and materials.',
+    'Include a HEAD AND IDENTITY DETAILS section with only 3 larger panels: 3/4 headshot, side profile headshot, and a close crop of the most important hair/face/marking detail.',
+    'Include 3 to 4 FEATURE CALLOUTS for important stable design features such as hairstyle, outerwear silhouette, footwear, signature accessory, texture, material, or permanent markings.',
+    'Include exactly one cinematic chest-up or shoulder-up profile close-up panel that can also work as the character portrait: natural neutral expression, strong facial identity, hairstyle, upper wardrobe detail, and emotional presence.',
+    'Do not include expression grids, micro-expression panels, hand gesture sheets, complicated fingers, action poses, combat stances, or many tiny panels.',
+    'Keep identity, face, body proportions, hair, wardrobe, palette, materials, and distinguishing marks consistent across every panel.',
+    'Neutral presentation only: no fighting pose, injury state, blood, crying, weather, scene lighting, event damage, or temporary story action unless it is a permanent identity trait.',
+  ].join(' ')
+}
+
+export function buildLocationReferenceSheetPrompt(input: EntityReferenceSheetBaseInput & { includeMapView?: boolean }) {
+  return [
+    'Create a single unified MASTER LOCATION / ENVIRONMENT REFERENCE SHEET as a 2048x2048 square production board.',
+    buildReferenceSheetContext(input),
+    'Use a clean technical visual-bible layout with readable English section labels and short callout captions.',
+    'Include a cinematic establishing view as the largest panel, plus entrance/threshold view, interior or key-zone views, material and lighting callouts, landmark/detail closeups, scale cues, and color palette.',
+    input.includeMapView === false
+      ? 'Include a spatial relationship / navigation diagram using visual zones instead of a literal map, because this place may be abstract or non-spatial.'
+      : 'Include a top-down or isometric map view when spatially meaningful, showing the main zones, routes, thresholds, and key feature highlights.',
+    'Include exactly one cinematic profile-like hero panel that can function as a recognizable close-up identity image for the place.',
+    'Preserve environment logic, architecture, palette, materials, scale, landmarks, and lighting direction across all views.',
+    'Do not make a poster, tourism ad, mood board, random collage, UI table, or lore document. Keep text sparse and readable.',
+  ].join(' ')
+}
+
+export function buildGroupReferenceSheetPrompt(input: EntityReferenceSheetBaseInput) {
+  return [
+    'Create a single unified MASTER GROUP / FACTION DESIGN SHEET as a 2048x2048 square visual identity board.',
+    buildReferenceSheetContext(input),
+    'Focus on the group visual system, not every individual member.',
+    'Include emblem or sigil, uniform or dress-code logic, representative member silhouettes, hierarchy or role archetypes, territory/base/environment cue, key object/banner/vehicle if relevant, palette swatches, material callouts, and visual behavior codes.',
+    'Include exactly one cinematic close-up/profile panel of a representative member, leader archetype, emblem, mask, banner, or symbol that captures the group identity.',
+    'Keep symbols, wardrobe language, palette, materials, and silhouette logic consistent across the sheet.',
+    'Avoid overcrowded crowd scenes, tiny roster grids, unreadable text, random members, poster composition, or UI-style infographics.',
+  ].join(' ')
+}
+
+export function buildItemReferenceSheetPrompt(input: EntityReferenceSheetBaseInput) {
+  return [
+    'Create a single unified MASTER ITEM / PROP DESIGN SHEET as a 2048x2048 square production design board.',
+    buildReferenceSheetContext(input),
+    'Include a hero render, front/side/back or 3/4 rotation views, scale reference, silhouette read, material callouts, functional detail callouts, wear or variant states if canonically relevant, in-hand or in-use view, and palette swatches.',
+    'Include exactly one cinematic close-up/profile panel that makes the object feel iconic and shows the most recognizable material, silhouette, and functional detail.',
+    'For magical, tech, or lore objects, include visible effect states only when they are stable identity traits, not temporary action moments.',
+    'Keep the same object proportions, materials, markings, palette, and construction logic across every view.',
+    'Avoid inventory-card UI, advertising layout, dense labels, random extra objects, poster composition, and illegible text.',
+  ].join(' ')
+}
+
 export function isValidImageFileEntry(value: unknown): value is { url: string; content_type?: string; file_name?: string } {
   if (!value || typeof value !== 'object') {
     return false

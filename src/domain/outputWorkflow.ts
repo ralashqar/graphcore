@@ -347,6 +347,8 @@ export const outputWorkflowPlanRequestSchema = z.object({
   videoResolution: z.enum(['480p', '720p', '1080p']).optional(),
   generateAudio: z.boolean().optional(),
   cinematicPresetFamily: z.enum(['story_movie_tv', 'ugc_creator', 'ugc_direct_response_ad', 'ugc_faceless_format']).optional(),
+  cinematicReferenceMode: z.enum(['keyframes', 'storyboard_sheet', 'keyframes_and_storyboard']).optional(),
+  debugSkipVideoGeneration: z.boolean().optional(),
   snapshot: z.object({
     project: z.object({
       id: z.string(),
@@ -383,6 +385,8 @@ export const outputRequestStartRequestSchema = z.object({
   videoResolution: z.enum(['480p', '720p', '1080p']).optional(),
   generateAudio: z.boolean().optional(),
   cinematicPresetFamily: z.enum(['story_movie_tv', 'ugc_creator', 'ugc_direct_response_ad', 'ugc_faceless_format']).optional(),
+  cinematicReferenceMode: z.enum(['keyframes', 'storyboard_sheet', 'keyframes_and_storyboard']).optional(),
+  debugSkipVideoGeneration: z.boolean().optional(),
   snapshot: outputWorkflowPlanRequestSchema.shape.snapshot,
   runInput: looseRecordSchema.default({}),
 })
@@ -1147,6 +1151,7 @@ const EBOOK_CHAPTER_FANOUT_LIMIT = 24
 const COMIC_PAGE_FANOUT_LIMIT = 12
 const DEFAULT_COMIC_PAGE_COUNT = 8
 const CINEMATIC_BLOCK_FANOUT_LIMIT = 6
+const CINEMATIC_MAX_TOTAL_DURATION_SECONDS = 60
 const DEFAULT_CINEMATIC_BLOCK_COUNT = 3
 const DEFAULT_CINEMATIC_BLOCK_DURATION_SECONDS = 8
 
@@ -1157,6 +1162,7 @@ const STORY_BIBLE_SEQUENCE_LIMIT = 36
 type CinematicAspectRatio = NonNullable<z.infer<typeof outputWorkflowPlanRequestSchema>['aspectRatio']>
 type CinematicResolution = NonNullable<z.infer<typeof outputWorkflowPlanRequestSchema>['videoResolution']>
 type CinematicPresetFamily = NonNullable<z.infer<typeof outputWorkflowPlanRequestSchema>['cinematicPresetFamily']>
+type CinematicReferenceMode = NonNullable<z.infer<typeof outputWorkflowPlanRequestSchema>['cinematicReferenceMode']>
 
 type OutputImageGenerationQuality = z.infer<typeof outputImageGenerationQualitySchema>
 type OutputImageGenerationOutputFormat = z.infer<typeof outputImageGenerationOutputFormatSchema>
@@ -2375,16 +2381,18 @@ export function buildCinematicSequencePlan(
   const prompt = request.prompt.trim() || 'Create a cinematic sequence from this world context with shot-by-shot scripts, storyboards, and final video clips.'
   const presetFamily = request.cinematicPresetFamily ?? inferCinematicPresetFamily(prompt, outputKind)
   const preset = inferCinematicPresetFromKind(outputKind, prompt)
-  const videoBlockCount = clampInteger(request.videoBlockCount, 1, CINEMATIC_BLOCK_FANOUT_LIMIT, DEFAULT_CINEMATIC_BLOCK_COUNT)
-  const durationPerBlockSeconds = clampInteger(
-    request.durationPerBlockSeconds,
-    4,
-    15,
-    DEFAULT_CINEMATIC_BLOCK_DURATION_SECONDS,
-  )
+  const legacyVideoBlockCount = typeof request.videoBlockCount === 'number'
+    ? clampInteger(request.videoBlockCount, 1, CINEMATIC_BLOCK_FANOUT_LIMIT, DEFAULT_CINEMATIC_BLOCK_COUNT)
+    : null
+  const legacyDurationPerBlockSeconds = typeof request.durationPerBlockSeconds === 'number'
+    ? clampInteger(request.durationPerBlockSeconds, 4, 15, DEFAULT_CINEMATIC_BLOCK_DURATION_SECONDS)
+    : null
   const aspectRatio: CinematicAspectRatio = request.aspectRatio ?? (presetFamily.startsWith('ugc') ? '9:16' : '16:9')
   const resolution: CinematicResolution = request.videoResolution ?? '720p'
   const generateAudio = request.generateAudio ?? true
+  const cinematicReferenceMode: CinematicReferenceMode = request.cinematicReferenceMode
+    ?? aiGenerationSettings.outputWorkflow.cinematicReferenceModeDefault
+  const debugSkipVideoGeneration = request.debugSkipVideoGeneration ?? aiGenerationSettings.outputWorkflow.debugSkipVideoGenerationDefault
   const videoModel = resolveSeedance2Model(resolution)
   const title = worldWiki.title || request.snapshot.project.name
   const sequenceTitle = selectedSequenceUnit?.name || 'Selected Sequence'
@@ -2393,114 +2401,114 @@ export function buildCinematicSequencePlan(
     : preset === 'ugc_episode'
       ? `${title} UGC Video`
       : `${title} - ${sequenceTitle} Cinematic`
-  const blockNumbers = Array.from({ length: videoBlockCount }, (_, index) => index + 1)
-  const blockScriptNodes = blockNumbers.map((blockNumber, index) => nodeBase({
-    key: `block_${String(blockNumber).padStart(3, '0')}_script`,
+  const scriptAuthoringNode = nodeBase({
+    key: 'cinematic_script_authoring',
     nodeType: 'text_llm',
-    label: `Block ${blockNumber} Script`,
+    label: 'Cinematic Script',
     x: 920,
-    y: 40 + (index % 6) * 180,
-    inputs: { prompt: `Write timestamped cinematic shots for video block ${blockNumber}.` },
+    y: 120,
+    inputs: { prompt: 'Author the directed cinematic script from the prompt and world context. Let the script determine runtime, shot count, and take breaks.' },
     config: {
-      purpose: 'cinematic_block_script',
-      blockNumber,
-      blockCount: videoBlockCount,
-      durationSeconds: durationPerBlockSeconds,
-      maxDurationSeconds: 15,
+      purpose: 'cinematic_script_authoring',
       aspectRatio,
       resolution,
+      generateAudio,
       presetFamily,
+      cinematicReferenceMode,
+      debugSkipVideoGeneration,
+      maxTakeDurationSeconds: 15,
+      maxTotalDurationSeconds: CINEMATIC_MAX_TOTAL_DURATION_SECONDS,
+      dynamicRuntime: true,
+      legacyVideoBlockCount,
+      legacyDurationPerBlockSeconds,
       sequenceUnitKey: selectedSequenceUnitKey,
       sequenceUnitName: sequenceTitle,
       skillKeys: ['cinematic_sequence_structure', 'cinematic_shot_direction', 'shortform_hook_retention', 'brand_ugc_proof_structure', 'provider_prompt_hygiene'],
       autoSkillTags: ['cinematic', 'shot_script', 'ugc', 'provider_hygiene'],
       guidanceMode: 'strict',
-      execution: { resourceClass: 'llm', groupKey: 'cinematic_block_scripts', maxConcurrency: Math.min(videoBlockCount, 6) },
+      execution: { resourceClass: 'llm', groupKey: 'cinematic_script_authoring', maxConcurrency: 1 },
     },
-  }))
-  const storyboardPromptNodes = blockNumbers.map((blockNumber, index) => {
-    const gridDimension = durationPerBlockSeconds > 9 ? 4 : 3
-    return nodeBase({
-      key: `block_${String(blockNumber).padStart(3, '0')}_storyboard_prompt`,
-      nodeType: 'utility_transform',
-      label: `Block ${blockNumber} Storyboard Prompt`,
-      x: 1200,
-      y: 40 + (index % 6) * 180,
-      config: {
-        purpose: 'cinematic_storyboard_prompt',
-        blockNumber,
-        blockCount: videoBlockCount,
-        gridDimension,
-        panelCount: gridDimension * gridDimension,
-        aspectRatio,
-        presetFamily,
-        execution: { resourceClass: 'utility', groupKey: 'cinematic_storyboard_prompts', maxConcurrency: 6 },
-      },
-    })
   })
-  const storyboardImageNodes = blockNumbers.map((blockNumber, index) => nodeBase({
-    key: `block_${String(blockNumber).padStart(3, '0')}_storyboard`,
-    nodeType: 'image_generation',
-    label: `Block ${blockNumber} Storyboard`,
-    x: 1480,
-    y: 40 + (index % 6) * 180,
-    config: {
-      purpose: 'cinematic_storyboard',
-      role: 'cinematic_storyboard',
-      blockNumber,
-      blockCount: videoBlockCount,
-      model: 'openai/gpt-image-2',
-      referenceModel: 'openai/gpt-image-2/edit',
-      quality: 'low',
-      outputFormat: 'webp',
-      imageSize: { width: 2048, height: 2048 },
-      skillKeys: ['storyboard_grid_direction', 'image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'provider_prompt_hygiene'],
-      autoSkillTags: ['storyboard', 'image_prompt', 'visual_only', 'entity_reference', 'reference_continuity'],
-      guidanceMode: 'strict',
-      execution: { resourceClass: 'image', groupKey: 'cinematic_storyboards', maxConcurrency: 3 },
-    },
-  }))
-  const videoPromptNodes = blockNumbers.map((blockNumber, index) => nodeBase({
-    key: `block_${String(blockNumber).padStart(3, '0')}_video_prompt`,
+  const sequenceCompileNode = nodeBase({
+    key: 'cinematic_sequence_compile',
     nodeType: 'utility_transform',
-    label: `Block ${blockNumber} Video Prompt`,
-    x: 1760,
-    y: 40 + (index % 6) * 180,
+    label: 'Compile Takes',
+    x: 1200,
+    y: 120,
     config: {
-      purpose: 'cinematic_video_prompt',
-      blockNumber,
-      blockCount: videoBlockCount,
-      durationSeconds: durationPerBlockSeconds,
+      purpose: 'cinematic_sequence_compile',
       aspectRatio,
       resolution,
       generateAudio,
       presetFamily,
-      execution: { resourceClass: 'utility', groupKey: 'cinematic_video_prompts', maxConcurrency: 6 },
+      cinematicReferenceMode,
+      debugSkipVideoGeneration,
+      maxTakeDurationSeconds: 15,
+      maxDynamicTakes: CINEMATIC_BLOCK_FANOUT_LIMIT,
+      maxTotalDurationSeconds: CINEMATIC_MAX_TOTAL_DURATION_SECONDS,
+      sequenceUnitKey: selectedSequenceUnitKey,
+      sequenceUnitName: sequenceTitle,
+      execution: { resourceClass: 'utility', groupKey: 'cinematic_sequence_compile', maxConcurrency: 1 },
     },
-  }))
-  const videoNodes = blockNumbers.map((blockNumber, index) => nodeBase({
-    key: `block_${String(blockNumber).padStart(3, '0')}_video`,
-    nodeType: 'video_generation',
-    label: `Block ${blockNumber} Video`,
-    x: 2040,
-    y: 40 + (index % 6) * 180,
+  })
+  const atlasPromptNode = nodeBase({
+    key: 'cinematic_atlas_prompt',
+    nodeType: 'text_llm',
+    label: 'Atlas Prompt',
+    x: 640,
+    y: 340,
+    inputs: { prompt: 'Create a GPT Image 2 prompt for a cinematic reference atlas of the selected entities.' },
     config: {
-      purpose: 'cinematic_block_video',
-      role: 'cinematic_block',
-      blockNumber,
-      blockCount: videoBlockCount,
-      model: videoModel,
-      durationSeconds: durationPerBlockSeconds,
+      purpose: 'cinematic_atlas_prompt',
+      sequenceUnitKey: selectedSequenceUnitKey,
+      sequenceUnitName: sequenceTitle,
+      skillKeys: ['image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'environment_staging', 'provider_prompt_hygiene'],
+      guidanceMode: 'strict',
+      execution: { resourceClass: 'llm' },
+    },
+  })
+  const atlasImageNode = nodeBase({
+    key: 'cinematic_atlas_image',
+    nodeType: 'image_generation',
+    label: 'Cinematic Atlas',
+    x: 920,
+    y: 340,
+    config: {
+      purpose: 'cinematic_reference_atlas',
+      role: 'cinematic_atlas',
+      model: 'openai/gpt-image-2',
+      referenceModel: 'openai/gpt-image-2/edit',
+      quality: 'low',
+      outputFormat: 'webp',
+      maxReferenceImages: 16,
+      imageSize: { width: 2048, height: 2048 },
+      skillKeys: ['image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'environment_staging', 'provider_prompt_hygiene'],
+      autoSkillTags: ['atlas', 'image_prompt', 'visual_only', 'entity_reference', 'reference_continuity'],
+      guidanceMode: 'strict',
+      execution: { resourceClass: 'image', groupKey: 'cinematic_atlas', maxConcurrency: 1 },
+    },
+  })
+  const dynamicFanoutNode = nodeBase({
+    key: 'cinematic_dynamic_take_fanout',
+    nodeType: 'utility_transform',
+    label: 'Materialize Takes',
+    x: 1480,
+    y: 120,
+    config: {
+      purpose: 'cinematic_dynamic_take_fanout',
+      role: 'dynamic_cinematic_take_fanout',
+      maxDynamicTakes: CINEMATIC_BLOCK_FANOUT_LIMIT,
+      maxTotalDurationSeconds: CINEMATIC_MAX_TOTAL_DURATION_SECONDS,
       aspectRatio,
       resolution,
       generateAudio,
-      syncMode: false,
-      skillKeys: ['seedance_reference_video_prompting', 'cinematic_shot_direction', 'shortform_hook_retention', 'brand_ugc_proof_structure', 'provider_prompt_hygiene'],
-      autoSkillTags: ['video_prompt', 'seedance', 'cinematic', 'ugc', 'provider_hygiene'],
-      guidanceMode: 'strict',
-      execution: { resourceClass: 'video', groupKey: 'cinematic_videos', maxConcurrency: Math.min(videoBlockCount, 3) },
+      presetFamily,
+      cinematicReferenceMode,
+      debugSkipVideoGeneration,
+      videoModel,
+      execution: { resourceClass: 'utility', groupKey: 'cinematic_dynamic_take_fanout', maxConcurrency: 1 },
     },
-  }))
+  })
   const nodes = [
     nodeBase({
       key: 'world_context',
@@ -2526,7 +2534,11 @@ export function buildCinematicSequencePlan(
         skillKeys: [
           'cinematic_sequence_structure',
           'cinematic_shot_direction',
-          'storyboard_grid_direction',
+          'cinematic_beat_sheet_planning',
+          'cinematic_keyframe_prompting',
+          'seedance_truth_source_modes',
+          'seedance_reference_legend_contract',
+          'seedance_timeline_call_sheet',
           'seedance_reference_video_prompting',
           'shortform_hook_retention',
           'brand_ugc_proof_structure',
@@ -2535,7 +2547,7 @@ export function buildCinematicSequencePlan(
           'environment_staging',
           'provider_prompt_hygiene',
         ],
-        autoSkillTags: ['cinematic', 'storyboard', 'seedance', 'ugc', 'video_prompt', 'entity_reference', 'provider_hygiene'],
+        autoSkillTags: ['cinematic', 'storyboard', 'beat_sheet', 'keyframe', 'seedance', 'ugc', 'video_prompt', 'entity_reference', 'provider_hygiene'],
         guidanceMode: 'strict',
         execution: { resourceClass: 'utility' },
       },
@@ -2556,99 +2568,33 @@ export function buildCinematicSequencePlan(
         execution: { resourceClass: 'llm' },
       },
     }),
-    nodeBase({
-      key: 'cinematic_sequence_plan',
-      nodeType: 'text_llm',
-      label: 'Sequence Plan',
-      x: 640,
-      y: 120,
-      inputs: { prompt: `Plan ${videoBlockCount} video block(s), each ${durationPerBlockSeconds}s or less, with shot timing and escalation.` },
-      config: {
-        purpose: 'cinematic_sequence_plan',
-        blockCount: videoBlockCount,
-        durationPerBlockSeconds,
-        maxDurationSeconds: 15,
-        aspectRatio,
-        resolution,
-        generateAudio,
-        presetFamily,
-        sequenceUnitKey: selectedSequenceUnitKey,
-        sequenceUnitName: sequenceTitle,
-        skillKeys: ['cinematic_sequence_structure', 'shortform_hook_retention', 'brand_ugc_proof_structure', 'provider_prompt_hygiene'],
-        autoSkillTags: ['cinematic', 'sequence_plan', 'ugc'],
-        guidanceMode: 'strict',
-        execution: { resourceClass: 'llm' },
-      },
-    }),
-    ...blockScriptNodes,
-    ...storyboardPromptNodes,
-    ...storyboardImageNodes,
-    ...videoPromptNodes,
-    ...videoNodes,
-    nodeBase({
-      key: 'video_stitch',
-      nodeType: 'utility_transform',
-      label: 'Stitch Video',
-      x: 2320,
-      y: 120,
-      config: {
-        purpose: 'video_stitch',
-        role: 'cinematic_sequence_final',
-        blockCount: videoBlockCount,
-        aspectRatio,
-        resolution,
-        execution: { resourceClass: 'video', groupKey: 'video_stitch', maxConcurrency: 1 },
-      },
-    }),
-    nodeBase({
-      key: 'artifact',
-      nodeType: 'output_artifact',
-      label: 'Register Video',
-      x: 2600,
-      y: 120,
-      config: { purpose: 'cinematic_video_artifact', artifactKind: 'video', execution: { resourceClass: 'utility' } },
-    }),
+    scriptAuthoringNode,
+    sequenceCompileNode,
+    atlasPromptNode,
+    atlasImageNode,
+    dynamicFanoutNode,
   ]
   const edges = [
     edgeBase('world_context', 'context', 'cinematic_entities', 'context'),
     edgeBase('skill_context', 'guidance', 'cinematic_entities', 'guidance'),
-    edgeBase('world_context', 'context', 'cinematic_sequence_plan', 'context'),
-    edgeBase('skill_context', 'guidance', 'cinematic_sequence_plan', 'guidance'),
-    edgeBase('cinematic_entities', 'asset_pack', 'cinematic_sequence_plan', 'asset_pack'),
-    ...blockScriptNodes.flatMap((node, index) => {
-      const storyboardPromptNode = storyboardPromptNodes[index]
-      const storyboardImageNode = storyboardImageNodes[index]
-      const videoPromptNode = videoPromptNodes[index]
-      const videoNode = videoNodes[index]
-      return [
-        edgeBase('cinematic_sequence_plan', 'sequencePlan', node.key, 'sequencePlan'),
-        edgeBase('world_context', 'context', node.key, 'context'),
-        edgeBase('skill_context', 'guidance', node.key, 'guidance'),
-        edgeBase('cinematic_entities', 'asset_pack', node.key, 'asset_pack'),
-        edgeBase(node.key, 'blockScript', storyboardPromptNode.key, 'script'),
-        edgeBase('cinematic_entities', 'asset_pack', storyboardPromptNode.key, 'asset_pack'),
-        edgeBase('skill_context', 'guidance', storyboardPromptNode.key, 'guidance'),
-        edgeBase(storyboardPromptNode.key, 'text', storyboardImageNode.key, 'prompt'),
-        edgeBase('cinematic_entities', 'asset_pack', storyboardImageNode.key, 'references'),
-        edgeBase('skill_context', 'guidance', storyboardImageNode.key, 'guidance'),
-        edgeBase(node.key, 'blockScript', videoPromptNode.key, 'script'),
-        edgeBase(storyboardImageNode.key, 'image', videoPromptNode.key, 'storyboard'),
-        edgeBase('cinematic_entities', 'asset_pack', videoPromptNode.key, 'asset_pack'),
-        edgeBase('skill_context', 'guidance', videoPromptNode.key, 'guidance'),
-        edgeBase(videoPromptNode.key, 'text', videoNode.key, 'prompt'),
-        edgeBase(storyboardImageNode.key, 'image', videoNode.key, 'references'),
-        edgeBase('cinematic_entities', 'asset_pack', videoNode.key, 'references'),
-        edgeBase('skill_context', 'guidance', videoNode.key, 'guidance'),
-        edgeBase(videoNode.key, 'video', 'video_stitch', 'videos', { blockNumber: videoNode.config.blockNumber }),
-      ]
-    }),
-    edgeBase('video_stitch', 'video', 'artifact', 'input'),
+    edgeBase('world_context', 'context', 'cinematic_script_authoring', 'context'),
+    edgeBase('skill_context', 'guidance', 'cinematic_script_authoring', 'guidance'),
+    edgeBase('cinematic_entities', 'asset_pack', 'cinematic_script_authoring', 'asset_pack'),
+    edgeBase('cinematic_script_authoring', 'script', 'cinematic_sequence_compile', 'input'),
+    edgeBase('world_context', 'context', 'cinematic_atlas_prompt', 'context'),
+    edgeBase('skill_context', 'guidance', 'cinematic_atlas_prompt', 'guidance'),
+    edgeBase('cinematic_entities', 'asset_pack', 'cinematic_atlas_prompt', 'asset_pack'),
+    edgeBase('cinematic_atlas_prompt', 'text', 'cinematic_atlas_image', 'prompt'),
+    edgeBase('cinematic_entities', 'asset_pack', 'cinematic_atlas_image', 'references'),
+    edgeBase('skill_context', 'guidance', 'cinematic_atlas_image', 'guidance'),
+    edgeBase('cinematic_sequence_compile', 'takePlan', 'cinematic_dynamic_take_fanout', 'input'),
+    edgeBase('cinematic_atlas_image', 'image', 'cinematic_dynamic_take_fanout', 'references'),
   ]
   const graphValidation = validateOutputWorkflowGraph({ nodes, edges, worldWiki })
   return outputWorkflowPlanResponseSchema.shape.plan.parse({
     preset,
     name,
-    description: 'Generate a cinematic sequence with shot scripts, storyboard grids, Seedance 2 reference-to-video blocks, and a final stitched MP4.',
+    description: 'Generate a cinematic sequence with shot scripts, storyboard-grid reference sheets, Seedance 2 reference-to-video blocks, and a final stitched MP4.',
     prompt,
     targetFormat: 'video',
     sourceEntityKeys: selectedEntityKeys,
@@ -2658,7 +2604,16 @@ export function buildCinematicSequencePlan(
     diagnostics: [
       ...graphValidation.diagnostics,
       ...(requestedSequenceKeys.length !== 1 ? ['Cinematic V1 uses one sequence_unit as the story spine; the first available sequence unit was used when none was selected.'] : []),
-      ...(request.videoBlockCount && request.videoBlockCount > CINEMATIC_BLOCK_FANOUT_LIMIT ? [`Cinematic block fan-out is capped at ${CINEMATIC_BLOCK_FANOUT_LIMIT} blocks in V1.`] : []),
+      'Cinematic outputs now author a full script first, then dynamically materialize compiled takes after the script is compiled. Total generated video duration is capped at 60 seconds.',
+      cinematicReferenceMode === 'keyframes'
+        ? 'Keyframe reference mode is enabled: Seedance uses clean opening/midpoint/ending keyframes before atlas/entity refs.'
+        : cinematicReferenceMode === 'keyframes_and_storyboard'
+          ? 'Storyboard-grid reference mode is enabled with additional keyframes: Seedance uses the generated beat sheet as @Image1, then keyframes and atlas/entity refs.'
+          : 'Storyboard-grid reference mode is enabled: Seedance uses the generated beat sheet as @Image1.',
+      debugSkipVideoGeneration
+        ? 'Debug video-skip mode is enabled: video_generation nodes will produce skipped placeholders instead of submitting Seedance jobs.'
+        : 'Debug video-skip mode is disabled: video_generation nodes will submit Seedance jobs.',
+      ...(request.videoBlockCount || request.durationPerBlockSeconds ? ['Legacy cinematic block count/duration inputs are treated as soft hints only; authored script timing drives generated takes.'] : []),
     ],
   })
 }

@@ -3,6 +3,18 @@ import {
   iconGenerationCandidateSchema,
   type IconGenerationCandidate,
 } from './entity-icon-generation.ts'
+import {
+  buildCharacterReferenceSheetPrompt,
+  buildGroupReferenceSheetPrompt,
+  buildItemReferenceSheetPrompt,
+  buildLocationReferenceSheetPrompt,
+} from '../../../src/domain/visualAssetGeneration.ts'
+import {
+  readWorldEntityVisualDescription,
+  readWorldEntityVisualIdentity,
+  readWorldEntityVisualTraitMap,
+  readWorldEntityVisualTraits,
+} from '../../../src/domain/worldEntityVisuals.ts'
 
 type DatabaseClient = {
   from: (table: string) => any
@@ -10,12 +22,13 @@ type DatabaseClient = {
   storage: {
     from: (bucket: string) => {
       upload: (path: string, body: Blob | Uint8Array | ArrayBuffer, options?: Record<string, unknown>) => Promise<{ data: unknown; error: { message: string } | null }>
+      createSignedUrl?: (path: string, expiresIn: number) => Promise<{ data: { signedUrl?: string } | null; error: { message: string } | null }>
     }
   }
 }
 
 type VisualJobStatus = 'queued' | 'running' | 'completed' | 'completed_with_errors' | 'failed' | 'cancelled'
-type VisualJobKind = 'world_entity_icon_grid' | 'brand_atlas' | 'screen_mockup' | 'character_sheet' | 'wiki_visual' | 'app_screen_mockup' | 'app_screen_analysis'
+type VisualJobKind = 'world_entity_icon_grid' | 'brand_atlas' | 'screen_mockup' | 'entity_reference_sheet' | 'character_sheet' | 'wiki_visual' | 'app_screen_mockup' | 'app_screen_analysis'
 
 type VisualJob = {
   id: string
@@ -135,6 +148,8 @@ async function submitFalImageRequest(input: {
   prompt: string
   imageSize?: unknown
   quality?: string
+  outputFormat?: string
+  referenceImageUrls?: string[]
 }) {
   return fetchFalJson(`${falQueueBaseUrl}/${input.model}`, {
     method: 'POST',
@@ -144,7 +159,8 @@ async function submitFalImageRequest(input: {
       image_size: input.imageSize ?? 'square_hd',
       quality: input.quality ?? Deno.env.get('VISUAL_GENERATION_FAL_QUALITY') ?? 'high',
       num_images: 1,
-      output_format: 'png',
+      output_format: input.outputFormat ?? 'png',
+      ...(input.referenceImageUrls && input.referenceImageUrls.length > 0 ? { image_urls: input.referenceImageUrls } : {}),
       sync_mode: false,
     }),
   })
@@ -280,6 +296,8 @@ async function waitForFalImage(input: {
   phasePrefix: string
   imageSize?: unknown
   quality?: string
+  outputFormat?: string
+  referenceImageUrls?: string[]
 }): Promise<FalImageResult> {
   const existingRequestId = readString(input.job.metadata.falRequestId)
   const existingStatusUrl = readString(input.job.metadata.falStatusUrl)
@@ -297,6 +315,8 @@ async function waitForFalImage(input: {
       model: input.model,
       imageSize: input.imageSize ?? 'square_hd',
       quality: input.quality ?? null,
+      outputFormat: input.outputFormat ?? 'png',
+      referenceImageCount: input.referenceImageUrls?.length ?? 0,
       promptChars: input.prompt.length,
     })
     await heartbeat(input.client, input.job.id, input.workerId, {
@@ -306,6 +326,8 @@ async function waitForFalImage(input: {
       model: input.model,
       imageSize: input.imageSize ?? 'square_hd',
       quality: input.quality ?? null,
+      outputFormat: input.outputFormat ?? 'png',
+      referenceImageCount: input.referenceImageUrls?.length ?? 0,
     })
 
     const submit = await submitFalImageRequest({
@@ -314,6 +336,8 @@ async function waitForFalImage(input: {
       prompt: input.prompt,
       imageSize: input.imageSize,
       quality: input.quality,
+      outputFormat: input.outputFormat,
+      referenceImageUrls: input.referenceImageUrls,
     })
     requestId = readString(submit.body.request_id)
     statusUrl = readString(submit.body.status_url) || null
@@ -344,6 +368,8 @@ async function waitForFalImage(input: {
       falResponseUrl: responseUrl,
       falImageSize: input.imageSize ?? 'square_hd',
       falQuality: input.quality ?? null,
+      falOutputFormat: input.outputFormat ?? 'png',
+      falReferenceImageCount: input.referenceImageUrls?.length ?? 0,
       falSubmittedAt: new Date().toISOString(),
     })
   }
@@ -445,6 +471,44 @@ async function upsertAssetRows(client: DatabaseClient, rows: Array<Record<string
     .from('project_assets')
     .upsert(rows, { onConflict: 'project_id,key' })
   if (response.error) throw new Error(response.error.message)
+}
+
+async function upsertDefinitionPreviewImageBinding(
+  client: DatabaseClient,
+  definitionId: string,
+  componentType: 'render_3d_binding' | 'environment_render_binding',
+  assetKey: string,
+) {
+  const componentResponse = await client
+    .from('project_definition_components')
+    .select('id, config')
+    .eq('definition_id', definitionId)
+    .eq('component_type', componentType)
+    .maybeSingle()
+  if (componentResponse.error) throw new Error(componentResponse.error.message)
+
+  const nextConfig = {
+    ...asRecord(asRecord(componentResponse.data).config),
+    previewImageAssetKey: assetKey,
+  }
+
+  if (componentResponse.data) {
+    const updateResponse = await client
+      .from('project_definition_components')
+      .update({ config: nextConfig })
+      .eq('id', readString(asRecord(componentResponse.data).id))
+    if (updateResponse.error) throw new Error(updateResponse.error.message)
+    return
+  }
+
+  const insertResponse = await client
+    .from('project_definition_components')
+    .insert({
+      definition_id: definitionId,
+      component_type: componentType,
+      config: nextConfig,
+    })
+  if (insertResponse.error) throw new Error(insertResponse.error.message)
 }
 
 function readIconCandidates(job: VisualJob): IconGenerationCandidate[] {
@@ -758,6 +822,314 @@ async function processBrandAtlasJob(client: DatabaseClient, job: VisualJob, work
   })
 
   return { assetKey }
+}
+
+function mapWorldEntityRow(row: Record<string, unknown>) {
+  return {
+    id: readString(row.id),
+    key: readString(row.key),
+    name: readString(row.name),
+    summary: readString(row.summary),
+    context: readString(row.context),
+    nodeType: readString(row.node_type),
+    tags: readStringArray(row.tags),
+    thumbnailAssetKey: typeof row.thumbnail_asset_key === 'string' ? row.thumbnail_asset_key : null,
+    linkedDefinitionKey: typeof row.linked_definition_key === 'string' ? row.linked_definition_key : null,
+    customProperties: asRecord(row.custom_properties),
+    metadata: asRecord(row.metadata),
+  }
+}
+
+function resolveEntityReferenceSheetKind(nodeType: string, explicitKind = '') {
+  const normalized = explicitKind.trim().toLowerCase()
+  if (normalized === 'character' || normalized === 'location' || normalized === 'group' || normalized === 'item') return normalized
+  if (nodeType === 'actor' || nodeType === 'persona' || nodeType === 'player_profile') return 'character'
+  if (nodeType === 'place' || nodeType === 'location_spot' || nodeType === 'travel_link' || nodeType === 'environment' || nodeType === 'screen' || nodeType === 'section') return 'location'
+  if (nodeType === 'group' || nodeType === 'faction' || nodeType === 'business_goal') return 'group'
+  if (nodeType === 'object' || nodeType === 'inventory_item' || nodeType === 'currency' || nodeType === 'shadow_token' || nodeType === 'marketplace' || nodeType === 'trade_offer' || nodeType === 'component' || nodeType === 'feature') return 'item'
+  return 'item'
+}
+
+function resolveEntityReferenceSheetImageSize(sheetKind: string) {
+  if (sheetKind === 'character') return { width: 2048, height: 1536 }
+  return { width: 2048, height: 2048 }
+}
+
+function resolveEntityReferenceSheetPrompt(input: {
+  sheetKind: string
+  entity: ReturnType<typeof mapWorldEntityRow>
+  projectArtStyle: string
+  projectTone: string
+  projectContextDescription: string
+  visualDescription: string
+  visualTraits: string[]
+  visualTraitMap: Record<string, string>
+  referenceAssetNotes: string[]
+}) {
+  const base = {
+    entityName: input.entity.name || input.entity.key,
+    entitySummary: input.entity.summary,
+    entityContext: input.entity.context,
+    projectArtStyle: input.projectArtStyle,
+    projectTone: input.projectTone,
+    projectContextDescription: input.projectContextDescription,
+    visualDescription: input.visualDescription,
+    visualTraits: input.visualTraits,
+    visualTraitMap: input.visualTraitMap,
+    referenceAssetNotes: input.referenceAssetNotes,
+  }
+  if (input.sheetKind === 'character') return buildCharacterReferenceSheetPrompt(base)
+  if (input.sheetKind === 'location') {
+    const text = `${input.entity.name} ${input.entity.summary} ${input.entity.context} ${input.visualDescription}`.toLowerCase()
+    const includeMapView = /(city|district|building|garden|dungeon|arena|settlement|route|station|ship|camp|base|temple|market|street|bridge|room|facility|map|layout|zone)/i.test(text)
+    return buildLocationReferenceSheetPrompt({ ...base, includeMapView })
+  }
+  if (input.sheetKind === 'group') return buildGroupReferenceSheetPrompt(base)
+  return buildItemReferenceSheetPrompt(base)
+}
+
+async function loadProjectAssetRows(client: DatabaseClient, projectId: string, assetKeys: string[]) {
+  const uniqueKeys = [...new Set(assetKeys.map((key) => key.trim()).filter(Boolean))].slice(0, 8)
+  if (uniqueKeys.length === 0) return []
+  const response = await client
+    .from('project_assets')
+    .select('key, name, kind, mime_type, storage_path, metadata')
+    .eq('project_id', projectId)
+    .in('key', uniqueKeys)
+  if (response.error) throw new Error(response.error.message)
+  return Array.isArray(response.data) ? response.data.map((row) => asRecord(row)) : []
+}
+
+async function createProjectAssetSignedUrls(client: DatabaseClient, assetRows: Record<string, unknown>[]) {
+  const storage = client.storage.from('project-assets')
+  if (typeof storage.createSignedUrl !== 'function') return []
+  const urls: string[] = []
+  for (const asset of assetRows) {
+    const storagePath = readString(asset.storage_path)
+    if (!storagePath || !/\.(avif|jpe?g|png|webp)$/i.test(storagePath)) continue
+    const signed = await storage.createSignedUrl(storagePath, 3600)
+    if (signed.error) {
+      console.warn('[visual-generation-job] failed to sign reference asset.', {
+        assetKey: readString(asset.key),
+        storagePath,
+        message: signed.error.message,
+      })
+      continue
+    }
+    const url = readString(signed.data?.signedUrl)
+    if (url) urls.push(url)
+  }
+  return urls
+}
+
+async function processEntityReferenceSheetJob(client: DatabaseClient, job: VisualJob, workerId: string) {
+  const entityKey = readString(job.input.entityKey) || readString(job.targetKeys.entityKey)
+  if (!entityKey) throw new Error('Entity reference sheet job is missing entityKey.')
+  await heartbeat(client, job.id, workerId, { phase: 'entity_reference_sheet_loading_context', entityKey })
+
+  const entityResponse = await client
+    .from('world_entities')
+    .select('*')
+    .eq('draft_id', job.draftId)
+    .eq('key', entityKey)
+    .single()
+  if (entityResponse.error || !entityResponse.data) {
+    throw new Error(entityResponse.error?.message ?? `World entity ${entityKey} was not found.`)
+  }
+  const entity = mapWorldEntityRow(asRecord(entityResponse.data))
+  const draftResponse = await client
+    .from('project_drafts')
+    .select('metadata')
+    .eq('id', job.draftId)
+    .single()
+  if (draftResponse.error) throw new Error(draftResponse.error.message)
+  const draftMetadata = asRecord(draftResponse.data?.metadata)
+  const worldWiki = asRecord(draftMetadata.worldWiki)
+  const inputArtStyle = asRecord(job.input.artStyle)
+  const projectArtStyle = readString(job.input.projectArtStyle)
+    || readString(inputArtStyle.artStyleDescription)
+    || readString(inputArtStyle.artStyleName)
+    || readString(worldWiki.artStyleDescription)
+    || 'cohesive project art style'
+  const projectTone = readString(job.input.projectTone)
+    || readString(worldWiki.genre)
+    || readStringArray(worldWiki.toneTags).join(', ')
+    || 'coherent project tone'
+  const projectContextDescription = readString(job.input.projectContextDescription)
+    || readString(worldWiki.logline)
+    || readString(worldWiki.synopsis)
+    || ''
+  const visualDescription = readWorldEntityVisualDescription(entity)
+  const visualIdentity = readWorldEntityVisualIdentity(entity)
+  const visualTraits = readWorldEntityVisualTraits(entity)
+  const visualTraitMap = readWorldEntityVisualTraitMap(entity) as Record<string, string>
+  const sheetKind = resolveEntityReferenceSheetKind(entity.nodeType, readString(job.input.sheetKind) || readString(job.targetKeys.sheetKind))
+  const referenceAssets: Record<string, unknown>[] = []
+  const referenceImageUrls: string[] = []
+  const referenceAssetNotes: string[] = []
+  const prompt = resolveEntityReferenceSheetPrompt({
+    sheetKind,
+    entity,
+    projectArtStyle,
+    projectTone,
+    projectContextDescription,
+    visualDescription: visualDescription || visualIdentity.description || entity.summary || entity.context,
+    visualTraits,
+    visualTraitMap,
+    referenceAssetNotes,
+  })
+
+  const falApiKey = Deno.env.get('FAL_KEY')
+  if (!falApiKey) throw new Error('FAL_KEY is not configured for the Fly visual generation worker.')
+  const explicitModel = readString(job.input.model) || readString(job.targetKeys.model)
+  const configuredModel = readString(Deno.env.get('VISUAL_GENERATION_ENTITY_REFERENCE_SHEET_MODEL'))
+  const baseModel = normalizeFalImageModel(explicitModel || configuredModel || 'openai/gpt-image-2')
+  const model = baseModel === 'openai/gpt-image-2/edit' ? 'openai/gpt-image-2' : baseModel
+  const quality = readString(job.input.quality) || Deno.env.get('VISUAL_GENERATION_ENTITY_REFERENCE_SHEET_QUALITY') || 'low'
+  const outputFormat = readString(job.input.outputFormat) || Deno.env.get('VISUAL_GENERATION_ENTITY_REFERENCE_SHEET_OUTPUT_FORMAT') || 'webp'
+  const imageSize = asRecord(job.input.imageSize)
+  const resolvedImageSize = Object.keys(imageSize).length > 0 ? imageSize : resolveEntityReferenceSheetImageSize(sheetKind)
+
+  const falResult = await waitForFalImage({
+    client,
+    job,
+    workerId,
+    apiKey: falApiKey,
+    model,
+    prompt,
+    phasePrefix: 'entity_reference_sheet',
+    imageSize: resolvedImageSize,
+    quality,
+    outputFormat,
+    referenceImageUrls,
+  })
+
+  const imageBytes = await downloadImageBytes(falResult.imageUrl)
+  const extension = outputFormat === 'webp' ? 'webp' : outputFormat === 'jpeg' || outputFormat === 'jpg' ? 'jpg' : 'png'
+  const mimeType = extension === 'webp' ? 'image/webp' : extension === 'jpg' ? 'image/jpeg' : 'image/png'
+  const assetKey = readString(job.input.assetKey)
+    || `entity_reference_sheet_${slugify(entity.name || entity.key)}_${entity.key.replace(/[^a-z0-9]+/gi, '_').slice(0, 24)}`
+  const storagePath = readString(job.input.storagePath)
+    || `generated/entity-reference-sheets/${job.draftId}/${job.id}/${slugify(entity.name || entity.key)}.${extension}`
+  await heartbeat(client, job.id, workerId, { phase: 'entity_reference_sheet_uploading_asset', imageBytes: imageBytes.byteLength, assetKey })
+  await uploadBytes(client, storagePath, imageBytes, mimeType)
+
+  const linkedDefinitionKey = entity.linkedDefinitionKey || readString(job.input.linkedDefinitionKey) || null
+  await upsertAssetRows(client, [{
+    project_id: job.projectId,
+    key: assetKey,
+    name: `${entity.name || entity.key} Reference Sheet`,
+    kind: 'image',
+    mime_type: mimeType,
+    storage_path: storagePath,
+    metadata: buildGeneratedAssetMetadata({
+      job,
+      generatedBy: 'entity_reference_sheet',
+      model,
+      prompt,
+      storagePath,
+      falResult,
+      extra: {
+        entityKey,
+        entityName: entity.name,
+        entityNodeType: entity.nodeType,
+        linkedDefinitionKey,
+        sheetKind,
+        visualDescription,
+        visualTraits,
+        visualTraitMap,
+        referenceAssetKeys: referenceAssets.map((asset) => readString(asset.key)).filter(Boolean),
+        imageSize: resolvedImageSize,
+        quality,
+        outputFormat,
+      },
+    }),
+  }])
+
+  const currentMetadata = asRecord(entity.metadata)
+  const currentReferenceSheets = Array.isArray(currentMetadata.referenceSheetAssetKeys)
+    ? currentMetadata.referenceSheetAssetKeys.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+    : []
+  const entityUpdate = await client
+    .from('world_entities')
+    .update({
+      thumbnail_asset_key: assetKey,
+      metadata: {
+        ...currentMetadata,
+        referenceSheetAssetKey: assetKey,
+        referenceSheetAssetKeys: [...new Set([assetKey, ...currentReferenceSheets])].slice(0, 8),
+        referenceSheetVisualJobId: job.id,
+      },
+    })
+    .eq('draft_id', job.draftId)
+    .eq('key', entityKey)
+  if (entityUpdate.error) throw new Error(entityUpdate.error.message)
+
+  if (linkedDefinitionKey) {
+    const definitionResponse = await client
+      .from('project_definitions')
+      .select('id, kind, metadata')
+      .eq('draft_id', job.draftId)
+      .eq('key', linkedDefinitionKey)
+      .maybeSingle()
+    if (definitionResponse.error) throw new Error(definitionResponse.error.message)
+    const definitionRow = asRecord(definitionResponse.data)
+    const definitionMetadata = asRecord(definitionRow.metadata)
+    const definitionUpdate = await client
+      .from('project_definitions')
+      .update({
+        icon_asset_key: assetKey,
+        metadata: {
+          ...definitionMetadata,
+          referenceSheetAssetKey: assetKey,
+          referenceSheetVisualJobId: job.id,
+        },
+      })
+      .eq('draft_id', job.draftId)
+      .eq('key', linkedDefinitionKey)
+    if (definitionUpdate.error) throw new Error(definitionUpdate.error.message)
+
+    const definitionId = readString(definitionRow.id)
+    if (definitionId) {
+      const definitionKind = readString(definitionRow.kind)
+      await upsertDefinitionPreviewImageBinding(
+        client,
+        definitionId,
+        definitionKind === 'environment' ? 'environment_render_binding' : 'render_3d_binding',
+        assetKey,
+      )
+    }
+  }
+
+  await completeJob(client, job.id, workerId, {
+    assets: [{
+      assetKey,
+      storagePath,
+      targetKind: 'world_entity',
+      targetKey: entityKey,
+      role: 'entity_reference_sheet',
+    }],
+    assetKey,
+    entityKey,
+    sheetKind,
+  }, {
+    phase: 'completed',
+    provider: 'fal',
+    model,
+    falRequestId: falResult.requestId,
+    falStatusUrl: falResult.statusUrl,
+    falResponseUrl: falResult.responseUrl,
+    falImageUrl: falResult.imageUrl,
+    assetKey,
+    entityKey,
+    sheetKind,
+    requestedImageSize: resolvedImageSize,
+    requestedQuality: quality,
+    outputFormat,
+    referenceImageCount: referenceImageUrls.length,
+  })
+
+  return { assetKey, entityKey, sheetKind }
 }
 
 async function processAppScreenMockupJob(client: DatabaseClient, job: VisualJob, workerId: string) {
@@ -1146,6 +1518,8 @@ export async function processFlyVisualGenerationJobs(input: {
       await processEntityIconGridJob(input.client, job, input.workerId)
     } else if (job.kind === 'brand_atlas') {
       await processBrandAtlasJob(input.client, job, input.workerId)
+    } else if (job.kind === 'entity_reference_sheet' || job.kind === 'character_sheet') {
+      await processEntityReferenceSheetJob(input.client, job, input.workerId)
     } else if (job.kind === 'app_screen_mockup') {
       await processAppScreenMockupJob(input.client, job, input.workerId)
     } else if (job.kind === 'app_screen_analysis') {

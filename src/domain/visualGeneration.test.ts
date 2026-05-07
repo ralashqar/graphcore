@@ -82,6 +82,37 @@ test('visual generation start request supports app mockup and analysis kinds', (
   assert.equal(analysisRequest.kind, 'app_screen_analysis')
 })
 
+test('visual generation schemas accept entity reference sheet jobs and legacy character sheet alias', () => {
+  const createdAt = new Date().toISOString()
+  const request = visualGenerationStartRequestSchema.parse({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    kind: 'entity_reference_sheet',
+    targetKeys: { entityKey: 'actor.eva_9' },
+    input: { entityKey: 'actor.eva_9', sheetKind: 'character' },
+  })
+  assert.equal(request.kind, 'entity_reference_sheet')
+  assert.equal(request.model, 'openai/gpt-image-2')
+
+  const legacy = visualGenerationJobSchema.parse({
+    id: 'job-character-sheet',
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    requestedBy: 'user-1',
+    status: 'queued',
+    kind: 'character_sheet',
+    provider: 'fal',
+    model: 'openai/gpt-image-2',
+    targetKeys: { entityKey: 'actor.eva_9' },
+    input: {},
+    outputs: {},
+    metadata: {},
+    createdAt,
+    updatedAt: createdAt,
+  })
+  assert.equal(legacy.kind, 'character_sheet')
+})
+
 test('brand atlas endpoint enqueues generic visual jobs instead of calling image provider directly', () => {
   const source = readFileSync(resolve(repoRoot, 'supabase/functions/start-world-brand-atlas-image/index.ts'), 'utf8')
   assert.match(source, /visual_generation_jobs/)
@@ -100,6 +131,24 @@ test('entity icon endpoint and Fly worker use the generic visual job pipeline', 
   assert.match(worker, /processFlyVisualGenerationJobs/)
   assert.match(visualWorker, /world_entity_icon_grid/)
   assert.match(visualWorker, /brand_atlas/)
+})
+
+test('entity reference sheet jobs route through Fly visual worker with low webp output', () => {
+  const visualWorker = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/visual-generation-worker.ts'), 'utf8')
+  const appSource = readFileSync(resolve(repoRoot, 'src/App.tsx'), 'utf8')
+
+  assert.match(visualWorker, /processEntityReferenceSheetJob/)
+  assert.match(visualWorker, /job\.kind === 'entity_reference_sheet' \|\| job\.kind === 'character_sheet'/)
+  assert.match(visualWorker, /VISUAL_GENERATION_ENTITY_REFERENCE_SHEET_MODEL/)
+  assert.match(visualWorker, /explicitModel \|\| configuredModel \|\| 'openai\/gpt-image-2'/)
+  assert.match(visualWorker, /baseModel === 'openai\/gpt-image-2\/edit' \? 'openai\/gpt-image-2' : baseModel/)
+  assert.match(visualWorker, /VISUAL_GENERATION_ENTITY_REFERENCE_SHEET_QUALITY'\) \|\| 'low'/)
+  assert.match(visualWorker, /VISUAL_GENERATION_ENTITY_REFERENCE_SHEET_OUTPUT_FORMAT'\) \|\| 'webp'/)
+  assert.match(visualWorker, /referenceSheetAssetKey/)
+  assert.match(visualWorker, /thumbnail_asset_key: assetKey/)
+  assert.match(visualWorker, /icon_asset_key: assetKey/)
+  assert.match(visualWorker, /upsertDefinitionPreviewImageBinding/)
+  assert.doesNotMatch(appSource, /referenceAssetKeys:\s*\[entity\.thumbnailAssetKey,\s*definition\.iconAssetKey\]/)
 })
 
 test('entity icon grid generation uses low quality and larger custom size for 3x3 plus grids', () => {

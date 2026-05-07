@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { useEffect, useMemo, useState } from 'react'
 
 import { isResolvableAssetUrl, resolveAssetSourceUrl } from '../../domain/assets'
+import { aiGenerationSettings } from '../../config/aiGenerationSettings'
 import { aiUsageLineSchema, aiUsageSummarySchema, formatAiUsd, summarizeAiUsageLines } from '../../domain/aiUsage'
 import type { ProjectSnapshot } from '../../domain/graphcore'
 import {
@@ -36,6 +37,8 @@ type OutputsWorkspaceProps = {
     targetFormat?: 'pdf' | 'epub' | 'docx' | 'markdown' | 'image'
     imageQuality?: 'low' | 'medium' | 'high'
     imageOutputFormat?: 'png' | 'jpeg' | 'webp'
+    cinematicReferenceMode?: 'keyframes' | 'storyboard_sheet' | 'keyframes_and_storyboard'
+    debugSkipVideoGeneration?: boolean
   }) => Promise<OutputRequestStatusResponse>
   onGetOutputRequestStatus: (requestId: string) => Promise<OutputRequestStatusResponse>
   onCancelOutputRequest: (requestId: string) => Promise<OutputRequestStatusResponse>
@@ -387,6 +390,15 @@ function isImageArtifact(artifact: OutputArtifact, mimeType: string) {
   return mimeType.startsWith('image/') || artifact.kind === 'image'
 }
 
+function artifactSortPriority(artifact: OutputArtifact) {
+  const metadata = readRecord(artifact.metadata)
+  const role = readTrimmedString(metadata.role)
+  const usedAsVideoReference = metadata.usedAsVideoReference === true || metadata.used_as_video_reference === true
+  if (usedAsVideoReference || role === 'cinematic_beat_sheet') return 0
+  if (artifact.kind === 'video' || String(artifact.mimeType ?? '').startsWith('video/')) return 2
+  return 1
+}
+
 function compactStatusForSteps(steps: OutputWorkflowRunStep[]) {
   if (steps.some((step) => step.status === 'running')) return 'running'
   if (steps.some((step) => {
@@ -553,9 +565,11 @@ export function OutputsWorkspace({
     for (const artifact of displayRun?.artifacts ?? []) {
       byId.set(artifact.id, artifact)
     }
-    return [...byId.values()].sort((left, right) => (
-      new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
-    ))
+    return [...byId.values()].sort((left, right) => {
+      const priorityDelta = artifactSortPriority(left) - artifactSortPriority(right)
+      if (priorityDelta !== 0) return priorityDelta
+      return new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+    })
   }, [displayRun?.artifacts, snapshot.outputArtifacts])
   const activeRunStatusLabel = activeRun ? formatStatus(displayRun?.status ?? activeRun.status) : 'Idle'
   const runningNodeCount = runStepCounts.get('running') ?? 0
@@ -626,6 +640,8 @@ export function OutputsWorkspace({
         sourceSurface: 'outputs',
         imageQuality: requestImageQuality === 'preset' ? undefined : requestImageQuality,
         imageOutputFormat: requestImageOutputFormat === 'preset' ? undefined : requestImageOutputFormat,
+        cinematicReferenceMode: aiGenerationSettings.outputWorkflow.cinematicReferenceModeDefault,
+        debugSkipVideoGeneration: aiGenerationSettings.outputWorkflow.debugSkipVideoGenerationDefault,
       })
       setSelectedRequestId(response.request.id)
       if (response.run) {
@@ -1318,9 +1334,15 @@ export function OutputsWorkspace({
                       const requestWorkflow = request.workflowId
                         ? workflows.find((workflow) => workflow.id === request.workflowId) ?? null
                         : null
-                      const requestArtifacts = snapshot.outputArtifacts.filter((artifact) => (
-                        artifact.runId === request.latestRunId || artifact.workflowId === request.workflowId
-                      ))
+                      const requestArtifacts = snapshot.outputArtifacts
+                        .filter((artifact) => (
+                          artifact.runId === request.latestRunId || artifact.workflowId === request.workflowId
+                        ))
+                        .sort((left, right) => {
+                          const priorityDelta = artifactSortPriority(left) - artifactSortPriority(right)
+                          if (priorityDelta !== 0) return priorityDelta
+                          return new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+                        })
                       const requestPrimaryArtifact = requestArtifacts.find((artifact) => artifact.mimeType === 'application/pdf' || artifact.kind === 'comic_pdf' || artifact.kind === 'pdf')
                         ?? requestArtifacts.find((artifact) => artifact.kind === 'image')
                         ?? requestArtifacts[0]

@@ -979,6 +979,12 @@ function appScreenMockupAssetKey(entity: WorldEntity): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
+function readEntityReferenceSheetAssetKey(entity: WorldEntity | null | undefined) {
+  const metadata = readLooseRecord(entity?.metadata)
+  const value = metadata.referenceSheetAssetKey
+  return typeof value === 'string' ? value.trim() : ''
+}
+
 function appEntityHasVisualSpec(entity: WorldEntity): boolean {
   const app = readAppCustomProperties(entity)
   const metadata = readLooseRecord(entity.metadata)
@@ -1392,6 +1398,8 @@ export function WorldGraphPage({
   const [selectedAppCodePath, setSelectedAppCodePath] = useState<string | null>(null)
   const [appScreenArtJobs, setAppScreenArtJobs] = useState<VisualGenerationStatusResponse['job'][]>([])
   const [appScreenAnalysisJobs, setAppScreenAnalysisJobs] = useState<VisualGenerationStatusResponse['job'][]>([])
+  const [entityReferenceSheetJobs, setEntityReferenceSheetJobs] = useState<VisualGenerationStatusResponse['job'][]>([])
+  const [entityReferenceSheetError, setEntityReferenceSheetError] = useState<string | null>(null)
   const [appScreenArtBusy, setAppScreenArtBusy] = useState(false)
   const [appScreenArtError, setAppScreenArtError] = useState<string | null>(null)
   const [showAppStaticPrototype, setShowAppStaticPrototype] = useState(false)
@@ -1936,6 +1944,8 @@ export function WorldGraphPage({
       const linkedDefinition = entity.linkedDefinitionKey ? definitionByKey.get(entity.linkedDefinitionKey) ?? null : null
       const previewAssetKey = entity.thumbnailAssetKey ?? linkedDefinition?.iconAssetKey ?? null
       if (previewAssetKey) desiredAssetKeys.add(previewAssetKey)
+      const referenceSheetAssetKey = readEntityReferenceSheetAssetKey(entity)
+      if (referenceSheetAssetKey) desiredAssetKeys.add(referenceSheetAssetKey)
     }
 
     for (const result of worldResults) {
@@ -2068,6 +2078,13 @@ export function WorldGraphPage({
       return [entity.key, resolveAssetSourceUrl(asset) ?? (previewAssetKey ? signedAssetUrlsByKey.get(previewAssetKey) ?? null : null)]
     }))
   }, [assetByKey, definitionByKey, signedAssetUrlsByKey, worldEntities])
+  const referenceSheetUrlByEntityKey = useMemo(() => {
+    return new Map(worldEntities.map((entity) => {
+      const assetKey = readEntityReferenceSheetAssetKey(entity)
+      const asset = assetKey ? assetByKey.get(assetKey) ?? null : null
+      return [entity.key, resolveAssetSourceUrl(asset) ?? (assetKey ? signedAssetUrlsByKey.get(assetKey) ?? null : null)]
+    }))
+  }, [assetByKey, signedAssetUrlsByKey, worldEntities])
   const imageUrlByResultKey = useMemo(() => {
     return new Map(worldResults.map((result) => {
       const asset = result.previewAssetKey ? assetByKey.get(result.previewAssetKey) ?? null : null
@@ -2356,6 +2373,37 @@ export function WorldGraphPage({
       window.clearInterval(intervalId)
     }
   }, [appScreenAnalysisJobs, onGetVisualGenerationStatus, onRefreshLiveSnapshot])
+  useEffect(() => {
+    const runningJobs = entityReferenceSheetJobs.filter((job) => ['queued', 'running'].includes(job.status))
+    if (runningJobs.length === 0 || typeof onGetVisualGenerationStatus !== 'function') return
+    let disposed = false
+    let refreshedTerminal = false
+    const poll = async () => {
+      const nextJobs = await Promise.all(runningJobs.map(async (job) => {
+        try {
+          const status = await onGetVisualGenerationStatus(job.id)
+          return status.job
+        } catch (error) {
+          console.warn('[GraphCore] failed to refresh entity reference sheet status.', { jobId: job.id, error })
+          return job
+        }
+      }))
+      if (disposed) return
+      setEntityReferenceSheetJobs((current) => current.map((job) => nextJobs.find((nextJob) => nextJob.id === job.id) ?? job))
+      if (!refreshedTerminal && nextJobs.some((job) => ['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(job.status))) {
+        refreshedTerminal = true
+        await onRefreshLiveSnapshot()
+      }
+    }
+    void poll()
+    const intervalId = window.setInterval(() => {
+      void poll()
+    }, 3500)
+    return () => {
+      disposed = true
+      window.clearInterval(intervalId)
+    }
+  }, [entityReferenceSheetJobs, onGetVisualGenerationStatus, onRefreshLiveSnapshot])
   const iconGenerationCandidates = useMemo(() => (
     buildWorldEntityIconCandidates({
       entities: worldEntities,
@@ -4343,6 +4391,62 @@ export function WorldGraphPage({
       console.error('[GraphCore] brand atlas image generation failed.', error)
     } finally {
       setBrandAtlasGenerating(false)
+    }
+  }
+
+  async function handleGenerateEntityReferenceSheet(entity: WorldEntity) {
+    if (!onStartVisualGenerationJob) {
+      setEntityReferenceSheetError('Visual generation is unavailable for this workspace.')
+      return
+    }
+    setEntityReferenceSheetError(null)
+    try {
+      const linkedDefinition = entity.linkedDefinitionKey ? definitionByKey.get(entity.linkedDefinitionKey) ?? null : null
+      const referenceAssetKeys = [
+        entity.thumbnailAssetKey,
+        linkedDefinition?.iconAssetKey,
+        readEntityReferenceSheetAssetKey(entity),
+      ].filter((value): value is string => Boolean(value && value.trim()))
+      const visualIdentity = readWorldEntityVisualIdentity(entity)
+      const result = await onStartVisualGenerationJob({
+        kind: 'entity_reference_sheet',
+        targetKeys: {
+          entityKey: entity.key,
+          entityName: entity.name,
+          entityNodeType: entity.nodeType,
+          linkedDefinitionKey: entity.linkedDefinitionKey ?? null,
+        },
+        input: {
+          entityKey: entity.key,
+          entityName: entity.name,
+          entityNodeType: entity.nodeType,
+          linkedDefinitionKey: entity.linkedDefinitionKey ?? null,
+          model: 'openai/gpt-image-2',
+          summary: entity.summary,
+          context: entity.context,
+          visualDescription: readWorldEntityVisualDescription(entity),
+          visualTraits: visualIdentity.traits,
+          visualTraitMap: visualIdentity.traitMap,
+          referenceAssetKeys,
+          projectArtStyle: wikiModel.overview.artStyleDescription,
+          projectTone: [wikiModel.overview.genre, ...wikiModel.overview.toneTags].filter(Boolean).join(', '),
+          projectContextDescription: [projectName, projectSummary, wikiModel.overview.logline, wikiModel.overview.synopsis].filter(Boolean).join(' '),
+        },
+        metadata: {
+          source: 'world_graph_entity_inspector',
+          requestedFrom: 'generate_entity_reference_sheet',
+          entityKey: entity.key,
+        },
+      })
+      setEntityReferenceSheetJobs((current) => {
+        const next = new Map(current.map((job) => [job.id, job]))
+        next.set(result.job.id, result.job)
+        return [...next.values()]
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not start entity reference sheet generation.'
+      setEntityReferenceSheetError(message)
+      console.error('[GraphCore] entity reference sheet generation failed to start.', error)
     }
   }
 
@@ -7511,6 +7615,59 @@ export function WorldGraphPage({
                     }}
                   />
                 </label>
+                {(() => {
+                  const referenceSheetJob = entityReferenceSheetJobs.find((job) => {
+                    const targetKeys = job.targetKeys && typeof job.targetKeys === 'object' && !Array.isArray(job.targetKeys)
+                      ? job.targetKeys as Record<string, unknown>
+                      : {}
+                    const input = job.input && typeof job.input === 'object' && !Array.isArray(job.input)
+                      ? job.input as Record<string, unknown>
+                      : {}
+                    return targetKeys.entityKey === displayedInspectorEntity.key || input.entityKey === displayedInspectorEntity.key
+                  }) ?? null
+                  const referenceSheetUrl = referenceSheetUrlByEntityKey.get(displayedInspectorEntity.key) ?? null
+                  const referenceSheetBusy = Boolean(referenceSheetJob && ['queued', 'running'].includes(referenceSheetJob.status))
+                  return (
+                    <div className="schema-card">
+                      <div className="schema-card-head">
+                        <div>
+                          <span className="eyebrow">Reference Sheet</span>
+                          <strong>{referenceSheetBusy ? 'Generating sheet' : referenceSheetUrl ? 'Sheet ready' : 'No sheet yet'}</strong>
+                        </div>
+                        <button
+                          className="ghost-button compact"
+                          disabled={referenceSheetBusy || !onStartVisualGenerationJob}
+                          onClick={() => void handleGenerateEntityReferenceSheet(displayedInspectorEntity)}
+                          type="button"
+                        >
+                          {referenceSheetBusy ? 'Generating...' : 'Generate reference sheet'}
+                        </button>
+                      </div>
+                      {referenceSheetUrl ? (
+                        <button
+                          className="world-wiki-style-card is-atlas has-image"
+                          onClick={() => openWikiDetailModal({
+                            title: `${displayedInspectorEntity.name} Reference Sheet`,
+                            eyebrow: 'Entity visual bible',
+                            body: readWorldEntityVisualDescription(displayedInspectorEntity) || displayedInspectorEntity.summary || displayedInspectorEntity.context,
+                            icon: iconForWorldEntity(displayedInspectorEntity.nodeType),
+                            imageUrl: referenceSheetUrl,
+                            meta: ['GPT Image 2', 'low quality', 'WebP'],
+                          })}
+                          type="button"
+                        >
+                          <img src={referenceSheetUrl} alt="" />
+                        </button>
+                      ) : (
+                        <div className="inline-note">Generate a full continuity sheet for this entity without replacing its thumbnail icon.</div>
+                      )}
+                      {referenceSheetJob?.status === 'failed' ? (
+                        <div className="inline-note is-error">{referenceSheetJob.errorMessage || 'Reference sheet generation failed.'}</div>
+                      ) : null}
+                      {entityReferenceSheetError ? <div className="inline-note is-error">{entityReferenceSheetError}</div> : null}
+                    </div>
+                  )
+                })()}
                 {selectedEntityThreads.length > 0 ? (
                   <div className="chip-row">
                     {selectedEntityThreads.map((thread) => (

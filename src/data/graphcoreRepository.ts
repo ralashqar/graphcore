@@ -1,4 +1,5 @@
 import { compileBundle } from '../domain/compiler'
+import { aiGenerationSettings } from '../config/aiGenerationSettings'
 import { cacheSignedAssetResponse, getCachedAssetObjectUrl, getCachedSignedAssetUrl, setCachedSignedAssetUrl } from '../domain/assetUrlCache'
 import { BASELINE_ARCHETYPES, hasMissingBaselineArchetypes } from '../domain/bootstrapSeeds'
 import { demoProjectSnapshot } from '../domain/demo-data'
@@ -7385,6 +7386,8 @@ function buildOutputWorkflowRunInput(snapshot: ProjectSnapshot, request?: {
   videoResolution?: string
   generateAudio?: boolean
   cinematicPresetFamily?: string
+  cinematicReferenceMode?: 'keyframes' | 'storyboard_sheet' | 'keyframes_and_storyboard'
+  debugSkipVideoGeneration?: boolean
 }) {
   const selectedEntityKeys = request?.selectedEntityKeys ?? []
   const selectedSequenceUnitKeys = request?.selectedSequenceUnitKeys ?? []
@@ -7411,6 +7414,8 @@ function buildOutputWorkflowRunInput(snapshot: ProjectSnapshot, request?: {
     videoResolution: request?.videoResolution,
     generateAudio: request?.generateAudio,
     cinematicPresetFamily: request?.cinematicPresetFamily,
+    cinematicReferenceMode: request?.cinematicReferenceMode ?? aiGenerationSettings.outputWorkflow.cinematicReferenceModeDefault,
+    debugSkipVideoGeneration: request?.debugSkipVideoGeneration ?? aiGenerationSettings.outputWorkflow.debugSkipVideoGenerationDefault,
   }
 }
 
@@ -7439,6 +7444,8 @@ export async function planOutputWorkflow(
     videoResolution: request?.videoResolution,
     generateAudio: request?.generateAudio,
     cinematicPresetFamily: request?.cinematicPresetFamily,
+    cinematicReferenceMode: request?.cinematicReferenceMode,
+    debugSkipVideoGeneration: request?.debugSkipVideoGeneration,
     snapshot: buildOutputWorkflowSnapshot(snapshot),
   })
   const response = await invokeAuthedFunctionWithSessionRecovery(
@@ -7574,6 +7581,8 @@ export async function startOutputRequest(
     videoResolution?: '480p' | '720p' | '1080p'
     generateAudio?: boolean
     cinematicPresetFamily?: 'story_movie_tv' | 'ugc_creator' | 'ugc_direct_response_ad' | 'ugc_faceless_format'
+    cinematicReferenceMode?: 'keyframes' | 'storyboard_sheet' | 'keyframes_and_storyboard'
+    debugSkipVideoGeneration?: boolean
   },
 ): Promise<OutputRequestStatusResponse> {
   const session = await getValidatedSession('Sign in and load a live GraphCore draft before creating an output request.')
@@ -7597,6 +7606,8 @@ export async function startOutputRequest(
     videoResolution: request.videoResolution,
     generateAudio: request.generateAudio,
     cinematicPresetFamily: request.cinematicPresetFamily,
+    cinematicReferenceMode: request.cinematicReferenceMode ?? aiGenerationSettings.outputWorkflow.cinematicReferenceModeDefault,
+    debugSkipVideoGeneration: request.debugSkipVideoGeneration ?? aiGenerationSettings.outputWorkflow.debugSkipVideoGenerationDefault,
     snapshot: buildOutputWorkflowSnapshot(snapshot),
     runInput: buildOutputWorkflowRunInput(snapshot, request),
   })

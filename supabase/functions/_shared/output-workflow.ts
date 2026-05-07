@@ -34,6 +34,10 @@ import {
   type OutputWorkflowRunStep,
 } from '../../../src/domain/outputWorkflow.ts'
 import { buildEbookDocumentMetadata, buildEbookHtmlDocument } from '../../../src/domain/ebookDocument.ts'
+import {
+  buildCinematicSequenceFromScriptDoc,
+  cinematicScriptDocSchema,
+} from '../../../src/domain/cinematics.ts'
 import { buildFalMediaUsageLine, buildOpenAiUsageLine, summarizeAiUsageLines, type AiUsageLine } from '../../../src/domain/aiUsage.ts'
 import { hashOutputGuidanceBundle, outputGuidanceBundleSchema, type OutputGuidanceBundle } from '../../../src/domain/outputSkills.ts'
 import {
@@ -50,7 +54,9 @@ import {
   type OpenAiResponseResult,
 } from './openai.ts'
 
-const OUTPUT_WORKFLOW_EXECUTOR_VERSION = 'cinematic-prompt-compact-v2'
+const OUTPUT_WORKFLOW_EXECUTOR_VERSION = 'output-text-gpt54-v6'
+const DEFAULT_OUTPUT_WORKFLOW_TEXT_MODEL = 'gpt-5.4'
+const CINEMATIC_MAX_TOTAL_DURATION_SECONDS = 60
 const DEFAULT_CHAPTER_PROSE_TIMEOUT_MS = 3_600_000
 const DEFAULT_CHAPTER_PROSE_ATTEMPTS = 2
 const FAL_QUEUE_BASE_URL = 'https://queue.fal.run'
@@ -1000,6 +1006,63 @@ function readUpstreamImages(upstream: Record<string, Record<string, unknown>>, f
   return images
 }
 
+function imageIsPlanningOnly(image: Record<string, unknown>) {
+  const metadata = asRecord(image.metadata)
+  return image.planningOnly === true
+    || image.planning_only === true
+    || metadata.planningOnly === true
+    || metadata.planning_only === true
+}
+
+function normalizeCinematicReferenceMode(value: unknown) {
+  const mode = readText(value)
+  return mode === 'keyframes' || mode === 'keyframes_and_storyboard' || mode === 'storyboard_sheet'
+    ? mode
+    : 'storyboard_sheet'
+}
+
+function cinematicImageReferencePriority(image: Record<string, unknown>, cinematicReferenceMode: string) {
+  const role = readText(image.role) || readText(asRecord(image.metadata).role)
+  if (role === 'cinematic_beat_sheet') {
+    return cinematicReferenceMode === 'keyframes' ? 99 : 0
+  }
+  if (role === 'cinematic_keyframe') {
+    const keyframeIndex = Number(image.keyframeIndex ?? asRecord(image.metadata).keyframeIndex ?? 0) || 0
+    return cinematicReferenceMode === 'keyframes' ? keyframeIndex : keyframeIndex + 1
+  }
+  if (role === 'cinematic_atlas') return 10
+  return 20
+}
+
+function orderCinematicVideoReferenceImages(images: Record<string, unknown>[], cinematicReferenceMode: string) {
+  const mode = normalizeCinematicReferenceMode(cinematicReferenceMode)
+  return images
+    .filter((image) => {
+      if (!imageIsPlanningOnly(image)) return true
+      const role = readText(image.role) || readText(asRecord(image.metadata).role)
+      return role === 'cinematic_beat_sheet' && mode !== 'keyframes'
+    })
+    .sort((left, right) => cinematicImageReferencePriority(left, mode) - cinematicImageReferencePriority(right, mode))
+}
+
+function debugSkipVideoGenerationEnabled(config: Record<string, unknown>, run: OutputWorkflowRun) {
+  const runInput = asRecord(run.input)
+  const runMetadata = asRecord(run.metadata)
+  if (typeof config.debugSkipVideoGeneration === 'boolean') return config.debugSkipVideoGeneration
+  if (typeof runInput.debugSkipVideoGeneration === 'boolean') return runInput.debugSkipVideoGeneration
+  if (typeof runMetadata.debugSkipVideoGeneration === 'boolean') return runMetadata.debugSkipVideoGeneration
+  return true
+}
+
+function upstreamHasDebugSkippedVideo(upstream: Record<string, Record<string, unknown>>) {
+  for (const outputs of Object.values(upstream)) {
+    const video = asRecord(outputs.video)
+    if (video.debugSkipVideoGeneration === true || video.skippedReason === 'debug_skip_video_generation') return true
+    if (outputs.debugSkipVideoGeneration === true || outputs.skippedReason === 'debug_skip_video_generation') return true
+  }
+  return false
+}
+
 function readUpstreamVideos(upstream: Record<string, Record<string, unknown>>, fields = ['video', 'videos']) {
   const videos: Record<string, unknown>[] = []
   for (const outputs of Object.values(upstream)) {
@@ -1102,7 +1165,7 @@ function guidanceStepMetadata(value: unknown) {
 }
 
 function outputWorkflowTextModel() {
-  return Deno.env.get('OUTPUT_WORKFLOW_TEXT_MODEL')?.trim() || 'gpt-4o-mini'
+  return Deno.env.get('OUTPUT_WORKFLOW_TEXT_MODEL')?.trim() || DEFAULT_OUTPUT_WORKFLOW_TEXT_MODEL
 }
 
 function outputWorkflowComicTextModel() {
@@ -2016,6 +2079,354 @@ function cinematicContextBrief(context: Record<string, unknown>) {
   }
 }
 
+const cinematicScriptAuthoringJsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['title', 'logline', 'tone', 'continuityNotes', 'shots'],
+  properties: {
+    title: { type: 'string' },
+    logline: { type: 'string' },
+    tone: { type: 'string' },
+    continuityNotes: { type: 'string' },
+    shots: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 36,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: [
+          'id',
+          'sceneId',
+          'title',
+          'beat',
+          'emotionalBeat',
+          'durationSeconds',
+          'shotType',
+          'framing',
+          'cameraAngle',
+          'cameraMovement',
+          'lensPreference',
+          'visualPrompt',
+          'compositionGuide',
+          'continuityNotes',
+          'participantRefIds',
+          'locationRefId',
+          'propRefIds',
+          'backdropRefIds',
+          'forceTakeBreak',
+          'actions',
+          'dialogue',
+          'audio',
+        ],
+        properties: {
+          id: { type: 'string' },
+          sceneId: { type: 'string' },
+          title: { type: 'string' },
+          beat: { type: 'string' },
+          emotionalBeat: { type: 'string' },
+          durationSeconds: { type: 'number' },
+          shotType: { type: 'string' },
+          framing: { type: 'string' },
+          cameraAngle: { type: 'string' },
+          cameraMovement: { type: 'string' },
+          lensPreference: { type: 'string' },
+          visualPrompt: { type: 'string' },
+          compositionGuide: { type: 'string' },
+          continuityNotes: { type: 'string' },
+          participantRefIds: { type: 'array', items: { type: 'string' } },
+          locationRefId: { type: 'string' },
+          propRefIds: { type: 'array', items: { type: 'string' } },
+          backdropRefIds: { type: 'array', items: { type: 'string' } },
+          forceTakeBreak: { type: 'boolean' },
+          actions: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['id', 'actorRefId', 'targetRefId', 'verb', 'propRefId', 'stagingNotes', 'startSeconds', 'endSeconds'],
+              properties: {
+                id: { type: 'string' },
+                actorRefId: { type: 'string' },
+                targetRefId: { type: 'string' },
+                verb: { type: 'string' },
+                propRefId: { type: 'string' },
+                stagingNotes: { type: 'string' },
+                startSeconds: { type: 'number' },
+                endSeconds: { type: 'number' },
+              },
+            },
+          },
+          dialogue: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['id', 'speakerRefId', 'line', 'delivery', 'startSeconds', 'endSeconds', 'lipSync'],
+              properties: {
+                id: { type: 'string' },
+                speakerRefId: { type: 'string' },
+                line: { type: 'string' },
+                delivery: { type: 'string' },
+                startSeconds: { type: 'number' },
+                endSeconds: { type: 'number' },
+                lipSync: { type: 'boolean' },
+              },
+            },
+          },
+          audio: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['id', 'kind', 'cue', 'sourceRefId', 'startSeconds', 'endSeconds'],
+              properties: {
+                id: { type: 'string' },
+                kind: { type: 'string' },
+                cue: { type: 'string' },
+                sourceRefId: { type: 'string' },
+                startSeconds: { type: 'number' },
+                endSeconds: { type: 'number' },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+
+function normalizeMaybeNullString(value: unknown) {
+  return readText(value) || null
+}
+
+function clampShotDuration(value: unknown, fallback = 4) {
+  const numeric = typeof value === 'number' ? value : Number(readText(value))
+  if (!Number.isFinite(numeric)) return fallback
+  return Math.max(1, Math.min(15, Math.round(numeric)))
+}
+
+function coerceCinematicShotType(value: unknown) {
+  const text = readText(value)
+  return ['establishing', 'dialogue', 'reveal', 'action', 'insert', 'transition', 'custom'].includes(text) ? text : 'custom'
+}
+
+function coerceCinematicAudioKind(value: unknown) {
+  const text = readText(value)
+  return ['dialogue', 'ambience', 'sfx', 'music', 'silence', 'offscreen'].includes(text) ? text : 'ambience'
+}
+
+function buildCinematicEntityBindings(assetPack: Record<string, unknown>) {
+  const entities = Array.isArray(assetPack.entities) ? assetPack.entities.map(asRecord) : []
+  return entities.slice(0, 16).map((entity, index) => ({
+    id: readText(entity.key) || `entity_${index + 1}`,
+    kind: readText(entity.type) === 'place' ? 'environment' : readText(entity.type) === 'item' ? 'item' : 'character',
+    role: readText(entity.role) || readText(entity.type) || 'reference',
+    label: readText(entity.name) || readText(entity.key) || `Entity ${index + 1}`,
+    sourceName: readText(entity.name),
+    summary: readText(entity.summary),
+    assetKey: readStringArray(entity.assetKeys)[0] ?? null,
+    stagingNotes: [
+      readText(entity.visualDescription),
+      readStringArray(entity.visualTraits).length > 0 ? `Traits: ${readStringArray(entity.visualTraits).join(', ')}` : '',
+    ].filter(Boolean).join(' '),
+    priority: Math.max(10, 90 - index * 4),
+    required: true,
+  }))
+}
+
+function normalizeCinematicScriptDoc(value: Record<string, unknown>, fallback: Record<string, unknown>, assetPack: Record<string, unknown>) {
+  const rawShots = Array.isArray(value.shots) ? value.shots.map(asRecord) : []
+  if (rawShots.length === 0) return cinematicScriptDocSchema.parse(fallback)
+  const entityKeys = new Set(buildCinematicEntityBindings(assetPack).map((entry) => entry.id))
+  const normalizeRefArray = (refs: unknown) => readStringArray(refs).filter((key) => entityKeys.size === 0 || entityKeys.has(key)).slice(0, 8)
+  const shots = rawShots.slice(0, 36).map((shot, index) => {
+    const durationSeconds = clampShotDuration(shot.durationSeconds, index === 0 ? 3 : 4)
+    const participantRefIds = normalizeRefArray(shot.participantRefIds)
+    const actions = Array.isArray(shot.actions) ? shot.actions.map(asRecord).slice(0, 5) : []
+    const dialogue = Array.isArray(shot.dialogue) ? shot.dialogue.map(asRecord).slice(0, 4) : []
+    const audio = Array.isArray(shot.audio) ? shot.audio.map(asRecord).slice(0, 3) : []
+    const shotId = readText(shot.id) || `shot_${String(index + 1).padStart(3, '0')}`
+    const beat = readText(shot.beat) || readText(shot.visualPrompt) || readText(shot.title) || `Cinematic beat ${index + 1}`
+    return {
+      id: shotId,
+      sceneId: normalizeMaybeNullString(shot.sceneId) ?? 'scene_1',
+      orderIndex: index,
+      title: readText(shot.title) || `Shot ${index + 1}`,
+      beat,
+      emotionalBeat: readText(shot.emotionalBeat),
+      durationSeconds,
+      shotType: coerceCinematicShotType(shot.shotType),
+      framing: readText(shot.framing),
+      cameraAngle: readText(shot.cameraAngle),
+      cameraMovement: readText(shot.cameraMovement),
+      lensPreference: readText(shot.lensPreference),
+      visualPrompt: readText(shot.visualPrompt) || beat,
+      compositionGuide: readText(shot.compositionGuide),
+      continuityNotes: readText(shot.continuityNotes),
+      participantRefIds,
+      locationRefId: normalizeMaybeNullString(shot.locationRefId),
+      propRefIds: normalizeRefArray(shot.propRefIds),
+      backdropRefIds: normalizeRefArray(shot.backdropRefIds),
+      forceTakeBreak: shot.forceTakeBreak === true,
+      actions: actions.length > 0 ? actions.map((action, actionIndex) => ({
+        id: readText(action.id) || `${shotId}_action_${actionIndex + 1}`,
+        actorRefId: normalizeMaybeNullString(action.actorRefId),
+        targetRefId: normalizeMaybeNullString(action.targetRefId),
+        verb: readText(action.verb) || beat,
+        propRefId: normalizeMaybeNullString(action.propRefId),
+        stagingNotes: readText(action.stagingNotes),
+        startSeconds: Math.max(0, Number(action.startSeconds ?? 0) || 0),
+        endSeconds: Math.max(0, Math.min(durationSeconds, Number(action.endSeconds ?? durationSeconds) || durationSeconds)),
+      })) : [{
+        id: `${shotId}_action_1`,
+        actorRefId: participantRefIds[0] ?? null,
+        targetRefId: null,
+        verb: beat,
+        propRefId: null,
+        stagingNotes: readText(shot.visualPrompt) || readText(shot.compositionGuide),
+        startSeconds: 0,
+        endSeconds: durationSeconds,
+      }],
+      dialogue: dialogue.map((entry, dialogueIndex) => ({
+        id: readText(entry.id) || `${shotId}_dialogue_${dialogueIndex + 1}`,
+        speakerRefId: normalizeMaybeNullString(entry.speakerRefId),
+        line: readText(entry.line),
+        delivery: readText(entry.delivery),
+        startSeconds: Math.max(0, Number(entry.startSeconds ?? 0) || 0),
+        endSeconds: Math.max(0, Math.min(durationSeconds, Number(entry.endSeconds ?? durationSeconds) || durationSeconds)),
+        lipSync: entry.lipSync !== false,
+      })).filter((entry) => entry.line),
+      audio: audio.map((entry, audioIndex) => ({
+        id: readText(entry.id) || `${shotId}_audio_${audioIndex + 1}`,
+        kind: coerceCinematicAudioKind(entry.kind),
+        cue: readText(entry.cue),
+        sourceRefId: normalizeMaybeNullString(entry.sourceRefId),
+        startSeconds: Math.max(0, Number(entry.startSeconds ?? 0) || 0),
+        endSeconds: Math.max(0, Math.min(durationSeconds, Number(entry.endSeconds ?? durationSeconds) || durationSeconds)),
+      })).filter((entry) => entry.cue),
+    }
+  })
+  return cinematicScriptDocSchema.parse({
+    title: readText(value.title) || readText(fallback.title) || 'Prompt Cinematic',
+    logline: readText(value.logline) || readText(fallback.logline),
+    tone: readText(value.tone) || readText(fallback.tone),
+    continuityNotes: readText(value.continuityNotes) || readText(fallback.continuityNotes),
+    entityBindings: buildCinematicEntityBindings(assetPack),
+    shots,
+  })
+}
+
+function buildDeterministicCinematicScriptDoc(input: {
+  context: Record<string, unknown>
+  assetPack: Record<string, unknown>
+  prompt: string
+  presetFamily: string
+}) {
+  const wiki = asRecord(input.context.wiki ?? input.context.worldWiki)
+  const sequenceUnits = Array.isArray(input.context.sequenceUnits) ? input.context.sequenceUnits.map(asRecord) : []
+  const sequence = sequenceUnits[0] ?? {}
+  const title = readText(wiki.title) || readText(sequence.name) || 'Prompt Cinematic'
+  const summary = readText(readEntitySequence(sequence).synopsis) || readText(sequence.summary) || readText(wiki.logline) || input.prompt
+  const bindings = buildCinematicEntityBindings(input.assetPack)
+  const primary = bindings[0]?.id ?? null
+  const location = bindings.find((entry) => entry.kind === 'location')?.id ?? null
+  const baseDurations = input.presetFamily.startsWith('ugc') ? [3, 4, 4, 4, 4] : [4, 5, 5, 5, 4, 4]
+  return cinematicScriptDocSchema.parse({
+    title,
+    logline: summary,
+    tone: readStringArray(wiki.toneTags).join(', ') || 'cinematic',
+    continuityNotes: 'Preserve world canon, neutral visual identities, wardrobe, place geography, and emotional continuity.',
+    entityBindings: bindings,
+    shots: baseDurations.map((durationSeconds, index) => {
+      const shotId = `shot_${String(index + 1).padStart(3, '0')}`
+      const beat = index === 0
+        ? `Open on the clearest visual hook from: ${summary}`
+        : index === baseDurations.length - 1
+          ? `Resolve the cinematic beat with a visible consequence.`
+          : `Escalate the cinematic action through a new visible turn.`
+      return {
+        id: shotId,
+        sceneId: 'scene_1',
+        orderIndex: index,
+        title: `Shot ${index + 1}`,
+        beat,
+        emotionalBeat: index === 0 ? 'attention' : index === baseDurations.length - 1 ? 'payoff' : 'escalation',
+        durationSeconds,
+        shotType: index === 0 ? 'establishing' : index === baseDurations.length - 1 ? 'reveal' : 'action',
+        framing: index % 3 === 0 ? 'wide readable frame' : index % 3 === 1 ? 'medium subject-focused frame' : 'close reaction or insert',
+        cameraAngle: 'cinematic eye-level angle',
+        cameraMovement: index % 2 === 0 ? 'controlled push-in' : 'smooth lateral tracking move',
+        visualPrompt: beat,
+        compositionGuide: 'Clear subject silhouette, readable environment, grounded continuity.',
+        participantRefIds: primary ? [primary] : [],
+        locationRefId: location,
+        forceTakeBreak: false,
+        actions: [{
+          id: `${shotId}_action_1`,
+          actorRefId: primary,
+          targetRefId: null,
+          verb: beat,
+          propRefId: null,
+          stagingNotes: 'Make the beat visible through blocking, movement, and environment interaction.',
+          startSeconds: 0,
+          endSeconds: durationSeconds,
+        }],
+        audio: [{
+          id: `${shotId}_audio_1`,
+          kind: 'ambience',
+          cue: input.presetFamily.startsWith('ugc') ? 'natural short-form audio bed' : 'cinematic ambience and restrained score',
+          sourceRefId: null,
+          startSeconds: 0,
+          endSeconds: durationSeconds,
+        }],
+      }
+    }),
+  })
+}
+
+function buildCinematicScriptAuthoringInstruction(input: {
+  context: Record<string, unknown>
+  assetPack: Record<string, unknown>
+  prompt: string
+  guidance: OutputGuidanceBundle
+  aspectRatio: string
+  resolution: string
+  presetFamily: string
+  legacyVideoBlockCount?: number | null
+  legacyDurationPerBlockSeconds?: number | null
+  maxTotalDurationSeconds?: number | null
+}) {
+  const maxTotalDurationSeconds = Math.max(4, Math.min(60, Number(input.maxTotalDurationSeconds ?? CINEMATIC_MAX_TOTAL_DURATION_SECONDS) || CINEMATIC_MAX_TOTAL_DURATION_SECONDS))
+  const legacyHints = [
+    input.legacyVideoBlockCount ? `Legacy requested block count hint: ${input.legacyVideoBlockCount}. Treat as a soft hint only.` : '',
+    input.legacyDurationPerBlockSeconds ? `Legacy requested block duration hint: ${input.legacyDurationPerBlockSeconds}s. Treat as a soft hint only.` : '',
+  ].filter(Boolean).join('\n')
+  return [
+    'Author the full directed cinematic script the prompt deserves. Do not force a fixed total length, fixed block count, or padded runtime.',
+    `Preset family: ${input.presetFamily}. Aspect ratio: ${input.aspectRatio}. Resolution: ${input.resolution}.`,
+    input.prompt ? `User request: ${input.prompt}` : '',
+    legacyHints,
+    guidanceMarkdown(input.guidance),
+    '',
+    'Requirements:',
+    '- Return JSON only.',
+    '- Let the shot count and runtime emerge from the prompt, world sequence, and dramatic complexity.',
+    `- Hard limit: the complete cinematic script must not exceed ${maxTotalDurationSeconds} seconds total runtime.`,
+    '- Every shot duration must be 1-15 seconds; the compiler will group shots into Seedance takes of 4-15 seconds.',
+    '- Prefer continuous directed shots with blocking and camera intent; do not split every tiny motion into a separate shot.',
+    '- Include visible subject/action/blocking, camera/framing/movement, composition, audio or vocal intent, and continuity refs.',
+    '- Preserve selected world canon and neutral visual identity traits. Do not invent new canon.',
+    '- Use supplied entity keys in participantRefIds, locationRefId, propRefIds, and action actor/target refs when relevant.',
+    '',
+    'World context:',
+    compactForPrompt({
+      ...cinematicContextBrief(input.context),
+      assetPack: input.assetPack,
+    }, 14000),
+  ].filter(Boolean).join('\n\n')
+}
+
 function buildDeterministicCinematicSequencePlan(input: {
   context: Record<string, unknown>
   assetPack: Record<string, unknown>
@@ -2202,7 +2613,7 @@ function buildCinematicSequencePlanInstruction(input: {
     '- Every block must be independently renderable as a 4-15 second video clip.',
     '- Make the first block hook visible within the first 1.5-2 seconds.',
     '- Preserve world canon and neutral visual identity traits; do not invent new canon.',
-    '- Use concise shotCount values appropriate for a storyboard grid: 6-9 for 3x3, 10-15 for 4x4.',
+    '- Use concise shotCount values that produce clean contact sheets: prefer 4, 6, 8, 9, 12, or 16 shots per block.',
     '',
     'World context:',
     compactForPrompt({
@@ -2233,6 +2644,7 @@ function buildCinematicBlockScriptInstruction(input: {
     'Requirements:',
     '- Return JSON only.',
     '- Shots must be ordered, timestamped, and fit inside the block duration.',
+    '- If the planned block includes shotCount, return exactly that many shots.',
     '- Each shot needs one dominant subject, one visible action, one camera direction, composition, audio note, and reference note.',
     '- Do not write prose, screenplay pages, marketing copy, hidden motivation, or workflow/internal terms.',
     '- Use @Image1 as storyboard continuity in referenceNotes and mention entity references only as continuity anchors.',
@@ -2365,6 +2777,50 @@ function formatShotSeconds(value: unknown, fallback: number) {
   return Number.isInteger(seconds) ? String(seconds) : seconds.toFixed(2).replace(/0+$/, '').replace(/\.$/, '')
 }
 
+function parseAspectRatio(value: string) {
+  const [rawWidth, rawHeight] = value.split(':').map((part) => Number(part))
+  if (Number.isFinite(rawWidth) && Number.isFinite(rawHeight) && rawWidth > 0 && rawHeight > 0) {
+    return { width: rawWidth, height: rawHeight }
+  }
+  return { width: 16, height: 9 }
+}
+
+function storyboardLayoutForShotCount(shotCount: number) {
+  const count = Math.max(1, Math.min(16, Math.ceil(shotCount)))
+  if (count <= 3) return { columns: count, rows: 1, panelCount: count }
+  if (count === 4) return { columns: 2, rows: 2, panelCount: count }
+  if (count <= 6) return { columns: 3, rows: 2, panelCount: count }
+  if (count <= 8) return { columns: 4, rows: 2, panelCount: count }
+  if (count === 9) return { columns: 3, rows: 3, panelCount: count }
+  if (count <= 12) return { columns: 4, rows: 3, panelCount: count }
+  return { columns: 4, rows: 4, panelCount: count }
+}
+
+function normalizeStoryboardImageDimension(value: number) {
+  return Math.max(16, Math.min(3072, Math.round(value / 16) * 16))
+}
+
+function storyboardImageSizeForLayout(input: {
+  columns: number
+  rows: number
+  aspectRatio: string
+}) {
+  const ratio = parseAspectRatio(input.aspectRatio)
+  const landscapeOrSquare = ratio.width >= ratio.height
+  const panelShortSide = 432
+  const rawWidth = landscapeOrSquare
+    ? input.columns * panelShortSide * (ratio.width / ratio.height)
+    : input.columns * panelShortSide
+  const rawHeight = landscapeOrSquare
+    ? input.rows * panelShortSide
+    : input.rows * panelShortSide * (ratio.height / ratio.width)
+  const scale = Math.min(1, 3072 / Math.max(rawWidth, rawHeight))
+  return {
+    width: normalizeStoryboardImageDimension(rawWidth * scale),
+    height: normalizeStoryboardImageDimension(rawHeight * scale),
+  }
+}
+
 function compactCinematicEntityAnchors(assetPack: Record<string, unknown>, limit = 8) {
   const entities = Array.isArray(assetPack.entities) ? assetPack.entities.map(asRecord) : []
   return entities.slice(0, limit).map((entity) => ({
@@ -2375,25 +2831,226 @@ function compactCinematicEntityAnchors(assetPack: Record<string, unknown>, limit
   })).filter((entity) => entity.name || entity.summary || entity.visualDescription || entity.visualTraits.length > 0)
 }
 
+function formatTimecode(seconds: number) {
+  const safeSeconds = Math.max(0, Math.round(seconds))
+  const minutes = Math.floor(safeSeconds / 60)
+  const remainder = safeSeconds % 60
+  return `${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`
+}
+
+function distributeBeatDurations(totalSeconds: number, panelCount: number) {
+  const count = Math.max(1, panelCount)
+  const total = Math.max(count, Math.round(totalSeconds))
+  const base = Math.max(1, Math.floor(total / count))
+  let remainder = Math.max(0, total - base * count)
+  return Array.from({ length: count }, (_, index) => {
+    const addExtra = index >= count - remainder ? 1 : 0
+    return base + addExtra
+  })
+}
+
+function beatSheetPanelCountForDuration(durationSeconds: number, shotCount: number) {
+  const duration = Math.max(4, Math.min(15, Math.round(durationSeconds) || 4))
+  if (duration >= 14) return 12
+  return Math.max(shotCount || 0, Math.min(12, duration))
+}
+
+function findShotForBeatMidpoint(shots: Record<string, unknown>[], midpointSeconds: number) {
+  return shots.find((shot) => midpointSeconds >= readShotStartSeconds(shot) && midpointSeconds < readShotEndSeconds(shot))
+    ?? shots.find((shot) => midpointSeconds <= readShotEndSeconds(shot))
+    ?? shots[shots.length - 1]
+    ?? {}
+}
+
+function makeBeatCaptionSentences(shot: Record<string, unknown>, fallbackIndex: number) {
+  const subject = readText(shot.subject) || readText(shot.title) || `The scene beat ${fallbackIndex + 1}`
+  const action = readText(shot.action) || readText(shot.composition) || readText(shot.visualPrompt) || readText(shot.beat)
+  const lineOne = `${subject} ${action || 'holds a clear visual moment.'}`.replace(/\s+/g, ' ').trim()
+  const lineTwo = (readText(shot.composition) || readText(shot.camera) || 'The environment, palette, and identity remain continuous.').replace(/\s+/g, ' ').trim()
+  return [lineOne, lineTwo].map((line) => line.length > 140 ? `${line.slice(0, 137).trim()}...` : line)
+}
+
+function buildCinematicBeatSheetPlan(blockScript: Record<string, unknown>) {
+  const shots = Array.isArray(blockScript.shots) ? blockScript.shots.map(asRecord) : []
+  const durationSeconds = Math.max(4, Math.min(15, Number(blockScript.durationSeconds ?? 8) || 8))
+  const panelCount = beatSheetPanelCountForDuration(durationSeconds, shots.length)
+  const durations = distributeBeatDurations(durationSeconds, panelCount)
+  let cursor = 0
+  const beats = durations.map((duration, index) => {
+    const startSeconds = cursor
+    const endSeconds = Math.min(durationSeconds, cursor + duration)
+    cursor = endSeconds
+    const shot = findShotForBeatMidpoint(shots, startSeconds + Math.max(0.1, (endSeconds - startSeconds) / 2))
+    const captions = makeBeatCaptionSentences(shot, index)
+    return {
+      beatNumber: index + 1,
+      startSeconds,
+      endSeconds,
+      timecode: `${formatTimecode(startSeconds)}-${formatTimecode(endSeconds)}`,
+      shotId: readText(shot.shotId) || readText(shot.id),
+      title: readText(shot.title) || `Beat ${index + 1}`,
+      captionLines: captions,
+      visual: [
+        readText(shot.subject),
+        readText(shot.action),
+        readText(shot.composition),
+      ].filter(Boolean).join(' '),
+    }
+  })
+  const layout = panelCount > 9
+    ? { columns: 3, rows: 4, panelCount }
+    : panelCount > 6
+      ? { columns: 3, rows: 3, panelCount }
+      : panelCount > 4
+        ? { columns: 3, rows: 2, panelCount }
+        : { columns: 2, rows: 2, panelCount }
+  return {
+    planningOnly: true,
+    durationSeconds,
+    panelCount,
+    layout,
+    beats,
+  }
+}
+
+function keyframeImageSizeForAspectRatio(aspectRatio: string) {
+  const ratio = parseAspectRatio(aspectRatio)
+  if (ratio >= 2) return { width: 2048, height: 960 }
+  if (ratio > 1.2) return { width: 1792, height: 1024 }
+  if (ratio < 0.55) return { width: 1024, height: 1792 }
+  if (ratio < 0.9) return { width: 1280, height: 1792 }
+  return { width: 1536, height: 1536 }
+}
+
+function buildCinematicBeatSheetPrompt(input: {
+  blockScript: Record<string, unknown>
+  assetPack: Record<string, unknown>
+  aspectRatio: string
+  prompt: string
+  guidance: OutputGuidanceBundle | null
+}) {
+  const beatSheetPlan = buildCinematicBeatSheetPlan(input.blockScript)
+  const entities = compactCinematicEntityAnchors(input.assetPack, 10)
+  const imageSize = beatSheetPlan.panelCount > 9
+    ? { width: 1536, height: 2304 }
+    : beatSheetPlan.panelCount > 6
+      ? { width: 1536, height: 1536 }
+      : { width: 1536, height: 1024 }
+  const beatLines = beatSheetPlan.beats.map((beat) => [
+    `BEAT ${String(beat.beatNumber).padStart(2, '0')} [${beat.timecode}]`,
+    `Caption line 1: ${beat.captionLines[0]}`,
+    `Caption line 2: ${beat.captionLines[1]}`,
+  ].join('\n')).join('\n\n')
+  return {
+    beatSheetPlan,
+    imageSize,
+    prompt: [
+      'Create a CINEMATIC BEAT SHEET planning image for video pre-production.',
+      `Canvas: pure black (#000000), ${beatSheetPlan.layout.rows} rows x ${beatSheetPlan.layout.columns} columns, ${beatSheetPlan.panelCount} timed panels, approximately ${imageSize.width}x${imageSize.height}.`,
+      `Every panel is a complete cinematic composition with an internal ${input.aspectRatio} video crop. Use thin black gutters only.`,
+      'Below each panel, include a narrow black caption band with panel number, timecode, and exactly two short caption sentences in clean white sans-serif.',
+      'No title banner. No footer. No colored gridlines. No table columns. No director notes. No SFX/BGM columns. No UI-like layout. No watermark.',
+      'Caption lines describe what the viewer sees, not camera direction.',
+      `Take title: ${readText(input.blockScript.title) || 'Compiled cinematic take'}`,
+      `Take duration: ${beatSheetPlan.durationSeconds} seconds exactly.`,
+      'Story beats:',
+      beatLines,
+      entities.length > 0 ? 'Canonical visual identity anchors:' : '',
+      entities.length > 0 ? compactForPrompt({ entities }, 3200) : '',
+      input.prompt ? `User brief: ${input.prompt}` : '',
+      'Visual style: live-action cinematic quality unless the user brief says otherwise; maintain palette, wardrobe, environment logic, lighting direction, and character identity across all panels.',
+      'This image is both a planning artifact and the primary Seedance visual reference. It must look like a clean production beat sheet, not a finished poster.',
+    ].filter(Boolean).join('\n\n'),
+  }
+}
+
+function buildCinematicKeyframePromptPack(input: {
+  blockScript: Record<string, unknown>
+  assetPack: Record<string, unknown>
+  aspectRatio: string
+  prompt: string
+}) {
+  const shots = Array.isArray(input.blockScript.shots) ? input.blockScript.shots.map(asRecord) : []
+  const durationSeconds = Math.max(4, Math.min(15, Number(input.blockScript.durationSeconds ?? 8) || 8))
+  const entities = compactCinematicEntityAnchors(input.assetPack, 8)
+  const picks = [
+    { keyframeIndex: 0, label: 'opening', timeSeconds: 0, ref: '@Image1' },
+    { keyframeIndex: 1, label: 'midpoint', timeSeconds: durationSeconds / 2, ref: '@Image2' },
+    { keyframeIndex: 2, label: 'ending', timeSeconds: Math.max(0, durationSeconds - 0.5), ref: '@Image3' },
+  ]
+  const keyframePrompts = picks.map((pick) => {
+    const shot = findShotForBeatMidpoint(shots, pick.timeSeconds)
+    const visual = [
+      readText(shot.subject),
+      readText(shot.action),
+      readText(shot.composition),
+    ].filter(Boolean).join(' ') || readText(input.blockScript.summary) || input.prompt
+    return {
+      keyframeIndex: pick.keyframeIndex,
+      label: pick.label,
+      referenceName: pick.ref,
+      timeSeconds: Number(pick.timeSeconds.toFixed(2)),
+      shotId: readText(shot.shotId) || readText(shot.id),
+      prompt: [
+        `Create one clean standalone GPT Image 2 cinematic keyframe for the ${pick.label} of a ${durationSeconds}-second video take.`,
+        `Frame aspect ratio: ${input.aspectRatio}. This keyframe will be used as ${pick.ref} for Seedance reference-to-video.`,
+        `Visible moment: ${visual}`,
+        `Framing and lens: ${readText(shot.camera) || 'cinematic lens, readable subject silhouette, coherent spatial blocking'}.`,
+        'Lighting and palette: preserve the world palette, lighting direction, wardrobe, environment logic, and mood from the references.',
+        entities.length > 0 ? `Identity/world locks: ${compactForPrompt({ entities }, 2200)}` : '',
+        input.prompt ? `User brief: ${input.prompt}` : '',
+        'No text, no captions, no UI, no collage, no panels, no watermark. Do not render a storyboard sheet. Make it a single cinematic still image.',
+      ].filter(Boolean).join('\n'),
+    }
+  })
+  return {
+    keyframePlan: {
+      durationSeconds,
+      aspectRatio: input.aspectRatio,
+      keyframes: keyframePrompts.map((entry) => ({
+        keyframeIndex: entry.keyframeIndex,
+        label: entry.label,
+        referenceName: entry.referenceName,
+        timeSeconds: entry.timeSeconds,
+        shotId: entry.shotId,
+      })),
+    },
+    keyframePrompts,
+  }
+}
+
 function buildCinematicStoryboardPrompt(input: {
   blockScript: Record<string, unknown>
   assetPack: Record<string, unknown>
-  gridDimension: number
+  aspectRatio: string
   prompt: string
   guidance: OutputGuidanceBundle | null
 }) {
   const shots = Array.isArray(input.blockScript.shots) ? input.blockScript.shots.map(asRecord) : []
+  const storyboardPanels = Array.isArray(input.blockScript.storyboardPanels) ? input.blockScript.storyboardPanels.map(asRecord) : []
   const entities = compactCinematicEntityAnchors(input.assetPack, 10)
-  const panelCount = input.gridDimension * input.gridDimension
-  const shotLines = shots.slice(0, panelCount).map((shot, index) => [
-    `Panel ${index + 1}: ${formatShotSeconds(readShotStartSeconds(shot), index)}s-${formatShotSeconds(readShotEndSeconds(shot), index + 1)}s.`,
-    `Subject: ${readText(shot.subject)}.`,
-    `Action: ${readText(shot.action)}.`,
-    `Camera: ${readText(shot.camera)}.`,
-  ].filter(Boolean).join(' '))
+  const layout = storyboardLayoutForShotCount(storyboardPanels.length || shots.length || 1)
+  const imageSize = storyboardImageSizeForLayout({
+    columns: layout.columns,
+    rows: layout.rows,
+    aspectRatio: input.aspectRatio,
+  })
+  const shotLines = storyboardPanels.length > 0
+    ? storyboardPanels.slice(0, layout.panelCount).map((panel, index) => [
+      `Panel ${index + 1}: ${readText(panel.title) || readText(panel.shotId) || `Storyboard panel ${index + 1}`}.`,
+      readText(panel.description),
+    ].filter(Boolean).join(' '))
+    : shots.slice(0, layout.panelCount).map((shot, index) => [
+      `Panel ${index + 1}: ${formatShotSeconds(readShotStartSeconds(shot), index)}s-${formatShotSeconds(readShotEndSeconds(shot), index + 1)}s.`,
+      `Subject: ${readText(shot.subject)}.`,
+      `Action: ${readText(shot.action)}.`,
+      `Camera: ${readText(shot.camera)}.`,
+    ].filter(Boolean).join(' '))
   return [
-    `Create a clean ${input.gridDimension}x${input.gridDimension} storyboard grid contact sheet for a ${readText(input.blockScript.durationSeconds)} second cinematic video block.`,
-    'Each panel is one shot thumbnail. Use consistent identity, wardrobe, environment, props, palette, and camera continuity across panels.',
+    `Create a clean ${layout.columns}-column x ${layout.rows}-row storyboard contact sheet with exactly ${layout.panelCount} panels for a ${readText(input.blockScript.durationSeconds)} second cinematic video block.`,
+    `Every panel must be ${input.aspectRatio}, matching the final video aspect ratio. Arrange panels in timestamp order, left-to-right then top-to-bottom.`,
+    `Target storyboard canvas: ${imageSize.width}x${imageSize.height}.`,
+    'Each panel is one shot thumbnail. Do not add extra panels or leave blank placeholder panels. Use consistent identity, wardrobe, environment, props, palette, and camera continuity across panels.',
     'No captions, labels, speech bubbles, watermarks, signatures, UI, or visible text unless the user explicitly requested on-screen text.',
     `Block title: ${readText(input.blockScript.title)}`,
     `Block summary: ${readText(input.blockScript.summary)}`,
@@ -2416,26 +3073,449 @@ function buildCinematicVideoPrompt(input: {
   resolution: string
   generateAudio: boolean
   referenceImageCount: number
+  cinematicReferenceMode?: string
 }) {
   const shots = Array.isArray(input.blockScript.shots) ? input.blockScript.shots.map(asRecord) : []
   const entities = compactCinematicEntityAnchors(input.assetPack, 8)
-  const imageRefs = Array.from({ length: Math.max(0, input.referenceImageCount) }, (_, index) => `@Image${index + 1}`)
-  const referenceLine = imageRefs.length > 1
-    ? `Use ${imageRefs[0]} as the storyboard/block motion reference. Additional references ${imageRefs.slice(1).join(', ')} are continuity anchors only.`
-    : imageRefs.length === 1
-      ? `Use ${imageRefs[0]} as the storyboard/block motion reference.`
-      : ''
+  const cinematicReferenceMode = normalizeCinematicReferenceMode(input.cinematicReferenceMode)
+  const keyframeCount = cinematicReferenceMode === 'keyframes'
+    ? Math.min(3, Math.max(0, input.referenceImageCount))
+    : 0
+  const extraReferenceStart = cinematicReferenceMode === 'keyframes' ? keyframeCount + 1 : 2
+  const extraReferenceCount = cinematicReferenceMode === 'keyframes'
+    ? Math.max(0, input.referenceImageCount - keyframeCount)
+    : Math.max(0, input.referenceImageCount - 1)
+  const truthSourceMode = readText(input.blockScript.truthSourceMode)
+    || (String(input.prompt).toLowerCase().match(/\b(ugc|phone|selfie|tiktok|reel|creator)\b/) ? 'UGC / PHONE'
+      : String(input.prompt).toLowerCase().match(/\b(broadcast|sports|live tv|news)\b/) ? 'BROADCAST SETUP'
+        : String(input.prompt).toLowerCase().match(/\b(anime|animation|animated|2d)\b/) ? '2D / ANIMATION STYLE'
+          : 'CINEMATIC SETUP')
+  const referenceLegend = cinematicReferenceMode === 'keyframes'
+    ? [
+      keyframeCount >= 1 ? '@Image1: opening keyframe; lock the opening look, subject identity, wardrobe, palette, and starting composition.' : '',
+      keyframeCount >= 2 ? '@Image2: midpoint keyframe; lock the midpoint composition and continuity state.' : '',
+      keyframeCount >= 3 ? '@Image3: ending keyframe; lock the final composition and emotional/visual beat.' : '',
+      extraReferenceCount > 0 ? `@Image${extraReferenceStart}${extraReferenceCount > 1 ? `-@Image${input.referenceImageCount}` : ''}: cinematic atlas, entity, environment, prop, or optional continuity anchors only.` : '',
+    ].filter(Boolean)
+    : [
+      input.referenceImageCount >= 1 ? '@Image1: storyboard beat-sheet grid; use it as the primary visual continuity and timing board, following panel order left-to-right then top-to-bottom.' : '',
+      extraReferenceCount > 0 ? `@Image${extraReferenceStart}${extraReferenceCount > 1 ? `-@Image${input.referenceImageCount}` : ''}: cinematic atlas, clean keyframes when present, entity, environment, or prop continuity anchors.` : '',
+    ].filter(Boolean)
+  const timeline = shots.length > 0
+    ? shots.map((shot) => {
+      const start = formatTimecode(readShotStartSeconds(shot))
+      const end = formatTimecode(readShotEndSeconds(shot))
+      return `[${start}-${end}] Shot: ${readText(shot.subject) || readText(shot.title)} | Camera: ${readText(shot.camera) || 'clear cinematic framing'} | Action: ${readText(shot.action) || readText(shot.composition)} | Physics: natural body/object motion and coherent spatial layout | Audio: ${input.generateAudio ? (readText(shot.audio) || 'natural scene sound') : 'minimal or none'}`
+    }).join('\n')
+    : `[00:00-${formatTimecode(input.durationSeconds)}] Shot: ${readText(input.blockScript.summary) || input.prompt} | Camera: clear cinematic framing | Action: one coherent visible action | Physics: natural motion | Audio: ${input.generateAudio ? 'natural scene sound' : 'minimal or none'}`
+  const continuityLock = [
+    'Maintain the same subject identity, face/body shape, wardrobe/product details, color palette, environment logic, and lighting style across the full clip.',
+    entities.length > 0 ? compactForPrompt({ entities }, 2200) : '',
+  ].filter(Boolean).join('\n')
   return [
-    `Generate one ${input.durationSeconds}-second cinematic video clip at ${input.aspectRatio}, ${input.resolution}.`,
-    referenceLine,
-    'Follow this shot timing. Keep action continuous, physically plausible, and visually readable.',
-    shots.map((shot, index) => `${index + 1}. ${formatShotSeconds(readShotStartSeconds(shot), index)}s-${formatShotSeconds(readShotEndSeconds(shot), index + 1)}s: ${readText(shot.subject)} ${readText(shot.action)} Camera: ${readText(shot.camera)}. ${readText(shot.composition)}`).join('\n'),
-    entities.length > 0 ? 'Entity continuity anchors:' : '',
-    entities.length > 0 ? compactForPrompt({ entities }, 2600) : '',
-    input.generateAudio ? 'Generate native audio if supported: natural sound, restrained music, and any implied voice/speech should serve the shot script.' : 'Do not add prominent generated dialogue; keep audio minimal if generated.',
-    input.prompt ? `User brief: ${input.prompt}` : '',
-    'Provider constraints: no watermarks, no captions, no workflow/schema/internal wording, no redesigning referenced characters or environments.',
+    `[${truthSourceMode}]`,
+    `Generate one ${input.durationSeconds}-second Seedance 2 reference-to-video clip at ${input.aspectRatio}, ${input.resolution}.`,
+    input.generateAudio ? 'Audio: native audio may include restrained music, natural foley, and any authored dialogue/audio cue on the exact timeline.' : 'Audio: keep generated audio minimal or absent.',
+    '',
+    '[IMAGE REFERENCES / LEGEND]',
+    referenceLegend.length > 0
+      ? referenceLegend.join('\n')
+      : 'No image references are attached; use the written continuity locks only.',
+    cinematicReferenceMode === 'keyframes'
+      ? 'Beat sheets are planning-only and should not appear in the video. Use keyframes as the main visual references.'
+      : 'Storyboard-grid reference mode is enabled. Follow @Image1 as the continuity and timing board, but do not reproduce caption bands, panel borders, grid gutters, UI, or text as on-screen elements.',
+    '',
+    '[TIMELINE SECOND BY SECOND]',
+    timeline,
+    '',
+    '[CONSISTENCY LOCK]',
+    continuityLock,
+    '',
+    '[POSITIVE CONSTRAINTS]',
+    '- stable face and body proportions',
+    '- clean readable silhouette',
+    '- natural physical motion',
+    '- continuous lighting direction',
+    '- coherent spatial layout',
+    '- no on-screen text, UI, captions, watermark, or storyboard-panel artifacts',
+    input.prompt ? `\nUser brief: ${input.prompt}` : '',
   ].filter(Boolean).join('\n\n')
+}
+
+function compileCinematicScriptDocForOutput(input: {
+  scriptDoc: Record<string, unknown>
+  maxDynamicTakes: number
+  maxTotalDurationSeconds?: number | null
+}) {
+  const cinematicScriptDoc = cinematicScriptDocSchema.parse(input.scriptDoc)
+  const compiledCinematicSequence = buildCinematicSequenceFromScriptDoc(cinematicScriptDoc)
+  const allTakes = compiledCinematicSequence.takes
+  if (allTakes.length === 0) throw new Error('Cinematic script compile produced zero video takes.')
+  const maxDynamicTakes = Math.max(1, Math.min(6, input.maxDynamicTakes || 6))
+  const maxTotalDurationSeconds = Math.max(4, Math.min(60, Number(input.maxTotalDurationSeconds ?? CINEMATIC_MAX_TOTAL_DURATION_SECONDS) || CINEMATIC_MAX_TOTAL_DURATION_SECONDS))
+  const generatedTakes: typeof allTakes = []
+  let generatedDurationSeconds = 0
+  for (const take of allTakes) {
+    if (generatedTakes.length >= maxDynamicTakes) break
+    const durationSeconds = Math.max(4, Math.min(15, Number(take.durationSeconds ?? 4) || 4))
+    if (generatedTakes.length > 0 && generatedDurationSeconds + durationSeconds > maxTotalDurationSeconds) break
+    generatedTakes.push(take)
+    generatedDurationSeconds += durationSeconds
+    if (generatedDurationSeconds >= maxTotalDurationSeconds) break
+  }
+  if (generatedTakes.length === 0) generatedTakes.push(allTakes[0])
+  const takePlan = generatedTakes.map((take, index) => ({
+    takeId: take.id,
+    takeIndex: index,
+    title: take.title || `Take ${index + 1}`,
+    shotIds: take.shotIds,
+    durationSeconds: Math.max(4, Math.min(15, Number(take.durationSeconds ?? 4) || 4)),
+    startSeconds: Number(take.startSeconds ?? 0) || 0,
+    endSeconds: Number(take.endSeconds ?? 0) || 0,
+    breakReason: readText(take.breakReason),
+    continuityRefIds: readStringArray(take.continuityRefIds),
+    requiredSourceRefIds: readStringArray(take.requiredSourceRefIds),
+    storyboardPanelPlan: take.storyboardPanelPlan ?? null,
+    storyboardPanelScriptText: readText(take.storyboardPanelScriptText),
+    representativeStillPrompt: readText(take.representativeStillPrompt),
+    truthSourceMode: readText(take.truthSourceMode),
+    beatSheetPlan: take.beatSheetPlan ?? null,
+    keyframePlan: take.keyframePlan ?? null,
+    referenceLegend: Array.isArray(take.referenceLegend) ? take.referenceLegend : [],
+    timelineCells: Array.isArray(take.timelineCells) ? take.timelineCells : [],
+    continuityLock: readText(take.continuityLock),
+    positiveConstraints: readStringArray(take.positiveConstraints),
+    planningOnlyArtifactKeys: readStringArray(take.planningOnlyArtifactKeys),
+    seedanceEndpoint: readText(take.seedanceEndpoint) || 'reference-to-video',
+  }))
+  const totalDurationSeconds = takePlan.reduce((total, take) => total + take.durationSeconds, 0)
+  const compileHash = hashOutputWorkflowValue({ scriptDoc: cinematicScriptDoc, takePlan })
+  return {
+    cinematicScriptDoc,
+    compiledCinematicSequence,
+    takePlan,
+    totalDurationSeconds,
+    maxTotalDurationSeconds,
+    dynamicTakeCount: takePlan.length,
+    cappedTakeCount: allTakes.length > generatedTakes.length ? allTakes.length : null,
+    scriptDurationSource: 'authored_script',
+    compileHash,
+    diagnostics: [
+      ...(allTakes.length > generatedTakes.length
+        ? [`Cinematic dynamic fanout is capped at ${maxDynamicTakes} takes and ${maxTotalDurationSeconds} seconds in V1; generated the first ${generatedTakes.length} of ${allTakes.length} compiled takes.`]
+        : []),
+      ...(totalDurationSeconds >= maxTotalDurationSeconds
+        ? [`Generated cinematic duration reached the ${maxTotalDurationSeconds}-second maximum.`]
+        : []),
+    ],
+  }
+}
+
+function nameForCinematicRef(assetPack: Record<string, unknown>, refId: string | null | undefined) {
+  const id = readText(refId)
+  if (!id) return ''
+  const entities = Array.isArray(assetPack.entities) ? assetPack.entities.map(asRecord) : []
+  const match = entities.find((entity) => readText(entity.key) === id || readText(entity.id) === id)
+  return readText(match?.name) || id
+}
+
+function actionTextForCompiledShot(shot: Record<string, unknown>, assetPack: Record<string, unknown>) {
+  const actions = Array.isArray(shot.actions) ? shot.actions.map(asRecord) : []
+  if (actions.length === 0) return readText(shot.visualPrompt) || readText(shot.beat) || readText(shot.title)
+  return actions.map((action) => [
+    nameForCinematicRef(assetPack, action.actorRefId),
+    readText(action.verb),
+    nameForCinematicRef(assetPack, action.targetRefId),
+    readText(action.stagingNotes),
+  ].filter(Boolean).join(' ')).filter(Boolean).join(' Then ')
+}
+
+function audioTextForCompiledShot(shot: Record<string, unknown>) {
+  const dialogue = Array.isArray(shot.dialogue) ? shot.dialogue.map(asRecord) : []
+  const audio = Array.isArray(shot.audio) ? shot.audio.map(asRecord) : []
+  const dialogueText = dialogue.map((entry) => [
+    readText(entry.speakerRefId),
+    readText(entry.line),
+    readText(entry.delivery),
+  ].filter(Boolean).join(': ')).filter(Boolean).join(' ')
+  const audioText = audio.map((entry) => [
+    readText(entry.kind),
+    readText(entry.cue),
+  ].filter(Boolean).join(': ')).filter(Boolean).join(' ')
+  return [dialogueText, audioText].filter(Boolean).join(' ')
+}
+
+function buildTakeBlockScriptFromCompiledSequence(input: {
+  compiledCinematicSequence: Record<string, unknown>
+  takePlan: Record<string, unknown>[]
+  takeId?: string
+  takeIndex?: number
+  assetPack: Record<string, unknown>
+}) {
+  const take = input.takeId
+    ? input.takePlan.find((candidate) => readText(candidate.takeId) === input.takeId)
+    : input.takePlan[input.takeIndex ?? 0]
+  if (!take) throw new Error('Compiled cinematic take was not found for this dynamic node.')
+  const sequenceShots = Array.isArray(input.compiledCinematicSequence.shots)
+    ? input.compiledCinematicSequence.shots.map(asRecord)
+    : []
+  const shotIds = new Set(readStringArray(take.shotIds))
+  const takeStart = Number(take.startSeconds ?? 0) || 0
+  const durationSeconds = Math.max(4, Math.min(15, Number(take.durationSeconds ?? 4) || 4))
+  const shots = sequenceShots
+    .filter((shot) => shotIds.has(readText(shot.id)))
+    .map((shot, index) => {
+      const start = Math.max(0, Number(shot.startSeconds ?? 0) - takeStart)
+      const end = Math.max(start + 0.25, Math.min(durationSeconds, Number(shot.endSeconds ?? start + Number(shot.durationSeconds ?? 1)) - takeStart))
+      const subject = [
+        ...readStringArray(shot.participantRefIds).map((refId) => nameForCinematicRef(input.assetPack, refId)),
+        nameForCinematicRef(input.assetPack, readText(shot.locationRefId)),
+      ].filter(Boolean).join(', ') || readText(shot.title) || `Shot ${index + 1}`
+      return {
+        shotNumber: index + 1,
+        shotId: readText(shot.id),
+        startTimeSeconds: Number(start.toFixed(2)),
+        endTimeSeconds: Number(end.toFixed(2)),
+        subject,
+        action: actionTextForCompiledShot(shot, input.assetPack),
+        camera: [readText(shot.cameraMovement), readText(shot.cameraAngle), readText(shot.framing), readText(shot.lensPreference)].filter(Boolean).join(', '),
+        composition: readText(shot.compositionGuide) || readText(shot.visualPrompt),
+        audio: audioTextForCompiledShot(shot),
+        referenceNotes: 'Use @Image1 opening keyframe, @Image2 midpoint keyframe, @Image3 ending keyframe, then atlas/entity anchors.',
+      }
+    })
+  const storyboardPanelPlan = asRecord(take.storyboardPanelPlan)
+  const storyboardPanels = Array.isArray(storyboardPanelPlan.panels) ? storyboardPanelPlan.panels.map(asRecord) : []
+  return {
+    blockNumber: Number(take.takeIndex ?? 0) + 1,
+    blockCount: input.takePlan.length,
+    takeId: readText(take.takeId),
+    takeIndex: Number(take.takeIndex ?? 0) || 0,
+    durationSeconds,
+    title: readText(take.title) || `Take ${(Number(take.takeIndex ?? 0) || 0) + 1}`,
+    storyFunction: readText(take.breakReason) || 'compiled cinematic take',
+    hook: shots[0]?.action ?? '',
+    summary: readText(take.representativeStillPrompt) || shots.map((shot) => shot.action).join(' '),
+    continuityNotes: readStringArray(take.continuityRefIds),
+    truthSourceMode: readText(take.truthSourceMode),
+    referenceLegend: Array.isArray(take.referenceLegend) ? take.referenceLegend : [],
+    timelineCells: Array.isArray(take.timelineCells) ? take.timelineCells : [],
+    continuityLock: readText(take.continuityLock),
+    positiveConstraints: readStringArray(take.positiveConstraints),
+    beatSheetPlan: take.beatSheetPlan ?? null,
+    keyframePlan: take.keyframePlan ?? null,
+    planningOnlyArtifactKeys: readStringArray(take.planningOnlyArtifactKeys),
+    storyboardPanels,
+    shots,
+  }
+}
+
+function dynamicNodeRow(input: {
+  workflow: OutputWorkflow
+  key: string
+  nodeType: OutputWorkflowNode['nodeType']
+  label: string
+  x: number
+  y: number
+  config: Record<string, unknown>
+  compileHash: string
+}) {
+  return {
+    workflow_id: input.workflow.id,
+    draft_id: input.workflow.draftId,
+    key: input.key,
+    node_type: input.nodeType,
+    label: input.label,
+    position: { x: input.x, y: input.y },
+    config: input.config,
+    inputs: {},
+    outputs: {},
+    dirty: true,
+    input_hash: '',
+    output_hash: '',
+    metadata: {
+      dynamicCinematicGenerated: true,
+      dynamicCompileHash: input.compileHash,
+      generatedByNodeKey: 'cinematic_dynamic_take_fanout',
+    },
+  }
+}
+
+function dynamicEdgeRow(input: {
+  workflow: OutputWorkflow
+  key: string
+  sourceNodeKey: string
+  sourcePort: string
+  targetNodeKey: string
+  targetPort: string
+  compileHash: string
+  metadata?: Record<string, unknown>
+}) {
+  return {
+    workflow_id: input.workflow.id,
+    draft_id: input.workflow.draftId,
+    key: input.key,
+    source_node_key: input.sourceNodeKey,
+    source_port: input.sourcePort,
+    target_node_key: input.targetNodeKey,
+    target_port: input.targetPort,
+    metadata: {
+      dynamicCinematicGenerated: true,
+      dynamicCompileHash: input.compileHash,
+      generatedByNodeKey: 'cinematic_dynamic_take_fanout',
+      ...(input.metadata ?? {}),
+    },
+  }
+}
+
+async function materializeDynamicCinematicTakeFanout(input: {
+  client: DatabaseClient
+  workflow: OutputWorkflow
+  compileOutputs: Record<string, unknown>
+  config: Record<string, unknown>
+}) {
+  const takePlan = Array.isArray(input.compileOutputs.takePlan) ? input.compileOutputs.takePlan.map(asRecord) : []
+  const compileHash = readText(input.compileOutputs.compileHash) || hashOutputWorkflowValue(input.compileOutputs)
+  if (takePlan.length === 0) throw new Error('Cannot materialize cinematic takes because the compile output has no takePlan.')
+
+  const aspectRatio = readText(input.config.aspectRatio) || '16:9'
+  const resolution = readText(input.config.resolution) || '720p'
+  const generateAudio = input.config.generateAudio !== false
+  const debugSkipVideoGeneration = input.config.debugSkipVideoGeneration === true
+  const videoModel = readText(input.config.videoModel)
+    || (resolution === '1080p' ? 'bytedance/seedance-2.0/reference-to-video' : 'bytedance/seedance-2.0/fast/reference-to-video')
+  const presetFamily = readText(input.config.presetFamily) || 'story_movie_tv'
+  const cinematicReferenceMode = normalizeCinematicReferenceMode(input.config.cinematicReferenceMode)
+  const useKeyframes = cinematicReferenceMode === 'keyframes' || cinematicReferenceMode === 'keyframes_and_storyboard'
+  const useStoryboardReference = cinematicReferenceMode !== 'keyframes'
+  const keyframeImageSize = keyframeImageSizeForAspectRatio(aspectRatio)
+
+  const existingNodeResponse = await input.client
+    .from('output_workflow_nodes')
+    .select(outputWorkflowNodeSelect)
+    .eq('workflow_id', input.workflow.id)
+  if (existingNodeResponse.error) throw new Error(existingNodeResponse.error.message)
+  const existingDynamicNodes = ((existingNodeResponse.data ?? []) as OutputWorkflowNodeRow[])
+    .filter((row) => asRecord(row.metadata).dynamicCinematicGenerated === true)
+  const existingReferenceModes = existingDynamicNodes
+    .map((row) => readText(asRecord(row.config).cinematicReferenceMode))
+    .filter(Boolean)
+  const existingModeMatches = existingReferenceModes.length === 0
+    || existingReferenceModes.every((mode) => mode === cinematicReferenceMode)
+  const existingSameHash = existingDynamicNodes.length > 0
+    && existingDynamicNodes.every((row) => readText(asRecord(row.metadata).dynamicCompileHash) === compileHash)
+    && existingModeMatches
+    && existingDynamicNodes.some((row) => row.key === 'video_stitch')
+    && existingDynamicNodes.some((row) => row.key.endsWith('_beat_sheet'))
+    && (!useKeyframes || existingDynamicNodes.some((row) => row.key.endsWith('_keyframe_001')))
+  if (existingSameHash) return { expanded: false, compileHash, takeCount: takePlan.length }
+
+  const existingEdgeResponse = await input.client
+    .from('output_workflow_edges')
+    .select(outputWorkflowEdgeSelect)
+    .eq('workflow_id', input.workflow.id)
+  if (existingEdgeResponse.error) throw new Error(existingEdgeResponse.error.message)
+  const dynamicEdgeKeys = ((existingEdgeResponse.data ?? []) as OutputWorkflowEdgeRow[])
+    .filter((row) => asRecord(row.metadata).dynamicCinematicGenerated === true)
+    .map((row) => row.key)
+  if (dynamicEdgeKeys.length > 0) {
+    const deleteEdges = await input.client.from('output_workflow_edges').delete().eq('workflow_id', input.workflow.id).in('key', dynamicEdgeKeys)
+    if (deleteEdges.error) throw new Error(deleteEdges.error.message)
+  }
+  if (existingDynamicNodes.length > 0) {
+    const deleteNodes = await input.client.from('output_workflow_nodes').delete().eq('workflow_id', input.workflow.id).in('key', existingDynamicNodes.map((row) => row.key))
+    if (deleteNodes.error) throw new Error(deleteNodes.error.message)
+  }
+
+  const nodeRows: Record<string, unknown>[] = []
+  const edgeRows: Record<string, unknown>[] = []
+  takePlan.forEach((take, index) => {
+    const takeNumber = index + 1
+    const suffix = String(takeNumber).padStart(3, '0')
+    const takeId = readText(take.takeId) || `take_${takeNumber}`
+    const durationSeconds = Math.max(4, Math.min(15, Number(take.durationSeconds ?? 4) || 4))
+    const y = 40 + index * 220
+    const beatSheetPromptKey = `take_${suffix}_beat_sheet_prompt`
+    const beatSheetKey = `take_${suffix}_beat_sheet`
+    const keyframePromptPackKey = `take_${suffix}_keyframe_prompt_pack`
+    const keyframeKeys = [1, 2, 3].map((keyframeNumber) => `take_${suffix}_keyframe_${String(keyframeNumber).padStart(3, '0')}`)
+    const videoPromptKey = `take_${suffix}_video_prompt`
+    const videoKey = `take_${suffix}_video`
+    nodeRows.push(
+      dynamicNodeRow({ workflow: input.workflow, key: beatSheetPromptKey, nodeType: 'utility_transform', label: `Take ${takeNumber} Beat Sheet Prompt`, x: 1760, y, compileHash, config: { purpose: 'cinematic_beat_sheet_prompt', takeId, takeIndex: index, aspectRatio, presetFamily, planningOnly: true, execution: { resourceClass: 'utility', groupKey: 'cinematic_beat_sheet_prompts', maxConcurrency: 6 } } }),
+      dynamicNodeRow({ workflow: input.workflow, key: beatSheetKey, nodeType: 'image_generation', label: `Take ${takeNumber} Beat Sheet`, x: 2040, y, compileHash, config: { purpose: 'cinematic_beat_sheet', role: 'cinematic_beat_sheet', takeId, takeIndex: index, planningOnly: true, planning_only: true, usedAsVideoReference: useStoryboardReference, model: 'openai/gpt-image-2', referenceModel: 'openai/gpt-image-2/edit', quality: 'low', outputFormat: 'webp', maxReferenceImages: 16, imageSizePolicy: 'from_beat_sheet_prompt_layout', panelAspectRatio: aspectRatio, skillKeys: ['cinematic_beat_sheet_planning', 'image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'provider_prompt_hygiene'], autoSkillTags: ['beat_sheet', 'storyboard', 'planning_only', 'video_reference', 'image_prompt', 'entity_reference', 'reference_continuity'], guidanceMode: 'strict', execution: { resourceClass: 'image', groupKey: 'cinematic_beat_sheets', maxConcurrency: 3 } } }),
+      ...(useKeyframes ? [
+        dynamicNodeRow({ workflow: input.workflow, key: keyframePromptPackKey, nodeType: 'utility_transform', label: `Take ${takeNumber} Keyframe Prompts`, x: 2320, y, compileHash, config: { purpose: 'cinematic_keyframe_prompt_pack', takeId, takeIndex: index, aspectRatio, presetFamily, execution: { resourceClass: 'utility', groupKey: 'cinematic_keyframe_prompt_packs', maxConcurrency: 6 } } }),
+        ...keyframeKeys.map((keyframeKey, keyframeIndex) => dynamicNodeRow({ workflow: input.workflow, key: keyframeKey, nodeType: 'image_generation', label: `Take ${takeNumber} Keyframe ${keyframeIndex + 1}`, x: 2600 + keyframeIndex * 40, y: y + keyframeIndex * 44, compileHash, config: { purpose: 'cinematic_keyframe', role: 'cinematic_keyframe', takeId, takeIndex: index, keyframeIndex, model: 'openai/gpt-image-2', referenceModel: 'openai/gpt-image-2/edit', quality: 'low', outputFormat: 'webp', maxReferenceImages: 16, imageSize: keyframeImageSize, aspectRatio, skillKeys: ['cinematic_keyframe_prompting', 'image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'provider_prompt_hygiene'], autoSkillTags: ['keyframe', 'image_prompt', 'visual_only', 'entity_reference', 'reference_continuity'], guidanceMode: 'strict', execution: { resourceClass: 'image', groupKey: 'cinematic_keyframes', maxConcurrency: 3 } } })),
+      ] : []),
+      dynamicNodeRow({ workflow: input.workflow, key: videoPromptKey, nodeType: 'utility_transform', label: `Take ${takeNumber} Video Prompt`, x: 2880, y, compileHash, config: { purpose: 'cinematic_video_prompt', takeId, takeIndex: index, durationSeconds, aspectRatio, resolution, generateAudio, presetFamily, cinematicReferenceMode, debugSkipVideoGeneration, execution: { resourceClass: 'utility', groupKey: 'cinematic_video_prompts', maxConcurrency: 6 } } }),
+      dynamicNodeRow({ workflow: input.workflow, key: videoKey, nodeType: 'video_generation', label: `Take ${takeNumber} Video`, x: 3160, y, compileHash, config: { purpose: 'cinematic_block_video', role: 'cinematic_block', takeId, takeIndex: index, model: videoModel, durationSeconds, aspectRatio, resolution, generateAudio, cinematicReferenceMode, debugSkipVideoGeneration, syncMode: false, skillKeys: ['seedance_reference_video_prompting', 'seedance_truth_source_modes', 'seedance_reference_legend_contract', 'seedance_timeline_call_sheet', 'cinematic_shot_direction', 'shortform_hook_retention', 'brand_ugc_proof_structure', 'provider_prompt_hygiene'], autoSkillTags: ['video_prompt', 'seedance', 'cinematic', 'ugc', 'provider_hygiene'], guidanceMode: 'strict', execution: { resourceClass: 'video', groupKey: 'cinematic_videos', maxConcurrency: Math.min(takePlan.length, 3) } } }),
+    )
+    const takeMeta = { takeId, takeIndex: index }
+    edgeRows.push(
+      dynamicEdgeRow({ workflow: input.workflow, key: `cinematic_sequence_compile__${beatSheetPromptKey}`, sourceNodeKey: 'cinematic_sequence_compile', sourcePort: 'takePlan', targetNodeKey: beatSheetPromptKey, targetPort: 'script', compileHash, metadata: takeMeta }),
+      dynamicEdgeRow({ workflow: input.workflow, key: `cinematic_entities__${beatSheetPromptKey}`, sourceNodeKey: 'cinematic_entities', sourcePort: 'asset_pack', targetNodeKey: beatSheetPromptKey, targetPort: 'asset_pack', compileHash, metadata: takeMeta }),
+      dynamicEdgeRow({ workflow: input.workflow, key: `skill_context__${beatSheetPromptKey}`, sourceNodeKey: 'skill_context', sourcePort: 'guidance', targetNodeKey: beatSheetPromptKey, targetPort: 'guidance', compileHash, metadata: takeMeta }),
+      dynamicEdgeRow({ workflow: input.workflow, key: `${beatSheetPromptKey}__${beatSheetKey}`, sourceNodeKey: beatSheetPromptKey, sourcePort: 'text', targetNodeKey: beatSheetKey, targetPort: 'prompt', compileHash, metadata: takeMeta }),
+      dynamicEdgeRow({ workflow: input.workflow, key: `cinematic_atlas_image__${beatSheetKey}`, sourceNodeKey: 'cinematic_atlas_image', sourcePort: 'image', targetNodeKey: beatSheetKey, targetPort: 'references', compileHash, metadata: takeMeta }),
+      dynamicEdgeRow({ workflow: input.workflow, key: `cinematic_entities__${beatSheetKey}`, sourceNodeKey: 'cinematic_entities', sourcePort: 'asset_pack', targetNodeKey: beatSheetKey, targetPort: 'references', compileHash, metadata: takeMeta }),
+      dynamicEdgeRow({ workflow: input.workflow, key: `skill_context__${beatSheetKey}`, sourceNodeKey: 'skill_context', sourcePort: 'guidance', targetNodeKey: beatSheetKey, targetPort: 'guidance', compileHash, metadata: takeMeta }),
+      ...(useKeyframes ? [
+        dynamicEdgeRow({ workflow: input.workflow, key: `cinematic_sequence_compile__${keyframePromptPackKey}`, sourceNodeKey: 'cinematic_sequence_compile', sourcePort: 'takePlan', targetNodeKey: keyframePromptPackKey, targetPort: 'script', compileHash, metadata: takeMeta }),
+        dynamicEdgeRow({ workflow: input.workflow, key: `${beatSheetPromptKey}__${keyframePromptPackKey}`, sourceNodeKey: beatSheetPromptKey, sourcePort: 'beatSheetPlan', targetNodeKey: keyframePromptPackKey, targetPort: 'beat_sheet_plan', compileHash, metadata: takeMeta }),
+        dynamicEdgeRow({ workflow: input.workflow, key: `cinematic_entities__${keyframePromptPackKey}`, sourceNodeKey: 'cinematic_entities', sourcePort: 'asset_pack', targetNodeKey: keyframePromptPackKey, targetPort: 'asset_pack', compileHash, metadata: takeMeta }),
+        dynamicEdgeRow({ workflow: input.workflow, key: `skill_context__${keyframePromptPackKey}`, sourceNodeKey: 'skill_context', sourcePort: 'guidance', targetNodeKey: keyframePromptPackKey, targetPort: 'guidance', compileHash, metadata: takeMeta }),
+        ...keyframeKeys.flatMap((keyframeKey) => [
+        dynamicEdgeRow({ workflow: input.workflow, key: `${keyframePromptPackKey}__${keyframeKey}`, sourceNodeKey: keyframePromptPackKey, sourcePort: 'keyframePrompts', targetNodeKey: keyframeKey, targetPort: 'prompt', compileHash, metadata: takeMeta }),
+        dynamicEdgeRow({ workflow: input.workflow, key: `cinematic_atlas_image__${keyframeKey}`, sourceNodeKey: 'cinematic_atlas_image', sourcePort: 'image', targetNodeKey: keyframeKey, targetPort: 'references', compileHash, metadata: takeMeta }),
+        dynamicEdgeRow({ workflow: input.workflow, key: `cinematic_entities__${keyframeKey}`, sourceNodeKey: 'cinematic_entities', sourcePort: 'asset_pack', targetNodeKey: keyframeKey, targetPort: 'references', compileHash, metadata: takeMeta }),
+        dynamicEdgeRow({ workflow: input.workflow, key: `skill_context__${keyframeKey}`, sourceNodeKey: 'skill_context', sourcePort: 'guidance', targetNodeKey: keyframeKey, targetPort: 'guidance', compileHash, metadata: takeMeta }),
+        ]),
+      ] : []),
+      dynamicEdgeRow({ workflow: input.workflow, key: `cinematic_sequence_compile__${videoPromptKey}`, sourceNodeKey: 'cinematic_sequence_compile', sourcePort: 'takePlan', targetNodeKey: videoPromptKey, targetPort: 'script', compileHash, metadata: takeMeta }),
+      ...(useStoryboardReference ? [dynamicEdgeRow({ workflow: input.workflow, key: `${beatSheetKey}__${videoPromptKey}`, sourceNodeKey: beatSheetKey, sourcePort: 'image', targetNodeKey: videoPromptKey, targetPort: 'references', compileHash, metadata: takeMeta })] : []),
+      ...(useKeyframes ? [
+        dynamicEdgeRow({ workflow: input.workflow, key: `${keyframePromptPackKey}__${videoPromptKey}`, sourceNodeKey: keyframePromptPackKey, sourcePort: 'keyframePlan', targetNodeKey: videoPromptKey, targetPort: 'keyframes', compileHash, metadata: takeMeta }),
+        ...keyframeKeys.map((keyframeKey) => dynamicEdgeRow({ workflow: input.workflow, key: `${keyframeKey}__${videoPromptKey}`, sourceNodeKey: keyframeKey, sourcePort: 'image', targetNodeKey: videoPromptKey, targetPort: 'references', compileHash, metadata: takeMeta })),
+      ] : []),
+      dynamicEdgeRow({ workflow: input.workflow, key: `cinematic_atlas_image__${videoPromptKey}`, sourceNodeKey: 'cinematic_atlas_image', sourcePort: 'image', targetNodeKey: videoPromptKey, targetPort: 'references', compileHash, metadata: takeMeta }),
+      dynamicEdgeRow({ workflow: input.workflow, key: `cinematic_entities__${videoPromptKey}`, sourceNodeKey: 'cinematic_entities', sourcePort: 'asset_pack', targetNodeKey: videoPromptKey, targetPort: 'asset_pack', compileHash, metadata: takeMeta }),
+      dynamicEdgeRow({ workflow: input.workflow, key: `skill_context__${videoPromptKey}`, sourceNodeKey: 'skill_context', sourcePort: 'guidance', targetNodeKey: videoPromptKey, targetPort: 'guidance', compileHash, metadata: takeMeta }),
+      dynamicEdgeRow({ workflow: input.workflow, key: `${videoPromptKey}__${videoKey}`, sourceNodeKey: videoPromptKey, sourcePort: 'text', targetNodeKey: videoKey, targetPort: 'prompt', compileHash, metadata: takeMeta }),
+      ...(useKeyframes ? keyframeKeys.map((keyframeKey) => dynamicEdgeRow({ workflow: input.workflow, key: `${keyframeKey}__${videoKey}`, sourceNodeKey: keyframeKey, sourcePort: 'image', targetNodeKey: videoKey, targetPort: 'references', compileHash, metadata: takeMeta })) : []),
+      dynamicEdgeRow({ workflow: input.workflow, key: `cinematic_atlas_image__${videoKey}`, sourceNodeKey: 'cinematic_atlas_image', sourcePort: 'image', targetNodeKey: videoKey, targetPort: 'references', compileHash, metadata: takeMeta }),
+      dynamicEdgeRow({ workflow: input.workflow, key: `skill_context__${videoKey}`, sourceNodeKey: 'skill_context', sourcePort: 'guidance', targetNodeKey: videoKey, targetPort: 'guidance', compileHash, metadata: takeMeta }),
+      dynamicEdgeRow({ workflow: input.workflow, key: `${videoKey}__video_stitch`, sourceNodeKey: videoKey, sourcePort: 'video', targetNodeKey: 'video_stitch', targetPort: 'videos', compileHash, metadata: takeMeta }),
+    )
+    if (useStoryboardReference) {
+      edgeRows.push(dynamicEdgeRow({ workflow: input.workflow, key: `${beatSheetKey}__${videoKey}`, sourceNodeKey: beatSheetKey, sourcePort: 'image', targetNodeKey: videoKey, targetPort: 'references', compileHash, metadata: takeMeta }))
+    }
+  })
+  nodeRows.push(
+    dynamicNodeRow({ workflow: input.workflow, key: 'video_stitch', nodeType: 'utility_transform', label: 'Stitch Video', x: 3440, y: 120, compileHash, config: { purpose: 'video_stitch', role: 'cinematic_sequence_final', dynamicTakeCount: takePlan.length, aspectRatio, resolution, debugSkipVideoGeneration, execution: { resourceClass: 'video', groupKey: 'video_stitch', maxConcurrency: 1 } } }),
+    dynamicNodeRow({ workflow: input.workflow, key: 'artifact', nodeType: 'output_artifact', label: 'Register Video', x: 3720, y: 120, compileHash, config: { purpose: 'cinematic_video_artifact', artifactKind: 'video', execution: { resourceClass: 'utility' } } }),
+  )
+  edgeRows.push(dynamicEdgeRow({ workflow: input.workflow, key: 'video_stitch__artifact', sourceNodeKey: 'video_stitch', sourcePort: 'video', targetNodeKey: 'artifact', targetPort: 'input', compileHash }))
+
+  const insertNodes = await input.client.from('output_workflow_nodes').upsert(nodeRows, { onConflict: 'workflow_id,key' })
+  if (insertNodes.error) throw new Error(insertNodes.error.message)
+  const insertEdges = await input.client.from('output_workflow_edges').upsert(edgeRows, { onConflict: 'workflow_id,key' })
+  if (insertEdges.error) throw new Error(insertEdges.error.message)
+  const updateWorkflow = await input.client.from('output_workflows').update({
+    metadata: {
+      ...input.workflow.metadata,
+      cinematicScriptDoc: input.compileOutputs.cinematicScriptDoc ?? null,
+      compiledCinematicSequence: input.compileOutputs.compiledCinematicSequence ?? null,
+      dynamicTakeCount: takePlan.length,
+      totalDurationSeconds: Number(input.compileOutputs.totalDurationSeconds ?? 0) || null,
+      scriptDurationSource: readText(input.compileOutputs.scriptDurationSource) || 'authored_script',
+      cinematicReferenceMode,
+      debugSkipVideoGeneration,
+      dynamicCinematicCompileHash: compileHash,
+    },
+  }).eq('id', input.workflow.id)
+  if (updateWorkflow.error) throw new Error(updateWorkflow.error.message)
+  return { expanded: true, compileHash, takeCount: takePlan.length }
 }
 
 function buildComicEntitySelectorInstruction(input: {
@@ -2779,6 +3859,28 @@ function buildComicAtlasPromptInstruction(input: {
     input.prompt ? `User brief: ${input.prompt}` : '',
     guidanceMarkdown(input.guidance),
     compactForPrompt({ assetPack: input.assetPack, wiki }),
+  ].filter(Boolean).join('\n\n')
+}
+
+function buildCinematicAtlasPromptInstruction(input: {
+  context: Record<string, unknown>
+  assetPack: Record<string, unknown>
+  prompt: string
+  guidance: OutputGuidanceBundle
+}) {
+  const wiki = asRecord(input.context.wiki)
+  const entities = compactCinematicEntityAnchors(input.assetPack, 12)
+  return [
+    'Create one GPT Image 2 prompt for a square cinematic reference atlas.',
+    'The atlas should show all relevant characters, places, objects, symbols, wardrobe anchors, palette swatches, and material cues as clean visual reference panels.',
+    'Use readable labels/captions for entity names only. A short caption under each panel is allowed when it clarifies role or visual identity.',
+    'Keep the atlas neutral and continuity-focused: default appearance, recognizable silhouettes, faces, clothing, props, materials, and environment design. Do not depict combat poses, injury, blood, temporary emotion, camera effects, or scene-specific action.',
+    'The atlas will be used as a single Seedance reference image, so each entity panel must be legible at thumbnail size and visually separated from the others.',
+    readText(wiki.artStyleDescription) ? `Project art direction: ${readText(wiki.artStyleDescription)}` : '',
+    Array.isArray(wiki.toneTags) ? `Tone tags: ${wiki.toneTags.join(', ')}` : '',
+    input.prompt ? `User brief: ${input.prompt}` : '',
+    guidanceMarkdown(input.guidance),
+    compactForPrompt({ entities, wiki }, 7000),
   ].filter(Boolean).join('\n\n')
 }
 
@@ -3311,6 +4413,16 @@ async function collectAssetPackReferenceUrls(client: DatabaseClient, run: Output
     }
   }
   return references
+}
+
+function referenceLimitForImageNode(config: Record<string, unknown>, role: string) {
+  const configured = Number(config.maxReferenceImages ?? config.referenceLimit ?? 0)
+  if (Number.isFinite(configured) && configured > 0) {
+    return Math.max(1, Math.min(16, Math.floor(configured)))
+  }
+  if (role === 'comic_page') return 1
+  if (role === 'comic_atlas' || role === 'cinematic_atlas' || role === 'cinematic_storyboard') return 16
+  return 16
 }
 
 async function projectAssetReferenceUrl(client: DatabaseClient, storagePath: string, mimeType: string) {
@@ -4553,6 +5665,71 @@ async function executeNode(input: {
           model: 'deterministic-cinematic-asset-pack-v1',
         }
       }
+      if (purpose === 'cinematic_script_authoring') {
+        const config = asRecord(input.node.config)
+        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+        const scriptInput = {
+          context,
+          assetPack,
+          prompt: input.run.prompt,
+          guidance,
+          aspectRatio: readText(config.aspectRatio) || '16:9',
+          resolution: readText(config.resolution) || '720p',
+          presetFamily: readText(config.presetFamily) || 'story_movie_tv',
+          legacyVideoBlockCount: Number(config.legacyVideoBlockCount ?? 0) || null,
+          legacyDurationPerBlockSeconds: Number(config.legacyDurationPerBlockSeconds ?? 0) || null,
+          maxTotalDurationSeconds: Number(config.maxTotalDurationSeconds ?? CINEMATIC_MAX_TOTAL_DURATION_SECONDS) || CINEMATIC_MAX_TOTAL_DURATION_SECONDS,
+        }
+        const fallbackScriptDoc = buildDeterministicCinematicScriptDoc(scriptInput)
+        const model = outputWorkflowTextModel()
+        const response = await runOpenAiResponses({
+          model,
+          instructions: 'You are a cinematic script author and shot director. Return strict JSON for a directed cinematic script only.',
+          input: buildCinematicScriptAuthoringInstruction(scriptInput),
+          text: {
+            format: {
+              type: 'json_schema',
+              name: 'output_workflow_cinematic_script_authoring',
+              schema: cinematicScriptAuthoringJsonSchema,
+              strict: true,
+            },
+          },
+          maxOutputTokens: 9000,
+          metadata: {
+            graphcore_task: 'output_workflow_cinematic_script_authoring',
+            graphcore_node_key: input.node.key,
+          },
+          timeoutMs: 180_000,
+        })
+        const cinematicScriptDoc = response.response.ok
+          ? normalizeCinematicScriptDoc(parseJsonObject(response.outputText), fallbackScriptDoc, assetPack)
+          : fallbackScriptDoc
+        if (cinematicScriptDoc.shots.length === 0) {
+          throw new Error('Cinematic script authoring produced zero shots.')
+        }
+        const totalDurationSeconds = cinematicScriptDoc.shots.reduce((total, shot) => total + (Number(shot.durationSeconds ?? 0) || 0), 0)
+        const text = JSON.stringify(cinematicScriptDoc, null, 2)
+        const outputs = {
+          cinematicScriptDoc,
+          scriptDoc: cinematicScriptDoc,
+          script: cinematicScriptDoc,
+          text,
+          shotCount: cinematicScriptDoc.shots.length,
+          totalDurationSeconds,
+          scriptDurationSource: response.response.ok ? 'authored_script' : 'fallback_script',
+          guidance,
+          usage: response.response.ok ? asRecord(response.body?.usage) : {},
+          providerStatus: response.response.ok ? response.status : 'fallback',
+        }
+        return {
+          inputHash: input.inputHash,
+          outputHash: hashOutputWorkflowValue(outputs),
+          outputs,
+          provider: response.response.ok ? 'openai' : 'graphcore',
+          model: response.response.ok ? model : 'deterministic-cinematic-script-v1',
+          providerRequestId: response.response.ok ? readText(response.body?.id) || response.response.headers.get('x-request-id') || null : null,
+        }
+      }
       if (purpose === 'cinematic_sequence_plan') {
         const config = asRecord(input.node.config)
         const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
@@ -4682,6 +5859,34 @@ async function executeNode(input: {
           provider: response.response.ok ? 'openai' : 'graphcore',
           model: response.response.ok ? model : 'deterministic-cinematic-block-script-v1',
           providerRequestId: response.response.ok ? readText(response.body?.id) || response.response.headers.get('x-request-id') || null : null,
+        }
+      }
+      if (purpose === 'cinematic_atlas_prompt') {
+        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+        const model = outputWorkflowTextModel()
+        const response = await runOpenAiResponses({
+          model,
+          instructions: 'You are a cinematic art director writing GPT Image 2 prompts. Return one prompt only.',
+          input: buildCinematicAtlasPromptInstruction({ context, assetPack, prompt, guidance }),
+          maxOutputTokens: 1200,
+          metadata: {
+            graphcore_task: 'output_workflow_cinematic_atlas_prompt',
+            graphcore_node_key: input.node.key,
+          },
+          timeoutMs: 120_000,
+        })
+        if (!response.response.ok) {
+          throw new Error(openAiErrorMessage(response, `OpenAI cinematic atlas prompt failed with status ${response.response.status}.`))
+        }
+        const atlasPrompt = response.outputText.trim()
+        const outputs = { prompt: atlasPrompt, text: atlasPrompt, assetPack, guidance, usage: asRecord(response.body?.usage) }
+        return {
+          inputHash: input.inputHash,
+          outputHash: hashOutputWorkflowValue(outputs),
+          outputs,
+          provider: 'openai',
+          model,
+          providerRequestId: readText(response.body?.id) || response.response.headers.get('x-request-id') || null,
         }
       }
       if (purpose === 'comic_entity_selector') {
@@ -5210,7 +6415,12 @@ async function executeNode(input: {
       const purpose = readText(config.purpose) || 'image_prompt'
       const role = readText(config.role) || purpose
       const guidance = resolveGuidanceForExecution({ run: input.run, node: input.node, upstream: input.upstream })
-      const prompt = readFirstUpstreamText(input.upstream, ['prompt', 'text'])
+      const keyframePrompts = readFirstUpstreamArray(input.upstream, ['keyframePrompts', 'keyframe_prompts'])
+      const keyframeIndex = Math.max(0, Math.min(2, Number(config.keyframeIndex ?? 0) || 0))
+      const prompt = (purpose === 'cinematic_keyframe' || role === 'cinematic_keyframe'
+        ? readText(keyframePrompts[keyframeIndex]?.prompt)
+        : '')
+        || readFirstUpstreamText(input.upstream, ['prompt', 'text'])
         || readText(input.node.inputs.prompt)
         || input.run.prompt
       if (!prompt) throw new Error('Image generation node is missing a prompt.')
@@ -5229,11 +6439,11 @@ async function executeNode(input: {
       if (!falApiKey) throw new Error('FAL_KEY is not configured for the Fly output workflow worker.')
       const upstreamImages = readUpstreamImages(input.upstream)
       const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-      const referenceLimit = role === 'comic_page' ? 1 : role === 'comic_atlas' ? 8 : 3
-      const referenceImageUrls = [
+      const referenceLimit = referenceLimitForImageNode(config, role)
+      const referenceImageUrls = [...new Set([
         ...(await Promise.all(upstreamImages.map((image) => imageReferenceToFalUrl(input.client, image)))),
         ...(await collectAssetPackReferenceUrls(input.client, input.run, assetPack, referenceLimit)),
-      ].filter(Boolean).slice(0, referenceLimit)
+      ].filter(Boolean))].slice(0, referenceLimit)
       const baseModel = outputWorkflowImageModel(config.model)
       const referenceModel = readText(config.referenceModel) || (baseModel.endsWith('/edit') ? baseModel : `${baseModel}/edit`)
       const model = referenceImageUrls.length > 0
@@ -5245,8 +6455,16 @@ async function executeNode(input: {
       const outputFormat = readText(config.outputFormat)
         || Deno.env.get('OUTPUT_WORKFLOW_IMAGE_OUTPUT_FORMAT')?.trim()
         || resolveOutputImageGenerationOutputFormat()
-      const imageSize = config.imageSize ?? { width: 1792, height: 2688 }
-      const includeProviderGuidance = purpose !== 'cinematic_storyboard' && role !== 'cinematic_storyboard'
+      const upstreamImageSize = readFirstUpstreamRecord(input.upstream, ['imageSize'])
+      const imageSize = (purpose === 'cinematic_storyboard' || role === 'cinematic_storyboard' || purpose === 'cinematic_beat_sheet' || role === 'cinematic_beat_sheet') && Object.keys(upstreamImageSize).length > 0
+        ? upstreamImageSize
+        : config.imageSize ?? { width: 1792, height: 2688 }
+      const includeProviderGuidance = purpose !== 'cinematic_storyboard'
+        && role !== 'cinematic_storyboard'
+        && purpose !== 'cinematic_beat_sheet'
+        && role !== 'cinematic_beat_sheet'
+        && purpose !== 'cinematic_keyframe'
+        && role !== 'cinematic_keyframe'
       const providerPrompt = [
         prompt,
         includeProviderGuidance ? '' : '',
@@ -5293,6 +6511,8 @@ async function executeNode(input: {
       const storagePath = `generated/output-workflows/${input.run.projectId}/${input.run.id}/${slugify(input.node.key)}.${outputFormat}`
       const mimeType = falResult.mimeType || `image/${outputFormat}`
       await uploadBytes(input.client, storagePath, imageBytes, mimeType)
+      const planningOnly = config.planningOnly === true || config.planning_only === true
+      const usedAsVideoReference = config.usedAsVideoReference === true || config.used_as_video_reference === true
       const imageOutput = {
         assetKey,
         storagePath,
@@ -5302,6 +6522,13 @@ async function executeNode(input: {
         prompt,
         providerPrompt,
         role,
+        planningOnly,
+        planning_only: planningOnly,
+        usedAsVideoReference,
+        used_as_video_reference: usedAsVideoReference,
+        takeId: readText(config.takeId) || null,
+        takeIndex: Number(config.takeIndex ?? -1) >= 0 ? Number(config.takeIndex) : null,
+        keyframeIndex: role === 'cinematic_keyframe' ? keyframeIndex : null,
         provider: 'fal',
         model,
         providerRequestId: falResult.requestId,
@@ -5332,6 +6559,13 @@ async function executeNode(input: {
         providerPrompt,
         role,
         purpose,
+        planningOnly,
+        planning_only: planningOnly,
+        usedAsVideoReference,
+        used_as_video_reference: usedAsVideoReference,
+        takeId: readText(config.takeId) || null,
+        takeIndex: Number(config.takeIndex ?? -1) >= 0 ? Number(config.takeIndex) : null,
+        keyframeIndex: role === 'cinematic_keyframe' ? keyframeIndex : null,
         pageNumber: Number(config.pageNumber ?? 0) || null,
         referenceImageCount: referenceImageUrls.length,
         imageSize: normalizeImageSize(imageSize),
@@ -5359,8 +6593,14 @@ async function executeNode(input: {
         name: role === 'ebook_cover' ? `${titleFromContext(worldContextFromRunInput(input.run))} Cover` : input.node.label,
         summary: role === 'ebook_cover'
           ? 'Ebook cover image generated with GPT Image 2 from the world graph.'
-          : role === 'comic_atlas'
-            ? 'Comic style atlas generated from selected world entities.'
+          : role === 'comic_atlas' || role === 'cinematic_atlas'
+            ? 'Reference atlas generated from selected world entities.'
+            : role === 'cinematic_beat_sheet'
+              ? (usedAsVideoReference
+                ? 'Primary cinematic storyboard-grid reference generated from the compiled take timeline.'
+                : 'Planning-only cinematic beat sheet generated from the compiled take timeline.')
+              : role === 'cinematic_keyframe'
+                ? 'Clean cinematic keyframe generated as a Seedance visual reference.'
             : role === 'comic_page'
               ? 'Comic page image generated from comic script and atlas reference.'
               : 'Generated image output from the workflow.',
@@ -5378,6 +6618,13 @@ async function executeNode(input: {
         providerPrompt,
         pageNumber: Number(config.pageNumber ?? 0) || null,
         role,
+        planningOnly,
+        planning_only: planningOnly,
+        usedAsVideoReference,
+        used_as_video_reference: usedAsVideoReference,
+        takeId: readText(config.takeId) || null,
+        takeIndex: Number(config.takeIndex ?? -1) >= 0 ? Number(config.takeIndex) : null,
+        keyframeIndex: role === 'cinematic_keyframe' ? keyframeIndex : null,
         artifact,
         guidance,
       }
@@ -5418,8 +6665,47 @@ async function executeNode(input: {
       const aspectRatio = readText(config.aspectRatio) || '16:9'
       const generateAudio = config.generateAudio !== false
       const syncMode = config.syncMode === true
+      const debugSkipVideoGeneration = debugSkipVideoGenerationEnabled(config, input.run)
+      if (debugSkipVideoGeneration) {
+        const outputs = {
+          video: {
+            skipped: true,
+            debugSkipVideoGeneration: true,
+            skippedReason: 'debug_skip_video_generation',
+            prompt,
+            providerPrompt: prompt,
+            provider: 'graphcore',
+            model: 'debug-skip-video-generation-v1',
+            durationSeconds,
+            aspectRatio,
+            resolution,
+            generateAudio,
+            referenceImageCount: 0,
+            referenceVideoCount: 0,
+            referenceAudioCount: 0,
+            referencePolicy: 'debug_skip_video_generation',
+            role: readText(config.role) || readText(config.purpose) || 'video',
+            blockNumber: Number(config.blockNumber ?? 0) || null,
+          },
+          prompt,
+          providerPrompt: prompt,
+          durationSeconds,
+          debugSkipVideoGeneration: true,
+          skippedReason: 'debug_skip_video_generation',
+          guidance,
+        }
+        return {
+          status: 'skipped',
+          inputHash: input.inputHash,
+          outputHash: hashOutputWorkflowValue(outputs),
+          outputs,
+          provider: 'graphcore',
+          model: 'debug-skip-video-generation-v1',
+        }
+      }
       const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-      const upstreamImages = readUpstreamImages(input.upstream)
+      const cinematicReferenceMode = normalizeCinematicReferenceMode(config.cinematicReferenceMode)
+      const upstreamImages = orderCinematicVideoReferenceImages(readUpstreamImages(input.upstream), cinematicReferenceMode)
       const directImageUrls = (await Promise.all(upstreamImages.map((image) => imageReferenceToFalUrl(input.client, image)))).filter(Boolean)
       const assetPackImageUrls = await collectAssetPackReferenceUrls(input.client, input.run, assetPack, 9)
       const referenceImageUrls = [...new Set([...directImageUrls, ...assetPackImageUrls])].slice(0, 9)
@@ -5437,17 +6723,24 @@ async function executeNode(input: {
         'Provider requirements:',
         '- Generate one finished Seedance 2 reference-to-video clip only.',
         `- Duration must be ${durationSeconds} seconds. Aspect ratio: ${aspectRatio}. Resolution: ${resolution}.`,
-        imageUrls.length > 0 ? `- Reference images are ordered as @Image1 through @Image${imageUrls.length}; @Image1 is usually the storyboard grid.` : '- No image references are attached; use the written continuity anchors in the prompt.',
+        imageUrls.length > 0
+          ? (cinematicReferenceMode === 'keyframes'
+            ? `- Reference images are ordered as @Image1 through @Image${imageUrls.length}; @Image1-@Image3 are clean keyframes when present, then atlas/entity refs.`
+            : `- Reference images are ordered as @Image1 through @Image${imageUrls.length}; @Image1 is the storyboard beat-sheet timing/continuity board, @Image2 is usually the cinematic atlas or next continuity anchor, then any remaining refs.`)
+          : '- No image references are attached; use the written continuity anchors in the prompt.',
         referenceVideoUrls.length > 0 ? `- Reference videos are ordered as @Video1 through @Video${referenceVideoUrls.length}.` : '',
-        referencePolicy !== 'storyboard_and_asset_refs' ? `- Reference fallback mode: ${referencePolicy}. Preserve character continuity from written entity descriptions instead of rejected identity images.` : '',
+        cinematicReferenceMode === 'keyframes' ? '- Beat sheets are planning-only and are not attached in keyframe mode.' : '- A beat sheet is attached as the primary visual reference; follow its panel order while avoiding caption-band, border, gutter, UI, or grid artifacts in the video.',
+        referencePolicy !== (cinematicReferenceMode === 'keyframes' ? 'keyframes_and_asset_refs' : 'storyboard_and_asset_refs') ? `- Reference fallback mode: ${referencePolicy}. Preserve character continuity from written entity descriptions instead of rejected identity images.` : '',
         '- Keep one dominant action path and one coherent camera direction for the clip.',
         imageUrls.length > 0 ? '- Preserve identity, wardrobe, environment, product, and prop continuity from references.' : '- Preserve identity, wardrobe, environment, product, and prop continuity from written descriptions.',
         '- Do not include GraphCore, workflow, node, schema, or internal ID wording in visible text.',
       ].filter(Boolean).join('\n')
-      const storyboardOnlyUrls = directImageUrls.slice(0, 1)
+      const primaryReferenceOnlyUrls = cinematicReferenceMode === 'keyframes'
+        ? directImageUrls.slice(0, 3)
+        : directImageUrls.slice(0, 1)
       const referenceAttempts = [
-        { policy: 'storyboard_and_asset_refs', imageUrls: referenceImageUrls },
-        { policy: 'storyboard_only', imageUrls: storyboardOnlyUrls },
+        { policy: cinematicReferenceMode === 'keyframes' ? 'keyframes_and_asset_refs' : 'storyboard_and_asset_refs', imageUrls: referenceImageUrls },
+        { policy: cinematicReferenceMode === 'keyframes' ? 'keyframes_only' : 'storyboard_only', imageUrls: primaryReferenceOnlyUrls },
         { policy: 'text_only_no_image_refs', imageUrls: [] },
       ].filter((attempt, index, attempts) => (
         index === attempts.findIndex((candidate) => candidate.policy === attempt.policy
@@ -5458,7 +6751,7 @@ async function executeNode(input: {
       let falResult: Awaited<ReturnType<typeof waitForOutputFalVideo>> | null = null
       let providerPrompt = ''
       let usedReferenceImageUrls = referenceImageUrls
-      let referencePolicy = 'storyboard_and_asset_refs'
+      let referencePolicy = cinematicReferenceMode === 'keyframes' ? 'keyframes_and_asset_refs' : 'storyboard_and_asset_refs'
       for (let attemptIndex = startAttemptIndex; attemptIndex < referenceAttempts.length; attemptIndex += 1) {
         const attempt = referenceAttempts[attemptIndex]
         providerPrompt = buildProviderPrompt(attempt.imageUrls, attempt.policy)
@@ -5499,6 +6792,7 @@ async function executeNode(input: {
                   referenceVideoCount: referenceVideoUrls.length,
                   referenceAudioCount: referenceAudioUrls.length,
                   referencePolicy: attempt.policy,
+                  cinematicReferenceMode,
                 },
               })
             },
@@ -5544,6 +6838,7 @@ async function executeNode(input: {
         referenceVideoCount: referenceVideoUrls.length,
         referenceAudioCount: referenceAudioUrls.length,
         referencePolicy,
+        cinematicReferenceMode,
         byteSize: videoBytes.byteLength,
         storageBucket: 'project-assets',
         storagePath,
@@ -5581,6 +6876,7 @@ async function executeNode(input: {
           referenceVideoCount: referenceVideoUrls.length,
           referenceAudioCount: referenceAudioUrls.length,
           referencePolicy,
+          cinematicReferenceMode,
           role: readText(config.role) || readText(config.purpose) || 'video',
           blockNumber: Number(config.blockNumber ?? 0) || null,
         },
@@ -5604,26 +6900,107 @@ async function executeNode(input: {
     }
     case 'utility_transform': {
       const purpose = readText(asRecord(input.node.config).purpose)
-      if (purpose === 'cinematic_storyboard_prompt') {
+      if (purpose === 'cinematic_sequence_compile') {
         const config = asRecord(input.node.config)
-        const blockScript = readFirstUpstreamRecord(input.upstream, ['blockScript', 'block_script', 'script'])
-        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+        const scriptDoc = readFirstUpstreamRecord(input.upstream, ['cinematicScriptDoc', 'scriptDoc'])
+        if (Object.keys(scriptDoc).length === 0) {
+          throw new Error('Cinematic sequence compile requires an authored cinematic script document.')
+        }
+        const compiled = compileCinematicScriptDocForOutput({
+          scriptDoc,
+          maxDynamicTakes: Number(config.maxDynamicTakes ?? 6) || 6,
+          maxTotalDurationSeconds: Number(config.maxTotalDurationSeconds ?? CINEMATIC_MAX_TOTAL_DURATION_SECONDS) || CINEMATIC_MAX_TOTAL_DURATION_SECONDS,
+        })
         const guidance = readUpstreamGuidanceBundle(input.upstream)
-        const gridDimension = Math.max(3, Math.min(4, Number(config.gridDimension ?? 3) || 3))
-        const storyboardPrompt = buildCinematicStoryboardPrompt({
+        const outputs = {
+          ...compiled,
+          guidance,
+          text: JSON.stringify({
+            dynamicTakeCount: compiled.dynamicTakeCount,
+            totalDurationSeconds: compiled.totalDurationSeconds,
+            diagnostics: compiled.diagnostics,
+          }, null, 2),
+          deterministic: true,
+        }
+        return {
+          inputHash: input.inputHash,
+          outputHash: hashOutputWorkflowValue(outputs),
+          outputs,
+          provider: 'graphcore',
+          model: 'deterministic-cinematic-sequence-compile-v1',
+        }
+      }
+      if (purpose === 'cinematic_dynamic_take_fanout') {
+        const config = asRecord(input.node.config)
+        const compileOutputs = Object.values(input.upstream).find((outputs) => {
+          const record = asRecord(outputs)
+          return Array.isArray(record.takePlan) && Object.keys(asRecord(record.compiledCinematicSequence)).length > 0
+        })
+        if (!compileOutputs) {
+          throw new Error('Cinematic dynamic fanout requires compiled take outputs.')
+        }
+        const result = await materializeDynamicCinematicTakeFanout({
+          client: input.client,
+          workflow: input.workflow,
+          compileOutputs: asRecord(compileOutputs),
+          config,
+        })
+        const outputs = {
+          dynamicGraphExpanded: result.expanded,
+          graphExpanded: result.expanded,
+          compileHash: result.compileHash,
+          dynamicTakeCount: result.takeCount,
+          text: result.expanded
+            ? `Materialized ${result.takeCount} cinematic take workflows.`
+            : `Cinematic take workflows already materialized for ${result.takeCount} takes.`,
+          deterministic: true,
+        }
+        return {
+          inputHash: input.inputHash,
+          outputHash: hashOutputWorkflowValue(outputs),
+          outputs,
+          provider: 'graphcore',
+          model: 'deterministic-cinematic-dynamic-take-fanout-v1',
+        }
+      }
+      if (purpose === 'cinematic_beat_sheet_prompt') {
+        const config = asRecord(input.node.config)
+        let blockScript = readFirstUpstreamRecord(input.upstream, ['blockScript', 'block_script', 'script'])
+        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+        if (!Array.isArray(blockScript.shots) || blockScript.shots.length === 0) {
+          const compileOutputs = Object.values(input.upstream).find((outputs) => {
+            const record = asRecord(outputs)
+            return Array.isArray(record.takePlan) && Object.keys(asRecord(record.compiledCinematicSequence)).length > 0
+          })
+          if (!compileOutputs) throw new Error('Cinematic beat sheet prompt requires a block script or compiled take output.')
+          blockScript = buildTakeBlockScriptFromCompiledSequence({
+            compiledCinematicSequence: asRecord(asRecord(compileOutputs).compiledCinematicSequence),
+            takePlan: Array.isArray(asRecord(compileOutputs).takePlan) ? asRecord(compileOutputs).takePlan.map(asRecord) : [],
+            takeId: readText(config.takeId),
+            takeIndex: Number(config.takeIndex ?? 0) || 0,
+            assetPack,
+          })
+        }
+        const guidance = readUpstreamGuidanceBundle(input.upstream)
+        const aspectRatio = readText(config.aspectRatio) || readText(blockScript.aspectRatio) || '16:9'
+        const beatSheet = buildCinematicBeatSheetPrompt({
           blockScript,
           assetPack,
-          gridDimension,
+          aspectRatio,
           prompt: input.run.prompt,
           guidance,
         })
         const outputs = {
-          prompt: storyboardPrompt,
-          text: storyboardPrompt,
+          prompt: beatSheet.prompt,
+          text: beatSheet.prompt,
           blockScript,
           assetPack,
-          gridDimension,
-          panelCount: gridDimension * gridDimension,
+          beatSheetPlan: beatSheet.beatSheetPlan,
+          planningOnly: true,
+          planning_only: true,
+          aspectRatio,
+          panelAspectRatio: aspectRatio,
+          imageSize: beatSheet.imageSize,
           guidance,
           deterministic: true,
         }
@@ -5632,19 +7009,136 @@ async function executeNode(input: {
           outputHash: hashOutputWorkflowValue(outputs),
           outputs,
           provider: 'graphcore',
-          model: 'deterministic-cinematic-storyboard-prompt-v1',
+          model: 'deterministic-cinematic-beat-sheet-prompt-v1',
+        }
+      }
+      if (purpose === 'cinematic_keyframe_prompt_pack') {
+        const config = asRecord(input.node.config)
+        let blockScript = readFirstUpstreamRecord(input.upstream, ['blockScript', 'block_script', 'script'])
+        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+        if (!Array.isArray(blockScript.shots) || blockScript.shots.length === 0) {
+          const compileOutputs = Object.values(input.upstream).find((outputs) => {
+            const record = asRecord(outputs)
+            return Array.isArray(record.takePlan) && Object.keys(asRecord(record.compiledCinematicSequence)).length > 0
+          })
+          if (!compileOutputs) throw new Error('Cinematic keyframe prompt pack requires a block script or compiled take output.')
+          blockScript = buildTakeBlockScriptFromCompiledSequence({
+            compiledCinematicSequence: asRecord(asRecord(compileOutputs).compiledCinematicSequence),
+            takePlan: Array.isArray(asRecord(compileOutputs).takePlan) ? asRecord(compileOutputs).takePlan.map(asRecord) : [],
+            takeId: readText(config.takeId),
+            takeIndex: Number(config.takeIndex ?? 0) || 0,
+            assetPack,
+          })
+        }
+        const guidance = readUpstreamGuidanceBundle(input.upstream)
+        const aspectRatio = readText(config.aspectRatio) || readText(blockScript.aspectRatio) || '16:9'
+        const keyframes = buildCinematicKeyframePromptPack({
+          blockScript,
+          assetPack,
+          aspectRatio,
+          prompt: input.run.prompt,
+        })
+        const outputs = {
+          prompt: keyframes.keyframePrompts[0]?.prompt ?? '',
+          text: keyframes.keyframePrompts.map((entry) => `${entry.referenceName} ${entry.label}\n${entry.prompt}`).join('\n\n'),
+          blockScript,
+          assetPack,
+          keyframePlan: keyframes.keyframePlan,
+          keyframePrompts: keyframes.keyframePrompts,
+          aspectRatio,
+          imageSize: keyframeImageSizeForAspectRatio(aspectRatio),
+          guidance,
+          deterministic: true,
+        }
+        return {
+          inputHash: input.inputHash,
+          outputHash: hashOutputWorkflowValue(outputs),
+          outputs,
+          provider: 'graphcore',
+          model: 'deterministic-cinematic-keyframe-prompt-pack-v1',
+        }
+      }
+      if (purpose === 'cinematic_storyboard_prompt') {
+        const config = asRecord(input.node.config)
+        let blockScript = readFirstUpstreamRecord(input.upstream, ['blockScript', 'block_script', 'script'])
+        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+        if (!Array.isArray(blockScript.shots) || blockScript.shots.length === 0) {
+          const compileOutputs = Object.values(input.upstream).find((outputs) => {
+            const record = asRecord(outputs)
+            return Array.isArray(record.takePlan) && Object.keys(asRecord(record.compiledCinematicSequence)).length > 0
+          })
+          if (!compileOutputs) throw new Error('Cinematic storyboard prompt requires a block script or compiled take output.')
+          blockScript = buildTakeBlockScriptFromCompiledSequence({
+            compiledCinematicSequence: asRecord(asRecord(compileOutputs).compiledCinematicSequence),
+            takePlan: Array.isArray(asRecord(compileOutputs).takePlan) ? asRecord(compileOutputs).takePlan.map(asRecord) : [],
+            takeId: readText(config.takeId),
+            takeIndex: Number(config.takeIndex ?? 0) || 0,
+            assetPack,
+          })
+        }
+        const guidance = readUpstreamGuidanceBundle(input.upstream)
+        const shots = Array.isArray(blockScript.shots) ? blockScript.shots.map(asRecord) : []
+        const aspectRatio = readText(config.aspectRatio) || readText(blockScript.aspectRatio) || '16:9'
+        const layout = storyboardLayoutForShotCount(shots.length || Number(config.panelCount ?? 0) || 1)
+        const imageSize = storyboardImageSizeForLayout({
+          columns: layout.columns,
+          rows: layout.rows,
+          aspectRatio,
+        })
+        const storyboardPrompt = buildCinematicStoryboardPrompt({
+          blockScript,
+          assetPack,
+          aspectRatio,
+          prompt: input.run.prompt,
+          guidance,
+        })
+        const outputs = {
+          prompt: storyboardPrompt,
+          text: storyboardPrompt,
+          blockScript,
+          assetPack,
+          storyboardLayout: layout,
+          gridDimension: Math.max(layout.columns, layout.rows),
+          gridColumns: layout.columns,
+          gridRows: layout.rows,
+          panelCount: layout.panelCount,
+          aspectRatio,
+          panelAspectRatio: aspectRatio,
+          imageSize,
+          guidance,
+          deterministic: true,
+        }
+        return {
+          inputHash: input.inputHash,
+          outputHash: hashOutputWorkflowValue(outputs),
+          outputs,
+          provider: 'graphcore',
+          model: 'deterministic-cinematic-storyboard-prompt-v2',
         }
       }
       if (purpose === 'cinematic_video_prompt') {
         const config = asRecord(input.node.config)
-        const blockScript = readFirstUpstreamRecord(input.upstream, ['blockScript', 'block_script', 'script'])
+        let blockScript = readFirstUpstreamRecord(input.upstream, ['blockScript', 'block_script', 'script'])
         const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+        if (!Array.isArray(blockScript.shots) || blockScript.shots.length === 0) {
+          const compileOutputs = Object.values(input.upstream).find((outputs) => {
+            const record = asRecord(outputs)
+            return Array.isArray(record.takePlan) && Object.keys(asRecord(record.compiledCinematicSequence)).length > 0
+          })
+          if (!compileOutputs) throw new Error('Cinematic video prompt requires a block script or compiled take output.')
+          blockScript = buildTakeBlockScriptFromCompiledSequence({
+            compiledCinematicSequence: asRecord(asRecord(compileOutputs).compiledCinematicSequence),
+            takePlan: Array.isArray(asRecord(compileOutputs).takePlan) ? asRecord(compileOutputs).takePlan.map(asRecord) : [],
+            takeId: readText(config.takeId),
+            takeIndex: Number(config.takeIndex ?? 0) || 0,
+            assetPack,
+          })
+        }
         const guidance = readUpstreamGuidanceBundle(input.upstream)
-        const upstreamImages = readUpstreamImages(input.upstream)
-        const packedEntities = Array.isArray(assetPack.entities) ? assetPack.entities.map(asRecord) : []
-        const assetReferenceCount = new Set(packedEntities.flatMap((entity) => readStringArray(entity.assetKeys))).size
-        const referenceImageCount = Math.min(9, Math.max(1, upstreamImages.length + assetReferenceCount))
-        const durationSeconds = Math.max(4, Math.min(15, Number(config.durationSeconds ?? 8) || 8))
+        const cinematicReferenceMode = normalizeCinematicReferenceMode(config.cinematicReferenceMode)
+        const upstreamImages = orderCinematicVideoReferenceImages(readUpstreamImages(input.upstream), cinematicReferenceMode)
+        const referenceImageCount = Math.min(9, upstreamImages.length)
+        const durationSeconds = Math.max(4, Math.min(15, Number(config.durationSeconds ?? blockScript.durationSeconds ?? 8) || 8))
         const videoPrompt = buildCinematicVideoPrompt({
           blockScript,
           assetPack,
@@ -5655,6 +7149,7 @@ async function executeNode(input: {
           resolution: readText(config.resolution) || '720p',
           generateAudio: config.generateAudio !== false,
           referenceImageCount,
+          cinematicReferenceMode,
         })
         const outputs = {
           prompt: videoPrompt,
@@ -5663,6 +7158,7 @@ async function executeNode(input: {
           assetPack,
           durationSeconds,
           referenceImageCount,
+          cinematicReferenceMode,
           guidance,
           deterministic: true,
         }
@@ -5675,7 +7171,33 @@ async function executeNode(input: {
         }
       }
       if (purpose === 'video_stitch') {
+        const config = asRecord(input.node.config)
         const videos = collectCinematicBlockVideos(input.upstream)
+        if (videos.length === 0 && (debugSkipVideoGenerationEnabled(config, input.run) || upstreamHasDebugSkippedVideo(input.upstream))) {
+          const video = {
+            skipped: true,
+            debugSkipVideoGeneration: true,
+            skippedReason: 'debug_skip_video_generation',
+            provider: 'graphcore',
+            model: 'debug-skip-video-stitch-v1',
+            role: 'cinematic_sequence_final',
+            sourceVideoCount: 0,
+          }
+          const outputs = {
+            video,
+            videos: [],
+            debugSkipVideoGeneration: true,
+            skippedReason: 'debug_skip_video_generation',
+          }
+          return {
+            status: 'skipped',
+            inputHash: input.inputHash,
+            outputHash: hashOutputWorkflowValue(outputs),
+            outputs,
+            provider: 'graphcore',
+            model: 'debug-skip-video-stitch-v1',
+          }
+        }
         const stitchResult = await stitchVideoBytes({ client: input.client, videos })
         const assetKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.${slugify(input.node.key)}`
         const storagePath = `generated/output-workflows/${input.run.projectId}/${input.run.id}/${slugify(input.node.key)}.mp4`
@@ -5866,6 +7388,25 @@ async function executeNode(input: {
       if (purpose === 'cinematic_video_artifact') {
         const video = readFirstUpstreamRecord(input.upstream, ['video'])
         const artifact = readFirstUpstreamRecord(input.upstream, ['artifact'])
+        if (video.debugSkipVideoGeneration === true || video.skippedReason === 'debug_skip_video_generation') {
+          const outputs = {
+            artifactKey: '',
+            assetKey: '',
+            artifact: {},
+            artifacts: [],
+            video,
+            debugSkipVideoGeneration: true,
+            skippedReason: 'debug_skip_video_generation',
+          }
+          return {
+            status: 'skipped',
+            inputHash: input.inputHash,
+            outputHash: hashOutputWorkflowValue(outputs),
+            outputs,
+            provider: 'graphcore',
+            model: 'debug-skip-cinematic-video-artifact-v1',
+          }
+        }
         const assetKey = readText(video.assetKey) || readText(artifact.assetKey)
         if (!assetKey) throw new Error('Cinematic video artifact requires a stitched video input.')
         const outputs = {
@@ -5964,9 +7505,10 @@ export async function processFlyOutputWorkflowRuns(input: {
   const runId = typeof claimResponse.data === 'string' ? claimResponse.data : ''
   if (!runId) return { processed: false, run: null }
 
-  const bundle = await loadOutputWorkflowRunBundle(input.client, runId)
+  let bundle = await loadOutputWorkflowRunBundle(input.client, runId)
 
   try {
+    for (let dynamicPass = 0; dynamicPass < 4; dynamicPass += 1) {
     const validation = validateOutputWorkflowGraph({ nodes: bundle.nodes, edges: bundle.edges })
     if (!validation.ok) {
       throw new Error(validation.diagnostics.join(' '))
@@ -6175,7 +7717,8 @@ export async function processFlyOutputWorkflowRuns(input: {
           provider: result.provider,
           model: result.model,
           providerRequestId: result.providerRequestId,
-          skipped: false,
+          skipped: result.status === 'skipped',
+          skippedReason: result.status === 'skipped' ? readText(asRecord(result.outputs).skippedReason) || 'node_reported_skipped' : undefined,
           reusedNodeKeys: cachedExternalUpstream.reusedNodeKeys,
           staleReusedNodeKeys: cachedExternalUpstream.staleReusedNodeKeys,
           sourceRunIds: cachedExternalUpstream.sourceRunIds,
@@ -6350,6 +7893,18 @@ export async function processFlyOutputWorkflowRuns(input: {
     if (schedulerResult.status === 'failed') {
       throw new Error('Output workflow failed while executing required nodes.')
     }
+    const fanoutOutputs = asRecord(schedulerResult.outputsByNodeKey.cinematic_dynamic_take_fanout)
+    const dynamicGraphExpanded = fanoutOutputs.dynamicGraphExpanded === true || fanoutOutputs.graphExpanded === true
+    if (dynamicGraphExpanded && !schedulerResult.skipped.includes('cinematic_dynamic_take_fanout')) {
+      await heartbeat(input.client, runId, input.workerId, {
+        runtime: 'fly_output_workflow_worker',
+        stage: 'dynamic_cinematic_take_fanout_materialized',
+        dynamicTakeCount: Number(fanoutOutputs.dynamicTakeCount ?? 0) || null,
+        compileHash: readText(fanoutOutputs.compileHash) || null,
+      })
+      bundle = await loadOutputWorkflowRunBundle(input.client, runId)
+      continue
+    }
 
     const finalOutputs = {
       nodes: schedulerResult.outputsByNodeKey,
@@ -6378,6 +7933,8 @@ export async function processFlyOutputWorkflowRuns(input: {
     })
     if (completeResponse.error) throw new Error(completeResponse.error.message)
     return { processed: true, run: { id: bundle.run.id, status: schedulerResult.status, preset: bundle.run.preset } }
+    }
+    throw new Error('Cinematic dynamic workflow expansion did not settle after 4 scheduler passes.')
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     await input.client.rpc('fail_output_workflow_run', {

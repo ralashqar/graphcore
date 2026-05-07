@@ -4,11 +4,87 @@ import assert from 'node:assert/strict'
 
 import {
   buildCharacterConceptPrompt,
+  buildCharacterReferenceSheetPrompt,
+  buildGroupReferenceSheetPrompt,
+  buildItemReferenceSheetPrompt,
+  buildLocationReferenceSheetPrompt,
   buildItemConceptPrompt,
   normalizeCharacterConceptArtMode,
   resolveCharacterConceptVariantSet,
   resolveConceptImageAspectRatio,
 } from './visualAssetGeneration.ts'
+
+const referenceSheetBase = {
+  entityName: 'Eva-9',
+  entitySummary: 'A synthetic singer in Skybridge Garden.',
+  entityContext: 'Appears in a neon rain sci-fi world.',
+  projectArtStyle: 'cinematic realism with restrained cyberpunk color',
+  projectTone: 'melancholic, romantic, high tension',
+  visualDescription: 'porcelain android with silver hair and translucent facial seams',
+  visualTraits: ['synthetic adult', 'slender build', 'silver bob hair', 'cool blue palette'],
+  visualTraitMap: { hair: 'silver bob', materials: 'porcelain shell and brushed chrome' },
+  referenceAssetNotes: ['existing thumbnail locks face and hair silhouette'],
+}
+
+test('character reference sheet prompt uses simplified low-quality-safe turnaround sections', () => {
+  const prompt = buildCharacterReferenceSheetPrompt(referenceSheetBase)
+
+  assert.match(prompt, /CHARACTER TURNAROUND REFERENCE SHEET/i)
+  assert.match(prompt, /4:3 horizontal layout/i)
+  assert.match(prompt, /front, 3\/4 front, side profile, and back/i)
+  assert.match(prompt, /HEAD AND IDENTITY DETAILS/i)
+  assert.match(prompt, /FEATURE CALLOUTS/i)
+  assert.match(prompt, /cinematic chest-up or shoulder-up profile close-up/i)
+  assert.match(prompt, /Do not include expression grids/i)
+  assert.match(prompt, /hand gesture sheets/i)
+  assert.match(prompt, /Project art style:/i)
+  assert.match(prompt, /Visual traits:/i)
+  assert.doesNotMatch(prompt, /MICRO EXPRESSIONS/i)
+  assert.doesNotMatch(prompt, /EXPRESSION PROGRESSION/i)
+})
+
+test('location reference sheet prompt requests square multi-view sheet with map view', () => {
+  const prompt = buildLocationReferenceSheetPrompt({
+    ...referenceSheetBase,
+    entityName: 'Skybridge Garden',
+    includeMapView: true,
+  })
+
+  assert.match(prompt, /2048x2048 square/i)
+  assert.match(prompt, /cinematic establishing view/i)
+  assert.match(prompt, /entrance\/threshold view/i)
+  assert.match(prompt, /top-down or isometric map view/i)
+  assert.match(prompt, /key feature highlights/i)
+  assert.match(prompt, /cinematic profile-like hero panel/i)
+})
+
+test('group reference sheet prompt focuses on faction visual identity system', () => {
+  const prompt = buildGroupReferenceSheetPrompt({
+    ...referenceSheetBase,
+    entityName: 'The Glass Choir',
+  })
+
+  assert.match(prompt, /MASTER GROUP \/ FACTION DESIGN SHEET/i)
+  assert.match(prompt, /emblem or sigil/i)
+  assert.match(prompt, /uniform or dress-code/i)
+  assert.match(prompt, /representative member silhouettes/i)
+  assert.match(prompt, /cinematic close-up\/profile panel/i)
+  assert.match(prompt, /not every individual member/i)
+})
+
+test('item reference sheet prompt includes rotation, material, in-use, and close-up panels', () => {
+  const prompt = buildItemReferenceSheetPrompt({
+    ...referenceSheetBase,
+    entityName: 'Archive Key',
+  })
+
+  assert.match(prompt, /MASTER ITEM \/ PROP DESIGN SHEET/i)
+  assert.match(prompt, /front\/side\/back or 3\/4 rotation views/i)
+  assert.match(prompt, /scale reference/i)
+  assert.match(prompt, /material callouts/i)
+  assert.match(prompt, /in-hand or in-use view/i)
+  assert.match(prompt, /cinematic close-up\/profile panel/i)
+})
 
 test('character design-sheet prompts replace showcase t-pose sheets', () => {
   const prompt = buildCharacterConceptPrompt({

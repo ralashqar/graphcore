@@ -5,6 +5,7 @@ import { getResolvedDefinition3dBinding } from '../domain/render3d'
 import { definitionKindForWorldEntity, getLinkedWorldEntityForDefinition, getWorldRelationshipsForDefinition } from '../domain/worldGraphHelpers'
 import { getResourceGenerationMetadata, isPendingGenerationResource } from '../domain/worldBuild'
 import type { MeshGenerationJob } from '../domain/meshGeneration'
+import type { VisualGenerationStatusResponse } from '../domain/visualGeneration'
 import { useEditorStore } from '../state/editorStore'
 import { EntityIcon, iconForDefinitionKind } from '../shared/entityIcons'
 import { ArchetypeEditor } from './content/ArchetypeEditor'
@@ -86,6 +87,9 @@ export function ContentWorkspace({
   onSelectArchetype: _onSelectArchetype,
   onSelectItem,
   onGenerateConceptImage,
+  onGenerateReferenceSheet,
+  onGetVisualGenerationStatus,
+  onReferenceSheetJobFinished,
   isGeneratingPrompt = false,
   onChangePromptText: onChangePromptTextProp,
   onGeneratePrompt,
@@ -117,6 +121,7 @@ export function ContentWorkspace({
   const [itemFilterKind, setItemFilterKind] = useState<DefinitionKindFilter>('all')
   const [itemConceptMessage, setItemConceptMessage] = useState<string | null>(null)
   const [itemConceptPending, setItemConceptPending] = useState(false)
+  const [itemReferenceSheetJob, setItemReferenceSheetJob] = useState<VisualGenerationStatusResponse['job'] | null>(null)
   const [isItemImagePickerOpen, setIsItemImagePickerOpen] = useState(false)
   const [isItemPreviewOpen, setIsItemPreviewOpen] = useState(false)
 
@@ -244,7 +249,8 @@ export function ContentWorkspace({
   }, [meshJobByDefinitionKey, selectedContentItem])
 
   const isItemConceptAssetPending = isPendingGenerationResource(selectedItemPreviewAsset)
-  const isItemConceptBusy = itemConceptPending || isItemConceptAssetPending
+  const isItemReferenceSheetBusy = itemReferenceSheetJob ? ['queued', 'running'].includes(itemReferenceSheetJob.status) : false
+  const isItemConceptBusy = itemConceptPending || isItemConceptAssetPending || isItemReferenceSheetBusy
   const supportsItem3dPanel = selectedContentItem?.kind === 'item'
   const hasSelectedItemGenerationFailed = getResourceGenerationMetadata(selectedContentItem)?.state === 'failed'
 
@@ -262,9 +268,44 @@ export function ContentWorkspace({
 
   useEffect(() => {
     setItemConceptMessage(null)
+    setItemReferenceSheetJob(null)
     setIsItemImagePickerOpen(false)
     setIsItemPreviewOpen(false)
   }, [selectedContentItem?.key])
+
+  useEffect(() => {
+    if (!itemReferenceSheetJob || !['queued', 'running'].includes(itemReferenceSheetJob.status) || !onGetVisualGenerationStatus) return
+    let disposed = false
+    let refreshed = false
+    const poll = async () => {
+      try {
+        const status = await onGetVisualGenerationStatus(itemReferenceSheetJob.id)
+        if (disposed) return
+        setItemReferenceSheetJob(status.job)
+        if (['queued', 'running'].includes(status.job.status)) {
+          setItemConceptMessage(status.job.status === 'queued' ? 'Reference sheet queued.' : 'Reference sheet generating.')
+          return
+        }
+        setItemConceptMessage(status.job.status === 'completed' || status.job.status === 'completed_with_errors'
+          ? 'Reference sheet generated.'
+          : status.job.errorMessage || `Reference sheet ${status.job.status}.`)
+        if (!refreshed && ['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(status.job.status)) {
+          refreshed = true
+          await onReferenceSheetJobFinished?.()
+        }
+      } catch (error) {
+        if (!disposed) {
+          setItemConceptMessage(error instanceof Error ? error.message : 'Could not refresh reference sheet status.')
+        }
+      }
+    }
+    void poll()
+    const intervalId = window.setInterval(() => void poll(), 2500)
+    return () => {
+      disposed = true
+      window.clearInterval(intervalId)
+    }
+  }, [itemReferenceSheetJob, onGetVisualGenerationStatus, onReferenceSheetJobFinished])
 
   function updateSelectedItemRenderBinding(changes: Partial<NonNullable<typeof selectedItemRenderBinding>>) {
     if (!selectedContentItem || !selectedItemRenderBinding) return
@@ -292,7 +333,12 @@ export function ContentWorkspace({
   }
 
   async function handleGenerateItemConcept() {
-    if (!selectedContentItem || !selectedItemRenderBinding) return
+    if (!selectedContentItem) return
+    if (linkedWorldEntity && onGenerateReferenceSheet) {
+      await handleGenerateItemReferenceSheet()
+      return
+    }
+    if (!selectedItemRenderBinding) return
     const conceptPrompt = selectedItemRenderBinding.conceptPrompt?.trim() ?? ''
     if (!conceptPrompt) return
 
@@ -304,6 +350,25 @@ export function ContentWorkspace({
       setItemConceptMessage('Concept image generation queued.')
     } catch (error) {
       setItemConceptMessage(error instanceof Error ? error.message : 'Concept image generation failed.')
+    } finally {
+      setItemConceptPending(false)
+    }
+  }
+
+  async function handleGenerateItemReferenceSheet() {
+    if (!selectedContentItem || !linkedWorldEntity || !onGenerateReferenceSheet) return
+
+    setItemConceptPending(true)
+    setItemConceptMessage(null)
+
+    try {
+      const response = await onGenerateReferenceSheet(selectedContentItem.key)
+      if (response?.job) {
+        setItemReferenceSheetJob(response.job)
+      }
+      setItemConceptMessage('Reference sheet queued.')
+    } catch (error) {
+      setItemConceptMessage(error instanceof Error ? error.message : 'Reference sheet generation failed.')
     } finally {
       setItemConceptPending(false)
     }
@@ -576,11 +641,11 @@ export function ContentWorkspace({
               <div className="definition-focus-action-row">
                 <button
                   className={isItemConceptBusy ? 'primary-button button-with-spinner' : 'primary-button'}
-                  disabled={isItemConceptBusy || !(selectedItemRenderBinding?.conceptPrompt?.trim())}
+                  disabled={isItemConceptBusy || (!linkedWorldEntity && !(selectedItemRenderBinding?.conceptPrompt?.trim()))}
                   onClick={() => void handleGenerateItemConcept()}
                   type="button"
                 >
-                  {isItemConceptBusy ? <><span className="button-spinner" aria-hidden="true" />Generating...</> : 'Generate concept image'}
+                  {isItemConceptBusy ? <><span className="button-spinner" aria-hidden="true" />{isItemReferenceSheetBusy ? 'Generating sheet...' : 'Generating...'}</> : linkedWorldEntity && onGenerateReferenceSheet ? 'Generate reference sheet' : 'Generate concept image'}
                 </button>
                 {supportsItem3dPanel ? (
                   <button className={itemPanelMode === '3d' ? 'ghost-button compact is-selected' : 'ghost-button compact'} onClick={() => setItemPanelMode('3d')} type="button">

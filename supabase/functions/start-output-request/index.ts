@@ -63,7 +63,7 @@ function stringArrayFromUnknown(value: unknown) {
 function outputRequestPlannerModel() {
   return Deno.env.get('OUTPUT_REQUEST_PLANNER_MODEL')?.trim()
     || Deno.env.get('OUTPUT_WORKFLOW_TEXT_MODEL')?.trim()
-    || 'gpt-4.1-mini'
+    || 'gpt-5.4'
 }
 
 function isImageOutputKind(outputKind: string) {
@@ -278,6 +278,8 @@ Deno.serve(async (request) => {
       || planner.outputKind === 'cinematic_trailer'
       || planner.outputKind === 'ugc_episode'
     const effectivePageCount = comicOutput ? payload.pageCount ?? 8 : null
+    const debugSkipVideoGeneration = payload.debugSkipVideoGeneration ?? true
+    const cinematicReferenceMode = payload.cinematicReferenceMode ?? 'storyboard_sheet'
     const requestInsertResponse = await client
       .from('output_requests')
       .insert({
@@ -309,6 +311,8 @@ Deno.serve(async (request) => {
               videoResolution: payload.videoResolution ?? null,
               generateAudio: payload.generateAudio ?? null,
               cinematicPresetFamily: payload.cinematicPresetFamily ?? null,
+              cinematicReferenceMode,
+              debugSkipVideoGeneration,
             }
             : null,
         },
@@ -354,6 +358,8 @@ Deno.serve(async (request) => {
       videoResolution: payload.videoResolution,
       generateAudio: payload.generateAudio,
       cinematicPresetFamily: payload.cinematicPresetFamily,
+      cinematicReferenceMode,
+      debugSkipVideoGeneration,
       snapshot: payload.snapshot,
     }, planner.outputKind)
     const validation = validateOutputWorkflowGraph({ nodes: plan.nodes, edges: plan.edges })
@@ -394,6 +400,8 @@ Deno.serve(async (request) => {
               videoResolution: payload.videoResolution ?? null,
               generateAudio: payload.generateAudio ?? null,
               cinematicPresetFamily: payload.cinematicPresetFamily ?? null,
+              cinematicReferenceMode,
+              debugSkipVideoGeneration,
             }
             : null,
           usageEstimate: plan.usageEstimate ?? null,
@@ -463,6 +471,8 @@ Deno.serve(async (request) => {
           videoResolution: payload.videoResolution ?? null,
           generateAudio: payload.generateAudio ?? true,
           cinematicPresetFamily: payload.cinematicPresetFamily ?? null,
+          cinematicReferenceMode,
+          debugSkipVideoGeneration,
         }
         : {}),
     }
@@ -499,6 +509,8 @@ Deno.serve(async (request) => {
               videoResolution: payload.videoResolution ?? null,
               generateAudio: payload.generateAudio ?? null,
               cinematicPresetFamily: payload.cinematicPresetFamily ?? null,
+              cinematicReferenceMode,
+              debugSkipVideoGeneration,
             }
             : null,
           usageEstimate: plan.usageEstimate ?? null,
@@ -568,6 +580,8 @@ Deno.serve(async (request) => {
               videoResolution: payload.videoResolution ?? null,
               generateAudio: payload.generateAudio ?? null,
               cinematicPresetFamily: payload.cinematicPresetFamily ?? null,
+              cinematicReferenceMode,
+              debugSkipVideoGeneration,
             }
             : null,
           usageEstimate: plan.usageEstimate ?? null,

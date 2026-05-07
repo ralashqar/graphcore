@@ -101,6 +101,7 @@ test('estimates output workflow text image and video nodes', () => {
   })
 
   assert.equal(summary.lines.length, 3)
+  assert.equal(summary.lines.find((line) => line.nodeKey === 'script')?.model, 'gpt-5.4')
   assert.ok(summary.estimatedCostUsd > 0)
   assert.ok(summary.totalTokens > 0)
   assert.equal(summary.mediaUnits, 6)

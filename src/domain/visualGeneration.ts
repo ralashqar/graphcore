@@ -15,6 +15,7 @@ export const visualGenerationKindSchema = z.enum([
   'world_entity_icon_grid',
   'brand_atlas',
   'screen_mockup',
+  'entity_reference_sheet',
   'character_sheet',
   'wiki_visual',
   'app_screen_mockup',

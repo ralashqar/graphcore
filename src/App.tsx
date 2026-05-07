@@ -5830,6 +5830,52 @@ export default function App() {
     }
   }
 
+  async function handleStartDefinitionReferenceSheetGeneration(definitionKey: string) {
+    if (!snapshot || loadedState?.source !== 'supabase') {
+      setPromptRuntimeError('Reference sheet generation requires a live Supabase workspace.')
+      return
+    }
+    const definition = snapshot.definitions.find((entry) => entry.key === definitionKey) ?? null
+    const entity = snapshot.worldEntities.find((entry) => entry.linkedDefinitionKey === definitionKey) ?? null
+    if (!definition || !entity) {
+      setPromptRuntimeError(`Linked world entity for ${definitionKey} was not found.`)
+      return
+    }
+    const metadata = snapshot.draft.metadata && typeof snapshot.draft.metadata === 'object' && !Array.isArray(snapshot.draft.metadata)
+      ? snapshot.draft.metadata as Record<string, unknown>
+      : {}
+    const worldWiki = metadata.worldWiki && typeof metadata.worldWiki === 'object' && !Array.isArray(metadata.worldWiki)
+      ? metadata.worldWiki as Record<string, unknown>
+      : {}
+    const result = await startVisualGenerationJob({
+      kind: 'entity_reference_sheet',
+      targetKeys: {
+        entityKey: entity.key,
+        entityName: entity.name,
+        entityNodeType: entity.nodeType,
+        linkedDefinitionKey: definition.key,
+      },
+      input: {
+        entityKey: entity.key,
+        entityName: entity.name,
+        entityNodeType: entity.nodeType,
+        linkedDefinitionKey: definition.key,
+        model: 'openai/gpt-image-2',
+        projectArtStyle: typeof worldWiki.artStyleDescription === 'string' ? worldWiki.artStyleDescription : '',
+        projectTone: Array.isArray(worldWiki.toneTags) ? worldWiki.toneTags.filter((entry): entry is string => typeof entry === 'string').join(', ') : '',
+        projectContextDescription: [snapshot.project.name, snapshot.project.summary].filter(Boolean).join(' '),
+      },
+      metadata: {
+        source: 'linked_definition_workspace',
+        requestedFrom: 'generate_entity_reference_sheet',
+        entityKey: entity.key,
+        definitionKey,
+      },
+    })
+    setPromptRuntimeError(null)
+    return result
+  }
+
   function handleOpenBootstrapOnboarding() {
     setActiveTab('graph')
   }
@@ -6623,6 +6669,9 @@ export default function App() {
                 onDeleteGeneratedMesh={deleteGeneratedMesh}
                 onDeleteItem={deleteDefinition}
                 onGenerateConceptImage={(definitionKey) => handleStartDefinitionConceptGeneration(definitionKey)}
+                onGenerateReferenceSheet={(definitionKey) => handleStartDefinitionReferenceSheetGeneration(definitionKey)}
+                onGetVisualGenerationStatus={getVisualGenerationStatus}
+                onReferenceSheetJobFinished={refreshLiveSnapshot}
                 isGeneratingPrompt={isGeneratingPatch}
                 onChangePromptText={setPromptText}
                 onGeneratePrompt={handleGeneratePatch}
@@ -6677,6 +6726,9 @@ export default function App() {
                 onDeleteEnvironmentBlueprint={deleteEnvironmentBlueprint}
                 onGeneratePrompt={handleGeneratePatch}
                 onGenerateConceptImage={(definitionKey) => handleStartDefinitionConceptGeneration(definitionKey)}
+                onGenerateReferenceSheet={(definitionKey) => handleStartDefinitionReferenceSheetGeneration(definitionKey)}
+                onGetVisualGenerationStatus={getVisualGenerationStatus}
+                onReferenceSheetJobFinished={refreshLiveSnapshot}
                 onOpenCinematicGraph={openCinematicWorkspace}
                 onOpenDefinitionLink={openDefinitionWorkspace}
                 onOpenWorldNode={openWorldNodeFromRecord}
@@ -6725,6 +6777,9 @@ export default function App() {
                 onDeleteEnvironmentBlueprint={deleteEnvironmentBlueprint}
                 onGeneratePrompt={handleGeneratePatch}
                 onGenerateConceptImage={(definitionKey) => handleStartDefinitionConceptGeneration(definitionKey)}
+                onGenerateReferenceSheet={(definitionKey) => handleStartDefinitionReferenceSheetGeneration(definitionKey)}
+                onGetVisualGenerationStatus={getVisualGenerationStatus}
+                onReferenceSheetJobFinished={refreshLiveSnapshot}
                 onOpenCinematicGraph={openCinematicWorkspace}
                 onOpenDefinitionLink={openDefinitionWorkspace}
                 onOpenWorldNode={openWorldNodeFromRecord}

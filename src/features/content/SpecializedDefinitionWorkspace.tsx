@@ -3,6 +3,7 @@ import { Suspense, lazy, useEffect, useMemo, useState, useTransition } from 'rea
 import { getArtStylePresetLabel } from '../../domain/artStylePresets'
 import type { ArchetypeDefinition, AssetDefinition, AssemblyGraphDefinition, DefinitionBase, EnvironmentBlueprintV1, FieldDefinition, FieldValue, GameSpec, GraphDefinition } from '../../domain/graphcore'
 import type { MeshGenerationJob } from '../../domain/meshGeneration'
+import type { VisualGenerationStartResponse, VisualGenerationStatusResponse } from '../../domain/visualGeneration'
 import type { WorldEntity, WorldEntityCreateInput, WorldRelationship } from '../../domain/worldGraph'
 import { definitionKindForWorldEntity, getLinkedWorldEntityForDefinition, getWorldRelationshipsForDefinition } from '../../domain/worldGraphHelpers'
 import {
@@ -58,6 +59,9 @@ type SpecializedDefinitionWorkspaceProps = {
   onChangePromptText?: (value: string) => void
   onGeneratePrompt: () => void
   onGenerateConceptImage: (definitionKey: string) => Promise<void>
+  onGenerateReferenceSheet?: (definitionKey: string) => Promise<VisualGenerationStartResponse | void>
+  onGetVisualGenerationStatus?: (jobId: string) => Promise<VisualGenerationStatusResponse>
+  onReferenceSheetJobFinished?: () => Promise<void> | void
   onOpenCinematicGraph: (graphKey: string) => void
   onStartMeshGeneration: (definitionKey: string) => void
   onPersistDefinitionPreviewImageBinding: (definitionKey: string, assetKey: string | null) => Promise<void>
@@ -120,6 +124,9 @@ export function SpecializedDefinitionWorkspace({
   onChangePromptText: onChangePromptTextProp,
   onGeneratePrompt,
   onGenerateConceptImage,
+  onGenerateReferenceSheet,
+  onGetVisualGenerationStatus,
+  onReferenceSheetJobFinished,
   onOpenCinematicGraph,
   onStartMeshGeneration,
   onPersistDefinitionPreviewImageBinding,
@@ -147,6 +154,7 @@ export function SpecializedDefinitionWorkspace({
   const [isSelectionPreviewOpen, setIsSelectionPreviewOpen] = useState(false)
   const [conceptMessage, setConceptMessage] = useState<string | null>(null)
   const [conceptPending, setConceptPending] = useState(false)
+  const [referenceSheetJob, setReferenceSheetJob] = useState<VisualGenerationStatusResponse['job'] | null>(null)
   const [isOpeningPreview, startOpeningPreview] = useTransition()
 
   const filteredDefinitions = useMemo(() => {
@@ -304,7 +312,42 @@ export function SpecializedDefinitionWorkspace({
     setConceptMessage(null)
     setIsSelectionIconPickerOpen(false)
     setIsSelectionPreviewOpen(false)
+    setReferenceSheetJob(null)
   }, [effectiveSelection?.key])
+
+  useEffect(() => {
+    if (!referenceSheetJob || !['queued', 'running'].includes(referenceSheetJob.status) || !onGetVisualGenerationStatus) return
+    let disposed = false
+    let refreshed = false
+    const poll = async () => {
+      try {
+        const status = await onGetVisualGenerationStatus(referenceSheetJob.id)
+        if (disposed) return
+        setReferenceSheetJob(status.job)
+        if (['queued', 'running'].includes(status.job.status)) {
+          setConceptMessage(status.job.status === 'queued' ? 'Reference sheet queued.' : 'Reference sheet generating.')
+          return
+        }
+        setConceptMessage(status.job.status === 'completed' || status.job.status === 'completed_with_errors'
+          ? 'Reference sheet generated.'
+          : status.job.errorMessage || `Reference sheet ${status.job.status}.`)
+        if (!refreshed && ['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(status.job.status)) {
+          refreshed = true
+          await onReferenceSheetJobFinished?.()
+        }
+      } catch (error) {
+        if (!disposed) {
+          setConceptMessage(error instanceof Error ? error.message : 'Could not refresh reference sheet status.')
+        }
+      }
+    }
+    void poll()
+    const intervalId = window.setInterval(() => void poll(), 2500)
+    return () => {
+      disposed = true
+      window.clearInterval(intervalId)
+    }
+  }, [onGetVisualGenerationStatus, onReferenceSheetJobFinished, referenceSheetJob])
 
   function updateCharacterRenderBinding(changes: Partial<NonNullable<typeof selectedCharacterRenderBinding>>) {
     if (!selectedCharacterRenderBinding || effectiveSelection?.kind !== 'character') return
@@ -400,6 +443,10 @@ export function SpecializedDefinitionWorkspace({
 
   async function handleGenerateConcept() {
     if (!effectiveSelection) return
+    if (linkedWorldEntity && onGenerateReferenceSheet) {
+      await handleGenerateReferenceSheet()
+      return
+    }
     const prompt = selectedVisualDescription.trim()
     if (!prompt) return
     if (effectiveSelection.kind === 'character' && !selectedCharacterRenderBinding?.conceptPrompt?.trim()) {
@@ -422,9 +469,31 @@ export function SpecializedDefinitionWorkspace({
     }
   }
 
+  async function handleGenerateReferenceSheet() {
+    if (!effectiveSelection || !onGenerateReferenceSheet) return
+    if (linkedWorldEntity && selectedVisualDescription.trim()) {
+      persistLinkedWorldVisualDescription(selectedVisualDescription)
+    }
+    setConceptPending(true)
+    setConceptMessage(null)
+    try {
+      const response = await onGenerateReferenceSheet(effectiveSelection.key)
+      if (response?.job) {
+        setReferenceSheetJob(response.job)
+      }
+      setConceptMessage('Reference sheet queued.')
+    } catch (error) {
+      setConceptMessage(error instanceof Error ? error.message : 'Reference sheet generation failed.')
+    } finally {
+      setConceptPending(false)
+    }
+  }
+
   const promptStatus = effectiveSelection
     ? `Focused on ${effectiveSelection.name}`
     : projectSummary || `No ${title.toLowerCase()} selected`
+  const referenceSheetBusy = referenceSheetJob ? ['queued', 'running'].includes(referenceSheetJob.status) : false
+  const visualGenerationBusy = conceptPending || referenceSheetBusy
 
   const stageHeader = (
     <div className="definition-authoring-stage-head">
@@ -489,7 +558,7 @@ export function SpecializedDefinitionWorkspace({
       <div className="definition-focus-hero">
         <div className="definition-focus-media-shell">
           <button className="icon-button definition-focus-media-button" onClick={() => setIsSelectionIconPickerOpen(true)} type="button">
-            {conceptPending ? (
+            {visualGenerationBusy ? (
               <span className="character-concept-art-overlay">
                 <span className="button-spinner" aria-hidden="true" />
               </span>
@@ -686,15 +755,15 @@ export function SpecializedDefinitionWorkspace({
             <div className="character-concept-actions">
               <div className="definition-focus-action-row">
                 <button
-                  className={conceptPending ? 'primary-button button-with-spinner' : 'primary-button'}
-                  disabled={conceptPending}
+                  className={visualGenerationBusy ? 'primary-button button-with-spinner' : 'primary-button'}
+                  disabled={visualGenerationBusy || (!linkedWorldEntity && !selectedVisualDescription.trim())}
                   onClick={() => void handleGenerateConcept()}
                   type="button"
                 >
-                  {conceptPending ? <><span className="button-spinner" aria-hidden="true" />Generating...</> : 'Generate concept image'}
+                  {visualGenerationBusy ? <><span className="button-spinner" aria-hidden="true" />{referenceSheetBusy ? 'Generating sheet...' : 'Generating...'}</> : linkedWorldEntity && onGenerateReferenceSheet ? 'Generate reference sheet' : 'Generate concept image'}
                 </button>
                 {supports3dPanel ? (
-                  <button className={panelMode === '3d' ? 'ghost-button compact is-selected' : 'ghost-button compact'} onClick={() => setPanelMode('3d')} type="button">
+                  <button className={panelMode === '3d' ? 'ghost-button compact is-selected' : 'ghost-button compact'} disabled={visualGenerationBusy} onClick={() => setPanelMode('3d')} type="button">
                     3D Preview
                   </button>
                 ) : null}
