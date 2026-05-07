@@ -19,6 +19,8 @@ export const aiGenerationSettings = {
     },
     cinematicStoryboardImageQuality: 'medium',
     cinematicReferenceModeDefault: 'storyboard_sheet',
+    debugCinematicStoryboardStyleSafeModeDefault: false,
+    debugCinematicStoryboardStylePrompt: 'painterly comic-book cinematic production art, expressive ink-and-paint rendering, premium graphic novel storyboard look, not photorealistic',
     debugSkipVideoGenerationDefault: true,
   },
 } as const

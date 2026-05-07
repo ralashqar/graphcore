@@ -348,6 +348,8 @@ export const outputWorkflowPlanRequestSchema = z.object({
   generateAudio: z.boolean().optional(),
   cinematicPresetFamily: z.enum(['story_movie_tv', 'ugc_creator', 'ugc_direct_response_ad', 'ugc_faceless_format']).optional(),
   cinematicReferenceMode: z.enum(['keyframes', 'storyboard_sheet', 'keyframes_and_storyboard']).optional(),
+  debugCinematicStoryboardStyleSafeMode: z.boolean().optional(),
+  cinematicStoryboardStyleOverride: z.string().trim().min(1).max(1000).optional(),
   debugSkipVideoGeneration: z.boolean().optional(),
   snapshot: z.object({
     project: z.object({
@@ -386,6 +388,8 @@ export const outputRequestStartRequestSchema = z.object({
   generateAudio: z.boolean().optional(),
   cinematicPresetFamily: z.enum(['story_movie_tv', 'ugc_creator', 'ugc_direct_response_ad', 'ugc_faceless_format']).optional(),
   cinematicReferenceMode: z.enum(['keyframes', 'storyboard_sheet', 'keyframes_and_storyboard']).optional(),
+  debugCinematicStoryboardStyleSafeMode: z.boolean().optional(),
+  cinematicStoryboardStyleOverride: z.string().trim().min(1).max(1000).optional(),
   debugSkipVideoGeneration: z.boolean().optional(),
   snapshot: outputWorkflowPlanRequestSchema.shape.snapshot,
   runInput: looseRecordSchema.default({}),
@@ -2421,6 +2425,11 @@ export function buildCinematicSequencePlan(
   const generateAudio = request.generateAudio ?? true
   const cinematicReferenceMode: CinematicReferenceMode = request.cinematicReferenceMode
     ?? aiGenerationSettings.outputWorkflow.cinematicReferenceModeDefault
+  const debugCinematicStoryboardStyleSafeMode = request.debugCinematicStoryboardStyleSafeMode
+    ?? aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStyleSafeModeDefault
+  const cinematicStoryboardStyleOverride = debugCinematicStoryboardStyleSafeMode
+    ? request.cinematicStoryboardStyleOverride || aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStylePrompt
+    : ''
   const debugSkipVideoGeneration = request.debugSkipVideoGeneration ?? aiGenerationSettings.outputWorkflow.debugSkipVideoGenerationDefault
   const videoModel = resolveSeedance2Model(resolution)
   const title = worldWiki.title || request.snapshot.project.name
@@ -2446,6 +2455,8 @@ export function buildCinematicSequencePlan(
       generateAudio,
       presetFamily,
       cinematicReferenceMode,
+      debugCinematicStoryboardStyleSafeMode,
+      cinematicStoryboardStyleOverride,
       debugSkipVideoGeneration,
       maxTakeDurationSeconds: 15,
       maxTotalDurationSeconds: CINEMATIC_MAX_TOTAL_DURATION_SECONDS,
@@ -2473,6 +2484,8 @@ export function buildCinematicSequencePlan(
       generateAudio,
       presetFamily,
       cinematicReferenceMode,
+      debugCinematicStoryboardStyleSafeMode,
+      cinematicStoryboardStyleOverride,
       debugSkipVideoGeneration,
       maxTakeDurationSeconds: 15,
       maxDynamicTakes: CINEMATIC_BLOCK_FANOUT_LIMIT,
@@ -2498,6 +2511,8 @@ export function buildCinematicSequencePlan(
       generateAudio,
       presetFamily,
       cinematicReferenceMode,
+      debugCinematicStoryboardStyleSafeMode,
+      cinematicStoryboardStyleOverride,
       debugSkipVideoGeneration,
       videoModel,
       execution: { resourceClass: 'utility', groupKey: 'cinematic_dynamic_take_fanout', maxConcurrency: 1 },
@@ -2595,6 +2610,9 @@ export function buildCinematicSequencePlan(
         : cinematicReferenceMode === 'keyframes_and_storyboard'
           ? 'Storyboard-grid reference mode is enabled with additional keyframes: Seedance uses the generated beat sheet as @Image1, then keyframes and individual entity reference assets.'
           : 'Storyboard-grid reference mode is enabled: Seedance uses the generated beat sheet as @Image1.',
+      debugCinematicStoryboardStyleSafeMode
+        ? `Debug storyboard style safe mode is enabled: beat-sheet/storyboard images use ${cinematicStoryboardStyleOverride}.`
+        : 'Debug storyboard style safe mode is disabled: beat-sheet/storyboard images use the normal project/user visual style.',
       debugSkipVideoGeneration
         ? 'Debug video-skip mode is enabled: video_generation nodes will produce skipped placeholders instead of submitting Seedance jobs.'
         : 'Debug video-skip mode is disabled: video_generation nodes will submit Seedance jobs.',

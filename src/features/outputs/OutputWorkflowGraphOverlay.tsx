@@ -166,6 +166,44 @@ function artifactUrlByAssetKey(run: OutputWorkflowRun | null | undefined) {
   return urls
 }
 
+function readArtifactImageSize(artifact: OutputWorkflowRun['artifacts'][number] | null | undefined) {
+  const metadata = readRecord(artifact?.metadata)
+  const width = Number(metadata.width ?? readRecord(metadata.imageSize).width)
+  const height = Number(metadata.height ?? readRecord(metadata.imageSize).height)
+  return Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0
+    ? { width, height }
+    : null
+}
+
+function artifactImageByNodeKey(run: OutputWorkflowRun | null | undefined) {
+  const images = new Map<string, {
+    assetKey: string
+    url: string
+    size: { width: number; height: number } | null
+  }>()
+  for (const artifact of run?.artifacts ?? []) {
+    if (artifact.kind !== 'image') continue
+    const metadata = readRecord(artifact.metadata)
+    const nodeKey = readTrimmedString(metadata.nodeKey)
+    if (!nodeKey) continue
+    const sourceUrl = readTrimmedString(metadata.sourceUrl)
+    const previewUrl = readTrimmedString(metadata.previewUrl)
+    const url = isResolvableAssetUrl(sourceUrl)
+      ? sourceUrl
+      : isResolvableAssetUrl(previewUrl)
+        ? previewUrl
+        : ''
+    const assetKey = readTrimmedString(artifact.assetKey)
+    if (!assetKey && !url) continue
+    images.set(nodeKey, {
+      assetKey,
+      url,
+      size: readArtifactImageSize(artifact),
+    })
+  }
+  return images
+}
+
 function readImageOutputSize(source: OutputWorkflowOutputSource) {
   const outputs = readRecord(source?.outputs)
   const image = readRecord(outputs.image)
@@ -450,6 +488,7 @@ export function OutputWorkflowGraphOverlay({
   )
   const assetByKey = useMemo(() => new Map(safeAssets.map((asset) => [asset.key, asset])), [safeAssets])
   const artifactImageUrlByAssetKey = useMemo(() => artifactUrlByAssetKey(activeRun), [activeRun?.artifacts])
+  const artifactImageByNodeKeyMap = useMemo(() => artifactImageByNodeKey(activeRun), [activeRun?.artifacts])
   const nodeByKey = useMemo(() => new Map(safeNodes.map((node) => [node.key, node])), [safeNodes])
   const targetedNodeKeySet = useMemo(() => new Set(targetedNodeKeys.length > 0
     ? targetedNodeKeys
@@ -465,12 +504,16 @@ export function OutputWorkflowGraphOverlay({
   const selectedOutputPreview = selectedStep
     ? readOutputPreview(selectedStep) || selectedCachedOutputPreview
     : selectedCachedOutputPreview
-  const selectedImageAssetKey = imageOutputAssetKey(selectedStep) || imageOutputAssetKey(selectedCachedOutputSource)
+  const selectedArtifactImage = selectedNode ? artifactImageByNodeKeyMap.get(selectedNode.key) ?? null : null
+  const selectedImageAssetKey = imageOutputAssetKey(selectedStep)
+    || imageOutputAssetKey(selectedCachedOutputSource)
+    || selectedArtifactImage?.assetKey
   const selectedImageAsset = selectedImageAssetKey
     ? safeAssets.find((asset) => asset.key === selectedImageAssetKey) ?? null
     : null
   const selectedImageUrl = resolveAssetSourceUrl(selectedImageAsset)
     || (selectedImageAssetKey ? artifactImageUrlByAssetKey.get(selectedImageAssetKey) ?? null : null)
+    || selectedArtifactImage?.url
   const selectedGuidance = selectedNode ? buildOutputGuidanceBundleForNode({ node: selectedNode, worldWiki }) : null
   const selectedProviderBacked = selectedNode ? isOutputWorkflowProviderBackedNodeType(selectedNode.nodeType) : false
   const [promptDraft, setPromptDraft] = useState('')
@@ -540,10 +583,14 @@ export function OutputWorkflowGraphOverlay({
   const expandedOutputPreview = expandedOutputStep
     ? readOutputPreview(expandedOutputStep) || expandedCachedOutputPreview
     : expandedCachedOutputPreview
-  const expandedImageAssetKey = imageOutputAssetKey(expandedOutputStep) || imageOutputAssetKey(expandedCachedOutputSource)
+  const expandedArtifactImage = expandedOutputNode ? artifactImageByNodeKeyMap.get(expandedOutputNode.key) ?? null : null
+  const expandedImageAssetKey = imageOutputAssetKey(expandedOutputStep)
+    || imageOutputAssetKey(expandedCachedOutputSource)
+    || expandedArtifactImage?.assetKey
   const expandedImageAsset = expandedImageAssetKey ? assetByKey.get(expandedImageAssetKey) ?? null : null
   const expandedImageUrl = resolveAssetSourceUrl(expandedImageAsset)
     || (expandedImageAssetKey ? artifactImageUrlByAssetKey.get(expandedImageAssetKey) ?? null : null)
+    || expandedArtifactImage?.url
 
   useEffect(() => {
     setPromptDraft(selectedNode ? readTrimmedString(selectedNode.inputs.prompt) : '')
@@ -596,11 +643,12 @@ export function OutputWorkflowGraphOverlay({
             ? 'completed'
             : outputWorkflowStepStatusKey(step)
         const definition = outputWorkflowNodeRegistry[node.nodeType]
-        const imageAssetKey = imageOutputAssetKey(step) || imageOutputAssetKey(cachedOutputSource)
+        const artifactImage = artifactImageByNodeKeyMap.get(node.key) ?? null
+        const imageAssetKey = imageOutputAssetKey(step) || imageOutputAssetKey(cachedOutputSource) || artifactImage?.assetKey
         const imageUrl = imageAssetKey
-          ? resolveAssetSourceUrl(assetByKey.get(imageAssetKey)) || artifactImageUrlByAssetKey.get(imageAssetKey) || null
-          : null
-        const imageSize = readImageOutputSize(step) ?? readImageOutputSize(cachedOutputSource)
+          ? resolveAssetSourceUrl(assetByKey.get(imageAssetKey)) || artifactImageUrlByAssetKey.get(imageAssetKey) || artifactImage?.url || null
+          : artifactImage?.url ?? null
+        const imageSize = readImageOutputSize(step) ?? readImageOutputSize(cachedOutputSource) ?? artifactImage?.size ?? null
         const dimensions = graphNodeDimensions(node, imageSize)
         const outputPreview = readOutputPreview(step)
           || readOutputPreview({ ...cachedOutputSource, errorMessage: null, provider: null, model: null })
@@ -1095,7 +1143,7 @@ export function OutputWorkflowGraphOverlay({
                 <img src={expandedImageUrl} alt={`${expandedOutputNode.label} output`} />
               </div>
             ) : null}
-            {expandedOutputPreview ? (
+            {!expandedImageUrl && expandedOutputPreview ? (
               <pre>{expandedOutputPreview}</pre>
             ) : !expandedImageUrl ? (
               <p className="outputs-muted">No persisted output is available for this node yet.</p>

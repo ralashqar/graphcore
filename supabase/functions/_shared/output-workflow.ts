@@ -59,6 +59,8 @@ const OUTPUT_WORKFLOW_EXECUTOR_VERSION = 'output-text-gpt54-v6'
 const DEFAULT_OUTPUT_WORKFLOW_TEXT_MODEL = 'gpt-5.4'
 const CINEMATIC_MAX_TOTAL_DURATION_SECONDS = 60
 const CINEMATIC_STORYBOARD_IMAGE_QUALITY = aiGenerationSettings.outputWorkflow.cinematicStoryboardImageQuality
+const DEFAULT_CINEMATIC_STORYBOARD_STYLE_SAFE_MODE = aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStyleSafeModeDefault
+const DEFAULT_CINEMATIC_STORYBOARD_STYLE_PROMPT = aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStylePrompt
 const DEFAULT_CHAPTER_PROSE_TIMEOUT_MS = 3_600_000
 const DEFAULT_CHAPTER_PROSE_ATTEMPTS = 2
 const FAL_QUEUE_BASE_URL = 'https://queue.fal.run'
@@ -1102,6 +1104,64 @@ function readUpstreamVideos(upstream: Record<string, Record<string, unknown>>, f
     }
   }
   return videos
+}
+
+function readCinematicStoryboardStyleSafeMode(config: Record<string, unknown>, run?: OutputWorkflowRun | null) {
+  if (typeof config.debugCinematicStoryboardStyleSafeMode === 'boolean') return config.debugCinematicStoryboardStyleSafeMode
+  const runInput = asRecord(run?.input)
+  const runMetadata = asRecord(run?.metadata)
+  const cinematicOptions = asRecord(runMetadata.cinematicOptions)
+  if (typeof runInput.debugCinematicStoryboardStyleSafeMode === 'boolean') return runInput.debugCinematicStoryboardStyleSafeMode
+  if (typeof runMetadata.debugCinematicStoryboardStyleSafeMode === 'boolean') return runMetadata.debugCinematicStoryboardStyleSafeMode
+  if (typeof cinematicOptions.debugCinematicStoryboardStyleSafeMode === 'boolean') return cinematicOptions.debugCinematicStoryboardStyleSafeMode
+  return DEFAULT_CINEMATIC_STORYBOARD_STYLE_SAFE_MODE
+}
+
+function readCinematicStoryboardStyleOverride(config: Record<string, unknown>, run?: OutputWorkflowRun | null) {
+  const runInput = asRecord(run?.input)
+  const runMetadata = asRecord(run?.metadata)
+  const cinematicOptions = asRecord(runMetadata.cinematicOptions)
+  return readText(config.cinematicStoryboardStyleOverride)
+    || readText(runInput.cinematicStoryboardStyleOverride)
+    || readText(runMetadata.cinematicStoryboardStyleOverride)
+    || readText(cinematicOptions.cinematicStoryboardStyleOverride)
+    || DEFAULT_CINEMATIC_STORYBOARD_STYLE_PROMPT
+}
+
+function resolveCinematicStoryboardStylePolicy(config: Record<string, unknown>, run?: OutputWorkflowRun | null) {
+  const safeMode = readCinematicStoryboardStyleSafeMode(config, run)
+  const stylePrompt = safeMode ? readCinematicStoryboardStyleOverride(config, run) : ''
+  return {
+    safeMode,
+    stylePrompt,
+    label: safeMode ? 'painterly comic-book' : 'normal project/user style',
+  }
+}
+
+function inferCinematicTargetVideoStyle(input: {
+  prompt: string
+  truthSourceMode: string
+  blockScript: Record<string, unknown>
+}) {
+  const explicitStyle = readText(input.blockScript.targetVideoStyle)
+    || readText(input.blockScript.visualStyle)
+    || readText(input.blockScript.style)
+  if (explicitStyle) return explicitStyle
+  const prompt = String(input.prompt || '').toLowerCase()
+  const truth = input.truthSourceMode.toLowerCase()
+  if (truth.includes('ugc') || /\b(phone|selfie|tiktok|reel|creator|ugc)\b/.test(prompt)) {
+    return 'raw UGC phone footage with natural handheld motion and platform-native realism'
+  }
+  if (truth.includes('broadcast') || /\b(broadcast|live tv|news|sports)\b/.test(prompt)) {
+    return 'authentic live broadcast video with practical camera coverage and natural signal texture'
+  }
+  if (truth.includes('animation') || /\b(anime|animated|animation|2d)\b/.test(prompt)) {
+    return 'coherent stylized animation matching the user brief and project art direction'
+  }
+  if (/\b(comic|graphic novel|illustrated|painterly)\b/.test(prompt)) {
+    return 'stylized cinematic graphic-novel animation matching the user brief'
+  }
+  return 'grounded live-action cinematic video with realistic faces, practical lighting, natural lens behavior, and physical motion'
 }
 
 function readFirstUpstreamRecord(upstream: Record<string, Record<string, unknown>>, fields: string[]) {
@@ -3630,10 +3690,19 @@ export function buildCinematicBeatSheetPrompt(input: {
   aspectRatio: string
   prompt: string
   guidance: OutputGuidanceBundle | null
+  debugCinematicStoryboardStyleSafeMode?: boolean
+  cinematicStoryboardStyleOverride?: string
 }) {
   const beatSheetPlan = buildCinematicBeatSheetPlan(input.blockScript)
   const entities = compactCinematicEntityAnchors(input.assetPack, 10)
   const entityAnchorLines = formatCinematicEntityAnchorLines(entities)
+  const safeMode = input.debugCinematicStoryboardStyleSafeMode === true
+  const storyboardStyle = safeMode
+    ? (readText(input.cinematicStoryboardStyleOverride) || DEFAULT_CINEMATIC_STORYBOARD_STYLE_PROMPT)
+    : 'project/user visual style from the brief and world context'
+  const styleInstruction = safeMode
+    ? `Visual style: ${storyboardStyle}. This is a stylized production-board translation, not photorealistic likeness. Apply the style to every panel while preserving each reference image's identity anchors, silhouette, wardrobe, palette, props, material cues, and environment geometry.`
+    : 'Visual style: follow the project/user visual style from the brief and world context; maintain palette, wardrobe, environment logic, lighting direction, and character identity across all panels.'
   const imageSize = beatSheetPlan.panelCount > 9
     ? { width: 1536, height: 2304 }
     : beatSheetPlan.panelCount > 6
@@ -3665,7 +3734,9 @@ export function buildCinematicBeatSheetPrompt(input: {
       entities.length > 0 ? 'Canonical visual identity anchors from appearance only:' : '',
       entityAnchorLines,
       input.prompt ? `User brief: ${input.prompt}` : '',
-      'Visual style: live-action cinematic quality unless the user brief says otherwise; maintain palette, wardrobe, environment logic, lighting direction, and character identity across all panels.',
+      styleInstruction,
+      safeMode ? 'Reference fidelity: use uploaded/entity reference images as strict identity, costume, prop, palette, and spatial-continuity anchors, but render the board in the safe painterly comic-book production style rather than a realistic likeness.' : '',
+      `Storyboard style safe mode: ${safeMode ? 'painterly comic-book' : 'disabled'}.`,
       'This image is both a planning artifact and the primary Seedance visual reference. It must look like a clean production beat sheet, not a finished poster.',
     ].filter(Boolean).join('\n\n'),
   }
@@ -3676,10 +3747,16 @@ function buildCinematicKeyframePromptPack(input: {
   assetPack: Record<string, unknown>
   aspectRatio: string
   prompt: string
+  debugCinematicStoryboardStyleSafeMode?: boolean
+  cinematicStoryboardStyleOverride?: string
 }) {
   const shots = Array.isArray(input.blockScript.shots) ? input.blockScript.shots.map(asRecord) : []
   const durationSeconds = Math.max(4, Math.min(15, Number(input.blockScript.durationSeconds ?? 8) || 8))
   const entities = compactCinematicEntityAnchors(input.assetPack, 8)
+  const safeMode = input.debugCinematicStoryboardStyleSafeMode === true
+  const storyboardStyle = safeMode
+    ? (readText(input.cinematicStoryboardStyleOverride) || DEFAULT_CINEMATIC_STORYBOARD_STYLE_PROMPT)
+    : ''
   const picks = [
     { keyframeIndex: 0, label: 'opening', timeSeconds: 0, ref: '@Image1' },
     { keyframeIndex: 1, label: 'midpoint', timeSeconds: durationSeconds / 2, ref: '@Image2' },
@@ -3704,6 +3781,7 @@ function buildCinematicKeyframePromptPack(input: {
         `Visible moment: ${visual}`,
         `Framing and lens: ${readText(shot.camera) || 'cinematic lens, readable subject silhouette, coherent spatial blocking'}.`,
         'Lighting and palette: preserve the world palette, lighting direction, wardrobe, environment logic, and mood from the references.',
+        safeMode ? `Render style: ${storyboardStyle}. This keyframe is a stylized production reference, not photorealistic likeness; preserve reference identity anchors, silhouette, wardrobe, props, palette, and environment geometry tightly.` : '',
         entities.length > 0 ? `Identity/world locks: ${compactForPrompt({ entities }, 2200)}` : '',
         input.prompt ? `User brief: ${input.prompt}` : '',
         'No text, no captions, no UI, no collage, no panels, no watermark. Do not render a storyboard sheet. Make it a single cinematic still image.',
@@ -3732,6 +3810,8 @@ function buildCinematicStoryboardPrompt(input: {
   aspectRatio: string
   prompt: string
   guidance: OutputGuidanceBundle | null
+  debugCinematicStoryboardStyleSafeMode?: boolean
+  cinematicStoryboardStyleOverride?: string
 }) {
   const shots = Array.isArray(input.blockScript.shots) ? input.blockScript.shots.map(asRecord) : []
   const storyboardPanels = Array.isArray(input.blockScript.storyboardPanels) ? input.blockScript.storyboardPanels.map(asRecord) : []
@@ -3742,6 +3822,10 @@ function buildCinematicStoryboardPrompt(input: {
     rows: layout.rows,
     aspectRatio: input.aspectRatio,
   })
+  const safeMode = input.debugCinematicStoryboardStyleSafeMode === true
+  const storyboardStyle = safeMode
+    ? (readText(input.cinematicStoryboardStyleOverride) || DEFAULT_CINEMATIC_STORYBOARD_STYLE_PROMPT)
+    : ''
   const shotLines = storyboardPanels.length > 0
     ? storyboardPanels.slice(0, layout.panelCount).map((panel, index) => [
       `Panel ${index + 1}: ${readText(panel.title) || readText(panel.shotId) || `Storyboard panel ${index + 1}`}.`,
@@ -3766,7 +3850,10 @@ function buildCinematicStoryboardPrompt(input: {
     entities.length > 0 ? 'Canonical visual identity anchors:' : '',
     entities.length > 0 ? compactForPrompt({ entities }, 3200) : '',
     input.prompt ? `User style brief: ${input.prompt}` : '',
-    'Render as low-detail but readable cinematic storyboard art, not a poster and not a finished comic page.',
+    safeMode
+      ? `Render as ${storyboardStyle}; this is a stylized production-board translation, not photorealistic likeness. Preserve reference identity anchors, silhouette, wardrobe, props, palette, and environment geometry tightly.`
+      : 'Render as low-detail but readable cinematic storyboard art, not a poster and not a finished comic page.',
+    `Storyboard style safe mode: ${safeMode ? 'painterly comic-book' : 'disabled'}.`,
   ].filter(Boolean).join('\n\n')
 }
 
@@ -3812,6 +3899,8 @@ export function buildCinematicVideoPrompt(input: {
   generateAudio: boolean
   referenceImageCount: number
   cinematicReferenceMode?: string
+  debugCinematicStoryboardStyleSafeMode?: boolean
+  cinematicStoryboardStyleOverride?: string
 }) {
   const shots = Array.isArray(input.blockScript.shots) ? input.blockScript.shots.map(asRecord) : []
   const entities = compactCinematicEntityAnchors(input.assetPack, 8)
@@ -3828,6 +3917,15 @@ export function buildCinematicVideoPrompt(input: {
       : String(input.prompt).toLowerCase().match(/\b(broadcast|sports|live tv|news)\b/) ? 'BROADCAST SETUP'
         : String(input.prompt).toLowerCase().match(/\b(anime|animation|animated|2d)\b/) ? '2D / ANIMATION STYLE'
           : 'CINEMATIC SETUP')
+  const targetVideoStyle = inferCinematicTargetVideoStyle({
+    prompt: input.prompt,
+    truthSourceMode,
+    blockScript: input.blockScript,
+  })
+  const storyboardStyleSafeMode = input.debugCinematicStoryboardStyleSafeMode === true
+  const storyboardStyle = storyboardStyleSafeMode
+    ? (readText(input.cinematicStoryboardStyleOverride) || DEFAULT_CINEMATIC_STORYBOARD_STYLE_PROMPT)
+    : ''
   const referenceLegend = cinematicReferenceMode === 'keyframes'
     ? [
       keyframeCount >= 1 ? '@Image1: opening keyframe; lock the opening look, subject identity, wardrobe, palette, and starting composition.' : '',
@@ -3861,6 +3959,7 @@ export function buildCinematicVideoPrompt(input: {
   return [
     `[${truthSourceMode}]`,
     `Generate one ${input.durationSeconds}-second Seedance 2 reference-to-video clip at ${input.aspectRatio}, ${input.resolution}.`,
+    `Target video style: ${targetVideoStyle}.`,
     input.generateAudio ? 'Audio: native audio may include restrained music, natural foley, and any authored dialogue/audio cue on the exact timeline.' : 'Audio: keep generated audio minimal or absent.',
     '',
     '[IMAGE REFERENCES / LEGEND]',
@@ -3869,7 +3968,9 @@ export function buildCinematicVideoPrompt(input: {
       : 'No image references are attached; use the written continuity locks only.',
     cinematicReferenceMode === 'keyframes'
       ? 'Beat sheets are planning-only and should not appear in the video. Use keyframes as the main visual references.'
-      : 'Storyboard-grid reference mode is enabled. Follow @Image1 as the visual continuity and timing board, but do not reproduce caption bands, panel borders, grid gutters, UI, or text as on-screen elements. Use the written timeline below for dialogue, foley, music, and audio timing.',
+      : storyboardStyleSafeMode
+        ? `Storyboard-grid reference mode is enabled. @Image1 is a stylized storyboard/timing reference rendered as ${storyboardStyle}; follow its panel order, blocking, composition, identity anchors, and continuity, but render the final clip in the target video style: ${targetVideoStyle}. Do not reproduce caption bands, panel borders, grid gutters, UI, or text as on-screen elements. Use the written timeline below for dialogue, foley, music, and audio timing.`
+        : 'Storyboard-grid reference mode is enabled. Follow @Image1 as the visual continuity and timing board, but do not reproduce caption bands, panel borders, grid gutters, UI, or text as on-screen elements. Use the written timeline below for dialogue, foley, music, and audio timing.',
     '',
     '[TIMELINE SECOND BY SECOND]',
     timeline,
@@ -4190,6 +4291,7 @@ async function materializeDynamicCinematicTakeFanout(input: {
     || (resolution === '1080p' ? 'bytedance/seedance-2.0/reference-to-video' : 'bytedance/seedance-2.0/fast/reference-to-video')
   const presetFamily = readText(input.config.presetFamily) || 'story_movie_tv'
   const cinematicReferenceMode = normalizeCinematicReferenceMode(input.config.cinematicReferenceMode)
+  const storyboardStylePolicy = resolveCinematicStoryboardStylePolicy(input.config)
   const useKeyframes = cinematicReferenceMode === 'keyframes' || cinematicReferenceMode === 'keyframes_and_storyboard'
   const useStoryboardReference = cinematicReferenceMode !== 'keyframes'
   const keyframeImageSize = keyframeImageSizeForAspectRatio(aspectRatio)
@@ -4204,11 +4306,20 @@ async function materializeDynamicCinematicTakeFanout(input: {
   const existingReferenceModes = existingDynamicNodes
     .map((row) => readText(asRecord(row.config).cinematicReferenceMode))
     .filter(Boolean)
+  const existingStoryboardStyleModes = existingDynamicNodes
+    .map((row) => asRecord(row.config))
+    .filter((config) => readText(config.purpose) === 'cinematic_beat_sheet_prompt' || readText(config.purpose) === 'cinematic_beat_sheet')
+    .map((config) => `${config.debugCinematicStoryboardStyleSafeMode === true}:${readText(config.cinematicStoryboardStyleOverride)}`)
+    .filter(Boolean)
   const existingModeMatches = existingReferenceModes.length === 0
     || existingReferenceModes.every((mode) => mode === cinematicReferenceMode)
+  const styleModeKey = `${storyboardStylePolicy.safeMode === true}:${storyboardStylePolicy.stylePrompt}`
+  const existingStyleModeMatches = existingStoryboardStyleModes.length === 0
+    || existingStoryboardStyleModes.every((mode) => mode === styleModeKey)
   const existingSameHash = existingDynamicNodes.length > 0
     && existingDynamicNodes.every((row) => readText(asRecord(row.metadata).dynamicCompileHash) === compileHash)
     && existingModeMatches
+    && existingStyleModeMatches
     && existingDynamicNodes.some((row) => row.key === 'video_stitch')
     && existingDynamicNodes.some((row) => row.key.endsWith('_beat_sheet'))
     && (!useKeyframes || existingDynamicNodes.some((row) => row.key.endsWith('_keyframe_001')))
@@ -4246,13 +4357,13 @@ async function materializeDynamicCinematicTakeFanout(input: {
     const videoPromptKey = `take_${suffix}_video_prompt`
     const videoKey = `take_${suffix}_video`
     nodeRows.push(
-      dynamicNodeRow({ workflow: input.workflow, key: beatSheetPromptKey, nodeType: 'utility_transform', label: `Take ${takeNumber} Beat Sheet Prompt`, x: 1760, y, compileHash, config: { purpose: 'cinematic_beat_sheet_prompt', takeId, takeIndex: index, aspectRatio, presetFamily, planningOnly: true, execution: { resourceClass: 'utility', groupKey: 'cinematic_beat_sheet_prompts', maxConcurrency: 6 } } }),
-      dynamicNodeRow({ workflow: input.workflow, key: beatSheetKey, nodeType: 'image_generation', label: `Take ${takeNumber} Beat Sheet`, x: 2040, y, compileHash, config: { purpose: 'cinematic_beat_sheet', role: 'cinematic_beat_sheet', takeId, takeIndex: index, planningOnly: true, planning_only: true, usedAsVideoReference: useStoryboardReference, model: 'openai/gpt-image-2', referenceModel: 'openai/gpt-image-2/edit', quality: CINEMATIC_STORYBOARD_IMAGE_QUALITY, outputFormat: 'webp', maxReferenceImages: 16, imageSizePolicy: 'from_beat_sheet_prompt_layout', panelAspectRatio: aspectRatio, skillKeys: ['cinematic_beat_sheet_planning', 'image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'provider_prompt_hygiene'], autoSkillTags: ['beat_sheet', 'storyboard', 'planning_only', 'video_reference', 'image_prompt', 'entity_reference', 'reference_continuity'], guidanceMode: 'strict', execution: { resourceClass: 'image', groupKey: 'cinematic_beat_sheets', maxConcurrency: 3 } } }),
+      dynamicNodeRow({ workflow: input.workflow, key: beatSheetPromptKey, nodeType: 'utility_transform', label: `Take ${takeNumber} Beat Sheet Prompt`, x: 1760, y, compileHash, config: { purpose: 'cinematic_beat_sheet_prompt', takeId, takeIndex: index, aspectRatio, presetFamily, planningOnly: true, debugCinematicStoryboardStyleSafeMode: storyboardStylePolicy.safeMode, cinematicStoryboardStyleOverride: storyboardStylePolicy.stylePrompt, execution: { resourceClass: 'utility', groupKey: 'cinematic_beat_sheet_prompts', maxConcurrency: 6 } } }),
+      dynamicNodeRow({ workflow: input.workflow, key: beatSheetKey, nodeType: 'image_generation', label: `Take ${takeNumber} Beat Sheet`, x: 2040, y, compileHash, config: { purpose: 'cinematic_beat_sheet', role: 'cinematic_beat_sheet', takeId, takeIndex: index, planningOnly: true, planning_only: true, usedAsVideoReference: useStoryboardReference, model: 'openai/gpt-image-2', referenceModel: 'openai/gpt-image-2/edit', quality: CINEMATIC_STORYBOARD_IMAGE_QUALITY, outputFormat: 'webp', maxReferenceImages: 16, imageSizePolicy: 'from_beat_sheet_prompt_layout', panelAspectRatio: aspectRatio, debugCinematicStoryboardStyleSafeMode: storyboardStylePolicy.safeMode, cinematicStoryboardStyleOverride: storyboardStylePolicy.stylePrompt, skillKeys: ['cinematic_beat_sheet_planning', 'image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'provider_prompt_hygiene'], autoSkillTags: ['beat_sheet', 'storyboard', 'planning_only', 'video_reference', 'image_prompt', 'entity_reference', 'reference_continuity'], guidanceMode: 'strict', execution: { resourceClass: 'image', groupKey: 'cinematic_beat_sheets', maxConcurrency: 3 } } }),
       ...(useKeyframes ? [
-        dynamicNodeRow({ workflow: input.workflow, key: keyframePromptPackKey, nodeType: 'utility_transform', label: `Take ${takeNumber} Keyframe Prompts`, x: 2320, y, compileHash, config: { purpose: 'cinematic_keyframe_prompt_pack', takeId, takeIndex: index, aspectRatio, presetFamily, execution: { resourceClass: 'utility', groupKey: 'cinematic_keyframe_prompt_packs', maxConcurrency: 6 } } }),
+        dynamicNodeRow({ workflow: input.workflow, key: keyframePromptPackKey, nodeType: 'utility_transform', label: `Take ${takeNumber} Keyframe Prompts`, x: 2320, y, compileHash, config: { purpose: 'cinematic_keyframe_prompt_pack', takeId, takeIndex: index, aspectRatio, presetFamily, debugCinematicStoryboardStyleSafeMode: storyboardStylePolicy.safeMode, cinematicStoryboardStyleOverride: storyboardStylePolicy.stylePrompt, execution: { resourceClass: 'utility', groupKey: 'cinematic_keyframe_prompt_packs', maxConcurrency: 6 } } }),
         ...keyframeKeys.map((keyframeKey, keyframeIndex) => dynamicNodeRow({ workflow: input.workflow, key: keyframeKey, nodeType: 'image_generation', label: `Take ${takeNumber} Keyframe ${keyframeIndex + 1}`, x: 2600 + keyframeIndex * 40, y: y + keyframeIndex * 44, compileHash, config: { purpose: 'cinematic_keyframe', role: 'cinematic_keyframe', takeId, takeIndex: index, keyframeIndex, model: 'openai/gpt-image-2', referenceModel: 'openai/gpt-image-2/edit', quality: 'low', outputFormat: 'webp', maxReferenceImages: 16, imageSize: keyframeImageSize, aspectRatio, skillKeys: ['cinematic_keyframe_prompting', 'image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'provider_prompt_hygiene'], autoSkillTags: ['keyframe', 'image_prompt', 'visual_only', 'entity_reference', 'reference_continuity'], guidanceMode: 'strict', execution: { resourceClass: 'image', groupKey: 'cinematic_keyframes', maxConcurrency: 3 } } })),
       ] : []),
-      dynamicNodeRow({ workflow: input.workflow, key: videoPromptKey, nodeType: 'utility_transform', label: `Take ${takeNumber} Video Prompt`, x: 2880, y, compileHash, config: { purpose: 'cinematic_video_prompt', takeId, takeIndex: index, durationSeconds, aspectRatio, resolution, generateAudio, presetFamily, cinematicReferenceMode, debugSkipVideoGeneration, execution: { resourceClass: 'utility', groupKey: 'cinematic_video_prompts', maxConcurrency: 6 } } }),
+      dynamicNodeRow({ workflow: input.workflow, key: videoPromptKey, nodeType: 'utility_transform', label: `Take ${takeNumber} Video Prompt`, x: 2880, y, compileHash, config: { purpose: 'cinematic_video_prompt', takeId, takeIndex: index, durationSeconds, aspectRatio, resolution, generateAudio, presetFamily, cinematicReferenceMode, debugCinematicStoryboardStyleSafeMode: storyboardStylePolicy.safeMode, cinematicStoryboardStyleOverride: storyboardStylePolicy.stylePrompt, debugSkipVideoGeneration, execution: { resourceClass: 'utility', groupKey: 'cinematic_video_prompts', maxConcurrency: 6 } } }),
       dynamicNodeRow({ workflow: input.workflow, key: videoKey, nodeType: 'video_generation', label: `Take ${takeNumber} Video`, x: 3160, y, compileHash, config: { purpose: 'cinematic_block_video', role: 'cinematic_block', takeId, takeIndex: index, model: videoModel, durationSeconds, aspectRatio, resolution, generateAudio, cinematicReferenceMode, debugSkipVideoGeneration, syncMode: false, skillKeys: ['seedance_reference_video_prompting', 'seedance_truth_source_modes', 'seedance_reference_legend_contract', 'seedance_timeline_call_sheet', 'cinematic_shot_direction', 'shortform_hook_retention', 'brand_ugc_proof_structure', 'provider_prompt_hygiene'], autoSkillTags: ['video_prompt', 'seedance', 'cinematic', 'ugc', 'provider_hygiene'], guidanceMode: 'strict', execution: { resourceClass: 'video', groupKey: 'cinematic_videos', maxConcurrency: Math.min(takePlan.length, 3) } } }),
     )
     const takeMeta = { takeId, takeIndex: index }
@@ -7828,12 +7939,15 @@ async function executeNode(input: {
         }
         const guidance = readUpstreamGuidanceBundle(input.upstream)
         const aspectRatio = readText(config.aspectRatio) || readText(blockScript.aspectRatio) || '16:9'
+        const storyboardStylePolicy = resolveCinematicStoryboardStylePolicy(config, input.run)
         const beatSheet = buildCinematicBeatSheetPrompt({
           blockScript,
           assetPack,
           aspectRatio,
           prompt: input.run.prompt,
           guidance,
+          debugCinematicStoryboardStyleSafeMode: storyboardStylePolicy.safeMode,
+          cinematicStoryboardStyleOverride: storyboardStylePolicy.stylePrompt,
         })
         const outputs = {
           prompt: beatSheet.prompt,
@@ -7846,6 +7960,10 @@ async function executeNode(input: {
           aspectRatio,
           panelAspectRatio: aspectRatio,
           imageSize: beatSheet.imageSize,
+          debugCinematicStoryboardStyleSafeMode: storyboardStylePolicy.safeMode,
+          cinematicStoryboardStyleOverride: storyboardStylePolicy.stylePrompt,
+          storyboardStyleSafeModeLabel: storyboardStylePolicy.label,
+          diagnostics: [`Storyboard style safe mode: ${storyboardStylePolicy.label}.`],
           guidance,
           deterministic: true,
         }
@@ -7882,6 +8000,8 @@ async function executeNode(input: {
           assetPack,
           aspectRatio,
           prompt: input.run.prompt,
+          debugCinematicStoryboardStyleSafeMode: resolveCinematicStoryboardStylePolicy(config, input.run).safeMode,
+          cinematicStoryboardStyleOverride: resolveCinematicStoryboardStylePolicy(config, input.run).stylePrompt,
         })
         const outputs = {
           prompt: keyframes.keyframePrompts[0]?.prompt ?? '',
@@ -7936,6 +8056,8 @@ async function executeNode(input: {
           aspectRatio,
           prompt: input.run.prompt,
           guidance,
+          debugCinematicStoryboardStyleSafeMode: resolveCinematicStoryboardStylePolicy(config, input.run).safeMode,
+          cinematicStoryboardStyleOverride: resolveCinematicStoryboardStylePolicy(config, input.run).stylePrompt,
         })
         const outputs = {
           prompt: storyboardPrompt,
@@ -7981,6 +8103,7 @@ async function executeNode(input: {
         }
         const guidance = readUpstreamGuidanceBundle(input.upstream)
         const cinematicReferenceMode = normalizeCinematicReferenceMode(config.cinematicReferenceMode)
+        const storyboardStylePolicy = resolveCinematicStoryboardStylePolicy(config, input.run)
         const upstreamImages = orderCinematicVideoReferenceImages(readUpstreamImages(input.upstream), cinematicReferenceMode)
         const referenceImageCount = Math.min(9, upstreamImages.length)
         const durationSeconds = Math.max(4, Math.min(15, Number(config.durationSeconds ?? blockScript.durationSeconds ?? 8) || 8))
@@ -7995,6 +8118,8 @@ async function executeNode(input: {
           generateAudio: config.generateAudio !== false,
           referenceImageCount,
           cinematicReferenceMode,
+          debugCinematicStoryboardStyleSafeMode: storyboardStylePolicy.safeMode,
+          cinematicStoryboardStyleOverride: storyboardStylePolicy.stylePrompt,
         })
         const outputs = {
           prompt: videoPrompt,
@@ -8004,6 +8129,14 @@ async function executeNode(input: {
           durationSeconds,
           referenceImageCount,
           cinematicReferenceMode,
+          debugCinematicStoryboardStyleSafeMode: storyboardStylePolicy.safeMode,
+          cinematicStoryboardStyleOverride: storyboardStylePolicy.stylePrompt,
+          targetVideoStyle: inferCinematicTargetVideoStyle({
+            prompt: input.run.prompt,
+            truthSourceMode: readText(blockScript.truthSourceMode) || 'CINEMATIC SETUP',
+            blockScript,
+          }),
+          diagnostics: [`Storyboard style safe mode: ${storyboardStylePolicy.label}.`],
           guidance,
           deterministic: true,
         }

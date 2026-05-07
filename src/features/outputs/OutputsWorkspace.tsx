@@ -38,6 +38,8 @@ type OutputsWorkspaceProps = {
     imageQuality?: 'low' | 'medium' | 'high'
     imageOutputFormat?: 'png' | 'jpeg' | 'webp'
     cinematicReferenceMode?: 'keyframes' | 'storyboard_sheet' | 'keyframes_and_storyboard'
+    debugCinematicStoryboardStyleSafeMode?: boolean
+    cinematicStoryboardStyleOverride?: string
     debugSkipVideoGeneration?: boolean
   }) => Promise<OutputRequestStatusResponse>
   onGetOutputRequestStatus: (requestId: string) => Promise<OutputRequestStatusResponse>
@@ -826,6 +828,8 @@ export function OutputsWorkspace({
         imageQuality: requestImageQuality === 'preset' ? undefined : requestImageQuality,
         imageOutputFormat: requestImageOutputFormat === 'preset' ? undefined : requestImageOutputFormat,
         cinematicReferenceMode: aiGenerationSettings.outputWorkflow.cinematicReferenceModeDefault,
+        debugCinematicStoryboardStyleSafeMode: aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStyleSafeModeDefault,
+        cinematicStoryboardStyleOverride: aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStylePrompt,
         debugSkipVideoGeneration: aiGenerationSettings.outputWorkflow.debugSkipVideoGenerationDefault,
       })
       setSelectedRequestId(response.request.id)

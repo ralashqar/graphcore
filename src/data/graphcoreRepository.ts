@@ -7387,10 +7387,16 @@ function buildOutputWorkflowRunInput(snapshot: ProjectSnapshot, request?: {
   generateAudio?: boolean
   cinematicPresetFamily?: string
   cinematicReferenceMode?: 'keyframes' | 'storyboard_sheet' | 'keyframes_and_storyboard'
+  debugCinematicStoryboardStyleSafeMode?: boolean
+  cinematicStoryboardStyleOverride?: string
   debugSkipVideoGeneration?: boolean
 }) {
   const selectedEntityKeys = request?.selectedEntityKeys ?? []
   const selectedSequenceUnitKeys = request?.selectedSequenceUnitKeys ?? []
+  const debugCinematicStoryboardStyleSafeMode = request?.debugCinematicStoryboardStyleSafeMode ?? aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStyleSafeModeDefault
+  const cinematicStoryboardStyleOverride = debugCinematicStoryboardStyleSafeMode
+    ? request?.cinematicStoryboardStyleOverride ?? aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStylePrompt
+    : ''
   return {
     projectContext: snapshot.projectContext ?? null,
     worldEntities: snapshot.worldEntities,
@@ -7415,6 +7421,8 @@ function buildOutputWorkflowRunInput(snapshot: ProjectSnapshot, request?: {
     generateAudio: request?.generateAudio,
     cinematicPresetFamily: request?.cinematicPresetFamily,
     cinematicReferenceMode: request?.cinematicReferenceMode ?? aiGenerationSettings.outputWorkflow.cinematicReferenceModeDefault,
+    debugCinematicStoryboardStyleSafeMode,
+    cinematicStoryboardStyleOverride,
     debugSkipVideoGeneration: request?.debugSkipVideoGeneration ?? aiGenerationSettings.outputWorkflow.debugSkipVideoGenerationDefault,
   }
 }
@@ -7445,6 +7453,8 @@ export async function planOutputWorkflow(
     generateAudio: request?.generateAudio,
     cinematicPresetFamily: request?.cinematicPresetFamily,
     cinematicReferenceMode: request?.cinematicReferenceMode,
+    debugCinematicStoryboardStyleSafeMode: request?.debugCinematicStoryboardStyleSafeMode,
+    cinematicStoryboardStyleOverride: request?.cinematicStoryboardStyleOverride,
     debugSkipVideoGeneration: request?.debugSkipVideoGeneration,
     snapshot: buildOutputWorkflowSnapshot(snapshot),
   })
@@ -7582,6 +7592,8 @@ export async function startOutputRequest(
     generateAudio?: boolean
     cinematicPresetFamily?: 'story_movie_tv' | 'ugc_creator' | 'ugc_direct_response_ad' | 'ugc_faceless_format'
     cinematicReferenceMode?: 'keyframes' | 'storyboard_sheet' | 'keyframes_and_storyboard'
+    debugCinematicStoryboardStyleSafeMode?: boolean
+    cinematicStoryboardStyleOverride?: string
     debugSkipVideoGeneration?: boolean
   },
 ): Promise<OutputRequestStatusResponse> {
@@ -7607,6 +7619,8 @@ export async function startOutputRequest(
     generateAudio: request.generateAudio,
     cinematicPresetFamily: request.cinematicPresetFamily,
     cinematicReferenceMode: request.cinematicReferenceMode ?? aiGenerationSettings.outputWorkflow.cinematicReferenceModeDefault,
+    debugCinematicStoryboardStyleSafeMode: request.debugCinematicStoryboardStyleSafeMode ?? aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStyleSafeModeDefault,
+    cinematicStoryboardStyleOverride: request.cinematicStoryboardStyleOverride ?? aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStylePrompt,
     debugSkipVideoGeneration: request.debugSkipVideoGeneration ?? aiGenerationSettings.outputWorkflow.debugSkipVideoGenerationDefault,
     snapshot: buildOutputWorkflowSnapshot(snapshot),
     runInput: buildOutputWorkflowRunInput(snapshot, request),

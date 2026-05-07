@@ -426,8 +426,11 @@ test('cinematic output preset creates script-first dynamic take fanout placehold
   assert.equal(fanout?.config.maxTotalDurationSeconds, 60)
   assert.equal(fanout?.config.videoModel, 'bytedance/seedance-2.0/fast/reference-to-video')
   assert.equal(fanout?.config.cinematicReferenceMode, 'storyboard_sheet')
+  assert.equal(fanout?.config.debugCinematicStoryboardStyleSafeMode, true)
+  assert.match(String(fanout?.config.cinematicStoryboardStyleOverride), /painterly comic-book cinematic production art/)
   assert.equal(fanout?.config.debugSkipVideoGeneration, true)
   assert.ok(plan.diagnostics.some((line) => line.includes('Storyboard-grid reference mode')))
+  assert.ok(plan.diagnostics.some((line) => line.includes('Debug storyboard style safe mode is enabled')))
   const skillContext = plan.nodes.find((node) => node.key === 'skill_context')
   assert.ok(Array.isArray(skillContext?.config.skillKeys))
   assert.ok((skillContext?.config.skillKeys as string[]).includes('cinematic_beat_sheet_planning'))
@@ -461,6 +464,7 @@ test('cinematic output preset creates script-first dynamic take fanout placehold
     snapshot,
   })
   assert.equal(requestPayload.cinematicReferenceMode, 'storyboard_sheet')
+  assert.equal(requestPayload.debugCinematicStoryboardStyleSafeMode, undefined)
   assert.equal(requestPayload.debugSkipVideoGeneration, false)
 
   const combinedReferencePayload = outputRequestStartRequestSchema.parse({
@@ -496,6 +500,21 @@ test('cinematic output preset creates script-first dynamic take fanout placehold
   }, 'cinematic_episode')
   const costEnabledFanout = costEnabledPlan.nodes.find((node) => node.key === 'cinematic_dynamic_take_fanout')
   assert.equal(costEnabledFanout?.config.debugSkipVideoGeneration, false)
+
+  const safeModeDisabledPlan = planOutputRequestWorkflow({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    prompt: 'Create a cinematic sequence from Chapter 1.',
+    targetFormat: 'video',
+    selectedSequenceUnitKeys: ['chapter-1'],
+    debugCinematicStoryboardStyleSafeMode: false,
+    cinematicStoryboardStyleOverride: 'charcoal animatic boards',
+    snapshot,
+  }, 'cinematic_episode')
+  const safeModeDisabledFanout = safeModeDisabledPlan.nodes.find((node) => node.key === 'cinematic_dynamic_take_fanout')
+  assert.equal(safeModeDisabledFanout?.config.debugCinematicStoryboardStyleSafeMode, false)
+  assert.equal(safeModeDisabledFanout?.config.cinematicStoryboardStyleOverride, '')
+  assert.ok(safeModeDisabledPlan.diagnostics.some((line) => line.includes('Debug storyboard style safe mode is disabled')))
 
   const keyframeModePlan = planOutputRequestWorkflow({
     projectId: 'project-1',
@@ -655,6 +674,8 @@ test('cinematic Nara EVA-9 fixture separates visual storyboard from Seedance dia
       aspectRatio: string
       prompt: string
       guidance: null
+      debugCinematicStoryboardStyleSafeMode?: boolean
+      cinematicStoryboardStyleOverride?: string
     }) => { prompt: string }
     buildCinematicVideoPrompt: (input: {
       blockScript: Record<string, unknown>
@@ -667,6 +688,8 @@ test('cinematic Nara EVA-9 fixture separates visual storyboard from Seedance dia
       generateAudio: boolean
       referenceImageCount: number
       cinematicReferenceMode?: string
+      debugCinematicStoryboardStyleSafeMode?: boolean
+      cinematicStoryboardStyleOverride?: string
     }) => string
   }
   const assetPack = {
@@ -732,11 +755,16 @@ test('cinematic Nara EVA-9 fixture separates visual storyboard from Seedance dia
     aspectRatio: '16:9',
     prompt: 'create a cinematic where Nara Quill is examining Eva-9 for the first time',
     guidance: null,
+    debugCinematicStoryboardStyleSafeMode: true,
+    cinematicStoryboardStyleOverride: 'painterly comic-book cinematic production art, expressive ink-and-paint rendering, premium graphic novel storyboard look, not photorealistic',
   }).prompt
   assert.doesNotMatch(storyboardPrompt, /You're what came out of the Foundry|No\. This is too refined|rain ticking|electrical hum|servo flicker/)
   assert.doesNotMatch(storyboardPrompt, /\b(stares_at|leans_over|lies_still)\b/)
   assert.match(storyboardPrompt, /Nara steps into the blue-lit bay/)
   assert.match(storyboardPrompt, /Nara Quill's mouth is slightly open/)
+  assert.match(storyboardPrompt, /painterly comic-book cinematic production art/)
+  assert.match(storyboardPrompt, /stylized production-board translation, not photorealistic likeness/i)
+  assert.match(storyboardPrompt, /preserving each reference image's identity anchors, silhouette, wardrobe, palette, props, material cues, and environment geometry/i)
 
   const videoPrompt = buildCinematicVideoPrompt({
     blockScript,
@@ -749,11 +777,28 @@ test('cinematic Nara EVA-9 fixture separates visual storyboard from Seedance dia
     generateAudio: true,
     referenceImageCount: 3,
     cinematicReferenceMode: 'storyboard_sheet',
+    debugCinematicStoryboardStyleSafeMode: true,
+    cinematicStoryboardStyleOverride: 'painterly comic-book cinematic production art, expressive ink-and-paint rendering, premium graphic novel storyboard look, not photorealistic',
   })
+  assert.match(videoPrompt, /Target video style: grounded live-action cinematic video/)
+  assert.match(videoPrompt, /@Image1 is a stylized storyboard\/timing reference rendered as painterly comic-book cinematic production art/)
+  assert.match(videoPrompt, /render the final clip in the target video style: grounded live-action cinematic video/)
   assert.match(videoPrompt, /Nara Quill: "You're what came out of the Foundry\."/)
   assert.match(videoPrompt, /Nara Quill: "No\. This is too refined\."/)
   assert.match(videoPrompt, /rain ticking against the bay window/)
   assert.match(videoPrompt, /@Image1: storyboard beat-sheet grid/)
+
+  const normalStoryboardPrompt = buildCinematicBeatSheetPrompt({
+    blockScript,
+    assetPack,
+    aspectRatio: '16:9',
+    prompt: 'create a cinematic where Nara Quill is examining Eva-9 for the first time',
+    guidance: null,
+    debugCinematicStoryboardStyleSafeMode: false,
+    cinematicStoryboardStyleOverride: 'painterly comic-book cinematic production art',
+  }).prompt
+  assert.doesNotMatch(normalStoryboardPrompt, /painterly comic-book cinematic production art/)
+  assert.match(normalStoryboardPrompt, /Storyboard style safe mode: disabled/)
 })
 
 test('cinematic cafe storyboard prompt naturalizes actions and strips dialogue delivery', async () => {
