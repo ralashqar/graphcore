@@ -2,7 +2,7 @@ import { z } from 'zod'
 
 const looseRecordSchema = z.record(z.string(), z.unknown())
 
-export const aiProviderSchema = z.enum(['openai', 'fal', 'graphcore', 'unknown'])
+export const aiProviderSchema = z.enum(['openai', 'fal', 'muapi', 'graphcore', 'unknown'])
 export const aiUsageModalitySchema = z.enum(['text', 'image', 'video', 'audio', 'embedding', 'mixed'])
 export const aiUsageOperationSchema = z.enum([
   'responses',
@@ -133,6 +133,10 @@ export const FAL_MEDIA_PRICE_SNAPSHOT: Record<string, ImagePrice> = {
   'bytedance/seedance-2.0/reference-to-video': { unitUsd: 0.3024, source: 'fal_seedance_2_reference_pricing_snapshot' },
 }
 
+export const MUAPI_MEDIA_PRICE_SNAPSHOT: Record<string, ImagePrice> = {
+  'seedance-2-vip-omni-reference': { unitUsd: 0, source: 'muapi_pricing_not_configured' },
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -232,6 +236,34 @@ export function estimateFalMediaCost(input: {
   })
 }
 
+export function estimateMuapiMediaCost(input: {
+  model: string
+  units?: number
+  width?: number
+  height?: number
+  durationSeconds?: number
+  creditsPerUsd?: number
+}): AiUsageCost {
+  const price = MUAPI_MEDIA_PRICE_SNAPSHOT[input.model] ?? { unitUsd: 0, source: 'muapi_pricing_not_configured' }
+  const units = Math.max(1, input.units ?? 1)
+  const actualCostUsd = units * price.unitUsd
+  return aiUsageCostSchema.parse({
+    estimatedCostUsd: actualCostUsd,
+    actualCostUsd,
+    estimatedCredits: creditsForUsd(actualCostUsd, input.creditsPerUsd),
+    actualCredits: creditsForUsd(actualCostUsd, input.creditsPerUsd),
+    pricingSource: price.source,
+    priceSnapshot: {
+      provider: 'muapi',
+      model: input.model,
+      unitUsd: price.unitUsd,
+      width: input.width ?? null,
+      height: input.height ?? null,
+      durationSeconds: input.durationSeconds ?? null,
+    },
+  })
+}
+
 export function buildOpenAiUsageLine(input: {
   model: string
   usage: unknown
@@ -310,6 +342,58 @@ export function buildFalMediaUsageLine(input: {
     nodeLabel: input.nodeLabel ?? '',
     nodeType: input.nodeType ?? '',
     provider: 'fal',
+    model: input.model,
+    modality: input.modality,
+    operation: input.operation,
+    status: input.status ?? 'succeeded',
+    requestId: input.requestId ?? null,
+    responseId: input.responseId ?? null,
+    media,
+    cost,
+    metadata: input.metadata ?? {},
+  })
+}
+
+export function buildMuapiMediaUsageLine(input: {
+  model: string
+  modality: 'video'
+  operation: 'video_generation' | 'provider_queue'
+  nodeKey?: string
+  nodeLabel?: string
+  nodeType?: string
+  requestId?: string | null
+  responseId?: string | null
+  status?: AiUsageLine['status']
+  units?: number
+  width?: number
+  height?: number
+  durationSeconds?: number
+  quality?: string
+  size?: string
+  creditsPerUsd?: number
+  metadata?: Record<string, unknown>
+}): AiUsageLine {
+  const media = aiMediaUsageSchema.parse({
+    units: Math.max(1, input.units ?? 1),
+    width: input.width,
+    height: input.height,
+    durationSeconds: input.durationSeconds,
+    quality: input.quality,
+    size: input.size,
+  })
+  const cost = estimateMuapiMediaCost({
+    model: input.model,
+    units: media.units,
+    width: media.width,
+    height: media.height,
+    durationSeconds: media.durationSeconds,
+    creditsPerUsd: input.creditsPerUsd,
+  })
+  return aiUsageLineSchema.parse({
+    nodeKey: input.nodeKey ?? '',
+    nodeLabel: input.nodeLabel ?? '',
+    nodeType: input.nodeType ?? '',
+    provider: 'muapi',
     model: input.model,
     modality: input.modality,
     operation: input.operation,
@@ -408,19 +492,25 @@ export function estimateOutputWorkflowUsage(plan: {
       })]
     }
     if (node.nodeType === 'video_generation') {
-      const model = typeof config.model === 'string' ? config.model : 'bytedance/seedance-2.0/fast/reference-to-video'
+      const provider = typeof config.provider === 'string' ? config.provider : 'muapi'
+      const model = typeof config.model === 'string'
+        ? config.model
+        : provider === 'muapi'
+          ? 'seedance-2-vip-omni-reference'
+          : 'bytedance/seedance-2.0/fast/reference-to-video'
       const durationSeconds = readNumber(config.durationSeconds) || 8
-      return [buildFalMediaUsageLine({
+      const usageInput = {
         model,
-        modality: 'video',
-        operation: 'video_generation',
+        modality: 'video' as const,
+        operation: 'video_generation' as const,
         nodeKey: node.key ?? '',
         nodeLabel: node.label ?? '',
         nodeType: node.nodeType,
-        status: 'estimated',
+        status: 'estimated' as const,
         units: durationSeconds,
         durationSeconds,
-      })]
+      }
+      return [provider === 'muapi' ? buildMuapiMediaUsageLine(usageInput) : buildFalMediaUsageLine(usageInput)]
     }
     return []
   })

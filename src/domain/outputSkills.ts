@@ -435,6 +435,28 @@ export const OUTPUT_SKILL_REGISTRY: readonly OutputSkill[] = [
     tags: ['cinematic', 'beat_sheet', 'storyboard', 'planning_only'],
   },
   {
+    key: 'cinematic_direction_sheet_planning',
+    name: 'Cinematic Direction Sheet Planning',
+    description: 'Creates director/DP shot reference sheets for cinematic take planning and Seedance visual continuity.',
+    category: 'cinematic',
+    modality: 'image',
+    appliesToNodeTypes: ['utility_transform', 'image_generation'],
+    appliesToPurposes: ['cinematic_beat_sheet_prompt', 'cinematic_beat_sheet'],
+    guidance: [
+      'For shot_reference_sheet mode, build one production-board image per compiled take with a hero frame, timed shot strip, top-down floor map, camera layout, lighting/mood/style notes, and continuity anchors.',
+      'Keep the sheet visual-first and sparse: show subject blocking, movement arrows, camera cones, practical light sources, palette, atmosphere, and key environment geometry.',
+      'Use appearance-only entity anchors from visual descriptions, visual traits, and reference-sheet images; do not include backstory summaries or spoken dialogue.',
+    ],
+    avoid: [
+      'Avoid dense paragraphs, screenplay columns, audio notes, provider wording, UI clutter, decorative posters, or labels that should appear in the final video.',
+    ],
+    structuredDirectives: { promptKind: 'cinematic_direction_sheet', planningOnly: true, usedAsVideoReferenceByDefault: true },
+    priority: 100,
+    tokenBudget: 340,
+    version: '1.0.0',
+    tags: ['cinematic', 'direction_sheet', 'shot_reference_sheet', 'floor_map', 'camera_layout', 'planning_only'],
+  },
+  {
     key: 'cinematic_keyframe_prompting',
     name: 'Cinematic Keyframe Prompting',
     description: 'Derives clean opening, midpoint, and ending GPT Image 2 keyframes from a compiled take.',

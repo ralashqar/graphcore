@@ -39,6 +39,7 @@ import {
   buildOutputWorkflowLevelLayout,
   buildOutputWorkflowTargetedRunMetadata,
 } from './outputWorkflowGraphView.ts'
+import { aiGenerationSettings } from '../config/aiGenerationSettings.ts'
 
 const now = '2026-05-03T00:00:00.000Z'
 const repoRoot = resolve(import.meta.dirname, '../..')
@@ -190,6 +191,26 @@ test('node registry exposes approved workflow node types only', () => {
 
 test('output artifacts support HTML companion pages', () => {
   assert.equal(outputWorkflowArtifactKindSchema.parse('html'), 'html')
+})
+
+test('cinematic storyboard style override accepts blank as default', () => {
+  const parsedStart = outputRequestStartRequestSchema.parse({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    prompt: 'Create a cinematic in the cafe',
+    cinematicStoryboardStyleOverride: '   ',
+    snapshot,
+  })
+  assert.equal(parsedStart.cinematicStoryboardStyleOverride, undefined)
+
+  const parsedPlan = outputWorkflowPlanRequestSchema.parse({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    prompt: 'Create a cinematic in the cafe',
+    cinematicStoryboardStyleOverride: '',
+    snapshot,
+  })
+  assert.equal(parsedPlan.cinematicStoryboardStyleOverride, undefined)
 })
 
 test('output skill registry is valid, versioned, and rejects duplicate keys', () => {
@@ -424,16 +445,18 @@ test('cinematic output preset creates script-first dynamic take fanout placehold
   assert.equal(fanout?.config.resolution, '720p')
   assert.equal(fanout?.config.generateAudio, true)
   assert.equal(fanout?.config.maxTotalDurationSeconds, 60)
-  assert.equal(fanout?.config.videoModel, 'bytedance/seedance-2.0/fast/reference-to-video')
-  assert.equal(fanout?.config.cinematicReferenceMode, 'storyboard_sheet')
-  assert.equal(fanout?.config.debugCinematicStoryboardStyleSafeMode, true)
-  assert.match(String(fanout?.config.cinematicStoryboardStyleOverride), /painterly comic-book cinematic production art/)
+  assert.equal(fanout?.config.videoProvider, 'muapi')
+  assert.equal(fanout?.config.videoModel, aiGenerationSettings.outputWorkflow.videoMuapiModel)
+  assert.equal(fanout?.config.cinematicReferenceMode, 'shot_reference_sheet')
+  assert.equal(fanout?.config.debugCinematicStoryboardStyleSafeMode, aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStyleSafeModeDefault)
+  assert.equal(fanout?.config.cinematicStoryboardStyleOverride, aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStyleSafeModeDefault ? aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStylePrompt : '')
   assert.equal(fanout?.config.debugSkipVideoGeneration, true)
-  assert.ok(plan.diagnostics.some((line) => line.includes('Storyboard-grid reference mode')))
-  assert.ok(plan.diagnostics.some((line) => line.includes('Debug storyboard style safe mode is enabled')))
+  assert.ok(plan.diagnostics.some((line) => line.includes('Cinematic direction-sheet reference mode')))
+  assert.ok(plan.diagnostics.some((line) => line.includes('Debug storyboard style safe mode')))
   const skillContext = plan.nodes.find((node) => node.key === 'skill_context')
   assert.ok(Array.isArray(skillContext?.config.skillKeys))
   assert.ok((skillContext?.config.skillKeys as string[]).includes('cinematic_beat_sheet_planning'))
+  assert.ok((skillContext?.config.skillKeys as string[]).includes('cinematic_direction_sheet_planning'))
   assert.ok((skillContext?.config.skillKeys as string[]).includes('cinematic_keyframe_prompting'))
   assert.ok((skillContext?.config.skillKeys as string[]).includes('seedance_timeline_call_sheet'))
 
@@ -476,6 +499,16 @@ test('cinematic output preset creates script-first dynamic take fanout placehold
     snapshot,
   })
   assert.equal(combinedReferencePayload.cinematicReferenceMode, 'keyframes_and_storyboard')
+
+  const directionSheetPayload = outputRequestStartRequestSchema.parse({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    prompt: 'Create a cinematic sequence from Chapter 1.',
+    targetFormat: 'video',
+    cinematicReferenceMode: 'shot_reference_sheet',
+    snapshot,
+  })
+  assert.equal(directionSheetPayload.cinematicReferenceMode, 'shot_reference_sheet')
 
   const portraitPlan = planOutputRequestWorkflow({
     projectId: 'project-1',
@@ -564,7 +597,7 @@ test('cinematic beat-sheet prompts use distinct clean micro-beat captions', asyn
       aspectRatio: string
       prompt: string
       guidance: null
-    }) => { prompt: string }
+    }) => { prompt: string; beatSheetPlan: Record<string, unknown> }
   }
   const beatSheet = buildCinematicBeatSheetPrompt({
     aspectRatio: '16:9',
@@ -644,16 +677,19 @@ test('cinematic beat-sheet prompts use distinct clean micro-beat captions', asyn
 
   const prompt = beatSheet.prompt
   const beatMatches = [...prompt.matchAll(/BEAT \d+ \[(.*?)\]\nPanel visual: (.*?)\nCaption line 1: (.*?)\nCaption line 2: (.*?)(?:\n\n|$)/g)]
-  assert.equal(beatMatches.length, 12)
+  assert.equal(beatMatches.length, 8)
   assert.equal(beatMatches[0]?.[1], '00:00-00:01')
-  assert.equal(beatMatches[11]?.[1], '00:11-00:13')
+  assert.equal(beatMatches[7]?.[1], '00:11-00:13')
+  assert.equal(beatSheet.beatSheetPlan.visualDensity, 'action')
+  assert.equal(beatSheet.beatSheetPlan.shotStripMode, 'dense')
+  assert.match(prompt, /Shot density: action; shot-strip mode: dense; panel count: 8/)
   const panelVisuals = beatMatches.map((match) => match[2])
   assert.ok(panelVisuals.some((visual) => visual.includes('boots exploding water')))
   assert.ok(panelVisuals.some((visual) => visual.includes('patrol drone slides overhead')))
   assert.ok(panelVisuals.every((visual) => !/Opening state|Action escalation|Obstacle or contact|Consequence and transition|Visible action and blocking|Dialogue cue|Audio cue|Camera feel|Framing:/i.test(visual)))
   assert.ok(panelVisuals.every((visual) => !/\b[A-Za-z]+_[A-Za-z]+\b/.test(visual)))
   const captionPairs = beatMatches.map((match) => `${match[3]} ${match[4]}`)
-  assert.ok(new Set(captionPairs).size >= 9)
+  assert.ok(new Set(captionPairs).size >= 7)
   assert.ok(captionPairs.every((caption) => !caption.includes('...') && !caption.includes('…')))
   assert.ok(captionPairs.every((caption) => !caption.includes('Ilya Sorin, Civic Harmony Bureau, Underrail Warrens')))
   assert.doesNotMatch(prompt, /Stop and submit|steam hiss blast/)
@@ -663,6 +699,340 @@ test('cinematic beat-sheet prompts use distinct clean micro-beat captions', asyn
   assert.match(prompt, /^Ilya Sorin: Visual: /m)
   assert.match(prompt, /Caption rules: describe only what the viewer sees/)
   assert.match(prompt, /Storyboard rules: every Panel visual must be action-based/)
+})
+
+test('cinematic adaptive shot density keeps slow scenes sparse and action scenes dense', async () => {
+  const sharedModulePath = ['..', '..', 'supabase', 'functions', '_shared', 'output-workflow.ts'].join('/')
+  const { buildCinematicBeatSheetPrompt, buildCinematicDirectionSheetPrompt, buildCinematicVideoPrompt } = await import(sharedModulePath) as {
+    buildCinematicBeatSheetPrompt: (input: {
+      blockScript: Record<string, unknown>
+      assetPack: Record<string, unknown>
+      aspectRatio: string
+      prompt: string
+      guidance: null
+    }) => { prompt: string; beatSheetPlan: Record<string, unknown> }
+    buildCinematicDirectionSheetPrompt: (input: {
+      blockScript: Record<string, unknown>
+      assetPack: Record<string, unknown>
+      aspectRatio: string
+      prompt: string
+      guidance: null
+    }) => { prompt: string; directionSheetPlan: Record<string, unknown> }
+    buildCinematicVideoPrompt: (input: {
+      blockScript: Record<string, unknown>
+      assetPack: Record<string, unknown>
+      prompt: string
+      guidance: null
+      durationSeconds: number
+      aspectRatio: string
+      resolution: string
+      generateAudio: boolean
+      referenceImageCount: number
+      cinematicReferenceMode?: string
+    }) => string
+  }
+  const slowCafeScript = {
+    title: 'Cafe Static',
+    durationSeconds: 15,
+    location: 'lower_city_cafe',
+    shots: [
+      {
+        id: 'shot_01',
+        startSeconds: 0,
+        endSeconds: 4,
+        visualAction: 'Ilya and EVA-9 sit across from each other with chipped cups between them while neon reflections crawl across wet glass.',
+        composition: 'A surveillance dome hangs in soft focus behind the cramped table.',
+        framing: 'Medium two-shot at a cramped metal cafe table.',
+        cameraMovement: 'Slow lateral creep inward.',
+        dialogue: [{ speaker: 'Ilya Sorin', line: 'You pick very public hiding spots.', delivery: 'dry' }],
+      },
+      {
+        id: 'shot_02',
+        startSeconds: 4,
+        endSeconds: 8,
+        visualAction: 'EVA-9 gives the faintest approximation of a smile as Ilya stirs bitter coffee.',
+        composition: 'Ilya shoulder soft in foreground, EVA-9 centered with cold blue edge light.',
+        framing: 'Over-shoulder favoring EVA-9.',
+        cameraMovement: 'Gentle push-in.',
+        dialogue: [{ speaker: 'EVA-9', line: 'I can lower the accuracy if you prefer.', delivery: 'deadpan' }],
+      },
+      {
+        id: 'shot_03',
+        startSeconds: 8,
+        endSeconds: 11,
+        visualAction: 'Ilya lets out a reluctant half-laugh and glances toward the rain-smeared street.',
+        composition: 'Ilya framed tight with window glow behind him.',
+        framing: 'Close-up on Ilya.',
+        cameraMovement: 'Static framing.',
+        dialogue: [{ speaker: 'Ilya Sorin', line: 'That was almost human.', delivery: 'soft' }],
+      },
+      {
+        id: 'shot_04',
+        startSeconds: 11,
+        endSeconds: 15,
+        visualAction: 'EVA-9 holds his gaze without blinking as the red surveillance glint pulses once behind her.',
+        composition: 'Her face centered and still, background falling away into cold blur.',
+        framing: 'Tight close-up on EVA-9.',
+        cameraMovement: 'Nearly imperceptible push-in.',
+        dialogue: [{ speaker: 'EVA-9', line: 'I practiced with your voice while you were asleep.', delivery: 'quiet sincere' }],
+      },
+    ],
+  }
+  const actionChaseScript = {
+    title: 'Underrail Pursuit',
+    durationSeconds: 15,
+    location: 'underrail_warrens',
+    shots: [
+      {
+        id: 'shot_01',
+        startSeconds: 0,
+        endSeconds: 4,
+        visualAction: 'Ilya sprints through flooded service tunnels, boots exploding water across rusted rails as pursuit lights sweep behind him.',
+        composition: 'Tunnel lines compress behind him while officers appear through spray.',
+        cameraMovement: 'Fast backward tracking.',
+        actions: [{ actor: 'Ilya Sorin', verb: 'sprints through', target: 'flooded tunnel', stagingNotes: 'Water impact and red warning light fill the frame.' }],
+      },
+      {
+        id: 'shot_02',
+        startSeconds: 4,
+        endSeconds: 8,
+        visualAction: 'He whips around a blind corner, nearly slips, and catches himself on the wall as steam erupts.',
+        composition: 'Search beams slice through steam from the rear corridor.',
+        cameraMovement: 'Handheld chase follow.',
+        actions: [{ actor: 'Ilya Sorin', verb: 'grabs', target: 'pipe brace', stagingNotes: 'The turn becomes a physical obstacle.' }],
+      },
+      {
+        id: 'shot_03',
+        startSeconds: 8,
+        endSeconds: 12,
+        visualAction: 'A patrol drone slides overhead and paints Ilya with a hard blue-white scan.',
+        composition: 'Ilya is small below brutalist geometry while the drone crosses top frame.',
+        cameraMovement: 'Crane-like rise and tilt.',
+      },
+      {
+        id: 'shot_04',
+        startSeconds: 12,
+        endSeconds: 15,
+        visualAction: 'Ilya vaults a service fence as a stun round sparks against the metal where he was standing.',
+        composition: 'His body arcs across center while red-lit officers are blocked on the other side.',
+        cameraMovement: 'Lateral tracking.',
+        actions: [{ actor: 'Ilya Sorin', verb: 'vaults', target: 'service fence', stagingNotes: 'Metal impact and sparks mark the near capture.' }],
+      },
+    ],
+  }
+  const assetPack = { entities: [] }
+  const slowSheet = buildCinematicBeatSheetPrompt({
+    blockScript: slowCafeScript,
+    assetPack,
+    aspectRatio: '16:9',
+    prompt: 'create a cinematic cafe banter scene',
+    guidance: null,
+  })
+  assert.equal(slowSheet.beatSheetPlan.visualDensity, 'slow')
+  assert.equal(slowSheet.beatSheetPlan.shotStripMode, 'sparse')
+  assert.equal(slowSheet.beatSheetPlan.panelCount, 5)
+  assert.equal((slowSheet.prompt.match(/^BEAT /gm) ?? []).length, 5)
+  assert.match(slowSheet.prompt, /Panel-count rule: these panels represent meaningful visual cuts or action phases, not every second/)
+
+  const slowShortSheet = buildCinematicBeatSheetPrompt({
+    blockScript: { ...slowCafeScript, durationSeconds: 11, shots: slowCafeScript.shots.slice(0, 3).map((shot, index) => ({ ...shot, startSeconds: index * 3, endSeconds: index === 2 ? 11 : index * 3 + 3 })) },
+    assetPack,
+    aspectRatio: '16:9',
+    prompt: 'create a short quiet cafe exchange',
+    guidance: null,
+  })
+  assert.equal(slowShortSheet.beatSheetPlan.visualDensity, 'slow')
+  assert.ok(Number(slowShortSheet.beatSheetPlan.panelCount) <= 4)
+
+  const actionSheet = buildCinematicBeatSheetPrompt({
+    blockScript: actionChaseScript,
+    assetPack,
+    aspectRatio: '16:9',
+    prompt: 'create an underrail chase',
+    guidance: null,
+  })
+  assert.equal(actionSheet.beatSheetPlan.visualDensity, 'action')
+  assert.equal(actionSheet.beatSheetPlan.shotStripMode, 'dense')
+  assert.ok(Number(actionSheet.beatSheetPlan.panelCount) >= 8)
+  assert.ok(Number(actionSheet.beatSheetPlan.panelCount) <= 12)
+
+  const directionSheet = buildCinematicDirectionSheetPrompt({
+    blockScript: slowCafeScript,
+    assetPack,
+    aspectRatio: '16:9',
+    prompt: 'create a cinematic cafe banter scene',
+    guidance: null,
+  })
+  assert.equal(directionSheet.directionSheetPlan.visualDensity, 'slow')
+  assert.match(directionSheet.prompt, /sparse slow-scene coverage/)
+  assert.match(directionSheet.prompt, /Do not invent second-by-second panels/)
+
+  const videoPrompt = buildCinematicVideoPrompt({
+    blockScript: slowCafeScript,
+    assetPack,
+    prompt: 'create a cinematic cafe banter scene',
+    guidance: null,
+    durationSeconds: 15,
+    aspectRatio: '16:9',
+    resolution: '720p',
+    generateAudio: true,
+    referenceImageCount: 2,
+    cinematicReferenceMode: 'shot_reference_sheet',
+  })
+  assert.match(videoPrompt, /Ilya Sorin: "You pick very public hiding spots\."/)
+  assert.match(videoPrompt, /EVA-9: "I practiced with your voice while you were asleep\."/)
+})
+
+test('cinematic direction-sheet mode builds director reference sheet and Seedance legend', async () => {
+  const sharedModulePath = ['..', '..', 'supabase', 'functions', '_shared', 'output-workflow.ts'].join('/')
+  const { buildCinematicDirectionSheetPrompt, buildCinematicVideoPrompt } = await import(sharedModulePath) as {
+    buildCinematicDirectionSheetPrompt: (input: {
+      blockScript: Record<string, unknown>
+      assetPack: Record<string, unknown>
+      aspectRatio: string
+      prompt: string
+      guidance: null
+      debugCinematicStoryboardStyleSafeMode?: boolean
+      cinematicStoryboardStyleOverride?: string
+    }) => { prompt: string; directionSheetPlan: Record<string, unknown>; imageSize: { width: number; height: number } }
+    buildCinematicVideoPrompt: (input: {
+      blockScript: Record<string, unknown>
+      assetPack: Record<string, unknown>
+      prompt: string
+      guidance: null
+      durationSeconds: number
+      aspectRatio: string
+      resolution: string
+      generateAudio: boolean
+      referenceImageCount: number
+      cinematicReferenceMode?: string
+      debugCinematicStoryboardStyleSafeMode?: boolean
+      cinematicStoryboardStyleOverride?: string
+    }) => string
+  }
+  const blockScript = {
+    title: 'Cafe Static Take',
+    durationSeconds: 15,
+    location: 'lower_city_cafe',
+    shots: [
+      {
+        id: 'shot_01',
+        title: 'Hook at the table',
+        startSeconds: 0,
+        endSeconds: 4,
+        visualAction: 'Ilya and EVA-9 sit across from each other with chipped cups between them while neon reflections crawl across wet glass.',
+        composition: 'Ilya foreground left, EVA-9 foreground right, surveillance dome layered behind them.',
+        framing: 'Medium two-shot at a cramped metal cafe table.',
+        cameraMovement: 'Slow lateral creep inward.',
+        dialogue: [{ speaker: 'Ilya Sorin', line: 'You pick very public hiding spots.', delivery: 'dry' }],
+        audioCues: ['rain ticking against glass'],
+      },
+      {
+        id: 'shot_02',
+        title: 'Still answer',
+        startSeconds: 4,
+        endSeconds: 9,
+        visualAction: 'EVA-9 gives the faintest approximation of a smile as Ilya stirs bitter coffee.',
+        composition: 'Ilya shoulder soft in foreground, EVA-9 centered with cold blue edge light.',
+        framing: 'Over-shoulder favoring EVA-9.',
+        cameraMovement: 'Gentle push-in.',
+      },
+      {
+        id: 'shot_03',
+        title: 'Room freezes',
+        startSeconds: 9,
+        endSeconds: 15,
+        visualAction: 'EVA-9 holds his gaze without blinking as the red surveillance glint pulses once behind her.',
+        composition: 'Her face centered and still, background falling away into cold blur.',
+        framing: 'Tight close-up on EVA-9.',
+        cameraMovement: 'Nearly imperceptible push-in.',
+      },
+    ],
+  }
+  const assetPack = {
+    entities: [
+      { name: 'Ilya Sorin', visualDescription: 'lean young man in a worn utility jacket with tired eyes', visualTraits: ['shaved dark hair'] },
+      { name: 'EVA-9', visualDescription: 'sleek humanoid android with pale synthetic panels and calm unreadable gaze', visualTraits: ['subtle neck ports'] },
+    ],
+  }
+  const sheet = buildCinematicDirectionSheetPrompt({
+    blockScript,
+    assetPack,
+    aspectRatio: '16:9',
+    prompt: 'create a cinematic cafe banter scene',
+    guidance: null,
+    debugCinematicStoryboardStyleSafeMode: true,
+    cinematicStoryboardStyleOverride: 'painterly comic-book cinematic production art',
+  })
+  assert.equal(sheet.directionSheetPlan.sheetKind, 'shot_reference_sheet')
+  assert.deepEqual(sheet.imageSize, { width: 2304, height: 1536 })
+  assert.match(sheet.prompt, /CINEMATIC DIRECTION SHEET/)
+  assert.match(sheet.prompt, /TIMED SHOT STRIP/)
+  assert.match(sheet.prompt, /LOCATION FLOOR MAP/)
+  assert.match(sheet.prompt, /CAMERA LAYOUT/)
+  assert.match(sheet.prompt, /LIGHTING \/ MOOD \/ STYLE/)
+  assert.match(sheet.prompt, /CONTINUITY ANCHORS/)
+  assert.match(sheet.prompt, /HERO FRAME/)
+  assert.match(sheet.prompt, /subject positions, movement arrows, camera positions, and camera direction cones/)
+  assert.match(sheet.prompt, /painterly comic-book cinematic production art/)
+  assert.doesNotMatch(sheet.prompt, /You pick very public hiding spots|rain ticking against glass|Seedance|provider names/)
+
+  const videoPrompt = buildCinematicVideoPrompt({
+    blockScript,
+    assetPack,
+    prompt: 'create a cinematic cafe banter scene',
+    guidance: null,
+    durationSeconds: 15,
+    aspectRatio: '16:9',
+    resolution: '720p',
+    generateAudio: true,
+    referenceImageCount: 3,
+    cinematicReferenceMode: 'shot_reference_sheet',
+    debugCinematicStoryboardStyleSafeMode: true,
+    cinematicStoryboardStyleOverride: 'painterly comic-book cinematic production art',
+  })
+  assert.match(videoPrompt, /@Image1: cinematic direction sheet/)
+  assert.match(videoPrompt, /timed shot strip, blocking, camera layout, spatial map, lighting direction/)
+  assert.match(videoPrompt, /Do not reproduce sheet labels, maps, arrows, camera cones/)
+  assert.match(videoPrompt, /Ilya Sorin: "You pick very public hiding spots\."/)
+})
+
+test('MUAPI video helpers build payloads and parse result shapes', async () => {
+  const sharedModulePath = ['..', '..', 'supabase', 'functions', '_shared', 'output-workflow.ts'].join('/')
+  const { buildMuapiVideoPayload, extractMuapiVideoUrlFromResult } = await import(sharedModulePath) as {
+    buildMuapiVideoPayload: (input: {
+      prompt: string
+      durationSeconds: number
+      aspectRatio?: string
+      referenceImageUrls?: string[]
+      referenceVideoUrls?: string[]
+      referenceAudioUrls?: string[]
+    }) => Record<string, unknown>
+    extractMuapiVideoUrlFromResult: (value: unknown) => string
+  }
+
+  assert.deepEqual(buildMuapiVideoPayload({
+    prompt: 'Generate one cinematic take.',
+    durationSeconds: 10,
+    aspectRatio: '16:9',
+    referenceImageUrls: ['https://example.com/a.webp'],
+    referenceVideoUrls: ['https://example.com/ref.mp4'],
+    referenceAudioUrls: ['https://example.com/ref.wav'],
+  }), {
+    prompt: 'Generate one cinematic take.',
+    images_list: ['https://example.com/a.webp'],
+    video_files: ['https://example.com/ref.mp4'],
+    audio_files: ['https://example.com/ref.wav'],
+    aspect_ratio: '16:9',
+    duration: 10,
+  })
+
+  assert.equal(extractMuapiVideoUrlFromResult({ video_url: 'https://cdn.example.com/out.mp4' }), 'https://cdn.example.com/out.mp4')
+  assert.equal(extractMuapiVideoUrlFromResult({ output: { video_url: 'https://cdn.example.com/output.mp4' } }), 'https://cdn.example.com/output.mp4')
+  assert.equal(extractMuapiVideoUrlFromResult({ result: { videos: [{ url: 'https://cdn.example.com/result.webm' }] } }), 'https://cdn.example.com/result.webm')
+  assert.equal(extractMuapiVideoUrlFromResult({ response: ['https://cdn.example.com/response.mp4'] }), 'https://cdn.example.com/response.mp4')
+  assert.equal(extractMuapiVideoUrlFromResult({ outputs: ['https://cdn.example.com/webhook.mp4'] }), 'https://cdn.example.com/webhook.mp4')
+  assert.equal(extractMuapiVideoUrlFromResult({ status: 'failed', error_message: 'moderated' }), '')
 })
 
 test('cinematic Nara EVA-9 fixture separates visual storyboard from Seedance dialogue', async () => {
@@ -869,8 +1239,9 @@ test('cinematic cafe storyboard prompt naturalizes actions and strips dialogue d
   assert.doesNotMatch(prompt, /Ilya Sorin leans table|EVA-9 tilts Ilya Sorin|EVA-9 holds Ilya Sorin Perfect/i)
   assert.doesNotMatch(prompt, /Dry, low, testing her|Even, almost teasing|Quiet, sincere, far too intimate/)
   assert.doesNotMatch(prompt, /You know, for someone on the run|I practiced with your voice/)
-  assert.match(prompt, /Ilya Sorin leans over the table/i)
-  assert.match(prompt, /EVA-9 tilts their head toward Ilya Sorin/i)
+  assert.match(prompt, /Shot density: slow; shot-strip mode: sparse; panel count: 4/i)
+  assert.match(prompt, /Panel-count rule: these panels represent meaningful visual cuts or action phases/i)
+  assert.match(prompt, /Ilya and EVA-9 sit across from each other/i)
   assert.match(prompt, /EVA-9 holds Ilya Sorin's gaze/i)
   assert.match(prompt, /Medium two-shot at a cramped metal cafe table/i)
   assert.match(prompt, /Tight close-up on EVA-9/i)
@@ -961,7 +1332,7 @@ test('image workflow quality defaults are configurable and client-overridable', 
     targetFormat: 'pdf',
     snapshot,
   }, 'comic_issue_from_sequence')
-  assert.equal(readConfigQuality(comicPlan.nodes.find((node) => node.key === 'comic_atlas_image') ?? {}), 'medium')
+  assert.equal(comicPlan.nodes.some((node) => node.key === 'comic_atlas_image'), false)
   assert.equal(readConfigQuality(comicPlan.nodes.find((node) => node.key === 'page_001_image') ?? {}), 'medium')
 })
 
@@ -992,7 +1363,7 @@ test('image workflow output format defaults to webp and is client-overridable', 
     targetFormat: 'pdf',
     snapshot,
   }, 'comic_issue_from_sequence')
-  assert.equal(readConfigOutputFormat(comicPlan.nodes.find((node) => node.key === 'comic_atlas_image') ?? {}), 'webp')
+  assert.equal(comicPlan.nodes.some((node) => node.key === 'comic_atlas_image'), false)
   assert.equal(readConfigOutputFormat(comicPlan.nodes.find((node) => node.key === 'page_001_image') ?? {}), 'webp')
 })
 
@@ -1341,22 +1712,39 @@ test('comic issue preset requires one sequence unit and creates fixed page fan-o
   assert.ok(!plan.sourceEntityKeys.includes('chapter-2'))
   assert.ok(plan.nodes.some((node) => node.key === 'comic_scene_script' && readConfigPurpose(node) === 'comic_scene_script'))
   assert.ok(plan.nodes.some((node) => node.key === 'comic_page_plan' && readConfigPurpose(node) === 'comic_page_plan'))
+  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'world_context' && edge.targetNodeKey === 'comic_scene_script' && edge.targetPort === 'context'))
+  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'skill_context' && edge.targetNodeKey === 'comic_scene_script' && edge.targetPort === 'guidance'))
+  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'relevant_entities' && edge.targetNodeKey === 'comic_scene_script' && edge.targetPort === 'asset_pack'))
   assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'comic_scene_script' && edge.targetNodeKey === 'comic_page_plan'))
   assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'comic_page_plan' && edge.targetNodeKey === 'comic_script'))
   assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'comic_page_prompt').length, 4)
   assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'comic_page').length, 4)
   assert.equal(plan.nodes.find((node) => node.key === 'page_001_prompt')?.nodeType, 'utility_transform')
   assert.ok(plan.nodes.some((node) => node.key === 'relevant_entities' && readConfigPurpose(node) === 'comic_entity_selector'))
-  assert.ok(plan.nodes.some((node) => node.key === 'comic_atlas_image' && node.nodeType === 'image_generation'))
+  assert.equal(plan.nodes.some((node) => node.key === 'comic_atlas_prompt'), false)
+  assert.equal(plan.nodes.some((node) => node.key === 'comic_atlas_image'), false)
   assert.ok(plan.nodes.some((node) => node.key === 'comic_pdf_render' && node.nodeType === 'document_render'))
   const pageImage = plan.nodes.find((node) => node.key === 'page_001_image')
   const pageImageSize = pageImage?.config.imageSize as { width?: number; height?: number } | undefined
   assert.equal((pageImageSize?.width ?? 0) % 16, 0)
   assert.equal((pageImageSize?.height ?? 0) % 16, 0)
+  assert.equal(pageImage?.config.maxReferenceImages, 6)
   assert.equal(pageImage ? getOutputWorkflowNodeExecutionMetadata(pageImage).maxConcurrency : undefined, 8)
-  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'comic_atlas_image' && edge.targetNodeKey === 'page_001_image' && edge.targetPort === 'references'))
+  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'relevant_entities' && edge.targetNodeKey === 'page_001_image' && edge.targetPort === 'references'))
+  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'page_001_prompt' && edge.targetNodeKey === 'page_001_image' && edge.targetPort === 'asset_pack'))
   assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'page_004_image' && edge.targetNodeKey === 'comic_pdf_render' && edge.targetPort === 'pages'))
   assert.equal(validateOutputWorkflowGraph({ nodes: plan.nodes, edges: plan.edges }).ok, true)
+})
+
+test('comic scene script return path does not reference comic script repair state', () => {
+  const sharedSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
+  const sceneScriptBranch = sharedSource.slice(
+    sharedSource.indexOf("if (purpose === 'comic_scene_script')"),
+    sharedSource.indexOf("if (purpose === 'comic_page_plan')"),
+  )
+
+  assert.ok(sceneScriptBranch.includes('providerRequestId: readText(response.body.id)'))
+  assert.equal(sceneScriptBranch.includes('repairResponse'), false)
 })
 
 test('comic issue page images run in parallel and PDF waits for all pages', () => {
@@ -1377,15 +1765,14 @@ test('comic issue page images run in parallel and PDF waits for all pages', () =
   assert.ok(pageImageLevel?.includes('page_002_image'))
   assert.ok(pageImageLevel?.includes('page_003_image'))
   assert.deepEqual(executionPlan.dependencyKeysByNodeKey.comic_pdf_render.sort(), [
-    'comic_atlas_image',
     'comic_script',
     'page_001_image',
     'page_002_image',
     'page_003_image',
   ])
-  assert.deepEqual(executionPlan.dependencyKeysByNodeKey.page_001_image.sort(), [
-    'comic_atlas_image',
+  assert.deepEqual([...new Set(executionPlan.dependencyKeysByNodeKey.page_001_image)].sort(), [
     'page_001_prompt',
+    'relevant_entities',
     'skill_context',
   ])
 })

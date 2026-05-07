@@ -37,7 +37,7 @@ type OutputsWorkspaceProps = {
     targetFormat?: 'pdf' | 'epub' | 'docx' | 'markdown' | 'image'
     imageQuality?: 'low' | 'medium' | 'high'
     imageOutputFormat?: 'png' | 'jpeg' | 'webp'
-    cinematicReferenceMode?: 'keyframes' | 'storyboard_sheet' | 'keyframes_and_storyboard'
+    cinematicReferenceMode?: 'keyframes' | 'storyboard_sheet' | 'keyframes_and_storyboard' | 'shot_reference_sheet'
     debugCinematicStoryboardStyleSafeMode?: boolean
     cinematicStoryboardStyleOverride?: string
     debugSkipVideoGeneration?: boolean

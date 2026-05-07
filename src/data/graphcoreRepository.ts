@@ -7386,7 +7386,7 @@ function buildOutputWorkflowRunInput(snapshot: ProjectSnapshot, request?: {
   videoResolution?: string
   generateAudio?: boolean
   cinematicPresetFamily?: string
-  cinematicReferenceMode?: 'keyframes' | 'storyboard_sheet' | 'keyframes_and_storyboard'
+  cinematicReferenceMode?: 'keyframes' | 'storyboard_sheet' | 'keyframes_and_storyboard' | 'shot_reference_sheet'
   debugCinematicStoryboardStyleSafeMode?: boolean
   cinematicStoryboardStyleOverride?: string
   debugSkipVideoGeneration?: boolean
@@ -7591,7 +7591,7 @@ export async function startOutputRequest(
     videoResolution?: '480p' | '720p' | '1080p'
     generateAudio?: boolean
     cinematicPresetFamily?: 'story_movie_tv' | 'ugc_creator' | 'ugc_direct_response_ad' | 'ugc_faceless_format'
-    cinematicReferenceMode?: 'keyframes' | 'storyboard_sheet' | 'keyframes_and_storyboard'
+    cinematicReferenceMode?: 'keyframes' | 'storyboard_sheet' | 'keyframes_and_storyboard' | 'shot_reference_sheet'
     debugCinematicStoryboardStyleSafeMode?: boolean
     cinematicStoryboardStyleOverride?: string
     debugSkipVideoGeneration?: boolean

@@ -16,6 +16,11 @@ import {
 import { worldThreadSchema } from './worldThread.ts'
 
 const looseRecordSchema = z.record(z.string(), z.unknown())
+const optionalTrimmedNonEmptyStringSchema = z.string()
+  .trim()
+  .max(1000)
+  .optional()
+  .transform((value) => value && value.length > 0 ? value : undefined)
 
 export const outputWorkflowStatusSchema = z.enum(['draft', 'active', 'archived'])
 export const outputWorkflowNodeTypeSchema = z.enum([
@@ -347,9 +352,9 @@ export const outputWorkflowPlanRequestSchema = z.object({
   videoResolution: z.enum(['480p', '720p', '1080p']).optional(),
   generateAudio: z.boolean().optional(),
   cinematicPresetFamily: z.enum(['story_movie_tv', 'ugc_creator', 'ugc_direct_response_ad', 'ugc_faceless_format']).optional(),
-  cinematicReferenceMode: z.enum(['keyframes', 'storyboard_sheet', 'keyframes_and_storyboard']).optional(),
+  cinematicReferenceMode: z.enum(['keyframes', 'storyboard_sheet', 'keyframes_and_storyboard', 'shot_reference_sheet']).optional(),
   debugCinematicStoryboardStyleSafeMode: z.boolean().optional(),
-  cinematicStoryboardStyleOverride: z.string().trim().min(1).max(1000).optional(),
+  cinematicStoryboardStyleOverride: optionalTrimmedNonEmptyStringSchema,
   debugSkipVideoGeneration: z.boolean().optional(),
   snapshot: z.object({
     project: z.object({
@@ -387,9 +392,9 @@ export const outputRequestStartRequestSchema = z.object({
   videoResolution: z.enum(['480p', '720p', '1080p']).optional(),
   generateAudio: z.boolean().optional(),
   cinematicPresetFamily: z.enum(['story_movie_tv', 'ugc_creator', 'ugc_direct_response_ad', 'ugc_faceless_format']).optional(),
-  cinematicReferenceMode: z.enum(['keyframes', 'storyboard_sheet', 'keyframes_and_storyboard']).optional(),
+  cinematicReferenceMode: z.enum(['keyframes', 'storyboard_sheet', 'keyframes_and_storyboard', 'shot_reference_sheet']).optional(),
   debugCinematicStoryboardStyleSafeMode: z.boolean().optional(),
-  cinematicStoryboardStyleOverride: z.string().trim().min(1).max(1000).optional(),
+  cinematicStoryboardStyleOverride: optionalTrimmedNonEmptyStringSchema,
   debugSkipVideoGeneration: z.boolean().optional(),
   snapshot: outputWorkflowPlanRequestSchema.shape.snapshot,
   runInput: looseRecordSchema.default({}),
@@ -2102,6 +2107,7 @@ export function buildComicIssueFromSequencePlan(request: z.infer<typeof outputWo
       }),
       outputFormat: resolveOutputImageGenerationOutputFormat({ requestedFormat: request.imageOutputFormat }),
       imageSize: { width: 1600, height: 2480 },
+      maxReferenceImages: 6,
       skillKeys: ['storyboard_panel_prompting', 'image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'provider_prompt_hygiene'],
       autoSkillTags: ['comic_page', 'image_prompt', 'visual_only', 'entity_reference', 'reference_continuity'],
       guidanceMode: 'strict',
@@ -2206,46 +2212,6 @@ export function buildComicIssueFromSequencePlan(request: z.infer<typeof outputWo
         execution: { resourceClass: 'llm' },
       },
     }),
-    nodeBase({
-      key: 'comic_atlas_prompt',
-      nodeType: 'text_llm',
-      label: 'Atlas Prompt',
-      x: 640,
-      y: 310,
-      inputs: { prompt: 'Create a GPT Image 2 prompt for a comic-style reference atlas of the selected entities.' },
-      config: {
-        purpose: 'comic_atlas_prompt',
-        sequenceUnitKey: selectedSequenceUnitKey,
-        sequenceUnitName: sequenceTitle,
-        skillKeys: ['image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'provider_prompt_hygiene'],
-        guidanceMode: 'strict',
-        execution: { resourceClass: 'llm' },
-      },
-    }),
-    nodeBase({
-      key: 'comic_atlas_image',
-      nodeType: 'image_generation',
-      label: 'Comic Atlas',
-      x: 920,
-      y: 310,
-      config: {
-        purpose: 'comic_style_atlas',
-        role: 'comic_atlas',
-        model: 'openai/gpt-image-2',
-        referenceModel: 'openai/gpt-image-2/edit',
-        quality: resolveOutputImageGenerationQuality({
-          requestedQuality: request.imageQuality,
-          role: 'comic_atlas',
-          purpose: 'comic_style_atlas',
-          prompt,
-        }),
-        outputFormat: resolveOutputImageGenerationOutputFormat({ requestedFormat: request.imageOutputFormat }),
-        imageSize: { width: 2048, height: 2048 },
-        skillKeys: ['image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'environment_staging', 'provider_prompt_hygiene'],
-        guidanceMode: 'strict',
-        execution: { resourceClass: 'image', groupKey: 'comic_atlas', maxConcurrency: 1 },
-      },
-    }),
     ...pagePromptNodes,
     ...pageImageNodes,
     nodeBase({
@@ -2286,32 +2252,26 @@ export function buildComicIssueFromSequencePlan(request: z.infer<typeof outputWo
     edgeBase('world_context', 'context', 'comic_script', 'context'),
     edgeBase('skill_context', 'guidance', 'comic_script', 'guidance'),
     edgeBase('relevant_entities', 'asset_pack', 'comic_script', 'asset_pack'),
-    edgeBase('world_context', 'context', 'comic_atlas_prompt', 'context'),
-    edgeBase('skill_context', 'guidance', 'comic_atlas_prompt', 'guidance'),
-    edgeBase('relevant_entities', 'asset_pack', 'comic_atlas_prompt', 'asset_pack'),
-    edgeBase('comic_atlas_prompt', 'text', 'comic_atlas_image', 'prompt'),
-    edgeBase('relevant_entities', 'asset_pack', 'comic_atlas_image', 'references'),
-    edgeBase('skill_context', 'guidance', 'comic_atlas_image', 'guidance'),
     ...pagePromptNodes.flatMap((node, index) => [
       edgeBase('comic_script', 'script', node.key, 'script'),
       edgeBase('relevant_entities', 'asset_pack', node.key, 'asset_pack'),
       edgeBase('skill_context', 'guidance', node.key, 'guidance'),
       edgeBase(node.key, 'text', pageImageNodes[index].key, 'prompt'),
+      edgeBase(node.key, 'asset_pack', pageImageNodes[index].key, 'asset_pack'),
     ]),
     ...pageImageNodes.flatMap((node) => [
-      edgeBase('comic_atlas_image', 'image', node.key, 'references'),
+      edgeBase('relevant_entities', 'asset_pack', node.key, 'references'),
       edgeBase('skill_context', 'guidance', node.key, 'guidance'),
       edgeBase(node.key, 'image', 'comic_pdf_render', 'pages', { pageNumber: node.config.pageNumber }),
     ]),
     edgeBase('comic_script', 'text', 'comic_pdf_render', 'source'),
-    edgeBase('comic_atlas_image', 'image', 'comic_pdf_render', 'cover', { role: 'atlas', optional: true }),
     edgeBase('comic_pdf_render', 'document', 'artifact', 'input'),
   ]
   const graphValidation = validateOutputWorkflowGraph({ nodes, edges, worldWiki })
   return outputWorkflowPlanResponseSchema.shape.plan.parse({
     preset: 'comic_issue_from_sequence',
     name,
-    description: 'Generate a comic issue PDF from one selected sequence unit, a comic-style atlas, and parallel page art.',
+    description: 'Generate a comic issue PDF from one selected sequence unit and parallel page art using direct entity reference sheets.',
     prompt,
     targetFormat: 'pdf',
     sourceEntityKeys: selectedEntityKeys,
@@ -2354,8 +2314,18 @@ function inferCinematicPresetFromKind(outputKind: z.infer<typeof outputRequestKi
 
 function resolveSeedance2Model(resolution: CinematicResolution) {
   return resolution === '1080p'
-    ? 'bytedance/seedance-2.0/reference-to-video'
-    : 'bytedance/seedance-2.0/fast/reference-to-video'
+    ? aiGenerationSettings.outputWorkflow.videoFalHighResolutionModel
+    : aiGenerationSettings.outputWorkflow.videoFalModel
+}
+
+function resolveDefaultVideoProvider() {
+  return aiGenerationSettings.outputWorkflow.videoProviderDefault
+}
+
+function resolveDefaultVideoModel(provider: string, resolution: CinematicResolution) {
+  return provider === 'muapi'
+    ? aiGenerationSettings.outputWorkflow.videoMuapiModel
+    : resolveSeedance2Model(resolution)
 }
 
 function isCinematicVisualEntity(entity: z.infer<typeof worldEntitySchema> | null | undefined) {
@@ -2431,7 +2401,8 @@ export function buildCinematicSequencePlan(
     ? request.cinematicStoryboardStyleOverride || aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStylePrompt
     : ''
   const debugSkipVideoGeneration = request.debugSkipVideoGeneration ?? aiGenerationSettings.outputWorkflow.debugSkipVideoGenerationDefault
-  const videoModel = resolveSeedance2Model(resolution)
+  const videoProvider = resolveDefaultVideoProvider()
+  const videoModel = resolveDefaultVideoModel(videoProvider, resolution)
   const title = worldWiki.title || request.snapshot.project.name
   const sequenceTitle = selectedSequenceUnit?.name || ''
   const name = preset === 'cinematic_trailer'
@@ -2514,6 +2485,7 @@ export function buildCinematicSequencePlan(
       debugCinematicStoryboardStyleSafeMode,
       cinematicStoryboardStyleOverride,
       debugSkipVideoGeneration,
+      videoProvider,
       videoModel,
       execution: { resourceClass: 'utility', groupKey: 'cinematic_dynamic_take_fanout', maxConcurrency: 1 },
     },
@@ -2544,6 +2516,7 @@ export function buildCinematicSequencePlan(
           'cinematic_sequence_structure',
           'cinematic_shot_direction',
           'cinematic_beat_sheet_planning',
+          'cinematic_direction_sheet_planning',
           'cinematic_keyframe_prompting',
           'seedance_truth_source_modes',
           'seedance_reference_legend_contract',
@@ -2556,7 +2529,7 @@ export function buildCinematicSequencePlan(
           'environment_staging',
           'provider_prompt_hygiene',
         ],
-        autoSkillTags: ['cinematic', 'storyboard', 'beat_sheet', 'keyframe', 'seedance', 'ugc', 'video_prompt', 'entity_reference', 'provider_hygiene'],
+        autoSkillTags: ['cinematic', 'storyboard', 'beat_sheet', 'direction_sheet', 'camera_layout', 'floor_map', 'keyframe', 'seedance', 'ugc', 'video_prompt', 'entity_reference', 'provider_hygiene'],
         guidanceMode: 'strict',
         execution: { resourceClass: 'utility' },
       },
@@ -2594,7 +2567,7 @@ export function buildCinematicSequencePlan(
   return outputWorkflowPlanResponseSchema.shape.plan.parse({
     preset,
     name,
-    description: 'Generate a cinematic sequence with shot scripts, storyboard-grid reference sheets, Seedance 2 reference-to-video blocks, and a final stitched MP4.',
+    description: 'Generate a cinematic sequence with shot scripts, direction/storyboard reference sheets, Seedance 2 reference-to-video blocks, and a final stitched MP4.',
     prompt,
     targetFormat: 'video',
     sourceEntityKeys: selectedEntityKeys,
@@ -2609,7 +2582,9 @@ export function buildCinematicSequencePlan(
         ? 'Keyframe reference mode is enabled: Seedance uses clean opening/midpoint/ending keyframes before individual entity reference assets.'
         : cinematicReferenceMode === 'keyframes_and_storyboard'
           ? 'Storyboard-grid reference mode is enabled with additional keyframes: Seedance uses the generated beat sheet as @Image1, then keyframes and individual entity reference assets.'
-          : 'Storyboard-grid reference mode is enabled: Seedance uses the generated beat sheet as @Image1.',
+          : cinematicReferenceMode === 'shot_reference_sheet'
+            ? 'Cinematic direction-sheet reference mode is enabled: Seedance uses the generated direction sheet as @Image1 for shot strip, floor map, camera layout, lighting/mood, hero frame, and continuity anchors.'
+            : 'Storyboard-grid reference mode is enabled: Seedance uses the generated beat sheet as @Image1.',
       debugCinematicStoryboardStyleSafeMode
         ? `Debug storyboard style safe mode is enabled: beat-sheet/storyboard images use ${cinematicStoryboardStyleOverride}.`
         : 'Debug storyboard style safe mode is disabled: beat-sheet/storyboard images use the normal project/user visual style.',

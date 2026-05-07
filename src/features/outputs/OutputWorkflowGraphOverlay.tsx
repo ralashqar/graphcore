@@ -272,8 +272,6 @@ function selectedNodeRunLabel(node: OutputWorkflowNode) {
   if (node.nodeType === 'document_render') return 'Refresh document only'
   if (purpose === 'ebook_cover_prompt') return 'Regenerate cover + PDF'
   if (purpose === 'ebook_cover_image') return 'Regenerate cover + PDF'
-  if (purpose === 'comic_atlas_prompt') return 'Run atlas prompt'
-  if (purpose === 'comic_style_atlas') return 'Run atlas image'
   if (purpose === 'comic_page_prompt') return 'Run prompt only'
   if (purpose === 'comic_page') return 'Run image only'
   if (purpose === 'chapter_prose') return 'Regenerate chapter'
@@ -550,10 +548,15 @@ export function OutputWorkflowGraphOverlay({
   const selectedCacheLabel = selectedIncomingEdges.length === 0
     ? 'No upstream cache required'
     : selectedMissingCachedInputs.length > 0
-      ? `Missing upstream: ${selectedMissingCachedInputs.join(', ')}`
+      ? `Missing upstream: ${selectedMissingCachedInputs.join(', ')}. Run upstream to this node first.`
       : selectedDirtyCachedInputs.length > 0
         ? `Upstream dirty but reusable: ${selectedDirtyCachedInputs.join(', ')}`
         : 'Ready from cache'
+  const selectedDefaultRunScope = selectedNode && selectedMissingCachedInputs.length > 0
+    ? 'upstream_to_node'
+    : selectedNode
+      ? defaultRunScopeForNode(selectedNode)
+      : 'node_only'
   const selectedPreviewRunId = readTrimmedString(readRecord(readRecord(selectedNode?.metadata).execution).lastRunId)
   const selectedStepRunMode = readTrimmedString(readRecord(selectedStep?.metadata).runScope) || readTrimmedString(readRecord(activeRun?.metadata).runScope)
   const selectedNodeIsTargeted = selectedNode ? targetedNodeKeySet.has(selectedNode.key) : false
@@ -884,10 +887,14 @@ export function OutputWorkflowGraphOverlay({
                 </div>
                 <button
                   disabled={!canRunOutputs || selectedNodeIsTargeted}
-                  onClick={() => onRunNode(selectedNode, defaultRunScopeForNode(selectedNode))}
+                  onClick={() => onRunNode(selectedNode, selectedDefaultRunScope)}
                   type="button"
                 >
-                  {selectedNodeIsTargeted ? 'Starting...' : selectedNodeRunLabel(selectedNode)}
+                  {selectedNodeIsTargeted
+                    ? 'Starting...'
+                    : selectedDefaultRunScope === 'upstream_to_node'
+                      ? 'Run Up To Node'
+                      : selectedNodeRunLabel(selectedNode)}
                 </button>
               </div>
               <section className="outputs-graph-inspector-section">

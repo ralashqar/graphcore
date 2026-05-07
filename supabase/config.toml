@@ -149,6 +149,9 @@ verify_jwt = false
 [functions.fal-webhook]
 verify_jwt = false
 
+[functions.muapi-webhook]
+verify_jwt = false
+
 [functions.cleanup-active-generation]
 verify_jwt = false
 

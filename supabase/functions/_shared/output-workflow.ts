@@ -38,7 +38,7 @@ import {
   buildCinematicSequenceFromScriptDoc,
   cinematicScriptDocSchema,
 } from '../../../src/domain/cinematics.ts'
-import { buildFalMediaUsageLine, buildOpenAiUsageLine, summarizeAiUsageLines, type AiUsageLine } from '../../../src/domain/aiUsage.ts'
+import { buildFalMediaUsageLine, buildMuapiMediaUsageLine, buildOpenAiUsageLine, summarizeAiUsageLines, type AiUsageLine } from '../../../src/domain/aiUsage.ts'
 import { hashOutputGuidanceBundle, outputGuidanceBundleSchema, type OutputGuidanceBundle } from '../../../src/domain/outputSkills.ts'
 import {
   readWorldEntityVisualDescription,
@@ -61,9 +61,14 @@ const CINEMATIC_MAX_TOTAL_DURATION_SECONDS = 60
 const CINEMATIC_STORYBOARD_IMAGE_QUALITY = aiGenerationSettings.outputWorkflow.cinematicStoryboardImageQuality
 const DEFAULT_CINEMATIC_STORYBOARD_STYLE_SAFE_MODE = aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStyleSafeModeDefault
 const DEFAULT_CINEMATIC_STORYBOARD_STYLE_PROMPT = aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStylePrompt
+const DEFAULT_OUTPUT_WORKFLOW_VIDEO_PROVIDER = aiGenerationSettings.outputWorkflow.videoProviderDefault
+const DEFAULT_MUAPI_VIDEO_MODEL = aiGenerationSettings.outputWorkflow.videoMuapiModel
+const DEFAULT_FAL_VIDEO_MODEL = aiGenerationSettings.outputWorkflow.videoFalModel
+const DEFAULT_FAL_VIDEO_HIGH_RESOLUTION_MODEL = aiGenerationSettings.outputWorkflow.videoFalHighResolutionModel
 const DEFAULT_CHAPTER_PROSE_TIMEOUT_MS = 3_600_000
 const DEFAULT_CHAPTER_PROSE_ATTEMPTS = 2
 const FAL_QUEUE_BASE_URL = 'https://queue.fal.run'
+const MUAPI_BASE_URL = 'https://api.muapi.ai/api/v1'
 
 export type OutputDocumentRenderer = (input: {
   markdown: string
@@ -736,6 +741,27 @@ function buildOutputStepAiUsage(input: {
     })
     return { line, summary: summarizeAiUsageLines([line]) }
   }
+  if (provider === 'muapi' && model && input.node.nodeType === 'video_generation') {
+    const line = buildMuapiMediaUsageLine({
+      model,
+      modality: 'video',
+      operation: 'video_generation',
+      nodeKey: input.node.key,
+      nodeLabel: input.node.label,
+      nodeType: input.node.nodeType,
+      requestId: input.result.providerRequestId ?? null,
+      responseId: input.result.providerRequestId ?? null,
+      units: Number(outputs.durationSeconds ?? 0) || undefined,
+      durationSeconds: Number(outputs.durationSeconds ?? 0) || undefined,
+      metadata: {
+        workflowId: input.run.workflowId,
+        runId: input.run.id,
+        providerMode: readText(asRecord(input.result.metadata).providerMode),
+        providerStatus: readText(asRecord(input.result.metadata).providerStatus),
+      },
+    })
+    return { line, summary: summarizeAiUsageLines([line]) }
+  }
   return { line: null, summary: null }
 }
 
@@ -1028,14 +1054,14 @@ function imageIsPlanningOnly(image: Record<string, unknown>) {
 
 function normalizeCinematicReferenceMode(value: unknown) {
   const mode = readText(value)
-  return mode === 'keyframes' || mode === 'keyframes_and_storyboard' || mode === 'storyboard_sheet'
+  return mode === 'keyframes' || mode === 'keyframes_and_storyboard' || mode === 'storyboard_sheet' || mode === 'shot_reference_sheet'
     ? mode
-    : 'storyboard_sheet'
+    : 'shot_reference_sheet'
 }
 
 function cinematicImageReferencePriority(image: Record<string, unknown>, cinematicReferenceMode: string) {
   const role = readText(image.role) || readText(asRecord(image.metadata).role)
-  if (role === 'cinematic_beat_sheet') {
+  if (role === 'cinematic_beat_sheet' || role === 'cinematic_direction_sheet') {
     return cinematicReferenceMode === 'keyframes' ? 99 : 0
   }
   if (role === 'cinematic_keyframe') {
@@ -1052,7 +1078,7 @@ function orderCinematicVideoReferenceImages(images: Record<string, unknown>[], c
     .filter((image) => {
       if (!imageIsPlanningOnly(image)) return true
       const role = readText(image.role) || readText(asRecord(image.metadata).role)
-      return role === 'cinematic_beat_sheet' && mode !== 'keyframes'
+      return (role === 'cinematic_beat_sheet' || role === 'cinematic_direction_sheet') && mode !== 'keyframes'
     })
     .sort((left, right) => cinematicImageReferencePriority(left, mode) - cinematicImageReferencePriority(right, mode))
 }
@@ -1312,9 +1338,71 @@ function outputWorkflowFalPollIntervalMs() {
   return Number.isFinite(parsed) && parsed > 0 ? Math.max(1_000, Math.floor(parsed)) : 3_000
 }
 
+function outputWorkflowMuapiTimeoutMs() {
+  const raw = Deno.env.get('OUTPUT_WORKFLOW_MUAPI_TIMEOUT_MS') ?? Deno.env.get('OUTPUT_WORKFLOW_FAL_TIMEOUT_MS') ?? Deno.env.get('VISUAL_GENERATION_FAL_TIMEOUT_MS')
+  const parsed = raw ? Number(raw) : NaN
+  return Number.isFinite(parsed) && parsed > 0 ? Math.max(60_000, Math.floor(parsed)) : 1_200_000
+}
+
+function outputWorkflowMuapiPollIntervalMs() {
+  const raw = Deno.env.get('OUTPUT_WORKFLOW_MUAPI_POLL_INTERVAL_MS') ?? Deno.env.get('OUTPUT_WORKFLOW_FAL_POLL_INTERVAL_MS') ?? Deno.env.get('VISUAL_GENERATION_FAL_POLL_INTERVAL_MS')
+  const parsed = raw ? Number(raw) : NaN
+  return Number.isFinite(parsed) && parsed > 0 ? Math.max(1_000, Math.floor(parsed)) : 3_000
+}
+
+function outputWorkflowMuapiWebhookSecret() {
+  return Deno.env.get('OUTPUT_WORKFLOW_MUAPI_WEBHOOK_SECRET')?.trim()
+    || Deno.env.get('MUAPI_WEBHOOK_SECRET')?.trim()
+    || ''
+}
+
+export function buildOutputWorkflowMuapiWebhookUrl() {
+  const secret = outputWorkflowMuapiWebhookSecret()
+  if (!secret) return ''
+
+  const overrideUrl = Deno.env.get('OUTPUT_WORKFLOW_MUAPI_WEBHOOK_URL')?.trim()
+  if (overrideUrl) {
+    try {
+      const url = new URL(overrideUrl)
+      if (!url.searchParams.has('secret')) {
+        url.searchParams.set('secret', secret)
+      }
+      return url.toString()
+    } catch {
+      return ''
+    }
+  }
+
+  const supabaseUrl = Deno.env.get('SUPABASE_URL')?.trim().replace(/\/+$/, '')
+  if (!supabaseUrl) return ''
+  const url = new URL(`${supabaseUrl}/functions/v1/muapi-webhook`)
+  url.searchParams.set('secret', secret)
+  return url.toString()
+}
+
+function normalizeOutputVideoProvider(value: unknown) {
+  const provider = readText(value).toLowerCase()
+  return provider === 'fal' || provider === 'muapi' ? provider : DEFAULT_OUTPUT_WORKFLOW_VIDEO_PROVIDER
+}
+
+function resolveOutputVideoProvider(config: Record<string, unknown>) {
+  return normalizeOutputVideoProvider(readText(config.provider) || readText(config.videoProvider) || Deno.env.get('OUTPUT_WORKFLOW_VIDEO_PROVIDER'))
+}
+
+function resolveFalVideoModel(resolution: string) {
+  return resolution === '1080p' ? DEFAULT_FAL_VIDEO_HIGH_RESOLUTION_MODEL : DEFAULT_FAL_VIDEO_MODEL
+}
+
 function buildFalHeaders(apiKey: string) {
   return new Headers({
     Authorization: `Key ${apiKey}`,
+    'Content-Type': 'application/json',
+  })
+}
+
+function buildMuapiHeaders(apiKey: string) {
+  return new Headers({
+    'x-api-key': apiKey,
     'Content-Type': 'application/json',
   })
 }
@@ -1331,6 +1419,115 @@ async function fetchFalJson(url: string, init: RequestInit) {
     }
   }
   return { response, body, rawText }
+}
+
+async function fetchMuapiJson(url: string, init: RequestInit) {
+  const response = await fetch(url, init)
+  const rawText = await response.text().catch(() => '')
+  let body: Record<string, unknown> = {}
+  if (rawText.trim()) {
+    try {
+      body = JSON.parse(rawText) as Record<string, unknown>
+    } catch {
+      body = {}
+    }
+  }
+  return { response, body, rawText }
+}
+
+function muapiErrorMessage(body: Record<string, unknown>, fallback: string) {
+  const direct = readText(body.error_message)
+    || readText(body.error)
+    || readText(body.message)
+    || readText(body.detail)
+    || readText(asRecord(body.error).message)
+    || readText(asRecord(body.data).error_message)
+    || readText(asRecord(body.result).error_message)
+  return direct || fallback
+}
+
+export function buildMuapiVideoPayload(input: {
+  prompt: string
+  durationSeconds: number
+  aspectRatio?: string
+  referenceImageUrls?: string[]
+  referenceVideoUrls?: string[]
+  referenceAudioUrls?: string[]
+}) {
+  return {
+    prompt: input.prompt,
+    images_list: input.referenceImageUrls ?? [],
+    video_files: input.referenceVideoUrls ?? [],
+    audio_files: input.referenceAudioUrls ?? [],
+    aspect_ratio: input.aspectRatio ?? '16:9',
+    duration: input.durationSeconds,
+  }
+}
+
+function extractStringUrl(value: unknown): string {
+  if (typeof value === 'string') return value.trim()
+  const record = asRecord(value)
+  return readText(record.video_url)
+    || readText(record.videoUrl)
+    || readText(record.url)
+    || readText(record.file_url)
+    || readText(record.fileUrl)
+}
+
+export function extractMuapiVideoUrlFromResult(value: unknown): string {
+  const record = asRecord(value)
+  const direct = extractStringUrl(record.video_url)
+    || extractStringUrl(record.videoUrl)
+    || extractStringUrl(record.url)
+    || extractStringUrl(record.output)
+    || extractStringUrl(record.result)
+    || extractStringUrl(record.data)
+  if (direct) return direct
+
+  for (const key of ['output', 'result', 'data']) {
+    const nested = record[key]
+    if (nested && typeof nested === 'object') {
+      const url = extractMuapiVideoUrlFromResult(nested)
+      if (url) return url
+    }
+  }
+
+  for (const key of ['videos', 'video_urls', 'videoUrls', 'response', 'outputs']) {
+    const array = Array.isArray(record[key]) ? record[key] : []
+    for (const entry of array) {
+      const url = extractStringUrl(entry) || extractMuapiVideoUrlFromResult(entry)
+      if (url) return url
+    }
+  }
+  return ''
+}
+
+function readMuapiRequestId(body: Record<string, unknown>) {
+  return readText(body.request_id)
+    || readText(body.requestId)
+    || readText(body.id)
+    || readText(body.prediction_id)
+    || readText(body.predictionId)
+    || readText(asRecord(body.data).request_id)
+    || readText(asRecord(body.data).id)
+}
+
+function readMuapiProviderStatus(body: Record<string, unknown>) {
+  return (readText(body.status)
+    || readText(body.state)
+    || readText(body.task_status)
+    || readText(body.taskStatus)
+    || readText(asRecord(body.data).status)
+    || readText(asRecord(body.result).status)
+    || 'UNKNOWN').toUpperCase()
+}
+
+function muapiStatusIsComplete(status: string) {
+  return ['COMPLETED', 'COMPLETE', 'SUCCEEDED', 'SUCCESS', 'DONE', 'FINISHED'].includes(status)
+}
+
+function muapiStatusIsFailed(status: string) {
+  return ['FAILED', 'ERROR', 'CANCELED', 'CANCELLED', 'EXPIRED', 'REJECTED'].includes(status)
 }
 
 function falErrorMessage(body: Record<string, unknown>, fallback: string) {
@@ -1500,6 +1697,37 @@ async function submitFalVideoRequest(input: {
     method: 'POST',
     headers: buildFalHeaders(input.apiKey),
     body: JSON.stringify(body),
+  })
+}
+
+async function submitMuapiVideoRequest(input: {
+  apiKey: string
+  prompt: string
+  durationSeconds: number
+  aspectRatio?: string
+  referenceImageUrls?: string[]
+  referenceVideoUrls?: string[]
+  referenceAudioUrls?: string[]
+  webhookUrl?: string
+}) {
+  const url = new URL(`${MUAPI_BASE_URL}/seedance-2-vip-omni-reference`)
+  if (input.webhookUrl) {
+    url.searchParams.set('webhook', input.webhookUrl)
+  }
+  return fetchMuapiJson(url.toString(), {
+    method: 'POST',
+    headers: buildMuapiHeaders(input.apiKey),
+    body: JSON.stringify(buildMuapiVideoPayload(input)),
+  })
+}
+
+async function getMuapiResult(input: {
+  apiKey: string
+  requestId: string
+}) {
+  return fetchMuapiJson(`${MUAPI_BASE_URL}/predictions/${encodeURIComponent(input.requestId)}/result`, {
+    method: 'GET',
+    headers: buildMuapiHeaders(input.apiKey),
   })
 }
 
@@ -3309,10 +3537,152 @@ function distributeBeatDurations(totalSeconds: number, panelCount: number) {
   })
 }
 
-function beatSheetPanelCountForDuration(durationSeconds: number, shotCount: number) {
-  const duration = Math.max(4, Math.min(15, Math.round(durationSeconds) || 4))
-  if (duration >= 14) return 12
-  return Math.max(shotCount || 0, Math.min(12, duration))
+type CinematicVisualDensity = 'slow' | 'standard' | 'active' | 'action'
+type CinematicShotStripMode = 'sparse' | 'balanced' | 'dense'
+
+function shotDurationSeconds(shot: Record<string, unknown>) {
+  const explicit = Number(shot.durationSeconds)
+  if (Number.isFinite(explicit) && explicit > 0) return explicit
+  return Math.max(0, readShotEndSeconds(shot) - readShotStartSeconds(shot))
+}
+
+function collectShotDensityText(shot: Record<string, unknown>) {
+  const actions = Array.isArray(shot.actions) ? shot.actions.map(asRecord) : []
+  return [
+    readText(shot.title),
+    readText(shot.beat),
+    readText(shot.emotionalBeat),
+    readText(shot.visualAction),
+    readText(shot.action),
+    readText(shot.composition),
+    readText(shot.framing),
+    readText(shot.cameraMovement),
+    ...actions.flatMap((action) => [
+      readText(action.verb),
+      readText(action.action),
+      readText(action.target),
+      readText(action.prop),
+      readText(action.stagingNotes),
+      readText(action.description),
+    ]),
+  ].filter(Boolean).join(' ').toLowerCase()
+}
+
+function countRegexMatches(value: string, pattern: RegExp) {
+  return (value.match(pattern) ?? []).length
+}
+
+function estimateDialogueSeconds(shot: Record<string, unknown>) {
+  const records = readShotDialogueRecords(shot).filter((entry) => readText(entry.line))
+  if (records.length === 0) return 0
+  return records.reduce((total, entry) => {
+    const start = Number(entry.startSeconds)
+    const end = Number(entry.endSeconds)
+    if (Number.isFinite(start) && Number.isFinite(end) && end > start) return total + Math.min(5, end - start)
+    const wordCount = readText(entry.line).split(/\s+/).filter(Boolean).length
+    return total + Math.max(1.2, Math.min(4, wordCount / 3.2))
+  }, 0)
+}
+
+function classifyCinematicVisualDensity(input: {
+  durationSeconds: number
+  shots: Record<string, unknown>[]
+}) {
+  const duration = Math.max(4, Math.min(15, Math.round(input.durationSeconds) || 4))
+  const shots = input.shots
+  const shotCount = shots.length
+  const allText = shots.map(collectShotDensityText).join(' ')
+  const dialogueSeconds = shots.reduce((total, shot) => total + estimateDialogueSeconds(shot), 0)
+  const dialogueCount = shots.reduce((total, shot) => total + readShotDialogueRecords(shot).filter((entry) => readText(entry.line)).length, 0)
+  const dialogueRatio = duration > 0 ? dialogueSeconds / duration : 0
+  const actionKeywordCount = countRegexMatches(
+    allText,
+    /\b(chase|pursu|fight|battle|attack|punch|kick|strike|shoot|fire|stun|slam|crash|burst|sprint|run|flee|vault|leap|dive|fall|collapse|explode|explosion|impact|hit|smash|throw|spin|transform|montage)\b/g,
+  )
+  const movementKeywordCount = countRegexMatches(
+    allText,
+    /\b(walk|move|cross|enter|exit|approach|turn|circle|track|follow|search|inspect|examine|lean|reach|grab|lift|open|close|pull|push)\b/g,
+  )
+  const stillKeywordCount = countRegexMatches(
+    allText,
+    /\b(sit|sits|still|motionless|quiet|stares|holds gaze|waits|listens|watches|smile|smirks|glances|breath|close-up|closeup|two-shot|table|cafe)\b/g,
+  )
+  const contactKeywordCount = countRegexMatches(
+    allText,
+    /\b(contact|impact|collide|hits|strikes|slams|crashes|sparks|grabs|yanks|vaults|lands|pins|blocks|cuts off|closes in)\b/g,
+  )
+  const forceBreakCount = shots.filter((shot) => shot.forceTakeBreak === true).length
+  const locationKeys = new Set(shots.map((shot) => slugify(readText(shot.location) || readText(shot.locationRefId))).filter(Boolean))
+  const cameraKeys = new Set(shots.map((shot) => slugify([readText(shot.framing), readText(shot.cameraMovement)].filter(Boolean).join(' '))).filter(Boolean))
+  const cameraChangeCount = Math.max(0, cameraKeys.size - 1)
+  const locationChangeCount = Math.max(0, locationKeys.size - 1)
+  const longShotCount = shots.filter((shot) => shotDurationSeconds(shot) >= 5).length
+  const actionScore = actionKeywordCount + contactKeywordCount * 1.5 + forceBreakCount * 2 + locationChangeCount + Math.max(0, cameraChangeCount - 1) * 0.5
+  const movementScore = movementKeywordCount + cameraChangeCount + locationChangeCount
+  let visualDensity: CinematicVisualDensity = 'standard'
+  const reasons: string[] = []
+
+  if (/\b(chase|fight|battle|montage|transformation|pursuit)\b/.test(allText) || actionScore >= 7 || shotCount >= 7) {
+    visualDensity = 'action'
+    reasons.push('action/contact or montage-style signals')
+  } else if (actionScore >= 3 || movementScore >= 8 || shotCount >= 5 || locationChangeCount > 0) {
+    visualDensity = 'active'
+    reasons.push('movement, camera, or spatial transition signals')
+  } else if (
+    shotCount <= 4
+    && actionScore < 3
+    && (dialogueRatio >= 0.35 || dialogueCount >= 2 || stillKeywordCount >= Math.max(2, actionKeywordCount + contactKeywordCount))
+  ) {
+    visualDensity = 'slow'
+    reasons.push('dialogue/stillness outweighs action')
+  } else {
+    reasons.push('balanced dramatic coverage')
+  }
+
+  if (longShotCount >= Math.max(1, shotCount - 1) && visualDensity === 'standard' && actionScore < 2 && dialogueCount > 0) {
+    visualDensity = 'slow'
+    reasons.length = 0
+    reasons.push('long dialogue-oriented shots')
+  }
+
+  const shotStripMode: CinematicShotStripMode = visualDensity === 'slow'
+    ? 'sparse'
+    : visualDensity === 'action'
+      ? 'dense'
+      : 'balanced'
+
+  return {
+    visualDensity,
+    shotStripMode,
+    densityReason: [
+      reasons.join(', '),
+      `shots=${shotCount || 0}`,
+      `dialogueRatio=${dialogueRatio.toFixed(2)}`,
+      `actionScore=${actionScore.toFixed(1)}`,
+      `cameraChanges=${cameraChangeCount}`,
+      `locationChanges=${locationChangeCount}`,
+    ].filter(Boolean).join('; '),
+  }
+}
+
+function adaptiveBeatSheetPanelCount(input: {
+  durationSeconds: number
+  shotCount: number
+  visualDensity: CinematicVisualDensity
+}) {
+  const duration = Math.max(4, Math.min(15, Math.round(input.durationSeconds) || 4))
+  const shotCount = Math.max(1, input.shotCount || 1)
+  if (input.visualDensity === 'slow') {
+    const maxSlowPanels = duration <= 11 ? 4 : 5
+    return Math.max(3, Math.min(maxSlowPanels, shotCount + 2))
+  }
+  if (input.visualDensity === 'standard') {
+    return Math.max(5, Math.min(7, shotCount + 2, Math.ceil(duration * 0.45)))
+  }
+  if (input.visualDensity === 'active') {
+    return Math.max(6, Math.min(8, shotCount + 3, Math.ceil(duration * 0.6)))
+  }
+  return Math.max(8, Math.min(12, shotCount + 5, Math.ceil(duration * 0.7)))
 }
 
 function findShotForBeatMidpoint(shots: Record<string, unknown>[], midpointSeconds: number) {
@@ -3614,7 +3984,12 @@ function makeBeatPanelVisualDirection(shot: Record<string, unknown>, occurrenceI
 function buildCinematicBeatSheetPlan(blockScript: Record<string, unknown>) {
   const shots = Array.isArray(blockScript.shots) ? blockScript.shots.map(asRecord) : []
   const durationSeconds = Math.max(4, Math.min(15, Number(blockScript.durationSeconds ?? 8) || 8))
-  const panelCount = beatSheetPanelCountForDuration(durationSeconds, shots.length)
+  const density = classifyCinematicVisualDensity({ durationSeconds, shots })
+  const panelCount = adaptiveBeatSheetPanelCount({
+    durationSeconds,
+    shotCount: shots.length,
+    visualDensity: density.visualDensity,
+  })
   const durations = distributeBeatDurations(durationSeconds, panelCount)
   let cursor = 0
   const pendingBeats = durations.map((duration, index) => {
@@ -3665,23 +4040,172 @@ function buildCinematicBeatSheetPlan(blockScript: Record<string, unknown>) {
       ? { columns: 3, rows: 3, panelCount }
       : panelCount > 4
         ? { columns: 3, rows: 2, panelCount }
-        : { columns: 2, rows: 2, panelCount }
+        : panelCount === 4
+          ? { columns: 2, rows: 2, panelCount }
+          : { columns: panelCount, rows: 1, panelCount }
   return {
     planningOnly: true,
     durationSeconds,
     panelCount,
+    visualDensity: density.visualDensity,
+    densityReason: density.densityReason,
+    shotStripMode: density.shotStripMode,
     layout,
     beats,
   }
 }
 
 function keyframeImageSizeForAspectRatio(aspectRatio: string) {
-  const ratio = parseAspectRatio(aspectRatio)
+  const parsed = parseAspectRatio(aspectRatio)
+  const ratio = parsed.width / parsed.height
   if (ratio >= 2) return { width: 2048, height: 960 }
   if (ratio > 1.2) return { width: 1792, height: 1024 }
   if (ratio < 0.55) return { width: 1024, height: 1792 }
   if (ratio < 0.9) return { width: 1280, height: 1792 }
   return { width: 1536, height: 1536 }
+}
+
+function directionSheetImageSizeForAspectRatio(aspectRatio: string) {
+  const parsed = parseAspectRatio(aspectRatio)
+  const ratio = parsed.width / parsed.height
+  if (ratio < 0.75) return { width: 1536, height: 2304 }
+  if (ratio > 1.35) return { width: 2304, height: 1536 }
+  return { width: 2048, height: 2048 }
+}
+
+function directionSheetShotLine(shot: Record<string, unknown>, index: number) {
+  const start = formatTimecode(readShotStartSeconds(shot))
+  const end = formatTimecode(readShotEndSeconds(shot))
+  const title = readText(shot.title) || `Shot ${index + 1}`
+  const visual = compactStoryboardSentence(
+    readText(shot.visualAction) || readText(shot.action) || readText(shot.beat),
+    'Clear visible action with readable subject blocking.',
+    32,
+  )
+  const composition = compactStoryboardSentence(
+    readText(shot.composition) || readText(shot.framing),
+    'Maintain coherent spatial layout and continuity.',
+    24,
+  )
+  const camera = compactStoryboardSentence(
+    [readText(shot.framing), readText(shot.cameraMovement)].filter(Boolean).join(' '),
+    'Camera placement should be readable from the scene layout.',
+    18,
+  )
+  return `${index + 1}. ${start}-${end} ${title}: ${visual} Composition: ${composition} Camera: ${camera}`
+}
+
+function directionSheetLocations(blockScript: Record<string, unknown>) {
+  const shots = Array.isArray(blockScript.shots) ? blockScript.shots.map(asRecord) : []
+  const names = [
+    readText(blockScript.location),
+    ...shots.map((shot) => readText(shot.location)),
+  ].filter(Boolean)
+  const seen = new Set<string>()
+  return names.filter((name) => {
+    const key = slugify(name)
+    if (!key || seen.has(key)) return false
+    seen.add(key)
+    return true
+  }).slice(0, 3)
+}
+
+export function buildCinematicDirectionSheetPrompt(input: {
+  blockScript: Record<string, unknown>
+  assetPack: Record<string, unknown>
+  aspectRatio: string
+  prompt: string
+  guidance: OutputGuidanceBundle | null
+  debugCinematicStoryboardStyleSafeMode?: boolean
+  cinematicStoryboardStyleOverride?: string
+}) {
+  const beatSheetPlan = buildCinematicBeatSheetPlan(input.blockScript)
+  const shots = Array.isArray(input.blockScript.shots) ? input.blockScript.shots.map(asRecord) : []
+  const entities = compactCinematicEntityAnchors(input.assetPack, 10)
+  const entityAnchorLines = formatCinematicEntityAnchorLines(entities)
+  const safeMode = input.debugCinematicStoryboardStyleSafeMode === true
+  const sheetStyle = safeMode
+    ? (readText(input.cinematicStoryboardStyleOverride) || DEFAULT_CINEMATIC_STORYBOARD_STYLE_PROMPT)
+    : 'project/user visual style from the brief and world context'
+  const styleInstruction = safeMode
+    ? `Visual style: ${sheetStyle}. This is a stylized production-board translation, not photorealistic likeness. Apply the style to the cinematic panels and hero frame while preserving reference image identity anchors, silhouette, wardrobe, palette, props, material cues, and environment geometry.`
+    : 'Visual style: follow the project/user visual style from the brief and world context; maintain palette, wardrobe, environment logic, lighting direction, and character identity across the sheet.'
+  const imageSize = directionSheetImageSizeForAspectRatio(input.aspectRatio)
+  const shotLines = shots.length > 0
+    ? shots.slice(0, 12).map(directionSheetShotLine).join('\n')
+    : beatSheetPlan.beats.map((beat) => `${beat.beatNumber}. ${beat.timecode}: ${beat.panelVisual}`).join('\n')
+  const timedPanelLines = beatSheetPlan.beats.map((beat) => [
+    `Panel ${String(beat.beatNumber).padStart(2, '0')} [${beat.timecode}]`,
+    `Visual: ${beat.panelVisual}`,
+    `Small label only: ${beat.captionLines[0]}`,
+  ].join('\n')).join('\n\n')
+  const locations = directionSheetLocations(input.blockScript)
+  return {
+    beatSheetPlan,
+    directionSheetPlan: {
+      planningOnly: true,
+      sheetKind: 'shot_reference_sheet',
+      durationSeconds: beatSheetPlan.durationSeconds,
+      aspectRatio: input.aspectRatio,
+      imageSize,
+      panelCount: beatSheetPlan.panelCount,
+      visualDensity: beatSheetPlan.visualDensity,
+      densityReason: beatSheetPlan.densityReason,
+      shotStripMode: beatSheetPlan.shotStripMode,
+      locationNames: locations,
+    },
+    imageSize,
+    prompt: [
+      'Create one CINEMATIC DIRECTION SHEET reference image for a single video take.',
+      `Canvas: large production-board layout, approximately ${imageSize.width}x${imageSize.height}, clean dark neutral background, sparse readable labels, no decorative poster treatment.`,
+      `The final video aspect ratio is ${input.aspectRatio}. Any cinematic shot panels and hero frame must use an internal ${input.aspectRatio} crop.`,
+      'This is a visual reference sheet, not a screenplay page and not a text table.',
+      '',
+      'Required sheet sections:',
+      '1. HERO FRAME: one large cinematic composition showing the dominant visual read of the take, with subject identity, wardrobe, props, lighting, and environment locked.',
+      `2. TIMED SHOT STRIP: ${beatSheetPlan.panelCount} ${beatSheetPlan.shotStripMode} cinematic panels in sequence, left-to-right, each showing a meaningful visible action/cut beat from the take.`,
+      '3. LOCATION FLOOR MAP: simplified top-down map of the scene space with subject positions, movement arrows, camera positions, and camera direction cones.',
+      '4. CAMERA LAYOUT: compact visual callouts for each shot camera placement, framing, lens feel, and motion path.',
+      '5. LIGHTING / MOOD / STYLE: key light direction, practical lights, palette swatches, atmosphere, weather, haze, reflections, and contrast level.',
+      '6. CONTINUITY ANCHORS: compact visual callouts for wardrobe, silhouettes, props, character marks, and environment features.',
+      beatSheetPlan.visualDensity === 'slow'
+        ? 'Density direction: sparse slow-scene coverage. Make the hero frame, actor blocking, gaze/reaction positions, table/room geography, and lighting mood larger and clearer than the shot strip. Do not invent second-by-second panels.'
+        : beatSheetPlan.visualDensity === 'action'
+          ? 'Density direction: dense action coverage. Emphasize obstacle/contact beats, movement arrows, spatial transitions, and readable impact geometry across the shot strip.'
+          : 'Density direction: balanced coverage. Use panels only for meaningful cut/action changes, while the map, camera plan, and lighting notes carry continuity.',
+      '',
+      'Visual-only boundaries:',
+      '- Do not include spoken words, foley, music, audio notes, technical service names, runtime instructions, JSON, or workflow metadata.',
+      '- If a shot contains speech, show only visible performance cues such as lips parted, gaze, posture, or reaction.',
+      '- Labels may identify planning marks such as CAM A, KEY LIGHT, MOVE, EXIT, or SHOT 01, but keep labels sparse and readable.',
+      '- Do not create dense paragraphs, UI panels, screenplay columns, captions as story text, watermarks, logos, or poster titles.',
+      '',
+      `Take title: ${readText(input.blockScript.title) || 'Compiled cinematic take'}`,
+      `Take duration: ${beatSheetPlan.durationSeconds} seconds exactly.`,
+      `Shot density: ${beatSheetPlan.visualDensity}; shot-strip mode: ${beatSheetPlan.shotStripMode}; panel count: ${beatSheetPlan.panelCount}.`,
+      `Density reason: ${beatSheetPlan.densityReason}.`,
+      locations.length > 0 ? `Location basis: ${locations.join(', ')}` : '',
+      '',
+      'Timed shot cuts:',
+      shotLines,
+      '',
+      'Shot-strip panel visuals:',
+      timedPanelLines,
+      '',
+      'Floor map requirements:',
+      'Show a schematic overhead plan of the location with walls, doors, table/vehicle/terrain/thresholds where relevant, subject start/end positions, movement arrows, camera cones, and practical light sources. Keep it simple enough to read at a glance.',
+      '',
+      'Camera and lighting requirements:',
+      'Show camera positions and movement arrows that match the shot strip. Show key light direction, fill/shadow side, practical source colors, atmosphere, reflections, and mood palette.',
+      entities.length > 0 ? 'Canonical visual identity anchors from appearance only:' : '',
+      entityAnchorLines,
+      input.prompt ? `User brief: ${input.prompt}` : '',
+      styleInstruction,
+      safeMode ? 'Reference fidelity: use uploaded/entity reference images as strict identity, costume, prop, palette, and spatial-continuity anchors, but render the sheet in the safe painterly comic-book production style rather than realistic likeness.' : '',
+      `Storyboard style safe mode: ${safeMode ? 'painterly comic-book' : 'disabled'}.`,
+      'The final image should read like a professional director/DP previsualization board: shot progression, spatial logic, camera plan, lighting plan, and continuity in one sheet.',
+    ].filter(Boolean).join('\n\n'),
+  }
 }
 
 export function buildCinematicBeatSheetPrompt(input: {
@@ -3731,6 +4255,9 @@ export function buildCinematicBeatSheetPrompt(input: {
       `Take duration: ${beatSheetPlan.durationSeconds} seconds exactly.`,
       'Story beats:',
       beatLines,
+      `Shot density: ${beatSheetPlan.visualDensity}; shot-strip mode: ${beatSheetPlan.shotStripMode}; panel count: ${beatSheetPlan.panelCount}.`,
+      `Density reason: ${beatSheetPlan.densityReason}.`,
+      'Panel-count rule: these panels represent meaningful visual cuts or action phases, not every second of runtime. Do not invent extra panels for slow micro-continuity.',
       entities.length > 0 ? 'Canonical visual identity anchors from appearance only:' : '',
       entityAnchorLines,
       input.prompt ? `User brief: ${input.prompt}` : '',
@@ -3933,6 +4460,11 @@ export function buildCinematicVideoPrompt(input: {
       keyframeCount >= 3 ? '@Image3: ending keyframe; lock the final composition and emotional/visual beat.' : '',
       extraReferenceCount > 0 ? `@Image${extraReferenceStart}${extraReferenceCount > 1 ? `-@Image${input.referenceImageCount}` : ''}: individual entity, environment, prop, or optional continuity reference assets only.` : '',
     ].filter(Boolean)
+    : cinematicReferenceMode === 'shot_reference_sheet'
+      ? [
+        input.referenceImageCount >= 1 ? '@Image1: cinematic direction sheet; follow the timed shot strip, blocking, camera layout, spatial map, lighting direction, identity anchors, and continuity.' : '',
+        extraReferenceCount > 0 ? `@Image${extraReferenceStart}${extraReferenceCount > 1 ? `-@Image${input.referenceImageCount}` : ''}: individual entity, environment, prop, or optional continuity reference sheets.` : '',
+      ].filter(Boolean)
     : [
       input.referenceImageCount >= 1 ? '@Image1: storyboard beat-sheet grid; use it as the primary visual continuity and timing board, following panel order left-to-right then top-to-bottom.' : '',
       extraReferenceCount > 0 ? `@Image${extraReferenceStart}${extraReferenceCount > 1 ? `-@Image${input.referenceImageCount}` : ''}: individual entity, environment, prop, or optional keyframe continuity reference assets.` : '',
@@ -3968,6 +4500,10 @@ export function buildCinematicVideoPrompt(input: {
       : 'No image references are attached; use the written continuity locks only.',
     cinematicReferenceMode === 'keyframes'
       ? 'Beat sheets are planning-only and should not appear in the video. Use keyframes as the main visual references.'
+      : cinematicReferenceMode === 'shot_reference_sheet'
+        ? storyboardStyleSafeMode
+          ? `Cinematic direction-sheet reference mode is enabled. @Image1 is a stylized director/DP reference sheet rendered as ${storyboardStyle}; follow its timed shot strip, subject blocking, camera layout, floor-map spatial logic, lighting direction, hero frame, identity anchors, and continuity, but render the final clip in the target video style: ${targetVideoStyle}. Do not reproduce sheet labels, maps, arrows, camera cones, gutters, caption bands, UI, diagram elements, or text as on-screen content. Use the written timeline below for dialogue, foley, music, and audio timing.`
+          : 'Cinematic direction-sheet reference mode is enabled. Follow @Image1 for timed shot progression, subject blocking, camera layout, floor-map spatial logic, lighting direction, hero frame, identity anchors, and continuity. Do not reproduce sheet labels, maps, arrows, camera cones, gutters, caption bands, UI, diagram elements, or text as on-screen content. Use the written timeline below for dialogue, foley, music, and audio timing.'
       : storyboardStyleSafeMode
         ? `Storyboard-grid reference mode is enabled. @Image1 is a stylized storyboard/timing reference rendered as ${storyboardStyle}; follow its panel order, blocking, composition, identity anchors, and continuity, but render the final clip in the target video style: ${targetVideoStyle}. Do not reproduce caption bands, panel borders, grid gutters, UI, or text as on-screen elements. Use the written timeline below for dialogue, foley, music, and audio timing.`
         : 'Storyboard-grid reference mode is enabled. Follow @Image1 as the visual continuity and timing board, but do not reproduce caption bands, panel borders, grid gutters, UI, or text as on-screen elements. Use the written timeline below for dialogue, foley, music, and audio timing.',
@@ -3984,7 +4520,7 @@ export function buildCinematicVideoPrompt(input: {
     '- natural physical motion',
     '- continuous lighting direction',
     '- coherent spatial layout',
-    '- no on-screen text, UI, captions, watermark, or storyboard-panel artifacts',
+    '- no on-screen text, UI, captions, watermark, storyboard-panel artifacts, map diagrams, arrows, or camera-layout marks',
     input.prompt ? `\nUser brief: ${input.prompt}` : '',
   ].filter(Boolean).join('\n\n')
 }
@@ -4287,13 +4823,16 @@ async function materializeDynamicCinematicTakeFanout(input: {
   const resolution = readText(input.config.resolution) || '720p'
   const generateAudio = input.config.generateAudio !== false
   const debugSkipVideoGeneration = input.config.debugSkipVideoGeneration === true
+  const videoProvider = resolveOutputVideoProvider(input.config)
   const videoModel = readText(input.config.videoModel)
-    || (resolution === '1080p' ? 'bytedance/seedance-2.0/reference-to-video' : 'bytedance/seedance-2.0/fast/reference-to-video')
+    || readText(input.config.model)
+    || (videoProvider === 'muapi' ? DEFAULT_MUAPI_VIDEO_MODEL : resolveFalVideoModel(resolution))
   const presetFamily = readText(input.config.presetFamily) || 'story_movie_tv'
   const cinematicReferenceMode = normalizeCinematicReferenceMode(input.config.cinematicReferenceMode)
   const storyboardStylePolicy = resolveCinematicStoryboardStylePolicy(input.config)
   const useKeyframes = cinematicReferenceMode === 'keyframes' || cinematicReferenceMode === 'keyframes_and_storyboard'
   const useStoryboardReference = cinematicReferenceMode !== 'keyframes'
+  const useDirectionSheet = cinematicReferenceMode === 'shot_reference_sheet'
   const keyframeImageSize = keyframeImageSizeForAspectRatio(aspectRatio)
 
   const existingNodeResponse = await input.client
@@ -4357,14 +4896,14 @@ async function materializeDynamicCinematicTakeFanout(input: {
     const videoPromptKey = `take_${suffix}_video_prompt`
     const videoKey = `take_${suffix}_video`
     nodeRows.push(
-      dynamicNodeRow({ workflow: input.workflow, key: beatSheetPromptKey, nodeType: 'utility_transform', label: `Take ${takeNumber} Beat Sheet Prompt`, x: 1760, y, compileHash, config: { purpose: 'cinematic_beat_sheet_prompt', takeId, takeIndex: index, aspectRatio, presetFamily, planningOnly: true, debugCinematicStoryboardStyleSafeMode: storyboardStylePolicy.safeMode, cinematicStoryboardStyleOverride: storyboardStylePolicy.stylePrompt, execution: { resourceClass: 'utility', groupKey: 'cinematic_beat_sheet_prompts', maxConcurrency: 6 } } }),
-      dynamicNodeRow({ workflow: input.workflow, key: beatSheetKey, nodeType: 'image_generation', label: `Take ${takeNumber} Beat Sheet`, x: 2040, y, compileHash, config: { purpose: 'cinematic_beat_sheet', role: 'cinematic_beat_sheet', takeId, takeIndex: index, planningOnly: true, planning_only: true, usedAsVideoReference: useStoryboardReference, model: 'openai/gpt-image-2', referenceModel: 'openai/gpt-image-2/edit', quality: CINEMATIC_STORYBOARD_IMAGE_QUALITY, outputFormat: 'webp', maxReferenceImages: 16, imageSizePolicy: 'from_beat_sheet_prompt_layout', panelAspectRatio: aspectRatio, debugCinematicStoryboardStyleSafeMode: storyboardStylePolicy.safeMode, cinematicStoryboardStyleOverride: storyboardStylePolicy.stylePrompt, skillKeys: ['cinematic_beat_sheet_planning', 'image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'provider_prompt_hygiene'], autoSkillTags: ['beat_sheet', 'storyboard', 'planning_only', 'video_reference', 'image_prompt', 'entity_reference', 'reference_continuity'], guidanceMode: 'strict', execution: { resourceClass: 'image', groupKey: 'cinematic_beat_sheets', maxConcurrency: 3 } } }),
+      dynamicNodeRow({ workflow: input.workflow, key: beatSheetPromptKey, nodeType: 'utility_transform', label: `Take ${takeNumber} ${useDirectionSheet ? 'Direction Sheet' : 'Beat Sheet'} Prompt`, x: 1760, y, compileHash, config: { purpose: 'cinematic_beat_sheet_prompt', takeId, takeIndex: index, aspectRatio, presetFamily, planningOnly: true, cinematicReferenceMode, referenceSheetKind: useDirectionSheet ? 'shot_reference_sheet' : 'storyboard_sheet', debugCinematicStoryboardStyleSafeMode: storyboardStylePolicy.safeMode, cinematicStoryboardStyleOverride: storyboardStylePolicy.stylePrompt, execution: { resourceClass: 'utility', groupKey: 'cinematic_beat_sheet_prompts', maxConcurrency: 6 } } }),
+      dynamicNodeRow({ workflow: input.workflow, key: beatSheetKey, nodeType: 'image_generation', label: `Take ${takeNumber} ${useDirectionSheet ? 'Direction Sheet' : 'Beat Sheet'}`, x: 2040, y, compileHash, config: { purpose: 'cinematic_beat_sheet', role: useDirectionSheet ? 'cinematic_direction_sheet' : 'cinematic_beat_sheet', takeId, takeIndex: index, planningOnly: true, planning_only: true, usedAsVideoReference: useStoryboardReference, model: 'openai/gpt-image-2', referenceModel: 'openai/gpt-image-2/edit', quality: CINEMATIC_STORYBOARD_IMAGE_QUALITY, outputFormat: 'webp', maxReferenceImages: 16, imageSizePolicy: useDirectionSheet ? 'from_direction_sheet_layout' : 'from_beat_sheet_prompt_layout', panelAspectRatio: aspectRatio, cinematicReferenceMode, referenceSheetKind: useDirectionSheet ? 'shot_reference_sheet' : 'storyboard_sheet', debugCinematicStoryboardStyleSafeMode: storyboardStylePolicy.safeMode, cinematicStoryboardStyleOverride: storyboardStylePolicy.stylePrompt, skillKeys: [useDirectionSheet ? 'cinematic_direction_sheet_planning' : 'cinematic_beat_sheet_planning', 'image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'provider_prompt_hygiene'], autoSkillTags: useDirectionSheet ? ['direction_sheet', 'shot_reference_sheet', 'camera_layout', 'floor_map', 'planning_only', 'video_reference', 'image_prompt', 'entity_reference', 'reference_continuity'] : ['beat_sheet', 'storyboard', 'planning_only', 'video_reference', 'image_prompt', 'entity_reference', 'reference_continuity'], guidanceMode: 'strict', execution: { resourceClass: 'image', groupKey: 'cinematic_beat_sheets', maxConcurrency: 3 } } }),
       ...(useKeyframes ? [
         dynamicNodeRow({ workflow: input.workflow, key: keyframePromptPackKey, nodeType: 'utility_transform', label: `Take ${takeNumber} Keyframe Prompts`, x: 2320, y, compileHash, config: { purpose: 'cinematic_keyframe_prompt_pack', takeId, takeIndex: index, aspectRatio, presetFamily, debugCinematicStoryboardStyleSafeMode: storyboardStylePolicy.safeMode, cinematicStoryboardStyleOverride: storyboardStylePolicy.stylePrompt, execution: { resourceClass: 'utility', groupKey: 'cinematic_keyframe_prompt_packs', maxConcurrency: 6 } } }),
         ...keyframeKeys.map((keyframeKey, keyframeIndex) => dynamicNodeRow({ workflow: input.workflow, key: keyframeKey, nodeType: 'image_generation', label: `Take ${takeNumber} Keyframe ${keyframeIndex + 1}`, x: 2600 + keyframeIndex * 40, y: y + keyframeIndex * 44, compileHash, config: { purpose: 'cinematic_keyframe', role: 'cinematic_keyframe', takeId, takeIndex: index, keyframeIndex, model: 'openai/gpt-image-2', referenceModel: 'openai/gpt-image-2/edit', quality: 'low', outputFormat: 'webp', maxReferenceImages: 16, imageSize: keyframeImageSize, aspectRatio, skillKeys: ['cinematic_keyframe_prompting', 'image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'provider_prompt_hygiene'], autoSkillTags: ['keyframe', 'image_prompt', 'visual_only', 'entity_reference', 'reference_continuity'], guidanceMode: 'strict', execution: { resourceClass: 'image', groupKey: 'cinematic_keyframes', maxConcurrency: 3 } } })),
       ] : []),
       dynamicNodeRow({ workflow: input.workflow, key: videoPromptKey, nodeType: 'utility_transform', label: `Take ${takeNumber} Video Prompt`, x: 2880, y, compileHash, config: { purpose: 'cinematic_video_prompt', takeId, takeIndex: index, durationSeconds, aspectRatio, resolution, generateAudio, presetFamily, cinematicReferenceMode, debugCinematicStoryboardStyleSafeMode: storyboardStylePolicy.safeMode, cinematicStoryboardStyleOverride: storyboardStylePolicy.stylePrompt, debugSkipVideoGeneration, execution: { resourceClass: 'utility', groupKey: 'cinematic_video_prompts', maxConcurrency: 6 } } }),
-      dynamicNodeRow({ workflow: input.workflow, key: videoKey, nodeType: 'video_generation', label: `Take ${takeNumber} Video`, x: 3160, y, compileHash, config: { purpose: 'cinematic_block_video', role: 'cinematic_block', takeId, takeIndex: index, model: videoModel, durationSeconds, aspectRatio, resolution, generateAudio, cinematicReferenceMode, debugSkipVideoGeneration, syncMode: false, skillKeys: ['seedance_reference_video_prompting', 'seedance_truth_source_modes', 'seedance_reference_legend_contract', 'seedance_timeline_call_sheet', 'cinematic_shot_direction', 'shortform_hook_retention', 'brand_ugc_proof_structure', 'provider_prompt_hygiene'], autoSkillTags: ['video_prompt', 'seedance', 'cinematic', 'ugc', 'provider_hygiene'], guidanceMode: 'strict', execution: { resourceClass: 'video', groupKey: 'cinematic_videos', maxConcurrency: Math.min(takePlan.length, 3) } } }),
+      dynamicNodeRow({ workflow: input.workflow, key: videoKey, nodeType: 'video_generation', label: `Take ${takeNumber} Video`, x: 3160, y, compileHash, config: { purpose: 'cinematic_block_video', role: 'cinematic_block', takeId, takeIndex: index, provider: videoProvider, videoProvider, model: videoModel, durationSeconds, aspectRatio, resolution, generateAudio, cinematicReferenceMode, debugSkipVideoGeneration, syncMode: false, skillKeys: ['seedance_reference_video_prompting', 'seedance_truth_source_modes', 'seedance_reference_legend_contract', 'seedance_timeline_call_sheet', 'cinematic_shot_direction', 'shortform_hook_retention', 'brand_ugc_proof_structure', 'provider_prompt_hygiene'], autoSkillTags: ['video_prompt', 'seedance', 'cinematic', 'ugc', 'provider_hygiene'], guidanceMode: 'strict', execution: { resourceClass: 'video', groupKey: 'cinematic_videos', maxConcurrency: Math.min(takePlan.length, 3) } } }),
     )
     const takeMeta = { takeId, takeIndex: index }
     edgeRows.push(
@@ -4423,6 +4962,8 @@ async function materializeDynamicCinematicTakeFanout(input: {
       totalDurationSeconds: Number(input.compileOutputs.totalDurationSeconds ?? 0) || null,
       scriptDurationSource: readText(input.compileOutputs.scriptDurationSource) || 'authored_script',
       cinematicReferenceMode,
+      videoProvider,
+      videoModel,
       debugSkipVideoGeneration,
       dynamicCinematicCompileHash: compileHash,
     },
@@ -4802,6 +5343,71 @@ function comicScriptPage(script: Record<string, unknown>, pageNumber: number) {
   return pages.find((entry) => Number(entry.pageNumber ?? 0) === pageNumber) ?? pages[pageNumber - 1] ?? {}
 }
 
+function normalizeComicEntityToken(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+}
+
+function comicEntityTokens(entity: Record<string, unknown>) {
+  return new Set([
+    readText(entity.key),
+    readText(entity.id),
+    readText(entity.name),
+    readText(entity.label),
+  ].map(normalizeComicEntityToken).filter(Boolean))
+}
+
+function collectComicPageReferenceTokens(page: Record<string, unknown>) {
+  const tokens = new Set<string>()
+  const add = (value: unknown) => {
+    if (typeof value === 'string') {
+      const token = normalizeComicEntityToken(value)
+      if (token) tokens.add(token)
+      return
+    }
+    if (Array.isArray(value)) {
+      for (const entry of value) add(entry)
+    }
+  }
+  add(page.requiredEntityKeys)
+  add(page.characters)
+  add(page.locations)
+  add(page.props)
+  const panels = Array.isArray(page.panels) ? page.panels.map(asRecord) : []
+  for (const panel of panels) {
+    add(panel.requiredEntityKeys)
+    add(panel.characters)
+    add(panel.location)
+    add(panel.locations)
+    add(panel.props)
+    add(panel.items)
+    add(panel.factions)
+  }
+  return tokens
+}
+
+function filterComicAssetPackForPage(assetPack: Record<string, unknown>, page: Record<string, unknown>, limit = 6) {
+  const entities = Array.isArray(assetPack.entities) ? assetPack.entities.map(asRecord) : []
+  const tokens = collectComicPageReferenceTokens(page)
+  const matched = tokens.size > 0
+    ? entities.filter((entity) => {
+      const entityTokens = comicEntityTokens(entity)
+      return [...tokens].some((token) => [...entityTokens].some((entityToken) => (
+        entityToken === token || entityToken.includes(token) || token.includes(entityToken)
+      )))
+    })
+    : entities
+  const pageEntities = (matched.length > 0 ? matched : entities).slice(0, limit)
+  return {
+    ...assetPack,
+    entities: pageEntities,
+    pageReferenceEntityKeys: pageEntities.map((entity) => readText(entity.key)).filter(Boolean),
+    missingReferenceEntityKeys: pageEntities
+      .filter((entity) => readStringArray(entity.assetKeys).length === 0)
+      .map((entity) => readText(entity.key))
+      .filter(Boolean),
+  }
+}
+
 function compactComicPanelForPrompt(panel: Record<string, unknown>, fallbackPanelNumber: number) {
   const panelNumber = Number(panel.panelNumber ?? fallbackPanelNumber)
   return [
@@ -4827,14 +5433,12 @@ function buildDeterministicComicPageImagePrompt(input: {
   if (panels.length < 3) {
     throw new Error(`Comic page ${input.pageNumber} prompt cannot be built because the script page has ${panels.length} panel(s). Rerun the Comic Script node first.`)
   }
-  const pageEntityKeys = readStringArray(page.requiredEntityKeys)
   const packedEntities = Array.isArray(input.assetPack.entities) ? input.assetPack.entities.map(asRecord) : []
-  const relevantEntities = pageEntityKeys.length > 0
-    ? packedEntities.filter((entity) => pageEntityKeys.includes(readText(entity.key)))
-    : packedEntities
+  const pageAssetPack = filterComicAssetPackForPage(input.assetPack, page, 6)
+  const relevantEntities = Array.isArray(pageAssetPack.entities) ? pageAssetPack.entities.map(asRecord) : packedEntities
   return [
     `Create a finished full-page portrait comic image for page ${input.pageNumber} of ${input.pageCount}.`,
-    'Use the attached comic atlas image as the primary identity, costume, environment, palette, and line-art reference.',
+    'Use the attached entity/environment reference sheets directly as continuity sources for identity, wardrobe, silhouettes, palette, props, materials, and environment features.',
     'The image must contain the complete page: panel borders, gutters, speech balloons, captions, sound effects where scripted, and readable lettering.',
     'Follow this script exactly. Do not invent a different beat, skip panels, merge pages, or repeat another page.',
     readText(input.script.title) ? `Issue title: ${readText(input.script.title)}` : '',
@@ -4846,7 +5450,7 @@ function buildDeterministicComicPageImagePrompt(input: {
     'Panel script:',
     panels.map((panel, index) => compactComicPanelForPrompt(panel, index + 1)).join('\n\n'),
     relevantEntities.length > 0 ? 'Required visual continuity references:' : '',
-    relevantEntities.length > 0 ? compactForPrompt({ entities: relevantEntities.slice(0, 10) }) : '',
+    relevantEntities.length > 0 ? compactForPrompt({ entities: relevantEntities.slice(0, 6) }) : '',
     input.prompt ? `User style brief: ${input.prompt}` : '',
     guidanceMarkdown(input.guidance),
     'Visible text rules: include only the scripted dialogue/caption/SFX text; keep text short, legible, and placed inside clear balloons or caption boxes.',
@@ -5367,8 +5971,8 @@ function referenceLimitForImageNode(config: Record<string, unknown>, role: strin
   if (Number.isFinite(configured) && configured > 0) {
     return Math.max(1, Math.min(16, Math.floor(configured)))
   }
-  if (role === 'comic_page') return 1
-  if (role === 'comic_atlas' || role === 'cinematic_atlas' || role === 'cinematic_storyboard') return 16
+  if (role === 'comic_page') return 6
+  if (role === 'comic_atlas' || role === 'cinematic_atlas' || role === 'cinematic_storyboard' || role === 'cinematic_direction_sheet') return 16
   return 16
 }
 
@@ -5683,6 +6287,106 @@ async function waitForOutputFalVideo(input: {
   throw new Error(`Fal video request timed out before completion after ${timeoutMs}ms.`)
 }
 
+async function waitForOutputMuapiVideo(input: {
+  priorStep?: OutputWorkflowRunStep | null
+  apiKey: string
+  model: string
+  prompt: string
+  durationSeconds: number
+  aspectRatio?: string
+  referenceImageUrls?: string[]
+  referenceVideoUrls?: string[]
+  referenceAudioUrls?: string[]
+  shouldCancel?: () => Promise<boolean>
+  onProgress?: (progress: {
+    providerRequestId: string
+    providerStatus: string
+    providerMode: string
+    lastProviderPollAt: string
+    resultUrl: string
+    webhookConfigured?: boolean
+  }) => Promise<void>
+}) {
+  const priorMetadata = asRecord(input.priorStep?.metadata)
+  let requestId = readText(input.priorStep?.providerRequestId) || readText(priorMetadata.muapiRequestId)
+  const webhookUrl = buildOutputWorkflowMuapiWebhookUrl()
+  const providerMode = webhookUrl ? 'muapi_webhook_polling' : 'muapi_polling'
+
+  if (!requestId) {
+    const submit = await submitMuapiVideoRequest({
+      apiKey: input.apiKey,
+      prompt: input.prompt,
+      durationSeconds: input.durationSeconds,
+      aspectRatio: input.aspectRatio,
+      referenceImageUrls: input.referenceImageUrls,
+      referenceVideoUrls: input.referenceVideoUrls,
+      referenceAudioUrls: input.referenceAudioUrls,
+      webhookUrl,
+    })
+    if (!submit.response.ok) {
+      throw new Error(muapiErrorMessage(submit.body, `MUAPI video submission failed with HTTP ${submit.response.status}.`))
+    }
+    requestId = readMuapiRequestId(submit.body)
+    if (!requestId) throw new Error('MUAPI did not return a request id for the output video generation node.')
+  }
+
+  const resultUrl = `${MUAPI_BASE_URL}/predictions/${encodeURIComponent(requestId)}/result`
+  await input.onProgress?.({
+    providerRequestId: requestId,
+    providerStatus: 'IN_QUEUE',
+    providerMode,
+    lastProviderPollAt: new Date().toISOString(),
+    resultUrl,
+    webhookConfigured: Boolean(webhookUrl),
+  })
+
+  const timeoutMs = outputWorkflowMuapiTimeoutMs()
+  const pollIntervalMs = outputWorkflowMuapiPollIntervalMs()
+  const startedAt = Date.now()
+
+  while (Date.now() - startedAt < timeoutMs) {
+    if (await input.shouldCancel?.()) {
+      throw new WorkflowCancelledError()
+    }
+
+    const result = await getMuapiResult({ apiKey: input.apiKey, requestId })
+    const providerStatus = readMuapiProviderStatus(result.body)
+    await input.onProgress?.({
+      providerRequestId: requestId,
+      providerStatus,
+      providerMode,
+      lastProviderPollAt: new Date().toISOString(),
+      resultUrl,
+      webhookConfigured: Boolean(webhookUrl),
+    })
+
+    const videoUrl = extractMuapiVideoUrlFromResult(result.body)
+    if (result.response.ok && (videoUrl || muapiStatusIsComplete(providerStatus))) {
+      if (!videoUrl) throw new Error('MUAPI completed the output video request but did not return a video URL.')
+      return {
+        requestId,
+        resultUrl,
+        videoUrl,
+        mimeType: videoUrl.toLowerCase().includes('.webm') ? 'video/webm' : 'video/mp4',
+        fileName: videoUrl.split('/').pop()?.split('?')[0] || '',
+        fileSize: null,
+        resultBody: result.body,
+      }
+    }
+
+    if (!result.response.ok && ![404, 409, 425, 429, 500, 502, 503, 504].includes(result.response.status)) {
+      throw new Error(muapiErrorMessage(result.body, `MUAPI video result failed with HTTP ${result.response.status}.`))
+    }
+    if (muapiStatusIsFailed(providerStatus)) {
+      throw new Error(muapiErrorMessage(result.body, `MUAPI video generation failed with status ${providerStatus}.`))
+    }
+
+    await sleep(pollIntervalMs)
+  }
+
+  throw new Error(`MUAPI video request timed out before completion after ${timeoutMs}ms.`)
+}
+
 async function registerImageArtifact(input: {
   client: DatabaseClient
   run: OutputWorkflowRun
@@ -5914,7 +6618,6 @@ async function registerComicArtifact(input: {
   comicPages: Record<string, unknown>[]
   scriptMarkdown: string
   script: Record<string, unknown> | null
-  atlasImage?: Record<string, unknown> | null
   documentRenderer?: OutputDocumentRenderer | null
 }) {
   if (!input.documentRenderer) throw new Error('Comic PDF rendering requires a worker document renderer.')
@@ -5960,8 +6663,6 @@ async function registerComicArtifact(input: {
   const renderMetadata = {
     ...renderResult.metadata,
     sequenceUnitKey: readStringArray(input.run.input.sourceSequenceUnitKeys)[0] ?? '',
-    atlasAssetKey: readText(input.atlasImage?.assetKey),
-    atlasStoragePath: readText(input.atlasImage?.storagePath),
   }
   const assetMetadata = {
     generatedBy: 'output_workflow',
@@ -5979,11 +6680,6 @@ async function registerComicArtifact(input: {
     sourceSequenceUnitKeys: input.run.input.sourceSequenceUnitKeys ?? [],
     pageAssetKeys: comicPageInputs.map((page) => page.assetKey),
     pageStoragePaths: comicPageInputs.map((page) => page.storagePath),
-    atlas: input.atlasImage ? {
-      assetKey: readText(input.atlasImage.assetKey),
-      storagePath: readText(input.atlasImage.storagePath),
-      mimeType: readText(input.atlasImage.mimeType),
-    } : null,
     render: renderMetadata,
   }
   const assetResponse = await input.client
@@ -7038,7 +7734,7 @@ async function executeNode(input: {
           outputs,
           provider: 'openai',
           model,
-          providerRequestId: readText(repairResponse?.body.id) || readText(response.body.id) || response.response.headers.get('x-request-id') || null,
+          providerRequestId: readText(response.body.id) || response.response.headers.get('x-request-id') || null,
         }
       }
       if (purpose === 'comic_page_plan') {
@@ -7133,12 +7829,16 @@ async function executeNode(input: {
         const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
         const scriptPage = comicScriptPage(script, pageNumber)
         const pagePrompt = buildDeterministicComicPageImagePrompt({ script, assetPack, pageNumber, pageCount, prompt: input.run.prompt, guidance })
+        const pageAssetPack = filterComicAssetPackForPage(assetPack, scriptPage, 6)
         const outputs = {
           prompt: pagePrompt,
           text: pagePrompt,
           pageNumber,
           pageCount,
           scriptPage,
+          pageAssetPack,
+          page_asset_pack: pageAssetPack,
+          pageReferenceEntityKeys: readStringArray(pageAssetPack.pageReferenceEntityKeys),
           assetPack,
           guidance,
           deterministic: true,
@@ -7374,7 +8074,8 @@ async function executeNode(input: {
       const prompt = (purpose === 'cinematic_keyframe' || role === 'cinematic_keyframe'
         ? readText(keyframePrompts[keyframeIndex]?.prompt)
         : '')
-        || readFirstUpstreamText(input.upstream, ['prompt', 'text'])
+        || readFirstUpstreamText(input.upstream, ['prompt'])
+        || readFirstUpstreamText(input.upstream, ['text'])
         || readText(input.node.inputs.prompt)
         || input.run.prompt
       if (!prompt) throw new Error('Image generation node is missing a prompt.')
@@ -7392,7 +8093,7 @@ async function executeNode(input: {
       const falApiKey = Deno.env.get('FAL_KEY')
       if (!falApiKey) throw new Error('FAL_KEY is not configured for the Fly output workflow worker.')
       const upstreamImages = readUpstreamImages(input.upstream)
-      const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+      const assetPack = readFirstUpstreamRecord(input.upstream, ['pageAssetPack', 'page_asset_pack', 'assetPack', 'asset_pack'])
       const referenceLimit = referenceLimitForImageNode(config, role)
       const referenceImageUrls = [...new Set([
         ...(await Promise.all(upstreamImages.map((image) => imageReferenceToFalUrl(input.client, image)))),
@@ -7549,6 +8250,8 @@ async function executeNode(input: {
           ? 'Ebook cover image generated with GPT Image 2 from the world graph.'
           : role === 'comic_atlas' || role === 'cinematic_atlas'
             ? 'Reference atlas generated from selected world entities.'
+            : role === 'cinematic_direction_sheet'
+              ? 'Primary cinematic direction-sheet reference generated from the compiled take timeline, camera layout, floor map, lighting/mood, and continuity anchors.'
             : role === 'cinematic_beat_sheet'
               ? (usedAsVideoReference
                 ? 'Primary cinematic storyboard-grid reference generated from the compiled take timeline.'
@@ -7556,7 +8259,7 @@ async function executeNode(input: {
               : role === 'cinematic_keyframe'
                 ? 'Clean cinematic keyframe generated as a Seedance visual reference.'
             : role === 'comic_page'
-              ? 'Comic page image generated from comic script and atlas reference.'
+              ? 'Comic page image generated from comic script and direct entity reference sheets.'
               : 'Generated image output from the workflow.',
         mimeType,
         metadata,
@@ -7609,12 +8312,14 @@ async function executeNode(input: {
           providerRequestId: input.priorStep.providerRequestId,
         }
       }
-      const falApiKey = Deno.env.get('FAL_KEY')
-      if (!falApiKey) throw new Error('FAL_KEY is not configured for the Fly output workflow worker.')
       const resolution = readText(config.resolution) || '720p'
+      const provider = resolveOutputVideoProvider(config)
       const model = readText(config.model)
+        || (provider === 'muapi'
+          ? Deno.env.get('OUTPUT_WORKFLOW_MUAPI_VIDEO_MODEL')?.trim()
+          : Deno.env.get('OUTPUT_WORKFLOW_FAL_VIDEO_MODEL')?.trim())
         || Deno.env.get('OUTPUT_WORKFLOW_VIDEO_MODEL')?.trim()
-        || (resolution === '1080p' ? 'bytedance/seedance-2.0/reference-to-video' : 'bytedance/seedance-2.0/fast/reference-to-video')
+        || (provider === 'muapi' ? DEFAULT_MUAPI_VIDEO_MODEL : resolveFalVideoModel(resolution))
       const durationSeconds = Math.max(4, Math.min(15, Number(config.durationSeconds ?? 8) || 8))
       const aspectRatio = readText(config.aspectRatio) || '16:9'
       const generateAudio = config.generateAudio !== false
@@ -7630,6 +8335,8 @@ async function executeNode(input: {
             providerPrompt: prompt,
             provider: 'graphcore',
             model: 'debug-skip-video-generation-v1',
+            targetProvider: provider,
+            targetModel: model,
             durationSeconds,
             aspectRatio,
             resolution,
@@ -7670,20 +8377,26 @@ async function executeNode(input: {
       const referenceAudioUrls: string[] = []
       const totalReferences = referenceImageUrls.length + referenceVideoUrls.length + referenceAudioUrls.length
       if (totalReferences > 12) {
-        throw new Error('Seedance 2 reference-to-video supports at most 12 total reference files.')
+        throw new Error('Seedance 2 Omni Reference supports at most 12 total reference files.')
       }
       const buildProviderPrompt = (imageUrls: string[], referencePolicy: string) => [
         prompt,
         'Provider requirements:',
-        '- Generate one finished Seedance 2 reference-to-video clip only.',
+        '- Generate one finished Seedance 2 Omni Reference video clip only.',
         `- Duration must be ${durationSeconds} seconds. Aspect ratio: ${aspectRatio}. Resolution: ${resolution}.`,
         imageUrls.length > 0
           ? (cinematicReferenceMode === 'keyframes'
             ? `- Reference images are ordered as @Image1 through @Image${imageUrls.length}; @Image1-@Image3 are clean keyframes when present, then individual entity, location, or prop reference assets.`
-            : `- Reference images are ordered as @Image1 through @Image${imageUrls.length}; @Image1 is the storyboard beat-sheet timing/continuity board, then individual entity, location, or prop reference assets.`)
+            : cinematicReferenceMode === 'shot_reference_sheet'
+              ? `- Reference images are ordered as @Image1 through @Image${imageUrls.length}; @Image1 is the cinematic direction sheet timing/camera/spatial continuity board, then individual entity, location, or prop reference assets.`
+              : `- Reference images are ordered as @Image1 through @Image${imageUrls.length}; @Image1 is the storyboard beat-sheet timing/continuity board, then individual entity, location, or prop reference assets.`)
           : '- No image references are attached; use the written continuity anchors in the prompt.',
         referenceVideoUrls.length > 0 ? `- Reference videos are ordered as @Video1 through @Video${referenceVideoUrls.length}.` : '',
-        cinematicReferenceMode === 'keyframes' ? '- Beat sheets are planning-only and are not attached in keyframe mode.' : '- A beat sheet is attached as the primary visual reference; follow its panel order while avoiding caption-band, border, gutter, UI, or grid artifacts in the video.',
+        cinematicReferenceMode === 'keyframes'
+          ? '- Beat sheets are planning-only and are not attached in keyframe mode.'
+          : cinematicReferenceMode === 'shot_reference_sheet'
+            ? '- A cinematic direction sheet is attached as the primary visual reference; follow its shot strip, camera layout, floor-map spatial logic, and hero frame while avoiding labels, map diagrams, arrows, UI, or sheet artifacts in the video.'
+            : '- A beat sheet is attached as the primary visual reference; follow its panel order while avoiding caption-band, border, gutter, UI, or grid artifacts in the video.',
         referencePolicy !== (cinematicReferenceMode === 'keyframes' ? 'keyframes_and_asset_refs' : 'storyboard_and_asset_refs') ? `- Reference fallback mode: ${referencePolicy}. Preserve character continuity from written entity descriptions instead of rejected identity images.` : '',
         '- Keep one dominant action path and one coherent camera direction for the clip.',
         imageUrls.length > 0 ? '- Preserve identity, wardrobe, environment, product, and prop continuity from references.' : '- Preserve identity, wardrobe, environment, product, and prop continuity from written descriptions.',
@@ -7702,7 +8415,17 @@ async function executeNode(input: {
       ))
       const priorFailedReferencePolicy = isFalReferencePolicyError(input.priorStep?.errorMessage)
       const startAttemptIndex = priorFailedReferencePolicy && referenceAttempts.length > 1 ? 1 : 0
-      let falResult: Awaited<ReturnType<typeof waitForOutputFalVideo>> | null = null
+      let providerResult: {
+        requestId: string
+        videoUrl: string
+        mimeType: string
+        fileName?: string
+        fileSize: number | null
+        resultBody: Record<string, unknown>
+        statusUrl?: string | null
+        responseUrl?: string | null
+        resultUrl?: string | null
+      } | null = null
       let providerPrompt = ''
       let usedReferenceImageUrls = referenceImageUrls
       let referencePolicy = cinematicReferenceMode === 'keyframes' ? 'keyframes_and_asset_refs' : 'storyboard_and_asset_refs'
@@ -7712,45 +8435,96 @@ async function executeNode(input: {
         usedReferenceImageUrls = attempt.imageUrls
         referencePolicy = attempt.policy
         try {
-          falResult = await waitForOutputFalVideo({
-            priorStep: attemptIndex === 0 && !priorFailedReferencePolicy ? input.priorStep : null,
-            apiKey: falApiKey,
-            model,
-            prompt: providerPrompt,
-            durationSeconds,
-            aspectRatio,
-            resolution,
-            generateAudio,
-            syncMode,
-            referenceImageUrls: attempt.imageUrls,
-            referenceVideoUrls,
-            referenceAudioUrls,
-            shouldCancel: input.shouldCancel,
-            onProgress: async (progress) => {
-              await input.onProgress?.({
-                provider: 'fal',
-                model,
-                providerRequestId: progress.providerRequestId,
-                metadata: {
-                  providerMode: progress.providerMode,
-                  providerStatus: progress.providerStatus,
-                  lastProviderPollAt: progress.lastProviderPollAt,
-                  falRequestId: progress.providerRequestId,
-                  falStatusUrl: progress.statusUrl ?? null,
-                  falResponseUrl: progress.responseUrl ?? null,
-                  durationSeconds,
-                  aspectRatio,
-                  resolution,
-                  generateAudio,
-                  referenceImageCount: attempt.imageUrls.length,
-                  referenceVideoCount: referenceVideoUrls.length,
-                  referenceAudioCount: referenceAudioUrls.length,
-                  referencePolicy: attempt.policy,
-                  cinematicReferenceMode,
-                },
-              })
-            },
-          })
+          if (provider === 'muapi') {
+            const muapiApiKey = Deno.env.get('MUAPI_KEY')
+            if (!muapiApiKey) throw new Error('MUAPI_KEY is not configured for the output workflow worker.')
+            providerResult = await waitForOutputMuapiVideo({
+              priorStep: attemptIndex === 0 && !priorFailedReferencePolicy ? input.priorStep : null,
+              apiKey: muapiApiKey,
+              model,
+              prompt: providerPrompt,
+              durationSeconds,
+              aspectRatio,
+              referenceImageUrls: attempt.imageUrls,
+              referenceVideoUrls,
+              referenceAudioUrls,
+              shouldCancel: input.shouldCancel,
+              onProgress: async (progress) => {
+                await input.onProgress?.({
+                  provider: 'muapi',
+                  model,
+                  providerRequestId: progress.providerRequestId,
+                  metadata: {
+                    providerMode: progress.providerMode,
+                    providerStatus: progress.providerStatus,
+                    lastProviderPollAt: progress.lastProviderPollAt,
+                    muapiRequestId: progress.providerRequestId,
+                    muapiResultUrl: progress.resultUrl,
+                    muapiWebhookConfigured: progress.webhookConfigured ?? false,
+                    durationSeconds,
+                    aspectRatio,
+                    resolution,
+                    generateAudio,
+                    referenceImageCount: attempt.imageUrls.length,
+                    referenceVideoCount: referenceVideoUrls.length,
+                    referenceAudioCount: referenceAudioUrls.length,
+                    referencePolicy: attempt.policy,
+                    cinematicReferenceMode,
+                    providerPayload: buildMuapiVideoPayload({
+                      prompt: providerPrompt,
+                      durationSeconds,
+                      aspectRatio,
+                      referenceImageUrls: attempt.imageUrls,
+                      referenceVideoUrls,
+                      referenceAudioUrls,
+                    }),
+                  },
+                })
+              },
+            })
+          } else {
+            const falApiKey = Deno.env.get('FAL_KEY')
+            if (!falApiKey) throw new Error('FAL_KEY is not configured for the output workflow worker.')
+            providerResult = await waitForOutputFalVideo({
+              priorStep: attemptIndex === 0 && !priorFailedReferencePolicy ? input.priorStep : null,
+              apiKey: falApiKey,
+              model,
+              prompt: providerPrompt,
+              durationSeconds,
+              aspectRatio,
+              resolution,
+              generateAudio,
+              syncMode,
+              referenceImageUrls: attempt.imageUrls,
+              referenceVideoUrls,
+              referenceAudioUrls,
+              shouldCancel: input.shouldCancel,
+              onProgress: async (progress) => {
+                await input.onProgress?.({
+                  provider: 'fal',
+                  model,
+                  providerRequestId: progress.providerRequestId,
+                  metadata: {
+                    providerMode: progress.providerMode,
+                    providerStatus: progress.providerStatus,
+                    lastProviderPollAt: progress.lastProviderPollAt,
+                    falRequestId: progress.providerRequestId,
+                    falStatusUrl: progress.statusUrl ?? null,
+                    falResponseUrl: progress.responseUrl ?? null,
+                    durationSeconds,
+                    aspectRatio,
+                    resolution,
+                    generateAudio,
+                    referenceImageCount: attempt.imageUrls.length,
+                    referenceVideoCount: referenceVideoUrls.length,
+                    referenceAudioCount: referenceAudioUrls.length,
+                    referencePolicy: attempt.policy,
+                    cinematicReferenceMode,
+                  },
+                })
+              },
+            })
+          }
           break
         } catch (error) {
           if (isFalReferencePolicyError(error) && attemptIndex < referenceAttempts.length - 1) {
@@ -7759,12 +8533,14 @@ async function executeNode(input: {
           throw error
         }
       }
-      if (!falResult) throw new Error('Fal video generation did not return a result.')
-      const videoBytes = await downloadRemoteBytes(falResult.videoUrl)
-      const extension = falResult.mimeType.includes('webm') ? 'webm' : 'mp4'
+      if (!providerResult) throw new Error(`${provider === 'muapi' ? 'MUAPI' : 'Fal'} video generation did not return a result.`)
+      const muapiWebhookConfigured = provider === 'muapi' ? Boolean(buildOutputWorkflowMuapiWebhookUrl()) : false
+      const muapiProviderMode = muapiWebhookConfigured ? 'muapi_webhook_polling' : 'muapi_polling'
+      const videoBytes = await downloadRemoteBytes(providerResult.videoUrl)
+      const extension = providerResult.mimeType.includes('webm') ? 'webm' : 'mp4'
       const assetKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.${slugify(input.node.key)}`
       const storagePath = `generated/output-workflows/${input.run.projectId}/${input.run.id}/${slugify(input.node.key)}.${extension}`
-      await uploadBytes(input.client, storagePath, videoBytes, falResult.mimeType)
+      await uploadBytes(input.client, storagePath, videoBytes, providerResult.mimeType)
       const metadata = {
         generatedBy: 'output_workflow',
         workflowId: input.workflow.id,
@@ -7773,15 +8549,19 @@ async function executeNode(input: {
         nodeId: input.node.id,
         nodeKey: input.node.key,
         preset: input.run.preset,
-        provider: 'fal',
+        provider,
         model,
-        providerRequestId: falResult.requestId,
-        providerMode: 'fal_queue',
+        providerRequestId: providerResult.requestId,
+        providerMode: provider === 'muapi' ? muapiProviderMode : 'fal_queue',
         providerStatus: 'COMPLETED',
-        falRequestId: falResult.requestId,
-        falStatusUrl: falResult.statusUrl,
-        falResponseUrl: falResult.responseUrl,
-        falVideoUrl: falResult.videoUrl,
+        falRequestId: provider === 'fal' ? providerResult.requestId : null,
+        falStatusUrl: provider === 'fal' ? providerResult.statusUrl ?? null : null,
+        falResponseUrl: provider === 'fal' ? providerResult.responseUrl ?? null : null,
+        falVideoUrl: provider === 'fal' ? providerResult.videoUrl : null,
+        muapiRequestId: provider === 'muapi' ? providerResult.requestId : null,
+        muapiResultUrl: provider === 'muapi' ? providerResult.resultUrl ?? null : null,
+        muapiVideoUrl: provider === 'muapi' ? providerResult.videoUrl : null,
+        muapiWebhookConfigured,
         prompt,
         providerPrompt,
         durationSeconds,
@@ -7793,6 +8573,14 @@ async function executeNode(input: {
         referenceAudioCount: referenceAudioUrls.length,
         referencePolicy,
         cinematicReferenceMode,
+        providerPayload: provider === 'muapi' ? buildMuapiVideoPayload({
+          prompt: providerPrompt,
+          durationSeconds,
+          aspectRatio,
+          referenceImageUrls: usedReferenceImageUrls,
+          referenceVideoUrls,
+          referenceAudioUrls,
+        }) : null,
         byteSize: videoBytes.byteLength,
         storageBucket: 'project-assets',
         storagePath,
@@ -7809,19 +8597,20 @@ async function executeNode(input: {
         storagePath,
         name: input.node.label,
         summary: 'Generated video output from the workflow.',
-        mimeType: falResult.mimeType,
+        mimeType: providerResult.mimeType,
         metadata,
       })
       const outputs = {
         video: {
           assetKey,
           storagePath,
-          mimeType: falResult.mimeType,
+          mimeType: providerResult.mimeType,
           prompt,
           providerPrompt,
-          provider: 'fal',
+          provider,
           model,
-          providerRequestId: falResult.requestId,
+          providerRequestId: providerResult.requestId,
+          providerMode: provider === 'muapi' ? muapiProviderMode : 'fal_queue',
           durationSeconds,
           aspectRatio,
           resolution,
@@ -7831,12 +8620,15 @@ async function executeNode(input: {
           referenceAudioCount: referenceAudioUrls.length,
           referencePolicy,
           cinematicReferenceMode,
+          muapiRequestId: provider === 'muapi' ? providerResult.requestId : null,
+          muapiResultUrl: provider === 'muapi' ? providerResult.resultUrl ?? null : null,
+          muapiWebhookConfigured,
           role: readText(config.role) || readText(config.purpose) || 'video',
           blockNumber: Number(config.blockNumber ?? 0) || null,
         },
         assetKey,
         storagePath,
-        mimeType: falResult.mimeType,
+        mimeType: providerResult.mimeType,
         prompt,
         providerPrompt,
         durationSeconds,
@@ -7847,9 +8639,9 @@ async function executeNode(input: {
         inputHash: input.inputHash,
         outputHash: hashOutputWorkflowValue(outputs),
         outputs,
-        provider: 'fal',
+        provider,
         model,
-        providerRequestId: falResult.requestId,
+        providerRequestId: providerResult.requestId,
       }
     }
     case 'utility_transform': {
@@ -7939,31 +8731,50 @@ async function executeNode(input: {
         }
         const guidance = readUpstreamGuidanceBundle(input.upstream)
         const aspectRatio = readText(config.aspectRatio) || readText(blockScript.aspectRatio) || '16:9'
+        const cinematicReferenceMode = normalizeCinematicReferenceMode(config.cinematicReferenceMode)
         const storyboardStylePolicy = resolveCinematicStoryboardStylePolicy(config, input.run)
-        const beatSheet = buildCinematicBeatSheetPrompt({
-          blockScript,
-          assetPack,
-          aspectRatio,
-          prompt: input.run.prompt,
-          guidance,
-          debugCinematicStoryboardStyleSafeMode: storyboardStylePolicy.safeMode,
-          cinematicStoryboardStyleOverride: storyboardStylePolicy.stylePrompt,
-        })
+        const beatSheet = cinematicReferenceMode === 'shot_reference_sheet'
+          ? buildCinematicDirectionSheetPrompt({
+            blockScript,
+            assetPack,
+            aspectRatio,
+            prompt: input.run.prompt,
+            guidance,
+            debugCinematicStoryboardStyleSafeMode: storyboardStylePolicy.safeMode,
+            cinematicStoryboardStyleOverride: storyboardStylePolicy.stylePrompt,
+          })
+          : buildCinematicBeatSheetPrompt({
+            blockScript,
+            assetPack,
+            aspectRatio,
+            prompt: input.run.prompt,
+            guidance,
+            debugCinematicStoryboardStyleSafeMode: storyboardStylePolicy.safeMode,
+            cinematicStoryboardStyleOverride: storyboardStylePolicy.stylePrompt,
+          })
         const outputs = {
           prompt: beatSheet.prompt,
           text: beatSheet.prompt,
           blockScript,
           assetPack,
           beatSheetPlan: beatSheet.beatSheetPlan,
+          directionSheetPlan: 'directionSheetPlan' in beatSheet ? beatSheet.directionSheetPlan : null,
           planningOnly: true,
           planning_only: true,
+          referenceSheetKind: cinematicReferenceMode === 'shot_reference_sheet' ? 'shot_reference_sheet' : 'storyboard_sheet',
           aspectRatio,
           panelAspectRatio: aspectRatio,
           imageSize: beatSheet.imageSize,
+          cinematicReferenceMode,
           debugCinematicStoryboardStyleSafeMode: storyboardStylePolicy.safeMode,
           cinematicStoryboardStyleOverride: storyboardStylePolicy.stylePrompt,
           storyboardStyleSafeModeLabel: storyboardStylePolicy.label,
-          diagnostics: [`Storyboard style safe mode: ${storyboardStylePolicy.label}.`],
+          diagnostics: [
+            `Storyboard style safe mode: ${storyboardStylePolicy.label}.`,
+            cinematicReferenceMode === 'shot_reference_sheet'
+              ? 'Cinematic direction sheet reference mode: @Image1 will carry shot strip, floor map, camera layout, lighting/mood, hero frame, and continuity anchors.'
+              : 'Storyboard-grid reference mode: @Image1 will carry timed beat-sheet panels.',
+          ],
           guidance,
           deterministic: true,
         }
@@ -8238,12 +9049,16 @@ async function executeNode(input: {
         const prompt = input.run.prompt
         const scriptPage = comicScriptPage(script, pageNumber)
         const pagePrompt = buildDeterministicComicPageImagePrompt({ script, assetPack, pageNumber, pageCount, prompt, guidance })
+        const pageAssetPack = filterComicAssetPackForPage(assetPack, scriptPage, 6)
         const outputs = {
           prompt: pagePrompt,
           text: pagePrompt,
           pageNumber,
           pageCount,
           scriptPage,
+          pageAssetPack,
+          page_asset_pack: pageAssetPack,
+          pageReferenceEntityKeys: readStringArray(pageAssetPack.pageReferenceEntityKeys),
           assetPack,
           guidance,
           deterministic: true,
@@ -8301,7 +9116,6 @@ async function executeNode(input: {
         const markdown = readFirstUpstreamText(input.upstream, ['markdown', 'text'])
         const guidance = readUpstreamGuidanceBundle(input.upstream)
         const comicPages = collectComicPageImages(input.upstream)
-        const atlasImage = readUpstreamImages(input.upstream, ['image']).find((image) => readText(image.role) === 'comic_atlas') ?? null
         const context = worldContextFromRunInput(input.run)
         const renderMetadata = {
           renderer: 'graphcore-comic-pdf-v1',
@@ -8309,7 +9123,6 @@ async function executeNode(input: {
           pageCount: comicPages.length,
           scriptCharacterCount: markdown.length,
           sequenceUnitKey: readStringArray(input.run.input.sourceSequenceUnitKeys)[0] ?? '',
-          atlasAssetKey: readText(atlasImage?.assetKey),
           title: readText(script.title) || titleFromContext(context),
         }
         const outputs = {
@@ -8318,7 +9131,6 @@ async function executeNode(input: {
           script,
           comicPages,
           pageImages: comicPages,
-          atlasImage,
           mimeType: 'application/pdf',
           fileName: `${slugify(input.workflow.name)}.pdf`,
           renderMetadata,
@@ -8406,7 +9218,6 @@ async function executeNode(input: {
         const script = readFirstUpstreamRecord(input.upstream, ['script'])
         const markdown = readFirstUpstreamText(input.upstream, ['markdown', 'text'])
         const comicPages = collectComicPageImages(input.upstream)
-        const atlasImage = readFirstUpstreamImage(input.upstream, ['atlasImage'])
         if (comicPages.length === 0) throw new Error('Comic PDF artifact requires generated comic page images.')
         const artifact = await registerComicArtifact({
           client: input.client,
@@ -8416,7 +9227,6 @@ async function executeNode(input: {
           comicPages,
           scriptMarkdown: markdown,
           script,
-          atlasImage,
           documentRenderer: input.documentRenderer,
         })
         const outputs = {
@@ -8428,7 +9238,6 @@ async function executeNode(input: {
           artifacts: [artifact.pdfArtifact, artifact.scriptArtifact],
           renderMetadata: artifact.renderMetadata,
           pageAssetKeys: comicPages.map((page) => readText(page.assetKey)).filter(Boolean),
-          atlasAssetKey: readText(atlasImage?.assetKey),
         }
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-comic-artifact-v1' }
       }
@@ -8527,7 +9336,7 @@ export async function processFlyOutputWorkflowRuns(input: {
     const missingCachedInputs = [...cachedExternalUpstreamByNodeKey.entries()]
       .flatMap(([nodeKey, cached]) => cached.missingNodeKeys.map((sourceKey) => `${nodeKey} <- ${sourceKey}`))
     if (missingCachedInputs.length > 0) {
-      throw new Error(`Cannot run this node only because required upstream cached output is missing: ${missingCachedInputs.join(', ')}. Run up to this node first.`)
+      throw new Error(`Required upstream cached output is missing: ${missingCachedInputs.join(', ')}. Run upstream to this node first.`)
     }
     const stepByNodeKey = new Map(bundle.run.steps.map((step) => [step.nodeKey, step]))
     const executionLevelByNodeKey = new Map(executionPlan.levels.flatMap((level, index) => level.map((key) => [key, index] as const)))

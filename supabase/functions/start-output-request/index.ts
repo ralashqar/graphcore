@@ -280,7 +280,7 @@ Deno.serve(async (request) => {
       || planner.outputKind === 'ugc_episode'
     const effectivePageCount = comicOutput ? payload.pageCount ?? 8 : null
     const debugSkipVideoGeneration = payload.debugSkipVideoGeneration ?? true
-    const cinematicReferenceMode = payload.cinematicReferenceMode ?? 'storyboard_sheet'
+    const cinematicReferenceMode = payload.cinematicReferenceMode ?? aiGenerationSettings.outputWorkflow.cinematicReferenceModeDefault
     const debugCinematicStoryboardStyleSafeMode = payload.debugCinematicStoryboardStyleSafeMode
       ?? aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStyleSafeModeDefault
     const cinematicStoryboardStyleOverride = debugCinematicStoryboardStyleSafeMode
