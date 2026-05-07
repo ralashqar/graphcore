@@ -1055,7 +1055,19 @@ function orderCinematicVideoReferenceImages(images: Record<string, unknown>[], c
     .sort((left, right) => cinematicImageReferencePriority(left, mode) - cinematicImageReferencePriority(right, mode))
 }
 
-function debugSkipVideoGenerationEnabled(config: Record<string, unknown>, run: OutputWorkflowRun) {
+function debugForceVideoGenerationEnabled(run: OutputWorkflowRun, node?: OutputWorkflowNode | null) {
+  const runMetadata = asRecord(run.metadata)
+  if (runMetadata.debugForceVideoGeneration !== true) return false
+  if (!node || node.nodeType !== 'video_generation') return false
+  const runMode = readText(runMetadata.runMode)
+  if (!runMode.startsWith('targeted_node')) return false
+  const targetNodeKeys = new Set(readStringArray(runMetadata.targetNodeKeys))
+  const forceNodeKeys = new Set(readStringArray(runMetadata.forceNodeKeys))
+  return targetNodeKeys.has(node.key) && forceNodeKeys.has(node.key)
+}
+
+function debugSkipVideoGenerationEnabled(config: Record<string, unknown>, run: OutputWorkflowRun, node?: OutputWorkflowNode | null) {
+  if (debugForceVideoGenerationEnabled(run, node)) return false
   const runInput = asRecord(run.input)
   const runMetadata = asRecord(run.metadata)
   if (typeof config.debugSkipVideoGeneration === 'boolean') return config.debugSkipVideoGeneration
@@ -3273,7 +3285,7 @@ function compactBeatCaptionSentence(value: unknown, fallback: string, maxWords =
   if (!clean) return 'The visual continuity stays clear.'
   const firstSentence = clean.split(/(?<=[.!?])\s+/)[0] ?? clean
   const firstClause = firstSentence.split(/\s+(?:while|as|before|after|then)\s+/i)[0]
-  const weakTailWords = new Set(['a', 'an', 'the', 'and', 'or', 'but', 'with', 'into', 'onto', 'through', 'from', 'to', 'of', 'in', 'on', 'as', 'while', 'before', 'after', 'then', 'just'])
+  const weakTailWords = new Set(['a', 'an', 'the', 'and', 'or', 'but', 'with', 'into', 'onto', 'through', 'from', 'to', 'of', 'in', 'on', 'for', 'as', 'while', 'before', 'after', 'then', 'just'])
   const words = firstClause.replace(/[.!?]+$/g, '').split(/\s+/).filter(Boolean)
   while (words.length > 1 && weakTailWords.has(words[words.length - 1].toLowerCase())) words.pop()
   const compactWords = words.length > maxWords ? words.slice(0, maxWords) : words
@@ -3291,7 +3303,7 @@ function compactStoryboardSentence(value: unknown, fallback = '', maxWords = 22)
   if (!source) return ''
   const firstSentence = source.split(/(?<=[.!?])\s+/)[0] ?? source
   const words = firstSentence.replace(/[.!?]+$/g, '').split(/\s+/).filter(Boolean)
-  const weakTailWords = new Set(['a', 'an', 'the', 'and', 'or', 'but', 'with', 'into', 'onto', 'through', 'from', 'to', 'of', 'in', 'on', 'as', 'while', 'before', 'after', 'then', 'just', 'where'])
+  const weakTailWords = new Set(['a', 'an', 'the', 'and', 'or', 'but', 'with', 'into', 'onto', 'through', 'from', 'to', 'of', 'in', 'on', 'for', 'as', 'while', 'before', 'after', 'then', 'just', 'where'])
   while (words.length > 1 && weakTailWords.has(words[words.length - 1].toLowerCase())) words.pop()
   const compactWords = words.length > maxWords ? words.slice(0, maxWords) : words
   while (compactWords.length > 1 && weakTailWords.has(compactWords[compactWords.length - 1].toLowerCase())) compactWords.pop()
@@ -3312,23 +3324,77 @@ function splitStoryboardVisualClauses(value: unknown) {
     })
 }
 
+function naturalizeCinematicActorName(value: unknown) {
+  const text = cleanBeatCaptionText(value)
+  if (!text) return ''
+  return text
+    .split(/[.:/]/)[0]
+    .replace(/\b(world|entity|actor|character|place|group|object)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (match) => match.toUpperCase())
+}
+
+function naturalizeCinematicTarget(value: unknown) {
+  const text = cleanBeatCaptionText(value)
+  if (!text) return ''
+  return text
+    .replace(/\b(world|entity|actor|character|place|group|object)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function cinematicActionPhrase(input: {
+  actor: string
+  verb: string
+  target: string
+  prop: string
+}) {
+  const actor = input.actor || 'The subject'
+  const verb = cleanBeatCaptionText(input.verb).toLowerCase()
+  const articleObject = (value: string) => {
+    if (!value) return ''
+    if (/^(?:the|a|an|this|that|his|her|their|its)\s/i.test(value)) return value
+    if (/^[A-Z][A-Za-z0-9-]*(?:\s+[A-Z][A-Za-z0-9-]*)*$/.test(value)) return value
+    if (/^(?:table|cup|window|street|door|wall|floor|worktable|face|hand|hands|room|corner|barrier|hatch|fence|panel|glass|dome)$/i.test(value)) {
+      return `the ${value}`
+    }
+    return value
+  }
+  const target = articleObject(input.target)
+  const prop = articleObject(input.prop)
+  const propPhrase = prop ? `, ${prop} visible in the frame` : ''
+  if (!verb) return ''
+  if (/\bleans?\b/.test(verb)) return `${actor} leans over ${target || 'the table'}${prop ? ` near ${prop}` : ''}.`
+  if (/\btilts?\b/.test(verb)) return `${actor} tilts their head toward ${target || 'the other character'}${propPhrase}.`
+  if (/\bholds?\b/.test(verb)) return `${actor} holds ${target ? `${target}'s gaze` : 'a perfectly still gaze'}${propPhrase}.`
+  if (/\bstudies?\b/.test(verb)) return `${actor} studies ${target || 'the other character'} with still, precise attention${propPhrase}.`
+  if (/\bstares?\b/.test(verb)) return `${actor} stares at ${target || 'the other character'} with a fixed expression${propPhrase}.`
+  if (/\blies?\s*still\b|\brests?\b/.test(verb)) return `${actor} lies motionless ${target ? `on ${target}` : 'in the frame'}${propPhrase}.`
+  if (/\bstirs?\b/.test(verb)) return `${actor} stirs ${target || prop || 'the cup'} with restless, contained movement.`
+  if (/\bsmirks?\b/.test(verb)) return `${actor} almost smiles toward ${target || 'the other character'}, then checks the reaction.`
+  if (/\bglances?\b/.test(verb)) return `${actor} glances toward ${target || 'the edge of the room'}, alert to danger.`
+  if (/\bfreezes?\b/.test(verb)) return `${actor} freezes around ${target || prop || 'the table'}, tension visible in the posture.`
+  if (/\bwaits?\b/.test(verb)) return `${actor} waits in stillness, watching ${target || 'the other character'} for a reaction.`
+  if (/\bapproaches?\b/.test(verb)) return `${actor} approaches ${target || 'the focal point'} with careful, contained body language.`
+  if (/\bexamines?\b/.test(verb)) return `${actor} examines ${target || 'the focal detail'} with focused attention.`
+  const normalizedVerb = verb.replace(/\s+/g, ' ')
+  return `${actor} ${normalizedVerb}${target ? ` ${target}` : ''}${prop ? ` with ${prop}` : ''}.`
+}
+
 function readShotStoryboardActionClauses(shot: Record<string, unknown>) {
   const actionRecords = Array.isArray(shot.actions) ? shot.actions.map(asRecord) : []
   return actionRecords.flatMap((action) => {
-    const actor = readText(action.actor) || readText(action.actorRefId) || readText(action.subject)
-    const verb = cleanBeatCaptionText(action.verb ?? action.action).toLowerCase()
-    const target = readText(action.target) || readText(action.targetRefId)
-    const prop = readText(action.prop) || readText(action.propRefId)
+    const actor = naturalizeCinematicActorName(action.actor) || naturalizeCinematicActorName(action.actorRefId) || naturalizeCinematicActorName(action.subject)
+    const verb = cleanBeatCaptionText(action.verb ?? action.action)
+    const target = naturalizeCinematicTarget(action.target) || naturalizeCinematicTarget(action.targetRefId)
+    const prop = naturalizeCinematicTarget(action.prop) || naturalizeCinematicTarget(action.propRefId)
     const staging = readText(action.stagingNotes) || readText(action.description)
-    const targetPhrase = target
-      ? /\b(?:lies still|rests|sits|stands|waits)\b/i.test(verb)
-        ? `on ${target}`
-        : target
-      : ''
+    const actionPhrase = cinematicActionPhrase({ actor, verb, target, prop })
     return [
+      actionPhrase,
       staging,
-      [actor, verb, targetPhrase, prop ? `with ${prop}` : ''].filter(Boolean).join(' '),
-    ]
+    ].filter(Boolean)
   })
 }
 
@@ -3412,7 +3478,7 @@ function makeBeatCaptionSentences(shot: Record<string, unknown>, occurrenceIndex
 function storyboardCaptionLooksComplete(value: string) {
   const words = value.replace(/[.!?]+$/g, '').split(/\s+/).filter(Boolean)
   if (words.length < 3) return false
-  const weakTailWords = new Set(['a', 'an', 'the', 'and', 'or', 'but', 'with', 'into', 'onto', 'through', 'from', 'to', 'of', 'in', 'on', 'as', 'while', 'before', 'after', 'then', 'just', 'where'])
+  const weakTailWords = new Set(['a', 'an', 'the', 'and', 'or', 'but', 'with', 'into', 'onto', 'through', 'from', 'to', 'of', 'in', 'on', 'for', 'as', 'while', 'before', 'after', 'then', 'just', 'where'])
   return !weakTailWords.has(words[words.length - 1].toLowerCase())
 }
 
@@ -3439,10 +3505,30 @@ function storyboardSpeechVisualCue(shot: Record<string, unknown>, occurrenceInde
   const targetIndex = Math.max(0, Math.min(occurrenceCount - 1, Math.floor(occurrenceCount / 2)))
   if (occurrenceIndex !== targetIndex) return ''
   const entry = dialogue[0]
-  const speaker = readText(entry.speaker) || readText(entry.speakerRefId) || 'The speaker'
-  const delivery = cleanBeatCaptionText(entry.delivery)
-  if (delivery) return `${speaker}'s mouth is slightly open, with ${delivery} body language.`
+  const speaker = naturalizeCinematicActorName(entry.speaker) || naturalizeCinematicActorName(entry.speakerRefId) || 'The speaker'
+  const delivery = cleanBeatCaptionText(entry.delivery).toLowerCase()
+  if (/\b(deadpan|even|flat|controlled|cold)\b/.test(delivery)) {
+    return `${speaker}'s lips are barely parted, expression flat and precise.`
+  }
+  if (/\b(stunned|surprised|disbeliev|regret|skeptical|testing)\b/.test(delivery)) {
+    return `${speaker}'s mouth is slightly open, guarded emotion visible in the face.`
+  }
+  if (/\b(quiet|sincere|intimate|soft|low|whisper)\b/.test(delivery)) {
+    return `${speaker}'s mouth is barely open, the expression still and close-held.`
+  }
+  if (/\b(teasing|light|dry)\b/.test(delivery)) {
+    return `${speaker}'s mouth is slightly open, a restrained half-smile held back.`
+  }
   return `${speaker}'s mouth is slightly open while their expression carries the beat.`
+}
+
+function naturalStoryboardCameraPhrase(shot: Record<string, unknown>) {
+  const framing = cleanBeatCaptionText(shot.framing)
+  const cameraMovement = cleanBeatCaptionText(shot.cameraMovement)
+  if (framing && cameraMovement) return `${framing}, composed for ${cameraMovement.toLowerCase()}.`
+  if (framing) return `${framing}.`
+  if (cameraMovement) return `The frame is composed for ${cameraMovement.toLowerCase()}.`
+  return ''
 }
 
 function makeBeatPanelVisualDirection(shot: Record<string, unknown>, occurrenceIndex: number, occurrenceCount: number) {
@@ -3453,16 +3539,16 @@ function makeBeatPanelVisualDirection(shot: Record<string, unknown>, occurrenceI
   const secondary = clauses[(occurrenceIndex + 1) % Math.max(1, clauses.length)]
     || compactStoryboardSentence(shot.composition, 'Preserve the same character identity, wardrobe, lighting direction, and location logic.', 24)
   const speechCue = storyboardSpeechVisualCue(shot, occurrenceIndex, Math.max(1, occurrenceCount))
-  const framing = cleanBeatCaptionText(shot.framing)
-  const cameraMovement = cleanBeatCaptionText(shot.cameraMovement)
-  const cameraPhrase = [framing, cameraMovement].filter(Boolean).join(', ')
+  const cameraPhrase = naturalStoryboardCameraPhrase(shot)
   const firstSentence = compactStoryboardSentence(primary, '', 30)
-  const secondSource = [
-    speechCue || secondary,
-    !speechCue && cameraPhrase ? `Compose the frame with ${cameraPhrase}.` : '',
-  ].filter(Boolean).join(' ')
-  const secondSentence = compactStoryboardSentence(secondSource, '', 30)
-  return [firstSentence, secondSentence].filter(Boolean).join(' ')
+  const secondSentence = compactStoryboardSentence(speechCue || secondary, '', 30)
+  const cameraSentence = compactStoryboardSentence(cameraPhrase, '', 24)
+  const sentences = [firstSentence, secondSentence, cameraSentence].filter((entry, index, list) => {
+    if (!entry) return false
+    const key = slugify(entry)
+    return key && list.findIndex((candidate) => slugify(candidate) === key) === index
+  })
+  return sentences.join(' ')
 }
 
 function buildCinematicBeatSheetPlan(blockScript: Record<string, unknown>) {
@@ -7422,7 +7508,7 @@ async function executeNode(input: {
       const aspectRatio = readText(config.aspectRatio) || '16:9'
       const generateAudio = config.generateAudio !== false
       const syncMode = config.syncMode === true
-      const debugSkipVideoGeneration = debugSkipVideoGenerationEnabled(config, input.run)
+      const debugSkipVideoGeneration = debugSkipVideoGenerationEnabled(config, input.run, input.node)
       if (debugSkipVideoGeneration) {
         const outputs = {
           video: {

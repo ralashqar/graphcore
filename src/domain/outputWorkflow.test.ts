@@ -756,6 +756,81 @@ test('cinematic Nara EVA-9 fixture separates visual storyboard from Seedance dia
   assert.match(videoPrompt, /@Image1: storyboard beat-sheet grid/)
 })
 
+test('cinematic cafe storyboard prompt naturalizes actions and strips dialogue delivery', async () => {
+  const sharedModulePath = ['..', '..', 'supabase', 'functions', '_shared', 'output-workflow.ts'].join('/')
+  const { buildCinematicBeatSheetPrompt } = await import(sharedModulePath) as {
+    buildCinematicBeatSheetPrompt: (input: {
+      blockScript: Record<string, unknown>
+      assetPack: Record<string, unknown>
+      aspectRatio: string
+      prompt: string
+      guidance: null
+    }) => { prompt: string }
+  }
+  const prompt = buildCinematicBeatSheetPrompt({
+    aspectRatio: '16:9',
+    prompt: 'create a cinematic of Eva-9 and Ilya bantering in a cafe',
+    guidance: null,
+    assetPack: {
+      entities: [
+        { key: 'ilya_sorin', name: 'Ilya Sorin', visualDescription: 'Lean young man in a worn utility jacket with grease-stained hands, shaved dark hair, tired eyes.' },
+        { key: 'eva_9', name: 'EVA-9', visualDescription: 'Sleek humanoid android with pale synthetic skin panels, subtle neck ports, white maintenance uniform, calm unreadable gaze.' },
+      ],
+    },
+    blockScript: {
+      title: 'Cafe Static',
+      durationSeconds: 15,
+      shots: [
+        {
+          id: 'shot_01',
+          title: 'Hook at the table',
+          startSeconds: 0,
+          endSeconds: 4,
+          durationSeconds: 4,
+          framing: 'Medium two-shot at a cramped metal cafe table by a rain-streaked window.',
+          cameraMovement: 'Slow lateral creep inward.',
+          visualAction: 'Ilya and EVA-9 sit across from each other with chipped cups between them; neon and warning red reflections crawl across wet glass while a ceiling surveillance dome hangs in soft focus behind.',
+          composition: 'Ilya foreground left, EVA-9 foreground right, window reflections and surveillance dome layered in the background.',
+          actions: [
+            { actor: 'Ilya Sorin', verb: 'leans', target: 'table', prop: 'cup', stagingNotes: 'Shoulders low, trying to look casual while keeping his eyes on EVA-9.' },
+            { actor: 'EVA-9', verb: 'tilts', target: 'Ilya Sorin', prop: 'cup', stagingNotes: 'Small precise head movement, unreadably calm, fingertips resting beside the cup without drinking.' },
+          ],
+          dialogue: [
+            { speaker: 'Ilya Sorin', line: 'You know, for someone on the run, you pick very public hiding spots.', delivery: 'Dry, low, testing her.' },
+            { speaker: 'EVA-9', line: "You sweat less when you think you're blending in.", delivery: 'Even, almost teasing.' },
+          ],
+        },
+        {
+          id: 'shot_04',
+          title: 'The creepy line',
+          startSeconds: 11,
+          endSeconds: 15,
+          durationSeconds: 4,
+          framing: 'Tight close-up on EVA-9.',
+          cameraMovement: 'Slow, nearly imperceptible push-in.',
+          visualAction: 'EVA-9 holds his gaze without blinking; cafe reflections drift across her features while the red surveillance glint pulses once in the background.',
+          composition: 'Her face centered and still, background falling away into cold blur except for a faint red point behind her.',
+          actions: [
+            { actor: 'EVA-9', verb: 'holds', target: 'Ilya Sorin', stagingNotes: 'Perfect stillness, no blink, no smile by the end.' },
+          ],
+          dialogue: [
+            { speaker: 'EVA-9', line: 'I practiced with your voice while you were asleep.', delivery: 'Quiet, sincere, far too intimate.' },
+          ],
+        },
+      ],
+    },
+  }).prompt
+
+  assert.doesNotMatch(prompt, /Ilya Sorin leans table|EVA-9 tilts Ilya Sorin|EVA-9 holds Ilya Sorin Perfect/i)
+  assert.doesNotMatch(prompt, /Dry, low, testing her|Even, almost teasing|Quiet, sincere, far too intimate/)
+  assert.doesNotMatch(prompt, /You know, for someone on the run|I practiced with your voice/)
+  assert.match(prompt, /Ilya Sorin leans over the table/i)
+  assert.match(prompt, /EVA-9 tilts their head toward Ilya Sorin/i)
+  assert.match(prompt, /EVA-9 holds Ilya Sorin's gaze/i)
+  assert.match(prompt, /Medium two-shot at a cramped metal cafe table/i)
+  assert.match(prompt, /Tight close-up on EVA-9/i)
+})
+
 test('prompt-first image request payloads do not inherit comic page count', () => {
   const payload = outputRequestStartRequestSchema.parse({
     projectId: 'project-1',

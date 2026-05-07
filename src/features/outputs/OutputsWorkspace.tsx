@@ -1063,6 +1063,7 @@ export function OutputsWorkspace({
             defaultDownstreamTarget,
           ].filter(Boolean)))
         : [node.key]
+    const debugForceVideoGeneration = node.nodeType === 'video_generation'
     markTargetedNodes([node.key], effectiveRunScope)
     setError(null)
     try {
@@ -1072,14 +1073,17 @@ export function OutputsWorkspace({
         sourceSequenceUnitKeys: readStringArray(workflowMetadata.sourceSequenceUnitKeys),
         pageCount: readNumber(workflowMetadata.pageCount) ?? undefined,
       }
+      const runInput = debugForceVideoGeneration
+        ? { ...previousInput, debugSkipVideoGeneration: false }
+        : previousInput
       const runResponse = await onStartOutputWorkflowRun({
         workflowId: activeWorkflow.id,
         prompt: activeRun?.prompt || readTrimmedString(workflowMetadata.prompt) || prompt,
         targetFormat: (activeRun?.targetFormat || readTrimmedString(workflowMetadata.targetFormat) || 'pdf') as 'pdf' | 'epub' | 'docx' | 'markdown',
-        selectedEntityKeys: readStringArray(previousInput.sourceEntityKeys),
-        selectedSequenceUnitKeys: readStringArray(previousInput.sourceSequenceUnitKeys),
-        pageCount: readNumber(previousInput.pageCount) ?? undefined,
-        input: previousInput,
+        selectedEntityKeys: readStringArray(runInput.sourceEntityKeys),
+        selectedSequenceUnitKeys: readStringArray(runInput.sourceSequenceUnitKeys),
+        pageCount: readNumber(runInput.pageCount) ?? undefined,
+        input: runInput,
         metadata: {
           sourceRunId: activeRun?.id ?? null,
           runMode: effectiveRunScope === 'artifact_rebake' ? 'pdf_rebake_from_existing_outputs' : 'targeted_node_preview',
@@ -1088,6 +1092,7 @@ export function OutputsWorkspace({
           forceNodeKeys,
           reuseExistingUpstreamOutputs: true,
           allowStaleUpstreamOutputs: effectiveRunScope === 'node_only',
+          debugForceVideoGeneration,
         },
       })
       setActiveRunId(runResponse.run.id)
@@ -1118,6 +1123,7 @@ export function OutputsWorkspace({
       return
     }
     const nodeKeys = uniqueNodes.map((node) => node.key)
+    const debugForceVideoGeneration = uniqueNodes.some((node) => node.nodeType === 'video_generation')
     markTargetedNodes(nodeKeys, runScope)
     setError(null)
     try {
@@ -1127,14 +1133,17 @@ export function OutputsWorkspace({
         sourceSequenceUnitKeys: readStringArray(workflowMetadata.sourceSequenceUnitKeys),
         pageCount: readNumber(workflowMetadata.pageCount) ?? undefined,
       }
+      const runInput = debugForceVideoGeneration
+        ? { ...previousInput, debugSkipVideoGeneration: false }
+        : previousInput
       const runResponse = await onStartOutputWorkflowRun({
         workflowId: activeWorkflow.id,
         prompt: activeRun?.prompt || readTrimmedString(workflowMetadata.prompt) || prompt,
         targetFormat: (activeRun?.targetFormat || readTrimmedString(workflowMetadata.targetFormat) || 'pdf') as 'pdf' | 'epub' | 'docx' | 'markdown',
-        selectedEntityKeys: readStringArray(previousInput.sourceEntityKeys),
-        selectedSequenceUnitKeys: readStringArray(previousInput.sourceSequenceUnitKeys),
-        pageCount: readNumber(previousInput.pageCount) ?? undefined,
-        input: previousInput,
+        selectedEntityKeys: readStringArray(runInput.sourceEntityKeys),
+        selectedSequenceUnitKeys: readStringArray(runInput.sourceSequenceUnitKeys),
+        pageCount: readNumber(runInput.pageCount) ?? undefined,
+        input: runInput,
         metadata: {
           sourceRunId: activeRun?.id ?? null,
           runMode: 'targeted_node_batch_preview',
@@ -1143,6 +1152,7 @@ export function OutputsWorkspace({
           forceNodeKeys: nodeKeys,
           reuseExistingUpstreamOutputs: true,
           allowStaleUpstreamOutputs: runScope === 'node_only',
+          debugForceVideoGeneration,
         },
       })
       setActiveRunId(runResponse.run.id)

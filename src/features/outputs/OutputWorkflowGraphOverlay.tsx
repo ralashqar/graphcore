@@ -240,6 +240,7 @@ function selectedNodeRunLabel(node: OutputWorkflowNode) {
   if (purpose === 'comic_page') return 'Run image only'
   if (purpose === 'chapter_prose') return 'Regenerate chapter'
   if (purpose === 'chapter_section_prose') return 'Regenerate section'
+  if (node.nodeType === 'video_generation') return 'Generate video'
   return 'Run node'
 }
 
