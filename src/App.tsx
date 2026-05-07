@@ -7,6 +7,7 @@ import { billingService } from './application/services/billingService'
 import { patchApplyService } from './application/services/patchApplyService'
 import { promptGenerationService } from './application/services/promptGenerationService'
 import { workspaceService } from './application/services/workspaceService'
+import { aiGenerationSettings } from './config/aiGenerationSettings'
 import { buildAssetSlug, getAssetKeyPrefix, inferAssetKindFromUpload, inferRemoteAssetMimeType, inferUploadMimeType, isSupportedMeshPath, resolveAssetSourceUrl, type AssetUrlCreateOptions, type AssetUrlCreationKind } from './domain/assets'
 import { DEFAULT_ART_STYLE_PRESET } from './domain/artStylePresets'
 import {
@@ -5861,9 +5862,9 @@ export default function App() {
         entityNodeType: entity.nodeType,
         linkedDefinitionKey: definition.key,
         model: 'openai/gpt-image-2',
+        quality: aiGenerationSettings.outputWorkflow.entityReferenceSheetQuality,
         projectArtStyle: typeof worldWiki.artStyleDescription === 'string' ? worldWiki.artStyleDescription : '',
         projectTone: Array.isArray(worldWiki.toneTags) ? worldWiki.toneTags.filter((entry): entry is string => typeof entry === 'string').join(', ') : '',
-        projectContextDescription: [snapshot.project.name, snapshot.project.summary].filter(Boolean).join(' '),
       },
       metadata: {
         source: 'linked_definition_workspace',

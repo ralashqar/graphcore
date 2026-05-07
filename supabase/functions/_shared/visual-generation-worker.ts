@@ -985,7 +985,7 @@ async function processEntityReferenceSheetJob(client: DatabaseClient, job: Visua
   const configuredModel = readString(Deno.env.get('VISUAL_GENERATION_ENTITY_REFERENCE_SHEET_MODEL'))
   const baseModel = normalizeFalImageModel(explicitModel || configuredModel || 'openai/gpt-image-2')
   const model = baseModel === 'openai/gpt-image-2/edit' ? 'openai/gpt-image-2' : baseModel
-  const quality = readString(job.input.quality) || Deno.env.get('VISUAL_GENERATION_ENTITY_REFERENCE_SHEET_QUALITY') || 'low'
+  const quality = readString(job.input.quality) || Deno.env.get('VISUAL_GENERATION_ENTITY_REFERENCE_SHEET_QUALITY') || 'medium'
   const outputFormat = readString(job.input.outputFormat) || Deno.env.get('VISUAL_GENERATION_ENTITY_REFERENCE_SHEET_OUTPUT_FORMAT') || 'webp'
   const imageSize = asRecord(job.input.imageSize)
   const resolvedImageSize = Object.keys(imageSize).length > 0 ? imageSize : resolveEntityReferenceSheetImageSize(sheetKind)

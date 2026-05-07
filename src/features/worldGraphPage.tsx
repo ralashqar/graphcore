@@ -22,6 +22,7 @@ import { Suspense, lazy, memo, useDeferredValue, useEffect, useMemo, useRef, use
 
 import { resolveAssetSourceUrl } from '../domain/assets'
 import { cacheSignedAssetResponse, getCachedAssetObjectUrl, getCachedSignedAssetUrl, setCachedSignedAssetUrl } from '../domain/assetUrlCache'
+import { aiGenerationSettings } from '../config/aiGenerationSettings'
 import type { AssetDefinition, DefinitionBase, GraphDefinition } from '../domain/graphcore'
 import type { ProjectContext } from '../domain/projectContext'
 import type {
@@ -4401,12 +4402,6 @@ export function WorldGraphPage({
     }
     setEntityReferenceSheetError(null)
     try {
-      const linkedDefinition = entity.linkedDefinitionKey ? definitionByKey.get(entity.linkedDefinitionKey) ?? null : null
-      const referenceAssetKeys = [
-        entity.thumbnailAssetKey,
-        linkedDefinition?.iconAssetKey,
-        readEntityReferenceSheetAssetKey(entity),
-      ].filter((value): value is string => Boolean(value && value.trim()))
       const visualIdentity = readWorldEntityVisualIdentity(entity)
       const result = await onStartVisualGenerationJob({
         kind: 'entity_reference_sheet',
@@ -4422,15 +4417,14 @@ export function WorldGraphPage({
           entityNodeType: entity.nodeType,
           linkedDefinitionKey: entity.linkedDefinitionKey ?? null,
           model: 'openai/gpt-image-2',
+          quality: aiGenerationSettings.outputWorkflow.entityReferenceSheetQuality,
           summary: entity.summary,
           context: entity.context,
           visualDescription: readWorldEntityVisualDescription(entity),
           visualTraits: visualIdentity.traits,
           visualTraitMap: visualIdentity.traitMap,
-          referenceAssetKeys,
           projectArtStyle: wikiModel.overview.artStyleDescription,
           projectTone: [wikiModel.overview.genre, ...wikiModel.overview.toneTags].filter(Boolean).join(', '),
-          projectContextDescription: [projectName, projectSummary, wikiModel.overview.logline, wikiModel.overview.synopsis].filter(Boolean).join(' '),
         },
         metadata: {
           source: 'world_graph_entity_inspector',

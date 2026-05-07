@@ -133,7 +133,7 @@ test('entity icon endpoint and Fly worker use the generic visual job pipeline', 
   assert.match(visualWorker, /brand_atlas/)
 })
 
-test('entity reference sheet jobs route through Fly visual worker with low webp output', () => {
+test('entity reference sheet jobs route through Fly visual worker with medium webp output', () => {
   const visualWorker = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/visual-generation-worker.ts'), 'utf8')
   const appSource = readFileSync(resolve(repoRoot, 'src/App.tsx'), 'utf8')
 
@@ -142,7 +142,7 @@ test('entity reference sheet jobs route through Fly visual worker with low webp 
   assert.match(visualWorker, /VISUAL_GENERATION_ENTITY_REFERENCE_SHEET_MODEL/)
   assert.match(visualWorker, /explicitModel \|\| configuredModel \|\| 'openai\/gpt-image-2'/)
   assert.match(visualWorker, /baseModel === 'openai\/gpt-image-2\/edit' \? 'openai\/gpt-image-2' : baseModel/)
-  assert.match(visualWorker, /VISUAL_GENERATION_ENTITY_REFERENCE_SHEET_QUALITY'\) \|\| 'low'/)
+  assert.match(visualWorker, /VISUAL_GENERATION_ENTITY_REFERENCE_SHEET_QUALITY'\) \|\| 'medium'/)
   assert.match(visualWorker, /VISUAL_GENERATION_ENTITY_REFERENCE_SHEET_OUTPUT_FORMAT'\) \|\| 'webp'/)
   assert.match(visualWorker, /referenceSheetAssetKey/)
   assert.match(visualWorker, /thumbnail_asset_key: assetKey/)

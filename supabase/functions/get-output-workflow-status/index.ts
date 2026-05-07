@@ -17,7 +17,10 @@ Deno.serve(async (request) => {
     if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed.')
     const { client } = await requireUserClient(request, 'get-output-workflow-status')
     const payload = outputWorkflowRunStatusRequestSchema.parse(await request.json())
-    const bundle = await loadOutputWorkflowRunBundle(client, payload.runId)
+    const bundle = await loadOutputWorkflowRunBundle(client, payload.runId, {
+      includeNodeOutputs: false,
+      includeRunPayload: false,
+    })
     const artifacts = await hydrateOutputArtifactSignedUrls(client, bundle.run.artifacts)
     const run = {
       ...compactOutputWorkflowRunForStatus(bundle.run),

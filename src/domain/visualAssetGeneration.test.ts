@@ -18,6 +18,7 @@ const referenceSheetBase = {
   entityName: 'Eva-9',
   entitySummary: 'A synthetic singer in Skybridge Garden.',
   entityContext: 'Appears in a neon rain sci-fi world.',
+  projectContextDescription: 'Ashqarapps Project Primary GraphCore project created automatically for promptable authoring.',
   projectArtStyle: 'cinematic realism with restrained cyberpunk color',
   projectTone: 'melancholic, romantic, high tension',
   visualDescription: 'porcelain android with silver hair and translucent facial seams',
@@ -26,7 +27,7 @@ const referenceSheetBase = {
   referenceAssetNotes: ['existing thumbnail locks face and hair silhouette'],
 }
 
-test('character reference sheet prompt uses simplified low-quality-safe turnaround sections', () => {
+test('character reference sheet prompt uses simplified stable turnaround sections', () => {
   const prompt = buildCharacterReferenceSheetPrompt(referenceSheetBase)
 
   assert.match(prompt, /CHARACTER TURNAROUND REFERENCE SHEET/i)
@@ -39,6 +40,8 @@ test('character reference sheet prompt uses simplified low-quality-safe turnarou
   assert.match(prompt, /hand gesture sheets/i)
   assert.match(prompt, /Project art style:/i)
   assert.match(prompt, /Visual traits:/i)
+  assert.doesNotMatch(prompt, /Project context:/i)
+  assert.doesNotMatch(prompt, /GraphCore project created automatically/i)
   assert.doesNotMatch(prompt, /MICRO EXPRESSIONS/i)
   assert.doesNotMatch(prompt, /EXPRESSION PROGRESSION/i)
 })

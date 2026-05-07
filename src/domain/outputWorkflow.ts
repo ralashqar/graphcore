@@ -2451,43 +2451,6 @@ export function buildCinematicSequencePlan(
       execution: { resourceClass: 'utility', groupKey: 'cinematic_sequence_compile', maxConcurrency: 1 },
     },
   })
-  const atlasPromptNode = nodeBase({
-    key: 'cinematic_atlas_prompt',
-    nodeType: 'text_llm',
-    label: 'Atlas Prompt',
-    x: 640,
-    y: 340,
-    inputs: { prompt: 'Create a GPT Image 2 prompt for a cinematic reference atlas of the selected entities.' },
-    config: {
-      purpose: 'cinematic_atlas_prompt',
-      sequenceUnitKey: selectedSequenceUnitKey,
-      sequenceUnitName: sequenceTitle,
-      skillKeys: ['image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'environment_staging', 'provider_prompt_hygiene'],
-      guidanceMode: 'strict',
-      execution: { resourceClass: 'llm' },
-    },
-  })
-  const atlasImageNode = nodeBase({
-    key: 'cinematic_atlas_image',
-    nodeType: 'image_generation',
-    label: 'Cinematic Atlas',
-    x: 920,
-    y: 340,
-    config: {
-      purpose: 'cinematic_reference_atlas',
-      role: 'cinematic_atlas',
-      model: 'openai/gpt-image-2',
-      referenceModel: 'openai/gpt-image-2/edit',
-      quality: 'low',
-      outputFormat: 'webp',
-      maxReferenceImages: 16,
-      imageSize: { width: 2048, height: 2048 },
-      skillKeys: ['image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'environment_staging', 'provider_prompt_hygiene'],
-      autoSkillTags: ['atlas', 'image_prompt', 'visual_only', 'entity_reference', 'reference_continuity'],
-      guidanceMode: 'strict',
-      execution: { resourceClass: 'image', groupKey: 'cinematic_atlas', maxConcurrency: 1 },
-    },
-  })
   const dynamicFanoutNode = nodeBase({
     key: 'cinematic_dynamic_take_fanout',
     nodeType: 'utility_transform',
@@ -2570,8 +2533,6 @@ export function buildCinematicSequencePlan(
     }),
     scriptAuthoringNode,
     sequenceCompileNode,
-    atlasPromptNode,
-    atlasImageNode,
     dynamicFanoutNode,
   ]
   const edges = [
@@ -2581,14 +2542,7 @@ export function buildCinematicSequencePlan(
     edgeBase('skill_context', 'guidance', 'cinematic_script_authoring', 'guidance'),
     edgeBase('cinematic_entities', 'asset_pack', 'cinematic_script_authoring', 'asset_pack'),
     edgeBase('cinematic_script_authoring', 'script', 'cinematic_sequence_compile', 'input'),
-    edgeBase('world_context', 'context', 'cinematic_atlas_prompt', 'context'),
-    edgeBase('skill_context', 'guidance', 'cinematic_atlas_prompt', 'guidance'),
-    edgeBase('cinematic_entities', 'asset_pack', 'cinematic_atlas_prompt', 'asset_pack'),
-    edgeBase('cinematic_atlas_prompt', 'text', 'cinematic_atlas_image', 'prompt'),
-    edgeBase('cinematic_entities', 'asset_pack', 'cinematic_atlas_image', 'references'),
-    edgeBase('skill_context', 'guidance', 'cinematic_atlas_image', 'guidance'),
     edgeBase('cinematic_sequence_compile', 'takePlan', 'cinematic_dynamic_take_fanout', 'input'),
-    edgeBase('cinematic_atlas_image', 'image', 'cinematic_dynamic_take_fanout', 'references'),
   ]
   const graphValidation = validateOutputWorkflowGraph({ nodes, edges, worldWiki })
   return outputWorkflowPlanResponseSchema.shape.plan.parse({
@@ -2606,9 +2560,9 @@ export function buildCinematicSequencePlan(
       ...(requestedSequenceKeys.length !== 1 ? ['Cinematic V1 uses one sequence_unit as the story spine; the first available sequence unit was used when none was selected.'] : []),
       'Cinematic outputs now author a full script first, then dynamically materialize compiled takes after the script is compiled. Total generated video duration is capped at 60 seconds.',
       cinematicReferenceMode === 'keyframes'
-        ? 'Keyframe reference mode is enabled: Seedance uses clean opening/midpoint/ending keyframes before atlas/entity refs.'
+        ? 'Keyframe reference mode is enabled: Seedance uses clean opening/midpoint/ending keyframes before individual entity reference assets.'
         : cinematicReferenceMode === 'keyframes_and_storyboard'
-          ? 'Storyboard-grid reference mode is enabled with additional keyframes: Seedance uses the generated beat sheet as @Image1, then keyframes and atlas/entity refs.'
+          ? 'Storyboard-grid reference mode is enabled with additional keyframes: Seedance uses the generated beat sheet as @Image1, then keyframes and individual entity reference assets.'
           : 'Storyboard-grid reference mode is enabled: Seedance uses the generated beat sheet as @Image1.',
       debugSkipVideoGeneration
         ? 'Debug video-skip mode is enabled: video_generation nodes will produce skipped placeholders instead of submitting Seedance jobs.'

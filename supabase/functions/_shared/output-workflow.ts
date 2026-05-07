@@ -123,8 +123,10 @@ type DatabaseClient = {
 
 export const outputWorkflowSelect = 'id, project_id, draft_id, key, name, description, preset, status, created_by, metadata, created_at, updated_at'
 export const outputWorkflowNodeSelect = 'id, workflow_id, key, node_type, label, position, config, inputs, outputs, dirty, input_hash, output_hash, metadata, created_at, updated_at'
+export const outputWorkflowNodeStatusSelect = 'id, workflow_id, key, node_type, label, position, config, inputs, dirty, input_hash, output_hash, metadata, created_at, updated_at'
 export const outputWorkflowEdgeSelect = 'id, workflow_id, key, source_node_key, source_port, target_node_key, target_port, metadata, created_at, updated_at'
 export const outputWorkflowRunSelect = 'id, project_id, draft_id, workflow_id, requested_by, status, preset, prompt, target_format, world_snapshot_fingerprint, input, outputs, error_message, worker_id, heartbeat_at, attempt_count, metadata, started_at, completed_at, created_at, updated_at'
+export const outputWorkflowRunStatusSelect = 'id, project_id, draft_id, workflow_id, requested_by, status, preset, prompt, target_format, world_snapshot_fingerprint, error_message, worker_id, heartbeat_at, attempt_count, metadata, started_at, completed_at, created_at, updated_at'
 export const outputWorkflowRunStepSelect = 'id, run_id, workflow_id, node_id, node_key, node_type, status, order_index, label, input_hash, output_hash, outputs, provider, model, provider_request_id, error_message, metadata, started_at, completed_at, created_at, updated_at'
 export const outputArtifactSelect = 'id, project_id, draft_id, workflow_id, run_id, node_id, key, name, kind, asset_key, mime_type, summary, metadata, created_at, updated_at'
 export const outputRequestSelect = 'id, project_id, draft_id, workflow_id, latest_run_id, requested_by, source_surface, prompt, title, intent, output_kind, status, selected_entity_keys, selected_sequence_unit_keys, page_count, target_format, planner_notes, error_message, metadata, created_at, updated_at'
@@ -540,10 +542,16 @@ export function buildOutputWorkflowInputFingerprint(raw: unknown) {
   })
 }
 
-export async function loadOutputWorkflowRunBundle(client: DatabaseClient, runId: string) {
+export async function loadOutputWorkflowRunBundle(
+  client: DatabaseClient,
+  runId: string,
+  options: { includeNodeOutputs?: boolean; includeRunPayload?: boolean } = {},
+) {
+  const includeNodeOutputs = options.includeNodeOutputs !== false
+  const includeRunPayload = options.includeRunPayload !== false
   const runResponse = await client
     .from('output_workflow_runs')
-    .select(outputWorkflowRunSelect)
+    .select(includeRunPayload ? outputWorkflowRunSelect : outputWorkflowRunStatusSelect)
     .eq('id', runId)
     .single()
   if (runResponse.error || !runResponse.data) throw new Error(runResponse.error?.message ?? 'Output workflow run not found.')
@@ -557,7 +565,7 @@ export async function loadOutputWorkflowRunBundle(client: DatabaseClient, runId:
       .single(),
     client
       .from('output_workflow_nodes')
-      .select(outputWorkflowNodeSelect)
+      .select(includeNodeOutputs ? outputWorkflowNodeSelect : outputWorkflowNodeStatusSelect)
       .eq('workflow_id', runRow.workflow_id)
       .order('created_at', { ascending: true }),
     client
@@ -1955,11 +1963,14 @@ const comicScriptJsonSchema = {
 }
 
 function entityAssetKeys(entity: Record<string, unknown>, assets: Record<string, unknown>[]) {
+  const metadata = asRecord(entity.metadata)
   const keys = [
+    readText(metadata.referenceSheetAssetKey),
+    ...readStringArray(metadata.referenceSheetAssetKeys),
     readText(entity.thumbnailAssetKey),
     readText(entity.thumbnail_asset_key),
-    readText(asRecord(entity.metadata).brandAtlasAssetKey),
-    readText(asRecord(entity.metadata).assetKey),
+    readText(metadata.brandAtlasAssetKey),
+    readText(metadata.assetKey),
   ].filter(Boolean)
   const matching = assets
     .filter((asset) => keys.includes(readText(asset.key)))
@@ -3095,11 +3106,11 @@ function buildCinematicVideoPrompt(input: {
       keyframeCount >= 1 ? '@Image1: opening keyframe; lock the opening look, subject identity, wardrobe, palette, and starting composition.' : '',
       keyframeCount >= 2 ? '@Image2: midpoint keyframe; lock the midpoint composition and continuity state.' : '',
       keyframeCount >= 3 ? '@Image3: ending keyframe; lock the final composition and emotional/visual beat.' : '',
-      extraReferenceCount > 0 ? `@Image${extraReferenceStart}${extraReferenceCount > 1 ? `-@Image${input.referenceImageCount}` : ''}: cinematic atlas, entity, environment, prop, or optional continuity anchors only.` : '',
+      extraReferenceCount > 0 ? `@Image${extraReferenceStart}${extraReferenceCount > 1 ? `-@Image${input.referenceImageCount}` : ''}: individual entity, environment, prop, or optional continuity reference assets only.` : '',
     ].filter(Boolean)
     : [
       input.referenceImageCount >= 1 ? '@Image1: storyboard beat-sheet grid; use it as the primary visual continuity and timing board, following panel order left-to-right then top-to-bottom.' : '',
-      extraReferenceCount > 0 ? `@Image${extraReferenceStart}${extraReferenceCount > 1 ? `-@Image${input.referenceImageCount}` : ''}: cinematic atlas, clean keyframes when present, entity, environment, or prop continuity anchors.` : '',
+      extraReferenceCount > 0 ? `@Image${extraReferenceStart}${extraReferenceCount > 1 ? `-@Image${input.referenceImageCount}` : ''}: individual entity, environment, prop, or optional keyframe continuity reference assets.` : '',
     ].filter(Boolean)
   const timeline = shots.length > 0
     ? shots.map((shot) => {
@@ -3281,7 +3292,7 @@ function buildTakeBlockScriptFromCompiledSequence(input: {
         camera: [readText(shot.cameraMovement), readText(shot.cameraAngle), readText(shot.framing), readText(shot.lensPreference)].filter(Boolean).join(', '),
         composition: readText(shot.compositionGuide) || readText(shot.visualPrompt),
         audio: audioTextForCompiledShot(shot),
-        referenceNotes: 'Use @Image1 opening keyframe, @Image2 midpoint keyframe, @Image3 ending keyframe, then atlas/entity anchors.',
+        referenceNotes: 'Use @Image1 opening keyframe, @Image2 midpoint keyframe, @Image3 ending keyframe, then individual entity/environment/prop anchors.',
       }
     })
   const storyboardPanelPlan = asRecord(take.storyboardPanelPlan)
@@ -3457,7 +3468,6 @@ async function materializeDynamicCinematicTakeFanout(input: {
       dynamicEdgeRow({ workflow: input.workflow, key: `cinematic_entities__${beatSheetPromptKey}`, sourceNodeKey: 'cinematic_entities', sourcePort: 'asset_pack', targetNodeKey: beatSheetPromptKey, targetPort: 'asset_pack', compileHash, metadata: takeMeta }),
       dynamicEdgeRow({ workflow: input.workflow, key: `skill_context__${beatSheetPromptKey}`, sourceNodeKey: 'skill_context', sourcePort: 'guidance', targetNodeKey: beatSheetPromptKey, targetPort: 'guidance', compileHash, metadata: takeMeta }),
       dynamicEdgeRow({ workflow: input.workflow, key: `${beatSheetPromptKey}__${beatSheetKey}`, sourceNodeKey: beatSheetPromptKey, sourcePort: 'text', targetNodeKey: beatSheetKey, targetPort: 'prompt', compileHash, metadata: takeMeta }),
-      dynamicEdgeRow({ workflow: input.workflow, key: `cinematic_atlas_image__${beatSheetKey}`, sourceNodeKey: 'cinematic_atlas_image', sourcePort: 'image', targetNodeKey: beatSheetKey, targetPort: 'references', compileHash, metadata: takeMeta }),
       dynamicEdgeRow({ workflow: input.workflow, key: `cinematic_entities__${beatSheetKey}`, sourceNodeKey: 'cinematic_entities', sourcePort: 'asset_pack', targetNodeKey: beatSheetKey, targetPort: 'references', compileHash, metadata: takeMeta }),
       dynamicEdgeRow({ workflow: input.workflow, key: `skill_context__${beatSheetKey}`, sourceNodeKey: 'skill_context', sourcePort: 'guidance', targetNodeKey: beatSheetKey, targetPort: 'guidance', compileHash, metadata: takeMeta }),
       ...(useKeyframes ? [
@@ -3467,7 +3477,6 @@ async function materializeDynamicCinematicTakeFanout(input: {
         dynamicEdgeRow({ workflow: input.workflow, key: `skill_context__${keyframePromptPackKey}`, sourceNodeKey: 'skill_context', sourcePort: 'guidance', targetNodeKey: keyframePromptPackKey, targetPort: 'guidance', compileHash, metadata: takeMeta }),
         ...keyframeKeys.flatMap((keyframeKey) => [
         dynamicEdgeRow({ workflow: input.workflow, key: `${keyframePromptPackKey}__${keyframeKey}`, sourceNodeKey: keyframePromptPackKey, sourcePort: 'keyframePrompts', targetNodeKey: keyframeKey, targetPort: 'prompt', compileHash, metadata: takeMeta }),
-        dynamicEdgeRow({ workflow: input.workflow, key: `cinematic_atlas_image__${keyframeKey}`, sourceNodeKey: 'cinematic_atlas_image', sourcePort: 'image', targetNodeKey: keyframeKey, targetPort: 'references', compileHash, metadata: takeMeta }),
         dynamicEdgeRow({ workflow: input.workflow, key: `cinematic_entities__${keyframeKey}`, sourceNodeKey: 'cinematic_entities', sourcePort: 'asset_pack', targetNodeKey: keyframeKey, targetPort: 'references', compileHash, metadata: takeMeta }),
         dynamicEdgeRow({ workflow: input.workflow, key: `skill_context__${keyframeKey}`, sourceNodeKey: 'skill_context', sourcePort: 'guidance', targetNodeKey: keyframeKey, targetPort: 'guidance', compileHash, metadata: takeMeta }),
         ]),
@@ -3478,12 +3487,11 @@ async function materializeDynamicCinematicTakeFanout(input: {
         dynamicEdgeRow({ workflow: input.workflow, key: `${keyframePromptPackKey}__${videoPromptKey}`, sourceNodeKey: keyframePromptPackKey, sourcePort: 'keyframePlan', targetNodeKey: videoPromptKey, targetPort: 'keyframes', compileHash, metadata: takeMeta }),
         ...keyframeKeys.map((keyframeKey) => dynamicEdgeRow({ workflow: input.workflow, key: `${keyframeKey}__${videoPromptKey}`, sourceNodeKey: keyframeKey, sourcePort: 'image', targetNodeKey: videoPromptKey, targetPort: 'references', compileHash, metadata: takeMeta })),
       ] : []),
-      dynamicEdgeRow({ workflow: input.workflow, key: `cinematic_atlas_image__${videoPromptKey}`, sourceNodeKey: 'cinematic_atlas_image', sourcePort: 'image', targetNodeKey: videoPromptKey, targetPort: 'references', compileHash, metadata: takeMeta }),
       dynamicEdgeRow({ workflow: input.workflow, key: `cinematic_entities__${videoPromptKey}`, sourceNodeKey: 'cinematic_entities', sourcePort: 'asset_pack', targetNodeKey: videoPromptKey, targetPort: 'asset_pack', compileHash, metadata: takeMeta }),
       dynamicEdgeRow({ workflow: input.workflow, key: `skill_context__${videoPromptKey}`, sourceNodeKey: 'skill_context', sourcePort: 'guidance', targetNodeKey: videoPromptKey, targetPort: 'guidance', compileHash, metadata: takeMeta }),
       dynamicEdgeRow({ workflow: input.workflow, key: `${videoPromptKey}__${videoKey}`, sourceNodeKey: videoPromptKey, sourcePort: 'text', targetNodeKey: videoKey, targetPort: 'prompt', compileHash, metadata: takeMeta }),
       ...(useKeyframes ? keyframeKeys.map((keyframeKey) => dynamicEdgeRow({ workflow: input.workflow, key: `${keyframeKey}__${videoKey}`, sourceNodeKey: keyframeKey, sourcePort: 'image', targetNodeKey: videoKey, targetPort: 'references', compileHash, metadata: takeMeta })) : []),
-      dynamicEdgeRow({ workflow: input.workflow, key: `cinematic_atlas_image__${videoKey}`, sourceNodeKey: 'cinematic_atlas_image', sourcePort: 'image', targetNodeKey: videoKey, targetPort: 'references', compileHash, metadata: takeMeta }),
+      dynamicEdgeRow({ workflow: input.workflow, key: `cinematic_entities__${videoKey}`, sourceNodeKey: 'cinematic_entities', sourcePort: 'asset_pack', targetNodeKey: videoKey, targetPort: 'references', compileHash, metadata: takeMeta }),
       dynamicEdgeRow({ workflow: input.workflow, key: `skill_context__${videoKey}`, sourceNodeKey: 'skill_context', sourcePort: 'guidance', targetNodeKey: videoKey, targetPort: 'guidance', compileHash, metadata: takeMeta }),
       dynamicEdgeRow({ workflow: input.workflow, key: `${videoKey}__video_stitch`, sourceNodeKey: videoKey, sourcePort: 'video', targetNodeKey: 'video_stitch', targetPort: 'videos', compileHash, metadata: takeMeta }),
     )
@@ -6725,8 +6733,8 @@ async function executeNode(input: {
         `- Duration must be ${durationSeconds} seconds. Aspect ratio: ${aspectRatio}. Resolution: ${resolution}.`,
         imageUrls.length > 0
           ? (cinematicReferenceMode === 'keyframes'
-            ? `- Reference images are ordered as @Image1 through @Image${imageUrls.length}; @Image1-@Image3 are clean keyframes when present, then atlas/entity refs.`
-            : `- Reference images are ordered as @Image1 through @Image${imageUrls.length}; @Image1 is the storyboard beat-sheet timing/continuity board, @Image2 is usually the cinematic atlas or next continuity anchor, then any remaining refs.`)
+            ? `- Reference images are ordered as @Image1 through @Image${imageUrls.length}; @Image1-@Image3 are clean keyframes when present, then individual entity, location, or prop reference assets.`
+            : `- Reference images are ordered as @Image1 through @Image${imageUrls.length}; @Image1 is the storyboard beat-sheet timing/continuity board, then individual entity, location, or prop reference assets.`)
           : '- No image references are attached; use the written continuity anchors in the prompt.',
         referenceVideoUrls.length > 0 ? `- Reference videos are ordered as @Video1 through @Video${referenceVideoUrls.length}.` : '',
         cinematicReferenceMode === 'keyframes' ? '- Beat sheets are planning-only and are not attached in keyframe mode.' : '- A beat sheet is attached as the primary visual reference; follow its panel order while avoiding caption-band, border, gutter, UI, or grid artifacts in the video.',

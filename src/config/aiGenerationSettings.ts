@@ -9,7 +9,7 @@ export const aiGenerationSettings = {
       ebookCover: 'medium',
     },
     imageOutputFormatDefault: 'webp',
-    entityReferenceSheetQuality: 'low',
+    entityReferenceSheetQuality: 'medium',
     entityReferenceSheetOutputFormat: 'webp',
     entityReferenceSheetImageSizes: {
       character: { width: 2048, height: 1536 },

@@ -17,7 +17,7 @@ import {
   outputArtifactSelect,
   outputRequestSelect,
   outputWorkflowEdgeSelect,
-  outputWorkflowNodeSelect,
+  outputWorkflowNodeStatusSelect,
   outputWorkflowSelect,
   loadOutputWorkflowRunBundle,
 } from '../_shared/output-workflow.ts'
@@ -47,7 +47,7 @@ Deno.serve(async (request) => {
     if (outputRequest.workflowId) {
       const [workflowResponse, nodeResponse, edgeResponse, artifactResponse] = await Promise.all([
         client.from('output_workflows').select(outputWorkflowSelect).eq('id', outputRequest.workflowId).single(),
-        client.from('output_workflow_nodes').select(outputWorkflowNodeSelect).eq('workflow_id', outputRequest.workflowId).order('created_at', { ascending: true }),
+        client.from('output_workflow_nodes').select(outputWorkflowNodeStatusSelect).eq('workflow_id', outputRequest.workflowId).order('created_at', { ascending: true }),
         client.from('output_workflow_edges').select(outputWorkflowEdgeSelect).eq('workflow_id', outputRequest.workflowId).order('created_at', { ascending: true }),
         client.from('output_artifacts').select(outputArtifactSelect).eq('workflow_id', outputRequest.workflowId).order('created_at', { ascending: false }),
       ])
@@ -60,7 +60,10 @@ Deno.serve(async (request) => {
       artifacts = await hydrateOutputArtifactSignedUrls(client, (artifactResponse.data ?? []).map(mapOutputArtifactRow))
     }
     if (outputRequest.latestRunId) {
-      const bundle = await loadOutputWorkflowRunBundle(client, outputRequest.latestRunId)
+      const bundle = await loadOutputWorkflowRunBundle(client, outputRequest.latestRunId, {
+        includeNodeOutputs: false,
+        includeRunPayload: false,
+      })
       run = compactOutputWorkflowRunForStatus(bundle.run)
       artifacts = bundle.run.artifacts.length > 0 ? bundle.run.artifacts : artifacts
       if (isTerminalOutputWorkflowRunStatus(bundle.run.status) && outputRequest.status !== bundle.run.status) {

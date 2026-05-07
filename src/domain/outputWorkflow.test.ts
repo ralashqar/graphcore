@@ -1,5 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 
 import {
   buildOutputGuidanceBundleForNode,
@@ -39,6 +41,7 @@ import {
 } from './outputWorkflowGraphView.ts'
 
 const now = '2026-05-03T00:00:00.000Z'
+const repoRoot = resolve(import.meta.dirname, '../..')
 
 function worldEntity(key: string, nodeType: string, name: string, customProperties: Record<string, unknown> = {}) {
   return {
@@ -303,7 +306,7 @@ test('cinematic output preset creates script-first dynamic take fanout placehold
   assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_sequence_compile').length, 1)
   assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_dynamic_take_fanout').length, 1)
   assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_block_script').length, 0)
-  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_reference_atlas').length, 1)
+  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_reference_atlas').length, 0)
   assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_storyboard').length, 0)
   assert.equal(plan.nodes.filter((node) => node.nodeType === 'video_generation').length, 0)
   assert.ok(!plan.nodes.some((node) => readConfigPurpose(node) === 'video_stitch'))
@@ -328,18 +331,21 @@ test('cinematic output preset creates script-first dynamic take fanout placehold
   assert.ok((skillContext?.config.skillKeys as string[]).includes('cinematic_keyframe_prompting'))
   assert.ok((skillContext?.config.skillKeys as string[]).includes('seedance_timeline_call_sheet'))
 
-  const atlas = plan.nodes.find((node) => node.key === 'cinematic_atlas_image')
-  assert.equal(readConfigQuality(atlas ?? {}), 'low')
-  assert.equal(readConfigOutputFormat(atlas ?? {}), 'webp')
-  assert.deepEqual(atlas?.config.imageSize, { width: 2048, height: 2048 })
-  assert.equal(atlas?.config.maxReferenceImages, 16)
-  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_entities' && edge.targetNodeKey === 'cinematic_atlas_image' && edge.targetPort === 'references'))
+  assert.ok(!plan.nodes.some((node) => node.key === 'cinematic_atlas_prompt'))
+  assert.ok(!plan.nodes.some((node) => node.key === 'cinematic_atlas_image'))
   assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_sequence_compile' && edge.targetNodeKey === 'cinematic_dynamic_take_fanout' && edge.targetPort === 'input'))
-  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_atlas_image' && edge.targetNodeKey === 'cinematic_dynamic_take_fanout' && edge.targetPort === 'references'))
-  assert.ok(plan.usageEstimate?.lines.some((line) => line.nodeKey === 'cinematic_atlas_image' && line.modality === 'image'))
+  assert.ok(!plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_atlas_image' || edge.targetNodeKey === 'cinematic_atlas_image'))
+  assert.ok(!plan.usageEstimate?.lines.some((line) => line.nodeKey === 'cinematic_atlas_image'))
   assert.ok(!plan.usageEstimate?.lines.some((line) => line.nodeKey === 'block_001_storyboard'))
   assert.ok(!plan.usageEstimate?.lines.some((line) => line.nodeKey === 'block_001_video'))
   assert.equal(validateOutputWorkflowGraph({ nodes: plan.nodes, edges: plan.edges }).ok, true)
+
+  const workerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
+  assert.doesNotMatch(workerSource, /cinematic_atlas_image__\$\{beatSheetKey\}/)
+  assert.doesNotMatch(workerSource, /cinematic_atlas_image__\$\{videoKey\}/)
+  assert.match(workerSource, /cinematic_entities__\$\{beatSheetKey\}/)
+  assert.match(workerSource, /cinematic_entities__\$\{videoKey\}/)
+  assert.match(workerSource, /metadata\.referenceSheetAssetKey/)
 
   const requestPayload = outputRequestStartRequestSchema.parse({
     projectId: 'project-1',

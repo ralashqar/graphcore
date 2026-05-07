@@ -1939,11 +1939,11 @@ const WORLD_CONNECTION_SELECT =
 const OUTPUT_WORKFLOW_SELECT =
   'id, project_id, draft_id, key, name, description, preset, status, created_by, metadata, created_at, updated_at'
 const OUTPUT_WORKFLOW_NODE_SELECT =
-  'id, workflow_id, key, node_type, label, position, config, inputs, outputs, dirty, input_hash, output_hash, metadata, created_at, updated_at'
+  'id, workflow_id, key, node_type, label, position, config, inputs, dirty, input_hash, output_hash, metadata, created_at, updated_at'
 const OUTPUT_WORKFLOW_EDGE_SELECT =
   'id, workflow_id, key, source_node_key, source_port, target_node_key, target_port, metadata, created_at, updated_at'
 const OUTPUT_WORKFLOW_RUN_SELECT =
-  'id, project_id, draft_id, workflow_id, requested_by, status, preset, prompt, target_format, world_snapshot_fingerprint, input, outputs, error_message, worker_id, heartbeat_at, attempt_count, metadata, started_at, completed_at, created_at, updated_at'
+  'id, project_id, draft_id, workflow_id, requested_by, status, preset, prompt, target_format, world_snapshot_fingerprint, error_message, worker_id, heartbeat_at, attempt_count, metadata, started_at, completed_at, created_at, updated_at'
 const OUTPUT_WORKFLOW_RUN_STEP_SELECT =
   'id, run_id, workflow_id, node_id, node_key, node_type, status, order_index, label, input_hash, output_hash, outputs, provider, model, provider_request_id, error_message, metadata, started_at, completed_at, created_at, updated_at'
 const OUTPUT_ARTIFACT_SELECT =

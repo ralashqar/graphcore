@@ -104,7 +104,6 @@ function buildReferenceSheetContext(input: EntityReferenceSheetBaseInput) {
     `Subject name: ${input.entityName}.`,
     input.entitySummary ? `Summary: ${cleanPromptText(input.entitySummary)}.` : null,
     input.entityContext ? `Canon context: ${cleanPromptText(input.entityContext)}.` : null,
-    input.projectContextDescription ? `Project context: ${cleanPromptText(input.projectContextDescription)}.` : null,
     input.projectArtStyle ? `Project art style: ${cleanPromptText(input.projectArtStyle)}.` : null,
     input.projectTone ? `Project tone: ${cleanPromptText(input.projectTone)}.` : null,
     input.visualDescription ? `Neutral visual identity: ${cleanPromptText(input.visualDescription)}.` : null,
@@ -118,7 +117,7 @@ function buildReferenceSheetContext(input: EntityReferenceSheetBaseInput) {
 
 export function buildCharacterReferenceSheetPrompt(input: EntityReferenceSheetBaseInput) {
   return [
-    'Create a single unified CHARACTER TURNAROUND REFERENCE SHEET in a 4:3 horizontal layout, optimized for low-quality GPT Image 2 generation with fewer, larger, stable panels.',
+    'Create a single unified CHARACTER TURNAROUND REFERENCE SHEET in a 4:3 horizontal layout, optimized for stable GPT Image 2 reference-sheet generation with fewer, larger, consistent panels.',
     buildReferenceSheetContext(input),
     'Use a pure white or clean off-white production-board background with balanced spacing and clear section titles.',
     'The largest dominant section is MAIN CHARACTER TURNAROUND: show the same character in four large neutral standing views: front, 3/4 front, side profile, and back. Keep arms relaxed and simple; do not emphasize fingers or complex hand poses.',
@@ -358,7 +357,6 @@ export function buildCharacterConceptPrompt(input: CharacterConceptPromptInput) 
     input.artStylePresetLabel?.trim() ? `Universal game art style: ${input.artStylePresetLabel.trim()}.` : null,
     input.artStyleDescription?.trim() ? `Additional art direction: ${input.artStyleDescription.trim()}.` : null,
     input.captureProfile?.trim() ? `Capture profile: ${input.captureProfile.trim()}.` : null,
-    input.projectContextDescription?.trim() ? `Project context: ${input.projectContextDescription.trim()}.` : null,
     poseDirection,
     mode === 'continuity'
       ? 'Use a clean studio or quiet neutral background with controlled lighting and no UI, text, logos, borders, or collage layout.'
@@ -388,7 +386,6 @@ export function buildItemConceptPrompt(input: ItemConceptPromptInput) {
     input.artStylePresetLabel?.trim() ? `Universal game art style: ${input.artStylePresetLabel.trim()}.` : null,
     input.artStyleDescription?.trim() ? `Additional art direction: ${input.artStyleDescription.trim()}.` : null,
     input.captureProfile?.trim() ? `Capture profile: ${input.captureProfile.trim()}.` : null,
-    input.projectContextDescription?.trim() ? `Project context: ${input.projectContextDescription.trim()}.` : null,
     mode === 'proof_surface'
       ? 'Show the object in a readable proof-friendly framing. Use a held, in-use, or close proof angle only when the selected variant requires it.'
       : 'Show one clearly readable hero object, centered in frame, fully visible, with no hands, characters, UI, labels, logo marks, borders, or collage layout.',
@@ -415,7 +412,6 @@ export function buildEnvironmentConceptPrompt(input: EnvironmentConceptPromptInp
     input.artStylePresetLabel?.trim() ? `Universal game art style: ${input.artStylePresetLabel.trim()}.` : null,
     input.artStyleDescription?.trim() ? `Additional art direction: ${input.artStyleDescription.trim()}.` : null,
     input.captureProfile?.trim() ? `Capture profile: ${input.captureProfile.trim()}.` : null,
-    input.projectContextDescription?.trim() ? `Project context: ${input.projectContextDescription.trim()}.` : null,
     'Show one clear environment view with strong spatial readability, grounded scale cues, and no UI, text, logos, borders, or collage layout.',
     `Environment visual description: ${input.visualDescription.trim()}.`,
   ]

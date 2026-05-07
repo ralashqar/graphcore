@@ -423,7 +423,7 @@ export const OUTPUT_SKILL_REGISTRY: readonly OutputSkill[] = [
       'Create a clean black-canvas beat sheet with timed cinematic panels and short caption bands for planning and default Seedance continuity reference.',
       'Use 12 beats for a 15-second take when appropriate; use fewer panels for shorter takes while preserving exact timing.',
       'Caption what the viewer sees in short plain-English lines; do not include camera notes, SFX columns, director notes, title banners, footer lines, or UI tables.',
-      'Preserve world/entity visual identity, atlas references, palette, wardrobe, environment logic, and lighting continuity across every panel.',
+      'Preserve world/entity visual identity, individual reference-sheet assets, palette, wardrobe, environment logic, and lighting continuity across every panel.',
     ],
     avoid: [
       'Avoid long text columns, speech bubbles, ornate borders, empty placeholder panels, or anything that would encourage Seedance to reproduce UI/grid artifacts.',
@@ -486,7 +486,7 @@ export const OUTPUT_SKILL_REGISTRY: readonly OutputSkill[] = [
     appliesToNodeTypes: ['utility_transform', 'video_generation'],
     appliesToPurposes: ['cinematic_video_prompt', 'cinematic_block_video'],
     guidance: [
-      'Write a compact reference legend that gives each @ImageN one job: storyboard timing board, atlas, entity, environment, prop, or keyframe when keyframe mode is explicitly enabled.',
+      'Write a compact reference legend that gives each @ImageN one job: storyboard timing board, entity reference sheet, environment reference, prop reference, or keyframe when keyframe mode is explicitly enabled.',
       'Do not re-describe faces or designs against the reference; state what each reference locks and what must not drift.',
     ],
     avoid: [
@@ -529,7 +529,7 @@ export const OUTPUT_SKILL_REGISTRY: readonly OutputSkill[] = [
     appliesToNodeTypes: ['utility_transform', 'video_generation'],
     appliesToPurposes: ['cinematic_video_prompt', 'cinematic_block_video'],
     guidance: [
-      'Use the storyboard beat sheet first by default: @Image1 is the compiled take timing/continuity board. Put atlas/entity references after it.',
+      'Use the storyboard beat sheet first by default: @Image1 is the compiled take timing/continuity board. Put individual entity, location, and prop reference assets after it.',
       'Use clean keyframes first only when cinematicReferenceMode is keyframes; in keyframes_and_storyboard mode, keep the storyboard grid first and put keyframes after it.',
       'Keep the clip prompt focused on one dominant action path and one camera direction, with block duration, aspect ratio, and continuity constraints explicit.',
       'Use reference images as anchors rather than asking the model to redesign characters, locations, products, or brand surfaces.',
@@ -832,7 +832,7 @@ export const OUTPUT_SKILL_REGISTRY: readonly OutputSkill[] = [
     category: 'visual',
     modality: 'image',
     appliesToNodeTypes: ['image_generation', 'video_generation', 'text_llm'],
-    appliesToPurposes: ['image_prompt', 'video_prompt', 'storyboard_prompt', 'comic_entity_selector', 'comic_atlas_prompt', 'comic_style_atlas', 'comic_page_prompt', 'comic_page', 'cinematic_entity_selector', 'cinematic_atlas_prompt', 'cinematic_reference_atlas', 'cinematic_storyboard', 'cinematic_block_video'],
+    appliesToPurposes: ['image_prompt', 'video_prompt', 'storyboard_prompt', 'comic_entity_selector', 'comic_atlas_prompt', 'comic_style_atlas', 'comic_page_prompt', 'comic_page', 'cinematic_entity_selector', 'cinematic_atlas_prompt', 'cinematic_reference_atlas', 'cinematic_storyboard', 'cinematic_beat_sheet', 'cinematic_keyframe', 'cinematic_block_video'],
     guidance: [
       'Treat character reference images and entity visual descriptions as identity constraints.',
       'Preserve face, silhouette, wardrobe anchors, color cues, and role-specific props unless the node explicitly changes them.',
@@ -853,7 +853,7 @@ export const OUTPUT_SKILL_REGISTRY: readonly OutputSkill[] = [
     category: 'visual',
     modality: 'image',
     appliesToNodeTypes: ['image_generation', 'text_llm'],
-    appliesToPurposes: ['image_prompt', 'concept_art_prompt', 'concept_art_image', 'poster_prompt', 'poster_image', 'ebook_cover_prompt', 'ebook_cover_image', 'storyboard_prompt', 'panel_prompt', 'comic_atlas_prompt', 'comic_style_atlas', 'comic_page_prompt', 'comic_page', 'cinematic_atlas_prompt', 'cinematic_reference_atlas', 'cinematic_storyboard'],
+    appliesToPurposes: ['image_prompt', 'concept_art_prompt', 'concept_art_image', 'poster_prompt', 'poster_image', 'ebook_cover_prompt', 'ebook_cover_image', 'storyboard_prompt', 'panel_prompt', 'comic_atlas_prompt', 'comic_style_atlas', 'comic_page_prompt', 'comic_page', 'cinematic_atlas_prompt', 'cinematic_reference_atlas', 'cinematic_storyboard', 'cinematic_beat_sheet', 'cinematic_keyframe'],
     guidance: [
       'Write prompts as visible subject, action, environment, composition, lighting, material, and camera qualities.',
       'Convert lore and abstract themes into visible production design choices.',
@@ -958,7 +958,7 @@ export const OUTPUT_SKILL_REGISTRY: readonly OutputSkill[] = [
     category: 'visual',
     modality: 'image',
     appliesToNodeTypes: ['text_llm', 'image_generation', 'video_generation'],
-    appliesToPurposes: ['image_prompt', 'image_reference_selector', 'concept_art_prompt', 'concept_art_image', 'poster_prompt', 'poster_image', 'ebook_cover_image', 'video_prompt', 'composite_reference', 'comic_entity_selector', 'comic_atlas_prompt', 'comic_style_atlas', 'comic_page', 'cinematic_entity_selector', 'cinematic_atlas_prompt', 'cinematic_reference_atlas', 'cinematic_storyboard', 'cinematic_block_video'],
+    appliesToPurposes: ['image_prompt', 'image_reference_selector', 'concept_art_prompt', 'concept_art_image', 'poster_prompt', 'poster_image', 'ebook_cover_image', 'video_prompt', 'composite_reference', 'comic_entity_selector', 'comic_atlas_prompt', 'comic_style_atlas', 'comic_page', 'cinematic_entity_selector', 'cinematic_atlas_prompt', 'cinematic_reference_atlas', 'cinematic_storyboard', 'cinematic_beat_sheet', 'cinematic_keyframe', 'cinematic_block_video'],
     guidance: [
       'Preserve entity identity, material, silhouette, and visible role cues from source references.',
       'Use source entity keys and visual descriptions as provenance anchors for generated assets.',
