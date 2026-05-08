@@ -11559,14 +11559,14 @@ button.world-wiki-style-card:hover {
 }
 
 .world-wiki-overview {
-  min-height: clamp(190px, 20vw, 270px);
+  min-height: clamp(205px, 19vw, 270px);
   gap: clamp(12px, 2vw, 28px);
   padding: 0 0 10px;
 }
 
 .world-wiki-overview-copy {
   align-self: start;
-  width: min(920px, 78%);
+  width: min(1040px, 88%);
   max-width: none;
   padding-top: clamp(4px, 1.1vw, 16px);
 }
@@ -11576,9 +11576,9 @@ button.world-wiki-style-card:hover {
 }
 
 .world-wiki-overview-copy h2 {
-  max-width: min(24ch, 100%);
+  max-width: min(34ch, 100%);
   margin-top: 4px;
-  font-size: clamp(1.75rem, 2.75vw, 3.05rem);
+  font-size: clamp(1.65rem, 2.45vw, 2.8rem);
   line-height: 1;
 }
 
@@ -11600,9 +11600,22 @@ button.world-wiki-style-card:hover {
   -webkit-line-clamp: 1;
 }
 
+.world-wiki-overview-bottom-row {
+  position: relative;
+  z-index: 4;
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  max-width: 100%;
+  margin-top: 2px;
+}
+
 .world-wiki-overview-stats {
   gap: 6px;
-  margin-top: 9px;
+  margin-top: 0;
 }
 
 .world-wiki-overview-stats span {
@@ -11621,6 +11634,25 @@ button.world-wiki-style-card:hover {
 
 .world-wiki-overview-actions {
   margin-top: 8px;
+}
+
+.world-wiki-overview-tags {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: min(520px, 48vw);
+  margin-left: auto;
+}
+
+.world-wiki-overview-tags .chip {
+  padding: 5px 8px;
+  border-color: rgba(169, 140, 255, 0.22);
+  background: rgba(9, 13, 24, 0.42);
+  color: rgba(223, 214, 255, 0.88);
+  font-size: 0.68rem;
+  line-height: 1;
+  backdrop-filter: blur(8px);
 }
 
 .world-wiki-overview-media {
@@ -11859,7 +11891,7 @@ button.world-wiki-style-card:hover {
 
 /* Final concept-art splash override: prove full header coverage before adding edge fades back. */
 .world-wiki-overview:has(.world-wiki-overview-media.has-image) {
-  min-height: clamp(210px, 22vw, 300px) !important;
+  min-height: clamp(205px, 19vw, 270px) !important;
 }
 
 .world-wiki-overview-media.has-image {

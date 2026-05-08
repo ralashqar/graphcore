@@ -2343,12 +2343,27 @@ export function WorldGraphPage({
     : null
   const wikiOverviewImageUrl = liveWorldConceptImageUrl ?? wikiWorldConceptImageUrl ?? wikiHeroEntityImageUrl
   const wikiOverviewLabel = projectContext?.projectType === 'app' || wikiHasAppSections ? 'App Overview' : projectContext?.projectType === 'game' || wikiHasGameSections ? 'Game Overview' : 'World Overview'
-  const wikiSynopsisLabel = projectContext?.projectType === 'app' || wikiHasAppSections ? 'App synopsis' : projectContext?.projectType === 'game' || wikiHasGameSections ? 'Game synopsis' : 'World synopsis'
-  const wikiEmptySynopsisText = projectContext?.projectType === 'app' || wikiHasAppSections
-    ? 'Add app graph canon or generate a synopsis from the existing product graph.'
-    : projectContext?.projectType === 'game' || wikiHasGameSections
-      ? 'Add playable game graph canon or generate a synopsis from the existing game graph.'
-    : 'Add world canon or generate a synopsis from the existing graph.'
+  const wikiOverviewActionGaps = useMemo(() => {
+    const actionKinds: Array<[WorldWikiGap['kind'], string]> = [
+      ['world_synopsis', 'Generate synopsis'],
+      ['world_tone', 'Add themes/tone'],
+    ]
+    return actionKinds
+      .map(([kind, label]) => {
+        const gap = wikiModel.gaps.find((entry) => entry.kind === kind) ?? null
+        return gap ? { gap, label } : null
+      })
+      .filter((entry): entry is { gap: WorldWikiGap; label: string } => Boolean(entry))
+  }, [wikiModel.gaps])
+  const wikiOverviewTags = useMemo(() => {
+    const seen = new Set<string>()
+    return wikiModel.overview.toneTags.filter((tag) => {
+      const key = tag.trim().toLowerCase()
+      if (!key || seen.has(key)) return false
+      seen.add(key)
+      return true
+    }).slice(0, 8)
+  }, [wikiModel.overview.toneTags])
   const wikiBrandAtlasAsset = useMemo(() => {
     const assetKey = wikiModel.overview.brandAtlasAssetKey.trim()
     if (!assetKey) return null
@@ -6633,48 +6648,26 @@ export function WorldGraphPage({
                           </button>
                         ) : null}
                       </div>
-                      <button
-                        className="world-wiki-summary-button is-overview"
-                        onClick={() => openWikiDetailModal({
-                          title: wikiModel.title,
-                          eyebrow: wikiSynopsisLabel,
-                          body: wikiModel.overview.synopsis || wikiEmptySynopsisText,
-                          icon: wikiOverviewIcon,
-                          imageUrl: wikiOverviewImageUrl,
-                          meta: [
-                            `${worldEntities.length} node${worldEntities.length === 1 ? '' : 's'}`,
-                            `${worldRelationships.length} link${worldRelationships.length === 1 ? '' : 's'}`,
-                          ],
-                        })}
-                        type="button"
-                      >
-                        <span className="world-wiki-summary-clamp">
-                          {wikiModel.overview.synopsis || wikiEmptySynopsisText}
-                        </span>
-                      </button>
+                      {wikiOverviewActionGaps.length > 0 ? (
+                        <div className="world-wiki-overview-actions">
+                          {wikiOverviewActionGaps.map(({ gap, label }) => (
+                            <button key={gap.kind} className="world-context-strip-action" disabled={isPromptSubmitting} onClick={() => void handleRunWikiGap(gap)} type="button">
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="world-wiki-overview-bottom-row">
                       <div className="world-wiki-overview-stats" aria-label="World wiki counts">
                         <span><strong>{worldEntities.length}</strong><small>Entities</small></span>
                         <span><strong>{worldRelationships.length}</strong><small>Links</small></span>
                         <span><strong>{wikiModel.threadPages.length}</strong><small>Threads</small></span>
                         <span><strong>{wikiModel.sequence.units.length || wikiModel.timeline.events.length}</strong><small>Beats</small></span>
                       </div>
-                      <div className="world-wiki-overview-actions">
-                        {([
-                          ['world_synopsis', 'Generate synopsis'],
-                          ['world_tone', 'Add themes/tone'],
-                          ['wiki_refresh', 'Refresh overview'],
-                        ] as const).map(([kind, label]) => {
-                          const gap = wikiModel.gaps.find((entry) => entry.kind === kind) ?? null
-                          return gap ? (
-                            <button key={kind} className="world-context-strip-action" disabled={isPromptSubmitting} onClick={() => void handleRunWikiGap(gap)} type="button">
-                              {label}
-                            </button>
-                          ) : null
-                        })}
-                      </div>
-                      {wikiModel.overview.toneTags.length > 0 ? (
-                        <div className="world-wiki-chip-row">
-                          {wikiModel.overview.toneTags.map((tag) => <span key={tag} className="chip">{tag}</span>)}
+                      {wikiOverviewTags.length > 0 ? (
+                        <div className="world-wiki-overview-tags" aria-label="World tone tags">
+                          {wikiOverviewTags.map((tag) => <span key={tag} className="chip">{tag}</span>)}
                         </div>
                       ) : null}
                     </div>
