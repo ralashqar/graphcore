@@ -1403,6 +1403,8 @@ export function WorldGraphPage({
   const [brandAtlasJobId, setBrandAtlasJobId] = useState<string | null>(null)
   const [appGenerationJob, setAppGenerationJob] = useState<AppGenerationStatusResponse['job'] | null>(null)
   const [appPreviewSession, setAppPreviewSession] = useState<AppPreviewSessionResponse | null>(null)
+  const [liveProjectDraftMetadata, setLiveProjectDraftMetadata] = useState<Record<string, unknown> | null>(null)
+  const [liveWorldConceptImageUrl, setLiveWorldConceptImageUrl] = useState<string | null>(null)
   const [appGenerationBusy, setAppGenerationBusy] = useState(false)
   const [appGenerationError, setAppGenerationError] = useState<string | null>(null)
   const [selectedAppCodePath, setSelectedAppCodePath] = useState<string | null>(null)
@@ -2097,6 +2099,70 @@ export function WorldGraphPage({
       return [entity.key, resolveAssetSourceUrl(asset) ?? (assetKey ? signedAssetUrlsByKey.get(assetKey) ?? null : null)]
     }))
   }, [assetByKey, signedAssetUrlsByKey, worldEntities])
+  const effectiveProjectDraftMetadata = liveProjectDraftMetadata ?? projectDraftMetadata
+  useEffect(() => {
+    if (worldViewMode !== 'wiki' || !projectDraftId) return
+
+    let cancelled = false
+    setLiveWorldConceptImageUrl(null)
+
+    const loadLiveWikiHeader = async () => {
+      const draftResponse = await supabase
+        .from('project_drafts')
+        .select('metadata')
+        .eq('id', projectDraftId)
+        .maybeSingle()
+
+      if (cancelled) return
+
+      if (draftResponse.error) {
+        console.warn('[GraphCore][wiki] direct draft metadata reload failed.', draftResponse.error.message)
+        return
+      }
+
+      const metadata = readLooseRecord(draftResponse.data?.metadata)
+      const worldWiki = readLooseRecord(metadata.worldWiki)
+      setLiveProjectDraftMetadata(metadata)
+
+      const assetKey = trimOptionalString(worldWiki.worldConceptAssetKey)
+      if (!assetKey) {
+        if (import.meta.env.DEV) {
+          console.info('[GraphCore][wiki] direct header metadata loaded without concept asset.', {
+            projectDraftId,
+            title: trimOptionalString(worldWiki.title),
+            hasLogline: Boolean(trimOptionalString(worldWiki.logline)),
+          })
+        }
+        return
+      }
+
+      const signedResponse = await supabase.functions.invoke<SignedAssetUrlResponse>('sign-project-asset-urls', {
+        body: { assetKeys: [assetKey] },
+      })
+
+      if (cancelled) return
+
+      const signedUrl = signedResponse.data?.urls?.find((entry) => entry.assetKey?.trim() === assetKey)?.signedUrl?.trim() ?? ''
+      if (signedUrl) setLiveWorldConceptImageUrl(signedUrl)
+
+      if (import.meta.env.DEV) {
+        console.info('[GraphCore][wiki] direct header metadata loaded.', {
+          projectDraftId,
+          title: trimOptionalString(worldWiki.title),
+          hasLogline: Boolean(trimOptionalString(worldWiki.logline)),
+          worldConceptAssetKey: assetKey,
+          hasSignedConceptUrl: Boolean(signedUrl),
+          signingError: signedResponse.error?.message ?? null,
+        })
+      }
+    }
+
+    void loadLiveWikiHeader()
+
+    return () => {
+      cancelled = true
+    }
+  }, [projectDraftId, worldViewMode])
   const imageUrlByResultKey = useMemo(() => {
     return new Map(worldResults.map((result) => {
       const asset = result.previewAssetKey ? assetByKey.get(result.previewAssetKey) ?? null : null
@@ -2117,7 +2183,7 @@ export function WorldGraphPage({
       },
       draft: {
         id: projectDraftId,
-        metadata: projectDraftMetadata,
+        metadata: effectiveProjectDraftMetadata,
       },
       worldEntities,
       worldRelationships,
@@ -2126,7 +2192,7 @@ export function WorldGraphPage({
       worldGraphConnections,
     },
     view: selectedView,
-  }), [projectDraftId, projectDraftMetadata, projectName, projectSummary, selectedView, worldEntities, worldGraphConnections, worldRelationships, worldResults, worldThreads])
+  }), [effectiveProjectDraftMetadata, projectDraftId, projectName, projectSummary, selectedView, worldEntities, worldGraphConnections, worldRelationships, worldResults, worldThreads])
   const wikiHasAppSections = useMemo(
     () => wikiModel.sections.some((section) => section.kind === 'app' || section.kind.startsWith('app_')),
     [wikiModel.sections],
@@ -2275,7 +2341,7 @@ export function WorldGraphPage({
   const wikiHeroEntityImageUrl = wikiModel.overview.heroEntityKey
     ? imageUrlByEntityKey.get(wikiModel.overview.heroEntityKey) ?? null
     : null
-  const wikiOverviewImageUrl = wikiWorldConceptImageUrl ?? wikiHeroEntityImageUrl
+  const wikiOverviewImageUrl = liveWorldConceptImageUrl ?? wikiWorldConceptImageUrl ?? wikiHeroEntityImageUrl
   const wikiOverviewLabel = projectContext?.projectType === 'app' || wikiHasAppSections ? 'App Overview' : projectContext?.projectType === 'game' || wikiHasGameSections ? 'Game Overview' : 'World Overview'
   const wikiSynopsisLabel = projectContext?.projectType === 'app' || wikiHasAppSections ? 'App synopsis' : projectContext?.projectType === 'game' || wikiHasGameSections ? 'Game synopsis' : 'World synopsis'
   const wikiEmptySynopsisText = projectContext?.projectType === 'app' || wikiHasAppSections

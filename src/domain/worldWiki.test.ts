@@ -225,7 +225,7 @@ test('deriveWorldWiki reads project-wide draft wiki metadata before project summ
             artStyleDescription: 'Candlelit gothic fantasy with luminous memory crystals and rain-dark archive halls.',
             worldConceptPrompt: 'A single cinematic establishing view of the rain-dark archive city and violet memory crystals.',
             worldConceptAssetKey: 'world_concept_archive',
-            worldConceptVisualJobId: 'visual-job-world-concept',
+            worldConceptVisualJobId: null,
             brandAtlasPrompt: 'A cinematic fantasy brand atlas board of crystal stacks, ink-black archive halls, rain, vellum maps, and violet lantern light.',
             colorScheme: {
               primary: '#7c3aed violet memory light',
@@ -258,7 +258,7 @@ test('deriveWorldWiki reads project-wide draft wiki metadata before project summ
   assert.equal(wiki.overview.artStyleDescription, 'Candlelit gothic fantasy with luminous memory crystals and rain-dark archive halls.')
   assert.equal(wiki.overview.worldConceptPrompt.includes('establishing view'), true)
   assert.equal(wiki.overview.worldConceptAssetKey, 'world_concept_archive')
-  assert.equal(wiki.overview.worldConceptVisualJobId, 'visual-job-world-concept')
+  assert.equal(wiki.overview.worldConceptVisualJobId, '')
   assert.equal(wiki.overview.brandAtlasPrompt.includes('fantasy brand atlas board'), true)
   assert.equal(wiki.overview.colorScheme.primary, '#7c3aed violet memory light')
   assert.equal(wiki.sections.some((section) => section.kind === 'style' && section.title === 'Art Direction'), true)

@@ -1028,6 +1028,10 @@ function clearAssetReferences<T>(value: T, assetKey: string): T {
 }
 
 function unsavedSnapshotStorageKey(draftId: string) {
+  return `graphcore.unsaved-snapshot.v2.${draftId}`
+}
+
+function legacyUnsavedSnapshotStorageKey(draftId: string) {
   return `graphcore.unsaved-snapshot.v1.${draftId}`
 }
 
@@ -1076,13 +1080,114 @@ function reconcileStaleGeneratedResourcesByKey<T extends { key: string; metadata
   return changed ? nextEntries : cached
 }
 
+function reconcileRemoteGeneratedWorldWikiMetadata(
+  cachedDraft: ProjectSnapshot['draft'],
+  incomingDraft: ProjectSnapshot['draft'],
+) {
+  const incomingMetadata = readMetadataRecord(incomingDraft.metadata)
+  const incomingWiki = readMetadataRecord(incomingMetadata.worldWiki)
+  if (Object.keys(incomingWiki).length === 0) return cachedDraft
+
+  const cachedMetadata = readMetadataRecord(cachedDraft.metadata)
+  const cachedWiki = readMetadataRecord(cachedMetadata.worldWiki)
+  const nextWiki = { ...cachedWiki, ...incomingWiki }
+  const changedKeys = new Set([...Object.keys(cachedWiki), ...Object.keys(incomingWiki)])
+  const changed = Array.from(changedKeys).some((key) => !Object.is(cachedWiki[key], nextWiki[key]))
+
+  if (!changed) return cachedDraft
+
+  return {
+    ...cachedDraft,
+    updatedAt: incomingDraft.updatedAt,
+    metadata: {
+      ...cachedMetadata,
+      worldWiki: nextWiki,
+    },
+  }
+}
+
+function readWorldWikiAssetKeys(snapshot: ProjectSnapshot) {
+  const draftMetadata = readMetadataRecord(snapshot.draft.metadata)
+  const worldWiki = readMetadataRecord(draftMetadata.worldWiki)
+  return new Set([
+    trimOptionalString(worldWiki.worldConceptAssetKey),
+    trimOptionalString(worldWiki.brandAtlasAssetKey),
+  ].filter(Boolean))
+}
+
+function worldWikiOverviewCompletenessScore(snapshot: ProjectSnapshot) {
+  const draftMetadata = readMetadataRecord(snapshot.draft.metadata)
+  const worldWiki = readMetadataRecord(draftMetadata.worldWiki)
+  const overviewValues: unknown[] = [
+    worldWiki.title,
+    worldWiki.logline,
+    worldWiki.synopsis,
+    worldWiki.genre,
+    worldWiki.artStyleDescription,
+    worldWiki.worldConceptAssetKey,
+  ]
+  return overviewValues.reduce<number>((score, value) => score + (trimOptionalString(value) ? 1 : 0), 0)
+}
+
+function shouldRestoreUnsavedSnapshot(cached: ProjectSnapshot, incoming: ProjectSnapshot) {
+  if (cached.project.id !== incoming.project.id || cached.draft.id !== incoming.draft.id) {
+    return false
+  }
+
+  return worldWikiOverviewCompletenessScore(cached) >= worldWikiOverviewCompletenessScore(incoming)
+}
+
+function hasHydratedAssetUrl(asset: ProjectSnapshot['assets'][number]) {
+  const metadata = readMetadataRecord(asset.metadata)
+  return Boolean(trimOptionalString(metadata.sourceUrl) || trimOptionalString(metadata.previewUrl))
+}
+
+function mergeIncomingHydratedAssets(
+  cached: ProjectSnapshot['assets'],
+  incoming: ProjectSnapshot['assets'],
+  priorityKeys: Set<string>,
+) {
+  if (incoming.length === 0) return cached
+
+  const merged = [...cached]
+  const indexByKey = new Map(merged.map((entry, index) => [entry.key, index] as const))
+  let changed = false
+
+  for (const incomingAsset of incoming) {
+    const existingIndex = indexByKey.get(incomingAsset.key)
+    if (typeof existingIndex !== 'number') {
+      indexByKey.set(incomingAsset.key, merged.length)
+      merged.push(incomingAsset)
+      changed = true
+      continue
+    }
+
+    const cachedAsset = merged[existingIndex]
+    const shouldReplace =
+      priorityKeys.has(incomingAsset.key)
+      || (isPendingGeneratedAsset(cachedAsset) && !isPendingGeneratedAsset(incomingAsset))
+      || (!hasHydratedAssetUrl(cachedAsset) && hasHydratedAssetUrl(incomingAsset))
+
+    if (shouldReplace && cachedAsset !== incomingAsset) {
+      merged[existingIndex] = incomingAsset
+      changed = true
+    }
+  }
+
+  return changed ? merged : cached
+}
+
 function reconcileStaleGeneratedSnapshot(cached: ProjectSnapshot, incoming: ProjectSnapshot) {
+  const nextDraft = reconcileRemoteGeneratedWorldWikiMetadata(cached.draft, incoming.draft)
   const nextDefinitions = reconcileStaleGeneratedResourcesByKey(cached.definitions, incoming.definitions)
   const nextGraphs = reconcileStaleGeneratedResourcesByKey(cached.graphs, incoming.graphs)
-  const nextAssets = reconcileStaleGeneratedResourcesByKey(cached.assets, incoming.assets)
+  const priorityAssetKeys = readWorldWikiAssetKeys(incoming)
+  const nextGeneratedAssets = reconcileStaleGeneratedResourcesByKey(cached.assets, incoming.assets)
+  const nextAssets = mergeIncomingHydratedAssets(nextGeneratedAssets, incoming.assets, priorityAssetKeys)
 
   if (
-    nextDefinitions === cached.definitions
+    nextDraft === cached.draft
+    && nextDefinitions === cached.definitions
     && nextGraphs === cached.graphs
     && nextAssets === cached.assets
   ) {
@@ -1091,6 +1196,7 @@ function reconcileStaleGeneratedSnapshot(cached: ProjectSnapshot, incoming: Proj
 
   return {
     ...cached,
+    draft: nextDraft,
     definitions: nextDefinitions,
     graphs: nextGraphs,
     assets: nextAssets,
@@ -1101,6 +1207,7 @@ function writeUnsavedSnapshot(snapshot: ProjectSnapshot) {
   if (typeof window === 'undefined') return
 
   try {
+    window.localStorage.removeItem(legacyUnsavedSnapshotStorageKey(snapshot.draft.id))
     window.localStorage.setItem(
       unsavedSnapshotStorageKey(snapshot.draft.id),
       JSON.stringify({
@@ -1118,6 +1225,7 @@ function clearUnsavedSnapshot(draftId: string) {
 
   try {
     window.localStorage.removeItem(unsavedSnapshotStorageKey(draftId))
+    window.localStorage.removeItem(legacyUnsavedSnapshotStorageKey(draftId))
   } catch {
     // Ignore local persistence failures and keep the editor usable.
   }
@@ -1243,6 +1351,7 @@ export default function App() {
   const workspaceHydrationRequestIdRef = useRef(0)
   const desiredGameSelectionRef = useRef<{ projectId: string; draftId: string } | null>(null)
   const lazyWorldLoadedDraftIdsRef = useRef(new Set<string>())
+  const wikiHeaderLiveReloadedDraftIdsRef = useRef(new Set<string>())
   const lazyOutputInboxLoadedDraftIdsRef = useRef(new Set<string>())
 
   useEffect(() => {
@@ -1351,15 +1460,20 @@ export default function App() {
       state.source === 'supabase' && !options?.ignoreUnsavedCache
         ? readUnsavedSnapshot(normalizedIncomingSnapshot.draft.id)
         : null
-    const snapshotToHydrate =
-      cachedUnsavedSnapshot
-      && cachedUnsavedSnapshot.project.id === normalizedIncomingSnapshot.project.id
-      && cachedUnsavedSnapshot.draft.id === normalizedIncomingSnapshot.draft.id
-        ? normalizeSnapshot(reconcileStaleGeneratedSnapshot(
-            normalizeSnapshot(cachedUnsavedSnapshot),
-            normalizedIncomingSnapshot,
-          ))
-        : normalizedIncomingSnapshot
+    const normalizedCachedUnsavedSnapshot = cachedUnsavedSnapshot ? normalizeSnapshot(cachedUnsavedSnapshot) : null
+    const shouldRestoreCachedUnsavedSnapshot = Boolean(
+      normalizedCachedUnsavedSnapshot
+      && shouldRestoreUnsavedSnapshot(normalizedCachedUnsavedSnapshot, normalizedIncomingSnapshot),
+    )
+    if (normalizedCachedUnsavedSnapshot && !shouldRestoreCachedUnsavedSnapshot) {
+      clearUnsavedSnapshot(normalizedIncomingSnapshot.draft.id)
+    }
+    const snapshotToHydrate = normalizedCachedUnsavedSnapshot && shouldRestoreCachedUnsavedSnapshot
+      ? normalizeSnapshot(reconcileStaleGeneratedSnapshot(
+          normalizedCachedUnsavedSnapshot,
+          normalizedIncomingSnapshot,
+        ))
+      : normalizedIncomingSnapshot
     const restoredUnsavedSnapshot = snapshotToHydrate !== state.snapshot
     if (
       desiredSelection
@@ -1628,6 +1742,63 @@ export default function App() {
       cancelled = true
     }
   }, [activeTab, appRoute, loadedState?.source, snapshot?.draft.id, snapshot?.project.id])
+
+  useEffect(() => {
+    if (appRoute !== 'app') return
+    if (loadedState?.source !== 'supabase' || !snapshot) return
+    if (activeTab !== 'graph' || worldViewMode !== 'wiki') return
+
+    const draftId = snapshot.draft.id
+    if (wikiHeaderLiveReloadedDraftIdsRef.current.has(draftId)) return
+    wikiHeaderLiveReloadedDraftIdsRef.current.add(draftId)
+
+    let cancelled = false
+    void (async () => {
+      try {
+        const reloaded = await workspaceService.load({
+          projectId: snapshot.project.id,
+          draftId,
+        }, { profile: 'world', hydrateAssetUrls: true, skipCache: true })
+        if (cancelled || reloaded.source !== 'supabase') return
+        const current = snapshotRef.current
+        if (!current || current.project.id !== reloaded.snapshot.project.id || current.draft.id !== reloaded.snapshot.draft.id) {
+          return
+        }
+        const hydratedSnapshot = mergeOutputSliceIntoSnapshot(reloaded.snapshot, {
+          requests: current.outputRequests,
+          workflows: current.outputWorkflows,
+          nodes: current.outputWorkflowNodes,
+          edges: current.outputWorkflowEdges,
+          runs: current.outputWorkflowRuns,
+          artifacts: current.outputArtifacts,
+        })
+        commitPersistedSnapshot(hydratedSnapshot)
+        try {
+          const delta = await loadDraftDelta(reloaded.snapshot.draft.id, null)
+          await saveCachedProjectSnapshot(reloaded.snapshot, delta.currentRevision)
+        } catch (cacheError) {
+          console.warn('[GraphCore] wiki live header cache refresh failed.', cacheError)
+        }
+        if (import.meta.env.DEV) {
+          const worldWiki = readMetadataRecord(reloaded.snapshot.draft.metadata.worldWiki)
+          console.info('[GraphCore][wiki] live header snapshot reloaded from Supabase.', {
+            draftId,
+            title: trimOptionalString(worldWiki.title),
+            hasLogline: Boolean(trimOptionalString(worldWiki.logline)),
+            worldConceptAssetKey: trimOptionalString(worldWiki.worldConceptAssetKey),
+            assets: reloaded.snapshot.assets.length,
+          })
+        }
+      } catch (loadError) {
+        wikiHeaderLiveReloadedDraftIdsRef.current.delete(draftId)
+        console.error('[GraphCore] wiki live header reload failed.', loadError)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [activeTab, appRoute, loadedState?.source, snapshot?.draft.id, snapshot?.project.id, worldViewMode])
 
   const refreshBillingState = useCallback(async () => {
     if (!sessionRef.current) {

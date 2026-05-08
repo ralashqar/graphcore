@@ -499,7 +499,7 @@ type SnapshotLoadOptions = {
 }
 
 export type DraftRevision = number
-export const GRAPHCORE_CACHE_SCHEMA_VERSION = 'world-cache-v4' as const
+export const GRAPHCORE_CACHE_SCHEMA_VERSION = 'world-cache-v6' as const
 export type GraphCoreCacheSchemaVersion = typeof GRAPHCORE_CACHE_SCHEMA_VERSION
 
 export type DraftDeltaResponse = {

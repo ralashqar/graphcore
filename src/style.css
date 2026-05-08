@@ -11566,7 +11566,8 @@ button.world-wiki-style-card:hover {
 
 .world-wiki-overview-copy {
   align-self: start;
-  max-width: 560px;
+  width: min(920px, 78%);
+  max-width: none;
   padding-top: clamp(4px, 1.1vw, 16px);
 }
 
@@ -11575,16 +11576,16 @@ button.world-wiki-style-card:hover {
 }
 
 .world-wiki-overview-copy h2 {
-  max-width: 10.5ch;
+  max-width: min(24ch, 100%);
   margin-top: 4px;
-  font-size: clamp(1.95rem, 3.55vw, 3.7rem);
-  line-height: 0.96;
+  font-size: clamp(1.75rem, 2.75vw, 3.05rem);
+  line-height: 1;
 }
 
 .world-wiki-logline {
-  max-width: 530px;
+  max-width: 660px;
   margin-top: 8px;
-  font-size: clamp(0.82rem, 0.95vw, 0.94rem);
+  font-size: clamp(0.76rem, 0.84vw, 0.88rem);
   line-height: 1.35;
 }
 
@@ -11858,7 +11859,7 @@ button.world-wiki-style-card:hover {
 
 /* Final concept-art splash override: prove full header coverage before adding edge fades back. */
 .world-wiki-overview:has(.world-wiki-overview-media.has-image) {
-  min-height: clamp(300px, 34vw, 460px) !important;
+  min-height: clamp(210px, 22vw, 300px) !important;
 }
 
 .world-wiki-overview-media.has-image {
@@ -11899,12 +11900,12 @@ button.world-wiki-style-card:hover {
 
 @media (max-width: 980px) {
   .world-wiki-overview:has(.world-wiki-overview-media.has-image) {
-    min-height: 440px !important;
+    min-height: 360px !important;
   }
 
   .world-wiki-overview-media.has-image {
     inset: -12px -12px auto -12px !important;
-    height: 260px !important;
+    height: min(240px, 60%) !important;
   }
 }
 

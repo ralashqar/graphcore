@@ -192,11 +192,13 @@ export const worldWikiSectionKindSchema = z.enum([
 ])
 
 const worldWikiStringFieldSchema = z.preprocess((value) => {
+  if (value === null || typeof value === 'undefined') return undefined
   if (Array.isArray(value)) return value.map((entry) => String(entry).trim()).filter(Boolean).join(', ')
   return value
 }, z.string().default(''))
 
 const worldWikiStringListFieldSchema = z.preprocess((value) => {
+  if (value === null || typeof value === 'undefined') return undefined
   if (typeof value === 'string') {
     return value.split(',').map((entry) => entry.trim()).filter(Boolean)
   }
@@ -204,6 +206,7 @@ const worldWikiStringListFieldSchema = z.preprocess((value) => {
 }, z.array(z.string()).default([]))
 
 const worldWikiColorSchemeSchema = z.preprocess((value) => {
+  if (value === null || typeof value === 'undefined') return undefined
   if (typeof value === 'string') {
     return value
       .split(',')
