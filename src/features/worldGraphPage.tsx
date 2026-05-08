@@ -6020,15 +6020,16 @@ export function WorldGraphPage({
   function renderWikiSection(section: WorldWikiSection) {
     if (section.kind === 'style') return renderWikiStyleSection(section)
     const visibleEntityKeys = section.entityKeys.slice(0, section.kind === 'cast' ? 8 : 6)
-    const visibleThreadKeys = section.threadKeys.slice(0, 6)
-    const visibleResultKeys = section.resultKeys.slice(0, 6)
-    const gap = wikiModel.gaps.find((entry) => entry.sectionKind === section.kind) ?? null
-    return (
-      <section id={`world-wiki-section-${section.kind}`} key={section.kind} className={`world-wiki-section world-wiki-section-${section.kind}`}>
-        <div className="world-wiki-section-head">
-          <div>
-            <span className="eyebrow">{labelForWikiSection(section.kind)}</span>
-            <h3>{section.title}</h3>
+  const visibleThreadKeys = section.threadKeys.slice(0, 6)
+  const visibleResultKeys = section.resultKeys.slice(0, 6)
+  const gap = wikiModel.gaps.find((entry) => entry.sectionKind === section.kind) ?? null
+  const isCastSection = section.kind === 'cast'
+  return (
+    <section id={`world-wiki-section-${section.kind}`} key={section.kind} className={`world-wiki-section world-wiki-section-${section.kind}`}>
+      <div className="world-wiki-section-head">
+          <div className={isCastSection ? 'world-wiki-section-title-row' : undefined}>
+            {isCastSection ? <EntityIcon id={iconForWikiSection(section.kind)} /> : <span className="eyebrow">{labelForWikiSection(section.kind)}</span>}
+            <h3>{isCastSection ? 'Characters' : section.title}</h3>
           </div>
           {gap ? (
             <button className="ghost-button compact" disabled={isPromptSubmitting} onClick={() => void handleRunWikiGap(gap)} type="button">
@@ -6036,18 +6037,20 @@ export function WorldGraphPage({
             </button>
           ) : null}
         </div>
-        <button
-          className="world-wiki-summary-button"
-          onClick={() => openWikiDetailModal({
-            title: section.title,
-            eyebrow: labelForWikiSection(section.kind),
-            body: section.summary,
-            icon: iconForWikiSection(section.kind),
-          })}
-          type="button"
-        >
-          <span className="world-wiki-summary-clamp">{section.summary}</span>
-        </button>
+        {!isCastSection ? (
+          <button
+            className="world-wiki-summary-button"
+            onClick={() => openWikiDetailModal({
+              title: section.title,
+              eyebrow: labelForWikiSection(section.kind),
+              body: section.summary,
+              icon: iconForWikiSection(section.kind),
+            })}
+            type="button"
+          >
+            <span className="world-wiki-summary-clamp">{section.summary}</span>
+          </button>
+        ) : null}
         {visibleEntityKeys.length > 0 ? (
           <div className={section.kind === 'timeline' ? 'world-wiki-timeline-list' : section.kind === 'cast' ? 'world-wiki-card-grid is-cast' : 'world-wiki-card-grid'}>
             {visibleEntityKeys.map((key, index) => (

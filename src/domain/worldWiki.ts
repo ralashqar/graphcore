@@ -612,15 +612,9 @@ export function deriveWorldWiki(input: {
     : [
         makeSection({
           kind: 'cast',
-          title: 'Main Characters',
+          title: 'Characters',
           summary: sectionSummary(actors, 'No character profiles yet.'),
           entityKeys: actors.slice(0, 8).map((entity) => entity.key),
-        }),
-        makeSection({
-          kind: 'threads',
-          title: 'Story Arcs',
-          summary: relevantThreads[0]?.summary || 'No active story arcs yet.',
-          threadKeys: relevantThreads.slice(0, 8).map((thread) => thread.key),
         }),
         makeSection({
           kind: 'timeline',
@@ -657,6 +651,14 @@ export function deriveWorldWiki(input: {
           entityKeys: objects.slice(0, 8).map((entity) => entity.key),
         }),
       ]
+  const storyArcSection = hasAppNodes || hasGameSystemNodes
+    ? null
+    : makeSection({
+        kind: 'threads',
+        title: 'Story Arcs',
+        summary: relevantThreads[0]?.summary || 'No active story arcs yet.',
+        threadKeys: relevantThreads.slice(0, 8).map((thread) => thread.key),
+      })
 
   const sections = [
     makeSection({
@@ -680,7 +682,8 @@ export function deriveWorldWiki(input: {
       summary: relevantResults[0]?.summary || 'No generated outputs are linked to this view yet.',
       resultKeys: relevantResults.slice(0, 8).map((result) => result.key),
     }),
-  ]
+    storyArcSection,
+  ].filter((section): section is WorldWikiSection => Boolean(section))
 
   const relationshipKeysByEntity = new Map<string, string[]>()
   for (const relationship of input.snapshot.worldRelationships) {

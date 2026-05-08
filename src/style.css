@@ -11688,6 +11688,18 @@ button.world-wiki-style-card:hover {
   font-size: 0.9rem;
 }
 
+.world-wiki-section-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.world-wiki-section-title-row svg {
+  width: 16px;
+  height: 16px;
+  color: rgba(169, 140, 255, 0.88);
+}
+
 .world-wiki-section .world-wiki-summary-button:not(.is-overview) {
   margin-bottom: 8px;
   padding: 0;
