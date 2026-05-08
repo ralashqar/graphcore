@@ -412,6 +412,31 @@ export function mapOutputArtifactRow(row: OutputArtifactRow): OutputArtifact {
 }
 
 export async function hydrateOutputArtifactSignedUrls(client: DatabaseClient, artifacts: OutputArtifact[]) {
+  const storagePathByAssetKey = new Map<string, string>()
+  const missingAssetKeys = Array.from(new Set(artifacts
+    .filter((artifact) => {
+      const metadata = asRecord(artifact.metadata)
+      const existingUrl = readText(metadata.sourceUrl) || readText(metadata.previewUrl)
+      const storagePath = readText(metadata.storagePath) || readText(asRecord(metadata.render).storagePath)
+      return Boolean(artifact.assetKey && !existingUrl && !storagePath)
+    })
+    .map((artifact) => artifact.assetKey)
+    .filter((assetKey): assetKey is string => Boolean(assetKey))))
+
+  if (missingAssetKeys.length > 0) {
+    const assetResponse = await client
+      .from('project_assets')
+      .select('key, storage_path')
+      .in('key', missingAssetKeys)
+    if (!assetResponse.error) {
+      for (const asset of assetResponse.data ?? []) {
+        const key = typeof asset.key === 'string' ? asset.key : ''
+        const storagePath = typeof asset.storage_path === 'string' ? asset.storage_path : ''
+        if (key && storagePath) storagePathByAssetKey.set(key, storagePath)
+      }
+    }
+  }
+
   return Promise.all(artifacts.map(async (artifact) => {
     const metadata = asRecord(artifact.metadata)
     const existingUrl = readText(metadata.sourceUrl) || readText(metadata.previewUrl)
@@ -419,6 +444,7 @@ export async function hydrateOutputArtifactSignedUrls(client: DatabaseClient, ar
 
     const storagePath = readText(metadata.storagePath)
       || readText(asRecord(metadata.render).storagePath)
+      || (artifact.assetKey ? storagePathByAssetKey.get(artifact.assetKey) ?? '' : '')
     if (!storagePath) return artifact
 
     const bucket = client.storage.from('project-assets')

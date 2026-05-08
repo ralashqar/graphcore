@@ -7,6 +7,7 @@ import type { EntityIconId } from './entityIcons'
 export type LoadedState = {
   source: 'supabase' | 'demo'
   reason?: string
+  profile?: 'shell' | 'world' | 'content' | 'jobs' | 'full'
 }
 
 export type GameSummary = {

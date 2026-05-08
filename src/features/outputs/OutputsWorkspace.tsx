@@ -45,6 +45,8 @@ type OutputsWorkspaceProps = {
   onGetOutputRequestStatus: (requestId: string) => Promise<OutputRequestStatusResponse>
   onCancelOutputRequest: (requestId: string) => Promise<OutputRequestStatusResponse>
   onRequestDeleteOutputRequest: (requestId: string) => void
+  onLoadOutputInbox: () => Promise<void>
+  onLoadOutputWorkflowGraph: (workflowId: string, runId?: string | null) => Promise<void>
   onPlanOutputWorkflow: (request: {
     prompt: string
     preset?: 'ebook_from_world' | 'story_bible_from_world' | 'comic_issue_from_sequence'
@@ -605,6 +607,8 @@ export function OutputsWorkspace({
   onGetOutputRequestStatus,
   onCancelOutputRequest,
   onRequestDeleteOutputRequest,
+  onLoadOutputInbox,
+  onLoadOutputWorkflowGraph,
   onStartOutputWorkflow,
   onStartOutputWorkflowRun,
   onGetOutputWorkflowStatus,
@@ -785,6 +789,16 @@ export function OutputsWorkspace({
   )
 
   useEffect(() => {
+    let cancelled = false
+    void onLoadOutputInbox().catch((loadError) => {
+      if (!cancelled) setError(loadError instanceof Error ? loadError.message : 'Could not load output history.')
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [onLoadOutputInbox, snapshot.draft.id])
+
+  useEffect(() => {
     if (selectedComicSequenceKey && sequenceUnits.some((entity) => entity.key === selectedComicSequenceKey)) return
     setSelectedComicSequenceKey(sequenceUnits[0]?.key ?? '')
   }, [selectedComicSequenceKey, sequenceUnits])
@@ -946,6 +960,7 @@ export function OutputsWorkspace({
 
   async function refreshOutputGraph() {
     if (refreshingGraph) return
+    if (!activeWorkflow) return
     setRefreshingGraph(true)
     setError(null)
     try {
@@ -954,7 +969,7 @@ export function OutputsWorkspace({
         setActiveRunId(status.run.id)
         rememberLiveRun(status.run)
       }
-      await onRefreshLiveSnapshot()
+      await onLoadOutputWorkflowGraph(activeWorkflow.id, activeRun?.id ?? null)
     } catch (refreshError) {
       setError(refreshError instanceof Error ? refreshError.message : 'Could not refresh output workflow graph.')
     } finally {

@@ -1193,6 +1193,8 @@ export default function App() {
   const meshGenerationPollFailureCountsRef = useRef(new Map<string, number>())
   const workspaceHydrationRequestIdRef = useRef(0)
   const desiredGameSelectionRef = useRef<{ projectId: string; draftId: string } | null>(null)
+  const lazyWorldLoadedDraftIdsRef = useRef(new Set<string>())
+  const lazyOutputInboxLoadedDraftIdsRef = useRef(new Set<string>())
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -1242,7 +1244,7 @@ export default function App() {
   }, [snapshot])
 
   function hydrateLoadedProject(
-    state: { snapshot: ProjectSnapshot; source: 'supabase' | 'demo'; reason?: string },
+    state: { snapshot: ProjectSnapshot; source: 'supabase' | 'demo'; reason?: string; profile?: LoadedState['profile'] },
     options?: { preserveUnsavedIfSameDraft?: boolean; ignoreUnsavedCache?: boolean; resetSelection?: boolean; allowProjectChange?: boolean; requestId?: number },
   ) {
     const normalizedIncomingSnapshot = normalizeSnapshot(state.snapshot)
@@ -1291,7 +1293,7 @@ export default function App() {
       && currentHydratedSnapshot.draft.id === normalizedIncomingSnapshot.draft.id
     ) {
       startTransition(() => {
-        setLoadedState({ source: state.source, reason: state.reason })
+        setLoadedState({ source: state.source, reason: state.reason, profile: state.profile })
       })
       return
     }
@@ -1394,7 +1396,7 @@ export default function App() {
     }
 
     startTransition(() => {
-      setLoadedState({ source: state.source, reason: state.reason })
+      setLoadedState({ source: state.source, reason: state.reason, profile: state.profile })
       setSnapshot(snapshotToHydrate)
       setPatchPreview(null)
       setSelectedNodeKey(nextSelectedNodeKey)
@@ -1418,7 +1420,7 @@ export default function App() {
   }
 
   async function refreshWorkspaceState(
-    loader?: () => Promise<{ snapshot: ProjectSnapshot; source: 'supabase' | 'demo'; reason?: string }>,
+    loader?: () => Promise<{ snapshot: ProjectSnapshot; source: 'supabase' | 'demo'; reason?: string; profile?: LoadedState['profile'] }>,
     options?: { ignoreUnsavedCache?: boolean; resetSelection?: boolean; allowProjectChange?: boolean },
   ) {
     const requestId = ++workspaceHydrationRequestIdRef.current
@@ -1525,6 +1527,58 @@ export default function App() {
       active = false
     }
   }, [appRoute, setSelectedDefinitionKey, setSelectedGraphKey])
+
+  useEffect(() => {
+    if (appRoute !== 'app') return
+    if (loadedState?.source !== 'supabase' || !snapshot) return
+    if (activeTab !== 'graph' && activeTab !== 'library' && activeTab !== 'global' && activeTab !== 'outputs') return
+    const draftId = snapshot.draft.id
+    const targetProfile = activeTab === 'library' ? 'content' : 'world'
+    const surfaceKey = `${draftId}:${targetProfile}`
+    if (lazyWorldLoadedDraftIdsRef.current.has(surfaceKey)) return
+    lazyWorldLoadedDraftIdsRef.current.add(surfaceKey)
+
+    let cancelled = false
+    void (async () => {
+      const startedAt = performance.now()
+      try {
+        const loaded = await workspaceService.load({
+          projectId: snapshot.project.id,
+          draftId,
+        }, { profile: targetProfile, hydrateAssetUrls: false })
+        if (cancelled || loaded.source !== 'supabase') return
+        const current = snapshotRef.current
+        const nextSnapshot = current
+          ? mergeOutputSliceIntoSnapshot(loaded.snapshot, {
+              assets: current.assets,
+              requests: current.outputRequests,
+              workflows: current.outputWorkflows,
+              nodes: current.outputWorkflowNodes,
+              edges: current.outputWorkflowEdges,
+              runs: current.outputWorkflowRuns,
+              artifacts: current.outputArtifacts,
+            })
+          : loaded.snapshot
+        commitPersistedSnapshot(nextSnapshot)
+        setLoadedState({ source: loaded.source, reason: loaded.reason, profile: loaded.profile })
+        if (import.meta.env.DEV) {
+          console.info('[GraphCore][boot] lazy world surface loaded.', {
+            profile: loaded.profile,
+            draftId,
+            ms: Math.round(performance.now() - startedAt),
+            worldEntities: loaded.snapshot.worldEntities.length,
+            assets: loaded.snapshot.assets.length,
+          })
+        }
+      } catch (loadError) {
+        lazyWorldLoadedDraftIdsRef.current.delete(surfaceKey)
+        console.error('[GraphCore] lazy world surface load failed.', loadError)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [activeTab, appRoute, loadedState?.source, snapshot?.draft.id, snapshot?.project.id])
 
   const refreshBillingState = useCallback(async () => {
     if (!sessionRef.current) {
@@ -2450,6 +2504,46 @@ export default function App() {
     setSnapshot(normalizedSnapshot)
     setHasLocalSnapshotChanges(false)
     setBundle(compileBundle(normalizedSnapshot))
+  }
+
+  function mergeOutputSliceIntoSnapshot(
+    current: ProjectSnapshot,
+    slice: {
+      workflows?: ProjectSnapshot['outputWorkflows']
+      nodes?: ProjectSnapshot['outputWorkflowNodes']
+      edges?: ProjectSnapshot['outputWorkflowEdges']
+      runs?: ProjectSnapshot['outputWorkflowRuns']
+      artifacts?: ProjectSnapshot['outputArtifacts']
+      requests?: ProjectSnapshot['outputRequests']
+      assets?: ProjectSnapshot['assets']
+    },
+    options?: { replaceWorkflowGraphId?: string },
+  ) {
+    const mergeById = <TEntry extends { id: string }>(existing: TEntry[], incoming: TEntry[] = []) => {
+      const byId = new Map(existing.map((entry) => [entry.id, entry]))
+      for (const entry of incoming) byId.set(entry.id, entry)
+      return [...byId.values()]
+    }
+    const mergeAssets = (existing: ProjectSnapshot['assets'], incoming: ProjectSnapshot['assets'] = []) => {
+      const byKey = new Map(existing.map((entry) => [entry.key, entry]))
+      for (const entry of incoming) byKey.set(entry.key, entry)
+      return [...byKey.values()]
+    }
+    const workflowId = options?.replaceWorkflowGraphId
+    return {
+      ...current,
+      assets: mergeAssets(current.assets, slice.assets),
+      outputRequests: mergeById(current.outputRequests, slice.requests),
+      outputWorkflows: mergeById(current.outputWorkflows, slice.workflows),
+      outputWorkflowNodes: workflowId
+        ? mergeById(current.outputWorkflowNodes.filter((node) => node.workflowId !== workflowId), slice.nodes)
+        : mergeById(current.outputWorkflowNodes, slice.nodes),
+      outputWorkflowEdges: workflowId
+        ? mergeById(current.outputWorkflowEdges.filter((edge) => edge.workflowId !== workflowId), slice.edges)
+        : mergeById(current.outputWorkflowEdges, slice.edges),
+      outputWorkflowRuns: mergeById(current.outputWorkflowRuns, slice.runs),
+      outputArtifacts: mergeById(current.outputArtifacts, slice.artifacts),
+    }
   }
 
   async function prepareLiveWorldGraphSnapshot(baseSnapshot: ProjectSnapshot) {
@@ -4320,6 +4414,73 @@ export default function App() {
     return result
   }
 
+  async function loadOutputInbox() {
+    const current = snapshotRef.current ?? snapshot
+    if (!current || loadedState?.source !== 'supabase') return
+    const draftId = current.draft.id
+    if (lazyOutputInboxLoadedDraftIdsRef.current.has(draftId)) return
+    lazyOutputInboxLoadedDraftIdsRef.current.add(draftId)
+    const startedAt = performance.now()
+    try {
+      const result = await workspaceService.loadOutputInbox({
+        projectId: current.project.id,
+        draftId,
+        limit: 30,
+      })
+      const latest = snapshotRef.current ?? current
+      commitPersistedSnapshot(mergeOutputSliceIntoSnapshot(latest, {
+        requests: result.requests,
+        workflows: result.workflows,
+        runs: result.runs,
+        artifacts: result.artifacts,
+        assets: result.assets,
+      }))
+      if (import.meta.env.DEV) {
+        console.info('[GraphCore][boot] output inbox loaded.', {
+          draftId,
+          ms: Math.round(performance.now() - startedAt),
+          requests: result.requests.length,
+          artifacts: result.artifacts.length,
+          signedAssets: result.assets.length,
+        })
+      }
+    } catch (loadError) {
+      lazyOutputInboxLoadedDraftIdsRef.current.delete(draftId)
+      throw loadError
+    }
+  }
+
+  async function loadOutputWorkflowGraph(workflowId: string, runId?: string | null) {
+    const current = snapshotRef.current ?? snapshot
+    if (!current || loadedState?.source !== 'supabase') return
+    const startedAt = performance.now()
+    const result = await workspaceService.loadOutputWorkflowGraph({
+      projectId: current.project.id,
+      draftId: current.draft.id,
+      workflowId,
+      runId,
+    })
+    const latest = snapshotRef.current ?? current
+    commitPersistedSnapshot(mergeOutputSliceIntoSnapshot(latest, {
+      workflows: result.workflow ? [result.workflow] : [],
+      nodes: result.nodes,
+      edges: result.edges,
+      runs: result.run ? [result.run] : [],
+      artifacts: result.artifacts,
+      assets: result.assets,
+    }, { replaceWorkflowGraphId: workflowId }))
+    if (import.meta.env.DEV) {
+      console.info('[GraphCore][boot] output workflow graph loaded.', {
+        workflowId,
+        runId,
+        ms: Math.round(performance.now() - startedAt),
+        nodes: result.nodes.length,
+        artifacts: result.artifacts.length,
+        signedAssets: result.assets.length,
+      })
+    }
+  }
+
   async function cancelOutputWorkflowRun(runId: string) {
     const result = await workspaceService.cancelOutputWorkflowRun(runId)
     if (result.run) {
@@ -4514,7 +4675,15 @@ export default function App() {
     if (reloaded.source !== 'supabase') {
       throw new Error(reloaded.reason ?? 'Could not reload the live GraphCore draft.')
     }
-    commitPersistedSnapshot(reloaded.snapshot)
+    commitPersistedSnapshot(mergeOutputSliceIntoSnapshot(reloaded.snapshot, {
+      assets: current.assets,
+      requests: current.outputRequests,
+      workflows: current.outputWorkflows,
+      nodes: current.outputWorkflowNodes,
+      edges: current.outputWorkflowEdges,
+      runs: current.outputWorkflowRuns,
+      artifacts: current.outputArtifacts,
+    }))
     try {
       const delta = await loadDraftDelta(reloaded.snapshot.draft.id, null)
       await saveCachedProjectSnapshot(reloaded.snapshot, delta.currentRevision)
@@ -6577,6 +6746,8 @@ export default function App() {
                   onCancelOutputWorkflowRun={cancelOutputWorkflowRun}
                   onGetOutputRequestStatus={getOutputRequestStatus}
                   onGetOutputWorkflowStatus={getOutputWorkflowStatus}
+                  onLoadOutputInbox={loadOutputInbox}
+                  onLoadOutputWorkflowGraph={loadOutputWorkflowGraph}
                   onPlanOutputWorkflow={planOutputWorkflow}
                   onRefreshLiveSnapshot={refreshLiveSnapshot}
                   onRequestDeleteOutputRequest={requestDeleteOutputRequest}

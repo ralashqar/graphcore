@@ -486,6 +486,7 @@ type SnapshotLoadResult = {
   snapshot: ProjectSnapshot
   source: 'supabase' | 'demo'
   reason?: string
+  profile?: SnapshotLoadProfile
 }
 
 export type SnapshotLoadProfile = 'shell' | 'world' | 'content' | 'jobs' | 'full'
@@ -494,10 +495,11 @@ type SnapshotLoadOptions = {
   profile?: SnapshotLoadProfile
   promptHistoryLimit?: number
   skipCache?: boolean
+  hydrateAssetUrls?: boolean
 }
 
 export type DraftRevision = number
-export const GRAPHCORE_CACHE_SCHEMA_VERSION = 'world-cache-v3' as const
+export const GRAPHCORE_CACHE_SCHEMA_VERSION = 'world-cache-v4' as const
 export type GraphCoreCacheSchemaVersion = typeof GRAPHCORE_CACHE_SCHEMA_VERSION
 
 export type DraftDeltaResponse = {
@@ -2259,6 +2261,20 @@ function mapOutputArtifactRow(entry: OutputArtifactRow): OutputArtifact {
   })
 }
 
+function mapAssetRow(asset: AssetRow): AssetDefinition {
+  return {
+    id: asset.id,
+    projectId: asset.project_id,
+    key: asset.key,
+    name: asset.name,
+    kind: asset.kind,
+    mimeType: asset.mime_type,
+    storagePath: asset.storage_path,
+    metadata: asset.metadata ?? {},
+    llmHints: asset.llm_hints ?? {},
+  }
+}
+
 function mapOutputRequestRow(entry: OutputRequestRow): OutputRequest {
   return outputRequestSchema.parse({
     id: entry.id,
@@ -2696,6 +2712,23 @@ function collectOutputAssetReferences(value: unknown, knownAssetKeys: Set<string
   }
 }
 
+function collectOutputAssetKeys(value: unknown, assetKeys: Set<string>, depth = 0) {
+  if (!value || depth > 8) return
+  if (Array.isArray(value)) {
+    for (const entry of value) collectOutputAssetKeys(entry, assetKeys, depth + 1)
+    return
+  }
+  if (typeof value !== 'object') return
+
+  const record = value as Record<string, unknown>
+  const assetKey = readRepositoryString(record.assetKey) || readRepositoryString(record.asset_key)
+  if (assetKey) assetKeys.add(assetKey)
+
+  for (const entry of Object.values(record)) {
+    if (entry && typeof entry === 'object') collectOutputAssetKeys(entry, assetKeys, depth + 1)
+  }
+}
+
 function findMissingAssetReferences(snapshot: ProjectSnapshot) {
   const assetKeys = new Set(snapshot.assets.map((asset) => asset.key))
   const missing = new Set<string>()
@@ -2909,6 +2942,21 @@ async function hydrateStorageAssetUrls<TAsset extends AssetDefinition>(projectId
   ))
 }
 
+export async function signProjectAssetUrls(projectId: string, assetKeys: string[]) {
+  const cleanKeys = Array.from(new Set(assetKeys.map((key) => key.trim()).filter(Boolean)))
+  if (cleanKeys.length === 0) return []
+
+  const response = await supabase
+    .from('project_assets')
+    .select('id, project_id, key, name, kind, mime_type, storage_path, metadata, llm_hints')
+    .eq('project_id', projectId)
+    .in('key', cleanKeys)
+  if (response.error) throw new Error(response.error.message)
+
+  const assets = ((response.data ?? []) as AssetRow[]).map(mapAssetRow)
+  return hydrateStorageAssetUrls(projectId, assets)
+}
+
 function prettifyChoiceKey(value: string) {
   return value
     .replace(/[_-]+/g, ' ')
@@ -2963,6 +3011,7 @@ export async function loadProjectSnapshot(
 ): Promise<SnapshotLoadResult> {
   const profile = options?.profile ?? DEFAULT_SNAPSHOT_LOAD_PROFILE
   const promptHistoryLimit = Math.max(1, options?.promptHistoryLimit ?? DEFAULT_PROMPT_HISTORY_LIMIT)
+  const shouldHydrateAssetUrls = options?.hydrateAssetUrls ?? (profile === 'full' || profile === 'content')
   const includeFull = profile === 'full'
   const includeContent = profile === 'full' || profile === 'content' || profile === 'world'
   const includeJobs = profile === 'full' || profile === 'jobs' || profile === 'world'
@@ -3051,7 +3100,9 @@ export async function loadProjectSnapshot(
           }
           const hydratedSnapshot = hydrateSnapshotOutputArtifactUrls({
             ...nextSnapshot,
-            assets: await hydrateStorageAssetUrls(nextSnapshot.project.id, nextSnapshot.assets),
+            assets: shouldHydrateAssetUrls
+              ? await hydrateStorageAssetUrls(nextSnapshot.project.id, nextSnapshot.assets)
+              : nextSnapshot.assets,
           })
           const missingAssetRefs = findMissingAssetReferences(hydratedSnapshot)
           if (missingAssetRefs.length > 0) {
@@ -3066,6 +3117,7 @@ export async function loadProjectSnapshot(
           return {
             snapshot: hydratedSnapshot,
             source: 'supabase',
+            profile,
           }
         }
       } catch (cacheError) {
@@ -3230,7 +3282,7 @@ export async function loadProjectSnapshot(
           .eq('draft_id', draft.id)
           .order('created_at', { ascending: true })
       : Promise.resolve(emptyPostgrestResponse()),
-    includeContent
+    (includeFull || profile === 'content')
       ? supabase
           .from('project_assets')
           .select(assetSelect)
@@ -3373,7 +3425,7 @@ export async function loadProjectSnapshot(
           .order('created_at', { ascending: false })
           .limit(includeFull ? 100 : 20)
       : Promise.resolve(emptyPostgrestResponse()),
-    includeWorld
+    includeFull
       ? supabase
           .from('output_workflows')
           .select(OUTPUT_WORKFLOW_SELECT)
@@ -3381,21 +3433,21 @@ export async function loadProjectSnapshot(
           .order('updated_at', { ascending: false })
           .limit(includeFull ? 100 : 20)
       : Promise.resolve(emptyPostgrestResponse()),
-    includeWorld
+    includeFull
       ? supabase
           .from('output_workflow_nodes')
           .select(OUTPUT_WORKFLOW_NODE_SELECT)
           .eq('draft_id', draft.id)
           .order('created_at', { ascending: true })
       : Promise.resolve(emptyPostgrestResponse()),
-    includeWorld
+    includeFull
       ? supabase
           .from('output_workflow_edges')
           .select(OUTPUT_WORKFLOW_EDGE_SELECT)
           .eq('draft_id', draft.id)
           .order('created_at', { ascending: true })
       : Promise.resolve(emptyPostgrestResponse()),
-    includeJobs || includeWorld
+    includeFull
       ? supabase
           .from('output_workflow_runs')
           .select(OUTPUT_WORKFLOW_RUN_SELECT)
@@ -3404,7 +3456,7 @@ export async function loadProjectSnapshot(
           .order('created_at', { ascending: false })
           .limit(includeFull ? 100 : 20)
       : Promise.resolve(emptyPostgrestResponse()),
-    includeWorld
+    includeFull
       ? supabase
           .from('output_artifacts')
           .select(OUTPUT_ARTIFACT_SELECT)
@@ -3412,7 +3464,7 @@ export async function loadProjectSnapshot(
           .order('created_at', { ascending: false })
           .limit(includeFull ? 200 : 50)
       : Promise.resolve(emptyPostgrestResponse()),
-    includeWorld
+    includeFull
       ? supabase
           .from('output_requests')
           .select(OUTPUT_REQUEST_SELECT)
@@ -4081,7 +4133,9 @@ export async function loadProjectSnapshot(
 
   snapshot = hydrateSnapshotOutputArtifactUrls({
     ...snapshot,
-    assets: await hydrateStorageAssetUrls(snapshot.project.id, snapshot.assets),
+    assets: shouldHydrateAssetUrls
+      ? await hydrateStorageAssetUrls(snapshot.project.id, snapshot.assets)
+      : snapshot.assets,
   })
 
   if (profile === 'world' && !options?.skipCache) {
@@ -4096,6 +4150,7 @@ export async function loadProjectSnapshot(
   return {
     snapshot,
     source: 'supabase',
+    profile,
   }
 }
 
@@ -4104,12 +4159,12 @@ export async function ensureLiveProjectSnapshot(): Promise<SnapshotLoadResult> {
     data: { session },
   } = await supabase.auth.getSession()
 
-  const initial = await loadProjectSnapshot(undefined, { profile: 'world' })
+  const initial = await loadProjectSnapshot(undefined, { profile: 'shell', hydrateAssetUrls: false })
 
   if (!session || initial.source === 'supabase' || !shouldBootstrapLiveProject(initial.reason)) {
-    if (session && initial.source === 'supabase' && hasMissingBaselineArchetypes(initial.snapshot.archetypes)) {
+    if (session && initial.source === 'supabase' && initial.profile !== 'shell' && hasMissingBaselineArchetypes(initial.snapshot.archetypes)) {
       await seedBaselineArchetypesDirect(initial.snapshot.draft.id, session.user.id)
-      return loadProjectSnapshot(undefined, { profile: 'world' })
+      return loadProjectSnapshot(undefined, { profile: 'shell', hydrateAssetUrls: false })
     }
 
     return initial
@@ -4126,7 +4181,7 @@ export async function ensureLiveProjectSnapshot(): Promise<SnapshotLoadResult> {
     }
   }
 
-  return loadProjectSnapshot(undefined, { profile: 'world' })
+  return loadProjectSnapshot(undefined, { profile: 'shell', hydrateAssetUrls: false })
 }
 
 async function ensureWorkspaceShellDirect(session: Session) {
@@ -4272,7 +4327,7 @@ export async function setActiveGame(projectId: string, draftId: string, options?
   }
 
   await setActiveWorkspaceGameState(workspaceMembership.workspace.id, projectId, draftId)
-  return loadProjectSnapshot({ projectId, draftId }, { profile: options?.profile ?? 'world' })
+  return loadProjectSnapshot({ projectId, draftId }, { profile: options?.profile ?? 'shell', hydrateAssetUrls: options?.hydrateAssetUrls ?? false })
 }
 
 export async function loadCachedProjectSnapshot(projectId: string, draftId: string): Promise<GraphCoreClientCacheSnapshot | null> {
@@ -7688,6 +7743,225 @@ export async function getOutputWorkflowStatus(runId: string): Promise<OutputWork
     await clearProjectCache(parsed.run.projectId, parsed.run.draftId)
   }
   return parsed
+}
+
+export type OutputInboxLoadResult = {
+  requests: OutputRequest[]
+  workflows: OutputWorkflow[]
+  runs: OutputWorkflowRun[]
+  artifacts: OutputArtifact[]
+  assets: AssetDefinition[]
+}
+
+export type OutputWorkflowGraphLoadResult = {
+  workflow: OutputWorkflow | null
+  nodes: OutputWorkflowNode[]
+  edges: OutputWorkflowEdge[]
+  run: OutputWorkflowRun | null
+  artifacts: OutputArtifact[]
+  assets: AssetDefinition[]
+}
+
+function collectAssetKeysForOutputScope(input: {
+  nodes?: OutputWorkflowNode[]
+  runs?: OutputWorkflowRun[]
+  steps?: OutputWorkflowRunStep[]
+  artifacts?: OutputArtifact[]
+}) {
+  const assetKeys = new Set<string>()
+  for (const artifact of input.artifacts ?? []) {
+    if (artifact.assetKey) assetKeys.add(artifact.assetKey)
+    collectOutputAssetKeys(artifact.metadata, assetKeys)
+  }
+  for (const node of input.nodes ?? []) collectOutputAssetKeys(node.outputs, assetKeys)
+  for (const run of input.runs ?? []) {
+    collectOutputAssetKeys(run.outputs, assetKeys)
+    for (const step of run.steps) collectOutputAssetKeys(step.outputs, assetKeys)
+    for (const artifact of run.artifacts) {
+      if (artifact.assetKey) assetKeys.add(artifact.assetKey)
+      collectOutputAssetKeys(artifact.metadata, assetKeys)
+    }
+  }
+  for (const step of input.steps ?? []) collectOutputAssetKeys(step.outputs, assetKeys)
+  return [...assetKeys]
+}
+
+async function loadHydratedOutputAssets(projectId: string, input: {
+  nodes?: OutputWorkflowNode[]
+  runs?: OutputWorkflowRun[]
+  steps?: OutputWorkflowRunStep[]
+  artifacts?: OutputArtifact[]
+}) {
+  return signProjectAssetUrls(projectId, collectAssetKeysForOutputScope(input))
+}
+
+export async function loadOutputInbox(input: {
+  projectId: string
+  draftId: string
+  limit?: number
+}): Promise<OutputInboxLoadResult> {
+  const limit = Math.max(1, Math.min(100, input.limit ?? 30))
+  const requestResponse = await supabase
+    .from('output_requests')
+    .select(OUTPUT_REQUEST_SELECT)
+    .eq('draft_id', input.draftId)
+    .order('created_at', { ascending: false })
+    .limit(limit)
+  if (requestResponse.error) throw new Error(requestResponse.error.message)
+
+  const requests = ((requestResponse.data ?? []) as OutputRequestRow[]).map(mapOutputRequestRow)
+  const workflowIds = Array.from(new Set(requests.map((request) => request.workflowId).filter((id): id is string => Boolean(id))))
+  const latestRunIds = Array.from(new Set(requests.map((request) => request.latestRunId).filter((id): id is string => Boolean(id))))
+
+  const [workflowResponse, runResponse, artifactResponse] = await Promise.all([
+    workflowIds.length > 0
+      ? supabase
+          .from('output_workflows')
+          .select(OUTPUT_WORKFLOW_SELECT)
+          .in('id', workflowIds)
+      : Promise.resolve(emptyPostgrestResponse()),
+    latestRunIds.length > 0
+      ? supabase
+          .from('output_workflow_runs')
+          .select(OUTPUT_WORKFLOW_RUN_SELECT)
+          .in('id', latestRunIds)
+      : Promise.resolve(emptyPostgrestResponse()),
+    workflowIds.length > 0
+      ? supabase
+          .from('output_artifacts')
+          .select(OUTPUT_ARTIFACT_SELECT)
+          .in('workflow_id', workflowIds)
+          .order('created_at', { ascending: false })
+      : Promise.resolve(emptyPostgrestResponse()),
+  ])
+  if (workflowResponse.error) throw new Error(workflowResponse.error.message)
+  if (runResponse.error) throw new Error(runResponse.error.message)
+  if (artifactResponse.error) throw new Error(artifactResponse.error.message)
+
+  const stepsResponse = latestRunIds.length > 0
+    ? await supabase
+        .from('output_workflow_run_steps')
+        .select(OUTPUT_WORKFLOW_RUN_STEP_SELECT)
+        .in('run_id', latestRunIds)
+        .order('order_index', { ascending: true })
+    : emptyPostgrestResponse()
+  if (stepsResponse.error) throw new Error(stepsResponse.error.message)
+
+  const steps = ((stepsResponse.data ?? []) as OutputWorkflowRunStepRow[]).map(mapOutputWorkflowRunStepRow)
+  const artifacts = ((artifactResponse.data ?? []) as OutputArtifactRow[]).map(mapOutputArtifactRow)
+  const artifactsByRunId = new Map<string, OutputArtifact[]>()
+  for (const artifact of artifacts) {
+    if (!artifact.runId) continue
+    artifactsByRunId.set(artifact.runId, [...(artifactsByRunId.get(artifact.runId) ?? []), artifact])
+  }
+  const stepsByRunId = new Map<string, OutputWorkflowRunStep[]>()
+  for (const step of steps) stepsByRunId.set(step.runId, [...(stepsByRunId.get(step.runId) ?? []), step])
+  const runs = ((runResponse.data ?? []) as OutputWorkflowRunRow[]).map((run) => (
+    mapOutputWorkflowRunRow(run, stepsByRunId.get(run.id) ?? [], artifactsByRunId.get(run.id) ?? [])
+  ))
+  const assets = await loadHydratedOutputAssets(input.projectId, { runs, steps, artifacts })
+  const hydratedArtifacts = hydrateOutputArtifactsFromAssets(artifacts, assets)
+  const hydratedRuns = runs.map((run) => ({
+    ...run,
+    artifacts: hydrateOutputArtifactsFromAssets(run.artifacts, assets),
+  }))
+
+  return {
+    requests,
+    workflows: ((workflowResponse.data ?? []) as OutputWorkflowRow[]).map(mapOutputWorkflowRow),
+    runs: hydratedRuns,
+    artifacts: hydratedArtifacts,
+    assets,
+  }
+}
+
+export async function loadOutputWorkflowGraph(input: {
+  projectId: string
+  draftId: string
+  workflowId: string
+  runId?: string | null
+}): Promise<OutputWorkflowGraphLoadResult> {
+  const [workflowResponse, nodeResponse, edgeResponse, artifactResponse] = await Promise.all([
+    supabase
+      .from('output_workflows')
+      .select(OUTPUT_WORKFLOW_SELECT)
+      .eq('id', input.workflowId)
+      .maybeSingle(),
+    supabase
+      .from('output_workflow_nodes')
+      .select(OUTPUT_WORKFLOW_NODE_SELECT)
+      .eq('workflow_id', input.workflowId)
+      .order('created_at', { ascending: true }),
+    supabase
+      .from('output_workflow_edges')
+      .select(OUTPUT_WORKFLOW_EDGE_SELECT)
+      .eq('workflow_id', input.workflowId)
+      .order('created_at', { ascending: true }),
+    supabase
+      .from('output_artifacts')
+      .select(OUTPUT_ARTIFACT_SELECT)
+      .eq('workflow_id', input.workflowId)
+      .order('created_at', { ascending: false }),
+  ])
+  if (workflowResponse.error) throw new Error(workflowResponse.error.message)
+  if (nodeResponse.error) throw new Error(nodeResponse.error.message)
+  if (edgeResponse.error) throw new Error(edgeResponse.error.message)
+  if (artifactResponse.error) throw new Error(artifactResponse.error.message)
+
+  let runRow: OutputWorkflowRunRow | null = null
+  if (input.runId) {
+    const runResponse = await supabase
+      .from('output_workflow_runs')
+      .select(OUTPUT_WORKFLOW_RUN_SELECT)
+      .eq('id', input.runId)
+      .maybeSingle()
+    if (runResponse.error) throw new Error(runResponse.error.message)
+    runRow = runResponse.data as OutputWorkflowRunRow | null
+  } else {
+    const runResponse = await supabase
+      .from('output_workflow_runs')
+      .select(OUTPUT_WORKFLOW_RUN_SELECT)
+      .eq('workflow_id', input.workflowId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+    if (runResponse.error) throw new Error(runResponse.error.message)
+    runRow = ((runResponse.data ?? []) as OutputWorkflowRunRow[])[0] ?? null
+  }
+
+  const stepResponse = runRow
+    ? await supabase
+        .from('output_workflow_run_steps')
+        .select(OUTPUT_WORKFLOW_RUN_STEP_SELECT)
+        .eq('run_id', runRow.id)
+        .order('order_index', { ascending: true })
+    : emptyPostgrestResponse()
+  if (stepResponse.error) throw new Error(stepResponse.error.message)
+
+  const nodes = ((nodeResponse.data ?? []) as OutputWorkflowNodeRow[]).map(mapOutputWorkflowNodeRow)
+  const edges = ((edgeResponse.data ?? []) as OutputWorkflowEdgeRow[]).map(mapOutputWorkflowEdgeRow)
+  const steps = ((stepResponse.data ?? []) as OutputWorkflowRunStepRow[]).map(mapOutputWorkflowRunStepRow)
+  const artifacts = ((artifactResponse.data ?? []) as OutputArtifactRow[]).map(mapOutputArtifactRow)
+  const runArtifacts = runRow ? artifacts.filter((artifact) => artifact.runId === runRow.id) : []
+  const run = runRow ? mapOutputWorkflowRunRow(runRow, steps, runArtifacts) : null
+  const assets = await loadHydratedOutputAssets(input.projectId, {
+    nodes,
+    steps,
+    runs: run ? [run] : [],
+    artifacts,
+  })
+  const hydratedArtifacts = hydrateOutputArtifactsFromAssets(artifacts, assets)
+  const hydratedRun = run
+    ? { ...run, artifacts: hydrateOutputArtifactsFromAssets(run.artifacts, assets) }
+    : null
+
+  return {
+    workflow: workflowResponse.data ? mapOutputWorkflowRow(workflowResponse.data as OutputWorkflowRow) : null,
+    nodes,
+    edges,
+    run: hydratedRun,
+    artifacts: hydratedArtifacts,
+    assets,
+  }
 }
 
 export async function cancelOutputWorkflowRun(runId: string): Promise<OutputWorkflowCancelResponse> {
