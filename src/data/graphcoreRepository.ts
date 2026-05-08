@@ -497,7 +497,7 @@ type SnapshotLoadOptions = {
 }
 
 export type DraftRevision = number
-export const GRAPHCORE_CACHE_SCHEMA_VERSION = 'world-cache-v2' as const
+export const GRAPHCORE_CACHE_SCHEMA_VERSION = 'world-cache-v3' as const
 export type GraphCoreCacheSchemaVersion = typeof GRAPHCORE_CACHE_SCHEMA_VERSION
 
 export type DraftDeltaResponse = {
@@ -2617,6 +2617,8 @@ type SignProjectAssetUrlsResponse = {
   }>
 }
 
+const PROJECT_ASSET_SIGNING_BATCH_SIZE = 100
+
 const storageAssetUrlCache = new Map<string, { storagePath: string; url: string; expiresAt: number | null }>()
 
 function isPrivateStorageBackedAsset(asset: AssetDefinition) {
@@ -2627,6 +2629,19 @@ function isPrivateStorageBackedAsset(asset: AssetDefinition) {
 }
 
 function stripTransientAssetUrlsForCache(snapshot: ProjectSnapshot): ProjectSnapshot {
+  const stripArtifactUrls = (artifact: OutputArtifact): OutputArtifact => {
+    // Legacy output artifacts may only carry a URL in metadata. Keep that as a
+    // last-resort pointer when there is no durable project asset to rehydrate.
+    if (!artifact.assetKey) return artifact
+    const metadata = { ...artifact.metadata }
+    delete metadata.sourceUrl
+    delete metadata.previewUrl
+    return {
+      ...artifact,
+      metadata,
+    }
+  }
+
   return {
     ...snapshot,
     assets: snapshot.assets.map((asset) => {
@@ -2639,6 +2654,45 @@ function stripTransientAssetUrlsForCache(snapshot: ProjectSnapshot): ProjectSnap
         metadata,
       }
     }),
+    outputArtifacts: snapshot.outputArtifacts.map(stripArtifactUrls),
+    outputWorkflowRuns: snapshot.outputWorkflowRuns.map((run) => ({
+      ...run,
+      artifacts: run.artifacts.map(stripArtifactUrls),
+    })),
+  }
+}
+
+function readRepositoryRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+}
+
+function readRepositoryString(value: unknown) {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function addMissingAssetKey(candidate: unknown, knownAssetKeys: Set<string>, missing: Set<string>) {
+  const assetKey = readRepositoryString(candidate)
+  if (assetKey && !knownAssetKeys.has(assetKey)) missing.add(assetKey)
+}
+
+function collectOutputAssetReferences(value: unknown, knownAssetKeys: Set<string>, missing: Set<string>, depth = 0) {
+  if (!value || depth > 8) return
+  if (Array.isArray(value)) {
+    for (const entry of value) collectOutputAssetReferences(entry, knownAssetKeys, missing, depth + 1)
+    return
+  }
+  if (typeof value !== 'object') return
+
+  const record = value as Record<string, unknown>
+  addMissingAssetKey(record.assetKey, knownAssetKeys, missing)
+  addMissingAssetKey(record.asset_key, knownAssetKeys, missing)
+
+  for (const entry of Object.values(record)) {
+    if (entry && typeof entry === 'object') {
+      collectOutputAssetReferences(entry, knownAssetKeys, missing, depth + 1)
+    }
   }
 }
 
@@ -2681,7 +2735,68 @@ function findMissingAssetReferences(snapshot: ProjectSnapshot) {
     }
   }
 
+  for (const node of snapshot.outputWorkflowNodes) {
+    collectOutputAssetReferences(node.outputs, assetKeys, missing)
+  }
+
+  for (const run of snapshot.outputWorkflowRuns) {
+    collectOutputAssetReferences(run.outputs, assetKeys, missing)
+    for (const step of run.steps) collectOutputAssetReferences(step.outputs, assetKeys, missing)
+    for (const artifact of run.artifacts) {
+      if (artifact.assetKey && !assetKeys.has(artifact.assetKey)) {
+        missing.add(artifact.assetKey)
+      }
+    }
+  }
+
   return Array.from(missing)
+}
+
+function resolveHydratedAssetUrl(asset: AssetDefinition | null | undefined) {
+  if (!asset) return ''
+  const metadata = readRepositoryRecord(asset.metadata)
+  return readRepositoryString(metadata.sourceUrl) || readRepositoryString(metadata.previewUrl)
+}
+
+function hydrateOutputArtifactsFromAssets(artifacts: OutputArtifact[], assets: AssetDefinition[]) {
+  const assetUrlByKey = new Map<string, string>()
+  for (const asset of assets) {
+    const url = resolveHydratedAssetUrl(asset)
+    if (url) assetUrlByKey.set(asset.key, url)
+  }
+  if (assetUrlByKey.size === 0) return artifacts
+
+  return artifacts.map((artifact) => {
+    const assetKey = readRepositoryString(artifact.assetKey)
+    if (!assetKey) return artifact
+    const assetUrl = assetUrlByKey.get(assetKey)
+    if (!assetUrl) return artifact
+
+    const metadata = readRepositoryRecord(artifact.metadata)
+    const sourceUrl = readRepositoryString(metadata.sourceUrl)
+    const previewUrl = readRepositoryString(metadata.previewUrl)
+    if (sourceUrl && previewUrl) return artifact
+
+    return {
+      ...artifact,
+      metadata: {
+        ...metadata,
+        previewUrl: previewUrl || assetUrl,
+        sourceUrl: sourceUrl || assetUrl,
+      },
+    }
+  })
+}
+
+function hydrateSnapshotOutputArtifactUrls(snapshot: ProjectSnapshot): ProjectSnapshot {
+  return {
+    ...snapshot,
+    outputArtifacts: hydrateOutputArtifactsFromAssets(snapshot.outputArtifacts, snapshot.assets),
+    outputWorkflowRuns: snapshot.outputWorkflowRuns.map((run) => ({
+      ...run,
+      artifacts: hydrateOutputArtifactsFromAssets(run.artifacts, snapshot.assets),
+    })),
+  }
 }
 
 async function hydrateStorageAssetUrls<TAsset extends AssetDefinition>(projectId: string, assets: TAsset[]) {
@@ -2722,25 +2837,44 @@ async function hydrateStorageAssetUrls<TAsset extends AssetDefinition>(projectId
   if (uncachedCandidates.length > 0) {
     try {
       const session = await getValidatedSession('Sign in and load a live GraphCore draft before loading generated meshes.')
-      const response = await invokeAuthedFunctionWithSessionRecovery<SignProjectAssetUrlsResponse>(
-        'sign-project-asset-urls',
-        {
-          projectId,
-          assetKeys: uncachedCandidates.map((asset) => asset.key),
-        } satisfies SignProjectAssetUrlsRequest,
-        session,
-      )
-      if (!response.error && response.data?.urls) {
-        for (const entry of response.data.urls) {
-          if (typeof entry.assetKey === 'string' && typeof entry.signedUrl === 'string' && entry.signedUrl.trim()) {
-            const asset = uncachedCandidates.find((candidate) => candidate.key === entry.assetKey) ?? null
-            if (asset) setCachedSignedAssetUrl(asset, entry.signedUrl)
-            signedUrls.set(entry.assetKey, asset ? await cacheSignedAssetResponse(asset, entry.signedUrl) : entry.signedUrl)
+      for (let index = 0; index < uncachedCandidates.length; index += PROJECT_ASSET_SIGNING_BATCH_SIZE) {
+        const batch = uncachedCandidates.slice(index, index + PROJECT_ASSET_SIGNING_BATCH_SIZE)
+        const response = await invokeAuthedFunctionWithSessionRecovery<SignProjectAssetUrlsResponse>(
+          'sign-project-asset-urls',
+          {
+            projectId,
+            assetKeys: batch.map((asset) => asset.key),
+          } satisfies SignProjectAssetUrlsRequest,
+          session,
+        )
+        if (!response.error && response.data?.urls) {
+          for (const entry of response.data.urls) {
+            if (typeof entry.assetKey === 'string' && typeof entry.signedUrl === 'string' && entry.signedUrl.trim()) {
+              const asset = batch.find((candidate) => candidate.key === entry.assetKey)
+                ?? uncachedCandidates.find((candidate) => candidate.key === entry.assetKey)
+                ?? null
+              if (asset) setCachedSignedAssetUrl(asset, entry.signedUrl)
+              signedUrls.set(entry.assetKey, asset ? await cacheSignedAssetResponse(asset, entry.signedUrl) : entry.signedUrl)
+            }
           }
+          continue
+        }
+
+        console.warn('[GraphCore] project asset signing batch failed during hydration.', {
+          projectId,
+          batchSize: batch.length,
+          batchStart: index,
+          error: response.error ? await readFunctionsErrorMessage(response.error) : 'No signed URLs returned.',
+        })
+        for (const asset of batch) {
+          const cached = getCachedSignedAssetUrl(asset)
+          if (!cached) continue
+          const resolvedUrl = await cacheSignedAssetResponse(asset, cached)
+          signedUrls.set(asset.key, resolvedUrl)
         }
       }
     } catch (error) {
-      console.error('[GraphCore] mesh asset signing failed during hydration.', error)
+      console.error('[GraphCore] project asset signing failed during hydration.', error)
     }
   }
 
@@ -2915,10 +3049,10 @@ export async function loadProjectSnapshot(
             })
             throw new Error('Cached snapshot identity mismatch.')
           }
-          const hydratedSnapshot = {
+          const hydratedSnapshot = hydrateSnapshotOutputArtifactUrls({
             ...nextSnapshot,
             assets: await hydrateStorageAssetUrls(nextSnapshot.project.id, nextSnapshot.assets),
-          }
+          })
           const missingAssetRefs = findMissingAssetReferences(hydratedSnapshot)
           if (missingAssetRefs.length > 0) {
             await clearProjectCache(project.id, draft.id)
@@ -3945,10 +4079,10 @@ export async function loadProjectSnapshot(
     })),
   })
 
-  snapshot = {
+  snapshot = hydrateSnapshotOutputArtifactUrls({
     ...snapshot,
     assets: await hydrateStorageAssetUrls(snapshot.project.id, snapshot.assets),
-  }
+  })
 
   if (profile === 'world' && !options?.skipCache) {
     try {

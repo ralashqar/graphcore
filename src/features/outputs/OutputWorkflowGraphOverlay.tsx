@@ -3,7 +3,6 @@ import {
   Background,
   BaseEdge,
   Controls,
-  EdgeLabelRenderer,
   getBezierPath,
   Handle,
   MiniMap,
@@ -39,8 +38,8 @@ import {
 } from '../../domain/outputWorkflowGraphView'
 
 const NODE_WIDTH = 306
-const NODE_HEIGHT = 184
-const IMAGE_NODE_MAX_HEIGHT = 280
+const NODE_HEIGHT = 220
+const IMAGE_NODE_MAX_HEIGHT = 320
 const IMAGE_NODE_MIN_WIDTH = 160
 const IMAGE_NODE_MAX_WIDTH = 360
 
@@ -63,7 +62,6 @@ type GraphNodeData = {
 }
 
 type GraphEdgeData = {
-  label: string
   valueType: string
   statusKey: string
 }
@@ -242,28 +240,15 @@ function sequenceRecordFromEntity(entity: Record<string, unknown> | null | undef
   return readRecord(readRecord(entity?.customProperties).sequence)
 }
 
-function nodeDisplaySnippet(input: {
-  node: OutputWorkflowNode
-  step: OutputWorkflowRunStep | null
-  outputPreview: string
-}) {
-  const config = readRecord(input.node.config)
-  const purpose = readTrimmedString(config.purpose)
-  const chapterNumber = formatConfigValue(config.chapterNumber)
-  const sequenceName = readTrimmedString(config.sequenceUnitName)
-  if (purpose === 'chapter_prose') {
-    return [chapterNumber ? `Chapter ${chapterNumber}` : '', sequenceName].filter(Boolean).join(': ')
-  }
-  if (purpose === 'comic_script') return 'Script from selected sequence unit'
-  if (purpose === 'comic_entity_selector') return 'Relevant cast, places, props, and visual refs'
-  if (purpose === 'comic_atlas_prompt') return 'Prompt for the comic style atlas'
-  if (purpose === 'comic_style_atlas') return 'Generated visual atlas reference'
-  if (purpose === 'comic_page_prompt' || purpose === 'comic_page') {
-    const pageNumber = formatConfigValue(config.pageNumber)
-    return pageNumber ? `Comic page ${pageNumber}` : 'Comic page'
-  }
-  const prompt = readTrimmedString(input.node.inputs.prompt)
-  return prompt || input.outputPreview || outputWorkflowNodeRegistry[input.node.nodeType].description
+function nodeTypeMarker(nodeType: OutputWorkflowNode['nodeType']) {
+  if (nodeType === 'image_generation') return 'IMG'
+  if (nodeType === 'video_generation') return 'VID'
+  if (nodeType === 'document_render') return 'DOC'
+  if (nodeType === 'output_artifact') return 'OUT'
+  if (nodeType === 'world_context_query') return 'CTX'
+  if (nodeType === 'skill_context_query') return 'SKL'
+  if (nodeType === 'utility_transform') return 'FX'
+  return 'T'
 }
 
 function selectedNodeRunLabel(node: OutputWorkflowNode) {
@@ -302,25 +287,10 @@ function localRunButtonLabel(input: {
   return input.activeRunStatus === 'queued' ? 'Queued...' : 'Running...'
 }
 
-function mergeGraphPorts(
-  registryPorts: Array<{ id: string; valueType: string }>,
-  edgePorts: Array<{ id: string; valueType: string }>,
-) {
-  const ports = new Map<string, { id: string; valueType: string }>()
-  for (const port of registryPorts) ports.set(port.id, port)
-  for (const port of edgePorts) {
-    if (!ports.has(port.id)) ports.set(port.id, port)
-  }
-  return [...ports.values()]
-}
-
 function OutputWorkflowNodeCard({ data }: NodeProps<GraphNode>) {
-  const { node, step, statusKey, outputPreview, imageUrl, imageSize, hasOutput, skillKeys, inputPorts, outputPorts, selected, running, onSelect, onRun, onOpenOutput } = data
-  const definition = outputWorkflowNodeRegistry[node.nodeType]
-  const execution = getOutputWorkflowNodeExecutionMetadata(node)
-  const purpose = readTrimmedString(node.config.purpose)
-  const snippet = nodeDisplaySnippet({ node, step, outputPreview })
+  const { node, step, statusKey, outputPreview, imageUrl, imageSize, hasOutput, inputPorts, outputPorts, selected, running, onSelect, onRun, onOpenOutput } = data
   const hasImagePreview = node.nodeType === 'image_generation' && Boolean(imageUrl)
+  const bodyText = outputPreview || (step?.errorMessage ? step.errorMessage : hasOutput ? '' : 'No output yet.')
 
   return (
     <div
@@ -349,30 +319,21 @@ function OutputWorkflowNodeCard({ data }: NodeProps<GraphNode>) {
       ))}
       {hasImagePreview ? (
         <>
-          <img className="outputs-graph-node-image" src={imageUrl ?? ''} alt="" loading="lazy" />
-          <div className="outputs-graph-node-image-overlay">
-            <span className={`outputs-status-icon is-${statusKey}`} aria-hidden="true" />
+          <div className="outputs-graph-node-header">
+            <span className={`outputs-graph-node-type is-${node.nodeType}`} aria-hidden="true">{nodeTypeMarker(node.nodeType)}</span>
             <strong>{node.label}</strong>
-            {providerStatus(step) ? <small>{providerStatus(step)}</small> : null}
+          </div>
+          <div className="outputs-graph-node-body outputs-graph-node-image-body">
+            <img className="outputs-graph-node-image" src={imageUrl ?? ''} alt="" loading="lazy" />
           </div>
         </>
       ) : (
         <>
-          <div className="outputs-graph-node-top">
-            <span className={`outputs-status-icon is-${statusKey}`} aria-hidden="true" />
-            <span className="outputs-graph-node-kind">{definition.label}</span>
-            <span className="outputs-graph-node-resource">{execution.resourceClass}</span>
+          <div className="outputs-graph-node-header">
+            <span className={`outputs-graph-node-type is-${node.nodeType}`} aria-hidden="true">{nodeTypeMarker(node.nodeType)}</span>
+            <strong>{node.label}</strong>
           </div>
-          <strong>{node.label}</strong>
-          <span>{purpose || node.nodeType.replace(/_/g, ' ')}</span>
-          {providerStatus(step) ? <small>{providerStatus(step)}</small> : null}
-          <p>{snippet}</p>
-          {skillKeys.length > 0 ? (
-            <div className="outputs-graph-skill-row">
-              {skillKeys.slice(0, 2).map((skillKey) => <small key={skillKey}>{skillKey.replace(/_/g, ' ')}</small>)}
-              {skillKeys.length > 2 ? <small>+{skillKeys.length - 2}</small> : null}
-            </div>
-          ) : null}
+          <pre className="outputs-graph-node-body nodrag nowheel">{bodyText}</pre>
         </>
       )}
       {hasOutput ? (
@@ -418,22 +379,10 @@ function OutputWorkflowNodeCard({ data }: NodeProps<GraphNode>) {
 }
 
 function OutputWorkflowEdgeView(props: EdgeProps<GraphEdge>) {
-  const [edgePath, labelX, labelY] = getBezierPath(props)
-  const data = props.data ?? { label: '', valueType: 'text', statusKey: 'queued' }
+  const [edgePath] = getBezierPath(props)
+  const data = props.data ?? { valueType: 'text', statusKey: 'queued' }
   return (
-    <>
-      <BaseEdge className={`outputs-graph-edge is-${data.valueType} is-${data.statusKey}`} path={edgePath} markerEnd={props.markerEnd} />
-      <EdgeLabelRenderer>
-        <span
-          className={`outputs-graph-edge-label is-${data.valueType}`}
-          style={{
-            transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
-          }}
-        >
-          {data.label}
-        </span>
-      </EdgeLabelRenderer>
-    </>
+    <BaseEdge className={`outputs-graph-edge is-${data.valueType} is-${data.statusKey}`} path={edgePath} markerEnd={props.markerEnd} />
   )
 }
 
@@ -610,6 +559,11 @@ export function OutputWorkflowGraphOverlay({
 
   useEffect(() => {
     const sourceByKey = new Map(safeNodes.map((node) => [node.key, node]))
+    const visibleEdges = safeEdges.filter((edge) => {
+      const sourceNode = sourceByKey.get(edge.sourceNodeKey)
+      const targetNode = sourceByKey.get(edge.targetNodeKey)
+      return sourceNode?.nodeType !== 'skill_context_query' && targetNode?.nodeType !== 'skill_context_query'
+    })
     const shouldUseDerivedLayout = !layoutDirty && hasOverlappingNodePositions(safeNodes)
     const derivedPositions = shouldUseDerivedLayout
       ? buildOutputWorkflowLevelLayout({
@@ -623,7 +577,7 @@ export function OutputWorkflowGraphOverlay({
       : null
     const inputPortsByNodeKey = new Map<string, Array<{ id: string; valueType: string }>>()
     const outputPortsByNodeKey = new Map<string, Array<{ id: string; valueType: string }>>()
-    for (const edge of safeEdges) {
+    for (const edge of visibleEdges) {
       const sourceNode = sourceByKey.get(edge.sourceNodeKey)
       const valueType = resolveEdgeValueType(edge, sourceNode)
       outputPortsByNodeKey.set(edge.sourceNodeKey, [
@@ -645,7 +599,6 @@ export function OutputWorkflowGraphOverlay({
           : hasCachedNodeOutput(node) && !node.dirty
             ? 'completed'
             : outputWorkflowStepStatusKey(step)
-        const definition = outputWorkflowNodeRegistry[node.nodeType]
         const artifactImage = artifactImageByNodeKeyMap.get(node.key) ?? null
         const imageAssetKey = imageOutputAssetKey(step) || imageOutputAssetKey(cachedOutputSource) || artifactImage?.assetKey
         const imageUrl = imageAssetKey
@@ -668,13 +621,13 @@ export function OutputWorkflowGraphOverlay({
             node,
             step,
             statusKey,
-            outputPreview: outputPreview.slice(0, 220),
+            outputPreview,
             imageUrl,
             imageSize,
             hasOutput,
             skillKeys: readNodeSkillKeys(node),
-            inputPorts: mergeGraphPorts(definition.inputPorts, inputPortsByNodeKey.get(node.key) ?? []),
-            outputPorts: mergeGraphPorts(definition.outputPorts, outputPortsByNodeKey.get(node.key) ?? []),
+            inputPorts: inputPortsByNodeKey.get(node.key) ?? [],
+            outputPorts: outputPortsByNodeKey.get(node.key) ?? [],
             selected: selectedNodeKey === node.key,
             running: targetedNodeKeySet.has(node.key) || statusKey === 'running',
             onSelect: onSelectNode,
@@ -684,7 +637,7 @@ export function OutputWorkflowGraphOverlay({
         }
       })
     })
-    setFlowEdges(safeEdges.map((edge) => {
+    setFlowEdges(visibleEdges.map((edge) => {
       const sourceNode = sourceByKey.get(edge.sourceNodeKey)
       const targetStep = stepsByNodeKey.get(edge.targetNodeKey) ?? null
       const valueType = resolveEdgeValueType(edge, sourceNode)
@@ -696,7 +649,6 @@ export function OutputWorkflowGraphOverlay({
         sourceHandle: edge.sourcePort,
         targetHandle: edge.targetPort,
         data: {
-          label: `${edge.sourcePort} -> ${edge.targetPort}`,
           valueType,
           statusKey: outputWorkflowStepStatusKey(targetStep),
         },
